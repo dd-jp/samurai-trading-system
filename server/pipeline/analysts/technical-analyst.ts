@@ -68,12 +68,16 @@
 import {
   type Bar,
   type BarWindow,
+  computeRvol,
   computeSessionVwap,
   type IndicatorSpec,
   InsufficientBarsError,
   minimumBarsFor,
+  RVOL_SESSION_WINDOW,
+  type RvolReading,
   recommendedWarmupFor,
 } from '../../providers/market-data-service/index.js';
+import { screeningInstrumentFor } from '../../providers/universe-pool/lse-etp-pool.js';
 import type { AnalystView, Direction } from '../debate-engine/index.js';
 import type { Analyst, AnalystInput, AnalystTelemetry, AssetClass } from './types.js';
 
@@ -119,6 +123,46 @@ const MI_CONTEXT_WINDOW_MS = 24 * 60 * 60 * 1000;
  * is well under a percent of any request budget mentioned there.
  */
 export const WARMUP_5M = 260;
+
+/** 5m bars in one regular US equity session: 6.5 hours / 5 minutes. */
+const BARS_PER_SESSION_5M = 78;
+
+/**
+ * The SEPARATE, WIDER 5m window `computeRvol` needs (#797), and why it cannot
+ * reuse `WARMUP_5M`.
+ *
+ * RVOL's baseline is the same clock-time bucket across the prior
+ * `RVOL_SESSION_WINDOW` (10) sessions, so it needs those ten sessions PLUS the
+ * current one present in the bars it is handed. `WARMUP_5M` is 260 bars ≈ 3.3
+ * sessions — feeding it to `computeRvol` would return `insufficient_sessions`
+ * on every tick forever, which is a caller in name only. Twelve sessions
+ * (`RVOL_SESSION_WINDOW + 2`) rather than the bare eleven, so ONE half-day or
+ * holiday inside the window does not drop the count below ten priors and
+ * degrade the line for a fortnight.
+ *
+ * **Cost, stated rather than hand-waved.** This is a second `getBars` call per
+ * instrument per tick, sequenced AFTER the shared `WARMUP_5M` read (never
+ * `Promise.all`-ed with it or with the core reads — two concurrent source
+ * fetches for the same instrument+timeframe would race on the store write).
+ * On a cold store it costs one extra HTTP fetch: `MarketDataServiceImpl`'s
+ * `cachedBars` route 1 misses when the store cannot return `lookback` rows, so
+ * a 936-row ask is not satisfied by the 260-row fetch that preceded it. Once
+ * the store holds >= `RVOL_5M_LOOKBACK` bars for the instrument, route 1 hits
+ * (same instrument+timeframe, already fetched this bar interval) and the
+ * steady-state cost returns to ONE fetch per instrument per tick.
+ *
+ * Within the raw-fetch caps by construction, not by luck: 936 + the forming-bar
+ * margin is far under `normalizing-data-source.ts`'s `MAX_RAW_LIMIT_ABSOLUTE`
+ * (20,000), the absolute row cap #747 shipped for EXACTLY this request shape —
+ * its doc comment names `computeRvol`'s "lookback in the hundreds" as the case
+ * it exists to bound. `alpaca-http-client.ts`'s large-`limit` warning does not
+ * bite either, but the reasoning is NOT inherited from `WARMUP_5M`'s ("well
+ * under a percent"), because 936 is 3.6x that: at `BUFFER_MULTIPLIER` 8 the
+ * widened search window is ~26 calendar days, ~18 equity sessions, ~1.4k raw
+ * 5m rows — two `PAGE_SIZE` (1,000) pages, and comfortably inside
+ * `RETRY_MAX_ROWS` (25,000).
+ */
+export const RVOL_5M_LOOKBACK = (RVOL_SESSION_WINDOW + 2) * BARS_PER_SESSION_5M;
 
 /**
  * `sma` reads the closes directly, so an SMA(14) is exactly 14 bars: the
@@ -807,6 +851,86 @@ function gateLine(
   return `Volatility gate (${INDICATOR_TIMEFRAME}): ${parts.join(', ')} — ${verdict}`;
 }
 
+/**
+ * The RVOL `key_points` line (#797) — INFORMATIONAL ONLY, and that is the
+ * recorded decision, not an omission.
+ *
+ * ## Option 1 of the three #797 put up, and why
+ *
+ * #797 offered (1) an informational line, (2) a new axis or a second reading
+ * on the participation axis, (3) reconciling RVOL with the participation axis.
+ * This is **option 1**. RVOL feeds NO vote: it is absent from `TechnicalAxis`,
+ * absent from `VOTING_AXES`, and never reaches `assessAxes` — it is rendered
+ * from the returned view alone, so `direction`, `net`, `availableAxes` and
+ * `confidence` are byte-identical with and without it
+ * (`technical-rvol.test.ts` asserts exactly that).
+ *
+ * Option 2 was NOT taken, and deliberately: #745's rule is ONE VOTE PER AXIS,
+ * and that rule is what justified cutting #744's indicator batch from ten
+ * kinds to five. Adding a vote — a sixth axis, or a second reading folded into
+ * participation — is a design change to a live-money debate path, not a wiring
+ * change. It would need the rule reconciled explicitly rather than quietly
+ * widened, and that is the owner's call. Same reason `computeSessionVwap`
+ * (#746) is informational above.
+ *
+ * Option 3 is ADOPTED, not overturned — and it is already written down at
+ * `upVolumeShare`'s doc comment above ("Reconciled with #747's `computeRvol`,
+ * deliberately NOT sharing a definition"). RVOL is unsigned magnitude against
+ * a baseline; `upVolumeShare` is a signed directional split of the volume that
+ * did participate. Different questions, different inputs (a calendar vs.
+ * none). That judgement stands; this call site consumes it rather than
+ * re-deciding it, and shares its volume-caveat posture below.
+ *
+ * ## The volume caveat (#744), enforced rather than merely documented
+ *
+ * On a 3x leveraged ETP, volume is market-maker and wrapper flow, not informed
+ * flow — so RVOL there measures the wrapper, not the tape, which is close to
+ * meaningless for what RVOL is supposed to measure. #749 has since landed
+ * `screening_instrument` (the liquid US underlying) as a named identity, so
+ * the question "is this instrument a wrapper" is now ANSWERABLE here, and
+ * `screeningInstrumentFor` answers it.
+ *
+ * What is NOT possible from this analyst's inputs is FETCHING the underlying's
+ * bars, and that limit is structural rather than an oversight:
+ * `AssetClassRoutingDataSource#routeFor` throws a bare `Error` for any
+ * instrument absent from `assetClassOf`, which `production/defaults.ts` builds
+ * from `ProductionConfig.universe` alone — and #749's pool is deliberately not
+ * wired into any running profile's universe (that is #751's job, gated on
+ * #800). So `market_data.getBars(screening_instrument, ...)` would throw
+ * inside a `role: 'mandatory'` analyst and forfeit the whole tick as a
+ * `quorum_skip`. THAT is the recorded deviation, and it is recorded HERE, at
+ * the call site, per #797's own acceptance criterion.
+ *
+ * The deviation is bounded and self-announcing rather than silent:
+ *
+ * - Today's configured universes hold only liquid US instruments (SPY, QQQ,
+ *   AAPL, TSLA), for which the traded instrument IS the informed instrument
+ *   and no caveat is owed. `screeningInstrumentFor` returns `null` and the
+ *   line carries no caveat, because there is nothing to caveat.
+ * - The moment #751 wires ETP lines into a universe, `screeningInstrumentFor`
+ *   returns a real underlying and this line RENDERS the caveat into the debate
+ *   prompt itself, naming the wrapper, the informed instrument, and this
+ *   ticket. Nobody has to remember to revisit it; the prompt says so.
+ */
+export function rvolLine(
+  instrument: string,
+  reading: RvolReading,
+  screening: string | null,
+): string {
+  const body =
+    reading.rvol === null
+      ? `unavailable (${reading.degraded_reason}, ${reading.sessions_used}/${reading.sessions_target} sessions matched)`
+      : `${round4(reading.rvol)}x the median same-clock-time bucket over ` +
+        `${reading.sessions_used}/${reading.sessions_target} prior sessions`;
+  const caveat =
+    screening === null
+      ? ''
+      : `; measured on ${instrument}, a leveraged-ETP wrapper — market-maker flow, not informed ` +
+        `flow. The informed instrument is ${screening}, not fetchable from this analyst's ` +
+        `inputs (#797)`;
+  return `RVOL (${INDICATOR_TIMEFRAME}): ${body} — informational, no vote${caveat}`;
+}
+
 export const technicalAnalyst: Analyst = {
   analyst_type: 'technical',
   role: 'mandatory',
@@ -930,6 +1054,24 @@ export const technicalAnalyst: Analyst = {
         : `Session VWAP (${INDICATOR_TIMEFRAME}): ${session.vwap} — price ${lastCandle.close} is ` +
           `${(session.distance_from_vwap as number) >= 0 ? '+' : ''}${session.distance_from_vwap} from it`;
 
+    // #797 — RVOL, informational only: no vote, no cap, no change to
+    // `assessAxes`'s arithmetic. See `rvolLine`'s doc comment for the recorded
+    // decision (option 1 of three), the one-vote-per-axis reasoning, and the
+    // recorded volume-caveat deviation.
+    //
+    // A SEPARATE, WIDER window than `technicalBars` — see `RVOL_5M_LOOKBACK`
+    // for why 260 bars cannot serve it and for the per-tick fetch cost. Awaited
+    // on its own rather than joined into either `Promise.all` above: both of
+    // those already read this instrument+timeframe, and two concurrent source
+    // fetches for one (instrument, timeframe) race on the store write.
+    const rvolBars = await input.market_data.getBars(
+      signal.asset,
+      { timeframe: INDICATOR_TIMEFRAME, lookback: RVOL_5M_LOOKBACK },
+      asOf,
+    );
+    const rvol = computeRvol(rvolBars, input.calendar, asOf);
+    const rvolText = rvolLine(signal.asset, rvol, screeningInstrumentFor(signal.asset));
+
     // No fallback numeric here on purpose: an empty context read has no
     // volume to average, and reporting "avg volume 0" would be a fabricated
     // claim about the tape, not an approximation (the same fabrication class
@@ -959,6 +1101,7 @@ export const technicalAnalyst: Analyst = {
         `Axis votes: ${voteSummary} — net ${assessment.net} over ${assessment.availableAxes} ` +
           `available axes, confidence ${assessment.confidence}`,
         sessionLine,
+        rvolText,
         contextLine,
         `MI context: ${marketContext.news.length} news, ${marketContext.social.length} social items in window`,
       ],
