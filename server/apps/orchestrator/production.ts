@@ -630,6 +630,13 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       // `lookback` means at the store.
       calendar: tradingCalendar,
       equitiesFallbackBarFetcher: config.equitiesFallbackBarFetcher,
+      // Passed through UNRESOLVED (#822/#825) — no `?? resolveFallbackPacing(...)`
+      // here. Resolving it at this call site, even sourced from config, would
+      // still run on every boot regardless of whether the default Polygon
+      // branch is the one selected, which is the exact defect #825 found.
+      // `buildFailoverDataSource` resolves it itself, gated on
+      // `equitiesFallbackBarFetcher` being undefined.
+      fallbackPacing: config.fallbackPacing,
       alertChannel: config.dataFailoverAlerts ?? new LoggingDataFailoverAlertChannel(logger),
       logger,
       now: () => clock.now(),

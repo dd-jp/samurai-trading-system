@@ -45,7 +45,12 @@ import type {
   MiArchiveStore,
   PolymarketWireClient,
 } from '../../../providers/market-intelligence/index.js';
-import type { Clock, ClosedTradeStore, VenuePacingConfig } from '../../../shared/index.js';
+import type {
+  Clock,
+  ClosedTradeStore,
+  TokenBucketConfig,
+  VenuePacingConfig,
+} from '../../../shared/index.js';
 import type { SharedStore as SqliteHandle } from '../../../shared/store/index.js';
 import type { CostConfig, SqliteStage2SelectionStore } from '../../../tools/backtest/index.js';
 import type { HeartbeatChannel } from '../heartbeat.js';
@@ -419,6 +424,22 @@ export interface ProductionConfig extends AlertChannelSlots {
    * without a credential.
    */
   equitiesFallbackBarFetcher?: BarFetcher;
+  /**
+   * The Polygon equities fallback's outbound pacing (#822), config-first
+   * rather than read from `process.env` mid-wiring — the composition root
+   * passes this straight through to `buildFailoverDataSource` UNRESOLVED
+   * (no `?? resolveFallbackPacing(...)` at this module's call site); the env
+   * read/warn only happens inside `buildFailoverDataSource`'s own default
+   * branch, and only when `equitiesFallbackBarFetcher` is also omitted
+   * (#825 — resolving it unconditionally warned about a variable a run with
+   * an injected fetcher would never consult). Ignored entirely when
+   * `equitiesFallbackBarFetcher` is supplied, for the same reason: there is
+   * no Polygon client left for it to pace. Defaults to
+   * `resolveFallbackPacing()`'s result — `DEFAULT_POLYGON_PACING` with any
+   * `SAMURAI_PACING_POLYGON_*` override applied — same convention as
+   * `venuePacing` below, minus the eager resolution at THIS call site.
+   */
+  fallbackPacing?: TokenBucketConfig;
   /**
    * Overrides the `AnthropicLlmClient` this module would otherwise build
    * around `NousMessagesClient` (#274, retargeted by ADR-0009) — same

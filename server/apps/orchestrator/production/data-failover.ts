@@ -47,16 +47,32 @@
  *
  * ## Pacing on the boot path — warn and default, never refuse to boot
  *
- * `SAMURAI_PACING_POLYGON_*` is resolved AT BOOT, so an operator sees a
- * malformed override in the startup log rather than at first failover — but it
- * is never fatal: the variable is logged at `warn` and `DEFAULT_POLYGON_PACING`
- * applies. It paces a DEGRADATION MITIGATION touched only once the primary has
- * already failed, so refusing to boot for a typo in it would take the whole
- * book offline to avoid a stall the fallback exists to survive. That is the
+ * `SAMURAI_PACING_POLYGON_*` is resolved AT BOOT — but ONLY when the default
+ * Polygon fetcher is the one actually selected (`deps.equitiesFallbackBarFetcher`
+ * is undefined). A run that injects its own fallback fetcher (every test root,
+ * the offline smoke probe, any future non-Polygon vendor) never touches
+ * Polygon pacing at all, so it must not consult, resolve, or warn about a
+ * variable it will never use (#825). When the default branch IS selected, the
+ * resolution stays eager at construction time — not deferred to first
+ * failover — so an operator sees a malformed override in the startup log
+ * rather than only once a stall actually happens. It is never fatal either
+ * way: the variable is logged at `warn` and `DEFAULT_POLYGON_PACING` applies.
+ * It paces a DEGRADATION MITIGATION touched only once the primary has already
+ * failed, so refusing to boot for a typo in it would take the whole book
+ * offline to avoid a stall the fallback exists to survive. That is the
  * opposite of `SAMURAI_ALERTS`/`SAMURAI_MODE`/`dataSourceAssetClass`, which do
  * refuse, and which gate whether the system operates correctly at all.
  * `venue-pacing.ts` keeps the variable out of `VENUE_KEYS` so this stays
  * possible.
+ *
+ * `LiveDataFailoverDeps.fallbackPacing` (#822) is the config-first seam: the
+ * composition root passes it through UNRESOLVED (`config.fallbackPacing`,
+ * with no `?? resolveFallbackPacing(...)` at the call site), so a caller that
+ * supplies it skips the env read entirely, and one that doesn't still gets
+ * `resolveFallbackPacing` — but only inside the gated default branch, per the
+ * paragraph above. Supplying `equitiesFallbackBarFetcher` makes `fallbackPacing`
+ * a no-op; there is no warning for setting both, since neither is a mistake by
+ * construction — the field for a vendor that then goes unused is just ignored.
  *
  * The Polygon CLIENT is constructed lazily: its constructor throws when
  * `POLYGON_API_KEY` is unset, and an unset key must not stop the orchestrator
@@ -79,6 +95,7 @@ import {
   type Logger,
   resolvePolygonPacing,
   TokenBucket,
+  type TokenBucketConfig,
 } from '../../../shared/index.js';
 import type { UniverseInstrument } from '../types.js';
 
@@ -209,6 +226,18 @@ export interface LiveDataFailoverDeps {
    * injected fetcher cannot opt out of the session invariant either.
    */
   equitiesFallbackBarFetcher?: BarFetcher | undefined;
+  /**
+   * The Polygon fallback's outbound pacing (#822), config-first rather than
+   * read from `process.env` mid-wiring (that was defect 1: `resolveFallbackPacing`
+   * took no other input than the logger). Passed through UNRESOLVED by the
+   * composition root — no `?? resolveFallbackPacing(...)` at the call site —
+   * so a caller that omits it does not force an env read either; that only
+   * happens inside `buildFailoverDataSource`'s default branch, and only when
+   * `equitiesFallbackBarFetcher` is undefined (see the module doc, #825).
+   * Ignored entirely when `equitiesFallbackBarFetcher` is supplied — there is
+   * no vendor left for it to pace.
+   */
+  fallbackPacing?: TokenBucketConfig | undefined;
   /** Raised on every failover. Guarded — a throwing channel cannot break a fetch. */
   alertChannel: DataFailoverAlertChannel;
   logger: Logger;
@@ -232,14 +261,24 @@ export function buildFailoverDataSource(deps: LiveDataFailoverDeps): DataSource 
     deps.universe.filter((i) => i.asset_class === 'stocks').map((i) => i.asset),
   );
 
-  const pacing = resolveFallbackPacing(deps.logger);
-  let polygon: PolygonBarsClient | undefined;
-  const rawFallbackBarFetcher: BarFetcher =
-    deps.equitiesFallbackBarFetcher ??
-    ((symbol, window, asOf) => {
+  // #825: only resolve (and possibly warn about) Polygon pacing when the
+  // default Polygon fetcher is actually the one selected. An injected
+  // fetcher never consults this variable, so it must never be read for that
+  // run — computing it unconditionally emitted a startup warn about a
+  // variable that run would never use. Still eager (constructed here, not
+  // inside the returned closure) so the default-branch case keeps resolving
+  // AT BOOT rather than being deferred to first failover (#562's constraint).
+  let rawFallbackBarFetcher: BarFetcher;
+  if (deps.equitiesFallbackBarFetcher !== undefined) {
+    rawFallbackBarFetcher = deps.equitiesFallbackBarFetcher;
+  } else {
+    const pacing = deps.fallbackPacing ?? resolveFallbackPacing(deps.logger);
+    let polygon: PolygonBarsClient | undefined;
+    rawFallbackBarFetcher = (symbol, window, asOf) => {
       polygon ??= new PolygonBarsClient({ rateLimiter: new TokenBucket(pacing) });
       return polygon.getBars(symbol, window.timeframe, asOf, window.lookback);
-    });
+    };
+  }
 
   // The session invariant, applied to whatever serves the fallback — see
   // `session-normalized-fetcher.ts`. Applied here rather than inside
