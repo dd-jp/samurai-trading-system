@@ -885,14 +885,24 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
     // an injected `AlpacaCalendarClient`, the same split `startingProfileForMode`'s
     // own doc comment explains for the mode/profile hop.
     //
-    // PAPER/BACKTEST only — live runs the LSE leg over Trading 212 (ADR-0015),
-    // never Alpaca, so there is nothing to fetch. `startFromEnvironment` still
-    // resolves `equityCalendarFor`'s LSE default when `tradingCalendar` is
-    // omitted (production.ts).
+    // PAPER only, narrower than "not live" — #684's own scope. `backtest`
+    // replays historical bars through `server/tools/backtest/backtest.ts`,
+    // which drives the pipeline via its own harness (`Clock`/`DataSource`/
+    // `BrokerAdapter` injected directly) and never imports this entrypoint,
+    // so in practice `SAMURAI_MODE=backtest` never reaches this line. But
+    // fetching here regardless would be actively wrong if it ever did:
+    // `resolveUsEquitySessionCalendar`'s window is anchored to wall-clock
+    // `now`, and `AlpacaEquitySessionCalendar` answers "not a trading day" for
+    // any date outside that window (the safe direction for the live paper
+    // book) — which would silently zero out every historical bar a backtest
+    // replays, with no alert, because the fetch itself would have succeeded.
+    // `startFromEnvironment` still resolves `equityCalendarFor`'s LSE default
+    // for `live`, and its hand-entered `UsEquityRegularHoursCalendar` default
+    // for `backtest`, when `tradingCalendar` is omitted (production.ts).
     const tradingCalendar =
-      mode === 'live'
-        ? undefined
-        : await resolveUsEquitySessionCalendar({ logger: entrypointLogger, now: () => new Date() });
+      mode === 'paper'
+        ? await resolveUsEquitySessionCalendar({ logger: entrypointLogger, now: () => new Date() })
+        : undefined;
     const orchestrator = await startFromEnvironment({
       ...startingProfileForMode(mode, entrypointLogger),
       logger: entrypointLogger,
