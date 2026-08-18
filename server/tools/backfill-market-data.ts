@@ -89,10 +89,15 @@
  * own `Bar.source`) and persisted into `bars.source` by
  * `SqliteMarketDataStore.appendBars` exactly like every other bar — the
  * column has existed since `0001_init.sql`, so no migration was needed to
- * add provenance. `backfillMarketData`'s `CoverageRow.source` (below) surfaces
- * which source served each pair in the printed table itself; a failover
- * additionally logs a `FAILOVER:` line via the alerter passed to
- * `withOhlcvFailover` in `runFromEnvironment` below.
+ * add provenance. `backfillMarketData`'s `CoverageRow.source` (below)
+ * surfaces which source served each pair in the printed table itself, and
+ * `CoverageRow.quarantined` (#791 AC2) flags a pair whose window contains a
+ * `QUARANTINED_BAR_SOURCES` bar (`'polygon'` — see that constant's doc for
+ * why equities-only); a failover additionally posts to the SAME
+ * `dataFailoverAlerts` transport the live orchestrator uses, via
+ * `buildBackfillFailoverAlerter` (#791 AC1) passed to `withOhlcvFailover` in
+ * `runFromEnvironment` below — this used to be a bare `console.error`
+ * `FAILOVER:` line, which reached a stream nobody watches unattended.
  *
  * **The residual gap this doc used to record is CLOSED for equities
  * (#562).** It read: this failover covers only this script's fetch path,
@@ -101,11 +106,11 @@
  * `FailoverDataSource`, built by
  * `server/apps/orchestrator/production/data-failover.ts` and injected at
  * `production.ts`'s `config.dataSource` seam, alerting on the live
- * `SAMURAI_ALERTS` transport rather than on this script's stdout. What
- * remains true: the live path fails over BARS only (never marks or quotes),
- * and the live CRYPTO leg has no fallback — crypto left Samurai's scope on
- * 2026-08-16 (ADR-0015's amendment), so the Coinbase -> Bitstamp pairing
- * stays this script's alone.
+ * `SAMURAI_ALERTS` transport — the same one this script now uses instead of
+ * its own stdout (#791). What remains true: the live path fails over BARS
+ * only (never marks or quotes), and the live CRYPTO leg has no fallback —
+ * crypto left Samurai's scope on 2026-08-16 (ADR-0015's amendment), so the
+ * Coinbase -> Bitstamp pairing stays this script's alone.
  *
  * ## Resumable and idempotent
  *
@@ -117,7 +122,20 @@
  * `(instrument, timeframe, open_time)` primary key, so even a re-fetched
  * overlapping window can never double-write a bar.
  */
-import { DEFAULT_UNIVERSE, type UniverseInstrument } from '../apps/orchestrator/index.js';
+
+import { LoggingDataFailoverAlertChannel } from '../apps/orchestrator/console-channels.js';
+import {
+  buildAlertChannels,
+  DEFAULT_UNIVERSE,
+  JsonLogger,
+  resolveAlertsMode,
+  type UniverseInstrument,
+} from '../apps/orchestrator/index.js';
+import type {
+  DataFailoverAlert,
+  DataFailoverAlertChannel,
+} from '../apps/orchestrator/production/data-failover.js';
+import type { Logger } from '../apps/orchestrator/types.js';
 import { WARMUP_5M } from '../pipeline/analysts/technical-analyst.js';
 import {
   AlpacaHttpDataClient,
@@ -169,7 +187,32 @@ export interface CoverageRow {
    * alert line that scrolled past.
    */
   source: string | undefined;
+  /**
+   * True when ANY bar in this pair's returned window carries a quarantined
+   * `Bar.source` (#791 AC2, implementing David's #612 disposition) — checked
+   * across every row `deps.store.readBars` returned for the pair, not just
+   * the most recent one (a mixed window with an alpaca bar last must not
+   * slip through by only sampling `rows.at(-1)`). Quarantined bars are still
+   * durably written — `PolygonBarsClient` stays in the failover chain, #612
+   * declined dropping it, and a warm-started tick still needs the rows — but
+   * this flag is what stops them being silently used as a clean SOURCE OF
+   * RECORD for a threshold or measurement that reaches an ADR (Massive
+   * Businesses ToS §6.1(j) forbids using "the Information" to build an
+   * "investment strategy"). `runFromEnvironment` below refuses to exit 0
+   * when any row is quarantined, precisely so an automated caller — not only
+   * a human reading the printed table — cannot miss it.
+   */
+  quarantined: boolean;
 }
+
+/**
+ * `Bar.source` values that must never be treated as a clean source of
+ * record (#791/#612). Equities-only and Polygon-only, deliberately: the
+ * crypto leg's Bitstamp fallback carries no Massive licensing exposure, and
+ * `stage2-source.ts`'s own direct `HttpPolygonClient` use is a separate,
+ * already-settled decision (#612 (2)) this constant does not touch.
+ */
+export const QUARANTINED_BAR_SOURCES: ReadonlySet<string> = new Set(['polygon']);
 
 export interface BackfillMarketDataDeps {
   store: MarketDataStore;
@@ -263,6 +306,7 @@ export async function backfillMarketData(deps: BackfillMarketDataDeps): Promise<
         satisfied: rows.length >= window.lookback,
         error: fetchError,
         source: rows.at(-1)?.source,
+        quarantined: rows.some((bar) => QUARANTINED_BAR_SOURCES.has(bar.source)),
       };
       coverage.push(row);
 
@@ -272,6 +316,7 @@ export async function backfillMarketData(deps: BackfillMarketDataDeps): Promise<
           (row.first_bar && row.last_bar ? `  (${row.first_bar} .. ${row.last_bar})` : '  (none)') +
           (row.source !== undefined ? `  source=${row.source}` : '') +
           (row.satisfied ? '' : '  SHORT') +
+          (row.quarantined ? '  QUARANTINED' : '') +
           (row.error !== undefined ? `  (fetch failed: ${row.error})` : ''),
       );
     }
@@ -302,30 +347,96 @@ function alpacaBarToBar(
 }
 
 /**
- * Prints a `FAILOVER:` line naming the leg, symbol, timeframe, both source
- * names and the primary's own error — the operator-facing half of #496's
- * "alert on failover" requirement. `CoverageRow.source` (surfaced in the
- * printed table by `backfillMarketData` above) is the durable half: this
- * line can scroll past, the coverage table cannot.
+ * Builds the `FailoverAlerter` `withOhlcvFailover` calls on both legs (#791
+ * AC1). Reaches the SAME `dataFailoverAlerts` transport the live orchestrator
+ * uses (#818/`alert-transport.ts`) instead of `console.error` — a backfill
+ * run unattended or from cron used to report a failover to a stream nobody
+ * reads.
  *
- * `console.error` itself can throw (a broken stdout pipe, `EPIPE`) —
- * `withOhlcvFailover`'s `safeAlert` already guards every call to this
- * function, so a crash here cannot mask the fallback's own result, but this
- * function does not additionally guard itself: one guard at the call site
- * is enough, and a second one here would just be dead code shadowing it.
+ * `FailoverAlerter` is synchronous by design (`(event) => void`) —
+ * `withOhlcvFailover` calls it BEFORE attempting the fallback, so an
+ * operator learns of a stall even when the fallback also fails, and that
+ * ordering is preserved here for free: this function does not change WHEN
+ * the alert fires, only WHERE it goes. `postDataFailoverAlert` is async
+ * (it posts to Telegram), so the post is fire-and-forget with a logged
+ * `.catch` — the same bridge `buildFailoverDataSource`
+ * (`orchestrator/production/data-failover.ts`) uses for the live path.
+ * Awaiting it here would block a bar fetch on a Telegram round trip, and a
+ * failed POST must not turn "the fallback served the bars" into "the fetch
+ * threw" — `withOhlcvFailover`'s own `safeAlert` guards a THROWING alerter,
+ * not a REJECTING promise it kicked off and forgot, so the `.catch` below is
+ * load-bearing: without it a rejected post would become an unhandled
+ * rejection, which is strictly worse than the `console.error` this replaces
+ * (#791 AC1's "making the alert louder must not make the backfill more
+ * fragile").
+ *
+ * No throttle, unlike the live path's `DataFailoverAlertThrottle`: this is a
+ * one-shot CLI run over `WARM_START_WINDOWS` (three windows) x
+ * `DEFAULT_UNIVERSE` (six instruments as of #504), not a 14-day tick loop —
+ * the alert volume a sustained live stall would produce never arises here,
+ * so `suppressed_since_last` is always `0`.
  */
-const alertFailover: FailoverAlerter = (event) => {
-  console.error(
-    `FAILOVER: ${event.leg} ${event.symbol} ${event.timeframe} — ${event.primaryName} failed ` +
-      `(${event.primaryError}); using ${event.fallbackName}.`,
-  );
-};
+export function buildBackfillFailoverAlerter(deps: {
+  alertChannel: DataFailoverAlertChannel;
+  logger: Logger;
+  now: () => Date;
+}): FailoverAlerter {
+  return (event) => {
+    const alert: DataFailoverAlert = {
+      ...event,
+      reported_at: deps.now(),
+      suppressed_since_last: 0,
+    };
+    void deps.alertChannel.postDataFailoverAlert(alert).catch((error: unknown) => {
+      deps.logger.log({
+        trace_id: 'backfill-market-data',
+        stage: 'orchestrator',
+        level: 'error',
+        message:
+          `OHLCV failover alert for ${event.symbol} ${event.timeframe} could not be delivered: ` +
+          `${error instanceof Error ? error.message : String(error)}. The failover itself ` +
+          `proceeded — ${event.fallbackName} is serving these bars.`,
+        payload: { instrument: event.symbol, timeframe: event.timeframe },
+      });
+    });
+  };
+}
 
 export async function runFromEnvironment(): Promise<void> {
+  const logger: Logger = new JsonLogger();
+
+  // Resolved BEFORE the store is opened, mirroring `startFromEnvironment`
+  // (`orchestrator/index.ts`): a missing/unrecognised `SAMURAI_ALERTS` is a
+  // startup failure this run should not leave a freshly-created SQLite file
+  // behind for (#791 AC1 reuses the live path's compiler-enforced
+  // `AlertChannelSlots` mechanism rather than inventing a parallel one, and
+  // that mechanism has no silent default — see `alert-transport.ts`).
+  const alertsMode = resolveAlertsMode({});
+
   const dbPath = sharedStorePath();
   const db = openSharedStore(dbPath);
   const store = new SqliteMarketDataStore(db);
   const asOf = new Date();
+
+  // `buildAlertChannels` needs the store handle (its Telegram client
+  // audit-logs inbound allowlist rejections through it), so this comes after
+  // `openSharedStore` even though `alertsMode` was resolved before it.
+  // `alertsMode` is never `undefined` here — this script injects nothing —
+  // but the ternary mirrors `startFromEnvironment`'s own shape rather than
+  // asserting it away.
+  const channels =
+    alertsMode === undefined ? {} : buildAlertChannels({ alertsMode, injected: {}, db, logger });
+  // `log-only` mode returns no `dataFailoverAlerts` slot at all (see
+  // `buildAlertChannels`'s doc) — default to the SAME log-only stand-in
+  // `production.ts` defaults to for the live path (`production.ts:640`),
+  // rather than inventing a second one, so both paths degrade identically.
+  const dataFailoverAlertChannel: DataFailoverAlertChannel =
+    channels.dataFailoverAlerts ?? new LoggingDataFailoverAlertChannel(logger);
+  const alertFailover = buildBackfillFailoverAlerter({
+    alertChannel: dataFailoverAlertChannel,
+    logger,
+    now: () => new Date(),
+  });
 
   const venuePacing = resolveVenuePacing();
   const alpacaBucket = new TokenBucket(venuePacing.alpaca);
@@ -413,6 +524,28 @@ export async function runFromEnvironment(): Promise<void> {
     console.error(
       `Backfill incomplete: ${short.length} of ${coverage.length} (instrument, timeframe) ` +
         `pair(s) short of the derived minimum — see the SHORT rows above.`,
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  // #791 AC2: fail loudly, not warn. A quarantined pair still has its bars
+  // durably written (the next warm tick is still served — #612 declined
+  // dropping Polygon from the failover chain), but this run must not exit 0
+  // as if it were a clean run: a caller that greps for a non-zero exit code
+  // — cron, a CI step, an operator's own habit — is exactly who else must
+  // not miss a polygon-sourced fill, not only the human reading the
+  // QUARANTINED rows above.
+  const quarantined = coverage.filter((row) => row.quarantined);
+  if (quarantined.length > 0) {
+    console.error(
+      `Backfill served ${quarantined.length} of ${coverage.length} (instrument, timeframe) ` +
+        'pair(s) from the QUARANTINED Polygon fallback — see the QUARANTINED rows above. Those ' +
+        'bars are durably stored and still usable for warm-starting a tick, but MUST NOT be ' +
+        'treated as a clean source of record for any threshold or measurement that reaches an ' +
+        'ADR (#791/#612 — Massive Businesses ToS §6.1(j) forbids using "the Information" to ' +
+        'build an "investment strategy"). Re-run once Alpaca recovers before trusting this ' +
+        "run's coverage for that purpose.",
     );
     process.exitCode = 1;
     return;
