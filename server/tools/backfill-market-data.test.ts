@@ -1,8 +1,14 @@
 import { DEFAULT_UNIVERSE, type UniverseInstrument } from '../apps/orchestrator/index.js';
+import type {
+  DataFailoverAlert,
+  DataFailoverAlertChannel,
+} from '../apps/orchestrator/production/data-failover.js';
+import type { Logger } from '../apps/orchestrator/types.js';
 import {
   type Bar,
   type BarWindow,
   type DataSource,
+  type FailoverEvent,
   type Mark,
   MarketDataServiceImpl,
   type Quote,
@@ -12,7 +18,11 @@ import {
 import { withOhlcvFailover } from '../providers/market-data-service/sources/ohlcv-failover.js';
 import type { Clock } from '../shared/index.js';
 import { openSharedStore } from '../shared/store/index.js';
-import { backfillMarketData, WARM_START_WINDOWS } from './backfill-market-data.js';
+import {
+  backfillMarketData,
+  buildBackfillFailoverAlerter,
+  WARM_START_WINDOWS,
+} from './backfill-market-data.js';
 
 class ManualClock implements Clock {
   constructor(private time: Date) {}
@@ -460,6 +470,108 @@ describe('OHLCV failover provenance, through the real store (#496)', () => {
     expect(stored.every((bar) => bar.source === 'polygon')).toBe(true);
   });
 
+  /**
+   * #791 AC2, named per the ticket's "provable by removal" criterion 3:
+   * DELETE `quarantined: rows.some((bar) => QUARANTINED_BAR_SOURCES.has(...))`
+   * from `backfillMarketData` (or replace it with `quarantined: false`) and
+   * this test goes red — it is the mechanism, not a description of intent.
+   */
+  it('flags the pair QUARANTINED when the equities fallback served a polygon-stamped bar (#791 AC2)', async () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteMarketDataStore(db);
+
+    const fetchEquityBars = withOhlcvFailover({
+      leg: 'equities',
+      primary: async () => {
+        throw new Error('Alpaca 403: SIP data window');
+      },
+      primaryName: 'alpaca',
+      fallback: async (symbol, window, at) =>
+        generateBars(symbol, window.timeframe, at, window.lookback).map((bar) => ({
+          ...bar,
+          source: 'polygon',
+        })),
+      fallbackName: 'polygon',
+      alert: () => {},
+    });
+
+    const coverage = await backfillMarketData({
+      store,
+      universe: [{ asset: 'SPY', asset_class: 'stocks' }] satisfies UniverseInstrument[],
+      windows: [{ timeframe: '1h', lookback: 20 }],
+      asOf: ASOF,
+      fetchEquityBars,
+      fetchCryptoBars: async () => [],
+      print: () => {},
+    });
+
+    expect(coverage[0]?.quarantined).toBe(true);
+  });
+
+  it('does NOT flag a pair the equities primary served cleanly — quarantine is not a default-true flag', async () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteMarketDataStore(db);
+
+    const fetchEquityBars = withOhlcvFailover({
+      leg: 'equities',
+      primary: async (symbol, window, at) =>
+        generateBars(symbol, window.timeframe, at, window.lookback).map((bar) => ({
+          ...bar,
+          source: 'alpaca',
+        })),
+      primaryName: 'alpaca',
+      fallback: async () => {
+        throw new Error('fallback must not be called');
+      },
+      fallbackName: 'polygon',
+      alert: () => {},
+    });
+
+    const coverage = await backfillMarketData({
+      store,
+      universe: [{ asset: 'SPY', asset_class: 'stocks' }] satisfies UniverseInstrument[],
+      windows: [{ timeframe: '1h', lookback: 20 }],
+      asOf: ASOF,
+      fetchEquityBars,
+      fetchCryptoBars: async () => [],
+      print: () => {},
+    });
+
+    expect(coverage[0]?.quarantined).toBe(false);
+  });
+
+  it('does NOT flag the crypto leg’s bitstamp fallback — the quarantine is equities/Polygon-only (#791/#612)', async () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteMarketDataStore(db);
+
+    const fetchCryptoBars = withOhlcvFailover({
+      leg: 'crypto',
+      primary: async () => {
+        throw new Error('Coinbase network error');
+      },
+      primaryName: 'coinbase',
+      fallback: async (symbol, window, at) =>
+        generateBars(symbol, window.timeframe, at, window.lookback).map((bar) => ({
+          ...bar,
+          source: 'bitstamp',
+        })),
+      fallbackName: 'bitstamp',
+      alert: () => {},
+    });
+
+    const coverage = await backfillMarketData({
+      store,
+      universe: [{ asset: 'BTC-USD', asset_class: 'crypto' }] satisfies UniverseInstrument[],
+      windows: [{ timeframe: '1d', lookback: 30 }],
+      asOf: ASOF,
+      fetchEquityBars: async () => [],
+      fetchCryptoBars,
+      print: () => {},
+    });
+
+    expect(coverage[0]?.quarantined).toBe(false);
+  });
+
   it('persists the CRYPTO fallback source (bitstamp) the same way', async () => {
     const db = openSharedStore(':memory:');
     const store = new SqliteMarketDataStore(db);
@@ -594,5 +706,139 @@ describe('warm-start payoff (#512 AC: no bar HTTP calls on a warm first tick)', 
     await service.getBars(firstInstrument.asset, firstWindow, tickAsOf);
 
     expect(source.fetches).toBe(1);
+  });
+});
+
+/** A `Logger` that records every call rather than writing anywhere. */
+class RecordingLogger implements Logger {
+  readonly entries: Parameters<Logger['log']>[0][] = [];
+  log(entry: Parameters<Logger['log']>[0]): void {
+    this.entries.push(entry);
+  }
+}
+
+const FAILOVER_EVENT: FailoverEvent = {
+  leg: 'equities',
+  symbol: 'SPY',
+  timeframe: '1h',
+  primaryName: 'alpaca',
+  fallbackName: 'polygon',
+  primaryError: 'Alpaca 403: SIP data window',
+};
+
+/**
+ * #791 AC1, named per the ticket's "provable by removal" criterion 3: swap
+ * `buildBackfillFailoverAlerter`'s wiring in `runFromEnvironment` back for
+ * the old `console.error`-only `alertFailover`, and
+ * `postDataFailoverAlert` above and this test go red — nothing left calls
+ * the channel.
+ */
+describe('buildBackfillFailoverAlerter (#791 AC1 — backfill failover reaches the routed channel)', () => {
+  it('posts to the routed dataFailoverAlerts channel, not console.error', () => {
+    const posted: DataFailoverAlert[] = [];
+    const channel: DataFailoverAlertChannel = {
+      postDataFailoverAlert: async (alert) => {
+        posted.push(alert);
+      },
+    };
+    const logger = new RecordingLogger();
+    const now = new Date('2026-08-18T09:00:00Z');
+
+    const alerter = buildBackfillFailoverAlerter({ alertChannel: channel, logger, now: () => now });
+    alerter(FAILOVER_EVENT);
+
+    expect(posted).toHaveLength(1);
+    expect(posted[0]).toMatchObject({
+      ...FAILOVER_EVENT,
+      reported_at: now,
+      suppressed_since_last: 0,
+    });
+  });
+
+  it('preserves the BEFORE-fallback alert ordering through withOhlcvFailover', async () => {
+    const posted: DataFailoverAlert[] = [];
+    const order: string[] = [];
+    const channel: DataFailoverAlertChannel = {
+      postDataFailoverAlert: async (alert) => {
+        order.push('alert');
+        posted.push(alert);
+      },
+    };
+    const alerter = buildBackfillFailoverAlerter({
+      alertChannel: channel,
+      logger: new RecordingLogger(),
+      now: () => new Date(),
+    });
+
+    const fetch = withOhlcvFailover({
+      leg: 'equities',
+      primaryName: 'alpaca',
+      fallbackName: 'polygon',
+      alert: alerter,
+      primary: async () => {
+        throw new Error('Alpaca 403: SIP data window');
+      },
+      fallback: async () => {
+        order.push('fallback');
+        return [];
+      },
+    });
+
+    await fetch('SPY', { timeframe: '1h', lookback: 20 }, new Date());
+
+    // `alerter` is synchronous (`FailoverAlerter` is `(event) => void`), so
+    // it runs to completion — including scheduling the fire-and-forget
+    // post — before `withOhlcvFailover` calls `config.fallback`. The POST
+    // itself may still resolve later; what must happen first is the call
+    // that starts it.
+    expect(order).toEqual(['alert', 'fallback']);
+    expect(posted).toHaveLength(1);
+  });
+
+  it('does not mask the fallback result or throw when postDataFailoverAlert REJECTS (#791 AC1 non-masking)', async () => {
+    const logger = new RecordingLogger();
+    const channel: DataFailoverAlertChannel = {
+      postDataFailoverAlert: async () => {
+        throw new Error('Telegram 500');
+      },
+    };
+    const alerter = buildBackfillFailoverAlerter({
+      alertChannel: channel,
+      logger,
+      now: () => new Date(),
+    });
+
+    const fetch = withOhlcvFailover({
+      leg: 'equities',
+      primaryName: 'alpaca',
+      fallbackName: 'polygon',
+      alert: alerter,
+      primary: async () => {
+        throw new Error('Alpaca 403: SIP data window');
+      },
+      fallback: async () => [
+        {
+          instrument: 'SPY',
+          timeframe: '1h',
+          open_time: new Date(0),
+          close_time: new Date(1),
+          open: 1,
+          high: 1,
+          low: 1,
+          close: 1,
+          volume: 1,
+          source: 'polygon',
+        } satisfies Bar,
+      ],
+    });
+
+    const bars = await fetch('SPY', { timeframe: '1h', lookback: 20 }, new Date());
+    expect(bars).toHaveLength(1);
+
+    // Let the rejected `postDataFailoverAlert` promise's `.catch` run before
+    // asserting — it is fire-and-forget, not awaited by `alerter` itself.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(logger.entries.some((e) => e.level === 'error')).toBe(true);
   });
 });
