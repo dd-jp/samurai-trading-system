@@ -143,6 +143,27 @@ describe('renderStage2Verdict', () => {
     expect(verdict.min_btl.exceeded).toBe(false);
   });
 
+  it('forwards an explicit expectedAnnualSharpe to the MinBTL check (#637)', () => {
+    // At the default E[SR]=1.0, 12 trials over 5 years is comfortably under
+    // the ~45-trial cap. At the measured 0.71, the cap for the same window is
+    // 10 — so the same N now exceeds it.
+    const atDefault = renderStage2Verdict({
+      results: [],
+      distinctTrialCount: 12,
+      window: FIVE_YEAR_WINDOW,
+    });
+    const atMeasured = renderStage2Verdict({
+      results: [],
+      distinctTrialCount: 12,
+      window: FIVE_YEAR_WINDOW,
+      expectedAnnualSharpe: 0.71,
+    });
+
+    expect(atDefault.min_btl.exceeded).toBe(false);
+    expect(atMeasured.min_btl.limit).toBe(10);
+    expect(atMeasured.min_btl.exceeded).toBe(true);
+  });
+
   it('reports no_real_trial_data for PBO when results is empty', () => {
     const verdict = renderStage2Verdict({
       results: [],

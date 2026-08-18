@@ -157,8 +157,17 @@ export function renderStage2Verdict(deps: {
   results: readonly TrialGridResult[];
   distinctTrialCount: number;
   window: DateRange;
+  /**
+   * E[SR] for the MinBTL check — see `overfitting.ts`'s
+   * `MINBTL_TARGET_ANNUAL_SHARPE` doc comment. Defaults to that constant
+   * (1.0) if omitted; pass a different value to render the verdict against a
+   * different stated assumption. Choosing which E[SR] is operative is a
+   * judgement call reserved for the repo owner (issue #637) — this parameter
+   * only makes the choice explicit rather than hardcoded.
+   */
+  expectedAnnualSharpe?: number;
 }): Stage2Verdict {
-  const min_btl = minbtlGuard(deps.window, deps.distinctTrialCount);
+  const min_btl = minbtlGuard(deps.window, deps.distinctTrialCount, deps.expectedAnnualSharpe);
   const kill_line_checks = killLineChecks(deps.results);
 
   const pboOutcomes = computePboFromCscvFolds(deps.results);

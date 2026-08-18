@@ -166,7 +166,7 @@ Uses existing seams unchanged: `ConfigTrialLog.recordTrial(config_hash, result)`
 
 Uses existing seams unchanged: `overfitting.ts`'s DSR/PBO/MinBTL functions, `ConfigTrialLog.distinctTrialCount()` as N.
 
-- MinBTL check: N=12 against a limit computed from the 5-year window (~45 at the reference 1.0 annual Sharpe target) — expected to report `exceeded: false` given the built-in headroom.
+- MinBTL check: N=12 against a limit computed from the 5-year window (~45 at the reference 1.0 annual Sharpe target) — expected to report `exceeded: false` given the built-in headroom. The 1.0 target is `overfitting.ts`'s `MINBTL_TARGET_ANNUAL_SHARPE`, a **stated default, not a measurement** — [#637](https://github.com/dd-jp/samurai-trading-system/issues/637) made it an explicit, overridable `expectedAnnualSharpe` parameter of `minbtl`/`minbtlGuard` rather than a private constant, so a caller quoting a different E[SR] states it explicitly. Which E[SR] should be operative is still an open call reserved for the repo owner; see the banner above and the F3 finding it cites.
 - PBO check: reject if `pbo > 0.05` (the spec's hard kill line, unchanged from `overfitting.ts`'s `PBO_REJECT_THRESHOLD`).
 - Result recorded as a written verdict (pass → proceed with Stage 3 as already underway via ADR-0004; kill/rework → back to Stage 2 per the staged-deployment plan, and the in-flight Production Composition Root work should be flagged, not silently continued past a failed gate).
 

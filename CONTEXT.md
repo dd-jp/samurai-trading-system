@@ -62,6 +62,9 @@ A statistical advantage that persists after costs, decay, and multiple-testing c
 **Overfitting**
 Manufacturing high in-sample Sharpe by testing too many configurations against noise. Measured via Probability of Backtest Overfitting (PBO). Kill if PBO > 0.05.
 
+**MinBTL (Minimum Backtest Length)**
+The other half of the overfitting guard alongside PBO/DSR (`server/tools/backtest/overfitting.ts`, López de Prado AFML ch. 8): the maximum number of independent trials a sample of a given length can support before an in-sample Sharpe of `E[SR]` is expected to arise from chance alone. The cap is inversely proportional to `E[SR]` **squared**, so this parameter drives every trial-budget number the project has quoted. `E[SR]` defaults to `MINBTL_TARGET_ANNUAL_SHARPE = 1.0` (López de Prado's reference case) — **a stated judgement call, not a measurement**, and now an explicit, overridable `expectedAnnualSharpe` parameter of `minbtl`/`minbtlGuard` rather than a private constant ([#637](https://github.com/dd-jp/samurai-trading-system/issues/637)). At the one Sharpe this project has actually measured (0.71, the now-superseded `docs/research/10-edge-hypothesis.md` configuration), the same function's headroom drops ~17× — 807 → 48 configs on a 10.2-year window. Choosing which `E[SR]` is operative is reserved for the repo owner; #637 only made the assumption visible. See `docs/reviews/spec-research-alignment-2026-08-09.md` F3, `docs/research/13-stage2-proxy-verdict.md`, and `docs/specs/stage2-validation-execution-spec.md`.
+
 **Sharpe Ratio**
 Risk-adjusted return metric. Live system target: ~1.5. Anything > 3-4 for non-HFT = red flag (leverage, hidden tail risk, or overfitting).
 

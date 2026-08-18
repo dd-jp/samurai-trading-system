@@ -716,6 +716,19 @@ describe('sizeTrialGridToSample', () => {
     expect(() => sizeTrialGridToSample([], windowOfYears(2))).toThrow(/empty grid/);
   });
 
+  it('forwards an explicit expectedAnnualSharpe to the MinBTL cap (#637)', () => {
+    // A lower E[SR] shrinks the cap sharply — sizing must reflect the value
+    // actually passed, not the hardcoded default.
+    const full = buildTrialGrid();
+    const window = windowOfYears(5);
+
+    const atDefault = sizeTrialGridToSample(full, window);
+    const atMeasured = sizeTrialGridToSample(full, window, 0.71);
+
+    expect(atMeasured.limit).toBeLessThan(atDefault.limit);
+    expect(atMeasured.limit).toBe(minbtl(window, 0.71).limit);
+  });
+
   it('keeps only distinct configs — a duplicate would inflate N against the cap', () => {
     const sizing = sizeTrialGridToSample(buildTrialGrid(), windowOfYears(2));
     const hashes = sizing.selected.map((entry) => entry.config_hash);
