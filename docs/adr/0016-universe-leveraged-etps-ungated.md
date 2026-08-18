@@ -73,7 +73,9 @@ Anything proposing to improve the economics should be checked against this order
 > amendment), so the largest lever no longer exists for this system; levers 2 and 3 (`£252 → £89/yr`, `~£5/yr`)
 > are 15-minute-cadence, crypto-in-scope numbers. The equities-only bill is **~£58/yr** in total
 > (`docs/research/54-capital-economics-vs-signal-accuracy.md`), which is worth **~0.55 pp** of accuracy at
-> £1,000 of position notional — second-order against geometry bars of 1–4 pp. **On the equities-only book the
+> £1,000 of position notional — but **1.58 pp on the index bracket at the £350 position notional D5 resolves
+> to** out of the £1,000 book, over half QQQ's 2.96 pp geometry bar, so it is second-order only at the larger
+> illustrative notional. **On the equities-only book the
 > economics are governed by the entry signal's accuracy, not by any lever in this list.** Kept for provenance.
 
 **Single-name concentration is now the norm, not a risk to be diversified away.** The Risk Manager's correlation and concentration limits were specced against a diversified basket and need re-reading against a universe deliberately chosen for co-movement.

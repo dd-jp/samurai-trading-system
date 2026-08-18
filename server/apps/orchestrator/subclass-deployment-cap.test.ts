@@ -34,7 +34,7 @@ import type { UniverseInstrument } from './types.js';
 const D5_PUBLISHED_LEG = 750;
 
 describe("ADR-0018 D5's fractions reproduce the ADR's own figures", () => {
-  it("puts a 3x index ETP at ~£260 and a single-stock ETP at ~£190 on the £750 leg D5 was written against", () => {
+  it('puts a 3x index ETP at ~£260 and a single-stock ETP at ~£190 on the £750 leg D5 was written against', () => {
     // The fractions are the rule (#739); the cash figures are what they
     // resolve to at the leg D5 was calibrated on, which is the check that the
     // base is right rather than a cap the system stores.

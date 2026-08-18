@@ -88,19 +88,23 @@ Annual net, per **£1,000 of position notional**, at accuracy `p` over `N` sessi
 net_£/yr = N × E(p)/100 × notional − bill
 ```
 
-**Position notional, not leg size.** Every figure below is per **£1,000 of position notional** — the cash
-in a single position — which is *not* the equity leg: under [ADR-0018](../adr/0018-intraday-thresholds-sizing-and-the-signal-bar.md)
-D5's fractions a leg funds a position at a fraction of itself, so leg size and notional differ by that factor
-and must not be read as the same number.
+**Position notional, not the book.** Every figure below is per **£1,000 of position notional** — the cash
+in a *single position* — which is not the book. Under [ADR-0018](../adr/0018-intraday-thresholds-sizing-and-the-signal-bar.md)
+D5's fractions a £1,000 book funds one position at **£350 (index) or £250 (single-stock)**
+(`server/apps/orchestrator/paper-profile.ts:381,391`), so book and notional differ by that fraction and must
+never be read as the same number.
 
 **Capital is deliberately not substituted.** #658's £500–1,000, and the later £750 equity leg, are both
 superseded. Multiply through by the notional once the deployment fraction is settled.
 
 > **Half of that resolved on 2026-08-18, after this doc was written.** David re-based the book to **£1,000,
 > all equity** (ADR-0015's 2026-08-18 amendment, closing
-> [#800](https://github.com/dd-jp/samurai-trading-system/issues/800)), so the **£1,000 column below is the
-> book, not an illustrative unit** — the 0.55 pp cost-in-accuracy figure applies as written, and the £5,000
-> column is hypothetical. The deployment fraction remains open under
+> [#800](https://github.com/dd-jp/samurai-trading-system/issues/800)), so the **book size is settled**.
+> **That does not make the £1,000 column below the operative one.** Corrected 2026-08-19 in review: an
+> earlier draft of this note read the £1,000 column as the book and concluded the 0.55 pp cost-in-accuracy
+> figure "applies as written". The columns are *position notional*, and D5 funds one position at £350/£250
+> out of a £1,000 book — so both the £1,000 and £5,000 columns remain illustrative, and at the resolved
+> notionals the bill costs **1.58 pp (index)** and **0.75 pp (single-stock)**, not 0.55 pp. See §4. The deployment fraction remains open under
 > [#798](https://github.com/dd-jp/samurai-trading-system/issues/798), which the same ruling made *harder*:
 > single-stock `f = 0.25` now applies unscaled, at a measured ~41.8% drawdown. Note the two move in opposite
 > directions for this doc's purposes — a **smaller** book raises the bill's share of accuracy, while a
@@ -112,15 +116,27 @@ sessions, £1,000 notional: `252 × −0.1231% × £1,000 = −£310/yr` against
 premise inverted.** #658 was written when the bill was believed to be ~£864/yr against a positive edge; the
 bill is now ~£58/yr against a trading term that is negative and roughly 5× larger.
 
-**Expressed as accuracy, the bill is a second-order term.** Carrying it costs
+**Expressed as accuracy, the bill's weight is entirely a function of the notional.** Carrying it costs
 
 ```
 Δp (pp) = bill × 10⁴ / (N × notional × width)      e.g. 58 × 10⁴ / (252 × 1000 × 4.16) = 0.55 pp
 ```
 
-— **0.55 pp** at £1,000 of notional on the index bracket, **0.11 pp** at £5,000. Against geometry bars of
-1–4 pp, the LLM bill moves the required accuracy by a fraction of what the instrument choice does. Including
-it, QQQ's break-even is **53.51%** at £1,000 notional and **53.07%** at £5,000.
+The whole £58 bill is charged against a **single** position stream throughout — the attribution the £1,000
+column already used — so every figure here is an upper bound if more than one position runs concurrently.
+
+| position notional | index (width 4.16) | single-stock (width 12.25) |
+| --- | --- | --- |
+| £5,000 | 0.11 pp | 0.04 pp |
+| £1,000 | 0.55 pp | 0.19 pp |
+| **£350 / £250 — D5's fractions of the £1,000 book** | **1.58 pp** | **0.75 pp** |
+
+**At the resolved notionals the bill stops being second-order on the index bracket.** 1.58 pp is more than
+half of QQQ's 2.96 pp geometry bar and ~38% of SPY's 4.19 pp; including it, QQQ's break-even is **54.54%**,
+not the 53.51% the £1,000 illustration gives. On the single-stock bracket it stays small — 0.75 pp against
+bars of 1.29 (PLTR) to 7.16 (MSTR) — because the wider bracket and the larger `E_net` magnitudes both
+dominate it. **The unqualified claim that the bill is second-order holds only at the £1,000-notional
+illustration, and not at the notional D5 actually resolves to.**
 
 ## 5. What this says about gating — and what it cannot say
 
@@ -143,8 +159,9 @@ Two things follow, and one explicitly does not.
 sessions traded reduces the loss. #658's (a) ruling loses the support it was given.
 
 **Follows.** The absolute bar is unchanged by gating: whatever `g` is, the system needs
-`p ≥ 50% + bar + Δp` to make money at all — **~51.3% (PLTR) to ~57.2% (MSTR)**, ~53.5% on QQQ at £1,000
-notional. This is the replacement for the withdrawn *"catalyst days must deliver ≥ 0.312%/trade against the
+`p ≥ 50% + bar + Δp` to make money at all — **51.3% (PLTR) to 57.2% (MSTR)** before the bill, and
+**~52.0% (PLTR) to ~57.9% (MSTR)** with it, alongside **~54.5% on QQQ**, each carrying the bill at the
+notional D5 resolves to (£250 single-stock, £350 index) rather than at the £1,000 illustration. This is the replacement for the withdrawn *"catalyst days must deliver ≥ 0.312%/trade against the
 0.195% all-day average — a 60% uplift"* bar handed to
 [#655](https://github.com/dd-jp/samurai-trading-system/issues/655). **The shape is different: the old bar was
 a percentage uplift over a positive average; the anchor is negative, so the replacement is an accuracy
@@ -169,7 +186,9 @@ is profitable or unprofitable."* `p_u` and `p_g` are both unmeasured because the
    [`53-intraday-cost-calibration.md`](53-intraday-cost-calibration.md) calibrates the *backtest* cost model
    at 1-minute resolution on a US-equity proxy; it does not supply an LSE ETP round trip either, so it
    narrows nothing here.
-4. **Capital and deployment are open** (#800, #798) — hence per-£1,000 throughout.
+4. **Deployment is open** ([#798](https://github.com/dd-jp/samurai-trading-system/issues/798)) — hence
+   per-£1,000 throughout, with the D5-resolved £350/£250 row alongside it. The book itself is no longer open:
+   #800 settled it at £1,000, all equity.
 5. **The bill's two factors are assumptions** (§3): instruments debated per day and bars per session.
 6. **The `E(p)` identity assumes the bracket resolves.** `E(p) = (p − 0.5) × width + E_net` prices a win at
    `+tp` and a loss at `−|sl|`, i.e. it puts no mass on sessions that reach neither leg and exit flat-by-close
