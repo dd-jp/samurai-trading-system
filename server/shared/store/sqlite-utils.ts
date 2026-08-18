@@ -34,12 +34,15 @@ export type StoredTimestamp = string & { readonly __storedTimestamp: unique symb
 
 /**
  * The one spelling every timestamp column is allowed to hold. Fixed width is
- * the load-bearing part, not the ISO-ness: `sqlite-shared-store.ts` reads
- * `MAX(timestamp)` over the stored TEXT and gets a chronological answer *only*
- * because every row is the same width in the same zone. A single row written
- * as `2026-08-18T09:00:00Z` (no milliseconds) or in a local offset would sort
- * wrong against its neighbours and silently corrupt that query, and every
- * range scan beside it.
+ * the load-bearing part, not the ISO-ness: the stores compare and order these
+ * columns as TEXT and get a chronological answer *only* because every row is
+ * the same width in the same zone — `sqlite-shared-store.ts`'s
+ * `ORDER BY opened_at`, `sqlite-setup-store.ts`'s `closed_at <= ?`,
+ * `sqlite-query-store.ts`'s whole `asOf` filter, `sqlite-daily-equity-store.ts`'s
+ * `ORDER BY session_start` (whose reader differences adjacent rows to find
+ * gaps). A single row written as `2026-08-18T09:00:00Z` (no milliseconds) or
+ * in a local offset sorts wrong against its neighbours and silently corrupts
+ * every one of them.
  */
 const STORED_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 

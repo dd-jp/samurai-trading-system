@@ -16,6 +16,7 @@
 
 import type { DebateLog, DebateLogStore } from '../../shared/index.js';
 import { isUniqueConstraintError, type SharedStore } from '../../shared/store/index.js';
+import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 import type { AnalystContribution, Direction } from './types.js';
 
 interface DebateLogRow {
@@ -54,11 +55,11 @@ export class SqliteDebateLogStore implements DebateLogStore {
         .run(
           entry.debate_id,
           entry.instrument,
-          entry.bar_timestamp.toISOString(),
+          toStoredTimestamp(entry.bar_timestamp),
           JSON.stringify(entry.contributions),
           entry.direction,
           entry.rounds,
-          entry.created_at.toISOString(),
+          toStoredTimestamp(entry.created_at),
           // #426. Null rather than absent when the caller has no trace: the
           // column is nullable precisely because pre-#426 rows have none, and
           // a retried tick's fresh trace must not overwrite the one that
@@ -101,11 +102,11 @@ export class SqliteDebateLogStore implements DebateLogStore {
     return {
       debate_id: row.debate_id,
       instrument: row.instrument,
-      bar_timestamp: new Date(row.bar_timestamp),
+      bar_timestamp: fromStoredTimestamp(row.bar_timestamp),
       contributions: JSON.parse(row.contributions_json) as AnalystContribution[],
       direction: row.direction,
       rounds: row.rounds,
-      created_at: new Date(row.created_at),
+      created_at: fromStoredTimestamp(row.created_at),
       // Absent rather than null on the domain object (#426): `DebateLog
       // .trace_id` is optional, and a pre-#426 row genuinely has no trace
       // rather than a null one.

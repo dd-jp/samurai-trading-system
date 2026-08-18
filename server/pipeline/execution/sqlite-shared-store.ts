@@ -13,8 +13,11 @@
  *
  * Two conventions carried from `SqliteSetupStore` (server/pipeline/trader/sqlite-setup-store.ts):
  *
- * 1. **Timestamps are ISO-8601 UTC TEXT** (`Date.toISOString()`) on write and
- *    read alike.
+ * 1. **Timestamps are ISO-8601 UTC TEXT**, written through
+ *    `toStoredTimestamp` and read back through `fromStoredTimestamp`
+ *    (`shared/store/sqlite-utils.ts`, #837 M7). Those helpers are where the
+ *    fixed-width form is held, and `ORDER BY opened_at` below is a TEXT sort
+ *    that is chronological only because of it.
  * 2. **JSON columns** (`broker_order_ids`, `cost_breakdown_json`) round-trip
  *    through `JSON.stringify`/`JSON.parse` at this boundary only — the port
  *    never sees the serialized form.
@@ -33,6 +36,11 @@ import {
   isUniqueConstraintError,
   TERMINAL_ORDER_STATES,
 } from '../../shared/store/index.js';
+import {
+  fromStoredTimestamp,
+  fromStoredTimestampOrNull,
+  toStoredTimestamp,
+} from '../../shared/store/sqlite-utils.js';
 import type {
   FlattenAttribution,
   FlattenSubmissionWriteAhead,
@@ -194,8 +202,8 @@ export class SqliteExecutionStore implements SharedStore {
           position.target,
           position.order_state,
           JSON.stringify(position.broker_order_ids),
-          position.opened_at.toISOString(),
-          position.decision_timestamp.toISOString(),
+          toStoredTimestamp(position.opened_at),
+          toStoredTimestamp(position.decision_timestamp),
           position.conviction,
           position.converged ? 1 : 0,
         );
@@ -263,7 +271,7 @@ export class SqliteExecutionStore implements SharedStore {
           fill.price,
           fill.qty,
           fill.fee,
-          fill.timestamp.toISOString(),
+          toStoredTimestamp(fill.timestamp),
           fill.cost_breakdown === undefined ? null : JSON.stringify(fill.cost_breakdown),
           fill.exit_reason ?? null,
         );
@@ -398,8 +406,8 @@ export class SqliteExecutionStore implements SharedStore {
           trade.filled_size,
           trade.realized_pnl_net,
           trade.fees_total,
-          trade.opened_at.toISOString(),
-          trade.closed_at.toISOString(),
+          toStoredTimestamp(trade.opened_at),
+          toStoredTimestamp(trade.closed_at),
           trade.close_reason,
         );
     } catch (cause) {
@@ -461,7 +469,7 @@ export class SqliteExecutionStore implements SharedStore {
           submission.asset_class,
           submission.side,
           submission.size,
-          submission.submitted_at.toISOString(),
+          toStoredTimestamp(submission.submitted_at),
           // Both columns projected from the SAME array in the same statement,
           // so the pairing they encode positionally cannot be wrong here.
           // `getFlattenAttribution` re-establishes it on the way out.
@@ -492,7 +500,7 @@ export class SqliteExecutionStore implements SharedStore {
       .run(
         update.order_state,
         JSON.stringify(update.broker_order_ids),
-        resolved_at.toISOString(),
+        toStoredTimestamp(resolved_at),
         idempotency_key,
       );
 
@@ -515,7 +523,7 @@ export class SqliteExecutionStore implements SharedStore {
             SET status = 'error', reason = ?, resolved_at = ?
           WHERE idempotency_key = ?`,
       )
-      .run(reason, resolved_at.toISOString(), idempotency_key);
+      .run(reason, toStoredTimestamp(resolved_at), idempotency_key);
 
     if (result.changes === 0) {
       throw new Error(
@@ -677,7 +685,7 @@ export class SqliteExecutionStore implements SharedStore {
   async markFlattenFillsSwept(idempotency_key: string, swept_at: Date): Promise<void> {
     const result = this.db
       .prepare('UPDATE flatten_submissions SET fills_swept_at = ? WHERE idempotency_key = ?')
-      .run(swept_at.toISOString(), idempotency_key);
+      .run(toStoredTimestamp(swept_at), idempotency_key);
 
     if (result.changes === 0) {
       throw new Error(
@@ -702,7 +710,7 @@ export class SqliteExecutionStore implements SharedStore {
             SET residual_unprotected_since = COALESCE(residual_unprotected_since, ?)
           WHERE idempotency_key = ?`,
       )
-      .run(observed_at.toISOString(), idempotency_key);
+      .run(toStoredTimestamp(observed_at), idempotency_key);
 
     if (result.changes === 0) {
       throw new Error(
@@ -741,7 +749,7 @@ export class SqliteExecutionStore implements SharedStore {
             SET residual_rearm_alerted_at = ?
           WHERE idempotency_key = ? AND residual_rearm_alerted_at IS NULL`,
       )
-      .run(alerted_at.toISOString(), idempotency_key);
+      .run(toStoredTimestamp(alerted_at), idempotency_key);
 
     return result.changes > 0;
   }
@@ -776,9 +784,8 @@ export class SqliteExecutionStore implements SharedStore {
       }
       return {
         position: fromPositionRow(row),
-        unprotected_since: new Date(row.residual_unprotected_since),
-        alerted_at:
-          row.residual_rearm_alerted_at === null ? null : new Date(row.residual_rearm_alerted_at),
+        unprotected_since: fromStoredTimestamp(row.residual_unprotected_since),
+        alerted_at: fromStoredTimestampOrNull(row.residual_rearm_alerted_at),
       };
     });
   }
@@ -816,8 +823,8 @@ export function fromPositionRow(row: OpenPositionRow): OpenPosition {
     target: row.target,
     order_state: row.order_state,
     broker_order_ids: JSON.parse(row.broker_order_ids) as string[],
-    opened_at: new Date(row.opened_at),
-    decision_timestamp: new Date(row.decision_timestamp),
+    opened_at: fromStoredTimestamp(row.opened_at),
+    decision_timestamp: fromStoredTimestamp(row.decision_timestamp),
     conviction: row.conviction,
     converged: row.converged === 1,
   };
@@ -831,7 +838,7 @@ function fromFillRow(row: FillRow): Fill {
     price: row.price,
     qty: row.qty,
     fee: row.fee,
-    timestamp: new Date(row.timestamp),
+    timestamp: fromStoredTimestamp(row.timestamp),
     ...(row.cost_breakdown_json === null
       ? {}
       : {

@@ -10,7 +10,9 @@
  * `AlpacaAccountStateProvider` — so the series cannot drift onto a different
  * definition of "a day" than the breaker uses.
  */
+
 import type { SharedStore } from '../../shared/store/index.js';
+import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 
 /** One day's equity observation, anchored to the portfolio session it opens. */
 export interface DailyEquityObservation {
@@ -73,9 +75,9 @@ export class SqliteDailyEquityStore {
          ON CONFLICT(session_start) DO NOTHING`,
       )
       .run(
-        sessionStart.toISOString(),
+        toStoredTimestamp(sessionStart),
         equity,
-        recordedAt.toISOString(),
+        toStoredTimestamp(recordedAt),
         observedAtBoundary ? 1 : 0,
       );
   }
@@ -84,7 +86,7 @@ export class SqliteDailyEquityStore {
    * Every observation, oldest first.
    *
    * `ORDER BY session_start` is a TEXT sort, chronological only because every
-   * value is written through `toISOString()` — fixed-width, zero-padded,
+   * value is written through `toStoredTimestamp` — fixed-width, zero-padded,
    * Z-suffixed. Ascending order is not a convenience: the reader detects gaps by
    * differencing adjacent rows, and an unsorted read would manufacture spacing
    * violations out of nothing.
@@ -99,9 +101,9 @@ export class SqliteDailyEquityStore {
       .all() as DailyEquityRow[];
 
     return rows.map((row) => ({
-      session_start: new Date(row.session_start),
+      session_start: fromStoredTimestamp(row.session_start),
       equity: row.equity,
-      recorded_at: new Date(row.recorded_at),
+      recorded_at: fromStoredTimestamp(row.recorded_at),
       observed_at_boundary: row.observed_at_boundary === 1,
     }));
   }

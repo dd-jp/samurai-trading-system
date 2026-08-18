@@ -6,7 +6,9 @@
  * previous verdict is the record of what was believed when a capital decision
  * was made. Readers take the newest row per asset class; nothing is destroyed.
  */
+
 import type { SharedStore } from '../../shared/store/index.js';
+import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 import type { Stage2Selection } from './stage2-selection.js';
 
 interface SelectionRow {
@@ -46,9 +48,9 @@ export class SqliteStage2SelectionStore {
       .run(
         selection.config_hash,
         selection.asset_class,
-        selection.selected_at.toISOString(),
-        selection.window.start.toISOString(),
-        selection.window.end.toISOString(),
+        toStoredTimestamp(selection.selected_at),
+        toStoredTimestamp(selection.window.start),
+        toStoredTimestamp(selection.window.end),
         selection.backtest_sharpe,
         selection.oos_sharpe,
         JSON.stringify(selection.fold_sharpes),
@@ -85,8 +87,11 @@ function toSelection(row: SelectionRow): Stage2Selection {
   return {
     config_hash: row.config_hash,
     asset_class: row.asset_class,
-    selected_at: new Date(row.selected_at),
-    window: { start: new Date(row.window_start), end: new Date(row.window_end) },
+    selected_at: fromStoredTimestamp(row.selected_at),
+    window: {
+      start: fromStoredTimestamp(row.window_start),
+      end: fromStoredTimestamp(row.window_end),
+    },
     backtest_sharpe: row.backtest_sharpe,
     oos_sharpe: row.oos_sharpe,
     fold_sharpes: JSON.parse(row.fold_sharpes_json) as number[],

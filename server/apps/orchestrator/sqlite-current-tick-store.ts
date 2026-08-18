@@ -12,7 +12,9 @@
  * "disposable, best-effort" framing) — so silently overwriting is correct,
  * not a bug to guard against.
  */
+
 import type { SharedStore } from '../../shared/store/index.js';
+import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 import type { AssetClass, CurrentTick, CurrentTickStore, TickStage } from './types.js';
 
 interface CurrentTickRow {
@@ -37,7 +39,13 @@ export class SqliteCurrentTickStore implements CurrentTickStore {
            trace_id = excluded.trace_id,
            updated_at = excluded.updated_at`,
       )
-      .run(row.instrument, row.asset_class, row.stage, row.trace_id, row.updated_at.toISOString());
+      .run(
+        row.instrument,
+        row.asset_class,
+        row.stage,
+        row.trace_id,
+        toStoredTimestamp(row.updated_at),
+      );
   }
 
   delete(instrument: string): void {
@@ -54,7 +62,7 @@ export class SqliteCurrentTickStore implements CurrentTickStore {
       asset_class: row.asset_class,
       stage: row.stage,
       trace_id: row.trace_id,
-      updated_at: new Date(row.updated_at),
+      updated_at: fromStoredTimestamp(row.updated_at),
     };
   }
 }

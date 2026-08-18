@@ -11,7 +11,9 @@
  * clock puts multiple stages at the same ISO millisecond (the same reason
  * `SqliteExecutionStore.getFills` orders by `rowid`).
  */
+
 import type { SharedStore } from '../../shared/store/index.js';
+import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 import type { AssetClass, AuditLog } from './types.js';
 
 export interface AuditLogEntry {
@@ -61,7 +63,7 @@ export class SqliteAuditLog implements AuditLog {
         entry.decision,
         entry.input_digest,
         entry.output_digest,
-        entry.timestamp.toISOString(),
+        toStoredTimestamp(entry.timestamp),
         entry.instrument ?? null,
         entry.asset_class ?? null,
       );
@@ -78,7 +80,7 @@ export class SqliteAuditLog implements AuditLog {
       decision: row.decision,
       input_digest: row.input_digest,
       output_digest: row.output_digest,
-      timestamp: new Date(row.timestamp),
+      timestamp: fromStoredTimestamp(row.timestamp),
       ...(row.instrument === null ? {} : { instrument: row.instrument }),
       ...(row.asset_class === null ? {} : { asset_class: row.asset_class }),
     }));

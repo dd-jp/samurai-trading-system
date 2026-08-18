@@ -11,7 +11,7 @@
  *
  * Timestamp convention carried from `SqliteExecutionStore` /
  * `SqliteDebateLogStore`: ISO-8601 UTC TEXT columns, lexicographically
- * comparable because every writer uses `Date.toISOString()`. `asOf`
+ * comparable because every writer goes through `toStoredTimestamp`. `asOf`
  * filtering below (`WHERE ... <= ?`) relies on that.
  *
  * Two `MetricsSuite` fields (`profit_factor`, `expectancy`) are honestly
@@ -38,6 +38,7 @@ import {
   fromClosedTradeRow,
   type SharedStore,
 } from '../../shared/store/index.js';
+import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
 import type { AssetClass, TickStage } from '../orchestrator/index.js';
 import type {
@@ -156,8 +157,8 @@ function fromOpenPositionRow(row: OpenPositionRow): OpenPosition {
     target: row.target,
     order_state: row.order_state,
     broker_order_ids: JSON.parse(row.broker_order_ids) as string[],
-    opened_at: new Date(row.opened_at),
-    decision_timestamp: new Date(row.decision_timestamp),
+    opened_at: fromStoredTimestamp(row.opened_at),
+    decision_timestamp: fromStoredTimestamp(row.decision_timestamp),
     conviction: row.conviction,
     converged: row.converged === 1,
   };
@@ -167,11 +168,11 @@ function fromDebateLogRow(row: DebateLogRow): DebateLog {
   return {
     debate_id: row.debate_id,
     instrument: row.instrument,
-    bar_timestamp: new Date(row.bar_timestamp),
+    bar_timestamp: fromStoredTimestamp(row.bar_timestamp),
     contributions: JSON.parse(row.contributions_json) as AnalystContribution[],
     direction: row.direction,
     rounds: row.rounds,
-    created_at: new Date(row.created_at),
+    created_at: fromStoredTimestamp(row.created_at),
   };
 }
 
@@ -182,7 +183,7 @@ function fromVerdictLogRow(row: VerdictLogRow): VerdictAuditEntry {
     status: row.status,
     reason: row.no_go_reason ?? 'approved',
     hitl_override: row.hitl_override !== 0,
-    timestamp: new Date(row.timestamp),
+    timestamp: fromStoredTimestamp(row.timestamp),
   };
 }
 
@@ -217,14 +218,14 @@ export class SqliteQueryStore implements DashboardQueryStore {
           WHERE order_state NOT IN (${placeholders}) AND opened_at <= ?
           ORDER BY opened_at`,
       )
-      .all(...TERMINAL_STATES, asOf.toISOString()) as OpenPositionRow[];
+      .all(...TERMINAL_STATES, toStoredTimestamp(asOf)) as OpenPositionRow[];
     return rows.map(fromOpenPositionRow);
   }
 
   getRecentDebates(limit: number, asOf: Date): DebateLog[] {
     const rows = this.db
       .prepare(`SELECT * FROM debate_log WHERE created_at <= ? ORDER BY created_at DESC LIMIT ?`)
-      .all(asOf.toISOString(), limit) as DebateLogRow[];
+      .all(toStoredTimestamp(asOf), limit) as DebateLogRow[];
     return rows.map(fromDebateLogRow);
   }
 
@@ -234,7 +235,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
         `SELECT instrument, asset_class, stage, trace_id FROM current_tick
           WHERE updated_at <= ? ORDER BY updated_at DESC LIMIT 1`,
       )
-      .get(asOf.toISOString()) as CurrentTickRow | undefined;
+      .get(toStoredTimestamp(asOf)) as CurrentTickRow | undefined;
     if (row === undefined) {
       return null;
     }
@@ -249,14 +250,14 @@ export class SqliteQueryStore implements DashboardQueryStore {
   getVerdictHistory(limit: number, asOf: Date): VerdictAuditEntry[] {
     const rows = this.db
       .prepare(`SELECT * FROM verdict_log WHERE timestamp <= ? ORDER BY timestamp DESC LIMIT ?`)
-      .all(asOf.toISOString(), limit) as VerdictLogRow[];
+      .all(toStoredTimestamp(asOf), limit) as VerdictLogRow[];
     return rows.map(fromVerdictLogRow);
   }
 
   getAnalystWeights(asOf: Date): Record<string, number> {
     const rows = this.db
       .prepare(`SELECT analyst_id, weight FROM analyst_weights WHERE updated_at <= ?`)
-      .all(asOf.toISOString()) as AnalystWeightRow[];
+      .all(toStoredTimestamp(asOf)) as AnalystWeightRow[];
     const weights: Record<string, number> = {};
     for (const row of rows) {
       weights[row.analyst_id] = row.weight;
@@ -279,7 +280,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
            JOIN debate_log ON debate_log.debate_id = closed_trades.debate_id
           WHERE closed_trades.closed_at > ? AND closed_trades.closed_at <= ?`,
       )
-      .all(from.toISOString(), asOf.toISOString()) as AttributionRow[];
+      .all(toStoredTimestamp(from), toStoredTimestamp(asOf)) as AttributionRow[];
 
     const rollingR = new Map<string, number>();
     for (const row of rows) {
@@ -312,7 +313,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
     const from = new Date(asOf.getTime() - 24 * 60 * 60 * 1000);
     const rows = this.db
       .prepare(`SELECT * FROM closed_trades WHERE closed_at > ? AND closed_at <= ?`)
-      .all(from.toISOString(), asOf.toISOString()) as ClosedTradeRow[];
+      .all(toStoredTimestamp(from), toStoredTimestamp(asOf)) as ClosedTradeRow[];
     const trades = rows.map(fromClosedTradeRow);
 
     return {
@@ -349,7 +350,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
     for (const row of rows) {
       marks.set(row.instrument, {
         price: row.price,
-        observed_at: new Date(row.observed_at),
+        observed_at: fromStoredTimestamp(row.observed_at),
         source: row.source,
         asset_class: row.asset_class,
       });
@@ -379,9 +380,9 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * than silently understating the total.
    */
   getLlmSpend(asOf: Date): LlmSpendSummary {
-    const until = asOf.toISOString();
-    const dayAgo = new Date(asOf.getTime() - 24 * 60 * 60 * 1000).toISOString();
-    const weekAgo = new Date(asOf.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const until = toStoredTimestamp(asOf);
+    const dayAgo = toStoredTimestamp(new Date(asOf.getTime() - 24 * 60 * 60 * 1000));
+    const weekAgo = toStoredTimestamp(new Date(asOf.getTime() - 7 * 24 * 60 * 60 * 1000));
     return {
       last_24h: this.spendBetween(dayAgo, until),
       last_7d: this.spendBetween(weekAgo, until),
@@ -419,8 +420,8 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * 0025) rather than scanning the table.
    */
   getPipelineActivity(maxLanes: number, lookbackMs: number, asOf: Date): PipelineActivity {
-    const until = asOf.toISOString();
-    const from = new Date(asOf.getTime() - lookbackMs).toISOString();
+    const until = toStoredTimestamp(asOf);
+    const from = toStoredTimestamp(new Date(asOf.getTime() - lookbackMs));
 
     // Three sources, and the invariant is that ACTIVITY defines the universe
     // while PRICING only extends it (#619):
@@ -503,7 +504,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
         asset_class: row.asset_class,
         stage: row.stage,
         trace_id: row.trace_id,
-        entered_at: new Date(row.updated_at),
+        entered_at: fromStoredTimestamp(row.updated_at),
       }));
 
     return {
@@ -589,7 +590,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
         asset_class: row.asset_class,
         stage: row.stage,
         decision: row.decision,
-        timestamp: new Date(row.timestamp),
+        timestamp: fromStoredTimestamp(row.timestamp),
       });
     }
     return events;

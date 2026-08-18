@@ -16,6 +16,7 @@
 import type { Clock, TuningStore } from '../../shared/index.js';
 import { assertThresholdWithinBounds, SystemClock } from '../../shared/index.js';
 import type { SharedStore } from '../../shared/store/index.js';
+import { toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 
 /**
  * The three dial tables share one shape — (name key, REAL value, updated_at)
@@ -85,7 +86,7 @@ export class SqliteTuningStore implements TuningStore {
          VALUES (?, ?, ?)
          ON CONFLICT(${ANALYST_WEIGHTS.keyColumn}) DO NOTHING`,
       )
-      .run(analyst_id, weight, this.clock.now().toISOString());
+      .run(analyst_id, weight, toStoredTimestamp(this.clock.now()));
     return result.changes === 1;
   }
 
@@ -135,7 +136,7 @@ export class SqliteTuningStore implements TuningStore {
          VALUES (?, ?, ?)
          ON CONFLICT(${RISK_THRESHOLDS.keyColumn}) DO NOTHING`,
       )
-      .run(name, value, this.clock.now().toISOString());
+      .run(name, value, toStoredTimestamp(this.clock.now()));
     return result.changes === 1;
   }
 
@@ -154,6 +155,6 @@ export class SqliteTuningStore implements TuningStore {
          ON CONFLICT(${dial.keyColumn}) DO UPDATE
            SET ${dial.valueColumn} = excluded.${dial.valueColumn}, updated_at = excluded.updated_at`,
       )
-      .run(key, value, this.clock.now().toISOString());
+      .run(key, value, toStoredTimestamp(this.clock.now()));
   }
 }
