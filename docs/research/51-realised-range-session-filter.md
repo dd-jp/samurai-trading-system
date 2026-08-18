@@ -174,7 +174,7 @@ a third of the trades.
 ### 6.0 Data actually fetched
 
 Alpaca SIP, `adjustment=all`, `2016-01-01 → 2026-08-01`, cached to the gitignored
-`docs/research/data/bars/` and never re-fetched. Regular hours (09:30–16:00 ET) are selected at
+`docs/research/data/bars/` and never re-fetched. <!-- cite-exempt: untracked — the bars cache is gitignored by design, as this sentence says; it is not in the tree and must not be --> Regular hours (09:30–16:00 ET) are selected at
 load time by `18-threshold-study.py`; the fetched files include extended hours, which is why the
 row counts exceed the session counts × bars-per-session.
 

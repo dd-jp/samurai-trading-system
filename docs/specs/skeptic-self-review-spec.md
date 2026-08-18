@@ -240,8 +240,8 @@ The skeptic prompt receives the debate synthesis and conditions as untrusted dat
 
 | File | Change |
 |---|---|
-| `server/pipeline/invalidation/invalidation-stage.ts` | Add skeptic call step between condition evaluation and result assembly |
-| `server/pipeline/invalidation/skeptic-prompt.ts` | New — prompt construction, JSON parsing, category validation |
-| `contracts/invalidation.ts` | Add `SkepticFlag`, `SkepticCategory` to `InvalidationResult` |
-| `server/providers/shared-sqlite-store-spec.md` | No change — `skeptic_flags` stored in existing `invalidations` table |
+| `server/pipeline/invalidation/invalidation-stage.ts` | Add skeptic call step between condition evaluation and result assembly | <!-- cite-exempt: planned — the invalidation stage is specced and not built; this marker fails once the file exists -->
+| `server/pipeline/invalidation/skeptic-prompt.ts` | New — prompt construction, JSON parsing, category validation | <!-- cite-exempt: planned — new file this spec proposes; does not exist yet by design -->
+| `contracts/invalidation.ts` | Add `SkepticFlag`, `SkepticCategory` to `InvalidationResult` | <!-- cite-exempt: planned — the invalidation contract lands with the unbuilt stage -->
+| `docs/specs/shared-sqlite-store-spec.md` | No change — `skeptic_flags` stored in existing `invalidations` table |
 | `docs/specs/devils-advocate-spec.md` | Amendment note pointing to this spec |
