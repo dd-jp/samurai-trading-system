@@ -145,9 +145,22 @@ function driverOver(
   return { driver: new ReplayDriver(deps), window };
 }
 
+/**
+ * 40 bars a session, not 20 (#857).
+ *
+ * `proxyWarmupBars` is now the CONVERGED ATR width — `4 * atrWindow + 1 = 17`
+ * rather than the `atrWindow + 1 = 5` arity floor — so the driver's first
+ * evaluated bar is the 17th of each session. At 20 bars a session that bar
+ * OPENS inside the flatten window (`close - 4min`), no entry is ever taken,
+ * and every assertion below would have gone green over an empty trade list.
+ * 40 bars puts the first evaluated bar at `close - 24min`, comfortably clear
+ * of the window, so the flatten these tests exist to check still happens —
+ * `trades.length` is asserted non-zero in the first test for exactly this
+ * reason.
+ */
 const TWO_SESSIONS = [
-  ...barsOfTimeframe(FRIDAY_CLOSE, 20, 1, '1m'),
-  ...barsOfTimeframe(MONDAY_CLOSE, 20, 1, '1m', 110),
+  ...barsOfTimeframe(FRIDAY_CLOSE, 40, 1, '1m'),
+  ...barsOfTimeframe(MONDAY_CLOSE, 40, 1, '1m', 110),
 ];
 
 describe('intraday replay across a session boundary (#664)', () => {

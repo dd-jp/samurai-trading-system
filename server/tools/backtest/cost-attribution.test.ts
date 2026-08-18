@@ -105,10 +105,23 @@ class ZeroCostModel implements CostModel {
 }
 
 /** A price path with enough trend reversals to open and close several lots. */
-const CLOSES = [
+const CYCLE = [
   100, 101, 103, 106, 110, 115, 121, 128, 130, 129, 125, 120, 114, 108, 103, 99, 96, 94, 93, 95, 98,
   102, 107, 113, 120, 128, 133, 136, 138, 137, 133, 128, 122, 116, 111, 107, 104, 102, 101, 103,
 ];
+
+/**
+ * The cycle TWICE (#857).
+ *
+ * `proxyWarmupBars` is now the converged ATR width (17 bars, up from the
+ * `atrWindow + 1 = 5` arity floor), which eats the first reversal of a single
+ * cycle. One cycle left too few closed trades for `EvalExecutorImpl`'s
+ * walk-forward folds — it threw "return series has zero variance" rather than
+ * quietly scoring nothing, which is the failure mode working as intended.
+ * Two cycles restore the trade density the fixture was written for; the
+ * `attribution.trades > 2` assertion below is what keeps that honest.
+ */
+const CLOSES = [...CYCLE, ...CYCLE];
 
 const WINDOW: DateRange = { start: day(0), end: day(CLOSES.length) };
 

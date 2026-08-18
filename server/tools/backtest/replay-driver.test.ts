@@ -5,7 +5,7 @@ import { AlwaysOpenCalendar, computeIndicator } from '../../providers/market-dat
 import { SimulatedClock } from '../../shared/index.js';
 import { EvalExecutorImpl } from './eval-executor.js';
 import { LookaheadViolationError } from './lookahead.js';
-import type { ProxyStrategyConfig } from './proxy-strategy.js';
+import { type ProxyStrategyConfig, proxyAtrSpec, proxyWarmupBars } from './proxy-strategy.js';
 import {
   type ReplayBarSource,
   ReplayDriver,
@@ -52,6 +52,50 @@ function buildBars(closes: readonly number[], overrides: Record<number, Partial<
     source: 'fixture',
     ...overrides[i],
   }));
+}
+
+/**
+ * A lead-in that satisfies the CONVERGED ATR warm-up (#857) without moving a
+ * single number the short fixtures below assert on.
+ *
+ * `proxyWarmupBars` rose from `max(3, 6, atrWindow + 1) = 6` to
+ * `max(3, 6, 4 * 4 + 1) = 17` when the backtest ATR stopped being seed-only,
+ * so a 7-to-13-bar fixture would now be skipped end to end and every one of
+ * these tests would assert on ZERO trades while still passing its `toEqual`.
+ * Prepending bars is the fix; prepending the RIGHT bars is what keeps the
+ * fixtures' hand-computed levels ("ATR 3 → stop 99") true:
+ *
+ * - **Exactly `17 - 6 = 11` bars.** The first bar the driver evaluates is the
+ *   one at index `warmup - 1 = 16`, which is then the fixture's own index 5 —
+ *   precisely the bar it was before, so entry timing is unchanged.
+ * - **`slowWindow = 6` covers indices 11..16**, i.e. the fixture's first six
+ *   closes and none of the lead-in, so both SMAs at the entry bar are
+ *   bit-identical to the pre-#857 run.
+ * - **Every true range in the window is 3.** The closes alternate by exactly
+ *   1 and `buildBars` brackets by 1, giving `high - low = 3` on every lead-in
+ *   bar and on the junction into the fixture's first close of 100. Index 0 has
+ *   no predecessor close to bracket against, so it gets the one override.
+ *   A Wilder recurrence over a constant 3 is 3, which is what the fixtures'
+ *   ATR-derived stops and targets were computed from — the arithmetic is
+ *   unchanged, only the number of true ranges folded into it.
+ */
+const LEAD_IN_CLOSES = [99, 100, 99, 100, 99, 100, 99, 100, 99, 100, 99];
+const LEAD_IN = LEAD_IN_CLOSES.length;
+
+/** `buildBars` with the warm-up lead-in prepended and `overrides` re-indexed onto the fixture half. */
+function buildWarmedBars(
+  closes: readonly number[],
+  overrides: Record<number, Partial<Bar>> = {},
+): Bar[] {
+  const shifted: Record<number, Partial<Bar>> = {
+    // Index 0's true range is `high - low = 2` by default (no previous close
+    // to bracket against), which would leave one non-3 range in the window.
+    0: { high: 100.5, low: 97.5 },
+  };
+  for (const [index, override] of Object.entries(overrides)) {
+    shifted[Number(index) + LEAD_IN] = override;
+  }
+  return buildBars([...LEAD_IN_CLOSES, ...closes], shifted);
 }
 
 class FixtureBarSource implements ReplayBarSource {
@@ -185,7 +229,7 @@ const REVERSAL_CLOSES = [100, 101, 102, 103, 104, 105, 106, 105.5, 105, 104.5, 1
 
 describe('ReplayDriver.run', () => {
   it('produces ClosedTrade/Fill records at exactly the injected fill prices', async () => {
-    const bars = buildBars(REVERSAL_CLOSES);
+    const bars = buildWarmedBars(REVERSAL_CLOSES);
     const { deps, costModel } = makeDeps(bars);
 
     const result = await new ReplayDriver(deps).run(CONFIG, windowOf(bars));
@@ -207,7 +251,7 @@ describe('ReplayDriver.run', () => {
   });
 
   it('closes the lot with the side opposite the entry (an exit is never favorable)', async () => {
-    const bars = buildBars(REVERSAL_CLOSES);
+    const bars = buildWarmedBars(REVERSAL_CLOSES);
     const { deps, costModel } = makeDeps(bars);
 
     await new ReplayDriver(deps).run(CONFIG, windowOf(bars));
@@ -220,7 +264,7 @@ describe('ReplayDriver.run', () => {
   });
 
   it('populates Fill.cost_breakdown from the CostModelResult on every leg', async () => {
-    const bars = buildBars(REVERSAL_CLOSES);
+    const bars = buildWarmedBars(REVERSAL_CLOSES);
     const { deps } = makeDeps(bars);
 
     const result = await new ReplayDriver(deps).run(CONFIG, windowOf(bars));
@@ -271,7 +315,7 @@ describe('ReplayDriver.run', () => {
   it('prices a gapped stop exit at the gap price, never at the stop level', async () => {
     // Rise into a long, then a bar that opens far below the protective stop.
     const closes = [100, 101, 102, 103, 104, 105, 106, 55];
-    const bars = buildBars(closes, { 7: { open: 50, high: 56, low: 49, close: 55 } });
+    const bars = buildWarmedBars(closes, { 7: { open: 50, high: 56, low: 49, close: 55 } });
     const { deps, costModel } = makeDeps(bars);
 
     const result = await new ReplayDriver(deps).run(CONFIG, windowOf(bars));
@@ -290,7 +334,7 @@ describe('ReplayDriver.run', () => {
     // Long entry at close 105 (ATR 3 → stop 99). The next bar opens above the
     // stop and only dips through it intrabar, so the stop was genuinely
     // available: the level is the honest reference, not the bar's open.
-    const bars = buildBars([100, 101, 102, 103, 104, 105, 100], {
+    const bars = buildWarmedBars([100, 101, 102, 103, 104, 105, 100], {
       6: { open: 104, high: 105, low: 98, close: 100 },
     });
     const { deps, costModel } = makeDeps(bars);
@@ -305,10 +349,10 @@ describe('ReplayDriver.run', () => {
 
   it('prices a target exit at the target, and at the gap price when it gapped through', async () => {
     // Long entry at close 105 (ATR 3 → target 114).
-    const touched = buildBars([100, 101, 102, 103, 104, 105, 114], {
+    const touched = buildWarmedBars([100, 101, 102, 103, 104, 105, 114], {
       6: { open: 106, high: 115, low: 105, close: 114 },
     });
-    const gapped = buildBars([100, 101, 102, 103, 104, 105, 120], {
+    const gapped = buildWarmedBars([100, 101, 102, 103, 104, 105, 120], {
       6: { open: 120, high: 122, low: 119, close: 120 },
     });
 
@@ -332,7 +376,7 @@ describe('ReplayDriver.run', () => {
 
   it('replays the short side: sell entry, buy exit, stop above the entry', async () => {
     // Falling series → short entry at close 95 (ATR 3 → stop 101).
-    const bars = buildBars([100, 99, 98, 97, 96, 95, 100], {
+    const bars = buildWarmedBars([100, 99, 98, 97, 96, 95, 100], {
       6: { open: 96, high: 102, low: 95, close: 100 },
     });
     const { deps, costModel } = makeDeps(bars);
@@ -350,14 +394,14 @@ describe('ReplayDriver.run', () => {
   });
 
   it('refuses to close a lot on a partial exit fill rather than mis-sizing the trade', async () => {
-    const bars = buildBars(REVERSAL_CLOSES);
+    const bars = buildWarmedBars(REVERSAL_CLOSES);
     const { deps } = makeDeps(bars, { costModel: new PartialExitCostModel() });
 
     await expect(new ReplayDriver(deps).run(CONFIG, windowOf(bars))).rejects.toThrow(/partially/i);
   });
 
   it('fails the run when the data source serves a bar stamped after clock.now()', async () => {
-    const bars = buildBars(REVERSAL_CLOSES);
+    const bars = buildWarmedBars(REVERSAL_CLOSES);
     const window = windowOf(bars);
     const future = [...bars, ...buildBars([200]).map((bar) => ({ ...bar, close_time: day(99) }))];
     const { deps } = makeDeps(bars, { barSource: new UnfilteredBarSource(future) });
@@ -368,7 +412,7 @@ describe('ReplayDriver.run', () => {
   });
 
   it('asserts survivorship-freeness before stepping the first bar', async () => {
-    const bars = buildBars(REVERSAL_CLOSES);
+    const bars = buildWarmedBars(REVERSAL_CLOSES);
     const { deps, barSource } = makeDeps(bars, {
       registry: new FixtureRegistry([{ symbol: 'DEAD-USD', delisted_at: day(3) }]),
     });
@@ -380,7 +424,7 @@ describe('ReplayDriver.run', () => {
   });
 
   it('fails the run when the data source serves bars out of close_time order', async () => {
-    const bars = buildBars(REVERSAL_CLOSES);
+    const bars = buildWarmedBars(REVERSAL_CLOSES);
     const shuffled = [bars[2] as Bar, bars[1] as Bar, ...bars.slice(3)];
     const { deps } = makeDeps(bars, { barSource: new UnfilteredBarSource(shuffled) });
 
@@ -390,7 +434,7 @@ describe('ReplayDriver.run', () => {
   });
 
   it('reads each instrument from the bar source once, not once per stepped bar', async () => {
-    const bars = buildBars(REVERSAL_CLOSES);
+    const bars = buildWarmedBars(REVERSAL_CLOSES);
     const { deps, barSource } = makeDeps(bars);
 
     await new ReplayDriver(deps).run(CONFIG, windowOf(bars));
@@ -404,7 +448,7 @@ describe('ReplayDriver.run', () => {
   });
 
   it('produces a timeline of exactly the bars it stepped', async () => {
-    const bars = buildBars(REVERSAL_CLOSES);
+    const bars = buildWarmedBars(REVERSAL_CLOSES);
     const { deps } = makeDeps(bars);
     const window = windowOf(bars);
 
@@ -508,12 +552,14 @@ describe('ReplayDriver.run', () => {
       expect(index).toBeGreaterThanOrEqual(0);
       const visiblePrefix = fullSeries.slice(0, index + 1);
 
-      const expectedAtr = computeIndicator(visiblePrefix.slice(-(CONFIG.atrWindow + 1)) as Bar[], {
-        indicator: 'atr',
-        params: {},
-        timeframe: '1d',
-        lookback: CONFIG.atrWindow,
-      });
+      // The CONVERGED window (#857) — `atrWindow + 1` with `params: {}` until
+      // then, which is exactly the seed-only shape this file's own
+      // "stamps a CONVERGED ATR" test now forbids.
+      const atrSpec = proxyAtrSpec(CONFIG, '1d');
+      const expectedAtr = computeIndicator(
+        visiblePrefix.slice(-atrSpec.lookback) as Bar[],
+        atrSpec,
+      );
       expect(marketState.volatility).toBe(expectedAtr);
 
       const advRecent = visiblePrefix.slice(-20);
@@ -532,5 +578,112 @@ describe('ReplayDriver.run', () => {
     expect(imports.filter((path) => /broker|trader|risk|verdict|execution/i.test(path))).toEqual(
       [],
     );
+  });
+});
+
+/**
+ * Wilder's ATR, hand-rolled (#857).
+ *
+ * Deliberately NOT `computeIndicator` — comparing the driver's ATR against
+ * `computeIndicator` would compare the implementation with itself, the exact
+ * shape `docs/reviews/indicator-characterisation-2026-08-16.md` opens by
+ * calling out ("a suite comparing the implementation against itself"). This is
+ * the textbook recurrence written independently.
+ */
+function wilderAtr(bars: readonly Bar[], period: number): number {
+  const trueRanges: number[] = [];
+  for (let i = 1; i < bars.length; i++) {
+    const current = bars[i] as Bar;
+    const previousClose = (bars[i - 1] as Bar).close;
+    trueRanges.push(
+      Math.max(
+        current.high - current.low,
+        Math.abs(current.high - previousClose),
+        Math.abs(current.low - previousClose),
+      ),
+    );
+  }
+  const seed = trueRanges.slice(0, period);
+  let value = seed.reduce((sum, range) => sum + range, 0) / seed.length;
+  for (const range of trueRanges.slice(period)) {
+    value = (value * (period - 1) + range) / period;
+  }
+  return value;
+}
+
+describe('the backtest ATR is converged, not seed-only (#857)', () => {
+  /**
+   * True ranges that genuinely VARY bar to bar. On a constant-range fixture
+   * the seed mean and the Wilder recurrence agree to the last bit, and a test
+   * asserting "converged" over one would pass with the defect still in place —
+   * which is exactly how the pre-#857 fixtures in this file stayed green.
+   */
+  const VARIED_CLOSES = Array.from(
+    { length: 40 },
+    (_, i) => 100 + i * 0.6 + 7 * Math.sin(i / 2.2) + 3 * Math.cos(i / 1.3),
+  );
+
+  const CONVERGED_WIDTH = 4 * CONFIG.atrWindow + 1;
+  const SEED_ONLY_WIDTH = CONFIG.atrWindow + 1;
+
+  it('stamps marketState.volatility from the converged Wilder recurrence, never the seed mean', async () => {
+    const bars = buildBars(VARIED_CLOSES);
+    const { deps, costModel } = makeDeps(bars);
+
+    await new ReplayDriver(deps).run(CONFIG, windowOf(bars));
+
+    // A vacuous pass — no fills, nothing stamped — would make every assertion
+    // below unreachable.
+    expect(costModel.requests.length).toBeGreaterThan(0);
+
+    for (const { marketState } of costModel.requests) {
+      const index = bars.findIndex(
+        (bar) => bar.close_time.getTime() === marketState.timestamp.getTime(),
+      );
+      expect(index).toBeGreaterThanOrEqual(0);
+      const prefix = bars.slice(0, index + 1);
+
+      // What the driver must produce: the recurrence folded over the full
+      // converged window. 7 decimals rather than exact equality because
+      // `computeIndicator` rounds its answer to 8; that rounding is the only
+      // gap this tolerance is allowed to absorb, and it is far below the
+      // seed-vs-converged separation asserted underneath.
+      expect(marketState.volatility).toBeCloseTo(
+        wilderAtr(prefix.slice(-CONVERGED_WIDTH), CONFIG.atrWindow),
+        7,
+      );
+
+      // And what it must NOT produce: the plain re-seeded mean over
+      // `atrWindow + 1` bars, which is what every backtest ATR reading was
+      // before #857 (the smoothing loop ran zero times). Asserting only the
+      // equality above would still pass if the production slice and this test
+      // were starved together; this inequality is what pins the SHAPE, so a
+      // regression to the floor fails here rather than agreeing with itself.
+      const seedOnly = wilderAtr(prefix.slice(-SEED_ONLY_WIDTH), CONFIG.atrWindow);
+      expect(Math.abs(marketState.volatility - seedOnly)).toBeGreaterThan(1e-6);
+    }
+  });
+
+  it('holds every step back until the converged ATR window can actually be filled', async () => {
+    const bars = buildBars(VARIED_CLOSES);
+    const { deps, costModel } = makeDeps(bars);
+
+    await new ReplayDriver(deps).run(CONFIG, windowOf(bars));
+
+    const first = costModel.requests[0];
+    if (first === undefined) throw new Error('expected at least one fill');
+    const firstIndex = bars.findIndex(
+      (bar) => bar.close_time.getTime() === first.marketState.timestamp.getTime(),
+    );
+
+    // The gate, not the slice. Widening the two ATR slices while leaving
+    // `run`'s warm-up on `atrWindow + 1` would let an early step hand a 6-bar
+    // prefix to a 17-bar slice and compute the seed again — inert, silent, and
+    // invisible to the assertion above, which recomputes from whatever prefix
+    // the driver actually saw. This is the assertion that goes red for that
+    // revert alone: on this fixture the signal is already non-flat well before
+    // bar 16, so a narrower gate enters strictly earlier.
+    expect(proxyWarmupBars(CONFIG, '1d')).toBe(CONVERGED_WIDTH);
+    expect(firstIndex).toBeGreaterThanOrEqual(proxyWarmupBars(CONFIG, '1d') - 1);
   });
 });
