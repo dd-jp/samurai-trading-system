@@ -37,6 +37,45 @@
  * truth — `invalidation` ships, and a marker asserting the path does not exist yet stays
  * on a live citation forever. It is the one exemption that clears itself.
  *
+ * ## The tree is the git index, never the working directory (#866)
+ *
+ * Existence is resolved against `git ls-files --cached`, and the set of markdown files
+ * scanned and the set of known top-level roots are derived from that same listing. The
+ * working directory is read for exactly one thing: the CONTENT of an indexed file, to
+ * count its lines.
+ *
+ * It used to `statSync` the working directory instead, and #866 measured what that cost.
+ * A citation's root had to exist for the citation to be extracted at all, so on a clean
+ * checkout the repo had 261 citations and 0 violations, and on a checkout carrying the
+ * gitignored `data/` a paper run leaves behind it had 268 and 4. Same commit, two
+ * answers. "0 violations" was not a fact about the repository but about which modes had
+ * been run on one machine. Worse in the other direction: `data/samurai-paper.sqlite`
+ * *resolved* on a machine that had run paper mode, so a citation to a runtime artefact
+ * was judged by whether the artefact happened to have been produced.
+ *
+ * The index fixes that by construction rather than by enumeration: it contains no
+ * gitignored path and no runtime output, so the report is a pure function of the index
+ * plus the content of the files it lists. No list of runtime directories to keep current,
+ * and no gitignore parser.
+ *
+ * `--cached` alone, deliberately — NOT `--others --exclude-standard`. Untracked-but-not-
+ * ignored files are still runtime state as far as this checker is concerned, and letting
+ * them in would re-open the same hole through the `planned` rule: scaffold
+ * `server/pipeline/invalidation/index.ts` locally without staging it and every `planned`
+ * marker on that path turns into a `stale-planned-exemption` — green on a clean checkout,
+ * red on a machine where work has happened, which is exactly the bug being fixed here.
+ *
+ * Two accepted costs, both in the direction this file is allowed to err:
+ *
+ *  - A file created and cited in the same change reads as unresolved until it is
+ *    `git add`-ed. A transient false positive with a one-word fix, and the only one.
+ *  - A new, unstaged `.md` is not scanned at all — a false negative, which is the safe
+ *    direction, and it clears itself the moment the file is staged.
+ *
+ * And one real narrowing: the checker now REQUIRES a git checkout and fails loudly
+ * outside one (a tarball export, a vendored copy). Falling back to the filesystem there
+ * would silently restore the flip, so it throws instead.
+ *
  * ## Known, deliberate gap
  *
  * Line validation is end-of-file validation: a `path:44` citation fails if the file has
@@ -46,8 +85,9 @@
  * file is explicitly not allowed to err in.
  */
 
-import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { isAbsolute, join, resolve, sep } from 'node:path';
 
 /**
  * Directories whose contents are preserved by rule and are therefore never parsed.
@@ -64,18 +104,26 @@ export const IMMUTABLE_RECORD_DIRS = [
   'docs/reviews/',
 ] as const;
 
-/** Directories the walker never descends into. */
+/**
+ * Directory names excluded from the scanned file set and from the known roots.
+ *
+ * Every entry here is TRACKED — that is the only reason an entry is needed at all. The
+ * listing is the git index, so `node_modules`, `dist`, `coverage`, `graphify-out`,
+ * `.git` and `.vitest-reports` are structurally unreachable and were dropped from this
+ * set when #866 moved resolution onto the index; verified with `git ls-files` that not
+ * one of them has a tracked file. Do not re-add them: an entry that can never match is
+ * an entry a reader has to disprove.
+ *
+ * `.claude/` and `.yarn/` appear in `.gitignore` yet have tracked files under them —
+ * an explicit `git add` beats an ignore rule — so both are still load-bearing here.
+ */
 const SKIPPED_DIRS = new Set([
-  'node_modules',
-  '.git',
-  '.yarn',
+  // Agent skills and yarn's vendored releases: tracked, but not this repo's prose or
+  // source, and neither is ever the subject of a citation.
   '.claude',
-  'dist',
-  'coverage',
-  'graphify-out',
-  '.vitest-reports',
+  '.yarn',
   // Fixture markdown deliberately contains citations that do NOT resolve — that is what
-  // it is for. Walking it would make the checker flag its own test data on every run.
+  // it is for. Scanning it would make the checker flag its own test data on every run.
   // Do not remove this entry without moving the fixtures somewhere else first.
   '__fixtures__',
 ]);
@@ -133,19 +181,67 @@ export interface TreeResolver {
   lineCount(repoRelativePath: string): number;
 }
 
-export function createFsResolver(root: string): TreeResolver {
+/**
+ * Every path in the git index of the checkout at `root`, repo-relative, `/`-separated.
+ *
+ * `-z` because a NUL-separated listing needs no unquoting and cannot be confused by a
+ * path containing a quote or a newline. Deliberately not memoized: a module-level cache
+ * would make the invariance test vacuous — it would pass by never re-listing rather than
+ * because the property holds. One `git` call per run, which measures faster than the
+ * recursive directory walk it replaced.
+ */
+export function listIndexedPaths(root: string): readonly string[] {
+  let stdout: string;
+  try {
+    stdout = execFileSync('git', ['-C', root, 'ls-files', '-z', '--cached'], {
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (cause) {
+    throw new Error(
+      `check-path-citations resolves citations against the git index, so it needs a git ` +
+        `checkout: \`git ls-files\` failed in ${root}. There is deliberately no filesystem ` +
+        `fallback — falling back would silently restore the working-tree dependence #866 removed.`,
+      { cause },
+    );
+  }
+  return stdout.split('\0').filter((path) => path !== '');
+}
+
+/**
+ * A resolver whose existence answers come from the index and whose line counts come from
+ * disk.
+ *
+ * A path is a directory when the index holds something beneath it: git stores no
+ * directory entries, so `docs/specs` is real exactly because `docs/specs/foo.md` is.
+ */
+export function createIndexResolver(root: string, indexedPaths: readonly string[]): TreeResolver {
+  const files = new Set(indexedPaths);
+  const directories = new Set<string>();
+  for (const path of indexedPaths) {
+    const segments = path.split('/');
+    for (let i = 1; i < segments.length; i++) directories.add(segments.slice(0, i).join('/'));
+  }
   return {
     kind(path) {
-      try {
-        return statSync(join(root, path)).isDirectory() ? 'directory' : 'file';
-      } catch {
-        return 'missing';
-      }
+      if (files.has(path)) return 'file';
+      return directories.has(path) ? 'directory' : 'missing';
     },
     lineCount(path) {
+      let text: string;
+      try {
+        text = readFileSync(join(root, path), 'utf8');
+      } catch {
+        // Indexed but not readable on disk — a tracked file deleted in the working tree
+        // with the deletion unstaged. Existence and content now come from different
+        // places, so this case exists where it could not before. Report a length no
+        // citation can exceed: the checker errs toward the false negative, and crashing
+        // the whole run over one locally-deleted file is the worst available outcome.
+        return Number.MAX_SAFE_INTEGER;
+      }
       // A trailing newline terminates the last line rather than starting an empty one,
       // so `a\nb\n` is 2 lines, not 3 — cite `b` as `:2` and it must pass.
-      const text = readFileSync(join(root, path), 'utf8');
       if (text === '') return 0;
       return text.replace(/\n$/, '').split('\n').length;
     },
@@ -251,15 +347,33 @@ function parseCandidate(
   return lineNumber === undefined ? { path } : { path, lineNumber };
 }
 
-export function knownRootsOf(root: string): ReadonlySet<string> {
+/**
+ * Top-level directories that exist in the index, plus the legacy root.
+ *
+ * This is the half of the checker #866 measured the flip on: a `data/` produced by a
+ * paper run made `data` a known root, which made seven previously-ignored tokens into
+ * citations. Directories are known because the index lists a file beneath them, so no
+ * amount of runtime output can add one.
+ *
+ * There is no dotfile rule any more. `.github/**` is tracked, so the listing supplies
+ * that root the same way it supplies `server`; the two tracked dot-directories that are
+ * NOT wanted (`.claude`, `.yarn`) are named in `SKIPPED_DIRS`, and every other dot
+ * directory is untracked and therefore already absent.
+ */
+export function knownRootsFromPaths(indexedPaths: readonly string[]): ReadonlySet<string> {
   const roots = new Set<string>([LEGACY_ROOT]);
-  for (const entry of readdirSync(root, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    if (SKIPPED_DIRS.has(entry.name)) continue;
-    if (entry.name.startsWith('.') && entry.name !== '.github') continue;
-    roots.add(entry.name);
+  for (const path of indexedPaths) {
+    const segments = path.split('/');
+    if (segments.length < 2) continue;
+    const root = segments[0] ?? '';
+    if (root === '' || SKIPPED_DIRS.has(root)) continue;
+    roots.add(root);
   }
   return roots;
+}
+
+export function knownRootsOf(root: string): ReadonlySet<string> {
+  return knownRootsFromPaths(listIndexedPaths(root));
 }
 
 export interface ExtractOptions {
@@ -359,34 +473,43 @@ export function isPreservedByRule(repoRelativeFile: string): boolean {
   return IMMUTABLE_RECORD_DIRS.some((dir) => posix.startsWith(dir));
 }
 
-function markdownFiles(root: string, dir: string, acc: string[]): string[] {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.isDirectory()) {
-      if (SKIPPED_DIRS.has(entry.name)) continue;
-      markdownFiles(root, join(dir, entry.name), acc);
-    } else if (entry.name.endsWith('.md')) {
-      acc.push(relative(root, join(dir, entry.name)).split(sep).join('/'));
-    }
-  }
-  return acc;
+/**
+ * The markdown to scan: tracked `.md`, minus anything under a skipped directory.
+ *
+ * Taking the file set from the index too — not just the resolution of the paths inside
+ * it — is what makes `filesScanned` a repository fact. A walker would also pick up an
+ * ignored `.md` dropped into the checkout by a tool, and the scanned count would move
+ * again for a reason having nothing to do with the repository.
+ */
+export function markdownFilesIn(indexedPaths: readonly string[]): string[] {
+  return indexedPaths
+    .filter((path) => path.endsWith('.md'))
+    .filter((path) => !path.split('/').some((segment) => SKIPPED_DIRS.has(segment)));
 }
 
 export interface CheckOptions {
   readonly root: string;
-  /** Repo-relative markdown files to scan. Defaults to every `.md` under `root`. */
+  /** Repo-relative markdown files to scan. Defaults to every tracked `.md` under `root`. */
   readonly files?: readonly string[];
   readonly tree?: TreeResolver;
   readonly knownRoots?: ReadonlySet<string>;
+  /** The git index listing. Defaults to `git ls-files --cached` run against `root`. */
+  readonly indexedPaths?: readonly string[];
   /** Where citation text is read from. Defaults to the real filesystem under `root`. */
   readonly readMarkdown?: (repoRelativeFile: string) => string;
 }
 
 export function runCitationCheck(options: CheckOptions): Report {
   const root = resolve(options.root);
-  const tree = options.tree ?? createFsResolver(root);
-  const knownRoots = options.knownRoots ?? knownRootsOf(root);
+  // Lazy: a caller that supplies the tree, the roots and the file list is running against
+  // fixtures and must not be made to shell out to git for a listing it never reads.
+  let listing: readonly string[] | undefined = options.indexedPaths;
+  const indexed = (): readonly string[] => (listing ??= listIndexedPaths(root));
+
+  const tree = options.tree ?? createIndexResolver(root, indexed());
+  const knownRoots = options.knownRoots ?? knownRootsFromPaths(indexed());
   const read = options.readMarkdown ?? ((f: string) => readFileSync(join(root, f), 'utf8'));
-  const all = options.files ?? markdownFiles(root, root, []);
+  const all = options.files ?? markdownFilesIn(indexed());
 
   const exemptByMarker: Record<ExemptReason, number> = {
     foreign: 0,
@@ -437,6 +560,8 @@ export function formatReport(report: Report): string {
     for (const v of report.violations) lines.push(`  [${v.kind}] ${v.message}`);
     lines.push('');
     lines.push(
+      '  Paths resolve against the git index, never the working directory, so a file you',
+      '  created in this change reads as unresolved until it is `git add`-ed.',
       '  Fix the citation, or — if it is correct as written — mark it inline with',
       '  `<!-- cite-exempt: foreign|historical|planned|untracked — why -->`.',
       '  NEVER edit a file under docs/adr/, docs/wayfinder/, docs/research/archive/ or',
