@@ -131,13 +131,18 @@ column already used — so every figure here is an upper bound if more than one 
 | £1,000 | 0.55 pp | 0.19 pp |
 | **£350 / £250 — D5's fractions of the £1,000 book** | **1.58 pp** | **0.75 pp** |
 
-> **And D5's envelope may not be what actually funds the position.**
-> [#886](https://github.com/dd-jp/samurai-trading-system/issues/886) (filed 2026-08-19, BLOCKING) records that
-> `per_trade_size_cap` is **5% of the same equity** D5 takes 35%/25% of, so it trims first at every book size:
-> on the £1,000 book the Trader asks for £350 and is handed **£50**. If that is the notional that survives,
-> the bill costs **11.1 pp (index)** and **3.8 pp (single-stock)** — larger than every geometry bar in §2, and
-> the dominant term rather than a second-order one. This document does not decide which cap is right; it
-> records that the answer moves the bill's weight by ~20x, which is why #886 is arming-blocking.
+> **And it is not settled that D5's envelope is what funds the position.**
+> [#886](https://github.com/dd-jp/samurai-trading-system/issues/886) (BLOCKING, filed 2026-08-19) records that
+> `per_trade_size_cap` can trim a D5-sized ask: a full-conviction £350 index entry against a 5% cap is handed
+> back **£50**. Two bounds on that, both recorded rather than resolved here. `decide.ts:575` stacks a
+> conviction multiplier on D5's fraction, so £350 is a full-conviction *ceiling* and a low-conviction ask can
+> land under the cap untrimmed. And `per_trade_size_cap` is a **static cash** figure derived from the boot
+> ceiling (`server/pipeline/risk-manager/index.ts:365`, `server/apps/orchestrator/live-profile.ts:66`) while
+> D5 is a live fraction of `portfolio.equity` (`risk-manager/index.ts:515`) — so which one binds depends on
+> how far equity sits below that ceiling, and the two are not comparable as fractions at all.
+> **The range matters more than the resolution:** across a £50–£350 index notional the bill costs **11.1 pp
+> down to 1.58 pp**, i.e. from dominating every geometry bar in §2 to sitting at half of QQQ's. Nothing here
+> decides which cap should win; the point is that the bill's weight stays unsettled by ~7x until #886 is.
 
 **At the resolved notionals the bill stops being second-order on the index bracket.** 1.58 pp is more than
 half of QQQ's 2.96 pp geometry bar and ~38% of SPY's 4.19 pp; including it, QQQ's break-even is **54.54%**,

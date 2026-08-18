@@ -246,7 +246,7 @@ describe('LIVE_MONEY_GATES', () => {
     // Pinned as literals rather than derived from LIVE_MONEY_GATES: a test that
     // renders the constant and asserts it contains the constant passes for any
     // list, which is why the seven ghosts survived a suite of ~2900 tests.
-    expect(LIVE_MONEY_GATES.map((gate) => gate.issue)).toEqual([734, 800, 798, 826]);
+    expect(LIVE_MONEY_GATES.map((gate) => gate.issue)).toEqual([734, 800, 886, 798, 826]);
   });
 
   it('hands the reader a command instead of only telling them to re-check', () => {
