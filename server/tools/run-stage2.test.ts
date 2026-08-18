@@ -431,10 +431,19 @@ describe('runStage2 at minute resolution (#664)', () => {
     expect(verdict.kill_line_checks.length).toBeGreaterThan(0);
     expect(verdict.kill_line_checks.every((check) => check.asset_class === 'stocks')).toBe(true);
 
-    // And the run says out loud that its cost model is calibrated for daily
-    // bars. Shipping the capability without that warning is how a repo that has
-    // already been wrong-in-sign twice gets there a third time.
-    expect(lines.join('\n')).toContain('INTRADAY run');
+    // And the run says out loud what is still wrong with its cost model. #875
+    // closed the resolution mismatch and NARROWED this warning rather than
+    // removing it; each residual is asserted by name, because a warning that
+    // survives as a vaguer version of itself is how a repo already wrong in
+    // sign twice gets there a third time.
+    const printed = lines.join('\n');
+    expect(printed).toContain('INTRADAY run');
+    expect(printed).toContain('STRUCTURAL FLOOR');
+    expect(printed).toContain('UNDER-charges');
+    expect(printed).toContain('US-EQUITY PROXY');
+    // The claim #875 measured and withdrew: the charged per-fill cost moved by
+    // at most 0.18bps of notional, not an order of magnitude.
+    expect(printed).not.toContain('order of magnitude');
   }, 120_000);
 });
 

@@ -133,14 +133,95 @@ export const CALIBRATED_COST_CONFIG: CostConfig = {
 };
 
 /**
+ * The same calibration, fitted at the INTRADAY replay resolution (#875).
+ *
+ * `CALIBRATED_COST_CONFIG` above fits `spreadVolatilityCoefficient` as a ratio
+ * of measured spread to ATR14 **on daily bars**. `CostModelImpl` then consumes
+ * it against `marketState.volatility`, which is the ATR of whatever bars the
+ * run replays — daily before #664, and per-MINUTE after it. A ratio fitted at
+ * one resolution and consumed at another is a category error whatever its
+ * magnitude, which is why this config exists rather than a note.
+ *
+ * **spreadVolatilityCoefficient — MEASURED, at 1-minute resolution.**
+ * `run-spread-calibration.ts --intraday` samples real Alpaca SIP quotes in the
+ * minute ENDING at a sampled 1-minute bar close — where an intraday replay
+ * actually fills — across three session buckets (open / midday / close), over
+ * `STAGE2_FREE_STACK_WINDOW`, the window an intraday Stage 2 run replays. The
+ * denominator is ATR14 on 1-minute bars, from the same `computeIndicator` the
+ * replay uses. **Not** the daily coefficient rescaled by bar-length arithmetic:
+ * the relationship between bar volatility and realised spread is precisely what
+ * had to be measured, and assuming it is what produced the defect.
+ * See `docs/research/53-intraday-cost-calibration.md` for the run and the numbers.
+ *
+ * **commissionRate — PUBLISHED, unchanged.** Alpaca US equities are
+ * commission-free; the structural 1bp floor covers the SEC/TAF/CAT
+ * pass-through, and nothing about resolution changes a fee schedule.
+ *
+ * **slippageCoefficient — ASSUMPTION, by the daily config's own declared rule.**
+ * `spreadVolatilityCoefficient / 4`. No new derivation is invented here; the
+ * fraction is the same judgement call the daily config flags, and it is
+ * replaced by the same thing that would replace the daily one — live fills.
+ *
+ * **impactK — UNCHANGED, deliberately.** Its basis was an empirical smallness
+ * claim (54 of 62,393 currency units at daily), and the product shrinks further
+ * at minute resolution, so there is no measurement basis to revise it.
+ *
+ * **crypto — the PESSIMISTIC fixture, and deliberately not the calibrated one.**
+ * An intraday Stage 2 run is equities-only (`universeFor`), so this branch is
+ * unreachable, and crypto left Samurai's scope on 2026-08-16 (ADR-0015's
+ * amendment) so there is nothing to re-fit against. If some future path does
+ * reach it, it errs toward over-charging rather than toward the flattering
+ * number this whole ticket exists to remove.
+ */
+export const CALIBRATED_INTRADAY_COST_CONFIG: CostConfig = {
+  crypto: PESSIMISTIC_COST_CONFIG.crypto,
+  stocks: {
+    spreadVolatilityCoefficient: 0.0697,
+    commissionRate: 0,
+    slippageCoefficient: 0.017425,
+    impactK: 0.05,
+  },
+};
+
+/**
  * Which cost config a direct run uses. `SAMURAI_STAGE2_COST_CONFIG=pessimistic`
  * re-runs against the old fixture for comparison; the calibrated one is the
  * default because it is the one with a stated basis for every number.
+ *
+ * **Daily only.** Kept at this signature because it is what
+ * `run-stage2-cost-decomposition.ts` calls, and that tool is pinned to
+ * `STAGE2_PINNED_WINDOW` at daily resolution — changing what it selects would
+ * silently move a recorded result. A run that knows its timeframe should call
+ * `costConfigFor`.
  */
 export function costConfigFromEnv(env: NodeJS.ProcessEnv = process.env): CostConfig {
   return env.SAMURAI_STAGE2_COST_CONFIG?.trim() === 'pessimistic'
     ? PESSIMISTIC_COST_CONFIG
     : CALIBRATED_COST_CONFIG;
+}
+
+/**
+ * The cost config for a run at `timeframe` (#875) — the timeframe-keyed shape,
+ * following `periodsPerYearFor(assetClass, timeframe)` and #874's
+ * timeframe-scoped historical store.
+ *
+ * Composes with `costConfigFromEnv` rather than replacing it: the
+ * `pessimistic` escape hatch still wins, because a run asking for the
+ * uncalibrated fixture is asking for a comparison against the fixture at every
+ * resolution.
+ *
+ * **Every non-daily timeframe gets the 1-minute fit, and that OVER-charges the
+ * coarser ones.** The fit is a spread/ATR ratio; ATR grows with bar length
+ * while the quoted spread does not, so at 5m or 1h the true ratio is smaller
+ * than the 1m one. The direction is deliberate — a single measured coefficient
+ * that over-charges beats a per-timeframe ladder of unmeasured ones, and the
+ * product's replay resolution is 1m. If a coarser intraday resolution ever
+ * becomes the traded one, re-run `--intraday` at it rather than interpolating.
+ */
+export function costConfigFor(timeframe: string, env: NodeJS.ProcessEnv = process.env): CostConfig {
+  const fromEnv = costConfigFromEnv(env);
+  if (fromEnv === PESSIMISTIC_COST_CONFIG) return fromEnv;
+  return isDailyTimeframe(timeframe) ? CALIBRATED_COST_CONFIG : CALIBRATED_INTRADAY_COST_CONFIG;
 }
 
 /** Default window: the last 5 years, ending "now" — the spec's Starter-tier depth. */
@@ -340,11 +421,16 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
   );
   if (!isDailyTimeframe(timeframe)) {
     print(
-      'Stage 2: WARNING — this is an INTRADAY run. The cost config below was calibrated ' +
-        'against DAILY ATR14 (see CALIBRATED_COST_CONFIG), so its ' +
-        'spreadVolatilityCoefficient models a spread roughly an order of magnitude too ' +
-        'narrow at minute resolution. #664 shipped the capability to replay intraday, not ' +
-        'a cost model calibrated for it — do not read these numbers as a Stage 2 verdict.',
+      'Stage 2: WARNING — this is an INTRADAY run. The spread/ATR ratio IS now fitted at ' +
+        '1-minute resolution (#875, CALIBRATED_INTRADAY_COST_CONFIG), so the resolution ' +
+        'mismatch #874 warned about is closed. THREE residuals are not: (1) the charged ' +
+        'half-spread sits at the 1bp STRUCTURAL FLOOR for every symbol measured, at both ' +
+        'resolutions and under both configs, so what a fill is charged is governed by the ' +
+        'floor and not by this calibration; (2) one per-asset-class coefficient UNDER-charges ' +
+        'the wide names — TSLA measured 3.3x the cross-symbol median; (3) the fit is a ' +
+        'US-EQUITY PROXY (SPY/QQQ/AAPL/TSLA on Alpaca SIP), while the live universe is LSE ' +
+        'leveraged ETPs with no free quote source. Do not read these numbers as a Stage 2 ' +
+        'verdict. See docs/research/53-intraday-cost-calibration.md.',
     );
   }
   for (const symbol of symbols) {
@@ -596,7 +682,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const shared = openSharedStore(sharedStorePath());
   runStage2({
     polygonClient,
-    costConfig: costConfigFromEnv(),
+    // Keyed on the run's timeframe (#875): a daily-fitted spread/ATR ratio
+    // consumed against per-minute volatility is the defect #874's WARNING was
+    // the stopgap for.
+    costConfig: costConfigFor(runTimeframe),
     window: runWindow,
     timeframe: runTimeframe,
     // Stated here rather than by changing `runStage2`'s `:memory:` default, so
