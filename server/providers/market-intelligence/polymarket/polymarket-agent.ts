@@ -319,8 +319,13 @@ type BuiltRow =
  * the item and break exactly the provenance `retrievalEvidence` now means
  * (#555). Reading the triple off `raw` makes drift impossible rather than
  * merely tested for.
+ *
+ * Exported so the drift itself is testable: a test that only reads back what
+ * `itemsKnownAt` serves cannot see the key columns at all (that read selects
+ * `asset_class, item_json` and nothing else), so it would stay green against a
+ * drifted `native_id`.
  */
-function toArchivedItem(item: IntelligenceItem, raw: RawArchiveRow): ArchivedItem {
+export function toArchivedItem(item: IntelligenceItem, raw: RawArchiveRow): ArchivedItem {
   return {
     source: raw.source,
     native_id: raw.native_id,

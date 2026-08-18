@@ -17,6 +17,14 @@
  * run silently measured less than it appeared to. `hydrate()` reloads the store
  * from the archive at startup, so a restart costs nothing.
  *
+ * That is true PER SOURCE, not globally (#835). `hydrate()` replays only the
+ * sources `MI_SOURCE_HYDRATION` marks `hydrate` — items that are dated
+ * observations. A source whose item is a trailing-window statistic (Polymarket's
+ * 24h delta) is archived for replay but deliberately NOT pushed back into the
+ * live store at boot, because re-serving a stale measurement as current is a
+ * different defect from losing it. `archive/mi-sources.ts` states each policy
+ * and why.
+ *
  * ## Deviation from #554 sub-decision 4, stated plainly
  *
  * That decision says `MarketIntelligenceStore` "becomes a read-through view
