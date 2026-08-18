@@ -90,15 +90,17 @@ export const LIVE_MONEY_GATES: readonly { readonly issue: number; readonly gap: 
     gap: 'the live equity leg has no mark source — no DataSource serves the LSE, so the GBP LSE-ETP book ADR-0015 puts live capital in cannot be priced at all, while this profile boots the Alpaca clients',
   },
   {
-    issue: 800,
-    // Verified OPEN 2026-08-19: `gh issue view 800`. Labelled BLOCKING(arming)
-    // on the issue itself. Note this profile's ceiling env var is named
+    issue: 888,
+    // Verified OPEN 2026-08-19: `gh issue view 888`. Arming-blocking on the
+    // issue itself. Note this profile's ceiling env var is named
     // SAMURAI_LIVE_MAX_CAPITAL_USD — USD — against a GBP book.
     //
-    // Rewritten 2026-08-19: the 2x denominator disagreement this entry used to
-    // name was RESOLVED on the branch that added this line (D5 unscaled, the
-    // book re-based to £1,000 all-equity). What keeps #800 open, and keeps it
-    // arming-blocking, is below.
+    // This entry was #800 until 2026-08-19. #800 named the 2x denominator
+    // disagreement, which PR #885 RESOLVED and which auto-closed #800 on merge
+    // — leaving this list citing a closed issue, the exact staleness the module
+    // doc forbids. The gap that survived #800 is split out as #888 so the
+    // citation points at something open. A closed issue is deleted, not
+    // struck through.
     gap: 'portfolio.equity is one blended GET /v2/account figure with no per-leg accounting, so every D5 envelope is correct only while the funded equity equals the declared book — fund the ISA past it and the same fractions authorise proportionally more cash than the book was sized for',
   },
   {
