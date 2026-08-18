@@ -32,6 +32,17 @@
  * (#555) is non-deterministic; re-scoring would make two runs of one backtest
  * disagree, which ADR-0003 §2 disqualifies exactly as it disqualifies a live
  * LLM call inside a replayed path.
+ *
+ * ## Exemption: raw `.toISOString()`/`new Date(...)` round-trips (#884)
+ *
+ * This file does NOT go through `shared/store/sqlite-utils.ts`'s
+ * `toStoredTimestamp`/`fromStoredTimestamp` (#837 M7). #852 deliberately
+ * declined to convert it — different DB, a separate migrations dir, and
+ * adopting the helpers would introduce a `providers/market-intelligence →
+ * shared/store` import that does not exist today. That deferral is still the
+ * right call, but every raw round-trip added here (10 as of #884, growing —
+ * #863 added more after #852 merged) widens it. Before adding another one,
+ * re-check whether the import-direction cost still outweighs converting.
  */
 
 import { mkdirSync } from 'node:fs';

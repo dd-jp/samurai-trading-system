@@ -79,6 +79,28 @@ describe('the timestamp round-trip (#837 M7)', () => {
     expect(() => toStoredTimestamp(new Date('not a date'))).toThrow(RangeError);
   });
 
+  // #884: the store tests are largely insensitive to a uniform timestamp-format
+  // change — a mutation probe found a milliseconds-dropping writer only turns 4
+  // of ~3900 tests red, none of them here. That is because every write and bound
+  // comparison parameter goes through this same helper, so a uniform format
+  // change keeps rows mutually consistent and TEXT ordering still "works". The
+  // real invariant is the STORED_TIMESTAMP width/precision check inside
+  // `toStoredTimestamp` itself, so pin it directly rather than relying on a
+  // downstream store test to notice. `Date.prototype.toISOString` always emits
+  // milliseconds, so the only way to exercise the guard against a
+  // non-millisecond format is to make `toISOString()` return one — standing in
+  // for exactly the `.replace(/\.\d{3}Z$/, 'Z')`-style mutation described above.
+  it('rejects a non-millisecond format even though the input Date is valid', () => {
+    const spy = vi.spyOn(Date.prototype, 'toISOString').mockReturnValue('2026-08-18T09:30:00Z');
+    try {
+      expect(() => toStoredTimestamp(new Date('2026-08-18T09:30:00.000Z'))).toThrow(
+        /fixed-width/,
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('passes null through on both sides of a nullable column', () => {
     expect(toStoredTimestampOrNull(null)).toBeNull();
     expect(fromStoredTimestampOrNull(null)).toBeNull();
