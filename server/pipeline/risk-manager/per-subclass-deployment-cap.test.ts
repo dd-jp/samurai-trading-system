@@ -102,6 +102,7 @@ const portfolioWith = (
     portfolio: { known: true, pct: 0 },
   },
   consecutive_losses: 0,
+  unvalued_instruments: [],
 });
 
 const CLOCK: Clock = { now: () => new Date('2026-08-19T14:35:00Z') };

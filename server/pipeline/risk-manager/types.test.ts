@@ -58,6 +58,7 @@ describe('PortfolioView', () => {
         portfolio: { known: true, pct: -0.01 },
       },
       consecutive_losses: 1,
+      unvalued_instruments: [],
     };
 
     expectTypeOf(view).toMatchTypeOf<PortfolioView>();
@@ -158,6 +159,7 @@ describe('RiskInput', () => {
           portfolio: { known: true, pct: 0 },
         },
         consecutive_losses: 0,
+        unvalued_instruments: [],
       },
       breakers: {
         portfolio_tripped: false,

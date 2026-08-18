@@ -23,6 +23,7 @@ function makePortfolio(overrides: Partial<PortfolioView> = {}): PortfolioView {
     gross_exposure: 0,
     daily_pnl: pnl(0),
     consecutive_losses: 0,
+    unvalued_instruments: [],
     ...overrides,
   };
 }

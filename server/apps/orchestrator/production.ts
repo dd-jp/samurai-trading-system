@@ -855,6 +855,17 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     breakerState: breakerStateStore,
     // One portfolio observation per tick, shared by the trader/risk binds (B4).
     portfolioSnapshots: new Map<string, PortfolioSnapshot>(),
+    // #841: BOTH the risk and verdict binds degrade an exit's valuation
+    // rather than suppress the flatten, and both must be able to say so.
+    // Spread here rather than onto each bind separately for exactly that
+    // reason — a channel wired into one seam only would leave the other
+    // silent. Conditional spread under `exactOptionalPropertyTypes`.
+    ...(config.exitValuationAlerts === undefined
+      ? {}
+      : { exitValuationAlerts: config.exitValuationAlerts }),
+    // The `error`-level line both seams write before reaching the channel
+    // above, and #726's sink for a failed `riskLog.write`.
+    logger,
     // Defaulted, not required (#276): the three sources this needs — Alpaca's
     // account ledger, the durable `account_state` table, and the existing
     // ClosedTrade store — all exist in-repo now, so an injected seam would be
