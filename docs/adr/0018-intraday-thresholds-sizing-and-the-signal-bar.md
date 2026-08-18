@@ -25,17 +25,19 @@ E = P_win × Avg_win − P_loss × Avg_loss − Costs
 
 Not per-instrument, and **not event-conditioned**. The universe is scanned daily ([#635](https://github.com/dd-jp/samurai-trading-system/issues/635)), so there is no fixed instrument list to fit per-instrument studies to.
 
-Event conditioning was tested directly rather than assumed away. Earnings-reaction sessions for TSLA, 46 across 10.6 years:
+Event conditioning was tested directly rather than assumed away. Earnings-reaction sessions for TSLA, 43 across 10.6 years:
 
 | strategy | expectancy/trade | n | t |
 | --- | --- | --- | --- |
 | pooled grid, every session | −0.4257% | 897 | −3.10 |
-| earnings-reaction sessions only | **−1.3267%** | 18 | −4.19 |
-| combination — event levels on event days | −0.4282% | 897 | −3.12 |
+| earnings-reaction sessions only | **−1.4433%** | 15 | −4.54 |
+| combination — event levels on event days | −0.4229% | 897 | −3.10 |
 
-**Event days are 0.92%/trade worse, t = −2.66**, and remain negative gross of cost with stops widened to −6%. An earnings reaction raises volatility without supplying direction, so a fixed stop is reached sooner while the take-profit is not.
+**Event days are 1.0378%/trade worse, t = −2.99**, and remain negative gross of cost with stops widened to −6%. An earnings reaction raises volatility without supplying direction, so a fixed stop is reached sooner while the take-profit is not.
 
-**And events are 1.73% of sessions**, so event-conditioned levels cannot move the blended result whatever their sign. This is a structural argument, not a statistical one, and it does not weaken with more data.
+**And events are 1.62% of sessions**, so event-conditioned levels cannot move the blended result whatever their sign. This is a structural argument, not a statistical one, and it does not weaken with more data.
+
+> **Numbers re-measured 2026-08-18 by [#685](https://github.com/dd-jp/samurai-trading-system/issues/685); the decision is unchanged and was not re-argued.** This table read **46** events, event-only **−1.3267%** at n = 18, **t = −4.19**, combination −0.4282%, and a difference of **0.92%/trade at t = −2.66**. Those figures reproduce to the digit on the same data under the old labelling — the correction is attributable, not a different pull. **Sign and significance both survive**, and the event penalty widens. The event count falling to 43 makes the structural argument *stronger* (1.73% → 1.62%), which is why the decision needed no revisiting. Working in [doc 18 Result 4](../research/18-intraday-instrument-physics.md#event-conditioned-levels-are-worse-and-cannot-matter-anyway) and the run record [`2026-08-18-earnings-lookahead-rerun.txt`](../research/archive/raw/2026-08-18-earnings-lookahead-rerun.txt).
 
 ## Decision 3 — the levels are the **neutral bracket**
 
@@ -195,6 +197,10 @@ Decision 5 stated the envelope but left three things underdetermined, each of wh
 
 **Two instruments, not the universe.** SPY and TSLA stand in for their subclasses.
 
-**The earnings-day labelling is loose, and in one case looks ahead.** `18-fetch-earnings.py` classifies a release as reacting on the *same* session whenever it lands before 16:00 ET — including releases *during* the session. The study enters at the open, so for an 11:00 release the entry precedes the event it is labelling. Same-date pre-market and post-close headlines also add both a "same" and a "next" marker, counting one event as two reaction days. Raised in review of [#676](https://github.com/dd-jp/samurai-trading-system/issues/676); tracked as [#685](https://github.com/dd-jp/samurai-trading-system/issues/685).
+**The earnings-day labelling was wrong, and is now corrected and re-measured — but not in the way the weakness was written.** Raised in review of [#676](https://github.com/dd-jp/samurai-trading-system/issues/676), fixed and re-run 2026-08-18 by [#685](https://github.com/dd-jp/samurai-trading-system/issues/685). **Decision 2's figures above are now measured, not indicative.**
 
-**This does not move Decision 2, and the reason is worth stating rather than assuming.** The event-conditioning result is carried by the STRUCTURAL argument — events are 46 of 2,657 sessions, 1.73%, so event-conditioned levels cannot move the blended expectancy whatever their sign. That argument is indifferent to which 46 sessions they are. What the mislabelling can move is the *magnitude* of the −1.3267%/trade event-day figure and its t-statistic, so treat those two numbers as indicative rather than measured until #685 re-runs it.
+The defect recorded here was a look-ahead — a release before 16:00 ET called a *same-session* reaction even when it landed *during* the session, ahead of which the study's 09:30 entry sits — plus one event counted as two reaction days. Both were real defects in `18-threshold-study.py` (not `18-fetch-earnings.py`, which classifies nothing; see [`docs/reviews/issue-triage-2026-08-17.md`](../reviews/issue-triage-2026-08-17.md)) and both are fixed. **Measured, neither moved a number**: every one of TSLA's 43 genuine releases in 10.6 years lands post-close, 16:01–17:14 ET, so no session was ever intraday-contaminated, and the old code's `(date, label)` set had already collapsed the double-count.
+
+**The defect that did move the numbers was the matcher, and it was not the one recorded.** Accepting any headline with a quarter token and the letters `EPS` let four previews and commentary pieces — *"Analyst Predicts 6% Beat On Q2 EPS"*, *"Q3 Earnings Preview: … Expects EPS To Fall Below Estimates"* — mark reaction days of their own. Three fell on trading days, all out-of-sample: 46 = 43 + 3. The release matcher now requires a reported figure (`EPS $…`).
+
+**The remaining weakness is real but smaller.** The classifier's pre-open and intraday branches are exercised only by a synthetic fixture, because TSLA never reports outside the post-close window; a name that reports pre-market would exercise them against real tape and none was measured. And the event-only row is still a 6-cell grid selected in-sample on 28 days and scored on 15, so it should be read as a sign and a significance, not as a precise level.

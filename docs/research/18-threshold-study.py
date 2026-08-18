@@ -7,6 +7,13 @@ scaled by the ETP leverage factor. Costs subtracted per round trip.
 No selection signal: this is the unconditional baseline the thresholds are fitted
 to. A real system adds an entry signal on top, which shifts P_win but not the
 shape of the distribution.
+
+Corrected 2026-08-18 for #685. The earnings labelling had two defects: a release
+at any time before 16:00 ET was called a same-session reaction, so an 11:00
+release labelled a session whose 09:30 entry PRECEDED it (look-ahead), and
+headlines were not deduped per event, so a same-date pre-market/post-close pair
+marked two reaction days for one event. See `earnings_events`, `classify` and
+`reaction_dates`. Set DUMP_EVENTS=1 to print every matched event with its label.
 """
 import json, math, os, re, sys
 from collections import defaultdict
@@ -60,47 +67,108 @@ def load_sessions(symbol, tf=os.environ.get("TF", "5Min")):
     return {d: v for d, v in sessions.items() if len(v) >= min_bars}
 
 
-def earnings_dates(symbol):
-    """ET trading date on which the market first reacts to the release."""
+# Two matched headlines closer together than this belong to the same release.
+# Earnings are ~90 days apart, so the threshold cannot merge two real events,
+# and it comfortably spans the common shape: a post-close release at 16:05
+# followed by pre-market recaps the next morning.
+# Safe at 5 days only because the matcher requires a reported figure: every
+# observed cluster is one release plus recaps within ~19h (widest gap seen:
+# 2026-04-22 16:11 -> 2026-04-23 12:55). A name that prints twice inside five
+# days (a restatement, an amended filing) would be silently collapsed into one
+# event -- narrow this before reusing the study on such a name.
+EVENT_CLUSTER_DAYS = 5
+
+
+def earnings_events(symbol):
+    """One (release datetime ET, headline) per earnings event, in time order.
+
+    Deduped per event. The wire publishes several headlines per release — a
+    post-close print plus pre-market recaps the following morning — and the
+    earlier revision of this function added one marker per *headline*, so a
+    same-date pre-market/post-close pair marked BOTH that session and the next
+    one. One event now contributes exactly one release time, the earliest
+    matched headline in its cluster (#685).
+    """
     path = os.path.join(TMP, "news_%s.jsonl" % symbol)
     if not os.path.exists(path):
-        return set()
+        return []
     name = {"TSLA": "tesla", "AAPL": "apple"}.get(symbol, symbol.lower())
     # Benzinga's release headline changed format in 2023:
     #   <=2022  "Tesla Reports Q4 Adj. EPS $(0.87), Deliveries ~17.478K"
     #   >=2023  "Tesla Q4 Adj. EPS $0.50 Beats $0.45 Estimate, Sales $24.901B Beats ..."
     # Both start with the company name and carry a quarter token plus EPS.
     quarter = re.compile(r"\bq[1-4]\b")
-    eps = re.compile(r"\beps\b")
-    out = set()
+    # A REPORTED figure, not a mention of the letters EPS: the release headline
+    # always carries the number, "EPS $0.50" / "Adj. EPS $(0.87)". Requiring it
+    # is what separates the print from the commentary around it — a bare
+    # `\beps\b` also matched four previews and roundups ("Analyst Predicts 6%
+    # Beat On Q2 EPS", "Q3 Earnings Preview: ... Expects EPS To Fall Below
+    # Estimates"), each of which then marked a reaction day of its own. Those
+    # four are the whole of the difference between the 46 days ADR-0018
+    # published and the 42 measured here (#685).
+    eps = re.compile(r"\beps\b[^$]{0,12}\$")
+    hits = []
     for line in open(path):
         n = json.loads(line)
-        h = n["h"].lower()
-        if not (h.startswith(name) and quarter.search(h) and eps.search(h)):
+        h = n["h"]
+        low = h.lower()
+        if not (low.startswith(name) and quarter.search(low) and eps.search(low)):
             continue
-        t = datetime.fromisoformat(n["t"].replace("Z", "+00:00")).astimezone(ET)
-        mins = t.hour * 60 + t.minute
-        d = t.date()
-        # released at/after 16:00 ET -> next session reacts; before 09:30 -> same session
-        out.add((d, "next" if mins >= 16 * 60 else "same"))
-    return out
+        hits.append((datetime.fromisoformat(n["t"].replace("Z", "+00:00")).astimezone(ET), h))
+    hits.sort(key=lambda r: r[0])
+    events = []
+    for t, h in hits:
+        if events and (t - events[-1][-1][0]).total_seconds() <= EVENT_CLUSTER_DAYS * 86400:
+            events[-1].append((t, h))
+        else:
+            events.append([(t, h)])
+    return [c[0] for c in events]
+
+
+def classify(t):
+    """Which session first reacts to a release at ET datetime `t`.
+
+    The study enters at the 09:30 open, so only a release that lands BEFORE the
+    open is reacted to by that session from the entry onwards. A release during
+    the session sits after the entry, and labelling that session as the reaction
+    is look-ahead — it was the defect this replaces (#685).
+    """
+    mins = t.hour * 60 + t.minute
+    if mins >= 16 * 60:
+        return "next"
+    if mins >= 9 * 60 + 30:
+        return "intraday"
+    return "same"
 
 
 def reaction_dates(symbol, session_days):
+    """(reaction sessions, sessions excluded as contaminated by an intraday release).
+
+    An intraday release contaminates its own session and nothing else: the
+    market has already reacted by that session's close, so the following session
+    is an ordinary post-reaction session. The excluded set is removed from the
+    event arm AND the ordinary arm, so both sides of the comparison are built on
+    the same rule.
+    """
     days = sorted(session_days)
-    idx = {d: i for i, d in enumerate(days)}
+    have = set(days)
     react = set()
-    for d, when in earnings_dates(symbol):
+    excluded = set()
+    for t, _h in earnings_events(symbol):
+        d = t.date()
+        when = classify(t)
         if when == "same":
-            if d in idx:
+            if d in have:
                 react.add(d)
+        elif when == "intraday":
+            if d in have:
+                excluded.add(d)
         else:
-            # first session strictly after d
-            for cand in days:
+            for cand in days:  # first session strictly after d
                 if cand > d:
                     react.add(cand)
                     break
-    return react
+    return react, excluded
 
 
 def simulate(sessions, days, lev, tp_pct, sl_pct, cost_pct, t0=0, flatten=None):
@@ -165,13 +233,30 @@ def stats(rs):
     var = sum((x - m) ** 2 for x in rs) / (n - 1) if n > 1 else 0.0
     sd = math.sqrt(var)
     wins = [x for x in rs if x > 0]
+    se = sd / math.sqrt(n) if n > 1 else 0.0
     return {
         "n": n,
         "exp": m,
         "sd": sd,
+        "se": se,
+        "t": (m / se) if se > 0 else 0.0,
         "winrate": len(wins) / n,
         "sharpe": (m / sd * math.sqrt(252)) if sd > 0 else 0.0,
     }
+
+
+# Below this many out-of-sample trades an arm's t-statistic is not reported.
+# Declared before the corrected run (#685), not chosen after seeing it.
+T_REPORT_FLOOR = 10
+
+
+def t_str(s):
+    """t-statistic, or an explicit refusal when the arm is under the floor."""
+    if s is None:
+        return "n/a"
+    if s["n"] < T_REPORT_FLOOR:
+        return "n=%d < %d, no t reported" % (s["n"], T_REPORT_FLOOR)
+    return "SE %.3f  t %+.2f" % (s["se"], s["t"])
 
 
 def main():
@@ -183,13 +268,27 @@ def main():
     if not days:
         print("== %s  no sessions loaded from %s - nothing to study" % (symbol, TMP))
         return
-    react = reaction_dates(symbol, set(days))
+    react, excluded = reaction_dates(symbol, set(days))
     split = [d for d in days if d.year <= 2022]
     oos = [d for d in days if d.year >= 2023]
 
+    events = earnings_events(symbol)
+    if os.environ.get("DUMP_EVENTS"):
+        # Only ~46 clusters, so every one is eyeballed rather than trusted.
+        print("-- MATCHED EARNINGS EVENTS (deduped, one row per event)")
+        for i, (t, h) in enumerate(events, 1):
+            print("   %2d  %s ET  %-8s  %s" % (i, t.strftime("%Y-%m-%d %H:%M"), classify(t), h[:100]))
+        print()
+
+    by = defaultdict(int)
+    for t, _h in events:
+        by[classify(t)] += 1
     print("== %s  lev=%gx  cost=%.2f%%  sessions=%d (%s..%s)  earnings-reaction days=%d"
           % (symbol, lev, cost, len(days), days[0], days[-1], len(react & set(days))))
     print("   in-sample %d (<=2022)   out-of-sample %d (>=2023)" % (len(split), len(oos)))
+    print("   events %d (pre-open %d, intraday %d, post-close %d); sessions excluded as "
+          "intraday-contaminated: %d" % (len(events), by["same"], by["intraday"], by["next"],
+                                         len(excluded & set(days))))
 
     TPS = [float(x) for x in os.environ.get("TPS", "2,4,6").split(",")]
     SLS = [float(x) for x in os.environ.get("SLS", "1.5,3").split(",")]
@@ -217,17 +316,28 @@ def main():
                      100 * h.get("tp", 0) / tot, 100 * h.get("sl", 0) / tot, 100 * h.get("close", 0) / tot))
         return rows[0]
 
-    ev_is = [d for d in split if d in react]
-    ord_is = [d for d in split if d not in react]
-    ev_oos = [d for d in oos if d in react]
-    ord_oos = [d for d in oos if d not in react]
+    # The intraday-contaminated sessions are dropped from BOTH the event arm and
+    # the ordinary arm — the same rule on both sides of the comparison, which is
+    # what makes the event-minus-ordinary difference meaningful (#685). They are
+    # NOT dropped from the pooled grid row: that row does not partition on
+    # events at all, it is the unconditional baseline over every session, and it
+    # is cited as reproducing to the digit by docs 50, 51 and 52.
+    ev_is = [d for d in split if d in react and d not in excluded]
+    ord_is = [d for d in split if d not in react and d not in excluded]
+    ev_oos = [d for d in oos if d in react and d not in excluded]
+    ord_oos = [d for d in oos if d not in react and d not in excluded]
 
     print("\n-- IN-SAMPLE FITS (<=2022)")
     b_pool = best(split, "pooled, all days")
     print()
     b_ord = best(ord_is, "ordinary days only")
     print()
-    b_ev = best(ev_is, "earnings-reaction days only") if len(ev_is) >= 8 else None
+    if len(ev_is) >= 8:
+        b_ev = best(ev_is, "earnings-reaction days only")
+    else:
+        b_ev = None
+        print("   [earnings-reaction days only] n=%d < 8 in-sample - the event arm cannot be "
+              "fitted, so no event row is produced" % len(ev_is))
 
     if b_pool is None:
         print("\nno in-sample sessions - nothing to freeze, stopping")
@@ -240,22 +350,37 @@ def main():
         print("   no out-of-sample sessions - the frozen levels cannot be scored")
         return
     res["grid_pooled"] = s
-    print("   GRID (one level pair, every day): TP %+.1f/SL -%.1f -> exp %+.4f%%  n=%d  win %.1f%%  Sharpe %.2f"
-          % (b_pool[0], b_pool[1], s["exp"], s["n"], s["winrate"] * 100, s["sharpe"]))
+    print("   GRID (one level pair, every day): TP %+.1f/SL -%.1f -> exp %+.4f%%  n=%d  win %.1f%%  Sharpe %.2f  %s"
+          % (b_pool[0], b_pool[1], s["exp"], s["n"], s["winrate"] * 100, s["sharpe"], t_str(s)))
 
     if b_ev and b_ord:
+        s_ord = stats(simulate(sessions, ord_oos, lev, b_ord[0], b_ord[1], cost))
+        res["ordinary_only"] = s_ord
+        if s_ord:
+            print("   ORDINARY-ONLY (non-event, intraday-contaminated excluded): TP %+.1f/SL -%.1f -> "
+                  "exp %+.4f%%  n=%d  win %.1f%%  %s"
+                  % (b_ord[0], b_ord[1], s_ord["exp"], s_ord["n"], s_ord["winrate"] * 100, t_str(s_ord)))
         s2 = stats(simulate(sessions, ev_oos, lev, b_ev[0], b_ev[1], cost))
         res["event_only"] = s2
         if s2:
-            print("   EVENT-ONLY (trade only earnings days): TP %+.1f/SL -%.1f -> exp %+.4f%%  n=%d  win %.1f%%"
-                  % (b_ev[0], b_ev[1], s2["exp"], s2["n"], s2["winrate"] * 100))
+            print("   EVENT-ONLY (trade only earnings days): TP %+.1f/SL -%.1f -> exp %+.4f%%  n=%d  win %.1f%%  %s"
+                  % (b_ev[0], b_ev[1], s2["exp"], s2["n"], s2["winrate"] * 100, t_str(s2)))
+        if s2 and s_ord:
+            diff = s2["exp"] - s_ord["exp"]
+            se_d = math.sqrt(s2["se"] ** 2 + s_ord["se"] ** 2)
+            if s2["n"] < T_REPORT_FLOOR or s_ord["n"] < T_REPORT_FLOOR:
+                print("   EVENT MINUS ORDINARY: %+.4f%%/trade  SE %.3f  -- n=%d/%d, below the declared "
+                      "floor of %d, so no t is reported" % (diff, se_d, s2["n"], s_ord["n"], T_REPORT_FLOOR))
+            else:
+                print("   EVENT MINUS ORDINARY: %+.4f%%/trade  SE %.3f  t %+.2f (Welch, unpaired)"
+                      % (diff, se_d, diff / se_d if se_d > 0 else 0.0))
         combo = (simulate(sessions, ord_oos, lev, b_ord[0], b_ord[1], cost)
                  + simulate(sessions, ev_oos, lev, b_ev[0], b_ev[1], cost))
         s3 = stats(combo)
         res["combination"] = s3
         if s3 is not None:
-            print("   COMBINATION (ordinary levels + earnings levels): exp %+.4f%%  n=%d  win %.1f%%  Sharpe %.2f"
-                  % (s3["exp"], s3["n"], s3["winrate"] * 100, s3["sharpe"]))
+            print("   COMBINATION (ordinary levels + earnings levels): exp %+.4f%%  n=%d  win %.1f%%  Sharpe %.2f  %s"
+                  % (s3["exp"], s3["n"], s3["winrate"] * 100, s3["sharpe"], t_str(s3)))
 
     print("\n-- ANNUALISED on GBP 750, at the out-of-sample trade rate")
     for k, s in res.items():

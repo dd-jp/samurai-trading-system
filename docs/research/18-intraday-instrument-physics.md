@@ -77,20 +77,46 @@ SPY at +1% / −0.5%: take-profit reached first **11.6%** of sessions, stop firs
 
 ### Event-conditioned levels are worse, and cannot matter anyway
 
-Earnings-reaction sessions identified from the Benzinga wire via Alpaca's news API — the release headline plus a next-session/same-session rule. **46 reaction days** for TSLA across 10.6 years, 28 in-sample and 18 out. (The headline format changed in 2023 from *"Tesla Reports Q4 Adj. EPS…"* to *"Tesla Q4 Adj. EPS … Beats … Estimate"*; matching only the first form silently loses every post-2022 event.)
+Earnings-reaction sessions identified from the Benzinga wire via Alpaca's news API — a headline carrying the company name, a quarter token and a **reported figure** (`EPS $…`), clustered per event, then mapped to a session by release time (before 09:30 ET → same session, 09:30–16:00 → intraday and excluded from both arms, at/after 16:00 → next session). The reported-figure requirement is the load-bearing half: the subsection below shows the release-time rule never fires on this sample, while accepting a bare `EPS` token cost three spurious reaction days. **43 reaction days** for TSLA across 10.6 years, 28 in-sample and 15 out. (The headline format changed in 2023 from *"Tesla Reports Q4 Adj. EPS…"* to *"Tesla Q4 Adj. EPS … Beats … Estimate"*; matching only the first form silently loses every post-2022 event.)
+
+> **Re-measured 2026-08-18 by [#685](https://github.com/dd-jp/samurai-trading-system/issues/685).** The table below replaces one that read **46 reaction days**, event-only **−1.3267%** at n = 18, **t = −4.19**, ordinary −0.4098% at n = 879, combination −0.4282%, and a difference of **−0.92%/trade at t = −2.66**. Those figures are superseded, not withdrawn as fabricated: they reproduce to the digit on the same data under the old labelling, which is what makes the correction attributable. Run record: [`archive/raw/2026-08-18-earnings-lookahead-rerun.txt`](archive/raw/2026-08-18-earnings-lookahead-rerun.txt), against a criterion committed before the run.
 
 Out-of-sample, levels frozen from the in-sample fits:
 
 | strategy | expectancy/trade | n | SE | t |
 | --- | --- | --- | --- | --- |
 | **Grid** — one pooled level pair, every session | **−0.4257%** | 897 | 0.137 | −3.10 |
-| ordinary sessions only | −0.4098% | 879 | 0.139 | −2.95 |
-| **Event-only** — trade earnings reactions alone | **−1.3267%** | 18 | 0.316 | **−4.19** |
-| **Combination** — event levels on event days, pooled elsewhere | **−0.4282%** | 897 | 0.137 | −3.12 |
+| ordinary sessions only | −0.4055% | 882 | 0.138 | −2.93 |
+| **Event-only** — trade earnings reactions alone | **−1.4433%** | 15 | 0.318 | **−4.54** |
+| **Combination** — event levels on event days, pooled elsewhere | **−0.4229%** | 897 | 0.136 | −3.10 |
 
-**Earnings days are significantly *worse*, not better**: −0.92%/trade against ordinary sessions, SE 0.345, **t = −2.66**. Not a stop-width artefact — gross of cost and with stops widened to −6%, every event-day configuration is still negative. The mechanism is that an earnings reaction raises intraday volatility without supplying direction, so a fixed stop is reached far sooner while the take-profit is not.
+**Earnings days are significantly *worse*, not better**: −1.0378%/trade against ordinary sessions, SE 0.347, **t = −2.99**. The sign and the significance both survive the correction, and the gap widens slightly. Not a stop-width artefact — gross of cost and with stops widened to −6%, every event-day configuration is still negative. The mechanism is that an earnings reaction raises intraday volatility without supplying direction, so a fixed stop is reached far sooner while the take-profit is not.
 
-**And the combination is arithmetically incapable of mattering.** Events are **46 of 2,657 sessions — 1.73%**. Even levels that were dramatically better on event days would move the blended expectancy by about 2%. Event-conditioned thresholds could only matter to an event-*only* strategy, which yields ~4 trades/yr/name and cannot meet ADR-0014's one-trade-per-day floor.
+**And the combination is arithmetically incapable of mattering.** Events are **43 of 2,657 sessions — 1.62%**. Even levels that were dramatically better on event days would move the blended expectancy by about 2%. Event-conditioned thresholds could only matter to an event-*only* strategy, which yields ~4 trades/yr/name and cannot meet ADR-0014's one-trade-per-day floor.
+
+#### What #685 actually found — the named defect was inert, a third one was not
+
+The ticket named two defects in the labelling, and both are real code defects, now fixed in `18-threshold-study.py`:
+
+1. **Look-ahead.** Any release before 16:00 ET was called a *same-session* reaction, including releases *during* the session — so for an 11:00 release the study's 09:30 entry preceded the event the session was labelled for.
+2. **One event counted as two days.** Headlines were not deduped per event.
+
+**Neither moved a number, and that is the measurement, not an assumption.** All 43 genuine TSLA releases in 10.6 years land **post-close, between 16:01 and 17:14 ET**. No session is intraday-contaminated, so nothing is excluded; and the old code's per-headline markers were kept in a `(date, label)` set, which already collapsed multiple post-close headlines on one date.
+
+**The whole 46 → 43 change is a third defect the ticket did not name: the matcher.** Requiring only `q[1-4]` and the letters `EPS` accepted commentary and previews, four of which marked reaction days of their own:
+
+| headline | ET | what it actually is |
+| --- | --- | --- |
+| *"Tesla Analyst Predicts 6% Beat On Q2 EPS — But Tells Investors To Focus On 4 'More Important' T…"* | 2023-07-14 02:07 | preview, 5 days before the release |
+| *"Tesla Q2 EPS Estimate Bumped Up, Rivian's Cold Shoulder To Union, Lucid's 70% Sales Jump And Mo…"* | 2024-07-13 11:16 | roundup, 10 days early — and a **Saturday**, so it marked no session |
+| *"Tesla Q3 Earnings Preview: Troy Teslike, Gary Black Expects EPS To Fall Below Estimates But Dan…"* | 2024-10-22 08:52 | preview, the day *before* the real release |
+| *"Tesla Among S&P's Big Losers: Q1 EPS Miss Puts TSLA In Bottom 10"* | 2025-06-09 14:10 | market commentary, no release |
+
+Three of the four fell on trading days: **46 = 43 + 3**, and all three are out-of-sample, which is why the in-sample fits and every frozen level are unchanged and the entire out-of-sample delta is attributable to dropping those three sessions.
+
+The 2024-10-22 preview is the one that shows why the matcher had to tighten rather than the dedupe alone: a naive earliest-headline-wins dedupe anchors the event to the *preview*, which then swallows the genuine 2024-10-23 16:04 print as a "recap" inside the same cluster and **loses the real reaction day entirely**. The release matcher now requires a reported figure — `EPS $…` — which is what separates the print from the talk about it. Under it the 43 events are exactly the quarterly sequence 2016 Q4 through 2026 Q2, with no gaps and no duplicates.
+
+**What is still not measured.** The pre-open and intraday branches of the classifier are exercised only by a synthetic fixture in the run record, because TSLA never reports outside the post-close window — a name that reports pre-market would exercise them for real, and none was measured here. And the event-only figure remains a 6-cell grid selected in-sample on 28 days and scored on 15; that was true of the superseded number too, and it is the reason this row should not be read as a precise level in either direction.
 
 **This confirms the sample-size arithmetic #653 wrote down before any data was pulled** — ~40 events per name in 10 years, too few to resolve the effect being sought.
 
