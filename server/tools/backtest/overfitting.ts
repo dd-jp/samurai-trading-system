@@ -43,11 +43,25 @@ export function windowYears(window: DateRange): number {
 
 /**
  * The annual Sharpe a trial is assumed to be searching for, in the MinBTL
- * cap. 1.0 is López de Prado's reference case and reproduces the spec's
- * stated calibration exactly: at N = 45 the formula returns ~5 years, which
- * is the "~45 / 5 yr" the spec and the issue both quote.
+ * cap — E[SR] in López de Prado's formula. **1.0 is a judgement call, not a
+ * measurement**: it is López de Prado's reference case, and reproduces the
+ * spec's stated calibration exactly (at N = 45 the formula returns ~5 years,
+ * the "~45 / 5 yr" the spec and the issue both quote).
+ *
+ * It is *not* derived from anything this project has measured. The one
+ * strategy actually measured under the superseded doc 10 configuration came
+ * in at 0.71 (`docs/research/10-edge-hypothesis.md`) — 29% below this
+ * constant — and at that value every trial-budget number this project has
+ * quoted shrinks by roughly 17x (807 -> 48 at the 10.2y window; see
+ * `overfitting.test.ts`'s "E[SR] sensitivity" case for the full table).
+ * Whether 1.0 or something else is the right E[SR] to search for is an
+ * open call reserved for the repo owner — see
+ * https://github.com/dd-jp/samurai-trading-system/issues/637. This constant
+ * only fixes the *default*; callers that want to state a different
+ * assumption pass `expectedAnnualSharpe` explicitly to `minbtl` /
+ * `minbtlGuard`.
  */
-const MINBTL_TARGET_ANNUAL_SHARPE = 1;
+export const MINBTL_TARGET_ANNUAL_SHARPE = 1;
 
 /**
  * Deflated Sharpe Ratio (Bailey & López de Prado 2014, eq. 9): the probability
@@ -188,25 +202,41 @@ export function pbo(performance: readonly (readonly number[])[]): PboVerdict {
 /**
  * MinBTL (López de Prado, AFML ch. 8): the maximum number of independent
  * trials a sample of this length can support before an in-sample Sharpe of
- * ~1 is expected to arise from chance alone.
+ * `expectedAnnualSharpe` is expected to arise from chance alone.
  *
  * Inverted numerically from the minimum-backtest-length formula
  *
  *   MinBTL(N) ≈ [ (1−γ)·Z⁻¹(1 − 1/N) + γ·Z⁻¹(1 − 1/(N·e)) ]² / E[SR]²   years
  *
  * which is strictly increasing in N, so counting upward finds the largest N
- * the window supports. The spec's calibration falls straight out: 5 years of
- * data supports ~45 trials.
+ * the window supports. At the default E[SR] = 1.0 the spec's calibration
+ * falls straight out: 5 years of data supports ~45 trials.
+ *
+ * @param expectedAnnualSharpe E[SR] — the annual Sharpe a trial is assumed
+ *   to be searching for. Defaults to `MINBTL_TARGET_ANNUAL_SHARPE` (1.0,
+ *   López de Prado's reference case). This is a **judgement call reserved
+ *   for the repo owner, not a measured constant** — see that constant's doc
+ *   comment. The cap is *inversely proportional to the square* of this
+ *   value, so a lower E[SR] shrinks the trial budget sharply: at the default
+ *   1.0 a 10.2y window supports 807 trials; at the one measured Sharpe this
+ *   project has on record, 0.71, the same window supports 48. Every caller
+ *   that reports a MinBTL number should state which E[SR] produced it.
  */
-export function minbtl(window: DateRange): { limit: number } {
+export function minbtl(
+  window: DateRange,
+  expectedAnnualSharpe: number = MINBTL_TARGET_ANNUAL_SHARPE,
+): { limit: number } {
   const years = windowYears(window);
 
   if (years <= 0) {
     throw new Error('minbtl: window must have end > start.');
   }
+  if (!(expectedAnnualSharpe > 0)) {
+    throw new Error(`minbtl: expectedAnnualSharpe must be > 0 (got ${expectedAnnualSharpe}).`);
+  }
 
   let limit = 1;
-  while (minimumBacktestLengthYears(limit + 1) <= years) {
+  while (minimumBacktestLengthYears(limit + 1, expectedAnnualSharpe) <= years) {
     limit++;
   }
 
@@ -222,20 +252,24 @@ export function minbtl(window: DateRange): { limit: number } {
  * judgement the caller (FL's kill/rework decision, or a researcher) owns, and
  * an exception here would deny them the report they need in order to make it.
  */
-export function minbtlGuard(window: DateRange, distinctConfigs: number): MinBtlVerdict {
+export function minbtlGuard(
+  window: DateRange,
+  distinctConfigs: number,
+  expectedAnnualSharpe: number = MINBTL_TARGET_ANNUAL_SHARPE,
+): MinBtlVerdict {
   if (!Number.isInteger(distinctConfigs) || distinctConfigs < 0) {
     throw new Error(
       `minbtlGuard: distinctConfigs must be an integer >= 0 (got ${distinctConfigs}).`,
     );
   }
 
-  const { limit } = minbtl(window);
+  const { limit } = minbtl(window, expectedAnnualSharpe);
 
   return { limit, distinct_configs: distinctConfigs, exceeded: distinctConfigs > limit };
 }
 
 /** Years of data N independent trials require. Strictly increasing in N. */
-function minimumBacktestLengthYears(nTrials: number): number {
+function minimumBacktestLengthYears(nTrials: number, expectedAnnualSharpe: number): number {
   if (nTrials <= 1) {
     return 0;
   }
@@ -244,7 +278,7 @@ function minimumBacktestLengthYears(nTrials: number): number {
     (1 - EULER_MASCHERONI) * inverseNormalCdf(1 - 1 / nTrials) +
     EULER_MASCHERONI * inverseNormalCdf(1 - 1 / (nTrials * Math.E));
 
-  return term ** 2 / MINBTL_TARGET_ANNUAL_SHARPE ** 2;
+  return term ** 2 / expectedAnnualSharpe ** 2;
 }
 
 /** Φ(z), via the Abramowitz & Stegun 7.1.26 error-function approximation. */

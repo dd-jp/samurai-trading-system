@@ -167,8 +167,17 @@ export interface TrialGridSizing {
 export function sizeTrialGridToSample(
   entries: TrialGridEntry[],
   window: DateRange,
+  /**
+   * E[SR] for the MinBTL cap — see `overfitting.ts`'s
+   * `MINBTL_TARGET_ANNUAL_SHARPE` doc comment. Defaults to that constant
+   * (1.0); pass a different value to size the grid against a different
+   * stated assumption. Which E[SR] is operative is a judgement call
+   * reserved for the repo owner (issue #637) — this parameter only makes
+   * the choice explicit rather than hardcoded.
+   */
+  expectedAnnualSharpe?: number,
 ): TrialGridSizing {
-  const { limit } = minbtl(window);
+  const { limit } = minbtl(window, expectedAnnualSharpe);
   const years = windowYears(window);
   const requested = entries.length;
 
@@ -286,6 +295,14 @@ export interface TrialGridRunDeps {
   averageCapital: number;
   configTrialLog: ConfigTrialLog;
   /**
+   * E[SR] for the MinBTL grid-sizing cap, forwarded to
+   * `sizeTrialGridToSample`. Defaults to `MINBTL_TARGET_ANNUAL_SHARPE` (1.0)
+   * if omitted — see that constant's doc comment in `overfitting.ts`. Which
+   * E[SR] is operative is the repo owner's call (issue #637); this only
+   * makes the assumption a stated one instead of a hardcoded one.
+   */
+  expectedAnnualSharpe?: number;
+  /**
    * Defaults to `EvalExecutorImpl` over the replay's own trade source and
    * timeline — the spec's "uses existing seams unchanged". Overridable only
    * so tests can isolate this module's wiring from a real replay+eval run.
@@ -342,7 +359,7 @@ export async function runTrialGrid(deps: TrialGridRunDeps): Promise<TrialGridRes
       new EvalExecutorImpl({ source: run.trades, timeline: run.timeline }));
 
   // #405: sized from the sample BEFORE any trial runs, not graded afterwards.
-  const sizing = sizeTrialGridToSample(buildTrialGrid(), deps.window);
+  const sizing = sizeTrialGridToSample(buildTrialGrid(), deps.window, deps.expectedAnnualSharpe);
   deps.announceSizing?.(sizing);
   const grid = sizing.selected;
   const results: TrialGridResult[] = [];

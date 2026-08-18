@@ -1,4 +1,10 @@
-import { deflatedSharpe, minbtl, minbtlGuard, pbo } from './overfitting.js';
+import {
+  deflatedSharpe,
+  MINBTL_TARGET_ANNUAL_SHARPE,
+  minbtl,
+  minbtlGuard,
+  pbo,
+} from './overfitting.js';
 import type { DateRange } from './universe.js';
 
 const MS_PER_YEAR = 365.25 * 24 * 60 * 60 * 1000;
@@ -154,6 +160,53 @@ describe('minbtl', () => {
       /end > start/,
     );
   });
+
+  it('defaults expectedAnnualSharpe to the declared E[SR] = 1.0 constant', () => {
+    // The default parameter and the exported constant must agree — a caller
+    // that omits the argument gets exactly what MINBTL_TARGET_ANNUAL_SHARPE
+    // says it should.
+    const window = yearsWindow(5);
+
+    expect(minbtl(window).limit).toBe(minbtl(window, MINBTL_TARGET_ANNUAL_SHARPE).limit);
+    expect(MINBTL_TARGET_ANNUAL_SHARPE).toBe(1);
+  });
+
+  it('throws on a non-positive expectedAnnualSharpe', () => {
+    expect(() => minbtl(yearsWindow(5), 0)).toThrow(/expectedAnnualSharpe/);
+    expect(() => minbtl(yearsWindow(5), -0.5)).toThrow(/expectedAnnualSharpe/);
+  });
+
+  /**
+   * Issue #637 (spec-research-alignment F3): E[SR] = 1.0 is a hardcoded
+   * judgement call, not a measurement, and `minimumBacktestLengthYears`
+   * divides by it *squared* — so a lower E[SR] shrinks the trial-budget cap
+   * fast. This pins the table the issue derived, comparing the default
+   * (1.0, López de Prado's reference case) against the one Sharpe this
+   * project has actually measured under the now-superseded doc 10
+   * configuration (0.71, `docs/research/10-edge-hypothesis.md`). Every
+   * number this project has quoted for MinBTL headroom (the 7 that #405
+   * sized the grid to, the spec's "~45 / 5 yr", doc 13's ~812-at-10.2y) is
+   * the E[SR] = 1.0 row — this test exists so that fact stays visible
+   * instead of being rediscovered by accident.
+   *
+   * This does NOT change which E[SR] is operative (still 1.0, unchanged by
+   * this ticket) — it only proves the sensitivity is real and pins its
+   * magnitude so a future edit can't silently erase it.
+   */
+  it('E[SR] sensitivity: the trial-budget cap at the measured 0.71 vs the declared 1.0 default', () => {
+    const cases: Array<{ years: number; capAt1: number; capAt071: number }> = [
+      { years: 1.99, capAt1: 7, capAt071: 3 },
+      { years: 5, capAt1: 45, capAt071: 10 },
+      { years: 10.2, capAt1: 807, capAt071: 48 },
+    ];
+
+    for (const { years, capAt1, capAt071 } of cases) {
+      const window = yearsWindow(years);
+
+      expect(minbtl(window, 1.0).limit).toBe(capAt1);
+      expect(minbtl(window, 0.71).limit).toBe(capAt071);
+    }
+  });
 });
 
 describe('minbtlGuard', () => {
@@ -186,6 +239,15 @@ describe('minbtlGuard', () => {
   it('throws on a negative or non-integer config count', () => {
     expect(() => minbtlGuard(yearsWindow(5), -1)).toThrow(/integer >= 0/);
     expect(() => minbtlGuard(yearsWindow(5), 1.5)).toThrow(/integer >= 0/);
+  });
+
+  it('accepts an explicit expectedAnnualSharpe and flags against that cap, not the default', () => {
+    // 11 configs is within the E[SR]=1.0 cap for 5y (45) but exceeds the
+    // E[SR]=0.71 cap for the same window (10).
+    const window = yearsWindow(5);
+
+    expect(minbtlGuard(window, 11).exceeded).toBe(false);
+    expect(minbtlGuard(window, 11, 0.71).exceeded).toBe(true);
   });
 });
 
