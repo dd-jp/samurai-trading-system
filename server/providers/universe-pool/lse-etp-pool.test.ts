@@ -103,8 +103,10 @@ describe('routing binds on lse_ticker only', () => {
 
   it('the real checked-in pool never lets a screening_instrument double as a routing key', () => {
     const routing = buildRoutingMap(LSE_ETP_POOL);
+    // No skip-guard for `screening_instrument === lse_ticker`: `assertValidPool`
+    // now refuses such a row outright (#807), so a `continue` here would be a
+    // test branch that reads as coverage and covers nothing.
     for (const row of LSE_ETP_POOL) {
-      if (row.screening_instrument === row.lse_ticker) continue;
       expect(routing.has(row.screening_instrument)).toBe(false);
     }
   });
@@ -135,6 +137,37 @@ describe('subclass validation fails loud', () => {
       subclass: 'not_a_real_subclass',
     } as unknown as LseEtpPoolRow;
     expect(() => assertValidPool([...LSE_ETP_POOL, bad])).toThrow(UnknownSubclassError);
+  });
+});
+
+// The checked-in pool's distinctness is asserted above ('every lse_ticker is
+// distinct', and the routing block). These cover the other half — a pool a
+// CALLER supplies, which #751 is the first ticket to make possible (#807).
+describe('identity distinctness is enforced, not merely observed', () => {
+  it('assertValidPool rejects a caller-supplied row whose lse_ticker equals its screening_instrument, naming the row', () => {
+    const collapsed = makeRow({ lse_ticker: 'SPY', screening_instrument: 'SPY' });
+    expect(() => assertValidPool([...LSE_ETP_POOL, collapsed])).toThrow(/'SPY'/);
+    expect(() => assertValidPool([collapsed])).toThrow(/same identity/);
+  });
+
+  it('assertValidPool treats a case-only or whitespace-only difference as the SAME identity, not two', () => {
+    // '3USL' vs '3usl' is a transcription of one identifier, never two
+    // instruments on two venues — the exact confusion the named field pair
+    // refuses. Case-sensitive validation would wave this through.
+    expect(() =>
+      assertValidPool([makeRow({ lse_ticker: '3USL', screening_instrument: '3usl' })]),
+    ).toThrow(/same identity/);
+    expect(() =>
+      assertValidPool([makeRow({ lse_ticker: '3USL', screening_instrument: ' 3USL ' })]),
+    ).toThrow(/same identity/);
+  });
+
+  it('assertValidPool accepts a genuinely distinct pair even when one string contains the other', () => {
+    // The checked-in pool holds 3SPY/SPY and 3QQQ/QQQ: a distinct ETP line and
+    // its distinct US underlying. The check is equality, never containment.
+    expect(() =>
+      assertValidPool([makeRow({ lse_ticker: '3SPY', screening_instrument: 'SPY' })]),
+    ).not.toThrow();
   });
 });
 

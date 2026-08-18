@@ -564,8 +564,31 @@ export function countRankableUnderlyings(pool: readonly LseEtpPoolRow[] = LSE_ET
 /**
  * Validates every row of a pool: subclass is recognised (fails loud per
  * `assertKnownSubclass`), and both instrument-identity fields are non-empty
- * and distinct. Rejects a whole malformed pool at once rather than letting a
- * bad row surface later as a routing throw mid-session.
+ * and distinct — distinct meaning UNEQUAL AFTER TRIMMING AND CASE-FOLDING
+ * (`'3USL'` and `' 3usl '` are the SAME identity here, not two). Rejects a
+ * whole malformed pool at once rather than letting a bad row surface later as
+ * a routing throw mid-session.
+ *
+ * Distinctness is the invariant this module exists to carry: `buildRoutingMap`
+ * binds only on `lse_ticker`, which is what makes a wrong-root fetch/route
+ * impossible by construction rather than by convention (see module doc). A row
+ * whose two identities coincide collapses that split back into one overloaded
+ * identifier, so it is refused here rather than merely observed by a test
+ * against the checked-in pool (#807).
+ *
+ * **Why this comparison folds case while `buildRoutingMap` and
+ * `screeningInstrumentFor` match case-sensitively.** Those two do runtime key
+ * lookup, where the exact string a caller holds is the key and must match
+ * exactly. This is authoring-time data hygiene on a hand-compiled file, where
+ * a pair differing only in case or surrounding whitespace is a transcription
+ * of one identifier, never two genuinely different instruments on two venues —
+ * exactly the identity confusion the named field pair was introduced to
+ * refuse. Case-sensitive validation here would wave through the confusing case
+ * and catch only the obvious one.
+ *
+ * The comparison is equality on the normalised values, never containment: the
+ * checked-in pool legitimately holds `3SPY`/`SPY` and `3QQQ`/`QQQ`, which are
+ * a distinct ETP line and its distinct US underlying.
  */
 export function assertValidPool(pool: readonly LseEtpPoolRow[]): void {
   for (const row of pool) {
@@ -575,6 +598,16 @@ export function assertValidPool(pool: readonly LseEtpPoolRow[]): void {
     }
     if (row.screening_instrument.trim().length === 0) {
       throw new Error(`LSE ETP pool row '${row.lse_ticker}' has an empty screening_instrument.`);
+    }
+    if (row.lse_ticker.trim().toUpperCase() === row.screening_instrument.trim().toUpperCase()) {
+      throw new Error(
+        `LSE ETP pool row '${row.lse_ticker}' has an lse_ticker and a screening_instrument that are ` +
+          `the same identity ('${row.lse_ticker}' vs '${row.screening_instrument}', compared after ` +
+          'trimming and case-folding). They name genuinely different objects — the LSE-listed ETP ' +
+          'Samurai routes orders against, and the US underlying the screener fetches bars for — and ' +
+          'a row where they coincide collapses that split back into one overloaded identifier, which ' +
+          'is what buildRoutingMap binding only on lse_ticker exists to make impossible.',
+      );
     }
   }
 }
