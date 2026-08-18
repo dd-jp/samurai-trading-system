@@ -29,6 +29,7 @@
     "test:watch": "vitest",
     "e2e": "playwright test --config e2e/playwright.config.ts",
     "check:citations": "tsx server/tools/check-path-citations.ts",
+    "check:live-gates": "tsx server/tools/check-live-money-gates.ts",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "precommit": "yarn lint:fix && yarn typecheck && yarn test:coverage"

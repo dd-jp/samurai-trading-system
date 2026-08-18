@@ -337,11 +337,32 @@ describe('paperStartingProfile', () => {
       return expect.unreachable('paperStartingProfile("live") must throw');
     })();
 
-    for (const closed of ['#384', '#375', '#333', '#525']) {
+    // Third time, #868: the seven the list carried from #566 were all closed by
+    // 2026-08-18 and still rendered here. The refusal is the second call site
+    // of LIVE_MONEY_GATE_SUMMARY, so it is pinned on the same numbers as the
+    // live boot — a list corrected in one message and not the other is the
+    // divergence live-money-gates.ts exists to prevent.
+    for (const closed of [
+      '#526',
+      '#519',
+      '#548',
+      '#549',
+      '#550',
+      '#551',
+      '#562',
+      '#384',
+      '#375',
+      '#333',
+      '#525',
+    ]) {
       expect(message).not.toContain(closed);
+    }
+    for (const open of ['#734', '#800', '#798', '#826']) {
+      expect(message).toContain(open);
     }
     expect(message).toContain('#238');
     expect(message).toContain('has not run');
+    expect(message).toContain('yarn check:live-gates');
   });
 
   it('routes an operator to the live profile rather than to a dead end', () => {
