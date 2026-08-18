@@ -215,7 +215,7 @@ function traderInput(overrides: Partial<TraderInput> = {}): TraderInput {
     debate: debateResult(),
     clock: new ManualClock(DECISION_BAR),
     marketData: new FixtureMarketData(bars(15, 2)),
-    equity: EQUITY,
+    equity: async () => EQUITY,
     config: DEFAULT_TRADER_CONFIG,
     positionState: async () => [],
     // #568: no exit fill on record for any lot — "missing is absent", so held
@@ -550,7 +550,7 @@ describe('decide — skip paths', () => {
 
   it('returns null rather than placing a dust order below the minimum viable notional', async () => {
     // Equity 100 yields a notional of 9.375, just under the 10 minimum.
-    const intent = await decide(traderInput({ equity: 100 }));
+    const intent = await decide(traderInput({ equity: async () => 100 }));
 
     expect(intent).toBeNull();
   });
@@ -616,7 +616,7 @@ describe('decide — skip paths', () => {
     // malformed quote reaches pricing. `size` is the choke point every
     // numeric input funnels through — guarding it covers this case and any
     // later one, which the per-input `entry` check alone would not.
-    const intent = await decide(traderInput({ equity: Number.NaN }));
+    const intent = await decide(traderInput({ equity: async () => Number.NaN }));
 
     expect(intent).toBeNull();
   });
@@ -978,6 +978,57 @@ describe('decide — flat by close (#668)', () => {
     );
 
     expect(outcome.intent?.intent_type).toBe('exit');
+  });
+
+  /**
+   * #847 — THE SIZING READ MUST NOT GATE THE FLATTEN.
+   *
+   * `TraderInput.equity` is a thunk backed by a whole-book valuation that
+   * REFUSES when any held instrument's mark is dark or stale. Until #847 the
+   * composition root resolved it eagerly, before `decide` was even called, so
+   * one dark name anywhere in the book aborted the whole decision pass before
+   * `routeDecision` could reach the flat-by-close branch — the flatten was
+   * delayed to the next tick, against ADR-0014.
+   *
+   * The thunk here throws if it is invoked at all, so this goes red the moment
+   * anyone re-eagers the read inside `decide`: an exit sizes to the held
+   * quantity and must never consult equity.
+   */
+  it('flattens without reading equity, so a dark mark elsewhere cannot suppress it (#847)', async () => {
+    const outcome = await decideWithReason(
+      traderInput({
+        clock: new ManualClock(INSIDE_WINDOW),
+        debate: debateResult({ direction: 'neutral' }),
+        positionState: async () => [holding()],
+        equity: async () => {
+          throw new Error('portfolio view refused: SPY mark is stale');
+        },
+      }),
+    );
+
+    expect(outcome.intent?.intent_type).toBe('exit');
+    expect(outcome.intent?.side).toBe('sell');
+  });
+
+  /**
+   * The other half of #847, and the costlier regression of the two. An ENTRY
+   * is sized off equity, and every exposure cap reads an absent instrument as
+   * ZERO exposure — so a refusal must stay a refusal here. It propagates as a
+   * throw (aborting the tick into `tick-loop.ts`'s `error` catch, #507) rather
+   * than becoming a quiet `skip_reason`, exactly as the eager read did.
+   */
+  it('still refuses to size an entry when the equity read refuses (#847)', async () => {
+    await expect(
+      decideWithReason(
+        traderInput({
+          clock: new ManualClock(OUTSIDE_WINDOW),
+          positionState: async () => [],
+          equity: async () => {
+            throw new Error('portfolio view refused: SPY mark is stale');
+          },
+        }),
+      ),
+    ).rejects.toThrow(/portfolio view refused/);
   });
 
   it('holds normally just outside the window', async () => {

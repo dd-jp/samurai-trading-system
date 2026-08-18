@@ -396,7 +396,7 @@ async function buildBracket(
   intentType: 'entry' | 'scale_in',
   diagnostics: TraderDiagnostic[],
 ): Promise<TraderOutcome> {
-  const { clock, config, debate, equity, instrument, marketData, setupStore } = input;
+  const { clock, config, debate, instrument, marketData, setupStore } = input;
 
   // Every caller must have already excluded 'neutral' — sideFor has no
   // direction to derive a side from. Checked here, not just assumed, so the
@@ -404,6 +404,25 @@ async function buildBracket(
   if (debate.direction === 'neutral') {
     throw new Error('buildBracket: debate.direction must not be neutral');
   }
+
+  // THE SIZING READ (#847), resolved HERE — the first thing this function does
+  // once it knows it is sizing, and the ONLY place in the module that touches
+  // it. Two properties, both load-bearing:
+  //
+  //  1. Reaching sizing at all requires a whole-book valuation to have
+  //     succeeded. The thunk throws when the book cannot be fully valued, and
+  //     that throw aborts the tick exactly as the eager read did before #847
+  //     — it is NOT converted into a `skip_reason`. A read failure is a fault
+  //     and must stay audible in `tick-loop.ts`'s `error`-level catch (#507),
+  //     not become a thirteenth quiet skip row.
+  //  2. Nothing that does NOT size pays for it or fails on it. `routeDecision`
+  //     evaluates flat-by-close before it can ever get here, so a dark mark
+  //     elsewhere in the book no longer suppresses this pass's flatten.
+  //
+  // Awaited at the TOP rather than at the use site so a future edit cannot
+  // reach the `size` computation on some path that skipped the read.
+  const equity = await input.equity();
+
   if (debate.confidence < config.conviction_floor) return skip('below_conviction_floor');
 
   const asOf = clock.now();

@@ -247,7 +247,26 @@ export interface TraderInput {
   /** Wall-clock live, simulated T in replay. */
   clock: Clock;
   marketData: MarketDataService;
-  equity: number;
+  /**
+   * Portfolio equity to size against — a THUNK, not a value (#847), for the
+   * same reason `positionState` below is one: only the branches that size
+   * may pay for it, and only they may fail on it.
+   *
+   * The whole-book valuation behind this can refuse (`computePortfolioView`
+   * throws when ANY held instrument's mark is dark or stale). Passing the
+   * number in eagerly meant that refusal aborted the WHOLE decision pass
+   * before `routeDecision` could reach the flat-by-close branch — so one dark
+   * name delayed a newly decided flatten by a tick, against ADR-0014.
+   * `buildExitIntent` never reads equity; only `buildBracket` does, and it
+   * awaits this FIRST (see there).
+   *
+   * The strictness is unchanged and must stay unchanged: this thunk must
+   * either return an equity derived from a whole-book valuation or throw.
+   * Returning a partial/degraded figure would silently under-count exposure
+   * and over-size the entry — every exposure cap reads an absent instrument
+   * as ZERO exposure (`SubclassDeploymentCap`, risk-manager/types.ts).
+   */
+  equity: () => Promise<number>;
   config: TraderConfig;
   /**
    * When each asset class's venue closes (#668) — the input the flat-by-close

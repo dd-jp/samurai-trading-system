@@ -1946,3 +1946,257 @@ describe('buildPersistence', () => {
     expect(persistence.orphanScanner).toBeInstanceOf(OrphanVerdictScanner);
   });
 });
+
+/**
+ * #847 — a decision pass must not abort before the Trader can flatten.
+ *
+ * #841 fixed the two seams that VALUE the book for an exit (`buildRiskStep`,
+ * `buildVerdictStep`). What it could not reach was the pass whose Trader would
+ * have produced the exit in the first place: `buildTraderStep` read the
+ * whole-book portfolio view eagerly, before any intent existed, so one dark
+ * held name aborted the pass AT the Trader and the flatten waited for the next
+ * tick's `runExitCheckPass` — a bounded but real delay against ADR-0014's
+ * flat-by-close.
+ *
+ * The read is still performed eagerly (it is also where `CircuitBreakers`
+ * evaluates and persists its sticky tiers); only the FAILURE is deferred, to
+ * the one branch that consumes equity.
+ */
+describe('#847: a dark mark must not suppress a newly decided flatten', () => {
+  /** 2026-07-28 is a Tuesday; the US close is 20:00 UTC, so the window opens 19:55. */
+  const INSIDE_FLATTEN_WINDOW = new Date('2026-07-28T19:56:00Z');
+  const WINDOW_CLOCK: Clock = { now: () => INSIDE_FLATTEN_WINDOW };
+
+  const RISK_CONFIG: RiskConfig = {
+    max_position_size: 100_000,
+    per_asset_cap: 100_000,
+    per_asset_class_cap: { crypto: 100_000, stocks: 100_000 },
+    portfolio_gross_cap: 200_000,
+    concentration: { cap: 100_000, threshold: 0.9 },
+    min_viable_size: 1,
+    cii_threshold: 80,
+    max_mark_age: TEST_MAX_MARK_AGE,
+  };
+
+  const TRADER_CONFIG: TraderConfig = {
+    conviction_floor: 0.5,
+    max_risk_per_trade: 0.01,
+    asset_class_risk_multiplier: { crypto: 0.5, stocks: 1 },
+    subclass_brackets: ADR_0018_SUBCLASS_BRACKETS,
+    subclass_of: {},
+    atr_timeframe: '1h',
+    atr_lookback: 14,
+    atr_k: 2,
+    vol_floor_fraction: 0.002,
+    non_converged_haircut: 0.5,
+    reward_risk_multiple: 2,
+    min_viable_notional: 10,
+    scale_in_conviction_delta: 0.1,
+    early_exit: DEFAULT_EARLY_EXIT_CONFIG,
+    time_in_force: { crypto: 'gtc', stocks: 'day' },
+    flatten_before_close_ms: 5 * 60 * 1_000,
+  };
+
+  function makeHeld(instrument: string): OpenPosition {
+    return {
+      idempotency_key: `held-${instrument}`,
+      debate_id: 'debate-1',
+      instrument,
+      asset_class: 'stocks',
+      side: 'buy',
+      intent_type: 'entry',
+      requested_size: 10,
+      filled_size: 10,
+      avg_entry_price: 90,
+      stop: 80,
+      target: 120,
+      order_state: 'filled',
+      broker_order_ids: [],
+      opened_at: NOW,
+      decision_timestamp: NOW,
+      conviction: 0.8,
+      converged: true,
+    };
+  }
+
+  /** Prices everything except DARK — the one held name the feed will not serve. */
+  const DARK_MARKET_DATA = {
+    ...FAKE_MARKET_DATA,
+    getMark: vi.fn(async (instrument: string, asOf: Date) => {
+      if (instrument === 'DARK') throw new Error('feed timeout for DARK');
+      return FAKE_GET_MARK(instrument, asOf);
+    }),
+    getMarks: vi.fn(async (instruments: readonly string[], asOf: Date) =>
+      collectMarks(
+        async (instrument: string, at: Date) => {
+          if (instrument === 'DARK') throw new Error('feed timeout for DARK');
+          return FAKE_GET_MARK(instrument, at);
+        },
+        instruments,
+        asOf,
+      ),
+    ),
+  };
+
+  function makeBreakers() {
+    return new CircuitBreakers({
+      daily_loss_pct: 0.05,
+      daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
+      max_drawdown_pct: 0.2,
+      max_consecutive_losses: 5,
+      volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
+      auto_rearm: { recovery_drawdown_pct: 0.05, max_days_tripped: 5 },
+    });
+  }
+
+  function makeDeps(held: OpenPosition[], portfolioSnapshots: Map<string, never>) {
+    return {
+      marketData: DARK_MARKET_DATA,
+      circuitBreakers: makeBreakers(),
+      accountState: FAKE_ACCOUNT_STATE,
+      volatility: FAKE_VOLATILITY,
+      getOpenPositions: async () => held,
+      maxMarkAge: TEST_MAX_MARK_AGE,
+      mode: 'paper' as const,
+      breakerState: NOOP_BREAKER_STATE,
+      portfolioSnapshots,
+      config: TRADER_CONFIG,
+      setupStore: new FixtureSetupStore(),
+      getExitFillSizes: async () => new Map<string, number>(),
+      sessionCalendars: {
+        crypto: new AlwaysOpenCalendar(),
+        stocks: new UsEquityRegularHoursCalendar(),
+      },
+    };
+  }
+
+  it('decides the flatten in THIS pass rather than deferring it to the next tick', async () => {
+    const snapshots = new Map<string, never>();
+    const step = buildTraderStep(makeDeps([makeHeld('AAPL'), makeHeld('DARK')], snapshots));
+
+    const intent = await step({
+      trace_id: TRACE_ID,
+      instrument: 'AAPL',
+      // Neutral, which was 92 of 94 debates in the soak — so this also pins
+      // that the flatten is reached on the commonest branch of all.
+      debate: makeDebate({ direction: 'neutral', synthesis: 'neutral', position: 'flat' }),
+      clock: WINDOW_CLOCK,
+    });
+
+    expect(intent).not.toBeNull();
+    expect(intent?.intent_type).toBe('exit');
+    expect(intent?.side).toBe('sell');
+    // Nothing was memoized: the strict read threw, so no entry later in this
+    // trace can pick a partial observation up out of the B4 memo.
+    expect(snapshots.size).toBe(0);
+  });
+
+  it('carries that flatten through Risk on the same pass, on the #841 degraded valuation', async () => {
+    const snapshots = new Map<string, never>();
+    const deps = makeDeps([makeHeld('AAPL'), makeHeld('DARK')], snapshots);
+    const traderStep = buildTraderStep(deps);
+    const riskStep = buildRiskStep({
+      ...deps,
+      config: RISK_CONFIG,
+      correlationConfig: { window: { timeframe: '1d', lookback: 30 }, min_bars: 5 },
+      ciiConsumer: { getScores: vi.fn(() => ({})) },
+    });
+
+    const intent = await traderStep({
+      trace_id: TRACE_ID,
+      instrument: 'AAPL',
+      debate: makeDebate({ direction: 'neutral', synthesis: 'neutral', position: 'flat' }),
+      clock: WINDOW_CLOCK,
+    });
+    expect(intent).not.toBeNull();
+
+    const decision = await riskStep({
+      trace_id: TRACE_ID,
+      intent: intent as OrderIntent,
+      clock: WINDOW_CLOCK,
+    });
+
+    expect(decision.status).toBe('approved');
+    expect(decision.order_intent?.instrument).toBe('AAPL');
+  });
+
+  /**
+   * THE REGRESSION THAT WOULD COST THE MOST AND SHOW THE LEAST.
+   *
+   * An entry is sized off equity, and every exposure cap reads an absent
+   * instrument as ZERO exposure — so a book that cannot be fully valued must
+   * still refuse outright here. It refuses by THROWING (aborting the tick into
+   * `tick-loop.ts`'s #507 catch), exactly as the eager read did, rather than
+   * degrading to a partial view or turning into a quiet skip row.
+   */
+  it('still refuses to size an ENTRY when one held name is dark', async () => {
+    const snapshots = new Map<string, never>();
+    // MSFT is flat, so this is an entry; DARK is held and unpriceable, so the
+    // whole-book valuation the sizing depends on cannot be produced.
+    const step = buildTraderStep(makeDeps([makeHeld('DARK')], snapshots));
+
+    await expect(
+      step({
+        trace_id: TRACE_ID,
+        instrument: 'MSFT',
+        debate: makeDebate(),
+        clock: CLOCK,
+      }),
+    ).rejects.toThrow(/DARK/);
+    expect(snapshots.size).toBe(0);
+  });
+
+  /**
+   * WHY THE READ IS CAPTURED RATHER THAN MADE LAZY.
+   *
+   * `computeCurrentPortfolioAndBreakers` is not a pure observation: it runs
+   * `CircuitBreakers.evaluate()` and persists the sticky tiers. A decision pass
+   * is one of the few places that happens — the tick path performs no portfolio
+   * read at all, and Verdict only re-derives on passes that produced an intent.
+   * So deferring the READ (rather than only the failure) would silently stop
+   * evaluating breakers on every no-trade decision bar, which was 92 of 94
+   * debates in the soak. This pins the side effect on the emptiest pass there
+   * is: neutral debate, flat book, no intent, no exception.
+   */
+  it('still evaluates and persists breakers on a decision pass that produces nothing', async () => {
+    const snapshots = new Map<string, never>();
+    const saved: unknown[] = [];
+    const step = buildTraderStep({
+      ...makeDeps([], snapshots),
+      marketData: FAKE_MARKET_DATA,
+      breakerState: { save: (state: unknown) => saved.push(state) },
+    });
+
+    const intent = await step({
+      trace_id: TRACE_ID,
+      instrument: 'MSFT',
+      debate: makeDebate({ direction: 'neutral', synthesis: 'neutral', position: 'flat' }),
+      clock: CLOCK,
+    });
+
+    expect(intent).toBeNull();
+    expect(saved).toHaveLength(1);
+    expect(snapshots.size).toBe(1);
+  });
+
+  it('leaves a cleanly-valued decision pass on exactly the path it took before', async () => {
+    const snapshots = new Map<string, never>();
+    const step = buildTraderStep({
+      ...makeDeps([makeHeld('AAPL')], snapshots),
+      marketData: FAKE_MARKET_DATA,
+    });
+
+    const intent = await step({
+      trace_id: TRACE_ID,
+      instrument: 'MSFT',
+      debate: makeDebate(),
+      clock: CLOCK,
+    });
+
+    expect(intent?.intent_type).toBe('entry');
+    // The B4 memo is still populated on a healthy pass, so Risk gates the
+    // entry against the same observation the Trader sized it against — and
+    // `CircuitBreakers.evaluate()` ran (and persisted) on this pass.
+    expect(snapshots.size).toBe(1);
+  });
+});

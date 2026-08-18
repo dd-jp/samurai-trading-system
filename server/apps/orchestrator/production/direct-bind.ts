@@ -272,7 +272,34 @@ export function buildTraderSteps(deps: TraderStepDeps): {
     // exposure) — the same OBSERVATION Risk gates against this tick, not
     // merely the same derivation: the snapshot is memoized per trace so the
     // two stages cannot see two different portfolios (B4).
-    const { portfolio } = await snapshotForTick(deps, clock, trace_id);
+    //
+    // #847 — CAPTURE-AND-RETHROW, not laziness. The read stays EAGER and
+    // unconditional: `computeCurrentPortfolioAndBreakers` is not a pure
+    // observation, it also runs `circuitBreakers.evaluate()` and persists the
+    // sticky tiers, and a decision pass is one of the few places that happens
+    // (the tick path deliberately performs no portfolio read at all). Making
+    // the read lazy would have skipped breaker evaluation on every no-trade
+    // bar — 92 of 94 debates in the soak — which is a silent live-money
+    // regression that ships green.
+    //
+    // What IS deferred is the FAILURE. When the strict whole-book valuation
+    // refuses (one held instrument's mark dark or stale), the throw is held
+    // here and re-raised, unwrapped, from inside `buildBracket` — so an ENTRY
+    // or scale-in still aborts the tick into #507's catch exactly as before,
+    // while `routeDecision`'s flat-by-close branch, which never reads equity,
+    // now gets to run. Before this, one dark name aborted the whole decision
+    // pass and delayed a newly decided flatten by a tick (ADR-0014).
+    //
+    // Re-raised UNWRAPPED on purpose: `snapshotForExit` downstream
+    // discriminates on the original `StaleMarkError`/`AggregateError` to
+    // decide whether a degraded valuation explains the refusal.
+    let snapshot: PortfolioSnapshot | null = null;
+    let snapshotError: unknown = null;
+    try {
+      snapshot = await snapshotForTick(deps, clock, trace_id);
+    } catch (error) {
+      snapshotError = error;
+    }
     const { intent, skip_reason, atr, diagnostics } = await decideWithReason({
       trace_id,
       instrument,
@@ -281,7 +308,15 @@ export function buildTraderSteps(deps: TraderStepDeps): {
       marketData: deps.marketData,
       // #511: bounded by the declared capital ceiling on a live run, verbatim
       // portfolio equity everywhere else.
-      equity: sizingEquity(portfolio.equity, deps.capitalCeilingUsd),
+      //
+      // #847: either the STRICT whole-book equity or the strict read's own
+      // throw — never a partial figure. A degraded view omits a held
+      // instrument, and every exposure cap reads an absent instrument as ZERO
+      // exposure, so sizing against one would silently over-size.
+      equity: async () => {
+        if (snapshot === null) throw snapshotError;
+        return sizingEquity(snapshot.portfolio.equity, deps.capitalCeilingUsd);
+      },
       config: deps.config,
       positionState: deps.getOpenPositions,
       // #568: the same store the lots came from, so the exit the Trader sizes
