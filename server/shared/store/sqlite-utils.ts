@@ -40,7 +40,8 @@ export type StoredTimestamp = string & { readonly __storedTimestamp: unique symb
  * `ORDER BY opened_at`, `sqlite-setup-store.ts`'s `closed_at <= ?`,
  * `sqlite-query-store.ts`'s whole `asOf` filter, `sqlite-daily-equity-store.ts`'s
  * `ORDER BY session_start` (whose reader differences adjacent rows to find
- * gaps). A single row written as `2026-08-18T09:00:00Z` (no milliseconds) or
+ * gaps), and `stage2-historical-store.ts`'s `MIN(open_time)`/`MAX(open_time)`
+ * coverage read. A single row written as `2026-08-18T09:00:00Z` (no milliseconds) or
  * in a local offset sorts wrong against its neighbours and silently corrupts
  * every one of them.
  */

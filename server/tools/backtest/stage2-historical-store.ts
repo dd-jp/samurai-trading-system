@@ -28,6 +28,7 @@ import { dirname } from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
 import type { Bar } from '../../providers/market-data-service/index.js';
 import { closeTimeOf } from '../../providers/market-data-service/index.js';
+import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 import type { ReplayTimeline } from './types.js';
 import type { DateRange, InstrumentListing, InstrumentRegistry } from './universe.js';
 
@@ -212,10 +213,10 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
       .get(symbol, TIMEFRAME) as { first: string | null; last: string | null } | undefined;
 
     return {
-      requestedFrom: new Date(requested.requested_from),
-      requestedTo: new Date(requested.requested_to),
-      firstBar: bars?.first ? new Date(bars.first) : undefined,
-      lastBar: bars?.last ? new Date(bars.last) : undefined,
+      requestedFrom: fromStoredTimestamp(requested.requested_from),
+      requestedTo: fromStoredTimestamp(requested.requested_to),
+      firstBar: bars?.first ? fromStoredTimestamp(bars.first) : undefined,
+      lastBar: bars?.last ? fromStoredTimestamp(bars.last) : undefined,
     };
   }
 
@@ -237,7 +238,7 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
            requested_from = excluded.requested_from,
            requested_to = excluded.requested_to`,
       )
-      .run(symbol, TIMEFRAME, from.toISOString(), to.toISOString());
+      .run(symbol, TIMEFRAME, toStoredTimestamp(from), toStoredTimestamp(to));
   }
 
   /**
@@ -309,8 +310,8 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
       upsert.run(
         symbol,
         TIMEFRAME,
-        openTime.toISOString(),
-        closeTime.toISOString(),
+        toStoredTimestamp(openTime),
+        toStoredTimestamp(closeTime),
         aggregate.o,
         aggregate.h,
         aggregate.l,
@@ -333,13 +334,17 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
           WHERE instrument = ? AND close_time >= ? AND close_time <= ?
           ORDER BY close_time ASC`,
       )
-      .all(symbol, window.start.toISOString(), window.end.toISOString()) as Stage2BarRow[];
+      .all(
+        symbol,
+        toStoredTimestamp(window.start),
+        toStoredTimestamp(window.end),
+      ) as Stage2BarRow[];
 
     return rows.map((row) => ({
       instrument: row.instrument,
       timeframe: row.timeframe,
-      open_time: new Date(row.open_time),
-      close_time: new Date(row.close_time),
+      open_time: fromStoredTimestamp(row.open_time),
+      close_time: fromStoredTimestamp(row.close_time),
       open: row.open,
       high: row.high,
       low: row.low,
@@ -375,9 +380,11 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
           WHERE close_time >= ? AND close_time <= ?
           ORDER BY close_time ASC`,
       )
-      .all(window.start.toISOString(), window.end.toISOString()) as { close_time: string }[];
+      .all(toStoredTimestamp(window.start), toStoredTimestamp(window.end)) as {
+      close_time: string;
+    }[];
 
-    return rows.map((row) => new Date(row.close_time));
+    return rows.map((row) => fromStoredTimestamp(row.close_time));
   }
 
   /**
@@ -417,7 +424,7 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
             AND close_time >= ? AND close_time <= ?
           ORDER BY close_time ASC`,
       )
-      .all(...symbols, window.start.toISOString(), window.end.toISOString()) as {
+      .all(...symbols, toStoredTimestamp(window.start), toStoredTimestamp(window.end)) as {
       close_time: string;
     }[];
 
@@ -441,7 +448,7 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
       );
     }
 
-    return Promise.resolve(rows.map((row) => new Date(row.close_time)));
+    return Promise.resolve(rows.map((row) => fromStoredTimestamp(row.close_time)));
   }
 
   /** `InstrumentRegistry.membershipDuring` — see class doc for the "nothing delisted" posture. */
@@ -453,7 +460,7 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
     return rows.map((row) =>
       row.delisted_at === null
         ? { symbol: row.symbol }
-        : { symbol: row.symbol, delisted_at: new Date(row.delisted_at) },
+        : { symbol: row.symbol, delisted_at: fromStoredTimestamp(row.delisted_at) },
     );
   }
 }

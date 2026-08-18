@@ -26,6 +26,7 @@ import {
   priceUsage,
 } from '../../../shared/llm/pricing.js';
 import type { SharedStore } from '../../../shared/store/index.js';
+import { toStoredTimestamp } from '../../../shared/store/sqlite-utils.js';
 import type { Logger } from '../../../shared/types.js';
 
 /** One metered API call, as handed to the sink. */
@@ -156,7 +157,7 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
           cost,
           toolCalls,
           entry.latency_ms,
-          entry.timestamp.toISOString(),
+          toStoredTimestamp(entry.timestamp),
         );
     } catch (error) {
       // See the module doc comment: a metering failure must not surface as a
