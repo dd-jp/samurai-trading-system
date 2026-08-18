@@ -74,6 +74,22 @@
  * a no-op; there is no warning for setting both, since neither is a mistake by
  * construction — the field for a vendor that then goes unused is just ignored.
  *
+ * `guardFallbackPacing` (#828) then checks whatever pacing was resolved for
+ * the two values that would make the bucket park forever instead of pacing —
+ * same warn-and-default posture, for the same reason. Only the DEFAULT branch
+ * consults it, because only that branch builds a `TokenBucket` at all.
+ *
+ * ## Request budget under a sustained stall (#828)
+ *
+ * Polygon's free tier allows 5 requests/min and this bucket operates at one
+ * per 13 seconds, so the number of REQUESTS a failed-over read costs is the
+ * budget that matters, not the rows. `withSessionNormalization` caps it at 2
+ * per bar read (it was up to 4 after #818) — see that module's "Request
+ * budget" section. The residual, stated rather than glossed: the bucket is
+ * shared across the whole tick, so a sustained stall still costs roughly
+ * `13s x (fallback bar reads in the tick)` of serialized pacing wait. Bounded
+ * and affordable against the 15-minute cadence; not cheap.
+ *
  * The Polygon CLIENT is constructed lazily: its constructor throws when
  * `POLYGON_API_KEY` is unset, and an unset key must not stop the orchestrator
  * booting on a day Alpaca never stalls. A missing key then surfaces inside
@@ -152,6 +168,51 @@ export function resolveFallbackPacing(logger: Logger, env: NodeJS.ProcessEnv = p
     });
     return DEFAULT_POLYGON_PACING;
   }
+}
+
+/**
+ * `deps.fallbackPacing`, checked for the two values that would make
+ * `TokenBucket.take` park FOREVER rather than pace (#828).
+ *
+ * `resolvePolygonPacing`'s `readPositive` already enforces this on the env
+ * path, but `fallbackPacing` (#822) is a CONFIG field — a plain
+ * `TokenBucketConfig` handed straight to `new TokenBucket(...)` with nothing
+ * between — so the guarantee did not extend to it. Both fields can wedge:
+ * `refillPerSecond <= 0` mints no tokens (the bucket's own `take` doc says it
+ * "would park every call forever rather than pace it"), and `capacity < 1`
+ * clamps `tokens` below the one `take` needs no matter how fast the refill.
+ *
+ * That is the shape #828 is about: an indefinite park on the fallback read
+ * path, inside a fourteen-day unattended soak, turns a vendor stall into a
+ * silent halt — no error, no alert, just a tick that never returns. There is
+ * no timeout underneath to catch it (`withOhlcvFailover` puts none around the
+ * fallback), so it is closed HERE, at the seam the value enters.
+ *
+ * Warn-and-default rather than throw, for the same reason
+ * `resolveFallbackPacing` warns: this paces a degradation mitigation touched
+ * only once Alpaca is already failing, and refusing to boot over it would
+ * take the whole book offline to avoid a stall the fallback exists to
+ * survive. Loud in the startup log, at boot, before any stall.
+ */
+export function guardFallbackPacing(pacing: TokenBucketConfig, logger: Logger): TokenBucketConfig {
+  const wedges =
+    pacing.refillPerSecond <= 0 || !Number.isFinite(pacing.refillPerSecond) || pacing.capacity < 1;
+  if (!wedges) return pacing;
+
+  logger.log({
+    trace_id: 'startup',
+    stage: 'orchestrator',
+    level: 'warn',
+    message:
+      `Polygon fallback pacing is unusable (capacity ${pacing.capacity}, refillPerSecond ` +
+      `${pacing.refillPerSecond}) and was IGNORED — falling back to the checked-in ` +
+      'DEFAULT_POLYGON_PACING. A non-positive refill rate, or a capacity below one, never ' +
+      'mints the token TokenBucket.take waits for, so every equities OHLCV fallback read ' +
+      'would have parked forever with no timeout above it (#828) — a silent halt rather than ' +
+      'a stall. Fix the configured pacing; the run continues at the default rate.',
+    payload: { pacing: 'polygon', applied: 'default' },
+  });
+  return DEFAULT_POLYGON_PACING;
 }
 
 /**
@@ -272,7 +333,10 @@ export function buildFailoverDataSource(deps: LiveDataFailoverDeps): DataSource 
   if (deps.equitiesFallbackBarFetcher !== undefined) {
     rawFallbackBarFetcher = deps.equitiesFallbackBarFetcher;
   } else {
-    const pacing = deps.fallbackPacing ?? resolveFallbackPacing(deps.logger);
+    const pacing = guardFallbackPacing(
+      deps.fallbackPacing ?? resolveFallbackPacing(deps.logger),
+      deps.logger,
+    );
     let polygon: PolygonBarsClient | undefined;
     rawFallbackBarFetcher = (symbol, window, asOf) => {
       polygon ??= new PolygonBarsClient({ rateLimiter: new TokenBucket(pacing) });

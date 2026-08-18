@@ -35,8 +35,22 @@ import type { Bar, BarWindow, DataSource, Mark } from '../types.js';
  * worst case is ~2 page walks per attempt, ~8 in total, not 4. Still bounded,
  * and bounded again below by `MAX_RAW_LIMIT_MULTIPLE`, which is what caps the
  * pages inside any one of them.
+ *
+ * The ~200 req/min budget named above is ALPACA's, and it is the whole reason
+ * this constant is 4. A source paced orders of magnitude slower — the Polygon
+ * equities fallback, one request per 13 seconds — opts out via
+ * `SourceConfig.rawWidenPolicy` (#828) rather than by re-tuning this.
  */
 const MAX_IN_SESSION_FETCH_ATTEMPTS = 4;
+/**
+ * Attempts a `'single-widest-retry'` source may spend instead (issue #828).
+ *
+ * See `SourceConfig.rawWidenPolicy` for the whole argument; the number is 2
+ * rather than 1 because one widen is what turns "the vendor's raw payload is
+ * mostly out-of-session" into a serve at all, and dropping to 1 would make the
+ * fallback short-serve every intraday equity read.
+ */
+const MAX_WIDEST_RETRY_FETCH_ATTEMPTS = 2;
 /**
  * Floor on how fast the raw request grows. The widen is estimated from the
  * observed in-session survival rate, and an estimate that lands just above the
@@ -215,6 +229,39 @@ export interface SourceConfig {
   asset_class: 'crypto' | 'stocks';
   /** Gates bar production to trading sessions; always-open for crypto. */
   calendar: TradingCalendar;
+  /**
+   * How `fetchBars` spends its widen budget when the first raw ask does not
+   * yield the caller's in-session count (issue #828). Defaults to
+   * `'gradual'` — today's behaviour for every source that does not say
+   * otherwise.
+   *
+   * **`'gradual'`** — up to `MAX_IN_SESSION_FETCH_ATTEMPTS` (4) requests,
+   * each sized from the survival rate the previous one revealed. Calibrated
+   * for Alpaca: ~200 req/min shared with order placement, where a request is
+   * cheap and over-fetching rows is the thing worth avoiding.
+   *
+   * **`'single-widest-retry'`** — at most
+   * `MAX_WIDEST_RETRY_FETCH_ATTEMPTS` (2) requests, and the retry jumps
+   * straight to `rawLimitCeiling` rather than to an estimate. For a source
+   * where the REQUEST is the scarce resource and rows are free: the Polygon
+   * equities fallback (`session-normalized-fetcher.ts`) is paced at
+   * `DEFAULT_POLYGON_PACING`'s 1 request per 13 seconds against a
+   * documented free-tier ceiling of 5/min, and `PolygonBarsClient.getBars`
+   * issues exactly one HTTP request per call with no pagination — so a
+   * gradual walk costs 4 x 13s of blocking per instrument per tick during a
+   * sustained primary stall, which is the steady state #828 was filed about.
+   *
+   * The jump to the ceiling is what keeps the smaller budget from costing
+   * serve rate: `rawLimitCeiling` is already the widest ask any `'gradual'`
+   * sequence could ever reach, so a source that lands there on its second
+   * request asks a question at least as good as the fourth request would
+   * have — two requests DOMINATE four rather than merely truncating them.
+   * The first ask is deliberately left unscaled: inflating it would trip the
+   * `candles.length < rawLimit` raw-scarcity early return (the vendor
+   * returning fewer rows than an inflated ask is not evidence it has run out
+   * of history), which would skip the widen entirely and short-serve.
+   */
+  rawWidenPolicy?: 'gradual' | 'single-widest-retry';
 }
 
 /**
@@ -355,6 +402,13 @@ export abstract class NormalizingDataSource implements DataSource {
       MAX_RAW_LIMIT_ABSOLUTE,
     );
 
+    // #828: the widen budget, and how each step is sized — see
+    // `SourceConfig.rawWidenPolicy`.
+    const widestRetry = this.config.rawWidenPolicy === 'single-widest-retry';
+    const maxAttempts = widestRetry
+      ? MAX_WIDEST_RETRY_FETCH_ATTEMPTS
+      : MAX_IN_SESSION_FETCH_ATTEMPTS;
+
     let rawLimit = firstRawLimit;
     let attempts = 0;
     let served: Bar[] = [];
@@ -400,12 +454,14 @@ export abstract class NormalizingDataSource implements DataSource {
       // guards, not here: the shortfall is a property of the venue's history,
       // not of the calendar, and this method cannot tell the difference.
       if (candles.length < rawLimit) return served;
-      if (attempts >= MAX_IN_SESSION_FETCH_ATTEMPTS) break;
+      if (attempts >= maxAttempts) break;
 
-      const widened = widenRawLimit(rawLimit, candles.length, served.length, {
-        neededInSession: window.lookback,
-        ceiling: rawLimitCeiling,
-      });
+      const widened = widestRetry
+        ? rawLimitCeiling
+        : widenRawLimit(rawLimit, candles.length, served.length, {
+            neededInSession: window.lookback,
+            ceiling: rawLimitCeiling,
+          });
       if (widened <= rawLimit) break;
       rawLimit = widened;
     }

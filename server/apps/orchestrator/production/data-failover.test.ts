@@ -452,13 +452,19 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
     // Exactly two attempts, and the WIDENED raw limit that reaches the
     // client on the second one: attempt 1 asks for lookback (2) +
     // FORMING_BAR_FETCH_MARGIN (1) = 3, nothing survives normalization (the
-    // newest 3 raw candles are all post-close), so widenRawLimit has no
-    // survival rate to estimate from (0 in-session out of 3 raw) — the
-    // estimate is Infinity, and MAX_RAW_WIDEN_FACTOR clamps the step to
-    // 3 * 8 = 24 rather than leaving it unbounded. Attempt 2 asks for that
-    // 24 and it is enough (the newest 24 raw candles include both in-session
-    // bars).
-    expect(getBarsSpy.mock.calls.map((call) => call[3])).toEqual([3, 24]);
+    // newest 3 raw candles are all post-close), so a widen is required.
+    //
+    // The widened value was 24 until #828 — `widenRawLimit` had no survival
+    // rate to estimate from (0 in-session out of 3 raw), so the estimate was
+    // Infinity and `MAX_RAW_WIDEN_FACTOR` clamped the step to 3 * 8. The
+    // fallback now takes its ONE permitted retry straight to
+    // `rawLimitCeiling` (3 * MAX_RAW_LIMIT_MULTIPLE = 96) instead, because a
+    // second Polygon request costs ~13 seconds and the rows it returns cost
+    // nothing: asking the widest permitted question once beats converging on
+    // it over four requests. The assertion's substance is unchanged — the raw
+    // limit escalates across attempts, and this is the value that actually
+    // reaches the client — only the widened number moved, by design.
+    expect(getBarsSpy.mock.calls.map((call) => call[3])).toEqual([3, 96]);
     // Every call target is the SAME (symbol, timeframe, asOf); only the
     // widened raw limit changes between attempts.
     for (const call of getBarsSpy.mock.calls) {
@@ -634,6 +640,167 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
     delete process.env.POLYGON_API_KEY;
     const second = await source.fetchBars('SPY', localWindow, localAsOf);
     expect(second).toHaveLength(2);
+  });
+
+  it('caps a failed-over read at TWO Polygon requests, counted at the client (#828)', async () => {
+    // The composition-root proof for #828's request budget. Everything
+    // between `buildFailoverDataSource` and the vendor is real here — the
+    // default branch's lazily-built `PolygonBarsClient`, the
+    // `withSessionNormalization` wrapper, `NormalizingDataSource`'s widen —
+    // and the count is taken where the HTTP requests actually are:
+    // `getBars` issues exactly one request per call, with no pagination, so
+    // calls ARE requests.
+    //
+    // The input is the worst case on purpose: a payload with no in-session
+    // candle at all, so the widen is exhausted rather than satisfied early.
+    // Before #828 this cost four requests — ~39s of blocking on a bucket
+    // that mints one token per 13 seconds, per instrument, every tick for as
+    // long as the primary stall lasts.
+    process.env.POLYGON_API_KEY = 'test-key';
+
+    const localAsOf = new Date('2026-08-18T01:00:00.000Z');
+    // 120 candles, every one of them at 03:00Z — never a US regular-hours
+    // open, so none survives `UsEquityRegularHoursCalendar` at any widen. The
+    // COUNT matters as much as the timestamps: it has to exceed the widest
+    // ask (the raw ceiling, 3 * 32 = 96) or the vendor would look like it had
+    // run out of history, and `NormalizingDataSource` would take its
+    // raw-scarcity early return instead of spending the widen this test is
+    // counting.
+    const rawAggregates = Array.from({ length: 120 }, (_, i) => {
+      const open = new Date(localAsOf.getTime() - (i + 1) * 86_400_000);
+      open.setUTCHours(3, 0, 0, 0);
+      return { t: open.getTime(), o: 100, h: 101, l: 99, c: 100.5, v: 42 };
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockImplementation(() =>
+          Promise.resolve(
+            new Response(JSON.stringify({ results: rawAggregates }), { status: 200 }),
+          ),
+        ),
+    );
+    const getBarsSpy = vi.spyOn(PolygonBarsClient.prototype, 'getBars');
+    // Real pacing would make the second request wait ~13s on the real clock.
+    // The BUDGET is what this test is about, not the wait.
+    vi.spyOn(TokenBucket.prototype, 'acquireBackground').mockResolvedValue(undefined);
+
+    const source = buildFailoverDataSource({
+      primary: stallingPrimary(),
+      calendar: new UsEquityRegularHoursCalendar(),
+      universe: [{ asset: 'SPY', asset_class: 'stocks' }],
+      // No equitiesFallbackBarFetcher — the real default Polygon branch.
+      alertChannel: { postDataFailoverAlert: vi.fn(async () => undefined) },
+      logger: recordingLogger(),
+      now: () => localAsOf,
+    });
+
+    // Loud, not silent: the exhausted widen throws InSessionUnderfetchError,
+    // which withOhlcvFailover reports as both vendors having failed.
+    await expect(
+      source.fetchBars('SPY', { timeframe: '1h', lookback: 2 }, localAsOf),
+    ).rejects.toThrow(/both alpaca .* and polygon .* failed/);
+
+    expect(getBarsSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('WARNS AND DEFAULTS on a fallbackPacing that would park every fallback read forever (#828)', async () => {
+    // `resolvePolygonPacing`'s `readPositive` guards the ENV path; this is
+    // the CONFIG path (#822), which handed a plain `TokenBucketConfig`
+    // straight to `new TokenBucket(...)`. A zero refill rate mints no token,
+    // and `TokenBucket.take` has no deadline — so every equities fallback
+    // read would have parked forever, with no timeout above it, inside a
+    // fourteen-day unattended soak. A silent halt, not a stall.
+    process.env.POLYGON_API_KEY = 'test-key';
+
+    const localAsOf = new Date('2026-08-17T17:00:00.000Z');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            results: [14, 15, 16].map((hour) => ({
+              t: new Date(`2026-08-17T${hour}:00:00.000Z`).getTime(),
+              o: 100,
+              h: 101,
+              l: 99,
+              c: 100.5,
+              v: 42,
+            })),
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+
+    let capturedBucket: { config: unknown } | undefined;
+    vi.spyOn(TokenBucket.prototype, 'acquireBackground').mockImplementation(async function (this: {
+      config: unknown;
+    }) {
+      capturedBucket = this;
+    });
+
+    const logger = recordingLogger();
+    const source = buildFailoverDataSource({
+      primary: stallingPrimary(),
+      calendar: new UsEquityRegularHoursCalendar(),
+      universe: [{ asset: 'SPY', asset_class: 'stocks' }],
+      fallbackPacing: { capacity: 1, refillPerSecond: 0 },
+      alertChannel: { postDataFailoverAlert: vi.fn(async () => undefined) },
+      logger,
+      now: () => localAsOf,
+    });
+
+    // Warned AT BOOT, before any stall — the same posture the malformed-env
+    // override takes, and for the same reason: this paces a degradation
+    // mitigation, so refusing to boot over it would be strictly worse.
+    const warned = logger.entries.filter((entry) => entry.level === 'warn');
+    expect(warned).toHaveLength(1);
+    expect(warned[0]?.message).toContain('parked forever');
+
+    const bars = await source.fetchBars('SPY', { timeframe: '1h', lookback: 2 }, localAsOf);
+
+    expect(bars).toHaveLength(2);
+    // The unusable config never reached the bucket; the checked-in default did.
+    expect(capturedBucket?.config).toEqual(DEFAULT_POLYGON_PACING);
+  });
+
+  it('rejects a capacity below one as well, not only a non-positive refill (#828)', () => {
+    // The other field that wedges: `refill()` clamps `tokens` to `capacity`,
+    // so `capacity: 0` never reaches the single token `take` needs no matter
+    // how fast the refill rate is. Same indefinite park, different field.
+    const logger = recordingLogger();
+
+    buildFailoverDataSource({
+      primary: stallingPrimary(),
+      calendar: new UsEquityRegularHoursCalendar(),
+      universe: [{ asset: 'SPY', asset_class: 'stocks' }],
+      fallbackPacing: { capacity: 0, refillPerSecond: 10 },
+      alertChannel: { postDataFailoverAlert: vi.fn(async () => undefined) },
+      logger,
+      now: () => ASOF,
+    });
+
+    expect(logger.entries.filter((entry) => entry.level === 'warn')).toHaveLength(1);
+  });
+
+  it('leaves a well-formed fallbackPacing untouched and silent', () => {
+    // The guard must not warn about, or replace, a legitimate override —
+    // otherwise it would quietly undo #822's config seam.
+    const logger = recordingLogger();
+
+    buildFailoverDataSource({
+      primary: stallingPrimary(),
+      calendar: new UsEquityRegularHoursCalendar(),
+      universe: [{ asset: 'SPY', asset_class: 'stocks' }],
+      fallbackPacing: { capacity: 2, refillPerSecond: 1 / 20 },
+      alertChannel: { postDataFailoverAlert: vi.fn(async () => undefined) },
+      logger,
+      now: () => ASOF,
+    });
+
+    expect(logger.entries).toHaveLength(0);
   });
 });
 
