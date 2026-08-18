@@ -171,7 +171,7 @@ function traderInput(instrument: string, overrides: Partial<TraderInput> = {}): 
     debate: debateResult(),
     clock: CLOCK,
     marketData: new FixtureMarketData(instrument),
-    equity: EQUITY,
+    equity: async () => EQUITY,
     config: armedConfig(),
     positionState: async () => [],
     exitFillSizes: async () => new Map<string, number>(),
@@ -225,7 +225,7 @@ describe("the frozen bracket sizes to ADR-0018 D5's deployment", () => {
   });
 
   it('scales the deployment with equity rather than with the mark', async () => {
-    const half = await entryFor(INDEX_ETP, { equity: EQUITY / 2 });
+    const half = await entryFor(INDEX_ETP, { equity: async () => EQUITY / 2 });
 
     expect(half.size * half.entry).toBeCloseTo((D5_INDEX_ETP_DEPLOYMENT_FRACTION * EQUITY) / 2, 6);
   });
