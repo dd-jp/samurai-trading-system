@@ -79,7 +79,17 @@ class ScriptedBroker implements BrokerAdapter {
   /** When set, `rearmProtectiveLegs` rejects with this — the #525 failure path. */
   rearmFailure: Error | undefined;
 
-  constructor(private readonly scriptedFills: NormalizedFill[]) {}
+  constructor(private scriptedFills: NormalizedFill[]) {}
+
+  /**
+   * Swaps the script between polls — what a CUMULATIVE feed (#842) does in
+   * reality: the SAME order id comes back, at a larger `filled_qty`, on the
+   * next poll. A fixed list cannot express that, because the second
+   * observation is not an extra fill, it is a REVISION of the first.
+   */
+  replaceFills(scriptedFills: NormalizedFill[]): void {
+    this.scriptedFills = scriptedFills;
+  }
 
   async submitBracket(order: NativeBracketRequest): Promise<BrokerAck> {
     return {
@@ -1417,5 +1427,213 @@ describe('ExecutionImpl.ingestFills', () => {
       });
       expect(JSON.stringify(entry)).not.toContain('super-secret-transport-token');
     });
+  });
+});
+
+/**
+ * #842 — Alpaca reports a RUNNING `filled_qty` per order under one order id,
+ * not one event per partial fill. Before this ticket the second observation
+ * of the same order at a larger cumulative was discarded by the `hasFill`
+ * dedup gate, so the increment never reached `fills`: the lot's `filled_size`
+ * froze at the first observation and `resizeProtectiveLegs` — which sets an
+ * ABSOLUTE quantity — armed protection for the stale, smaller figure, leaving
+ * the rest of the lot naked, invisible to the exposure caps, and un-exited by
+ * flat-by-close (ADR-0014, which sizes the exit off `filled_size`).
+ *
+ * THE INVARIANT: our persisted `filled_size` for a lot equals the venue's
+ * cumulative `filled_qty` for its entry order.
+ */
+describe('ExecutionImpl.ingestFills — cumulative partial fills (#842)', () => {
+  /** The venue's account of one entry order at one moment in time. */
+  function cumulativeEntry(cumQty: number, cumAvgPrice: number, at: string): NormalizedFill {
+    return fill({
+      // ONE id for every observation — the ORDER id. That is the whole
+      // problem: the id has no room to say "and now 50 more".
+      broker_fill_id: 'alpaca-entry-1',
+      leg: 'entry',
+      qty: cumQty,
+      price: cumAvgPrice,
+      fee: 0,
+      timestamp: new Date(at),
+      qty_is_cumulative: true,
+    });
+  }
+
+  it('books the increment when the same entry order is re-observed at a larger cumulative', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 100, filled_size: 0 });
+    // Poll 1: the venue has filled 50 of 100, averaging 100.
+    const broker = new ScriptedBroker([cumulativeEntry(50, 100, '2026-07-20T15:00:00Z')]);
+    const execution = new ExecutionImpl(makeInput(broker, store));
+    await execution.ingestFills();
+
+    expect((await store.getPosition('key-1'))?.filled_size).toBe(50);
+
+    // Poll 2: SAME order id, now 100 filled at a cumulative average of 101 —
+    // i.e. the second 50 went off at 102.
+    broker.replaceFills([cumulativeEntry(100, 101, '2026-07-20T15:30:00Z')]);
+    await execution.ingestFills();
+
+    const position = await store.getPosition('key-1');
+    // The invariant: persisted filled_size == the venue's cumulative.
+    expect(position?.filled_size).toBe(100);
+    // And the increment was priced so the rebuilt weighted average
+    // reproduces the venue's own cumulative average rather than drifting to
+    // whichever tranche happened to be larger.
+    expect(position?.avg_entry_price).toBeCloseTo(101, 10);
+
+    const fills = await store.getFills('key-1');
+    expect(fills).toHaveLength(2);
+    expect(fills[1]?.qty).toBe(50);
+    expect(fills[1]?.price).toBeCloseTo(102, 10);
+    // The base id is UNCHANGED — nothing already persisted is re-keyed, which
+    // is what lets this ship without a migration and without re-booking any
+    // lot already in flight across the deploy boundary.
+    expect(fills[0]?.broker_fill_id).toBe('alpaca-entry-1');
+    expect(fills[1]?.broker_fill_id).toBe('alpaca-entry-1#100');
+  });
+
+  it('resizes the protective legs to the TRUE cumulative, not the stale first observation', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 100, filled_size: 0 });
+    const broker = new ScriptedBroker([cumulativeEntry(50, 100, '2026-07-20T15:00:00Z')]);
+    const execution = new ExecutionImpl(makeInput(broker, store));
+    await execution.ingestFills();
+    expect(broker.resizeCalls).toEqual([{ clientOrderId: 'key-1', filledQty: 50 }]);
+
+    broker.replaceFills([cumulativeEntry(100, 101, '2026-07-20T15:30:00Z')]);
+    await execution.ingestFills();
+
+    // The money assertion. Booking the increment but not re-arming would move
+    // the defect one layer down rather than fixing it: `filled_size` correct
+    // in the store, the venue's stop still covering 50.
+    expect(broker.resizeCalls).toEqual([
+      { clientOrderId: 'key-1', filledQty: 50 },
+      { clientOrderId: 'key-1', filledQty: 100 },
+    ]);
+  });
+
+  it('re-offers the SAME cumulative without booking a second row or resizing again', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 100, filled_size: 0 });
+    const broker = new ScriptedBroker([cumulativeEntry(50, 100, '2026-07-20T15:00:00Z')]);
+    const execution = new ExecutionImpl(makeInput(broker, store));
+    await execution.ingestFills();
+    // Idempotent by arithmetic: the re-offer computes a zero delta.
+    await execution.ingestFills();
+    await execution.ingestFills();
+
+    expect(await store.getFills('key-1')).toHaveLength(1);
+    expect((await store.getPosition('key-1'))?.filled_size).toBe(50);
+    expect(broker.resizeCalls).toHaveLength(1);
+  });
+
+  it('books the last increment of an order that terminates partially filled (cancelled/expired)', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 100, filled_size: 0 });
+    const broker = new ScriptedBroker([cumulativeEntry(50, 100, '2026-07-20T15:00:00Z')]);
+    const execution = new ExecutionImpl(makeInput(broker, store));
+    await execution.ingestFills();
+
+    // The venue cancels the rest — the order goes terminal at 80 filled. That
+    // last 30 is the window this defect opened: it is the FINAL word on the
+    // order, so nothing later ever offers it again. `collectFill` reads no
+    // `status`, and `nextState` is driven by filled quantity rather than the
+    // venue's status string, so the increment is booked on its own terms.
+    broker.replaceFills([cumulativeEntry(80, 100.75, '2026-07-20T15:30:00Z')]);
+    await execution.ingestFills();
+
+    const position = await store.getPosition('key-1');
+    expect(position?.filled_size).toBe(80);
+    // Under-filled against the request, so still 'partially_filled' — and
+    // therefore still protected, which is exactly what has to be re-sized.
+    expect(position?.order_state).toBe('partially_filled');
+    expect(broker.resizeCalls.at(-1)).toEqual({ clientOrderId: 'key-1', filledQty: 80 });
+  });
+
+  it('ignores a cumulative that SHRINKS rather than un-booking a persisted fill', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 100, filled_size: 0 });
+    const broker = new ScriptedBroker([cumulativeEntry(50, 100, '2026-07-20T15:00:00Z')]);
+    const execution = new ExecutionImpl(makeInput(broker, store));
+    await execution.ingestFills();
+
+    // Venue/store divergence, not a lost increment: protection would be
+    // OVER-sized, which is not the direction that leaves shares naked, and
+    // fill rows are append-only. `reconcile()` owns divergence.
+    broker.replaceFills([cumulativeEntry(30, 100, '2026-07-20T15:30:00Z')]);
+    await execution.ingestFills();
+
+    expect(await store.getFills('key-1')).toHaveLength(1);
+    expect((await store.getPosition('key-1'))?.filled_size).toBe(50);
+    expect(broker.resizeCalls).toHaveLength(1);
+  });
+
+  it('leaves a non-cumulative feed alone — a re-offered id is still a duplicate', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 100, filled_size: 0 });
+    // No `qty_is_cumulative`: the Simulated adapter (and every backtest) emits
+    // one row per fill EVENT, so "same id, bigger qty" would be a bug in the
+    // feed, not an increment to book.
+    const broker = new ScriptedBroker([
+      fill({ broker_fill_id: 'sim-1', leg: 'entry', qty: 50, price: 100, fee: 0 }),
+    ]);
+    const execution = new ExecutionImpl(makeInput(broker, store));
+    await execution.ingestFills();
+    broker.replaceFills([
+      fill({
+        broker_fill_id: 'sim-1',
+        leg: 'entry',
+        qty: 100,
+        price: 100,
+        fee: 0,
+        timestamp: new Date('2026-07-20T15:30:00Z'),
+      }),
+    ]);
+    await execution.ingestFills();
+
+    expect(await store.getFills('key-1')).toHaveLength(1);
+    expect((await store.getPosition('key-1'))?.filled_size).toBe(50);
+  });
+
+  it('carries a cumulative STOP leg to flat instead of stranding the lot part-closed', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 100, filled_size: 0 });
+    const broker = new ScriptedBroker([cumulativeEntry(100, 100, '2026-07-20T15:00:00Z')]);
+    const execution = new ExecutionImpl(makeInput(broker, store));
+    await execution.ingestFills();
+
+    // The stop leg fills in two tranches under ITS own single order id. The
+    // same loss applies on the closing side, where it strands a lot reading
+    // half-open forever and never emits its ClosedTrade.
+    broker.replaceFills([
+      fill({
+        broker_fill_id: 'alpaca-stop-1',
+        leg: 'stop',
+        qty: 40,
+        price: 95,
+        fee: 0,
+        timestamp: new Date('2026-07-20T15:30:00Z'),
+        qty_is_cumulative: true,
+      }),
+    ]);
+    await execution.ingestFills();
+    expect((await store.getPosition('key-1'))?.order_state).not.toBe('closed');
+
+    broker.replaceFills([
+      fill({
+        broker_fill_id: 'alpaca-stop-1',
+        leg: 'stop',
+        qty: 100,
+        price: 95,
+        fee: 0,
+        timestamp: new Date('2026-07-20T15:45:00Z'),
+        qty_is_cumulative: true,
+      }),
+    ]);
+    await execution.ingestFills();
+
+    expect((await store.getPosition('key-1'))?.order_state).toBe('closed');
+    expect(await store.getClosedTrades()).toHaveLength(1);
   });
 });

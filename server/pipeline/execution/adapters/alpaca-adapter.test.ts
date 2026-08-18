@@ -378,8 +378,111 @@ describe('AlpacaBrokerAdapter.fetchNewFills', () => {
         qty: 100,
         fee: 0,
         timestamp: new Date(filledAt),
+        // #842: Alpaca reports a running per-order total, flagged for
+        // `ingestFills()` so a later, larger observation books the increment.
+        qty_is_cumulative: true,
       },
     ]);
+  });
+
+  /**
+   * #842's OTHER guard. Alpaca's own documentation does not settle whether
+   * `filled_at` is populated on the FIRST partial fill or only once an order
+   * is COMPLETELY filled — the field carries no description at all in the
+   * docs source that generates the Order entity table
+   * (alpacahq/alpaca-docs `data/webapi/entities/order-v2.yaml`) or in either
+   * OpenAPI spec, and there is no `partially_filled` example payload anywhere
+   * in the docs repo to settle it by example. The one indirect signal (the
+   * trade_updates stream distinguishing `fill`, "completely filled", from
+   * `partial_fill`) points toward "filled means COMPLETELY", i.e. toward a
+   * partial reporting a positive `filled_qty` with a null `filled_at`.
+   *
+   * Under the old guard that combination was dropped silently, every poll,
+   * forever — the same money-losing ending as the `hasFill` dedup, reached by
+   * a different door. Fixed defensively while the docs cannot rule it out.
+   */
+  it('collects a partial fill the venue has not dated, timestamped at the sweep clock', async () => {
+    const now = new Date('2026-07-15T14:07:00Z');
+    const client = makeClient({
+      getOrder: vi.fn().mockResolvedValue(
+        acceptedOrder({
+          status: 'partially_filled',
+          filled_qty: '50',
+          filled_avg_price: '100.02',
+          filled_at: null,
+        }),
+      ),
+    });
+    const adapter = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
+      clock: { now: () => now },
+    });
+    await adapter.submitBracket(makeBracket());
+
+    const fills = await adapter.fetchNewFills(new Date(0));
+
+    expect(fills).toEqual([
+      {
+        client_order_id: 'key-aapl-1355',
+        broker_fill_id: 'alpaca-entry-1',
+        leg: 'entry',
+        price: 100.02,
+        qty: 50,
+        fee: 0,
+        // Never EARLIER than the real fill, so `advanceLot`'s no-lookahead
+        // filter cannot be tricked into seeing a fill ahead of simulated T.
+        timestamp: now,
+        qty_is_cumulative: true,
+      },
+    ]);
+  });
+
+  it('re-offers the same order id at a growing cumulative filled_qty (#842)', async () => {
+    const getOrder = vi
+      .fn()
+      .mockResolvedValueOnce(
+        acceptedOrder({
+          status: 'partially_filled',
+          filled_qty: '50',
+          filled_avg_price: '100',
+          filled_at: '2026-07-15T14:05:00Z',
+        }),
+      )
+      // The venue's SECOND word on the SAME order — a running total, not a
+      // second fill event, and under the same order id. Nothing about the
+      // wire shape distinguishes it from a duplicate; only the flag does.
+      .mockResolvedValueOnce(
+        acceptedOrder({
+          status: 'canceled',
+          filled_qty: '80',
+          filled_avg_price: '100.75',
+          filled_at: '2026-07-15T14:06:00Z',
+        }),
+      );
+    const adapter = new AlpacaBrokerAdapter({
+      client: makeClient({ getOrder }),
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
+    });
+    await adapter.submitBracket(makeBracket());
+
+    const first = await adapter.fetchNewFills(new Date(0));
+    const second = await adapter.fetchNewFills(new Date(0));
+
+    expect(first).toEqual([expect.objectContaining({ broker_fill_id: 'alpaca-entry-1', qty: 50 })]);
+    // The bracket is NOT pruned on a terminal status the way `flattens` is,
+    // so the terminating observation is still swept — which is what gives
+    // `ingestFills()` the chance to book that last 30.
+    expect(second).toEqual([
+      expect.objectContaining({ broker_fill_id: 'alpaca-entry-1', qty: 80 }),
+    ]);
+    expect(second[0]?.qty_is_cumulative).toBe(true);
   });
 
   it('tags the take-profit leg as target and the stop-loss leg as stop', async () => {
@@ -542,6 +645,9 @@ describe('AlpacaBrokerAdapter integration: entry fill then stop-out', () => {
         qty: 100,
         fee: 0,
         timestamp: new Date(entryFilledAt),
+        // #842: Alpaca reports a running per-order total, flagged for
+        // `ingestFills()` so a later, larger observation books the increment.
+        qty_is_cumulative: true,
       },
     ]);
 
@@ -583,6 +689,9 @@ describe('AlpacaBrokerAdapter integration: entry fill then stop-out', () => {
         qty: 100,
         fee: 0,
         timestamp: new Date(stopFilledAt),
+        // #842: Alpaca reports a running per-order total, flagged for
+        // `ingestFills()` so a later, larger observation books the increment.
+        qty_is_cumulative: true,
       },
     ]);
   });
@@ -1394,6 +1503,9 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
         qty: 100,
         fee: 0,
         timestamp: new Date(filledAt),
+        // #842: Alpaca reports a running per-order total, flagged for
+        // `ingestFills()` so a later, larger observation books the increment.
+        qty_is_cumulative: true,
       },
     ]);
   });
@@ -1488,6 +1600,9 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         qty: 12,
         fee: 0,
         timestamp: new Date(filledAt),
+        // #842: Alpaca reports a running per-order total, flagged for
+        // `ingestFills()` so a later, larger observation books the increment.
+        qty_is_cumulative: true,
       },
     ]);
   });
@@ -1952,6 +2067,9 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         qty: 6,
         fee: 0,
         timestamp: new Date(filledAt),
+        // #842: Alpaca reports a running per-order total, flagged for
+        // `ingestFills()` so a later, larger observation books the increment.
+        qty_is_cumulative: true,
       },
     ]);
   });
@@ -2292,6 +2410,177 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
       ([orderId]) => orderId === 'aapl-flatten-order',
     ).length;
     expect(flattenOrderCallsAfterSecondPoll).toBe(1);
+  });
+
+  /**
+   * #842 END TO END, through the REAL `AlpacaBrokerAdapter`, the REAL
+   * `ExecutionImpl`/`ingestFills()` and a REAL sqlite store — not a spy
+   * adapter. The invariant this repo's dominant bug class ("tested mechanisms
+   * nothing calls") demands be proved at the composition seam rather than in
+   * a unit: our persisted `filled_size` for a lot equals the venue's
+   * cumulative `filled_qty` for its entry order.
+   *
+   * `orchestrator/fill-sync.ts` calls exactly this `ingestFills()` on the
+   * same `ExecutionImpl`, over the adapter `production.ts` constructs — so
+   * there is no intervening layer that could rebuild the `NormalizedFill` and
+   * drop the flag between the venue and the store.
+   */
+  it('follows the venue cumulative across polls instead of freezing at the first observation', async () => {
+    const { store } = openTestExecutionStore();
+    // Poll 1 sees 50 of 100 filled at 100; poll 2 sees the order terminate
+    // CANCELLED at 80, average 100.75 — i.e. the last 30 went off at 102.
+    // That last 30 is the increment the defect lost forever: a cancelled
+    // order is the venue's final word, so nothing ever offers it again.
+    const getOrder = vi
+      .fn()
+      .mockResolvedValueOnce(
+        acceptedOrder({
+          id: 'aapl-entry-order',
+          client_order_id: 'key-aapl-entry',
+          status: 'partially_filled',
+          filled_qty: '50',
+          filled_avg_price: '100',
+          filled_at: NOW.toISOString(),
+          legs: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        acceptedOrder({
+          id: 'aapl-entry-order',
+          client_order_id: 'key-aapl-entry',
+          status: 'canceled',
+          filled_qty: '80',
+          filled_avg_price: '100.75',
+          filled_at: NOW.toISOString(),
+          legs: [],
+        }),
+      );
+    const client = makeClient({
+      submitOrder: vi.fn(async () =>
+        acceptedOrder({
+          id: 'aapl-entry-order',
+          client_order_id: 'key-aapl-entry',
+          status: 'accepted',
+          filled_qty: '0',
+          filled_avg_price: null,
+          filled_at: null,
+          legs: [],
+        }),
+      ),
+      getOrder,
+    });
+    const broker = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
+      clock: fixedClock,
+    });
+    const execution = new ExecutionImpl({
+      trace_id: 'trace-1',
+      clock: fixedClock,
+      broker,
+      store,
+      costModel: {} as CostModel,
+      marketData: {} as MarketDataService,
+      config: executionConfig(),
+      mode: 'paper',
+      residualExposureAlerts: { postResidualExposureAlert: async () => {} },
+      flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
+      flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
+      logger: { log: () => {} },
+    });
+
+    await execution.execute(
+      goDecision(orderIntent({ idempotency_key: 'key-aapl-entry', size: 100 })),
+    );
+    await execution.ingestFills();
+    expect((await store.getPosition('key-aapl-entry'))?.filled_size).toBe(50);
+
+    await execution.ingestFills();
+
+    const position = await store.getPosition('key-aapl-entry');
+    // Before this ticket: 50 forever. Everything sized off `filled_size` —
+    // the exposure caps, flat-by-close's exit (ADR-0014), the realized PnL —
+    // was blind to 30 filled shares.
+    expect(position?.filled_size).toBe(80);
+    expect(position?.avg_entry_price).toBeCloseTo(100.75, 10);
+  });
+
+  /**
+   * #842 guard 2, END TO END, on an ADVANCING clock — the only shape that
+   * discriminates. `collectFill` dates an undated fill at the adapter's own
+   * clock read, taken PART WAY THROUGH the sweep; `ingestFills` then drops
+   * anything with `timestamp > now`. Read `now` before the sweep, as this
+   * function originally did, and under a real (monotonically advancing)
+   * clock `now` is ALWAYS the earlier of the two, so the undated fill is
+   * discarded on every poll, forever — the exact defect one layer down,
+   * invisible to every fixed-clock test in this file because there
+   * `observedAt === now` and `<=` holds.
+   *
+   * Each `now()` here returns a distinct, increasing instant, so nothing
+   * about the ordering is left to luck.
+   */
+  it('books a partial fill the venue never dated, on a clock that advances between reads (#842)', async () => {
+    const { store } = openTestExecutionStore();
+    let tick = 0;
+    const advancingClock: Clock = { now: () => new Date(NOW.getTime() + tick++ * 1000) };
+    const getOrder = vi.fn().mockResolvedValue(
+      acceptedOrder({
+        id: 'aapl-entry-order',
+        client_order_id: 'key-aapl-entry',
+        status: 'partially_filled',
+        filled_qty: '50',
+        filled_avg_price: '100',
+        // The combination Alpaca's docs decline to rule out.
+        filled_at: null,
+        legs: [],
+      }),
+    );
+    const client = makeClient({
+      submitOrder: vi.fn(async () =>
+        acceptedOrder({
+          id: 'aapl-entry-order',
+          client_order_id: 'key-aapl-entry',
+          status: 'accepted',
+          filled_qty: '0',
+          filled_avg_price: null,
+          filled_at: null,
+          legs: [],
+        }),
+      ),
+      getOrder,
+    });
+    const broker = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
+      clock: advancingClock,
+    });
+    const execution = new ExecutionImpl({
+      trace_id: 'trace-1',
+      clock: advancingClock,
+      broker,
+      store,
+      costModel: {} as CostModel,
+      marketData: {} as MarketDataService,
+      config: executionConfig(),
+      mode: 'paper',
+      residualExposureAlerts: { postResidualExposureAlert: async () => {} },
+      flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
+      flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
+      logger: { log: () => {} },
+    });
+
+    await execution.execute(
+      goDecision(orderIntent({ idempotency_key: 'key-aapl-entry', size: 100 })),
+    );
+    await execution.ingestFills();
+
+    expect((await store.getPosition('key-aapl-entry'))?.filled_size).toBe(50);
   });
 
   /**

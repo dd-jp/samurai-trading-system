@@ -68,6 +68,38 @@ export interface NormalizedFill {
     slippage: number;
     market_impact: number;
   };
+  /**
+   * #842: `qty`/`price` are the venue's CUMULATIVE filled quantity and
+   * cumulative average price for `broker_fill_id`'s order, not an increment
+   * over what a previous poll already reported.
+   *
+   * Alpaca's `getOrder` is the only shape this system polls that works this
+   * way: it reports one order with a running `filled_qty`, never one event per
+   * partial fill (see `fetchNewFills`' file doc in alpaca-adapter.ts). A
+   * second observation of the same order at a LARGER `filled_qty` therefore
+   * carries the same `broker_fill_id` (the order id) as the first, and
+   * `ingestFills()`' `hasFill` gate — which compares the id VALUE alone —
+   * would skip it as a duplicate, permanently losing the increment. The lot's
+   * `filled_size` would then stay at the first observation forever and
+   * `resizeProtectiveLegs` (which sets an ABSOLUTE quantity) would arm
+   * protection for the stale figure, leaving the rest of the lot naked.
+   *
+   * Flagged HERE rather than reconciled in the adapter because the adapter
+   * cannot: `collectFill` is a pure function of one order, and
+   * `AlpacaBrokerAdapterInput.state`'s docstring records the deliberate
+   * decision that this adapter has no `SharedStore` access. Only
+   * `ingestFills()` can see what is already persisted, so only it can compute
+   * the delta — see `advanceLot`'s top-up in ingest-fills.ts.
+   *
+   * Absent (or false) means what every other feed means: `qty` is this fill's
+   * own quantity and the id identifies it uniquely. The Simulated adapter
+   * emits one row per fill event, so it never sets this.
+   *
+   * TRANSPORT-ONLY. `toFill` (ingest-fills.ts) enumerates the fields it
+   * persists and deliberately does not carry this one: a stored `Fill` row is
+   * always an increment by the time it is written, whatever the wire said.
+   */
+  qty_is_cumulative?: boolean;
 }
 
 /**
