@@ -165,3 +165,138 @@ labelled a **US-equity proxy** wherever it appears, with the statement of what c
    `CALIBRATED_COST_CONFIG`, not assumed.
 4. An explicit statement of G1's outcome and why.
 5. No intraday Stage 2 run is reported, cited, or treated as a verdict as part of this work.
+
+---
+
+# The measurement, run after the criterion above was committed
+
+Everything above this line was committed before any of the numbers below existed
+(`git log --follow docs/research/53-intraday-cost-calibration.md`). Nothing above it has been edited since.
+
+**Every number here is a US-equity proxy** (SPY/QQQ/AAPL/TSLA, Alpaca SIP consolidated quotes). See G4.
+
+## The calibration run
+
+```
+node --import tsx /tmp/i875/run-intraday.mts 24
+  # -> runIntradaySpreadCalibration({ sampleDays: 24 })
+  # -> server/tools/run-spread-calibration.ts --intraday
+```
+
+24 sampled dates x 3 session buckets across `STAGE2_FREE_STACK_WINDOW` (2016-01-01 .. 2026-08-05) at `1m`.
+Roughly 8,000-9,200 real quotes per symbol per bucket (TSLA thinner in the early years: 5,781-7,704).
+
+```
+=== Measured spread vs ATR14 on 1m bars ===
+SPY    n=57 median=0.347bps p90=0.489bps  spread/ATR median=0.0618 p90=0.2311
+  open    n=19 quotes=9153 median=0.364bps spread/ATR median=0.0463 p90=0.1346
+  midday  n=19 quotes=9002 median=0.348bps spread/ATR median=0.0764 p90=0.3065
+  close   n=19 quotes=9040 median=0.342bps spread/ATR median=0.0488 p90=0.2311
+QQQ    n=57 median=0.546bps p90=0.931bps  spread/ATR median=0.0614 p90=0.3061
+  open    n=19 quotes=9090 median=0.596bps spread/ATR median=0.0561 p90=0.1621
+  midday  n=19 quotes=9132 median=0.546bps spread/ATR median=0.1055 p90=0.3273
+  close   n=19 quotes=9194 median=0.527bps spread/ATR median=0.0580 p90=0.3100
+AAPL   n=57 median=0.740bps p90=1.607bps  spread/ATR median=0.0777 p90=0.1827
+  open    n=19 quotes=9247 median=1.113bps spread/ATR median=0.0473 p90=0.0934
+  midday  n=19 quotes=8984 median=0.699bps spread/ATR median=0.1148 p90=0.2545
+  close   n=19 quotes=9114 median=0.667bps spread/ATR median=0.0774 p90=0.2092
+TSLA   n=57 median=4.216bps p90=10.032bps spread/ATR median=0.2272 p90=0.5723
+  open    n=19 quotes=7704 median=6.872bps spread/ATR median=0.2061 p90=0.3930
+  midday  n=19 quotes=5781 median=4.216bps spread/ATR median=0.2814 p90=0.7123
+  close   n=19 quotes=7459 median=2.528bps spread/ATR median=0.2093 p90=0.3136
+
+=== Fitted intraday spreadVolatilityCoefficient (stocks, from medians) ===
+  stocks: 0.0697   (p90 across symbols: 0.2272; daily-fitted: 0.0037)
+```
+
+**`CALIBRATED_INTRADAY_COST_CONFIG.stocks.spreadVolatilityCoefficient = 0.0697`**, with
+`slippageCoefficient = 0.0697 / 4 = 0.017425` by the daily config's own declared rule. **18.8x the daily-fitted
+0.0037** — the correction moves the model toward charging MORE, which is the safe direction.
+
+An independent 4-date trial run beforehand fitted 0.0858 on the same method — same order, same conclusion, and the
+24-date figure is the one adopted.
+
+## G2 — the magnitude claim: WITHDRAWN as unsupported
+
+```
+node --import tsx /tmp/i875/charged-cost.mts
+```
+
+Per-fill charged cost in bps of notional, median over 5 sessions spread across the replay window
+(2017-03-15, 2019-09-18, 2021-06-16, 2023-11-15, 2026-05-13), at `DEFAULT_CAPITAL_PER_TRADE`:
+
+| symbol | 1m bars, DAILY cfg | 1m bars, INTRADAY cfg | delta | 1d bars, DAILY cfg |
+| --- | --- | --- | --- | --- |
+| SPY | 2.0062 | 2.0750 | **+0.0688** | 2.0833 |
+| QQQ | 2.0094 | 2.0780 | **+0.0686** | 2.1158 |
+| AAPL | 2.0143 | 2.1174 | **+0.1031** | 2.1574 |
+| TSLA | 2.0401 | 2.2238 | **+0.1837** | 2.3176 |
+
+The declared bar was 0.25 bps for **any** symbol. The largest delta is **0.1837 bps (TSLA)**. Every symbol is
+below the bar, so per the criterion committed before the run, **the "roughly an order of magnitude" claim is
+withdrawn from the WARNING text as unsupported**, and the timeframe keying is recorded as correctness-preserving
+rather than as a material repricing.
+
+**Why, mechanically.** Component breakdown printed by the same script (2017-03-15 session, bps of notional):
+
+| symbol | spread (daily cfg) | spread (intraday cfg) | slippage (daily cfg) | slippage (intraday cfg) | commission | impact |
+| --- | --- | --- | --- | --- | --- | --- |
+| SPY | 1.0000 | 1.0000 | 0.0039 | 0.0726 | 1.0000 | 0.0024 |
+| QQQ | 1.0000 | 1.0000 | 0.0038 | 0.0724 | 1.0000 | 0.0056 |
+| AAPL | 1.0000 | 1.0000 | 0.0058 | 0.1089 | 1.0000 | 0.0085 |
+| TSLA | 1.0000 | 1.0000 | 0.0076 | 0.1430 | 1.0000 | 0.0325 |
+
+The charged half-spread is pinned at exactly `STRUCTURAL_MIN_HALF_SPREAD_RATE` (1bp of mid) under **both** configs
+at **both** resolutions, for every symbol. The raw modelled spread never reaches the floor — at 1m the intraday
+coefficient gives roughly 0.24-0.72 bps half-spread, still under 1bp. So the entire repricing arrives through the
+**unfloored slippage term**, and the charged spread does not move at all. This confirms the premise correction
+recorded above the line, now with the intraday-fitted coefficient in hand rather than the daily one.
+
+This is the substantive finding of the ticket: **at $10k notional in this universe, modelled cost is governed by
+the two 1bp structural floors (~4 bps round trip), not by the spread calibration.** A coefficient error of 19x
+moves the charged cost by 3-9%. Filing rather than acting on it — the floors are a Principle-1 guard and #875 does
+not have a mandate to touch them, and the criterion above explicitly excludes them.
+
+## G3 — one `stocks` coefficient is NOT defensible: fires, and is filed
+
+p90 across symbols 0.2272 (TSLA) against a median of 0.0697 is **3.3x**, above the declared 2x threshold. Recorded
+explicitly: **a single `stocks` coefficient under-charges the wide names.** TSLA's real median 1m half-spread is
+4.216 bps — over 4x the structural floor and 12x SPY's 0.347 bps — so TSLA is the one symbol in this universe
+where the spread term would actually escape the floor under a per-symbol coefficient, and it is charged the floor
+instead. Per the criterion this is filed, not fixed here; inventing a per-symbol config was ruled out in advance.
+
+The session profile is also real: TSLA's open median (6.872 bps) is 2.7x its close median (2.528 bps), and AAPL's
+open (1.113 bps) is 1.7x its close (0.667 bps). A single all-session coefficient under-charges the open. Same
+disposition — recorded, not acted on.
+
+## G1 — the WARNING NARROWS
+
+The stated defect is gone: the ratio is now fitted at the resolution it is consumed at, and `costConfigFor` selects
+it. "Drops entirely" required both conjuncts and neither holds — the 1m charged cost is still *below* the 1d
+charged cost for every symbol (the floor is invariant while slippage still shrinks with per-minute ATR), and the
+G4 proxy gap is uncovered. So the WARNING narrows, and its replacement states three named residuals:
+
+1. charged half-spread is at the structural floor at both resolutions and under both configs, so the floor governs
+   what a fill is charged, not this calibration;
+2. one per-asset-class coefficient under-charges the wide names (G3, TSLA at 3.3x the median);
+3. the fit is a **US-equity proxy**; the live universe is GBP LSE-listed leveraged ETPs (ADR-0016) with no free
+   quote source.
+
+The sentence claiming an order-of-magnitude understatement is deleted, and a test asserts it is absent.
+
+## G4 — the proxy gap, stated and NOT closed
+
+Every figure above is measured on US equities via Alpaca SIP. The live tradeable universe is GBP LSE-listed
+leveraged ETPs (ADR-0016), and `docs/research/33-intraday-data-availability.md` records that no free LSE quote
+source exists over a comparable window. Closing this would take a paid LSE level-1 quote feed with history (or an
+accumulation of live Trading 212 fills once the equity leg trades), fitted the same way against LSE 1m bars.
+Until then the intraday coefficient is a proxy, and an LSE leveraged ETP's real spread is very likely **wider**
+than a US mega-cap's — so the proxy errs optimistic, which is the direction this repo has been wrong in before.
+
+## What could not be measured
+
+- **LSE leveraged-ETP spreads** — no free quote source (G4 above).
+- **Realised slippage** — needs live fills. Left as the daily config's declared `coefficient / 4` assumption,
+  labelled as such, unchanged in kind.
+- **Whether the structural floors are correctly sized** — the floors dominate the charged cost, but validating
+  them needs realised fills, and they are explicitly out of this ticket's scope.

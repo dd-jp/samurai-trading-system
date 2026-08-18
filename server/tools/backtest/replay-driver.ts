@@ -680,16 +680,19 @@ export class ReplayDriver {
    * volatility (cross-spec OPEN-GAP-A). `volatility` is the same ATR the
    * strategy sized its stop with, and `adv` the rolling mean bar volume.
    *
-   * **The cost config is calibrated against DAILY ATR (#664).**
-   * `CALIBRATED_COST_CONFIG`'s `spreadVolatilityCoefficient` (run-stage2.ts)
-   * was fitted as a ratio of measured spread to **ATR14 on daily bars**. A
-   * minute bar's ATR is roughly an order of magnitude smaller, so the same
-   * coefficient models a spread roughly an order of magnitude too NARROW on an
-   * intraday replay — flattering, and in the direction this repo has already
-   * been wrong in sign twice (ADR-0016's expectancy, and the Stage 2 cost
-   * fixture). #664 ships the CAPABILITY to replay intraday; it does not ship a
-   * cost model calibrated for it, and no intraday Stage 2 number should be
-   * read as a verdict until that recalibration exists.
+   * **The cost config must match the replay resolution (#664, fixed by #875).**
+   * `spreadVolatilityCoefficient` is a ratio of measured spread to ATR14, so it
+   * is only meaningful against the ATR of the bars it was fitted on.
+   * `costConfigFor(timeframe)` (run-stage2.ts) now selects a 1-minute fit for
+   * intraday runs and keeps `CALIBRATED_COST_CONFIG` for daily ones; a caller
+   * passing `CALIBRATED_COST_CONFIG` to an intraday replay by hand still gets
+   * the daily-fitted ratio and the flattering spread that comes with it.
+   *
+   * What the recalibration did NOT change: measured at 1m, the modelled raw
+   * half-spread stays BELOW `STRUCTURAL_MIN_HALF_SPREAD_RATE` for every symbol
+   * sampled, so the charged spread is the floor either way and the repricing
+   * arrives entirely through the unfloored slippage term. Do not read a change
+   * in this coefficient as a change in what a fill is charged.
    */
   private marketState(
     config: ProxyStrategyConfig,
