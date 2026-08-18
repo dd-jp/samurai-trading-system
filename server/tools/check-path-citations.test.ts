@@ -46,13 +46,13 @@ describe('the known-bad fixture', () => {
   const report = check([`${FIXTURES}/known-bad.md`]);
 
   it('flags every case exactly once, and nothing else', () => {
-    expect(report.violations.map((v) => v.kind)).toEqual([
-      'missing-path',
-      'line-beyond-eof',
-      'line-on-directory',
-      'stale-planned-exemption',
-      'malformed-exemption',
-      'malformed-exemption',
+    expect(kinds(report.violations)).toEqual([
+      'missing-path@7:server/pipeline/verdict/no-such-file.ts',
+      'line-beyond-eof@9:server/tools/check-path-citations.ts:99999',
+      'line-on-directory@11:server/tools/:12',
+      'stale-planned-exemption@13:server/tools/check-path-citations.ts',
+      'malformed-exemption@15:server/pipeline/verdict/gone.ts',
+      'malformed-exemption@17:server/pipeline/verdict/also-gone.ts',
     ]);
   });
 

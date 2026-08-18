@@ -175,6 +175,10 @@ const MARKER = /<!--\s*cite-exempt:\s*([a-z]+)\s*(?:[—:-]\s*)?([^>]*?)\s*-->/;
  * path would recover them, at the price of a marker that goes stale silently when the
  * prose around it is edited — a false-positive source, which is the direction this
  * checker is not allowed to err in.
+ *
+ * Append the marker to the end of the cited line; never put it at the start. A comment
+ * that opens a line opens a CommonMark HTML block, and the rest of that line stops being
+ * parsed as markdown — links, emphasis and backticks in it render as literal text.
  */
 function markerOn(line: string): { reason: string; note: string } | null {
   const match = MARKER.exec(line);
