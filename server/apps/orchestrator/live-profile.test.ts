@@ -5,7 +5,13 @@
  * key, and nothing sets `SAMURAI_MODE`.
  */
 
-import { LIVE_MONEY_GATE_SUMMARY, LIVE_MONEY_GATES } from './live-money-gates.js';
+import { startingProfileForMode } from './index.js';
+import {
+  LIVE_MONEY_GATE_SUMMARY,
+  LIVE_MONEY_GATES,
+  LIVE_MONEY_GATES_RECHECK_COMMAND,
+  LIVE_MONEY_GATES_VERIFIED_ON,
+} from './live-money-gates.js';
 import {
   LIVE_MAX_CAPITAL_ENV_VAR,
   liveStartingProfile,
@@ -221,7 +227,12 @@ describe('LIVE_MONEY_GATES', () => {
   });
 
   it('cites no issue that was closed when this list was verified', () => {
-    const closed = [384, 375, 333, 525];
+    // #868: the first seven are the list as it shipped from #566. Every one of
+    // them was closed by 2026-08-18 while still being rendered to an operator
+    // booting live money, so they are pinned here permanently — a revert of the
+    // list, or a copy-paste of the old one, fails on this line rather than on
+    // the next operator's read.
+    const closed = [526, 519, 548, 549, 550, 551, 562, 384, 375, 333, 525];
 
     for (const gate of LIVE_MONEY_GATES) {
       expect(closed).not.toContain(gate.issue);
@@ -229,5 +240,65 @@ describe('LIVE_MONEY_GATES', () => {
     for (const issue of closed) {
       expect(LIVE_MONEY_GATE_SUMMARY).not.toContain(`#${issue}`);
     }
+  });
+
+  it('cites the gates that are open today, by number (#868)', () => {
+    // Pinned as literals rather than derived from LIVE_MONEY_GATES: a test that
+    // renders the constant and asserts it contains the constant passes for any
+    // list, which is why the seven ghosts survived a suite of ~2900 tests.
+    expect(LIVE_MONEY_GATES.map((gate) => gate.issue)).toEqual([734, 800, 798, 826]);
+  });
+
+  it('hands the reader a command instead of only telling them to re-check', () => {
+    // The decay #868 records was not that the list went stale — lists do — but
+    // that a reader told to "re-check their state" had seven issues to check by
+    // hand and no way to do it, so nobody did. The summary names the one
+    // command that settles it, and dates its own claim.
+    expect(LIVE_MONEY_GATE_SUMMARY).toContain(LIVE_MONEY_GATES_RECHECK_COMMAND);
+    expect(LIVE_MONEY_GATE_SUMMARY).toContain(LIVE_MONEY_GATES_VERIFIED_ON);
+    expect(LIVE_MONEY_GATE_SUMMARY).toContain('not a live');
+  });
+});
+
+describe('the live-boot warning as an operator actually receives it', () => {
+  /**
+   * Reached through `startingProfileForMode`, the seam `orchestrator/index.ts`
+   * takes on `mode === 'live'` — not `liveStartingProfile` directly. The gate
+   * list being correct is worth nothing if the branch that renders it is not
+   * the branch a live boot takes.
+   */
+  function liveBootWarning(): string {
+    const logger = makeLogger();
+    vi.stubEnv(LIVE_MAX_CAPITAL_ENV_VAR, String(CEILING));
+    try {
+      startingProfileForMode('live', logger);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    const warn = logger.entries.find((entry) => entry.level === 'warn');
+    if (warn === undefined)
+      throw new Error('a live boot must emit a warn before anything is built');
+    return warn.message;
+  }
+
+  it('names every gate that is open, at the boot path', () => {
+    const message = liveBootWarning();
+
+    for (const issue of [734, 800, 798, 826]) {
+      expect(message).toContain(`#${issue}`);
+    }
+    expect(message).toContain('#238');
+  });
+
+  it('names no gate that has closed, at the boot path', () => {
+    const message = liveBootWarning();
+
+    for (const issue of [526, 519, 548, 549, 550, 551, 562]) {
+      expect(message).not.toContain(`#${issue}`);
+    }
+  });
+
+  it('tells the operator how to re-verify the list they are being shown', () => {
+    expect(liveBootWarning()).toContain(LIVE_MONEY_GATES_RECHECK_COMMAND);
   });
 });

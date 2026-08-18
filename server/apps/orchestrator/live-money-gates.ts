@@ -11,12 +11,58 @@
  *
  * ## The rule for editing this list
  *
- * **Verify state before citing.** `gh issue view <N>` and confirm the issue is
- * OPEN and says what the line claims, every time this list is touched. An issue
- * number in a safety message is a claim about the world, not decoration.
+ * **Verify state before citing.** `yarn check:live-gates` (or `gh issue view <N>`
+ * one at a time) and confirm the issue is OPEN and says what the line claims,
+ * every time this list is touched. An issue number in a safety message is a
+ * claim about the world, not decoration. Bump `LIVE_MONEY_GATES_VERIFIED_ON` in
+ * the same edit — the date is the only thing telling the next reader how much
+ * of the list to trust.
  *
  * **A closed issue is deleted, not struck through.** The list's value is that
  * an operator can act on it; a graveyard entry costs them the read.
+ *
+ * **Adding an entry means commenting on that issue too**, saying it is cited
+ * here and that closing it makes this list wrong. That comment is the only
+ * thing that reaches the person who closes the issue, who has no reason to know
+ * this file exists — see the #868 note below. An entry added without one
+ * re-creates exactly the silent decay this list has already suffered once.
+ *
+ * **Every entry states why it gates a LIVE BOOT**, not merely that it is open.
+ * The discriminator is whether it changes what the operator should do at the
+ * moment they flip `SAMURAI_MODE=live`. An open ticket that does not is noise
+ * here, and noise is how the previous list became unreadable.
+ *
+ * ## Why nothing in `yarn test` asserts these are still open (#868)
+ *
+ * The list went 7-for-7 stale between 2026-08-07 and 2026-08-18 and nothing
+ * noticed, so the obvious fix is a test that asserts each cited issue is OPEN.
+ * That test cannot exist here, for two reasons that are facts about this repo
+ * rather than judgement calls:
+ *
+ *  1. **"Is issue N open" is not a property of this tree.** It changes with no
+ *     file changing, so no checkout-deterministic check can hold it. The suite
+ *     makes no real network calls, and a check whose answer depends on ambient
+ *     state that varies by machine is a check people learn to disable — that is
+ *     #866's finding about `check-path-citations`, and a `gh`-shelling test
+ *     would reproduce it with authentication in place of a `data/` directory.
+ *  2. **A scheduled task would never run.** GitHub Actions is billing-blocked
+ *     on this repo: every job fails in ~3s with 0 steps. A cron check is a
+ *     mechanism that exists and does nothing, which is worse than none.
+ *
+ * A clock-triggered variant — fail the suite once `LIVE_MONEY_GATES_VERIFIED_ON`
+ * is older than N days — was considered and rejected for the same reason: it
+ * reddens unrelated work at an arbitrary moment, which is the disable-magnet
+ * shape again.
+ *
+ * So the decay is made **loud and cheap to settle** instead of silently
+ * checked. The rendered summary carries the verification date and names the
+ * one command that answers the question — `yarn check:live-gates`
+ * (`server/tools/check-live-money-gates.ts`), which reads this same list, asks
+ * GitHub for each issue's state, and exits non-zero if any cited issue has
+ * closed. It is operator- and maintainer-invoked, deliberately NOT wired into
+ * `lint`/`typecheck`/`test`/`smoke`. Each cited issue also carries a pointer
+ * comment saying it is cited here, so the person closing it is told by the
+ * artifact they are already reading.
  *
  * ## What is deliberately NOT in the list
  *
@@ -32,53 +78,58 @@
 /**
  * Open issues that gate live money, each verified OPEN on the date below.
  *
- * Kept as data rather than prose so the two callers render one list and a test
+ * Kept as data rather than prose so the two callers render one list, so a test
  * can assert that no entry has silently become a bare number with no claim
- * attached to it.
+ * attached to it, and so `yarn check:live-gates` can re-verify the whole list
+ * against GitHub without re-parsing an English sentence.
  */
 export const LIVE_MONEY_GATES: readonly { readonly issue: number; readonly gap: string }[] = [
   {
-    issue: 526,
-    gap: 'the Alpaca flattens sweep map is in-memory, so a crash drops a flatten off the fill worklist',
+    issue: 734,
+    // Verified OPEN 2026-08-18: `gh issue view 734`.
+    gap: 'the live equity leg has no mark source — no DataSource serves the LSE, so the GBP LSE-ETP book ADR-0015 puts live capital in cannot be priced at all, while this profile boots the Alpaca clients',
   },
   {
-    issue: 519,
-    gap: 'nothing sweeps the flatten_submissions journal, so a lost-response flatten is recorded but never resolved',
+    issue: 800,
+    // Verified OPEN 2026-08-18: `gh issue view 800`. Labelled BLOCKING(arming)
+    // on the issue itself. Note this profile's ceiling env var is named
+    // SAMURAI_LIVE_MAX_CAPITAL_USD — USD — against a GBP book.
+    gap: 'Trader and the ADR-0018 D5 cap disagree 2x on what portfolio.equity denominates, so the size that reaches the broker is not the size either side believes it authorised',
   },
   {
-    issue: 548,
-    gap: "AlpacaBrokerAdapter's re-armed-legs sweep is in-memory, so a restart drops a re-armed OCO off the fill worklist",
+    issue: 798,
+    // Verified OPEN 2026-08-18: `gh issue view 798`.
+    gap: "ADR-0018 D5's declared brackets imply a ~41.8% single-stock envelope against a ~20-25% tolerance, so the sizing this profile ships is unreconciled with the drawdown envelope it was sized against",
   },
   {
-    issue: 549,
-    gap: 'a crash between a partial-flatten exit fill and its re-arm leaves a residual naked, with no retry and no alert',
-  },
-  {
-    issue: 550,
-    gap: 'Alpaca OCO — the re-arm order — is unverified for crypto symbols',
-  },
-  {
-    issue: 551,
-    // Deliberately does not cite the (closed) ticket that added the alert: a
-    // number in this list reads as "still open", and mixing provenance
-    // citations into it is how the last stale refusal happened.
-    gap: 'the residual-exposure alert has no transport wired through SAMURAI_ALERTS, so it reaches nobody',
-  },
-  {
-    issue: 562,
-    gap: 'the live orchestrator has no OHLCV failover — one vendor serves every bar it reads',
+    issue: 826,
+    // Verified OPEN 2026-08-18: `gh issue view 826`. The live successor to the
+    // closed #562 — the failover gap moved from bars to marks and quotes, it
+    // did not clear.
+    gap: 'marks and quotes are not failed over, so a single Alpaca outage stops the tick at the mark read with positions open',
   },
 ];
 
-/** The date every entry above was checked against GitHub. */
-export const LIVE_MONEY_GATES_VERIFIED_ON = '2026-08-07';
+/**
+ * The date every entry above was checked against GitHub.
+ *
+ * Bump this in the same edit that touches `LIVE_MONEY_GATES`, never separately:
+ * a date newer than the last verification is a false claim in an operator-facing
+ * safety message, and a date older than the list is what #868 was filed about.
+ */
+export const LIVE_MONEY_GATES_VERIFIED_ON = '2026-08-18';
+
+/** The command that re-verifies the list, named in the operator-facing summary. */
+export const LIVE_MONEY_GATES_RECHECK_COMMAND = 'yarn check:live-gates';
 
 /**
  * The gate list as one sentence, for an error message or a log line.
  *
- * Leads with the reason that cannot go stale and dates the numbered part, so a
- * reader who finds the numbers closed still has the standing reason and knows
- * exactly how old the rest is.
+ * Leads with the reason that cannot go stale, dates the numbered part, and — the
+ * #868 change — hands the reader the one command that settles whether the dated
+ * part is still true. "Re-check their state before trusting this list" was true
+ * advice with no way to act on it; a reader who has to hand-check seven issue
+ * numbers checks none.
  */
 export const LIVE_MONEY_GATE_SUMMARY: string =
   'The reason that does not depend on any bug number: the 14-day paper soak (#238) that ' +
@@ -87,4 +138,6 @@ export const LIVE_MONEY_GATE_SUMMARY: string =
   `${LIVE_MONEY_GATES_VERIFIED_ON}, ${LIVE_MONEY_GATES.length} further issues were verified ` +
   `OPEN and gate live money: ` +
   LIVE_MONEY_GATES.map(({ issue, gap }) => `#${issue} (${gap})`).join('; ') +
-  '. Re-check their state before trusting this list.';
+  `. That verification is a snapshot taken on ${LIVE_MONEY_GATES_VERIFIED_ON}, not a live ` +
+  `fact: nothing re-checks it automatically. Run \`${LIVE_MONEY_GATES_RECHECK_COMMAND}\` to ` +
+  're-verify every number above against GitHub before trusting this list.';
