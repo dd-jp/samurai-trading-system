@@ -432,7 +432,7 @@ export interface ProductionConfig extends AlertChannelSlots {
    *
    * There is deliberately no default. Which vendor may lawfully serve a live
    * LSE quote is an OPEN OWNER DECISION (docs/research/34-lse-mark-source-options.md),
-   * gated on Trading 212 access (#665/#666); a default here would be this repo's
+   * and is tracked by #895; a default here would be this repo's
    * dominant defect class — a mechanism that looks wired and serves nothing.
    */
   lseMarkClient?: LseMarkClient;

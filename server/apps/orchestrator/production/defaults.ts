@@ -436,12 +436,14 @@ function buildLseMarkSourceIfNeeded(
         "underlying is inadmissible (#734), so there is no fallback to take — Verdict's " +
         "stale_feed gate (#641) and the Risk Manager's valuation bound (#640) would never pass " +
         'and the book could not be valued at all. Which vendor may serve this is an OPEN OWNER ' +
-        'DECISION: see docs/research/34-lse-mark-source-options.md, which recommends IBKR LSE ' +
-        'UK Level 1 (~GBP 1/month non-professional) as the only retail-priced real-time LSE ' +
-        "feed with bid/ask, and records that Trading 212's own API cannot serve a mark at all " +
-        '— it has no quote endpoint, and its API Terms 4.2(a) prohibit algorithmic trading ' +
-        'outright, which is a venue question beyond this seam (#665/#666 rest on a premise ' +
-        'those terms contradict).',
+        'DECISION (#895): see docs/research/34-lse-mark-source-options.md, which recommends ' +
+        'IBKR LSE UK Level 1 (~GBP 1/month non-professional) as the only retail-priced ' +
+        "real-time LSE feed with bid/ask found. Trading 212's own API cannot supply one either, " +
+        'on mechanical grounds: its published OpenAPI bundle exposes no quote endpoint at all, ' +
+        'and its only price field (Position.currentPrice) exists solely for instruments already ' +
+        'held and carries no observation timestamp, so no honest Mark.observed_at can be derived ' +
+        "from it. Whether that venue's terms permit an automated trader at all is a separate " +
+        'question, open and NOT settled here — see #896.',
     );
   }
 

@@ -23,7 +23,8 @@
  * there either cannot be used (no LSE coverage at all — Alpaca and Polygon
  * were re-probed with this project's own keys and answer `invalid symbol` /
  * an exchange list with no `XLON`), or cannot be used lawfully at £0, or needs
- * an access step only the owner can take (#665/#666, Trading 212). So this
+ * an access step only the owner can take (#895 — choosing and provisioning
+ * the vendor). So this
  * ships with **no concrete client**: the seam, the normalisation, and the
  * refusals are decidable now; the vendor is not.
  *
@@ -58,8 +59,9 @@
  *   mark. A GBP book valued partly in dollars breaches every cap at once and
  *   looks green while doing it.
  *
- * That refusal is deliberately inconvenient: six of the eleven pool rows quote
- * in USD, so on today's pool most of the universe cannot be marked. That is a
+ * That refusal is deliberately inconvenient: EIGHT of the eleven pool rows
+ * declare USD in `lse-etp-pool.ts`, so on today's pool most of the universe
+ * cannot be marked. That is a
  * real finding about the pool (doc 34 §3.2), not a defect in this class — the
  * fix is an FX-rate decision or a GBP-line pool, both of which are the owner's
  * to make.
@@ -176,11 +178,14 @@ export interface LseVendorBars {
  * `new Date()`.
  *
  * `bid`/`ask` are optional and matter more here than on any other source.
- * These ETPs are market-maker quoted and thinly TRADED: measured on
- * 2026-08-18 across five sessions (doc 34 §4), the median gap between prints
- * is 2-30 minutes depending on the line, and for six of eleven names more than
- * 13% of consecutive-print gaps exceed the 15-minute `max_mark_age.stocks`
- * bound — 65% for `3AAP`. A LAST-TRADE mark therefore fails #641 by
+ * These ETPs are market-maker quoted and thinly TRADED: measured over the five
+ * sessions to 2026-08-19 (doc 34 §3.3, produced by
+ * `docs/research/34-print-gap-measurement.py`), the median within-session gap
+ * between prints runs from 2 minutes on the busiest line to 44 on the thinnest,
+ * and on SEVEN of the eleven names more than 17% of consecutive-print gaps
+ * exceed the 15-minute `max_mark_age.stocks` bound — 72.7% for `3AAP`, and an
+ * eighth line (`3LPA`) printed four times in five whole sessions. A LAST-TRADE
+ * mark therefore fails #641 by
  * illiquidity alone, on any vendor. A quote midpoint does not, because the
  * market maker refreshes it whether or not anyone trades.
  */

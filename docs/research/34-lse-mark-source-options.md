@@ -107,7 +107,8 @@ does not satisfy that restriction:
 | `GBP` | 1 | 3AAP |
 
 And the venue disagrees with the file on two rows. Yahoo-reported currency per ticker, probed
-2026-08-18: 3USL `USD`, LQQ3 `GBp`, 3SPY `GBp`, 3LTS `USD`, NVD3 `USD`, **3AAP `GBp`** (the file
+2026-08-18 and **re-confirmed 2026-08-19** by the §3.3 script (its log's last line records the
+venue's currency for all eleven): 3USL `USD`, LQQ3 `GBp`, 3SPY `GBp`, 3LTS `USD`, NVD3 `USD`, **3AAP `GBp`** (the file
 says `GBP` — a **100x** discrepancy), 3LNV `USD`, **3QQQ `GBp`** (the file says `USD`), MST3 `USD`,
 3LPA `USD`, PLT3 `USD`.
 
@@ -128,16 +129,39 @@ Two findings; the second is for David rather than for code:
 
 ### 3.3 Recency — a last-trade mark fails #641 on illiquidity alone
 
-Over five sessions of 1-minute bars, the fraction of consecutive-print gaps **longer than the
-15-minute `max_mark_age.stocks` bound**:
+**MEASURED**, and reproducible: the producer is
+[`34-print-gap-measurement.py`](34-print-gap-measurement.py) and its raw output is
+[`archive/raw/2026-08-19-34-print-gaps.txt`](archive/raw/2026-08-19-34-print-gaps.txt). The table
+below is that log, not a transcription of an earlier unrecorded run — the first pass of this
+document published figures from a 2026-08-18 window with no script and no log, and they are replaced
+here rather than restated, because a MEASURED label with nothing behind it is the thing this repo's
+convention exists to prevent.
+
+Method, since the numbers mean nothing without it: a **print** is a 1-minute Yahoo bar with a
+non-null close AND non-zero volume (Yahoo emits a bar per session minute regardless of activity);
+gaps are measured **within a session only**, over the LSE continuous window **08:00–16:30
+Europe/London**; the figure is the fraction of consecutive-print gaps strictly greater than 15
+minutes. Yahoo's 1-minute history reaches back about seven days, so this can only ever measure the
+last handful of sessions — **re-running it on another day measures different sessions and will not
+reproduce these figures exactly.** It reproduced the earlier run's *ordering* and its conclusion, not
+its decimals.
+
+Five sessions to 2026-08-19:
 
 | Ticker | 3USL | LQQ3 | 3SPY | 3LTS | NVD3 | 3AAP | 3LNV | 3QQQ | MST3 | 3LPA | PLT3 |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| gaps > 15 min | 24.6% | 1.3% | 44.0% | 15.4% | 9.5% | **65.5%** | 48.4% | 57.1% | 14.3% | 33.3% | 6.9% |
+| gaps > 15 min | 33.6% | 3.2% | 50.0% | 17.5% | 11.5% | **72.7%** | 50.0% | 64.0% | 18.4% | *n/a* | 7.3% |
+| prints in 5 sessions | 148 | 671 | 26 | 262 | 354 | 27 | 57 | 30 | 266 | **4** | 512 |
+| median gap (min) | 9 | 2 | 27 | 4 | 4 | 44 | 16 | 23 | 4 | *n/a* | 2 |
+
+**3LPA is the worst line, not the exception its blank cell suggests.** It printed **four times across
+five whole sessions**, so it has no within-session consecutive pair to measure and the percentage is
+undefined. An instrument that trades four times a week cannot be marked off its last trade at any
+freshness bound worth having.
 
 **This is the most consequential measurement here, and it is vendor-independent.** These ETPs trade
 thinly. A mark taken from the last *trade* is stale by the system's own definition for a large part
-of every session — 65% of the time on 3AAP — however fast the vendor is, because there is no more
+of every session — 72.7% of the time on 3AAP — however fast the vendor is, because there is no more
 recent trade to report. #641 would fire constantly and #640 would refuse to value the book, on
 instruments that are perfectly liquid in the sense that matters: a market maker is quoting them
 continuously.
@@ -195,26 +219,47 @@ quotes going forward"* is superseded by 7.1(b) and 4.2(a).
 
 This document does not resolve that. It records it as the largest open item on the live path and
 routes it to David, because the options — seek written consent, change venue, or change the
-automation posture — are all his, and #665/#666 were opened on a premise these terms contradict.
+automation posture — are all his. It is filed as
+[#896](https://github.com/dd-jp/samurai-trading-system/issues/896), and #665/#666 were opened on a
+premise these terms contradict.
 
 ## 5. The rest of the field, and why a free tier does not exist here
 
-**The governing rule is the exchange's, not the vendors'.** LSE's Market Data Policy 2025
-(`https://docs.londonstockexchange.com/sites/default/files/documents/policies-2025_2.pdf`, text
-machine-extracted) §7.2: *"If Level 1 or 2 Data is delayed by 15 minutes or more prior to
-dissemination and display, Data Charges are not payable"*, with *"Delayed Data means Data made
-available 15 minutes after publication."* §6.1.6 puts *"automated trading, semi-automated trading"*
-under **Non-Display Usage** — but Non-Display Usage is defined over **Real Time Data only**. So the
-15-minute path is free of licence exposure and useless for a 15-minute freshness bound, while the
+**The governing rule is the exchange's, not the vendors'.** Quoted from the **2026** edition,
+effective 01 January 2026 — Schedule B – Market Data Policy
+(`https://docs.londonstockexchange.com/sites/default/files/documents/schedule-b-market-data-policy-2026.pdf`)
+and Schedule A – Price List
+(`https://docs.londonstockexchange.com/sites/default/files/documents/schedule-a-price-list-and-products-schedule-2026.pdf`),
+both retrieved and text-extracted 2026-08-19. The first pass of this document quoted the **2025**
+edition, in August 2026, and the section numbers and prices moved between the two.
+
+- **§7.2, in full:** *"If Level 1 or 2 Data is delayed by 15 minutes or more prior to dissemination
+  and display, Data Charges are not payable by the End Customer."* The 2025 wording ended at *"are
+  not payable"*; the 2026 wording rescopes it to the **End Customer**.
+- **"Delayed Data", in full:** *"means Data made available 15 minutes after publication, but before
+  midnight on the day of its original publication."* The trailing clause is not decoration — data
+  older than that day is **After Midnight Data**, a separately licensed thing.
+- **§6.5** (2025's §6.1.6): *"For the avoidance of doubt, Non-Display Usage includes but is not
+  limited to automated processing (including automated trading), semi-automated processing
+  (including semi-automated trading) and Non-Display Usage within hosted environments."* Non-Display
+  Usage is defined over **Real Time Data**.
+
+**What §7.2 actually grants is narrower than "the 15-minute path is free".** It exempts *Data
+Charges* only, and only as against the End Customer. **Delayed Data *Licence* Charges are a separate
+line item** — Schedule A prices the UK market Data Delayed Data licence at **£5,831/year per Website
+for Level 1** (£13,160 Level 2). Whether a single self-consuming user needs one at all is a question
+for LSEG, not one this document can answer; what can be said is that a delayed feed is **not
+self-evidently licence-free**, and it is useless for a 15-minute freshness bound anyway, while the
 real-time path is exactly what carries the non-display fee. Direct from LSEG, ETF/ETP Non-Display
-Level 1 for 1–5 applications is **£6,500/year** (Schedule A), 50% off the first year.
+Level 1 for 1–5 applications is **£6,695/year** (Schedule A 2026, §3.3.2 Client Facilitation; the
+2025 figure was £6,500), 50% off the first year.
 
 That single distinction explains every row below.
 
 | Vendor | XLON coverage | Cheapest with LSE | LSE freshness | Bid/ask | Terms for a private for-profit algo |
 |---|---|---|---|---|---|
-| **IBKR** | LSE / LSEETF / LSEIOB1 | **GBP 1.00/mo** L1 non-pro (L2 £7) | **real-time on subscription**; free tier 15 min delayed | **yes** (`reqTickByTickData`, `BidAsk`) | non-professional if not registered with a regulator, not an adviser, not employed by a financial institution |
-| Twelve Data | XLON, symbol form `AZN_LSE` | Pro **$229/mo** + an unpriced real-time-EU add-on | add-on advertises **Cboe Europe**, not LSE primary; LSE figure not found | not found | individual ladder is *"personal, internal, and non-commercial"* |
+| **IBKR** | market-data bundles **`LSE` ("LSE UK") / `LSEIOB` ("LSE International")** — see note | **GBP 1.00/mo** L1 non-pro (L2 £7) | **real-time on subscription**; free tier 15 min delayed | **yes** (`reqTickByTickData`, `BidAsk`) | non-professional test is IBKR's own and is **not** paraphrasable — see §6 |
+| Twelve Data | XLON — request form is **`symbol=AZN&exchange=LSE`** (VERIFIED at `twelvedata.com/docs`, 2026-08-19); XLON is **EOD-only** there | Pro **$229/mo** is on the **Individual** ladder, headed *"Access the data for personal, internal, and non-commercial purposes"* (VERIFIED at `twelvedata.com/pricing`, 2026-08-19) — **so it is not a tier this system may buy**; the Business ladder is unpriced here | add-on advertises **Cboe Europe**, not LSE primary; LSE figure not found | not found | private for-profit use falls outside the Individual ladder by its own heading |
 | EODHD | `3USL.LSE` | £29.99/mo (EOD+Intraday) | *"Prices are delayed: **15-20 minutes** for stocks"*; the real-time WebSocket is US/FX/crypto only | **no** — OHLCV snapshot | personal vs commercial toggle |
 | FMP | `.L` from Premium | $49/mo | real-time claim is scoped to **US** ETFs | not found | commercial use of exchange data → enterprise |
 | Databento | **no XLON dataset** (US equities + futures) | — | — | yes | good terms, wrong geography |
@@ -240,7 +285,8 @@ before any of them is either adopted or written off. Note the prior on that prob
 ETP lines are small, numerous and issuer-specific, which is exactly where thin vendor coverage stops,
 and §5's structural rule means even full coverage is likely to arrive 15 minutes late.
 
-**One cheap lead left open:** LSE's own **Per Price Request** licence — £5,535/year with the first
+**One cheap lead left open:** LSE's own **Per Price Request** licence — **£5,812/year** for UK and
+International market Data (Schedule A 2026, §3.1.4 Other Licences; the 2025 figure was £5,535) with the first
 300,000 requests included, delivering *"all Level 1 components including best bid & offer"*. It is
 published under Redistribution, so whether a single self-consuming user may hold it is unknown.
 Worth an email to `marketdata@lseg.com` if IBKR falls through.
@@ -250,22 +296,31 @@ Worth an email to `marketdata@lseg.com` if IBKR falls through.
 **Interactive Brokers, "LSE UK (L1)", GBP 1.00/month non-professional.**
 
 - It is the **only retail-priced real-time LSE Level 1 feed with bid/ask** found in this sweep. The
-  next cheapest real-time route is LSEG direct at £6,500/year.
+  next cheapest real-time route is LSEG direct at £6,695/year (§5).
 - Bid/ask is native, which §3.3 shows is not a nicety but the difference between a mark source that
   works and one that trips #641 through most of the session.
 - ADR-0001 already names IBKR as the long-term equities broker, so this is a step onto a path the
   project had chosen anyway rather than a new dependency.
-- Non-professional status is what makes it £1 rather than £56/month, and its conditions (not
-  registered with a regulator, not an adviser, not employed by a financial institution) appear to
-  fit the owner — **to be confirmed by David, not inferred here.**
+- Non-professional status is what makes it £1 rather than £56/month. **Its conditions are not
+  paraphrased here on purpose.** IBKR's own test names **US** regulators specifically, and its
+  employment prong is about acting *in a role requiring registration* rather than "working at a
+  financial institution" — a paraphrase that sounds equivalent and is not. Eligibility is
+  **David's to confirm against IBKR's own wording at application time**, and nothing in this
+  document should be read as having settled it.
 
 Costs and unknowns to carry into that decision, none of them settled by this document:
 
 - **USD 500 minimum account equity** is required to hold any IBKR market-data subscription; fees are
   not pro-rated.
-- **Whether "LSE UK (L1)" covers the LSEETF segment these ETPs list on is NOT VERIFIED** — the
-  pricing page does not say. Ask IBKR before subscribing. If it does not, the recommendation is
-  unfunded.
+- **Whether "LSE UK (L1)" covers the segment these ETPs list on is NOT VERIFIED, and it is the
+  load-bearing unknown in this recommendation.** IBKR's *market-data* bundles for the venue are
+  `LSE` ("LSE UK") and `LSEIOB` ("LSE International"); the `LSE / LSEETF / LSEIOB1` trio is IBKR's
+  **commission** schedule, a different list, and the .co.uk entity's page omits `LSEETF` from it
+  altogether. So there is no "LSEETF market-data bundle" to buy, and the question is not which of
+  several bundles to pick but **whether the one GBP 1.00 "LSE UK" bundle carries these ETP lines at
+  all**. Ask IBKR before subscribing; if it does not, the recommendation is unfunded. (Neither
+  claim could be re-fetched here — `interactivebrokers.co.uk` answers **HTTP 403** to non-browser
+  requests, the same refusal noted for the docs site below.)
 - The **timestamp field on IBKR's tick-by-tick callback is NOT VERIFIED** (the docs site refuses
   non-browser fetches). Since `Mark.observed_at` must be the vendor's stamp, this needs confirming
   at integration time, not assumed.
@@ -301,8 +356,10 @@ implementation ships everything that does not depend on the answer:
 
 1. **Trading 212's API Terms bar algorithmic trading (§4.3), and this is an execution-venue
    question, not a data one.** Seek written consent, change venue, or change the automation posture.
-   #665/#666 rest on a premise these terms contradict.
-2. **Which vendor may serve the live mark.** Recommended: IBKR LSE UK (L1) at £1/month non-pro
+   Filed as [#896](https://github.com/dd-jp/samurai-trading-system/issues/896); #665/#666 rest
+   on a premise these terms contradict.
+2. **Which vendor may serve the live mark** — filed as
+   [#895](https://github.com/dd-jp/samurai-trading-system/issues/895). Recommended: IBKR LSE UK (L1) at £1/month non-pro
    (§6), subject to the LSEETF-segment question and the USD 500 minimum.
 3. **The USD majority (§3.2).** Narrow the universe to the GBP/GBX lines, or answer the FX question.
    Until then the orchestrator refuses to boot on a USD-declared line rather than guessing a rate.
