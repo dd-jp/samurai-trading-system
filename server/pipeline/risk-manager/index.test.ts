@@ -140,6 +140,35 @@ describe('RiskManagerImpl.evaluate — exits', () => {
     });
     expect(decision.binding_constraint).toBeNull();
   });
+
+  it('carries an unpriced flatten through with its flag and zeroed prices intact (#826)', () => {
+    // Risk sits BETWEEN the stage that sets `unpriced_exit` (Trader) and the
+    // only stage that reads it (Verdict, which skips its drift and stale-feed
+    // gates for such an intent). Both ends are tested at their own seam, so
+    // without this the middle hop is the one thing nothing pins: an edit that
+    // rebuilt the intent here instead of returning it verbatim would drop the
+    // flag, leave both suites green, and silently reinstate the `!(entry > 0)`
+    // no_go that strands a position through the close.
+    const manager = new RiskManagerImpl(makeConfig());
+    const intent = makeIntent({
+      intent_type: 'exit',
+      size: 100,
+      entry: 0,
+      stop: 0,
+      target: 0,
+      metadata: { ...makeIntent().metadata, exit_reason: 'flatten', unpriced_exit: true },
+    });
+    const input = makeInput({ intent });
+
+    const decision = manager.evaluate(input);
+
+    expect(decision.status).toBe('approved');
+    expect(decision.order_intent?.metadata.unpriced_exit).toBe(true);
+    expect(decision.order_intent?.entry).toBe(0);
+    expect(decision.order_intent).toEqual(intent);
+    // The size an exit fills is the held quantity, never a price-derived one.
+    expect(decision.modifications?.final_size).toBe(100);
+  });
 });
 
 describe('RiskManagerImpl.evaluate — a partly-valued book (#841)', () => {
