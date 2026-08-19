@@ -162,6 +162,7 @@ import {
 import type {
   BreakerConfig,
   RiskConfig,
+  RiskDecision,
   SessionBasisByClass,
 } from '../../pipeline/risk-manager/index.js';
 import {
@@ -169,8 +170,9 @@ import {
   RiskManagerImpl,
   resolveRiskConfig,
 } from '../../pipeline/risk-manager/index.js';
-import type { VerdictDecision } from '../../pipeline/verdict/index.js';
-import type { Bar } from '../../providers/market-data-service/index.js';
+import type { VerdictConfig, VerdictDecision } from '../../pipeline/verdict/index.js';
+import { VerdictImpl } from '../../pipeline/verdict/index.js';
+import type { Bar, MarketDataService } from '../../providers/market-data-service/index.js';
 import {
   AlwaysOpenCalendar,
   FixtureDataSource,
@@ -1045,17 +1047,87 @@ function exitPathOrder(
   };
 }
 
-/** A `go` verdict wrapping `order` — the only status `Execution.execute()` acts on. */
-function exitPathVerdict(order: OrderIntent, timestamp: Date): VerdictDecision {
-  return {
-    status: 'go',
-    order,
-    no_go_reason: null,
-    approval_path: 'automated',
-    would_require_approval: false,
-    idempotency_key: order.idempotency_key,
-    timestamp,
-  };
+/**
+ * The gate config the exit-path harness drives the REAL Verdict with (#894).
+ *
+ * This harness used to fabricate its own `go` (`exitPathVerdict`), which is
+ * how #894 stayed invisible in the one place a flatten is driven to the
+ * broker: a hand-built `go` cannot be refused by a gate, so the smoke run
+ * proved the exit MECHANICS and said nothing about whether a flatten survives
+ * the stage above them.
+ *
+ * Every dial below is the paper profile's own, with one deliberate exception.
+ * `max_mark_age` is widened because the fixture feed (`FixtureDataSource`,
+ * constructed with a single `SMOKE_RUN_INSTANT` mark) stamps every mark at one
+ * fixed instant while this harness advances its clock between phases — feed
+ * freshness is a property of the fixture here, not of the code under test, and
+ * `market-data-service`'s own suite owns that gate. The staleness, drift,
+ * dedup and breaker gates run exactly as shipped.
+ */
+const EXIT_PATH_VERDICT_CONFIG: VerdictConfig = {
+  // ADR-0007: no human in the path, which is also what production runs.
+  automation_level: { crypto: 'auto', stocks: 'auto' },
+  max_signal_age: { crypto: 5 * 60_000, stocks: 15 * 60_000 },
+  max_mark_age: { crypto: 24 * 60 * 60_000, stocks: 24 * 60 * 60_000 },
+  drift_tolerance_pct: { crypto: 0.005, stocks: 0.005 },
+  human_timeout: 5 * 60_000,
+  allow_extended_hours: true,
+  flag_thresholds: { size_over: 1_000_000 },
+};
+
+/**
+ * The REAL `VerdictImpl` decision for `order` — what `execute()` then acts on.
+ *
+ * A `no_go` throws rather than being returned: every scenario here is
+ * constructed to pass every gate, so a refusal is the harness having lost a
+ * precondition (or a gate having changed), and the smoke run must say which
+ * reason fired rather than quietly submitting nothing.
+ */
+async function exitPathVerdict(
+  order: OrderIntent,
+  deps: {
+    marketData: MarketDataService;
+    positionStore: SqliteExecutionStore;
+    clock: SimulatedClock;
+  },
+  step: string,
+): Promise<VerdictDecision> {
+  const decision = await new VerdictImpl().decide({
+    trace_id: 'smoke-exit-path',
+    risk_decision: {
+      status: 'approved' as const,
+      order_intent: order,
+      modifications: null,
+      binding_constraint: null,
+      reasons: [],
+      warnings: [],
+      risk_snapshot: { exposure: {}, drawdown_pct: 0, armed_breakers: [] },
+      next_breaker_state: [],
+    } satisfies RiskDecision,
+    clock: deps.clock,
+    marketData: deps.marketData,
+    // Crypto instruments (`EXIT_PATH_INSTRUMENTS`), so gate 4 does not consult
+    // this at all; the always-open calendar is what the rest of this run uses.
+    tradingCalendar: new AlwaysOpenCalendar(),
+    positionStore: deps.positionStore,
+    breakers: {
+      portfolio_tripped: false,
+      asset_class_tripped: { crypto: false, stocks: false },
+      armed_breakers: [],
+    },
+    config: EXIT_PATH_VERDICT_CONFIG,
+    mode: 'paper',
+    approvals: { requestApproval: async () => 'approved' as const },
+  });
+
+  if (decision.status !== 'go') {
+    throw new Error(
+      `smoke exit-path harness: '${step}' was refused by Verdict ` +
+        `(no_go: ${decision.no_go_reason ?? 'unknown'}) — the order never reached Execution`,
+    );
+  }
+
+  return decision;
 }
 
 /** Throws with the harness step named, rather than letting a silent no-op reach the gate. */
@@ -1191,9 +1263,16 @@ async function runExitPathScenarios(input: {
     return clock.now();
   };
 
-  /** Submits `order` as a `go`, asserting it actually reached the broker. */
+  const positionStore = new SqliteExecutionStore(db);
+
+  /**
+   * Drives `order` through the REAL Verdict and then Execution, asserting it
+   * actually reached the broker (#894 — the `go` is decided here, not
+   * fabricated).
+   */
   const submit = async (order: OrderIntent, step: string): Promise<void> => {
-    assertSubmitted(await execution.execute(exitPathVerdict(order, clock.now())), step);
+    const verdict = await exitPathVerdict(order, { marketData, positionStore, clock }, step);
+    assertSubmitted(await execution.execute(verdict), step);
   };
 
   // --- Scenario 1 (#508/#516/#517): open, exit in full. ------------------

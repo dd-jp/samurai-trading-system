@@ -879,6 +879,13 @@ async function buildFlattenExit(
         // `exactOptionalPropertyTypes` is on, and the flag is true-or-absent so
         // that `=== true` is the only test a reader can write (#826).
         ...(priced.unpriced ? { unpriced_exit: true as const } : {}),
+        // #894: the mandatory-flatten marker Verdict's gate-1 exemption reads.
+        // Derived from `exitReason` HERE, at the one place an exit intent is
+        // constructed, so the two discretionary exits cannot acquire it and no
+        // second call site has to be kept in step. Same spread form and the
+        // same true-or-absent shape as `unpriced_exit`, for the same
+        // `exactOptionalPropertyTypes` reason.
+        ...(exitReason === 'flatten' ? { mandatory_flatten: true as const } : {}),
         conviction: attribution.conviction,
         converged: attribution.converged,
         sizing: {

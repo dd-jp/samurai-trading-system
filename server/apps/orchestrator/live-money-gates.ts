@@ -132,22 +132,23 @@ export const LIVE_MONEY_GATES: readonly { readonly issue: number; readonly gap: 
     gap: "ADR-0018 D5's declared brackets imply a ~41.8% single-stock envelope against a ~20-25% tolerance, so the sizing this profile ships is unreconciled with the drawdown envelope it was sized against",
   },
   {
-    issue: 894,
-    // Verified OPEN 2026-08-19: `gh issue view 894`. Labelled BLOCKING(live) on
-    // the issue itself. Cited here per this module's own rule; see the comment
-    // left on #894 recording the citation.
+    issue: 900,
+    // Verified OPEN 2026-08-19: filed on that date and cited here in the same
+    // change; see the comment left on #900 recording the citation.
     //
-    // This entry is the survivor of #826, which said "marks and quotes are not
-    // failed over, so a single Alpaca outage stops the tick at the mark read
-    // with positions open". #826 is closed by the change that made the
-    // MANDATORY flat-by-close flatten degrade to an unpriced exit instead of
-    // throwing, so the old sentence is no longer true as written — but the
-    // operator-facing consequence survived intact, because the degraded
-    // flatten is refused one stage later by Verdict's staleness gate (#894)
-    // and because quotes, entries and the discretionary exits were never in
-    // #826's fix at all. A closed issue is deleted, not struck through, so the
-    // citation points at the open issue that keeps the gap open.
-    gap: "a data-source outage still leaves no exit path that completes with positions open — quotes are not failed over at all, every entry and both discretionary exits (signal_decay, direction_flip) still stop the tick at the mark read, and the mandatory flat-by-close flatten, which does degrade to an unpriced exit rather than throwing, is no_go'd one stage later by Verdict's staleness gate on every flatten it decides",
+    // This entry is the survivor of #894's, which was itself the survivor of
+    // #826's. Each step closed one half of the same operator-facing gap and
+    // left the rest standing, so the CLAIM is narrowed rather than deleted:
+    // #826 made the mandatory flat-by-close flatten degrade to an unpriced
+    // exit instead of throwing, and #894 stopped Verdict's staleness gate
+    // refusing that degraded flatten one stage later — so the book now HAS one
+    // exit path that completes during an outage, which the old wording denied.
+    // What #894 did not touch, and never claimed to: quotes are not failed
+    // over at all, and every entry plus both discretionary exits still stop
+    // the tick at the mark read. A closed issue is deleted, not struck
+    // through, so the citation moves to the open issue that carries what is
+    // left.
+    gap: 'a data-source outage leaves the book able to take exactly ONE action — quotes are not failed over at all, and every entry plus both discretionary exits (signal_decay, direction_flip) still stop the tick at the mark read, so the clock-driven flat-by-close flatten is the only decision that completes while a vendor is down',
   },
 ];
 

@@ -102,6 +102,33 @@ export interface OrderIntentMetadata {
    * not carry it.
    */
   unpriced_exit?: true;
+  /**
+   * #894: this exit is ADR-0014's MANDATORY flat-by-close flatten — the one
+   * exit the horizon does not make optional.
+   *
+   * Set by `buildFlattenExit` (trader/decide.ts) exactly when its
+   * `exitReason` is `'flatten'`, which both call paths reach only from inside
+   * the flatten window (`withinFlattenWindow`), and never for
+   * `signal_decay`/`direction_flip`. Read by `VerdictImpl.decide`, which skips
+   * gate 1 (`staleness`) for such an intent: a flat-by-close exit is not
+   * acting on a stale OPINION, it is acting on the clock, so the age of the
+   * signal that opened the lot is not a reason to refuse it. Every other
+   * intent — including the two discretionary exits, which ARE acting on an
+   * opinion — is bounded by `max_signal_age` exactly as before.
+   *
+   * A SEPARATE field rather than Verdict re-reading `exit_reason === 'flatten'`
+   * at the gate, deliberately. That would put the policy question ("which
+   * intents may skip a freshness bound") inside the Trader's exit TAXONOMY,
+   * where a fourth `ExitReason` added later could widen a live gate's
+   * exemption without anyone editing Verdict. The marker is one field with one
+   * writer, and widening it takes an edit to the line that sets it.
+   *
+   * Optional in the TYPE and literally `true` when present, matching
+   * `unpriced_exit` above and for the same reason: `=== true` is the only test
+   * a reader can write, and the absent case cannot be spelled `false` in one
+   * place and omitted in another.
+   */
+  mandatory_flatten?: true;
   conviction: number;
   converged: boolean;
   sizing: {

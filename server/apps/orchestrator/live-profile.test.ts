@@ -235,13 +235,14 @@ describe('LIVE_MONEY_GATES', () => {
     // #826 joins the ghost list on 2026-08-19, closed by the change that made
     // the mandatory flat-by-close exit survive a stalled mark source, and
     // deleted from LIVE_MONEY_GATES in that same edit per this module's rule.
-    // The operator-facing gap #826 named did NOT close with it — quotes are
-    // still not failed over, entries and the discretionary exits still stop at
-    // the mark read, and the degraded flatten is refused downstream — so it is
-    // cited as #894, which is open.
+    // #894 joins it the same day, closed by the change that stopped Verdict's
+    // staleness gate refusing that flatten one stage later. Neither closure
+    // closed the whole operator-facing gap — quotes are still not failed over
+    // and entries plus both discretionary exits still stop at the mark read —
+    // so the surviving half is cited as #900, which is open.
     // (#800 was already retired here by PR #890, which re-pointed its entry at
     // #888.)
-    const closed = [526, 519, 548, 549, 550, 551, 562, 384, 375, 333, 525, 800, 826];
+    const closed = [526, 519, 548, 549, 550, 551, 562, 384, 375, 333, 525, 800, 826, 894];
 
     for (const gate of LIVE_MONEY_GATES) {
       expect(closed).not.toContain(gate.issue);
@@ -255,7 +256,7 @@ describe('LIVE_MONEY_GATES', () => {
     // Pinned as literals rather than derived from LIVE_MONEY_GATES: a test that
     // renders the constant and asserts it contains the constant passes for any
     // list, which is why the seven ghosts survived a suite of ~2900 tests.
-    expect(LIVE_MONEY_GATES.map((gate) => gate.issue)).toEqual([895, 888, 886, 798, 894]);
+    expect(LIVE_MONEY_GATES.map((gate) => gate.issue)).toEqual([895, 888, 886, 798, 900]);
   });
 
   it('hands the reader a command instead of only telling them to re-check', () => {
@@ -293,7 +294,7 @@ describe('the live-boot warning as an operator actually receives it', () => {
   it('names every gate that is open, at the boot path', () => {
     const message = liveBootWarning();
 
-    for (const issue of [895, 888, 886, 798, 894]) {
+    for (const issue of [895, 888, 886, 798, 900]) {
       expect(message).toContain(`#${issue}`);
     }
     expect(message).toContain('#238');
@@ -302,7 +303,7 @@ describe('the live-boot warning as an operator actually receives it', () => {
   it('names no gate that has closed, at the boot path', () => {
     const message = liveBootWarning();
 
-    for (const issue of [526, 519, 548, 549, 550, 551, 562, 800, 826]) {
+    for (const issue of [526, 519, 548, 549, 550, 551, 562, 800, 826, 894]) {
       expect(message).not.toContain(`#${issue}`);
     }
   });

@@ -359,10 +359,14 @@ describe('paperStartingProfile', () => {
       // module's own rule: the change that made the mandatory flat-by-close
       // exit survive a stalled mark source closes it.
       '#826',
+      // Closed the same day by the change that stopped Verdict's staleness
+      // gate refusing that flatten one stage later; the surviving half of the
+      // gap is cited as #900.
+      '#894',
     ]) {
       expect(message).not.toContain(closed);
     }
-    for (const open of ['#895', '#888', '#886', '#798', '#894']) {
+    for (const open of ['#895', '#888', '#886', '#798', '#900']) {
       expect(message).toContain(open);
     }
     expect(message).toContain('#238');
