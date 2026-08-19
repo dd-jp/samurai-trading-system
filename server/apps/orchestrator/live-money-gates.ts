@@ -96,15 +96,34 @@ export const LIVE_MONEY_GATES: readonly { readonly issue: number; readonly gap: 
     gap: 'the live equity leg still has no chosen mark vendor — the LseMarkDataSource seam exists but the composition root has no client to hand it, so a live LSE boot refuses by design; doc 34 recommends IBKR LSE UK L1 and records that the T212 API can neither quote nor lawfully be automated',
   },
   {
+    issue: 888,
+    // Verified OPEN 2026-08-19: `gh issue view 888`. Arming-blocking on the
+    // issue itself. Note this profile's ceiling env var is named
+    // SAMURAI_LIVE_MAX_CAPITAL_USD — USD — against a GBP book.
+    //
+    // This entry was #800 until 2026-08-19. #800 named the 2x denominator
+    // disagreement, which PR #885 RESOLVED and which auto-closed #800 on merge
+    // — leaving this list citing a closed issue, the exact staleness the module
+    // doc forbids. The gap that survived #800 is split out as #888 so the
+    // citation points at something open. A closed issue is deleted, not
+    // struck through.
+    gap: 'portfolio.equity is one blended GET /v2/account figure with no per-leg accounting, so every D5 envelope is correct only while the funded equity equals the declared book — fund the ISA past it and the same fractions authorise proportionally more cash than the book was sized for',
+  },
+  {
+    issue: 886,
+    // Verified OPEN 2026-08-19: `gh issue view 886`. Labelled BLOCKING(arming)
+    // on the issue itself. Cited here per this module's own rule; see the
+    // comment left on #886 recording the citation.
+    gap: 'per_trade_size_cap is a STATIC cash figure derived from the boot ceiling while the D5 envelope is a live fraction of portfolio.equity, so which one binds depends on how far equity sits below that ceiling — the two caps are not comparable as fractions and neither side of the pair is reliably the operative limit on an entry',
+  },
+  {
     issue: 798,
     // Verified OPEN 2026-08-19: `gh issue view 798`.
     gap: "ADR-0018 D5's declared brackets imply a ~41.8% single-stock envelope against a ~20-25% tolerance, so the sizing this profile ships is unreconciled with the drawdown envelope it was sized against",
   },
   {
     issue: 826,
-    // Verified OPEN 2026-08-19: `gh issue view 826`. #800 was deleted from this
-    // list on the same date: `gh issue view 800` reports it CLOSED
-    // 2026-08-18T23:51Z, and a closed issue is deleted here, not struck through. The live successor to the
+    // Verified OPEN 2026-08-19: `gh issue view 826`. The live successor to the
     // closed #562 — the failover gap moved from bars to marks and quotes, it
     // did not clear.
     gap: 'marks and quotes are not failed over, so a single Alpaca outage stops the tick at the mark read with positions open',

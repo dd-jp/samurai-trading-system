@@ -79,6 +79,27 @@ describe('the timestamp round-trip (#837 M7)', () => {
     expect(() => toStoredTimestamp(new Date('not a date'))).toThrow(RangeError);
   });
 
+  // #884: a writer that strips milliseconds after this file's own format
+  // assertions run (e.g. `toStoredTimestamp` returning
+  // `text.replace(/\.\d{3}Z$/, 'Z')`) IS caught by this file's own
+  // "writes the fixed-width..."/"round-trips..." tests and by
+  // `sqlite-setup-store.test.ts`. What nothing catches is the guard itself
+  // being weakened, because no real `Date.prototype.toISOString()` call ever
+  // emits a non-millisecond string — production never reaches the reject
+  // branch. Loosening STORED_TIMESTAMP to make the milliseconds group
+  // optional (`(\.\d{3})?Z$`) left every other test in this suite and in
+  // `sqlite-shared-store`/`sqlite-setup-store` green — only this test failed.
+  // Mock `toISOString()` to drive a non-millisecond string through the
+  // guard's real entry point and pin that it still rejects.
+  it('rejects a non-millisecond format even though the input Date is valid', () => {
+    const spy = vi.spyOn(Date.prototype, 'toISOString').mockReturnValue('2026-08-18T09:30:00Z');
+    try {
+      expect(() => toStoredTimestamp(new Date('2026-08-18T09:30:00.000Z'))).toThrow(/fixed-width/);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('passes null through on both sides of a nullable column', () => {
     expect(toStoredTimestampOrNull(null)).toBeNull();
     expect(fromStoredTimestampOrNull(null)).toBeNull();

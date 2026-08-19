@@ -44,6 +44,8 @@ Gating was proposed to fix a cost problem. Measurement shows the problem does no
 
 **And gating is not free.** It removes trading days, so it removes gross edge with them. Cutting 252 equity trades to 156 costs ~**£141/yr of gross** to save ~£5/yr of spend — a 28:1 loss.
 
+> **Superseded 2026-08-18 — every cost figure in the three paragraphs above is withdrawn.** See the amendment at the foot of this ADR. The `£252`/`£89` bill, the `+£139`/`+£729` book, the `~£12`/`~£5` equity-leg pair and the `~£141`-of-gross-against-£5 comparison behind the **28:1** loss are each a 15-minute-cadence, crypto-in-scope number, and crypto left Samurai's scope on 2026-08-16 ([ADR-0015](0015-live-venue-account-and-book-split.md)'s amendment); the `£141` term is additionally `96 × +0.195%/trade`, voided above. Rebuilt equities-only the bill is **~£58/yr** (`docs/research/54-capital-economics-vs-signal-accuracy.md`), and post-[#617](https://github.com/dd-jp/samurai-trading-system/issues/617) debate spend is **per debate run**, so a gate scales the trading term and the bill together and the 28:1 comparison has no fixed terms left. **Kept for provenance, not for use. Decision 2 itself is unchanged** and now rests on the #685 event-day measurement recorded below.
+
 ### The bar for revisiting
 
 Gating is an **expectancy** question, not a cost question. It pays only if catalyst days are genuinely better:
@@ -52,9 +54,9 @@ Gating is an **expectancy** question, not a cost question. It pays only if catal
 156·e_c·750 − 85  ≥  369 − 89     ⇒     e_c ≥ 0.312%
 ```
 
-**Catalyst days must deliver ≥ 0.312%/trade against the 0.195% all-day average — a 60% expectancy uplift.** Held by [#655](https://github.com/dd-jp/samurai-trading-system/issues/655). If the event study clears it, gate and reopen #658; if not, the universe trades every day the selector finds a setup.
+**Catalyst days must deliver ≥ 0.312%/trade against the 0.195% all-day average — a 60% expectancy uplift.** Held by [#655](https://github.com/dd-jp/samurai-trading-system/issues/655). **Withdrawn 2026-08-18 — see the amendment at the foot of this ADR; the replacement bar is an accuracy threshold, not an uplift.** If the event study clears it, gate and reopen #658; if not, the universe trades every day the selector finds a setup.
 
-> **Restated 2026-08-10.** The 0.312% bar and the £369 term in it both derive from the 0.195%/trade figure the amendment below voids, so **the arithmetic in this block no longer computes** — it is kept for provenance, not for use. **The decision it supports is unchanged and now rests on direct measurement instead**: earnings-reaction sessions are 1.0378%/trade *worse* than ordinary ones (t = −2.99) and are 1.62% of sessions (re-measured 2026-08-18 by [#685](https://github.com/dd-jp/samurai-trading-system/issues/685); previously 0.92%/trade, t = −2.66, 1.73%). The bar #655 must clear is now stated relative to whatever the entry signal delivers, not to a fixed all-day constant.
+> **Restated 2026-08-10.** The 0.312% bar and the £369 term in it both derive from the 0.195%/trade figure the amendment below voids, so **the arithmetic in this block no longer computes** — it is kept for provenance, not for use. **The decision it supports is unchanged and now rests on direct measurement instead**: earnings-reaction sessions are 1.0378%/trade *worse* than ordinary ones (t = −2.99) and are 1.62% of sessions (re-measured 2026-08-18 by [#685](https://github.com/dd-jp/samurai-trading-system/issues/685); previously 0.92%/trade, t = −2.66, 1.73%). The bar #655 must clear is now stated relative to whatever the entry signal delivers, not to a fixed all-day constant. **Sharpened 2026-08-18: because that anchor is *negative* at the declared brackets, the bar is not a relative uplift at all — it is an absolute accuracy threshold, and the gating question is a comparison of two accuracies. See the amendment at the foot of this ADR.**
 
 ## Consequences
 
@@ -65,6 +67,16 @@ Gating is an **expectancy** question, not a cost question. It pays only if catal
 3. **Catalyst-gating** — ~£5/yr, and likely net negative
 
 Anything proposing to improve the economics should be checked against this ordering first.
+
+> **Superseded 2026-08-18 — the whole ranking is crypto-era and its figures are withdrawn.** Lever 1 is a
+> **crypto** fee schedule and crypto left Samurai's scope on 2026-08-16 ([ADR-0015](0015-live-venue-account-and-book-split.md)'s
+> amendment), so the largest lever no longer exists for this system; levers 2 and 3 (`£252 → £89/yr`, `~£5/yr`)
+> are 15-minute-cadence, crypto-in-scope numbers. The equities-only bill is **~£58/yr** in total
+> (`docs/research/54-capital-economics-vs-signal-accuracy.md`), which is worth **~0.55 pp** of accuracy at
+> £1,000 of position notional — but **1.58 pp on the index bracket at the £350 position notional D5 resolves
+> to** out of the £1,000 book, over half QQQ's 2.96 pp geometry bar, so it is second-order only at the larger
+> illustrative notional. **On the equities-only book the
+> economics are governed by the entry signal's accuracy, not by any lever in this list.** Kept for provenance.
 
 **Single-name concentration is now the norm, not a risk to be diversified away.** The Risk Manager's correlation and concentration limits were specced against a diversified basket and need re-reading against a universe deliberately chosen for co-movement.
 
@@ -94,7 +106,7 @@ Decision 1's reach rates were measured; its **expectancy** was inferred from the
 
 **Survives — Decision 1's universe choice.** A broad tracker still cannot reach an intraday take-profit; leveraged ETPs still can. The universe is unchanged.
 
-**Survives — Decision 2, and it is now better supported.** Event-conditioned levels were tested directly: earnings-reaction sessions are **−1.0378%/trade worse** than ordinary sessions (t = −2.99), and they are **1.62% of sessions**, so conditioning on them cannot move the blended result regardless of sign. (Re-measured 2026-08-18 by [#685](https://github.com/dd-jp/samurai-trading-system/issues/685) — previously −0.92%/trade at t = −2.66 over 1.73% of sessions; sign and significance both survived, and the smaller share makes the structural argument stronger.) Catalyst gating remains rejected, now on measurement rather than cost arithmetic. The 0.312%/trade bar held by [#655](https://github.com/dd-jp/samurai-trading-system/issues/655) stands, and this evidence makes it harder to clear, not easier.
+**Survives — Decision 2, and it is now better supported.** Event-conditioned levels were tested directly: earnings-reaction sessions are **−1.0378%/trade worse** than ordinary sessions (t = −2.99), and they are **1.62% of sessions**, so conditioning on them cannot move the blended result regardless of sign. (Re-measured 2026-08-18 by [#685](https://github.com/dd-jp/samurai-trading-system/issues/685) — previously −0.92%/trade at t = −2.66 over 1.73% of sessions; sign and significance both survived, and the smaller share makes the structural argument stronger.) Catalyst gating remains rejected, now on measurement rather than cost arithmetic. The 0.312%/trade bar held by [#655](https://github.com/dd-jp/samurai-trading-system/issues/655) stands, and this evidence makes it harder to clear, not easier. *(Superseded 2026-08-18 — the 0.312% figure is withdrawn with the rest of the +0.195% family; #655 now holds an accuracy-threshold bar instead. This sentence's substantive claim — that the event-day measurement makes gating harder to justify — is unaffected. See the amendment below.)*
 
 **Does not survive — "the equity leg returns 50.7%/yr".** Any figure downstream of +0.195%/trade is void. That includes the £/yr equity numbers this ADR and [#658](https://github.com/dd-jp/samurai-trading-system/issues/658) used to rank levers. The **ordering** of the levers is unaffected — the crypto fee schedule was and remains the largest — but the equity leg's contribution is not a positive constant.
 
@@ -110,3 +122,17 @@ The measurement replaces a profit claim with **a bar the entry signal must clear
 This is the first falsifiable statement of what the debate layer has to be worth. It is also why [#625](https://github.com/dd-jp/samurai-trading-system/issues/625) is now the critical path: a system that has produced zero trades has never been measured against it.
 
 **Not overturned by this amendment:** the universe, the no-gating decision, and the ISA/venue constraints of [ADR-0015](0015-live-venue-account-and-book-split.md). **Still open:** [#666](https://github.com/dd-jp/samurai-trading-system/issues/666) must measure real LSE ETP spreads per subclass — the 0.18% and 0.41% figures are each a single quote, and both bars move directly with them.
+
+## Amendment, 2026-08-18 — the revisit bar is rehomed, and it changes shape ([#840](https://github.com/dd-jp/samurai-trading-system/issues/840))
+
+**Decision 1 and Decision 2 both stand. What is withdrawn is the *form* of the bar for revisiting Decision 2**, which this ADR twice records #655 as holding.
+
+`docs/research/54-capital-economics-vs-signal-accuracy.md` restates #658's capital arithmetic against [`52-exit-geometry-and-subclass-odds.md`](../research/52-exit-geometry-and-subclass-odds.md)'s simulated per-trade expectancy, in place of the `+0.195%/trade` the 2026-08-10 amendment voided. Three consequences for this ADR:
+
+1. **The `≥ 0.312%/trade` bar is withdrawn, not merely uncomputable.** Both of its terms — the `0.195%` all-day anchor and the `£369`/`£89`/`£85` cost terms — are gone: the first with the +0.195% family, the second because every one of those cost figures is a 15-minute-cadence, crypto-in-scope number and crypto left scope on 2026-08-16 ([ADR-0015](0015-live-venue-account-and-book-split.md)'s amendment). Rebuilt equities-only from the measured `$0.0060`/debate run at the 1h debate bar, the bill is **~£58/yr**.
+
+2. **The replacement is an accuracy threshold, because the anchor is negative.** At the declared brackets, out of sample, per-trade `E_net` is negative on all seven measured underlyings, so there is no positive average for a percentage uplift to be taken over. Break-even is `50% + bar`: **51.29% (PLTR) to 57.16% (MSTR)**, ~53.51% on QQQ at £1,000 of position notional. The revisit condition is correspondingly a **comparison of two accuracies** — is directional accuracy higher on catalyst days than on all days? — rather than a cost trade.
+
+3. **Decision 2's cost arithmetic is superseded; Decision 2 is not.** The "28:1", the "gating aims at the wrong 14%", and the £141-against-£5 comparison are all void — post-[#617](https://github.com/dd-jp/samurai-trading-system/issues/617) debate spend is per debate run, so a gate scales the trading term and the bill together and the comparison has no fixed terms left. **Decision 2 rests on the #685 event-day measurement instead**, which is independent of cost and is recorded above.
+
+**#655 continues to hold the revisit bar** in its new form, so the citations at the head of this ADR and in Decision 2 remain live. Doc 52's 126 trials are inherited by any figure above; nothing here is selected or adopted.
