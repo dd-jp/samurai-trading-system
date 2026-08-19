@@ -820,6 +820,76 @@ describe('buildTraderSteps unpriced flatten escalation (#826)', () => {
     expect(posted[0]?.reported_at).toEqual(INSIDE_WINDOW);
   });
 
+  /**
+   * The OTHER binding — the decision-path `trader` step.
+   *
+   * `buildTraderSteps` threads `onUnpricedFlatten` twice, and until this case
+   * existed only the tick-path thread was pinned: deleting the `trader` bind
+   * left all ~3900 tests green, which is this repo's dominant defect shape (a
+   * mechanism that is tested and a wire that nothing holds).
+   *
+   * The debate is deliberately NEUTRAL. `routeDecision` decides flat-by-close
+   * ABOVE its `neutral || !converged` skip — that ordering is the load-bearing
+   * part of the branch's own comment — so a neutral debate is exactly the case
+   * that reaches `buildFlattenExit` on this path, and it reaches it without the
+   * pass needing a working equity read (the strict snapshot throws here, since
+   * the same dark mark it captures is the one under test).
+   */
+  it('pages the operator when the DECISION path decides the unpriced flatten', async () => {
+    const posted: ExitValuationDegradedAlert[] = [];
+    const { trader } = buildTraderSteps({
+      marketData: {
+        ...FAKE_MARKET_DATA,
+        getMark: vi.fn(async () => {
+          throw new Error(STALL);
+        }),
+      },
+      circuitBreakers: new CircuitBreakers({
+        daily_loss_pct: 0.05,
+        daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
+        max_drawdown_pct: 0.2,
+        max_consecutive_losses: 5,
+        volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
+        auto_rearm: { recovery_drawdown_pct: 0.05, max_days_tripped: 5 },
+      }),
+      accountState: FAKE_ACCOUNT_STATE,
+      volatility: FAKE_VOLATILITY,
+      getOpenPositions: async () => [HELD],
+      maxMarkAge: TEST_MAX_MARK_AGE,
+      mode: 'paper',
+      breakerState: NOOP_BREAKER_STATE,
+      portfolioSnapshots: new Map(),
+      config: CONFIG,
+      setupStore: new FixtureSetupStore(),
+      getExitFillSizes: async () => new Map<string, number>(),
+      sessionCalendars: {
+        crypto: new AlwaysOpenCalendar(),
+        stocks: new UsEquityRegularHoursCalendar(),
+      },
+      exitValuationAlerts: {
+        postExitValuationDegradedAlert: (alert) => posted.push(alert),
+      },
+    });
+
+    const intent = await trader({
+      trace_id: TRACE_ID,
+      instrument: 'AAPL',
+      debate: makeDebate({ direction: 'neutral', synthesis: 'neutral', bar_timestamp: TICK_BAR }),
+      clock: WINDOW_CLOCK,
+    });
+
+    expect(intent?.intent_type).toBe('exit');
+    expect(intent?.metadata.exit_reason).toBe('flatten');
+    expect(intent?.metadata.unpriced_exit).toBe(true);
+    // The wire, which is what a deleted bind breaks — the intent above still
+    // degrades without it.
+    expect(posted).toHaveLength(1);
+    expect(posted[0]?.seam).toBe('trader');
+    expect(posted[0]?.instrument).toBe('AAPL');
+    expect(posted[0]?.unvalued_instruments).toEqual(['AAPL']);
+    expect(posted[0]?.reason).toContain('timed out');
+  });
+
   it('does not page when the mark reads cleanly', async () => {
     const posted: ExitValuationDegradedAlert[] = [];
     const exitCheck = buildTraderSteps({

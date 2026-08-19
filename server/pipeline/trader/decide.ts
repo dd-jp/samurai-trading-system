@@ -735,6 +735,16 @@ interface ExitAttribution {
  * harm, so it is the only one that degrades; the other two keep propagating
  * the throw exactly as before.
  *
+ * ## The trigger is ANY throw, not a feed stall
+ *
+ * The degradation keys on `getMark` throwing, and nothing narrower: a symbol
+ * mapping that resolves to no instrument, a `marketData` wired to a source that
+ * does not serve this venue, and a stalled feed are one case here. That is
+ * correct rather than merely tolerable, because the flatten's size comes from
+ * our own position store and its price fields are never read — an exit is
+ * sized to the held quantity, so a misconfiguration cannot make a degraded
+ * flatten close the wrong amount, only an unpriced one.
+ *
  * ## The control plane is a different service
  *
  * Alpaca serves both marks and orders here, so a fair question is whether a
