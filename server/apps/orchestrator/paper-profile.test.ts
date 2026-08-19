@@ -357,7 +357,7 @@ describe('paperStartingProfile', () => {
     ]) {
       expect(message).not.toContain(closed);
     }
-    for (const open of ['#734', '#800', '#798', '#826']) {
+    for (const open of ['#665', '#798', '#826']) {
       expect(message).toContain(open);
     }
     expect(message).toContain('#238');

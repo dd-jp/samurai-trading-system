@@ -85,25 +85,26 @@
  */
 export const LIVE_MONEY_GATES: readonly { readonly issue: number; readonly gap: string }[] = [
   {
-    issue: 734,
-    // Verified OPEN 2026-08-18: `gh issue view 734`.
-    gap: 'the live equity leg has no mark source — no DataSource serves the LSE, so the GBP LSE-ETP book ADR-0015 puts live capital in cannot be priced at all, while this profile boots the Alpaca clients',
-  },
-  {
-    issue: 800,
-    // Verified OPEN 2026-08-18: `gh issue view 800`. Labelled BLOCKING(arming)
-    // on the issue itself. Note this profile's ceiling env var is named
-    // SAMURAI_LIVE_MAX_CAPITAL_USD — USD — against a GBP book.
-    gap: 'Trader and the ADR-0018 D5 cap disagree 2x on what portfolio.equity denominates, so the size that reaches the broker is not the size either side believes it authorised',
+    issue: 665,
+    // Verified OPEN 2026-08-19: `gh issue view 665`. Replaces the #734 entry,
+    // which closed with the LSE mark SEAM built but its vendor unchosen — the
+    // seam is not the gate, the vendor is. Cited here rather than #666 because
+    // #666 is a measurement on the T212 demo API, and doc 34 §4 found that API
+    // cannot serve a mark at all (no quote endpoint, no timestamp on the one
+    // price field, and API Terms 4.2(a) prohibiting algorithmic trading) —
+    // so the open question is the venue/vendor itself, which is #665's.
+    gap: 'the live equity leg still has no chosen mark vendor — the LseMarkDataSource seam exists but the composition root has no client to hand it, so a live LSE boot refuses by design; doc 34 recommends IBKR LSE UK L1 and records that the T212 API can neither quote nor lawfully be automated',
   },
   {
     issue: 798,
-    // Verified OPEN 2026-08-18: `gh issue view 798`.
+    // Verified OPEN 2026-08-19: `gh issue view 798`.
     gap: "ADR-0018 D5's declared brackets imply a ~41.8% single-stock envelope against a ~20-25% tolerance, so the sizing this profile ships is unreconciled with the drawdown envelope it was sized against",
   },
   {
     issue: 826,
-    // Verified OPEN 2026-08-18: `gh issue view 826`. The live successor to the
+    // Verified OPEN 2026-08-19: `gh issue view 826`. #800 was deleted from this
+    // list on the same date: `gh issue view 800` reports it CLOSED
+    // 2026-08-18T23:51Z, and a closed issue is deleted here, not struck through. The live successor to the
     // closed #562 — the failover gap moved from bars to marks and quotes, it
     // did not clear.
     gap: 'marks and quotes are not failed over, so a single Alpaca outage stops the tick at the mark read with positions open',
@@ -117,7 +118,7 @@ export const LIVE_MONEY_GATES: readonly { readonly issue: number; readonly gap: 
  * a date newer than the last verification is a false claim in an operator-facing
  * safety message, and a date older than the list is what #868 was filed about.
  */
-export const LIVE_MONEY_GATES_VERIFIED_ON = '2026-08-18';
+export const LIVE_MONEY_GATES_VERIFIED_ON = '2026-08-19';
 
 /** The command that re-verifies the list, named in the operator-facing summary. */
 export const LIVE_MONEY_GATES_RECHECK_COMMAND = 'yarn check:live-gates';

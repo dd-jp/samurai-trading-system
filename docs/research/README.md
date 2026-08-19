@@ -48,6 +48,7 @@ Rules:
 | **Tick latency economics** | [`41-tick-latency-economics.md`](41-tick-latency-economics.md) | MEASURED (#657/#670) — τ\* = 21.8 min; drift mean-reverts, tail diffuses. ADR-0008's $3.0/day was 3.4x high |
 | **Market intelligence** | [`20-mi-decisions.md`](20-mi-decisions.md) | DECIDED — Alpaca News + GDELT + calendar spine; Massive and Guardian killed |
 | **Data vendors** | [`30-data-vendor-decisions.md`](30-data-vendor-decisions.md) | SETTLED — the whole historical stack runs at £0 |
+| **LSE live mark source** | [`34-lse-mark-source-options.md`](34-lse-mark-source-options.md) | MEASURED (#734) — **the live equity leg still has no mark source, and the blocker is bigger than data.** Alpaca and Polygon VERIFIED absent from the LSE with this project's own keys. **Trading 212 cannot serve a mark at all**: its API has no quote endpoint, its one price field (`Position.currentPrice`) exists only for held instruments and carries no timestamp, and its API Terms **4.2(a) expressly prohibit Algorithmic Trading** as §11 defines it — which describes Samurai verbatim and is a **venue** question, not a data one. Every retail vendor swept is 15–20 min delayed, EOD, or US-only, because LSE only lets Level 1 be redistributed free at ≥15 min. **Recommendation: IBKR "LSE UK (L1)", ~GBP 1/month non-professional** — the only retail-priced real-time LSE L1 with bid/ask found; needs an account and confirmation it covers the LSEETF segment. Two measurements bind independently of vendor: **8 of 11 pool rows declare USD**, so the GBP-only restriction #659 asserts is not true of the pool; and print gaps exceed the 15-min `max_mark_age` bound on **6 of 11 lines (65.5% on 3AAP)**, so a **last-trade** mark fails #641 by illiquidity alone — the mark must be a **quote midpoint** |
 | **Stack register** | [`../techstack.md`](../techstack.md) | LIVING — moved out of `research/`; it is a register, not a dated artifact |
 
 ## The live set
@@ -60,7 +61,7 @@ Rules:
 
 **Market intelligence** — `20` decisions, [`21-mi-ingestion-architecture.md`](21-mi-ingestion-architecture.md), [`22-mi-source-licensing.md`](22-mi-source-licensing.md), [`23-polymarket-source.md`](23-polymarket-source.md).
 
-**Data vendors** — `30` decisions, [`31-free-ohlcv-evidence.md`](31-free-ohlcv-evidence.md), [`32-vendor-api-reference.md`](32-vendor-api-reference.md).
+**Data vendors** — `30` decisions, [`31-free-ohlcv-evidence.md`](31-free-ohlcv-evidence.md), [`32-vendor-api-reference.md`](32-vendor-api-reference.md), [`33-intraday-data-availability.md`](33-intraday-data-availability.md), [`34-lse-mark-source-options.md`](34-lse-mark-source-options.md).
 
 **Infra** — [`40-dashboard-framework-and-hosting.md`](40-dashboard-framework-and-hosting.md), [`41-tick-latency-economics.md`](41-tick-latency-economics.md). The paper-soak gate passed 2026-08-06 (typecheck/lint/build clean, 2282 tests, `yarn smoke` PASS, $50/14d budget, 15-min ticks) — record in [`archive/2026-08-06-soak-readiness.md`](archive/2026-08-06-soak-readiness.md). Three caveats stand: the mechanical layer has no demonstrated edge, two of three analysts run on an empty store, and three built learning layers are still unfed (#435, #465, #328).
 

@@ -246,7 +246,7 @@ describe('LIVE_MONEY_GATES', () => {
     // Pinned as literals rather than derived from LIVE_MONEY_GATES: a test that
     // renders the constant and asserts it contains the constant passes for any
     // list, which is why the seven ghosts survived a suite of ~2900 tests.
-    expect(LIVE_MONEY_GATES.map((gate) => gate.issue)).toEqual([734, 800, 798, 826]);
+    expect(LIVE_MONEY_GATES.map((gate) => gate.issue)).toEqual([665, 798, 826]);
   });
 
   it('hands the reader a command instead of only telling them to re-check', () => {
@@ -284,7 +284,7 @@ describe('the live-boot warning as an operator actually receives it', () => {
   it('names every gate that is open, at the boot path', () => {
     const message = liveBootWarning();
 
-    for (const issue of [734, 800, 798, 826]) {
+    for (const issue of [665, 798, 826]) {
       expect(message).toContain(`#${issue}`);
     }
     expect(message).toContain('#238');
