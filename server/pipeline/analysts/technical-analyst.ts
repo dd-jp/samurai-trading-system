@@ -343,10 +343,42 @@ export const SQUEEZE_ON_BELOW = 1;
 
 /**
  * The cap the gate applies. 0.40 is the issue's number, taken as given rather
- * than searched — see `AXIS_WEIGHTS`. It sits below the 0.55 conviction floor
- * the stocks path needs (memory: "System Cannot Trade", #625), which is the
- * point: a non-trending or coiled tape should not be able to carry an entry on
- * technicals alone.
+ * than searched — see `AXIS_WEIGHTS`.
+ *
+ * **It is a DAMPER, not a veto, and #745's original claim that it was a veto
+ * was wrong (#870).** That claim read: 0.40 "sits below the 0.55 conviction
+ * floor ... a non-trending or coiled tape should not be able to carry an entry
+ * on technicals alone." The first half is true of this constant and irrelevant
+ * to the second: the cap binds on the ANALYST's confidence, and
+ * `computeConvictionScore` then combines it with the mediator's stance and the
+ * evidence average. On the all-absent desk — sentiment and fundamental both
+ * `NO_DATA_MARKER`, the shape every recorded soak debate ran on — conviction is
+ * `0.5 + 0.2c` in the capped confidence `c`, so a capped 0.40 yields **0.58**,
+ * above the floor. Measured by `server/tools/measure-conviction-ceiling.ts`
+ * (#756) and pinned end to end in `../trader/gated-tape-conviction.test.ts`.
+ *
+ * What the cap is actually worth, stated shape by shape rather than as one
+ * sentence, because the obvious single-sentence correction is also wrong:
+ *
+ * - **All-absent desk:** a gated tape clears the floor **only** with an
+ *   agreeing mediator (0.58); neutral gives 0.43 and opposing 0.28.
+ * - **Hydrated-aligned desk:** the cap does not prevent entry at **any**
+ *   mediator stance — two MI analysts at 0.95 carry the evidence average, and
+ *   even an opposing mediator lands at 0.6533. That desk is not "technicals
+ *   alone", so this is not a hole in the intent; it is the reason the intent
+ *   could never have been enforced by capping a conviction either.
+ * - **Everywhere:** `conviction_floor` is read twice in the Trader, once as
+ *   the gate and once through `convictionMultiplier`, so the cap's real effect
+ *   is on SIZE. A gated tape enters at `(0.58 − 0.55)/0.45 ≈ 6.7%` of
+ *   ADR-0018 D5's deployment envelope — about a fifth of what the same axis
+ *   votes deploy with ADX above the trend floor.
+ *
+ * **Do not "fix" this by lowering the value.** The intent needs `c < 0.25` on
+ * the absent desk, which is below every non-zero point of the four-axis
+ * lattice, so such a cap would stop capping and become a constant that
+ * discards directional strength entirely — and it would sit a hundredth under
+ * a `conviction_floor` that #756 item 1 still has open and blocked on soak
+ * data. Barring a gated tape outright is a product decision, not a defect fix.
  */
 export const LOW_CONVICTION_CAP = 0.4;
 
