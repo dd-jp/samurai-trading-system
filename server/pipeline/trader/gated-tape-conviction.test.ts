@@ -81,7 +81,7 @@ import { type AxisAssessment, assessAxes } from '../analysts/technical-analyst.j
 import { NO_DATA_MARKER } from '../analysts/types.js';
 import { computeConvictionScore } from '../debate-engine/conviction-score.js';
 import type { AnalystView, DebateResult, Direction } from '../debate-engine/index.js';
-import { decide } from './decide.js';
+import { decide, decideWithReason } from './decide.js';
 import {
   D5_INDEX_ETP_DEPLOYMENT_FRACTION,
   D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION,
@@ -376,6 +376,27 @@ async function deploymentAt(
   return intent.size * intent.entry;
 }
 
+/**
+ * Two weaker gated reads on the same gate, so the SPAN is executed rather than
+ * asserted in prose: the cap binds only from raw 0.40 up, and below it the axes
+ * carry the conviction down on their own. Both are real `assessAxes` outputs —
+ * ADX still under `ADX_TREND_FLOOR`, so the gate fires on both.
+ */
+function gatedAssessmentAt(raw: 0.3333 | 0.25): AxisAssessment {
+  return assessAxes(
+    { lastClose: 101, sma: 100, rsi: 45, atrPct: 1 },
+    {
+      adx: 10,
+      donchian: 0.9,
+      macd: undefined,
+      // The participation axis: absent leaves 3 voting axes (net 1 → 1/3),
+      // present-and-neutral makes it 4 (net 1 → 0.25).
+      participation: raw === 0.25 ? 0.5 : undefined,
+      squeeze: undefined,
+    },
+  );
+}
+
 describe('#870 — what the damping is worth at the composition root', () => {
   it('caps a gated tape at ~6.7% of ADR-0018 D5s deployment envelope — a ceiling, not a value', async () => {
     // The half of the corrected claim that had no test anywhere. `decide.ts`
@@ -393,6 +414,33 @@ describe('#870 — what the damping is worth at the composition root', () => {
     // same `conviction` the deployment is: if the cap stopped binding, both
     // sides would move together and only this number would notice.
     expect(deployed).toBeCloseTo(2_333.33, 2);
+  });
+
+  it('and 6.7% really is a CEILING — a weaker gated read deploys less, and the weakest deploys nothing', async () => {
+    // The span the ceiling implies, executed rather than asserted in prose:
+    // the cap binds only from raw 0.40 up, so gated deployment runs 0 → 6.7%.
+    const middling = gatedAssessmentAt(0.3333);
+    const weakest = gatedAssessmentAt(0.25);
+
+    expect(middling.capReasons.length).toBeGreaterThan(0);
+    expect(weakest.capReasons.length).toBeGreaterThan(0);
+    expect(middling.confidence).toBe(0.3333);
+    expect(weakest.confidence).toBe(0.25);
+
+    const middlingConviction = convictionOf(absentDesk(middling), 'bullish');
+    expect(middlingConviction).toBeCloseTo(0.5667, 4);
+    expect(await deploymentAt(middlingConviction, LIVE_BOOK)).toBeCloseTo(12.96, 2);
+
+    // The bottom of the span, taken from the Trader's OWN skip reason rather
+    // than derived from `decide.ts:426`'s `<`: this read lands exactly ON the
+    // floor, which is the boundary #683 has open, so which of the two skips
+    // fires is a fact to read off rather than to reason about.
+    const weakestConviction = convictionOf(absentDesk(weakest), 'bullish');
+    expect(weakestConviction).toBeCloseTo(FLOOR, 10);
+
+    const outcome = await decideWithReason(traderInput(weakestConviction, LIVE_BOOK));
+    expect(outcome.intent).toBeNull();
+    expect(outcome.skip_reason).toBe('below_min_notional');
   });
 
   it('sizes an ungated unanimous tape 5x larger from the same axis votes', async () => {

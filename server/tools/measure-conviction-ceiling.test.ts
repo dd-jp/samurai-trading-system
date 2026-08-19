@@ -131,7 +131,8 @@ describe('LOW_CONVICTION_CAP interaction (#756 item 3)', () => {
     // RESOLVED by #870: #745's claim was corrected rather than the mechanism —
     // the cap is a damper, not a veto. The reasoning lives on
     // `LOW_CONVICTION_CAP`'s docstring and the behaviour it actually buys
-    // (~6.7% of ADR-0018 D5's deployment envelope) is pinned end to end in
+    // (at most ~6.7% of ADR-0018 D5's deployment envelope, 0 at the weakest
+    // gated read) is pinned end to end in
     // `server/pipeline/trader/gated-tape-conviction.test.ts`. This assertion
     // is unchanged and is the measurement that finding rests on.
     const cappedCeiling = directional('absent', 'agrees')
