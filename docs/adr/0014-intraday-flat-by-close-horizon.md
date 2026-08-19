@@ -92,3 +92,42 @@ This is the part that belongs in the record rather than a chat log, and dropping
 The recorded thesis rests on a selector with **no observed win rate**. [#625](https://github.com/dd-jp/samurai-trading-system/issues/625) measured 96 debates and 0 trades — the stocks conviction ceiling was 0.5478 against a 0.55 floor, and debate rounds moved conviction by zero. Adopting (a) does not make that evidence exist; it makes producing it the next blocking task.
 
 Related: [#552](https://github.com/dd-jp/samurai-trading-system/issues/552) moves onto the critical path, because (a) makes news and sentiment *the edge* while the MI store currently ingests `[]` on every refresh.
+
+## Amendment — 2026-08-19: the mandatory flatten is exempt from Verdict's staleness gate
+
+- **Status:** implemented by the PR that closes [#894](https://github.com/dd-jp/samurai-trading-system/issues/894); **pending David's ratification.** He has not been asked and has not approved it. Every other amendment on this page records an owner decision — this one records an engineering resolution to a defect, taken because the invariant this ADR declares was not holding in production and the fix could not wait on a review cycle. If David rules otherwise, the code changes with the ruling.
+- **Amends:** the Consequences clause "the flatten becomes load-bearing" — it was load-bearing and it could not reach the broker.
+- **Proposed by:** #894, found by the hostile review of PR [#891](https://github.com/dd-jp/samurai-trading-system/pull/891) (the #826 fix) and confirmed by driving the real `VerdictImpl.decide`.
+
+### The defect
+
+Verdict's gate 1 (`staleness`) `no_go`'d **every** flat-by-close flatten on equities, so the mandatory exit could not reach Execution at any tick, on a healthy feed or a degraded one.
+
+The tick path stamps `decision_timestamp` to the **decision bar** — `floorToBar(clock.now(), DEBATE_BAR_TIMEFRAME_MS)`, a 1-hour grid — while the flatten window opens only `flatten_before_close_ms` (5 minutes) before the session close. The signal's measured age at the moment of the flatten is therefore structural, not incidental:
+
+| venue | close | window opens | decision bar | signal age | vs `max_signal_age.stocks` (15 min) |
+| --- | --- | --- | --- | --- | --- |
+| US | 20:00Z | 19:55 | 19:00 | 55–56 min | `no_go` |
+| LSE | 15:30Z (16:30 London) | 15:25 | 15:00 | 25–26 min | `no_go` |
+
+Three consequences worth stating plainly: the flat-by-close invariant this ADR declares did not hold in the running system; #826/#891's degradation of a mark-read failure into an unpriced flatten was silently voided one stage later; and the failure presented as a `no_go`, which reads like caution rather than like a dropped exit.
+
+### The resolution
+
+**A mandatory flat-by-close flatten is exempt from gate 1.** The Trader marks the intent `metadata.mandatory_flatten` (set by `buildFlattenExit` exactly when `exit_reason === 'flatten'`), and `VerdictImpl` skips the staleness bound for a marked intent alone. Gates 2–6 are untouched: dedup still stops a repeated flatten double-submitting, and the fire-time breaker re-check still applies.
+
+**Why the exemption is sound rather than convenient:** a flat-by-close exit is not acting on a stale *opinion*, it is acting on the clock. The position must be closed before the session ends whatever the debate that opened it now thinks, so the age of that debate is not a reason to leave leveraged exposure on overnight. Gate 1 bounds how old a *decision* is, and this decision was made by the calendar at the moment the gate ran.
+
+This mirrors the precedent PR #891 (#826) set one branch below — the unpriced flatten skips the two price gates for the same structural reason — and it deliberately reuses that pattern (a typed, true-or-absent marker set at the single site an exit is constructed) rather than inventing a second mechanism.
+
+### Why not the other three candidates
+
+- **(2) Stamp the flatten with `clock.now()` instead of the bar floor.** Defensible in principle — the flatten is decided at the tick, not at the bar — but `decision_timestamp`'s bar-floored value is what makes the idempotency key stable within a bar (#616, #748). Moving it for one intent puts weight on the dedup gate, which is the mechanism keeping a repeated flatten from double-submitting during exactly the degraded conditions this exit runs in. A larger risk than the gate it removes.
+- **(3) Raise `max_signal_age.stocks` above the bar timeframe.** Cheapest and worst: it slackens a live freshness bound for **every** intent — including entries — to fix one. The value is marked UNSOURCED in `paper-profile.ts`, whose own note says re-sizing a live gate "is a product decision, not a side effect", so this would also be re-deriving a number nobody derived, under time pressure, for the wrong reason.
+- **(4) Make the flatten bypass Verdict entirely.** Largest blast radius, and it discards the two protections that are still doing real work for this intent — dedup and the fire-time breaker re-check — to avoid one gate that does not apply.
+
+### What now holds by test
+
+`server/apps/orchestrator/production/flat-by-close-to-execution.test.ts` drives a tick-decided flatten through the real Trader, Risk, Verdict and Execution bindings, at **both** the US and LSE closes, and asserts the flatten reaches the broker. `smoke-run.ts`'s exit-path harness no longer fabricates its own `go`: it decides one with the real `VerdictImpl`, so the offline run can no longer prove the exit mechanics while saying nothing about whether a flatten survives the stage above them. (That harness's own orders carry fresh `decision_timestamp`s, so it exercises the real gate stack but not this exemption — the exemption's proof is the dedicated test above.)
+
+**What this does NOT claim.** The flatten still passes gate 4: a tick that reaches Verdict after `sessionEnd` is refused as `market_closed`, so the exemption's benefit is bounded by tick latency inside the five-minute window. That is pre-existing and correct — a shut venue cannot fill — but it means this amendment makes the flatten survive *staleness*, not that flat-by-close is now unconditional.

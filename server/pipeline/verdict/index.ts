@@ -13,11 +13,21 @@
  * `staleness` bounds how old our DECISION is, `stale_feed` (#641) bounds how
  * old the PRICE is. Neither implies the other.
  *
- * ONE intent skips two of those gates (#826): the mandatory flat-by-close exit
- * built while the mark source was stalled, which carries no reference price at
- * all (`metadata.unpriced_exit`). `stale_feed` and `drift` are skipped for it —
- * see `#priceGates` and the branch that guards it. Every other gate still runs,
- * for it as for everything else.
+ * TWO exemptions exist, both narrowed by a typed marker on the intent and both
+ * belonging to ADR-0014's MANDATORY flat-by-close exit — the one order the
+ * horizon does not make optional:
+ *
+ * - `metadata.unpriced_exit` (#826): the flatten built while the mark source
+ *   was stalled carries no reference price at all, so `stale_feed` and `drift`
+ *   are skipped for it — see `#priceGates` and the branch that guards it.
+ * - `metadata.mandatory_flatten` (#894): EVERY flat-by-close flatten skips
+ *   `staleness`, because it acts on the clock rather than on the opinion whose
+ *   age that gate bounds. See gate 1 for the arithmetic that made this
+ *   structural rather than occasional.
+ *
+ * Neither marker is derivable from the clock or from `intent_type`; both are
+ * set at the single site that constructs an exit (`buildFlattenExit`). Every
+ * other gate still runs, for the flatten as for everything else.
  *
  * HITL only engages per the per-asset-class automation dial: `manual`
  * always engages it, `auto` never does, `semi_auto` engages it only when a
@@ -144,9 +154,35 @@ export class VerdictImpl implements Verdict {
     const now = clock.now();
 
     // Gate 1: staleness — signal age vs the per-asset-class bound.
+    //
+    // #894 — THE MANDATORY FLAT-BY-CLOSE FLATTEN SKIPS THIS GATE, AND ONLY IT.
+    //
+    // The tick path stamps `decision_timestamp` to the DECISION BAR (1h,
+    // `floorToBar`/`DEBATE_BAR_TIMEFRAME_MS`), while ADR-0014's flatten window
+    // opens `flatten_before_close_ms` (5 min) before the session close. So a
+    // flatten's "signal age" is structurally tens of minutes — 56 at the US
+    // close, 26 at the LSE's — against a 15-minute `max_signal_age.stocks`,
+    // and this gate refused EVERY flat-by-close exit, on a healthy feed as
+    // readily as a degraded one. The invariant the horizon rests on could not
+    // reach Execution at all.
+    //
+    // Exempted rather than re-timed or re-sized because the gate's question
+    // does not apply: a flat-by-close exit is not acting on a stale OPINION,
+    // it is acting on the clock. The lot must be closed before the session
+    // ends whatever the debate that opened it now thinks, so how old that
+    // debate is cannot be a reason to leave the position on overnight. Same
+    // structural argument #826 made for the price gates one branch below.
+    //
+    // Scoped by `metadata.mandatory_flatten` — set by `buildFlattenExit` only
+    // for `exit_reason: 'flatten'` — so the exemption cannot widen by
+    // accident. An entry never carries the marker, and neither do the two
+    // discretionary exits (`signal_decay`, `direction_flip`), which ARE acting
+    // on an opinion and stay bounded here exactly as before. Every later gate
+    // still runs for the flatten: dedup (3) is what stops a repeated flatten
+    // double-submitting, and the breaker re-check (5) still applies.
     const signalAgeMs = now.getTime() - orderIntent.decision_timestamp.getTime();
     const maxAgeMs = config.max_signal_age[orderIntent.asset_class];
-    if (signalAgeMs > maxAgeMs) {
+    if (orderIntent.metadata.mandatory_flatten !== true && signalAgeMs > maxAgeMs) {
       return noGo('staleness', idempotencyKey, now);
     }
 

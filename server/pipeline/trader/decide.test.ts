@@ -2266,6 +2266,68 @@ describe('checkExitsWithReason — the indicator-based early exit (#748)', () =>
     expect(outcome.intent?.metadata.exit_reason).toBe('flatten');
     expect(reads).toBe(0);
   });
+
+  /**
+   * #894 — the marker Verdict's gate-1 exemption is scoped by.
+   *
+   * `VerdictImpl` skips the staleness bound for `metadata.mandatory_flatten`
+   * alone, so which intents acquire it IS the width of that exemption. These
+   * cases pin the producer's side of it: only the clock-driven flatten carries
+   * the marker, on either path, and neither discretionary exit does.
+   */
+  it('marks the flat-by-close flatten as mandatory, on the tick path', async () => {
+    const outcome = await checkExitsWithReason(
+      exitInput({
+        clock: new ManualClock(INSIDE_WINDOW),
+        marketData: marketDataWithMomentum(MOMENTUM_FLAT),
+      }),
+    );
+
+    expect(outcome.intent?.metadata.exit_reason).toBe('flatten');
+    expect(outcome.intent?.metadata.mandatory_flatten).toBe(true);
+  });
+
+  it('marks it on the DECISION path too — the same builder, the same window', async () => {
+    const outcome = await decideWithReason(
+      traderInput({
+        clock: new ManualClock(INSIDE_WINDOW),
+        debate: debateResult({ direction: 'neutral' }),
+        positionState: async () => [openPosition({ side: 'buy', filled_size: 10 })],
+      }),
+    );
+
+    expect(outcome.intent?.metadata.exit_reason).toBe('flatten');
+    expect(outcome.intent?.metadata.mandatory_flatten).toBe(true);
+  });
+
+  it('does NOT mark a signal_decay release — a discretionary exit stays gated', async () => {
+    const outcome = await checkExitsWithReason(exitInput());
+
+    expect(outcome.intent?.metadata.exit_reason).toBe('signal_decay');
+    expect(outcome.intent?.metadata.mandatory_flatten).toBeUndefined();
+  });
+
+  it('does NOT mark a direction_flip exit', async () => {
+    const outcome = await decideWithReason(
+      traderInput({
+        clock: new ManualClock(OUTSIDE_WINDOW),
+        debate: debateResult({ direction: 'bearish', confidence: 0.9 }),
+        positionState: async () => [openPosition({ side: 'buy', filled_size: 10 })],
+      }),
+    );
+
+    expect(outcome.intent?.metadata.exit_reason).toBe('direction_flip');
+    expect(outcome.intent?.metadata.mandatory_flatten).toBeUndefined();
+  });
+
+  it('does NOT mark an entry', async () => {
+    const outcome = await decideWithReason(
+      traderInput({ clock: new ManualClock(OUTSIDE_WINDOW), positionState: async () => [] }),
+    );
+
+    expect(outcome.intent?.intent_type).toBe('entry');
+    expect(outcome.intent?.metadata.mandatory_flatten).toBeUndefined();
+  });
 });
 
 /**

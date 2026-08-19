@@ -955,6 +955,97 @@ describe('VerdictImpl.decide — unpriced mandatory flatten (#826)', () => {
   });
 });
 
+/**
+ * #894 — the mandatory flatten and gate 1.
+ *
+ * The end-to-end proof lives in
+ * `apps/orchestrator/production/flat-by-close-to-execution.test.ts`, which is
+ * what the defect required: these unit cases could not have found it, because
+ * every intent here is handed a `decision_timestamp` this file chose. What
+ * they own instead is the exemption's NARROWNESS — that nothing but the
+ * mandatory flatten acquires it.
+ */
+describe('VerdictImpl.decide — mandatory flatten and staleness (#894)', () => {
+  /** Older than `max_signal_age.stocks` (30 min here) by the bar-floor margin. */
+  const STALE_AT = new Date(NOW.getTime() - 56 * 60_000);
+
+  function staleExit(overrides: Partial<OrderIntent> = {}): OrderIntent {
+    const base = makeIntent();
+    return {
+      ...base,
+      intent_type: 'exit',
+      side: 'sell',
+      decision_timestamp: STALE_AT,
+      metadata: { ...base.metadata, exit_reason: 'flatten', mandatory_flatten: true },
+      ...overrides,
+    };
+  }
+
+  function inputFor(intent: OrderIntent, overrides: Partial<VerdictInput> = {}): VerdictInput {
+    return makeInput({
+      risk_decision: makeRiskDecision({ order_intent: intent }),
+      config: makeConfig({ automation_level: { crypto: 'auto', stocks: 'auto' } }),
+      ...overrides,
+    });
+  }
+
+  it('goes on a signal far older than the bound', async () => {
+    const decision = await new VerdictImpl().decide(inputFor(staleExit()));
+
+    expect(decision.no_go_reason).toBeNull();
+    expect(decision.status).toBe('go');
+  });
+
+  it('still dedupes — the clock does not authorise a second submission', async () => {
+    const decision = await new VerdictImpl().decide(
+      inputFor(staleExit(), { positionStore: makePositionStore(true) }),
+    );
+
+    expect(decision.no_go_reason).toBe('dedup');
+  });
+
+  it('still re-checks the breaker at fire time', async () => {
+    const decision = await new VerdictImpl().decide(
+      inputFor(staleExit(), { breakers: makeBreakers({ portfolio_tripped: true }) }),
+    );
+
+    expect(decision.no_go_reason).toBe('breaker');
+  });
+
+  it('leaves a stale DISCRETIONARY exit refused — it is acting on an opinion', async () => {
+    const flatten = staleExit();
+    const metadata = { ...flatten.metadata, exit_reason: 'signal_decay' as const };
+    delete metadata.mandatory_flatten;
+
+    const decision = await new VerdictImpl().decide(inputFor({ ...flatten, metadata }));
+
+    expect(decision.no_go_reason).toBe('staleness');
+  });
+
+  it('leaves a stale ENTRY refused — no entry carries the marker', async () => {
+    const flatten = staleExit();
+    const metadata = { ...flatten.metadata };
+    delete metadata.mandatory_flatten;
+    delete metadata.exit_reason;
+
+    const decision = await new VerdictImpl().decide(
+      inputFor({ ...flatten, intent_type: 'entry', side: 'buy', metadata }),
+    );
+
+    expect(decision.no_go_reason).toBe('staleness');
+  });
+
+  it('leaves a FRESH mandatory flatten gated on everything else, unchanged', async () => {
+    const decision = await new VerdictImpl().decide(
+      inputFor(staleExit({ decision_timestamp: NOW }), {
+        marketData: makeMarketData(makeMark({ price: 140 })),
+      }),
+    );
+
+    expect(decision.no_go_reason).toBe('drift');
+  });
+});
+
 describe('VerdictImpl.decide — precondition', () => {
   it('throws if handed a RiskDecision without an approved order_intent', async () => {
     const verdict = new VerdictImpl();
