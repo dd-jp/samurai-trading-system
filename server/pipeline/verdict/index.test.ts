@@ -831,6 +831,130 @@ describe('VerdictImpl.decide — gate ordering', () => {
   });
 });
 
+/**
+ * #826 — the unpriced mandatory flatten.
+ *
+ * `buildFlattenExit` (trader/decide.ts) emits a flat-by-close exit with a zero
+ * entry/stop/target, flagged `metadata.unpriced_exit`, when the instrument's
+ * own mark could not be read during an Alpaca stall. Verdict is the choke
+ * point for that decision: gate 2 refuses any intent whose entry is not
+ * positive, so without this the Trader's degradation would be undone one stage
+ * later and the flatten would still be missed — this repo's dominant defect
+ * class (a mechanism nothing reaches) wearing a new hat.
+ */
+describe('VerdictImpl.decide — unpriced mandatory flatten (#826)', () => {
+  function unpricedFlatten(overrides: Partial<OrderIntent> = {}): OrderIntent {
+    const base = makeIntent();
+    return {
+      ...base,
+      intent_type: 'exit',
+      side: 'sell',
+      entry: 0,
+      stop: 0,
+      target: 0,
+      metadata: { ...base.metadata, exit_reason: 'flatten', unpriced_exit: true },
+      ...overrides,
+    };
+  }
+
+  function inputFor(intent: OrderIntent, overrides: Partial<VerdictInput> = {}): VerdictInput {
+    return makeInput({
+      risk_decision: makeRiskDecision({ order_intent: intent }),
+      // `auto` because the flatten must not wait on a human — ADR-0007 removed
+      // that gate, and the HITL path would otherwise decide these cases.
+      config: makeConfig({ automation_level: { crypto: 'auto', stocks: 'auto' } }),
+      ...overrides,
+    });
+  }
+
+  it('goes, rather than no-going on drift, when the intent carries no price', async () => {
+    const verdict = new VerdictImpl();
+
+    const decision = await verdict.decide(inputFor(unpricedFlatten()));
+
+    expect(decision.no_go_reason).toBeNull();
+    expect(decision.status).toBe('go');
+  });
+
+  it('does not read the mark at all — the stalled call is not paid a second time', async () => {
+    const verdict = new VerdictImpl();
+    const marketData = makeMarketData();
+
+    await verdict.decide(inputFor(unpricedFlatten(), { marketData }));
+
+    expect(marketData.getMark).not.toHaveBeenCalled();
+  });
+
+  it('goes even against a feed so stale every other intent would be refused', async () => {
+    // The condition that actually holds during the stall: whatever the feed
+    // says, if it says anything, is old. `stale_feed` must not reappear as the
+    // reason the flatten did not go out.
+    const verdict = new VerdictImpl();
+    const stale = makeMarketData(makeMark({ observed_at: new Date(NOW.getTime() - 60 * 60_000) }));
+
+    const decision = await verdict.decide(inputFor(unpricedFlatten(), { marketData: stale }));
+
+    expect(decision.status).toBe('go');
+  });
+
+  it('still dedupes — a repeated flatten must not double-submit while the feed is down', async () => {
+    const verdict = new VerdictImpl();
+
+    const decision = await verdict.decide(
+      inputFor(unpricedFlatten(), { positionStore: makePositionStore(true) }),
+    );
+
+    expect(decision.status).toBe('no_go');
+    expect(decision.no_go_reason).toBe('dedup');
+  });
+
+  it('still re-checks the breaker at fire time', async () => {
+    const verdict = new VerdictImpl();
+
+    const decision = await verdict.decide(
+      inputFor(unpricedFlatten(), { breakers: makeBreakers({ portfolio_tripped: true }) }),
+    );
+
+    expect(decision.status).toBe('no_go');
+    expect(decision.no_go_reason).toBe('breaker');
+  });
+
+  /**
+   * The scoping assertion. The skip is keyed on the FLAG, not on
+   * `intent_type === 'exit'` and not on a zero entry — an exit that carries a
+   * real price is still drift-gated, and an unflagged zero-entry intent (which
+   * nothing should produce) is still refused.
+   */
+  it('leaves a normally-priced exit fully gated', async () => {
+    const verdict = new VerdictImpl();
+    const priced = unpricedFlatten({ entry: 100, stop: 100, target: 100 });
+    const metadata = { ...priced.metadata };
+    delete metadata.unpriced_exit;
+
+    const decision = await verdict.decide(
+      inputFor(
+        { ...priced, metadata },
+        // 40% away from the intent's entry, far outside the 1% tolerance.
+        { marketData: makeMarketData(makeMark({ price: 140 })) },
+      ),
+    );
+
+    expect(decision.status).toBe('no_go');
+    expect(decision.no_go_reason).toBe('drift');
+  });
+
+  it('still refuses an unflagged intent with no positive entry', async () => {
+    const verdict = new VerdictImpl();
+    const metadata = { ...unpricedFlatten().metadata };
+    delete metadata.unpriced_exit;
+
+    const decision = await verdict.decide(inputFor({ ...unpricedFlatten(), metadata }));
+
+    expect(decision.status).toBe('no_go');
+    expect(decision.no_go_reason).toBe('drift');
+  });
+});
+
 describe('VerdictImpl.decide — precondition', () => {
   it('throws if handed a RiskDecision without an approved order_intent', async () => {
     const verdict = new VerdictImpl();

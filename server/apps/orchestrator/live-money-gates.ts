@@ -115,13 +115,6 @@ export const LIVE_MONEY_GATES: readonly { readonly issue: number; readonly gap: 
     // Verified OPEN 2026-08-18: `gh issue view 798`.
     gap: "ADR-0018 D5's declared brackets imply a ~41.8% single-stock envelope against a ~20-25% tolerance, so the sizing this profile ships is unreconciled with the drawdown envelope it was sized against",
   },
-  {
-    issue: 826,
-    // Verified OPEN 2026-08-18: `gh issue view 826`. The live successor to the
-    // closed #562 — the failover gap moved from bars to marks and quotes, it
-    // did not clear.
-    gap: 'marks and quotes are not failed over, so a single Alpaca outage stops the tick at the mark read with positions open',
-  },
 ];
 
 /**

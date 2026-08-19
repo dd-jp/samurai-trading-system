@@ -101,7 +101,10 @@ import { OrphanVerdictScanner } from '../orphan-verdict-scan.js';
 import { SqliteAuditLog } from '../sqlite-audit-log.js';
 import { SqliteCurrentTickStore } from '../sqlite-current-tick-store.js';
 import type { TickSteps } from '../types.js';
-import type { ExitValuationDegradedAlertChannel } from './exit-valuation-alert.js';
+import type {
+  ExitValuationDegradedAlert,
+  ExitValuationDegradedAlertChannel,
+} from './exit-valuation-alert.js';
 import type { ThresholdClampAlertChannel } from './threshold-clamp-alert.js';
 import {
   type TraderDiagnosticAlert,
@@ -328,6 +331,16 @@ export function buildTraderSteps(deps: TraderStepDeps): {
       // through rather than rebuilt — two literals would be two calendars and
       // two places for an override to be applied to only one.
       sessionCalendars: deps.sessionCalendars,
+      // #826. Wired on BOTH trader binds — the decision path can reach the
+      // flatten too (`routeDecision`'s holding branch), so a hook on only the
+      // tick path would go quiet for exactly the exits a debate bar decides.
+      onUnpricedFlatten: (report) =>
+        reportExitValuationDegraded(
+          deps,
+          'trader',
+          { trace_id, instrument, clock },
+          { unvalued_instruments: [report.instrument], reason: report.reason },
+        ),
     });
 
     // Written for a null intent too (#328). `TickOutcome.final_stage` records
@@ -393,6 +406,17 @@ export function buildTraderSteps(deps: TraderStepDeps): {
       positionState: deps.getOpenPositions,
       exitFillSizes: deps.getExitFillSizes,
       sessionCalendars: deps.sessionCalendars,
+      // #826, and THIS is the binding that matters most: the mandatory
+      // flat-by-close flatten is decided on the tick path (`routeExitCheck`'s
+      // first branch), so an unpriced flatten during an Alpaca stall is
+      // overwhelmingly raised here rather than on the decision path above.
+      onUnpricedFlatten: (report) =>
+        reportExitValuationDegraded(
+          deps,
+          'trader',
+          { trace_id, instrument, clock },
+          { unvalued_instruments: [report.instrument], reason: report.reason },
+        ),
     });
 
     // Written only when the check ACTED (#743) — unlike the decision step,
@@ -795,7 +819,7 @@ async function snapshotForExit(
  */
 function reportExitValuationDegraded(
   deps: BreakerStateDeps,
-  seam: 'risk' | 'verdict',
+  seam: ExitValuationDegradedAlert['seam'],
   context: { trace_id: string; instrument: string; clock: Clock },
   degradation: ExitValuationDegradation,
 ): void {
@@ -807,8 +831,14 @@ function reportExitValuationDegraded(
       stage: seam,
       level: 'error',
       message:
-        `exit valued on a partly-valued book: ${instrument} — ` +
-        `${degradation.unvalued_instruments.length} held instrument(s) could not be valued`,
+        seam === 'trader'
+          ? // #826: a different condition, so a different line — this one is
+            // not about the rest of the book, it is about the exited name
+            // having no price of its own.
+            `mandatory flatten sent with NO mark: ${instrument} — the flat-by-close exit went ` +
+            'out unpriced rather than being missed (ADR-0014)'
+          : `exit valued on a partly-valued book: ${instrument} — ` +
+            `${degradation.unvalued_instruments.length} held instrument(s) could not be valued`,
       payload: {
         instrument,
         seam,
