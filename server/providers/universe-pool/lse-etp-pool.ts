@@ -46,7 +46,8 @@
  *
  * ## Provenance
  *
- * Compiled by hand, 2026-08-17, from the three named LSE leveraged-ETP
+ * Compiled by hand, 2026-08-17 (rows 1-11) and 2026-08-19 (rows 12-30, #813),
+ * from the three named LSE leveraged-ETP
  * issuers (Leverage Shares, WisdomTree — trading as the "Boost" ETP brand
  * for this product line, and GraniteShares), cross-referenced against
  * Trading 212's own public instrument pages
@@ -55,15 +56,32 @@
  * `t212_source_url` in `RowProvenance` is a page actually fetched or returned
  * by a web search during this compile — see each row for its citation.
  *
- * **This pool is 11 rows (tradeable ETP lines, distinct `lse_ticker`
- * values) but only 7 distinct `screening_instrument` values (rankable
- * underlyings) — not the 40-80 ADR-0016 estimates for the full
- * three-issuer catalogue, and neither number is a ceiling on real
- * availability, only a floor.** SPY, QQQ, PLTR, and NVDA each carry two ETP
- * lines from different issuers, which is why 11 rows resolve to 7 distinct
- * underlyings — see `countRankableUnderlyings()` below, and the pool-count
- * finding further down for which of these two counts each downstream ticket
- * actually consumes. An early pass of this file stopped at 6 rows and
+ * **What the T212 evidence is, exactly.** `trading212.com` answers HTTP 403
+ * to a programmatic fetch — identically for a real ticker and for a
+ * nonsense one, which was checked before any row was added — so no row's
+ * `t212_source_url` was read directly. The evidence is the search-returned
+ * page title, e.g. "Invest in GraniteShares 3x Long Netflix, London Stock
+ * Exchange: 3LNP ETF": issuer, underlying and ticker all come from T212's
+ * own page content, and a nonexistent ticker produces no such title. Two
+ * rows below (3LAL, 3UBR) have titles the search engine truncated before the
+ * ticker; they say so in their own `notes` rather than borrowing the
+ * stronger claim their neighbours can make. Currency and ISIN are held to a
+ * higher bar — a page actually fetched (AJ Bell's LSE instrument pages, or
+ * justETF's per-ISIN profile) — because a wrong quoting currency is a 100x
+ * sizing error and a wrong ISIN identifies a different security.
+ *
+ * **Expanded 2026-08-19 by [#813](https://github.com/dd-jp/samurai-trading-system/issues/813):
+ * this pool is now 30 rows (tradeable ETP lines, distinct `lse_ticker`
+ * values) resolving to 26 distinct `screening_instrument` values (rankable
+ * underlyings)** — still not the 40-80 ADR-0016 estimates for the full
+ * three-issuer catalogue, and still neither number is a ceiling on real
+ * availability, only a floor. The nineteen rows #813 added each carry one
+ * new underlying, so both counts moved by the same amount; the four
+ * duplicated underlyings are still SPY, QQQ, PLTR, and NVDA, each carrying
+ * two ETP lines from different issuers, which is why 30 rows resolve to 26
+ * distinct underlyings — see `countRankableUnderlyings()` below, and the
+ * pool-count finding further down for which of these two counts each
+ * downstream ticket actually consumes. An early pass of this file stopped at 6 rows and
  * reported "under 25" as a finding. That was wrong, and the mistake is worth
  * naming: the first pass dropped a candidate the moment its currency line was
  * unconfirmed (Palantir, a second NVIDIA line), while simultaneously keeping
@@ -78,46 +96,77 @@
  * Leverage Shares alone advertises 150+ products. **The verified-tradeable
  * count of ETP LINES for this three-issuer universe is materially above
  * 25** — that is a line count, not the distinct-underlying count #707's
- * 25-name threshold is measured against (7 today; see the pool-count finding
+ * 25-name threshold is measured against (26 today; see the pool-count finding
  * below for why those two 25s are not the same 25) — the original under-25
  * conclusion was an artifact of stopping the search early, not a property of
- * the universe. Bulk-importing the rest of that 18-ticker (and larger)
- * catalogue row-by-row was out of scope for this pass — each addition needs
- * the same ISIN + currency-line + T212-page verification this file's eleven
- * rows got, which is more per-row research than one ticket can absorb — so
- * this file ships 11 fully-verified rows (7 distinct underlyings) as a seed,
- * not a claim of completeness.
+ * the universe. #813 was the ticket that absorbed that per-row research:
+ * nineteen further names were carried through the same ISIN + currency-line +
+ * T212-page bar on 2026-08-19, and the resulting pool clears #707's
+ * distinct-underlying threshold rather than merely clearing a line count.
  *
- * **The pool-count finding this ticket asks for, corrected — and split by
- * what each consumer actually counts.** This pool has 11 tradeable ETP lines
- * (distinct `lse_ticker` rows) but only 7 distinct rankable underlyings
+ * **This is still a seed, not a claim of completeness, and the distinction
+ * survives the expansion rather than being retired by it.** GraniteShares'
+ * own catalogue page lists roughly seventy 3x/-3x lines, Leverage Shares
+ * advertises 150+ products, and neither WisdomTree's index range nor either
+ * issuer's short (-3x) side is represented here at all — every row in this
+ * file is `direction: 'long'`. What #813 established is that the pool is
+ * large enough for the ranking machinery to be defined; what it did not
+ * establish is that it is the whole tradeable universe, or that any row is
+ * worth trading (ADR-0018 records the leveraged-ETP universe as
+ * negative-expectancy on unconditional entry, and #666 still owns real
+ * spreads). Rows were dropped from this pass, not padded around: a
+ * GraniteShares Spotify line was carried through T212 verification and then
+ * left out because no fetched page confirmed its ISIN or quoting currency.
+ *
+ * **The pool-count finding, restated at #813's counts — and still split by
+ * what each consumer actually counts.** This pool has 30 tradeable ETP lines
+ * (distinct `lse_ticker` rows) resolving to 26 distinct rankable underlyings
  * (unique `screening_instrument` values, see `countRankableUnderlyings()`),
  * because SPY, QQQ, PLTR, and NVDA each carry two ETP lines from different
  * issuers. These are not interchangeable counts, and each downstream ticket
- * consumes only one of them:
+ * consumes only one of them — the expansion does not merge them, it just
+ * moves both:
  *
  * - **#707** (the screener's ranking/shortlist step) ranks
- *   `screening_instrument` — underlyings, not ETP lines. At 7 distinct
- *   underlyings, #707 is BLOCKED, not cleared: it needs the distinct-
- *   `screening_instrument` count to reach at least 25, the
+ *   `screening_instrument` — underlyings, not ETP lines. At 26 distinct
+ *   underlyings, #707's pool precondition is now MET: it needed the
+ *   distinct-`screening_instrument` count to reach at least 25, the
  *   `docs/specs/universe-selector-spec.md` ("Candidate pool") threshold for
- *   where ranking machinery earns its keep, and row count is not the measure
- *   of that gate — 11 rows says nothing about whether #707 can run. A
- *   monthly quintile over 7 names is in fact MORE degenerate (1-2
- *   instruments per bucket) than the 12-15-row case already recorded on
- *   #707 as requiring the bucketing scheme to be restated before its first
- *   run, so this correction tightens #707's precondition, it does not
- *   relax it.
+ *   where ranking machinery earns its keep. Row count was never the measure
+ *   of that gate and still is not — 30 rows would say nothing about whether
+ *   #707 can run if they collapsed onto a handful of names. **What is
+ *   cleared is the pool size, not #707 itself**: a monthly quintile over 26
+ *   names gives ~5 instruments per bucket, which is a defined statistic
+ *   rather than the near-empty buckets 7 names produced, but #707 is a
+ *   pre-registered study and nothing here pre-empts its other
+ *   preconditions.
  * - **#751** (ActiveUniverseProvider, tradeable-lines wiring) consumes the
- *   11-row tradeable-ETP-line count instead — the population it wires for
+ *   30-row tradeable-ETP-line count instead — the population it wires for
  *   order routing legitimately spans issuer-duplicate lines, since 3USL and
  *   3SPY are two genuinely different holdable instruments even though both
  *   screen off SPY.
  *
+ * **What the expansion also widened: `index_etp_3x` is now a broader bucket
+ * than ADR-0018 measured.** D3's frozen bracket and D5's deployment
+ * fraction for `index_etp_3x` were measured with SPY standing in for the
+ * whole subclass (ADR-0018: two instruments, not the universe). Before
+ * #813 every index row in this pool was a broad-US-tracker line, so that
+ * stand-in held. It no longer does: 3VT (all-world), 3KOR (single-country
+ * Korea), 3KWE (single-country China tech) and 3XLE (single-sector US
+ * energy) all carry `subclass: 'index_etp_3x'` and none of them sits in
+ * 3x SPY's volatility envelope. `assertKnownSubclass` cannot catch this —
+ * the string is in `KNOWN_SUBCLASSES`, which is exactly why it is recorded
+ * here and in each of those four rows' notes. A consumer that sizes off
+ * `subclass` alone is, for those rows, deploying against an envelope
+ * nobody measured for the instrument. Re-measuring the bracket per row, or
+ * splitting the subclass, is ADR-0018's call and not this ticket's.
+ *
  * The `toBeLessThan` test that encoded the old under-25 (row-count)
  * conclusion has been removed from this file's test suite; both current
- * counts (11 rows, 7 distinct underlyings) are pinned by
- * `lse-etp-pool.test.ts` instead.
+ * counts (30 rows, 26 distinct underlyings) are pinned by
+ * `lse-etp-pool.test.ts` instead, along with the >= 25 threshold itself so
+ * that a future row removal fails loudly against #707's gate rather than
+ * silently re-blocking it.
  *
  * ## Residual risks (issue #749, "record ... rather than leaving them to be
  * discovered")
@@ -257,16 +306,19 @@ export function assertKnownSubclass(row: LseEtpPoolRow): void {
 }
 
 /**
- * The checked-in pool. Eleven rows (tradeable ETP lines): four
- * `index_etp_3x`, seven `single_stock_etp_3x`. That resolves to only 7
+ * The checked-in pool. Thirty rows (tradeable ETP lines): eight
+ * `index_etp_3x`, twenty-two `single_stock_etp_3x`. That resolves to 26
  * distinct `screening_instrument` values (rankable underlyings; see
- * `countRankableUnderlyings()`) — 2 among the index rows (SPY, QQQ, each
- * doubled) and 5 among the single-stock rows (TSLA, AAPL, MSTR, plus NVDA
- * and PLTR each doubled) — since SPY, QQQ, PLTR, and NVDA each carry two
- * lines from different issuers. See the module doc's provenance section for
- * why this is a verified seed of the full three-issuer catalogue rather than
- * an exhaustive scrape, and for the corrected pool-count finding — which of
- * these two counts each downstream ticket (#707, #751) consumes.
+ * `countRankableUnderlyings()`) — 6 among the index rows (SPY and QQQ each
+ * doubled, plus VT, EWY, KWEB, XLE) and 20 among the single-stock rows
+ * (NVDA and PLTR each doubled) — since SPY, QQQ, PLTR, and NVDA are the only
+ * underlyings carrying two lines from different issuers. Every row added by
+ * #813 on 2026-08-19 brought a new underlying with it, which is why the row
+ * count and the distinct-underlying count moved together. See the module
+ * doc's provenance section for why this is still a verified seed of the full
+ * three-issuer catalogue rather than an exhaustive scrape, and for the
+ * pool-count finding — which of these two counts each downstream ticket
+ * (#707, #751) consumes.
  */
 export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
   {
@@ -502,6 +554,455 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
         "Leverage Shares 3x Palantir ETP Securities, USD line. justETF's LSE table lists three lines " +
         'for this ISIN (3PLT GBX, 3PRE EUR, PLT3 USD); PLT3 is the ticker T212 itself lists, so it is ' +
         'used here.',
+    },
+  },
+  // ---------------------------------------------------------------------
+  // #813's expansion pass, verified 2026-08-19. Nineteen further rows, each
+  // carrying a fetched `source_url` (an AJ Bell LSE instrument page or a
+  // justETF profile naming the ISIN and the quoting currency) and a
+  // `t212_source_url` whose page title names issuer, underlying and ticker.
+  // The T212 pages themselves answer HTTP 403 to a programmatic fetch, so
+  // the T212 evidence is the search-returned page title — the same standard
+  // the eleven rows above were compiled to ("actually fetched OR returned by
+  // a web search during this compile").
+  // ---------------------------------------------------------------------
+  {
+    lse_ticker: '3LME',
+    screening_instrument: 'MSFT',
+    underlying: 'Microsoft Corp',
+    leverage: 3,
+    direction: 'long',
+    subclass: 'single_stock_etp_3x',
+    currency: 'EUR',
+    t212_isa: true,
+    provenance: {
+      isin: 'XS2662640627',
+      issuer: 'GraniteShares',
+      source_url: 'https://www.ajbell.co.uk/market-research/LSE:3LME',
+      t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3LME.GB',
+      verified_on: '2026-08-19',
+      notes:
+        'GraniteShares 3x Long Microsoft Daily ETP. **This row is the EUR line**, not a sterling one: ' +
+        'AJ Bell quotes LSE:3LME in euro and the issuer fact summary reads "3LME (EUR) / 3LMP (GBX) / ' +
+        '3LMS (USD)". 3LME is nonetheless the only one of the three T212 was found to list, so it is ' +
+        'the row here — this file claims listing, not ISA-tradeability (see `t212_isa`), and the ' +
+        'settlement-vs-listing-currency risk is residual risk 2 below, one notch louder for this row.',
+    },
+  },
+  {
+    lse_ticker: 'LAM3',
+    screening_instrument: 'AMD',
+    underlying: 'Advanced Micro Devices Inc',
+    leverage: 3,
+    direction: 'long',
+    subclass: 'single_stock_etp_3x',
+    currency: 'GBX',
+    t212_isa: true,
+    provenance: {
+      isin: 'XS3075487713',
+      issuer: 'GraniteShares',
+      source_url: 'https://www.ajbell.co.uk/market-research/LSE:LAM3',
+      t212_source_url: 'https://www.trading212.com/trading-instruments/invest/LAM3.GB',
+      verified_on: '2026-08-19',
+      notes:
+        'GraniteShares 3x Long AMD Daily ETP, sterling line. AJ Bell quotes LSE:LAM3 in pence, so the ' +
+        'currency is recorded as GBX even though the issuer fact summary loosely says "LAM3 (GBP)" — ' +
+        'that field is base currency, not the quote convention, and reading it as pounds is a 100x ' +
+        'sizing error. The 3LAM ticker T212 also lists is Euronext Paris, not the LSE; it is not this row.',
+    },
+  },
+  {
+    lse_ticker: '3LAL',
+    screening_instrument: 'GOOG',
+    underlying: 'Alphabet Inc',
+    leverage: 3,
+    direction: 'long',
+    subclass: 'single_stock_etp_3x',
+    currency: 'USD',
+    t212_isa: true,
+    provenance: {
+      isin: 'XS2675292309',
+      issuer: 'GraniteShares',
+      source_url: 'https://www.ajbell.co.uk/market-research/LSE:3LAL',
+      t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3LAL.GB',
+      verified_on: '2026-08-19',
+      notes:
+        'GraniteShares 3x Long Alphabet Daily ETP, USD line (issuer fact summary: "3LAL (USD) / 3LGE ' +
+        '(EUR) / 3LGP (GBX)"). The issuer names GOOG, not GOOGL, as the tracked share class, so that is ' +
+        'the screening instrument. Two lower-confidence points, recorded rather than smoothed over: the ' +
+        "T212 search result's title was truncated before the ticker, so the ticker evidence there is the " +
+        'URL alone; and a MarketScreener title carries a different ISIN (XS2193968307) for a line of the ' +
+        'same name, most likely a superseded one — the fetched AJ Bell page is what this row records.',
+    },
+  },
+  {
+    lse_ticker: 'LPP3',
+    screening_instrument: 'PYPL',
+    underlying: 'PayPal Holdings Inc',
+    leverage: 3,
+    direction: 'long',
+    subclass: 'single_stock_etp_3x',
+    currency: 'GBX',
+    t212_isa: true,
+    provenance: {
+      isin: 'XS2596087671',
+      issuer: 'GraniteShares',
+      source_url: 'https://www.ajbell.co.uk/market-research/LSE:LPP3',
+      t212_source_url: 'https://www.trading212.com/trading-instruments/invest/LPP3.GB',
+      verified_on: '2026-08-19',
+      notes:
+        'GraniteShares 3x Long PayPal Daily ETP, sterling line, quoted in pence per AJ Bell. T212 lists ' +
+        'both LPP3.GB and the USD line 3LPP.GB under the same ISIN; LPP3 is used here because it is the ' +
+        'sterling one. (A third 3LPP line trades in euro on Milan — same ticker string, different venue.)',
+    },
+  },
+  {
+    lse_ticker: '3LNP',
+    screening_instrument: 'NFLX',
+    underlying: 'Netflix Inc',
+    leverage: 3,
+    direction: 'long',
+    subclass: 'single_stock_etp_3x',
+    currency: 'GBX',
+    t212_isa: true,
+    provenance: {
+      isin: 'XS2856106302',
+      issuer: 'GraniteShares',
+      source_url: 'https://www.ajbell.co.uk/market-research/LSE:3LNP',
+      t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3LNP.GB',
+      verified_on: '2026-08-19',
+      notes:
+        'GraniteShares 3x Long Netflix Daily ETP, GBX line (issuer fact summary: "3LNE (EUR) / 3LNF ' +
+        '(USD) / 3LNP (GBX)"). A MarketScreener title carries XS2193970543 for a Netflix line of the ' +
+        'same name; the fetched AJ Bell pages for all three current lines return XS2856106302, so the ' +
+        'older ISIN is treated as superseded and is deliberately not used here.',
+    },
+  },
+  {
+    lse_ticker: 'LCO3',
+    screening_instrument: 'COIN',
+    underlying: 'Coinbase Global Inc',
+    leverage: 3,
+    direction: 'long',
+    subclass: 'single_stock_etp_3x',
+    currency: 'GBX',
+    t212_isa: true,
+    provenance: {
+      isin: 'XS2575914176',
+      issuer: 'GraniteShares',
+      source_url: 'https://www.ajbell.co.uk/market-research/LSE:LCO3',
+      t212_source_url: 'https://www.trading212.com/trading-instruments/invest/LCO3.GB',
+      verified_on: '2026-08-19',
+      notes:
+        'GraniteShares 3x Long Coinbase Daily ETP, sterling line quoted in pence. Two independently ' +
+        "fetched sources agree on ISIN and currency: AJ Bell's LSE:LCO3 page and justETF's profile for " +
+        'this ISIN, whose LSE table reads "LCO3 | GBX" and "3LCO | USD". COIN is an equity underlying, ' +
+        'so this row is in scope for an equities-only pool — but its price is driven by crypto activity, ' +
+        'which is a correlation this pool does not model.',
+    },
+  },
+  {
+    lse_ticker: 'LAA3',
+    screening_instrument: 'BABA',
+    underlying: 'Alibaba Group Holding Ltd',
+    leverage: 3,
+    direction: 'long',
+    subclass: 'single_stock_etp_3x',
+    currency: 'GBX',
+    t212_isa: true,
+    provenance: {
+      isin: 'XS2842095320',
+      issuer: 'GraniteShares',
+      source_url: 'https://www.justetf.com/en/etf-profile.html?isin=XS2842095320',
+      t212_source_url: 'https://www.trading212.com/trading-instruments/invest/LAA3.GB',
+      verified_on: '2026-08-19',
+      notes:
+        'GraniteShares 3x Long Alibaba Daily ETP. The fetched justETF profile for this ISIN lists ' +
+        '"London Stock Exchange | LAA3 | GBX (British pence)" alongside the USD line 3LAA. AJ Bell has ' +
+        'no page for LAA3, so unlike the neighbouring GraniteShares rows this one rests on a single ' +
+        'fetched source for its currency; the T212 listing evidence is independent of it. BABA is the ' +
+        'US ADR line, which is what the screener would fetch bars for.',
+    },
+  },
+  {
+    lse_ticker: '3LMO',
+    screening_instrument: 'MRNA',
+    underlying: 'Moderna Inc',
+    leverage: 3,
+    direction: 'long',
+    subclass: 'single_stock_etp_3x',
+    currency: 'USD',
+    t212_isa: true,
+    provenance: {
+      isin: 'XS3069877556',
+      issuer: 'GraniteShares',
+      source_url: 'https://www.ajbell.co.uk/market-research/LSE:3LMO',
+      t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3LMO.GB',
+      verified_on: '2026-08-19',
+      notes:
+        'GraniteShares 3x Long Moderna Daily ETP, USD line (AJ Bell quotes LSE:3LMO in dollars). The ' +
+        'issuer names a sterling twin, MOL3, but no T212 page for it was found, so the only ' +
+        'T212-evidenced Moderna line is this dollar one — recorded as USD rather than substituting the ' +
+        'unevidenced sterling ticker.',
+    },
+  },
+  {
+    lse_ticker: '3LIP',
+    screening_instrument: 'NIO',
+    underlying: 'NIO Inc',
+    leverage: 3,
+    direction: 'long',
+    subclass: 'single_stock_etp_3x',
+    currency: 'GBX',
+    t212_isa: true,
+    provenance: {
+      isin: 'XS3075487044',
+      issuer: 'GraniteShares',
+      source_url: 'https://www.ajbell.co.uk/market-research/LSE:3LIP',
+      t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3LIP.GB',
+      verified_on: '2026-08-19',
+      notes:
+        'GraniteShares 3x Long NIO Daily ETP, GBX line (issuer fact summary: "3LIE (EUR) / 3LIP (GBX) / ' +
+        '3LNI (USD)"; AJ Bell quotes LSE:3LIP in pence). GraniteShares has published a reverse split for ' +
+        'this product, so any historical price series for the ETP line is discontinuous across it — the ' +
+        'screener reads NIO, not this line, so it is unaffected, but a mark or PnL history is not.',
+    },
+  },
+  {
+    lse_ticker: '3LSQ',
+    screening_instrument: 'XYZ',
+    underlying: 'Block Inc (formerly Square)',
+    leverage: 3,
+    direction: 'long',
+    subclass: 'single_stock_etp_3x',
+    currency: 'USD',
+    t212_isa: true,
+    provenance: {
+      isin: 'XS2596085972',
+      issuer: 'GraniteShares',
+      source_url: 'https://www.ajbell.co.uk/market-research/LSE:3LSQ',
+      t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3LSQ.GB',
+      verified_on: '2026-08-19',
+      notes:
+        'GraniteShares 3x Long Square Daily ETP, USD line per AJ Bell. **The screening instrument is ' +
+        'XYZ, not SQ**: Block renamed its NYSE ticker from SQ to XYZ effective 2025-01-21 (the company ' +
+        "issued the change itself), and both the issuer's product page and T212's page title still say " +
+        '"Square" — a stale name on the ETP side, not a second instrument. A bar fetch on SQ would ' +
+        'resolve to nothing or to the wrong root, which is exactly the confusion the two-field split ' +
+        'exists to prevent. The issuer also names a sterling line, LSQ3; no T212 page for it was found.',
+    },
+  },
+  {
+    lse_ticker: '3AMZ',
+    screening_instrument: 'AMZN',
+    underlying: 'Amazon.com Inc',
+    leverage: 3,
+    direction: 'long',
+    subclass: 'single_stock_etp_3x',
+    currency: 'GBX',
+    t212_isa: true,
+    provenance: {
+      isin: 'IE00BK5BZQ82',
+      issuer: 'Leverage Shares',
+      source_url: 'https://www.ajbell.co.uk/market-research/LSE:3AMZ',
+      t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3AMZ.GB',
+      verified_on: '2026-08-19',
+      notes:
+        'Leverage Shares 3x Amazon ETP Securities, tracking the iSTOXX Leveraged 3X AMZN Index. AJ Bell ' +
+        'quotes LSE:3AMZ in pence; the issuer factsheet lists the same ISIN across three LSE lines ' +
+        '(3AMZ sterling, AMZ3 USD, 3AMZE EUR), so the ISIN alone does not identify a tradeable line — ' +
+        'the ticker does.',
+    },
+  },
+  {
+    lse_ticker: '3FB',
+    screening_instrument: 'META',
+    underlying: 'Meta Platforms Inc',
+    leverage: 3,
+    direction: 'long',
+    subclass: 'single_stock_etp_3x',
+    currency: 'GBX',
+    t212_isa: true,
+    provenance: {
+      isin: 'IE00BK5C1B80',
+      issuer: 'Leverage Shares',
+      source_url: 'https://www.ajbell.co.uk/market-research/LSE:3FB',
+      t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3FB.GB',
+      verified_on: '2026-08-19',
+      notes:
+        'Leverage Shares 3x Facebook ETP Securities, sterling line quoted in pence. Both the issuer ' +
+        'factsheet and T212 still carry the pre-rename "Facebook" product name; the tracked company is ' +
+        "Meta Platforms and the screener's instrument is META, which the issuer's own product page " +
+        'states. 3FB is also a Euronext Amsterdam and Borsa Italiana code for this ISIN — the LSE line ' +
+        'is the one this row names.',
+    },
+  },
+  {
+    lse_ticker: '3UBR',
+    screening_instrument: 'UBER',
+    underlying: 'Uber Technologies Inc',
+    leverage: 3,
+    direction: 'long',
+    subclass: 'single_stock_etp_3x',
+    currency: 'GBX',
+    t212_isa: true,
+    provenance: {
+      isin: 'XS2337092550',
+      issuer: 'Leverage Shares',
+      source_url: 'https://www.ajbell.co.uk/market-research/LSE:3UBR',
+      t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3UBR.GB',
+      verified_on: '2026-08-19',
+      notes:
+        'Leverage Shares 3x Uber ETP Securities, sterling line quoted in pence per AJ Bell. The T212 ' +
+        'result title for 3UBR.GB is truncated before the ticker ("Invest in Leverage Shares 3x UBER, ' +
+        'London Stock Exchange"), so the ticker evidence there is the URL; the USD twin UBR3.GB carries ' +
+        'the full title. Recorded rather than quietly upgraded.',
+    },
+  },
+  {
+    lse_ticker: '3RAC',
+    screening_instrument: 'RACE',
+    underlying: 'Ferrari NV (US ADR)',
+    leverage: 3,
+    direction: 'long',
+    subclass: 'single_stock_etp_3x',
+    currency: 'GBX',
+    t212_isa: true,
+    provenance: {
+      isin: 'XS2595673190',
+      issuer: 'Leverage Shares',
+      source_url: 'https://www.ajbell.co.uk/market-research/LSE:3RAC',
+      t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3RAC.GB',
+      verified_on: '2026-08-19',
+      notes:
+        'Leverage Shares 3x Long Ferrari ETP, sterling line quoted in pence. The issuer names the ' +
+        'underlying as the Ferrari NV ADR and the index as iSTOXX Leveraged 3x RACE, which is where the ' +
+        'RACE screening instrument comes from. The ADR’s listing venue was NOT independently ' +
+        'confirmed by any page fetched for this row — the company is also Milan-listed, and the two ' +
+        'venues do not share a session, so which line the screener actually fetches is worth checking ' +
+        'before this row is consumed.',
+    },
+  },
+  {
+    lse_ticker: '3ARM',
+    screening_instrument: 'ARM',
+    underlying: 'Arm Holdings plc (US ADR)',
+    leverage: 3,
+    direction: 'long',
+    subclass: 'single_stock_etp_3x',
+    currency: 'GBX',
+    t212_isa: true,
+    provenance: {
+      isin: 'XS2691006303',
+      issuer: 'Leverage Shares',
+      source_url: 'https://www.ajbell.co.uk/market-research/LSE:3ARM',
+      t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3ARM.GB',
+      verified_on: '2026-08-19',
+      notes:
+        'Leverage Shares 3x Long ARM ETP, sterling line quoted in pence. Underlying is the Arm Holdings ' +
+        'ADR per the issuer; the index is iSTOXX Leveraged 3x ARM, which is where the ARM screening ' +
+        "ticker comes from. As with 3RAC, the ADR's listing venue was not independently confirmed by a " +
+        'fetched page. The USD twin ARM3 is also T212-listed.',
+    },
+  },
+  {
+    lse_ticker: '3VT',
+    screening_instrument: 'VT',
+    underlying: 'Vanguard Total World Stock ETF',
+    leverage: 3,
+    direction: 'long',
+    subclass: 'index_etp_3x',
+    currency: 'GBX',
+    t212_isa: true,
+    provenance: {
+      isin: 'XS2399364822',
+      issuer: 'Leverage Shares',
+      source_url: 'https://www.ajbell.co.uk/market-research/LSE:3VT',
+      t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3VT.GB',
+      verified_on: '2026-08-19',
+      notes:
+        'Leverage Shares 3x Long Total World ETP. AJ Bell states the product delivers 3x the daily ' +
+        'performance of the Vanguard Total World Stock Index Fund ETF, so the screening instrument is ' +
+        'that ETF itself (VT) rather than a proxy — the closest this pool gets to screening the actual ' +
+        'tracked object. Sterling line quoted in pence; VT3 (USD) and 3VTE (EUR) share the ISIN. ' +
+        'NOT THE SPY-MEASURED ENVELOPE: ADR-0018 measured the `index_etp_3x` bracket and D5 ' +
+        'deployment fraction with SPY standing in for the whole subclass. VT is a broader, ' +
+        'multi-region tracker, so a consumer sizing this row off the subclass is sizing off an ' +
+        'envelope nobody measured for this instrument.',
+    },
+  },
+  {
+    lse_ticker: '3KOR',
+    screening_instrument: 'EWY',
+    underlying: 'iShares MSCI South Korea ETF',
+    leverage: 3,
+    direction: 'long',
+    subclass: 'index_etp_3x',
+    currency: 'GBX',
+    t212_isa: true,
+    provenance: {
+      isin: 'XS2472196257',
+      issuer: 'Leverage Shares',
+      source_url: 'https://www.ajbell.co.uk/market-research/LSE:3KOR',
+      t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3KOR.GB',
+      verified_on: '2026-08-19',
+      notes:
+        'Leverage Shares 3x Long South Korea ETP, sterling line quoted in pence. AJ Bell names the ' +
+        'tracked object as the iShares MSCI South Korea ETF, i.e. EWY. Note the session mismatch in ' +
+        'residual risk 3 is worse for this row than for a US single stock: the Korean market that drives ' +
+        "EWY's NAV is closed for the whole of the screening window. " +
+        'NOT THE SPY-MEASURED ENVELOPE: ADR-0018 measured the `index_etp_3x` bracket and D5 ' +
+        'deployment fraction with SPY standing in for the whole subclass. A single-country ' +
+        'tracker sits nowhere near 3x SPY, so a consumer sizing this row off the subclass is ' +
+        'sizing off an envelope nobody measured for this instrument.',
+    },
+  },
+  {
+    lse_ticker: '3KWE',
+    screening_instrument: 'KWEB',
+    underlying: 'KraneShares CSI China Internet ETF',
+    leverage: 3,
+    direction: 'long',
+    subclass: 'index_etp_3x',
+    currency: 'GBX',
+    t212_isa: true,
+    provenance: {
+      isin: 'XS2800709128',
+      issuer: 'Leverage Shares',
+      source_url: 'https://www.ajbell.co.uk/market-research/LSE:3KWE',
+      t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3KWE.GB',
+      verified_on: '2026-08-19',
+      notes:
+        'Leverage Shares 3x Long China Tech ETP, sterling line quoted in pence. AJ Bell names the ' +
+        'KraneShares CSI China Internet ETF (KWEB) as the tracked object. T212 also lists 3KWB.GB, ' +
+        'which is the EUR line of the same product — not this row. The same closed-home-market caveat ' +
+        'as 3KOR applies, as does 3KOR\u2019s envelope caveat: ADR-0018 measured the `index_etp_3x` ' +
+        'bracket and D5 deployment fraction with SPY standing in for the whole subclass, and a ' +
+        'single-country sector tracker is not that instrument.',
+    },
+  },
+  {
+    lse_ticker: '3XLE',
+    screening_instrument: 'XLE',
+    underlying: 'Energy Select Sector SPDR Fund',
+    leverage: 3,
+    direction: 'long',
+    subclass: 'index_etp_3x',
+    currency: 'GBX',
+    t212_isa: true,
+    provenance: {
+      isin: 'XS2399370555',
+      issuer: 'Leverage Shares',
+      source_url: 'https://www.ajbell.co.uk/market-research/LSE:3XLE',
+      t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3XLE.GB',
+      verified_on: '2026-08-19',
+      notes:
+        'Leverage Shares 3x Long Oil & Gas ETP, sterling line quoted in pence. AJ Bell names the Energy ' +
+        'Select Sector SPDR Fund (XLE) as the tracked object. T212 also lists 3XEE.GB, the EUR line of ' +
+        'the same product \u2014 not this row. NOT THE SPY-MEASURED ENVELOPE: ADR-0018 measured the ' +
+        '`index_etp_3x` bracket and D5 deployment fraction with SPY standing in for the whole ' +
+        'subclass. A single-sector tracker is not that instrument, so a consumer sizing this row ' +
+        'off the subclass is sizing off an envelope nobody measured for it.',
     },
   },
 ];

@@ -65,10 +65,13 @@ describe('LSE_ETP_POOL — the checked-in pool', () => {
     // even considered. The verified-tradeable ETP-LINE count across the three
     // named issuers is materially above 25 — see the module doc's provenance
     // section. That is a line count, NOT the distinct-underlying count #707's
-    // 25-name threshold is measured against (7 today — see the
-    // `countRankableUnderlyings` describe block below). This file ships 11
-    // fully-verified rows as a seed, not a claim of completeness, so the test
-    // asserts a floor rather than a ceiling.
+    // 25-name threshold is measured against (26 today — see the
+    // `countRankableUnderlyings` describe block below, where that threshold
+    // has its own assertion). #813 carried nineteen further rows through the
+    // same per-row verification, but the file still ships a verified seed
+    // rather than a claim of completeness — neither issuer's short (-3x)
+    // side is represented at all — so the test asserts a floor rather than a
+    // ceiling.
     expect(LSE_ETP_POOL.length).toBeGreaterThanOrEqual(11);
   });
 
@@ -180,20 +183,33 @@ describe('t212_isa is populated for every row', () => {
 });
 
 describe('countRankableUnderlyings — the count #707 consumes, not #751', () => {
-  it('returns 7 for the checked-in pool: SPY, QQQ, PLTR, and NVDA each carry two ETP lines', () => {
-    expect(countRankableUnderlyings(LSE_ETP_POOL)).toBe(7);
+  it('returns 26 for the checked-in pool: SPY, QQQ, PLTR, and NVDA each carry two ETP lines', () => {
+    expect(countRankableUnderlyings(LSE_ETP_POOL)).toBe(26);
+  });
+
+  it('clears the >= 25 distinct-underlying threshold #707 ranks against (#813)', () => {
+    // The named acceptance criterion of #813, asserted rather than observed.
+    // This is the gate `docs/specs/universe-selector-spec.md` ("Candidate
+    // pool") sets for where the monthly-quintile ranking earns its keep: at
+    // 7 underlyings the quintiles held 1-2 names each and the statistic was
+    // undefined rather than merely weak. It is deliberately a floor, not an
+    // equality — rows may be added freely, but removing enough of them to
+    // drop back under 25 must fail here rather than silently re-block #707.
+    // Note this counts UNDERLYINGS, not rows: 30 rows would not satisfy it
+    // if they collapsed onto fewer than 25 distinct screening instruments.
+    expect(countRankableUnderlyings(LSE_ETP_POOL)).toBeGreaterThanOrEqual(25);
   });
 
   it('is strictly less than the row count, since some underlyings have more than one issuer line', () => {
     expect(countRankableUnderlyings(LSE_ETP_POOL)).toBeLessThan(LSE_ETP_POOL.length);
   });
 
-  it('the pool has exactly 11 tradeable ETP lines — the count #751 consumes', () => {
-    expect(LSE_ETP_POOL.length).toBe(11);
+  it('the pool has exactly 30 tradeable ETP lines — the count #751 consumes', () => {
+    expect(LSE_ETP_POOL.length).toBe(30);
   });
 
   it('defaults to the checked-in pool when called with no argument', () => {
-    expect(countRankableUnderlyings()).toBe(7);
+    expect(countRankableUnderlyings()).toBe(26);
   });
 
   it('counts distinct screening_instrument values, not rows, on an arbitrary pool', () => {
