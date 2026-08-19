@@ -70,18 +70,25 @@ import { NO_DATA_MARKER } from '../analysts/types.js';
 import { computeConvictionScore } from '../debate-engine/conviction-score.js';
 import type { AnalystView, DebateResult, Direction } from '../debate-engine/index.js';
 import { decide } from './decide.js';
-import { D5_INDEX_ETP_DEPLOYMENT_FRACTION } from './subclass-bracket.js';
+import {
+  D5_INDEX_ETP_DEPLOYMENT_FRACTION,
+  D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION,
+} from './subclass-bracket.js';
 import { DEFAULT_TRADER_CONFIG, type TraderConfig, type TraderInput } from './types.js';
 
 const FLOOR = DEFAULT_TRADER_CONFIG.conviction_floor;
 
 const INDEX_ETP = '3USL';
+const SINGLE_STOCK_ETP = '3LTS';
 const DECISION_BAR = new Date('2026-07-15T10:00:00Z');
 const ENTRY_PRICE = 40;
 const EQUITY = 100_000;
+/** ADR-0015's 2026-08-18 amendment: the book is GBP 1,000, all equity. */
+const LIVE_BOOK = 1_000;
 
 const SUBCLASS_OF: Readonly<Record<string, InstrumentSubclass>> = {
   [INDEX_ETP]: 'index_etp_3x',
+  [SINGLE_STOCK_ETP]: 'single_stock_etp_3x',
 };
 
 /**
@@ -303,15 +310,15 @@ function debateAt(confidence: number): DebateResult {
   };
 }
 
-function traderInput(confidence: number): TraderInput {
+function traderInput(confidence: number, equity = EQUITY, instrument = INDEX_ETP): TraderInput {
   const config: TraderConfig = { ...DEFAULT_TRADER_CONFIG, subclass_of: SUBCLASS_OF };
   return {
     trace_id: 'trace-870',
-    instrument: INDEX_ETP,
+    instrument,
     debate: debateAt(confidence),
     clock: CLOCK,
     marketData: new FixtureMarketData(),
-    equity: async () => EQUITY,
+    equity: async () => equity,
     config,
     positionState: async () => [],
     exitFillSizes: async () => new Map<string, number>(),
@@ -323,8 +330,12 @@ function traderInput(confidence: number): TraderInput {
   };
 }
 
-async function deploymentAt(confidence: number): Promise<number> {
-  const intent = await decide(traderInput(confidence));
+async function deploymentAt(
+  confidence: number,
+  equity = EQUITY,
+  instrument = INDEX_ETP,
+): Promise<number> {
+  const intent = await decide(traderInput(confidence, equity, instrument));
   if (intent === null) throw new Error(`expected an entry intent at conviction ${confidence}`);
   return intent.size * intent.entry;
 }
@@ -371,17 +382,31 @@ describe('#870 — what the damping is worth at the composition root', () => {
   });
 
   it('does not clear the minimum viable notional by accident — the floor does not enforce #745', async () => {
-    // Reported as a NEGATIVE result rather than relied on. At the live
-    // GBP 1,000 book the gated deployment is ~GBP 23 against a
-    // `min_viable_notional` of 10, so nothing downstream quietly restores the
-    // veto #745 believed it had.
+    // Reported as a NEGATIVE result rather than relied on, and run through
+    // `decide` at the real book size rather than recomputed here: a test that
+    // restated the sizing formula would survive `convictionMultiplier` being
+    // deleted from `decide.ts` entirely.
+    //
+    // Both frozen ADR-0018 D5 brackets are checked, because the conclusion has
+    // to hold on the whole live universe, not just the index row. Deployment is
+    // `deployment_fraction x equity x multiplier` on both — the stop cancels
+    // out of `risk_fraction = deployment_fraction x stop_pct` — so the
+    // single-stock row lands lower and still clears the minimum.
     const conviction = convictionOf(absentDesk(gatedAssessment()), 'bullish');
     const multiplier = (conviction - FLOOR) / (1 - FLOOR);
-    const liveBook = 1_000;
 
-    const deployedOnLiveBook = D5_INDEX_ETP_DEPLOYMENT_FRACTION * liveBook * multiplier;
+    const onIndex = await deploymentAt(conviction, LIVE_BOOK, INDEX_ETP);
+    const onSingleStock = await deploymentAt(conviction, LIVE_BOOK, SINGLE_STOCK_ETP);
 
-    expect(deployedOnLiveBook).toBeGreaterThan(DEFAULT_TRADER_CONFIG.min_viable_notional);
-    expect(deployedOnLiveBook).toBeCloseTo(23.3, 1);
+    expect(onIndex).toBeCloseTo(D5_INDEX_ETP_DEPLOYMENT_FRACTION * LIVE_BOOK * multiplier, 6);
+    expect(onIndex).toBeCloseTo(23.33, 2);
+    expect(onSingleStock).toBeCloseTo(
+      D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION * LIVE_BOOK * multiplier,
+      6,
+    );
+    expect(onSingleStock).toBeCloseTo(16.67, 2);
+
+    expect(onIndex).toBeGreaterThan(DEFAULT_TRADER_CONFIG.min_viable_notional);
+    expect(onSingleStock).toBeGreaterThan(DEFAULT_TRADER_CONFIG.min_viable_notional);
   });
 });
