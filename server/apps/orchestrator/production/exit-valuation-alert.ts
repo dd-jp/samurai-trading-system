@@ -49,17 +49,44 @@
  * the position that made the tick produce one.
  */
 
+/**
+ * ## The `trader` seam (#826) — the SAME page, one stage earlier
+ *
+ * #841's two seams both mean "the exit went out against a book that could not
+ * be fully valued". #826 adds a third that means "the exit went out with NO
+ * PRICE OF ITS OWN": the instrument's own mark read failed — an Alpaca stall,
+ * which `FailoverDataSource` deliberately does not fail over for marks — and
+ * `buildFlattenExit` emitted the mandatory flat-by-close exit anyway, with
+ * `entry`/`stop`/`target` zeroed and `metadata.unpriced_exit` set.
+ *
+ * Reported through THIS port rather than a sixteenth channel because the
+ * operator's question and action are identical: an exit proceeded despite a
+ * market-data failure, and the market-data feed for the named instrument is
+ * the thing to look at. A separate transport would split one condition across
+ * two chats and double the wiring surface (`AlertChannelSlots`) for no new
+ * decision. What differs is the CONSEQUENCE line, which the formatter varies
+ * per seam — the risk/verdict seams understate exposure in `risk_log`, while
+ * the trader seam leaves the intent's price fields meaningless.
+ */
 /** One exit priced against a book that could not be fully valued. */
 export interface ExitValuationDegradedAlert {
   /** The instrument being EXITED — not the one that could not be valued. */
   instrument: string;
   /**
-   * Which seam degraded. Both re-derive the portfolio for the same tick:
-   * `risk` sizes/records the exit, `verdict` re-checks breakers at fire time
-   * (verdict-spec.md gate 5). A tick can report both.
+   * Which seam degraded. `risk` and `verdict` both re-derive the portfolio for
+   * the same tick: `risk` sizes/records the exit, `verdict` re-checks breakers
+   * at fire time (verdict-spec.md gate 5). A tick can report both.
+   *
+   * `trader` (#826) is a different condition on the same subject — see the
+   * block above: the EXIT ITSELF has no mark, not merely the rest of the book.
    */
-  seam: 'risk' | 'verdict';
-  /** The held instruments left out of the valuation — the dark names. */
+  seam: 'risk' | 'verdict' | 'trader';
+  /**
+   * The held instruments left out of the valuation — the dark names. On the
+   * `trader` seam that is the exited instrument itself, which is the whole
+   * point of that seam: the one name that could not be priced is the one being
+   * closed.
+   */
   unvalued_instruments: readonly string[];
   /**
    * The refusal the strict valuation raised, verbatim — it names each dark

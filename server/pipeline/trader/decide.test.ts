@@ -2267,3 +2267,170 @@ describe('checkExitsWithReason — the indicator-based early exit (#748)', () =>
     expect(reads).toBe(0);
   });
 });
+
+/**
+ * #826 — THE MARK SOURCE STALLS.
+ *
+ * `FailoverDataSource` fails BARS over to a second vendor and deliberately
+ * does not fail MARKS over, so an Alpaca stall makes `getMark` throw for the
+ * whole outage. Before this ticket that throw was on the flatten's path: the
+ * exit never got built, `tick-loop.ts` logged the instrument as failed, and
+ * under ADR-0014's flat-by-close invariant a stall in the last hour of a
+ * session was a missed exit rather than a pause.
+ *
+ * The decision recorded in `readExitPrice`: the MANDATORY flatten degrades to
+ * an unpriced market exit; everything else still fails loudly. These cases pin
+ * BOTH halves — a suite that only asserted the flatten would go green on an
+ * implementation that swallowed every mark failure everywhere.
+ */
+describe('decide/checkExits — the mark read fails (#826)', () => {
+  const INSIDE_WINDOW = new Date('2026-07-15T19:56:00Z');
+  const OUTSIDE_WINDOW = new Date('2026-07-15T15:00:00Z');
+  const TICK_BAR = new Date('2026-07-15T18:00:00Z');
+  const STALL = 'alpaca: request timed out after 3 attempts';
+
+  /** The live shape of the outage: bars still answer, the mark does not. */
+  class MarkStalledMarketData extends FixtureMarketData {
+    override async getMark(): Promise<Mark> {
+      throw new Error(STALL);
+    }
+  }
+
+  function stalled(): MarkStalledMarketData {
+    const marketData = new MarkStalledMarketData(bars(15, 2));
+    // Momentum that still SUPPORTS a long, so nothing here reaches the early
+    // exit by accident — the flatten window is the only thing that fires.
+    marketData.indicatorReads.set('rsi', 60);
+    marketData.indicatorReads.set('macd_histogram', 0.5);
+    return marketData;
+  }
+
+  function exitInput(overrides: Partial<ExitCheckInput> = {}): ExitCheckInput {
+    const base = traderInput();
+    return {
+      trace_id: base.trace_id,
+      instrument: base.instrument,
+      clock: new ManualClock(INSIDE_WINDOW),
+      config: base.config,
+      marketData: stalled(),
+      sessionCalendars: base.sessionCalendars,
+      positionState: async () => [openPosition({ side: 'buy', filled_size: 10 })],
+      exitFillSizes: base.exitFillSizes,
+      bar: TICK_BAR,
+      ...overrides,
+    };
+  }
+
+  it('still flattens on the tick path, unpriced, rather than carrying the position overnight', async () => {
+    const outcome = await checkExitsWithReason(exitInput());
+
+    expect(outcome.intent?.intent_type).toBe('exit');
+    expect(outcome.intent?.metadata.exit_reason).toBe('flatten');
+    expect(outcome.intent?.side).toBe('sell');
+    // Sized to the HELD quantity — the number that never needed a price.
+    expect(outcome.intent?.size).toBe(10);
+    // Asset class off the open lot, which is what the position was opened as.
+    expect(outcome.intent?.asset_class).toBe('stocks');
+    // The three price fields are zero and flagged as meaningless, rather than
+    // carrying a stale or invented number a later reader would trust.
+    expect(outcome.intent?.entry).toBe(0);
+    expect(outcome.intent?.stop).toBe(0);
+    expect(outcome.intent?.target).toBe(0);
+    expect(outcome.intent?.metadata.unpriced_exit).toBe(true);
+  });
+
+  it('reports the unpriced flatten, so the degradation is never silent', async () => {
+    const reports: { instrument: string; reason: string }[] = [];
+
+    const outcome = await checkExitsWithReason(
+      exitInput({ onUnpricedFlatten: (report) => reports.push(report) }),
+    );
+
+    expect(outcome.intent?.metadata.unpriced_exit).toBe(true);
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.instrument).toBe(INSTRUMENT);
+    expect(reports[0]?.reason).toContain('timed out');
+  });
+
+  it('flattens even when the report channel throws — a page must not cost the exit', async () => {
+    const outcome = await checkExitsWithReason(
+      exitInput({
+        onUnpricedFlatten: () => {
+          throw new Error('telegram is unreachable');
+        },
+      }),
+    );
+
+    expect(outcome.intent?.metadata.unpriced_exit).toBe(true);
+  });
+
+  it('flattens unpriced on the DECISION path too — a debate bar reaches the same branch', async () => {
+    const outcome = await decideWithReason(
+      traderInput({
+        clock: new ManualClock(INSIDE_WINDOW),
+        marketData: stalled(),
+        debate: debateResult({ direction: 'neutral' }),
+        positionState: async () => [openPosition({ side: 'buy', filled_size: 10 })],
+      }),
+    );
+
+    expect(outcome.intent?.intent_type).toBe('exit');
+    expect(outcome.intent?.metadata.exit_reason).toBe('flatten');
+    expect(outcome.intent?.metadata.unpriced_exit).toBe(true);
+  });
+
+  /**
+   * The other half, and the one that keeps the degradation honest. A DECAY
+   * release is the system choosing to close, not the session forcing it —
+   * deferring one to the next tick costs nothing, and a feed that cannot
+   * answer is a real reason to do less. If this ever goes green with an
+   * intent, the "only the mandatory flatten degrades" claim is false.
+   */
+  it('does NOT degrade a signal_decay release — it still fails loudly', async () => {
+    const marketData = stalled();
+    marketData.indicatorReads.set('rsi', 40);
+    marketData.indicatorReads.set('macd_histogram', -0.5);
+
+    await expect(
+      checkExitsWithReason(exitInput({ clock: new ManualClock(OUTSIDE_WINDOW), marketData })),
+    ).rejects.toThrow(STALL);
+  });
+
+  it('does NOT degrade a direction_flip exit — it still fails loudly', async () => {
+    await expect(
+      decideWithReason(
+        traderInput({
+          clock: new ManualClock(OUTSIDE_WINDOW),
+          marketData: stalled(),
+          // Holding long while the debate resolves short: the flip exit, which
+          // the debate decides rather than the clock.
+          debate: debateResult({ direction: 'bearish', confidence: 0.9 }),
+          positionState: async () => [openPosition({ side: 'buy', filled_size: 10 })],
+        }),
+      ),
+    ).rejects.toThrow(STALL);
+  });
+
+  it('does NOT degrade an ENTRY — a position must never be opened without a price', async () => {
+    await expect(
+      decideWithReason(
+        traderInput({
+          clock: new ManualClock(OUTSIDE_WINDOW),
+          marketData: stalled(),
+          positionState: async () => [],
+        }),
+      ),
+    ).rejects.toThrow(STALL);
+  });
+
+  it('leaves a HEALTHY flatten priced and unflagged — the degradation is reached only on a failure', async () => {
+    const marketData = new FixtureMarketData(bars(15, 2));
+    marketData.indicatorReads.set('rsi', 60);
+    marketData.indicatorReads.set('macd_histogram', 0.5);
+
+    const outcome = await checkExitsWithReason(exitInput({ marketData }));
+
+    expect(outcome.intent?.entry).toBe(ENTRY_PRICE);
+    expect(outcome.intent?.metadata.unpriced_exit).toBeUndefined();
+  });
+});

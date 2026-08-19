@@ -316,6 +316,33 @@ export interface TraderInput {
    * ticket exists to remove — exactly the no-caller shape #430 closes.
    */
   setupStore: SetupStore;
+  /**
+   * #826: raised when the mandatory flat-by-close flatten was built WITHOUT a
+   * mark, because the instrument's own mark read failed (an Alpaca stall). The
+   * exit still goes out — see `buildFlattenExit` for why — and this is what
+   * stops that degradation from being silent.
+   *
+   * Optional, and the degradation does NOT depend on it. That distinction is
+   * deliberate and is the opposite call to `sessionCalendars`/`exitFillSizes`
+   * above, which are required precisely because forgetting them disarms a
+   * safety rule. Here, forgetting it costs an operator page and nothing else:
+   * the flatten is built the same way whether or not a channel is wired, so a
+   * composition root that omits this cannot reintroduce the missed exit. Same
+   * shape as `exitValuationAlerts` (#841) one stage down, which the live root
+   * routes this into.
+   *
+   * Must not throw — the flatten is already committed by the time it is
+   * called, and a page that could abort it would reinstate exactly the
+   * suppression #826 removes. `buildFlattenExit` guards it anyway.
+   */
+  onUnpricedFlatten?: (report: UnpricedFlattenReport) => void;
+}
+
+/** One mandatory flatten built without a mark (#826). */
+export interface UnpricedFlattenReport {
+  instrument: string;
+  /** The mark read's own failure, rendered — the only form a thrown value survives in. */
+  reason: string;
 }
 
 /** The single test seam. `decide` in ./decide.ts is its implementation. */

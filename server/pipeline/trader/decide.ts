@@ -691,6 +691,109 @@ interface ExitAttribution {
 }
 
 /**
+ * What the exit prices its (degenerate) bracket at — and #826's decision:
+ * **a MANDATORY flatten never depends on a live mark.**
+ *
+ * ## The failure
+ *
+ * `FailoverDataSource` (providers/market-data-service) fails bars over to a
+ * second vendor and deliberately does NOT fail marks over: the fallback
+ * vendors serve delayed historical aggregates, and pricing an open position
+ * off a delayed, differently-conventioned feed is worse than a loud failure.
+ * That decision stands and is not reopened here. Its CONSEQUENCE is what #826
+ * is about: `getMark` still throws for the whole length of an Alpaca stall,
+ * and this read is on the flatten's path — so under ADR-0014's flat-by-close
+ * invariant a vendor outage in the last hour of a session was not a pause, it
+ * was a missed exit. The throw propagates to `tick-loop.ts`'s `error` catch,
+ * the tick moves on, and a leveraged ETP (ADR-0016) carries overnight.
+ *
+ * ## Hold versus flatten — the ticket's actual question
+ *
+ * **Flatten.** Scoped to the ONE exit the horizon makes mandatory
+ * (`exit_reason: 'flatten'`); every other exit keeps failing loudly, and so
+ * does every entry.
+ *
+ * The argument is that the mark is not load-bearing for this order. An exit
+ * sizes to the HELD QUANTITY, never to a price (`heldQuantitiesFor`, above),
+ * and `executeExit` submits a MARKET flatten — `submitFlatten` takes
+ * (instrument, side, size, key) and reads no price at all. The mark's only
+ * jobs here are to stamp `asset_class` and to fill `entry`/`stop`/`target`,
+ * which are degenerate on an exit by construction (all three equal) and which
+ * #83's flatten lifecycle does not consult. `asset_class` is carried on the
+ * open lot, which is the better source anyway: it is what the position was
+ * actually opened as.
+ *
+ * So the choice is between a flatten that goes out with three unread price
+ * fields and no flatten at all. ADR-0014 settles that.
+ *
+ * ## Why only `'flatten'`
+ *
+ * `signal_decay` and `direction_flip` are DISCRETIONARY exits — the system
+ * choosing to close, not the session forcing it. Nothing is lost by deferring
+ * one to the next tick, and a market-data feed that cannot answer is a real
+ * reason to do less. `'flatten'` is the only exit whose deferral is itself the
+ * harm, so it is the only one that degrades; the other two keep propagating
+ * the throw exactly as before.
+ *
+ * ## The trigger is ANY throw, not a feed stall
+ *
+ * The degradation keys on `getMark` throwing, and nothing narrower: a symbol
+ * mapping that resolves to no instrument, a `marketData` wired to a source that
+ * does not serve this venue, and a stalled feed are one case here. That is
+ * correct rather than merely tolerable, because the flatten's size comes from
+ * our own position store and its price fields are never read — an exit is
+ * sized to the held quantity, so a misconfiguration cannot make a degraded
+ * flatten close the wrong amount, only an unpriced one.
+ *
+ * ## The control plane is a different service
+ *
+ * Alpaca serves both marks and orders here, so a fair question is whether a
+ * flatten can even be submitted during an Alpaca outage. It can: the data API
+ * stalling does not imply the trading API is down, and they are separate hosts
+ * (`AlpacaHttpDataClient` vs the execution adapter). If the trading API is
+ * also down the flatten fails at the adapter — loudly, with a durable
+ * `flatten_submissions` row and #86's reconciliation behind it — which is the
+ * correct outcome and strictly better than never having tried.
+ *
+ * ## Backtest and replay
+ *
+ * Not gated on a mode flag, because this seam has none and inventing one would
+ * add a knob a caller can set wrongly. A missing fixture mark in replay still
+ * fails loudly one stage down: `SimulatedBrokerAdapter` prices its own fills
+ * through `marketData.getMark`, so an unpriced exit cannot fill quietly there
+ * — it raises the same read failure at the adapter instead.
+ */
+async function readExitPrice(
+  input: Pick<TraderInput, 'instrument' | 'marketData' | 'onUnpricedFlatten'>,
+  positions: OpenPosition[],
+  exitReason: ExitReason,
+  asOf: Date,
+): Promise<{ price: number; asset_class: AssetClass; unpriced: boolean }> {
+  const { instrument, marketData } = input;
+  try {
+    const mark = await marketData.getMark(instrument, asOf);
+    return { price: mark.price, asset_class: mark.asset_class, unpriced: false };
+  } catch (error) {
+    const lotAssetClass = positions[0]?.asset_class;
+    // A discretionary exit, or a lot that cannot even say what asset class it
+    // is (nothing constructs one, but an array index is not proof) — both
+    // propagate exactly as they did before #826.
+    if (exitReason !== 'flatten' || lotAssetClass === undefined) throw error;
+
+    const reason = error instanceof Error ? error.message : String(error);
+    try {
+      input.onUnpricedFlatten?.({ instrument, reason });
+    } catch {
+      // The flatten is already decided; a page that could abort it would
+      // reinstate the very suppression this function removes. The composition
+      // root logs before it posts (`reportExitValuationDegraded`), so the
+      // durable record does not depend on this call surviving.
+    }
+    return { price: 0, asset_class: lotAssetClass, unpriced: true };
+  }
+}
+
+/**
  * The debate-free core of the flatten (#743): everything an exit needs is a
  * mark, the held quantities and a bar coordinate for the idempotency key.
  * `attribution` is metadata only — nothing here branches on it, which is what
@@ -698,13 +801,18 @@ interface ExitAttribution {
  * "The tick/decision split", constraint 4).
  */
 async function buildFlattenExit(
-  input: Pick<TraderInput, 'clock' | 'config' | 'exitFillSizes' | 'instrument' | 'marketData'>,
+  input: Pick<
+    TraderInput,
+    'clock' | 'config' | 'exitFillSizes' | 'instrument' | 'marketData' | 'onUnpricedFlatten'
+  >,
   positions: OpenPosition[],
   decisionBar: Date,
   attribution: ExitAttribution,
   exitReason: ExitReason,
 ): Promise<TraderOutcome> {
-  const { clock, config, exitFillSizes, instrument, marketData } = input;
+  // No `marketData` here since #826: the mark read moved into `readExitPrice`,
+  // which owns both the healthy answer and the unpriced degradation.
+  const { clock, config, exitFillSizes, instrument } = input;
 
   const existingSide = positions[0]?.side;
   if (existingSide === undefined) {
@@ -738,7 +846,7 @@ async function buildFlattenExit(
   if (totalSize <= 0) return skip('exit_no_filled_size');
 
   const asOf = clock.now();
-  const mark = await marketData.getMark(instrument, asOf);
+  const priced = await readExitPrice(input, positions, exitReason, asOf);
 
   return emit(
     {
@@ -751,18 +859,26 @@ async function buildFlattenExit(
         exitReason === 'signal_decay' ? 'early_close' : 'close',
       ),
       instrument,
-      asset_class: mark.asset_class,
+      asset_class: priced.asset_class,
       side: closingSide,
       intent_type: 'exit',
       size: totalSize,
-      entry: mark.price,
-      stop: mark.price,
-      target: mark.price,
-      time_in_force: config.time_in_force[mark.asset_class],
+      // All three are the mark, or all three are ZERO when there was no mark
+      // to read (#826). Degenerate either way: #83 owns the flatten lifecycle
+      // and consults none of them, and `executeExit` submits a market flatten
+      // sized to the held quantity without reading a price at all.
+      entry: priced.price,
+      stop: priced.price,
+      target: priced.price,
+      time_in_force: config.time_in_force[priced.asset_class],
       decision_timestamp: decisionBar,
       metadata: {
         debate_id: attribution.debate_id,
         exit_reason: exitReason,
+        // Spread rather than a plain `unpriced_exit: priced.unpriced` field:
+        // `exactOptionalPropertyTypes` is on, and the flag is true-or-absent so
+        // that `=== true` is the only test a reader can write (#826).
+        ...(priced.unpriced ? { unpriced_exit: true as const } : {}),
         conviction: attribution.conviction,
         converged: attribution.converged,
         sizing: {
@@ -1108,6 +1224,11 @@ export type ExitCheckInput = Pick<
   | 'sessionCalendars'
   | 'positionState'
   | 'exitFillSizes'
+  // #826: the tick path is where the mandatory flatten is actually decided
+  // (`routeExitCheck`'s first branch), so the unpriced-flatten escalation has
+  // to reach THIS entry point — omitting it here would leave the degradation
+  // audible only on the once-a-bar decision path.
+  | 'onUnpricedFlatten'
 > & {
   /** The pass's debate-bar coordinate, floored once by the tick runner. */
   bar: Date;

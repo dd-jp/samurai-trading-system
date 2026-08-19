@@ -355,10 +355,14 @@ describe('paperStartingProfile', () => {
       '#333',
       '#525',
       '#800',
+      // Closed 2026-08-19 and deleted from the list in the same edit, per that
+      // module's own rule: the change that made the mandatory flat-by-close
+      // exit survive a stalled mark source closes it.
+      '#826',
     ]) {
       expect(message).not.toContain(closed);
     }
-    for (const open of ['#734', '#888', '#886', '#798', '#826']) {
+    for (const open of ['#734', '#888', '#886', '#798', '#894']) {
       expect(message).toContain(open);
     }
     expect(message).toContain('#238');
