@@ -29,7 +29,7 @@ key appears here.
 | **Trading 212** (the account provider) | **No — VERIFIED from its own docs** | No quote endpoint exists; the one price field has no timestamp; the API Terms bar algorithmic trading outright (§4). |
 | **Yahoo Finance** | **Yes, 11/11 at 1-minute — VERIFIED** | Technically able for *bars*, but last-trade only, ~20 min delayed, and unlicensed. Research only. |
 | **Interactive Brokers** | **Yes — LSE L1, GBP 1.00/month non-professional** | **The recommendation.** Real-time bid/ask at a retail price. Needs an IBKR account: David's action. |
-| Twelve Data / EODHD / FMP / Databento | **No usable real-time XLON** | Delayed, EOD, Cboe-not-LSE, or US-only. See §5. |
+| Twelve Data / EODHD / FMP / Databento | **No real-time XLON found** (not the same as none existing) | Delayed, EOD, Cboe-not-LSE, or US-only in what was checked; Twelve Data's real-time-EU add-on advertises Cboe Europe and its LSE price was NOT FOUND rather than shown to be absent. See §5. |
 | Finnhub / Tiingo / marketstack / Alpha Vantage / IEX Cloud | **NOT VERIFIED** | Not confirmed against the pool or their own terms; recorded as open, not rejected. |
 | Google Finance | **No API since 2012** | Not a candidate. |
 
