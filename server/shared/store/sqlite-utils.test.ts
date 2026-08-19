@@ -81,16 +81,15 @@ describe('the timestamp round-trip (#837 M7)', () => {
 
   // #884: a writer that strips milliseconds after this file's own format
   // assertions run (e.g. `toStoredTimestamp` returning
-  // `text.replace(/\.\d{3}Z$/, 'Z')`) IS caught — by this file's own
-  // "writes the fixed-width..."/"round-trips..." tests and by 4 tests in
-  // `sqlite-setup-store.test.ts` (verified: 8/101 red under that mutation).
-  // What nothing catches is the guard itself being weakened, because no real
-  // `Date.prototype.toISOString()` call ever emits a non-millisecond string —
-  // production never reaches the reject branch. Loosening STORED_TIMESTAMP to
-  // make the milliseconds group optional (`(\.\d{3})?Z$`) left every other
-  // test in this suite green, all 41 `sqlite-shared-store` tests green, and
-  // all 12 `sqlite-setup-store` tests green — 100/101 passed, only this test
-  // failed. Mock `toISOString()` to drive a non-millisecond string through the
+  // `text.replace(/\.\d{3}Z$/, 'Z')`) IS caught by this file's own
+  // "writes the fixed-width..."/"round-trips..." tests and by
+  // `sqlite-setup-store.test.ts`. What nothing catches is the guard itself
+  // being weakened, because no real `Date.prototype.toISOString()` call ever
+  // emits a non-millisecond string — production never reaches the reject
+  // branch. Loosening STORED_TIMESTAMP to make the milliseconds group
+  // optional (`(\.\d{3})?Z$`) left every other test in this suite and in
+  // `sqlite-shared-store`/`sqlite-setup-store` green — only this test failed.
+  // Mock `toISOString()` to drive a non-millisecond string through the
   // guard's real entry point and pin that it still rejects.
   it('rejects a non-millisecond format even though the input Date is valid', () => {
     const spy = vi.spyOn(Date.prototype, 'toISOString').mockReturnValue('2026-08-18T09:30:00Z');

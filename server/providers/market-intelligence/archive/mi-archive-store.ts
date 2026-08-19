@@ -37,12 +37,8 @@
  *
  * This file does NOT go through `shared/store/sqlite-utils.ts`'s
  * `toStoredTimestamp`/`fromStoredTimestamp` (#837 M7). #852 deliberately
- * declined to convert it — different DB, a separate migrations dir, and
- * adopting the helpers would introduce a `providers/market-intelligence →
- * shared/store` import that does not exist today. That deferral is still the
- * right call, but this file keeps accruing fresh raw round-trips after the
- * #852 merge (#863 added more), so it widens rather than staying flat. Before adding another one,
- * re-check whether the import-direction cost still outweighs converting.
+ * declined to convert it — different DB, a separate migrations dir. That
+ * deferral is still the right call.
  */
 
 import { mkdirSync } from 'node:fs';
