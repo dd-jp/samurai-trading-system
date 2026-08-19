@@ -345,20 +345,17 @@ export const SQUEEZE_ON_BELOW = 1;
  * The cap the gate applies. 0.40 is the issue's number, taken as given rather
  * than searched — see `AXIS_WEIGHTS`.
  *
- * **It is a DAMPER, not a veto, and #745's original claim that it was a veto
- * was wrong (#870).** That claim read: 0.40 "sits below the 0.55 conviction
- * floor ... a non-trending or coiled tape should not be able to carry an entry
- * on technicals alone." The first half is true of this constant and irrelevant
- * to the second: the cap binds on the ANALYST's confidence, and
- * `computeConvictionScore` then combines it with the mediator's stance and the
- * evidence average. On the all-absent desk — sentiment and fundamental both
- * `NO_DATA_MARKER`, the shape every recorded soak debate ran on — conviction is
- * `0.5 + 0.2c` in the capped confidence `c`, so a capped 0.40 yields **0.58**,
- * above the floor. Measured by `server/tools/measure-conviction-ceiling.ts`
- * (#756) and pinned end to end in `../trader/gated-tape-conviction.test.ts`.
+ * **It is a DAMPER, not a veto (#870).** The cap binds on the ANALYST's
+ * confidence, and `computeConvictionScore` then combines it with the
+ * mediator's stance and the evidence average. On the all-absent desk —
+ * sentiment and fundamental both `NO_DATA_MARKER`, the shape every recorded
+ * soak debate ran on — conviction is `0.5 + 0.2c` in the capped confidence
+ * `c`, so a capped 0.40 yields **0.58**, above the 0.55 floor. Measured by
+ * `server/tools/measure-conviction-ceiling.ts` (#756) and pinned end to end in
+ * `../trader/gated-tape-conviction.test.ts`.
  *
- * What the cap is actually worth, stated shape by shape rather than as one
- * sentence, because the obvious single-sentence correction is also wrong:
+ * What the cap is worth, stated shape by shape rather than as one sentence,
+ * because no single sentence covers all of them:
  *
  * - **All-absent desk:** a gated tape clears the floor **only** with an
  *   agreeing mediator (0.58); neutral gives 0.43 and opposing 0.28.
@@ -369,16 +366,36 @@ export const SQUEEZE_ON_BELOW = 1;
  *   could never have been enforced by capping a conviction either.
  * - **Everywhere:** `conviction_floor` is read twice in the Trader, once as
  *   the gate and once through `convictionMultiplier`, so the cap's real effect
- *   is on SIZE. A gated tape enters at `(0.58 − 0.55)/0.45 ≈ 6.7%` of
- *   ADR-0018 D5's deployment envelope — about a fifth of what the same axis
- *   votes deploy with ADX above the trend floor.
+ *   is on SIZE. `(0.58 − 0.55)/0.45 ≈ 6.7%` of ADR-0018 D5's deployment
+ *   envelope is the **CEILING, not the value**: the cap only binds from raw
+ *   confidence 0.40 up, and a weaker gated read deploys less. At `raw = 1/3`
+ *   conviction is 0.5667 and the index bracket deploys about £12.96 of the
+ *   £1,000 book; at `raw = 0.25` conviction is exactly the floor, the
+ *   multiplier is 0 and `decide` skips at `below_min_notional`. Gated
+ *   deployment therefore spans **0 → ~6.7%** — at most about a fifth of what
+ *   the same axis votes deploy with ADX above the trend floor.
  *
- * **Do not "fix" this by lowering the value.** The intent needs `c < 0.25` on
- * the absent desk, which is below every non-zero point of the four-axis
- * lattice, so such a cap would stop capping and become a constant that
- * discards directional strength entirely — and it would sit a hundredth under
- * a `conviction_floor` that #756 item 1 still has open and blocked on soak
- * data. Barring a gated tape outright is a product decision, not a defect fix.
+ * **Two conditions those numbers hold under**, both carried from
+ * `measure-conviction-ceiling.ts`: `routeDecision` skips at
+ * `neutral_direction_while_flat` BEFORE the floor is ever consulted (265 of
+ * 268 recorded skips in #625's data), so clearing the floor is necessary and
+ * not sufficient; and `applyAnalystWeights` rescales the conviction the Trader
+ * gates on by a factor that is exactly 1 only while every `analyst_weights`
+ * row still sits at 1.0, which a feedback loop that has started moving weights
+ * would change.
+ *
+ * **Lowering the value would enforce #745's intent — and is David's call, not
+ * a defect fix.** On the absent desk the intent needs the CAP under 0.25, and
+ * that is reachable: a 0.24 cap yields `0.5 + 0.2(0.24) = 0.548` and the
+ * entry is refused. What it costs is directional strength: it would bind on
+ * every non-zero point of the four-axis lattice (weights all 1, votes in
+ * {-1, 0, 1}, `availableAxes` in {2, 3, 4}, so the non-zero values of
+ * `|net| / availableAxes` are {0.25, 1/3, 0.5, 2/3, 0.75, 1}) and collapse
+ * every non-zero read to one constant. 0.40 already collapses 4 of those 6
+ * points, so this is a difference of degree, not of kind — and a sub-0.25 cap
+ * would sit a hundredth under a `conviction_floor` that #756 item 1 still has
+ * open and blocked on soak data. Barring a gated tape outright is a product
+ * decision.
  */
 export const LOW_CONVICTION_CAP = 0.4;
 

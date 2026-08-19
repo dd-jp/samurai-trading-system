@@ -23,18 +23,34 @@
  * - **Capping the CONVICTION instead** would over-fire. The intent is about a
  *   gated tape entering *on technicals alone*; a hydrated-aligned desk is not
  *   technicals alone, and a conviction-level cap would bar it too.
- * - **Re-deriving the cap VALUE cannot work.** On the all-absent desk
- *   conviction is exactly `0.5 + 0.2c` in the capped confidence `c`, so the
- *   intent needs `c < 0.25`. Every non-zero point of the four-axis lattice is
- *   at or above 0.25 (`|net| / availableAxes` in {0, .25, .3333, .5, ...}), so
- *   such a cap stops capping and becomes a constant that discards directional
- *   strength entirely — and it would sit a hundredth under a `conviction_floor`
- *   that #756 item 1 still has open and blocked on soak data.
+ * - **Re-deriving the cap VALUE is a product decision, not a defect fix.** On
+ *   the all-absent desk conviction is exactly `0.5 + 0.2c` in the capped
+ *   confidence `c`, so the intent needs the CAP under 0.25 — which works: a
+ *   0.24 cap yields 0.548 and `decide` refuses the entry. The cost is that it
+ *   binds on every non-zero point of the four-axis lattice ({0.25, 1/3, 0.5,
+ *   2/3, 0.75, 1}) and collapses every non-zero read to one constant,
+ *   discarding directional strength; 0.40 already does that to 4 of the 6. It
+ *   would also sit a hundredth under a `conviction_floor` that #756 item 1
+ *   still has open and blocked on soak data. That trade is David's to make.
  *
  * So the cap is a **damper, not a veto**, and these tests pin the damping: the
  * conviction it yields, the mediator stances it survives, and — the half no
  * test anywhere covered — the position size it produces at the composition
- * root, which is ~6.7% of ADR-0018 D5's deployment envelope.
+ * root. That size is **at most** ~6.7% of ADR-0018 D5's deployment envelope:
+ * the cap only binds from raw confidence 0.40 up, so gated deployment spans
+ * 0 (at `raw = 0.25`, where conviction is exactly the floor and `decide` skips
+ * `below_min_notional`) through ~6.7%.
+ *
+ * ## Two conditions these numbers hold under
+ *
+ * Carried from `measure-conviction-ceiling.ts`, which measured them:
+ * `routeDecision` skips at `neutral_direction_while_flat` BEFORE the floor is
+ * consulted — 265 of 268 recorded skips in #625's data — so clearing the floor
+ * is necessary, not sufficient, and `debateAt` below hardcodes
+ * `direction: 'bullish'` and so runs past that gate rather than exercising it.
+ * And `applyAnalystWeights` rescales the gated conviction by a factor that is
+ * exactly 1 only while every `analyst_weights` row still sits at 1.0 (no closed
+ * trades), which a feedback loop that has started moving weights would change.
  *
  * The assertion is on the resulting DEPLOYMENT (`size x entry`), never on a
  * config value, per ADR-0018's sizing amendment: both of its recorded silent
@@ -61,11 +77,7 @@ import type {
   SetupStore,
   SetupVector,
 } from '../../shared/index.js';
-import {
-  type AxisAssessment,
-  assessAxes,
-  LOW_CONVICTION_CAP,
-} from '../analysts/technical-analyst.js';
+import { type AxisAssessment, assessAxes } from '../analysts/technical-analyst.js';
 import { NO_DATA_MARKER } from '../analysts/types.js';
 import { computeConvictionScore } from '../debate-engine/conviction-score.js';
 import type { AnalystView, DebateResult, Direction } from '../debate-engine/index.js';
@@ -83,7 +95,12 @@ const SINGLE_STOCK_ETP = '3LTS';
 const DECISION_BAR = new Date('2026-07-15T10:00:00Z');
 const ENTRY_PRICE = 40;
 const EQUITY = 100_000;
-/** ADR-0015's 2026-08-18 amendment: the book is GBP 1,000, all equity. */
+/**
+ * ADR-0015's 2026-08-18 amendment: the book is GBP 1,000, all equity.
+ * `LIVE_BOOK_GBP` (`../../apps/orchestrator/paper-profile.ts`) is the source of
+ * truth; it is restated rather than imported so a Trader test does not depend
+ * on the orchestrator app. Re-base it there and here together.
+ */
 const LIVE_BOOK = 1_000;
 
 const SUBCLASS_OF: Readonly<Record<string, InstrumentSubclass>> = {
@@ -102,6 +119,18 @@ function gatedAssessment(): AxisAssessment {
   return assessAxes(
     { lastClose: 101, sma: 100, rsi: 60, atrPct: 1 },
     { adx: 10, donchian: 0.9, macd: undefined, participation: 0.9, squeeze: undefined },
+  );
+}
+
+/**
+ * The same tape with the ADX above `ADX_TREND_FLOOR` and nothing else changed:
+ * the discriminator every cap assertion here is stated against, so that a cap
+ * that stopped binding collapses the difference rather than moving both sides.
+ */
+function ungatedAssessment(): AxisAssessment {
+  return assessAxes(
+    { lastClose: 101, sma: 100, rsi: 60, atrPct: 1 },
+    { adx: 30, donchian: 0.9, macd: undefined, participation: 0.9, squeeze: undefined },
   );
 }
 
@@ -176,13 +205,20 @@ function convictionOf(views: AnalystView[], mediator: Direction): number {
 }
 
 describe('#870 — the gated tape is DAMPED, not barred, and the damping is shape-conditional', () => {
-  it('caps the analyst below the floor, exactly as #745 said', () => {
-    const assessment = gatedAssessment();
+  it('damps the identical axis votes that an ungated tape carries in full', () => {
+    // Asserted as a COMPARISON, not as `confidence === LOW_CONVICTION_CAP`:
+    // that identity is the code's output against the code's own constant, it
+    // survives any change to the cap's value, and `technical-axes.test.ts`
+    // (:253, :269) already pins it. The only difference between these two
+    // reads is the ADX, so if the cap stops binding they become equal.
+    const gated = gatedAssessment();
+    const ungated = ungatedAssessment();
 
-    expect(assessment.capReasons.length).toBeGreaterThan(0);
-    expect(assessment.confidence).toBe(LOW_CONVICTION_CAP);
-    expect(assessment.direction).toBe('bullish');
-    expect(LOW_CONVICTION_CAP).toBeLessThan(FLOOR);
+    expect(gated.capReasons.length).toBeGreaterThan(0);
+    expect(ungated.capReasons).toEqual([]);
+    expect(gated.direction).toBe(ungated.direction);
+    expect(gated.confidence).toBeLessThan(ungated.confidence);
+    expect(gated.confidence).toBeLessThan(FLOOR);
   });
 
   it('but the CONVICTION it feeds clears the floor once the mediator agrees', () => {
@@ -341,7 +377,7 @@ async function deploymentAt(
 }
 
 describe('#870 — what the damping is worth at the composition root', () => {
-  it('lets a gated tape enter at ~6.7% of ADR-0018 D5s deployment envelope', async () => {
+  it('caps a gated tape at ~6.7% of ADR-0018 D5s deployment envelope — a ceiling, not a value', async () => {
     // The half of the corrected claim that had no test anywhere. `decide.ts`
     // reads `conviction_floor` TWICE — once as the gate and once through
     // `convictionMultiplier`, which is a SIZING input — so the cap's real
@@ -364,15 +400,7 @@ describe('#870 — what the damping is worth at the composition root', () => {
     // is wired: the ONLY difference between the two runs is the ADX read, and
     // it moves the deployed notional by a factor of 5.
     const gated = convictionOf(absentDesk(gatedAssessment()), 'bullish');
-    const ungated = convictionOf(
-      absentDesk(
-        assessAxes(
-          { lastClose: 101, sma: 100, rsi: 60, atrPct: 1 },
-          { adx: 30, donchian: 0.9, macd: undefined, participation: 0.9, squeeze: undefined },
-        ),
-      ),
-      'bullish',
-    );
+    const ungated = convictionOf(absentDesk(ungatedAssessment()), 'bullish');
 
     const ungatedDeployment = await deploymentAt(ungated);
     const gatedDeployment = await deploymentAt(gated);
