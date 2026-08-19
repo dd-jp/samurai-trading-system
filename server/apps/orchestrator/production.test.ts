@@ -31,7 +31,12 @@ import type {
   ApprovalRequest,
   VerdictDecision,
 } from '../../pipeline/verdict/index.js';
-import type { AlpacaBar, AlpacaQuote, Bar } from '../../providers/market-data-service/index.js';
+import type {
+  AlpacaBar,
+  AlpacaQuote,
+  Bar,
+  LseMarkClient,
+} from '../../providers/market-data-service/index.js';
 import {
   AlpacaDataSource,
   AlwaysOpenCalendar,
@@ -39,6 +44,7 @@ import {
   FAILOVER_CIRCUIT_COOLDOWN_MS,
   FAILOVER_CIRCUIT_FAILURE_THRESHOLD,
   FixtureDataSource,
+  LseMarkDataSource,
   LseRegularHoursCalendar,
   londonEntryWindow,
   MarketDataServiceImpl,
@@ -2028,7 +2034,24 @@ describe('buildProductionOrchestrator', () => {
         // exactly that resolution.
         ...(pinLse ? { tradingCalendar: new LseRegularHoursCalendar() } : {}),
         stocksTradingWindow: londonEntryWindow(),
-        universe: [{ asset: '3USL', asset_class: 'stocks', subclass: 'index_etp_3x' }],
+        universe: [{ asset: 'LQQ3', asset_class: 'stocks', subclass: 'index_etp_3x' }],
+        // #734: this was `3USL` until that ticket. Both are LSE ETPs, but the
+        // pool declares 3USL in USD, which the mark source now refuses at
+        // construction rather than mid-tick — so a case about the tick WINDOW
+        // would have failed for a currency reason. `LQQ3` is the same shape of
+        // instrument and is declared in GBX. The composition root also refuses
+        // to build a source for an LSE ticker without a vendor client rather
+        // than routing it to Alpaca, which does not list it; nothing here reads
+        // a price, so a stub satisfies that seam.
+        lseMarkClient: {
+          vendor: 'stub-lse-vendor',
+          getBars: vi.fn(async () => ({ currency: 'GBP', candles: [] })),
+          getLatestQuote: vi.fn(async () => ({
+            price: 100,
+            currency: 'GBP',
+            observed_at: now,
+          })),
+        },
         tickIntervalMs: 1_000,
         heartbeatIntervalMs: 1_000,
       });
@@ -3574,6 +3597,134 @@ describe('buildProductionOrchestrator', () => {
           calendar,
         ),
       ).not.toThrow();
+    });
+  });
+
+  /**
+   * #734 — the LSE mark source, asserted THROUGH the composition root.
+   *
+   * Same reason #562's cases below are: `lse-mark-source.test.ts` proves the
+   * class works, and this repo's dominant defect is a tested mechanism nothing
+   * calls. These cases fail if `buildAlpacaDataSource` stops consulting the
+   * pool, which is what would silently send `LQQ3` to an Alpaca endpoint that
+   * answers `invalid symbol`.
+   */
+  describe('buildAlpacaDataSource — the LSE equity leg (#734)', () => {
+    const calendar = new UsEquityRegularHoursCalendar();
+    // Both declared GBX in the pool. The USD-declared majority gets its own
+    // case below — it is the finding, not the happy path.
+    const LSE_UNIVERSE = [
+      { asset: 'LQQ3', asset_class: 'stocks' as const },
+      { asset: '3SPY', asset_class: 'stocks' as const },
+    ];
+    // The no-LSE regression case below builds the real default Alpaca clients,
+    // which refuse to construct without credentials. Placeholders only; nothing
+    // here makes a request, and no real credential is read or written.
+    const savedKey = process.env.ALPACA_API_KEY;
+    const savedSecret = process.env.ALPACA_API_SECRET;
+    beforeEach(() => {
+      process.env.ALPACA_API_KEY = 'dummy-key-not-a-credential';
+      process.env.ALPACA_API_SECRET = 'dummy-secret-not-a-credential';
+    });
+    afterEach(() => {
+      if (savedKey === undefined) delete process.env.ALPACA_API_KEY;
+      else process.env.ALPACA_API_KEY = savedKey;
+      if (savedSecret === undefined) delete process.env.ALPACA_API_SECRET;
+      else process.env.ALPACA_API_SECRET = savedSecret;
+    });
+
+    const lseClient = (): LseMarkClient => ({
+      vendor: 'fake-lse-vendor',
+      getBars: vi.fn(async () => ({ currency: 'GBp', candles: [] })),
+      getLatestQuote: vi.fn(async () => ({
+        price: 31_240,
+        currency: 'GBp',
+        observed_at: START,
+      })),
+    });
+
+    it('builds an LseMarkDataSource for a universe of pool lse_tickers', () => {
+      const source = buildAlpacaDataSource({ lseMarkClient: lseClient() }, LSE_UNIVERSE, calendar);
+
+      expect(source).toBeInstanceOf(LseMarkDataSource);
+    });
+
+    it('refuses to boot an LSE universe with no vendor client, rather than 404ing per tick', () => {
+      expect(() => buildAlpacaDataSource({}, LSE_UNIVERSE, calendar)).toThrow(
+        /no ProductionConfig\.lseMarkClient was supplied/,
+      );
+    });
+
+    it('refuses a universe that mixes LSE ETPs with Alpaca-served instruments', () => {
+      // Both are asset_class 'stocks', so AssetClassRoutingDataSource cannot
+      // split them and every LSE symbol would go to Alpaca.
+      expect(() =>
+        buildAlpacaDataSource(
+          { lseMarkClient: lseClient() },
+          [...LSE_UNIVERSE, { asset: 'SPY', asset_class: 'stocks' as const }],
+          calendar,
+        ),
+      ).toThrow(/mixes LSE leveraged ETPs/);
+    });
+
+    it('refuses at boot — not mid-tick — a universe holding a USD-declared pool row', () => {
+      // Eight of the eleven checked-in rows declare USD (doc 34 §3.2), so this
+      // is the pool's majority case, not an edge. The failure has to land here,
+      // at construction: a `MarkCurrencyError` on the first live read would
+      // arrive after the orchestrator was up and possibly holding a position.
+      expect(() =>
+        buildAlpacaDataSource(
+          { lseMarkClient: lseClient() },
+          [{ asset: '3USL', asset_class: 'stocks' as const }],
+          calendar,
+        ),
+      ).toThrow(/3USL \(USD\)/);
+    });
+
+    it('leaves every universe without an lse_ticker on exactly the path it had', () => {
+      // The regression that matters most: shipped profiles hold no LSE ticker,
+      // so this branch must be invisible to them.
+      expect(buildAlpacaDataSource({}, DEFAULT_UNIVERSE, calendar)).toBeInstanceOf(
+        AlpacaDataSource,
+      );
+      expect(buildAlpacaDataSource({}, SMOKE_TEST_UNIVERSE, calendar)).toBeInstanceOf(
+        AlpacaDataSource,
+      );
+    });
+
+    it('will not mark an lse_ticker off its screening_instrument, through the built source', async () => {
+      // The substitution the issue names as "the failure mode worth a test",
+      // asserted on the object the composition root actually returns.
+      const source = buildAlpacaDataSource({ lseMarkClient: lseClient() }, LSE_UNIVERSE, calendar);
+
+      await expect(source.fetchMark('SPY', START, 'live')).rejects.toThrow(/SCREENING INSTRUMENT/);
+    });
+
+    it('serves a GBP mark stamped at the vendor observation time', async () => {
+      // #641/#640 gate on `Mark.observed_at`; a request-time stamp is the one
+      // way this whole ticket could land and still not make them pass.
+      const observed = new Date(START.getTime() - 30_000);
+      const source = buildAlpacaDataSource(
+        {
+          lseMarkClient: {
+            vendor: 'fake-lse-vendor',
+            getBars: vi.fn(async () => ({ currency: 'GBp', candles: [] })),
+            getLatestQuote: vi.fn(async () => ({
+              price: 31_240,
+              currency: 'GBp',
+              observed_at: observed,
+            })),
+          },
+        },
+        LSE_UNIVERSE,
+        calendar,
+      );
+
+      const mark = await source.fetchMark('LQQ3', START, 'live');
+
+      expect(mark.price).toBeCloseTo(312.4, 10);
+      expect(mark.observed_at).toEqual(observed);
+      expect(mark.asset_class).toBe('stocks');
     });
   });
 

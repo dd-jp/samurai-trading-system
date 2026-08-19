@@ -96,6 +96,24 @@ export type {
   IbkrSourceOptions,
 } from './sources/ibkr-source.js';
 export { IbkrDataSource } from './sources/ibkr-source.js';
+// #734 — the LSE leveraged-ETP mark source, the producer that finally writes
+// `latest_mark` rows keyed by `lse_ticker`. The VENDOR is not decided (see
+// docs/research/34-lse-mark-source-options.md); the port, the GBP/pence
+// normalisation and the no-substitution refusal are.
+export type {
+  LseMarkClient,
+  LseMarkSourceOptions,
+  LseVendorBars,
+  LseVendorCandle,
+  LseVendorQuote,
+} from './sources/lse-mark-source.js';
+export {
+  BOOK_CURRENCY,
+  LseMarkDataSource,
+  MarkCurrencyError,
+  NonTradeableInstrumentError,
+  toBookCurrency,
+} from './sources/lse-mark-source.js';
 export type { LiveObservation, SourceConfig } from './sources/normalizing-data-source.js';
 export {
   InSessionUnderfetchError,

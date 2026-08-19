@@ -20,12 +20,23 @@ import {
 } from './sources/alpaca-source.js';
 import { type CcxtClient, CcxtDataSource, type CcxtSourceOptions } from './sources/ccxt-source.js';
 import { type IbkrClient, IbkrDataSource, type IbkrSourceOptions } from './sources/ibkr-source.js';
+import {
+  type LseMarkClient,
+  LseMarkDataSource,
+  type LseMarkSourceOptions,
+} from './sources/lse-mark-source.js';
 import type { DataSource } from './types.js';
 
 export type DataSourceConfig =
   | ({ kind: 'ccxt'; client: CcxtClient } & CcxtSourceOptions)
   | ({ kind: 'alpaca'; client: AlpacaMarketDataClient } & AlpacaSourceOptions)
-  | ({ kind: 'ibkr'; client: IbkrClient } & IbkrSourceOptions);
+  | ({ kind: 'ibkr'; client: IbkrClient } & IbkrSourceOptions)
+  // #734 — the LSE leveraged-ETP mark source. `client` is the vendor seam and
+  // stays injected for the same reason the other three are: which vendor may
+  // lawfully serve a live LSE quote is an open owner decision
+  // (docs/research/34-lse-mark-source-options.md), and keeping it here means
+  // answering it is a config change rather than a rewrite.
+  | ({ kind: 'lse'; client: LseMarkClient } & LseMarkSourceOptions);
 
 export function createDataSource(config: DataSourceConfig): DataSource {
   switch (config.kind) {
@@ -35,6 +46,8 @@ export function createDataSource(config: DataSourceConfig): DataSource {
       return new AlpacaDataSource(config.client, config);
     case 'ibkr':
       return new IbkrDataSource(config.client, config);
+    case 'lse':
+      return new LseMarkDataSource(config.client, config);
     default: {
       const unreachable: never = config;
       throw new Error(`Unknown data source kind: ${JSON.stringify(unreachable)}`);

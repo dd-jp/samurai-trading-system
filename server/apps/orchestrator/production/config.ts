@@ -36,6 +36,7 @@ import type {
   BarFetcher,
   DataSource,
   IndicatorSpec,
+  LseMarkClient,
   TradingCalendar,
 } from '../../../providers/market-data-service/index.js';
 import type {
@@ -419,6 +420,22 @@ export interface ProductionConfig extends AlertChannelSlots {
    * `AssetClassRoutingDataSource`.
    */
   dataSourceAssetClass?: 'crypto' | 'stocks';
+  /**
+   * The vendor seam for LSE leveraged-ETP marks (#734) — the ONLY thing that
+   * can price the live equity leg.
+   *
+   * Consulted only when `universe` actually holds an `lse_ticker` from
+   * `lse-etp-pool.ts`; every shipped profile today holds none, so omitting it
+   * changes nothing. When the universe DOES hold one and this is omitted, the
+   * orchestrator refuses to start rather than routing an LSE symbol to Alpaca,
+   * which does not list it — see `buildLseMarkSourceIfNeeded` in defaults.ts.
+   *
+   * There is deliberately no default. Which vendor may lawfully serve a live
+   * LSE quote is an OPEN OWNER DECISION (docs/research/34-lse-mark-source-options.md),
+   * and is tracked by #895; a default here would be this repo's
+   * dominant defect class — a mechanism that looks wired and serves nothing.
+   */
+  lseMarkClient?: LseMarkClient;
   /**
    * Overrides the `AlpacaBrokerAdapter` this module would otherwise build.
    * The `BrokerAdapter` port is dual-target by design (ADR-0001) — this is

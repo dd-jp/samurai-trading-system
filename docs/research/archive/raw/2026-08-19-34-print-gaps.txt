@@ -1,0 +1,21 @@
+# doc 34 §3.3 print-gap measurement — run 2026-08-19T00:42:44.991175+00:00
+# source: Yahoo v8/finance/chart, interval=1m, range=5d, session 08:00-16:30 London
+# a print = 1-minute bar with non-null close and non-zero volume; gaps never cross a session
+
+ticker  ccy    sessions  prints   gaps   >15m  pct>15m   median     max
+3USL    USD           5     148    143     48    33.6%      9.0   143.0
+LQQ3    GBp           5     671    666     21     3.2%      2.0    39.0
+3SPY    GBp           4      26     22     11    50.0%     27.0   297.0
+3LTS    USD           5     262    257     45    17.5%      4.0    93.0
+NVD3    USD           5     354    349     40    11.5%      4.0    90.0
+3AAP    GBp           5      27     22     16    72.7%     44.0   335.0
+3LNV    USD           5      57     52     26    50.0%     16.0   201.0
+3QQQ    GBp           5      30     25     16    64.0%     23.0   408.0
+MST3    USD           5     266    261     48    18.4%      4.0    86.0
+3LPA    USD           4       4      0      0     nan%      nan     nan
+PLT3    USD           5     512    507     37     7.3%      2.0    60.0
+
+# median and max are minutes between consecutive prints, within a session
+# lines with >13% of gaps over the bound: 7/11 ['3USL', '3SPY', '3LTS', '3AAP', '3LNV', '3QQQ', 'MST3']
+# lines with >15% of gaps over the bound: 7/11 ['3USL', '3SPY', '3LTS', '3AAP', '3LNV', '3QQQ', 'MST3']
+# quoted currencies as the venue reports them: 3USL USD, LQQ3 GBp, 3SPY GBp, 3LTS USD, NVD3 USD, 3AAP GBp, 3LNV USD, 3QQQ GBp, MST3 USD, 3LPA USD, PLT3 USD

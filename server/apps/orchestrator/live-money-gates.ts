@@ -85,9 +85,25 @@
  */
 export const LIVE_MONEY_GATES: readonly { readonly issue: number; readonly gap: string }[] = [
   {
-    issue: 734,
-    // Verified OPEN 2026-08-18: `gh issue view 734`.
-    gap: 'the live equity leg has no mark source — no DataSource serves the LSE, so the GBP LSE-ETP book ADR-0015 puts live capital in cannot be priced at all, while this profile boots the Alpaca clients',
+    issue: 895,
+    // Verified OPEN 2026-08-19: `gh issue view 895`. See the comment left on
+    // #895 recording the citation.
+    //
+    // This entry was #665 until 2026-08-19, and #665 was the WRONG citation
+    // rather than a stale one: its title is "T212 setup: pass the
+    // complex-products questionnaire, confirm leveraged ETPs tradeable in the
+    // ISA via API", so it can be closed on its own terms with no mark vendor
+    // chosen — and this gate would then vanish from the live-boot warning and
+    // the paper-mode refusal while the gap it names is still fully open, with
+    // `check:live-gates` staying green because it only asks whether the cited
+    // issue is open. #895 is the mark-vendor gap itself, with that gap as its
+    // closure condition, which is what this module's rule requires: the cited
+    // issue must SAY what the line claims.
+    //
+    // The T212 terms question — whether that venue may be driven by an
+    // algorithm at all — is #896, a venue question rather than a mark one, so
+    // it is not folded into this entry's claim.
+    gap: 'the live equity leg still has no chosen mark vendor — the LseMarkDataSource seam exists but the composition root has no client to hand it, so a live LSE boot refuses by design; no source this repo integrates lists an LSE ticker (Alpaca and Polygon both VERIFIED absent), and doc 34 recommends IBKR LSE UK L1 as the only retail-priced real-time LSE Level 1 feed with bid/ask found',
   },
   {
     issue: 888,
@@ -112,7 +128,7 @@ export const LIVE_MONEY_GATES: readonly { readonly issue: number; readonly gap: 
   },
   {
     issue: 798,
-    // Verified OPEN 2026-08-18: `gh issue view 798`.
+    // Verified OPEN 2026-08-19: `gh issue view 798`.
     gap: "ADR-0018 D5's declared brackets imply a ~41.8% single-stock envelope against a ~20-25% tolerance, so the sizing this profile ships is unreconciled with the drawdown envelope it was sized against",
   },
   {

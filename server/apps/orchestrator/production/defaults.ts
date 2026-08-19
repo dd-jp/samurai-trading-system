@@ -22,9 +22,11 @@ import {
   AlpacaDataSource,
   AlpacaHttpDataClient,
   AssetClassRoutingDataSource,
+  LseMarkDataSource,
   recommendedWarmupFor,
   type TradingCalendar,
 } from '../../../providers/market-data-service/index.js';
+import { buildRoutingMap, LSE_ETP_POOL } from '../../../providers/universe-pool/lse-etp-pool.js';
 import type { AssetClass, TokenBucket } from '../../../shared/index.js';
 import { nousCredentials } from '../../../shared/llm/index.js';
 import type { Logger, UniverseInstrument } from '../types.js';
@@ -360,9 +362,111 @@ export function universeAssetClasses(universe: readonly UniverseInstrument[]): A
 }
 
 /**
+ * The `lse_ticker` values the checked-in pool declares tradeable, and the
+ * `screening_instrument` values that must never be marked in their place
+ * (#734). Both derived from `lse-etp-pool.ts` rather than restated, so a row
+ * added there reaches the mark path without a second edit.
+ */
+const LSE_TICKERS: ReadonlySet<string> = new Set(buildRoutingMap().keys());
+const LSE_SCREENING_INSTRUMENTS: ReadonlySet<string> = new Set(
+  LSE_ETP_POOL.map((row) => row.screening_instrument),
+);
+
+/**
+ * The LSE mark source (#734), when — and only when — the configured universe
+ * actually holds LSE ETPs.
+ *
+ * ## Why this is a boot-time decision
+ *
+ * Until #734 there was NO producer writing a `latest_mark` row keyed by
+ * `lse_ticker`, so Verdict's `stale_feed` no-go (#641) and the Risk Manager's
+ * valuation bound (#640) could never pass on the live equity leg. The fix has
+ * two halves and only one of them is decidable in code: the source (this) and
+ * the vendor (`ProductionConfig.lseMarkClient`, an open owner decision — see
+ * `docs/research/34-lse-mark-source-options.md`).
+ *
+ * So an LSE universe with no vendor client REFUSES TO BOOT. The alternative is
+ * the failure this repo has already had twice (#358, and the missing-producer
+ * hole #734 itself describes): every tick reaching a source that cannot serve
+ * the symbol, 404-ing, and surfacing as an instrument that simply never found a
+ * setup. A startup error naming the missing seam is the same posture
+ * `AssetClassRoutingDataSource` takes for a missing asset class.
+ *
+ * ## Why a MIXED venue universe is refused rather than routed
+ *
+ * `AssetClassRoutingDataSource` cannot split this one: an LSE ETP and SPY are
+ * both `asset_class: 'stocks'`, so there is no class to route on. A per-venue
+ * router is real work with a real design question behind it (which vendor
+ * fails over to which), and #751 — the ticket that actually puts LSE tickers
+ * into a running universe — has not landed, so no caller needs it yet.
+ * Refusing loudly is honest; silently sending `3USL` to Alpaca is not.
+ *
+ * Returns `undefined` when the universe holds no LSE ticker, which is every
+ * shipped profile today.
+ */
+function buildLseMarkSourceIfNeeded(
+  config: Pick<ProductionConfig, 'lseMarkClient'>,
+  universe: readonly UniverseInstrument[],
+): DataSource | undefined {
+  const lseHeld = universe.filter((instrument) => LSE_TICKERS.has(instrument.asset));
+  if (lseHeld.length === 0) return undefined;
+
+  if (lseHeld.length !== universe.length) {
+    const others = universe
+      .filter((instrument) => !LSE_TICKERS.has(instrument.asset))
+      .map((instrument) => instrument.asset);
+    throw new Error(
+      `Orchestrator cannot start: the universe mixes LSE leveraged ETPs (${lseHeld
+        .map((instrument) => instrument.asset)
+        .join(', ')}) with instruments served by another venue (${others.join(', ')}). ` +
+        'Both are asset_class "stocks", so there is no asset class to route on and every LSE ' +
+        'symbol would be sent to Alpaca, which does not list it (verified: /v2/stocks/bars for ' +
+        '3USL answers "invalid symbol"). Per-venue routing is #751/#826 work; until then, ' +
+        'configure a single-venue universe or inject ProductionConfig.dataSource yourself.',
+    );
+  }
+
+  if (config.lseMarkClient === undefined) {
+    throw new Error(
+      'Orchestrator cannot start: the universe holds LSE leveraged ETPs ' +
+        `(${lseHeld.map((instrument) => instrument.asset).join(', ')}) but no ` +
+        'ProductionConfig.lseMarkClient was supplied, so nothing can produce a mark for them. ' +
+        'No source this repo integrates serves the LSE (verified 2026-08-18: Alpaca answers ' +
+        '"invalid symbol", Polygon lists no XLON), and marking an LSE 3x ETP off its US ' +
+        "underlying is inadmissible (#734), so there is no fallback to take — Verdict's " +
+        "stale_feed gate (#641) and the Risk Manager's valuation bound (#640) would never pass " +
+        'and the book could not be valued at all. Which vendor may serve this is an OPEN OWNER ' +
+        'DECISION (#895): see docs/research/34-lse-mark-source-options.md, which recommends ' +
+        'IBKR LSE UK Level 1 (~GBP 1/month non-professional) as the only retail-priced ' +
+        "real-time LSE feed with bid/ask found. Trading 212's own API cannot supply one either, " +
+        'on mechanical grounds: its published OpenAPI bundle exposes no quote endpoint at all, ' +
+        'and its only price field (Position.currentPrice) exists solely for instruments already ' +
+        'held and carries no observation timestamp, so no honest Mark.observed_at can be derived ' +
+        "from it. Whether that venue's terms permit an automated trader at all is a separate " +
+        'question, open and NOT settled here — see #896.',
+    );
+  }
+
+  return new LseMarkDataSource(config.lseMarkClient, {
+    tradeable: LSE_TICKERS,
+    screeningInstruments: LSE_SCREENING_INSTRUMENTS,
+    // Only the HELD lines, not the whole pool: a USD-quoted row nobody is
+    // trading is a fact about the pool, whereas a USD-quoted row in this
+    // universe is an instrument the orchestrator is about to be asked to mark
+    // and cannot. The first must not block a boot; the second must.
+    declaredCurrencies: new Map(
+      LSE_ETP_POOL.filter((row) => lseHeld.some((held) => held.asset === row.lse_ticker)).map(
+        (row) => [row.lse_ticker, row.currency],
+      ),
+    ),
+  });
+}
+
+/**
  * The market-data source for `universe`, which is one `AlpacaDataSource` per
  * asset class the universe holds — routed per instrument when it holds both
- * (#381).
+ * (#381) — or the LSE mark source (#734) when the universe is the live equity
+ * leg's LSE leveraged ETPs.
  *
  * A single source cannot serve a mixed universe: `AlpacaDataSource` fixes its
  * asset class and calendar at construction, and `AlpacaHttpDataClient` fixes
@@ -379,12 +483,22 @@ export function universeAssetClasses(universe: readonly UniverseInstrument[]): A
  * never reaches here.
  */
 export function buildAlpacaDataSource(
-  config: Pick<ProductionConfig, 'alpacaDataClient' | 'dataSourceAssetClass'>,
+  config: Pick<ProductionConfig, 'alpacaDataClient' | 'dataSourceAssetClass' | 'lseMarkClient'>,
   universe: readonly UniverseInstrument[],
   tradingCalendar: TradingCalendar,
   /** The account's shared outbound bucket (#391) — see `buildDefaultAlpacaDataClient`. */
   rateLimiter?: TokenBucket,
 ): DataSource {
+  // #734, and it runs FIRST because it is a venue question, not an asset-class
+  // one. An LSE leveraged ETP is `asset_class: 'stocks'` exactly like SPY, so
+  // every check below this point would happily hand it to Alpaca — which does
+  // not list it. Re-probed with this project's own keys on 2026-08-18:
+  // `/v2/stocks/bars?symbols=3USL` answers `{"message":"invalid symbol: 3USL"}`
+  // and Polygon's exchange list contains no `XLON`. See
+  // `docs/research/34-lse-mark-source-options.md`.
+  const lseSource = buildLseMarkSourceIfNeeded(config, universe);
+  if (lseSource !== undefined) return lseSource;
+
   const present = universeAssetClasses(universe);
   // An empty universe has no class to derive — `'crypto'` remains the
   // historical default there rather than throwing on a degenerate-but-harmless
