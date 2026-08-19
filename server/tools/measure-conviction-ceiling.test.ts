@@ -127,6 +127,14 @@ describe('LOW_CONVICTION_CAP interaction (#756 item 3)', () => {
     // purpose". That holds for the analyst's own confidence and does NOT hold
     // for the conviction the Trader gates on: a capped 0.40 still produces
     // 0.6(0.5) + 0.4((1 + 0.4) / 2) = 0.58 once the mediator agrees.
+    //
+    // RESOLVED by #870: #745's claim was corrected rather than the mechanism —
+    // the cap is a damper, not a veto. The reasoning lives on
+    // `LOW_CONVICTION_CAP`'s docstring and the behaviour it actually buys
+    // (at most ~6.7% of ADR-0018 D5's deployment envelope, 0 at the weakest
+    // gated read) is pinned end to end in
+    // `server/pipeline/trader/gated-tape-conviction.test.ts`. This assertion
+    // is unchanged and is the measurement that finding rests on.
     const cappedCeiling = directional('absent', 'agrees')
       .filter((sample) => sample.capped)
       .reduce((max, sample) => Math.max(max, sample.conviction), 0);
