@@ -232,7 +232,11 @@ import {
 } from './console-channels.js';
 import { installFaultHandlers, startFromEnvironment } from './index.js';
 import { buildEntrypointLogger, JsonLogger, type StdoutStream } from './logger.js';
-import { paperStartingProfile } from './paper-profile.js';
+import {
+  buildStartingProfileConfigs,
+  PAPER_ACCOUNT_EQUITY_ANCHOR,
+  paperStartingProfile,
+} from './paper-profile.js';
 import type { DataFailoverAlert } from './production/data-failover.js';
 import { worstCaseLlmCallsForAssetClass } from './production/debate-adapter.js';
 import type { AccountStateProvider } from './production/direct-bind.js';
@@ -1056,23 +1060,23 @@ function exitPathOrder(
  * proved the exit MECHANICS and said nothing about whether a flatten survives
  * the stage above them.
  *
- * Every dial below is the paper profile's own, with one deliberate exception.
- * `max_mark_age` is widened because the fixture feed (`FixtureDataSource`,
- * constructed with a single `SMOKE_RUN_INSTANT` mark) stamps every mark at one
- * fixed instant while this harness advances its clock between phases — feed
- * freshness is a property of the fixture here, not of the code under test, and
- * `market-data-service`'s own suite owns that gate. The staleness, drift,
- * dedup and breaker gates run exactly as shipped.
+ * Every dial is the paper profile's own **by construction** — spread from
+ * `buildStartingProfileConfigs`, not re-typed, so a retune of the shipped
+ * profile cannot leave this harness silently testing a config nothing runs.
+ * There is exactly one override, and it is spelled out below.
  */
 const EXIT_PATH_VERDICT_CONFIG: VerdictConfig = {
-  // ADR-0007: no human in the path, which is also what production runs.
-  automation_level: { crypto: 'auto', stocks: 'auto' },
-  max_signal_age: { crypto: 5 * 60_000, stocks: 15 * 60_000 },
+  ...buildStartingProfileConfigs(PAPER_ACCOUNT_EQUITY_ANCHOR).verdictConfig,
+  /**
+   * The ONE override. `FixtureDataSource` is constructed with a single
+   * `SMOKE_RUN_INSTANT` mark, so every mark it serves carries that one fixed
+   * timestamp while this harness advances its clock between phases. Mark
+   * freshness is therefore a property of the fixture here, not of the code
+   * under test, and `market-data-service`'s own suite owns that gate. The
+   * staleness, drift, dedup, calendar and breaker gates all run exactly as
+   * the paper profile ships them.
+   */
   max_mark_age: { crypto: 24 * 60 * 60_000, stocks: 24 * 60 * 60_000 },
-  drift_tolerance_pct: { crypto: 0.005, stocks: 0.005 },
-  human_timeout: 5 * 60_000,
-  allow_extended_hours: true,
-  flag_thresholds: { size_over: 1_000_000 },
 };
 
 /**

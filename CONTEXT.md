@@ -25,7 +25,7 @@ A predicate: an observable (indicator, mark, bar window, or market-intelligence 
 Gate between Invalidation and Verdict. Applies position-size caps, max drawdown circuit breakers, portfolio exposure limits. Can override Trader's recommendation with a hard "no." Also hard-rejects when the invalidation stage reports a non-empty breached list.
 
 **Verdict**
-The final go/no-go decision after Risk approval. Triggers execution.
+The final go/no-go decision after Risk approval. Triggers execution. Its gates are unconditional with one **named** exception, so that the exception stays a decision rather than a habit: ADR-0014's **mandatory flat-by-close flatten is exempt from the signal-staleness gate** ([#894](https://github.com/dd-jp/samurai-trading-system/issues/894), 2026-08-19, recorded as an amendment to ADR-0014) — that exit is not acting on an opinion whose freshness can be judged, it is acting on the clock, and refusing it leaves a position open past the close, which is the one outcome the horizon exists to prevent. The exemption reaches only that flatten; both discretionary exits and every entry are still refused when stale, and every other gate — dedup, calendar, circuit breakers — still runs on the flatten.
 
 **Debate Engine**
 Mediates between conflicting analyst views before the Trader consolidates. Surfaces disagreements rather than averaging them away.
