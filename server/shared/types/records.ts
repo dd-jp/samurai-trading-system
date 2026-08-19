@@ -83,6 +83,25 @@ export interface OrderIntentMetadata {
    * argument, so no exit can be constructed without one.
    */
   exit_reason?: ExitReason;
+  /**
+   * #826: this exit carries NO reference price. `entry`, `stop` and `target`
+   * are all zero because the instrument's own mark could not be read at all —
+   * the Alpaca-served mark stalled — and ADR-0014's flat-by-close invariant
+   * makes a missed exit worse than an unpriced one.
+   *
+   * Set by `buildFlattenExit` (trader/decide.ts) and ONLY on
+   * `exit_reason: 'flatten'`, the one exit the horizon makes mandatory. Read by
+   * `VerdictImpl.decide`, which skips its two price gates (`stale_feed`,
+   * `drift`) for such an intent — a bracket with no reference price is not one
+   * those gates can reason about, and refusing it would re-create exactly the
+   * missed exit this flag exists to prevent.
+   *
+   * Optional in the TYPE and literally `true` when present, so `=== true` is
+   * the only test a reader can write and the absent case cannot be spelled as
+   * `false` in one place and omitted in another. An exit priced normally does
+   * not carry it.
+   */
+  unpriced_exit?: true;
   conviction: number;
   converged: boolean;
   sizing: {

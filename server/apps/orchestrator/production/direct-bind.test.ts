@@ -35,7 +35,10 @@ import {
   buildVerdictStep,
   sizingEquity,
 } from './direct-bind.js';
-import type { ExitValuationDegradedAlert } from './exit-valuation-alert.js';
+import type {
+  ExitValuationDegradedAlert,
+  ExitValuationDegradedAlertChannel,
+} from './exit-valuation-alert.js';
 import type { TraderDiagnosticAlertChannel } from './trader-diagnostic-alert.js';
 
 const NOW = new Date('2026-07-28T14:00:00Z');
@@ -673,6 +676,261 @@ describe('buildTraderSteps exit_reason persistence (#748)', () => {
     // Attributed to the debate that OPENED the lot, not to a debate this tick
     // never ran — the tick path has no `DebateResult` at all.
     expect(written[0]?.debate_id).toBe('debate-that-opened-the-lot');
+  });
+});
+
+/**
+ * #826 — THE WIRE, not the mechanism.
+ *
+ * `decide.test.ts` proves `buildFlattenExit` degrades to an unpriced flatten
+ * when the mark read fails, and `verdict/index.test.ts` proves Verdict lets
+ * such an intent through. Neither says the live orchestrator ever REACHES that
+ * behaviour: the tick path runs through `buildTraderSteps`, and if this root
+ * did not thread `onUnpricedFlatten` the degradation would still happen but
+ * nobody would be paged for it — which is precisely the "tested mechanism
+ * nothing calls" shape this repo keeps shipping.
+ *
+ * So this drives the real `exitCheck` binding with a market-data double whose
+ * `getMark` throws the way a stalled Alpaca does, inside the flat-by-close
+ * window, and asserts BOTH halves at the composition: the exit intent, and the
+ * page on the channel the composition root owns.
+ */
+describe('buildTraderSteps unpriced flatten escalation (#826)', () => {
+  // 2026-07-28 is a Tuesday; the US close is 20:00 UTC and the config below
+  // opens the flatten window at 19:55, so 19:56 is inside it.
+  const INSIDE_WINDOW = new Date('2026-07-28T19:56:00Z');
+  const WINDOW_CLOCK: Clock = { now: () => INSIDE_WINDOW };
+  const TICK_BAR = new Date('2026-07-28T19:00:00Z');
+  const STALL = 'alpaca: request timed out after 3 attempts';
+
+  const HELD: OpenPosition = {
+    idempotency_key: 'held-lot',
+    debate_id: 'debate-that-opened-the-lot',
+    instrument: 'AAPL',
+    asset_class: 'stocks',
+    side: 'buy',
+    intent_type: 'entry',
+    requested_size: 50,
+    filled_size: 50,
+    avg_entry_price: 100,
+    stop: 90,
+    target: 110,
+    order_state: 'filled',
+    broker_order_ids: ['broker-1'],
+    opened_at: new Date(INSIDE_WINDOW.getTime() - 6 * 60 * 60 * 1_000),
+    decision_timestamp: new Date(INSIDE_WINDOW.getTime() - 6 * 60 * 60 * 1_000),
+    conviction: 0.6,
+    converged: true,
+  };
+
+  const CONFIG: TraderConfig = {
+    conviction_floor: 0.5,
+    max_risk_per_trade: 0.01,
+    asset_class_risk_multiplier: { crypto: 0.5, stocks: 1 },
+    subclass_brackets: ADR_0018_SUBCLASS_BRACKETS,
+    subclass_of: {},
+    atr_timeframe: '1h',
+    atr_lookback: 14,
+    atr_k: 2,
+    vol_floor_fraction: 0.002,
+    non_converged_haircut: 0.5,
+    reward_risk_multiple: 2,
+    min_viable_notional: 10,
+    scale_in_conviction_delta: 0.1,
+    early_exit: DEFAULT_EARLY_EXIT_CONFIG,
+    time_in_force: { crypto: 'gtc', stocks: 'day' },
+    flatten_before_close_ms: 5 * 60 * 1_000,
+  };
+
+  function buildExitCheck(overrides: { exitValuationAlerts?: ExitValuationDegradedAlertChannel }) {
+    return buildTraderSteps({
+      marketData: {
+        ...FAKE_MARKET_DATA,
+        // The stall: bars still answer, the mark does not — the exact split
+        // `FailoverDataSource` leaves in place by failing over bars only.
+        getMark: vi.fn(async () => {
+          throw new Error(STALL);
+        }),
+      },
+      circuitBreakers: new CircuitBreakers({
+        daily_loss_pct: 0.05,
+        daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
+        max_drawdown_pct: 0.2,
+        max_consecutive_losses: 5,
+        volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
+        auto_rearm: { recovery_drawdown_pct: 0.05, max_days_tripped: 5 },
+      }),
+      accountState: FAKE_ACCOUNT_STATE,
+      volatility: FAKE_VOLATILITY,
+      getOpenPositions: async () => [HELD],
+      maxMarkAge: TEST_MAX_MARK_AGE,
+      mode: 'paper',
+      breakerState: NOOP_BREAKER_STATE,
+      portfolioSnapshots: new Map(),
+      config: CONFIG,
+      setupStore: new FixtureSetupStore(),
+      getExitFillSizes: async () => new Map<string, number>(),
+      sessionCalendars: {
+        crypto: new AlwaysOpenCalendar(),
+        stocks: new UsEquityRegularHoursCalendar(),
+      },
+      ...overrides,
+    }).exitCheck;
+  }
+
+  it('still emits the flatten, unpriced, when the tick path cannot read a mark', async () => {
+    const exitCheck = buildExitCheck({});
+
+    const intent = await exitCheck({
+      trace_id: TRACE_ID,
+      instrument: 'AAPL',
+      clock: WINDOW_CLOCK,
+      bar: TICK_BAR,
+    });
+
+    expect(intent?.intent_type).toBe('exit');
+    expect(intent?.metadata.exit_reason).toBe('flatten');
+    expect(intent?.metadata.unpriced_exit).toBe(true);
+    expect(intent?.size).toBe(50);
+    expect(intent?.entry).toBe(0);
+  });
+
+  it('pages the operator through the channel this root owns', async () => {
+    const posted: ExitValuationDegradedAlert[] = [];
+    const exitCheck = buildExitCheck({
+      exitValuationAlerts: {
+        postExitValuationDegradedAlert: (alert) => posted.push(alert),
+      },
+    });
+
+    await exitCheck({
+      trace_id: TRACE_ID,
+      instrument: 'AAPL',
+      clock: WINDOW_CLOCK,
+      bar: TICK_BAR,
+    });
+
+    expect(posted).toHaveLength(1);
+    expect(posted[0]?.seam).toBe('trader');
+    expect(posted[0]?.instrument).toBe('AAPL');
+    // The dark name IS the exited name on this seam — that is what
+    // distinguishes it from #841's two.
+    expect(posted[0]?.unvalued_instruments).toEqual(['AAPL']);
+    expect(posted[0]?.reason).toContain('timed out');
+    expect(posted[0]?.reported_at).toEqual(INSIDE_WINDOW);
+  });
+
+  /**
+   * The OTHER binding — the decision-path `trader` step.
+   *
+   * `buildTraderSteps` threads `onUnpricedFlatten` twice, and until this case
+   * existed only the tick-path thread was pinned: deleting the `trader` bind
+   * left all ~3900 tests green, which is this repo's dominant defect shape (a
+   * mechanism that is tested and a wire that nothing holds).
+   *
+   * The debate is deliberately NEUTRAL. `routeDecision` decides flat-by-close
+   * ABOVE its `neutral || !converged` skip — that ordering is the load-bearing
+   * part of the branch's own comment — so a neutral debate is exactly the case
+   * that reaches `buildFlattenExit` on this path, and it reaches it without the
+   * pass needing a working equity read (the strict snapshot throws here, since
+   * the same dark mark it captures is the one under test).
+   */
+  it('pages the operator when the DECISION path decides the unpriced flatten', async () => {
+    const posted: ExitValuationDegradedAlert[] = [];
+    const { trader } = buildTraderSteps({
+      marketData: {
+        ...FAKE_MARKET_DATA,
+        getMark: vi.fn(async () => {
+          throw new Error(STALL);
+        }),
+      },
+      circuitBreakers: new CircuitBreakers({
+        daily_loss_pct: 0.05,
+        daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
+        max_drawdown_pct: 0.2,
+        max_consecutive_losses: 5,
+        volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
+        auto_rearm: { recovery_drawdown_pct: 0.05, max_days_tripped: 5 },
+      }),
+      accountState: FAKE_ACCOUNT_STATE,
+      volatility: FAKE_VOLATILITY,
+      getOpenPositions: async () => [HELD],
+      maxMarkAge: TEST_MAX_MARK_AGE,
+      mode: 'paper',
+      breakerState: NOOP_BREAKER_STATE,
+      portfolioSnapshots: new Map(),
+      config: CONFIG,
+      setupStore: new FixtureSetupStore(),
+      getExitFillSizes: async () => new Map<string, number>(),
+      sessionCalendars: {
+        crypto: new AlwaysOpenCalendar(),
+        stocks: new UsEquityRegularHoursCalendar(),
+      },
+      exitValuationAlerts: {
+        postExitValuationDegradedAlert: (alert) => posted.push(alert),
+      },
+    });
+
+    const intent = await trader({
+      trace_id: TRACE_ID,
+      instrument: 'AAPL',
+      debate: makeDebate({ direction: 'neutral', synthesis: 'neutral', bar_timestamp: TICK_BAR }),
+      clock: WINDOW_CLOCK,
+    });
+
+    expect(intent?.intent_type).toBe('exit');
+    expect(intent?.metadata.exit_reason).toBe('flatten');
+    expect(intent?.metadata.unpriced_exit).toBe(true);
+    // The wire, which is what a deleted bind breaks — the intent above still
+    // degrades without it.
+    expect(posted).toHaveLength(1);
+    expect(posted[0]?.seam).toBe('trader');
+    expect(posted[0]?.instrument).toBe('AAPL');
+    expect(posted[0]?.unvalued_instruments).toEqual(['AAPL']);
+    expect(posted[0]?.reason).toContain('timed out');
+  });
+
+  it('does not page when the mark reads cleanly', async () => {
+    const posted: ExitValuationDegradedAlert[] = [];
+    const exitCheck = buildTraderSteps({
+      marketData: FAKE_MARKET_DATA,
+      circuitBreakers: new CircuitBreakers({
+        daily_loss_pct: 0.05,
+        daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
+        max_drawdown_pct: 0.2,
+        max_consecutive_losses: 5,
+        volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
+        auto_rearm: { recovery_drawdown_pct: 0.05, max_days_tripped: 5 },
+      }),
+      accountState: FAKE_ACCOUNT_STATE,
+      volatility: FAKE_VOLATILITY,
+      getOpenPositions: async () => [HELD],
+      maxMarkAge: TEST_MAX_MARK_AGE,
+      mode: 'paper',
+      breakerState: NOOP_BREAKER_STATE,
+      portfolioSnapshots: new Map(),
+      config: CONFIG,
+      setupStore: new FixtureSetupStore(),
+      getExitFillSizes: async () => new Map<string, number>(),
+      sessionCalendars: {
+        crypto: new AlwaysOpenCalendar(),
+        stocks: new UsEquityRegularHoursCalendar(),
+      },
+      exitValuationAlerts: {
+        postExitValuationDegradedAlert: (alert) => posted.push(alert),
+      },
+    }).exitCheck;
+
+    const intent = await exitCheck({
+      trace_id: TRACE_ID,
+      instrument: 'AAPL',
+      clock: WINDOW_CLOCK,
+      bar: TICK_BAR,
+    });
+
+    expect(intent?.metadata.exit_reason).toBe('flatten');
+    expect(intent?.metadata.unpriced_exit).toBeUndefined();
+    expect(posted).toHaveLength(0);
   });
 });
 

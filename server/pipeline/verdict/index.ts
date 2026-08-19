@@ -13,6 +13,12 @@
  * `staleness` bounds how old our DECISION is, `stale_feed` (#641) bounds how
  * old the PRICE is. Neither implies the other.
  *
+ * ONE intent skips two of those gates (#826): the mandatory flat-by-close exit
+ * built while the mark source was stalled, which carries no reference price at
+ * all (`metadata.unpriced_exit`). `stale_feed` and `drift` are skipped for it —
+ * see `#priceGates` and the branch that guards it. Every other gate still runs,
+ * for it as for everything else.
+ *
  * HITL only engages per the per-asset-class automation dial: `manual`
  * always engages it, `auto` never does, `semi_auto` engages it only when a
  * flag is set (non-converged, no-precedent, size-over, or near-limit —
@@ -144,41 +150,31 @@ export class VerdictImpl implements Verdict {
       return noGo('staleness', idempotencyKey, now);
     }
 
-    // Gate 2: drift — current price vs the bracket's entry, as a FRACTION of
-    // that entry (#381). Absolute price distance cannot be set correctly for
-    // more than one instrument at a time; see `VerdictConfig.drift_tolerance_pct`.
+    // #826 — THE UNPRICED MANDATORY FLATTEN SKIPS BOTH PRICE GATES.
     //
-    // Fails closed on a non-positive entry: `entry * pct` would be zero or
-    // negative there, which would either reject everything or — worse, for a
-    // negative entry — invert the comparison into a gate that passes on
-    // unbounded drift. A bracket with no positive entry price is not a bracket
-    // this gate can reason about, so it is refused rather than waved through.
-    const mark = await marketData.getMark(orderIntent.instrument, now);
-
-    // Gate 2a: FEED staleness (#641) — how long ago the market last spoke,
-    // measured off `Mark.observed_at`.
+    // `buildFlattenExit` emits an `entry`/`stop`/`target` of zero, flagged
+    // `metadata.unpriced_exit`, when the instrument's own mark could not be
+    // read at all and ADR-0014's flat-by-close window is open. Neither gate
+    // below can reason about such an intent: gate 2 measures drift FROM the
+    // bracket's entry and would reject on `!(entry > 0)`, and gate 2a asks how
+    // old a price is that was never obtained. Running them would turn the
+    // Trader's deliberate degradation into a `no_go` — the missed exit #826
+    // exists to remove, moved one stage later.
     //
-    // Ordered BEFORE the drift gate, and on the same `mark` that gate reads
-    // rather than a second fetch. A stale mark does not merely weaken the
-    // drift comparison, it breaks it in both directions: a price frozen at the
-    // bracket's entry passes a gate that is supposed to be measuring live
-    // movement, and one frozen far from it fires a `drift` no-go that names
-    // the wrong cause. Running this first means a `drift` verdict always
-    // refers to real movement, and a dead feed is reported as a dead feed.
+    // The mark is not even READ on this branch. During the stall it is the
+    // failing call, and re-issuing it here would pay a second primary timeout
+    // (~30s per `AlpacaHttpDataClient`'s retry budget) on the tick that is
+    // trying to get flat before the close.
     //
-    // Distinct from gate 1: that bounds how old our DECISION is, this bounds
-    // how old the PRICE is. Both must hold — see `VerdictConfig.max_mark_age`.
-    if (isMarkStale(mark, now, config.max_mark_age[orderIntent.asset_class])) {
-      return noGo('stale_feed', idempotencyKey, now);
-    }
-
-    if (!(orderIntent.entry > 0)) {
-      return noGo('drift', idempotencyKey, now);
-    }
-    const drift = Math.abs(mark.price - orderIntent.entry);
-    const driftTolerance = orderIntent.entry * config.drift_tolerance_pct[orderIntent.asset_class];
-    if (drift > driftTolerance) {
-      return noGo('drift', idempotencyKey, now);
+    // Scoped by the flag alone, so the healthy path is byte-identical: an exit
+    // that HAS a mark still drifts and still ages, and a normally-priced
+    // flatten is gated exactly as before. Gates 3 (dedup), 4 (market-open) and
+    // 5 (breaker re-check) still run — none of them reads a price, and the
+    // dedup gate in particular is what keeps a repeated flatten from
+    // double-submitting while the feed is down.
+    if (orderIntent.metadata.unpriced_exit !== true) {
+      const noGoOnPrice = await this.#priceGates(orderIntent, marketData, config, now);
+      if (noGoOnPrice !== null) return noGoOnPrice;
     }
 
     // Gate 3: idempotency dedup — existing order/fill for this key.
@@ -272,6 +268,66 @@ export class VerdictImpl implements Verdict {
       idempotency_key: idempotencyKey,
       timestamp: now,
     };
+  }
+
+  /**
+   * Gates 2a and 2 — the two that need a PRICE — as one read (#826).
+   *
+   * Extracted verbatim from the gate sequence, not rewritten: both still run
+   * on ONE `getMark`, still in the order `stale_feed` then `drift`, and still
+   * fail closed on a non-positive entry. The extraction exists so the caller
+   * can skip both together for an intent that has no reference price at all,
+   * without a second `getMark` or a partially-applied gate.
+   *
+   * Returns the `no_go` to short-circuit on, or `null` when both gates pass.
+   */
+  async #priceGates(
+    orderIntent: OrderIntent,
+    marketData: VerdictInput['marketData'],
+    config: VerdictConfig,
+    now: Date,
+  ): Promise<VerdictDecision | null> {
+    const idempotencyKey = orderIntent.idempotency_key;
+    const mark = await marketData.getMark(orderIntent.instrument, now);
+
+    // Gate 2a: FEED staleness (#641) — how long ago the market last spoke,
+    // measured off `Mark.observed_at`.
+    //
+    // Ordered BEFORE the drift gate, and on the same `mark` that gate reads
+    // rather than a second fetch. A stale mark does not merely weaken the
+    // drift comparison, it breaks it in both directions: a price frozen at the
+    // bracket's entry passes a gate that is supposed to be measuring live
+    // movement, and one frozen far from it fires a `drift` no-go that names
+    // the wrong cause. Running this first means a `drift` verdict always
+    // refers to real movement, and a dead feed is reported as a dead feed.
+    //
+    // Distinct from gate 1: that bounds how old our DECISION is, this bounds
+    // how old the PRICE is. Both must hold — see `VerdictConfig.max_mark_age`.
+    if (isMarkStale(mark, now, config.max_mark_age[orderIntent.asset_class])) {
+      return noGo('stale_feed', idempotencyKey, now);
+    }
+
+    // Gate 2: drift — current price vs the bracket's entry, as a FRACTION of
+    // that entry (#381). Absolute price distance cannot be set correctly for
+    // more than one instrument at a time; see `VerdictConfig.drift_tolerance_pct`.
+    //
+    // Fails closed on a non-positive entry: `entry * pct` would be zero or
+    // negative there, which would either reject everything or — worse, for a
+    // negative entry — invert the comparison into a gate that passes on
+    // unbounded drift. A bracket with no positive entry price is not a bracket
+    // this gate can reason about, so it is refused rather than waved through.
+    // The #826 unpriced flatten does not reach here at all; it is excluded by
+    // the caller, precisely so this refusal keeps its meaning.
+    if (!(orderIntent.entry > 0)) {
+      return noGo('drift', idempotencyKey, now);
+    }
+    const drift = Math.abs(mark.price - orderIntent.entry);
+    const driftTolerance = orderIntent.entry * config.drift_tolerance_pct[orderIntent.asset_class];
+    if (drift > driftTolerance) {
+      return noGo('drift', idempotencyKey, now);
+    }
+
+    return null;
   }
 }
 
