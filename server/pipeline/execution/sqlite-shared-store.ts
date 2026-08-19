@@ -17,7 +17,12 @@
  *    `toStoredTimestamp` and read back through `fromStoredTimestamp`
  *    (`shared/store/sqlite-utils.ts`, #837 M7). Those helpers are where the
  *    fixed-width form is held, and `ORDER BY opened_at` below is a TEXT sort
- *    that is chronological only because of it.
+ *    that is chronological only because of it. The store tests here do NOT
+ *    catch a uniform format regression — every write and bound parameter
+ *    flows through the same helper, so rows stay mutually consistent even if
+ *    the format drifts. The write-side `STORED_TIMESTAMP` regex inside
+ *    `toStoredTimestamp` is the actual enforcement point (#884); don't relax
+ *    it on the strength of these tests staying green.
  * 2. **JSON columns** (`broker_order_ids`, `cost_breakdown_json`) round-trip
  *    through `JSON.stringify`/`JSON.parse` at this boundary only — the port
  *    never sees the serialized form.
