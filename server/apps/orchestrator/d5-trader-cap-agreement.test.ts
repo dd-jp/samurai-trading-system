@@ -228,7 +228,7 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
     expect(decision.modifications?.final_size).toBeCloseTo(intended, 6);
   });
 
-  it('leaves NO room for a scale-in once an entry took the full envelope — #800 AC3 is NOT satisfied', () => {
+  it('leaves NO room for a scale-in once an entry took the full envelope — #897, unresolved', () => {
     // Recorded as behaviour, not asserted as desirable. `buildBracket` sizes a
     // `scale_in` exactly like an entry (decide.ts:391), so a first fill at the
     // full envelope leaves `allowedAdditional <= 0` and every scale-in is
@@ -238,7 +238,9 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
     // the Trader sizing ONE entry AT the whole envelope. Resolving it is a
     // Trader-side or ADR-0018 D5 decision — entries size below the envelope to
     // leave headroom, or scale-ins are ruled out for D5-capped subclasses —
-    // and it is the half of #800 that survives David's capital ruling.
+    // and it is the half of #800 that survives David's capital ruling. #800
+    // itself closed once its denominator question resolved; this gap is now
+    // owned by #897, which must stay OPEN while this test asserts the gap.
     const full = D5_INDEX_ETP_DEPLOYMENT_FRACTION * EQUITY;
 
     const decision = decide(d5InIsolation(), intentFor('3USL', full, 'scale_in'), {
