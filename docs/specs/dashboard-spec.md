@@ -212,7 +212,7 @@ Tokens are defined once as CSS custom properties and consumed everywhere; nothin
 
 | Token | Value | Meaning |
 | --- | --- | --- |
-| `--bg` | `#060A14` | Page ground (deep indigo) |
+| `--bg` | `#05070D` | Page ground (near-void indigo) |
 | `--panel` | `rgba(255,255,255,.04)` + backdrop blur + 1px `#1E2A44` border | Glass panel |
 | `--cyan` | `#38E1FF` | Live / in-flight accent |
 | `--go` | `#3DDC7D` | `go`, profit |
@@ -220,12 +220,15 @@ Tokens are defined once as CSS custom properties and consumed everywhere; nothin
 | `--vermilion` | `#FF4D5E` | `stopped`, loss, error |
 | `--text` | `#E8EDF7` | Body text |
 | `--muted` | `#8A93A8` | Secondary text, labels |
+| `--gold` | `#C9A25A` | Chrome only — the seal ring and the panel corner-bracket frame. Never a state signal; the six rows above own that job |
 
 The palette was checked for common colour-vision deficiencies when it was chosen. That check is a floor, not a licence: **colour is never the sole carrier of a signal** anywhere on this page — every state that has a colour also has a word.
 
 **Type** — Chakra Petch (display: room names, headings, callsigns), IBM Plex Sans (body), IBM Plex Mono (all numerics, so columns of figures align). **Self-hosted via `@fontsource`** and bundled into the build. Zero external requests is a hard requirement (story 21), not a preference.
 
-**Signature element** — the hanko seal stamp on ledger entries. It is the one piece of ornament with a job: it makes "a decision was made" a physical event on the page.
+**Spacing** — an 8px baseline scale (`--space-1`…`--space-8`, 4–48px), applied at the outer layout level (page shell, telemetry strip, panel padding, section gaps). Component-internal spacing with its own documented reason (e.g. the position rail's 13px label-row stride) stays off the scale.
+
+**Signature element** — the hanko seal stamp on ledger entries, now ringed in `--gold`. The same corner-bracket language framing every panel (previously shown only on a selected pipeline room) extends that ceremony page-wide: a consistent HUD reticle-corner frame is the chrome every container shares.
 
 ## Wire Shape
 

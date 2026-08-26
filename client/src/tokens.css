@@ -29,7 +29,7 @@
    * is the duplication this exists to remove. The values are still the spec's
    * colour table (`--cyan` = #38e1ff = 56 225 255, and so on).
    */
-  --bg: #060a14;
+  --bg: #05070d;
   --panel: rgba(255, 255, 255, 0.04);
   --border-rgb: 30 42 68;
   --border: rgb(var(--border-rgb));
@@ -45,6 +45,15 @@
   --muted-rgb: 138 147 168;
   --muted: rgb(var(--muted-rgb));
   /*
+   * Chrome-only accent for the hanko seal ring and other ceremonial framing
+   * (redesign, 2026-08-26). Deliberately never used for a state signal — the
+   * four colours above already own that job; adding a fifth would blur the
+   * "colour is never the sole carrier of a signal" rule this file's header
+   * describes, since a reader would have to learn gold means nothing.
+   */
+  --gold-rgb: 201 162 90;
+  --gold: rgb(var(--gold-rgb));
+  /*
    * The dark the panels and chips sit ON, distinct from `--bg` (6 10 20) and
    * deliberately not folded into it: the washes at 0.4–0.72 alpha are read
    * against the page's radial gradient, and collapsing them onto the page
@@ -57,6 +66,34 @@
   --font-display: "Chakra Petch", sans-serif;
   --font-body: "IBM Plex Sans", sans-serif;
   --font-mono: "IBM Plex Mono", monospace;
+
+  /*
+   * Spacing scale (redesign, 2026-08-26). Applied at the outer layout level
+   * — the page shell, the telemetry strip, panel padding, section gaps —
+   * where an inconsistent pixel value is visible as misalignment. Component-
+   * internal spacing with its own documented reason (e.g. the position rail's
+   * 13px label-row stride) is left alone rather than forced onto this scale.
+   */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 40px;
+  --space-8: 48px;
+}
+
+/*
+ * `--bg` on html AND body, not just body: neither previously had a declared
+ * background, so trackpad overscroll (and the instant before `.app`'s own
+ * min-height:100vh background paints) showed the browser's default white
+ * above the UI. `.app`'s background is unchanged and still does the visible
+ * work; this is the fallback underneath it.
+ */
+html,
+body {
+  background: var(--bg);
 }
 
 body {
