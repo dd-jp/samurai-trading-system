@@ -58,6 +58,7 @@
     "vitest": "^4.1.10"
   },
   "dependencies": {
+    "@fontsource/shippori-mincho": "^5.3.0",
     "better-sqlite3": "^13.0.1"
   },
   "allowScripts": {

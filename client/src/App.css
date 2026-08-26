@@ -21,17 +21,11 @@
 
 .app {
   min-height: 100vh;
-  /*
-   * Three layers: the existing top-of-page cyan wash, plus a fine dot-grid
-   * (two repeating-linear-gradients, one per axis) at a low enough alpha to
-   * read as texture rather than noise — the radar/satellite-HUD ground this
-   * page's mission-control framing wants. Static, so it costs nothing on the
-   * 3-second repaint and needs no prefers-reduced-motion handling.
-   */
+  /* A single ink-bleed wash from the top, in `--lacquer` rather than the
+     technical cyan grid the previous pass used — the page's ground reads as
+     paper the ink has soaked into, not an instrument display. */
   background:
-    radial-gradient(1200px 600px at 50% -200px, rgb(var(--cyan-rgb) / 0.06), transparent 60%),
-    repeating-linear-gradient(0deg, rgb(var(--border-rgb) / 0.05) 0 1px, transparent 1px 40px),
-    repeating-linear-gradient(90deg, rgb(var(--border-rgb) / 0.05) 0 1px, transparent 1px 40px),
+    radial-gradient(1400px 700px at 50% -240px, rgb(var(--lacquer-rgb) / 0.08), transparent 62%),
     var(--bg);
   color: var(--text);
   font-family: var(--font-body);
@@ -94,18 +88,17 @@ button {
 }
 
 :focus-visible {
-  outline: 2px solid var(--cyan);
+  outline: 2px solid var(--gold);
   outline-offset: 2px;
 }
 
 /* ---------------------------------------------------------------- telemetry */
 
 /*
- * Docked flush to the viewport top (sticky, no margin, no top border-radius)
- * rather than inset with a margin — the "cockpit canopy rail" the rooms hero
- * scrolls under. This is also what removes the white band trackpad overscroll
- * used to reveal above it: there is no gap above this element for the
- * un-backgrounded page ground (fixed in tokens.css) to show through.
+ * Docked flush to the viewport top (sticky, no margin, sharp corners) — this
+ * is what removes the white band trackpad overscroll used to reveal above
+ * it: there is no gap above this element for the un-backgrounded page
+ * ground (fixed in tokens.css) to show through.
  */
 .telemetry-strip {
   position: sticky;
@@ -119,34 +112,11 @@ button {
   padding: var(--space-3) var(--space-5);
   border: 0;
   border-bottom: 1px solid var(--border);
-  border-radius: 0 0 12px 12px;
+  border-radius: 0;
   background: var(--panel);
   backdrop-filter: blur(12px);
+  box-shadow: 0 1px 0 rgb(var(--gold-rgb) / 0.3);
   transition: border-color 0.3s;
-}
-
-/* A slow radar-style sweep — decoration on top of an already-labelled state,
-   never the signal itself. Disabled below under prefers-reduced-motion. */
-.telemetry-strip::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: 26%;
-  background: linear-gradient(90deg, transparent, rgb(var(--cyan-rgb) / 0.05), transparent);
-  animation: telemetry-scan 7s linear infinite;
-  pointer-events: none;
-}
-
-@keyframes telemetry-scan {
-  from {
-    transform: translateX(-120%);
-  }
-
-  to {
-    transform: translateX(480%);
-  }
 }
 
 /* Staleness is a label plus a border, never a disappearance. The colour
@@ -157,10 +127,10 @@ button {
 }
 
 .brand {
-  font-family: var(--font-display);
+  font-family: var(--font-accent);
   font-weight: 700;
-  font-size: 15px;
-  letter-spacing: 0.14em;
+  font-size: 16px;
+  letter-spacing: 0.08em;
 }
 
 .brand i {
@@ -306,13 +276,12 @@ main {
  * the rooms hero actually scrolls behind.
  */
 /*
- * The corner-bracket motif (previously only `.room-corner`, shown on
- * selection) becomes the page's unifying frame: every panel gets a static
- * reticle corner in `--border`, drawn as eight background-gradient layers (an
- * L-shaped pair per corner) on a full-bleed pseudo-element rather than markup
- * — no component file needs to change to pick this up, since all four already
- * share this selector. `pointer-events: none` and a fully transparent base
- * keep it inert; nothing here can be clicked or read by assistive tech.
+ * "Blade & Ink" replaces the rounded-corner HUD reticle with a single cut
+ * corner (top-right), the way a blade squares a sheet of paper: `clip-path`
+ * on the panel itself instead of a rounded border, plus a small lacquer-red
+ * wedge on a pseudo-element that fills the cut notch — the "ink at the
+ * blade's edge" this direction is named for. No component file needs to
+ * change to pick this up, since all four already share this selector.
  */
 .panel,
 .rooms-panel,
@@ -320,7 +289,7 @@ main {
 .drawer-panel {
   position: relative;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  clip-path: polygon(0 0, calc(100% - var(--space-4)) 0, 100% var(--space-4), 100% 100%, 0 100%);
   background: var(--panel);
   padding: var(--space-4) var(--space-5);
 }
@@ -331,40 +300,13 @@ main {
 .drawer-panel::before {
   content: "";
   position: absolute;
-  inset: 0;
-  border-radius: inherit;
+  top: 0;
+  right: 0;
+  width: var(--space-4);
+  height: var(--space-4);
+  background: rgb(var(--lacquer-rgb) / 0.5);
+  clip-path: polygon(100% 0, 100% 100%, 0 0);
   pointer-events: none;
-  --corner-len: 9px;
-  --corner-w: 2px;
-  --corner-c: rgb(var(--border-rgb) / 0.9);
-  background-image:
-    linear-gradient(to right, var(--corner-c) 0 var(--corner-len), transparent var(--corner-len)),
-    linear-gradient(to bottom, var(--corner-c) 0 var(--corner-len), transparent var(--corner-len)),
-    linear-gradient(to left, var(--corner-c) 0 var(--corner-len), transparent var(--corner-len)),
-    linear-gradient(to bottom, var(--corner-c) 0 var(--corner-len), transparent var(--corner-len)),
-    linear-gradient(to left, var(--corner-c) 0 var(--corner-len), transparent var(--corner-len)),
-    linear-gradient(to top, var(--corner-c) 0 var(--corner-len), transparent var(--corner-len)),
-    linear-gradient(to right, var(--corner-c) 0 var(--corner-len), transparent var(--corner-len)),
-    linear-gradient(to top, var(--corner-c) 0 var(--corner-len), transparent var(--corner-len));
-  background-repeat: no-repeat;
-  background-size:
-    var(--corner-len) var(--corner-w),
-    var(--corner-w) var(--corner-len),
-    var(--corner-len) var(--corner-w),
-    var(--corner-w) var(--corner-len),
-    var(--corner-len) var(--corner-w),
-    var(--corner-w) var(--corner-len),
-    var(--corner-len) var(--corner-w),
-    var(--corner-w) var(--corner-len);
-  background-position:
-    top left,
-    top left,
-    top right,
-    top right,
-    bottom right,
-    bottom right,
-    bottom left,
-    bottom left;
 }
 
 .panel-head {
@@ -373,13 +315,15 @@ main {
   gap: 10px;
   flex-wrap: wrap;
   margin-bottom: 12px;
+  border-bottom: 1px solid rgb(var(--lacquer-rgb) / 0.35);
+  padding-bottom: var(--space-2);
 }
 
 .panel-head h2 {
-  font-family: var(--font-display);
-  font-weight: 600;
-  font-size: 12px;
-  letter-spacing: 0.2em;
+  font-family: var(--font-accent);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   margin: 0;
 }
@@ -441,7 +385,7 @@ main {
 .room {
   position: relative;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  clip-path: polygon(0 0, calc(100% - var(--space-2)) 0, 100% var(--space-2), 100% 100%, 0 100%);
   background: rgb(var(--ink-rgb) / 0.72);
   padding: 10px 12px;
   display: flex;
@@ -511,28 +455,11 @@ main {
 
 .room-live {
   border-color: rgb(var(--cyan-rgb) / 0.55);
+  /* Static glow only: the resting frame is also the full signal, so
+     prefers-reduced-motion needs no override here to keep "live" marked. */
   box-shadow:
     0 0 18px rgb(var(--cyan-rgb) / 0.12),
     inset 0 0 24px rgb(var(--cyan-rgb) / 0.04);
-  /* The static box-shadow above is also the resting frame — the animation
-     below only breathes its intensity, so prefers-reduced-motion (which turns
-     this off) still leaves the live state visibly marked. */
-  animation: room-live-pulse 2.6s ease-in-out infinite;
-}
-
-@keyframes room-live-pulse {
-  0%,
-  100% {
-    box-shadow:
-      0 0 18px rgb(var(--cyan-rgb) / 0.12),
-      inset 0 0 24px rgb(var(--cyan-rgb) / 0.04);
-  }
-
-  50% {
-    box-shadow:
-      0 0 27px rgb(var(--cyan-rgb) / 0.22),
-      inset 0 0 30px rgb(var(--cyan-rgb) / 0.07);
-  }
 }
 
 .room-live::before {
@@ -559,20 +486,24 @@ main {
   opacity: 1;
 }
 
+/*
+ * Inset to 0, not the -2px outset the rounded-corner frame used: `.room` now
+ * clips to its `clip-path` polygon regardless of `overflow`, so anything
+ * placed outside the border box (as -2px was) gets silently cut off instead
+ * of hanging past the edge as it did under `border-radius`.
+ */
 .room-corner-tl {
-  top: -2px;
-  left: -2px;
+  top: 0;
+  left: 0;
   border-right: 0;
   border-bottom: 0;
-  border-radius: 3px 0 0 0;
 }
 
 .room-corner-br {
-  bottom: -2px;
-  right: -2px;
+  bottom: 0;
+  right: 0;
   border-left: 0;
   border-top: 0;
-  border-radius: 0 0 3px 0;
 }
 
 .room-heading {
@@ -630,13 +561,20 @@ main {
   padding: 0 6px;
 }
 
+/*
+ * The signature watermark: large enough to read as the card's dominant
+ * graphic device rather than a corner ornament, tinted `--lacquer` (ink) so
+ * it also carries the "red over grey" chrome shift the rest of the room
+ * card doesn't otherwise get much of. Bottom-right, not top-right, so it
+ * never falls under `.room`'s cut-corner clip-path.
+ */
 .room-kanji {
   position: absolute;
-  right: 8px;
-  bottom: 2px;
-  font-size: 48px;
+  right: -4px;
+  bottom: -8px;
+  font-size: 76px;
   line-height: 1;
-  color: rgb(var(--muted-rgb) / 0.1);
+  color: rgb(var(--lacquer-rgb) / 0.22);
   pointer-events: none;
   user-select: none;
 }
@@ -843,11 +781,11 @@ main {
 }
 
 .ledger-row:hover {
-  background: rgb(var(--cyan-rgb) / 0.05);
+  background: rgb(var(--lacquer-rgb) / 0.08);
 }
 
 .ledger-row-selected {
-  background: rgb(var(--cyan-rgb) / 0.08);
+  background: rgb(var(--lacquer-rgb) / 0.14);
 }
 
 .ledger-time,
@@ -1315,13 +1253,13 @@ main {
 
 .spark-line {
   fill: none;
-  stroke: var(--cyan);
+  stroke: var(--lacquer);
   stroke-width: 2;
   stroke-linecap: round;
 }
 
 .spark-fill {
-  fill: rgb(var(--cyan-rgb) / 0.1);
+  fill: rgb(var(--lacquer-rgb) / 0.14);
   stroke: none;
 }
 
@@ -1360,7 +1298,7 @@ main {
   left: 0;
   top: 0;
   bottom: 0;
-  background: var(--cyan);
+  background: var(--lacquer);
   border-radius: 3px;
 }
 
@@ -1476,9 +1414,7 @@ main {
   .chip-bob,
   .chip-shimmer::after,
   .room,
-  .room-live,
   .ledger-row-stamped .seal,
-  .telemetry-strip::after,
   .chip {
     animation: none;
   }
