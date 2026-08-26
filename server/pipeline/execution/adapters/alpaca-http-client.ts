@@ -244,7 +244,20 @@ function validateAlpacaOrder(body: unknown, context: string): AlpacaOrder {
   if (filled_at !== null && typeof filled_at !== 'string') {
     failValidation(context, 'filled_at must be a string or null', body);
   }
-  if (legs !== undefined) {
+  // `null` is ABSENT here, not a malformed array (#921). Alpaca returns
+  // `"legs": null` on every order that has no attached legs — which is every
+  // plain market order, i.e. every flatten this adapter ever submits, and
+  // every later lookup of one. Excusing only `undefined` made
+  // `validateAlpacaOrder` throw on all of them: `submitFlatten` threw AFTER
+  // the venue had accepted and filled the order (so the store kept the lot
+  // open while the account was flat), and `resumeFlatten` then threw the same
+  // way, so `reconcile()`'s flatten-journal sweep could not repair what the
+  // submit had lost. The flatten path could not complete against live Alpaca
+  // at all — `closed_trades` held 0 rows across the whole paper soak.
+  //
+  // Verified against a live paper response, 2026-08-26: a filled market sell
+  // returns `"legs": null` alongside `"order_class": ""`.
+  if (legs !== undefined && legs !== null) {
     if (!Array.isArray(legs)) failValidation(context, 'legs must be an array', body);
     for (const leg of legs) validateAlpacaOrderLeg(leg, context, body);
   }
