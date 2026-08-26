@@ -493,6 +493,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@fontsource/shippori-mincho@npm:^5.3.0":
+  version: 5.3.0
+  resolution: "@fontsource/shippori-mincho@npm:5.3.0"
+  checksum: 10c0/bb89da9407a34a476ac08947726b3da929609812ec0b2abca342ce3a15710bef1e3ed9e5ce734db8e28107e8b84d56f5ca4a7e397ccfafe1ddb17fafb49b59cf
+  languageName: node
+  linkType: hard
+
 "@isaacs/fs-minipass@npm:^4.0.0":
   version: 4.0.1
   resolution: "@isaacs/fs-minipass@npm:4.0.1"
@@ -2213,6 +2220,7 @@ __metadata:
     "@fontsource/chakra-petch": "npm:^5.3.0"
     "@fontsource/ibm-plex-mono": "npm:^5.3.0"
     "@fontsource/ibm-plex-sans": "npm:^5.3.0"
+    "@fontsource/shippori-mincho": "npm:^5.3.0"
     "@playwright/test": "npm:^1.62.1"
     "@testing-library/dom": "npm:^10.4.1"
     "@testing-library/react": "npm:^16.3.2"
