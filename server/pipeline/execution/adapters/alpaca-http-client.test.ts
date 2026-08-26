@@ -821,6 +821,69 @@ describe('AlpacaHttpBrokerClient — wire validation (#509)', () => {
     });
   });
 
+  it('accepts legs: null — the shape live Alpaca returns on every flatten (#921)', async () => {
+    // The exact body a filled paper market sell returned on 2026-08-26, fields
+    // trimmed to the ones the validator reads. Before the fix, `legs: null`
+    // failed the `Array.isArray` check and threw an
+    // `AlpacaBrokerProviderError` AFTER the venue had already filled the
+    // order — so the store kept the lot open against a flat account, and
+    // `resumeFlatten` threw identically, leaving reconcile unable to repair
+    // it. No flatten could ever complete against live Alpaca.
+    const liveFlattenResponse = {
+      id: '296d7b03-d6ab-46d0-8eb3-3b045415a688',
+      client_order_id: 'flatten-key',
+      symbol: 'SPY',
+      side: 'sell',
+      qty: '1',
+      order_class: '',
+      status: 'filled',
+      filled_qty: '1',
+      filled_avg_price: '766.23',
+      filled_at: '2026-08-26T19:56:40.033801055Z',
+      legs: null,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(liveFlattenResponse));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+
+    await expect(client.submitMarketOrder(MARKET_ORDER_REQUEST)).resolves.toEqual(
+      liveFlattenResponse,
+    );
+  });
+
+  it('getOrderByClientOrderId accepts legs: null too — the reconcile half of #921', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        id: 'alpaca-order-1',
+        status: 'filled',
+        filled_qty: '1',
+        filled_avg_price: '766.23',
+        filled_at: '2026-08-26T19:56:40.033801055Z',
+        legs: null,
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+
+    await expect(client.getOrderByClientOrderId('flatten-key')).resolves.toMatchObject({
+      id: 'alpaca-order-1',
+      status: 'filled',
+    });
+  });
+
+  it('still rejects legs when it is present and a non-array, non-null value', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ...ORDER_RESPONSE, legs: 'two' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+
+    await expect(client.submitOrder(ORDER_REQUEST)).rejects.toBeInstanceOf(
+      AlpacaBrokerProviderError,
+    );
+  });
+
   it('submitOrder still rejects client_order_id/qty/side/order_class when present but the wrong type', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ...ORDER_RESPONSE, side: 'up' }));
     vi.stubGlobal('fetch', fetchMock);
