@@ -538,6 +538,20 @@ export class SqliteExecutionStore implements SharedStore {
   }
 
   /**
+   * Pure read — see `SharedStore.isRetryableFlattenError` for the invariant
+   * this backs (a fresh retry key is only safe over a row PROVABLY dead at
+   * the venue). A key naming no row at all is `false`, same as a
+   * `'submitting'`/`'submitted'` row: only `'error'` clears the walk in
+   * `execute.ts`'s `resolveExitRetryKey` to try this exact candidate again.
+   */
+  async isRetryableFlattenError(idempotency_key: string): Promise<boolean> {
+    const row = this.db
+      .prepare('SELECT status FROM flatten_submissions WHERE idempotency_key = ?')
+      .get(idempotency_key) as { status: string } | undefined;
+    return row?.status === 'error';
+  }
+
+  /**
    * #517's read, widened by #571: which lot(s) a flatten submission was
    * journalled to close, and what each of them HELD when it was submitted.
    * `null` covers both "no such flatten" and "a flatten row written before

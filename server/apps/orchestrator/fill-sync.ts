@@ -35,10 +35,11 @@
  * is synchronous, so it cannot overlap itself. That precedent does not
  * transfer here.
  *
- * ## Ordering: reconcile once, before anything else
+ * ## Ordering: reconcile before the tick loop, and before every ingest
  *
- * `start()` awaits `reconcile()` before the tick loop and before the first
- * ingest. Both orderings are load-bearing:
+ * `start()` awaits `reconcile()` once, before the tick loop and before the
+ * first ingest (`runStartupReconcile`, awaited by the caller in
+ * `production.ts`). Both orderings are load-bearing:
  *
  * - **Before the tick loop** — reconcile adopts broker truth for lots a crash
  *   stranded in `pending`/`submitted`. Letting `execute()` write ahead first
@@ -48,6 +49,22 @@
  *   live adapters the bracket registry is process-local (`brackets` map), so
  *   after a restart `fetchNewFills` polls nothing until `getOrder` repopulates
  *   it, and reconcile is what calls `getOrder`.
+ *
+ * **#921: `reconcile()` is no longer startup-only.** `runPoll` below (the
+ * body of every recurring pass `startFillSync` schedules) now calls
+ * `reconcile()` again, before that pass's `ingestFills()`, for the SAME
+ * "before every ingest" reason the startup call exists — a lost ack between
+ * polls (e.g. a `submitFlatten` response dropped, leaving a
+ * `flatten_submissions` row at `'submitting'` with the adapter's in-memory
+ * worklist never populated) would otherwise sit unrecovered until the next
+ * process restart, which on an always-on host may be arbitrarily far away.
+ * Wrapped in its own try/catch so a reconcile failure — the venue briefly
+ * unreachable, say — can neither block nor mask that pass's `ingestFills()`,
+ * mirroring the posture the residual-protection sweep already takes in its
+ * own `finally`-block try/catch below. Reported divergences are deduped
+ * per-episode (`lastReconcileAction`, the same #342 "repeated-line lesson"
+ * `lastSweepAction` already applies) so a divergence that persists across
+ * many polls logs once, not once per poll.
  *
  * ## What this does NOT fix
  *
@@ -72,10 +89,14 @@ export interface FillSyncSurface {
   ingestFills(): Promise<void>;
   /**
    * The #549 residual-protection sweep's within-process cadence — run after
-   * every fill poll (see `runOnce`), because `reconcile()` has no recurring
-   * schedule here and a re-arm failure the process survives must not wait
-   * for the next restart to be retried. Cheap when healthy: an empty marker
-   * worklist makes no broker call.
+   * every fill poll (see `runOnce`), so a re-arm failure the process
+   * survives must not wait for the next restart to be retried. This runs
+   * ALONGSIDE `reconcile()`'s own periodic call (#921), not in place of it:
+   * `reconcile()`'s pass is scoped to `IN_FLIGHT` bracket/flatten rows
+   * (`reconcile.ts`), while this sweep is scoped to lots already marked
+   * `#549`-unprotected — two different worklists, both worth revisiting
+   * every poll. Cheap when healthy: an empty marker worklist makes no
+   * broker call.
    */
   sweepResidualProtection(): Promise<ResidualProtectionSweepResult>;
 }
@@ -152,16 +173,82 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
    * restart re-logging current state once is a feature.
    */
   const lastSweepAction = new Map<string, string>();
+  /**
+   * The same per-episode dedup as `lastSweepAction`, above, but for the
+   * periodic `reconcile()` call's own divergences (#921) — a SEPARATE Map
+   * rather than one shared namespace, because the two worklists overlap in
+   * shape (`ReconcileDivergence`) but not in membership, and a shared Map's
+   * "delete every key not reported this pass" cleanup (see both loops below)
+   * would otherwise evict one call's entries on a poll where only the OTHER
+   * call reported anything.
+   *
+   * Keyed on `idempotency_key || instrument`, not `idempotency_key` alone:
+   * `findUnrecordedVenuePositions` (reconcile.ts) reports an `unrecorded`
+   * divergence with `idempotency_key: ''` for every such position — an empty
+   * string is not a distinguishing key, so keying on it bare would collapse
+   * every unrecorded-venue-position divergence onto one dedup slot and mask
+   * all but the first from ever logging. `instrument` is populated on every
+   * `ReconcileDivergence` shape (bracket, flatten, and unrecorded alike), so
+   * it is always a safe fallback.
+   */
+  const lastReconcileAction = new Map<string, string>();
 
   /**
-   * One pass: the fill poll, then the #549 residual-protection sweep. The
-   * sweep runs in a `finally` — even when the poll itself failed, and
-   * ESPECIALLY then: a residual whose re-arm the failed poll never confirmed
-   * is exactly the durable marker it retries. Its own failure is contained
-   * to a log line so it can neither mask the poll's error nor add a second
-   * failure mode to a loop whose posture is log-and-poll-again.
+   * One pass: `reconcile()`, then the fill poll, then the #549
+   * residual-protection sweep.
+   *
+   * `reconcile()` runs FIRST and in its OWN try/catch (#921) — the same
+   * "before every ingest" ordering `runStartupReconcile` establishes at
+   * startup (see this module's top-of-file doc), now repeated on cadence so
+   * a lost ack between polls does not sit unrecovered until the next
+   * restart. Caught independently of `ingestFills()` so a reconcile failure
+   * (the venue briefly unreachable, say) can neither block nor mask that
+   * pass's ingest — log-and-continue, the same posture the sweep's own
+   * try/catch below already takes for its failure mode.
+   *
+   * The #549 sweep runs in a `finally` — even when the poll itself failed,
+   * and ESPECIALLY then: a residual whose re-arm the failed poll never
+   * confirmed is exactly the durable marker it retries. Its own failure is
+   * contained to a log line so it can neither mask the poll's error nor add
+   * a second failure mode to a loop whose posture is log-and-poll-again.
    */
   const runPoll = async (): Promise<void> => {
+    try {
+      const report = await deps.execution.reconcile();
+      const reportedThisPass = new Set<string>();
+      for (const divergence of report.divergences) {
+        const dedupKey = divergence.idempotency_key || divergence.instrument;
+        reportedThisPass.add(dedupKey);
+        // Repeat pass, same state: already logged — see `lastReconcileAction`.
+        if (lastReconcileAction.get(dedupKey) === divergence.action) continue;
+        lastReconcileAction.set(dedupKey, divergence.action);
+        deps.logger.log({
+          trace_id: RECONCILE_TRACE_ID,
+          stage: 'execution',
+          // `undetermined` means the adapter could not answer and a human
+          // must look; an adopted/rejected row was settled automatically —
+          // the same split `runStartupReconcile` uses for this same report
+          // shape.
+          level: divergence.action === 'undetermined' ? 'warn' : 'info',
+          message: 'reconcile divergence',
+          payload: { ...divergence },
+        });
+      }
+      for (const key of [...lastReconcileAction.keys()]) {
+        if (!reportedThisPass.has(key)) lastReconcileAction.delete(key);
+      }
+    } catch (reconcileError) {
+      deps.logger.log({
+        trace_id: FILL_SYNC_TRACE_ID,
+        stage: 'execution',
+        level: 'error',
+        message: 'periodic reconcile failed',
+        payload: {
+          error: reconcileError instanceof Error ? reconcileError.message : String(reconcileError),
+        },
+      });
+    }
+
     try {
       await deps.execution.ingestFills();
     } finally {

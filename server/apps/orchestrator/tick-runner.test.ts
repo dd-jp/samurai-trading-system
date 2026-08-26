@@ -1131,3 +1131,98 @@ describe('SequentialTickRunner decision bar identity (#743)', () => {
     expect(steps.trader).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * #921 gap 4: the mandatory-exit's `ExecutionResult` flows through the same
+ * `record()` helper as every other stage, which hardcoded `level: 'info'`
+ * regardless of `decision` — so an execution failure (the very failure mode
+ * #921's resilience gaps are about) used to log exactly like a routine
+ * status update, with nothing to page an operator. Scoped tightly: only
+ * `stage === 'execution' && decision === 'error'` escalates; every other
+ * stage — including ones whose OWN decision is a routine "refused" outcome
+ * (Risk `rejected`, Verdict `no_go`) — must keep logging at `info`.
+ */
+describe('SequentialTickRunner.runInstrument — execution stage error log level (#921)', () => {
+  function recordLines(ctx: TickContext) {
+    const log = ctx.logger.log as ReturnType<typeof vi.fn>;
+    return log.mock.calls.map((call) => call[0]);
+  }
+
+  it('logs at error level when the execution stage reports status: error', async () => {
+    const steps = makeSteps({
+      execution: vi.fn(async () => ({
+        status: 'error' as const,
+        idempotency_key: 'key-aapl-1355',
+        broker_order_ids: null,
+        order_state: null,
+        reason: 'cancelling held lot failed, so the flatten was refused',
+        timestamp: NOW,
+      })),
+    });
+    const ctx = makeCtx();
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    const executionLines = recordLines(ctx).filter((entry) => entry.stage === 'execution');
+    expect(executionLines).toHaveLength(1);
+    expect(executionLines[0]).toMatchObject({
+      stage: 'execution',
+      level: 'error',
+      message: 'execution: error',
+    });
+  });
+
+  it('keeps the execution stage at info level for a non-error outcome (submitted)', async () => {
+    const steps = makeSteps();
+    const ctx = makeCtx();
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    const executionLines = recordLines(ctx).filter((entry) => entry.stage === 'execution');
+    expect(executionLines).toHaveLength(1);
+    expect(executionLines[0]).toMatchObject({ stage: 'execution', level: 'info' });
+  });
+
+  it('keeps a deduped execution outcome at info level — the escalation is scoped to status: error alone', async () => {
+    const steps = makeSteps({
+      execution: vi.fn(async () => ({
+        status: 'deduped' as const,
+        idempotency_key: 'key-aapl-1355',
+        broker_order_ids: null,
+        order_state: null,
+        reason: 'an order or fill already exists for this idempotency_key',
+        timestamp: NOW,
+      })),
+    });
+    const ctx = makeCtx();
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    const executionLines = recordLines(ctx).filter((entry) => entry.stage === 'execution');
+    expect(executionLines[0]).toMatchObject({ stage: 'execution', level: 'info' });
+  });
+
+  it('does not broaden the escalation to other stages: a Risk rejection still logs at info', async () => {
+    const steps = makeSteps({ risk: vi.fn(async () => rejectedRisk()) });
+    const ctx = makeCtx();
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    const riskLines = recordLines(ctx).filter(
+      (entry) => entry.stage === 'risk' && entry.message === 'risk: rejected',
+    );
+    expect(riskLines).toHaveLength(1);
+    expect(riskLines[0]).toMatchObject({ stage: 'risk', level: 'info' });
+  });
+
+  it('does not broaden the escalation to other stages: a Verdict no_go still logs at info', async () => {
+    const steps = makeSteps({ verdict: vi.fn(async () => noGoVerdict()) });
+    const ctx = makeCtx();
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    const verdictLines = recordLines(ctx).filter((entry) => entry.stage === 'verdict');
+    expect(verdictLines).toHaveLength(1);
+    expect(verdictLines[0]).toMatchObject({ stage: 'verdict', level: 'info' });
+  });
+});

@@ -917,6 +917,159 @@ describe('ExecutionImpl.execute', () => {
       expect(broker.flattenCalls).toHaveLength(1);
     });
 
+    // #921: closing gap #1 in the issue's remaining "resilience gaps" list.
+    // Once a `flatten_submissions` row exists under a key, EVERY replay used
+    // to dedupe forever — including the case where the row's own status
+    // (`'error'`) PROVES the flatten never reached the broker. A mandatory
+    // flatten cannot be allowed to stall like that: the next tick's retry of
+    // the same exit decision must get a fresh key and a fresh attempt.
+    describe('fresh idempotency key on flatten retry (#921)', () => {
+      it('retries under a :retry-1 key when the cancel loop failed (row resolved to error), and the retry row is distinct from the original', async () => {
+        const { store } = openTestExecutionStore();
+        let failCancel = true;
+        const broker = makeBroker(undefined, undefined, () => {
+          if (failCancel) throw new Error('venue timeout on cancel');
+        });
+        await seedHeldLot(store);
+        const execution = new ExecutionImpl(makeInput({ store, broker }));
+
+        const first = await execution.execute(makeExitGo());
+        expect(first.status).toBe('error');
+        expect((await store.getFlattenSubmission('key-aapl-1355'))?.status).toBe('error');
+
+        // The next tick: the cancel loop now succeeds (the transient venue
+        // issue cleared), so the retry should actually flatten.
+        failCancel = false;
+        const second = await execution.execute(makeExitGo());
+
+        expect(second.status).toBe('submitted');
+        expect(second.idempotency_key).toBe('key-aapl-1355:retry-1');
+        expect(broker.flattenCalls).toEqual([
+          {
+            instrument: 'AAPL',
+            side: 'sell',
+            size: 40,
+            clientOrderId: 'key-aapl-1355:retry-1',
+          },
+        ]);
+        // The retry re-ran the FULL cancel loop rather than assuming the
+        // first attempt's (failed) cancel still holds — this is the
+        // `sweepResidualProtection`-may-have-re-armed-in-between guarantee.
+        expect(broker.cancelCalls).toEqual([
+          { clientOrderId: 'key-aapl-entry-1', instrument: 'AAPL' },
+          { clientOrderId: 'key-aapl-entry-1', instrument: 'AAPL' },
+        ]);
+
+        // The original row is untouched, and a DISTINCT row now exists for
+        // the retry key — two separate flatten_submissions rows, not one
+        // overwritten in place.
+        const original = await store.getFlattenSubmission('key-aapl-1355');
+        expect(original?.status).toBe('error');
+        const retry = await store.getFlattenSubmission('key-aapl-1355:retry-1');
+        expect(retry?.status).toBe('submitted');
+        expect(await store.countAllFlattenSubmissions()).toBe(2);
+      });
+
+      it('still dedupes (does not retry) when the prior attempt is stuck at submitting — a lost ack is genuinely ambiguous', async () => {
+        const { store } = openTestExecutionStore();
+        const broker = makeBroker(undefined, () => {
+          // submitFlatten itself throws: ambiguous, row stays 'submitting'.
+          throw new Error('response lost');
+        });
+        await seedHeldLot(store);
+        const execution = new ExecutionImpl(makeInput({ store, broker }));
+
+        const first = await execution.execute(makeExitGo());
+        expect(first.status).toBe('error');
+        expect((await store.getFlattenSubmission('key-aapl-1355'))?.status).toBe('submitting');
+
+        const second = await execution.execute(makeExitGo());
+
+        expect(second.status).toBe('deduped');
+        expect(second.idempotency_key).toBe('key-aapl-1355');
+        // No second cancel/flatten attempt of any kind — both call counts are
+        // exactly what the FIRST (ambiguous) attempt left behind.
+        expect(broker.cancelCalls).toHaveLength(1);
+        expect(broker.flattenCalls).toHaveLength(1);
+        expect(await store.countAllFlattenSubmissions()).toBe(1);
+      });
+
+      it('still dedupes (does not retry) when the prior attempt already succeeded', async () => {
+        const { store } = openTestExecutionStore();
+        const broker = makeBroker();
+        await seedHeldLot(store);
+        const execution = new ExecutionImpl(makeInput({ store, broker }));
+
+        const first = await execution.execute(makeExitGo());
+        expect(first.status).toBe('submitted');
+        expect((await store.getFlattenSubmission('key-aapl-1355'))?.status).toBe('submitted');
+
+        const second = await execution.execute(makeExitGo());
+
+        expect(second.status).toBe('deduped');
+        expect(second.idempotency_key).toBe('key-aapl-1355');
+        expect(broker.cancelCalls).toHaveLength(1);
+        expect(broker.flattenCalls).toHaveLength(1);
+        expect(await store.countAllFlattenSubmissions()).toBe(1);
+      });
+
+      // Entry/scale_in must not gain any retry behaviour — a replayed entry
+      // decision always means "this was already acted on", never "the prior
+      // attempt provably failed and should be retried under a new id".
+      it('never applies retry treatment to entry/scale_in intents — same key always dedupes unconditionally', async () => {
+        const { store } = openTestExecutionStore();
+        const broker = makeBroker();
+        const execution = new ExecutionImpl(makeInput({ store, broker }));
+
+        const first = await execution.execute(makeGo());
+        const second = await execution.execute(makeGo());
+
+        expect(first.status).toBe('submitted');
+        expect(second.status).toBe('deduped');
+        expect(second.idempotency_key).toBe('key-aapl-1355');
+        expect(broker.calls).toHaveLength(1);
+        // isRetryableFlattenError is never even consulted for a bracket path
+        // key — there is no flatten_submissions row to find.
+        expect(await store.isRetryableFlattenError('key-aapl-1355')).toBe(false);
+      });
+
+      it('caps retries at MAX_EXIT_RETRY_ATTEMPTS: after that many consecutive retryable errors, the next call dedupes instead of retrying forever', async () => {
+        const { store } = openTestExecutionStore();
+        const broker = makeBroker(undefined, undefined, () => {
+          throw new Error('venue timeout on cancel');
+        });
+        await seedHeldLot(store);
+        const execution = new ExecutionImpl(makeInput({ store, broker }));
+
+        // Every attempt's cancel loop fails, so every row resolves to
+        // 'error' — a persistently failing venue, never a lost ack.
+        const results = [];
+        for (let i = 0; i < 5; i++) {
+          results.push(await execution.execute(makeExitGo()));
+        }
+
+        // base key + :retry-1 + :retry-2 + :retry-3 all attempt-and-fail
+        // (each is a genuine attempt, each ends in 'error'); the 5th call has
+        // exhausted MAX_EXIT_RETRY_ATTEMPTS (3) and falls back to 'deduped'
+        // rather than minting a 5th key.
+        expect(results.map((r) => r.status)).toEqual([
+          'error',
+          'error',
+          'error',
+          'error',
+          'deduped',
+        ]);
+        expect(results.map((r) => r.idempotency_key)).toEqual([
+          'key-aapl-1355',
+          'key-aapl-1355:retry-1',
+          'key-aapl-1355:retry-2',
+          'key-aapl-1355:retry-3',
+          'key-aapl-1355',
+        ]);
+        expect(await store.countAllFlattenSubmissions()).toBe(4);
+      });
+    });
+
     describe('store cross-check (review comment 3)', () => {
       it('refuses when the store holds no open lot for the instrument to close', async () => {
         const { store } = openTestExecutionStore();

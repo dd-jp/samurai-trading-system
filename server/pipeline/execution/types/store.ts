@@ -141,6 +141,17 @@ export interface SharedStore {
    */
   resolveFlattenError(idempotency_key: string, reason: string, resolved_at: Date): Promise<void>;
   /**
+   * True iff `idempotency_key` names a `flatten_submissions` row resolved to
+   * `'error'` — i.e. `resolveFlattenError`'s own invariant: the flatten
+   * PROVABLY never reached the broker. A `'submitting'` or `'submitted'` row
+   * returns `false` — retrying under a fresh key while the broker's answer
+   * to the ORIGINAL attempt is still unknown (`'submitting'`) or the
+   * original attempt already succeeded (`'submitted'`) risks a double
+   * flatten, the #516 reverse-position hazard. `false` also for a key that
+   * names no flatten row at all.
+   */
+  isRetryableFlattenError(idempotency_key: string): Promise<boolean>;
+  /**
    * What a flatten submission journalled about the lot(s) it was closing
    * (#517, widened by #571) — or `null` if `key` names no flatten submission,
    * or names one written before migration 0020 added the lot identity.
