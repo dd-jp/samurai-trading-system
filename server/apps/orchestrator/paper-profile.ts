@@ -148,7 +148,7 @@ export type ValueProvenance = 'SPEC' | 'DERIVED' | 'UNSOURCED';
  * -> `SPEC` (the ADR is the doc that states it); the dual-labeled
  * "UNSOURCED — DERIVED from ..." daily-loss values -> `UNSOURCED` (their own
  * comment closes "a starting point to be measured, not a derived constant").
- * `riskConfig.portfolio_gross_cap` follows its own field comment (`DERIVED`)
+ * `riskConfig.portfolio_gross_cap_fraction_of_equity` follows its own field comment (`DERIVED`)
  * over the block-level "UNSOURCED (all five caps)".
  */
 export const PAPER_PROFILE_PROVENANCE = {
@@ -195,12 +195,12 @@ export const PAPER_PROFILE_PROVENANCE = {
   // other Trader threshold — `DEFAULT_EARLY_EXIT_CONFIG` is spread in unchanged
   // and its default is argued at its definition, not fitted here.
   'traderConfig.early_exit.momentum_release_at': 'SPEC',
-  'riskConfig.max_position_size': 'UNSOURCED',
-  'riskConfig.per_asset_cap': 'UNSOURCED',
-  'riskConfig.per_asset_class_cap.crypto': 'UNSOURCED',
-  'riskConfig.per_asset_class_cap.stocks': 'UNSOURCED',
-  'riskConfig.portfolio_gross_cap': 'DERIVED',
-  'riskConfig.concentration.cap': 'DERIVED',
+  'riskConfig.max_position_size_fraction_of_equity': 'UNSOURCED',
+  'riskConfig.per_asset_cap_fraction_of_equity': 'UNSOURCED',
+  'riskConfig.per_asset_class_cap_fraction_of_equity.crypto': 'UNSOURCED',
+  'riskConfig.per_asset_class_cap_fraction_of_equity.stocks': 'UNSOURCED',
+  'riskConfig.portfolio_gross_cap_fraction_of_equity': 'DERIVED',
+  'riskConfig.concentration.cap_fraction_of_equity': 'DERIVED',
   'riskConfig.concentration.threshold': 'UNSOURCED',
   'riskConfig.min_viable_size': 'DERIVED',
   'riskConfig.cii_threshold': 'UNSOURCED',
@@ -260,52 +260,36 @@ export const PAPER_PROFILE_PROVENANCE = {
   'feedback.config.weights.ceiling': 'DERIVED',
   'feedback.config.weights.tighten_is': 'DERIVED',
   'feedback.config.strategy_params': 'DERIVED',
-  'feedback.config.risk_thresholds.max_position_size.max_step': 'DERIVED',
-  'feedback.config.risk_thresholds.max_position_size.floor': 'DERIVED',
-  'feedback.config.risk_thresholds.max_position_size.ceiling': 'DERIVED',
-  'feedback.config.risk_thresholds.max_position_size.tighten_is': 'DERIVED',
-  'feedback.config.risk_thresholds.per_asset_cap.max_step': 'DERIVED',
-  'feedback.config.risk_thresholds.per_asset_cap.floor': 'DERIVED',
-  'feedback.config.risk_thresholds.per_asset_cap.ceiling': 'DERIVED',
-  'feedback.config.risk_thresholds.per_asset_cap.tighten_is': 'DERIVED',
-  'feedback.config.risk_thresholds.per_asset_class_cap_crypto.max_step': 'DERIVED',
-  'feedback.config.risk_thresholds.per_asset_class_cap_crypto.floor': 'DERIVED',
-  'feedback.config.risk_thresholds.per_asset_class_cap_crypto.ceiling': 'DERIVED',
-  'feedback.config.risk_thresholds.per_asset_class_cap_crypto.tighten_is': 'DERIVED',
-  'feedback.config.risk_thresholds.per_asset_class_cap_stocks.max_step': 'DERIVED',
-  'feedback.config.risk_thresholds.per_asset_class_cap_stocks.floor': 'DERIVED',
-  'feedback.config.risk_thresholds.per_asset_class_cap_stocks.ceiling': 'DERIVED',
-  'feedback.config.risk_thresholds.per_asset_class_cap_stocks.tighten_is': 'DERIVED',
-  'feedback.config.risk_thresholds.portfolio_gross_cap.max_step': 'DERIVED',
-  'feedback.config.risk_thresholds.portfolio_gross_cap.floor': 'DERIVED',
-  'feedback.config.risk_thresholds.portfolio_gross_cap.ceiling': 'DERIVED',
-  'feedback.config.risk_thresholds.portfolio_gross_cap.tighten_is': 'DERIVED',
-  'feedback.config.risk_thresholds.concentration_cap.max_step': 'DERIVED',
-  'feedback.config.risk_thresholds.concentration_cap.floor': 'DERIVED',
-  'feedback.config.risk_thresholds.concentration_cap.ceiling': 'DERIVED',
-  'feedback.config.risk_thresholds.concentration_cap.tighten_is': 'DERIVED',
+  'feedback.config.risk_thresholds.max_position_size_fraction_of_equity.max_step': 'DERIVED',
+  'feedback.config.risk_thresholds.max_position_size_fraction_of_equity.floor': 'DERIVED',
+  'feedback.config.risk_thresholds.max_position_size_fraction_of_equity.ceiling': 'DERIVED',
+  'feedback.config.risk_thresholds.max_position_size_fraction_of_equity.tighten_is': 'DERIVED',
+  'feedback.config.risk_thresholds.per_asset_cap_fraction_of_equity.max_step': 'DERIVED',
+  'feedback.config.risk_thresholds.per_asset_cap_fraction_of_equity.floor': 'DERIVED',
+  'feedback.config.risk_thresholds.per_asset_cap_fraction_of_equity.ceiling': 'DERIVED',
+  'feedback.config.risk_thresholds.per_asset_cap_fraction_of_equity.tighten_is': 'DERIVED',
+  'feedback.config.risk_thresholds.per_asset_class_cap_fraction_of_equity_crypto.max_step': 'DERIVED',
+  'feedback.config.risk_thresholds.per_asset_class_cap_fraction_of_equity_crypto.floor': 'DERIVED',
+  'feedback.config.risk_thresholds.per_asset_class_cap_fraction_of_equity_crypto.ceiling': 'DERIVED',
+  'feedback.config.risk_thresholds.per_asset_class_cap_fraction_of_equity_crypto.tighten_is': 'DERIVED',
+  'feedback.config.risk_thresholds.per_asset_class_cap_fraction_of_equity_stocks.max_step': 'DERIVED',
+  'feedback.config.risk_thresholds.per_asset_class_cap_fraction_of_equity_stocks.floor': 'DERIVED',
+  'feedback.config.risk_thresholds.per_asset_class_cap_fraction_of_equity_stocks.ceiling': 'DERIVED',
+  'feedback.config.risk_thresholds.per_asset_class_cap_fraction_of_equity_stocks.tighten_is': 'DERIVED',
+  'feedback.config.risk_thresholds.portfolio_gross_cap_fraction_of_equity.max_step': 'DERIVED',
+  'feedback.config.risk_thresholds.portfolio_gross_cap_fraction_of_equity.floor': 'DERIVED',
+  'feedback.config.risk_thresholds.portfolio_gross_cap_fraction_of_equity.ceiling': 'DERIVED',
+  'feedback.config.risk_thresholds.portfolio_gross_cap_fraction_of_equity.tighten_is': 'DERIVED',
+  'feedback.config.risk_thresholds.concentration_cap_fraction_of_equity.max_step': 'DERIVED',
+  'feedback.config.risk_thresholds.concentration_cap_fraction_of_equity.floor': 'DERIVED',
+  'feedback.config.risk_thresholds.concentration_cap_fraction_of_equity.ceiling': 'DERIVED',
+  'feedback.config.risk_thresholds.concentration_cap_fraction_of_equity.tighten_is': 'DERIVED',
   'feedback.config.kill_thresholds.max_pbo': 'SPEC',
   'feedback.config.kill_thresholds.min_oos_sharpe': 'SPEC',
   'feedback.config.kill_thresholds.min_deflated_sharpe': 'SPEC',
   'feedback.config.kill_thresholds.max_live_backtest_divergence': 'UNSOURCED',
   'feedback.metrics.backtest_reference_sharpe': 'SPEC',
 } as const satisfies Record<string, ValueProvenance>;
-
-/**
- * The equity the notional caps below are expressed against.
- *
- * `UNSOURCED` as a repo fact; `SPEC`-adjacent as a venue fact: an Alpaca paper
- * account is provisioned with $100,000 of simulated buying power by default,
- * and CLAUDE.md's MVP path is Alpaca paper trading. Every `riskConfig` cap is
- * written as an explicit fraction of this anchor rather than as a bare number,
- * so re-scaling to a differently-funded paper account is one edit here rather
- * than five unrelated ones — and so the intent (5% of equity, 20% of equity)
- * survives in the source instead of being lost in a rounded literal.
- *
- * If your paper account is not funded at $100k, change this. The caps are
- * meaningless in absolute terms.
- */
-export const PAPER_ACCOUNT_EQUITY_ANCHOR = 100_000;
 
 /**
  * The guardrail band for every `risk_thresholds` dial (#433), as fractions of
@@ -316,50 +300,33 @@ export const PAPER_RISK_THRESHOLD_FLOOR_FRACTION = 0.25;
 export const PAPER_RISK_THRESHOLD_STEP_FRACTION = 0.1;
 
 /**
- * The notional caps as FRACTIONS of whatever equity anchor a profile declares
- * (#433, generalised by #511).
+ * The six notional caps, as FRACTIONS OF EQUITY (#886) — resolved against
+ * `portfolio.equity` at evaluate time (`risk-manager/index.ts`'s
+ * `ENTRY_CAP_GATES`), not multiplied against a frozen anchor or ceiling at
+ * profile-build time. Keyed identically to `RISK_THRESHOLD_KEYS`
+ * (risk-manager/risk-thresholds.ts) on purpose: these are the same six
+ * numbers the `risk_thresholds` table seeds and tunes, under one shared
+ * vocabulary rather than two that could drift.
  *
- * The fractions are the decision; the dollars are arithmetic. Keeping them in
- * that order is what lets the live profile (live-profile.ts) express the same
- * ladder against a declared capital ceiling instead of a $100,000 paper
- * account, without a second copy of six numbers that would drift the first
- * time either profile moved.
+ * Until #886 these were multiplied by an assumed equity anchor once at boot
+ * (`riskCapsFor`, deleted) — static cash that stayed put while D5's own
+ * fraction (`per_subclass_deployment_cap`) resolved against live equity every
+ * decision. That mismatch meant which cap bound depended on the gap between
+ * live equity and the anchor rather than being statically decidable (#886).
+ * All six now share D5's pattern: the fraction is the decision, and it is
+ * multiplied by equity at the one place equity is actually known — the
+ * decision itself, in every profile (paper AND live) alike.
  *
  * Each fraction's justification stays at its `riskConfig` field, not here.
  */
 export const RISK_CAP_EQUITY_FRACTIONS = {
-  max_position_size: 0.05,
-  per_asset_cap: 0.1,
-  per_asset_class_cap_crypto: 0.2,
-  per_asset_class_cap_stocks: 0.4,
-  portfolio_gross_cap: 0.5,
-  concentration_cap: 0.2,
+  max_position_size_fraction_of_equity: 0.05,
+  per_asset_cap_fraction_of_equity: 0.1,
+  per_asset_class_cap_fraction_of_equity_crypto: 0.2,
+  per_asset_class_cap_fraction_of_equity_stocks: 0.4,
+  portfolio_gross_cap_fraction_of_equity: 0.5,
+  concentration_cap_fraction_of_equity: 0.2,
 } as const;
-
-/** The six caps, in account currency. */
-export type RiskCaps = Record<keyof typeof RISK_CAP_EQUITY_FRACTIONS, number>;
-
-/**
- * The notional caps for one equity anchor, derived once (#433).
- *
- * They are consumed in two places that must not drift: `riskConfig` below (the
- * values a run starts from, and the seed for the `risk_thresholds` table) and
- * `feedback.config.risk_thresholds` (the guardrail band those values may move
- * within). Written as literals in both, an edit to one would silently leave
- * the other bounding a cap that no longer exists — with the dial's ceiling
- * then sitting above or below the value it is supposed to bound. So both read
- * this.
- */
-export function riskCapsFor(equityAnchorUsd: number): RiskCaps {
-  return Object.fromEntries(
-    Object.entries(RISK_CAP_EQUITY_FRACTIONS).map(([name, fraction]) => [
-      name,
-      fraction * equityAnchorUsd,
-    ]),
-  ) as RiskCaps;
-}
-
-export const PAPER_RISK_CAPS: RiskCaps = riskCapsFor(PAPER_ACCOUNT_EQUITY_ANCHOR);
 
 /**
  * ADR-0015's book, as decided by David on 2026-08-18: **£1,000, all equity.**
@@ -629,7 +596,7 @@ const PAPER_ANALYST_WEIGHT_TRAVERSE_CYCLES = 20;
  * `computeMetrics` is no longer the exception either — see `buildDailyMetrics`
  * (#379) for what arming it does and does not mean during a soak.
  */
-function buildFeedbackConfig(caps: RiskCaps): FeedbackConfig {
+function buildFeedbackConfig(caps: typeof RISK_CAP_EQUITY_FRACTIONS): FeedbackConfig {
   /**
    * `DERIVED` from `DEFAULT_FEEDBACK_INTERVAL_MS` (24h), which is why it is
    * written as a multiple of it: two cadences, not "48 hours".
@@ -743,12 +710,11 @@ function buildFeedbackConfig(caps: RiskCaps): FeedbackConfig {
 
   /**
    * A guardrail band for one notional cap (#433), expressed relative to the
-   * value this profile ships — so the band re-scales with the profile's equity
-   * anchor instead of pinning absolute dollars that silently mean something
-   * different on a differently-funded account. Since #511 that matters twice
-   * over: the same builder produces a live profile anchored to a declared
-   * capital ceiling, where a band left pinned to $100,000 would bound a $2,000
-   * run's cap at fifty times the cap itself.
+   * FRACTION this profile ships (#886 — `shipped` is one of
+   * `RISK_CAP_EQUITY_FRACTIONS`'s values, not a cash figure derived from an
+   * anchor). Since every profile now ships the identical fractions — paper
+   * and live no longer diverge on an anchor vs. a declared ceiling — the band
+   * is the same in both, which was not true before #886.
    *
    * `ceiling` is the shipped value itself, and that asymmetry is the safety
    * posture, not an oversight: a kill-line breach may tighten a cap far below
@@ -829,11 +795,12 @@ function buildFeedbackConfig(caps: RiskCaps): FeedbackConfig {
      * caps, and `RiskManagerImpl` reads them live at `evaluate()`. All three
      * ends now agree, so the dials are declarable.
      *
-     * Bounds come from `capDial`, relative to the shipped cap rather than
-     * absolute, so they re-scale with the profile's equity anchor — the paper
-     * account's assumed balance here, a declared capital ceiling in the live
-     * profile (#511). `caps` is the same object `riskConfig` above was built
-     * from, so the two cannot describe different numbers.
+     * `caps` here is `RISK_CAP_EQUITY_FRACTIONS` itself (#886) — its keys are
+     * `RISK_THRESHOLD_KEYS` verbatim, so a row this seeds and a row
+     * `resolveRiskConfig` later reads name the same field with no lookup
+     * between them. Bounds come from `capDial`, relative to the shipped
+     * FRACTION rather than a cash figure — the same six fractions every
+     * profile ships (paper and live no longer differ here, #886).
      */
     risk_thresholds: Object.fromEntries(
       Object.entries(caps).map(([name, shipped]) => [name, capDial(shipped)]),
@@ -978,27 +945,33 @@ const CRYPTO_MAX_DEBATES_PER_WINDOW = 20;
 const STOCKS_MAX_DEBATES_PER_WINDOW = 15;
 
 /**
- * The eight required config objects, plus the optional ninth seam (#366),
- * expressed against a declared equity anchor.
+ * The eight required config objects, plus the optional ninth seam (#366).
+ *
+ * **No longer parameterised by an equity anchor or capital ceiling (#886).**
+ * Before #886 this took one as its first argument and multiplied the six
+ * notional caps against it once, here, at profile-build time — the paper
+ * profile's assumed $100,000 balance, or the live profile's declared
+ * ceiling. That is exactly the "frozen cash, computed once" shape #886
+ * retired: the caps below are FRACTIONS now (`RISK_CAP_EQUITY_FRACTIONS`),
+ * resolved against `portfolio.equity` at evaluate time
+ * (`risk-manager/index.ts`), so this function no longer needs to know an
+ * anchor to build them.
  *
  * **Exported for exactly one caller: `liveStartingProfile` (live-profile.ts,
- * #511).** The live profile is specified as "the same shape, but every figure
- * the paper profile pins to a $100,000 assumption derived from a declared
- * capital ceiling instead" — so it must be the SAME builder with a different
- * anchor, not a copy. A copy is how the two would silently disagree about a
- * dial the day either one is retuned, and the live one is the copy nobody
- * exercises.
+ * #511).** The live profile is specified as "the same shape" — so it must be
+ * the SAME builder, not a copy. A copy is how the two would silently
+ * disagree about a dial the day either one is retuned, and the live one is
+ * the copy nobody exercises.
  *
- * That sharing is also the honest statement of what a live run inherits: every
- * value here that is not anchored to equity is inherited UNCHANGED and
- * UNTUNED. See live-profile.ts's header for the enumerated list.
+ * That sharing is also the honest statement of what a live run inherits:
+ * every value here is inherited UNCHANGED and UNTUNED. See live-profile.ts's
+ * header for the enumerated list.
  *
  * `paperStartingProfile(mode)` remains the paper entry point, so the live-mode
  * refusal there cannot be bypassed by importing the values, and each call gets
  * its own copy.
  */
 export function buildStartingProfileConfigs(
-  equityAnchorUsd: number,
   /**
    * The universe this profile's gates are keyed to AND the list the run ticks
    * — one argument, because they must not be two lists (#739).
@@ -1041,7 +1014,6 @@ export function buildStartingProfileConfigs(
       'rateLimiterConfig' | 'llmBudgetUsd' | 'tickIntervalMs' | 'stocksTradingWindow'
     >
   > {
-  const caps = riskCapsFor(equityAnchorUsd);
   // ADR-0018 D5. The gate's classification and the list the run actually ticks
   // MUST be the same universe: a cap keyed to one list while another is traded
   // sizes unclassified names with no envelope, or throws on every entry.
@@ -1089,19 +1061,23 @@ export function buildStartingProfileConfigs(
     // Pipeline"), and so `binding_constraint` names the step an operator
     // would expect. Every one is well inside what an Alpaca paper account
     // could take, deliberately: the first run is testing wiring, not size.
-    /** 5% of equity — the Trader's own 0.5-1% *risk* budget becomes a much larger *notional* once divided by a ~1-2% ATR stop, so this is the cap that actually binds first on BTC-USD. */
-    max_position_size: caps.max_position_size,
+    //
+    // #886: read straight off `RISK_CAP_EQUITY_FRACTIONS` rather than a
+    // `caps` object multiplied against an anchor here — the fraction IS the
+    // value now, resolved against `portfolio.equity` at evaluate time.
+    /** 5% of equity — the Trader's own 0.5-1% *risk* budget becomes a much larger *notional* once divided by a ~1-2% ATR stop, so this is the cap that actually binds first on BTC-USD. Skipped entirely for a D5-classified instrument (#886) — see the field's own doc comment. */
+    max_position_size_fraction_of_equity: RISK_CAP_EQUITY_FRACTIONS.max_position_size_fraction_of_equity,
     /** 10% — one instrument may hold at most two max-size entries' worth. */
-    per_asset_cap: caps.per_asset_cap,
+    per_asset_cap_fraction_of_equity: RISK_CAP_EQUITY_FRACTIONS.per_asset_cap_fraction_of_equity,
     /**
      * 20% crypto / 40% stocks. Asymmetric for the same reason
      * `asset_class_risk_multiplier` is (docs/research/02-staged-deployment-plan.md:
      * quarter-Kelly or less in fat-tailed markets) — the crypto bucket is
      * held to half the equity share of the stock bucket.
      */
-    per_asset_class_cap: {
-      crypto: caps.per_asset_class_cap_crypto,
-      stocks: caps.per_asset_class_cap_stocks,
+    per_asset_class_cap_fraction_of_equity: {
+      crypto: RISK_CAP_EQUITY_FRACTIONS.per_asset_class_cap_fraction_of_equity_crypto,
+      stocks: RISK_CAP_EQUITY_FRACTIONS.per_asset_class_cap_fraction_of_equity_stocks,
     },
     /**
      * 50% gross. DERIVED, not arbitrary: anything above 100% is leverage,
@@ -1109,7 +1085,7 @@ export function buildStartingProfileConfigs(
      * equity leaves the account able to absorb the full 20% drawdown limit
      * below without the caps and the breaker fighting each other.
      */
-    portfolio_gross_cap: caps.portfolio_gross_cap,
+    portfolio_gross_cap_fraction_of_equity: RISK_CAP_EQUITY_FRACTIONS.portfolio_gross_cap_fraction_of_equity,
     concentration: {
       /**
        * DERIVED — equal to the crypto asset-class cap: a cluster of
@@ -1117,7 +1093,7 @@ export function buildStartingProfileConfigs(
        * single asset class may hold, which is the whole point of the check
        * (risk-manager-spec.md step 6).
        */
-      cap: caps.concentration_cap,
+      cap_fraction_of_equity: RISK_CAP_EQUITY_FRACTIONS.concentration_cap_fraction_of_equity,
       /**
        * UNSOURCED — 0.7 is the conventional |r| boundary for "strongly
        * correlated". **No longer inert (#381):** it was dead only because the
@@ -1180,12 +1156,22 @@ export function buildStartingProfileConfigs(
      * default universe is SPY/QQQ/AAPL/TSLA/BTC/ETH. It arms itself the moment
      * C1's pool file supplies one.
      *
-     * **Consequence, stated rather than discovered in a soak:** on the paper
-     * profile this gate does not bind, and would not bind even if it were
-     * armed — `max_position_size` is 5% of a $100k anchor ($5,000) against a
-     * D5 index-ETP envelope of 35% of a $50k leg ($17,500), so
-     * `per_trade_size_cap` trims first every time. D5 is a live-capital
-     * protection; the paper soak is not a test of it.
+     * **The `per_trade_size_cap`-vs-D5 conflict this comment used to record
+     * here is retired by #886, not merely re-scaled.** Before #886,
+     * `max_position_size` was 5% of whatever anchor a profile declared,
+     * always tighter than D5's 35%/25%, so `per_trade_size_cap` trimmed a
+     * classified instrument first every time regardless of anchor — the
+     * finding #886 (née #885) was filed over. `per_trade_size_cap` now skips
+     * a D5-classified instrument entirely
+     * (`isD5ArmedWithNumericFraction`, risk-manager/index.ts), so once this
+     * arms, D5's own fraction sizes the position, not the generic cap.
+     *
+     * **What #886 did NOT resolve, and #886's own acceptance criteria say
+     * so:** `per_asset_cap_fraction_of_equity` (10%) is still below both D5
+     * fractions (35% index / 25% single-stock) and is NOT exempted — so a
+     * full-sized D5 ask still trims at the asset-exposure gate today. See
+     * `d5-trader-cap-agreement.test.ts`'s "#886" describe block for the
+     * failing acceptance-criteria test this leaves open.
      */
     ...(subclassCap === undefined ? {} : { per_subclass_deployment_cap: subclassCap }),
   };
@@ -1992,7 +1978,7 @@ export function buildStartingProfileConfigs(
      * channel and its 24h default apply.
      */
     feedback: {
-      config: buildFeedbackConfig(caps),
+      config: buildFeedbackConfig(RISK_CAP_EQUITY_FRACTIONS),
       metrics: buildDailyMetrics(),
     },
   };
@@ -2004,12 +1990,16 @@ export function buildStartingProfileConfigs(
  *
  * The refusal is not belt-and-braces caution; it follows from what these
  * values are. The volatility breaker's baseline is uncalibrated to the point
- * of being inert, every notional cap is a fraction of an *assumed* paper
- * account balance, `drift_tolerance` is sized for one instrument, and its
+ * of being inert, `drift_tolerance` is sized for one instrument, and its
  * cadence and LLM budget are sized for a $50 paper soak rather than for a run
  * that is trying to make money. Each of those is a fine trade for a paper run
  * and none of them is acceptable against real money — the more so since
  * ADR-0007, which removed the human gate that used to sit behind them.
+ *
+ * **Since #886 the notional caps are no longer this list's reason** — they
+ * are fractions of live equity, resolved at evaluate time, identical in
+ * every profile. The refusal is about the OTHER untuned values above, not
+ * about a paper-account assumption the caps no longer carry.
  *
  * This does not make live unreachable — it makes it explicit.
  * `startFromEnvironment(injected)` still accepts any `ProductionConfig` a live
@@ -2046,19 +2036,20 @@ export function paperStartingProfile(
       'Orchestrator cannot start: SAMURAI_MODE=live was requested against the PAPER STARTING ' +
         'PROFILE (server/apps/orchestrator/paper-profile.ts) — a set of deliberately untuned starting ' +
         'values. Its volatility breaker baseline is uncalibrated and effectively inert, its ' +
-        'exposure caps assume a $100,000 paper account, its drift tolerance is a fraction ' +
-        'nobody has yet observed against a real fill, and its cadence and LLM budget are sized ' +
-        'for a $50 paper soak rather than for a run trying to make money. Since ADR-0007 it ' +
-        'also runs with NO human gate at all (automation_level: auto for both classes), which ' +
-        'makes the circuit breakers and the notional caps the only stop. None of that may ' +
-        'decide a real-money trade. ' +
+        'drift tolerance is a fraction nobody has yet observed against a real fill, and its ' +
+        'cadence and LLM budget are sized for a $50 paper soak rather than for a run trying to ' +
+        'make money. Since ADR-0007 it also runs with NO human gate at all (automation_level: ' +
+        'auto for both classes), which makes the circuit breakers and the notional caps the ' +
+        'only stop. None of that may decide a real-money trade. ' +
         LIVE_MONEY_GATE_SUMMARY +
-        ' The live path is liveStartingProfile() in server/apps/orchestrator/live-profile.ts, which ' +
-        'derives its caps from SAMURAI_LIVE_MAX_CAPITAL_USD instead of a paper balance; or ' +
-        'call startFromEnvironment() from your own composition root with a config you have ' +
-        'tuned against paper results — see ProductionConfig in server/apps/orchestrator/production.ts.',
+        ' The live path is liveStartingProfile() in server/apps/orchestrator/live-profile.ts, ' +
+        'gated on the declared ceiling SAMURAI_LIVE_MAX_CAPITAL_USD (the six caps ' +
+        "themselves are the same equity-relative fractions as this profile's; the ceiling bounds " +
+        "only the Trader's ask); or call startFromEnvironment() from your own composition root " +
+        'with a config you have tuned against paper results — see ProductionConfig in ' +
+        'server/apps/orchestrator/production.ts.',
     );
   }
 
-  return { ...buildStartingProfileConfigs(PAPER_ACCOUNT_EQUITY_ANCHOR), mode };
+  return { ...buildStartingProfileConfigs(), mode };
 }

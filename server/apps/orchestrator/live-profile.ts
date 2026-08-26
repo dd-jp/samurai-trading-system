@@ -63,15 +63,22 @@
  * sizes off $500. Never off equity alone: that is the whole point, because a
  * funded account would otherwise silently widen the run past what was declared.
  *
- * **Known limit, stated rather than hidden:** the six notional caps are STATIC,
- * derived from the ceiling at boot. When equity is BELOW the ceiling they are
- * therefore looser than an equity-relative cap would be — `portfolio_gross_cap`
- * at 50% of a ceiling above actual equity permits gross exposure above 50% of
- * equity. The paper profile has the identical shape ("If your paper account is
- * not funded at $100k, change this"). The mitigation is to declare a ceiling at
- * or below what the account actually holds, which is what a capital cap means
- * in the first place. Making the caps equity-relative at evaluate time is a
- * separate change to the Risk Manager, not a config edit.
+ * **#886 made the six notional caps equity-relative, resolved against
+ * `portfolio.equity` at evaluate time — the same pattern D5 already used.**
+ * That retired the STATIC-cap limit this section used to describe (the six
+ * caps used to be derived from the ceiling once at boot, and were therefore
+ * looser than intended whenever equity sat below it). It also means the Risk
+ * Manager's caps now scale with REAL, unclamped account equity, not with the
+ * ceiling: `sizingEquity` (direct-bind.ts) clamps equity only at the Trader's
+ * sizing inlet, deliberately, so the drawdown/loss breakers still observe the
+ * true account. D5 has always worked this way — its envelope is 35%/25% of
+ * real equity regardless of any declared ceiling — and the other five caps
+ * now match it rather than being an exception. **Consequence, stated rather
+ * than hidden:** on an account funded ABOVE the declared ceiling, the Risk
+ * Manager's caps are no longer bounded by the ceiling at all; the ceiling's
+ * only remaining effect is on the Trader's ASK via `sizingEquity`. Declaring
+ * a ceiling at or below what the account actually holds is what a capital cap
+ * means in the first place, and remains the mitigation.
  */
 import { DEFAULT_TRADER_CONFIG } from '../../pipeline/trader/index.js';
 import type { Logger } from '../../shared/index.js';
@@ -87,18 +94,31 @@ import type { ProductionConfig } from './production.js';
 export const LIVE_MAX_CAPITAL_ENV_VAR = 'SAMURAI_LIVE_MAX_CAPITAL_USD';
 
 /**
- * The smallest ceiling that produces a run capable of trading at all.
+ * The smallest ceiling this function still refuses below — kept as a floor on
+ * the DECLARED CEILING itself, not on live equity.
  *
- * `max_position_size` is 5% of the ceiling and `min_viable_size` is the
- * Trader's `min_viable_notional` — so below `min_viable_notional / 0.05` every
- * intent is trimmed to fit the per-trade cap and then hard-rejected as dust.
- * That run boots, connects, spends LLM budget and never places an order, and
- * "a run that boots and then trades nothing is indistinguishable at a glance
- * from a clean run that decided not to trade" (paper-profile.ts).
+ * **#886 changed what this floor does and does not protect against, and that
+ * needs saying rather than leaving this comment describing the pre-#886
+ * mechanism.** Before #886, `max_position_size` was 5% of the ceiling, so a
+ * ceiling below `min_viable_notional / 0.05` guaranteed `per_trade_size_cap`
+ * trimmed every entry below the dust floor — this function's exact job.
+ * `max_position_size_fraction_of_equity` now resolves against LIVE EQUITY at
+ * evaluate time, not the ceiling, so that specific failure mode has moved:
+ * it now depends on whether EQUITY (not the declared ceiling) clears
+ * `min_viable_notional / max_position_size_fraction_of_equity` (~£200 at
+ * today's fractions) — and nothing enforces that at boot, because equity is
+ * observed, not declared. A live account funded inside ADR-0017's £100–200
+ * ramp can still boot, spend LLM budget and reject every unclassified entry
+ * as dust, ceiling notwithstanding (`d5-trader-cap-agreement.test.ts` asserts
+ * this rather than leaving it for a soak to find).
  *
- * Refused rather than clamped up to a workable figure: a ceiling is the one
- * number in this system the operator is asserting personally, and quietly
- * raising it is the last thing that may happen to it.
+ * This function is retained anyway, for a narrower and still-valid reason:
+ * `sizingEquity` (direct-bind.ts) clamps the Trader's ask to
+ * `min(ceiling, equity)`, so a pathologically small ceiling still forces a
+ * pathologically small ask regardless of real equity. Refused rather than
+ * clamped up to a workable figure: a ceiling is the one number in this system
+ * the operator is asserting personally, and quietly raising it is the last
+ * thing that may happen to it.
  *
  * **A function, not a `const`, and the reason is load-bearing rather than
  * stylistic.** `orchestrator/index.ts` re-exports this module and is itself
@@ -110,7 +130,10 @@ export const LIVE_MAX_CAPITAL_ENV_VAR = 'SAMURAI_LIVE_MAX_CAPITAL_USD';
  * to call time, the value is always the real one.
  */
 export function minLiveCapitalCeilingUsd(): number {
-  return DEFAULT_TRADER_CONFIG.min_viable_notional / RISK_CAP_EQUITY_FRACTIONS.max_position_size;
+  return (
+    DEFAULT_TRADER_CONFIG.min_viable_notional /
+    RISK_CAP_EQUITY_FRACTIONS.max_position_size_fraction_of_equity
+  );
 }
 
 /**
@@ -169,12 +192,12 @@ export function assertLiveCapitalCeilingUsd(value: number, source: string): numb
   const floor = minLiveCapitalCeilingUsd();
   if (value < floor) {
     throw new Error(
-      `Orchestrator cannot start: ${source} is below ${floor}, the smallest ceiling that can ` +
-        `place a trade. At that ceiling the per-trade cap ` +
-        `(${RISK_CAP_EQUITY_FRACTIONS.max_position_size * 100}% of it) falls under the ` +
-        `${DEFAULT_TRADER_CONFIG.min_viable_notional} dust floor, so every intent would be ` +
-        'trimmed to fit the cap and then rejected as too small — a run that connects, spends ' +
-        'LLM budget and never trades. Raise the ceiling or stay on paper.',
+      `Orchestrator cannot start: ${source} is below ${floor}. Below that, ` +
+        `\`sizingEquity\` (direct-bind.ts) clamps the Trader's ask to the ceiling itself, and a ` +
+        `ceiling this small produces an ask under the ` +
+        `${DEFAULT_TRADER_CONFIG.min_viable_notional} dust floor before the Risk Manager is ` +
+        'even consulted — a run that connects, spends LLM budget and never trades. Raise the ' +
+        'ceiling or stay on paper.',
     );
   }
 
@@ -215,15 +238,15 @@ export function liveStartingProfile(
     level: 'warn',
     message:
       'building the LIVE STARTING PROFILE — real money, no human gate (ADR-0007). Its dials ' +
-      "are the paper soak's untuned starting values; only the notional caps are re-anchored " +
-      `to ${LIVE_MAX_CAPITAL_ENV_VAR}. Declare a ceiling at or below what the account actually ` +
-      'holds: the caps are fractions of the ceiling, so a ceiling above real equity leaves ' +
-      `them looser than the account can support. ${LIVE_MONEY_GATE_SUMMARY}`,
+      "are the paper soak's untuned starting values. The six notional caps are fractions of " +
+      `live equity, identical to the paper profile's; ${LIVE_MAX_CAPITAL_ENV_VAR} bounds ` +
+      "only the Trader's ask (sizingEquity: min(ceiling, equity)), not the Risk Manager's caps " +
+      `— declare a ceiling at or below what the account actually holds. ${LIVE_MONEY_GATE_SUMMARY}`,
     payload: { capital_ceiling_usd: ceiling },
   });
 
   return {
-    ...buildStartingProfileConfigs(ceiling),
+    ...buildStartingProfileConfigs(),
     mode: 'live',
     capitalCeilingUsd: ceiling,
   };

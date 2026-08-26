@@ -5,6 +5,7 @@
  * key, and nothing sets `SAMURAI_MODE`.
  */
 
+import { DEFAULT_TRADER_CONFIG } from '../../pipeline/trader/index.js';
 import { startingProfileForMode } from './index.js';
 import {
   LIVE_MONEY_GATE_SUMMARY,
@@ -18,7 +19,7 @@ import {
   minLiveCapitalCeilingUsd,
   resolveLiveCapitalCeilingUsd,
 } from './live-profile.js';
-import { PAPER_ACCOUNT_EQUITY_ANCHOR, paperStartingProfile } from './paper-profile.js';
+import { paperStartingProfile, RISK_CAP_EQUITY_FRACTIONS } from './paper-profile.js';
 import type { LogEntry, Logger } from './types.js';
 
 const CEILING = 2_000;
@@ -91,74 +92,84 @@ describe('liveStartingProfile', () => {
     expect(profile.capitalCeilingUsd).toBe(CEILING);
   });
 
-  it('derives every notional cap from the ceiling, not from the paper anchor', () => {
+  it('shares the paper profile\'s equity-relative caps verbatim — the ceiling no longer touches riskConfig (#886)', () => {
+    // Before #886 the six caps were derived from the ceiling once at boot, so
+    // live and paper necessarily disagreed. #886 made them fractions of live
+    // EQUITY, resolved at evaluate time by the Risk Manager — both profiles
+    // now build `riskConfig` from the same `RISK_CAP_EQUITY_FRACTIONS`
+    // constant, through the same shared `buildStartingProfileConfigs`, and the
+    // ceiling argument plays no part in it at all.
     const live = liveStartingProfile(CEILING);
     const paper = paperStartingProfile('paper');
-    const ratio = CEILING / PAPER_ACCOUNT_EQUITY_ANCHOR;
 
-    // The whole point: a $100,000 assumption may not decide a real-money size.
-    expect(live.riskConfig.max_position_size).toBeCloseTo(
-      paper.riskConfig.max_position_size * ratio,
-      10,
-    );
-    expect(live.riskConfig.per_asset_cap).toBeCloseTo(paper.riskConfig.per_asset_cap * ratio, 10);
-    expect(live.riskConfig.per_asset_class_cap.crypto).toBeCloseTo(
-      paper.riskConfig.per_asset_class_cap.crypto * ratio,
-      10,
-    );
-    expect(live.riskConfig.per_asset_class_cap.stocks).toBeCloseTo(
-      paper.riskConfig.per_asset_class_cap.stocks * ratio,
-      10,
-    );
-    expect(live.riskConfig.portfolio_gross_cap).toBeCloseTo(
-      paper.riskConfig.portfolio_gross_cap * ratio,
-      10,
-    );
-    expect(live.riskConfig.concentration.cap).toBeCloseTo(
-      paper.riskConfig.concentration.cap * ratio,
-      10,
-    );
+    expect(live.riskConfig).toEqual(paper.riskConfig);
   });
 
-  it('keeps gross exposure inside the declared ceiling', () => {
-    // Gross above the ceiling is the run exceeding what was declared, which is
-    // the failure the ceiling exists to prevent.
-    expect(liveStartingProfile(CEILING).riskConfig.portfolio_gross_cap).toBeLessThanOrEqual(
-      CEILING,
-    );
+  it('produces the identical riskConfig regardless of which ceiling it is built with', () => {
+    // The ceiling still bounds something (`sizingEquity`'s Trader ask), but
+    // not this. A caller declaring $2,000 vs $2,000,000 must get the same six
+    // caps — only `capitalCeilingUsd` on the returned profile differs.
+    const small = liveStartingProfile(CEILING);
+    const large = liveStartingProfile(CEILING * 1_000);
+
+    expect(small.riskConfig).toEqual(large.riskConfig);
+    expect(small.capitalCeilingUsd).not.toBe(large.capitalCeilingUsd);
   });
 
-  it('keeps the cap ladder monotonic at the live anchor too, so no cap is unreachable', () => {
+  it('keeps every cap at or under 1x equity — no leverage, independent of the ceiling (#886)', () => {
+    // Gross exposure above equity is leverage. Since #886 this is a bound on
+    // the FRACTION itself, not on the ceiling: `portfolio_gross_cap` above 1
+    // would permit more notional than the account (whatever its equity) holds.
+    expect(
+      liveStartingProfile(CEILING).riskConfig.portfolio_gross_cap_fraction_of_equity,
+    ).toBeLessThanOrEqual(1);
+  });
+
+  it('keeps the cap ladder monotonic, so no cap is unreachable', () => {
     const { riskConfig } = liveStartingProfile(CEILING);
 
-    expect(riskConfig.max_position_size).toBeLessThanOrEqual(riskConfig.per_asset_cap);
-    expect(riskConfig.per_asset_cap).toBeLessThanOrEqual(riskConfig.per_asset_class_cap.crypto);
-    expect(riskConfig.per_asset_cap).toBeLessThanOrEqual(riskConfig.per_asset_class_cap.stocks);
-    expect(riskConfig.per_asset_class_cap.crypto).toBeLessThanOrEqual(
-      riskConfig.portfolio_gross_cap,
+    expect(riskConfig.max_position_size_fraction_of_equity).toBeLessThanOrEqual(
+      riskConfig.per_asset_cap_fraction_of_equity,
     );
-    expect(riskConfig.per_asset_class_cap.stocks).toBeLessThanOrEqual(
-      riskConfig.portfolio_gross_cap,
+    expect(riskConfig.per_asset_cap_fraction_of_equity).toBeLessThanOrEqual(
+      riskConfig.per_asset_class_cap_fraction_of_equity.crypto,
+    );
+    expect(riskConfig.per_asset_cap_fraction_of_equity).toBeLessThanOrEqual(
+      riskConfig.per_asset_class_cap_fraction_of_equity.stocks,
+    );
+    expect(riskConfig.per_asset_class_cap_fraction_of_equity.crypto).toBeLessThanOrEqual(
+      riskConfig.portfolio_gross_cap_fraction_of_equity,
+    );
+    expect(riskConfig.per_asset_class_cap_fraction_of_equity.stocks).toBeLessThanOrEqual(
+      riskConfig.portfolio_gross_cap_fraction_of_equity,
     );
   });
 
-  it('keeps the per-trade cap above the dust floor at the smallest allowed ceiling', () => {
-    // The bound `minLiveCapitalCeilingUsd` exists to guarantee. Below it the
-    // run boots, spends LLM budget and never places an order.
-    const { riskConfig, traderConfig } = liveStartingProfile(minLiveCapitalCeilingUsd());
+  it('derives the ceiling floor from the fraction and the dust floor, not a magic number', () => {
+    // #886 moved the guarantee this floor used to provide (a per-trade cap
+    // that clears the dust floor) from the CEILING to live EQUITY — the
+    // ceiling no longer feeds `riskConfig` at all (see the tests above). What
+    // survives is narrower: `sizingEquity` (direct-bind.ts) clamps the
+    // Trader's ask to `min(ceiling, equity)`, so a ceiling below this floor
+    // still forces every ask under the dust floor regardless of real equity.
+    // The armed-D5-at-low-equity case this floor does NOT cover is asserted in
+    // `d5-trader-cap-agreement.test.ts`, not here.
+    const floor = minLiveCapitalCeilingUsd();
 
-    expect(riskConfig.max_position_size).toBeGreaterThanOrEqual(traderConfig.min_viable_notional);
-    expect(riskConfig.min_viable_size).toBeLessThanOrEqual(traderConfig.min_viable_notional);
+    expect(floor).toBeCloseTo(
+      DEFAULT_TRADER_CONFIG.min_viable_notional /
+        RISK_CAP_EQUITY_FRACTIONS.max_position_size_fraction_of_equity,
+      10,
+    );
   });
 
   it("re-anchors the Feedback Loop's guardrail band with the caps, so no dial bounds a cap that does not exist", () => {
     const { feedback, riskConfig } = liveStartingProfile(CEILING);
-    const dial = feedback?.config.risk_thresholds?.max_position_size;
+    const dial = feedback?.config.risk_thresholds?.max_position_size_fraction_of_equity;
 
-    // #433's invariant: the dial's ceiling IS the shipped cap. Left anchored to
-    // the paper balance, a live run's dial would permit 50x the cap it bounds.
-    expect(dial?.ceiling).toBe(riskConfig.max_position_size);
-    expect(dial?.floor).toBeLessThan(riskConfig.max_position_size);
+    // #433's invariant: the dial's ceiling IS the shipped cap.
+    expect(dial?.ceiling).toBe(riskConfig.max_position_size_fraction_of_equity);
+    expect(dial?.floor).toBeLessThan(riskConfig.max_position_size_fraction_of_equity);
   });
 
   it('inherits the untuned dials verbatim — the retune is #238’s, not this ticket’s', () => {
@@ -241,8 +252,12 @@ describe('LIVE_MONEY_GATES', () => {
     // and entries plus both discretionary exits still stop at the mark read —
     // so the surviving half is cited as #900, which is open.
     // (#800 was already retired here by PR #890, which re-pointed its entry at
-    // #888.)
-    const closed = [526, 519, 548, 549, 550, 551, 562, 384, 375, 333, 525, 800, 826, 894];
+    // #888.) #798 closed 2026-08-26 and was replaced by #925 in the same edit.
+    // #886 closed 2026-08-26 too (D5 cap authority + equity-relative caps
+    // shipped) and was replaced by #932 (the per_asset_cap gap #886 left open).
+    const closed = [
+      526, 519, 548, 549, 550, 551, 562, 384, 375, 333, 525, 798, 800, 826, 894, 886,
+    ];
 
     for (const gate of LIVE_MONEY_GATES) {
       expect(closed).not.toContain(gate.issue);
@@ -256,7 +271,7 @@ describe('LIVE_MONEY_GATES', () => {
     // Pinned as literals rather than derived from LIVE_MONEY_GATES: a test that
     // renders the constant and asserts it contains the constant passes for any
     // list, which is why the seven ghosts survived a suite of ~2900 tests.
-    expect(LIVE_MONEY_GATES.map((gate) => gate.issue)).toEqual([895, 888, 886, 798, 900]);
+    expect(LIVE_MONEY_GATES.map((gate) => gate.issue)).toEqual([895, 888, 932, 925, 900]);
   });
 
   it('hands the reader a command instead of only telling them to re-check', () => {
@@ -294,7 +309,7 @@ describe('the live-boot warning as an operator actually receives it', () => {
   it('names every gate that is open, at the boot path', () => {
     const message = liveBootWarning();
 
-    for (const issue of [895, 888, 886, 798, 900]) {
+    for (const issue of [895, 888, 932, 925, 900]) {
       expect(message).toContain(`#${issue}`);
     }
     expect(message).toContain('#238');
@@ -303,7 +318,10 @@ describe('the live-boot warning as an operator actually receives it', () => {
   it('names no gate that has closed, at the boot path', () => {
     const message = liveBootWarning();
 
-    for (const issue of [526, 519, 548, 549, 550, 551, 562, 800, 826, 894]) {
+    // #798 closed 2026-08-26 (the "accept the wider envelope" ruling) and was
+    // replaced by #925 in the same edit. #886 closed the same day and was
+    // replaced by #932.
+    for (const issue of [526, 519, 548, 549, 550, 551, 562, 798, 800, 826, 894, 886]) {
       expect(message).not.toContain(`#${issue}`);
     }
   });

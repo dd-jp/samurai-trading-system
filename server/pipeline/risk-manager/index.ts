@@ -362,27 +362,66 @@ type EntryCapGate = (
   correlation: RiskInput['correlation'],
 ) => { name: string; allowedAdditional: number } | null;
 
-const perTradeSizeCap: EntryCapGate = (config) => ({
-  name: 'per_trade_size_cap',
-  allowedAdditional: config.max_position_size,
-});
+/**
+ * Whether D5 is ARMED for this instrument with a NUMERIC fraction — the
+ * predicate `perTradeSizeCap` and `perSubclassDeploymentCap` must agree on
+ * (#886), so it lives once, here, rather than each gate re-deriving "is this
+ * instrument classified" and drifting on what that means.
+ *
+ * Deliberately NOT "has a `subclass_of` entry": a subclass with a `null`
+ * fraction (crypto, today — doc 18 covers only the two leveraged-ETP
+ * subclasses) means D5 measured no envelope at all, so exempting
+ * `per_trade_size_cap` there would leave the instrument with NO per-trade
+ * bound whatsoever — strictly looser than today, and not what #886 ruled.
+ * An instrument absent from `subclass_of` (undefined) is likewise not
+ * exempt: `perSubclassDeploymentCap` throws on it, so keeping the generic
+ * cap is fail-closed either way.
+ */
+function isD5ArmedWithNumericFraction(
+  config: RiskConfig,
+  instrument: RiskInput['intent']['instrument'],
+): boolean {
+  const declared = config.per_subclass_deployment_cap;
+  if (declared === undefined) return false;
+  const subclass = declared.subclass_of[instrument];
+  if (subclass === undefined) return false;
+  return typeof declared.cap_fraction_of_equity[subclass] === 'number';
+}
+
+/**
+ * #886: David's ruling on the anchor-vs-equity mismatch this gate used to
+ * have with D5 (`server/pipeline/risk-manager/index.ts:513`) — "D5's own
+ * fraction … is the sole drawdown authority once an instrument is
+ * subclass-classified. `per_trade_size_cap` becomes the cap for unclassified
+ * instruments only." A D5-classified instrument with a numeric fraction
+ * therefore skips this gate entirely (`null`) rather than being trimmed to
+ * whichever of the two caps is smaller.
+ */
+const perTradeSizeCap: EntryCapGate = (config, intent, portfolio) => {
+  if (isD5ArmedWithNumericFraction(config, intent.instrument)) return null;
+  return {
+    name: 'per_trade_size_cap',
+    allowedAdditional: config.max_position_size_fraction_of_equity * portfolio.equity,
+  };
+};
 
 const perAssetExposureCap: EntryCapGate = (config, intent, portfolio) => ({
   name: 'per_asset_exposure_cap',
   allowedAdditional:
-    config.per_asset_cap - (portfolio.exposure_by_instrument[intent.instrument] ?? 0),
+    config.per_asset_cap_fraction_of_equity * portfolio.equity -
+    (portfolio.exposure_by_instrument[intent.instrument] ?? 0),
 });
 
 const perAssetClassExposureCap: EntryCapGate = (config, intent, portfolio) => ({
   name: 'per_asset_class_exposure_cap',
   allowedAdditional:
-    config.per_asset_class_cap[intent.asset_class] -
+    config.per_asset_class_cap_fraction_of_equity[intent.asset_class] * portfolio.equity -
     portfolio.exposure_by_class[intent.asset_class],
 });
 
 const portfolioGrossExposureCap: EntryCapGate = (config, _intent, portfolio) => ({
   name: 'portfolio_gross_exposure_cap',
-  allowedAdditional: config.portfolio_gross_cap - portfolio.gross_exposure,
+  allowedAdditional: config.portfolio_gross_cap_fraction_of_equity * portfolio.equity - portfolio.gross_exposure,
 });
 
 /**
@@ -406,7 +445,7 @@ const concentrationCorrelationCap: EntryCapGate = (config, intent, portfolio, co
   );
   return {
     name: 'concentration_correlation_cap',
-    allowedAdditional: config.concentration.cap - existingCorrelatedExposure,
+    allowedAdditional: config.concentration.cap_fraction_of_equity * portfolio.equity - existingCorrelatedExposure,
   };
 };
 

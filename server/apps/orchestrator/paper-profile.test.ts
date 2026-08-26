@@ -19,7 +19,7 @@ import { SimulatedClock, SystemClock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { SqliteStage2SelectionStore } from '../../tools/backtest/index.js';
 import { REQUIRED_INJECTED_CONFIG } from './index.js';
-import { PAPER_ACCOUNT_EQUITY_ANCHOR, paperStartingProfile } from './paper-profile.js';
+import { paperStartingProfile } from './paper-profile.js';
 import { SqliteDailyEquityMetricsSource } from './production/daily-equity-metrics-source.js';
 import { DEFAULT_FEEDBACK_INTERVAL_MS } from './production.js';
 
@@ -147,25 +147,36 @@ describe('paperStartingProfile', () => {
     // `binding_constraint` audit field would name the wrong step.
     const { riskConfig } = paperStartingProfile('paper');
 
-    expect(riskConfig.max_position_size).toBeLessThanOrEqual(riskConfig.per_asset_cap);
-    expect(riskConfig.per_asset_cap).toBeLessThanOrEqual(riskConfig.per_asset_class_cap.crypto);
-    expect(riskConfig.per_asset_cap).toBeLessThanOrEqual(riskConfig.per_asset_class_cap.stocks);
-    expect(riskConfig.per_asset_class_cap.crypto).toBeLessThanOrEqual(
-      riskConfig.portfolio_gross_cap,
+    expect(riskConfig.max_position_size_fraction_of_equity).toBeLessThanOrEqual(
+      riskConfig.per_asset_cap_fraction_of_equity,
     );
-    expect(riskConfig.per_asset_class_cap.stocks).toBeLessThanOrEqual(
-      riskConfig.portfolio_gross_cap,
+    expect(riskConfig.per_asset_cap_fraction_of_equity).toBeLessThanOrEqual(
+      riskConfig.per_asset_class_cap_fraction_of_equity.crypto,
     );
-    expect(riskConfig.concentration.cap).toBeGreaterThanOrEqual(riskConfig.max_position_size);
+    expect(riskConfig.per_asset_cap_fraction_of_equity).toBeLessThanOrEqual(
+      riskConfig.per_asset_class_cap_fraction_of_equity.stocks,
+    );
+    expect(riskConfig.per_asset_class_cap_fraction_of_equity.crypto).toBeLessThanOrEqual(
+      riskConfig.portfolio_gross_cap_fraction_of_equity,
+    );
+    expect(riskConfig.per_asset_class_cap_fraction_of_equity.stocks).toBeLessThanOrEqual(
+      riskConfig.portfolio_gross_cap_fraction_of_equity,
+    );
+    expect(riskConfig.concentration.cap_fraction_of_equity).toBeGreaterThanOrEqual(
+      riskConfig.max_position_size_fraction_of_equity,
+    );
   });
 
-  it('keeps every cap inside the account equity it is anchored to', () => {
-    // Gross exposure above equity is leverage. Nothing in the docs asks for
-    // leverage on a first paper run, and an Alpaca paper account would reject
-    // it anyway.
+  it('keeps every cap at or under 1x equity — no leverage on a first paper run (#886)', () => {
+    // #886 made every cap a fraction of live equity rather than of a frozen
+    // cash anchor, so the leverage check is now a bound on the fraction
+    // itself: above 1 the portfolio gross cap alone would permit more
+    // notional than the account holds. Nothing in the docs asks for leverage
+    // on a first paper run, and an Alpaca paper account would reject it
+    // anyway.
     const { riskConfig } = paperStartingProfile('paper');
 
-    expect(riskConfig.portfolio_gross_cap).toBeLessThanOrEqual(PAPER_ACCOUNT_EQUITY_ANCHOR);
+    expect(riskConfig.portfolio_gross_cap_fraction_of_equity).toBeLessThanOrEqual(1);
   });
 
   it("does not set Risk's dust floor above the Trader's minimum notional", () => {
@@ -363,10 +374,16 @@ describe('paperStartingProfile', () => {
       // gate refusing that flatten one stage later; the surviving half of the
       // gap is cited as #900.
       '#894',
+      // Closed 2026-08-26 (the "accept the wider envelope" ruling) and
+      // replaced by #925 in the same edit.
+      '#798',
+      // Closed 2026-08-26 (D5 cap authority + equity-relative caps shipped)
+      // and replaced by #932, the per_asset_cap gap #886 left open.
+      '#886',
     ]) {
       expect(message).not.toContain(closed);
     }
-    for (const open of ['#895', '#888', '#886', '#798', '#900']) {
+    for (const open of ['#895', '#888', '#932', '#925', '#900']) {
       expect(message).toContain(open);
     }
     expect(message).toContain('#238');
