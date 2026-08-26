@@ -5,6 +5,8 @@
 **Date:** 2026-08-07
 **Wayfinder map:** [Wayfinder: Universe Selector (Stage 0) + tick cadence gating](../../issues/397) — closed 2026-08-06, all four children resolved ([#398](../../issues/398), [#399](../../issues/399), [#401](../../issues/401), [#402](../../issues/402); [#400](../../issues/400) resolved and then superseded).
 
+**2026-08-26 — single-name earnings-day exclusion added.** [Wayfinder: single-name earnings-day entry filter — placement and data source](../../issues/926), closed 2026-08-26. New subsection under "Candidate pool (#401)" — see "Single-name earnings-day exclusion (#926)" below.
+
 **2026-08-16 — the screener and the active list are re-specified, not annotated.** This spec previously carried a `PARTIALLY SUPERSEDED` banner listing what the horizon change invalidated while the body below still described the superseded design. **That banner is deleted and the affected sections are rewritten**, because a banner over a stale body is a note that the body lies, and a reader following the body gets the old rule. Superseded text is struck in place with its replacement adjacent.
 
 Three sections are rewritten and one clause is withdrawn:
@@ -232,6 +234,26 @@ Pool size is a config value so widening is a later dial. Nothing above the pool 
 
 **`InstrumentRegistry` is not reused.** The port at `server/tools/backtest/universe.ts` answers a different question — `membershipDuring(window)` is *point-in-time* membership for survivorship-free backtesting, paired with `SurvivorshipViolationError`. The live pool is a present-tense list with no window and no survivorship assertion. Reusing the port would force a fake window argument and inherit a guard that means nothing here.
 
+### Single-name earnings-day exclusion (#926)
+
+**A per-name eligibility filter, applied at the 22:15 London screener run, alongside doc 17's guardrails — not a runtime veto and not a reopening of ADR-0016 Decision 2.** [#685](../../issues/685) measured earnings-reaction sessions at **−1.0378%/trade** (t = −2.99, 1.62% of sessions) — directionally negative. ADR-0016 Decision 2 already rejected debate-wide catalyst gating on this exact finding (earnings was excluded from #655/#915's FOMC/CPI/NFP trial *because* it's already measured and dead); this exclusion applies that same measurement as a mechanical per-name constraint, the same shape as `docs/research/17-universe-manipulation-guardrails.md`'s "which names are eligible" — orthogonal to what the universe is selected for. **No ADR is required**: this doesn't reverse a decision or add a new trade-off axis, it applies one already made.
+
+**Scope: the 20 single-stock underlyings only.** Index/basket rows (SPY, QQQ, VT, EWY, KWEB, XLE) have no "own" earnings and are unaffected. The single-stock rows are enumerated in `server/providers/universe-pool/lse-etp-pool.ts` by `screening_instrument`.
+
+**Data source: Alpha Vantage `EARNINGS_CALENDAR`, free tier.** Decided in [`docs/research/38-earnings-calendar-vendor-evaluation.md`](../research/38-earnings-calendar-vendor-evaluation.md) — the only candidate whose forward-looking coverage was confirmed by a live call against the production endpoint rather than inferred from vendor marketing copy. One unfiltered `horizon=3month` request per day (~1 of the 25/day free cap), filtered client-side to the 20-name pool. Response schema: `symbol,name,reportDate,fiscalDateEnding,estimate,currency,timeOfTheDay`.
+
+**Session-labelling window: reuse #685's corrected rule directly, do not re-derive one.** #685 fixed a look-ahead defect in `docs/research/18-fetch-earnings.py`'s original same/next classification; this filter must not reintroduce it. Classified by release time against the session it is being screened for:
+
+- `timeOfTheDay = pre-market`, `reportDate` = the session being built → releases before that session's open, reacts that same session. **Exclude.**
+- `timeOfTheDay = post-market`, `reportDate` = the *prior* trading day → releases after that day's close, reacts at the next open, i.e. the session being built. **Exclude.**
+- `timeOfTheDay` blank (unclassified/intraday) for either date above → #685's fix left genuinely-intraday releases as an excluded/ambiguous case rather than resolving them to a session. Treat the same way here: **exclude**, since a missed exclusion (trading a known-negative day) is a worse failure than a spurious one (skipping a name for a day it turns out to be fine).
+
+**Mechanism: filtered out of the candidate pool before ranking, at the same 22:15 London run that produces the Watchlist** — not a separate scheduled job and not a Trader/Risk-stage check. A name excluded for the session it's being screened for simply doesn't enter that day's ranking; it re-enters normally the next run once its exclusion window has passed. Pinned open positions (see "The active list and rotation" below) are **not** affected by this filter — pinning is evaluated on existing positions, and this filter governs candidate eligibility, not position management. **This is a stated scope boundary, not a delegation**: `risk-manager-spec.md` has no earnings-aware mechanism today (checked — no match for "earnings" or "position_check" in that spec), so a name entered before its earnings date and still held through it is an unaddressed gap, not something Risk already covers. Out of scope for #926, which asked only about entry-day exclusion; left named here rather than silently assumed away.
+
+**Fallback interaction.** The pool's `fallback_default` subset (used when the screener run itself fails, per "Candidate pool" above) is **not** filtered by this exclusion. The fallback is a degraded-mode "some trade beats no trade" path; stacking a second exclusion rule on an already-emergency path adds a way for the fallback itself to come up empty, which defeats its purpose.
+
+**Residual risk, stated rather than discovered.** Alpha Vantage's `EARNINGS_CALENDAR` has no vendor-documented reschedule-freshness guarantee (doc 38) — if a company moves its earnings date after the 22:15 run has already fetched the calendar, the exclusion is computed against a snapshot that may be stale by the time the session opens. This is a known gap, not a silent one; a soak should watch for it rather than assume it away.
+
 ### The active list and rotation (#399)
 
 **`ActiveUniverseProvider` is a new port owning three things in order:** pin held positions → apply the one-session minimum hold → fill remaining slots from the new top-N.
@@ -340,7 +362,7 @@ Two implementation obligations:
 
 ## Further Notes
 
-**Provenance.** Synthesized from the closed wayfinder map [Wayfinder: Universe Selector (Stage 0) + tick cadence gating](../../issues/397) and its four resolved children: [#398](../../issues/398) (ranking shape), [#399](../../issues/399) (rotation and pinning), [#401](../../issues/401) (candidate pool), [#402](../../issues/402) (attribution — premise false, no work needed). [#400](../../issues/400) resolved the cadence question and was then superseded by ADR-0008; its arithmetic survives only as the input ADR-0008 cites and decides against.
+**Provenance.** Synthesized from the closed wayfinder map [Wayfinder: Universe Selector (Stage 0) + tick cadence gating](../../issues/397) and its four resolved children: [#398](../../issues/398) (ranking shape), [#399](../../issues/399) (rotation and pinning), [#401](../../issues/401) (candidate pool), [#402](../../issues/402) (attribution — premise false, no work needed). [#400](../../issues/400) resolved the cadence question and was then superseded by ADR-0008; its arithmetic survives only as the input ADR-0008 cites and decides against. **"Single-name earnings-day exclusion (#926)"** is synthesized from the closed wayfinder map [Wayfinder: single-name earnings-day entry filter — placement and data source](../../issues/926), [`docs/research/38-earnings-calendar-vendor-evaluation.md`](../research/38-earnings-calendar-vendor-evaluation.md) (data source), and [#685](../../issues/685) (the measurement it applies).
 
 **Reversals this spec lands.** Three documents recorded "not in v1" and are amended in the same change:
 - `docs/specs/orchestrator-spec.md` §25 (key architectural decisions) and §245 (Out of Scope) — "fixed universe iteration, not a scanner".

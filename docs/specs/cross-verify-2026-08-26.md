@@ -1,0 +1,39 @@
+# Cross-Spec Verification Pass — 2026-08-26
+
+**Scope: targeted, not a full folder audit** — per the request, this pass verifies one addition (the "Single-name earnings-day exclusion (#926)" subsection just added to `docs/specs/universe-selector-spec.md`, under "Candidate pool (#401)") against the specs it could plausibly contradict: `risk-manager-spec.md`, `trader-spec.md`, `market-data-service-spec.md`, and the frozen registry `docs/specs/cross-spec-contracts.md`. The full 19-spec folder was not re-swept; nothing outside this addition's blast radius was touched.
+
+`docs/specs/cross-spec-contracts.md` was present and read in full. Contradictions with it are treated as HIGH per its own stated authority ("If a spec disagrees with this file, this file wins and the spec is wrong").
+
+## Contradiction matrix
+
+No cross-spec field/type contradictions found. The addition introduces no new shared type — its output (an excluded-name set) is consumed entirely within `universe-selector-spec.md`'s own Candidate pool → ranking pipeline and never crosses a spec boundary, so it does not need a `cross-spec-contracts.md` entry (registry §1–§10 all cover types with ≥2 consumers across specs; this filter has exactly one, inside one spec).
+
+## Security findings
+
+None at HIGH or MEDIUM. **LOW** — the addition names a new external vendor call (Alpha Vantage) but doesn't restate the API-key handling convention (`.env.local`, never committed) that every other vendor integration in this repo follows. Not a defect — no spec in `docs/specs/` restates this per-vendor either, it's an implementation-ticket concern — but flagged so the eventual ticket doesn't skip it.
+
+## Design-practice findings
+
+**Confirmed clean, not a gap:** the addition has the Universe Selector call Alpha Vantage directly rather than routing through `MarketDataService`. This looked like a candidate contradiction going in — registry §3 names `MarketDataService` as the interface for Analysts/Trader/Risk/Verdict — but `universe-selector-spec.md`'s existing "Market data — Alpaca free Basic..." section already establishes that the screener **constructs its own HTTP client and bypasses MDS entirely**, because MDS is "strictly single-symbol" and the screener needs batched, out-of-session, SIP-pinned reads MDS doesn't serve. The earnings-day filter's direct Alpha Vantage call follows the identical, already-accepted pattern (a second out-of-session, screener-time-only vendor call) rather than introducing a new one.
+
+**MEDIUM — GAP-L: an unverified ownership claim, caught and fixed during this pass, not left in the spec.** The subsection's original text asserted "an earnings release on a name already held is a Risk Manager concern (position management), not a Universe Selector one" — implying `risk-manager-spec.md` already owns held-position earnings handling. It does not: `grep -n -i "earnings\|position_check" docs/specs/risk-manager-spec.md` returns zero matches. This was an unverified delegation, the exact "silent assumption" pattern this skill exists to catch (registry's own history has one precedent: `DebateLog` went unspecced the same way until a verification pass caught it). **Fix, already applied:** the subsection now states this is an explicit scope boundary — entry-day exclusion only, per #926's actual question — and names held-position earnings exposure as an unaddressed gap rather than an implicit Risk Manager responsibility. No spec file claims ownership of it; it is not tracked as a new registry entry because #926 never asked for it and inventing scope here would be adding an untracked feature during a verification pass, not fixing one.
+
+No missing idempotency, no missing error-boundary gap: the filter is a pure exclusion applied once per day inside an already-idempotent daily run (the screener's own completed-bars-only, re-run-produces-same-output invariant, `universe-selector-spec.md` "Completed bars only"), and a failed Alpha Vantage call degrades to "exclusion list empty for today" rather than blocking the screener — consistent with the existing pool `fallback_default` design philosophy of never letting one data source's failure dark the whole session. (This degrade-on-failure behavior is implied by the addition's existing "Residual risk" paragraph on reschedule staleness but is not spelled out as an explicit failure-mode contract; noted below as a LOW open item, not elevated to MEDIUM since the existing "Failure modes, specified rather than discovered" module in the same spec already establishes the pattern this would follow.)
+
+## Performance / maintainability / complexity / simplicity findings
+
+**LOW.** One Alpha Vantage call/day against a 25/day free-tier cap (4% utilization) is appropriately sized for a 20-name, once-daily need — no overengineering (no caching layer, no separate scheduled job) and no underengineering (doesn't try to poll intraday for reschedules, which the reschedule-freshness gap already names as accepted, not solved).
+
+## Confirmed clean
+
+- **No contradiction with registry §3 (`MarketDataService`)** — the addition doesn't touch MDS's four-consumer contract; it extends the Universe Selector's already-established direct-vendor-call pattern.
+- **No contradiction with `risk-manager-spec.md`** on eligibility, position sizing, or subclass tiering — zero matches for "earnings" in that spec; nothing there claims or contradicts entry-eligibility ownership.
+- **No contradiction with `trader-spec.md`** — zero matches for "earnings"; the Trader's `direction`/`debate_id` contract (registry §1/§2) is unaffected since this filter acts upstream of the Trader entirely (candidate pool, before ranking, before any debate runs).
+- **No contradiction with ADR-0016 Decision 2** (no catalyst gating) — verified the addition's own framing against the ADR text: this is a per-name candidate-pool exclusion, not a debate-wide gate, and the spec subsection states this distinction explicitly rather than leaving it implicit.
+- **Threshold-clamp table (registry §9)** — the addition introduces no new tunable numeric threshold, so no clamp-table entry is needed.
+- **Trace-ID / `trace_id` propagation (registry's GAP-J resolution)** — not applicable; the screener's out-of-session run has no per-tick `trace_id` to thread, same as the rest of the Candidate pool module.
+
+## Open questions
+
+1. **Failure-mode contract for a failed/unreachable Alpha Vantage call.** The addition's "Residual risk" paragraph names reschedule-staleness as a known gap but doesn't state what happens if the daily call fails outright (network error, rate-limit exceeded, malformed response). Recommend: degrade to "no exclusions applied today" (fail-open on the filter, not fail-closed on the whole screener run) — consistent with the fallback philosophy elsewhere in this spec — but this is a judgment call for whoever writes the implementation ticket, not resolved by this pass.
+2. **Should held-position earnings exposure (GAP-L's named gap) become its own wayfinder question?** This pass deliberately left it unassigned rather than inventing an owner. Worth a separate, explicit decision — the same way #926 was chartered for the entry-day question — rather than folding it silently into the earnings-filter ticket now.
