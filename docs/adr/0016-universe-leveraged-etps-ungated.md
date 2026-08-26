@@ -142,3 +142,13 @@ This is the first falsifiable statement of what the debate layer has to be worth
 **#655 is closed.** It resolved by *declaring* the trial this ADR's revisit bar tests — David named FOMC/CPI/NFP, pooled as one family statistic, index subclass only — rather than by measuring an answer. The declaration is final; the measurement is not, and #655 does not run it.
 
 **[#915](https://github.com/dd-jp/samurai-trading-system/issues/915) now holds the revisit bar.** It carries the declared trial's full constraints (family, population, subclass, statistic, bracket, pooling unit) and runs the FOMC/CPI/NFP event-study against them. The citations at the head of this ADR and in Decision 2 that name #655 as the live holder are superseded by this amendment; read them as pointing at #915.
+
+## Amendment, 2026-08-26 — the revisit bar was run; it does not clear ([#915](https://github.com/dd-jp/samurai-trading-system/issues/915))
+
+**Decision 2 stands, on a completed measurement rather than a declared bar.** Full result: [`docs/research/55-fomc-cpi-nfp-event-study.md`](../research/55-fomc-cpi-nfp-event-study.md).
+
+- **FOMC is structurally excluded, not measured.** Every one of the 84 scheduled FOMC decisions, 2016–2026, releases at 14:00 ET — after ADR-0018 D3's bracket has already flattened. There is no session in this system's exposure window where an FOMC decision lands, so `p_catalyst` for FOMC does not exist. This holds for as long as the flatten stays where D3 put it, independent of sample size.
+- **CPI/NFP, pooled (SPY+QQQ, 264 event-days, 2016–2026): a positive point estimate that does not clear.** `p_catalyst` = 57.34% vs `p_all-day` = 52.51%, delta +4.82pp. Correlation-adjusted for ρ(SPY,QQQ) = 0.883 (the naive independent-N estimate overstates power by ~2×), t = 1.54 — below the conventional 95% threshold. The measurement cannot distinguish this delta from noise.
+- **The declared family narrowed under measurement**, from "FOMC/CPI/NFP pooled as one statistic" to "CPI/NFP pooled, FOMC void" — flagged to [#658](https://github.com/dd-jp/samurai-trading-system/issues/658)'s grilling for David to confirm the narrowing is legitimate, not assumed by this ADR.
+
+**Catalyst gating remains rejected.** The universe trades every day the selector finds a setup, per this ADR's original fallback. Nothing here rules out a future revisit if the sample grows (264 event-days is the full 2016–2026 population, not a selection) or if the exit rule's flatten timing changes.
