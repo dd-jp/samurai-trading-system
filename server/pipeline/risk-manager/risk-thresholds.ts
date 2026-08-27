@@ -97,8 +97,10 @@ export function riskThresholdsFrom(config: RiskConfig): Partial<Record<RiskThres
   const candidates: Record<RiskThresholdKey, number | undefined> = {
     max_position_size_fraction_of_equity: config.max_position_size_fraction_of_equity,
     per_asset_cap_fraction_of_equity: config.per_asset_cap_fraction_of_equity,
-    per_asset_class_cap_fraction_of_equity_crypto: config.per_asset_class_cap_fraction_of_equity?.crypto,
-    per_asset_class_cap_fraction_of_equity_stocks: config.per_asset_class_cap_fraction_of_equity?.stocks,
+    per_asset_class_cap_fraction_of_equity_crypto:
+      config.per_asset_class_cap_fraction_of_equity?.crypto,
+    per_asset_class_cap_fraction_of_equity_stocks:
+      config.per_asset_class_cap_fraction_of_equity?.stocks,
     portfolio_gross_cap_fraction_of_equity: config.portfolio_gross_cap_fraction_of_equity,
     concentration_cap_fraction_of_equity: config.concentration?.cap_fraction_of_equity,
   };
@@ -192,7 +194,8 @@ export function resolveRiskConfig(
           base.per_asset_class_cap_fraction_of_equity.stocks,
       },
       portfolio_gross_cap_fraction_of_equity:
-        applied.portfolio_gross_cap_fraction_of_equity ?? base.portfolio_gross_cap_fraction_of_equity,
+        applied.portfolio_gross_cap_fraction_of_equity ??
+        base.portfolio_gross_cap_fraction_of_equity,
       concentration: {
         ...base.concentration,
         cap_fraction_of_equity:

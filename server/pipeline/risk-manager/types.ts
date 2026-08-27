@@ -308,7 +308,7 @@ export interface SubclassDeploymentCap {
    * a placeholder to be filled with a plausible number later. Today only
    * `crypto` is `null`: doc 18's study covers the two leveraged-ETP subclasses
    * and nothing else, and the crypto leg is parked out of the tick loop
-   * (#705). `per_asset_class_cap.crypto` still bounds it.
+   * (#705). `per_asset_class_cap_fraction_of_equity.crypto` still bounds it (#886 rename).
    */
   cap_fraction_of_equity: Readonly<Record<InstrumentSubclass, number | null>>;
 }

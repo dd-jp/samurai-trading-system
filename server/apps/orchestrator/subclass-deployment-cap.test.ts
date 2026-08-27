@@ -132,9 +132,9 @@ describe('what the paper profile actually enforces (#886)', () => {
     // not this file's arithmetic) lives in `d5-trader-cap-agreement.test.ts`,
     // including the acceptance-criteria test and the gap #886 did NOT close
     // (`per_asset_cap_fraction_of_equity` still binds ahead of D5).
-    expect(
-      RISK_CAP_EQUITY_FRACTIONS.max_position_size_fraction_of_equity,
-    ).toBeLessThan(subclassDeploymentCapFractionsOfEquity().index_etp_3x as number);
+    expect(RISK_CAP_EQUITY_FRACTIONS.max_position_size_fraction_of_equity).toBeLessThan(
+      subclassDeploymentCapFractionsOfEquity().index_etp_3x as number,
+    );
   });
 });
 

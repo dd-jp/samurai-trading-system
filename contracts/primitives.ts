@@ -52,7 +52,7 @@ export type AssetClass = 'crypto' | 'stocks';
  *    and there is nowhere else in the type system to say it.
  * 3. **`AssetClass` still carries `'crypto'` and so does the running system.**
  *    `DEFAULT_UNIVERSE` holds BTC-USD, the backtest fixtures do, and
- *    `per_asset_class_cap.crypto` still bounds it. A crypto instrument can
+ *    `per_asset_class_cap_fraction_of_equity.crypto` still bounds it (#886 rename). A crypto instrument can
  *    therefore still reach the risk gate; removing the subclass would make
  *    that instrument inexpressible in a pool file while remaining tradeable in
  *    a paper profile — a worse gap than the dead member, and a silent one.

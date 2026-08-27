@@ -421,7 +421,8 @@ const perAssetClassExposureCap: EntryCapGate = (config, intent, portfolio) => ({
 
 const portfolioGrossExposureCap: EntryCapGate = (config, _intent, portfolio) => ({
   name: 'portfolio_gross_exposure_cap',
-  allowedAdditional: config.portfolio_gross_cap_fraction_of_equity * portfolio.equity - portfolio.gross_exposure,
+  allowedAdditional:
+    config.portfolio_gross_cap_fraction_of_equity * portfolio.equity - portfolio.gross_exposure,
 });
 
 /**
@@ -445,7 +446,8 @@ const concentrationCorrelationCap: EntryCapGate = (config, intent, portfolio, co
   );
   return {
     name: 'concentration_correlation_cap',
-    allowedAdditional: config.concentration.cap_fraction_of_equity * portfolio.equity - existingCorrelatedExposure,
+    allowedAdditional:
+      config.concentration.cap_fraction_of_equity * portfolio.equity - existingCorrelatedExposure,
   };
 };
 

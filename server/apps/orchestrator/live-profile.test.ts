@@ -92,7 +92,7 @@ describe('liveStartingProfile', () => {
     expect(profile.capitalCeilingUsd).toBe(CEILING);
   });
 
-  it('shares the paper profile\'s equity-relative caps verbatim — the ceiling no longer touches riskConfig (#886)', () => {
+  it("shares the paper profile's equity-relative caps verbatim — the ceiling no longer touches riskConfig (#886)", () => {
     // Before #886 the six caps were derived from the ceiling once at boot, so
     // live and paper necessarily disagreed. #886 made them fractions of live
     // EQUITY, resolved at evaluate time by the Risk Manager — both profiles
@@ -255,9 +255,7 @@ describe('LIVE_MONEY_GATES', () => {
     // #888.) #798 closed 2026-08-26 and was replaced by #925 in the same edit.
     // #886 closed 2026-08-26 too (D5 cap authority + equity-relative caps
     // shipped) and was replaced by #932 (the per_asset_cap gap #886 left open).
-    const closed = [
-      526, 519, 548, 549, 550, 551, 562, 384, 375, 333, 525, 798, 800, 826, 894, 886,
-    ];
+    const closed = [526, 519, 548, 549, 550, 551, 562, 384, 375, 333, 525, 798, 800, 826, 894, 886];
 
     for (const gate of LIVE_MONEY_GATES) {
       expect(closed).not.toContain(gate.issue);

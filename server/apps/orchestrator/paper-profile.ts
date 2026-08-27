@@ -268,14 +268,20 @@ export const PAPER_PROFILE_PROVENANCE = {
   'feedback.config.risk_thresholds.per_asset_cap_fraction_of_equity.floor': 'DERIVED',
   'feedback.config.risk_thresholds.per_asset_cap_fraction_of_equity.ceiling': 'DERIVED',
   'feedback.config.risk_thresholds.per_asset_cap_fraction_of_equity.tighten_is': 'DERIVED',
-  'feedback.config.risk_thresholds.per_asset_class_cap_fraction_of_equity_crypto.max_step': 'DERIVED',
+  'feedback.config.risk_thresholds.per_asset_class_cap_fraction_of_equity_crypto.max_step':
+    'DERIVED',
   'feedback.config.risk_thresholds.per_asset_class_cap_fraction_of_equity_crypto.floor': 'DERIVED',
-  'feedback.config.risk_thresholds.per_asset_class_cap_fraction_of_equity_crypto.ceiling': 'DERIVED',
-  'feedback.config.risk_thresholds.per_asset_class_cap_fraction_of_equity_crypto.tighten_is': 'DERIVED',
-  'feedback.config.risk_thresholds.per_asset_class_cap_fraction_of_equity_stocks.max_step': 'DERIVED',
+  'feedback.config.risk_thresholds.per_asset_class_cap_fraction_of_equity_crypto.ceiling':
+    'DERIVED',
+  'feedback.config.risk_thresholds.per_asset_class_cap_fraction_of_equity_crypto.tighten_is':
+    'DERIVED',
+  'feedback.config.risk_thresholds.per_asset_class_cap_fraction_of_equity_stocks.max_step':
+    'DERIVED',
   'feedback.config.risk_thresholds.per_asset_class_cap_fraction_of_equity_stocks.floor': 'DERIVED',
-  'feedback.config.risk_thresholds.per_asset_class_cap_fraction_of_equity_stocks.ceiling': 'DERIVED',
-  'feedback.config.risk_thresholds.per_asset_class_cap_fraction_of_equity_stocks.tighten_is': 'DERIVED',
+  'feedback.config.risk_thresholds.per_asset_class_cap_fraction_of_equity_stocks.ceiling':
+    'DERIVED',
+  'feedback.config.risk_thresholds.per_asset_class_cap_fraction_of_equity_stocks.tighten_is':
+    'DERIVED',
   'feedback.config.risk_thresholds.portfolio_gross_cap_fraction_of_equity.max_step': 'DERIVED',
   'feedback.config.risk_thresholds.portfolio_gross_cap_fraction_of_equity.floor': 'DERIVED',
   'feedback.config.risk_thresholds.portfolio_gross_cap_fraction_of_equity.ceiling': 'DERIVED',
@@ -1066,7 +1072,8 @@ export function buildStartingProfileConfigs(
     // `caps` object multiplied against an anchor here — the fraction IS the
     // value now, resolved against `portfolio.equity` at evaluate time.
     /** 5% of equity — the Trader's own 0.5-1% *risk* budget becomes a much larger *notional* once divided by a ~1-2% ATR stop, so this is the cap that actually binds first on BTC-USD. Skipped entirely for a D5-classified instrument (#886) — see the field's own doc comment. */
-    max_position_size_fraction_of_equity: RISK_CAP_EQUITY_FRACTIONS.max_position_size_fraction_of_equity,
+    max_position_size_fraction_of_equity:
+      RISK_CAP_EQUITY_FRACTIONS.max_position_size_fraction_of_equity,
     /** 10% — one instrument may hold at most two max-size entries' worth. */
     per_asset_cap_fraction_of_equity: RISK_CAP_EQUITY_FRACTIONS.per_asset_cap_fraction_of_equity,
     /**
@@ -1085,7 +1092,8 @@ export function buildStartingProfileConfigs(
      * equity leaves the account able to absorb the full 20% drawdown limit
      * below without the caps and the breaker fighting each other.
      */
-    portfolio_gross_cap_fraction_of_equity: RISK_CAP_EQUITY_FRACTIONS.portfolio_gross_cap_fraction_of_equity,
+    portfolio_gross_cap_fraction_of_equity:
+      RISK_CAP_EQUITY_FRACTIONS.portfolio_gross_cap_fraction_of_equity,
     concentration: {
       /**
        * DERIVED — equal to the crypto asset-class cap: a cluster of

@@ -392,7 +392,9 @@ describe('RiskManagerImpl.evaluate — trim steps', () => {
   });
 
   it('trims to the portfolio gross exposure cap', () => {
-    const manager = new RiskManagerImpl(makeConfig({ portfolio_gross_cap_fraction_of_equity: 0.06 }));
+    const manager = new RiskManagerImpl(
+      makeConfig({ portfolio_gross_cap_fraction_of_equity: 0.06 }),
+    );
     const input = makeInput({
       intent: makeIntent({ size: 100, entry: 100 }),
       portfolio: makePortfolio({ gross_exposure: 2_000 }),
@@ -905,7 +907,10 @@ describe('RiskManagerImpl.evaluate — live risk thresholds (#433)', () => {
 
   it('falls back to the static config for a threshold the table has no row for', () => {
     const { source } = liveThresholds({ max_position_size_fraction_of_equity: 0.05 });
-    const manager = new RiskManagerImpl(makeConfig({ per_asset_cap_fraction_of_equity: 0.03 }), source);
+    const manager = new RiskManagerImpl(
+      makeConfig({ per_asset_cap_fraction_of_equity: 0.03 }),
+      source,
+    );
 
     const decision = manager.evaluate(makeInput());
 
@@ -915,10 +920,15 @@ describe('RiskManagerImpl.evaluate — live risk thresholds (#433)', () => {
   });
 
   it('behaves exactly as before when no source is supplied', () => {
-    const withoutSource = new RiskManagerImpl(makeConfig({ max_position_size_fraction_of_equity: 0.05 }));
-    const withEmptySource = new RiskManagerImpl(makeConfig({ max_position_size_fraction_of_equity: 0.05 }), {
-      getRiskThresholds: () => ({}),
-    });
+    const withoutSource = new RiskManagerImpl(
+      makeConfig({ max_position_size_fraction_of_equity: 0.05 }),
+    );
+    const withEmptySource = new RiskManagerImpl(
+      makeConfig({ max_position_size_fraction_of_equity: 0.05 }),
+      {
+        getRiskThresholds: () => ({}),
+      },
+    );
 
     expect(withoutSource.evaluate(makeInput()).modifications?.final_size).toBe(
       withEmptySource.evaluate(makeInput()).modifications?.final_size,
@@ -929,7 +939,10 @@ describe('RiskManagerImpl.evaluate — live risk thresholds (#433)', () => {
     // NaN compares false against every notional, so applying one would turn a
     // cap into no cap at all — the opposite of what a tightening means.
     const { source } = liveThresholds({ max_position_size_fraction_of_equity: Number.NaN });
-    const manager = new RiskManagerImpl(makeConfig({ max_position_size_fraction_of_equity: 0.05 }), source);
+    const manager = new RiskManagerImpl(
+      makeConfig({ max_position_size_fraction_of_equity: 0.05 }),
+      source,
+    );
 
     const decision = manager.evaluate(makeInput());
 

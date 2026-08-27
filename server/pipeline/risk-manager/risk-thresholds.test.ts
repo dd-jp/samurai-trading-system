@@ -77,7 +77,10 @@ describe('resolveRiskConfig', () => {
       concentration_cap_fraction_of_equity: 2_000,
     });
 
-    expect(config.per_asset_class_cap_fraction_of_equity).toEqual({ crypto: 1_000, stocks: 40_000 });
+    expect(config.per_asset_class_cap_fraction_of_equity).toEqual({
+      crypto: 1_000,
+      stocks: 40_000,
+    });
     expect(config.concentration).toEqual({ cap_fraction_of_equity: 2_000, threshold: 0.7 });
   });
 
@@ -128,7 +131,10 @@ describe('resolveRiskConfig', () => {
   it('does not mutate the config it was given', () => {
     const base = makeConfig();
 
-    resolveRiskConfig(base, { max_position_size_fraction_of_equity: 1, concentration_cap_fraction_of_equity: 1 });
+    resolveRiskConfig(base, {
+      max_position_size_fraction_of_equity: 1,
+      concentration_cap_fraction_of_equity: 1,
+    });
 
     expect(base.max_position_size_fraction_of_equity).toBe(5_000);
     expect(base.concentration.cap_fraction_of_equity).toBe(20_000);

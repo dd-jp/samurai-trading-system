@@ -265,7 +265,7 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
 });
 
 describe('#886 fixed the per-trade cap for D5 instruments — per_asset_cap remains the unclosed gap', () => {
-  it("no longer trims a full-envelope D5 ask via the per-trade cap — that cap is now EXEMPT for a classified instrument", () => {
+  it('no longer trims a full-envelope D5 ask via the per-trade cap — that cap is now EXEMPT for a classified instrument', () => {
     // The bug this ticket closed: pre-#886, `per_trade_size_cap` returned
     // `config.max_position_size` (5% of equity) for EVERY intent, classified
     // or not, and 5% < 35%/25% meant it always bound ahead of D5. It is now
