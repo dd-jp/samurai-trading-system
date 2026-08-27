@@ -127,9 +127,20 @@ export const LIVE_MONEY_GATES: readonly { readonly issue: number; readonly gap: 
     gap: 'per_trade_size_cap is a STATIC cash figure derived from the boot ceiling while the D5 envelope is a live fraction of portfolio.equity, so which one binds depends on how far equity sits below that ceiling — the two caps are not comparable as fractions and neither side of the pair is reliably the operative limit on an entry',
   },
   {
-    issue: 798,
-    // Verified OPEN 2026-08-19: `gh issue view 798`.
-    gap: "ADR-0018 D5's declared brackets imply a ~41.8% single-stock envelope against a ~20-25% tolerance, so the sizing this profile ships is unreconciled with the drawdown envelope it was sized against",
+    issue: 925,
+    // Verified OPEN 2026-08-26: filed on that date and cited here in the same
+    // change; see the comment left on #925 recording the citation.
+    //
+    // This entry replaces #798, closed 2026-08-26 once David ruled to accept
+    // the wider envelope rather than re-size or re-open the stop. That
+    // ruling is itself not the gap: the gap it exposed is that the circuit
+    // breaker's own hard safety clamp (server/shared/threshold-bounds.ts)
+    // still sites `max_drawdown_pct`'s ceiling and `MEASURED_DRAWDOWN_ENVELOPE`
+    // below the 41.8% single-stock figure the ADR now declares operative, so
+    // the shipped trip (0.30) fires inside the tolerance the strategy is
+    // meant to be sized for, and the ceiling forbids raising it high enough
+    // to fix that without a separate code change.
+    gap: "the drawdown circuit breaker's hard clamp (max_drawdown_pct ceiling 0.35, MEASURED_DRAWDOWN_ENVELOPE 0.262) sits below the 41.8% single-stock envelope ADR-0018 D5 now declares accepted, so the shipped trip (0.30) can fire on the single-stock leg operating exactly as designed and cannot be corrected without loosening the safety ceiling itself",
   },
   {
     issue: 900,
@@ -159,7 +170,7 @@ export const LIVE_MONEY_GATES: readonly { readonly issue: number; readonly gap: 
  * a date newer than the last verification is a false claim in an operator-facing
  * safety message, and a date older than the list is what #868 was filed about.
  */
-export const LIVE_MONEY_GATES_VERIFIED_ON = '2026-08-19';
+export const LIVE_MONEY_GATES_VERIFIED_ON = '2026-08-26';
 
 /** The command that re-verifies the list, named in the operator-facing summary. */
 export const LIVE_MONEY_GATES_RECHECK_COMMAND = 'yarn check:live-gates';
