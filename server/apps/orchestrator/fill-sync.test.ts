@@ -309,7 +309,7 @@ describe('startFillSync', () => {
   // top-of-file doc), now repeated on cadence so a lost ack between polls
   // does not sit unrecovered until the next restart.
   describe('the periodic reconcile leg (#921)', () => {
-    it('calls reconcile() on every poll, before that poll\'s ingestFills()', async () => {
+    it("calls reconcile() on every poll, before that poll's ingestFills()", async () => {
       const callSequence: string[] = [];
       const execution = makeExecution({
         reconcile: vi.fn().mockImplementation(async () => {
@@ -335,7 +335,7 @@ describe('startFillSync', () => {
       await sync.stop();
     });
 
-    it('a reconcile() failure is caught on its own and does not prevent that same pass\'s ingestFills() from running', async () => {
+    it("a reconcile() failure is caught on its own and does not prevent that same pass's ingestFills() from running", async () => {
       const logger = makeLogger();
       const execution = makeExecution({
         reconcile: vi.fn().mockRejectedValue(new Error('venue unreachable during reconcile')),
@@ -394,7 +394,9 @@ describe('startFillSync', () => {
 
       await vi.advanceTimersByTimeAsync(4_000);
 
-      const divergenceLines = logger.entries.filter((entry) => entry.message === 'reconcile divergence');
+      const divergenceLines = logger.entries.filter(
+        (entry) => entry.message === 'reconcile divergence',
+      );
       // Pass 1 logs the warn; pass 2 (same key, same state) is deduped; pass
       // 3's transition to adopted logs the info; pass 4 reports nothing.
       expect(divergenceLines.map((entry) => entry.level)).toEqual(['warn', 'info']);
@@ -409,7 +411,7 @@ describe('startFillSync', () => {
     // `idempotency_key: ''`, so a naive dedup keyed on that field alone would
     // treat every such divergence as the SAME episode and mask all but the
     // first. Keying on `idempotency_key || instrument` keeps them distinct.
-    it('does not collapse two different unrecorded-venue-position divergences (both idempotency_key: \'\') onto one dedup slot', async () => {
+    it("does not collapse two different unrecorded-venue-position divergences (both idempotency_key: '') onto one dedup slot", async () => {
       const logger = makeLogger();
       const unrecordedAapl = {
         idempotency_key: '',
@@ -435,15 +437,16 @@ describe('startFillSync', () => {
 
       await vi.advanceTimersByTimeAsync(2_000);
 
-      const divergenceLines = logger.entries.filter((entry) => entry.message === 'reconcile divergence');
+      const divergenceLines = logger.entries.filter(
+        (entry) => entry.message === 'reconcile divergence',
+      );
       // Pass 1: AAPL logs once. Pass 2: AAPL is the same episode (deduped),
       // but TSLA is a genuinely NEW divergence sharing the same empty
       // idempotency_key, and must log despite that collision.
       expect(divergenceLines).toHaveLength(2);
-      expect(divergenceLines.map((entry) => (entry.payload as { instrument: string }).instrument)).toEqual([
-        'AAPL',
-        'TSLA',
-      ]);
+      expect(
+        divergenceLines.map((entry) => (entry.payload as { instrument: string }).instrument),
+      ).toEqual(['AAPL', 'TSLA']);
 
       await sync.stop();
     });
