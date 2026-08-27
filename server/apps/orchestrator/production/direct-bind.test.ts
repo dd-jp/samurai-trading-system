@@ -1103,11 +1103,14 @@ describe('buildTraderStep diagnostic escalation (#698, #710)', () => {
 
 describe('buildRiskStep', () => {
   const RISK_CONFIG: RiskConfig = {
-    max_position_size: 100_000,
-    per_asset_cap: 100_000,
-    per_asset_class_cap: { crypto: 100_000, stocks: 100_000 },
-    portfolio_gross_cap: 200_000,
-    concentration: { cap: 100_000, threshold: 0.9 },
+    // Fractions of the fixture's equity ($10,000, `FAKE_ACCOUNT_STATE`),
+    // sized so none of them binds unless a test overrides one on purpose —
+    // 10x/20x equity is "never" regardless of a test's own position sizes.
+    max_position_size_fraction_of_equity: 10,
+    per_asset_cap_fraction_of_equity: 10,
+    per_asset_class_cap_fraction_of_equity: { crypto: 10, stocks: 10 },
+    portfolio_gross_cap_fraction_of_equity: 20,
+    concentration: { cap_fraction_of_equity: 10, threshold: 0.9 },
     min_viable_size: 1,
     cii_threshold: 80,
     max_mark_age: TEST_MAX_MARK_AGE,
@@ -1226,13 +1229,13 @@ describe('buildRiskStep', () => {
     const writes: unknown[] = [];
     const riskLog = { write: (record: unknown) => writes.push(record) };
 
-    // Trimmed to £5 notional by the £5 per-asset-class cap, which is below
-    // the £100 `min_viable_size` floor — a dust residual that must refuse
-    // rather than forward.
+    // Trimmed to £5 notional by the per-asset-class cap (0.0005 x the
+    // $10,000 fixture equity = $5), which is below the £100 `min_viable_size`
+    // floor — a dust residual that must refuse rather than forward.
     const sizeStep = buildRiskStep({
       config: {
         ...RISK_CONFIG,
-        per_asset_class_cap: { crypto: 100_000, stocks: 5 },
+        per_asset_class_cap_fraction_of_equity: { crypto: 10, stocks: 0.0005 },
         min_viable_size: 100,
       },
       correlationConfig: { window: { timeframe: '1d', lookback: 30 }, min_bars: 5 },
@@ -2226,11 +2229,14 @@ describe('#847: a dark mark must not suppress a newly decided flatten', () => {
   const WINDOW_CLOCK: Clock = { now: () => INSIDE_FLATTEN_WINDOW };
 
   const RISK_CONFIG: RiskConfig = {
-    max_position_size: 100_000,
-    per_asset_cap: 100_000,
-    per_asset_class_cap: { crypto: 100_000, stocks: 100_000 },
-    portfolio_gross_cap: 200_000,
-    concentration: { cap: 100_000, threshold: 0.9 },
+    // Fractions of the fixture's equity ($10,000, `FAKE_ACCOUNT_STATE`),
+    // sized so none of them binds unless a test overrides one on purpose —
+    // 10x/20x equity is "never" regardless of a test's own position sizes.
+    max_position_size_fraction_of_equity: 10,
+    per_asset_cap_fraction_of_equity: 10,
+    per_asset_class_cap_fraction_of_equity: { crypto: 10, stocks: 10 },
+    portfolio_gross_cap_fraction_of_equity: 20,
+    concentration: { cap_fraction_of_equity: 10, threshold: 0.9 },
     min_viable_size: 1,
     cii_threshold: 80,
     max_mark_age: TEST_MAX_MARK_AGE,

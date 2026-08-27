@@ -56,16 +56,17 @@ const DEPLOYMENT_CAP: SubclassDeploymentCap = {
 };
 
 /**
- * Every other cap set far above D5's, so the subclass gate is the one that can
- * bind and `binding_constraint` is unambiguous. The "does it bind in a real
- * profile" question is a separate test below.
+ * Every other cap set far above D5's (1000x equity, so it never binds
+ * regardless of the fixture's equity), so the subclass gate is the one that
+ * can bind and `binding_constraint` is unambiguous. The "does it bind in a
+ * real profile" question is a separate test below.
  */
 const configWith = (cap: SubclassDeploymentCap | undefined): RiskConfig => ({
-  max_position_size: 1_000_000,
-  per_asset_cap: 1_000_000,
-  per_asset_class_cap: { crypto: 1_000_000, stocks: 1_000_000 },
-  portfolio_gross_cap: 1_000_000,
-  concentration: { cap: 1_000_000, threshold: 0.7 },
+  max_position_size_fraction_of_equity: 1_000,
+  per_asset_cap_fraction_of_equity: 1_000,
+  per_asset_class_cap_fraction_of_equity: { crypto: 1_000, stocks: 1_000 },
+  portfolio_gross_cap_fraction_of_equity: 1_000,
+  concentration: { cap_fraction_of_equity: 1_000, threshold: 0.7 },
   min_viable_size: 10,
   cii_threshold: 70,
   max_mark_age: { crypto: 2 * 60_000, stocks: 15 * 60_000 },

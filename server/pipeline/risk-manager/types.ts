@@ -184,18 +184,30 @@ export interface CorrelationEstimate {
  * Scope: Exact limit values") — this is the shape, not the numbers.
  */
 export interface RiskConfig {
-  /** Max notional exposure for a single trade. */
-  max_position_size: number;
-  /** Max total notional exposure to one instrument. */
-  per_asset_cap: number;
-  /** Max total notional exposure per asset-class bucket. */
-  per_asset_class_cap: { crypto: number; stocks: number };
-  /** Max total gross notional exposure across the portfolio. */
-  portfolio_gross_cap: number;
+  /**
+   * Max notional for a single trade, as a FRACTION OF EQUITY resolved at
+   * evaluate time (#886) — not a frozen cash amount, which is what this field
+   * carried until #886's equity-relative amendment. Renamed rather than
+   * reinterpreted in place: a bare `max_position_size` left every existing
+   * cash-literal test fixture compiling and silently testing a 1000x-wider
+   * cap once the unit changed underneath it.
+   *
+   * Skipped entirely for a D5-classified instrument with a numeric
+   * `per_subclass_deployment_cap` fraction (`isD5ArmedWithNumericFraction` in
+   * risk-manager/index.ts) — David's #886 ruling: "D5's own fraction … is
+   * the sole drawdown authority once an instrument is subclass-classified."
+   */
+  max_position_size_fraction_of_equity: number;
+  /** Max total notional exposure to one instrument, as a FRACTION OF EQUITY resolved at evaluate time (#886). */
+  per_asset_cap_fraction_of_equity: number;
+  /** Max total notional exposure per asset-class bucket, as a FRACTION OF EQUITY resolved at evaluate time (#886). */
+  per_asset_class_cap_fraction_of_equity: { crypto: number; stocks: number };
+  /** Max total gross notional exposure across the portfolio, as a FRACTION OF EQUITY resolved at evaluate time (#886). */
+  portfolio_gross_cap_fraction_of_equity: number;
   /** v2 dynamic concentration check (#50) — caps combined exposure across the intent's instrument and every instrument correlated with it. */
   concentration: {
-    /** Max combined notional exposure across the intent's instrument and everything correlated with it. */
-    cap: number;
+    /** Max combined notional exposure across the intent's instrument and everything correlated with it, as a FRACTION OF EQUITY resolved at evaluate time (#886). */
+    cap_fraction_of_equity: number;
     /** |correlation| at/above which another instrument counts as concentrated risk with this one. */
     threshold: number;
   };
@@ -296,7 +308,7 @@ export interface SubclassDeploymentCap {
    * a placeholder to be filled with a plausible number later. Today only
    * `crypto` is `null`: doc 18's study covers the two leveraged-ETP subclasses
    * and nothing else, and the crypto leg is parked out of the tick loop
-   * (#705). `per_asset_class_cap.crypto` still bounds it.
+   * (#705). `per_asset_class_cap_fraction_of_equity.crypto` still bounds it (#886 rename).
    */
   cap_fraction_of_equity: Readonly<Record<InstrumentSubclass, number | null>>;
 }

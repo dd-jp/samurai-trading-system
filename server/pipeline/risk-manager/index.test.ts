@@ -92,11 +92,11 @@ function makePersistedBreakerState(): PersistedBreakerState[] {
 // Caps set high enough by default that no step trims unless a test lowers one.
 function makeConfig(overrides: Partial<RiskConfig> = {}): RiskConfig {
   return {
-    max_position_size: 1_000_000,
-    per_asset_cap: 1_000_000,
-    per_asset_class_cap: { crypto: 1_000_000, stocks: 1_000_000 },
-    portfolio_gross_cap: 1_000_000,
-    concentration: { cap: 1_000_000, threshold: 0.7 },
+    max_position_size_fraction_of_equity: 10,
+    per_asset_cap_fraction_of_equity: 10,
+    per_asset_class_cap_fraction_of_equity: { crypto: 10, stocks: 10 },
+    portfolio_gross_cap_fraction_of_equity: 10,
+    concentration: { cap_fraction_of_equity: 10, threshold: 0.7 },
     min_viable_size: 100,
     cii_threshold: 70,
     max_mark_age: { crypto: 2 * 60_000, stocks: 15 * 60_000 },
@@ -122,7 +122,7 @@ function makeInput(overrides: Partial<RiskInput> = {}): RiskInput {
 describe('RiskManagerImpl.evaluate — exits', () => {
   it('passes an exit through verbatim, bypassing every gate', () => {
     const manager = new RiskManagerImpl(
-      makeConfig({ max_position_size: 1, min_viable_size: 1_000_000 }),
+      makeConfig({ max_position_size_fraction_of_equity: 0.00001, min_viable_size: 1_000_000 }),
     );
     const input = makeInput({
       intent: makeIntent({ intent_type: 'exit', size: 100 }),
@@ -346,7 +346,7 @@ describe('RiskManagerImpl.evaluate — circuit-breaker gate', () => {
 
 describe('RiskManagerImpl.evaluate — trim steps', () => {
   it('trims to the per-trade size cap', () => {
-    const manager = new RiskManagerImpl(makeConfig({ max_position_size: 5_000 }));
+    const manager = new RiskManagerImpl(makeConfig({ max_position_size_fraction_of_equity: 0.05 }));
     const input = makeInput({ intent: makeIntent({ size: 100, entry: 100 }) }); // notional 10,000
 
     const decision = manager.evaluate(input);
@@ -362,7 +362,7 @@ describe('RiskManagerImpl.evaluate — trim steps', () => {
   });
 
   it('trims to the per-asset exposure cap, accounting for existing exposure', () => {
-    const manager = new RiskManagerImpl(makeConfig({ per_asset_cap: 12_000 }));
+    const manager = new RiskManagerImpl(makeConfig({ per_asset_cap_fraction_of_equity: 0.12 }));
     const input = makeInput({
       intent: makeIntent({ size: 100, entry: 100 }), // notional 10,000
       portfolio: makePortfolio({ exposure_by_instrument: { AAPL: 5_000 } }),
@@ -377,7 +377,7 @@ describe('RiskManagerImpl.evaluate — trim steps', () => {
 
   it('trims to the per-asset-class exposure cap', () => {
     const manager = new RiskManagerImpl(
-      makeConfig({ per_asset_class_cap: { crypto: 1_000_000, stocks: 8_000 } }),
+      makeConfig({ per_asset_class_cap_fraction_of_equity: { crypto: 10, stocks: 0.08 } }),
     );
     const input = makeInput({
       intent: makeIntent({ size: 100, entry: 100, asset_class: 'stocks' }),
@@ -392,7 +392,9 @@ describe('RiskManagerImpl.evaluate — trim steps', () => {
   });
 
   it('trims to the portfolio gross exposure cap', () => {
-    const manager = new RiskManagerImpl(makeConfig({ portfolio_gross_cap: 6_000 }));
+    const manager = new RiskManagerImpl(
+      makeConfig({ portfolio_gross_cap_fraction_of_equity: 0.06 }),
+    );
     const input = makeInput({
       intent: makeIntent({ size: 100, entry: 100 }),
       portfolio: makePortfolio({ gross_exposure: 2_000 }),
@@ -407,7 +409,7 @@ describe('RiskManagerImpl.evaluate — trim steps', () => {
 
   it('trims to the concentration cap when the instrument is correlated with a held one', () => {
     const manager = new RiskManagerImpl(
-      makeConfig({ concentration: { cap: 9_000, threshold: 0.7 } }),
+      makeConfig({ concentration: { cap_fraction_of_equity: 0.09, threshold: 0.7 } }),
     );
     const input = makeInput({
       intent: makeIntent({ size: 100, entry: 100, instrument: 'AAPL' }),
@@ -424,7 +426,7 @@ describe('RiskManagerImpl.evaluate — trim steps', () => {
 
   it('does not trim on a held instrument whose correlation is below the threshold', () => {
     const manager = new RiskManagerImpl(
-      makeConfig({ concentration: { cap: 9_000, threshold: 0.7 } }),
+      makeConfig({ concentration: { cap_fraction_of_equity: 0.09, threshold: 0.7 } }),
     );
     const input = makeInput({
       intent: makeIntent({ size: 100, entry: 100, instrument: 'AAPL' }),
@@ -441,7 +443,7 @@ describe('RiskManagerImpl.evaluate — trim steps', () => {
 
   it('falls back gracefully (no trim) when correlation history is insufficient (warm-up)', () => {
     const manager = new RiskManagerImpl(
-      makeConfig({ concentration: { cap: 9_000, threshold: 0.7 } }),
+      makeConfig({ concentration: { cap_fraction_of_equity: 0.09, threshold: 0.7 } }),
     );
     const input = makeInput({
       intent: makeIntent({ size: 100, entry: 100, instrument: 'AAPL' }),
@@ -458,7 +460,9 @@ describe('RiskManagerImpl.evaluate — trim steps', () => {
   });
 
   it('never trims below zero when existing exposure already exceeds a cap', () => {
-    const manager = new RiskManagerImpl(makeConfig({ per_asset_cap: 1_000, min_viable_size: 100 }));
+    const manager = new RiskManagerImpl(
+      makeConfig({ per_asset_cap_fraction_of_equity: 0.01, min_viable_size: 100 }),
+    );
     const input = makeInput({
       intent: makeIntent({ size: 100, entry: 100 }),
       portfolio: makePortfolio({ exposure_by_instrument: { AAPL: 5_000 } }),
@@ -475,7 +479,10 @@ describe('RiskManagerImpl.evaluate — trim steps', () => {
 describe('RiskManagerImpl.evaluate — ordering and monotonicity', () => {
   it('applies checks in documented order — an earlier, tighter cap wins over a later one', () => {
     const manager = new RiskManagerImpl(
-      makeConfig({ max_position_size: 3_000, per_asset_cap: 999_999 }),
+      makeConfig({
+        max_position_size_fraction_of_equity: 0.03,
+        per_asset_cap_fraction_of_equity: 9.99999,
+      }),
     );
     const input = makeInput({ intent: makeIntent({ size: 100, entry: 100 }) });
 
@@ -486,7 +493,7 @@ describe('RiskManagerImpl.evaluate — ordering and monotonicity', () => {
   });
 
   it('never increases size relative to the original intent', () => {
-    const manager = new RiskManagerImpl(makeConfig({ max_position_size: 50_000 }));
+    const manager = new RiskManagerImpl(makeConfig({ max_position_size_fraction_of_equity: 0.5 }));
     const input = makeInput({ intent: makeIntent({ size: 100, entry: 100 }) });
 
     const decision = manager.evaluate(input);
@@ -498,7 +505,10 @@ describe('RiskManagerImpl.evaluate — ordering and monotonicity', () => {
 describe('RiskManagerImpl.evaluate — min-viable-size re-check', () => {
   it('rejects with min_viable_size when a mid-pipeline trim pushes size below viable', () => {
     const manager = new RiskManagerImpl(
-      makeConfig({ per_asset_class_cap: { crypto: 1_000_000, stocks: 50 }, min_viable_size: 100 }),
+      makeConfig({
+        per_asset_class_cap_fraction_of_equity: { crypto: 10, stocks: 0.0005 },
+        min_viable_size: 100,
+      }),
     );
     const input = makeInput({
       intent: makeIntent({ size: 100, entry: 100, asset_class: 'stocks' }),
@@ -515,7 +525,7 @@ describe('RiskManagerImpl.evaluate — min-viable-size re-check', () => {
 
   it('approves when the trimmed size stays at or above the viable minimum', () => {
     const manager = new RiskManagerImpl(
-      makeConfig({ max_position_size: 200, min_viable_size: 100 }),
+      makeConfig({ max_position_size_fraction_of_equity: 0.002, min_viable_size: 100 }),
     );
     const input = makeInput({ intent: makeIntent({ size: 100, entry: 1 }) });
 
@@ -534,7 +544,7 @@ describe('RiskManagerImpl.evaluate — min-viable-size re-check', () => {
     // `deps.riskLog?.write({ ..., binding_constraint: decision.binding_constraint, ... })`),
     // not against the in-memory `reasons` array alone.
     const sizeConfig = makeConfig({
-      per_asset_class_cap: { crypto: 1_000_000, stocks: 50 },
+      per_asset_class_cap_fraction_of_equity: { crypto: 10, stocks: 0.0005 },
       min_viable_size: 100,
     });
     const sizeDecision = new RiskManagerImpl(sizeConfig).evaluate(
@@ -561,7 +571,7 @@ describe('RiskManagerImpl.evaluate — min-viable-size re-check', () => {
 
 describe('RiskManagerImpl.evaluate — audit fields', () => {
   it('attaches reason codes to every reject and modify', () => {
-    const manager = new RiskManagerImpl(makeConfig({ max_position_size: 5_000 }));
+    const manager = new RiskManagerImpl(makeConfig({ max_position_size_fraction_of_equity: 0.05 }));
     const input = makeInput({ intent: makeIntent({ size: 100, entry: 100 }) });
 
     const decision = manager.evaluate(input);
@@ -657,7 +667,7 @@ describe('RiskManagerImpl.evaluate — CII soft signal (#205)', () => {
 
   it('never appears in binding_constraint or changes status/order_intent when it fires alongside a trim', () => {
     const manager = new RiskManagerImpl(
-      makeConfig({ cii_threshold: 70, max_position_size: 5_000 }),
+      makeConfig({ cii_threshold: 70, max_position_size_fraction_of_equity: 0.05 }),
     );
     const input = makeInput({
       intent: makeIntent({ instrument: 'YNDX', size: 100, entry: 100 }),
@@ -769,7 +779,7 @@ describe('RiskManagerImpl.evaluate — correlation warm-up warning (#303)', () =
    */
   it('flags every peer of a six-instrument day-1 portfolio rather than reading as diversified', () => {
     const manager = new RiskManagerImpl(
-      makeConfig({ concentration: { cap: 9_000, threshold: 0.7 } }),
+      makeConfig({ concentration: { cap_fraction_of_equity: 0.09, threshold: 0.7 } }),
     );
     const peers = ['QQQ', 'AAPL', 'TSLA', 'BTC-USD', 'ETH-USD'];
     const input = makeInput({
@@ -861,12 +871,12 @@ describe('RiskManagerImpl.evaluate — live risk thresholds (#433)', () => {
     // 1,000,000 default cap.
     expect(manager.evaluate(makeInput()).modifications?.final_size).toBe(100);
 
-    tighten('max_position_size', 5_000);
+    tighten('max_position_size_fraction_of_equity', 0.05);
     const decision = manager.evaluate(makeInput());
 
     expect(decision.modifications?.final_size).toBe(50);
     // `binding_constraint` names the CHECK STEP, not the config field — the
-    // tuning key is `max_position_size`, the step is `per_trade_size_cap`.
+    // tuning key is `max_position_size_fraction_of_equity`, the step is `per_trade_size_cap`.
     expect(decision.binding_constraint).toBe('per_trade_size_cap');
   });
 
@@ -877,7 +887,7 @@ describe('RiskManagerImpl.evaluate — live risk thresholds (#433)', () => {
     const manager = new RiskManagerImpl(makeConfig(), source);
 
     const before = manager.evaluate(makeInput());
-    tighten('portfolio_gross_cap', 2_000);
+    tighten('portfolio_gross_cap_fraction_of_equity', 0.02);
     const after = manager.evaluate(makeInput());
 
     expect(before.modifications?.final_size).toBe(100);
@@ -886,7 +896,7 @@ describe('RiskManagerImpl.evaluate — live risk thresholds (#433)', () => {
   });
 
   it('tightens the per-asset-class cap through the nested field', () => {
-    const { source } = liveThresholds({ per_asset_class_cap_stocks: 4_000 });
+    const { source } = liveThresholds({ per_asset_class_cap_fraction_of_equity_stocks: 0.04 });
     const manager = new RiskManagerImpl(makeConfig(), source);
 
     const decision = manager.evaluate(makeInput());
@@ -896,21 +906,29 @@ describe('RiskManagerImpl.evaluate — live risk thresholds (#433)', () => {
   });
 
   it('falls back to the static config for a threshold the table has no row for', () => {
-    const { source } = liveThresholds({ max_position_size: 5_000 });
-    const manager = new RiskManagerImpl(makeConfig({ per_asset_cap: 3_000 }), source);
+    const { source } = liveThresholds({ max_position_size_fraction_of_equity: 0.05 });
+    const manager = new RiskManagerImpl(
+      makeConfig({ per_asset_cap_fraction_of_equity: 0.03 }),
+      source,
+    );
 
     const decision = manager.evaluate(makeInput());
 
-    // per_asset_cap (3,000, static) binds before max_position_size (5,000, live).
+    // per_asset_cap_fraction_of_equity (3,000, static) binds before max_position_size_fraction_of_equity (5,000, live).
     expect(decision.modifications?.final_size).toBe(30);
     expect(decision.binding_constraint).toBe('per_asset_exposure_cap');
   });
 
   it('behaves exactly as before when no source is supplied', () => {
-    const withoutSource = new RiskManagerImpl(makeConfig({ max_position_size: 5_000 }));
-    const withEmptySource = new RiskManagerImpl(makeConfig({ max_position_size: 5_000 }), {
-      getRiskThresholds: () => ({}),
-    });
+    const withoutSource = new RiskManagerImpl(
+      makeConfig({ max_position_size_fraction_of_equity: 0.05 }),
+    );
+    const withEmptySource = new RiskManagerImpl(
+      makeConfig({ max_position_size_fraction_of_equity: 0.05 }),
+      {
+        getRiskThresholds: () => ({}),
+      },
+    );
 
     expect(withoutSource.evaluate(makeInput()).modifications?.final_size).toBe(
       withEmptySource.evaluate(makeInput()).modifications?.final_size,
@@ -920,8 +938,11 @@ describe('RiskManagerImpl.evaluate — live risk thresholds (#433)', () => {
   it('ignores a corrupt row rather than letting it disable the cap', () => {
     // NaN compares false against every notional, so applying one would turn a
     // cap into no cap at all — the opposite of what a tightening means.
-    const { source } = liveThresholds({ max_position_size: Number.NaN });
-    const manager = new RiskManagerImpl(makeConfig({ max_position_size: 5_000 }), source);
+    const { source } = liveThresholds({ max_position_size_fraction_of_equity: Number.NaN });
+    const manager = new RiskManagerImpl(
+      makeConfig({ max_position_size_fraction_of_equity: 0.05 }),
+      source,
+    );
 
     const decision = manager.evaluate(makeInput());
 
@@ -983,7 +1004,7 @@ describe('RiskManagerImpl.evaluate — exit bypasses the live threshold clamp (#
       makeInput({ intent: makeIntent({ intent_type: 'exit' }) }),
     );
     const withSource = new RiskManagerImpl(makeConfig({ cii_threshold: 70 }), {
-      getRiskThresholds: () => ({ max_position_size: 5_000 }),
+      getRiskThresholds: () => ({ max_position_size_fraction_of_equity: 0.05 }),
     }).evaluate(makeInput({ intent: makeIntent({ intent_type: 'exit' }) }));
 
     expect(withSource.warnings).toEqual(withoutSource.warnings);

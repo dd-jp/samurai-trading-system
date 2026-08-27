@@ -232,11 +232,7 @@ import {
 } from './console-channels.js';
 import { installFaultHandlers, startFromEnvironment } from './index.js';
 import { buildEntrypointLogger, JsonLogger, type StdoutStream } from './logger.js';
-import {
-  buildStartingProfileConfigs,
-  PAPER_ACCOUNT_EQUITY_ANCHOR,
-  paperStartingProfile,
-} from './paper-profile.js';
+import { buildStartingProfileConfigs, paperStartingProfile } from './paper-profile.js';
 import type { DataFailoverAlert } from './production/data-failover.js';
 import { worstCaseLlmCallsForAssetClass } from './production/debate-adapter.js';
 import type { AccountStateProvider } from './production/direct-bind.js';
@@ -633,10 +629,10 @@ export class ConstantResponseLlmClient implements LlmClient {
  *
  * Injected rather than composed because the only in-repo `AccountStateProvider`
  * is `AlpacaAccountStateProvider`, which reads `GET /v2/account` — a network
- * call, and therefore out of bounds here. The numbers match
- * `PAPER_ACCOUNT_EQUITY_ANCHOR`, which is what every `riskConfig` cap in the
- * paper profile is expressed as a fraction of, so the caps bind at the sizes
- * they were written for.
+ * call, and therefore out of bounds here. `equity` feeds `portfolio.equity`
+ * directly, and every `riskConfig` cap is a fraction resolved against that
+ * figure at evaluate time (#886) rather than a boot-time anchor, so this
+ * value need only be plausible, not calibrated to a specific constant.
  *
  * All four values are the "healthy account" case on purpose: a tripped circuit
  * breaker halts entries, and a smoke run that halts is indistinguishable at a
@@ -1066,7 +1062,7 @@ function exitPathOrder(
  * There is exactly one override, and it is spelled out below.
  */
 const EXIT_PATH_VERDICT_CONFIG: VerdictConfig = {
-  ...buildStartingProfileConfigs(PAPER_ACCOUNT_EQUITY_ANCHOR).verdictConfig,
+  ...buildStartingProfileConfigs().verdictConfig,
   /**
    * The ONE override. `FixtureDataSource` is constructed with a single
    * `SMOKE_RUN_INSTANT` mark, so every mark it serves carries that one fixed

@@ -28,11 +28,11 @@ function makeBreakerConfig(overrides: Partial<BreakerConfig> = {}): BreakerConfi
 
 function makeRiskConfig(): RiskConfig {
   return {
-    max_position_size: 5_000,
-    per_asset_cap: 10_000,
-    per_asset_class_cap: { crypto: 20_000, stocks: 40_000 },
-    portfolio_gross_cap: 50_000,
-    concentration: { cap: 20_000, threshold: 0.7 },
+    max_position_size_fraction_of_equity: 5_000,
+    per_asset_cap_fraction_of_equity: 10_000,
+    per_asset_class_cap_fraction_of_equity: { crypto: 20_000, stocks: 40_000 },
+    portfolio_gross_cap_fraction_of_equity: 50_000,
+    concentration: { cap_fraction_of_equity: 20_000, threshold: 0.7 },
     min_viable_size: 100,
     cii_threshold: 70,
     max_mark_age: { crypto: 2 * 60_000, stocks: 15 * 60_000 },
@@ -106,7 +106,10 @@ describe('CircuitBreakers — in-code threshold clamp at construction (#638)', (
 describe('resolveRiskConfig — the LIVE read path (#638)', () => {
   it('resolves normally when every stored row is in bounds', () => {
     expect(() =>
-      resolveRiskConfig(makeRiskConfig(), { max_position_size: 1_000, max_drawdown_pct: 0.3 }),
+      resolveRiskConfig(makeRiskConfig(), {
+        max_position_size_fraction_of_equity: 1_000,
+        max_drawdown_pct: 0.3,
+      }),
     ).not.toThrow();
   });
 
@@ -139,12 +142,12 @@ describe('resolveRiskConfig — the LIVE read path (#638)', () => {
     // and would freeze the Feedback Loop's only working dials.
     expect(() =>
       resolveRiskConfig(makeRiskConfig(), {
-        max_position_size: 10 ** 9,
-        per_asset_cap: 10 ** 9,
-        per_asset_class_cap_crypto: 10 ** 9,
-        per_asset_class_cap_stocks: 10 ** 9,
-        portfolio_gross_cap: 10 ** 9,
-        concentration_cap: 10 ** 9,
+        max_position_size_fraction_of_equity: 10 ** 9,
+        per_asset_cap_fraction_of_equity: 10 ** 9,
+        per_asset_class_cap_fraction_of_equity_crypto: 10 ** 9,
+        per_asset_class_cap_fraction_of_equity_stocks: 10 ** 9,
+        portfolio_gross_cap_fraction_of_equity: 10 ** 9,
+        concentration_cap_fraction_of_equity: 10 ** 9,
       }),
     ).not.toThrow();
   });

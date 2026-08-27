@@ -27,11 +27,20 @@
  *
  * ## What is tunable, and what deliberately is not
  *
- * Every key below is a NOTIONAL CAP in account currency, and for every one of
- * them tightening means DECREASING. That uniformity is the point: `autoTighten`
- * drives all of them toward one bound, and a mixed set — where tightening some
- * dials meant increasing them — would make a single "tighten everything" sweep
- * unreadable.
+ * Every key below is a FRACTION OF EQUITY (#886 — resolved against
+ * `portfolio.equity` at evaluate time, not a frozen cash amount), and for
+ * every one of them tightening means DECREASING. That uniformity is the
+ * point: `autoTighten` drives all of them toward one bound, and a mixed set —
+ * where tightening some dials meant increasing them — would make a single
+ * "tighten everything" sweep unreadable.
+ *
+ * **#886 renamed the `RiskConfig` fields these keys drive, and the keys
+ * follow rather than staying put.** A `risk_thresholds` row written under the
+ * pre-#886 key names held a CASH figure; if these strings had stayed the
+ * same, `resolveRiskConfig` would apply an old cash value (e.g. `5000`) as a
+ * fraction and produce an effectively-unbounded cap that survives a restart.
+ * Renaming means an old row simply goes unread — the static fraction is the
+ * fallback — which fails safe instead of silently reinterpreting stale data.
  *
  * Excluded on purpose:
  * - `concentration.threshold` — a correlation coefficient, not a cap, and its
@@ -68,12 +77,12 @@ import type { RiskConfig } from './types.js';
  * absence so an unrelated widening of this list cannot quietly grant one.
  */
 export const RISK_THRESHOLD_KEYS = [
-  'max_position_size',
-  'per_asset_cap',
-  'per_asset_class_cap_crypto',
-  'per_asset_class_cap_stocks',
-  'portfolio_gross_cap',
-  'concentration_cap',
+  'max_position_size_fraction_of_equity',
+  'per_asset_cap_fraction_of_equity',
+  'per_asset_class_cap_fraction_of_equity_crypto',
+  'per_asset_class_cap_fraction_of_equity_stocks',
+  'portfolio_gross_cap_fraction_of_equity',
+  'concentration_cap_fraction_of_equity',
 ] as const;
 
 export type RiskThresholdKey = (typeof RISK_THRESHOLD_KEYS)[number];
@@ -86,12 +95,14 @@ export type RiskThresholdKey = (typeof RISK_THRESHOLD_KEYS)[number];
  */
 export function riskThresholdsFrom(config: RiskConfig): Partial<Record<RiskThresholdKey, number>> {
   const candidates: Record<RiskThresholdKey, number | undefined> = {
-    max_position_size: config.max_position_size,
-    per_asset_cap: config.per_asset_cap,
-    per_asset_class_cap_crypto: config.per_asset_class_cap?.crypto,
-    per_asset_class_cap_stocks: config.per_asset_class_cap?.stocks,
-    portfolio_gross_cap: config.portfolio_gross_cap,
-    concentration_cap: config.concentration?.cap,
+    max_position_size_fraction_of_equity: config.max_position_size_fraction_of_equity,
+    per_asset_cap_fraction_of_equity: config.per_asset_cap_fraction_of_equity,
+    per_asset_class_cap_fraction_of_equity_crypto:
+      config.per_asset_class_cap_fraction_of_equity?.crypto,
+    per_asset_class_cap_fraction_of_equity_stocks:
+      config.per_asset_class_cap_fraction_of_equity?.stocks,
+    portfolio_gross_cap_fraction_of_equity: config.portfolio_gross_cap_fraction_of_equity,
+    concentration_cap_fraction_of_equity: config.concentration?.cap_fraction_of_equity,
   };
 
   // Only what the config actually carries. `RiskConfig` requires every field,
@@ -170,16 +181,25 @@ export function resolveRiskConfig(
   return {
     config: {
       ...base,
-      max_position_size: applied.max_position_size ?? base.max_position_size,
-      per_asset_cap: applied.per_asset_cap ?? base.per_asset_cap,
-      per_asset_class_cap: {
-        crypto: applied.per_asset_class_cap_crypto ?? base.per_asset_class_cap.crypto,
-        stocks: applied.per_asset_class_cap_stocks ?? base.per_asset_class_cap.stocks,
+      max_position_size_fraction_of_equity:
+        applied.max_position_size_fraction_of_equity ?? base.max_position_size_fraction_of_equity,
+      per_asset_cap_fraction_of_equity:
+        applied.per_asset_cap_fraction_of_equity ?? base.per_asset_cap_fraction_of_equity,
+      per_asset_class_cap_fraction_of_equity: {
+        crypto:
+          applied.per_asset_class_cap_fraction_of_equity_crypto ??
+          base.per_asset_class_cap_fraction_of_equity.crypto,
+        stocks:
+          applied.per_asset_class_cap_fraction_of_equity_stocks ??
+          base.per_asset_class_cap_fraction_of_equity.stocks,
       },
-      portfolio_gross_cap: applied.portfolio_gross_cap ?? base.portfolio_gross_cap,
+      portfolio_gross_cap_fraction_of_equity:
+        applied.portfolio_gross_cap_fraction_of_equity ??
+        base.portfolio_gross_cap_fraction_of_equity,
       concentration: {
         ...base.concentration,
-        cap: applied.concentration_cap ?? base.concentration.cap,
+        cap_fraction_of_equity:
+          applied.concentration_cap_fraction_of_equity ?? base.concentration.cap_fraction_of_equity,
       },
     },
     applied,
