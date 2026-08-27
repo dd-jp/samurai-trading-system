@@ -202,6 +202,17 @@ Decision 5 stated the envelope but left three things underdetermined, each of wh
 
 **Open against this amendment:** [#729](https://github.com/dd-jp/samurai-trading-system/issues/729) — D5's envelope has no generator checked into the repo and its rows cannot be re-derived by hand. The conservatism argument in point 2 is what lets sizing be built against the fraction-of-equity form meanwhile; what stays unproven is that `CONTEXT.md`'s 20–25% tolerance is *met*.
 
+## Amendment — 2026-08-27, [#903](https://github.com/dd-jp/samurai-trading-system/issues/903): `index_etp_3x` was widened past what Decisions 3 and 5 measured; the four widened rows are structurally excluded from live sizing
+
+- **Amends:** Decisions 3 and 5 — the *membership* of `index_etp_3x`, not its figures.
+- **Source:** [#903](https://github.com/dd-jp/samurai-trading-system/issues/903), against ground laid by [#813](https://github.com/dd-jp/samurai-trading-system/issues/813).
+
+D3's frozen bracket (+2.00% / −2.16%, 48.8% resolve level) and D5's 35% deployment fraction for `index_etp_3x` were both measured with **SPY standing in for the whole subclass** — "two instruments, not the universe" (Known weaknesses, below). That stand-in held for as long as every `index_etp_3x` row in `lse-etp-pool.ts` was a broad-US-tracker line. [#813](https://github.com/dd-jp/samurai-trading-system/issues/813) (2026-08-19) broke that: it added four `index_etp_3x` rows — **3VT/VT** (all-world), **3KOR/EWY** (South Korea), **3KWE/KWEB** (China internet), **3XLE/XLE** (US energy sector) — none of which sits in 3x SPY's volatility envelope. `assertKnownSubclass` cannot catch this, because the subclass *string* is still recognised; only the *measurement* is stale for these four.
+
+**Resolution (Option 3 of #903's three): exclude, don't re-measure or split, for now.** `LseEtpPoolRow` gained a `subclass_envelope_measured: boolean` field (`true` on 26 rows, `false` on exactly these four), and `liveSizingSubclassFor()` is the function any live-sizing consumer — chiefly [#751](https://github.com/dd-jp/samurai-trading-system/issues/751)'s `ActiveUniverseProvider`, not yet built — must call instead of reading `row.subclass` directly. It returns `undefined` for the four unmeasured rows, which `subclassOfUniverse` treats as "arm no per-subclass regime for this instrument" rather than "size it off the SPY-measured bracket", and `resolveSubclassBracket` then throws `SubclassBracketUnresolvableError` for any of them rather than sizing quietly. This was the cheapest safe option and it preserves #813's 26-underlying count, which #707's ranking precondition needs — the exclusion is sizing-only and does not touch screening.
+
+**What this does not settle.** Whether `index_etp_3x` should be split into narrower subclasses (e.g. a separate bracket per single-country/sector/all-world grouping) or re-measured across its now-wider membership is still open; #903 records the interim state, not the final one. Until a split or a re-measurement is decided, these four rows can be ranked and screened but not sized under the per-subclass regime.
+
 ## Known weaknesses
 
 **The baseline is an unconditional long at the open.** That is deliberately naive — it is the bar, not a prediction that the strategy loses money. It is also **long-only**; the short ETP lines are unmeasured.
