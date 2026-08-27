@@ -439,4 +439,122 @@ describe('AnalystOrchestrator', () => {
       expect(result.failures).toEqual([]);
     });
   });
+
+  /**
+   * #899 — analysts-spec.md ":202"/":319" claimed a SECOND, independent
+   * ≥50%-of-3 quorum enforcer lives downstream in the Debate Engine
+   * (`collectAnalystViews`, debate-engine/analyst-response-collector.ts).
+   * That function has no production caller (a non-test grep of `server/` and
+   * `client/` returns only its own definition and a re-export), so the role
+   * gate exercised above is the ONLY production quorum enforcement. This
+   * block pins exactly what that gate does and does not guarantee.
+   */
+  describe('quorum guarantee (#899): the role gate is the only production enforcement', () => {
+    it('rejects a desk narrowed to a single live analyst before it can reach the debate', async () => {
+      const { clock, marketData, marketIntelligence } = buildDeps('stocks');
+      const personas = [
+        stubAnalyst('technical', 'mandatory', 'fail'),
+        stubAnalyst('fundamental', 'mandatory', 'succeed'),
+        stubAnalyst('sentiment', 'optional', 'fail'),
+      ];
+      const orchestrator = new AnalystOrchestrator(
+        { market_data: marketData, market_intelligence: marketIntelligence },
+        personas,
+      );
+      const signal: Signal = { asset: INSTRUMENT, asset_class: 'stocks' };
+
+      const result = await orchestrator.runAnalysts('trace-1', signal, clock, ASOF);
+
+      // Only `fundamental` produced a view here — a single live analyst out
+      // of 3 (33%), which analysts-spec.md says "is below quorum and must
+      // not trade." Nothing computes 1/3 >= 0.5 to reach that conclusion:
+      // `technical` is `mandatory` and failed, so the role gate wipes
+      // `views` to `[]` regardless of what else succeeded
+      // (orchestrator.ts:257-263). This is the whole guarantee — pinned
+      // here because the count-based check in `collectAnalystViews` never
+      // runs in production.
+      expect(result.skipped).toBe(true);
+      expect(result.views).toEqual([]);
+      expect(result.analyst_count).toBe(3);
+    });
+
+    it('the only reachable partial desk is the optional dropout (2-of-3 = 67%), never a genuine <50% state', async () => {
+      const { clock, marketData, marketIntelligence } = buildDeps('stocks');
+      const personas = [
+        stubAnalyst('technical', 'mandatory', 'succeed'),
+        stubAnalyst('fundamental', 'mandatory', 'succeed'),
+        stubAnalyst('sentiment', 'optional', 'fail'),
+      ];
+      const orchestrator = new AnalystOrchestrator(
+        { market_data: marketData, market_intelligence: marketIntelligence },
+        personas,
+      );
+      const signal: Signal = { asset: INSTRUMENT, asset_class: 'stocks' };
+
+      const result = await orchestrator.runAnalysts('trace-1', signal, clock, ASOF);
+
+      // With Technical + Fundamental mandatory and Sentiment the lone
+      // optional slot, a mandatory failure always zeroes `views` entirely,
+      // and the one persona allowed to fail alone without zeroing the desk
+      // is the sole optional slot. So the only nonzero partial state the
+      // role gate ever lets through is 2-of-3 — comfortably above 50%.
+      expect(result.skipped).toBe(false);
+      expect(result.views).toHaveLength(2);
+      expect(result.views.length / result.analyst_count).toBeGreaterThanOrEqual(0.5);
+    });
+
+    it('FRAGILITY: a hypothetical demotion of Fundamental to optional would let a genuine 1-of-3 (33%) desk survive undetected', async () => {
+      // NOT production config — Fundamental is `mandatory` today
+      // (fundamental-analyst.ts:47). This documents the scope of the
+      // guarantee above: it holds only because there is exactly ONE
+      // optional slot out of three. If a second slot ever went optional
+      // (Fundamental demoted, as simulated here, or a new persona added as
+      // optional), two optional personas could fail together while the sole
+      // remaining mandatory persona succeeds — and nothing would notice the
+      // desk fell to 33%, because `collectAnalystViews`'s count check has no
+      // production caller either.
+      const { clock, marketData, marketIntelligence } = buildDeps('stocks');
+      const personas = [
+        stubAnalyst('technical', 'mandatory', 'succeed'),
+        stubAnalyst('fundamental', 'optional', 'fail'), // hypothetical demotion, see comment above
+        stubAnalyst('sentiment', 'optional', 'fail'),
+      ];
+      const orchestrator = new AnalystOrchestrator(
+        { market_data: marketData, market_intelligence: marketIntelligence },
+        personas,
+      );
+      const signal: Signal = { asset: INSTRUMENT, asset_class: 'stocks' };
+
+      const result = await orchestrator.runAnalysts('trace-1', signal, clock, ASOF);
+
+      // The role gate lets this through: no `mandatory` persona failed.
+      expect(result.skipped).toBe(false);
+      expect(result.views).toHaveLength(1);
+      expect(result.analyst_count).toBe(3);
+      // Genuine quorum miss (33% < 50%) that nothing in production catches.
+      expect(result.views.length / result.analyst_count).toBeLessThan(0.5);
+    });
+
+    it('a hypothetical promotion of Sentiment to mandatory stays safe — it only makes the role gate stricter, never leakier', async () => {
+      const { clock, marketData, marketIntelligence } = buildDeps('stocks');
+      const personas = [
+        stubAnalyst('technical', 'mandatory', 'succeed'),
+        stubAnalyst('fundamental', 'mandatory', 'succeed'),
+        stubAnalyst('sentiment', 'mandatory', 'fail'), // hypothetical promotion
+      ];
+      const orchestrator = new AnalystOrchestrator(
+        { market_data: marketData, market_intelligence: marketIntelligence },
+        personas,
+      );
+      const signal: Signal = { asset: INSTRUMENT, asset_class: 'stocks' };
+
+      const result = await orchestrator.runAnalysts('trace-1', signal, clock, ASOF);
+
+      // With every persona mandatory, any single failure zeroes the desk,
+      // so the only reachable nonzero state is 3-of-3. Promoting a persona
+      // to `mandatory` can only tighten the gate, never loosen it.
+      expect(result.skipped).toBe(true);
+      expect(result.views).toEqual([]);
+    });
+  });
 });
