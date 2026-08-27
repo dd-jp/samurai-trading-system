@@ -208,24 +208,28 @@ Everything that is *not* a recorded transition still follows v1's rule: a ring o
 
 Tokens are defined once as CSS custom properties and consumed everywhere; nothing hard-codes a hex.
 
-**Colour**
+**Colour** — "Blade & Ink" (2026-08-26): warm lacquer-black ground, not the earlier cool blue-black. The four state colours are unchanged — same hexes, same CVD check, same meanings; only the chrome around them moved.
 
 | Token | Value | Meaning |
 | --- | --- | --- |
-| `--bg` | `#060A14` | Page ground (deep indigo) |
-| `--panel` | `rgba(255,255,255,.04)` + backdrop blur + 1px `#1E2A44` border | Glass panel |
+| `--bg` | `#0C0906` | Page ground (warm lacquer-black) |
+| `--panel` | `rgba(255,238,214,.035)` + 1px `#40322A` border | Panel fill |
 | `--cyan` | `#38E1FF` | Live / in-flight accent |
 | `--go` | `#3DDC7D` | `go`, profit |
 | `--amber` | `#FFB454` | `no_go`, `quorum_skip`, warning, staleness |
 | `--vermilion` | `#FF4D5E` | `stopped`, loss, error |
-| `--text` | `#E8EDF7` | Body text |
-| `--muted` | `#8A93A8` | Secondary text, labels |
+| `--text` | `#F0E6D8` | Body text (warm off-white) |
+| `--muted` | `#9E8C76` | Secondary text, labels |
+| `--gold` | `#C9A25A` | Chrome only — the seal ring, the telemetry-strip hairline, the focus ring. Never a state signal; the six rows above own that job |
+| `--lacquer` | `#982420` | Chrome only — panel corner-cut wedges, section-header rules, the page's ink-bleed wash. A separate token from `--vermilion` on purpose: that colour already means stopped/loss/error, and decorative chrome must never share a hue with a live risk signal |
 
 The palette was checked for common colour-vision deficiencies when it was chosen. That check is a floor, not a licence: **colour is never the sole carrier of a signal** anywhere on this page — every state that has a colour also has a word.
 
-**Type** — Chakra Petch (display: room names, headings, callsigns), IBM Plex Sans (body), IBM Plex Mono (all numerics, so columns of figures align). **Self-hosted via `@fontsource`** and bundled into the build. Zero external requests is a hard requirement (story 21), not a preference.
+**Type** — Chakra Petch (display: room names, small uppercase labels, callsigns — legible at 9–11px), IBM Plex Sans (body), IBM Plex Mono (all numerics, so columns of figures align), Shippori Mincho (accent: the brand mark and panel section headers only, where its brush-serif stroke contrast reads at a glance; never used below ~13px). **Self-hosted via `@fontsource`** and bundled into the build. Zero external requests is a hard requirement (story 21), not a preference.
 
-**Signature element** — the hanko seal stamp on ledger entries. It is the one piece of ornament with a job: it makes "a decision was made" a physical event on the page.
+**Spacing** — an 8px baseline scale (`--space-1`…`--space-8`, 4–48px), applied at the outer layout level (page shell, telemetry strip, panel padding, section gaps). Component-internal spacing with its own documented reason (e.g. the position rail's 13px label-row stride) stays off the scale.
+
+**Signature element** — a single blade-cut corner (top-right, via `clip-path`) on every panel and pipeline room, in place of the earlier rounded-corner HUD reticle bracket. A small `--lacquer` wedge fills the cut notch — ink at the blade's edge. The hanko seal stamp on ledger entries keeps its `--gold` ink-ring, unchanged.
 
 ## Wire Shape
 

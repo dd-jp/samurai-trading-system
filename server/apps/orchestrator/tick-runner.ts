@@ -103,7 +103,17 @@ export class SequentialTickRunner implements TickRunner {
       logger.log({
         trace_id,
         stage,
-        level: 'info',
+        // #921: the mandatory flat-by-close exit's execution result flows
+        // through this SAME shared helper as every other stage (the only
+        // call site passing `'execution'` is the Risk -> Verdict ->
+        // Execution tail below, reached by both entries and exits), so an
+        // execution failure — including the exact failure mode #921's
+        // resilience gaps are about — used to log at `'info'` like a normal
+        // status update. Scoped exactly to this one stage/decision pair:
+        // Risk vetoes and Verdict no_go are expected, routine outcomes and
+        // must stay at `'info'`, so this must NOT be broadened to "any
+        // stage whose decision string happens to be 'error'".
+        level: stage === 'execution' && decision === 'error' ? 'error' : 'info',
         message: `${stage}: ${decision}`,
         payload: output,
       });

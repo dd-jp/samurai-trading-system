@@ -91,6 +91,9 @@ class FakeSharedStore implements SharedStore {
     _reason: string,
     _resolved_at: Date,
   ): Promise<void> {}
+  async isRetryableFlattenError(_idempotency_key: string): Promise<boolean> {
+    return false;
+  }
   async getFlattenAttribution(_idempotency_key: string): Promise<FlattenAttribution | null> {
     return null;
   }

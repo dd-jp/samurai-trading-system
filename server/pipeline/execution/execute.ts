@@ -27,6 +27,7 @@ import type {
   NativeBracketRequest,
   ReconcileReport,
   ResidualProtectionSweepResult,
+  SharedStore,
 } from './types.js';
 
 export class ExecutionImpl implements Execution {
@@ -81,10 +82,33 @@ export class ExecutionImpl implements Execution {
     // Never reaches the broker. Layer 2 is the client order id below. Checked
     // ahead of the intent_type branch so entry, scale_in AND exit share one
     // gate, rather than the exit branch running its own copy of this check.
+    //
+    // #921: an exit is the one intent type that gets a SECOND chance here.
+    // Entry/scale_in dedupe unconditionally — a replayed entry decision must
+    // never re-submit under any key, fresh or otherwise, because the original
+    // bracket (if it landed) is still exactly what was wanted. A mandatory
+    // flatten is different: it is the flat-by-close guarantee, so a prior
+    // attempt that provably never reached the broker (cancel-loop failure,
+    // `resolveFlattenError`'s 'error' status) must not be allowed to stand in
+    // for "the position is closed" forever. `resolveExitRetryKey` walks to a
+    // fresh key ONLY over that provable case; every other case (no row, or a
+    // 'submitting'/'submitted' row whose venue truth is unknown or already
+    // succeeded) falls through to the same unconditional dedup entry/scale_in
+    // gets, because retrying either of those risks the #516 double-flatten /
+    // reverse-position hazard.
     if (await store.findByKey(idempotencyKey)) {
-      return result('deduped', idempotencyKey, now, {
-        reason: 'an order or fill already exists for this idempotency_key',
-      });
+      if (order.intent_type !== 'exit') {
+        return result('deduped', idempotencyKey, now, {
+          reason: 'an order or fill already exists for this idempotency_key',
+        });
+      }
+      const retryKey = await resolveExitRetryKey(store, idempotencyKey);
+      if (retryKey === null) {
+        return result('deduped', idempotencyKey, now, {
+          reason: 'an order or fill already exists for this idempotency_key',
+        });
+      }
+      return executeExit(this.input, order, retryKey, now);
     }
 
     // An exit closes existing lot(s) via submitFlatten (#429) rather than
@@ -182,6 +206,54 @@ export class ExecutionImpl implements Execution {
       broker_order_ids: ack.broker_order_ids,
     });
   }
+}
+
+/**
+ * Bounds how many fresh keys a single mandatory-flatten retry chain may burn
+ * across the flatten window. `resolveExitRetryKey` only ever advances past a
+ * PROVABLY-dead attempt (`isRetryableFlattenError`), so this is not a limit
+ * on how many times the exit is allowed to genuinely fail — it exists so a
+ * persistently failing cancel loop (e.g. the venue itself is unreachable)
+ * cannot hammer it with a fresh clientOrderId every tick of the flatten
+ * window forever. Once exhausted, `execute()` falls back to `deduped` — the
+ * safe default for a mandatory exit that has demonstrably not been going
+ * through — rather than retrying unbounded.
+ */
+const MAX_EXIT_RETRY_ATTEMPTS = 3;
+
+/**
+ * Finds a usable idempotency key for a retried exit, given `baseKey` — the
+ * order's own deterministic key (`idempotency-key.ts`), unchanged across
+ * retries of the same bar's mandatory flatten. Walks `baseKey`,
+ * `${baseKey}:retry-1`, `${baseKey}:retry-2`, ... (mirrors the
+ * `${clientOrderId}:rearm` convention `rearmProtectiveLegs` already uses in
+ * the Alpaca adapter for "a fresh id derived from, but distinct from, the
+ * original").
+ *
+ * A candidate is usable if it names NOTHING in the store yet, or names a
+ * flatten row that is a RETRYABLE error (`isRetryableFlattenError`) — a
+ * 'submitting'/'submitted' row at ANY candidate is not usable and stops the
+ * walk immediately, because a genuinely ambiguous or already-succeeded
+ * attempt must never be retried out from under (#516's reverse-position
+ * hazard runs both directions: retrying over an unresolved or successful
+ * attempt risks a double flatten just as surely as skipping the cancel loop
+ * does). Bounded at `MAX_EXIT_RETRY_ATTEMPTS` so a persistently failing
+ * cancel loop cannot hammer the venue every tick of the flatten window;
+ * returns `null` once exhausted, and the caller falls back to `deduped`, the
+ * safe default. Never throws, and never loops unbounded.
+ */
+async function resolveExitRetryKey(store: SharedStore, baseKey: string): Promise<string | null> {
+  for (let attempt = 0; attempt <= MAX_EXIT_RETRY_ATTEMPTS; attempt++) {
+    const candidate = attempt === 0 ? baseKey : `${baseKey}:retry-${attempt}`;
+    const exists = await store.findByKey(candidate);
+    if (!exists) return candidate;
+    const retryable = await store.isRetryableFlattenError(candidate);
+    if (!retryable) return null;
+    // else: candidate names a retryable error — loop tries the NEXT suffix,
+    // since this exact candidate key already has a terminal row and must not
+    // be written to twice.
+  }
+  return null;
 }
 
 /**

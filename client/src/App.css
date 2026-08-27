@@ -21,12 +21,12 @@
 
 .app {
   min-height: 100vh;
-  background: var(--bg);
-  background-image: radial-gradient(
-    1200px 600px at 50% -200px,
-    rgb(var(--cyan-rgb) / 0.06),
-    transparent 60%
-  );
+  /* A single ink-bleed wash from the top, in `--lacquer` rather than the
+     technical cyan grid the previous pass used — the page's ground reads as
+     paper the ink has soaked into, not an instrument display. */
+  background:
+    radial-gradient(1400px 700px at 50% -240px, rgb(var(--lacquer-rgb) / 0.08), transparent 62%),
+    var(--bg);
   color: var(--text);
   font-family: var(--font-body);
   font-size: 14px;
@@ -88,23 +88,34 @@ button {
 }
 
 :focus-visible {
-  outline: 2px solid var(--cyan);
+  outline: 2px solid var(--gold);
   outline-offset: 2px;
 }
 
 /* ---------------------------------------------------------------- telemetry */
 
+/*
+ * Docked flush to the viewport top (sticky, no margin, sharp corners) — this
+ * is what removes the white band trackpad overscroll used to reveal above
+ * it: there is no gap above this element for the un-backgrounded page
+ * ground (fixed in tokens.css) to show through.
+ */
 .telemetry-strip {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  overflow: hidden;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 22px;
-  padding: 12px 20px;
-  margin: 14px 20px 18px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
+  padding: var(--space-3) var(--space-5);
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
   background: var(--panel);
   backdrop-filter: blur(12px);
+  box-shadow: 0 1px 0 rgb(var(--gold-rgb) / 0.3);
   transition: border-color 0.3s;
 }
 
@@ -116,10 +127,10 @@ button {
 }
 
 .brand {
-  font-family: var(--font-display);
+  font-family: var(--font-accent);
   font-weight: 700;
-  font-size: 15px;
-  letter-spacing: 0.14em;
+  font-size: 16px;
+  letter-spacing: 0.08em;
 }
 
 .brand i {
@@ -245,8 +256,10 @@ button {
 main {
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  padding: 0 20px 60px;
+  gap: var(--space-5);
+  /* Top padding replaces the telemetry strip's old bottom margin now that the
+     strip is flush/sticky with no margin of its own. */
+  padding: var(--space-5) var(--space-5) var(--space-8);
 }
 
 /*
@@ -262,14 +275,38 @@ main {
  * panels, the rooms hero, the ledger and the drawer), and it is the one thing
  * the rooms hero actually scrolls behind.
  */
+/*
+ * "Blade & Ink" replaces the rounded-corner HUD reticle with a single cut
+ * corner (top-right), the way a blade squares a sheet of paper: `clip-path`
+ * on the panel itself instead of a rounded border, plus a small lacquer-red
+ * wedge on a pseudo-element that fills the cut notch — the "ink at the
+ * blade's edge" this direction is named for. No component file needs to
+ * change to pick this up, since all four already share this selector.
+ */
 .panel,
 .rooms-panel,
 .ledger-panel,
 .drawer-panel {
+  position: relative;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  clip-path: polygon(0 0, calc(100% - var(--space-4)) 0, 100% var(--space-4), 100% 100%, 0 100%);
   background: var(--panel);
-  padding: 16px 18px;
+  padding: var(--space-4) var(--space-5);
+}
+
+.panel::before,
+.rooms-panel::before,
+.ledger-panel::before,
+.drawer-panel::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: var(--space-4);
+  height: var(--space-4);
+  background: rgb(var(--lacquer-rgb) / 0.5);
+  clip-path: polygon(100% 0, 100% 100%, 0 0);
+  pointer-events: none;
 }
 
 .panel-head {
@@ -278,13 +315,15 @@ main {
   gap: 10px;
   flex-wrap: wrap;
   margin-bottom: 12px;
+  border-bottom: 1px solid rgb(var(--lacquer-rgb) / 0.35);
+  padding-bottom: var(--space-2);
 }
 
 .panel-head h2 {
-  font-family: var(--font-display);
-  font-weight: 600;
-  font-size: 12px;
-  letter-spacing: 0.2em;
+  font-family: var(--font-accent);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   margin: 0;
 }
@@ -297,13 +336,13 @@ main {
 .mid-row {
   display: grid;
   grid-template-columns: minmax(340px, 1fr) minmax(400px, 1.4fr);
-  gap: 18px;
+  gap: var(--space-5);
 }
 
 .bento {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 18px;
+  gap: var(--space-5);
 }
 
 .panel-positions,
@@ -339,14 +378,14 @@ main {
      get crushed on narrow viewports. */
   grid-template-columns: repeat(4, minmax(200px, 1fr));
   grid-auto-rows: minmax(150px, auto);
-  gap: 12px;
+  gap: var(--space-3);
   min-width: 880px;
 }
 
 .room {
   position: relative;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  clip-path: polygon(0 0, calc(100% - var(--space-2)) 0, 100% var(--space-2), 100% 100%, 0 100%);
   background: rgb(var(--ink-rgb) / 0.72);
   padding: 10px 12px;
   display: flex;
@@ -382,6 +421,26 @@ main {
   background: var(--border);
 }
 
+/*
+ * Assembly-line trace between horizontally-adjacent stages, into the grid gap
+ * (the gap's width, `--space-3`). `.rooms-hero` is fixed at 4 columns, so
+ * "not the 4th of a group of 4" is exactly "not the last column" — every room
+ * except the row's last gets a line reaching toward the next one. The one
+ * connection this does not draw is the row wrap (column 4 to the next row's
+ * column 1); a straight CSS line there would run through unrelated rooms, so
+ * that jump is left to the room order and numbering alone.
+ */
+.room:not(:nth-child(4n))::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: calc(-1 * var(--space-3));
+  width: var(--space-3);
+  height: 1px;
+  background: rgb(var(--border-rgb) / 0.8);
+  pointer-events: none;
+}
+
 .room-lobby {
   border-style: dashed;
   background: rgb(var(--ink-rgb) / 0.4);
@@ -396,6 +455,8 @@ main {
 
 .room-live {
   border-color: rgb(var(--cyan-rgb) / 0.55);
+  /* Static glow only: the resting frame is also the full signal, so
+     prefers-reduced-motion needs no override here to keep "live" marked. */
   box-shadow:
     0 0 18px rgb(var(--cyan-rgb) / 0.12),
     inset 0 0 24px rgb(var(--cyan-rgb) / 0.04);
@@ -425,20 +486,24 @@ main {
   opacity: 1;
 }
 
+/*
+ * Inset to 0, not the -2px outset the rounded-corner frame used: `.room` now
+ * clips to its `clip-path` polygon regardless of `overflow`, so anything
+ * placed outside the border box (as -2px was) gets silently cut off instead
+ * of hanging past the edge as it did under `border-radius`.
+ */
 .room-corner-tl {
-  top: -2px;
-  left: -2px;
+  top: 0;
+  left: 0;
   border-right: 0;
   border-bottom: 0;
-  border-radius: 3px 0 0 0;
 }
 
 .room-corner-br {
-  bottom: -2px;
-  right: -2px;
+  bottom: 0;
+  right: 0;
   border-left: 0;
   border-top: 0;
-  border-radius: 0 0 3px 0;
 }
 
 .room-heading {
@@ -496,13 +561,20 @@ main {
   padding: 0 6px;
 }
 
+/*
+ * The signature watermark: large enough to read as the card's dominant
+ * graphic device rather than a corner ornament, tinted `--lacquer` (ink) so
+ * it also carries the "red over grey" chrome shift the rest of the room
+ * card doesn't otherwise get much of. Bottom-right, not top-right, so it
+ * never falls under `.room`'s cut-corner clip-path.
+ */
 .room-kanji {
   position: absolute;
-  right: 8px;
-  bottom: 2px;
-  font-size: 48px;
+  right: -4px;
+  bottom: -8px;
+  font-size: 76px;
   line-height: 1;
-  color: rgb(var(--muted-rgb) / 0.1);
+  color: rgb(var(--lacquer-rgb) / 0.22);
   pointer-events: none;
   user-select: none;
 }
@@ -709,11 +781,11 @@ main {
 }
 
 .ledger-row:hover {
-  background: rgb(var(--cyan-rgb) / 0.05);
+  background: rgb(var(--lacquer-rgb) / 0.08);
 }
 
 .ledger-row-selected {
-  background: rgb(var(--cyan-rgb) / 0.08);
+  background: rgb(var(--lacquer-rgb) / 0.14);
 }
 
 .ledger-time,
@@ -740,6 +812,10 @@ main {
   border: 1.5px solid;
   transform: rotate(-6deg);
   flex: none;
+  /* A thin gold ink-ring outside the outcome-coloured border — ceremony, not
+     a signal. The outcome colour (border + text) still carries the meaning;
+     this never appears anywhere it would compete with that. */
+  box-shadow: 0 0 0 1px rgb(var(--gold-rgb) / 0.45);
 }
 
 .seal-go {
@@ -1177,13 +1253,13 @@ main {
 
 .spark-line {
   fill: none;
-  stroke: var(--cyan);
+  stroke: var(--lacquer);
   stroke-width: 2;
   stroke-linecap: round;
 }
 
 .spark-fill {
-  fill: rgb(var(--cyan-rgb) / 0.1);
+  fill: rgb(var(--lacquer-rgb) / 0.14);
   stroke: none;
 }
 
@@ -1222,7 +1298,7 @@ main {
   left: 0;
   top: 0;
   bottom: 0;
-  background: var(--cyan);
+  background: var(--lacquer);
   border-radius: 3px;
 }
 

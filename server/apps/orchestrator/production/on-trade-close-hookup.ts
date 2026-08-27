@@ -109,6 +109,13 @@ export function withOnTradeClose(
       resolved_at: Date,
     ): Promise<void> => store.resolveFlattenError(idempotency_key, reason, resolved_at),
 
+    // #921: pure pass-through, same as every other read here — this
+    // decorator's whole job is the `onTradeClose` side effect on
+    // `applyLotAdvance`, so every unrelated method (this one included) just
+    // forwards to the wrapped store unchanged.
+    isRetryableFlattenError: (idempotency_key: string): Promise<boolean> =>
+      store.isRetryableFlattenError(idempotency_key),
+
     getFlattenAttribution: (idempotency_key: string): Promise<FlattenAttribution | null> =>
       store.getFlattenAttribution(idempotency_key),
 
