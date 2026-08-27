@@ -396,6 +396,15 @@ export const SQUEEZE_ON_BELOW = 1;
  * would sit a hundredth under a `conviction_floor` that #756 item 1 still has
  * open and blocked on soak data. Barring a gated tape outright is a product
  * decision.
+ *
+ * **Resolved 2026-08-26 (#870): the value stays 0.40, mechanism unchanged.**
+ * David's ruling — the mechanism is fine, #745's stated intent was overstated.
+ * "A gated tape should not carry an entry on technicals alone" means alone —
+ * no other analyst signal AND no mediator agreement — not "even with a
+ * concurring mediator". The all-absent-desk 0.58 case above clears the floor
+ * only because a mediator independently agreed; that is not the cap failing,
+ * it is the cap doing exactly what a damper (not a veto) does. #745's
+ * docstring is corrected by this note rather than by lowering the cap.
  */
 export const LOW_CONVICTION_CAP = 0.4;
 
