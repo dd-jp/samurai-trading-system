@@ -70,16 +70,16 @@ HMRC's Cryptoassets Manual applies the **same statutory framework as shares** (T
 
 **Practical implication for a future crypto system:** because pooling and matching are per token type (not per venue, not per strategy), any system running frequent buy/sell cycles on the same token (e.g. BTC entered and exited multiple times within a month) will constantly re-trigger same-day and 30-day matching against its own pool. A naive "sell to harvest a loss, then re-enter on the next signal" approach will very often find its loss deferred into the reacquisition's cost basis rather than banked, exactly as with shares (§2) — the mechanism is identical, just scoped to token type instead of company/class.
 
-## 5. Finding: ADR-0015's CGT framing should be corrected (not fixed here)
+## 5. Finding: ADR-0015's CGT framing should be corrected (not fixed here) — RESOLVED by #930
 
-`docs/adr/0015-live-venue-account-and-book-split.md` currently states, at two points:
+`docs/adr/0015-live-venue-account-and-book-split.md` stated, at two points, before this doc's own follow-up ticket landed:
 
-- Line ~55: *"UK tax. CGT is immaterial at £1,500 against a £3,000 annual exempt amount, but every crypto disposal and equity trade is still a recordable event..."*
-- Line ~143: *"The UK tax position is if anything looser: CGT was already immaterial at £1,500 against a £3,000 exempt amount."*
+- Line ~55 (as it read at research time): *"UK tax. CGT is immaterial at £1,500 against a £3,000 annual exempt amount, but every crypto disposal and equity trade is still a recordable event..."*
+- Line ~143 (as it read at research time): *"The UK tax position is if anything looser: CGT was already immaterial at £1,500 against a £3,000 exempt amount."*
 
-Both frame the ISA leg's CGT-free status as a **magnitude** argument — the book is small relative to the £3,000 allowance, so tax is "immaterial." That framing is **stale/wrong for the equity leg specifically**: the Trading 212 ISA wrapper exempts equity disposals from CGT **unconditionally**, regardless of size — see [gov.uk — Capital Gains Tax: What you pay it on](https://www.gov.uk/capital-gains-tax/what-you-pay-it-on) ("You do not pay Capital Gains Tax on certain assets, including any gains you make from: ISAs or PEPs"). The £3,000-allowance comparison never actually applied to the equity leg; it would only ever have been the right frame for the (now out-of-scope) crypto leg, which has no wrapper and was genuinely small enough to sit under the allowance.
+Both framed the ISA leg's CGT-free status as a **magnitude** argument — the book is small relative to the £3,000 allowance, so tax is "immaterial." That framing was **stale/wrong for the equity leg specifically**: the Trading 212 ISA wrapper exempts equity disposals from CGT **unconditionally**, regardless of size — see [gov.uk — Capital Gains Tax: What you pay it on](https://www.gov.uk/capital-gains-tax/what-you-pay-it-on) ("You do not pay Capital Gains Tax on certain assets, including any gains you make from: ISAs or PEPs"). The £3,000-allowance comparison never actually applied to the equity leg; it would only ever have been the right frame for the (now out-of-scope) crypto leg, which has no wrapper and was genuinely small enough to sit under the allowance.
 
-**This doc does not edit the ADR.** Per this task's brief, the correction is flagged here as a finding for whoever next touches ADR-0015: the "immaterial... against a £3,000 annual exempt amount" language should be replaced with something stating the ISA leg is CGT-exempt by wrapper (unconditional), separately from any allowance-based argument that would (if ever needed again) apply only to a non-ISA/GIA leg or to crypto.
+**This doc did not edit the ADR itself — that was tracked separately as [#930](https://github.com/dd-jp/samurai-trading-system/issues/930), which is now closed and merged** (`docs(adr): correct ADR-0015 CGT-exempt framing to wrapper, not magnitude`). Both cited points now read "That is a wrapper exemption, not a magnitude one" and equivalent language, stating the ISA leg is CGT-exempt by wrapper (unconditional) rather than by size. This section is preserved as the record of the finding that prompted #930, not as an open item.
 
 ## Sources (fetched live 2026-08-26)
 

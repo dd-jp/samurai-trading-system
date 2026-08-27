@@ -256,7 +256,7 @@ Pool size is a config value so widening is a later dial. Nothing above the pool 
 
 **Fallback interaction.** The pool's `fallback_default` subset (used when the screener run itself fails, per "Candidate pool" above) is **not** filtered by this exclusion. The fallback is a degraded-mode "some trade beats no trade" path; stacking a second exclusion rule on an already-emergency path adds a way for the fallback itself to come up empty, which defeats its purpose.
 
-**Residual risk, stated rather than discovered.** Alpha Vantage's `EARNINGS_CALENDAR` has no vendor-documented reschedule-freshness guarantee (doc 38) — if a company moves its earnings date after the 22:15 run has already fetched the calendar, the exclusion is computed against a snapshot that may be stale by the time the session opens. This is a known gap, not a silent one; a soak should watch for it rather than assume it away.
+**Residual risk, stated rather than discovered.** Alpha Vantage's `EARNINGS_CALENDAR` has no vendor-documented reschedule-freshness guarantee (doc 39) — if a company moves its earnings date after the 22:15 run has already fetched the calendar, the exclusion is computed against a snapshot that may be stale by the time the session opens. This is a known gap, not a silent one; a soak should watch for it rather than assume it away.
 
 ### The active list and rotation (#399)
 
