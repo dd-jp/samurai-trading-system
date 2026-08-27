@@ -10,10 +10,17 @@
  * removed the leg-to-account conversion that scaler was, and the first
  * describe below asserts the two sides now resolve to the same fraction.
  *
- * The second describe is the more consequential half, and it was found by
- * these tests rather than reasoned to: **D5's envelope is unreachable in the
- * shipped profile at every book size**, because `max_position_size` is 5% of
- * the same equity D5 takes 35% of. See its comment.
+ * The second and third describes are #886's territory: David's ruling on
+ * this ticket made D5 the sole drawdown authority for a classified
+ * instrument, and exempted it from `per_trade_size_cap` entirely — resolved
+ * against live `portfolio.equity` at evaluate time, with no boot-time anchor
+ * left for the two sides to disagree about. `per_asset_cap_fraction_of_equity`
+ * (10%) is NOT exempted, and is tighter than either D5 fraction (35%/25%), so
+ * it remains a real, documented gap on a full-envelope ask — the second
+ * describe pins that gap rather than hiding it. The third describe carries
+ * #886's still-open acceptance criterion: an armed D5 entry lands at the
+ * Trader's intended size through the SHIPPED profile, no cap lifted out of
+ * the way, at the reference book and below it.
  */
 import { describe, expect, it } from 'vitest';
 
@@ -112,25 +119,35 @@ const intentFor = (
   },
 });
 
-const shippedConfig = (equity = EQUITY): RiskConfig =>
-  buildStartingProfileConfigs(equity, UNIVERSE).riskConfig;
+/**
+ * The shipped profile's `RiskConfig`, for the classified `UNIVERSE`.
+ *
+ * #886 deleted the equity/ceiling anchor `buildStartingProfileConfigs` used
+ * to take: every cap is now a FRACTION, resolved against whatever
+ * `portfolio.equity` `decide()` is given below, so this config no longer
+ * varies with the book size being traded — only the universe arms it.
+ */
+const shippedConfig = (): RiskConfig => buildStartingProfileConfigs(UNIVERSE).riskConfig;
 
 /**
  * The shipped config with every cap OTHER than D5 lifted out of the way.
  *
- * Necessary because — see the second describe — the generic per-trade cap
- * binds first in the shipped profile at every equity, so a behavioural
- * assertion about D5 would otherwise be an assertion about `max_position_size`
- * wearing D5's name. The lifted caps are named individually rather than
- * spread over, so a newly added cap does not silently join them.
+ * Necessary for the first describe below, which is about the D5 gate alone
+ * agreeing with the Trader's own fractions — not about where the OTHER five
+ * caps happen to sit. The lifted caps are named individually rather than
+ * spread over, so a newly added cap does not silently join them. A fraction
+ * of `1e6` rather than `Number.MAX_SAFE_INTEGER`: these are multiplied by
+ * `portfolio.equity` now, and `1e6 x equity` stays comfortably inside the
+ * safe integer range for every equity this file uses, which
+ * `MAX_SAFE_INTEGER x equity` would not.
  */
-const d5InIsolation = (equity = EQUITY): RiskConfig => ({
-  ...shippedConfig(equity),
-  max_position_size: Number.MAX_SAFE_INTEGER,
-  per_asset_cap: Number.MAX_SAFE_INTEGER,
-  per_asset_class_cap: { crypto: Number.MAX_SAFE_INTEGER, stocks: Number.MAX_SAFE_INTEGER },
-  portfolio_gross_cap: Number.MAX_SAFE_INTEGER,
-  concentration: { cap: Number.MAX_SAFE_INTEGER, threshold: 0.7 },
+const d5InIsolation = (): RiskConfig => ({
+  ...shippedConfig(),
+  max_position_size_fraction_of_equity: 1e6,
+  per_asset_cap_fraction_of_equity: 1e6,
+  per_asset_class_cap_fraction_of_equity: { crypto: 1e6, stocks: 1e6 },
+  portfolio_gross_cap_fraction_of_equity: 1e6,
+  concentration: { cap_fraction_of_equity: 1e6, threshold: 0.7 },
 });
 
 const decide = (
@@ -217,12 +234,7 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
     expect(intended).toBeCloseTo(525, 6);
     expect(intended).toBeGreaterThan(D5_INDEX_ETP_DEPLOYMENT_FRACTION * LIVE_BOOK_GBP);
 
-    const decision = decide(
-      d5InIsolation(overfunded),
-      intentFor('3USL', intended, 'entry'),
-      {},
-      overfunded,
-    );
+    const decision = decide(d5InIsolation(), intentFor('3USL', intended, 'entry'), {}, overfunded);
 
     expect(decision.status).not.toBe('rejected');
     expect(decision.modifications?.final_size).toBeCloseTo(intended, 6);
@@ -252,156 +264,106 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
   });
 });
 
-describe("D5's envelope is unreachable in the SHIPPED profile, at every book size", () => {
-  it("trims the Trader's D5-sized entry to the 5% per-trade cap instead", () => {
-    // Found by these tests, not reasoned to. `max_position_size` is 5% of
-    // equity and D5's index envelope is 35% of the SAME equity, so whenever
-    // the Trader's ask exceeds 5% the generic per-trade cap binds first: a
-    // full-conviction index ask of £350 on the £1,000 book gets £50.
-    //
-    // £350 is the CEILING, not the typical ask. `decide.ts:575` stacks
-    // `convictionMultiplier x non_converged_haircut x cosine_multiplier` on
-    // D5's fraction, so the intent is `0.35 x M x equity` for
-    // M in (0, 1.5] — the per-trade cap binds only for M > 1/7, and the next
-    // case records what happens below that. What holds unconditionally is the
-    // weaker, more consequential claim: 0.05 < 0.35 means D5 can never be the
-    // binding constraint on a first entry, so its per-subclass split has no
-    // effect on any order.
-    const intended = D5_INDEX_ETP_DEPLOYMENT_FRACTION * EQUITY;
+describe('#886 fixed the per-trade cap for D5 instruments — per_asset_cap remains the unclosed gap', () => {
+  it('no longer trims a full-envelope D5 ask via the per-trade cap — that cap is now EXEMPT for a classified instrument', () => {
+    // The bug this ticket closed: pre-#886, `per_trade_size_cap` returned
+    // `config.max_position_size` (5% of equity) for EVERY intent, classified
+    // or not, and 5% < 35%/25% meant it always bound ahead of D5. It is now
+    // `null` for a D5-classified instrument (`isD5ArmedWithNumericFraction`,
+    // risk-manager/index.ts) regardless of the ask size.
+    const intended = D5_INDEX_ETP_DEPLOYMENT_FRACTION * EQUITY; // the full envelope, £350
 
-    const decision = decide(shippedConfig(), intentFor('3USL', intended, 'entry'));
+    const decision = decide(shippedConfig(), intentFor('3USL', intended, 'entry'), {}, EQUITY);
 
-    expect(decision.binding_constraint).toBe('per_trade_size_cap');
+    expect(decision.binding_constraint).not.toBe('per_trade_size_cap');
+  });
+
+  it('still trims a full-envelope D5 ask — now via per_asset_cap, the gap #886 did not close', () => {
+    // `per_asset_cap_fraction_of_equity` is 10% — tighter than either D5
+    // fraction — and it was never a candidate for the same exemption: D5
+    // caps DEPLOYMENT into one subclass, per_asset_cap caps EXPOSURE to one
+    // instrument, and the two are not the same claim. Documented in
+    // `paper-profile.ts` and `live-money-gates.ts` (#886's own entry) as the
+    // gap this ticket left open, pinned here rather than only in prose.
+    const intended = D5_INDEX_ETP_DEPLOYMENT_FRACTION * EQUITY; // £350
+
+    const decision = decide(shippedConfig(), intentFor('3USL', intended, 'entry'), {}, EQUITY);
+
+    expect(decision.binding_constraint).toBe('per_asset_exposure_cap');
     expect(decision.modifications?.final_size).toBeCloseTo(
-      RISK_CAP_EQUITY_FRACTIONS.max_position_size * EQUITY,
+      RISK_CAP_EQUITY_FRACTIONS.per_asset_cap_fraction_of_equity * EQUITY,
       6,
     );
   });
 
-  it('does NOT trim a low-conviction ask — the per-trade cap is not universal', () => {
-    // Bounding the finding above. With the multiplier stack at, say,
-    // conviction 0.6 (`convictionMultiplier` = (0.60 - 0.55) / 0.45 ~ 0.111)
-    // and no precedent (0.75x), M ~ 0.083 < 1/7, so the ask lands at ~£29 —
-    // under the £50 per-trade cap, and NO cap binds. `per_trade_size_cap` is
-    // therefore not recorded on every entry, and #886 must not claim it is.
-    const M = ((0.6 - 0.55) / 0.45) * 0.75;
-    const intended = D5_INDEX_ETP_DEPLOYMENT_FRACTION * M * EQUITY;
-
-    expect(intended).toBeLessThan(RISK_CAP_EQUITY_FRACTIONS.max_position_size * EQUITY);
-
-    const decision = decide(shippedConfig(), intentFor('3USL', intended, 'entry'));
-
-    expect(decision.status).not.toBe('rejected');
-    expect(decision.modifications?.final_size).toBeCloseTo(intended, 6);
-    expect(decision.binding_constraint).not.toBe('per_trade_size_cap');
-  });
-
-  it('is SCALE-INVARIANT — a bigger book does not make D5 bind', () => {
-    // The existing note in `subclass-deployment-cap.test.ts` reads this as an
-    // artefact of the $100k paper anchor ("the paper soak is not a test of
-    // D5"). It is not an artefact: both caps are fractions of the same equity,
-    // so 5% < 35% holds at every book size and D5 can never be the binding
-    // constraint on a first entry. What follows matters for #798 — the
-    // ~41.8% drawdown envelope is measured at f = 0.25, and the shipped
-    // profile deploys 0.05.
-    for (const equity of [1_000, 1_500, 100_000]) {
+  it('is SCALE-INVARIANT — both caps are fractions of the same equity, so book size does not change which one binds', () => {
+    // The property that replaces the retired "unreachable at every book size"
+    // finding: 10% < 35% holds at every equity, exactly as 5% < 35% did
+    // before #886. Fixing the per-trade cap did not touch this ordering.
+    for (const equity of [200, 1_000, 100_000]) {
       const decision = decide(
-        shippedConfig(equity),
+        shippedConfig(),
         intentFor('3USL', D5_INDEX_ETP_DEPLOYMENT_FRACTION * equity, 'entry'),
         {},
         equity,
       );
 
-      expect(decision.binding_constraint).toBe('per_trade_size_cap');
+      expect(decision.binding_constraint).toBe('per_asset_exposure_cap');
     }
 
-    expect(RISK_CAP_EQUITY_FRACTIONS.max_position_size).toBeLessThan(
+    expect(RISK_CAP_EQUITY_FRACTIONS.per_asset_cap_fraction_of_equity).toBeLessThan(
       D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION,
     );
   });
 });
 
-describe('#886 — the ordering above is anchor-relative, and D5 DOES bind below the anchor', () => {
-  // The second describe's unconditional claim ("0.05 < 0.35 at every equity,
-  // so D5 can never be the binding constraint") compares a fraction against a
-  // frozen cash figure, and that is only an ordering where live equity equals
-  // the anchor the caps were built at. `perTradeSizeCap` returns
-  // `config.max_position_size` verbatim (`risk-manager/index.ts:365-368`) — a
-  // static number, built once as `fraction x anchor` (`riskCapsFor`) or
-  // `x the boot ceiling` (`live-profile.ts`, whose own docstring concedes the
-  // six notional caps are STATIC and "when equity is BELOW the ceiling they
-  // are therefore looser"). D5 alone re-resolves against live equity
-  // (`risk-manager/index.ts:513`).
-  //
-  // The scale-invariance case above passes the SAME number as anchor and as
-  // portfolio equity, so it can only ever exercise equity == anchor. These
-  // drive them apart, which is the shape a live run actually has.
-  const ANCHOR = 2_000;
-  const EQUITY_BELOW_ANCHOR = 200; // inside ADR-0017's £100-200 ramp
+describe('#886 acceptance criterion — an armed D5 entry lands at the intended size through the SHIPPED profile', () => {
+  // Not `d5InIsolation` — the point is that NOTHING is lifted out of the way.
+  // `decide.ts:575` stacks `convictionMultiplier x non_converged_haircut x
+  // cosine_multiplier` onto D5's fraction, so a real Trader ask is
+  // `D5_fraction x M x equity` for M in (0, 1.5], not necessarily the full
+  // envelope. `CONVICTION_FACTOR` picks an M under `per_asset_cap`'s 10%
+  // ceiling (the one cap the describe above shows is still real for this
+  // subclass), so this proves the FIX — D5 exempt from `per_trade_size_cap`
+  // — at a size the shipped profile actually clears end to end, rather than
+  // proving it only with five other caps manually disabled.
+  const CONVICTION_FACTOR = 0.2;
 
-  it('holds the per-trade cap at its anchor value while D5 falls with the book', () => {
-    const config = shippedConfig(ANCHOR);
-    const staticPerTrade = config.max_position_size;
-    const d5AtLiveEquity = D5_INDEX_ETP_DEPLOYMENT_FRACTION * EQUITY_BELOW_ANCHOR;
+  it('index_etp_3x: lands at the intended size at the reference book (£1,000)', () => {
+    const intended = D5_INDEX_ETP_DEPLOYMENT_FRACTION * CONVICTION_FACTOR * EQUITY; // £70
 
-    // 5% of the ANCHOR, not of the book being traded.
-    expect(staticPerTrade).toBeCloseTo(RISK_CAP_EQUITY_FRACTIONS.max_position_size * ANCHOR, 6);
-    expect(staticPerTrade).toBeCloseTo(100, 6);
-    expect(d5AtLiveEquity).toBeCloseTo(70, 6);
-    // The ordering the second describe asserts is REVERSED here.
-    expect(d5AtLiveEquity).toBeLessThan(staticPerTrade);
+    const decision = decide(shippedConfig(), intentFor('3USL', intended, 'entry'), {}, EQUITY);
+
+    expect(decision.status).toBe('approved');
+    expect(decision.binding_constraint).toBeNull();
+    expect(decision.modifications?.final_size).toBeCloseTo(intended, 6);
   });
 
-  it('trims an entry by D5, not by the per-trade cap, at an equity below the anchor', () => {
-    // The behavioural half: an ask that clears every static cap but exceeds
-    // D5's equity-relative envelope. £90 < the £100 static per-trade cap and
-    // under per_asset (£200) / class (£800) / gross (£1,000) / concentration
-    // (£400), all of which are 2,000-anchored — so the only thing that can
-    // bind is D5, at 35% x £200 = £70.
-    const ask = 90;
+  it('index_etp_3x: lands at the intended size BELOW the reference book too — there is no anchor left to fall below', () => {
+    // Pre-#886, `per_trade_size_cap` was a STATIC cash figure fixed at boot,
+    // so this equity/anchor split was exactly where the fix mattered most
+    // (`#886 — the ordering above is anchor-relative` used to assert the
+    // BUG here). There is no boot-time anchor any more for the two to
+    // diverge over — this is now a redundant check on that, not a live risk.
+    const equity = 200; // inside ADR-0017's £100-200 ramp
+    const intended = D5_INDEX_ETP_DEPLOYMENT_FRACTION * CONVICTION_FACTOR * equity; // £14
 
-    const decision = decide(
-      shippedConfig(ANCHOR),
-      intentFor('3USL', ask, 'entry'),
-      {},
-      EQUITY_BELOW_ANCHOR,
-    );
+    const decision = decide(shippedConfig(), intentFor('3USL', intended, 'entry'), {}, equity);
 
-    expect(decision.binding_constraint).toBe('per_subclass_deployment_cap');
-    expect(decision.modifications?.final_size).toBeCloseTo(70, 6);
+    expect(decision.status).toBe('approved');
+    expect(decision.binding_constraint).toBeNull();
+    expect(decision.modifications?.final_size).toBeCloseTo(intended, 6);
   });
 
-  it("is therefore NOT inert here — #800's unscaling doubles the authorised size", () => {
-    // #886's "no effect on any order" is false on this axis. Reconstructing
-    // the pre-#800 gate — D5's fraction halved by the
-    // `EQUITY_LEG_FRACTION_OF_CAPITAL = 0.5` account -> leg conversion this
-    // branch deleted — trims the SAME ask to £35 where the shipped gate now
-    // allows £70. Both are below the £100 static per-trade cap, so the
-    // difference is authorised size, not a cap that never fired.
-    const ask = 90;
-    const shipped = shippedConfig(ANCHOR);
-    const beforeUnscaling: RiskConfig = {
-      ...shipped,
-      per_subclass_deployment_cap: {
-        ...shipped.per_subclass_deployment_cap,
-        cap_fraction_of_equity: {
-          index_etp_3x: 0.5 * D5_INDEX_ETP_DEPLOYMENT_FRACTION,
-          single_stock_etp_3x: 0.5 * D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION,
-        },
-      },
-    } as RiskConfig;
+  it('single_stock_etp_3x: the same holds for the other D5 subclass, at and below the reference book', () => {
+    for (const equity of [EQUITY, 200]) {
+      const intended = D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION * CONVICTION_FACTOR * equity;
 
-    const before = decide(
-      beforeUnscaling,
-      intentFor('3USL', ask, 'entry'),
-      {},
-      EQUITY_BELOW_ANCHOR,
-    );
-    const after = decide(shipped, intentFor('3USL', ask, 'entry'), {}, EQUITY_BELOW_ANCHOR);
+      const decision = decide(shippedConfig(), intentFor('3LAP', intended, 'entry'), {}, equity);
 
-    expect(before.modifications?.final_size).toBeCloseTo(35, 6);
-    expect(after.modifications?.final_size).toBeCloseTo(70, 6);
-    expect(before.binding_constraint).toBe('per_subclass_deployment_cap');
-    expect(after.binding_constraint).toBe('per_subclass_deployment_cap');
+      expect(decision.status).toBe('approved');
+      expect(decision.binding_constraint).toBeNull();
+      expect(decision.modifications?.final_size).toBeCloseTo(intended, 6);
+    }
   });
 });

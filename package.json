@@ -2,7 +2,7 @@
   "name": "samurai-trading-system",
   "version": "0.0.1",
   "private": true,
-  "description": "Samurai \u2014 live-money multi-agent trading system (crypto + stocks). See CLAUDE.md and docs/specs/.",
+  "description": "Samurai — live-money multi-agent trading system (crypto + stocks). See CLAUDE.md and docs/specs/.",
   "type": "module",
   "engines": {
     "node": ">=24"

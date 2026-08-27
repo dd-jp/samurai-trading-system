@@ -387,11 +387,11 @@ const REAL_CONFIGS = {
     subclass_of: {},
   },
   riskConfig: {
-    max_position_size: 100_000,
-    per_asset_cap: 100_000,
-    per_asset_class_cap: { crypto: 100_000, stocks: 100_000 },
-    portfolio_gross_cap: 200_000,
-    concentration: { cap: 100_000, threshold: 0.9 },
+    max_position_size_fraction_of_equity: 1,
+    per_asset_cap_fraction_of_equity: 1,
+    per_asset_class_cap_fraction_of_equity: { crypto: 1, stocks: 1 },
+    portfolio_gross_cap_fraction_of_equity: 2,
+    concentration: { cap_fraction_of_equity: 1, threshold: 0.9 },
     min_viable_size: 0.0001,
     cii_threshold: 80,
     // An hour, matching `max_signal_age` below: this integration test drives

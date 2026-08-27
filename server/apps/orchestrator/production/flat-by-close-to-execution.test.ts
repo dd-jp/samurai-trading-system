@@ -41,7 +41,7 @@ import {
 } from '../../../providers/market-data-service/index.js';
 import type { Clock, OpenPosition, OrderIntent } from '../../../shared/index.js';
 import { openSharedStore } from '../../../shared/store/index.js';
-import { buildStartingProfileConfigs, PAPER_ACCOUNT_EQUITY_ANCHOR } from '../paper-profile.js';
+import { buildStartingProfileConfigs } from '../paper-profile.js';
 import {
   buildExecutionStep,
   buildRiskStep,
@@ -55,7 +55,7 @@ const HELD_SIZE = 50;
 /** A Tuesday, and a trading day on both venues. */
 const SESSION_DAY = new Date('2026-07-28T12:00:00Z');
 
-const PROFILE = buildStartingProfileConfigs(PAPER_ACCOUNT_EQUITY_ANCHOR);
+const PROFILE = buildStartingProfileConfigs();
 const MAX_MARK_AGE = { crypto: 2 * 60_000, stocks: 15 * 60_000 };
 
 function makeBars(at: Date, count: number) {

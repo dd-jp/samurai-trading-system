@@ -120,27 +120,29 @@ export const LIVE_MONEY_GATES: readonly { readonly issue: number; readonly gap: 
     gap: 'portfolio.equity is one blended GET /v2/account figure with no per-leg accounting, so every D5 envelope is correct only while the funded equity equals the declared book — fund the ISA past it and the same fractions authorise proportionally more cash than the book was sized for',
   },
   {
-    issue: 886,
-    // Verified OPEN 2026-08-19: `gh issue view 886`. Labelled BLOCKING(arming)
-    // on the issue itself. Cited here per this module's own rule; see the
-    // comment left on #886 recording the citation.
-    gap: 'per_trade_size_cap is a STATIC cash figure derived from the boot ceiling while the D5 envelope is a live fraction of portfolio.equity, so which one binds depends on how far equity sits below that ceiling — the two caps are not comparable as fractions and neither side of the pair is reliably the operative limit on an entry',
+    issue: 932,
+    // #886 (the previous holder of this citation) was CLOSED 2026-08-26 by
+    // this change: David's ruling resolved which cap is the drawdown
+    // authority for D5 (per_trade_size_cap exempts a classified instrument;
+    // D5's own fraction is the sole authority for it) and made all six caps
+    // equity-relative, both shipped here, and the acceptance-criteria test
+    // now asserts an armed D5 entry lands at the intended size through the
+    // shipped profile (d5-trader-cap-agreement.test.ts). Writing that test
+    // surfaced a gap the ruling did not name — per_asset_cap is NOT exempted
+    // and is tighter than D5's fractions — so it is split out as #932, the
+    // same #800/#798-style handoff this module's header describes, rather
+    // than left attached to a closed issue. Verified OPEN 2026-08-26:
+    // `gh issue view 932`.
+    gap: "per_trade_size_cap now exempts a D5-classified instrument, but per_asset_cap_fraction_of_equity (10%) does not and is below both D5 fractions (35% index / 25% single-stock), so a full-sized D5 entry is still trimmed — at the per-asset-exposure gate instead of the per-trade gate — before D5's own envelope is ever consulted",
   },
   {
     issue: 925,
-    // Verified OPEN 2026-08-26: filed on that date and cited here in the same
-    // change; see the comment left on #925 recording the citation.
-    //
-    // This entry replaces #798, closed 2026-08-26 once David ruled to accept
-    // the wider envelope rather than re-size or re-open the stop. That
-    // ruling is itself not the gap: the gap it exposed is that the circuit
-    // breaker's own hard safety clamp (server/shared/threshold-bounds.ts)
-    // still sites `max_drawdown_pct`'s ceiling and `MEASURED_DRAWDOWN_ENVELOPE`
-    // below the 41.8% single-stock figure the ADR now declares operative, so
-    // the shipped trip (0.30) fires inside the tolerance the strategy is
-    // meant to be sized for, and the ceiling forbids raising it high enough
-    // to fix that without a separate code change.
-    gap: "the drawdown circuit breaker's hard clamp (max_drawdown_pct ceiling 0.35, MEASURED_DRAWDOWN_ENVELOPE 0.262) sits below the 41.8% single-stock envelope ADR-0018 D5 now declares accepted, so the shipped trip (0.30) can fire on the single-stock leg operating exactly as designed and cannot be corrected without loosening the safety ceiling itself",
+    // #798 (the previous holder of this citation) was CLOSED 2026-08-26:
+    // `gh issue view 798` resolved it as "accept the wider envelope" (41.8%
+    // single-stock), and its own closing comment says #925 "now carries this
+    // issue's LIVE_MONEY_GATES citation" — the exact #800-style handoff this
+    // module's header describes. Verified OPEN 2026-08-26: `gh issue view 925`.
+    gap: "the circuit breaker's hard safety clamp (threshold-bounds.ts) still ceilings max_drawdown_pct at 0.35 and MEASURED_DRAWDOWN_ENVELOPE at the stale 0.262 — both now sit below the 41.8% single-stock envelope the owner ruling accepted, so the shipped 0.30 trip can fire on the single-stock leg operating exactly as designed, and the ceiling forbids raising it without a separate code change",
   },
   {
     issue: 900,
@@ -170,7 +172,7 @@ export const LIVE_MONEY_GATES: readonly { readonly issue: number; readonly gap: 
  * a date newer than the last verification is a false claim in an operator-facing
  * safety message, and a date older than the list is what #868 was filed about.
  */
-export const LIVE_MONEY_GATES_VERIFIED_ON = '2026-08-26';
+export const LIVE_MONEY_GATES_VERIFIED_ON = '2026-08-27';
 
 /** The command that re-verifies the list, named in the operator-facing summary. */
 export const LIVE_MONEY_GATES_RECHECK_COMMAND = 'yarn check:live-gates';

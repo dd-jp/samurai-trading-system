@@ -121,12 +121,7 @@ export {
   type OrphanGoVerdict,
   OrphanVerdictScanner,
 } from './orphan-verdict-scan.js';
-export {
-  PAPER_ACCOUNT_EQUITY_ANCHOR,
-  paperStartingProfile,
-  RISK_CAP_EQUITY_FRACTIONS,
-  riskCapsFor,
-} from './paper-profile.js';
+export { paperStartingProfile, RISK_CAP_EQUITY_FRACTIONS } from './paper-profile.js';
 export {
   ALERT_AFTER_CONSECUTIVE_SKIPS,
   ALERT_REPEAT_EVERY_SKIPS,

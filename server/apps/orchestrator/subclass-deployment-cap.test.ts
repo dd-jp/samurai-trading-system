@@ -16,7 +16,6 @@ import {
   D5_DEPLOYMENT_FRACTION_OF_EQUITY_LEG,
   d5EnvelopeFor,
   LIVE_BOOK_GBP,
-  PAPER_ACCOUNT_EQUITY_ANCHOR,
   paperStartingProfile,
   RISK_CAP_EQUITY_FRACTIONS,
   subclassDeploymentCapFractionsOfEquity,
@@ -91,7 +90,7 @@ describe("ADR-0018 D5's fractions reproduce the ADR's own figures", () => {
     // The disqualifying property of the rejected base: it is a live dial, so
     // D5's envelope would widen at runtime. D5 is measured drift-removed with
     // zero edge assumed and must not be contingent on what the loop learns.
-    expect(RISK_THRESHOLD_KEYS).toContain('per_asset_class_cap_stocks');
+    expect(RISK_THRESHOLD_KEYS).toContain('per_asset_class_cap_fraction_of_equity_stocks');
     expect(RISK_THRESHOLD_KEYS).not.toContain('per_subclass_deployment_cap');
   });
 });
@@ -120,27 +119,22 @@ describe('the envelope arms itself off the universe', () => {
   });
 });
 
-describe('what the paper profile actually enforces', () => {
-  it('would be dominated by the per-trade cap even if armed — D5 is a live protection', () => {
-    // Stated here rather than discovered in a soak: on a $100k paper anchor
-    // the 5% per-trade cap ($5,000) is far tighter than a D5 index envelope of
-    // 35% of the whole account ($35,000), so `per_trade_size_cap` trims first
-    // every time. The paper soak is not a test of D5 — and NOT because of the
-    // anchor: both caps are fractions of the same equity, so 5% < 35% holds at
-    // every book size and D5 cannot bind a first entry at any of them. See
-    // `d5-trader-cap-agreement.test.ts`, which asserts the scale-invariance.
-    // The envelope DOUBLED on
-    // 2026-08-18 (#800 — the £750/£750 split dissolved, so D5 no longer scales
-    // by 0.5); the domination holds by a wider margin than before, not a
-    // narrower one, so the conclusion is unchanged.
-    const perTrade = RISK_CAP_EQUITY_FRACTIONS.max_position_size * PAPER_ACCOUNT_EQUITY_ANCHOR;
-    const d5Index =
-      (subclassDeploymentCapFractionsOfEquity().index_etp_3x as number) *
-      PAPER_ACCOUNT_EQUITY_ANCHOR;
-
-    expect(perTrade).toBe(5_000);
-    expect(d5Index).toBe(35_000);
-    expect(perTrade).toBeLessThan(d5Index as number);
+describe('what the paper profile actually enforces (#886)', () => {
+  it('per_trade_size_cap no longer dominates a classified instrument — it is exempt', () => {
+    // Until #886, `per_trade_size_cap` was a STATIC cash figure (5% of an
+    // assumed anchor) while D5 resolved against live equity, so which cap
+    // bound depended on the gap between the two (#886's finding). #886 ruled
+    // D5 the sole drawdown authority for a classified instrument and made
+    // `per_trade_size_cap` skip it entirely
+    // (`isD5ArmedWithNumericFraction`, risk-manager/index.ts) — so the
+    // domination this block used to assert here is retired, not merely
+    // re-scaled. The gate-level assertion (through `RiskManagerImpl.evaluate`,
+    // not this file's arithmetic) lives in `d5-trader-cap-agreement.test.ts`,
+    // including the acceptance-criteria test and the gap #886 did NOT close
+    // (`per_asset_cap_fraction_of_equity` still binds ahead of D5).
+    expect(RISK_CAP_EQUITY_FRACTIONS.max_position_size_fraction_of_equity).toBeLessThan(
+      subclassDeploymentCapFractionsOfEquity().index_etp_3x as number,
+    );
   });
 });
 
@@ -158,7 +152,7 @@ describe('the Trader and the Risk Manager classify from ONE derivation (#739)', 
       { asset: '3LAP', asset_class: 'stocks', subclass: 'single_stock_etp_3x' },
     ];
 
-    const configs = buildStartingProfileConfigs(LIVE_BOOK_GBP, universe);
+    const configs = buildStartingProfileConfigs(universe);
 
     expect(configs.traderConfig.subclass_of).toEqual({
       '3USL': 'index_etp_3x',

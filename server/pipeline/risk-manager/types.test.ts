@@ -103,11 +103,11 @@ describe('PersistedBreakerState', () => {
 describe('RiskConfig', () => {
   it('matches the config-driven threshold shape', () => {
     const config: RiskConfig = {
-      max_position_size: 20_000,
-      per_asset_cap: 25_000,
-      per_asset_class_cap: { crypto: 40_000, stocks: 60_000 },
-      portfolio_gross_cap: 90_000,
-      concentration: { cap: 30_000, threshold: 0.7 },
+      max_position_size_fraction_of_equity: 20_000,
+      per_asset_cap_fraction_of_equity: 25_000,
+      per_asset_class_cap_fraction_of_equity: { crypto: 40_000, stocks: 60_000 },
+      portfolio_gross_cap_fraction_of_equity: 90_000,
+      concentration: { cap_fraction_of_equity: 30_000, threshold: 0.7 },
       min_viable_size: 500,
       cii_threshold: 70,
       max_mark_age: { crypto: 2 * 60_000, stocks: 15 * 60_000 },
