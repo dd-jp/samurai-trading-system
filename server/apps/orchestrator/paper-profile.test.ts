@@ -363,10 +363,13 @@ describe('paperStartingProfile', () => {
       // gate refusing that flatten one stage later; the surviving half of the
       // gap is cited as #900.
       '#894',
+      // Closed 2026-08-26 once David ruled to accept the wider envelope; the
+      // gap it exposed survives as #925.
+      '#798',
     ]) {
       expect(message).not.toContain(closed);
     }
-    for (const open of ['#895', '#888', '#886', '#798', '#900']) {
+    for (const open of ['#895', '#888', '#886', '#925', '#900']) {
       expect(message).toContain(open);
     }
     expect(message).toContain('#238');
