@@ -158,8 +158,21 @@
  * the string is in `KNOWN_SUBCLASSES`, which is exactly why it is recorded
  * here and in each of those four rows' notes. A consumer that sizes off
  * `subclass` alone is, for those rows, deploying against an envelope
- * nobody measured for the instrument. Re-measuring the bracket per row, or
- * splitting the subclass, is ADR-0018's call and not this ticket's.
+ * nobody measured for the instrument.
+ *
+ * **#903's interim resolution: these four rows are structurally excluded
+ * from live sizing, not just documented as risky.** `LseEtpPoolRow` carries
+ * `subclass_envelope_measured: false` on exactly 3VT/3KOR/3KWE/3XLE (`true`
+ * on the other 26), and `liveSizingSubclassFor()` below is the function a
+ * future `UniverseInstrument[]` builder (#751) MUST call instead of reading
+ * `row.subclass` directly — it returns `undefined` for these four, which
+ * `subclassOfUniverse` (`server/apps/orchestrator/types.ts`) treats as "arm
+ * no per-subclass regime for this instrument" rather than "size it off the
+ * SPY-measured bracket". Screening/ranking is unaffected: `countRankableUnderlyings`
+ * and the full `LSE_ETP_POOL` (30 rows, 26 underlyings) are untouched, since
+ * this exclusion is sizing-only. Recorded against ADR-0018 (see the
+ * 2026-08-27 amendment) until Option 1 (split the subclass) or Option 2
+ * (re-measure across the wider membership) lands.
  *
  * The `toBeLessThan` test that encoded the old under-25 (row-count)
  * conclusion has been removed from this file's test suite; both current
@@ -260,6 +273,25 @@ export interface LseEtpPoolRow {
    * spread gap explicitly rather than leaving it implied.
    */
   readonly t212_isa: boolean;
+  /**
+   * Whether ADR-0018's D3/D5 numbers for THIS row's `subclass` were actually
+   * measured against an instrument like this one — not just whether the
+   * subclass string is known (`assertKnownSubclass`'s separate, weaker job:
+   * a string can be a recognised member of `KNOWN_SUBCLASSES` while still
+   * describing an instrument nobody measured, which is exactly #813's
+   * `index_etp_3x` widening).
+   *
+   * `false` on exactly the four rows #813 added whose underlying is nothing
+   * like SPY (3VT/VT all-world, 3KOR/EWY South Korea, 3KWE/KWEB China
+   * internet, 3XLE/XLE US energy sector) — ADR-0018 D3's frozen bracket and
+   * D5's deployment fraction for `index_etp_3x` were measured with SPY
+   * standing in for the whole subclass. `true` on every other row.
+   *
+   * Read this through `liveSizingSubclassFor()`, never directly — that
+   * function is what a live-sizing consumer (#751) must build its
+   * `subclassOf` map from. #903 records the interim resolution.
+   */
+  readonly subclass_envelope_measured: boolean;
   readonly provenance: RowProvenance;
 }
 
@@ -330,6 +362,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    subclass_envelope_measured: true,
     provenance: {
       isin: 'IE00B7Y34M31',
       issuer: 'WisdomTree',
@@ -352,6 +385,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    subclass_envelope_measured: true,
     provenance: {
       isin: 'IE00BLRPRL42',
       issuer: 'WisdomTree',
@@ -373,6 +407,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2472197149',
       issuer: 'Leverage Shares',
@@ -394,6 +429,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2656472193',
       issuer: 'GraniteShares',
@@ -415,6 +451,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2820604770',
       issuer: 'Leverage Shares',
@@ -438,6 +475,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBP',
     t212_isa: true,
+    subclass_envelope_measured: true,
     provenance: {
       isin: 'IE00BK5BZS07',
       issuer: 'Leverage Shares',
@@ -458,6 +496,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2734938835',
       issuer: 'GraniteShares',
@@ -480,6 +519,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2472197065',
       issuer: 'Leverage Shares',
@@ -500,6 +540,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2901882618',
       issuer: 'Leverage Shares',
@@ -523,6 +564,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2856105833',
       issuer: 'GraniteShares',
@@ -544,6 +586,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2663694680',
       issuer: 'Leverage Shares',
@@ -575,6 +618,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'EUR',
     t212_isa: true,
+    subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2662640627',
       issuer: 'GraniteShares',
@@ -598,6 +642,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    subclass_envelope_measured: true,
     provenance: {
       isin: 'XS3075487713',
       issuer: 'GraniteShares',
@@ -620,6 +665,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2675292309',
       issuer: 'GraniteShares',
@@ -644,6 +690,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2596087671',
       issuer: 'GraniteShares',
@@ -665,6 +712,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2856106302',
       issuer: 'GraniteShares',
@@ -687,6 +735,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2575914176',
       issuer: 'GraniteShares',
@@ -710,6 +759,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2842095320',
       issuer: 'GraniteShares',
@@ -733,6 +783,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    subclass_envelope_measured: true,
     provenance: {
       isin: 'XS3069877556',
       issuer: 'GraniteShares',
@@ -755,6 +806,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    subclass_envelope_measured: true,
     provenance: {
       isin: 'XS3075487044',
       issuer: 'GraniteShares',
@@ -777,6 +829,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2596085972',
       issuer: 'GraniteShares',
@@ -801,6 +854,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    subclass_envelope_measured: true,
     provenance: {
       isin: 'IE00BK5BZQ82',
       issuer: 'Leverage Shares',
@@ -823,6 +877,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    subclass_envelope_measured: true,
     provenance: {
       isin: 'IE00BK5C1B80',
       issuer: 'Leverage Shares',
@@ -846,6 +901,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2337092550',
       issuer: 'Leverage Shares',
@@ -868,6 +924,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2595673190',
       issuer: 'Leverage Shares',
@@ -892,6 +949,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2691006303',
       issuer: 'Leverage Shares',
@@ -914,6 +972,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    subclass_envelope_measured: false,
     provenance: {
       isin: 'XS2399364822',
       issuer: 'Leverage Shares',
@@ -940,6 +999,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    subclass_envelope_measured: false,
     provenance: {
       isin: 'XS2472196257',
       issuer: 'Leverage Shares',
@@ -966,6 +1026,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    subclass_envelope_measured: false,
     provenance: {
       isin: 'XS2800709128',
       issuer: 'Leverage Shares',
@@ -990,6 +1051,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    subclass_envelope_measured: false,
     provenance: {
       isin: 'XS2399370555',
       issuer: 'Leverage Shares',
@@ -1060,6 +1122,44 @@ export function screeningInstrumentFor(
  */
 export function countRankableUnderlyings(pool: readonly LseEtpPoolRow[] = LSE_ETP_POOL): number {
   return new Set(pool.map((row) => row.screening_instrument)).size;
+}
+
+/**
+ * The subclass a LIVE-SIZING consumer may use for this row, or `undefined`
+ * when ADR-0018's D3/D5 numbers for that subclass were never measured
+ * against an instrument like it (#903).
+ *
+ * **This is the function a future `UniverseInstrument[]` builder (#751) MUST
+ * call when setting `UniverseInstrument.subclass` from a pool row.** Reading
+ * `row.subclass` directly would silently re-introduce the hazard #813's
+ * widening created: `UniverseInstrument.subclass` is optional specifically
+ * so an unset value arms NO per-subclass regime for that instrument
+ * (`subclassOfUniverse`, `server/apps/orchestrator/types.ts`, filters out
+ * `instrument.subclass === undefined`) rather than sizing it off another
+ * instrument's envelope — the same "unclassified is safer than
+ * misclassified" argument `resolveSubclassBracket`
+ * (`server/pipeline/trader/subclass-bracket.ts`) makes one stage later. A
+ * `subclassOf` map built with `liveSizingSubclassFor` therefore cannot
+ * contain 3VT, 3KOR, 3KWE or 3XLE, and `resolveSubclassBracket` throws
+ * `SubclassBracketUnresolvableError` for any of them rather than sizing
+ * against the SPY-measured `index_etp_3x` bracket (see
+ * `lse-etp-pool.test.ts`, which asserts this end-to-end against the real
+ * function, not just against this file's flag).
+ *
+ * **What this does NOT close.** A caller can still read `row.subclass`
+ * directly and bypass this entirely — Option 3 (#903's chosen resolution)
+ * is "structurally excluded from live sizing" through this helper plus the
+ * test that proves it, not a type-level guarantee that no code path can
+ * reach `row.subclass`. #751 must use this helper; nothing here can force
+ * it to.
+ *
+ * Screening/ranking is untouched by this function and must stay that way —
+ * `countRankableUnderlyings` and every other screening consumer keep
+ * reading the full `LSE_ETP_POOL` (30 rows, 26 underlyings) unchanged, since
+ * this exclusion is sizing-only, not a pool filter.
+ */
+export function liveSizingSubclassFor(row: LseEtpPoolRow): InstrumentSubclass | undefined {
+  return row.subclass_envelope_measured ? row.subclass : undefined;
 }
 
 /**

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ADR_0018_SUBCLASS_BRACKETS,
+  resolveSubclassBracket,
+  SubclassBracketUnresolvableError,
+} from '../../pipeline/trader/subclass-bracket.js';
+import {
   assertKnownSubclass,
   assertValidPool,
   buildRoutingMap,
@@ -7,6 +12,7 @@ import {
   KNOWN_SUBCLASSES,
   LSE_ETP_POOL,
   type LseEtpPoolRow,
+  liveSizingSubclassFor,
   UnknownSubclassError,
 } from './lse-etp-pool.js';
 
@@ -20,6 +26,7 @@ function makeRow(overrides: Partial<LseEtpPoolRow> = {}): LseEtpPoolRow {
     subclass: 'index_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    subclass_envelope_measured: true,
     provenance: {
       isin: 'XX0000000000',
       issuer: 'Leverage Shares',
@@ -43,6 +50,7 @@ describe('LSE_ETP_POOL — the checked-in pool', () => {
       expect(row.subclass).toBeTruthy();
       expect(row.currency).toBeTruthy();
       expect(typeof row.t212_isa).toBe('boolean');
+      expect(typeof row.subclass_envelope_measured).toBe('boolean');
       expect(row.provenance.isin).toBeTruthy();
       expect(row.provenance.issuer).toBeTruthy();
       expect(row.provenance.source_url).toMatch(/^https:\/\//);
@@ -219,5 +227,79 @@ describe('countRankableUnderlyings — the count #707 consumes, not #751', () =>
       makeRow({ lse_ticker: 'A3', screening_instrument: 'QQQ' }),
     ];
     expect(countRankableUnderlyings(pool)).toBe(2);
+  });
+});
+
+// #903: index_etp_3x was widened by #813 to include four underlyings nothing
+// like SPY (3VT/VT all-world, 3KOR/EWY South Korea, 3KWE/KWEB China internet,
+// 3XLE/XLE US energy sector), but ADR-0018's D3/D5 numbers for index_etp_3x
+// were measured with SPY standing in for the whole subclass. These tests
+// prove — against the REAL `resolveSubclassBracket`, not a re-implementation
+// — that a live-sizing consumer built the way #751 must build it cannot size
+// those four rows off the SPY-measured envelope.
+describe('liveSizingSubclassFor — #903 excludes the four unmeasured index_etp_3x rows from live sizing', () => {
+  const UNMEASURED_TICKERS = ['3VT', '3KOR', '3KWE', '3XLE'];
+
+  it('flags exactly the four widened rows as unmeasured, and every other row as measured', () => {
+    const unmeasured = LSE_ETP_POOL.filter((row) => !row.subclass_envelope_measured).map(
+      (row) => row.lse_ticker,
+    );
+    expect(unmeasured.sort()).toEqual([...UNMEASURED_TICKERS].sort());
+
+    const measured = LSE_ETP_POOL.filter((row) => row.subclass_envelope_measured);
+    expect(measured.length).toBe(LSE_ETP_POOL.length - 4);
+  });
+
+  it("returns undefined for exactly the 4 flagged rows, and the row's real subclass for the other 26", () => {
+    for (const row of LSE_ETP_POOL) {
+      if (UNMEASURED_TICKERS.includes(row.lse_ticker)) {
+        expect(liveSizingSubclassFor(row)).toBeUndefined();
+      } else {
+        expect(liveSizingSubclassFor(row)).toBe(row.subclass);
+      }
+    }
+  });
+
+  it('a subclassOf map built the way #751 must build it (via liveSizingSubclassFor, keyed on lse_ticker — the same key buildRoutingMap and UniverseInstrument.asset use) omits the 4 unmeasured rows entirely', () => {
+    const subclassOf = Object.fromEntries(
+      LSE_ETP_POOL.flatMap((row) => {
+        const subclass = liveSizingSubclassFor(row);
+        return subclass === undefined ? [] : [[row.lse_ticker, subclass] as const];
+      }),
+    );
+
+    for (const ticker of UNMEASURED_TICKERS) {
+      expect(Object.hasOwn(subclassOf, ticker)).toBe(false);
+    }
+    expect(Object.keys(subclassOf).length).toBe(LSE_ETP_POOL.length - 4);
+
+    // The proof that matters: feed this map into the REAL Trader-side
+    // resolver and confirm each of the four unmeasured rows fails loud
+    // instead of being sized off the SPY-measured index_etp_3x bracket.
+    for (const ticker of UNMEASURED_TICKERS) {
+      expect(() => resolveSubclassBracket(ticker, subclassOf, ADR_0018_SUBCLASS_BRACKETS)).toThrow(
+        SubclassBracketUnresolvableError,
+      );
+    }
+
+    // The guard must not over-exclude: a measured index_etp_3x row (3USL)
+    // still resolves successfully to the SPY-measured bracket.
+    const resolved = resolveSubclassBracket('3USL', subclassOf, ADR_0018_SUBCLASS_BRACKETS);
+    expect(resolved).toBe(ADR_0018_SUBCLASS_BRACKETS.index_etp_3x);
+
+    // And a measured single_stock_etp_3x row resolves to its own bracket too.
+    const resolvedSingleStock = resolveSubclassBracket(
+      '3LTS',
+      subclassOf,
+      ADR_0018_SUBCLASS_BRACKETS,
+    );
+    expect(resolvedSingleStock).toBe(ADR_0018_SUBCLASS_BRACKETS.single_stock_etp_3x);
+  });
+
+  it('screening/ranking is unaffected: the full pool and its rankable-underlying count are unchanged by the sizing exclusion', () => {
+    // The guard is sizing-only. #707's ranking precondition and #751's
+    // tradeable-line count must not silently shrink because of it.
+    expect(LSE_ETP_POOL.length).toBe(30);
+    expect(countRankableUnderlyings(LSE_ETP_POOL)).toBe(26);
   });
 });
