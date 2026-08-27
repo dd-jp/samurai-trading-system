@@ -8,7 +8,10 @@ import { MarketIntelligenceStore } from '../../providers/market-intelligence/ind
 import type { Clock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import type { AnalystView } from '../debate-engine/index.js';
+import { fundamentalAnalyst } from './fundamental-analyst.js';
 import { AnalystOrchestrator } from './orchestrator.js';
+import { sentimentAnalyst } from './sentiment-analyst.js';
+import { technicalAnalyst } from './technical-analyst.js';
 import type { Analyst, AnalystInput, AssetClass, Signal } from './types.js';
 
 class ManualClock implements Clock {
@@ -533,6 +536,18 @@ describe('AnalystOrchestrator', () => {
       expect(result.analyst_count).toBe(3);
       // Genuine quorum miss (33% < 50%) that nothing in production catches.
       expect(result.views.length / result.analyst_count).toBeLessThan(0.5);
+    });
+
+    it('pins the real persona role assignment the guarantee above depends on — a silent demotion must fail this test, not just the doc', () => {
+      // The FRAGILITY case above is only hypothetical because Fundamental is
+      // `mandatory` today. This is the tripwire: if someone actually demotes
+      // Fundamental (or promotes a second persona to optional), this
+      // assertion fails immediately instead of the regression surviving
+      // undetected — which is exactly the gap analysts-spec.md now warns
+      // about (#899).
+      expect(technicalAnalyst.role).toBe('mandatory');
+      expect(fundamentalAnalyst.role).toBe('mandatory');
+      expect(sentimentAnalyst.role).toBe('optional');
     });
 
     it('a hypothetical promotion of Sentiment to mandatory stays safe — it only makes the role gate stricter, never leakier', async () => {
