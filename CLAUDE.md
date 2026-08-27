@@ -88,7 +88,7 @@ New research goes to `~/hermes-assistant/research/<topic>-<date>-raw.md` (raw) a
 - **Host:** MacBook (always-on). Risks accepted by owner.
 - **Risks to mitigate:** macOS auto-updates, power/WiFi drops, lid-close during open position. UPS + wired ethernet + dead-man's-switch alerting recommended.
 - **Money graduation:** backtest → paper → tiny live capital. First live = "tuition money."
-- **UK tax:** crypto disposals + stock trades = CGT events. Track everything for HMRC.
+- **UK tax:** the equity leg trades inside a Trading 212 Stocks & Shares ISA, which HMRC treats as unconditionally CGT-exempt regardless of trade size or count (see ADR-0015's UK tax note) — crypto disposals would be CGT events, but crypto left Samurai's scope 2026-08-16. Track everything for HMRC regardless.
 
 ## Key Constraints
 

@@ -52,7 +52,7 @@ Driven by a **fee-tier cliff**, not by risk balance. Crypto's two-way monthly vo
 
 **PDT never binds.** FINRA Rule 4210 governs US margin accounts. A UK cash ISA is neither. Verified on the paper path too — the Alpaca paper account carries $100,000 equity against the $25,000 threshold ([#657](https://github.com/dd-jp/samurai-trading-system/issues/657)).
 
-**UK tax.** CGT is immaterial at £1,500 against a £3,000 annual exempt amount, but every crypto disposal and equity trade is still a recordable event, and HMRC badges-of-trade reclassification to income remains a theoretical exposure at high trade counts.
+**UK tax.** The equity leg trades inside a Trading 212 Stocks & Shares ISA, which HMRC treats as unconditionally exempt from Capital Gains Tax — gains and losses inside the wrapper are outside CGT's scope regardless of trade size, count, or gains realised ([gov.uk — Capital Gains Tax: What you pay it on](https://www.gov.uk/capital-gains-tax/what-you-pay-it-on): "You do not pay Capital Gains Tax on certain assets, including any gains you make from: ISAs or PEPs"). That is a wrapper exemption, not a magnitude one — the £3,000 annual exempt amount never actually applied to this leg. Crypto has no such shelter: every crypto disposal is still a recordable event, and HMRC badges-of-trade reclassification to income remains a theoretical exposure at high trade counts.
 
 ## Amendment, 2026-08-10 — the crypto fee schedule, measured ([#671](https://github.com/dd-jp/samurai-trading-system/issues/671))
 
@@ -140,6 +140,6 @@ It also interacts with [ADR-0017](0017-validation-gates-paper-operational-thesis
 
 ### What this does not change
 
-The **ISA restriction**, the **GBP LSE-listed ETF/ETC constraint**, the **Trading 212 venue**, and **[ADR-0017](0017-validation-gates-paper-operational-thesis-expectancy.md)'s £100–200 live ramp** — the ramp is sized to surface the three unconfirmables at the smallest size producing real fills, and a smaller total book does not change what it is for. The **UK tax position** is if anything looser: CGT was already immaterial at £1,500 against a £3,000 exempt amount.
+The **ISA restriction**, the **GBP LSE-listed ETF/ETC constraint**, the **Trading 212 venue**, and **[ADR-0017](0017-validation-gates-paper-operational-thesis-expectancy.md)'s £100–200 live ramp** — the ramp is sized to surface the three unconfirmables at the smallest size producing real fills, and a smaller total book does not change what it is for. The **UK tax position** is unchanged, and was never a matter of size: the book is now entirely the ISA-wrapped equity leg, and gains and losses inside a Trading 212 Stocks & Shares ISA sit outside CGT's scope unconditionally, independent of book size — the £3,000 exempt amount was never the operative reason, at £1,500 or at £1,000.
 
 `docs/research/54-capital-economics-vs-signal-accuracy.md` states its arithmetic **per £1,000 notional**, which is now the book rather than a convenient unit — its 0.55 pp cost-in-accuracy figure applies directly, and the £5,000 column there is hypothetical.
