@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isMarkStale, markAgeMs } from './mark-freshness.js';
+import { isMarkStale, MARK_FORWARD_TOLERANCE_MS, markAgeMs } from './mark-freshness.js';
 import type { Mark } from './types.js';
 
 const NOW = new Date('2026-08-15T12:00:00.000Z');
@@ -40,12 +40,54 @@ describe('isMarkStale', () => {
     expect(isMarkStale(markObservedAt('2026-08-15T11:57:59.000Z'), NOW, 120_000)).toBe(true);
   });
 
-  it('fails a mark observed in the future, however small the skew', () => {
+  it('fails a mark observed well in the future, beyond the forward-tolerance grace', () => {
     // The case a naive `age > max` check passes: a mark from 20 minutes in the
     // future is not fresh, it is evidence that one of the two clocks is wrong
-    // — including the one every other time comparison in the pass uses.
+    // — including the one every other time comparison in the pass uses. This
+    // is far outside `MARK_FORWARD_TOLERANCE_MS`, so it still trips the guard.
     expect(isMarkStale(markObservedAt('2026-08-15T12:20:00.000Z'), NOW, 120_000)).toBe(true);
-    expect(isMarkStale(markObservedAt('2026-08-15T12:00:00.001Z'), NOW, 120_000)).toBe(true);
+  });
+
+  // #939: `asOf` is the tick's START instant, while marks are read later in
+  // the same pass. A data source that stamps `observed_at` from a live quote
+  // clock legitimately produces a mark a few hundred milliseconds "ahead" of
+  // `asOf` — that is pass latency, not a clock disagreement. A small, named
+  // forward tolerance admits that ordering artifact without reopening the
+  // door to genuine skew (#640).
+  describe('forward tolerance (#939)', () => {
+    it('passes a mark observed 149ms after now (soak-observed pass latency)', () => {
+      expect(isMarkStale(markObservedAt('2026-08-15T12:00:00.149Z'), NOW, 120_000)).toBe(false);
+    });
+
+    it('passes a mark observed 1083ms after now (soak-observed pass latency)', () => {
+      expect(isMarkStale(markObservedAt('2026-08-15T12:00:01.083Z'), NOW, 120_000)).toBe(false);
+    });
+
+    it('passes a mark observed exactly at the forward-tolerance bound', () => {
+      const observedAt = new Date(NOW.getTime() + MARK_FORWARD_TOLERANCE_MS);
+      expect(
+        isMarkStale(
+          { price: 100, observed_at: observedAt, source: 'test', asset_class: 'crypto' },
+          NOW,
+          120_000,
+        ),
+      ).toBe(false);
+    });
+
+    it('fails a mark observed just past the forward-tolerance bound', () => {
+      const observedAt = new Date(NOW.getTime() + MARK_FORWARD_TOLERANCE_MS + 1);
+      expect(
+        isMarkStale(
+          { price: 100, observed_at: observedAt, source: 'test', asset_class: 'crypto' },
+          NOW,
+          120_000,
+        ),
+      ).toBe(true);
+    });
+
+    it('still fails a mark observed minutes in the future — genuine clock skew, not pass latency', () => {
+      expect(isMarkStale(markObservedAt('2026-08-15T12:20:00.000Z'), NOW, 120_000)).toBe(true);
+    });
   });
 
   it.each([0, -1, Number.NaN])('refuses a non-positive or NaN bound (%s)', (bound) => {

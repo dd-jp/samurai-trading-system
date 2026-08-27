@@ -13,7 +13,11 @@
  * it in the account provider instead would mean a second round of mark reads
  * for the same instruments at the same instant.
  */
-import { isMarkStale, type MarketDataService } from '../../providers/market-data-service/index.js';
+import {
+  isMarkStale,
+  MARK_FORWARD_TOLERANCE_MS,
+  type MarketDataService,
+} from '../../providers/market-data-service/index.js';
 import { type AssetClass, describeThrown, type OpenPosition } from '../../shared/index.js';
 import type { DailyPnl, PortfolioView, SessionBasis, SessionBasisByClass } from './types.js';
 
@@ -94,11 +98,21 @@ export class StaleMarkError extends Error {
     readonly max_age_ms: number,
   ) {
     const ageMs = asOf.getTime() - observed_at.getTime();
+    // #939: `isMarkStale` already admits a mark observed up to
+    // `MARK_FORWARD_TOLERANCE_MS` ahead of `asOf` as ordinary pass latency —
+    // `asOf` is the tick's START instant, and this mark was read some
+    // milliseconds into the same pass. So by the time this error is even
+    // constructed, a negative `ageMs` has already been checked against that
+    // tolerance and found to exceed it: this IS a genuine clock disagreement,
+    // not the sub-second case the old wording used to lump in with it.
     super(
       `computePortfolioView: mark for held instrument '${instrument}' was observed ` +
         `${observed_at.toISOString()}, ${ageMs}ms before ${asOf.toISOString()}, which exceeds ` +
         `the ${max_age_ms}ms bound for its asset class` +
-        (ageMs < 0 ? ' (the mark is AHEAD of our clock — the two disagree)' : '') +
+        (ageMs < 0
+          ? ` (the mark is ${-ageMs}ms AHEAD of our clock, beyond the ` +
+            `${MARK_FORWARD_TOLERANCE_MS}ms pass-latency tolerance — the two disagree)`
+          : '') +
         '. Refusing to value the book on a price the market may no longer support: exposure, ' +
         'drawdown and daily PnL all derive from these marks, so a frozen price freezes every ' +
         'risk limit that reads them.',
