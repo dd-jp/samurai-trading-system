@@ -81,9 +81,13 @@ function unrealizedPnl(position: OpenPosition, markPrice: number): number {
  *    fill prices, qty-weighted. This is what really happened.
  * 2. **Algebra against `realized_pnl_net`**: `entry + (realized_pnl_net +
  *    fees_total) / filled_size` (sign-flipped for a sell). Exact when 1 is
- *    unavailable, but only as good as `entry` — and `entry`/`stop` are BOTH
- *    zero on a #826 no-reference-price close, which would turn "no data"
- *    into a plausible-looking wrong number.
+ *    unavailable, but only as good as `entry` — which comes from real data
+ *    here: `ClosedTrade.entry` is the avg entry fill price and `.stop` the
+ *    original bracket's stop, both set in `ingest-fills.ts` from
+ *    `avgEntryPrice`/`position.stop`. That is a different path from #826's
+ *    zeroing, which applies to the flatten `OrderIntent`'s own
+ *    entry/stop/target fields on a no-reference-price close, not to this
+ *    trade's recorded `entry`/`stop`.
  *
  * `weightedExitFillPrice` is tried first; the algebraic fallback only runs
  * when a trade has no exit fill on record.
