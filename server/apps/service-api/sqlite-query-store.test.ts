@@ -9,7 +9,7 @@
 import type { AnalystContribution } from '../../pipeline/debate-engine/index.js';
 import { SqliteDebateLogStore } from '../../pipeline/debate-engine/index.js';
 import { SqliteExecutionStore } from '../../pipeline/execution/index.js';
-import type { ClosedTrade, DebateLog, OpenPosition } from '../../shared/index.js';
+import type { ClosedTrade, DebateLog, Fill, OpenPosition } from '../../shared/index.js';
 import { openSharedStore, type SharedStore } from '../../shared/store/index.js';
 import { percentile, SqliteQueryStore } from './sqlite-query-store.js';
 
@@ -87,6 +87,32 @@ function seedClosedTrade(execStore: SqliteExecutionStore, trade: ClosedTrade): P
   return execStore.applyLotAdvance({
     idempotency_key: trade.idempotency_key,
     fills: [],
+    closed_trade: trade,
+  });
+}
+
+function makeFill(overrides: Partial<Fill> = {}): Fill {
+  return {
+    idempotency_key: 'key-closed-1',
+    broker_fill_id: 'fill-1',
+    leg: 'entry',
+    price: 100,
+    qty: 10,
+    fee: 1,
+    timestamp: new Date('2026-07-27T09:00:00Z'),
+    ...overrides,
+  };
+}
+
+/** Seed a closed trade AND its fills in one `applyLotAdvance` call (#940). */
+function seedClosedTradeWithFills(
+  execStore: SqliteExecutionStore,
+  trade: ClosedTrade,
+  fills: readonly Fill[],
+): Promise<void> {
+  return execStore.applyLotAdvance({
+    idempotency_key: trade.idempotency_key,
+    fills,
     closed_trade: trade,
   });
 }
@@ -281,6 +307,74 @@ describe('SqliteQueryStore', () => {
 
     const store = new SqliteQueryStore(db);
     expect(store.getAttribution(NOW)).toEqual({});
+  });
+
+  // #940: closed trades and their fills, surfaced for the dashboard.
+  describe('getRecentClosedTrades / getFillsForTrades (#940)', () => {
+    it('reads recent closed trades newest-first, respecting the limit', async () => {
+      const db = makeDb();
+      const execStore = new SqliteExecutionStore(db);
+      await seedClosedTrade(execStore, makeClosedTrade());
+      await seedClosedTrade(
+        execStore,
+        makeClosedTrade({
+          idempotency_key: 'key-closed-2',
+          closed_at: new Date('2026-07-27T11:30:00Z'),
+        }),
+      );
+
+      const store = new SqliteQueryStore(db);
+      const trades = store.getRecentClosedTrades(1, NOW);
+
+      expect(trades).toHaveLength(1);
+      expect(trades[0]?.idempotency_key).toBe('key-closed-2');
+    });
+
+    it('excludes a closed trade that closed after asOf, matching every other read on this store', async () => {
+      const db = makeDb();
+      const execStore = new SqliteExecutionStore(db);
+      await seedClosedTrade(
+        execStore,
+        makeClosedTrade({ closed_at: new Date('2026-07-28T00:00:00Z') }), // after NOW
+      );
+
+      const store = new SqliteQueryStore(db);
+      expect(store.getRecentClosedTrades(10, NOW)).toEqual([]);
+    });
+
+    it('reads every fill for the named lots, ignoring lots not named', async () => {
+      const db = makeDb();
+      const execStore = new SqliteExecutionStore(db);
+      await seedClosedTradeWithFills(execStore, makeClosedTrade({ idempotency_key: 'key-A' }), [
+        makeFill({ idempotency_key: 'key-A', broker_fill_id: 'fill-A-entry', leg: 'entry' }),
+        makeFill({
+          idempotency_key: 'key-A',
+          broker_fill_id: 'fill-A-target',
+          leg: 'target',
+          price: 110,
+        }),
+      ]);
+      await seedClosedTradeWithFills(
+        execStore,
+        makeClosedTrade({ idempotency_key: 'key-B', debate_id: 'debate-1' }),
+        [makeFill({ idempotency_key: 'key-B', broker_fill_id: 'fill-B-entry', leg: 'entry' })],
+      );
+
+      const store = new SqliteQueryStore(db);
+      const fills = store.getFillsForTrades(['key-A'], NOW);
+
+      expect(fills).toHaveLength(2);
+      expect(fills.map((f) => f.broker_fill_id).sort()).toEqual(['fill-A-entry', 'fill-A-target']);
+    });
+
+    it('returns no fills, without querying, for an empty key list', async () => {
+      const db = makeDb();
+      const execStore = new SqliteExecutionStore(db);
+      await seedClosedTradeWithFills(execStore, makeClosedTrade(), [makeFill()]);
+
+      const store = new SqliteQueryStore(db);
+      expect(store.getFillsForTrades([], NOW)).toEqual([]);
+    });
   });
 });
 

@@ -18,10 +18,18 @@
  *    happen; neither is on any single snapshot.
  */
 
-import type { AnalystPerformanceRow, DebateRow, PipelineView, PositionRow } from '@contracts';
+import type {
+  AnalystPerformanceRow,
+  ClosedTradeRow,
+  DebateRow,
+  FillRow,
+  PipelineView,
+  PositionRow,
+} from '@contracts';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DetailDrawer } from './components/DetailDrawer.tsx';
 import { AnalystsPanel } from './components/panels/AnalystsPanel.tsx';
+import { ClosedTradesPanel } from './components/panels/ClosedTradesPanel.tsx';
 import { DebatesPanel } from './components/panels/DebatesPanel.tsx';
 import type { EquitySample } from './components/panels/MetricsPanel.tsx';
 import { MetricsPanel } from './components/panels/MetricsPanel.tsx';
@@ -51,6 +59,8 @@ const EMPTY_VIEW: PipelineView = { lanes: [], live_trace_id: null, live_entered_
  * stable identity the walk planner's memo already depends on.
  */
 const EMPTY_POSITIONS: readonly PositionRow[] = [];
+const EMPTY_CLOSED_TRADES: readonly ClosedTradeRow[] = [];
+const EMPTY_FILLS: readonly FillRow[] = [];
 const EMPTY_ANALYSTS: readonly AnalystPerformanceRow[] = [];
 const EMPTY_DEBATES: readonly DebateRow[] = [];
 
@@ -252,6 +262,10 @@ export function App({ snapshotOptions }: AppProps = {}) {
 
         <div className="bento">
           <PositionsPanel positions={snapshot?.positions ?? EMPTY_POSITIONS} />
+          <ClosedTradesPanel
+            trades={snapshot?.closed_trades ?? EMPTY_CLOSED_TRADES}
+            fills={snapshot?.fills ?? EMPTY_FILLS}
+          />
           <MetricsPanel metrics={snapshot?.metrics ?? null} equitySamples={equitySamples} />
           <AnalystsPanel analysts={snapshot?.analysts ?? EMPTY_ANALYSTS} />
           <SpendPanel spend={snapshot?.llm_spend ?? null} />

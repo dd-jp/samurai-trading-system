@@ -32,7 +32,13 @@ import { PIPELINE_STAGES, type PipelineStage } from '../../../contracts/pipeline
 import type { AnalystContribution, Direction } from '../../pipeline/debate-engine/index.js';
 import { creditForContribution, realizedR } from '../../pipeline/feedback-loop/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
-import type { ClosedTrade, DebateLog, OpenPosition, OrderState } from '../../shared/index.js';
+import type {
+  ClosedTrade,
+  DebateLog,
+  Fill,
+  OpenPosition,
+  OrderState,
+} from '../../shared/index.js';
 import {
   type ClosedTradeRow,
   fromClosedTradeRow,
@@ -142,6 +148,33 @@ interface AttributionRow extends ClosedTradeRow {
   debate_contributions_json: string;
 }
 
+/**
+ * One `fills` row, the columns `getFillsForTrades` reads — deliberately
+ * excludes `cost_breakdown_json`, which is a Simulated-adapter-only backtest
+ * artifact (0001_init.sql) with no wire shape and no operator use here.
+ */
+interface FillRowSql {
+  idempotency_key: string;
+  broker_fill_id: string;
+  leg: 'entry' | 'stop' | 'target' | 'exit';
+  price: number;
+  qty: number;
+  fee: number;
+  timestamp: string;
+}
+
+function fromFillRowSql(row: FillRowSql): Fill {
+  return {
+    idempotency_key: row.idempotency_key,
+    broker_fill_id: row.broker_fill_id,
+    leg: row.leg,
+    price: row.price,
+    qty: row.qty,
+    fee: row.fee,
+    timestamp: fromStoredTimestamp(row.timestamp),
+  };
+}
+
 function fromOpenPositionRow(row: OpenPositionRow): OpenPosition {
   return {
     idempotency_key: row.idempotency_key,
@@ -220,6 +253,35 @@ export class SqliteQueryStore implements DashboardQueryStore {
       )
       .all(...TERMINAL_STATES, toStoredTimestamp(asOf)) as OpenPositionRow[];
     return rows.map(fromOpenPositionRow);
+  }
+
+  /** #940: `closed_trades`' mirror of `getRecentDebates`/`getVerdictHistory` below. */
+  getRecentClosedTrades(limit: number, asOf: Date): ClosedTrade[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM closed_trades WHERE closed_at <= ? ORDER BY closed_at DESC LIMIT ?`)
+      .all(toStoredTimestamp(asOf), limit) as ClosedTradeRow[];
+    return rows.map(fromClosedTradeRow);
+  }
+
+  /**
+   * #940: every fill for the named lots. Scoped by `idempotency_key IN (...)`
+   * rather than a bounded time window — `buildSnapshot` always calls this with
+   * the closed trades it just read, so the placeholder list (built from
+   * `idempotencyKeys.length`, never the strings themselves, same as
+   * `getMarks`) is exactly the set of lots being rendered.
+   */
+  getFillsForTrades(idempotencyKeys: readonly string[], _asOf: Date): Fill[] {
+    if (idempotencyKeys.length === 0) return [];
+    const placeholders = idempotencyKeys.map(() => '?').join(', ');
+    const rows = this.db
+      .prepare(
+        `SELECT idempotency_key, broker_fill_id, leg, price, qty, fee, timestamp
+           FROM fills
+          WHERE idempotency_key IN (${placeholders})
+          ORDER BY idempotency_key, rowid`,
+      )
+      .all(...idempotencyKeys) as FillRowSql[];
+    return rows.map(fromFillRowSql);
   }
 
   getRecentDebates(limit: number, asOf: Date): DebateLog[] {

@@ -101,6 +101,63 @@ export interface DebateRow {
   }[];
 }
 
+/**
+ * Why a lot closed. Structurally identical to the server-side
+ * `ExitReason | 'stop' | 'target' | 'exit'` union
+ * (`server/shared/types/records.ts`, `ClosedTrade.close_reason`) — duplicated
+ * here rather than imported because `contracts/` may import from neither
+ * `server/` nor `client/` (the boundary `contracts/boundary.test.ts`
+ * enforces). Widen both sides together if a new reason is ever added.
+ */
+export type CloseReason = 'stop' | 'target' | 'exit' | 'flatten' | 'signal_decay' | 'direction_flip';
+
+/**
+ * One realized round trip from `closed_trades` (#940) — the dashboard's only
+ * view of a position AFTER it flattens. `positions` above is open lots only;
+ * without this a trade that entered, filled and flattened left no trace
+ * anywhere on the wire.
+ *
+ * `exit_price` is not a `closed_trades` column — the table has no such field.
+ * `buildSnapshot` derives it, preferring the actual weighted price of this
+ * trade's non-entry `fills` (real, but requires a fill row to exist) and
+ * falling back to `realized_pnl_net`/`fees_total` arithmetic against `entry`
+ * for a trade whose exit fills were not captured. Either way it is a single
+ * number on the wire — the two cases are not distinguished here.
+ */
+export interface ClosedTradeRow {
+  idempotency_key: string;
+  debate_id: string;
+  instrument: string;
+  asset_class: AssetClass;
+  side: 'buy' | 'sell';
+  entry_price: number;
+  /** Derived — see the interface doc above. Not a stored column. */
+  exit_price: number;
+  filled_size: number;
+  realized_pnl_net: number;
+  fees_total: number;
+  opened_at: string;
+  closed_at: string;
+  close_reason: CloseReason;
+}
+
+/**
+ * One `fills` row (#940) — the venue-side execution trail. `broker_fill_id`
+ * is the nearest thing to a traceable order id a closed lot carries:
+ * `open_positions.broker_order_ids` exists only while a lot is open and is
+ * not preserved once it closes, so this is the identifier a completed trade
+ * can still be traced by.
+ */
+export interface FillRow {
+  idempotency_key: string;
+  broker_fill_id: string;
+  leg: 'entry' | 'stop' | 'target' | 'exit';
+  price: number;
+  qty: number;
+  fee: number;
+  timestamp: string;
+}
+
 /** One verdict/audit_log entry — the go/no-go history (story 5). */
 export interface VerdictRow {
   trace_id: string;
@@ -228,6 +285,10 @@ export interface DashboardSnapshot {
   mode: StoreMode;
   tick_status: TickStatus | null;
   positions: PositionRow[];
+  /** Recent realized round trips (#940) — most-recently-closed first. */
+  closed_trades: ClosedTradeRow[];
+  /** Fills belonging to `closed_trades` above — every leg, entry through exit. */
+  fills: FillRow[];
   debates: DebateRow[];
   verdicts: VerdictRow[];
   analysts: AnalystPerformanceRow[];

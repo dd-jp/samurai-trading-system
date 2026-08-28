@@ -8,7 +8,7 @@
  */
 import type { AnalystContribution } from '../../pipeline/debate-engine/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
-import type { DebateLog, OpenPosition } from '../../shared/index.js';
+import type { ClosedTrade, DebateLog, Fill, OpenPosition } from '../../shared/index.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
 import { PIPELINE_LOOKBACK_MS, PIPELINE_MAX_LANES } from './pipeline-query.js';
 import { buildSnapshot } from './snapshot.js';
@@ -56,6 +56,38 @@ function makePosition(overrides: Partial<OpenPosition> = {}): OpenPosition {
     decision_timestamp: AS_OF,
     conviction: 0.7,
     converged: true,
+    ...overrides,
+  };
+}
+
+function makeClosedTrade(overrides: Partial<ClosedTrade> = {}): ClosedTrade {
+  return {
+    idempotency_key: 'AAPL-2026-07-19T09:30:00Z',
+    debate_id: 'debate-abc123',
+    instrument: 'AAPL',
+    asset_class: 'stocks',
+    side: 'buy',
+    entry: 100,
+    stop: 95,
+    filled_size: 10,
+    realized_pnl_net: 48,
+    fees_total: 2,
+    opened_at: AS_OF,
+    closed_at: AS_OF,
+    close_reason: 'target',
+    ...overrides,
+  };
+}
+
+function makeFill(overrides: Partial<Fill> = {}): Fill {
+  return {
+    idempotency_key: 'AAPL-2026-07-19T09:30:00Z',
+    broker_fill_id: 'fill-1',
+    leg: 'entry',
+    price: 100,
+    qty: 10,
+    fee: 1,
+    timestamp: AS_OF,
     ...overrides,
   };
 }
@@ -113,6 +145,8 @@ function fakeStore(overrides: Partial<DashboardQueryStore> = {}): DashboardQuery
     getRecentDebates: () => [],
     getTickStatus: () => null,
     getOpenPositions: () => [],
+    getRecentClosedTrades: () => [],
+    getFillsForTrades: () => [],
     getVerdictHistory: () => [],
     getAnalystWeights: () => ({}),
     getAttribution: () => ({}),
@@ -314,6 +348,8 @@ describe('buildSnapshot', () => {
     const snap = buildSnapshot(fakeStore(), AS_OF, 'paper');
 
     expect(snap.positions).toEqual([]);
+    expect(snap.closed_trades).toEqual([]);
+    expect(snap.fills).toEqual([]);
     expect(snap.debates).toEqual([]);
     expect(snap.verdicts).toEqual([]);
     expect(snap.analysts).toEqual([]);
@@ -403,6 +439,141 @@ describe('buildSnapshot', () => {
       maxLanes: PIPELINE_MAX_LANES,
       lookbackMs: PIPELINE_LOOKBACK_MS,
       asOf: AS_OF,
+    });
+  });
+
+  // #940: closed trades and their fills appear on the wire — the surface the
+  // dashboard never had before, for a trade that entered, filled and flattened.
+  describe('closed trades and fills (#940)', () => {
+    it('projects a closed trade onto the wire with entry/exit price, PnL, fees and close_reason', () => {
+      const trade = makeClosedTrade({
+        idempotency_key: 'SPY-1',
+        instrument: 'SPY',
+        side: 'buy',
+        entry: 552.1,
+        filled_size: 20,
+        realized_pnl_net: 151.6,
+        fees_total: 2.4,
+        close_reason: 'target',
+      });
+      const store = fakeStore({
+        getRecentClosedTrades: () => [trade],
+        getFillsForTrades: () => [
+          makeFill({ idempotency_key: 'SPY-1', leg: 'entry', price: 552.1, qty: 20 }),
+          makeFill({ idempotency_key: 'SPY-1', leg: 'target', price: 559.8, qty: 20 }),
+        ],
+      });
+
+      const snap = buildSnapshot(store, AS_OF, 'paper');
+
+      expect(snap.closed_trades).toHaveLength(1);
+      expect(snap.closed_trades[0]).toMatchObject({
+        idempotency_key: 'SPY-1',
+        instrument: 'SPY',
+        side: 'buy',
+        entry_price: 552.1,
+        exit_price: 559.8,
+        filled_size: 20,
+        realized_pnl_net: 151.6,
+        fees_total: 2.4,
+        close_reason: 'target',
+      });
+      expect(snap.closed_trades[0]?.opened_at).toBe(trade.opened_at.toISOString());
+      expect(snap.closed_trades[0]?.closed_at).toBe(trade.closed_at.toISOString());
+    });
+
+    it('derives exit_price from the weighted price of the trade’s own exit fills', () => {
+      const trade = makeClosedTrade({ idempotency_key: 'K1', side: 'buy', filled_size: 10 });
+      const store = fakeStore({
+        getRecentClosedTrades: () => [trade],
+        // Two exit-leg fills at different prices — a real partial exit — so a
+        // naive "first fill" read would get this wrong; only the qty-weighted
+        // average is correct.
+        getFillsForTrades: () => [
+          makeFill({ idempotency_key: 'K1', leg: 'entry', price: 100, qty: 10 }),
+          makeFill({ idempotency_key: 'K1', leg: 'stop', price: 104, qty: 4 }),
+          makeFill({ idempotency_key: 'K1', leg: 'exit', price: 106, qty: 6 }),
+        ],
+      });
+
+      const snap = buildSnapshot(store, AS_OF, 'paper');
+
+      // (104*4 + 106*6) / 10 = 105.2
+      expect(snap.closed_trades[0]?.exit_price).toBeCloseTo(105.2);
+    });
+
+    it('falls back to deriving exit_price from realized PnL when no exit fill is on record', () => {
+      const trade = makeClosedTrade({
+        idempotency_key: 'K2',
+        side: 'sell',
+        entry: 495.6,
+        filled_size: 15,
+        realized_pnl_net: -69.3,
+        fees_total: 1.8,
+        close_reason: 'stop',
+      });
+      const store = fakeStore({
+        getRecentClosedTrades: () => [trade],
+        getFillsForTrades: () => [], // no fills captured for this lot
+      });
+
+      const snap = buildSnapshot(store, AS_OF, 'paper');
+
+      // grossPnl = -69.3 + 1.8 = -67.5; delta = -67.5/15 = -4.5;
+      // sell => exit = entry - delta = 495.6 - (-4.5) = 500.1
+      expect(snap.closed_trades[0]?.exit_price).toBeCloseTo(500.1);
+    });
+
+    it('projects fills belonging to the closed trades onto the wire', () => {
+      const trade = makeClosedTrade({ idempotency_key: 'K3' });
+      const fill = makeFill({
+        idempotency_key: 'K3',
+        broker_fill_id: 'alpaca-fill-9',
+        leg: 'target',
+        price: 110,
+        qty: 10,
+        fee: 1.5,
+      });
+      const store = fakeStore({
+        getRecentClosedTrades: () => [trade],
+        getFillsForTrades: () => [fill],
+      });
+
+      const snap = buildSnapshot(store, AS_OF, 'paper');
+
+      expect(snap.fills).toHaveLength(1);
+      expect(snap.fills[0]).toMatchObject({
+        idempotency_key: 'K3',
+        broker_fill_id: 'alpaca-fill-9',
+        leg: 'target',
+        price: 110,
+        qty: 10,
+        fee: 1.5,
+      });
+      expect(snap.fills[0]?.timestamp).toBe(fill.timestamp.toISOString());
+    });
+
+    it('asks for fills scoped to exactly the closed trades just read, not an independent window', () => {
+      // #940 review: a separately-bounded "recent fills" query can starve an
+      // older closed trade of its fills once open-position churn fills the
+      // window with entry-leg noise. `buildSnapshot` must instead ask for
+      // fills BY the closed-trade keys it already has.
+      const trades = [
+        makeClosedTrade({ idempotency_key: 'K-old' }),
+        makeClosedTrade({ idempotency_key: 'K-new' }),
+      ];
+      let askedKeys: readonly string[] | null = null;
+      const store = fakeStore({
+        getRecentClosedTrades: () => trades,
+        getFillsForTrades: (idempotencyKeys) => {
+          askedKeys = idempotencyKeys;
+          return [];
+        },
+      });
+
+      buildSnapshot(store, AS_OF, 'paper');
+
+      expect(askedKeys).toEqual(['K-old', 'K-new']);
     });
   });
 

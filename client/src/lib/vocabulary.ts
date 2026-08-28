@@ -10,7 +10,13 @@
  * rather than rendering blank somewhere on the screen.
  */
 
-import type { PipelineCellState, PipelineLane, PipelineOutcome, PipelineStage } from '@contracts';
+import type {
+  CloseReason,
+  PipelineCellState,
+  PipelineLane,
+  PipelineOutcome,
+  PipelineStage,
+} from '@contracts';
 import type { SettledOutcome } from './ledger.ts';
 import type { RoomId } from './room-layout.ts';
 
@@ -93,6 +99,20 @@ export function assetGlyph(assetClass: PipelineLane['asset_class']): AssetGlyph 
 export function sideWord(side: 'buy' | 'sell'): string {
   return side === 'buy' ? 'long' : 'short';
 }
+
+/**
+ * Why a closed trade closed, in words (#940). Total over the wire's
+ * `CloseReason` union (`contracts/snapshot.ts`) — a member added there and not
+ * here fails to compile, matching every other table in this file.
+ */
+export const CLOSE_REASON_WORD: Readonly<Record<CloseReason, string>> = {
+  stop: 'stop hit',
+  target: 'target hit',
+  exit: 'exit',
+  flatten: 'flat-by-close',
+  signal_decay: 'signal decay',
+  direction_flip: 'direction flip',
+};
 
 /**
  * The six `ProviderState` values, as words. Typed as a plain record rather

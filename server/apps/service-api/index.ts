@@ -18,6 +18,7 @@
  * and never blocks startup, because the rest of the dashboard is still worth
  * serving without it.
  */
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AlpacaHttpBrokerClient } from '../../pipeline/execution/index.js';
 import { openSharedStore, resolveStoreMode, sharedStorePath } from '../../shared/store/index.js';
@@ -51,7 +52,16 @@ const host = process.env.HOST ?? '127.0.0.1';
 // them independently (`process.env.SAMURAI_MODE === 'live'`). One derivation
 // means the page cannot report a mode the database file disagrees with.
 const mode = resolveStoreMode();
-const db = openSharedStore(sharedStorePath(mode));
+const dbPath = sharedStorePath(mode);
+const db = openSharedStore(dbPath);
+// #940: `sharedStorePath` returns a path RELATIVE to the process's working
+// directory (see file header), so two processes started from different
+// directories can silently open two different files — a trade lands in one
+// and the dashboard reads the other, with no error and no visible trace
+// anywhere. Naming the resolved absolute path at boot is the one thing that
+// would have made that mismatch visible instead of merely fixable in
+// hindsight.
+console.log(`Samurai dashboard store → ${resolve(dbPath)}`);
 
 /**
  * The built Vite+React bundle (ADR-0010), resolved relative to THIS MODULE
