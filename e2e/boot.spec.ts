@@ -44,6 +44,7 @@ const REGIONS = [
   'Verdict ledger',
   'Instrument detail',
   'Open positions',
+  'Closed trades',
   'Metrics suite',
   'Analysts',
   'LLM spend',

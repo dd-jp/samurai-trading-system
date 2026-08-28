@@ -50,8 +50,11 @@ export type {
 } from './providers.js';
 export type {
   AnalystPerformanceRow,
+  ClosedTradeRow,
+  CloseReason,
   DashboardSnapshot,
   DebateRow,
+  FillRow,
   LlmPerDebateStats,
   LlmSpendSummary,
   LlmSpendWindow,

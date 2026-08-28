@@ -24,7 +24,7 @@ import type {
   TickStatus,
 } from '../../../contracts/snapshot.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
-import type { DebateLog, OpenPosition } from '../../shared/index.js';
+import type { ClosedTrade, DebateLog, Fill, OpenPosition } from '../../shared/index.js';
 import type { ProviderStatusReader } from './provider-status.js';
 
 /**
@@ -33,8 +33,11 @@ import type { ProviderStatusReader } from './provider-status.js';
  */
 export type {
   AnalystPerformanceRow,
+  ClosedTradeRow,
+  CloseReason,
   DashboardSnapshot,
   DebateRow,
+  FillRow,
   LlmPerDebateStats,
   LlmSpendSummary,
   LlmSpendWindow,
@@ -168,6 +171,20 @@ export interface DashboardQueryStore {
   getRecentDebates(limit: number, asOf: Date): DebateLog[];
   getTickStatus(asOf: Date): TickStatus | null;
   getOpenPositions(asOf: Date): OpenPosition[];
+  /**
+   * Recent realized round trips (#940), most-recently-closed first — the
+   * `closed_trades` mirror of `getRecentDebates`/`getVerdictHistory` above.
+   */
+  getRecentClosedTrades(limit: number, asOf: Date): ClosedTrade[];
+  /**
+   * Every fill belonging to the named lots, in no particular cross-lot order.
+   * Scoped to `idempotencyKeys` rather than a bounded "recent fills" window
+   * (contrast `getMarks`' instrument-list shape) — `buildSnapshot` always
+   * calls this with the SAME closed trades it is about to render, so the
+   * fills returned are guaranteed complete for those trades rather than
+   * coincidentally so.
+   */
+  getFillsForTrades(idempotencyKeys: readonly string[], asOf: Date): Fill[];
   getVerdictHistory(limit: number, asOf: Date): VerdictAuditEntry[];
   getAnalystWeights(asOf: Date): Record<string, number>;
   getAttribution(asOf: Date): Record<string, AttributionSummary>;

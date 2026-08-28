@@ -25,7 +25,7 @@ import type { PipelineStage } from '../../../contracts/pipeline.js';
 import { computeInfluenceScore } from '../../pipeline/debate-engine/analyst-contribution.js';
 import type { AnalystContribution } from '../../pipeline/debate-engine/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
-import type { DebateLog, OpenPosition } from '../../shared/index.js';
+import type { ClosedTrade, DebateLog, Fill, OpenPosition } from '../../shared/index.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
 import type {
   AttributionSummary,
@@ -123,6 +123,87 @@ const OPEN_POSITIONS: OpenPosition[] = [
     decision_timestamp: hoursAgo(5),
     conviction: 0.61,
     converged: false,
+  },
+];
+
+/**
+ * Closed-trade fixtures (#940) — the two round trips `positions` above never
+ * had a way to show: a WIN (SPY, target hit) and a LOSS (QQQ, stop hit), each
+ * with its own entry + exit fill so the panel's fills sub-list has something
+ * real to render. Every number below is internally consistent both ways
+ * `buildSnapshot`'s `exit_price` can be derived — from these fills' weighted
+ * price, and from `realized_pnl_net`/`fees_total` arithmetic against `entry`
+ * — so the fixture cannot silently drift the two derivations apart.
+ */
+const CLOSED_TRADES: ClosedTrade[] = [
+  {
+    idempotency_key: 'SPY-2026-07-19T06:30:00Z',
+    debate_id: 'debate-spy-101',
+    instrument: 'SPY',
+    asset_class: 'stocks',
+    side: 'buy',
+    entry: 552.1,
+    stop: 545.0,
+    filled_size: 20,
+    realized_pnl_net: 151.6,
+    fees_total: 2.4,
+    opened_at: hoursAgo(8),
+    closed_at: hoursAgo(6.5),
+    close_reason: 'target',
+  },
+  {
+    idempotency_key: 'QQQ-2026-07-19T04:30:00Z',
+    debate_id: 'debate-qqq-102',
+    instrument: 'QQQ',
+    asset_class: 'stocks',
+    side: 'sell',
+    entry: 495.6,
+    stop: 500.5,
+    filled_size: 15,
+    realized_pnl_net: -69.3,
+    fees_total: 1.8,
+    opened_at: hoursAgo(10),
+    closed_at: hoursAgo(9),
+    close_reason: 'stop',
+  },
+];
+
+const FILLS: Fill[] = [
+  {
+    idempotency_key: 'SPY-2026-07-19T06:30:00Z',
+    broker_fill_id: 'alpaca-fill-spy-entry',
+    leg: 'entry',
+    price: 552.1,
+    qty: 20,
+    fee: 1.2,
+    timestamp: hoursAgo(8),
+  },
+  {
+    idempotency_key: 'SPY-2026-07-19T06:30:00Z',
+    broker_fill_id: 'alpaca-fill-spy-target',
+    leg: 'target',
+    price: 559.8,
+    qty: 20,
+    fee: 1.2,
+    timestamp: hoursAgo(6.5),
+  },
+  {
+    idempotency_key: 'QQQ-2026-07-19T04:30:00Z',
+    broker_fill_id: 'alpaca-fill-qqq-entry',
+    leg: 'entry',
+    price: 495.6,
+    qty: 15,
+    fee: 0.9,
+    timestamp: hoursAgo(10),
+  },
+  {
+    idempotency_key: 'QQQ-2026-07-19T04:30:00Z',
+    broker_fill_id: 'alpaca-fill-qqq-stop',
+    leg: 'stop',
+    price: 500.1,
+    qty: 15,
+    fee: 0.9,
+    timestamp: hoursAgo(9),
   },
 ];
 
@@ -520,6 +601,16 @@ export class InMemoryQueryStore implements DashboardQueryStore {
 
   getOpenPositions(_asOf: Date): OpenPosition[] {
     return OPEN_POSITIONS;
+  }
+
+  getRecentClosedTrades(limit: number, _asOf: Date): ClosedTrade[] {
+    return CLOSED_TRADES.slice(0, limit);
+  }
+
+  /** Same "scoped to the named lots" contract as `SqliteQueryStore` — see there. */
+  getFillsForTrades(idempotencyKeys: readonly string[], _asOf: Date): Fill[] {
+    const keys = new Set(idempotencyKeys);
+    return FILLS.filter((fill) => keys.has(fill.idempotency_key));
   }
 
   getVerdictHistory(limit: number, _asOf: Date): VerdictAuditEntry[] {

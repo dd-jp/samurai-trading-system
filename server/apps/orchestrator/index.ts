@@ -46,7 +46,7 @@
  * process fast, naming every missing variable, rather than starting a
  * half-wired process against real money.
  */
-import { basename } from 'node:path';
+import { basename, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { ALPACA_CREDENTIAL_ENV_VARS } from '../../pipeline/execution/index.js';
 import { MiArchiveStore, miArchivePath } from '../../providers/market-intelligence/index.js';
@@ -605,6 +605,18 @@ export async function startFromEnvironment(
     const dbPath = sharedStorePath();
     assertStorePathMatchesMode({ dbPath, mode });
     db = openSharedStore(dbPath);
+    // #940: `dbPath` is relative to the process's working directory (see the
+    // `sharedStorePath()` comment above) — the orchestrator and the dashboard
+    // can each resolve it against a different cwd and silently open two
+    // different files, with no error on either side. Naming the resolved
+    // ABSOLUTE path here is what would have made that mismatch visible.
+    logger.log({
+      trace_id: 'startup',
+      stage: 'orchestrator',
+      level: 'info',
+      message: 'orchestrator store opened',
+      payload: { db_path: resolve(dbPath) },
+    });
   }
 
   // #686 rollout guard. Runs against BOTH the handle we opened and one the

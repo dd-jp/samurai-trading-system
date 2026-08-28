@@ -11,7 +11,9 @@
 
 import type {
   AnalystPerformanceRow,
+  ClosedTradeRow,
   DebateRow,
+  FillRow,
   LlmSpendSummary,
   LlmSpendWindow,
   MetricsSuiteWire,
@@ -90,6 +92,38 @@ export function makePosition(overrides: Partial<PositionRow> = {}): PositionRow 
   };
 }
 
+export function makeClosedTrade(overrides: Partial<ClosedTradeRow> = {}): ClosedTradeRow {
+  return {
+    idempotency_key: 'key-spy-closed-1',
+    debate_id: 'debate-spy-1',
+    instrument: 'SPY',
+    asset_class: 'stocks',
+    side: 'buy',
+    entry_price: 552.1,
+    exit_price: 559.8,
+    filled_size: 20,
+    realized_pnl_net: 151.6,
+    fees_total: 2.4,
+    opened_at: '2026-08-07T06:30:00.000Z',
+    closed_at: '2026-08-07T08:00:00.000Z',
+    close_reason: 'target',
+    ...overrides,
+  };
+}
+
+export function makeFill(overrides: Partial<FillRow> = {}): FillRow {
+  return {
+    idempotency_key: 'key-spy-closed-1',
+    broker_fill_id: 'alpaca-fill-spy-target',
+    leg: 'target',
+    price: 559.8,
+    qty: 20,
+    fee: 1.2,
+    timestamp: '2026-08-07T08:00:00.000Z',
+    ...overrides,
+  };
+}
+
 export function makeDebate(overrides: Partial<DebateRow> = {}): DebateRow {
   return {
     debate_id: 'debate-1',
@@ -162,6 +196,8 @@ export function makeSnapshot(overrides: Partial<WireSnapshot> = {}): WireSnapsho
     mode: 'paper',
     tick_status: null,
     positions: [makePosition()],
+    closed_trades: [makeClosedTrade()],
+    fills: [makeFill()],
     debates: [makeDebate()],
     verdicts: [makeVerdict()],
     analysts: [makeAnalyst()],

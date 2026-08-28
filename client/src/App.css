@@ -1206,6 +1206,95 @@ main {
   font-family: var(--font-mono);
 }
 
+/* ------------------------------------------------------------- closed trades */
+
+/* Same card chrome as `.position-card` — a closed trade is the same kind of
+   row, one step later in its life — but named separately (#940) so the two
+   panels can diverge without one's tuning silently reaching the other. */
+.trade-card {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  background: rgb(var(--ink-rgb) / 0.5);
+}
+
+.trade-top {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.trade-symbol {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 14px;
+  letter-spacing: 0.06em;
+}
+
+.trade-size {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.close-reason {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.trade-pnl {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.trade-meta {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+}
+
+.trade-fills {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--border);
+}
+
+.trade-fill-row {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--muted);
+  padding: 2px 0;
+  flex-wrap: wrap;
+}
+
+.trade-fill-leg {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text);
+}
+
+.trade-fill-id {
+  margin-left: auto;
+  opacity: 0.7;
+}
+
 /* --------------------------------------------------------------- metrics */
 
 .stat-grid {
