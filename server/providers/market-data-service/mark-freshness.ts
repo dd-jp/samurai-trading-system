@@ -31,27 +31,53 @@
 import type { Mark } from './types.js';
 
 /**
+ * How far a mark may be observed AHEAD of `now` before `isMarkStale` treats it
+ * as a clock disagreement rather than pass latency (#939).
+ *
+ * `now` (the `asOf` a caller passes in) is typically the tick's START instant,
+ * while a mark is read some milliseconds or seconds later in the SAME pass —
+ * a data source that stamps `observed_at` from a live quote clock (e.g.
+ * `AlpacaDataSource`, from the venue's own quote timestamp) then legitimately
+ * produces a mark "ahead" of `now` by however long the pass has taken so far.
+ * That is ordering by construction, not evidence either clock is wrong.
+ *
+ * A few seconds comfortably covers realistic pass latency (soak observed
+ * 149ms and 1083ms) while staying far below a genuine venue-vs-us skew, which
+ * shows up in minutes, not milliseconds. Kept as its own named constant
+ * rather than folded into `maxAgeMs` — the two bound different things: this
+ * one caps ORDERING slop within a pass, `maxAgeMs` caps how OLD a mark may be.
+ */
+export const MARK_FORWARD_TOLERANCE_MS = 5_000;
+
+/**
  * How old `mark` is at `now`, in milliseconds.
  *
- * Can be NEGATIVE: a mark observed after `now` is a clock disagreement between
- * this process and the venue, not a fresh mark. Callers must treat that as its
- * own failure rather than as "very fresh" — `isMarkStale` does.
+ * Can be NEGATIVE: a mark observed after `now` is either normal pass latency
+ * (within `MARK_FORWARD_TOLERANCE_MS`, see `isMarkStale`) or a genuine clock
+ * disagreement between this process and the venue, not a fresh mark. Callers
+ * must not treat a negative age as "very fresh" on their own — leave that
+ * distinction to `isMarkStale`, which applies the tolerance.
  */
 export function markAgeMs(mark: Mark, now: Date): number {
   return now.getTime() - mark.observed_at.getTime();
 }
 
 /**
- * True when `mark` must not be acted on: older than `maxAgeMs`, OR observed in
- * the future.
+ * True when `mark` must not be acted on: older than `maxAgeMs`, OR observed
+ * further ahead of `now` than `MARK_FORWARD_TOLERANCE_MS` allows.
  *
- * The future case is deliberately folded in here rather than left to each
- * caller. An `observed_at` ahead of our clock means one of the two clocks is
- * wrong, and neither answer is safe: if OUR clock is behind, the mark may be
- * genuinely fine, but every other time comparison in the pass — signal age,
- * the flatten window, the bar coordinate — is also being computed against a
- * clock we have just caught being wrong. Refusing costs one tick; trusting it
- * means trading on arithmetic we have direct evidence against.
+ * The forward case is deliberately folded in here rather than left to each
+ * caller, but it is NOT a bare `age < 0` check (#939). `now` is typically a
+ * tick-start `asOf`, and marks are read later in the same pass, so a mark
+ * legitimately lands a few hundred milliseconds "ahead" of `now` on every
+ * busy tick — that is our own pipeline latency, not two clocks disagreeing.
+ * Only once the mark is ahead by more than `MARK_FORWARD_TOLERANCE_MS` does
+ * this stop being explainable by ordering and start being evidence that one
+ * of the two clocks is actually wrong: if OUR clock is behind, the mark may
+ * be genuinely fine, but every other time comparison in the pass — signal
+ * age, the flatten window, the bar coordinate — is also being computed
+ * against a clock we have just caught being wrong. Refusing costs one tick;
+ * trusting it means trading on arithmetic we have direct evidence against.
  *
  * A `maxAgeMs` of 0 or less is rejected as a configuration error rather than
  * silently making every mark stale. That shape is how a gate becomes a
@@ -69,5 +95,5 @@ export function isMarkStale(mark: Mark, now: Date, maxAgeMs: number): boolean {
   }
 
   const age = markAgeMs(mark, now);
-  return age < 0 || age > maxAgeMs;
+  return age < -MARK_FORWARD_TOLERANCE_MS || age > maxAgeMs;
 }

@@ -32,7 +32,7 @@ export {
 } from './indicators.js';
 export type { NormalizeContext, RawCandle } from './ingestion.js';
 export { completedBars, deriveBacktestMark, normalizeBars } from './ingestion.js';
-export { isMarkStale, markAgeMs } from './mark-freshness.js';
+export { isMarkStale, MARK_FORWARD_TOLERANCE_MS, markAgeMs } from './mark-freshness.js';
 export { collectMarks } from './marks-batch.js';
 export type { RvolDegradedReason, RvolReading } from './rvol.js';
 export { computeRvol, RVOL_SESSION_WINDOW } from './rvol.js';

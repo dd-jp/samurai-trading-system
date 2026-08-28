@@ -394,6 +394,34 @@ describe('computePortfolioView — feed staleness (#640)', () => {
     await expect(computePortfolioView(input)).rejects.toThrow(/AHEAD of our clock/);
   });
 
+  // #939: `asOf` is the tick's START instant, and `getMark` is called some
+  // milliseconds or seconds into the same pass, so a live-stamped mark
+  // legitimately lands after `asOf` on a busy tick. That is pipeline
+  // latency, not a clock disagreement — it must value the book, not abort
+  // it. Reproduces the soak failure: 149ms/1083ms-ahead AAPL marks aborted
+  // SPY's whole tick under the pre-#939 bare `age < 0` rule.
+  it('values the book when a held instrument’s mark is observed slightly AFTER asOf (pass latency, #939)', async () => {
+    const input = makeInput({
+      positions: [makePosition()],
+      marketData: makeMarketDataObservedAt({
+        AAPL: { price: 100, observed_at: new Date(asOf.getTime() + 149) },
+      }),
+    });
+
+    await expect(computePortfolioView(input)).resolves.toBeDefined();
+  });
+
+  it('values the book when a held instrument’s mark is observed over a second AFTER asOf (pass latency, #939)', async () => {
+    const input = makeInput({
+      positions: [makePosition()],
+      marketData: makeMarketDataObservedAt({
+        AAPL: { price: 100, observed_at: new Date(asOf.getTime() + 1083) },
+      }),
+    });
+
+    await expect(computePortfolioView(input)).resolves.toBeDefined();
+  });
+
   it('applies the bound for each position’s OWN asset class', async () => {
     // One mark age, 5 minutes, held under both classes: past the 2-minute
     // crypto bound, inside the 15-minute stocks one.
