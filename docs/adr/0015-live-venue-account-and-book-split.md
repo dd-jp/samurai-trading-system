@@ -142,7 +142,9 @@ It also interacts with [ADR-0017](0017-validation-gates-paper-operational-thesis
 
 ### What this does not change
 
-The **GBP LSE-listed ETF/ETC constraint** and **[ADR-0017](0017-validation-gates-paper-operational-thesis-expectancy.md)'s £100–200 live ramp** — the ramp is sized to surface the three unconfirmables at the smallest size producing real fills, and a smaller total book does not change what it is for. ~~The **ISA restriction**... **the Trading 212 venue**... **the UK tax position** is unchanged...~~ **Superseded 2026-08-30 — see the amendment below.** Both the ISA wrapper and the T212 venue named here were dropped; the venue is now Saxo, GIA, and the tax position is the operative CGT/disclosure exposure that paragraph warned was "not durable."
+The **GBP LSE-listed ETF/ETC constraint** and **[ADR-0017](0017-validation-gates-paper-operational-thesis-expectancy.md)'s £100–200 live ramp** — the ramp is sized to surface the three unconfirmables at the smallest size producing real fills, and a smaller total book does not change what it is for. This section previously also named the **ISA restriction**, the **Trading 212 venue**, and an unchanged **UK tax position** as untouched by the book-size change.
+
+> **SUPERSEDED 2026-08-30 — see the amendment below.** Both the ISA wrapper and the Trading 212 venue named above were dropped; the venue is now Saxo, GIA, and the tax position is the operative CGT/disclosure exposure that paragraph warned was "not durable."
 
 `docs/research/54-capital-economics-vs-signal-accuracy.md` states its arithmetic **per £1,000 notional**, which is now the book rather than a convenient unit — its 0.55 pp cost-in-accuracy figure applies directly, and the £5,000 column there is hypothetical.
 
@@ -161,7 +163,7 @@ The **GBP LSE-listed ETF/ETC constraint** and **[ADR-0017](0017-validation-gates
 
 **Cost model and D5 sizing are not disturbed the way a venue change usually would be.** Doc 35 warned generally that "any per-order commission floor argues for fewer, larger positions" — the opposite direction from D5's fractions — and that this fights D5 directly at IBKR (its £250 bracket is strictly worse than its £350 one). **Saxo has no per-order minimum**: 8bps is a flat rate on notional, proportional at both D5 ticket sizes, so this risk does not materialise for the venue actually chosen. `docs/research/53`'s `CostModelImpl`, which floors commission at a 1bp-of-notional *rate*, models Saxo's rate-based structure in kind (not in the exact 8bps figure) rather than IBKR's per-order floor — a rate-calibration update to 8bps is an implementation follow-up, not a structural fix.
 
-**LSE L1 market data (#895) stays an open, separate question.** Saxo's £7/month entitlement (refunded on ≥4 trades/month) is confirmed to exist but whether it is delivered over OpenAPI or only through SaxoTraderGO's UI was not asked in the #910 exchange and remains unresolved — [[no-lse-mark-source]] is not closed by this amendment.
+**LSE L1 market data ([#895](https://github.com/dd-jp/samurai-trading-system/issues/895)) stays an open, separate question.** Saxo's £7/month entitlement (refunded on ≥4 trades/month) is confirmed to exist but whether it is delivered over OpenAPI or only through SaxoTraderGO's UI was not asked in the #910 exchange and remains unresolved — the live equity leg still has no confirmed mark source, and this amendment does not close that gap.
 
 ### What this does not change
 
