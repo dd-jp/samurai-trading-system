@@ -425,6 +425,16 @@ async function buildBracket(
 
   if (debate.confidence < config.conviction_floor) return skip('below_conviction_floor');
 
+  // `marketData.getMark` here is the mark read #900 pins for BOTH callers of
+  // this function — an entry AND a scale_in (`intentType`, above): it is
+  // load-bearing (it prices `entry`/`stop`/`target` and its `asset_class`
+  // picks the flatten calendar a few lines down), it has no failover — only
+  // `getBars` does, via `FailoverDataSource` — and there is no mode flag or
+  // catch around it. A stalled vendor throws here and takes the whole
+  // `Promise.all` (and this function, and the tick) down with it, on
+  // purpose: opening or adding to a position without a live price is worse
+  // than deferring to the next tick, unlike the ONE exit ADR-0014 makes
+  // mandatory (see `readExitPrice`'s docstring for the full posture).
   const asOf = clock.now();
   const [mark, bars] = await Promise.all([
     marketData.getMark(instrument, asOf),
@@ -762,6 +772,27 @@ interface ExitAttribution {
  * fails loudly one stage down: `SimulatedBrokerAdapter` prices its own fills
  * through `marketData.getMark`, so an unpriced exit cannot fill quietly there
  * — it raises the same read failure at the adapter instead.
+ *
+ * ## Why this is the settled posture (#900)
+ *
+ * #900 asked whether the remainder — quotes/marks never failed over, so
+ * `signal_decay`, `direction_flip`, every entry, and every scale_in still
+ * throw during a vendor outage — is an open gap or an accepted design. It is
+ * the latter, recorded here rather than reopened: `FailoverDataSource`
+ * fails BARS over to a second vendor and deliberately does not fail
+ * marks/quotes over (see above), and there is no equivalent for a mark today
+ * to fail over TO even if the policy changed — #895 records that no LSE mark
+ * vendor is chosen at all yet, so building failover for a data class with no
+ * live source would be premature. A vendor outage therefore leaves the book
+ * able to take exactly one action: the clock-driven mandatory flatten, which
+ * degrades because deferring it IS the harm (ADR-0014). Every other
+ * decision — an entry, a scale_in, or either discretionary exit — is the
+ * system CHOOSING to act rather than the session forcing it, so failing
+ * closed and deferring to the next tick is the correct posture, not an
+ * oversight this function forgot to handle. `decide.test.ts`'s "#826 — THE
+ * MARK SOURCE STALLS" suite pins this for all four decision kinds — entry,
+ * scale_in, signal_decay, direction_flip — and `live-money-gates.ts` carries
+ * the operator-facing citation.
  */
 async function readExitPrice(
   input: Pick<TraderInput, 'instrument' | 'marketData' | 'onUnpricedFlatten'>,
