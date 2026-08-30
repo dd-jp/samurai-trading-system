@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-08-09
 - **Decided by:** David — *"will run paper for 14 days and then decide whether live. will start with 1500£"*, *"i already have crypto.com account. you decide how 1500 is split based on maths"*
-- **Related:** [#659](https://github.com/dd-jp/samurai-trading-system/issues/659) (broker reality check), [#660](https://github.com/dd-jp/samurai-trading-system/issues/660) (book split), [#671](https://github.com/dd-jp/samurai-trading-system/issues/671) (crypto fee schedules — **resolved**, see the 2026-08-10 amendment), [#673](https://github.com/dd-jp/samurai-trading-system/issues/673) (the two account facts that pick the venue), [#667](https://github.com/dd-jp/samurai-trading-system/issues/667) (the crypto calendar, which sets the fee tier), map [#631](https://github.com/dd-jp/samurai-trading-system/issues/631)
+- **Related:** [#659](https://github.com/dd-jp/samurai-trading-system/issues/659) (broker reality check), [#660](https://github.com/dd-jp/samurai-trading-system/issues/660) (book split), [#671](https://github.com/dd-jp/samurai-trading-system/issues/671) (crypto fee schedules — **resolved**, see the 2026-08-10 amendment), [#673](https://github.com/dd-jp/samurai-trading-system/issues/673) (the two account facts that pick the venue), [#667](https://github.com/dd-jp/samurai-trading-system/issues/667) (the crypto calendar, which sets the fee tier), map [#631](https://github.com/dd-jp/samurai-trading-system/issues/631). Venue superseded 2026-08-30 by map [#905](https://github.com/dd-jp/samurai-trading-system/issues/905) — see the 2026-08-30 amendment; follow-up ships tracked in [#946](https://github.com/dd-jp/samurai-trading-system/issues/946).
 - **Does not supersede** [ADR-0001](0001-technical-foundation-hybrid.md) — Alpaca remains the paper and backtest data path. This ADR decides the **live** venue only.
 
 ## Context
@@ -147,6 +147,49 @@ The **GBP LSE-listed ETF/ETC constraint** and **[ADR-0017](0017-validation-gates
 > **SUPERSEDED 2026-08-30 — see the amendment below.** Both the ISA wrapper and the Trading 212 venue named above were dropped; the venue is now Saxo, GIA, and the tax position is the operative CGT/disclosure exposure that paragraph warned was "not durable."
 
 `docs/research/54-capital-economics-vs-signal-accuracy.md` states its arithmetic **per £1,000 notional**, which is now the book rather than a convenient unit — its 0.55 pp cost-in-accuracy figure applies directly, and the £5,000 column there is hypothetical.
+
+## Amendment — 2026-08-30: the venue changes to **Saxo Capital Markets UK, GIA (not ISA)**
+
+- **Earned by:** map [#905](https://github.com/dd-jp/samurai-trading-system/issues/905) (venue selection), settling [#896](https://github.com/dd-jp/samurai-trading-system/issues/896) (T212 barred), [#906](https://github.com/dd-jp/samurai-trading-system/issues/906) (cost ceilings), [#910](https://github.com/dd-jp/samurai-trading-system/issues/910) (Saxo gating questions), [#911](https://github.com/dd-jp/samurai-trading-system/issues/911) (IBKR, closed without further pursuit), [#912](https://github.com/dd-jp/samurai-trading-system/issues/912) (T212 written-consent route, closed negative)
+- **Decided by:** David — 2026-08-26, *"we have to go with GIA only for day trading"* (settles ISA-vs-GIA); 2026-08-30, confirming Saxo as the venue and #911 as unnecessary to pursue further
+
+### Why Trading 212 stops being the venue
+
+**Trading 212's own API and Invest Terms prohibit algorithmic trading outright**, and the prohibition reaches the ISA (Invest Terms 5.1, incorporated into ISA Terms 1.1/1.2) — recorded on #896. **Written consent was not obtainable**: #912 closed negative. There is no route left by which T212 can host this system. This ADR's original venue decision — GBP LSE-listed ETFs/ETCs over T212 — is superseded on the venue only; the *instrument-class* reasoning (no SDRT, no FX fee on that class) is unaffected by the venue change, because the SDRT exemption on ETFs/ETCs is structural, not ISA-specific.
+
+### The replacement venue: Saxo Capital Markets UK, GIA
+
+**Account type: GIA, not ISA.** The 2026-08-26 ruling settles this specifically for the live leg — ISA wrapping is not part of the venue going forward. This is a genuine change, not a formality: **UK tax treatment changes from unconditionally CGT-exempt (ISA) to CGT-liable (GIA).** Gains and losses on the live equity leg are now real CGT events, subject to the annual exempt amount and CGT rates. Cost-basis and disposal-date tracking, already required for HMRC record-keeping regardless of wrapper, now has teeth.
+
+**Cost, per #906 (closed 2026-08-26), evaluated against a bar-inflation ceiling (1.0 pp added to the required-accuracy bar per subclass) rather than a flat round-trip %:**
+
+| Venue | Round trip | Standing annual drag | Verdict |
+| --- | --- | --- | --- |
+| **Saxo** | 0.16% both tickets | £1.20/yr custody, no inactivity fee | **Clears both ceilings** (0.22% index / 0.53% single-stock; £18.35/yr) |
+| IBKR | 1.71% / 2.40% | £36/yr ISA activity fee | **Fails both by an order of magnitude** — disqualified outright, not a cost trade-off |
+
+**Permission, per #910 (closed 2026-08-30) — all four gating questions resolved:**
+
+1. GIA order entry over OpenAPI — confirmed (Eirik, Saxo UK Digital Sales, case SAX-7604003-X2M1F0, 2026-08-27).
+2. LSE leveraged ETPs tradeable electronically, not desk-only — confirmed for all three named instruments (3USL, 3UKL, an oil ETC); the desk-only carve-out is a separate SETSqx/SEAQ small-cap subset with a £3.5k order minimum.
+3. Own-built OpenAPI integrations permitted — confirmed (Alexander Henry, Saxo OpenAPI Team, ticket 20084, 2026-08-28): *"Retail clients can use OpenAPI within their own built applications... as they wish, as long as it is in accordance with Saxo's general terms of use."*
+4. What the Commissions Schedule's "specific algorithmic orders... trading desk" clause scopes — **not answered in writing.** David judged this non-blocking (2026-08-30) rather than pursuing a further re-ask; recorded as a judgment call, not a resolved fact.
+
+**Not answered, not blocking this decision:** whether Saxo's £7/month LSE Level 1 data entitlement is delivered over OpenAPI — bears on [#895](https://github.com/dd-jp/samurai-trading-system/issues/895) separately.
+
+### What this amendment does NOT change
+
+The **GBP LSE-listed ETF/ETC instrument-class restriction** ([#659](https://github.com/dd-jp/samurai-trading-system/issues/659)), the **£1,000, all-equity book** (the 2026-08-18 amendment above), and **ADR-0017's £100–200 live ramp** are all venue-independent and stand as written.
+
+### What this amendment does NOT ship on its own — filed as follow-up
+
+This ADR records the venue decision; it does not itself update the documents and code that assumed Trading 212. Filed as [#946](https://github.com/dd-jp/samurai-trading-system/issues/946):
+
+- **ADR-0016**'s per-instrument ISA/SDRT/desk-execution checks (doc 36/37) were framed against T212/ISA and need re-checking against Saxo/GIA — the SDRT conclusion should be unaffected (structural), the ISA framing is not.
+- **CLAUDE.md's Broker Plan** section still names T212/Freetrade for live equities and IBKR as the long-term stocks venue; both are now wrong (T212 barred, IBKR disqualified on cost).
+- **#659**'s GBP-LSE restriction ticket should be re-read against the venue change, though the restriction itself is expected to survive unchanged.
+- **#895** (LSE real-time L1 mark vendor) was blocked on the venue choice and can now proceed against Saxo.
+- **Code**: `server/providers/market-data-service/index.ts`, `server/providers/universe-pool/lse-etp-pool.ts` (+ test), `server/apps/orchestrator/production.test.ts`, `server/apps/orchestrator/d5-trader-cap-agreement.test.ts`, `server/apps/orchestrator/paper-profile.ts`, and `server/apps/orchestrator/live-money-gates.ts` all reference Trading 212 by name and need a pass once a `BrokerAdapter` for Saxo exists.
 
 ## Amendment — 2026-08-30: equity venue moves to Saxo Capital Markets UK, GIA — Trading 212 ruled out
 
