@@ -349,24 +349,59 @@ export const RISK_CAP_EQUITY_FRACTIONS = {
  * D5's published cash figures were calibrated against, and it is the base the
  * drawdown envelope of #798 is a fraction of. It is NOT the live account
  * balance: the gate resolves against `portfolio.equity` on every decision
- * (#739), and this is the inception figure the ADR names.
+ * (#739), clamped to this figure — see the next paragraph — and this is the
+ * inception figure the ADR names.
  *
- * **It is a DOCUMENTATION constant and enforces nothing.** Nothing in the
- * runtime reads it — the deleted `EQUITY_LEG_FRACTION_OF_CAPITAL` actually
- * scaled the gate, and this does not replace that role. Stated because
- * Samurai's dominant defect is the tested mechanism nothing calls: do not
- * read this as a bound on the book. The book is bounded by what the account
- * is funded with.
+ * **#888 resolved: this IS load-bearing now, not documentation-only.**
+ * Until #888, nothing in the runtime read this constant — the deleted
+ * `EQUITY_LEG_FRACTION_OF_CAPITAL` used to scale the gate, and deleting it
+ * left NOTHING bounding D5's fractions to the declared book, correct only
+ * while funded equity happened to equal it exactly. Above it, the same
+ * fractions authorised proportionally more cash than the book was sized for
+ * (£1,500 funded resolved £525 at the 0.35 fraction, not £350) — asserted at
+ * the time as the one exposure #885 knowingly left open. `d5EnvelopeFor`
+ * below now passes this figure as `SubclassDeploymentCap.equity_ceiling.book`,
+ * so `perSubclassDeploymentCap` (risk-manager/index.ts) clamps its equity
+ * read to it, and REFUSES the entry outright once funded equity exceeds it
+ * by more than `D5_BOOK_REFUSE_ABOVE_TOLERANCE`. The book is still bounded by
+ * what the account is funded with — this constant is what stops that funding
+ * level, if it drifts, from silently reaching every position's sizing too.
  *
- * **And that is the assumption the unscaled form rests on.** The 0.5 was an
- * ACCOUNT -> LEG conversion, because `RiskPortfolioView.equity` is the whole
- * account while D5's fractions are of the leg. Deleting it is correct exactly
- * while the funded equity read EQUALS the book. If the T212 ISA is ever
- * funded above £1,000, `0.35 x equity` sizes against the account rather than
- * the book (0.35 x £1,500 = £525, not £350) — and the fix is then a
- * `book / equity` conversion resolved live, NOT a re-introduced constant.
+ * **`liveStartingProfile` is the only caller that passes this constant
+ * through.** `d5EnvelopeFor` takes the book as an optional parameter rather
+ * than reading this constant directly, because the ceiling is a statement
+ * about the LIVE account specifically — `paperStartingProfile` runs against
+ * Alpaca's simulated ~$100,000 balance, and clamping a classified paper
+ * universe to a £1,000 ceiling would refuse every entry rather than test
+ * anything. See `d5EnvelopeFor`'s docstring for the paper-soak failure mode
+ * an earlier, unconditional version of this wiring would have caused.
+ *
+ * **And that is the assumption the unscaled fraction form rests on.** The old
+ * 0.5 was an ACCOUNT -> LEG conversion, because `RiskPortfolioView.equity` is
+ * the whole account while D5's fractions are of the leg. Deleting it in #885
+ * was correct exactly while the funded equity read EQUALS the book; #888's
+ * `equity_ceiling` is the live `book / equity` conversion #885's own body
+ * named as the repair, resolved at evaluate time rather than as a
+ * re-introduced static constant.
  */
 export const LIVE_BOOK_GBP = 1_000;
+
+/**
+ * #888's backstop: how far funded equity may drift above `LIVE_BOOK_GBP`
+ * before `perSubclassDeploymentCap` refuses a D5-classified entry outright,
+ * rather than merely clamping its equity read to the book.
+ *
+ * Chosen as "a few percent" per the issue's own framing — small enough that
+ * routine drift (a pending dividend credit, a stray fee, a top-up mid-cycle)
+ * does not halt trading, but small enough that a materially overfunded
+ * account (the £1,000 -> £1,500 scenario #888 was filed against) still
+ * refuses rather than silently sizing on the wider figure. Not a Feedback
+ * Loop dial for the same reason D5's fractions themselves are not one (see
+ * `D5_DEPLOYMENT_FRACTION_OF_EQUITY_LEG`): this bounds how far the ACCOUNT
+ * may drift from a number the operator declared, not a risk parameter the
+ * loop has any business tuning.
+ */
+export const D5_BOOK_REFUSE_ABOVE_TOLERANCE = 0.05;
 
 /**
  * ADR-0018 D5 — max deployment per subclass, as a fraction of the EQUITY LEG.
@@ -445,14 +480,55 @@ export function subclassDeploymentCapFractionsOfEquity(): Record<
  * A universe that is PARTLY classified still arms it, and the unclassified
  * names then throw at sizing time. That is intended: a half-populated pool
  * file is a mistake to surface, not one to size around.
+ *
+ * **`equity_ceiling` is set here (#888) only when a book is supplied — LIVE
+ * ONLY, not unconditionally.** D5's fractions were measured against
+ * `LIVE_BOOK_GBP`, a declaration about the live account, not about whatever
+ * balance the account this gate observes happens to hold. An earlier version
+ * of this function set the ceiling unconditionally for every caller,
+ * reasoning that it was harmless because `DEFAULT_UNIVERSE` carries no
+ * subclasses today — but the moment a universe IS classified (C1's LSE-ETP
+ * pool file, #703), that reasoning inverts: `paperStartingProfile` runs
+ * against Alpaca's simulated ~$100,000 balance, ~100x `LIVE_BOOK_GBP`, so an
+ * unconditional ceiling would REFUSE every classified paper entry, forever —
+ * failing closed and silently blocking the very soak (#238) live money is
+ * gated on. Threading the book through as a parameter, supplied only by
+ * `liveStartingProfile` (live-profile.ts), keeps the fix scoped to the
+ * account it is actually a statement about. `buildStartingProfileConfigs` is
+ * still the one shared builder (a copy would drift) — only the book argument
+ * differs between the two callers, the same way the capital ceiling already
+ * does.
+ *
+ * A fixture in `per-subclass-deployment-cap.test.ts` that builds a bare
+ * `SubclassDeploymentCap` by hand gets no ceiling either, and resolves
+ * against raw `portfolio.equity` exactly as before.
  */
 export function d5EnvelopeFor(
   universe: readonly UniverseInstrument[],
+  /**
+   * The declared book this envelope's fractions resolve against, in GBP —
+   * `LIVE_BOOK_GBP` for the live profile, `undefined` for paper (and for
+   * backtest/tests that build no book at all). `undefined` means "no ceiling
+   * at all": the fraction resolves against raw `portfolio.equity`, same as
+   * before #888.
+   */
+  bookCeilingGbp?: number,
 ): SubclassDeploymentCap | undefined {
   const subclass_of = subclassOfUniverse(universe);
   if (Object.keys(subclass_of).length === 0) return undefined;
 
-  return { subclass_of, cap_fraction_of_equity: subclassDeploymentCapFractionsOfEquity() };
+  return {
+    subclass_of,
+    cap_fraction_of_equity: subclassDeploymentCapFractionsOfEquity(),
+    ...(bookCeilingGbp === undefined
+      ? {}
+      : {
+          equity_ceiling: {
+            book: bookCeilingGbp,
+            refuse_above_tolerance: D5_BOOK_REFUSE_ABOVE_TOLERANCE,
+          },
+        }),
+  };
 }
 
 /**
@@ -989,6 +1065,15 @@ export function buildStartingProfileConfigs(
    * this repo's dominant defect shape wearing a test.
    */
   universe: readonly UniverseInstrument[] = DEFAULT_UNIVERSE,
+  /**
+   * #888 — the declared book (GBP) D5's fractions resolve against once
+   * equity drifts past it, passed through to `d5EnvelopeFor` unchanged.
+   * `undefined` for paper (Alpaca's simulated balance is not the book);
+   * `liveStartingProfile` (live-profile.ts) is the one caller that supplies
+   * `LIVE_BOOK_GBP`. See `d5EnvelopeFor`'s docstring for why this is not
+   * unconditional.
+   */
+  bookCeilingGbp?: number,
 ): Pick<
   ProductionConfig,
   | 'universe'
@@ -1029,7 +1114,7 @@ export function buildStartingProfileConfigs(
   // read by both, makes it hold by construction: the D5 gate's classification,
   // the Trader's `subclass_of` and the ticked list are the same list or none of
   // them are.
-  const subclassCap = d5EnvelopeFor(universe);
+  const subclassCap = d5EnvelopeFor(universe, bookCeilingGbp);
 
   const traderConfig: TraderConfig = {
     // SPEC — `DEFAULT_TRADER_CONFIG` (server/pipeline/trader/types.ts) is the one set of
@@ -1182,6 +1267,23 @@ export function buildStartingProfileConfigs(
      * failing acceptance-criteria test this leaves open.
      */
     ...(subclassCap === undefined ? {} : { per_subclass_deployment_cap: subclassCap }),
+    /**
+     * #888 review fix-up — armed whenever a book is supplied, WITHOUT
+     * depending on `subclassCap`/universe classification at all. This is
+     * what makes the account-level refusal work on `DEFAULT_UNIVERSE`
+     * (no subclasses yet, so `subclassCap` above is `undefined` on the
+     * actual shipped live path) — see `RiskConfig['live_book_ceiling']`'s
+     * doc comment (risk-manager/types.ts) for why the per-subclass
+     * `equity_ceiling` alone does not arm here.
+     */
+    ...(bookCeilingGbp === undefined
+      ? {}
+      : {
+          live_book_ceiling: {
+            book: bookCeilingGbp,
+            refuse_above_tolerance: D5_BOOK_REFUSE_ABOVE_TOLERANCE,
+          },
+        }),
   };
 
   const verdictConfig: VerdictConfig = {

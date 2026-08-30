@@ -474,10 +474,19 @@ const concentrationCorrelationCap: EntryCapGate = (config, intent, portfolio, co
  * `ENTRY_CAP_GATES` loop is entered, so no throw in any gate — this one
  * included — can block an exit. Flat-by-close therefore cannot be stopped by a
  * stale pool file, which matters because a flatten that silently stops running
- * is the defect class #670/#706 were filed for. The blast radius is exactly:
- * one unclassified instrument's ENTRIES refuse, every tick, until the pool file
- * is corrected. That refusal is the intended reading of a half-populated pool
- * file, and it is strictly safer than the alternative of entering unbounded.
+ * is the defect class #670/#706 were filed for. **The blast radius is no
+ * longer just one unclassified instrument (#888 review fix-up added a second
+ * refusal path).** An instrument absent from `subclass_of` still refuses ITS
+ * OWN entries alone, every tick, until the pool file is corrected — that part
+ * is unchanged. But an OVERFUNDED account now refuses much wider than that:
+ * this gate's own `equity_ceiling` refuses every D5-classified instrument's
+ * entries once armed, and `liveBookCeiling` (this file, below) refuses EVERY
+ * instrument's entries — classified or not — regardless of pool-file state,
+ * because it reads `config.live_book_ceiling` directly rather than resolving
+ * through `subclass_of`. Both are the intended reading of their respective
+ * triggers (a half-populated pool file; an overfunded account) and remedies
+ * (correct the pool file; re-fund the account down to the declared book, or
+ * raise the book deliberately) — both strictly safer than entering unbounded.
  *
  * **That "one instrument" bound is a claim about a caller, so here is the
  * caller.** `SequentialTickRunner.runInstrument` deliberately has no try/catch;
@@ -548,10 +557,45 @@ const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
   }
   if (capFraction === null) return null;
 
+  // #888 — the equity this fraction resolves against is the DECLARED BOOK
+  // (`equity_ceiling.book`), not raw `portfolio.equity`, once the two
+  // diverge. `portfolio.equity` is one blended broker figure with no
+  // per-leg accounting, so it equals the book only by coincidence of how the
+  // account happens to be funded at this instant; funding it past the book
+  // must not silently widen every position the same fractions size.
+  const ceiling = declared.equity_ceiling;
+  if (ceiling !== undefined) {
+    const refuseAbove = ceiling.book * (1 + ceiling.refuse_above_tolerance);
+    if (portfolio.equity > refuseAbove) {
+      // The backstop half of the fix: an account funded THIS far past the
+      // declared book does not merely make this one cap too generous — it
+      // invalidates the other assumptions the book was sized against too
+      // (the breaker baselines, the drawdown envelope D5's fractions were
+      // measured to hold). Refusing the entry outright, rather than quietly
+      // capping and moving on, is what turns that into something the
+      // operator has to notice and correct, per #888's chosen resolution.
+      throw new PerSubclassCapUnresolvableError(
+        `per_subclass_deployment_cap's declared book is ${ceiling.book} but portfolio.equity is ` +
+          `${portfolio.equity}, more than ${(ceiling.refuse_above_tolerance * 100).toFixed(0)}% ` +
+          `above it. ADR-0018 D5's envelope was measured against the declared book (#888), and an ` +
+          'account funded this far past it invalidates every sizing assumption built on that ' +
+          'book, not just this one fraction. Refusing to size this entry — re-fund the account ' +
+          'down to the declared book, or raise the book deliberately.',
+        intent.instrument,
+        `per_subclass_deployment_cap:equity_exceeds_book:${intent.instrument}`,
+      );
+    }
+  }
+
   // Resolved against the equity read of THIS decision (#739), which is the
   // whole point of the fractional form: a frozen cash cap is a rising fraction
-  // of a falling book, so it stops bounding drawdown at the first loss.
-  const cap = capFraction * portfolio.equity;
+  // of a falling book, so it stops bounding drawdown at the first loss. Below
+  // the declared book (or when no book is declared at all) that equity read
+  // is `portfolio.equity` unclamped; at or above the book (within tolerance)
+  // it is clamped to the book, per #888 — the whole point of `equity_ceiling`.
+  const cappedEquity =
+    ceiling === undefined ? portfolio.equity : Math.min(portfolio.equity, ceiling.book);
+  const cap = capFraction * cappedEquity;
 
   const deployedToSubclass = Object.entries(portfolio.exposure_by_instrument)
     .filter(([instrument]) => declared.subclass_of[instrument] === subclass)
@@ -563,8 +607,72 @@ const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
   };
 };
 
+/**
+ * #888 review fix-up — the account-level counterpart of
+ * `perSubclassDeploymentCap`'s `equity_ceiling`, armed INDEPENDENTLY of
+ * universe classification.
+ *
+ * `perSubclassDeploymentCap`'s `equity_ceiling` refusal only fires once an
+ * instrument is D5-classified (`declared.subclass_of[intent.instrument]`
+ * resolves) — and `DEFAULT_UNIVERSE` (scheduler.ts), the universe
+ * `liveStartingProfile()` actually boots on, classifies nothing today. This
+ * gate reads `config.live_book_ceiling` instead, a sibling field set by
+ * `buildStartingProfileConfigs` whenever a book is supplied (live only),
+ * with no dependency on `subclass_of` — so an overfunded live account
+ * refuses EVERY entry, on EVERY instrument, from the first tick, not just
+ * the ones the pool file happens to classify. See
+ * `RiskConfig['live_book_ceiling']`'s doc comment (types.ts) for the full
+ * "why doesn't the existing mechanism cover this" account.
+ *
+ * Placed in `ENTRY_CAP_GATES` rather than ahead of the exit early-return in
+ * `evaluate()` on purpose: a throw above that early return would block
+ * exits and flat-by-close too (the exact defect class `guards-before-early-
+ * returns` was filed for) — living in the gates array inherits the
+ * structural guarantee that only entries ever reach it.
+ *
+ * **Returns `null`, never a cap.** This gate is a pure refusal (throw) or
+ * pass-through — it does not itself narrow `allowedAdditional`, because
+ * `perSubclassDeploymentCap`'s own `equity_ceiling` clamp already does that
+ * job once an instrument IS classified. Duplicating the clamp here would
+ * double-count for a classified instrument and do nothing for an
+ * unclassified one (no fraction to clamp).
+ *
+ * **Unresolved USD/GBP mismatch — read `live_book_ceiling`'s doc comment
+ * before assuming this compares like with like.** `ceiling.book` is GBP;
+ * `portfolio.equity` is sourced from Alpaca's account balance, which is
+ * USD, with no FX conversion anywhere in this codebase. This comparison is
+ * only valid while the funding source and the declared book share a
+ * currency — they do not today, so this will misfire (refuse a correctly
+ * funded GBP account, or fail to refuse a correctly funded one, depending on
+ * the prevailing rate) the moment live boot's other gates clear
+ * (`live-money-gates.ts` refuses live boot outright today regardless, so
+ * this is a flagged gap, not a live bug).
+ */
+const liveBookCeiling: EntryCapGate = (config, intent, portfolio) => {
+  const ceiling = config.live_book_ceiling;
+  if (ceiling === undefined) return null;
+
+  const refuseAbove = ceiling.book * (1 + ceiling.refuse_above_tolerance);
+  if (portfolio.equity > refuseAbove) {
+    throw new PerSubclassCapUnresolvableError(
+      `live_book_ceiling's declared book is ${ceiling.book} but portfolio.equity is ` +
+        `${portfolio.equity}, more than ${(ceiling.refuse_above_tolerance * 100).toFixed(0)}% ` +
+        'above it. This account-level check (#888 review fix-up) arms regardless of whether any ' +
+        'instrument is D5-classified yet — an account funded this far past the declared book ' +
+        'invalidates every sizing assumption built on that book, not just a classified ' +
+        "subclass's. Refusing to size this entry — re-fund the account down to the declared " +
+        'book, or raise the book deliberately.',
+      intent.instrument,
+      `live_book_ceiling:equity_exceeds_book:${intent.instrument}`,
+    );
+  }
+
+  return null;
+};
+
 /** Spec steps 2–6 plus ADR-0018 D5, in binding order. The array IS the pipeline. */
 const ENTRY_CAP_GATES: readonly EntryCapGate[] = [
+  liveBookCeiling,
   perTradeSizeCap,
   perAssetExposureCap,
   perAssetClassExposureCap,

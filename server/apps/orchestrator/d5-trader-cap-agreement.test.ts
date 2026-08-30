@@ -37,6 +37,7 @@ import {
   D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION,
 } from '../../pipeline/trader/subclass-bracket.js';
 import type { Clock, OrderIntent } from '../../shared/index.js';
+import { liveStartingProfile } from './live-profile.js';
 import {
   buildStartingProfileConfigs,
   LIVE_BOOK_GBP,
@@ -130,6 +131,20 @@ const intentFor = (
 const shippedConfig = (): RiskConfig => buildStartingProfileConfigs(UNIVERSE).riskConfig;
 
 /**
+ * The LIVE profile's `RiskConfig` for the same classified `UNIVERSE` — the
+ * one config that actually carries `per_subclass_deployment_cap.equity_ceiling`
+ * (#888). `shippedConfig()` above is the PAPER wiring, and deliberately does
+ * not: `d5EnvelopeFor` only sets the ceiling when a book is passed, and
+ * `buildStartingProfileConfigs`'s only caller that passes one is
+ * `liveStartingProfile` (live-profile.ts). Built directly from
+ * `buildStartingProfileConfigs(UNIVERSE, LIVE_BOOK_GBP)` rather than via
+ * `liveStartingProfile()` itself, so this file stays independent of the
+ * capital-ceiling env var and the live-mode startup warning log.
+ */
+const liveShippedConfig = (): RiskConfig =>
+  buildStartingProfileConfigs(UNIVERSE, LIVE_BOOK_GBP).riskConfig;
+
+/**
  * The shipped config with every cap OTHER than D5 lifted out of the way.
  *
  * Necessary for the first describe below, which is about the D5 gate alone
@@ -143,6 +158,16 @@ const shippedConfig = (): RiskConfig => buildStartingProfileConfigs(UNIVERSE).ri
  */
 const d5InIsolation = (): RiskConfig => ({
   ...shippedConfig(),
+  max_position_size_fraction_of_equity: 1e6,
+  per_asset_cap_fraction_of_equity: 1e6,
+  per_asset_class_cap_fraction_of_equity: { crypto: 1e6, stocks: 1e6 },
+  portfolio_gross_cap_fraction_of_equity: 1e6,
+  concentration: { cap_fraction_of_equity: 1e6, threshold: 0.7 },
+});
+
+/** `d5InIsolation`, built off `liveShippedConfig()` — for the #888 tests below, which need `equity_ceiling` armed. */
+const d5InIsolationLive = (): RiskConfig => ({
+  ...liveShippedConfig(),
   max_position_size_fraction_of_equity: 1e6,
   per_asset_cap_fraction_of_equity: 1e6,
   per_asset_class_cap_fraction_of_equity: { crypto: 1e6, stocks: 1e6 },
@@ -178,6 +203,20 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
 
     expect(caps?.index_etp_3x).toBe(D5_INDEX_ETP_DEPLOYMENT_FRACTION);
     expect(caps?.single_stock_etp_3x).toBe(D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION);
+  });
+
+  it('#888: only the LIVE profile carries equity_ceiling — paper is deliberately unbounded to the book', () => {
+    // The regression this pins: an earlier version of `d5EnvelopeFor` set
+    // `equity_ceiling` unconditionally for every caller, which would have
+    // made every classified paper entry refuse against Alpaca's simulated
+    // ~$100,000 balance. `buildStartingProfileConfigs`'s book argument is
+    // `undefined` unless a caller supplies one, and `liveStartingProfile`
+    // (live-profile.ts) is the only caller that does.
+    expect(shippedConfig().per_subclass_deployment_cap?.equity_ceiling).toBeUndefined();
+    expect(liveShippedConfig().per_subclass_deployment_cap?.equity_ceiling).toEqual({
+      book: LIVE_BOOK_GBP,
+      refuse_above_tolerance: expect.any(Number),
+    });
   });
 
   it("does NOT trim an armed index entry sized at the Trader's intent", () => {
@@ -216,28 +255,71 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
     expect(decision.modifications?.final_size).toBeCloseTo(deployed, 6);
   });
 
-  it('sizes against the ACCOUNT, so funding above the book overshoots it', () => {
-    // The precondition the deletion of `EQUITY_LEG_FRACTION_OF_CAPITAL` rests
+  it('#888 FIXED: caps against the BOOK once funded equity drifts moderately above it — LIVE profile only', () => {
+    // The precondition the deletion of `EQUITY_LEG_FRACTION_OF_CAPITAL` rested
     // on, asserted rather than only written down. That constant was an
     // account -> leg conversion: `portfolio.equity` is the whole Alpaca
     // account (`production/account-state.ts:129`, one blended `GET /v2/account`
     // figure — there is no per-leg accounting and no Trading212Adapter),
-    // while D5's fractions are of the LEG. Deleting it is correct exactly
-    // while the funded equity equals the book.
+    // while D5's fractions are of the LEG. Deleting it was correct exactly
+    // while the funded equity equals the book — and #888 closed the gap that
+    // left open above it: `d5EnvelopeFor` now hands the LIVE gate a live
+    // `book / equity` conversion (`equity_ceiling`), exactly what #885's body
+    // named as the repair, rather than a re-introduced static constant.
     //
-    // Fund above £1,000 and the same 35% resolves against the account: £525 on
-    // a £1,500 account, not £350. The repair would then be a live
-    // `book / equity` conversion, NOT a re-introduced constant.
+    // `d5InIsolationLive()`, not `d5InIsolation()`: the ceiling is only ever
+    // set for the live profile (see `d5EnvelopeFor`'s docstring, paper-profile.ts) —
+    // a paper run's simulated ~$100,000 balance must never be clamped to the
+    // £1,000 book, or every classified paper entry would refuse.
+    //
+    // Within `D5_BOOK_REFUSE_ABOVE_TOLERANCE` (5%) of the book, the gate caps
+    // resolution AT the book instead of refusing outright — a small funding
+    // drift (a dividend credit, a stray fee) should not halt trading.
+    const withinTolerance = LIVE_BOOK_GBP * 1.02; // £1,020 — 2% over, inside the 5% tolerance
+    const intended = D5_INDEX_ETP_DEPLOYMENT_FRACTION * withinTolerance; // £357, NOT what should size
+
+    const decision = decide(
+      d5InIsolationLive(),
+      intentFor('3USL', intended, 'entry'),
+      {},
+      withinTolerance,
+    );
+
+    expect(decision.status).not.toBe('rejected');
+    // Capped at the BOOK, not the account: 0.35 x £1,000 = £350, not 0.35 x
+    // £1,020 = £357 — the overshoot the pre-#888 gate would have allowed.
+    expect(decision.modifications?.final_size).toBeCloseTo(
+      D5_INDEX_ETP_DEPLOYMENT_FRACTION * LIVE_BOOK_GBP,
+      6,
+    );
+    expect(decision.binding_constraint).toBe('per_subclass_deployment_cap');
+  });
+
+  it('#888 FIXED: REFUSES the entry once funded equity clears the tolerance, rather than sizing on the wider figure — LIVE profile only', () => {
+    // The scenario this test used to pin as the (undesired) status quo:
+    // £1,500 funded on a £1,000 book, 50% over — far past the 5% tolerance.
+    // Pre-#888 the same 35% resolved against the account: £525, not £350.
+    // Post-#888 the gate refuses the entry outright rather than silently
+    // widening it, per the chosen backstop (Option 2, combined with the
+    // book-relative cap above as Option 1) — but only for the LIVE profile;
+    // see `d5InIsolationLive()`.
+    //
+    // **Review fix-up (#888 follow-up): the throw now comes from
+    // `liveBookCeiling`, not `perSubclassDeploymentCap`.** Both gates are
+    // armed for this fixture (`UNIVERSE` is classified AND a book is
+    // supplied), and `liveBookCeiling` sits first in `ENTRY_CAP_GATES` — it
+    // is the account-level check that also fires on `DEFAULT_UNIVERSE`
+    // (no classification at all), which `equity_ceiling` alone cannot do.
+    // See `liveBookCeiling`'s docstring (risk-manager/index.ts).
     const overfunded = 1_500;
     const intended = D5_INDEX_ETP_DEPLOYMENT_FRACTION * overfunded;
 
     expect(intended).toBeCloseTo(525, 6);
     expect(intended).toBeGreaterThan(D5_INDEX_ETP_DEPLOYMENT_FRACTION * LIVE_BOOK_GBP);
 
-    const decision = decide(d5InIsolation(), intentFor('3USL', intended, 'entry'), {}, overfunded);
-
-    expect(decision.status).not.toBe('rejected');
-    expect(decision.modifications?.final_size).toBeCloseTo(intended, 6);
+    expect(() =>
+      decide(d5InIsolationLive(), intentFor('3USL', intended, 'entry'), {}, overfunded),
+    ).toThrow(/live_book_ceiling's declared book/);
   });
 
   it('leaves NO room for a scale-in once an entry took the full envelope — #897, unresolved', () => {
@@ -262,6 +344,72 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
     expect(decision.status).toBe('rejected');
     expect(decision.binding_constraint).toBe('min_viable_size');
   });
+
+  it(
+    '#888 review fix-up: liveStartingProfile() itself refuses an overfunded ' +
+      'entry through the REAL composition root, with NO hand-classified universe',
+    () => {
+      // The gap the review found: every #888 test above builds `RiskConfig`
+      // from a hand-classified `UNIVERSE` fixture passed DIRECTLY to
+      // `buildStartingProfileConfigs`, bypassing `liveStartingProfile()`
+      // entirely — so nothing exercised the actual shipped live composition
+      // root, which calls `buildStartingProfileConfigs(undefined,
+      // LIVE_BOOK_GBP)` and therefore defaults to `DEFAULT_UNIVERSE`
+      // (scheduler.ts), which carries NO subclass classification today.
+      // `d5EnvelopeFor` returns `undefined` for an unclassified universe
+      // (paper-profile.ts), so `per_subclass_deployment_cap` — and with it
+      // `equity_ceiling` — is `undefined` on the real path, proven below.
+      const profile = liveStartingProfile(2_000);
+
+      expect(profile.riskConfig.per_subclass_deployment_cap).toBeUndefined();
+
+      // Yet the account-level `live_book_ceiling` (this review's fix) is
+      // armed regardless — it does not read `subclass_of` at all.
+      expect(profile.riskConfig.live_book_ceiling).toEqual({
+        book: LIVE_BOOK_GBP,
+        refuse_above_tolerance: expect.any(Number),
+      });
+
+      // An overfunded account (£1,500 on a £1,000 book, 50% over — far past
+      // the tolerance) refuses the entry outright through the real live
+      // profile, on an instrument `DEFAULT_UNIVERSE` never classifies (SPY),
+      // proving the refusal does not depend on the pool file at all.
+      const overfunded = 1_500;
+      const spyIntent: OrderIntent = {
+        ...intentFor('SPY', 100, 'entry'),
+        asset_class: 'stocks',
+      };
+
+      expect(() =>
+        new RiskManagerImpl(profile.riskConfig).evaluate({
+          trace_id: 'trace-888-review',
+          intent: spyIntent,
+          clock: CLOCK,
+          portfolio: portfolioWith(overfunded, {}),
+          breakers: NO_BREAKERS,
+          next_breaker_state: NO_PERSISTED_BREAKERS,
+          correlation: NO_CORRELATION,
+          cii: {},
+          mode: 'live',
+        }),
+      ).toThrow(/live_book_ceiling's declared book/);
+
+      // And an exit is unaffected — the gate lives in `ENTRY_CAP_GATES`,
+      // below the exit early-return, not ahead of it.
+      const exitDecision = new RiskManagerImpl(profile.riskConfig).evaluate({
+        trace_id: 'trace-888-review-exit',
+        intent: { ...spyIntent, intent_type: 'exit' },
+        clock: CLOCK,
+        portfolio: portfolioWith(overfunded, { SPY: 100 }),
+        breakers: NO_BREAKERS,
+        next_breaker_state: NO_PERSISTED_BREAKERS,
+        correlation: NO_CORRELATION,
+        cii: {},
+        mode: 'live',
+      });
+      expect(exitDecision.status).toBe('approved');
+    },
+  );
 });
 
 describe('#886 fixed the per-trade cap for D5 instruments — per_asset_cap remains the unclosed gap', () => {
@@ -298,9 +446,18 @@ describe('#886 fixed the per-trade cap for D5 instruments — per_asset_cap rema
 
   it('is SCALE-INVARIANT — both caps are fractions of the same equity, so book size does not change which one binds', () => {
     // The property that replaces the retired "unreachable at every book size"
-    // finding: 10% < 35% holds at every equity, exactly as 5% < 35% did
-    // before #886. Fixing the per-trade cap did not touch this ordering.
-    for (const equity of [200, 1_000, 100_000]) {
+    // finding: 10% < 35% holds at every equity. Fixing the per-trade cap did
+    // not touch this ordering.
+    //
+    // This runs through equity = 100,000 deliberately: `shippedConfig()` is
+    // the PAPER wiring, which never sets `equity_ceiling` (#888 — the book
+    // ceiling only ever arms for the LIVE profile, see
+    // `d5-trader-cap-agreement.test.ts`'s `liveShippedConfig()` and
+    // `d5EnvelopeFor`'s docstring in paper-profile.ts). A paper run's
+    // simulated ~$100,000 balance must remain scale-invariant with this
+    // ordering exactly as before #888 — that is the property #888's fix was
+    // designed not to break.
+    for (const equity of [200, LIVE_BOOK_GBP, 100_000]) {
       const decision = decide(
         shippedConfig(),
         intentFor('3USL', D5_INDEX_ETP_DEPLOYMENT_FRACTION * equity, 'entry'),
@@ -314,6 +471,36 @@ describe('#886 fixed the per-trade cap for D5 instruments — per_asset_cap rema
     expect(RISK_CAP_EQUITY_FRACTIONS.per_asset_cap_fraction_of_equity).toBeLessThan(
       D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION,
     );
+  });
+
+  it('#888: the LIVE profile is NOT scale-invariant above the book — the book ceiling refuses the entry first', () => {
+    // The live-profile mirror of the scale-invariance test above:
+    // `liveShippedConfig()` carries both `equity_ceiling` (per-subclass) and
+    // `live_book_ceiling` (account-level, review fix-up), so at equity =
+    // 100,000 (far past the book and its 5% tolerance) a book ceiling now
+    // binds before `per_asset_exposure_cap` is ever consulted — the gate
+    // refuses the entry outright rather than sizing it against an account
+    // 100x the declared book, which the pre-#888 gate would have done
+    // silently at whichever cap was numerically tighter. This is deliberately
+    // asymmetric with the paper case: a LIVE account funded 100x its declared
+    // book is a real anomaly to refuse; a PAPER account simulated at $100,000
+    // is normal and must not be refused (previous test).
+    //
+    // **Review fix-up: the throw comes from `liveBookCeiling`, the
+    // account-level gate, which sits first in `ENTRY_CAP_GATES` — not from
+    // `perSubclassDeploymentCap`'s `equity_ceiling`.** Both are armed here,
+    // but `liveBookCeiling` is the one that also covers `DEFAULT_UNIVERSE`
+    // (no classification), which is why it goes first.
+    const equity = 100_000;
+
+    expect(() =>
+      decide(
+        liveShippedConfig(),
+        intentFor('3USL', D5_INDEX_ETP_DEPLOYMENT_FRACTION * equity, 'entry'),
+        {},
+        equity,
+      ),
+    ).toThrow(/live_book_ceiling's declared book/);
   });
 });
 

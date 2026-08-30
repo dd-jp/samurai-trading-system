@@ -19,7 +19,7 @@ import {
   minLiveCapitalCeilingUsd,
   resolveLiveCapitalCeilingUsd,
 } from './live-profile.js';
-import { paperStartingProfile, RISK_CAP_EQUITY_FRACTIONS } from './paper-profile.js';
+import { LIVE_BOOK_GBP, paperStartingProfile, RISK_CAP_EQUITY_FRACTIONS } from './paper-profile.js';
 import type { LogEntry, Logger } from './types.js';
 
 const CEILING = 2_000;
@@ -92,17 +92,31 @@ describe('liveStartingProfile', () => {
     expect(profile.capitalCeilingUsd).toBe(CEILING);
   });
 
-  it("shares the paper profile's equity-relative caps verbatim — the ceiling no longer touches riskConfig (#886)", () => {
+  it("shares the paper profile's equity-relative caps verbatim, except the account-level book ceiling — the CEILING ARGUMENT no longer touches riskConfig (#886)", () => {
     // Before #886 the six caps were derived from the ceiling once at boot, so
     // live and paper necessarily disagreed. #886 made them fractions of live
     // EQUITY, resolved at evaluate time by the Risk Manager — both profiles
     // now build `riskConfig` from the same `RISK_CAP_EQUITY_FRACTIONS`
     // constant, through the same shared `buildStartingProfileConfigs`, and the
-    // ceiling argument plays no part in it at all.
+    // `capitalCeilingUsd` ARGUMENT (`CEILING` here) plays no part in it at
+    // all — asserted below by rebuilding `live` with a wildly different
+    // ceiling and getting the identical `riskConfig` back.
+    //
+    // **`live_book_ceiling` is the one deliberate exception (#888 review
+    // fix-up), and it is NOT ceiling-argument-shaped.** It is set from
+    // `LIVE_BOOK_GBP` — a fixed constant, not `CEILING` — whenever
+    // `liveStartingProfile` calls `buildStartingProfileConfigs` at all, which
+    // is unconditional, unlike the ceiling argument's independence asserted
+    // above. See `RiskConfig['live_book_ceiling']`'s doc comment
+    // (risk-manager/types.ts) for why paper deliberately does not carry it.
     const live = liveStartingProfile(CEILING);
     const paper = paperStartingProfile('paper');
 
-    expect(live.riskConfig).toEqual(paper.riskConfig);
+    expect(live.riskConfig).toEqual({
+      ...paper.riskConfig,
+      live_book_ceiling: { book: LIVE_BOOK_GBP, refuse_above_tolerance: expect.any(Number) },
+    });
+    expect(paper.riskConfig.live_book_ceiling).toBeUndefined();
   });
 
   it('produces the identical riskConfig regardless of which ceiling it is built with', () => {
