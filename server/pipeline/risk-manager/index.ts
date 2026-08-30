@@ -261,7 +261,31 @@ export class RiskManagerImpl implements RiskManager {
 
     const reasons: string[] = [];
     let bindingConstraint: string | null = null;
-    let notional = intent.size * intent.entry;
+    const originalNotional = intent.size * intent.entry;
+    let notional = originalNotional;
+
+    /**
+     * #941, second site. The Trader floors the entry it PROPOSES; every gate
+     * below trims a notional and the size is re-derived by dividing, which
+     * re-introduces the fraction the Trader removed. Both sites are needed:
+     * without the Trader's floor an untrimmed entry is fractional, without
+     * this one a trimmed entry is.
+     *
+     * `Math.floor`, not rounding, for the same reason as in `decide.ts` —
+     * rounding up would restore exposure a cap gate had just removed, which
+     * is the one direction this must never move.
+     *
+     * The `originalNotional` short-circuit is not an optimisation. When no
+     * gate binds, `notional / intent.entry` is a float round-trip of a value
+     * the Trader already floored, and it can land a hair BELOW the integer
+     * (93 as 92.999...), which a floor would then take to 92 — a silent
+     * one-share haircut on the untrimmed path. Returning `intent.size`
+     * verbatim when nothing trimmed it is exact by construction.
+     */
+    const submittableSize = (value: number): number => {
+      const raw = value === originalNotional ? intent.size : value / intent.entry;
+      return config.whole_share_sizing ? Math.floor(raw) : raw;
+    };
 
     for (const gate of ENTRY_CAP_GATES) {
       const cap = gate(config, intent, portfolio, correlation);
@@ -276,7 +300,7 @@ export class RiskManagerImpl implements RiskManager {
       if (changed) bindingConstraint = cap.name;
     }
 
-    const finalSize = notional / intent.entry;
+    const finalSize = submittableSize(notional);
 
     if (notional < config.min_viable_size) {
       reasons.push(
@@ -304,12 +328,27 @@ export class RiskManagerImpl implements RiskManager {
       }
     }
 
+    const approvedSize = submittableSize(notional);
+
+    // A trim that leaves less than one whole share is a rejection, not a
+    // zero-quantity order. `min_viable_size` above cannot catch it: it tests
+    // the NOTIONAL, and 0.8 shares of a $300 name is $240 — comfortably
+    // viable, and still unsubmittable. Reaching this only requires
+    // `whole_share_sizing`; without it `approvedSize` is the unfloored
+    // quotient, which is positive whenever the notional is.
+    if (approvedSize <= 0) {
+      reasons.push(
+        `whole_share_sizing: trimmed notional ${notional} at entry ${intent.entry} is less than one whole share`,
+      );
+      return rejected('whole_share_sizing:rounds_to_zero', reasons);
+    }
+
     return {
       status: 'approved',
-      order_intent: { ...intent, size: notional / intent.entry },
+      order_intent: { ...intent, size: approvedSize },
       modifications: {
         original_size: intent.size,
-        final_size: notional / intent.entry,
+        final_size: approvedSize,
         stop_tightened: false,
       },
       binding_constraint: bindingConstraint,

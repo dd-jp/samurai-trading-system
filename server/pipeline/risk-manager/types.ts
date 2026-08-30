@@ -213,6 +213,23 @@ export interface RiskConfig {
   };
   /** Below this notional, a trimmed intent is dust and must be rejected. */
   min_viable_size: number;
+  /**
+   * Quantise an APPROVED entry size to whole shares (#941). Mirrors
+   * `TraderConfig.whole_share_sizing` and must be set to the same value: the
+   * two are one venue constraint applied at the two places a size is set.
+   *
+   * The Trader's floor is necessary but not sufficient. Every cap gate here
+   * trims a NOTIONAL, and the approved size is re-derived as
+   * `notional / intent.entry` — so a whole-share entry of 93 that any gate
+   * binds on comes back out as, say, 71.4, and Alpaca refuses the bracket
+   * with `422 42210000 fractional orders must be simple orders` exactly as it
+   * did before the Trader was fixed. The trim, not the Trader, is then the
+   * proximate cause of an unsubmittable order.
+   *
+   * Trims only ever reduce, and flooring only ever reduces, so composing them
+   * cannot breach a cap the gates just enforced.
+   */
+  whole_share_sizing: boolean;
   /** CII soft signal (#205): absolute WorldMonitor CII level (0-100) above which a warning fires. Unpinned, tuned in paper trading. */
   cii_threshold: number;
   /**

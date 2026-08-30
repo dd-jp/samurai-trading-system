@@ -208,6 +208,7 @@ export const PAPER_PROFILE_PROVENANCE = {
   'riskConfig.concentration.cap_fraction_of_equity': 'DERIVED',
   'riskConfig.concentration.threshold': 'UNSOURCED',
   'riskConfig.min_viable_size': 'DERIVED',
+  'riskConfig.whole_share_sizing': 'SPEC',
   'riskConfig.cii_threshold': 'UNSOURCED',
   'riskConfig.max_mark_age.crypto': 'UNSOURCED',
   'riskConfig.max_mark_age.stocks': 'UNSOURCED',
@@ -1144,6 +1145,10 @@ export function buildStartingProfileConfigs(
      * trade. Also above Alpaca's ~$10 crypto order minimum.
      */
     min_viable_size: DEFAULT_TRADER_CONFIG.min_viable_notional,
+    // Same venue constraint as traderConfig.whole_share_sizing, at the second
+    // site that sets a size (#941): the cap gates trim a notional and re-derive
+    // the quantity, so a whole-share entry comes back fractional if any gate binds.
+    whole_share_sizing: true,
     /**
      * UNSOURCED — risk-manager-spec.md calls the CII threshold "an unpinned
      * config value, tuned in paper trading". 70 on WorldMonitor's 0-100

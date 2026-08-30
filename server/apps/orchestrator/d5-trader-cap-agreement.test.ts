@@ -329,10 +329,32 @@ describe('#886 acceptance criterion — an armed D5 entry lands at the intended 
   // proving it only with five other caps manually disabled.
   const CONVICTION_FACTOR = 0.2;
 
+  /**
+   * The shipped config with the venue's whole-share grid (#941) lifted, and
+   * ONLY that.
+   *
+   * `intentFor` models size as a cash amount at `entry: 1`, which is what lets
+   * these tests state the D5 arithmetic in pounds. Under
+   * `whole_share_sizing` that fixture's "share" is a pound, so £69.99 of
+   * envelope floors to £69 and the assertion below stops being about the cap
+   * arithmetic it exists to pin. The grid itself is tested where it belongs,
+   * in `risk-manager/index.test.ts`, and its interaction with the shipped
+   * profile is pinned by the last test in this describe.
+   */
+  const d5WithoutTheVenueGrid = (): RiskConfig => ({
+    ...shippedConfig(),
+    whole_share_sizing: false,
+  });
+
   it('index_etp_3x: lands at the intended size at the reference book (£1,000)', () => {
     const intended = D5_INDEX_ETP_DEPLOYMENT_FRACTION * CONVICTION_FACTOR * EQUITY; // £70
 
-    const decision = decide(shippedConfig(), intentFor('3USL', intended, 'entry'), {}, EQUITY);
+    const decision = decide(
+      d5WithoutTheVenueGrid(),
+      intentFor('3USL', intended, 'entry'),
+      {},
+      EQUITY,
+    );
 
     expect(decision.status).toBe('approved');
     expect(decision.binding_constraint).toBeNull();
@@ -348,7 +370,12 @@ describe('#886 acceptance criterion — an armed D5 entry lands at the intended 
     const equity = 200; // inside ADR-0017's £100-200 ramp
     const intended = D5_INDEX_ETP_DEPLOYMENT_FRACTION * CONVICTION_FACTOR * equity; // £14
 
-    const decision = decide(shippedConfig(), intentFor('3USL', intended, 'entry'), {}, equity);
+    const decision = decide(
+      d5WithoutTheVenueGrid(),
+      intentFor('3USL', intended, 'entry'),
+      {},
+      equity,
+    );
 
     expect(decision.status).toBe('approved');
     expect(decision.binding_constraint).toBeNull();
@@ -359,11 +386,31 @@ describe('#886 acceptance criterion — an armed D5 entry lands at the intended 
     for (const equity of [EQUITY, 200]) {
       const intended = D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION * CONVICTION_FACTOR * equity;
 
-      const decision = decide(shippedConfig(), intentFor('3LAP', intended, 'entry'), {}, equity);
+      const decision = decide(
+        d5WithoutTheVenueGrid(),
+        intentFor('3LAP', intended, 'entry'),
+        {},
+        equity,
+      );
 
       expect(decision.status).toBe('approved');
       expect(decision.binding_constraint).toBeNull();
       expect(decision.modifications?.final_size).toBeCloseTo(intended, 6);
     }
+  });
+
+  it('the SHIPPED profile then quantises that same entry to the venue grid (#941)', () => {
+    // The one thing `d5WithoutTheVenueGrid` lifts, asserted rather than
+    // assumed: nothing above changes which cap binds, the approved size is
+    // just floored on the way out. `69` and not `70` because
+    // `0.35 * 0.2 * 1000` is 69.99999999999999 in IEEE-754 — the floor is
+    // toward less exposure even when the shortfall is a float artefact.
+    const intended = D5_INDEX_ETP_DEPLOYMENT_FRACTION * CONVICTION_FACTOR * EQUITY;
+
+    const decision = decide(shippedConfig(), intentFor('3USL', intended, 'entry'), {}, EQUITY);
+
+    expect(decision.status).toBe('approved');
+    expect(decision.binding_constraint).toBeNull();
+    expect(decision.modifications?.final_size).toBe(69);
   });
 });

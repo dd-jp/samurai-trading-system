@@ -1120,6 +1120,7 @@ describe('buildRiskStep', () => {
     portfolio_gross_cap_fraction_of_equity: 20,
     concentration: { cap_fraction_of_equity: 10, threshold: 0.9 },
     min_viable_size: 1,
+    whole_share_sizing: false,
     cii_threshold: 80,
     max_mark_age: TEST_MAX_MARK_AGE,
   };
@@ -1245,6 +1246,7 @@ describe('buildRiskStep', () => {
         ...RISK_CONFIG,
         per_asset_class_cap_fraction_of_equity: { crypto: 10, stocks: 0.0005 },
         min_viable_size: 100,
+        whole_share_sizing: false,
       },
       correlationConfig: { window: { timeframe: '1d', lookback: 30 }, min_bars: 5 },
       ciiConsumer: { getScores: vi.fn(() => ({})) },
@@ -2246,6 +2248,7 @@ describe('#847: a dark mark must not suppress a newly decided flatten', () => {
     portfolio_gross_cap_fraction_of_equity: 20,
     concentration: { cap_fraction_of_equity: 10, threshold: 0.9 },
     min_viable_size: 1,
+    whole_share_sizing: false,
     cii_threshold: 80,
     max_mark_age: TEST_MAX_MARK_AGE,
   };
