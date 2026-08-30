@@ -311,6 +311,41 @@ export interface SubclassDeploymentCap {
    * (#705). `per_asset_class_cap_fraction_of_equity.crypto` still bounds it (#886 rename).
    */
   cap_fraction_of_equity: Readonly<Record<InstrumentSubclass, number | null>>;
+  /**
+   * #888 — the DECLARED BOOK this cap's fractions are fractions OF, resolved
+   * against it rather than against raw `portfolio.equity`.
+   *
+   * `portfolio.equity` is one blended broker figure with no per-leg
+   * accounting (`production/account-state.ts`), so it equals the declared
+   * book only while the funding account happens to be funded at exactly that
+   * figure. Above it, `cap_fraction_of_equity * portfolio.equity` authorises
+   * proportionally more cash than the book was ever sized for — the gap #888
+   * was filed for. Optional, and the optionality matters: every fixture in
+   * `per-subclass-deployment-cap.test.ts` constructs a `SubclassDeploymentCap`
+   * with no book at all, on purpose, to exercise the gate's netting/throwing
+   * behaviour independent of any particular book — leaving this `undefined`
+   * there preserves that. `d5EnvelopeFor` (paper-profile.ts) is the one
+   * caller that sets it, at `LIVE_BOOK_GBP`, so it is load-bearing on the
+   * profile actually shipped rather than on the gate in the abstract.
+   */
+  equity_ceiling?: {
+    /** The declared book (`LIVE_BOOK_GBP`) this cap's fractions resolve against, in place of `portfolio.equity`, once equity has drifted past it. */
+    book: number;
+    /**
+     * Fractional headroom above `book` the gate tolerates before REFUSING the
+     * entry outright (throwing) rather than merely capping resolution at
+     * `book`. E.g. `0.05` refuses once `portfolio.equity` exceeds `book` by
+     * more than 5%.
+     *
+     * The backstop half of #888's fix: capping resolution at `book` alone
+     * closes the silent-widening gap, but an account funded far past the
+     * declared book invalidates every OTHER sizing assumption too (the
+     * breaker baselines, the drawdown envelope D5's fractions were measured
+     * to hold) — so past a small tolerance this refuses to size the entry at
+     * all instead of quietly treating the overfunding as harmless.
+     */
+    refuse_above_tolerance: number;
+  };
 }
 
 /** The red-team critic's verdict on one gated `OrderIntent` (ADR-0003, #204). Produced *outside* `evaluate()` by critic.ts and consumed here as pre-built data.
