@@ -300,7 +300,11 @@ export class RiskManagerImpl implements RiskManager {
       if (changed) bindingConstraint = cap.name;
     }
 
-    const finalSize = submittableSize(notional);
+    // Deliberately NOT quantised: this feeds `applyCritic` only, whose
+    // pass/unavailable branch echoes it back as a notional the caller
+    // discards. Flooring it would change an input the critic reasons with as
+    // a side effect of a venue fix. Quantisation happens once, at the emit.
+    const finalSize = notional / intent.entry;
 
     if (notional < config.min_viable_size) {
       reasons.push(
@@ -330,17 +334,41 @@ export class RiskManagerImpl implements RiskManager {
 
     const approvedSize = submittableSize(notional);
 
-    // A trim that leaves less than one whole share is a rejection, not a
-    // zero-quantity order. `min_viable_size` above cannot catch it: it tests
-    // the NOTIONAL, and 0.8 shares of a $300 name is $240 — comfortably
-    // viable, and still unsubmittable. Reaching this only requires
-    // `whole_share_sizing`; without it `approvedSize` is the unfloored
-    // quotient, which is positive whenever the notional is.
+    // The dust floor has to be re-tested on what will ACTUALLY be submitted.
+    // The `min_viable_size` check above ran on the pre-floor notional, and
+    // flooring only ever reduces it: £110 of trimmed notional at an entry of
+    // £60 is 1.83 shares, floors to 1, and submits £60 against a config that
+    // just declared anything under £100 to be dust. A quantity grid can turn
+    // a viable order into a sub-viable one, so the floor is checked on both
+    // sides of it.
+    //
+    // Two reasons, not one, and for the same reason `decide.ts` keeps
+    // `rounds_to_zero_shares` distinct from `below_min_notional`: a soak log
+    // must distinguish "the venue's grid ate the whole position" from "what
+    // survived the caps was dust". The zero case is the strictly worse one —
+    // there is no order left at all.
+    const approvedNotional = approvedSize * intent.entry;
     if (approvedSize <= 0) {
       reasons.push(
         `whole_share_sizing: trimmed notional ${notional} at entry ${intent.entry} is less than one whole share`,
       );
       return rejected('whole_share_sizing:rounds_to_zero', reasons);
+    }
+    if (approvedNotional < config.min_viable_size) {
+      reasons.push(
+        `min_viable_size: quantised notional ${approvedNotional} below viable minimum ${config.min_viable_size}`,
+      );
+      return rejected('min_viable_size:quantised', reasons);
+    }
+
+    // `modifications` carries only sizes, so a reader cannot tell a cap trim
+    // from a grid floor by comparing them — and `binding_constraint` names
+    // the cap. Recorded in `reasons` instead, which is the audit channel, so
+    // an under-deployed entry is attributable without re-deriving the grid.
+    if (config.whole_share_sizing && approvedSize !== finalSize) {
+      reasons.push(
+        `whole_share_sizing: floored size from ${finalSize} to ${approvedSize} (whole shares)`,
+      );
     }
 
     return {

@@ -1094,6 +1094,51 @@ describe('whole-share sizing (#941)', () => {
     expect(decision.order_intent?.size).toBeCloseTo(0.8, 10);
   });
 
+  it('re-tests the dust floor on the QUANTISED notional, not the pre-floor one', () => {
+    // 110 of trimmed notional at an entry of 60 is 1.83 shares, which clears a
+    // min_viable_size of 100 — and floors to 1 share, i.e. 60, which does not.
+    // Flooring only ever reduces, so a grid can turn a viable order into a
+    // sub-viable one after the first check has already passed.
+    const decision = new RiskManagerImpl(
+      makeConfig({
+        max_position_size_fraction_of_equity: 0.0011,
+        min_viable_size: 100,
+        whole_share_sizing: true,
+      }),
+    ).evaluate(makeInput({ intent: makeIntent({ size: 5, entry: 60 }) }));
+
+    expect(decision.status).toBe('rejected');
+    expect(decision.binding_constraint).toBe('min_viable_size:quantised');
+  });
+
+  it('approves that same order when the grid is off — the pre-floor notional was viable', () => {
+    const decision = new RiskManagerImpl(
+      makeConfig({
+        max_position_size_fraction_of_equity: 0.0011,
+        min_viable_size: 100,
+        whole_share_sizing: false,
+      }),
+    ).evaluate(makeInput({ intent: makeIntent({ size: 5, entry: 60 }) }));
+
+    expect(decision.status).toBe('approved');
+  });
+
+  it('records the floor in `reasons` — `modifications` alone cannot attribute it', () => {
+    const decision = new RiskManagerImpl(trimmingConfig(true)).evaluate(makeInput());
+
+    expect(decision.reasons.some((r) => r.startsWith('whole_share_sizing: floored size'))).toBe(
+      true,
+    );
+  });
+
+  it('records no floor when the grid did not move the size', () => {
+    const decision = new RiskManagerImpl(makeConfig({ whole_share_sizing: true })).evaluate(
+      makeInput(),
+    );
+
+    expect(decision.reasons.some((r) => r.startsWith('whole_share_sizing:'))).toBe(false);
+  });
+
   it('never quantises an exit', () => {
     // ADR-0014's flat-by-close rides the exit path, and an exit is sized from
     // what actually filled. Flooring a residual would strand a fraction of a
