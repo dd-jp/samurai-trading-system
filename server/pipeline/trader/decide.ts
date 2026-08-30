@@ -582,7 +582,46 @@ async function buildBracket(
   // line: `NaN < min_viable_notional` is false, so that check passes NaN.
   if (!Number.isFinite(size)) return skip('size_not_finite');
 
-  if (size * entry < config.min_viable_notional) return skip('below_min_notional');
+  // #941: the venue's quantity grid, applied to the ENTRY only. `Math.floor`
+  // rather than rounding to nearest, and the direction of the rounding is the
+  // whole point — rounding up would submit more than D5's envelope sized and
+  // more than every cap the Risk Manager is about to approve against, turning
+  // a venue accommodation into an unrecorded amendment of ADR-0018 D5. Erring
+  // small is the ADR's own declared preference. `size` is always positive here
+  // (the direction lives in `side`, not the sign), so a plain floor is a floor
+  // toward zero exposure on both sides.
+  //
+  // Sited AFTER the finite check so `Math.floor(NaN)` cannot reach the
+  // guards below, and BEFORE `min_viable_notional` so the notional test reads
+  // the quantity that will actually be submitted rather than the unquantised
+  // one — a 0.8-share intent is dust the venue would refuse, and it must not
+  // pass a notional check on the strength of a fraction we cannot send.
+  //
+  // Exits are NOT quantised here or anywhere: `buildFlattenExit` sizes from
+  // `heldQuantitiesFor`, i.e. from what actually filled, and rounding that
+  // could stranded a remainder or zero a flatten outright. Under this flag
+  // every entry fills whole, so held quantities are whole and no exit needs
+  // it; if that ever stops being true the residual must still go out verbatim.
+  const submittableSize = config.whole_share_sizing ? Math.floor(size) : size;
+
+  // Its own reason rather than folding into `below_min_notional`, because the
+  // two say different things to a soak: `below_min_notional` means the
+  // strategy sized dust, this means the strategy sized a real position and the
+  // venue's quantity grid ate it. A run in which this fires steadily is a run
+  // whose deployment fraction cannot buy one share of the names it is trading
+  // — a sizing/universe mismatch, not a quiet market. It also cannot be left
+  // to the notional check below: 0.8 shares of a $300 name is $240 of intended
+  // notional, which passes a $10 dust floor comfortably and would then be
+  // submitted as a zero quantity.
+  //
+  // `size > 0` is what keeps the two distinguishable in the direction that
+  // matters. A gate that damped conviction to nothing produces size EXACTLY
+  // zero, and that is the strategy declining to deploy, not the venue's grid
+  // eating a real position — it belongs in `below_min_notional` where it has
+  // always been reported, and #870's ceiling test asserts precisely that.
+  if (submittableSize <= 0 && size > 0) return skip('rounds_to_zero_shares');
+
+  if (submittableSize * entry < config.min_viable_notional) return skip('below_min_notional');
 
   // Written only once every skip guard has passed, so a decision the Trader
   // itself declined leaves no row.
@@ -613,7 +652,7 @@ async function buildBracket(
       asset_class: mark.asset_class,
       side,
       intent_type: intentType,
-      size,
+      size: submittableSize,
       entry,
       stop: entry - direction * stopDistance,
       target: entry + direction * targetDistance,
@@ -635,6 +674,11 @@ async function buildBracket(
           // Spread rather than field-by-field so a bracket field added to
           // config cannot be silently dropped from the audit record.
           ...(bracket === null ? {} : { frozen_bracket: { ...bracket } }),
+          // Spread-or-absent for the same `exactOptionalPropertyTypes` reason
+          // the bracket above is, and absent when the floor changed nothing so
+          // that its PRESENCE means "this intent under-deploys D5" rather than
+          // merely "the flag is on".
+          ...(submittableSize === size ? {} : { unquantised_size: size }),
         },
         cosine_precedent: {
           neighbor_count: precedent.neighbor_count,
@@ -988,7 +1032,11 @@ export type TraderSkipReason =
   | 'atr_not_finite'
   | 'mark_not_finite'
   | 'stop_distance_not_positive'
-  | 'size_not_finite';
+  | 'size_not_finite'
+  // #941: the entry sized to less than one whole share on a venue that only
+  // accepts whole shares (`whole_share_sizing`). Not a data-quality failure
+  // and not dust — see the guard's own comment in `decide`.
+  | 'rounds_to_zero_shares';
 
 /**
  * A condition the Trader DETECTED but did not treat as fatal (#698).

@@ -188,6 +188,11 @@ export const PAPER_PROFILE_PROVENANCE = {
   'traderConfig.non_converged_haircut': 'SPEC',
   'traderConfig.reward_risk_multiple': 'SPEC',
   'traderConfig.min_viable_notional': 'SPEC',
+  // #941. SPEC by the same reading `time_in_force` is: a venue constraint the
+  // venue itself states, here by refusing — `422 42210000 fractional orders
+  // must be simple orders`, measured against the paper API rather than assumed
+  // from documentation. Not DERIVED: nothing here computes it.
+  'traderConfig.whole_share_sizing': 'SPEC',
   'traderConfig.time_in_force.crypto': 'SPEC',
   'traderConfig.time_in_force.stocks': 'SPEC',
   'traderConfig.scale_in_conviction_delta': 'SPEC',
@@ -1049,6 +1054,21 @@ export function buildStartingProfileConfigs(
     // unarmed until the LSE-ETP pool file (#703 C1) classifies its rows —
     // exactly the state `subclassCap` above is in, and for the same reason.
     subclass_of: subclassOfUniverse(universe),
+    // #941 — ON here and OFF in `DEFAULT_TRADER_CONFIG`, which is the opposite
+    // arrangement to `time_in_force` below, deliberately. Both are venue
+    // constraints, but time-in-force is inert in simulation while flooring
+    // changes the fill size, so a global default would silently move every
+    // backtest and fixture result. The flag therefore lives with the profiles
+    // that actually submit to a venue.
+    //
+    // Alpaca refuses a bracket at any fractional quantity and refuses a
+    // fractional short outright; ADR-0018 D5 sizes by cash and so produces
+    // fractional quantities for nearly every entry. Two of this soak's three
+    // entries were rejected at submission before this was set. Safe for this
+    // profile specifically because `DEFAULT_UNIVERSE` is equities-only since
+    // ADR-0015's 2026-08-16 amendment — a crypto instrument ticked under this
+    // flag would floor to zero and never trade. See the field's own comment.
+    whole_share_sizing: true,
     // `time_in_force` is no longer overridden here (#381). It used to be
     // pinned to `gtc` for BTC-USD because the field was a single string and
     // the profile's universe was crypto-only; widening to `DEFAULT_UNIVERSE`
