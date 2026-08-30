@@ -37,6 +37,7 @@ import {
   D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION,
 } from '../../pipeline/trader/subclass-bracket.js';
 import type { Clock, OrderIntent } from '../../shared/index.js';
+import { liveStartingProfile } from './live-profile.js';
 import {
   buildStartingProfileConfigs,
   LIVE_BOOK_GBP,
@@ -302,6 +303,14 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
     // widening it, per the chosen backstop (Option 2, combined with the
     // book-relative cap above as Option 1) — but only for the LIVE profile;
     // see `d5InIsolationLive()`.
+    //
+    // **Review fix-up (#888 follow-up): the throw now comes from
+    // `liveBookCeiling`, not `perSubclassDeploymentCap`.** Both gates are
+    // armed for this fixture (`UNIVERSE` is classified AND a book is
+    // supplied), and `liveBookCeiling` sits first in `ENTRY_CAP_GATES` — it
+    // is the account-level check that also fires on `DEFAULT_UNIVERSE`
+    // (no classification at all), which `equity_ceiling` alone cannot do.
+    // See `liveBookCeiling`'s docstring (risk-manager/index.ts).
     const overfunded = 1_500;
     const intended = D5_INDEX_ETP_DEPLOYMENT_FRACTION * overfunded;
 
@@ -310,7 +319,7 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
 
     expect(() =>
       decide(d5InIsolationLive(), intentFor('3USL', intended, 'entry'), {}, overfunded),
-    ).toThrow(/per_subclass_deployment_cap's declared book/);
+    ).toThrow(/live_book_ceiling's declared book/);
   });
 
   it('leaves NO room for a scale-in once an entry took the full envelope — #897, unresolved', () => {
@@ -335,6 +344,72 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
     expect(decision.status).toBe('rejected');
     expect(decision.binding_constraint).toBe('min_viable_size');
   });
+
+  it(
+    '#888 review fix-up: liveStartingProfile() itself refuses an overfunded ' +
+      'entry through the REAL composition root, with NO hand-classified universe',
+    () => {
+      // The gap the review found: every #888 test above builds `RiskConfig`
+      // from a hand-classified `UNIVERSE` fixture passed DIRECTLY to
+      // `buildStartingProfileConfigs`, bypassing `liveStartingProfile()`
+      // entirely — so nothing exercised the actual shipped live composition
+      // root, which calls `buildStartingProfileConfigs(undefined,
+      // LIVE_BOOK_GBP)` and therefore defaults to `DEFAULT_UNIVERSE`
+      // (scheduler.ts), which carries NO subclass classification today.
+      // `d5EnvelopeFor` returns `undefined` for an unclassified universe
+      // (paper-profile.ts), so `per_subclass_deployment_cap` — and with it
+      // `equity_ceiling` — is `undefined` on the real path, proven below.
+      const profile = liveStartingProfile(2_000);
+
+      expect(profile.riskConfig.per_subclass_deployment_cap).toBeUndefined();
+
+      // Yet the account-level `live_book_ceiling` (this review's fix) is
+      // armed regardless — it does not read `subclass_of` at all.
+      expect(profile.riskConfig.live_book_ceiling).toEqual({
+        book: LIVE_BOOK_GBP,
+        refuse_above_tolerance: expect.any(Number),
+      });
+
+      // An overfunded account (£1,500 on a £1,000 book, 50% over — far past
+      // the tolerance) refuses the entry outright through the real live
+      // profile, on an instrument `DEFAULT_UNIVERSE` never classifies (SPY),
+      // proving the refusal does not depend on the pool file at all.
+      const overfunded = 1_500;
+      const spyIntent: OrderIntent = {
+        ...intentFor('SPY', 100, 'entry'),
+        asset_class: 'stocks',
+      };
+
+      expect(() =>
+        new RiskManagerImpl(profile.riskConfig).evaluate({
+          trace_id: 'trace-888-review',
+          intent: spyIntent,
+          clock: CLOCK,
+          portfolio: portfolioWith(overfunded, {}),
+          breakers: NO_BREAKERS,
+          next_breaker_state: NO_PERSISTED_BREAKERS,
+          correlation: NO_CORRELATION,
+          cii: {},
+          mode: 'live',
+        }),
+      ).toThrow(/live_book_ceiling's declared book/);
+
+      // And an exit is unaffected — the gate lives in `ENTRY_CAP_GATES`,
+      // below the exit early-return, not ahead of it.
+      const exitDecision = new RiskManagerImpl(profile.riskConfig).evaluate({
+        trace_id: 'trace-888-review-exit',
+        intent: { ...spyIntent, intent_type: 'exit' },
+        clock: CLOCK,
+        portfolio: portfolioWith(overfunded, { SPY: 100 }),
+        breakers: NO_BREAKERS,
+        next_breaker_state: NO_PERSISTED_BREAKERS,
+        correlation: NO_CORRELATION,
+        cii: {},
+        mode: 'live',
+      });
+      expect(exitDecision.status).toBe('approved');
+    },
+  );
 });
 
 describe('#886 fixed the per-trade cap for D5 instruments — per_asset_cap remains the unclosed gap', () => {
@@ -399,16 +474,23 @@ describe('#886 fixed the per-trade cap for D5 instruments — per_asset_cap rema
   });
 
   it('#888: the LIVE profile is NOT scale-invariant above the book — the book ceiling refuses the entry first', () => {
-    // The live-profile mirror of the scale-invariance test above: `liveShippedConfig()`
-    // carries `equity_ceiling` (the book), so at equity = 100,000 (far past
-    // the book and its 5% tolerance) D5's own ceiling now binds before
-    // `per_asset_exposure_cap` is ever consulted — the gate refuses the entry
-    // outright rather than sizing it against an account 100x the declared
-    // book, which the pre-#888 gate would have done silently at whichever cap
-    // was numerically tighter. This is deliberately asymmetric with the paper
-    // case: a LIVE account funded 100x its declared book is a real anomaly to
-    // refuse; a PAPER account simulated at $100,000 is normal and must not be
-    // refused (previous test).
+    // The live-profile mirror of the scale-invariance test above:
+    // `liveShippedConfig()` carries both `equity_ceiling` (per-subclass) and
+    // `live_book_ceiling` (account-level, review fix-up), so at equity =
+    // 100,000 (far past the book and its 5% tolerance) a book ceiling now
+    // binds before `per_asset_exposure_cap` is ever consulted — the gate
+    // refuses the entry outright rather than sizing it against an account
+    // 100x the declared book, which the pre-#888 gate would have done
+    // silently at whichever cap was numerically tighter. This is deliberately
+    // asymmetric with the paper case: a LIVE account funded 100x its declared
+    // book is a real anomaly to refuse; a PAPER account simulated at $100,000
+    // is normal and must not be refused (previous test).
+    //
+    // **Review fix-up: the throw comes from `liveBookCeiling`, the
+    // account-level gate, which sits first in `ENTRY_CAP_GATES` — not from
+    // `perSubclassDeploymentCap`'s `equity_ceiling`.** Both are armed here,
+    // but `liveBookCeiling` is the one that also covers `DEFAULT_UNIVERSE`
+    // (no classification), which is why it goes first.
     const equity = 100_000;
 
     expect(() =>
@@ -418,7 +500,7 @@ describe('#886 fixed the per-trade cap for D5 instruments — per_asset_cap rema
         {},
         equity,
       ),
-    ).toThrow(/per_subclass_deployment_cap's declared book/);
+    ).toThrow(/live_book_ceiling's declared book/);
   });
 });
 

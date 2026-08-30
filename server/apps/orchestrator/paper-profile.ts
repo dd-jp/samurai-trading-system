@@ -1267,6 +1267,23 @@ export function buildStartingProfileConfigs(
      * failing acceptance-criteria test this leaves open.
      */
     ...(subclassCap === undefined ? {} : { per_subclass_deployment_cap: subclassCap }),
+    /**
+     * #888 review fix-up — armed whenever a book is supplied, WITHOUT
+     * depending on `subclassCap`/universe classification at all. This is
+     * what makes the account-level refusal work on `DEFAULT_UNIVERSE`
+     * (no subclasses yet, so `subclassCap` above is `undefined` on the
+     * actual shipped live path) — see `RiskConfig['live_book_ceiling']`'s
+     * doc comment (risk-manager/types.ts) for why the per-subclass
+     * `equity_ceiling` alone does not arm here.
+     */
+    ...(bookCeilingGbp === undefined
+      ? {}
+      : {
+          live_book_ceiling: {
+            book: bookCeilingGbp,
+            refuse_above_tolerance: D5_BOOK_REFUSE_ABOVE_TOLERANCE,
+          },
+        }),
   };
 
   const verdictConfig: VerdictConfig = {

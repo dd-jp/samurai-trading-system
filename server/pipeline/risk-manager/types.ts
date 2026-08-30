@@ -245,6 +245,48 @@ export interface RiskConfig {
    * fails loud once declared.
    */
   per_subclass_deployment_cap?: SubclassDeploymentCap;
+  /**
+   * #888 review fix-up — the declared book, armed INDEPENDENTLY of universe
+   * classification, unlike `per_subclass_deployment_cap.equity_ceiling`.
+   *
+   * `per_subclass_deployment_cap` (and the `equity_ceiling` nested inside it)
+   * only exists once `d5EnvelopeFor` finds at least one classified instrument
+   * (`subclassOfUniverse(universe)` non-empty) — and on the actual shipped
+   * live composition root, `liveStartingProfile()` calls
+   * `buildStartingProfileConfigs(undefined, LIVE_BOOK_GBP)`, which defaults to
+   * `DEFAULT_UNIVERSE` (scheduler.ts), which carries NO subclass
+   * classification today. So `per_subclass_deployment_cap` — and with it the
+   * whole `equity_ceiling` clamp/refuse mechanism — is `undefined` on every
+   * live tick until C1's LSE-ETP pool file lands (#703). This field is the
+   * fix: set by `buildStartingProfileConfigs` whenever a book is supplied,
+   * with no dependency on `subclass_of` at all, so `liveBookCeiling`
+   * (risk-manager/index.ts) refuses an overfunded live account regardless of
+   * whether any instrument happens to be D5-classified yet.
+   *
+   * Same shape as `SubclassDeploymentCap['equity_ceiling']` deliberately —
+   * this is the account-level statement that one is the per-subclass
+   * instance of, not a competing design.
+   *
+   * **Unresolved unit mismatch, same class as `SAMURAI_LIVE_MAX_CAPITAL_USD`
+   * (live-profile.ts) but a NEW instance of it.** `book` is GBP
+   * (`LIVE_BOOK_GBP`); the only `AccountStateProvider` this repo ships
+   * (`AlpacaAccountStateProvider`, production/account-state.ts) reads
+   * `portfolio.equity` from Alpaca's `GET /v2/account`, which is
+   * USD-denominated with no FX conversion anywhere in this codebase. This
+   * check is therefore only valid while the funding source and
+   * `LIVE_BOOK_GBP` are denominated in the same currency — today they are
+   * not, so a correctly-funded £1,000 account (~$1,270+ read via Alpaca)
+   * would wrongly trip this refusal once live boot's other gates ever clear
+   * (`live-money-gates.ts` refuses live boot outright today regardless, so
+   * this is latent, not live). No FX provider exists to fix this properly;
+   * flagged rather than resolved, same posture as the pre-existing gap.
+   */
+  live_book_ceiling?: {
+    /** The declared book (`LIVE_BOOK_GBP`), in GBP. */
+    book: number;
+    /** Same semantics as `SubclassDeploymentCap['equity_ceiling'].refuse_above_tolerance`. */
+    refuse_above_tolerance: number;
+  };
 }
 
 /**
