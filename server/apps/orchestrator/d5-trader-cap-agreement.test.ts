@@ -14,13 +14,17 @@
  * this ticket made D5 the sole drawdown authority for a classified
  * instrument, and exempted it from `per_trade_size_cap` entirely — resolved
  * against live `portfolio.equity` at evaluate time, with no boot-time anchor
- * left for the two sides to disagree about. `per_asset_cap_fraction_of_equity`
- * (10%) is NOT exempted, and is tighter than either D5 fraction (35%/25%), so
- * it remains a real, documented gap on a full-envelope ask — the second
- * describe pins that gap rather than hiding it. The third describe carries
- * #886's still-open acceptance criterion: an armed D5 entry lands at the
- * Trader's intended size through the SHIPPED profile, no cap lifted out of
- * the way, at the reference book and below it.
+ * left for the two sides to disagree about. Writing #886's own
+ * acceptance-criteria test at a realistic (not full-envelope) ask size
+ * surfaced that `per_asset_cap_fraction_of_equity` (10%) was NOT exempted by
+ * #886 and is tighter than either D5 fraction (35%/25%), so a full-envelope
+ * ask was still trimmed — just at a different gate — until #932 extended the
+ * same exemption to `per_asset_cap`. The second describe now pins that FIX
+ * (it used to pin the gap; the history is kept in its own comments rather
+ * than deleted). The third describe carries #886's still-open acceptance
+ * criterion: an armed D5 entry lands at the Trader's intended size through
+ * the SHIPPED profile, no cap lifted out of the way, at the reference book
+ * and below it.
  */
 import { describe, expect, it } from 'vitest';
 
@@ -45,10 +49,18 @@ import {
 } from './paper-profile.js';
 import type { UniverseInstrument } from './types.js';
 
-/** One classified instrument per D5 subclass, so the gate is armed. */
+/**
+ * One classified instrument per D5 subclass, so the gate is armed, plus one
+ * `crypto`-subclassed instrument — `D5_DEPLOYMENT_FRACTION_OF_EQUITY_LEG`
+ * carries `null` for `crypto` (no measured envelope), so
+ * `isD5ArmedWithNumericFraction` is false for it even though it IS
+ * classified. Used below (#932) to prove the `per_asset_cap` exemption is
+ * scoped to a NUMERIC D5 fraction, not to "classified at all".
+ */
 const UNIVERSE: readonly UniverseInstrument[] = [
   { asset: '3USL', asset_class: 'stocks', subclass: 'index_etp_3x' },
   { asset: '3LAP', asset_class: 'stocks', subclass: 'single_stock_etp_3x' },
+  { asset: 'BTC-USD', asset_class: 'crypto', subclass: 'crypto' },
 ];
 
 /** The book, per ADR-0015's 2026-08-18 amendment. */
@@ -412,8 +424,20 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
   );
 });
 
-describe('#886 fixed the per-trade cap for D5 instruments — per_asset_cap remains the unclosed gap', () => {
-  it('no longer trims a full-envelope D5 ask via the per-trade cap — that cap is now EXEMPT for a classified instrument', () => {
+describe('#886 fixed per_trade_size_cap for D5 instruments; #932 fixed per_asset_cap — neither cap trims a full-envelope D5 ask any more', () => {
+  // HISTORY, kept rather than deleted: this describe used to be titled
+  // "#886 fixed the per-trade cap for D5 instruments — per_asset_cap remains
+  // the unclosed gap", and its second test used to PIN the #932 bug (asserted
+  // `binding_constraint` was `'per_asset_exposure_cap'` and the final size was
+  // trimmed to 10% of equity, not D5's 35%/25%). David's #932 ruling extended
+  // #886's reasoning — "D5's own fraction is the sole drawdown authority once
+  // an instrument is subclass-classified" — from `per_trade_size_cap` to
+  // `per_asset_cap` too, since both are per-instrument axes even though they
+  // cap different claims (deployment vs. exposure). `perAssetExposureCap`
+  // (risk-manager/index.ts) now also skips a D5-classified instrument
+  // entirely, via the same `isD5ArmedWithNumericFraction` predicate.
+
+  it('no longer trims a full-envelope D5 ask via the per-trade cap — that cap is EXEMPT for a classified instrument (#886)', () => {
     // The bug this ticket closed: pre-#886, `per_trade_size_cap` returned
     // `config.max_position_size` (5% of equity) for EVERY intent, classified
     // or not, and 5% < 35%/25% meant it always bound ahead of D5. It is now
@@ -426,29 +450,36 @@ describe('#886 fixed the per-trade cap for D5 instruments — per_asset_cap rema
     expect(decision.binding_constraint).not.toBe('per_trade_size_cap');
   });
 
-  it('still trims a full-envelope D5 ask — now via per_asset_cap, the gap #886 did not close', () => {
+  it('#932 FIXED: no longer trims a full-envelope D5 ask via per_asset_cap either', () => {
     // `per_asset_cap_fraction_of_equity` is 10% — tighter than either D5
-    // fraction — and it was never a candidate for the same exemption: D5
-    // caps DEPLOYMENT into one subclass, per_asset_cap caps EXPOSURE to one
-    // instrument, and the two are not the same claim. Documented in
-    // `paper-profile.ts` and `live-money-gates.ts` (#886's own entry) as the
-    // gap this ticket left open, pinned here rather than only in prose.
+    // fraction — and #886 correctly left it alone: D5 caps DEPLOYMENT into
+    // one subclass, per_asset_cap caps EXPOSURE to one instrument, and the
+    // two are not the same claim. But the practical consequence was the same
+    // shape #886 fixed, so #932 extended the exemption here too. The entry
+    // now lands at D5's own fraction, unmodified, with NO binding constraint
+    // at all — nothing in `ENTRY_CAP_GATES` trims an exactly-full-envelope ask.
     const intended = D5_INDEX_ETP_DEPLOYMENT_FRACTION * EQUITY; // £350
 
     const decision = decide(shippedConfig(), intentFor('3USL', intended, 'entry'), {}, EQUITY);
 
-    expect(decision.binding_constraint).toBe('per_asset_exposure_cap');
-    expect(decision.modifications?.final_size).toBeCloseTo(
-      RISK_CAP_EQUITY_FRACTIONS.per_asset_cap_fraction_of_equity * EQUITY,
-      6,
-    );
+    expect(decision.status).toBe('approved');
+    expect(decision.binding_constraint).not.toBe('per_asset_exposure_cap');
+    expect(decision.binding_constraint).toBeNull();
+    expect(decision.modifications?.final_size).toBeCloseTo(intended, 6);
   });
 
-  it('is SCALE-INVARIANT — both caps are fractions of the same equity, so book size does not change which one binds', () => {
-    // The property that replaces the retired "unreachable at every book size"
-    // finding: 10% < 35% holds at every equity. Fixing the per-trade cap did
-    // not touch this ordering.
-    //
+  it('the same holds for the single-stock subclass', () => {
+    const intended = D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION * EQUITY; // £250
+
+    const decision = decide(shippedConfig(), intentFor('3LAP', intended, 'entry'), {}, EQUITY);
+
+    expect(decision.status).toBe('approved');
+    expect(decision.binding_constraint).not.toBe('per_asset_exposure_cap');
+    expect(decision.binding_constraint).toBeNull();
+    expect(decision.modifications?.final_size).toBeCloseTo(intended, 6);
+  });
+
+  it('is SCALE-INVARIANT — the fix holds at every book size, not just the reference book', () => {
     // This runs through equity = 100,000 deliberately: `shippedConfig()` is
     // the PAPER wiring, which never sets `equity_ceiling` (#888 — the book
     // ceiling only ever arms for the LIVE profile, see
@@ -456,7 +487,7 @@ describe('#886 fixed the per-trade cap for D5 instruments — per_asset_cap rema
     // `d5EnvelopeFor`'s docstring in paper-profile.ts). A paper run's
     // simulated ~$100,000 balance must remain scale-invariant with this
     // ordering exactly as before #888 — that is the property #888's fix was
-    // designed not to break.
+    // designed not to break, and #932's fix does not touch either.
     for (const equity of [200, LIVE_BOOK_GBP, 100_000]) {
       const decision = decide(
         shippedConfig(),
@@ -465,9 +496,40 @@ describe('#886 fixed the per-trade cap for D5 instruments — per_asset_cap rema
         equity,
       );
 
-      expect(decision.binding_constraint).toBe('per_asset_exposure_cap');
+      expect(decision.status).toBe('approved');
+      expect(decision.binding_constraint).not.toBe('per_asset_exposure_cap');
     }
+  });
 
+  it('does NOT leak the exemption to a NON-NUMERIC-fraction subclass — per_asset_cap still binds where D5 measured no envelope', () => {
+    // The exemption is scoped to `isD5ArmedWithNumericFraction`, not to
+    // "has a `subclass_of` entry". `BTC-USD` IS classified (`crypto`), but
+    // `D5_DEPLOYMENT_FRACTION_OF_EQUITY_LEG.crypto` is `null` — no measured
+    // envelope — so `per_asset_cap` must still bind for it exactly as it
+    // always has, proving #932's fix is scoped to a NUMERIC D5 fraction
+    // rather than widening the cap for every classified instrument.
+    //
+    // `max_position_size_fraction_of_equity` (5%) is lifted here, and ONLY
+    // that: it is tighter than `per_asset_cap_fraction_of_equity` (10%) and
+    // sits ahead of it in `ENTRY_CAP_GATES`, so for a NON-exempt instrument it
+    // always binds first and `per_asset_cap` could never be observed to bind
+    // at all — true before #932 too, and not the property under test here.
+    const perTradeCapLifted: RiskConfig = {
+      ...shippedConfig(),
+      max_position_size_fraction_of_equity: 1e6,
+    };
+    const cryptoIntent: OrderIntent = {
+      ...intentFor('BTC-USD', 500, 'entry'),
+      asset_class: 'crypto',
+    };
+
+    const decision = decide(perTradeCapLifted, cryptoIntent, {}, EQUITY);
+
+    expect(decision.binding_constraint).toBe('per_asset_exposure_cap');
+    expect(decision.modifications?.final_size).toBeCloseTo(
+      RISK_CAP_EQUITY_FRACTIONS.per_asset_cap_fraction_of_equity * EQUITY,
+      6,
+    );
     expect(RISK_CAP_EQUITY_FRACTIONS.per_asset_cap_fraction_of_equity).toBeLessThan(
       D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION,
     );

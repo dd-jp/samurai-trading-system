@@ -431,9 +431,11 @@ type EntryCapGate = (
 
 /**
  * Whether D5 is ARMED for this instrument with a NUMERIC fraction — the
- * predicate `perTradeSizeCap` and `perSubclassDeploymentCap` must agree on
- * (#886), so it lives once, here, rather than each gate re-deriving "is this
- * instrument classified" and drifting on what that means.
+ * predicate `perTradeSizeCap`, `perAssetExposureCap`, and
+ * `perSubclassDeploymentCap` must agree on (#886, extended to
+ * `perAssetExposureCap` by #932), so it lives once, here, rather than each
+ * gate re-deriving "is this instrument classified" and drifting on what that
+ * means.
  *
  * Deliberately NOT "has a `subclass_of` entry": a subclass with a `null`
  * fraction (crypto, today — doc 18 covers only the two leveraged-ETP
@@ -472,12 +474,28 @@ const perTradeSizeCap: EntryCapGate = (config, intent, portfolio) => {
   };
 };
 
-const perAssetExposureCap: EntryCapGate = (config, intent, portfolio) => ({
-  name: 'per_asset_exposure_cap',
-  allowedAdditional:
-    config.per_asset_cap_fraction_of_equity * portfolio.equity -
-    (portfolio.exposure_by_instrument[intent.instrument] ?? 0),
-});
+/**
+ * #932: extends #886's ruling to this cap. D5 caps DEPLOYMENT into one
+ * subclass and this cap caps EXPOSURE to one instrument — not the same claim,
+ * which is why #886 correctly left it alone — but `per_asset_cap_fraction_of_equity`
+ * (10%) is tighter than either D5 fraction (35%/25%), so a full-envelope
+ * D5-classified entry was still trimmed here even after #886's fix, just at a
+ * different gate. Once an instrument is D5-classified with a numeric
+ * fraction, D5 is the sole per-instrument drawdown authority for it on this
+ * axis too, so this gate skips entirely (`null`) exactly as `perTradeSizeCap`
+ * does — see `isD5ArmedWithNumericFraction`'s docstring for why "armed with a
+ * numeric fraction" (not merely "has a `subclass_of` entry") is the right
+ * predicate.
+ */
+const perAssetExposureCap: EntryCapGate = (config, intent, portfolio) => {
+  if (isD5ArmedWithNumericFraction(config, intent.instrument)) return null;
+  return {
+    name: 'per_asset_exposure_cap',
+    allowedAdditional:
+      config.per_asset_cap_fraction_of_equity * portfolio.equity -
+      (portfolio.exposure_by_instrument[intent.instrument] ?? 0),
+  };
+};
 
 const perAssetClassExposureCap: EntryCapGate = (config, intent, portfolio) => ({
   name: 'per_asset_class_exposure_cap',
