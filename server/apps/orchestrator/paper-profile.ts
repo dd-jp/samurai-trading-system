@@ -1622,10 +1622,27 @@ export function buildStartingProfileConfigs(
      * DERIVED — owner ruling on #634, sited against ADR-0018's measured
      * drawdown envelope. At today's fixed-fraction sizing (~35% of the leg for
      * index ETPs, ~25% for single-stock ETPs) ADR-0018 holds max drawdown at
-     * **23.1%** and **26.2%** respectively. A breaker inside that band would
-     * fire on the strategy working as designed, so the trip sits ABOVE the
-     * envelope at 30% — it means "reality has exceeded what we sized for",
-     * not "we are having a bad week".
+     * **26.2%** (index) and **41.8%** (single-stock), re-measured 2026-08-17
+     * by #729 at the neutral brackets D3 actually declares and accepted as
+     * the operative tolerance by David 2026-08-26 (#798) — this replaces the
+     * older 23.1%/26.2% pair, measured at the pre-neutral SLS grid. A breaker
+     * inside that band would fire on the strategy working as designed, so
+     * the trip sits ABOVE the envelope — it means "reality has exceeded what
+     * we sized for", not "we are having a bad week".
+     *
+     * **Re-sited 2026-08-31 (David's approval of #925) from 0.30 to 0.44.**
+     * 0.30 sat INSIDE the newly-accepted 41.8% single-stock tolerance — it
+     * would have fired on the single-stock leg operating exactly as #798 now
+     * says is normal, defeating the breaker's purpose. 0.44 sits 2.2
+     * percentage points above the 41.8% envelope (41.8% is a point estimate
+     * off a drift-removed simulation; a 1-2pp margin is inside that
+     * measurement's own noise, so the margin needed room) and 1 percentage
+     * point below the 0.45 hard ceiling (`threshold-bounds.ts`) — the
+     * ceiling and the trip are deliberately not equal, so the ceiling still
+     * functions as a bound rather than a restatement of this config. There
+     * is very little room between the accepted envelope and the ceiling
+     * David approved (3.2pp total); see the PR body for #925 for that
+     * tension flagged explicitly.
      *
      * This replaces the earlier 0.2, which read CONTEXT.md's "~20-25% target"
      * as a breaker level. That range is a *design target for the envelope* —
@@ -1640,7 +1657,7 @@ export function buildStartingProfileConfigs(
      * Hard and sticky, but no longer human-cleared: ADR-0013 removed the
      * operator, so `auto_rearm` clears it on recovery in every mode (#634).
      */
-    max_drawdown_pct: 0.3,
+    max_drawdown_pct: 0.44,
     /**
      * UNSOURCED — spec story 15 names the breaker, not the count. 5 is a
      * streak unlikely enough at any plausible win rate to be signal rather
@@ -1670,12 +1687,24 @@ export function buildStartingProfileConfigs(
      * only thing that can clear a trip outside backtest.
      *
      * `recovery_drawdown_pct: 0.2` is the owner ruling on #634 and the lower
-     * edge of the band whose upper edge is `max_drawdown_pct: 0.3` above. It
+     * edge of the band whose upper edge is `max_drawdown_pct: 0.44` above. It
      * is deliberately the top of CONTEXT.md's "~20-25%" design envelope: the
      * book resumes taking entries once it is back inside the drawdown it was
-     * sized for, not merely once it has stopped falling. The 10-point band is
-     * wide enough that a single mark cannot flip the breaker back and forth
-     * across it.
+     * sized for, not merely once it has stopped falling.
+     *
+     * RECONSIDERED against the widened envelope, 2026-08-31 (#925), and left
+     * UNCHANGED. Unlike `max_drawdown_pct`, this value has no obligation to
+     * sit near the 41.8% envelope — the opposite: `threshold-bounds.ts`'s
+     * ceiling requires it to sit AT OR BELOW the envelope (a re-arm edge
+     * above it would resume trading while the book was still outside its own
+     * sizing assumption), and 0.2 clears that with room whether the envelope
+     * is 26.2% or 41.8%. Raising it toward the new envelope would only widen
+     * the outage after a real trip, which is the safe direction but not a
+     * safety requirement — CONTEXT.md's "~20-25%" design target is unrelated
+     * to the accepted-tolerance question #798 settled, so it still governs
+     * here. The band is now 24 points wide (0.44 − 0.2) rather than 10; the
+     * original 10-point band was sized so "a single mark cannot flip the
+     * breaker back and forth across it" — a wider band only strengthens that.
      *
      * `max_days_tripped: 5` is backtest-only by construction — see the field's
      * docblock. Its job is stopping a multi-year replay from dead-ending on

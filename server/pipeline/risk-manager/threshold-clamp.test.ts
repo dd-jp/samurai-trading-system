@@ -8,11 +8,12 @@
  * between two ticks binds on the second one without passing through startup
  * again. A boot-only clamp would constrain nothing the Feedback Loop does.
  */
-import { ThresholdBoundViolationError } from '../../shared/index.js';
-import type { BreakerConfig } from './breakers.js';
+import type { Clock } from '../../shared/index.js';
+import { GUARDED_THRESHOLD_BOUNDS, ThresholdBoundViolationError } from '../../shared/index.js';
+import type { BreakerConfig, BreakerEvalInput } from './breakers.js';
 import { CircuitBreakers } from './breakers.js';
 import { RISK_THRESHOLD_KEYS, resolveRiskConfig } from './risk-thresholds.js';
-import type { RiskConfig } from './types.js';
+import type { DailyPnlByClass, PortfolioView, RiskConfig } from './types.js';
 
 function makeBreakerConfig(overrides: Partial<BreakerConfig> = {}): BreakerConfig {
   return {
@@ -69,16 +70,72 @@ describe('CircuitBreakers — in-code threshold clamp at construction (#638)', (
   });
 
   it('refuses to construct when recovery_drawdown_pct is past its ceiling', () => {
+    // recovery_drawdown_pct's ceiling is MEASURED_DRAWDOWN_ENVELOPE (0.418,
+    // #729/#798). max_drawdown_pct is set within ITS OWN ceiling (0.45,
+    // #925) so only the recovery edge is the thing under test here.
     expect(
       () =>
         new CircuitBreakers(
           makeBreakerConfig({
-            max_drawdown_pct: 0.35,
-            auto_rearm: { recovery_drawdown_pct: 0.3, max_days_tripped: 5 },
+            max_drawdown_pct: 0.44,
+            auto_rearm: { recovery_drawdown_pct: 0.42, max_days_tripped: 5 },
           }),
         ),
     ).toThrow(/recovery_drawdown_pct/);
   });
+
+  it(
+    'keeps the recovery_drawdown_pct ceiling strictly below the max_drawdown_pct ' +
+      'ceiling (#925) — the structural bug this issue fixed was the ceiling ' +
+      'drifting below the accepted envelope',
+    () => {
+      expect(GUARDED_THRESHOLD_BOUNDS.recovery_drawdown_pct.max).toBeLessThan(
+        GUARDED_THRESHOLD_BOUNDS.max_drawdown_pct.max as number,
+      );
+      // And specifically: the ceiling sits above #798's accepted 41.8%
+      // single-stock envelope, which recovery_drawdown_pct.max (the
+      // re-measured MEASURED_DRAWDOWN_ENVELOPE) now equals.
+      expect(GUARDED_THRESHOLD_BOUNDS.max_drawdown_pct.max as number).toBeGreaterThan(0.418);
+    },
+  );
+
+  it(
+    'cannot fire on a single-stock position at its accepted 41.8% envelope (#729/#798), ' +
+      'the same discipline this file already applies to the ceiling itself (#925)',
+    () => {
+      // Mirrors the shipped paper-profile.ts breaker config (max_drawdown_pct:
+      // 0.44), not an arbitrary fixture — the point is that the ACTUAL shipped
+      // trip does not fire on the strategy working as designed.
+      const breakers = new CircuitBreakers(
+        makeBreakerConfig({
+          max_drawdown_pct: 0.44,
+          auto_rearm: { recovery_drawdown_pct: 0.2, max_days_tripped: 5 },
+        }),
+      );
+      const portfolio: PortfolioView = {
+        equity: 58_200,
+        peak_equity: 100_000,
+        drawdown_pct: 0.418, // #729/#798's accepted single-stock envelope
+        exposure_by_instrument: {},
+        exposure_by_class: { crypto: 0, stocks: 0 },
+        gross_exposure: 0,
+        daily_pnl: { crypto: { known: true, pct: 0 }, stocks: { known: true, pct: 0 }, portfolio: { known: true, pct: 0 } } as DailyPnlByClass,
+        consecutive_losses: 0,
+        unvalued_instruments: [],
+      };
+      const clock: Clock = { now: () => new Date('2026-08-31T09:30:00Z') };
+      const input: BreakerEvalInput = {
+        portfolio,
+        volatility: { crypto: 1, stocks: 0.5 },
+        mode: 'live',
+        clock,
+      };
+
+      const state = breakers.evaluate(input);
+
+      expect(state.armed_breakers).not.toContain('portfolio_drawdown_hard');
+    },
+  );
 
   it('refuses to construct when the portfolio daily-loss tier is past its ceiling', () => {
     expect(() => new CircuitBreakers(makeBreakerConfig({ daily_loss_pct: 0.5 }))).toThrow(

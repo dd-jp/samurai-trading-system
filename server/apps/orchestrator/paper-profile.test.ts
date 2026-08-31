@@ -404,14 +404,16 @@ describe('paperStartingProfile', () => {
     // (portfolio-view.ts) — a FRACTION, despite the `_pct` name. A `30` here
     // would mean 3000% and never trip.
     //
-    // 0.30 is the owner ruling on #634, sited above ADR-0018's measured
-    // drawdown envelope (23.1% index ETPs / 26.2% single-stock at today's
-    // sizing). CONTEXT.md's "~20-25%" is that envelope's design target, not
-    // the halt line — it binds on the RE-ARM edge below instead.
+    // 0.44 is the owner ruling on #634, re-sited 2026-08-31 by David's
+    // approval of #925 above ADR-0018's measured drawdown envelope (26.2%
+    // index ETPs / 41.8% single-stock at today's sizing, #729/#798 —
+    // supersedes the older 23.1%/26.2% pair the trip used to sit above).
+    // CONTEXT.md's "~20-25%" is that envelope's design target, not the halt
+    // line — it binds on the RE-ARM edge below instead.
     const { breakerConfig } = paperStartingProfile('paper');
 
-    expect(breakerConfig.max_drawdown_pct).toBe(0.3);
-    expect(breakerConfig.max_drawdown_pct).toBeGreaterThan(0.262);
+    expect(breakerConfig.max_drawdown_pct).toBe(0.44);
+    expect(breakerConfig.max_drawdown_pct).toBeGreaterThan(0.418);
 
     // The hysteresis band (#634): re-arm strictly inside the trip level, and
     // back within the design envelope rather than merely off its worst point.
