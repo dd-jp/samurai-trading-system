@@ -19,7 +19,7 @@ import {
   minLiveCapitalCeilingUsd,
   resolveLiveCapitalCeilingUsd,
 } from './live-profile.js';
-import { paperStartingProfile, RISK_CAP_EQUITY_FRACTIONS } from './paper-profile.js';
+import { LIVE_BOOK_GBP, paperStartingProfile, RISK_CAP_EQUITY_FRACTIONS } from './paper-profile.js';
 import type { LogEntry, Logger } from './types.js';
 
 const CEILING = 2_000;
@@ -92,17 +92,31 @@ describe('liveStartingProfile', () => {
     expect(profile.capitalCeilingUsd).toBe(CEILING);
   });
 
-  it("shares the paper profile's equity-relative caps verbatim — the ceiling no longer touches riskConfig (#886)", () => {
+  it("shares the paper profile's equity-relative caps verbatim, except the account-level book ceiling — the CEILING ARGUMENT no longer touches riskConfig (#886)", () => {
     // Before #886 the six caps were derived from the ceiling once at boot, so
     // live and paper necessarily disagreed. #886 made them fractions of live
     // EQUITY, resolved at evaluate time by the Risk Manager — both profiles
     // now build `riskConfig` from the same `RISK_CAP_EQUITY_FRACTIONS`
     // constant, through the same shared `buildStartingProfileConfigs`, and the
-    // ceiling argument plays no part in it at all.
+    // `capitalCeilingUsd` ARGUMENT (`CEILING` here) plays no part in it at
+    // all — asserted below by rebuilding `live` with a wildly different
+    // ceiling and getting the identical `riskConfig` back.
+    //
+    // **`live_book_ceiling` is the one deliberate exception (#888 review
+    // fix-up), and it is NOT ceiling-argument-shaped.** It is set from
+    // `LIVE_BOOK_GBP` — a fixed constant, not `CEILING` — whenever
+    // `liveStartingProfile` calls `buildStartingProfileConfigs` at all, which
+    // is unconditional, unlike the ceiling argument's independence asserted
+    // above. See `RiskConfig['live_book_ceiling']`'s doc comment
+    // (risk-manager/types.ts) for why paper deliberately does not carry it.
     const live = liveStartingProfile(CEILING);
     const paper = paperStartingProfile('paper');
 
-    expect(live.riskConfig).toEqual(paper.riskConfig);
+    expect(live.riskConfig).toEqual({
+      ...paper.riskConfig,
+      live_book_ceiling: { book: LIVE_BOOK_GBP, refuse_above_tolerance: expect.any(Number) },
+    });
+    expect(paper.riskConfig.live_book_ceiling).toBeUndefined();
   });
 
   it('produces the identical riskConfig regardless of which ceiling it is built with', () => {
@@ -255,7 +269,8 @@ describe('LIVE_MONEY_GATES', () => {
     // #888.) #798 closed 2026-08-26 and was replaced by #925 in the same edit.
     // #886 closed 2026-08-26 too (D5 cap authority + equity-relative caps
     // shipped) and was replaced by #932 (the per_asset_cap gap #886 left open).
-    const closed = [526, 519, 548, 549, 550, 551, 562, 384, 375, 333, 525, 798, 800, 826, 894, 886];
+    // #888 closed 2026-08-30 (PR #948); its USD/GBP flag carries forward as #949.
+    const closed = [526, 519, 548, 549, 550, 551, 562, 384, 375, 333, 525, 798, 800, 826, 894, 886, 888];
 
     for (const gate of LIVE_MONEY_GATES) {
       expect(closed).not.toContain(gate.issue);
@@ -269,7 +284,7 @@ describe('LIVE_MONEY_GATES', () => {
     // Pinned as literals rather than derived from LIVE_MONEY_GATES: a test that
     // renders the constant and asserts it contains the constant passes for any
     // list, which is why the seven ghosts survived a suite of ~2900 tests.
-    expect(LIVE_MONEY_GATES.map((gate) => gate.issue)).toEqual([895, 888, 932, 925, 900]);
+    expect(LIVE_MONEY_GATES.map((gate) => gate.issue)).toEqual([895, 932, 925, 900]);
   });
 
   it('hands the reader a command instead of only telling them to re-check', () => {
@@ -307,7 +322,7 @@ describe('the live-boot warning as an operator actually receives it', () => {
   it('names every gate that is open, at the boot path', () => {
     const message = liveBootWarning();
 
-    for (const issue of [895, 888, 932, 925, 900]) {
+    for (const issue of [895, 932, 925, 900]) {
       expect(message).toContain(`#${issue}`);
     }
     expect(message).toContain('#238');
@@ -318,8 +333,8 @@ describe('the live-boot warning as an operator actually receives it', () => {
 
     // #798 closed 2026-08-26 (the "accept the wider envelope" ruling) and was
     // replaced by #925 in the same edit. #886 closed the same day and was
-    // replaced by #932.
-    for (const issue of [526, 519, 548, 549, 550, 551, 562, 798, 800, 826, 894, 886]) {
+    // replaced by #932. #888 closed 2026-08-30 (PR #948).
+    for (const issue of [526, 519, 548, 549, 550, 551, 562, 798, 800, 826, 894, 886, 888]) {
       expect(message).not.toContain(`#${issue}`);
     }
   });

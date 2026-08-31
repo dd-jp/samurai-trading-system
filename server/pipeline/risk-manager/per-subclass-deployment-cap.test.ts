@@ -68,6 +68,7 @@ const configWith = (cap: SubclassDeploymentCap | undefined): RiskConfig => ({
   portfolio_gross_cap_fraction_of_equity: 1_000,
   concentration: { cap_fraction_of_equity: 1_000, threshold: 0.7 },
   min_viable_size: 10,
+  whole_share_sizing: false,
   cii_threshold: 70,
   max_mark_age: { crypto: 2 * 60_000, stocks: 15 * 60_000 },
   ...(cap === undefined ? {} : { per_subclass_deployment_cap: cap }),
@@ -425,5 +426,109 @@ describe('ADR-0018 D5 deployment envelope', () => {
     // the envelope in exactly the run where it had learned to be confident.
     expect(RISK_THRESHOLD_KEYS).not.toContain('per_subclass_deployment_cap');
     expect(RISK_THRESHOLD_KEYS.some((key) => key.includes('subclass'))).toBe(false);
+  });
+});
+
+describe('#888 — equity_ceiling: the fraction resolves against the declared BOOK, not raw portfolio.equity', () => {
+  // The book equals `PORTFOLIO_EQUITY` here deliberately, so `capFraction *
+  // book === INDEX_CAP`, the SAME cash figure the unclamped tests above
+  // resolve to — the ceiling tests below are then directly comparable to
+  // them, rather than needing a second cash constant. A book far below
+  // `PORTFOLIO_EQUITY` would additionally trip `min_viable_size` on this
+  // fixture's `capFraction` (calibrated to £750-leg-scale cash figures at
+  // £100,000 equity, not at ADR-0018's real 0.35/0.25), which is not what
+  // these tests are about.
+  const BOOK = PORTFOLIO_EQUITY;
+  const TOLERANCE = 0.05;
+
+  const capWithCeiling = (refuse_above_tolerance = TOLERANCE): SubclassDeploymentCap => ({
+    ...DEPLOYMENT_CAP,
+    equity_ceiling: { book: BOOK, refuse_above_tolerance },
+  });
+
+  it('is unaffected when equity_ceiling is absent — every fixture above proves this, asserted once here explicitly', () => {
+    expect(DEPLOYMENT_CAP.equity_ceiling).toBeUndefined();
+    const decision = decide(intentFor('3USL', 10_000), {}, DEPLOYMENT_CAP, PORTFOLIO_EQUITY);
+    expect(decision.binding_constraint).toBe('per_subclass_deployment_cap');
+    expect(finalSizeOf(decision)).toBeCloseTo(INDEX_CAP, 6); // 35% of £100,000, unclamped
+  });
+
+  it('clamps resolution to the book once equity is ABOVE it, within tolerance', () => {
+    // This is the "sizes on the account" defect #888 was filed for,
+    // reproduced directly against the gate rather than through the
+    // composition root: fund 2% past the book and, pre-#888, the cap would
+    // have resolved 2% wider too.
+    const withinTolerance = BOOK * 1.02; // 2% over, inside the 5% tolerance
+
+    const decision = decide(
+      intentFor('3USL', 10_000),
+      {},
+      capWithCeiling(),
+      withinTolerance,
+    );
+
+    expect(decision.status).toBe('approved');
+    expect(decision.binding_constraint).toBe('per_subclass_deployment_cap');
+    // Clamped at the BOOK, not the funded 2%-over figure.
+    expect(finalSizeOf(decision)).toBeCloseTo(INDEX_CAP, 6);
+  });
+
+  it('leaves sizing untouched below the book — the ceiling only ever clamps DOWN', () => {
+    const belowBook = BOOK * 0.5;
+
+    const decision = decide(intentFor('3USL', 10_000), {}, capWithCeiling(), belowBook);
+
+    expect(decision.status).toBe('approved');
+    expect(finalSizeOf(decision)).toBeCloseTo(INDEX_CAP / 2, 6);
+  });
+
+  it('REFUSES the entry once equity clears the tolerance above the book, rather than sizing on the wider figure', () => {
+    const farOverBook = BOOK * 1.5; // 50% over — well past the 5% tolerance
+
+    expect(() =>
+      decide(intentFor('3USL', 10_000), {}, capWithCeiling(), farOverBook),
+    ).toThrow(/per_subclass_deployment_cap's declared book/);
+  });
+
+  it('the refusal is a PerSubclassCapUnresolvableError with a structured binding_constraint naming the instrument', () => {
+    const farOverBook = BOOK * 1.5;
+
+    try {
+      decide(intentFor('3USL', 10_000), {}, capWithCeiling(), farOverBook);
+      expect.unreachable('expected perSubclassDeploymentCap to throw');
+    } catch (error) {
+      expect(error).toBeInstanceOf(PerSubclassCapUnresolvableError);
+      const typed = error as PerSubclassCapUnresolvableError;
+      expect(typed.instrument).toBe('3USL');
+      expect(typed.bindingConstraint).toBe(
+        'per_subclass_deployment_cap:equity_exceeds_book:3USL',
+      );
+    }
+  });
+
+  it('sits exactly at the tolerance boundary: refuses just past it, caps right at it', () => {
+    const justUnder = BOOK * 1.05 - 1;
+    const justAt = BOOK * 1.05;
+    const justOver = BOOK * 1.05 + 1;
+
+    expect(
+      decide(intentFor('3USL', 10_000), {}, capWithCeiling(), justUnder).binding_constraint,
+    ).toBe('per_subclass_deployment_cap');
+    expect(
+      decide(intentFor('3USL', 10_000), {}, capWithCeiling(), justAt).binding_constraint,
+    ).toBe('per_subclass_deployment_cap');
+    expect(() => decide(intentFor('3USL', 10_000), {}, capWithCeiling(), justOver)).toThrow();
+  });
+
+  it('an exit still bypasses the ceiling entirely — the refusal must never be able to trap a flatten', () => {
+    // Mirrors the existing "lets the forced flatten out" test above: the
+    // throw lives on the entry-gate path, and `evaluate()` returns for an
+    // exit before that path is ever reached.
+    const flatten = { ...intentFor('3USL', 10_000), intent_type: 'exit' as const };
+
+    const decision = decide(flatten, { '3USL': INDEX_CAP }, capWithCeiling(), BOOK * 10);
+
+    expect(decision.status).toBe('approved');
+    expect(decision.binding_constraint).toBeNull();
   });
 });

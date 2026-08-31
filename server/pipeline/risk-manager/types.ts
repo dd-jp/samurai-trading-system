@@ -213,6 +213,23 @@ export interface RiskConfig {
   };
   /** Below this notional, a trimmed intent is dust and must be rejected. */
   min_viable_size: number;
+  /**
+   * Quantise an APPROVED entry size to whole shares (#941). Mirrors
+   * `TraderConfig.whole_share_sizing` and must be set to the same value: the
+   * two are one venue constraint applied at the two places a size is set.
+   *
+   * The Trader's floor is necessary but not sufficient. Every cap gate here
+   * trims a NOTIONAL, and the approved size is re-derived as
+   * `notional / intent.entry` — so a whole-share entry of 93 that any gate
+   * binds on comes back out as, say, 71.4, and Alpaca refuses the bracket
+   * with `422 42210000 fractional orders must be simple orders` exactly as it
+   * did before the Trader was fixed. The trim, not the Trader, is then the
+   * proximate cause of an unsubmittable order.
+   *
+   * Trims only ever reduce, and flooring only ever reduces, so composing them
+   * cannot breach a cap the gates just enforced.
+   */
+  whole_share_sizing: boolean;
   /** CII soft signal (#205): absolute WorldMonitor CII level (0-100) above which a warning fires. Unpinned, tuned in paper trading. */
   cii_threshold: number;
   /**
@@ -245,6 +262,48 @@ export interface RiskConfig {
    * fails loud once declared.
    */
   per_subclass_deployment_cap?: SubclassDeploymentCap;
+  /**
+   * #888 review fix-up — the declared book, armed INDEPENDENTLY of universe
+   * classification, unlike `per_subclass_deployment_cap.equity_ceiling`.
+   *
+   * `per_subclass_deployment_cap` (and the `equity_ceiling` nested inside it)
+   * only exists once `d5EnvelopeFor` finds at least one classified instrument
+   * (`subclassOfUniverse(universe)` non-empty) — and on the actual shipped
+   * live composition root, `liveStartingProfile()` calls
+   * `buildStartingProfileConfigs(undefined, LIVE_BOOK_GBP)`, which defaults to
+   * `DEFAULT_UNIVERSE` (scheduler.ts), which carries NO subclass
+   * classification today. So `per_subclass_deployment_cap` — and with it the
+   * whole `equity_ceiling` clamp/refuse mechanism — is `undefined` on every
+   * live tick until C1's LSE-ETP pool file lands (#703). This field is the
+   * fix: set by `buildStartingProfileConfigs` whenever a book is supplied,
+   * with no dependency on `subclass_of` at all, so `liveBookCeiling`
+   * (risk-manager/index.ts) refuses an overfunded live account regardless of
+   * whether any instrument happens to be D5-classified yet.
+   *
+   * Same shape as `SubclassDeploymentCap['equity_ceiling']` deliberately —
+   * this is the account-level statement that one is the per-subclass
+   * instance of, not a competing design.
+   *
+   * **Unresolved unit mismatch, same class as `SAMURAI_LIVE_MAX_CAPITAL_USD`
+   * (live-profile.ts) but a NEW instance of it.** `book` is GBP
+   * (`LIVE_BOOK_GBP`); the only `AccountStateProvider` this repo ships
+   * (`AlpacaAccountStateProvider`, production/account-state.ts) reads
+   * `portfolio.equity` from Alpaca's `GET /v2/account`, which is
+   * USD-denominated with no FX conversion anywhere in this codebase. This
+   * check is therefore only valid while the funding source and
+   * `LIVE_BOOK_GBP` are denominated in the same currency — today they are
+   * not, so a correctly-funded £1,000 account (~$1,270+ read via Alpaca)
+   * would wrongly trip this refusal once live boot's other gates ever clear
+   * (`live-money-gates.ts` refuses live boot outright today regardless, so
+   * this is latent, not live). No FX provider exists to fix this properly;
+   * flagged rather than resolved, same posture as the pre-existing gap.
+   */
+  live_book_ceiling?: {
+    /** The declared book (`LIVE_BOOK_GBP`), in GBP. */
+    book: number;
+    /** Same semantics as `SubclassDeploymentCap['equity_ceiling'].refuse_above_tolerance`. */
+    refuse_above_tolerance: number;
+  };
 }
 
 /**
@@ -311,6 +370,41 @@ export interface SubclassDeploymentCap {
    * (#705). `per_asset_class_cap_fraction_of_equity.crypto` still bounds it (#886 rename).
    */
   cap_fraction_of_equity: Readonly<Record<InstrumentSubclass, number | null>>;
+  /**
+   * #888 — the DECLARED BOOK this cap's fractions are fractions OF, resolved
+   * against it rather than against raw `portfolio.equity`.
+   *
+   * `portfolio.equity` is one blended broker figure with no per-leg
+   * accounting (`production/account-state.ts`), so it equals the declared
+   * book only while the funding account happens to be funded at exactly that
+   * figure. Above it, `cap_fraction_of_equity * portfolio.equity` authorises
+   * proportionally more cash than the book was ever sized for — the gap #888
+   * was filed for. Optional, and the optionality matters: every fixture in
+   * `per-subclass-deployment-cap.test.ts` constructs a `SubclassDeploymentCap`
+   * with no book at all, on purpose, to exercise the gate's netting/throwing
+   * behaviour independent of any particular book — leaving this `undefined`
+   * there preserves that. `d5EnvelopeFor` (paper-profile.ts) is the one
+   * caller that sets it, at `LIVE_BOOK_GBP`, so it is load-bearing on the
+   * profile actually shipped rather than on the gate in the abstract.
+   */
+  equity_ceiling?: {
+    /** The declared book (`LIVE_BOOK_GBP`) this cap's fractions resolve against, in place of `portfolio.equity`, once equity has drifted past it. */
+    book: number;
+    /**
+     * Fractional headroom above `book` the gate tolerates before REFUSING the
+     * entry outright (throwing) rather than merely capping resolution at
+     * `book`. E.g. `0.05` refuses once `portfolio.equity` exceeds `book` by
+     * more than 5%.
+     *
+     * The backstop half of #888's fix: capping resolution at `book` alone
+     * closes the silent-widening gap, but an account funded far past the
+     * declared book invalidates every OTHER sizing assumption too (the
+     * breaker baselines, the drawdown envelope D5's fractions were measured
+     * to hold) — so past a small tolerance this refuses to size the entry at
+     * all instead of quietly treating the overfunding as harmless.
+     */
+    refuse_above_tolerance: number;
+  };
 }
 
 /** The red-team critic's verdict on one gated `OrderIntent` (ADR-0003, #204). Produced *outside* `evaluate()` by critic.ts and consumed here as pre-built data.

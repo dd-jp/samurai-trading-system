@@ -106,20 +106,6 @@ export const LIVE_MONEY_GATES: readonly { readonly issue: number; readonly gap: 
     gap: 'the live equity leg still has no chosen mark vendor — the LseMarkDataSource seam exists but the composition root has no client to hand it, so a live LSE boot refuses by design; no source this repo integrates lists an LSE ticker (Alpaca and Polygon both VERIFIED absent), and doc 34 recommends IBKR LSE UK L1 as the only retail-priced real-time LSE Level 1 feed with bid/ask found',
   },
   {
-    issue: 888,
-    // Verified OPEN 2026-08-19: `gh issue view 888`. Arming-blocking on the
-    // issue itself. Note this profile's ceiling env var is named
-    // SAMURAI_LIVE_MAX_CAPITAL_USD — USD — against a GBP book.
-    //
-    // This entry was #800 until 2026-08-19. #800 named the 2x denominator
-    // disagreement, which PR #885 RESOLVED and which auto-closed #800 on merge
-    // — leaving this list citing a closed issue, the exact staleness the module
-    // doc forbids. The gap that survived #800 is split out as #888 so the
-    // citation points at something open. A closed issue is deleted, not
-    // struck through.
-    gap: 'portfolio.equity is one blended GET /v2/account figure with no per-leg accounting, so every D5 envelope is correct only while the funded equity equals the declared book — fund the ISA past it and the same fractions authorise proportionally more cash than the book was sized for',
-  },
-  {
     issue: 932,
     // #886 (the previous holder of this citation) was CLOSED 2026-08-26 by
     // this change: David's ruling resolved which cap is the drawdown
@@ -172,7 +158,7 @@ export const LIVE_MONEY_GATES: readonly { readonly issue: number; readonly gap: 
  * a date newer than the last verification is a false claim in an operator-facing
  * safety message, and a date older than the list is what #868 was filed about.
  */
-export const LIVE_MONEY_GATES_VERIFIED_ON = '2026-08-27';
+export const LIVE_MONEY_GATES_VERIFIED_ON = '2026-08-31';
 
 /** The command that re-verifies the list, named in the operator-facing summary. */
 export const LIVE_MONEY_GATES_RECHECK_COMMAND = 'yarn check:live-gates';
