@@ -2344,6 +2344,16 @@ describe('checkExitsWithReason — the indicator-based early exit (#748)', () =>
  * an unpriced market exit; everything else still fails loudly. These cases pin
  * BOTH halves — a suite that only asserted the flatten would go green on an
  * implementation that swallowed every mark failure everywhere.
+ *
+ * #900 records that "everything else" is not an unaddressed remainder — it is
+ * the DELIBERATE posture for a data-source outage: quotes/marks have no
+ * second-vendor failover at all (only bars do), so the mandatory,
+ * clock-driven flatten degrading is the only action a discretionary decision
+ * — an entry, a scale_in, or either exit that the SYSTEM chooses to take
+ * rather than the session forcing — is permitted to take without a live
+ * price. Every case below that asserts a throw is pinning that this is
+ * correct-by-design, not an open gap; see the operator-facing citation in
+ * `live-money-gates.ts`.
  */
 describe('decide/checkExits — the mark read fails (#826)', () => {
   const INSIDE_WINDOW = new Date('2026-07-15T19:56:00Z');
@@ -2447,6 +2457,16 @@ describe('decide/checkExits — the mark read fails (#826)', () => {
    * deferring one to the next tick costs nothing, and a feed that cannot
    * answer is a real reason to do less. If this ever goes green with an
    * intent, the "only the mandatory flatten degrades" claim is false.
+   *
+   * #900: this is DELIBERATE, not an unaddressed remainder of #826's fix.
+   * `signal_decay` is a discretionary exit — the system deciding to close,
+   * not the horizon forcing it — so a stalled mark source is a correct reason
+   * to defer to the next tick rather than to act on a price it cannot read.
+   * Building quote/mark failover to avoid this throw (the #641/#640
+   * neighbourhood) is a materially larger, and currently premature, change:
+   * #895 records that no LSE mark vendor is even chosen yet, so there is
+   * nothing today for a `FailoverDataSource`-style second source to fail
+   * marks over to.
    */
   it('does NOT degrade a signal_decay release — it still fails loudly', async () => {
     const marketData = stalled();
@@ -2458,6 +2478,14 @@ describe('decide/checkExits — the mark read fails (#826)', () => {
     ).rejects.toThrow(STALL);
   });
 
+  /**
+   * #900: same deliberate posture as the signal_decay case above.
+   * `direction_flip` is the OTHER discretionary exit — the debate deciding to
+   * reverse, not the clock forcing a flatten — so it fails closed on a
+   * stalled mark for the same reason: nothing is lost by deferring a
+   * discretionary decision to the next tick, and a feed that cannot answer is
+   * a real reason to do less rather than act on a stale or missing price.
+   */
   it('does NOT degrade a direction_flip exit — it still fails loudly', async () => {
     await expect(
       decideWithReason(
@@ -2473,6 +2501,15 @@ describe('decide/checkExits — the mark read fails (#826)', () => {
     ).rejects.toThrow(STALL);
   });
 
+  /**
+   * #900: an entry is not even a discretionary EXIT — it is new risk, so the
+   * bar for proceeding without a live price is higher, not lower, than either
+   * discretionary exit above. `buildBracket` is the one function both an
+   * entry and a scale_in route through (see the sibling `scale_in` case
+   * below), and it awaits `marketData.getMark` unconditionally — a stalled
+   * mark stops the tick before a position can ever be opened or added to
+   * blind.
+   */
   it('does NOT degrade an ENTRY — a position must never be opened without a price', async () => {
     await expect(
       decideWithReason(
@@ -2480,6 +2517,33 @@ describe('decide/checkExits — the mark read fails (#826)', () => {
           clock: new ManualClock(OUTSIDE_WINDOW),
           marketData: stalled(),
           positionState: async () => [],
+        }),
+      ),
+    ).rejects.toThrow(STALL);
+  });
+
+  /**
+   * #900: the entry test above exercises `buildBracket(input, 'entry', ...)`,
+   * but `routeDecision` sends a HELD, same-direction, higher-conviction debate
+   * through the SAME builder tagged `'scale_in'` instead — a second call site
+   * into the one function that reads the mark, and #900's "every entry ...
+   * stops the tick at the mark read" is silently unpinned for it without this
+   * case. Same builder, same unconditional `marketData.getMark` await in
+   * `buildBracket`, so this is the mechanism confirming the claim rather than
+   * a new behaviour.
+   */
+  it('does NOT degrade a scale_in either — the same builder serves both call sites (#900)', async () => {
+    await expect(
+      decideWithReason(
+        traderInput({
+          clock: new ManualClock(OUTSIDE_WINDOW),
+          marketData: stalled(),
+          // Same-direction, conviction risen materially — routeDecision's
+          // scale_in branch, not direction_flip or the conviction-gated skip.
+          debate: debateResult({ direction: 'bullish', confidence: 0.775, converged: true }),
+          positionState: async () => [
+            openPosition({ side: 'buy', filled_size: 10, conviction: 0.6 }),
+          ],
         }),
       ),
     ).rejects.toThrow(STALL);
