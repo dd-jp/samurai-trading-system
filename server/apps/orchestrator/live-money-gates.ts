@@ -106,22 +106,6 @@ export const LIVE_MONEY_GATES: readonly { readonly issue: number; readonly gap: 
     gap: 'the live equity leg still has no chosen mark vendor — the LseMarkDataSource seam exists but the composition root has no client to hand it, so a live LSE boot refuses by design; no source this repo integrates lists an LSE ticker (Alpaca and Polygon both VERIFIED absent), and doc 34 recommends IBKR LSE UK L1 as the only retail-priced real-time LSE Level 1 feed with bid/ask found',
   },
   {
-    issue: 932,
-    // #886 (the previous holder of this citation) was CLOSED 2026-08-26 by
-    // this change: David's ruling resolved which cap is the drawdown
-    // authority for D5 (per_trade_size_cap exempts a classified instrument;
-    // D5's own fraction is the sole authority for it) and made all six caps
-    // equity-relative, both shipped here, and the acceptance-criteria test
-    // now asserts an armed D5 entry lands at the intended size through the
-    // shipped profile (d5-trader-cap-agreement.test.ts). Writing that test
-    // surfaced a gap the ruling did not name — per_asset_cap is NOT exempted
-    // and is tighter than D5's fractions — so it is split out as #932, the
-    // same #800/#798-style handoff this module's header describes, rather
-    // than left attached to a closed issue. Verified OPEN 2026-08-26:
-    // `gh issue view 932`.
-    gap: "per_trade_size_cap now exempts a D5-classified instrument, but per_asset_cap_fraction_of_equity (10%) does not and is below both D5 fractions (35% index / 25% single-stock), so a full-sized D5 entry is still trimmed — at the per-asset-exposure gate instead of the per-trade gate — before D5's own envelope is ever consulted",
-  },
-  {
     issue: 900,
     // Verified OPEN 2026-08-19: filed on that date and cited here in the same
     // change; see the comment left on #900 recording the citation.
@@ -150,7 +134,7 @@ export const LIVE_MONEY_GATES: readonly { readonly issue: number; readonly gap: 
  * safety message, and a date older than the list is what #868 was filed about.
  */
 export const LIVE_MONEY_GATES_VERIFIED_ON = '2026-08-31';
-// (re-verified same day: #895/#932/#900 confirmed still OPEN, #925 entry removed above)
+// (re-verified same day: #895/#900 confirmed still OPEN, #925 and #932 entries removed above)
 
 /** The command that re-verifies the list, named in the operator-facing summary. */
 export const LIVE_MONEY_GATES_RECHECK_COMMAND = 'yarn check:live-gates';

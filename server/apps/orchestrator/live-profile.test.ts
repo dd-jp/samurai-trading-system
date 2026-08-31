@@ -271,8 +271,11 @@ describe('LIVE_MONEY_GATES', () => {
     // shipped) and was replaced by #932 (the per_asset_cap gap #886 left open).
     // #888 closed 2026-08-30 (PR #948); its USD/GBP flag carries forward as #949.
     // #925 closed 2026-08-31 (PR #952): breaker ceiling raised to 0.45.
+    // #932 closed 2026-08-31 (PR #956): per_asset_cap exempted for D5-classified
+    // instruments the same way #886 exempted per_trade_size_cap.
     const closed = [
       526, 519, 548, 549, 550, 551, 562, 384, 375, 333, 525, 798, 800, 826, 894, 886, 888, 925,
+      932,
     ];
 
     for (const gate of LIVE_MONEY_GATES) {
@@ -287,7 +290,7 @@ describe('LIVE_MONEY_GATES', () => {
     // Pinned as literals rather than derived from LIVE_MONEY_GATES: a test that
     // renders the constant and asserts it contains the constant passes for any
     // list, which is why the seven ghosts survived a suite of ~2900 tests.
-    expect(LIVE_MONEY_GATES.map((gate) => gate.issue)).toEqual([895, 932, 900]);
+    expect(LIVE_MONEY_GATES.map((gate) => gate.issue)).toEqual([895, 900]);
   });
 
   it('hands the reader a command instead of only telling them to re-check', () => {
@@ -325,7 +328,7 @@ describe('the live-boot warning as an operator actually receives it', () => {
   it('names every gate that is open, at the boot path', () => {
     const message = liveBootWarning();
 
-    for (const issue of [895, 932, 900]) {
+    for (const issue of [895, 900]) {
       expect(message).toContain(`#${issue}`);
     }
     expect(message).toContain('#238');
@@ -337,8 +340,11 @@ describe('the live-boot warning as an operator actually receives it', () => {
     // #798 closed 2026-08-26 (the "accept the wider envelope" ruling) and was
     // replaced by #925 in the same edit. #886 closed the same day and was
     // replaced by #932. #888 closed 2026-08-30 (PR #948). #925 closed
-    // 2026-08-31 (PR #952): breaker ceiling raised to 0.45.
-    for (const issue of [526, 519, 548, 549, 550, 551, 562, 798, 800, 826, 894, 886, 888, 925]) {
+    // 2026-08-31 (PR #952): breaker ceiling raised to 0.45. #932 closed
+    // 2026-08-31 (PR #956): per_asset_cap exempted for D5-classified instruments.
+    for (const issue of [
+      526, 519, 548, 549, 550, 551, 562, 798, 800, 826, 894, 886, 888, 925, 932,
+    ]) {
       expect(message).not.toContain(`#${issue}`);
     }
   });
