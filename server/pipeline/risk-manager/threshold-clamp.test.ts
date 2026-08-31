@@ -15,6 +15,12 @@ import { CircuitBreakers } from './breakers.js';
 import { RISK_THRESHOLD_KEYS, resolveRiskConfig } from './risk-thresholds.js';
 import type { DailyPnlByClass, PortfolioView, RiskConfig } from './types.js';
 
+/** Every class at the same known figure — the daily-loss breaker reads `portfolio`. */
+function pnl(pct: number): DailyPnlByClass {
+  const known = { known: true, pct } as const;
+  return { crypto: known, stocks: known, portfolio: known };
+}
+
 function makeBreakerConfig(overrides: Partial<BreakerConfig> = {}): BreakerConfig {
   return {
     daily_loss_pct: 0.03,
@@ -120,7 +126,7 @@ describe('CircuitBreakers — in-code threshold clamp at construction (#638)', (
         exposure_by_instrument: {},
         exposure_by_class: { crypto: 0, stocks: 0 },
         gross_exposure: 0,
-        daily_pnl: { crypto: { known: true, pct: 0 }, stocks: { known: true, pct: 0 }, portfolio: { known: true, pct: 0 } } as DailyPnlByClass,
+        daily_pnl: pnl(0),
         consecutive_losses: 0,
         unvalued_instruments: [],
       };

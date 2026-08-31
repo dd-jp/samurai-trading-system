@@ -1723,11 +1723,14 @@ export function buildStartingProfileConfigs(
      * ceiling requires it to sit AT OR BELOW the envelope (a re-arm edge
      * above it would resume trading while the book was still outside its own
      * sizing assumption), and 0.2 clears that with room whether the envelope
-     * is 26.2% or 41.8%. Raising it toward the new envelope would only widen
-     * the outage after a real trip, which is the safe direction but not a
-     * safety requirement — CONTEXT.md's "~20-25%" design target is unrelated
-     * to the accepted-tolerance question #798 settled, so it still governs
-     * here. The band is now 24 points wide (0.44 − 0.2) rather than 10; the
+     * is 26.2% or 41.8%. Raising it toward the new envelope would re-arm at
+     * a larger residual drawdown, shortening the halt after a real trip —
+     * the LESS safe direction, so the widened envelope is no reason to
+     * raise it. Leaving it low keeps the halt in force longer, which is the
+     * safe direction (see `threshold-bounds.ts`'s `recovery_drawdown_pct`
+     * bound). CONTEXT.md's "~20-25%" design target is unrelated to the
+     * accepted-tolerance question #798 settled, so it still governs here.
+     * The band is now 24 points wide (0.44 − 0.2) rather than 10; the
      * original 10-point band was sized so "a single mark cannot flip the
      * breaker back and forth across it" — a wider band only strengthens that.
      *
