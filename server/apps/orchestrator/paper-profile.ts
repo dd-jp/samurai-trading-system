@@ -1180,7 +1180,7 @@ export function buildStartingProfileConfigs(
     /** 5% of equity — the Trader's own 0.5-1% *risk* budget becomes a much larger *notional* once divided by a ~1-2% ATR stop, so this is the cap that actually binds first on BTC-USD. Skipped entirely for a D5-classified instrument (#886) — see the field's own doc comment. */
     max_position_size_fraction_of_equity:
       RISK_CAP_EQUITY_FRACTIONS.max_position_size_fraction_of_equity,
-    /** 10% — one instrument may hold at most two max-size entries' worth. */
+    /** 10% — one instrument may hold at most two max-size entries' worth. Skipped entirely for a D5-classified instrument (#932, extending #886's ruling to this cap) — see the field's own doc comment. */
     per_asset_cap_fraction_of_equity: RISK_CAP_EQUITY_FRACTIONS.per_asset_cap_fraction_of_equity,
     /**
      * 20% crypto / 40% stocks. Asymmetric for the same reason
@@ -1284,12 +1284,17 @@ export function buildStartingProfileConfigs(
      * (`isD5ArmedWithNumericFraction`, risk-manager/index.ts), so once this
      * arms, D5's own fraction sizes the position, not the generic cap.
      *
-     * **What #886 did NOT resolve, and #886's own acceptance criteria say
-     * so:** `per_asset_cap_fraction_of_equity` (10%) is still below both D5
-     * fractions (35% index / 25% single-stock) and is NOT exempted — so a
-     * full-sized D5 ask still trims at the asset-exposure gate today. See
-     * `d5-trader-cap-agreement.test.ts`'s "#886" describe block for the
-     * failing acceptance-criteria test this leaves open.
+     * **#886 alone did not close this — #932 finished it.** #886's own
+     * acceptance-criteria test, written at a realistic (not full-envelope)
+     * ask size, surfaced that `per_asset_cap_fraction_of_equity` (10%) was
+     * NOT exempted and is tighter than both D5 fractions (35% index / 25%
+     * single-stock), so a full-envelope D5 ask still trimmed at the
+     * asset-exposure gate even after #886 shipped. #932 extends the same
+     * exemption to `per_asset_cap` — D5 is now the sole per-instrument
+     * drawdown authority for a classified instrument on both axes. See
+     * `d5-trader-cap-agreement.test.ts`'s "#886 fixed per_trade_size_cap for
+     * D5 instruments; #932 fixed per_asset_cap" describe block for the test
+     * that pins this.
      */
     ...(subclassCap === undefined ? {} : { per_subclass_deployment_cap: subclassCap }),
     /**

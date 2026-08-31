@@ -198,7 +198,20 @@ export interface RiskConfig {
    * the sole drawdown authority once an instrument is subclass-classified."
    */
   max_position_size_fraction_of_equity: number;
-  /** Max total notional exposure to one instrument, as a FRACTION OF EQUITY resolved at evaluate time (#886). */
+  /**
+   * Max total notional exposure to one instrument, as a FRACTION OF EQUITY
+   * resolved at evaluate time (#886).
+   *
+   * Skipped entirely for a D5-classified instrument with a numeric
+   * `per_subclass_deployment_cap` fraction (`isD5ArmedWithNumericFraction` in
+   * risk-manager/index.ts) — #932, extending #886's ruling to this cap: D5
+   * caps DEPLOYMENT into one subclass and this cap caps EXPOSURE to one
+   * instrument, not the same claim, but #886 left this one at 10% — tighter
+   * than either D5 fraction (35%/25%) — so a full-envelope D5 entry was still
+   * trimmed here, just at a different gate than the one #886 fixed. Once an
+   * instrument is D5-classified, D5 is the sole per-instrument drawdown
+   * authority for it on this axis too.
+   */
   per_asset_cap_fraction_of_equity: number;
   /** Max total notional exposure per asset-class bucket, as a FRACTION OF EQUITY resolved at evaluate time (#886). */
   per_asset_class_cap_fraction_of_equity: { crypto: number; stocks: number };
