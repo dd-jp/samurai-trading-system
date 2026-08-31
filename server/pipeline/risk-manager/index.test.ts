@@ -98,6 +98,7 @@ function makeConfig(overrides: Partial<RiskConfig> = {}): RiskConfig {
     portfolio_gross_cap_fraction_of_equity: 10,
     concentration: { cap_fraction_of_equity: 10, threshold: 0.7 },
     min_viable_size: 100,
+    whole_share_sizing: false,
     cii_threshold: 70,
     max_mark_age: { crypto: 2 * 60_000, stocks: 15 * 60_000 },
     ...overrides,
@@ -508,6 +509,7 @@ describe('RiskManagerImpl.evaluate — min-viable-size re-check', () => {
       makeConfig({
         per_asset_class_cap_fraction_of_equity: { crypto: 10, stocks: 0.0005 },
         min_viable_size: 100,
+        whole_share_sizing: false,
       }),
     );
     const input = makeInput({
@@ -546,6 +548,7 @@ describe('RiskManagerImpl.evaluate — min-viable-size re-check', () => {
     const sizeConfig = makeConfig({
       per_asset_class_cap_fraction_of_equity: { crypto: 10, stocks: 0.0005 },
       min_viable_size: 100,
+      whole_share_sizing: false,
     });
     const sizeDecision = new RiskManagerImpl(sizeConfig).evaluate(
       makeInput({ intent: makeIntent({ size: 100, entry: 100, asset_class: 'stocks' }) }),
@@ -1008,5 +1011,143 @@ describe('RiskManagerImpl.evaluate — exit bypasses the live threshold clamp (#
     }).evaluate(makeInput({ intent: makeIntent({ intent_type: 'exit' }) }));
 
     expect(withSource.warnings).toEqual(withoutSource.warnings);
+  });
+});
+
+/**
+ * #941 second site. The Trader floors the size it PROPOSES, but every cap gate
+ * here trims a notional and the approved size is re-derived by dividing — so a
+ * whole-share entry comes back fractional the moment any gate binds, and
+ * Alpaca refuses the bracket (`422 42210000 fractional orders must be simple
+ * orders`) exactly as it did before the Trader was fixed.
+ *
+ * The worked example throughout: 100 shares at 100 against 100_000 of equity,
+ * i.e. 10_000 of notional, trimmed by a position cap to 7_145 — which divides
+ * to 71.45, deliberately fractional.
+ */
+describe('whole-share sizing (#941)', () => {
+  const trimmingConfig = (whole: boolean) =>
+    makeConfig({ max_position_size_fraction_of_equity: 0.07145, whole_share_sizing: whole });
+
+  it('floors a trimmed size to whole shares', () => {
+    const decision = new RiskManagerImpl(trimmingConfig(true)).evaluate(makeInput());
+
+    expect(decision.status).toBe('approved');
+    expect(decision.order_intent?.size).toBe(71);
+    // Never 72: rounding up would restore exposure the cap gate just removed.
+    expect(decision.modifications?.final_size).toBe(71);
+    expect(decision.modifications?.original_size).toBe(100);
+  });
+
+  it('leaves the trimmed size fractional when the flag is off', () => {
+    const decision = new RiskManagerImpl(trimmingConfig(false)).evaluate(makeInput());
+
+    expect(decision.order_intent?.size).toBeCloseTo(71.45, 10);
+  });
+
+  it('deploys no more notional than the cap allowed', () => {
+    const decision = new RiskManagerImpl(trimmingConfig(true)).evaluate(makeInput());
+
+    expect((decision.order_intent?.size ?? 0) * 100).toBeLessThanOrEqual(7_145);
+  });
+
+  it('returns an untrimmed size verbatim rather than round-tripping it through the notional', () => {
+    // Not a hypothetical: `3 * 0.35 / 0.35` evaluates to 2.9999999999999996 in
+    // IEEE-754 double, so a floor over the round-trip turns 3 whole shares
+    // into 2 on a path where NOTHING trimmed. A penny-priced entry is the
+    // live shape of this — ADR-0016's universe is LSE ETPs.
+    const decision = new RiskManagerImpl(
+      makeConfig({ whole_share_sizing: true, min_viable_size: 0.1 }),
+    ).evaluate(makeInput({ intent: makeIntent({ size: 3, entry: 0.35, stop: 0.3, target: 0.4 }) }));
+
+    expect(decision.status).toBe('approved');
+    expect(decision.order_intent?.size).toBe(3);
+  });
+
+  it('rejects a trim that leaves less than one whole share', () => {
+    // 240 of notional at an entry of 300 is 0.8 shares. `min_viable_size` is
+    // 10 here and cannot catch it — the notional is comfortably viable and the
+    // ORDER is still unsubmittable.
+    const decision = new RiskManagerImpl(
+      makeConfig({
+        max_position_size_fraction_of_equity: 0.0024,
+        min_viable_size: 10,
+        whole_share_sizing: true,
+      }),
+    ).evaluate(makeInput({ intent: makeIntent({ size: 5, entry: 300 }) }));
+
+    expect(decision.status).toBe('rejected');
+    expect(decision.binding_constraint).toBe('whole_share_sizing:rounds_to_zero');
+    expect(decision.order_intent).toBeNull();
+  });
+
+  it('approves that same sub-one-share trim when the flag is off', () => {
+    const decision = new RiskManagerImpl(
+      makeConfig({
+        max_position_size_fraction_of_equity: 0.0024,
+        min_viable_size: 10,
+        whole_share_sizing: false,
+      }),
+    ).evaluate(makeInput({ intent: makeIntent({ size: 5, entry: 300 }) }));
+
+    expect(decision.status).toBe('approved');
+    expect(decision.order_intent?.size).toBeCloseTo(0.8, 10);
+  });
+
+  it('re-tests the dust floor on the QUANTISED notional, not the pre-floor one', () => {
+    // 110 of trimmed notional at an entry of 60 is 1.83 shares, which clears a
+    // min_viable_size of 100 — and floors to 1 share, i.e. 60, which does not.
+    // Flooring only ever reduces, so a grid can turn a viable order into a
+    // sub-viable one after the first check has already passed.
+    const decision = new RiskManagerImpl(
+      makeConfig({
+        max_position_size_fraction_of_equity: 0.0011,
+        min_viable_size: 100,
+        whole_share_sizing: true,
+      }),
+    ).evaluate(makeInput({ intent: makeIntent({ size: 5, entry: 60 }) }));
+
+    expect(decision.status).toBe('rejected');
+    expect(decision.binding_constraint).toBe('min_viable_size:quantised');
+  });
+
+  it('approves that same order when the grid is off — the pre-floor notional was viable', () => {
+    const decision = new RiskManagerImpl(
+      makeConfig({
+        max_position_size_fraction_of_equity: 0.0011,
+        min_viable_size: 100,
+        whole_share_sizing: false,
+      }),
+    ).evaluate(makeInput({ intent: makeIntent({ size: 5, entry: 60 }) }));
+
+    expect(decision.status).toBe('approved');
+  });
+
+  it('records the floor in `reasons` — `modifications` alone cannot attribute it', () => {
+    const decision = new RiskManagerImpl(trimmingConfig(true)).evaluate(makeInput());
+
+    expect(decision.reasons.some((r) => r.startsWith('whole_share_sizing: floored size'))).toBe(
+      true,
+    );
+  });
+
+  it('records no floor when the grid did not move the size', () => {
+    const decision = new RiskManagerImpl(makeConfig({ whole_share_sizing: true })).evaluate(
+      makeInput(),
+    );
+
+    expect(decision.reasons.some((r) => r.startsWith('whole_share_sizing:'))).toBe(false);
+  });
+
+  it('never quantises an exit', () => {
+    // ADR-0014's flat-by-close rides the exit path, and an exit is sized from
+    // what actually filled. Flooring a residual would strand a fraction of a
+    // position overnight.
+    const decision = new RiskManagerImpl(makeConfig({ whole_share_sizing: true })).evaluate(
+      makeInput({ intent: makeIntent({ intent_type: 'exit', size: 10.5 }) }),
+    );
+
+    expect(decision.status).toBe('approved');
+    expect(decision.order_intent?.size).toBe(10.5);
   });
 });

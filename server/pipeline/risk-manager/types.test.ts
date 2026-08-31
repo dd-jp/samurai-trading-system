@@ -109,6 +109,7 @@ describe('RiskConfig', () => {
       portfolio_gross_cap_fraction_of_equity: 90_000,
       concentration: { cap_fraction_of_equity: 30_000, threshold: 0.7 },
       min_viable_size: 500,
+      whole_share_sizing: false,
       cii_threshold: 70,
       max_mark_age: { crypto: 2 * 60_000, stocks: 15 * 60_000 },
     };

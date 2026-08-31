@@ -140,6 +140,38 @@ export interface TraderConfig {
    */
   min_viable_notional: number;
   /**
+   * Quantise entry size to whole shares (#941).
+   *
+   * A VENUE constraint, not a tuning knob, and the reason it exists is
+   * measured rather than assumed: Alpaca refuses `order_class: 'bracket'` at
+   * any fractional quantity — `422 42210000 fractional orders must be simple
+   * orders` — long or short alike, and refuses a fractional SHORT outright
+   * (`fractional orders cannot be sold short`) even as a plain limit. A
+   * whole-share bracket, short included, is accepted. ADR-0018 D5 sizes by
+   * CASH (35%/25% of equity), so almost every intent it produces is
+   * fractional, and two of the paper soak's three entries were rejected at
+   * submission for exactly this.
+   *
+   * **Default `false`, and unlike `time_in_force` this venue constraint is
+   * deliberately NOT carried in the shared default.** Time-in-force is inert
+   * in simulation — the simulated broker never expires an order — so pinning
+   * it globally changes nothing that is measured. Flooring changes the FILL
+   * SIZE, so switching it on globally would silently move every backtest and
+   * fixture result and make runs on either side of this change
+   * incomparable. It is therefore opted into by the profiles that actually
+   * talk to a venue (`paper-profile.ts`, `live-profile.ts`) and left off for
+   * `DEFAULT_TRADER_CONFIG`, backtests and fixtures.
+   *
+   * Equities-shaped, because the profiles that set it are equities-only
+   * (ADR-0015's 2026-08-16 amendment). A fractional venue is the norm in
+   * crypto — Alpaca's own crypto leg accepts fractional quantities, and a
+   * whole-unit BTC entry at a £250 deployment would floor to zero and trade
+   * never. If crypto re-enters scope this must become per-asset-class, the
+   * way `time_in_force` already is, rather than being set true anywhere a
+   * crypto instrument can be ticked.
+   */
+  whole_share_sizing: boolean;
+  /**
    * Order time-in-force, **per asset class** (#381).
    *
    * One value cannot serve both, and this is a venue constraint rather than a
@@ -194,6 +226,7 @@ export const DEFAULT_TRADER_CONFIG: TraderConfig = {
   non_converged_haircut: 0.5,
   reward_risk_multiple: 2.0,
   min_viable_notional: 10,
+  whole_share_sizing: false,
   time_in_force: { crypto: 'gtc', stocks: 'day' },
   scale_in_conviction_delta: 0.1,
   flatten_before_close_ms: 5 * 60 * 1_000,

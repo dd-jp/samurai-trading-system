@@ -261,7 +261,31 @@ export class RiskManagerImpl implements RiskManager {
 
     const reasons: string[] = [];
     let bindingConstraint: string | null = null;
-    let notional = intent.size * intent.entry;
+    const originalNotional = intent.size * intent.entry;
+    let notional = originalNotional;
+
+    /**
+     * #941, second site. The Trader floors the entry it PROPOSES; every gate
+     * below trims a notional and the size is re-derived by dividing, which
+     * re-introduces the fraction the Trader removed. Both sites are needed:
+     * without the Trader's floor an untrimmed entry is fractional, without
+     * this one a trimmed entry is.
+     *
+     * `Math.floor`, not rounding, for the same reason as in `decide.ts` —
+     * rounding up would restore exposure a cap gate had just removed, which
+     * is the one direction this must never move.
+     *
+     * The `originalNotional` short-circuit is not an optimisation. When no
+     * gate binds, `notional / intent.entry` is a float round-trip of a value
+     * the Trader already floored, and it can land a hair BELOW the integer
+     * (93 as 92.999...), which a floor would then take to 92 — a silent
+     * one-share haircut on the untrimmed path. Returning `intent.size`
+     * verbatim when nothing trimmed it is exact by construction.
+     */
+    const submittableSize = (value: number): number => {
+      const raw = value === originalNotional ? intent.size : value / intent.entry;
+      return config.whole_share_sizing ? Math.floor(raw) : raw;
+    };
 
     for (const gate of ENTRY_CAP_GATES) {
       const cap = gate(config, intent, portfolio, correlation);
@@ -276,6 +300,10 @@ export class RiskManagerImpl implements RiskManager {
       if (changed) bindingConstraint = cap.name;
     }
 
+    // Deliberately NOT quantised: this feeds `applyCritic` only, whose
+    // pass/unavailable branch echoes it back as a notional the caller
+    // discards. Flooring it would change an input the critic reasons with as
+    // a side effect of a venue fix. Quantisation happens once, at the emit.
     const finalSize = notional / intent.entry;
 
     if (notional < config.min_viable_size) {
@@ -304,12 +332,51 @@ export class RiskManagerImpl implements RiskManager {
       }
     }
 
+    const approvedSize = submittableSize(notional);
+
+    // The dust floor has to be re-tested on what will ACTUALLY be submitted.
+    // The `min_viable_size` check above ran on the pre-floor notional, and
+    // flooring only ever reduces it: £110 of trimmed notional at an entry of
+    // £60 is 1.83 shares, floors to 1, and submits £60 against a config that
+    // just declared anything under £100 to be dust. A quantity grid can turn
+    // a viable order into a sub-viable one, so the floor is checked on both
+    // sides of it.
+    //
+    // Two reasons, not one, and for the same reason `decide.ts` keeps
+    // `rounds_to_zero_shares` distinct from `below_min_notional`: a soak log
+    // must distinguish "the venue's grid ate the whole position" from "what
+    // survived the caps was dust". The zero case is the strictly worse one —
+    // there is no order left at all.
+    const approvedNotional = approvedSize * intent.entry;
+    if (approvedSize <= 0) {
+      reasons.push(
+        `whole_share_sizing: trimmed notional ${notional} at entry ${intent.entry} is less than one whole share`,
+      );
+      return rejected('whole_share_sizing:rounds_to_zero', reasons);
+    }
+    if (approvedNotional < config.min_viable_size) {
+      reasons.push(
+        `min_viable_size: quantised notional ${approvedNotional} below viable minimum ${config.min_viable_size}`,
+      );
+      return rejected('min_viable_size:quantised', reasons);
+    }
+
+    // `modifications` carries only sizes, so a reader cannot tell a cap trim
+    // from a grid floor by comparing them — and `binding_constraint` names
+    // the cap. Recorded in `reasons` instead, which is the audit channel, so
+    // an under-deployed entry is attributable without re-deriving the grid.
+    if (config.whole_share_sizing && approvedSize !== finalSize) {
+      reasons.push(
+        `whole_share_sizing: floored size from ${finalSize} to ${approvedSize} (whole shares)`,
+      );
+    }
+
     return {
       status: 'approved',
-      order_intent: { ...intent, size: notional / intent.entry },
+      order_intent: { ...intent, size: approvedSize },
       modifications: {
         original_size: intent.size,
-        final_size: notional / intent.entry,
+        final_size: approvedSize,
         stop_tightened: false,
       },
       binding_constraint: bindingConstraint,

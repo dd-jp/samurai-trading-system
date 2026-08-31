@@ -95,7 +95,7 @@ import type { ProductionConfig } from './production.js';
  * message, a doc comment and a credential pre-flight, and a typo in any of them
  * would send an operator looking for a variable that does not exist.
  *
- * **#888, flagged rather than fixed: this is USD-denominated against a
+ * **#949, flagged rather than fixed: this is USD-denominated against a
  * GBP book.** `LIVE_BOOK_GBP` (paper-profile.ts) — the £1,000 ADR-0015's
  * 2026-08-18 amendment declares — and this ceiling are two different numbers
  * in two different currencies, and nothing in this file or `direct-bind.ts`
@@ -108,13 +108,16 @@ import type { ProductionConfig } from './production.js';
  * chosen in GBP terms already, wrong by whatever the prevailing USD/GBP rate
  * is otherwise. The variable name says USD, the value is compared unconverted
  * against a GBP-denominated account, and no test in this repo catches a
- * mismatched pair. #888 did not fix this: there is no FX-rate provider
- * anywhere in this codebase to convert with, and bolting one on to resolve a
- * single boot-time comparison is a bigger change than this ticket's scope
- * (D5's book-vs-equity mismatch, a same-currency comparison throughout).
- * Left as an explicit, named gap — the operator must currently choose this
- * ceiling's VALUE in GBP terms themselves, despite the USD name, until either
- * the env var is renamed/redenominated or an FX conversion is added here.
+ * mismatched pair. #888 (closed, PR #948) did not fix this — it was flagged
+ * out of scope there and carried forward as #949, which also covers the two
+ * newer instances of the same mismatch #888's own fix introduced
+ * (`liveBookCeiling` and `equity_ceiling` in risk-manager/index.ts). There is
+ * no FX-rate provider anywhere in this codebase to convert with, and bolting
+ * one on to resolve a single boot-time comparison is a bigger change than any
+ * one of these tickets' scope. Left as an explicit, named gap — the operator
+ * must currently choose this ceiling's VALUE in GBP terms themselves, despite
+ * the USD name, until either the env var is renamed/redenominated or an FX
+ * conversion is added here.
  */
 export const LIVE_MAX_CAPITAL_ENV_VAR = 'SAMURAI_LIVE_MAX_CAPITAL_USD';
 

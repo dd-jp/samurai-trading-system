@@ -380,10 +380,13 @@ describe('paperStartingProfile', () => {
       // Closed 2026-08-26 (D5 cap authority + equity-relative caps shipped)
       // and replaced by #932, the per_asset_cap gap #886 left open.
       '#886',
+      // Closed 2026-08-30 by PR #948 — the funded-equity-vs-declared-book gap.
+      // The USD/GBP mismatch it flagged (not fixed) carries forward as #949.
+      '#888',
     ]) {
       expect(message).not.toContain(closed);
     }
-    for (const open of ['#895', '#888', '#932', '#925', '#900']) {
+    for (const open of ['#895', '#932', '#925', '#900']) {
       expect(message).toContain(open);
     }
     expect(message).toContain('#238');

@@ -35,6 +35,7 @@ function makeRiskConfig(): RiskConfig {
     portfolio_gross_cap_fraction_of_equity: 50_000,
     concentration: { cap_fraction_of_equity: 20_000, threshold: 0.7 },
     min_viable_size: 100,
+    whole_share_sizing: false,
     cii_threshold: 70,
     max_mark_age: { crypto: 2 * 60_000, stocks: 15 * 60_000 },
   };

@@ -167,6 +167,20 @@ export interface OrderIntentMetadata {
       deployment_fraction: number;
       round_trip_cost_pct: number;
     };
+    /**
+     * The size D5 actually sized, before `whole_share_sizing` floored it to the
+     * venue's quantity grid (#941). Present exactly when the flag is on AND the
+     * floor moved the number, absent otherwise — so its presence is the signal
+     * that this intent is NOT deployed at `deployment_fraction x equity`.
+     *
+     * Recorded because the quantisation is a deviation from the ADR's declared
+     * sizing, and a deviation that leaves no trace is one no later expectancy
+     * accounting can correct for. `size` (submitted) against this (intended)
+     * gives the realized deployment shortfall directly; without it the
+     * shortfall is only recoverable by re-deriving D5 from equity at decision
+     * time, which is not persisted.
+     */
+    unquantised_size?: number;
   };
   cosine_precedent: {
     neighbor_count: number;
