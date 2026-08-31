@@ -387,10 +387,13 @@ describe('paperStartingProfile', () => {
       // raised to 0.45 and MEASURED_DRAWDOWN_ENVELOPE to 0.418, per David's
       // approval to widen it to 0.45.
       '#925',
+      // Closed 2026-08-31 by PR #956 — per_asset_cap now exempts a
+      // D5-classified instrument the same way #886 exempted per_trade_size_cap.
+      '#932',
     ]) {
       expect(message).not.toContain(closed);
     }
-    for (const open of ['#895', '#932', '#900']) {
+    for (const open of ['#895', '#900']) {
       expect(message).toContain(open);
     }
     expect(message).toContain('#238');
