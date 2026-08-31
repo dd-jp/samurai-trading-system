@@ -124,8 +124,8 @@ afterwards, so this table is the sole remaining stop.
 | `max_pbo` | ≤ 0.05 | `CONTEXT.md` — "Kill if PBO > 0.05"; `feedback-loop-spec.md` story 13; `PBO_REJECT_THRESHOLD` |
 | `min_oos_sharpe` | ≥ 0.5 | `feedback-loop-spec.md` story 13 — lowering it softens the kill |
 | `min_deflated_sharpe` | ≥ 0.95 | `CONTEXT.md` falsification test, DSR-significant at the conventional 5% level |
-| `max_drawdown_pct` | ≤ 0.35 | **engineering choice**, stated as one: `CONTEXT.md`'s ~20-25% drawdown tolerance, one tuning step past the shipped 0.30 |
-| `recovery_drawdown_pct` | ≤ 0.262 | [ADR-0018](../adr/0018-intraday-thresholds-sizing-and-the-signal-bar.md) D5's measured envelope — the book resumes only inside the drawdown it was sized for |
+| `max_drawdown_pct` | ≤ 0.45 | **engineering choice**, stated as one: David's 2026-08-31 approval of [#925](https://github.com/dd-jp/samurai-trading-system/issues/925), re-siting the ceiling above [#798](https://github.com/dd-jp/samurai-trading-system/issues/798)'s accepted 41.8% single-stock envelope (shipped trip 0.44, one tuning step under the ceiling) |
+| `recovery_drawdown_pct` | ≤ 0.418 | [ADR-0018](../adr/0018-intraday-thresholds-sizing-and-the-signal-bar.md) D5's measured envelope, re-measured by [#729](https://github.com/dd-jp/samurai-trading-system/issues/729) and accepted by [#798](https://github.com/dd-jp/samurai-trading-system/issues/798) — the book resumes only inside the drawdown it was sized for |
 | `daily_loss_pct` (+ both per-class tiers) | ≤ 0.10 | **engineering choice**, derived from `max_drawdown_pct` so the daily tier can fire several sessions before the drawdown trip |
 
 Bounds carry a `source` string in the table, and an uncited bound is an invented

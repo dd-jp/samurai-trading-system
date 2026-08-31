@@ -71,14 +71,19 @@ export interface ThresholdBound {
 }
 
 /**
- * ADR-0018 D5's measured drawdown envelope at today's sizing: 23.1% for a 3x
- * index ETP, 26.2% for a 3x single-stock ETP. Drift-removed with zero edge
- * assumed, so it binds regardless of how good the signal turns out to be. The
- * wider of the two is the one every drawdown bound below is sited against —
- * using the narrower would let a breaker be configured to fire on the
- * single-stock leg working exactly as designed.
+ * ADR-0018 D5's measured drawdown envelope at today's sizing, re-measured
+ * 2026-08-17 by #729 at the neutral brackets D3 actually declares (the
+ * figures this constant held before, 23.1%/26.2%, were measured at the
+ * pre-neutral SLS grid and are superseded): 26.2% for a 3x index ETP, 41.8%
+ * for a 3x single-stock ETP. Drift-removed with zero edge assumed, so it
+ * binds regardless of how good the signal turns out to be. David accepted
+ * the wider figure as the operative tolerance, 2026-08-26 (#798), rather
+ * than re-sizing or re-opening the stop — see CONTEXT.md's Drawdown entry.
+ * The wider of the two is the one every drawdown bound below is sited
+ * against — using the narrower would let a breaker be configured to fire on
+ * the single-stock leg working exactly as designed.
  */
-const MEASURED_DRAWDOWN_ENVELOPE = 0.262;
+const MEASURED_DRAWDOWN_ENVELOPE = 0.418;
 
 /**
  * Every guarded threshold, keyed by its flat `risk_thresholds` name.
@@ -92,13 +97,21 @@ export const GUARDED_THRESHOLD_BOUNDS = {
    * The hard drawdown breaker's trip. A CEILING ONLY, and the missing floor is
    * a decision rather than an oversight.
    *
-   * Ceiling: ENGINEERING CHOICE, not research. CONTEXT.md:68 records a ~20-25%
-   * drawdown tolerance and the shipped trip is 0.30, set above ADR-0018's
-   * measured envelope rather than inside the tolerance. 0.35 is one tuning
-   * step past the shipped value; beyond it the breaker no longer bounds loss
-   * anywhere near the recorded tolerance and reads as a control while being
-   * none. The `0.95` / `0.90` pair that `CircuitBreakers`' existing width
-   * check happily accepts is exactly what this refuses.
+   * Ceiling: ENGINEERING CHOICE, not research, and re-sited 2026-08-31 by
+   * David's approval of [#925](https://github.com/dd-jp/samurai-trading-system/issues/925).
+   * The previous 0.35 ceiling predated #798's 2026-08-26 acceptance of the
+   * wider 41.8% single-stock envelope (#729's re-measurement) and forbade
+   * siting a trip above it at all — the file's own invariant ("a breaker
+   * cannot fire on the strategy working as designed") was false for the
+   * single-stock subclass at the shipped 0.30 trip, which sits INSIDE 41.8%.
+   * 0.45 is deliberately not derived by the old "one tuning step past the
+   * shipped value" convention: that relation is unrecoverable once the
+   * envelope it must clear grew +15.6pp (26.2%→41.8%) while this ceiling
+   * only had room to grow +10pp before running into values that stop reading
+   * as a control (see `CircuitBreakers`' own `0.95`/`0.90` refusal below).
+   * 0.45 is the largest ceiling David approved against #925; the shipped trip
+   * below is sited with margin under it, not against it, so the ceiling
+   * still functions as a bound rather than a restatement of the config.
    *
    * No floor, deliberately (see cross-spec-contracts.md). #638 asks for "a
    * fixed maximum" and a floor is a different control: a trip set too LOW
@@ -108,9 +121,9 @@ export const GUARDED_THRESHOLD_BOUNDS = {
    * measured envelope stays a spec-level obligation.
    */
   max_drawdown_pct: {
-    max: 0.35,
+    max: 0.45,
     source:
-      'CONTEXT.md:68 ~20-25% drawdown tolerance; ceiling an engineering choice recorded in cross-spec-contracts.md',
+      "David's 2026-08-31 approval of #925, re-siting the ceiling above #798's accepted 41.8% single-stock envelope; engineering choice recorded in cross-spec-contracts.md",
   },
   /**
    * The hysteresis band's lower edge. Capped at the envelope so the book
@@ -131,9 +144,10 @@ export const GUARDED_THRESHOLD_BOUNDS = {
    *
    * ENGINEERING CHOICE, recorded as one: no document states a daily-loss
    * number. The ceiling is derived from the drawdown clamp above rather than
-   * invented free-hand — at 0.10 the daily tier can fire at least three
-   * sessions before the 0.30 drawdown trip, which is what makes it an
-   * independent control instead of a second name for the same halt.
+   * invented free-hand — at 0.10 the daily tier can fire at least four
+   * sessions before the shipped 0.44 drawdown trip (#925, 2026-08-31; was
+   * "three sessions before 0.30"), which is what makes it an independent
+   * control instead of a second name for the same halt.
    */
   daily_loss_pct: {
     max: 0.1,

@@ -404,8 +404,9 @@ describe('runDailyCycle — asymmetric risk-threshold guardrails', () => {
  * standing between an automatic loosening and an arbitrary risk limit.
  *
  * `max_drawdown_pct` is used deliberately: it is one of the names in
- * `GUARDED_THRESHOLD_BOUNDS` (max 0.35). A test written against an unguarded
- * name like `max_position_size` would pass while proving nothing.
+ * `GUARDED_THRESHOLD_BOUNDS` (max 0.45, re-sited 2026-08-31 by David's
+ * approval of #925 — was 0.35). A test written against an unguarded name
+ * like `max_position_size` would pass while proving nothing.
  */
 describe('runDailyCycle — the #638 clamp still binds on an automatic loosening', () => {
   function drawdownHarness(ceiling: number, target: number): Harness {
@@ -416,9 +417,11 @@ describe('runDailyCycle — the #638 clamp still binds on an automatic loosening
         risk_thresholds: {
           // A dial whose own ceiling is deliberately mis-set ABOVE the in-code
           // clamp: the dial bounds are config and the clamp is not, which is
-          // exactly the case the clamp exists for.
+          // exactly the case the clamp exists for. max_step is 0.2 (not the
+          // file's usual 0.1) so a single day's step from the 0.3 starting
+          // value can still reach past the #925-widened 0.45 in-code ceiling.
           max_drawdown_pct: makeDial({
-            max_step: 0.1,
+            max_step: 0.2,
             floor: 0.05,
             ceiling,
             tighten_is: 'decrease',
@@ -444,8 +447,8 @@ describe('runDailyCycle — the #638 clamp still binds on an automatic loosening
 
   it('allows a loosening that stays inside the clamp', () => {
     // 0.30 -> 0.34 is a real widening of the drawdown breaker, and it is under
-    // the 0.35 line, so nothing refuses it. This is the control for the test
-    // above: it proves the refusal is the bound, not the direction.
+    // the 0.45 line (#925), so nothing refuses it. This is the control for the
+    // test above: it proves the refusal is the bound, not the direction.
     const { input, tuning, notices } = drawdownHarness(0.34, 0.34);
 
     runDailyCycle(input);
