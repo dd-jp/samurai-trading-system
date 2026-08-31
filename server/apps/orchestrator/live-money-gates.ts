@@ -122,15 +122,6 @@ export const LIVE_MONEY_GATES: readonly { readonly issue: number; readonly gap: 
     gap: "per_trade_size_cap now exempts a D5-classified instrument, but per_asset_cap_fraction_of_equity (10%) does not and is below both D5 fractions (35% index / 25% single-stock), so a full-sized D5 entry is still trimmed — at the per-asset-exposure gate instead of the per-trade gate — before D5's own envelope is ever consulted",
   },
   {
-    issue: 925,
-    // #798 (the previous holder of this citation) was CLOSED 2026-08-26:
-    // `gh issue view 798` resolved it as "accept the wider envelope" (41.8%
-    // single-stock), and its own closing comment says #925 "now carries this
-    // issue's LIVE_MONEY_GATES citation" — the exact #800-style handoff this
-    // module's header describes. Verified OPEN 2026-08-26: `gh issue view 925`.
-    gap: "the circuit breaker's hard safety clamp (threshold-bounds.ts) still ceilings max_drawdown_pct at 0.35 and MEASURED_DRAWDOWN_ENVELOPE at the stale 0.262 — both now sit below the 41.8% single-stock envelope the owner ruling accepted, so the shipped 0.30 trip can fire on the single-stock leg operating exactly as designed, and the ceiling forbids raising it without a separate code change",
-  },
-  {
     issue: 900,
     // Verified OPEN 2026-08-19: filed on that date and cited here in the same
     // change; see the comment left on #900 recording the citation.
@@ -159,6 +150,7 @@ export const LIVE_MONEY_GATES: readonly { readonly issue: number; readonly gap: 
  * safety message, and a date older than the list is what #868 was filed about.
  */
 export const LIVE_MONEY_GATES_VERIFIED_ON = '2026-08-31';
+// (re-verified same day: #895/#932/#900 confirmed still OPEN, #925 entry removed above)
 
 /** The command that re-verifies the list, named in the operator-facing summary. */
 export const LIVE_MONEY_GATES_RECHECK_COMMAND = 'yarn check:live-gates';

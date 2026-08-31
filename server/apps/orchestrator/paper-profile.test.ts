@@ -383,10 +383,14 @@ describe('paperStartingProfile', () => {
       // Closed 2026-08-30 by PR #948 — the funded-equity-vs-declared-book gap.
       // The USD/GBP mismatch it flagged (not fixed) carries forward as #949.
       '#888',
+      // Closed 2026-08-31 by PR #952 — the drawdown breaker's hard ceiling
+      // raised to 0.45 and MEASURED_DRAWDOWN_ENVELOPE to 0.418, per David's
+      // approval to widen it to 0.45.
+      '#925',
     ]) {
       expect(message).not.toContain(closed);
     }
-    for (const open of ['#895', '#932', '#925', '#900']) {
+    for (const open of ['#895', '#932', '#900']) {
       expect(message).toContain(open);
     }
     expect(message).toContain('#238');
