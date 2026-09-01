@@ -2627,9 +2627,11 @@ describe('buildProductionOrchestrator', () => {
    * (`benchmarkSeries` rebuilt from `marketData`/`buildAlpacaDataSource`
    * instead of `components.benchmarkSeries`/`buildBenchmarkDataSource`).
    * Verified red-first: temporarily reverting that one construction back to
-   * `new MarketDataBenchmarkSeriesSource(marketData)` fails this case (SPY
-   * rejected as a SCREENING INSTRUMENT) while leaving every other case in
-   * this file green, including the injected-override case directly above.
+   * `new MarketDataBenchmarkSeriesSource(marketData)` fails this case (rows
+   * come back empty — the SPY rejection happens in a fire-and-forget path and
+   * does not surface directly in the assertion diff) while leaving every
+   * other case in this file green, including the injected-override case
+   * directly above.
    *
    * So this drives the REAL default wiring end to end: an LSE-only universe,
    * no `benchmarkSeriesSource` override, and a real (lazily-built)
@@ -4239,12 +4241,12 @@ describe('buildProductionOrchestrator', () => {
       // `mode === 'live'`. Accepting a calendar here would re-couple the
       // benchmarks to the live configuration through the back door: US bars
       // normalized against London sessions and `LSE_HOLIDAYS` — a REAL
-      // divergence, not a latent one (#987 review): `LSE_HOLIDAYS` and
-      // `US_HOLIDAYS` (trading-calendar.ts) disagree on 22 civil dates across
-      // 2026-2027 alone, each one a daily `isTradingDay` call would answer
-      // differently under the two calendars. Closed structurally rather than
-      // by any empirical agreement — the option does not exist, so it cannot
-      // come back by accident.
+      // divergence, not a latent one. `LSE_HOLIDAYS` and `US_HOLIDAYS`
+      // (trading-calendar.ts) disagree on 22 civil dates across 2026-2027
+      // alone, each one a daily `isTradingDay` call would answer differently
+      // under the two calendars. Closed structurally rather than by any
+      // empirical agreement — the option does not exist, so it cannot come
+      // back by accident.
       expect(() =>
         buildBenchmarkDataSource({
           // @ts-expect-error — no `calendar` option: the US equities session is

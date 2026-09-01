@@ -712,21 +712,8 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   const marketDataMode = config.mode === 'backtest' ? 'backtest' : 'live';
   /**
    * The PIPELINE's own store instance — NOT shared with the benchmark
-   * service below (#987 review), which gets its own (`benchmarkMarketDataStore`).
-   *
-   * Splitting the instance does not, by itself, give the two writers separate
-   * tables: `SqliteMarketDataStore` takes no table name, so both instances
-   * still address the same `bars`/`latest_mark` rows over `config.db` — the
-   * same coupling #986 closed for the data SOURCE is a smaller residual here
-   * for the data STORE. Two instances are still the right move: it mirrors
-   * the source-level independence #986 established rather than leaving this
-   * the one seam still shared for no reason, and it means a future per-instance
-   * concern (a cache, a metric, a table name) added to `SqliteMarketDataStore`
-   * defaults to isolated rather than silently shared. See
-   * `benchmarkMarketDataStore`'s doc for why the shared KEY SPACE (same
-   * `bars` table, same `(instrument, timeframe, open_time)` PK, no
-   * calendar/source discriminator column) is safe under #751 without a
-   * schema change.
+   * service below, which gets its own (`benchmarkMarketDataStore`). See that
+   * instance's doc for why the two writers' shared key space is safe.
    */
   const marketDataStore = new SqliteMarketDataStore(config.db);
   const marketData: MarketDataService = new MarketDataServiceImpl(
@@ -759,7 +746,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * replace the whole port via `config.benchmarkSeriesSource` instead.
    */
   /**
-   * The benchmark path's OWN store instance (#987 review) — deliberately not
+   * The benchmark path's OWN store instance — deliberately not
    * `marketDataStore` above, mirroring the data-SOURCE independence #986
    * already established for this same pair of services.
    *

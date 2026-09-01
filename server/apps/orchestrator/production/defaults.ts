@@ -668,13 +668,9 @@ export function buildBenchmarkDataSource(options: {
         // Thanksgiving are US-only; Easter Monday, the Early May and Summer
         // bank holidays and the Boxing Day substitute are LSE-only), each one
         // a `daily` bar `isTradingDay` would keep under one calendar and drop
-        // under the other (#987 review — an earlier version of this comment
-        // claimed a same-shaped daily fixture came back identical under both
-        // calendars; that held only for whichever narrow window was checked,
-        // not in general, and is not asserted here). The signature simply has
-        // no `calendar` parameter to pass, so this coupling cannot recur no
-        // matter which calendar the live path is on — closed structurally,
-        // not by an empirical coincidence.
+        // under the other. The signature simply has no `calendar` parameter
+        // to pass, so this coupling cannot recur no matter which calendar the
+        // live path is on — closed structurally, not by empirical agreement.
         { asset_class: 'stocks' },
       ),
   );
