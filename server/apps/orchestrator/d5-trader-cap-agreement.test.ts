@@ -229,6 +229,14 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
       book: LIVE_BOOK_GBP,
       refuse_above_tolerance: expect.any(Number),
     });
+    // #949 — the shipped live profile does not (and today cannot) assert
+    // `same_currency_verified`: no FX-rate provider or same-currency broker
+    // adapter exists, so `d5EnvelopeFor` leaves it unset and the currency
+    // guard stays armed on every real live tick. See the "#949" describe
+    // block below for what that guard does.
+    expect(
+      liveShippedConfig().per_subclass_deployment_cap?.equity_ceiling?.same_currency_verified,
+    ).toBeUndefined();
   });
 
   it("does NOT trim an armed index entry sized at the Trader's intent", () => {
@@ -267,71 +275,90 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
     expect(decision.modifications?.final_size).toBeCloseTo(deployed, 6);
   });
 
-  it('#888 FIXED: caps against the BOOK once funded equity drifts moderately above it — LIVE profile only', () => {
-    // The precondition the deletion of `EQUITY_LEG_FRACTION_OF_CAPITAL` rested
-    // on, asserted rather than only written down. That constant was an
-    // account -> leg conversion: `portfolio.equity` is the whole Alpaca
-    // account (`production/account-state.ts:129`, one blended `GET /v2/account`
-    // figure — there is no per-leg accounting and no Trading212Adapter),
-    // while D5's fractions are of the LEG. Deleting it was correct exactly
-    // while the funded equity equals the book — and #888 closed the gap that
-    // left open above it: `d5EnvelopeFor` now hands the LIVE gate a live
-    // `book / equity` conversion (`equity_ceiling`), exactly what #885's body
-    // named as the repair, rather than a re-introduced static constant.
-    //
-    // `d5InIsolationLive()`, not `d5InIsolation()`: the ceiling is only ever
-    // set for the live profile (see `d5EnvelopeFor`'s docstring, paper-profile.ts) —
-    // a paper run's simulated ~$100,000 balance must never be clamped to the
-    // £1,000 book, or every classified paper entry would refuse.
-    //
-    // Within `D5_BOOK_REFUSE_ABOVE_TOLERANCE` (5%) of the book, the gate caps
-    // resolution AT the book instead of refusing outright — a small funding
-    // drift (a dividend credit, a stray fee) should not halt trading.
-    const withinTolerance = LIVE_BOOK_GBP * 1.02; // £1,020 — 2% over, inside the 5% tolerance
-    const intended = D5_INDEX_ETP_DEPLOYMENT_FRACTION * withinTolerance; // £357, NOT what should size
+  it('#949 SUPERSEDES #888: the book-relative clamp is UNREACHABLE on the shipped live profile — currency mismatch refuses first', () => {
+    // #888's clamp arithmetic (below, still real and still tested directly
+    // against the gate in per-subclass-deployment-cap.test.ts's "#888"
+    // describe block) required `same_currency_verified: true` to run at all,
+    // once #949 added that guard — and `d5EnvelopeFor` (paper-profile.ts)
+    // never sets it, because no FX-rate provider or same-currency broker
+    // adapter exists yet (#946). So on the ACTUAL shipped live profile this
+    // clamp can never fire: `liveBookCeiling` (which sits first in
+    // `ENTRY_CAP_GATES` and is unconditional once `live_book_ceiling` is
+    // set) refuses on currency mismatch before `perSubclassDeploymentCap`'s
+    // `equity_ceiling` is ever reached, at ANY equity — including this one,
+    // £1,020 on a £1,000 book, which #888 previously clamped to £350.
+    const withinTolerance = LIVE_BOOK_GBP * 1.02; // £1,020 — 2% over, inside the (now unreachable) 5% tolerance
+    const intended = D5_INDEX_ETP_DEPLOYMENT_FRACTION * withinTolerance;
 
-    const decision = decide(
-      d5InIsolationLive(),
-      intentFor('3USL', intended, 'entry'),
-      {},
-      withinTolerance,
-    );
-
-    expect(decision.status).not.toBe('rejected');
-    // Capped at the BOOK, not the account: 0.35 x £1,000 = £350, not 0.35 x
-    // £1,020 = £357 — the overshoot the pre-#888 gate would have allowed.
-    expect(decision.modifications?.final_size).toBeCloseTo(
-      D5_INDEX_ETP_DEPLOYMENT_FRACTION * LIVE_BOOK_GBP,
-      6,
-    );
-    expect(decision.binding_constraint).toBe('per_subclass_deployment_cap');
+    expect(() =>
+      decide(d5InIsolationLive(), intentFor('3USL', intended, 'entry'), {}, withinTolerance),
+    ).toThrow(/currency mismatch, cannot verify funding/);
   });
 
-  it('#888 FIXED: REFUSES the entry once funded equity clears the tolerance, rather than sizing on the wider figure — LIVE profile only', () => {
-    // The scenario this test used to pin as the (undesired) status quo:
-    // £1,500 funded on a £1,000 book, 50% over — far past the 5% tolerance.
-    // Pre-#888 the same 35% resolved against the account: £525, not £350.
-    // Post-#888 the gate refuses the entry outright rather than silently
-    // widening it, per the chosen backstop (Option 2, combined with the
-    // book-relative cap above as Option 1) — but only for the LIVE profile;
-    // see `d5InIsolationLive()`.
-    //
-    // **Review fix-up (#888 follow-up): the throw now comes from
-    // `liveBookCeiling`, not `perSubclassDeploymentCap`.** Both gates are
-    // armed for this fixture (`UNIVERSE` is classified AND a book is
-    // supplied), and `liveBookCeiling` sits first in `ENTRY_CAP_GATES` — it
-    // is the account-level check that also fires on `DEFAULT_UNIVERSE`
-    // (no classification at all), which `equity_ceiling` alone cannot do.
-    // See `liveBookCeiling`'s docstring (risk-manager/index.ts).
+  it('#949 SUPERSEDES #888: the far-overfunded refusal now reads as a currency problem, not an overfunding one — LIVE profile only', () => {
+    // The scenario this test used to pin: £1,500 funded on a £1,000 book,
+    // 50% over — far past the 5% tolerance. Pre-#888 the same 35% resolved
+    // against the account: £525, not £350. #888 made the gate refuse this
+    // outright rather than silently widen it; #949 changes WHY it refuses —
+    // `liveBookCeiling` (first in `ENTRY_CAP_GATES`) now refuses on currency
+    // mismatch BEFORE the £1,500-vs-£1,000 comparison is even made, so the
+    // error is diagnosable as "cannot verify funding", not "you are
+    // overfunded" — the misdiagnosis #949 was filed over, since a
+    // correctly-funded £1,000 account reads as ~$1,270+ via Alpaca and would
+    // have hit this exact "overfunded" message for being funded correctly.
     const overfunded = 1_500;
     const intended = D5_INDEX_ETP_DEPLOYMENT_FRACTION * overfunded;
 
     expect(intended).toBeCloseTo(525, 6);
     expect(intended).toBeGreaterThan(D5_INDEX_ETP_DEPLOYMENT_FRACTION * LIVE_BOOK_GBP);
 
-    expect(() =>
-      decide(d5InIsolationLive(), intentFor('3USL', intended, 'entry'), {}, overfunded),
-    ).toThrow(/live_book_ceiling's declared book/);
+    try {
+      decide(d5InIsolationLive(), intentFor('3USL', intended, 'entry'), {}, overfunded);
+      expect.unreachable('expected liveBookCeiling to throw');
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      const message = (error as Error).message;
+      expect(message).toMatch(/currency mismatch, cannot verify funding/);
+      // The old over-book reason's distinguishing phrase must be absent.
+      expect(message).not.toMatch(/more than \d+% *above it/);
+    }
+  });
+
+  it("#949: same_currency_verified: true restores liveBookCeiling's pre-#949 over-book refusal — the escape hatch this flag exists for", () => {
+    // The gap this pins: every test above that used to reach
+    // `liveBookCeiling`'s `refuseAbove` comparison (the two `#949 SUPERSEDES
+    // #888` tests, the `#888 review fix-up` test, and the `#888: the LIVE
+    // profile is NOT scale-invariant` test) was rewritten to assert the NEW
+    // currency-mismatch throw instead, which left the account-level
+    // `equity_exceeds_book` throw itself with zero coverage anywhere in the
+    // suite — a future edit could delete it and nothing would go red. The
+    // per-subclass `equity_ceiling` mirror of this is still covered, via
+    // `capWithCeiling`'s `same_currency_verified = true` default in
+    // per-subclass-deployment-cap.test.ts's "#888" describe block; this is
+    // the account-level counterpart.
+    const withVerifiedBookCeiling: RiskConfig = {
+      ...d5InIsolationLive(),
+      live_book_ceiling: {
+        ...(d5InIsolationLive().live_book_ceiling as NonNullable<RiskConfig['live_book_ceiling']>),
+        same_currency_verified: true,
+      },
+    };
+    const overfunded = 1_500; // 50% over the £1,000 book — past the 5% tolerance
+    const intended = D5_INDEX_ETP_DEPLOYMENT_FRACTION * overfunded;
+
+    try {
+      decide(withVerifiedBookCeiling, intentFor('3USL', intended, 'entry'), {}, overfunded);
+      expect.unreachable('expected liveBookCeiling to throw');
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      const message = (error as Error).message;
+      // The pre-#949 over-book reason, not the currency-mismatch one.
+      expect(message).toMatch(/more than \d+% *above it/);
+      expect(message).not.toMatch(/currency mismatch, cannot verify funding/);
+      expect((error as { bindingConstraint?: string }).bindingConstraint).toBe(
+        'live_book_ceiling:equity_exceeds_book:3USL',
+      );
+    }
   });
 
   it('leaves NO room for a scale-in once an entry took the full envelope — #897, unresolved', () => {
@@ -382,10 +409,12 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
         refuse_above_tolerance: expect.any(Number),
       });
 
-      // An overfunded account (£1,500 on a £1,000 book, 50% over — far past
-      // the tolerance) refuses the entry outright through the real live
-      // profile, on an instrument `DEFAULT_UNIVERSE` never classifies (SPY),
-      // proving the refusal does not depend on the pool file at all.
+      // An account funded well past the book (£1,500 on a £1,000 book, 50%
+      // over) refuses the entry outright through the real live profile, on
+      // an instrument `DEFAULT_UNIVERSE` never classifies (SPY), proving the
+      // refusal does not depend on the pool file at all. #949 — the reason
+      // is now `currency_mismatch`, not `equity_exceeds_book`: see the "#949"
+      // test below for why that distinction is load-bearing at THIS value.
       const overfunded = 1_500;
       const spyIntent: OrderIntent = {
         ...intentFor('SPY', 100, 'entry'),
@@ -404,7 +433,7 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
           cii: {},
           mode: 'live',
         }),
-      ).toThrow(/live_book_ceiling's declared book/);
+      ).toThrow(/currency mismatch, cannot verify funding/);
 
       // And an exit is unaffected — the gate lives in `ENTRY_CAP_GATES`,
       // below the exit early-return, not ahead of it.
@@ -420,6 +449,54 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
         mode: 'live',
       });
       expect(exitDecision.status).toBe('approved');
+    },
+  );
+
+  it(
+    '#949: a REALISTIC, genuinely correctly-funded £1,000 account refuses through the REAL live ' +
+      'composition root — diagnosable as a currency problem, not an overfunding one',
+    () => {
+      // The exact scenario #949 was filed over, through the actual shipped
+      // live composition root (not a hand-built fixture): at typical
+      // GBP/USD rates (~1.25-1.35), a correctly-funded £1,000 book reads as
+      // roughly $1,250-$1,350 over Alpaca's `GET /v2/account` — already past
+      // `live_book_ceiling`'s 5% tolerance (£1,050) under a naive same-units
+      // comparison, so the PRE-#949 gate would have refused this CORRECTLY
+      // FUNDED account with "your account is overfunded", which is false.
+      // 1,270 sits squarely in that band.
+      const profile = liveStartingProfile(2_000);
+      const genuinelyCorrectlyFundedReadAsUsd = 1_270;
+      const spyIntent: OrderIntent = {
+        ...intentFor('SPY', 100, 'entry'),
+        asset_class: 'stocks',
+      };
+
+      try {
+        new RiskManagerImpl(profile.riskConfig).evaluate({
+          trace_id: 'trace-949-realistic',
+          intent: spyIntent,
+          clock: CLOCK,
+          portfolio: portfolioWith(genuinelyCorrectlyFundedReadAsUsd, {}),
+          breakers: NO_BREAKERS,
+          next_breaker_state: NO_PERSISTED_BREAKERS,
+          correlation: NO_CORRELATION,
+          cii: {},
+          mode: 'live',
+        });
+        expect.unreachable('expected liveBookCeiling to throw');
+      } catch (error) {
+        expect(error).toBeInstanceOf(Error);
+        const message = (error as Error).message;
+        // Diagnosable as a currency problem...
+        expect(message).toMatch(/currency mismatch, cannot verify funding/);
+        // ...NOT as an overfunding one — the old reason's distinguishing
+        // phrase, which would have told the operator to re-fund an account
+        // that is already correctly funded, must be absent.
+        expect(message).not.toMatch(/more than \d+% *above it/);
+        expect((error as { bindingConstraint?: string }).bindingConstraint).toBe(
+          'live_book_ceiling:currency_mismatch:SPY',
+        );
+      }
     },
   );
 });
@@ -553,6 +630,10 @@ describe('#886 fixed per_trade_size_cap for D5 instruments; #932 fixed per_asset
     // `perSubclassDeploymentCap`'s `equity_ceiling`.** Both are armed here,
     // but `liveBookCeiling` is the one that also covers `DEFAULT_UNIVERSE`
     // (no classification), which is why it goes first.
+    //
+    // #949 — the refusal now fires as `currency_mismatch`, before the
+    // 100,000-vs-book comparison is even made; see the "#949" describe block
+    // for why that is the correct reading at every equity, not just this one.
     const equity = 100_000;
 
     expect(() =>
@@ -562,7 +643,7 @@ describe('#886 fixed per_trade_size_cap for D5 instruments; #932 fixed per_asset
         {},
         equity,
       ),
-    ).toThrow(/live_book_ceiling's declared book/);
+    ).toThrow(/currency mismatch, cannot verify funding/);
   });
 });
 

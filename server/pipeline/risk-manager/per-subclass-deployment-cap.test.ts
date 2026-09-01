@@ -441,9 +441,18 @@ describe('#888 — equity_ceiling: the fraction resolves against the declared BO
   const BOOK = PORTFOLIO_EQUITY;
   const TOLERANCE = 0.05;
 
-  const capWithCeiling = (refuse_above_tolerance = TOLERANCE): SubclassDeploymentCap => ({
+  // `same_currency_verified: true` by default — this whole describe block is
+  // about the book-relative clamp/refuse ARITHMETIC (#888), which #949 now
+  // gates behind that flag (see the describe block below). Defaulting it to
+  // `true` here keeps these fixtures exercising that arithmetic directly,
+  // as they did before #949; no production caller ever sets it (#949's
+  // currency-mismatch describe block below covers the shipped default).
+  const capWithCeiling = (
+    refuse_above_tolerance = TOLERANCE,
+    same_currency_verified = true,
+  ): SubclassDeploymentCap => ({
     ...DEPLOYMENT_CAP,
-    equity_ceiling: { book: BOOK, refuse_above_tolerance },
+    equity_ceiling: { book: BOOK, refuse_above_tolerance, same_currency_verified },
   });
 
   it('is unaffected when equity_ceiling is absent — every fixture above proves this, asserted once here explicitly', () => {
@@ -520,6 +529,88 @@ describe('#888 — equity_ceiling: the fraction resolves against the declared BO
     const flatten = { ...intentFor('3USL', 10_000), intent_type: 'exit' as const };
 
     const decision = decide(flatten, { '3USL': INDEX_CAP }, capWithCeiling(), BOOK * 10);
+
+    expect(decision.status).toBe('approved');
+    expect(decision.binding_constraint).toBeNull();
+  });
+});
+
+describe('#949 — equity_ceiling refuses on currency mismatch, UNCONDITIONALLY, until same_currency_verified', () => {
+  // `book` is GBP; the only funding read this codebase has (Alpaca's
+  // `GET /v2/account`, `production/account-state.ts:129`) is USD, with no FX
+  // conversion. #888's clamp/refuse arithmetic above therefore cannot tell a
+  // correctly-funded account from an overfunded one at ANY equity value —
+  // not just the ones numerically above the book — so `same_currency_verified`
+  // absent/`false` must refuse before that arithmetic ever runs, regardless
+  // of whether `portfolio.equity` reads above, at, or below `book`. No
+  // production caller sets the flag today (see `d5EnvelopeFor`,
+  // paper-profile.ts); the describe block above is what exercising it looks
+  // like once a same-currency comparison exists.
+  const BOOK = PORTFOLIO_EQUITY;
+
+  const CAP_NO_VERIFICATION: SubclassDeploymentCap = {
+    ...DEPLOYMENT_CAP,
+    equity_ceiling: { book: BOOK, refuse_above_tolerance: 0.05 },
+  };
+
+  it('refuses even when equity is BELOW the book — proving this is not an overfunding check', () => {
+    const belowBook = BOOK * 0.5;
+
+    expect(() => decide(intentFor('3USL', 10_000), {}, CAP_NO_VERIFICATION, belowBook)).toThrow(
+      /currency mismatch, cannot verify funding/,
+    );
+  });
+
+  it('refuses at a realistic FX-inflated but genuinely correctly-funded value', () => {
+    // The scenario #949 was filed over: a correctly-funded GBP book reads as
+    // a numerically LARGER USD figure over Alpaca's API (~1.25-1.35x at
+    // typical GBP/USD rates), which the pre-#949 gate misread as overfunding.
+    const fxInflatedButCorrect = BOOK * 1.27;
+
+    expect(() =>
+      decide(intentFor('3USL', 10_000), {}, CAP_NO_VERIFICATION, fxInflatedButCorrect),
+    ).toThrow(/currency mismatch, cannot verify funding/);
+  });
+
+  it('refuses even when equity exactly equals the book — no numeric coincidence exempts it', () => {
+    expect(() => decide(intentFor('3USL', 10_000), {}, CAP_NO_VERIFICATION, BOOK)).toThrow(
+      /currency mismatch, cannot verify funding/,
+    );
+  });
+
+  it('the binding_constraint is currency_mismatch, distinguishable from equity_exceeds_book', () => {
+    try {
+      decide(intentFor('3USL', 10_000), {}, CAP_NO_VERIFICATION, BOOK * 1.5);
+      expect.unreachable('expected perSubclassDeploymentCap to throw');
+    } catch (error) {
+      expect(error).toBeInstanceOf(PerSubclassCapUnresolvableError);
+      const typed = error as PerSubclassCapUnresolvableError;
+      expect(typed.instrument).toBe('3USL');
+      expect(typed.bindingConstraint).toBe('per_subclass_deployment_cap:currency_mismatch:3USL');
+      expect(typed.bindingConstraint).not.toContain('equity_exceeds_book');
+      // The old over-book reason's distinguishing phrase must be absent —
+      // this refusal is diagnosable as a currency problem, not a funding one.
+      expect(typed.message).not.toMatch(/more than \d+% *above it/);
+    }
+  });
+
+  it('same_currency_verified: true restores the pre-#949 clamp/refuse arithmetic — the escape hatch this flag exists for', () => {
+    const verified: SubclassDeploymentCap = {
+      ...DEPLOYMENT_CAP,
+      equity_ceiling: { book: BOOK, refuse_above_tolerance: 0.05, same_currency_verified: true },
+    };
+    const withinTolerance = BOOK * 1.02;
+
+    const decision = decide(intentFor('3USL', 10_000), {}, verified, withinTolerance);
+
+    expect(decision.status).toBe('approved');
+    expect(finalSizeOf(decision)).toBeCloseTo(INDEX_CAP, 6);
+  });
+
+  it('an exit still bypasses the currency-mismatch refusal — must never be able to trap a flatten', () => {
+    const flatten = { ...intentFor('3USL', 10_000), intent_type: 'exit' as const };
+
+    const decision = decide(flatten, { '3USL': INDEX_CAP }, CAP_NO_VERIFICATION, BOOK * 10);
 
     expect(decision.status).toBe('approved');
     expect(decision.binding_constraint).toBeNull();
