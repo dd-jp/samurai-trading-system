@@ -665,15 +665,14 @@ describe('#886 acceptance criterion — an armed D5 entry lands at the intended 
 });
 
 describe('#959 — multiple D5-armed instruments in the SAME subclass share one envelope, not one each', () => {
-  // #932 exempted a D5-classified instrument from `per_asset_cap` entirely
-  // (above), which closed the question of whether ONE instrument reaches
-  // D5's own fraction. It left open — not undecided, just untested — what
-  // bounds a SECOND D5-armed instrument in the same subclass once neither
-  // one carries its own 10% ceiling any more. `perSubclassDeploymentCap`
-  // (risk-manager/index.ts) already nets `deployedToSubclass` across every
-  // instrument the pool file classifies into the intent's subclass, not just
-  // the intent's own instrument — this describe is the concurrent-instrument
-  // coverage that mechanism lacked, per this file's own doc comment.
+  // #932 exempts a D5-classified instrument from `per_asset_cap` entirely
+  // (above) — a single instrument reaches D5's own fraction unbound by the
+  // 10% per-asset ceiling. `perSubclassDeploymentCap` (risk-manager/index.ts)
+  // nets `deployedToSubclass` across every instrument the pool file
+  // classifies into the intent's subclass, not just the intent's own
+  // instrument, so a SECOND D5-armed instrument in the same subclass shares
+  // that envelope rather than getting its own independent 25%. This describe
+  // block covers the concurrent-instrument case.
   //
   // Two REAL `single_stock_etp_3x` tickers from the actual pool
   // (lse-etp-pool.ts) rather than the single-instrument-per-subclass
@@ -694,12 +693,21 @@ describe('#959 — multiple D5-armed instruments in the SAME subclass share one 
   const PER_ASSET_CAP = RISK_CAP_EQUITY_FRACTIONS.per_asset_cap_fraction_of_equity * EQUITY; // £100
 
   it('(a) neither instrument is capped individually at 10% via per_asset_cap — each lands ABOVE that ceiling, unclipped', () => {
-    // Each half exactly fills the shared £250 subclass envelope (£125 +
-    // £125), and £125 is already above the £100 per-asset ceiling that would
-    // have bound it pre-#932. Asserting the landed size is strictly greater
-    // than `PER_ASSET_CAP`, not merely "not that binding constraint", closes
-    // the tautology a size-under-10% fixture would leave open (per this
-    // file's own precedent at `RISK_CAP_EQUITY_FRACTIONS.per_asset_cap_fraction_of_equity`, above).
+    // This proves the #932 per-asset-cap exemption applies independently to
+    // a SECOND D5-armed instrument in the subclass, not just the first: each
+    // half (£125) is above the £100 per-asset ceiling that would have bound
+    // it pre-#932, and both land unclipped. Asserting the landed size is
+    // strictly greater than `PER_ASSET_CAP`, not merely "not that binding
+    // constraint", closes the tautology a size-under-10% fixture would leave
+    // open (per this file's own precedent at
+    // `RISK_CAP_EQUITY_FRACTIONS.per_asset_cap_fraction_of_equity`, above).
+    //
+    // This test does NOT discriminate combined-subclass netting from
+    // isolated per-instrument accounting: NVD3's £125 ask fits under £250
+    // headroom either way (isolated: NVD3 alone has no prior exposure of its
+    // own; combined: £250 envelope - £125 already deployed by 3LTS = £125
+    // remaining). Test (b), below, asks for MORE than the true combined
+    // headroom — that is what actually proves netting.
     const half = FULL_ENVELOPE / 2; // £125 — 12.5% of equity, over the 10% per-asset ceiling
     expect(half).toBeGreaterThan(PER_ASSET_CAP);
 

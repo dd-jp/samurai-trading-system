@@ -518,11 +518,15 @@ const perTradeSizeCap: EntryCapGate = (config, intent, portfolio) => {
  * numeric fraction" (not merely "has a `subclass_of` entry") is the right
  * predicate.
  *
- * With this gate skipped, `perSubclassDeploymentCap` (below) is the SOLE
- * per-instrument exposure bound left for a D5-classified instrument — see
- * that gate's "Netted across the subclass" paragraph (`#959`) for how it
- * holds that role across MULTIPLE concurrently-armed instruments in the same
- * subclass, not just one.
+ * With this gate skipped, `perSubclassDeploymentCap` (below) is the sole
+ * per-instrument *deployment-fraction* bound left for a D5-classified
+ * instrument — see that gate's "Netted across the subclass" paragraph for
+ * how it holds that role across MULTIPLE concurrently-armed instruments in
+ * the same subclass, not just one. `concentrationCorrelationCap` (below) is
+ * a second, independent bound: it carries no D5-armed guard, so it still
+ * applies to a D5-classified instrument's size unchanged, binding whenever
+ * correlation data is present and the correlated set's exposure exceeds
+ * `config.concentration.cap_fraction_of_equity`.
  */
 const perAssetExposureCap: EntryCapGate = (config, intent, portfolio) => {
   if (isD5ArmedWithNumericFraction(config, intent.instrument)) return null;
@@ -591,25 +595,21 @@ const concentrationCorrelationCap: EntryCapGate = (config, intent, portfolio, co
  * position should not be able to break sizing for an unrelated name. Only the
  * INTENT's own instrument must be classified, and that one throws.
  *
- * **This netting is what makes this gate the SOLE per-instrument exposure
- * bound for a D5-classified instrument, once #932 exempts it from
- * `per_asset_cap`.** `#932` (`perAssetExposureCap`, above) skips the
- * per-instrument exposure cap entirely for a D5-armed instrument — David's
- * ruling that D5 is the sole per-instrument drawdown authority once an
- * instrument is subclass-classified — but left unstated (`#959`) what bounds
- * a SECOND D5-armed instrument in the SAME subclass, now that neither one
- * carries its own 10% ceiling. The answer is this gate, and it already
- * carried the mechanism when #932 shipped: `deployedToSubclass` sums
- * `exposure_by_instrument` across every instrument the pool file classifies
- * into the intent's subclass, not just the intent's own instrument, so N
- * concurrently-armed names in `single_stock_etp_3x` share ONE 25%-of-equity
- * envelope rather than each reaching 25% independently — exactly the
- * "two different 3x index ETPs … would each get the full envelope" failure
- * mode the paragraph above names and nets away. ADR-0018 D5 states the
- * envelope the same way: "35% of the leg deployed to 3x index ETPs", a
- * subclass aggregate, not a per-name allowance. See
- * `d5-trader-cap-agreement.test.ts`'s "#959" describe block for the
- * concurrent-instrument coverage this gate lacked until now.
+ * **This netting is what makes this gate the sole per-instrument
+ * deployment-fraction bound for a D5-classified instrument, once #932
+ * exempts it from `per_asset_cap`** — `concentrationCorrelationCap` (above)
+ * is a second, independent bound (correlation-based, not deployment-based)
+ * that still applies to a D5-classified instrument's size unchanged.
+ * `deployedToSubclass` sums `exposure_by_instrument` across every instrument
+ * the pool file classifies into the intent's subclass, not just the
+ * intent's own instrument, so N concurrently-armed names in
+ * `single_stock_etp_3x` share ONE 25%-of-equity envelope rather than each
+ * reaching 25% independently — exactly the "two different 3x index ETPs …
+ * would each get the full envelope" failure mode the paragraph above names
+ * and nets away. ADR-0018 D5 states the envelope the same way: "35% of the
+ * leg deployed to 3x index ETPs", a subclass aggregate, not a per-name
+ * allowance. See `d5-trader-cap-agreement.test.ts`'s "#959" describe block
+ * for the concurrent-instrument coverage.
  *
  * **What the throw can and cannot reach, since it fires on the live decision
  * path.** `evaluate()` returns at `intent.intent_type === 'exit'` BEFORE the
