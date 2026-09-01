@@ -20,6 +20,7 @@ import type {
   LoosenNotificationChannel,
   TuningProposal,
 } from '../../../pipeline/feedback-loop/index.js';
+import type { BenchmarkSeriesSource } from '../../../pipeline/outside-benchmark/index.js';
 import type {
   BreakerConfig,
   CorrelationConfig,
@@ -473,6 +474,23 @@ export interface ProductionConfig extends AlertChannelSlots {
    * same rationale as `broker`, for `FixtureDataSource`/ccxt/IBKR.
    */
   dataSource?: DataSource;
+  /**
+   * Overrides the OUTSIDE BENCHMARKS' series reader (#981, under #636).
+   *
+   * A separate seam from `dataSource` on purpose, and the separation is the
+   * fix: `dataSource` replaces the LIVE TRADING path's source, which is
+   * universe-derived and becomes `LseMarkDataSource` — a source that refuses
+   * `'SPY'` by design (#734) — the moment #751 puts LSE tickers into the
+   * universe. The benchmarks are reference series, never order targets, so
+   * they must not be routed through that seam at all; by default they read
+   * `buildBenchmarkDataSource`, which takes no universe.
+   *
+   * Injectable for the same reason `equitiesFallbackBarFetcher` is: the
+   * default path builds an Alpaca client on first read, and a test — or any
+   * offline composition root — needs to drive the benchmark cycle without a
+   * credential and without a network call.
+   */
+  benchmarkSeriesSource?: BenchmarkSeriesSource;
   /**
    * Overrides the EQUITIES OHLCV FALLBACK fetcher (#562) — what serves bars
    * while the primary vendor is throwing. Defaults to a lazily constructed

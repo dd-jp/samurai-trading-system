@@ -61,6 +61,8 @@ export type {
   LlmSpendSummary,
   LlmSpendWindow,
   MetricsSuiteWire,
+  OutsideBenchmarkRow,
+  OutsideBenchmarkWire,
   PositionRow,
   TickStatus,
   TradingArmWire,

@@ -28,6 +28,7 @@ export {
   InMemoryArmComparisonSampleStore,
   InMemoryBreachAlertChannel,
   InMemoryClosedTradeStore,
+  InMemoryOutsideBenchmarkSampleStore,
   InMemoryTuningStore,
 } from './fixture-stores.js';
 export { applyGuardrail, boundedStep, type GuardrailOutcome, moveDirection } from './guardrails.js';
@@ -41,6 +42,7 @@ export {
   REVALIDATION_GATED_KILL_LINES,
 } from './metrics.js';
 export { onTradeClose } from './on-trade-close.js';
+export { runOutsideBenchmarkCycle } from './outside-benchmark-cycle.js';
 export {
   type SeedAnalystWeightsInput,
   type SeedAnalystWeightsResult,
@@ -49,6 +51,7 @@ export {
 export { SqliteAdjustmentLog } from './sqlite-adjustment-log.js';
 export { SqliteArmComparisonSampleStore } from './sqlite-arm-comparison-sample-store.js';
 export { SqliteClosedTradeStore } from './sqlite-closed-trade-store.js';
+export { SqliteOutsideBenchmarkSampleStore } from './sqlite-outside-benchmark-sample-store.js';
 export { SqliteTuningStore } from './sqlite-tuning-store.js';
 export type {
   Adjustment,
@@ -75,8 +78,12 @@ export type {
   MetricsInput,
   MetricsReport,
   OnTradeCloseInput,
+  OutsideBenchmarkCycleInput,
+  OutsideBenchmarkCycleResult,
+  OutsideBenchmarkSampleStore,
   PendingApprovalAdjustment,
   RevalidationSnapshot,
   TunableDial,
   TuningProposal,
+  UnmeasuredOutsideBenchmark,
 } from './types.js';

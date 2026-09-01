@@ -32,6 +32,7 @@ import {
   FixedAccountStateProvider,
   formatSmokeReport,
   type LoggerResilienceEvidence,
+  type OutsideBenchmarkEvidence,
   type RiskCriticEvidence,
   runSmoke,
   SMOKE_LLM_RESPONSE,
@@ -253,10 +254,12 @@ function healthyGateOptions(
     dataFailover?: DataFailoverEvidence;
     riskCritic?: RiskCriticEvidence;
     armComparison?: ArmComparisonEvidence;
+    outsideBenchmarks?: OutsideBenchmarkEvidence;
   } = {},
 ) {
   return {
     armComparison: overrides.armComparison ?? healthyArmComparison(),
+    outsideBenchmarks: overrides.outsideBenchmarks ?? healthyOutsideBenchmarks(),
     minTicks: overrides.minTicks ?? 2,
     llmRateLimiterSnapshot: meteredSnapshot(),
     exitPath: overrides.exitPath ?? healthyExitPath(),
@@ -292,6 +295,35 @@ function healthyArmComparison(
     persistedBothDrawdowns: true,
     diverged: false,
     alerts: 0,
+    comparison: {
+      from: ARM_WINDOW_FROM,
+      to: ARM_WINDOW_TO,
+      basis: 1_000,
+      live: arm('live'),
+      control: arm('control'),
+    },
+    ...overrides,
+  };
+}
+
+/** The window a healthy arm comparison covers, and therefore the benchmarks'. */
+const ARM_WINDOW_FROM = new Date('2026-08-02T00:00:00.000Z');
+const ARM_WINDOW_TO = new Date('2026-09-01T00:00:00.000Z');
+
+/**
+ * What `runOutsideBenchmarkProbe` (#981) reports on a healthy run: both
+ * benchmarks measured and persisted, both columns finite, and every persisted
+ * window equal to the arm comparison's.
+ */
+function healthyOutsideBenchmarks(
+  overrides: Partial<OutsideBenchmarkEvidence> = {},
+): OutsideBenchmarkEvidence {
+  return {
+    measured: 2,
+    persistedRows: 2,
+    persistedBothColumns: true,
+    windowsMatchArmComparison: true,
+    unmeasured: [],
     ...overrides,
   };
 }
@@ -1941,6 +1973,73 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
       const gate = evaluateSmokeGate(transactedObservations(), healthyGateOptions());
 
       expect(gate.failures.filter((failure) => failure.includes('arm-comparison'))).toEqual([]);
+    });
+  });
+
+  describe('the outside benchmarks (#981)', () => {
+    it('fails when the cycle measured no benchmark at all', () => {
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({
+          outsideBenchmarks: healthyOutsideBenchmarks({
+            measured: 0,
+            unmeasured: ['spy: series unavailable', 'sixty_forty: series unavailable'],
+          }),
+        }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('measured nothing');
+      // The reasons travel with the failure, so an operator is not left to
+      // guess between "the vendor was down" and "the cycle is unwired".
+      expect(gate.failures.join(' ')).toContain('series unavailable');
+    });
+
+    it('fails when nothing was persisted for the panel to read', () => {
+      // The mutation this catches: drop `samples.append(...)`, or migration
+      // 0036, and the panel shows "not measured yet" forever while every unit
+      // test stays green.
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({ outsideBenchmarks: healthyOutsideBenchmarks({ persistedRows: 0 }) }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('outside_benchmark_samples');
+    });
+
+    it('fails when a persisted benchmark lost one of its two columns (D4)', () => {
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({
+          outsideBenchmarks: healthyOutsideBenchmarks({ persistedBothColumns: false }),
+        }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('return-only view');
+    });
+
+    it('fails when a benchmark was measured over a window of its own', () => {
+      // The invariant #636 turns on, and the one that would rot silently: give
+      // the benchmark cycle its own `window_ms` and every unit test still
+      // passes while the panel quietly compares two different periods.
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({
+          outsideBenchmarks: healthyOutsideBenchmarks({ windowsMatchArmComparison: false }),
+        }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('SAME window');
+    });
+
+    it('passes on measured, persisted benchmarks over the comparison’s window', () => {
+      const gate = evaluateSmokeGate(transactedObservations(), healthyGateOptions());
+
+      expect(gate.failures.filter((failure) => failure.includes('outside-benchmark'))).toEqual([]);
+      expect(gate.failures.filter((failure) => failure.includes('outside benchmark'))).toEqual([]);
     });
   });
 

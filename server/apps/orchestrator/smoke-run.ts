@@ -123,6 +123,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { crc32, deflateRawSync } from 'node:zlib';
 import {
+  type ArmComparison,
   type ArmPerformance,
   SqliteArmComparisonSource,
 } from '../../pipeline/control-arm/index.js';
@@ -164,9 +165,15 @@ import {
   DEFAULT_ARM_COMPARISON_WINDOW_MS,
   DEFAULT_ARM_DIVERGENCE_THRESHOLDS,
   runArmComparisonCycle,
+  runOutsideBenchmarkCycle,
   SqliteArmComparisonSampleStore,
+  SqliteOutsideBenchmarkSampleStore,
   SqliteTuningStore,
 } from '../../pipeline/feedback-loop/index.js';
+import type {
+  BenchmarkObservation,
+  BenchmarkSeriesSource,
+} from '../../pipeline/outside-benchmark/index.js';
 import type {
   BreakerConfig,
   RiskConfig,
@@ -2582,6 +2589,35 @@ export interface ArmComparisonEvidence {
   diverged: boolean;
   /** Divergence alerts that reached the injected channel. */
   alerts: number;
+  /**
+   * The comparison itself, so the outside-benchmark probe can be handed the
+   * SAME window rather than recomputing one that merely looks equal (#981).
+   */
+  comparison: ArmComparison;
+}
+
+/**
+ * What `evaluateSmokeGate` needs from the outside-benchmark surface (#981).
+ *
+ * Same posture and same reason as `ArmComparisonEvidence` above: FL's daily
+ * timer cannot fire inside a seconds-long run, so the gate drives the shipped
+ * `runOutsideBenchmarkCycle` directly over this run's own store.
+ */
+export interface OutsideBenchmarkEvidence {
+  /** Benchmarks the cycle measured — 0 means the mechanism produced nothing. */
+  measured: number;
+  /** Rows read back out of `outside_benchmark_samples` — 0 means nothing persisted. */
+  persistedRows: number;
+  /** Whether return AND drawdown both survived the round trip on every row (D4). */
+  persistedBothColumns: boolean;
+  /**
+   * Whether every persisted row's window is the arm comparison's own window,
+   * to the millisecond. The one property #636 turns on: a benchmark measured
+   * over an approximate window is noise, not a comparison.
+   */
+  windowsMatchArmComparison: boolean;
+  /** Benchmarks the cycle could not measure, with reasons — for the report. */
+  unmeasured: readonly string[];
 }
 
 /** Drives the shipped arm-comparison cycle over the smoke run's own store. */
@@ -2614,6 +2650,78 @@ function runArmComparisonProbe(db: SqliteHandle): ArmComparisonEvidence {
     ),
     diverged: sample.divergence.diverged,
     alerts,
+    comparison: sample.comparison,
+  };
+}
+
+/**
+ * A deterministic, offline stand-in for the benchmark vendor (#981).
+ *
+ * The live source is `MarketDataBenchmarkSeriesSource` over the already-wired
+ * Alpaca daily bars (SPY and AGG were verified obtainable there on 2026-09-01).
+ * A smoke run makes no network call, so — exactly as it fabricates the Alpaca
+ * wire everywhere else — it hands the shipped cycle a fixture series instead.
+ *
+ * The closes below are NOT a claim about SPY or AGG. They exist so the gate can
+ * assert the WIRING: that the cycle computes, persists, round-trips both
+ * columns, and inherits the arm comparison's window. Nothing downstream of the
+ * gate reads these numbers, and nothing writes them anywhere a real benchmark
+ * reading is served from.
+ */
+const SMOKE_BENCHMARK_DAY_MS = 24 * 60 * 60 * 1000;
+
+class FixtureBenchmarkSeriesSource implements BenchmarkSeriesSource {
+  /** Per-day drift, so the two legs are distinguishable and neither is flat. */
+  private static readonly DRIFT: Record<string, number> = { SPY: 0.001, AGG: 0.0002 };
+
+  async getDailyCloses(instrument: string, from: Date, to: Date): Promise<BenchmarkObservation[]> {
+    // Three days of pad before `from` so the anchor bar the computation
+    // requires exists — the same surplus the real source over-fetches for.
+    const start = from.getTime() - 3 * SMOKE_BENCHMARK_DAY_MS;
+    const drift = FixtureBenchmarkSeriesSource.DRIFT[instrument] ?? 0.0005;
+    const observations: BenchmarkObservation[] = [];
+    let close = 100;
+    for (let t = start; t <= to.getTime(); t += SMOKE_BENCHMARK_DAY_MS) {
+      // A single mid-series dip, so `max_drawdown_pct` is a real reading rather
+      // than the 0 a monotonic series would always produce.
+      const step = observations.length === 7 ? -0.01 : drift;
+      close *= 1 + step;
+      observations.push({ close_time: new Date(t), close });
+    }
+    return observations;
+  }
+}
+
+/** Drives the shipped outside-benchmark cycle over the arm comparison's window. */
+async function runOutsideBenchmarkProbe(
+  db: SqliteHandle,
+  comparison: ArmComparison,
+): Promise<OutsideBenchmarkEvidence> {
+  const samples = new SqliteOutsideBenchmarkSampleStore(db);
+  const result = await runOutsideBenchmarkCycle({
+    clock: new SimulatedClock(SMOKE_RUN_INSTANT),
+    comparison,
+    series: new FixtureBenchmarkSeriesSource(),
+    samples,
+  });
+
+  const persisted = samples.getRecent(10, SMOKE_RUN_INSTANT);
+  return {
+    measured: result.measured.length,
+    persistedRows: persisted.length,
+    persistedBothColumns: persisted.every(
+      (row) =>
+        Number.isFinite(row.performance.buy_and_hold_return_pct) &&
+        Number.isFinite(row.performance.max_drawdown_pct),
+    ),
+    windowsMatchArmComparison:
+      persisted.length > 0 &&
+      persisted.every(
+        (row) =>
+          row.from.getTime() === comparison.from.getTime() &&
+          row.to.getTime() === comparison.to.getTime(),
+      ),
+    unmeasured: result.unmeasured.map((entry) => `${entry.benchmark}: ${entry.reason}`),
   };
 }
 
@@ -2929,6 +3037,13 @@ export function evaluateSmokeGate(
      * and every unit test — and `yarn smoke` — would stay green.
      */
     armComparison: ArmComparisonEvidence;
+    /**
+     * The outside benchmarks' evidence (#981) — required, not optional, for the
+     * same reason every mechanism above is: deleting the benchmark cycle from
+     * the composition root must break the build here, not quietly leave
+     * `yarn smoke` green with a dashboard panel that says nothing was measured.
+     */
+    outsideBenchmarks: OutsideBenchmarkEvidence;
   },
 ): SmokeGateResult {
   const failures: string[] = [];
@@ -3066,6 +3181,44 @@ export function evaluateSmokeGate(
       `the arm comparison reported diverged=${String(arms.diverged)} but posted ${arms.alerts} ` +
         'alert(s) — the divergence verdict and the escalation have come apart, so either a ' +
         'divergence reaches nobody or an alert fires on a comparison that did not diverge (#971)',
+    );
+  }
+
+  // #981 — the risk-adjusted OUTSIDE benchmarks reach a surface too, and reach
+  // it over the arm comparison's own window.
+  //
+  // Stands alone for `arms`' reason: a benchmark is computable regardless of
+  // what the tape did, so these properties hold on every run. They assert the
+  // WIRING and the two invariants that would rot silently — D4's paired columns
+  // and the inherited window.
+  const benchmarks = options.outsideBenchmarks;
+  if (benchmarks.measured === 0) {
+    failures.push(
+      'the outside-benchmark cycle measured nothing — `runOutsideBenchmarkCycle` (#981) produced ' +
+        'no benchmark at all, so the dashboard has no market context beside the arm comparison. ' +
+        `Reasons given: ${benchmarks.unmeasured.join('; ') || '(none reported)'}`,
+    );
+  }
+  if (benchmarks.persistedRows === 0) {
+    failures.push(
+      'the outside-benchmark cycle wrote no row to `outside_benchmark_samples` — either migration ' +
+        '0036 did not apply or `SqliteOutsideBenchmarkSampleStore.append` stopped being called, ' +
+        'and the panel reads FL persisted samples and nothing else (#981)',
+    );
+  }
+  if (!benchmarks.persistedBothColumns) {
+    failures.push(
+      'an `outside_benchmark_samples` row came back without BOTH a finite return and a finite ' +
+        'drawdown — the persisted benchmark has become a return-only view, which is what doc 12 ' +
+        'D4 rules out and what the two NOT NULL columns exist to prevent (#981)',
+    );
+  }
+  if (!benchmarks.windowsMatchArmComparison) {
+    failures.push(
+      'a persisted outside benchmark does not cover the SAME window the arm comparison was ' +
+        'measured over — #636: a benchmark on an approximate window is not a risk-adjusted ' +
+        'comparison, it is noise. The window is meant to be inherited from the `ArmComparison`, ' +
+        'so this means it stopped being (#981)',
     );
   }
 
@@ -4227,6 +4380,11 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
     // `readSmokeObservations(db)` calls pass no store, so they observe ticks
     // and fills only and are unaffected.
     const observations = readSmokeObservations(db, smokeMiArchive, orchestrator.marketIntelligence);
+    // #981. Runs AFTER the arm comparison and is handed its `ArmComparison`,
+    // which is the shipped ordering: the benchmark's window is the matched
+    // control's, never one of its own.
+    const armComparison = runArmComparisonProbe(db);
+    const outsideBenchmarks = await runOutsideBenchmarkProbe(db, armComparison.comparison);
     const gate = evaluateSmokeGate(observations, {
       minTicks: targetTicks,
       alpacaWireClientReached: alpacaBrokerClient.reached,
@@ -4240,7 +4398,8 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // #971. Run against the same store the observations were read from, and
       // AFTER `orchestrator.stop()` for `readSmokeObservations`' reason: the
       // tape has to be complete before the comparison is taken over it.
-      armComparison: runArmComparisonProbe(db),
+      armComparison,
+      outsideBenchmarks,
       exitPath: {
         ...exitPathHarnessResult,
         // Alerts from BOTH the six-stage tick loop and the exit-path harness —

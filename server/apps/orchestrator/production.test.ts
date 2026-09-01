@@ -20,6 +20,11 @@ import {
 import { SimulatedBrokerAdapter, SqliteExecutionStore } from '../../pipeline/execution/index.js';
 import type { DailyMetricsSample, FeedbackConfig } from '../../pipeline/feedback-loop/index.js';
 import { SqliteTuningStore } from '../../pipeline/feedback-loop/index.js';
+import type {
+  BenchmarkObservation,
+  BenchmarkSeriesSource,
+} from '../../pipeline/outside-benchmark/index.js';
+import { MarketDataBenchmarkSeriesSource } from '../../pipeline/outside-benchmark/index.js';
 import type { VolatilityReading } from '../../pipeline/risk-manager/index.js';
 import {
   RISK_CRITIC_SKIPPED_REASON,
@@ -39,6 +44,7 @@ import type {
   AlpacaBar,
   AlpacaQuote,
   Bar,
+  DataSource,
   LseMarkClient,
 } from '../../providers/market-data-service/index.js';
 import {
@@ -74,6 +80,7 @@ import {
 } from './production/mi-coverage.js';
 import {
   buildAlpacaDataSource,
+  buildBenchmarkDataSource,
   buildDefaultLlmClient,
   buildProductionComponents,
   buildProductionOrchestrator,
@@ -2493,6 +2500,127 @@ describe('buildProductionOrchestrator', () => {
   });
 
   /**
+   * #981 — the outside benchmarks have a production caller, asserted THROUGH
+   * the real composition root.
+   *
+   * The smoke gate's probe drives `runOutsideBenchmarkCycle` directly, so it
+   * proves the cycle works and proves nothing about the wiring: deleting
+   * `runOutsideBenchmarks(comparison)` from `runFeedbackCycle` would leave
+   * `yarn smoke` green. This case is the one that goes red — it starts the
+   * real orchestrator, lets FL's own timer fire, and reads
+   * `outside_benchmark_samples`.
+   *
+   * The series is injected (`benchmarkSeriesSource`) rather than faked at the
+   * vendor: the DEFAULT path builds its Alpaca client on first read and there
+   * is no credential here, which is the point of that seam. What is under test
+   * is the call site, not the vendor.
+   */
+  describe('the outside benchmarks run on the daily feedback cycle (#981)', () => {
+    const DAY_MS = 24 * 60 * 60 * 1_000;
+
+    /**
+     * Resolves synchronously with an already-built array — no timer, no I/O —
+     * so a single `advanceTimersByTimeAsync` drains the fire-and-forget
+     * `.then()` chain the composition root attaches.
+     *
+     * The pad before `from` is required, not decorative: `buildOutsideBenchmark`
+     * refuses to measure without an anchor bar at or before the window start,
+     * and without it both benchmarks would land in `unmeasured` and this case
+     * would read a wiring failure that isn't one.
+     */
+    class FakeBenchmarkSeries implements BenchmarkSeriesSource {
+      readonly instruments: string[] = [];
+
+      async getDailyCloses(
+        instrument: string,
+        from: Date,
+        to: Date,
+      ): Promise<BenchmarkObservation[]> {
+        this.instruments.push(instrument);
+        const observations: BenchmarkObservation[] = [];
+        let close = 100;
+        let day = 0;
+        for (let t = from.getTime() - 3 * DAY_MS; t <= to.getTime(); t += DAY_MS) {
+          // A dip partway through, deliberately: a monotonic series has a
+          // drawdown of exactly 0, which `Number.isFinite` would accept from a
+          // hardcoded zero column just as happily. This makes the persisted
+          // drawdown a measurement the assertion can actually distinguish.
+          close *= day === 4 ? 0.97 : 1.001;
+          day += 1;
+          observations.push({ close_time: new Date(t), close });
+        }
+        return observations;
+      }
+    }
+
+    function feedbackOnlyConfig(overrides: Partial<ProductionConfig> = {}): StubConfig {
+      return stubConfig(db, {
+        tickIntervalMs: 48 * 60 * 60 * 1_000,
+        heartbeatIntervalMs: 48 * 60 * 60 * 1_000,
+        fillPollIntervalMs: NO_FILL_POLL_MS,
+        traderConfig: {
+          ...DEFAULT_TRADER_CONFIG,
+          flatten_before_close_ms: MIN_TICKS_INSIDE_FLATTEN_WINDOW * 48 * 60 * 60 * 1_000,
+        },
+        feedback: {
+          intervalMs: 1_000,
+          config: paperStartingProfile('paper').feedback?.config as FeedbackConfig,
+        },
+        ...overrides,
+      });
+    }
+
+    it('persists a benchmark row per benchmark, over the arm comparison window', async () => {
+      const series = new FakeBenchmarkSeries();
+      const logger = recordingLogger();
+      const orchestrator = buildProductionOrchestrator(
+        feedbackOnlyConfig({ benchmarkSeriesSource: series, logger }),
+      );
+
+      await orchestrator.start();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await orchestrator.stop();
+
+      // Both legs of both benchmarks were asked for — SPY twice (it is the
+      // 60/40's equity leg too), AGG once.
+      expect(series.instruments).toContain('SPY');
+      expect(series.instruments).toContain('AGG');
+
+      const rows = db
+        .prepare(
+          'SELECT benchmark, window_from, window_to, max_drawdown_pct FROM outside_benchmark_samples',
+        )
+        .all() as {
+        benchmark: string;
+        window_from: string;
+        window_to: string;
+        max_drawdown_pct: number;
+      }[];
+      expect(rows.map((row) => row.benchmark).sort()).toEqual(['sixty_forty', 'spy']);
+      // Return AND drawdown together, persisted (doc 12 D4). The series dips,
+      // so a real measurement is strictly positive — a zero here would mean the
+      // column was defaulted rather than computed.
+      expect(rows.every((row) => Number.isFinite(row.max_drawdown_pct))).toBe(true);
+      expect(rows.every((row) => row.max_drawdown_pct > 0)).toBe(true);
+
+      // The window is the arm comparison's own, to the millisecond — inherited,
+      // never recomputed (#636).
+      const armWindows = db
+        .prepare('SELECT window_from, window_to FROM arm_comparison_samples')
+        .all() as { window_from: string; window_to: string }[];
+      expect(armWindows).toHaveLength(1);
+      for (const row of rows) {
+        expect(row.window_from).toBe(armWindows[0]?.window_from);
+        expect(row.window_to).toBe(armWindows[0]?.window_to);
+      }
+
+      expect(
+        logger.entries.filter((entry) => entry.message === 'outside benchmarks computed'),
+      ).toHaveLength(1);
+    });
+  });
+
+  /**
    * #366 — `ProductionConfig.feedback` had no supplier, so the `#327` warn
    * above fired on every real paper start and the daily timer never began. A
    * 14-day soak (#238) therefore ran 5 of the 6 pipeline stages while looking
@@ -3875,6 +4003,144 @@ describe('buildProductionOrchestrator', () => {
       expect(mark.price).toBeCloseTo(312.4, 10);
       expect(mark.observed_at).toEqual(observed);
       expect(mark.asset_class).toBe('stocks');
+    });
+  });
+
+  /**
+   * #981 — the outside benchmarks have to survive the LSE cutover (#751).
+   *
+   * The regression this exists for is latent rather than live: no shipped
+   * profile puts LSE tickers in `universe` yet, so nothing fails today. But
+   * `buildAlpacaDataSource` returns `LseMarkDataSource` EXCLUSIVELY the moment
+   * one does, and that source refuses `'SPY'` on purpose (#734 — SPY is a
+   * `screening_instrument`, the US underlying a 3x LSE ETP tracks). Had the
+   * benchmarks kept reading through the pipeline's own `MarketDataService`,
+   * the cutover would have parked BOTH benchmarks (60/40 has a SPY leg too) in
+   * `unmeasured` permanently — caught per-benchmark, logged at `warn`, panel
+   * reading "Absent, not zero", nothing red anywhere. #636 requires the
+   * opposite: FL keeps computing an outside benchmark on its own cadence no
+   * matter what the live universe trades.
+   *
+   * So the first case pins the LIVE path's refusal (the defect's mechanism)
+   * and the second proves the BENCHMARK path serves the same two symbols under
+   * the same LSE-only configuration. Both go through the whole chain the
+   * production caller uses — `MarketDataBenchmarkSeriesSource` over a
+   * `MarketDataServiceImpl` over the built source — not against the sources in
+   * isolation, because the isolation is exactly what hid this.
+   */
+  describe('buildBenchmarkDataSource — benchmarks outlive the LSE cutover (#981)', () => {
+    const calendar = new UsEquityRegularHoursCalendar();
+    const DAY_MS = 24 * 60 * 60 * 1_000;
+    const WINDOW_TO = START;
+    const WINDOW_FROM = new Date(START.getTime() - 30 * DAY_MS);
+    // Pool `lse_ticker`s, both GBp-declared — the same pair the #734 cases
+    // above use, so this stays a fact about the pool and not a literal.
+    const LSE_UNIVERSE = [
+      { asset: 'LQQ3', asset_class: 'stocks' as const },
+      { asset: '3SPY', asset_class: 'stocks' as const },
+    ];
+
+    const lseClient = (): LseMarkClient => ({
+      vendor: 'fake-lse-vendor',
+      getBars: vi.fn(async () => ({ currency: 'GBp', candles: [] })),
+      getLatestQuote: vi.fn(async () => ({ price: 31_240, currency: 'GBp', observed_at: START })),
+    });
+
+    /** A stocks-rooted wire client, so no credential and no network is needed. */
+    const benchmarkClient = (): NonNullable<ProductionConfig['alpacaDataClient']> => ({
+      getBars: vi.fn(async (_symbol: string, _timeframe: string, asOf: Date, limit: number) =>
+        Array.from({ length: limit }, (_unused, index): AlpacaBar => {
+          const open = new Date(asOf.getTime() - (limit - index) * DAY_MS);
+          return { t: open.toISOString(), o: 100, h: 101, l: 99, c: 100 + index, v: 1_000 };
+        }),
+      ),
+      getLatestQuote: vi.fn(
+        async (): Promise<AlpacaQuote> => ({ t: START.toISOString(), ap: 100, bp: 99 }),
+      ),
+    });
+
+    const seriesOver = (source: DataSource): MarketDataBenchmarkSeriesSource =>
+      new MarketDataBenchmarkSeriesSource(
+        new MarketDataServiceImpl(
+          source,
+          new SimulatedClock(START),
+          'live',
+          new SqliteMarketDataStore(db),
+        ),
+      );
+
+    it('is refused for SPY and AGG through the LIVE universe-derived source', async () => {
+      // The defect's mechanism, asserted so the second case cannot pass for a
+      // reason unrelated to the routing.
+      const live = seriesOver(
+        buildAlpacaDataSource({ lseMarkClient: lseClient() }, LSE_UNIVERSE, calendar),
+      );
+
+      await expect(live.getDailyCloses('SPY', WINDOW_FROM, WINDOW_TO)).rejects.toThrow(
+        /SCREENING INSTRUMENT/,
+      );
+      // AGG takes the other branch — not a screening instrument, simply not in
+      // the pool — so the 60/40 leg fails for its own reason, not SPY's.
+      await expect(live.getDailyCloses('AGG', WINDOW_FROM, WINDOW_TO)).rejects.toThrow(
+        /not an lse_ticker/,
+      );
+    });
+
+    it('serves SPY and AGG closes with an LSE-only universe configured', async () => {
+      // The builder takes no `universe` and no `ProductionConfig` at all, which
+      // is why this holds: there is nothing for an LSE cutover to change.
+      const series = seriesOver(buildBenchmarkDataSource({ dataClient: benchmarkClient() }));
+
+      for (const instrument of ['SPY', 'AGG']) {
+        const closes = await series.getDailyCloses(instrument, WINDOW_FROM, WINDOW_TO);
+
+        expect(closes.length).toBeGreaterThan(0);
+        expect(closes.every((observation) => Number.isFinite(observation.close))).toBe(true);
+        // The anchor `buildOutsideBenchmark` refuses to measure without.
+        expect(closes[0]?.close_time.getTime()).toBeLessThanOrEqual(WINDOW_FROM.getTime());
+      }
+    });
+
+    it('cannot be handed the live session calendar, which is LSE in live mode', () => {
+      // `equityCalendarFor` returns `LseRegularHoursCalendar` when
+      // `mode === 'live'`. Accepting a calendar here would re-couple the
+      // benchmarks to the live configuration through the back door: US bars
+      // normalized against London sessions and `LSE_HOLIDAYS`. A daily fixture
+      // measured the same under both calendars, so the coupling is latent, not
+      // a live failure — closed structurally rather than argued about. The
+      // option does not exist, so it cannot come back by accident.
+      expect(() =>
+        buildBenchmarkDataSource({
+          // @ts-expect-error — no `calendar` option: the US equities session is
+          // fixed inside the builder, where no configuration can reach it.
+          calendar: new LseRegularHoursCalendar(),
+          dataClient: benchmarkClient(),
+        }),
+      ).not.toThrow();
+    });
+
+    it('builds its Alpaca client on first read, so a missing key cannot fail a boot', async () => {
+      // Deferred construction is load-bearing, not incidental: on the LSE
+      // cutover the live path builds NO Alpaca client at all, and a secondary
+      // context-only measurement must not be able to take the trading loop
+      // down over a credential it alone needs. The absence surfaces as one
+      // `unmeasured` benchmark instead.
+      const savedKey = process.env.ALPACA_API_KEY;
+      const savedSecret = process.env.ALPACA_API_SECRET;
+      delete process.env.ALPACA_API_KEY;
+      delete process.env.ALPACA_API_SECRET;
+      try {
+        const source = buildBenchmarkDataSource({});
+
+        await expect(
+          source.fetchBars('SPY', { timeframe: '1d', lookback: 5 }, START),
+        ).rejects.toThrow(/ALPACA_API_KEY/);
+      } finally {
+        if (savedKey === undefined) delete process.env.ALPACA_API_KEY;
+        else process.env.ALPACA_API_KEY = savedKey;
+        if (savedSecret === undefined) delete process.env.ALPACA_API_SECRET;
+        else process.env.ALPACA_API_SECRET = savedSecret;
+      }
     });
   });
 

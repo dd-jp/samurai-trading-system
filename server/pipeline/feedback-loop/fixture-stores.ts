@@ -11,6 +11,7 @@
  */
 import type { ClosedTrade, ClosedTradeStore, TuningStore } from '../../shared/index.js';
 import { assertThresholdWithinBounds } from '../../shared/index.js';
+import type { OutsideBenchmarkSample } from '../outside-benchmark/index.js';
 import type {
   Adjustment,
   AdjustmentLog,
@@ -18,6 +19,7 @@ import type {
   ArmComparisonSampleStore,
   BreachAlert,
   BreachAlertChannel,
+  OutsideBenchmarkSampleStore,
 } from './types.js';
 
 export class InMemoryClosedTradeStore implements ClosedTradeStore {
@@ -141,6 +143,32 @@ export class InMemoryArmComparisonSampleStore implements ArmComparisonSampleStor
     return this.samples
       .filter((sample) => sample.computed_at.getTime() <= asOf.getTime())
       .sort((a, b) => b.computed_at.getTime() - a.computed_at.getTime())
+      .slice(0, limit);
+  }
+}
+
+/**
+ * In-memory `OutsideBenchmarkSampleStore` (#981) — the arm store's sibling.
+ *
+ * Rows, not cycles: with two benchmarks a `limit` of 10 is five cycles' worth,
+ * matching `SqliteOutsideBenchmarkSampleStore.getRecent`'s contract exactly so
+ * a caller cannot pass a test against this and fail against SQLite.
+ */
+export class InMemoryOutsideBenchmarkSampleStore implements OutsideBenchmarkSampleStore {
+  private readonly samples: OutsideBenchmarkSample[] = [];
+
+  append(sample: OutsideBenchmarkSample): void {
+    this.samples.push(sample);
+  }
+
+  getRecent(limit: number, asOf: Date): OutsideBenchmarkSample[] {
+    return this.samples
+      .filter((sample) => sample.computed_at.getTime() <= asOf.getTime())
+      .sort(
+        (a, b) =>
+          b.computed_at.getTime() - a.computed_at.getTime() ||
+          a.performance.benchmark.localeCompare(b.performance.benchmark),
+      )
       .slice(0, limit);
   }
 }

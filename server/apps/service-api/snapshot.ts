@@ -12,6 +12,7 @@
  * (`RECENT_DEBATES_LIMIT` / `RECENT_VERDICTS_LIMIT`), no config surface yet.
  */
 import type { AnalystContribution, Direction } from '../../pipeline/debate-engine/index.js';
+import { OUTSIDE_BENCHMARKS } from '../../pipeline/outside-benchmark/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
 import type { ClosedTrade, Fill, OpenPosition } from '../../shared/index.js';
 import type { StoreMode } from '../../shared/store/index.js';
@@ -23,6 +24,7 @@ import type {
   DashboardQueryStore,
   DashboardSnapshot,
   FillRow,
+  OutsideBenchmarkRow,
   PositionRow,
 } from './types.js';
 
@@ -38,6 +40,16 @@ const RECENT_CLOSED_TRADES_LIMIT = 10;
  * make legible.
  */
 const RECENT_ARM_COMPARISONS_LIMIT = 14;
+/**
+ * Rows, not cycles (#981): one row per benchmark per cycle, so this is the same
+ * fourteen cycles' worth the arm trend above shows. Kept in lockstep
+ * deliberately — the two panels sit side by side and a benchmark trend reaching
+ * further back than the matched control's would invite exactly the comparison
+ * across mismatched periods #636 rules out. Derived from `OUTSIDE_BENCHMARKS`
+ * rather than a literal `* 2`, so adding a third benchmark widens this instead
+ * of silently truncating the trend to two-thirds of the cycles it claims.
+ */
+const RECENT_OUTSIDE_BENCHMARKS_LIMIT = RECENT_ARM_COMPARISONS_LIMIT * OUTSIDE_BENCHMARKS.length;
 
 /**
  * The directions the wire may carry, as a value rather than a type. Same
@@ -228,6 +240,26 @@ export function buildSnapshot(
       min_trades_per_arm: sample.divergence.min_trades_per_arm,
     }));
 
+  // #981: the Feedback Loop's outside benchmarks, newest first — SPY and 60/40
+  // over the SAME window the arm comparisons above were measured over. Read,
+  // never recomputed here, for the reason the arm rows are: FL owns the
+  // computation (#636) and the page must show what FL actually measured.
+  //
+  // A benchmark FL could not measure this cycle is simply ABSENT — FL persists
+  // nothing it could not measure — so this seam never invents a zero row to
+  // fill a gap. The panel renders the absence as "not measured".
+  const outside_benchmarks = store
+    .getOutsideBenchmarks(RECENT_OUTSIDE_BENCHMARKS_LIMIT, asOf)
+    .map<OutsideBenchmarkRow>((sample) => ({
+      computed_at: sample.computed_at.toISOString(),
+      benchmark: sample.performance.benchmark,
+      window_from: sample.from.toISOString(),
+      window_to: sample.to.toISOString(),
+      buy_and_hold_return_pct: sample.performance.buy_and_hold_return_pct,
+      max_drawdown_pct: sample.performance.max_drawdown_pct,
+      observation_count: sample.performance.observation_count,
+    }));
+
   const metrics = store.getDailyMetrics(asOf);
   const tickStatus = store.getTickStatus(asOf);
 
@@ -290,6 +322,7 @@ export function buildSnapshot(
     analysts,
     metrics,
     arm_comparison,
+    outside_benchmarks,
     providers: providers.readProviderStatus(),
     llm_spend: store.getLlmSpend(asOf),
     // Same `asOf` as every other field above, which is the reason the Pipeline

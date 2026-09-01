@@ -15,8 +15,11 @@ import {
 } from '../../../pipeline/execution/index.js';
 import type {
   AlpacaMarketDataClient,
+  Bar,
+  BarWindow,
   DataSource,
   IndicatorSpec,
+  Mark,
 } from '../../../providers/market-data-service/index.js';
 import {
   AlpacaDataSource,
@@ -556,4 +559,113 @@ export function buildAlpacaDataSource(
     sources: { crypto: sourceFor('crypto'), stocks: sourceFor('stocks') },
     assetClassOf: new Map(universe.map((i) => [i.asset, i.asset_class])),
   });
+}
+
+/**
+ * Defers construction of the underlying source to the first read (#981).
+ *
+ * The benchmark path must not be able to fail a boot. `AlpacaHttpDataClient`'s
+ * constructor throws when `ALPACA_API_KEY`/`ALPACA_API_SECRET` are absent, and
+ * on the LSE cutover (#751) the live universe needs NO Alpaca client at all —
+ * `buildAlpacaDataSource` returns the LSE mark source before ever building
+ * one. Constructing a stocks client eagerly for a SECONDARY, read-only,
+ * context-only measurement would therefore make a missing benchmark credential
+ * take the whole trading loop down, which inverts #636's own ordering (an
+ * outside benchmark can never raise a verdict).
+ *
+ * Deferred, the same absence surfaces where it belongs: as one benchmark
+ * landing in `OutsideBenchmarkCycleResult.unmeasured` with the client's own
+ * message, logged at `warn`, with the trading path untouched.
+ */
+class LazyDataSource implements DataSource {
+  private delegate: DataSource | undefined;
+
+  constructor(private readonly build: () => DataSource) {}
+
+  private resolve(): DataSource {
+    this.delegate ??= this.build();
+    return this.delegate;
+  }
+
+  async fetchBars(instrument: string, window: BarWindow, asOf: Date): Promise<Bar[]> {
+    return this.resolve().fetchBars(instrument, window, asOf);
+  }
+
+  async fetchMark(instrument: string, asOf: Date, mode: 'live' | 'backtest'): Promise<Mark> {
+    return this.resolve().fetchMark(instrument, asOf, mode);
+  }
+}
+
+/**
+ * The market-data source for the OUTSIDE BENCHMARKS (#981, under #636) — and
+ * deliberately not the one the live trading path uses.
+ *
+ * ## Why this exists at all
+ *
+ * It takes no `universe` and no `ProductionConfig`. That is the whole point,
+ * and it is a correctness property rather than a style preference:
+ * `buildAlpacaDataSource` is universe-derived end to end, and the moment #751
+ * puts LSE tickers into the configured universe it returns `LseMarkDataSource`
+ * EXCLUSIVELY. That source refuses `'SPY'` on purpose — SPY is a
+ * `screening_instrument` in `lse-etp-pool.ts`, the US underlying a 3x LSE ETP
+ * tracks, and marking the wrapper off the underlying is inadmissible (#734), so
+ * the substitution is refused at the source rather than warned about.
+ *
+ * Routing the benchmarks through that same seam would therefore mean: on the
+ * day the live universe becomes LSE-only, every SPY and AGG lookup throws
+ * `NonTradeableInstrumentError`, `runOutsideBenchmarkCycle` catches it
+ * per-benchmark, and BOTH benchmarks (60/40 has a SPY leg too) go permanently
+ * `unmeasured` — with the panel reading "Absent, not zero", nothing crashing,
+ * and nobody noticing. #636 requires FL to keep computing an outside benchmark
+ * on its own cadence regardless of what the live universe is doing, so the
+ * benchmark series needs a path that is *provably* independent of it. Hence a
+ * separate builder with no universe in its signature, not a conditional branch
+ * inside the universe-derived one.
+ *
+ * The signature takes no session calendar either, for the same reason: the live
+ * one is `equityCalendarFor(config)`, which is LSE in live mode, and passing it
+ * would smuggle the live configuration back in — see the call below.
+ *
+ * ## Why a fixed stocks root is right
+ *
+ * SPY and AGG are ordinary US-listed instruments on Alpaca's `/v2/stocks` root
+ * (verified 2026-09-01 on the free-tier `iex` feed this repo defaults to), and
+ * they are REFERENCE SERIES, never order targets — no venue restriction (ADR-0016's
+ * GBP LSE ETP rule) reaches them, because nothing ever places an order against
+ * a benchmark. `config.alpacaDataClient` is deliberately NOT consulted: it is a
+ * single-asset-class wire client whose path root is fixed at construction, so a
+ * crypto-rooted one would send SPY to `/v1beta3/crypto/us/...` and 404 silently
+ * (#358). A caller who wants control injects `dataClient` here, or replaces the
+ * whole port via `ProductionConfig.benchmarkSeriesSource`.
+ */
+export function buildBenchmarkDataSource(options: {
+  /** The account's shared outbound bucket (#391) — see `buildDefaultAlpacaDataClient`. */
+  rateLimiter?: TokenBucket;
+  /**
+   * A STOCKS-rooted wire client. Omitted in production, where the default
+   * stocks client is built on first read; supplied by tests, which must not
+   * need Alpaca credentials to prove the routing.
+   */
+  dataClient?: AlpacaMarketDataClient;
+}): DataSource {
+  return new LazyDataSource(
+    () =>
+      new AlpacaDataSource(
+        options.dataClient ?? buildDefaultAlpacaDataClient('stocks', options.rateLimiter),
+        // NO `calendar`, deliberately — `AlpacaDataSource` then defaults to
+        // `UsEquityRegularHoursCalendar`, the session SPY and AGG actually
+        // trade in. The live path's calendar is `equityCalendarFor(config)`,
+        // which returns `LseRegularHoursCalendar` in live mode, so accepting
+        // one would re-couple this builder to the live configuration through
+        // the back door — the independence would hold for the signature only.
+        // `NormalizingDataSource` resolves session boundaries and holidays
+        // against whatever calendar it is handed, and `LSE_HOLIDAYS` is not the
+        // US table, so US bars measured on a London session is simply the wrong
+        // normalization for these instruments. Measured, a same-shaped daily
+        // fixture came back identical under both calendars, so this is a latent
+        // coupling rather than a failure visible today — which is exactly why
+        // it should be closed structurally instead of relied on.
+        { asset_class: 'stocks' },
+      ),
+  );
 }
