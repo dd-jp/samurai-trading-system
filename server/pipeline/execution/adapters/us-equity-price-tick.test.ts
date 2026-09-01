@@ -40,8 +40,22 @@ describe('snapToTick', () => {
   it('rounds toward the named direction, never the nearer side', () => {
     expect(snapToTick(766.40805334, 'down')).toBe(766.4);
     expect(snapToTick(766.40805334, 'up')).toBe(766.41);
-    // 762.335 is nearer 762.34, but 'down' must still go down.
+    // 762.335 is the decimal midpoint of the two ticks, and its double lands
+    // just ABOVE it (762.33500000000003638), so the nearer tick is 762.34.
+    // 'down' must still go down.
     expect(snapToTick(762.335, 'down')).toBe(762.33);
+  });
+
+  it('leaves a high-priced on-tick value alone, where a flat 1e-9 bound would not', () => {
+    // Measured: 111848.18 / 0.01 carries 1.86e-9 of dust, the first penny price
+    // above $200k-down to exceed a flat 1e-9. A relative tolerance still sees it
+    // as on-tick; an absolute one would ceil it to 111848.19.
+    expect(snapToTick(111848.18, 'up')).toBe(111848.18);
+    expect(snapToTick(111848.18, 'down')).toBe(111848.18);
+  });
+
+  it('refuses a price that rounds down to nothing', () => {
+    expect(() => snapToTick(0.00005, 'down')).toThrow(/non-positive/);
   });
 
   it('returns a value that survives its own string form', () => {

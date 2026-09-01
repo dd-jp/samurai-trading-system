@@ -73,12 +73,28 @@ export function snapToTick(value: number, direction: 'up' | 'down'): number {
 
   // Tolerance, not equality: the division above is itself lossy, so an on-tick
   // price arrives a few ULPs to one side of the integer rather than on it.
+  //
+  // The tolerance is RELATIVE, not a flat 1e-9, because that dust scales with
+  // the magnitude of `scaled`. Measured over every penny price up to $200k, it
+  // first exceeds 1e-9 at $111,848.18 (1.86e-9) — so a flat bound would bump an
+  // already-valid price a full tick above that, the exact defect this guard
+  // exists to prevent. Unreachable on today's universe; BRK.A is not.
   const steps =
-    Math.abs(scaled - nearest) < 1e-9
+    Math.abs(scaled - nearest) <= Math.abs(scaled) * Number.EPSILON * 4
       ? nearest
       : direction === 'up'
         ? Math.ceil(scaled)
         : Math.floor(scaled);
+
+  // A price below one tick floors to zero. Nothing on today's path can reach
+  // here — both callers' ordering guards refuse a collapsed bracket first — but
+  // the contract above promises a positive price, so it is enforced here rather
+  // than left resting on a caller that may not exist yet.
+  if (steps <= 0) {
+    throw new Error(
+      `snapToTick: ${value} rounded ${direction} onto the ${tick} grid collapses to a non-positive price`,
+    );
+  }
 
   return Number((steps * tick).toFixed(decimals));
 }
