@@ -307,25 +307,31 @@ export interface RiskConfig {
    * this is the account-level statement that one is the per-subclass
    * instance of, not a competing design.
    *
-   * **Unresolved unit mismatch, same class as `SAMURAI_LIVE_MAX_CAPITAL_USD`
-   * (live-profile.ts) but a NEW instance of it.** `book` is GBP
-   * (`LIVE_BOOK_GBP`); the only `AccountStateProvider` this repo ships
+   * **Currency mismatch, guarded rather than merely flagged (#949).** `book`
+   * is GBP (`LIVE_BOOK_GBP`); the only `AccountStateProvider` this repo ships
    * (`AlpacaAccountStateProvider`, production/account-state.ts) reads
    * `portfolio.equity` from Alpaca's `GET /v2/account`, which is
-   * USD-denominated with no FX conversion anywhere in this codebase. This
-   * check is therefore only valid while the funding source and
-   * `LIVE_BOOK_GBP` are denominated in the same currency — today they are
-   * not, so a correctly-funded £1,000 account (~$1,270+ read via Alpaca)
-   * would wrongly trip this refusal once live boot's other gates ever clear
-   * (`live-money-gates.ts` refuses live boot outright today regardless, so
-   * this is latent, not live). No FX provider exists to fix this properly;
-   * flagged rather than resolved, same posture as the pre-existing gap.
+   * USD-denominated with no FX conversion anywhere in this codebase — so a
+   * numeric comparison of `portfolio.equity` against `book` compares GBP to
+   * USD at whatever the prevailing rate happens to be, and neither passing
+   * nor failing the tolerance check proves anything about real funding.
+   * `same_currency_verified` is the guard: `liveBookCeiling`
+   * (risk-manager/index.ts) refuses to arm — a distinct `currency_mismatch`
+   * `binding_constraint`, not the `equity_exceeds_book` refusal below — for
+   * as long as this is `false`/absent, regardless of what `portfolio.equity`
+   * reads. No caller sets it today; nothing in this codebase can verify a
+   * same-currency read yet (no FX-rate provider, no GBP-native broker
+   * adapter — #946 is the eventual same-currency adapter). Setting it true
+   * is only correct once one of those exists and this comparison is known to
+   * hold like-for-like.
    */
   live_book_ceiling?: {
     /** The declared book (`LIVE_BOOK_GBP`), in GBP. */
     book: number;
     /** Same semantics as `SubclassDeploymentCap['equity_ceiling'].refuse_above_tolerance`. */
     refuse_above_tolerance: number;
+    /** See the currency-mismatch paragraph above. Absent/`false` refuses to arm outright. */
+    same_currency_verified?: boolean;
   };
 }
 
@@ -411,7 +417,12 @@ export interface SubclassDeploymentCap {
    * profile actually shipped rather than on the gate in the abstract.
    */
   equity_ceiling?: {
-    /** The declared book (`LIVE_BOOK_GBP`) this cap's fractions resolve against, in place of `portfolio.equity`, once equity has drifted past it. */
+    /**
+     * The declared book (`LIVE_BOOK_GBP`) this cap's fractions resolve
+     * against, in place of `portfolio.equity`, once equity has drifted past
+     * it. GBP, same currency-mismatch caveat as `same_currency_verified`
+     * below.
+     */
     book: number;
     /**
      * Fractional headroom above `book` the gate tolerates before REFUSING the
@@ -427,6 +438,20 @@ export interface SubclassDeploymentCap {
      * all instead of quietly treating the overfunding as harmless.
      */
     refuse_above_tolerance: number;
+    /**
+     * **Currency mismatch, guarded rather than flagged (#949) — same
+     * mechanism as `RiskConfig['live_book_ceiling'].same_currency_verified`,
+     * read that field's doc comment for the full account.** `book` is GBP;
+     * `portfolio.equity` is read from Alpaca's USD-denominated
+     * `GET /v2/account` (`production/account-state.ts:129`) with no FX
+     * conversion anywhere in this codebase, so comparing the two proves
+     * nothing about real funding regardless of which way the tolerance check
+     * comes out. `perSubclassDeploymentCap` (risk-manager/index.ts) refuses
+     * to arm — `binding_constraint` ending `:currency_mismatch:<instrument>`,
+     * distinct from `:equity_exceeds_book:<instrument>` below — for as long
+     * as this is `false`/absent. No caller sets it today.
+     */
+    same_currency_verified?: boolean;
   };
 }
 

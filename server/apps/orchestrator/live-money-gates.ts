@@ -73,6 +73,26 @@
  * thing between a bad debate and the account. That sentence stays true until
  * the soak happens, which is why both callers lead with it and treat the
  * numbered list as supporting detail.
+ *
+ * **Also not in the list, and never can be: the risk-manager currency-mismatch
+ * guard (#949) — read this before lifting this file's blanket refusal.**
+ * `liveBookCeiling` and `perSubclassDeploymentCap`'s `equity_ceiling`
+ * (risk-manager/index.ts) refuse to arm ANY live entry whenever
+ * `RiskConfig['live_book_ceiling']`/`SubclassDeploymentCap['equity_ceiling']`
+ * are set without `same_currency_verified: true` — which is every live tick
+ * today, because the declared book is GBP and the only funding read this
+ * codebase has (Alpaca's `GET /v2/account`, `production/account-state.ts:129`)
+ * is USD, with no FX conversion and no same-currency broker adapter (#946 is
+ * that eventual adapter). This is NOT a `LIVE_MONEY_GATES` entry: it is not an
+ * open issue whose closure changes anything here, it is a standing structural
+ * refusal in the code itself that this list cannot express and
+ * `yarn check:live-gates` cannot verify. **The two are coupled and must not be
+ * decoupled**: lifting this file's blanket refusal does NOT by itself unblock
+ * a single live entry — the currency-mismatch guard still refuses every one,
+ * correctly, until a real FX-rate provider or a same-currency (GBP-native)
+ * broker adapter exists and `same_currency_verified` is set. Whoever next
+ * revisits this file's refusal should check that guard's state too, not
+ * assume it moved in step.
  */
 
 /**

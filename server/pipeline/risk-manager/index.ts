@@ -707,6 +707,30 @@ const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
   // must not silently widen every position the same fractions size.
   const ceiling = declared.equity_ceiling;
   if (ceiling !== undefined) {
+    // #949 — `book` is GBP, `portfolio.equity` is read from Alpaca's
+    // USD-denominated `GET /v2/account` with no FX conversion anywhere in
+    // this codebase (production/account-state.ts:129), so this comparison
+    // cannot verify funding in EITHER direction until it is known to compare
+    // like-for-like — not just above `refuseAbove`, where the previous
+    // behaviour merely gave the wrong REASON, but also below it, where a
+    // stale FX rate could have let a genuinely wrong funding level clamp and
+    // pass silently. Refuse outright, before the numeric comparison, rather
+    // than let either failure mode reach it. See `same_currency_verified`'s
+    // doc comment (types.ts) for what would need to be true to lift this.
+    if (!ceiling.same_currency_verified) {
+      throw new PerSubclassCapUnresolvableError(
+        'per_subclass_deployment_cap: currency mismatch, cannot verify funding — ' +
+          `equity_ceiling's declared book (${ceiling.book}) is GBP but portfolio.equity ` +
+          `(${portfolio.equity}) is read from Alpaca's USD-denominated GET /v2/account with no FX ` +
+          'conversion anywhere in this codebase (#949). Comparing the two proves nothing about ' +
+          'real funding regardless of which way it comes out, so this refuses to arm rather than ' +
+          'silently compare GBP to USD. Resolve with a real FX-rate provider or a same-currency ' +
+          '(GBP-native) broker adapter, then set equity_ceiling.same_currency_verified once the ' +
+          'comparison is known to hold like-for-like.',
+        intent.instrument,
+        `per_subclass_deployment_cap:currency_mismatch:${intent.instrument}`,
+      );
+    }
     const refuseAbove = ceiling.book * (1 + ceiling.refuse_above_tolerance);
     if (portfolio.equity > refuseAbove) {
       // The backstop half of the fix: an account funded THIS far past the
@@ -779,20 +803,37 @@ const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
  * double-count for a classified instrument and do nothing for an
  * unclassified one (no fraction to clamp).
  *
- * **Unresolved USD/GBP mismatch — read `live_book_ceiling`'s doc comment
- * before assuming this compares like with like.** `ceiling.book` is GBP;
- * `portfolio.equity` is sourced from Alpaca's account balance, which is
- * USD, with no FX conversion anywhere in this codebase. This comparison is
- * only valid while the funding source and the declared book share a
- * currency — they do not today, so this will misfire (refuse a correctly
- * funded GBP account, or fail to refuse a correctly funded one, depending on
- * the prevailing rate) the moment live boot's other gates clear
- * (`live-money-gates.ts` refuses live boot outright today regardless, so
- * this is a flagged gap, not a live bug).
+ * **Currency mismatch, guarded rather than flagged (#949) — read
+ * `live_book_ceiling`'s doc comment (types.ts) for the full account.**
+ * `ceiling.book` is GBP; `portfolio.equity` is sourced from Alpaca's account
+ * balance, which is USD, with no FX conversion anywhere in this codebase.
+ * Below, `same_currency_verified` guards the numeric comparison entirely:
+ * absent/`false` refuses to arm BEFORE the comparison runs, in either
+ * direction — this used to only "misfire" (refuse a correctly funded GBP
+ * account, or fail to refuse one, depending on the prevailing rate); now it
+ * refuses unconditionally with a `currency_mismatch` binding_constraint,
+ * distinguishable from the `equity_exceeds_book` refusal below, until a
+ * same-currency comparison exists.
  */
 const liveBookCeiling: EntryCapGate = (config, intent, portfolio) => {
   const ceiling = config.live_book_ceiling;
   if (ceiling === undefined) return null;
+
+  if (!ceiling.same_currency_verified) {
+    throw new PerSubclassCapUnresolvableError(
+      'live_book_ceiling: currency mismatch, cannot verify funding — ' +
+        `live_book_ceiling's declared book (${ceiling.book}) is GBP but portfolio.equity ` +
+        `(${portfolio.equity}) is read from Alpaca's USD-denominated GET /v2/account with no FX ` +
+        'conversion anywhere in this codebase (#949). Comparing the two proves nothing about real ' +
+        'funding regardless of which way it comes out, so this account-level check (#888 review ' +
+        'fix-up, arms regardless of whether any instrument is D5-classified yet) refuses to arm ' +
+        'rather than silently compare GBP to USD. Resolve with a real FX-rate provider or a ' +
+        'same-currency (GBP-native) broker adapter, then set live_book_ceiling.same_currency_verified ' +
+        'once the comparison is known to hold like-for-like.',
+      intent.instrument,
+      `live_book_ceiling:currency_mismatch:${intent.instrument}`,
+    );
+  }
 
   const refuseAbove = ceiling.book * (1 + ceiling.refuse_above_tolerance);
   if (portfolio.equity > refuseAbove) {
