@@ -663,12 +663,12 @@ export function buildBenchmarkDataSource(options: {
         // US table, so US bars normalized on a London session is simply the
         // wrong normalization for these instruments — and this is not merely
         // theoretical: `LSE_HOLIDAYS` and `US_HOLIDAYS` (trading-calendar.ts)
-        // disagree on 22 civil dates across 2026-2027 alone (MLK Day,
-        // Washington's Birthday, Juneteenth, Independence Day, Labor Day and
-        // Thanksgiving are US-only; Easter Monday, the Early May and Summer
-        // bank holidays and the Boxing Day substitute are LSE-only), each one
-        // a `daily` bar `isTradingDay` would keep under one calendar and drop
-        // under the other. The signature simply has no `calendar` parameter
+        // disagree on several civil dates (MLK Day, Washington's Birthday,
+        // Juneteenth, Independence Day, Labor Day and Thanksgiving are
+        // US-only; Easter Monday, the Early May and Summer bank holidays and
+        // the Boxing Day substitute are LSE-only), each one a `daily` bar
+        // `isTradingDay` would keep under one calendar and drop under the
+        // other. The signature simply has no `calendar` parameter
         // to pass, so this coupling cannot recur no matter which calendar the
         // live path is on — closed structurally, not by empirical agreement.
         { asset_class: 'stocks' },

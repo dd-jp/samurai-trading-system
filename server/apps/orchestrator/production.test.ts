@@ -2649,20 +2649,14 @@ describe('buildProductionOrchestrator', () => {
       { asset: '3SPY', asset_class: 'stocks' as const },
     ];
 
-    const savedKey = process.env.ALPACA_API_KEY;
-    const savedSecret = process.env.ALPACA_API_SECRET;
-
     beforeEach(() => {
-      process.env.ALPACA_API_KEY = 'dummy-key-not-a-credential';
-      process.env.ALPACA_API_SECRET = 'dummy-secret-not-a-credential';
+      vi.stubEnv('ALPACA_API_KEY', 'dummy-key-not-a-credential');
+      vi.stubEnv('ALPACA_API_SECRET', 'dummy-secret-not-a-credential');
     });
 
     afterEach(() => {
       vi.unstubAllGlobals();
-      if (savedKey === undefined) delete process.env.ALPACA_API_KEY;
-      else process.env.ALPACA_API_KEY = savedKey;
-      if (savedSecret === undefined) delete process.env.ALPACA_API_SECRET;
-      else process.env.ALPACA_API_SECRET = savedSecret;
+      vi.unstubAllEnvs();
     });
 
     const lseClient = (): LseMarkClient => ({
@@ -2685,15 +2679,29 @@ describe('buildProductionOrchestrator', () => {
         if (!parsed.pathname.includes('/bars')) {
           throw new Error(`unexpected fetch in test: ${url}`);
         }
-        const start = new Date(parsed.searchParams.get('start') as string);
-        const end = new Date(parsed.searchParams.get('end') as string);
+        const startParam = parsed.searchParams.get('start');
+        const endParam = parsed.searchParams.get('end');
+        if (startParam === null || endParam === null) {
+          throw new Error(`expected start/end query params in test: ${url}`);
+        }
+        const start = new Date(startParam);
+        const end = new Date(endParam);
         const bars: Array<{ t: string; o: number; h: number; l: number; c: number; v: number }> =
           [];
         let close = 100;
-        let day = 0;
+        // `AlpacaHttpClient.getBars` widens `start` by `BUFFER_MULTIPLIER` (8x)
+        // and then trims the response to the most recent `limit` rows via
+        // `.slice(-limit)` — so a dip indexed off `start` in a wide request
+        // (as this fixture's was) gets sliced away entirely before it ever
+        // reaches `buildOutsideBenchmark`, and never shows up in the computed
+        // series. Index off `end` instead: `DIP_DAYS_BEFORE_END` days before
+        // `end` survives the slice (well inside the last `limit` rows) AND
+        // lands inside the comparison window, not the anchor pad before it
+        // (`ANCHOR_PAD_BARS` days older than the window start).
+        const DIP_DAYS_BEFORE_END = 10;
         for (let t = start.getTime(); t <= end.getTime(); t += DAY_MS) {
-          close *= day === 4 ? 0.97 : 1.001;
-          day += 1;
+          const daysBeforeEnd = Math.round((end.getTime() - t) / DAY_MS);
+          close *= daysBeforeEnd === DIP_DAYS_BEFORE_END ? 0.97 : 1.001;
           bars.push({
             t: new Date(t).toISOString(),
             o: close,
@@ -2748,6 +2756,10 @@ describe('buildProductionOrchestrator', () => {
 
       expect(rows.map((row) => row.benchmark).sort()).toEqual(['sixty_forty', 'spy']);
       expect(rows.every((row) => Number.isFinite(row.max_drawdown_pct))).toBe(true);
+      // The fixture dips `DIP_DAYS_BEFORE_END` days before `end` so drawdown !=
+      // 0 — assert that for the `spy` row so this can't pass on a defaulted 0
+      // column.
+      expect(rows.find((row) => row.benchmark === 'spy')?.max_drawdown_pct).toBeGreaterThan(0);
 
       expect(
         logger.entries.filter((entry) => entry.message === 'outside benchmarks computed'),

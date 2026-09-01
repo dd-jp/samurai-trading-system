@@ -120,6 +120,24 @@ describe('LseMarkDataSource — the no-substitution invariant (#734 DoD)', () =>
     );
   });
 
+  /**
+   * `production.ts`'s `benchmarkMarketDataStore` doc argues the two
+   * `SqliteMarketDataStore` writers (the live universe path and the outside
+   * benchmarks' own path) are disjoint on `'SPY'`/`'AGG'` rows ONLY because
+   * this source refuses both instruments before any write can reach the
+   * store. Pin that invariant directly so a future pool/config change can't
+   * silently reopen the collision the doc argues is closed.
+   */
+  it('refuses SPY and AGG — the pair the outside-benchmark store-disjointness argument depends on', async () => {
+    const source = sourceWith(fakeClient());
+    await expect(source.fetchMark('SPY', IN_SESSION, 'live')).rejects.toThrow(
+      NonTradeableInstrumentError,
+    );
+    await expect(source.fetchMark('AGG', IN_SESSION, 'live')).rejects.toThrow(
+      NonTradeableInstrumentError,
+    );
+  });
+
   it('refuses screening instruments on the bars and quote paths as well', async () => {
     const client = fakeClient();
     const source = sourceWith(client);
