@@ -35,7 +35,9 @@ import {
   creditForContribution,
   realizedR,
   SqliteArmComparisonSampleStore,
+  SqliteOutsideBenchmarkSampleStore,
 } from '../../pipeline/feedback-loop/index.js';
+import type { OutsideBenchmarkSample } from '../../pipeline/outside-benchmark/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
 import type { ClosedTrade, DebateLog, Fill, OpenPosition, OrderState } from '../../shared/index.js';
 import {
@@ -239,12 +241,14 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * taken as a constructor option, defaulting to the fixture's 30 days. */
   /** #971: the Feedback Loop's own sample store, read (never written) here. */
   private readonly armComparisons: SqliteArmComparisonSampleStore;
+  private readonly outsideBenchmarks: SqliteOutsideBenchmarkSampleStore;
 
   constructor(
     private readonly db: SharedStore,
     private readonly attributionWindowDays = 30,
   ) {
     this.armComparisons = new SqliteArmComparisonSampleStore(db);
+    this.outsideBenchmarks = new SqliteOutsideBenchmarkSampleStore(db);
   }
 
   /**
@@ -468,6 +472,17 @@ export class SqliteQueryStore implements DashboardQueryStore {
    */
   getArmComparisons(limit: number, asOf: Date): ArmComparisonSample[] {
     return this.armComparisons.getRecent(limit, asOf);
+  }
+
+  /**
+   * Delegated to the Feedback Loop's own store (#981) for the reason
+   * `getArmComparisons` is: the orchestrator writes
+   * `outside_benchmark_samples` through `SqliteOutsideBenchmarkSampleStore` and
+   * this process reads it, and two hand-written copies of one row mapping is
+   * how a column gets dropped on one side.
+   */
+  getOutsideBenchmarks(limit: number, asOf: Date): OutsideBenchmarkSample[] {
+    return this.outsideBenchmarks.getRecent(limit, asOf);
   }
 
   getLlmSpend(asOf: Date): LlmSpendSummary {

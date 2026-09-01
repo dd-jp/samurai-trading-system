@@ -24,6 +24,7 @@ import type {
   ClosedTradeRow,
   DebateRow,
   FillRow,
+  OutsideBenchmarkRow,
   PipelineView,
   PositionRow,
 } from '@contracts';
@@ -35,6 +36,7 @@ import { ClosedTradesPanel } from './components/panels/ClosedTradesPanel.tsx';
 import { DebatesPanel } from './components/panels/DebatesPanel.tsx';
 import type { EquitySample } from './components/panels/MetricsPanel.tsx';
 import { MetricsPanel } from './components/panels/MetricsPanel.tsx';
+import { OutsideBenchmarkPanel } from './components/panels/OutsideBenchmarkPanel.tsx';
 import { PositionsPanel } from './components/panels/PositionsPanel.tsx';
 import { SpendPanel } from './components/panels/SpendPanel.tsx';
 import { RoomsGrid } from './components/RoomsGrid.tsx';
@@ -67,6 +69,7 @@ const EMPTY_ANALYSTS: readonly AnalystPerformanceRow[] = [];
 const EMPTY_DEBATES: readonly DebateRow[] = [];
 /** #971 — an empty list is the honest "no comparison computed yet" state. */
 const EMPTY_ARM_COMPARISONS: readonly ArmComparisonRow[] = [];
+const EMPTY_OUTSIDE_BENCHMARKS: readonly OutsideBenchmarkRow[] = [];
 
 /**
  * What the drawer is showing: an instrument AND the trace within it (#606 item
@@ -272,6 +275,15 @@ export function App({ snapshotOptions }: AppProps = {}) {
           />
           <MetricsPanel metrics={snapshot?.metrics ?? null} equitySamples={equitySamples} />
           <ArmComparisonPanel comparisons={snapshot?.arm_comparison ?? EMPTY_ARM_COMPARISONS} />
+          {/*
+            #981. BESIDE the matched control and immediately AFTER it, never
+            before: the outside benchmarks are secondary, and reading order is
+            part of saying so. `OutsideBenchmarkPanel` carries the rest of that
+            (no verdict line, no alert styling, `panel-secondary`).
+          */}
+          <OutsideBenchmarkPanel
+            benchmarks={snapshot?.outside_benchmarks ?? EMPTY_OUTSIDE_BENCHMARKS}
+          />
           <AnalystsPanel analysts={snapshot?.analysts ?? EMPTY_ANALYSTS} />
           <SpendPanel spend={snapshot?.llm_spend ?? null} />
           <DebatesPanel debates={snapshot?.debates ?? EMPTY_DEBATES} />

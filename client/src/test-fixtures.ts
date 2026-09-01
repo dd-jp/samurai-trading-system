@@ -18,6 +18,7 @@ import type {
   LlmSpendSummary,
   LlmSpendWindow,
   MetricsSuiteWire,
+  OutsideBenchmarkRow,
   PipelineView,
   PositionRow,
   VerdictRow,
@@ -225,6 +226,25 @@ export function makeArmComparison(overrides: Partial<ArmComparisonRow> = {}): Ar
   };
 }
 
+/**
+ * #981. One outside benchmark row, over the SAME window `makeArmComparison`
+ * uses — the match is the point, since the panel states it.
+ */
+export function makeOutsideBenchmark(
+  overrides: Partial<OutsideBenchmarkRow> = {},
+): OutsideBenchmarkRow {
+  return {
+    computed_at: AS_OF,
+    benchmark: 'spy',
+    window_from: '2026-07-08T12:00:00.000Z',
+    window_to: AS_OF,
+    buy_and_hold_return_pct: 0.0241,
+    max_drawdown_pct: 0.0473,
+    observation_count: 21,
+    ...overrides,
+  };
+}
+
 export function makeSnapshot(overrides: Partial<WireSnapshot> = {}): WireSnapshot {
   return {
     generated_at: AS_OF,
@@ -239,6 +259,14 @@ export function makeSnapshot(overrides: Partial<WireSnapshot> = {}): WireSnapsho
     analysts: [makeAnalyst()],
     metrics: makeMetrics(),
     arm_comparison: [makeArmComparison()],
+    outside_benchmarks: [
+      makeOutsideBenchmark(),
+      makeOutsideBenchmark({
+        benchmark: 'sixty_forty',
+        buy_and_hold_return_pct: 0.0158,
+        max_drawdown_pct: 0.0289,
+      }),
+    ],
     providers: {
       alpaca: {
         provider: 'alpaca',

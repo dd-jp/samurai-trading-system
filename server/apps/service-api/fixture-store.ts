@@ -28,6 +28,7 @@ import {
   type ArmComparisonSample,
   MIN_TRADES_PER_ARM_FOR_DIVERGENCE,
 } from '../../pipeline/feedback-loop/index.js';
+import type { OutsideBenchmarkSample } from '../../pipeline/outside-benchmark/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
 import type { ClosedTrade, DebateLog, Fill, OpenPosition } from '../../shared/index.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
@@ -507,6 +508,43 @@ const LLM_SPEND_7D = {
  * own test; baking a permanent divergence into the out-of-the-box fixtures would
  * teach the reader that the alert state is normal.
  */
+/**
+ * #981. The outside benchmarks over the SAME window as `ARM_COMPARISONS[0]` —
+ * that match is the fixture's whole point, since the panel states it. Two
+ * benchmarks per cycle, populated for `getArmComparisons`' reason: a fixture
+ * store whose job is "the dashboard runs out of the box" must exercise the
+ * populated branch or the panel ships never having been drawn.
+ *
+ * The numbers are deliberately unremarkable and NOT chosen to make the live arm
+ * look good: over this window SPY beat the live arm's 1.84%. That is a normal
+ * reading for a flat-by-close book against a fully-invested index, it is not a
+ * failure, and the panel's copy has to hold up when it happens.
+ */
+const OUTSIDE_BENCHMARKS: OutsideBenchmarkSample[] = [
+  {
+    computed_at: NOW,
+    from: new Date(NOW.getTime() - 30 * 24 * 3_600_000),
+    to: NOW,
+    performance: {
+      benchmark: 'spy',
+      buy_and_hold_return_pct: 0.0241,
+      max_drawdown_pct: 0.0473,
+      observation_count: 21,
+    },
+  },
+  {
+    computed_at: NOW,
+    from: new Date(NOW.getTime() - 30 * 24 * 3_600_000),
+    to: NOW,
+    performance: {
+      benchmark: 'sixty_forty',
+      buy_and_hold_return_pct: 0.0158,
+      max_drawdown_pct: 0.0289,
+      observation_count: 21,
+    },
+  },
+];
+
 const ARM_COMPARISONS: ArmComparisonSample[] = [
   {
     computed_at: NOW,
@@ -721,6 +759,11 @@ export class InMemoryQueryStore implements DashboardQueryStore {
    */
   getArmComparisons(limit: number, _asOf: Date): ArmComparisonSample[] {
     return ARM_COMPARISONS.slice(0, limit).map((sample) => ({ ...sample }));
+  }
+
+  /** #981. `limit` counts rows, not cycles — see the port's doc. */
+  getOutsideBenchmarks(limit: number, _asOf: Date): OutsideBenchmarkSample[] {
+    return OUTSIDE_BENCHMARKS.slice(0, limit).map((sample) => ({ ...sample }));
   }
 
   getLlmSpend(_asOf: Date): LlmSpendSummary {

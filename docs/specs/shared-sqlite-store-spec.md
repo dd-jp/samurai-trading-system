@@ -640,6 +640,49 @@ CREATE TABLE arm_comparison_samples (
 CREATE INDEX idx_arm_comparison_samples_computed_at ON arm_comparison_samples(computed_at DESC);
 ```
 
+#### `outside_benchmark_samples` (2026-09-01, [#981](https://github.com/dd-jp/samurai-trading-system/issues/981))
+
+Owned by the Feedback Loop
+(`server/pipeline/feedback-loop/sqlite-outside-benchmark-sample-store.ts`; migration
+`0036_outside_benchmark_samples.sql`). One row per benchmark per comparison cycle: SPY and the
+60/40 (SPY/AGG) blend measured over **the same window** `arm_comparison_samples` recorded for that
+cycle. FL is the sole writer; service-api is a reader only.
+
+**A separate table, not columns on `arm_comparison_samples`.** A benchmark has no trade count, no
+realized PnL, no verdict and no arm tag, so folding it in would mean four nullable columns and, worse,
+would make the outside benchmark render as a third arm — the exact "the thing to beat" reading
+[#636](https://github.com/dd-jp/samurai-trading-system/issues/636) rules out. The benchmarks are
+secondary context; the schema keeps them in their own table so a reader has to opt into them.
+
+**`buy_and_hold_return_pct`, not `return_pct`.** The name differs from the arms' column on purpose:
+the denominators differ. A benchmark is fully invested through every night; the book is flat by close
+(ADR-0014), so its `return_pct` is realized PnL on capital at risk only while a trade is on. Two
+columns with the same name would invite a `UNION` that is arithmetic nonsense.
+
+**Both `buy_and_hold_return_pct` and `max_drawdown_pct` are NOT NULL** — doc 12 D4 in the schema, the
+same rule `arm_comparison_samples` enforces. There is no way to write a return-only benchmark row.
+
+**Primary key `(computed_at, benchmark)`**, because one cycle writes one row per benchmark. **An
+absent row means the benchmark was not measured that cycle** — FL persists nothing when a leg's
+series is unavailable rather than writing a zero, and the reason is in the log. A `CHECK` pins the
+benchmark id to the settled set.
+
+```sql
+CREATE TABLE outside_benchmark_samples (
+  computed_at             TEXT NOT NULL,
+  benchmark               TEXT NOT NULL CHECK(benchmark IN ('spy', 'sixty_forty')),
+  window_from             TEXT NOT NULL,
+  window_to               TEXT NOT NULL,
+  buy_and_hold_return_pct REAL NOT NULL,
+  max_drawdown_pct        REAL NOT NULL,
+  observation_count       INTEGER NOT NULL,
+  PRIMARY KEY (computed_at, benchmark)
+);
+
+CREATE INDEX idx_outside_benchmark_samples_computed_at
+  ON outside_benchmark_samples(computed_at DESC);
+```
+
 **Retrieval is by `(instrument, bar_timestamp)`, never by an id.** A replay mints fresh `trace_id` and `debate_id` values, so neither can bridge a live row to a replayed lookup. The id column is row identity; the unique index is the lookup path — the same arrangement `debate_log` already relies on.
 
 **`bar_timestamp` must be floored to the bar boundary on write, and this does not happen today.** The equivalent write on the debate path stores `clock.now()` unfloored, so a live tick at 14:32:07 files under 14:32:07 while a replay stepping bar boundaries looks up 14:30:00 and misses every row. Under the backtest harness the simulated clock sits exactly on the bar close and the bug is invisible. Fixing it on this table does not fix `debate_log`, which has the same defect.

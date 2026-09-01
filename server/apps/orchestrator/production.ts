@@ -112,6 +112,7 @@
  */
 import { AnalystOrchestrator } from '../../pipeline/analysts/index.js';
 // #753: falsifier arm 2's comparison reader — both arms, one window, one query.
+import type { ArmComparison } from '../../pipeline/control-arm/index.js';
 import { SqliteArmComparisonSource } from '../../pipeline/control-arm/index.js';
 import type { LlmClient, SpendCap } from '../../pipeline/debate-engine/index.js';
 import {
@@ -145,12 +146,15 @@ import {
   DEFAULT_ARM_DIVERGENCE_THRESHOLDS,
   runArmComparisonCycle,
   runDailyCycle,
+  runOutsideBenchmarkCycle,
   SqliteAdjustmentLog,
   SqliteArmComparisonSampleStore,
   SqliteClosedTradeStore,
+  SqliteOutsideBenchmarkSampleStore,
   SqliteTuningStore,
   seedAnalystWeights,
 } from '../../pipeline/feedback-loop/index.js';
+import { MarketDataBenchmarkSeriesSource } from '../../pipeline/outside-benchmark/index.js';
 import {
   buildRiskCriticProducer,
   CircuitBreakers,
@@ -2148,7 +2152,79 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
   const armComparisonSource = new SqliteArmComparisonSource(config.db);
   const armComparisonSamples = new SqliteArmComparisonSampleStore(config.db);
 
-  const runArmComparison = (): void => {
+  /**
+   * The outside benchmarks' production caller (#981, under #636) — the half of
+   * #636 that #971 left open. SPY and 60/40 over the MATCHED CONTROL'S window,
+   * on FL's existing daily cadence.
+   *
+   * The series come from the same `MarketDataService` the pipeline already runs
+   * (`components.marketData`): SPY and AGG are ordinary US-listed instruments
+   * on Alpaca's `/v2/stocks` root, verified obtainable as daily bars on the
+   * free-tier `iex` feed this codebase defaults to. No new vendor, key or
+   * spend — and #895 (the LSE real-time L1 mark vendor) is a different data
+   * need and does not gate this.
+   */
+  const outsideBenchmarkSeries = new MarketDataBenchmarkSeriesSource(components.marketData);
+  const outsideBenchmarkSamples = new SqliteOutsideBenchmarkSampleStore(config.db);
+
+  /**
+   * Fire-and-forget, but NEVER unhandled.
+   *
+   * `runFeedbackCycle` is synchronous and is called from a `setInterval`, so
+   * there is no `await` seam here. An unawaited promise whose fetch rejects
+   * would be an unhandled rejection AND a benchmark that silently never
+   * persists — this repo's dominant defect class arriving through the back
+   * door. So the rejection is handled explicitly, and logged, rather than left
+   * to the runtime.
+   *
+   * It runs AFTER the arm comparison and takes its `comparison`: the window is
+   * inherited, never recomputed (#636's exact-window condition).
+   */
+  const runOutsideBenchmarks = (comparison: ArmComparison): void => {
+    void runOutsideBenchmarkCycle({
+      clock,
+      comparison,
+      series: outsideBenchmarkSeries,
+      samples: outsideBenchmarkSamples,
+    })
+      .then((result) => {
+        logger.log({
+          trace_id: 'feedback-cycle',
+          stage: 'feedback-loop',
+          // `warn` only when a benchmark could not be measured at all. A
+          // benchmark out-performing the book is NOT a warning — it is context,
+          // and an outside benchmark can never raise a verdict (#636: secondary,
+          // never a replacement for the matched control).
+          level: result.unmeasured.length > 0 ? 'warn' : 'info',
+          message:
+            result.unmeasured.length > 0
+              ? 'outside benchmarks computed — SOME NOT MEASURED (absent, not zeroed)'
+              : 'outside benchmarks computed',
+          payload: {
+            window_from: comparison.from.toISOString(),
+            window_to: comparison.to.toISOString(),
+            // Return AND drawdown together on every measured benchmark
+            // (`docs/research/12-edge-hypothesis-critique.md` D4).
+            measured: result.measured.map((sample) => sample.performance),
+            // The reason a benchmark is absent lives HERE and nowhere else: FL
+            // persists no row for it, so without this line "the vendor failed"
+            // and "FL never ran" are the same empty panel.
+            unmeasured: result.unmeasured,
+          },
+        });
+      })
+      .catch((error: unknown) => {
+        logger.log({
+          trace_id: 'feedback-cycle',
+          stage: 'feedback-loop',
+          level: 'error',
+          message: 'outside benchmark cycle failed',
+          payload: { error: error instanceof Error ? error.message : String(error) },
+        });
+      });
+  };
+
+  const runArmComparison = (): ArmComparison => {
     const sample = runArmComparisonCycle({
       clock,
       trades: armComparisonSource,
@@ -2184,6 +2260,10 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         divergence_reason: sample.divergence.reason,
       },
     });
+
+    // Returned so #981's benchmark cycle can inherit this window rather than
+    // recomputing one. The arm comparison's own logic above is untouched.
+    return sample.comparison;
   };
 
   const runFeedbackCycle = (feedback: FeedbackCycleConfig): void => {
@@ -2219,7 +2299,13 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
       // `closed_trades` — so gating it on the metrics source would make the
       // matched control invisible on every day the equity series is thin,
       // which is most of them early in a soak.
-      runArmComparison();
+      const comparison = runArmComparison();
+
+      // #981: the outside benchmarks, over the window `runArmComparison` just
+      // measured the arms over. Inside the same try/catch and AFTER the arm
+      // comparison, both deliberately — a benchmark is secondary and must never
+      // be able to cost the operator the matched control's reading.
+      runOutsideBenchmarks(comparison);
     } catch (error) {
       logger.log({
         trace_id: 'feedback-cycle',

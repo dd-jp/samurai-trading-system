@@ -24,6 +24,7 @@ import type {
   TickStatus,
 } from '../../../contracts/snapshot.js';
 import type { ArmComparisonSample } from '../../pipeline/feedback-loop/index.js';
+import type { OutsideBenchmarkSample } from '../../pipeline/outside-benchmark/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
 import type { ClosedTrade, DebateLog, Fill, OpenPosition } from '../../shared/index.js';
 import type { ProviderStatusReader } from './provider-status.js';
@@ -45,6 +46,8 @@ export type {
   LlmSpendSummary,
   LlmSpendWindow,
   MetricsSuiteWire,
+  OutsideBenchmarkRow,
+  OutsideBenchmarkWire,
   PositionRow,
   TickStatus,
   VerdictRow,
@@ -204,6 +207,11 @@ export interface DashboardQueryStore {
    * — see migration 0034's own comment.
    */
   getArmComparisons(limit: number, asOf: Date): ArmComparisonSample[];
+  /**
+   * The Feedback Loop's outside benchmarks (#981), newest first, bounded by
+   * `asOf`. `limit` counts ROWS, not cycles — two benchmarks per cycle.
+   */
+  getOutsideBenchmarks(limit: number, asOf: Date): OutsideBenchmarkSample[];
   getMark(instrument: string, asOf: Date): Mark;
   /**
    * Batched `getMark` — one query for a whole position list instead of one per

@@ -212,6 +212,30 @@ Added 2026-08-05 ([#359](https://github.com/dd-jp/samurai-trading-system/issues/
 
 **Cadence and persistence.** The comparison runs on FL's existing daily cycle — not a new schedule — and each cycle appends one row to `arm_comparison_samples` (`shared-sqlite-store-spec.md`). It is persisted rather than recomputed on read because the dashboard is a separate process, because FL owns the computation, and because the panel below shows a trend, which needs a series.
 
+#### The risk-adjusted outside benchmarks (SPY, 60/40) — [#981](https://github.com/dd-jp/samurai-trading-system/issues/981), under [#636](https://github.com/dd-jp/samurai-trading-system/issues/636)
+
+**The other half of #636, and deliberately the smaller half.** CONTEXT.md's Key Constraints require that outside benchmarks "report return *and* drawdown together" — but as *secondary* context. The matched control above is the comparison; SPY and 60/40 tell an operator what the market did while the arms did whatever they did. Nothing in this section may be read as a target, and the module is built so that it cannot be.
+
+**Secondary is structural here, not a styling choice.** Three mechanisms, none of which a later edit can quietly undo:
+
+1. **The window is inherited, not chosen.** `runOutsideBenchmarkCycle` takes the `ArmComparison` the same cycle just produced and reads `from`/`to` off it. There is no `window_ms` option on its input, and the type refuses one. A benchmark therefore *cannot* be measured for a cycle in which the matched control was not — the primary comparison is a precondition of the secondary one — and doc 12's gate 4 (an approximate window is noise, not a comparison) holds by construction rather than by two constants happening to agree.
+2. **There is no verdict type and no alert channel.** The benchmark cycle returns `{ measured, unmeasured }` and nothing else. It cannot raise a divergence, and `OutsideBenchmarkRow` carries no `diverged` field, so no consumer — dashboard or otherwise — can render "the benchmark won" without a contract change first.
+3. **It carries no trade count, no realized PnL, and no arm tag**, because a benchmark is not an arm.
+
+**The set is SPY and 60/40; the "40" is AGG.** SPY is the equity leg. The bond leg is **AGG** (iShares Core U.S. Aggregate Bond ETF) — the broad investment-grade aggregate the phrase "60/40" has always denoted. IEF, BND and TLT were all confirmed available on the same source and rejected: IEF and TLT are duration *bets* (7–10y and 20y+) rather than the aggregate, and BND is the same aggregate as AGG but with less history as a benchmark proxy. The blend is **daily-rebalanced fixed weight**: each day's index return is `0.6·r_SPY + 0.4·r_AGG`. A buy-and-hold blend whose weights drift would be measuring an unstated allocation policy on top of the benchmark.
+
+**Drawdown is computed on the blended index, never blended from sleeve drawdowns.** A 60/40 whose legs draw down in different weeks has a *smaller* max drawdown than either leg — averaging the two sleeve figures would overstate it, sometimes by a factor of two. The index is seeded at 1 and stepped by the blended daily return; drawdown is `(peak − index) / peak` against the running peak.
+
+**Each window needs an anchor bar.** The first in-window daily return has no denominator inside the window, so the series source fetches a small pad of extra bars and the computation requires, per leg, a close at or before `window_from`. Without one the benchmark is **refused**, not approximated from the first in-window close — that would silently drop the window's first day.
+
+**`buy_and_hold_return_pct`, not `return_pct`.** The benchmark's return is a fully-invested notional's: it holds through every night. The book is flat by close ([ADR-0014](../adr/0014-intraday-flat-by-close-horizon.md)), so an arm's `return_pct` is realized PnL on capital at risk only while a trade is on. The two percentages share their units but not their denominator, so they are given different names on the wire and in the schema, and the dashboard prints the caveat rather than trusting a reader to remember it.
+
+**Return and drawdown together, on every branch — D4 again.** `OutsideBenchmarkPerformance.max_drawdown_pct` is non-optional and `outside_benchmark_samples`' two numeric columns are both `NOT NULL`. There is no shape in this module that can carry a benchmark return without its drawdown.
+
+**A benchmark FL could not measure is absent, not zero.** Each benchmark is computed independently inside the cycle, so one leg's missing series costs only that benchmark; the other is still persisted. Nothing is written for the failed one — a zero row would be a fabricated benchmark — and the reason is logged. Consumers must read an absent row as "not measured", which is what the dashboard panel says in words.
+
+**Cadence and persistence.** Same daily cycle as the arm comparison, immediately after it, appending one row per measured benchmark to `outside_benchmark_samples` (`shared-sqlite-store-spec.md`). Series come through the already-integrated market-data service (daily bars), so the module adds no new vendor and no new spend.
+
 ### Module: Determinism & Backtest
 
 - Walk-forward: weights/params evolve daily from only outcomes known before each T (injected clock), producing a point-in-time trajectory the backtest replays. Never global-fit-and-apply-retroactively.
@@ -227,6 +251,7 @@ Added 2026-08-05 ([#359](https://github.com/dd-jp/samurai-trading-system/issues/
 - Labelling: on close, the right setup gets the right R, joined correctly; no label before close (point-in-time).
 - Metrics: full suite computed; a breach triggers alert + auto-tighten but not an automatic kill.
 - Matched control: both arms come from one window read; a control that leads on return but with a worse drawdown is NOT divergence; under the per-arm trade floor no verdict is issued; a divergence alerts and persists but tightens no dial; every cycle persists a sample, including the zero-trade one.
+- Outside benchmarks: the window is copied from the arm comparison rather than recomputed (proved with a window deliberately unequal to `now − 30d`); a 60/40 blends daily returns and draws down on the blended index, not on a blend of sleeve drawdowns; a missing anchor bar refuses rather than approximates; one benchmark's unavailable series persists nothing for that benchmark and does not cost the other; no branch produces a divergence verdict.
 - Determinism: walk-forward weight trajectory is reproducible and uses no future data.
 
 ### Modules to Test

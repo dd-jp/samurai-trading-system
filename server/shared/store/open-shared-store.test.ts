@@ -63,6 +63,13 @@ const TABLES = [
   // under #636/#913). Persisted rather than recomputed because the dashboard
   // reads it from a different process, and because a trend needs a series.
   'arm_comparison_samples',
+  // `outside_benchmark_samples` (0036) — the risk-adjusted OUTSIDE benchmarks,
+  // SPY and 60/40, over the same window the arm comparison used (#981, under
+  // #636). A separate table rather than columns on `arm_comparison_samples`: a
+  // benchmark has no trade count, no realized PnL, no verdict and no arm tag,
+  // so folding it in would mean four nullable columns and would make the
+  // secondary reading look like a third arm.
+  'outside_benchmark_samples',
 ];
 
 /**
@@ -71,7 +78,7 @@ const TABLES = [
  * That prose number silently drifted twice (it read "twenty" and "twenty-one"
  * simultaneously while the schema held 22), so it is pinned here.
  */
-const CONSOLIDATED_SCHEMA_TABLE_COUNT = 30;
+const CONSOLIDATED_SCHEMA_TABLE_COUNT = 31;
 
 const tempDirs: string[] = [];
 
@@ -158,6 +165,7 @@ describe('openSharedStore', () => {
       { version: 33 },
       { version: 34 },
       { version: 35 },
+      { version: 36 },
     ]);
     expect(runMigrations(db)).toEqual([]);
     expect(db.prepare('SELECT version FROM schema_migrations').all()).toEqual([
@@ -196,6 +204,7 @@ describe('openSharedStore', () => {
       { version: 33 },
       { version: 34 },
       { version: 35 },
+      { version: 36 },
     ]);
   });
 

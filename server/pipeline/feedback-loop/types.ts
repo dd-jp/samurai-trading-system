@@ -36,6 +36,12 @@ export type {
   RevalidationSnapshot,
 } from './types/metrics.js';
 export type {
+  OutsideBenchmarkCycleInput,
+  OutsideBenchmarkCycleResult,
+  OutsideBenchmarkSampleStore,
+  UnmeasuredOutsideBenchmark,
+} from './types/outside-benchmark.js';
+export type {
   Adjustment,
   AdjustmentLog,
   FeedbackConfig,

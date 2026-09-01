@@ -175,6 +175,78 @@ export interface ArmComparisonRow {
 }
 
 /**
+ * The outside benchmarks this system measures (#981). Mirrors the server-side
+ * `OutsideBenchmarkId` — a closed union rather than a string, because #636
+ * settled the set (SPY and 60/40) and #981's non-goals rule out reopening it.
+ */
+export type OutsideBenchmarkWire = 'spy' | 'sixty_forty';
+
+/**
+ * One Feedback Loop cycle's measurement of ONE outside benchmark (#981) — the
+ * second half of #636, whose first half is `ArmComparisonRow` above.
+ *
+ * ## This type is SECONDARY, and it is shaped to stay that way
+ *
+ * Falsifier arm 2 is the primary matched control; an outside benchmark never
+ * substitutes for it (CLAUDE.md Key Constraints; ADR-0014 amendment 2; ADR-0017
+ * §Consequences). That is enforced by what this type does NOT have, rather than
+ * by a convention the panel is trusted to follow:
+ *
+ *  - **no `diverged` and no `divergence_reason`** — a benchmark cannot produce a
+ *    verdict, so no renderer can give it the arm panel's alert treatment;
+ *  - **no `trade_count`** — SPY is held, not traded;
+ *  - **no `realized_pnl_net` and no `basis`** — the benchmark has no account and
+ *    made nobody any money, and carrying a basis would invite a £ figure to be
+ *    multiplied out of a percentage nobody earned;
+ *  - **no `arm`** — it is not a third arm.
+ *
+ * ## `buy_and_hold_return_pct`, NOT `return_pct`
+ *
+ * `ArmPerformanceWire.return_pct` is realized PnL as a fraction of the declared
+ * book — a book that is FLAT OVERNIGHT and carries risk only while a trade is on
+ * (ADR-0014's flat-by-close horizon). This is the return of a position fully
+ * invested for the whole window, every day, including the nights the live book
+ * is deliberately flat. Same units, different quantities.
+ *
+ * #636 names this exact trap — *"easy to lose in a per-arm metrics table with
+ * one column per arm"* — so the field carries a different NAME rather than a
+ * footnote a table author can skip. A component that wants to stack these in one
+ * column has to rename something first, in code that reads as the mistake it is.
+ * That is the same argument `ArmPerformanceWire` makes about drawdown, applied
+ * to the denominator instead of the column.
+ */
+export interface OutsideBenchmarkRow {
+  /** The FL cycle instant, ISO-8601 UTC. */
+  computed_at: string;
+  benchmark: OutsideBenchmarkWire;
+  /**
+   * The window, COPIED from the `ArmComparisonRow` computed in the same cycle —
+   * never chosen independently. #636: *"Outside benchmarks computed on
+   * approximate windows are not risk-adjusted comparisons, they are noise."*
+   * Carried onto the wire so the panel can state the match rather than assume it.
+   */
+  window_from: string;
+  window_to: string;
+  /** Signed fraction of a fully-invested notional. See the type's header. */
+  buy_and_hold_return_pct: number;
+  /**
+   * REQUIRED, exactly as on `ArmPerformanceWire` and for the same reason:
+   * `docs/research/12-edge-hypothesis-critique.md` D4 rules out return-only
+   * comparison against a risk-targeted stream, and CLAUDE.md applies it to the
+   * outside benchmarks by name — they "report return AND drawdown together".
+   * A positive fraction, taken on the BLENDED index for a multi-leg benchmark.
+   */
+  max_drawdown_pct: number;
+  /**
+   * Daily observations the figures were computed over. The benchmark's analogue
+   * of `ArmPerformanceWire.trade_count`, and carried for the same reason: a
+   * percentage over three observations and one over three hundred look
+   * identical without it.
+   */
+  observation_count: number;
+}
+
+/**
  * Why a lot closed. Structurally identical to the server-side
  * `ExitReason | 'stop' | 'target' | 'exit'` union
  * (`server/shared/types/records.ts`, `ClosedTrade.close_reason`) — duplicated
@@ -386,6 +458,24 @@ export interface DashboardSnapshot {
    * divergence".
    */
   arm_comparison: ArmComparisonRow[];
+  /**
+   * The Feedback Loop's outside benchmarks (#981), newest first — SPY and
+   * 60/40, over the SAME window the `arm_comparison` rows above were measured
+   * over, on the same cadence.
+   *
+   * Required and an EMPTY ARRAY when FL has measured none, matching
+   * `arm_comparison` — but note the field is SECONDARY to it, and the panel is
+   * laid out to say so. An outside benchmark is context for the matched
+   * control's reading, never the thing to beat (CLAUDE.md Key Constraints;
+   * ADR-0014 amendment 2; ADR-0017 §Consequences).
+   *
+   * Rows, not cycles: with two benchmarks measured per cycle, a cycle
+   * contributes up to two entries. A cycle may contribute FEWER — a benchmark
+   * whose series was unavailable is simply absent, because FL persists nothing
+   * it could not measure and a zero row would be a fabricated benchmark. The
+   * panel renders that absence as "not measured", never as 0.00%.
+   */
+  outside_benchmarks: OutsideBenchmarkRow[];
   /**
    * Third-party provider tiles. Three providers, three different realities,
    * and the shapes differ because the underlying facts do rather than for

@@ -1,0 +1,242 @@
+/**
+ * `runOutsideBenchmarkCycle` (#981) — the FL half of #636's second question.
+ *
+ * The load-bearing tests here are the ones about the WINDOW and about
+ * SECONDARY status, not the arithmetic (that lives in
+ * `outside-benchmark/outside-benchmark.test.ts`):
+ *
+ *  - the benchmark is measured over the matched control's own window, taken
+ *    from the `ArmComparison` rather than recomputed from the clock;
+ *  - a benchmark FL could not measure persists NOTHING and is reported as
+ *    unmeasured, rather than being written as a zero;
+ *  - one benchmark's failure does not cost the operator the other's.
+ */
+import type { ArmComparison } from '../control-arm/index.js';
+import type { BenchmarkObservation, BenchmarkSeriesSource } from '../outside-benchmark/index.js';
+import { InMemoryOutsideBenchmarkSampleStore } from './fixture-stores.js';
+import { runOutsideBenchmarkCycle } from './outside-benchmark-cycle.js';
+import type { OutsideBenchmarkCycleInput } from './types/outside-benchmark.js';
+
+const DAY = 24 * 60 * 60 * 1000;
+const NOW = new Date('2026-09-01T12:00:00.000Z');
+/** Deliberately NOT `NOW - 30d`: the cycle must copy this, not recompute it. */
+const WINDOW_FROM = new Date('2026-08-05T09:15:00.000Z');
+const WINDOW_TO = new Date('2026-08-31T20:00:00.000Z');
+
+const COMPARISON: ArmComparison = {
+  from: WINDOW_FROM,
+  to: WINDOW_TO,
+  basis: 1_000,
+  live: {
+    arm: 'live',
+    trade_count: 7,
+    realized_pnl_net: 21.5,
+    return_pct: 0.0215,
+    max_drawdown_pct: 0.04,
+  },
+  control: {
+    arm: 'control',
+    trade_count: 6,
+    realized_pnl_net: 4,
+    return_pct: 0.004,
+    max_drawdown_pct: 0.02,
+  },
+};
+
+const clock = { now: () => NOW };
+
+/** Records the windows it was asked for, so the test can assert on them. */
+class RecordingSeriesSource implements BenchmarkSeriesSource {
+  readonly calls: { instrument: string; from: Date; to: Date }[] = [];
+
+  constructor(private readonly byInstrument: Record<string, BenchmarkObservation[] | Error>) {}
+
+  async getDailyCloses(instrument: string, from: Date, to: Date): Promise<BenchmarkObservation[]> {
+    this.calls.push({ instrument, from, to });
+    const entry = this.byInstrument[instrument];
+    if (entry === undefined) throw new Error(`no fixture series for ${instrument}`);
+    if (entry instanceof Error) throw entry;
+    return entry;
+  }
+}
+
+/**
+ * Closes anchored one day BEFORE the window opens, then daily strictly inside
+ * it. The first entry is the anchor and is never an observation; the rest fall
+ * at `from + 1d`, `from + 2d`, … which is strictly greater than `from` as the
+ * half-open window requires.
+ */
+function series(closes: readonly number[]): BenchmarkObservation[] {
+  return closes.map((close, i) => ({
+    close_time: new Date(WINDOW_FROM.getTime() + (i === 0 ? -DAY : i * DAY)),
+    close,
+  }));
+}
+
+function sources(spy: readonly number[], agg: readonly number[]): RecordingSeriesSource {
+  return new RecordingSeriesSource({ SPY: series(spy), AGG: series(agg) });
+}
+
+describe('runOutsideBenchmarkCycle — the window is the matched control’s', () => {
+  it('measures over the ArmComparison’s window, never a window of its own', async () => {
+    const series = sources([100, 102, 104], [100, 100, 101]);
+    const result = await runOutsideBenchmarkCycle({
+      clock,
+      comparison: COMPARISON,
+      series,
+      samples: new InMemoryOutsideBenchmarkSampleStore(),
+    });
+
+    // Every leg of every benchmark was asked for the SAME window — the arm
+    // comparison's — and it is not derivable from `clock.now()` (NOW - 30d is
+    // 2026-08-02, not WINDOW_FROM). #636: an approximate window is noise.
+    expect(series.calls.length).toBeGreaterThan(0);
+    for (const call of series.calls) {
+      expect(call.from).toEqual(WINDOW_FROM);
+      expect(call.to).toEqual(WINDOW_TO);
+    }
+
+    for (const sample of result.measured) {
+      expect(sample.from).toEqual(WINDOW_FROM);
+      expect(sample.to).toEqual(WINDOW_TO);
+      // The cycle instant is the clock's, and is distinct from the window end.
+      expect(sample.computed_at).toEqual(NOW);
+      expect(sample.to.getTime()).not.toBe(sample.computed_at.getTime());
+    }
+  });
+
+  it('has no window parameter of its own to get wrong', () => {
+    // A structural claim, checked as one: `OutsideBenchmarkCycleInput` carries
+    // no `window_ms`. If one is ever added, a benchmark can be measured over a
+    // period the arms were not, which is the exact defect #636 rules out.
+    const input: OutsideBenchmarkCycleInput = {
+      clock,
+      comparison: COMPARISON,
+      series: sources([100, 101], [100, 100]),
+      samples: new InMemoryOutsideBenchmarkSampleStore(),
+      // @ts-expect-error there is no `window_ms` on this input, by design. The
+      // window comes from `comparison`, so a benchmark cannot be measured over
+      // a period the arms were not — #636's exact-window condition, made
+      // unrepresentable rather than merely documented.
+      window_ms: 30 * DAY,
+    };
+    expect(input).toBeTruthy();
+  });
+});
+
+describe('runOutsideBenchmarkCycle — measures and persists both benchmarks', () => {
+  it('persists SPY and 60/40, each with return AND drawdown', async () => {
+    const samples = new InMemoryOutsideBenchmarkSampleStore();
+    const result = await runOutsideBenchmarkCycle({
+      clock,
+      comparison: COMPARISON,
+      series: sources([100, 110, 99], [100, 100, 100]),
+      samples,
+    });
+
+    expect(result.unmeasured).toEqual([]);
+    expect(result.measured.map((s) => s.performance.benchmark)).toEqual(['spy', 'sixty_forty']);
+
+    const persisted = samples.getRecent(10, NOW);
+    expect(persisted).toHaveLength(2);
+    for (const sample of persisted) {
+      // Both columns present on every persisted benchmark — D4.
+      expect(typeof sample.performance.buy_and_hold_return_pct).toBe('number');
+      expect(typeof sample.performance.max_drawdown_pct).toBe('number');
+      expect(sample.performance.observation_count).toBe(2);
+    }
+
+    // SPY fell 10% from its peak; the 60/40 blend, being 40% in a flat bond
+    // leg, fell less. The benchmark that is measured is the blend, not SPY
+    // scaled — so these must differ.
+    const spy = persisted.find((s) => s.performance.benchmark === 'spy');
+    const blend = persisted.find((s) => s.performance.benchmark === 'sixty_forty');
+    expect(spy?.performance.max_drawdown_pct ?? 0).toBeGreaterThan(
+      blend?.performance.max_drawdown_pct ?? 0,
+    );
+  });
+
+  it('carries no divergence verdict and no alert channel — secondary, structurally', async () => {
+    const result = await runOutsideBenchmarkCycle({
+      clock,
+      comparison: COMPARISON,
+      series: sources([100, 130], [100, 100]),
+      samples: new InMemoryOutsideBenchmarkSampleStore(),
+    });
+
+    // Even a benchmark that massively out-performs both arms produces no
+    // verdict and wakes nobody: there is no threshold, no `diverged` field and
+    // no alert channel on this cycle at all. An outside benchmark is context,
+    // never a falsifying result (CLAUDE.md; ADR-0014 amendment 2; ADR-0017).
+    for (const sample of result.measured) {
+      expect('diverged' in sample).toBe(false);
+      expect('divergence' in sample).toBe(false);
+      expect('reason' in sample.performance).toBe(false);
+    }
+    expect('alerts' in result).toBe(false);
+  });
+});
+
+describe('runOutsideBenchmarkCycle — unmeasurable is absent, never fabricated', () => {
+  it('persists NOTHING for a benchmark whose series is unavailable', async () => {
+    const samples = new InMemoryOutsideBenchmarkSampleStore();
+    const result = await runOutsideBenchmarkCycle({
+      clock,
+      comparison: COMPARISON,
+      series: new RecordingSeriesSource({ SPY: new Error('vendor 429'), AGG: series([100, 100]) }),
+      samples,
+    });
+
+    // Both benchmarks depend on SPY, so both are unmeasured — and NEITHER is
+    // written as a zero-return row. An absent row means "not measured"; a
+    // zero row would be a fabricated benchmark on the operator's panel.
+    expect(samples.getRecent(10, NOW)).toEqual([]);
+    expect(result.measured).toEqual([]);
+    expect(result.unmeasured.map((u) => u.benchmark)).toEqual(['spy', 'sixty_forty']);
+    // The reason travels back for the caller to log: absence from persistence,
+    // presence in the log, so "the vendor 429'd" and "FL never ran" differ.
+    for (const unmeasured of result.unmeasured) {
+      expect(unmeasured.reason).toMatch(/vendor 429/);
+    }
+  });
+
+  it("does not let one benchmark's data gap cost the operator the other", async () => {
+    const samples = new InMemoryOutsideBenchmarkSampleStore();
+    const result = await runOutsideBenchmarkCycle({
+      clock,
+      comparison: COMPARISON,
+      // AGG is missing, so 60/40 cannot be built — but SPY is intact and its
+      // reading is still owed to the operator.
+      series: new RecordingSeriesSource({
+        SPY: series([100, 105]),
+        AGG: new Error('no bars for AGG'),
+      }),
+      samples,
+    });
+
+    expect(result.measured.map((s) => s.performance.benchmark)).toEqual(['spy']);
+    expect(result.unmeasured.map((u) => u.benchmark)).toEqual(['sixty_forty']);
+    expect(samples.getRecent(10, NOW)).toHaveLength(1);
+  });
+
+  it('reports a missing anchor as unmeasured rather than measuring a short window', async () => {
+    const samples = new InMemoryOutsideBenchmarkSampleStore();
+    // Closes start INSIDE the window, so there is no denominator for its first
+    // daily return. Measuring anyway would cover a shorter period than the arms.
+    const inWindowOnly = [1, 2].map((i) => ({
+      close_time: new Date(WINDOW_FROM.getTime() + i * DAY),
+      close: 100 + i,
+    }));
+
+    const result = await runOutsideBenchmarkCycle({
+      clock,
+      comparison: COMPARISON,
+      series: new RecordingSeriesSource({ SPY: inWindowOnly, AGG: inWindowOnly }),
+      samples,
+    });
+
+    expect(samples.getRecent(10, NOW)).toEqual([]);
+    expect(result.unmeasured).toHaveLength(2);
+    expect(result.unmeasured[0].reason).toMatch(/no close at or before the window start/);
+  });
+});

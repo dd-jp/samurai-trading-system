@@ -216,6 +216,22 @@ The trend list (below the headline) renders many historical rows at once, and wi
 
 **Read-only, and computed elsewhere.** The panel projects `arm_comparison_samples` rows the Feedback Loop wrote (`feedback-loop-spec.md`, "The matched-control comparison"). `buildSnapshot` must not compute or re-derive the comparison: the page shows what FL measured and alerted on, or it shows nothing.
 
+### Outside benchmarks panel — [#981](https://github.com/dd-jp/samurai-trading-system/issues/981), under [#636](https://github.com/dd-jp/samurai-trading-system/issues/636)
+
+**Beside the arm-comparison panel, and visibly subordinate to it.** SPY and 60/40 (SPY/AGG) are secondary context — what the market did over the same window — and the page must not lay them out so they read as the thing to beat. It renders immediately *after* the arm-comparison panel in reading order, carries `panel-secondary`, and says its own status in words ("secondary context, not the control"; "falsifier arm 2 is the matched control") because colour and weight are never the sole carrier of a signal on this page.
+
+**It has no verdict line and no alert styling, and cannot grow one.** The arm panel's loudest element is its divergence claim. This panel has no equivalent, because `OutsideBenchmarkRow` carries no `diverged` field: a "the benchmark won" banner would require a contract change first, which is the point.
+
+**It never renders the arms.** A side-by-side of a benchmark's return and an arm's would invite exactly the comparison the denominators do not support, so the panel prints the caveat instead: a benchmark is fully invested through every night while the book is flat by close, so the two percentages share their units but not their denominator. The wire keeps the names apart too — `buy_and_hold_return_pct`, not `return_pct`.
+
+**Return and drawdown together, on every branch.** D4 binds this panel exactly as hard as the arm panel. `OutsideBenchmarkRow.max_drawdown_pct` is required on the wire, and no branch prints a return without its drawdown beside it. Observation counts accompany both, for the reason trade counts accompany the arms.
+
+**One cycle's rows only, and the window is stated.** The panel renders the rows sharing the newest `computed_at` and prints the window with the sentence that it is the same one the arm comparison used. Rows from two cycles listed together would present two periods as one reading.
+
+**An unmeasured benchmark is named, never drawn as zero.** FL persists nothing for a benchmark whose series it could not fetch, so a cycle can legitimately carry SPY and not 60/40. The panel names the missing one ("Not measured this cycle: … Absent, not zero") rather than dropping it silently or rendering 0.00%, which would be a claim about the market instead of about the measurement. The empty state says the Feedback Loop has measured none yet, for the same reason.
+
+**Read-only, and computed elsewhere.** The panel projects `outside_benchmark_samples` rows FL wrote (`feedback-loop-spec.md`, "The risk-adjusted outside benchmarks"). `buildSnapshot` must not compute a benchmark.
+
 ## Motion — replay only
 
 **A persona walks only where the store recorded it walking.** This reverses v1's "no transit animation" rule; the reversal and its reasoning are recorded in [ADR-0011](../adr/0011-pipeline-theater-replay-motion.md). The rule, in full:

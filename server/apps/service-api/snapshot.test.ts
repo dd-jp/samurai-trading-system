@@ -152,6 +152,7 @@ function fakeStore(overrides: Partial<DashboardQueryStore> = {}): DashboardQuery
     getAttribution: () => ({}),
     getDailyMetrics: () => ({ ...METRICS }),
     getArmComparisons: () => [],
+    getOutsideBenchmarks: () => [],
     getMark: () => makeMark(0),
     getLlmSpend: () => ({
       last_24h: { ...EMPTY_SPEND_WINDOW },
