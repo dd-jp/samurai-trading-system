@@ -274,8 +274,7 @@ describe('LIVE_MONEY_GATES', () => {
     // #932 closed 2026-08-31 (PR #956): per_asset_cap exempted for D5-classified
     // instruments the same way #886 exempted per_trade_size_cap.
     const closed = [
-      526, 519, 548, 549, 550, 551, 562, 384, 375, 333, 525, 798, 800, 826, 894, 886, 888, 925,
-      932,
+      526, 519, 548, 549, 550, 551, 562, 384, 375, 333, 525, 798, 800, 826, 894, 886, 888, 925, 932,
     ];
 
     for (const gate of LIVE_MONEY_GATES) {

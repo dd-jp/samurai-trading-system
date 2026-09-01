@@ -109,7 +109,13 @@ export interface DebateRow {
  * `server/` nor `client/` (the boundary `contracts/boundary.test.ts`
  * enforces). Widen both sides together if a new reason is ever added.
  */
-export type CloseReason = 'stop' | 'target' | 'exit' | 'flatten' | 'signal_decay' | 'direction_flip';
+export type CloseReason =
+  | 'stop'
+  | 'target'
+  | 'exit'
+  | 'flatten'
+  | 'signal_decay'
+  | 'direction_flip';
 
 /**
  * One realized round trip from `closed_trades` (#940) — the dashboard's only
