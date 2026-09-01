@@ -36,7 +36,7 @@
  * | Field | Derivation |
  * |---|---|
  * | `cash` | anchor + realized PnL to date − cash deployed in open long lots |
- * | `peak_equity` | running max of (anchor + realized), floored at the anchor |
+ * | `peak_equity` | running max of the cumulative realized curve (anchor + realized-to-date at each close, in trade order), floored at the anchor |
  * | `daily_basis` | (anchor + realized before the session open) as the denominator, realized since it as the numerator |
  * | `consecutive_losses` | the control's own closed trades, walked backwards |
  *
@@ -80,7 +80,11 @@
  *    the live account's currency and scale, which is what makes the two arms'
  *    per-trade sizes comparable in the first place.
  */
-import type { SessionBasis, SessionBasisByClass } from '../../../pipeline/risk-manager/index.js';
+import type {
+  RiskConfig,
+  SessionBasis,
+  SessionBasisByClass,
+} from '../../../pipeline/risk-manager/index.js';
 import type { TradingCalendar } from '../../../providers/market-data-service/index.js';
 import type { ClosedTrade, OpenPosition } from '../../../shared/index.js';
 import type { SessionEquityKey } from '../sqlite-session-equity-store.js';
@@ -143,14 +147,6 @@ export interface ControlArmAccountStateProviderInput {
 }
 
 export class ControlArmAccountStateProvider implements AccountStateProvider {
-  /**
-   * The realized high-water mark, held in memory for the same reason
-   * `InMemoryBreakerStatePersistence` is: it is re-derivable from the trade
-   * record on the next tick after a restart (max of the cumulative realized
-   * curve), and no real money depends on it surviving one.
-   */
-  #peakEquity: number | null = null;
-
   /** The resolved anchor. Null until the first `getAccountState`; set once. */
   #book: number | null = null;
 
@@ -165,9 +161,7 @@ export class ControlArmAccountStateProvider implements AccountStateProvider {
    */
   private async book(asOf: Date): Promise<number> {
     if (this.#book === null) {
-      const resolved = await this.input.resolveBook(asOf);
-      this.#book = resolved;
-      this.#peakEquity = resolved;
+      this.#book = await this.input.resolveBook(asOf);
     }
     return this.#book;
   }
@@ -187,13 +181,16 @@ export class ControlArmAccountStateProvider implements AccountStateProvider {
 
     const realized = trades.reduce((total, trade) => total + trade.realized_pnl_net, 0);
     const equityAtCost = book + realized;
-    // Raised before it is read, exactly as `SqliteAccountStateStore.recordEquity`
-    // does, so a new high shows up on the tick that set it.
-    this.#peakEquity = Math.max(this.#peakEquity ?? book, equityAtCost);
 
     return {
       cash: equityAtCost - deployedCash(positions),
-      peak_equity: this.#peakEquity,
+      // #972 fix 1 — derived FRESH from the full ordered trade curve on every
+      // cold read, not carried in a running field that a restart resets to
+      // the anchor. `trades` is already `EPOCH..asOf`, i.e. the whole record,
+      // and `SqliteClosedTradeStore.getClosedTradesBetween` orders it by
+      // `closed_at` — see `realizedHighWaterMark` below for why that ordering
+      // is load-bearing here.
+      peak_equity: realizedHighWaterMark(trades, book),
       daily_basis: {
         crypto: this.sessionBasisFor('crypto', trades, asOf, book),
         stocks: this.sessionBasisFor('stocks', trades, asOf, book),
@@ -300,8 +297,30 @@ export interface ControlBookAnchorResolverInput {
   liveAccountState: AccountStateProvider;
   /** Keyed to `CONTROL_BOOK_ANCHOR_KEY` — never the live arm's `'default'` row. */
   store: BookAnchorStore;
-  /** `LIVE_BOOK_GBP`. Used only when the live observation is unusable. */
+  /**
+   * `LIVE_BOOK_GBP` (or `config.riskConfig.live_book_ceiling?.book`). Used
+   * only when the live observation is unusable — and, per #972 fix 2, used
+   * for THAT TICK'S return value only. It is never handed to
+   * `store.anchorEquity`: `anchorEquity` is first-write-wins, so persisting
+   * the fallback on what may be one transient read failure would pin the
+   * control's book at the declared figure permanently, even once the live
+   * account becomes readable again on a later tick. Only a successful,
+   * usable live observation is ever persisted.
+   */
   fallbackBook: number;
+  /**
+   * #972 fix 3 — the SAME `RiskConfig['live_book_ceiling']` the fallback
+   * above is already resolved through (`fallbackBook` at the composition root
+   * is `config.riskConfig.live_book_ceiling?.book ?? LIVE_BOOK_GBP`). Without
+   * this, the primary (live-read) anchor path read `max(cash, peak_equity)`
+   * off the live account UNCAPPED while the fallback path was already capped
+   * — so the anchor and the live arm's own sizing basis could diverge
+   * whenever the live account's equity exceeded the ceiling. Optional: most
+   * callers (every test fixture that predates #972, and any composition that
+   * never sets `live_book_ceiling`) leave the live-read path exactly as it
+   * was.
+   */
+  liveBookCeiling?: RiskConfig['live_book_ceiling'];
 }
 
 /**
@@ -314,10 +333,12 @@ export interface ControlBookAnchorResolverInput {
  * control low. `peak_equity` is the account's scale and is persisted; on a flat
  * boot the two agree exactly, which is the case this normally runs in.
  *
- * A throw or a non-positive reading falls back to the declared book rather than
- * propagating: this runs on the first decision tick, and an account read that
- * fails must not take the live arm's tick down with it. The fallback is the
- * conservative direction — a small book under-trades, it does not over-trade.
+ * A throw or a non-positive reading falls back to the declared book WITHOUT
+ * persisting it (#972 fix 2 — see `fallbackBook`'s doc comment): this runs on
+ * the first decision tick, and an account read that fails must not take the
+ * live arm's tick down with it, nor may it foreclose a later tick's real
+ * anchor. The fallback is the conservative direction — a small book
+ * under-trades, it does not over-trade.
  */
 export function buildControlBookAnchorResolver(
   input: ControlBookAnchorResolverInput,
@@ -326,17 +347,73 @@ export function buildControlBookAnchorResolver(
     const persisted = input.store.peakEquity();
     if (persisted !== null && persisted > 0) return persisted;
 
-    let observed = 0;
+    let observed: number;
     try {
       const live = await input.liveAccountState.getAccountState(asOf);
       observed = Math.max(live.cash, live.peak_equity);
     } catch {
-      observed = 0;
+      // #972 fix 2 — return the fallback for THIS tick without writing it.
+      // `store.anchorEquity` is first-write-wins, so writing here would
+      // permanently pin the anchor at the declared book on the strength of
+      // one transient failure.
+      return input.fallbackBook;
     }
 
-    const anchor = Number.isFinite(observed) && observed > 0 ? observed : input.fallbackBook;
-    return input.store.anchorEquity(anchor, asOf);
+    // #972 fix 3 — the same ceiling `fallbackBook` is already resolved
+    // through, applied to the live observation too, so the two paths cannot
+    // disagree on the sizing basis. `same_currency_verified` gates the
+    // comparison exactly as it does in `liveBookCeiling`/`perSubclassDeploymentCap`
+    // (risk-manager/index.ts) — EXCEPT that gate throws on an unverified
+    // ceiling and this one does not: `liveBookCeiling` lives in
+    // `ENTRY_CAP_GATES`, which only ever sees entries, while this resolver is
+    // reached from `getAccountState` on the control arm's decision path for
+    // exits too, and a throw here would block flat-by-close the same way a
+    // guard above an early return would. So an unverified ceiling is left
+    // unapplied rather than refused outright.
+    const ceiling = input.liveBookCeiling;
+    if (ceiling !== undefined && ceiling.same_currency_verified === true) {
+      observed = Math.min(observed, ceiling.book);
+    }
+
+    if (!(Number.isFinite(observed) && observed > 0)) {
+      // A successful read that came back unusable (zero/negative/non-finite)
+      // is the same hazard as a throw: persisting it would pin the anchor at
+      // a nonsense value forever. Fallback for this tick only, same as above.
+      return input.fallbackBook;
+    }
+
+    return input.store.anchorEquity(observed, asOf);
   };
+}
+
+/**
+ * The realized high-water mark (#972 fix 1): the running max of `book +
+ * cumulative-realized-so-far`, walked over `trades` IN ORDER.
+ *
+ * The bug this replaces summed all realized PnL to a single net figure and
+ * maxed that ONE point against an in-memory running field — which loses any
+ * peak that was reached and then given back within the SAME window, because
+ * summing collapses the sequence before the max ever sees the high point.
+ * Concretely: +250 then -300 nets to -50, so `max(book, book - 50)` reports
+ * `book`, silently losing the real peak of `book + 250`. Walking the ordered
+ * sequence and taking the max at every step is the only way to recover a
+ * peak that intermediate closes reached and then gave back — which is also
+ * why this has to be re-run over the FULL trade record on every call rather
+ * than resumed from a peak held in memory: an in-memory value is exactly what
+ * a process restart does not have.
+ *
+ * `trades` MUST be ordered by `closed_at` ascending for this to be correct —
+ * `SqliteClosedTradeStore.getClosedTradesBetween` guarantees that (`ORDER BY
+ * closed_at`), and every caller here reads through that store.
+ */
+function realizedHighWaterMark(trades: readonly ClosedTrade[], book: number): number {
+  let cumulative = 0;
+  let peak = book;
+  for (const trade of trades) {
+    cumulative += trade.realized_pnl_net;
+    peak = Math.max(peak, book + cumulative);
+  }
+  return peak;
 }
 
 function deployedCash(positions: readonly OpenPosition[]): number {

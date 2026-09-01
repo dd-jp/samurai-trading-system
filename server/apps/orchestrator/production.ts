@@ -1331,6 +1331,9 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
         liveAccountState: breakerStateDeps.accountState,
         store: new SqliteAccountStateStore(config.db, CONTROL_BOOK_ANCHOR_KEY),
         fallbackBook: config.riskConfig.live_book_ceiling?.book ?? LIVE_BOOK_GBP,
+        // #972 fix 3 — the same ceiling the fallback above resolves through,
+        // applied to the primary live-read anchor path too.
+        liveBookCeiling: config.riskConfig.live_book_ceiling,
       }),
       // `arm: 'control'` — the one caller that asks this store for the other
       // arm. Handing it the default would restore the coupling exactly.
