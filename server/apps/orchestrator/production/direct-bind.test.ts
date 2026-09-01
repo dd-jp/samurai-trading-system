@@ -33,6 +33,7 @@ import { openSharedStore } from '../../../shared/store/index.js';
 import { OrphanVerdictScanner } from '../orphan-verdict-scan.js';
 import { SqliteAuditLog } from '../sqlite-audit-log.js';
 import { SqliteCurrentTickStore } from '../sqlite-current-tick-store.js';
+import type { PortfolioSnapshot } from './direct-bind.js';
 import {
   buildExecutionStep,
   buildPersistence,
@@ -1182,6 +1183,8 @@ describe('buildRiskStep', () => {
       mode: 'paper',
       breakerState: NOOP_BREAKER_STATE,
       portfolioSnapshots: new Map(),
+      // Required-but-nullable since #957: no producer here, said out loud.
+      critic: undefined,
     });
 
     const decision = await step({ trace_id: TRACE_ID, intent: makeIntent(), clock: CLOCK });
@@ -1226,6 +1229,8 @@ describe('buildRiskStep', () => {
       mode: 'paper',
       breakerState: NOOP_BREAKER_STATE,
       portfolioSnapshots: new Map(),
+      // Required-but-nullable since #957: no producer here, said out loud.
+      critic: undefined,
     });
 
     const decision = await step({ trace_id: TRACE_ID, intent: makeIntent(), clock: CLOCK });
@@ -1273,6 +1278,8 @@ describe('buildRiskStep', () => {
       mode: 'paper',
       breakerState: NOOP_BREAKER_STATE,
       portfolioSnapshots: new Map(),
+      // Required-but-nullable since #957: no producer here, said out loud.
+      critic: undefined,
       riskLog,
     });
 
@@ -1319,6 +1326,8 @@ describe('buildRiskStep', () => {
       mode: 'paper',
       breakerState: NOOP_BREAKER_STATE,
       portfolioSnapshots: new Map(),
+      // Required-but-nullable since #957: no producer here, said out loud.
+      critic: undefined,
       riskLog,
     });
 
@@ -1385,6 +1394,8 @@ describe('buildRiskStep', () => {
         mode: 'paper',
         breakerState: NOOP_BREAKER_STATE,
         portfolioSnapshots: new Map(),
+        // Required-but-nullable since #957: no producer here, said out loud.
+        critic: undefined,
         riskLog,
       });
     }
@@ -1487,6 +1498,8 @@ describe('buildRiskStep', () => {
         mode: 'paper',
         breakerState: NOOP_BREAKER_STATE,
         portfolioSnapshots: new Map(),
+        // Required-but-nullable since #957: no producer here, said out loud.
+        critic: undefined,
         // max_pbo's bound is 0.05 (threshold-bounds.ts) — 0.5 crosses it, so
         // `resolveRiskConfig` throws on every `evaluate()` call.
         thresholds: { getRiskThresholds: () => ({ max_pbo: 0.5 }) },
@@ -1632,6 +1645,8 @@ describe('buildRiskStep', () => {
         mode: 'paper',
         breakerState: NOOP_BREAKER_STATE,
         portfolioSnapshots: new Map(),
+        // Required-but-nullable since #957: no producer here, said out loud.
+        critic: undefined,
         ...overrides,
       });
     }
@@ -1828,12 +1843,45 @@ describe('buildRiskStep', () => {
       };
     }
 
+    /**
+     * A DEGRADED snapshot, memoised for this trace the way the Trader's is.
+     *
+     * The only route to a non-empty `unvalued_instruments` on an entry: the
+     * entry path asks `computePortfolioView` for a strict valuation, which
+     * REFUSES rather than returning a partial view, so a stale mark aborts the
+     * pass long before step 7. Seeding the per-trace memo puts the degraded
+     * view in front of `evaluate()` directly, which is what makes the
+     * `unvalued_book` gate reachable here at all.
+     */
+    function unvaluedSnapshot(): PortfolioSnapshot {
+      const known = { known: true, pct: 0 } as const;
+      return {
+        portfolio: {
+          equity: 10_000,
+          peak_equity: 10_000,
+          drawdown_pct: 0,
+          exposure_by_instrument: {},
+          exposure_by_class: { crypto: 0, stocks: 0 },
+          gross_exposure: 0,
+          daily_pnl: { crypto: known, stocks: known, portfolio: known },
+          consecutive_losses: 0,
+          unvalued_instruments: ['DARK'],
+        },
+        breakers: {
+          portfolio_tripped: false,
+          asset_class_tripped: { crypto: false, stocks: false },
+          armed_breakers: [],
+        },
+      };
+    }
+
     function step(
       overrides: {
         critic?: RiskCriticProducer;
         config?: RiskConfig;
         peakEquity?: number;
         riskLog?: { write: (record: unknown) => void };
+        portfolioSnapshots?: Map<string, PortfolioSnapshot>;
       } = {},
     ) {
       return buildRiskStep({
@@ -1862,8 +1910,10 @@ describe('buildRiskStep', () => {
         maxMarkAge: TEST_MAX_MARK_AGE,
         mode: 'paper',
         breakerState: NOOP_BREAKER_STATE,
-        portfolioSnapshots: new Map(),
-        ...(overrides.critic === undefined ? {} : { critic: overrides.critic }),
+        portfolioSnapshots: overrides.portfolioSnapshots ?? new Map(),
+        // Unconditional, not a conditional spread: `critic` is required-but-
+        // nullable on `RiskStepDeps` (#957), so "no producer" is a value here.
+        critic: overrides.critic,
         ...(overrides.riskLog === undefined ? {} : { riskLog: overrides.riskLog }),
       });
     }
@@ -1982,6 +2032,42 @@ describe('buildRiskStep', () => {
 
       expect(decision.binding_constraint).toBe('circuit_breaker:portfolio');
       expect(asks).toHaveLength(0);
+    });
+
+    it('never pays for an entry the unvalued-book gate already refused', async () => {
+      // The fourth member of the population #955's cadence names, alongside
+      // the exit bypass, the breaker gate and the min-viable floor: an entry
+      // on a book that could not be fully valued is refused at
+      // `unvalued_book` — ABOVE step 7 — so it must cost no call.
+      const { critic, asks } = recordingCritic();
+      const snapshots = new Map<string, PortfolioSnapshot>([[TRACE_ID, unvaluedSnapshot()]]);
+
+      const decision = await step({ critic, portfolioSnapshots: snapshots })({
+        trace_id: TRACE_ID,
+        intent: makeIntent(),
+        clock: CLOCK,
+      });
+
+      expect(decision.status).toBe('rejected');
+      expect(decision.binding_constraint).toBe('unvalued_book');
+      expect(decision.reasons).not.toContain(RISK_CRITIC_SKIPPED_REASON);
+      expect(asks).toHaveLength(0);
+    });
+
+    it('DOES pay once the same intent’s book is fully valued — the gate is what excluded it', async () => {
+      // The positive half, and the reason the case above is evidence of
+      // anything: the ONLY difference is the degraded snapshot. Without this,
+      // a critic that never fired at all would pass the check above.
+      const { critic, asks } = recordingCritic();
+
+      const decision = await step({ critic })({
+        trace_id: TRACE_ID,
+        intent: makeIntent(),
+        clock: CLOCK,
+      });
+
+      expect(decision.binding_constraint).not.toBe('unvalued_book');
+      expect(asks).toHaveLength(1);
     });
 
     it('never pays for an entry trimmed below the min-viable floor', async () => {
@@ -2554,6 +2640,8 @@ describe('#847: a dark mark must not suppress a newly decided flatten', () => {
       mode: 'paper' as const,
       breakerState: NOOP_BREAKER_STATE,
       portfolioSnapshots,
+      // Required-but-nullable since #957: no producer here, said out loud.
+      critic: undefined,
       config: TRADER_CONFIG,
       setupStore: new FixtureSetupStore(),
       getExitFillSizes: async () => new Map<string, number>(),

@@ -22,6 +22,10 @@ import type { DailyMetricsSample, FeedbackConfig } from '../../pipeline/feedback
 import { SqliteTuningStore } from '../../pipeline/feedback-loop/index.js';
 import type { VolatilityReading } from '../../pipeline/risk-manager/index.js';
 import {
+  RISK_CRITIC_SKIPPED_REASON,
+  SqliteRiskCriticStore,
+} from '../../pipeline/risk-manager/index.js';
+import {
   ADR_0018_SUBCLASS_BRACKETS,
   DEFAULT_TRADER_CONFIG,
   SqliteSetupStore,
@@ -4076,5 +4080,109 @@ describe('buildProductionOrchestrator', () => {
     const rows = orchestrator.persistence.auditLog.getByTraceId('trace-audit');
     expect(rows.map((row) => row.stage)).toEqual(['analysts', 'position_check']);
     expect(orchestrator.persistence.currentTickStore.get('BTC-USD')).toBeUndefined();
+  });
+});
+
+/**
+ * #957 — the risk critic, wired by the composition root, in `backtest` mode.
+ *
+ * `risk-manager-spec.md` ("Risk Critic", Testing Decisions) asks for this
+ * assertion at exactly this altitude: *"backtest mode reads the logged
+ * `debate_id`-keyed verdict, never calls the LLM (assert no network/LLM-client
+ * call in a mock-clock backtest run)"*. `critic.test.ts` proves
+ * `buildRiskCriticProducer` honours the mode branch; it CANNOT prove
+ * `production.ts` passes the run's own mode rather than, say, a hard-coded
+ * `'paper'` — which would hand a replayed path a live client and silently void
+ * Stage 2's PBO/DSR statistics with every unit test still green.
+ *
+ * So: the REAL `buildProductionComponents`, a `SimulatedClock`, an `llmClient`
+ * whose `complete` is a spy, and a verdict pre-written to `risk_critic_log`.
+ * The replayed verdict BINDING the decision is what makes the no-call
+ * assertion non-vacuous — a critic that was never consulted at all would
+ * satisfy "made no call" just as well.
+ */
+describe('risk critic in backtest mode is replay-only at the composition root (#957)', () => {
+  let db: SqliteHandle;
+
+  beforeEach(() => {
+    db = openSharedStore(':memory:');
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it('replays the logged verdict, binds the decision on it, and reaches neither the client nor the network', async () => {
+    const clock = new SimulatedClock(START);
+    const complete = vi.fn();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+    const intent = goVerdict().order as OrderIntent;
+    // History the critic has already seen, keyed the way replay keys it.
+    new SqliteRiskCriticStore(db).writeVerdict({
+      debate_id: intent.metadata.debate_id,
+      verdict: {
+        verdict: 'reject',
+        max_notional: null,
+        reasoning: 'logged by the live run this backtest is replaying',
+      },
+      created_at: START,
+    });
+
+    const config = stubConfig(db, {
+      ...REAL_CONFIGS,
+      mode: 'backtest',
+      clock,
+      llmClient: { complete } as unknown as NonNullable<ProductionConfig['llmClient']>,
+    });
+    const { steps } = buildProductionComponents(config);
+
+    const decision = await steps.risk({ trace_id: 'trace-957-backtest', intent, clock });
+
+    // The logged verdict reached `evaluate()`, so step 7 genuinely ran.
+    expect(decision.status).toBe('rejected');
+    expect(decision.binding_constraint).toBe('risk_critic:reject');
+    expect(decision.reasons.join(' ')).toContain('logged by the live run');
+    // And it ran without dialling anything: no client call, no socket, and no
+    // billed row a replayed path has no business producing.
+    expect(complete).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(db.prepare('SELECT COUNT(*) AS n FROM llm_spend').get()).toEqual({ n: 0 });
+
+    fetchSpy.mockRestore();
+  });
+
+  it('replays UNSEEN history as no verdict rather than dialling — the mode branch, not the log hit', async () => {
+    // The case above alone cannot catch a `production.ts` that passed a
+    // hard-coded `'paper'`: the live producer reuses a logged verdict for the
+    // same `debate_id` before it dials, so it would make no call either. This
+    // one has NO row, which is every bar of a fresh backtest — the live
+    // producer would call the model here, and the replay producer must not.
+    const clock = new SimulatedClock(START);
+    const complete = vi.fn();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+    const config = stubConfig(db, {
+      ...REAL_CONFIGS,
+      mode: 'backtest',
+      clock,
+      llmClient: { complete } as unknown as NonNullable<ProductionConfig['llmClient']>,
+    });
+    const { steps } = buildProductionComponents(config);
+
+    const decision = await steps.risk({
+      trace_id: 'trace-957-backtest-unseen',
+      intent: goVerdict().order as OrderIntent,
+      clock,
+    });
+
+    expect(decision.reasons).toContain(RISK_CRITIC_SKIPPED_REASON);
+    expect(complete).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(db.prepare('SELECT COUNT(*) AS n FROM llm_spend').get()).toEqual({ n: 0 });
+    // Nothing was invented for the log either — a replay writes no row.
+    expect(db.prepare('SELECT COUNT(*) AS n FROM risk_critic_log').get()).toEqual({ n: 0 });
+
+    fetchSpy.mockRestore();
   });
 });

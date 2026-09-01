@@ -911,13 +911,21 @@ export interface RiskStepDeps extends BreakerStateDeps {
   /**
    * #957: check-pipeline step 7's producer (`risk-manager/critic.ts`).
    *
-   * Optional, and absence is a real, safe state rather than a gap: without it
+   * `undefined` is a real, safe state rather than a gap: without a producer
    * every decision keeps the explicit `risk_critic: skipped` reason it has
    * carried since the step was specced, and the mechanical steps remain the
-   * safety net. Same optionality rationale as `riskLog`/`thresholds` — a test
-   * or a programmatic root stays offline, the production path supplies it.
+   * safety net. A test or a programmatic root stays offline that way.
+   *
+   * REQUIRED but nullable, unlike `riskLog`/`thresholds`, and the asymmetry is
+   * the point — the same argument `evaluateSmokeGate`'s
+   * `llmRateLimiterSnapshot` makes (smoke-run.ts). Optional, deleting the one
+   * `critic:` line in `production.ts` would compile, pass every test, and
+   * silently return step 7 to the never-run state review F-5 recorded. Passing
+   * `undefined` has to be a written choice at the call site, so forgetting it
+   * is a COMPILE error rather than a quietly disarmed model check in front of
+   * live money.
    */
-  critic?: RiskCriticProducer;
+  critic: RiskCriticProducer | undefined;
 }
 
 /**

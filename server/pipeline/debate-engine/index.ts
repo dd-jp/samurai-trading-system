@@ -61,9 +61,18 @@ export {
   LlmRateLimitError,
   LlmTimeoutError,
 } from './llm/errors.js';
+// The prompt-plumbing three, on the barrel since #957 because the risk critic
+// (`risk-manager/critic.ts`) is the first consumer OUTSIDE this module: it
+// answers in JSON and shows a model book context, so it needs the same
+// bare-JSON instruction, the same fence-tolerant unwrap, and the same
+// untrusted-data wrapper the debate's own prompts use. Sharing them is the
+// point — a second copy of any of the three would drift from the one the
+// personas are tested against.
+export { BARE_JSON_INSTRUCTION, unwrapFencedJson } from './llm/json-response.js';
 export { MockLlmClient } from './llm/mock-client.js';
 export type { NousMessagesClientOptions } from './llm/nous-messages-client.js';
 export { NousMessagesClient } from './llm/nous-messages-client.js';
+export { wrapUntrusted } from './llm/prompt-safety.js';
 export type { SpendCap, SpendCapVerdict } from './llm/spend-cap.js';
 export { SqliteSpendCap, UNCAPPED_SPEND } from './llm/spend-cap.js';
 export type { LlmSpendRecord, LlmSpendSink } from './llm/spend-sink.js';

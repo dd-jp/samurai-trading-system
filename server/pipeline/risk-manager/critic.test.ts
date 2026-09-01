@@ -20,11 +20,11 @@ import { openSharedStore, type SharedStore } from '../../shared/store/index.js';
 import type {
   AnthropicMessageRequest,
   AnthropicMessagesClient,
-} from '../debate-engine/llm/anthropic-client.js';
-import { AnthropicLlmClient } from '../debate-engine/llm/anthropic-client.js';
-import { UNCAPPED_SPEND } from '../debate-engine/llm/spend-cap.js';
-import { SqliteLlmSpendStore } from '../debate-engine/llm/spend-sink.js';
-import type { LlmClient, LlmRequest, LlmResponse } from '../debate-engine/llm/types.js';
+  LlmClient,
+  LlmRequest,
+  LlmResponse,
+} from '../debate-engine/index.js';
+import { AnthropicLlmClient, SqliteLlmSpendStore, UNCAPPED_SPEND } from '../debate-engine/index.js';
 import type { RiskCriticRequest } from './critic.js';
 import {
   buildRiskCriticProducer,
@@ -58,16 +58,20 @@ function makeIntent(overrides: Partial<OrderIntent> = {}): OrderIntent {
       debate_id: DEBATE_ID,
       conviction: 0.8,
       converged: true,
+      // The REAL `OrderIntentMetadata['sizing']` shape. The builder used to
+      // end in `as OrderIntent`, and the cast was hiding a `vol_floor_applied`
+      // field that has never existed on it (`shared/types/records.ts`).
       sizing: {
+        base_risk_fraction: 0.01,
         conviction_multiplier: 1,
+        vol_floor_factor: 1,
         non_converged_haircut: 1,
         cosine_multiplier: 1,
-        vol_floor_applied: false,
       },
-      cosine_precedent: { no_precedent: true, nearest_ids: [] },
+      cosine_precedent: { neighbor_count: 0, weighted_mean_r: null, no_precedent: true },
     },
     ...overrides,
-  } as OrderIntent;
+  };
 }
 
 function makeRequest(overrides: Partial<RiskCriticRequest> = {}): RiskCriticRequest {
@@ -312,8 +316,19 @@ describe('LlmRiskCriticProducer (live/paper)', () => {
     expect(store.getByDebateId(DEBATE_ID)?.verdict.verdict).toBe('unavailable');
   });
 
-  it('still returns a verdict when persistence fails — the decision must not depend on the log', async () => {
-    const { client } = fakeLlm(PASS_JSON);
+  it('DISCARDS a real verdict it could not persist, rather than acting on one no replay can see', async () => {
+    // The determinism half of ADR-0003 §2, and the one case where "the
+    // decision must not depend on the log" is wrong: an un-persisted verdict
+    // has no row for its `debate_id`, so a backtest replaying this decision
+    // reaches it WITHOUT the verdict. Acting on it live would make the live
+    // trade unreproducible by construction — and only for the trades taken
+    // while the store was down, which is the worst possible sample to have
+    // silently diverge. Fail open instead: same `undefined` as any other
+    // producer failure, same `risk_critic: skipped` reason, live and replay
+    // agreeing on what step 7 saw.
+    const { client } = fakeLlm(
+      JSON.stringify({ verdict: 'trim', max_notional: 250, reasoning: 'crowded catalyst' }),
+    );
     const { logger, entries } = collectingLogger();
 
     const verdict = await new LlmRiskCriticProducer({
@@ -328,8 +343,10 @@ describe('LlmRiskCriticProducer (live/paper)', () => {
       logger,
     }).produce(makeRequest());
 
-    expect(verdict?.verdict).toBe('pass');
+    expect(verdict).toBeUndefined();
     expect(entries.some((entry) => entry.message.includes('could not be persisted'))).toBe(true);
+    // A store failure is not a tick failure: the producer still returns.
+    expect(entries.some((entry) => entry.level === 'warn')).toBe(true);
   });
 });
 

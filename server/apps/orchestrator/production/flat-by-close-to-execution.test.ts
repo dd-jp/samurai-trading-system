@@ -199,6 +199,8 @@ async function driveFlatten(venue: Venue) {
     mode: 'paper' as const,
     breakerState: { save: () => {} },
     portfolioSnapshots: new Map(),
+    // Required-but-nullable since #957: this harness runs step 7 producerless.
+    critic: undefined,
   };
 
   const { exitCheck } = buildTraderSteps({

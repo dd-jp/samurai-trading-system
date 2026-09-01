@@ -54,21 +54,30 @@
  * ## Failure posture: fail-open, by record
  *
  * Every failure — a spend-cap refusal, a provider error, a timeout, an
- * unreadable answer — yields `undefined`, which leaves `evaluate()` on its
+ * unreadable answer, or a PERSISTENCE failure after a real answer — yields
+ * `undefined`, which leaves `evaluate()` on its
  * existing `critic === undefined` path and its explicit
  * `risk_critic: skipped` reason (`index.ts`). The mechanical steps remain the
- * safety net (ADR-0003 Consequences; #640's fail-open precedent). A row IS
- * still written, with `verdict: 'unavailable'`, so the failure is auditable
- * and so a later backtest replays the same "no verdict" input the live run
- * had — `unavailable` maps back to `undefined` on the way out, in both
- * producers, for exactly that reason.
+ * safety net (ADR-0003 Consequences; #640's fail-open precedent). Where the
+ * log is reachable a row IS still written, with `verdict: 'unavailable'`, so
+ * the failure is auditable and so a later backtest replays the same "no
+ * verdict" input the live run had — `unavailable` maps back to `undefined` on
+ * the way out, in both producers, for exactly that reason.
+ *
+ * The persistence case is the one that reads as a special case and is not.
+ * An un-persisted verdict has NO row for its `debate_id`, so the backtest that
+ * replays this decision sees "no verdict" no matter what the live run did with
+ * it. Acting on it live would therefore make the live decision unreproducible
+ * by construction — the same-code-path-live-and-replay invariant ADR-0003 §2
+ * and `docs/specs/risk-manager-spec.md` state, broken silently and only for
+ * the trades taken while the store was down. So a write failure degrades to
+ * the same fail-open `undefined` as any other producer failure: the decision
+ * runs on the mechanical steps, and live and replay agree on what step 7 saw.
  */
 
 import type { Logger, OrderIntent } from '../../shared/index.js';
-import { BARE_JSON_INSTRUCTION, unwrapFencedJson } from '../debate-engine/llm/json-response.js';
-import { wrapUntrusted } from '../debate-engine/llm/prompt-safety.js';
-import type { SpendCap } from '../debate-engine/llm/spend-cap.js';
-import type { LlmClient } from '../debate-engine/llm/types.js';
+import type { LlmClient, SpendCap } from '../debate-engine/index.js';
+import { BARE_JSON_INSTRUCTION, unwrapFencedJson, wrapUntrusted } from '../debate-engine/index.js';
 import type { RiskCriticStore, RiskCriticVerdict } from './types.js';
 
 /**
@@ -366,23 +375,35 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
         created_at: request.asOf,
       });
     } catch (error) {
-      // Same posture as `SqliteLlmSpendStore.record`: a persistence failure is
-      // bookkeeping attached to a decision the tick is waiting on, and must
-      // not turn a produced verdict into a thrown error. The cost is that this
-      // decision will not replay identically, which is worth a `warn`.
+      // Never a throw — like `SqliteLlmSpendStore.record`, this is bookkeeping
+      // attached to a decision the tick is waiting on, and a store failure
+      // must not take the risk stage down.
+      //
+      // But it is not merely logged either: the verdict is DROPPED, and the
+      // decision proceeds on the mechanical steps with `risk_critic: skipped`.
+      // A verdict with no row cannot be replayed — a backtest reading this
+      // `debate_id` finds nothing and reaches its decision without it — so
+      // acting on it live would put the live run on a code path replay can
+      // never reproduce, which is exactly what ADR-0003 §2's
+      // same-code-path-live-and-replay invariant forbids. Fail-open costs one
+      // narrative check while the store is down; the alternative silently
+      // invalidates every trade taken in that window against its own backtest.
       this.#logger?.log({
         trace_id: request.trace_id,
         stage: 'risk',
         level: 'warn',
         message:
-          'risk critic verdict could not be persisted — the decision is unaffected, but a ' +
-          'backtest will replay this intent with no verdict',
+          'risk critic verdict could not be persisted; it is DISCARDED and the decision ' +
+          'proceeds on the mechanical steps with risk_critic: skipped, so live and replay ' +
+          'see the same input',
         payload: {
           instrument: request.intent.instrument,
           debate_id: request.intent.metadata.debate_id,
+          verdict: verdict.verdict,
           error: describeThrown(error),
         },
       });
+      return undefined;
     }
     return toDecisionInput(verdict);
   }

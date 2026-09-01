@@ -30,6 +30,7 @@ import {
   FixedAccountStateProvider,
   formatSmokeReport,
   type LoggerResilienceEvidence,
+  type RiskCriticEvidence,
   runSmoke,
   SMOKE_LLM_RESPONSE,
   SMOKE_RUN_INSTANT,
@@ -231,6 +232,7 @@ function healthyGateOptions(
     entrypointFaultGuards?: EntrypointFaultGuardEvidence;
     thresholdClamp?: ThresholdClampEvidence;
     dataFailover?: DataFailoverEvidence;
+    riskCritic?: RiskCriticEvidence;
   } = {},
 ) {
   return {
@@ -242,7 +244,21 @@ function healthyGateOptions(
     entrypointFaultGuards: overrides.entrypointFaultGuards ?? healthyEntrypointFaultGuards(),
     thresholdClamp: overrides.thresholdClamp ?? healthyThresholdClamp(),
     dataFailover: overrides.dataFailover ?? healthyDataFailover(),
+    riskCritic: overrides.riskCritic ?? healthyRiskCritic(),
   };
+}
+
+/**
+ * What `runRiskCriticScenario` (#957) reports when the composition root wires
+ * check-pipeline step 7's producer.
+ *
+ * `unavailable` rather than a real verdict, matching what the scenario
+ * actually records: `ConstantResponseLlmClient` answers with the debate's
+ * fixture payload, which the critic's parser refuses, so the producer fails
+ * open and persists the failure. The row is the evidence, not its content.
+ */
+function healthyRiskCritic(overrides: Partial<RiskCriticEvidence> = {}): RiskCriticEvidence {
+  return { loggedVerdicts: ['unavailable'], stepError: null, ...overrides };
 }
 
 /** What `runDataFailoverScenario` (#562) reports when the root builds a FailoverDataSource. */
@@ -1722,6 +1738,39 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
       const gate = evaluateSmokeGate(transactedObservations(), healthyGateOptions());
 
       expect(gate.failures.filter((failure) => failure.includes('#562'))).toEqual([]);
+    });
+  });
+
+  describe('the risk critic (#957)', () => {
+    it('fails when no risk_critic_log row was written for a viable entry', () => {
+      // The mutation this check exists to catch, verified by hand: delete the
+      // `critic:` line from `buildProductionComponents` and `yarn smoke` goes
+      // red here, while every unit test stays green.
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({ riskCritic: healthyRiskCritic({ loggedVerdicts: [] }) }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('no risk_critic_log row was written');
+    });
+
+    it('fails when consulting the critic threw instead of failing open', () => {
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({
+          riskCritic: healthyRiskCritic({ stepError: 'nous 503', loggedVerdicts: [] }),
+        }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('threw while consulting the critic');
+    });
+
+    it('passes when the root wired the producer and it recorded its verdict', () => {
+      const gate = evaluateSmokeGate(transactedObservations(), healthyGateOptions());
+
+      expect(gate.failures.filter((failure) => failure.includes('#957'))).toEqual([]);
     });
   });
 });
