@@ -126,6 +126,11 @@ describe('SqliteArmComparisonSampleStore', () => {
    */
   describe('the divergence invariant is a schema constraint', () => {
     function insertDivergence(diverged: number, reason: string | null): () => void {
+      // A FRESH store per call, deliberately: every insert below uses the same
+      // `computed_at`, which is the table's primary key. Hoisting this open()
+      // out of the helper would make the second insert in `accepts both honest
+      // pairs` fail on the PK instead of exercising the `CHECK` — a green test
+      // asserting the wrong constraint.
       const db = openSharedStore(':memory:');
       return () =>
         db
