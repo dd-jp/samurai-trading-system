@@ -1330,7 +1330,16 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       resolveBook: buildControlBookAnchorResolver({
         liveAccountState: breakerStateDeps.accountState,
         store: new SqliteAccountStateStore(config.db, CONTROL_BOOK_ANCHOR_KEY),
-        fallbackBook: config.riskConfig.live_book_ceiling?.book ?? LIVE_BOOK_GBP,
+        // Gated on `same_currency_verified` exactly like the primary live-read
+        // clamp below — an unverified ceiling must not cap one path and leave
+        // the other uncapped, or #972 fix 3 reopens itself in that one state.
+        fallbackBook:
+          config.riskConfig.live_book_ceiling?.same_currency_verified === true
+            ? config.riskConfig.live_book_ceiling.book
+            : LIVE_BOOK_GBP,
+        // #972 fix 3 — the same ceiling the fallback above resolves through,
+        // applied to the primary live-read anchor path too.
+        liveBookCeiling: config.riskConfig.live_book_ceiling,
       }),
       // `arm: 'control'` — the one caller that asks this store for the other
       // arm. Handing it the default would restore the coupling exactly.

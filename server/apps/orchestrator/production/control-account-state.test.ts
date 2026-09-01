@@ -189,8 +189,10 @@ describe('ControlArmAccountStateProvider (#753)', () => {
 
       // book + realized (100 − 40) − deployed (25 × 4)
       expect(state.cash).toBeCloseTo(BOOK + 60 - 100, 9);
-      // The realized high-water mark: book + 100 was reached before the loss.
-      expect(state.peak_equity).toBe(BOOK + 60);
+      // The realized high-water mark: book + 100 was reached before the loss,
+      // and the loss gives cash back without giving the PEAK back to a level
+      // the net final balance alone would understate.
+      expect(state.peak_equity).toBe(BOOK + 100);
       expect(state.consecutive_losses).toBe(1);
 
       const crypto = state.daily_basis.crypto;
@@ -369,6 +371,55 @@ describe('the control arm’s book anchor (#753)', () => {
       cleanup();
     }
   });
+
+  /**
+   * #972 fix 1 — `peak_equity` has to survive a restart, not just retention
+   * within one running process.
+   *
+   * The test above ("holds the realized high-water mark…") only proves that a
+   * SINGLE `ControlArmAccountStateProvider` instance remembers a peak it
+   * itself observed mid-process. It says nothing about what a FRESH instance
+   * — the shape every process restart actually produces — reports when it
+   * cold-reads the same trade history. The doc comment on `#peakEquity`
+   * claims the peak is "re-derivable from the trade record on the next tick
+   * after a restart (max of the cumulative realized curve)"; the
+   * implementation this test targets does not do that walk, so a fresh
+   * instance under-reports the peak whenever the account gave back some of
+   * its high after the process that saw the high goes away.
+   */
+  it('reconstructs the true high-water mark from the trade record after a restart', async () => {
+    const { db, cleanup } = openStore();
+    try {
+      // Control runs +250 then -300 (net -50) while some process is up.
+      insertClosedTrade(db, {
+        key: 'control-up',
+        assetClass: 'crypto',
+        pnl: 250,
+        closedAt: BEFORE_THE_SESSION,
+        arm: 'control',
+      });
+      insertClosedTrade(db, {
+        key: 'control-down',
+        assetClass: 'crypto',
+        pnl: -300,
+        closedAt: IN_THE_SESSION,
+        arm: 'control',
+      });
+
+      // A restart: a FRESH provider instance, never having seen the +250 tick
+      // itself, reading the SAME store.
+      const restarted = makeProvider(db, async () => BOOK);
+      const state = await restarted.getAccountState(AS_OF);
+
+      // The true peak was reached after the +250 close, before the -300 loss —
+      // NOT the anchor (BOOK) and NOT the net (BOOK - 50), either of which a
+      // running-sum-reset-to-the-anchor implementation would report instead.
+      expect(state.peak_equity).toBe(BOOK + 250);
+      expect(state.cash).toBe(BOOK - 50);
+    } finally {
+      cleanup();
+    }
+  });
 });
 
 /**
@@ -466,5 +517,133 @@ describe('buildControlBookAnchorResolver (#753)', () => {
     } finally {
       cleanup();
     }
+  });
+
+  /**
+   * #972 fix 2 — the declared-book fallback must NOT persist on a transient
+   * failure.
+   *
+   * `store.anchorEquity` is first-write-wins (`ON CONFLICT(key) DO NOTHING`).
+   * The test above proves the fallback is RETURNED on a failing read, but not
+   * that it stays unwritten — and writing it would permanently pin the
+   * control's book at the declared £1,000 against the live arm's real
+   * ~100,000-scale account (the exact `rounds_to_zero_shares` inertness the
+   * anchor mechanism exists to solve), recoverable only by hand-deleting the
+   * DB row. A single bad tick must not be able to do that.
+   */
+  it('does not persist the fallback on a transient failure, and anchors for real once the read succeeds', async () => {
+    const { db, cleanup } = openStore();
+    try {
+      let shouldFail = true;
+      const resolve = buildControlBookAnchorResolver({
+        liveAccountState: {
+          getAccountState: async () => {
+            if (shouldFail) throw new Error('venue down');
+            return accountReturning(250_000).getAccountState();
+          },
+        },
+        store: new SqliteAccountStateStore(db, CONTROL_BOOK_ANCHOR_KEY),
+        fallbackBook: BOOK,
+      });
+      const anchorRow = new SqliteAccountStateStore(db, CONTROL_BOOK_ANCHOR_KEY);
+
+      // Tick 1: the live read throws. The fallback is used for THIS tick only.
+      expect(await resolve(AS_OF)).toBe(BOOK);
+      expect(anchorRow.peakEquity()).toBeNull();
+
+      // Tick 2: the live read succeeds. The anchor is persisted at the real
+      // live value — first-write-wins now has something real to win with.
+      shouldFail = false;
+      expect(await resolve(AS_OF)).toBe(250_000);
+      expect(anchorRow.peakEquity()).toBe(250_000);
+
+      // Tick 3: reads the persisted real anchor, not the fallback — even
+      // though the live account happens to be unreadable again.
+      shouldFail = true;
+      expect(await resolve(AS_OF)).toBe(250_000);
+    } finally {
+      cleanup();
+    }
+  });
+
+  /**
+   * The same non-persistence hazard as a throw (#972 fix 2), but for a
+   * successful read that comes back unusable — zero, negative, or
+   * non-finite. Persisting a nonsense observation would pin the anchor at
+   * that value forever via `store.anchorEquity`'s first-write-wins upsert,
+   * same as persisting the fallback would. Not asked for by #972's text,
+   * but the same hazard the fix targets, so it gets the same treatment.
+   */
+  it('does not persist a successful-but-unusable read (zero equity), and falls back for that tick', async () => {
+    const { db, cleanup } = openStore();
+    try {
+      const resolve = buildControlBookAnchorResolver({
+        liveAccountState: accountReturning(0, 0),
+        store: new SqliteAccountStateStore(db, CONTROL_BOOK_ANCHOR_KEY),
+        fallbackBook: BOOK,
+      });
+      const anchorRow = new SqliteAccountStateStore(db, CONTROL_BOOK_ANCHOR_KEY);
+
+      expect(await resolve(AS_OF)).toBe(BOOK);
+      expect(anchorRow.peakEquity()).toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
+  /**
+   * #972 fix 3 — the primary (live-read) anchor path ignores `live_book_ceiling`
+   * while the fallback path already resolves through it (`fallbackBook` in
+   * `production.ts` is `config.riskConfig.live_book_ceiling?.book ??
+   * LIVE_BOOK_GBP`). If the ceiling is meant to clamp the sizing basis, the
+   * anchor and the live arm's own sizing basis must not be able to diverge.
+   */
+  describe('live_book_ceiling clamp (#972)', () => {
+    it('clamps a live-observed anchor to the ceiling when the observation exceeds it', async () => {
+      const { db, cleanup } = openStore();
+      try {
+        const resolve = buildControlBookAnchorResolver({
+          liveAccountState: accountReturning(5_000, 5_000),
+          store: new SqliteAccountStateStore(db, CONTROL_BOOK_ANCHOR_KEY),
+          fallbackBook: BOOK,
+          liveBookCeiling: {
+            book: BOOK,
+            refuse_above_tolerance: 0.1,
+            same_currency_verified: true,
+          },
+        });
+
+        expect(await resolve(AS_OF)).toBe(BOOK);
+        expect(new SqliteAccountStateStore(db, CONTROL_BOOK_ANCHOR_KEY).peakEquity()).toBe(BOOK);
+      } finally {
+        cleanup();
+      }
+    });
+
+    /**
+     * The divergence from `liveBookCeiling` (risk-manager/index.ts), which
+     * THROWS a `currency_mismatch` refusal when `same_currency_verified` is
+     * unset. This resolver cannot do the same: it runs on the control arm's
+     * decision path for exits as well as entries, and it has none of the
+     * `ENTRY_CAP_GATES`-array structural guarantee that only entries reach it
+     * — a throw here would be the "guard above an early return blocks exits"
+     * defect class in a new file. So an unverified ceiling is left unapplied
+     * (the pre-#972 behaviour) rather than refused outright.
+     */
+    it('leaves the anchor uncapped when the ceiling is not currency-verified', async () => {
+      const { db, cleanup } = openStore();
+      try {
+        const resolve = buildControlBookAnchorResolver({
+          liveAccountState: accountReturning(5_000, 5_000),
+          store: new SqliteAccountStateStore(db, CONTROL_BOOK_ANCHOR_KEY),
+          fallbackBook: BOOK,
+          liveBookCeiling: { book: BOOK, refuse_above_tolerance: 0.1 },
+        });
+
+        expect(await resolve(AS_OF)).toBe(5_000);
+      } finally {
+        cleanup();
+      }
+    });
   });
 });
