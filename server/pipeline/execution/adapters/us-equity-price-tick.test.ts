@@ -1,5 +1,3 @@
-import { describe, expect, it } from 'vitest';
-
 import {
   formatTickPrice,
   roundBracketToTick,
@@ -109,13 +107,27 @@ describe('roundBracketToTick', () => {
     expect(entry).toBeLessThan(target);
   });
 
+  it('resolves the tick per LEG, so a bracket straddling a dollar uses both grids', () => {
+    // The reason `tickFor` is called per price rather than once per order: a
+    // long entered just above a dollar has its stop on the finer grid and its
+    // target on the coarser one, in the SAME bracket.
+    expect(roundBracketToTick('buy', 1.004567, 0.98765432, 1.114567)).toEqual({
+      // >= $1: penny grid, rounded down for a long entry.
+      entry: 1,
+      // < $1: hundredth-of-a-penny grid, rounded up (toward the entry).
+      stop: 0.9877,
+      // >= $1 again: penny grid, rounded down.
+      target: 1.11,
+    });
+  });
+
   it('refuses a bracket that rounding collapses rather than submitting it inverted', () => {
     // Sub-tick wide: every leg lands on 100.00.
     expect(() => roundBracketToTick('buy', 100.001, 99.9995, 100.002)).toThrow(
-      /collapsed its ordering/,
+      /collapsed the bracket/,
     );
     expect(() => roundBracketToTick('sell', 100.001, 100.002, 99.9995)).toThrow(
-      /collapsed its ordering/,
+      /collapsed the bracket/,
     );
   });
 
@@ -145,7 +157,7 @@ describe('roundProtectiveLegsToTick', () => {
 
   it('refuses legs that rounding collapses', () => {
     expect(() => roundProtectiveLegsToTick('buy', 100.0006, 100.0004)).toThrow(
-      /collapsed their ordering/,
+      /collapsed the bracket/,
     );
   });
 });
