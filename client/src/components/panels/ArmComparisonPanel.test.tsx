@@ -9,6 +9,11 @@
 
 import type { ArmPerformanceWire } from '@contracts';
 import { render, screen, within } from '@testing-library/react';
+// Explicit, unlike the server suite: `client/tsconfig.test.json` extends
+// `client/tsconfig.json`, whose `types` is `["vite/client"]` — `vitest/globals`
+// is on the ROOT `tsconfig.test.json` only, so under `yarn typecheck` these
+// names are unresolvable in a `client/` test without this import. Same as
+// `PositionsPanel.test.tsx` and `ClosedTradesPanel.test.tsx`.
 import { describe, expect, it } from 'vitest';
 import { makeArmComparison } from '../../test-fixtures.ts';
 import { ArmComparisonPanel } from './ArmComparisonPanel.tsx';
@@ -79,6 +84,21 @@ describe('ArmComparisonPanel', () => {
 
     const panel = screen.getByRole('region', { name: 'Arm comparison' });
     expect(within(panel).getByText(/DIVERGED: the control arm is ahead by 1\.20%/)).toBeTruthy();
+  });
+
+  /**
+   * `diverged: false` covers "tested, did not dominate" AND "below the
+   * closed-trade floor, never tested" — and the wire does not carry the floor,
+   * so the panel cannot tell them apart (#982). It must therefore state the
+   * rule rather than assert the stronger claim, which is false in the second
+   * case.
+   */
+  it('does not claim the control failed to dominate when it may never have been tested', () => {
+    render(<ArmComparisonPanel comparisons={[makeArmComparison({ diverged: false })]} />);
+
+    const panel = screen.getByRole('region', { name: 'Arm comparison' });
+    expect(within(panel).getByText(/clear its closed-trade floor/)).toBeTruthy();
+    expect(within(panel).queryByText(/is not ahead of the live arm/)).toBeNull();
   });
 
   /** Zeros would read as "both arms flat"; the honest empty state says nothing was computed. */

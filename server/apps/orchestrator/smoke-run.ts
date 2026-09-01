@@ -4054,8 +4054,13 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // rest of this attended, offline run. The Feedback Loop's daily timer is
       // 24h and this run lasts seconds, so this slot is never reached from the
       // orchestrator here; the enforcement that the comparison has a caller at
-      // all is `probeArmComparisonSurface` below, which drives the real
-      // `runArmComparisonCycle` over the tape this run just produced.
+      // all is `runArmComparisonProbe`, run after `orchestrator.stop()` below,
+      // which drives the real `runArmComparisonCycle` over the tape this run
+      // just produced. That the composition root RESOLVES this slot at all is
+      // held by `satisfies Required<AlertChannels>` on this object plus
+      // `production.test.ts`'s "arm comparison runs on the daily feedback
+      // cycle" pair, which drive `buildProductionOrchestrator`'s own timer
+      // under fake timers — the one thing a seconds-long smoke run cannot.
       armDivergenceAlerts: new LoggingArmDivergenceAlertChannel(logger),
     } satisfies Required<AlertChannels>;
 

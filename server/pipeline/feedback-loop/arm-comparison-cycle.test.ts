@@ -1,4 +1,3 @@
-import { describe, expect, it } from 'vitest';
 import type { ArmedClosedTrade } from '../control-arm/index.js';
 import {
   ARM_DIVERGENCE_RETURN_GAP_PCT,

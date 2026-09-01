@@ -20,6 +20,19 @@
  * says so. Rendering zeros instead would read as "both arms flat, no
  * divergence" — a claim about the book rather than about the measurement.
  *
+ * ## The non-diverged line says LESS than it could, on purpose
+ *
+ * `evaluateArmDivergence` returns `diverged: false` for two different reasons:
+ * dominance was tested and not found, and — below its per-arm closed-trade floor
+ * — dominance was never tested at all. The wire carries `diverged` and both
+ * trade counts, but NOT the floor those counts are compared against, so this
+ * panel genuinely cannot tell the two apart. It therefore refuses to claim "the
+ * control is not ahead on both columns", which is false in the second case, and
+ * says instead that a verdict is issued only above a floor. Surfacing the floor
+ * on the wire so the panel can name which state it is in is the follow-up
+ * ([#982](https://github.com/dd-jp/samurai-trading-system/issues/982)); until
+ * then the honest move is to state the rule rather than fake the inference.
+ *
  * ## The asymmetry is on the panel, not only in the spec
  *
  * The control arm has no debate rounds, so it is always treated as converged.
@@ -91,8 +104,9 @@ export function ArmComparisonPanel({ comparisons }: ArmComparisonPanelProps) {
             <p className="arm-divergence">DIVERGED: {latest.divergence_reason}.</p>
           ) : (
             <p className="arm-divergence arm-ok">
-              No divergence: the control is not ahead of the live arm on both return and drawdown
-              together.
+              No divergence alert this cycle. The Feedback Loop issues a verdict only once both arms
+              clear its closed-trade floor; below that floor this is an absent verdict, not a
+              passing one.
             </p>
           )}
           {comparisons.length > 1 ? (

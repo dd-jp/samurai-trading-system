@@ -205,6 +205,8 @@ A grid of equal-citizen panels, none of which is a hero:
 
 **Divergence is shown, not just alerted.** When the Feedback Loop's most recent sample crossed the divergence line, the panel says so and carries the same reason sentence the trade-channel alert carried, so the page and the alert never disagree.
 
+**A non-divergence must not be rendered as a passing result.** `diverged: false` covers two states: dominance was tested and not found, and — below FL's per-arm closed-trade floor — dominance was never tested at all. The wire carries `diverged` and both trade counts but **not the floor**, so the panel cannot currently distinguish them; it therefore states the rule ("a verdict is issued only once both arms clear the floor") rather than asserting the stronger claim, which would be false in the second state. Surfacing the floor so the panel can name which state it is in is [#982](https://github.com/dd-jp/samurai-trading-system/issues/982).
+
 **The convergence asymmetry is stated on the panel.** The control arm always trades; the live arm can decline to when the debate does not converge. A trade-count gap therefore has an innocent explanation, and the panel says so rather than leaving the reader to infer a performance story from a participation difference.
 
 **Read-only, and computed elsewhere.** The panel projects `arm_comparison_samples` rows the Feedback Loop wrote (`feedback-loop-spec.md`, "The matched-control comparison"). `buildSnapshot` must not compute or re-derive the comparison: the page shows what FL measured and alerted on, or it shows nothing.

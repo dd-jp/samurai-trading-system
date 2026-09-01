@@ -57,10 +57,11 @@ function fromRow(row: ArmComparisonSampleRow): ArmComparisonSample {
     },
     divergence: {
       diverged: row.diverged === 1,
-      // The column is NULL exactly when `diverged = 0`; a row that says it
-      // diverged with no reason is corrupt, and reading it back as
-      // `diverged: true, reason: null` would put an unexplained escalation on
-      // the operator's panel. Normalized to the honest pair instead.
+      // `divergence_reason` is non-NULL if and only if `diverged = 1` — a table
+      // `CHECK` in migration 0034, not a convention this mapper upholds. The
+      // ternary is therefore not a guard and is not claimed to be one: it is
+      // the `string | null` narrowing the row type needs, and both of the pairs
+      // it could otherwise produce are unrepresentable in the table.
       reason: row.diverged === 1 ? row.divergence_reason : null,
     },
   };

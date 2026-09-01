@@ -116,4 +116,47 @@ describe('SqliteArmComparisonSampleStore', () => {
         ),
     ).toThrow(/NOT NULL/i);
   });
+
+  /**
+   * The `diverged`/`divergence_reason` invariant is enforced by migration
+   * 0034's table `CHECK`, not by caller discipline. Both directions are
+   * unrepresentable: an escalation with no sentence to show the operator, and a
+   * sentence claiming the control won attached to a verdict that says it did
+   * not.
+   */
+  describe('the divergence invariant is a schema constraint', () => {
+    function insertDivergence(diverged: number, reason: string | null): () => void {
+      const db = openSharedStore(':memory:');
+      return () =>
+        db
+          .prepare(
+            `INSERT INTO arm_comparison_samples (
+               computed_at, window_from, window_to, basis,
+               live_trade_count, live_realized_pnl_net, live_return_pct, live_max_drawdown_pct,
+               control_trade_count, control_realized_pnl_net, control_return_pct,
+               control_max_drawdown_pct, diverged, divergence_reason
+             ) VALUES (?, ?, ?, 1000, 1, 1, 0.001, 0.01, 1, 1, 0.001, 0.01, ?, ?)`,
+          )
+          .run(
+            COMPUTED_AT.toISOString(),
+            WINDOW_FROM.toISOString(),
+            COMPUTED_AT.toISOString(),
+            diverged,
+            reason,
+          );
+    }
+
+    it('rejects a divergence with no reason', () => {
+      expect(insertDivergence(1, null)).toThrow(/CHECK constraint/i);
+    });
+
+    it('rejects a reason on a non-divergence', () => {
+      expect(insertDivergence(0, 'the control arm is ahead')).toThrow(/CHECK constraint/i);
+    });
+
+    it('accepts both honest pairs', () => {
+      expect(insertDivergence(0, null)).not.toThrow();
+      expect(insertDivergence(1, 'the control arm is ahead')).not.toThrow();
+    });
+  });
 });

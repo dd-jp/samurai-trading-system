@@ -58,10 +58,29 @@ CREATE TABLE arm_comparison_samples (
   control_max_drawdown_pct REAL NOT NULL,
 
   -- Whether this cycle crossed the divergence line, and the operator-facing
-  -- sentence that was alerted. `divergence_reason` is NULL exactly when
-  -- `diverged = 0`, which the store asserts on read-back.
+  -- sentence that was alerted.
   diverged INTEGER NOT NULL CHECK(diverged IN (0, 1)),
-  divergence_reason TEXT
+  divergence_reason TEXT,
+
+  -- `divergence_reason` is non-NULL if and ONLY if `diverged = 1`, enforced
+  -- here rather than asserted by the readers.
+  --
+  -- The two halves fail differently and both matter. A row saying it diverged
+  -- with no reason would put an UNEXPLAINED escalation on the operator's panel
+  -- — the alert text and the panel line are the same sentence, so a missing
+  -- reason is a divergence nobody can act on. A row carrying a reason while
+  -- `diverged = 0` is the opposite lie: a sentence asserting the control won,
+  -- attached to a verdict that says it did not. Neither is representable now.
+  --
+  -- This is the schema layer of the same invariant `ArmDivergenceVerdict`
+  -- documents and `evaluateArmDivergence` constructs. It belongs here rather
+  -- than in the store's row mapper because the mapper only sees rows on the way
+  -- OUT: a hand-written INSERT, a repair script or a future second writer never
+  -- passes through it, and the table is the one place all of them meet.
+  CHECK (
+    (diverged = 0 AND divergence_reason IS NULL) OR
+    (diverged = 1 AND divergence_reason IS NOT NULL)
+  )
 );
 
 -- The panel's only read shape: the most recent N samples, newest first.
