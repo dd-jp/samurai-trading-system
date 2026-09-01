@@ -154,6 +154,7 @@ import {
   SqliteTuningStore,
   seedAnalystWeights,
 } from '../../pipeline/feedback-loop/index.js';
+import type { BenchmarkSeriesSource } from '../../pipeline/outside-benchmark/index.js';
 import { MarketDataBenchmarkSeriesSource } from '../../pipeline/outside-benchmark/index.js';
 import {
   buildRiskCriticProducer,
@@ -305,6 +306,7 @@ import {
 
 export {
   buildAlpacaDataSource,
+  buildBenchmarkDataSource,
   buildDefaultAlpacaBrokerClient,
   buildDefaultAlpacaDataClient,
   buildDefaultLlmClient,
@@ -317,6 +319,7 @@ export {
 
 import {
   buildAlpacaDataSource,
+  buildBenchmarkDataSource,
   buildDefaultAlpacaBrokerClient,
   buildDefaultLlmClient,
   DEFAULT_FEEDBACK_INTERVAL_MS,
@@ -395,6 +398,16 @@ export interface ProductionComponents {
    */
   tuning: TuningStore;
   marketData: MarketDataService;
+  /**
+   * The OUTSIDE BENCHMARKS' series reader (#981) — a separate port from
+   * `marketData` on purpose, because `marketData` is universe-derived and
+   * refuses `'SPY'` outright once the universe is LSE-only (#734/#751). See
+   * its construction below for the full argument. Exposed here so
+   * `buildProductionOrchestrator` binds the instance this function resolved
+   * rather than deriving a second one from `marketData` — that derivation was
+   * the defect.
+   */
+  benchmarkSeries: BenchmarkSeriesSource;
   broker: BrokerAdapter;
   analysts: AnalystOrchestrator;
   circuitBreakers: CircuitBreakers;
@@ -693,15 +706,56 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       logger,
       now: () => clock.now(),
     });
+  // `MarketDataServiceImpl`'s mode is live-vs-backtest only; `paper` reads
+  // the same live feed `live` does — paper differs at the broker, not at
+  // the data source.
+  const marketDataMode = config.mode === 'backtest' ? 'backtest' : 'live';
+  /**
+   * ONE store instance, shared by the pipeline's service and the benchmark
+   * service below (#981). Two instances over one `config.db` would be two
+   * writers to `market_data` for no gain — the store is keyed by instrument
+   * and the two services never read the same symbol.
+   */
+  const marketDataStore = new SqliteMarketDataStore(config.db);
   const marketData: MarketDataService = new MarketDataServiceImpl(
     dataSource,
     clock,
-    // `MarketDataServiceImpl`'s mode is live-vs-backtest only; `paper` reads
-    // the same live feed `live` does — paper differs at the broker, not at
-    // the data source.
-    config.mode === 'backtest' ? 'backtest' : 'live',
-    new SqliteMarketDataStore(config.db),
+    marketDataMode,
+    marketDataStore,
   );
+
+  /**
+   * The OUTSIDE BENCHMARKS' own market-data path (#981, under #636) —
+   * deliberately NOT `marketData` above.
+   *
+   * `marketData` is universe-derived: `buildAlpacaDataSource` returns
+   * `LseMarkDataSource` EXCLUSIVELY once the configured universe holds LSE
+   * tickers (#751's cutover), and that source refuses `'SPY'` on purpose —
+   * SPY is a `screening_instrument`, the US underlying a 3x LSE ETP tracks,
+   * and marking the wrapper off the underlying is inadmissible (#734). Reading
+   * the benchmarks through it would therefore park BOTH benchmarks (60/40 has
+   * a SPY leg too) in `unmeasured` forever on the day the live universe
+   * becomes LSE-only, with the panel reading "Absent, not zero" and nothing
+   * failing. #636 requires the outside benchmark to keep being computed on
+   * FL's own cadence regardless of what the live universe trades, so the
+   * series come from a source with no universe in its construction at all —
+   * see `buildBenchmarkDataSource`.
+   *
+   * `config.dataSource` is not consulted here for the same reason: it is the
+   * override for the LIVE path's source, and honouring it would re-couple the
+   * benchmarks to the universe through the back door. Tests and offline roots
+   * replace the whole port via `config.benchmarkSeriesSource` instead.
+   */
+  const benchmarkSeries: BenchmarkSeriesSource =
+    config.benchmarkSeriesSource ??
+    new MarketDataBenchmarkSeriesSource(
+      new MarketDataServiceImpl(
+        buildBenchmarkDataSource({ calendar: tradingCalendar, rateLimiter: alpacaBucket }),
+        clock,
+        marketDataMode,
+        marketDataStore,
+      ),
+    );
 
   // `MarketIntelligenceStore` starts empty and, as of #464, has a writer: the
   // Grok agent below ingests into THIS instance. Constructed here rather than
@@ -1458,6 +1512,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     armDivergenceAlerts,
     tuning: tuningStore,
     marketData,
+    benchmarkSeries,
     broker,
     analysts,
     circuitBreakers,
@@ -2157,14 +2212,21 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
    * #636 that #971 left open. SPY and 60/40 over the MATCHED CONTROL'S window,
    * on FL's existing daily cadence.
    *
-   * The series come from the same `MarketDataService` the pipeline already runs
-   * (`components.marketData`): SPY and AGG are ordinary US-listed instruments
-   * on Alpaca's `/v2/stocks` root, verified obtainable as daily bars on the
-   * free-tier `iex` feed this codebase defaults to. No new vendor, key or
-   * spend — and #895 (the LSE real-time L1 mark vendor) is a different data
-   * need and does not gate this.
+   * The series come from `components.benchmarkSeries` — the benchmarks' OWN
+   * reader, resolved in `buildProductionComponents` over a stocks-rooted
+   * source that takes no `universe`, and NOT from `components.marketData`.
+   * That distinction is load-bearing rather than tidy: `marketData` is
+   * universe-derived and becomes `LseMarkDataSource` exclusively on #751's
+   * cutover, and that source refuses `'SPY'` by design (#734), which would put
+   * both benchmarks permanently in `unmeasured`. See the construction site for
+   * the full argument.
+   *
+   * SPY and AGG are ordinary US-listed instruments on Alpaca's `/v2/stocks`
+   * root, verified obtainable as daily bars on the free-tier `iex` feed this
+   * codebase defaults to. No new vendor, key or spend — and #895 (the LSE
+   * real-time L1 mark vendor) is a different data need and does not gate this.
    */
-  const outsideBenchmarkSeries = new MarketDataBenchmarkSeriesSource(components.marketData);
+  const outsideBenchmarkSeries = components.benchmarkSeries;
   const outsideBenchmarkSamples = new SqliteOutsideBenchmarkSampleStore(config.db);
 
   /**

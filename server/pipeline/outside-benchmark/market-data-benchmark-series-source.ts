@@ -23,6 +23,20 @@
  * The same reason every other Feedback Loop input is one: the composition root
  * injects the real reader and tests inject a fake. It also keeps the benchmark
  * cycle synchronous-looking in its own tests while the real fetch is over HTTP.
+ *
+ * ## Which `MarketDataService` — NOT the pipeline's
+ *
+ * The instance passed here must be built on `buildBenchmarkDataSource`, not on
+ * the pipeline's `components.marketData`. The latter is derived from the
+ * configured `universe`: once #751 puts LSE tickers in it, its source becomes
+ * `LseMarkDataSource` EXCLUSIVELY, and that source refuses `'SPY'` on purpose
+ * — SPY is a `screening_instrument` (the US underlying a 3x LSE ETP tracks),
+ * and marking the wrapper off the underlying is inadmissible (#734). Both
+ * benchmarks would then sit in `unmeasured` forever with nothing failing,
+ * which is precisely what #636 forbids: the outside benchmark is computed on
+ * FL's own cadence, independent of what the live universe trades. Benchmarks
+ * are reference series, never order targets, so no venue restriction reaches
+ * them.
  */
 import type { MarketDataService } from '../../providers/market-data-service/index.js';
 import type { BenchmarkObservation } from './outside-benchmark.js';
