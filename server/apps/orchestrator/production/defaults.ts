@@ -655,11 +655,16 @@ export function buildBenchmarkDataSource(options: {
         // NO `calendar`, deliberately — `AlpacaDataSource` then defaults to
         // `UsEquityRegularHoursCalendar`, the session SPY and AGG actually
         // trade in. The live path's calendar is `equityCalendarFor(config)`,
-        // which returns `LseRegularHoursCalendar` in live mode: handing that in
-        // would re-couple this builder to the live configuration through the
-        // back door, session-normalizing US daily bars against London hours and
-        // reproducing the very `unmeasured` outcome this builder exists to
-        // prevent. Nothing configuration-derived reaches this call.
+        // which returns `LseRegularHoursCalendar` in live mode, so accepting
+        // one would re-couple this builder to the live configuration through
+        // the back door — the independence would hold for the signature only.
+        // `NormalizingDataSource` resolves session boundaries and holidays
+        // against whatever calendar it is handed, and `LSE_HOLIDAYS` is not the
+        // US table, so US bars measured on a London session is simply the wrong
+        // normalization for these instruments. Measured, a same-shaped daily
+        // fixture came back identical under both calendars, so this is a latent
+        // coupling rather than a failure visible today — which is exactly why
+        // it should be closed structurally instead of relied on.
         { asset_class: 'stocks' },
       ),
   );

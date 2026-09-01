@@ -4104,9 +4104,11 @@ describe('buildProductionOrchestrator', () => {
     it('cannot be handed the live session calendar, which is LSE in live mode', () => {
       // `equityCalendarFor` returns `LseRegularHoursCalendar` when
       // `mode === 'live'`. Accepting a calendar here would re-couple the
-      // benchmarks to the live configuration through the back door — US daily
-      // bars session-normalized against London — reaching the same `unmeasured`
-      // end state by a different road. The option does not exist, so it can't.
+      // benchmarks to the live configuration through the back door: US bars
+      // normalized against London sessions and `LSE_HOLIDAYS`. A daily fixture
+      // measured the same under both calendars, so the coupling is latent, not
+      // a live failure — closed structurally rather than argued about. The
+      // option does not exist, so it cannot come back by accident.
       expect(() =>
         buildBenchmarkDataSource({
           // @ts-expect-error — no `calendar` option: the US equities session is
