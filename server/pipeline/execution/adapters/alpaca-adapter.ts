@@ -68,6 +68,11 @@ import {
   toAlpacaSymbol,
   UnpricedFillError,
 } from './alpaca-order-normalization.js';
+import {
+  formatTickPrice,
+  roundBracketToTick,
+  roundProtectiveLegsToTick,
+} from './us-equity-price-tick.js';
 
 /**
  * How long a fill may sit unpriced before it stops being "the venue is briefly
@@ -535,17 +540,35 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       return this.emulation.submitEntry(order);
     }
 
+    // #983: onto the venue's price grid BEFORE anything else reads the prices.
+    // The stop and target are bracket multiples of the entry, so they carry
+    // full float precision (766.40805334) and Alpaca refuses the whole order:
+    // `422 {"code":42210000,"message":"invalid limit_price 762.335. sub-penny
+    // increment does not fulfill minimum pricing criteria"}`, measured live.
+    //
+    // Rounded into `submitted` rather than at the three call sites, because
+    // the journal below MUST record what was actually sent: a restart that
+    // rehydrates unrounded prices would re-place the leg off-grid, and the
+    // re-arm comparison would never match the venue's own rounded copy.
+    const { entry, stop, target } = roundBracketToTick(
+      order.side,
+      order.entry,
+      order.stop,
+      order.target,
+    );
+    const submitted: NativeBracketRequest = { ...order, entry, stop, target };
+
     const response = await this.call('submitBracket', () =>
       this.input.client.submitOrder({
-        symbol: toAlpacaSymbol(order.instrument, order.asset_class),
-        side: order.side,
-        qty: String(order.size),
-        limit_price: String(order.entry),
-        time_in_force: order.time_in_force,
-        client_order_id: order.client_order_id,
+        symbol: toAlpacaSymbol(submitted.instrument, submitted.asset_class),
+        side: submitted.side,
+        qty: String(submitted.size),
+        limit_price: formatTickPrice(submitted.entry),
+        time_in_force: submitted.time_in_force,
+        client_order_id: submitted.client_order_id,
         order_class: 'bracket',
-        take_profit: { limit_price: String(order.target) },
-        stop_loss: { stop_price: String(order.stop) },
+        take_profit: { limit_price: formatTickPrice(submitted.target) },
+        stop_loss: { stop_price: formatTickPrice(submitted.stop) },
       }),
     );
 
@@ -561,7 +584,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       phase: 'armed',
       entry_order_id: response.id,
       ...legOrderIds(response.legs),
-      request: toRequestFields(order),
+      request: toRequestFields(submitted),
       armed_qty: null,
       arming_qty: null,
       arm_attempt: 0,
@@ -741,8 +764,8 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     instrument: string,
     side: 'buy' | 'sell',
     qty: number,
-    stop: number,
-    target: number,
+    rawStop: number,
+    rawTarget: number,
   ): Promise<void> {
     // `owns` is the authoritative test (the journal knows every emulated
     // bracket, durably); the syntactic `-USD` fallback catches the crypto
@@ -750,7 +773,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // rather than fall through to an order class the venue is verified to
     // reject — a thrown 422 here would read as a transient venue error.
     if (this.emulation.owns(clientOrderId)) {
-      return this.emulation.rearm(clientOrderId, instrument, side, qty, stop, target);
+      return this.emulation.rearm(clientOrderId, instrument, side, qty, rawStop, rawTarget);
     }
     if (instrument.endsWith('-USD')) {
       throw new Error(
@@ -759,6 +782,15 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
           'rejected for crypto (verified, #550). The residual stays alert-only.',
       );
     }
+
+    // #983, and BEFORE the adoption comparison below, not at the submit.
+    // `rearmOrderMatches` compares the caller's levels against what the venue
+    // holds — which is the ROUNDED copy this method sent last time. Rounding
+    // only at the submit would leave that comparison permanently unequal, so
+    // every re-arm would take the cancel-and-replace branch: a round-trip of
+    // real cost that briefly drops protection on a live position, for no
+    // reason but a trailing decimal.
+    const { stop, target } = roundProtectiveLegsToTick(side, rawStop, rawTarget);
 
     const rearmClientOrderId = `${clientOrderId}:rearm`;
 
@@ -853,8 +885,8 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         time_in_force: 'gtc',
         client_order_id: rearmClientOrderId,
         order_class: 'oco',
-        take_profit: { limit_price: String(target) },
-        stop_loss: { stop_price: String(stop) },
+        take_profit: { limit_price: formatTickPrice(target) },
+        stop_loss: { stop_price: formatTickPrice(stop) },
       }),
     );
 
