@@ -73,7 +73,19 @@ describe('stocks conviction ceiling vs conviction_floor (#756 item 2)', () => {
     expect(strict.length).toBeGreaterThan(0);
   });
 
-  it('lands EXACTLY on the floor at the weakest directional read (#683 decides it)', () => {
+  it('lands EXACTLY on the floor at the weakest directional read (#683 did NOT decide this)', () => {
+    // #683 closed the lean-FROM-NOTHING branch: a mediator vote could not
+    // create a directional lean when the analysts' own mean was exactly 0
+    // (every analyst neutral, or an exactly-cancelling desk). It did not
+    // touch this sample — the technical analyst here has a REAL directional
+    // read (bullish, confidence 0.25), so the analyst mean is 1/3, non-zero,
+    // and the mediator is still counted as an equal participant exactly as
+    // before #683. This tie — a genuine (if weak) directional read landing
+    // EXACTLY on the floor, which `decide.ts` gates with `<` and so
+    // authorises — is a separate, still-open question: whether
+    // `conviction_floor` itself should exclude the boundary. That is #756
+    // item 1, open per `gated-tape-conviction.test.ts`'s docstring, not
+    // #683's Option 1/2/3 choice.
     const weakest = directional('absent', 'agrees')
       .filter((sample) => sample.clears)
       .reduce((min, sample) => (sample.confidence < min.confidence ? sample : min));
