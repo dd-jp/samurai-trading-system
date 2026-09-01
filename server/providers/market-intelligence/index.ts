@@ -196,10 +196,11 @@ export class MarketIntelligenceStore {
    * reason `bar` does: a caller with no single-instrument concept at all — the
    * coverage checker's own class-wide presence scan, the push-subscription
    * path below — has a real class-wide answer to give, not a forgotten
-   * argument. Omitting it is unchanged behaviour; today's non-LSE universe
-   * (SPY/QQQ/AAPL/TSLA) has no per-entity items yet, so an entity-scoped read
-   * for those names correctly comes back empty until #914's ingestion-side
-   * fix (`mi-ingest-agent.ts`) has run.
+   * argument. Omitting it is unchanged behaviour. Ingestion already tagged
+   * every item's `entity` with its instrument before #914; what #914 adds is
+   * the LSE resolution step (`resolveMiSubject`) so an ETP wrapper's read
+   * targets the same US-underlying key its items are actually filed under,
+   * rather than a `lse_ticker` no item has ever been entitied with.
    */
   getContext(
     assetClass: AssetClass,
