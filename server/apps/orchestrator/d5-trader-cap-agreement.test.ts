@@ -336,12 +336,14 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
     // `capWithCeiling`'s `same_currency_verified = true` default in
     // per-subclass-deployment-cap.test.ts's "#888" describe block; this is
     // the account-level counterpart.
+    const baseConfig = d5InIsolationLive();
+    const baseLiveBookCeiling = baseConfig.live_book_ceiling;
+    if (!baseLiveBookCeiling) {
+      throw new Error('expected liveShippedConfig() to always set live_book_ceiling');
+    }
     const withVerifiedBookCeiling: RiskConfig = {
-      ...d5InIsolationLive(),
-      live_book_ceiling: {
-        ...(d5InIsolationLive().live_book_ceiling as NonNullable<RiskConfig['live_book_ceiling']>),
-        same_currency_verified: true,
-      },
+      ...baseConfig,
+      live_book_ceiling: { ...baseLiveBookCeiling, same_currency_verified: true },
     };
     const overfunded = 1_500; // 50% over the £1,000 book — past the 5% tolerance
     const intended = D5_INDEX_ETP_DEPLOYMENT_FRACTION * overfunded;
