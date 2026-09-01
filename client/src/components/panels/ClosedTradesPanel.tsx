@@ -49,8 +49,8 @@ export function ClosedTradesPanel({ trades, fills }: ClosedTradesPanelProps) {
       </div>
       {trades.length === 0 ? (
         <p className="empty-state">
-          No closed trade in the recent-history window. A round trip appears here once it
-          flattens — this is a reading, not a missing panel.
+          No closed trade in the recent-history window. A round trip appears here once it flattens —
+          this is a reading, not a missing panel.
         </p>
       ) : (
         <ul className="position-list">
