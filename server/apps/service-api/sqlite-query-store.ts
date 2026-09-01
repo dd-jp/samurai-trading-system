@@ -32,13 +32,7 @@ import { PIPELINE_STAGES, type PipelineStage } from '../../../contracts/pipeline
 import type { AnalystContribution, Direction } from '../../pipeline/debate-engine/index.js';
 import { creditForContribution, realizedR } from '../../pipeline/feedback-loop/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
-import type {
-  ClosedTrade,
-  DebateLog,
-  Fill,
-  OpenPosition,
-  OrderState,
-} from '../../shared/index.js';
+import type { ClosedTrade, DebateLog, Fill, OpenPosition, OrderState } from '../../shared/index.js';
 import {
   type ClosedTradeRow,
   fromClosedTradeRow,

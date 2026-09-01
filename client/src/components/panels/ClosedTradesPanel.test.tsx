@@ -97,9 +97,13 @@ describe('ClosedTradesPanel', () => {
   });
 
   it('renders no fills sub-list for a trade with no captured fills', () => {
-    render(<ClosedTradesPanel trades={[makeClosedTrade({ idempotency_key: 'key-3' })]} fills={[]} />);
+    render(
+      <ClosedTradesPanel trades={[makeClosedTrade({ idempotency_key: 'key-3' })]} fills={[]} />,
+    );
 
-    expect(screen.queryByText(/entry|target|stop|exit/i, { selector: '.trade-fill-leg' })).toBeNull();
+    expect(
+      screen.queryByText(/entry|target|stop|exit/i, { selector: '.trade-fill-leg' }),
+    ).toBeNull();
   });
 
   it('states that an empty list is a reading, not a missing panel', () => {

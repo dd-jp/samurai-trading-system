@@ -460,12 +460,7 @@ describe('#888 — equity_ceiling: the fraction resolves against the declared BO
     // have resolved 2% wider too.
     const withinTolerance = BOOK * 1.02; // 2% over, inside the 5% tolerance
 
-    const decision = decide(
-      intentFor('3USL', 10_000),
-      {},
-      capWithCeiling(),
-      withinTolerance,
-    );
+    const decision = decide(intentFor('3USL', 10_000), {}, capWithCeiling(), withinTolerance);
 
     expect(decision.status).toBe('approved');
     expect(decision.binding_constraint).toBe('per_subclass_deployment_cap');
@@ -485,9 +480,9 @@ describe('#888 — equity_ceiling: the fraction resolves against the declared BO
   it('REFUSES the entry once equity clears the tolerance above the book, rather than sizing on the wider figure', () => {
     const farOverBook = BOOK * 1.5; // 50% over — well past the 5% tolerance
 
-    expect(() =>
-      decide(intentFor('3USL', 10_000), {}, capWithCeiling(), farOverBook),
-    ).toThrow(/per_subclass_deployment_cap's declared book/);
+    expect(() => decide(intentFor('3USL', 10_000), {}, capWithCeiling(), farOverBook)).toThrow(
+      /per_subclass_deployment_cap's declared book/,
+    );
   });
 
   it('the refusal is a PerSubclassCapUnresolvableError with a structured binding_constraint naming the instrument', () => {
@@ -500,9 +495,7 @@ describe('#888 — equity_ceiling: the fraction resolves against the declared BO
       expect(error).toBeInstanceOf(PerSubclassCapUnresolvableError);
       const typed = error as PerSubclassCapUnresolvableError;
       expect(typed.instrument).toBe('3USL');
-      expect(typed.bindingConstraint).toBe(
-        'per_subclass_deployment_cap:equity_exceeds_book:3USL',
-      );
+      expect(typed.bindingConstraint).toBe('per_subclass_deployment_cap:equity_exceeds_book:3USL');
     }
   });
 
@@ -514,9 +507,9 @@ describe('#888 — equity_ceiling: the fraction resolves against the declared BO
     expect(
       decide(intentFor('3USL', 10_000), {}, capWithCeiling(), justUnder).binding_constraint,
     ).toBe('per_subclass_deployment_cap');
-    expect(
-      decide(intentFor('3USL', 10_000), {}, capWithCeiling(), justAt).binding_constraint,
-    ).toBe('per_subclass_deployment_cap');
+    expect(decide(intentFor('3USL', 10_000), {}, capWithCeiling(), justAt).binding_constraint).toBe(
+      'per_subclass_deployment_cap',
+    );
     expect(() => decide(intentFor('3USL', 10_000), {}, capWithCeiling(), justOver)).toThrow();
   });
 
