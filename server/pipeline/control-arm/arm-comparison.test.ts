@@ -10,7 +10,6 @@
  * `max_drawdown_pct` were ever made optional, the compiler stops rejecting the
  * drawdown-less literal and this file fails to type-check.
  */
-import { describe, expect, it } from 'vitest';
 import type { ClosedTrade, TradingArm } from '../../shared/index.js';
 import { type ArmPerformance, buildArmComparison } from './arm-comparison.js';
 

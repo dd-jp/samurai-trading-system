@@ -18,7 +18,6 @@
  * the bracket one stage down, in `resolveSubclassBracket`, from the same frozen
  * ADR-0018 D3 table both arms read.
  */
-import { describe, expect, it } from 'vitest';
 import type { AnalystView } from '../debate-engine/index.js';
 import {
   AXIS_VOTE_ANALYST_TYPE,

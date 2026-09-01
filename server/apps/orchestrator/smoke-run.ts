@@ -2636,6 +2636,13 @@ async function runDataFailoverScenario(logger: Logger): Promise<DataFailoverEvid
       },
       miArchive: new MiArchiveStore(),
       accountState: new FixedAccountStateProvider(),
+      // #753: the control arm gets the SAME fixed account the live arm does.
+      // Its default provider derives equity from the control's own (empty)
+      // book at LIVE_BOOK_GBP, and a control arm sizing against £1,000 while
+      // the live arm sizes against this harness's 100,000 is a fixture
+      // difference, not a measurement — the run would stop exercising the
+      // control's path at all.
+      controlAccountState: new FixedAccountStateProvider(),
       alpacaBrokerClient: new UnreachableAlpacaClient(),
       llmClient: new ConstantResponseLlmClient(),
     });
@@ -2720,6 +2727,13 @@ async function runRiskCriticScenario(logger: Logger): Promise<RiskCriticEvidence
       dataSource,
       miArchive: new MiArchiveStore(),
       accountState: new FixedAccountStateProvider(),
+      // #753: the control arm gets the SAME fixed account the live arm does.
+      // Its default provider derives equity from the control's own (empty)
+      // book at LIVE_BOOK_GBP, and a control arm sizing against £1,000 while
+      // the live arm sizes against this harness's 100,000 is a fixture
+      // difference, not a measurement — the run would stop exercising the
+      // control's path at all.
+      controlAccountState: new FixedAccountStateProvider(),
       alpacaBrokerClient: new UnreachableAlpacaClient(),
       llmClient: new ConstantResponseLlmClient(),
     });
@@ -4008,6 +4022,13 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // See the class docs: both of these exist because the composition root's
       // defaults reach Alpaca over the network.
       accountState: new FixedAccountStateProvider(),
+      // #753: the control arm gets the SAME fixed account the live arm does.
+      // Its default provider derives equity from the control's own (empty)
+      // book at LIVE_BOOK_GBP, and a control arm sizing against £1,000 while
+      // the live arm sizes against this harness's 100,000 is a fixture
+      // difference, not a measurement — the run would stop exercising the
+      // control's path at all.
+      controlAccountState: new FixedAccountStateProvider(),
       alpacaBrokerClient,
       // Naming log-only alerting explicitly, exhaustively over
       // `ALERT_CHANNEL_FIELDS` — see `smokeAlertChannels` above for why it is

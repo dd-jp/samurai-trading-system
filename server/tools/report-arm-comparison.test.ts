@@ -8,7 +8,6 @@
  * is worded about what the report can produce, not about what the builder
  * returns. These tests read the rendered text.
  */
-import { describe, expect, it } from 'vitest';
 import { buildArmComparison } from '../pipeline/control-arm/index.js';
 import type { ClosedTrade, TradingArm } from '../shared/index.js';
 import {

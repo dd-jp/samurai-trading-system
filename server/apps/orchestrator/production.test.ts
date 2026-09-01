@@ -4255,17 +4255,26 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
 
   const HOUR_MS = 60 * 60 * 1_000;
 
-  function tapeFor() {
+  /**
+   * The default name for these cases. `LQQ3` — a real GBX-declared LSE 3x index
+   * ETP, the same one the #706 window cases use — is the in-scope alternative,
+   * reached through `subclassCase()` below.
+   */
+  const DEFAULT_INSTRUMENT = { asset: 'BTC-USD', asset_class: 'crypto' as const };
+
+  function tapeFor(
+    signal: { asset: string; asset_class: 'crypto' | 'stocks' } = DEFAULT_INSTRUMENT,
+  ) {
     const bars = [
-      ...fixtureBars('BTC-USD', '5m', 60, 5 * 60_000),
-      ...fixtureBars('BTC-USD', '1h', 60, HOUR_MS),
-      ...fixtureBars('BTC-USD', '1m', 60, 60_000),
-      ...fixtureBars('BTC-USD', '1d', 40, 24 * HOUR_MS),
+      ...fixtureBars(signal.asset, '5m', 60, 5 * 60_000),
+      ...fixtureBars(signal.asset, '1h', 60, HOUR_MS),
+      ...fixtureBars(signal.asset, '1m', 60, 60_000),
+      ...fixtureBars(signal.asset, '1d', 40, 24 * HOUR_MS),
     ];
     return new FixtureDataSource(
       bars,
       { price: 160, observed_at: START, source: 'fixture' },
-      'crypto',
+      signal.asset_class,
       { bid: 159.5, ask: 160.5, observed_at: START },
     );
   }
@@ -4291,9 +4300,12 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
     handle: SqliteHandle;
     llmClient: NonNullable<ProductionConfig['llmClient']>;
     traderConfig?: ProductionConfig['traderConfig'];
+    /** Defaults to BTC-USD; the D3-bracket case drives a real LSE ETP instead. */
+    signal?: { asset: string; asset_class: 'crypto' | 'stocks' };
   }) {
+    const signal = options.signal ?? DEFAULT_INSTRUMENT;
     const clock = new SimulatedClock(START);
-    const dataSource = tapeFor();
+    const dataSource = tapeFor(signal);
     const costModel = new CostModelImpl(REAL_CONFIGS.costConfig as ProductionConfig['costConfig']);
     const marketDataForBroker = new MarketDataServiceImpl(
       dataSource,
@@ -4319,21 +4331,18 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
     const { steps } = buildProductionComponents(config);
     const persistence = buildPersistence(options.handle);
 
-    await new SequentialTickRunner(steps).runInstrument(
-      { asset: 'BTC-USD', asset_class: 'crypto' },
-      {
-        clock,
-        trace_id: 'trace-753',
-        logger: recordingLogger(),
-        auditLog: persistence.auditLog,
-        currentTickStore: persistence.currentTickStore,
-        decision_bar: {
-          id: `${START.toISOString()}@3600000`,
-          open_time: START,
-          timeframe_ms: 3_600_000,
-        },
+    await new SequentialTickRunner(steps).runInstrument(signal, {
+      clock,
+      trace_id: 'trace-753',
+      logger: recordingLogger(),
+      auditLog: persistence.auditLog,
+      currentTickStore: persistence.currentTickStore,
+      decision_bar: {
+        id: `${START.toISOString()}@3600000`,
+        open_time: START,
+        timeframe_ms: 3_600_000,
       },
-    );
+    });
 
     return { persistence, steps, config };
   }
@@ -4341,8 +4350,8 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
   function lotsByArm(handle: SqliteHandle) {
     return handle
       .prepare(
-        'SELECT arm, idempotency_key, instrument, side, stop, target, decision_timestamp ' +
-          'FROM open_positions ORDER BY arm',
+        'SELECT arm, idempotency_key, instrument, side, stop, target, avg_entry_price, ' +
+          'decision_timestamp FROM open_positions ORDER BY arm',
       )
       .all() as {
       arm: string;
@@ -4351,6 +4360,7 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
       side: string;
       stop: number;
       target: number;
+      avg_entry_price: number;
       decision_timestamp: string;
     }[];
   }
@@ -4451,6 +4461,64 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
     expect(
       soloPersistence.auditLog.getByTraceId('trace-753-solo:control').map((row) => row.stage),
     ).toEqual(['analysts', 'debate', 'trader', 'risk', 'verdict', 'execution']);
+
+    /**
+     * The zero above must not be a vacuous zero. A control pass that decided
+     * nothing would reach Execution with a skip and call no model either — the
+     * same assertion, proving nothing. These two make the run non-vacuous:
+     *
+     * - a control LOT exists, so an intent really was produced, sized, gated and
+     *   submitted while the only client in the process throws on any call;
+     * - the control's `risk_log` row carries `risk_critic: skipped`, which is
+     *   the record of the ONE remaining LLM seam in the control's path (#957's
+     *   step 7) being absent by wiring rather than by luck. Restore
+     *   `critic: deps.risk.critic` in `control-arm-wiring.ts` and this line goes
+     *   from `skipped` to a thrown call.
+     */
+    const controlLots = db
+      .prepare("SELECT idempotency_key FROM open_positions WHERE arm = 'control'")
+      .all() as { idempotency_key: string }[];
+    expect(controlLots.length).toBeGreaterThan(0);
+
+    const controlRisk = db
+      .prepare('SELECT reasons_json FROM risk_log WHERE trace_id = ?')
+      .get('trace-753-solo:control') as { reasons_json: string } | undefined;
+    expect(controlRisk?.reasons_json).toContain('risk_critic: skipped');
+  });
+
+  /**
+   * The control arm's account state is its OWN (#753).
+   *
+   * `computeCurrentPortfolioAndBreakers` combines each arm's open positions with
+   * its `AccountStateProvider`, and the control arm used to be handed the LIVE
+   * arm's — which reads `GET /v2/account`, an account the control never trades
+   * against. Its D5 sizing (a fraction of `portfolio.equity`) and its
+   * drawdown-halt timing were therefore functions of the live arm's realized
+   * cash, which is not an independent measurement over the same tape.
+   *
+   * `risk_log.equity` is where each arm's own valuation is recorded, so the two
+   * rows from ONE tick are the proof: this harness injects a 100,000 live
+   * account, and the control's row must be its own declared book instead.
+   */
+  it('sizes and halts off its own book, not the live arm’s account', async () => {
+    await runOneDecisionPass({ handle: db, llmClient: llmForOneDebate() });
+
+    const rows = db.prepare('SELECT trace_id, equity FROM risk_log ORDER BY trace_id').all() as {
+      trace_id: string;
+      equity: number;
+    }[];
+    const live = rows.find((row) => row.trace_id === 'trace-753');
+    const control = rows.find((row) => row.trace_id === 'trace-753:control');
+
+    expect(live?.equity).toBeDefined();
+    expect(control?.equity).toBeDefined();
+    // The live arm reads the injected `accountState` stub…
+    expect(live?.equity).toBeGreaterThan(50_000);
+    // …and the control reads `ControlArmAccountStateProvider` over its own
+    // (empty) book, so its equity is the declared £1,000 plus whatever its own
+    // open lot marks at — nowhere near the live account's.
+    expect(control?.equity).toBeLessThan(10_000);
+    expect(control?.equity).not.toBe(live?.equity);
   });
 
   /**
@@ -4485,10 +4553,85 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
   });
 
   /**
-   * AC2, second half — the mutation the ticket asks for. ONE field of ONE
-   * config moves, and BOTH arms' stops move with it. If the control arm ever
-   * grew its own bracket table or its own stop constant, this case would show
-   * the live arm moving alone.
+   * AC2, second half — the mutation the ticket asks for, run through the REAL
+   * ADR-0018 D3 bracket rather than the pre-D3 `atr_k` fallback.
+   *
+   * The distinction is load-bearing. `REAL_CONFIGS.traderConfig.subclass_of` is
+   * `{}`, which is `resolveSubclassBracket`'s "the per-subclass regime is not
+   * armed" answer, so the `atr_k` case below it exercises the geometry the live
+   * system will NOT use once the pool file lands. This case arms the regime with
+   * a real in-scope name — `LQQ3`, a GBX-declared LSE 3x index ETP — and moves
+   * the ONE field that selects a bracket row. Both arms must land on the new
+   * row's frozen percentages together; a control arm with its own bracket table
+   * would show the live arm moving alone.
+   */
+  it("moves both arms together across ADR-0018 D3's frozen bracket rows", async () => {
+    const LSE_ETP = { asset: 'LQQ3', asset_class: 'stocks' as const };
+    const configFor = (subclass: 'index_etp_3x' | 'single_stock_etp_3x') =>
+      ({
+        ...REAL_CONFIGS.traderConfig,
+        subclass_of: { [LSE_ETP.asset]: subclass },
+      }) as unknown as ProductionConfig['traderConfig'];
+
+    /** D3's neutral pairs, read off the frozen table rather than restated here. */
+    const indexBracket = ADR_0018_SUBCLASS_BRACKETS.index_etp_3x;
+    const singleStockBracket = ADR_0018_SUBCLASS_BRACKETS.single_stock_etp_3x;
+    if (indexBracket === null || singleStockBracket === null) {
+      throw new Error('ADR-0018 declares a bracket for both leveraged-ETP subclasses');
+    }
+
+    await runOneDecisionPass({
+      handle: db,
+      llmClient: llmForOneDebate(),
+      signal: LSE_ETP,
+      traderConfig: configFor('index_etp_3x'),
+    });
+    const asIndex = lotsByArm(db);
+    expect(asIndex.map((lot) => lot.arm)).toEqual(['control', 'live']);
+
+    const moved = openSharedStore(':memory:');
+    try {
+      await runOneDecisionPass({
+        handle: moved,
+        llmClient: llmForOneDebate(),
+        signal: LSE_ETP,
+        // The one field, changed once: the subclass this name is priced under.
+        traderConfig: configFor('single_stock_etp_3x'),
+      });
+      const asSingleStock = lotsByArm(moved);
+      expect(asSingleStock.map((lot) => lot.arm)).toEqual(['control', 'live']);
+
+      /**
+       * The bracket's own geometry, checked without needing the entry price —
+       * `avg_entry_price` is 0 on a write-ahead row, and these lots have not
+       * filled. For a long placed at `e`, `stop = e(1 − s)` and
+       * `target = e(1 + t)`, so `target / stop = (1 + t) / (1 − s)`: a pure
+       * function of the D3 row, and a different number for each subclass
+       * (1.0221 index, 1.1307 single-stock).
+       */
+      const shape = (bracket: { take_profit_pct: number; stop_pct: number }) =>
+        (1 + bracket.take_profit_pct) / (1 - bracket.stop_pct);
+      for (const lot of asIndex) {
+        expect(lot.target / lot.stop).toBeCloseTo(shape(indexBracket), 6);
+      }
+      for (const lot of asSingleStock) {
+        expect(lot.target / lot.stop).toBeCloseTo(shape(singleStockBracket), 6);
+      }
+
+      // Both arms moved, and they still agree with each other — the invariant.
+      expect(asSingleStock[0]?.stop).not.toBe(asIndex[0]?.stop);
+      expect(asSingleStock[1]?.stop).not.toBe(asIndex[1]?.stop);
+      expect(asSingleStock[0]?.stop).toBe(asSingleStock[1]?.stop);
+      expect(asSingleStock[0]?.target).toBe(asSingleStock[1]?.target);
+    } finally {
+      moved.close();
+    }
+  });
+
+  /**
+   * The same mutation on the PRE-D3 fallback geometry, kept because
+   * `subclass_of` is `{}` on every shipped profile until the pool file lands —
+   * so `atr_k` is the width the two arms actually run on today.
    */
   it('moves both arms together when the shared stop config is perturbed', async () => {
     await runOneDecisionPass({ handle: db, llmClient: llmForOneDebate() });

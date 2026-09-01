@@ -78,7 +78,7 @@
  */
 
 import type { Signal } from '../../pipeline/analysts/index.js';
-import { controlArmDecision } from '../../pipeline/control-arm/index.js';
+import { CONTROL_DEBATE_ID_PREFIX, controlArmDecision } from '../../pipeline/control-arm/index.js';
 import type { AnalystView, DebateResult } from '../../pipeline/debate-engine/index.js';
 import type { Logger } from '../../shared/index.js';
 import type { CurrentTick, CurrentTickStore, TickContext, TickRunner, TickSteps } from './types.js';
@@ -157,7 +157,10 @@ export function buildControlDebateStep(relay: AnalystViewRelay): TickSteps['deba
       direction: 'neutral',
       confidence: 0,
       bar_timestamp: bar,
-      debate_id: `control:no-axis-vote:${instrument}:${bar.toISOString()}`,
+      debate_id: `${CONTROL_DEBATE_ID_PREFIX}no-axis-vote:${instrument}:${bar.toISOString()}`,
+      // `true` here for the same reason `controlArmDecision` gives, and it costs
+      // the control nothing on this branch: a neutral direction is declined by
+      // the Trader before `converged` is read at all.
       converged: true,
       rounds_completed: 0,
       latency_ms: 0,

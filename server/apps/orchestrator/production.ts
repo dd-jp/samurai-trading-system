@@ -208,8 +208,11 @@ import {
 import { Heartbeat } from './heartbeat.js';
 import { JsonLogger } from './logger.js';
 import type { OrphanGoVerdict, OrphanVerdictScanner } from './orphan-verdict-scan.js';
+import { LIVE_BOOK_GBP } from './paper-profile.js';
 import { AlpacaAccountStateProvider } from './production/account-state.js';
 import { buildAnalystsStep } from './production/analysts-adapter.js';
+// #753: the control arm's own account scalars — see `control-account-state.ts`.
+import { ControlArmAccountStateProvider } from './production/control-account-state.js';
 // #753: falsifier arm 2's composition — see `control-arm-wiring.ts`.
 import {
   buildControlArmWiring,
@@ -1301,6 +1304,32 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     }),
     circuitBreakers: new CircuitBreakers(config.breakerConfig, controlBreakerState.load()),
     breakerState: controlBreakerState,
+    // The control arm's OWN account scalars, derived from its OWN book.
+    //
+    // The fourth per-arm thing, and the one that was missing: a shared
+    // `AccountStateProvider` reads `GET /v2/account`, which only ever reflects
+    // the LIVE arm's trades (the control's venue is simulated). Sharing it made
+    // the control's D5 sizing — a fraction of `portfolio.equity` — and its
+    // drawdown-halt timing functions of the live arm's realized cash, so the
+    // control was not an independent measurement over the same tape. See
+    // `control-account-state.ts`.
+    accountState:
+      config.controlAccountState ??
+      new ControlArmAccountStateProvider({
+        // The DECLARED book, not live equity. Both arms are stated against the
+        // same £1,000 (ADR-0015's 2026-08-18 amendment) — the arm comparison
+        // divides both by it too — and the live arm's own ceiling gate reads the
+        // same field, so there is one anchor rather than two.
+        book: config.riskConfig.live_book_ceiling?.book ?? LIVE_BOOK_GBP,
+        // `arm: 'control'` — the one caller that asks this store for the other
+        // arm. Handing it the default would restore the coupling exactly.
+        closedTrades: new SqliteClosedTradeStore(config.db, 'control'),
+        getOpenPositions: () => controlExecutionStore.getOpenPositions(),
+        // The SAME two calendars the live provider is given: the arms must
+        // measure a "day" over identical boundaries or their daily figures are
+        // not comparable.
+        calendars: sessionCalendars,
+      }),
     costModel: executionDeps.costModel,
     marketData,
     executionConfig: config.executionConfig,

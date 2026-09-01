@@ -147,7 +147,20 @@ export function controlArmDecision(input: {
     // which is exactly what a matched control may not have. And it would be a
     // false statement about the world: convergence means "the mediator signalled
     // agreement before the round cap", and a single deterministic vote has no
-    // disagreement left to resolve. It is unanimous by construction.
+    // disagreement left to resolve. It is unanimous by construction. The control
+    // arm has no rounds, so "converged" is not a variable for it — it is
+    // ALWAYS-DECIDED, and a constant is the honest encoding of that.
+    //
+    // The consequence, named rather than left to be discovered: on a bar where
+    // the LIVE debate fails to converge, the live arm takes the
+    // `non_converged_haircut` and refuses a scale-in while the control does
+    // neither, so the two arms' sizing diverges on exactly those bars. That is
+    // not a defect to fix by mirroring the live arm's convergence — the control
+    // has no debate whose convergence could be mirrored, and copying the live
+    // flag would make the control's size a function of the live model layer,
+    // which is the one input a matched control may not take. It is a known
+    // asymmetry of the measurement, and `formatArmComparison` says so in the
+    // report rather than leaving the reader to infer it from equal trade counts.
     converged: true,
     // Zero, not one. No round was run, and a `1` here would put a fabricated
     // round into any per-round accounting of what the control cost.

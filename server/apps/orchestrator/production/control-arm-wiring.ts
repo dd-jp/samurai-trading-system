@@ -14,8 +14,13 @@
  * conviction floor, the same frozen ADR-0018 D3 bracket and stop, the same
  * flatten window), the same `RiskConfig` and thresholds, the same
  * `VerdictConfig`, the same `MarketDataService` (so literally the same tape),
- * the same session calendars, the same `AccountStateProvider` (so both arms size
- * against the same equity), the same `SetupStore`.
+ * the same session calendars, the same `SetupStore`.
+ *
+ * The `AccountStateProvider` is NOT one of them, and it used to be. Passing the
+ * live arm's through made the control's D5 sizing and its drawdown-halt timing
+ * a function of the live arm's realized cash — the live provider reads
+ * `GET /v2/account`, and the control never places an order there. So the arms
+ * share every RULE and no BALANCE: see `control-account-state.ts`.
  *
  * That pass-through is the mechanism behind #753's "asserted, not configured
  * twice". There is no control-arm bracket table, no control-arm stop, no
@@ -48,6 +53,7 @@ import {
 import { SequentialTickRunner } from '../tick-runner.js';
 import type { TickSteps } from '../types.js';
 import {
+  type AccountStateProvider,
   buildExecutionStep,
   buildExecutionSurface,
   buildRiskStep,
@@ -114,6 +120,18 @@ export interface ControlArmWiringDeps {
   /** The control arm's own breaker instance, over `InMemoryBreakerStatePersistence`. */
   circuitBreakers: CircuitBreakers;
   breakerState: BreakerStatePersistence;
+  /**
+   * The control arm's own `cash` / `peak_equity` / `daily_basis` /
+   * `consecutive_losses` — a `ControlArmAccountStateProvider`, never the live
+   * arm's `AlpacaAccountStateProvider`.
+   *
+   * Required rather than defaulted, and typed on this interface rather than
+   * left to fall through from `deps.trader`/`deps.risk`/`deps.verdict`: an
+   * omitted override here is invisible (the spread supplies the live arm's) and
+   * silently re-couples the control's sizing and halting to the live book. A
+   * required field makes that omission a compile error.
+   */
+  accountState: AccountStateProvider;
   /** Shared with the live arm on purpose: the control prices its fills the same way. */
   costModel: CostModel;
   marketData: MarketDataService;
@@ -167,6 +185,13 @@ export function buildControlArmWiring(deps: ControlArmWiringDeps): ControlArmWir
   const breakerOverrides = {
     circuitBreakers: deps.circuitBreakers,
     breakerState: deps.breakerState,
+    // The control's OWN account scalars. `computeCurrentPortfolioAndBreakers`
+    // combines `getOpenPositions()` with `accountState.getAccountState()`, so
+    // overriding only the first leaves the control valuing its own positions
+    // against the LIVE arm's cash and peak equity — its sizing and its
+    // drawdown halt would then track the live arm's fills, which is precisely
+    // the independence #753 measures.
+    accountState: deps.accountState,
     // Its own per-tick memo. Sharing the live arm's map would not COLLIDE (the
     // control pass runs under a suffixed trace id) but it would fill the live
     // arm's bounded cache with entries the live arm never reads, evicting its

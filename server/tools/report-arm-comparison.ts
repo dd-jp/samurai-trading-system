@@ -81,6 +81,13 @@ export function formatArmComparison(comparison: ArmComparison): string {
     '  names, the same ADR-0018 D3 bracket and the same stop, entered on the',
     '  deterministic axis vote alone — so the difference between these rows is what',
     '  the debate layer bought, net of nothing else.',
+    '',
+    '  ONE KNOWN ASYMMETRY. The control arm has no debate rounds, so it is always',
+    '  treated as decided (`converged: true`, axis-vote-decision.ts). On bars where',
+    '  the live debate did NOT converge, the live arm takes its non-converged size',
+    '  haircut and refuses a scale-in; the control takes neither. The arms therefore',
+    '  differ in SIZE on those bars, not only in entry — read a return gap on a',
+    '  non-converging stretch with that in mind.',
   );
 
   if (comparison.control.trade_count === 0) {

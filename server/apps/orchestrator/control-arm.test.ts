@@ -8,7 +8,6 @@
  * Execution, that both arms' exit rule and stop move together off one config,
  * and that the control's lot is queryable by `arm`. This file is the fast half.
  */
-import { describe, expect, it, vi } from 'vitest';
 import type { Signal } from '../../pipeline/analysts/index.js';
 import type { AnalystView } from '../../pipeline/debate-engine/index.js';
 import { SimulatedClock } from '../../shared/index.js';
@@ -20,7 +19,7 @@ import {
   CONTROL_TRACE_SUFFIX,
   InMemoryCurrentTickStore,
 } from './control-arm.js';
-import type { AuditLog, TickContext, TickOutcome, TickRunner } from './types.js';
+import type { TickContext, TickOutcome, TickRunner } from './types.js';
 
 const BAR = new Date('2026-09-01T09:00:00.000Z');
 const SIGNAL: Signal = { asset: 'BTC-USD', asset_class: 'crypto' };
@@ -59,7 +58,10 @@ function tickContext(overrides: Partial<TickContext> = {}): TickContext {
     clock: new SimulatedClock(BAR),
     trace_id: 'trace-live',
     logger: recordingLogger(),
-    auditLog: { record: () => undefined, getByTraceId: () => [] } as unknown as AuditLog,
+    // No cast: `AuditLog` declares `record()` and nothing else — `getByTraceId`
+    // belongs to the concrete `SqliteAuditLog`, and stubbing it here was what
+    // made a cast look necessary.
+    auditLog: { record: () => undefined },
     currentTickStore: new InMemoryCurrentTickStore(),
     ...overrides,
   };
