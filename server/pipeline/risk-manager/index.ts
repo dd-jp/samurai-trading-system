@@ -330,10 +330,9 @@ export class RiskManagerImpl implements RiskManager {
       if (changed) bindingConstraint = cap.name;
     }
 
-    // Deliberately NOT quantised: this feeds `applyCritic` only, whose
-    // pass/unavailable branch echoes it back as a notional the caller
-    // discards. Flooring it would change an input the critic reasons with as
-    // a side effect of a venue fix. Quantisation happens once, at the emit.
+    // Deliberately NOT quantised: this is the reported pre-quantisation size,
+    // and flooring it here would move a number the caps reason about as a side
+    // effect of a venue fix. Quantisation happens once, at the emit below.
     const finalSize = notional / intent.entry;
 
     if (notional < config.min_viable_size) {
@@ -354,7 +353,7 @@ export class RiskManagerImpl implements RiskManager {
       reasons.push(RISK_CRITIC_SKIPPED_REASON);
     }
     if (critic) {
-      const criticTrim = applyCritic(critic, notional, finalSize, reasons);
+      const criticTrim = applyCritic(critic, notional, reasons);
       if (criticTrim.rejected) {
         return rejected('risk_critic:reject', reasons);
       }
@@ -801,15 +800,14 @@ const ENTRY_CAP_GATES: readonly EntryCapGate[] = [
 function applyCritic(
   critic: { verdict: RiskCriticVerdict['verdict']; max_notional: number | null; reasoning: string },
   notional: number,
-  finalSize: number,
   reasons: string[],
 ): { changed: boolean; notional: number; rejected: boolean } {
   if (critic.verdict === 'pass' || critic.verdict === 'unavailable') {
-    return {
-      changed: false,
-      notional: finalSize * (critic.verdict === 'pass' ? 1 : 1),
-      rejected: false,
-    };
+    // Nothing to apply. `notional` goes back untouched — before #957 this
+    // branch echoed the SHARE COUNT back in a field named `notional`, inert
+    // only because the caller ignores the value when `changed` is false. That
+    // path is reachable for the first time now, so it returns the real thing.
+    return { changed: false, notional, rejected: false };
   }
 
   if (critic.verdict === 'reject') {
