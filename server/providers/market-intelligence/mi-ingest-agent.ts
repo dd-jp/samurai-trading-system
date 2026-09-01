@@ -38,6 +38,7 @@
 
 import type { LlmClient } from '../../pipeline/debate-engine/index.js';
 import type { AssetClass, Clock, Logger } from '../../shared/index.js';
+import { resolveMiSubject } from '../universe-pool/lse-etp-pool.js';
 import type { ArchivedItem, MiArchiveStore, RawArchiveRow } from './archive/mi-archive-store.js';
 import { HYDRATING_MI_SOURCES, MI_SOURCES } from './archive/mi-sources.js';
 import type { MarketIntelligenceStore } from './index.js';
@@ -131,7 +132,16 @@ export class MiIngestAgent {
    * alone.
    */
   async refresh(trace_id: string, instrument: string, asset_class: AssetClass): Promise<boolean> {
-    const symbols = [wireSymbol(instrument)];
+    // #914/#960: the ingestion-side half of the MI-wide rule. An LSE-listed
+    // leveraged ETP generates no headlines of its own — resolve to the US
+    // underlying (`screening_instrument`) BEFORE fetching, so the wire is
+    // asked about the instrument that actually gets covered, and file the
+    // resulting items under that same resolved subject (see `entity` below)
+    // so the entity-scoped read `fundamental-analyst.ts`/`sentiment-analyst.ts`
+    // now perform actually finds them. `resolveMiSubject` is the identity for
+    // every non-pool instrument, so today's universe is unaffected.
+    const miSubject = resolveMiSubject(instrument);
+    const symbols = [wireSymbol(miSubject)];
 
     const now = this.deps.clock.now();
     const start = new Date(now.getTime() - LOOKBACK_MS);
@@ -166,12 +176,14 @@ export class MiIngestAgent {
     // One article carries a symbols[] array, so an article about three tickers
     // is three items — each scored against ITS OWN entity, because a headline
     // can be bullish for one ticker and bearish for another.
-    // The wire symbol decides WHETHER this article is about the instrument;
-    // the pipeline's own id is what the item is filed under, so downstream
-    // joins see `BTC-USD` rather than the vendor's `BTCUSD`.
+    // The wire symbol decides WHETHER this article is about the resolved MI
+    // subject; the pipeline's own id (`miSubject`, #914/#960) is what the
+    // item is filed under, so downstream joins see `BTC-USD` rather than the
+    // vendor's `BTCUSD`, and an LSE ETP's items see the US underlying rather
+    // than the traded wrapper ticker.
     const pairs = fresh
       .filter((article) => article.symbols.some((symbol) => symbols.includes(symbol)))
-      .map((article) => ({ article, entity: instrument }));
+      .map((article) => ({ article, entity: miSubject }));
     if (pairs.length === 0) return false;
 
     const scores = await scoreItems(
@@ -221,7 +233,16 @@ export class MiIngestAgent {
       stage: 'market_intelligence',
       level: 'info',
       message: 'market intelligence: ingested scored news items',
-      payload: { asset_class, instrument, articles: fresh.length, items: archivedItems.length },
+      payload: {
+        asset_class,
+        instrument,
+        // Distinct from `instrument` exactly when this refresh was for an LSE
+        // ETP row — the operator-visible evidence that the resolution step
+        // ran (#914/#960).
+        mi_subject: miSubject,
+        articles: fresh.length,
+        items: archivedItems.length,
+      },
     });
 
     return true;

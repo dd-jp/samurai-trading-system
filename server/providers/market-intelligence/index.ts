@@ -178,12 +178,35 @@ export class MarketIntelligenceStore {
    * `smoke-run.ts`'s post-hoc summary read) fall back to flooring the live
    * clock, which is no worse than #782 left them and is not this ticket's
    * scope to change.
+   *
+   * ## `entity` (#914) — scoping the read past the asset class
+   *
+   * Before this, every instrument in a class read the identical class-wide
+   * bag: `fundamental-analyst.ts` and `sentiment-analyst.ts` both called this
+   * method with `signal.asset_class`, never `signal.asset`, so a class-wide
+   * macro item and a genuinely per-instrument item were indistinguishable —
+   * measured directly in #914 as 8 debates across SPY/QQQ/AAPL/TSLA sharing
+   * one fundamental key point at one confidence.
+   *
+   * `entity`, when supplied, additionally filters `inWindow` to items whose
+   * `IntelligenceItem.entity` matches — the resolved MI subject a caller
+   * computes via `resolveMiSubject` (`lse-etp-pool.ts`) so an LSE-listed
+   * wrapper's read targets the US underlying MI is actually keyed on, per
+   * #960's MI-wide rule. It stays optional on this method itself for the same
+   * reason `bar` does: a caller with no single-instrument concept at all — the
+   * coverage checker's own class-wide presence scan, the push-subscription
+   * path below — has a real class-wide answer to give, not a forgotten
+   * argument. Omitting it is unchanged behaviour; today's non-LSE universe
+   * (SPY/QQQ/AAPL/TSLA) has no per-entity items yet, so an entity-scoped read
+   * for those names correctly comes back empty until #914's ingestion-side
+   * fix (`mi-ingest-agent.ts`) has run.
    */
   getContext(
     assetClass: AssetClass,
     timeWindow: Duration,
     _trace_id: string,
     bar?: Date,
+    entity?: string,
   ): MarketContext {
     const asOf = this.clock.now();
     const windowEnd = (bar ?? floorToBar(asOf, DEBATE_BAR_TIMEFRAME_MS)).getTime();
@@ -194,7 +217,8 @@ export class MarketIntelligenceStore {
       .map((entry) => entry.item)
       .filter(
         (item) => item.timestamp.getTime() <= windowEnd && item.timestamp.getTime() >= windowStart,
-      );
+      )
+      .filter((item) => entity === undefined || item.entity === entity);
 
     const lastUpdated = this.lastUpdated(assetClass, asOf);
 

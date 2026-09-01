@@ -12,6 +12,7 @@
  */
 
 import type { IntelligenceItem } from '../../providers/market-intelligence/index.js';
+import { resolveMiSubject } from '../../providers/universe-pool/lse-etp-pool.js';
 import type { AnalystView, Direction } from '../debate-engine/index.js';
 import type { Analyst, AnalystInput, AssetClass } from './types.js';
 import { NO_DATA_MARKER } from './types.js';
@@ -54,12 +55,21 @@ export const fundamentalAnalyst: Analyst = {
     const { signal, clock } = input;
     const asOf = clock.now();
 
+    // #914/#960: entity-scoped, not class-wide — every equity in the universe
+    // used to receive the identical class-wide MI bag. `resolveMiSubject`
+    // resolves an LSE-listed wrapper to the US underlying MI is keyed on
+    // (`lse-etp-pool.ts`) and is the identity for every non-pool instrument,
+    // so today's SPY/QQQ/AAPL/TSLA universe is unaffected by the resolution
+    // step itself.
+    const miSubject = resolveMiSubject(signal.asset);
+
     const [marketContext, mark] = await Promise.all([
       input.market_intelligence.getContext(
         signal.asset_class,
         MI_CONTEXT_WINDOW_MS,
         input.trace_id,
         input.bar,
+        miSubject,
       ),
       input.market_data.getMark(signal.asset, asOf),
     ]);

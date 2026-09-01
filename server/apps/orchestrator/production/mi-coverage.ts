@@ -43,6 +43,7 @@
  * explicitly, never dropped and never left to read as healthy.
  */
 import type { MarketContext } from '../../../providers/market-intelligence/index.js';
+import { resolveMiSubject } from '../../../providers/universe-pool/lse-etp-pool.js';
 import type { AssetClass, InstrumentSubclass, Logger } from '../../../shared/index.js';
 
 /** The bucket a per-subclass counter uses when the universe declares no subclass for a name. */
@@ -247,7 +248,13 @@ export async function checkMiCoverage(
     COVERAGE_WINDOW_MS,
     params.trace_id,
   );
-  const covered = hasCoverageFor(context, params.instrument);
+  // #914/#960: ingestion now files items under the resolved MI subject
+  // (`resolveMiSubject` — the US underlying for an LSE-listed leveraged ETP,
+  // identity for every non-pool instrument), so coverage must ask the same
+  // question the analysts now ask, or an LSE row would read as permanently
+  // uncovered even when its underlying has fresh items — the wrong instrument
+  // compared to the right entity.
+  const covered = hasCoverageFor(context, resolveMiSubject(params.instrument));
   const subclass = subclassFor(params.instrument, deps.subclassOf);
   const { alert } = deps.monitor.observe(params.instrument, covered);
 

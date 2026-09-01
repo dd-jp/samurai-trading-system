@@ -12,6 +12,7 @@
 
 import type { BarWindow } from '../../providers/market-data-service/index.js';
 import type { IntelligenceItem } from '../../providers/market-intelligence/index.js';
+import { resolveMiSubject } from '../../providers/universe-pool/lse-etp-pool.js';
 import type { AnalystView, Direction } from '../debate-engine/index.js';
 import type { Analyst, AnalystInput, AssetClass } from './types.js';
 import { NO_DATA_MARKER } from './types.js';
@@ -60,12 +61,19 @@ export const sentimentAnalyst: Analyst = {
       lookback: CONTEXT_CANDLE_LOOKBACK,
     };
 
+    // #914/#960: entity-scoped, not class-wide — same defect and same fix as
+    // fundamental-analyst.ts. `resolveMiSubject` resolves an LSE-listed
+    // wrapper to the US underlying MI is keyed on and is the identity for
+    // every non-pool instrument.
+    const miSubject = resolveMiSubject(signal.asset);
+
     const [marketContext, candles] = await Promise.all([
       input.market_intelligence.getContext(
         signal.asset_class,
         MI_CONTEXT_WINDOW_MS,
         input.trace_id,
         input.bar,
+        miSubject,
       ),
       input.market_data.getBars(signal.asset, contextWindow, asOf),
     ]);

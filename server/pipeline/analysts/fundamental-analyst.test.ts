@@ -159,4 +159,125 @@ describe('fundamentalAnalyst', () => {
 
     expect(view.key_points.join(' ')).not.toContain(NO_DATA_MARKER);
   });
+
+  describe('entity-scoped MI read (#914)', () => {
+    it('direction and confidence differ between two instruments of the same class given different per-entity items in ONE shared store', async () => {
+      const clock = new ManualClock(ASOF);
+      const sharedStore = new MarketIntelligenceStore(clock);
+      sharedStore.ingest({
+        agent_id: 'deepresearch',
+        timestamp: ASOF,
+        asset_class: 'stocks',
+        items: [
+          {
+            id: 'aapl-1',
+            source: 'sec-filing',
+            type: 'news',
+            timestamp: ASOF,
+            entity: 'AAPL',
+            headline: 'Apple beats estimates',
+            sentiment: 1,
+            confidence: 0.9,
+          },
+          {
+            id: 'tsla-1',
+            source: 'sec-filing',
+            type: 'news',
+            timestamp: ASOF,
+            entity: 'TSLA',
+            headline: 'Tesla misses estimates',
+            sentiment: -1,
+            confidence: 0.3,
+          },
+        ],
+      });
+
+      const aaplInput = {
+        ...buildInput({ asset: 'AAPL', asset_class: 'stocks' }, 'trace-aapl'),
+        market_intelligence: sharedStore,
+      };
+      const tslaInput = {
+        ...buildInput({ asset: 'TSLA', asset_class: 'stocks' }, 'trace-tsla'),
+        market_intelligence: sharedStore,
+      };
+
+      const aaplView = await fundamentalAnalyst.run(aaplInput);
+      const tslaView = await fundamentalAnalyst.run(tslaInput);
+
+      expect(aaplView.direction).toBe('bullish');
+      expect(tslaView.direction).toBe('bearish');
+      expect(aaplView.confidence).not.toBe(tslaView.confidence);
+    });
+
+    it('an instrument with no items of its own reports NO_DATA_MARKER even though the class-wide store holds other instruments items', async () => {
+      const clock = new ManualClock(ASOF);
+      const store = new MarketIntelligenceStore(clock);
+      store.ingest({
+        agent_id: 'deepresearch',
+        timestamp: ASOF,
+        asset_class: 'stocks',
+        items: [
+          {
+            id: 'aapl-1',
+            source: 'sec-filing',
+            type: 'news',
+            timestamp: ASOF,
+            entity: 'AAPL',
+            headline: 'Apple beats estimates',
+            sentiment: 1,
+            confidence: 0.9,
+          },
+        ],
+      });
+
+      const qqqInput = {
+        ...buildInput({ asset: 'QQQ', asset_class: 'stocks' }, 'trace-qqq'),
+        market_intelligence: store,
+      };
+
+      const view = await fundamentalAnalyst.run(qqqInput);
+
+      expect(view.key_points[0]).toContain(NO_DATA_MARKER);
+      expect(view.direction).toBe('neutral');
+      expect(view.confidence).toBe(0.05);
+    });
+
+    /**
+     * #960's MI-wide rule: an LSE-listed leveraged ETP's MI read targets the
+     * US underlying (`screening_instrument`), not the traded `lse_ticker`. A
+     * real pool row (`3USL` -> `SPY`, `lse-etp-pool.ts`) proves the resolution
+     * step actually runs rather than merely existing unused.
+     */
+    it('resolves an LSE ETP instrument through screeningInstrumentFor to its US underlying before querying MI', async () => {
+      const clock = new ManualClock(ASOF);
+      const store = new MarketIntelligenceStore(clock);
+      store.ingest({
+        agent_id: 'deepresearch',
+        timestamp: ASOF,
+        asset_class: 'stocks',
+        items: [
+          {
+            id: 'spy-1',
+            source: 'sec-filing',
+            type: 'news',
+            timestamp: ASOF,
+            entity: 'SPY',
+            headline: 'S&P 500 rallies on rate-cut bets',
+            sentiment: 1,
+            confidence: 0.8,
+          },
+        ],
+      });
+
+      const etpInput = {
+        ...buildInput({ asset: '3USL', asset_class: 'stocks' }, 'trace-3usl'),
+        market_intelligence: store,
+      };
+
+      const view = await fundamentalAnalyst.run(etpInput);
+
+      expect(view.direction).toBe('bullish');
+      expect(view.key_points.join(' ')).not.toContain(NO_DATA_MARKER);
+    });
+  });
 });
