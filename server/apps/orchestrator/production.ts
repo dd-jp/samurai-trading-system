@@ -143,9 +143,11 @@ import {
   seedAnalystWeights,
 } from '../../pipeline/feedback-loop/index.js';
 import {
+  buildRiskCriticProducer,
   CircuitBreakers,
   riskThresholdsFrom,
   SqliteBreakerStateStore,
+  SqliteRiskCriticStore,
 } from '../../pipeline/risk-manager/index.js';
 import { assertTraderConfigSound, SqliteSetupStore } from '../../pipeline/trader/index.js';
 import { assertAutomationLevelSupported } from '../../pipeline/verdict/index.js';
@@ -1247,6 +1249,20 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       // to go but silent loss (still fine; see that catch's doc comment) with
       // no trace at all.
       logger,
+      // #957: check-pipeline step 7's producer. The SAME `llmClient` the
+      // debate bills through, so there is one spend meter and one config —
+      // the critic's calls land in `llm_spend` under `stage: 'risk_critic'`
+      // and count against ADR-0008's ceiling like every other billed call.
+      // `mode` picks the implementation: `backtest` gets a producer holding no
+      // LLM client at all, which is what makes "no live call in a replayed
+      // path" (ADR-0003 §2) structural rather than a runtime check.
+      critic: buildRiskCriticProducer({
+        mode: config.mode,
+        llm: llmClient,
+        store: new SqliteRiskCriticStore(config.db),
+        spendCap,
+        logger,
+      }),
     }),
     verdict: buildVerdictStep({
       ...breakerStateDeps,

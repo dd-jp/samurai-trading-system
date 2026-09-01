@@ -561,6 +561,39 @@ CREATE TABLE llm_spend (
 CREATE INDEX idx_llm_spend_timestamp ON llm_spend(timestamp);
 ```
 
+#### `risk_critic_log` (2026-09-01, [#957](https://github.com/dd-jp/samurai-trading-system/issues/957))
+
+Owned by the Risk Manager (`server/pipeline/risk-manager/critic-store.ts` writes and reads it;
+migration `0032_risk_critic_log.sql`). It is what makes [ADR-0003](../adr/0003-risk-manager-critic-layer.md) §2's
+replay-from-log determinism real: `live`/`paper` persist the critic's verdict here, and a `backtest`
+run READS this table instead of calling the model again — so a replay of the same history reaches
+the same decision and Stage 2's PBO/DSR/MinBTL statistics stay valid.
+
+Keyed on `debate_id`, the join key `debate_log` and `cosine_setups` already carry (#162) — one
+debate produces at most one gated intent, so one verdict per debate is the grain, and the PK is
+what makes a re-run idempotent instead of accumulating a second, possibly different, verdict for
+one decision. Postdates the non-collision pass below; `verdict`, `max_notional` and `reasoning`
+collide with nothing.
+
+`verdict = 'unavailable'` is a real row rather than an absent one: the critic was consulted and
+could not answer (provider failure, spend-cap refusal, unreadable response). `evaluate()` is still
+handed NOTHING in that case, so the decision keeps its explicit `risk_critic: skipped` reason —
+the row is for the operator, and so a replay sees the same "no verdict" input the live run had.
+
+```sql
+CREATE TABLE risk_critic_log (
+  debate_id    TEXT NOT NULL PRIMARY KEY,
+  verdict      TEXT NOT NULL CHECK(verdict IN ('pass', 'trim', 'reject', 'unavailable')),
+  -- Meaningful only for 'trim': the notional the critic argues this intent
+  -- should be capped at. The pipeline can only ever use it to REDUCE size.
+  max_notional REAL NULL,
+  reasoning    TEXT NOT NULL,
+  created_at   TEXT NOT NULL
+);
+
+CREATE INDEX idx_risk_critic_log_created_at ON risk_critic_log(created_at);
+```
+
 **Retrieval is by `(instrument, bar_timestamp)`, never by an id.** A replay mints fresh `trace_id` and `debate_id` values, so neither can bridge a live row to a replayed lookup. The id column is row identity; the unique index is the lookup path — the same arrangement `debate_log` already relies on.
 
 **`bar_timestamp` must be floored to the bar boundary on write, and this does not happen today.** The equivalent write on the debate path stores `clock.now()` unfloored, so a live tick at 14:32:07 files under 14:32:07 while a replay stepping bar boundaries looks up 14:30:00 and misses every row. Under the backtest harness the simulated clock sits exactly on the bar close and the bug is invisible. Fixing it on this table does not fix `debate_log`, which has the same defect.

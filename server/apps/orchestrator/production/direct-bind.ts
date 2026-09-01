@@ -40,7 +40,10 @@ import type {
   BreakerStatePersistence,
   CircuitBreakers,
   PersistedBreakerState,
+  PortfolioView,
   RiskConfig,
+  RiskCriticProducer,
+  RiskCriticVerdict,
   RiskDecision,
   RiskThresholdSource,
   SessionBasisByClass,
@@ -52,6 +55,7 @@ import {
   computePortfolioView,
   countryForInstrument,
   PerSubclassCapUnresolvableError,
+  RISK_CRITIC_SKIPPED_REASON,
   RiskManagerImpl,
 } from '../../../pipeline/risk-manager/index.js';
 import type { TraderConfig, TraderDiagnostic } from '../../../pipeline/trader/index.js';
@@ -78,6 +82,7 @@ import type {
   Clock,
   Logger,
   OpenPosition,
+  OrderIntent,
   RiskLogStore,
   SetupStore,
   TraderLogStore,
@@ -903,6 +908,69 @@ export interface RiskStepDeps extends BreakerStateDeps {
    * `Logging…Channel`: this catch already logs at `error`).
    */
   thresholdClampAlerts?: ThresholdClampAlertChannel;
+  /**
+   * #957: check-pipeline step 7's producer (`risk-manager/critic.ts`).
+   *
+   * `undefined` is a real, safe state rather than a gap: without a producer
+   * every decision keeps the explicit `risk_critic: skipped` reason it has
+   * carried since the step was specced, and the mechanical steps remain the
+   * safety net. A test or a programmatic root stays offline that way.
+   *
+   * REQUIRED but nullable, unlike `riskLog`/`thresholds`, and the asymmetry is
+   * the point — the same argument `evaluateSmokeGate`'s
+   * `llmRateLimiterSnapshot` makes (smoke-run.ts). Optional, deleting the one
+   * `critic:` line in `production.ts` would compile, pass every test, and
+   * silently return step 7 to the never-run state review F-5 recorded. Passing
+   * `undefined` has to be a written choice at the call site, so forgetting it
+   * is a COMPILE error rather than a quietly disarmed model check in front of
+   * live money.
+   */
+  critic: RiskCriticProducer | undefined;
+}
+
+/**
+ * Asks the critic producer for a verdict, and NEVER throws (#957).
+ *
+ * The producer already fails open internally, but it is a public seam any
+ * implementation may satisfy, and a throw from here would reach
+ * `buildRiskStep`'s catch — which writes a `risk_log` `error` row and re-throws
+ * to abort the tick. That would turn "the critic was unreachable" into "the
+ * risk stage crashed", inverting the fail-open posture ADR-0003 and #640
+ * settled. The guarantee is enforced at the boundary, where it holds.
+ */
+async function criticVerdictFor(
+  deps: RiskStepDeps,
+  context: { trace_id: string; intent: OrderIntent; portfolio: PortfolioView; clock: Clock },
+): Promise<RiskCriticVerdict | undefined> {
+  const { trace_id, intent, portfolio, clock } = context;
+  try {
+    return await deps.critic?.produce({
+      trace_id,
+      intent,
+      portfolio: {
+        equity: portfolio.equity,
+        gross_exposure: portfolio.gross_exposure,
+        held: Object.entries(portfolio.exposure_by_instrument).map(([instrument, notional]) => ({
+          instrument,
+          notional,
+        })),
+      },
+      asOf: clock.now(),
+    });
+  } catch (error) {
+    if (deps.logger) {
+      safeLog(deps.logger, {
+        trace_id,
+        stage: 'risk',
+        level: 'warn',
+        message:
+          'risk critic producer threw; the decision proceeds on the mechanical steps with ' +
+          'risk_critic: skipped',
+        payload: { instrument: intent.instrument, error: describeThrown(error) },
+      });
+    }
+    return undefined;
+  }
 }
 
 export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
@@ -968,13 +1036,13 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
       .filter((country): country is string => country !== null);
     const cii = deps.ciiConsumer.getScores(heldCountries);
 
-    // Red-team critic (#204), check-pipeline step 7, has NO PRODUCER anywhere
-    // in the tree — `critic.ts` does not exist; only `critic-store.ts` (the
-    // consumer side) does. The verdict is therefore always absent, which
-    // defaults to "pass", so nothing distinguishes "the critic passed" from
-    // "the critic was never consulted". The mechanical steps remain the safety
-    // net. Do not read this comment as "wiring pending" — the step has never
-    // run in any environment. See docs/reviews/triage-2026-08-06.md F-5.
+    // Red-team critic (#204), check-pipeline step 7: the producer is
+    // `risk-manager/critic.ts`, built by #957 and supplied on `deps.critic`.
+    // It runs BELOW, between two `evaluate()` calls — see `criticVerdictFor`.
+    // Without a producer (a test, a programmatic root) the verdict stays
+    // absent and every decision keeps its explicit `risk_critic: skipped`
+    // reason, with the mechanical steps as the safety net, exactly as before
+    // (docs/reviews/triage-2026-08-06.md F-5).
     const daily = portfolio.daily_pnl;
     const riskLogBase = {
       trace_id,
@@ -1003,17 +1071,42 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
 
     let decision: RiskDecision;
     try {
-      decision = riskManager.evaluate({
-        trace_id,
-        intent,
-        clock,
-        portfolio,
-        breakers,
-        next_breaker_state,
-        correlation,
-        cii,
-        mode: deps.mode,
-      });
+      const evaluateWith = (critic?: RiskCriticVerdict): RiskDecision =>
+        riskManager.evaluate({
+          trace_id,
+          intent,
+          clock,
+          portfolio,
+          breakers,
+          next_breaker_state,
+          correlation,
+          cii,
+          mode: deps.mode,
+          ...(critic === undefined ? {} : { critic }),
+        });
+
+      // TWO PASSES, and the first one is what fixes the cadence.
+      //
+      // #955 specifies the critic firing on every intent that REACHES step 7 —
+      // every viable entry that survived the exit bypass, the unvalued-book
+      // refusal, the breaker gate and the `min_viable_size` reject. Nothing
+      // outside `evaluate()` knows which of those an intent will survive, and
+      // `evaluate()` must stay pure and synchronous (#642), so it cannot ask
+      // the model itself. So: evaluate once with NO verdict — cheap, pure, no
+      // I/O — and let the pipeline itself answer the question. Reaching step 7
+      // with no verdict is exactly what pushes `RISK_CRITIC_SKIPPED_REASON`,
+      // so that reason IS the "step 7 was reached" signal, read from the same
+      // exported constant the pipeline pushes.
+      //
+      // Only the SECOND decision is logged and returned; the dry run is
+      // discarded, so one intent still produces exactly one `risk_log` row.
+      const dryRun = evaluateWith();
+      const reachedCritic = dryRun.reasons.includes(RISK_CRITIC_SKIPPED_REASON);
+      const verdict =
+        reachedCritic && deps.critic !== undefined
+          ? await criticVerdictFor(deps, { trace_id, intent, portfolio, clock })
+          : undefined;
+      decision = verdict === undefined ? dryRun : evaluateWith(verdict);
     } catch (error) {
       // #726: `perSubclassDeploymentCap` (risk-manager/index.ts) is the only
       // entry gate that throws rather than returning a decision — deliberately,

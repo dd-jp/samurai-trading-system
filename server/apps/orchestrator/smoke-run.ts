@@ -237,7 +237,11 @@ import type { DataFailoverAlert } from './production/data-failover.js';
 import { worstCaseLlmCallsForAssetClass } from './production/debate-adapter.js';
 import type { AccountStateProvider } from './production/direct-bind.js';
 import { buildExecutionSurface } from './production/direct-bind.js';
-import { buildProductionOrchestrator, SMOKE_TEST_UNIVERSE } from './production.js';
+import {
+  buildProductionComponents,
+  buildProductionOrchestrator,
+  SMOKE_TEST_UNIVERSE,
+} from './production.js';
 import type { Logger } from './types.js';
 
 /**
@@ -2644,6 +2648,96 @@ async function runDataFailoverScenario(logger: Logger): Promise<DataFailoverEvid
   }
 }
 
+/** What `evaluateSmokeGate` needs from the risk-critic scenario (#957). */
+export interface RiskCriticEvidence {
+  /** `risk_critic_log.verdict` values the run's own composition root wrote, in insertion order. */
+  loggedVerdicts: readonly string[];
+  /** The step's throw, if consulting the critic took the risk stage down instead of failing open. */
+  stepError: string | null;
+}
+
+/**
+ * The risk critic's enforcement assertion (#957), per the standard that wiring
+ * a mechanism means asserting it HERE (#430).
+ *
+ * Driven through the REAL `buildProductionComponents` — the composition root
+ * that owns the one `critic:` line — and asserted on the DURABLE effect: a
+ * `risk_critic_log` row for the intent's `debate_id`. Delete that line and this
+ * scenario records nothing and the gate FAILS, which is the whole point: this
+ * repo's dominant defect class is a built, tested, wired mechanism nothing
+ * external ever asserts fires (#388, #364, #562), and step 7 spent its entire
+ * life so far in exactly that state (docs/reviews/triage-2026-08-06.md F-5).
+ *
+ * VERDICT-AGNOSTIC on purpose. `ConstantResponseLlmClient` answers with the
+ * debate's fixture payload, which does not satisfy the critic's parser, so the
+ * producer fails open and records `unavailable`. That row still proves the
+ * producer was wired, dialled, metered and persisted — and asserting the row
+ * rather than its content keeps this gate from turning red on an unrelated
+ * change to the shared fixture response.
+ */
+async function runRiskCriticScenario(logger: Logger): Promise<RiskCriticEvidence> {
+  const db = openSharedStore(':memory:');
+  try {
+    const clock = new SimulatedClock(SMOKE_RUN_INSTANT);
+    const profile = paperStartingProfile('paper');
+    const dataSource = new FixtureDataSource(
+      buildSmokeFixtureBars(),
+      { price: SMOKE_MARK_PRICE, observed_at: SMOKE_RUN_INSTANT, source: 'smoke-fixture' },
+      'crypto',
+      {
+        bid: SMOKE_MARK_PRICE - 0.5,
+        ask: SMOKE_MARK_PRICE + 0.5,
+        observed_at: SMOKE_RUN_INSTANT,
+      },
+    );
+
+    const components = buildProductionComponents({
+      ...profile,
+      db,
+      clock,
+      logger,
+      universe: SMOKE_TEST_UNIVERSE,
+      tradingCalendar: new AlwaysOpenCalendar(),
+      stocksTradingWindow: () => true,
+      dataSource,
+      miArchive: new MiArchiveStore(),
+      accountState: new FixedAccountStateProvider(),
+      alpacaBrokerClient: new UnreachableAlpacaClient(),
+      llmClient: new ConstantResponseLlmClient(),
+    });
+
+    // A viable ENTRY — the population #955's cadence names. An exit would
+    // bypass the entry gates and never reach step 7, so it would prove
+    // nothing about the wiring. Size 1 rather than a dust lot on purpose: at
+    // `SMOKE_MARK_PRICE` that is $160 of notional, clear of the profile's own
+    // `min_viable_size` floor, which rejects ABOVE step 7 (a 0.01 lot bound on
+    // `min_viable_size` here and the critic was correctly never asked).
+    const intent = exitPathOrder(
+      SMOKE_INSTRUMENT,
+      'smoke-risk-critic-entry',
+      'buy',
+      'entry',
+      1,
+      SMOKE_RUN_INSTANT,
+    );
+
+    let stepError: string | null = null;
+    try {
+      await components.steps.risk({ trace_id: 'smoke-risk-critic', intent, clock });
+    } catch (error) {
+      stepError = error instanceof Error ? error.message : String(error);
+    }
+
+    const logged = db.prepare('SELECT verdict FROM risk_critic_log ORDER BY rowid').all() as {
+      verdict: string;
+    }[];
+
+    return { loggedVerdicts: logged.map((row) => row.verdict), stepError };
+  } finally {
+    db.close();
+  }
+}
+
 export function evaluateSmokeGate(
   observations: SmokeObservations,
   options: {
@@ -2729,6 +2823,14 @@ export function evaluateSmokeGate(
      * site would leave `yarn smoke` green — #430's defect class exactly.
      */
     dataFailover: DataFailoverEvidence;
+    /**
+     * The risk critic's evidence (#957) — required, not optional, for the same
+     * "compile error, not a silent no-op" reason the mechanisms above are.
+     * Check-pipeline step 7 has a producer for the first time; deleting the one
+     * `critic:` line in `production.ts` would return it to the never-run state
+     * with every unit test still green, and nothing else here would notice.
+     */
+    riskCritic: RiskCriticEvidence;
   },
 ): SmokeGateResult {
   const failures: string[] = [];
@@ -3005,6 +3107,26 @@ export function evaluateSmokeGate(
     failures.push(
       'the failover served bars but raised nothing on the DataFailoverAlertChannel — an ' +
         'unattended soak that silently switched vendors is a stall nobody learns about (#562)',
+    );
+  }
+
+  // #957 — check-pipeline step 7's producer, asserted on its DURABLE effect
+  // through the real composition root. See `runRiskCriticScenario`.
+  const critic = options.riskCritic;
+  if (critic.stepError !== null) {
+    failures.push(
+      `the risk step threw while consulting the critic: ${critic.stepError} — step 7 is ` +
+        'specified to FAIL OPEN (a decision proceeds on the mechanical steps with ' +
+        'risk_critic: skipped), so a throw here turns an unreachable model into a dead tick ' +
+        'in front of an order (#957, ADR-0003)',
+    );
+  }
+  if (critic.loggedVerdicts.length === 0) {
+    failures.push(
+      'a viable entry reached the risk stage through the real composition root and no ' +
+        'risk_critic_log row was written — the critic producer is not wired at all, so ' +
+        'check-pipeline step 7 is back to the never-run state review F-5 recorded, and every ' +
+        'decision silently records risk_critic: skipped while looking healthy (#957)',
     );
   }
 
@@ -3897,6 +4019,13 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
     // the root's `config.dataSource ??` seam short-circuits the failover there.
     const dataFailover = await runDataFailoverScenario(logger);
 
+    // #957: check-pipeline step 7's producer, on its own composition root and
+    // its own cold in-memory store. The six-stage run above cannot stand in
+    // for it — it has produced zero approved entries historically (#625), so
+    // a critic that never fired would be indistinguishable from one that was
+    // never wired.
+    const riskCritic = await runRiskCriticScenario(logger);
+
     // Safe to read the Polymarket counts here, and only here: `start()` fires
     // the first refresh as `void polymarketAgent.refresh('startup')`, so its
     // store write is in flight after `start()` resolves — but `stop()` (line
@@ -3915,6 +4044,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       entrypointFaultGuards,
       thresholdClamp,
       dataFailover,
+      riskCritic,
       exitPath: {
         ...exitPathHarnessResult,
         // Alerts from BOTH the six-stage tick loop and the exit-path harness —

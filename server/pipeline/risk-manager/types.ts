@@ -420,9 +420,11 @@ export interface SubclassDeploymentCap {
   };
 }
 
-/** The red-team critic's verdict on one gated `OrderIntent` (ADR-0003, #204). Produced *outside* `evaluate()` by critic.ts and consumed here as pre-built data.
+/** The red-team critic's verdict on one gated `OrderIntent` (ADR-0003, #204). Produced *outside* `evaluate()` by critic.ts (built by #957) and consumed here as pre-built data.
  *
- * `unavailable` is what a failed live critic call persists (fail-open, per ADR-0003 §Consequences): the mechanical steps remain the safety net. */
+ * `unavailable` is what a failed critic call PERSISTS (fail-open, per ADR-0003 §Consequences): the mechanical steps remain the safety net. It is
+ * never handed to `evaluate()` — both producers map it back to `undefined`, so the decision keeps its explicit `risk_critic: skipped` reason and a
+ * backtest replays the same "no verdict" input the live run had. `evaluate()` still handles the value defensively, since `RiskInput` is a public seam. */
 export interface RiskCriticVerdict {
   verdict: 'pass' | 'trim' | 'reject' | 'unavailable';
   /** Only meaningful for `trim`: the notional the critic argues this intent should be capped at. */
@@ -438,7 +440,9 @@ export interface RiskCriticLog {
   created_at: Date;
 }
 
-/** Port for the `debate_id`-keyed critic log. In-memory implementation in critic-store.ts; SQLite-backed store deferred repo-wide. */
+/** Port for the `debate_id`-keyed critic log. `SqliteRiskCriticStore` (critic-store.ts, migration 0032) is the production implementation — durable and
+ * cross-process because ADR-0003 §2's replay-from-log means a `backtest` run reads what a `live`/`paper` run wrote; `InMemoryRiskCriticStore` beside it
+ * serves tests and a root with no shared store. */
 export interface RiskCriticStore {
   writeVerdict(entry: RiskCriticLog): void;
   getByDebateId(debate_id: string): RiskCriticLog | undefined;
@@ -469,7 +473,14 @@ export interface RiskInput {
    * `CiiConsumer.getScores`.
    */
   cii: Record<string, number>;
-  /** Red-team critic verdict (#204), pre-fetched by critic.ts. Absent = pass; mechanical steps are the safety net. */
+  /**
+   * Red-team critic verdict (#204), pre-fetched by critic.ts (#957).
+   *
+   * Absent is NOT silently a pass: step 7 records an explicit
+   * `risk_critic: skipped` reason (see `RISK_CRITIC_SKIPPED_REASON`), so a
+   * decision the critic never saw stays distinguishable from one it passed.
+   * The mechanical steps are the safety net either way.
+   */
   critic?: RiskCriticVerdict;
   /**
    * Consumed by #77 (`CircuitBreakers.evaluate`), not by this pipeline. It no

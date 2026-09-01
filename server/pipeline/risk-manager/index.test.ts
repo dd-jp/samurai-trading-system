@@ -970,6 +970,29 @@ describe('RiskManagerImpl.evaluate — risk-critic skip record (review 2026-08-0
 
     expect(decision.reasons.some((reason) => reason.includes('risk_critic: skipped'))).toBe(false);
   });
+
+  it('#957: a critic trim below the dust floor is still attributable to the critic in `reasons`', () => {
+    // `applyCritic` runs AFTER the pre-quantisation `min_viable_size` check, so
+    // a trim to dust falls through to the post-quantisation floor and the
+    // `binding_constraint` names THAT — the critic's decision reaches the log
+    // as what looks like a grid artifact. The producer (#957) cannot prevent
+    // this: it has no view of `config.min_viable_size`. Pinning the behaviour
+    // instead of re-plumbing the ordering, because `reasons` still carries the
+    // trim verbatim and a post-mortem can attribute it there.
+    const decision = new RiskManagerImpl(makeConfig({ min_viable_size: 100 })).evaluate(
+      makeInput({
+        critic: { verdict: 'trim', max_notional: 50, reasoning: 'headline risk into the close' },
+      }),
+    );
+
+    expect(decision.status).toBe('rejected');
+    expect(decision.binding_constraint).toBe('min_viable_size:quantised');
+    expect(
+      decision.reasons.some((reason) =>
+        reason.includes('risk_critic: trimmed notional from 10000 to 50'),
+      ),
+    ).toBe(true);
+  });
 });
 
 describe('RiskManagerImpl.evaluate — exit bypasses the live threshold clamp (#766)', () => {
