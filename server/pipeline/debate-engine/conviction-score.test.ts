@@ -219,20 +219,19 @@ describe('computeConvictionScore', () => {
       expect(score).toBeLessThan(CONVICTION_FLOOR);
     });
 
-    it('KNOWN HOLE — the guarantee above is desk-shaped, and fails at maximum evidence', () => {
-      // Characterisation, not an endorsement. The test above passes on the
-      // production desk's OBSERVED evidence (0.54), but the guarantee is an
-      // accident of desk shape rather than a property: the mediator's lone vote
-      // supplies a lean of 1/(n+1) out of nothing, so at MAXIMUM evidence a
-      // three-analyst desk scores exactly the floor and a two-analyst desk
-      // clears it — a trade no analyst agreed with, which is the pre-#625
-      // branch this module set out to close.
+    it('FIXED by #683 — the mediator cannot create a directional lean from a neutral desk, at any desk size', () => {
+      // Was "KNOWN HOLE" until #683: at maximum evidence, a neutral desk's
+      // mediator vote used to supply a lean of 1/(n+1) out of nothing — 0.55
+      // (exactly the floor) on a three-analyst desk, 0.60 (clearing outright)
+      // on a two-analyst desk. `decide.ts` gates on `confidence <
+      // conviction_floor`, so the exact tie AUTHORISED the trade.
       //
-      // The Trader gates on `confidence < conviction_floor` (decide.ts), so the
-      // exact tie AUTHORISES the trade rather than blocking it.
-      //
-      // Pinned here so the hole cannot be closed silently or widen unnoticed.
-      // Closing it changes what the system trades and is tracked as #683.
+      // #683 implements Option 1: the mediator amplifies an existing analyst
+      // lean but cannot create one. With the analysts' own directional mean at
+      // exactly 0, `computeDirectionalConsensus` now returns 0 regardless of
+      // what the mediator says, so the whole score is capped at
+      // `EVIDENCE_WEIGHT` (0.4) — well under the floor, and identically so at
+      // both desk sizes, closing the desk-size dependency along with the hole.
       const maxEvidence = (id: string): AnalystView =>
         makeView({
           analyst_id: id,
@@ -245,11 +244,58 @@ describe('computeConvictionScore', () => {
       const threeAnalystDesk = [maxEvidence('a1'), maxEvidence('a2'), maxEvidence('a3')];
       const twoAnalystDesk = [maxEvidence('a1'), maxEvidence('a2')];
 
-      expect(computeConvictionScore(threeAnalystDesk, [], 'bearish')).toBeCloseTo(0.55, 10);
-      expect(computeConvictionScore(twoAnalystDesk, [], 'bearish')).toBeCloseTo(0.6, 10);
-      expect(computeConvictionScore(threeAnalystDesk, [], 'bearish')).toBeGreaterThanOrEqual(
+      // Evidence strength is saturated (3 key points, confidence 1) for both
+      // desks, so the ceiling is exactly EVIDENCE_WEIGHT (0.4) either way.
+      expect(computeConvictionScore(threeAnalystDesk, [], 'bearish')).toBeCloseTo(0.4, 10);
+      expect(computeConvictionScore(twoAnalystDesk, [], 'bearish')).toBeCloseTo(0.4, 10);
+      expect(computeConvictionScore(threeAnalystDesk, [], 'bearish')).toBeLessThan(
         CONVICTION_FLOOR,
       );
+      expect(computeConvictionScore(twoAnalystDesk, [], 'bearish')).toBeLessThan(CONVICTION_FLOOR);
+
+      // Holds for every mediator stance, not just 'bearish' — a neutral desk
+      // cannot be walked over the floor by the mediator alone, at any size.
+      for (const mediator of ['bullish', 'neutral', 'bearish'] as const) {
+        expect(computeConvictionScore(threeAnalystDesk, [], mediator)).toBeLessThan(
+          CONVICTION_FLOOR,
+        );
+        expect(computeConvictionScore(twoAnalystDesk, [], mediator)).toBeLessThan(CONVICTION_FLOOR);
+      }
+    });
+
+    it('#683 — the mediator can still amplify a genuine (non-zero) analyst lean', () => {
+      // The fix must not regress defect 2/#625: when the analysts DO have a
+      // real (non-zero) mean lean, the mediator remains an equal participant
+      // that can move the score up or down, same as before #683.
+      const desk = [
+        makeView({ analyst_id: 'a1', direction: 'bullish', confidence: 1, key_points: [] }),
+        makeView({ analyst_id: 'a2', direction: 'neutral', confidence: 1, key_points: [] }),
+        makeView({ analyst_id: 'a3', direction: 'neutral', confidence: 1, key_points: [] }),
+      ];
+
+      const agreeing = computeConvictionScore(desk, [], 'bullish');
+      const abstaining = computeConvictionScore(desk, [], 'neutral');
+      const dissenting = computeConvictionScore(desk, [], 'bearish');
+
+      expect(agreeing).toBeGreaterThan(abstaining);
+      expect(abstaining).toBeGreaterThan(dissenting);
+    });
+
+    it('#683 — a mediator cannot create a lean out of exact analyst disagreement either', () => {
+      // "Analysts' own mean is 0" is broader than "every analyst neutral": a
+      // desk that cancels out exactly (one bullish, one bearish) has no net
+      // lean either, and the mediator must not be able to manufacture one from
+      // that symmetric disagreement.
+      const cancelledDesk = [
+        makeView({ analyst_id: 'a1', direction: 'bullish', confidence: 1, key_points: [] }),
+        makeView({ analyst_id: 'a2', direction: 'bearish', confidence: 1, key_points: [] }),
+      ];
+
+      // EVIDENCE_WEIGHT = 0.4, not re-exported by the module — this is the
+      // module's own INVARIANT restated as a literal, matching the other
+      // "cannot exceed 0.4" assertion below.
+      expect(computeConvictionScore(cancelledDesk, [], 'bullish')).toBeLessThanOrEqual(0.4);
+      expect(computeConvictionScore(cancelledDesk, [], 'bearish')).toBeLessThanOrEqual(0.4);
     });
 
     it('with no directional lean the score cannot reach any shipped floor', () => {

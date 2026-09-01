@@ -126,32 +126,54 @@ function directionValue(direction: Direction): number {
  * to. Counting them would add a permanent -1 and +1 to every debate, pinning
  * the mean near zero and making conviction unreachable by construction.
  *
- * INVARIANT worth keeping: with no directional lean the first term is 0, so
- * the score cannot exceed `EVIDENCE_WEIGHT` (0.4) — below every conviction
- * floor the Trader ships. A debate in which nobody takes a side can therefore
- * never open a position, arithmetically rather than by a threshold that could
- * be retuned.
+ * INVARIANT: for any NON-EMPTY set of analyst views, with no directional lean
+ * the first term is 0, so the score cannot exceed `EVIDENCE_WEIGHT` (0.4) —
+ * below every conviction floor the Trader ships. A debate in which nobody
+ * takes a side can therefore never open a position, arithmetically rather
+ * than by a threshold that could be retuned. This now holds unconditionally
+ * over this function's own inputs, including with a mediator verdict present
+ * — see the next paragraph. (`computeConvictionScore` short-circuits on an
+ * EMPTY `views` array before this function ever runs, returning
+ * `NO_DATA_SCORE` = 0.5, which does exceed 0.4 — that path is a "no debate
+ * ran at all" fallback, not a directional-lean question, and is unaffected
+ * by #683.)
  *
- * **KNOWN HOLE — the mediator can still create a lean out of nothing.** With
- * every analyst neutral, the mediator's single vote supplies a lean of
- * `1/(n+1)`, whose size depends on how many analysts sit on the desk. At
- * maximum evidence that scores **exactly 0.55** on a three-analyst desk and
- * **0.60** on a two-analyst desk, and the Trader gates on
- * `confidence < conviction_floor` (`decide.ts`), so the tie *authorises* the
- * trade. That is the pre-#625 branch this module set out to close, surviving at
- * the boundary. Closing it changes what the system will trade, so it is a
- * product decision rather than a cleanup — tracked as #683, NOT fixed here.
+ * **#683 — the mediator amplifies a lean but cannot create one.** Before this,
+ * with every analyst neutral, the mediator's single vote supplied a lean of
+ * `1/(n+1)` out of nothing, whose size depended on how many analysts sat on
+ * the desk: at maximum evidence that scored **exactly 0.55** on a
+ * three-analyst desk (tying `conviction_floor`) and **0.60** on a
+ * two-analyst desk (clearing it outright), and the Trader gates on
+ * `confidence < conviction_floor` (`decide.ts`), so the tie *authorised* the
+ * trade — the pre-#625 branch this module set out to close, surviving at the
+ * boundary. Fixed by computing the analysts' own directional mean first: when
+ * it is exactly 0 (every analyst neutral, or a desk that cancels out exactly,
+ * e.g. one bullish and one bearish), the mediator's verdict is excluded
+ * entirely and the consensus term is 0 regardless of what the mediator says.
+ * When the analysts' own mean is non-zero, the mediator is still counted as
+ * one more equal participant, exactly as before — it can move an existing
+ * lean up or down, it just cannot manufacture one from nothing. This closes
+ * the hole for every desk size, not just the three- and two-analyst cases
+ * measured above, because the fix depends on the analyst mean rather than on
+ * `n`.
  */
 function computeDirectionalConsensus(
   views: AnalystView[],
   roundStances: AnalystRoundStance[],
   debateVerdict?: Direction,
 ): number {
-  const values = views.map((view) => directionValue(finalPositionFor(view, roundStances)));
-  if (debateVerdict !== undefined) {
-    values.push(directionValue(debateVerdict));
+  const analystValues = views.map((view) => directionValue(finalPositionFor(view, roundStances)));
+  const analystMean = analystValues.reduce((sum, value) => sum + value, 0) / analystValues.length;
+
+  if (debateVerdict === undefined) {
+    return clamp(Math.abs(analystMean));
   }
 
+  if (analystMean === 0) {
+    return 0;
+  }
+
+  const values = [...analystValues, directionValue(debateVerdict)];
   const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
 
   return clamp(Math.abs(mean));
