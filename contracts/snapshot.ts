@@ -102,6 +102,57 @@ export interface DebateRow {
 }
 
 /**
+ * Which arm produced a trade (#753, migration 0033). Structurally identical to
+ * the server-side `TradingArm` union (`server/shared/types/records.ts`) —
+ * duplicated here for `CloseReason`'s reason below: `contracts/` may import from
+ * neither `server/` nor `client/`. Widen both sides together.
+ */
+export type TradingArmWire = 'live' | 'control';
+
+/**
+ * One arm's performance over the comparison window (#971).
+ *
+ * **`max_drawdown_pct` is REQUIRED, and that is the point.** It mirrors the
+ * server-side `ArmPerformance` (`server/pipeline/control-arm/arm-comparison.ts`),
+ * whose required drawdown field makes a return-only view of an arm impossible to
+ * construct — `docs/research/12-edge-hypothesis-critique.md` D4 rules out a
+ * return-only comparison against a risk-targeted stream, and the wire is where a
+ * "just show me the returns" panel would otherwise be born. A renderer cannot
+ * ask the server for a row without the drawdown on it, because no such row
+ * exists on this contract.
+ */
+export interface ArmPerformanceWire {
+  arm: TradingArmWire;
+  trade_count: number;
+  realized_pnl_net: number;
+  /** Fraction of `basis`, not a percentage — 0.0125 is 1.25%. */
+  return_pct: number;
+  /** Fraction of `basis`, peak-to-trough on this arm's realized-PnL series. */
+  max_drawdown_pct: number;
+}
+
+/**
+ * One Feedback Loop cycle's comparison of the two arms (#971).
+ *
+ * Both arms come off ONE window (`window_from`/`window_to`, half-open at the
+ * start) and share ONE `basis` — doc 12 gate 4's exact-window requirement,
+ * carried onto the wire rather than left as an assumption the panel makes.
+ */
+export interface ArmComparisonRow {
+  /** The FL cycle instant, ISO-8601 UTC. */
+  computed_at: string;
+  window_from: string;
+  window_to: string;
+  /** The denominator BOTH arms were divided by (`LIVE_BOOK_GBP` today), in GBP. */
+  basis: number;
+  live: ArmPerformanceWire;
+  control: ArmPerformanceWire;
+  diverged: boolean;
+  /** The operator-facing sentence that was alerted. `null` exactly when `diverged` is false. */
+  divergence_reason: string | null;
+}
+
+/**
  * Why a lot closed. Structurally identical to the server-side
  * `ExitReason | 'stop' | 'target' | 'exit'` union
  * (`server/shared/types/records.ts`, `ClosedTrade.close_reason`) — duplicated
@@ -299,6 +350,20 @@ export interface DashboardSnapshot {
   verdicts: VerdictRow[];
   analysts: AnalystPerformanceRow[];
   metrics: MetricsSuiteWire;
+  /**
+   * The Feedback Loop's matched-control comparisons (#971, #913 surface 2),
+   * most-recently-computed first — falsifier arm 2 against the live arm, on
+   * FL's own cadence.
+   *
+   * Required, not optional, and an EMPTY ARRAY when FL has computed none. A
+   * dashboard that could omit this field would render a book with no matched
+   * control exactly like a book with one, which is the state ADR-0014
+   * amendment 2 forbids and the thing the panel exists to make visible. Empty
+   * means "no comparison computed yet" and the panel says so in those words —
+   * it must never be drawn as zeros, which would read as "both arms flat, no
+   * divergence".
+   */
+  arm_comparison: ArmComparisonRow[];
   /**
    * Third-party provider tiles. Three providers, three different realities,
    * and the shapes differ because the underlying facts do rather than for

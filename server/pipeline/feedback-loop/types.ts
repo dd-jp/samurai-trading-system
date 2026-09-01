@@ -10,6 +10,16 @@
  */
 
 export type {
+  ArmComparisonCycleInput,
+  ArmComparisonSample,
+  ArmComparisonSampleStore,
+  ArmComparisonSource,
+  ArmDivergenceAlert,
+  ArmDivergenceAlertChannel,
+  ArmDivergenceThresholds,
+  ArmDivergenceVerdict,
+} from './types/arm-comparison.js';
+export type {
   DailyCycleInput,
   DailyCycleResult,
   FeedbackLoop,

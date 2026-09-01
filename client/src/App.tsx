@@ -20,6 +20,7 @@
 
 import type {
   AnalystPerformanceRow,
+  ArmComparisonRow,
   ClosedTradeRow,
   DebateRow,
   FillRow,
@@ -29,6 +30,7 @@ import type {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DetailDrawer } from './components/DetailDrawer.tsx';
 import { AnalystsPanel } from './components/panels/AnalystsPanel.tsx';
+import { ArmComparisonPanel } from './components/panels/ArmComparisonPanel.tsx';
 import { ClosedTradesPanel } from './components/panels/ClosedTradesPanel.tsx';
 import { DebatesPanel } from './components/panels/DebatesPanel.tsx';
 import type { EquitySample } from './components/panels/MetricsPanel.tsx';
@@ -63,6 +65,8 @@ const EMPTY_CLOSED_TRADES: readonly ClosedTradeRow[] = [];
 const EMPTY_FILLS: readonly FillRow[] = [];
 const EMPTY_ANALYSTS: readonly AnalystPerformanceRow[] = [];
 const EMPTY_DEBATES: readonly DebateRow[] = [];
+/** #971 — an empty list is the honest "no comparison computed yet" state. */
+const EMPTY_ARM_COMPARISONS: readonly ArmComparisonRow[] = [];
 
 /**
  * What the drawer is showing: an instrument AND the trace within it (#606 item
@@ -267,6 +271,7 @@ export function App({ snapshotOptions }: AppProps = {}) {
             fills={snapshot?.fills ?? EMPTY_FILLS}
           />
           <MetricsPanel metrics={snapshot?.metrics ?? null} equitySamples={equitySamples} />
+          <ArmComparisonPanel comparisons={snapshot?.arm_comparison ?? EMPTY_ARM_COMPARISONS} />
           <AnalystsPanel analysts={snapshot?.analysts ?? EMPTY_ANALYSTS} />
           <SpendPanel spend={snapshot?.llm_spend ?? null} />
           <DebatesPanel debates={snapshot?.debates ?? EMPTY_DEBATES} />

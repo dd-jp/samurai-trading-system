@@ -2382,6 +2382,117 @@ describe('buildProductionOrchestrator', () => {
   });
 
   /**
+   * #971 — the matched control's comparison has a production caller.
+   *
+   * Every unit of `runArmComparisonCycle` can pass while nothing in the
+   * composition root calls it, which is this repo's dominant defect class and
+   * exactly what happened to `buildArmComparison` before this ticket: it was
+   * reachable only from `yarn report:arms`, when a human remembered to run it.
+   *
+   * The `metrics` block is deliberately ABSENT here. The comparison must run on
+   * a cycle with no `MetricsSuite` — it is derived from `closed_trades`, not
+   * from the equity series — and nesting it inside `runMetricsCheck` (which
+   * returns early with no suite) would have left it silently un-run for most of
+   * a soak.
+   */
+  describe('the arm comparison runs on the daily feedback cycle (#971)', () => {
+    const CLOSED_AT = new Date(START.getTime() - 24 * 60 * 60 * 1_000);
+
+    function insertTrade(arm: 'live' | 'control', index: number, pnl: number): void {
+      db.prepare(
+        `INSERT INTO closed_trades (
+           idempotency_key, debate_id, instrument, asset_class, side, entry, stop,
+           filled_size, realized_pnl_net, fees_total, opened_at, closed_at, close_reason, arm
+         ) VALUES (?, ?, '3LTS', 'stocks', 'buy', 100, 95, 1, ?, 0, ?, ?, 'target', ?)`,
+      ).run(
+        `${arm}-${index}`,
+        `debate-${arm}-${index}`,
+        pnl,
+        new Date(CLOSED_AT.getTime() - 60_000).toISOString(),
+        new Date(CLOSED_AT.getTime() + index * 1_000).toISOString(),
+        arm,
+      );
+    }
+
+    function feedbackOnlyConfig(overrides: Partial<ProductionConfig> = {}): StubConfig {
+      return stubConfig(db, {
+        tickIntervalMs: 48 * 60 * 60 * 1_000,
+        heartbeatIntervalMs: 48 * 60 * 60 * 1_000,
+        fillPollIntervalMs: NO_FILL_POLL_MS,
+        traderConfig: {
+          ...DEFAULT_TRADER_CONFIG,
+          flatten_before_close_ms: MIN_TICKS_INSIDE_FLATTEN_WINDOW * 48 * 60 * 60 * 1_000,
+        },
+        feedback: {
+          intervalMs: 1_000,
+          config: paperStartingProfile('paper').feedback?.config as FeedbackConfig,
+        },
+        ...overrides,
+      });
+    }
+
+    it('computes and persists a sample with no metrics source configured', async () => {
+      const logger = recordingLogger();
+      const orchestrator = buildProductionOrchestrator(feedbackOnlyConfig({ logger }));
+
+      await orchestrator.start();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await orchestrator.stop();
+
+      const computed = logger.entries.filter(
+        (entry) => entry.message === 'arm comparison computed',
+      );
+      expect(computed).toHaveLength(1);
+      // Both arms, both columns — a log line carrying a return without its
+      // drawdown would re-open doc 12 D4 at the surface.
+      const payload = computed[0]?.payload as {
+        live: { return_pct: number; max_drawdown_pct: number };
+        control: { return_pct: number; max_drawdown_pct: number };
+      };
+      expect(payload.live.max_drawdown_pct).toBeTypeOf('number');
+      expect(payload.control.max_drawdown_pct).toBeTypeOf('number');
+
+      const rows = db.prepare('SELECT diverged FROM arm_comparison_samples').all() as {
+        diverged: number;
+      }[];
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.diverged).toBe(0);
+    });
+
+    it('alerts through the armDivergenceAlerts slot when the control dominates', async () => {
+      for (let i = 0; i < 5; i += 1) {
+        insertTrade('live', i, -1);
+        insertTrade('control', i, 4);
+      }
+      const postArmDivergenceAlert = vi.fn();
+      const orchestrator = buildProductionOrchestrator(
+        feedbackOnlyConfig({ armDivergenceAlerts: { postArmDivergenceAlert } }),
+      );
+
+      await orchestrator.start();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await orchestrator.stop();
+
+      expect(postArmDivergenceAlert).toHaveBeenCalledTimes(1);
+      const alert = postArmDivergenceAlert.mock.calls[0]?.[0] as {
+        comparison: {
+          live: { return_pct: number; max_drawdown_pct: number };
+          control: { return_pct: number; max_drawdown_pct: number };
+        };
+      };
+      expect(alert.comparison.control.return_pct).toBeGreaterThan(alert.comparison.live.return_pct);
+      expect(alert.comparison.control.max_drawdown_pct).toBeLessThanOrEqual(
+        alert.comparison.live.max_drawdown_pct,
+      );
+
+      const rows = db.prepare('SELECT diverged FROM arm_comparison_samples').all() as {
+        diverged: number;
+      }[];
+      expect(rows[0]?.diverged).toBe(1);
+    });
+  });
+
+  /**
    * #366 — `ProductionConfig.feedback` had no supplier, so the `#327` warn
    * above fired on every real paper start and the daily timer never began. A
    * 14-day soak (#238) therefore ran 5 of the 6 pipeline stages while looking

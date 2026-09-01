@@ -1512,3 +1512,87 @@ main {
     transition: box-shadow 0.3s;
   }
 }
+
+/* --------------------------------------------------------- arm comparison */
+
+/* #971 — falsifier arm 2 against the live arm. The two arm rows are laid out
+   identically on purpose: the panel's whole claim is that the arms are matched,
+   and a control styled as a footnote to the live arm would undercut it. */
+.arm-window {
+  margin: 0 0 10px;
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+}
+
+.arm-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.arm-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: rgb(var(--ink-rgb) / 0.5);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.arm-name {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  font-size: 12px;
+}
+
+.arm-pnl {
+  margin-left: auto;
+  font-weight: 600;
+}
+
+.arm-divergence {
+  margin: 0 0 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--vermilion);
+}
+
+.arm-divergence.arm-ok {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.arm-trend {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--border);
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--muted);
+}
+
+.arm-trend li {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 2px 0;
+}
+
+.arm-trend-diverged {
+  color: var(--vermilion);
+}
+
+.arm-caveat {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--muted);
+}

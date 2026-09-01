@@ -105,6 +105,7 @@
 import { TelegramBotApiClient, TelegramChannel } from '../../pipeline/verdict/index.js';
 import type { SharedStore as SqliteHandle } from '../../shared/store/index.js';
 import { TradeChannelAnalystSkipAlert } from './analyst-skip-alert-channel.js';
+import { TradeChannelArmDivergenceAlert } from './arm-divergence-alert-channel.js';
 import { TradeChannelBreachAlert } from './breach-alert-channel.js';
 import { TradeChannelCalendarFallbackAlert } from './calendar-fallback-alert-channel.js';
 import { TradeChannelDataFailoverAlert } from './data-failover-alert-channel.js';
@@ -242,6 +243,14 @@ export const ALERT_CHANNEL_FIELDS = [
   // and flattening on the fallback table, which is a defensible calendar —
   // just not the venue's own, and not immune to its own coverage cliff.
   'calendarFallbackAlerts',
+  // #971 — the seventeenth. Channel type and transport in the SAME change, like
+  // `calendarFallbackAlerts` before it. The condition it reports (the matched
+  // control arm out-performing the debate-driven live arm on return AND
+  // drawdown together) is invisible from outside by construction: both arms
+  // keep trading and the heartbeat keeps beating, and the only thing that has
+  // happened is that the debate layer stopped earning its cost — which is
+  // precisely the falsifier ADR-0014 amendment 2 mandates the system watch for.
+  'armDivergenceAlerts',
 ] as const satisfies readonly (keyof AlertChannelSlots)[];
 
 /**
@@ -515,6 +524,15 @@ export function buildAlertChannels(deps: {
             chatId,
             deps.logger,
           ),
+        }
+      : {}),
+    // #971. The escalation chat, never the heartbeat chat: the control arm
+    // beating the debate arm is the falsifying result the whole two-arm design
+    // exists to detect, and it is a decision waiting on the operator (#636's
+    // "did the debate layer earn its cost"), not a beat.
+    ...(deps.injected.armDivergenceAlerts === undefined
+      ? {
+          armDivergenceAlerts: new TradeChannelArmDivergenceAlert(telegram, chatId, deps.logger),
         }
       : {}),
   };

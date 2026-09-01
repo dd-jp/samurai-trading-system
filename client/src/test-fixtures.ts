@@ -11,6 +11,7 @@
 
 import type {
   AnalystPerformanceRow,
+  ArmComparisonRow,
   ClosedTradeRow,
   DebateRow,
   FillRow,
@@ -189,6 +190,37 @@ const EMPTY_PIPELINE: PipelineView = {
   live_entered_at: null,
 };
 
+/**
+ * One Feedback Loop comparison of the two arms (#971), non-diverged by default
+ * — both columns always present, because `ArmPerformanceWire` has no shape
+ * without them (doc 12 D4).
+ */
+export function makeArmComparison(overrides: Partial<ArmComparisonRow> = {}): ArmComparisonRow {
+  return {
+    computed_at: AS_OF,
+    window_from: '2026-07-08T12:00:00.000Z',
+    window_to: AS_OF,
+    basis: 1_000,
+    live: {
+      arm: 'live',
+      trade_count: 24,
+      realized_pnl_net: 18.4,
+      return_pct: 0.0184,
+      max_drawdown_pct: 0.021,
+    },
+    control: {
+      arm: 'control',
+      trade_count: 19,
+      realized_pnl_net: 6.2,
+      return_pct: 0.0062,
+      max_drawdown_pct: 0.028,
+    },
+    diverged: false,
+    divergence_reason: null,
+    ...overrides,
+  };
+}
+
 export function makeSnapshot(overrides: Partial<WireSnapshot> = {}): WireSnapshot {
   return {
     generated_at: AS_OF,
@@ -202,6 +234,7 @@ export function makeSnapshot(overrides: Partial<WireSnapshot> = {}): WireSnapsho
     verdicts: [makeVerdict()],
     analysts: [makeAnalyst()],
     metrics: makeMetrics(),
+    arm_comparison: [makeArmComparison()],
     providers: {
       alpaca: {
         provider: 'alpaca',

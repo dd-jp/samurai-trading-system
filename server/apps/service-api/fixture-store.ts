@@ -24,6 +24,7 @@ import type { PipelineStage } from '../../../contracts/pipeline.js';
 // stays a type-only-equivalent, zero-side-effect import.
 import { computeInfluenceScore } from '../../pipeline/debate-engine/analyst-contribution.js';
 import type { AnalystContribution } from '../../pipeline/debate-engine/index.js';
+import type { ArmComparisonSample } from '../../pipeline/feedback-loop/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
 import type { ClosedTrade, DebateLog, Fill, OpenPosition } from '../../shared/index.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
@@ -494,6 +495,64 @@ const LLM_SPEND_7D = {
   },
 };
 
+/**
+ * Two Feedback Loop cycles' matched-control comparisons (#971), newest first.
+ *
+ * The live arm leads on both columns here — the healthy reading, and the one an
+ * operator opening the dashboard for the first time should see. The divergent
+ * case has its own coverage in `arm-comparison-cycle.test.ts` and in the panel's
+ * own test; baking a permanent divergence into the out-of-the-box fixtures would
+ * teach the reader that the alert state is normal.
+ */
+const ARM_COMPARISONS: ArmComparisonSample[] = [
+  {
+    computed_at: NOW,
+    comparison: {
+      from: new Date(NOW.getTime() - 30 * 24 * 3_600_000),
+      to: NOW,
+      basis: 1_000,
+      live: {
+        arm: 'live',
+        trade_count: 24,
+        realized_pnl_net: 18.4,
+        return_pct: 0.0184,
+        max_drawdown_pct: 0.021,
+      },
+      control: {
+        arm: 'control',
+        trade_count: 19,
+        realized_pnl_net: 6.2,
+        return_pct: 0.0062,
+        max_drawdown_pct: 0.028,
+      },
+    },
+    divergence: { diverged: false, reason: null },
+  },
+  {
+    computed_at: new Date(NOW.getTime() - 24 * 3_600_000),
+    comparison: {
+      from: new Date(NOW.getTime() - 31 * 24 * 3_600_000),
+      to: new Date(NOW.getTime() - 24 * 3_600_000),
+      basis: 1_000,
+      live: {
+        arm: 'live',
+        trade_count: 22,
+        realized_pnl_net: 15.1,
+        return_pct: 0.0151,
+        max_drawdown_pct: 0.021,
+      },
+      control: {
+        arm: 'control',
+        trade_count: 18,
+        realized_pnl_net: 7.9,
+        return_pct: 0.0079,
+        max_drawdown_pct: 0.026,
+      },
+    },
+    divergence: { diverged: false, reason: null },
+  },
+];
+
 const LLM_SPEND_ALL = {
   cost_usd: 6.7742,
   input_tokens: 3_488_900,
@@ -640,6 +699,17 @@ export class InMemoryQueryStore implements DashboardQueryStore {
   /** Same throw-on-missing contract as `getMark`, per instrument in request order. */
   getMarks(instruments: readonly string[], asOf: Date): Map<string, Mark> {
     return new Map(instruments.map((instrument) => [instrument, this.getMark(instrument, asOf)]));
+  }
+
+  /**
+   * #971. One sample, not zero: an empty array is the honest "FL has computed
+   * none yet" state and the panel renders it as those words — a fixture store
+   * whose whole job is "the dashboard runs out of the box" must exercise the
+   * populated branch instead, or the panel ships never having been drawn.
+   * `limit` is honoured for `getPipelineActivity`'s reason.
+   */
+  getArmComparisons(limit: number, _asOf: Date): ArmComparisonSample[] {
+    return ARM_COMPARISONS.slice(0, limit).map((sample) => ({ ...sample }));
   }
 
   getLlmSpend(_asOf: Date): LlmSpendSummary {

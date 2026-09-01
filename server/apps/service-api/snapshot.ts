@@ -18,6 +18,7 @@ import type { StoreMode } from '../../shared/store/index.js';
 import { buildPipelineView, PIPELINE_LOOKBACK_MS, PIPELINE_MAX_LANES } from './pipeline-query.js';
 import { NULL_PROVIDER_STATUS, type ProviderStatusReader } from './provider-status.js';
 import type {
+  ArmComparisonRow,
   ClosedTradeRow,
   DashboardQueryStore,
   DashboardSnapshot,
@@ -30,6 +31,13 @@ const RECENT_DEBATES_LIMIT = 10;
 const RECENT_VERDICTS_LIMIT = 10;
 /** #940: same window size as the other recent-history lists above. */
 const RECENT_CLOSED_TRADES_LIMIT = 10;
+/**
+ * #971: how many Feedback Loop cycles the comparison panel plots. Same
+ * fixed-window posture as the lists above; at FL's daily cadence this is a
+ * fortnight of measurements, which is the soak length (#238) the panel has to
+ * make legible.
+ */
+const RECENT_ARM_COMPARISONS_LIMIT = 14;
 
 /**
  * The directions the wire may carry, as a value rather than a type. Same
@@ -198,6 +206,24 @@ export function buildSnapshot(
     window_days: attribution[analyst_id]?.window_days ?? 0,
   }));
 
+  // #971: the Feedback Loop's matched-control comparisons, newest first. Read,
+  // never recomputed here — FL owns the computation (#636), and this seam's job
+  // is the `Date` → ISO conversion the wire needs. Whole `ArmPerformance`
+  // values are carried across rather than picked apart, so no branch here can
+  // produce a return without its drawdown (doc 12 D4).
+  const arm_comparison = store
+    .getArmComparisons(RECENT_ARM_COMPARISONS_LIMIT, asOf)
+    .map<ArmComparisonRow>((sample) => ({
+      computed_at: sample.computed_at.toISOString(),
+      window_from: sample.comparison.from.toISOString(),
+      window_to: sample.comparison.to.toISOString(),
+      basis: sample.comparison.basis,
+      live: { ...sample.comparison.live },
+      control: { ...sample.comparison.control },
+      diverged: sample.divergence.diverged,
+      divergence_reason: sample.divergence.reason,
+    }));
+
   const metrics = store.getDailyMetrics(asOf);
   const tickStatus = store.getTickStatus(asOf);
 
@@ -259,6 +285,7 @@ export function buildSnapshot(
     verdicts,
     analysts,
     metrics,
+    arm_comparison,
     providers: providers.readProviderStatus(),
     llm_spend: store.getLlmSpend(asOf),
     // Same `asOf` as every other field above, which is the reason the Pipeline

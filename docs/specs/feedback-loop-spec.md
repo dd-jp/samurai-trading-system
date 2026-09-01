@@ -190,6 +190,24 @@ Added 2026-08-05 ([#359](https://github.com/dd-jp/samurai-trading-system/issues/
 - **This is read-only at the API level, not just semantically.** `config_trials.config_hash` is the table's `PRIMARY KEY` and `recordTrial` upserts on conflict (per [#179](https://github.com/dd-jp/samurai-trading-system/issues/179) and `shared-sqlite-store-spec.md`) — a call to `recordTrial` during revalidation would silently overwrite `recorded_at` and look indistinguishable from a fresh trial recording, not a read. FL's revalidation path must query `config_trials` directly (`SELECT ... WHERE config_hash = ?`) and must **never** call `recordTrial`. This is caller discipline, not something the schema enforces — get this wrong and DSR/PBO/MinBTL silently corrupt without any error.
 - Depends on the backtest harness / cost model (separate uncharted component) for the honest historical inputs.
 
+#### The matched-control comparison (falsifier arm 2) — [#971](https://github.com/dd-jp/samurai-trading-system/issues/971), under [#636](https://github.com/dd-jp/samurai-trading-system/issues/636) and [#913](https://github.com/dd-jp/samurai-trading-system/issues/913)
+
+**The daily suite carries a second arm, not just the live one.** Every cycle FL measures the live arm and **falsifier arm 2** — same instruments, same exit rule ([ADR-0018](../adr/0018-intraday-thresholds-sizing-and-the-signal-bar.md) D3's neutral single bracket), same stop, **entry by indicator alone, no LLM** — and records both. This is the primary control CONTEXT.md's Key Constraints name; outside benchmarks (buy-and-hold and similar) are secondary and never replace it. FL is the sole owner of this computation: nothing else in the system may compute a live-vs-control comparison, because a second implementation is a second thing that can drift out of match.
+
+**Return and drawdown are reported together, always. A return without its drawdown beside it is not a result.** `docs/research/12-edge-hypothesis-critique.md`'s **D4** rules out return-only comparison against a risk-targeted stream: an arm can buy return with leverage, and against a stream whose risk is being targeted the return column alone is not evidence of anything. Both columns are therefore **structurally required**, not conventionally reported — `ArmPerformance.max_drawdown_pct` is non-optional in the contract and `arm_comparison_samples`' per-arm columns are `NOT NULL`, so no row shape, wire shape, or panel branch exists that can present one arm's return without its drawdown. Trade counts accompany both, because a comparison over two trades is not a comparison.
+
+**Both arms come out of ONE window query, never two.** Doc 12's gate 4: the window is computed once per cycle (`window_from` exclusive, `window_to` inclusive, default 30 days), applied to a single read of `closed_trades`, and partitioned by the `arm` column. Two separately-parameterised queries would silently drift by a bar boundary, and a comparison that is off by a bar is a comparison of two different periods.
+
+**Why the control cannot accidentally differ from the live arm.** `analysts-spec.md`:163 records the guarantee, and FL depends on it: with the analyst layer deterministic, the control arm "becomes **the analyst layer's own output thresholded**, with no separate implementation to write and no risk of the control differing from the live arm by accident." The two arms therefore differ in exactly one place — whether the debate ran — which is what makes the comparison a test of the debate rather than a test of two codebases. If the analyst layer ever regains an LLM, this guarantee lapses and the control becomes a separate implementation that must be independently matched; that is a spec-level precondition of this module, not an implementation detail.
+
+**Divergence is alerted through the existing trade channel.** When the control **dominates** the live arm — control return exceeds live return by more than the threshold **and** the control's max drawdown is no worse — FL posts to the human on the same trade-channel path the metrics reports and breach alerts already use. The threshold is `0.5` percentage points of return over the 30-day window, with a floor of **5 closed trades on each arm** before any verdict is issued at all. The 0.5 pp comes from the LLM bill the debate has to earn back: ~£58/yr equities-only ([#840](https://github.com/dd-jp/samurai-trading-system/issues/840)) pro-rated over 30 days against the £1,000 book is ~0.48 pp, rounded to 0.5. It is deliberately **not** CLAUDE.md's "~0.55 pp of accuracy" figure, which is a different quantity (per-decision accuracy at position notional, not realized return at book level).
+
+**A divergence alert tightens nothing.** It is a measurement, not a kill-line breach: the "auto-tighten" reflex above would shrink the **live** arm's sizing only, changing one arm mid-comparison and corrupting the match it was reacting to. Kill/rework stays human, and so does any response to divergence.
+
+**One known asymmetry, carried in the alert text.** The control always trades — it converges by construction — while the live arm can decline to trade when the debate does not converge. A stretch in which the live arm simply traded less can therefore read as divergence. The alert says so, so the operator reads a trade-count gap as a trade-count gap.
+
+**Cadence and persistence.** The comparison runs on FL's existing daily cycle — not a new schedule — and each cycle appends one row to `arm_comparison_samples` (`shared-sqlite-store-spec.md`). It is persisted rather than recomputed on read because the dashboard is a separate process, because FL owns the computation, and because the panel below shows a trend, which needs a series.
+
 ### Module: Determinism & Backtest
 
 - Walk-forward: weights/params evolve daily from only outcomes known before each T (injected clock), producing a point-in-time trajectory the backtest replays. Never global-fit-and-apply-retroactively.
@@ -204,6 +222,7 @@ Added 2026-08-05 ([#359](https://github.com/dd-jp/samurai-trading-system/issues/
 - Guardrails: auto-tighten applies; auto-loosen applies too and is logged, announced and reversible (#736); a loosening past a hard bound is refused, writes no dial and appends no log row.
 - Labelling: on close, the right setup gets the right R, joined correctly; no label before close (point-in-time).
 - Metrics: full suite computed; a breach triggers alert + auto-tighten but not an automatic kill.
+- Matched control: both arms come from one window read; a control that leads on return but with a worse drawdown is NOT divergence; under the per-arm trade floor no verdict is issued; a divergence alerts and persists but tightens no dial; every cycle persists a sample, including the zero-trade one.
 - Determinism: walk-forward weight trajectory is reproducible and uses no future data.
 
 ### Modules to Test
@@ -234,7 +253,9 @@ Added 2026-08-05 ([#359](https://github.com/dd-jp/samurai-trading-system/issues/
 Execution → shared store (fills/outcomes) → Feedback Loop
 Feedback Loop → analyst weights (→ Debate Engine), strategy params (→ Trader),
                 risk thresholds (→ Risk, loosening gated), setup-store R-labels (→ Trader cosine)
-Feedback Loop → trade channel (metrics reports, breach alerts, loosen-approval requests)
+Feedback Loop → trade channel (metrics reports, breach alerts, arm-divergence alerts,
+                loosen-approval requests)
+Feedback Loop → arm_comparison_samples (→ dashboard arm-comparison panel, read-only)
 ```
 
 ### Domain Glossary Alignment

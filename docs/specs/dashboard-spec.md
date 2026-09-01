@@ -102,6 +102,9 @@ Driven by `invalidation_log`, joined on `(instrument, bar_timestamp)`. Showing d
 
 6. As an operator, I want current per-analyst weights and their rolling attribution, so that I can see which analysts are earning trust and which are being tuned down — with the weight shown **numerically as well as** as a bar, so the comparison does not depend on judging bar lengths.
 7. As an operator, I want the Feedback Loop's daily `MetricsSuite` (Sharpe, Sortino, Calmar, max drawdown, profit factor, expectancy, skew/kurtosis, turnover, exposure), so that I see the full metrics picture the research constraints require, not a single vanity number.
+7a. As an operator, I want the live arm shown **beside falsifier arm 2**, the matched control, so that I can see whether the debate layer is beating the same strategy without it — the question CONTEXT.md's Key Constraints make the primary one, and the one a live-arm-only page cannot answer. ([#971](https://github.com/dd-jp/samurai-trading-system/issues/971), surface 2 of [#913](https://github.com/dd-jp/samurai-trading-system/issues/913).)
+7b. As an operator, I want **return and max drawdown together** for both arms, over the **same window**, so that I never read a lead that was bought with more risk as a lead.
+7c. As an operator, I want the comparison as a **trend across the Feedback Loop's cycles**, not only today's row, so that one favourable window does not read as a verdict.
 
 ### Providers & LLM Spend
 
@@ -186,6 +189,25 @@ A grid of equal-citizen panels, none of which is a hero:
 - **Analysts** — weight bar with the **numeric percentage** beside it, and signed rolling-R with its window in days.
 - **LLM spend** — the three rolling windows, per-debate cost p50/p95 and LLM latency p50/p95, and **both** honest caveats (see below) whenever their counts are non-zero.
 - **Recent debates** — direction, rounds, and per-analyst stance strips with a legend.
+- **Arm comparison** — the live arm and **falsifier arm 2** (the matched control: same names, same exit rule, same stop, entry by indicator alone, no LLM) side by side, from the Feedback Loop's most recent sample. See below.
+
+#### Arm comparison panel ([#971](https://github.com/dd-jp/samurai-trading-system/issues/971), under [#636](https://github.com/dd-jp/samurai-trading-system/issues/636)/[#913](https://github.com/dd-jp/samurai-trading-system/issues/913))
+
+**Both arms or neither.** The panel renders the live arm and the control arm together, never one alone. A page that shows only the live arm's return is the buy-and-hold-comparison failure mode in a different costume: it invites the reader to score the system against nothing.
+
+**No branch of this panel may render a return without its drawdown.** This is `docs/research/12-edge-hypothesis-critique.md` **D4** at the presentation layer, and it mirrors [#753](https://github.com/dd-jp/samurai-trading-system/issues/753)'s AC5 at spec level: **return and max drawdown are one unit of display**, for both arms, in every state — headline, trend row, and any future compact or summary rendering. The wire type enforces it (`ArmPerformanceWire.max_drawdown_pct` is required, not optional) so that a component *cannot* be given an arm without its drawdown; the spec-level rule is what that type exists to serve, and it binds any new branch added later.
+
+**Matched windows, stated on the page.** Both arms are shown over the identical window the Feedback Loop measured them over (doc 12 gate 4 — one query, one window), and the window is displayed, not implied. Two arms over two windows is not a comparison, and a reader cannot tell the difference unless the page says.
+
+**Trade counts beside the percentages.** A percentage over two trades and a percentage over two hundred look identical; the counts are what stop the panel from over-claiming.
+
+**Empty state is honest, not zero.** Before the Feedback Loop has computed a sample the panel says so — it does not render 0.00% for both arms, which is a claim (the arms tied) rather than the truth (nothing has been measured).
+
+**Divergence is shown, not just alerted.** When the Feedback Loop's most recent sample crossed the divergence line, the panel says so and carries the same reason sentence the trade-channel alert carried, so the page and the alert never disagree.
+
+**The convergence asymmetry is stated on the panel.** The control arm always trades; the live arm can decline to when the debate does not converge. A trade-count gap therefore has an innocent explanation, and the panel says so rather than leaving the reader to infer a performance story from a participation difference.
+
+**Read-only, and computed elsewhere.** The panel projects `arm_comparison_samples` rows the Feedback Loop wrote (`feedback-loop-spec.md`, "The matched-control comparison"). `buildSnapshot` must not compute or re-derive the comparison: the page shows what FL measured and alerted on, or it shows nothing.
 
 ## Motion — replay only
 
@@ -233,7 +255,7 @@ The palette was checked for common colour-vision deficiencies when it was chosen
 
 ## Wire Shape
 
-The snapshot is **unchanged apart from two additive fields**. No shape is renamed, no field is removed, and the server computes nothing new.
+The snapshot is **unchanged apart from three additive fields** (`recorded_at`, `mode`, and #971's `arm_comparison`). No shape is renamed, no field is removed, and the server computes nothing new.
 
 ```typescript
 interface PipelineCell {
@@ -266,6 +288,39 @@ interface DashboardSnapshot {
    * run — the one time being wrong matters.
    */
   mode: 'paper' | 'live';
+
+  /**
+   * The Feedback Loop's matched-control samples, newest first (#971). A
+   * projection of `arm_comparison_samples` — `buildSnapshot` re-derives
+   * nothing. Present and empty (never absent) before FL has computed one, so
+   * the panel can tell "not measured yet" from "measured as a tie".
+   */
+  arm_comparison: ArmComparisonRow[];
+}
+
+interface ArmPerformanceWire {
+  arm: 'live' | 'control';
+  trade_count: number;
+  realized_pnl_net: number;
+  return_pct: number;
+  /**
+   * REQUIRED, deliberately — doc 12 D4 in the type system. An optional
+   * drawdown would make a return-only arm a representable value, and the
+   * panel's "no branch renders a return alone" rule would then be a
+   * convention instead of a guarantee.
+   */
+  max_drawdown_pct: number;
+}
+
+interface ArmComparisonRow {
+  computed_at: string;        // ISO — no `Date` on the wire
+  window_from: string;
+  window_to: string;          // the ONE window both arms were measured over
+  basis: number;
+  live: ArmPerformanceWire;
+  control: ArmPerformanceWire;
+  diverged: boolean;
+  divergence_reason: string | null;   // non-null exactly when `diverged`
 }
 ```
 
@@ -434,6 +489,7 @@ Non-negotiable, and unchanged in spirit from v1 — the screen got more visual, 
 - **Server tests** assert on HTTP status/body for each route (`GET /`, a bundle asset, `GET /api/snapshot`, unknown path, non-`GET` method) and on the **static containment guard** against an injected fake store — no real network dependency beyond binding to an ephemeral port (`port: 0`). Two escapes must both be covered: `..`/percent-encoded-`..` traversal, **and** a sibling directory whose name shares the bundle root's prefix (`dist/client-evil/`). The second is the one a naive `startsWith` passes the first test while remaining open to, so a suite that only tests `..` proves nothing about it.
 - **`QueryStore` implementation** is tested against a real (test) SQLite instance seeded with rows matching the other components' own fixture patterns — reuses their existing test data shapes, no new schema.
 - **Offline check is part of acceptance:** the built bundle contains no external URL. A grep for `https://` over `dist/client/` is the crude version; the network panel showing zero third-party requests is the real one.
+- **Arm comparison panel:** the D4 rule is tested as a *type* obligation as well as a rendered one — a `@ts-expect-error` case proving an arm without `max_drawdown_pct` does not compile, alongside RTL assertions that both arms, both columns, the window and the trade counts are on screen, that the empty state says nothing has been measured rather than showing zeros, and that a diverged sample renders FL's own reason sentence.
 - No end-to-end trading test needed — this component cannot affect trading outcomes by construction (read-only).
 
 ## Out of Scope

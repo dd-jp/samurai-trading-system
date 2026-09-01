@@ -111,6 +111,8 @@
  * `submitted` at all.
  */
 import { AnalystOrchestrator } from '../../pipeline/analysts/index.js';
+// #753: falsifier arm 2's comparison reader — both arms, one window, one query.
+import { SqliteArmComparisonSource } from '../../pipeline/control-arm/index.js';
 import type { LlmClient, SpendCap } from '../../pipeline/debate-engine/index.js';
 import {
   RateLimiter,
@@ -131,6 +133,7 @@ import {
   SqliteExecutionStore,
 } from '../../pipeline/execution/index.js';
 import type {
+  ArmDivergenceAlertChannel,
   BreachAlertChannel,
   DailyMetricsSource,
   FeedbackConfig,
@@ -138,8 +141,12 @@ import type {
 import {
   assertKillThresholdsWithinBounds,
   computeMetrics,
+  DEFAULT_ARM_COMPARISON_WINDOW_MS,
+  DEFAULT_ARM_DIVERGENCE_THRESHOLDS,
+  runArmComparisonCycle,
   runDailyCycle,
   SqliteAdjustmentLog,
+  SqliteArmComparisonSampleStore,
   SqliteClosedTradeStore,
   SqliteTuningStore,
   seedAnalystWeights,
@@ -183,6 +190,7 @@ import { CostModelImpl, SqliteStage2SelectionStore } from '../../tools/backtest/
 import {
   LoggingAnalystSkipAlertChannel,
   LoggingAnalystTelemetry,
+  LoggingArmDivergenceAlertChannel,
   LoggingBreachAlertChannel,
   LoggingDataFailoverAlertChannel,
   LoggingFlattenOverfillAlertChannel,
@@ -366,6 +374,14 @@ export interface ProductionComponents {
    * to only one of them.
    */
   breachAlerts: BreachAlertChannel;
+  /**
+   * Where arm divergence escalates (#971), exposed for `breachAlerts`' reason:
+   * the composition root resolves it once (injected override, else the log-only
+   * stand-in) and the daily feedback cycle in `buildProductionOrchestrator` is
+   * its consumer. A second instance built there would be a second place for an
+   * injected override to be missed.
+   */
+  armDivergenceAlerts: ArmDivergenceAlertChannel;
   /**
    * The tuning dials, exposed for `breachAlerts`' reason (#433): the Risk
    * Manager READS `risk_thresholds` here at evaluate time and the Feedback
@@ -742,6 +758,10 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * unattended run. It depends on nothing but `logger`, so the move is free.
    */
   const breachAlerts = config.breachAlerts ?? new LoggingBreachAlertChannel(logger);
+
+  /** #971. Resolved beside `breachAlerts`, and never merged with it — see its slot's doc. */
+  const armDivergenceAlerts =
+    config.armDivergenceAlerts ?? new LoggingArmDivergenceAlertChannel(logger);
 
   /**
    * The hard dollar ceiling (ADR-0008). Distinct from `llmRateLimiter`, which
@@ -1431,6 +1451,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   return {
     steps,
     breachAlerts,
+    armDivergenceAlerts,
     tuning: tuningStore,
     marketData,
     broker,
@@ -2106,6 +2127,65 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     });
   };
 
+  /**
+   * The matched-control comparison's production caller (#971, under #636 and
+   * #913) — the thing that makes falsifier arm 2's numbers reach an operator at
+   * all, rather than only `yarn report:arms` when a human remembers to run it.
+   *
+   * Runs inside the same daily timer as `runDailyCycle`, per #636 ("additional
+   * columns in the existing daily/weekly suite, no new scheduling primitive"),
+   * and deliberately NOT inside `runMetricsCheck`: that function returns early
+   * whenever no `MetricsSuite` is available, and the arm comparison is derived
+   * from `closed_trades` — it is computable on every one of those days. Nesting
+   * it there would leave this mechanism silently un-run for exactly the runs it
+   * exists to measure, which is this repo's dominant defect class.
+   *
+   * The reader is `SqliteArmComparisonSource` (control-arm/), NOT
+   * `feedbackStores.trades`: the latter is scoped to `arm = 'live'` so the loop
+   * never tunes on the control's outcomes, and this question needs both arms out
+   * of ONE window query (doc 12 gate 4).
+   */
+  const armComparisonSource = new SqliteArmComparisonSource(config.db);
+  const armComparisonSamples = new SqliteArmComparisonSampleStore(config.db);
+
+  const runArmComparison = (): void => {
+    const sample = runArmComparisonCycle({
+      clock,
+      trades: armComparisonSource,
+      samples: armComparisonSamples,
+      alerts: components.armDivergenceAlerts,
+      // The declared book, not live equity: both arms must be divided by the
+      // SAME denominator or their two `return_pct` figures are not comparable.
+      // Same choice `report-arm-comparison.ts` makes, for the same reason.
+      basis: LIVE_BOOK_GBP,
+      window_ms: DEFAULT_ARM_COMPARISON_WINDOW_MS,
+      thresholds: DEFAULT_ARM_DIVERGENCE_THRESHOLDS,
+    });
+
+    logger.log({
+      trace_id: 'feedback-cycle',
+      stage: 'feedback-loop',
+      // A divergence is `warn`, not `error`: nothing failed and no dial moved
+      // (contrast the kill-line breach above, which auto-tightens). It is the
+      // measurement #636 asked for, and the operator decides what it means.
+      level: sample.divergence.diverged ? 'warn' : 'info',
+      message: sample.divergence.diverged
+        ? 'arm comparison computed — ARM DIVERGENCE (alerted, nothing auto-tightened)'
+        : 'arm comparison computed',
+      payload: {
+        window_from: sample.comparison.from.toISOString(),
+        window_to: sample.comparison.to.toISOString(),
+        basis: sample.comparison.basis,
+        // Both arms, both columns — never a return without its drawdown
+        // (`docs/research/12-edge-hypothesis-critique.md` D4).
+        live: sample.comparison.live,
+        control: sample.comparison.control,
+        diverged: sample.divergence.diverged,
+        divergence_reason: sample.divergence.reason,
+      },
+    });
+  };
+
   const runFeedbackCycle = (feedback: FeedbackCycleConfig): void => {
     try {
       const result = runDailyCycle({
@@ -2133,6 +2213,13 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
       if (feedback.metrics !== undefined && metricsSource !== undefined) {
         runMetricsCheck(metricsSource, feedback.metrics, feedback.config);
       }
+
+      // #971: OUTSIDE the `feedback.metrics` guard above, deliberately. The
+      // comparison needs no `MetricsSuite` and no Stage 2 selection — only
+      // `closed_trades` — so gating it on the metrics source would make the
+      // matched control invisible on every day the equity series is thin,
+      // which is most of them early in a soak.
+      runArmComparison();
     } catch (error) {
       logger.log({
         trace_id: 'feedback-cycle',

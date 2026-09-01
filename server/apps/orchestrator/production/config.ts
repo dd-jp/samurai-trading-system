@@ -13,6 +13,7 @@ import type {
   UnpricedFillAlertChannel,
 } from '../../../pipeline/execution/index.js';
 import type {
+  ArmDivergenceAlertChannel,
   BreachAlertChannel,
   DailyMetricsSource,
   FeedbackConfig,
@@ -324,6 +325,29 @@ export interface AlertChannelSlots {
    * cliff throws rather than guessing a normal close past it.
    */
   calendarFallbackAlerts?: CalendarFallbackAlertChannel;
+  /**
+   * Where the matched control (falsifier arm 2) OUT-PERFORMING the debate-driven
+   * live arm is escalated (#971, under #636 and #913) — the seventeenth
+   * `ALERT_CHANNEL_FIELDS` member, channel type and transport landing in the
+   * SAME change like `traderDiagnosticAlerts`/`calendarFallbackAlerts` before it.
+   * Defaults to `LoggingArmDivergenceAlertChannel`, with the same caveat as
+   * `calendarFallbackAlerts`: log-only cannot page anyone, and #913 is explicit
+   * that the divergence reaches the trade channel.
+   * `TradeChannelArmDivergenceAlert` (arm-divergence-alert-channel.ts) is what
+   * `SAMURAI_ALERTS=telegram` (#322) supplies.
+   *
+   * Deliberately its own slot rather than a reuse of `breachAlerts`: the breach
+   * formatter says "KILL-THRESHOLD BREACH … thresholds auto-tightened", and
+   * pushing divergence through `MetricsReport.breaches` would actually run
+   * `autoTighten` — tightening the LIVE arm's sizing and not the control's,
+   * which degrades the matching the comparison depends on. This is a
+   * measurement, and it changes no dial.
+   *
+   * The condition it reports is invisible from outside by construction: both
+   * arms keep trading, the heartbeat keeps beating, and the only symptom is that
+   * the £58/yr debate layer is no longer earning its bill.
+   */
+  armDivergenceAlerts?: ArmDivergenceAlertChannel;
 }
 
 /**

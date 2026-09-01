@@ -594,6 +594,49 @@ CREATE TABLE risk_critic_log (
 CREATE INDEX idx_risk_critic_log_created_at ON risk_critic_log(created_at);
 ```
 
+#### `arm_comparison_samples` (2026-09-01, [#971](https://github.com/dd-jp/samurai-trading-system/issues/971))
+
+Owned by the Feedback Loop (`server/pipeline/feedback-loop/sqlite-arm-comparison-sample-store.ts`;
+migration `0034_arm_comparison_samples.sql`). One row per comparison cycle: the live arm and
+falsifier arm 2 measured over the same window, plus the divergence verdict FL reached on it. The
+Feedback Loop is the sole writer; the dashboard's service-api process is a reader only.
+
+**Persisted rather than recomputed at read time** for three reasons. FL owns the computation
+([#636](https://github.com/dd-jp/samurai-trading-system/issues/636)) and a second implementation in
+the read path would be a second thing to keep matched. The reader is a *different process* over the
+same store, so there is no in-memory result to share. And the panel shows a trend, which needs a
+series — a recompute only ever yields "now".
+
+**Both arms' `return_pct` and `max_drawdown_pct` are NOT NULL.** This is
+`docs/research/12-edge-hypothesis-critique.md` D4 enforced in the schema: a row that carries a
+return without the drawdown beside it cannot be written, so no reader can render a return-only
+comparison even by accident. `divergence_reason` is nullable and is NULL exactly when
+`diverged = 0`. Postdates the non-collision pass below; every column name here is new.
+
+```sql
+CREATE TABLE arm_comparison_samples (
+  computed_at             TEXT PRIMARY KEY,
+  window_from              TEXT NOT NULL,
+  window_to                TEXT NOT NULL,
+  basis                    REAL NOT NULL,
+
+  live_trade_count         INTEGER NOT NULL,
+  live_realized_pnl_net    REAL NOT NULL,
+  live_return_pct          REAL NOT NULL,
+  live_max_drawdown_pct    REAL NOT NULL,
+
+  control_trade_count      INTEGER NOT NULL,
+  control_realized_pnl_net REAL NOT NULL,
+  control_return_pct       REAL NOT NULL,
+  control_max_drawdown_pct REAL NOT NULL,
+
+  diverged                 INTEGER NOT NULL CHECK(diverged IN (0, 1)),
+  divergence_reason        TEXT
+);
+
+CREATE INDEX idx_arm_comparison_samples_computed_at ON arm_comparison_samples(computed_at DESC);
+```
+
 **Retrieval is by `(instrument, bar_timestamp)`, never by an id.** A replay mints fresh `trace_id` and `debate_id` values, so neither can bridge a live row to a replayed lookup. The id column is row identity; the unique index is the lookup path — the same arrangement `debate_log` already relies on.
 
 **`bar_timestamp` must be floored to the bar boundary on write, and this does not happen today.** The equivalent write on the debate path stores `clock.now()` unfloored, so a live tick at 14:32:07 files under 14:32:07 while a replay stepping bar boundaries looks up 14:30:00 and misses every row. Under the backtest harness the simulated clock sits exactly on the bar close and the bug is invisible. Fixing it on this table does not fix `debate_log`, which has the same defect.
