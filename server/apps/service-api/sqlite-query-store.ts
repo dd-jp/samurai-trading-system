@@ -237,12 +237,19 @@ export class SqliteQueryStore implements DashboardQueryStore {
     private readonly attributionWindowDays = 30,
   ) {}
 
+  /**
+   * **LIVE arm only (#753)**, like every other read on this store. The dashboard
+   * shows the book the system is actually trading; falsifier arm 2's shadow lots
+   * are a measurement, not exposure, and mixing them into the operator's view of
+   * open positions would misstate what is at risk. The two arms are compared
+   * deliberately, through the arm comparison report, not incidentally here.
+   */
   getOpenPositions(asOf: Date): OpenPosition[] {
     const placeholders = TERMINAL_STATES.map(() => '?').join(', ');
     const rows = this.db
       .prepare(
         `SELECT * FROM open_positions
-          WHERE order_state NOT IN (${placeholders}) AND opened_at <= ?
+          WHERE arm = 'live' AND order_state NOT IN (${placeholders}) AND opened_at <= ?
           ORDER BY opened_at`,
       )
       .all(...TERMINAL_STATES, toStoredTimestamp(asOf)) as OpenPositionRow[];
@@ -252,7 +259,11 @@ export class SqliteQueryStore implements DashboardQueryStore {
   /** #940: `closed_trades`' mirror of `getRecentDebates`/`getVerdictHistory` below. */
   getRecentClosedTrades(limit: number, asOf: Date): ClosedTrade[] {
     const rows = this.db
-      .prepare(`SELECT * FROM closed_trades WHERE closed_at <= ? ORDER BY closed_at DESC LIMIT ?`)
+      .prepare(
+        `SELECT * FROM closed_trades
+          WHERE arm = 'live' AND closed_at <= ?
+          ORDER BY closed_at DESC LIMIT ?`,
+      )
       .all(toStoredTimestamp(asOf), limit) as ClosedTradeRow[];
     return rows.map(fromClosedTradeRow);
   }
@@ -334,7 +345,8 @@ export class SqliteQueryStore implements DashboardQueryStore {
         `SELECT closed_trades.*, debate_log.contributions_json AS debate_contributions_json
            FROM closed_trades
            JOIN debate_log ON debate_log.debate_id = closed_trades.debate_id
-          WHERE closed_trades.closed_at > ? AND closed_trades.closed_at <= ?`,
+          WHERE closed_trades.arm = 'live'
+            AND closed_trades.closed_at > ? AND closed_trades.closed_at <= ?`,
       )
       .all(toStoredTimestamp(from), toStoredTimestamp(asOf)) as AttributionRow[];
 
@@ -368,7 +380,9 @@ export class SqliteQueryStore implements DashboardQueryStore {
   getDailyMetrics(asOf: Date): MetricsSuite {
     const from = new Date(asOf.getTime() - 24 * 60 * 60 * 1000);
     const rows = this.db
-      .prepare(`SELECT * FROM closed_trades WHERE closed_at > ? AND closed_at <= ?`)
+      .prepare(
+        `SELECT * FROM closed_trades WHERE arm = 'live' AND closed_at > ? AND closed_at <= ?`,
+      )
       .all(toStoredTimestamp(from), toStoredTimestamp(asOf)) as ClosedTradeRow[];
     const trades = rows.map(fromClosedTradeRow);
 

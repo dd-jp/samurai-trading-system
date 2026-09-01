@@ -397,6 +397,9 @@ async function buildBracket(
   diagnostics: TraderDiagnostic[],
 ): Promise<TraderOutcome> {
   const { clock, config, debate, instrument, marketData, setupStore } = input;
+  // #753: absent means the live arm — the arm that existed before the control
+  // did — never "unknown".
+  const arm = input.arm ?? 'live';
 
   // Every caller must have already excluded 'neutral' — sideFor has no
   // direction to derive a side from. Checked here, not just assumed, so the
@@ -657,7 +660,18 @@ async function buildBracket(
 
   return emit(
     {
-      idempotency_key: computeIdempotencyKey(instrument, decisionBar, intentSideFor(intentType)),
+      // #753: `arm` is a hash input, not merely a recorded label. The control
+      // arm runs the same names on the same bars, so on every bar the two arms
+      // agree they would otherwise produce ONE key and Execution's `findByKey`
+      // gate would dedupe the second away — silently, and exactly on the
+      // agreeing subset the comparison is most sensitive to. `'live'` hashes
+      // identically to the pre-#753 payload; see `computeIdempotencyKey`.
+      idempotency_key: computeIdempotencyKey(
+        instrument,
+        decisionBar,
+        intentSideFor(intentType),
+        arm,
+      ),
       instrument,
       asset_class: mark.asset_class,
       side,
@@ -670,6 +684,10 @@ async function buildBracket(
       decision_timestamp: decisionBar,
       metadata: {
         debate_id: debate.debate_id,
+        // #753. Recorded on every intent (never omitted for the live arm), so
+        // `trader_log` / `risk_log` rows say which arm decided without anyone
+        // having to infer it from a `debate_id` prefix.
+        arm,
         conviction: debate.confidence,
         converged: debate.converged,
         sizing: {
@@ -878,7 +896,7 @@ async function readExitPrice(
 async function buildFlattenExit(
   input: Pick<
     TraderInput,
-    'clock' | 'config' | 'exitFillSizes' | 'instrument' | 'marketData' | 'onUnpricedFlatten'
+    'arm' | 'clock' | 'config' | 'exitFillSizes' | 'instrument' | 'marketData' | 'onUnpricedFlatten'
   >,
   positions: OpenPosition[],
   decisionBar: Date,
@@ -888,6 +906,8 @@ async function buildFlattenExit(
   // No `marketData` here since #826: the mark read moved into `readExitPrice`,
   // which owns both the healthy answer and the unpriced degradation.
   const { clock, config, exitFillSizes, instrument } = input;
+  // #753 — see `buildBracket`'s note. Absent means the live arm.
+  const arm = input.arm ?? 'live';
 
   const existingSide = positions[0]?.side;
   if (existingSide === undefined) {
@@ -932,6 +952,7 @@ async function buildFlattenExit(
         instrument,
         decisionBar,
         exitReason === 'signal_decay' ? 'early_close' : 'close',
+        arm,
       ),
       instrument,
       asset_class: priced.asset_class,
@@ -949,6 +970,8 @@ async function buildFlattenExit(
       decision_timestamp: decisionBar,
       metadata: {
         debate_id: attribution.debate_id,
+        // #753 — see the entry intent's own `arm` note.
+        arm,
         exit_reason: exitReason,
         // Spread rather than a plain `unpriced_exit: priced.unpriced` field:
         // `exactOptionalPropertyTypes` is on, and the flag is true-or-absent so
@@ -1315,6 +1338,12 @@ export type ExitCheckInput = Pick<
   // to reach THIS entry point — omitting it here would leave the degradation
   // audible only on the once-a-bar decision path.
   | 'onUnpricedFlatten'
+  // #753: which arm's book this exit closes. Both arms share this ONE exit
+  // entry point — that sharing is the acceptance criterion "both arms share
+  // the same exit rule and the same stop, asserted, not configured twice" —
+  // so the arm cannot be a property of a second implementation; it has to be
+  // an input to the single one.
+  | 'arm'
 > & {
   /** The pass's debate-bar coordinate, floored once by the tick runner. */
   bar: Date;

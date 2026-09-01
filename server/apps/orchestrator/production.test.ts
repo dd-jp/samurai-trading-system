@@ -90,6 +90,7 @@ import {
 } from './production.js';
 import { DEFAULT_UNIVERSE } from './scheduler.js';
 import { buildTrendingCloses } from './smoke-run.js';
+import { CONTROL_BOOK_ANCHOR_KEY } from './sqlite-account-state-store.js';
 import { SqliteDailyEquityStore } from './sqlite-daily-equity-store.js';
 import { SequentialTickRunner } from './tick-runner.js';
 import type { Logger, Scheduler, TickOutcome, TickPlan, TickRunner } from './types.js';
@@ -1256,8 +1257,42 @@ describe('composed tick chain (integration)', () => {
 
     // The progress row is upserted per stage and deleted on completion.
     expect(persistence.currentTickStore.get('BTC-USD')).toBeUndefined();
-    expect(logger.entries.map((entry) => entry.stage)).toEqual(stages);
-    expect(logger.entries.every((entry) => entry.trace_id === 'trace-composed')).toBe(true);
+    // #753: the log now carries BOTH arms, so it is filtered to the live trace
+    // rather than compared whole. The control arm's own stages are asserted
+    // just below — this line is about the LIVE pass being untouched by it.
+    expect(
+      logger.entries
+        .filter((entry) => entry.trace_id === 'trace-composed')
+        .map((entry) => entry.stage),
+    ).toEqual(stages);
+
+    /**
+     * #753 — FALSIFIER ARM 2 RAN, on this same tick, through the real
+     * composition root.
+     *
+     * This is the composition-root proof the ticket's "run it in parallel with
+     * the soak from the first day" constraint needs: not that the control arm
+     * exists and is tested, but that `buildProductionComponents` actually binds
+     * it and that a single `runInstrument` call drives it. Deleting the
+     * `controlArm:` line from `production.ts` — or the `await
+     * this.steps.controlArm?.(...)` from the tick runner — must fail HERE,
+     * at the root, rather than leaving a green unit suite around a mechanism
+     * nothing calls.
+     */
+    const controlStages = persistence.auditLog
+      .getByTraceId('trace-composed:control')
+      .map((row) => row.stage);
+    expect(controlStages).toEqual(['analysts', 'debate', 'trader', 'risk', 'verdict', 'execution']);
+
+    // Same six stages, same instrument, same bar — and a DIFFERENT lot, because
+    // `arm` is a hash input to the idempotency key. Without that the control's
+    // order would have been deduped away against the live arm's, silently, on
+    // exactly the bars the two arms agree.
+    const armRows = db
+      .prepare('SELECT arm, idempotency_key FROM open_positions ORDER BY arm')
+      .all() as { arm: string; idempotency_key: string }[];
+    expect(armRows.map((row) => row.arm)).toEqual(['control', 'live']);
+    expect(armRows[0]?.idempotency_key).not.toEqual(armRows[1]?.idempotency_key);
 
     // #302: the `go` verdict above must have left a real `verdict_log` row
     // through the PRODUCTION composition path (`buildProductionComponents`
@@ -4184,5 +4219,467 @@ describe('risk critic in backtest mode is replay-only at the composition root (#
     expect(db.prepare('SELECT COUNT(*) AS n FROM risk_critic_log').get()).toEqual({ n: 0 });
 
     fetchSpy.mockRestore();
+  });
+});
+
+/**
+ * #753 — falsifier arm 2, end to end through the REAL composition root.
+ *
+ * Three of the ticket's six acceptance criteria are properties of the whole
+ * wired chain rather than of any unit, so they are proven here:
+ *
+ * - **AC1**: zero LLM calls against the control arm, asserted with a client that
+ *   THROWS if it is ever called — while the same `buildProductionComponents`
+ *   run has an LLM client wired for the live arm's debate.
+ * - **AC2**: both arms' exit rule and stop come from ONE source. Asserted by
+ *   perturbing a single `traderConfig` field and observing both arms move
+ *   together, and by the two arms' `stop`/`target` being byte-identical on the
+ *   same bar — a stronger statement than two constants that happen to agree.
+ * - **AC6**: the control's trades are distinguishable by a real, queryable
+ *   column: `SELECT ... FROM open_positions WHERE arm = 'control'`.
+ *
+ * In `production.test.ts` rather than a file of its own because the harness that
+ * makes a full composed tick possible — `stubConfig`, `REAL_CONFIGS`,
+ * `fixtureBars` — lives here, and duplicating it would be a second fixture to
+ * keep in step with the composition root.
+ */
+describe('falsifier arm 2, through the composition root (#753)', () => {
+  let db: SqliteHandle;
+
+  beforeEach(() => {
+    db = openSharedStore(':memory:');
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  const HOUR_MS = 60 * 60 * 1_000;
+
+  /**
+   * The default name for these cases. `LQQ3` — a real GBX-declared LSE 3x index
+   * ETP, the same one the #706 window cases use — is the in-scope alternative,
+   * reached through `subclassCase()` below.
+   */
+  const DEFAULT_INSTRUMENT = { asset: 'BTC-USD', asset_class: 'crypto' as const };
+
+  function tapeFor(
+    signal: { asset: string; asset_class: 'crypto' | 'stocks' } = DEFAULT_INSTRUMENT,
+  ) {
+    const bars = [
+      ...fixtureBars(signal.asset, '5m', 60, 5 * 60_000),
+      ...fixtureBars(signal.asset, '1h', 60, HOUR_MS),
+      ...fixtureBars(signal.asset, '1m', 60, 60_000),
+      ...fixtureBars(signal.asset, '1d', 40, 24 * HOUR_MS),
+    ];
+    return new FixtureDataSource(
+      bars,
+      { price: 160, observed_at: START, source: 'fixture' },
+      signal.asset_class,
+      { bid: 159.5, ask: 160.5, observed_at: START },
+    );
+  }
+
+  function llmForOneDebate(): MockLlmClient {
+    const client = new MockLlmClient();
+    for (let i = 0; i < 40; i += 1) {
+      client.enqueueText(
+        JSON.stringify({ stance: 'bullish', rationale: 'fixture rationale', converged: true }),
+      );
+    }
+    return client;
+  }
+
+  /**
+   * One composed decision pass over one instrument, driving BOTH arms — the
+   * live chain and, from inside the tick runner, the control arm.
+   *
+   * `traderConfig` is a parameter so a case can perturb exactly one field and
+   * observe what moves.
+   */
+  async function runOneDecisionPass(options: {
+    handle: SqliteHandle;
+    llmClient: NonNullable<ProductionConfig['llmClient']>;
+    traderConfig?: ProductionConfig['traderConfig'];
+    /** Defaults to BTC-USD; the D3-bracket case drives a real LSE ETP instead. */
+    signal?: { asset: string; asset_class: 'crypto' | 'stocks' };
+  }) {
+    const signal = options.signal ?? DEFAULT_INSTRUMENT;
+    const clock = new SimulatedClock(START);
+    const dataSource = tapeFor(signal);
+    const costModel = new CostModelImpl(REAL_CONFIGS.costConfig as ProductionConfig['costConfig']);
+    const marketDataForBroker = new MarketDataServiceImpl(
+      dataSource,
+      clock,
+      'live',
+      new SqliteMarketDataStore(options.handle),
+    );
+
+    const config = stubConfig(options.handle, {
+      ...(REAL_CONFIGS as unknown as Partial<ProductionConfig>),
+      ...(options.traderConfig === undefined ? {} : { traderConfig: options.traderConfig }),
+      clock,
+      dataSource,
+      llmClient: options.llmClient,
+      broker: new SimulatedBrokerAdapter({
+        clock,
+        costModel,
+        marketData: marketDataForBroker,
+        config: REAL_CONFIGS.executionConfig.simulated,
+      }),
+    });
+
+    const { steps } = buildProductionComponents(config);
+    const persistence = buildPersistence(options.handle);
+
+    await new SequentialTickRunner(steps).runInstrument(signal, {
+      clock,
+      trace_id: 'trace-753',
+      logger: recordingLogger(),
+      auditLog: persistence.auditLog,
+      currentTickStore: persistence.currentTickStore,
+      decision_bar: {
+        id: `${START.toISOString()}@3600000`,
+        open_time: START,
+        timeframe_ms: 3_600_000,
+      },
+    });
+
+    return { persistence, steps, config };
+  }
+
+  function lotsByArm(handle: SqliteHandle) {
+    return handle
+      .prepare(
+        'SELECT arm, idempotency_key, instrument, side, stop, target, avg_entry_price, ' +
+          'decision_timestamp FROM open_positions ORDER BY arm',
+      )
+      .all() as {
+      arm: string;
+      idempotency_key: string;
+      instrument: string;
+      side: string;
+      stop: number;
+      target: number;
+      avg_entry_price: number;
+      decision_timestamp: string;
+    }[];
+  }
+
+  /**
+   * AC1. Two halves, in one case.
+   *
+   * First: the client IS wired and IS reachable — the live arm's debate calls
+   * it — while the control arm reaches Execution on the same tick. So this is a
+   * statement about the control arm's path, not about a run with no LLM in it.
+   *
+   * Second: the control arm is driven ALONE against a client that THROWS on any
+   * call. A model call anywhere between the axis vote and Execution would be
+   * contained as a control-arm failure and leave the chain short, so the
+   * six-stage assertion at the end is what proves the zero.
+   */
+  it('makes zero LLM calls from the axis vote through to Execution', async () => {
+    const calls: unknown[] = [];
+    const backing = llmForOneDebate();
+    const countingClient = {
+      complete: async (...args: unknown[]) => {
+        calls.push(args);
+        return (backing as unknown as { complete: (...a: unknown[]) => Promise<unknown> }).complete(
+          ...args,
+        );
+      },
+    } as unknown as NonNullable<ProductionConfig['llmClient']>;
+
+    const { persistence } = await runOneDecisionPass({ handle: db, llmClient: countingClient });
+
+    expect(calls.length).toBeGreaterThan(0);
+    expect(persistence.auditLog.getByTraceId('trace-753:control').map((row) => row.stage)).toEqual([
+      'analysts',
+      'debate',
+      'trader',
+      'risk',
+      'verdict',
+      'execution',
+    ]);
+
+    const soloBar = new Date(START.getTime() + HOUR_MS);
+    const clock = new SimulatedClock(START);
+    const soloConfig = stubConfig(db, {
+      ...(REAL_CONFIGS as unknown as Partial<ProductionConfig>),
+      clock,
+      dataSource: tapeFor(),
+      llmClient: {
+        complete: async () => {
+          calls.push('control-arm made an LLM call');
+          throw new Error('#753: the control arm must make no LLM call');
+        },
+      } as unknown as NonNullable<ProductionConfig['llmClient']>,
+    });
+    const components = buildProductionComponents(soloConfig);
+    const soloPersistence = buildPersistence(db);
+    const views = await components.steps.analysts({
+      trace_id: 'trace-753-solo',
+      signal: { asset: 'BTC-USD', asset_class: 'crypto' },
+      clock,
+      bar: soloBar,
+    });
+    expect(views.length).toBeGreaterThan(0);
+
+    /**
+     * The LIVE analysts step just made a model call — the
+     * `MarketIntelligenceStore.getContext` path reaches the Nous/Grok ingest
+     * agent — and that is exactly why the control arm RELAYS this view set
+     * instead of re-running the step. A control arm that re-ran its analysts
+     * would call a model in production while every unit test with a stubbed
+     * analysts step stayed green. The baseline for the zero-call assertion is
+     * therefore taken HERE, after the live stage, not before it.
+     */
+    expect(calls.length).toBeGreaterThan(0);
+    const before = calls.length;
+
+    // The hook is optional on `TickSteps` (see its doc), so an unbound one is
+    // not a compile error — it is the #753 wiring defect, named here.
+    expect(components.steps.controlArm).toBeDefined();
+
+    await components.steps.controlArm?.({
+      signal: { asset: 'BTC-USD', asset_class: 'crypto' },
+      ctx: {
+        clock,
+        trace_id: 'trace-753-solo',
+        logger: recordingLogger(),
+        auditLog: soloPersistence.auditLog,
+        currentTickStore: soloPersistence.currentTickStore,
+        decision_bar: {
+          id: `${soloBar.toISOString()}@3600000`,
+          open_time: soloBar,
+          timeframe_ms: 3_600_000,
+        },
+      },
+      views,
+    });
+
+    expect(calls.length).toBe(before);
+    expect(
+      soloPersistence.auditLog.getByTraceId('trace-753-solo:control').map((row) => row.stage),
+    ).toEqual(['analysts', 'debate', 'trader', 'risk', 'verdict', 'execution']);
+
+    /**
+     * The zero above must not be a vacuous zero. A control pass that decided
+     * nothing would reach Execution with a skip and call no model either — the
+     * same assertion, proving nothing. These two make the run non-vacuous:
+     *
+     * - a control LOT exists, so an intent really was produced, sized, gated and
+     *   submitted while the only client in the process throws on any call;
+     * - the control's `risk_log` row carries `risk_critic: skipped`, which is
+     *   the record of the ONE remaining LLM seam in the control's path (#957's
+     *   step 7) being absent by wiring rather than by luck. Restore
+     *   `critic: deps.risk.critic` in `control-arm-wiring.ts` and this line goes
+     *   from `skipped` to a thrown call.
+     */
+    const controlLots = db
+      .prepare("SELECT idempotency_key FROM open_positions WHERE arm = 'control'")
+      .all() as { idempotency_key: string }[];
+    expect(controlLots.length).toBeGreaterThan(0);
+
+    const controlRisk = db
+      .prepare('SELECT reasons_json FROM risk_log WHERE trace_id = ?')
+      .get('trace-753-solo:control') as { reasons_json: string } | undefined;
+    expect(controlRisk?.reasons_json).toContain('risk_critic: skipped');
+  });
+
+  /**
+   * The control arm's account state is its OWN (#753).
+   *
+   * `computeCurrentPortfolioAndBreakers` combines each arm's open positions with
+   * its `AccountStateProvider`, and the control arm used to be handed the LIVE
+   * arm's — which reads `GET /v2/account`, an account the control never trades
+   * against. Its D5 sizing (a fraction of `portfolio.equity`) and its
+   * drawdown-halt timing were therefore functions of the live arm's realized
+   * cash, which is not an independent measurement over the same tape.
+   *
+   * `risk_log.equity` is where each arm's own valuation is recorded, so the two
+   * rows from ONE tick are the proof. Both figures are on the same SCALE — the
+   * control anchors its book to the live account once, at boot, because a
+   * matched control has to start at the same capital (see the anchor tests in
+   * `control-account-state.test.ts`, and the `rounds_to_zero_shares` failure
+   * that a declared-£1,000 control produced under `yarn smoke`). What separates
+   * them is the accounting: the control debits its OWN deployed cash and marks
+   * its OWN lot, while the live arm reads the harness's fixed 100,000 stub.
+   */
+  it('sizes and halts off its own book, not the live arm’s account', async () => {
+    await runOneDecisionPass({ handle: db, llmClient: llmForOneDebate() });
+
+    const rows = db.prepare('SELECT trace_id, equity FROM risk_log ORDER BY trace_id').all() as {
+      trace_id: string;
+      equity: number;
+    }[];
+    const live = rows.find((row) => row.trace_id === 'trace-753');
+    const control = rows.find((row) => row.trace_id === 'trace-753:control');
+
+    expect(live?.equity).toBeDefined();
+    expect(control?.equity).toBeDefined();
+    // Matched scale: a control anchored at the declared £1,000 against this
+    // 100,000 live account is the exact inertness the smoke gate caught.
+    expect(live?.equity).toBeGreaterThan(50_000);
+    expect(control?.equity).toBeGreaterThan(50_000);
+    // Its own book all the same. The two figures agree on this FIRST tick and
+    // only on it — both arms start flat at one anchor, and `risk_log` is
+    // written before either lot fills — so the equality is not the property to
+    // assert. What proves the arms are on different providers is the anchor
+    // row: `CONTROL_BOOK_ANCHOR_KEY` exists in `account_state` only because
+    // `ControlArmAccountStateProvider`'s resolver ran, and nothing on the live
+    // path ever writes that key. Independence from there is
+    // `control-account-state.test.ts`'s, which moves a live row and a control
+    // row and watches which figures follow.
+    const anchor = db
+      .prepare('SELECT peak_equity FROM account_state WHERE key = ?')
+      .get(CONTROL_BOOK_ANCHOR_KEY) as { peak_equity: number } | undefined;
+    expect(anchor?.peak_equity).toBe(100_000);
+    // And it actually traded — the condition the smoke gate exists to catch,
+    // asserted here too so a control that silently stops sizing fails a unit
+    // test first.
+    expect(lotsByArm(db).map((lot) => lot.arm)).toEqual(['control', 'live']);
+  });
+
+  /**
+   * AC2, first half: on the same bar, over the same tape, the two arms' stop
+   * and target are IDENTICAL — because both are computed by the same
+   * `decide.ts` from the same `TraderConfig` and the same
+   * `ADR_0018_SUBCLASS_BRACKETS`, not by two implementations that agree today.
+   *
+   * AC6 rides along: the control's row is selected by a real column.
+   */
+  it('gives both arms the same exit rule and stop, and marks the control row queryable', async () => {
+    await runOneDecisionPass({ handle: db, llmClient: llmForOneDebate() });
+
+    const lots = lotsByArm(db);
+    expect(lots.map((lot) => lot.arm)).toEqual(['control', 'live']);
+    const [control, live] = lots;
+
+    // Same name, same bar, same side — the matched control's premise.
+    expect(control?.instrument).toBe(live?.instrument);
+    expect(control?.decision_timestamp).toBe(live?.decision_timestamp);
+    expect(control?.side).toBe(live?.side);
+    // Same exit rule and same stop, to the last bit. Nothing is configured twice.
+    expect(control?.stop).toBe(live?.stop);
+    expect(control?.target).toBe(live?.target);
+    // AC6: a real, queryable property — not inferred from a key prefix.
+    const queried = db
+      .prepare('SELECT idempotency_key FROM open_positions WHERE arm = ?')
+      .all('control') as { idempotency_key: string }[];
+    expect(queried).toHaveLength(1);
+    expect(queried[0]?.idempotency_key).toBe(control?.idempotency_key);
+    expect(queried[0]?.idempotency_key).not.toBe(live?.idempotency_key);
+  });
+
+  /**
+   * AC2, second half — the mutation the ticket asks for, run through the REAL
+   * ADR-0018 D3 bracket rather than the pre-D3 `atr_k` fallback.
+   *
+   * The distinction is load-bearing. `REAL_CONFIGS.traderConfig.subclass_of` is
+   * `{}`, which is `resolveSubclassBracket`'s "the per-subclass regime is not
+   * armed" answer, so the `atr_k` case below it exercises the geometry the live
+   * system will NOT use once the pool file lands. This case arms the regime with
+   * a real in-scope name — `LQQ3`, a GBX-declared LSE 3x index ETP — and moves
+   * the ONE field that selects a bracket row. Both arms must land on the new
+   * row's frozen percentages together; a control arm with its own bracket table
+   * would show the live arm moving alone.
+   */
+  it("moves both arms together across ADR-0018 D3's frozen bracket rows", async () => {
+    const LSE_ETP = { asset: 'LQQ3', asset_class: 'stocks' as const };
+    const configFor = (subclass: 'index_etp_3x' | 'single_stock_etp_3x') =>
+      ({
+        ...REAL_CONFIGS.traderConfig,
+        subclass_of: { [LSE_ETP.asset]: subclass },
+      }) as unknown as ProductionConfig['traderConfig'];
+
+    /** D3's neutral pairs, read off the frozen table rather than restated here. */
+    const indexBracket = ADR_0018_SUBCLASS_BRACKETS.index_etp_3x;
+    const singleStockBracket = ADR_0018_SUBCLASS_BRACKETS.single_stock_etp_3x;
+    if (indexBracket === null || singleStockBracket === null) {
+      throw new Error('ADR-0018 declares a bracket for both leveraged-ETP subclasses');
+    }
+
+    await runOneDecisionPass({
+      handle: db,
+      llmClient: llmForOneDebate(),
+      signal: LSE_ETP,
+      traderConfig: configFor('index_etp_3x'),
+    });
+    const asIndex = lotsByArm(db);
+    expect(asIndex.map((lot) => lot.arm)).toEqual(['control', 'live']);
+
+    const moved = openSharedStore(':memory:');
+    try {
+      await runOneDecisionPass({
+        handle: moved,
+        llmClient: llmForOneDebate(),
+        signal: LSE_ETP,
+        // The one field, changed once: the subclass this name is priced under.
+        traderConfig: configFor('single_stock_etp_3x'),
+      });
+      const asSingleStock = lotsByArm(moved);
+      expect(asSingleStock.map((lot) => lot.arm)).toEqual(['control', 'live']);
+
+      /**
+       * The bracket's own geometry, checked without needing the entry price —
+       * `avg_entry_price` is 0 on a write-ahead row, and these lots have not
+       * filled. For a long placed at `e`, `stop = e(1 − s)` and
+       * `target = e(1 + t)`, so `target / stop = (1 + t) / (1 − s)`: a pure
+       * function of the D3 row, and a different number for each subclass
+       * (1.0221 index, 1.1307 single-stock).
+       */
+      const shape = (bracket: { take_profit_pct: number; stop_pct: number }) =>
+        (1 + bracket.take_profit_pct) / (1 - bracket.stop_pct);
+      for (const lot of asIndex) {
+        expect(lot.target / lot.stop).toBeCloseTo(shape(indexBracket), 6);
+      }
+      for (const lot of asSingleStock) {
+        expect(lot.target / lot.stop).toBeCloseTo(shape(singleStockBracket), 6);
+      }
+
+      // Both arms moved, and they still agree with each other — the invariant.
+      expect(asSingleStock[0]?.stop).not.toBe(asIndex[0]?.stop);
+      expect(asSingleStock[1]?.stop).not.toBe(asIndex[1]?.stop);
+      expect(asSingleStock[0]?.stop).toBe(asSingleStock[1]?.stop);
+      expect(asSingleStock[0]?.target).toBe(asSingleStock[1]?.target);
+    } finally {
+      moved.close();
+    }
+  });
+
+  /**
+   * The same mutation on the PRE-D3 fallback geometry, kept because
+   * `subclass_of` is `{}` on every shipped profile until the pool file lands —
+   * so `atr_k` is the width the two arms actually run on today.
+   */
+  it('moves both arms together when the shared stop config is perturbed', async () => {
+    await runOneDecisionPass({ handle: db, llmClient: llmForOneDebate() });
+    const baseline = lotsByArm(db);
+    expect(baseline).toHaveLength(2);
+
+    const widened = openSharedStore(':memory:');
+    try {
+      await runOneDecisionPass({
+        handle: widened,
+        llmClient: llmForOneDebate(),
+        // `atr_k` is the stop's width in ATRs — the one field, changed once.
+        traderConfig: {
+          ...REAL_CONFIGS.traderConfig,
+          atr_k: REAL_CONFIGS.traderConfig.atr_k * 2,
+        } as unknown as ProductionConfig['traderConfig'],
+      });
+      const perturbed = lotsByArm(widened);
+
+      expect(perturbed.map((lot) => lot.arm)).toEqual(['control', 'live']);
+      // Both arms moved…
+      expect(perturbed[0]?.stop).not.toBe(baseline[0]?.stop);
+      expect(perturbed[1]?.stop).not.toBe(baseline[1]?.stop);
+      // …and they still agree with each other, which is the invariant.
+      expect(perturbed[0]?.stop).toBe(perturbed[1]?.stop);
+      expect(perturbed[0]?.target).toBe(perturbed[1]?.target);
+    } finally {
+      widened.close();
+    }
   });
 });

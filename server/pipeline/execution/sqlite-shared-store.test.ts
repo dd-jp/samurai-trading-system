@@ -815,4 +815,92 @@ describe('SqliteExecutionStore', () => {
       expect(await store.getExitFillSizes([])).toEqual(new Map());
     });
   });
+
+  /**
+   * #753 acceptance criterion 6: *the control arm's trades are distinguishable
+   * in the trade record — a real, queryable property, not an inference.*
+   *
+   * The trade record is two tables. `open_positions` is asserted end to end by
+   * `production.test.ts` and by the smoke gate; `closed_trades` is the half a
+   * completed trade lives in, and it is what the comparison report groups on. If
+   * `writeClosedTrade` failed to bind this instance's arm, every control trade
+   * would land in the record as a live one, the report would show the two arms'
+   * results merged into the live row, and NOTHING else in the suite would
+   * notice — the shape the control arm's own fill-sync loop exists to avoid.
+   */
+  describe('arm scoping (#753)', () => {
+    function makeArmedStores(): {
+      db: Db;
+      live: SqliteExecutionStore;
+      control: SqliteExecutionStore;
+    } {
+      const db = openSharedStore(':memory:');
+      // One database, two instances. The arm is a CONSTRUCTOR argument rather
+      // than a per-call one precisely so a caller cannot mix them.
+      return {
+        db,
+        live: new SqliteExecutionStore(db),
+        control: new SqliteExecutionStore(db, 'control'),
+      };
+    }
+
+    function armsOf(db: Db, table: 'open_positions' | 'closed_trades'): string[] {
+      return (
+        db.prepare(`SELECT idempotency_key, arm FROM ${table} ORDER BY idempotency_key`).all() as {
+          idempotency_key: string;
+          arm: string;
+        }[]
+      ).map((row) => `${row.idempotency_key}=${row.arm}`);
+    }
+
+    it('stamps the closed-trade record with the writing instance’s arm', async () => {
+      const { db, live, control } = makeArmedStores();
+
+      // Same name, same bar, different arms — which is the normal case, since
+      // both arms trade the same universe off the same tape. The keys differ
+      // only because `arm` is a hash input to `computeIdempotencyKey`.
+      await live.writeAheadPosition(makePosition({ idempotency_key: 'live-key' }));
+      await control.writeAheadPosition(makePosition({ idempotency_key: 'control-key' }));
+      await live.applyLotAdvance({
+        idempotency_key: 'live-key',
+        fills: [],
+        closed_trade: makeClosedTrade({ idempotency_key: 'live-key' }),
+      });
+      await control.applyLotAdvance({
+        idempotency_key: 'control-key',
+        fills: [],
+        closed_trade: makeClosedTrade({ idempotency_key: 'control-key' }),
+      });
+
+      expect(armsOf(db, 'closed_trades')).toEqual(['control-key=control', 'live-key=live']);
+      expect(armsOf(db, 'open_positions')).toEqual(['control-key=control', 'live-key=live']);
+
+      // The query the report and an operator both actually run.
+      const controlKeys = db
+        .prepare(`SELECT idempotency_key FROM closed_trades WHERE arm = 'control'`)
+        .all() as { idempotency_key: string }[];
+      expect(controlKeys.map((row) => row.idempotency_key)).toEqual(['control-key']);
+    });
+
+    it('keeps each arm’s open book invisible to the other', async () => {
+      const { live, control } = makeArmedStores();
+
+      await live.writeAheadPosition(makePosition({ idempotency_key: 'live-key' }));
+      await control.writeAheadPosition(makePosition({ idempotency_key: 'control-key' }));
+
+      // The scan behind the exposure caps, the concentration gate and the
+      // breakers. Unscoped, a control lot would consume the live arm's headroom.
+      expect((await live.getOpenPositions()).map((p) => p.idempotency_key)).toEqual(['live-key']);
+      expect((await control.getOpenPositions()).map((p) => p.idempotency_key)).toEqual([
+        'control-key',
+      ]);
+    });
+
+    it('defaults to the live arm, so every pre-#753 row and caller is unchanged', async () => {
+      const { db, store } = makeStore();
+      await store.writeAheadPosition(makePosition());
+
+      expect(armsOf(db, 'open_positions')).toEqual(['key-1=live']);
+    });
+  });
 });

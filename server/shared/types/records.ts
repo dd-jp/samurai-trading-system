@@ -4,7 +4,7 @@
  * interfaces that read and write these.
  */
 import type { AnalystContribution, Direction } from '../../pipeline/debate-engine/index.js';
-import type { AssetClass } from './primitives.js';
+import type { AssetClass, TradingArm } from './primitives.js';
 
 /**
  * The bracket handed from the Trader to the Risk Manager. See
@@ -76,6 +76,24 @@ export type ExitReason =
 
 export interface OrderIntentMetadata {
   debate_id: string;
+  /**
+   * Which arm of #753's measurement produced this intent — `'live'` for the
+   * debate-driven arm, `'control'` for falsifier arm 2 (the deterministic axis
+   * vote thresholded, debate stage bypassed, no model call anywhere in the
+   * path).
+   *
+   * Optional in the TYPE for the same reason `TraderInput.arm` is: absent means
+   * the live arm, which is what every record written before falsifier arm 2
+   * existed means. `decide.ts` sets it on every intent it builds — including
+   * the live ones — so a *new* record never omits it.
+   *
+   * This is the DECISION record's copy. It is not what makes a control trade
+   * distinguishable in `open_positions`/`closed_trades`: those carry their own
+   * `arm` column (migration 0033), stamped by the arm-scoped store instance
+   * that writes them, so the queryable property does not depend on an optional
+   * field surviving four stages.
+   */
+  arm?: TradingArm;
   /**
    * Set on every `intent_type: 'exit'` intent and absent on every other
    * (#748). Optional in the TYPE because an entry or scale-in genuinely has

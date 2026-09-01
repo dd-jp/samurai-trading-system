@@ -109,26 +109,38 @@ export class SqliteSessionEquityStore {
    *
    * `COALESCE` because `SUM` over zero rows is SQL NULL — a fresh session with
    * no closes yet has realized PnL of exactly 0, not "unknown".
+   *
+   * `arm = 'live'` is load-bearing (#753). This sum is the `daily_basis`
+   * numerator, and `daily_basis` is what the drawdown circuit breaker trips on
+   * for the arm that trades real capital. Falsifier arm 2's lots land in the
+   * same `closed_trades` table; unfiltered, a control-arm loss would tighten the
+   * live breaker and a control-arm gain would loosen it — the measurement
+   * changing the thing it measures, which is the exact failure the control arm's
+   * separate `CircuitBreakers` instance exists to prevent. Separating the
+   * breaker instance is not enough if both instances read one equity basis.
    */
   realizedSince(assetClass: 'crypto' | 'stocks', openAt: Date): number {
     const row = this.db
       .prepare(
         `SELECT COALESCE(SUM(realized_pnl_net), 0) AS realized
            FROM closed_trades
-          WHERE asset_class = ? AND closed_at > ?`,
+          WHERE arm = 'live' AND asset_class = ? AND closed_at > ?`,
       )
       .get(assetClass, toStoredTimestamp(openAt)) as RealizedRow | undefined;
 
     return row?.realized ?? 0;
   }
 
-  /** As `realizedSince`, across every asset class — the portfolio-level numerator. */
+  /**
+   * As `realizedSince`, across every asset class — the portfolio-level numerator.
+   * Scoped to `arm = 'live'` for the reason given above (#753).
+   */
   realizedSinceAllClasses(openAt: Date): number {
     const row = this.db
       .prepare(
         `SELECT COALESCE(SUM(realized_pnl_net), 0) AS realized
            FROM closed_trades
-          WHERE closed_at > ?`,
+          WHERE arm = 'live' AND closed_at > ?`,
       )
       .get(toStoredTimestamp(openAt)) as RealizedRow | undefined;
 

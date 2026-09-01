@@ -13,6 +13,7 @@
  * over a canonical JSON payload.
  */
 import { createHash } from 'node:crypto';
+import type { TradingArm } from '../../shared/index.js';
 
 /**
  * Which SIDE of a position the intent is on — the discriminator, deliberately
@@ -96,12 +97,41 @@ export function intentSideFor(intentType: 'entry' | 'scale_in' | 'exit'): Intent
  * On a 3x leveraged ETP (ADR-0016's universe) that is the worst outcome the
  * intraday horizon has.
  */
-export function computeIdempotencyKey(instrument: string, bar: Date, side: IntentSide): string {
-  const payload = JSON.stringify({
-    instrument,
-    bar: bar.toISOString(),
-    side,
-  });
+/**
+ * **`arm` is #753's discriminator, and it is load-bearing for exactly the
+ * reason `side` (#686) and `'early_close'` (#748) are.**
+ *
+ * Falsifier arm 2 runs over the SAME tape, the SAME names and the SAME bars as
+ * the live arm — that is the entire point of a matched control. So on every
+ * bar where the debate and the deterministic axis vote agree, the two arms
+ * produce an intent for the same `(instrument, bar, side)` triple and, without
+ * this field, the SAME key. `open_positions` and `closed_trades` both hold
+ * `idempotency_key` as PRIMARY KEY and `execute()` gates on `findByKey`, so
+ * the second arm's order would be silently deduped away — and it would be
+ * deduped away *precisely on the ticks where the two arms agree*, which is the
+ * subset a comparison of the two arms is most sensitive to. The loss would be
+ * invisible: a suppressed control entry is indistinguishable from a control
+ * that declined to trade.
+ *
+ * **The live arm's keys are byte-identical to their pre-#753 values**, because
+ * `'live'` omits the field from the hashed payload entirely rather than
+ * hashing the string `'live'`. That is deliberate and not cosmetic: every
+ * `open_positions` / `closed_trades` / `flatten_submissions` row and every
+ * venue-side `client_order_id` already in flight was keyed under the
+ * three-field payload, and a re-keying of the live arm would make a
+ * crash-restart replay re-place orders the store already holds under the old
+ * key. Only the arm that did not exist before gets a new key space.
+ */
+export function computeIdempotencyKey(
+  instrument: string,
+  bar: Date,
+  side: IntentSide,
+  arm: TradingArm = 'live',
+): string {
+  const payload =
+    arm === 'live'
+      ? JSON.stringify({ instrument, bar: bar.toISOString(), side })
+      : JSON.stringify({ instrument, bar: bar.toISOString(), side, arm });
 
   return createHash('sha256').update(payload).digest('hex');
 }

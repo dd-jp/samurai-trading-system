@@ -35,6 +35,7 @@ import type {
   LotHeldQuantity,
   OpenPosition,
   OrderState,
+  TradingArm,
 } from '../../shared/index.js';
 import {
   type SharedStore as Db,
@@ -149,7 +150,40 @@ export class DuplicateFlattenSubmissionError extends Error {
 }
 
 export class SqliteExecutionStore implements SharedStore {
-  constructor(private readonly db: Db) {}
+  /**
+   * Which arm's book this instance reads and writes (#753).
+   *
+   * **One class, two instances — never two classes.** #753's acceptance
+   * criterion is that both arms share the same exit rule and the same stop
+   * *asserted, not configured twice*, and the same argument applies one layer
+   * down: a second store implementation for the control arm would be a second
+   * place for the two arms' persistence to drift. So the arm is a CONSTRUCTOR
+   * ARGUMENT to the one store, and every behaviour below is literally the same
+   * code for both arms.
+   *
+   * It does exactly two things. It is stamped onto the two tables that make up
+   * the trade record (`open_positions`, `closed_trades`), and it filters the
+   * two SCAN queries — `getOpenPositions()` and `getUnprotectedResidualLots()`.
+   * Those scans are what feed the live arm's exposure caps, its whole-book
+   * valuation and its residual-protection sweep, so filtering them is what
+   * keeps the control arm from consuming the live arm's headroom or tripping
+   * its breakers. The arms share a tape; they must not share a book.
+   *
+   * Key-based reads and writes are deliberately unfiltered — `arm` is a hash
+   * input to `idempotency_key` (#753, `computeIdempotencyKey`), so the two arms
+   * occupy disjoint key spaces and a key lookup cannot cross arms.
+   *
+   * Defaults to `'live'`, so every existing construction keeps exactly the
+   * behaviour it had.
+   */
+  private readonly arm: TradingArm;
+
+  constructor(
+    private readonly db: Db,
+    arm: TradingArm = 'live',
+  ) {
+    this.arm = arm;
+  }
 
   /**
    * True if an order already exists under this key. Two tables, because two
@@ -190,8 +224,8 @@ export class SqliteExecutionStore implements SharedStore {
              idempotency_key, debate_id, instrument, asset_class, side, intent_type,
              requested_size, filled_size, avg_entry_price, stop, target,
              order_state, broker_order_ids, opened_at, decision_timestamp,
-             conviction, converged
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             conviction, converged, arm
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           position.idempotency_key,
@@ -211,6 +245,11 @@ export class SqliteExecutionStore implements SharedStore {
           toStoredTimestamp(position.decision_timestamp),
           position.conviction,
           position.converged ? 1 : 0,
+          // #753: this INSTANCE's arm, not a field off the position — the
+          // writer's identity is the fact being recorded, and reading it off
+          // the row would let a mislabelled `OpenPosition` file a control lot
+          // into the live arm's book.
+          this.arm,
         );
     } catch (cause) {
       if (isUniqueConstraintError(cause)) {
@@ -243,9 +282,16 @@ export class SqliteExecutionStore implements SharedStore {
     const placeholders = TERMINAL_STATES.map(() => '?').join(', ');
     const rows = this.db
       .prepare(
-        `SELECT * FROM open_positions WHERE order_state NOT IN (${placeholders}) ORDER BY opened_at`,
+        // #753: arm-scoped. This is the read the Trader's position awareness,
+        // `computePortfolioView` and every Risk exposure cap run on, so an
+        // unfiltered scan here would put the control arm's lots into the live
+        // arm's book — halving its headroom and letting a control drawdown
+        // move a live breaker.
+        `SELECT * FROM open_positions
+          WHERE arm = ? AND order_state NOT IN (${placeholders})
+          ORDER BY opened_at`,
       )
-      .all(...TERMINAL_STATES) as OpenPositionRow[];
+      .all(this.arm, ...TERMINAL_STATES) as OpenPositionRow[];
     return rows.map(fromPositionRow);
   }
 
@@ -397,8 +443,8 @@ export class SqliteExecutionStore implements SharedStore {
           `INSERT INTO closed_trades (
              idempotency_key, debate_id, instrument, asset_class, side,
              entry, stop, filled_size, realized_pnl_net, fees_total,
-             opened_at, closed_at, close_reason
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             opened_at, closed_at, close_reason, arm
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           trade.idempotency_key,
@@ -414,6 +460,12 @@ export class SqliteExecutionStore implements SharedStore {
           toStoredTimestamp(trade.opened_at),
           toStoredTimestamp(trade.closed_at),
           trade.close_reason,
+          // #753 — this instance's arm, for the reason `writeAheadPosition`
+          // states. THIS is the column `SELECT ... WHERE arm = 'control'` reads
+          // and the one the arm comparison report groups on, which is what makes
+          // "the control arm's trades are distinguishable in the trade record" a
+          // queryable property rather than an inference.
+          this.arm,
         );
     } catch (cause) {
       if (isUniqueConstraintError(cause)) {
@@ -782,12 +834,16 @@ export class SqliteExecutionStore implements SharedStore {
     const placeholders = TERMINAL_STATES.map(() => '?').join(', ');
     const rows = this.db
       .prepare(
+        // #753: arm-scoped, for the reason `getOpenPositions()` is — the #549
+        // sweep re-arms protection on THIS arm's lots, and an arm's sweep must
+        // not act on the other arm's book.
         `SELECT * FROM open_positions
-          WHERE residual_unprotected_since IS NOT NULL
+          WHERE arm = ?
+            AND residual_unprotected_since IS NOT NULL
             AND order_state NOT IN (${placeholders})
           ORDER BY opened_at`,
       )
-      .all(...TERMINAL_STATES) as OpenPositionRow[];
+      .all(this.arm, ...TERMINAL_STATES) as OpenPositionRow[];
 
     return rows.map((row) => {
       // Non-null by the WHERE clause — a null here means the row (or the

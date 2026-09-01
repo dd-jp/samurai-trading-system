@@ -125,6 +125,8 @@ import type {
 } from '../../pipeline/execution/index.js';
 import {
   AlpacaBrokerAdapter,
+  // #753: falsifier arm 2's venue. A measurement, not a second book.
+  SimulatedBrokerAdapter,
   SqliteBrokerStateStore,
   SqliteExecutionStore,
 } from '../../pipeline/execution/index.js';
@@ -206,8 +208,20 @@ import {
 import { Heartbeat } from './heartbeat.js';
 import { JsonLogger } from './logger.js';
 import type { OrphanGoVerdict, OrphanVerdictScanner } from './orphan-verdict-scan.js';
+import { LIVE_BOOK_GBP } from './paper-profile.js';
 import { AlpacaAccountStateProvider } from './production/account-state.js';
 import { buildAnalystsStep } from './production/analysts-adapter.js';
+// #753: the control arm's own account scalars — see `control-account-state.ts`.
+import {
+  buildControlBookAnchorResolver,
+  ControlArmAccountStateProvider,
+} from './production/control-account-state.js';
+// #753: falsifier arm 2's composition — see `control-arm-wiring.ts`.
+import {
+  buildControlArmWiring,
+  type ControlArmWiring,
+  InMemoryBreakerStatePersistence,
+} from './production/control-arm-wiring.js';
 import { buildFailoverDataSource } from './production/data-failover.js';
 import { buildDebateStep } from './production/debate-adapter.js';
 import {
@@ -220,6 +234,9 @@ import {
   type ExecutionStepDeps,
   type PersistenceInstances,
   type PortfolioSnapshot,
+  type RiskStepDeps,
+  type TraderStepDeps,
+  type VerdictStepDeps,
 } from './production/direct-bind.js';
 import { assertFlattenWindowCoversTickInterval } from './production/flatten-tick-coupling.js';
 import { MiCoverageMonitor } from './production/mi-coverage.js';
@@ -227,7 +244,7 @@ import { withOnTradeClose } from './production/on-trade-close-hookup.js';
 import { withFlattenTail } from './production/stocks-tick-window.js';
 import { MarketDataVolatilityReadingProvider } from './production/volatility-reading-provider.js';
 import { UniverseScheduler } from './scheduler.js';
-import { SqliteAccountStateStore } from './sqlite-account-state-store.js';
+import { CONTROL_BOOK_ANCHOR_KEY, SqliteAccountStateStore } from './sqlite-account-state-store.js';
 import { SqliteDailyEquityStore } from './sqlite-daily-equity-store.js';
 import { SqliteSessionEquityStore } from './sqlite-session-equity-store.js';
 import { runTickPlan } from './tick-loop.js';
@@ -376,6 +393,19 @@ export interface ProductionComponents {
    * `reconcile()`/`ingestFills()` from the same object the tick step uses.
    */
   executionDeps: ExecutionStepDeps;
+  /**
+   * Falsifier arm 2's wiring (#753) — the control arm's tick hook (already
+   * bound onto `steps.controlArm`) and its own fill-sync/reconcile surfaces.
+   *
+   * Exposed for the reason `executionDeps` is: the control arm's fill poller
+   * runs on its own cadence from `buildProductionOrchestrator`, not from a tick
+   * step, so the surfaces have to travel out of here rather than be rebuilt
+   * against a second dependency set. Without a poller the control's lots stop
+   * at `submitted`, no `ClosedTrade` is ever written, and the comparison report
+   * reads "the control arm made no trades" — indistinguishable from a control
+   * that found no setups.
+   */
+  controlArmWiring: ControlArmWiring;
   /**
    * The LLM budget every debate in this process is admitted against and
    * metered through (#388) — the instance inside `steps.debate`, not a copy.
@@ -1118,7 +1148,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // The Trader's two entry points, built together so the tick path's exit
   // check and the decision path's full decision share one dependency set and
   // one diagnostic throttle (#743) — see `buildTraderSteps`.
-  const traderSteps = buildTraderSteps({
+  const traderStepDeps: TraderStepDeps = {
     ...breakerStateDeps,
     config: config.traderConfig,
     // #668: THE pair built above, not a fresh one. ADR-0014's flat-by-close
@@ -1160,6 +1190,160 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // The sink for the diagnostics themselves, and for an alert the transport
     // could not deliver. Without it a log-only run would have nowhere to put
     // them at all.
+    logger,
+  };
+  const traderSteps = buildTraderSteps(traderStepDeps);
+
+  const riskStepDeps: RiskStepDeps = {
+    ...breakerStateDeps,
+    config: config.riskConfig,
+    correlationConfig: config.correlationConfig,
+    ciiConsumer,
+    riskLog: new SqliteRiskLogStore(config.db),
+    // #433: the live dial. Without this Risk freezes its RiskConfig at
+    // construction and `autoTighten`'s response to a kill-line breach
+    // changes no decision.
+    thresholds: tuningStore,
+    // #766: the live-read clamp trip escalation. Same conditional-spread
+    // idiom as `traderDiagnosticAlerts` above, required by
+    // `exactOptionalPropertyTypes`: omitted rather than passed as
+    // `undefined` under `log-only`, where the catch's own logger is the
+    // whole reporting path.
+    ...(config.thresholdClampAlerts === undefined
+      ? {}
+      : { thresholdClampAlerts: config.thresholdClampAlerts }),
+    // #726: sink for the catch's own guarded `riskLog.write` failure —
+    // without it, a store failure while reporting a gate throw has nowhere
+    // to go but silent loss (still fine; see that catch's doc comment) with
+    // no trace at all.
+    logger,
+    // #957: check-pipeline step 7's producer. The SAME `llmClient` the
+    // debate bills through, so there is one spend meter and one config —
+    // the critic's calls land in `llm_spend` under `stage: 'risk_critic'`
+    // and count against ADR-0008's ceiling like every other billed call.
+    // `mode` picks the implementation: `backtest` gets a producer holding no
+    // LLM client at all, which is what makes "no live call in a replayed
+    // path" (ADR-0003 §2) structural rather than a runtime check.
+    critic: buildRiskCriticProducer({
+      mode: config.mode,
+      llm: llmClient,
+      store: new SqliteRiskCriticStore(config.db),
+      spendCap,
+      logger,
+    }),
+  };
+
+  const verdictStepDeps: VerdictStepDeps = {
+    ...breakerStateDeps,
+    // #465. Absent under `log-only` and in tests, so no verdict alerting;
+    // present under `telegram`, filtered to notable verdicts only.
+    ...(config.verdictAlerts === undefined ? {} : { verdictAlerts: config.verdictAlerts }),
+    tradingCalendar,
+    // Verdict's `PositionStore.findByKey` is a strict subset of Execution's
+    // `SharedStore`; one store instance serves both rather than opening a
+    // second connection with a divergent view of the same table.
+    positionStore: executionStore,
+    config: config.verdictConfig,
+    // Unreachable by design since ADR-0007: `automation_level` is `auto` for
+    // both classes, so gate 6 short-circuits and this is never called. It
+    // THROWS rather than auto-approving, so that turning the dial back
+    // without wiring a transport fails loudly instead of fabricating
+    // consent — and, unlike `ConsoleApprovalChannel`, it constructs in
+    // `live`, because refusing there would block a live start over a gate
+    // that never fires.
+    approvals: config.approvals ?? new UnwiredApprovalChannel(),
+    // Backs LoggingVerdict's verdict_log write (#302) — the same handle
+    // every other Sqlite* store in this function reads/writes through.
+    store: config.db,
+  };
+
+  /**
+   * FALSIFIER ARM 2 (#753) — the mandated matched control, composed here beside
+   * the live arm rather than in a script of its own.
+   *
+   * ADR-0014 amendment 2 and ADR-0017 §Consequences make this benchmark
+   * non-optional, and #753's ordering constraint is that it runs *in parallel
+   * with the soak from the first day, not retrofitted later* — a control that
+   * starts three months after the live arm cannot answer the question over the
+   * same tape, and the tape is the only thing the two arms share. Wiring it
+   * unconditionally into the one composition root every real run goes through
+   * is what makes "from the first soak day" a property of the system rather
+   * than of an operator remembering to start something.
+   *
+   * **No env flag, deliberately.** An opt-in control is a control that is off
+   * during the run that mattered. The cost of leaving it on is bounded and
+   * known: no LLM call (the arm's whole point), no venue call (a simulated
+   * broker), no additional market-data fetch (it decides from the live arm's
+   * own views), and one extra pass through the in-process stage code per tick.
+   *
+   * Three things are per-arm and every one of them is a way a shared instance
+   * would corrupt the live arm rather than measure it — see
+   * `control-arm-wiring.ts` for the full argument.
+   */
+  const controlExecutionStore = new SqliteExecutionStore(config.db, 'control');
+  const controlBreakerState = new InMemoryBreakerStatePersistence();
+  const controlArmWiring = buildControlArmWiring({
+    trader: traderStepDeps,
+    risk: riskStepDeps,
+    verdict: verdictStepDeps,
+    execution: executionDeps,
+    store: controlExecutionStore,
+    // A SIMULATED venue, never the live one. The book is £1,000 and ADR-0018 D5
+    // deploys 35%/25% per position; a control arm placing real orders at the
+    // same envelope doubles deployment, which no ADR authorises and which would
+    // breach the drawdown envelope #925/#932 gate the live ramp on. Its fills
+    // are priced through the SAME `CostModel` the live arm's backtesting uses,
+    // so the control's returns are cost-inclusive — a zero-cost control would
+    // flatter the indicator arm against ADR-0018 D3's round-trip bar and
+    // invalidate the comparison this whole ticket exists to produce.
+    broker: new SimulatedBrokerAdapter({
+      clock,
+      costModel: executionDeps.costModel,
+      marketData,
+      // The SAME simulated-adapter config the live arm's own execution config
+      // declares, not a second one: fill modelling that differed between the
+      // arms would show up as an edge that is really a fixture difference.
+      config: config.executionConfig.simulated,
+    }),
+    circuitBreakers: new CircuitBreakers(config.breakerConfig, controlBreakerState.load()),
+    breakerState: controlBreakerState,
+    // The control arm's OWN account scalars, derived from its OWN book.
+    //
+    // The fourth per-arm thing, and the one that was missing: a shared
+    // `AccountStateProvider` reads `GET /v2/account`, which only ever reflects
+    // the LIVE arm's trades (the control's venue is simulated). Sharing it made
+    // the control's D5 sizing — a fraction of `portfolio.equity` — and its
+    // drawdown-halt timing functions of the live arm's realized cash, so the
+    // control was not an independent measurement over the same tape. See
+    // `control-account-state.ts`.
+    accountState: new ControlArmAccountStateProvider({
+      // The live arm's equity, observed ONCE at first boot and then persisted
+      // first-write-wins — not the declared £1,000.
+      //
+      // A matched control starts at the same capital as the arm it is matched
+      // against. In `paper` mode the live arm sizes against the broker's equity
+      // (the £1,000 ceiling gate does not arm without `same_currency_verified`),
+      // and `yarn smoke` proved what a declared-£1,000 control costs there:
+      // every control intent came back `rounds_to_zero_shares` and the arm took
+      // no trade at all. Reading it once is what keeps this an anchor rather
+      // than a coupling — see `buildControlBookAnchorResolver`.
+      resolveBook: buildControlBookAnchorResolver({
+        liveAccountState: breakerStateDeps.accountState,
+        store: new SqliteAccountStateStore(config.db, CONTROL_BOOK_ANCHOR_KEY),
+        fallbackBook: config.riskConfig.live_book_ceiling?.book ?? LIVE_BOOK_GBP,
+      }),
+      // `arm: 'control'` — the one caller that asks this store for the other
+      // arm. Handing it the default would restore the coupling exactly.
+      closedTrades: new SqliteClosedTradeStore(config.db, 'control'),
+      getOpenPositions: () => controlExecutionStore.getOpenPositions(),
+      // The SAME two calendars the live provider is given: the arms must
+      // measure a "day" over identical boundaries or their daily figures are
+      // not comparable.
+      calendars: sessionCalendars,
+    }),
+    costModel: executionDeps.costModel,
+    marketData,
+    executionConfig: config.executionConfig,
     logger,
   });
 
@@ -1226,68 +1410,13 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // `risk`. Both write on a skip/rejection too, which is the case with no
     // downstream record at all. Bound above via `buildTraderSteps` (#743).
     trader: traderSteps.trader,
-    risk: buildRiskStep({
-      ...breakerStateDeps,
-      config: config.riskConfig,
-      correlationConfig: config.correlationConfig,
-      ciiConsumer,
-      riskLog: new SqliteRiskLogStore(config.db),
-      // #433: the live dial. Without this Risk freezes its RiskConfig at
-      // construction and `autoTighten`'s response to a kill-line breach
-      // changes no decision.
-      thresholds: tuningStore,
-      // #766: the live-read clamp trip escalation. Same conditional-spread
-      // idiom as `traderDiagnosticAlerts` above, required by
-      // `exactOptionalPropertyTypes`: omitted rather than passed as
-      // `undefined` under `log-only`, where the catch's own logger is the
-      // whole reporting path.
-      ...(config.thresholdClampAlerts === undefined
-        ? {}
-        : { thresholdClampAlerts: config.thresholdClampAlerts }),
-      // #726: sink for the catch's own guarded `riskLog.write` failure —
-      // without it, a store failure while reporting a gate throw has nowhere
-      // to go but silent loss (still fine; see that catch's doc comment) with
-      // no trace at all.
-      logger,
-      // #957: check-pipeline step 7's producer. The SAME `llmClient` the
-      // debate bills through, so there is one spend meter and one config —
-      // the critic's calls land in `llm_spend` under `stage: 'risk_critic'`
-      // and count against ADR-0008's ceiling like every other billed call.
-      // `mode` picks the implementation: `backtest` gets a producer holding no
-      // LLM client at all, which is what makes "no live call in a replayed
-      // path" (ADR-0003 §2) structural rather than a runtime check.
-      critic: buildRiskCriticProducer({
-        mode: config.mode,
-        llm: llmClient,
-        store: new SqliteRiskCriticStore(config.db),
-        spendCap,
-        logger,
-      }),
-    }),
-    verdict: buildVerdictStep({
-      ...breakerStateDeps,
-      // #465. Absent under `log-only` and in tests, so no verdict alerting;
-      // present under `telegram`, filtered to notable verdicts only.
-      ...(config.verdictAlerts === undefined ? {} : { verdictAlerts: config.verdictAlerts }),
-      tradingCalendar,
-      // Verdict's `PositionStore.findByKey` is a strict subset of Execution's
-      // `SharedStore`; one store instance serves both rather than opening a
-      // second connection with a divergent view of the same table.
-      positionStore: executionStore,
-      config: config.verdictConfig,
-      // Unreachable by design since ADR-0007: `automation_level` is `auto` for
-      // both classes, so gate 6 short-circuits and this is never called. It
-      // THROWS rather than auto-approving, so that turning the dial back
-      // without wiring a transport fails loudly instead of fabricating
-      // consent — and, unlike `ConsoleApprovalChannel`, it constructs in
-      // `live`, because refusing there would block a live start over a gate
-      // that never fires.
-      approvals: config.approvals ?? new UnwiredApprovalChannel(),
-      // Backs LoggingVerdict's verdict_log write (#302) — the same handle
-      // every other Sqlite* store in this function reads/writes through.
-      store: config.db,
-    }),
+    risk: buildRiskStep(riskStepDeps),
+    verdict: buildVerdictStep(verdictStepDeps),
     execution: buildExecutionStep(executionDeps),
+    // #753: falsifier arm 2, run on every tick beside the live arm. Bound
+    // unconditionally — see `controlArmWiring`'s construction above for why
+    // there is no flag.
+    controlArm: controlArmWiring.controlArm,
   };
 
   return {
@@ -1300,6 +1429,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     circuitBreakers,
     executionStore,
     executionDeps,
+    controlArmWiring,
     llmRateLimiter,
     gdeltIngestAgent,
     polymarketAgent,
@@ -1808,6 +1938,20 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
 
   let loop: { stop: () => Promise<void> } | undefined;
   let fillSync: { stop: () => Promise<void> } | undefined;
+  /**
+   * #753: falsifier arm 2's own fill poller.
+   *
+   * A SECOND loop rather than a widened first one, because `ingestFills()` and
+   * `reconcile()` are bound to one Execution surface, and that surface is bound
+   * to one store and one broker — and the arms deliberately have neither in
+   * common. Without this the control arm's lots stop dead at `submitted`:
+   * `writeClosedTrade` is only reached from `ingestFills`, so the control would
+   * emit no `ClosedTrade` at all and the comparison report would show it making
+   * zero trades — indistinguishable from a control that found no setups. That
+   * is exactly the "one missing caller, four silent failures" shape
+   * `fill-sync.ts` was written to fix, and leaving it out here would recreate it.
+   */
+  let controlFillSync: { stop: () => Promise<void> } | undefined;
   let heartbeatHandle: NodeJS.Timeout | undefined;
   let feedbackHandle: NodeJS.Timeout | undefined;
   let gdeltHandle: NodeJS.Timeout | undefined;
@@ -2034,6 +2178,19 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
       // logged and stepped over.
       await runStartupReconcile({ execution: reconcileExecution, logger });
 
+      // #753: the control arm's own startup reconcile, for the reason the live
+      // arm's runs before the tick loop — a crash leaves control lots stranded
+      // `pending`/`submitted`, and the simulated adapter's bracket registry is
+      // process-local, so nothing repopulates it until `getOrder` is called.
+      // Awaited alongside the live one, and allowed to propagate for the same
+      // reason: it writes through the SAME database handle the live arm trades
+      // against, so a store that will not take this write is a store the process
+      // must not go on to place orders against.
+      await runStartupReconcile({
+        execution: components.controlArmWiring.reconcileExecution,
+        logger,
+      });
+
       // #371, and deliberately HERE — beside reconcile, before the tick loop,
       // the fill poll and the heartbeat all start.
       //
@@ -2160,6 +2317,13 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
       polymarketHandle = setInterval(() => {
         void polymarketAgent.refresh('polymarket-poll');
       }, config.polymarketPollIntervalMs ?? DEFAULT_POLYMARKET_POLL_INTERVAL_MS);
+
+      controlFillSync = startFillSync({
+        execution: components.controlArmWiring.fillSyncExecution,
+        clock,
+        logger,
+        fillPollIntervalMs: config.fillPollIntervalMs ?? DEFAULT_FILL_POLL_INTERVAL_MS,
+      });
 
       fillSync = startFillSync({
         execution: fillSyncExecution,
@@ -2376,6 +2540,10 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
       // tick and a fill poll rather than the longer of the two.
       const stopping = loop?.stop();
       const stoppingFillSync = fillSync?.stop();
+      // #753: drained beside the live poller, started before either is awaited,
+      // for the same reason the two above are — independent loops, so shutdown
+      // takes the longest rather than the sum.
+      const stoppingControlFillSync = controlFillSync?.stop();
       // Clearing the timer stops the NEXT GDELT poll, not the one already
       // downloading — and that one ends in an archive write, which without this
       // drain can land after the store is closed. The write is guarded, so this
@@ -2387,13 +2555,20 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
       const drainingPolymarket = components.polymarketAgent.whenIdle();
       loop = undefined;
       fillSync = undefined;
+      controlFillSync = undefined;
       // `allSettled`, not two sequential awaits: `buildShutdownHandler`'s doc
       // comment records that `stop()` CAN reject (a pass that rejects after
       // `stop()` captured `inFlight` rejects in the caller too). Awaiting in
       // series would leave the second drain's promise unawaited on that path
       // — an unhandled rejection, and the fill poll's drain silently
       // discarded during shutdown. This still drains both concurrently.
-      await Promise.allSettled([stopping, stoppingFillSync, drainingGdelt, drainingPolymarket]);
+      await Promise.allSettled([
+        stopping,
+        stoppingFillSync,
+        stoppingControlFillSync,
+        drainingGdelt,
+        drainingPolymarket,
+      ]);
     },
   };
 }

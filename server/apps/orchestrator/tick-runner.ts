@@ -228,6 +228,19 @@ export class SequentialTickRunner implements TickRunner {
 
     const decisionBar = ctx.decision_bar;
     if (decisionBar === undefined) {
+      // ── FALSIFIER ARM 2, tick cadence (#753). ────────────────────────────
+      // Awaited BEFORE the live exit check, and run on the tick path at all,
+      // because the control arm holds its own lots and they are subject to the
+      // same ADR-0014 flat-by-close the live arm's are. A control that only ran
+      // on decision bars would carry positions overnight, which is not the live
+      // arm minus one stage — it is a different strategy.
+      //
+      // Awaited rather than fired off so a pass cannot outlive the tick that
+      // started it and decide against the next bar's tape. It never rejects
+      // (see `TickSteps.controlArm`), so there is nothing here to catch: the
+      // containment is inside the step, where it does not disturb this method's
+      // deliberate absence of a try/catch.
+      await this.steps.controlArm?.({ signal, ctx });
       // ── TICK PASS (#743): the cheap, position-facing path. ────────────────
       // The bar is floored HERE, once, onto the same grid the decision gate
       // uses; the exit intent's idempotency key dedupes on it, so every
@@ -244,6 +257,24 @@ export class SequentialTickRunner implements TickRunner {
     const analystsInput = { trace_id, signal, clock, bar: decisionBar.open_time };
     const views = await this.steps.analysts(analystsInput);
     record('analysts', views.length === 0 ? 'quorum_skip' : 'quorum_met', analystsInput, views);
+
+    // ── FALSIFIER ARM 2, decision cadence (#753). ──────────────────────────
+    // Sited HERE — after the analysts step, before the debate — because that is
+    // the only point at which the control arm can be what the mandate says it
+    // is: the SAME name selection over the SAME views on the SAME bar, with the
+    // debate stage bypassed. Handing it `views` rather than letting it re-run
+    // the analysts step is load-bearing for the no-LLM guarantee as well as for
+    // the shared tape: `buildAnalystsStep` reaches
+    // `MarketIntelligenceStore.getContext`, which can call the Nous/Grok ingest
+    // agent, so a control arm that re-ran its analysts would make a model call
+    // in production while every stubbed-step unit test stayed green.
+    //
+    // Passed even when `views` is empty: the control arm reads an empty set the
+    // same way this runner does — a quorum skip that falls through to its own
+    // exit check — so a quorum-skipped bar still evaluates the control's
+    // flat-by-close instead of silently skipping it.
+    await this.steps.controlArm?.({ signal, ctx, views });
+
     if (views.length === 0) {
       // A quorum skip has no Trader entry point of its own to carry the
       // flatten (#785) — so this pass still evaluates it, through the exact

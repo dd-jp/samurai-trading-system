@@ -8,7 +8,7 @@
  * the Feedback Loop to accidentally mutate Execution's table.
  */
 
-import type { ClosedTrade, ClosedTradeStore } from '../../shared/index.js';
+import type { ClosedTrade, ClosedTradeStore, TradingArm } from '../../shared/index.js';
 import {
   type ClosedTradeRow,
   fromClosedTradeRow,
@@ -17,9 +17,36 @@ import {
 import { toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 
 export class SqliteClosedTradeStore implements ClosedTradeStore {
-  constructor(private readonly db: SharedStore) {}
+  /**
+   * Which arm's closed trades this instance reads (#753). Defaults to `'live'`,
+   * so every construction that predates the control arm keeps exactly the
+   * behaviour it had.
+   *
+   * **One class, two instances — never two classes**, the same argument
+   * `SqliteExecutionStore`'s `arm` makes: a second reader for the control arm
+   * would be a second place for the two arms' accounting to drift. The
+   * Feedback Loop takes the default; `ControlArmAccountStateProvider`
+   * (production/control-account-state.ts) is the only caller that asks for
+   * `'control'`.
+   */
+  constructor(
+    private readonly db: SharedStore,
+    private readonly arm: TradingArm = 'live',
+  ) {}
 
-  /** Half-open at the start, so consecutive daily cycles partition the timeline. */
+  /**
+   * Half-open at the start, so consecutive daily cycles partition the timeline.
+   *
+   * **ONE arm only (#753), the live one by default.** Falsifier arm 2's control
+   * trades land in this same table, tagged `arm = 'control'`, and the Feedback
+   * Loop must not attribute them: it steps analyst weights and risk dials off
+   * realized outcomes, and the control arm has no analyst contributions to
+   * credit and does not trade the book those dials govern. Folding the two arms
+   * together here would tune the live system on a stream half of which it did
+   * not decide — and would do it silently, since a mixed result is still a
+   * plausible-looking number. The control arm's own account state asks the same
+   * question of the other arm through the same code.
+   */
   getClosedTradesBetween(from: Date, to: Date): ClosedTrade[] {
     const rows = this.db
       .prepare(
@@ -27,10 +54,10 @@ export class SqliteClosedTradeStore implements ClosedTradeStore {
                 entry, stop, filled_size, realized_pnl_net, fees_total,
                 opened_at, closed_at, close_reason
            FROM closed_trades
-          WHERE closed_at > ? AND closed_at <= ?
+          WHERE arm = ? AND closed_at > ? AND closed_at <= ?
           ORDER BY closed_at`,
       )
-      .all(toStoredTimestamp(from), toStoredTimestamp(to)) as ClosedTradeRow[];
+      .all(this.arm, toStoredTimestamp(from), toStoredTimestamp(to)) as ClosedTradeRow[];
 
     return rows.map(fromClosedTradeRow);
   }

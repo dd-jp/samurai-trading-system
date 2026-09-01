@@ -17,6 +17,7 @@ export type {
   InstrumentSubclass,
   LogEntry,
   Logger,
+  TradingArm,
 } from './types/primitives.js';
 export type {
   ClosedTrade,

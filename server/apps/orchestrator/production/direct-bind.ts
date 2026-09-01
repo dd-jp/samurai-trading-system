@@ -86,6 +86,7 @@ import type {
   RiskLogStore,
   SetupStore,
   TraderLogStore,
+  TradingArm,
 } from '../../../shared/index.js';
 import {
   describeThrown,
@@ -152,6 +153,19 @@ export interface VolatilityReadingProvider {
 
 export interface TraderStepDeps extends BreakerStateDeps {
   config: TraderConfig;
+  /**
+   * Which arm of #753's measurement this bind decides for. Absent = `'live'`.
+   *
+   * The ONE field the control arm's bind sets that the live arm's does not, and
+   * it changes no decision logic: it reaches `TraderInput.arm`, which reaches
+   * the intent's idempotency key (so the two arms cannot dedupe each other's
+   * orders away) and `OrderIntentMetadata.arm` (so the decision records say who
+   * decided). The conviction floor, the frozen ADR-0018 D3 bracket, the stop,
+   * the sizing and the exit rules all come from `config` — the SAME
+   * `TraderConfig` object both arms are built over, which is what makes #753's
+   * "asserted, not configured twice" structural.
+   */
+  arm?: TradingArm;
   /**
    * #568: `SharedStore.getExitFillSizes`, bound to the SAME store
    * `getOpenPositions` reads. Held quantity is `filled_size` minus this, and
@@ -313,6 +327,10 @@ export function buildTraderSteps(deps: TraderStepDeps): {
       instrument,
       debate,
       clock,
+      // #753. Conditional spread under `exactOptionalPropertyTypes`: omitted
+      // rather than passed as `undefined` on the live bind, which is the
+      // pre-#753 behaviour and the value `TraderInput.arm` defaults to.
+      ...(deps.arm === undefined ? {} : { arm: deps.arm }),
       marketData: deps.marketData,
       // #511: bounded by the declared capital ceiling on a live run, verbatim
       // portfolio equity everywhere else.
@@ -406,6 +424,10 @@ export function buildTraderSteps(deps: TraderStepDeps): {
       instrument,
       clock,
       bar,
+      // #753 — see the decision bind above. The exit intent's idempotency key
+      // needs the arm for the same reason the entry's does: both arms flatten
+      // the same instrument on the same bar.
+      ...(deps.arm === undefined ? {} : { arm: deps.arm }),
       marketData: deps.marketData,
       config: deps.config,
       positionState: deps.getOpenPositions,
