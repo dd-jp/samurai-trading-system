@@ -106,6 +106,7 @@ export type {
   SetupNeighbor,
   SetupStore,
   SetupVector,
+  TradingArm,
   TuningStore,
   VerdictLog,
   VerdictLogStore,

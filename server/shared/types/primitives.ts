@@ -21,7 +21,12 @@
  * The finer dimension ADR-0018 keys its brackets and sizing on. Same
  * re-export rule as `AssetClass` above, and same reason.
  */
-export type { AssetClass, InstrumentSubclass } from '../../../contracts/primitives.js';
+/**
+ * Which arm of #753's measurement a decision belongs to — the live
+ * debate-driven arm, or falsifier arm 2's deterministic control. Same
+ * re-export rule as `AssetClass` above, and same reason.
+ */
+export type { AssetClass, InstrumentSubclass, TradingArm } from '../../../contracts/primitives.js';
 
 /** One structured log line; `trace_id` threads every line (#95). */
 export interface LogEntry {

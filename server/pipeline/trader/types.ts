@@ -19,6 +19,7 @@ import type {
   OpenPosition,
   OrderIntent,
   SetupStore,
+  TradingArm,
 } from '../../shared/index.js';
 import type { DebateResult } from '../debate-engine/index.js';
 import { DEFAULT_EARLY_EXIT_CONFIG, type EarlyExitConfig } from './early-exit.js';
@@ -269,6 +270,30 @@ export function assertTraderConfigSound(config: TraderConfig): void {
 export interface TraderInput {
   /** Cross-cutting correlation ID, threaded from the Orchestrator's tick — not business data. */
   trace_id: string;
+  /**
+   * Which arm of #753's measurement this decision belongs to. Absent means
+   * `'live'` — the debate-driven arm, which is what every caller was before
+   * falsifier arm 2 existed.
+   *
+   * **Optional here, and the reason matters.** Every other seam this repo
+   * makes REQUIRED is one whose omission silently disarms a mechanism
+   * (`sessionCalendars` and the flatten, `breakerState` and the sticky
+   * breakers). This one is the opposite: the value it defaults to is the value
+   * every pre-#753 call site meant, so a forgotten `arm` cannot mislabel a
+   * live trade as a control one or vice versa — it can only fail to *create*
+   * the control arm, which the composition-root test (`control-arm-wiring`)
+   * catches at the root rather than at the field.
+   *
+   * It reaches two places and only two: the intent's `idempotency_key` (so the
+   * two arms cannot dedupe each other's orders away — see
+   * `computeIdempotencyKey`) and `OrderIntentMetadata.arm` (so the decision
+   * records say which arm decided). It changes NO decision logic: the
+   * conviction floor, the frozen ADR-0018 D3 bracket, the stop, the sizing and
+   * the exit rules are read from the same config and the same
+   * `subclass-bracket.ts` constants for both arms, which is what makes the
+   * control a matched control rather than a reimplementation.
+   */
+  arm?: TradingArm;
   /**
    * Not on trader-spec.md's `TraderInput`, and `DebateResult` carries no
    * instrument either — but `OrderIntent.instrument` cannot be constructed

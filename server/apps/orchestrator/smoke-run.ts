@@ -191,7 +191,7 @@ import {
   SOURCE_POLYMARKET,
 } from '../../providers/market-intelligence/index.js';
 import { delay } from '../../shared/http/delay.js';
-import type { OrderIntent } from '../../shared/index.js';
+import type { OrderIntent, TradingArm } from '../../shared/index.js';
 import {
   boundFor,
   GUARDED_THRESHOLD_NAMES,
@@ -2088,6 +2088,18 @@ export interface SmokeObservations {
     filled_size: number;
     avg_entry_price: number;
     order_state: string;
+    /**
+     * #753, migration 0033 — which arm opened this lot.
+     *
+     * Observed for the reason `debates` is: falsifier arm 2 is mandated
+     * (ADR-0014 amendment 2, ADR-0017 §Consequences) to run in parallel with the
+     * live arm from the first soak day, and a control arm that has silently
+     * stopped producing is invisible to every other check in this file. This
+     * column is also the acceptance criterion itself — "the control arm's trades
+     * are distinguishable in the trade record" — so reading it here is reading
+     * the thing the ticket promised, not a proxy for it.
+     */
+    arm: TradingArm;
   }[];
   /** From `fills` — appended by `ingestFills()` on the fill-sync poll. */
   fills: { idempotency_key: string; leg: string; price: number; qty: number; fee: number }[];
@@ -2099,7 +2111,13 @@ export interface SmokeObservations {
    * `SimulatedBrokerAdapter.submitBracket` models only the entry fill and
    * nothing ever submitted a flatten. See `evaluateSmokeGate`'s check.
    */
-  closedTrades: { idempotency_key: string; realized_pnl_net: number; close_reason: string }[];
+  closedTrades: {
+    idempotency_key: string;
+    realized_pnl_net: number;
+    close_reason: string;
+    /** #753 — see `positions.arm`. The column the comparison report groups on. */
+    arm: TradingArm;
+  }[];
   /**
    * From `flatten_submissions` (#508/#516 review, migration 0019) — the
    * write-ahead journal `executeExit` writes BEFORE cancelling a held lot's
@@ -2202,14 +2220,14 @@ export function readSmokeObservations(
     positions: db
       .prepare(
         'SELECT idempotency_key, instrument, side, requested_size, filled_size, avg_entry_price, ' +
-          'order_state FROM open_positions ORDER BY rowid',
+          'order_state, arm FROM open_positions ORDER BY rowid',
       )
       .all() as SmokeObservations['positions'],
     fills: db
       .prepare('SELECT idempotency_key, leg, price, qty, fee FROM fills ORDER BY rowid')
       .all() as SmokeObservations['fills'],
     closedTrades: db
-      .prepare('SELECT idempotency_key, realized_pnl_net, close_reason FROM closed_trades')
+      .prepare('SELECT idempotency_key, realized_pnl_net, close_reason, arm FROM closed_trades')
       .all() as SmokeObservations['closedTrades'],
     flattenSubmissions: db
       .prepare('SELECT idempotency_key, instrument, status FROM flatten_submissions ORDER BY rowid')
@@ -2885,6 +2903,50 @@ export function evaluateSmokeGate(
           'beside the LLM path rather than in it. This is the #388 defect exactly: the ' +
           'component was implemented, tested and exported while nothing in production ever ' +
           'called it, and the whole unit suite passed the entire time',
+      );
+    }
+  }
+
+  // #753 — falsifier arm 2 has a production caller.
+  //
+  // Hung off "a tick reached Execution" rather than standing alone, so a run
+  // that never traded at all fails on the checks above naming the real cause.
+  // Given that the live arm transacted over this tape, the control arm saw the
+  // same tape on the same tick and must have left its own row: the arms are
+  // matched by construction on name, bracket, stop and conviction floor, and
+  // the control's entry is the same deterministic axis vote the live arm's
+  // Analysts stage produced.
+  //
+  // This is the ONLY check anywhere that the control arm has a caller. Every
+  // one of its units can pass while `TickSteps.controlArm` is unbound in
+  // `production.ts` — the member is optional, so unbinding it is not even a
+  // compile error — and the soak would then run for its whole duration with no
+  // matched control, which is the exact thing ADR-0014 amendment 2 forbids and
+  // the repo's dominant defect class (a tested mechanism nothing calls).
+  const transactedThisRun = ticks.some((tick) =>
+    tick.stages.some((entry) => entry.stage === 'execution'),
+  );
+  if (transactedThisRun) {
+    const controlLots = positions.filter((position) => position.arm === 'control');
+    if (controlLots.length === 0) {
+      failures.push(
+        "a tick reached Execution but not one `open_positions` row carries `arm = 'control'` — " +
+          'falsifier arm 2 (#753) did not run against the tape the live arm just traded. Either ' +
+          '`TickSteps.controlArm` is unbound in the composition root or the control arm threw ' +
+          'and was swallowed; a soak in this state produces a live track with no matched ' +
+          'control, which ADR-0014 amendment 2 and ADR-0017 both require',
+      );
+    }
+    const liveKeys = new Set(
+      positions.filter((position) => position.arm === 'live').map((row) => row.idempotency_key),
+    );
+    const collided = controlLots.filter((row) => liveKeys.has(row.idempotency_key));
+    if (collided.length > 0) {
+      failures.push(
+        `${collided.length} control lot(s) share an idempotency key with a live lot — \`arm\` has ` +
+          'stopped being a hash input to `computeIdempotencyKey`, so on every bar the two arms ' +
+          "agree on, Execution's `findByKey` gate silently drops the control order. The " +
+          'comparison would then be biased on exactly the subset it is most sensitive to',
       );
     }
   }

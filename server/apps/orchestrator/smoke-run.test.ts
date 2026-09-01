@@ -144,6 +144,19 @@ function transactedObservations(): SmokeObservations {
         filled_size: 31.25,
         avg_entry_price: 161,
         order_state: 'filled',
+        arm: 'live',
+      },
+      // #753: falsifier arm 2's own lot over the same tape, on the same tick.
+      // A distinct key, because `arm` is a hash input to the idempotency key.
+      {
+        idempotency_key: 'idem-1-control',
+        instrument: 'BTC-USD',
+        side: 'buy',
+        requested_size: 31.25,
+        filled_size: 31.25,
+        avg_entry_price: 161,
+        order_state: 'filled',
+        arm: 'control',
       },
       // #576: scenario 1's closed lot — paired with `healthyExitPath()`'s
       // `fullExit.lotKey` default and the `closedTrades`/`flattenSubmissions`
@@ -156,6 +169,7 @@ function transactedObservations(): SmokeObservations {
         filled_size: 10,
         avg_entry_price: 160,
         order_state: 'closed',
+        arm: 'live',
       },
       // #519/#526: scenario 4's crash-restart lot — paired with
       // `healthyExitPath()`'s `crashRestart.lotKey` default, same convention
@@ -168,11 +182,14 @@ function transactedObservations(): SmokeObservations {
         filled_size: 10,
         avg_entry_price: 160,
         order_state: 'closed',
+        arm: 'live',
       },
     ],
     fills: [{ idempotency_key: 'idem-1', leg: 'entry', price: 161, qty: 31.25, fee: 13 }],
     // #576: no longer always empty — see `SmokeObservations.closedTrades`'s doc.
-    closedTrades: [{ idempotency_key: 'idem-exit-1', realized_pnl_net: 42, close_reason: 'exit' }],
+    closedTrades: [
+      { idempotency_key: 'idem-exit-1', realized_pnl_net: 42, close_reason: 'exit', arm: 'live' },
+    ],
     flattenSubmissions: [
       { idempotency_key: 'idem-exit-1', instrument: 'BTC-USD', status: 'submitted' },
     ],
@@ -489,6 +506,54 @@ describe('evaluateSmokeGate', () => {
     expect(gate.failures.some((failure) => failure.includes('no tick got past Analysts'))).toBe(
       true,
     );
+  });
+
+  /**
+   * #753, expressed as a gate condition: the live arm transacted and every
+   * other observation is green, while `open_positions` holds no control row at
+   * all. That is `TickSteps.controlArm` left unbound in the composition root —
+   * which is not a compile error, because the member is optional — and it is
+   * the state a whole soak would run in, producing a live track with no matched
+   * control. Nothing else in this gate, and no unit of the control arm, can see
+   * it.
+   */
+  it('fails when the live arm transacted but falsifier arm 2 left no row (#753)', () => {
+    const observations = transactedObservations();
+    const gate = evaluateSmokeGate(
+      {
+        ...observations,
+        positions: observations.positions.filter((position) => position.arm !== 'control'),
+      },
+      healthyGateOptions(),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes("`arm = 'control'`"))).toBe(true);
+  });
+
+  /**
+   * The other half of #753's wiring: `arm` must be a HASH INPUT to the
+   * idempotency key, not merely a recorded label. Sharing a key means
+   * Execution's `findByKey` gate drops the control order on exactly the bars
+   * the two arms agree on — a bias in the comparison, invisible everywhere
+   * else because both arms still look busy.
+   */
+  it('fails when a control lot shares an idempotency key with a live lot (#753)', () => {
+    const observations = transactedObservations();
+    const gate = evaluateSmokeGate(
+      {
+        ...observations,
+        positions: observations.positions.map((position) =>
+          position.arm === 'control' ? { ...position, idempotency_key: 'idem-1' } : position,
+        ),
+      },
+      healthyGateOptions(),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(
+      gate.failures.some((failure) => failure.includes('share an idempotency key with a live lot')),
+    ).toBe(true);
   });
 
   /**
@@ -1130,9 +1195,19 @@ describe('runSmoke (end-to-end, real composition root)', () => {
     // The observable effects, not the log lines.
     expect(result.observations.verdicts.map((verdict) => verdict.status)).toContain('go');
     const sixStageLots = result.observations.positions.filter(
-      (position) => position.instrument === 'BTC-USD',
+      (position) => position.instrument === 'BTC-USD' && position.arm === 'live',
     );
     expect(sixStageLots).toHaveLength(1);
+    // #753 — falsifier arm 2 ran on the SAME tick, over the same tape, and left
+    // its own lot in the same book, distinguishable by a real column rather
+    // than inferred. Distinct idempotency keys prove `arm` is a hash input:
+    // without that, Execution's `findByKey` would have deduped the control lot
+    // away on exactly the bars the two arms agree on.
+    const controlLots = result.observations.positions.filter(
+      (position) => position.instrument === 'BTC-USD' && position.arm === 'control',
+    );
+    expect(controlLots).toHaveLength(1);
+    expect(controlLots[0]?.idempotency_key).not.toEqual(sixStageLots[0]?.idempotency_key);
     expect(result.observations.fills.some((fill) => fill.leg === 'entry')).toBe(true);
     // Reachable only through the fill-sync poll: the lot advanced past
     // `submitted` because `ingestFills()` ran, not because `execute()` said so.
@@ -1558,6 +1633,20 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
     const observations = {
       ...transactedObservations(),
       positions: [
+        // #753: the control arm's lot from the same run. Present in every
+        // positions fixture because the gate now requires falsifier arm 2 to
+        // have produced a row whenever a tick reached Execution — a fixture
+        // without one is a run with no matched control.
+        {
+          idempotency_key: 'lot-control',
+          instrument: 'AVAX-USD',
+          side: 'buy',
+          requested_size: 10,
+          filled_size: 10,
+          avg_entry_price: 160,
+          order_state: 'closed',
+          arm: 'control' as const,
+        },
         {
           idempotency_key: 'lot-older',
           instrument: 'AVAX-USD',
@@ -1566,6 +1655,7 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
           filled_size: 10,
           avg_entry_price: 160,
           order_state: 'closed',
+          arm: 'live' as const,
         },
         {
           idempotency_key: 'lot-newer',
@@ -1576,6 +1666,7 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
           avg_entry_price: 160,
           // Never reached 'closed' — the #571 regression shape.
           order_state: 'partially_filled',
+          arm: 'live' as const,
         },
       ],
     };
@@ -1596,6 +1687,20 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
     const observations = {
       ...transactedObservations(),
       positions: [
+        // #753: the control arm's lot from the same run. Present in every
+        // positions fixture because the gate now requires falsifier arm 2 to
+        // have produced a row whenever a tick reached Execution — a fixture
+        // without one is a run with no matched control.
+        {
+          idempotency_key: 'lot-control',
+          instrument: 'AVAX-USD',
+          side: 'buy',
+          requested_size: 10,
+          filled_size: 10,
+          avg_entry_price: 160,
+          order_state: 'closed',
+          arm: 'control' as const,
+        },
         {
           idempotency_key: 'lot-older',
           instrument: 'AVAX-USD',
@@ -1604,6 +1709,7 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
           filled_size: 10,
           avg_entry_price: 160,
           order_state: 'closed',
+          arm: 'live' as const,
         },
         {
           idempotency_key: 'lot-newer',
@@ -1613,6 +1719,7 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
           filled_size: 10,
           avg_entry_price: 160,
           order_state: 'closed',
+          arm: 'live' as const,
         },
       ],
     };

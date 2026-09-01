@@ -86,3 +86,29 @@ export type OrderState =
   | 'cancelled'
   | 'rejected'
   | 'expired';
+
+/**
+ * Which ARM of the measurement a decision, order or trade belongs to (#753).
+ *
+ * ADR-0014 amendment 2 and ADR-0017's Consequences mandate falsifier arm 2 —
+ * *same name selection, same exit rule, same stop, entry by indicator alone,
+ * no LLM in the path* — as the system's PRIMARY matched control, and
+ * `docs/research/12-edge-hypothesis-critique.md` D4 rules out the tempting
+ * substitute (a return-only comparison against a risk-targeted stream). The
+ * whole system's claim is that debate beats indicators; this union is what
+ * makes the two claims separable in the record rather than inferable from it.
+ *
+ * - `'live'` — the debate-driven arm: Analysts -> Debate -> Trader -> Risk ->
+ *   Verdict -> Execution. The arm that trades the book.
+ * - `'control'` — falsifier arm 2: the SAME analyst views, the deterministic
+ *   axis vote thresholded by the SAME Trader conviction floor, the SAME frozen
+ *   ADR-0018 D3 bracket and stop, routed through the same Trader/Risk/Verdict/
+ *   Execution chain with the debate stage bypassed. No model call is reachable
+ *   from it.
+ *
+ * `'live'` is the DEFAULT everywhere it is optional, so every pre-#753 row and
+ * every existing construction keeps meaning exactly what it meant. A missing
+ * arm is never "unknown" — it is the live arm, which is what the whole system
+ * was before the control existed.
+ */
+export type TradingArm = 'live' | 'control';

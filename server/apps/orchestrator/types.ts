@@ -361,6 +361,39 @@ export interface TickSteps {
   }): Promise<VerdictDecision>;
   /** Called only on a Verdict `go` (orchestrator-spec.md story 7). */
   execution(verdict: VerdictDecision): Promise<ExecutionResult>;
+  /**
+   * Falsifier arm 2, run in parallel with this pass (#753) — the mandated
+   * matched control from ADR-0014 amendment 2 and ADR-0017 §Consequences.
+   *
+   * Invoked on EVERY pass through `runInstrument`, both cadences: on a decision
+   * pass with the live arm's own `AnalystView[]` (so the control decides from
+   * the same views on the same bar), and on a tick pass with none (so the
+   * control runs its own position-facing exit check and its lots reach
+   * ADR-0014's mandatory flat-by-close). "In parallel from the first soak day"
+   * is the ticket's ordering constraint, and calling this from the one method
+   * every real tick goes through is what makes it structural rather than a
+   * separately scheduled job that could be started late.
+   *
+   * **Optional, and this is the one place in the file where optional is not the
+   * lesser choice.** A required member would break every existing `TickSteps`
+   * construction — the backtest replay driver, the smoke run, and several
+   * hundred tests — to express something none of them measure: a replayed or
+   * fixture-driven pass has no soak to control for. The risk that optionality
+   * usually carries here (this repo's dominant defect: a tested mechanism
+   * nothing calls) is closed where it belongs, at the composition root, by a
+   * test that drives the real `buildProductionComponents(...)` and asserts the
+   * member is bound — the same remedy #752's counter-unwired mutation uses.
+   *
+   * Resolves when the control pass has finished or has been contained. It never
+   * rejects: a failure in the measurement must not take down the arm that
+   * trades the book, and the containment lives in the implementation rather than
+   * in the runner, whose lack of a try/catch is a deliberate invariant.
+   */
+  controlArm?(input: {
+    signal: Signal;
+    ctx: TickContext;
+    views?: readonly AnalystView[];
+  }): Promise<void>;
 }
 
 /** The Tick Runner seam. One call per instrument per tick. */

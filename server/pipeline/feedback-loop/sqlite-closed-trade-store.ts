@@ -19,7 +19,17 @@ import { toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 export class SqliteClosedTradeStore implements ClosedTradeStore {
   constructor(private readonly db: SharedStore) {}
 
-  /** Half-open at the start, so consecutive daily cycles partition the timeline. */
+  /**
+   * Half-open at the start, so consecutive daily cycles partition the timeline.
+   *
+   * **LIVE arm only (#753).** Falsifier arm 2's control trades land in this same
+   * table, tagged `arm = 'control'`, and the Feedback Loop must not attribute
+   * them: it steps analyst weights and risk dials off realized outcomes, and the
+   * control arm has no analyst contributions to credit and does not trade the
+   * book those dials govern. Folding the two arms together here would tune the
+   * live system on a stream half of which it did not decide — and would do it
+   * silently, since a mixed result is still a plausible-looking number.
+   */
   getClosedTradesBetween(from: Date, to: Date): ClosedTrade[] {
     const rows = this.db
       .prepare(
@@ -27,7 +37,7 @@ export class SqliteClosedTradeStore implements ClosedTradeStore {
                 entry, stop, filled_size, realized_pnl_net, fees_total,
                 opened_at, closed_at, close_reason
            FROM closed_trades
-          WHERE closed_at > ? AND closed_at <= ?
+          WHERE arm = 'live' AND closed_at > ? AND closed_at <= ?
           ORDER BY closed_at`,
       )
       .all(toStoredTimestamp(from), toStoredTimestamp(to)) as ClosedTradeRow[];
