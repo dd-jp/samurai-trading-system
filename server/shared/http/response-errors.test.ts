@@ -1,4 +1,4 @@
-import { parseRetryAfterMs, truncateForError } from './response-errors.js';
+import { parseRetryAfterMs, readErrorBody, truncateForError } from './response-errors.js';
 
 describe('parseRetryAfterMs', () => {
   it('parses a numeric Retry-After header (seconds) into milliseconds', () => {
@@ -42,5 +42,46 @@ describe('truncateForError', () => {
     const result = truncateForError(oversized);
     expect(result).toContain('truncated, 1000 chars total');
     expect(result.length).toBeLessThan(1000);
+  });
+});
+
+describe('readErrorBody (#953)', () => {
+  it('extracts a numeric code and the truncated detail from an Alpaca-shaped JSON body', async () => {
+    const body = JSON.stringify({
+      code: 42210000,
+      message: 'fractional orders must be simple orders',
+    });
+    const response = new Response(body, { status: 422, statusText: 'Unprocessable Entity' });
+    expect(await readErrorBody(response)).toEqual({ detail: body, code: '42210000' });
+  });
+
+  it('degrades a string code to undefined — never lets venue-controlled text into the structured code field', async () => {
+    const body = JSON.stringify({ code: 'forbidden', message: 'nope' });
+    const response = new Response(body, { status: 403, statusText: 'Forbidden' });
+    expect((await readErrorBody(response)).code).toBeUndefined();
+  });
+
+  it('returns undefined code for JSON with no code key, detail unaffected', async () => {
+    const body = JSON.stringify({ message: 'bad request' });
+    const response = new Response(body, { status: 400, statusText: 'Bad Request' });
+    expect(await readErrorBody(response)).toEqual({ detail: body, code: undefined });
+  });
+
+  it('returns undefined code for a non-JSON body (e.g. an HTML error page), detail still the truncated text', async () => {
+    const body = '<html>502 Bad Gateway</html>';
+    const response = new Response(body, { status: 502, statusText: 'Bad Gateway' });
+    expect(await readErrorBody(response)).toEqual({ detail: body, code: undefined });
+  });
+
+  it('degrades to statusText with an undefined code when the body cannot be read at all', async () => {
+    const response = {
+      status: 500,
+      statusText: 'Internal Server Error',
+      text: () => Promise.reject(new Error('stream already consumed')),
+    } as unknown as Response;
+    expect(await readErrorBody(response)).toEqual({
+      detail: 'Internal Server Error',
+      code: undefined,
+    });
   });
 });

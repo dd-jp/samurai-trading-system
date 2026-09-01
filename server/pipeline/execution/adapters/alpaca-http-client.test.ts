@@ -465,6 +465,30 @@ describe('AlpacaHttpBrokerClient', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('captures Alpaca numeric error code onto AlpacaBrokerProviderError (#953)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(
+        {
+          code: 42210000,
+          message: 'fractional orders must be simple orders that are DAY orders',
+        },
+        422,
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({
+      apiKey: FAKE_KEY,
+      apiSecret: FAKE_SECRET,
+      retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
+    });
+
+    const error = await client.submitOrder(ORDER_REQUEST).catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(AlpacaBrokerProviderError);
+    expect((error as AlpacaBrokerProviderError).code).toBe('42210000');
+  });
+
   it('retries a 503 up to maxAttempts and eventually succeeds', async () => {
     const fetchMock = vi
       .fn()
