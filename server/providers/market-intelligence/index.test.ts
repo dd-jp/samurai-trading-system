@@ -243,6 +243,58 @@ describe('MarketIntelligenceStore.getContext', () => {
     expect(context.news.map((item) => item.id)).toEqual(['claimed-bar-item']);
   });
 
+  /**
+   * #914. Before this, `getContext` filtered on `asset_class` only, so every
+   * instrument in a class read the same class-wide bag — an item genuinely
+   * about AAPL diluted (or, worse, silently stood in for) a read that should
+   * have been about TSLA. The optional `entity` param scopes the read to one
+   * instrument's own items, matching `IntelligenceItem.entity`.
+   */
+  it('scopes to one entity when an entity filter is passed, leaving the rest of the class-wide bag out', () => {
+    const asOf = new Date('2026-07-14T09:00:00Z');
+    const store = new MarketIntelligenceStore(new FixedClock(asOf));
+
+    store.ingest(
+      envelope([
+        newsItem({ id: 'aapl-item', entity: 'AAPL' }),
+        newsItem({ id: 'tsla-item', entity: 'TSLA' }),
+      ]),
+    );
+
+    const aaplContext = store.getContext('stocks', 60_000, 'trace-1', undefined, 'AAPL');
+    const tslaContext = store.getContext('stocks', 60_000, 'trace-1', undefined, 'TSLA');
+
+    expect(aaplContext.news.map((item) => item.id)).toEqual(['aapl-item']);
+    expect(tslaContext.news.map((item) => item.id)).toEqual(['tsla-item']);
+  });
+
+  it('omitting the entity filter still returns the full class-wide bag — additive, not a breaking change', () => {
+    const asOf = new Date('2026-07-14T09:00:00Z');
+    const store = new MarketIntelligenceStore(new FixedClock(asOf));
+
+    store.ingest(
+      envelope([
+        newsItem({ id: 'aapl-item', entity: 'AAPL' }),
+        newsItem({ id: 'tsla-item', entity: 'TSLA' }),
+      ]),
+    );
+
+    const context = store.getContext('stocks', 60_000, 'trace-1');
+
+    expect(context.news.map((item) => item.id).sort()).toEqual(['aapl-item', 'tsla-item']);
+  });
+
+  it('an entity with no items of its own returns empty even though the class-wide bag is non-empty', () => {
+    const asOf = new Date('2026-07-14T09:00:00Z');
+    const store = new MarketIntelligenceStore(new FixedClock(asOf));
+
+    store.ingest(envelope([newsItem({ id: 'aapl-item', entity: 'AAPL' })]));
+
+    const context = store.getContext('stocks', 60_000, 'trace-1', undefined, 'QQQ');
+
+    expect(context.news).toEqual([]);
+  });
+
   it('conflicts is always empty — conflict resolution is not ticketed under epic #52', () => {
     const store = new MarketIntelligenceStore(new FixedClock(new Date('2026-07-14T09:00:00Z')));
     store.ingest(envelope([newsItem()]));

@@ -13,6 +13,8 @@ import {
   LSE_ETP_POOL,
   type LseEtpPoolRow,
   liveSizingSubclassFor,
+  resolveMiSubject,
+  screeningInstrumentFor,
   UnknownSubclassError,
 } from './lse-etp-pool.js';
 
@@ -301,5 +303,26 @@ describe('liveSizingSubclassFor — #903 excludes the four unmeasured index_etp_
     // tradeable-line count must not silently shrink because of it.
     expect(LSE_ETP_POOL.length).toBe(30);
     expect(countRankableUnderlyings(LSE_ETP_POOL)).toBe(26);
+  });
+});
+
+// #914/#960: the read-side resolution step both the fundamental analyst's
+// fix and any future MI producer need — resolve an LSE wrapper to the US
+// underlying MI is actually keyed on, falling back to the instrument itself
+// for anything not in the pool.
+describe('resolveMiSubject — the MI-wide retrieval-subject resolution (#914/#960)', () => {
+  it('resolves a real LSE pool row to its screening_instrument, matching screeningInstrumentFor directly', () => {
+    expect(resolveMiSubject('3USL')).toBe('SPY');
+    expect(screeningInstrumentFor('3USL')).toBe('SPY');
+
+    expect(resolveMiSubject('NVD3')).toBe('NVDA');
+    expect(screeningInstrumentFor('NVD3')).toBe('NVDA');
+  });
+
+  it('falls back to the instrument itself for a non-pool name — every instrument in DEFAULT_UNIVERSE today', () => {
+    expect(resolveMiSubject('AAPL')).toBe('AAPL');
+    expect(resolveMiSubject('QQQ')).toBe('QQQ');
+    expect(resolveMiSubject('TSLA')).toBe('TSLA');
+    expect(resolveMiSubject('BTC-USD')).toBe('BTC-USD');
   });
 });

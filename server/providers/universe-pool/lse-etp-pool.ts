@@ -1112,6 +1112,34 @@ export function screeningInstrumentFor(
 }
 
 /**
+ * Resolves the Market Intelligence RETRIEVAL subject for an instrument — the
+ * "key on `screening_instrument`, not `lse_ticker`" rule #960 recorded as
+ * MI-wide (#914). News/sentiment/X coverage for an LSE-listed leveraged ETP
+ * is filed under, and must be read back under, the liquid US underlying it
+ * tracks: a 3x wrapper generates no headlines of its own, and keying MI on
+ * the wrapper produces either an invisible-wrong class-wide read (#914's
+ * measured defect) or a permanent `NO_DATA_MARKER` for a name that genuinely
+ * has coverage under its underlying.
+ *
+ * Unlike `screeningInstrumentFor`, this ALWAYS returns a usable subject
+ * rather than `null`: a non-pool instrument (every name in today's
+ * `DEFAULT_UNIVERSE` — SPY, QQQ, AAPL, TSLA, and crypto ids like `BTC-USD`)
+ * already IS its own MI subject, so the fallback is the identity, not a
+ * missing answer.
+ *
+ * Same routing caveat as `screeningInstrumentFor` above: this is a lookup for
+ * WHAT TO ASK MI FOR, never for order placement or bar-fetching — those stay
+ * keyed on `lse_ticker` (or the routing map's inverse), and nothing here
+ * changes that.
+ */
+export function resolveMiSubject(
+  instrument: string,
+  pool: readonly LseEtpPoolRow[] = LSE_ETP_POOL,
+): string {
+  return screeningInstrumentFor(instrument, pool) ?? instrument;
+}
+
+/**
  * The count #707 (screener ranking/shortlist) actually consumes: the number
  * of DISTINCT `screening_instrument` values in a pool — rankable
  * underlyings, not tradeable ETP lines. Strictly less than `pool.length`

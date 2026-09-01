@@ -160,6 +160,27 @@ describe('MiIngestAgent', () => {
   });
 
   /**
+   * #914/#960: the ingestion-side half of the MI-wide rule. An LSE-listed
+   * leveraged ETP generates no headlines of its own — the wire only carries
+   * news for the US underlying it tracks. Before this, `refresh` fetched and
+   * tagged items under the raw traded instrument (`3USL`), so an LSE row's MI
+   * items were filed under a symbol the wire never mentions and an
+   * entity-scoped read for the underlying (`SPY`) would never find them.
+   */
+  it('resolves an LSE ETP instrument to its screening_instrument before fetching news, and tags items with the resolved entity', async () => {
+    const { agent, store, news } = build([article({ symbols: ['SPY'] })]);
+
+    await agent.refresh('t', '3USL', 'stocks');
+
+    // Fetched the underlying's wire symbol, not the wrapper's.
+    expect(news.fetchNews).toHaveBeenCalledWith(['SPY'], expect.any(Date), expect.any(Date));
+    // Filed under the resolved subject, not the traded ticker.
+    expect(store.getContext('stocks', WINDOW, 't').news.map((item) => item.entity)).toEqual([
+      'SPY',
+    ]);
+  });
+
+  /**
    * The refresh window overlaps the previous one on purpose, so most of what a
    * poll returns is already held. Re-scoring it would bill tokens for an answer
    * on disk AND mint a second, different score for one article — the

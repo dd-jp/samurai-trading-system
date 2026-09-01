@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { MarketContext } from '../../../providers/market-intelligence/index.js';
 import type { LogEntry, Logger } from '../../../shared/index.js';
 import {
+  type CheckMiCoverageDeps,
   checkMiCoverage,
   hasCoverageFor,
   type MiCoverageAlert,
@@ -247,7 +248,13 @@ function buildDeps(overrides: {
                   source: 'alpaca',
                   type: 'news',
                   timestamp: NOW,
-                  entity: '3USL',
+                  // #914/#960: ingestion now files an LSE ETP's items under its
+                  // resolved screening_instrument ('3USL' -> 'SPY' is a real
+                  // lse-etp-pool.ts row), so the honest fixture for "the
+                  // instrument used in these tests (3USL) is covered" is an
+                  // item entitied 'SPY', not '3USL' — mirroring what
+                  // `checkMiCoverage` now actually resolves before comparing.
+                  entity: 'SPY',
                   headline: 'x',
                   sentiment: 1,
                   confidence: 0.5,
@@ -339,6 +346,51 @@ describe('checkMiCoverage', () => {
 
     expect(noDataEvents).toHaveLength(0);
     expect(alertsPosted).toHaveLength(0);
+  });
+
+  it('does NOT count a match on the raw traded ticker as coverage — proves resolution actually ran, not a coincidental match (#914/#960)', async () => {
+    // Same shape as buildDeps({ covered: true }) but the stored item is
+    // entitied '3USL' (the old, pre-#914 unresolved convention) rather than
+    // its resolved 'SPY'. If checkMiCoverage were still comparing the raw
+    // instrument, this would read as covered; since it now resolves '3USL'
+    // to 'SPY' before comparing, an entity of '3USL' no longer matches
+    // anything and the instrument correctly reads as missing.
+    const contextSource: MiCoverageContextSource = {
+      getContext: vi.fn(() =>
+        emptyContext({
+          news: [
+            {
+              id: '1',
+              source: 'alpaca',
+              type: 'news',
+              timestamp: NOW,
+              entity: '3USL',
+              headline: 'x',
+              sentiment: 1,
+              confidence: 0.5,
+            },
+          ],
+        }),
+      ),
+    };
+    const noDataEvents: MiCoverageEvent[] = [];
+    const deps: CheckMiCoverageDeps = {
+      contextSource,
+      subclassOf: {},
+      telemetry: { noDataObserved: (event) => noDataEvents.push(event) },
+      monitor: new MiCoverageMonitor(),
+      alertChannel: undefined,
+      logger: undefined,
+    };
+
+    await checkMiCoverage(deps, {
+      trace_id: 'trace-1',
+      instrument: '3USL',
+      assetClass: 'stocks',
+      reportedAt: NOW,
+    });
+
+    expect(noDataEvents).toHaveLength(1);
   });
 
   it('sets the degraded-coverage flag on the monitor when coverage is missing', async () => {
