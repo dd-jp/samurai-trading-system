@@ -20,18 +20,34 @@
  * says so. Rendering zeros instead would read as "both arms flat, no
  * divergence" — a claim about the book rather than about the measurement.
  *
- * ## The non-diverged line says LESS than it could, on purpose
+ * ## The non-diverged line now names which of two states it is (#982)
  *
  * `evaluateArmDivergence` returns `diverged: false` for two different reasons:
  * dominance was tested and not found, and — below its per-arm closed-trade floor
- * — dominance was never tested at all. The wire carries `diverged` and both
- * trade counts, but NOT the floor those counts are compared against, so this
- * panel genuinely cannot tell the two apart. It therefore refuses to claim "the
- * control is not ahead on both columns", which is false in the second case, and
- * says instead that a verdict is issued only above a floor. Surfacing the floor
- * on the wire so the panel can name which state it is in is the follow-up
- * ([#982](https://github.com/dd-jp/samurai-trading-system/issues/982)); until
- * then the honest move is to state the rule rather than fake the inference.
+ * — dominance was never tested at all. `ArmComparisonRow.min_trades_per_arm`
+ * carries the floor each verdict was actually evaluated against, so this panel
+ * can now tell the two states apart instead of softening its copy to cover
+ * both:
+ *
+ * - **Below the floor on either arm** — dominance was never tested, so no claim
+ *   about the control is made. The panel states the trade counts against the
+ *   floor instead ("not enough closed trades yet for a verdict").
+ * - **At or above the floor on both arms, and `diverged: false`** — dominance
+ *   WAS tested and the control did not win, so the panel makes the claim #979
+ *   had to withdraw ("the control is not ahead … on both … together"). It is
+ *   provably true here: this branch is only reachable when the floor is
+ *   cleared, which is exactly when the test actually ran.
+ *
+ * The trend list below the headline renders many historical rows at once, and
+ * a below-floor row there is otherwise pixel-identical to a tested-and-did-not-
+ * diverge row — both show `diverged: false` and neither carries the alert
+ * class. Each row's own `min_trades_per_arm` marks it (`arm-trend-below-floor`
+ * plus a "below floor" word, never colour alone) so a reader scanning the
+ * trend does not read an absent verdict as a settled one. This is also *why*
+ * the floor is stored per row rather than once for the whole snapshot: a
+ * snapshot-level field could only describe the *current* policy, but this list
+ * renders older rows evaluated under whatever the floor was at their own
+ * `computed_at`.
  *
  * ## The asymmetry is on the panel, not only in the spec
  *
@@ -75,6 +91,19 @@ function ArmRow({ arm }: { arm: ArmPerformanceWire }) {
   );
 }
 
+/**
+ * Whether either arm was still below `min_trades_per_arm` when this row was
+ * computed — the "dominance was never tested" state (#982). Only meaningful
+ * when `diverged` is false: a diverged row proves both arms cleared the floor,
+ * by construction of `evaluateArmDivergence`.
+ */
+function isBelowTradeFloor(row: ArmComparisonRow): boolean {
+  return (
+    row.live.trade_count < row.min_trades_per_arm ||
+    row.control.trade_count < row.min_trades_per_arm
+  );
+}
+
 export function ArmComparisonPanel({ comparisons }: ArmComparisonPanelProps) {
   const latest = comparisons[0];
 
@@ -102,28 +131,45 @@ export function ArmComparisonPanel({ comparisons }: ArmComparisonPanelProps) {
           </ul>
           {latest.diverged && latest.divergence_reason !== null ? (
             <p className="arm-divergence">DIVERGED: {latest.divergence_reason}.</p>
+          ) : isBelowTradeFloor(latest) ? (
+            <p className="arm-divergence arm-below-floor">
+              Not enough closed trades yet for a verdict — the floor is {latest.min_trades_per_arm}{' '}
+              per arm (live {latest.live.trade_count}, control {latest.control.trade_count}).
+            </p>
           ) : (
             <p className="arm-divergence arm-ok">
-              No divergence alert this cycle. The Feedback Loop issues a verdict only once both arms
-              clear its closed-trade floor; below that floor this is an absent verdict, not a
-              passing one.
+              Did not diverge: the control is not ahead of the live arm on both return and drawdown
+              together.
             </p>
           )}
           {comparisons.length > 1 ? (
             <ul className="arm-trend">
-              {comparisons.map((row) => (
-                <li key={row.computed_at} className={row.diverged ? 'arm-trend-diverged' : ''}>
-                  <span>{formatClockUtc(row.computed_at)}</span>
-                  <span className="numeric">
-                    live {formatPercent(row.live.return_pct, 2)} /{' '}
-                    {formatPercent(row.live.max_drawdown_pct, 2)} dd
-                  </span>
-                  <span className="numeric">
-                    control {formatPercent(row.control.return_pct, 2)} /{' '}
-                    {formatPercent(row.control.max_drawdown_pct, 2)} dd
-                  </span>
-                </li>
-              ))}
+              {comparisons.map((row) => {
+                const belowFloor = !row.diverged && isBelowTradeFloor(row);
+                return (
+                  <li
+                    key={row.computed_at}
+                    className={
+                      row.diverged
+                        ? 'arm-trend-diverged'
+                        : belowFloor
+                          ? 'arm-trend-below-floor'
+                          : ''
+                    }
+                  >
+                    <span>{formatClockUtc(row.computed_at)}</span>
+                    <span className="numeric">
+                      live {formatPercent(row.live.return_pct, 2)} /{' '}
+                      {formatPercent(row.live.max_drawdown_pct, 2)} dd
+                    </span>
+                    <span className="numeric">
+                      control {formatPercent(row.control.return_pct, 2)} /{' '}
+                      {formatPercent(row.control.max_drawdown_pct, 2)} dd
+                    </span>
+                    {belowFloor ? <span>below floor</span> : null}
+                  </li>
+                );
+              })}
             </ul>
           ) : null}
           <p className="arm-caveat">

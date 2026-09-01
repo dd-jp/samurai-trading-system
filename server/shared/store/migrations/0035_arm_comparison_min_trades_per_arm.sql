@@ -1,0 +1,40 @@
+-- The arm-comparison floor, persisted per row (#982, under #971/#636/#913).
+--
+-- `evaluateArmDivergence` (arm-comparison-cycle.ts) returns `diverged: false`
+-- for TWO different reasons: dominance was tested and the control did not win,
+-- and — below `MIN_TRADES_PER_ARM_FOR_DIVERGENCE` on either arm — dominance was
+-- never tested at all. Before this migration neither the row nor the wire
+-- carried the floor those trade counts are compared against, so a reader could
+-- not tell the two states apart; the dashboard panel had to soften its copy to
+-- the honest-but-uninformative "a verdict is issued only above a floor" rather
+-- than naming which state a given row is in.
+--
+-- ## Per row, not read live off the constant — same choice `basis` already makes
+--
+-- Migration 0034 stores `basis` per row rather than reading `LIVE_BOOK_GBP`
+-- live at query time, specifically so "a row read back after the book is
+-- re-based must still be interpretable against the basis it used." The floor
+-- is the same kind of quantity: chosen policy, not derived, and free to change.
+-- A snapshot-level "current policy" field would render every OLDER row in the
+-- panel's trend list against a floor it was never actually evaluated with, the
+-- moment `MIN_TRADES_PER_ARM_FOR_DIVERGENCE` next changes — exactly the failure
+-- mode 0034's comment names for `basis`. Storing it per row keeps a row an
+-- honest record of what FL actually tested at `computed_at`.
+--
+-- ## DEFAULT 5, and why that is not a placeholder
+--
+-- Every row already in this table was evaluated against
+-- `MIN_TRADES_PER_ARM_FOR_DIVERGENCE = 5` (arm-comparison-cycle.ts), because
+-- that is the only value this constant has ever had since migration 0034
+-- introduced the table. `5` is therefore the true floor those rows were tested
+-- against, not a filler value — the same reasoning migration 0033 gives for
+-- `DEFAULT 'live'` on `arm` (every existing row really was produced by the live
+-- arm, because that was the only arm that existed).
+--
+-- ## ALTER TABLE, not a rebuild
+--
+-- Like 0033, this adds a column with its own (trivial, no-CHECK) constraint, so
+-- SQLite's `ALTER TABLE ... ADD COLUMN` applies without a table rebuild.
+
+ALTER TABLE arm_comparison_samples
+  ADD COLUMN min_trades_per_arm INTEGER NOT NULL DEFAULT 5;

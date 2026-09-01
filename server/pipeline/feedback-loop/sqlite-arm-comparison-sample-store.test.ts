@@ -27,7 +27,7 @@ function makeSample(overrides: Partial<ArmComparisonSample> = {}): ArmComparison
         max_drawdown_pct: 0.02,
       },
     },
-    divergence: { diverged: false, reason: null },
+    divergence: { diverged: false, reason: null, min_trades_per_arm: 5 },
     ...overrides,
   };
 }
@@ -43,11 +43,33 @@ describe('SqliteArmComparisonSampleStore', () => {
     expect(read).toEqual(makeSample());
   });
 
+  /**
+   * #982: written with a NON-default floor and read back the same value — the
+   * default (5) round-trips in the test above too, but only a non-default
+   * value can prove the column is actually wired end to end rather than
+   * hardcoded at some hop between `append` and `getRecent`.
+   */
+  it('round-trips a non-default min_trades_per_arm rather than the module default', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteArmComparisonSampleStore(db);
+    const sample = makeSample({
+      divergence: { diverged: false, reason: null, min_trades_per_arm: 8 },
+    });
+
+    store.append(sample);
+
+    expect(store.getRecent(10, COMPUTED_AT)[0]?.divergence.min_trades_per_arm).toBe(8);
+  });
+
   it('round-trips a diverged sample with its reason', () => {
     const db = openSharedStore(':memory:');
     const store = new SqliteArmComparisonSampleStore(db);
     const sample = makeSample({
-      divergence: { diverged: true, reason: 'the control arm is ahead by 1.20% of the book' },
+      divergence: {
+        diverged: true,
+        reason: 'the control arm is ahead by 1.20% of the book',
+        min_trades_per_arm: 5,
+      },
     });
 
     store.append(sample);
@@ -80,7 +102,7 @@ describe('SqliteArmComparisonSampleStore', () => {
     store.append(makeSample());
     store.append(
       makeSample({
-        divergence: { diverged: true, reason: 'recomputed after a restart' },
+        divergence: { diverged: true, reason: 'recomputed after a restart', min_trades_per_arm: 5 },
       }),
     );
 

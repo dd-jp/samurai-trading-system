@@ -106,19 +106,21 @@ export function evaluateArmDivergence(
   const { live, control } = comparison;
 
   // Under the floor the comparison is not asked the question at all — an
-  // absent answer, not a passing one.
+  // absent answer, not a passing one. `min_trades_per_arm` travels with the
+  // verdict either way (#982) so a later reader can tell THIS state apart from
+  // "tested, control did not dominate" below.
   if (
     live.trade_count < thresholds.min_trades_per_arm ||
     control.trade_count < thresholds.min_trades_per_arm
   ) {
-    return { diverged: false, reason: null };
+    return { diverged: false, reason: null, min_trades_per_arm: thresholds.min_trades_per_arm };
   }
 
   const returnGap = control.return_pct - live.return_pct;
   const controlNoWorseOnDrawdown = control.max_drawdown_pct <= live.max_drawdown_pct;
 
   if (returnGap <= thresholds.min_return_gap_pct || !controlNoWorseOnDrawdown) {
-    return { diverged: false, reason: null };
+    return { diverged: false, reason: null, min_trades_per_arm: thresholds.min_trades_per_arm };
   }
 
   return {
@@ -128,6 +130,7 @@ export function evaluateArmDivergence(
       `(control ${pct(control.return_pct)} vs live ${pct(live.return_pct)}) ` +
       `and took no more drawdown doing it ` +
       `(control ${pct(control.max_drawdown_pct)} vs live ${pct(live.max_drawdown_pct)})`,
+    min_trades_per_arm: thresholds.min_trades_per_arm,
   };
 }
 

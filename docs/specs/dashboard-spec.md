@@ -205,7 +205,12 @@ A grid of equal-citizen panels, none of which is a hero:
 
 **Divergence is shown, not just alerted.** When the Feedback Loop's most recent sample crossed the divergence line, the panel says so and carries the same reason sentence the trade-channel alert carried, so the page and the alert never disagree.
 
-**A non-divergence must not be rendered as a passing result.** `diverged: false` covers two states: dominance was tested and not found, and — below FL's per-arm closed-trade floor — dominance was never tested at all. The wire carries `diverged` and both trade counts but **not the floor**, so the panel cannot currently distinguish them; it therefore states the rule ("a verdict is issued only once both arms clear the floor") rather than asserting the stronger claim, which would be false in the second state. Surfacing the floor so the panel can name which state it is in is [#982](https://github.com/dd-jp/samurai-trading-system/issues/982).
+**A non-divergence must not be rendered as a passing result — and the wire now carries what it takes to tell the two apart ([#982](https://github.com/dd-jp/samurai-trading-system/issues/982)).** `diverged: false` covers two states: dominance was tested and not found, and — below FL's per-arm closed-trade floor — dominance was never tested at all. `ArmComparisonRow.min_trades_per_arm` carries the floor the verdict was actually evaluated against, stored per row rather than read live off the current policy constant (the same choice `basis` makes on this type, for the same reason: a row is a record of what FL tested at `computed_at`, and the trend list below renders many historical rows at once). The panel uses it to name which state a given row is in:
+
+- **Below the floor on either arm** — dominance was never tested. The panel makes no claim about the control; it states the trade counts against the floor instead ("not enough closed trades yet for a verdict — the floor is *N* per arm (live *x*, control *y*)").
+- **At or above the floor on both arms** — dominance WAS tested and the control did not win, so the panel states the claim directly ("did not diverge: the control is not ahead of the live arm on both return and drawdown together"), which is provably true here since this branch is only reachable once the floor is cleared.
+
+The trend list (below the headline) renders many historical rows at once, and without marking each one this is exactly where a per-row floor earns its keep: a below-floor row there would otherwise be pixel-identical to a tested-and-did-not-diverge row — both show `diverged: false`. Each row is checked against its own `min_trades_per_arm`, and a below-floor row gets its own class (`arm-trend-below-floor`, styled neutral — never the diverged row's alert colour) plus the word "below floor" in the row itself, so colour is never the only carrier (this page's rule, "Colour" section below).
 
 **The convergence asymmetry is stated on the panel.** The control arm always trades; the live arm can decline to when the debate does not converge. A trade-count gap therefore has an innocent explanation, and the panel says so rather than leaving the reader to infer a performance story from a participation difference.
 
@@ -323,6 +328,9 @@ interface ArmComparisonRow {
   control: ArmPerformanceWire;
   diverged: boolean;
   divergence_reason: string | null;   // non-null exactly when `diverged`
+  min_trades_per_arm: number; // #982 — the per-arm closed-trade floor THIS
+                               // verdict was tested against, stored per row
+                               // like `basis` (see the panel section above)
 }
 ```
 
@@ -491,7 +499,7 @@ Non-negotiable, and unchanged in spirit from v1 — the screen got more visual, 
 - **Server tests** assert on HTTP status/body for each route (`GET /`, a bundle asset, `GET /api/snapshot`, unknown path, non-`GET` method) and on the **static containment guard** against an injected fake store — no real network dependency beyond binding to an ephemeral port (`port: 0`). Two escapes must both be covered: `..`/percent-encoded-`..` traversal, **and** a sibling directory whose name shares the bundle root's prefix (`dist/client-evil/`). The second is the one a naive `startsWith` passes the first test while remaining open to, so a suite that only tests `..` proves nothing about it.
 - **`QueryStore` implementation** is tested against a real (test) SQLite instance seeded with rows matching the other components' own fixture patterns — reuses their existing test data shapes, no new schema.
 - **Offline check is part of acceptance:** the built bundle contains no external URL. A grep for `https://` over `dist/client/` is the crude version; the network panel showing zero third-party requests is the real one.
-- **Arm comparison panel:** the D4 rule is tested as a *type* obligation as well as a rendered one — a `@ts-expect-error` case proving an arm without `max_drawdown_pct` does not compile, alongside RTL assertions that both arms, both columns, the window and the trade counts are on screen, that the empty state says nothing has been measured rather than showing zeros, and that a diverged sample renders FL's own reason sentence.
+- **Arm comparison panel:** the D4 rule is tested as a *type* obligation as well as a rendered one — a `@ts-expect-error` case proving an arm without `max_drawdown_pct` does not compile, alongside RTL assertions that both arms, both columns, the window and the trade counts are on screen, that the empty state says nothing has been measured rather than showing zeros, and that a diverged sample renders FL's own reason sentence. Both `min_trades_per_arm` (#982) branches are covered separately: below the floor, the panel names the trade counts against it and makes no dominance claim; at or above the floor, `diverged: false` renders the "control is not ahead … together" claim. The trend list's own marking is covered too: a below-floor historical row renders `arm-trend-below-floor` and the "below floor" word, not the diverged row's class or colour.
 - No end-to-end trading test needed — this component cannot affect trading outcomes by construction (read-only).
 
 ## Out of Scope
