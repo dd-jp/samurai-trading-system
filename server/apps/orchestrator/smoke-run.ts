@@ -122,6 +122,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { crc32, deflateRawSync } from 'node:zlib';
+import {
+  type ArmPerformance,
+  SqliteArmComparisonSource,
+} from '../../pipeline/control-arm/index.js';
 import type {
   AssetClass,
   LlmClient,
@@ -157,6 +161,10 @@ import {
 } from '../../pipeline/execution/index.js';
 import {
   assertKillThresholdsWithinBounds,
+  DEFAULT_ARM_COMPARISON_WINDOW_MS,
+  DEFAULT_ARM_DIVERGENCE_THRESHOLDS,
+  runArmComparisonCycle,
+  SqliteArmComparisonSampleStore,
   SqliteTuningStore,
 } from '../../pipeline/feedback-loop/index.js';
 import type {
@@ -218,6 +226,7 @@ import {
 import type { AlertChannels } from './alert-transport.js';
 import {
   LoggingAnalystSkipAlertChannel,
+  LoggingArmDivergenceAlertChannel,
   LoggingBreachAlertChannel,
   LoggingCalendarFallbackAlertChannel,
   LoggingDataFailoverAlertChannel,
@@ -232,7 +241,11 @@ import {
 } from './console-channels.js';
 import { installFaultHandlers, startFromEnvironment } from './index.js';
 import { buildEntrypointLogger, JsonLogger, type StdoutStream } from './logger.js';
-import { buildStartingProfileConfigs, paperStartingProfile } from './paper-profile.js';
+import {
+  buildStartingProfileConfigs,
+  LIVE_BOOK_GBP,
+  paperStartingProfile,
+} from './paper-profile.js';
 import type { DataFailoverAlert } from './production/data-failover.js';
 import { worstCaseLlmCallsForAssetClass } from './production/debate-adapter.js';
 import type { AccountStateProvider } from './production/direct-bind.js';
@@ -2546,6 +2559,64 @@ function runThresholdClampScenario(
   }
 }
 
+/**
+ * What `evaluateSmokeGate` needs from the arm-comparison surface (#971).
+ *
+ * The Feedback Loop's daily timer is 24h and this run lasts seconds, so the
+ * orchestrator's own cycle cannot fire here. The probe therefore drives the
+ * REAL `runArmComparisonCycle` — the same function `production.ts` calls, over
+ * the same `SqliteArmComparisonSource`, `SqliteArmComparisonSampleStore` and
+ * thresholds — against the tape this run just traded. Same posture as
+ * `runThresholdClampScenario`: when the shipped timer cannot be reached inside
+ * a smoke run, the gate exercises the shipped classes directly rather than
+ * asserting nothing.
+ */
+export interface ArmComparisonEvidence {
+  /** Both arms as computed. `null` only if the cycle produced no comparison at all. */
+  live: ArmPerformance | null;
+  control: ArmPerformance | null;
+  /** Rows read back out of `arm_comparison_samples` — 0 means nothing persisted. */
+  persistedRows: number;
+  /** Whether the drawdown column survived the round trip on BOTH arms. */
+  persistedBothDrawdowns: boolean;
+  diverged: boolean;
+  /** Divergence alerts that reached the injected channel. */
+  alerts: number;
+}
+
+/** Drives the shipped arm-comparison cycle over the smoke run's own store. */
+function runArmComparisonProbe(db: SqliteHandle): ArmComparisonEvidence {
+  let alerts = 0;
+  const samples = new SqliteArmComparisonSampleStore(db);
+  const sample = runArmComparisonCycle({
+    clock: new SimulatedClock(SMOKE_RUN_INSTANT),
+    trades: new SqliteArmComparisonSource(db),
+    samples,
+    alerts: {
+      postArmDivergenceAlert: () => {
+        alerts += 1;
+      },
+    },
+    basis: LIVE_BOOK_GBP,
+    window_ms: DEFAULT_ARM_COMPARISON_WINDOW_MS,
+    thresholds: DEFAULT_ARM_DIVERGENCE_THRESHOLDS,
+  });
+
+  const persisted = samples.getRecent(5, SMOKE_RUN_INSTANT);
+  return {
+    live: sample.comparison.live,
+    control: sample.comparison.control,
+    persistedRows: persisted.length,
+    persistedBothDrawdowns: persisted.every(
+      (row) =>
+        Number.isFinite(row.comparison.live.max_drawdown_pct) &&
+        Number.isFinite(row.comparison.control.max_drawdown_pct),
+    ),
+    diverged: sample.divergence.diverged,
+    alerts,
+  };
+}
+
 /** What `evaluateSmokeGate` needs from the OHLCV failover scenario (#562). */
 export interface DataFailoverEvidence {
   /** `bars.source` values the store holds for the failed-over instrument, in `open_time` order. */
@@ -2849,6 +2920,15 @@ export function evaluateSmokeGate(
      * with every unit test still green, and nothing else here would notice.
      */
     riskCritic: RiskCriticEvidence;
+    /**
+     * The arm-comparison surface's evidence (#971) — required, not optional,
+     * for the same "compile error, not a silent no-op" reason the mechanisms
+     * above are. #636/#913 put the matched control's comparison on the Feedback
+     * Loop's cadence and on the operator's surfaces; the FL timer is 24h, so
+     * without this probe the whole path could be deleted from `production.ts`
+     * and every unit test — and `yarn smoke` — would stay green.
+     */
+    armComparison: ArmComparisonEvidence;
   },
 ): SmokeGateResult {
   const failures: string[] = [];
@@ -2949,6 +3029,44 @@ export function evaluateSmokeGate(
           'comparison would then be biased on exactly the subset it is most sensitive to',
       );
     }
+  }
+
+  // #971 — falsifier arm 2's comparison reaches a surface, not just a report.
+  //
+  // Stands alone rather than hanging off `transactedThisRun`: the comparison is
+  // computable over an empty window (a zero-trade sample is a real, honest
+  // measurement), so the properties below hold on every run. What they enforce
+  // is the WIRING — that the shipped cycle produces both arms, persists them,
+  // and alerts exactly when it says it diverged.
+  const arms = options.armComparison;
+  if (arms.live === null || arms.control === null) {
+    failures.push(
+      'the arm-comparison cycle produced no comparison — `runArmComparisonCycle` (#971) could ' +
+        'not derive both arms from `closed_trades`, so the Feedback Loop has nothing to persist ' +
+        'and the dashboard panel has nothing to show',
+    );
+  }
+  if (arms.persistedRows === 0) {
+    failures.push(
+      'the arm-comparison cycle wrote no row to `arm_comparison_samples` — either migration 0034 ' +
+        'did not apply or `SqliteArmComparisonSampleStore.append` stopped being called. The ' +
+        'dashboard panel (#913 surface 2) reads FL persisted samples and nothing else, so a soak ' +
+        'in this state shows "no comparison computed yet" for its whole duration',
+    );
+  }
+  if (!arms.persistedBothDrawdowns) {
+    failures.push(
+      'an `arm_comparison_samples` row came back without a finite drawdown on both arms — ' +
+        'the persisted comparison has become a return-only view, which is exactly what doc 12 D4 ' +
+        'rules out and what `ArmPerformance.max_drawdown_pct` being required exists to prevent',
+    );
+  }
+  if (arms.diverged !== arms.alerts > 0) {
+    failures.push(
+      `the arm comparison reported diverged=${String(arms.diverged)} but posted ${arms.alerts} ` +
+        'alert(s) — the divergence verdict and the escalation have come apart, so either a ' +
+        'divergence reaches nobody or an alert fires on a comparison that did not diverge (#971)',
+    );
   }
 
   // #581 — the per-asset-class round cap is wired through the composition
@@ -3932,6 +4050,18 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // is never exercised — a log-only stand-in is enough, same posture as
       // `dataFailoverAlerts` above.
       calendarFallbackAlerts: new LoggingCalendarFallbackAlertChannel(logger),
+      // #971 — the seventeenth `ALERT_CHANNEL_FIELDS` member. Log-only like the
+      // rest of this attended, offline run. The Feedback Loop's daily timer is
+      // 24h and this run lasts seconds, so this slot is never reached from the
+      // orchestrator here; the enforcement that the comparison has a caller at
+      // all is `runArmComparisonProbe`, run after `orchestrator.stop()` below,
+      // which drives the real `runArmComparisonCycle` over the tape this run
+      // just produced. That the composition root RESOLVES this slot at all is
+      // held by `satisfies Required<AlertChannels>` on this object plus
+      // `production.test.ts`'s "arm comparison runs on the daily feedback
+      // cycle" pair, which drive `buildProductionOrchestrator`'s own timer
+      // under fake timers — the one thing a seconds-long smoke run cannot.
+      armDivergenceAlerts: new LoggingArmDivergenceAlertChannel(logger),
     } satisfies Required<AlertChannels>;
 
     const orchestrator = await startFromEnvironment({
@@ -4107,6 +4237,10 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       thresholdClamp,
       dataFailover,
       riskCritic,
+      // #971. Run against the same store the observations were read from, and
+      // AFTER `orchestrator.stop()` for `readSmokeObservations`' reason: the
+      // tape has to be complete before the comparison is taken over it.
+      armComparison: runArmComparisonProbe(db),
       exitPath: {
         ...exitPathHarnessResult,
         // Alerts from BOTH the six-stage tick loop and the exit-path harness —

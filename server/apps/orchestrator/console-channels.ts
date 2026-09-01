@@ -36,6 +36,8 @@ import type {
   UnpricedFillAlertChannel,
 } from '../../pipeline/execution/index.js';
 import type {
+  ArmDivergenceAlert,
+  ArmDivergenceAlertChannel,
   BreachAlert,
   BreachAlertChannel,
   LoosenAppliedNotice,
@@ -473,6 +475,50 @@ export class LoggingDataFailoverAlertChannel implements DataFailoverAlertChannel
         fallback: alert.fallbackName,
         reported_at: alert.reported_at.toISOString(),
         suppressed_since_last: alert.suppressed_since_last,
+      },
+    });
+  }
+}
+
+/**
+ * Arm divergence, written to the log (#971).
+ *
+ * `warn`, not `error`: the matched control out-performing the debate arm is a
+ * MEASUREMENT the operator has to act on with judgement — nothing has failed,
+ * nothing was auto-tightened, and no position is unprotected. It is also not
+ * routine, which is why it is not `info`.
+ *
+ * Same caveat as every other log-only stand-in: `SAMURAI_ALERTS=log-only`
+ * cannot page anyone. `TradeChannelArmDivergenceAlert`
+ * (arm-divergence-alert-channel.ts) is the reachable-from-a-phone
+ * implementation `SAMURAI_ALERTS=telegram` (#322) selects, and #913 is explicit
+ * that the divergence must reach the trade channel.
+ */
+export class LoggingArmDivergenceAlertChannel implements ArmDivergenceAlertChannel {
+  constructor(private readonly logger: Logger) {}
+
+  postArmDivergenceAlert(alert: ArmDivergenceAlert): void {
+    const { live, control } = alert.comparison;
+    this.logger.log({
+      trace_id: 'arm-divergence',
+      stage: 'feedback-loop',
+      level: 'warn',
+      message:
+        'ARM DIVERGENCE — the matched control (falsifier arm 2) is out-performing the live ' +
+        'arm. SAMURAI_ALERTS=log-only cannot page anyone about this; use ' +
+        'SAMURAI_ALERTS=telegram for an unattended run.',
+      payload: {
+        reason: alert.reason,
+        // Both columns for both arms, never a return on its own (doc 12 D4).
+        live_return_pct: live.return_pct,
+        live_max_drawdown_pct: live.max_drawdown_pct,
+        live_trade_count: live.trade_count,
+        control_return_pct: control.return_pct,
+        control_max_drawdown_pct: control.max_drawdown_pct,
+        control_trade_count: control.trade_count,
+        window_from: alert.comparison.from.toISOString(),
+        window_to: alert.comparison.to.toISOString(),
+        reported_at: alert.reported_at.toISOString(),
       },
     });
   }

@@ -151,6 +151,7 @@ function fakeStore(overrides: Partial<DashboardQueryStore> = {}): DashboardQuery
     getAnalystWeights: () => ({}),
     getAttribution: () => ({}),
     getDailyMetrics: () => ({ ...METRICS }),
+    getArmComparisons: () => [],
     getMark: () => makeMark(0),
     getLlmSpend: () => ({
       last_24h: { ...EMPTY_SPEND_WINDOW },
@@ -574,6 +575,81 @@ describe('buildSnapshot', () => {
       buildSnapshot(store, AS_OF, 'paper');
 
       expect(askedKeys).toEqual(['K-old', 'K-new']);
+    });
+  });
+
+  /**
+   * #971 — the Feedback Loop's matched-control comparison reaches the wire.
+   *
+   * The projection is read-and-convert, never a second computation: FL owns the
+   * derivation (#636), and a `buildSnapshot` that recomputed it would put a
+   * number on the panel that FL never saw and never alerted on.
+   */
+  describe('arm comparison (#971)', () => {
+    const COMPUTED_AT = new Date('2026-07-19T11:00:00.000Z');
+
+    const SAMPLE = {
+      computed_at: COMPUTED_AT,
+      comparison: {
+        from: new Date('2026-06-19T11:00:00.000Z'),
+        to: COMPUTED_AT,
+        basis: 1_000,
+        live: {
+          arm: 'live' as const,
+          trade_count: 24,
+          realized_pnl_net: 18.4,
+          return_pct: 0.0184,
+          max_drawdown_pct: 0.021,
+        },
+        control: {
+          arm: 'control' as const,
+          trade_count: 19,
+          realized_pnl_net: 6.2,
+          return_pct: 0.0062,
+          max_drawdown_pct: 0.028,
+        },
+      },
+      divergence: { diverged: false, reason: null },
+    };
+
+    it('projects both arms with every column, dates as ISO strings', () => {
+      const snap = buildSnapshot(fakeStore({ getArmComparisons: () => [SAMPLE] }), AS_OF, 'paper');
+
+      expect(snap.arm_comparison).toEqual([
+        {
+          computed_at: '2026-07-19T11:00:00.000Z',
+          window_from: '2026-06-19T11:00:00.000Z',
+          window_to: '2026-07-19T11:00:00.000Z',
+          basis: 1_000,
+          live: SAMPLE.comparison.live,
+          control: SAMPLE.comparison.control,
+          diverged: false,
+          divergence_reason: null,
+        },
+      ]);
+    });
+
+    it('carries the divergence verdict and its reason', () => {
+      const snap = buildSnapshot(
+        fakeStore({
+          getArmComparisons: () => [
+            { ...SAMPLE, divergence: { diverged: true, reason: 'control ahead on both columns' } },
+          ],
+        }),
+        AS_OF,
+        'paper',
+      );
+
+      expect(snap.arm_comparison[0]?.diverged).toBe(true);
+      expect(snap.arm_comparison[0]?.divergence_reason).toBe('control ahead on both columns');
+    });
+
+    /** Empty is a required field holding an empty array, never an absent one. */
+    it('emits an empty array when FL has computed no comparison', () => {
+      const snap = buildSnapshot(fakeStore({ getArmComparisons: () => [] }), AS_OF, 'paper');
+
+      expect(snap.arm_comparison).toEqual([]);
+      expect('arm_comparison' in snap).toBe(true);
     });
   });
 

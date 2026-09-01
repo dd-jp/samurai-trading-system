@@ -16,9 +16,11 @@
  * is the whole point of the ticket.
  */
 import { RSI_SPEC, SMA_SPEC } from '../../pipeline/analysts/technical-analyst.js';
+import type { ArmPerformance } from '../../pipeline/control-arm/index.js';
 import { computeIndicator } from '../../providers/market-data-service/index.js';
 import { GUARDED_THRESHOLD_NAMES } from '../../shared/index.js';
 import {
+  type ArmComparisonEvidence,
   buildSmokeFixtureBars,
   ConstantResponseLlmClient,
   type CryptoEmulationEvidence,
@@ -250,9 +252,11 @@ function healthyGateOptions(
     thresholdClamp?: ThresholdClampEvidence;
     dataFailover?: DataFailoverEvidence;
     riskCritic?: RiskCriticEvidence;
+    armComparison?: ArmComparisonEvidence;
   } = {},
 ) {
   return {
+    armComparison: overrides.armComparison ?? healthyArmComparison(),
     minTicks: overrides.minTicks ?? 2,
     llmRateLimiterSnapshot: meteredSnapshot(),
     exitPath: overrides.exitPath ?? healthyExitPath(),
@@ -262,6 +266,33 @@ function healthyGateOptions(
     thresholdClamp: overrides.thresholdClamp ?? healthyThresholdClamp(),
     dataFailover: overrides.dataFailover ?? healthyDataFailover(),
     riskCritic: overrides.riskCritic ?? healthyRiskCritic(),
+  };
+}
+
+/**
+ * What `runArmComparisonProbe` (#971) reports on a healthy run: both arms
+ * derived, a sample persisted with both drawdowns, and no divergence — the
+ * smoke tape is seconds long and the control arm's intents round to zero
+ * shares, so the trade-count floor keeps divergence out of reach here.
+ */
+function healthyArmComparison(
+  overrides: Partial<ArmComparisonEvidence> = {},
+): ArmComparisonEvidence {
+  const arm = (name: 'live' | 'control'): ArmPerformance => ({
+    arm: name,
+    trade_count: 0,
+    realized_pnl_net: 0,
+    return_pct: 0,
+    max_drawdown_pct: 0,
+  });
+  return {
+    live: arm('live'),
+    control: arm('control'),
+    persistedRows: 1,
+    persistedBothDrawdowns: true,
+    diverged: false,
+    alerts: 0,
+    ...overrides,
   };
 }
 
@@ -1845,6 +1876,71 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
       const gate = evaluateSmokeGate(transactedObservations(), healthyGateOptions());
 
       expect(gate.failures.filter((failure) => failure.includes('#562'))).toEqual([]);
+    });
+  });
+
+  describe('the arm-comparison surface (#971)', () => {
+    it('fails when the cycle produced no comparison at all', () => {
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({ armComparison: healthyArmComparison({ live: null, control: null }) }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('produced no comparison');
+    });
+
+    it('fails when nothing was persisted for the dashboard panel to read', () => {
+      // The mutation this catches: drop the `samples.append(sample)` line, or
+      // migration 0034, and the panel shows "no comparison computed yet"
+      // forever while every unit test stays green.
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({ armComparison: healthyArmComparison({ persistedRows: 0 }) }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('arm_comparison_samples');
+    });
+
+    it('fails when a persisted arm came back without its drawdown', () => {
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({
+          armComparison: healthyArmComparison({ persistedBothDrawdowns: false }),
+        }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('return-only view');
+    });
+
+    it('fails when a divergence verdict reached nobody', () => {
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({
+          armComparison: healthyArmComparison({ diverged: true, alerts: 0 }),
+        }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('come apart');
+    });
+
+    it('fails when an alert fired on a comparison that did not diverge', () => {
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({ armComparison: healthyArmComparison({ alerts: 1 }) }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('come apart');
+    });
+
+    it('passes on a computed, persisted, non-diverged comparison', () => {
+      const gate = evaluateSmokeGate(transactedObservations(), healthyGateOptions());
+
+      expect(gate.failures.filter((failure) => failure.includes('arm-comparison'))).toEqual([]);
     });
   });
 

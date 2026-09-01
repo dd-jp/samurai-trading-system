@@ -22,6 +22,26 @@
  * the wire contract, the snapshot and the dashboard would be a larger change
  * than #753 asks for, and none of it would make the numbers arrive sooner.
  *
+ * ## KEPT after #971, deliberately — and what it is now FOR
+ *
+ * #971 did thread the comparison through the wire, the snapshot and the
+ * dashboard, which retires the paragraph above as a *reason not to*. It does not
+ * retire the command, because the two answer different questions:
+ *
+ *  - The dashboard panel shows what the **Feedback Loop measured** — FL's own
+ *    persisted `arm_comparison_samples` rows, on FL's cadence, over FL's fixed
+ *    30-day window. That is the point: the panel and the divergence alert must
+ *    read the same row, or the page and the alert can disagree.
+ *  - This command recomputes from `closed_trades` **ad hoc**, over any window
+ *    the operator names, against any store path — including a store whose
+ *    orchestrator never ran an FL cycle, or a historical window that predates
+ *    the sample series entirely. FL cannot answer those, by construction.
+ *
+ * It is also the independent check on the panel. If this command and the panel
+ * ever disagree over the same window, one of them is wrong, and having two
+ * routes to the number is what makes that discoverable at all. Retiring it would
+ * leave the persisted samples unfalsifiable by anything but reading SQL by hand.
+ *
  * ## Testability
  *
  * `formatArmComparison` is pure and takes an `ArmComparison`. The store is

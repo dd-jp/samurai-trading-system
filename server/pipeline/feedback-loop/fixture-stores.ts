@@ -11,7 +11,14 @@
  */
 import type { ClosedTrade, ClosedTradeStore, TuningStore } from '../../shared/index.js';
 import { assertThresholdWithinBounds } from '../../shared/index.js';
-import type { Adjustment, AdjustmentLog, BreachAlert, BreachAlertChannel } from './types.js';
+import type {
+  Adjustment,
+  AdjustmentLog,
+  ArmComparisonSample,
+  ArmComparisonSampleStore,
+  BreachAlert,
+  BreachAlertChannel,
+} from './types.js';
 
 export class InMemoryClosedTradeStore implements ClosedTradeStore {
   private readonly trades: ClosedTrade[];
@@ -114,6 +121,27 @@ export class InMemoryAdjustmentLog implements AdjustmentLog {
   /** Append-only: the log is read back in write order, never edited. */
   getEntries(): readonly Adjustment[] {
     return this.entries;
+  }
+}
+
+/**
+ * In-memory arm-comparison samples (#971) — the offline/backtest pair for
+ * `SqliteArmComparisonSampleStore`, same relationship every other store on this
+ * file has to its SQLite twin.
+ */
+export class InMemoryArmComparisonSampleStore implements ArmComparisonSampleStore {
+  private readonly samples: ArmComparisonSample[] = [];
+
+  append(sample: ArmComparisonSample): void {
+    this.samples.push(sample);
+  }
+
+  /** Most-recently-computed first, `asOf`-bounded — the SQLite store's contract. */
+  getRecent(limit: number, asOf: Date): ArmComparisonSample[] {
+    return this.samples
+      .filter((sample) => sample.computed_at.getTime() <= asOf.getTime())
+      .sort((a, b) => b.computed_at.getTime() - a.computed_at.getTime())
+      .slice(0, limit);
   }
 }
 

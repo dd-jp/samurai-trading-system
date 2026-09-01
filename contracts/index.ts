@@ -50,6 +50,8 @@ export type {
 } from './providers.js';
 export type {
   AnalystPerformanceRow,
+  ArmComparisonRow,
+  ArmPerformanceWire,
   ClosedTradeRow,
   CloseReason,
   DashboardSnapshot,
@@ -61,5 +63,6 @@ export type {
   MetricsSuiteWire,
   PositionRow,
   TickStatus,
+  TradingArmWire,
   VerdictRow,
 } from './snapshot.js';

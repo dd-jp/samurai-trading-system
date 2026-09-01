@@ -23,6 +23,7 @@ import type {
   LlmSpendSummary,
   TickStatus,
 } from '../../../contracts/snapshot.js';
+import type { ArmComparisonSample } from '../../pipeline/feedback-loop/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
 import type { ClosedTrade, DebateLog, Fill, OpenPosition } from '../../shared/index.js';
 import type { ProviderStatusReader } from './provider-status.js';
@@ -33,6 +34,8 @@ import type { ProviderStatusReader } from './provider-status.js';
  */
 export type {
   AnalystPerformanceRow,
+  ArmComparisonRow,
+  ArmPerformanceWire,
   ClosedTradeRow,
   CloseReason,
   DashboardSnapshot,
@@ -189,6 +192,18 @@ export interface DashboardQueryStore {
   getAnalystWeights(asOf: Date): Record<string, number>;
   getAttribution(asOf: Date): Record<string, AttributionSummary>;
   getDailyMetrics(asOf: Date): MetricsSuite;
+  /**
+   * The Feedback Loop's persisted matched-control comparisons (#971),
+   * most-recently-computed first — the panel's whole data source.
+   *
+   * Returns FL's own `ArmComparisonSample`, not a dashboard-local shape: this
+   * store "defines no competing shapes for data owned elsewhere", and the
+   * comparison is owned by the Feedback Loop (#636). It is read here rather
+   * than recomputed at snapshot time because recomputing would move the
+   * computation out of FL and show a number FL never saw and never alerted on
+   * — see migration 0034's own comment.
+   */
+  getArmComparisons(limit: number, asOf: Date): ArmComparisonSample[];
   getMark(instrument: string, asOf: Date): Mark;
   /**
    * Batched `getMark` — one query for a whole position list instead of one per

@@ -58,6 +58,11 @@ const TABLES = [
   // `backtest` run reads what a `live`/`paper` run wrote instead of calling
   // the model again.
   'risk_critic_log',
+  // `arm_comparison_samples` (0034) — the Feedback Loop's own record of every
+  // matched-control comparison it computed and of the ones it escalated (#971,
+  // under #636/#913). Persisted rather than recomputed because the dashboard
+  // reads it from a different process, and because a trend needs a series.
+  'arm_comparison_samples',
 ];
 
 /**
@@ -66,7 +71,7 @@ const TABLES = [
  * That prose number silently drifted twice (it read "twenty" and "twenty-one"
  * simultaneously while the schema held 22), so it is pinned here.
  */
-const CONSOLIDATED_SCHEMA_TABLE_COUNT = 29;
+const CONSOLIDATED_SCHEMA_TABLE_COUNT = 30;
 
 const tempDirs: string[] = [];
 
@@ -151,6 +156,7 @@ describe('openSharedStore', () => {
       { version: 31 },
       { version: 32 },
       { version: 33 },
+      { version: 34 },
     ]);
     expect(runMigrations(db)).toEqual([]);
     expect(db.prepare('SELECT version FROM schema_migrations').all()).toEqual([
@@ -187,6 +193,7 @@ describe('openSharedStore', () => {
       { version: 31 },
       { version: 32 },
       { version: 33 },
+      { version: 34 },
     ]);
   });
 

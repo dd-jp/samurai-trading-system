@@ -30,7 +30,12 @@
 
 import { PIPELINE_STAGES, type PipelineStage } from '../../../contracts/pipeline.js';
 import type { AnalystContribution, Direction } from '../../pipeline/debate-engine/index.js';
-import { creditForContribution, realizedR } from '../../pipeline/feedback-loop/index.js';
+import type { ArmComparisonSample } from '../../pipeline/feedback-loop/index.js';
+import {
+  creditForContribution,
+  realizedR,
+  SqliteArmComparisonSampleStore,
+} from '../../pipeline/feedback-loop/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
 import type { ClosedTrade, DebateLog, Fill, OpenPosition, OrderState } from '../../shared/index.js';
 import {
@@ -232,10 +237,15 @@ export class SqliteQueryStore implements DashboardQueryStore {
   /** How far back `getAttribution` looks for closed trades. No home in the schema
    * (`attribution_window_ms` is a `FeedbackConfig` field, not a persisted value) —
    * taken as a constructor option, defaulting to the fixture's 30 days. */
+  /** #971: the Feedback Loop's own sample store, read (never written) here. */
+  private readonly armComparisons: SqliteArmComparisonSampleStore;
+
   constructor(
     private readonly db: SharedStore,
     private readonly attributionWindowDays = 30,
-  ) {}
+  ) {
+    this.armComparisons = new SqliteArmComparisonSampleStore(db);
+  }
 
   /**
    * **LIVE arm only (#753)**, like every other read on this store. The dashboard
@@ -449,6 +459,17 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * `unpriced_calls` is counted alongside so the omission is visible rather
    * than silently understating the total.
    */
+  /**
+   * Delegated to the Feedback Loop's own store (#971) rather than re-issuing
+   * its SELECT here: the orchestrator process writes `arm_comparison_samples`
+   * through `SqliteArmComparisonSampleStore` and this process reads it, and two
+   * hand-written copies of the same row mapping is exactly how a column gets
+   * dropped on one side. Built once per query store, not per request.
+   */
+  getArmComparisons(limit: number, asOf: Date): ArmComparisonSample[] {
+    return this.armComparisons.getRecent(limit, asOf);
+  }
+
   getLlmSpend(asOf: Date): LlmSpendSummary {
     const until = toStoredTimestamp(asOf);
     const dayAgo = toStoredTimestamp(new Date(asOf.getTime() - 24 * 60 * 60 * 1000));
