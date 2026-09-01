@@ -1,0 +1,131 @@
+/**
+ * The surface half of #753's AC5: the *report* cannot show a return without the
+ * drawdown beside it.
+ *
+ * `arm-comparison.test.ts` holds the type half — `ArmPerformance` has a required
+ * `max_drawdown_pct`, enforced by a `@ts-expect-error`. That is necessary and not
+ * sufficient: a renderer is free to select one field and drop the other, and AC5
+ * is worded about what the report can produce, not about what the builder
+ * returns. These tests read the rendered text.
+ */
+import { describe, expect, it } from 'vitest';
+import { buildArmComparison } from '../pipeline/control-arm/index.js';
+import type { ClosedTrade, TradingArm } from '../shared/index.js';
+import {
+  DEFAULT_WINDOW_DAYS,
+  formatArmComparison,
+  parseWindowDays,
+} from './report-arm-comparison.js';
+
+const FROM = new Date('2026-09-01T00:00:00.000Z');
+const TO = new Date('2026-09-30T00:00:00.000Z');
+
+function trade(arm: TradingArm, pnl: number, closedAt: string): ClosedTrade & { arm: TradingArm } {
+  return {
+    arm,
+    idempotency_key: `${arm}-${closedAt}`,
+    debate_id: arm === 'control' ? 'control:abc' : 'debate-abc',
+    instrument: '3LUS',
+    asset_class: 'stocks',
+    side: 'buy',
+    entry: 100,
+    stop: 98,
+    filled_size: 3,
+    realized_pnl_net: pnl,
+    fees_total: 0,
+    opened_at: FROM,
+    closed_at: new Date(closedAt),
+    close_reason: 'target',
+  };
+}
+
+function report(): string {
+  return formatArmComparison(
+    buildArmComparison({
+      basis: 1_000,
+      from: FROM,
+      to: TO,
+      trades: [
+        trade('live', 40, '2026-09-02T00:00:00.000Z'),
+        trade('live', -10, '2026-09-03T00:00:00.000Z'),
+        // The control ends AHEAD on return with a deeper hole first — doc 12
+        // D4's exact scenario, and the reason both figures must be on the page.
+        trade('control', -30, '2026-09-02T12:00:00.000Z'),
+        trade('control', 90, '2026-09-04T00:00:00.000Z'),
+      ],
+    }),
+  );
+}
+
+describe('formatArmComparison (#753 AC4/AC5)', () => {
+  it('prints return AND drawdown for BOTH arms', () => {
+    const text = report();
+
+    // live: +30 on 1000 with a 10 fall from the 40 peak.
+    expect(text).toMatch(/live\s+2\s+30\.00\s+3\.00%\s+1\.00%/);
+    // control: +60 on 1000 with a 30 hole first.
+    expect(text).toMatch(/control\s+2\s+60\.00\s+6\.00%\s+3\.00%/);
+  });
+
+  /**
+   * The structural claim: every line that carries a return also carries a
+   * drawdown. If someone later adds a summary line printing only `return_pct`,
+   * this fails — which is the whole point of testing the rendered text rather
+   * than the object it came from.
+   */
+  it('emits no line carrying a return without a drawdown beside it', () => {
+    const percentages = report()
+      .split('\n')
+      .map((line) => line.match(/-?\d+\.\d\d%/g) ?? [])
+      .filter((matches) => matches.length > 0);
+
+    expect(percentages).toHaveLength(2);
+    for (const matches of percentages) {
+      expect(matches).toHaveLength(2);
+    }
+  });
+
+  it('names the shared window and the shared denominator — AC4 is one tape, one basis', () => {
+    const text = report();
+
+    expect(text).toContain(FROM.toISOString());
+    expect(text).toContain(TO.toISOString());
+    expect(text).toContain('the same denominator for both arms');
+  });
+
+  /**
+   * A silent zero is the failure mode the control arm's own fill-sync loop
+   * exists to prevent, and the report must not let it read as a finding.
+   */
+  it('warns rather than reporting a clean zero when the control closed nothing', () => {
+    const text = formatArmComparison(
+      buildArmComparison({
+        basis: 1_000,
+        from: FROM,
+        to: TO,
+        trades: [trade('live', 40, '2026-09-02T00:00:00.000Z')],
+      }),
+    );
+
+    expect(text).toContain('the control arm actually ran');
+    // Still a full row — the warning supplements the numbers, it does not
+    // replace them.
+    expect(text).toMatch(/control\s+0\s+0\.00\s+0\.00%\s+0\.00%/);
+  });
+});
+
+describe('parseWindowDays', () => {
+  it('defaults when no window is given', () => {
+    expect(parseWindowDays([])).toBe(DEFAULT_WINDOW_DAYS);
+  });
+
+  it('reads an explicit window', () => {
+    expect(parseWindowDays(['--days', '7'])).toBe(7);
+  });
+
+  it('refuses a window that would silently produce an empty or reversed report', () => {
+    for (const bad of [['--days', '0'], ['--days', '-3'], ['--days', 'soon'], ['--days']]) {
+      expect(() => parseWindowDays(bad)).toThrow(/--days must be a positive number of days/);
+    }
+  });
+});

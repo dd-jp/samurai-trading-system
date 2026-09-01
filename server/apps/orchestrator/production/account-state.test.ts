@@ -7,7 +7,7 @@ import {
   type TradingCalendar,
   UsEquityRegularHoursCalendar,
 } from '../../../providers/market-data-service/index.js';
-import type { ClosedTrade } from '../../../shared/index.js';
+import type { ClosedTrade, TradingArm } from '../../../shared/index.js';
 import { openSharedStore, type SharedStore } from '../../../shared/store/index.js';
 import { SqliteAccountStateStore } from '../sqlite-account-state-store.js';
 import { SqliteDailyEquityStore } from '../sqlite-daily-equity-store.js';
@@ -110,15 +110,22 @@ function makeTradeReader(trades: ClosedTrade[]): ClosedTradeReader {
  */
 function insertClosedTrade(
   db: SharedStore,
-  args: { key: string; assetClass: 'crypto' | 'stocks'; pnl: number; closedAt: Date },
+  args: {
+    key: string;
+    assetClass: 'crypto' | 'stocks';
+    pnl: number;
+    closedAt: Date;
+    /** #753. Defaults to the live arm, which is what every pre-#753 row was. */
+    arm?: TradingArm;
+  },
 ): void {
   const closedAt = args.closedAt.toISOString();
   db.prepare(
     `INSERT INTO closed_trades (
        idempotency_key, debate_id, instrument, asset_class, side,
        entry, stop, filled_size, realized_pnl_net, fees_total,
-       opened_at, closed_at, close_reason
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       opened_at, closed_at, close_reason, arm
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     args.key,
     'debate-abc123',
@@ -133,6 +140,7 @@ function insertClosedTrade(
     closedAt,
     closedAt,
     'stop',
+    args.arm ?? 'live',
   );
 }
 
@@ -309,6 +317,42 @@ describe('SqliteSessionEquityStore', () => {
       // null leaking out here would become NaN in the division.
       expect(sessionEquity.realizedSince('crypto', new Date(CRYPTO_OPEN))).toBe(0);
       expect(sessionEquity.realizedSinceAllClasses(new Date(CRYPTO_OPEN))).toBe(0);
+    } finally {
+      cleanup();
+    }
+  });
+
+  /**
+   * #753. This sum is the `daily_basis` numerator, and `daily_basis` is what the
+   * daily-loss circuit breaker trips on for the arm holding real capital.
+   * Falsifier arm 2 writes into the SAME `closed_trades` table, so an unfiltered
+   * sum would let a control-arm loss tighten the live breaker and a control-arm
+   * gain loosen it — the shadow measurement steering the live book. Giving the
+   * control arm its own `CircuitBreakers` instance does not fix this on its own:
+   * both instances would still divide by one contaminated basis.
+   */
+  it('sums the live arm only — falsifier arm 2 must not move the live breaker (#753)', () => {
+    const { db, sessionEquity, cleanup } = openStore();
+    try {
+      const after = new Date(new Date(CRYPTO_OPEN).getTime() + 60_000);
+      insertClosedTrade(db, { key: 'live-1', assetClass: 'crypto', pnl: -50, closedAt: after });
+      insertClosedTrade(db, {
+        key: 'control-1',
+        assetClass: 'crypto',
+        pnl: -5_000,
+        closedAt: after,
+        arm: 'control',
+      });
+      insertClosedTrade(db, {
+        key: 'control-2',
+        assetClass: 'stocks',
+        pnl: 9_000,
+        closedAt: after,
+        arm: 'control',
+      });
+
+      expect(sessionEquity.realizedSince('crypto', new Date(CRYPTO_OPEN))).toBe(-50);
+      expect(sessionEquity.realizedSinceAllClasses(new Date(CRYPTO_OPEN))).toBe(-50);
     } finally {
       cleanup();
     }
