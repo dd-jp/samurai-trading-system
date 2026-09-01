@@ -41,6 +41,23 @@ export { CircuitBreakers } from './breakers.js';
 export { countryForInstrument, trackedCountries } from './cii-mapping.js';
 export type { CorrelationConfig, CorrelationEstimateInput } from './correlation.js';
 export { computeCorrelationEstimate } from './correlation.js';
+export type {
+  BuildRiskCriticProducerOptions,
+  CriticHeldPosition,
+  LlmRiskCriticProducerOptions,
+  ReplayRiskCriticProducerOptions,
+  RiskCriticProducer,
+  RiskCriticRequest,
+} from './critic.js';
+export {
+  buildRiskCriticProducer,
+  DEFAULT_CRITIC_BUDGET_MS,
+  LlmRiskCriticProducer,
+  parseCriticVerdict,
+  ReplayRiskCriticProducer,
+  renderCriticPrompt,
+} from './critic.js';
+export { InMemoryRiskCriticStore, SqliteRiskCriticStore } from './critic-store.js';
 export type { PortfolioAccountingInput } from './portfolio-view.js';
 export { computePortfolioView } from './portfolio-view.js';
 export {
@@ -78,6 +95,19 @@ export type {
  * called `CircuitBreakers.getPersistedState()` to build this input)
  * persists the echoed value to the `breaker_state` table after each call.
  */
+
+/**
+ * The reason pushed when step 7 runs with no verdict on `RiskInput.critic`.
+ *
+ * EXPORTED, and that is load-bearing since #957. `buildRiskStep`
+ * (apps/orchestrator/production/direct-bind.ts) evaluates once with no verdict
+ * and consults the critic only when that pass actually REACHED step 7 — the
+ * presence of this reason is how it knows. A string matched by hand in the
+ * caller would be a cross-module contract nothing enforces; one constant, read
+ * from both sides, cannot drift.
+ */
+export const RISK_CRITIC_SKIPPED_REASON =
+  'risk_critic: skipped — no critic verdict was supplied for this evaluation';
 
 /**
  * CII soft signal (#205, ADR-0002): runs alongside the check pipeline, not
@@ -313,13 +343,15 @@ export class RiskManagerImpl implements RiskManager {
       return rejected('min_viable_size', reasons);
     }
 
-    // Risk-critic review (#204).
+    // Risk-critic review (#204; producer built by #957 in `critic.ts`).
     if (critic === undefined) {
-      // Fails open BY RECORD, not silently (review 2026-08-06 B3): no producer
-      // for the critic exists yet, and until one does, every decision must be
-      // distinguishable from one the critic actually passed. The mechanical
-      // steps above remain the safety net.
-      reasons.push('risk_critic: skipped — no critic verdict was supplied for this evaluation');
+      // Fails open BY RECORD, not silently (review 2026-08-06 B3): a decision
+      // the critic never saw must stay distinguishable from one it actually
+      // passed. Since #957 this is the producer's failure path — a provider
+      // error, a spend-cap refusal, an unreadable answer, or a backtest
+      // replaying history the critic never saw — rather than the permanent
+      // state it used to be. The mechanical steps above remain the safety net.
+      reasons.push(RISK_CRITIC_SKIPPED_REASON);
     }
     if (critic) {
       const criticTrim = applyCritic(critic, notional, finalSize, reasons);

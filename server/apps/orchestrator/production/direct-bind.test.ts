@@ -1,7 +1,14 @@
 import type { DebateResult } from '../../../pipeline/debate-engine/index.js';
 import { type ExecutionConfig, SqliteExecutionStore } from '../../../pipeline/execution/index.js';
-import type { RiskConfig } from '../../../pipeline/risk-manager/index.js';
-import { CircuitBreakers } from '../../../pipeline/risk-manager/index.js';
+import type {
+  RiskConfig,
+  RiskCriticProducer,
+  RiskCriticVerdict,
+} from '../../../pipeline/risk-manager/index.js';
+import {
+  CircuitBreakers,
+  RISK_CRITIC_SKIPPED_REASON,
+} from '../../../pipeline/risk-manager/index.js';
 import {
   ADR_0018_SUBCLASS_BRACKETS,
   DEFAULT_EARLY_EXIT_CONFIG,
@@ -1780,6 +1787,217 @@ describe('buildRiskStep', () => {
       // Nothing persisted from the degraded path either — the strict path is
       // the only writer of `breaker_state`.
       expect(saved).toHaveLength(0);
+    });
+  });
+
+  /**
+   * #957: the risk critic's CADENCE, which is the half that lives here rather
+   * than in the producer. The producer answers; this step decides WHEN to ask,
+   * and #955 specifies "every intent that reaches step 7" — every viable entry
+   * that survived the exit bypass, the breaker gate and the `min_viable_size`
+   * reject. Each test below is one of those survivals, or one of the exits
+   * that must NOT be paid for.
+   */
+  describe('risk critic (#957)', () => {
+    const BREAKER_CONFIG = {
+      daily_loss_pct: 0.05,
+      daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
+      max_drawdown_pct: 0.2,
+      max_consecutive_losses: 5,
+      volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
+      auto_rearm: { recovery_drawdown_pct: 0.05, max_days_tripped: 5 },
+    } as const;
+
+    /** A producer that records what it was asked and answers with `verdict`. */
+    function recordingCritic(verdict?: RiskCriticVerdict): {
+      critic: RiskCriticProducer;
+      asks: { instrument: string; held: string[] }[];
+    } {
+      const asks: { instrument: string; held: string[] }[] = [];
+      return {
+        asks,
+        critic: {
+          produce: async (request) => {
+            asks.push({
+              instrument: request.intent.instrument,
+              held: request.portfolio.held.map((position) => position.instrument),
+            });
+            return verdict;
+          },
+        },
+      };
+    }
+
+    function step(
+      overrides: {
+        critic?: RiskCriticProducer;
+        config?: RiskConfig;
+        peakEquity?: number;
+        riskLog?: { write: (record: unknown) => void };
+      } = {},
+    ) {
+      return buildRiskStep({
+        config: overrides.config ?? RISK_CONFIG,
+        correlationConfig: { window: { timeframe: '1d', lookback: 30 }, min_bars: 5 },
+        ciiConsumer: { getScores: vi.fn(() => ({})) },
+        marketData: FAKE_MARKET_DATA,
+        circuitBreakers: new CircuitBreakers(BREAKER_CONFIG),
+        accountState:
+          overrides.peakEquity === undefined
+            ? FAKE_ACCOUNT_STATE
+            : {
+                getAccountState: vi.fn(async () => ({
+                  cash: 0,
+                  peak_equity: overrides.peakEquity as number,
+                  daily_basis: {
+                    crypto: { known: true, open_equity: 1_000_000, realized_pnl: 0 },
+                    stocks: { known: true, open_equity: 1_000_000, realized_pnl: 0 },
+                    portfolio: { known: true, open_equity: 1_000_000, realized_pnl: 0 },
+                  } as const,
+                  consecutive_losses: 0,
+                })),
+              },
+        volatility: FAKE_VOLATILITY,
+        getOpenPositions: async () => NO_POSITIONS,
+        maxMarkAge: TEST_MAX_MARK_AGE,
+        mode: 'paper',
+        breakerState: NOOP_BREAKER_STATE,
+        portfolioSnapshots: new Map(),
+        ...(overrides.critic === undefined ? {} : { critic: overrides.critic }),
+        ...(overrides.riskLog === undefined ? {} : { riskLog: overrides.riskLog }),
+      });
+    }
+
+    it('consults the critic on a viable entry, and shows it the book', async () => {
+      const { critic, asks } = recordingCritic();
+
+      await step({ critic })({ trace_id: TRACE_ID, intent: makeIntent(), clock: CLOCK });
+
+      expect(asks).toHaveLength(1);
+      expect(asks[0]?.instrument).toBe('AAPL');
+      // The co-catalyst read ADR-0003 §1 names as the blind spot needs the
+      // rest of the book, not just this intent.
+      expect(asks[0]?.held).toBeDefined();
+    });
+
+    it('a reject verdict binds the decision, with the critic’s own words in the record', async () => {
+      const writes: { binding_constraint: string | null; reasons: string[] }[] = [];
+      const { critic } = recordingCritic({
+        verdict: 'reject',
+        max_notional: null,
+        reasoning: 'every open leg rides the same CPI print',
+      });
+
+      const decision = await step({
+        critic,
+        riskLog: { write: (record) => writes.push(record as (typeof writes)[number]) },
+      })({ trace_id: TRACE_ID, intent: makeIntent(), clock: CLOCK });
+
+      expect(decision.status).toBe('rejected');
+      expect(decision.binding_constraint).toBe('risk_critic:reject');
+      expect(decision.reasons.join(' ')).toContain('same CPI print');
+      // ONE row, not one per evaluate pass — the dry run is discarded.
+      expect(writes).toHaveLength(1);
+      expect(writes[0]?.binding_constraint).toBe('risk_critic:reject');
+    });
+
+    it('a trim verdict only ever reduces the position', async () => {
+      const { critic } = recordingCritic({
+        verdict: 'trim',
+        max_notional: 400,
+        reasoning: 'halve it until the print lands',
+      });
+
+      const decision = await step({ critic })({
+        trace_id: TRACE_ID,
+        // 10 x $100 = $1,000 of notional proposed.
+        intent: makeIntent({ size: 10, entry: 100 }),
+        clock: CLOCK,
+      });
+
+      expect(decision.status).toBe('approved');
+      expect(decision.binding_constraint).toBe('risk_critic:trim');
+      expect(decision.order_intent?.size).toBe(4);
+    });
+
+    it('no verdict leaves the decision on the mechanical steps, by record', async () => {
+      // The fail-open path the ticket requires to stay intact: a producer-side
+      // failure returns `undefined`, and the decision must stay
+      // distinguishable from one the critic actually passed.
+      const { critic } = recordingCritic(undefined);
+
+      const decision = await step({ critic })({
+        trace_id: TRACE_ID,
+        intent: makeIntent(),
+        clock: CLOCK,
+      });
+
+      expect(decision.status).toBe('approved');
+      expect(decision.reasons).toContain(RISK_CRITIC_SKIPPED_REASON);
+    });
+
+    it('a producer that THROWS does not take the tick down', async () => {
+      const decision = await step({
+        critic: {
+          produce: () => Promise.reject(new Error('producer exploded')),
+        },
+      })({ trace_id: TRACE_ID, intent: makeIntent(), clock: CLOCK });
+
+      expect(decision.status).toBe('approved');
+      expect(decision.reasons).toContain(RISK_CRITIC_SKIPPED_REASON);
+    });
+
+    it('with no producer wired at all, nothing changes from before #957', async () => {
+      const decision = await step()({
+        trace_id: TRACE_ID,
+        intent: makeIntent(),
+        clock: CLOCK,
+      });
+
+      expect(decision.status).toBe('approved');
+      expect(decision.reasons).toContain(RISK_CRITIC_SKIPPED_REASON);
+    });
+
+    it('never pays for an EXIT — exits bypass the entry gates and never reach step 7', async () => {
+      const { critic, asks } = recordingCritic();
+
+      const decision = await step({ critic })({
+        trace_id: TRACE_ID,
+        intent: makeIntent({ intent_type: 'exit' }),
+        clock: CLOCK,
+      });
+
+      expect(decision.status).toBe('approved');
+      expect(asks).toHaveLength(0);
+    });
+
+    it('never pays for an entry a circuit breaker already refused', async () => {
+      const { critic, asks } = recordingCritic();
+
+      const decision = await step({ critic, peakEquity: 1_000_000 })({
+        trace_id: TRACE_ID,
+        intent: makeIntent(),
+        clock: CLOCK,
+      });
+
+      expect(decision.binding_constraint).toBe('circuit_breaker:portfolio');
+      expect(asks).toHaveLength(0);
+    });
+
+    it('never pays for an entry trimmed below the min-viable floor', async () => {
+      const { critic, asks } = recordingCritic();
+
+      const decision = await step({
+        critic,
+        config: {
+          ...RISK_CONFIG,
+          per_asset_class_cap_fraction_of_equity: { crypto: 10, stocks: 0.0005 },
+          min_viable_size: 100,
+        },
+      })({ trace_id: TRACE_ID, intent: makeIntent({ size: 10, entry: 100 }), clock: CLOCK });
+
+      expect(decision.binding_constraint).toBe('min_viable_size');
+      expect(asks).toHaveLength(0);
     });
   });
 });

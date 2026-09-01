@@ -53,6 +53,11 @@ const TABLES = [
   // against and a lost `submitFlatten` response had no clientOrderId for
   // reconcile to resolve.
   'flatten_submissions',
+  // `risk_critic_log` (0032) — the risk critic's `debate_id`-keyed verdict
+  // (#957). ADR-0003 §2's replay-from-log determinism lives in this table: a
+  // `backtest` run reads what a `live`/`paper` run wrote instead of calling
+  // the model again.
+  'risk_critic_log',
 ];
 
 /**
@@ -61,7 +66,7 @@ const TABLES = [
  * That prose number silently drifted twice (it read "twenty" and "twenty-one"
  * simultaneously while the schema held 22), so it is pinned here.
  */
-const CONSOLIDATED_SCHEMA_TABLE_COUNT = 28;
+const CONSOLIDATED_SCHEMA_TABLE_COUNT = 29;
 
 const tempDirs: string[] = [];
 
@@ -144,6 +149,7 @@ describe('openSharedStore', () => {
       { version: 29 },
       { version: 30 },
       { version: 31 },
+      { version: 32 },
     ]);
     expect(runMigrations(db)).toEqual([]);
     expect(db.prepare('SELECT version FROM schema_migrations').all()).toEqual([
@@ -178,6 +184,7 @@ describe('openSharedStore', () => {
       { version: 29 },
       { version: 30 },
       { version: 31 },
+      { version: 32 },
     ]);
   });
 

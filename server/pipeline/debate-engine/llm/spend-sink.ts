@@ -35,15 +35,19 @@ export interface LlmSpendRecord {
   /**
    * Which pipeline stage issued the call, for attributing an unexpected bill.
    *
-   * Today this is always `'debate'`, and that is a fact about the system
-   * rather than a gap in the plumbing: the debate personas
-   * (`debate-engine/personas.ts`) and `detectDisagreements` are the ONLY
-   * `LlmClient.complete()` call sites in the codebase. The three analysts
-   * (technical, fundamental, sentiment) are deterministic numeric scorers —
-   * `sentiment-analyst.ts` says so in its own header: "over the
-   * primary/context inputs, not an LLM call" — so there is no Analyst-stage
-   * spend to record. The column stays because the day an analyst becomes
-   * LLM-backed, its calls must not silently land in the debate's cost.
+   * `'debate'` was the only value until #957, which added `'risk_critic'`
+   * (`risk-manager/critic.ts`) — check-pipeline step 7's single pass, ~1-2
+   * calls a day. Both bill through the SAME `LlmClient`, so the distinction
+   * lives entirely in this column: without it the critic's cost would land
+   * inside the debate's, which is exactly the confusion the column exists to
+   * prevent. Its rows still carry `debate_id`, so the per-decision totals on
+   * the dashboard (`getLlmSpend`, which applies no stage filter) attribute it
+   * to the decision it was spent on, which is the honest place for it.
+   *
+   * The three analysts (technical, fundamental, sentiment) are deterministic
+   * numeric scorers — `sentiment-analyst.ts` says so in its own header: "over
+   * the primary/context inputs, not an LLM call" — so there is still no
+   * Analyst-stage spend to record.
    */
   stage: string;
   /**
