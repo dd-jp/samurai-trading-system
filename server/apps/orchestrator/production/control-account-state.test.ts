@@ -190,11 +190,8 @@ describe('ControlArmAccountStateProvider (#753)', () => {
       // book + realized (100 − 40) − deployed (25 × 4)
       expect(state.cash).toBeCloseTo(BOOK + 60 - 100, 9);
       // The realized high-water mark: book + 100 was reached before the loss,
-      // and the loss gives cash back without giving the PEAK back (#972 fix 1
-      // — this assertion used to read `BOOK + 60`, the net rather than the
-      // true intra-sequence high, which is the exact bug #972's first fix
-      // closes; this comment already said "book + 100" before that fix
-      // landed, so only the number below was wrong).
+      // and the loss gives cash back without giving the PEAK back to a level
+      // the net final balance alone would understate.
       expect(state.peak_equity).toBe(BOOK + 100);
       expect(state.consecutive_losses).toBe(1);
 
@@ -609,7 +606,11 @@ describe('buildControlBookAnchorResolver (#753)', () => {
           liveAccountState: accountReturning(5_000, 5_000),
           store: new SqliteAccountStateStore(db, CONTROL_BOOK_ANCHOR_KEY),
           fallbackBook: BOOK,
-          liveBookCeiling: { book: BOOK, refuse_above_tolerance: 0.1, same_currency_verified: true },
+          liveBookCeiling: {
+            book: BOOK,
+            refuse_above_tolerance: 0.1,
+            same_currency_verified: true,
+          },
         });
 
         expect(await resolve(AS_OF)).toBe(BOOK);
