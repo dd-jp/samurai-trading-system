@@ -104,6 +104,18 @@ function isBelowTradeFloor(row: ArmComparisonRow): boolean {
   );
 }
 
+type ArmVerdictState = 'diverged' | 'below-floor' | 'ok';
+
+/**
+ * The one classification both the headline and the trend list render from —
+ * computed once so the two views cannot drift into naming a row differently.
+ */
+function armVerdictState(row: ArmComparisonRow): ArmVerdictState {
+  if (row.diverged && row.divergence_reason !== null) return 'diverged';
+  if (isBelowTradeFloor(row)) return 'below-floor';
+  return 'ok';
+}
+
 export function ArmComparisonPanel({ comparisons }: ArmComparisonPanelProps) {
   const latest = comparisons[0];
 
@@ -129,30 +141,38 @@ export function ArmComparisonPanel({ comparisons }: ArmComparisonPanelProps) {
             <ArmRow arm={latest.live} />
             <ArmRow arm={latest.control} />
           </ul>
-          {latest.diverged && latest.divergence_reason !== null ? (
-            <p className="arm-divergence">DIVERGED: {latest.divergence_reason}.</p>
-          ) : isBelowTradeFloor(latest) ? (
-            <p className="arm-divergence arm-below-floor">
-              Not enough closed trades yet for a verdict — the floor is {latest.min_trades_per_arm}{' '}
-              per arm (live {latest.live.trade_count}, control {latest.control.trade_count}).
-            </p>
-          ) : (
-            <p className="arm-divergence arm-ok">
-              Did not diverge: the control is not ahead of the live arm on both return and drawdown
-              together.
-            </p>
-          )}
+          {(() => {
+            const state = armVerdictState(latest);
+            if (state === 'diverged') {
+              return <p className="arm-divergence">DIVERGED: {latest.divergence_reason}.</p>;
+            }
+            if (state === 'below-floor') {
+              return (
+                <p className="arm-divergence arm-below-floor">
+                  Not enough closed trades yet for a verdict — the floor is{' '}
+                  {latest.min_trades_per_arm} per arm (live {latest.live.trade_count}, control{' '}
+                  {latest.control.trade_count}).
+                </p>
+              );
+            }
+            return (
+              <p className="arm-divergence arm-ok">
+                Did not diverge: the control is not ahead of the live arm on both return and
+                drawdown together.
+              </p>
+            );
+          })()}
           {comparisons.length > 1 ? (
             <ul className="arm-trend">
               {comparisons.map((row) => {
-                const belowFloor = !row.diverged && isBelowTradeFloor(row);
+                const state = armVerdictState(row);
                 return (
                   <li
                     key={row.computed_at}
                     className={
-                      row.diverged
+                      state === 'diverged'
                         ? 'arm-trend-diverged'
-                        : belowFloor
+                        : state === 'below-floor'
                           ? 'arm-trend-below-floor'
                           : ''
                     }
@@ -166,7 +186,7 @@ export function ArmComparisonPanel({ comparisons }: ArmComparisonPanelProps) {
                       control {formatPercent(row.control.return_pct, 2)} /{' '}
                       {formatPercent(row.control.max_drawdown_pct, 2)} dd
                     </span>
-                    {belowFloor ? <span>below floor</span> : null}
+                    {state === 'below-floor' ? <span>below floor</span> : null}
                   </li>
                 );
               })}

@@ -1592,14 +1592,12 @@ main {
 }
 
 /*
- * A below-floor trend row is an absent verdict, not an escalation — it must
- * not inherit `.arm-trend-diverged`'s alert colour (#982). Left at the
- * `.arm-trend` default (muted); the "below floor" word carried in the row's
- * own markup is what distinguishes it, not colour alone.
+ * `.arm-trend-below-floor` carries no rule here on purpose: a below-floor row
+ * is an absent verdict, not an escalation, so it stays at `.arm-trend`'s own
+ * muted colour rather than taking `.arm-trend-diverged`'s alert colour (#982).
+ * The "below floor" word in the row's own markup is what distinguishes it,
+ * not colour.
  */
-.arm-trend-below-floor {
-  color: var(--muted);
-}
 
 .arm-caveat {
   margin: 0;
