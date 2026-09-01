@@ -211,6 +211,16 @@ export interface RiskConfig {
    * trimmed here, just at a different gate than the one #886 fixed. Once an
    * instrument is D5-classified, D5 is the sole per-instrument drawdown
    * authority for it on this axis too.
+   *
+   * Once this cap is skipped, `per_subclass_deployment_cap` is the sole
+   * per-instrument *deployment-fraction* bound left for a D5-classified
+   * instrument — including when MULTIPLE instruments in the same subclass
+   * are armed concurrently, which that field's gate
+   * (`perSubclassDeploymentCap`, risk-manager/index.ts) nets across rather
+   * than bounding independently. `concentration.cap_fraction_of_equity`
+   * (below, via `concentrationCorrelationCap`) is a second, independent
+   * bound — correlation-based, not deployment-based — that still applies to
+   * a D5-classified instrument unchanged.
    */
   per_asset_cap_fraction_of_equity: number;
   /** Max total notional exposure per asset-class bucket, as a FRACTION OF EQUITY resolved at evaluate time (#886). */

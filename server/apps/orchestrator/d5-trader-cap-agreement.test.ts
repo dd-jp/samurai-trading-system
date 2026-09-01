@@ -663,3 +663,128 @@ describe('#886 acceptance criterion — an armed D5 entry lands at the intended 
     expect(decision.modifications?.final_size).toBe(69);
   });
 });
+
+describe('#959 — multiple D5-armed instruments in the SAME subclass share one envelope, not one each', () => {
+  // #932 exempts a D5-classified instrument from `per_asset_cap` entirely
+  // (above) — a single instrument reaches D5's own fraction unbound by the
+  // 10% per-asset ceiling. `perSubclassDeploymentCap` (risk-manager/index.ts)
+  // nets `deployedToSubclass` across every instrument the pool file
+  // classifies into the intent's subclass, not just the intent's own
+  // instrument, so a SECOND D5-armed instrument in the same subclass shares
+  // that envelope rather than getting its own independent 25%. This describe
+  // block covers the concurrent-instrument case.
+  //
+  // Two REAL `single_stock_etp_3x` tickers from the actual pool
+  // (lse-etp-pool.ts) rather than the single-instrument-per-subclass
+  // `UNIVERSE` fixture above: `3LTS` (GraniteShares 3x Long Tesla) and
+  // `NVD3` (Leverage Shares 3x NVIDIA). `single_stock_etp_3x` is chosen over
+  // `index_etp_3x` because its fraction (0.25) keeps every figure below
+  // integral on the £1,000 reference book, so `whole_share_sizing` never
+  // bites and no `d5WithoutTheVenueGrid`-style variant is needed.
+  const MULTI_UNIVERSE: readonly UniverseInstrument[] = [
+    { asset: '3LTS', asset_class: 'stocks', subclass: 'single_stock_etp_3x' },
+    { asset: 'NVD3', asset_class: 'stocks', subclass: 'single_stock_etp_3x' },
+  ];
+
+  const multiConfig = (): RiskConfig => buildStartingProfileConfigs(MULTI_UNIVERSE).riskConfig;
+
+  /** D5's own fraction for `single_stock_etp_3x` — £250 on the £1,000 book. */
+  const FULL_ENVELOPE = D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION * EQUITY;
+  const PER_ASSET_CAP = RISK_CAP_EQUITY_FRACTIONS.per_asset_cap_fraction_of_equity * EQUITY; // £100
+
+  it('(a) neither instrument is capped individually at 10% via per_asset_cap — each lands ABOVE that ceiling, unclipped', () => {
+    // This proves the #932 per-asset-cap exemption applies independently to
+    // a SECOND D5-armed instrument in the subclass, not just the first: each
+    // half (£125) is above the £100 per-asset ceiling that would have bound
+    // it pre-#932, and both land unclipped. Asserting the landed size is
+    // strictly greater than `PER_ASSET_CAP`, not merely "not that binding
+    // constraint", closes the tautology a size-under-10% fixture would leave
+    // open (per this file's own precedent at
+    // `RISK_CAP_EQUITY_FRACTIONS.per_asset_cap_fraction_of_equity`, above).
+    //
+    // This test does NOT discriminate combined-subclass netting from
+    // isolated per-instrument accounting: NVD3's £125 ask fits under £250
+    // headroom either way (isolated: NVD3 alone has no prior exposure of its
+    // own; combined: £250 envelope - £125 already deployed by 3LTS = £125
+    // remaining). Test (b), below, asks for MORE than the true combined
+    // headroom — that is what actually proves netting.
+    const half = FULL_ENVELOPE / 2; // £125 — 12.5% of equity, over the 10% per-asset ceiling
+    expect(half).toBeGreaterThan(PER_ASSET_CAP);
+
+    const first = decide(multiConfig(), intentFor('3LTS', half, 'entry'), {}, EQUITY);
+    expect(first.status).toBe('approved');
+    expect(first.binding_constraint).toBeNull();
+    expect(first.modifications?.final_size).toBeCloseTo(half, 6);
+
+    const second = decide(
+      multiConfig(),
+      intentFor('NVD3', half, 'entry'),
+      { '3LTS': half },
+      EQUITY,
+    );
+    expect(second.status).toBe('approved');
+    expect(second.binding_constraint).toBeNull();
+    expect(second.modifications?.final_size).toBeCloseTo(half, 6);
+    expect(second.modifications?.final_size).toBeGreaterThan(PER_ASSET_CAP);
+  });
+
+  it('(b) the combined exposure is bounded by the shared subclass envelope — a second instrument does NOT get its own independent 25%', () => {
+    // `3LTS` already holds £150 (15% of equity — itself above the 10%
+    // per-asset ceiling, proving the #932 exemption still applies to IT
+    // individually). `NVD3` then asks for D5's FULL envelope (£250), as if it
+    // were the only instrument armed in the subclass. If the two instruments
+    // were bounded independently, `NVD3` would land at the full £250
+    // (combined 3LTS + NVD3 = £400, 40% of equity — well past the 25%
+    // subclass envelope D5's 41.8% drawdown figure was measured to hold).
+    // `perSubclassDeploymentCap` nets across BOTH instruments instead, so the
+    // remaining headroom is £250 (cap) - £150 (already deployed) = £100, and
+    // `NVD3` is trimmed to exactly that — not to its own 25%.
+    const alreadyDeployed = FULL_ENVELOPE * 0.6; // £150
+    const askedAsIfAlone = FULL_ENVELOPE; // £250 — what NVD3 would land at if uncapped by the shared envelope
+
+    const decision = decide(
+      multiConfig(),
+      intentFor('NVD3', askedAsIfAlone, 'entry'),
+      { '3LTS': alreadyDeployed },
+      EQUITY,
+    );
+
+    expect(decision.status).toBe('approved');
+    expect(decision.binding_constraint).toBe('per_subclass_deployment_cap');
+    const expectedHeadroom = FULL_ENVELOPE - alreadyDeployed; // £100
+    expect(decision.modifications?.final_size).toBeCloseTo(expectedHeadroom, 6);
+    // The combined exposure across both instruments, after this fill, is
+    // exactly the shared envelope — never the doubled £400 independent
+    // bounding would have allowed.
+    expect(alreadyDeployed + (decision.modifications?.final_size ?? 0)).toBeCloseTo(
+      FULL_ENVELOPE,
+      6,
+    );
+    expect(decision.reasons).toEqual(
+      expect.arrayContaining([expect.stringContaining('per_subclass_deployment_cap: trimmed')]),
+    );
+  });
+
+  it('(b, exhausted case) once BOTH instruments together have consumed the shared envelope, a further entry in the subclass is rejected, not sized at its own 25%', () => {
+    // Combined £250 already deployed across the two names (any split), the
+    // subclass envelope is fully consumed — a third ask in the SAME subclass
+    // (here, a scale-in on `3LTS`) gets zero headroom from
+    // `per_subclass_deployment_cap` and is rejected as dust, exactly the
+    // shape `#897`'s single-instrument scale-in test pins for one name. The
+    // `binding_constraint` on the returned decision names `min_viable_size`,
+    // not `per_subclass_deployment_cap`, because `evaluate()`'s dust-floor
+    // check overwrites it once notional is trimmed to zero — matching this
+    // file's existing `#897` precedent above.
+    const eachHalf = FULL_ENVELOPE / 2; // £125 + £125 = £250, the full shared envelope
+
+    const decision = decide(
+      multiConfig(),
+      intentFor('3LTS', eachHalf, 'scale_in'),
+      { '3LTS': eachHalf, NVD3: eachHalf },
+      EQUITY,
+    );
+
+    expect(decision.status).toBe('rejected');
+    expect(decision.binding_constraint).toBe('min_viable_size');
+  });
+});
