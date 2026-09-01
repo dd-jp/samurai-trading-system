@@ -26,6 +26,7 @@ export {
   type HttpErrorKind,
   isTimeoutAbort,
   parseRetryAfterMs,
+  readErrorBody,
   readErrorDetail,
   truncateForError,
 } from './http/response-errors.js';

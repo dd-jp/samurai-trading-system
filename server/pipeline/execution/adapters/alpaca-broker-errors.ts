@@ -22,7 +22,7 @@ import {
   classifyStatus,
   isTimeoutAbort,
   parseRetryAfterMs,
-  readErrorDetail,
+  readErrorBody,
 } from '../../../shared/index.js';
 
 export class AlpacaBrokerTimeoutError extends Error {
@@ -47,11 +47,22 @@ export class AlpacaBrokerRateLimitError extends Error {
 export class AlpacaBrokerProviderError extends Error {
   /** HTTP status code, when the failure came from a response rather than a network error. */
   readonly status: number | undefined;
+  /**
+   * Alpaca's own numeric error code (e.g. `42210000`), when the failure came
+   * from a response whose body was parseable JSON carrying one — see
+   * `sanitizeBrokerError`'s `readVenueCode` (`broker-error.ts`), which reads
+   * this field off the thrown cause to populate `BrokerError.venueCode`
+   * (issue #953). Only `AlpacaBrokerProviderError` carries this: Timeout and
+   * RateLimit are classified before any body is inspected for a venue code,
+   * and 429/408/504 responses do not carry Alpaca's `{code, message}` shape.
+   */
+  readonly code: string | undefined;
 
-  constructor(message: string, status?: number) {
+  constructor(message: string, status?: number, code?: string) {
     super(message);
     this.name = 'AlpacaBrokerProviderError';
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -81,7 +92,8 @@ export async function classifyAlpacaBrokerResponse(
   response: Response,
   context: string,
 ): Promise<AlpacaBrokerError> {
-  const message = `Alpaca API error: ${response.status} ${await readErrorDetail(response)} (${context})`;
+  const { detail, code } = await readErrorBody(response);
+  const message = `Alpaca API error: ${response.status} ${detail} (${context})`;
 
   switch (classifyStatus(response.status)) {
     case 'rate-limit':
@@ -89,7 +101,7 @@ export async function classifyAlpacaBrokerResponse(
     case 'timeout':
       return new AlpacaBrokerTimeoutError(message);
     default:
-      return new AlpacaBrokerProviderError(message, response.status);
+      return new AlpacaBrokerProviderError(message, response.status, code);
   }
 }
 

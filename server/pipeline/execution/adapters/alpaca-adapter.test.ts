@@ -13,6 +13,7 @@ import type { ExecutionConfig, ExecutionInput, NativeBracketRequest } from '../t
 import type { UnpricedFillAlert, UnpricedFillAlertChannel } from '../unpriced-fill-alert.js';
 import { AlpacaBrokerAdapter, DEFAULT_UNPRICED_FILL_AGE_OUT_MS } from './alpaca-adapter.js';
 import type { AlpacaBrokerClient, AlpacaOrder } from './alpaca-client.js';
+import { AlpacaHttpBrokerClient } from './alpaca-http-client.js';
 
 /**
  * These tests are about bracket submission and fill normalization, not
@@ -748,6 +749,51 @@ describe('AlpacaBrokerAdapter outbound call discipline', () => {
     );
     expect((error as BrokerError).message).not.toContain(secret);
     expect('cause' in (error as BrokerError)).toBe(false);
+  });
+
+  it('populates BrokerError.venueCode from a real Alpaca 422 rejection body (#953)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 422,
+      statusText: 'Unprocessable Entity',
+      headers: new Headers(),
+      json: async () => ({
+        code: 42210000,
+        message: 'fractional orders must be simple orders that are DAY orders',
+      }),
+      text: async () =>
+        JSON.stringify({
+          code: 42210000,
+          message: 'fractional orders must be simple orders that are DAY orders',
+        }),
+    } as Response);
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      const httpClient = new AlpacaHttpBrokerClient({
+        apiKey: 'test-fake-alpaca-key',
+        apiSecret: 'test-fake-alpaca-secret',
+        retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
+      });
+      const adapter = new AlpacaBrokerAdapter({
+        client: httpClient,
+        rateLimiter: permissiveLimiter(),
+        unpricedFillAlerts: recordingAlerts(),
+        ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+        logger: recordingLogger(),
+      });
+
+      const error = await adapter.submitBracket(makeBracket()).catch((thrown: unknown) => thrown);
+
+      expect(error).toBeInstanceOf(BrokerError);
+      expect((error as BrokerError).venueCode).toBe('42210000');
+      expect((error as BrokerError).message).toBe(
+        'alpaca submitBracket failed (status 422, code 42210000)',
+      );
+      expect((error as BrokerError).message).not.toContain('fractional orders');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
