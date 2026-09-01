@@ -2539,8 +2539,14 @@ describe('buildProductionOrchestrator', () => {
         this.instruments.push(instrument);
         const observations: BenchmarkObservation[] = [];
         let close = 100;
+        let day = 0;
         for (let t = from.getTime() - 3 * DAY_MS; t <= to.getTime(); t += DAY_MS) {
-          close *= 1.001;
+          // A dip partway through, deliberately: a monotonic series has a
+          // drawdown of exactly 0, which `Number.isFinite` would accept from a
+          // hardcoded zero column just as happily. This makes the persisted
+          // drawdown a measurement the assertion can actually distinguish.
+          close *= day === 4 ? 0.97 : 1.001;
+          day += 1;
           observations.push({ close_time: new Date(t), close });
         }
         return observations;
@@ -2591,8 +2597,11 @@ describe('buildProductionOrchestrator', () => {
         max_drawdown_pct: number;
       }[];
       expect(rows.map((row) => row.benchmark).sort()).toEqual(['sixty_forty', 'spy']);
-      // Return AND drawdown together, persisted (doc 12 D4).
+      // Return AND drawdown together, persisted (doc 12 D4). The series dips,
+      // so a real measurement is strictly positive — a zero here would mean the
+      // column was defaulted rather than computed.
       expect(rows.every((row) => Number.isFinite(row.max_drawdown_pct))).toBe(true);
+      expect(rows.every((row) => row.max_drawdown_pct > 0)).toBe(true);
 
       // The window is the arm comparison's own, to the millisecond — inherited,
       // never recomputed (#636).
@@ -4080,9 +4089,7 @@ describe('buildProductionOrchestrator', () => {
     it('serves SPY and AGG closes with an LSE-only universe configured', async () => {
       // The builder takes no `universe` and no `ProductionConfig` at all, which
       // is why this holds: there is nothing for an LSE cutover to change.
-      const series = seriesOver(
-        buildBenchmarkDataSource({ calendar, dataClient: benchmarkClient() }),
-      );
+      const series = seriesOver(buildBenchmarkDataSource({ dataClient: benchmarkClient() }));
 
       for (const instrument of ['SPY', 'AGG']) {
         const closes = await series.getDailyCloses(instrument, WINDOW_FROM, WINDOW_TO);
@@ -4092,6 +4099,22 @@ describe('buildProductionOrchestrator', () => {
         // The anchor `buildOutsideBenchmark` refuses to measure without.
         expect(closes[0]?.close_time.getTime()).toBeLessThanOrEqual(WINDOW_FROM.getTime());
       }
+    });
+
+    it('cannot be handed the live session calendar, which is LSE in live mode', () => {
+      // `equityCalendarFor` returns `LseRegularHoursCalendar` when
+      // `mode === 'live'`. Accepting a calendar here would re-couple the
+      // benchmarks to the live configuration through the back door — US daily
+      // bars session-normalized against London — reaching the same `unmeasured`
+      // end state by a different road. The option does not exist, so it can't.
+      expect(() =>
+        buildBenchmarkDataSource({
+          // @ts-expect-error — no `calendar` option: the US equities session is
+          // fixed inside the builder, where no configuration can reach it.
+          calendar: new LseRegularHoursCalendar(),
+          dataClient: benchmarkClient(),
+        }),
+      ).not.toThrow();
     });
 
     it('builds its Alpaca client on first read, so a missing key cannot fail a boot', async () => {
@@ -4105,7 +4128,7 @@ describe('buildProductionOrchestrator', () => {
       delete process.env.ALPACA_API_KEY;
       delete process.env.ALPACA_API_SECRET;
       try {
-        const source = buildBenchmarkDataSource({ calendar });
+        const source = buildBenchmarkDataSource({});
 
         await expect(
           source.fetchBars('SPY', { timeframe: '1d', lookback: 5 }, START),

@@ -622,6 +622,10 @@ class LazyDataSource implements DataSource {
  * separate builder with no universe in its signature, not a conditional branch
  * inside the universe-derived one.
  *
+ * The signature takes no session calendar either, for the same reason: the live
+ * one is `equityCalendarFor(config)`, which is LSE in live mode, and passing it
+ * would smuggle the live configuration back in — see the call below.
+ *
  * ## Why a fixed stocks root is right
  *
  * SPY and AGG are ordinary US-listed instruments on Alpaca's `/v2/stocks` root
@@ -635,8 +639,6 @@ class LazyDataSource implements DataSource {
  * whole port via `ProductionConfig.benchmarkSeriesSource`.
  */
 export function buildBenchmarkDataSource(options: {
-  /** The equities session calendar — the same instance the live path uses. */
-  calendar: TradingCalendar;
   /** The account's shared outbound bucket (#391) — see `buildDefaultAlpacaDataClient`. */
   rateLimiter?: TokenBucket;
   /**
@@ -650,7 +652,15 @@ export function buildBenchmarkDataSource(options: {
     () =>
       new AlpacaDataSource(
         options.dataClient ?? buildDefaultAlpacaDataClient('stocks', options.rateLimiter),
-        { asset_class: 'stocks', calendar: options.calendar },
+        // NO `calendar`, deliberately — `AlpacaDataSource` then defaults to
+        // `UsEquityRegularHoursCalendar`, the session SPY and AGG actually
+        // trade in. The live path's calendar is `equityCalendarFor(config)`,
+        // which returns `LseRegularHoursCalendar` in live mode: handing that in
+        // would re-couple this builder to the live configuration through the
+        // back door, session-normalizing US daily bars against London hours and
+        // reproducing the very `unmeasured` outcome this builder exists to
+        // prevent. Nothing configuration-derived reaches this call.
+        { asset_class: 'stocks' },
       ),
   );
 }

@@ -750,7 +750,9 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     config.benchmarkSeriesSource ??
     new MarketDataBenchmarkSeriesSource(
       new MarketDataServiceImpl(
-        buildBenchmarkDataSource({ calendar: tradingCalendar, rateLimiter: alpacaBucket }),
+        // `tradingCalendar` is NOT passed: it is LSE in live mode, and SPY/AGG
+        // are US-session instruments. See `buildBenchmarkDataSource`.
+        buildBenchmarkDataSource({ rateLimiter: alpacaBucket }),
         clock,
         marketDataMode,
         marketDataStore,
