@@ -16,6 +16,23 @@ quoted from a vendor document retrieved at the URL given. Claims that could not 
 way are marked **NOT VERIFIED** and nothing is planned against them. No probe placed an order and no
 key appears here.
 
+**Update 2026-09-01 — recommendation moved to Saxo, superseding §6's IBKR pick below.** Saxo (the
+execution venue decided after this document was written — ADR-0015's 2026-08-30 amendment) confirmed
+in writing that LSE data, including real-time subscriptions, is delivered over OpenAPI on a live
+account (Alexander Henry, Saxo OpenAPI Team, support ticket 20084, 2026-09-01): *"Most market data
+(and real-time data subscriptions) are available via OpenAPI. LSE exchanges are as well... only
+delayed data is available on simulation, even after linking your live account (which itself may have
+real-time data entitlements)."* This is a **written vendor statement, not an HTTP-probed claim** — it
+does not carry this document's VERIFIED marking, and none of §5/§6's IBKR findings below are wrong or
+withdrawn; they now describe the runner-up. David chose Saxo over IBKR on 2026-09-01 (grilling record
+on [#895](https://github.com/dd-jp/samurai-trading-system/issues/895)): one account for execution and
+data beats IBKR's cheaper sticker price (£1/mo non-pro vs Saxo's ~£7/mo) once IBKR's second account,
+USD 500 minimum-equity tie-up, and its own unverified LSEETF-coverage gap are counted. Saxo carries
+the equivalent open items IBKR has below — confirmation that this is the same ~£7/month L1
+entitlement, the OpenAPI endpoint/field carrying the tick timestamp, and per-instrument coverage for
+the pool's leveraged ETPs/ETCs (3USL, 3UKL, an oil ETC) rather than ordinary shares — chased in a
+2026-09-01 follow-up on the same ticket, not yet answered.
+
 **Read §4 before anything else.** It is not a data-vendor finding, and it is larger than this ticket.
 
 ---
@@ -28,15 +45,21 @@ key appears here.
 | **Polygon** (integrated, fallback) | **No — VERIFIED** | Cannot serve the equity leg at any price. |
 | **Trading 212** (the account provider) | **No — VERIFIED from its own docs** | No quote endpoint exists; the one price field has no timestamp; the API Terms bar algorithmic trading outright (§4). |
 | **Yahoo Finance** | **Yes, 11/11 at 1-minute — VERIFIED** | Technically able for *bars*, but last-trade only, ~20 min delayed, and unlicensed. Research only. |
-| **Interactive Brokers** | **Yes — LSE L1, GBP 1.00/month non-professional** | **The recommendation.** Real-time bid/ask at a retail price. Needs an IBKR account: David's action. |
+| **Saxo** (the execution venue) | **Yes — real-time over OpenAPI on a live account, per written vendor confirmation (not HTTP-probed)** | **The recommendation as of 2026-09-01.** Same account as execution; entitlement price/endpoint/per-instrument coverage still being chased (ticket 20084). See update note above and §6. |
+| **Interactive Brokers** | **Yes — LSE L1, GBP 1.00/month non-professional** | **Runner-up as of 2026-09-01** (was the recommendation). Real-time bid/ask at a retail price, but a second account, USD 500 minimum equity, and unverified LSEETF coverage lost it to Saxo's single-account path. |
 | Twelve Data / EODHD / FMP / Databento | **No real-time XLON found** (not the same as none existing) | Delayed, EOD, Cboe-not-LSE, or US-only in what was checked; Twelve Data's real-time-EU add-on advertises Cboe Europe and its LSE price was NOT FOUND rather than shown to be absent. See §5. |
 | Finnhub / Tiingo / marketstack / Alpha Vantage / IEX Cloud | **NOT VERIFIED** | Not confirmed against the pool or their own terms; recorded as open, not rejected. |
 | Google Finance | **No API since 2012** | Not a candidate. |
 
-**Recommendation: Interactive Brokers, "LSE UK (L1)", GBP 1.00/month non-professional.** It is the
-only retail-priced real-time LSE Level 1 feed with bid/ask found anywhere in this sweep. It requires
-an IBKR account (ADR-0001 already names IBKR as the long-term equities broker) and a USD 500 minimum
-equity balance to hold any market-data subscription.
+**Recommendation as of 2026-09-01: Saxo, over OpenAPI, on the account already used for execution.**
+See the update note above and §6 — this replaces the IBKR pick below, which stands as the runner-up
+and as the record of why IBKR was ruled out on total cost (second account, USD 500 minimum equity,
+unverified LSEETF coverage) rather than on data quality.
+
+**Original recommendation (2026-08-19, superseded above): Interactive Brokers, "LSE UK (L1)", GBP
+1.00/month non-professional.** It is the only retail-priced real-time LSE Level 1 feed with bid/ask
+found anywhere in this sweep. It requires an IBKR account (ADR-0001 already names IBKR as the
+long-term equities broker) and a USD 500 minimum equity balance to hold any market-data subscription.
 
 **And the blocker is bigger than the mark.** Trading 212's API Terms prohibit exactly what Samurai
 is. That is an execution-venue problem, not a data problem, and no mark source fixes it.
@@ -293,7 +316,16 @@ Worth an email to `marketdata@lseg.com` if IBKR falls through.
 
 ## 6. Recommendation
 
-**Interactive Brokers, "LSE UK (L1)", GBP 1.00/month non-professional.**
+**Superseded 2026-09-01 — see the update note after §0 and the Verdict table.** David chose Saxo
+over IBKR (grilling record on [#895](https://github.com/dd-jp/samurai-trading-system/issues/895)):
+one account for both execution and data beats IBKR's cheaper sticker price once IBKR's second
+account, USD 500 minimum-equity tie-up, and unverified LSEETF coverage are counted against it. Saxo's
+own load-bearing unknowns — whether the confirmed real-time feed is the same ~£7/month L1 entitlement,
+which endpoint/field carries the tick timestamp, and whether leveraged ETPs/ETCs are covered, not
+just ordinary shares — are chased in a 2026-09-01 follow-up on Saxo support ticket 20084 and not yet
+answered. The IBKR analysis below is kept as the record of the runner-up, not retracted.
+
+**Original recommendation (2026-08-19): Interactive Brokers, "LSE UK (L1)", GBP 1.00/month non-professional.**
 
 - It is the **only retail-priced real-time LSE Level 1 feed with bid/ask** found in this sweep. The
   next cheapest real-time route is LSEG direct at £6,695/year (§5).
@@ -359,8 +391,11 @@ implementation ships everything that does not depend on the answer:
    Filed as [#896](https://github.com/dd-jp/samurai-trading-system/issues/896); #665/#666 rest
    on a premise these terms contradict.
 2. **Which vendor may serve the live mark** — filed as
-   [#895](https://github.com/dd-jp/samurai-trading-system/issues/895). Recommended: IBKR LSE UK (L1) at £1/month non-pro
-   (§6), subject to the LSEETF-segment question and the USD 500 minimum.
+   [#895](https://github.com/dd-jp/samurai-trading-system/issues/895). Recommended as of 2026-09-01:
+   Saxo, over OpenAPI, on the execution account (§0 update note, §6), subject to the entitlement/
+   endpoint/ETP-coverage questions chased on ticket 20084 and not yet answered. IBKR LSE UK (L1) at
+   £1/month non-pro (§6) is the runner-up, still gated on the same class of open question
+   (LSEETF-segment coverage) plus its own second-account/USD 500 minimum overhead.
 3. **The USD majority (§3.2).** Narrow the universe to the GBP/GBX lines, or answer the FX question.
    Until then the orchestrator refuses to boot on a USD-declared line rather than guessing a rate.
 4. **The 15-minute bound versus print frequency (§3.3).** Every non-IBKR option is ≥15 min delayed,
