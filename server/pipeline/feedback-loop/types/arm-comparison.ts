@@ -62,6 +62,14 @@ export interface ArmDivergenceVerdict {
   diverged: boolean;
   /** Operator-facing sentence naming both columns. `null` exactly when `diverged` is false. */
   reason: string | null;
+  /**
+   * The `thresholds.min_trades_per_arm` this verdict was actually evaluated
+   * against (#982) — carried on every branch of `evaluateArmDivergence`, so a
+   * `diverged: false` verdict can be read against the floor that produced it
+   * rather than against whatever `MIN_TRADES_PER_ARM_FOR_DIVERGENCE` happens to
+   * be when the row is later read back.
+   */
+  min_trades_per_arm: number;
 }
 
 /** One cycle's comparison, as computed, evaluated and persisted. */

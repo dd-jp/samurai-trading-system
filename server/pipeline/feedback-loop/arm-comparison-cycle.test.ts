@@ -119,6 +119,7 @@ describe('evaluateArmDivergence', () => {
 
     expect(verdict.diverged).toBe(true);
     expect(verdict.reason).toContain('control');
+    expect(verdict.min_trades_per_arm).toBe(MIN_TRADES_PER_ARM_FOR_DIVERGENCE);
   });
 
   /**
@@ -186,6 +187,45 @@ describe('evaluateArmDivergence', () => {
 
     expect(verdict.diverged).toBe(false);
     expect(verdict.reason).toBeNull();
+    expect(verdict.min_trades_per_arm).toBe(MIN_TRADES_PER_ARM_FOR_DIVERGENCE);
+  });
+
+  /**
+   * #982: `min_trades_per_arm` on the verdict must be the THRESHOLD PASSED IN,
+   * not a hardcoded echo of the module default — a non-default floor proves the
+   * value actually flows through `evaluateArmDivergence` rather than being
+   * hardcoded at some later hop (the sample store, the row mapper, the
+   * projection) where every other test in this suite, using the default
+   * threshold, could not tell the difference.
+   */
+  it('carries whatever min_trades_per_arm the caller configured, not the module default', () => {
+    const customThresholds = { ...DEFAULT_ARM_DIVERGENCE_THRESHOLDS, min_trades_per_arm: 8 };
+
+    const belowCustomFloor = evaluateArmDivergence(
+      comparisonOf({
+        liveReturn: 0,
+        liveDrawdown: 0.1,
+        controlReturn: 0.2,
+        controlDrawdown: 0,
+        trades: 6,
+      }),
+      customThresholds,
+    );
+    expect(belowCustomFloor.min_trades_per_arm).toBe(8);
+    expect(belowCustomFloor.diverged).toBe(false);
+
+    const atCustomFloor = evaluateArmDivergence(
+      comparisonOf({
+        liveReturn: 0.001,
+        liveDrawdown: 0.04,
+        controlReturn: 0.001 + ARM_DIVERGENCE_RETURN_GAP_PCT + 0.0001,
+        controlDrawdown: 0.03,
+        trades: 8,
+      }),
+      customThresholds,
+    );
+    expect(atCustomFloor.min_trades_per_arm).toBe(8);
+    expect(atCustomFloor.diverged).toBe(true);
   });
 });
 
@@ -223,6 +263,7 @@ describe('runArmComparisonCycle', () => {
     expect(source.windows[0]?.from).toEqual(new Date(NOW.getTime() - input.window_ms));
     expect(sample.comparison.live.trade_count).toBe(5);
     expect(sample.comparison.control.trade_count).toBe(5);
+    expect(sample.divergence.min_trades_per_arm).toBe(MIN_TRADES_PER_ARM_FOR_DIVERGENCE);
     expect(samples.getRecent(10, NOW)).toHaveLength(1);
     expect(samples.getRecent(10, NOW)[0]?.computed_at).toEqual(NOW);
   });

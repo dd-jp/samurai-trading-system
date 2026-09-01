@@ -26,12 +26,13 @@ interface ArmComparisonSampleRow {
   control_max_drawdown_pct: number;
   diverged: number;
   divergence_reason: string | null;
+  min_trades_per_arm: number;
 }
 
 const COLUMNS = `computed_at, window_from, window_to, basis,
                  live_trade_count, live_realized_pnl_net, live_return_pct, live_max_drawdown_pct,
                  control_trade_count, control_realized_pnl_net, control_return_pct,
-                 control_max_drawdown_pct, diverged, divergence_reason`;
+                 control_max_drawdown_pct, diverged, divergence_reason, min_trades_per_arm`;
 
 function fromRow(row: ArmComparisonSampleRow): ArmComparisonSample {
   return {
@@ -63,6 +64,10 @@ function fromRow(row: ArmComparisonSampleRow): ArmComparisonSample {
       // the `string | null` narrowing the row type needs, and both of the pairs
       // it could otherwise produce are unrepresentable in the table.
       reason: row.diverged === 1 ? row.divergence_reason : null,
+      // The floor THIS verdict was tested against (#982), read back as it was
+      // written — never recomputed against whatever `MIN_TRADES_PER_ARM_FOR_
+      // DIVERGENCE` is today.
+      min_trades_per_arm: row.min_trades_per_arm,
     },
   };
 }
@@ -82,7 +87,7 @@ export class SqliteArmComparisonSampleStore implements ArmComparisonSampleStore 
     this.db
       .prepare(
         `INSERT OR REPLACE INTO arm_comparison_samples (${COLUMNS})
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         toStoredTimestamp(sample.computed_at),
@@ -99,6 +104,7 @@ export class SqliteArmComparisonSampleStore implements ArmComparisonSampleStore 
         comparison.control.max_drawdown_pct,
         divergence.diverged ? 1 : 0,
         divergence.reason,
+        divergence.min_trades_per_arm,
       );
   }
 

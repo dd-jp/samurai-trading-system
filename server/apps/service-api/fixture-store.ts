@@ -24,7 +24,10 @@ import type { PipelineStage } from '../../../contracts/pipeline.js';
 // stays a type-only-equivalent, zero-side-effect import.
 import { computeInfluenceScore } from '../../pipeline/debate-engine/analyst-contribution.js';
 import type { AnalystContribution } from '../../pipeline/debate-engine/index.js';
-import type { ArmComparisonSample } from '../../pipeline/feedback-loop/index.js';
+import {
+  type ArmComparisonSample,
+  MIN_TRADES_PER_ARM_FOR_DIVERGENCE,
+} from '../../pipeline/feedback-loop/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
 import type { ClosedTrade, DebateLog, Fill, OpenPosition } from '../../shared/index.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
@@ -526,7 +529,11 @@ const ARM_COMPARISONS: ArmComparisonSample[] = [
         max_drawdown_pct: 0.028,
       },
     },
-    divergence: { diverged: false, reason: null },
+    divergence: {
+      diverged: false,
+      reason: null,
+      min_trades_per_arm: MIN_TRADES_PER_ARM_FOR_DIVERGENCE,
+    },
   },
   {
     computed_at: new Date(NOW.getTime() - 24 * 3_600_000),
@@ -549,7 +556,11 @@ const ARM_COMPARISONS: ArmComparisonSample[] = [
         max_drawdown_pct: 0.026,
       },
     },
-    divergence: { diverged: false, reason: null },
+    divergence: {
+      diverged: false,
+      reason: null,
+      min_trades_per_arm: MIN_TRADES_PER_ARM_FOR_DIVERGENCE,
+    },
   },
 ];
 

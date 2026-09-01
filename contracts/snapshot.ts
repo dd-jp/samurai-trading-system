@@ -150,6 +150,28 @@ export interface ArmComparisonRow {
   diverged: boolean;
   /** The operator-facing sentence that was alerted. `null` exactly when `diverged` is false. */
   divergence_reason: string | null;
+  /**
+   * Closed trades EACH arm needed before dominance was even tested this cycle
+   * (`ArmDivergenceThresholds.min_trades_per_arm` at compute time; the default is
+   * `MIN_TRADES_PER_ARM_FOR_DIVERGENCE`, currently 5) — #982.
+   *
+   * `diverged: false` alone is ambiguous between "dominance was tested and the
+   * control did not win" and "one or both arms were below this floor, so
+   * dominance was never tested at all" — an absent verdict, not a passing one.
+   * Without this field on the wire the panel could not tell those two states
+   * apart and had to soften its copy to the honest-but-uninformative "a verdict
+   * is issued only above a floor" rather than naming which state a given row is
+   * in.
+   *
+   * Stored PER ROW rather than read live off the current policy constant, the
+   * same choice `basis` makes on this same type and for the same reason (see
+   * migration `0034_arm_comparison_samples.sql`): a row is a record of what FL
+   * actually tested the verdict against at `computed_at`, and the trend list
+   * below renders many historical rows at once — a snapshot-level "current
+   * policy" field would render every older row against a floor it was never
+   * evaluated with, the moment the constant next changes.
+   */
+  min_trades_per_arm: number;
 }
 
 /**

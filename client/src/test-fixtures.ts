@@ -217,6 +217,10 @@ export function makeArmComparison(overrides: Partial<ArmComparisonRow> = {}): Ar
     },
     diverged: false,
     divergence_reason: null,
+    // #982. Mirrors `MIN_TRADES_PER_ARM_FOR_DIVERGENCE` (arm-comparison-cycle.ts)
+    // — a plain literal here, not an import, because `contracts`/client fixtures
+    // may not reach into `server/`.
+    min_trades_per_arm: 5,
     ...overrides,
   };
 }

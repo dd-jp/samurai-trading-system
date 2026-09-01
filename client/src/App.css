@@ -1564,7 +1564,8 @@ main {
   color: var(--vermilion);
 }
 
-.arm-divergence.arm-ok {
+.arm-divergence.arm-ok,
+.arm-divergence.arm-below-floor {
   color: var(--muted);
   font-weight: 400;
 }
@@ -1589,6 +1590,14 @@ main {
 .arm-trend-diverged {
   color: var(--vermilion);
 }
+
+/*
+ * `.arm-trend-below-floor` carries no rule here on purpose: a below-floor row
+ * is an absent verdict, not an escalation, so it stays at `.arm-trend`'s own
+ * muted colour rather than taking `.arm-trend-diverged`'s alert colour (#982).
+ * The "below floor" word in the row's own markup is what distinguishes it,
+ * not colour.
+ */
 
 .arm-caveat {
   margin: 0;

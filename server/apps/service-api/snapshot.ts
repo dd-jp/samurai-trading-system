@@ -222,6 +222,10 @@ export function buildSnapshot(
       control: { ...sample.comparison.control },
       diverged: sample.divergence.diverged,
       divergence_reason: sample.divergence.reason,
+      // #982: the per-arm closed-trade floor THIS verdict was tested against,
+      // carried across rather than read live off the current constant — see
+      // `ArmComparisonRow.min_trades_per_arm`'s doc for why.
+      min_trades_per_arm: sample.divergence.min_trades_per_arm,
     }));
 
   const metrics = store.getDailyMetrics(asOf);

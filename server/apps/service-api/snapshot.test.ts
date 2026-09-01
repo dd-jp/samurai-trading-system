@@ -609,7 +609,10 @@ describe('buildSnapshot', () => {
           max_drawdown_pct: 0.028,
         },
       },
-      divergence: { diverged: false, reason: null },
+      // A non-default floor (7, not `MIN_TRADES_PER_ARM_FOR_DIVERGENCE`'s 5)
+      // deliberately — #982's projection must carry whatever value the sample
+      // actually recorded, not echo the module default at some hop.
+      divergence: { diverged: false, reason: null, min_trades_per_arm: 7 },
     };
 
     it('projects both arms with every column, dates as ISO strings', () => {
@@ -625,6 +628,7 @@ describe('buildSnapshot', () => {
           control: SAMPLE.comparison.control,
           diverged: false,
           divergence_reason: null,
+          min_trades_per_arm: 7,
         },
       ]);
     });
@@ -633,7 +637,14 @@ describe('buildSnapshot', () => {
       const snap = buildSnapshot(
         fakeStore({
           getArmComparisons: () => [
-            { ...SAMPLE, divergence: { diverged: true, reason: 'control ahead on both columns' } },
+            {
+              ...SAMPLE,
+              divergence: {
+                diverged: true,
+                reason: 'control ahead on both columns',
+                min_trades_per_arm: 7,
+              },
+            },
           ],
         }),
         AS_OF,

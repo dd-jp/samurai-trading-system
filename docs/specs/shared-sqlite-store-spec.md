@@ -613,6 +613,8 @@ return without the drawdown beside it cannot be written, so no reader can render
 comparison even by accident. `divergence_reason` is nullable and is NULL exactly when
 `diverged = 0`. Postdates the non-collision pass below; every column name here is new.
 
+**`min_trades_per_arm` (migration `0035`, [#982](https://github.com/dd-jp/samurai-trading-system/issues/982)) is the per-arm closed-trade floor THIS row's verdict was actually tested against** — stored per row rather than read live off `MIN_TRADES_PER_ARM_FOR_DIVERGENCE`, the same choice `basis` already makes on this table and for the same reason: a row must stay interpretable against the policy value it was measured with even after that constant later changes. `ALTER TABLE ... ADD COLUMN ... DEFAULT 5` needed no rebuild, and `5` is not a placeholder for the backfilled rows — it is the only value the constant has held since this table was created in `0034`.
+
 ```sql
 CREATE TABLE arm_comparison_samples (
   computed_at             TEXT PRIMARY KEY,
@@ -631,7 +633,8 @@ CREATE TABLE arm_comparison_samples (
   control_max_drawdown_pct REAL NOT NULL,
 
   diverged                 INTEGER NOT NULL CHECK(diverged IN (0, 1)),
-  divergence_reason        TEXT
+  divergence_reason        TEXT,
+  min_trades_per_arm       INTEGER NOT NULL DEFAULT 5
 );
 
 CREATE INDEX idx_arm_comparison_samples_computed_at ON arm_comparison_samples(computed_at DESC);
