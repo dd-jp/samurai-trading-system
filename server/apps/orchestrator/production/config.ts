@@ -381,23 +381,6 @@ export interface ProductionConfig extends AlertChannelSlots {
    * account ledger.
    */
   accountState?: AccountStateProvider;
-  /**
-   * Falsifier arm 2's account scalars (#753), separately overridable.
-   *
-   * A SECOND field rather than a reuse of `accountState`, because the two arms
-   * must not share one: the live provider reads the broker's ledger and the
-   * control arm never trades there, so sharing made the control's D5 sizing and
-   * its drawdown halt functions of the live arm's fills. When omitted this
-   * module builds a `ControlArmAccountStateProvider` over the control arm's own
-   * `closed_trades` and open lots.
-   *
-   * The override exists for the same reason `accountState`'s does — a harness
-   * that pins the live arm to a fixed equity (`smoke-run.ts`) has to be able to
-   * pin the control arm to the same one, or the two arms transact against books
-   * that differ by two orders of magnitude and the run stops testing the
-   * pipeline.
-   */
-  controlAccountState?: AccountStateProvider;
   /** Realized-vol reading for the volatility breaker tier — no in-repo indicator (#234). */
   volatility?: VolatilityReadingProvider;
 

@@ -17,7 +17,11 @@ import {
 } from '../../../providers/market-data-service/index.js';
 import type { TradingArm } from '../../../shared/index.js';
 import { openSharedStore, type SharedStore } from '../../../shared/store/index.js';
-import { ControlArmAccountStateProvider } from './control-account-state.js';
+import { CONTROL_BOOK_ANCHOR_KEY, SqliteAccountStateStore } from '../sqlite-account-state-store.js';
+import {
+  buildControlBookAnchorResolver,
+  ControlArmAccountStateProvider,
+} from './control-account-state.js';
 
 /** Saturday noon UTC: the crypto session opened at 00:00 UTC the same morning. */
 const AS_OF = new Date('2026-08-01T12:00:00Z');
@@ -102,9 +106,12 @@ function insertOpenLot(
   );
 }
 
-function makeProvider(db: SharedStore): ControlArmAccountStateProvider {
+function makeProvider(
+  db: SharedStore,
+  resolveBook: (asOf: Date) => Promise<number> = async () => BOOK,
+): ControlArmAccountStateProvider {
   return new ControlArmAccountStateProvider({
-    book: BOOK,
+    resolveBook,
     // `arm: 'control'` — the whole point. The live arm's Feedback Loop takes
     // the same class's default.
     closedTrades: new SqliteClosedTradeStore(db, 'control'),
@@ -298,6 +305,164 @@ describe('the control arm is wired to its own account state, not the live one (#
 
       expect(live.map((trade) => trade.realized_pnl_net)).toEqual([-50]);
       expect(control.map((trade) => trade.realized_pnl_net)).toEqual([900]);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+/**
+ * The book ANCHOR (#753, second pass).
+ *
+ * The first version of this provider took a constant `LIVE_BOOK_GBP`. `yarn
+ * smoke` proved what that costs on a paper account: the live arm sizes against
+ * the broker's ~100,000 equity (the £1,000 ceiling gate does not arm without
+ * `same_currency_verified`), so every control intent came back
+ * `rounds_to_zero_shares` and the arm took no trade at all — a control that
+ * cannot be told apart from one that never found a setup.
+ *
+ * The property is therefore two-sided, exactly like the independence tests
+ * above: the anchor must TRACK the live arm once, at boot, and must never track
+ * it again.
+ */
+describe('the control arm’s book anchor (#753)', () => {
+  it('resolves the starting book exactly once, then stops reading it', async () => {
+    const { db, cleanup } = openStore();
+    try {
+      const seen: number[] = [];
+      let liveEquity = 100_000;
+      const provider = makeProvider(db, async () => {
+        seen.push(liveEquity);
+        return liveEquity;
+      });
+
+      const first = await provider.getAccountState(AS_OF);
+      // The live arm's account is wiped out between the two calls. The control
+      // arm's book must not notice: it is a matched control, not a mirror.
+      liveEquity = 20_000;
+      const second = await provider.getAccountState(AS_OF);
+
+      expect(seen).toEqual([100_000]);
+      expect(first.cash).toBe(100_000);
+      expect(second.cash).toBe(100_000);
+      expect(second.peak_equity).toBe(100_000);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('still moves on the control arm’s own realized PnL after anchoring', async () => {
+    const { db, cleanup } = openStore();
+    try {
+      insertClosedTrade(db, {
+        key: 'control-1',
+        assetClass: 'crypto',
+        pnl: 250,
+        closedAt: IN_THE_SESSION,
+        arm: 'control',
+      });
+
+      const state = await makeProvider(db, async () => 100_000).getAccountState(AS_OF);
+
+      expect(state.cash).toBe(100_250);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+/**
+ * The anchor POLICY — persisted value first, one live observation second, the
+ * declared book only as a last resort.
+ *
+ * Persistence is the load-bearing half. A lazily resolved anchor that is not
+ * written down re-anchors on every process restart, so across a multi-restart
+ * soak the control's book would slowly track the live arm's performance — a
+ * re-coupling of exactly the kind the provider above exists to remove.
+ */
+describe('buildControlBookAnchorResolver (#753)', () => {
+  function accountReturning(cash: number, peak = cash) {
+    return {
+      getAccountState: async () => ({
+        cash,
+        peak_equity: peak,
+        daily_basis: {
+          crypto: { known: true as const, open_equity: cash, realized_pnl: 0 },
+          stocks: { known: true as const, open_equity: cash, realized_pnl: 0 },
+          portfolio: { known: true as const, open_equity: cash, realized_pnl: 0 },
+        },
+        consecutive_losses: 0,
+      }),
+    };
+  }
+
+  it('writes the live arm’s equity once and re-reads it on the next boot', async () => {
+    const { db, cleanup } = openStore();
+    try {
+      const firstBoot = buildControlBookAnchorResolver({
+        liveAccountState: accountReturning(100_000),
+        store: new SqliteAccountStateStore(db, CONTROL_BOOK_ANCHOR_KEY),
+        fallbackBook: BOOK,
+      });
+      expect(await firstBoot(AS_OF)).toBe(100_000);
+
+      // A second process, started after the live arm has run its book up.
+      const readsLive: number[] = [];
+      const secondBoot = buildControlBookAnchorResolver({
+        liveAccountState: {
+          getAccountState: async () => {
+            readsLive.push(1);
+            return accountReturning(500_000).getAccountState();
+          },
+        },
+        store: new SqliteAccountStateStore(db, CONTROL_BOOK_ANCHOR_KEY),
+        fallbackBook: BOOK,
+      });
+
+      expect(await secondBoot(AS_OF)).toBe(100_000);
+      // Not merely the right number: the live account is not consulted at all.
+      expect(readsLive).toEqual([]);
+      // And the live arm's own row is untouched — different key, same table.
+      expect(new SqliteAccountStateStore(db).peakEquity()).toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('anchors on the account’s scale, not on what is left after deployment', async () => {
+    const { db, cleanup } = openStore();
+    try {
+      // A restart taken while the live arm holds lots: `cash` is the residual,
+      // `peak_equity` is the account. Anchoring on `cash` alone would start the
+      // control at a fraction of the live arm's size for no stated reason.
+      const resolve = buildControlBookAnchorResolver({
+        liveAccountState: accountReturning(10_000, 100_000),
+        store: new SqliteAccountStateStore(db, CONTROL_BOOK_ANCHOR_KEY),
+        fallbackBook: BOOK,
+      });
+
+      expect(await resolve(AS_OF)).toBe(100_000);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('falls back to the declared book when the live account cannot be read', async () => {
+    const { db, cleanup } = openStore();
+    try {
+      const resolve = buildControlBookAnchorResolver({
+        liveAccountState: {
+          getAccountState: async () => {
+            throw new Error('venue down');
+          },
+        },
+        store: new SqliteAccountStateStore(db, CONTROL_BOOK_ANCHOR_KEY),
+        fallbackBook: BOOK,
+      });
+
+      // Not a throw: this resolves on the first decision tick, and an account
+      // read that fails must not take the live arm's tick down with it.
+      expect(await resolve(AS_OF)).toBe(BOOK);
     } finally {
       cleanup();
     }

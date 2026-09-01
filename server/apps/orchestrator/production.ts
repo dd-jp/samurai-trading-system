@@ -212,7 +212,10 @@ import { LIVE_BOOK_GBP } from './paper-profile.js';
 import { AlpacaAccountStateProvider } from './production/account-state.js';
 import { buildAnalystsStep } from './production/analysts-adapter.js';
 // #753: the control arm's own account scalars — see `control-account-state.ts`.
-import { ControlArmAccountStateProvider } from './production/control-account-state.js';
+import {
+  buildControlBookAnchorResolver,
+  ControlArmAccountStateProvider,
+} from './production/control-account-state.js';
 // #753: falsifier arm 2's composition — see `control-arm-wiring.ts`.
 import {
   buildControlArmWiring,
@@ -241,7 +244,7 @@ import { withOnTradeClose } from './production/on-trade-close-hookup.js';
 import { withFlattenTail } from './production/stocks-tick-window.js';
 import { MarketDataVolatilityReadingProvider } from './production/volatility-reading-provider.js';
 import { UniverseScheduler } from './scheduler.js';
-import { SqliteAccountStateStore } from './sqlite-account-state-store.js';
+import { CONTROL_BOOK_ANCHOR_KEY, SqliteAccountStateStore } from './sqlite-account-state-store.js';
 import { SqliteDailyEquityStore } from './sqlite-daily-equity-store.js';
 import { SqliteSessionEquityStore } from './sqlite-session-equity-store.js';
 import { runTickPlan } from './tick-loop.js';
@@ -1313,23 +1316,31 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // drawdown-halt timing functions of the live arm's realized cash, so the
     // control was not an independent measurement over the same tape. See
     // `control-account-state.ts`.
-    accountState:
-      config.controlAccountState ??
-      new ControlArmAccountStateProvider({
-        // The DECLARED book, not live equity. Both arms are stated against the
-        // same £1,000 (ADR-0015's 2026-08-18 amendment) — the arm comparison
-        // divides both by it too — and the live arm's own ceiling gate reads the
-        // same field, so there is one anchor rather than two.
-        book: config.riskConfig.live_book_ceiling?.book ?? LIVE_BOOK_GBP,
-        // `arm: 'control'` — the one caller that asks this store for the other
-        // arm. Handing it the default would restore the coupling exactly.
-        closedTrades: new SqliteClosedTradeStore(config.db, 'control'),
-        getOpenPositions: () => controlExecutionStore.getOpenPositions(),
-        // The SAME two calendars the live provider is given: the arms must
-        // measure a "day" over identical boundaries or their daily figures are
-        // not comparable.
-        calendars: sessionCalendars,
+    accountState: new ControlArmAccountStateProvider({
+      // The live arm's equity, observed ONCE at first boot and then persisted
+      // first-write-wins — not the declared £1,000.
+      //
+      // A matched control starts at the same capital as the arm it is matched
+      // against. In `paper` mode the live arm sizes against the broker's equity
+      // (the £1,000 ceiling gate does not arm without `same_currency_verified`),
+      // and `yarn smoke` proved what a declared-£1,000 control costs there:
+      // every control intent came back `rounds_to_zero_shares` and the arm took
+      // no trade at all. Reading it once is what keeps this an anchor rather
+      // than a coupling — see `buildControlBookAnchorResolver`.
+      resolveBook: buildControlBookAnchorResolver({
+        liveAccountState: breakerStateDeps.accountState,
+        store: new SqliteAccountStateStore(config.db, CONTROL_BOOK_ANCHOR_KEY),
+        fallbackBook: config.riskConfig.live_book_ceiling?.book ?? LIVE_BOOK_GBP,
       }),
+      // `arm: 'control'` — the one caller that asks this store for the other
+      // arm. Handing it the default would restore the coupling exactly.
+      closedTrades: new SqliteClosedTradeStore(config.db, 'control'),
+      getOpenPositions: () => controlExecutionStore.getOpenPositions(),
+      // The SAME two calendars the live provider is given: the arms must
+      // measure a "day" over identical boundaries or their daily figures are
+      // not comparable.
+      calendars: sessionCalendars,
+    }),
     costModel: executionDeps.costModel,
     marketData,
     executionConfig: config.executionConfig,

@@ -27,20 +27,20 @@
  *
  * The control's venue is simulated, so there is no ledger to read: the book IS
  * its own trade record. Every figure below therefore comes from two
- * arm-scoped reads — its `closed_trades` rows and its open lots — plus the
- * DECLARED book (`LIVE_BOOK_GBP`) as the starting cash. That mirrors the
- * `arm = 'live'` scoping already applied one layer down rather than inventing a
- * second mechanism, and it means a control-arm figure can never be moved by a
- * live-arm fill.
+ * arm-scoped reads — its `closed_trades` rows and its open lots — plus a
+ * starting BOOK ANCHOR resolved exactly once (see `resolveBook`). That mirrors
+ * the `arm = 'live'` scoping already applied one layer down rather than
+ * inventing a second mechanism, and it means a control-arm figure can never be
+ * moved by a live-arm fill.
  *
  * | Field | Derivation |
  * |---|---|
- * | `cash` | declared book + realized PnL to date − cash deployed in open long lots |
- * | `peak_equity` | running max of (book + realized), floored at the book |
- * | `daily_basis` | (book + realized before the session open) as the denominator, realized since it as the numerator |
+ * | `cash` | anchor + realized PnL to date − cash deployed in open long lots |
+ * | `peak_equity` | running max of (anchor + realized), floored at the anchor |
+ * | `daily_basis` | (anchor + realized before the session open) as the denominator, realized since it as the numerator |
  * | `consecutive_losses` | the control's own closed trades, walked backwards |
  *
- * ## Three deliberate divergences from `AlpacaAccountStateProvider`
+ * ## Four deliberate divergences from `AlpacaAccountStateProvider`
  *
  * 1. **`peak_equity` is a REALIZED high-water mark, not a marked one.** The
  *    live provider reads Alpaca's mark-to-market `equity` and stores its max,
@@ -70,6 +70,15 @@
  *    Alpaca equity). No FX provider exists in this codebase; the arm
  *    comparison already divides both arms by `LIVE_BOOK_GBP` for the same
  *    reason. Nothing here makes that worse, and it is not this ticket's to fix.
+ * 4. **The starting book is the live arm's equity at first boot, not the
+ *    declared £1,000.** A matched control has to start at the same capital as
+ *    the arm it is matched against, and in `paper` mode the live arm sizes
+ *    against the broker's equity rather than `LIVE_BOOK_GBP` (the ceiling gate
+ *    does not arm without `same_currency_verified`). The anchor is read ONCE and
+ *    persisted first-write-wins, so this is a single boot-time observation and
+ *    not an ongoing coupling — but it does mean the control's book is stated in
+ *    the live account's currency and scale, which is what makes the two arms'
+ *    per-trade sizes comparable in the first place.
  */
 import type { SessionBasis, SessionBasisByClass } from '../../../pipeline/risk-manager/index.js';
 import type { TradingCalendar } from '../../../providers/market-data-service/index.js';
@@ -90,12 +99,30 @@ const EPOCH = new Date(0);
 
 export interface ControlArmAccountStateProviderInput {
   /**
-   * The declared book the control arm's own account starts at — `LIVE_BOOK_GBP`,
-   * the same figure the live arm's D5 fractions and `live_book_ceiling` are
-   * stated against. Passed in rather than imported so a test can state its own
-   * anchor without restating the whole profile.
+   * The book the control arm's own account STARTS at, resolved once — on the
+   * first `getAccountState` — and then never consulted again.
+   *
+   * A resolver rather than a constant because the anchor has to be the LIVE
+   * arm's starting equity, and that is not known at construction. It was a
+   * constant (`LIVE_BOOK_GBP`) in this module's first version, and `yarn smoke`
+   * caught what that costs: the live arm sizes against the broker's equity
+   * (~100,000 on an Alpaca paper account, and the £1,000 `live_book_ceiling`
+   * does not arm without `same_currency_verified`), so a control arm anchored at
+   * £1,000 sized every intent to `rounds_to_zero_shares` and took no trade at
+   * all. A control that never trades is indistinguishable from a control that
+   * never found a setup — the exact row `formatArmComparison` warns about, and
+   * a whole soak wasted.
+   *
+   * "Matched control" means the same starting capital and then INDEPENDENT
+   * evolution. Resolving once gives that: the anchor is a boot-time observation,
+   * never a per-tick read, so no live fill can move a control-arm figure. The
+   * composition root persists the resolved value (`CONTROL_BOOK_ANCHOR_KEY`,
+   * first-write-wins) so a restart re-reads the original anchor rather than
+   * re-anchoring to the live arm's by-then-different equity — without which the
+   * control's book would slowly track the live arm's performance across a
+   * multi-restart soak.
    */
-  book: number;
+  resolveBook: (asOf: Date) => Promise<number>;
   /**
    * The CONTROL arm's closed trades — a `SqliteClosedTradeStore` constructed
    * with `arm: 'control'`. Handing this the default (live) instance would
@@ -122,10 +149,27 @@ export class ControlArmAccountStateProvider implements AccountStateProvider {
    * record on the next tick after a restart (max of the cumulative realized
    * curve), and no real money depends on it surviving one.
    */
-  #peakEquity: number;
+  #peakEquity: number | null = null;
 
-  constructor(private readonly input: ControlArmAccountStateProviderInput) {
-    this.#peakEquity = input.book;
+  /** The resolved anchor. Null until the first `getAccountState`; set once. */
+  #book: number | null = null;
+
+  constructor(private readonly input: ControlArmAccountStateProviderInput) {}
+
+  /**
+   * The anchor, resolved on first use and cached for the life of the process.
+   *
+   * Cached on the INSTANCE and not re-read even though the composition root's
+   * resolver is itself idempotent: the point is that a live-arm figure is read
+   * once, at boot, and never again on a decision path.
+   */
+  private async book(asOf: Date): Promise<number> {
+    if (this.#book === null) {
+      const resolved = await this.input.resolveBook(asOf);
+      this.#book = resolved;
+      this.#peakEquity = resolved;
+    }
+    return this.#book;
   }
 
   async getAccountState(asOf: Date): Promise<{
@@ -137,22 +181,23 @@ export class ControlArmAccountStateProvider implements AccountStateProvider {
     // One read, reused by all four figures — the live provider's own posture
     // (`realizedFor` and `consecutiveLosses` both read the same store) without
     // its four separate round trips.
+    const book = await this.book(asOf);
     const trades = this.input.closedTrades.getClosedTradesBetween(EPOCH, asOf);
     const positions = await this.input.getOpenPositions();
 
     const realized = trades.reduce((total, trade) => total + trade.realized_pnl_net, 0);
-    const equityAtCost = this.input.book + realized;
+    const equityAtCost = book + realized;
     // Raised before it is read, exactly as `SqliteAccountStateStore.recordEquity`
     // does, so a new high shows up on the tick that set it.
-    this.#peakEquity = Math.max(this.#peakEquity, equityAtCost);
+    this.#peakEquity = Math.max(this.#peakEquity ?? book, equityAtCost);
 
     return {
       cash: equityAtCost - deployedCash(positions),
       peak_equity: this.#peakEquity,
       daily_basis: {
-        crypto: this.sessionBasisFor('crypto', trades, asOf),
-        stocks: this.sessionBasisFor('stocks', trades, asOf),
-        portfolio: this.sessionBasisFor('portfolio', trades, asOf),
+        crypto: this.sessionBasisFor('crypto', trades, asOf, book),
+        stocks: this.sessionBasisFor('stocks', trades, asOf, book),
+        portfolio: this.sessionBasisFor('portfolio', trades, asOf, book),
       },
       consecutive_losses: this.consecutiveLosses(trades, asOf),
     };
@@ -175,6 +220,7 @@ export class ControlArmAccountStateProvider implements AccountStateProvider {
     key: SessionEquityKey,
     trades: readonly ClosedTrade[],
     asOf: Date,
+    book: number,
   ): SessionBasis {
     const sessionStart = this.calendarFor(key).sessionStart(asOf).getTime();
 
@@ -192,7 +238,7 @@ export class ControlArmAccountStateProvider implements AccountStateProvider {
       }
     }
 
-    const openEquity = this.input.book + realizedBefore;
+    const openEquity = book + realizedBefore;
     // The live provider's guard, for the live provider's reason: a non-positive
     // denominator makes the fraction Infinity or NaN, and both compare false
     // against the breaker's threshold — a wiped-out account would read as "no
@@ -241,6 +287,58 @@ export class ControlArmAccountStateProvider implements AccountStateProvider {
  * authoritative fee ledger, and reading it here would be a third accounting of
  * the same trade.
  */
+/** The durable home for the anchor — `SqliteAccountStateStore`'s shape, narrowed. */
+export interface BookAnchorStore {
+  /** The persisted anchor, or null before one was ever written. */
+  peakEquity(): number | null;
+  /** First-write-wins: stores `equity` if absent, and returns the value in force. */
+  anchorEquity(equity: number, asOf: Date): number;
+}
+
+export interface ControlBookAnchorResolverInput {
+  /** The LIVE arm's provider. Read exactly once, at first boot, and never again. */
+  liveAccountState: AccountStateProvider;
+  /** Keyed to `CONTROL_BOOK_ANCHOR_KEY` — never the live arm's `'default'` row. */
+  store: BookAnchorStore;
+  /** `LIVE_BOOK_GBP`. Used only when the live observation is unusable. */
+  fallbackBook: number;
+}
+
+/**
+ * The anchor policy, in one testable place: persisted value if there is one,
+ * otherwise the live arm's equity observed once and written first-write-wins,
+ * otherwise the declared book.
+ *
+ * `max(cash, peak_equity)` rather than bare `cash`: `cash` is what is left after
+ * deployment, so a restart taken while the live arm holds lots would anchor the
+ * control low. `peak_equity` is the account's scale and is persisted; on a flat
+ * boot the two agree exactly, which is the case this normally runs in.
+ *
+ * A throw or a non-positive reading falls back to the declared book rather than
+ * propagating: this runs on the first decision tick, and an account read that
+ * fails must not take the live arm's tick down with it. The fallback is the
+ * conservative direction — a small book under-trades, it does not over-trade.
+ */
+export function buildControlBookAnchorResolver(
+  input: ControlBookAnchorResolverInput,
+): (asOf: Date) => Promise<number> {
+  return async (asOf: Date): Promise<number> => {
+    const persisted = input.store.peakEquity();
+    if (persisted !== null && persisted > 0) return persisted;
+
+    let observed = 0;
+    try {
+      const live = await input.liveAccountState.getAccountState(asOf);
+      observed = Math.max(live.cash, live.peak_equity);
+    } catch {
+      observed = 0;
+    }
+
+    const anchor = Number.isFinite(observed) && observed > 0 ? observed : input.fallbackBook;
+    return input.store.anchorEquity(anchor, asOf);
+  };
+}
+
 function deployedCash(positions: readonly OpenPosition[]): number {
   return positions.reduce(
     (total, position) =>

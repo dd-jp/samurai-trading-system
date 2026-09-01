@@ -90,6 +90,7 @@ import {
 } from './production.js';
 import { DEFAULT_UNIVERSE } from './scheduler.js';
 import { buildTrendingCloses } from './smoke-run.js';
+import { CONTROL_BOOK_ANCHOR_KEY } from './sqlite-account-state-store.js';
 import { SqliteDailyEquityStore } from './sqlite-daily-equity-store.js';
 import { SequentialTickRunner } from './tick-runner.js';
 import type { Logger, Scheduler, TickOutcome, TickPlan, TickRunner } from './types.js';
@@ -4497,8 +4498,13 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
    * cash, which is not an independent measurement over the same tape.
    *
    * `risk_log.equity` is where each arm's own valuation is recorded, so the two
-   * rows from ONE tick are the proof: this harness injects a 100,000 live
-   * account, and the control's row must be its own declared book instead.
+   * rows from ONE tick are the proof. Both figures are on the same SCALE — the
+   * control anchors its book to the live account once, at boot, because a
+   * matched control has to start at the same capital (see the anchor tests in
+   * `control-account-state.test.ts`, and the `rounds_to_zero_shares` failure
+   * that a declared-£1,000 control produced under `yarn smoke`). What separates
+   * them is the accounting: the control debits its OWN deployed cash and marks
+   * its OWN lot, while the live arm reads the harness's fixed 100,000 stub.
    */
   it('sizes and halts off its own book, not the live arm’s account', async () => {
     await runOneDecisionPass({ handle: db, llmClient: llmForOneDebate() });
@@ -4512,13 +4518,27 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
 
     expect(live?.equity).toBeDefined();
     expect(control?.equity).toBeDefined();
-    // The live arm reads the injected `accountState` stub…
+    // Matched scale: a control anchored at the declared £1,000 against this
+    // 100,000 live account is the exact inertness the smoke gate caught.
     expect(live?.equity).toBeGreaterThan(50_000);
-    // …and the control reads `ControlArmAccountStateProvider` over its own
-    // (empty) book, so its equity is the declared £1,000 plus whatever its own
-    // open lot marks at — nowhere near the live account's.
-    expect(control?.equity).toBeLessThan(10_000);
-    expect(control?.equity).not.toBe(live?.equity);
+    expect(control?.equity).toBeGreaterThan(50_000);
+    // Its own book all the same. The two figures agree on this FIRST tick and
+    // only on it — both arms start flat at one anchor, and `risk_log` is
+    // written before either lot fills — so the equality is not the property to
+    // assert. What proves the arms are on different providers is the anchor
+    // row: `CONTROL_BOOK_ANCHOR_KEY` exists in `account_state` only because
+    // `ControlArmAccountStateProvider`'s resolver ran, and nothing on the live
+    // path ever writes that key. Independence from there is
+    // `control-account-state.test.ts`'s, which moves a live row and a control
+    // row and watches which figures follow.
+    const anchor = db
+      .prepare('SELECT peak_equity FROM account_state WHERE key = ?')
+      .get(CONTROL_BOOK_ANCHOR_KEY) as { peak_equity: number } | undefined;
+    expect(anchor?.peak_equity).toBe(100_000);
+    // And it actually traded — the condition the smoke gate exists to catch,
+    // asserted here too so a control that silently stops sizing fails a unit
+    // test first.
+    expect(lotsByArm(db).map((lot) => lot.arm)).toEqual(['control', 'live']);
   });
 
   /**
