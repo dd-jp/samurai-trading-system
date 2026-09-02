@@ -219,7 +219,10 @@ def main():
         first_scored = None
         for m in months:
             rows = cross_section(per_symbol, m)
-            if rows and first_scored is None:
+            # The floor, not mere availability: `spreads()` skips any month
+            # under NAME_FLOOR, so a month with 1..19 names is not scoreable and
+            # must not be reported as the first one that is.
+            if len(rows) >= NAME_FLOOR and first_scored is None:
                 first_scored = m
             flag = "" if len(rows) >= NAME_FLOOR else "  BELOW FLOOR"
             if m.endswith("-01") or flag:
