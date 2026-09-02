@@ -621,68 +621,30 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     );
   }
 
+  const universe = config.universe ?? SMOKE_TEST_UNIVERSE;
+
   // Sixth of the same boot-time-refusal family (#989, follow-up to #987's
-  // review of PR #988 — see `benchmarkMarketDataStore`'s doc below for the
-  // full mechanism this guard closes).
+  // review of PR #988) — full mechanism (why a calendar mismatch, not
+  // `mode`, is the real hazard; why the two writers can collide on one
+  // `bars` row; why this is deferred rather than a schema fix) is documented
+  // on `benchmarkMarketDataStore`'s doc comment below, not repeated here.
   //
-  // Post-#751 the live path and the outside-benchmark path are provably
-  // disjoint on `BENCHMARK_INSTRUMENTS`: `LseMarkDataSource#assertTradeable`
-  // throws `NonTradeableInstrumentError` for every one of them once the
-  // universe is LSE-only, so `marketData` can never write those symbols and
-  // `buildBenchmarkDataSource` remains their only writer. PRE-#751 that
-  // disjointness does not hold — today's default universe (`DEFAULT_UNIVERSE`,
-  // scheduler.ts) still trades `'SPY'` directly.
-  //
-  // The real hazard is a CALENDAR mismatch, not `mode` itself (#989 review):
-  // the live path's own `AlpacaDataSource` writes through whatever
-  // `equityCalendarFor(config)` resolves — `LseRegularHoursCalendar` by
-  // default in live mode, but `config.tradingCalendar` can override that in
-  // ANY mode — while `buildBenchmarkDataSource` always normalizes against
-  // `UsEquityRegularHoursCalendar`, unconditionally. Gating on `mode ===
-  // 'live'` alone is a leaky proxy in both directions: a `mode: 'paper'` run
-  // with an explicit `tradingCalendar: new LseRegularHoursCalendar()`
-  // override reproduces the exact same collision mechanism and a mode-only
-  // check would stay silent (false negative — the dangerous one); a `mode:
-  // 'live'` run with an explicit `tradingCalendar: new
-  // UsEquityRegularHoursCalendar()` override has no real mismatch and a
-  // mode-only check would still refuse to boot it for no reason (false
-  // positive). So this checks the RESOLVED calendar instance instead of
-  // `mode`.
-  //
-  // `instanceof LseRegularHoursCalendar` enumerates the one calendar class
-  // that actually mismatches `buildBenchmarkDataSource`'s pinned
-  // `UsEquityRegularHoursCalendar` today, not "is this calendar different
-  // from US". A future third calendar class would need its own clause (or a
-  // switch to the negated form) to be caught here.
-  //
-  // The two writers could both write the same `(instrument, timeframe,
-  // open_time)` row in the shared `bars` table, calendar-normalized two
-  // different ways — a silent last-write-wins collision, not a crash.
-  //
-  // Narrowly targeted at exactly that condition — the resolved
-  // `tradingCalendar` is `LseRegularHoursCalendar` AND the resolved universe
-  // holds one of `BENCHMARK_INSTRUMENTS` by EXACT symbol — so it does not
-  // reject a non-LSE calendar, does not reject a universe that excludes every
-  // benchmark instrument, and does not reject an LSE-only universe: an LSE
-  // ETP ticker like `'3SPY'` shares no substring match with the literal
-  // `'SPY'` this checks for, only the symbol itself. Resolved with the same
-  // `?? SMOKE_TEST_UNIVERSE` fallback `universe` below uses, so a caller
-  // relying on that default is covered too.
-  //
-  // A schema fix (a discriminator column on `bars`, needing a migration) was
-  // considered and deferred as disproportionate: this system has no live
-  // exposure yet (ADR-0004 §5), and #751's cutover removes the hazard
-  // structurally once it lands. Failing loudly at boot is proportionate for a
-  // gap that is real but has never fired.
+  // Checks the RESOLVED calendar, fail-CLOSED: anything other than an exact
+  // `UsEquityRegularHoursCalendar` match is treated as a potential mismatch
+  // against `buildBenchmarkDataSource`'s fixed US-normalized port, rather
+  // than enumerating `LseRegularHoursCalendar` as the one bad case (#989
+  // review — a positive enumeration silently admits a future third calendar
+  // class). Case-insensitive on the instrument symbol since
+  // `ProductionConfig.universe` is caller-assembled and untyped on case.
   const tradingCalendar = equityCalendarFor(config);
-  if (tradingCalendar instanceof LseRegularHoursCalendar) {
-    const collidingInstrument = (config.universe ?? SMOKE_TEST_UNIVERSE).find((instrument) =>
-      BENCHMARK_INSTRUMENTS.has(instrument.asset),
+  if (!(tradingCalendar instanceof UsEquityRegularHoursCalendar)) {
+    const collidingInstrument = universe.find((instrument) =>
+      BENCHMARK_INSTRUMENTS.has(instrument.asset.toUpperCase()),
     );
     if (collidingInstrument !== undefined) {
       throw new Error(
         'Orchestrator cannot start: the resolved trading calendar ' +
-          '(equityCalendarFor(config)) is LseRegularHoursCalendar and ' +
+          '(equityCalendarFor(config)) is not UsEquityRegularHoursCalendar and ' +
           `'${collidingInstrument.asset}' is still directly in ProductionConfig.universe. ` +
           'That collides with the outside-benchmark path (#989): ' +
           "buildBenchmarkDataSource's fixed benchmark port always normalizes against " +
@@ -691,7 +653,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
           `calendars. Safe once #751's LSE-only cutover lands (${collidingInstrument.asset} ` +
           'becomes a non-tradeable screening instrument, per LseMarkDataSource#assertTradeable), ' +
           `once this universe drops '${collidingInstrument.asset}', or once ` +
-          'config.tradingCalendar resolves to a non-LSE calendar.',
+          'config.tradingCalendar resolves to UsEquityRegularHoursCalendar.',
       );
     }
   }
@@ -762,7 +724,6 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    */
   const logger = config.logger ?? new JsonLogger();
 
-  const universe = config.universe ?? SMOKE_TEST_UNIVERSE;
   /**
    * #562: the live orchestrator's bars now fail over, per leg, instead of
    * every bar the running system reads coming from one vendor with no catch,
@@ -849,16 +810,17 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * (ADR-0004 §5) — so a schema change (a discriminator column, needing a
    * migration) is deferred as disproportionate to a risk with no live
    * exposure yet. **Closed in code by #989**: `buildProductionComponents`
-   * refuses to boot when the RESOLVED `tradingCalendar` is
-   * `LseRegularHoursCalendar` and `'SPY'`/`'AGG'` (or any other
-   * `BENCHMARK_INSTRUMENTS` member) is still directly in the universe (the
-   * guard sits above, before the LLM budget is constructed, and keys on the
-   * resolved calendar rather than `mode` — a `mode`-only check both misses a
-   * `paper`-mode run with an LSE calendar override and wrongly refuses a
-   * `live`-mode run with a US calendar override, #989 review) — a comment
-   * alone was judged insufficient for live-money infrastructure. Reopen once
-   * #751 lands (the guard's structural condition disappears) or before this
-   * collision condition can be reached any other way.
+   * refuses to boot when the RESOLVED `tradingCalendar` is anything other
+   * than `UsEquityRegularHoursCalendar` (fail-closed, not an enumerated
+   * `LseRegularHoursCalendar` check — #989 review) and `'SPY'`/`'AGG'` (or
+   * any other `BENCHMARK_INSTRUMENTS` member) is still directly in the
+   * universe. The guard sits above, before the LLM budget is constructed,
+   * and keys on the resolved calendar rather than `mode` — a `mode`-only
+   * check both misses a `paper`-mode run with an LSE calendar override and
+   * wrongly refuses a `live`-mode run with a US calendar override. A
+   * comment alone was judged insufficient for live-money infrastructure.
+   * Reopen once #751 lands (the guard's structural condition disappears) or
+   * before this collision condition can be reached any other way.
    */
   const benchmarkMarketDataStore = new SqliteMarketDataStore(config.db);
   /**

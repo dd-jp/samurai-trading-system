@@ -12,6 +12,7 @@
 import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { BENCHMARK_COMPOSITION } from '../../pipeline/outside-benchmark/outside-benchmark.js';
 import { DEFAULT_TRADER_CONFIG } from '../../pipeline/trader/index.js';
 import {
   GdeltGkgClient,
@@ -30,6 +31,16 @@ import {
   startingProfileForMode,
 } from './index.js';
 import type { Logger } from './types.js';
+
+/**
+ * Derived from `BENCHMARK_COMPOSITION` (#989 review), not a hardcoded
+ * `'SPY'` literal — the one source of truth for which symbols
+ * `buildBenchmarkDataSource` writes, shared with `production.ts`'s own
+ * `BENCHMARK_INSTRUMENTS`.
+ */
+const BENCHMARK_INSTRUMENT_SYMBOLS: ReadonlySet<string> = new Set(
+  Object.values(BENCHMARK_COMPOSITION).flatMap((legs) => legs.map((leg) => leg.instrument)),
+);
 
 /**
  * A GDELT client that reaches no network.
@@ -748,8 +759,13 @@ describe('startFromEnvironment — the live profile (#511)', () => {
       // EXACT condition `buildProductionComponents`'s new collision guard
       // refuses to boot. This test is about the live-host wiring
       // (`brokerLine`/`profileWarn` below), not about which universe is
-      // configured, so it drops `'SPY'` rather than weakening the guard.
-      universe: DEFAULT_UNIVERSE.filter((instrument) => instrument.asset !== 'SPY'),
+      // configured, so it drops every `BENCHMARK_COMPOSITION` instrument
+      // rather than weakening the guard — derived, not a hardcoded `'SPY'`
+      // literal (#989 review), so an `'AGG'` addition to `DEFAULT_UNIVERSE`
+      // can't silently break this test for an unrelated reason.
+      universe: DEFAULT_UNIVERSE.filter(
+        (instrument) => !BENCHMARK_INSTRUMENT_SYMBOLS.has(instrument.asset.toUpperCase()),
+      ),
       db: openSharedStore(':memory:'),
       miArchive: new MiArchiveStore(),
       gdeltClient: offlineGdeltClient,

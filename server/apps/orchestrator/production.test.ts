@@ -824,6 +824,28 @@ describe('buildProductionComponents', () => {
   );
 
   it(
+    'refuses mode "live" with a third, unmatched tradingCalendar override and SPY in the ' +
+      'universe (#989 review — the fail-open enumeration a `instanceof LseRegularHoursCalendar` ' +
+      'check would miss) — the guard checks fail-CLOSED (anything other than an exact ' +
+      '`UsEquityRegularHoursCalendar` match is treated as a potential mismatch), not an ' +
+      'enumerated `LseRegularHoursCalendar` case, so a calendar this system has never seen ' +
+      'before (here `AlwaysOpenCalendar`, the crypto default) does not silently bypass it ' +
+      'the way a positive enumeration would',
+    () => {
+      const config = stubConfig(db, {
+        mode: 'live',
+        capitalCeilingUsd: 1_000,
+        tradingCalendar: new AlwaysOpenCalendar(),
+        universe: [{ asset: 'SPY', asset_class: 'stocks' }],
+      });
+
+      expect(() => buildProductionComponents(config)).toThrow(
+        /collides with the outside-benchmark path/,
+      );
+    },
+  );
+
+  it(
     'does NOT refuse mode "live" with a universe that excludes SPY/AGG (#989) — a universe ' +
       'holding neither symbol has no collision to guard against',
     () => {
@@ -834,6 +856,23 @@ describe('buildProductionComponents', () => {
       });
 
       expect(() => buildProductionComponents(config)).not.toThrow();
+    },
+  );
+
+  it(
+    'refuses mode "live" with a lower-cased "spy" in the universe (#989 review) — ' +
+      'ProductionConfig.universe is caller-assembled and untyped on case, so the guard ' +
+      'compares case-insensitively rather than trusting every caller to upper-case first',
+    () => {
+      const config = stubConfig(db, {
+        mode: 'live',
+        capitalCeilingUsd: 1_000,
+        universe: [{ asset: 'spy', asset_class: 'stocks' }],
+      });
+
+      expect(() => buildProductionComponents(config)).toThrow(
+        /collides with the outside-benchmark path/,
+      );
     },
   );
 
