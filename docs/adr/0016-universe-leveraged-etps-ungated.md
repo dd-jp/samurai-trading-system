@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-08-09
 - **Decided by:** David — universe objective on [#635](https://github.com/dd-jp/samurai-trading-system/issues/635), gating on [#658](https://github.com/dd-jp/samurai-trading-system/issues/658)
-- **Related:** [#915](https://github.com/dd-jp/samurai-trading-system/issues/915) (holds the falsifiable bar for revisiting gating — #655 closed 2026-08-26 on a *declared* trial, not a measured answer; #915 runs the measurement), [#666](https://github.com/dd-jp/samurai-trading-system/issues/666) (can overturn the instrument choice), [`docs/research/18-intraday-instrument-physics.md`](../research/18-intraday-instrument-physics.md)
+- **Related:** [#915](https://github.com/dd-jp/samurai-trading-system/issues/915) (holds the falsifiable bar for revisiting gating — #655 closed 2026-08-26 on a *declared* trial, not a measured answer; #915 runs the measurement), [#750](https://github.com/dd-jp/samurai-trading-system/issues/750) (measured per-instrument round-trip cost gates this; [#666](https://github.com/dd-jp/samurai-trading-system/issues/666) would have delivered it but closed 2026-08-27 out of scope without doing so), [`docs/research/18-intraday-instrument-physics.md`](../research/18-intraday-instrument-physics.md)
 - **Builds on:** [ADR-0014](0014-intraday-flat-by-close-horizon.md), [ADR-0015](0015-live-venue-account-and-book-split.md)
 
 ## Context
@@ -26,7 +26,9 @@ Measured over two years of daily bars — the frequency with which each instrume
 
 ### So the equity universe is **LSE-listed leveraged index ETPs plus commodity ETCs**
 
-Verified tradeable inside the T212 ISA behind an FCA complex-products appropriateness questionnaire.
+Tradeable via Saxo Capital Markets UK, a GIA (not an ISA), which confirms electronic (not desk-only) tradeability over its OpenAPI for all three named instruments (3USL, 3UKL, an oil ETC) — [ADR-0015](0015-live-venue-account-and-book-split.md)'s 2026-08-30 amendment.
+
+> **Updated 2026-09-02 — venue re-framed for Saxo/GIA (docs subset of [#946](https://github.com/dd-jp/samurai-trading-system/issues/946)).** This line previously read "Verified tradeable inside the T212 ISA behind an FCA complex-products appropriateness questionnaire" — T212 was ruled out as the venue (#896, #912) and Saxo/GIA adopted instead, map [#905](https://github.com/dd-jp/samurai-trading-system/issues/905). The FCA complex-products appropriateness questionnaire was a T212-specific detail; neither ADR-0015 nor map #905 records whether an equivalent gate applies under Saxo, so it is dropped rather than mechanically swapped to "Saxo."
 
 **Leverage does not improve the odds** — this is the part that is easy to get wrong. Break-even win rate stays at ~47% because leverage scales gains and losses alike. What it does is **enlarge each win against a fixed-percentage cost**, which is decisive when trade count is capped near one per day: 3USL's observed 0.18% round trip against 3× the base range lifts equity-leg expectancy from **+0.063% to +0.195%/trade** (16.3%/yr to 50.7%/yr).
 
@@ -82,7 +84,7 @@ Anything proposing to improve the economics should be checked against this order
 
 ## Known weakness
 
-**The entire leveraged-ETP case rests on one observed 0.18% spread quote for 3USL.** [#666](https://github.com/dd-jp/samurai-trading-system/issues/666) must measure it on the T212 demo API and is explicitly permitted to overturn this ADR. If the real spread is materially wider, the expectancy uplift that justifies leverage disappears.
+**The entire leveraged-ETP case rests on one observed 0.18% spread quote for 3USL.** [#666](https://github.com/dd-jp/samurai-trading-system/issues/666) was closed 2026-08-27 as out of scope, following the T212-to-Saxo venue pivot, without ever delivering this spread measurement — it named the T212 demo API as the measurement source, and that venue no longer runs this strategy. [#750](https://github.com/dd-jp/samurai-trading-system/issues/750) (measured round-trip cost, ascending, per pool line) now gates on this measurement rather than performing it — no open ticket currently delivers a per-instrument spread on any live venue. If the real spread is materially wider than 0.18%, the expectancy uplift that justifies leverage still disappears; that question remains open, not answered.
 
 **No free LSE intraday history exists** ([#656](https://github.com/dd-jp/samurai-trading-system/issues/656)), so the measurements above use US instruments as proxies for the underlying. They characterise the *underlying's* physics, not the LSE ETP's own tape.
 
@@ -121,7 +123,7 @@ The measurement replaces a profit claim with **a bar the entry signal must clear
 
 This is the first falsifiable statement of what the debate layer has to be worth. It is also why [#625](https://github.com/dd-jp/samurai-trading-system/issues/625) is now the critical path: a system that has produced zero trades has never been measured against it.
 
-**Not overturned by this amendment:** the universe, the no-gating decision, and the ISA/venue constraints of [ADR-0015](0015-live-venue-account-and-book-split.md). **Still open:** [#666](https://github.com/dd-jp/samurai-trading-system/issues/666) must measure real LSE ETP spreads per subclass — the 0.18% and 0.41% figures are each a single quote, and both bars move directly with them.
+**Not overturned by this amendment:** the universe, the no-gating decision, and the venue/account constraints of [ADR-0015](0015-live-venue-account-and-book-split.md) (now Saxo GIA, not T212 ISA — see the 2026-08-30 amendment). **Still open:** real LSE ETP spreads per subclass have not been measured on any live venue — the 0.18% and 0.41% figures are each a single quote, and both bars move directly with them. [#666](https://github.com/dd-jp/samurai-trading-system/issues/666), which would have measured this on the T212 demo API, closed 2026-08-27 out of scope without delivering it; [#750](https://github.com/dd-jp/samurai-trading-system/issues/750) now gates on this measurement rather than performing it — no open ticket currently delivers it.
 
 ## Amendment, 2026-08-18 — the revisit bar is rehomed, and it changes shape ([#840](https://github.com/dd-jp/samurai-trading-system/issues/840))
 
