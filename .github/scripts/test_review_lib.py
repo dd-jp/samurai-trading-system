@@ -1829,6 +1829,15 @@ def test_everything_not_low_still_anchors_inline(severity):
     assert len(payload["comments"]) == 1
 
 
+def test_the_gate_consults_the_constant():
+    """The constant must BE the gate, not decoration next to it: a named set
+    that nothing reads implies an enforcement that does not exist."""
+    assert review_lib.GATED_SEVERITIES == frozenset({"low"})
+
+    payload = review_lib.build_review_payload(DIFF, _result([_comment(severity="low")]))
+    assert payload["comments"] == []
+
+
 @pytest.mark.parametrize("severity", ["low", "LOW", " low "])
 def test_low_is_matched_case_and_whitespace_insensitively(severity):
     payload = review_lib.build_review_payload(DIFF, _result([_comment(severity=severity)]))

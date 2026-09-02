@@ -52,17 +52,17 @@ MAX_REVIEW_BODY_CHARS = 63000
 TRANSIENT_MAX_ATTEMPTS = 3
 TRANSIENT_BACKOFF_SECONDS = (20, 90)
 
-# Severities that earn a line-anchored comment. Everything else the model
-# labels — `low`, in the schema — is still reported, but folded into the body
-# rather than spent as an inline comment: the volume of low-severity inline
-# comments is what makes a re-reviewed PR unreadable. NOT a drop: a gated
-# finding gets its own body section, and the section says why it isn't inline.
+# Severities that do NOT earn a line-anchored comment. The finding is still
+# reported — it gets its own body section saying why it isn't inline — but the
+# volume of low-severity inline comments is what makes a re-reviewed PR
+# unreadable.
 #
-# An unrecognised or missing severity is treated as inline-worthy, never as
-# `low`. The model's JSON is untrusted input, and a parse miss that silently
-# demoted a `high` finding into a body bullet would be the same class of quiet
-# lie the coverage banner exists to prevent.
-INLINE_SEVERITIES = frozenset({"high", "medium"})
+# A DENYLIST, deliberately, not an allowlist of {high, medium}: an
+# unrecognised or missing severity must stay inline. The model's JSON is
+# untrusted input, and a parse miss that silently demoted a `high` finding
+# into a body bullet would be the same class of quiet lie the coverage banner
+# exists to prevent. An allowlist inverts that default.
+GATED_SEVERITIES = frozenset({"low"})
 
 # Marker appended to every inline comment body so a later run can recognise
 # its own prior findings. Keyed on the REVIEWER, not the posting identity:
@@ -1435,7 +1435,7 @@ def build_review_payload(
             continue
         # Severity gate BEFORE dedup: a `low` finding never becomes an inline
         # comment, so it never earns an anchor a later run would match on.
-        if normalise_severity(c.get("severity")) == "low":
+        if normalise_severity(c.get("severity")) in GATED_SEVERITIES:
             gated_low.append(c)
             continue
         if (file, line) in anchors:
