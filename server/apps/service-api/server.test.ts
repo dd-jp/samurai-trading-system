@@ -331,3 +331,56 @@ describe('dashboard server — bundle not built', () => {
     expect(((await r.json()) as { mode: string }).mode).toBe('live');
   });
 });
+
+/**
+ * #887/ADR-0019: `createDashboardServer` must itself enforce the conjunctive
+ * bind guard (`bind-guard.ts`), not merely offer it as a function nothing
+ * calls — the composition, not the pure predicate, is what actually protects
+ * a real `yarn dashboard`. `bind-guard.test.ts` covers the predicate's own
+ * truth table directly; these three cases prove the wiring at the boundary
+ * every caller (`index.ts`, `fixture-server.ts`) actually goes through.
+ *
+ * Construction only, no `.start()`: the refusal (and the permission) happen
+ * synchronously inside `createDashboardServer`, before any socket binds, so
+ * asserting on the constructor call is the precise claim — actually binding
+ * `0.0.0.0` would additionally depend on the test sandbox's own network
+ * policy, which is not what this guard is about.
+ */
+describe('dashboard server — bind guard (#887, ADR-0019)', () => {
+  it('refuses a non-loopback HOST with no credential configured', () => {
+    expect(() =>
+      createDashboardServer({
+        port: 0,
+        host: '0.0.0.0',
+        store: new InMemoryQueryStore(),
+        bundleRoot,
+        mode: 'paper',
+      }),
+    ).toThrow(/HOST=0\.0\.0\.0.*SAMURAI_DASHBOARD_TOKEN/s);
+  });
+
+  it('still constructs for the default loopback bind with no credential — regression guard', () => {
+    expect(() =>
+      createDashboardServer({
+        port: 0,
+        host: '127.0.0.1',
+        store: new InMemoryQueryStore(),
+        bundleRoot,
+        mode: 'paper',
+      }),
+    ).not.toThrow();
+  });
+
+  it('permits a non-loopback HOST once a credential is configured', () => {
+    expect(() =>
+      createDashboardServer({
+        port: 0,
+        host: '0.0.0.0',
+        store: new InMemoryQueryStore(),
+        bundleRoot,
+        mode: 'paper',
+        dashboardCredential: 'fake-sim-token',
+      }),
+    ).not.toThrow();
+  });
+});

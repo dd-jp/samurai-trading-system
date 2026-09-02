@@ -157,6 +157,13 @@ if (mode !== 'paper') {
 
 const server = createDashboardServer({
   port: resolvePort(),
+  // #887/ADR-0019: same `HOST` pattern as `index.ts`, and deliberately NOT
+  // excluded from the bind guard even though this process serves fabricated
+  // data rather than a real book. `createDashboardServer` enforces the guard
+  // structurally (`bind-guard.ts`), so this harness inherits the identical
+  // fail-closed behaviour for free rather than needing its own copy — there
+  // is no reason a Playwright run should be able to publish a fake book to
+  // the LAN unauthenticated when the real dashboard cannot.
   host: process.env.HOST ?? '127.0.0.1',
   store: new E2eFixtureStore(),
   // Same module-relative resolution as `index.ts`: this file is
@@ -167,6 +174,7 @@ const server = createDashboardServer({
   bundleRoot: fileURLToPath(new URL('../../../client/', import.meta.url)),
   mode,
   providers,
+  dashboardCredential: process.env.SAMURAI_DASHBOARD_TOKEN,
 });
 
 await server.start();
