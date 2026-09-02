@@ -257,13 +257,12 @@ archived-citation-plus-refetch design lossy over time.
 
 ## 3. Other candidates, briefly
 
-**Bluesky / AT Protocol** is the most credible remaining option: the public AppView
-(`public.api.bsky.app`) exposes `app.bsky.feed.searchPosts` without authentication, Jetstream is an
-open firehose, posts have public no-login permalinks, and the protocol is *designed* for third-party
-consumption — no approval gate, no per-call fee. **The weakness is coverage**: finance/cashtag volume
-is far below X or StockTwits and may not carry a usable per-ticker signal for 26 names.
-**UNVERIFIED:** a probe of `public.api.bsky.app` returned 403 from the research environment on
-2026-09-01, so the open-access claim needs a direct test before it is relied on.
+**Bluesky / AT Protocol** — **SUPERSEDED 2026-09-02 by [`25-bluesky-social-sentiment-source.md`](25-bluesky-social-sentiment-source.md) (#1041). Verdict: UNUSABLE, on volume.** Read doc 25 rather than this paragraph; it is kept only to show what was believed before the measurement.
+
+Two corrections to what this paragraph asserted:
+
+- **The 403 was not the host refusing anonymous traffic.** `getProfile`, `searchActors` and `getAuthorFeed` all return 200 unauthenticated on `public.api.bsky.app`. But `searchPosts` *specifically* 403s at the CDN edge there, so this paragraph's claim that the public AppView "exposes `app.bsky.feed.searchPosts` without authentication" is **wrong for that host**. It is reachable unauthenticated on `api.bsky.app`, under an undocumented ~3-call burst throttle. Everything else here — open firehose, no-login permalinks, no approval gate, no fee — held up, and the licensing review found **no** anti-automation, anti-commercial, or indirect-revenue clause, and no Reddit-style retention purge.
+- **The suspected weakness was the real one, and it is now measured rather than suspected.** A 10-minute unauthenticated Jetstream sample on 2026-09-02 (25,269 posts, the whole network) returned **zero cashtag mentions of any of the 26 pool tickers**, and of 116 bare-word hits only four were finance-worded — those four being an Amazon affiliate-link post and tokenized-stock pump bots. So the little ticker-adjacent content that exists is automated promotion, which would poison the lens rather than thin it.
 
 **Finance-specific sentiment vendors** (Tiingo/Finnhub-style resellers of social sentiment scores)
 were not researched here, but are worth a look for one structural reason: they move the licensing
@@ -302,4 +301,4 @@ So the decision #969 faces is narrower than the three-way choice it was framed a
 - Per-symbol message volume for either source.
 - Whether a stored permalink + score satisfies Reddit's deletion duty.
 - Whether strategy backtesting would be classed as "research" and routed to RFR.
-- Bluesky public API open access (403 from the research environment on 2026-09-01).
+- ~~Bluesky public API open access (403 from the research environment on 2026-09-01).~~ **RESOLVED 2026-09-02 by doc 25 (#1041)** — the host serves anonymous reads; `searchPosts` alone is edge-blocked on `public.api.bsky.app` and throttled on `api.bsky.app`. Bluesky is nonetheless ruled out on measured finance-chatter volume, not on access.
