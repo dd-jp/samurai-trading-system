@@ -20,11 +20,13 @@
 -- — it starts at or before `ttfb_ms` starts and ends at or after `ttfb_ms`
 -- ends. Ordinary scheduler jitter shifts an endpoint by a few milliseconds
 -- without reordering it, so it cannot invert that containment. Only a
--- wall-clock STEP — an NTP step correction, a manual clock set, or a resync
--- after a host suspend/VM migration — landing inside either span could
--- produce `ttfb_ms > latency_ms`; a step is a discontinuous jump, forward or
--- backward, not the gradual drift jitter describes. Expect near-equality,
--- not a guaranteed `<=`.
+-- BACKWARD wall-clock STEP — an NTP step correction, a manual clock set, or a
+-- resync after a host suspend/VM migration — landing in the part of
+-- `latency_ms`'s span that `ttfb_ms`'s does not cover (before `ttfb_ms`
+-- starts, or after it ends) could produce `ttfb_ms > latency_ms`. A step
+-- inside `ttfb_ms`'s own span shifts both readings equally and cancels out; a
+-- forward step only ever inflates `latency_ms` further, never inverts it.
+-- Expect near-equality, not a guaranteed `<=`.
 --
 -- WHAT IT WILL AND WON'T ANSWER. For a non-streaming completions endpoint
 -- that itself buffers the full generation before writing any response bytes
