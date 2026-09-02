@@ -359,7 +359,7 @@ The other nineteen lines, which doc 34 never probed (four more pass the screen; 
 | 3KOR | 50 | *99.25* | *401.50* | **UNMEASURED** — 9.9% flat days |
 | 3LIP | 47 | *444.51* | *730.62* | **UNMEASURED** — 9.3% flat days |
 | 3UBR | 44 | *229.66* | *487.74* | **UNMEASURED** — 8.7% flat days |
-| LAM3 | 67 | *—* | *—* | **UNMEASURED** — 13.3% flat days |
+| LAM3 | 67 | *191.20* | *582.13* | **UNMEASURED** — 13.3% flat days |
 | 3LAL | 18 | *143.55* | *356.23* | **UNMEASURED** — 3.6% flat days |
 | 3KWE | 13 | *143.42* | *387.03* | **UNMEASURED** — 2.6% flat days |
 | 3VT | 24 | *0.00* | *113.59* | **UNMEASURED** — **101** usable pairs, 23.5% flat days |
@@ -407,7 +407,7 @@ above, both of which push the same way:
 
 So the estimator arm's dispersion statistic should be read as a **lower bound reported for completeness**, and
 the direct quote measurement in F6 is the one to act on. What the estimator arm *does* establish, and F6 confirms
-independently: **every one of the ten screened names estimates wider than SPY (2.1x to 15.6x), and six of the ten
+independently: **every one of the ten screened names estimates wider than SPY (2.1x to 15.6x), and eight of the ten
 estimate wider than TSLA** — the name doc 53 measured at 4.216 bps, already **4.2x the 1bp floor**.
 
 ## F6 — the direct measurement: free LSE quotes across all thirty lines
@@ -426,19 +426,24 @@ a real intraday profile on the US names (TSLA's open median 2.7x its close media
 
 30/30 coverage. Round-trip spread in bps of mid, tightest first:
 
-| tidm | bps | tidm | bps | tidm | bps |
-| --- | --- | --- | --- | --- | --- |
-| PLT3 | **2.3** | 3XLE | 79.7 | 3LPA | 163.0 |
-| LQQ3 | 5.3 | 3ARM | 81.6 | 3LSQ | 168.8 |
-| NVD3 | 6.5 | 3LTS | 94.6 | 3RAC | 173.9 |
-| 3AAP | 12.6 | 3SPY | 96.6 | LAA3 | 186.9 |
-| 3KOR | 13.3 | 3LAL | 97.2 | 3LMO | 208.2 |
-| 3USL | 15.6 | LAM3 | 100.0 | LPP3 | 221.4 |
-| MST3 | 20.3 | 3LME | 105.7 | 3LIP | 240.9 |
-| 3FB | 26.5 | 3UBR | 111.7 | **LCO3** | **1111.1** |
-| 3QQQ | 34.8 | 3LNP | 138.9 | | |
-| 3AMZ | 36.8 | 3KWE | 46.3 | 3LNV | 51.6 |
-| 3VT | 68.4 | | | | |
+| tidm | bps | | tidm | bps |
+| --- | --- | --- | --- | --- |
+| PLT3 | **2.3** | | 3ARM | 81.6 |
+| LQQ3 | 5.3 | | 3LTS | 94.6 |
+| NVD3 | 6.5 | | 3SPY | 96.6 |
+| 3AAP | 12.6 | | 3LAL | 97.2 |
+| 3KOR | 13.3 | | LAM3 | 100.0 |
+| 3USL | 15.6 | | 3LME | 105.7 |
+| MST3 | 20.3 | | 3UBR | 111.7 |
+| 3FB | 26.5 | | 3LNP | 138.9 |
+| 3QQQ | 34.8 | | 3LPA | 163.0 |
+| 3AMZ | 36.8 | | 3LSQ | 168.8 |
+| 3KWE | 46.3 | | 3RAC | 173.9 |
+| 3LNV | 51.6 | | LAA3 | 186.9 |
+| 3VT | 68.4 | | 3LMO | 208.2 |
+| 3XLE | 79.7 | | LPP3 | 221.4 |
+| | | | 3LIP | 240.9 |
+| | | | **LCO3** | **1111.1** |
 
 | statistic | value |
 | --- | --- |
@@ -491,7 +496,7 @@ conclusion:
 > (not in the exact 8bps figure) rather than IBKR's per-order floor — **a rate-calibration update to 8bps is an
 > implementation follow-up, not a structural fix.**
 
-**The half-spread floor is under-sized too, by the ordering argument of F2/F3** — four of six screened LSE names
+**The half-spread floor is under-sized too, by the ordering argument of F2/F3** — eight of ten screened LSE names
 estimate wider than TSLA, whose measured 1m half-spread is 4.2x the floor. Doc 53 §G4 already recorded the same
 direction on separate grounds ("an LSE leveraged ETP's real spread is very likely **wider** than a US
 mega-cap's"). This document does not put a number on it; it establishes the sign.
