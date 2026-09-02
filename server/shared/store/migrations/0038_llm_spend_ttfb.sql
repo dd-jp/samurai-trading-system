@@ -14,11 +14,17 @@
 -- measured inside `nousChat` around `fetchWithTimeout` alone — BEFORE
 -- `response.json()` reads the body. `latency_ms` (already persisted) covers
 -- headers-received AND the full body read; this column isolates the first
--- half. The two are measured against independent `Date.now()` calls in two
--- different functions (`nousChat` vs `AnthropicLlmClient.attempt`), so
--- `ttfb_ms` can very occasionally read a hair above `latency_ms` from
--- scheduler jitter between the two clocks — expect near-equality, not a
--- guaranteed `<=`.
+-- half. Both spans are timestamped with `Date.now()` (the same clock source,
+-- called from two different functions: `nousChat` vs
+-- `AnthropicLlmClient.attempt`), and `latency_ms`'s span contains `ttfb_ms`'s
+-- — it starts at or before `ttfb_ms` starts and ends at or after `ttfb_ms`
+-- ends. Ordinary scheduler jitter shifts an endpoint by a few milliseconds
+-- without reordering it, so it cannot invert that containment. Only a
+-- wall-clock STEP — an NTP step correction, a manual clock set, or a resync
+-- after a host suspend/VM migration — landing inside either span could
+-- produce `ttfb_ms > latency_ms`; a step is a discontinuous jump, forward or
+-- backward, not the gradual drift jitter describes. Expect near-equality,
+-- not a guaranteed `<=`.
 --
 -- WHAT IT WILL AND WON'T ANSWER. For a non-streaming completions endpoint
 -- that itself buffers the full generation before writing any response bytes

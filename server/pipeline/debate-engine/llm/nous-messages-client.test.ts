@@ -39,13 +39,7 @@ function request(): LlmRequest<{ stance: string }> {
 
 function stubFetch(body: unknown) {
   const fetchMock = vi.fn(
-    async () =>
-      ({
-        ok: true,
-        status: 200,
-        statusText: 'OK',
-        json: async () => body,
-      }) as Response,
+    async () => new Response(JSON.stringify(body), { status: 200, statusText: 'OK' }),
   );
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
@@ -57,8 +51,8 @@ function stubFetch(body: unknown) {
  * `fetchWithTimeout`'s promise settles) vs. additional time inside
  * `response.json()` reading the body. Returns a REAL `Response` (via the
  * global constructor) with `.json` overridden to advance the fake-timer
- * clock before resolving — no `as unknown as Response` cast needed, since a
- * real `Response` instance already satisfies the full `Response` type. Same
+ * clock before resolving — no type-assertion cast to `Response` needed,
+ * since a real `Response` instance already satisfies the full type. Same
  * construction `nous-chat.test.ts`'s `stubFetchWithTiming` uses; kept local
  * here rather than imported since `stubFetch` above is also a local copy
  * (each test file mocks the wire boundary independently).
@@ -180,21 +174,17 @@ describe('NousMessagesClient through AnthropicLlmClient', () => {
     let call = 0;
     const fetchMock = vi.fn(async () => {
       call += 1;
-      return {
-        ok: true,
-        status: 200,
-        statusText: 'OK',
-        json: async () => ({
-          choices: [
-            {
-              message: { content: call === 1 ? 'not json at all' : '{"stance":"bullish"}' },
-              finish_reason: 'stop',
-            },
-          ],
-          model: 'openai/gpt-5.6-luna',
-          usage: { prompt_tokens: 10, completion_tokens: 5 },
-        }),
-      } as Response;
+      const body = {
+        choices: [
+          {
+            message: { content: call === 1 ? 'not json at all' : '{"stance":"bullish"}' },
+            finish_reason: 'stop',
+          },
+        ],
+        model: 'openai/gpt-5.6-luna',
+        usage: { prompt_tokens: 10, completion_tokens: 5 },
+      };
+      return new Response(JSON.stringify(body), { status: 200, statusText: 'OK' });
     });
     vi.stubGlobal('fetch', fetchMock);
 

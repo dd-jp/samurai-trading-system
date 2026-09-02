@@ -59,10 +59,10 @@ export interface NousChatResult {
    * received — measured BEFORE `response.json()` reads the body. Distinct
    * from the caller's `latency_ms` (`anthropic-client.ts`), which spans
    * headers-received AND the full body read using its own, separately
-   * started clock; the two will normally read almost equal (a small JSON
-   * reply has a negligible body-read component) but are not the same
-   * measurement — see `migrations/0038_llm_spend_ttfb.sql` for what a
-   * meaningful gap between them would mean.
+   * started span of the same `Date.now()` clock; the two will normally read
+   * almost equal (a small JSON reply has a negligible body-read component)
+   * but are not the same measurement — see `migrations/0038_llm_spend_ttfb.sql`
+   * for what a meaningful gap between them would mean.
    */
   ttfb_ms: number;
 }
