@@ -8,6 +8,7 @@ import type {
   CostFloors,
   CostModel,
   CostModelResult,
+  CostVenue,
   FillRequest,
   MarketState,
 } from './types.js';
@@ -24,10 +25,10 @@ import type {
  * config omits that field, so every config that predates `floors` keeps
  * behaving exactly as it did before this ticket.
  */
-export const DEFAULT_COST_FLOORS: CostFloors = {
+export const DEFAULT_COST_FLOORS: CostFloors = Object.freeze({
   minHalfSpreadRate: 0.0001, // 1 bp of mid
   minCommissionRate: 0.0001, // 1 bp of notional
-};
+});
 
 /**
  * Principle 1 (cost-model-backtest-spec.md:148) requires the SUM
@@ -47,6 +48,39 @@ function assertPositiveFloor(name: keyof CostFloors, value: number): void {
   }
 }
 
+/**
+ * Validates every venue override field present in `CostConfig.venues` at
+ * construction time (#1000), the same point `floors` is validated — a
+ * malformed override (`NaN`/negative/`Infinity`) must fail loudly here
+ * rather than flow through `resolveAssetConfig`'s merge and silently
+ * corrupt `fill_price` via `Math.max(override, floor)`, exactly the failure
+ * mode the floor validation above exists to prevent, just via a different
+ * door.
+ *
+ * Unlike a floor, an `AssetClassCostConfig` rate (e.g. `commissionRate: 0`
+ * for Alpaca's commission-free US equities, `cost-model.test.ts`) is
+ * legitimately zero, so this only requires finite and `>= 0`, not `> 0`.
+ */
+function assertValidVenueOverrides(venues: CostConfig['venues']): void {
+  if (!venues) return;
+  for (const [venue, override] of Object.entries(venues) as Array<
+    [CostVenue, Partial<AssetClassCostConfig> | undefined]
+  >) {
+    if (!override) continue;
+    for (const [field, value] of Object.entries(override) as Array<
+      [keyof AssetClassCostConfig, number | undefined]
+    >) {
+      if (value === undefined) continue;
+      if (!(Number.isFinite(value) && value >= 0)) {
+        throw new Error(
+          `CostModelImpl: CostConfig.venues.${venue}.${field} must be a finite number >= 0 ` +
+            `(got ${value}).`,
+        );
+      }
+    }
+  }
+}
+
 export class CostModelImpl implements CostModel {
   private readonly floors: CostFloors;
 
@@ -54,6 +88,7 @@ export class CostModelImpl implements CostModel {
     this.floors = config.floors ?? DEFAULT_COST_FLOORS;
     assertPositiveFloor('minHalfSpreadRate', this.floors.minHalfSpreadRate);
     assertPositiveFloor('minCommissionRate', this.floors.minCommissionRate);
+    assertValidVenueOverrides(config.venues);
   }
 
   fill(request: FillRequest, marketState: MarketState): CostModelResult {

@@ -56,4 +56,31 @@ describe('scaleCostConfig', () => {
 
     expect(scaled.venues).toEqual({ saxo: { commissionRate: 0.0008 } });
   });
+
+  // #1000 review finding: floors/venues must be copied, not aliased — a
+  // caller mutating a scaled rung's floors/venues (e.g. the sensitivity
+  // ladder in run-stage2-cost-decomposition.ts) must not reach back into the
+  // input config it was scaled from.
+  it('copies floors rather than aliasing the input config object', () => {
+    const withFloors: CostConfig = {
+      ...BASE,
+      floors: { minHalfSpreadRate: 0.002, minCommissionRate: 0.003 },
+    };
+
+    const scaled = scaleCostConfig(withFloors, 0.1);
+
+    expect(scaled.floors).not.toBe(withFloors.floors);
+  });
+
+  it('copies venues (and each per-venue override object) rather than aliasing the input config object', () => {
+    const withVenues: CostConfig = {
+      ...BASE,
+      venues: { saxo: { commissionRate: 0.0008 } },
+    };
+
+    const scaled = scaleCostConfig(withVenues, 0.05);
+
+    expect(scaled.venues).not.toBe(withVenues.venues);
+    expect(scaled.venues?.saxo).not.toBe(withVenues.venues?.saxo);
+  });
 });

@@ -268,6 +268,46 @@ describe('CostModelImpl venue keying (#1000)', () => {
     expect(result.cost_breakdown.commission).toBeGreaterThan(notional * 0.0001); // above the floor
   });
 
+  it('rejects a NaN venue override field at construction (Math.max(x, NaN) silently corrupts fill_price)', () => {
+    expect(
+      () =>
+        new CostModelImpl({
+          ...OPTIMISTIC_CONFIG,
+          venues: { saxo: { commissionRate: NaN } },
+        }),
+    ).toThrow();
+  });
+
+  it('rejects a negative venue override field at construction', () => {
+    expect(
+      () =>
+        new CostModelImpl({
+          ...OPTIMISTIC_CONFIG,
+          venues: { saxo: { commissionRate: -0.0001 } },
+        }),
+    ).toThrow();
+  });
+
+  it('rejects a non-finite (Infinity) venue override field at construction', () => {
+    expect(
+      () =>
+        new CostModelImpl({
+          ...OPTIMISTIC_CONFIG,
+          venues: { saxo: { spreadVolatilityCoefficient: Infinity } },
+        }),
+    ).toThrow();
+  });
+
+  it('accepts a venue override field of exactly 0 (a legitimately zero rate, unlike a floor)', () => {
+    expect(
+      () =>
+        new CostModelImpl({
+          ...OPTIMISTIC_CONFIG,
+          venues: { saxo: { commissionRate: 0 } },
+        }),
+    ).not.toThrow();
+  });
+
   it('does not mutate other fields of the asset-class config when only commissionRate is overridden', () => {
     const config: CostConfig = {
       ...OPTIMISTIC_CONFIG,
