@@ -79,6 +79,7 @@ import {
   MI_NO_DATA_BY_SUBCLASS_COUNTER,
 } from './production/mi-coverage.js';
 import {
+  BENCHMARK_INSTRUMENTS,
   buildAlpacaDataSource,
   buildBenchmarkDataSource,
   buildDefaultLlmClient,
@@ -745,7 +746,11 @@ describe('buildProductionComponents', () => {
     },
   );
 
-  it.each(['SPY', 'AGG'])(
+  // `[...BENCHMARK_INSTRUMENTS]`, not a hardcoded `['SPY', 'AGG']` literal
+  // (#989 review) — a second, independent enumeration of the same set the
+  // guard itself derives from `BENCHMARK_COMPOSITION` would silently stop
+  // covering a future third benchmark leg.
+  it.each([...BENCHMARK_INSTRUMENTS])(
     'refuses to build with mode "live" and %s still directly in the universe (#989) — ' +
       "PRE-#751, `marketData`'s own `AlpacaDataSource` can write a matching bar normalized " +
       "against `equityCalendarFor`'s `LseRegularHoursCalendar` (live mode) while " +
@@ -836,6 +841,29 @@ describe('buildProductionComponents', () => {
         mode: 'live',
         capitalCeilingUsd: 1_000,
         tradingCalendar: new AlwaysOpenCalendar(),
+        universe: [{ asset: 'SPY', asset_class: 'stocks' }],
+      });
+
+      expect(() => buildProductionComponents(config)).toThrow(
+        /collides with the outside-benchmark path/,
+      );
+    },
+  );
+
+  it(
+    'refuses mode "live" with a SUBCLASS of UsEquityRegularHoursCalendar as the tradingCalendar ' +
+      'override and SPY in the universe (#989 review — `instanceof` matches subclasses, so ' +
+      '`.constructor !==` is the check, not `!(x instanceof ...)`) — a subclass overriding ' +
+      'session normalization (this codebase already has one such pattern, ' +
+      '`NeverTradingCalendar` in trading-calendar.test.ts) is not provably the SAME ' +
+      "normalization as `buildBenchmarkDataSource`'s fixed calendar just because it inherits " +
+      'from it',
+    () => {
+      class SubclassCalendar extends UsEquityRegularHoursCalendar {}
+      const config = stubConfig(db, {
+        mode: 'live',
+        capitalCeilingUsd: 1_000,
+        tradingCalendar: new SubclassCalendar(),
         universe: [{ asset: 'SPY', asset_class: 'stocks' }],
       });
 

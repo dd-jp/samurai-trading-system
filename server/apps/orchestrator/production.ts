@@ -641,10 +641,17 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // against `buildBenchmarkDataSource`'s fixed US-normalized port, rather
   // than enumerating `LseRegularHoursCalendar` as the one bad case (#989
   // review — a positive enumeration silently admits a future third calendar
-  // class). Case-insensitive on the instrument symbol since
-  // `ProductionConfig.universe` is caller-assembled and untyped on case.
+  // class). `.constructor !==`, not `!(x instanceof ...)` (#989 review):
+  // `instanceof` also matches a SUBCLASS of `UsEquityRegularHoursCalendar`
+  // (this codebase already has one, `NeverTradingCalendar` in
+  // trading-calendar.test.ts) that could override session normalization —
+  // exact constructor identity is the only check that cannot be quietly
+  // satisfied by a variant that behaves differently from the benchmark
+  // port's own fixed calendar. Case-insensitive on the instrument symbol
+  // since `ProductionConfig.universe` is caller-assembled and untyped on
+  // case.
   const tradingCalendar = equityCalendarFor(config);
-  if (!(tradingCalendar instanceof UsEquityRegularHoursCalendar)) {
+  if (tradingCalendar.constructor !== UsEquityRegularHoursCalendar) {
     const collidingInstrument = universe.find((instrument) =>
       BENCHMARK_INSTRUMENTS.has(instrument.asset.toUpperCase()),
     );
