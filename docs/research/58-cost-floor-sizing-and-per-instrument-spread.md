@@ -126,6 +126,48 @@ under-charges is flattering, and flattering is the direction this repo has twice
 ([`13-stage2-proxy-verdict.md`](13-stage2-proxy-verdict.md)'s KILL was the cost fixture; #875's own "order of
 magnitude" claim was withdrawn).
 
+## AMENDMENT — the first criterion FAILED AS WRITTEN, and is replaced here
+
+Committed **after** a first run and **before** the re-run whose numbers appear below the line. The first run's
+raw log is kept at [`archive/raw/2026-09-02-58-spread-estimator.txt`](archive/raw/2026-09-02-58-spread-estimator.txt)
+and is **not** deleted, because the failure is the point.
+
+**What happened.** The degeneracy screen above declared that a ticker degenerate on more than 33% of its usable
+day-pairs is UNMEASURED and "excluded from the ordering and dispersion statistics". On the first run **all four US
+validation names were degenerate** — SPY 41.4%, QQQ 40.2%, AAPL 40.6%, TSLA 45.4% under Corwin-Schultz. Under the
+criterion as written, all four are excluded, nothing survives to be ranked, and the LSE arm should not have run.
+
+The script did not implement that: it computed the ordering and dispersion bars over every row with a non-null
+estimate, never applying the exclusion. It printed `ORDERING BAR: PASS` and `DISPERSION BAR: PASS` and went on to
+run the LSE arm. **Those bars were real arithmetic on data the criterion had told it to drop, so the criterion is
+recorded as FAILED AS WRITTEN, not as passed.**
+
+**Why the screen was wrong, stated so it is not repeated.** It was declared to catch *thin instruments* — the
+criterion says it is "expected to bind on the thin lines". It fired at 41.4% on **SPY**, which had **zero** flat
+days and 500 usable pairs. A 40-50% negative rate is the documented norm for both estimators at daily frequency;
+it is a property of the *estimator*, not of the *instrument*. So the screen keyed on the wrong thing and
+discriminates nothing.
+
+**The replacement screen, declared now and keyed on data quality rather than estimator output.** A ticker enters
+the ordering and dispersion statistics only if **both**:
+
+1. **`usable_pairs >= 250`** — roughly a year of daily bars out of the ~500 the endpoint returns; and
+2. **`flat_days / bars <= 2%`**, where a flat day is one with `high == low`, i.e. a session in which the
+   instrument had no intraday range at all.
+
+The negative/undefined rate is still **reported for every ticker**, and is no longer an exclusion criterion. The
+prohibition it existed to enforce is unchanged and still binds: **a negative estimate is never truncated to zero,
+and a ticker that fails the screen is reported as UNMEASURED, never as tight.**
+
+The ordering and dispersion bars for the validation arm are unchanged (exact `SPY < QQQ < AAPL < TSLA`, and a
+TSLA/SPY ratio in 3x-40x), and are now actually applied to the screened set.
+
+**One consequence, declared before the re-run:** doc 34 §3.3 measured 3SPY at 26 prints across five sessions with
+50% of gaps over 15 minutes, and the first run gave it **78 flat days** and a Corwin-Schultz estimate of 28.29 bps
+— *tighter than SPY's own 37.98*. That is the "no information becomes zero spread" artefact this document was
+written to avoid, observed live. The replacement screen excludes it on flat days. If the screened LSE set still
+shows large dispersion, that finding does not rest on 3SPY.
+
 ## What this document will NOT do
 
 - It will not touch `STRUCTURAL_MIN_HALF_SPREAD_RATE` or `STRUCTURAL_MIN_COMMISSION_RATE` in code. It produces a
