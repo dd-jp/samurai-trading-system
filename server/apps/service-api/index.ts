@@ -22,6 +22,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AlpacaHttpBrokerClient } from '../../pipeline/execution/index.js';
 import { openSharedStore, resolveStoreMode, sharedStorePath } from '../../shared/store/index.js';
+import { JsonLogger } from '../orchestrator/logger.js';
 import { DASHBOARD_CREDENTIAL_ENV_VAR } from './bind-guard.js';
 import { installDashboardContinueOnFault, watchDashboardStdout } from './fault-guard.js';
 import { ProviderStatusPoller } from './provider-status.js';
@@ -35,6 +36,30 @@ import { SqliteQueryStore } from './sqlite-query-store.js';
 // why the arbitrary-fault handler (installed further down, after boot) is a
 // separate call installed at a separate time.
 watchDashboardStdout();
+
+/**
+ * The dashboard's structured logger (#1035).
+ *
+ * Before this, both shipped non-orchestrator entrypoints wrote bare
+ * `console.*`, so their lines carried no `trace_id`, no `stage` and no level —
+ * unparseable next to every other line the system emits, and invisible to any
+ * reader that filters the log by stage.
+ *
+ * Stdout-only, and deliberately NOT `buildEntrypointLogger`: that opens a
+ * `RotatingFileSink` on `SAMURAI_LOG_FILE`, and this process runs ALONGSIDE
+ * the orchestrator under `yarn serve`. Two processes rotating the same file
+ * race each other's renames, which is a way to lose the durable trace the file
+ * exists to hold — a worse outcome than the one being fixed. The supervisor
+ * captures this process's stdout, so these lines still land on disk; they just
+ * arrive there as captured output rather than through a second rotator.
+ *
+ * `trace_id: 'startup'` matches the sentinel `logger.ts` already uses for
+ * lines that belong to the process rather than to a tick.
+ */
+const logger = new JsonLogger();
+const bootLog = (level: 'info' | 'warn' | 'error', message: string, payload?: unknown) => {
+  logger.log({ trace_id: 'startup', stage: 'dashboard', level, message, payload });
+};
 
 const port = Number(process.env.PORT ?? 8787);
 const host = process.env.HOST ?? '127.0.0.1';
@@ -70,7 +95,10 @@ const db = openSharedStore(dbPath);
 // anywhere. Naming the resolved absolute path at boot is the one thing that
 // would have made that mismatch visible instead of merely fixable in
 // hindsight.
-console.log(`Samurai dashboard store → ${resolve(dbPath)}`);
+bootLog('info', `Samurai dashboard store → ${resolve(dbPath)}`, {
+  store_path: resolve(dbPath),
+  mode,
+});
 
 /**
  * The built Vite+React bundle (ADR-0010), resolved relative to THIS MODULE
@@ -105,7 +133,9 @@ const bundleRoot = fileURLToPath(new URL('../../../client/', import.meta.url));
  */
 const bundleProblem = bundleDiagnostic(bundleRoot);
 if (bundleProblem !== null) {
-  console.error(`\n*** DASHBOARD UI NOT SERVABLE — /api/snapshot still up ***\n${bundleProblem}`);
+  bootLog('error', 'dashboard UI not servable — /api/snapshot is still up', {
+    bundle_problem: bundleProblem,
+  });
 }
 
 /**
@@ -126,9 +156,9 @@ function buildAlpacaClient(): AlpacaHttpBrokerClient | undefined {
     // orchestrator and merely a missing tile here, so it is caught rather than
     // propagated — the operator still gets positions, verdicts and metrics off
     // the store.
-    console.warn(
-      `Alpaca balance tile disabled: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    bootLog('warn', 'Alpaca balance tile disabled', {
+      error: error instanceof Error ? error.message : String(error),
+    });
     return undefined;
   }
 }
@@ -159,5 +189,7 @@ installDashboardContinueOnFault();
 // invert the priority — the store-backed views need no provider at all.
 void providers.start();
 
-console.log(`Samurai dashboard → ${server.url}`);
-console.log('Read-only operator view. Ctrl+C to stop.');
+bootLog('info', `Samurai dashboard → ${server.url}`, {
+  url: server.url,
+  note: 'read-only operator view; Ctrl+C to stop',
+});

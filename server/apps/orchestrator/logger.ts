@@ -97,6 +97,7 @@
  *    skipped for the life of the process; the file carries the run.
  */
 import type { LogEntry } from '../../shared/index.js';
+import { redactPayload } from './redact-payload.js';
 import {
   type FileSinkConfig,
   fileSinkConfigFromEnvironment,
@@ -144,9 +145,43 @@ export interface ErrorStream {
 }
 
 /**
+ * Redacts a payload for the wire, and CANNOT throw (#1035).
+ *
+ * The guard is not defensive habit — it is what keeps `redact-payload.ts` off
+ * #714's critical path. `formatLogLine` is what `degradationLine` builds on,
+ * and `degradationLine` runs when both sinks are gone, producing the string
+ * that goes straight to stderr as the run's last trace. A throw from the
+ * walker there would destroy that write and convert a logging degradation into
+ * silence. So a redaction failure degrades the PAYLOAD and never the line.
+ *
+ * `JSON.stringify` runs inside the guard too, so a payload that cannot be
+ * serialized at all (a cycle — an uncaught throw here before this existed)
+ * costs its payload rather than the log line.
+ */
+function redactedPayload(payload: unknown): unknown {
+  if (payload === undefined) return undefined;
+  try {
+    const redacted = redactPayload(payload);
+    // Serialized here, discarded, and serialized again by the caller: the
+    // point is to find out INSIDE the guard whether this payload can be put
+    // on the wire at all. A cyclic payload that survives the walk would
+    // otherwise throw from the caller's `JSON.stringify`, outside any catch.
+    JSON.stringify(redacted);
+    return redacted;
+  } catch {
+    return { redaction_failed: true };
+  }
+}
+
+/**
  * The wire format, in one place: used for the log lines themselves and for the
  * sink-failure warn, which has to be written straight to stdout without
  * re-entering the logger.
+ *
+ * `payload` is redacted centrally here rather than at call sites (#1035).
+ * Before this, `sanitizeLogText` was applied only where a caller remembered
+ * to — ten sites out of every logging call in the system — so the guarantee
+ * was "redacted where someone thought about it", which is not a guarantee.
  */
 export function formatLogLine(entry: LogEntry): string {
   return `${JSON.stringify({
@@ -155,21 +190,32 @@ export function formatLogLine(entry: LogEntry): string {
     stage: entry.stage,
     level: entry.level,
     message: entry.message,
-    payload: entry.payload,
+    payload: redactedPayload(entry.payload),
     started_at: entry.started_at,
     duration_ms: entry.duration_ms,
   })}\n`;
 }
 
-/** A degradation notice in the same wire format as everything else. */
+/**
+ * A degradation notice in the same wire format as everything else.
+ *
+ * Builds the line directly rather than through `formatLogLine`, so the
+ * redaction walker is bypassed on this path entirely. Its payloads are in-repo
+ * literals (`{ log_file_sink: 'degraded' }`) with no credential in them and
+ * nothing to mask, and this is the path that runs when the sinks are failing —
+ * the one place in the system where doing less work is the whole point.
+ */
 function degradationLine(message: string, payload: Record<string, unknown>): string {
-  return formatLogLine({
+  return `${JSON.stringify({
+    timestamp: new Date().toISOString(),
     trace_id: 'startup',
     stage: 'orchestrator',
     level: 'warn',
     message,
     payload,
-  });
+    started_at: undefined,
+    duration_ms: undefined,
+  })}\n`;
 }
 
 /** Reports a file-sink failure on the one stream that may still work. */
@@ -181,6 +227,26 @@ function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * Whether `debug` lines are written, read from `SAMURAI_LOG_LEVEL` (#1035).
+ *
+ * Exactly one threshold and exactly one filterable level, rather than the
+ * usual ordered ladder. The reason is #714: `warn` and `error` carry the
+ * sink-degradation notices, and the run's last trace before the logger throws
+ * is a `warn`. A conventional `LOG_LEVEL=error` would suppress those, letting
+ * an operator configure the process into the silence that rule exists to
+ * forbid. So the setting answers one question — are debug lines on? — and
+ * every other level is structurally unfilterable.
+ *
+ * Default `info`: `debug` is opt-in, because the lines it gates are the
+ * verbose ones and a soak's default posture should not be the loud one.
+ */
+export function debugEnabledFromEnvironment(
+  value: string | undefined = process.env.SAMURAI_LOG_LEVEL,
+): boolean {
+  return value?.trim().toLowerCase() === 'debug';
+}
+
 export class JsonLogger implements Logger {
   private fileSinkFailed = false;
   private stdoutDegraded = false;
@@ -190,6 +256,14 @@ export class JsonLogger implements Logger {
     private readonly fileSink?: LogLineSink,
     private readonly stdout: StdoutStream = process.stdout,
     private readonly stderr: ErrorStream = process.stderr,
+    /**
+     * Whether `debug` entries are written. Constructor argument rather than an
+     * environment read inside the class, for the reason
+     * `buildEntrypointLogger` gives about the file sink: the deployment
+     * decision belongs on the entrypoint's path, and the dozen `new
+     * JsonLogger()` call sites in tests must not each inherit an ambient one.
+     */
+    private readonly debugEnabled = false,
   ) {}
 
   /**
@@ -210,6 +284,14 @@ export class JsonLogger implements Logger {
    * doc's "where that throw actually lands".
    */
   log(entry: LogEntry): void {
+    // BEFORE the sinks, and this ordering is load-bearing rather than an
+    // efficiency: a suppressed line that fell through to the write path would
+    // reach `if (reachedStdout || reachedFile)` with neither true and throw
+    // the no-sink error — turning a verbosity SETTING into a fabricated #714
+    // fault on a perfectly healthy run. A dropped debug line is not a logging
+    // failure, so it must never be able to reach that branch.
+    if (entry.level === 'debug' && !this.debugEnabled) return;
+
     const line = formatLogLine(entry);
     const reachedStdout = this.writeToStdout(line);
     const reachedFile = this.writeToFileSink(line);
@@ -443,7 +525,7 @@ export function buildEntrypointLogger(
       warnOnStdout(message, stdout);
     },
   });
-  const logger = new JsonLogger(sink, stdout, stderr);
+  const logger = new JsonLogger(sink, stdout, stderr, debugEnabledFromEnvironment());
   watchStdoutErrors(logger, stdout);
   return logger;
 }

@@ -102,6 +102,17 @@ export interface GrokSentimentClient {
      */
     retrievalEvidence: boolean;
     latency_ms: number;
+    /**
+     * The prompt sent and the text that came back (#1035), so this stage's
+     * calls are as reconstructable as the debate's.
+     *
+     * Optional, unlike `retrievalEvidence`: an omission here costs a
+     * diagnostic, not a correctness guarantee, so a client that cannot supply
+     * it should not be forced to invent one. The one shipped client supplies
+     * both.
+     */
+    prompt?: string | undefined;
+    raw_text?: string | undefined;
   }>;
 }
 
@@ -111,6 +122,9 @@ export interface GrokSpendSink {
     trace_id: string;
     stage: string;
     model: string;
+    /** The call's text (#1035); the sink decides whether to persist it. */
+    prompt?: string | undefined;
+    response?: string | undefined;
     usage: {
       input_tokens: number;
       output_tokens: number;
@@ -218,6 +232,11 @@ export class GrokAgent {
         server_tool_calls: result.server_tool_calls,
         latency_ms: result.latency_ms,
         timestamp: asOf,
+        // #1035. Whether these are persisted is the sink's decision
+        // (`SqliteLlmSpendStore`'s `captureText`), not this agent's — the
+        // agent's job is to stop discarding them.
+        prompt: result.prompt,
+        response: result.raw_text,
       });
 
       // Fail-closed retrieval-evidence guard (#485, restoring the principle

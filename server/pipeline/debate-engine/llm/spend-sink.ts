@@ -20,6 +20,7 @@
  * trading decision.
  */
 
+import { maskAndCap } from '../../../shared/index.js';
 import {
   type AnthropicUsage,
   priceServerToolCalls,
@@ -85,7 +86,40 @@ export interface LlmSpendRecord {
    */
   ttfb_ms?: number | undefined;
   timestamp: Date;
+  /**
+   * The exact string sent to the provider (#1035) — `renderMessageContent`'s
+   * output, not a reconstruction from `request.prompt` and the context.
+   *
+   * Optional because the sink's other callers do not all have it, and because
+   * a `LlmSpendRecord` built by a test double should not have to invent one.
+   * Masked and capped by `SqliteLlmSpendStore`, not by the caller: the bound
+   * belongs at the boundary that persists it, so every writer gets the same
+   * one.
+   */
+  prompt?: string | undefined;
+  /** The model's raw response text, same provenance and same treatment as `prompt`. */
+  response?: string | undefined;
 }
+
+/**
+ * How much of a prompt is persisted.
+ *
+ * Not a round number: `prompt-caching.test.ts` establishes that every debate
+ * request sits under Anthropic's 4,096-token caching minimum (~16 KB), and the
+ * measured average over a week of paper trading is ~6.8 KB. So this cap is
+ * non-binding on the shape the system actually produces and fires only on a
+ * pathological prompt — which is the case where a bound is worth having.
+ */
+export const MAX_CAPTURED_PROMPT_CHARS = 16_384;
+
+/**
+ * How much of a response is persisted.
+ *
+ * Sized off `max_tokens: 1024` (`orchestrator/production/defaults.ts`) at ~4
+ * chars per token, so it is non-binding on any response the model is permitted
+ * to produce. If `max_tokens` is ever raised, raise this with it.
+ */
+export const MAX_CAPTURED_RESPONSE_CHARS = 4_096;
 
 export interface LlmSpendSink {
   record(entry: LlmSpendRecord): void;
@@ -103,6 +137,18 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
   constructor(
     private readonly db: SharedStore,
     private readonly logger?: Logger,
+    /**
+     * Whether the prompt and response text are persisted to `llm_call_log`
+     * and put on the log line (#1035).
+     *
+     * A constructor argument defaulting to `false`, with the environment read
+     * at the composition root — the same split `buildEntrypointLogger` makes
+     * for the file sink, and for the same reason: the deployment decision
+     * belongs on the shipped entrypoint's path, and the many test and backtest
+     * constructions of this class must not start writing text because an
+     * ambient variable happened to be set.
+     */
+    private readonly captureText = false,
   ) {}
 
   record(entry: LlmSpendRecord): void {
@@ -144,7 +190,7 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
         });
       }
 
-      this.db
+      const spendRow = this.db
         .prepare(
           `INSERT INTO llm_spend (
              trace_id, stage, debate_id, model,
@@ -172,6 +218,26 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
           entry.ttfb_ms ?? null,
           toStoredTimestamp(entry.timestamp),
         );
+
+      // Reached only once the spend row has landed, so `spend_id` is always a
+      // real rowid. It gets its OWN catch rather than falling into the outer
+      // one: the outer message says the call is missing from the dashboard
+      // spend total, which would be false here — the spend row is written and
+      // safe, and only the text was lost. A capture failure reported as a
+      // metering failure would send an operator to look at the wrong thing.
+      try {
+        this.recordText(entry, Number(spendRow.lastInsertRowid));
+      } catch (error) {
+        this.logger?.log({
+          trace_id: entry.trace_id,
+          stage: 'orchestrator',
+          level: 'warn',
+          message:
+            'llm call text capture failed — the API call and its spend row are unaffected, ' +
+            'but this call has no prompt/response recorded in llm_call_log',
+          payload: { error: error instanceof Error ? error.message : String(error) },
+        });
+      }
     } catch (error) {
       // See the module doc comment: a metering failure must not surface as a
       // failed LLM call. Logged rather than silent so a persistently broken
@@ -186,5 +252,75 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
         payload: { error: error instanceof Error ? error.message : String(error) },
       });
     }
+  }
+
+  /**
+   * Persists the call's text and emits the one log line that answers the whole
+   * question (#1035): when it ran, how long it took, which model, what it
+   * cost, how many tokens each way, what it was asked, and what it said.
+   *
+   * `started_at`/`duration_ms` are set from the call's own timestamp and
+   * latency rather than measured here, so the line agrees exactly with the
+   * `llm_spend` row beside it and with the `LlmResponse` the caller received —
+   * the same "measured once, passed in" rule `anthropic-client.ts` applies to
+   * `latency_ms`.
+   *
+   * Masked and capped HERE rather than at the call site so every writer
+   * inherits one bound and one pattern list. The masking is `maskCredentials`,
+   * whose narrowness is a deliberate property of that module and not a
+   * guarantee about this data: a prompt embeds news bodies and analyst free
+   * text, so a credential pasted into ingested content in a shape the patterns
+   * do not match WILL be persisted. This is a capture, not a scrub.
+   */
+  private recordText(entry: LlmSpendRecord, spendId: number): void {
+    if (!this.captureText) return;
+    if (entry.prompt === undefined && entry.response === undefined) return;
+
+    const prompt =
+      entry.prompt === undefined ? null : maskAndCap(entry.prompt, MAX_CAPTURED_PROMPT_CHARS);
+    const response =
+      entry.response === undefined ? null : maskAndCap(entry.response, MAX_CAPTURED_RESPONSE_CHARS);
+
+    this.db
+      .prepare(
+        `INSERT INTO llm_call_log (
+           spend_id, trace_id, stage, debate_id, model, prompt, response, timestamp
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        // Never null in practice: the caller only reaches here after the spend
+        // INSERT returned a rowid. The column stays nullable so a future
+        // writer that captures text without metering has somewhere to go.
+        spendId,
+        entry.trace_id,
+        entry.stage,
+        entry.debate_id ?? null,
+        entry.model,
+        prompt,
+        response,
+        toStoredTimestamp(entry.timestamp),
+      );
+
+    this.logger?.log({
+      trace_id: entry.trace_id,
+      stage: entry.stage,
+      level: 'info',
+      message: `llm call: ${entry.model}`,
+      payload: {
+        debate_id: entry.debate_id,
+        model: entry.model,
+        input_tokens: entry.usage.input_tokens,
+        output_tokens: entry.usage.output_tokens,
+        cache_creation_input_tokens: entry.usage.cache_creation_input_tokens ?? 0,
+        cache_read_input_tokens: entry.usage.cache_read_input_tokens ?? 0,
+        cost_usd: priceUsage(entry.model, entry.usage),
+        latency_ms: entry.latency_ms,
+        ttfb_ms: entry.ttfb_ms,
+        prompt,
+        response,
+      },
+      started_at: entry.timestamp.toISOString(),
+      duration_ms: entry.latency_ms,
+    });
   }
 }

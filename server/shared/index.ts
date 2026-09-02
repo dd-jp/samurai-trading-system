@@ -73,7 +73,7 @@ export {
   logCaughtFailure,
   safeLog,
 } from './safe-log.js';
-export { sanitizeLogText } from './sanitize-log-text.js';
+export { maskAndCap, maskCredentials, sanitizeLogText } from './sanitize-log-text.js';
 // #638: the in-code clamp on the kill-line and breaker thresholds. Exported
 // from the shared barrel because the three paths that can put a threshold into
 // force — boot-time construction, the tuning store's write, and the Risk
@@ -100,6 +100,7 @@ export type {
   InstrumentSubclass,
   LogEntry,
   Logger,
+  LogLevel,
   OpenPosition,
   OrderIntent,
   OrderIntentMetadata,

@@ -17,6 +17,7 @@ export type {
   InstrumentSubclass,
   LogEntry,
   Logger,
+  LogLevel,
   TradingArm,
 } from './types/primitives.js';
 export type {

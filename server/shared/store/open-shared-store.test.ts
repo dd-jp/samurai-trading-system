@@ -70,6 +70,11 @@ const TABLES = [
   // so folding it in would mean four nullable columns and would make the
   // secondary reading look like a third arm.
   'outside_benchmark_samples',
+  // `llm_call_log` (0039) — the prompt sent and the text that came back for
+  // every metered LLM call (#1035). Separate from `llm_spend` because the
+  // spend cap sums that table on the trading path and the dashboard
+  // range-scans it, and neither reads the text; see the migration's header.
+  'llm_call_log',
 ];
 
 /**
@@ -78,7 +83,7 @@ const TABLES = [
  * That prose number silently drifted twice (it read "twenty" and "twenty-one"
  * simultaneously while the schema held 22), so it is pinned here.
  */
-const CONSOLIDATED_SCHEMA_TABLE_COUNT = 31;
+const CONSOLIDATED_SCHEMA_TABLE_COUNT = 32;
 
 const tempDirs: string[] = [];
 
@@ -168,6 +173,7 @@ describe('openSharedStore', () => {
       { version: 36 },
       { version: 37 },
       { version: 38 },
+      { version: 39 },
     ]);
     expect(runMigrations(db)).toEqual([]);
     expect(db.prepare('SELECT version FROM schema_migrations').all()).toEqual([
@@ -209,6 +215,7 @@ describe('openSharedStore', () => {
       { version: 36 },
       { version: 37 },
       { version: 38 },
+      { version: 39 },
     ]);
   });
 
