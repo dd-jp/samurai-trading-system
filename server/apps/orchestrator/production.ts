@@ -290,10 +290,17 @@ export const SMOKE_TEST_UNIVERSE: readonly UniverseInstrument[] = [
  * the one source of truth for what `buildBenchmarkDataSource` writes, and a
  * future third benchmark leg (or a leg swap) should not have to remember a
  * second, silently-stale literal list here. Consumed by the precutover
- * collision guard below.
+ * collision guard below. Upper-cased at the source (#989 review) so the
+ * guard's own `.toUpperCase()` comparison is symmetric — a future
+ * mixed/lowercase entry in `BENCHMARK_COMPOSITION` can't silently bypass it.
+ * Exported so callers (`startup.test.ts`) derive the same set instead of
+ * re-deriving it from `BENCHMARK_COMPOSITION` a second time (#989 review —
+ * two derivations can silently diverge).
  */
-const BENCHMARK_INSTRUMENTS: ReadonlySet<string> = new Set(
-  Object.values(BENCHMARK_COMPOSITION).flatMap((legs) => legs.map((leg) => leg.instrument)),
+export const BENCHMARK_INSTRUMENTS: ReadonlySet<string> = new Set(
+  Object.values(BENCHMARK_COMPOSITION).flatMap((legs) =>
+    legs.map((leg) => leg.instrument.toUpperCase()),
+  ),
 );
 
 // Split out by the 2026-08-06 review (D1): the injectable-surface types live
