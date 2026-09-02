@@ -275,16 +275,30 @@ export class AnthropicLlmClient implements LlmClient {
 
   private async attempt<T>(request: LlmRequest<T>): Promise<LlmResponse<T>> {
     const start = Date.now();
-    const response = await this.callWithTimeout(renderMessageContent(request), request.signal);
+    // Hoisted out of the call below so the capture path can persist the EXACT
+    // string that went on the wire (#1035), rather than rebuilding it from
+    // `request.prompt` and the context afterwards. A reconstruction is a
+    // different artifact: it answers "what would we send now", not "what was
+    // this call actually asked", and the second question is the one an
+    // operator has on day six of a soak.
+    const content = renderMessageContent(request);
+    const response = await this.callWithTimeout(content, request.signal);
     const latency_ms = Date.now() - start;
+
+    const rawText = extractText(response);
 
     // Metered BEFORE the parse gate below, because a malformed response was
     // still generated and still billed. Recording only well-formed responses
     // would make the meter understate spend by exactly the calls most likely
     // to be retried — i.e. it would be most wrong when it matters most.
-    this.recordSpend(request, response, latency_ms);
+    //
+    // Moved BELOW `extractText` by #1035 so the same record can carry the
+    // response text. The ordering argument is unchanged and now cuts twice: a
+    // malformed response is exactly the case whose text an operator most wants
+    // to read, so capturing it only for well-formed answers would withhold the
+    // evidence precisely when it is needed.
+    this.recordSpend(request, response, latency_ms, content, rawText);
 
-    const rawText = extractText(response);
     const parsed = request.parseResponse(rawText);
     if (!parsed.valid) {
       throw new LlmMalformedResponseError(parsed.reason);
@@ -312,7 +326,16 @@ export class AnthropicLlmClient implements LlmClient {
     request: LlmRequest<T>,
     response: AnthropicMessageResponse,
     latency_ms: number,
+    prompt: string,
+    responseText: string,
   ): void {
+    // The capture inherits this early return, and that coupling is worth
+    // stating rather than discovering: text is recorded only for METERED
+    // calls. On the production path Nous always returns a usage block, so the
+    // two coincide; in tests, the many doubles that return a bare `content`
+    // capture nothing. Combined with the floor named above — a call that times
+    // out or throws never reaches here — the capture's coverage is "every call
+    // that completed and reported usage", which is narrower than "every call".
     if (response.usage === undefined) return;
     try {
       this.spendSink.record({
@@ -324,6 +347,8 @@ export class AnthropicLlmClient implements LlmClient {
         latency_ms,
         ttfb_ms: response.ttfb_ms,
         timestamp: new Date(),
+        prompt,
+        response: responseText,
       });
     } catch {
       // The sink contract says `record` must not throw, and the SQLite

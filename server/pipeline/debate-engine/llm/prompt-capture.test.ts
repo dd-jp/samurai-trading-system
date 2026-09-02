@@ -1,0 +1,146 @@
+/**
+ * What the client hands the sink to capture (#1035).
+ *
+ * Two properties carry this file. First, the captured prompt must be the
+ * BYTE-IDENTICAL string that went on the wire — a re-render answers "what
+ * would we send now", not "what was this call asked", and only the second
+ * question is useful on day six of a soak. Second, capture must not have moved
+ * the wire call itself: the metering reorder that made room for it happens
+ * around a live provider call, so "the prompt sent is unchanged" is pinned
+ * directly rather than assumed.
+ *
+ * The malformed-response case is the one most likely to be regressed by a
+ * later tidy-up, and it is deliberate: a response that fails the parse gate is
+ * exactly the one whose text an operator wants to read.
+ */
+import type {
+  AnthropicMessageRequest,
+  AnthropicMessageResponse,
+  AnthropicMessagesClient,
+} from './anthropic-client.js';
+import { AnthropicLlmClient, renderMessageContent } from './anthropic-client.js';
+import type { LlmSpendRecord } from './spend-sink.js';
+import type { LlmRequest } from './types.js';
+
+interface ParsedData {
+  value: string;
+}
+
+const NO_RETRY = { maxAttempts: 1, baseDelayMs: 10, maxDelayMs: 10 };
+const CONFIG = {
+  model: 'openai/gpt-5.6-luna',
+  max_tokens: 100,
+  timeoutMs: 1_000,
+  retry: NO_RETRY,
+};
+
+function request(): LlmRequest<ParsedData> {
+  return {
+    prompt: 'analyze this',
+    context: { analyst_views: [{ stance: 'bullish' }] as unknown as [] },
+    parseResponse: (rawText) =>
+      rawText === 'good'
+        ? { valid: true, data: { value: rawText } }
+        : { valid: false, reason: 'not "good"' },
+  };
+}
+
+function recordingSink(): { records: LlmSpendRecord[]; record: (e: LlmSpendRecord) => void } {
+  const records: LlmSpendRecord[] = [];
+  return { records, record: (entry) => records.push(entry) };
+}
+
+function usageResponse(text: string): AnthropicMessageResponse {
+  return {
+    content: [{ type: 'text', text }],
+    usage: { input_tokens: 120, output_tokens: 30 },
+  };
+}
+
+describe('AnthropicLlmClient prompt capture', () => {
+  it('captures the exact string that went on the wire', async () => {
+    let sent: AnthropicMessageRequest | undefined;
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi.fn(async (body: AnthropicMessageRequest) => {
+        sent = body;
+        return usageResponse('good');
+      }),
+    };
+    const sink = recordingSink();
+
+    await new AnthropicLlmClient(wire, CONFIG, sink).complete(request());
+
+    const wireContent = sent?.messages[0]?.content;
+    expect(sink.records[0]?.prompt).toBe(wireContent);
+    // …and that string is still what `renderMessageContent` produces, so the
+    // hoist did not quietly change what the provider is asked.
+    expect(wireContent).toBe(renderMessageContent(request()));
+  });
+
+  it('captures the model response text', async () => {
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi.fn().mockResolvedValue(usageResponse('good')),
+    };
+    const sink = recordingSink();
+
+    await new AnthropicLlmClient(wire, CONFIG, sink).complete(request());
+
+    expect(sink.records[0]?.response).toBe('good');
+  });
+
+  it('captures a MALFORMED response, which is when the text matters most', async () => {
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi.fn().mockResolvedValue(usageResponse('not json at all')),
+    };
+    const sink = recordingSink();
+
+    await expect(new AnthropicLlmClient(wire, CONFIG, sink).complete(request())).rejects.toThrow();
+
+    expect(sink.records).toHaveLength(1);
+    expect(sink.records[0]?.response).toBe('not json at all');
+    expect(sink.records[0]?.prompt).toContain('analyze this');
+  });
+
+  it('captures nothing for an unmetered call', async () => {
+    // Inherits `recordSpend`'s existing early return: no usage block, no
+    // record at all — so capture coverage is "completed and metered", not
+    // "every call". Stated as a floor, not discovered later.
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi.fn().mockResolvedValue({ content: [{ type: 'text', text: 'good' }] }),
+    };
+    const sink = recordingSink();
+
+    await new AnthropicLlmClient(wire, CONFIG, sink).complete(request());
+
+    expect(sink.records).toEqual([]);
+  });
+
+  it('captures nothing when the call itself throws', async () => {
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi.fn().mockRejectedValue(new Error('upstream exploded')),
+    };
+    const sink = recordingSink();
+
+    await expect(new AnthropicLlmClient(wire, CONFIG, sink).complete(request())).rejects.toThrow();
+
+    expect(sink.records).toEqual([]);
+  });
+
+  it('does not fail the call when the sink throws while capturing', async () => {
+    // The boundary guarantee, unchanged by #1035: `LlmSpendSink` is a public
+    // interface, so the "recording must never fail a call" rule is enforced
+    // here rather than trusted per-implementation.
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi.fn().mockResolvedValue(usageResponse('good')),
+    };
+    const throwingSink = {
+      record: () => {
+        throw new Error('sink is broken');
+      },
+    };
+
+    const result = await new AnthropicLlmClient(wire, CONFIG, throwingSink).complete(request());
+
+    expect(result.data).toEqual({ value: 'good' });
+  });
+});

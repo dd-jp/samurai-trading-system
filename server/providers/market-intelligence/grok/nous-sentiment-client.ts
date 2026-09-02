@@ -138,6 +138,25 @@ export class NousSentimentClient implements GrokSentimentClient {
   async fetchSentiment(instrument: string, asOf: Date) {
     const started = Date.now();
 
+    // Hoisted so the capture path (#1035) persists the messages that actually
+    // went on the wire, rather than a re-render of them.
+    const messages = [
+      {
+        role: 'system' as const,
+        content:
+          'You summarise X/Twitter sentiment for one financial instrument. Reply ' +
+          'with JSON only: {"items":[{"headline":string,"sentiment":1|0|-1,' +
+          '"confidence":number 0-1,"summary":string}]}. Report at most ' +
+          `${MAX_ITEMS} distinct themes. If there is no meaningful discussion, reply ` +
+          '{"items":[]} — an empty list is a valid and useful answer, and inventing ' +
+          'sentiment to fill the list is worse than reporting none.',
+      },
+      {
+        role: 'user' as const,
+        content: `Instrument: ${instrument}. As of: ${asOf.toISOString()}.`,
+      },
+    ];
+
     const result = await nousChat(
       {
         apiKey: this.#apiKey,
@@ -147,27 +166,16 @@ export class NousSentimentClient implements GrokSentimentClient {
       {
         model: this.#model,
         max_tokens: this.#maxTokens,
-        messages: [
-          {
-            role: 'system',
-            content:
-              'You summarise X/Twitter sentiment for one financial instrument. Reply ' +
-              'with JSON only: {"items":[{"headline":string,"sentiment":1|0|-1,' +
-              '"confidence":number 0-1,"summary":string}]}. Report at most ' +
-              `${MAX_ITEMS} distinct themes. If there is no meaningful discussion, reply ` +
-              '{"items":[]} — an empty list is a valid and useful answer, and inventing ' +
-              'sentiment to fill the list is worse than reporting none.',
-          },
-          {
-            role: 'user',
-            content: `Instrument: ${instrument}. As of: ${asOf.toISOString()}.`,
-          },
-        ],
+        messages,
       },
     );
 
     return {
       items: this.#parseItems(result.text, instrument, asOf),
+      // Both roles, joined the way they were sent: a capture holding only the
+      // user turn would omit the instruction that actually shapes the answer.
+      prompt: messages.map((message) => `[${message.role}] ${message.content}`).join('\n\n'),
+      raw_text: result.text,
       model: result.model,
       usage: result.usage,
       // ALWAYS false: `chat/completions` carries no citations and runs no

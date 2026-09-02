@@ -534,6 +534,29 @@ export interface ProductionComponents {
  * instance over the same account would silently lose bracket-leg lookups for
  * orders the first one placed.
  */
+/**
+ * Whether LLM prompt/response text is persisted to `llm_call_log` (#1035).
+ *
+ * DEFAULT ON, and the asymmetry with `SAMURAI_ALERTS` — which deliberately has
+ * no default at all — is the point rather than an inconsistency. An unset
+ * `SAMURAI_ALERTS` would silently route operator alerts to an EXTERNAL
+ * channel, so it must be named out loud; this writes to a local SQLite table
+ * at a measured ~7 MB per 14-day soak. The cost of defaulting wrong is a few
+ * megabytes of disk. The cost of defaulting OFF is that the soak this exists
+ * to diagnose runs without it, and nobody finds out until they need the data
+ * and it was never recorded.
+ *
+ * Exported so the default is pinned by a test rather than inferred from a
+ * `!== 'off'` buried in a long composition root — this repo's characteristic
+ * defect is a mechanism that is built, tested, and then reached by nothing on
+ * the shipped path.
+ */
+export function captureLlmTextFromEnvironment(
+  value: string | undefined = process.env.SAMURAI_LLM_CAPTURE,
+): boolean {
+  return value?.trim().toLowerCase() !== 'off';
+}
+
 export function buildProductionComponents(config: ProductionConfig): ProductionComponents {
   const clock = config.clock;
 
@@ -1221,6 +1244,11 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // calling.
   const sentimentEnabled =
     config.sentimentEnabled ?? process.env.SAMURAI_SENTIMENT?.trim().toLowerCase() !== 'off';
+
+  // #1035. Read ONCE here and passed down, so both spend sinks agree and
+  // neither reads the environment for itself — the same rule the file sink
+  // follows (`buildEntrypointLogger`).
+  const captureLlmText = captureLlmTextFromEnvironment();
   // `tryNousCredentials` rather than `nousCredentials`: an unconfigured Nous
   // environment degrades this optional stage to no-agent instead of failing
   // the boot, which is how the absent `XAI_API_KEY` behaved before ADR-0009
@@ -1234,7 +1262,8 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * rather than two clients disagreeing about either.
    */
   const llmClient =
-    config.llmClient ?? buildDefaultLlmClient(logger, new SqliteLlmSpendStore(config.db, logger));
+    config.llmClient ??
+    buildDefaultLlmClient(logger, new SqliteLlmSpendStore(config.db, logger, captureLlmText));
 
   const grokAgent =
     sentimentCredentials === undefined
@@ -1243,7 +1272,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
           client: new NousSentimentClient({ ...sentimentCredentials, logger }),
           store: marketIntelligence,
           spendCap,
-          spendSink: new SqliteLlmSpendStore(config.db, logger),
+          spendSink: new SqliteLlmSpendStore(config.db, logger, captureLlmText),
           clock,
           logger,
         });
