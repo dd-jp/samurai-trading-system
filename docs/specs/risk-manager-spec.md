@@ -126,6 +126,15 @@ interface RiskInput {
                                           // 2026-08-17 (#644) to match `execution-spec.md:103` and the code (`RiskInput.mode`,
                                           // `BreakerEvalInput.mode`) — the store provisions one DB file per environment, and
                                           // a two-way union here lied about which environments the system runs in.
+  critic?: RiskCriticVerdict;            // pre-built, external — check-pipeline step 7 (see "Module: Risk Critic"). Built and
+                                          // wired 2026-09-01 by #957. Added to this interface block 2026-09-02: the field was
+                                          // referenced pervasively in this spec's prose from the start but had never actually
+                                          // been declared here — see docs/reviews/devils-advocate-spec-cross-verify-2026-09-02.md.
+  invalidation?: InvalidationResult;     // pre-built, external — the same seam as `critic`, produced by the `invalidation`
+                                          // stage (devils-advocate-spec.md). NOT YET WIRED: `invalidation` is specced but not
+                                          // built (CLAUDE.md), so this field has no producer today. Declared here ahead of the
+                                          // implementation per cross-spec-contracts.md §8 and devils-advocate-spec.md, so the
+                                          // seam is visible before the stage ships rather than discovered as a gap when it does.
 }
 
 // Crash-restart-safe row shape for the two sticky breakers (hard drawdown, kill-switch),

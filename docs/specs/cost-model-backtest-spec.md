@@ -190,6 +190,15 @@ interface BacktestReport {
   };
   capacity_ceiling: number;            // from the √-law impact
   lookahead_audit: 'passed' | 'failed';// a failure fails the run
+  invalidation_replay: 'warm' | 'cold';// 'cold' = window predates the invalidation stage's history, so it ran permanently
+                                        // inert and this report's trade count is only an upper bound on the live system's.
+                                        // Non-optional so callers cannot silently pool warm- and cold-window reports as
+                                        // comparable (devils-advocate-spec.md story 47). NOT YET WIRED: `invalidation` is
+                                        // specced but not built (CLAUDE.md), so every report is 'cold' until it ships.
+                                        // Added to this interface 2026-09-02 — see
+                                        // docs/reviews/devils-advocate-spec-cross-verify-2026-09-02.md GAP-E: this field was
+                                        // asserted in this spec's own prose ("Module: Determinism") but never actually added
+                                        // to the type it was supposed to be on.
 }
 ```
 
