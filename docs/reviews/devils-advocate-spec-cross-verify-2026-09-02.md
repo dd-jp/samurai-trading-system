@@ -58,7 +58,7 @@ None found specific to this spec beyond GAP-B's cost-arithmetic implication (tic
 
 ## Open questions
 
-1. **Does the Risk Critic going from hypothetical to built (#957, 2026-09-01) change the case for building `invalidation` at all, or for merging the two?** Both now occupy the same seam (`RiskInput`, pre-built data entering `evaluate()`); the critic covers narrative/qualitative risk in prose, `invalidation` would add typed falsifiable conditions. `risk-manager-spec.md`'s own "no second full debate" reasoning and #718's declined-skeptic reasoning both point the same direction without ever being asked against the now-real critic. This is a posture call for David, not something resolvable from the record. **Left open, not fixed** — this is a judgment call, not a defect.
+1. ~~**Does the Risk Critic going from hypothetical to built (#957, 2026-09-01) change the case for building `invalidation` at all, or for merging the two?**~~ **Resolved 2026-09-02 — David: "fold this to risk critic."** No standalone `invalidation` stage. `devils-advocate-spec.md` marked declined-as-a-standalone-stage; its mechanism (typed, falsifiable, deterministically-evaluated conditions) is tracked for a fold into the Risk Critic as [#994](https://github.com/dd-jp/samurai-trading-system/issues/994), which requires a `risk-manager-spec.md` amendment before implementation (Standing Pipeline Rule 3/7). CLAUDE.md's Architecture line updated to drop the `[Invalidation]` placeholder accordingly.
 2. **Who owns the one-time fix for `AssetClass` still being typed `'crypto' | 'stocks'` across `orchestrator-spec.md`, `trader-spec.md`, and (if built) `devils-advocate-spec.md`?** Fixing it in three places independently risks drift; better to name one spec as the type's owner and have the others reference it. **Left open, not fixed** — no single spec claims ownership of the `AssetClass` type today, so there's no clear place to land a one-time fix without inventing that ownership unilaterally.
 
 ## Disposition — 2026-09-02
@@ -72,6 +72,6 @@ All six contradiction-matrix gaps (GAP-A through GAP-F) fixed in this pass, same
 - **GAP-E — fixed.** `cost-model-backtest-spec.md`'s `BacktestReport` interface now declares `invalidation_replay: 'warm' | 'cold'`, non-optional per the spec's own "an attestation a caller can ignore is worthless" standard, matching the prose that already asserted this field existed.
 - **GAP-F — fixed.** `TickStatus.stage` renamed to `CurrentTick.stage` in `devils-advocate-spec.md` story 4, matching the type `orchestrator-spec.md` actually defines.
 
-Not fixed, and not attempted: the two Open Questions above (Risk Critic/invalidation redundancy; `AssetClass` type ownership) — both are judgment calls for David, not contradictions with a mechanical fix.
+Not fixed, and not attempted: Open Question 2 (`AssetClass` type ownership) — a judgment call for David, not a contradiction with a mechanical fix. Open Question 1 (Risk Critic/invalidation redundancy) was resolved 2026-09-02 — see above.
 
 Every edit that touches a frozen or built-and-shipped artifact (`cross-spec-contracts.md`, `risk-manager-spec.md`'s `critic` field, `shared-sqlite-store-spec.md`'s `debate_log` claim) carries an inline dated correction note rather than a silent rewrite, per this repo's archive-never-delete convention.
