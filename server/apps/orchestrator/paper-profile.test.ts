@@ -49,12 +49,10 @@ describe('paperStartingProfile', () => {
       // schedule this profile feeds must never resolve one.
       const { universe } = paperStartingProfile('paper');
 
-      expect(universe?.map((instrument) => instrument.asset)).toEqual([
-        'SPY',
-        'QQQ',
-        'AAPL',
-        'TSLA',
-      ]);
+      // #1006: 'SPY' is gone too — it is a BENCHMARK_INSTRUMENTS member, and a
+      // universe row for it made the orchestrator a second writer of the bars
+      // the outside-benchmark port already owns.
+      expect(universe?.map((instrument) => instrument.asset)).toEqual(['QQQ', 'AAPL', 'TSLA']);
     });
 
     it('covers exactly the one asset class it schedules, so the other reads INERT rather than silently misleading (#738)', () => {

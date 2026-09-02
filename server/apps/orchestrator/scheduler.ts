@@ -32,9 +32,24 @@ import type { Scheduler, TickPlan, UniverseInstrument } from './types.js';
  * one by default. `AssetClass` and `UniverseInstrument` still accept a
  * `'crypto'` row — nothing here forbids one — this array just no longer
  * declares any. `SMOKE_TEST_UNIVERSE` (production.ts) still does, on purpose.
+ *
+ * **SPY-free as of #1006.** SPY is a `BENCHMARK_INSTRUMENTS` member, and the
+ * outside-benchmark path (#981, under #636) writes SPY bars through
+ * `buildBenchmarkDataSource`'s fixed port, always normalized against
+ * `UsEquityRegularHoursCalendar`. A universe row for SPY makes the orchestrator
+ * a SECOND writer of those same `(instrument, timeframe, open_time)` rows under
+ * whatever calendar the mode resolves — `AlpacaEquitySessionCalendar` in paper,
+ * `LseRegularHoursCalendar` in live — so the two disagree on any early-close
+ * session. #989's boot guard refuses to start on exactly that pairing; removing
+ * the row removes the collision itself rather than the alarm, and leaves the
+ * benchmark port as SPY's only writer.
+ *
+ * This costs one screening instrument and no tradeable one: the whole
+ * SPY/QQQ/AAPL/TSLA universe is already non-tradeable live (ADR-0016 — live
+ * instruments are LSE leveraged ETPs), and #751's cutover retires this array's
+ * US symbols wholesale.
  */
 export const DEFAULT_UNIVERSE: readonly UniverseInstrument[] = [
-  { asset: 'SPY', asset_class: 'stocks' },
   { asset: 'QQQ', asset_class: 'stocks' },
   { asset: 'AAPL', asset_class: 'stocks' },
   { asset: 'TSLA', asset_class: 'stocks' },

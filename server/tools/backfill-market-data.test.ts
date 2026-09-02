@@ -128,7 +128,7 @@ describe('backfillMarketData', () => {
     // is equities-only since #738. Derived from WARM_START_WINDOWS.length
     // rather than a literal so this doesn't rot the next time that list
     // gains/loses a timeframe (#742 added '5m').
-    expect(equityFetches).toHaveLength(4 * WARM_START_WINDOWS.length);
+    expect(equityFetches).toHaveLength(DEFAULT_UNIVERSE.length * WARM_START_WINDOWS.length);
     expect(cryptoFetches).toHaveLength(0);
   });
 
@@ -139,7 +139,6 @@ describe('backfillMarketData', () => {
     expect([...new Set(equityFetches.map((f) => f.symbol))].sort()).toEqual([
       'AAPL',
       'QQQ',
-      'SPY',
       'TSLA',
     ]);
     expect([...new Set(cryptoFetches.map((f) => f.symbol))].sort()).toEqual(['BTC-USD', 'ETH-USD']);
@@ -161,8 +160,8 @@ describe('backfillMarketData', () => {
   it('is resumable — only fetches the pairs a prior partial run left short', async () => {
     const db = openSharedStore(':memory:');
     const store = new SqliteMarketDataStore(db);
-    // Simulate a prior run that completed SPY's 1h window only.
-    store.appendBars(generateBars('SPY', '1h', ASOF, HOURLY_WARM_START));
+    // Simulate a prior run that completed QQQ's 1h window only.
+    store.appendBars(generateBars('QQQ', '1h', ASOF, HOURLY_WARM_START));
 
     const equityFetches: { symbol: string; window: BarWindow }[] = [];
     const cryptoFetches: { symbol: string; window: BarWindow }[] = [];
@@ -180,12 +179,12 @@ describe('backfillMarketData', () => {
       print: () => {},
     });
 
-    // SPY/1h was already warm and must not be re-fetched.
-    expect(equityFetches.some((f) => f.symbol === 'SPY' && f.window.timeframe === '1h')).toBe(
+    // QQQ/1h was already warm and must not be re-fetched.
+    expect(equityFetches.some((f) => f.symbol === 'QQQ' && f.window.timeframe === '1h')).toBe(
       false,
     );
-    // SPY/1d and every other pair were still missing and must be fetched.
-    expect(equityFetches.some((f) => f.symbol === 'SPY' && f.window.timeframe === '1d')).toBe(true);
+    // QQQ/1d and every other pair were still missing and must be fetched.
+    expect(equityFetches.some((f) => f.symbol === 'QQQ' && f.window.timeframe === '1d')).toBe(true);
     expect(coverage.every((row) => row.satisfied)).toBe(true);
   });
 
@@ -194,7 +193,7 @@ describe('backfillMarketData', () => {
     await backfillMarketData(deps);
     await backfillMarketData(deps); // re-run, should be a no-op fetch-wise (idempotent test above) and a no-op write-wise here
 
-    const rows = store.readBars('SPY', '1h', ASOF, 1000);
+    const rows = store.readBars('QQQ', '1h', ASOF, 1000);
     expect(rows).toHaveLength(HOURLY_WARM_START); // not twice that
   });
 
@@ -202,18 +201,18 @@ describe('backfillMarketData', () => {
     const { deps } = buildDeps();
     const coverage = await backfillMarketData(deps);
 
-    const spy1h = coverage.find((row) => row.instrument === 'SPY' && row.timeframe === '1h');
-    expect(spy1h).toMatchObject({
+    const qqq1h = coverage.find((row) => row.instrument === 'QQQ' && row.timeframe === '1h');
+    expect(qqq1h).toMatchObject({
       rows: HOURLY_WARM_START,
       required: HOURLY_WARM_START,
       satisfied: true,
     });
-    expect(spy1h?.first_bar).toBeDefined();
-    expect(spy1h?.last_bar).toBeDefined();
-    if (spy1h?.first_bar === undefined || spy1h?.last_bar === undefined) {
+    expect(qqq1h?.first_bar).toBeDefined();
+    expect(qqq1h?.last_bar).toBeDefined();
+    if (qqq1h?.first_bar === undefined || qqq1h?.last_bar === undefined) {
       throw new Error('expected first_bar/last_bar to be defined');
     }
-    expect(new Date(spy1h.first_bar).getTime()).toBeLessThan(new Date(spy1h.last_bar).getTime());
+    expect(new Date(qqq1h.first_bar).getTime()).toBeLessThan(new Date(qqq1h.last_bar).getTime());
   });
 
   it('marks a pair unsatisfied and does not silently under-report when the fetcher returns fewer bars than required', async () => {
@@ -397,8 +396,8 @@ describe('backfillMarketData', () => {
     const { deps } = buildDeps(); // generateBars stamps source: 'fixture'
     const coverage = await backfillMarketData(deps);
 
-    const spy1h = coverage.find((row) => row.instrument === 'SPY' && row.timeframe === '1h');
-    expect(spy1h?.source).toBe('fixture');
+    const qqq1h = coverage.find((row) => row.instrument === 'QQQ' && row.timeframe === '1h');
+    expect(qqq1h?.source).toBe('fixture');
   });
 
   it('reports source: undefined for a pair with no bars at all, rather than fabricating one', async () => {
