@@ -1,0 +1,50 @@
+#881 — LSE free quote snapshot (api.londonstockexchange.com, unauthenticated)
+Captured: 2026-09-02 05:34 Europe/London
+IN CONTINUOUS SESSION (08:00-16:30 weekdays): False
+
+  *** OUT OF SESSION — these are the PREVIOUS SESSION'S CLOSING quotes. ***
+  *** They are NOT evidence about the spread a fill would cross, because  ***
+  *** market-maker quote obligations bind during continuous trading only. ***
+
+tidm    ccy   seg         ems          bid        offer  spread bps
+PLT3    USD   ECE1        100     864.8000     865.0000         2.3
+LQQ3    GBX   ECE2        100   30106.0000   30122.0000         5.3
+NVD3    USD   ECE1       1000      61.8700      61.9100         6.5
+3AAP    GBX   ECE2         75   10337.0000   10350.0000        12.6
+3KOR    GBX   ECE2        750    1885.5000    1888.0000        13.3
+3USL    USD   ECE1        200     185.3500     185.6400        15.6
+MST3    USD   ECE1       2000      17.1850      17.2200        20.3
+3FB     GBX   ECE2       7500     226.3000     226.9000        26.5
+3QQQ    GBX   ECE2        200    2868.0000    2878.0000        34.8
+3AMZ    GBX   ECE2       1000     611.0000     613.2500        36.8
+3KWE    GBX   ECE2       1000     452.9000     455.0000        46.3
+3LNV    USD   ECE1        750      36.7000      36.8900        51.6
+3VT     GBX   ECE2       1000     546.0000     549.7500        68.4
+3XLE    GBX   ECE2        750    1250.0000    1260.0000        79.7
+3ARM    GBX   ECE2        300     732.0000     738.0000        81.6
+3LTS    USD   ECE1      15000       1.3670       1.3800        94.6
+3SPY    GBX   ECE2        300    2060.0000    2080.0000        96.6
+3LAL    USD   ECE1         30     153.5000     155.0000        97.2
+LAM3    GBX   ECE2         20   25171.5700   25424.5600       100.0
+3LME    EUR   ECE2        500      20.7000      20.9200       105.7
+3UBR    GBX   ECE2      20000      26.7000      27.0000       111.7
+3LNP    GBX   ECE3        500    1430.0000    1450.0000       138.9
+3LPA    USD   ECE1         30     426.0000     433.0000       163.0
+3LSQ    USD   ECE1      15000       0.6460       0.6570       168.8
+3RAC    GBX   ECE2        750    1140.0000    1160.0000       173.9
+LAA3    GBX   ECE2        500    1325.0000    1350.0000       186.9
+3LMO    USD   ECE1        200     142.6000     145.6000       208.2
+LPP3    GBX   ECE2      15000      67.0000      68.5000       221.4
+3LIP    GBX   ECE3        750     381.4000     390.7000       240.9
+LCO3    GBX   ECE2      50000       8.5000       9.5000      1111.1
+
+covered: 30/30
+round-trip spread, bps: median 88.1, range 2.3-1111.1
+  max/min    = 480.5x
+  max/median = 12.61x   (#875's 2x shape: FIRES)
+
+implied HALF-spread, bps (the quantity STRUCTURAL_MIN_HALF_SPREAD_RATE floors at 1.0):
+  median 44.1 bps, range 1.2-555.6 bps
+  lines whose half-spread EXCEEDS the 1bp floor: 30/30
+
+  (All of the above inherits the out-of-session caveat above.)

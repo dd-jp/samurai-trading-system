@@ -2,7 +2,7 @@
 Source: Yahoo v8/finance/chart, interval=1d, range=2y. RESEARCH USE ONLY (doc 34 §5).
 Declared screen (doc 58 amendment): usable_pairs >= 250 AND flat_days/bars <= 2%.
 The negative rate is reported, not screened on. Negatives are never truncated to zero.
-Run at: 2026-09-02T04:30:01Z
+Run at: 2026-09-02T04:34:54Z
 
 === VALIDATION ARM — the estimators must reproduce doc 53's measured SIP ordering ===
 
@@ -50,18 +50,52 @@ NVD3.L   USD     505    504     1    307.48    465.55    47.0%    51.0%  ok
 MST3.L   USD     476    475     6    593.01    796.47    49.5%    49.9%  ok
 3LPA.L   USD     505    504    24    261.43    599.44    46.4%    50.0%  UNMEASURED (4.8% flat days (> 2%))
 PLT3.L   USD     505    504     1    434.03    613.04    43.8%    51.2%  ok
+3LME.L   EUR       1      0      -         -         -        -  UNMEASURED (no usable day-pairs)
+LAM3.L   GBp     504    503    67    191.20    582.13    50.7%    55.1%  UNMEASURED (13.3% flat days (> 2%))
+3LAL.L   USD     505    504    18    143.55    356.23    48.6%    50.8%  UNMEASURED (3.6% flat days (> 2%))
+LPP3.L   GBp     504    503    77    103.21    381.43    50.3%    49.3%  UNMEASURED (15.3% flat days (> 2%))
+3LNP.L   GBp     504    503    83    116.26    329.38    51.1%    53.1%  UNMEASURED (16.5% flat days (> 2%))
+LCO3.L   GBp     504    503     4    536.56    887.70    45.3%    50.1%  ok
+LAA3.L   GBp     504    503    87    118.84    516.24    51.5%    50.5%  UNMEASURED (17.3% flat days (> 2%))
+3LMO.L   USD     505    504    65    271.72    820.48    51.4%    47.6%  UNMEASURED (12.9% flat days (> 2%))
+3LIP.L   GBp     504    503    47    444.51    730.62    45.7%    49.3%  UNMEASURED (9.3% flat days (> 2%))
+3LSQ.L   USD     505    504   218      0.00    442.80    64.9%    57.5%  UNMEASURED (43.2% flat days (> 2%))
+3AMZ.L   GBp     504    503     3    198.38    358.15    45.9%    49.1%  ok
+3FB.L    GBp     504    503     1    233.06    390.30    43.7%    49.9%  ok
+3UBR.L   GBp     503    502    44    229.66    487.74    41.0%    48.0%  UNMEASURED (8.7% flat days (> 2%))
+3RAC.L   GBp     504    503   192      0.00    275.71    56.5%    54.7%  UNMEASURED (38.1% flat days (> 2%))
+3ARM.L   GBp     504    503     7    348.07    692.08    47.3%    48.7%  ok
+3VT.L    GBp     102    101    24      0.00    113.59    51.5%    40.6%  UNMEASURED (only 101 usable day-pairs (< 250); 23.5% flat days (> 2%))
+3KOR.L   GBp     504    503    50     99.25    401.50    50.1%    48.7%  UNMEASURED (9.9% flat days (> 2%))
+3KWE.L   GBp     503    502    13    143.42    387.03    50.0%    49.4%  UNMEASURED (2.6% flat days (> 2%))
+3XLE.L   GBp     503    502    80     75.58    312.93    48.6%    51.0%  UNMEASURED (15.9% flat days (> 2%))
 
 === #881's QUESTION: does cost vary enough WITHIN the tradeable universe? ===
-  measurable tickers: 6 of 11
+  measurable tickers: 10 of 30
   UNMEASURED — screened out on DATA QUALITY, which is NOT a finding that they are tight:
     3SPY.L (15.5% flat days (> 2%))
     3LTS.L (no usable day-pairs)
     3AAP.L (no usable day-pairs)
     3QQQ.L (4.2% flat days (> 2%))
     3LPA.L (4.8% flat days (> 2%))
-  Corwin-Schultz: median 329.70 bps, range 80.62-593.01 bps, max/min 7.36x, p_max/median 1.80x
+    3LME.L (no usable day-pairs)
+    LAM3.L (13.3% flat days (> 2%))
+    3LAL.L (3.6% flat days (> 2%))
+    LPP3.L (15.3% flat days (> 2%))
+    3LNP.L (16.5% flat days (> 2%))
+    LAA3.L (17.3% flat days (> 2%))
+    3LMO.L (12.9% flat days (> 2%))
+    3LIP.L (9.3% flat days (> 2%))
+    3LSQ.L (43.2% flat days (> 2%))
+    3UBR.L (8.7% flat days (> 2%))
+    3RAC.L (38.1% flat days (> 2%))
+    3VT.L (only 101 usable day-pairs (< 250); 23.5% flat days (> 2%))
+    3KOR.L (9.9% flat days (> 2%))
+    3KWE.L (2.6% flat days (> 2%))
+    3XLE.L (15.9% flat days (> 2%))
+  Corwin-Schultz: median 327.78 bps, range 80.62-593.01 bps, max/min 7.36x, p_max/median 1.81x
     #875's declared 2x threshold for 'one coefficient is not defensible': does not fire
-  Abdi-Ranaldo: median 463.33 bps, range 149.85-796.47 bps, max/min 5.31x, p_max/median 1.72x
+  Abdi-Ranaldo: median 463.33 bps, range 149.85-887.70 bps, max/min 5.92x, p_max/median 1.92x
     #875's declared 2x threshold for 'one coefficient is not defensible': does not fire
 
 === #882's QUESTION: how does the 1bp structural floor compare? ===
@@ -74,3 +108,7 @@ PLT3.L   USD     505    504     1    434.03    613.04    43.8%    51.2%  ok
   3LNV.L   CS half   175.96 bps  AR half   230.56 bps  -> the 1bp floor UNDER-charges this line
   MST3.L   CS half   296.51 bps  AR half   398.23 bps  -> the 1bp floor UNDER-charges this line
   PLT3.L   CS half   217.01 bps  AR half   306.52 bps  -> the 1bp floor UNDER-charges this line
+  LCO3.L   CS half   268.28 bps  AR half   443.85 bps  -> the 1bp floor UNDER-charges this line
+  3AMZ.L   CS half    99.19 bps  AR half   179.08 bps  -> the 1bp floor UNDER-charges this line
+  3FB.L    CS half   116.53 bps  AR half   195.15 bps  -> the 1bp floor UNDER-charges this line
+  3ARM.L   CS half   174.03 bps  AR half   346.04 bps  -> the 1bp floor UNDER-charges this line

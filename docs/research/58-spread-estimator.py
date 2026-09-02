@@ -67,19 +67,17 @@ US_VALIDATION = {
     "TSLA": 4.216,
 }
 
-# The eleven `lse_ticker` rows in server/providers/universe-pool/lse-etp-pool.ts.
+# ALL THIRTY `lse_ticker` rows in server/providers/universe-pool/lse-etp-pool.ts.
+#
+# The first criterion said "the eleven `lse_ticker` rows", inherited from doc 34
+# §3.2's table. That was WRONG: doc 34 probed eleven, the pool holds thirty
+# (8 index_etp_3x + 22 single_stock_etp_3x, over 26 distinct screening
+# underlyings — SPY, QQQ, NVDA and PLTR each carry two lines from different
+# issuers). The correction is recorded in the doc; the run below covers all 30.
 LSE_TICKERS = [
-    "3USL",
-    "LQQ3",
-    "3SPY",
-    "3LTS",
-    "NVD3",
-    "3AAP",
-    "3LNV",
-    "3QQQ",
-    "MST3",
-    "3LPA",
-    "PLT3",
+    "3USL", "LQQ3", "3SPY", "3LTS", "NVD3", "3AAP", "3LNV", "3QQQ", "MST3", "3LPA",
+    "PLT3", "3LME", "LAM3", "3LAL", "LPP3", "3LNP", "LCO3", "LAA3", "3LMO", "3LIP",
+    "3LSQ", "3AMZ", "3FB", "3UBR", "3RAC", "3ARM", "3VT", "3KOR", "3KWE", "3XLE",
 ]
 
 # The REPLACEMENT screen (doc 58's amendment). The first criterion screened on

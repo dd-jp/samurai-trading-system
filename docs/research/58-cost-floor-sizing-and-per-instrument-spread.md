@@ -267,10 +267,65 @@ for the live universe, and no such conversion should be built on it.
 The estimators also **compress** dispersion — 4x estimated against 12x measured — so they *understate* how
 different two instruments are. That direction matters: a dispersion finding from this method is a lower bound.
 
+## F2b — TWO PREMISE CORRECTIONS, both of which cut against what this document first assumed
+
+Recorded here rather than edited into the criterion above, because the criterion is what it was.
+
+**Correction 1 — the universe is THIRTY lines, not eleven.** The criterion says "the eleven `lse_ticker` rows in
+`server/providers/universe-pool/lse-etp-pool.ts`". That number was inherited from doc 34 §3.2, which *probed*
+eleven. `LSE_ETP_POOL` (`lse-etp-pool.ts:355`) holds **30 tradeable lines** — 8 `index_etp_3x` and 22
+`single_stock_etp_3x`, across **26 distinct screening underlyings** (SPY, QQQ, NVDA and PLTR each carry two lines
+from different issuers), from Leverage Shares (16), GraniteShares (12) and WisdomTree (2). Every row is 3x long;
+there are no shorts and **no commodity ETCs at all**, though ADR-0016's universe is "LSE-listed leveraged index
+ETPs **plus commodity ETCs**" — the ETC leg was never encoded. ADR-0016 itself names exactly one ticker, 3USL.
+The run below covers all 30.
+
+**Correction 2 — #881's stated blocker is FALSE. Free per-line LSE quotes exist.** The ticket says its answer
+"needs LSE quote data that does not currently exist for free". The London Stock Exchange's own website is a
+JavaScript app backed by an **unauthenticated** endpoint that returns bid and offer per TIDM:
+
+```
+https://api.londonstockexchange.com/api/gw/lse/instruments/alldata/<TIDM>
+```
+
+**30/30 coverage of the pool**, plus `marketsize` (Exchange Market Size — the size the quote is good for),
+`segment`, `currency` and `sedol`. Producer: [`58-lse-quote-snapshot.py`](58-lse-quote-snapshot.py). This does
+not touch open [#895](https://github.com/dd-jp/samurai-trading-system/issues/895) — doc 34 §5's licence and
+freshness analysis still governs what may price the *live book*. It changes what **research** can measure, for £0.
+
+### F2c — what a free published *static* spread source turns out not to be
+
+Searched so nobody re-runs it. **There is no free published static expected- or average-spread statistic for this
+universe.** Four separate findings:
+
+1. **LSE market-maker maximum-spread obligations — published and free, but useless as a per-instrument term.**
+   The [obligations PDF](https://docs.londonstockexchange.com/sites/default/files/documents/etf-&-etp-market-maker-obligations.pdf)
+   states maximum spread "varies according to four percentage bands: 1.5%, 3%, 5% and 15%… determined by the
+   sector in which each security is placed", that wider quotes "will be automatically rejected by the trading
+   system", and that in stressed conditions the parameters **double**. But the instrument→sector mapping is not
+   free and current: the API returns `segment` (ECE1/ECE2/ECE3) and no trading sector, and one segment spans
+   1.5% to 15%. The authoritative mapping is behind credentialed Millennium Exchange reference data (MIT401). A
+   free LSE securities XLS carries exactly the right columns but **the series stopped in September 2020** and
+   covers 4 of our 30 ISINs — on which the obligated maximum is **5.0% for all four**, i.e. no discriminating
+   power even if the current file were obtained.
+2. **Issuer factsheets and KIDs — cover the tickers, wrong quantity.** No issuer publishes a typical or maximum
+   bid-ask spread. The PRIIPs KID transaction-cost row is the *fund's own portfolio dealing cost* — and from
+   1 January 2025 must use the **arrival-price** method — not the investor's spread on the LSE line.
+3. **justETF, LSE instrument pages, LSE monthly ETP Analysis — verified negative.** No spread field of any kind;
+   the monthly reports carry listings, trade counts and orderbook value only.
+4. **MiFID II / FCA cost disclosure — structurally not a source.** Ex-ante costs-and-charges is a firm-to-client
+   obligation producing a per-client quote at point of sale, not a published per-instrument dataset.
+
+One partial lead is left open rather than chased: **Borsa Italiana** (sister LSEG venue) publishes free monthly
+per-instrument bid-ask spread statistics at four notional sizes, archived to 2013, and several pool lines are
+cross-listed there. It is the Milan tape, not London, and was not verified against our lines.
+
+**So the realistic path is not to find a published statistic — it is to sample the free endpoint ourselves.**
+
 ## F3 — the LSE pool, and what #881 actually asked
 
-Six of eleven pool tickers pass the declared screen. Five do not, and **none of the five is screened out for
-being tight** — they are screened out for having no usable data:
+Ten of thirty pool tickers pass the declared screen. Twenty do not, and **none of the twenty is screened out for
+being tight** — they are screened out for having no usable data. The eleven doc 34 probed are shown first:
 
 | ticker | ccy | bars | pairs | flat days | CS bps | AR bps | status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -286,6 +341,37 @@ being tight** — they are screened out for having no usable data:
 | 3LTS | USD | **1** | 0 | — | — | — | **UNMEASURED** — no usable day-pairs |
 | 3AAP | GBp | **1** | 0 | — | — | — | **UNMEASURED** — no usable day-pairs |
 
+The other nineteen lines, which doc 34 never probed (four more pass the screen; fifteen more do not):
+
+| ticker | flat days | CS bps | AR bps | status |
+| --- | --- | --- | --- | --- |
+| LCO3 | 4 | 536.56 | 887.70 | ok |
+| 3AMZ | 3 | 198.38 | 358.15 | ok |
+| 3FB | 1 | 233.06 | 390.30 | ok |
+| 3ARM | 7 | 348.07 | 692.08 | ok |
+| 3LSQ | **218** | *0.00* | *442.80* | **UNMEASURED** — 43.2% flat days |
+| 3RAC | **192** | *0.00* | *275.71* | **UNMEASURED** — 38.1% flat days |
+| LAA3 | 87 | *118.84* | *516.24* | **UNMEASURED** — 17.3% flat days |
+| 3LNP | 83 | *116.26* | *329.38* | **UNMEASURED** — 16.5% flat days |
+| 3XLE | 80 | *75.58* | *312.93* | **UNMEASURED** — 15.9% flat days |
+| LPP3 | 77 | *103.21* | *381.43* | **UNMEASURED** — 15.3% flat days |
+| 3LMO | 65 | *271.72* | *820.48* | **UNMEASURED** — 12.9% flat days |
+| 3KOR | 50 | *99.25* | *401.50* | **UNMEASURED** — 9.9% flat days |
+| 3LIP | 47 | *444.51* | *730.62* | **UNMEASURED** — 9.3% flat days |
+| 3UBR | 44 | *229.66* | *487.74* | **UNMEASURED** — 8.7% flat days |
+| LAM3 | 67 | *—* | *—* | **UNMEASURED** — 13.3% flat days |
+| 3LAL | 18 | *143.55* | *356.23* | **UNMEASURED** — 3.6% flat days |
+| 3KWE | 13 | *143.42* | *387.03* | **UNMEASURED** — 2.6% flat days |
+| 3VT | 24 | *0.00* | *113.59* | **UNMEASURED** — **101** usable pairs, 23.5% flat days |
+| 3LME | — | — | — | **UNMEASURED** — no usable day-pairs |
+
+**3LSQ and 3RAC print `0.00` under Corwin-Schultz on 218 and 192 flat days.** That is the truncate-to-zero
+artefact in its purest form and the reason the criterion forbade it: two instruments that barely trade would
+otherwise enter a cost table as **free**.
+
+**Twenty of the thirty lines in the tradeable universe cannot be priced from free daily bars**, and three (3LTS,
+3AAP, 3LME) return a single bar in two years. That is a fact about the *universe*, not about the estimator.
+
 **3SPY is the artefact the criterion was written to catch, observed live.** Corwin-Schultz scores it at 28.29 bps
 — *tighter than SPY's own 37.98* — on a line doc 34 §3.3 measured at **26 prints across five whole sessions with
 50% of gaps over 15 minutes**, and which shows **78 flat days** here. It is not tight; it does not trade. Had the
@@ -300,27 +386,80 @@ have no usable price history at all.
 ### What #881's own statistic says, and why the honest answer is not the one the ticket expected
 
 #875's declared test was **p90 across symbols against the median**, which fired at 3.3x on the US four. Applied
-to the six screened LSE names:
+to the ten screened LSE names:
 
 | statistic | Corwin-Schultz | Abdi-Ranaldo |
 | --- | --- | --- |
-| median | 329.70 bps | 463.33 bps |
-| range | 80.62 - 593.01 | 149.85 - 796.47 |
-| **max / min** | **7.36x** | **5.31x** |
-| **max / median** (#875's shape) | **1.80x** | **1.72x** |
+| median | 327.78 bps | 463.33 bps |
+| range | 80.62 - 593.01 | 149.85 - 887.70 |
+| **max / min** | **7.36x** | **5.92x** |
+| **max / median** (#875's shape) | **1.81x** | **1.92x** |
 | #875's 2x threshold | **does not fire** | **does not fire** |
 
-**This is the substantive finding, and it inverts the ticket's framing.** Within-universe *dispersion* is real
-(max/min 7.36x, against 3.98x across the US four on the same estimator — the LSE pool is about twice as spread
-out) but it is **not concentrated in an outlier**, so #875's p90-vs-median statistic does not fire. The pool is
-**uniformly wide**. Every one of the six screened names estimates wider than SPY (2.1x to 15.6x), and **four of
-the six estimate wider than TSLA** — the name doc 53 measured at 4.216 bps, already **4.2x the 1bp floor**.
+**Read this together with F6, which contradicts it, and F6 wins.** On the estimator the threshold does not fire;
+on real quotes it fires at 12.61x. The estimator's statistic is biased low for two reasons already established
+above, both of which push the same way:
 
-So the dominant error in `CALIBRATED_INTRADAY_COST_CONFIG` is **not** that one `stocks` coefficient fails to
-separate wide names from tight ones. It is that the coefficient — and the floors under it — are fitted on **US
-mega-caps and applied to a universe that sits entirely above them.** That is a *level* error against the live
-universe, not a *dispersion* error within it, and a per-instrument coefficient fitted on US proxies would not
-touch it.
+1. **The estimator compresses dispersion by construction** — F2 measured 4x estimated against 12x true on the US
+   names, a 3x compression.
+2. **The screen removes the wide names, not the tight ones.** Twenty of thirty are excluded for having no usable
+   range data, and thinness and width are the same phenomenon. What survives is the *liquid tenth* of the pool.
+
+So the estimator arm's dispersion statistic should be read as a **lower bound reported for completeness**, and
+the direct quote measurement in F6 is the one to act on. What the estimator arm *does* establish, and F6 confirms
+independently: **every one of the ten screened names estimates wider than SPY (2.1x to 15.6x), and six of the ten
+estimate wider than TSLA** — the name doc 53 measured at 4.216 bps, already **4.2x the 1bp floor**.
+
+## F6 — the direct measurement: free LSE quotes across all thirty lines
+
+Producer: [`58-lse-quote-snapshot.py`](58-lse-quote-snapshot.py). Raw log:
+[`archive/raw/2026-09-02-58-lse-quotes-preopen.txt`](archive/raw/2026-09-02-58-lse-quotes-preopen.txt).
+
+**PROVISIONAL, and the caveat is load-bearing.** Captured 2026-09-02 05:34 Europe/London, i.e. **before the
+08:00 open**. Out of continuous trading the endpoint returns the *previous session's closing* quotes
+(`tradingstatuscode: "N c"`, prior-session volume; re-running minutes later returns byte-identical values). LSE's
+market-maker obligations bind quotes to "at least 90% of continuous trading during the mandatory period" and
+explicitly **not** during the opening auction, so **these are not the spreads a fill would cross.** The script
+prints `IN CONTINUOUS SESSION: False` on such a run and refuses to imply otherwise. **This must be re-sampled in
+session before any number here is used to size anything**, and re-sampled repeatedly, because doc 53 G3 measured
+a real intraday profile on the US names (TSLA's open median 2.7x its close median).
+
+30/30 coverage. Round-trip spread in bps of mid, tightest first:
+
+| tidm | bps | tidm | bps | tidm | bps |
+| --- | --- | --- | --- | --- | --- |
+| PLT3 | **2.3** | 3XLE | 79.7 | 3LPA | 163.0 |
+| LQQ3 | 5.3 | 3ARM | 81.6 | 3LSQ | 168.8 |
+| NVD3 | 6.5 | 3LTS | 94.6 | 3RAC | 173.9 |
+| 3AAP | 12.6 | 3SPY | 96.6 | LAA3 | 186.9 |
+| 3KOR | 13.3 | 3LAL | 97.2 | 3LMO | 208.2 |
+| 3USL | 15.6 | LAM3 | 100.0 | LPP3 | 221.4 |
+| MST3 | 20.3 | 3LME | 105.7 | 3LIP | 240.9 |
+| 3FB | 26.5 | 3UBR | 111.7 | **LCO3** | **1111.1** |
+| 3QQQ | 34.8 | 3LNP | 138.9 | | |
+| 3AMZ | 36.8 | 3KWE | 46.3 | 3LNV | 51.6 |
+| 3VT | 68.4 | | | | |
+
+| statistic | value |
+| --- | --- |
+| median round-trip | **88.1 bps** |
+| range | 2.3 - 1111.1 bps |
+| **max / min** | **480.5x** |
+| **max / median** (#875's shape) | **12.61x** |
+| **#875's 2x threshold** | **FIRES** |
+| implied median **half**-spread | **44.1 bps** |
+| lines whose half-spread exceeds the 1bp floor | **30 of 30** |
+
+Three things fall out, and the third is the one nobody has been treating as a cost problem:
+
+1. **#881's question is answered YES, decisively.** 12.61x against a declared 2x. Cost varies enormously within
+   the tradeable universe — far more than the 3.3x that fired on the US four.
+2. **ADR-0016's single observed quote is fine for 3USL and badly unrepresentative of the pool.** The ADR rests
+   the entire leveraged-ETP case on "one observed 0.18% spread quote for 3USL"; 3USL measures **0.156%** here,
+   close to it — while the pool median is **0.88%** and the worst line is **11.1%**.
+3. **The widest lines are TICK-BOUND, not liquidity-bound.** LCO3 quotes 8.5p / 9.5p — a **one-penny** tick on a
+   9p instrument is 11%. 3LSQ quotes $0.646 / $0.657. No spread *model* keyed off volatility can represent that;
+   it is a minimum-tick-over-price floor, a different functional form from anything in `CostConfig` today.
 
 ## F4 — the floors are under-sized for the live venue, and this part needs no estimator at all
 
@@ -402,33 +541,53 @@ Both tickets asked for a decision. David's instruction on 2026-09-02 was to take
 than hold the question open, so these are recorded as **rulings, made on his behalf and reversible by him** —
 each states what would change it.
 
-### #881 — do NOT build a per-instrument spread coefficient. Narrow the universe instead.
+### #881 — YES, a per-instrument term is justified. But sample the free feed first, and narrow the universe.
 
 The ticket asks "whether cost varies enough *within the tradeable universe* to justify a per-instrument term at
-all". Measured answer: **it varies, but not in the shape that would justify one, and not where the money is.**
+all", and states that answering it "needs LSE quote data that does not currently exist for free".
 
-1. **#875's own statistic does not fire.** max/median is 1.80x (CS) and 1.72x (AR) across the six screened LSE
-   names, under the 2x threshold #875 declared. The 3.3x that fired on the US four does not reproduce here.
-2. **The pool is uniformly wide, not dispersed around an outlier.** All six estimate wider than SPY; four of six
-   wider than TSLA. A per-instrument coefficient re-splits a level error it cannot fix.
-3. **A per-symbol coefficient fitted on US names would be a per-symbol *proxy*** — the ticket's own objection,
-   and F2 shows the level does not transfer even in aggregate, let alone per name.
-4. **The universe question comes first.** 3LTS and 3AAP return **one daily bar in two years**; 3SPY has 78 flat
-   days and doc 34 §3.3 measured it at 26 prints in five sessions. Five of eleven "tradeable" instruments cannot
-   be priced from free daily data at all. Deciding a per-instrument cost term for instruments that may not
-   survive a tradeability review is work in the wrong order.
+**Both halves of that framing are wrong, and in opposite directions.** The data exists and is free (F2b). And
+once measured, the dispersion is not marginal — it is **12.61x max/median and 480x max/min** across the thirty
+lines (F6), against a threshold of 2x. Cost varies *enormously* within the tradeable universe.
 
-**What would reverse this:** an LSE level-1 quote feed (open
-[#895](https://github.com/dd-jp/samurai-trading-system/issues/895)) showing real per-instrument spreads whose
-p90/median exceeds 2x on the *surviving* universe. At that point the term is justified, and F5 records that the
-seam already carries `request.instrument`, so it is a small change when it is warranted.
+*An earlier draft of this document ruled the opposite way, on the estimator arm's 1.81x. That ruling was wrong
+and is retracted here rather than quietly edited: the estimator compresses dispersion 3x by construction and its
+screen removes exactly the wide names (F3). It is left in the document as a lower bound and a lesson —
+**a screened proxy statistic disagreed with a direct measurement, and the direct measurement was right.***
+
+The ruling, in order of what should actually be built:
+
+1. **Do not hand-fit a per-symbol coefficient from a single snapshot.** F6 is one out-of-session capture. The
+   first ship is the **sampler**: run `58-lse-quote-snapshot.py` on a cron through the session and accumulate the
+   dataset. That is £0, needs no vendor, and produces both the per-instrument level and the session profile that
+   doc 53 G3 showed matters (TSLA's open 2.7x its close).
+2. **The per-instrument term is justified and the seam is ready** — F5 records that `fill()` already holds
+   `request.instrument`. Build it *against sampled data*, not against this snapshot.
+3. **The functional form has to change, not just the coefficient.** LCO3 at 8.5p/9.5p is **tick-bound**: a
+   one-penny tick on a 9p line is 11%, and no `volatility × coefficient` term can represent that. A
+   minimum-tick-over-price floor is a different shape from anything in `CostConfig`.
+4. **Narrow the universe, and treat that as the larger finding.** Twenty of thirty lines cannot be priced from
+   free daily bars; three return **one bar in two years**; 3LSQ and 3RAC are flat on 43% and 38% of sessions.
+   ADR-0016's commodity-ETC leg was never encoded, and its whole leverage case rests on one 3USL quote that F6
+   shows is the pool's 6th-tightest line out of thirty. An instrument whose spread is 11% cannot be traded
+   profitably at any signal accuracy — that is a *universe* decision, not a cost-model parameter.
+
+**What would reverse this:** in-session sampling showing the pre-open snapshot was unrepresentative and that
+continuous-trading spreads are both tight and uniform. F6's caveat is real and this ruling is explicitly
+provisional on it — which is exactly why the first ship is the sampler and not a coefficient.
 
 ### #882 — the floors are under-sized, and must stop being module constants
 
-1. **Sized wrong, and flattering.** Saxo charges **8 bps per side** (ADR-0015:201); the model floors commission at
-   **1 bp per side**. That is an 8x under-charge on the live venue, from a primary source with no estimation. The
-   half-spread floor is under-sized in the same direction by F2/F3's ordering argument and doc 53 §G4's
-   independent one.
+1. **Sized wrong, and flattering, on both floors.** Saxo charges **8 bps per side** (ADR-0015:201); the model
+   floors commission at **1 bp per side** — an 8x under-charge on the live venue, from a primary source with no
+   estimation. And **all 30 of 30** pool lines show a half-spread above the 1bp floor, at a median of **44 bps**
+   (F6, provisional on its out-of-session caveat) — 44x the floor, corroborated in sign by F2/F3's ordering
+   argument and independently by doc 53 §G4.
+
+   Put together, at the £350/£250 position sizes ADR-0018 D5 resolves to: the model charges **~4 bps round
+   trip**, while commission alone is **16 bps** and the median line's spread adds **~88 bps**. Against an edge
+   ADR-0018 measures in single-digit bps per session, that is not a calibration nuance — it is the difference
+   between a positive and a negative expectancy.
 2. **A dominating floor must not be inert.** Principle 1 requires only that a frictionless fill be
    unrepresentable (`cost-model-backtest-spec.md:148`); it does not mandate 1 bp. The floors become a table on
    `CostConfig`, keyed by asset class today and by venue once a venue identity reaches the seam.
@@ -438,6 +597,7 @@ seam already carries `request.instrument`, so it is a small change when it is wa
 **What would reverse this:** realised Saxo fills showing an effective all-in cost below the re-sized floor, or a
 tier change in Saxo's schedule.
 
-**What this does NOT authorise:** picking a number for the half-spread floor. F2 forbids converting an estimate
-into bps. The commission floor has a sourced figure (8 bps); the half-spread floor has only a **sign**, and
-sizing it needs either #895's feed or the F1 instrumentation below.
+**What this does NOT authorise:** picking a final number for the half-spread floor from F6. That snapshot is
+out-of-session and provisional, and F2 forbids converting an *estimate* into bps at all. The commission floor has
+a sourced, actionable figure (8 bps per side); the half-spread floor has a **sign, an order of magnitude, and a
+free way to measure it properly** — the sampler, not a guess.
