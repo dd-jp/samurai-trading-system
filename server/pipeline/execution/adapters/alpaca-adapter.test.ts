@@ -192,13 +192,85 @@ describe('AlpacaBrokerAdapter.submitBracket', () => {
       symbol: 'AAPL',
       side: 'buy',
       qty: '100',
-      limit_price: '100',
+      // #983: emitted at the venue's tick precision, not `String(number)`.
+      limit_price: '100.00',
       time_in_force: 'day',
       client_order_id: 'key-aapl-1355',
       order_class: 'bracket',
-      take_profit: { limit_price: '110' },
-      stop_loss: { stop_price: '95' },
+      take_profit: { limit_price: '110.00' },
+      stop_loss: { stop_price: '95.00' },
     });
+  });
+
+  /**
+   * #983, the shape the venue ACTUALLY refused on 2026-09-01. A whole-share
+   * SPY short whose only defect was price precision came back
+   * `422 {"code":42210000,"message":"invalid limit_price 762.335. sub-penny
+   * increment does not fulfill minimum pricing criteria"}`. Both live
+   * rejections that day were shorts, so this is the branch on the live path.
+   */
+  it('rounds a sub-penny short bracket onto the venue price grid (#983)', async () => {
+    const client = makeClient();
+    const adapter = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
+    });
+
+    await adapter.submitBracket(
+      makeBracket({
+        instrument: 'SPY',
+        side: 'sell',
+        size: 6,
+        entry: 762.335,
+        stop: 766.40805334,
+        target: 754.18889332,
+      }),
+    );
+
+    expect(client.submitOrder).toHaveBeenCalledWith(
+      expect.objectContaining({
+        // Entry UP: a short's limit is the least it will accept.
+        limit_price: '762.34',
+        // Stop DOWN: above the entry on a short, so down is a SMALLER loss —
+        // rounding must never hand back exposure the Risk Manager removed.
+        stop_loss: { stop_price: '766.40' },
+        // Target UP: below the entry, so up is the earlier fill.
+        take_profit: { limit_price: '754.19' },
+      }),
+    );
+  });
+
+  /**
+   * The journal has to hold what was SENT, not what the caller asked for. A
+   * restart rehydrates this row to re-place the leg; journalling the
+   * unrounded prices would reproduce the same 422 across the restart, and
+   * leave the re-arm comparison unable to match the venue's rounded copy.
+   */
+  it("journals the ROUNDED request, not the caller's unrounded one (#983)", async () => {
+    const client = makeClient();
+    const state = new InMemoryBrokerStateStore();
+    const saveBracket = vi.spyOn(state, 'saveBracket');
+    const adapter = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
+      state,
+    });
+
+    await adapter.submitBracket(
+      makeBracket({ side: 'sell', entry: 762.335, stop: 766.40805334, target: 754.18889332 }),
+    );
+
+    expect(saveBracket).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: expect.objectContaining({ entry: 762.34, stop: 766.4, target: 754.19 }),
+      }),
+    );
   });
 
   // #586: a crypto bracket must NEVER reach `submitOrder`'s native
@@ -1699,6 +1771,71 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     expect(cancelOrder).not.toHaveBeenCalled();
   });
 
+  /**
+   * #983 regression, and the reason the rounding happens at the TOP of
+   * `rearmProtectiveLegs` rather than at its submit.
+   *
+   * `rearmOrderMatches` compares the caller's levels against what the venue
+   * holds — and what the venue holds is the ROUNDED copy a previous re-arm
+   * sent. Rounding only at the submit leaves that comparison permanently
+   * unequal, so a live, correct, matching OCO is CANCELLED and re-placed on
+   * every single pass: a needless round-trip that briefly leaves a real
+   * position unprotected, for no cause but a trailing decimal.
+   */
+  it("adopts a resting prior whose venue prices are the ROUNDED form of the caller's (#983)", async () => {
+    const getOrderByClientOrderId = vi.fn(async () => ({
+      ...acceptedOrder(),
+      id: 'rearm-venue-id',
+      order_class: 'oco' as const,
+      qty: '6',
+      // What the venue holds: rounded, because that is what was sent.
+      limit_price: '754.19',
+      legs: [
+        {
+          id: 'rearm-stop-leg',
+          type: 'stop' as const,
+          status: 'held',
+          filled_qty: '0',
+          filled_avg_price: null,
+          filled_at: null,
+          stop_price: '766.40',
+        },
+      ],
+    }));
+    const cancelOrder = vi.fn();
+    const submitOcoOrder = vi.fn();
+    const adapter = adapterWith(
+      makeClient({ getOrderByClientOrderId, cancelOrder, submitOcoOrder }),
+    );
+
+    // The caller passes the UNROUNDED levels, exactly as the lot's own
+    // bracket multiples produced them.
+    await adapter.rearmProtectiveLegs('key-1', 'SPY', 'sell', 6, 766.40805334, 754.18889332);
+
+    expect(cancelOrder).not.toHaveBeenCalled();
+    expect(submitOcoOrder).not.toHaveBeenCalled();
+  });
+
+  it('rounds the legs it does place (#983)', async () => {
+    const getOrderByClientOrderId = vi.fn(async () => null);
+    const submitOcoOrder = vi.fn().mockResolvedValue({
+      ...acceptedOrder(),
+      id: 'rearm-venue-id',
+      order_class: 'oco' as const,
+      legs: [],
+    });
+    const adapter = adapterWith(makeClient({ getOrderByClientOrderId, submitOcoOrder }));
+
+    await adapter.rearmProtectiveLegs('key-1', 'SPY', 'sell', 6, 766.40805334, 754.18889332);
+
+    expect(submitOcoOrder).toHaveBeenCalledWith(
+      expect.objectContaining({
+        take_profit: { limit_price: '754.19' },
+        stop_loss: { stop_price: '766.40' },
+      }),
+    );
+  });
+
   // #525 follow-up: `cancel()` must also clear a re-armed residual's OCO —
   // it carries `${clientOrderId}:rearm`, a DIFFERENT id from the lot's own,
   // so the lookup above alone can never find it. Left uncancelled, it stays
@@ -1890,8 +2027,8 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       // `take_profit`, never top-level — Alpaca rejects the top-level form
       // for every asset class (422 code 40010001, "oco orders require
       // take_profit.limit_price").
-      take_profit: { limit_price: '110' },
-      stop_loss: { stop_price: '95' },
+      take_profit: { limit_price: '110.00' },
+      stop_loss: { stop_price: '95.00' },
     });
   });
 
