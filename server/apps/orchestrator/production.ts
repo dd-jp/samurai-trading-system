@@ -2095,8 +2095,10 @@ export function startTickLoop(deps: {
  * close**. The overnight carry #668 exists to prevent, arriving through the
  * composition root rather than through the rule.
  *
- * The venues genuinely differ per ADR-0015: live equity is the Trading 212 ISA
- * restricted to GBP LSE-listed ETFs/ETCs (#659), while paper runs Alpaca US
+ * The venues genuinely differ per ADR-0015: live equity is a Saxo Capital
+ * Markets UK GIA (ADR-0015's 2026-08-30 amendment; this comment said
+ * "Trading 212 ISA" until #946), restricted to GBP LSE-listed ETFs/ETCs
+ * (#659), while paper runs Alpaca US
  * equities. #656 measured the two sessions overlapping by only two hours, so
  * one calendar cannot serve both — which is exactly why #668 made the flatten
  * an offset resolved through the instrument's own calendar rather than a shared

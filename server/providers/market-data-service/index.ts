@@ -130,7 +130,10 @@ export { closeTimeOf, isDailyTimeframe, timeframeToMs } from './timeframe.js';
 export type { TradingCalendar } from './trading-calendar.js';
 export {
   AlwaysOpenCalendar,
-  // #668 — the live equity leg's venue (#659: T212 ISA, GBP LSE-listed ETFs).
+  // #668 — the live equity leg's venue (#659: GBP LSE-listed ETFs, restriction
+  // re-confirmed against the venue change, #946; venue itself is Saxo GIA per
+  // ADR-0015's 2026-08-30 amendment, map #905 — not #659, which never named
+  // a broker).
   LseRegularHoursCalendar,
   // #706 — policy, not venue: narrows WHEN equities may be entered inside a
   // session the calendar has already opened.

@@ -4,8 +4,11 @@
  * ## What this is
  *
  * A checked-in, hand-compiled list of the leveraged ETPs Samurai MAY trade on
- * the live equity leg — GBP-account, T212-ISA, LSE-listed instruments — and,
- * for each one, the separate US instrument the screener ranks it on.
+ * the live equity leg — GBP-account, Saxo GIA, LSE-listed instruments — and,
+ * for each one, the separate US instrument the screener ranks it on. (This
+ * line said "T212-ISA" until the 2026-08-30 venue change, #946 — see
+ * "## Saxo venue change" below for what that does and does not mean for the
+ * per-row evidence.)
  *
  * ## The two identities
  *
@@ -43,6 +46,28 @@
  * `fallback_default` (the story-12 fallback subset the universe-selector spec
  * also asks for) is likewise NOT part of this file — the fallback watchlist
  * is #751's active-list/rotation concern, not this pool's.
+ *
+ * ## Saxo venue change — what changed here and what did not
+ *
+ * The live equity venue changed from Trading 212 (ISA) to Saxo Capital
+ * Markets UK (GIA) on 2026-08-30 (ADR-0015's amendment, map #905), after
+ * every row below was compiled. This doc pass (#946) updated the framing
+ * text on that basis. **Not changed by this**: the GBP-LSE restriction
+ * itself (#659, re-confirmed against the venue change) and the per-row
+ * identity evidence (ISIN, issuer, currency, ticker) — none of that
+ * depended on which broker holds the account. **Left deliberately unrenamed**:
+ * `t212_isa`, `t212_source_url`, and every row's T212-sourced listing
+ * evidence, because that evidence answers "does Trading 212 list this
+ * ticker", not "does Saxo" — those are different, unverified claims, and
+ * mechanically relabelling the field would assert a Saxo fact this pool has
+ * never checked. #946's own scope excluded building a Saxo `BrokerAdapter`
+ * or doing Saxo outreach, so no such check happened here — and, as of this
+ * writing, no open ticket tracks that Saxo-side re-verification either. A
+ * future pass that re-verifies this pool's rows (or a subset) against Saxo's
+ * own tradeable
+ * list, once a `BrokerAdapter` for Saxo exists, is the right place to either
+ * add a parallel `saxo_tradeable`-style field or retire `t212_isa` — not this
+ * change.
  *
  * ## Provenance
  *
@@ -113,8 +138,11 @@
  * large enough for the ranking machinery to be defined; what it did not
  * establish is that it is the whole tradeable universe, or that any row is
  * worth trading (ADR-0018 records the leveraged-ETP universe as
- * negative-expectancy on unconditional entry, and #666 still owns real
- * spreads). Rows were dropped from this pass, not padded around: a
+ * negative-expectancy on unconditional entry, and real spreads are still
+ * unmeasured on any live venue — #666 closed 2026-08-27 out of scope,
+ * following the T212-to-Saxo pivot, without delivering that measurement;
+ * #750 now gates on it instead, per ADR-0016). Rows were dropped from this
+ * pass, not padded around: a
  * GraniteShares Spotify line was carried through T212 verification and then
  * left out because no fetched page confirmed its ISIN or quoting currency.
  *
@@ -191,7 +219,9 @@
  *    grows with intraday path roughness — precisely the regime the screener
  *    selects for.
  * 2. **The GBP/USD leg.** Every underlying here is USD-denominated; the
- *    ETP is held in a GBP ISA. A currency move between entry and exit is an
+ *    ETP is held in a GBP account (Saxo GIA — see "## Saxo venue change"
+ *    above; this line said "GBP ISA" until #946). A currency move between
+ *    entry and exit is an
  *    uncompensated term in the realised return that the US-underlying
  *    screening bars cannot see. (Several rows below are themselves
  *    USD-denominated LSE lines rather than GBX/GBP lines — see each row's
@@ -261,16 +291,20 @@ export interface LseEtpPoolRow {
   /**
    * Best-effort determination that Trading 212 LISTS this ticker, from
    * T212's own public instrument pages (see `provenance.t212_source_url`) —
-   * NOT that it is confirmed listed-and-tradeable inside the Trading 212
-   * Stocks ISA. Listing is verified; ISA eligibility and this account's
-   * permission to actually trade it are unverified pending #665 (the
-   * complex-products questionnaire, still open), which can shrink this pool.
-   * This is also NOT a spread or liquidity measurement — #666 (still open)
-   * is what measures real T212 spreads. Until #665 and #666 land, treat
-   * every `true` here as "T212 lists the instrument", not "this account can
-   * hold it" or "the spread is tradeable" — the acceptance criterion calling
-   * this "the liquidity gate until #666 measures real spreads" names the
-   * spread gap explicitly rather than leaving it implied.
+   * NOT that it is confirmed listed-and-tradeable inside a Trading 212
+   * account, and NOT a claim about Saxo (the live equity venue since
+   * 2026-08-30, ADR-0015's amendment, map #905 — see "## Saxo venue change"
+   * above). Listing is verified; T212-side eligibility to actually trade it
+   * was pending #665 (the complex-products questionnaire), which closed
+   * 2026-08-27 as out of scope once T212 was ruled out as a venue at all
+   * (#896/#912, both closed 2026-08-27) — it never ran, so this field never
+   * shrank on that basis. This is also NOT a spread or liquidity
+   * measurement — #666, which would have measured real T212 spreads, closed
+   * the same day for the same reason; #750 now gates on a real per-instrument
+   * spread measurement instead, per ADR-0016. Every `true` here means only
+   * "T212 lists the instrument" — not "tradeable", not "the spread is
+   * tradeable", and not anything about Saxo, which this field has never
+   * checked.
    */
   readonly t212_isa: boolean;
   /**

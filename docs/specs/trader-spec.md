@@ -11,7 +11,7 @@
 | **The exit model** | **The neutral single bracket, per subclass** — see "The exit model" below. The tranche ladder was measured against it by [#708](https://github.com/dd-jp/samurai-trading-system/issues/708) and lost; the **−0.5% stop is dead**, on two independent grounds. The **indicator-based early exit is retained** and specified. |
 | **The horizon** | Flat by close is an invariant. The forced flatten is **close − 5 minutes resolved through the instrument's `TradingCalendar`** ([#657](https://github.com/dd-jp/samurai-trading-system/issues/657)), and it runs on the tick path — see "Exits are not all attached". |
 | **Threshold derivation** | [ADR-0018](../adr/0018-intraday-thresholds-sizing-and-the-signal-bar.md) resolved it: **frozen percentage brackets per subclass, pooled — not per-instrument fits.** Per-instrument fitting is refused there as threshold fitting, and this spec must not reintroduce it under an ATR formula. |
-| **The execution venue** | Trading 212 ISA, **GBP LSE-listed ETPs only**. `Trading212Adapter` still does not exist ([#659](https://github.com/dd-jp/samurai-trading-system/issues/659)) — that is a build gap, no longer a spec gap. |
+| **The execution venue** | Saxo Capital Markets UK, GIA — ADR-0015's 2026-08-30 amendment (this row said "Trading 212 ISA" until [#946](https://github.com/dd-jp/samurai-trading-system/issues/946)) — **GBP LSE-listed ETPs only**. No Saxo `BrokerAdapter` exists yet ([#659](https://github.com/dd-jp/samurai-trading-system/issues/659)) — that is a build gap, no longer a spec gap. |
 
 **Two clauses in the old banner are themselves withdrawn:**
 

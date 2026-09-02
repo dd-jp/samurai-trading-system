@@ -46,7 +46,25 @@ describe('scaleCostConfig', () => {
     expect(scaled.floors).toEqual({ minHalfSpreadRate: 0.002, minCommissionRate: 0.003 });
   });
 
-  it('carries venue overrides through UNSCALED rather than dropping them', () => {
+  // #1017: `venues[*]` rate fields are cost coefficients (the same kind of
+  // fact as `stocks.commissionRate`/`crypto.commissionRate`), unlike
+  // `floors`, and must be scaled the same way — carrying them through
+  // unscaled silently under-measures cost sensitivity the moment a
+  // Saxo-keyed config reaches the ladder (`PESSIMISTIC_COST_CONFIG` sets no
+  // `venues` today, so this was inert, not yet observable, before #1017).
+  it('scales every present rate field of each venue override by factor (#1017)', () => {
+    const withVenues: CostConfig = {
+      ...BASE,
+      venues: { saxo: { commissionRate: 0.0008, impactK: 0.02 } },
+    };
+
+    const scaled = scaleCostConfig(withVenues, 0.05);
+
+    expect(scaled.venues?.saxo?.commissionRate).toBeCloseTo(0.00004, 10);
+    expect(scaled.venues?.saxo?.impactK).toBeCloseTo(0.001, 10);
+  });
+
+  it('leaves a venue override field unset when the input did not set it', () => {
     const withVenues: CostConfig = {
       ...BASE,
       venues: { saxo: { commissionRate: 0.0008 } },
@@ -54,7 +72,8 @@ describe('scaleCostConfig', () => {
 
     const scaled = scaleCostConfig(withVenues, 0.05);
 
-    expect(scaled.venues).toEqual({ saxo: { commissionRate: 0.0008 } });
+    expect(scaled.venues?.saxo).toEqual({ commissionRate: 0.00004 });
+    expect('spreadVolatilityCoefficient' in (scaled.venues?.saxo ?? {})).toBe(false);
   });
 
   // #1000 review finding: floors/venues must be copied, not aliased — a

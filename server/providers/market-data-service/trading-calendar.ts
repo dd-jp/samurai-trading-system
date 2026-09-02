@@ -697,9 +697,11 @@ const LSE_HALF_DAYS = new Set([
  * London Stock Exchange regular trading hours: Mon-Fri, 08:00-16:30 London,
  * with UK bank holidays and 12:30 half-day closes (#668).
  *
- * This is the calendar the LIVE equity leg runs on. #659 put that leg on the
- * Trading 212 ISA restricted to GBP LSE-listed ETFs/ETCs, so the US 16:00 ET
- * boundary the repo previously had is the PAPER venue's, not the live one's —
+ * This is the calendar the LIVE equity leg runs on. #659 put that leg on
+ * GBP LSE-listed ETFs/ETCs (venue: Saxo Capital Markets UK, GIA, since the
+ * 2026-08-30 ADR-0015 amendment; this comment said "Trading 212 ISA" until
+ * #946), so the US 16:00 ET boundary the repo previously had is the PAPER
+ * venue's, not the live one's —
  * and #656 measured that the two sessions overlap by only two hours, which is
  * why the flatten rule had to be an offset resolved through the instrument's
  * own calendar rather than a shared wall-clock constant.
