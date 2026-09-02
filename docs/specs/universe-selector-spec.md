@@ -362,7 +362,11 @@ Two implementation obligations:
 
 ### 3. Does shortlist size collide with the LLM budget window? — open, not a gate
 
-`LLM_BUDGET_WINDOW_MS` is 300 s and `STOCKS_MAX_DEBATES_PER_WINDOW` is 15. Whether a 10-name shortlist fits inside one window depends on per-stock-debate duration: under ~30 s/debate the whole shortlist lands in one window (10/15, and >15 names would be rejected outright); at ~60 s/debate it spans two-plus windows and the ceiling is nowhere near binding. `maxConcurrentInstruments` defaults to 1, so instruments run sequentially rather than bursting. **Per-stock-debate duration is unmeasured** — [#367](../../issues/367) decides it. Do not cap the shortlist or raise the ceiling on this basis until then; the constraint may not exist.
+`LLM_BUDGET_WINDOW_MS` is 300 s and `STOCKS_MAX_DEBATES_PER_WINDOW` is 15. Whether a 10-name shortlist fits inside one window depends on per-stock-debate duration: under ~30 s/debate the whole shortlist lands in one window (10/15, and >15 names would be rejected outright); at ~60 s/debate it spans two-plus windows and the ceiling is nowhere near binding.
+
+> **STALE PREMISE — [#1013](../../issues/1013) (2026-09-02).** The sentence this replaces read "`maxConcurrentInstruments` defaults to 1, so instruments run sequentially rather than bursting." That is no longer true: #1013 set `maxConcurrentInstruments` to an explicit `6` in paper and live, so shortlist instruments now start their debates CONCURRENTLY (up to width 6), not walking the list one at a time. This does not just change a number — it changes the shape of the analysis above, which assumed sequential arrival spreads debates across windows; a burst of near-simultaneous admissions can all land in the SAME window regardless of per-debate duration. Reworking that arithmetic is more than a value swap and is tracked separately as [#1020](../../issues/1020) rather than attempted here. Until #1020 lands, treat this section's conclusion as unverified against current behavior, not merely as "open, not a gate" for the reason originally stated.
+
+**Per-stock-debate duration is unmeasured** — [#367](../../issues/367) decides it. Do not cap the shortlist or raise the ceiling on this basis until then; the constraint may not exist.
 
 ## Further Notes
 

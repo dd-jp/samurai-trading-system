@@ -375,10 +375,17 @@ describe('paperStartingProfile', () => {
       }
 
       expect(universe.length).toBeLessThan(stocksBudget.maxDebates);
-      // The configured width itself, not just today's universe, also clears
-      // the budget — headroom for the universe growing up to this cap
-      // without the rate limiter needing a second look.
-      expect(profile.maxConcurrentInstruments).toBeLessThan(stocksBudget.maxDebates);
+    });
+
+    it('pins backtest at width 1 for replay determinism, not the paper/live 6 (#1013 fix-up H1)', () => {
+      // `paperStartingProfile('backtest')` explicitly overrides
+      // `maxConcurrentInstruments` back to 1 rather than inheriting
+      // `buildStartingProfileConfigs()`'s 6 — backtest's log-insertion-order
+      // determinism depends on instruments running one at a time, unlike
+      // paper/live width 6 (see paper-profile.ts's return statement and
+      // failover-data-source.ts's replay-determinism comment).
+      expect(paperStartingProfile('backtest').maxConcurrentInstruments).toBe(1);
+      expect(paperStartingProfile('paper').maxConcurrentInstruments).toBe(6);
     });
   });
 

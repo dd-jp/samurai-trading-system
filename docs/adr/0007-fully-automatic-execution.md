@@ -7,6 +7,8 @@
 - **Related:** [#275](https://github.com/dd-jp/samurai-trading-system/issues/275) (built the Telegram approval transport), [#384](https://github.com/dd-jp/samurai-trading-system/issues/384), [#375](https://github.com/dd-jp/samurai-trading-system/issues/375), [#333](https://github.com/dd-jp/samurai-trading-system/issues/333) (the breakers that must work now that this gate does not exist)
 
 > **Amended by [ADR-0013](0013-no-human-gate-anywhere.md) (2026-08-09).** This ADR removed the human from the **trade approval** path only. ADR-0013 extends the same posture to the two human gates that survived it — the hard breaker's **manual re-arm** and the Feedback Loop's **risk-threshold loosening approval** — so no gate anywhere waits on a person. It does so on separate reasoning: the serialization argument below applies to a blocking `await` in the instrument pass and does not carry to either of those, since neither blocks anything. ADR-0013 also keeps the Feedback Loop's static hard bounds, which are limits rather than approvals, and requires that breach **alerting** survive the removal of the approval channel it currently shares a field with.
+>
+> **Amended 2026-09-02 — [#1013](https://github.com/dd-jp/samurai-trading-system/issues/1013) raised `max_concurrent_instruments` from 1 to 6.** See the amendment at the bottom of this document: the premise the serialization argument below was measured against has changed, but the decision (no human gate) still holds — for a different, sufficient reason (`automation_level: auto` already makes the gate unreachable regardless of width), not because the original width-1 argument was wrong when made.
 
 ## Context
 
@@ -28,6 +30,11 @@ and unit-tested, and nothing constructs the chain.
 The question was therefore live: finish wiring it, or decide against it.
 
 ### What made the decision, and it is structural rather than a preference
+
+> **`max_concurrent_instruments` is no longer 1 — see the 2026-09-02 amendment
+> at the bottom of this document.** The width figure below is what the
+> decision was measured against at the time; it is not what the system runs
+> today, and the amendment explains why the decision does not depend on it.
 
 `VerdictImpl.decide` **awaits** `approvals.requestApproval` inside the
 instrument pass (gate 6, `server/pipeline/verdict/index.ts`). `runTickPlan` runs
@@ -130,3 +137,18 @@ fire. Either relax it or document why it stays.
   runner. Not pursued because the decision was to remove the human, not to
   re-plumb around them; recorded here because it is the only version of
   `semi_auto` worth building if the dial is ever turned back.
+
+## Amendment — 2026-09-02: `max_concurrent_instruments` is now 6, not 1 — the conclusion still holds
+
+- **Prompted by:** [#1013](https://github.com/dd-jp/samurai-trading-system/issues/1013) / PR [#1018](https://github.com/dd-jp/samurai-trading-system/issues/1018), which set `maxConcurrentInstruments` to an explicit `6` in paper and live (`server/apps/orchestrator/paper-profile.ts`), replacing the implicit `?? 1` fallback this ADR's serialization argument was measured against.
+- **Answers:** whether the load-bearing premise above — "`runTickPlan` runs instruments at `max_concurrent_instruments`, which is **1**" — changing to 6 reopens the question this ADR decided.
+
+**The premise changed. The conclusion does not depend on it, and did not need to.**
+
+At width 1, a single trade awaiting a human tap blocked EVERY other instrument in the universe for up to `human_timeout` — the whole run serialized behind one un-answered notification. At width 6, `VerdictImpl.decide`'s `await approvals.requestApproval` still blocks only the ONE worker holding that instrument's pass; the other five instruments' workers are unaffected. At width ≥ universe size — today's `DEFAULT_UNIVERSE` is 4, below the width of 6 — every instrument already gets its own worker in the same pass, so a pending approval blocks no *other* instrument at all; the specific "blocks every other instrument" arithmetic this ADR argued from would only bind again if the universe grew past the width (see the `maxConcurrentInstruments` field comment in `paper-profile.ts` and the #895/#1019 tripwire it points to).
+
+**That does not reopen the question, because the decision was never conditional on the width being exactly 1.** `automation_level: { crypto: 'auto', stocks: 'auto' }` (`paper-profile.ts`) makes `shouldEngageHitl` short-circuit to `false` before `isFlagged` is ever consulted — gate 6 is unreachable, `approvals.requestApproval` is never called, at ANY concurrency width. The serialization argument above explains *why* `auto` was chosen over `manual`/`semi_auto` in the first place; it is not a runtime condition the `auto` decision continues to depend on once made. A future width change (up or down) cannot, by itself, make gate 6 reachable again — only a config edit to `automation_level` can, and `assertAutomationLevelSupported` (`server/pipeline/verdict/index.ts`) throws at production boot if that edit is made without also landing async approval (#434), per verdict-spec.md's "Staged-Deployment Alignment" section.
+
+The second, smaller finding this ADR made — that gates 1 and 2 run before gate 6 and are never re-checked after it, so an approval could submit against a stale snapshot — is also unaffected by width: it was about the ORDER of gates within one instrument's pass, not about how many instruments run concurrently.
+
+**Unchanged by this amendment:** the decision (`automation_level: auto`, no human gate anywhere), the breaker-only stop posture, and everything under "Consequences" above. The only correction is to the width figure the serialization argument cites, which is now historical context for why `auto` was chosen rather than a live constraint the choice still rests on.
