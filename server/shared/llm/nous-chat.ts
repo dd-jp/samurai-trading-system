@@ -248,6 +248,21 @@ export async function nousChat(
     );
   }
 
+  // #1010: this reads exactly two fields off the OpenAI-shaped `usage`
+  // object and drops everything else — including any cache-related fields a
+  // provider or proxy might return (e.g. an OpenAI-style
+  // `prompt_tokens_details.cached_tokens`, or an Anthropic-style
+  // `cache_read_input_tokens` passed through verbatim). `NousChatResult.usage`
+  // above has no slot for them either. So even in a world where caching WAS
+  // requested and honoured upstream, this function would still report zero
+  // cache tokens to `AnthropicLlmClient.recordSpend` -> `spend-sink.ts` ->
+  // `llm_spend`, which is a structurally separate cause of the all-zero
+  // `cache_creation_input_tokens`/`cache_read_input_tokens` columns #1010
+  // measured, from "nothing ever asks for caching" (anthropic-client.ts's
+  // `renderMessageContent`, which #1010 also found does not clear the
+  // model's minimum). `nous-chat.test.ts`'s "cache accounting" block
+  // characterizes this drop so it can't silently persist unnoticed if the
+  // token-size gate above is ever cleared by a future model change.
   const usage = {
     input_tokens: toTokenCount(parsed.usage?.prompt_tokens),
     output_tokens: toTokenCount(parsed.usage?.completion_tokens),

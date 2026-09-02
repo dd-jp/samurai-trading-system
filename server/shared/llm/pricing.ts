@@ -153,6 +153,16 @@ export const MODEL_RATES: Readonly<Record<string, ModelRate>> = Object.freeze({
  * now — a column no caller populates is a second thing to keep in sync for no
  * behavioural gain. This comment is the flag.
  *
+ * #1010 measured whether "nothing requests caching" was itself worth fixing
+ * and found it moot for the pinned debate model on token size alone: Claude
+ * Haiku 4.5 requires 4,096 input tokens before Anthropic caches anything
+ * (platform.claude.com/docs/en/build-with-claude/prompt-caching, fetched
+ * 2026-09-02), and the debate engine's actual requests — measured against
+ * the paper-soak store — average ~1,575-2,150. See the request-builder
+ * comment on `renderMessageContent` in `debate-engine/llm/anthropic-client.ts`
+ * for the full finding; this multiplier stays inert for that reason too, not
+ * only the per-vendor pricing gap above.
+ *
  * The 1-hour-TTL write multiplier (2x) is absent for the same reason it always
  * was: nothing requests a 1h TTL, and the usage block does not distinguish the
  * two TTLs anyway — that change needs a wire-level discriminator first.

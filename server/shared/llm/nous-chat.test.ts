@@ -169,6 +169,68 @@ describe('nousChat', () => {
     });
   });
 
+  describe('cache accounting (#1010)', () => {
+    /**
+     * #1010: `llm_spend.cache_creation_input_tokens` /
+     * `cache_read_input_tokens` are zero on every one of 383 sampled debate
+     * calls. Measurement (prompt-caching.test.ts) found the debate model's
+     * requests fall well short of the 4,096-token minimum Anthropic requires
+     * before it caches anything, so nothing in this repo requests caching —
+     * see the comment on `anthropic-client.ts`'s `renderMessageContent`.
+     *
+     * This test pins the SEPARATE, structural half of that same zero: even
+     * if some future request DID clear the minimum and a provider/proxy
+     * returned cache usage, this function only ever reads `prompt_tokens`
+     * and `completion_tokens` off the response body and has no field to
+     * carry a cache count through. A cache hit upstream would currently be
+     * invisible here. If this test starts failing, it means someone widened
+     * `usage` parsing without also widening `NousChatResult['usage']` and
+     * `AnthropicUsage` (pricing.ts) to match — check both stay in sync before
+     * "fixing" this assertion.
+     *
+     * The exact field name a caching-aware Nous response would use is
+     * UNVERIFIED (Nous's own docs are not in this repo — see the deferral
+     * note in pricing.ts) so this checks both an OpenAI-shaped
+     * (`prompt_tokens_details.cached_tokens`) and an Anthropic-shaped
+     * (`cache_read_input_tokens`) guess; either way, both are dropped today.
+     */
+    it('drops any cache-related usage fields a provider response might carry', async () => {
+      stubFetch(
+        completion({
+          usage: {
+            prompt_tokens: 11,
+            completion_tokens: 22,
+            prompt_tokens_details: { cached_tokens: 9 },
+            cache_read_input_tokens: 9,
+            cache_creation_input_tokens: 2,
+          },
+        }),
+      );
+
+      const result = await nousChat(OPTIONS, REQUEST);
+
+      expect(result.usage).toEqual({ input_tokens: 11, output_tokens: 22 });
+      expect(result.usage).not.toHaveProperty('cache_read_input_tokens');
+      expect(result.usage).not.toHaveProperty('cache_creation_input_tokens');
+    });
+
+    it('never sends a cache_control breakpoint in the POSTed request body', async () => {
+      // Documents present-day behaviour: the request builder has no
+      // content-block structure to attach `cache_control` to (flat string
+      // `content`, see `NousChatMessage` above), so it can't appear by
+      // construction. This is the canary for that changing silently — if a
+      // future change starts sending one, it should be a deliberate,
+      // measured decision (prompt-caching.test.ts re-cleared, Nous's
+      // pass-through behaviour confirmed), not an accident.
+      const fetchMock = stubFetch(completion());
+
+      await nousChat(OPTIONS, REQUEST);
+
+      const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+      expect(init.body as string).not.toContain('cache_control');
+    });
+  });
+
   describe('failures', () => {
     it('exposes the HTTP status, which is what classifies a 429 as retryable', async () => {
       stubFetch(
