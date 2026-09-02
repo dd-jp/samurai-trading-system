@@ -181,7 +181,14 @@ export class SequentialTickRunner implements TickRunner {
       const riskStartedAt = Date.now();
       const riskStartedAtPerf = performance.now();
       const riskDecision = await this.steps.risk(riskInput);
-      record('risk', riskDecision.status, riskInput, riskDecision, riskStartedAt, riskStartedAtPerf);
+      record(
+        'risk',
+        riskDecision.status,
+        riskInput,
+        riskDecision,
+        riskStartedAt,
+        riskStartedAtPerf,
+      );
       this.reportAdvisoryWarnings(instrument, riskDecision.warnings, ctx);
       if (riskDecision.status === 'rejected') {
         currentTickStore.delete(instrument);
