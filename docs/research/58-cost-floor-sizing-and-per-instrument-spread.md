@@ -179,3 +179,219 @@ shows large dispersion, that finding does not rest on 3SPY.
   [#895](https://github.com/dd-jp/samurai-trading-system/issues/895) and stays there.
 
 ---
+
+# The measurement, run after the criteria above were committed
+
+Producer: [`58-spread-estimator.py`](58-spread-estimator.py). Raw logs:
+[`archive/raw/2026-09-02-58-spread-estimator.txt`](archive/raw/2026-09-02-58-spread-estimator.txt) (the first run,
+whose criterion failed as written) and
+[`archive/raw/2026-09-02-58-spread-estimator-rerun.txt`](archive/raw/2026-09-02-58-spread-estimator-rerun.txt)
+(the run reported below). Both are kept.
+
+## F1 — realised fills do not exist, and the paper soak cannot ever produce the ones #882 needs
+
+#882 says validating the floors "needs realised fills from the paper soak **or** the live equity leg". Checked
+against `data/samurai-paper.sqlite` (2,174,976 B, mtime 2026-09-02T03:47Z, zero-byte WAL so nothing is
+uncommitted):
+
+| table | rows |
+| --- | --- |
+| `fills` | **2** |
+| `broker_observed_fills` | 0 |
+| `closed_trades` | 1 |
+| `open_positions` | 5 (1 filled, **4 `order_state='rejected'`, `filled_size = 0.0`**) |
+| `verdict_log` | 10 (5 `go`) |
+| `debate_log` | 48 |
+
+**Pipeline-generated fills: zero.** Both `fills` rows carry
+`idempotency_key = 'soak-lifecycle-probe-2026-08-26'`, minted by `server/tools/place-soak-position.ts` — a
+one-off manual probe, not a pipeline decision. `data/samurai.db` is **0 bytes**, so no live-leg store exists at
+all. The 2026-08-25 archive DB holds 94 debates and 0 fills; the stale worktree copy holds 78 debates and 0 fills.
+
+**The premise is not merely unmet, it is unmeetable on this venue.** Three independent reasons, any one of which
+is sufficient:
+
+1. **`fee = 0.0` on both fills.** Alpaca paper charges no commission, so the **1bp commission floor is
+   structurally unvalidatable there at any sample size.**
+2. **No quote is persisted anywhere in the schema.** `bars` is OHLCV only; `latest_mark` is one overwritten row
+   per instrument; `fills` carries `price` and nothing else. There is no column that could hold a bid/ask at
+   submit time, so **a realised half-spread cannot be computed from this store however long the soak runs** —
+   that needs an instrumentation change, not more ticks. `fills.cost_breakdown_json` is NULL on both rows and its
+   own schema comment scopes it to "Simulated-adapter fills only", so the modelled-vs-realised comparison field
+   never populates on a real-broker path.
+3. **Wrong venue, wrong instruments.** The one fill is SPY on Alpaca US paper. The live universe is GBP
+   LSE-listed leveraged ETPs at Saxo (ADR-0016, ADR-0015). Thousands of Alpaca paper fills would not size either
+   floor for that universe.
+
+So #882's stated gate is **half wrong**: only the live Saxo leg can produce the fills that would validate these
+floors, and the paper soak never can.
+
+### F1b — a finding that outgrows this document, and is filed separately
+
+All **four** rejected pipeline orders were `sell` while flat, i.e. **short entries**, and all four returned
+`alpaca submitBracket failed (status 422)`:
+
+| opened_at | instrument | side | requested_size |
+| --- | --- | --- | --- |
+| 2026-08-27T14:05:00.906Z | AAPL | sell | 16.0593553774751 |
+| 2026-08-28T14:05:50.177Z | TSLA | sell | 14.2205031214004 |
+| 2026-09-01T14:02:23.064Z | SPY | sell | **6.0** |
+| 2026-09-01T14:03:20.555Z | QQQ | sell | **7.0** |
+
+SPY 6.0 and QQQ 7.0 are **whole-share** and were rejected too, which narrows the standing "every fractional
+bracket 422s" reading — fractional sizing is not the common cause. No response body is persisted, only
+`"reason":"alpaca submitBracket failed (status 422)"`. Filed rather than chased here.
+
+## F2 — the estimator validates on ordering, and the level is NOT transferable
+
+Both estimators, run on the four US names where doc 53 G3 already knows the answer from real Alpaca SIP quotes,
+under the amendment's data-quality screen (all four pass it: 500 usable pairs, zero flat days):
+
+| ticker | CS bps (round trip) | AR bps (round trip) | CS neg% | AR neg% | doc 53 measured 1m half-spread |
+| --- | --- | --- | --- | --- | --- |
+| SPY | 37.98 | 49.49 | 41.4% | 48.2% | 0.347 bps |
+| QQQ | 49.68 | 71.64 | 40.2% | 48.0% | 0.546 bps |
+| AAPL | 75.67 | 97.04 | 40.6% | 51.4% | 0.740 bps |
+| TSLA | 151.02 | 198.12 | 45.4% | 50.2% | 4.216 bps |
+
+- **ORDERING BAR: PASS, both estimators.** Estimated `SPY < QQQ < AAPL < TSLA`, exactly the measured ordering.
+- **DISPERSION BAR: PASS, both estimators.** TSLA/SPY = 3.98x (CS) and 4.00x (AR), inside the declared 3x-40x
+  band against a measured 12.15x.
+
+**The absolute level is off by a factor of roughly fifty and must never be quoted.** SPY's estimated round-trip
+37.98 bps is a 19 bps half-spread against a measured 0.347 bps. The criterion forbade level comparison in advance
+and this is why: these are daily proportional spreads from range data, not 1-minute half-spreads from quotes.
+**Only same-estimator ratios are used below.** Nothing in this document converts an estimate into a bps figure
+for the live universe, and no such conversion should be built on it.
+
+The estimators also **compress** dispersion — 4x estimated against 12x measured — so they *understate* how
+different two instruments are. That direction matters: a dispersion finding from this method is a lower bound.
+
+## F3 — the LSE pool, and what #881 actually asked
+
+Six of eleven pool tickers pass the declared screen. Five do not, and **none of the five is screened out for
+being tight** — they are screened out for having no usable data:
+
+| ticker | ccy | bars | pairs | flat days | CS bps | AR bps | status |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 3USL | USD | 505 | 504 | 1 | 80.62 | 149.85 | ok |
+| LQQ3 | GBp | 504 | 503 | 1 | 124.52 | 213.90 | ok |
+| NVD3 | USD | 505 | 504 | 1 | 307.48 | 465.55 | ok |
+| 3LNV | USD | 505 | 504 | 1 | 351.92 | 461.12 | ok |
+| MST3 | USD | 476 | 475 | 6 | 593.01 | 796.47 | ok |
+| PLT3 | USD | 505 | 504 | 1 | 434.03 | 613.04 | ok |
+| 3SPY | GBp | 504 | 503 | **78** | *28.29* | *170.49* | **UNMEASURED** — 15.5% flat days |
+| 3QQQ | GBp | 504 | 503 | 21 | *119.28* | *221.93* | **UNMEASURED** — 4.2% flat days |
+| 3LPA | USD | 505 | 504 | 24 | *261.43* | *599.44* | **UNMEASURED** — 4.8% flat days |
+| 3LTS | USD | **1** | 0 | — | — | — | **UNMEASURED** — no usable day-pairs |
+| 3AAP | GBp | **1** | 0 | — | — | — | **UNMEASURED** — no usable day-pairs |
+
+**3SPY is the artefact the criterion was written to catch, observed live.** Corwin-Schultz scores it at 28.29 bps
+— *tighter than SPY's own 37.98* — on a line doc 34 §3.3 measured at **26 prints across five whole sessions with
+50% of gaps over 15 minutes**, and which shows **78 flat days** here. It is not tight; it does not trade. Had the
+first criterion's truncate-free rule not been in place, and had the flat-day screen not been declared, this line
+would have entered a cost table as the cheapest instrument in the universe. It is excluded, and its number is
+printed in italics above only so the artefact is visible.
+
+**3LTS and 3AAP return a single daily bar for the whole two-year window.** Doc 34 §3.3 independently measured
+3AAP at 27 prints in five sessions with 72.7% of gaps over 15 minutes. Two of the eleven "tradeable" instruments
+have no usable price history at all.
+
+### What #881's own statistic says, and why the honest answer is not the one the ticket expected
+
+#875's declared test was **p90 across symbols against the median**, which fired at 3.3x on the US four. Applied
+to the six screened LSE names:
+
+| statistic | Corwin-Schultz | Abdi-Ranaldo |
+| --- | --- | --- |
+| median | 329.70 bps | 463.33 bps |
+| range | 80.62 - 593.01 | 149.85 - 796.47 |
+| **max / min** | **7.36x** | **5.31x** |
+| **max / median** (#875's shape) | **1.80x** | **1.72x** |
+| #875's 2x threshold | **does not fire** | **does not fire** |
+
+**This is the substantive finding, and it inverts the ticket's framing.** Within-universe *dispersion* is real
+(max/min 7.36x, against 3.98x across the US four on the same estimator — the LSE pool is about twice as spread
+out) but it is **not concentrated in an outlier**, so #875's p90-vs-median statistic does not fire. The pool is
+**uniformly wide**. Every one of the six screened names estimates wider than SPY (2.1x to 15.6x), and **four of
+the six estimate wider than TSLA** — the name doc 53 measured at 4.216 bps, already **4.2x the 1bp floor**.
+
+So the dominant error in `CALIBRATED_INTRADAY_COST_CONFIG` is **not** that one `stocks` coefficient fails to
+separate wide names from tight ones. It is that the coefficient — and the floors under it — are fitted on **US
+mega-caps and applied to a universe that sits entirely above them.** That is a *level* error against the live
+universe, not a *dispersion* error within it, and a per-instrument coefficient fitted on US proxies would not
+touch it.
+
+## F4 — the floors are under-sized for the live venue, and this part needs no estimator at all
+
+`server/tools/backtest/cost-model.ts` applies both floors **per component, per side**:
+
+```ts
+const rawSpread =
+  marketState.spread ?? marketState.volatility * assetConfig.spreadVolatilityCoefficient;
+const half_spread = Math.max(rawSpread / 2, marketState.mid * STRUCTURAL_MIN_HALF_SPREAD_RATE);
+
+const notional = request.size * marketState.mid;
+const commission = Math.max(
+  assetConfig.commissionRate * notional,
+  STRUCTURAL_MIN_COMMISSION_RATE * notional,
+);
+```
+
+`slippage` and `market_impact` are unfloored. `fill()` is called once at entry and once at exit
+(`replay-driver.ts:560`/`:609`, `simulated-adapter.ts:83`/`:232`), so a round trip charges both floors twice:
+**~4 bps round trip**, exactly as #882 states.
+
+**The commission floor is under-sized by 8x against the live venue, from a primary in-repo source and with no
+estimation involved.** [ADR-0015](../adr/0015-live-venue-account-and-book-split.md):201 records Saxo's
+**8 bps-per-side Classic tier with no per-order minimum**, i.e. **0.16% = 16 bps round trip** at both the £350 and
+£250 position sizes. The model charges **2 bps round trip**. ADR-0015:207 already anticipated this document's
+conclusion:
+
+> `CostModelImpl`, which floors commission at a 1bp-of-notional *rate*, models Saxo's rate-based structure in kind
+> (not in the exact 8bps figure) rather than IBKR's per-order floor — **a rate-calibration update to 8bps is an
+> implementation follow-up, not a structural fix.**
+
+**The half-spread floor is under-sized too, by the ordering argument of F2/F3** — four of six screened LSE names
+estimate wider than TSLA, whose measured 1m half-spread is 4.2x the floor. Doc 53 §G4 already recorded the same
+direction on separate grounds ("an LSE leveraged ETP's real spread is very likely **wider** than a US
+mega-cap's"). This document does not put a number on it; it establishes the sign.
+
+**Direction, which the criterion required be stated: the floors are FLATTERING for the live universe.** #882's
+ticket says the guard "over-charges the tight names and under-charges the wide ones" — true of the US four, and
+misleading about the live book, where **there are no tight names.** Against an edge ADR-0018 measures in
+single-digit bps per session, a cost model charging ~4 bps round trip where the venue's *commission alone* is
+16 bps is wrong in the one direction this repo has twice been burned by
+([`13-stage2-proxy-verdict.md`](13-stage2-proxy-verdict.md)'s KILL was the cost fixture; #875's own
+order-of-magnitude claim was withdrawn).
+
+## F5 — should a floor that dominates be inert to calibration?
+
+**No, and the fix is a floor table rather than a constant.** Findings:
+
+- The floors are module-private `const` in `cost-model.ts`. **Not exported, no env var, no config field.**
+  `CostConfig` has no floor fields, and the only cost env var (`SAMURAI_STAGE2_COST_CONFIG`) swaps whole configs
+  and cannot reach them. Overriding them today requires editing the constants or substituting an entire
+  `CostModel` — which is what `ZeroCostModel` in `cost-attribution.test.ts` does, existing solely to bypass an
+  otherwise unreachable guard.
+- **Principle 1 does not require a fixed magnitude.** `docs/wayfinder/cost-model-backtest-map.md:16` and
+  `docs/specs/cost-model-backtest-spec.md:148` state it as *representability*: "the most optimistic config still
+  applies a non-zero `half_spread + commission` floor. A frictionless fill is not representable." A per-venue or
+  per-asset-class floor table satisfies that in full. **Nothing in Principle 1 says the floor must be 1bp**, and
+  nothing anywhere states a measurement basis for that magnitude.
+- **The seam already carries what a better floor needs.** `fill(request: FillRequest, marketState: MarketState)`
+  has `request.instrument` (currently used only in an ADV error message) and `marketState.asset_class` in hand at
+  the floor site. A `floorFor(...)` lookup drops in with the table hung off `CostConfig`. A per-**venue** floor is
+  the one variant needing a new field — `MarketState`, `FillRequest` and `InstrumentListing` carry **no venue or
+  exchange identity at all**, so LSE ETPs arrive as `'stocks'`, indistinguishable from Alpaca US equities.
+- **A floor that dominates silently corrupts a tool already in the tree.**
+  `run-stage2-cost-decomposition.ts:137-155` scales all four coefficients by `COST_SCALES = [1, 0.5, 0.25, 0.1,
+  0.05]`; with stocks already at the floor, **the lower rungs of that ladder measure nothing.** Its own docstring
+  says so. That is the concrete cost of leaving a dominating floor inert.
+
+**No recorded result is invalidated by re-deciding this.** The floors are inert on the live path — the cost model
+is only consumed by `SimulatedBrokerAdapter`; the Alpaca adapter never prices through it
+(`paper-profile.ts:1751`: "Inert in paper (Simulated adapter only)"). What *is* affected is every Stage 2
+backtest number, all of which were scored with a cost floor now shown to be under-sized for the live universe —
+i.e. they are **optimistic by an unquantified amount**, and no Stage 2 verdict should be re-cited until the floor
+is re-sized.

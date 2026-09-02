@@ -82,9 +82,18 @@ LSE_TICKERS = [
     "PLT3",
 ]
 
-# Declared in the criterion: a ticker degenerate on more than this fraction of
-# its usable day-pairs is UNMEASURED, not tight.
-DEGENERACY_LIMIT = 0.33
+# The REPLACEMENT screen (doc 58's amendment). The first criterion screened on
+# the estimators' negative rate at 33%, which fired on all four US validation
+# names including SPY (41.4%, zero flat days) — a 40-50% negative rate is the
+# documented norm for both estimators at daily frequency, so it keyed on an
+# estimator property rather than an instrument property and discriminated
+# nothing. The screen is now on DATA QUALITY, declared before the re-run.
+MIN_USABLE_PAIRS = 250
+MAX_FLAT_DAY_FRACTION = 0.02
+
+# The negative/undefined rate is still reported for every ticker. It is no
+# longer an exclusion. Negatives are still never truncated to zero, and a
+# screened-out ticker is reported UNMEASURED, never tight.
 
 CHART = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=2y"
 
@@ -226,7 +235,14 @@ def score(symbol: str) -> dict[str, object] | None:
 
     cs_degenerate = (cs_negative + cs_undefined) / pairs
     ar_degenerate = (ar_negative + ar_undefined) / pairs
-    unmeasured = cs_degenerate > DEGENERACY_LIMIT or ar_degenerate > DEGENERACY_LIMIT
+
+    flat_fraction = flat_days / len(bars) if bars else 1.0
+    reasons: list[str] = []
+    if pairs < MIN_USABLE_PAIRS:
+        reasons.append(f"only {pairs} usable day-pairs (< {MIN_USABLE_PAIRS})")
+    if flat_fraction > MAX_FLAT_DAY_FRACTION:
+        reasons.append(f"{flat_fraction:.1%} flat days (> {MAX_FLAT_DAY_FRACTION:.0%})")
+    unmeasured = bool(reasons)
 
     return {
         "symbol": symbol,
@@ -234,6 +250,7 @@ def score(symbol: str) -> dict[str, object] | None:
         "bars": len(bars),
         "pairs": pairs,
         "flat_days": flat_days,
+        "flat_fraction": flat_fraction,
         "cs_bps": statistics.median(cs_values) * 10_000 if cs_values else None,
         "ar_bps": statistics.median(ar_values) * 10_000 if ar_values else None,
         "cs_degenerate": cs_degenerate,
@@ -243,7 +260,7 @@ def score(symbol: str) -> dict[str, object] | None:
         "cs_undefined": cs_undefined,
         "ar_undefined": ar_undefined,
         "unmeasured": unmeasured,
-        "reason": "degeneracy above the declared 33% limit" if unmeasured else "",
+        "reason": "; ".join(reasons),
     }
 
 
@@ -261,7 +278,7 @@ def render(rows: list[dict[str, object]], title: str) -> None:
             continue
         cs = f"{row['cs_bps']:.2f}" if row["cs_bps"] is not None else "-"
         ar = f"{row['ar_bps']:.2f}" if row["ar_bps"] is not None else "-"
-        status = "UNMEASURED" if row["unmeasured"] else "ok"
+        status = f"UNMEASURED ({row['reason']})" if row["unmeasured"] else "ok"
         print(
             f"{row['symbol']:<8} {row['currency']:<5} {row['bars']:>5} {row['pairs']:>6} "
             f"{row['flat_days']:>5} {cs:>9} {ar:>9} "
@@ -272,19 +289,33 @@ def render(rows: list[dict[str, object]], title: str) -> None:
 def main() -> int:
     print("#881 / #882 — free OHLC spread estimators, Corwin-Schultz (2012) and Abdi-Ranaldo (2017)")
     print("Source: Yahoo v8/finance/chart, interval=1d, range=2y. RESEARCH USE ONLY (doc 34 §5).")
-    print(f"Declared degeneracy limit: {DEGENERACY_LIMIT:.0%} of day-pairs. Negatives are counted, never truncated.")
+    print(
+        f"Declared screen (doc 58 amendment): usable_pairs >= {MIN_USABLE_PAIRS} "
+        f"AND flat_days/bars <= {MAX_FLAT_DAY_FRACTION:.0%}."
+    )
+    print("The negative rate is reported, not screened on. Negatives are never truncated to zero.")
     print(f"Run at: {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}")
 
     print("\n=== VALIDATION ARM — the estimators must reproduce doc 53's measured SIP ordering ===")
     us_rows = [row for row in (score(symbol) for symbol in US_VALIDATION) if row]
     render(us_rows, "US validation names (doc 53 G3 measured: SPY 0.347 < QQQ 0.546 < AAPL 0.740 << TSLA 4.216 bps, 1m half-spread)")
 
-    measured_order = [symbol for symbol, _ in sorted(US_VALIDATION.items(), key=lambda item: item[1])]
+    measured_order_all = [symbol for symbol, _ in sorted(US_VALIDATION.items(), key=lambda item: item[1])]
     verdicts: dict[str, bool] = {}
+    excluded_us = [f"{row['symbol']} ({row['reason']})" for row in us_rows if row["unmeasured"]]
+    if excluded_us:
+        print(f"\nSCREENED OUT of the validation arm: {', '.join(excluded_us)}")
+
     for name, key in (("Corwin-Schultz", "cs_bps"), ("Abdi-Ranaldo", "ar_bps")):
-        usable = [row for row in us_rows if row.get(key) is not None]
+        # The screen is APPLIED here. The first run's defect was scoring these
+        # bars over rows the criterion had excluded.
+        usable = [row for row in us_rows if not row["unmeasured"] and row.get(key) is not None]
         estimated_order = [str(row["symbol"]) for row in sorted(usable, key=lambda row: row[key])]
-        ordering_ok = estimated_order == measured_order
+        # Compare against the measured ordering restricted to whatever survived
+        # the screen, so a screened-out name cannot fail the bar by absence.
+        survivors = {str(row["symbol"]) for row in usable}
+        measured_order = [symbol for symbol in measured_order_all if symbol in survivors]
+        ordering_ok = len(usable) >= 2 and estimated_order == measured_order
 
         by_symbol = {str(row["symbol"]): row[key] for row in usable}
         ratio = None
@@ -319,9 +350,11 @@ def main() -> int:
     measurable = [row for row in lse_rows if not row["unmeasured"] and row.get("cs_bps") is not None]
     print("\n=== #881's QUESTION: does cost vary enough WITHIN the tradeable universe? ===")
     print(f"  measurable tickers: {len(measurable)} of {len(LSE_TICKERS)}")
-    unmeasured = [str(row["symbol"]) for row in lse_rows if row["unmeasured"]]
+    unmeasured = [f"{row['symbol']} ({row['reason']})" for row in lse_rows if row["unmeasured"]]
     if unmeasured:
-        print(f"  UNMEASURED (degenerate, NOT tight): {', '.join(unmeasured)}")
+        print("  UNMEASURED — screened out on DATA QUALITY, which is NOT a finding that they are tight:")
+        for entry in unmeasured:
+            print(f"    {entry}")
 
     for name, key in (("Corwin-Schultz", "cs_bps"), ("Abdi-Ranaldo", "ar_bps")):
         values = [row[key] for row in measurable if row.get(key) is not None]

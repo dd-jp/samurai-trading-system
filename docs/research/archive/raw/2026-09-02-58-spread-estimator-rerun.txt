@@ -1,0 +1,76 @@
+#881 / #882 — free OHLC spread estimators, Corwin-Schultz (2012) and Abdi-Ranaldo (2017)
+Source: Yahoo v8/finance/chart, interval=1d, range=2y. RESEARCH USE ONLY (doc 34 §5).
+Declared screen (doc 58 amendment): usable_pairs >= 250 AND flat_days/bars <= 2%.
+The negative rate is reported, not screened on. Negatives are never truncated to zero.
+Run at: 2026-09-02T04:30:01Z
+
+=== VALIDATION ARM — the estimators must reproduce doc 53's measured SIP ordering ===
+
+US validation names (doc 53 G3 measured: SPY 0.347 < QQQ 0.546 < AAPL 0.740 << TSLA 4.216 bps, 1m half-spread)
+--------------------------------------------------------------------------------------------------------------
+ticker   ccy    bars  pairs  flat    CS bps    AR bps  CS deg%  AR deg%  status
+SPY      USD     501    500     0     37.98     49.49    41.4%    48.2%  ok
+QQQ      USD     501    500     0     49.68     71.64    40.2%    48.0%  ok
+AAPL     USD     501    500     0     75.67     97.04    40.6%    51.4%  ok
+TSLA     USD     501    500     0    151.02    198.12    45.4%    50.2%  ok
+
+Corwin-Schultz:
+  estimated ordering : SPY < QQQ < AAPL < TSLA
+  measured  ordering : SPY < QQQ < AAPL < TSLA
+  ORDERING BAR (exact match)      : PASS
+  TSLA/SPY ratio = 3.98x (measured 12.15x)
+  DISPERSION BAR (3x <= r <= 40x) : PASS
+
+Abdi-Ranaldo:
+  estimated ordering : SPY < QQQ < AAPL < TSLA
+  measured  ordering : SPY < QQQ < AAPL < TSLA
+  ORDERING BAR (exact match)      : PASS
+  TSLA/SPY ratio = 4.00x (measured 12.15x)
+  DISPERSION BAR (3x <= r <= 40x) : PASS
+
+=== VALIDATION VERDICT ===
+  Corwin-Schultz: PASS
+  Abdi-Ranaldo: PASS
+
+At least one estimator passes (Corwin-Schultz, Abdi-Ranaldo). Running the LSE arm.
+
+=== LSE ARM — the actual ADR-0016 tradeable universe ===
+
+LSE leveraged-ETP pool (server/providers/universe-pool/lse-etp-pool.ts)
+-----------------------------------------------------------------------
+ticker   ccy    bars  pairs  flat    CS bps    AR bps  CS deg%  AR deg%  status
+3USL.L   USD     505    504     1     80.62    149.85    43.7%    47.0%  ok
+LQQ3.L   GBp     504    503     1    124.52    213.90    41.2%    47.9%  ok
+3SPY.L   GBp     504    503    78     28.29    170.49    49.9%    50.7%  UNMEASURED (15.5% flat days (> 2%))
+3LTS.L   USD       1      0      -         -         -        -  UNMEASURED (no usable day-pairs)
+NVD3.L   USD     505    504     1    307.48    465.55    47.0%    51.0%  ok
+3AAP.L   GBp       1      0      -         -         -        -  UNMEASURED (no usable day-pairs)
+3LNV.L   USD     505    504     1    351.92    461.12    41.5%    48.2%  ok
+3QQQ.L   GBp     504    503    21    119.28    221.93    44.5%    48.5%  UNMEASURED (4.2% flat days (> 2%))
+MST3.L   USD     476    475     6    593.01    796.47    49.5%    49.9%  ok
+3LPA.L   USD     505    504    24    261.43    599.44    46.4%    50.0%  UNMEASURED (4.8% flat days (> 2%))
+PLT3.L   USD     505    504     1    434.03    613.04    43.8%    51.2%  ok
+
+=== #881's QUESTION: does cost vary enough WITHIN the tradeable universe? ===
+  measurable tickers: 6 of 11
+  UNMEASURED — screened out on DATA QUALITY, which is NOT a finding that they are tight:
+    3SPY.L (15.5% flat days (> 2%))
+    3LTS.L (no usable day-pairs)
+    3AAP.L (no usable day-pairs)
+    3QQQ.L (4.2% flat days (> 2%))
+    3LPA.L (4.8% flat days (> 2%))
+  Corwin-Schultz: median 329.70 bps, range 80.62-593.01 bps, max/min 7.36x, p_max/median 1.80x
+    #875's declared 2x threshold for 'one coefficient is not defensible': does not fire
+  Abdi-Ranaldo: median 463.33 bps, range 149.85-796.47 bps, max/min 5.31x, p_max/median 1.72x
+    #875's declared 2x threshold for 'one coefficient is not defensible': does not fire
+
+=== #882's QUESTION: how does the 1bp structural floor compare? ===
+  STRUCTURAL_MIN_HALF_SPREAD_RATE = 1.0000 bps of mid (half-spread, per side).
+  The estimators produce a ROUND-TRIP proportional spread, so the comparable
+  half-spread is CS/2 and AR/2. Horizon differs (daily vs 1m) — read the ordering.
+  3USL.L   CS half    40.31 bps  AR half    74.93 bps  -> the 1bp floor UNDER-charges this line
+  LQQ3.L   CS half    62.26 bps  AR half   106.95 bps  -> the 1bp floor UNDER-charges this line
+  NVD3.L   CS half   153.74 bps  AR half   232.77 bps  -> the 1bp floor UNDER-charges this line
+  3LNV.L   CS half   175.96 bps  AR half   230.56 bps  -> the 1bp floor UNDER-charges this line
+  MST3.L   CS half   296.51 bps  AR half   398.23 bps  -> the 1bp floor UNDER-charges this line
+  PLT3.L   CS half   217.01 bps  AR half   306.52 bps  -> the 1bp floor UNDER-charges this line
