@@ -340,4 +340,29 @@ export interface BrokerAdapter {
    * the broker doesn't, *or vice-versa*).
    */
   getOpenPositions(): Promise<NormalizedPosition[]>;
+  /**
+   * True when this adapter prices its OWN fills through a `CostModel` and
+   * therefore reports a `cost_breakdown` on every fill it emits (#1014
+   * finding 1, on #1001's submit-time snapshot).
+   *
+   * `captureSubmitSnapshot` normally runs `CostModel.fill` itself to store the
+   * modelled cost the realised fill is later compared against. Against an
+   * adapter that declares this flag that would be a SECOND, independent draw
+   * of the same model for the same order — two writers for one number, free to
+   * disagree under any non-determinism, and #1001's acceptance query would
+   * report the invented gap as realised divergence. So the snapshot skips its
+   * own pricing here and lets the adapter's breakdown stand as the single
+   * source; nothing is lost, because `toFill`/`redistributeOneFlatten` only
+   * fall back to the snapshot when `fill.cost_breakdown === undefined`, which
+   * such an adapter never leaves unset.
+   *
+   * Declared as a capability rather than detected with `instanceof` because
+   * "strategy code must not know which broker it's talking to" (CLAUDE.md's
+   * Broker Plan) — a future adapter that prices its own fills opts in by
+   * setting this, without `execute.ts` learning its class.
+   *
+   * Absent/false on every real-venue adapter: a venue reports what it charged,
+   * not what a model predicted, so there is no second writer to disagree with.
+   */
+  readonly prices_own_fills?: boolean;
 }

@@ -657,7 +657,8 @@ export class SqliteExecutionStore implements SharedStore {
   async getFlattenAttribution(idempotency_key: string): Promise<FlattenAttribution | null> {
     const row = this.db
       .prepare(
-        `SELECT lot_idempotency_keys, lot_held_quantities, exit_reason, modelled_cost_breakdown_json
+        `SELECT lot_idempotency_keys, lot_held_quantities, exit_reason, size,
+                modelled_cost_breakdown_json
            FROM flatten_submissions WHERE idempotency_key = ?`,
       )
       .get(idempotency_key) as
@@ -665,6 +666,7 @@ export class SqliteExecutionStore implements SharedStore {
           lot_idempotency_keys: string | null;
           lot_held_quantities: string | null;
           exit_reason: ExitReason | null;
+          size: number;
           modelled_cost_breakdown_json: string | null;
         }
       | undefined;
@@ -674,12 +676,15 @@ export class SqliteExecutionStore implements SharedStore {
     // breakdown, prorated and attached to each named lot's split exit fill
     // by `redistributeOneFlatten` (ingest-fills.ts). `null` for a flatten row
     // written before this migration, or whose submit-time capture failed.
-    const modelledCostBreakdown =
-      row.modelled_cost_breakdown_json === null
-        ? null
-        : (JSON.parse(row.modelled_cost_breakdown_json) as NonNullable<
-            FlattenAttribution['modelled_cost_breakdown']
-          >);
+    //
+    // #1014 review, finding 4: VALIDATED, not cast — the same defect class
+    // #509 closed repo-wide, and the same one the `lot_idempotency_keys`
+    // block below already guards against. See
+    // `parseModelledCostBreakdownColumn` for why this one degrades to `null`
+    // where those two throw.
+    const modelledCostBreakdown = parseModelledCostBreakdownColumn(
+      row.modelled_cost_breakdown_json,
+    );
 
     // Validated, not cast — the same defect class #509 closed repo-wide
     // (a value cast to a type with no runtime check, failing far from the
@@ -707,6 +712,7 @@ export class SqliteExecutionStore implements SharedStore {
         lot_held_quantities: null,
         exit_reason: row.exit_reason,
         modelled_cost_breakdown: modelledCostBreakdown,
+        size: row.size,
       };
     }
 
@@ -747,6 +753,7 @@ export class SqliteExecutionStore implements SharedStore {
       lot_held_quantities: paired,
       exit_reason: row.exit_reason,
       modelled_cost_breakdown: modelledCostBreakdown,
+      size: row.size,
     };
   }
 
@@ -935,7 +942,81 @@ function parseJsonColumn(idempotency_key: string, column: string, raw: string): 
   }
 }
 
+/**
+ * #1014 review, finding 4: the guarded read of a `modelled_cost_breakdown_json`
+ * column — #1001's own, on `flatten_submissions` and on `open_positions`.
+ *
+ * The defect this closes is the one #509 closed repo-wide and
+ * `getFlattenAttribution` already guards for its other two columns: a value
+ * cast to a type with no runtime check, failing far from the cause. Two ways
+ * this column can be bad — invalid JSON (a truncated write, a corrupted page)
+ * and valid JSON of the wrong shape (a future migration writing something
+ * else into it) — and an `as` cast catches neither: the first throws a
+ * `SyntaxError` from deep inside `getFlattenAttribution` on the fill-ingest
+ * path, and the second sails straight through into arithmetic that quietly
+ * produces `NaN` money.
+ *
+ * DEGRADES TO `null` rather than throwing, which is where it deliberately
+ * parts company with the two sibling guards a few lines above it. Those two
+ * columns are the MONEY path — `lot_idempotency_keys` and
+ * `lot_held_quantities` decide which lot gets which share of a fill, so a
+ * corrupted one has no safe interpretation and must fail closed. This column
+ * is INSTRUMENTATION: it is the estimate a later analysis diffs a realised
+ * fill against (#1001), it is already `null` for every pre-migration-0037 row
+ * and for every order whose best-effort submit-time capture failed, and every
+ * consumer already handles that null. Throwing here would let a corrupted
+ * instrumentation byte abort the ingest of a REAL FILL — trading the thing
+ * that matters for the thing that measures it, which is exactly backwards.
+ * So a bad value is treated as the absence it effectively is.
+ *
+ * `NaN`/`Infinity` are rejected along with the wrong types: JSON cannot encode
+ * them, so their presence means the column was written by something other than
+ * this file's `JSON.stringify`, and letting one through would poison the
+ * prorated figures `redistributeOneFlatten` derives from it.
+ */
+function parseModelledCostBreakdownColumn(
+  raw: string | null,
+): FlattenAttribution['modelled_cost_breakdown'] {
+  if (raw === null) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+  const candidate: Record<string, unknown> = parsed as Record<string, unknown>;
+
+  // Read one by one and REBUILT below rather than returned as the parsed
+  // object: what leaves this function is then constructed from four values
+  // this function has personally checked are finite numbers, so the return
+  // type is earned rather than asserted — no `as` on the result, which is the
+  // whole point of the #509 pattern.
+  const spread_cost = candidate['spread_cost'];
+  const commission = candidate['commission'];
+  const slippage = candidate['slippage'];
+  const market_impact = candidate['market_impact'];
+  if (
+    !isFiniteNumber(spread_cost) ||
+    !isFiniteNumber(commission) ||
+    !isFiniteNumber(slippage) ||
+    !isFiniteNumber(market_impact)
+  ) {
+    return null;
+  }
+
+  return { spread_cost, commission, slippage, market_impact };
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
 export function fromPositionRow(row: OpenPositionRow): OpenPosition {
+  const modelledCostBreakdown = parseModelledCostBreakdownColumn(row.modelled_cost_breakdown_json);
+
   return {
     idempotency_key: row.idempotency_key,
     debate_id: row.debate_id,
@@ -964,13 +1045,13 @@ export function fromPositionRow(row: OpenPositionRow): OpenPosition {
     ...(row.quote_observed_at === null
       ? {}
       : { quote_observed_at: fromStoredTimestamp(row.quote_observed_at) }),
-    ...(row.modelled_cost_breakdown_json === null
-      ? {}
-      : {
-          modelled_cost_breakdown: JSON.parse(row.modelled_cost_breakdown_json) as NonNullable<
-            OpenPosition['modelled_cost_breakdown']
-          >,
-        }),
+    // #1014 review, finding 4: the same guarded read `getFlattenAttribution`
+    // uses — this is the "identical `fromPositionRow` block" the review names,
+    // and an unvalidated cast here would throw on a corrupted row inside
+    // whichever caller happened to load the position (`reconcile`, the
+    // residual sweep, `ingestFills`). A bad value reads as absent, which is
+    // the same thing every pre-migration-0037 row already looks like.
+    ...(modelledCostBreakdown === null ? {} : { modelled_cost_breakdown: modelledCostBreakdown }),
   };
 }
 

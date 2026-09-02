@@ -331,6 +331,25 @@ export interface FlattenAttribution {
     slippage: number;
     market_impact: number;
   } | null;
+  /**
+   * #1014 review, finding 3: the quantity the flatten was SUBMITTED for —
+   * `flatten_submissions.size`, the denominator `modelled_cost_breakdown` was
+   * priced against (`captureSubmitSnapshot` passes `order.size`).
+   *
+   * Load-bearing, not informational. `redistributeOneFlatten` prorates the
+   * breakdown across the lots a raw fill is split into, and its `share` is
+   * `take / rawFill.qty` — this lot's slice of THAT RAW FILL, which sums to
+   * 1.0 per raw fill. Correct for `fee` (a per-raw-fill actual) and WRONG for
+   * the breakdown (a per-SUBMISSION estimate): a flatten filled in two
+   * partial raw fills would distribute the whole snapshot twice, so the
+   * summed modelled cost across the flatten's fills would come to a multiple
+   * of the one estimate it is supposed to reconstruct. Prorating against this
+   * `size` instead makes the shares sum to 1.0 across the whole submission,
+   * however many raw fills the venue splits it into (and to less than 1.0 if
+   * it under-fills, which is the honest reading — the unfilled remainder cost
+   * nothing).
+   */
+  size: number;
 }
 
 /** One poll's atomic advance of a single lot — see `SharedStore.applyLotAdvance`. */

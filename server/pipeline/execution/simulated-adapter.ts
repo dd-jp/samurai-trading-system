@@ -36,6 +36,12 @@ export interface SimulatedBrokerAdapterInput {
 
 export class SimulatedBrokerAdapter implements BrokerAdapter {
   /**
+   * #1014 finding 1: this adapter prices every fill it emits through its own
+   * injected `CostModel`, so `captureSubmitSnapshot` must NOT price the same
+   * order a second time. See `BrokerAdapter.prices_own_fills`.
+   */
+  readonly prices_own_fills = true;
+  /**
    * Modelled fills awaiting ingestion, keyed in arrival order. Stands in for
    * the venue's fill feed that live adapters poll or subscribe to.
    */

@@ -1388,17 +1388,6 @@ describe('ExecutionImpl.execute', () => {
           fill: vi
             .fn()
             .mockReturnValueOnce({ fill_price: 95, filled_size: 40, cost_breakdown: zeroCosts() })
-            .mockReturnValueOnce({ fill_price: 95, filled_size: 40, cost_breakdown: zeroCosts() })
-            .mockReturnValueOnce({
-              fill_price: 99.5,
-              filled_size: 40,
-              cost_breakdown: {
-                spread_cost: 0.1,
-                commission: 0.2,
-                slippage: 0.05,
-                market_impact: 0.01,
-              },
-            })
             .mockReturnValueOnce({
               fill_price: 99.5,
               filled_size: 40,
@@ -1474,13 +1463,9 @@ describe('ExecutionImpl.execute', () => {
         const costModel: CostModel = {
           fill: vi
             .fn()
-            .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() })
             .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() }) // lot A entry
-            .mockReturnValueOnce({ fill_price: 92, filled_size: 10, cost_breakdown: zeroCosts() })
             .mockReturnValueOnce({ fill_price: 92, filled_size: 10, cost_breakdown: zeroCosts() }) // lot B entry
-            .mockReturnValueOnce({ fill_price: 95, filled_size: 10, cost_breakdown: zeroCosts() })
             .mockReturnValueOnce({ fill_price: 95, filled_size: 10, cost_breakdown: zeroCosts() }) // lot A exit (signal_decay)
-            .mockReturnValueOnce({ fill_price: 96, filled_size: 10, cost_breakdown: zeroCosts() })
             .mockReturnValueOnce({ fill_price: 96, filled_size: 10, cost_breakdown: zeroCosts() }), // lot B exit (flatten)
         };
         const marketData = makeMarketData();
@@ -1557,12 +1542,6 @@ describe('ExecutionImpl.execute', () => {
           fill: vi
             .fn()
             .mockReturnValueOnce({ fill_price: 95, filled_size: 40, cost_breakdown: zeroCosts() })
-            .mockReturnValueOnce({ fill_price: 95, filled_size: 40, cost_breakdown: zeroCosts() })
-            .mockReturnValueOnce({
-              fill_price: 99.5,
-              filled_size: 40,
-              cost_breakdown: zeroCosts(),
-            })
             .mockReturnValueOnce({
               fill_price: 99.5,
               filled_size: 40,
@@ -1612,11 +1591,8 @@ describe('ExecutionImpl.execute', () => {
         const costModel: CostModel = {
           fill: vi
             .fn()
-            .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() })
             .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() }) // lot 1 entry
-            .mockReturnValueOnce({ fill_price: 92, filled_size: 15, cost_breakdown: zeroCosts() })
             .mockReturnValueOnce({ fill_price: 92, filled_size: 15, cost_breakdown: zeroCosts() }) // lot 2 entry
-            .mockReturnValueOnce({ fill_price: 100, filled_size: 25, cost_breakdown: zeroCosts() })
             .mockReturnValueOnce({ fill_price: 100, filled_size: 25, cost_breakdown: zeroCosts() }), // flatten, covers both
         };
         const marketData = makeMarketData();
@@ -1682,13 +1658,10 @@ describe('ExecutionImpl.execute', () => {
         const costModel: CostModel = {
           fill: vi
             .fn()
-            .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() })
             .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() }) // lot 1 entry
-            .mockReturnValueOnce({ fill_price: 92, filled_size: 15, cost_breakdown: zeroCosts() })
             .mockReturnValueOnce({ fill_price: 92, filled_size: 15, cost_breakdown: zeroCosts() }) // lot 2 entry
             // The flatten asked for 25 (10 + 15) but the IOC only fills 20 —
             // a thin book taking part of the order and cancelling the rest.
-            .mockReturnValueOnce({ fill_price: 100, filled_size: 20, cost_breakdown: zeroCosts() })
             .mockReturnValueOnce({ fill_price: 100, filled_size: 20, cost_breakdown: zeroCosts() }),
         };
         const marketData = makeMarketData();
@@ -1786,22 +1759,10 @@ describe('ExecutionImpl.execute', () => {
             fill: vi
               .fn()
               .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() })
-              .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() })
-              .mockReturnValueOnce({ fill_price: 92, filled_size: 5, cost_breakdown: zeroCosts() })
               .mockReturnValueOnce({ fill_price: 92, filled_size: 5, cost_breakdown: zeroCosts() })
               .mockReturnValueOnce({
                 fill_price: 99,
                 filled_size: firstFlattenQty,
-                cost_breakdown: zeroCosts(),
-              })
-              .mockReturnValueOnce({
-                fill_price: 99,
-                filled_size: firstFlattenQty,
-                cost_breakdown: zeroCosts(),
-              })
-              .mockReturnValueOnce({
-                fill_price: 100,
-                filled_size: secondFlattenQty,
                 cost_breakdown: zeroCosts(),
               })
               .mockReturnValueOnce({
@@ -1961,14 +1922,7 @@ describe('ExecutionImpl.execute', () => {
             fill: vi
               .fn()
               .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() })
-              .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() })
               .mockReturnValueOnce({ fill_price: 92, filled_size: 5, cost_breakdown: zeroCosts() })
-              .mockReturnValueOnce({ fill_price: 92, filled_size: 5, cost_breakdown: zeroCosts() })
-              .mockReturnValueOnce({
-                fill_price: 100,
-                filled_size: 15,
-                cost_breakdown: zeroCosts(),
-              })
               .mockReturnValueOnce({
                 fill_price: 100,
                 filled_size: 15,
@@ -2032,14 +1986,8 @@ describe('ExecutionImpl.execute', () => {
             fill: vi
               .fn()
               .mockReturnValueOnce({ fill_price: 95, filled_size: 40, cost_breakdown: zeroCosts() })
-              .mockReturnValueOnce({ fill_price: 95, filled_size: 40, cost_breakdown: zeroCosts() })
               // The flatten asks for 40 but a thin book only fills 25 — a
               // naked residual of 15 if nothing re-arms it.
-              .mockReturnValueOnce({
-                fill_price: 99,
-                filled_size: 25,
-                cost_breakdown: zeroCosts(),
-              })
               .mockReturnValueOnce({
                 fill_price: 99,
                 filled_size: 25,
@@ -2110,16 +2058,9 @@ describe('ExecutionImpl.execute', () => {
             fill: vi
               .fn()
               .mockReturnValueOnce({ fill_price: 95, filled_size: 40, cost_breakdown: zeroCosts() })
-              .mockReturnValueOnce({ fill_price: 95, filled_size: 40, cost_breakdown: zeroCosts() })
               // First flatten: asks 40, fills 25 — residual 15.
               .mockReturnValueOnce({ fill_price: 99, filled_size: 25, cost_breakdown: zeroCosts() })
-              .mockReturnValueOnce({ fill_price: 99, filled_size: 25, cost_breakdown: zeroCosts() })
               // Second flatten: the residual, in full.
-              .mockReturnValueOnce({
-                fill_price: 98,
-                filled_size: 15,
-                cost_breakdown: zeroCosts(),
-              })
               .mockReturnValueOnce({
                 fill_price: 98,
                 filled_size: 15,
@@ -2193,17 +2134,10 @@ describe('ExecutionImpl.execute', () => {
           const costModel: CostModel = {
             fill: vi
               .fn()
-              .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() })
               .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() }) // lot 1 entry
-              .mockReturnValueOnce({ fill_price: 92, filled_size: 15, cost_breakdown: zeroCosts() })
               .mockReturnValueOnce({ fill_price: 92, filled_size: 15, cost_breakdown: zeroCosts() }) // lot 2 entry
               // The flatten asks for 25 (10 + 15) but only 7 fills — less
               // than even lot 1's own 10-share, so lot 2 gets nothing.
-              .mockReturnValueOnce({
-                fill_price: 100,
-                filled_size: 7,
-                cost_breakdown: zeroCosts(),
-              })
               .mockReturnValueOnce({
                 fill_price: 100,
                 filled_size: 7,
@@ -2298,17 +2232,7 @@ describe('ExecutionImpl.execute', () => {
                   fill_price: 90,
                   filled_size: 10,
                   cost_breakdown: zeroCosts(),
-                })
-                .mockReturnValueOnce({
-                  fill_price: 90,
-                  filled_size: 10,
-                  cost_breakdown: zeroCosts(),
                 }) // lot 1 entry
-                .mockReturnValueOnce({
-                  fill_price: 92,
-                  filled_size: 15,
-                  cost_breakdown: zeroCosts(),
-                })
                 .mockReturnValueOnce({
                   fill_price: 92,
                   filled_size: 15,
@@ -2318,19 +2242,9 @@ describe('ExecutionImpl.execute', () => {
                   fill_price: 94,
                   filled_size: 8,
                   cost_breakdown: zeroCosts(),
-                })
-                .mockReturnValueOnce({
-                  fill_price: 94,
-                  filled_size: 8,
-                  cost_breakdown: zeroCosts(),
                 }) // lot 3 entry
                 // Same shape as the ZERO-share-sibling test above: less than
                 // even lot 1's own 10-share, so lot 2 gets nothing.
-                .mockReturnValueOnce({
-                  fill_price: 100,
-                  filled_size: 7,
-                  cost_breakdown: zeroCosts(),
-                })
                 .mockReturnValueOnce({
                   fill_price: 100,
                   filled_size: 7,
@@ -2454,17 +2368,7 @@ describe('ExecutionImpl.execute', () => {
                   fill_price: 90,
                   filled_size: 10,
                   cost_breakdown: zeroCosts(),
-                })
-                .mockReturnValueOnce({
-                  fill_price: 90,
-                  filled_size: 10,
-                  cost_breakdown: zeroCosts(),
                 }) // lot 1 entry
-                .mockReturnValueOnce({
-                  fill_price: 92,
-                  filled_size: 15,
-                  cost_breakdown: zeroCosts(),
-                })
                 .mockReturnValueOnce({
                   fill_price: 92,
                   filled_size: 15,
@@ -2474,17 +2378,7 @@ describe('ExecutionImpl.execute', () => {
                   fill_price: 94,
                   filled_size: 8,
                   cost_breakdown: zeroCosts(),
-                })
-                .mockReturnValueOnce({
-                  fill_price: 94,
-                  filled_size: 8,
-                  cost_breakdown: zeroCosts(),
                 }) // lot 3 entry
-                .mockReturnValueOnce({
-                  fill_price: 100,
-                  filled_size: 25,
-                  cost_breakdown: zeroCosts(),
-                })
                 .mockReturnValueOnce({
                   fill_price: 100,
                   filled_size: 25,
@@ -2654,6 +2548,155 @@ describe('#1001: submit-time quote and decision price', () => {
     };
   }
 
+  // Hoisted to this describe's scope by #1014's review fix — the
+  // Simulated-adapter block below exercises the SAME flatten these two build,
+  // and duplicating them per sub-describe would let the two copies drift.
+  function makeExitGo(overrides: Partial<OrderIntent> = {}): VerdictDecision {
+    return makeGo({
+      idempotency_key: 'key-aapl-1355',
+      intent_type: 'exit',
+      side: 'sell',
+      size: 40,
+      entry: 100,
+      stop: 100,
+      target: 100,
+      metadata: { ...makeIntent().metadata, exit_reason: 'flatten' },
+      ...overrides,
+    });
+  }
+
+  async function seedHeldLot(
+    store: ReturnType<typeof openTestExecutionStore>['store'],
+  ): Promise<void> {
+    await store.writeAheadPosition({
+      idempotency_key: 'key-aapl-entry-1',
+      debate_id: 'debate-abc123',
+      instrument: 'AAPL',
+      asset_class: 'stocks',
+      side: 'buy',
+      intent_type: 'entry',
+      requested_size: 40,
+      filled_size: 40,
+      avg_entry_price: 95,
+      stop: 90,
+      target: 110,
+      order_state: 'filled',
+      broker_order_ids: ['seed:entry', 'seed:stop', 'seed:target'],
+      opened_at: NOW,
+      decision_timestamp: NOW,
+      conviction: 0.7,
+      converged: true,
+    });
+  }
+
+  /**
+   * #1014 review, finding 1. Before this fix `CostModel.fill` ran TWICE per
+   * order on the Simulated-adapter path — once in `captureSubmitSnapshot`,
+   * once inside `SimulatedBrokerAdapter.submitBracket`/`submitFlatten`
+   * pricing the actual fill. The tell was in this very file: every
+   * pre-existing simulated-adapter test had to double its
+   * `mockReturnValueOnce` chain to keep passing, which is a test bending
+   * around a defect rather than pinning a behaviour.
+   *
+   * The defect is not the wasted call. It is that the two calls are
+   * INDEPENDENT: any non-determinism in the cost model (a random slippage
+   * draw, a clock-sensitive market state) makes the stored snapshot and the
+   * fill's own `cost_breakdown` two different prices of two different draws,
+   * and #1001's whole acceptance query is "diff the modelled estimate against
+   * the realised fill". A divergence the instrumentation invented is worse
+   * than no instrumentation.
+   *
+   * These tests pin the single call on both simulated paths. Nothing is lost
+   * by skipping: the adapter's own breakdown lands on the fill verbatim
+   * (`toFill` / `redistributeOneFlatten` only substitute the snapshot when
+   * `fill.cost_breakdown === undefined`, which a simulated fill never is), so
+   * the acceptance query is answered from the fill row exactly as before.
+   */
+  describe('Simulated-adapter path — CostModel.fill runs exactly once (#1014 review, finding 1)', () => {
+    const SIM_CONFIG = {
+      volatility_indicator: {
+        indicator: 'atr' as const,
+        params: { period: 14 },
+        timeframe: '1h' as const,
+        lookback: 15,
+      },
+      adv_window: { timeframe: '1d' as const, lookback: 20 },
+    };
+
+    it('prices a bracket entry once — the adapter’s call, not the snapshot’s', async () => {
+      const { store } = openTestExecutionStore();
+      const costModel = makeSnapshotCostModel();
+      const marketData = makeSnapshotMarketData();
+      const broker = new SimulatedBrokerAdapter({
+        clock: fixedClock,
+        costModel,
+        marketData,
+        config: SIM_CONFIG,
+      });
+
+      const result = await new ExecutionImpl(
+        makeInput({ store, broker, costModel, marketData }),
+      ).execute(makeGo());
+
+      expect(result.status).toBe('submitted');
+      expect(costModel.fill).toHaveBeenCalledTimes(1);
+
+      // The snapshot's OTHER fields are unaffected — only the cost-model half
+      // is skipped, and the quote read (which has no second writer to
+      // disagree with) still runs.
+      const position = await store.getPosition('key-aapl-1355');
+      expect(position?.decision_price).toBe(100);
+      expect(position?.quote_bid).toBe(100.1);
+      expect(position?.quote_ask).toBe(100.3);
+      expect(position?.modelled_cost_breakdown).toBeUndefined();
+    });
+
+    it('prices a flatten once, and the adapter’s breakdown still reaches the fill', async () => {
+      const { store } = openTestExecutionStore();
+      const costModel = makeSnapshotCostModel();
+      const marketData = makeSnapshotMarketData();
+      const broker = new SimulatedBrokerAdapter({
+        clock: fixedClock,
+        costModel,
+        marketData,
+        config: SIM_CONFIG,
+      });
+      await seedHeldLot(store);
+
+      const result = await new ExecutionImpl(
+        makeInput({ store, broker, costModel, marketData }),
+      ).execute(makeExitGo());
+
+      expect(result.status).toBe('submitted');
+      expect(costModel.fill).toHaveBeenCalledTimes(1);
+
+      const row = await store.getFlattenSubmission('key-aapl-1355');
+      expect(row?.decision_price).toBe(100);
+      expect(row?.modelled_cost_breakdown_json).toBeNull();
+
+      // The pricing that DID happen is the adapter's, and it carries the full
+      // breakdown onto the fill — so nothing #1001 needs is lost by skipping
+      // the snapshot's own call.
+      const fills = await broker.fetchNewFills(new Date(NOW.getTime() - 1));
+      expect(fills[0]?.cost_breakdown).toEqual(modelledCostBreakdown);
+    });
+
+    it('still prices the snapshot itself when the broker is NOT the Simulated adapter — the skip is not a blanket disable', async () => {
+      const { store } = openTestExecutionStore();
+      const costModel = makeSnapshotCostModel();
+      const marketData = makeSnapshotMarketData();
+
+      const result = await new ExecutionImpl(
+        makeInput({ store, broker: makeBroker(), costModel, marketData }),
+      ).execute(makeGo());
+
+      expect(result.status).toBe('submitted');
+      expect(costModel.fill).toHaveBeenCalledTimes(1);
+      const position = await store.getPosition('key-aapl-1355');
+      expect(position?.modelled_cost_breakdown).toEqual(modelledCostBreakdown);
+    });
+  });
+
   describe('bracket (entry) path — open_positions', () => {
     it('captures decision_price, the quote bid/ask/mid/observed_at, and the modelled cost breakdown', async () => {
       const { store } = openTestExecutionStore();
@@ -2741,44 +2784,6 @@ describe('#1001: submit-time quote and decision price', () => {
   });
 
   describe('exit (flatten) path — flatten_submissions', () => {
-    function makeExitGo(overrides: Partial<OrderIntent> = {}): VerdictDecision {
-      return makeGo({
-        idempotency_key: 'key-aapl-1355',
-        intent_type: 'exit',
-        side: 'sell',
-        size: 40,
-        entry: 100,
-        stop: 100,
-        target: 100,
-        metadata: { ...makeIntent().metadata, exit_reason: 'flatten' },
-        ...overrides,
-      });
-    }
-
-    async function seedHeldLot(
-      store: ReturnType<typeof openTestExecutionStore>['store'],
-    ): Promise<void> {
-      await store.writeAheadPosition({
-        idempotency_key: 'key-aapl-entry-1',
-        debate_id: 'debate-abc123',
-        instrument: 'AAPL',
-        asset_class: 'stocks',
-        side: 'buy',
-        intent_type: 'entry',
-        requested_size: 40,
-        filled_size: 40,
-        avg_entry_price: 95,
-        stop: 90,
-        target: 110,
-        order_state: 'filled',
-        broker_order_ids: ['seed:entry', 'seed:stop', 'seed:target'],
-        opened_at: NOW,
-        decision_timestamp: NOW,
-        conviction: 0.7,
-        converged: true,
-      });
-    }
-
     it('captures decision_price, the quote, and the modelled cost breakdown on a normal flatten', async () => {
       const { store } = openTestExecutionStore();
       const broker = makeBroker();
@@ -2814,7 +2819,7 @@ describe('#1001: submit-time quote and decision price', () => {
       expect(fillRequestArg).not.toHaveProperty('limit_price');
     });
 
-    it('skips every market-data read for an unpriced exit (#826) — quote/cost fields stay null, decision_price still populates', async () => {
+    it('skips every market-data read for an unpriced exit (#826) AND nulls decision_price rather than persisting the 0 placeholder', async () => {
       const { store } = openTestExecutionStore();
       const broker = makeBroker();
       await seedHeldLot(store);
@@ -2842,12 +2847,47 @@ describe('#1001: submit-time quote and decision price', () => {
       expect(costModel.fill).not.toHaveBeenCalled();
 
       const row = await store.getFlattenSubmission('key-aapl-1355');
-      expect(row?.decision_price).toBe(100);
+      // #1014 review, finding 2. This assertion read `.toBe(100)` before that
+      // review, and 100 was a FICTION: an unpriced flatten's `order.entry` is
+      // `readExitPrice`'s `price: 0` sentinel (decide.ts) — the feed was dark,
+      // so no price was known — and the 100 only appeared because
+      // `makeExitGo` overrides the metadata without touching `makeIntent`'s
+      // entry. In production this column would have carried the 0, and the
+      // Feedback Loop's live-vs-modelled divergence check would have read a
+      // ~100% divergence for every dark-feed flatten. `null` says the one
+      // true thing: no decision price existed for this order.
+      expect(row?.decision_price).toBeNull();
       expect(row?.quote_bid).toBeNull();
       expect(row?.quote_ask).toBeNull();
       expect(row?.quote_mid).toBeNull();
       expect(row?.quote_observed_at).toBeNull();
       expect(row?.modelled_cost_breakdown_json).toBeNull();
+    });
+
+    it('keeps the last known mark as decision_price on a PRICED flatten — the placeholder concern is the unpriced case alone (#1014 review, finding 2)', async () => {
+      const { store } = openTestExecutionStore();
+      const broker = makeBroker();
+      await seedHeldLot(store);
+
+      // `decide.ts` sets an exit's `entry`/`stop`/`target` all three to
+      // `readExitPrice`'s mark. Degenerate as a BRACKET — nothing consults
+      // them, `executeExit` submits a market flatten — but the VALUE is the
+      // real mark read when the exit was decided, which is exactly the "last
+      // known mark" #1014's review offers as the honest substitute. So it is
+      // kept, not nulled: nulling it too would throw away the only reference
+      // price an exit fill has to be diffed against (#1001's whole point).
+      const result = await new ExecutionImpl(
+        makeInput({
+          store,
+          broker,
+          costModel: makeSnapshotCostModel(),
+          marketData: makeSnapshotMarketData(),
+        }),
+      ).execute(makeExitGo({ entry: 123.45, stop: 123.45, target: 123.45 }));
+
+      expect(result.status).toBe('submitted');
+      const row = await store.getFlattenSubmission('key-aapl-1355');
+      expect(row?.decision_price).toBe(123.45);
     });
 
     /**

@@ -79,17 +79,26 @@ function makeFlattenWriteAhead(
  */
 function overwriteJournalColumn(
   db: Db,
-  column: 'lot_idempotency_keys' | 'lot_held_quantities',
+  column: 'lot_idempotency_keys' | 'lot_held_quantities' | 'modelled_cost_breakdown_json',
   idempotency_key: string,
   raw: string | null,
 ): void {
   // Chosen by name from a closed union rather than interpolated from a caller's
-  // string, so the SQL text stays fixed at the two forms written here.
+  // string, so the SQL text stays fixed at the three forms written here.
   const sql =
     column === 'lot_idempotency_keys'
       ? 'UPDATE flatten_submissions SET lot_idempotency_keys = ? WHERE idempotency_key = ?'
-      : 'UPDATE flatten_submissions SET lot_held_quantities = ? WHERE idempotency_key = ?';
+      : column === 'lot_held_quantities'
+        ? 'UPDATE flatten_submissions SET lot_held_quantities = ? WHERE idempotency_key = ?'
+        : 'UPDATE flatten_submissions SET modelled_cost_breakdown_json = ? WHERE idempotency_key = ?';
   db.prepare(sql).run(raw, idempotency_key);
+}
+
+/** The `open_positions` counterpart of `overwriteJournalColumn` — #1014 review, finding 4. */
+function overwritePositionCostBreakdown(db: Db, idempotency_key: string, raw: string | null): void {
+  db.prepare(
+    'UPDATE open_positions SET modelled_cost_breakdown_json = ? WHERE idempotency_key = ?',
+  ).run(raw, idempotency_key);
 }
 
 /** Raw journal columns `SqliteExecutionStore`'s own port never reads back — test-only, like `overwriteJournalColumn` above. */
@@ -398,6 +407,126 @@ describe('SqliteExecutionStore', () => {
       const attribution = await store.getFlattenAttribution('flatten-1');
       expect(attribution?.modelled_cost_breakdown).toBeNull();
     });
+
+    /**
+     * #1014 review, finding 4. `modelled_cost_breakdown_json` shipped as a
+     * bare `JSON.parse(...) as` on both read paths — the exact defect class
+     * the `#509` comment a few lines up in this file says was closed
+     * repo-wide, and re-introduced by #1001.
+     *
+     * Red-checked: every case below THREW before the fix (a `SyntaxError` on
+     * the malformed cases, and the wrong-shape ones sailed through into
+     * `NaN`-producing arithmetic downstream).
+     *
+     * It degrades to null rather than throwing, unlike the two `lot_*`
+     * columns guarded further down. Those are the money path — they decide
+     * which lot gets which share of a fill, so a corrupted one has no safe
+     * reading and must fail closed. This column is instrumentation, it is
+     * ALREADY null on every pre-migration-0037 row, and the throw's blast
+     * radius is `getFlattenAttribution` on the fill-ingest path — a corrupted
+     * instrumentation byte would abort the ingest of a real fill. See
+     * `parseModelledCostBreakdownColumn`.
+     */
+    describe('corrupted modelled_cost_breakdown_json degrades to null instead of throwing', () => {
+      const CORRUPT_VALUES: ReadonlyArray<readonly [string, string]> = [
+        ['not valid JSON at all', '{not json'],
+        ['truncated JSON', '{"spread_cost":0.1,"commi'],
+        ['a JSON array, not an object', '[0.1, 0.2, 0.05, 0.01]'],
+        ['a JSON scalar', '42'],
+        ['JSON null', 'null'],
+        ['an object missing a component', '{"spread_cost":0.1,"commission":0.2,"slippage":0.05}'],
+        [
+          'an object whose component is a string',
+          '{"spread_cost":"0.1","commission":0.2,"slippage":0.05,"market_impact":0.01}',
+        ],
+        [
+          'an object whose component is null',
+          '{"spread_cost":null,"commission":0.2,"slippage":0.05,"market_impact":0.01}',
+        ],
+      ];
+
+      for (const [label, raw] of CORRUPT_VALUES) {
+        it(`getFlattenAttribution returns null modelled_cost_breakdown for ${label}`, async () => {
+          const { db, store } = makeStore();
+          await store.writeAheadFlatten(
+            makeFlattenWriteAhead({
+              modelled_cost_breakdown: {
+                spread_cost: 0.2,
+                commission: 0.3,
+                slippage: 0.1,
+                market_impact: 0.02,
+              },
+            }),
+          );
+          overwriteJournalColumn(db, 'modelled_cost_breakdown_json', 'flatten-1', raw);
+
+          const attribution = await store.getFlattenAttribution('flatten-1');
+          // The row still reads — the lot identity it carries is intact, and
+          // it is the lot identity the fill split actually needs.
+          expect(attribution?.lot_idempotency_keys).toEqual(['key-lot-1', 'key-lot-2']);
+          expect(attribution?.modelled_cost_breakdown).toBeNull();
+        });
+
+        it(`fromPositionRow leaves modelled_cost_breakdown absent for ${label}`, async () => {
+          const { db, store } = makeStore();
+          await store.writeAheadPosition(
+            makePosition({
+              modelled_cost_breakdown: {
+                spread_cost: 0.1,
+                commission: 0.2,
+                slippage: 0.05,
+                market_impact: 0.01,
+              },
+            }),
+          );
+          overwritePositionCostBreakdown(db, 'key-1', raw);
+
+          const [position] = await store.getOpenPositions();
+          expect(position?.idempotency_key).toBe('key-1');
+          expect(position?.modelled_cost_breakdown).toBeUndefined();
+        });
+      }
+
+      // JSON cannot encode NaN/Infinity, so their presence means the column
+      // was written by something other than this file's `JSON.stringify` —
+      // and letting one through would poison every prorated figure
+      // `redistributeOneFlatten` derives from it with NaN money.
+      it('rejects a non-finite component even though it parses as a number', async () => {
+        const { db, store } = makeStore();
+        await store.writeAheadFlatten(makeFlattenWriteAhead());
+        overwriteJournalColumn(
+          db,
+          'modelled_cost_breakdown_json',
+          'flatten-1',
+          '{"spread_cost":1e999,"commission":0.2,"slippage":0.05,"market_impact":0.01}',
+        );
+
+        expect(
+          (await store.getFlattenAttribution('flatten-1'))?.modelled_cost_breakdown,
+        ).toBeNull();
+      });
+
+      it('still accepts a well-formed breakdown — the guard rejects corruption, not the happy path', async () => {
+        const { store } = makeStore();
+        await store.writeAheadFlatten(
+          makeFlattenWriteAhead({
+            modelled_cost_breakdown: {
+              spread_cost: 0.2,
+              commission: 0.3,
+              slippage: 0.1,
+              market_impact: 0.02,
+            },
+          }),
+        );
+
+        expect((await store.getFlattenAttribution('flatten-1'))?.modelled_cost_breakdown).toEqual({
+          spread_cost: 0.2,
+          commission: 0.3,
+          slippage: 0.1,
+          market_impact: 0.02,
+        });
+      });
+    });
   });
 
   describe('applyLotAdvance', () => {
@@ -608,6 +737,10 @@ describe('SqliteExecutionStore', () => {
         lot_held_quantities: null,
         exit_reason: 'flatten',
         modelled_cost_breakdown: null,
+        // #1014 review, finding 3 — the flatten's SUBMITTED size, now the
+        // denominator `redistributeOneFlatten` prorates the modelled cost
+        // breakdown against.
+        size: 25,
       });
     });
   });

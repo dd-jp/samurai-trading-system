@@ -641,14 +641,40 @@ async function redistributeOneFlatten(
         // needs no modelled estimate substituted for it. On a real-broker
         // fill (`rawFill.cost_breakdown === undefined`, always, on that
         // path), this attaches the flatten's OWN submit-time modelled cost
-        // breakdown instead — the venue reports no breakdown of its own —
-        // prorated by this lot's `share` of the raw fill for the same reason
-        // `fee` above is: one snapshot, priced against the flatten's whole
-        // `size`, can cover several lots' worth of split fill rows, and each
-        // must carry only its own slice or the modelled figures would sum to
-        // a multiple of the true estimate across the flatten's lots.
-        ...(rawFill.cost_breakdown === undefined && attribution.modelled_cost_breakdown !== null
-          ? { cost_breakdown: prorateCostBreakdown(attribution.modelled_cost_breakdown, share) }
+        // breakdown instead — the venue reports no breakdown of its own.
+        //
+        // #1014 review, finding 3: prorated against the SUBMISSION's `size`,
+        // NOT against `share`. The two denominators differ and the difference
+        // is a double-count. `share` is `take / rawFill.qty` — this lot's
+        // slice of THIS RAW FILL, which sums to 1.0 per raw fill, and that is
+        // exactly right for `fee` above (a per-raw-fill actual the venue
+        // reported) and wrong here: `modelled_cost_breakdown` was priced ONCE
+        // against the whole submitted `size` (`captureSubmitSnapshot` passes
+        // `order.size`). A flatten the venue splits into two partial raw
+        // fills would then distribute the entire snapshot across the first
+        // one's shares and the entire snapshot AGAIN across the second's, so
+        // the summed modelled cost over the flatten's fills would come to
+        // twice the single estimate it is supposed to reconstruct.
+        //
+        // `take / attribution.size` makes every slice a fraction of the one
+        // submission instead, so the shares sum to 1.0 across the flatten
+        // however many raw fills it arrives in — and to LESS than 1.0 if the
+        // venue under-fills, which is the honest reading: the unfilled
+        // remainder was never traded and cost nothing.
+        //
+        // `attribution.size > 0` is guarded rather than assumed: `executeExit`
+        // never writes a zero-size flatten (it refuses when the held quantity
+        // is not positive), so this is a corrupted-row guard, and dividing by
+        // it would silently write `Infinity`/`NaN` money onto a fill row.
+        ...(rawFill.cost_breakdown === undefined &&
+        attribution.modelled_cost_breakdown !== null &&
+        attribution.size > 0
+          ? {
+              cost_breakdown: prorateCostBreakdown(
+                attribution.modelled_cost_breakdown,
+                take / attribution.size,
+              ),
+            }
           : {}),
         // #842: CLEARED, not inherited from `...rawFill`. `take` is this
         // lot's ALLOCATION of the raw fill, not the venue's cumulative
