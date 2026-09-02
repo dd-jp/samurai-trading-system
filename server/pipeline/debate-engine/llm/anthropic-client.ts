@@ -165,8 +165,11 @@ function promptContextOf(context: LlmRequestContext): Record<string, unknown> {
  * https://platform.claude.com/docs/en/build-with-claude/prompt-caching —
  * "Shorter prompts cannot be cached, even if marked with cache_control").
  * The full bull/bear request this function renders — prompt AND context,
- * i.e. the whole thing, since it is byte-identical across every round of one
- * debate (see the round-orchestrator note below) — averages ~1,575-1,576
+ * i.e. the whole thing, since `personas.ts`'s `PersonaInput` (what
+ * `runBullPersona`/`runBearPersona` build the prompt from) has no field for
+ * `RoundContext.priorArguments` at all as of #1010 — the round number never
+ * reaches the rendered prompt, so it is byte-identical across every round of
+ * one debate — averages ~1,575-1,576
  * input tokens in the paper-soak store (`llm_spend`, stage='debate',
  * 2026-09-02 sample) and the mediator's ~2,100-2,150; both comfortably under
  * half the minimum. `prompt-caching.test.ts` pins a generous synthetic
