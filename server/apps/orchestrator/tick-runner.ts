@@ -99,7 +99,33 @@ export class SequentialTickRunner implements TickRunner {
     const { trace_id, clock, logger, auditLog, currentTickStore } = ctx;
     const instrument = signal.asset;
 
-    const record = (stage: TickStage, decision: string, input: unknown, output: unknown) => {
+    // Real wall-clock (`wallMs`), not `clock.now()` — the injected `Clock` is
+    // stepped manually by the backtest harness and does not advance on its
+    // own during real async work (LLM calls, I/O), so it would report
+    // near-zero durations there. Same reasoning as the debate engine's
+    // `enforceLatencyBudget`, which uses `Date.now()` for the same reason.
+    //
+    // Elapsed time is measured off `perfMs` (`performance.now()`), not
+    // `wallMs`: `Date.now()` can step backward on an NTP correction
+    // mid-stage, which would report a negative duration. `performance.now()`
+    // is monotonic. `wallMs` is still needed alongside it, since `started_at`
+    // must be a real wall-clock instant, not an elapsed measurement.
+    //
+    // Named fields rather than two positional numbers at each call site —
+    // `wallMs`/`perfMs` are trivially transposable as bare `number` params
+    // (swapping compiles clean and silently yields a 1970 `started_at` /
+    // negative `duration_ms`), so this closure is the one place either value
+    // is read.
+    const startStageTimer = () => ({ wallMs: Date.now(), perfMs: performance.now() });
+
+    const record = (
+      stage: TickStage,
+      decision: string,
+      input: unknown,
+      output: unknown,
+      startedAt: { wallMs: number; perfMs: number },
+    ) => {
+      const duration_ms = performance.now() - startedAt.perfMs;
       logger.log({
         trace_id,
         stage,
@@ -116,6 +142,8 @@ export class SequentialTickRunner implements TickRunner {
         level: stage === 'execution' && decision === 'error' ? 'error' : 'info',
         message: `${stage}: ${decision}`,
         payload: output,
+        started_at: new Date(startedAt.wallMs).toISOString(),
+        duration_ms,
       });
       auditLog.record({
         trace_id,
@@ -157,8 +185,9 @@ export class SequentialTickRunner implements TickRunner {
     ): Promise<TickOutcome> => {
       markStage('risk');
       const riskInput = { trace_id, intent, clock };
+      const riskTimer = startStageTimer();
       const riskDecision = await this.steps.risk(riskInput);
-      record('risk', riskDecision.status, riskInput, riskDecision);
+      record('risk', riskDecision.status, riskInput, riskDecision, riskTimer);
       this.reportAdvisoryWarnings(instrument, riskDecision.warnings, ctx);
       if (riskDecision.status === 'rejected') {
         currentTickStore.delete(instrument);
@@ -167,16 +196,18 @@ export class SequentialTickRunner implements TickRunner {
 
       markStage('verdict');
       const verdictInput = { trace_id, risk_decision: riskDecision, clock };
+      const verdictTimer = startStageTimer();
       const verdict = await this.steps.verdict(verdictInput);
-      record('verdict', verdict.status, verdictInput, verdict);
+      record('verdict', verdict.status, verdictInput, verdict, verdictTimer);
       if (verdict.status !== 'go') {
         currentTickStore.delete(instrument);
         return { trace_id, final_stage: 'verdict', verdict_status: 'no_go', ...extras };
       }
 
       markStage('execution');
+      const executionTimer = startStageTimer();
       const executionResult = await this.steps.execution(verdict);
-      record('execution', executionResult.status, verdict, executionResult);
+      record('execution', executionResult.status, verdict, executionResult, executionTimer);
 
       currentTickStore.delete(instrument);
       return {
@@ -199,6 +230,7 @@ export class SequentialTickRunner implements TickRunner {
     const runExitCheckPass = async (bar: Date): Promise<TickOutcome> => {
       markStage('position_check');
       const exitInput = { trace_id, instrument, bar, clock };
+      const exitCheckTimer = startStageTimer();
       const exitIntent = await this.steps.exitCheck(exitInput);
       // #748: the tick path can now fire TWO kinds of exit, so the audit row
       // names which — `flatten` and `signal_decay` are different events with
@@ -209,6 +241,7 @@ export class SequentialTickRunner implements TickRunner {
         exitIntent === null ? 'no_exit_due' : (exitIntent.metadata.exit_reason ?? 'exit'),
         exitInput,
         exitIntent,
+        exitCheckTimer,
       );
       if (exitIntent === null) {
         currentTickStore.delete(instrument);
@@ -255,8 +288,15 @@ export class SequentialTickRunner implements TickRunner {
     // `MarketIntelligenceStore.getContext`) unchanged (#811) rather than
     // re-derived from `clock.now()` a second time.
     const analystsInput = { trace_id, signal, clock, bar: decisionBar.open_time };
+    const analystsTimer = startStageTimer();
     const views = await this.steps.analysts(analystsInput);
-    record('analysts', views.length === 0 ? 'quorum_skip' : 'quorum_met', analystsInput, views);
+    record(
+      'analysts',
+      views.length === 0 ? 'quorum_skip' : 'quorum_met',
+      analystsInput,
+      views,
+      analystsTimer,
+    );
 
     // ── FALSIFIER ARM 2, decision cadence (#753). ──────────────────────────
     // Sited HERE — after the analysts step, before the debate — because that is
@@ -299,8 +339,9 @@ export class SequentialTickRunner implements TickRunner {
       clock,
       bar: decisionBar.open_time,
     };
+    const debateTimer = startStageTimer();
     const debate = await this.steps.debate(debateInput);
-    record('debate', debate.direction, debateInput, debate);
+    record('debate', debate.direction, debateInput, debate, debateTimer);
 
     // BAR-IDENTITY ASSERTION (#743, acceptance: a suppressed entry must be
     // observable). The Trader keys its intent on `debate.bar_timestamp`; if
@@ -331,8 +372,15 @@ export class SequentialTickRunner implements TickRunner {
 
     markStage('trader');
     const traderInput = { trace_id, instrument, debate, clock };
+    const traderTimer = startStageTimer();
     const intent = await this.steps.trader(traderInput);
-    record('trader', intent === null ? 'no_trade' : intent.intent_type, traderInput, intent);
+    record(
+      'trader',
+      intent === null ? 'no_trade' : intent.intent_type,
+      traderInput,
+      intent,
+      traderTimer,
+    );
     if (intent === null) {
       currentTickStore.delete(instrument);
       return { trace_id, final_stage: 'trader' };
