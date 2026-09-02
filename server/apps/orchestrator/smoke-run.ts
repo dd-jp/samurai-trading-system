@@ -4346,13 +4346,16 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // `SimulatedBrokerAdapter.submitBracket()` (`CostModelImpl.fill()` has
       // no partial-fill modelling), so "drained" means every currently-open
       // position has actually been ingested, not just that fills exist.
-      await waitUntil(() => {
-        const observations = readSmokeObservations(db);
-        return (
-          observations.positions.length > 0 &&
-          observations.positions.every((position) => position.filled_size > 0)
-        );
-      }, Math.min(Date.now() + FILL_GRACE_MS, deadline));
+      await waitUntil(
+        () => {
+          const observations = readSmokeObservations(db);
+          return (
+            observations.positions.length > 0 &&
+            observations.positions.every((position) => position.filled_size > 0)
+          );
+        },
+        Math.min(Date.now() + FILL_GRACE_MS, deadline),
+      );
     } finally {
       // Always drained, including on the deadline path: `stop()` awaits the
       // in-flight tick, and abandoning one mid-pipeline manufactures exactly
