@@ -379,9 +379,9 @@ first criterion's truncate-free rule not been in place, and had the flat-day scr
 would have entered a cost table as the cheapest instrument in the universe. It is excluded, and its number is
 printed in italics above only so the artefact is visible.
 
-**3LTS and 3AAP return a single daily bar for the whole two-year window.** Doc 34 §3.3 independently measured
-3AAP at 27 prints in five sessions with 72.7% of gaps over 15 minutes. Two of the eleven "tradeable" instruments
-have no usable price history at all.
+**3LTS, 3AAP and 3LME return a single daily bar for the whole two-year window** — no usable price history at all.
+Doc 34 §3.3 independently measured 3AAP at 27 prints in five sessions with 72.7% of gaps over 15 minutes, so this
+is corroborated rather than a Yahoo artefact.
 
 ### What #881's own statistic says, and why the honest answer is not the one the ticket expected
 
