@@ -57,12 +57,26 @@ export class AlpacaBrokerProviderError extends Error {
    * and 429/408/504 responses do not carry Alpaca's `{code, message}` shape.
    */
   readonly code: string | undefined;
+  /**
+   * Alpaca's own diagnostic `message` string (e.g. "invalid
+   * take_profit.limit_price 746.96 ... sub-penny increment does not fulfill
+   * minimum pricing criteria"), when the response body carried one — see
+   * `sanitizeBrokerError`'s `readVenueMessage` (`broker-error.ts`), which
+   * reads this field off the thrown cause to populate `BrokerError.venueMessage`
+   * (issue #1003). This is `readErrorBody`'s allowlisted, length-bounded
+   * `message` field — never the raw response body, and never this error's own
+   * `.message` (which embeds the full body text and is deliberately NOT read
+   * by `sanitizeBrokerError`, per broker-error.ts's H1 boundary). Same scope
+   * restriction as `code`: only `AlpacaBrokerProviderError` carries this.
+   */
+  readonly venueMessage: string | undefined;
 
-  constructor(message: string, status?: number, code?: string) {
+  constructor(message: string, status?: number, code?: string, venueMessage?: string) {
     super(message);
     this.name = 'AlpacaBrokerProviderError';
     this.status = status;
     this.code = code;
+    this.venueMessage = venueMessage;
   }
 }
 
@@ -92,7 +106,7 @@ export async function classifyAlpacaBrokerResponse(
   response: Response,
   context: string,
 ): Promise<AlpacaBrokerError> {
-  const { detail, code } = await readErrorBody(response);
+  const { detail, code, message: venueMessage } = await readErrorBody(response);
   const message = `Alpaca API error: ${response.status} ${detail} (${context})`;
 
   switch (classifyStatus(response.status)) {
@@ -101,7 +115,7 @@ export async function classifyAlpacaBrokerResponse(
     case 'timeout':
       return new AlpacaBrokerTimeoutError(message);
     default:
-      return new AlpacaBrokerProviderError(message, response.status, code);
+      return new AlpacaBrokerProviderError(message, response.status, code, venueMessage);
   }
 }
 

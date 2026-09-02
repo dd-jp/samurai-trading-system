@@ -35,7 +35,11 @@
  * `undetermined` divergence already carries the adapter's error message
  * verbatim (reconcile.ts's own comment: `sanitizeBrokerError`, #297's H1,
  * makes that safe), the same text this alert forwards — never a raw response
- * body, never a credential.
+ * body, never a credential. Since #1003 that curated message can also
+ * include `BrokerError.venueMessage` — a venue diagnostic string read only
+ * from a dedicated allowlisted property, bounded and truncated — so this
+ * transport now widens slightly what reaches an operator's alert channel;
+ * it stays within the same "sanitized, never raw" guarantee.
  */
 
 /** One `flatten_submissions` row `reconcile()` could not settle this pass. */

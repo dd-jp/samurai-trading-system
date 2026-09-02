@@ -67,6 +67,82 @@ describe('sanitizeBrokerError', () => {
 
     expect(error.statusCode).toBeUndefined();
     expect(error.venueCode).toBeUndefined();
+    expect(error.venueMessage).toBeUndefined();
     expect(error.message).toBe('ibkr submitBracket failed (status unknown)');
+  });
+});
+
+// #1003: `sanitizeBrokerError` used to discard the venue's own diagnostic
+// text entirely, leaving `ExecutionResult.reason` (and the durable log line
+// it becomes) as just "alpaca submitBracket failed (status 422)" — no
+// indication of WHY. This block covers the curated `venueMessage` field that
+// closes that gap while keeping the module's credential-safety boundary
+// intact: only a dedicated, allowlisted property is ever read, never the
+// client's own `.message`.
+describe('sanitizeBrokerError venueMessage (#1003)', () => {
+  it('captures a venue diagnostic message exposed on the dedicated venueMessage property', () => {
+    const error = sanitizeBrokerError('alpaca', 'submitBracket', {
+      status: 422,
+      code: 42210000,
+      venueMessage:
+        'invalid take_profit.limit_price 746.96416125. sub-penny increment does not fulfill ' +
+        'minimum pricing criteria',
+    });
+
+    expect(error.venueMessage).toBe(
+      'invalid take_profit.limit_price 746.96416125. sub-penny increment does not fulfill ' +
+        'minimum pricing criteria',
+    );
+    expect(error.message).toBe(
+      'alpaca submitBracket failed (status 422, code 42210000): invalid take_profit.limit_price ' +
+        '746.96416125. sub-penny increment does not fulfill minimum pricing criteria',
+    );
+  });
+
+  it('is present even when no venue code was exposed', () => {
+    const error = sanitizeBrokerError('alpaca', 'submitBracket', {
+      status: 422,
+      venueMessage: 'symbol is not shortable',
+    });
+
+    expect(error.venueCode).toBeUndefined();
+    expect(error.venueMessage).toBe('symbol is not shortable');
+    expect(error.message).toBe('alpaca submitBracket failed (status 422): symbol is not shortable');
+  });
+
+  it("never reads the cause's own .message as a venueMessage — that is the exact credential-leak vector this module guards against", () => {
+    const raw = Object.assign(new Error(`boom ${SECRET}`), { status: 500 });
+
+    const error = sanitizeBrokerError('ccxt', 'createOrder', raw);
+
+    expect(error.venueMessage).toBeUndefined();
+    expect(error.message).not.toContain(SECRET);
+    expect(error.message).not.toContain('boom');
+  });
+
+  it('degrades a non-string venueMessage to undefined', () => {
+    const error = sanitizeBrokerError('alpaca', 'submitBracket', {
+      status: 422,
+      venueMessage: { nested: 'not a string' },
+    });
+
+    expect(error.venueMessage).toBeUndefined();
+  });
+
+  it('degrades an empty venueMessage to undefined', () => {
+    const error = sanitizeBrokerError('alpaca', 'submitBracket', { status: 422, venueMessage: '' });
+
+    expect(error.venueMessage).toBeUndefined();
+  });
+
+  it('truncates an oversized venueMessage as defense-in-depth, independent of the upstream bound', () => {
+    const oversized = 'x'.repeat(1000);
+    const error = sanitizeBrokerError('alpaca', 'submitBracket', {
+      status: 422,
+      venueMessage: oversized,
+    });
+
+    expect(error.venueMessage).toContain('truncated, 1000 chars total');
+    expect(error.venueMessage?.length).toBeLessThan(1000);
   });
 });

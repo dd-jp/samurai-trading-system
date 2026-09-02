@@ -33,9 +33,10 @@ export function truncateForError(text: string): string {
 }
 
 /**
- * A non-2xx response's error body, parsed two ways at once — a truncated
- * text `detail` for a human-readable message, and (best-effort) a machine
- * `code` for callers that want to key off it structurally.
+ * A non-2xx response's error body, parsed three ways at once — a truncated
+ * text `detail` for a human-readable message, and (best-effort) two machine
+ * fields for callers that want to key off or surface them structurally: a
+ * `code` and a `message`.
  *
  * `code` is deliberately numeric-only (Alpaca's `{"code": 42210000, ...}`
  * shape): a string is not accepted here, because it would smuggle
@@ -45,20 +46,35 @@ export function truncateForError(text: string): string {
  * `sanitizeBrokerError`'s own duck-typed `readVenueCode`, which this helper
  * does not replace.
  *
+ * `message` (#1003) is the JSON body's own `message` STRING field, allowlisted
+ * and bounded the same way `code` is — never the whole raw body. Alpaca's
+ * `message` is a short, non-credentialed description of what the request
+ * violated (e.g. "invalid take_profit.limit_price 746.96 ... sub-penny
+ * increment does not fulfill minimum pricing criteria"), verified against a
+ * live paper submission (#1003) to carry no echoed credentials, headers or
+ * request body. It exists because `code` alone (e.g. `42210000`) is opaque
+ * without an external decoder table, and `detail` — the FULL raw body,
+ * unbounded in shape — is deliberately never forwarded past this module
+ * (`sanitizeBrokerError` reads only curated fields, never `cause.message`
+ * wholesale, per broker-error.ts's H1 boundary). A non-string `message` (an
+ * object, array, or absent key) degrades to `undefined` for the same reason a
+ * non-numeric `code` does: the field must never carry a shape callers do not
+ * expect.
+ *
  * The body is read via `response.text()` exactly once — a `Response` body
  * can only be consumed a single time — then best-effort JSON-parsed for
- * `code`; a body that is not JSON (or has no `code`) yields `code: undefined`
- * with `detail` unaffected.
+ * `code`/`message`; a body that is not JSON (or has neither key) yields
+ * `code: undefined, message: undefined` with `detail` unaffected.
  *
  * A body that cannot be read at all (already-consumed stream, mid-flight
- * network drop) degrades to `{ detail: statusText, code: undefined }` rather
- * than throwing — this runs on the path that is *already* reporting a
- * failure, and a throw here would replace a useful provider error with a
- * meaningless one.
+ * network drop) degrades to `{ detail: statusText, code: undefined, message:
+ * undefined }` rather than throwing — this runs on the path that is
+ * *already* reporting a failure, and a throw here would replace a useful
+ * provider error with a meaningless one.
  */
 export async function readErrorBody(
   response: Response,
-): Promise<{ detail: string; code: string | undefined }> {
+): Promise<{ detail: string; code: string | undefined; message: string | undefined }> {
   let bodyText: string;
   try {
     bodyText = await response.text();
@@ -66,7 +82,7 @@ export async function readErrorBody(
     bodyText = '';
   }
   const detail = bodyText.length > 0 ? truncateForError(bodyText) : response.statusText;
-  return { detail, code: parseErrorCode(bodyText) };
+  return { detail, code: parseErrorCode(bodyText), message: parseErrorMessage(bodyText) };
 }
 
 /** Best-effort numeric `code` out of a JSON error body; `undefined` on anything else. */
@@ -81,6 +97,25 @@ function parseErrorCode(bodyText: string): string | undefined {
   if (typeof parsed !== 'object' || parsed === null || !('code' in parsed)) return undefined;
   const code = (parsed as { code: unknown }).code;
   return typeof code === 'number' && Number.isFinite(code) ? String(code) : undefined;
+}
+
+/**
+ * Best-effort `message` STRING out of a JSON error body, truncated the same
+ * way `detail` is; `undefined` on anything else (not JSON, no `message` key,
+ * non-string, or empty). See `readErrorBody`'s doc comment (#1003) for why
+ * this field exists and what it is safe to carry.
+ */
+function parseErrorMessage(bodyText: string): string | undefined {
+  if (bodyText.length === 0) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bodyText);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== 'object' || parsed === null || !('message' in parsed)) return undefined;
+  const message = (parsed as { message: unknown }).message;
+  return typeof message === 'string' && message.length > 0 ? truncateForError(message) : undefined;
 }
 
 /**
