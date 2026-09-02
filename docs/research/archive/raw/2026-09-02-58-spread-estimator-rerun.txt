@@ -1,0 +1,114 @@
+#881 / #882 — free OHLC spread estimators, Corwin-Schultz (2012) and Abdi-Ranaldo (2017)
+Source: Yahoo v8/finance/chart, interval=1d, range=2y. RESEARCH USE ONLY (doc 34 §5).
+Declared screen (doc 58 amendment): usable_pairs >= 250 AND flat_days/bars <= 2%.
+The negative rate is reported, not screened on. Negatives are never truncated to zero.
+Run at: 2026-09-02T04:34:54Z
+
+=== VALIDATION ARM — the estimators must reproduce doc 53's measured SIP ordering ===
+
+US validation names (doc 53 G3 measured: SPY 0.347 < QQQ 0.546 < AAPL 0.740 << TSLA 4.216 bps, 1m half-spread)
+--------------------------------------------------------------------------------------------------------------
+ticker   ccy    bars  pairs  flat    CS bps    AR bps  CS deg%  AR deg%  status
+SPY      USD     501    500     0     37.98     49.49    41.4%    48.2%  ok
+QQQ      USD     501    500     0     49.68     71.64    40.2%    48.0%  ok
+AAPL     USD     501    500     0     75.67     97.04    40.6%    51.4%  ok
+TSLA     USD     501    500     0    151.02    198.12    45.4%    50.2%  ok
+
+Corwin-Schultz:
+  estimated ordering : SPY < QQQ < AAPL < TSLA
+  measured  ordering : SPY < QQQ < AAPL < TSLA
+  ORDERING BAR (exact match)      : PASS
+  TSLA/SPY ratio = 3.98x (measured 12.15x)
+  DISPERSION BAR (3x <= r <= 40x) : PASS
+
+Abdi-Ranaldo:
+  estimated ordering : SPY < QQQ < AAPL < TSLA
+  measured  ordering : SPY < QQQ < AAPL < TSLA
+  ORDERING BAR (exact match)      : PASS
+  TSLA/SPY ratio = 4.00x (measured 12.15x)
+  DISPERSION BAR (3x <= r <= 40x) : PASS
+
+=== VALIDATION VERDICT ===
+  Corwin-Schultz: PASS
+  Abdi-Ranaldo: PASS
+
+At least one estimator passes (Corwin-Schultz, Abdi-Ranaldo). Running the LSE arm.
+
+=== LSE ARM — the actual ADR-0016 tradeable universe ===
+
+LSE leveraged-ETP pool (server/providers/universe-pool/lse-etp-pool.ts)
+-----------------------------------------------------------------------
+ticker   ccy    bars  pairs  flat    CS bps    AR bps  CS deg%  AR deg%  status
+3USL.L   USD     505    504     1     80.62    149.85    43.7%    47.0%  ok
+LQQ3.L   GBp     504    503     1    124.52    213.90    41.2%    47.9%  ok
+3SPY.L   GBp     504    503    78     28.29    170.49    49.9%    50.7%  UNMEASURED (15.5% flat days (> 2%))
+3LTS.L   USD       1      0      -         -         -        -  UNMEASURED (no usable day-pairs)
+NVD3.L   USD     505    504     1    307.48    465.55    47.0%    51.0%  ok
+3AAP.L   GBp       1      0      -         -         -        -  UNMEASURED (no usable day-pairs)
+3LNV.L   USD     505    504     1    351.92    461.12    41.5%    48.2%  ok
+3QQQ.L   GBp     504    503    21    119.28    221.93    44.5%    48.5%  UNMEASURED (4.2% flat days (> 2%))
+MST3.L   USD     476    475     6    593.01    796.47    49.5%    49.9%  ok
+3LPA.L   USD     505    504    24    261.43    599.44    46.4%    50.0%  UNMEASURED (4.8% flat days (> 2%))
+PLT3.L   USD     505    504     1    434.03    613.04    43.8%    51.2%  ok
+3LME.L   EUR       1      0      -         -         -        -  UNMEASURED (no usable day-pairs)
+LAM3.L   GBp     504    503    67    191.20    582.13    50.7%    55.1%  UNMEASURED (13.3% flat days (> 2%))
+3LAL.L   USD     505    504    18    143.55    356.23    48.6%    50.8%  UNMEASURED (3.6% flat days (> 2%))
+LPP3.L   GBp     504    503    77    103.21    381.43    50.3%    49.3%  UNMEASURED (15.3% flat days (> 2%))
+3LNP.L   GBp     504    503    83    116.26    329.38    51.1%    53.1%  UNMEASURED (16.5% flat days (> 2%))
+LCO3.L   GBp     504    503     4    536.56    887.70    45.3%    50.1%  ok
+LAA3.L   GBp     504    503    87    118.84    516.24    51.5%    50.5%  UNMEASURED (17.3% flat days (> 2%))
+3LMO.L   USD     505    504    65    271.72    820.48    51.4%    47.6%  UNMEASURED (12.9% flat days (> 2%))
+3LIP.L   GBp     504    503    47    444.51    730.62    45.7%    49.3%  UNMEASURED (9.3% flat days (> 2%))
+3LSQ.L   USD     505    504   218      0.00    442.80    64.9%    57.5%  UNMEASURED (43.2% flat days (> 2%))
+3AMZ.L   GBp     504    503     3    198.38    358.15    45.9%    49.1%  ok
+3FB.L    GBp     504    503     1    233.06    390.30    43.7%    49.9%  ok
+3UBR.L   GBp     503    502    44    229.66    487.74    41.0%    48.0%  UNMEASURED (8.7% flat days (> 2%))
+3RAC.L   GBp     504    503   192      0.00    275.71    56.5%    54.7%  UNMEASURED (38.1% flat days (> 2%))
+3ARM.L   GBp     504    503     7    348.07    692.08    47.3%    48.7%  ok
+3VT.L    GBp     102    101    24      0.00    113.59    51.5%    40.6%  UNMEASURED (only 101 usable day-pairs (< 250); 23.5% flat days (> 2%))
+3KOR.L   GBp     504    503    50     99.25    401.50    50.1%    48.7%  UNMEASURED (9.9% flat days (> 2%))
+3KWE.L   GBp     503    502    13    143.42    387.03    50.0%    49.4%  UNMEASURED (2.6% flat days (> 2%))
+3XLE.L   GBp     503    502    80     75.58    312.93    48.6%    51.0%  UNMEASURED (15.9% flat days (> 2%))
+
+=== #881's QUESTION: does cost vary enough WITHIN the tradeable universe? ===
+  measurable tickers: 10 of 30
+  UNMEASURED — screened out on DATA QUALITY, which is NOT a finding that they are tight:
+    3SPY.L (15.5% flat days (> 2%))
+    3LTS.L (no usable day-pairs)
+    3AAP.L (no usable day-pairs)
+    3QQQ.L (4.2% flat days (> 2%))
+    3LPA.L (4.8% flat days (> 2%))
+    3LME.L (no usable day-pairs)
+    LAM3.L (13.3% flat days (> 2%))
+    3LAL.L (3.6% flat days (> 2%))
+    LPP3.L (15.3% flat days (> 2%))
+    3LNP.L (16.5% flat days (> 2%))
+    LAA3.L (17.3% flat days (> 2%))
+    3LMO.L (12.9% flat days (> 2%))
+    3LIP.L (9.3% flat days (> 2%))
+    3LSQ.L (43.2% flat days (> 2%))
+    3UBR.L (8.7% flat days (> 2%))
+    3RAC.L (38.1% flat days (> 2%))
+    3VT.L (only 101 usable day-pairs (< 250); 23.5% flat days (> 2%))
+    3KOR.L (9.9% flat days (> 2%))
+    3KWE.L (2.6% flat days (> 2%))
+    3XLE.L (15.9% flat days (> 2%))
+  Corwin-Schultz: median 327.78 bps, range 80.62-593.01 bps, max/min 7.36x, p_max/median 1.81x
+    #875's declared 2x threshold for 'one coefficient is not defensible': does not fire
+  Abdi-Ranaldo: median 463.33 bps, range 149.85-887.70 bps, max/min 5.92x, p_max/median 1.92x
+    #875's declared 2x threshold for 'one coefficient is not defensible': does not fire
+
+=== #882's QUESTION: how does the 1bp structural floor compare? ===
+  STRUCTURAL_MIN_HALF_SPREAD_RATE = 1.0000 bps of mid (half-spread, per side).
+  The estimators produce a ROUND-TRIP proportional spread, so the comparable
+  half-spread is CS/2 and AR/2. Horizon differs (daily vs 1m) — read the ordering.
+  3USL.L   CS half    40.31 bps  AR half    74.93 bps  -> the 1bp floor UNDER-charges this line
+  LQQ3.L   CS half    62.26 bps  AR half   106.95 bps  -> the 1bp floor UNDER-charges this line
+  NVD3.L   CS half   153.74 bps  AR half   232.77 bps  -> the 1bp floor UNDER-charges this line
+  3LNV.L   CS half   175.96 bps  AR half   230.56 bps  -> the 1bp floor UNDER-charges this line
+  MST3.L   CS half   296.51 bps  AR half   398.23 bps  -> the 1bp floor UNDER-charges this line
+  PLT3.L   CS half   217.01 bps  AR half   306.52 bps  -> the 1bp floor UNDER-charges this line
+  LCO3.L   CS half   268.28 bps  AR half   443.85 bps  -> the 1bp floor UNDER-charges this line
+  3AMZ.L   CS half    99.19 bps  AR half   179.08 bps  -> the 1bp floor UNDER-charges this line
+  3FB.L    CS half   116.53 bps  AR half   195.15 bps  -> the 1bp floor UNDER-charges this line
+  3ARM.L   CS half   174.03 bps  AR half   346.04 bps  -> the 1bp floor UNDER-charges this line

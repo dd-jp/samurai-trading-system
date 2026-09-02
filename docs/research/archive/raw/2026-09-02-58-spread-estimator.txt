@@ -1,0 +1,62 @@
+#881 / #882 — free OHLC spread estimators, Corwin-Schultz (2012) and Abdi-Ranaldo (2017)
+Source: Yahoo v8/finance/chart, interval=1d, range=2y. RESEARCH USE ONLY (doc 34 §5).
+Declared degeneracy limit: 33% of day-pairs. Negatives are counted, never truncated.
+Run at: 2026-09-02T04:26:57Z
+
+=== VALIDATION ARM — the estimators must reproduce doc 53's measured SIP ordering ===
+
+US validation names (doc 53 G3 measured: SPY 0.347 < QQQ 0.546 < AAPL 0.740 << TSLA 4.216 bps, 1m half-spread)
+--------------------------------------------------------------------------------------------------------------
+ticker   ccy    bars  pairs  flat    CS bps    AR bps  CS deg%  AR deg%  status
+SPY      USD     501    500     0     37.98     49.49    41.4%    48.2%  UNMEASURED
+QQQ      USD     501    500     0     49.68     71.64    40.2%    48.0%  UNMEASURED
+AAPL     USD     501    500     0     75.67     97.04    40.6%    51.4%  UNMEASURED
+TSLA     USD     501    500     0    151.02    198.12    45.4%    50.2%  UNMEASURED
+
+Corwin-Schultz:
+  estimated ordering : SPY < QQQ < AAPL < TSLA
+  measured  ordering : SPY < QQQ < AAPL < TSLA
+  ORDERING BAR (exact match)      : PASS
+  TSLA/SPY ratio = 3.98x (measured 12.15x)
+  DISPERSION BAR (3x <= r <= 40x) : PASS
+
+Abdi-Ranaldo:
+  estimated ordering : SPY < QQQ < AAPL < TSLA
+  measured  ordering : SPY < QQQ < AAPL < TSLA
+  ORDERING BAR (exact match)      : PASS
+  TSLA/SPY ratio = 4.00x (measured 12.15x)
+  DISPERSION BAR (3x <= r <= 40x) : PASS
+
+=== VALIDATION VERDICT ===
+  Corwin-Schultz: PASS
+  Abdi-Ranaldo: PASS
+
+At least one estimator passes (Corwin-Schultz, Abdi-Ranaldo). Running the LSE arm.
+
+=== LSE ARM — the actual ADR-0016 tradeable universe ===
+
+LSE leveraged-ETP pool (server/providers/universe-pool/lse-etp-pool.ts)
+-----------------------------------------------------------------------
+ticker   ccy    bars  pairs  flat    CS bps    AR bps  CS deg%  AR deg%  status
+3USL.L   USD     505    504     1     80.62    149.85    43.7%    47.0%  UNMEASURED
+LQQ3.L   GBp     504    503     1    124.52    213.90    41.2%    47.9%  UNMEASURED
+3SPY.L   GBp     504    503    78     28.29    170.49    49.9%    50.7%  UNMEASURED
+3LTS.L   USD       1      0      -         -         -        -  UNMEASURED (no usable day-pairs)
+NVD3.L   USD     505    504     1    307.48    465.55    47.0%    51.0%  UNMEASURED
+3AAP.L   GBp       1      0      -         -         -        -  UNMEASURED (no usable day-pairs)
+3LNV.L   USD     505    504     1    351.92    461.12    41.5%    48.2%  UNMEASURED
+3QQQ.L   GBp     504    503    21    119.28    221.93    44.5%    48.5%  UNMEASURED
+MST3.L   USD     476    475     6    593.01    796.47    49.5%    49.9%  UNMEASURED
+3LPA.L   USD     505    504    24    261.43    599.44    46.4%    50.0%  UNMEASURED
+PLT3.L   USD     505    504     1    434.03    613.04    43.8%    51.2%  UNMEASURED
+
+=== #881's QUESTION: does cost vary enough WITHIN the tradeable universe? ===
+  measurable tickers: 0 of 11
+  UNMEASURED (degenerate, NOT tight): 3USL.L, LQQ3.L, 3SPY.L, 3LTS.L, NVD3.L, 3AAP.L, 3LNV.L, 3QQQ.L, MST3.L, 3LPA.L, PLT3.L
+  Corwin-Schultz: fewer than two measurable tickers — no dispersion statistic
+  Abdi-Ranaldo: fewer than two measurable tickers — no dispersion statistic
+
+=== #882's QUESTION: how does the 1bp structural floor compare? ===
+  STRUCTURAL_MIN_HALF_SPREAD_RATE = 1.0000 bps of mid (half-spread, per side).
+  The estimators produce a ROUND-TRIP proportional spread, so the comparable
+  half-spread is CS/2 and AR/2. Horizon differs (daily vs 1m) — read the ordering.
