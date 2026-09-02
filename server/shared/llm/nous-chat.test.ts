@@ -30,6 +30,41 @@ function stubFetch(body: unknown, init: { ok?: boolean; status?: number } = {}) 
   return fetchMock;
 }
 
+/**
+ * Like `stubFetch`, but for the `ttfb_ms` (#1012) tests below, which need to
+ * separate two phases of one fetch: time to headers (before
+ * `fetchWithTimeout`'s promise settles) vs. additional time inside
+ * `response.json()` reading the body. Returns a REAL `Response` (via the
+ * global constructor) with `.json` overridden to advance the fake-timer
+ * clock before resolving — no `as unknown as Response` cast needed, since a
+ * real `Response` instance already satisfies the full `Response` type.
+ * Requires `vi.useFakeTimers()` to be active in the caller: the delays below
+ * are `vi.advanceTimersByTime` calls, not real waits.
+ */
+function stubFetchWithTiming(
+  body: unknown,
+  timing: { headerDelayMs: number; bodyDelayMs: number },
+) {
+  const fetchMock = vi.fn(async () => {
+    vi.advanceTimersByTime(timing.headerDelayMs); // time to headers
+    const response = new Response(JSON.stringify(body), { status: 200, statusText: 'OK' });
+    const originalJson = response.json.bind(response);
+    // `Response.json` is a read-only property in the ambient fetch types, so
+    // a direct `response.json = ...` reassignment doesn't type-check.
+    // `defineProperty` replaces the own binding at runtime the same way,
+    // without needing a cast to route around the readonly check.
+    Object.defineProperty(response, 'json', {
+      value: async () => {
+        vi.advanceTimersByTime(timing.bodyDelayMs); // additional time to read the body
+        return originalJson();
+      },
+    });
+    return response;
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
+
 function completion(overrides: Record<string, unknown> = {}) {
   return {
     choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }],
@@ -182,19 +217,7 @@ describe('nousChat', () => {
     it('measures only the time up to the response settling, not the body read', async () => {
       vi.useFakeTimers();
       try {
-        const fetchMock = vi.fn(async () => {
-          vi.advanceTimersByTime(4_000); // time to headers
-          return {
-            ok: true,
-            status: 200,
-            statusText: 'OK',
-            json: async () => {
-              vi.advanceTimersByTime(1_000); // additional time to read the body
-              return completion();
-            },
-          } as unknown as Response;
-        });
-        vi.stubGlobal('fetch', fetchMock);
+        stubFetchWithTiming(completion(), { headerDelayMs: 4_000, bodyDelayMs: 1_000 });
 
         const result = await nousChat(OPTIONS, REQUEST);
 
@@ -209,19 +232,7 @@ describe('nousChat', () => {
       // actually measures `latency_ms` — around the whole `nousChat` call.
       vi.useFakeTimers();
       try {
-        const fetchMock = vi.fn(async () => {
-          vi.advanceTimersByTime(4_000);
-          return {
-            ok: true,
-            status: 200,
-            statusText: 'OK',
-            json: async () => {
-              vi.advanceTimersByTime(1_000);
-              return completion();
-            },
-          } as unknown as Response;
-        });
-        vi.stubGlobal('fetch', fetchMock);
+        stubFetchWithTiming(completion(), { headerDelayMs: 4_000, bodyDelayMs: 1_000 });
 
         const start = Date.now();
         const result = await nousChat(OPTIONS, REQUEST);

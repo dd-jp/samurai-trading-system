@@ -51,6 +51,42 @@ function stubFetch(body: unknown) {
   return fetchMock;
 }
 
+/**
+ * Like `stubFetch`, but for the ttfb_ms/latency_ms join test below, which
+ * needs to separate two phases of one fetch: time to headers (before
+ * `fetchWithTimeout`'s promise settles) vs. additional time inside
+ * `response.json()` reading the body. Returns a REAL `Response` (via the
+ * global constructor) with `.json` overridden to advance the fake-timer
+ * clock before resolving — no `as unknown as Response` cast needed, since a
+ * real `Response` instance already satisfies the full `Response` type. Same
+ * construction `nous-chat.test.ts`'s `stubFetchWithTiming` uses; kept local
+ * here rather than imported since `stubFetch` above is also a local copy
+ * (each test file mocks the wire boundary independently).
+ */
+function stubFetchWithTiming(
+  body: unknown,
+  timing: { headerDelayMs: number; bodyDelayMs: number },
+) {
+  const fetchMock = vi.fn(async () => {
+    vi.advanceTimersByTime(timing.headerDelayMs); // time to headers
+    const response = new Response(JSON.stringify(body), { status: 200, statusText: 'OK' });
+    const originalJson = response.json.bind(response);
+    // `Response.json` is a read-only property in the ambient fetch types, so
+    // a direct `response.json = ...` reassignment doesn't type-check.
+    // `defineProperty` replaces the own binding at runtime the same way,
+    // without needing a cast to route around the readonly check.
+    Object.defineProperty(response, 'json', {
+      value: async () => {
+        vi.advanceTimersByTime(timing.bodyDelayMs); // additional time to read the body
+        return originalJson();
+      },
+    });
+    return response;
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
+
 function client(spendSink?: LlmSpendSink) {
   return new AnthropicLlmClient(
     new NousMessagesClient(OPTIONS),
@@ -100,23 +136,14 @@ describe('NousMessagesClient through AnthropicLlmClient', () => {
     vi.useFakeTimers();
     try {
       const records: LlmSpendRecord[] = [];
-      const fetchMock = vi.fn(async () => {
-        vi.advanceTimersByTime(1_900); // time to headers
-        return {
-          ok: true,
-          status: 200,
-          statusText: 'OK',
-          json: async () => {
-            vi.advanceTimersByTime(100); // additional time to read the body
-            return {
-              choices: [{ message: { content: '{"stance":"bullish"}' }, finish_reason: 'stop' }],
-              model: 'openai/gpt-5.6-luna',
-              usage: { prompt_tokens: 10, completion_tokens: 5 },
-            };
-          },
-        } as unknown as Response;
-      });
-      vi.stubGlobal('fetch', fetchMock);
+      stubFetchWithTiming(
+        {
+          choices: [{ message: { content: '{"stance":"bullish"}' }, finish_reason: 'stop' }],
+          model: 'openai/gpt-5.6-luna',
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        },
+        { headerDelayMs: 1_900, bodyDelayMs: 100 },
+      );
 
       await client({ record: (entry) => records.push(entry) }).complete(request());
 
