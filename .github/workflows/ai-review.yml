@@ -70,7 +70,17 @@ jobs:
             api_key_secret: NOUS_API_KEY
             app_id_var: NOUS_APP_ID
             app_key_secret: NOUS_APP_PRIVATE_KEY
-            max_tokens: "8192"
+            # 32768 (#1008 Mode A): deepseek is a reasoning model too, so the
+            # same shape of failure the kimi comment below documents in detail
+            # applies here — hidden chain-of-thought tokens count against
+            # max_tokens and are spent before any answer text. On PR #996 this
+            # leg burned the whole 8192 budget on a single ~26k-char slice and
+            # returned finish_reason=length with content_chars=0 on all three
+            # attempts. Raised to match kimi's 32768 rather than re-deriving a
+            # separate number: same failure mode, same fix, same headroom
+            # rationale (input is sliced to <=60k chars/call, so reasoning
+            # burn per call is bounded the same way for both legs).
+            max_tokens: "32768"
             inline_only: "false"
           - reviewer: nous-kimi
             model_var: KIMI_MODEL
