@@ -130,10 +130,17 @@ describe('llm_call_log capture', () => {
     expect(payload.response).toBe(ENTRY.response);
   });
 
-  it('never fails the caller when the text write throws', () => {
+  it('never fails the caller when the text write throws, and says which half failed', () => {
     // The module's standing rule, extended to the capture: bookkeeping
     // attached to an already-billed call must not turn a real answer into an
     // error. The spend row is written first and survives.
+    //
+    // The message matters as much as the swallow. A capture failure reported
+    // through the spend handler would tell an operator this call is missing
+    // from the dashboard spend total — false, and it sends them to look at the
+    // meter instead of at the table that actually failed. So this asserts the
+    // capture message is present AND the spend message is absent; asserting
+    // only "some warn was logged" passes under the bug too.
     const db = openSharedStore(':memory:');
     db.prepare('DROP TABLE llm_call_log').run();
     const lines: LogEntry[] = [];
@@ -143,6 +150,9 @@ describe('llm_call_log capture', () => {
     ).not.toThrow();
 
     expect(db.prepare('SELECT COUNT(*) AS n FROM llm_spend').get()).toEqual({ n: 1 });
-    expect(lines.some((entry) => entry.level === 'warn')).toBe(true);
+    const warnings = lines.filter((entry) => entry.level === 'warn').map((entry) => entry.message);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('llm call text capture failed');
+    expect(warnings[0]).not.toContain('missing from the dashboard spend total');
   });
 });

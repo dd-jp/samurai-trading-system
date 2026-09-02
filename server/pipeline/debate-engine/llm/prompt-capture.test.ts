@@ -101,6 +101,24 @@ describe('AnthropicLlmClient prompt capture', () => {
     expect(sink.records[0]?.prompt).toContain('analyze this');
   });
 
+  it('still meters a billed call whose response has no content block', async () => {
+    // The regression the #1035 reorder could have introduced. `extractText`
+    // reads `response.content`; a provider payload without it throws, and the
+    // metering used to run ABOVE that line. If the throw skipped the meter,
+    // `llm_spend` would lose a billed call and `SqliteSpendCap` — which sums
+    // that table — would silently understate the budget. The `finally` is what
+    // this pins; the call is still allowed to fail.
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi.fn().mockResolvedValue({ usage: { input_tokens: 120, output_tokens: 30 } }),
+    };
+    const sink = recordingSink();
+
+    await expect(new AnthropicLlmClient(wire, CONFIG, sink).complete(request())).rejects.toThrow();
+
+    expect(sink.records).toHaveLength(1);
+    expect(sink.records[0]?.usage?.input_tokens).toBe(120);
+  });
+
   it('captures nothing for an unmetered call', async () => {
     // Inherits `recordSpend`'s existing early return: no usage block, no
     // record at all — so capture coverage is "completed and metered", not

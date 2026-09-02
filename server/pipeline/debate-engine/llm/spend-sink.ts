@@ -219,11 +219,25 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
           toStoredTimestamp(entry.timestamp),
         );
 
-      // Nested, and inside the spend row's own try: `spend_id` is only
-      // meaningful if the row above landed. A failure here is caught by the
-      // outer handler and costs the text, never the spend row that preceded
-      // it — the ordering that keeps the cap's arithmetic authoritative.
-      this.recordText(entry, Number(spendRow.lastInsertRowid));
+      // Reached only once the spend row has landed, so `spend_id` is always a
+      // real rowid. It gets its OWN catch rather than falling into the outer
+      // one: the outer message says the call is missing from the dashboard
+      // spend total, which would be false here — the spend row is written and
+      // safe, and only the text was lost. A capture failure reported as a
+      // metering failure would send an operator to look at the wrong thing.
+      try {
+        this.recordText(entry, Number(spendRow.lastInsertRowid));
+      } catch (error) {
+        this.logger?.log({
+          trace_id: entry.trace_id,
+          stage: 'orchestrator',
+          level: 'warn',
+          message:
+            'llm call text capture failed — the API call and its spend row are unaffected, ' +
+            'but this call has no prompt/response recorded in llm_call_log',
+          payload: { error: error instanceof Error ? error.message : String(error) },
+        });
+      }
     } catch (error) {
       // See the module doc comment: a metering failure must not surface as a
       // failed LLM call. Logged rather than silent so a persistently broken
@@ -274,7 +288,10 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
-        Number.isFinite(spendId) ? spendId : null,
+        // Never null in practice: the caller only reaches here after the spend
+        // INSERT returned a rowid. The column stays nullable so a future
+        // writer that captures text without metering has somewhere to go.
+        spendId,
         entry.trace_id,
         entry.stage,
         entry.debate_id ?? null,

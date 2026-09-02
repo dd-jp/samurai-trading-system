@@ -73,24 +73,47 @@ import { maskCredentials } from '../../shared/index.js';
  * `cookie` are here and not there for the reason the split exists: as a bare
  * header name in prose they are not evidence of a secret, but as an object KEY
  * the value beside them is one.
+ *
+ * EXACT NAMES, NOT A SUFFIX RULE. Matching anything ending in `token` would be
+ * shorter and would mask more, but this codebase logs `next_page_token`,
+ * `page_token` and `pageToken` — pagination cursors, carrying no secret and
+ * worth reading when a provider fetch stalls mid-page. Over-masking is a
+ * failure of this module in the same way under-masking is, so the compounds
+ * are enumerated. `bottoken` IS here: the Slack bot token is a real secret
+ * that the plural-safe reading of `token` alone would have missed.
  */
 const CREDENTIAL_KEYS: ReadonlySet<string> = new Set([
+  'accesskey',
+  'accesskeyid',
+  'accesstoken',
   'apikey',
+  'apikeyid',
   'apisecret',
+  'apitoken',
   'apcaapikeyid',
   'apcaapisecretkey',
   'auth',
   'authorization',
+  'authtoken',
+  'bearertoken',
+  'bottoken',
+  'clientsecret',
   'cookie',
   'credential',
   'credentials',
+  'idtoken',
   'passwd',
   'password',
   'privatekey',
   'pwd',
+  'refreshtoken',
   'secret',
+  'secretaccesskey',
+  'secretkey',
   'sessiontoken',
+  'signingsecret',
   'token',
+  'webhooksecret',
 ]);
 
 /** The placeholder, identical to the one `sanitize-log-text.ts` writes. */
@@ -143,18 +166,45 @@ export function redactPayload(payload: unknown): unknown {
 
     if (depth >= MAX_DEPTH) return '[REDACTION_DEPTH_LIMIT]';
 
-    if (Array.isArray(value)) return value.map((item) => walk(item, depth + 1));
+    // The loops below BREAK on the node bound rather than running to the end
+    // with every remaining entry mapped to the marker. Recursing into `walk`
+    // was already bounded, but iterating siblings was not: a 100k-element
+    // array still cost 100k iterations and still produced a 100k-element line,
+    // so neither the work nor the line length was actually bounded. The
+    // truncation marker is appended once, so a reader can still tell "there
+    // was more here" from "there was nothing here".
+    if (Array.isArray(value)) {
+      const items: unknown[] = [];
+      for (const item of value) {
+        if (visited >= MAX_NODES) {
+          items.push('[REDACTION_TRUNCATED]');
+          break;
+        }
+        items.push(walk(item, depth + 1));
+      }
+      return items;
+    }
 
-    // Anything with a custom prototype (Error, Date, Map, a class instance)
-    // does not survive a key walk in a recognisable shape, so it is rendered
-    // the way `JSON.stringify` would have rendered it and then masked as text.
-    // Errors are the case that actually occurs here, and their `message` is
-    // exactly the free text `maskCredentials` exists for.
+    // Error and Date have custom prototypes that would not survive a key walk
+    // in a recognisable shape, so each is rendered the way `JSON.stringify`
+    // renders it and then masked as text. Errors are the case that actually
+    // occurs here, and their `message` is exactly the free text
+    // `maskCredentials` exists for.
+    //
+    // Other exotic prototypes are NOT special-cased: a Map or a Set has no own
+    // enumerable properties, so it falls through to the loop below and comes
+    // out as `{}` — the same thing `JSON.stringify` would have produced for it
+    // unredacted, and lossy either way. Nothing in this system logs one; if
+    // something starts to, it needs a branch here rather than silence.
     if (value instanceof Error) return maskCredentials(`${value.name}: ${value.message}`);
     if (value instanceof Date) return value.toISOString();
 
     const out: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      if (visited >= MAX_NODES) {
+        out['[REDACTION_TRUNCATED]'] = true;
+        break;
+      }
       // Rule 1 before the walk: a credential key's value is replaced whatever
       // it is, so a secret nested inside an object under `auth` cannot escape
       // by being structured rather than a string.

@@ -41,6 +41,33 @@ describe('redactPayload', () => {
     });
   });
 
+  it('covers the compound credential key spellings, which rule 2 cannot see', () => {
+    // A bare token under `access_token` has no assignment syntax around it, so
+    // `maskCredentials` never matches it — the key name is the only evidence
+    // there is. These are the spellings a provider SDK actually uses.
+    for (const key of [
+      'access_token',
+      'refresh_token',
+      'client_secret',
+      'secret_key',
+      'api_key_id',
+      'accessToken',
+      'botToken',
+      'signing_secret',
+    ]) {
+      expect(redactPayload({ [key]: 'xoxb-real-value' })).toEqual({ [key]: '[REDACTED]' });
+    }
+  });
+
+  it('leaves pagination cursors readable', () => {
+    // Why the key list enumerates compounds instead of suffix-matching
+    // `token`: these are cursors, not secrets, and they are exactly what a
+    // reader needs when a paged provider fetch stalls part-way.
+    expect(
+      redactPayload({ next_page_token: 'CAESBQ', pageToken: 'abc', max_tokens: 1_024 }),
+    ).toEqual({ next_page_token: 'CAESBQ', pageToken: 'abc', max_tokens: 1_024 });
+  });
+
   it('masks credential syntaxes inside string leaves', () => {
     expect(redactPayload({ error: 'Authorization: Bearer sk-ant-abc123' })).toEqual({
       error: 'Authorization: [REDACTED]',
@@ -83,7 +110,23 @@ describe('redactPayload', () => {
     const wide: Record<string, unknown> = {};
     for (let i = 0; i < 5_000; i += 1) wide[`k${i}`] = 'v';
 
-    expect(JSON.stringify(redactPayload(wide))).toContain('REDACTION_TRUNCATED');
+    const out = redactPayload(wide) as Record<string, unknown>;
+    expect(JSON.stringify(out)).toContain('REDACTION_TRUNCATED');
+    // The bound has to cut the OUTPUT, not just stop recursing. Mapping every
+    // remaining sibling to the marker would keep all 5,000 entries and put a
+    // 5,000-key object on a log line — bounding nothing that matters.
+    expect(Object.keys(out).length).toBeLessThan(2_100);
+  });
+
+  it('bounds a very wide ARRAY too, in work and in line length', () => {
+    // Sibling iteration was the hole: recursion into `walk` was bounded from
+    // the start, but `value.map(...)` still visited every element of a huge
+    // array and emitted one entry per element.
+    const wide = Array.from({ length: 50_000 }, () => 'v');
+
+    const out = redactPayload(wide) as unknown[];
+    expect(out.length).toBeLessThan(2_100);
+    expect(out.at(-1)).toBe('[REDACTION_TRUNCATED]');
   });
 });
 

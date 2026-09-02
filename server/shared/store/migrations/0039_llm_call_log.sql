@@ -49,7 +49,9 @@
 -- a row whose text was not captured is a legitimate row, not a broken one.
 CREATE TABLE llm_call_log (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  spend_id   INTEGER,          -- llm_spend.id; NULL when the spend write failed
+  spend_id   INTEGER,          -- llm_spend.id. Never NULL from today's writer,
+                               -- which runs only after that row lands; nullable so a
+                               -- future writer capturing text without metering fits.
   trace_id   TEXT    NOT NULL, -- joins to the tick, and to every log line for it
   stage      TEXT    NOT NULL, -- 'debate' | 'risk_critic' | 'sentiment'
   debate_id  TEXT,             -- joins to debate_log; NULL outside a debate

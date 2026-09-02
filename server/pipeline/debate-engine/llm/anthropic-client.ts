@@ -285,19 +285,29 @@ export class AnthropicLlmClient implements LlmClient {
     const response = await this.callWithTimeout(content, request.signal);
     const latency_ms = Date.now() - start;
 
-    const rawText = extractText(response);
-
-    // Metered BEFORE the parse gate below, because a malformed response was
-    // still generated and still billed. Recording only well-formed responses
-    // would make the meter understate spend by exactly the calls most likely
-    // to be retried — i.e. it would be most wrong when it matters most.
-    //
-    // Moved BELOW `extractText` by #1035 so the same record can carry the
-    // response text. The ordering argument is unchanged and now cuts twice: a
-    // malformed response is exactly the case whose text an operator most wants
-    // to read, so capturing it only for well-formed answers would withhold the
-    // evidence precisely when it is needed.
-    this.recordSpend(request, response, latency_ms, content, rawText);
+    // `finally`, not a plain sequence: `extractText` reads `response.content`,
+    // and a provider payload without that field throws a TypeError. Metering
+    // was ABOVE this extraction before #1035, so ordering the two naively
+    // would newly lose the `llm_spend` row for a billed call — and
+    // `SqliteSpendCap` sums that table, so the cap would silently understate
+    // by exactly the malformed responses. This restores the pre-#1035
+    // guarantee while still letting the record carry whatever text existed.
+    let rawText = '';
+    try {
+      rawText = extractText(response);
+    } finally {
+      // Metered BEFORE the parse gate below, because a malformed response was
+      // still generated and still billed. Recording only well-formed responses
+      // would make the meter understate spend by exactly the calls most likely
+      // to be retried — i.e. it would be most wrong when it matters most.
+      //
+      // Moved BELOW `extractText` by #1035 so the same record can carry the
+      // response text. The ordering argument is unchanged and now cuts twice: a
+      // malformed response is exactly the case whose text an operator most
+      // wants to read, so capturing it only for well-formed answers would
+      // withhold the evidence precisely when it is needed.
+      this.recordSpend(request, response, latency_ms, content, rawText);
+    }
 
     const parsed = request.parseResponse(rawText);
     if (!parsed.valid) {

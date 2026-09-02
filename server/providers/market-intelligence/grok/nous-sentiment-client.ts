@@ -172,8 +172,14 @@ export class NousSentimentClient implements GrokSentimentClient {
 
     return {
       items: this.#parseItems(result.text, instrument, asOf),
-      // Both roles, joined the way they were sent: a capture holding only the
-      // user turn would omit the instruction that actually shapes the answer.
+      // A RENDERED representation, not the wire bytes. `anthropic-client.ts`
+      // captures the exact string it hands the transport; here the transport
+      // takes a structured `messages` array and serializes it itself, so the
+      // closest honest artifact is both roles joined in order. It reads back
+      // faithfully — a capture holding only the user turn would omit the
+      // instruction that actually shapes the answer — but it is not
+      // byte-identical to the request body, and nothing should compare it as
+      // though it were.
       prompt: messages.map((message) => `[${message.role}] ${message.content}`).join('\n\n'),
       raw_text: result.text,
       model: result.model,
