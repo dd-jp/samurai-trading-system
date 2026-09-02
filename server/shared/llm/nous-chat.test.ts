@@ -16,16 +16,31 @@ const REQUEST = {
   messages: [{ role: 'user' as const, content: 'hello' }],
 };
 
-function stubFetch(body: unknown, init: { ok?: boolean; status?: number } = {}) {
-  const fetchMock = vi.fn(
-    async () =>
-      ({
-        ok: init.ok ?? true,
-        status: init.status ?? 200,
-        statusText: 'OK',
-        json: async () => body,
-      }) as Response,
-  );
+/**
+ * Builds a real `Response` (via the global constructor) for `status`/`ok` to
+ * come from — `ok` is the constructor's own derivation from `status`
+ * (200-299), not a separately-settable field, so every call site here passes
+ * a `status` that already implies the `ok` it wants. `jsonOverride` covers
+ * the one case (an unparseable 2xx body) that needs `.json()` to behave
+ * differently than "resolve with the stringified `body`"; `Response.json` is
+ * read-only in the ambient fetch types, so `defineProperty` replaces the own
+ * binding at runtime instead of a direct reassignment, without needing a
+ * cast to route around the readonly check.
+ */
+function stubFetch(
+  body: unknown,
+  init: { status?: number; jsonOverride?: () => Promise<unknown> } = {},
+) {
+  const fetchMock = vi.fn(async () => {
+    const response = new Response(JSON.stringify(body), {
+      status: init.status ?? 200,
+      statusText: 'OK',
+    });
+    if (init.jsonOverride) {
+      Object.defineProperty(response, 'json', { value: init.jsonOverride });
+    }
+    return response;
+  });
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
 }
@@ -36,8 +51,8 @@ function stubFetch(body: unknown, init: { ok?: boolean; status?: number } = {}) 
  * `fetchWithTimeout`'s promise settles) vs. additional time inside
  * `response.json()` reading the body. Returns a REAL `Response` (via the
  * global constructor) with `.json` overridden to advance the fake-timer
- * clock before resolving — no `as unknown as Response` cast needed, since a
- * real `Response` instance already satisfies the full `Response` type.
+ * clock before resolving — no type-assertion cast to `Response` needed,
+ * since a real `Response` instance already satisfies the full type.
  * Requires `vi.useFakeTimers()` to be active in the caller: the delays below
  * are `vi.advanceTimersByTime` calls, not real waits.
  */
@@ -321,13 +336,7 @@ describe('nousChat', () => {
 
   describe('failures', () => {
     it('exposes the HTTP status, which is what classifies a 429 as retryable', async () => {
-      stubFetch(
-        { error: { type: 'rate_limit_error', message: 'slow down' } },
-        {
-          ok: false,
-          status: 429,
-        },
-      );
+      stubFetch({ error: { type: 'rate_limit_error', message: 'slow down' } }, { status: 429 });
 
       const error = (await nousChat(OPTIONS, REQUEST).catch((e: unknown) => e)) as NousApiError;
       expect(error).toBeInstanceOf(NousApiError);
@@ -338,25 +347,21 @@ describe('nousChat', () => {
     it('never puts the API key in an error message', async () => {
       // Error strings go straight to logs, and a provider echoing the request
       // back is exactly how a key ends up in one.
-      stubFetch({ error: { type: 'invalid_request', message: 'bad' } }, { ok: false, status: 400 });
+      stubFetch({ error: { type: 'invalid_request', message: 'bad' } }, { status: 400 });
 
       const error = (await nousChat(OPTIONS, REQUEST).catch((e: unknown) => e)) as Error;
       expect(error.message).not.toContain('test-fake-nous-key');
     });
 
     it('wraps an unparseable 2xx body instead of leaking a raw SyntaxError', async () => {
-      const fetchMock = vi.fn(
-        async () =>
-          ({
-            ok: true,
-            status: 200,
-            statusText: 'OK',
-            json: async () => {
-              throw new SyntaxError('Unexpected token <');
-            },
-          }) as unknown as Response,
+      stubFetch(
+        {},
+        {
+          jsonOverride: async () => {
+            throw new SyntaxError('Unexpected token <');
+          },
+        },
       );
-      vi.stubGlobal('fetch', fetchMock);
 
       await expect(nousChat(OPTIONS, REQUEST)).rejects.toThrow(NousApiError);
     });
