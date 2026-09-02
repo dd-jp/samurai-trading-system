@@ -26,6 +26,7 @@ import { readFile } from 'node:fs/promises';
 import { createServer, type Server, type ServerResponse } from 'node:http';
 import { extname, isAbsolute, join, relative, resolve as resolvePath, sep } from 'node:path';
 import type { StoreMode } from '../../shared/store/index.js';
+import { assertBindAllowed } from './bind-guard.js';
 import { NULL_PROVIDER_STATUS, type ProviderStatusReader } from './provider-status.js';
 import { buildSnapshot } from './snapshot.js';
 import type { DashboardQueryStore } from './types.js';
@@ -34,6 +35,19 @@ export interface DashboardServerOptions {
   port: number;
   host: string;
   store: DashboardQueryStore;
+  /**
+   * The dashboard's fail-closed bind guard (#887, ADR-0019, `bind-guard.ts`).
+   * `undefined` reads as "not configured" — the loopback default stays
+   * startable with no value here, and a non-loopback `host` refuses unless
+   * this is a non-empty string. Callers resolve it from
+   * `process.env[DASHBOARD_CREDENTIAL_ENV_VAR]` (`SAMURAI_DASHBOARD_TOKEN`)
+   * per this repo's env-var convention — this option exists so the guard is
+   * testable without touching `process.env`.
+   *
+   * Boot-time only: nothing here verifies this value against any request to
+   * `/api/snapshot`. See `bind-guard.ts`'s `assertBindAllowed` doc comment.
+   */
+  dashboardCredential?: string | undefined;
   /**
    * Absolute path to the built bundle (`dist/client/`). Required and injected
    * rather than derived here: this module is loaded from `dist/` in production
@@ -198,6 +212,14 @@ export function bundleDiagnostic(root: string): string | null {
 }
 
 export function createDashboardServer(opts: DashboardServerOptions): DashboardServer {
+  // Runs first, synchronously, before anything below constructs a socket or
+  // even resolves the bundle path: a refused bind must never get as far as
+  // `server.listen()` (called later, from `start()`). Structural here rather
+  // than only in `index.ts` — every caller of `createDashboardServer`
+  // (`index.ts`, `fixture-server.ts`, and every test in this module) gets the
+  // same guard with no separate call to remember. See `bind-guard.ts`.
+  assertBindAllowed(opts.host, opts.dashboardCredential);
+
   const { host, store, mode } = opts;
   const bundleRoot = resolvePath(opts.bundleRoot);
   const providers = opts.providers ?? NULL_PROVIDER_STATUS;
