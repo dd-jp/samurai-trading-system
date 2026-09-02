@@ -395,3 +395,49 @@ is only consumed by `SimulatedBrokerAdapter`; the Alpaca adapter never prices th
 backtest number, all of which were scored with a cost floor now shown to be under-sized for the live universe —
 i.e. they are **optimistic by an unquantified amount**, and no Stage 2 verdict should be re-cited until the floor
 is re-sized.
+
+## The rulings
+
+Both tickets asked for a decision. David's instruction on 2026-09-02 was to take the recommended approach rather
+than hold the question open, so these are recorded as **rulings, made on his behalf and reversible by him** —
+each states what would change it.
+
+### #881 — do NOT build a per-instrument spread coefficient. Narrow the universe instead.
+
+The ticket asks "whether cost varies enough *within the tradeable universe* to justify a per-instrument term at
+all". Measured answer: **it varies, but not in the shape that would justify one, and not where the money is.**
+
+1. **#875's own statistic does not fire.** max/median is 1.80x (CS) and 1.72x (AR) across the six screened LSE
+   names, under the 2x threshold #875 declared. The 3.3x that fired on the US four does not reproduce here.
+2. **The pool is uniformly wide, not dispersed around an outlier.** All six estimate wider than SPY; four of six
+   wider than TSLA. A per-instrument coefficient re-splits a level error it cannot fix.
+3. **A per-symbol coefficient fitted on US names would be a per-symbol *proxy*** — the ticket's own objection,
+   and F2 shows the level does not transfer even in aggregate, let alone per name.
+4. **The universe question comes first.** 3LTS and 3AAP return **one daily bar in two years**; 3SPY has 78 flat
+   days and doc 34 §3.3 measured it at 26 prints in five sessions. Five of eleven "tradeable" instruments cannot
+   be priced from free daily data at all. Deciding a per-instrument cost term for instruments that may not
+   survive a tradeability review is work in the wrong order.
+
+**What would reverse this:** an LSE level-1 quote feed (open
+[#895](https://github.com/dd-jp/samurai-trading-system/issues/895)) showing real per-instrument spreads whose
+p90/median exceeds 2x on the *surviving* universe. At that point the term is justified, and F5 records that the
+seam already carries `request.instrument`, so it is a small change when it is warranted.
+
+### #882 — the floors are under-sized, and must stop being module constants
+
+1. **Sized wrong, and flattering.** Saxo charges **8 bps per side** (ADR-0015:201); the model floors commission at
+   **1 bp per side**. That is an 8x under-charge on the live venue, from a primary source with no estimation. The
+   half-spread floor is under-sized in the same direction by F2/F3's ordering argument and doc 53 §G4's
+   independent one.
+2. **A dominating floor must not be inert.** Principle 1 requires only that a frictionless fill be
+   unrepresentable (`cost-model-backtest-spec.md:148`); it does not mandate 1 bp. The floors become a table on
+   `CostConfig`, keyed by asset class today and by venue once a venue identity reaches the seam.
+3. **The evidence gate in the ticket is wrong and is corrected here.** "Needs realised fills from the paper soak
+   or the live equity leg" — the paper soak can never supply them (F1). Waiting on it would have waited forever.
+
+**What would reverse this:** realised Saxo fills showing an effective all-in cost below the re-sized floor, or a
+tier change in Saxo's schedule.
+
+**What this does NOT authorise:** picking a number for the half-spread floor. F2 forbids converting an estimate
+into bps. The commission floor has a sourced figure (8 bps); the half-spread floor has only a **sign**, and
+sizing it needs either #895's feed or the F1 instrumentation below.
