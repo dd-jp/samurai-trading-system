@@ -92,11 +92,16 @@
  * least `FAILOVER_CIRCUIT_FAILURE_THRESHOLD` names, and the rest of that
  * tick's reads skip the primary.
  *
- * "The rest of that tick" is exact at the live default
- * (`maxConcurrentInstruments: 1`, production.ts), where the tick loop walks
- * the universe one instrument at a time. Raise that cap and up to that many
- * reads can snapshot a still-closed circuit before any of them has failed, so
- * the skip starts a few reads later — never later than the following tick.
+ * "The rest of that tick" was exact when the tick loop walked the universe
+ * one instrument at a time (`maxConcurrentInstruments: 1`). #1013 set paper
+ * and live to an explicit `6` (`paper-profile.ts`); smoke and backtest still
+ * run at 1, but now by explicit override rather than by the `?? 1` fallback
+ * production.ts once relied on — `smoke-run.ts` sets it directly, and
+ * `paperStartingProfile`'s `mode === 'backtest'` branch pins it back to 1 for
+ * this same replay-determinism reason. At width 6, up to that many reads can
+ * now snapshot a still-closed circuit before any of them has failed — the
+ * skip starts a few reads later, never later than the following tick.
+ *
  * The admission is deliberately taken ONCE per read rather than re-checked
  * mid-flight: a read already talking to the primary has paid the cost the
  * breaker exists to avoid, and cancelling it would gain nothing.

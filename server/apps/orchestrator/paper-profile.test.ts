@@ -19,7 +19,7 @@ import { SimulatedClock, SystemClock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { SqliteStage2SelectionStore } from '../../tools/backtest/index.js';
 import { REQUIRED_INJECTED_CONFIG } from './index.js';
-import { paperStartingProfile } from './paper-profile.js';
+import { paperStartingProfile, subclassOfUniverse } from './paper-profile.js';
 import { SqliteDailyEquityMetricsSource } from './production/daily-equity-metrics-source.js';
 import { DEFAULT_FEEDBACK_INTERVAL_MS } from './production.js';
 
@@ -325,6 +325,87 @@ describe('paperStartingProfile', () => {
       const NEUTRAL_STOP_PCT = 2.16;
 
       expect(overshootPct).toBeLessThan(NEUTRAL_STOP_PCT / 3);
+    });
+  });
+
+  /**
+   * #1013: `maxConcurrentInstruments` used to fall through to
+   * `buildProductionOrchestrator`'s `?? 1` default, silently — the universe
+   * walked one instrument at a time regardless of how wide `runTickPlan`'s
+   * pool could otherwise run. These pin the explicit value this profile now
+   * carries, and the two claims that justify it: today's universe fits
+   * without serializing, and the width stays well inside the rate limiter's
+   * own budget even in the worst case the pool could produce.
+   */
+  describe('maxConcurrentInstruments (#1013)', () => {
+    it('is set explicitly, not left to the ?? 1 fallback that made every pass serial', () => {
+      const profile = paperStartingProfile('paper');
+
+      expect(profile.maxConcurrentInstruments).toBeDefined();
+      expect(profile.maxConcurrentInstruments).toBe(6);
+    });
+
+    it("fully parallelizes today's universe — no instrument waits behind another", () => {
+      // `runTickPlan`'s worker count is `min(maxConcurrentInstruments,
+      // plan.instruments.length)` (tick-loop.ts): at or above the universe
+      // size, every instrument gets its own worker in the same pass.
+      const profile = paperStartingProfile('paper');
+      const universe = profile.universe;
+      if (universe === undefined) {
+        throw new Error("paperStartingProfile('paper') always carries a universe");
+      }
+
+      expect(profile.maxConcurrentInstruments).toBeGreaterThanOrEqual(universe.length);
+    });
+
+    it('stays well inside the stocks rate-limiter budget even if every instrument debates in one window', () => {
+      // Headroom, not a hard proof: `RateLimiter.reserve` is what actually
+      // enforces `maxDebates` as a ceiling (it never throws, so #785's
+      // bounded per-bar retry can't turn a refusal into a runaway) — this
+      // just checks that today's universe, and the width itself, both sit
+      // comfortably clear of that ceiling on ordinary operation, one debate
+      // per instrument per window.
+      const profile = paperStartingProfile('paper');
+      const universe = profile.universe;
+      const stocksBudget = profile.rateLimiterConfig.perAssetClass?.stocks;
+      if (universe === undefined || stocksBudget === undefined) {
+        throw new Error(
+          "paperStartingProfile('paper') always carries a universe and a stocks rate-limit budget",
+        );
+      }
+
+      expect(universe.length).toBeLessThan(stocksBudget.maxDebates);
+    });
+
+    it('pins backtest at width 1 for replay determinism, not the paper/live 6 (#1013 fix-up H1)', () => {
+      // `paperStartingProfile('backtest')` explicitly overrides
+      // `maxConcurrentInstruments` back to 1 rather than inheriting
+      // `buildStartingProfileConfigs()`'s 6 — backtest's log-insertion-order
+      // determinism depends on instruments running one at a time, unlike
+      // paper/live width 6 (see paper-profile.ts's return statement and
+      // failover-data-source.ts's replay-determinism comment).
+      expect(paperStartingProfile('backtest').maxConcurrentInstruments).toBe(1);
+      expect(paperStartingProfile('paper').maxConcurrentInstruments).toBe(6);
+    });
+
+    it('tripwire: same-tick portfolio-cap netting (#1019) stays bounded only while the universe carries no subclass — break loudly, not silently, if that changes at width > 1', () => {
+      // #1019's mechanism: at width > 1, sibling submissions in the same tick
+      // read each other's exposure as zero (the fill poll hasn't caught up),
+      // so `perSubclassDeploymentCap`'s cross-instrument netting cannot net
+      // same-tick exposure. Today that's harmless only because
+      // `subclassOfUniverse(universe)` is empty, which leaves the per-name
+      // gates (`perTradeSizeCap`, `perAssetExposureCap`) doing the real work
+      // unassisted. If a universe edit adds a `subclass` to any instrument
+      // while width stays > 1, this assertion — not a live drawdown — should
+      // be the first thing to notice.
+      const profile = paperStartingProfile('paper');
+      const universe = profile.universe;
+      if (universe === undefined) {
+        throw new Error("paperStartingProfile('paper') always carries a universe");
+      }
+
+      expect(profile.maxConcurrentInstruments).toBeGreaterThan(1);
+      expect(Object.keys(subclassOfUniverse(universe))).toEqual([]);
     });
   });
 

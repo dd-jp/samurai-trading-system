@@ -108,6 +108,49 @@ describe('runTickPlan', () => {
     expect(peakInFlight()).toBe(2);
   });
 
+  /**
+   * #1013: the pool mechanism above (`max_concurrent_instruments` bounding
+   * simultaneous passes) was never the gap — `buildProductionOrchestrator`
+   * feeding it a config-derived `?? 1` was. This pins the wiring at the level
+   * that regresses silently: if the paper profile's explicit width is ever
+   * dropped back to the implicit default, this fails with `peakInFlight() ===
+   * 1` and `started()` showing one instrument at a time, exactly the
+   * behaviour #1013 measured (SPY at 19:56:42, QQQ at 19:57:07, TSLA at
+   * 19:58:02 — the issue's own timestamps, ~25-55s apart; it did not report
+   * AAPL's) against a running orchestrator.
+   *
+   * Uses the REAL configured universe and width, not stand-ins, so a change
+   * to either value is exercised here rather than assumed.
+   */
+  it("runs the paper profile's universe concurrently, up to its configured width, not one instrument at a time", async () => {
+    const profile = paperStartingProfile('paper');
+    const universe = profile.universe;
+    if (universe === undefined) {
+      throw new Error("paperStartingProfile('paper') always carries a universe");
+    }
+    const { runner, releaseAll, peakInFlight, started } = gatedRunner();
+    const plan = makePlan(...universe.map((instrument) => instrument.asset));
+
+    const pending = runTickPlan(plan, runner, CLOCK, {
+      max_concurrent_instruments: profile.maxConcurrentInstruments,
+      newTraceId: countingTraceIds(),
+      logger: LOGGER,
+      auditLog: makeAuditLog(),
+      currentTickStore: makeCurrentTickStore(),
+      decisionGate: new DebateBarDecisionGate(),
+    });
+    await settle();
+
+    // Every instrument in today's universe started in the SAME pass, not
+    // queued behind one another — the width configured is >= the universe
+    // size (paper-profile.ts's own `maxConcurrentInstruments` comment).
+    expect(started()).toEqual(plan.instruments.map((instrument) => instrument.asset));
+    expect(peakInFlight()).toBe(plan.instruments.length);
+
+    releaseAll();
+    await pending;
+  });
+
   it('runs every instrument in the plan', async () => {
     const runner: TickRunner = {
       runInstrument: vi.fn(async (_signal, ctx) => ({

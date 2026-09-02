@@ -154,6 +154,10 @@ export type ValueProvenance = 'SPEC' | 'DERIVED' | 'UNSOURCED';
 export const PAPER_PROFILE_PROVENANCE = {
   llmBudgetUsd: 'SPEC',
   tickIntervalMs: 'DERIVED',
+  // #1013 — derived from `rateLimiterConfig.perAssetClass.stocks`'s budget,
+  // #1012's measured per-call latency, and today's universe size. See the
+  // field's own comment for the arithmetic.
+  maxConcurrentInstruments: 'DERIVED',
   universe: 'SPEC',
   'traderConfig.conviction_floor': 'SPEC',
   // #668. SPEC rather than DERIVED: close − 5 minutes is not calculated from
@@ -1033,6 +1037,13 @@ const CRYPTO_MAX_DEBATES_PER_WINDOW = 20;
 const STOCKS_MAX_DEBATES_PER_WINDOW = 15;
 
 /**
+ * `maxConcurrentInstruments` (#1013) — see that field's comment, on the
+ * returned profile below, for the full derivation. Named here so the number
+ * is defined once, next to the budgets it is checked against.
+ */
+const MAX_CONCURRENT_INSTRUMENTS = 6;
+
+/**
  * The eight required config objects, plus the optional ninth seam (#366).
  *
  * **No longer parameterised by an equity anchor or capital ceiling (#886).**
@@ -1105,10 +1116,20 @@ export function buildStartingProfileConfigs(
   // more: the fallback when it is absent is `?? true` (`scheduler.ts:74`) —
   // i.e. the whole LSE session, which is the OPPOSITE of the constraint. A
   // profile that dropped it would tick 08:00-16:30 and look healthy doing it.
+  //
+  // `maxConcurrentInstruments` joined them under #1013: the fallback when it
+  // is absent is `?? 1` (`production.ts:2701`), which is what actually ran —
+  // the universe walked one instrument at a time regardless of how many
+  // workers `runTickPlan` could otherwise use. A profile that dropped it
+  // would silently go back to serial, not to some documented default width.
   Required<
     Pick<
       ProductionConfig,
-      'rateLimiterConfig' | 'llmBudgetUsd' | 'tickIntervalMs' | 'stocksTradingWindow'
+      | 'rateLimiterConfig'
+      | 'llmBudgetUsd'
+      | 'tickIntervalMs'
+      | 'stocksTradingWindow'
+      | 'maxConcurrentInstruments'
     >
   > {
   // ADR-0018 D5. The gate's classification and the list the run actually ticks
@@ -1324,15 +1345,24 @@ export function buildStartingProfileConfigs(
      * KPIs hold"); that sentence has been amended rather than left to
      * contradict this value.
      *
-     * **The reason is throughput, and it is a measured one, not a preference.**
-     * `runTickPlan` runs instruments at `max_concurrent_instruments`, which is
-     * `1` (tick-loop.ts, and see `maxConcurrentInstruments` in production.ts
-     * for why raising it is not free), and `VerdictImpl.decide` *awaits*
-     * `approvals.requestApproval` inside the instrument pass. So a single
-     * pending approval blocks every other instrument for up to
-     * `human_timeout`. At the soak's cadence one un-answered tap costs the
-     * whole universe a full cycle. A human in this loop is a serialization
-     * point, not a safety net.
+     * **The reason was throughput when this was written, and the width has
+     * since moved — the conclusion has not.** `runTickPlan` ran instruments at
+     * `max_concurrent_instruments`, which was `1` at the time ADR-0007 argued
+     * this; #1013 set it to `6` explicitly (paper and live both — see that
+     * field's comment below), and `VerdictImpl.decide` *awaits*
+     * `approvals.requestApproval` inside the instrument pass. At width 1 a
+     * single pending approval blocked EVERY other instrument for up to
+     * `human_timeout`; at width 6 it blocks only the one worker holding that
+     * instrument's pass, not the whole universe — the throughput argument as
+     * ADR-0007 originally stated it is weaker than it was. **It is moot in
+     * practice, not merely weaker**, because `automation_level` below is
+     * `auto` for both classes: `shouldEngageHitl` short-circuits to `false`
+     * before `isFlagged` is ever consulted, so `approvals.requestApproval` is
+     * never reached at either width, and the human-approval gate cannot block
+     * anything, one instrument or six. A human in this loop is a serialization
+     * point, not a safety net — that framing survives the width change even
+     * though the specific "blocks every other instrument" arithmetic no
+     * longer does.
      *
      * **What this removes, stated plainly.** Gate 6 is now unreachable: the
      * dial short-circuits `shouldEngageHitl` to `false` before `isFlagged` is
@@ -1890,6 +1920,156 @@ export function buildStartingProfileConfigs(
      */
     tickIntervalMs: 2 * 60_000,
     /**
+     * Concurrent instrument passes within one tick (#1013) — SET EXPLICITLY
+     * rather than left to `buildProductionOrchestrator`'s `config.maxConcurrentInstruments
+     * ?? 1` fallback (`production.ts:2701`), which is what actually ran: a
+     * worker pool of width 1, walking the universe one instrument at a time —
+     * SPY at 19:56:42, QQQ at 19:57:07, TSLA at 19:58:02 (the issue's own
+     * measurement; it did not report AAPL's timestamp), ~25-55s apart —
+     * against the `tickIntervalMs: 2 * 60_000` two lines up. The pool itself
+     * (`runTickPlan`, tick-loop.ts) was never the gap; only the config value
+     * feeding it was.
+     *
+     * **Worked from the rate limiter's actual budget and #1012's measured
+     * latency, not by feel — the issue's own instruction:**
+     *
+     * - `rateLimiterConfig.perAssetClass.stocks` below admits
+     *   `STOCKS_MAX_DEBATES_PER_WINDOW = 15` debates per `LLM_BUDGET_WINDOW_MS
+     *   = 300_000` (5 min) — a sustained 3/min. `DEFAULT_UNIVERSE` today is
+     *   FOUR stocks-only instruments (SPY/QQQ/AAPL/TSLA; crypto left scope,
+     *   ADR-0015's 2026-08-16 amendment). At `maxDebates: 15`, four
+     *   instruments debating once each in the same window is nowhere near
+     *   it — but "at most 4" is not actually the bound: #743's
+     *   `DebateBarDecisionGate` admits one debate attempt per instrument per
+     *   bar, and #785 lets a THROWING pass retry up to
+     *   `DEFAULT_MAX_DECISION_RETRIES_PER_BAR = 5` further times in that same
+     *   bar. **Corrected here (#1013 fix-up L2) — the original `4 x (1 + 5) =
+     *   24` figure overstated both what re-triggers a retry and how many can
+     *   land in one window.** A retry only re-hits `RateLimiter.reserve` if
+     *   the DEBATE STEP ITSELF fails before persisting: `debate-adapter.ts`
+     *   writes the `debate_log` row as soon as a debate completes, converged
+     *   or not (`persistDebateLog`), and any later attempt in the same bar
+     *   that finds a replayable row for that `debate_id` short-circuits via
+     *   `replayedDebateResult` — no LLM call, no re-reservation. So
+     *   "something downstream throws" AFTER a debate that already persisted
+     *   does not compound admission attempts; only the narrower case of the
+     *   debate step itself throwing pre-persist, on every attempt, does. Even
+     *   then, retries land on SUBSEQUENT TICKS (`tickIntervalMs: 2 * 60_000`
+     *   below), not instantly: five retries at a 2-minute cadence span up to
+     *   10 minutes — crossing rate-limit window boundaries (`windowMs:
+     *   300_000` below) — so at most ~3 attempts per instrument (one first
+     *   try plus two retries), not six, can land inside any SINGLE 5-minute
+     *   window: `4 x 3 = 12` in one window, under the 15 ceiling. The full
+     *   `4 x (1 + 5) = 24` is real only as a per-BAR total spread across
+     *   several windows, never as a single-window burst. What actually holds
+     *   the line either way is `RateLimiter.reserve` itself: it is TOTAL and
+     *   never throws (its own doc comment), so any attempt past whichever
+     *   ceiling actually binds in a given window is simply refused —
+     *   `granted: false`, logged, degrades that pass to `no_trade` — rather
+     *   than retried further (a refusal is not a throw, so #785 never sees it
+     *   as one to retry). The width this field sets does not change any of
+     *   that arithmetic: it only affects how many instruments' FIRST attempt
+     *   in a bar can start in parallel, not how many attempts each can
+     *   eventually make.
+     * - #1012 measured the debate LLM call itself at 6,441ms mean / 28,340ms
+     *   max, ~9-10 calls serially per one debate (`WORST_CASE_LLM_CALLS_PER_DEBATE`
+     *   below reserves for exactly 10) — a mean debate of ~61s (matching the
+     *   ~50s/instrument this ticket measured), a worst case of ~4.7 min.
+     *   Neither figure is gated by THIS dial. **Corrected here (#1013 fix-up
+     *   M1) — `RateLimiter.reserve` does NOT book the worst-case call count up
+     *   front**; it only increments `debatesUsed` by one, synchronously, and
+     *   CHECKS (does not reserve) that `llmCallsUsed + worstCaseLlmCalls`
+     *   still fits `maxLlmCalls` at that instant (`rate-limiter.ts`).
+     *   `llmCallsUsed` itself is only incremented later, per real call, by
+     *   `recordCall` (`production/rate-limited-llm-client.ts`). The real
+     *   safety property is `maxLlmCalls = maxDebates x
+     *   WORST_CASE_LLM_CALLS_PER_DEBATE` (`llmBudget` above, pinned by
+     *   `rate-limit-wiring.test.ts`'s "carries a per-asset-class budget with
+     *   the call budget tied to the worst case"): `debatesUsed` is capped at
+     *   `maxDebates` synchronously and atomically (no await between check and
+     *   increment), so as long as no single debate exceeds its own worst-case
+     *   call allowance, the window's aggregate `llmCallsUsed` cannot exceed
+     *   `maxLlmCalls` either — the ceiling holds by construction of the two
+     *   numbers, not by `reserve` pre-booking calls it has not yet made. A
+     *   slow debate still only spends its own call budget, never another
+     *   instrument's debate-count budget — a debate's duration and how many
+     *   debates a window admits are separate quantities here.
+     * - `6` clears today's 4-instrument universe with a spare worker, so the
+     *   tick loop's own per-instrument reentrancy guard (#669, `production.ts`
+     *   — never more than one in-flight pass per instrument) is what actually
+     *   bounds concurrent debates today, at `min(6, universe.length) = 4`, not
+     *   this number: raising it further would not raise real concurrency until
+     *   the universe itself grows past 6.
+     * - `6` also reuses, rather than re-derives, #388's own headroom check two
+     *   screens down (`rateLimiterConfig`'s comment): raising this to 6 was
+     *   already shown there to roughly double the stock debate rate to
+     *   ~1.6/min, comfortably under the 3/min budget above.
+     *
+     * **Effect on staleness.** The issue's own timestamps (SPY 19:56:42, QQQ
+     * 19:57:07, TSLA 19:58:02) show ~80s of staleness on the span it actually
+     * timestamped — corrected here (#1013 fix-up L1) from an earlier "~2 min"
+     * that did not match the quoted timestamps. That span is two gaps if only
+     * SPY/QQQ/TSLA are counted (~40s/gap), but `DEFAULT_UNIVERSE`'s walk order
+     * is SPY/QQQ/AAPL/TSLA, so AAPL's debate almost certainly ran between
+     * QQQ's and TSLA's timestamps even though the issue never reported it —
+     * meaning the 80s span most likely covers three gaps across all four
+     * instruments (~27s/gap), not two. Either way the per-gap figure the data
+     * itself supports is in the ~27-40s range, not the "~50s/instrument" an
+     * earlier draft of this comment invented and then wrongly called "that
+     * same" figure when extrapolating (#1013 fix-up L1, second correction).
+     * Rather than lean on a number this small a sample can't really pin down,
+     * the extrapolation below instead uses #1012's separately-measured ~61s
+     * MEAN debate latency (a different, independently-sourced figure, not a
+     * refinement of the 80s span) as a deliberately conservative per-instrument
+     * estimate: at width 1 the last instrument in a pass decides on data as
+     * old as every other instrument's combined debate time ahead of it in the
+     * walk, so up to ~3 debates deep at ~61s each puts the full 4-instrument
+     * `DEFAULT_UNIVERSE`'s last instrument on the order of ~3 min stale (not
+     * itself measured — #1012's figure is a per-call/per-debate benchmark, not
+     * a walk-order measurement on this universe). At width 6 (>= 4), every
+     * instrument in `DEFAULT_UNIVERSE` starts its pass in the same tick
+     * instant — one worker per instrument — so the whole pass's staleness
+     * spread collapses to the spread of the instruments' OWN debate latencies
+     * (seconds to low tens of seconds, #1012's mean-to-tail range) rather than
+     * the sum of the instruments ahead of it in a serial walk.
+     *
+     * **NOT sized for the ~30-name live LSE ETP pool (#895).** A universe that
+     * wide makes `maxConcurrentInstruments x passes in flight` (#692) actually
+     * multiply — a wider universe than this cap gives a second, overlapping
+     * pass NEW instruments to claim rather than none — which is a materially
+     * different safety question this comment does not answer. Revisit this
+     * dial, not assume it, when the universe widens past it. See the tripwire
+     * comment on #895 itself and #1019 (next paragraph) for what else arms at
+     * the same time.
+     *
+     * **Same-tick concurrency also opens a portfolio-cap race, filed as #1019
+     * rather than fixed here (#1013 fix-up H3).** `computePortfolioView`
+     * values a position at `filled_size * mark`, never `requested_size`
+     * (`portfolio-view.ts`), so a just-submitted order reads as ZERO exposure
+     * to every sibling instrument's Risk evaluation in the same tick until a
+     * fill poll (`DEFAULT_FILL_POLL_INTERVAL_MS = 15_000`) catches up — at
+     * width 6, unlike the old serial walk, no poll typically intervenes
+     * between sibling submissions. This makes `perSubclassDeploymentCap`'s
+     * cross-instrument netting (`risk-manager/index.ts`) structurally unable
+     * to net same-tick concurrent exposure. **Bounded today**: `DEFAULT_UNIVERSE`
+     * has no `subclass_of` entries, so `perSubclassDeploymentCap` is inert and
+     * the per-name gates (`perTradeSizeCap`, `perAssetExposureCap`) still bind
+     * independently. **It disappears the moment a D5-classified subclass with
+     * a numeric fraction arms** (`isD5ArmedWithNumericFraction`,
+     * `risk-manager/index.ts`) — expected once #895's pool file lands — which
+     * nulls out both per-name gates and leaves only the gate that cannot net
+     * same-tick submissions. See #1019 for the full mechanism and the two
+     * related gaps (no submit-time cash reservation; a breaker-state
+     * audit-fidelity note) it also covers.
+     *
+     * **`backtest` is not this value.** This `6` is what `mode` resolves to
+     * for `paper` and `live`; the return statement below overrides
+     * `backtest` back to an explicit `1` for replay determinism (#1013
+     * fix-up H1) — see the comment there and
+     * `failover-data-source.ts`'s replay-determinism note.
+     */
+    maxConcurrentInstruments: MAX_CONCURRENT_INSTRUMENTS,
+    /**
      * `SPEC` — equities are entered only inside the LSE/US overlap (#706).
      *
      * Set HERE rather than defaulted in `buildProductionOrchestrator`, because
@@ -1979,12 +2159,30 @@ export function buildStartingProfileConfigs(
      * of one. It is closer to **1.6x**, and the reason is worth writing down
      * because it also answers whether the tick loop can keep up:
      * `startTickLoop` is a `setTimeout` CHAIN, not a fixed-cadence
-     * `setInterval` — the next tick is scheduled only once the previous pass
-     * has finished. With `maxConcurrentInstruments: 1` a pass runs its
-     * instruments sequentially, so widening the universe stretches the
-     * effective cadence instead of multiplying the tick count. Nothing stacks,
-     * nothing is skipped, and the "tick skipped: previous tick still running"
-     * warn stays unreachable.
+     * `setInterval`. **Both halves of the next sentence, as this passage
+     * originally wrote them, are now false and are corrected here (#1013
+     * fix-up H2) rather than left to mislead the next reader:**
+     *
+     * The next tick is re-armed BEFORE the current pass runs, not once it
+     * finishes (#669, `production.ts`'s tick-loop doc) — chaining on
+     * completion made the real period `interval + passDuration`, which #669
+     * removed specifically because one slow debate was pushing back every
+     * instrument's next tick. So the cadence is the fixed interval, not
+     * interval-plus-duration, independent of this dial.
+     *
+     * And at `maxConcurrentInstruments: 6` (#1013; it was `1` when this
+     * passage was written) a pass runs its instruments CONCURRENTLY, up to
+     * the configured width, not sequentially — so "widening the universe
+     * stretches the effective cadence" no longer holds at today's width
+     * either. Passes from DIFFERENT ticks can now also legitimately overlap
+     * (#669 re-arms ahead of completion), bounded only per-instrument: the
+     * #669 reentrancy guard never lets two passes be in flight for the same
+     * instrument, but distinct instruments across overlapping passes are not
+     * bounded by this field at all — see `production.ts`'s "`maxConcurrentInstruments`
+     * is a per-pass bound" note. The "tick skipped: previous tick still
+     * running" warn this passage used to say "stays unreachable" does not
+     * merely stay unreachable: #669 deleted the global in-flight guard that
+     * logged it, so that message no longer exists anywhere in the code.
      *
      * Arithmetic, at `LATENCY_BUDGET_MS` (crypto 30s, stocks 60s — #581) and
      * `DEFAULT_TICK_INTERVAL_MS` (60s):
@@ -2108,6 +2306,12 @@ export function buildStartingProfileConfigs(
      * be raised for latency without the ceiling firing, and cannot be raised
      * far enough to remove it.
      *
+     * **#1013 acted on this.** `maxConcurrentInstruments` below is now set to
+     * exactly the `6` this paragraph analyzed, rather than left at the
+     * `?? 1` fallback that made every pass walk the universe serially — see
+     * that field's own comment for the full derivation, current-universe fit,
+     * and the explicit non-claim about the wider ~30-name LSE pool.
+     *
      * **`maxLlmCalls = maxDebates * WORST_CASE_LLM_CALLS_PER_DEBATE` —
      * DERIVED, and deliberately redundant.** `reserve` admits a debate only if
      * its worst case (3 rounds x 3 persona calls + 1 disagreement call = 10)
@@ -2200,7 +2404,11 @@ export function paperStartingProfile(
   Required<
     Pick<
       ProductionConfig,
-      'rateLimiterConfig' | 'llmBudgetUsd' | 'tickIntervalMs' | 'stocksTradingWindow'
+      | 'rateLimiterConfig'
+      | 'llmBudgetUsd'
+      | 'tickIntervalMs'
+      | 'stocksTradingWindow'
+      | 'maxConcurrentInstruments'
     >
   > {
   if (mode === 'live') {
@@ -2223,5 +2431,24 @@ export function paperStartingProfile(
     );
   }
 
-  return { ...buildStartingProfileConfigs(), mode };
+  return {
+    ...buildStartingProfileConfigs(),
+    mode,
+    // `backtest` keeps `maxConcurrentInstruments: 1` explicitly (#1013 fix-up
+    // H1) rather than inheriting `buildStartingProfileConfigs()`'s `6` —
+    // `tick-loop.ts`'s determinism-rationale comment is specific about why: a
+    // cap of 1 makes the interleaving of stage calls across instruments
+    // deterministic (outcomes come back in plan order regardless of the cap,
+    // but log-insertion order and stage-call interleaving do not, at width >
+    // 1). `smoke-run.ts` has always pinned this separately and explicitly for
+    // the same reason; `backtest` inheriting the paper/live width of 6 here
+    // WAS this PR's own regression until this override — the walk-forward
+    // replay path is sequential-mode's whole reason to exist, and this keeps
+    // it that way rather than making the case (option (b) considered and
+    // rejected) that log-order determinism turns out not to matter to any
+    // Stage-2/backtest tooling. Nobody has audited that claim, so the cheap
+    // and certain fix is preserving the original guarantee, not arguing it
+    // away.
+    ...(mode === 'backtest' ? { maxConcurrentInstruments: 1 } : {}),
+  };
 }

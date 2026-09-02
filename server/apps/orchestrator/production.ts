@@ -1743,10 +1743,24 @@ function buildMiIngestAgent(deps: {
  * cap — the cap bounds instruments *within* a tick and knows nothing about
  * ticks racing each other". That reasoning predates the mechanisms that now own
  * this. `RateLimiter.reserve` (#388) admits or refuses every debate against a
- * per-asset-class window BEFORE any call is made, and `SpendCap` (ADR-0008)
- * bounds total dollars. Both are indifferent to which tick a debate belongs to.
- * The global lock was doing rate limiting's job, coarsely, and paying for it in
- * dropped equity ticks.
+ * per-asset-class window BEFORE any call is made — that check IS indifferent
+ * to which tick a debate belongs to: `debatesUsed` is incremented
+ * synchronously and atomically per reservation regardless of tick or
+ * instrument, so the window's admission count is exact no matter how many
+ * ticks or passes overlap. The global lock was doing rate limiting's job,
+ * coarsely, and paying for it in dropped equity ticks.
+ *
+ * **`SpendCap` (ADR-0008) is NOT the same shape, and it is worth being exact
+ * about (#1013 fix-up H2) rather than lumping it in with `RateLimiter`.**
+ * `SpendCap.check()` is a synchronous PURE READ against cumulative
+ * `llm_spend.cost_usd` — it admits or refuses, but reserves nothing, and
+ * nothing debits the figure it read until the admitted debate's calls are
+ * actually recorded later. Concurrent instruments can therefore all read the
+ * SAME pre-spend total and all pass `check()` before any of their spend
+ * lands, so the cap's overshoot bound scales with how many debates can be
+ * concurrently admitted, not with ticks. See `debate-adapter.ts`'s
+ * `spendCap.check()` call site for the concurrency-scaled overshoot figure —
+ * accepted there as financially trivial at this PR's width.
  *
  * What remains genuinely per-instrument is pipeline reentrancy: one instrument
  * must not have two passes in flight, or the second would decide against
@@ -1773,6 +1787,19 @@ function buildMiIngestAgent(deps: {
  *
  * So neither store assumes a single writer; both assume a single writer PER
  * INSTRUMENT, which is precisely the invariant this guard holds.
+ *
+ * **This section covers PERSISTENCE only — `current_tick`, `audit_log`, and
+ * the synchronous-write guarantee underneath both. It says nothing about
+ * whether the Risk/Execution DECISION path is safe under the same
+ * interleaving, and it is not (#1013 fix-up H3).** Portfolio-level risk caps
+ * (`perSubclassDeploymentCap`, `risk-manager/index.ts`) net exposure across
+ * concurrently-armed instruments by reading `position.filled_size`, which is
+ * zero for an order this tick has not yet had a fill poll for — at
+ * `maxConcurrentInstruments: 6` (#1013), sibling instruments' Risk
+ * evaluations routinely run before any fill poll intervenes, so that netting
+ * cannot see same-tick concurrent exposure. See #1019 for the full mechanism,
+ * why it is bounded today (no subclass classification on `DEFAULT_UNIVERSE`),
+ * and why it stops being bounded once #895's pool arms D5 classification.
  *
  * ## Scheduling
  *
