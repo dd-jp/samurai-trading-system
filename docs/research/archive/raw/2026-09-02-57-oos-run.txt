@@ -1,37 +1,38 @@
 # 57-open-low-close-high-persistence.py run log, 2026-09-02 (#707)
 #
-# Stages were run and the write-up committed in this order: data, is (with the
-# write-up sections 1-5 committed against it), then oos.
+# Stages were run and the write-up committed in this order: data, is (sections
+# 1-5 committed against it, b57a41f), then oos. Re-run here on the corrected
+# panel after the NIO ticker-reuse finding; the oos figures are unchanged by it.
 
 $ python3 docs/research/57-open-low-close-high-persistence.py data
 == per-symbol daily bars, 2016-01-04 .. 2026-07-31 (adjustment=all, feed=sip)
-sym      bars  first      last       |r|>30%
-AAPL     2659  2016-01-04 2026-07-31 0
-AMD      2659  2016-01-04 2026-07-31 0
-AMZN     2659  2016-01-04 2026-07-31 0
-ARM       722  2023-09-14 2026-07-31 0
-BABA     2659  2016-01-04 2026-07-31 0
-COIN     1331  2021-04-14 2026-07-31 0
-EWY      2659  2016-01-04 2026-07-31 0
-GOOG     2659  2016-01-04 2026-07-31 0
-KWEB     2659  2016-01-04 2026-07-31 0
-META     2659  2016-01-04 2026-07-31 0
-MRNA     1921  2018-12-07 2026-07-31 0
-MSFT     2659  2016-01-04 2026-07-31 0
-MSTR     2659  2016-01-04 2026-07-31 0
-NFLX     2659  2016-01-04 2026-07-31 0
-NIO      2659  2016-01-04 2026-07-31 2
-NVDA     2659  2016-01-04 2026-07-31 0
-PLTR     1465  2020-09-30 2026-07-31 0
-PYPL     2659  2016-01-04 2026-07-31 0
-QQQ      2659  2016-01-04 2026-07-31 0
-RACE     2659  2016-01-04 2026-07-31 0
-SPY      2659  2016-01-04 2026-07-31 0
-TSLA     2659  2016-01-04 2026-07-31 0
-UBER     1816  2019-05-10 2026-07-31 0
-VT       2659  2016-01-04 2026-07-31 0
-XLE      2659  2016-01-04 2026-07-31 0
-XYZ      2659  2016-01-04 2026-07-31 0
+sym      bars  first      last        |r|>30% v=0 dropped
+AAPL     2659  2016-01-04 2026-07-31        0 0
+AMD      2659  2016-01-04 2026-07-31        0 0
+AMZN     2659  2016-01-04 2026-07-31        0 0
+ARM       722  2023-09-14 2026-07-31        0 0
+BABA     2659  2016-01-04 2026-07-31        0 0
+COIN     1331  2021-04-14 2026-07-31        0 0
+EWY      2659  2016-01-04 2026-07-31        0 0
+GOOG     2659  2016-01-04 2026-07-31        0 0
+KWEB     2659  2016-01-04 2026-07-31        0 0
+META     2659  2016-01-04 2026-07-31        0 0
+MRNA     1921  2018-12-07 2026-07-31        0 0
+MSFT     2659  2016-01-04 2026-07-31        0 0
+MSTR     2659  2016-01-04 2026-07-31        0 0
+NFLX     2659  2016-01-04 2026-07-31        0 0
+NIO      1981  2018-09-12 2026-07-31        2 0
+NVDA     2659  2016-01-04 2026-07-31        0 0
+PLTR     1465  2020-09-30 2026-07-31        0 0
+PYPL     2659  2016-01-04 2026-07-31        0 0
+QQQ      2659  2016-01-04 2026-07-31        0 0
+RACE     2659  2016-01-04 2026-07-31        0 0
+SPY      2659  2016-01-04 2026-07-31        0 0
+TSLA     2659  2016-01-04 2026-07-31        0 0
+UBER     1816  2019-05-10 2026-07-31        0 0
+VT       2659  2016-01-04 2026-07-31        0 0
+XLE      2659  2016-01-04 2026-07-31        0 0
+XYZ      2659  2016-01-04 2026-07-31        0 0
 
 == availability per month (floor = 20)
   2016-01  n= 0  BELOW FLOOR
@@ -46,9 +47,9 @@ XYZ      2659  2016-01-04 2026-07-31 0
   2016-10  n= 0  BELOW FLOOR
   2016-11  n= 0  BELOW FLOOR
   2016-12  n= 0  BELOW FLOOR
-  2017-01  n=21
-  2018-01  n=21
-  2019-01  n=21
+  2017-01  n=20
+  2018-01  n=20
+  2019-01  n=20
   2020-01  n=22
   2021-01  n=23
   2022-01  n=24
@@ -60,15 +61,15 @@ first scoreable month: 2017-01
 
 $ python3 docs/research/57-open-low-close-high-persistence.py is
 == IN-SAMPLE (<=2022)  months scored: 72  (of 84 in the arm; the rest are below the 20-name floor)
-   first 2017-01  last 2022-12   names/month 21..25
+   first 2017-01  last 2022-12   names/month 20..25
 
    top-minus-bottom spread, %/session
-   n=72  mean +0.0529  sd 0.3282  se 0.0387  t +1.367
-   top quintile   mean +0.0302  se 0.0391  t +0.774
-   bottom quintile mean -0.0226  se 0.0420  t -0.539
+   n=72  mean +0.0364  sd 0.3339  se 0.0394  t +0.926
+   top quintile   mean +0.0275  se 0.0412  t +0.668
+   bottom quintile mean -0.0090  se 0.0417  t -0.215
 
    MDE for the out-of-sample arm:
-   2.8016 x 0.3282 / sqrt(43) = +0.1402 %/session
+   2.8016 x 0.3339 / sqrt(43) = +0.1427 %/session
    (z = 1.96 + 0.84, 80% power at 5% two-sided; sd in-sample, M = 43 OOS months)
 
 $ python3 docs/research/57-open-low-close-high-persistence.py oos

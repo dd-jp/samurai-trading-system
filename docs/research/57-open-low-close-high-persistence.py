@@ -72,6 +72,17 @@ POOL = [
 
 START = "2016-01-04"
 END = "2026-07-31"
+
+# Ticker reuse, not a method choice. Alpaca serves 2,659 bars for NIO back to
+# 2016-01-04, but NIO listed on the NYSE on 2018-09-12: the earlier tape is a
+# previous holder of the ticker (real prices around $14 and real volume, then a
+# run of zero-volume flat 14.67 bars immediately before the IPO). Those bars are
+# not the instrument being ranked, so they are not its data. The declared
+# availability rule is applied to the instrument's own tape; this table is what
+# makes "its own tape" true. Every other name in the pool was trading under its
+# current ticker on 2016-01-04 (XYZ's pre-rename SQ history back-maps correctly:
+# ~$12 with real volume in January 2016, which is where Square traded).
+FIRST_ELIGIBLE = {"NIO": "2018-09-12"}
 LOOKBACK_MONTHS = 12
 NAME_FLOOR = 20            # declared 2026-08-27; applied to BOTH arms
 IS_LAST_YEAR = 2022        # 18-threshold-study.py:272
@@ -101,13 +112,19 @@ def load():
         months = {}
         days = []
         extreme = 0
+        zerovol = 0
+        floor_day = max(START, FIRST_ELIGIBLE.get(sym, START))
         with open(path) as fh:
             for line in fh:
                 b = json.loads(line)
                 day = b["t"][:10]
-                if day < START or day > END:
+                if day < floor_day or day > END:
                     continue
                 if not b["o"]:
+                    continue
+                # A zero-volume bar is a carried quote, not a session's tape.
+                if not b.get("v"):
+                    zerovol += 1
                     continue
                 r = (b["c"] - b["o"]) / b["o"] * 100.0
                 if abs(r) > 30.0:
@@ -117,7 +134,7 @@ def load():
         if not days:
             raise SystemExit("%s: no bars in window" % sym)
         per_symbol[sym] = months
-        span[sym] = (len(days), min(days), max(days), extreme)
+        span[sym] = (len(days), min(days), max(days), extreme, zerovol)
     return per_symbol, span
 
 
@@ -188,10 +205,10 @@ def main():
 
     if stage == "data":
         print("== per-symbol daily bars, %s .. %s (adjustment=all, feed=sip)" % (START, END))
-        print("%-6s %6s  %-10s %-10s %s" % ("sym", "bars", "first", "last", "|r|>30%"))
+        print("%-6s %6s  %-10s %-10s %8s %s" % ("sym", "bars", "first", "last", "|r|>30%", "v=0 dropped"))
         for sym in POOL:
-            n, lo, hi, ex = span[sym]
-            print("%-6s %6d  %-10s %-10s %d" % (sym, n, lo, hi, ex))
+            n, lo, hi, ex, zv = span[sym]
+            print("%-6s %6d  %-10s %-10s %8d %d" % (sym, n, lo, hi, ex, zv))
         print("\n== availability per month (floor = %d)" % NAME_FLOOR)
         first_scored = None
         for m in months:

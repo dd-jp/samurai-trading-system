@@ -3,13 +3,17 @@
 **Ticket:** [#707](https://github.com/dd-jp/samurai-trading-system/issues/707) (R1), under map [#703](https://github.com/dd-jp/samurai-trading-system/issues/703).
 **Generator:** [`57-open-low-close-high-persistence.py`](57-open-low-close-high-persistence.py) (fetch via [`18-fetch-bars.py`](18-fetch-bars.py), `TF=1Day`).
 **Horizon:** ADR-0014 intraday, flat by close. **Bracket:** ADR-0018 D4, frozen — nothing here tunes it.
-**Status:** MEASURED 2026-09-02 — **FAIL.** The out-of-sample top-minus-bottom spread is **-0.0246 %/session, t = -0.44** — the wrong sign, and indistinguishable from zero — against a declared bar of spread > 0 with `t >= 2.0`. The test is **not** underpowered against the range the pool could plausibly carry (MDE 0.1402 %/session against the declared 0.757 %/session bound), so this is a rejection, not a "cannot be settled here". **Build nothing.**
+**Status:** MEASURED 2026-09-02 — **FAIL.** The out-of-sample top-minus-bottom spread is **-0.0246 %/session, t = -0.44** — the wrong sign, and indistinguishable from zero — against a declared bar of spread > 0 with `t >= 2.0`. The test is **not** underpowered against the range the pool could plausibly carry (MDE 0.1427 %/session against the declared 0.757 %/session bound), so this is a rejection, not a "cannot be settled here". **Build nothing.**
 
 > Sections are in the order #707 requires: the statistic, the pass bar **stated before the
 > result**, the declared trial count, the inherited split, the declared MDE, then the verdict.
-> Sections 1–5 were written and committed against the in-sample stage output only, on this branch, **before the out-of-sample arm was scored** —
-> the two-stage script (`is` / `oos`) exists to make that ordering checkable rather than
-> asserted.
+> Sections 1–5 were written and committed against the `data` and `is` stage output only, in
+> commit **`b57a41f`** on this branch, **before the out-of-sample arm was scored** — the
+> three-stage script (`data` / `is` / `oos`) exists to make that ordering checkable rather than
+> asserted. One thing changed after that commit and before §6: the NIO ticker-reuse correction
+> in §4, which moved the in-sample dispersion and therefore the MDE (0.1402 → **0.1427**) but
+> **left the out-of-sample arm bit-identical**, since NIO is fully available across 2023–2026
+> either way. The declared bar, the statistic, the split and the §2 tie-break are as committed.
 
 ## 1. The question, and the statistic — not re-declared
 
@@ -86,6 +90,11 @@ Per #707, declared before the run:
 2. The rank-within-available-names entry rule with a 20-name floor (resolved 2026-08-27 —
    David's ruling was that a data-availability rule **does** spend a D4 trial).
 
+**The §2 UNMEASURABLE tie-break is not a third trial.** It alters neither the statistic nor
+the cross-section nor the split; it makes an outcome boundary #707 left implicit executable, it
+was fixed before the out-of-sample arm was scored, and it did not bind on the verdict — the
+spread's *sign* decides this study, and would decide it identically at any tie-break value.
+
 **One lookback: 12 months.** No second window was computed. The "ten or twenty years" in the
 original framing is about *sample length*, not a search over the lookback, and #707 instructs
 that a request to try both and pick be refused. The bracket stays frozen per ADR-0018 D4.
@@ -101,13 +110,14 @@ Realised, after the 12-month trailing window and the 20-name floor:
 
 | arm | months in arm | months scored | names/month |
 | --- | --- | --- | --- |
-| in sample (≤2022) | 84 | **72** (2017-01 → 2022-12) | 21–25 |
+| in sample (≤2022) | 84 | **72** (2017-01 → 2022-12) | 20–25 |
 | out of sample (≥2023) | 43 | **43** (2023-01 → 2026-07) | 25–26 |
 
 The twelve dropped months are **2016 in its entirety**, dropped by the trailing window rather
 than by the floor: no name has a full 12-month history before 2017-01. **No month from 2017-01
 onward falls below the 20-name floor**, so the floor excludes nothing in either arm — it is
-declared and applied to both arms identically, and it binds on neither. First scoreable month
+declared and applied to both arms identically, and it binds on neither. It comes closest in
+2017–2019, where exactly 20 names are available and the floor is met on the boundary. First scoreable month
 2017-01, out-of-sample 43 months, both as #707's own arithmetic anticipated.
 
 ARM is an out-of-sample-only name by construction (first bar 2023-09-14) and enters the
@@ -115,13 +125,26 @@ cross-section from 2024-09, once its 12-month trailing window is populated. Per 
 per-name figures are never pooled across the unequal windows and none are reported here.
 
 **Data check, run before either arm was scored.** All 26 symbols returned bars over the declared
-window; 21 carry the full 2,659 sessions, and the five that do not begin at their listing
-(ARM 2023-09-14, COIN 2021-04-14, PLTR 2020-09-30, UBER 2019-05-10, MRNA 2018-12-07). **NIO,
-which #707 lists among the post-2016 names, in fact serves the full 2,659 bars from
-2016-01-04** — the ticket's count of six late names is five. **XYZ (Block, renamed from SQ)
-serves the full history under the current ticker**, so the rename needed no handling and none
-was applied. Two daily
-`|(c−o)/o| > 30%` values exist in the whole panel, both NIO and both genuine tape
+window. Twenty carry the full 2,659 sessions; six begin at their listing, exactly the six
+#707 names — ARM 2023-09-14, COIN 2021-04-14, PLTR 2020-09-30, UBER 2019-05-10, MRNA
+2018-12-07, **NIO 2018-09-12**.
+
+**NIO needed a data-provenance correction, and it is not a method change.** Alpaca serves
+2,659 NIO bars back to 2016-01-04, but NIO listed on the NYSE on **2018-09-12**: the earlier
+tape belongs to a previous holder of the ticker — real prices around \$14 with real volume
+through 2016–2018, then four zero-volume flat 14.67 bars immediately before the IPO, then the
+genuine listing session (open 6.05). Those bars are not the instrument being ranked, so they
+are not its data; the script's `FIRST_ELIGIBLE` table and its zero-volume drop are what make
+"the instrument's own tape" true, and the declared availability rule is then applied to that
+tape unchanged. **Effect: the out-of-sample arm and the verdict are unaffected** (NIO is fully
+available throughout 2023–2026 either way); the in-sample arm loses one name in 2017–2019, so
+§5's dispersion and MDE are reported on the corrected panel. No other name in the pool needed
+one: all twenty full-history names were trading under their current ticker on 2016-01-04, and
+**XYZ (Block, renamed from SQ) back-maps correctly** — ~\$12 on real volume in January 2016,
+which is where Square traded. Zero-volume bars: four in the whole panel, all NIO's pre-IPO run,
+all already outside its eligible window.
+
+Two daily `|(c−o)/o| > 30%` values exist in the whole panel, both NIO and both genuine tape
 (2018-09-13 +75.2% on the listing-year squeeze; 2019-10-02 +33.6% off a $1.19 open). No
 split-adjustment corruption: `adjustment=all` is set and both legs of the ratio carry the same
 factor.
@@ -131,22 +154,25 @@ factor.
 Dispersion from the **in-sample** arm; sample size from the **out-of-sample** arm — using the
 in-sample month count would report the power of a test that is not being run.
 
-In-sample spread series, 72 months: mean **+0.0529 %/session**, sd **0.3282**, se 0.0387,
-t = +1.367. (Recorded for the MDE only. The in-sample arm is not a result: it is the arm the
+In-sample spread series, 72 months: mean **+0.0364 %/session**, sd **0.3339**, se 0.0394,
+t = +0.926. (Recorded for the MDE only. The in-sample arm is not a result: it is the arm the
 statistic was declared over, and it does not clear `t ≥ 2.0` either.)
 
 ```
 MDE = (z_0.975 + z_0.80) × sd_IS / √M_OOS
-    = (1.9600 + 0.8416) × 0.3282 / √43
-    = 2.8016 × 0.3282 / 6.5574
-    = 0.1402 %/session
+    = (1.9600 + 0.8416) × 0.3339 / √43
+    = 2.8016 × 0.3339 / 6.5574
+    = 0.1427 %/session
 ```
 
-**MDE = 0.1402 %/session** — the smallest true top-minus-bottom spread this design detects at
-80% power, 5% two-sided, over the 43 out-of-sample months.
+**MDE = 0.1427 %/session** — the smallest true top-minus-bottom spread this design detects at
+80% power, 5% two-sided, over the 43 out-of-sample months. (The pre-registration commit recorded
+0.1402 on the uncorrected panel; §4's NIO correction moved the in-sample sd from 0.3282 to
+0.3339. The conclusion of this section is unchanged at either value, and the out-of-sample arm
+is untouched by the correction.)
 
-**Against the tie-break declared in §2: 0.1402 < 0.757, so UNMEASURABLE cannot fire.** The
-design has power across the entire plausible effect range — it would detect an effect **5.4×
+**Against the tie-break declared in §2: 0.1427 < 0.757, so UNMEASURABLE cannot fire.** The
+design has power across the entire plausible effect range — it would detect an effect **5.3×
 smaller** than the best-minus-worst single-name gross drift gap doc 52 measured on the same
 pool over an overlapping window. Whatever the out-of-sample arm returns, it will be a result and
 not an absence of one. (Doc 51's precedent runs the other way: there the MDE, 2.72 / 1.95 pp,
@@ -164,8 +190,8 @@ Out of sample, **43 months, 2023-01 → 2026-07**, 25–26 names a month, quinti
 | top quintile, absolute | **+0.0550** | — | 0.0604 | +0.912 |
 | bottom quintile, absolute | +0.0797 | — | 0.0513 | +1.552 |
 
-**The spread is negative and indistinguishable from zero.** Its magnitude is **5.7× smaller than
-the 0.1402 MDE** and it sits 0.44 standard errors below zero — the names the trailing 12-month
+**The spread is negative and indistinguishable from zero.** Its magnitude is **5.8× smaller than
+the 0.1427 MDE** and it sits 0.44 standard errors below zero — the names the trailing 12-month
 open-to-close mean ranked *highest* went on to return slightly *less*, open-to-close, than the
 names it ranked lowest. Month by month the sign is a coin flip: **21 of 43 months positive, 22
 negative.** The two largest monthly spreads are consecutive and opposite (2026-06 **+1.12**,
@@ -176,12 +202,12 @@ Both quintiles' absolute expectancies are positive and statistically alike (+0.0
 open-to-close over 2023–2026 by roughly +0.07 %/session, and the ranking sorted essentially none
 of that drift between the ends.
 
-The in-sample arm did not carry the effect either: +0.0529 %/session at **t = +1.37** over 72
-months (§5), already short of the declared bar on the arm the statistic was registered over. So
+The in-sample arm did not carry the effect either: +0.0364 %/session at **t = +0.93** over 72
+months (§5), nowhere near the declared bar on the arm the statistic was registered over. So
 this is not an in-sample effect decaying out of sample. It is an effect that was never there,
 and it changed sign when it crossed the split.
 
-Realised out-of-sample sd is 0.3708 %/session against the 0.3282 the in-sample arm supplied to
+Realised out-of-sample sd is 0.3708 %/session against the 0.3339 the in-sample arm supplied to
 the MDE, so the arm actually run was marginally *less* powered than the declaration assumed
 (a like-for-like MDE on realised dispersion is 0.1584 %/session — still 4.8× below the 0.757
 bound, so the §2 tie-break is unaffected either way).
@@ -205,8 +231,8 @@ Against the four outcomes exactly as declared in §2, in the order declared:
   [#750](https://github.com/dd-jp/samurai-trading-system/issues/750)'s two-sided reach-rate
   band. Had this landed PARTIAL the write-up would have owed that composition rule; writing one
   against a rejected result would be building on it, so none is written.
-* **UNMEASURABLE** was pre-bound in §2 to `MDE > 0.757 %/session`. **MDE = 0.1402.** The design
-  detects an effect **5.4× smaller** than the best-minus-worst gross-drift gap doc 52 measured
+* **UNMEASURABLE** was pre-bound in §2 to `MDE > 0.757 %/session`. **MDE = 0.1427.** The design
+  detects an effect **5.3× smaller** than the best-minus-worst gross-drift gap doc 52 measured
   on this same pool over an overlapping window. Not UNMEASURABLE. Doc 51's *"cannot be settled
   here"* precedent does not apply here — there the MDE exceeded the adopt bar; here it is far
   below the plausibility bound.
