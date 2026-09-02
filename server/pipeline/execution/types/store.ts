@@ -317,6 +317,39 @@ export interface FlattenAttribution {
    * written before that migration, which recorded no such reason.
    */
   exit_reason: ExitReason | null;
+  /**
+   * #1001: the modelled cost breakdown captured at the flatten's own
+   * submit time (`FlattenSubmissionWriteAhead.modelled_cost_breakdown`) —
+   * what `redistributeOneFlatten` (ingest-fills.ts) prorates by each named
+   * lot's share and attaches to that lot's split exit fill, since the venue
+   * reports no breakdown of its own. `null` for a flatten row written before
+   * migration 0037, or whose submit-time capture failed.
+   */
+  modelled_cost_breakdown: {
+    spread_cost: number;
+    commission: number;
+    slippage: number;
+    market_impact: number;
+  } | null;
+  /**
+   * #1014 review, finding 3: the quantity the flatten was SUBMITTED for —
+   * `flatten_submissions.size`, the denominator `modelled_cost_breakdown` was
+   * priced against (`captureSubmitSnapshot` passes `order.size`).
+   *
+   * Load-bearing, not informational. `redistributeOneFlatten` prorates the
+   * breakdown across the lots a raw fill is split into, and its `share` is
+   * `take / rawFill.qty` — this lot's slice of THAT RAW FILL, which sums to
+   * 1.0 per raw fill. Correct for `fee` (a per-raw-fill actual) and WRONG for
+   * the breakdown (a per-SUBMISSION estimate): a flatten filled in two
+   * partial raw fills would distribute the whole snapshot twice, so the
+   * summed modelled cost across the flatten's fills would come to a multiple
+   * of the one estimate it is supposed to reconstruct. Prorating against this
+   * `size` instead makes the shares sum to 1.0 across the whole submission,
+   * however many raw fills the venue splits it into (and to less than 1.0 if
+   * it under-fills, which is the honest reading — the unfilled remainder cost
+   * nothing).
+   */
+  size: number;
 }
 
 /** One poll's atomic advance of a single lot — see `SharedStore.applyLotAdvance`. */
@@ -368,4 +401,24 @@ export interface FlattenSubmissionWriteAhead {
    * rather than defaulting silently.
    */
   exit_reason: ExitReason;
+  /**
+   * #1001's submit-time snapshot, mirroring `OpenPosition`'s own fields of
+   * the same name (records.ts) — see there for what each one is. `null`
+   * rather than omitted (unlike the read-side `OpenPosition`/`Fill` optional
+   * fields): `captureSubmitSnapshot` (execute.ts) always returns a value for
+   * every one of these, sometimes null when the best-effort capture failed
+   * or was skipped (`order.metadata.unpriced_exit`), so the write-ahead call
+   * site never has a "not yet known" case to omit.
+   */
+  decision_price: number | null;
+  quote_bid: number | null;
+  quote_ask: number | null;
+  quote_mid: number | null;
+  quote_observed_at: Date | null;
+  modelled_cost_breakdown: {
+    spread_cost: number;
+    commission: number;
+    slippage: number;
+    market_impact: number;
+  } | null;
 }

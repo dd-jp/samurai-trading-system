@@ -611,6 +611,12 @@ describe('ExecutionImpl.ingestFills', () => {
           { idempotency_key: 'key-2', held: 4 },
         ],
         exit_reason: 'flatten',
+        decision_price: null,
+        quote_bid: null,
+        quote_ask: null,
+        quote_mid: null,
+        quote_observed_at: null,
+        modelled_cost_breakdown: null,
       });
       // The raw fill (qty 6) exactly covers key-1's own share, leaving
       // key-2 with ZERO — named by the flatten, but with no new fill of its
@@ -702,6 +708,12 @@ describe('ExecutionImpl.ingestFills', () => {
           { idempotency_key: 'key-2', held: 4 },
         ],
         exit_reason: 'flatten',
+        decision_price: null,
+        quote_bid: null,
+        quote_ask: null,
+        quote_mid: null,
+        quote_observed_at: null,
+        modelled_cost_breakdown: null,
       });
       const withFlatten = new ScriptedBroker([
         fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 6 }),
@@ -820,6 +832,12 @@ describe('ExecutionImpl.ingestFills', () => {
         submitted_at: OPENED_AT,
         lot_held_quantities: [{ idempotency_key: 'key-1', held: 10 }],
         exit_reason: 'flatten',
+        decision_price: null,
+        quote_bid: null,
+        quote_ask: null,
+        quote_mid: null,
+        quote_observed_at: null,
+        modelled_cost_breakdown: null,
       });
       // NULLed to a pre-migration-0021 row, which is the one shape that still
       // routes the split through `getEntryFillSizes` — the only `await`
@@ -876,6 +894,12 @@ describe('ExecutionImpl.ingestFills', () => {
         submitted_at: OPENED_AT,
         lot_held_quantities: [{ idempotency_key: 'key-1', held: 10 }],
         exit_reason: 'flatten',
+        decision_price: null,
+        quote_bid: null,
+        quote_ask: null,
+        quote_mid: null,
+        quote_observed_at: null,
+        modelled_cost_breakdown: null,
       });
       const withFlatten = new ScriptedBroker([
         fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
@@ -928,6 +952,12 @@ describe('ExecutionImpl.ingestFills', () => {
         submitted_at: OPENED_AT,
         lot_held_quantities: [{ idempotency_key: 'key-1', held: 10 }],
         exit_reason: 'flatten',
+        decision_price: null,
+        quote_bid: null,
+        quote_ask: null,
+        quote_mid: null,
+        quote_observed_at: null,
+        modelled_cost_breakdown: null,
       });
       const withFlatten = new ScriptedBroker([
         fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
@@ -978,6 +1008,12 @@ describe('ExecutionImpl.ingestFills', () => {
         submitted_at: OPENED_AT,
         lot_held_quantities: [{ idempotency_key: 'key-1', held: 10 }],
         exit_reason: 'flatten',
+        decision_price: null,
+        quote_bid: null,
+        quote_ask: null,
+        quote_mid: null,
+        quote_observed_at: null,
+        modelled_cost_breakdown: null,
       });
       // NULLed to a pre-migration-0021 row, routing the split through the
       // now-flaky `getEntryFillSizes` fallback — same technique the existing
@@ -1061,6 +1097,12 @@ describe('ExecutionImpl.ingestFills', () => {
         submitted_at: OPENED_AT,
         lot_held_quantities: [{ idempotency_key: 'key-1', held: 10 }],
         exit_reason: 'flatten',
+        decision_price: null,
+        quote_bid: null,
+        quote_ask: null,
+        quote_mid: null,
+        quote_observed_at: null,
+        modelled_cost_breakdown: null,
       });
       // Acked, as `executeExit` always resolves it synchronously right after
       // `submitFlatten` returns, before any poll ever runs — a row still at
@@ -1132,6 +1174,12 @@ describe('ExecutionImpl.ingestFills', () => {
         submitted_at: OPENED_AT,
         lot_held_quantities: [{ idempotency_key: 'key-1', held: 10 }],
         exit_reason: 'flatten',
+        decision_price: null,
+        quote_bid: null,
+        quote_ask: null,
+        quote_mid: null,
+        quote_observed_at: null,
+        modelled_cost_breakdown: null,
       });
       // Acked, as `executeExit` always resolves it synchronously right after
       // `submitFlatten` returns, before any poll ever runs.
@@ -1210,6 +1258,12 @@ describe('ExecutionImpl.ingestFills', () => {
         submitted_at: OPENED_AT,
         lot_held_quantities: [{ idempotency_key: 'key-1', held: 6 }],
         exit_reason: 'flatten',
+        decision_price: null,
+        quote_bid: null,
+        quote_ask: null,
+        quote_mid: null,
+        quote_observed_at: null,
+        modelled_cost_breakdown: null,
       });
 
       const withFlatten = new ScriptedBroker([
@@ -1262,6 +1316,12 @@ describe('ExecutionImpl.ingestFills', () => {
         submitted_at: OPENED_AT,
         lot_held_quantities: [{ idempotency_key: 'key-1', held: 6 }],
         exit_reason: 'flatten',
+        decision_price: null,
+        quote_bid: null,
+        quote_ask: null,
+        quote_mid: null,
+        quote_observed_at: null,
+        modelled_cost_breakdown: null,
       });
 
       // A single scripted broker, polled TWICE: `fetchNewFills` re-offers the
@@ -1313,6 +1373,12 @@ describe('ExecutionImpl.ingestFills', () => {
         submitted_at: OPENED_AT,
         lot_held_quantities: [{ idempotency_key: 'key-1', held: 10 }],
         exit_reason: 'flatten',
+        decision_price: null,
+        quote_bid: null,
+        quote_ask: null,
+        quote_mid: null,
+        quote_observed_at: null,
+        modelled_cost_breakdown: null,
       });
 
       const withFlatten = new ScriptedBroker([
@@ -1352,6 +1418,12 @@ describe('ExecutionImpl.ingestFills', () => {
         submitted_at: OPENED_AT,
         lot_held_quantities: [{ idempotency_key: 'key-1', held: 6 }],
         exit_reason: 'flatten',
+        decision_price: null,
+        quote_bid: null,
+        quote_ask: null,
+        quote_mid: null,
+        quote_observed_at: null,
+        modelled_cost_breakdown: null,
       });
       const withFlatten = new ScriptedBroker([
         fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
@@ -1647,5 +1719,326 @@ describe('ExecutionImpl.ingestFills — cumulative partial fills (#842)', () => 
 
     expect((await store.getPosition('key-1'))?.order_state).toBe('closed');
     expect(await store.getClosedTrades()).toHaveLength(1);
+  });
+});
+
+/**
+ * #1001: `cost_breakdown_json` on real-broker fills. The Simulated adapter
+ * always prices its own fills through `CostModel.fill` directly, so
+ * `NormalizedFill.cost_breakdown` is already set on that path — these tests
+ * are all about the OTHER path, where the broker reports no breakdown of its
+ * own (`fill.cost_breakdown === undefined`, always true for a real broker)
+ * and `toFill()` falls back to the submit-time modelled snapshot instead:
+ * `OpenPosition.modelled_cost_breakdown` for an `'entry'` leg,
+ * `FlattenAttribution.modelled_cost_breakdown` for a flatten's `'exit'` leg
+ * — each prorated by this fill's share of the size the snapshot was modelled
+ * against. Scoped to entry + flatten-exit only, deliberately: the Simulated
+ * adapter itself never models `'stop'`/`'target'` fills either
+ * (`simulated-adapter.ts`), so there is no fallback for those.
+ */
+describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#1001)', () => {
+  const modelledCostBreakdown = {
+    spread_cost: 0.5,
+    commission: 1,
+    slippage: 0.25,
+    market_impact: 0.1,
+  };
+
+  /** Float-tolerant equality — `prorateCostBreakdown` multiplies by a share, so exact decimal equality is not guaranteed. */
+  function expectCostBreakdownCloseTo(
+    actual:
+      | { spread_cost: number; commission: number; slippage: number; market_impact: number }
+      | undefined,
+    expected: { spread_cost: number; commission: number; slippage: number; market_impact: number },
+  ): void {
+    expect(actual).toBeDefined();
+    expect(actual?.spread_cost).toBeCloseTo(expected.spread_cost, 9);
+    expect(actual?.commission).toBeCloseTo(expected.commission, 9);
+    expect(actual?.slippage).toBeCloseTo(expected.slippage, 9);
+    expect(actual?.market_impact).toBeCloseTo(expected.market_impact, 9);
+  }
+
+  it('prorates the modelled entry cost breakdown across two partial entry fills, by each fill share of requested_size', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, {
+      requested_size: 10,
+      modelled_cost_breakdown: modelledCostBreakdown,
+    });
+    const broker = new ScriptedBroker([
+      fill({ broker_fill_id: 'e1', leg: 'entry', qty: 4, price: 100 }),
+      fill({
+        broker_fill_id: 'e2',
+        leg: 'entry',
+        qty: 6,
+        price: 101,
+        timestamp: new Date('2026-07-20T15:15:00Z'),
+      }),
+    ]);
+
+    await new ExecutionImpl(makeInput(broker, store)).ingestFills();
+
+    const fills = await store.getFills('key-1');
+    const e1 = fills.find((row) => row.broker_fill_id === 'e1');
+    const e2 = fills.find((row) => row.broker_fill_id === 'e2');
+    // share = 4/10 and 6/10 of the modelled breakdown, linearly.
+    expectCostBreakdownCloseTo(e1?.cost_breakdown, {
+      spread_cost: 0.2,
+      commission: 0.4,
+      slippage: 0.1,
+      market_impact: 0.04,
+    });
+    expectCostBreakdownCloseTo(e2?.cost_breakdown, {
+      spread_cost: 0.3,
+      commission: 0.6,
+      slippage: 0.15,
+      market_impact: 0.06,
+    });
+  });
+
+  it('leaves cost_breakdown unset on an entry fill when the lot carries no modelled snapshot', async () => {
+    const { store } = openTestExecutionStore();
+    // No `modelled_cost_breakdown` override — a pre-migration-0037 row, or a
+    // submit-time capture that failed.
+    await seedPosition(store, { requested_size: 10 });
+    const broker = new ScriptedBroker([fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10 })]);
+
+    await new ExecutionImpl(makeInput(broker, store)).ingestFills();
+
+    const fills = await store.getFills('key-1');
+    expect(fills[0]?.cost_breakdown).toBeUndefined();
+  });
+
+  it('prefers the broker fill own cost_breakdown over the modelled fallback when both are present', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, {
+      requested_size: 10,
+      modelled_cost_breakdown: modelledCostBreakdown,
+    });
+    const ownBreakdown = { spread_cost: 9, commission: 9, slippage: 9, market_impact: 9 };
+    const broker = new ScriptedBroker([
+      fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, cost_breakdown: ownBreakdown }),
+    ]);
+
+    await new ExecutionImpl(makeInput(broker, store)).ingestFills();
+
+    const fills = await store.getFills('key-1');
+    expect(fills[0]?.cost_breakdown).toEqual(ownBreakdown);
+  });
+
+  it('never falls back for a stop/target leg fill, even when the lot carries a modelled entry snapshot', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, {
+      requested_size: 10,
+      side: 'buy',
+      stop: 95,
+      modelled_cost_breakdown: modelledCostBreakdown,
+    });
+    const broker = new ScriptedBroker([
+      fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+      fill({
+        broker_fill_id: 's1',
+        leg: 'stop',
+        qty: 10,
+        price: 95,
+        timestamp: new Date('2026-07-20T15:30:00Z'),
+      }),
+    ]);
+
+    await new ExecutionImpl(makeInput(broker, store)).ingestFills();
+
+    const fills = await store.getFills('key-1');
+    const stopFill = fills.find((row) => row.broker_fill_id === 's1');
+    expect(stopFill?.cost_breakdown).toBeUndefined();
+  });
+
+  it('prorates the flatten own modelled cost breakdown across a FIFO split exit fill, by each lot share of the raw fill', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, {
+      idempotency_key: 'key-1',
+      requested_size: 6,
+      opened_at: OPENED_AT,
+    });
+    await seedPosition(store, {
+      idempotency_key: 'key-2',
+      requested_size: 4,
+      opened_at: new Date(OPENED_AT.getTime() + 1_000),
+    });
+    const entryOnly = new ScriptedBroker([
+      fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 6 }),
+      fill({ client_order_id: 'key-2', broker_fill_id: 'e2', leg: 'entry', qty: 4 }),
+    ]);
+    await new ExecutionImpl(makeInput(entryOnly, store)).ingestFills();
+
+    await store.writeAheadFlatten({
+      idempotency_key: 'flatten-1',
+      instrument: 'AAPL',
+      asset_class: 'stocks',
+      side: 'sell',
+      size: 10,
+      submitted_at: OPENED_AT,
+      lot_held_quantities: [
+        { idempotency_key: 'key-1', held: 6 },
+        { idempotency_key: 'key-2', held: 4 },
+      ],
+      exit_reason: 'flatten',
+      decision_price: 100,
+      quote_bid: null,
+      quote_ask: null,
+      quote_mid: null,
+      quote_observed_at: null,
+      modelled_cost_breakdown: modelledCostBreakdown,
+    });
+
+    const withFlatten = new ScriptedBroker([
+      fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 6 }),
+      fill({ client_order_id: 'key-2', broker_fill_id: 'e2', leg: 'entry', qty: 4 }),
+      // A single raw exit fill covering the whole 10 — FIFO-allocates 6 to
+      // key-1 and 4 to key-2 (`redistributeOneFlatten`).
+      fill({
+        client_order_id: 'flatten-1',
+        broker_fill_id: 'f1',
+        leg: 'exit',
+        qty: 10,
+        timestamp: new Date('2026-07-20T15:30:00Z'),
+      }),
+    ]);
+
+    await new ExecutionImpl(makeInput(withFlatten, store)).ingestFills();
+
+    const key1Fills = await store.getFills('key-1');
+    const key2Fills = await store.getFills('key-2');
+    const key1Exit = key1Fills.find((row) => row.leg === 'exit');
+    const key2Exit = key2Fills.find((row) => row.leg === 'exit');
+    // share = 6/10 and 4/10 of the flatten's modelled breakdown.
+    expectCostBreakdownCloseTo(key1Exit?.cost_breakdown, {
+      spread_cost: 0.3,
+      commission: 0.6,
+      slippage: 0.15,
+      market_impact: 0.06,
+    });
+    expectCostBreakdownCloseTo(key2Exit?.cost_breakdown, {
+      spread_cost: 0.2,
+      commission: 0.4,
+      slippage: 0.1,
+      market_impact: 0.04,
+    });
+    // #1001: both split rows carry the FLATTEN's own key, not the lot's own
+    // (already `idempotency_key` on these rows) — the join back to
+    // `flatten_submissions` this column exists for.
+    expect(key1Exit?.flatten_idempotency_key).toBe('flatten-1');
+    expect(key2Exit?.flatten_idempotency_key).toBe('flatten-1');
+  });
+
+  /**
+   * #1014 review, finding 3 — the proration BASIS, red-checked against the
+   * pre-fix code: this test failed with every component exactly DOUBLE the
+   * snapshot before `redistributeOneFlatten` switched its denominator from
+   * `rawFill.qty` to `attribution.size`.
+   *
+   * `share` (`take / rawFill.qty`) sums to 1.0 PER RAW FILL, which is right
+   * for `fee` — the venue reports a fee per raw fill — and wrong for
+   * `modelled_cost_breakdown`, which was priced ONCE against the whole
+   * submitted size. So a flatten the venue splits into two partial raw fills
+   * distributed the entire snapshot twice, and the summed modelled cost over
+   * the flatten's fills came to a multiple of the single estimate it exists
+   * to reconstruct — silently overstating modelled cost in exactly the query
+   * #1001 was built to answer.
+   *
+   * One lot and two raw fills, deliberately: it isolates the SUBMISSION-level
+   * basis from the lot-level split the test above already covers.
+   */
+  it('sums to exactly ONE snapshot across two partial raw fills of the same flatten, not one per raw fill', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10 });
+    const entryOnly = new ScriptedBroker([
+      fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+    ]);
+    await new ExecutionImpl(makeInput(entryOnly, store)).ingestFills();
+
+    await store.writeAheadFlatten({
+      idempotency_key: 'flatten-1',
+      instrument: 'AAPL',
+      asset_class: 'stocks',
+      side: 'sell',
+      size: 10,
+      submitted_at: OPENED_AT,
+      lot_held_quantities: [{ idempotency_key: 'key-1', held: 10 }],
+      exit_reason: 'flatten',
+      decision_price: 100,
+      quote_bid: null,
+      quote_ask: null,
+      quote_mid: null,
+      quote_observed_at: null,
+      modelled_cost_breakdown: modelledCostBreakdown,
+    });
+
+    const withFlatten = new ScriptedBroker([
+      fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+      // ONE flatten submission for 10, filled by the venue in two partial raw
+      // fills of 5. Each is its own `rawFill`, so each ran its own
+      // 100%-of-the-snapshot allocation under the old basis.
+      fill({
+        client_order_id: 'flatten-1',
+        broker_fill_id: 'f1',
+        leg: 'exit',
+        qty: 5,
+        timestamp: new Date('2026-07-20T15:30:00Z'),
+      }),
+      fill({
+        client_order_id: 'flatten-1',
+        broker_fill_id: 'f2',
+        leg: 'exit',
+        qty: 5,
+        timestamp: new Date('2026-07-20T15:31:00Z'),
+      }),
+    ]);
+
+    await new ExecutionImpl(makeInput(withFlatten, store)).ingestFills();
+
+    const exits = (await store.getFills('key-1')).filter((row) => row.leg === 'exit');
+    expect(exits).toHaveLength(2);
+    // Each raw fill is 5 of the submitted 10, so each carries HALF.
+    for (const row of exits) {
+      expectCostBreakdownCloseTo(row.cost_breakdown, {
+        spread_cost: modelledCostBreakdown.spread_cost / 2,
+        commission: modelledCostBreakdown.commission / 2,
+        slippage: modelledCostBreakdown.slippage / 2,
+        market_impact: modelledCostBreakdown.market_impact / 2,
+      });
+    }
+    // The property the review actually asked for: SUMMED, the modelled cost
+    // across the flatten's fills EQUALS the one snapshot — never exceeds it.
+    const summed = exits.reduce(
+      (total, row) => ({
+        spread_cost: total.spread_cost + (row.cost_breakdown?.spread_cost ?? 0),
+        commission: total.commission + (row.cost_breakdown?.commission ?? 0),
+        slippage: total.slippage + (row.cost_breakdown?.slippage ?? 0),
+        market_impact: total.market_impact + (row.cost_breakdown?.market_impact ?? 0),
+      }),
+      { spread_cost: 0, commission: 0, slippage: 0, market_impact: 0 },
+    );
+    expectCostBreakdownCloseTo(summed, modelledCostBreakdown);
+  });
+
+  it('leaves flatten_idempotency_key unset on entry/stop/target fills — only a flatten-produced exit fill carries one', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 10, side: 'buy', stop: 95 });
+    const broker = new ScriptedBroker([
+      fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+      fill({
+        broker_fill_id: 's1',
+        leg: 'stop',
+        qty: 10,
+        price: 95,
+        timestamp: new Date('2026-07-20T15:30:00Z'),
+      }),
+    ]);
+
+    await new ExecutionImpl(makeInput(broker, store)).ingestFills();
+
+    const fills = await store.getFills('key-1');
+    for (const row of fills) {
+      expect(row.flatten_idempotency_key).toBeUndefined();
+    }
   });
 });

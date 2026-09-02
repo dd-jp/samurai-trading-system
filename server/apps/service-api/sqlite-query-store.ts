@@ -151,8 +151,11 @@ interface AttributionRow extends ClosedTradeRow {
 
 /**
  * One `fills` row, the columns `getFillsForTrades` reads — deliberately
- * excludes `cost_breakdown_json`, which is a Simulated-adapter-only backtest
- * artifact (0001_init.sql) with no wire shape and no operator use here.
+ * excludes `cost_breakdown_json`. Populated on Simulated-adapter fills and
+ * (#1001) on real-broker `'entry'`/`'exit'` fills from a submit-time
+ * modelled snapshot (0001_init.sql, 0037_submit_time_quote_and_decision_price.sql),
+ * but still an internal modelling/validation artifact with no operator use
+ * on this dashboard read — not the realised cost this table otherwise shows.
  */
 interface FillRowSql {
   idempotency_key: string;

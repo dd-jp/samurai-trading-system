@@ -50,6 +50,7 @@ function makeMarketData(barsByInstrument: Record<string, Bar[]>): MarketDataServ
       throw new Error('not used in these tests');
     }),
     getSpreadEstimate: vi.fn(async (_i: string, _a: Date): Promise<number | null> => null),
+    getQuote: vi.fn(async (_i: string, _a: Date): Promise<null> => null),
     getADV: vi.fn(async (_i: string, _w: BarWindow, _a: Date): Promise<number> => 0),
   };
 }

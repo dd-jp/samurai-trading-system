@@ -13,8 +13,10 @@ import {
   logCaughtFailure,
   type OpenPosition,
   type OrderIntent,
+  safeLog,
   totalHeldQuantity,
 } from '../../shared/index.js';
+import type { CostBreakdown, FillRequest, MarketState } from '../../tools/backtest/index.js';
 import type { VerdictDecision } from '../verdict/index.js';
 import { ingestFills } from './ingest-fills.js';
 import { reconcile } from './reconcile.js';
@@ -138,6 +140,12 @@ export class ExecutionImpl implements Execution {
       time_in_force: order.time_in_force,
     };
 
+    // #1001: best-effort snapshot — see `captureSubmitSnapshot`'s doc. Read
+    // BEFORE the write-ahead so the snapshot lands in the same durable row a
+    // crash-restart would recover, not bolted on after the fact. Deliberately
+    // UNBOUNDED here, unlike the exit path: an entry is not racing the close.
+    const snapshot = await captureSubmitSnapshot(this.input, order, now);
+
     const position: OpenPosition = {
       idempotency_key: idempotencyKey,
       debate_id: order.metadata.debate_id,
@@ -156,6 +164,21 @@ export class ExecutionImpl implements Execution {
       decision_timestamp: order.decision_timestamp,
       conviction: order.metadata.conviction,
       converged: order.metadata.converged,
+      // #1014 review: omitted (not `null`) when there is none, matching every
+      // other optional snapshot field below. `decisionPriceFor` only ever
+      // returns null on the unpriced-exit path, which never reaches here —
+      // an exit builds no `OpenPosition` — but the type is honest about it
+      // rather than asserting a value the function does not promise.
+      ...(snapshot.decision_price === null ? {} : { decision_price: snapshot.decision_price }),
+      ...(snapshot.quote_bid === null ? {} : { quote_bid: snapshot.quote_bid }),
+      ...(snapshot.quote_ask === null ? {} : { quote_ask: snapshot.quote_ask }),
+      ...(snapshot.quote_mid === null ? {} : { quote_mid: snapshot.quote_mid }),
+      ...(snapshot.quote_observed_at === null
+        ? {}
+        : { quote_observed_at: snapshot.quote_observed_at }),
+      ...(snapshot.modelled_cost_breakdown === null
+        ? {}
+        : { modelled_cost_breakdown: snapshot.modelled_cost_breakdown }),
     };
 
     // Write-ahead: `pending` is durable BEFORE the broker call, so a crash in
@@ -206,6 +229,314 @@ export class ExecutionImpl implements Execution {
       broker_order_ids: ack.broker_order_ids,
     });
   }
+}
+
+/**
+ * The whole latency budget #1001's submit-time snapshot may spend on the EXIT
+ * path, where `executeExit` is running the mandatory flat-by-close flatten.
+ *
+ * Two seconds, deliberately an order of magnitude under the ~30s single-read
+ * budget #826 (verdict/index.ts) already judged too expensive to pay in this
+ * window — the point is that the feature's worst-case contribution to the time
+ * before a flatten reaches the broker stays small and BOUNDED, not that a slow
+ * feed still gets its sample in. A healthy quote read returns in tens of
+ * milliseconds, so this never binds in the normal case.
+ *
+ * There is no matching bound on the bracket (entry) path: nothing there is
+ * racing a session close, and an entry that arrives late is an entry not
+ * taken, not a position left open overnight.
+ */
+const EXIT_SNAPSHOT_BUDGET_MS = 2_000;
+
+/**
+ * The submit-time snapshot #1001 captures alongside every write-ahead —
+ * `decision_price` plus a best-effort quote and modelled cost breakdown. See
+ * `captureSubmitSnapshot` below for how each field is produced.
+ */
+interface SubmitSnapshot {
+  decision_price: number | null;
+  quote_bid: number | null;
+  quote_ask: number | null;
+  quote_mid: number | null;
+  quote_observed_at: Date | null;
+  modelled_cost_breakdown: CostBreakdown | null;
+}
+
+/**
+ * #1001: what the system believed immediately before submitting an order —
+ * the price the Trader's decision was formed at, the venue's own bid/ask (if
+ * the instrument's data source quotes one), and a modelled cost breakdown
+ * priced the same way the Simulated adapter prices one
+ * (`SimulatedBrokerAdapter.buildMarketState` + `CostModel.fill`), so a
+ * real-broker fill has something honest to diff its realized price against.
+ *
+ * BEST-EFFORT — this is instrumentation, not a trading decision.
+ * `decision_price` alone needs no I/O (`order.entry` is already in hand), so
+ * it is always populated; the quote and cost-model reads are each wrapped in
+ * their OWN try/catch, independently, so a failure in one does not cost the
+ * other. Every failure degrades to `null` and is logged, never thrown: no
+ * read here may refuse an order. The reads are skipped entirely when
+ * `order.metadata.unpriced_exit` is set: that flag already means the feed was
+ * dark THIS tick (`readExitPrice`, trader/decide.ts) — re-probing it here
+ * would only be a second chance for the same feed to hang, inside the one
+ * window (#826) a hang must never widen.
+ *
+ * NOT "never blocking" — an earlier revision of this comment claimed that, and
+ * it was false. These reads are `await`ed inline before the caller's
+ * write-ahead, and every one of them routes through `fetchWithTimeout` (10s
+ * per attempt) under `withRetry` (3 attempts), so a stalled feed costs roughly
+ * 30s on the quote read and another ~30s on the `Promise.all` cost-model
+ * group. On the bracket (entry) path that is tolerable: nothing there is
+ * racing a session close. On the EXIT path it is not — `executeExit` runs the
+ * mandatory flat-by-close flatten, and #826's own reasoning (verdict/index.ts)
+ * treats ONE ~30s stalled read as a cost worth deliberately refusing "on the
+ * tick that is trying to get flat before the close". Unbounded, this function
+ * would pay two such budgets there, doubling the exposure #826 exists to
+ * prevent.
+ *
+ * So `budget_ms` bounds the WHOLE capture, and `executeExit` is the only
+ * caller that passes one (`EXIT_SNAPSHOT_BUDGET_MS`). The deadline RESOLVES to
+ * the all-null snapshot rather than rejecting, so `decision_price` — the field
+ * the #1001 acceptance query actually needs and the only one costing no I/O —
+ * survives a stall intact. What a stall costs is the `quote_bid/ask/mid` and
+ * `modelled_cost_breakdown` sample for that one exit. That is the same trade
+ * #826 already made (it declines to re-read the mark at all), not a regression
+ * against it: an instrumentation sample is never worth widening the window in
+ * which a position can be left open overnight.
+ *
+ * A timed-out read keeps running in the background — there is no `AbortSignal`
+ * on the `MarketDataService` port to cancel it with — but it has no side
+ * effects and its late result is simply discarded, exactly as
+ * `AnalystOrchestrator.withTimeout` handles the same situation.
+ */
+async function captureSubmitSnapshot(
+  input: ExecutionInput,
+  order: OrderIntent,
+  now: Date,
+  budget_ms?: number,
+): Promise<SubmitSnapshot> {
+  const decision_price = decisionPriceFor(order);
+
+  if (budget_ms === undefined) return readSubmitSnapshot(input, order, now, decision_price);
+
+  const empty: SubmitSnapshot = {
+    decision_price,
+    quote_bid: null,
+    quote_ask: null,
+    quote_mid: null,
+    quote_observed_at: null,
+    modelled_cost_breakdown: null,
+  };
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      readSubmitSnapshot(input, order, now, decision_price),
+      new Promise<SubmitSnapshot>((resolve) => {
+        timer = setTimeout(() => {
+          safeLog(input.logger, {
+            trace_id: input.trace_id,
+            stage: 'execution',
+            level: 'warn',
+            message:
+              `#1001: captureSubmitSnapshot exceeded its ${budget_ms}ms exit budget — the quote ` +
+              'and modelled cost breakdown are left null for this order so the flatten is not ' +
+              'held behind a stalled feed (#826). decision_price is unaffected.',
+            payload: { idempotency_key: order.idempotency_key, instrument: order.instrument },
+          });
+          resolve(empty);
+        }, budget_ms);
+      }),
+    ]);
+  } finally {
+    // An uncleared `setTimeout` keeps the Node event loop alive — in a
+    // cadence-driven process that is a run which will not exit.
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+/**
+ * #1001: the price the trading INTENT was formed at — which is not the same
+ * thing as `order.entry` on every path, and #1014's review was right that
+ * persisting it unconditionally would put a fake number on the money path.
+ *
+ * On an entry/scale_in, `order.entry` IS the decision price: the Trader
+ * computed it from the mark it decided on, and it is the limit actually
+ * submitted.
+ *
+ * On an EXIT it is subtler. `decide.ts`'s exit branch sets
+ * `entry`/`stop`/`target` all three to `readExitPrice`'s result, and the
+ * flatten-path tests rightly call that triple "degenerate placeholders" — as
+ * a BRACKET it is meaningless (nothing consults it; `executeExit` submits a
+ * market flatten sized to the held quantity). But the VALUE is not fake in
+ * the priced case: it is the last known mark, read at the moment the exit was
+ * decided, which is exactly the "last known mark" the review offers as the
+ * honest substitute.
+ *
+ * The one genuinely fake case is the UNPRICED flatten (#826): `readExitPrice`
+ * returns `price: 0` when the feed is dark, because a flatten is mandatory and
+ * must proceed without a mark. Persisting that `0` would hand the Feedback
+ * Loop's live-vs-modelled divergence check a 100%-divergence exit for every
+ * dark-feed flatten — noise indistinguishable from a catastrophic fill. `null`
+ * is the honest record there: no price was known, so none is claimed.
+ *
+ * Keyed on `metadata.unpriced_exit` rather than `entry === 0`, so a real mark
+ * that happens to be zero is not misread as absence and vice versa — the flag
+ * is `readExitPrice`'s own declaration of which case it took.
+ */
+function decisionPriceFor(order: OrderIntent): number | null {
+  if (order.intent_type === 'exit' && order.metadata.unpriced_exit === true) return null;
+  return order.entry;
+}
+
+/** The unbounded body of `captureSubmitSnapshot` — see there for the contract. */
+async function readSubmitSnapshot(
+  input: ExecutionInput,
+  order: OrderIntent,
+  now: Date,
+  decision_price: number | null,
+): Promise<SubmitSnapshot> {
+  let quoteBid: number | null = null;
+  let quoteAsk: number | null = null;
+  let quoteObservedAt: Date | null = null;
+  let modelledCostBreakdown: CostBreakdown | null = null;
+
+  if (order.metadata.unpriced_exit !== true) {
+    const { marketData, costModel, config, logger, trace_id } = input;
+
+    try {
+      const quote = await marketData.getQuote(order.instrument, now);
+      if (quote !== null) {
+        quoteBid = quote.bid;
+        quoteAsk = quote.ask;
+        quoteObservedAt = quote.observed_at;
+      }
+    } catch (error) {
+      logCaughtFailure(
+        logger,
+        {
+          trace_id,
+          stage: 'execution',
+          level: 'warn',
+          message:
+            '#1001: captureSubmitSnapshot could not read a quote at submit time — ' +
+            'quote_bid/quote_ask/quote_mid/quote_observed_at are left null for this order. ' +
+            'Best-effort instrumentation only; the order is submitted regardless.',
+        },
+        error,
+        { idempotency_key: order.idempotency_key, instrument: order.instrument },
+      );
+    }
+
+    // #1014 review, finding 1: the Simulated adapter prices the SAME order
+    // with the SAME `CostModel.fill` moments later, and that call is the
+    // authoritative one — its result becomes the fill's own price, qty, fee
+    // AND `NormalizedFill.cost_breakdown`, which `toFill` /
+    // `redistributeOneFlatten` (ingest-fills.ts) then persist verbatim, never
+    // reaching this snapshot's fallback (both apply ONLY when
+    // `fill.cost_breakdown === undefined`, which a Simulated fill never is).
+    // So on that path a second pricing here buys nothing and risks something:
+    // any non-determinism in the cost model — a random slippage draw, a
+    // clock-sensitive market state, a stateful test double — would make
+    // `modelled_cost_breakdown_json` disagree with the
+    // `fills.cost_breakdown_json` it is supposed to be the estimate FOR, and
+    // the #1001 acceptance query would then compare two different draws and
+    // report the difference as realised divergence.
+    //
+    // SKIPPED rather than shared: sharing one `FillResult` across the
+    // execute→adapter boundary would mean either handing the adapter a
+    // pre-priced fill (it is the venue; it must price its own) or reaching
+    // into it from here — both put a simulation detail into the code path
+    // live takes. Skipping keeps the boundary intact and leaves the simulated
+    // path with exactly ONE pricing, which is what the review asked for.
+    //
+    // The quote read above is NOT skipped: nothing else captures a bid/ask on
+    // this path, and it has no second writer to disagree with.
+    // Keyed on the DECLARED capability, not `instanceof SimulatedBrokerAdapter`:
+    // "strategy code must not know which broker it's talking to" (CLAUDE.md's
+    // Broker Plan), and any future self-pricing adapter opts in the same way.
+    if (input.broker.prices_own_fills === true) {
+      safeLog(logger, {
+        trace_id,
+        stage: 'execution',
+        level: 'info',
+        message:
+          '#1001: captureSubmitSnapshot skipped its own CostModel.fill on the Simulated-adapter ' +
+          'path — the adapter prices this order itself and that breakdown is persisted directly ' +
+          'onto the fill, so a second pricing here could only disagree with it.',
+        payload: { idempotency_key: order.idempotency_key, instrument: order.instrument },
+      });
+      return {
+        decision_price,
+        quote_bid: quoteBid,
+        quote_ask: quoteAsk,
+        quote_mid: quoteBid === null || quoteAsk === null ? null : (quoteBid + quoteAsk) / 2,
+        quote_observed_at: quoteObservedAt,
+        modelled_cost_breakdown: null,
+      };
+    }
+
+    try {
+      const [mark, volatility, spread, adv] = await Promise.all([
+        marketData.getMark(order.instrument, now),
+        marketData.getIndicator(order.instrument, config.simulated.volatility_indicator, now),
+        marketData.getSpreadEstimate(order.instrument, now),
+        marketData.getADV(order.instrument, config.simulated.adv_window, now),
+      ]);
+      const marketState: MarketState = {
+        mid: mark.price,
+        spread,
+        adv,
+        volatility: volatility.value,
+        asset_class: mark.asset_class,
+        timestamp: mark.observed_at,
+      };
+      const fillRequest: FillRequest = {
+        instrument: order.instrument,
+        side: order.side,
+        size: order.size,
+        order_type: order.intent_type === 'exit' ? 'market' : 'limit',
+        ...(order.intent_type === 'exit' ? {} : { limit_price: order.entry }),
+        idempotency_key: order.idempotency_key,
+      };
+      modelledCostBreakdown = costModel.fill(fillRequest, marketState).cost_breakdown;
+    } catch (error) {
+      logCaughtFailure(
+        logger,
+        {
+          trace_id,
+          stage: 'execution',
+          level: 'warn',
+          message:
+            '#1001: captureSubmitSnapshot could not assemble a MarketState / price the modelled ' +
+            'cost breakdown at submit time — modelled_cost_breakdown is left null for this order. ' +
+            'Best-effort instrumentation only; the order is submitted regardless.',
+        },
+        error,
+        { idempotency_key: order.idempotency_key, instrument: order.instrument },
+      );
+    }
+  } else {
+    safeLog(input.logger, {
+      trace_id: input.trace_id,
+      stage: 'execution',
+      level: 'info',
+      message:
+        '#1001: captureSubmitSnapshot skipped the quote/cost-model reads for an unpriced exit ' +
+        '(order.metadata.unpriced_exit) — the feed was already known dark this tick, so ' +
+        're-probing it here would only risk widening the #826 flatten window.',
+      payload: { idempotency_key: order.idempotency_key, instrument: order.instrument },
+    });
+  }
+
+  return {
+    decision_price,
+    quote_bid: quoteBid,
+    quote_ask: quoteAsk,
+    quote_mid: quoteBid === null || quoteAsk === null ? null : (quoteBid + quoteAsk) / 2,
+    quote_observed_at: quoteObservedAt,
+    modelled_cost_breakdown: modelledCostBreakdown,
+  };
 }
 
 /**
@@ -386,6 +717,12 @@ async function executeExit(
     });
   }
 
+  // #1001: best-effort snapshot — see `captureSubmitSnapshot`'s doc. Read
+  // BEFORE the write-ahead, same reasoning as the bracket path, but BOUNDED
+  // here: this is the mandatory flat-by-close path, and the budget is carved
+  // out of the #826 flatten window rather than added to it.
+  const snapshot = await captureSubmitSnapshot(input, order, now, EXIT_SNAPSHOT_BUDGET_MS);
+
   // Write-ahead BEFORE any broker call — see the docstring above for why
   // this row exists at all. `writeAheadFlatten` throwing (a genuine store
   // failure, not the duplicate case — `findByKey` above already excludes
@@ -415,6 +752,12 @@ async function executeExit(
     // its protective legs go either way; dropping it here would remove the
     // only thing that re-arms them (#525). Its share is then exactly zero.
     lot_held_quantities: perLotHeld,
+    decision_price: snapshot.decision_price,
+    quote_bid: snapshot.quote_bid,
+    quote_ask: snapshot.quote_ask,
+    quote_mid: snapshot.quote_mid,
+    quote_observed_at: snapshot.quote_observed_at,
+    modelled_cost_breakdown: snapshot.modelled_cost_breakdown,
   });
 
   // Lots this loop has ALREADY cancelled successfully, in order. Load-bearing

@@ -103,6 +103,10 @@ class FixtureMarketData implements MarketDataService {
     throw new Error('FixtureMarketData.getSpreadEstimate: not part of the Trader path');
   }
 
+  async getQuote(): Promise<null> {
+    throw new Error('FixtureMarketData.getQuote: not part of the Trader path');
+  }
+
   async getADV(): Promise<number> {
     throw new Error('FixtureMarketData.getADV: not part of the Trader path');
   }

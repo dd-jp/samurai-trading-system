@@ -1,4 +1,4 @@
-import type { MarketDataService } from '../../providers/market-data-service/index.js';
+import type { MarketDataService, MarkRead } from '../../providers/market-data-service/index.js';
 import type { Clock, Fill, OpenPosition, OrderIntent } from '../../shared/index.js';
 import type { CostModel } from '../../tools/backtest/index.js';
 import type { VerdictDecision } from '../verdict/index.js';
@@ -352,6 +352,12 @@ describe('ExecutionImpl.execute', () => {
       decision_timestamp: new Date('2026-07-15T13:55:00Z'),
       conviction: 0.72,
       converged: true,
+      // #1001: always populated, no I/O — `order.entry` from `makeIntent()`.
+      // The quote/modelled-cost-breakdown fields stay absent here because
+      // this test's `makeInput` default `marketData`/`costModel` are `{}`,
+      // so both of `captureSubmitSnapshot`'s independent reads throw and
+      // degrade to null (see the dedicated #1001 describe block below).
+      decision_price: 100,
     });
   });
 
@@ -2474,6 +2480,480 @@ describe('ExecutionImpl.execute', () => {
           },
         );
       });
+    });
+  });
+});
+
+/**
+ * #1001: the submit-time snapshot `captureSubmitSnapshot` (execute.ts)
+ * attaches to every write-ahead — `decision_price` (always, from
+ * `order.entry`, no I/O), a best-effort quote (`MarketDataService.getQuote`)
+ * and a best-effort modelled cost breakdown (`CostModel.fill` over the same
+ * `MarketState` shape `SimulatedBrokerAdapter.buildMarketState` assembles).
+ * Covers both the bracket path (`open_positions`) and the exit path
+ * (`flatten_submissions`), the null-quote and read-failure degradations, and
+ * the #826 `unpriced_exit` skip that must not touch the market-data port at
+ * all.
+ */
+describe('#1001: submit-time quote and decision price', () => {
+  function makeSnapshotMarketData(overrides: Partial<MarketDataService> = {}): MarketDataService {
+    const service: MarketDataService = {
+      getBars: vi.fn(),
+      getMark: vi.fn().mockResolvedValue({
+        price: 100.2,
+        observed_at: NOW,
+        source: 'fixture',
+        asset_class: 'stocks',
+      }),
+      getIndicator: vi.fn().mockResolvedValue({ indicator: 'atr', value: 2, as_of_bar_close: NOW }),
+      getSpreadEstimate: vi.fn().mockResolvedValue(0.04),
+      getADV: vi.fn().mockResolvedValue(1_000_000),
+      getQuote: vi.fn().mockResolvedValue({ bid: 100.1, ask: 100.3, observed_at: NOW }),
+      // Required on the port, so it is implemented rather than cast away: the
+      // batch read is the single read, per distinct instrument, wrapped in
+      // `MarkRead`'s ok/error envelope exactly as the real service does. Reads
+      // `service.getMark` (not the literal above) so an `overrides.getMark`
+      // stub is honoured here too.
+      getMarks: async (instruments, asOf) => {
+        const marks = new Map<string, MarkRead>();
+        for (const instrument of new Set(instruments)) {
+          try {
+            marks.set(instrument, { ok: true, mark: await service.getMark(instrument, asOf) });
+          } catch (error) {
+            marks.set(instrument, { ok: false, error });
+          }
+        }
+        return marks;
+      },
+      ...overrides,
+    };
+    return service;
+  }
+
+  const modelledCostBreakdown = {
+    spread_cost: 0.1,
+    commission: 0.2,
+    slippage: 0.05,
+    market_impact: 0.01,
+  };
+
+  function makeSnapshotCostModel(overrides: Partial<CostModel> = {}): CostModel {
+    return {
+      fill: vi.fn().mockReturnValue({
+        fill_price: 100,
+        filled_size: 100,
+        cost_breakdown: modelledCostBreakdown,
+      }),
+      ...overrides,
+    };
+  }
+
+  // Hoisted to this describe's scope by #1014's review fix — the
+  // Simulated-adapter block below exercises the SAME flatten these two build,
+  // and duplicating them per sub-describe would let the two copies drift.
+  function makeExitGo(overrides: Partial<OrderIntent> = {}): VerdictDecision {
+    return makeGo({
+      idempotency_key: 'key-aapl-1355',
+      intent_type: 'exit',
+      side: 'sell',
+      size: 40,
+      entry: 100,
+      stop: 100,
+      target: 100,
+      metadata: { ...makeIntent().metadata, exit_reason: 'flatten' },
+      ...overrides,
+    });
+  }
+
+  async function seedHeldLot(
+    store: ReturnType<typeof openTestExecutionStore>['store'],
+  ): Promise<void> {
+    await store.writeAheadPosition({
+      idempotency_key: 'key-aapl-entry-1',
+      debate_id: 'debate-abc123',
+      instrument: 'AAPL',
+      asset_class: 'stocks',
+      side: 'buy',
+      intent_type: 'entry',
+      requested_size: 40,
+      filled_size: 40,
+      avg_entry_price: 95,
+      stop: 90,
+      target: 110,
+      order_state: 'filled',
+      broker_order_ids: ['seed:entry', 'seed:stop', 'seed:target'],
+      opened_at: NOW,
+      decision_timestamp: NOW,
+      conviction: 0.7,
+      converged: true,
+    });
+  }
+
+  /**
+   * #1014 review, finding 1. Before this fix `CostModel.fill` ran TWICE per
+   * order on the Simulated-adapter path — once in `captureSubmitSnapshot`,
+   * once inside `SimulatedBrokerAdapter.submitBracket`/`submitFlatten`
+   * pricing the actual fill. The tell was in this very file: every
+   * pre-existing simulated-adapter test had to double its
+   * `mockReturnValueOnce` chain to keep passing, which is a test bending
+   * around a defect rather than pinning a behaviour.
+   *
+   * The defect is not the wasted call. It is that the two calls are
+   * INDEPENDENT: any non-determinism in the cost model (a random slippage
+   * draw, a clock-sensitive market state) makes the stored snapshot and the
+   * fill's own `cost_breakdown` two different prices of two different draws,
+   * and #1001's whole acceptance query is "diff the modelled estimate against
+   * the realised fill". A divergence the instrumentation invented is worse
+   * than no instrumentation.
+   *
+   * These tests pin the single call on both simulated paths. Nothing is lost
+   * by skipping: the adapter's own breakdown lands on the fill verbatim
+   * (`toFill` / `redistributeOneFlatten` only substitute the snapshot when
+   * `fill.cost_breakdown === undefined`, which a simulated fill never is), so
+   * the acceptance query is answered from the fill row exactly as before.
+   */
+  describe('Simulated-adapter path — CostModel.fill runs exactly once (#1014 review, finding 1)', () => {
+    const SIM_CONFIG = {
+      volatility_indicator: {
+        indicator: 'atr' as const,
+        params: { period: 14 },
+        timeframe: '1h' as const,
+        lookback: 15,
+      },
+      adv_window: { timeframe: '1d' as const, lookback: 20 },
+    };
+
+    it('prices a bracket entry once — the adapter’s call, not the snapshot’s', async () => {
+      const { store } = openTestExecutionStore();
+      const costModel = makeSnapshotCostModel();
+      const marketData = makeSnapshotMarketData();
+      const broker = new SimulatedBrokerAdapter({
+        clock: fixedClock,
+        costModel,
+        marketData,
+        config: SIM_CONFIG,
+      });
+
+      const result = await new ExecutionImpl(
+        makeInput({ store, broker, costModel, marketData }),
+      ).execute(makeGo());
+
+      expect(result.status).toBe('submitted');
+      expect(costModel.fill).toHaveBeenCalledTimes(1);
+
+      // The snapshot's OTHER fields are unaffected — only the cost-model half
+      // is skipped, and the quote read (which has no second writer to
+      // disagree with) still runs.
+      const position = await store.getPosition('key-aapl-1355');
+      expect(position?.decision_price).toBe(100);
+      expect(position?.quote_bid).toBe(100.1);
+      expect(position?.quote_ask).toBe(100.3);
+      expect(position?.modelled_cost_breakdown).toBeUndefined();
+    });
+
+    it('prices a flatten once, and the adapter’s breakdown still reaches the fill', async () => {
+      const { store } = openTestExecutionStore();
+      const costModel = makeSnapshotCostModel();
+      const marketData = makeSnapshotMarketData();
+      const broker = new SimulatedBrokerAdapter({
+        clock: fixedClock,
+        costModel,
+        marketData,
+        config: SIM_CONFIG,
+      });
+      await seedHeldLot(store);
+
+      const result = await new ExecutionImpl(
+        makeInput({ store, broker, costModel, marketData }),
+      ).execute(makeExitGo());
+
+      expect(result.status).toBe('submitted');
+      expect(costModel.fill).toHaveBeenCalledTimes(1);
+
+      const row = await store.getFlattenSubmission('key-aapl-1355');
+      expect(row?.decision_price).toBe(100);
+      expect(row?.modelled_cost_breakdown_json).toBeNull();
+
+      // The pricing that DID happen is the adapter's, and it carries the full
+      // breakdown onto the fill — so nothing #1001 needs is lost by skipping
+      // the snapshot's own call.
+      const fills = await broker.fetchNewFills(new Date(NOW.getTime() - 1));
+      expect(fills[0]?.cost_breakdown).toEqual(modelledCostBreakdown);
+    });
+
+    it('still prices the snapshot itself when the broker is NOT the Simulated adapter — the skip is not a blanket disable', async () => {
+      const { store } = openTestExecutionStore();
+      const costModel = makeSnapshotCostModel();
+      const marketData = makeSnapshotMarketData();
+
+      const result = await new ExecutionImpl(
+        makeInput({ store, broker: makeBroker(), costModel, marketData }),
+      ).execute(makeGo());
+
+      expect(result.status).toBe('submitted');
+      expect(costModel.fill).toHaveBeenCalledTimes(1);
+      const position = await store.getPosition('key-aapl-1355');
+      expect(position?.modelled_cost_breakdown).toEqual(modelledCostBreakdown);
+    });
+  });
+
+  describe('bracket (entry) path — open_positions', () => {
+    it('captures decision_price, the quote bid/ask/mid/observed_at, and the modelled cost breakdown', async () => {
+      const { store } = openTestExecutionStore();
+      const broker = makeBroker();
+      const costModel = makeSnapshotCostModel();
+      const marketData = makeSnapshotMarketData();
+
+      const result = await new ExecutionImpl(
+        makeInput({ store, broker, costModel, marketData }),
+      ).execute(makeGo());
+
+      expect(result.status).toBe('submitted');
+      const position = await store.getPosition('key-aapl-1355');
+      // order.entry, unrounded — the pre-tick-rounding decision price, never
+      // the wire price a real broker may round differently.
+      expect(position?.decision_price).toBe(100);
+      expect(position?.quote_bid).toBe(100.1);
+      expect(position?.quote_ask).toBe(100.3);
+      expect(position?.quote_mid).toBeCloseTo(100.2, 5);
+      expect(position?.quote_observed_at).toEqual(NOW);
+      expect(position?.modelled_cost_breakdown).toEqual(modelledCostBreakdown);
+      expect(marketData.getQuote).toHaveBeenCalledWith('AAPL', NOW);
+    });
+
+    it('leaves the quote fields absent but still populates decision_price when getQuote resolves null', async () => {
+      const { store } = openTestExecutionStore();
+      const broker = makeBroker();
+      const costModel = makeSnapshotCostModel();
+      const marketData = makeSnapshotMarketData({ getQuote: vi.fn().mockResolvedValue(null) });
+
+      const result = await new ExecutionImpl(
+        makeInput({ store, broker, costModel, marketData }),
+      ).execute(makeGo());
+
+      expect(result.status).toBe('submitted');
+      const position = await store.getPosition('key-aapl-1355');
+      expect(position?.decision_price).toBe(100);
+      expect(position?.quote_bid).toBeUndefined();
+      expect(position?.quote_ask).toBeUndefined();
+      expect(position?.quote_mid).toBeUndefined();
+      expect(position?.quote_observed_at).toBeUndefined();
+      // The cost-model read is independent of the quote read — it still ran.
+      expect(position?.modelled_cost_breakdown).toEqual(modelledCostBreakdown);
+    });
+
+    it('never blocks submission when getQuote throws — logs and leaves the quote fields absent', async () => {
+      const { store } = openTestExecutionStore();
+      const broker = makeBroker();
+      const costModel = makeSnapshotCostModel();
+      const marketData = makeSnapshotMarketData({
+        getQuote: vi.fn().mockRejectedValue(new Error('quote feed down')),
+      });
+
+      const result = await new ExecutionImpl(
+        makeInput({ store, broker, costModel, marketData }),
+      ).execute(makeGo());
+
+      expect(result.status).toBe('submitted');
+      const position = await store.getPosition('key-aapl-1355');
+      expect(position?.decision_price).toBe(100);
+      expect(position?.quote_bid).toBeUndefined();
+      // The independent cost-model try/catch is unaffected by the quote one.
+      expect(position?.modelled_cost_breakdown).toEqual(modelledCostBreakdown);
+    });
+
+    it('never blocks submission when the cost-model MarketState assembly throws — modelled_cost_breakdown left absent', async () => {
+      const { store } = openTestExecutionStore();
+      const broker = makeBroker();
+      const costModel = makeSnapshotCostModel();
+      const marketData = makeSnapshotMarketData({
+        getMark: vi.fn().mockRejectedValue(new Error('mark feed down')),
+      });
+
+      const result = await new ExecutionImpl(
+        makeInput({ store, broker, costModel, marketData }),
+      ).execute(makeGo());
+
+      expect(result.status).toBe('submitted');
+      const position = await store.getPosition('key-aapl-1355');
+      expect(position?.decision_price).toBe(100);
+      // The independent quote try/catch is unaffected by the cost-model one.
+      expect(position?.quote_bid).toBe(100.1);
+      expect(position?.modelled_cost_breakdown).toBeUndefined();
+    });
+  });
+
+  describe('exit (flatten) path — flatten_submissions', () => {
+    it('captures decision_price, the quote, and the modelled cost breakdown on a normal flatten', async () => {
+      const { store } = openTestExecutionStore();
+      const broker = makeBroker();
+      await seedHeldLot(store);
+      const costModel = makeSnapshotCostModel();
+      const marketData = makeSnapshotMarketData();
+
+      const result = await new ExecutionImpl(
+        makeInput({ store, broker, costModel, marketData }),
+      ).execute(makeExitGo());
+
+      expect(result.status).toBe('submitted');
+      const row = await store.getFlattenSubmission('key-aapl-1355');
+      expect(row?.decision_price).toBe(100);
+      expect(row?.quote_bid).toBe(100.1);
+      expect(row?.quote_ask).toBe(100.3);
+      expect(row?.quote_mid).toBeCloseTo(100.2, 5);
+      expect(row?.quote_observed_at).not.toBeNull();
+      expect(
+        row === null || row.modelled_cost_breakdown_json === null
+          ? null
+          : JSON.parse(row.modelled_cost_breakdown_json),
+      ).toEqual(modelledCostBreakdown);
+      // #826: an exit's cost-model FillRequest prices a market order, not a
+      // limit — `order_type: 'market'`, no `limit_price` key at all — since a
+      // flatten's `entry`/`stop`/`target` are degenerate placeholders, never
+      // a real limit.
+      const fillRequestArg = (costModel.fill as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+        order_type: string;
+        limit_price?: number;
+      };
+      expect(fillRequestArg.order_type).toBe('market');
+      expect(fillRequestArg).not.toHaveProperty('limit_price');
+    });
+
+    it('skips every market-data read for an unpriced exit (#826) AND nulls decision_price rather than persisting the 0 placeholder', async () => {
+      const { store } = openTestExecutionStore();
+      const broker = makeBroker();
+      await seedHeldLot(store);
+      const costModel = makeSnapshotCostModel();
+      const marketData = makeSnapshotMarketData();
+
+      const result = await new ExecutionImpl(
+        makeInput({ store, broker, costModel, marketData }),
+      ).execute(
+        makeExitGo({
+          metadata: {
+            ...makeIntent().metadata,
+            exit_reason: 'flatten',
+            unpriced_exit: true,
+          },
+        }),
+      );
+
+      expect(result.status).toBe('submitted');
+      expect(marketData.getQuote).not.toHaveBeenCalled();
+      expect(marketData.getMark).not.toHaveBeenCalled();
+      expect(marketData.getIndicator).not.toHaveBeenCalled();
+      expect(marketData.getSpreadEstimate).not.toHaveBeenCalled();
+      expect(marketData.getADV).not.toHaveBeenCalled();
+      expect(costModel.fill).not.toHaveBeenCalled();
+
+      const row = await store.getFlattenSubmission('key-aapl-1355');
+      // #1014 review, finding 2. This assertion read `.toBe(100)` before that
+      // review, and 100 was a FICTION: an unpriced flatten's `order.entry` is
+      // `readExitPrice`'s `price: 0` sentinel (decide.ts) — the feed was dark,
+      // so no price was known — and the 100 only appeared because
+      // `makeExitGo` overrides the metadata without touching `makeIntent`'s
+      // entry. In production this column would have carried the 0, and the
+      // Feedback Loop's live-vs-modelled divergence check would have read a
+      // ~100% divergence for every dark-feed flatten. `null` says the one
+      // true thing: no decision price existed for this order.
+      expect(row?.decision_price).toBeNull();
+      expect(row?.quote_bid).toBeNull();
+      expect(row?.quote_ask).toBeNull();
+      expect(row?.quote_mid).toBeNull();
+      expect(row?.quote_observed_at).toBeNull();
+      expect(row?.modelled_cost_breakdown_json).toBeNull();
+    });
+
+    it('keeps the last known mark as decision_price on a PRICED flatten — the placeholder concern is the unpriced case alone (#1014 review, finding 2)', async () => {
+      const { store } = openTestExecutionStore();
+      const broker = makeBroker();
+      await seedHeldLot(store);
+
+      // `decide.ts` sets an exit's `entry`/`stop`/`target` all three to
+      // `readExitPrice`'s mark. Degenerate as a BRACKET — nothing consults
+      // them, `executeExit` submits a market flatten — but the VALUE is the
+      // real mark read when the exit was decided, which is exactly the "last
+      // known mark" #1014's review offers as the honest substitute. So it is
+      // kept, not nulled: nulling it too would throw away the only reference
+      // price an exit fill has to be diffed against (#1001's whole point).
+      const result = await new ExecutionImpl(
+        makeInput({
+          store,
+          broker,
+          costModel: makeSnapshotCostModel(),
+          marketData: makeSnapshotMarketData(),
+        }),
+      ).execute(makeExitGo({ entry: 123.45, stop: 123.45, target: 123.45 }));
+
+      expect(result.status).toBe('submitted');
+      const row = await store.getFlattenSubmission('key-aapl-1355');
+      expect(row?.decision_price).toBe(123.45);
+    });
+
+    /**
+     * The #826 latency property, and the reason `captureSubmitSnapshot` takes
+     * a `budget_ms` at all. Every read it makes routes through
+     * `fetchWithTimeout` (10s) under `withRetry` (3 attempts), so a stalled
+     * feed costs ~30s per read group — and this is the mandatory
+     * flat-by-close path, where verdict/index.ts already refuses to pay ONE
+     * such budget. Unbounded, the snapshot would pay two before the flatten
+     * order was even submitted.
+     *
+     * Driven on fake timers so the stall is 30s of MODEL time: advancing only
+     * the 2s budget and asserting the flatten has already reached the broker
+     * is exactly the claim — the exit does not wait for the feed. Against the
+     * unbounded version this fails on `flattenCalls` being empty at that
+     * point, rather than hanging the suite.
+     */
+    it('submits the flatten within its 2s snapshot budget even when the feed stalls for 30s (#826)', async () => {
+      vi.useFakeTimers();
+      try {
+        const { store } = openTestExecutionStore();
+        const broker = makeBroker();
+        await seedHeldLot(store);
+        const costModel = makeSnapshotCostModel();
+        const stalled = <T>(value: T): Promise<T> =>
+          new Promise<T>((resolve) => setTimeout(() => resolve(value), 30_000));
+        const marketData = makeSnapshotMarketData({
+          getQuote: vi
+            .fn()
+            .mockImplementation(() => stalled({ bid: 100.1, ask: 100.3, observed_at: NOW })),
+          getMark: vi.fn().mockImplementation(() =>
+            stalled({
+              price: 100.2,
+              observed_at: NOW,
+              source: 'fixture',
+              asset_class: 'stocks' as const,
+            }),
+          ),
+        });
+
+        const pending = new ExecutionImpl(
+          makeInput({ store, broker, costModel, marketData }),
+        ).execute(makeExitGo());
+
+        // The whole budget, and not one tick of the 30s stall beyond it.
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(broker.flattenCalls).toHaveLength(1);
+
+        const result = await pending;
+        expect(result.status).toBe('submitted');
+
+        // The acceptance criterion (#1001) still holds for the field that
+        // needs no I/O; the sample the stall costs is the quote and the
+        // modelled breakdown, which is the trade #826 already makes.
+        const row = await store.getFlattenSubmission('key-aapl-1355');
+        expect(row?.decision_price).toBe(100);
+        expect(row?.quote_bid).toBeNull();
+        expect(row?.quote_ask).toBeNull();
+        expect(row?.quote_mid).toBeNull();
+        expect(row?.modelled_cost_breakdown_json).toBeNull();
+
+        // Let the abandoned reads settle so no timer outlives the test.
+        await vi.advanceTimersByTimeAsync(30_000);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

@@ -445,6 +445,7 @@ describe('core vs enrichment — the availability trade-off (#745)', () => {
       getMarks: inner.getMarks.bind(inner),
       getADV: inner.getADV.bind(inner),
       getSpreadEstimate: inner.getSpreadEstimate.bind(inner),
+      getQuote: inner.getQuote.bind(inner),
       async getIndicator(
         instrument: string,
         spec: IndicatorSpec,
@@ -472,6 +473,7 @@ describe('core vs enrichment — the availability trade-off (#745)', () => {
       getMarks: inner.getMarks.bind(inner),
       getADV: inner.getADV.bind(inner),
       getSpreadEstimate: inner.getSpreadEstimate.bind(inner),
+      getQuote: inner.getQuote.bind(inner),
       async getIndicator(
         instrument: string,
         spec: IndicatorSpec,
@@ -507,6 +509,7 @@ describe('core vs enrichment — the availability trade-off (#745)', () => {
       getMarks: inner.getMarks.bind(inner),
       getADV: inner.getADV.bind(inner),
       getSpreadEstimate: inner.getSpreadEstimate.bind(inner),
+      getQuote: inner.getQuote.bind(inner),
       async getIndicator(
         instrument: string,
         spec: IndicatorSpec,

@@ -92,6 +92,7 @@ function makeMarketData(at: Date) {
       collectMarks(getMark, instruments, asOf),
     ),
     getSpreadEstimate: vi.fn(async () => null),
+    getQuote: vi.fn(async () => null),
     getADV: vi.fn(async () => 1_000),
   };
 }

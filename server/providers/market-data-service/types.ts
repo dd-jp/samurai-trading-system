@@ -255,6 +255,18 @@ export interface MarketDataService {
    */
   getSpreadEstimate(instrument: string, asOf: Date): Promise<number | null>;
   /**
+   * The genuine bid/ask observation behind `getSpreadEstimate` — added for
+   * #1001 (persisting the quote at order submit), which needs the two SIDES,
+   * not their scalar difference. `null` under exactly the conditions
+   * `getSpreadEstimate` returns `null` for: the source doesn't implement
+   * `DataSource.fetchQuote` (e.g. Alpaca's own `AlpacaDataSource`), it has no
+   * quote for this instrument/asOf, or a returned quote is timestamped after
+   * `asOf` (PIT re-check). MDS never fabricates a side it can't observe — a
+   * caller wanting bid/ask MUST use this, never derive them from
+   * `getSpreadEstimate`'s scalar plus a separately-fetched mid.
+   */
+  getQuote(instrument: string, asOf: Date): Promise<Quote | null>;
+  /**
    * Average bars volume over the point-in-time window — the liquidity
    * proxy for the cost model's √-law market impact term. Reuses `getBars`,
    * so it is no-lookahead by construction.
