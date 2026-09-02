@@ -755,8 +755,8 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * cutover this ticket is ahead of, and this system has not gone live
    * (ADR-0004 §5) — so a schema change (a discriminator column, needing a
    * migration) is deferred as disproportionate to a risk with no live
-   * exposure yet. Reopen this once #751 lands, or before `mode: 'live'` ships
-   * with a non-LSE universe, whichever comes first.
+   * exposure yet. Tracked in #989 — reopen once #751 lands, or before
+   * `mode: 'live'` ships with a non-LSE universe, whichever comes first.
    */
   const benchmarkMarketDataStore = new SqliteMarketDataStore(config.db);
   /**
