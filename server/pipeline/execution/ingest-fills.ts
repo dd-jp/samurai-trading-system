@@ -605,6 +605,13 @@ async function redistributeOneFlatten(
         // flatten submitted from here forward always carries one
         // (`executeExit` refuses to write ahead without it).
         ...(attribution.exit_reason === null ? {} : { exit_reason: attribution.exit_reason }),
+        // #1001: the flatten's OWN key — `clientOrderId` is this function's
+        // lookup key for `getFlattenAttribution`, i.e. exactly the
+        // `flatten_submissions.idempotency_key` that produced this raw fill,
+        // before the split below re-keys the row to the LOT. Carried
+        // through so the persisted row can be joined back to the specific
+        // flatten submission that priced it — see `Fill.flatten_idempotency_key`.
+        flatten_idempotency_key: clientOrderId,
         // `fills`' row identity is `(idempotency_key, broker_fill_id)` — the
         // table's PK — so the SAME venue fill id can legitimately hold ONE
         // ROW PER LOT it is split across. That is the right scope here: a
@@ -628,6 +635,21 @@ async function redistributeOneFlatten(
         broker_fill_id: `${rawFill.broker_fill_id}:${lotKey}`,
         qty: take,
         fee: rawFill.fee * share,
+        // #1001: FALLBACK only — `rawFill.cost_breakdown` is already set (and
+        // left untouched by this spread) on the Simulated adapter's own
+        // flatten fill, which is priced by `CostModel.fill` directly and
+        // needs no modelled estimate substituted for it. On a real-broker
+        // fill (`rawFill.cost_breakdown === undefined`, always, on that
+        // path), this attaches the flatten's OWN submit-time modelled cost
+        // breakdown instead — the venue reports no breakdown of its own —
+        // prorated by this lot's `share` of the raw fill for the same reason
+        // `fee` above is: one snapshot, priced against the flatten's whole
+        // `size`, can cover several lots' worth of split fill rows, and each
+        // must carry only its own slice or the modelled figures would sum to
+        // a multiple of the true estimate across the flatten's lots.
+        ...(rawFill.cost_breakdown === undefined && attribution.modelled_cost_breakdown !== null
+          ? { cost_breakdown: prorateCostBreakdown(attribution.modelled_cost_breakdown, share) }
+          : {}),
         // #842: CLEARED, not inherited from `...rawFill`. `take` is this
         // lot's ALLOCATION of the raw fill, not the venue's cumulative
         // quantity for the order, and the id it is written under is
@@ -869,6 +891,10 @@ async function advanceLot(
    * fills the feed re-offered.
    */
   const cumulativeReoffers: NormalizedFill[] = [];
+  // #1001: read once per call, reused by every `toFill`/`cumulativeTopUp`
+  // call below rather than re-derived per fill — it is a pure function of
+  // `position`, which does not change within this call.
+  const modelledEntryCost = modelledEntryCostFor(position);
   let ingestedEntry = false;
   let ingestedExit = false;
   for (const fill of lotFills) {
@@ -876,7 +902,7 @@ async function advanceLot(
       if (fill.qty_is_cumulative === true) cumulativeReoffers.push(fill);
       continue;
     }
-    newFills.push(toFill(fill, position.idempotency_key));
+    newFills.push(toFill(fill, position.idempotency_key, modelledEntryCost));
     ingestedEntry ||= fill.leg === 'entry';
     ingestedExit ||= fill.leg === 'exit';
   }
@@ -1526,6 +1552,10 @@ function cumulativeTopUp(
       fee: Math.max(0, fill.fee - priors.reduce((sum, row) => sum + row.fee, 0)),
     },
     position.idempotency_key,
+    // #1001: same fallback `advanceLot`'s own `toFill` call uses — a
+    // cumulative top-up is still an `'entry'`-leg fill (Alpaca's only
+    // cumulative feed), just a later increment of it.
+    modelledEntryCostFor(position),
   );
 }
 
@@ -1539,7 +1569,79 @@ function cumulativeTopUp(
  * "this is a running total" flag would be a lie that every later rebuild of
  * `filled_size` would have to re-litigate.
  */
-function toFill(fill: NormalizedFill, idempotencyKey: string): Fill {
+/**
+ * #1001: scales every component of a modelled cost breakdown by `share` — the
+ * same linear approximation `redistributeOneFlatten`'s `fee: rawFill.fee *
+ * share` already makes for the flatten split, extended to the OTHER money
+ * this snapshot carries. Not physically exact for `market_impact` (the
+ * cost model's own √-law term is nonlinear in size), but consistent with the
+ * existing precedent rather than inventing a second approximation scheme, and
+ * still strictly better than attaching the UNSCALED snapshot to every fill a
+ * single modelled estimate happens to cover.
+ */
+function prorateCostBreakdown(
+  breakdown: NonNullable<Fill['cost_breakdown']>,
+  share: number,
+): NonNullable<Fill['cost_breakdown']> {
+  return {
+    spread_cost: breakdown.spread_cost * share,
+    commission: breakdown.commission * share,
+    slippage: breakdown.slippage * share,
+    market_impact: breakdown.market_impact * share,
+  };
+}
+
+/**
+ * #1001's fallback source for an `'entry'` leg's modelled cost breakdown —
+ * `OpenPosition.modelled_cost_breakdown`, captured once at submit time
+ * (`execute.ts`'s `captureSubmitSnapshot`) against the lot's whole
+ * `requested_size`. `null` when the lot carries none (pre-migration-0037 row,
+ * or the submit-time capture failed) — `toFill`'s caller then leaves
+ * `cost_breakdown` unset, exactly as before this ticket.
+ */
+interface ModelledEntryCost {
+  breakdown: NonNullable<Fill['cost_breakdown']>;
+  requestedSize: number;
+}
+
+function modelledEntryCostFor(position: OpenPosition): ModelledEntryCost | null {
+  return position.modelled_cost_breakdown === undefined
+    ? null
+    : { breakdown: position.modelled_cost_breakdown, requestedSize: position.requested_size };
+}
+
+/**
+ * Normalized broker shape → the stored record, keyed to its lot.
+ *
+ * Enumerates its fields rather than spreading, which is what keeps
+ * `qty_is_cumulative` (#842) OUT of the persisted row — deliberately, not by
+ * omission: a stored `Fill` is always an increment by the time it is written
+ * (`cumulativeTopUp` has already taken the difference), so a row carrying a
+ * "this is a running total" flag would be a lie that every later rebuild of
+ * `filled_size` would have to re-litigate.
+ *
+ * `modelledEntryCost` (#1001) is the FALLBACK for a real-broker `'entry'`
+ * fill, which arrives with `fill.cost_breakdown === undefined` — the venue
+ * reports no breakdown of its own. Applied ONLY to `'entry'` legs, prorated
+ * by this fill's share of `requestedSize`: the Simulated adapter never
+ * modelled `'stop'`/`'target'` fills either (`simulated-adapter.ts`'s
+ * `submitBracket` prices only the entry leg), so there is no precedent —
+ * modelled or otherwise — to fall back to for those, and none is invented
+ * here.
+ */
+function toFill(
+  fill: NormalizedFill,
+  idempotencyKey: string,
+  modelledEntryCost: ModelledEntryCost | null = null,
+): Fill {
+  const fallbackCostBreakdown =
+    fill.cost_breakdown === undefined && fill.leg === 'entry' && modelledEntryCost !== null
+      ? prorateCostBreakdown(
+          modelledEntryCost.breakdown,
+          fill.qty / modelledEntryCost.requestedSize,
+        )
+      : undefined;
+
   return {
     idempotency_key: idempotencyKey,
     broker_fill_id: fill.broker_fill_id,
@@ -1548,11 +1650,20 @@ function toFill(fill: NormalizedFill, idempotencyKey: string): Fill {
     qty: fill.qty,
     fee: fill.fee,
     timestamp: fill.timestamp,
-    ...(fill.cost_breakdown === undefined ? {} : { cost_breakdown: fill.cost_breakdown }),
+    ...(fill.cost_breakdown !== undefined
+      ? { cost_breakdown: fill.cost_breakdown }
+      : fallbackCostBreakdown !== undefined
+        ? { cost_breakdown: fallbackCostBreakdown }
+        : {}),
     // #793: UNLIKE `qty_is_cumulative`, this one IS persisted — see
     // `NormalizedFill.exit_reason`'s doc for why it has to survive to reach
     // `closedTrade()` on any poll, not only the one that ingested this fill.
     ...(fill.exit_reason === undefined ? {} : { exit_reason: fill.exit_reason }),
+    // #1001: UNLIKE `qty_is_cumulative`, this one IS persisted — see
+    // `Fill.flatten_idempotency_key`'s doc.
+    ...(fill.flatten_idempotency_key === undefined
+      ? {}
+      : { flatten_idempotency_key: fill.flatten_idempotency_key }),
   };
 }
 

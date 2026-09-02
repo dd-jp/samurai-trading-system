@@ -41,6 +41,7 @@ function makeMarketData(prices: Record<string, number>): MarketDataService {
         collectMarks((instrument, a) => service.getMark(instrument, a), instruments, at),
     ),
     getSpreadEstimate: vi.fn(async (_i: string, _a: Date): Promise<number | null> => null),
+    getQuote: vi.fn(async (_i: string, _a: Date): Promise<null> => null),
     getADV: vi.fn(async (_i: string, _w: BarWindow, _a: Date): Promise<number> => 0),
   };
   return service;

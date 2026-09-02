@@ -101,6 +101,13 @@ export interface OpenPositionRow {
   residual_unprotected_since: string | null;
   /** NULL until that episode's operator alert was posted — migration 0024. */
   residual_rearm_alerted_at: string | null;
+  /** #1001, migration 0037 — see `OpenPosition.decision_price`. */
+  decision_price: number | null;
+  quote_bid: number | null;
+  quote_ask: number | null;
+  quote_mid: number | null;
+  quote_observed_at: string | null;
+  modelled_cost_breakdown_json: string | null;
 }
 
 interface FillRow {
@@ -114,6 +121,8 @@ interface FillRow {
   cost_breakdown_json: string | null;
   /** #793, migration 0031 — see `Fill.exit_reason`. */
   exit_reason: ExitReason | null;
+  /** #1001, migration 0037 — see `Fill.flatten_idempotency_key`. */
+  flatten_idempotency_key: string | null;
 }
 
 /**
@@ -224,8 +233,10 @@ export class SqliteExecutionStore implements SharedStore {
              idempotency_key, debate_id, instrument, asset_class, side, intent_type,
              requested_size, filled_size, avg_entry_price, stop, target,
              order_state, broker_order_ids, opened_at, decision_timestamp,
-             conviction, converged, arm
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             conviction, converged, arm,
+             decision_price, quote_bid, quote_ask, quote_mid, quote_observed_at,
+             modelled_cost_breakdown_json
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           position.idempotency_key,
@@ -250,6 +261,18 @@ export class SqliteExecutionStore implements SharedStore {
           // the row would let a mislabelled `OpenPosition` file a control lot
           // into the live arm's book.
           this.arm,
+          // #1001, migration 0037 — best-effort submit-time snapshot; see
+          // `OpenPosition`'s own field docs (records.ts) for what each is.
+          position.decision_price ?? null,
+          position.quote_bid ?? null,
+          position.quote_ask ?? null,
+          position.quote_mid ?? null,
+          position.quote_observed_at === undefined
+            ? null
+            : toStoredTimestamp(position.quote_observed_at),
+          position.modelled_cost_breakdown === undefined
+            ? null
+            : JSON.stringify(position.modelled_cost_breakdown),
         );
     } catch (cause) {
       if (isUniqueConstraintError(cause)) {
@@ -312,8 +335,8 @@ export class SqliteExecutionStore implements SharedStore {
         .prepare(
           `INSERT INTO fills (
              idempotency_key, broker_fill_id, leg, price, qty, fee, timestamp, cost_breakdown_json,
-             exit_reason
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             exit_reason, flatten_idempotency_key
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           fill.idempotency_key,
@@ -325,6 +348,7 @@ export class SqliteExecutionStore implements SharedStore {
           toStoredTimestamp(fill.timestamp),
           fill.cost_breakdown === undefined ? null : JSON.stringify(fill.cost_breakdown),
           fill.exit_reason ?? null,
+          fill.flatten_idempotency_key ?? null,
         );
     } catch (cause) {
       if (isUniqueConstraintError(cause)) {
@@ -517,8 +541,10 @@ export class SqliteExecutionStore implements SharedStore {
         .prepare(
           `INSERT INTO flatten_submissions (
              idempotency_key, instrument, asset_class, side, size,
-             status, submitted_at, lot_idempotency_keys, lot_held_quantities, exit_reason
-           ) VALUES (?, ?, ?, ?, ?, 'submitting', ?, ?, ?, ?)`,
+             status, submitted_at, lot_idempotency_keys, lot_held_quantities, exit_reason,
+             decision_price, quote_bid, quote_ask, quote_mid, quote_observed_at,
+             modelled_cost_breakdown_json
+           ) VALUES (?, ?, ?, ?, ?, 'submitting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           submission.idempotency_key,
@@ -533,6 +559,18 @@ export class SqliteExecutionStore implements SharedStore {
           JSON.stringify(submission.lot_held_quantities.map((lot) => lot.idempotency_key)),
           JSON.stringify(submission.lot_held_quantities.map((lot) => lot.held)),
           submission.exit_reason,
+          // #1001, migration 0037 — see `FlattenSubmissionWriteAhead`'s own
+          // field docs (types/store.ts).
+          submission.decision_price,
+          submission.quote_bid,
+          submission.quote_ask,
+          submission.quote_mid,
+          submission.quote_observed_at === null
+            ? null
+            : toStoredTimestamp(submission.quote_observed_at),
+          submission.modelled_cost_breakdown === null
+            ? null
+            : JSON.stringify(submission.modelled_cost_breakdown),
         );
     } catch (cause) {
       if (isUniqueConstraintError(cause)) {
@@ -619,7 +657,7 @@ export class SqliteExecutionStore implements SharedStore {
   async getFlattenAttribution(idempotency_key: string): Promise<FlattenAttribution | null> {
     const row = this.db
       .prepare(
-        `SELECT lot_idempotency_keys, lot_held_quantities, exit_reason
+        `SELECT lot_idempotency_keys, lot_held_quantities, exit_reason, modelled_cost_breakdown_json
            FROM flatten_submissions WHERE idempotency_key = ?`,
       )
       .get(idempotency_key) as
@@ -627,9 +665,21 @@ export class SqliteExecutionStore implements SharedStore {
           lot_idempotency_keys: string | null;
           lot_held_quantities: string | null;
           exit_reason: ExitReason | null;
+          modelled_cost_breakdown_json: string | null;
         }
       | undefined;
     if (row === undefined || row.lot_idempotency_keys === null) return null;
+
+    // #1001, migration 0037 — the flatten's own submit-time modelled cost
+    // breakdown, prorated and attached to each named lot's split exit fill
+    // by `redistributeOneFlatten` (ingest-fills.ts). `null` for a flatten row
+    // written before this migration, or whose submit-time capture failed.
+    const modelledCostBreakdown =
+      row.modelled_cost_breakdown_json === null
+        ? null
+        : (JSON.parse(row.modelled_cost_breakdown_json) as NonNullable<
+            FlattenAttribution['modelled_cost_breakdown']
+          >);
 
     // Validated, not cast — the same defect class #509 closed repo-wide
     // (a value cast to a type with no runtime check, failing far from the
@@ -656,6 +706,7 @@ export class SqliteExecutionStore implements SharedStore {
         lot_idempotency_keys: keys,
         lot_held_quantities: null,
         exit_reason: row.exit_reason,
+        modelled_cost_breakdown: modelledCostBreakdown,
       };
     }
 
@@ -695,6 +746,7 @@ export class SqliteExecutionStore implements SharedStore {
       lot_idempotency_keys: keys,
       lot_held_quantities: paired,
       exit_reason: row.exit_reason,
+      modelled_cost_breakdown: modelledCostBreakdown,
     };
   }
 
@@ -902,6 +954,23 @@ export function fromPositionRow(row: OpenPositionRow): OpenPosition {
     decision_timestamp: fromStoredTimestamp(row.decision_timestamp),
     conviction: row.conviction,
     converged: row.converged === 1,
+    // #1001, migration 0037 — omitted (not `null`) on a pre-migration row or
+    // an uncaptured best-effort read, matching `fromFillRow`'s own convention
+    // for `cost_breakdown`/`exit_reason` below.
+    ...(row.decision_price === null ? {} : { decision_price: row.decision_price }),
+    ...(row.quote_bid === null ? {} : { quote_bid: row.quote_bid }),
+    ...(row.quote_ask === null ? {} : { quote_ask: row.quote_ask }),
+    ...(row.quote_mid === null ? {} : { quote_mid: row.quote_mid }),
+    ...(row.quote_observed_at === null
+      ? {}
+      : { quote_observed_at: fromStoredTimestamp(row.quote_observed_at) }),
+    ...(row.modelled_cost_breakdown_json === null
+      ? {}
+      : {
+          modelled_cost_breakdown: JSON.parse(row.modelled_cost_breakdown_json) as NonNullable<
+            OpenPosition['modelled_cost_breakdown']
+          >,
+        }),
   };
 }
 
@@ -922,5 +991,8 @@ function fromFillRow(row: FillRow): Fill {
           >,
         }),
     ...(row.exit_reason === null ? {} : { exit_reason: row.exit_reason }),
+    ...(row.flatten_idempotency_key === null
+      ? {}
+      : { flatten_idempotency_key: row.flatten_idempotency_key }),
   };
 }

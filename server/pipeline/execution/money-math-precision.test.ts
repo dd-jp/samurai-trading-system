@@ -506,6 +506,7 @@ describe('money-math precision (ADR-0005)', () => {
           collectMarks(getMark, instruments, at),
       ),
       getSpreadEstimate: vi.fn(notOnThisPath('getSpreadEstimate') as () => Promise<number | null>),
+      getQuote: vi.fn(notOnThisPath('getQuote') as () => Promise<null>),
       getADV: vi.fn(notOnThisPath('getADV') as () => Promise<number>),
     };
 

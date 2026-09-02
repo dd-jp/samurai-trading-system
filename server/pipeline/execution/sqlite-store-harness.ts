@@ -52,6 +52,13 @@ export interface FlattenSubmissionRow {
   lot_held_quantities: string | null;
   /** NULL until `markFlattenFillsSwept` runs — migration 0023 (#519/#526). */
   fills_swept_at: string | null;
+  /** #1001, migration 0037 — the raw submit-time snapshot columns, unparsed. */
+  decision_price: number | null;
+  quote_bid: number | null;
+  quote_ask: number | null;
+  quote_mid: number | null;
+  quote_observed_at: string | null;
+  modelled_cost_breakdown_json: string | null;
 }
 
 export class TestExecutionStore extends SqliteExecutionStore {

@@ -86,6 +86,7 @@ const FAKE_MARKET_DATA = {
     collectMarks(FAKE_GET_MARK, instruments, asOf),
   ),
   getSpreadEstimate: vi.fn(async () => null),
+  getQuote: vi.fn(async () => null),
   getADV: vi.fn(async () => 1000),
 };
 

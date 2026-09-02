@@ -108,6 +108,20 @@ export interface NormalizedFill {
    * `closedTrade()` can read it back regardless of which poll ingested it.
    */
   exit_reason?: ExitReason;
+  /**
+   * #1001: set by `redistributeOneFlatten` on a flatten's split fill, from
+   * the `clientOrderId` `getFlattenAttribution` was looked up by — the
+   * FLATTEN's own `flatten_submissions.idempotency_key`, not the lot's (the
+   * split fill is re-keyed to the lot before persistence, which is exactly
+   * what loses this link if it is not carried separately). Persisted
+   * (`toFill`, migration 0037) so a stored exit fill can be joined back to
+   * the specific `flatten_submissions` row that priced it — the decision
+   * mid and modelled cost breakdown it carries — without guessing by
+   * timestamp when a lot has been partially flattened more than once.
+   * Absent on an `'entry'`/`'stop'`/`'target'` fill (no flatten submission
+   * behind those) and on an `'exit'` fill from before this migration.
+   */
+  flatten_idempotency_key?: string;
 }
 
 /**

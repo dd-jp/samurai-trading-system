@@ -20,6 +20,7 @@ import type {
   MarketDataService,
   MarketDataStore,
   MarkRead,
+  Quote,
 } from './types.js';
 
 /**
@@ -332,16 +333,29 @@ export class MarketDataServiceImpl implements MarketDataService {
    * unimplemented), when it has no quote for this instrument/asOf, or when
    * a returned quote is timestamped after `asOf` (defensive PIT re-check,
    * mirroring `getBars`'s close-time re-filter) — never a fabricated value.
+   *
+   * Delegates to `getQuote` so the two never disagree about what "no quote"
+   * means — a single PIT check, not two that could drift.
    */
   async getSpreadEstimate(
     instrument: string,
     asOf: Date = this.clock.now(),
   ): Promise<number | null> {
+    const quote = await this.getQuote(instrument, asOf);
+    return quote === null ? null : quote.ask - quote.bid;
+  }
+
+  /**
+   * The genuine bid/ask observation — #1001. Same source call and same PIT
+   * re-check `getSpreadEstimate` used to do inline (now the other way
+   * around: that method delegates here).
+   */
+  async getQuote(instrument: string, asOf: Date = this.clock.now()): Promise<Quote | null> {
     const quote = await this.dataSource.fetchQuote?.(instrument, asOf);
     if (!quote || quote.observed_at.getTime() > asOf.getTime()) {
       return null;
     }
-    return quote.ask - quote.bid;
+    return quote;
   }
 
   /**

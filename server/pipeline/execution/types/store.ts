@@ -317,6 +317,20 @@ export interface FlattenAttribution {
    * written before that migration, which recorded no such reason.
    */
   exit_reason: ExitReason | null;
+  /**
+   * #1001: the modelled cost breakdown captured at the flatten's own
+   * submit time (`FlattenSubmissionWriteAhead.modelled_cost_breakdown`) —
+   * what `redistributeOneFlatten` (ingest-fills.ts) prorates by each named
+   * lot's share and attaches to that lot's split exit fill, since the venue
+   * reports no breakdown of its own. `null` for a flatten row written before
+   * migration 0037, or whose submit-time capture failed.
+   */
+  modelled_cost_breakdown: {
+    spread_cost: number;
+    commission: number;
+    slippage: number;
+    market_impact: number;
+  } | null;
 }
 
 /** One poll's atomic advance of a single lot — see `SharedStore.applyLotAdvance`. */
@@ -368,4 +382,24 @@ export interface FlattenSubmissionWriteAhead {
    * rather than defaulting silently.
    */
   exit_reason: ExitReason;
+  /**
+   * #1001's submit-time snapshot, mirroring `OpenPosition`'s own fields of
+   * the same name (records.ts) — see there for what each one is. `null`
+   * rather than omitted (unlike the read-side `OpenPosition`/`Fill` optional
+   * fields): `captureSubmitSnapshot` (execute.ts) always returns a value for
+   * every one of these, sometimes null when the best-effort capture failed
+   * or was skipped (`order.metadata.unpriced_exit`), so the write-ahead call
+   * site never has a "not yet known" case to omit.
+   */
+  decision_price: number | null;
+  quote_bid: number | null;
+  quote_ask: number | null;
+  quote_mid: number | null;
+  quote_observed_at: Date | null;
+  modelled_cost_breakdown: {
+    spread_cost: number;
+    commission: number;
+    slippage: number;
+    market_impact: number;
+  } | null;
 }

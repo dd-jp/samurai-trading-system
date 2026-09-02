@@ -373,6 +373,42 @@ export interface OpenPosition {
    */
   conviction: number;
   converged: boolean;
+  /**
+   * #1001: the price the Trader's decision was formed at — `OrderIntent.entry`,
+   * unchanged through Debate/Risk/Verdict. NOT the post-tick-rounding wire
+   * price the adapter actually submits (`broker_brackets.entry_price` carries
+   * that, joinable by `(venue, client_order_id)`). Optional because a row
+   * written before migration 0037 carries none — omission means "not
+   * captured", never a fabricated 0.
+   */
+  decision_price?: number;
+  /**
+   * The submit-time quote's own two sides, from `MarketDataService.getQuote`
+   * — genuinely observed, never derived from a scalar spread (#1001). Both
+   * absent together on any source with no `DataSource.fetchQuote` (e.g.
+   * Alpaca's own `AlpacaDataSource`), or on a pre-migration-0037 row.
+   */
+  quote_bid?: number;
+  quote_ask?: number;
+  /** (quote_bid + quote_ask) / 2 — a real midpoint of the SAME observed quote. Absent iff the pair is. */
+  quote_mid?: number;
+  /** The quote's own timestamp — distinct from `decision_timestamp` and `opened_at` (pipeline latency separates all three). */
+  quote_observed_at?: Date;
+  /**
+   * The modelled cost breakdown captured at submit time, via the same
+   * `CostModel.fill()` the Simulated adapter calls (#1001) — what
+   * `ingest-fills.ts`'s `toFill` copies onto a real-broker entry fill's own
+   * `Fill.cost_breakdown` (prorated by that fill's share of `requested_size`)
+   * since the venue reports no breakdown of its own. Absent on a
+   * pre-migration-0037 row or when the submit-time capture failed
+   * (best-effort — see `execute.ts`'s `captureSubmitSnapshot`).
+   */
+  modelled_cost_breakdown?: {
+    spread_cost: number;
+    commission: number;
+    slippage: number;
+    market_impact: number;
+  };
 }
 
 /**
@@ -393,10 +429,18 @@ export interface Fill {
   fee: number;
   timestamp: Date;
   /**
-   * Populated only for fills produced by the Simulated adapter, mapped from
-   * `CostModel.fill`'s `CostModelResult`. Absent on real broker fills, where
-   * no modeled breakdown exists — which is what powers FL's live-vs-modeled
-   * cost divergence check (cross-spec §4, GAP-F).
+   * On a Simulated-adapter fill: `CostModel.fill`'s own `CostModelResult`,
+   * priced against the actual fill. On a real-broker `'entry'` fill (#1001):
+   * the MODELLED figure captured at submit time
+   * (`OpenPosition.modelled_cost_breakdown`), prorated by this fill's share
+   * of the lot's `requested_size` — the venue reports no breakdown of its
+   * own, so this is the estimate to diff the realized price against, not a
+   * second observation. Absent on a `'stop'`/`'target'` fill (the Simulated
+   * adapter never modelled those either — there is no modelled figure to
+   * fall back to) and on any fill whose submit-time capture failed or
+   * predates migration 0037. FL's live-vs-modeled divergence check
+   * (cross-spec §4, GAP-F) reads this the same way regardless of which path
+   * populated it; a caller that must tell them apart can check `leg`.
    */
   cost_breakdown?: {
     spread_cost: number;
@@ -415,6 +459,18 @@ export interface Fill {
    * before this migration, whose reason was never recorded.
    */
   exit_reason?: ExitReason;
+  /**
+   * #1001, migration 0037: for a `leg: 'exit'` fill produced by
+   * `redistributeOneFlatten`, the FLATTEN's own
+   * `flatten_submissions.idempotency_key` (not the lot's — this row's own
+   * `idempotency_key` is already the lot's, per `fills`' PK convention).
+   * Joins a stored exit fill back to the specific flatten submission that
+   * priced it (`decision_price`, `quote_mid`, `modelled_cost_breakdown`)
+   * without a timestamp-ordering guess when a lot was partially flattened
+   * more than once. Absent on `'entry'`/`'stop'`/`'target'` fills and on an
+   * `'exit'` fill from before this migration.
+   */
+  flatten_idempotency_key?: string;
 }
 
 /**

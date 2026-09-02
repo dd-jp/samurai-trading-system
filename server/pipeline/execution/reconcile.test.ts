@@ -503,6 +503,14 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
       submitted_at: NOW,
       lot_held_quantities: [{ idempotency_key: 'key-aapl-entry', held: 10 }],
       exit_reason: 'flatten',
+      // #1001 — every write-ahead call site provides a value (possibly null,
+      // never omitted; see `FlattenSubmissionWriteAhead`'s own doc).
+      decision_price: null,
+      quote_bid: null,
+      quote_ask: null,
+      quote_mid: null,
+      quote_observed_at: null,
+      modelled_cost_breakdown: null,
       ...overrides,
     });
   }

@@ -13,8 +13,10 @@ import {
   logCaughtFailure,
   type OpenPosition,
   type OrderIntent,
+  safeLog,
   totalHeldQuantity,
 } from '../../shared/index.js';
+import type { CostBreakdown, FillRequest, MarketState } from '../../tools/backtest/index.js';
 import type { VerdictDecision } from '../verdict/index.js';
 import { ingestFills } from './ingest-fills.js';
 import { reconcile } from './reconcile.js';
@@ -138,6 +140,11 @@ export class ExecutionImpl implements Execution {
       time_in_force: order.time_in_force,
     };
 
+    // #1001: best-effort, never blocking — see `captureSubmitSnapshot`'s doc.
+    // Read BEFORE the write-ahead so the snapshot lands in the same durable
+    // row a crash-restart would recover, not bolted on after the fact.
+    const snapshot = await captureSubmitSnapshot(this.input, order, now);
+
     const position: OpenPosition = {
       idempotency_key: idempotencyKey,
       debate_id: order.metadata.debate_id,
@@ -156,6 +163,16 @@ export class ExecutionImpl implements Execution {
       decision_timestamp: order.decision_timestamp,
       conviction: order.metadata.conviction,
       converged: order.metadata.converged,
+      decision_price: snapshot.decision_price,
+      ...(snapshot.quote_bid === null ? {} : { quote_bid: snapshot.quote_bid }),
+      ...(snapshot.quote_ask === null ? {} : { quote_ask: snapshot.quote_ask }),
+      ...(snapshot.quote_mid === null ? {} : { quote_mid: snapshot.quote_mid }),
+      ...(snapshot.quote_observed_at === null
+        ? {}
+        : { quote_observed_at: snapshot.quote_observed_at }),
+      ...(snapshot.modelled_cost_breakdown === null
+        ? {}
+        : { modelled_cost_breakdown: snapshot.modelled_cost_breakdown }),
     };
 
     // Write-ahead: `pending` is durable BEFORE the broker call, so a crash in
@@ -206,6 +223,142 @@ export class ExecutionImpl implements Execution {
       broker_order_ids: ack.broker_order_ids,
     });
   }
+}
+
+/**
+ * The submit-time snapshot #1001 captures alongside every write-ahead —
+ * `decision_price` plus a best-effort quote and modelled cost breakdown. See
+ * `captureSubmitSnapshot` below for how each field is produced.
+ */
+interface SubmitSnapshot {
+  decision_price: number;
+  quote_bid: number | null;
+  quote_ask: number | null;
+  quote_mid: number | null;
+  quote_observed_at: Date | null;
+  modelled_cost_breakdown: CostBreakdown | null;
+}
+
+/**
+ * #1001: what the system believed immediately before submitting an order —
+ * the price the Trader's decision was formed at, the venue's own bid/ask (if
+ * the instrument's data source quotes one), and a modelled cost breakdown
+ * priced the same way the Simulated adapter prices one
+ * (`SimulatedBrokerAdapter.buildMarketState` + `CostModel.fill`), so a
+ * real-broker fill has something honest to diff its realized price against.
+ *
+ * BEST-EFFORT AND NEVER BLOCKING — this is instrumentation, not a trading
+ * decision. `decision_price` alone needs no I/O (`order.entry` is already in
+ * hand), so it is always populated; the quote and cost-model reads are each
+ * wrapped in their OWN try/catch, independently, so a failure in one does not
+ * cost the other. Every failure degrades to `null` and is logged, never
+ * thrown — mirroring #826's mandatory flat-by-close design, where a stalled
+ * feed must never delay or refuse an order. For the same reason, the reads
+ * are skipped entirely when `order.metadata.unpriced_exit` is set: that flag
+ * already means the feed was dark THIS tick (`readExitPrice`, trader/decide.ts)
+ * — re-probing it here would only be a second chance for the same feed to
+ * hang, inside the one window (#826) a hang must never widen.
+ */
+async function captureSubmitSnapshot(
+  input: ExecutionInput,
+  order: OrderIntent,
+  now: Date,
+): Promise<SubmitSnapshot> {
+  const decision_price = order.entry;
+
+  let quoteBid: number | null = null;
+  let quoteAsk: number | null = null;
+  let quoteObservedAt: Date | null = null;
+  let modelledCostBreakdown: CostBreakdown | null = null;
+
+  if (order.metadata.unpriced_exit !== true) {
+    const { marketData, costModel, config, logger, trace_id } = input;
+
+    try {
+      const quote = await marketData.getQuote(order.instrument, now);
+      if (quote !== null) {
+        quoteBid = quote.bid;
+        quoteAsk = quote.ask;
+        quoteObservedAt = quote.observed_at;
+      }
+    } catch (error) {
+      logCaughtFailure(
+        logger,
+        {
+          trace_id,
+          stage: 'execution',
+          level: 'warn',
+          message:
+            '#1001: captureSubmitSnapshot could not read a quote at submit time — ' +
+            'quote_bid/quote_ask/quote_mid/quote_observed_at are left null for this order. ' +
+            'Best-effort instrumentation only; the order is submitted regardless.',
+        },
+        error,
+        { idempotency_key: order.idempotency_key, instrument: order.instrument },
+      );
+    }
+
+    try {
+      const [mark, volatility, spread, adv] = await Promise.all([
+        marketData.getMark(order.instrument, now),
+        marketData.getIndicator(order.instrument, config.simulated.volatility_indicator, now),
+        marketData.getSpreadEstimate(order.instrument, now),
+        marketData.getADV(order.instrument, config.simulated.adv_window, now),
+      ]);
+      const marketState: MarketState = {
+        mid: mark.price,
+        spread,
+        adv,
+        volatility: volatility.value,
+        asset_class: mark.asset_class,
+        timestamp: mark.observed_at,
+      };
+      const fillRequest: FillRequest = {
+        instrument: order.instrument,
+        side: order.side,
+        size: order.size,
+        order_type: order.intent_type === 'exit' ? 'market' : 'limit',
+        ...(order.intent_type === 'exit' ? {} : { limit_price: order.entry }),
+        idempotency_key: order.idempotency_key,
+      };
+      modelledCostBreakdown = costModel.fill(fillRequest, marketState).cost_breakdown;
+    } catch (error) {
+      logCaughtFailure(
+        logger,
+        {
+          trace_id,
+          stage: 'execution',
+          level: 'warn',
+          message:
+            '#1001: captureSubmitSnapshot could not assemble a MarketState / price the modelled ' +
+            'cost breakdown at submit time — modelled_cost_breakdown is left null for this order. ' +
+            'Best-effort instrumentation only; the order is submitted regardless.',
+        },
+        error,
+        { idempotency_key: order.idempotency_key, instrument: order.instrument },
+      );
+    }
+  } else {
+    safeLog(input.logger, {
+      trace_id: input.trace_id,
+      stage: 'execution',
+      level: 'info',
+      message:
+        '#1001: captureSubmitSnapshot skipped the quote/cost-model reads for an unpriced exit ' +
+        '(order.metadata.unpriced_exit) — the feed was already known dark this tick, so ' +
+        're-probing it here would only risk widening the #826 flatten window.',
+      payload: { idempotency_key: order.idempotency_key, instrument: order.instrument },
+    });
+  }
+
+  return {
+    decision_price,
+    quote_bid: quoteBid,
+    quote_ask: quoteAsk,
+    quote_mid: quoteBid === null || quoteAsk === null ? null : (quoteBid + quoteAsk) / 2,
+    quote_observed_at: quoteObservedAt,
+    modelled_cost_breakdown: modelledCostBreakdown,
+  };
 }
 
 /**
@@ -386,6 +539,10 @@ async function executeExit(
     });
   }
 
+  // #1001: best-effort, never blocking — see `captureSubmitSnapshot`'s doc.
+  // Read BEFORE the write-ahead, same reasoning as the bracket path.
+  const snapshot = await captureSubmitSnapshot(input, order, now);
+
   // Write-ahead BEFORE any broker call — see the docstring above for why
   // this row exists at all. `writeAheadFlatten` throwing (a genuine store
   // failure, not the duplicate case — `findByKey` above already excludes
@@ -415,6 +572,12 @@ async function executeExit(
     // its protective legs go either way; dropping it here would remove the
     // only thing that re-arms them (#525). Its share is then exactly zero.
     lot_held_quantities: perLotHeld,
+    decision_price: snapshot.decision_price,
+    quote_bid: snapshot.quote_bid,
+    quote_ask: snapshot.quote_ask,
+    quote_mid: snapshot.quote_mid,
+    quote_observed_at: snapshot.quote_observed_at,
+    modelled_cost_breakdown: snapshot.modelled_cost_breakdown,
   });
 
   // Lots this loop has ALREADY cancelled successfully, in order. Load-bearing
