@@ -297,8 +297,16 @@ than a US mega-cap's — so the proxy errs optimistic, which is the direction th
 
 ## What could not be measured
 
-- **LSE leveraged-ETP spreads** — no free quote source (G4 above).
+- **LSE leveraged-ETP spreads** — no free quote source (G4 above). **CORRECTED 2026-09-02 by
+  [`58-cost-floor-sizing-and-per-instrument-spread.md`](58-cost-floor-sizing-and-per-instrument-spread.md) §F2b:
+  a free unauthenticated LSE endpoint returns bid/offer for all thirty pool lines.** G4's conclusion that this
+  document's figures are a US proxy is unaffected; what changes is that closing the gap no longer needs a paid
+  feed. Doc 58 F6 measures the pool at a median 88.1 bps round trip against 3USL's 15.6 bps.
 - **Realised slippage** — needs live fills. Left as the daily config's declared `coefficient / 4` assumption,
-  labelled as such, unchanged in kind.
+  labelled as such, unchanged in kind. **Doc 58 F1 finds there are none: pipeline-generated fills are ZERO, and
+  the paper soak can never supply them** — Alpaca paper books `fee = 0.0` and no bid/ask is persisted anywhere in
+  the schema.
 - **Whether the structural floors are correctly sized** — the floors dominate the charged cost, but validating
-  them needs realised fills, and they are explicitly out of this ticket's scope.
+  them needs realised fills, and they are explicitly out of this ticket's scope. **ANSWERED 2026-09-02 by doc 58
+  §F4: they are under-sized and flattering for the live universe.** Saxo charges 8 bps per side (ADR-0015:201)
+  against a 1 bp commission floor, and all 30 of 30 pool lines show a half-spread above the 1 bp spread floor.
