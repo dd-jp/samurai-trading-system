@@ -747,7 +747,7 @@ describe('buildProductionComponents', () => {
 
   it.each(['SPY', 'AGG'])(
     'refuses to build with mode "live" and %s still directly in the universe (#989) — ' +
-      "PRE-#751, `marketData`'s own `AlpacaDataSource` can write a %s bar normalized " +
+      "PRE-#751, `marketData`'s own `AlpacaDataSource` can write a matching bar normalized " +
       "against `equityCalendarFor`'s `LseRegularHoursCalendar` (live mode) while " +
       "`buildBenchmarkDataSource`'s fixed benchmark port writes the SAME " +
       "(instrument, timeframe, open_time) row normalized against " +
@@ -760,18 +760,62 @@ describe('buildProductionComponents', () => {
         universe: [{ asset: instrument, asset_class: 'stocks' }],
       });
 
-      expect(() => buildProductionComponents(config)).toThrow(new RegExp(instrument));
+      // Not `new RegExp(instrument)` (#989 review): that would pass on ANY
+      // unrelated error that happens to contain "SPY"/"AGG" as a substring,
+      // not necessarily this guard. Match the guard's distinctive phrase
+      // instead.
+      expect(() => buildProductionComponents(config)).toThrow(
+        /collides with the outside-benchmark path/,
+      );
     },
   );
 
   it(
-    'does NOT refuse mode "paper" with SPY in the universe (#989) — the collision guard is ' +
-      'live-mode only; `buildBenchmarkDataSource`\'s benchmark store and a paper run\'s own ' +
-      '`marketDataStore` never share a calendar-disagreement hazard because paper never ' +
-      'resolves `equityCalendarFor` to `LseRegularHoursCalendar`',
+    'does NOT refuse mode "paper" with SPY in the universe and no tradingCalendar override ' +
+      '(#989) — the guard keys on the RESOLVED trading calendar, not `mode` directly, and ' +
+      'plain `mode: "paper"` resolves `equityCalendarFor` to `UsEquityRegularHoursCalendar`, ' +
+      "which matches `buildBenchmarkDataSource`'s own fixed calendar — no disagreement to guard",
     () => {
       const config = stubConfig(db, {
         mode: 'paper',
+        universe: [{ asset: 'SPY', asset_class: 'stocks' }],
+      });
+
+      expect(() => buildProductionComponents(config)).not.toThrow();
+    },
+  );
+
+  it(
+    'refuses mode "paper" with an explicit LSE tradingCalendar override and SPY in the ' +
+      'universe (#989 review — the false negative a `mode`-only guard would miss) — ' +
+      'this override pattern already exists elsewhere in this file (see the flatten-tail ' +
+      "tests' `pinLse` config) and reproduces the exact same collision mechanism: the " +
+      'resolved calendar is `LseRegularHoursCalendar` while `buildBenchmarkDataSource` stays ' +
+      'pinned to `UsEquityRegularHoursCalendar`, regardless of `mode`',
+    () => {
+      const config = stubConfig(db, {
+        mode: 'paper',
+        tradingCalendar: new LseRegularHoursCalendar(),
+        universe: [{ asset: 'SPY', asset_class: 'stocks' }],
+      });
+
+      expect(() => buildProductionComponents(config)).toThrow(
+        /collides with the outside-benchmark path/,
+      );
+    },
+  );
+
+  it(
+    'does NOT refuse mode "live" with an explicit US tradingCalendar override and SPY in the ' +
+      'universe (#989 review — the false positive a `mode`-only guard would wrongly reject) — ' +
+      'the resolved calendar is `UsEquityRegularHoursCalendar`, matching ' +
+      "`buildBenchmarkDataSource`'s own calendar exactly, so there is no real mismatch even " +
+      'though `mode` is "live"',
+    () => {
+      const config = stubConfig(db, {
+        mode: 'live',
+        capitalCeilingUsd: 1_000,
+        tradingCalendar: new UsEquityRegularHoursCalendar(),
         universe: [{ asset: 'SPY', asset_class: 'stocks' }],
       });
 

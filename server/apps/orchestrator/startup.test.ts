@@ -787,6 +787,27 @@ describe('startFromEnvironment — the live profile (#511)', () => {
     }
   });
 
+  it(
+    'refuses to boot the REAL default live entrypoint (#989) — `startingProfileForMode' +
+      "('live')` (`liveStartingProfile` under the hood) resolves to `DEFAULT_UNIVERSE`, " +
+      "which still trades 'SPY' directly, with no `universe` override at all. The test " +
+      "above deliberately drops 'SPY' from the universe to isolate the live-host wiring " +
+      'it is about; this one proves the collision guard actually protects the default ' +
+      'entrypoint an operator would reach by just setting SAMURAI_MODE=live, not only the ' +
+      'synthetic configs `production.test.ts` constructs by hand',
+    async () => {
+      const error = await startFromEnvironment({
+        ...startingProfileForMode('live'),
+        db: openSharedStore(':memory:'),
+        miArchive: new MiArchiveStore(),
+        gdeltClient: offlineGdeltClient,
+        polymarketClient: offlinePolymarketClient,
+      }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
+
+      expect(error.message).toMatch(/collides with the outside-benchmark path/);
+    },
+  );
+
   it.each([
     '',
     '  ',
