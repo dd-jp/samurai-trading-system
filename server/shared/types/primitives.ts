@@ -35,6 +35,10 @@ export interface LogEntry {
   level: 'info' | 'warn' | 'error';
   message: string;
   payload?: unknown;
+  /** Real wall-clock start of the stage, ISO 8601 — not `Clock.now()`, which doesn't advance on its own in backtest. */
+  started_at?: string;
+  /** Real wall-clock elapsed time for the stage, in milliseconds. */
+  duration_ms?: number;
 }
 
 /**

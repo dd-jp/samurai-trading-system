@@ -156,6 +156,8 @@ export function formatLogLine(entry: LogEntry): string {
     level: entry.level,
     message: entry.message,
     payload: entry.payload,
+    started_at: entry.started_at,
+    duration_ms: entry.duration_ms,
   })}\n`;
 }
 
