@@ -87,6 +87,7 @@ LOOKBACK_MONTHS = 12
 NAME_FLOOR = 20            # declared 2026-08-27; applied to BOTH arms
 IS_LAST_YEAR = 2022        # 18-threshold-study.py:272
 OOS_FIRST_YEAR = 2023      # 18-threshold-study.py:273
+STAGES = ("data", "is", "oos")
 # 80% power, 5% two-sided: 1.96 + 0.8416. Doc 51's MDE convention, unchanged.
 MDE_Z = 1.959964 + 0.841621
 
@@ -200,6 +201,11 @@ def summary(series):
 
 def main():
     stage = sys.argv[1] if len(sys.argv) > 1 else "data"
+    # The staging IS the pre-registration discipline: a mistyped stage that fell
+    # through to the out-of-sample arm would score OOS under an in-sample label.
+    # Unknown stages therefore fail loudly rather than defaulting to anything.
+    if stage not in STAGES:
+        raise SystemExit("unknown stage %r — expected one of: %s" % (stage, ", ".join(STAGES)))
     per_symbol, span = load()
     months = all_months()
 
@@ -248,8 +254,13 @@ def main():
         # MDE: dispersion from THIS arm, sample size from the arm actually
         # tested. Using the in-sample month count would report the power of a
         # test that is not being run.
+        # Availability only: count the out-of-sample months that clear the floor,
+        # which is the sole filter `spreads()` applies. Calling `spreads()` here
+        # would form out-of-sample spread values — the very numbers this stage
+        # exists to defer — even though they would be discarded unread.
         oos_months = [m for m in months if int(m[:4]) >= OOS_FIRST_YEAR]
-        m_oos = len(spreads(per_symbol, oos_months))
+        m_oos = sum(1 for m in oos_months
+                    if len(cross_section(per_symbol, m)) >= NAME_FLOOR)
         print("\n   MDE for the out-of-sample arm:")
         print("   %.4f x %.4f / sqrt(%d) = %+.4f %%/session"
               % (MDE_Z, sd, m_oos, MDE_Z * sd / math.sqrt(m_oos)))
