@@ -129,7 +129,7 @@ export {
   attributeTradeCost,
   GrossOfCostsTradeSource,
 } from './cost-attribution.js';
-export { CostModelImpl } from './cost-model.js';
+export { CostModelImpl, DEFAULT_COST_FLOORS } from './cost-model.js';
 export type { EvalExecutorDeps } from './eval-executor.js';
 export { EvalExecutorImpl } from './eval-executor.js';
 export type {
@@ -210,8 +210,10 @@ export type {
   BacktestReport,
   CostBreakdown,
   CostConfig,
+  CostFloors,
   CostModel,
   CostModelResult,
+  CostVenue,
   FillRequest,
   MarketState,
   ReplayTimeline,

@@ -143,6 +143,18 @@ export const COST_SCALES = [1, 0.5, 0.25, 0.1, 0.05] as const;
  * preserved here rather than modeled around — each rung is re-run against the
  * real cost model instead of extrapolated arithmetically, so the reported bps
  * are what the model actually charged.
+ *
+ * `floors` and `venues` (#1000) are carried through UNSCALED, not dropped:
+ * they are not among "every cost coefficient" this function's own docstring
+ * scales, so silently omitting them would have quietly reset any caller's
+ * floor override back to `DEFAULT_COST_FLOORS` at every rung. `PESSIMISTIC_COST_CONFIG`
+ * (this file's own default) sets neither, so the default caller sees no
+ * behaviour change from this.
+ *
+ * Copied, not aliased, same as every other field this function returns: a
+ * caller mutating a scaled rung's `floors`/`venues` must not reach back into
+ * the input `config` it was scaled from — `copyVenues` below does that
+ * per-venue-object copy for `venues`.
  */
 export function scaleCostConfig(config: CostConfig, factor: number): CostConfig {
   const scale = (c: CostConfig['crypto']): CostConfig['crypto'] => ({
@@ -151,7 +163,22 @@ export function scaleCostConfig(config: CostConfig, factor: number): CostConfig 
     slippageCoefficient: c.slippageCoefficient * factor,
     impactK: c.impactK * factor,
   });
-  return { crypto: scale(config.crypto), stocks: scale(config.stocks) };
+  return {
+    crypto: scale(config.crypto),
+    stocks: scale(config.stocks),
+    ...(config.floors ? { floors: { ...config.floors } } : {}),
+    ...(config.venues ? { venues: copyVenues(config.venues) } : {}),
+  };
+}
+
+/** Shallow-copies each venue's override object so `venues` isn't aliased. */
+function copyVenues(venues: NonNullable<CostConfig['venues']>): NonNullable<CostConfig['venues']> {
+  const copy: NonNullable<CostConfig['venues']> = {};
+  for (const venue of Object.keys(venues) as Array<keyof NonNullable<CostConfig['venues']>>) {
+    const override = venues[venue];
+    if (override) copy[venue] = { ...override };
+  }
+  return copy;
 }
 
 export async function runCostDecomposition(

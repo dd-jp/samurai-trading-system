@@ -229,6 +229,20 @@ describe('costConfigFor — the timeframe-keyed cost config (#875)', () => {
     expect(CALIBRATED_INTRADAY_COST_CONFIG.crypto).toBe(PESSIMISTIC_COST_CONFIG.crypto);
   });
 
+  /**
+   * #1000: ADR-0015:201's Saxo Classic tier is 8bps-per-side — the live
+   * venue for this universe's actual traded ETPs, unlike the Alpaca-fitted
+   * `stocks.commissionRate: 0` above. The override is currently inert (no
+   * caller sets `MarketState.venue = 'saxo'` yet), so this only pins that
+   * the rate is present and correctly keyed, not that anything consumes it.
+   */
+  it('carries a Saxo-keyed commission override at ADR-0015:201s 8bps rate', () => {
+    expect(CALIBRATED_INTRADAY_COST_CONFIG.venues?.saxo?.commissionRate).toBe(0.0008);
+    // The un-keyed default stays 0 (correct for Alpaca) — the override does
+    // not mutate the base asset-class config.
+    expect(CALIBRATED_INTRADAY_COST_CONFIG.stocks.commissionRate).toBe(0);
+  });
+
   /** The comparison escape hatch still wins, at every resolution. */
   it('honours SAMURAI_STAGE2_COST_CONFIG=pessimistic at both resolutions', () => {
     for (const timeframe of ['1d', '1m']) {
