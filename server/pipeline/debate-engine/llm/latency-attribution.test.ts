@@ -57,15 +57,60 @@
  * cannot differ this much on generation length; something external to the
  * call's own content varied between them.
  *
- * FINDING 4 — this isn't client-side contention. The raw rows around the
- * global max (ids 136-152, 2026-08-27T14:03-14:05Z) show every call's
- * timestamp landing within ~1-4s of the PRIOR call's timestamp plus its own
- * latency — i.e. calls run strictly sequentially, one HTTP request in flight
- * at a time, exactly as #1011's "9-10 calls run strictly in sequence per
- * debate" and #1013's "serial instruments" describe. There is no concurrent
- * request from this process that could be queuing against its own traffic.
- * That leaves the provider side (Nous's portal, or Anthropic behind it) as
- * the source of the swing.
+ * FINDING 4 — this rules out client-side CONCURRENCY, not client-side cost in
+ * general. The raw rows around the global max (ids 136-152,
+ * 2026-08-27T14:03-14:05Z) show every call's timestamp landing within ~1-4s
+ * of the PRIOR call's timestamp plus its own latency — i.e. calls run
+ * strictly sequentially, one HTTP request in flight at a time, exactly as
+ * #1011's "9-10 calls run strictly in sequence per debate" and #1013's
+ * "serial instruments" describe. There is no concurrent request from this
+ * process that could be queuing against its own traffic. That is narrower
+ * than "therefore provider-side": a cold TCP/TLS handshake, DNS lookup, or a
+ * consumer-network hiccup (the MacBook host's own listed risk — see
+ * CLAUDE.md's "power/WiFi drops") would ALSO show up as one slow sequential
+ * call with nothing else in flight, and sequentiality alone cannot
+ * distinguish that from provider-side queueing. Findings 4a/4b below close
+ * that gap instead of leaving it as an assumption.
+ *
+ * FINDING 4a — no client-side WAIT exists in the call chain at all, so it is
+ * not backoff or a rate-limiter parking the call. `latency_ms` is measured
+ * inside `AnthropicLlmClient.attempt` around `callWithTimeout`'s direct call
+ * to the wire client — no retry backoff runs inside that span; each retry is
+ * its own `attempt` with its own `start`, so a retried call's wait-before-
+ * retry is time BETWEEN two recorded rows, not time inside either one.
+ * Above that, `RateLimitedLlmClient` (orchestrator/production) is
+ * deliberately non-blocking: its own class doc says so in as many words
+ * ("It does not wait, and that is the decision"), `recordCall` is a
+ * synchronous counter increment, and `rate-limited-llm-client.test.ts`
+ * already asserts the ordering (`['recorded', 'issued']`, no wait between
+ * them) as a regression guard. There is no queue, semaphore, or backoff
+ * anywhere between the debate call site and the `fetch` call that
+ * `latency_ms` could be silently including.
+ *
+ * FINDING 4b — the cold-connection/network-hiccup alternative is checked
+ * directly and comes back negative. If a stall this large were driven by a
+ * cold connection or a local network hiccup, it should concentrate on calls
+ * that follow an idle gap (nothing recently sent means nothing recently
+ * warmed a connection) — exactly what a cold-start theory predicts. It does
+ * not: bucketing every `anthropic/claude-haiku-4.5` row by the gap since the
+ * PRIOR row's timestamp (2026-09-02 sample, n=398).
+ *
+ * | gap since prior call | n   | mean latency | max latency | calls > 15s |
+ * |-----------------------|-----|--------------|-------------|-------------|
+ * | > 5 min (incl. first) | 12  | 5,660ms      | 11,657ms    | 0           |
+ * | 1-5 min               | 1   | 6,525ms      | 6,525ms     | 0           |
+ * | back-to-back (< 1min) | 385 | 6,458ms      | 28,340ms    | 16          |
+ *
+ * Every call over 15s in this sample is a back-to-back call; not one
+ * follows an idle gap, and the after-idle bucket's own max (11,657ms) is
+ * BELOW the back-to-back mean's tail. A cold-connection theory predicts the
+ * opposite shape (idle-gap calls slower), so this sample rules it out as the
+ * systematic driver — it does not, and cannot from a wall-clock sample
+ * alone, rule out an occasional one-off network stall contributing to any
+ * single row. Combined with 4a (no client-side wait mechanism exists) and
+ * Finding 4's sequentiality, the remaining explanation with no client-side
+ * candidate left standing is provider-side: Nous's portal, or Anthropic
+ * behind it.
  *
  * FINDING 5 — this matches a decision ADR-0009 already recorded on
  * 2026-08-06, from a DIFFERENT measurement (8-sample rotation across
@@ -83,9 +128,27 @@
  * cheaper/faster-sounding alternatives carry WORSE tails for the same
  * reason (more heavily queued), and confirming whether some untested model
  * queues less needs its own evidence-gathering pass, not a guess folded into
- * this ticket. This PR therefore ships `ttfb_ms` instrumentation (so a
- * future soak sample CAN separate queue/TTFT from body-read time going
- * forward) and this written attribution, not a speculative fix.
+ * this ticket.
+ *
+ * WHAT `ttfb_ms` DOES AND DOES NOT BUY. Shipped by this PR, but stated
+ * plainly rather than oversold: `nousChat`'s single non-streaming
+ * `chat/completions` POST reads the whole response body before this
+ * process can act on it, and there is no evidence Nous's proxy emits
+ * response headers before the completion is fully generated (undocumented,
+ * same deferral ADR-0009 already notes for caching) — a buffered upstream
+ * would make `ttfb_ms` read near-identical to `latency_ms` on most calls,
+ * separating "queue+prefill+generation" from "read a ~1KB JSON body" rather
+ * than queue from generation. That is still a real, cheap, structural
+ * result worth having (it will confirm or refute header-buffering under
+ * live soak traffic, which nothing today can), but it is not the queue/
+ * generation split item 3 ultimately wants. The two follow-ups that would
+ * buy that split are named here rather than guessed at in this ticket:
+ * switching the wire call to `stream: true` to get a true TTFT, or reading
+ * whatever request-id/processing-time headers Nous's proxy actually returns
+ * (`nousChat` never touches `response.headers` today — this ticket looked at
+ * that seam and is deliberately not adding a header allowlist without first
+ * knowing what Nous sends). This PR ships `ttfb_ms` instrumentation and this
+ * written attribution, not a speculative fix.
  */
 import { describe, expect, it } from 'vitest';
 
@@ -128,6 +191,17 @@ function excessMs(latencyMs: number, outputTokens: number): number {
   return latencyMs - outputTokens * BEST_OBSERVED_MS_PER_OUTPUT_TOKEN;
 }
 
+/**
+ * Finding 4b's bucketing, frozen the same way `SAME_DEBATE_ADJACENT_CALLS`
+ * is: every `anthropic/claude-haiku-4.5` row in the 2026-09-02 sample
+ * (n=398), grouped by the gap since the PRIOR row's timestamp. Reproduced
+ * with the query in this file's module doc comment.
+ */
+const CALLS_BY_IDLE_GAP = {
+  afterLongIdle: { n: 12, maxLatencyMs: 11_657, callsOver15s: 0 },
+  backToBack: { n: 385, maxLatencyMs: 28_340, callsOver15s: 16 },
+} as const;
+
 describe('debate LLM latency attribution (#1012)', () => {
   it('the global-maximum call cannot be explained by generation time even at the fastest observed throughput', () => {
     const { later } = SAME_DEBATE_ADJACENT_CALLS;
@@ -165,5 +239,17 @@ describe('debate LLM latency attribution (#1012)', () => {
     // is two calls back-to-back in one debate, not two samples taken
     // minutes apart.
     expect(gapMs).toBeLessThan(60_000);
+  });
+
+  it('rules out cold-connection/idle-reconnect as the tail driver: every slow (>15s) call is back-to-back, none follow an idle gap', () => {
+    const { afterLongIdle, backToBack } = CALLS_BY_IDLE_GAP;
+
+    // A cold-connection theory predicts the OPPOSITE shape — idle-gap calls
+    // slower, from re-establishing a connection. Instead the idle-gap
+    // bucket's own worst case sits below the back-to-back bucket's tail, and
+    // contributes zero of the 16 calls over 15s.
+    expect(afterLongIdle.callsOver15s).toBe(0);
+    expect(backToBack.callsOver15s).toBeGreaterThan(0);
+    expect(afterLongIdle.maxLatencyMs).toBeLessThan(backToBack.maxLatencyMs);
   });
 });
