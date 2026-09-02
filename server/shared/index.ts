@@ -25,6 +25,7 @@ export {
   classifyStatus,
   type HttpErrorKind,
   isTimeoutAbort,
+  MAX_ERROR_BODY_CHARS,
   parseRetryAfterMs,
   readErrorBody,
   readErrorDetail,

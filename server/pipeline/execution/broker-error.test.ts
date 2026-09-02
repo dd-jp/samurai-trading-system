@@ -135,6 +135,37 @@ describe('sanitizeBrokerError venueMessage (#1003)', () => {
     expect(error.venueMessage).toBeUndefined();
   });
 
+  // The venueMessage field is venue-controlled free text (the `message`
+  // JSON string, allowlisted but not otherwise validated) that reaches
+  // durable storage (audit_log) and alert transports via `BrokerError.message`
+  // (flatten-reconcile-alert.ts). A control character in that text — an
+  // ANSI escape sequence, or an embedded newline that could forge a second
+  // log line — must not survive into either field.
+  it('strips control characters from venueMessage before it reaches BrokerError.venueMessage or .message', () => {
+    const hostile = '\x1b[31mFAKE\x1b[0m symbol is not shortable\nAUDIT_LOG: fake entry injected';
+
+    const error = sanitizeBrokerError('alpaca', 'submitBracket', {
+      status: 422,
+      venueMessage: hostile,
+    });
+
+    // Biome forbids control characters in a regex literal, so this checks
+    // by code point rather than matching `/[\x00-\x1f\x7f]/`.
+    const hasControlChar = (text: string) =>
+      [...text].some((char) => {
+        const code = char.codePointAt(0) ?? 0;
+        return (code >= 0 && code <= 31) || code === 127;
+      });
+
+    expect(error.venueMessage).toBeDefined();
+    expect(hasControlChar(error.venueMessage ?? '')).toBe(false);
+    expect(error.venueMessage).not.toContain('\x1b');
+    expect(error.venueMessage).not.toContain('\n');
+    expect(hasControlChar(error.message)).toBe(false);
+    expect(error.message).not.toContain('\x1b');
+    expect(error.message).not.toContain('\n');
+  });
+
   it('truncates an oversized venueMessage as defense-in-depth, independent of the upstream bound', () => {
     const oversized = 'x'.repeat(1000);
     const error = sanitizeBrokerError('alpaca', 'submitBracket', {
@@ -144,5 +175,28 @@ describe('sanitizeBrokerError venueMessage (#1003)', () => {
 
     expect(error.venueMessage).toContain('truncated, 1000 chars total');
     expect(error.venueMessage?.length).toBeLessThan(1000);
+  });
+
+  // A venueMessage that already passed through `truncateForError` upstream
+  // (readErrorBody, shared/http/response-errors.ts) arrives here already
+  // bearing that helper's own "… (truncated, N chars total)" suffix — around
+  // 530 chars for a 500-char cap. If this module's own defense-in-depth cap
+  // sits at or below that length, the already-truncated string gets sliced a
+  // second time, landing mid-suffix and producing a garbled nested marker
+  // that also misreports the original length.
+  it('does not re-truncate a venueMessage already truncated upstream by truncateForError', () => {
+    const originalLength = 5000;
+    const alreadyTruncated = `${'x'.repeat(500)}… (truncated, ${originalLength} chars total)`;
+
+    const error = sanitizeBrokerError('alpaca', 'submitBracket', {
+      status: 422,
+      venueMessage: alreadyTruncated,
+    });
+
+    // Passed through unchanged: no second truncation marker, no garbled
+    // nested "… (truncated, …" and the original upstream note is intact.
+    expect(error.venueMessage).toBe(alreadyTruncated);
+    expect(error.venueMessage).toContain(`truncated, ${originalLength} chars total`);
+    expect(error.venueMessage?.match(/truncated,/g)).toHaveLength(1);
   });
 });

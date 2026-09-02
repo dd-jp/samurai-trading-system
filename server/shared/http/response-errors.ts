@@ -22,8 +22,14 @@ export function parseRetryAfterMs(response: Response): number | undefined {
   return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : undefined;
 }
 
-/** Caps how much of a response body is ever baked into an error message (goes straight to logs). */
-const MAX_ERROR_BODY_CHARS = 500;
+/**
+ * Caps how much of a response body is ever baked into an error message (goes
+ * straight to logs). Exported so callers that apply their own bound on top
+ * of `truncateForError`'s output (e.g. `broker-error.ts`'s defense-in-depth
+ * cap on `venueMessage`) can size that bound above this one — a second cap at
+ * or below this value re-truncates an already-truncated string mid-suffix.
+ */
+export const MAX_ERROR_BODY_CHARS = 500;
 
 /** Truncates `text` to `MAX_ERROR_BODY_CHARS`, appending a note of the original length when it does. */
 export function truncateForError(text: string): string {
@@ -82,40 +88,45 @@ export async function readErrorBody(
     bodyText = '';
   }
   const detail = bodyText.length > 0 ? truncateForError(bodyText) : response.statusText;
-  return { detail, code: parseErrorCode(bodyText), message: parseErrorMessage(bodyText) };
-}
-
-/** Best-effort numeric `code` out of a JSON error body; `undefined` on anything else. */
-function parseErrorCode(bodyText: string): string | undefined {
-  if (bodyText.length === 0) return undefined;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(bodyText);
-  } catch {
-    return undefined;
-  }
-  if (typeof parsed !== 'object' || parsed === null || !('code' in parsed)) return undefined;
-  const code = (parsed as { code: unknown }).code;
-  return typeof code === 'number' && Number.isFinite(code) ? String(code) : undefined;
+  return { detail, ...parseErrorFields(bodyText) };
 }
 
 /**
- * Best-effort `message` STRING out of a JSON error body, truncated the same
- * way `detail` is; `undefined` on anything else (not JSON, no `message` key,
- * non-string, or empty). See `readErrorBody`'s doc comment (#1003) for why
- * this field exists and what it is safe to carry.
+ * Best-effort `code`/`message` out of a JSON error body, parsed exactly once
+ * and shared by both fields (rather than each independently re-parsing
+ * `bodyText`, which cost nothing per call but was still redundant work on
+ * every error path). `code` degrades to `undefined` unless it is a finite
+ * number (stringified); `message` degrades to `undefined` unless it is a
+ * non-empty string, truncated the same way `detail` is. Both degrade to
+ * `undefined` together when the body is empty, not JSON, or not an object.
+ * See `readErrorBody`'s doc comment (#1003) for why `message` exists and what
+ * it is safe to carry.
  */
-function parseErrorMessage(bodyText: string): string | undefined {
-  if (bodyText.length === 0) return undefined;
+function parseErrorFields(bodyText: string): {
+  code: string | undefined;
+  message: string | undefined;
+} {
+  if (bodyText.length === 0) return { code: undefined, message: undefined };
   let parsed: unknown;
   try {
     parsed = JSON.parse(bodyText);
   } catch {
-    return undefined;
+    return { code: undefined, message: undefined };
   }
-  if (typeof parsed !== 'object' || parsed === null || !('message' in parsed)) return undefined;
-  const message = (parsed as { message: unknown }).message;
-  return typeof message === 'string' && message.length > 0 ? truncateForError(message) : undefined;
+  if (typeof parsed !== 'object' || parsed === null) return { code: undefined, message: undefined };
+  const record = parsed as Record<string, unknown>;
+
+  const code =
+    'code' in record && typeof record.code === 'number' && Number.isFinite(record.code)
+      ? String(record.code)
+      : undefined;
+
+  const message =
+    'message' in record && typeof record.message === 'string' && record.message.length > 0
+      ? truncateForError(record.message)
+      : undefined;
+
+  return { code, message };
 }
 
 /**
