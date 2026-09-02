@@ -384,9 +384,9 @@ This spec assumes LLMs for disagreement detection and mediator synthesis. Which 
 
 ### Integration with Pipeline
 
-The Debate Engine sits between Analysts and Trader in the 7-stage pipeline (`Invalidation` added 2026-08-05 — see devils-advocate-spec.md; it consumes this spec's `DebateResult.synthesis`/`position`/`open_items` as the thesis it attacks):
+The Debate Engine sits between Analysts and Trader. The runtime chain is **six stages, and stays six** — `invalidation` was specced as a seventh (devils-advocate-spec.md, 2026-08-05) but **declined as a standalone stage 2026-09-02**; its mechanism folds into the Risk Critic instead ([#994](https://github.com/dd-jp/samurai-trading-system/issues/994)). The thesis material it would have attacked — this spec's `DebateResult.synthesis`/`position`/`open_items` — reaches the critic through `RiskInput` on the existing chain, with no new stage:
 ```
-Analysts → Debate Engine → Trader → Invalidation → Risk Manager → Verdict → Execution
+Analysts → Debate Engine → Trader → Risk Manager → Verdict → Execution
          (this spec)
 ```
 

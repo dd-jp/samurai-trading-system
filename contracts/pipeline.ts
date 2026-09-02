@@ -22,18 +22,27 @@ import type { AssetClass } from './primitives.js';
 /**
  * The stages a tick passes through, in pipeline order.
  *
- * **Seven, not six.** `invalidation` was added between `trader` and `risk` on
- * 2026-08-05 (docs/specs/devils-advocate-spec.md; orchestrator-spec.md
- * "the pipeline is SEVEN stages"). The runtime `TickStage` union in
- * `server/apps/orchestrator/types.ts` has not caught up yet — the stage is specced and
- * not built — so today nothing ever writes an `invalidation` row and its
- * column renders as never-reached for every lane.
+ * **This array is seven wide, but the pipeline is six stages and stays six.**
+ * `invalidation` was specced between `trader` and `risk` on 2026-08-05
+ * (docs/specs/devils-advocate-spec.md) and declared here at full width so the
+ * column would fill in on its own the day the stage shipped — `audit_log.stage`
+ * is unconstrained TEXT, so no migration on the read path would have been needed.
  *
- * Declared here at its full width deliberately: `audit_log.stage` is an
- * unconstrained TEXT column, so the day the stage ships, its rows appear and
- * the column fills in with no change to this file, no migration on the read
- * path, and no silently-dropped stage in between. A six-stage table would have
- * hidden those rows instead.
+ * **That day is not coming.** The standalone stage was **declined 2026-09-02**;
+ * its typed invalidation-condition mechanism folds into the Risk Critic instead
+ * (issue #994). Nothing has ever written an `invalidation` row and nothing ever
+ * will, so the member is now a dead placeholder rendering a permanently
+ * never-reached column.
+ *
+ * Left seven wide **deliberately, for now**: `PipelineStage` derives from this
+ * array and the dashboard iterates it to render rooms (dashboard-spec.md's
+ * "Seven stages, not six" section, room 04 lights-off). Narrowing it to six is a
+ * typed contract change with client render ripple, owned by #994 — not a tail on
+ * the docs pass that recorded the ruling.
+ *
+ * Do not re-derive a seven-stage pipeline from this array. Prior text here quoted
+ * orchestrator-spec.md's "the pipeline is SEVEN stages"; that line has since been
+ * corrected at its source and the quote removed.
  */
 export const PIPELINE_STAGES = [
   'analysts',

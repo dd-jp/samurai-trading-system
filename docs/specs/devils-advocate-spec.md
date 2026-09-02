@@ -1,9 +1,21 @@
-# Devil's Advocate — Thesis Invalidation Stage Specification
+# Devil's Advocate — Thesis Invalidation Stage Specification — **DECLINED AS A STANDALONE STAGE**
 
-**Status:** Draft (resolved wayfinder decisions synthesized)
+**Status:** **Declined as a standalone stage, 2026-09-02** — folded into the Risk Critic instead, not pending as written here
 **Owner:** David (Deepak)
-**Date:** 2026-08-05
+**Date:** 2026-08-05, declined 2026-09-02
 **Wayfinder map:** [Wayfinder: Devil's Advocate — thesis invalidation layer placement](https://github.com/dd-jp/samurai-trading-system/issues/291) (closed 2026-08-05, all nine decision tickets resolved)
+**Supersedes:** Nothing
+**Superseded by:** No standalone `invalidation` decision-path stage will ship. Its mechanism — typed, falsifiable, deterministically-evaluated invalidation conditions — is being folded into the Risk Critic (built [#957](https://github.com/dd-jp/samurai-trading-system/issues/957), wayfinder map [#513](https://github.com/dd-jp/samurai-trading-system/issues/513)). Tracked by [#994](https://github.com/dd-jp/samurai-trading-system/issues/994), which amends `risk-manager-spec.md` first per Standing Pipeline Rule 3/7.
+
+## Why this was declined as a standalone stage
+
+Stated here in the body rather than as a banner, so a later reader does not find an unbuilt spec and assume it is pending work as written. **Everything below this section is the original proposal, preserved as the record of what was designed and as the source to mine for #994 — it is not the current plan.**
+
+This spec's own Out of Scope section (below) declined to merge with the Risk Critic: *"Different input, different output, different consumer horizon. Revisit only if the conditions cannot be shown to carry what the critic's prose cannot."* That reasoning was written when the critic was still hypothetical — its wayfinder map (#513) hadn't resolved "build it" yet. The Risk Critic shipped 2026-09-01 (#957), landing in exactly the seam this spec assumed for `invalidation`'s Risk-facing handoff: the check-pipeline step 7 producer, feeding `RiskInput`. With the critic real rather than hypothetical, the revisit condition this spec itself named is met: a second, adjacent LLM-authored producer sitting in the same pipeline slot as the critic is the redundancy this spec's own precedent (`skeptic-self-review-spec.md`, declined 2026-08-17 on closely related grounds) already warned against, not a reason to build both.
+
+David's ruling, 2026-09-02: *"fold this to risk critic. Create ticket to ammend existing risk critic implementation to include this."* This resolves Open Question 1 of [`devils-advocate-spec-cross-verify-2026-09-02.md`](../reviews/devils-advocate-spec-cross-verify-2026-09-02.md).
+
+**What is preserved, not discarded:** the core insight — prose cannot be checked, typed predicates can — and the concrete mechanism below (`InvalidationResult`/`InvalidationCondition`/`InvalidationObservable`/`EvaluatedCondition`, the 3-5-condition cap, the validator drop rules, the tri-state evaluation) are exactly what #994 is scoped to carry into the Risk Critic. Nothing here was wrong; the placement — a standalone seventh stage rather than a capability of the stage the codebase already built next to it — is what changed.
 
 ## Problem Statement
 
@@ -15,7 +27,7 @@ The concrete failure this stage exists to prevent: an intent is formed against a
 
 ## Solution
 
-A **seventh tick stage named `invalidation`**, sitting between `trader` and `risk`, that runs only when the Trader has produced an actionable `entry` or `scale_in` intent. It reads the debate's thesis and the intent, and emits an **invalidation checklist**: 3-5 typed, machine-checkable conditions under which the thesis is falsified, each bound to a service that already exists.
+A **seventh stage of the decision chain, named `invalidation`**, sitting between `trader` and `risk`, that runs only when the Trader has produced an actionable `entry` or `scale_in` intent. Per `orchestrator-spec.md`'s 2026-08-16 tick/decision split, this is a **decision-path stage**: it runs at most once per debate bar, not on every `τ`-interval tick — the two cadences are decoupled, and the decision cadence is strictly the less frequent of the two. It reads the debate's thesis and the intent, and emits an **invalidation checklist**: 3-5 typed, machine-checkable conditions under which the thesis is falsified, each bound to a service that already exists.
 
 The stage then **evaluates its own conditions against live data at emit time** and hands the result to the Risk Manager. Any condition **already breached** as the intent is formed means the thesis was falsified before the trade was placed, and Risk hard-rejects. Unbreached conditions are advisory: persisted, surfaced, and given no effect on the outcome.
 
@@ -40,8 +52,8 @@ Key architectural decisions, each traceable to a resolved decision ticket:
 1. As the Orchestrator, I want the `invalidation` stage to run between `trader` and `risk`, so that it sees a formed intent and its output reaches Risk in the same pass.
 2. As the Orchestrator, I want the stage to run **only** when the Trader returned an `entry` or `scale_in` intent, so that no LLM spend is incurred on holds, no-trades, or exits.
 3. As the Orchestrator, I want the stage skipped entirely on an `exit` intent, so that the system never blocks its own way out of a position.
-4. As the Orchestrator, I want `TickStatus.stage` to report `'invalidation'` while the stage runs, so that a stalled pass is diagnosable at the right stage.
-5. As the system, I want the stage to be unable to terminate the tick itself, so that every trade-killing decision passes through Risk's ordered, composable check pipeline.
+4. As the Orchestrator, I want `CurrentTick.stage` to report `'invalidation'` while the stage runs, so that a stalled pass is diagnosable at the right stage.
+5. As the system, I want the stage to be unable to terminate the decision pass itself, so that every trade-killing decision passes through Risk's ordered, composable check pipeline.
 
 ### Thesis Input
 
@@ -369,7 +381,7 @@ The reason is mechanical rather than a judgement about merit: attribution reads 
 - **Feedback Loop attribution for this stage.** Decided against; see the Feedback Loop Boundary section. No scorer, no dial, no `AnalystContribution` widening.
 - **A counterfactual observer for rejected intents** (shadow-tracking rejects to a synthetic close). It is the named reopening trigger, deliberately not built — machinery with no consumer.
 - **Severity configuration keyed by condition kind.** Rejected on the grounds that it would be invented rather than measured.
-- **Merging this pass with the Risk Critic.** Different input, different output, different consumer horizon. Revisit only if the conditions cannot be shown to carry what the critic's prose cannot.
+- **Merging this pass with the Risk Critic.** Different input, different output, different consumer horizon. Revisit only if the conditions cannot be shown to carry what the critic's prose cannot. *(Revisited and reversed 2026-09-02 — see the Status header. Now tracked as [#994](https://github.com/dd-jp/samurai-trading-system/issues/994).)*
 - **Trader-side sizing adjustment.** Foreclosed on placement grounds — the Trader has already run.
 - **Persisting `RiskDecision`** so that "Risk acted on the invalidation" is recorded. [#328](https://github.com/dd-jp/samurai-trading-system/issues/328).
 - **Fixing ADR-0003's retrieval story or giving the Risk Critic a durable store.** Both are real and neither is this spec's.
@@ -379,11 +391,11 @@ The reason is mechanical rather than a judgement about merit: attribution reads 
 
 **This stage is near-inert at first, by design, and should be judged on that.** A freshly-formed thesis rarely has an already-breached condition, so rejections will be rare. That is the intended trade: *rare and explainable-by-a-number* over *frequent and explainable-by-a-vibe*. A reviewer who measures this stage by how often it fires will conclude it does nothing. The correct measure is whether the rejections it does produce are ones a human agrees with, and whether the persisted conditions turn out to describe real failure modes.
 
-**The Bear persona is unchanged.** The prototype found the Devil's Advocate's *insights* nearly identical to the Bear's — the justification for building this anyway is entirely that structure is checkable and prose is not. If the typed conditions cannot be shown to carry something the Bear's rationale cannot, this stage should be folded into the critic rather than kept.
+**The Bear persona is unchanged.** The prototype found the Devil's Advocate's *insights* nearly identical to the Bear's — the justification for building this anyway is entirely that structure is checkable and prose is not. If the typed conditions cannot be shown to carry something the Bear's rationale cannot, this stage should be folded into the critic rather than kept. *(This is what happened — see the Status header and [#994](https://github.com/dd-jp/samurai-trading-system/issues/994).)*
 
-**Two standing constraints this map corrected, worth carrying forward.** First, "the Risk Manager is fully deterministic — no LLM" was stale: ADR-0003 already placed an LLM red-team critic in Stage 4 with trim-and-reject authority. Determinism is preserved by a *seam* — the LLM call outside `evaluate()`, its verdict entering as pre-built data — not by absence, and this spec reuses that seam. Second, the pipeline is now **seven** stages, and three documents still say six.
+**Two standing constraints this map corrected, worth carrying forward.** First, "the Risk Manager is fully deterministic — no LLM" was stale: ADR-0003 already placed an LLM red-team critic in Stage 4 with trim-and-reject authority. Determinism is preserved by a *seam* — the LLM call outside `evaluate()`, its verdict entering as pre-built data — not by absence, and this spec reuses that seam. Second, the pipeline **is six stages and stays six** — this spec's seventh was declined 2026-09-02 (see the Status header) *(corrected twice on 2026-09-02: this line originally read "the pipeline is now seven stages," present tense, which was never accurate — see `docs/reviews/devils-advocate-spec-cross-verify-2026-09-02.md` GAP-A; the GAP-A fix then read "will be seven once this spec is built," which the same-day fold ruling superseded)*.
 
-**Latency is not a constraint on this stage.** The debate's crypto-15s / stocks-60s budget wraps the debate only, so a downstream pass sits outside it entirely. The stocks breakdown that appeared to be over budget was triple-counting parallel analysts; stocks has roughly 10s of headroom. Per-call latency remains unmeasured, and this stage adds one sequential call on triggered ticks only.
+**Latency is not a constraint on this stage.** The debate's latency budget wraps the debate only, so a downstream pass sits outside it entirely *(the crypto-side figure this footnote previously cited is moot — crypto left Samurai's scope 2026-08-16, ADR-0015's amendment)*. The stocks breakdown that appeared to be over budget was triple-counting parallel analysts; stocks has roughly 10s of headroom. Per-call latency remains unmeasured, and this stage adds one sequential call on triggered decisions only — at most once per debate bar, not once per tick (`orchestrator-spec.md`'s tick/decision split).
 
 **The tier decision was made on structural grounds and says so.** The side-by-side model comparison this would ideally rest on was descoped when the prototype could not make live calls. `claude-sonnet-5` at `effort: 'medium'` is a starting point to be re-tuned once real calls and real spend attribution exist — which is exactly what the metered second client makes possible.
 
