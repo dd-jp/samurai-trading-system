@@ -159,34 +159,23 @@ function promptContextOf(context: LlmRequestContext): Record<string, unknown> {
  * message.
  *
  * #1010 measured whether that gap is worth closing and found it moot on a
- * more basic ground: the pinned debate model (`anthropic/claude-haiku-4.5`,
- * pricing.ts `MODEL_RATES`) requires 4,096 tokens before Anthropic will
- * cache anything at all (docs, fetched 2026-09-02:
- * https://platform.claude.com/docs/en/build-with-claude/prompt-caching —
- * "Shorter prompts cannot be cached, even if marked with cache_control").
- * The full bull/bear request this function renders — prompt AND context,
- * i.e. the whole thing, since `personas.ts`'s `PersonaInput` (what
- * `runBullPersona`/`runBearPersona` build the prompt from) has no field for
- * `RoundContext.priorArguments` at all as of #1010 — the round number never
- * reaches the rendered prompt, so it is byte-identical across every round of
- * one debate — averages ~1,623 input tokens (max 1,721) in the paper-soak
- * store (`llm_spend`, stage='debate', n=383 rows across 49 debates,
- * 2026-09-02 sample) and the mediator's ~2,191 average (max 2,360). Both stay
- * under the minimum, but not by a wide margin: the highest observed call
- * (mediator, 2,360 tokens) is ~58% of 4,096, i.e. roughly 1.7x of headroom
- * left before caching would even become eligible, not "half" of it.
- * `prompt-caching.test.ts` pins a deliberately generous synthetic upper bound
- * (~2,079 bull/bear, ~2,213 mediator, measured against
- * `renderMessageContent`'s actual rendered string — not `request.prompt`
- * alone, which understates it) at the same conclusion so this doesn't have to
- * be re-discovered from a live database again. There is also a fourth,
- * smaller debate-stage call shape this measurement excludes:
- * `detectDisagreements` (`disagreement-detector.ts`), which fires on the
- * final round and averages ~1,088 input tokens (range 1,058-1,138, n=21 in
- * the same sample) — smaller than either shape above, so it does not change
- * the conclusion. Below 4,096 tokens, restructuring this into content blocks
- * would buy nothing — Anthropic silently skips caching rather than erroring,
- * so it would look like it worked and never fire.
+ * more basic ground: the pinned debate model (`anthropic/claude-haiku-4.5`)
+ * requires 4,096 input tokens before Anthropic will cache anything at all,
+ * and every debate-stage request this repo sends is measured well under
+ * that minimum — including the full bull/bear request this function
+ * renders, which is byte-identical across every round of one debate
+ * (`personas.ts`'s `PersonaInput` has no field for
+ * `RoundContext.priorArguments` at all as of #1010, so the round number
+ * never reaches the rendered prompt) and would therefore be exactly the
+ * shape caching helps most, if it were large enough to qualify. Full
+ * figures, the provider docs citation, the production (`llm_spend`)
+ * measurement this rests on, and why a naive chars/4 estimate is not itself
+ * proof of "under the minimum" all live in `prompt-caching.test.ts` (same
+ * directory) — that file is the canonical home for this finding, kept as a
+ * test so it re-verifies rather than going stale. Below 4,096 tokens,
+ * restructuring this into content blocks would buy nothing — Anthropic
+ * silently skips caching rather than erroring, so it would look like it
+ * worked and never fire.
  *
  * Separately (and this holds regardless of prompt size): `nous-chat.ts`'s
  * usage parsing reads only `prompt_tokens`/`completion_tokens` from the
