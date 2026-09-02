@@ -19,7 +19,7 @@ import { SimulatedClock, SystemClock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { SqliteStage2SelectionStore } from '../../tools/backtest/index.js';
 import { REQUIRED_INJECTED_CONFIG } from './index.js';
-import { paperStartingProfile } from './paper-profile.js';
+import { paperStartingProfile, subclassOfUniverse } from './paper-profile.js';
 import { SqliteDailyEquityMetricsSource } from './production/daily-equity-metrics-source.js';
 import { DEFAULT_FEEDBACK_INTERVAL_MS } from './production.js';
 
@@ -386,6 +386,26 @@ describe('paperStartingProfile', () => {
       // failover-data-source.ts's replay-determinism comment).
       expect(paperStartingProfile('backtest').maxConcurrentInstruments).toBe(1);
       expect(paperStartingProfile('paper').maxConcurrentInstruments).toBe(6);
+    });
+
+    it('tripwire: same-tick portfolio-cap netting (#1019) stays bounded only while the universe carries no subclass — break loudly, not silently, if that changes at width > 1', () => {
+      // #1019's mechanism: at width > 1, sibling submissions in the same tick
+      // read each other's exposure as zero (the fill poll hasn't caught up),
+      // so `perSubclassDeploymentCap`'s cross-instrument netting cannot net
+      // same-tick exposure. Today that's harmless only because
+      // `subclassOfUniverse(universe)` is empty, which leaves the per-name
+      // gates (`perTradeSizeCap`, `perAssetExposureCap`) doing the real work
+      // unassisted. If a universe edit adds a `subclass` to any instrument
+      // while width stays > 1, this assertion — not a live drawdown — should
+      // be the first thing to notice.
+      const profile = paperStartingProfile('paper');
+      const universe = profile.universe;
+      if (universe === undefined) {
+        throw new Error("paperStartingProfile('paper') always carries a universe");
+      }
+
+      expect(profile.maxConcurrentInstruments).toBeGreaterThan(1);
+      expect(Object.keys(subclassOfUniverse(universe))).toEqual([]);
     });
   });
 
