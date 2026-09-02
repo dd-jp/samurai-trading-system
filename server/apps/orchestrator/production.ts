@@ -155,7 +155,10 @@ import {
   seedAnalystWeights,
 } from '../../pipeline/feedback-loop/index.js';
 import type { BenchmarkSeriesSource } from '../../pipeline/outside-benchmark/index.js';
-import { MarketDataBenchmarkSeriesSource } from '../../pipeline/outside-benchmark/index.js';
+import {
+  BENCHMARK_COMPOSITION,
+  MarketDataBenchmarkSeriesSource,
+} from '../../pipeline/outside-benchmark/index.js';
 import {
   buildRiskCriticProducer,
   CircuitBreakers,
@@ -280,6 +283,25 @@ import { subclassOfUniverse } from './types.js';
 export const SMOKE_TEST_UNIVERSE: readonly UniverseInstrument[] = [
   { asset: 'BTC-USD', asset_class: 'crypto' },
 ];
+
+/**
+ * Every instrument symbol the outside-benchmark path can write, derived from
+ * `BENCHMARK_COMPOSITION` rather than hardcoded (#989 review) — that table is
+ * the one source of truth for what `buildBenchmarkDataSource` writes, and a
+ * future third benchmark leg (or a leg swap) should not have to remember a
+ * second, silently-stale literal list here. Consumed by the precutover
+ * collision guard below. Upper-cased at the source (#989 review) so the
+ * guard's own `.toUpperCase()` comparison is symmetric — a future
+ * mixed/lowercase entry in `BENCHMARK_COMPOSITION` can't silently bypass it.
+ * Exported so callers (`startup.test.ts`) derive the same set instead of
+ * re-deriving it from `BENCHMARK_COMPOSITION` a second time (#989 review —
+ * two derivations can silently diverge).
+ */
+export const BENCHMARK_INSTRUMENTS: ReadonlySet<string> = new Set(
+  Object.values(BENCHMARK_COMPOSITION).flatMap((legs) =>
+    legs.map((leg) => leg.instrument.toUpperCase()),
+  ),
+);
 
 // Split out by the 2026-08-06 review (D1): the injectable-surface types live
 // in ./production/config.ts and the checked-in defaults/default-client
@@ -606,6 +628,50 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     );
   }
 
+  const universe = config.universe ?? SMOKE_TEST_UNIVERSE;
+
+  // Sixth of the same boot-time-refusal family (#989, follow-up to #987's
+  // review of PR #988) — full mechanism (why a calendar mismatch, not
+  // `mode`, is the real hazard; why the two writers can collide on one
+  // `bars` row; why this is deferred rather than a schema fix) is documented
+  // on `benchmarkMarketDataStore`'s doc comment below, not repeated here.
+  //
+  // Checks the RESOLVED calendar, fail-CLOSED: anything other than an exact
+  // `UsEquityRegularHoursCalendar` match is treated as a potential mismatch
+  // against `buildBenchmarkDataSource`'s fixed US-normalized port, rather
+  // than enumerating `LseRegularHoursCalendar` as the one bad case (#989
+  // review — a positive enumeration silently admits a future third calendar
+  // class). `.constructor !==`, not `!(x instanceof ...)` (#989 review):
+  // `instanceof` also matches a SUBCLASS of `UsEquityRegularHoursCalendar`
+  // (this codebase already has one, `NeverTradingCalendar` in
+  // trading-calendar.test.ts) that could override session normalization —
+  // exact constructor identity is the only check that cannot be quietly
+  // satisfied by a variant that behaves differently from the benchmark
+  // port's own fixed calendar. Case-insensitive on the instrument symbol
+  // since `ProductionConfig.universe` is caller-assembled and untyped on
+  // case.
+  const tradingCalendar = equityCalendarFor(config);
+  if (tradingCalendar.constructor !== UsEquityRegularHoursCalendar) {
+    const collidingInstrument = universe.find((instrument) =>
+      BENCHMARK_INSTRUMENTS.has(instrument.asset.toUpperCase()),
+    );
+    if (collidingInstrument !== undefined) {
+      throw new Error(
+        'Orchestrator cannot start: the resolved trading calendar ' +
+          '(equityCalendarFor(config)) is not UsEquityRegularHoursCalendar and ' +
+          `'${collidingInstrument.asset}' is still directly in ProductionConfig.universe. ` +
+          'That collides with the outside-benchmark path (#989): ' +
+          "buildBenchmarkDataSource's fixed benchmark port always normalizes against " +
+          'UsEquityRegularHoursCalendar — the two writers would target the same ' +
+          '(instrument, timeframe, open_time) row in the bars table under different ' +
+          `calendars. Safe once #751's LSE-only cutover lands (${collidingInstrument.asset} ` +
+          'becomes a non-tradeable screening instrument, per LseMarkDataSource#assertTradeable), ' +
+          `once this universe drops '${collidingInstrument.asset}', or once ` +
+          'config.tradingCalendar resolves to UsEquityRegularHoursCalendar.',
+      );
+    }
+  }
+
   // FIRST, ahead of every store, socket and wire client below (PR #390
   // review). The LLM budget is constructed here rather than beside the debate
   // step it feeds because `RateLimiter`'s constructor VALIDATES its config, and
@@ -630,7 +696,9 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     config.llmRateLimiter ??
     new RateLimiter(clock, config.rateLimiterConfig ?? DEFAULT_LLM_RATE_LIMIT_CONFIG);
 
-  const tradingCalendar = equityCalendarFor(config);
+  // `tradingCalendar` is computed above, ahead of the precutover collision
+  // guard, which needs its RESOLVED value rather than re-deriving `mode`
+  // itself (#989 review). Reused here rather than recomputed.
   /**
    * ONE calendar pair, shared by every consumer that needs to know when a
    * venue is open — the daily-PnL boundary (#331/#332) and the volatility
@@ -670,7 +738,6 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    */
   const logger = config.logger ?? new JsonLogger();
 
-  const universe = config.universe ?? SMOKE_TEST_UNIVERSE;
   /**
    * #562: the live orchestrator's bars now fail over, per leg, instead of
    * every bar the running system reads coming from one vendor with no catch,
@@ -743,11 +810,12 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * universe). So post-cutover the two writers are provably disjoint on the
    * one column a collision would need to share.
    *
-   * The residual gap is PRE-cutover: `config.mode === 'live'` with a universe
-   * that still trades `'SPY'` directly (the pre-#751 default) sends the LIVE
-   * path's own `AlpacaDataSource` through `equityCalendarFor(config)`, which
-   * is `LseRegularHoursCalendar` in live mode (`equityCalendarFor`'s own
-   * doc) — so `marketData` and this benchmark path could both write
+   * The residual gap is PRE-cutover: a universe that still trades `'SPY'`
+   * directly (the pre-#751 default) sends the LIVE path's own
+   * `AlpacaDataSource` through whatever `equityCalendarFor(config)` resolves
+   * — `LseRegularHoursCalendar` by default in live mode, but
+   * `config.tradingCalendar` can pin it there in ANY mode (`equityCalendarFor`'s
+   * own doc) — so `marketData` and this benchmark path could both write
    * `'SPY'`/`(timeframe, open_time)` rows, normalized against two DIFFERENT
    * calendars (see `buildBenchmarkDataSource`'s doc for how far those two
    * tables actually diverge). That collision is not new here and not
@@ -755,8 +823,18 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * cutover this ticket is ahead of, and this system has not gone live
    * (ADR-0004 §5) — so a schema change (a discriminator column, needing a
    * migration) is deferred as disproportionate to a risk with no live
-   * exposure yet. Tracked in #989 — reopen once #751 lands, or before
-   * `mode: 'live'` ships with a non-LSE universe, whichever comes first.
+   * exposure yet. **Closed in code by #989**: `buildProductionComponents`
+   * refuses to boot when the RESOLVED `tradingCalendar` is anything other
+   * than `UsEquityRegularHoursCalendar` (fail-closed, not an enumerated
+   * `LseRegularHoursCalendar` check — #989 review) and `'SPY'`/`'AGG'` (or
+   * any other `BENCHMARK_INSTRUMENTS` member) is still directly in the
+   * universe. The guard sits above, before the LLM budget is constructed,
+   * and keys on the resolved calendar rather than `mode` — a `mode`-only
+   * check both misses a `paper`-mode run with an LSE calendar override and
+   * wrongly refuses a `live`-mode run with a US calendar override. A
+   * comment alone was judged insufficient for live-money infrastructure.
+   * Reopen once #751 lands (the guard's structural condition disappears) or
+   * before this collision condition can be reached any other way.
    */
   const benchmarkMarketDataStore = new SqliteMarketDataStore(config.db);
   /**

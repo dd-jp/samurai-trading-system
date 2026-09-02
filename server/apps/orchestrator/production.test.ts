@@ -79,6 +79,7 @@ import {
   MI_NO_DATA_BY_SUBCLASS_COUNTER,
 } from './production/mi-coverage.js';
 import {
+  BENCHMARK_INSTRUMENTS,
   buildAlpacaDataSource,
   buildBenchmarkDataSource,
   buildDefaultLlmClient,
@@ -742,6 +743,188 @@ describe('buildProductionComponents', () => {
       const config = stubConfig(db, { mode: 'live', capitalCeilingUsd: ceiling });
 
       expect(() => buildProductionComponents(config)).toThrow(/capitalCeilingUsd/);
+    },
+  );
+
+  // `[...BENCHMARK_INSTRUMENTS]`, not a hardcoded `['SPY', 'AGG']` literal
+  // (#989 review) — a second, independent enumeration of the same set the
+  // guard itself derives from `BENCHMARK_COMPOSITION` would silently stop
+  // covering a future third benchmark leg.
+  it.each([...BENCHMARK_INSTRUMENTS])(
+    'refuses to build with mode "live" and %s still directly in the universe (#989) — ' +
+      "PRE-#751, `marketData`'s own `AlpacaDataSource` can write a matching bar normalized " +
+      "against `equityCalendarFor`'s `LseRegularHoursCalendar` (live mode) while " +
+      "`buildBenchmarkDataSource`'s fixed benchmark port writes the SAME " +
+      '(instrument, timeframe, open_time) row normalized against ' +
+      '`UsEquityRegularHoursCalendar` — a silent last-write-wins collision in the shared ' +
+      "`bars` table. `benchmarkMarketDataStore`'s doc above names this residual gap.",
+    (instrument) => {
+      const config = stubConfig(db, {
+        mode: 'live',
+        capitalCeilingUsd: 1_000,
+        universe: [{ asset: instrument, asset_class: 'stocks' }],
+      });
+
+      // Not `new RegExp(instrument)` (#989 review): that would pass on ANY
+      // unrelated error that happens to contain "SPY"/"AGG" as a substring,
+      // not necessarily this guard. Match the guard's distinctive phrase
+      // instead.
+      expect(() => buildProductionComponents(config)).toThrow(
+        /collides with the outside-benchmark path/,
+      );
+    },
+  );
+
+  it(
+    'does NOT refuse mode "paper" with SPY in the universe and no tradingCalendar override ' +
+      '(#989) — the guard keys on the RESOLVED trading calendar, not `mode` directly, and ' +
+      'plain `mode: "paper"` resolves `equityCalendarFor` to `UsEquityRegularHoursCalendar`, ' +
+      "which matches `buildBenchmarkDataSource`'s own fixed calendar — no disagreement to guard",
+    () => {
+      const config = stubConfig(db, {
+        mode: 'paper',
+        universe: [{ asset: 'SPY', asset_class: 'stocks' }],
+      });
+
+      expect(() => buildProductionComponents(config)).not.toThrow();
+    },
+  );
+
+  it(
+    'refuses mode "paper" with an explicit LSE tradingCalendar override and SPY in the ' +
+      'universe (#989 review — the false negative a `mode`-only guard would miss) — ' +
+      'this override pattern already exists elsewhere in this file (see the flatten-tail ' +
+      "tests' `pinLse` config) and reproduces the exact same collision mechanism: the " +
+      'resolved calendar is `LseRegularHoursCalendar` while `buildBenchmarkDataSource` stays ' +
+      'pinned to `UsEquityRegularHoursCalendar`, regardless of `mode`',
+    () => {
+      const config = stubConfig(db, {
+        mode: 'paper',
+        tradingCalendar: new LseRegularHoursCalendar(),
+        universe: [{ asset: 'SPY', asset_class: 'stocks' }],
+      });
+
+      expect(() => buildProductionComponents(config)).toThrow(
+        /collides with the outside-benchmark path/,
+      );
+    },
+  );
+
+  it(
+    'does NOT refuse mode "live" with an explicit US tradingCalendar override and SPY in the ' +
+      'universe (#989 review — the false positive a `mode`-only guard would wrongly reject) — ' +
+      'the resolved calendar is `UsEquityRegularHoursCalendar`, matching ' +
+      "`buildBenchmarkDataSource`'s own calendar exactly, so there is no real mismatch even " +
+      'though `mode` is "live"',
+    () => {
+      const config = stubConfig(db, {
+        mode: 'live',
+        capitalCeilingUsd: 1_000,
+        tradingCalendar: new UsEquityRegularHoursCalendar(),
+        universe: [{ asset: 'SPY', asset_class: 'stocks' }],
+      });
+
+      expect(() => buildProductionComponents(config)).not.toThrow();
+    },
+  );
+
+  it(
+    'refuses mode "live" with a third, unmatched tradingCalendar override and SPY in the ' +
+      'universe (#989 review — the fail-open enumeration a `instanceof LseRegularHoursCalendar` ' +
+      'check would miss) — the guard checks fail-CLOSED (anything other than an exact ' +
+      '`UsEquityRegularHoursCalendar` match is treated as a potential mismatch), not an ' +
+      'enumerated `LseRegularHoursCalendar` case, so a calendar this system has never seen ' +
+      'before (here `AlwaysOpenCalendar`, the crypto default) does not silently bypass it ' +
+      'the way a positive enumeration would',
+    () => {
+      const config = stubConfig(db, {
+        mode: 'live',
+        capitalCeilingUsd: 1_000,
+        tradingCalendar: new AlwaysOpenCalendar(),
+        universe: [{ asset: 'SPY', asset_class: 'stocks' }],
+      });
+
+      expect(() => buildProductionComponents(config)).toThrow(
+        /collides with the outside-benchmark path/,
+      );
+    },
+  );
+
+  it(
+    'refuses mode "live" with a SUBCLASS of UsEquityRegularHoursCalendar as the tradingCalendar ' +
+      'override and SPY in the universe (#989 review — `instanceof` matches subclasses, so ' +
+      '`.constructor !==` is the check, not `!(x instanceof ...)`) — a subclass overriding ' +
+      'session normalization (this codebase already has one such pattern, ' +
+      '`NeverTradingCalendar` in trading-calendar.test.ts) is not provably the SAME ' +
+      "normalization as `buildBenchmarkDataSource`'s fixed calendar just because it inherits " +
+      'from it',
+    () => {
+      class SubclassCalendar extends UsEquityRegularHoursCalendar {}
+      const config = stubConfig(db, {
+        mode: 'live',
+        capitalCeilingUsd: 1_000,
+        tradingCalendar: new SubclassCalendar(),
+        universe: [{ asset: 'SPY', asset_class: 'stocks' }],
+      });
+
+      expect(() => buildProductionComponents(config)).toThrow(
+        /collides with the outside-benchmark path/,
+      );
+    },
+  );
+
+  it(
+    'does NOT refuse mode "live" with a universe that excludes SPY/AGG (#989) — a universe ' +
+      'holding neither symbol has no collision to guard against',
+    () => {
+      const config = stubConfig(db, {
+        mode: 'live',
+        capitalCeilingUsd: 1_000,
+        universe: [{ asset: 'AAPL', asset_class: 'stocks' }],
+      });
+
+      expect(() => buildProductionComponents(config)).not.toThrow();
+    },
+  );
+
+  it(
+    'refuses mode "live" with a lower-cased "spy" in the universe (#989 review) — ' +
+      'ProductionConfig.universe is caller-assembled and untyped on case, so the guard ' +
+      'compares case-insensitively rather than trusting every caller to upper-case first',
+    () => {
+      const config = stubConfig(db, {
+        mode: 'live',
+        capitalCeilingUsd: 1_000,
+        universe: [{ asset: 'spy', asset_class: 'stocks' }],
+      });
+
+      expect(() => buildProductionComponents(config)).toThrow(
+        /collides with the outside-benchmark path/,
+      );
+    },
+  );
+
+  it(
+    'does NOT refuse mode "live" with an LSE-only universe post-#751 (#989) — exactly the ' +
+      "case #751's cutover is supposed to make safe: `3SPY` is an LSE ETP ticker, not the " +
+      "US underlying 'SPY', so it must not trip a guard keyed on the literal symbol",
+    () => {
+      const config = stubConfig(db, {
+        mode: 'live',
+        capitalCeilingUsd: 1_000,
+        universe: [{ asset: '3SPY', asset_class: 'stocks' }],
+        lseMarkClient: {
+          vendor: 'fake-lse-vendor',
+          getBars: vi.fn(async () => ({ currency: 'GBp', candles: [] })),
+          getLatestQuote: vi.fn(async () => ({
+            price: 31_240,
+            currency: 'GBp',
+            observed_at: START,
+          })),
+        },
+      });
+
+      expect(() => buildProductionComponents(config)).not.toThrow();
     },
   );
 

@@ -145,6 +145,7 @@ export {
   type VolatilityReadingProvider,
 } from './production/direct-bind.js';
 export {
+  BENCHMARK_INSTRUMENTS,
   buildProductionComponents,
   buildProductionOrchestrator,
   buildProductionTickRunner,

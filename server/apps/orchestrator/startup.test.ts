@@ -22,6 +22,8 @@ import { TokenBucket } from '../../shared/index.js';
 import { openSharedStore, sharedStorePath } from '../../shared/store/index.js';
 import {
   assertStorePathMatchesMode,
+  BENCHMARK_INSTRUMENTS,
+  DEFAULT_UNIVERSE,
   missingCredentialEnvVars,
   paperStartingProfile,
   SMOKE_TEST_UNIVERSE,
@@ -742,6 +744,20 @@ describe('startFromEnvironment — the live profile (#511)', () => {
 
     const orchestrator = await startFromEnvironment({
       ...startingProfileForMode('live', logger),
+      // #989: `liveStartingProfile` resolves to `DEFAULT_UNIVERSE`, which
+      // still trades `'SPY'` directly (pre-#751's LSE-only cutover) — the
+      // EXACT condition `buildProductionComponents`'s new collision guard
+      // refuses to boot. This test is about the live-host wiring
+      // (`brokerLine`/`profileWarn` below), not about which universe is
+      // configured, so it drops every `BENCHMARK_INSTRUMENTS` symbol rather
+      // than weakening the guard — imported from `production.ts` via the
+      // barrel rather than re-derived from `BENCHMARK_COMPOSITION` here
+      // (#989 review — a second derivation can silently diverge from the
+      // guard's own), so an `'AGG'` addition to `DEFAULT_UNIVERSE` can't
+      // silently break this test for an unrelated reason.
+      universe: DEFAULT_UNIVERSE.filter(
+        (instrument) => !BENCHMARK_INSTRUMENTS.has(instrument.asset.toUpperCase()),
+      ),
       db: openSharedStore(':memory:'),
       miArchive: new MiArchiveStore(),
       gdeltClient: offlineGdeltClient,
@@ -778,6 +794,27 @@ describe('startFromEnvironment — the live profile (#511)', () => {
       await orchestrator.stop();
     }
   });
+
+  it(
+    'refuses to boot the REAL default live entrypoint (#989) — `startingProfileForMode' +
+      "('live')` (`liveStartingProfile` under the hood) resolves to `DEFAULT_UNIVERSE`, " +
+      "which still trades 'SPY' directly, with no `universe` override at all. The test " +
+      "above deliberately drops 'SPY' from the universe to isolate the live-host wiring " +
+      'it is about; this one proves the collision guard actually protects the default ' +
+      'entrypoint an operator would reach by just setting SAMURAI_MODE=live, not only the ' +
+      'synthetic configs `production.test.ts` constructs by hand',
+    async () => {
+      const error = await startFromEnvironment({
+        ...startingProfileForMode('live'),
+        db: openSharedStore(':memory:'),
+        miArchive: new MiArchiveStore(),
+        gdeltClient: offlineGdeltClient,
+        polymarketClient: offlinePolymarketClient,
+      }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
+
+      expect(error.message).toMatch(/collides with the outside-benchmark path/);
+    },
+  );
 
   it.each([
     '',
