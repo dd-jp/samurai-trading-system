@@ -1430,6 +1430,15 @@ def build_review_payload(
         if not file or not isinstance(line, int):
             rejected.append(c)
             continue
+        # A non-string or empty body cannot be posted: GitHub 422s an empty
+        # review comment, and that 422 does not match the "could not be
+        # resolved" fallback, so it re-raises and the job goes red with NO
+        # review at all. Route it through `rejected` instead — the finding
+        # still appears in the body with its file and line, which is the most
+        # that can be salvaged from a comment that has no text.
+        if not isinstance(body, str) or not body.strip():
+            rejected.append(c)
+            continue
         if line not in valid_lines.get(file, set()):
             rejected.append(c)
             continue

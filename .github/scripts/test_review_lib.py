@@ -1829,6 +1829,18 @@ def test_everything_not_low_still_anchors_inline(severity):
     assert len(payload["comments"]) == 1
 
 
+@pytest.mark.parametrize("body", [None, "", "   ", 42, {"text": "x"}])
+def test_a_comment_with_no_usable_body_is_not_posted_inline(body):
+    """GitHub 422s an empty review comment, and that 422 does not match the
+    'could not be resolved' fallback — it re-raises and the job goes red with
+    no review at all. Raised by the deepseek reviewer on #996."""
+    payload = review_lib.build_review_payload(DIFF, _result([_comment(body=body)]))
+
+    assert payload["comments"] == []
+    # Not dropped: still reported with its file and line.
+    assert "src/trader/x.ts" in payload["summary_markdown"]
+
+
 def test_the_gate_consults_the_constant():
     """The constant must BE the gate, not decoration next to it: a named set
     that nothing reads implies an enforcement that does not exist."""
