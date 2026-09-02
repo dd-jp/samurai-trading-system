@@ -125,10 +125,13 @@ describe('LseMarkDataSource — the no-substitution invariant (#734 DoD)', () =>
    * `SqliteMarketDataStore` writers (the live universe path and the outside
    * benchmarks' own path) are disjoint on `'SPY'`/`'AGG'` rows ONLY because
    * this source refuses both instruments before any write can reach the
-   * store. Pin that invariant directly so a future pool/config change can't
+   * store. The benchmark path reads via `getDailyCloses`, which resolves to
+   * `fetchRawCandles`/`fetchBars` — the BARS path, not the mark path — so the
+   * invariant that actually protects the store must be pinned there, not
+   * just on `fetchMark`. Pin both so a future pool/config change can't
    * silently reopen the collision the doc argues is closed.
    */
-  it('refuses SPY and AGG — the pair the outside-benchmark store-disjointness argument depends on', async () => {
+  it('refuses SPY and AGG on the mark path — the pair the outside-benchmark store-disjointness argument depends on', async () => {
     const source = sourceWith(fakeClient());
     await expect(source.fetchMark('SPY', IN_SESSION, 'live')).rejects.toThrow(
       NonTradeableInstrumentError,
@@ -136,6 +139,16 @@ describe('LseMarkDataSource — the no-substitution invariant (#734 DoD)', () =>
     await expect(source.fetchMark('AGG', IN_SESSION, 'live')).rejects.toThrow(
       NonTradeableInstrumentError,
     );
+  });
+
+  it('refuses SPY and AGG on the bars path — the one the store-disjointness argument actually depends on', async () => {
+    const source = sourceWith(fakeClient());
+    await expect(
+      source.fetchBars('SPY', { timeframe: '1m', lookback: 5 }, IN_SESSION),
+    ).rejects.toThrow(NonTradeableInstrumentError);
+    await expect(
+      source.fetchBars('AGG', { timeframe: '1m', lookback: 5 }, IN_SESSION),
+    ).rejects.toThrow(NonTradeableInstrumentError);
   });
 
   it('refuses screening instruments on the bars and quote paths as well', async () => {
