@@ -4254,11 +4254,11 @@ describe('buildProductionOrchestrator', () => {
       // benchmarks to the live configuration through the back door: US bars
       // normalized against London sessions and `LSE_HOLIDAYS` — a REAL
       // divergence, not a latent one. `LSE_HOLIDAYS` and `US_HOLIDAYS`
-      // (trading-calendar.ts) disagree on 22 civil dates across 2026-2027
-      // alone, each one a daily `isTradingDay` call would answer differently
-      // under the two calendars. Closed structurally rather than by any
-      // empirical agreement — the option does not exist, so it cannot come
-      // back by accident.
+      // (trading-calendar.ts) disagree on several civil dates, each one a
+      // daily `isTradingDay` call would answer differently under the two
+      // calendars. Closed structurally rather than by any empirical
+      // agreement — the option does not exist, so it cannot come back by
+      // accident.
       expect(() =>
         buildBenchmarkDataSource({
           // @ts-expect-error — no `calendar` option: the US equities session is
