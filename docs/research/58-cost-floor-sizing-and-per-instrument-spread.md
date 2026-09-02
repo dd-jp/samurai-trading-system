@@ -419,7 +419,17 @@ Producer: [`58-lse-quote-snapshot.py`](58-lse-quote-snapshot.py). Raw log:
 08:00 open**. Out of continuous trading the endpoint returns the *previous session's closing* quotes
 (`tradingstatuscode: "N c"`, prior-session volume; re-running minutes later returns byte-identical values). LSE's
 market-maker obligations bind quotes to "at least 90% of continuous trading during the mandatory period" and
-explicitly **not** during the opening auction, so **these are not the spreads a fill would cross.** The script
+explicitly **not** during the opening auction, so **these are not the spreads a fill would cross.**
+
+**Direction of error, stated: this capture is most likely PESSIMISTIC — the opposite of this repo's usual
+hazard.** The obligations that cap a market maker's quoted spread bind *during* continuous trading and not
+outside it, so an out-of-session quote is unconstrained and plausibly wider than the same line in session, with
+the wide names widening most. That is the direction that would inflate the 12.61x max/median this document rules
+on. It is asserted, not measured — which is exactly why the ruling's first ship is the sampler rather than a
+coefficient, and why the reversal condition is in-session data. The counter-consideration is that F3's flat-day
+evidence and doc 34 §3.3's print-frequency measurements are independent of session state and point the same way.
+
+The script
 prints `IN CONTINUOUS SESSION: False` on such a run and refuses to imply otherwise. **This must be re-sampled in
 session before any number here is used to size anything**, and re-sampled repeatedly, because doc 53 G3 measured
 a real intraday profile on the US names (TSLA's open median 2.7x its close median).
@@ -486,11 +496,21 @@ const commission = Math.max(
 (`replay-driver.ts:560`/`:609`, `simulated-adapter.ts:83`/`:232`), so a round trip charges both floors twice:
 **~4 bps round trip**, exactly as #882 states.
 
-**The commission floor is under-sized by 8x against the live venue, from a primary in-repo source and with no
-estimation involved.** [ADR-0015](../adr/0015-live-venue-account-and-book-split.md):201 records Saxo's
-**8 bps-per-side Classic tier with no per-order minimum**, i.e. **0.16% = 16 bps round trip** at both the £350 and
-£250 position sizes. The model charges **2 bps round trip**. ADR-0015:207 already anticipated this document's
-conclusion:
+**The commission gap is 8x against the live venue — but it is a missing RATE, not an under-sized floor, and the
+distinction decides what gets changed.** `commissionRate` is **0** in `CALIBRATED_COST_CONFIG.stocks`, which is
+*correct*: Alpaca US equities are commission-free, and `run-stage2.ts:96-103` says so explicitly, leaving the
+floor to stand in for the regulatory pass-through. So the floor binds **because the rate is zero** — that is the
+guard doing exactly its specified job, not failing.
+
+[ADR-0015](../adr/0015-live-venue-account-and-book-split.md):201 records Saxo's **8 bps-per-side Classic tier
+with no per-order minimum**, i.e. **0.16% = 16 bps round trip** at both the £350 and £250 position sizes, against
+a model charging **2 bps round trip**. Set `commissionRate = 0.0008` for the Saxo path and the floor never binds
+at all. What is actually missing is therefore a **venue-keyed commission rate** — and F5 records that no venue
+identity reaches this seam, so the config has nowhere to put one. **Raising `STRUCTURAL_MIN_COMMISSION_RATE` to
+8 bps would be the wrong fix**: it would over-charge every Alpaca-paper backtest by 8x.
+
+The 16-vs-2 bps arithmetic and the flattering direction are unaffected by this re-attribution. ADR-0015:207
+already anticipated it:
 
 > `CostModelImpl`, which floors commission at a 1bp-of-notional *rate*, models Saxo's rate-based structure in kind
 > (not in the exact 8bps figure) rather than IBKR's per-order floor — **a rate-calibration update to 8bps is an
@@ -581,13 +601,22 @@ The ruling, in order of what should actually be built:
 continuous-trading spreads are both tight and uniform. F6's caveat is real and this ruling is explicitly
 provisional on it — which is exactly why the first ship is the sampler and not a coefficient.
 
-### #882 — the floors are under-sized, and must stop being module constants
+### #882 — the modelled cost is under-sized, and the floors must stop being module constants
 
-1. **Sized wrong, and flattering, on both floors.** Saxo charges **8 bps per side** (ADR-0015:201); the model
-   floors commission at **1 bp per side** — an 8x under-charge on the live venue, from a primary source with no
-   estimation. And **all 30 of 30** pool lines show a half-spread above the 1bp floor, at a median of **44 bps**
-   (F6, provisional on its out-of-session caveat) — 44x the floor, corroborated in sign by F2/F3's ordering
-   argument and independently by doc 53 §G4.
+1. **Under-charged and flattering — but the two legs have different defects, and conflating them causes a bad
+   fix.**
+   - **Commission: the RATE is missing, and the floor is fine.** Saxo charges **8 bps per side**
+     (ADR-0015:201) against a modelled **1 bp**. But `commissionRate` is **0** because Alpaca is
+     commission-free, so the floor binds only as its specified backstop. The fix is a **venue-keyed
+     `commissionRate = 0.0008`**, after which the floor never binds. **Raising
+     `STRUCTURAL_MIN_COMMISSION_RATE` to 8 bps is the wrong fix** — it would over-charge every Alpaca-paper
+     backtest by 8x and break `paper-profile.test.ts` for the wrong reason. Leave that floor at 1 bp.
+   - **Half-spread: this is where the genuine floor question lives.** **All 30 of 30** pool lines show a
+     half-spread above the 1 bp floor, at a median of **44 bps** (F6, provisional on its out-of-session
+     caveat) — 44x the floor, corroborated in sign by F2/F3's ordering argument and independently by doc 53
+     §G4. Note the model already prefers a supplied spread (`marketState.spread ?? volatility × coefficient`),
+     so **feeding real sampled LSE spreads into `marketState` may be a better fix than raising this floor** —
+     which is another reason the sampler ships first.
 
    Put together, at the £350/£250 position sizes ADR-0018 D5 resolves to: the model charges **~4 bps round
    trip**, while commission alone is **16 bps** and the median line's spread adds **~88 bps**. Against an edge
@@ -603,6 +632,7 @@ provisional on it — which is exactly why the first ship is the sampler and not
 tier change in Saxo's schedule.
 
 **What this does NOT authorise:** picking a final number for the half-spread floor from F6. That snapshot is
-out-of-session and provisional, and F2 forbids converting an *estimate* into bps at all. The commission floor has
-a sourced, actionable figure (8 bps per side); the half-spread floor has a **sign, an order of magnitude, and a
-free way to measure it properly** — the sampler, not a guess.
+out-of-session and provisional, and F2 forbids converting an *estimate* into bps at all. Commission has a
+sourced, actionable figure to set as a **rate** (8 bps per side); the half-spread has a **sign, an order of
+magnitude, and a free way to measure it properly** — the sampler, not a guess. It also does not authorise
+raising `STRUCTURAL_MIN_COMMISSION_RATE`, for the reason in point 1.
