@@ -750,9 +750,9 @@ describe('buildProductionComponents', () => {
       "PRE-#751, `marketData`'s own `AlpacaDataSource` can write a matching bar normalized " +
       "against `equityCalendarFor`'s `LseRegularHoursCalendar` (live mode) while " +
       "`buildBenchmarkDataSource`'s fixed benchmark port writes the SAME " +
-      "(instrument, timeframe, open_time) row normalized against " +
-      "`UsEquityRegularHoursCalendar` — a silent last-write-wins collision in the shared " +
-      '`bars` table. `benchmarkMarketDataStore`\'s doc above names this residual gap.',
+      '(instrument, timeframe, open_time) row normalized against ' +
+      '`UsEquityRegularHoursCalendar` — a silent last-write-wins collision in the shared ' +
+      "`bars` table. `benchmarkMarketDataStore`'s doc above names this residual gap.",
     (instrument) => {
       const config = stubConfig(db, {
         mode: 'live',
@@ -839,7 +839,7 @@ describe('buildProductionComponents', () => {
 
   it(
     'does NOT refuse mode "live" with an LSE-only universe post-#751 (#989) — exactly the ' +
-      'case #751\'s cutover is supposed to make safe: `3SPY` is an LSE ETP ticker, not the ' +
+      "case #751's cutover is supposed to make safe: `3SPY` is an LSE ETP ticker, not the " +
       "US underlying 'SPY', so it must not trip a guard keyed on the literal symbol",
     () => {
       const config = stubConfig(db, {

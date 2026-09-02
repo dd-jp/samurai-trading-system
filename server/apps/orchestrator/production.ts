@@ -689,7 +689,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
           'UsEquityRegularHoursCalendar — the two writers would target the same ' +
           '(instrument, timeframe, open_time) row in the bars table under different ' +
           `calendars. Safe once #751's LSE-only cutover lands (${collidingInstrument.asset} ` +
-          "becomes a non-tradeable screening instrument, per LseMarkDataSource#assertTradeable), " +
+          'becomes a non-tradeable screening instrument, per LseMarkDataSource#assertTradeable), ' +
           `once this universe drops '${collidingInstrument.asset}', or once ` +
           'config.tradingCalendar resolves to a non-LSE calendar.',
       );
