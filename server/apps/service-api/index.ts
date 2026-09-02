@@ -22,6 +22,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AlpacaHttpBrokerClient } from '../../pipeline/execution/index.js';
 import { openSharedStore, resolveStoreMode, sharedStorePath } from '../../shared/store/index.js';
+import { DASHBOARD_CREDENTIAL_ENV_VAR } from './bind-guard.js';
 import { installDashboardContinueOnFault, watchDashboardStdout } from './fault-guard.js';
 import { ProviderStatusPoller } from './provider-status.js';
 import { bundleDiagnostic, createDashboardServer } from './server.js';
@@ -44,7 +45,7 @@ const host = process.env.HOST ?? '127.0.0.1';
 // `process.env` here (an entry point) rather than inside `server.ts` follows
 // this repo's env-var convention: composition code takes a config field, not
 // a mid-wiring env read.
-const dashboardCredential = process.env.SAMURAI_DASHBOARD_TOKEN;
+const dashboardCredential = process.env[DASHBOARD_CREDENTIAL_ENV_VAR];
 // Same resolver the orchestrator uses: the dashboard reads the file the
 // orchestrator writes, so the two must not derive its name independently.
 //

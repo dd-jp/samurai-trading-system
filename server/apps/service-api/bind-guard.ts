@@ -98,7 +98,8 @@ export function isBindAllowed(host: string, credential: string | undefined): boo
  * only unlocks the BOOT-time bind here. Nothing in this repo yet verifies
  * that credential per request against `/api/snapshot` — option 2 (a bearer
  * token checked on every request) was considered on #887 and explicitly not
- * chosen. Request-time verification is a separate, unshipped concern.
+ * chosen. Request-time verification is a separate, unshipped concern, tracked
+ * as https://github.com/dd-jp/samurai-trading-system/issues/1038.
  */
 export function assertBindAllowed(host: string, credential: string | undefined): void {
   if (isBindAllowed(host, credential)) return;

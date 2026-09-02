@@ -21,6 +21,7 @@
  */
 import { fileURLToPath } from 'node:url';
 import { resolveStoreMode } from '../../shared/store/index.js';
+import { DASHBOARD_CREDENTIAL_ENV_VAR } from './bind-guard.js';
 import { FIXTURE_NOW, InMemoryQueryStore } from './fixture-store.js';
 import type { ProviderStatusPanel, ProviderStatusReader } from './provider-status.js';
 import { createDashboardServer } from './server.js';
@@ -174,7 +175,7 @@ const server = createDashboardServer({
   bundleRoot: fileURLToPath(new URL('../../../client/', import.meta.url)),
   mode,
   providers,
-  dashboardCredential: process.env.SAMURAI_DASHBOARD_TOKEN,
+  dashboardCredential: process.env[DASHBOARD_CREDENTIAL_ENV_VAR],
 });
 
 await server.start();
