@@ -859,10 +859,19 @@ describe('AlpacaBrokerAdapter outbound call discipline', () => {
 
       expect(error).toBeInstanceOf(BrokerError);
       expect((error as BrokerError).venueCode).toBe('42210000');
-      expect((error as BrokerError).message).toBe(
-        'alpaca submitBracket failed (status 422, code 42210000)',
+      // #1003: the venue's own diagnostic message is now also captured, via
+      // the dedicated (allowlisted, length-bounded) `venueMessage` field —
+      // NOT the client's raw `.message`, which is exactly what this test used
+      // to assert stayed OUT of `BrokerError`. That credential-safety
+      // boundary is unchanged; what changed is that Alpaca's parsed `message`
+      // field is now curated in, the same way `code` already was.
+      expect((error as BrokerError).venueMessage).toBe(
+        'fractional orders must be simple orders that are DAY orders',
       );
-      expect((error as BrokerError).message).not.toContain('fractional orders');
+      expect((error as BrokerError).message).toBe(
+        'alpaca submitBracket failed (status 422, code 42210000): fractional orders must be ' +
+          'simple orders that are DAY orders',
+      );
     } finally {
       vi.unstubAllGlobals();
     }

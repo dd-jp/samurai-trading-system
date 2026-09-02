@@ -2,6 +2,7 @@ import type { MarketDataService } from '../../providers/market-data-service/inde
 import type { Clock, Fill, OpenPosition, OrderIntent } from '../../shared/index.js';
 import type { CostModel } from '../../tools/backtest/index.js';
 import type { VerdictDecision } from '../verdict/index.js';
+import { sanitizeBrokerError } from './broker-error.js';
 import { ExecutionImpl } from './execute.js';
 import { SimulatedBrokerAdapter } from './simulated-adapter.js';
 import { openTestExecutionStore, TestExecutionStore } from './sqlite-store-harness.js';
@@ -565,6 +566,51 @@ describe('ExecutionImpl.execute', () => {
     // than being guessed terminal.
     expect(result.order_state).toBe('pending');
     expect((await store.getPosition('key-aapl-1355'))?.order_state).toBe('pending');
+  });
+
+  // #1003: a rejected order used to leave only the generic
+  // "alpaca submitBracket failed (status 422)" behind — sanitizeBrokerError
+  // discarded the venue's own diagnostic text on the credential-safety
+  // boundary, so the only durable trace of WHY a whole-share short 422'd was
+  // a bare HTTP status. The venue's `code`/`message` fields are curated,
+  // non-credentialed diagnostics (see broker-error.ts's `readVenueCode`/
+  // `readVenueMessage`), so they now ride through into `ExecutionResult.reason`
+  // — the same field this suite already pins to `error.message` verbatim
+  // (see the 'connection reset' case above).
+  it('surfaces the venue diagnostic detail, not just the HTTP status, when a rejected order is caught', async () => {
+    const { store } = openTestExecutionStore();
+    const brokerError = sanitizeBrokerError('alpaca', 'submitBracket', {
+      status: 422,
+      code: 42210000,
+      venueMessage:
+        'invalid take_profit.limit_price 746.96416125. sub-penny increment does not fulfill ' +
+        'minimum pricing criteria',
+    });
+    const broker: BrokerAdapter = {
+      submitBracket: vi.fn().mockRejectedValue(brokerError),
+      fetchNewFills: vi.fn().mockResolvedValue([]),
+      resizeProtectiveLegs: vi.fn().mockResolvedValue(undefined),
+      rearmProtectiveLegs: vi
+        .fn()
+        .mockRejectedValue(new Error('rearmProtectiveLegs: not part of execute()')),
+      getOrder: vi.fn().mockRejectedValue(new Error('getOrder: not part of execute()')),
+      submitFlatten: vi.fn().mockRejectedValue(new Error('submitFlatten: not part of execute()')),
+      cancel: vi.fn().mockRejectedValue(new Error('cancel: not part of execute()')),
+      getOpenPositions: vi
+        .fn()
+        .mockRejectedValue(new Error('getOpenPositions: not part of execute()')),
+      resumeFlatten: vi.fn().mockRejectedValue(new Error('resumeFlatten: not part of execute()')),
+    };
+
+    const result = await new ExecutionImpl(makeInput({ store, broker })).execute(makeGo());
+
+    expect(result.status).toBe('error');
+    // Not just the generic status string — the venue's own diagnostic text
+    // must be present too.
+    expect(result.reason).toContain('status 422');
+    expect(result.reason).toContain('code 42210000');
+    expect(result.reason).toContain('sub-penny increment does not fulfill minimum pricing');
+    expect(result.reason).not.toBe('alpaca submitBracket failed (status 422)');
   });
 
   it('does not act on a no_go', async () => {

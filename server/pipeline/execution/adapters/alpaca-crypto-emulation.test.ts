@@ -392,8 +392,11 @@ describe('AlpacaCryptoLegEmulation — crash-restart resumes from the journal', 
     const adapter = makeAdapter(venue, state);
 
     venue.acceptThenThrowNextLimit = true;
-    // `sanitizeBrokerError` replaces the venue's message wholesale (H1) —
-    // what reaches the caller is the credential-safe named-operation form.
+    // `sanitizeBrokerError` replaces the raw thrown message wholesale (H1) —
+    // what reaches the caller is the credential-safe named-operation form,
+    // optionally suffixed with a curated `venueMessage` (#1003) when the
+    // cause exposes one on its dedicated property; the fake venue here
+    // doesn't, so this assertion only needs the stable prefix.
     await expect(adapter.submitBracket(cryptoBracket())).rejects.toThrow(
       'alpaca submitBracket failed',
     );

@@ -489,6 +489,35 @@ describe('AlpacaHttpBrokerClient', () => {
     expect((error as AlpacaBrokerProviderError).code).toBe('42210000');
   });
 
+  it('captures Alpaca diagnostic message onto AlpacaBrokerProviderError.venueMessage (#1003)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(
+        {
+          code: 42210000,
+          message:
+            'invalid take_profit.limit_price 746.96416125. sub-penny increment does not ' +
+            'fulfill minimum pricing criteria',
+        },
+        422,
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({
+      apiKey: FAKE_KEY,
+      apiSecret: FAKE_SECRET,
+      retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
+    });
+
+    const error = await client.submitOrder(ORDER_REQUEST).catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(AlpacaBrokerProviderError);
+    expect((error as AlpacaBrokerProviderError).venueMessage).toBe(
+      'invalid take_profit.limit_price 746.96416125. sub-penny increment does not fulfill ' +
+        'minimum pricing criteria',
+    );
+  });
+
   it('retries a 503 up to maxAttempts and eventually succeeds', async () => {
     const fetchMock = vi
       .fn()

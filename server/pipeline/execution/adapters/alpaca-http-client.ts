@@ -90,8 +90,11 @@ import type {
  * would carry the `APCA-API-*` headers) and is truncated — but this is a
  * belt no braces are actually needed for: `alpaca-adapter.ts`'s `call()`
  * wraps every one of these methods and converts whatever they throw through
- * `sanitizeBrokerError`, which discards the original message entirely before
- * it can reach a durable `audit_log` row or the dashboard. See
+ * `sanitizeBrokerError`. That boundary discards the *raw* thrown message
+ * wholesale (the vector that could carry request headers/URLs), but since
+ * #1003 it forwards one curated, allowlisted field — `venueMessage`, read
+ * only from a dedicated property, never from `.message` — through to a
+ * durable log line and (via `reconcile.ts`) alert transports. See
  * `broker-error.ts`'s doc comment — this file does not duplicate that
  * boundary, it relies on it being upstream of every caller.
  */
