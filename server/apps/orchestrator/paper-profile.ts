@@ -154,6 +154,10 @@ export type ValueProvenance = 'SPEC' | 'DERIVED' | 'UNSOURCED';
 export const PAPER_PROFILE_PROVENANCE = {
   llmBudgetUsd: 'SPEC',
   tickIntervalMs: 'DERIVED',
+  // #1013 — derived from `rateLimiterConfig.perAssetClass.stocks`'s budget,
+  // #1012's measured per-call latency, and today's universe size. See the
+  // field's own comment for the arithmetic.
+  maxConcurrentInstruments: 'DERIVED',
   universe: 'SPEC',
   'traderConfig.conviction_floor': 'SPEC',
   // #668. SPEC rather than DERIVED: close − 5 minutes is not calculated from
@@ -1033,6 +1037,13 @@ const CRYPTO_MAX_DEBATES_PER_WINDOW = 20;
 const STOCKS_MAX_DEBATES_PER_WINDOW = 15;
 
 /**
+ * `maxConcurrentInstruments` (#1013) — see that field's comment, on the
+ * returned profile below, for the full derivation. Named here so the number
+ * is defined once, next to the budgets it is checked against.
+ */
+const MAX_CONCURRENT_INSTRUMENTS = 6;
+
+/**
  * The eight required config objects, plus the optional ninth seam (#366).
  *
  * **No longer parameterised by an equity anchor or capital ceiling (#886).**
@@ -1105,10 +1116,20 @@ export function buildStartingProfileConfigs(
   // more: the fallback when it is absent is `?? true` (`scheduler.ts:74`) —
   // i.e. the whole LSE session, which is the OPPOSITE of the constraint. A
   // profile that dropped it would tick 08:00-16:30 and look healthy doing it.
+  //
+  // `maxConcurrentInstruments` joined them under #1013: the fallback when it
+  // is absent is `?? 1` (`production.ts:2701`), which is what actually ran —
+  // the universe walked one instrument at a time regardless of how many
+  // workers `runTickPlan` could otherwise use. A profile that dropped it
+  // would silently go back to serial, not to some documented default width.
   Required<
     Pick<
       ProductionConfig,
-      'rateLimiterConfig' | 'llmBudgetUsd' | 'tickIntervalMs' | 'stocksTradingWindow'
+      | 'rateLimiterConfig'
+      | 'llmBudgetUsd'
+      | 'tickIntervalMs'
+      | 'stocksTradingWindow'
+      | 'maxConcurrentInstruments'
     >
   > {
   // ADR-0018 D5. The gate's classification and the list the run actually ticks
@@ -1890,6 +1911,84 @@ export function buildStartingProfileConfigs(
      */
     tickIntervalMs: 2 * 60_000,
     /**
+     * Concurrent instrument passes within one tick (#1013) — SET EXPLICITLY
+     * rather than left to `buildProductionOrchestrator`'s `config.maxConcurrentInstruments
+     * ?? 1` fallback (`production.ts:2701`), which is what actually ran: a
+     * worker pool of width 1, walking the universe one instrument at a time —
+     * SPY at 19:56:42, QQQ at 19:57:07, TSLA at 19:58:02 (the issue's own
+     * measurement; it did not report AAPL's timestamp), ~25-55s apart —
+     * against the `tickIntervalMs: 2 * 60_000` two lines up. The pool itself
+     * (`runTickPlan`, tick-loop.ts) was never the gap; only the config value
+     * feeding it was.
+     *
+     * **Worked from the rate limiter's actual budget and #1012's measured
+     * latency, not by feel — the issue's own instruction:**
+     *
+     * - `rateLimiterConfig.perAssetClass.stocks` below admits
+     *   `STOCKS_MAX_DEBATES_PER_WINDOW = 15` debates per `LLM_BUDGET_WINDOW_MS
+     *   = 300_000` (5 min) — a sustained 3/min. `DEFAULT_UNIVERSE` today is
+     *   FOUR stocks-only instruments (SPY/QQQ/AAPL/TSLA; crypto left scope,
+     *   ADR-0015's 2026-08-16 amendment). At `maxDebates: 15`, four
+     *   instruments debating once each in the same window is nowhere near
+     *   it — but "at most 4" is not actually the bound: #743's
+     *   `DebateBarDecisionGate` admits one debate attempt per instrument per
+     *   bar, and #785 lets a THROWING pass retry up to
+     *   `DEFAULT_MAX_DECISION_RETRIES_PER_BAR = 5` further times in that same
+     *   bar, so a pathological run (every instrument's debate is admitted,
+     *   then something downstream throws, every attempt) could try to admit
+     *   up to `4 x (1 + 5) = 24` debates in one window — over the 15 ceiling.
+     *   What actually holds the line is `RateLimiter.reserve` itself: it is
+     *   TOTAL and never throws (its own doc comment), so the 25th-and-later
+     *   attempt in that scenario is simply refused — `granted: false`,
+     *   logged, degrades that pass to `no_trade` — rather than retried
+     *   further (a refusal is not a throw, so #785 never sees it as one to
+     *   retry). The width this field sets does not change any of that
+     *   arithmetic: it only affects how many instruments' FIRST attempt in a
+     *   bar can start in parallel, not how many attempts each can eventually
+     *   make.
+     * - #1012 measured the debate LLM call itself at 6,441ms mean / 28,340ms
+     *   max, ~9-10 calls serially per one debate (`WORST_CASE_LLM_CALLS_PER_DEBATE`
+     *   below reserves for exactly 10) — a mean debate of ~61s (matching the
+     *   ~50s/instrument this ticket measured), a worst case of ~4.7 min.
+     *   Neither figure is gated by THIS dial: `RateLimiter.reserve` books the
+     *   worst-case CALL count for a debate up front
+     *   (`rate-limited-llm-client.ts`), so a slow debate spends more of its
+     *   own call budget, never another instrument's debate-count budget — a
+     *   debate's duration and how many debates a window admits are separate
+     *   quantities here.
+     * - `6` clears today's 4-instrument universe with a spare worker, so the
+     *   tick loop's own per-instrument reentrancy guard (#669, `production.ts`
+     *   — never more than one in-flight pass per instrument) is what actually
+     *   bounds concurrent debates today, at `min(6, universe.length) = 4`, not
+     *   this number: raising it further would not raise real concurrency until
+     *   the universe itself grows past 6.
+     * - `6` also reuses, rather than re-derives, #388's own headroom check two
+     *   screens down (`rateLimiterConfig`'s comment): raising this to 6 was
+     *   already shown there to roughly double the stock debate rate to
+     *   ~1.6/min, comfortably under the 3/min budget above.
+     *
+     * **Effect on staleness.** The issue reports ~2 min staleness on the
+     * 3-instrument span it actually timestamped (SPY to TSLA, above). At
+     * width 1 the last instrument in a pass decides on data as old as every
+     * other instrument's combined debate time ahead of it in the walk, so
+     * extrapolating that same ~50s/instrument figure to the full 4-instrument
+     * `DEFAULT_UNIVERSE` (not itself measured) puts the last instrument up to
+     * ~3 debates deep, i.e. on the order of ~2.5 min stale. At width 6 (>= 4), every
+     * instrument in `DEFAULT_UNIVERSE` starts its pass in the same tick
+     * instant — one worker per instrument — so the whole pass's staleness
+     * spread collapses to the spread of the instruments' OWN debate latencies
+     * (seconds to low tens of seconds, #1012's mean-to-tail range) rather than
+     * the sum of the instruments ahead of it in a serial walk.
+     *
+     * **NOT sized for the ~30-name live LSE ETP pool (#895).** A universe that
+     * wide makes `maxConcurrentInstruments x passes in flight` (#692) actually
+     * multiply — a wider universe than this cap gives a second, overlapping
+     * pass NEW instruments to claim rather than none — which is a materially
+     * different safety question this comment does not answer. Revisit this
+     * dial, not assume it, when the universe widens past it.
+     */
+    maxConcurrentInstruments: MAX_CONCURRENT_INSTRUMENTS,
+    /**
      * `SPEC` — equities are entered only inside the LSE/US overlap (#706).
      *
      * Set HERE rather than defaulted in `buildProductionOrchestrator`, because
@@ -2108,6 +2207,12 @@ export function buildStartingProfileConfigs(
      * be raised for latency without the ceiling firing, and cannot be raised
      * far enough to remove it.
      *
+     * **#1013 acted on this.** `maxConcurrentInstruments` below is now set to
+     * exactly the `6` this paragraph analyzed, rather than left at the
+     * `?? 1` fallback that made every pass walk the universe serially — see
+     * that field's own comment for the full derivation, current-universe fit,
+     * and the explicit non-claim about the wider ~30-name LSE pool.
+     *
      * **`maxLlmCalls = maxDebates * WORST_CASE_LLM_CALLS_PER_DEBATE` —
      * DERIVED, and deliberately redundant.** `reserve` admits a debate only if
      * its worst case (3 rounds x 3 persona calls + 1 disagreement call = 10)
@@ -2200,7 +2305,11 @@ export function paperStartingProfile(
   Required<
     Pick<
       ProductionConfig,
-      'rateLimiterConfig' | 'llmBudgetUsd' | 'tickIntervalMs' | 'stocksTradingWindow'
+      | 'rateLimiterConfig'
+      | 'llmBudgetUsd'
+      | 'tickIntervalMs'
+      | 'stocksTradingWindow'
+      | 'maxConcurrentInstruments'
     >
   > {
   if (mode === 'live') {

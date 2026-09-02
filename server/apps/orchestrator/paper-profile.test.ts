@@ -328,6 +328,60 @@ describe('paperStartingProfile', () => {
     });
   });
 
+  /**
+   * #1013: `maxConcurrentInstruments` used to fall through to
+   * `buildProductionOrchestrator`'s `?? 1` default, silently — the universe
+   * walked one instrument at a time regardless of how wide `runTickPlan`'s
+   * pool could otherwise run. These pin the explicit value this profile now
+   * carries, and the two claims that justify it: today's universe fits
+   * without serializing, and the width stays well inside the rate limiter's
+   * own budget even in the worst case the pool could produce.
+   */
+  describe('maxConcurrentInstruments (#1013)', () => {
+    it('is set explicitly, not left to the ?? 1 fallback that made every pass serial', () => {
+      const profile = paperStartingProfile('paper');
+
+      expect(profile.maxConcurrentInstruments).toBeDefined();
+      expect(profile.maxConcurrentInstruments).toBe(6);
+    });
+
+    it("fully parallelizes today's universe — no instrument waits behind another", () => {
+      // `runTickPlan`'s worker count is `min(maxConcurrentInstruments,
+      // plan.instruments.length)` (tick-loop.ts): at or above the universe
+      // size, every instrument gets its own worker in the same pass.
+      const profile = paperStartingProfile('paper');
+      const universe = profile.universe;
+      if (universe === undefined) {
+        throw new Error("paperStartingProfile('paper') always carries a universe");
+      }
+
+      expect(profile.maxConcurrentInstruments).toBeGreaterThanOrEqual(universe.length);
+    });
+
+    it('stays well inside the stocks rate-limiter budget even if every instrument debates in one window', () => {
+      // Headroom, not a hard proof: `RateLimiter.reserve` is what actually
+      // enforces `maxDebates` as a ceiling (it never throws, so #785's
+      // bounded per-bar retry can't turn a refusal into a runaway) — this
+      // just checks that today's universe, and the width itself, both sit
+      // comfortably clear of that ceiling on ordinary operation, one debate
+      // per instrument per window.
+      const profile = paperStartingProfile('paper');
+      const universe = profile.universe;
+      const stocksBudget = profile.rateLimiterConfig.perAssetClass?.stocks;
+      if (universe === undefined || stocksBudget === undefined) {
+        throw new Error(
+          "paperStartingProfile('paper') always carries a universe and a stocks rate-limit budget",
+        );
+      }
+
+      expect(universe.length).toBeLessThan(stocksBudget.maxDebates);
+      // The configured width itself, not just today's universe, also clears
+      // the budget — headroom for the universe growing up to this cap
+      // without the rate limiter needing a second look.
+      expect(profile.maxConcurrentInstruments).toBeLessThan(stocksBudget.maxDebates);
+    });
+  });
+
   it('refuses live mode without citing issues that have since closed', () => {
     // The refusal message is what an operator reads when they try to go live,
     // so every checkable claim in it has to still be true. It has now been
