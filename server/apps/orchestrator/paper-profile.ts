@@ -2005,15 +2005,28 @@ export function buildStartingProfileConfigs(
      *   already shown there to roughly double the stock debate rate to
      *   ~1.6/min, comfortably under the 3/min budget above.
      *
-     * **Effect on staleness.** The issue's own timestamps (SPY 19:56:42, TSLA
-     * 19:58:02, above) show ~80s of staleness on the 3-instrument span it
-     * actually timestamped — corrected here (#1013 fix-up L1) from an earlier
-     * "~2 min" that did not match the quoted timestamps. At width 1 the last
-     * instrument in a pass decides on data as old as every
-     * other instrument's combined debate time ahead of it in the walk, so
-     * extrapolating that same ~50s/instrument figure to the full 4-instrument
-     * `DEFAULT_UNIVERSE` (not itself measured) puts the last instrument up to
-     * ~3 debates deep, i.e. on the order of ~2.5 min stale. At width 6 (>= 4), every
+     * **Effect on staleness.** The issue's own timestamps (SPY 19:56:42, QQQ
+     * 19:57:07, TSLA 19:58:02) show ~80s of staleness on the span it actually
+     * timestamped — corrected here (#1013 fix-up L1) from an earlier "~2 min"
+     * that did not match the quoted timestamps. That span is two gaps if only
+     * SPY/QQQ/TSLA are counted (~40s/gap), but `DEFAULT_UNIVERSE`'s walk order
+     * is SPY/QQQ/AAPL/TSLA, so AAPL's debate almost certainly ran between
+     * QQQ's and TSLA's timestamps even though the issue never reported it —
+     * meaning the 80s span most likely covers three gaps across all four
+     * instruments (~27s/gap), not two. Either way the per-gap figure the data
+     * itself supports is in the ~27-40s range, not the "~50s/instrument" an
+     * earlier draft of this comment invented and then wrongly called "that
+     * same" figure when extrapolating (#1013 fix-up L1, second correction).
+     * Rather than lean on a number this small a sample can't really pin down,
+     * the extrapolation below instead uses #1012's separately-measured ~61s
+     * MEAN debate latency (a different, independently-sourced figure, not a
+     * refinement of the 80s span) as a deliberately conservative per-instrument
+     * estimate: at width 1 the last instrument in a pass decides on data as
+     * old as every other instrument's combined debate time ahead of it in the
+     * walk, so up to ~3 debates deep at ~61s each puts the full 4-instrument
+     * `DEFAULT_UNIVERSE`'s last instrument on the order of ~3 min stale (not
+     * itself measured — #1012's figure is a per-call/per-debate benchmark, not
+     * a walk-order measurement on this universe). At width 6 (>= 4), every
      * instrument in `DEFAULT_UNIVERSE` starts its pass in the same tick
      * instant — one worker per instrument — so the whole pass's staleness
      * spread collapses to the spread of the instruments' OWN debate latencies
