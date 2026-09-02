@@ -1,0 +1,127 @@
+# 57-open-low-close-high-persistence.py run log, 2026-09-02 (#707)
+#
+# Stages were run and the write-up committed in this order: data, is (with the
+# write-up sections 1-5 committed against it), then oos.
+
+$ python3 docs/research/57-open-low-close-high-persistence.py data
+== per-symbol daily bars, 2016-01-04 .. 2026-07-31 (adjustment=all, feed=sip)
+sym      bars  first      last       |r|>30%
+AAPL     2659  2016-01-04 2026-07-31 0
+AMD      2659  2016-01-04 2026-07-31 0
+AMZN     2659  2016-01-04 2026-07-31 0
+ARM       722  2023-09-14 2026-07-31 0
+BABA     2659  2016-01-04 2026-07-31 0
+COIN     1331  2021-04-14 2026-07-31 0
+EWY      2659  2016-01-04 2026-07-31 0
+GOOG     2659  2016-01-04 2026-07-31 0
+KWEB     2659  2016-01-04 2026-07-31 0
+META     2659  2016-01-04 2026-07-31 0
+MRNA     1921  2018-12-07 2026-07-31 0
+MSFT     2659  2016-01-04 2026-07-31 0
+MSTR     2659  2016-01-04 2026-07-31 0
+NFLX     2659  2016-01-04 2026-07-31 0
+NIO      2659  2016-01-04 2026-07-31 2
+NVDA     2659  2016-01-04 2026-07-31 0
+PLTR     1465  2020-09-30 2026-07-31 0
+PYPL     2659  2016-01-04 2026-07-31 0
+QQQ      2659  2016-01-04 2026-07-31 0
+RACE     2659  2016-01-04 2026-07-31 0
+SPY      2659  2016-01-04 2026-07-31 0
+TSLA     2659  2016-01-04 2026-07-31 0
+UBER     1816  2019-05-10 2026-07-31 0
+VT       2659  2016-01-04 2026-07-31 0
+XLE      2659  2016-01-04 2026-07-31 0
+XYZ      2659  2016-01-04 2026-07-31 0
+
+== availability per month (floor = 20)
+  2016-01  n= 0  BELOW FLOOR
+  2016-02  n= 0  BELOW FLOOR
+  2016-03  n= 0  BELOW FLOOR
+  2016-04  n= 0  BELOW FLOOR
+  2016-05  n= 0  BELOW FLOOR
+  2016-06  n= 0  BELOW FLOOR
+  2016-07  n= 0  BELOW FLOOR
+  2016-08  n= 0  BELOW FLOOR
+  2016-09  n= 0  BELOW FLOOR
+  2016-10  n= 0  BELOW FLOOR
+  2016-11  n= 0  BELOW FLOOR
+  2016-12  n= 0  BELOW FLOOR
+  2017-01  n=21
+  2018-01  n=21
+  2019-01  n=21
+  2020-01  n=22
+  2021-01  n=23
+  2022-01  n=24
+  2023-01  n=25
+  2024-01  n=25
+  2025-01  n=26
+  2026-01  n=26
+first scoreable month: 2017-01
+
+$ python3 docs/research/57-open-low-close-high-persistence.py is
+== IN-SAMPLE (<=2022)  months scored: 72  (of 84 in the arm; the rest are below the 20-name floor)
+   first 2017-01  last 2022-12   names/month 21..25
+
+   top-minus-bottom spread, %/session
+   n=72  mean +0.0529  sd 0.3282  se 0.0387  t +1.367
+   top quintile   mean +0.0302  se 0.0391  t +0.774
+   bottom quintile mean -0.0226  se 0.0420  t -0.539
+
+   MDE for the out-of-sample arm:
+   2.8016 x 0.3282 / sqrt(43) = +0.1402 %/session
+   (z = 1.96 + 0.84, 80% power at 5% two-sided; sd in-sample, M = 43 OOS months)
+
+$ python3 docs/research/57-open-low-close-high-persistence.py oos
+== OUT-OF-SAMPLE (>=2023)  months scored: 43  (of 43 in the arm; the rest are below the 20-name floor)
+   first 2023-01  last 2026-07   names/month 25..26
+
+   top-minus-bottom spread, %/session
+   n=43  mean -0.0246  sd 0.3708  se 0.0565  t -0.436
+   top quintile   mean +0.0550  se 0.0604  t +0.912
+   bottom quintile mean +0.0797  se 0.0513  t +1.552
+
+   per-month spreads:
+     2023-01  n=25 k=5  top +0.4793  bot +0.7639  spread -0.2846
+     2023-02  n=25 k=5  top +0.3204  bot -0.1259  spread +0.4463
+     2023-03  n=25 k=5  top +0.4020  bot +0.3227  spread +0.0793
+     2023-04  n=25 k=5  top -0.3701  bot -0.5845  spread +0.2145
+     2023-05  n=25 k=5  top +0.3621  bot +0.1973  spread +0.1649
+     2023-06  n=25 k=5  top +0.5373  bot +0.3896  spread +0.1478
+     2023-07  n=25 k=5  top +0.6273  bot +0.4507  spread +0.1767
+     2023-08  n=25 k=5  top -0.2736  bot -0.1114  spread -0.1621
+     2023-09  n=25 k=5  top -0.3648  bot -0.0038  spread -0.3609
+     2023-10  n=25 k=5  top -0.1188  bot +0.1124  spread -0.2313
+     2023-11  n=25 k=5  top +0.7649  bot +0.0394  spread +0.7256
+     2023-12  n=25 k=5  top +0.3035  bot +0.3004  spread +0.0032
+     2024-01  n=25 k=5  top -0.1032  bot +0.2187  spread -0.3219
+     2024-02  n=25 k=5  top +0.3800  bot +0.1900  spread +0.1900
+     2024-03  n=25 k=5  top -0.1782  bot +0.1129  spread -0.2910
+     2024-04  n=25 k=5  top -0.6126  bot +0.0772  spread -0.6899
+     2024-05  n=25 k=5  top +0.1943  bot +0.4653  spread -0.2710
+     2024-06  n=25 k=5  top -0.1253  bot -0.0479  spread -0.0774
+     2024-07  n=25 k=5  top -0.3067  bot +0.0564  spread -0.3631
+     2024-08  n=25 k=5  top -0.1577  bot +0.0270  spread -0.1847
+     2024-09  n=26 k=6  top +0.1744  bot +0.0524  spread +0.1220
+     2024-10  n=26 k=6  top +0.1798  bot -0.0417  spread +0.2215
+     2024-11  n=26 k=6  top +0.2707  bot -0.1062  spread +0.3770
+     2024-12  n=26 k=6  top -0.5962  bot -0.4454  spread -0.1508
+     2025-01  n=26 k=6  top +0.1730  bot +0.0161  spread +0.1569
+     2025-02  n=26 k=6  top -0.2391  bot +0.0731  spread -0.3122
+     2025-03  n=26 k=6  top -0.1227  bot -0.1335  spread +0.0107
+     2025-04  n=26 k=6  top +0.9249  bot +1.1110  spread -0.1861
+     2025-05  n=26 k=6  top +0.0732  bot +0.0794  spread -0.0062
+     2025-06  n=26 k=6  top +0.0875  bot +0.2786  spread -0.1911
+     2025-07  n=26 k=6  top -0.1263  bot +0.2613  spread -0.3876
+     2025-08  n=26 k=6  top +0.0368  bot +0.0016  spread +0.0352
+     2025-09  n=26 k=6  top +0.3507  bot +0.1203  spread +0.2305
+     2025-10  n=26 k=6  top +0.0138  bot -0.3383  spread +0.3521
+     2025-11  n=26 k=6  top -0.5311  bot -0.3503  spread -0.1808
+     2025-12  n=26 k=6  top -0.2175  bot -0.1518  spread -0.0657
+     2026-01  n=26 k=6  top -0.7186  bot -0.1971  spread -0.5215
+     2026-02  n=26 k=6  top +0.0744  bot +0.4357  spread -0.3613
+     2026-03  n=26 k=6  top +0.1303  bot -0.1180  spread +0.2483
+     2026-04  n=26 k=6  top +0.4018  bot +0.1737  spread +0.2281
+     2026-05  n=26 k=6  top +0.6799  bot +0.3695  spread +0.3104
+     2026-06  n=26 k=6  top +0.2701  bot -0.8527  spread +1.1228
+     2026-07  n=26 k=6  top -0.6838  bot +0.3380  spread -1.0217
+
