@@ -1388,6 +1388,15 @@ def existing_comment_anchors(comments: Sequence[dict], reviewer: str) -> set[tup
         body = c.get("body")
         if not isinstance(body, str) or marker not in body:
             continue
+        # Only a BOT's comment can suppress a finding. The marker is plain
+        # text in a public comment thread, so a human quoting it — which is
+        # exactly what happens on a PR that discusses this mechanism — would
+        # otherwise mute the reviewer on whatever line they replied to.
+        # Absent `user` means a hand-built comment (the tests), not a human
+        # on GitHub: every real payload carries one.
+        user = c.get("user")
+        if isinstance(user, dict) and user.get("type") != "Bot":
+            continue
         # `side` is absent on some historical comments; absent means RIGHT,
         # which is what this script posts. Only an explicit LEFT is excluded.
         if c.get("side") not in (None, "RIGHT"):

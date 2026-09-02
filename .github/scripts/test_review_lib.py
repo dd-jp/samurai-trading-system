@@ -1896,6 +1896,37 @@ def test_a_human_comment_on_the_same_line_does_not_suppress_the_reviewer():
     assert review_lib.existing_comment_anchors(prior, "nous-kimi") == set()
 
 
+def test_a_human_quoting_the_marker_cannot_mute_the_reviewer():
+    """The marker is plain text in a public thread. A human discussing this
+    very mechanism on a PR would otherwise suppress the reviewer on whatever
+    line they replied to."""
+    prior = [
+        {
+            "path": "src/trader/x.ts",
+            "line": 2,
+            "side": "RIGHT",
+            "user": {"login": "dd-jp", "type": "User"},
+            "body": "why does it stamp " + review_lib.comment_marker("nous-kimi") + "?",
+        }
+    ]
+
+    assert review_lib.existing_comment_anchors(prior, "nous-kimi") == set()
+
+
+def test_a_bot_comment_still_suppresses():
+    prior = [
+        {
+            "path": "src/trader/x.ts",
+            "line": 2,
+            "side": "RIGHT",
+            "user": {"login": "kimi-3-review[bot]", "type": "Bot"},
+            "body": "prior\n\n" + review_lib.comment_marker("nous-kimi"),
+        }
+    ]
+
+    assert review_lib.existing_comment_anchors(prior, "nous-kimi") == {("src/trader/x.ts", 2)}
+
+
 def test_an_outdated_comment_does_not_suppress_a_fresh_finding():
     """GitHub nulls `line` once the code under a comment changes and moves the
     old value to `original_line`. The line has moved on; the finding deserves
