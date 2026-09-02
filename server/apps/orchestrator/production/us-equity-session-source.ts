@@ -25,8 +25,10 @@
  * trading-calendar.ts) — so even the degraded path cannot silently take the
  * dangerous direction #684 exists to close.
  *
- * **Live mode is never touched.** The live equity leg is the Trading 212 ISA
- * (ADR-0015, #659), not Alpaca, and runs `LseRegularHoursCalendar` — this
+ * **Live mode is never touched.** The live equity leg is a Saxo Capital
+ * Markets UK GIA (ADR-0015, #659; ADR-0015's 2026-08-30 amendment — this
+ * comment said "Trading 212 ISA" until #946), not Alpaca, and runs
+ * `LseRegularHoursCalendar` — this
  * factory is for the PAPER leg only, matching #684's own scope.
  */
 

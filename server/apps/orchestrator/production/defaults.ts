@@ -445,8 +445,10 @@ function buildLseMarkSourceIfNeeded(
         'on mechanical grounds: its published OpenAPI bundle exposes no quote endpoint at all, ' +
         'and its only price field (Position.currentPrice) exists solely for instruments already ' +
         'held and carries no observation timestamp, so no honest Mark.observed_at can be derived ' +
-        "from it. Whether that venue's terms permit an automated trader at all is a separate " +
-        'question, open and NOT settled here — see #896.',
+        'from it. Moot regardless as of 2026-08-30: #896 (closed) found Trading 212 bars ' +
+        'algorithmic trading outright, so it is no longer a candidate venue at all — the live ' +
+        "equity leg is a Saxo Capital Markets UK GIA (ADR-0015's 2026-08-30 amendment). This " +
+        'sentence said "open and NOT settled" until #946.',
     );
   }
 

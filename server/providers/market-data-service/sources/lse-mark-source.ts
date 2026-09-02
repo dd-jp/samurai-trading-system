@@ -7,8 +7,10 @@
  * `market-data-service-spec.md` specs three `DataSource` implementations —
  * ccxt/Kraken, IBKR and Alpaca — and **none of them serves the LSE**. Under
  * [ADR-0016](../../../../docs/adr/0016-universe-leveraged-etps-ungated.md) the
- * live equity universe is GBP LSE-listed leveraged ETPs held in the Trading
- * 212 ISA, and `server/providers/universe-pool/lse-etp-pool.ts` splits the
+ * live equity universe is GBP LSE-listed leveraged ETPs held in a Saxo
+ * Capital Markets UK GIA (ADR-0015's 2026-08-30 amendment; this comment said
+ * "Trading 212 ISA" until #946), and
+ * `server/providers/universe-pool/lse-etp-pool.ts` splits the
  * identity in two: `screening_instrument` (the liquid US underlying, which
  * Alpaca serves) is what the screener ranks, and `lse_ticker` is what Samurai
  * actually holds and routes. Nothing on the mark path knew the second identity

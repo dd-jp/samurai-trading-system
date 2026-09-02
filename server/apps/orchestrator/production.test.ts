@@ -521,7 +521,7 @@ describe('equityCalendarFor', () => {
    * The overnight carry #668 exists to prevent, arriving through the
    * composition root rather than through the rule.
    */
-  it('gives the live equity leg the LSE calendar (ADR-0015: T212 ISA, LSE ETPs)', () => {
+  it('gives the live equity leg the LSE calendar (ADR-0015: Saxo GIA, LSE ETPs)', () => {
     const calendar = equityCalendarFor({ mode: 'live' } as unknown as ProductionConfig);
 
     // 2026-07-15 is a Wednesday. 16:25 London (BST) = 15:25 UTC — inside the
