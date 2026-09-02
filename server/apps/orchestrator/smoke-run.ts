@@ -2259,8 +2259,16 @@ export function readSmokeObservations(
           'ORDER BY idempotency_key, leg, rowid',
       )
       .all() as SmokeObservations['fills'],
+    // #1028: same content-based ordering as `positions`/`fills` above — `closed_trades`
+    // rows are also written per-arm, on whichever arm's exit path (round-trip-to-flat,
+    // #82/#83) reaches the store first, so `rowid` order is the same insertion-timing
+    // race. `idempotency_key` is `closed_trades`' PRIMARY KEY (migration 0031), so
+    // ordering by it after `arm` is a total, stable order.
     closedTrades: db
-      .prepare('SELECT idempotency_key, realized_pnl_net, close_reason, arm FROM closed_trades')
+      .prepare(
+        'SELECT idempotency_key, realized_pnl_net, close_reason, arm FROM closed_trades ' +
+          'ORDER BY arm, idempotency_key',
+      )
       .all() as SmokeObservations['closedTrades'],
     flattenSubmissions: db
       .prepare('SELECT idempotency_key, instrument, status FROM flatten_submissions ORDER BY rowid')
@@ -4052,6 +4060,17 @@ const DEFAULT_SMOKE_DEADLINE_MS = 30_000;
 const FILL_GRACE_MS = 2_000;
 /** Store-polling granularity for the two waits below. */
 const OBSERVE_INTERVAL_MS = 25;
+/**
+ * #1028 — the two arms `readSmokeObservations().positions` can ever carry a
+ * row for. Not an incidental default: falsifier arm 2 (control) is mandated
+ * to run in parallel with the live arm from the first soak day (ADR-0014
+ * amendment 2, ADR-0017 §Consequences), and this composition root wires it
+ * unconditionally (`production.ts`'s `controlArm` step) — there is no smoke
+ * config that runs `live` alone. Used below to compute how many `open_positions`
+ * rows a transacting run must produce before the post-tick wait can trust the
+ * readback is fully drained, rather than just nonempty.
+ */
+const SMOKE_TRADING_ARMS: readonly TradingArm[] = ['live', 'control'];
 
 /** Polls the store until `done` or the deadline — never a fixed sleep. */
 async function waitUntil(check: () => boolean, deadline: number): Promise<void> {
@@ -4346,11 +4365,25 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // `SimulatedBrokerAdapter.submitBracket()` (`CostModelImpl.fill()` has
       // no partial-fill modelling), so "drained" means every currently-open
       // position has actually been ingested, not just that fills exist.
+      //
+      // #1028 (residual): `positions.length > 0` is still satisfiable by ONE
+      // fully-filled arm's row(s) while the OTHER arm hasn't even submitted
+      // its order yet — that arm's row does not exist in `open_positions` at
+      // all, so `every()` over the partial set says nothing about what is
+      // still missing. `SMOKE_TEST_UNIVERSE` has exactly one instrument and
+      // `SMOKE_TRADING_ARMS` names the two arms this composition root always
+      // wires, and Trader routes a held instrument into its exit branch
+      // rather than re-entering it (decide.ts), so a transacting run opens
+      // AT MOST one lot per (arm, instrument) regardless of tick count —
+      // `expectedOpenPositions` is that ceiling. Requiring the count to reach
+      // it before checking `filled_size` closes the gap: the wait can no
+      // longer return while a whole arm's row is simply absent.
+      const expectedOpenPositions = SMOKE_TEST_UNIVERSE.length * SMOKE_TRADING_ARMS.length;
       await waitUntil(
         () => {
           const observations = readSmokeObservations(db);
           return (
-            observations.positions.length > 0 &&
+            observations.positions.length === expectedOpenPositions &&
             observations.positions.every((position) => position.filled_size > 0)
           );
         },
