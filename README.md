@@ -125,7 +125,8 @@ Two roles, each with its own default model. Set a `_MODEL` override only if you 
 | `POLYGON_API_KEY` | Stage-2 historical bars (free tier: 5 calls/min, ~2 years of history — a fallback source, not the backfill source) |
 | `TIINGO_API_KEY` | `yarn ingest-history` — Stage-2 history ingestion |
 | `WORLDMONITOR_API_KEY` | WorldMonitor CII feed (ADR-0002). The adapter stays parked until this is set |
-| `PORT`, `HOST` | Dashboard bind address (defaults `8787`, `127.0.0.1`) |
+| `PORT`, `HOST` | Dashboard bind address (defaults `8787`, `127.0.0.1`). Binding `HOST` to anything other than `127.0.0.1`/`::1` refuses to start unless `SAMURAI_DASHBOARD_TOKEN` (below) is also set — see #887/ADR-0019 |
+| `SAMURAI_DASHBOARD_TOKEN` | Required to bind the dashboard's `HOST` off loopback (#887/ADR-0019). Checked only at boot, not per request — see `server/apps/service-api/bind-guard.ts` |
 
 #### Optional — venue pacing
 
