@@ -191,9 +191,54 @@ jobs:
       - name: Install deps
         run: pip install openai
 
+      # Fetched BEFORE the review runs, on purpose. Every `synchronize` push
+      # re-reviews the whole branch diff (see "Get PR diff" above — the range
+      # is merge-base...HEAD, not the pushed commits), and with no memory of
+      # what it already said the reviewer re-posted the same findings on
+      # unchanged code after every push. `run_review.py` matches these against
+      # the marker it stamps on its own comments and drops repeats.
+      #
+      # Skipped on `workflow_dispatch`: that trigger is a deliberate request to
+      # look again — often at a merged PR whose earlier review was the problem
+      # (#594) — and deduping it against that very review would post an empty
+      # one. No file written means dedup is off, which is what the script's
+      # missing-file branch documents.
+      #
+      # `github.token` suffices: the workflow already holds
+      # `pull-requests: write`, and reading needs less than that. Failing the
+      # step on a fetch error rather than `|| true`-ing it: a silent fetch
+      # failure would look exactly like "nothing was flagged before" and
+      # quietly bring the duplicates back.
+      - name: Fetch this reviewer's existing comments
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          # `pipefail` because the pipeline below ends in `jq`: without it a
+          # failing `gh` exits 0 through the pipe, writing an empty array that
+          # reads as "nothing was flagged before" — the silent-disable this
+          # step is supposed to fail loudly on.
+          set -o pipefail
+          # NOT `--paginate --slurp`. On a list endpoint that returns an array
+          # per page, `--slurp` produces an array OF PAGES — `[[c1, c2]]`, not
+          # `[c1, c2]`. `json.load` still yields a list, so a top-level type
+          # check passes and every element then fails the per-comment dict
+          # check downstream, turning dedup off while looking like it worked.
+          # `--jq '.[]'` streams the comments as NDJSON and `jq -s` collects
+          # them into one flat array. (`--slurp` cannot be combined with
+          # `--jq` at all: gh rejects the pair outright.)
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/comments" \
+            --paginate --jq '.[]' | jq -s '.' > existing_comments.json
+          # Counts COMMENTS. The earlier form counted pages, which would have
+          # printed a reassuring "1" for an empty PR and masked the bug above.
+          echo "existing review comments: $(jq 'length' existing_comments.json)"
+
       - name: Run review (${{ matrix.reviewer }})
         env:
           NOUS_API_KEY: ${{ secrets[matrix.api_key_secret] }}
+          REVIEWER: ${{ matrix.reviewer }}
+          EXISTING_COMMENTS_FILE: existing_comments.json
           NOUS_BASE_URL: ${{ vars.NOUS_BASE_URL }}
           REVIEW_MODEL: ${{ vars[matrix.model_var] }}
           REVIEW_MAX_TOKENS: ${{ matrix.max_tokens }}
@@ -256,7 +301,13 @@ jobs:
               const header =
                 `${payload.summary_markdown}\n\n---\n_GitHub would not anchor these inline ` +
                 '(line not resolvable in its diff view):_\n';
-              const lines = payload.comments.map((c) => `- **${c.path}:${c.line}**: ${c.body}`);
+              // The dedup marker is stamped on every inline body so a later
+              // run can recognise its own findings. It is an HTML comment, so
+              // it is invisible where it was meant to live — but folded into
+              // the review body as prose it becomes a stray tag in a bullet
+              // list, and it would anchor nothing there anyway.
+              const strip = (body) => body.replace(/\n*<!-- ai-review:[^>]*-->\s*$/, '');
+              const lines = payload.comments.map((c) => `- **${c.path}:${c.line}**: ${strip(c.body)}`);
 
               let body = header;
               let dropped = 0;

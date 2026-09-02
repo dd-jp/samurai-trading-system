@@ -169,7 +169,7 @@ def test_blank_summary_with_anchored_comments_still_gets_a_body():
         {
             "summary_markdown": "",
             "inline_comments": [
-                {"file": "src/trader/x.ts", "line": 2, "severity": "low", "body": "nit"}
+                {"file": "src/trader/x.ts", "line": 2, "severity": "high", "body": "nit"}
             ],
             "verdict": "APPROVE_WITH_COMMENTS",
         },
@@ -1614,9 +1614,9 @@ def test_merging_comments_across_slices_drops_nothing_and_duplicates_nothing():
         {
             "summary_markdown": "slice one",
             "inline_comments": [
-                {"file": "src/trader/x.ts", "line": 2, "severity": "low", "body": "a"},
+                {"file": "src/trader/x.ts", "line": 2, "severity": "high", "body": "a"},
                 # Same finding repeated inside one slice.
-                {"file": "src/trader/x.ts", "line": 2, "severity": "low", "body": "a"},
+                {"file": "src/trader/x.ts", "line": 2, "severity": "high", "body": "a"},
             ],
             "verdict": "APPROVE_WITH_COMMENTS",
         },
@@ -1624,7 +1624,7 @@ def test_merging_comments_across_slices_drops_nothing_and_duplicates_nothing():
             "summary_markdown": "slice two",
             "inline_comments": [
                 # Repeated across slices (a file split over two calls).
-                {"file": "src/trader/x.ts", "line": 2, "severity": "low", "body": "a"},
+                {"file": "src/trader/x.ts", "line": 2, "severity": "high", "body": "a"},
                 {"file": "src/trader/y.ts", "line": 2, "severity": "high", "body": "b"},
             ],
             "verdict": "APPROVE",
@@ -1666,7 +1666,7 @@ def test_comments_from_a_later_slice_still_anchor_against_the_full_diff():
             {
                 "summary_markdown": "",
                 "inline_comments": [
-                    {"file": "src/trader/y.ts", "line": 3, "severity": "low", "body": "late"}
+                    {"file": "src/trader/y.ts", "line": 3, "severity": "high", "body": "late"}
                 ],
                 "verdict": "APPROVE_WITH_COMMENTS",
             },
@@ -1781,3 +1781,372 @@ def test_review_coverage_no_usable_review_property():
     assert review_lib.ReviewCoverage(slices_total=2, slices_reviewed=0).no_usable_review is True
     assert review_lib.ReviewCoverage(slices_total=2, slices_reviewed=1).no_usable_review is False
     assert review_lib.ReviewCoverage(slices_total=0, slices_reviewed=0).no_usable_review is False
+
+
+# --- severity gate ----------------------------------------------------------
+
+
+def _comment(line=2, severity="high", body="finding", file="src/trader/x.ts"):
+    return {"file": file, "line": line, "severity": severity, "body": body}
+
+
+def _result(comments, summary="", verdict="REQUEST_CHANGES"):
+    return {
+        "summary_markdown": summary,
+        "inline_comments": list(comments),
+        "verdict": verdict,
+    }
+
+
+def test_low_severity_findings_do_not_anchor_inline():
+    payload = review_lib.build_review_payload(
+        DIFF, _result([_comment(severity="low", body="rename this")])
+    )
+
+    assert payload["comments"] == []
+    assert "rename this" in payload["summary_markdown"]
+    assert "Low-severity findings" in payload["summary_markdown"]
+
+
+def test_low_severity_is_not_filed_under_the_unanchorable_heading():
+    """A gated `low` COULD have anchored — saying it could not be anchored
+    would misreport why it is in the body."""
+    payload = review_lib.build_review_payload(
+        DIFF, _result([_comment(severity="low", body="nit")])
+    )
+    body = payload["summary_markdown"]
+
+    heading = "could not be anchored inline"
+    assert heading not in body
+
+
+@pytest.mark.parametrize("severity", ["high", "medium", "HIGH", " Medium ", None, "", "bogus", 3])
+def test_everything_not_low_still_anchors_inline(severity):
+    """The model's JSON is untrusted: an unparseable severity must never
+    silently demote a finding into a body bullet."""
+    payload = review_lib.build_review_payload(DIFF, _result([_comment(severity=severity)]))
+
+    assert len(payload["comments"]) == 1
+
+
+@pytest.mark.parametrize("body", [None, "", "   ", 42, {"text": "x"}])
+def test_a_comment_with_no_usable_body_is_not_posted_inline(body):
+    """GitHub 422s an empty review comment, and that 422 does not match the
+    'could not be resolved' fallback — it re-raises and the job goes red with
+    no review at all. Raised by the deepseek reviewer on #996."""
+    payload = review_lib.build_review_payload(DIFF, _result([_comment(body=body)]))
+
+    assert payload["comments"] == []
+    # Not dropped: still reported with its file and line.
+    assert "src/trader/x.ts" in payload["summary_markdown"]
+
+
+def test_the_gate_consults_the_constant():
+    """The constant must BE the gate, not decoration next to it: a named set
+    that nothing reads implies an enforcement that does not exist."""
+    assert review_lib.GATED_SEVERITIES == frozenset({"low"})
+
+    payload = review_lib.build_review_payload(DIFF, _result([_comment(severity="low")]))
+    assert payload["comments"] == []
+
+
+@pytest.mark.parametrize("severity", ["low", "LOW", " low "])
+def test_low_is_matched_case_and_whitespace_insensitively(severity):
+    payload = review_lib.build_review_payload(DIFF, _result([_comment(severity=severity)]))
+
+    assert payload["comments"] == []
+
+
+# --- cross-run dedup --------------------------------------------------------
+
+
+def test_a_previously_flagged_line_is_not_commented_again():
+    prior = [
+        {
+            "path": "src/trader/x.ts",
+            "line": 2,
+            "side": "RIGHT",
+            "body": "old finding\n\n" + review_lib.comment_marker("nous-kimi"),
+        }
+    ]
+    anchors = review_lib.existing_comment_anchors(prior, "nous-kimi")
+
+    payload = review_lib.build_review_payload(
+        DIFF, _result([_comment(body="same line, reworded")]),
+        reviewer="nous-kimi",
+        existing_anchors=anchors,
+    )
+
+    assert payload["comments"] == []
+    assert "1 finding(s) not repeated" in payload["summary_markdown"]
+
+
+def test_suppression_is_disclosed_not_silent():
+    """A body that simply lost its findings reads exactly like a broken
+    reviewer — the #409/#567 shape."""
+    payload = review_lib.build_review_payload(
+        DIFF, _result([_comment()]),
+        reviewer="nous-kimi",
+        existing_anchors={("src/trader/x.ts", 2)},
+    )
+
+    assert "not repeated" in payload["summary_markdown"]
+    assert "src/trader/x.ts" in payload["summary_markdown"]
+
+
+def test_a_suppressed_finding_is_listed_in_full():
+    """Suppression is keyed on the LINE, not the text, so a genuinely new
+    finding on an already-flagged line would be invisible if the disclosure
+    only counted them. Raised by the kimi reviewer on #996."""
+    payload = review_lib.build_review_payload(
+        DIFF,
+        _result([_comment(body="a DIFFERENT bug on the same line")]),
+        reviewer="nous-kimi",
+        existing_anchors={("src/trader/x.ts", 2)},
+    )
+
+    assert payload["comments"] == []
+    assert "a DIFFERENT bug on the same line" in payload["summary_markdown"]
+
+
+def test_the_low_section_says_it_may_repeat():
+    payload = review_lib.build_review_payload(
+        DIFF, _result([_comment(severity="low")])
+    )
+
+    assert "may repeat" in payload["summary_markdown"]
+
+
+def test_the_other_reviewers_comments_do_not_suppress_this_ones():
+    """deepseek and kimi run concurrently on the same lines; matching on the
+    posting identity would let whichever posted first mute the other."""
+    prior = [
+        {
+            "path": "src/trader/x.ts",
+            "line": 2,
+            "side": "RIGHT",
+            "body": "deepseek's take\n\n" + review_lib.comment_marker("nous-deepseek"),
+        }
+    ]
+
+    anchors = review_lib.existing_comment_anchors(prior, "nous-kimi")
+
+    assert anchors == set()
+
+
+def test_a_human_comment_on_the_same_line_does_not_suppress_the_reviewer():
+    prior = [{"path": "src/trader/x.ts", "line": 2, "side": "RIGHT", "body": "why this?"}]
+
+    assert review_lib.existing_comment_anchors(prior, "nous-kimi") == set()
+
+
+def test_a_human_quoting_the_marker_cannot_mute_the_reviewer():
+    """The marker is plain text in a public thread. A human discussing this
+    very mechanism on a PR would otherwise suppress the reviewer on whatever
+    line they replied to."""
+    prior = [
+        {
+            "path": "src/trader/x.ts",
+            "line": 2,
+            "side": "RIGHT",
+            "user": {"login": "dd-jp", "type": "User"},
+            "body": "why does it stamp " + review_lib.comment_marker("nous-kimi") + "?",
+        }
+    ]
+
+    assert review_lib.existing_comment_anchors(prior, "nous-kimi") == set()
+
+
+def test_a_bot_comment_still_suppresses():
+    prior = [
+        {
+            "path": "src/trader/x.ts",
+            "line": 2,
+            "side": "RIGHT",
+            "user": {"login": "kimi-3-review[bot]", "type": "Bot"},
+            "body": "prior\n\n" + review_lib.comment_marker("nous-kimi"),
+        }
+    ]
+
+    assert review_lib.existing_comment_anchors(prior, "nous-kimi") == {("src/trader/x.ts", 2)}
+
+
+def test_an_outdated_comment_does_not_suppress_a_fresh_finding():
+    """GitHub nulls `line` once the code under a comment changes and moves the
+    old value to `original_line`. The line has moved on; the finding deserves
+    re-posting rather than silent suppression."""
+    prior = [
+        {
+            "path": "src/trader/x.ts",
+            "line": None,
+            "original_line": 2,
+            "side": "RIGHT",
+            "body": "stale\n\n" + review_lib.comment_marker("nous-kimi"),
+        }
+    ]
+
+    assert review_lib.existing_comment_anchors(prior, "nous-kimi") == set()
+
+
+def test_a_left_side_comment_is_ignored():
+    prior = [
+        {
+            "path": "src/trader/x.ts",
+            "line": 2,
+            "side": "LEFT",
+            "body": "on the old side\n\n" + review_lib.comment_marker("nous-kimi"),
+        }
+    ]
+
+    assert review_lib.existing_comment_anchors(prior, "nous-kimi") == set()
+
+
+def test_posted_comments_carry_the_reviewer_marker():
+    payload = review_lib.build_review_payload(
+        DIFF, _result([_comment(body="finding")]), reviewer="nous-kimi"
+    )
+
+    assert payload["comments"][0]["body"].endswith(review_lib.comment_marker("nous-kimi"))
+    assert "finding" in payload["comments"][0]["body"]
+
+
+def test_no_reviewer_means_no_marker_and_no_dedup():
+    """`workflow_dispatch` runs with dedup off — a deliberate re-review must
+    not be muted by the review it was asked to redo."""
+    payload = review_lib.build_review_payload(DIFF, _result([_comment()]))
+
+    assert len(payload["comments"]) == 1
+    assert "<!--" not in payload["comments"][0]["body"]
+
+
+def test_a_fully_suppressed_run_is_not_reported_as_no_usable_review():
+    """`no_usable_review` fails the job (#567). A reviewer whose findings were
+    all deduped away DID produce a review."""
+    payload = review_lib.build_review_payload(
+        DIFF,
+        _result([_comment()]),
+        coverage=review_lib.ReviewCoverage(slices_total=1, slices_reviewed=1),
+        reviewer="nous-kimi",
+        existing_anchors={("src/trader/x.ts", 2)},
+    )
+
+    assert payload["no_usable_review"] is False
+
+
+def test_inline_only_keeps_its_verdict_line_when_findings_are_suppressed():
+    """The placeholder body is keyed on the MODEL's summary being blank, not
+    on the accumulated one — otherwise one suppressed finding costs the
+    inline-only reviewer its verdict/count line."""
+    payload = review_lib.build_review_payload(
+        DIFF,
+        _result([_comment()], summary="", verdict="REQUEST_CHANGES"),
+        reviewer="nous-kimi",
+        existing_anchors={("src/trader/x.ts", 2)},
+    )
+    body = payload["summary_markdown"]
+
+    assert "REQUEST_CHANGES" in body
+    assert "0 inline comments posted" in body
+    assert "not repeated" in body
+
+
+def test_dedup_and_severity_compose():
+    """A `low` never anchors, so it never earns an anchor a later run matches
+    on: it must land in the low section, not the suppressed one."""
+    payload = review_lib.build_review_payload(
+        DIFF,
+        _result([_comment(severity="low", body="nit"), _comment(severity="high", body="real")]),
+        reviewer="nous-kimi",
+        existing_anchors={("src/trader/x.ts", 2)},
+    )
+    body = payload["summary_markdown"]
+
+    assert payload["comments"] == []
+    assert "Low-severity findings" in body
+    assert "nit" in body
+    assert "1 finding(s) not repeated" in body
+
+
+# --- the fetched-comments file --------------------------------------------
+
+
+def _write(tmp_path, payload):
+    path = tmp_path / "existing_comments.json"
+    path.write_text(json.dumps(payload))
+    return str(path)
+
+
+def test_an_array_of_pages_fails_loudly(tmp_path, monkeypatch):
+    """`gh api --paginate --slurp` writes `[[c1, c2]]`, not `[c1, c2]`. That
+    passes a top-level list check and then matches no comment at all — dedup
+    silently off. Caught on PR #996 by the kimi reviewer this change touches."""
+    import run_review
+
+    page = [{"path": "src/trader/x.ts", "line": 2, "side": "RIGHT", "body": "x"}]
+    monkeypatch.setenv("EXISTING_COMMENTS_FILE", _write(tmp_path, [page]))
+
+    with pytest.raises(ValueError, match="FLAT array"):
+        run_review.load_existing_anchors("nous-kimi")
+
+
+def test_a_non_array_file_fails_loudly(tmp_path, monkeypatch):
+    import run_review
+
+    monkeypatch.setenv("EXISTING_COMMENTS_FILE", _write(tmp_path, {"message": "Not Found"}))
+
+    with pytest.raises(ValueError, match="expected a JSON array"):
+        run_review.load_existing_anchors("nous-kimi")
+
+
+def test_a_flat_array_loads(tmp_path, monkeypatch):
+    import run_review
+
+    comments = [
+        {
+            "path": "src/trader/x.ts",
+            "line": 2,
+            "side": "RIGHT",
+            "body": "prior\n\n" + review_lib.comment_marker("nous-kimi"),
+        }
+    ]
+    monkeypatch.setenv("EXISTING_COMMENTS_FILE", _write(tmp_path, comments))
+
+    assert run_review.load_existing_anchors("nous-kimi") == {("src/trader/x.ts", 2)}
+
+
+def test_a_missing_file_means_dedup_off_not_an_error(tmp_path, monkeypatch):
+    """`workflow_dispatch` writes no file — a deliberate re-review must not be
+    muted, and must not crash either."""
+    import run_review
+
+    monkeypatch.setenv("EXISTING_COMMENTS_FILE", str(tmp_path / "nope.json"))
+
+    assert run_review.load_existing_anchors("nous-kimi") == set()
+
+
+def test_no_reviewer_skips_the_file_entirely(tmp_path, monkeypatch):
+    import run_review
+
+    monkeypatch.setenv("EXISTING_COMMENTS_FILE", _write(tmp_path, [["bad shape"]]))
+
+    assert run_review.load_existing_anchors(None) == set()
+
+
+def test_review_diff_threads_reviewer_and_anchors_through():
+    """The wiring, not just the leaf: #567's class of defect in this repo is a
+    tested mechanism nothing calls."""
+    call = lambda **_k: _result([_comment(body="from the model")])  # noqa: E731
+
+    payload = review_lib.review_diff(
+        DIFF, ["src/trader/x.ts"], call=call, reviewer="nous-kimi"
+    )
+    assert payload["comments"][0]["body"].endswith(review_lib.comment_marker("nous-kimi"))
+
+    suppressed = review_lib.review_diff(
+        DIFF,
+        ["src/trader/x.ts"],
+        call=call,
+        reviewer="nous-kimi",
+        existing_anchors={("src/trader/x.ts", 2)},
+    )
+    assert suppressed["comments"] == []
