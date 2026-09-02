@@ -489,6 +489,38 @@ describe('AnthropicLlmClient spend metering', () => {
     expect(sink.records[0]?.model).toBe('anthropic/claude-opus-4.8');
   });
 
+  it("meters the wire client's reported time-to-first-byte alongside latency_ms (#1012)", async () => {
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi.fn().mockResolvedValue(usageResponse('good', { ttfb_ms: 1_900 })),
+    };
+    const sink = recordingSink();
+    const client = new AnthropicLlmClient(
+      wire,
+      { model: 'openai/gpt-5.6-luna', max_tokens: 100, timeoutMs: 1000, retry: NO_RETRY },
+      sink,
+    );
+
+    await client.complete(request());
+    expect(sink.records[0]?.ttfb_ms).toBe(1_900);
+  });
+
+  it('meters an undefined ttfb_ms rather than inventing one, when the wire client does not report it (#1012)', async () => {
+    // Most test doubles in this suite return a response with no `ttfb_ms` —
+    // metering must pass that absence through rather than defaulting it.
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi.fn().mockResolvedValue(usageResponse('good')),
+    };
+    const sink = recordingSink();
+    const client = new AnthropicLlmClient(
+      wire,
+      { model: 'openai/gpt-5.6-luna', max_tokens: 100, timeoutMs: 1000, retry: NO_RETRY },
+      sink,
+    );
+
+    await client.complete(request());
+    expect(sink.records[0]?.ttfb_ms).toBeUndefined();
+  });
+
   it('records nothing when the wire client returns no usage block', async () => {
     // Most test doubles in this suite return `content` alone; metering must
     // not invent zeros for them.

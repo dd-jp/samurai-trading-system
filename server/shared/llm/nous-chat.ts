@@ -53,6 +53,18 @@ export interface NousChatResult {
   model: string;
   /** As reported by the provider, for callers that want to log it. `'length'` never reaches a caller — it throws. */
   finish_reason: string | null;
+  /**
+   * Time-to-first-byte (#1012): milliseconds from dispatching the POST to
+   * `fetchWithTimeout`'s promise settling — i.e. HTTP response headers
+   * received — measured BEFORE `response.json()` reads the body. Distinct
+   * from the caller's `latency_ms` (`anthropic-client.ts`), which spans
+   * headers-received AND the full body read using its own, separately
+   * started clock; the two will normally read almost equal (a small JSON
+   * reply has a negligible body-read component) but are not the same
+   * measurement — see `migrations/0038_llm_spend_ttfb.sql` for what a
+   * meaningful gap between them would mean.
+   */
+  ttfb_ms: number;
 }
 
 export interface NousChatOptions {
@@ -199,6 +211,7 @@ export async function nousChat(
   options: NousChatOptions,
   request: NousChatRequest,
 ): Promise<NousChatResult> {
+  const dispatchedAt = Date.now();
   const response = await fetchWithTimeout(
     `${options.baseUrl}/chat/completions`,
     {
@@ -216,6 +229,14 @@ export async function nousChat(
     },
     options.timeoutMs ?? DEFAULT_NOUS_TIMEOUT_MS,
   );
+  // Measured here, before `response.json()` below reads the body — see the
+  // `ttfb_ms` doc comment on `NousChatResult`. Captured for every response
+  // regardless of `ok`, but only threaded through on the success path below;
+  // the error paths (`buildApiError`, the JSON-parse-failure branch) don't
+  // carry a `NousChatResult` at all, matching how `usage`/`latency_ms` are
+  // already dropped on every thrown error at this boundary (see
+  // `NousTruncatedError`'s doc comment).
+  const ttfb_ms = Date.now() - dispatchedAt;
 
   if (!response.ok) {
     throw await buildApiError(response);
@@ -278,5 +299,6 @@ export async function nousChat(
     usage,
     model: resolveMeteredModel(parsed.model, request.model),
     finish_reason,
+    ttfb_ms,
   };
 }

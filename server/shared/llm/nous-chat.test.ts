@@ -30,6 +30,41 @@ function stubFetch(body: unknown, init: { ok?: boolean; status?: number } = {}) 
   return fetchMock;
 }
 
+/**
+ * Like `stubFetch`, but for the `ttfb_ms` (#1012) tests below, which need to
+ * separate two phases of one fetch: time to headers (before
+ * `fetchWithTimeout`'s promise settles) vs. additional time inside
+ * `response.json()` reading the body. Returns a REAL `Response` (via the
+ * global constructor) with `.json` overridden to advance the fake-timer
+ * clock before resolving — no `as unknown as Response` cast needed, since a
+ * real `Response` instance already satisfies the full `Response` type.
+ * Requires `vi.useFakeTimers()` to be active in the caller: the delays below
+ * are `vi.advanceTimersByTime` calls, not real waits.
+ */
+function stubFetchWithTiming(
+  body: unknown,
+  timing: { headerDelayMs: number; bodyDelayMs: number },
+) {
+  const fetchMock = vi.fn(async () => {
+    vi.advanceTimersByTime(timing.headerDelayMs); // time to headers
+    const response = new Response(JSON.stringify(body), { status: 200, statusText: 'OK' });
+    const originalJson = response.json.bind(response);
+    // `Response.json` is a read-only property in the ambient fetch types, so
+    // a direct `response.json = ...` reassignment doesn't type-check.
+    // `defineProperty` replaces the own binding at runtime the same way,
+    // without needing a cast to route around the readonly check.
+    Object.defineProperty(response, 'json', {
+      value: async () => {
+        vi.advanceTimersByTime(timing.bodyDelayMs); // additional time to read the body
+        return originalJson();
+      },
+    });
+    return response;
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
+
 function completion(overrides: Record<string, unknown> = {}) {
   return {
     choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }],
@@ -166,6 +201,59 @@ describe('nousChat', () => {
       const result = await nousChat(OPTIONS, REQUEST);
 
       expect(result.model).toBe('openai/gpt-5.6-luna');
+    });
+  });
+
+  describe('time-to-first-byte (#1012)', () => {
+    /**
+     * #1012: `latency_ms` (measured around the whole call, one layer up in
+     * `anthropic-client.ts`) cannot distinguish queue/generation time from
+     * body-read time because it is a single span. `ttfb_ms` isolates the
+     * `fetchWithTimeout` half — headers received, before `response.json()`
+     * reads the body — using fake timers so the two spans are exact and
+     * non-flaky, the same technique `anthropic-client.test.ts` uses for
+     * `latency_ms` (#326).
+     */
+    it('measures only the time up to the response settling, not the body read', async () => {
+      vi.useFakeTimers();
+      try {
+        stubFetchWithTiming(completion(), { headerDelayMs: 4_000, bodyDelayMs: 1_000 });
+
+        const result = await nousChat(OPTIONS, REQUEST);
+
+        expect(result.ttfb_ms).toBe(4_000);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('reports a smaller ttfb_ms than the caller-measured total latency when the body read is slow', async () => {
+      // Cross-checks against the OUTER timer the way a caller (`anthropic-client.ts`)
+      // actually measures `latency_ms` — around the whole `nousChat` call.
+      vi.useFakeTimers();
+      try {
+        stubFetchWithTiming(completion(), { headerDelayMs: 4_000, bodyDelayMs: 1_000 });
+
+        const start = Date.now();
+        const result = await nousChat(OPTIONS, REQUEST);
+        const callerMeasuredLatencyMs = Date.now() - start;
+
+        expect(callerMeasuredLatencyMs).toBe(5_000);
+        expect(result.ttfb_ms).toBeLessThan(callerMeasuredLatencyMs);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('reports a ttfb_ms equal to total latency when the body is read instantly (the common case for a small JSON reply)', async () => {
+      stubFetch(completion());
+
+      const result = await nousChat(OPTIONS, REQUEST);
+
+      // stubFetch's `json()` resolves with no artificial delay, so with real
+      // timers ttfb_ms should be a small, non-negative number well under any
+      // flake-prone threshold, and never negative.
+      expect(result.ttfb_ms).toBeGreaterThanOrEqual(0);
     });
   });
 

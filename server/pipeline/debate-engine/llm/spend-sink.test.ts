@@ -26,6 +26,7 @@ interface SpendRow {
   cost_usd: number | null;
   server_tool_calls: number;
   latency_ms: number | null;
+  ttfb_ms: number | null;
   timestamp: string;
 }
 
@@ -152,6 +153,41 @@ describe('SqliteLlmSpendStore', () => {
     const [row] = rows(db);
     expect(row?.latency_ms).toBe(0);
     expect(row?.latency_ms).not.toBeNull();
+  });
+
+  it('persists ttfb_ms alongside latency_ms (#1012)', () => {
+    const db = openSharedStore(':memory:');
+    new SqliteLlmSpendStore(db).record({
+      trace_id: 'trace-1',
+      stage: 'debate',
+      model: 'openai/gpt-5.6-luna',
+      usage: { input_tokens: 10, output_tokens: 10 },
+      latency_ms: 6_441,
+      ttfb_ms: 6_200,
+      timestamp: NOW,
+    });
+
+    const [row] = rows(db);
+    expect(row?.latency_ms).toBe(6_441);
+    expect(row?.ttfb_ms).toBe(6_200);
+  });
+
+  it('stores NULL ttfb_ms — not 0 — for a wire client that does not report it', () => {
+    // `AnthropicMessageResponse.ttfb_ms` is optional (any structural
+    // `AnthropicMessagesClient` may omit it) — an absent measurement must
+    // read as "never measured", not as an impossibly fast zero.
+    const db = openSharedStore(':memory:');
+    new SqliteLlmSpendStore(db).record({
+      trace_id: 'trace-1',
+      stage: 'debate',
+      model: 'openai/gpt-5.6-luna',
+      usage: { input_tokens: 10, output_tokens: 10 },
+      latency_ms: 10,
+      timestamp: NOW,
+    });
+
+    const [row] = rows(db);
+    expect(row?.ttfb_ms).toBeNull();
   });
 
   it('writes an unattributed call as NULL debate_id rather than losing the row', () => {
