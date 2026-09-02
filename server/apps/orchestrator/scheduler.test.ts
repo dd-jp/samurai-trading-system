@@ -57,7 +57,7 @@ describe('UniverseScheduler.nextTick', () => {
   it('fires the full universe when the market is open', () => {
     const plan = makeScheduler().nextTick(clockAt(MARKET_OPEN));
 
-    expect(assets(plan.instruments)).toEqual(['SPY', 'QQQ', 'AAPL', 'TSLA']);
+    expect(assets(plan.instruments)).toEqual(['QQQ', 'AAPL', 'TSLA']);
   });
 
   it('never fires a stock instrument on a holiday', () => {
@@ -99,8 +99,8 @@ describe('UniverseScheduler.nextTick', () => {
     const justBefore = scheduler.nextTick(clockAt(new Date(close.getTime() - 1)));
     const atClose = scheduler.nextTick(clockAt(close));
 
-    expect(assets(justBefore.instruments)).toContain('SPY');
-    expect(assets(atClose.instruments)).not.toContain('SPY');
+    expect(assets(justBefore.instruments)).toContain('QQQ');
+    expect(assets(atClose.instruments)).not.toContain('QQQ');
   });
 
   it('reports tick_time as clock.now()', () => {
@@ -165,7 +165,9 @@ describe('UniverseScheduler.nextTick', () => {
       const scheduler = makeScheduler();
 
       expect(assets(scheduler.nextTick(clockAt(MARKET_CLOSED)).instruments)).toEqual([]);
-      expect(assets(scheduler.nextTick(clockAt(MARKET_OPEN)).instruments)).toHaveLength(4);
+      expect(assets(scheduler.nextTick(clockAt(MARKET_OPEN)).instruments)).toHaveLength(
+        DEFAULT_UNIVERSE.length,
+      );
       expect(assets(scheduler.nextTick(clockAt(MARKET_CLOSED)).instruments)).toEqual([]);
     });
   });

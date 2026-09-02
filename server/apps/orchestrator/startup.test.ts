@@ -476,7 +476,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
       // longer includes BTC-USD/ETH-USD.
       expect(started?.payload).toMatchObject({
         mode: 'paper',
-        universe: ['SPY', 'QQQ', 'AAPL', 'TSLA'],
+        universe: ['QQQ', 'AAPL', 'TSLA'],
       });
 
       // ...and the equity half is genuinely wired, not merely listed. Before
@@ -796,16 +796,32 @@ describe('startFromEnvironment — the live profile (#511)', () => {
   });
 
   it(
-    'refuses to boot the REAL default live entrypoint (#989) — `startingProfileForMode' +
-      "('live')` (`liveStartingProfile` under the hood) resolves to `DEFAULT_UNIVERSE`, " +
-      "which still trades 'SPY' directly, with no `universe` override at all. The test " +
-      "above deliberately drops 'SPY' from the universe to isolate the live-host wiring " +
-      'it is about; this one proves the collision guard actually protects the default ' +
-      'entrypoint an operator would reach by just setting SAMURAI_MODE=live, not only the ' +
-      'synthetic configs `production.test.ts` constructs by hand',
+    'the REAL default live entrypoint no longer carries a benchmark instrument (#1006) — ' +
+      "`startingProfileForMode('live')` resolves to `DEFAULT_UNIVERSE`, and #1006 removed " +
+      "'SPY' from it, so the collision the #989 guard refuses on cannot be reached by " +
+      'the default entrypoint an operator gets from `SAMURAI_MODE=live` alone. This ' +
+      'asserts the universe, not the guard: the guard itself is proved by the test below, ' +
+      'which puts a benchmark symbol back',
+    () => {
+      const { universe } = startingProfileForMode('live');
+
+      expect(
+        (universe ?? DEFAULT_UNIVERSE).filter((instrument) =>
+          BENCHMARK_INSTRUMENTS.has(instrument.asset.toUpperCase()),
+        ),
+      ).toEqual([]);
+    },
+  );
+
+  it(
+    'still refuses to boot live when a BENCHMARK_INSTRUMENTS symbol IS configured (#989) — ' +
+      '#1006 removed the collision from the default universe, it did not remove the guard, ' +
+      'and an operator who re-adds a benchmark symbol by hand must still be stopped before ' +
+      'two writers target the same bars row under different calendars',
     async () => {
       const error = await startFromEnvironment({
         ...startingProfileForMode('live'),
+        universe: [...DEFAULT_UNIVERSE, { asset: 'SPY', asset_class: 'stocks' }],
         db: openSharedStore(':memory:'),
         miArchive: new MiArchiveStore(),
         gdeltClient: offlineGdeltClient,
