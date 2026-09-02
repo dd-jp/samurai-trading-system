@@ -37,7 +37,7 @@ export interface LogEntry {
   payload?: unknown;
   /** Real wall-clock start of the stage, ISO 8601 — not `Clock.now()`, which doesn't advance on its own in backtest. */
   started_at?: string;
-  /** Real wall-clock elapsed time for the stage, in milliseconds. */
+  /** Monotonic elapsed time for the stage (`performance.now()` deltas), in milliseconds — not wall-clock, so an NTP step mid-stage can't produce a negative value. */
   duration_ms?: number;
 }
 
