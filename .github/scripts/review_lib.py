@@ -1466,7 +1466,8 @@ def build_review_payload(
     if gated_low:
         summary += (
             "\n\n---\n_Low-severity findings, reported here rather than as inline "
-            "comments:_\n"
+            "comments. These carry no anchor, so the cross-run dedup cannot match "
+            "them and they may repeat on later runs:_\n"
         )
         for c in gated_low:
             summary += f"- **{c.get('file', '?')}:{c.get('line', '?')}**: {c.get('body', '')}\n"
@@ -1476,14 +1477,16 @@ def build_review_payload(
     # comparing two runs of the same PR needs to see that the earlier review
     # still carries them.
     if suppressed:
-        files = sorted({str(c.get("file", "?")) for c in suppressed})
         summary += (
-            f"\n\n---\n_{len(suppressed)} finding(s) suppressed as already flagged on an "
-            f"earlier review of this PR ({', '.join(md_code(f) for f in files[:10])}"
-            + (" …" if len(files) > 10 else "")
-            + "). They stand on that review; this run re-read the same lines and "
-            "did not repeat them._\n"
+            f"\n\n---\n_{len(suppressed)} finding(s) not repeated as inline comments — "
+            "this reviewer has already commented on these lines and those comments "
+            "stand. Listed in full because suppression is keyed on the LINE, not the "
+            "text: a genuinely new finding on an already-flagged line would otherwise "
+            "be invisible._\n"
         )
+        for c in suppressed:
+            sev = c.get("severity", "?")
+            summary += f"- **{c.get('file', '?')}:{c.get('line', '?')}** ({sev}): {c.get('body', '')}\n"
 
     verdict = model_result["verdict"]
 

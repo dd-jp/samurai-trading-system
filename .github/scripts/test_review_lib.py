@@ -1878,7 +1878,7 @@ def test_a_previously_flagged_line_is_not_commented_again():
     )
 
     assert payload["comments"] == []
-    assert "1 finding(s) suppressed" in payload["summary_markdown"]
+    assert "1 finding(s) not repeated" in payload["summary_markdown"]
 
 
 def test_suppression_is_disclosed_not_silent():
@@ -1890,8 +1890,31 @@ def test_suppression_is_disclosed_not_silent():
         existing_anchors={("src/trader/x.ts", 2)},
     )
 
-    assert "suppressed" in payload["summary_markdown"]
+    assert "not repeated" in payload["summary_markdown"]
     assert "src/trader/x.ts" in payload["summary_markdown"]
+
+
+def test_a_suppressed_finding_is_listed_in_full():
+    """Suppression is keyed on the LINE, not the text, so a genuinely new
+    finding on an already-flagged line would be invisible if the disclosure
+    only counted them. Raised by the kimi reviewer on #996."""
+    payload = review_lib.build_review_payload(
+        DIFF,
+        _result([_comment(body="a DIFFERENT bug on the same line")]),
+        reviewer="nous-kimi",
+        existing_anchors={("src/trader/x.ts", 2)},
+    )
+
+    assert payload["comments"] == []
+    assert "a DIFFERENT bug on the same line" in payload["summary_markdown"]
+
+
+def test_the_low_section_says_it_may_repeat():
+    payload = review_lib.build_review_payload(
+        DIFF, _result([_comment(severity="low")])
+    )
+
+    assert "may repeat" in payload["summary_markdown"]
 
 
 def test_the_other_reviewers_comments_do_not_suppress_this_ones():
@@ -2024,7 +2047,7 @@ def test_inline_only_keeps_its_verdict_line_when_findings_are_suppressed():
 
     assert "REQUEST_CHANGES" in body
     assert "0 inline comments posted" in body
-    assert "suppressed" in body
+    assert "not repeated" in body
 
 
 def test_dedup_and_severity_compose():
@@ -2041,7 +2064,7 @@ def test_dedup_and_severity_compose():
     assert payload["comments"] == []
     assert "Low-severity findings" in body
     assert "nit" in body
-    assert "1 finding(s) suppressed" in body
+    assert "1 finding(s) not repeated" in body
 
 
 # --- the fetched-comments file --------------------------------------------
