@@ -37,11 +37,45 @@ const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   /\b(?:APCA-API-KEY-ID|APCA-API-SECRET-KEY|api[_-]?key|api[_-]?secret|secret|token|password|passwd|pwd|auth)\b["']?\s*[:=]\s*["']?[^\s,;"'}\]]+/gi,
 ];
 
-/** Masks known credential syntaxes, then caps length — mask first, so truncation cannot bisect a token and leave half of it. */
-export function sanitizeLogText(text: string): string {
+/**
+ * Masks known credential syntaxes and does NOT cap length.
+ *
+ * Split out of `sanitizeLogText` (#1035) because that function's cap is
+ * `MAX_ERROR_BODY_CHARS` — 500 chars, sized for an HTTP error body — and the
+ * LLM capture path masks a ~6.8 KB rendered prompt that a 500-char cap would
+ * destroy. Masking and capping are two decisions with two different right
+ * answers per caller, so the caller now picks the cap and never the masking:
+ * every path through this module masks with the same pattern list, which is
+ * the property the module exists to guarantee.
+ *
+ * Callers that cap MUST mask first, for the reason `sanitizeLogText` has
+ * always given: truncating first can bisect a token and leave half of it.
+ */
+export function maskCredentials(text: string): string {
   let masked = text;
   for (const pattern of CREDENTIAL_PATTERNS) {
     masked = masked.replace(pattern, '[REDACTED]');
   }
-  return truncateForError(masked);
+  return masked;
+}
+
+/** Masks known credential syntaxes, then caps length — mask first, so truncation cannot bisect a token and leave half of it. */
+export function sanitizeLogText(text: string): string {
+  return truncateForError(maskCredentials(text));
+}
+
+/**
+ * Masks, then caps at a caller-chosen bound — the LLM capture path's entry
+ * point (#1035), where the bound is sized off the prompt and response shapes
+ * rather than off an HTTP error body.
+ *
+ * The suffix matches `truncateForError`'s exactly, so a truncated capture
+ * reads the same as every other truncated string in the logs and is never
+ * mistaken for a short prompt.
+ */
+export function maskAndCap(text: string, maxChars: number): string {
+  const masked = maskCredentials(text);
+  return masked.length > maxChars
+    ? `${masked.slice(0, maxChars)}… (truncated, ${masked.length} chars total)`
+    : masked;
 }

@@ -28,11 +28,26 @@
  */
 export type { AssetClass, InstrumentSubclass, TradingArm } from '../../../contracts/primitives.js';
 
+/**
+ * The severities a log line can carry.
+ *
+ * `'debug'` joined the three originals in #1035 and is the ONLY filterable
+ * one: `SAMURAI_LOG_LEVEL=info` drops it and nothing else. That asymmetry is
+ * deliberate — `warn` and `error` carry the degradation notices #714's rule is
+ * built on, and a verbosity setting that could suppress those would let an
+ * operator configure the run into the silence that rule exists to prevent.
+ *
+ * Internal to the server runtime. Verified at introduction: `level` appears in
+ * no `contracts/` type, no client component and no migration, so widening it
+ * is not a wire-format or schema change.
+ */
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+
 /** One structured log line; `trace_id` threads every line (#95). */
 export interface LogEntry {
   trace_id: string;
   stage: string;
-  level: 'info' | 'warn' | 'error';
+  level: LogLevel;
   message: string;
   payload?: unknown;
   /** Real wall-clock start of the stage, ISO 8601 — not `Clock.now()`, which doesn't advance on its own in backtest. */
