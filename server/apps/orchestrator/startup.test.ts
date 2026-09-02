@@ -22,6 +22,7 @@ import { TokenBucket } from '../../shared/index.js';
 import { openSharedStore, sharedStorePath } from '../../shared/store/index.js';
 import {
   assertStorePathMatchesMode,
+  DEFAULT_UNIVERSE,
   missingCredentialEnvVars,
   paperStartingProfile,
   SMOKE_TEST_UNIVERSE,
@@ -742,6 +743,13 @@ describe('startFromEnvironment — the live profile (#511)', () => {
 
     const orchestrator = await startFromEnvironment({
       ...startingProfileForMode('live', logger),
+      // #989: `liveStartingProfile` resolves to `DEFAULT_UNIVERSE`, which
+      // still trades `'SPY'` directly (pre-#751's LSE-only cutover) — the
+      // EXACT condition `buildProductionComponents`'s new collision guard
+      // refuses to boot. This test is about the live-host wiring
+      // (`brokerLine`/`profileWarn` below), not about which universe is
+      // configured, so it drops `'SPY'` rather than weakening the guard.
+      universe: DEFAULT_UNIVERSE.filter((instrument) => instrument.asset !== 'SPY'),
       db: openSharedStore(':memory:'),
       miArchive: new MiArchiveStore(),
       gdeltClient: offlineGdeltClient,

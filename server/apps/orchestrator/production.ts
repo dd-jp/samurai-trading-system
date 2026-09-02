@@ -606,6 +606,56 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     );
   }
 
+  // Fifth of the same boot-time-refusal family (#989, follow-up to #987's
+  // review of PR #988 — see `benchmarkMarketDataStore`'s doc below for the
+  // full mechanism this guard closes).
+  //
+  // Post-#751 the live path and the outside-benchmark path are provably
+  // disjoint on `'SPY'`/`'AGG'`: `LseMarkDataSource#assertTradeable` throws
+  // `NonTradeableInstrumentError` for both once the universe is LSE-only, so
+  // `marketData` can never write either symbol and `buildBenchmarkDataSource`
+  // remains their only writer. PRE-#751 that disjointness does not hold —
+  // today's default universe (`DEFAULT_UNIVERSE`, scheduler.ts) still trades
+  // `'SPY'` directly, and `mode === 'live'` resolves `equityCalendarFor` to
+  // `LseRegularHoursCalendar`, while `buildBenchmarkDataSource` always
+  // normalizes against `UsEquityRegularHoursCalendar` — so the live path and
+  // the benchmark path could both write the same `(instrument, timeframe,
+  // open_time)` row in the shared `bars` table, calendar-normalized two
+  // different ways. A silent last-write-wins collision, not a crash.
+  //
+  // Narrowly targeted at exactly that condition — `mode === 'live'` AND the
+  // resolved universe holds `'SPY'` or `'AGG'` by EXACT symbol — so it does
+  // not reject paper/backtest, does not reject a universe that excludes both
+  // symbols, and does not reject an LSE-only universe: an LSE ETP ticker like
+  // `'3SPY'` shares no substring match with the literal `'SPY'` this checks
+  // for, only the symbol itself. Resolved with the same `?? SMOKE_TEST_UNIVERSE`
+  // fallback `universe` below uses, so a caller relying on that default is
+  // covered too.
+  //
+  // A schema fix (a discriminator column on `bars`, needing a migration) was
+  // considered and deferred as disproportionate: this system has no live
+  // exposure yet (ADR-0004 §5), and #751's cutover removes the hazard
+  // structurally once it lands. Failing loudly at boot is proportionate for a
+  // gap that is real but has never fired.
+  if (config.mode === 'live') {
+    const collidingInstrument = (config.universe ?? SMOKE_TEST_UNIVERSE).find(
+      (instrument) => instrument.asset === 'SPY' || instrument.asset === 'AGG',
+    );
+    if (collidingInstrument !== undefined) {
+      throw new Error(
+        `Orchestrator cannot start: mode "live" with '${collidingInstrument.asset}' still ` +
+          'directly in ProductionConfig.universe collides with the outside-benchmark path ' +
+          '(#989). equityCalendarFor(config) resolves LseRegularHoursCalendar for a live run, ' +
+          "while buildBenchmarkDataSource's fixed SPY/AGG port always normalizes against " +
+          'UsEquityRegularHoursCalendar — the two writers would target the same ' +
+          '(instrument, timeframe, open_time) row in the bars table under different ' +
+          `calendars. Safe once #751's LSE-only cutover lands (${collidingInstrument.asset} ` +
+          "becomes a non-tradeable screening instrument, per LseMarkDataSource#assertTradeable) " +
+          `or once this universe drops '${collidingInstrument.asset}'.`,
+      );
+    }
+  }
+
   // FIRST, ahead of every store, socket and wire client below (PR #390
   // review). The LLM budget is constructed here rather than beside the debate
   // step it feeds because `RateLimiter`'s constructor VALIDATES its config, and
@@ -755,8 +805,12 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * cutover this ticket is ahead of, and this system has not gone live
    * (ADR-0004 §5) — so a schema change (a discriminator column, needing a
    * migration) is deferred as disproportionate to a risk with no live
-   * exposure yet. Tracked in #989 — reopen once #751 lands, or before
-   * `mode: 'live'` ships with a non-LSE universe, whichever comes first.
+   * exposure yet. **Closed in code by #989**: `buildProductionComponents`
+   * refuses to boot `mode: 'live'` with `'SPY'`/`'AGG'` still directly in the
+   * universe (the guard sits above, before the LLM budget is constructed) —
+   * a comment alone was judged insufficient for live-money infrastructure.
+   * Reopen once #751 lands (the guard's structural condition disappears) or
+   * before this collision condition can be reached any other way.
    */
   const benchmarkMarketDataStore = new SqliteMarketDataStore(config.db);
   /**
