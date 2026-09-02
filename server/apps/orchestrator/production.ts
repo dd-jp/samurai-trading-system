@@ -724,28 +724,6 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   );
 
   /**
-   * The OUTSIDE BENCHMARKS' own market-data path (#981, under #636) —
-   * deliberately NOT `marketData` above.
-   *
-   * `marketData` is universe-derived: `buildAlpacaDataSource` returns
-   * `LseMarkDataSource` EXCLUSIVELY once the configured universe holds LSE
-   * tickers (#751's cutover), and that source refuses `'SPY'` on purpose —
-   * SPY is a `screening_instrument`, the US underlying a 3x LSE ETP tracks,
-   * and marking the wrapper off the underlying is inadmissible (#734). Reading
-   * the benchmarks through it would therefore park BOTH benchmarks (60/40 has
-   * a SPY leg too) in `unmeasured` forever on the day the live universe
-   * becomes LSE-only, with the panel reading "Absent, not zero" and nothing
-   * failing. #636 requires the outside benchmark to keep being computed on
-   * FL's own cadence regardless of what the live universe trades, so the
-   * series come from a source with no universe in its construction at all —
-   * see `buildBenchmarkDataSource`.
-   *
-   * `config.dataSource` is not consulted here for the same reason: it is the
-   * override for the LIVE path's source, and honouring it would re-couple the
-   * benchmarks to the universe through the back door. Tests and offline roots
-   * replace the whole port via `config.benchmarkSeriesSource` instead.
-   */
-  /**
    * The benchmark path's OWN store instance — deliberately not
    * `marketDataStore` above, mirroring the data-SOURCE independence #986
    * already established for this same pair of services.
@@ -781,6 +759,28 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * with a non-LSE universe, whichever comes first.
    */
   const benchmarkMarketDataStore = new SqliteMarketDataStore(config.db);
+  /**
+   * The OUTSIDE BENCHMARKS' own market-data path (#981, under #636) —
+   * deliberately NOT `marketData` above.
+   *
+   * `marketData` is universe-derived: `buildAlpacaDataSource` returns
+   * `LseMarkDataSource` EXCLUSIVELY once the configured universe holds LSE
+   * tickers (#751's cutover), and that source refuses `'SPY'` on purpose —
+   * SPY is a `screening_instrument`, the US underlying a 3x LSE ETP tracks,
+   * and marking the wrapper off the underlying is inadmissible (#734). Reading
+   * the benchmarks through it would therefore park BOTH benchmarks (60/40 has
+   * a SPY leg too) in `unmeasured` forever on the day the live universe
+   * becomes LSE-only, with the panel reading "Absent, not zero" and nothing
+   * failing. #636 requires the outside benchmark to keep being computed on
+   * FL's own cadence regardless of what the live universe trades, so the
+   * series come from a source with no universe in its construction at all —
+   * see `buildBenchmarkDataSource`.
+   *
+   * `config.dataSource` is not consulted here for the same reason: it is the
+   * override for the LIVE path's source, and honouring it would re-couple the
+   * benchmarks to the universe through the back door. Tests and offline roots
+   * replace the whole port via `config.benchmarkSeriesSource` instead.
+   */
   const benchmarkSeries: BenchmarkSeriesSource =
     config.benchmarkSeriesSource ??
     new MarketDataBenchmarkSeriesSource(
