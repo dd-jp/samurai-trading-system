@@ -33,6 +33,19 @@ def load_existing_anchors(reviewer: str | None) -> set[tuple[str, int]]:
         raise ValueError(
             f"{path}: expected a JSON array of PR review comments, got {type(comments).__name__}"
         )
+    # The ELEMENT check matters as much as the top-level one. `gh api
+    # --paginate --slurp` writes an array of PAGES (`[[c1, c2]]`), which
+    # passes a list check and then matches no comment at all — dedup off,
+    # nothing said. Anything that is not a flat array of comment objects is a
+    # bug in the fetch step, and must fail the job rather than degrade to
+    # "nothing was flagged before".
+    bad = next((c for c in comments if not isinstance(c, dict)), None)
+    if bad is not None:
+        raise ValueError(
+            f"{path}: expected a FLAT array of PR review comment objects, but an element "
+            f"is {type(bad).__name__} — an array of pages (gh's --slurp) reads as a valid "
+            "list here and would silently disable dedup"
+        )
     return existing_comment_anchors(comments, reviewer)
 
 

@@ -1992,6 +1992,71 @@ def test_dedup_and_severity_compose():
     assert "1 finding(s) suppressed" in body
 
 
+# --- the fetched-comments file --------------------------------------------
+
+
+def _write(tmp_path, payload):
+    path = tmp_path / "existing_comments.json"
+    path.write_text(json.dumps(payload))
+    return str(path)
+
+
+def test_an_array_of_pages_fails_loudly(tmp_path, monkeypatch):
+    """`gh api --paginate --slurp` writes `[[c1, c2]]`, not `[c1, c2]`. That
+    passes a top-level list check and then matches no comment at all — dedup
+    silently off. Caught on PR #996 by the kimi reviewer this change touches."""
+    import run_review
+
+    page = [{"path": "src/trader/x.ts", "line": 2, "side": "RIGHT", "body": "x"}]
+    monkeypatch.setenv("EXISTING_COMMENTS_FILE", _write(tmp_path, [page]))
+
+    with pytest.raises(ValueError, match="FLAT array"):
+        run_review.load_existing_anchors("nous-kimi")
+
+
+def test_a_non_array_file_fails_loudly(tmp_path, monkeypatch):
+    import run_review
+
+    monkeypatch.setenv("EXISTING_COMMENTS_FILE", _write(tmp_path, {"message": "Not Found"}))
+
+    with pytest.raises(ValueError, match="expected a JSON array"):
+        run_review.load_existing_anchors("nous-kimi")
+
+
+def test_a_flat_array_loads(tmp_path, monkeypatch):
+    import run_review
+
+    comments = [
+        {
+            "path": "src/trader/x.ts",
+            "line": 2,
+            "side": "RIGHT",
+            "body": "prior\n\n" + review_lib.comment_marker("nous-kimi"),
+        }
+    ]
+    monkeypatch.setenv("EXISTING_COMMENTS_FILE", _write(tmp_path, comments))
+
+    assert run_review.load_existing_anchors("nous-kimi") == {("src/trader/x.ts", 2)}
+
+
+def test_a_missing_file_means_dedup_off_not_an_error(tmp_path, monkeypatch):
+    """`workflow_dispatch` writes no file — a deliberate re-review must not be
+    muted, and must not crash either."""
+    import run_review
+
+    monkeypatch.setenv("EXISTING_COMMENTS_FILE", str(tmp_path / "nope.json"))
+
+    assert run_review.load_existing_anchors("nous-kimi") == set()
+
+
+def test_no_reviewer_skips_the_file_entirely(tmp_path, monkeypatch):
+    import run_review
+
+    monkeypatch.setenv("EXISTING_COMMENTS_FILE", _write(tmp_path, [["bad shape"]]))
+
+    assert run_review.load_existing_anchors(None) == set()
+
+
 def test_review_diff_threads_reviewer_and_anchors_through():
     """The wiring, not just the leaf: #567's class of defect in this repo is a
     tested mechanism nothing calls."""

@@ -215,9 +215,24 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
         run: |
+          # `pipefail` because the pipeline below ends in `jq`: without it a
+          # failing `gh` exits 0 through the pipe, writing an empty array that
+          # reads as "nothing was flagged before" — the silent-disable this
+          # step is supposed to fail loudly on.
+          set -o pipefail
+          # NOT `--paginate --slurp`. On a list endpoint that returns an array
+          # per page, `--slurp` produces an array OF PAGES — `[[c1, c2]]`, not
+          # `[c1, c2]`. `json.load` still yields a list, so a top-level type
+          # check passes and every element then fails the per-comment dict
+          # check downstream, turning dedup off while looking like it worked.
+          # `--jq '.[]'` streams the comments as NDJSON and `jq -s` collects
+          # them into one flat array. (`--slurp` cannot be combined with
+          # `--jq` at all: gh rejects the pair outright.)
           gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/comments" \
-            --paginate --slurp > existing_comments.json
-          echo "existing review comments: $(python3 -c 'import json;print(len(json.load(open("existing_comments.json"))))')"
+            --paginate --jq '.[]' | jq -s '.' > existing_comments.json
+          # Counts COMMENTS. The earlier form counted pages, which would have
+          # printed a reassuring "1" for an empty PR and masked the bug above.
+          echo "existing review comments: $(jq 'length' existing_comments.json)"
 
       - name: Run review (${{ matrix.reviewer }})
         env:
