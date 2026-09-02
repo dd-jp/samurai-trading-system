@@ -50,6 +50,16 @@ export interface MarketState {
   /** e.g. ATR or realized vol at the bar. */
   volatility: number;
   asset_class: 'crypto' | 'stocks';
+  /**
+   * Venue identity for the leg being priced, when it differs materially from
+   * the plain asset-class default — e.g. LSE ETPs traded through Saxo vs a
+   * US equity through Alpaca, both `asset_class: 'stocks'` (#1000,
+   * ADR-0015:201/:207). `undefined` (every caller today — no `SaxoAdapter`
+   * exists yet, ADR-0015's 2026-08-30 amendment) means "use the plain
+   * asset-class config"; `CostConfig.venues` supplies the override when a
+   * caller does set this.
+   */
+  venue?: CostVenue;
   /** = clock.now(); must be <= now (point-in-time). */
   timestamp: Date;
 }
@@ -102,9 +112,55 @@ export interface AssetClassCostConfig {
   impactK: number;
 }
 
+/**
+ * Distinguishes cost-model legs that share `asset_class` but face different
+ * venue economics — e.g. Saxo's LSE ETPs vs Alpaca's US equities, both
+ * `'stocks'` (ADR-0015:201/:207). Deliberately NOT `BrokerVenue`
+ * (`pipeline/execution/broker-state-store.ts`): that type enumerates the
+ * adapters that actually exist today (`ccxt`/`ibkr`/`alpaca`), and no
+ * `SaxoAdapter` exists yet — this is a narrower identity scoped to the cost
+ * seam alone (#1000).
+ */
+export type CostVenue = 'saxo';
+
+/**
+ * The structural non-zero floor beneath a `CostConfig`'s spread/commission
+ * (Principle 1, cost-model-backtest-spec.md:148): even the most optimistic
+ * config cannot construct a frictionless fill. Calibration-addressable
+ * (#1000) rather than the hard-coded module constants it replaces — a
+ * `CostConfig` MAY supply this to override `DEFAULT_COST_FLOORS`
+ * (`cost-model.ts`). `CostModelImpl` throws if either rate is not a finite
+ * number > 0, so a zero (or `NaN`) floor stays structurally unrepresentable
+ * rather than merely the current default's behaviour.
+ */
+export interface CostFloors {
+  /** Floor on half-spread, as a fraction of `MarketState.mid`. */
+  minHalfSpreadRate: number;
+  /** Floor on commission, as a fraction of notional (size * mid). */
+  minCommissionRate: number;
+}
+
 export interface CostConfig {
   crypto: AssetClassCostConfig;
   stocks: AssetClassCostConfig;
+  /**
+   * Structural floor override (#1000) — omit to get `DEFAULT_COST_FLOORS`,
+   * the same 1bp/1bp values every existing config relied on as a hard-coded
+   * constant before this field existed, so omitting it changes nothing.
+   * Present so the floor is calibration-addressable without substituting a
+   * whole `CostModel` (the reason `ZeroCostModel` exists in
+   * `cost-attribution.test.ts`).
+   */
+  floors?: CostFloors;
+  /**
+   * Per-venue override of `AssetClassCostConfig` fields, layered onto the
+   * asset-class base when `MarketState.venue` matches a key here — e.g.
+   * `{ saxo: { commissionRate: 0.0008 } }` for ADR-0015:201's 8bps-per-side
+   * Saxo Classic tier. A key with no `MarketState` anywhere in a run setting
+   * that `venue` is inert, not an error — see `run-stage2.ts`'s
+   * `CALIBRATED_INTRADAY_COST_CONFIG`.
+   */
+  venues?: Partial<Record<CostVenue, Partial<AssetClassCostConfig>>>;
 }
 
 /** Seam 1 (partial — #87 scope): deterministic, pessimistic fill pricing. */

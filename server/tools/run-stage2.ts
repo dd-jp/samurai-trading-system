@@ -172,7 +172,25 @@ export const CALIBRATED_COST_CONFIG: CostConfig = {
  * amendment) so there is nothing to re-fit against. If some future path does
  * reach it, it errs toward over-charging rather than toward the flattering
  * number this whole ticket exists to remove.
+ *
+ * **venues.saxo.commissionRate — ADR-0015:201, #1000.** `stocks.commissionRate`
+ * above is `0` because it models Alpaca (`run-stage2.ts:96-103` explains why
+ * that's correct there, not a defect). This universe's actual live venue is
+ * Saxo, per ADR-0016's LSE-ETP universe and ADR-0015's 2026-08-30 amendment,
+ * and Saxo's Classic tier is 8bps-per-side with no per-order minimum
+ * (ADR-0015:201) — 16bps round trip against the ~4bps the un-keyed model
+ * charges. `SAXO_COMMISSION_RATE` supplies that as a `CostConfig.venues`
+ * override rather than a change to `stocks.commissionRate` itself, because
+ * the latter must stay correct for the Alpaca-priced legs this same config
+ * is used for elsewhere. It is currently inert: nothing sets
+ * `MarketState.venue = 'saxo'` yet, because no `SaxoAdapter` exists
+ * (ADR-0015's 2026-08-30 amendment) — this only makes the rate
+ * calibration-addressable ahead of that wiring landing, per
+ * docs/research/58-cost-floor-sizing-and-per-instrument-spread.md F4 (on the
+ * `worktree-wayfinder-research-881-882` branch, not yet merged to main).
  */
+export const SAXO_COMMISSION_RATE = 0.0008;
+
 export const CALIBRATED_INTRADAY_COST_CONFIG: CostConfig = {
   crypto: PESSIMISTIC_COST_CONFIG.crypto,
   stocks: {
@@ -181,6 +199,7 @@ export const CALIBRATED_INTRADAY_COST_CONFIG: CostConfig = {
     slippageCoefficient: 0.017425,
     impactK: 0.05,
   },
+  venues: { saxo: { commissionRate: SAXO_COMMISSION_RATE } },
 };
 
 /**
