@@ -153,6 +153,14 @@ export const MODEL_RATES: Readonly<Record<string, ModelRate>> = Object.freeze({
  * now — a column no caller populates is a second thing to keep in sync for no
  * behavioural gain. This comment is the flag.
  *
+ * #1010 measured whether "nothing requests caching" was itself worth fixing
+ * and found it moot for the pinned debate model (Claude Haiku 4.5) on token
+ * size alone — every debate-stage request measures well under the model's
+ * cache minimum. Full figures and the production measurement live in
+ * `server/pipeline/debate-engine/llm/prompt-caching.test.ts`, the canonical
+ * home for this finding; this multiplier stays inert for that reason too,
+ * not only the per-vendor pricing gap above.
+ *
  * The 1-hour-TTL write multiplier (2x) is absent for the same reason it always
  * was: nothing requests a 1h TTL, and the usage block does not distinguish the
  * two TTLs anyway — that change needs a wire-level discriminator first.

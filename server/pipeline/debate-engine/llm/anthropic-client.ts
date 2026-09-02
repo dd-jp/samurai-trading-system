@@ -149,7 +149,52 @@ function promptContextOf(context: LlmRequestContext): Record<string, unknown> {
   return promptContext;
 }
 
-function renderMessageContent<T>(request: LlmRequest<T>): string {
+/**
+ * THE debate request builder (#1010). Flattens `prompt` + the serialized
+ * context into a single string with no content-block structure — there is
+ * nowhere here a `cache_control: {type: 'ephemeral'}` breakpoint could be
+ * attached even if one were wanted, since Anthropic's cache breakpoints are
+ * a property of a content BLOCK, and this produces one opaque string that
+ * `nous-messages-client.ts` wraps in a single `{role:'user', content}`
+ * message.
+ *
+ * #1010 measured whether that gap is worth closing and found it moot on a
+ * more basic ground: the pinned debate model (`anthropic/claude-haiku-4.5`)
+ * requires 4,096 input tokens before Anthropic will cache anything at all,
+ * and every debate-stage request this repo sends is measured well under
+ * that minimum — including the full bull/bear request this function
+ * renders, which is byte-identical across every round of one debate
+ * (`personas.ts`'s `PersonaInput` has no field for
+ * `RoundContext.priorArguments` at all as of #1010, so the round number
+ * never reaches the rendered prompt) and would therefore be exactly the
+ * shape caching helps most, if it were large enough to qualify. Full
+ * figures, the provider docs citation, the production (`llm_spend`)
+ * measurement this rests on, and why a naive chars/4 estimate is not itself
+ * proof of "under the minimum" all live in `prompt-caching.test.ts` (same
+ * directory) — that file is the canonical home for this finding, kept as a
+ * test so it re-verifies rather than going stale. Below 4,096 tokens,
+ * restructuring this into content blocks would buy nothing — Anthropic
+ * silently skips caching rather than erroring, so it would look like it
+ * worked and never fire.
+ *
+ * Separately (and this holds regardless of prompt size): `nous-chat.ts`'s
+ * usage parsing reads only `prompt_tokens`/`completion_tokens` from the
+ * proxy's response and drops everything else, so even a hit somewhere
+ * upstream of Nous would currently be invisible here — see the comment on
+ * that parsing and the characterization test next to it.
+ *
+ * Do not re-add `cache_control` here without first: (1) re-measuring this
+ * average against the model's current minimum (Anthropic's per-model
+ * minimums have moved before), (2) confirming Nous's proxy actually forwards
+ * an Anthropic-specific `cache_control` field through its OpenAI-compatible
+ * `chat/completions` shape (undocumented anywhere in this repo as of #1010 —
+ * `docs/adr/0009-single-provider-nous.md` is the canonical document
+ * distinguishing Nous from other providers/OpenRouter, and says nothing about
+ * caching), and (3) giving `MODEL_RATES` a per-model `cache_read` column
+ * first, per the existing deferral note on `CACHE_READ_MULTIPLIER` in
+ * pricing.ts — a uniform multiplier mis-prices most of Nous's vendor lineup.
+ */
+export function renderMessageContent<T>(request: LlmRequest<T>): string {
   const contextJson = JSON.stringify(promptContextOf(request.context), null, 2);
   return `${request.prompt}\n\nContext:\n${wrapUntrusted(contextJson)}`;
 }
