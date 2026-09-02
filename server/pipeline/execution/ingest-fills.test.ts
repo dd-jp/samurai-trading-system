@@ -1746,7 +1746,9 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
 
   /** Float-tolerant equality — `prorateCostBreakdown` multiplies by a share, so exact decimal equality is not guaranteed. */
   function expectCostBreakdownCloseTo(
-    actual: { spread_cost: number; commission: number; slippage: number; market_impact: number } | undefined,
+    actual:
+      | { spread_cost: number; commission: number; slippage: number; market_impact: number }
+      | undefined,
     expected: { spread_cost: number; commission: number; slippage: number; market_impact: number },
   ): void {
     expect(actual).toBeDefined();

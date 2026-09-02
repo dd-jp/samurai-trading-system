@@ -1,4 +1,4 @@
-import type { MarketDataService } from '../../providers/market-data-service/index.js';
+import type { MarketDataService, MarkRead } from '../../providers/market-data-service/index.js';
 import type { Clock, Fill, OpenPosition, OrderIntent } from '../../shared/index.js';
 import type { CostModel } from '../../tools/backtest/index.js';
 import type { VerdictDecision } from '../verdict/index.js';
@@ -1387,7 +1387,8 @@ describe('ExecutionImpl.execute', () => {
         const costModel: CostModel = {
           fill: vi
             .fn()
-            .mockReturnValueOnce({ fill_price: 95, filled_size: 40, cost_breakdown: zeroCosts() }).mockReturnValueOnce({ fill_price: 95, filled_size: 40, cost_breakdown: zeroCosts() })
+            .mockReturnValueOnce({ fill_price: 95, filled_size: 40, cost_breakdown: zeroCosts() })
+            .mockReturnValueOnce({ fill_price: 95, filled_size: 40, cost_breakdown: zeroCosts() })
             .mockReturnValueOnce({
               fill_price: 99.5,
               filled_size: 40,
@@ -1397,7 +1398,8 @@ describe('ExecutionImpl.execute', () => {
                 slippage: 0.05,
                 market_impact: 0.01,
               },
-            }).mockReturnValueOnce({
+            })
+            .mockReturnValueOnce({
               fill_price: 99.5,
               filled_size: 40,
               cost_breakdown: {
@@ -1472,10 +1474,14 @@ describe('ExecutionImpl.execute', () => {
         const costModel: CostModel = {
           fill: vi
             .fn()
-            .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() }).mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() }) // lot A entry
-            .mockReturnValueOnce({ fill_price: 92, filled_size: 10, cost_breakdown: zeroCosts() }).mockReturnValueOnce({ fill_price: 92, filled_size: 10, cost_breakdown: zeroCosts() }) // lot B entry
-            .mockReturnValueOnce({ fill_price: 95, filled_size: 10, cost_breakdown: zeroCosts() }).mockReturnValueOnce({ fill_price: 95, filled_size: 10, cost_breakdown: zeroCosts() }) // lot A exit (signal_decay)
-            .mockReturnValueOnce({ fill_price: 96, filled_size: 10, cost_breakdown: zeroCosts() }).mockReturnValueOnce({ fill_price: 96, filled_size: 10, cost_breakdown: zeroCosts() }), // lot B exit (flatten)
+            .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() })
+            .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() }) // lot A entry
+            .mockReturnValueOnce({ fill_price: 92, filled_size: 10, cost_breakdown: zeroCosts() })
+            .mockReturnValueOnce({ fill_price: 92, filled_size: 10, cost_breakdown: zeroCosts() }) // lot B entry
+            .mockReturnValueOnce({ fill_price: 95, filled_size: 10, cost_breakdown: zeroCosts() })
+            .mockReturnValueOnce({ fill_price: 95, filled_size: 10, cost_breakdown: zeroCosts() }) // lot A exit (signal_decay)
+            .mockReturnValueOnce({ fill_price: 96, filled_size: 10, cost_breakdown: zeroCosts() })
+            .mockReturnValueOnce({ fill_price: 96, filled_size: 10, cost_breakdown: zeroCosts() }), // lot B exit (flatten)
         };
         const marketData = makeMarketData();
         const broker = new SimulatedBrokerAdapter({
@@ -1550,12 +1556,14 @@ describe('ExecutionImpl.execute', () => {
         const costModel: CostModel = {
           fill: vi
             .fn()
-            .mockReturnValueOnce({ fill_price: 95, filled_size: 40, cost_breakdown: zeroCosts() }).mockReturnValueOnce({ fill_price: 95, filled_size: 40, cost_breakdown: zeroCosts() })
+            .mockReturnValueOnce({ fill_price: 95, filled_size: 40, cost_breakdown: zeroCosts() })
+            .mockReturnValueOnce({ fill_price: 95, filled_size: 40, cost_breakdown: zeroCosts() })
             .mockReturnValueOnce({
               fill_price: 99.5,
               filled_size: 40,
               cost_breakdown: zeroCosts(),
-            }).mockReturnValueOnce({
+            })
+            .mockReturnValueOnce({
               fill_price: 99.5,
               filled_size: 40,
               cost_breakdown: zeroCosts(),
@@ -1604,9 +1612,12 @@ describe('ExecutionImpl.execute', () => {
         const costModel: CostModel = {
           fill: vi
             .fn()
-            .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() }).mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() }) // lot 1 entry
-            .mockReturnValueOnce({ fill_price: 92, filled_size: 15, cost_breakdown: zeroCosts() }).mockReturnValueOnce({ fill_price: 92, filled_size: 15, cost_breakdown: zeroCosts() }) // lot 2 entry
-            .mockReturnValueOnce({ fill_price: 100, filled_size: 25, cost_breakdown: zeroCosts() }).mockReturnValueOnce({ fill_price: 100, filled_size: 25, cost_breakdown: zeroCosts() }), // flatten, covers both
+            .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() })
+            .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() }) // lot 1 entry
+            .mockReturnValueOnce({ fill_price: 92, filled_size: 15, cost_breakdown: zeroCosts() })
+            .mockReturnValueOnce({ fill_price: 92, filled_size: 15, cost_breakdown: zeroCosts() }) // lot 2 entry
+            .mockReturnValueOnce({ fill_price: 100, filled_size: 25, cost_breakdown: zeroCosts() })
+            .mockReturnValueOnce({ fill_price: 100, filled_size: 25, cost_breakdown: zeroCosts() }), // flatten, covers both
         };
         const marketData = makeMarketData();
         const broker = new SimulatedBrokerAdapter({
@@ -1671,11 +1682,14 @@ describe('ExecutionImpl.execute', () => {
         const costModel: CostModel = {
           fill: vi
             .fn()
-            .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() }).mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() }) // lot 1 entry
-            .mockReturnValueOnce({ fill_price: 92, filled_size: 15, cost_breakdown: zeroCosts() }).mockReturnValueOnce({ fill_price: 92, filled_size: 15, cost_breakdown: zeroCosts() }) // lot 2 entry
+            .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() })
+            .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() }) // lot 1 entry
+            .mockReturnValueOnce({ fill_price: 92, filled_size: 15, cost_breakdown: zeroCosts() })
+            .mockReturnValueOnce({ fill_price: 92, filled_size: 15, cost_breakdown: zeroCosts() }) // lot 2 entry
             // The flatten asked for 25 (10 + 15) but the IOC only fills 20 —
             // a thin book taking part of the order and cancelling the rest.
-            .mockReturnValueOnce({ fill_price: 100, filled_size: 20, cost_breakdown: zeroCosts() }).mockReturnValueOnce({ fill_price: 100, filled_size: 20, cost_breakdown: zeroCosts() }),
+            .mockReturnValueOnce({ fill_price: 100, filled_size: 20, cost_breakdown: zeroCosts() })
+            .mockReturnValueOnce({ fill_price: 100, filled_size: 20, cost_breakdown: zeroCosts() }),
         };
         const marketData = makeMarketData();
         const broker = new SimulatedBrokerAdapter({
@@ -1771,13 +1785,16 @@ describe('ExecutionImpl.execute', () => {
           const costModel: CostModel = {
             fill: vi
               .fn()
-              .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() }).mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() })
-              .mockReturnValueOnce({ fill_price: 92, filled_size: 5, cost_breakdown: zeroCosts() }).mockReturnValueOnce({ fill_price: 92, filled_size: 5, cost_breakdown: zeroCosts() })
+              .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() })
+              .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() })
+              .mockReturnValueOnce({ fill_price: 92, filled_size: 5, cost_breakdown: zeroCosts() })
+              .mockReturnValueOnce({ fill_price: 92, filled_size: 5, cost_breakdown: zeroCosts() })
               .mockReturnValueOnce({
                 fill_price: 99,
                 filled_size: firstFlattenQty,
                 cost_breakdown: zeroCosts(),
-              }).mockReturnValueOnce({
+              })
+              .mockReturnValueOnce({
                 fill_price: 99,
                 filled_size: firstFlattenQty,
                 cost_breakdown: zeroCosts(),
@@ -1786,7 +1803,8 @@ describe('ExecutionImpl.execute', () => {
                 fill_price: 100,
                 filled_size: secondFlattenQty,
                 cost_breakdown: zeroCosts(),
-              }).mockReturnValueOnce({
+              })
+              .mockReturnValueOnce({
                 fill_price: 100,
                 filled_size: secondFlattenQty,
                 cost_breakdown: zeroCosts(),
@@ -1942,13 +1960,16 @@ describe('ExecutionImpl.execute', () => {
           const costModel: CostModel = {
             fill: vi
               .fn()
-              .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() }).mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() })
-              .mockReturnValueOnce({ fill_price: 92, filled_size: 5, cost_breakdown: zeroCosts() }).mockReturnValueOnce({ fill_price: 92, filled_size: 5, cost_breakdown: zeroCosts() })
+              .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() })
+              .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() })
+              .mockReturnValueOnce({ fill_price: 92, filled_size: 5, cost_breakdown: zeroCosts() })
+              .mockReturnValueOnce({ fill_price: 92, filled_size: 5, cost_breakdown: zeroCosts() })
               .mockReturnValueOnce({
                 fill_price: 100,
                 filled_size: 15,
                 cost_breakdown: zeroCosts(),
-              }).mockReturnValueOnce({
+              })
+              .mockReturnValueOnce({
                 fill_price: 100,
                 filled_size: 15,
                 cost_breakdown: zeroCosts(),
@@ -2010,14 +2031,16 @@ describe('ExecutionImpl.execute', () => {
           const costModel: CostModel = {
             fill: vi
               .fn()
-              .mockReturnValueOnce({ fill_price: 95, filled_size: 40, cost_breakdown: zeroCosts() }).mockReturnValueOnce({ fill_price: 95, filled_size: 40, cost_breakdown: zeroCosts() })
+              .mockReturnValueOnce({ fill_price: 95, filled_size: 40, cost_breakdown: zeroCosts() })
+              .mockReturnValueOnce({ fill_price: 95, filled_size: 40, cost_breakdown: zeroCosts() })
               // The flatten asks for 40 but a thin book only fills 25 — a
               // naked residual of 15 if nothing re-arms it.
               .mockReturnValueOnce({
                 fill_price: 99,
                 filled_size: 25,
                 cost_breakdown: zeroCosts(),
-              }).mockReturnValueOnce({
+              })
+              .mockReturnValueOnce({
                 fill_price: 99,
                 filled_size: 25,
                 cost_breakdown: zeroCosts(),
@@ -2086,15 +2109,18 @@ describe('ExecutionImpl.execute', () => {
           const costModel: CostModel = {
             fill: vi
               .fn()
-              .mockReturnValueOnce({ fill_price: 95, filled_size: 40, cost_breakdown: zeroCosts() }).mockReturnValueOnce({ fill_price: 95, filled_size: 40, cost_breakdown: zeroCosts() })
+              .mockReturnValueOnce({ fill_price: 95, filled_size: 40, cost_breakdown: zeroCosts() })
+              .mockReturnValueOnce({ fill_price: 95, filled_size: 40, cost_breakdown: zeroCosts() })
               // First flatten: asks 40, fills 25 — residual 15.
-              .mockReturnValueOnce({ fill_price: 99, filled_size: 25, cost_breakdown: zeroCosts() }).mockReturnValueOnce({ fill_price: 99, filled_size: 25, cost_breakdown: zeroCosts() })
+              .mockReturnValueOnce({ fill_price: 99, filled_size: 25, cost_breakdown: zeroCosts() })
+              .mockReturnValueOnce({ fill_price: 99, filled_size: 25, cost_breakdown: zeroCosts() })
               // Second flatten: the residual, in full.
               .mockReturnValueOnce({
                 fill_price: 98,
                 filled_size: 15,
                 cost_breakdown: zeroCosts(),
-              }).mockReturnValueOnce({
+              })
+              .mockReturnValueOnce({
                 fill_price: 98,
                 filled_size: 15,
                 cost_breakdown: zeroCosts(),
@@ -2167,15 +2193,18 @@ describe('ExecutionImpl.execute', () => {
           const costModel: CostModel = {
             fill: vi
               .fn()
-              .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() }).mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() }) // lot 1 entry
-              .mockReturnValueOnce({ fill_price: 92, filled_size: 15, cost_breakdown: zeroCosts() }).mockReturnValueOnce({ fill_price: 92, filled_size: 15, cost_breakdown: zeroCosts() }) // lot 2 entry
+              .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() })
+              .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() }) // lot 1 entry
+              .mockReturnValueOnce({ fill_price: 92, filled_size: 15, cost_breakdown: zeroCosts() })
+              .mockReturnValueOnce({ fill_price: 92, filled_size: 15, cost_breakdown: zeroCosts() }) // lot 2 entry
               // The flatten asks for 25 (10 + 15) but only 7 fills — less
               // than even lot 1's own 10-share, so lot 2 gets nothing.
               .mockReturnValueOnce({
                 fill_price: 100,
                 filled_size: 7,
                 cost_breakdown: zeroCosts(),
-              }).mockReturnValueOnce({
+              })
+              .mockReturnValueOnce({
                 fill_price: 100,
                 filled_size: 7,
                 cost_breakdown: zeroCosts(),
@@ -2269,7 +2298,8 @@ describe('ExecutionImpl.execute', () => {
                   fill_price: 90,
                   filled_size: 10,
                   cost_breakdown: zeroCosts(),
-                }).mockReturnValueOnce({
+                })
+                .mockReturnValueOnce({
                   fill_price: 90,
                   filled_size: 10,
                   cost_breakdown: zeroCosts(),
@@ -2278,7 +2308,8 @@ describe('ExecutionImpl.execute', () => {
                   fill_price: 92,
                   filled_size: 15,
                   cost_breakdown: zeroCosts(),
-                }).mockReturnValueOnce({
+                })
+                .mockReturnValueOnce({
                   fill_price: 92,
                   filled_size: 15,
                   cost_breakdown: zeroCosts(),
@@ -2287,7 +2318,8 @@ describe('ExecutionImpl.execute', () => {
                   fill_price: 94,
                   filled_size: 8,
                   cost_breakdown: zeroCosts(),
-                }).mockReturnValueOnce({
+                })
+                .mockReturnValueOnce({
                   fill_price: 94,
                   filled_size: 8,
                   cost_breakdown: zeroCosts(),
@@ -2298,7 +2330,8 @@ describe('ExecutionImpl.execute', () => {
                   fill_price: 100,
                   filled_size: 7,
                   cost_breakdown: zeroCosts(),
-                }).mockReturnValueOnce({
+                })
+                .mockReturnValueOnce({
                   fill_price: 100,
                   filled_size: 7,
                   cost_breakdown: zeroCosts(),
@@ -2421,7 +2454,8 @@ describe('ExecutionImpl.execute', () => {
                   fill_price: 90,
                   filled_size: 10,
                   cost_breakdown: zeroCosts(),
-                }).mockReturnValueOnce({
+                })
+                .mockReturnValueOnce({
                   fill_price: 90,
                   filled_size: 10,
                   cost_breakdown: zeroCosts(),
@@ -2430,7 +2464,8 @@ describe('ExecutionImpl.execute', () => {
                   fill_price: 92,
                   filled_size: 15,
                   cost_breakdown: zeroCosts(),
-                }).mockReturnValueOnce({
+                })
+                .mockReturnValueOnce({
                   fill_price: 92,
                   filled_size: 15,
                   cost_breakdown: zeroCosts(),
@@ -2439,7 +2474,8 @@ describe('ExecutionImpl.execute', () => {
                   fill_price: 94,
                   filled_size: 8,
                   cost_breakdown: zeroCosts(),
-                }).mockReturnValueOnce({
+                })
+                .mockReturnValueOnce({
                   fill_price: 94,
                   filled_size: 8,
                   cost_breakdown: zeroCosts(),
@@ -2448,7 +2484,8 @@ describe('ExecutionImpl.execute', () => {
                   fill_price: 100,
                   filled_size: 25,
                   cost_breakdown: zeroCosts(),
-                }).mockReturnValueOnce({
+                })
+                .mockReturnValueOnce({
                   fill_price: 100,
                   filled_size: 25,
                   cost_breakdown: zeroCosts(),
@@ -2566,7 +2603,7 @@ describe('ExecutionImpl.execute', () => {
  */
 describe('#1001: submit-time quote and decision price', () => {
   function makeSnapshotMarketData(overrides: Partial<MarketDataService> = {}): MarketDataService {
-    return {
+    const service: MarketDataService = {
       getBars: vi.fn(),
       getMark: vi.fn().mockResolvedValue({
         price: 100.2,
@@ -2578,8 +2615,25 @@ describe('#1001: submit-time quote and decision price', () => {
       getSpreadEstimate: vi.fn().mockResolvedValue(0.04),
       getADV: vi.fn().mockResolvedValue(1_000_000),
       getQuote: vi.fn().mockResolvedValue({ bid: 100.1, ask: 100.3, observed_at: NOW }),
+      // Required on the port, so it is implemented rather than cast away: the
+      // batch read is the single read, per distinct instrument, wrapped in
+      // `MarkRead`'s ok/error envelope exactly as the real service does. Reads
+      // `service.getMark` (not the literal above) so an `overrides.getMark`
+      // stub is honoured here too.
+      getMarks: async (instruments, asOf) => {
+        const marks = new Map<string, MarkRead>();
+        for (const instrument of new Set(instruments)) {
+          try {
+            marks.set(instrument, { ok: true, mark: await service.getMark(instrument, asOf) });
+          } catch (error) {
+            marks.set(instrument, { ok: false, error });
+          }
+        }
+        return marks;
+      },
       ...overrides,
-    } as unknown as MarketDataService;
+    };
+    return service;
   }
 
   const modelledCostBreakdown = {
@@ -2794,6 +2848,72 @@ describe('#1001: submit-time quote and decision price', () => {
       expect(row?.quote_mid).toBeNull();
       expect(row?.quote_observed_at).toBeNull();
       expect(row?.modelled_cost_breakdown_json).toBeNull();
+    });
+
+    /**
+     * The #826 latency property, and the reason `captureSubmitSnapshot` takes
+     * a `budget_ms` at all. Every read it makes routes through
+     * `fetchWithTimeout` (10s) under `withRetry` (3 attempts), so a stalled
+     * feed costs ~30s per read group — and this is the mandatory
+     * flat-by-close path, where verdict/index.ts already refuses to pay ONE
+     * such budget. Unbounded, the snapshot would pay two before the flatten
+     * order was even submitted.
+     *
+     * Driven on fake timers so the stall is 30s of MODEL time: advancing only
+     * the 2s budget and asserting the flatten has already reached the broker
+     * is exactly the claim — the exit does not wait for the feed. Against the
+     * unbounded version this fails on `flattenCalls` being empty at that
+     * point, rather than hanging the suite.
+     */
+    it('submits the flatten within its 2s snapshot budget even when the feed stalls for 30s (#826)', async () => {
+      vi.useFakeTimers();
+      try {
+        const { store } = openTestExecutionStore();
+        const broker = makeBroker();
+        await seedHeldLot(store);
+        const costModel = makeSnapshotCostModel();
+        const stalled = <T>(value: T): Promise<T> =>
+          new Promise<T>((resolve) => setTimeout(() => resolve(value), 30_000));
+        const marketData = makeSnapshotMarketData({
+          getQuote: vi
+            .fn()
+            .mockImplementation(() => stalled({ bid: 100.1, ask: 100.3, observed_at: NOW })),
+          getMark: vi.fn().mockImplementation(() =>
+            stalled({
+              price: 100.2,
+              observed_at: NOW,
+              source: 'fixture',
+              asset_class: 'stocks' as const,
+            }),
+          ),
+        });
+
+        const pending = new ExecutionImpl(
+          makeInput({ store, broker, costModel, marketData }),
+        ).execute(makeExitGo());
+
+        // The whole budget, and not one tick of the 30s stall beyond it.
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(broker.flattenCalls).toHaveLength(1);
+
+        const result = await pending;
+        expect(result.status).toBe('submitted');
+
+        // The acceptance criterion (#1001) still holds for the field that
+        // needs no I/O; the sample the stall costs is the quote and the
+        // modelled breakdown, which is the trade #826 already makes.
+        const row = await store.getFlattenSubmission('key-aapl-1355');
+        expect(row?.decision_price).toBe(100);
+        expect(row?.quote_bid).toBeNull();
+        expect(row?.quote_ask).toBeNull();
+        expect(row?.quote_mid).toBeNull();
+        expect(row?.modelled_cost_breakdown_json).toBeNull();
+
+        // Let the abandoned reads settle so no timer outlives the test.
+        await vi.advanceTimersByTimeAsync(30_000);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

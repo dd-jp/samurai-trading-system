@@ -140,9 +140,10 @@ export class ExecutionImpl implements Execution {
       time_in_force: order.time_in_force,
     };
 
-    // #1001: best-effort, never blocking — see `captureSubmitSnapshot`'s doc.
-    // Read BEFORE the write-ahead so the snapshot lands in the same durable
-    // row a crash-restart would recover, not bolted on after the fact.
+    // #1001: best-effort snapshot — see `captureSubmitSnapshot`'s doc. Read
+    // BEFORE the write-ahead so the snapshot lands in the same durable row a
+    // crash-restart would recover, not bolted on after the fact. Deliberately
+    // UNBOUNDED here, unlike the exit path: an entry is not racing the close.
     const snapshot = await captureSubmitSnapshot(this.input, order, now);
 
     const position: OpenPosition = {
@@ -226,6 +227,23 @@ export class ExecutionImpl implements Execution {
 }
 
 /**
+ * The whole latency budget #1001's submit-time snapshot may spend on the EXIT
+ * path, where `executeExit` is running the mandatory flat-by-close flatten.
+ *
+ * Two seconds, deliberately an order of magnitude under the ~30s single-read
+ * budget #826 (verdict/index.ts) already judged too expensive to pay in this
+ * window — the point is that the feature's worst-case contribution to the time
+ * before a flatten reaches the broker stays small and BOUNDED, not that a slow
+ * feed still gets its sample in. A healthy quote read returns in tens of
+ * milliseconds, so this never binds in the normal case.
+ *
+ * There is no matching bound on the bracket (entry) path: nothing there is
+ * racing a session close, and an entry that arrives late is an entry not
+ * taken, not a position left open overnight.
+ */
+const EXIT_SNAPSHOT_BUDGET_MS = 2_000;
+
+/**
  * The submit-time snapshot #1001 captures alongside every write-ahead —
  * `decision_price` plus a best-effort quote and modelled cost breakdown. See
  * `captureSubmitSnapshot` below for how each field is produced.
@@ -247,25 +265,98 @@ interface SubmitSnapshot {
  * (`SimulatedBrokerAdapter.buildMarketState` + `CostModel.fill`), so a
  * real-broker fill has something honest to diff its realized price against.
  *
- * BEST-EFFORT AND NEVER BLOCKING — this is instrumentation, not a trading
- * decision. `decision_price` alone needs no I/O (`order.entry` is already in
- * hand), so it is always populated; the quote and cost-model reads are each
- * wrapped in their OWN try/catch, independently, so a failure in one does not
- * cost the other. Every failure degrades to `null` and is logged, never
- * thrown — mirroring #826's mandatory flat-by-close design, where a stalled
- * feed must never delay or refuse an order. For the same reason, the reads
- * are skipped entirely when `order.metadata.unpriced_exit` is set: that flag
- * already means the feed was dark THIS tick (`readExitPrice`, trader/decide.ts)
- * — re-probing it here would only be a second chance for the same feed to
- * hang, inside the one window (#826) a hang must never widen.
+ * BEST-EFFORT — this is instrumentation, not a trading decision.
+ * `decision_price` alone needs no I/O (`order.entry` is already in hand), so
+ * it is always populated; the quote and cost-model reads are each wrapped in
+ * their OWN try/catch, independently, so a failure in one does not cost the
+ * other. Every failure degrades to `null` and is logged, never thrown: no
+ * read here may refuse an order. The reads are skipped entirely when
+ * `order.metadata.unpriced_exit` is set: that flag already means the feed was
+ * dark THIS tick (`readExitPrice`, trader/decide.ts) — re-probing it here
+ * would only be a second chance for the same feed to hang, inside the one
+ * window (#826) a hang must never widen.
+ *
+ * NOT "never blocking" — an earlier revision of this comment claimed that, and
+ * it was false. These reads are `await`ed inline before the caller's
+ * write-ahead, and every one of them routes through `fetchWithTimeout` (10s
+ * per attempt) under `withRetry` (3 attempts), so a stalled feed costs roughly
+ * 30s on the quote read and another ~30s on the `Promise.all` cost-model
+ * group. On the bracket (entry) path that is tolerable: nothing there is
+ * racing a session close. On the EXIT path it is not — `executeExit` runs the
+ * mandatory flat-by-close flatten, and #826's own reasoning (verdict/index.ts)
+ * treats ONE ~30s stalled read as a cost worth deliberately refusing "on the
+ * tick that is trying to get flat before the close". Unbounded, this function
+ * would pay two such budgets there, doubling the exposure #826 exists to
+ * prevent.
+ *
+ * So `budget_ms` bounds the WHOLE capture, and `executeExit` is the only
+ * caller that passes one (`EXIT_SNAPSHOT_BUDGET_MS`). The deadline RESOLVES to
+ * the all-null snapshot rather than rejecting, so `decision_price` — the field
+ * the #1001 acceptance query actually needs and the only one costing no I/O —
+ * survives a stall intact. What a stall costs is the `quote_bid/ask/mid` and
+ * `modelled_cost_breakdown` sample for that one exit. That is the same trade
+ * #826 already made (it declines to re-read the mark at all), not a regression
+ * against it: an instrumentation sample is never worth widening the window in
+ * which a position can be left open overnight.
+ *
+ * A timed-out read keeps running in the background — there is no `AbortSignal`
+ * on the `MarketDataService` port to cancel it with — but it has no side
+ * effects and its late result is simply discarded, exactly as
+ * `AnalystOrchestrator.withTimeout` handles the same situation.
  */
 async function captureSubmitSnapshot(
   input: ExecutionInput,
   order: OrderIntent,
   now: Date,
+  budget_ms?: number,
 ): Promise<SubmitSnapshot> {
   const decision_price = order.entry;
 
+  if (budget_ms === undefined) return readSubmitSnapshot(input, order, now, decision_price);
+
+  const empty: SubmitSnapshot = {
+    decision_price,
+    quote_bid: null,
+    quote_ask: null,
+    quote_mid: null,
+    quote_observed_at: null,
+    modelled_cost_breakdown: null,
+  };
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      readSubmitSnapshot(input, order, now, decision_price),
+      new Promise<SubmitSnapshot>((resolve) => {
+        timer = setTimeout(() => {
+          safeLog(input.logger, {
+            trace_id: input.trace_id,
+            stage: 'execution',
+            level: 'warn',
+            message:
+              `#1001: captureSubmitSnapshot exceeded its ${budget_ms}ms exit budget — the quote ` +
+              'and modelled cost breakdown are left null for this order so the flatten is not ' +
+              'held behind a stalled feed (#826). decision_price is unaffected.',
+            payload: { idempotency_key: order.idempotency_key, instrument: order.instrument },
+          });
+          resolve(empty);
+        }, budget_ms);
+      }),
+    ]);
+  } finally {
+    // An uncleared `setTimeout` keeps the Node event loop alive — in a
+    // cadence-driven process that is a run which will not exit.
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+/** The unbounded body of `captureSubmitSnapshot` — see there for the contract. */
+async function readSubmitSnapshot(
+  input: ExecutionInput,
+  order: OrderIntent,
+  now: Date,
+  decision_price: number,
+): Promise<SubmitSnapshot> {
   let quoteBid: number | null = null;
   let quoteAsk: number | null = null;
   let quoteObservedAt: Date | null = null;
@@ -539,9 +630,11 @@ async function executeExit(
     });
   }
 
-  // #1001: best-effort, never blocking — see `captureSubmitSnapshot`'s doc.
-  // Read BEFORE the write-ahead, same reasoning as the bracket path.
-  const snapshot = await captureSubmitSnapshot(input, order, now);
+  // #1001: best-effort snapshot — see `captureSubmitSnapshot`'s doc. Read
+  // BEFORE the write-ahead, same reasoning as the bracket path, but BOUNDED
+  // here: this is the mandatory flat-by-close path, and the budget is carved
+  // out of the #826 flatten window rather than added to it.
+  const snapshot = await captureSubmitSnapshot(input, order, now, EXIT_SNAPSHOT_BUDGET_MS);
 
   // Write-ahead BEFORE any broker call — see the docstring above for why
   // this row exists at all. `writeAheadFlatten` throwing (a genuine store
