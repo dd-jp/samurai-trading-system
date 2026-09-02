@@ -22,10 +22,24 @@
  * an error — which is exactly why this needs measuring rather than assuming:
  * a `cache_control` breakpoint added under the minimum would look like it
  * shipped and never once fire.
+ *
+ * These synthetic fixtures corroborate the conclusion, but the AUTHORITATIVE
+ * figure is production ground truth: `data/samurai-paper.sqlite`'s
+ * `llm_spend` table (stage='debate', n=383 rows across 49 debates,
+ * 2026-09-02 sample), which is the provider's own reported token count, not
+ * a character-count estimate. That measurement: bull/bear input averages
+ * ~1,623 tokens (max 1,721); mediator input averages ~2,191 (max 2,360) —
+ * the largest of the three debate-stage call shapes it distinguishes (a
+ * fourth, `detectDisagreements`, averages ~1,088 and is smaller still). The
+ * highest observed call (2,360) is ~58% of the 4,096 minimum: comfortably
+ * under it, but with roughly 1.7x of headroom left rather than "half" —
+ * see the `renderMessageContent` comment in `anthropic-client.ts` for the
+ * full finding.
  */
 import { describe, expect, it } from 'vitest';
 import { type PersonaResponse, runBullPersona, runMediatorPersona } from '../personas.js';
 import type { AnalystView } from '../types.js';
+import { renderMessageContent } from './anthropic-client.js';
 import { MockLlmClient } from './mock-client.js';
 
 /** Anthropic's minimum cacheable prompt length for the pinned debate model. */
@@ -36,11 +50,20 @@ function estimatedTokens(text: string): number {
   return Math.round(text.length / 4);
 }
 
+/**
+ * Reads `renderMessageContent(client.requests[0])`, NOT `client.requests[0].prompt`
+ * — production sends the former (`anthropic-client.ts`'s `AnthropicLlmClient.attempt`
+ * calls `callWithTimeout(renderMessageContent(request), ...)`), which appends the
+ * serialized, `wrapUntrusted`-wrapped `analyst_views` context after `.prompt`. Reading
+ * `.prompt` alone measured only part of what actually goes over the wire.
+ */
 async function bullPrompt(views: AnalystView[]): Promise<string> {
   const client = new MockLlmClient();
   client.enqueueText(JSON.stringify({ stance: 'bullish', rationale: 'r' }));
   await runBullPersona(client, { trace_id: 't', analyst_views: views });
-  return client.requests[0]?.prompt as string;
+  const request = client.requests[0];
+  if (request === undefined) throw new Error('MockLlmClient recorded no request');
+  return renderMessageContent(request);
 }
 
 async function mediatorPrompt(views: AnalystView[]): Promise<string> {
@@ -54,16 +77,22 @@ async function mediatorPrompt(views: AnalystView[]): Promise<string> {
     bullResponse,
     bearResponse,
   });
-  return client.requests[0]?.prompt as string;
+  const request = client.requests[0];
+  if (request === undefined) throw new Error('MockLlmClient recorded no request');
+  return renderMessageContent(request);
 }
 
 /**
  * A deliberately GENEROUS fixture — 5 analyst views (production runs 3:
  * technical, fundamental, sentiment) with verbose multi-line `key_points`,
- * well past what any analyst in this repo actually emits. If even this
- * pessimistic shape stays under the cache minimum, the real production
- * shape — measured directly below via the paper-soak store's own numbers —
- * is not a borderline case.
+ * well past what any analyst in this repo actually emits. It lands above the
+ * production bull/bear max (measured below) but, for the mediator shape,
+ * slightly under the production max — the paper-soak store's own numbers
+ * (`llm_spend`, stage='debate') are the authoritative figure either way,
+ * being real provider-reported token counts rather than this file's
+ * chars/4 estimate. Both this fixture and the production max stay under the
+ * cache minimum, but not by a huge factor — the production max (2,360) is
+ * ~58% of the 4,096 minimum, not a wide margin.
  */
 function generousViews(): AnalystView[] {
   const analystTypes = ['technical', 'fundamental', 'sentiment', 'technical', 'fundamental'];
@@ -112,9 +141,10 @@ describe('prompt-caching stable-prefix measurement (#1010)', () => {
       `#1010: generous bull/bear-shaped request: ${prompt.length} chars, ~${tokens} tokens`,
     );
 
-    // Production (paper-soak store, llm_spend, stage='debate', 2026-09-02
-    // sample) measures bull/bear input at ~1,575-1,576 tokens — this fixture
-    // is intentionally heavier than that and still falls well short.
+    // Production (paper-soak store, llm_spend, stage='debate', n=383 rows
+    // across 49 debates, 2026-09-02 sample) measures bull/bear input at
+    // ~1,623 tokens average, 1,721 max — this fixture is intentionally
+    // heavier than that and still falls well short of the minimum.
     expect(tokens).toBeLessThan(HAIKU_4_5_CACHE_MINIMUM_TOKENS);
   });
 
@@ -126,8 +156,14 @@ describe('prompt-caching stable-prefix measurement (#1010)', () => {
       `#1010: generous mediator-shaped request: ${prompt.length} chars, ~${tokens} tokens`,
     );
 
-    // Production measures mediator input at ~2,100-2,150 tokens — again below
-    // this fixture, and still well under the 4,096-token minimum.
+    // Production measures mediator input at ~2,191 tokens average, 2,360
+    // max — the highest of any debate-stage call shape measured, and the
+    // figure closest to the minimum: ~58% of it, comfortably under but not
+    // by a wide margin. That production max is slightly ABOVE this fixture's
+    // chars/4 estimate here, which is why the production figure (real
+    // provider-reported tokens, not a character-count estimate) is the
+    // authoritative one — see the module doc comment. Both still stay under
+    // the 4,096-token minimum.
     expect(tokens).toBeLessThan(HAIKU_4_5_CACHE_MINIMUM_TOKENS);
   });
 });

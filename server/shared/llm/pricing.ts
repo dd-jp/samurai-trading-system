@@ -158,10 +158,14 @@ export const MODEL_RATES: Readonly<Record<string, ModelRate>> = Object.freeze({
  * Haiku 4.5 requires 4,096 input tokens before Anthropic caches anything
  * (platform.claude.com/docs/en/build-with-claude/prompt-caching, fetched
  * 2026-09-02), and the debate engine's actual requests — measured against
- * the paper-soak store — average ~1,575-2,150. See the request-builder
- * comment on `renderMessageContent` in `debate-engine/llm/anthropic-client.ts`
- * for the full finding; this multiplier stays inert for that reason too, not
- * only the per-vendor pricing gap above.
+ * the paper-soak store (`llm_spend`, stage='debate', n=383, 2026-09-02
+ * sample) — average ~1,623 (bull/bear) to ~2,191 (mediator) tokens, topping
+ * out at a measured max of 2,360. That is comfortably under the minimum but
+ * not by a wide factor — ~58% of it, roughly 1.7x of headroom, not "half".
+ * See the request-builder comment on `renderMessageContent` in
+ * `debate-engine/llm/anthropic-client.ts` for the full finding; this
+ * multiplier stays inert for that reason too, not only the per-vendor pricing
+ * gap above.
  *
  * The 1-hour-TTL write multiplier (2x) is absent for the same reason it always
  * was: nothing requests a 1h TTL, and the usage block does not distinguish the
