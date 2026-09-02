@@ -52,6 +52,25 @@ MAX_REVIEW_BODY_CHARS = 63000
 TRANSIENT_MAX_ATTEMPTS = 3
 TRANSIENT_BACKOFF_SECONDS = (20, 90)
 
+# Severities that earn a line-anchored comment. Everything else the model
+# labels — `low`, in the schema — is still reported, but folded into the body
+# rather than spent as an inline comment: the volume of low-severity inline
+# comments is what makes a re-reviewed PR unreadable. NOT a drop: a gated
+# finding gets its own body section, and the section says why it isn't inline.
+#
+# An unrecognised or missing severity is treated as inline-worthy, never as
+# `low`. The model's JSON is untrusted input, and a parse miss that silently
+# demoted a `high` finding into a body bullet would be the same class of quiet
+# lie the coverage banner exists to prevent.
+INLINE_SEVERITIES = frozenset({"high", "medium"})
+
+# Marker appended to every inline comment body so a later run can recognise
+# its own prior findings. Keyed on the REVIEWER, not the posting identity:
+# the matrix runs deepseek and kimi concurrently, and matching on the bot
+# login would let whichever leg posts first suppress the other leg's findings
+# on the same line. HTML comment, so it renders invisibly on GitHub.
+REVIEW_MARKER_TEMPLATE = "<!-- ai-review:{reviewer} -->"
+
 # Blast-radius tiers, based on this repo's src/ layout and the live-money
 # constraints in CLAUDE.md (persistence, order execution, risk management).
 HIGH_RISK_PREFIXES = ("src/execution/", "src/risk-manager/", "src/shared/store/")
@@ -908,6 +927,8 @@ def review_diff(
     max_chars: int = MAX_SLICE_CHARS,
     max_slices: int = MAX_SLICES,
     extra_skipped: Sequence[str] = (),
+    reviewer: str | None = None,
+    existing_anchors: Sequence[tuple[str, int]] | set[tuple[str, int]] = (),
     **model_kwargs,
 ) -> dict:
     """Review a whole diff, in slices, and return the payload to post.
@@ -966,6 +987,8 @@ def review_diff(
             diff_text,
             {"summary_markdown": empty_summary, "inline_comments": [], "verdict": None},
             coverage=ReviewCoverage(0, 0, tuple(skipped)),
+            reviewer=reviewer,
+            existing_anchors=existing_anchors,
         )
 
     results: list[dict] = []
@@ -1052,7 +1075,13 @@ def review_diff(
     )
     # The FULL diff, not the slice: a comment is anchorable if the line is in
     # any hunk of the PR, and the merged comments span every slice.
-    return build_review_payload(diff_text, merged, coverage=coverage)
+    return build_review_payload(
+        diff_text,
+        merged,
+        coverage=coverage,
+        reviewer=reviewer,
+        existing_anchors=existing_anchors,
+    )
 
 
 def parse_model_output(raw: str | None) -> dict | None:
@@ -1326,13 +1355,65 @@ def call_model(
     return parsed
 
 
+def comment_marker(reviewer: str) -> str:
+    """The invisible tag stamped on this reviewer's inline comments."""
+    return REVIEW_MARKER_TEMPLATE.format(reviewer=reviewer)
+
+
+def normalise_severity(value) -> str:
+    """Lower-case a model-supplied severity, or "" for anything not a string.
+
+    The model's JSON is untrusted: `severity` has arrived as None and as
+    non-string values. Everything unrecognised normalises to "", which the
+    gate treats as inline-worthy rather than as `low`."""
+    return value.strip().lower() if isinstance(value, str) else ""
+
+
+def existing_comment_anchors(comments: Sequence[dict], reviewer: str) -> set[tuple[str, int]]:
+    """`(path, line)` pairs this reviewer already commented on, and that GitHub
+    can STILL anchor to the current diff.
+
+    `line` goes null on a comment GitHub has marked outdated — the code under
+    it changed, and the original position moves to `original_line`. Those are
+    deliberately NOT collected: if the line has moved on, the finding deserves
+    re-posting rather than silent suppression.
+
+    Only RIGHT-side comments count, because that is the only side this script
+    ever creates."""
+    anchors: set[tuple[str, int]] = set()
+    marker = comment_marker(reviewer)
+    for c in comments:
+        if not isinstance(c, dict):
+            continue
+        body = c.get("body")
+        if not isinstance(body, str) or marker not in body:
+            continue
+        # `side` is absent on some historical comments; absent means RIGHT,
+        # which is what this script posts. Only an explicit LEFT is excluded.
+        if c.get("side") not in (None, "RIGHT"):
+            continue
+        path = c.get("path")
+        line = c.get("line")
+        if isinstance(path, str) and isinstance(line, int) and not isinstance(line, bool):
+            anchors.add((path, line))
+    return anchors
+
+
 def build_review_payload(
-    diff_text: str, model_result: dict, coverage: ReviewCoverage | None = None
+    diff_text: str,
+    model_result: dict,
+    coverage: ReviewCoverage | None = None,
+    *,
+    reviewer: str | None = None,
+    existing_anchors: Sequence[tuple[str, int]] | set[tuple[str, int]] = (),
 ) -> dict:
     valid_lines = commentable_lines(diff_text)
+    anchors = set(existing_anchors)
 
     accepted = []
     rejected = []
+    gated_low = []
+    suppressed = []
     for c in model_result["inline_comments"]:
         file = c.get("file")
         line = c.get("line")
@@ -1340,10 +1421,19 @@ def build_review_payload(
         if not file or not isinstance(line, int):
             rejected.append(c)
             continue
-        if line in valid_lines.get(file, set()):
-            accepted.append({"path": file, "line": line, "side": "RIGHT", "body": body})
-        else:
+        if line not in valid_lines.get(file, set()):
             rejected.append(c)
+            continue
+        # Severity gate BEFORE dedup: a `low` finding never becomes an inline
+        # comment, so it never earns an anchor a later run would match on.
+        if normalise_severity(c.get("severity")) == "low":
+            gated_low.append(c)
+            continue
+        if (file, line) in anchors:
+            suppressed.append(c)
+            continue
+        marked = f"{body}\n\n{comment_marker(reviewer)}" if reviewer else body
+        accepted.append({"path": file, "line": line, "side": "RIGHT", "body": marked})
 
     summary = model_result["summary_markdown"] or ""
     if rejected:
@@ -1351,6 +1441,31 @@ def build_review_payload(
         for c in rejected:
             sev = c.get("severity", "?")
             summary += f"- **{c.get('file', '?')}:{c.get('line', '?')}** ({sev}): {c.get('body', '')}\n"
+
+    # Distinct section, distinct wording: these COULD have anchored inline and
+    # were held back on severity. Filing them under the "could not be
+    # anchored" heading above would misreport why they are in the body.
+    if gated_low:
+        summary += (
+            "\n\n---\n_Low-severity findings, reported here rather than as inline "
+            "comments:_\n"
+        )
+        for c in gated_low:
+            summary += f"- **{c.get('file', '?')}:{c.get('line', '?')}**: {c.get('body', '')}\n"
+
+    # Disclosed, never silent. A body that simply lost N findings reads exactly
+    # like a broken reviewer — the #409/#567 failure shape — and an operator
+    # comparing two runs of the same PR needs to see that the earlier review
+    # still carries them.
+    if suppressed:
+        files = sorted({str(c.get("file", "?")) for c in suppressed})
+        summary += (
+            f"\n\n---\n_{len(suppressed)} finding(s) suppressed as already flagged on an "
+            f"earlier review of this PR ({', '.join(md_code(f) for f in files[:10])}"
+            + (" …" if len(files) > 10 else "")
+            + "). They stand on that review; this run re-read the same lines and "
+            "did not repeat them._\n"
+        )
 
     verdict = model_result["verdict"]
 
@@ -1366,12 +1481,19 @@ def build_review_payload(
     # findings all anchor inline — or which found nothing — used to reach
     # GitHub as a zero-length body (#409: BODYLEN=0 rows on #396 and #404).
     # A reader can't tell that apart from a broken reviewer.
-    if not summary.strip():
+    #
+    # Keyed on the MODEL's summary being blank, not on the accumulated body:
+    # the severity and suppression sections above are appended before this
+    # point, so testing `summary` would silently drop the verdict/count line
+    # for exactly the inline-only reviewer that needs it as soon as one
+    # low-severity or suppressed finding existed.
+    if not (model_result["summary_markdown"] or "").strip():
         anchored = f"{len(accepted)} inline comment{'' if len(accepted) == 1 else 's'}"
-        summary = (
+        placeholder = (
             f"_No prose summary from this reviewer (inline-only mode). "
             f"Verdict: **{verdict or 'none parsed'}**; {anchored} posted._"
         )
+        summary = f"{placeholder}{summary}" if summary.strip() else placeholder
 
     # The disclosure leads the body — buried at the bottom it would be read
     # after the reader has already formed a view from the findings above it.
