@@ -11,6 +11,7 @@
  * `dashboard` scripts, which would each start their own `tsc`.
  */
 import { pathToFileURL } from 'node:url';
+import { JsonLogger } from '../orchestrator/logger.js';
 import { installSupervisorContinueOnFault, watchSupervisorStdout } from './fault-guard.js';
 import { startSupervisor } from './supervisor.js';
 
@@ -24,7 +25,17 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
   // separate time.
   watchSupervisorStdout();
 
-  console.log('Samurai serve → starting orchestrator + dashboard. Ctrl+C to stop both.');
+  // #1035: structured like every other line the system emits. Stdout-only
+  // (`new JsonLogger()`), not `buildEntrypointLogger` — see the reasoning in
+  // `service-api/index.ts`: this process supervises the orchestrator, which
+  // owns the rotating file, and a second rotator on the same path would race
+  // it.
+  new JsonLogger().log({
+    trace_id: 'startup',
+    stage: 'supervisor',
+    level: 'info',
+    message: 'Samurai serve → starting orchestrator + dashboard. Ctrl+C to stop both.',
+  });
 
   let supervisor: ReturnType<typeof startSupervisor>;
   try {

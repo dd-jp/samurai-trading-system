@@ -45,6 +45,7 @@
  */
 import { type ChildProcess, spawn as nodeSpawn } from 'node:child_process';
 import { openSharedStore, sharedStorePath } from '../../shared/store/index.js';
+import { JsonLogger } from '../orchestrator/logger.js';
 
 /** The subset of `child_process.spawn` this module uses, so tests can inject. */
 export type SpawnFn = (command: string, args: readonly string[]) => ChildProcess;
@@ -147,13 +148,33 @@ const REQUESTED_STOP: ReadonlySet<string> = new Set(['SIGINT', 'SIGTERM']);
  * a `spawn` that throws propagates too, but only after signalling whichever
  * child it had already launched.
  */
+/**
+ * The default log sink's logger (#1035). Module-level so one supervisor run
+ * has one logger, and stdout-only for the reason `service-api/index.ts`
+ * documents: the orchestrator this process supervises owns the rotating file.
+ */
+const supervisorLogger = new JsonLogger();
+
 export function startSupervisor(effects: SupervisorEffects = {}): Supervisor {
   const spawn: SpawnFn =
     effects.spawn ?? ((command, args) => nodeSpawn(command, [...args], { stdio: 'inherit' }));
   const execPath = effects.execPath ?? process.execPath;
   const scripts = effects.scripts ?? DEFAULT_SCRIPTS;
   const nodeArgs = effects.nodeArgs ?? DEFAULT_NODE_ARGS;
-  const log = effects.log ?? ((message: string) => console.error(message));
+  // #1035: the default sink is now structured, so a supervisor line is
+  // parseable and stage-filterable like every other line. Still a `(message:
+  // string) => void` seam, so every injected `effects.log` in the tests is
+  // unaffected.
+  const log =
+    effects.log ??
+    ((message: string) => {
+      supervisorLogger.log({
+        trace_id: 'startup',
+        stage: 'supervisor',
+        level: 'warn',
+        message,
+      });
+    });
 
   (effects.prepare ?? migrateSharedStore)();
 

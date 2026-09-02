@@ -294,6 +294,16 @@ interface AuditLogEntry {
 - Mines the JSONB pattern from sentient-trader (rich per-decision snapshots) for the row shape; storage stays the project's existing shared SQLite (ADR-0001), not a separate database.
 - This table is additive to the shared store schema already accumulated by other specs (`bars`/`latest_mark` — MDS; `OpenPosition`/`Fill`/`ClosedTrade` — Execution; `config_trials` — cost-model; weights/params/thresholds — Feedback Loop), alongside the `current_tick` row this spec also adds (Tick Runner module, above) — both are Orchestrator-owned additions to the same shared store.
 
+**Amendment 2026-09-02 (#1035) — payload redaction, a `debug` level, and `llm_call_log`.**
+
+Three additions to this module, all within the responsibilities above.
+
+1. **`payload` is redacted centrally**, in `formatLogLine`, by a structural walker over the object graph (`redact-payload.ts`) rather than a regex over the serialized string — the credential pattern's value class excludes `"` and `}` but not `{`, so applying it textually turns `{"auth":{"scheme":"basic"}}` into unparseable JSON, and an unreadable line defeats every reader an operator has. The walker is depth- and node-bounded and cannot throw: `formatLogLine` is what the both-sinks-dead path builds the run's final stderr trace from, so a throw there would convert a logging degradation into silence.
+
+2. **`LogEntry.level` gains `'debug'`**, filterable by `SAMURAI_LOG_LEVEL`. It is the *only* filterable level. `warn` and `error` carry the sink-degradation notices, so an ordered threshold of the usual kind would let an operator configure away the evidence that logging itself is failing. The filter returns before the sink-reachability check, so a suppressed line can never raise the "reached no sink" error on a healthy run.
+
+3. **`llm_call_log` (migration 0039)** — a new Orchestrator-owned table holding the prompt sent and the text returned for every metered LLM call, keyed by `trace_id` (to the tick) and `debate_id` (to the decision), with `spend_id` joining to `llm_spend`. It closes the gap this module's own `audit_log` design creates: digests establish *that* a stage ran on given inputs and cannot reconstruct *what* was asked or answered, and `llm_spend` records every fact about a call except its content. Separate from `llm_spend` because `SqliteSpendCap` sums that table all-time on the trading path and the dashboard range-scans it, and neither reads text. Text is masked for known credential syntaxes and capped (16 KB prompt, 4 KB response) at the write boundary. Gated by `SAMURAI_LLM_CAPTURE`, default on, measured at ~7 MB per 14-day soak. A pruning policy is deliberately left open — SQLite has no rotation analogue, and the retention question is not settled by this change.
+
 ### Module: Heartbeat
 
 **Responsibilities**

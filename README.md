@@ -159,6 +159,15 @@ A malformed value is refused at startup rather than defaulted. An **unwritable**
 
 Retention is deliberately short. These files are the *diagnostic* record; the durable trade record (every signal, order and fill, and so the UK CGT disposal history) is SQLite, and nothing in it depends on a log generation surviving.
 
+#### Optional — verbosity and LLM call capture
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SAMURAI_LOG_LEVEL` | `info` | `debug` also writes `debug`-level lines. It is the **only** filterable level: `warn` and `error` always write, because they carry the sink-degradation notices a run's last trace depends on, and a verbosity setting must not be able to configure the process into silence |
+| `SAMURAI_LLM_CAPTURE` | on | The prompt sent and the text returned for every metered LLM call, persisted to `llm_call_log` and written on one `llm call:` log line alongside model, both token counts, `cost_usd` and latency. `off` disables. Measured cost of leaving it on: ~7 MB per 14-day soak |
+
+Capture answers "what was this call actually asked, and what did it say" — `llm_spend` already records everything *about* a call, and `audit_log` holds digests from which no value can be reconstructed. Text is masked for known credential syntaxes and capped (16 KB prompt, 4 KB response) on the way in. Treat it as a capture, not a scrub: the masker is deliberately narrow, and prompts embed news bodies and analyst free text.
+
 **Attended vs unattended (`SAMURAI_ALERTS`).** Five operator alerts — the dead-man's-switch heartbeat, an orphaned `go` verdict found at restart, a fill the venue will not price, a kill-threshold breach, and a proposed risk-threshold loosening — are the only warning an operator gets that the system has stopped or is stuck.
 
 - `SAMURAI_ALERTS=telegram` pushes them to Telegram: the escalations to `TELEGRAM_CHAT_ID`, and the heartbeat to `TELEGRAM_HEARTBEAT_CHAT_ID` on its own (#342), so muting the beat cannot mute an escalation. **This is the posture an unattended run requires**, and the only one appropriate for the 14-day soak.
