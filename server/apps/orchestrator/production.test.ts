@@ -2621,6 +2621,153 @@ describe('buildProductionOrchestrator', () => {
   });
 
   /**
+   * #987 item 1 — the case above proves `buildBenchmarkDataSource` itself is
+   * universe-independent, but it INJECTS `benchmarkSeriesSource`, so it can
+   * never notice `production.ts`'s wiring reverting to the pre-#986 defect
+   * (`benchmarkSeries` rebuilt from `marketData`/`buildAlpacaDataSource`
+   * instead of `components.benchmarkSeries`/`buildBenchmarkDataSource`).
+   * Verified red-first: temporarily reverting that one construction back to
+   * `new MarketDataBenchmarkSeriesSource(marketData)` fails this case (rows
+   * come back empty — the SPY rejection happens in a fire-and-forget path and
+   * does not surface directly in the assertion diff) while leaving every
+   * other case in this file green, including the injected-override case
+   * directly above.
+   *
+   * So this drives the REAL default wiring end to end: an LSE-only universe,
+   * no `benchmarkSeriesSource` override, and a real (lazily-built)
+   * `AlpacaHttpDataClient('stocks', ...)` underneath — with only `fetch`
+   * itself stubbed, at the HTTP boundary `buildDefaultAlpacaDataClient`
+   * ultimately calls, the same technique `alpaca-http-client.test.ts` and
+   * the OHLCV-failover block below use. `ALPACA_API_KEY`/`_SECRET` are
+   * placeholders only, matching the #734 LSE-leg block's pattern above —
+   * nothing here makes a real request.
+   */
+  describe('the outside benchmarks survive the LSE cutover through the DEFAULT wiring (#987)', () => {
+    const DAY_MS = 24 * 60 * 60 * 1_000;
+    const LSE_UNIVERSE = [
+      { asset: 'LQQ3', asset_class: 'stocks' as const },
+      { asset: '3SPY', asset_class: 'stocks' as const },
+    ];
+
+    beforeEach(() => {
+      vi.stubEnv('ALPACA_API_KEY', 'dummy-key-not-a-credential');
+      vi.stubEnv('ALPACA_API_SECRET', 'dummy-secret-not-a-credential');
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.unstubAllEnvs();
+    });
+
+    const lseClient = (): LseMarkClient => ({
+      vendor: 'fake-lse-vendor',
+      getBars: vi.fn(async () => ({ currency: 'GBp', candles: [] })),
+      getLatestQuote: vi.fn(async () => ({ price: 31_240, currency: 'GBp', observed_at: START })),
+    });
+
+    /**
+     * Answers `GET /v2/stocks/{symbol}/bars` with one daily close per
+     * calendar day spanning the request's own `start`/`end` — the only
+     * endpoint this path reaches (`getDailyCloses` never marks, so
+     * `/quotes/latest` is never requested). A dip partway through for the
+     * same reason `FakeBenchmarkSeries` above dips: a monotonic series has a
+     * drawdown of exactly 0, indistinguishable from a defaulted column.
+     */
+    function stocksBarsFetchMock() {
+      return vi.fn(async (url: string) => {
+        const parsed = new URL(url);
+        if (!parsed.pathname.includes('/bars')) {
+          throw new Error(`unexpected fetch in test: ${url}`);
+        }
+        const startParam = parsed.searchParams.get('start');
+        const endParam = parsed.searchParams.get('end');
+        if (startParam === null || endParam === null) {
+          throw new Error(`expected start/end query params in test: ${url}`);
+        }
+        const start = new Date(startParam);
+        const end = new Date(endParam);
+        const bars: Array<{ t: string; o: number; h: number; l: number; c: number; v: number }> =
+          [];
+        let close = 100;
+        // `AlpacaHttpClient.getBars` widens `start` by `BUFFER_MULTIPLIER` (8x)
+        // and then trims the response to the most recent `limit` rows via
+        // `.slice(-limit)` — so a dip indexed off `start` in a wide request
+        // (as this fixture's was) gets sliced away entirely before it ever
+        // reaches `buildOutsideBenchmark`, and never shows up in the computed
+        // series. Index off `end` instead: `DIP_DAYS_BEFORE_END` days before
+        // `end` survives the slice (well inside the last `limit` rows) AND
+        // lands inside the comparison window, not the anchor pad before it
+        // (`ANCHOR_PAD_BARS` days older than the window start).
+        const DIP_DAYS_BEFORE_END = 10;
+        for (let t = start.getTime(); t <= end.getTime(); t += DAY_MS) {
+          const daysBeforeEnd = Math.round((end.getTime() - t) / DAY_MS);
+          close *= daysBeforeEnd === DIP_DAYS_BEFORE_END ? 0.97 : 1.001;
+          bars.push({
+            t: new Date(t).toISOString(),
+            o: close,
+            h: close + 1,
+            l: close - 1,
+            c: close,
+            v: 1_000,
+          });
+        }
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          headers: new Headers(),
+          json: async () => ({ bars }),
+          text: async () => JSON.stringify({ bars }),
+        } as Response;
+      });
+    }
+
+    function lseFeedbackOnlyConfig(overrides: Partial<ProductionConfig> = {}): StubConfig {
+      return stubConfig(db, {
+        universe: LSE_UNIVERSE,
+        lseMarkClient: lseClient(),
+        tickIntervalMs: 48 * 60 * 60 * 1_000,
+        heartbeatIntervalMs: 48 * 60 * 60 * 1_000,
+        fillPollIntervalMs: NO_FILL_POLL_MS,
+        traderConfig: {
+          ...DEFAULT_TRADER_CONFIG,
+          flatten_before_close_ms: MIN_TICKS_INSIDE_FLATTEN_WINDOW * 48 * 60 * 60 * 1_000,
+        },
+        feedback: {
+          intervalMs: 1_000,
+          config: paperStartingProfile('paper').feedback?.config as FeedbackConfig,
+        },
+        ...overrides,
+      });
+    }
+
+    it('persists SPY/AGG-derived benchmark rows through the real orchestrator, with no benchmarkSeriesSource override', async () => {
+      vi.stubGlobal('fetch', stocksBarsFetchMock());
+      const logger = recordingLogger();
+      const orchestrator = buildProductionOrchestrator(lseFeedbackOnlyConfig({ logger }));
+
+      await orchestrator.start();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await orchestrator.stop();
+
+      const rows = db
+        .prepare('SELECT benchmark, max_drawdown_pct FROM outside_benchmark_samples')
+        .all() as { benchmark: string; max_drawdown_pct: number }[];
+
+      expect(rows.map((row) => row.benchmark).sort()).toEqual(['sixty_forty', 'spy']);
+      expect(rows.every((row) => Number.isFinite(row.max_drawdown_pct))).toBe(true);
+      // The fixture dips `DIP_DAYS_BEFORE_END` days before `end` so drawdown !=
+      // 0 — assert that for the `spy` row so this can't pass on a defaulted 0
+      // column.
+      expect(rows.find((row) => row.benchmark === 'spy')?.max_drawdown_pct).toBeGreaterThan(0);
+
+      expect(
+        logger.entries.filter((entry) => entry.message === 'outside benchmarks computed'),
+      ).toHaveLength(1);
+    });
+  });
+
+  /**
    * #366 — `ProductionConfig.feedback` had no supplier, so the `#327` warn
    * above fired on every real paper start and the daily timer never began. A
    * 14-day soak (#238) therefore ran 5 of the 6 pipeline stages while looking
@@ -4105,10 +4252,13 @@ describe('buildProductionOrchestrator', () => {
       // `equityCalendarFor` returns `LseRegularHoursCalendar` when
       // `mode === 'live'`. Accepting a calendar here would re-couple the
       // benchmarks to the live configuration through the back door: US bars
-      // normalized against London sessions and `LSE_HOLIDAYS`. A daily fixture
-      // measured the same under both calendars, so the coupling is latent, not
-      // a live failure — closed structurally rather than argued about. The
-      // option does not exist, so it cannot come back by accident.
+      // normalized against London sessions and `LSE_HOLIDAYS` — a REAL
+      // divergence, not a latent one. `LSE_HOLIDAYS` and `US_HOLIDAYS`
+      // (trading-calendar.ts) disagree on several civil dates, each one a
+      // daily `isTradingDay` call would answer differently under the two
+      // calendars. Closed structurally rather than by any empirical
+      // agreement — the option does not exist, so it cannot come back by
+      // accident.
       expect(() =>
         buildBenchmarkDataSource({
           // @ts-expect-error — no `calendar` option: the US equities session is

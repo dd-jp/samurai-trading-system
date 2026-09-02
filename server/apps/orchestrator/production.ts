@@ -711,10 +711,9 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // the data source.
   const marketDataMode = config.mode === 'backtest' ? 'backtest' : 'live';
   /**
-   * ONE store instance, shared by the pipeline's service and the benchmark
-   * service below (#981). Two instances over one `config.db` would be two
-   * writers to `market_data` for no gain — the store is keyed by instrument
-   * and the two services never read the same symbol.
+   * The PIPELINE's own store instance — NOT shared with the benchmark
+   * service below, which gets its own (`benchmarkMarketDataStore`). See that
+   * instance's doc for why the two writers' shared key space is safe.
    */
   const marketDataStore = new SqliteMarketDataStore(config.db);
   const marketData: MarketDataService = new MarketDataServiceImpl(
@@ -724,6 +723,42 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     marketDataStore,
   );
 
+  /**
+   * The benchmark path's OWN store instance — deliberately not
+   * `marketDataStore` above, mirroring the data-SOURCE independence #986
+   * already established for this same pair of services.
+   *
+   * It is still the same `bars` table, over the same `config.db`, with the
+   * same `(instrument, timeframe, open_time)` primary key and no
+   * calendar/source discriminator column — `SqliteMarketDataStore` has no
+   * table-name option to give the two instances separate storage, so this
+   * does not add row-level isolation by itself. What makes the shared key
+   * space SAFE is `instrument`, which is part of that PK: `marketData` above
+   * can never write a `'SPY'` or `'AGG'` row once the universe is LSE-only
+   * (#751) — `LseMarkDataSource#assertTradeable` (lse-mark-source.ts) throws
+   * `NonTradeableInstrumentError` for both, since neither is a pool
+   * `lse_ticker`, before any bar reaches this store — and this benchmark
+   * path is the ONLY writer of `'SPY'`/`'AGG'` rows by construction
+   * (`buildBenchmarkDataSource` is a fixed two-symbol port, never the
+   * universe). So post-cutover the two writers are provably disjoint on the
+   * one column a collision would need to share.
+   *
+   * The residual gap is PRE-cutover: `config.mode === 'live'` with a universe
+   * that still trades `'SPY'` directly (the pre-#751 default) sends the LIVE
+   * path's own `AlpacaDataSource` through `equityCalendarFor(config)`, which
+   * is `LseRegularHoursCalendar` in live mode (`equityCalendarFor`'s own
+   * doc) — so `marketData` and this benchmark path could both write
+   * `'SPY'`/`(timeframe, open_time)` rows, normalized against two DIFFERENT
+   * calendars (see `buildBenchmarkDataSource`'s doc for how far those two
+   * tables actually diverge). That collision is not new here and not
+   * introduced by #987: it exists on `main` today, is orthogonal to the
+   * cutover this ticket is ahead of, and this system has not gone live
+   * (ADR-0004 §5) — so a schema change (a discriminator column, needing a
+   * migration) is deferred as disproportionate to a risk with no live
+   * exposure yet. Tracked in #989 — reopen once #751 lands, or before
+   * `mode: 'live'` ships with a non-LSE universe, whichever comes first.
+   */
+  const benchmarkMarketDataStore = new SqliteMarketDataStore(config.db);
   /**
    * The OUTSIDE BENCHMARKS' own market-data path (#981, under #636) —
    * deliberately NOT `marketData` above.
@@ -755,7 +790,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
         buildBenchmarkDataSource({ rateLimiter: alpacaBucket }),
         clock,
         marketDataMode,
-        marketDataStore,
+        benchmarkMarketDataStore,
       ),
     );
 
