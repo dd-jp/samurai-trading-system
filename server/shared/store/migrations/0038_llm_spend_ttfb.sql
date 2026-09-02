@@ -1,0 +1,45 @@
+-- Time-to-first-byte instrumentation for the debate LLM call (#1012).
+--
+-- THE GAP THIS CLOSES. #1012 measured `latency_ms` (383+ debate calls,
+-- `anthropic/claude-haiku-4.5`): 6.4s mean, 1.9s-28.3s range, a 15x spread on
+-- structurally identical calls not explained by output token count. The
+-- investigation's own "Start here" asked whether that spread is queue wait,
+-- time-to-first-token, or generation — but `latency_ms` (anthropic-client.ts's
+-- `AnthropicLlmClient.attempt`) is ONE wall-clock span around a single
+-- non-streaming `fetch` POST (`nous-chat.ts`'s `nousChat`), so today's data
+-- cannot decompose it: there is no second timestamp anywhere on the call.
+--
+-- WHAT THIS COLUMN IS. `ttfb_ms`: milliseconds between dispatching the POST
+-- and the `fetch()` promise settling (HTTP response headers received),
+-- measured inside `nousChat` around `fetchWithTimeout` alone — BEFORE
+-- `response.json()` reads the body. `latency_ms` (already persisted) covers
+-- headers-received AND the full body read; this column isolates the first
+-- half. The two are measured against independent `Date.now()` calls in two
+-- different functions (`nousChat` vs `AnthropicLlmClient.attempt`), so
+-- `ttfb_ms` can very occasionally read a hair above `latency_ms` from
+-- scheduler jitter between the two clocks — expect near-equality, not a
+-- guaranteed `<=`.
+--
+-- WHAT IT WILL AND WON'T ANSWER. For a non-streaming completions endpoint
+-- that itself buffers the full generation before writing any response bytes
+-- (which Nous's `chat/completions` proxy may or may not do — undocumented,
+-- per the same deferral ADR-0009 already notes for caching), `ttfb_ms` and
+-- `latency_ms` will read almost identical on every call: nearly all of the
+-- latency lands before the first byte, and the body-read remainder (a few KB
+-- of JSON) is negligible. That outcome is itself the finding — it would prove
+-- queue wait, prompt processing and generation are already fused into one
+-- number by the proxy, and further decomposition needs `stream: true`
+-- end-to-end (Nous to Anthropic), not more client-side timestamps. If instead
+-- `ttfb_ms` runs meaningfully below `latency_ms` on the slow tail, that
+-- narrows the gap and is worth a follow-up. Either reading requires live
+-- soak data to accumulate under this column — see #1012's PR for the
+-- existing-data analysis (output-token bucketing, same-debate call adjacency)
+-- that motivated shipping this rather than guessing.
+--
+-- Plain ADD COLUMN, following 0037's convention: additive, nullable, no CHECK
+-- constraint. NULL on every row written before this migration, and on any row
+-- from a wire client that doesn't report it (`AnthropicMessageResponse.ttfb_ms`
+-- is optional, same reasoning as `usage` on that interface: any structural
+-- `AnthropicMessagesClient` implementation may omit it).
+
+ALTER TABLE llm_spend ADD COLUMN ttfb_ms INTEGER;

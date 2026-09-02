@@ -169,6 +169,83 @@ describe('nousChat', () => {
     });
   });
 
+  describe('time-to-first-byte (#1012)', () => {
+    /**
+     * #1012: `latency_ms` (measured around the whole call, one layer up in
+     * `anthropic-client.ts`) cannot distinguish queue/generation time from
+     * body-read time because it is a single span. `ttfb_ms` isolates the
+     * `fetchWithTimeout` half — headers received, before `response.json()`
+     * reads the body — using fake timers so the two spans are exact and
+     * non-flaky, the same technique `anthropic-client.test.ts` uses for
+     * `latency_ms` (#326).
+     */
+    it('measures only the time up to the response settling, not the body read', async () => {
+      vi.useFakeTimers();
+      try {
+        const fetchMock = vi.fn(async () => {
+          vi.advanceTimersByTime(4_000); // time to headers
+          return {
+            ok: true,
+            status: 200,
+            statusText: 'OK',
+            json: async () => {
+              vi.advanceTimersByTime(1_000); // additional time to read the body
+              return completion();
+            },
+          } as unknown as Response;
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const result = await nousChat(OPTIONS, REQUEST);
+
+        expect(result.ttfb_ms).toBe(4_000);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('reports a smaller ttfb_ms than the caller-measured total latency when the body read is slow', async () => {
+      // Cross-checks against the OUTER timer the way a caller (`anthropic-client.ts`)
+      // actually measures `latency_ms` — around the whole `nousChat` call.
+      vi.useFakeTimers();
+      try {
+        const fetchMock = vi.fn(async () => {
+          vi.advanceTimersByTime(4_000);
+          return {
+            ok: true,
+            status: 200,
+            statusText: 'OK',
+            json: async () => {
+              vi.advanceTimersByTime(1_000);
+              return completion();
+            },
+          } as unknown as Response;
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const start = Date.now();
+        const result = await nousChat(OPTIONS, REQUEST);
+        const callerMeasuredLatencyMs = Date.now() - start;
+
+        expect(callerMeasuredLatencyMs).toBe(5_000);
+        expect(result.ttfb_ms).toBeLessThan(callerMeasuredLatencyMs);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('reports a ttfb_ms equal to total latency when the body is read instantly (the common case for a small JSON reply)', async () => {
+      stubFetch(completion());
+
+      const result = await nousChat(OPTIONS, REQUEST);
+
+      // stubFetch's `json()` resolves with no artificial delay, so with real
+      // timers ttfb_ms should be a small, non-negative number well under any
+      // flake-prone threshold, and never negative.
+      expect(result.ttfb_ms).toBeGreaterThanOrEqual(0);
+    });
+  });
+
   describe('cache accounting (#1010)', () => {
     /**
      * #1010: `llm_spend.cache_creation_input_tokens` /

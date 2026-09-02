@@ -76,6 +76,14 @@ export interface LlmSpendRecord {
   server_tool_calls?: number | undefined;
   /** Wall-clock time for this one API call, as measured by the client. */
   latency_ms: number;
+  /**
+   * Time-to-first-byte (#1012): the `latency_ms` prefix spent waiting for
+   * response headers, before the body is read — see `nous-chat.ts`'s
+   * `NousChatResult.ttfb_ms` doc comment. Undefined for any wire client that
+   * doesn't report it (`AnthropicMessageResponse.ttfb_ms` is optional), and
+   * persisted as NULL in that case — see `migrations/0038_llm_spend_ttfb.sql`.
+   */
+  ttfb_ms?: number | undefined;
   timestamp: Date;
 }
 
@@ -142,8 +150,8 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
              trace_id, stage, debate_id, model,
              input_tokens, output_tokens,
              cache_creation_input_tokens, cache_read_input_tokens,
-             cost_usd, server_tool_calls, latency_ms, timestamp
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             cost_usd, server_tool_calls, latency_ms, ttfb_ms, timestamp
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           entry.trace_id,
@@ -161,6 +169,7 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
           cost,
           toolCalls,
           entry.latency_ms,
+          entry.ttfb_ms ?? null,
           toStoredTimestamp(entry.timestamp),
         );
     } catch (error) {

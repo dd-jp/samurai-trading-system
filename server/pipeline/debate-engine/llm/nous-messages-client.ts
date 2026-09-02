@@ -89,6 +89,9 @@ export class NousMessagesClient implements AnthropicMessagesClient {
       // record an unpriced row, and an unpriced row does not count against the
       // spend cap.
       model: result.model,
+      // #1012: threaded straight through — `nousChat` is the only place that
+      // measures it (see its `ttfb_ms` doc comment).
+      ttfb_ms: result.ttfb_ms,
     };
   }
 }

@@ -91,6 +91,44 @@ describe('NousMessagesClient through AnthropicLlmClient', () => {
   });
 
   /**
+   * End-to-end join for #1012: `nousChat` measures `ttfb_ms`, and it must
+   * survive the trip through `NousMessagesClient.createMessage` and
+   * `AnthropicLlmClient.recordSpend` to reach the spend sink — not just the
+   * wire-level shape `nous-chat.test.ts` already covers.
+   */
+  it('carries ttfb_ms through to the spend sink, distinct from latency_ms', async () => {
+    vi.useFakeTimers();
+    try {
+      const records: LlmSpendRecord[] = [];
+      const fetchMock = vi.fn(async () => {
+        vi.advanceTimersByTime(1_900); // time to headers
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => {
+            vi.advanceTimersByTime(100); // additional time to read the body
+            return {
+              choices: [{ message: { content: '{"stance":"bullish"}' }, finish_reason: 'stop' }],
+              model: 'openai/gpt-5.6-luna',
+              usage: { prompt_tokens: 10, completion_tokens: 5 },
+            };
+          },
+        } as unknown as Response;
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await client({ record: (entry) => records.push(entry) }).complete(request());
+
+      expect(records).toHaveLength(1);
+      expect(records[0]?.ttfb_ms).toBe(1_900);
+      expect(records[0]?.latency_ms).toBe(2_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
    * The whole reason `NousTruncatedError` exists.
    *
    * `retry.maxAttempts` is 3 here. A malformed response WOULD be retried three

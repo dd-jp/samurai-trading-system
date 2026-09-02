@@ -71,6 +71,14 @@ export interface AnthropicMessageResponse {
    * pricing, so the meter bills what ran rather than what was asked for.
    */
   model?: string;
+  /**
+   * Time-to-first-byte (#1012), as measured by the wire client — see
+   * `nous-chat.ts`'s `NousChatResult.ttfb_ms` doc comment for exactly what it
+   * spans. Optional for the same reason `usage` is: `AnthropicMessagesClient`
+   * is structural, and requiring this field would break every test double in
+   * this suite that predates #1012 and returns bare `content`.
+   */
+  ttfb_ms?: number;
 }
 
 /**
@@ -314,6 +322,7 @@ export class AnthropicLlmClient implements LlmClient {
         model: response.model ?? this.config.model,
         usage: response.usage,
         latency_ms,
+        ttfb_ms: response.ttfb_ms,
         timestamp: new Date(),
       });
     } catch {
