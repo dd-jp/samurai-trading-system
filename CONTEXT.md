@@ -7,7 +7,7 @@ No implementation details here. Just terms, relationships, invariants.
 
 ## Concepts
 
-### Agent Roles (7-stage pipeline)
+### Agent Roles (6-stage pipeline)
 
 **Analyst**
 An agent persona that examines market data through a specific lens (technical, fundamental, sentiment, etc.). Multiple analysts run in parallel. Each produces a view, not a recommendation. Stateless per tick — holds no memory across ticks. A pure function of its inputs: given data (from Market Intelligence and the Market Data Service) plus its current weight, it emits a weight-blind raw view. Any rolling/windowed features it needs are supplied by upstream data services, never computed and held inside the analyst.
