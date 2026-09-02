@@ -2237,14 +2237,27 @@ export function readSmokeObservations(
     verdicts: db
       .prepare('SELECT trace_id, instrument, status, no_go_reason FROM verdict_log ORDER BY rowid')
       .all() as SmokeObservations['verdicts'],
+    // #1028: ordered by content (`arm`/`idempotency_key`/`leg`), not `rowid`.
+    // `rowid` reflects insertion order, which for these two tables is
+    // insertion-timing-dependent — `open_positions` rows are written by
+    // whichever arm's Trader stage reaches the store first, and `fills`
+    // rows are written by whichever arm's independently-scheduled
+    // `startFillSync()` poll ingests first (production.ts). Both races are
+    // real but harmless to outcome; a content-based order makes the
+    // readback describe *what* was recorded rather than *when*, so
+    // `runSmoke()`'s determinism check compares stable results instead of
+    // an accidental scheduling order.
     positions: db
       .prepare(
         'SELECT idempotency_key, instrument, side, requested_size, filled_size, avg_entry_price, ' +
-          'order_state, arm FROM open_positions ORDER BY rowid',
+          'order_state, arm FROM open_positions ORDER BY arm, idempotency_key',
       )
       .all() as SmokeObservations['positions'],
     fills: db
-      .prepare('SELECT idempotency_key, leg, price, qty, fee FROM fills ORDER BY rowid')
+      .prepare(
+        'SELECT idempotency_key, leg, price, qty, fee FROM fills ' +
+          'ORDER BY idempotency_key, leg, rowid',
+      )
       .all() as SmokeObservations['fills'],
     closedTrades: db
       .prepare('SELECT idempotency_key, realized_pnl_net, close_reason, arm FROM closed_trades')
@@ -4317,10 +4330,29 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       await waitUntil(() => readSmokeObservations(db).ticks.length >= targetTicks, deadline);
       // Then a bounded grace period for the fill poll to follow the submit —
       // the fill lands on `ingestFills()`, not on the tick that submitted.
-      await waitUntil(
-        () => readSmokeObservations(db).fills.length > 0,
-        Math.min(Date.now() + FILL_GRACE_MS, deadline),
-      );
+      //
+      // #1028: this used to be `fills.length > 0`, which only asks whether
+      // *some* fill has been ingested. The live and control arms each run
+      // their own independently-scheduled `startFillSync()` poll loop
+      // (`production.ts`, `fillSync` / `controlFillSync`), so a single fill
+      // from either arm satisfied the predicate while the other arm's lot
+      // was still sitting at `order_state: 'submitted'`, `filled_size: 0`.
+      // `orchestrator.stop()` then cancelled that arm's not-yet-fired poll
+      // timer (`fill-sync.ts`'s `stop()` is a bare `clearTimeout`, nothing
+      // to await when the timer hasn't fired), and the readback observed
+      // whichever lot won the race — nondeterministically, across runs.
+      //
+      // Every lot the smoke run opens fills fully and synchronously inside
+      // `SimulatedBrokerAdapter.submitBracket()` (`CostModelImpl.fill()` has
+      // no partial-fill modelling), so "drained" means every currently-open
+      // position has actually been ingested, not just that fills exist.
+      await waitUntil(() => {
+        const observations = readSmokeObservations(db);
+        return (
+          observations.positions.length > 0 &&
+          observations.positions.every((position) => position.filled_size > 0)
+        );
+      }, Math.min(Date.now() + FILL_GRACE_MS, deadline));
     } finally {
       // Always drained, including on the deadline path: `stop()` awaits the
       // in-flight tick, and abandoning one mid-pipeline manufactures exactly
