@@ -207,13 +207,15 @@ export const D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION = 0.25;
  * #897's scale-in headroom reserve, as a fraction of the D5 envelope, for both
  * subclasses.
  *
- * One number on both rows rather than one global constant: the field is
- * per-subclass because the two floors it has to clear bite differently at £350
- * and £250 of envelope (see `SubclassBracket.headroom_reserve_fraction` for the
- * arithmetic and the boundary equities), so the granularity has to exist even
- * where the two values currently agree. Both rows are seeded at 0.10 because
- * nothing measured distinguishes them — only the boundary equities do, and
- * those are recorded rather than sized against.
+ * One number on both rows rather than one global constant. The per-subclass
+ * granularity is justified by where the field lives and by what it implies —
+ * NOT by the two values differing today. Every field on `SubclassBracket` is
+ * injected config by this module's stated design, and the same 0.10 applied to
+ * two different envelopes yields boundary equities 40% apart (£285.71 index vs
+ * £400 single-stock — see `SubclassBracket.headroom_reserve_fraction` for that
+ * arithmetic). A module-level constant would make the identical seeding read as
+ * a property of the system rather than the coincidence it is. Both rows are
+ * seeded at 0.10 because nothing measured distinguishes them.
  */
 export const D5_SCALE_IN_HEADROOM_RESERVE_FRACTION = 0.1;
 

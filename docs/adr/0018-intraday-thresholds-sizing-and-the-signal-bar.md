@@ -233,7 +233,7 @@ One factor is added to the sizing conversion, and nothing else:
 risk_fraction = deployment_fraction × stop_pct × (1 − headroom_reserve_fraction)
 ```
 
-`headroom_reserve_fraction` is **0.10 on both rows**, carried as a per-subclass field on the frozen bracket (injected config, like every other field there) rather than as a module constant or one global number — both floors below bite differently at £350 and £250 of envelope, so the granularity has to exist even where the two values agree.
+`headroom_reserve_fraction` is **0.10 on both rows**, carried as a per-subclass field on the frozen bracket (injected config, like every other field there) rather than as a module constant or one global number. The granularity is justified by where the field lives and by what it implies, not by the two values differing today: every field on that bracket is injected config by the module's stated design, and the two rows' boundary equities below differ by 40% (£285.71 vs £400) because the reserve is applied to different envelopes. A module constant would make the identical seeding look like a property of the system rather than the coincidence it is.
 
 | subclass | deployment (D5) | reserve | first tranche | `risk_fraction` | at the £1,000 book |
 | --- | --- | --- | --- | --- | --- |

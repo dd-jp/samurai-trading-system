@@ -252,8 +252,18 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
     ).toBeUndefined();
   });
 
-  it("does NOT trim an armed index entry sized at the Trader's intent", () => {
-    const intended = D5_INDEX_ETP_DEPLOYMENT_FRACTION * EQUITY; // £350 on the book
+  it('does NOT trim an armed entry sized at the FULL index envelope', () => {
+    // **#897 (2026-09-03) changed what "the Trader's intent" means, and this
+    // test deliberately did NOT follow it.** `riskFractionFor` now reserves
+    // 10% of the envelope, so the largest size the Trader can emit for this
+    // subclass is 31.5% of equity (£315), not 35% (£350). This test keeps
+    // asking at the FULL £350 on purpose: the property under test is that
+    // `per_subclass_deployment_cap` still ADMITS the whole envelope, which is
+    // exactly what makes the reserved £35 reachable by a later `scale_in`
+    // (see the "#897" describe below). Were this rescaled to £315 it would
+    // stop witnessing the cap's ceiling at all, and the reserve would look
+    // like a cap change rather than a Trader-side change.
+    const intended = D5_INDEX_ETP_DEPLOYMENT_FRACTION * EQUITY; // £350 — the envelope, ABOVE one Trader ask
 
     const decision = decide(d5InIsolation(), intentFor('3USL', intended, 'entry'));
 
@@ -262,8 +272,10 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
     expect(decision.binding_constraint).not.toBe('per_subclass_deployment_cap');
   });
 
-  it('does NOT trim an armed single-stock entry either', () => {
-    const intended = D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION * EQUITY; // £250
+  it('does NOT trim an armed single-stock entry at its full envelope either', () => {
+    // Same reading as above: post-#897 one Trader ask tops out at £225, and
+    // the £250 here is the envelope the cap must keep admitting.
+    const intended = D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION * EQUITY; // £250 — the envelope
 
     const decision = decide(d5InIsolation(), intentFor('3LAP', intended, 'entry'));
 
@@ -723,6 +735,15 @@ describe('#886 acceptance criterion — an armed D5 entry lands at the intended 
   // subclass), so this proves the FIX — D5 exempt from `per_trade_size_cap`
   // — at a size the shipped profile actually clears end to end, rather than
   // proving it only with five other caps manually disabled.
+  //
+  // **Post-#897 note.** `riskFractionFor` now multiplies by
+  // `(1 - headroom_reserve_fraction)`, so a real full-conviction ask is
+  // `D5_fraction x 0.9 x equity`. That does NOT change what this describe
+  // measures: `M` here is an arbitrary conviction multiplier well under 1,
+  // the ask is hand-constructed rather than read off the Trader, and the
+  // property is that no cap in the shipped profile trims whatever the Trader
+  // asks for. Rescaling `CONVICTION_FACTOR` by the reserve would just pick a
+  // different arbitrary M and prove the same thing.
   const CONVICTION_FACTOR = 0.2;
 
   /**
@@ -835,7 +856,13 @@ describe('#959 — multiple D5-armed instruments in the SAME subclass share one 
 
   const multiConfig = (): RiskConfig => buildStartingProfileConfigs(MULTI_UNIVERSE).riskConfig;
 
-  /** D5's own fraction for `single_stock_etp_3x` — £250 on the £1,000 book. */
+  /**
+   * D5's own fraction for `single_stock_etp_3x` — £250 on the £1,000 book.
+   *
+   * The ENVELOPE, which post-#897 is larger than any single Trader ask
+   * (£225); as in the #800 describe above, these tests probe the shared cap's
+   * ceiling deliberately, not the Trader's emitted size.
+   */
   const FULL_ENVELOPE = D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION * EQUITY;
   const PER_ASSET_CAP = RISK_CAP_EQUITY_FRACTIONS.per_asset_cap_fraction_of_equity * EQUITY; // £100
 
