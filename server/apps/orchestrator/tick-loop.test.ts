@@ -123,6 +123,10 @@ describe('runTickPlan', () => {
    * to either value is exercised here rather than assumed.
    */
   it("runs the paper profile's universe concurrently, up to its configured width, not one instrument at a time", async () => {
+    // Width is now BELOW the universe size (20 names, width 6), so the pass
+    // walks in `ceil(20 / 6)` groups rather than starting every instrument in
+    // one instant. The property under test is unchanged and is the one that
+    // matters: concurrency is the configured width, not 1.
     const profile = paperStartingProfile('paper');
     const universe = profile.universe;
     if (universe === undefined) {
@@ -141,13 +145,42 @@ describe('runTickPlan', () => {
     });
     await settle();
 
-    // Every instrument in today's universe started in the SAME pass, not
-    // queued behind one another — the width configured is >= the universe
-    // size (paper-profile.ts's own `maxConcurrentInstruments` comment).
-    expect(started()).toEqual(plan.instruments.map((instrument) => instrument.asset));
-    expect(peakInFlight()).toBe(plan.instruments.length);
+    // The first group started together, in plan order, and saturated the
+    // configured width — not one instrument at a time.
+    const width = profile.maxConcurrentInstruments ?? plan.instruments.length;
+    const expectedFirstGroup = Math.min(width, plan.instruments.length);
+    expect(started()).toEqual(
+      plan.instruments.slice(0, expectedFirstGroup).map((instrument) => instrument.asset),
+    );
+    expect(peakInFlight()).toBe(expectedFirstGroup);
 
-    releaseAll();
+    // The universe no longer fits in one group, so `releaseAll` has to be
+    // pumped: it splices the gates that exist NOW, and each released worker
+    // lets the next instrument start and park on a gate that did not exist
+    // when the splice ran. One call would release only the first group and
+    // hang the rest.
+    let drains = 0;
+    let settled = false;
+    // Both branches flip the flag. If only the fulfil branch did, a REJECTED
+    // `pending` would spin the pump until the drain guard threw — masking the
+    // real failure behind a bookkeeping error — and the detached promise would
+    // reject unhandled on top of it. `await pending` below is what surfaces the
+    // rejection, so this handler must not swallow it, only observe it.
+    pending.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    while (!settled) {
+      releaseAll();
+      await settle();
+      if (++drains > plan.instruments.length) {
+        throw new Error('runTickPlan did not settle after draining every instrument');
+      }
+    }
     await pending;
   });
 

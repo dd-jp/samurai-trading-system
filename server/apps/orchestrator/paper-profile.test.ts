@@ -21,7 +21,8 @@ import { SqliteStage2SelectionStore } from '../../tools/backtest/index.js';
 import { REQUIRED_INJECTED_CONFIG } from './index.js';
 import { paperStartingProfile, subclassOfUniverse } from './paper-profile.js';
 import { SqliteDailyEquityMetricsSource } from './production/daily-equity-metrics-source.js';
-import { DEFAULT_FEEDBACK_INTERVAL_MS } from './production.js';
+import { BENCHMARK_INSTRUMENTS, DEFAULT_FEEDBACK_INTERVAL_MS } from './production.js';
+import { DEFAULT_UNIVERSE } from './scheduler.js';
 
 describe('paperStartingProfile', () => {
   it('supplies every dependency REQUIRED_INJECTED_CONFIG demands', () => {
@@ -52,7 +53,23 @@ describe('paperStartingProfile', () => {
       // #1006: 'SPY' is gone too — it is a BENCHMARK_INSTRUMENTS member, and a
       // universe row for it made the orchestrator a second writer of the bars
       // the outside-benchmark port already owns.
-      expect(universe?.map((instrument) => instrument.asset)).toEqual(['QQQ', 'AAPL', 'TSLA']);
+      expect(universe).toEqual(DEFAULT_UNIVERSE);
+      // 20 names since the paper-soak widening. Asserted as a NUMBER as well as
+      // an identity so a change to `DEFAULT_UNIVERSE` still has to be a
+      // deliberate edit here — the identity check alone would follow it
+      // silently, and universe size is what every rate dial is derived from.
+      expect(universe).toHaveLength(20);
+      // No `BENCHMARK_INSTRUMENTS` member may appear: a universe row for one
+      // makes the orchestrator a second writer of the benchmark port's own bar
+      // rows (#1006). In paper this is NOT caught by #989's boot guard, which
+      // only fires when the calendar is not `UsEquityRegularHoursCalendar`.
+      for (const asset of BENCHMARK_INSTRUMENTS) {
+        expect(universe?.map((instrument) => instrument.asset)).not.toContain(asset);
+      }
+      // No row may carry `subclass` while #1019's same-tick portfolio-cap
+      // race is open — an armed `perSubclassDeploymentCap` is what makes that
+      // race reachable. See `maxConcurrentInstruments`' comment.
+      expect(universe?.every((instrument) => instrument.subclass === undefined)).toBe(true);
     });
 
     it('covers exactly the one asset class it schedules, so the other reads INERT rather than silently misleading (#738)', () => {
@@ -343,17 +360,29 @@ describe('paperStartingProfile', () => {
       expect(profile.maxConcurrentInstruments).toBe(6);
     });
 
-    it("fully parallelizes today's universe — no instrument waits behind another", () => {
-      // `runTickPlan`'s worker count is `min(maxConcurrentInstruments,
-      // plan.instruments.length)` (tick-loop.ts): at or above the universe
-      // size, every instrument gets its own worker in the same pass.
+    it('keeps the widened universe worst-case pass inside the freshness gates it is checked against', () => {
+      // The universe (20) is now WIDER than the width (6), so `runTickPlan`
+      // walks it in `ceil(20 / 6)` groups and the last group decides on data
+      // several debates old. That is a deliberate trade — see
+      // `maxConcurrentInstruments`' "Revisited at 20 names" comment: the
+      // staleness is accepted only because Verdict's own freshness gates sit
+      // well above the worst-case pass. This test is that argument, executable.
+      // If either gate is tightened below the pass, the tail of the walk gets
+      // refused at Verdict and the width has to rise with it.
       const profile = paperStartingProfile('paper');
       const universe = profile.universe;
       if (universe === undefined) {
         throw new Error("paperStartingProfile('paper') always carries a universe");
       }
 
-      expect(profile.maxConcurrentInstruments).toBeGreaterThanOrEqual(universe.length);
+      // #1012's measured mean debate latency, the per-instrument estimate the
+      // width comment derives from.
+      const MEAN_DEBATE_LATENCY_MS = 61_000;
+      const width = profile.maxConcurrentInstruments ?? universe.length;
+      const worstCasePassMs = Math.ceil(universe.length / width) * MEAN_DEBATE_LATENCY_MS;
+
+      expect(profile.verdictConfig.max_signal_age.stocks).toBeGreaterThan(worstCasePassMs);
+      expect(profile.verdictConfig.max_mark_age.stocks).toBeGreaterThan(worstCasePassMs);
     });
 
     it('stays well inside the stocks rate-limiter budget even if every instrument debates in one window', () => {

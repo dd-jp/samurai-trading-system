@@ -136,11 +136,12 @@ describe('backfillMarketData', () => {
     const { deps, equityFetches, cryptoFetches } = buildDeps({ universe: MIXED_UNIVERSE });
     await backfillMarketData(deps);
 
-    expect([...new Set(equityFetches.map((f) => f.symbol))].sort()).toEqual([
-      'AAPL',
-      'QQQ',
-      'TSLA',
-    ]);
+    // Derived from `DEFAULT_UNIVERSE` rather than transcribed: the property is
+    // the ROUTING split by `asset_class`, not which equities happen to be in
+    // the universe this week.
+    expect([...new Set(equityFetches.map((f) => f.symbol))].sort()).toEqual(
+      DEFAULT_UNIVERSE.map((instrument) => instrument.asset).sort(),
+    );
     expect([...new Set(cryptoFetches.map((f) => f.symbol))].sort()).toEqual(['BTC-USD', 'ETH-USD']);
   });
 

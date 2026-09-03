@@ -48,11 +48,67 @@ import type { Scheduler, TickPlan, UniverseInstrument } from './types.js';
  * SPY/QQQ/AAPL/TSLA universe is already non-tradeable live (ADR-0016 — live
  * instruments are LSE leveraged ETPs), and #751's cutover retires this array's
  * US symbols wholesale.
+ *
+ * **Widened from 3 to 20 names for the paper soak.** The binding constraint on
+ * ADR-0017's Gate 2 is TRADE COUNT (~126 trades on the expectancy sign test),
+ * not calendar time, and a 3-name universe produces trades too slowly to reach
+ * it in any tolerable number of soaks. Breadth is the only lever that
+ * compresses Gate 2 — Gate 1 is 14 calendar days and does not compress. The
+ * cost is linear and small: `instruments x 7 hourly bars x 10 sessions x
+ * $0.0060/debate` = `instruments x $0.42`, so 20 names is ~$8.40 per 14-day
+ * soak against ADR-0008's $50/14d cap (~17%).
+ *
+ * Three properties this list is chosen to preserve, none of them incidental:
+ *
+ * - **No `BENCHMARK_INSTRUMENTS` member.** SPY and AGG are the full benchmark
+ *   set and BOTH are excluded, for the dual-writer reason stated above — which
+ *   is independent of #989's boot guard. That guard only fires when the mode's
+ *   calendar is not `UsEquityRegularHoursCalendar`, and paper resolves to
+ *   exactly that, so in paper the guard would NOT catch a SPY row. The
+ *   exclusion is the control here, not the alarm.
+ * - **No `subclass` on any row.** `perSubclassDeploymentCap` (ADR-0018 D5)
+ *   stays inert, which is what keeps #1019's same-tick portfolio-cap race
+ *   bounded: `computePortfolioView` values a just-submitted order at zero until
+ *   a fill poll, so an armed subclass cap could be breached by siblings inside
+ *   one tick. With no subclasses the per-name gates (`perTradeSizeCap`,
+ *   `perAssetExposureCap`) still bind independently. Do not classify these rows
+ *   until #1019 is closed.
+ * - **Cash equities and one index ETF, no leveraged ETPs.** A US 3x proxy would
+ *   look like the live LSE ETP pool and measure something else entirely: the
+ *   spread step (~0.003% here vs ~0.18% there) is the exact substitution that
+ *   made ADR-0016's expectancy figures wrong in SIGN. This universe measures
+ *   the PIPELINE, not the live instruments' expectancy.
+ *
+ * Composition is biased to high-beta movers per ADR-0016's movers objective —
+ * an intraday, flat-by-close horizon needs names that actually travel far
+ * enough within a session to reach a bracket.
+ *
+ * This is a paper-soak widening, NOT #751. There is no daily re-rank, no
+ * session immutability, and no screener here; #751's `ActiveUniverseProvider`
+ * cutover still owns all three, and still retires this array's US symbols
+ * wholesale when it lands.
  */
 export const DEFAULT_UNIVERSE: readonly UniverseInstrument[] = [
   { asset: 'QQQ', asset_class: 'stocks' },
   { asset: 'AAPL', asset_class: 'stocks' },
   { asset: 'TSLA', asset_class: 'stocks' },
+  { asset: 'NVDA', asset_class: 'stocks' },
+  { asset: 'AMD', asset_class: 'stocks' },
+  { asset: 'MSFT', asset_class: 'stocks' },
+  { asset: 'AMZN', asset_class: 'stocks' },
+  { asset: 'GOOGL', asset_class: 'stocks' },
+  { asset: 'META', asset_class: 'stocks' },
+  { asset: 'AVGO', asset_class: 'stocks' },
+  { asset: 'NFLX', asset_class: 'stocks' },
+  { asset: 'MU', asset_class: 'stocks' },
+  { asset: 'SMCI', asset_class: 'stocks' },
+  { asset: 'PLTR', asset_class: 'stocks' },
+  { asset: 'COIN', asset_class: 'stocks' },
+  { asset: 'MSTR', asset_class: 'stocks' },
+  { asset: 'MARA', asset_class: 'stocks' },
+  { asset: 'RIOT', asset_class: 'stocks' },
+  { asset: 'SOFI', asset_class: 'stocks' },
+  { asset: 'UBER', asset_class: 'stocks' },
 ];
 
 export interface SchedulerConfig {
