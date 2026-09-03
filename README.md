@@ -4,18 +4,16 @@ Live-money multi-agent trading system covering **crypto and stocks**.
 
 The runtime tick is **six stages** — Analysts → Debate → Trader → Risk → Verdict → Execution — driven by `SequentialTickRunner` (`server/apps/orchestrator/tick-runner.ts`), with a Feedback Loop that adjusts analyst weights and risk thresholds post-trade.
 
-A seventh stage, **Invalidation** (the devil's-advocate critic, between Trader and Risk), is **specced but not built** — see `docs/specs/devils-advocate-spec.md`. The dashboard already reserves its room in the pipeline layout so its rows appear the day it ships (`client/src/lib/room-layout.ts`, whose `STAGE_ORDER` includes `invalidation`), but nothing writes an `invalidation` row today.
+A seventh **Invalidation** stage (the devil's-advocate critic, between Trader and Risk) was proposed in `docs/specs/devils-advocate-spec.md` and **declined as a standalone stage on 2026-09-02** — the pipeline is six stages and stays six. Its typed, falsifiable invalidation-condition mechanism folds into the already-built Risk Critic inside the Risk Manager instead ([#957](https://github.com/dd-jp/samurai-trading-system/issues/957) built, fold tracked as [#994](https://github.com/dd-jp/samurai-trading-system/issues/994)). Two artifacts still carry the seventh stage as a live placeholder — `PIPELINE_STAGES` in `contracts/pipeline.ts` and the dashboard's room 04 (`client/src/lib/room-layout.ts`) — and are retired by [#998](https://github.com/dd-jp/samurai-trading-system/issues/998). Nothing has ever written an `invalidation` row and nothing ever will.
 
 ## Architecture
 
 ```
 Market Data Service ─┐
-                     ├─→ Analysts (parallel) → Debate Engine → Trader → [Invalidation*] → Risk Manager → Verdict → Execution → Feedback Loop
-Market Intelligence ─┘                                                                                                             │
-                                                                                                                                   ↑
-                                                                                                                    adjusts weights, thresholds
-
-* specced, not built — the runtime chain goes Trader → Risk today
+                     ├─→ Analysts (parallel) → Debate Engine → Trader → Risk Manager → Verdict → Execution → Feedback Loop
+                                                                                                                   │
+                                                                                                                   ↑
+                                                                                    adjusts weights, thresholds
 ```
 
 | Stage | Directory | What it does |
@@ -323,7 +321,7 @@ samurai-trading-system/
 │   │   ├── orchestrator/  # Tick loop, scheduler, audit, heartbeat, composition root
 │   │   ├── service-api/   # Read-only HTTP :8787; serves /api/snapshot + the bundle
 │   │   └── supervisor/    # Runs orchestrator + service-api as one foreground process
-│   ├── pipeline/          # the seven stages
+│   ├── pipeline/          # the six stages + feedback loop
 │   │   ├── analysts/      # Stateless per-tick agents
 │   │   ├── debate-engine/ # Bull/Bear/Mediator, rounds, conviction, LLM client
 │   │   ├── trader/        # OrderIntent, position-aware branching, setup vectors
@@ -454,7 +452,6 @@ dist/server/tools/<name>.js` after a build — see
 All twelve charted components are implemented and under test; the pipeline runs end-to-end offline (`yarn smoke`). Outstanding:
 
 - **One real Alpaca paper tick** — ADR-0004 §5's "wiring validated" bar. `yarn smoke` is offline and does not clear it.
-- **Invalidation stage** — specced (`docs/specs/devils-advocate-spec.md`), not built.
 - **14-day unattended soak** (#238) — the "paper trading achieved" bar; not yet run.
 - **ccxt / IBKR broker adapters** — data sources exist, order adapters are the long-term path.
 - **WorldMonitor CII feed** — consumer seam built, live wiring parked pending `WORLDMONITOR_API_KEY`.
