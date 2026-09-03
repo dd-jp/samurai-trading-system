@@ -35,7 +35,12 @@ import {
   renderCriticPrompt,
 } from './critic.js';
 import { InMemoryRiskCriticStore, SqliteRiskCriticStore } from './critic-store.js';
-import { breachedConditions, invalidationReasons, NO_CONDITIONS_REASON } from './invalidation.js';
+import {
+  breachedConditions,
+  invalidationReasons,
+  MAX_INVALIDATION_LOOKBACK,
+  NO_CONDITIONS_REASON,
+} from './invalidation.js';
 import type { RiskCriticVerdict } from './types.js';
 
 const NOW = new Date('2026-09-01T14:00:00.000Z');
@@ -243,6 +248,12 @@ describe('renderCriticPrompt', () => {
     expect(prompt).toContain('TRIMMED or REJECTED');
     // The escape attempt cannot close the data block early.
     expect(prompt.split('</untrusted_analyst_data>')).toHaveLength(2);
+  });
+
+  it('tells the model the lookback bound, not just the type (#994 review, PR #1067)', () => {
+    const prompt = renderCriticPrompt(makeRequest());
+
+    expect(prompt).toContain(`<= ${MAX_INVALIDATION_LOOKBACK}`);
   });
 });
 

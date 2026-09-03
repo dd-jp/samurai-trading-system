@@ -94,7 +94,11 @@ import { INDICATOR_KINDS } from '../../providers/market-data-service/index.js';
 import type { Logger, OrderIntent } from '../../shared/index.js';
 import type { LlmClient, SpendCap } from '../debate-engine/index.js';
 import { BARE_JSON_INSTRUCTION, unwrapFencedJson, wrapUntrusted } from '../debate-engine/index.js';
-import { evaluateConditions, validateConditions } from './invalidation.js';
+import {
+  evaluateConditions,
+  MAX_INVALIDATION_LOOKBACK,
+  validateConditions,
+} from './invalidation.js';
 import type {
   DroppedCondition,
   EvaluatedCondition,
@@ -224,8 +228,8 @@ export function renderCriticPrompt(request: RiskCriticRequest): string {
     '- Observable is exactly one of:',
     '    {"kind":"mark"}  — the instrument\'s current price',
     `    {"kind":"indicator","spec":{"indicator":<one of ${INDICATOR_KINDS.join('|')}>,`,
-    '                               "params":{"period":number},"lookback":number,"timeframe":"1h"}}',
-    '    {"kind":"bars","window":{"timeframe":"1h","lookback":number},"measure":"volume_ratio"}',
+    `                               "params":{"period":number},"lookback":number (<= ${MAX_INVALIDATION_LOOKBACK}),"timeframe":"1h"}}`,
+    `    {"kind":"bars","window":{"timeframe":"1h","lookback":number (<= ${MAX_INVALIDATION_LOOKBACK})},"measure":"volume_ratio"}`,
     "  — the latest bar's volume over the mean of the preceding bars.",
     '- A condition must fire when the thesis is FAILING, not when it is working:',
     '  for a "buy" that means price/momentum observables BELOW a threshold, for a',

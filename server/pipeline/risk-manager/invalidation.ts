@@ -78,6 +78,22 @@ export const MAX_INVALIDATION_CONDITIONS = 5;
  */
 export const MAX_INSPECTED_CONDITIONS = 16;
 
+/**
+ * The ceiling on `lookback` for an indicator spec or a bars window (#994
+ * review, PR #1067) — otherwise a model emission of `lookback: 1_000_000`
+ * validates and triggers a huge `getBars`/indicator read on the path an order
+ * is waiting on (`withinDeadline` races the read against the budget but does
+ * not cancel it, so an unbounded fetch is an unbounded wait either way).
+ *
+ * Sized off the largest lookback any real caller in this codebase asks the
+ * Market Data Service for on the indicator/bars path: `technical-analyst.ts`'s
+ * `RVOL_5M_LOOKBACK` = `(RVOL_SESSION_WINDOW + 2) * BARS_PER_SESSION_5M` =
+ * `12 * 78` = 936 bars (ten sessions of 5m RVOL history plus a two-session
+ * margin). 1000 is a round number comfortably above that measured ceiling
+ * without being large enough to make the read itself the problem.
+ */
+export const MAX_INVALIDATION_LOOKBACK = 1000;
+
 /** `binding_constraint` for a hard-reject on a measured breach. DISTINCT from `risk_critic:reject` (#997 Q2b). */
 export const INVALIDATED_BINDING_CONSTRAINT = 'risk_critic:invalidated';
 
@@ -194,7 +210,9 @@ export interface ValidatedConditions {
   dropped: DroppedCondition[];
 }
 
-function readIndicatorSpec(value: unknown): IndicatorSpec | 'unparseable' | 'unknown_indicator' {
+function readIndicatorSpec(
+  value: unknown,
+): IndicatorSpec | 'unparseable' | 'unknown_indicator' | 'lookback_too_large' {
   if (typeof value !== 'object' || value === null) return 'unparseable';
   const spec = value as {
     indicator?: unknown;
@@ -205,6 +223,7 @@ function readIndicatorSpec(value: unknown): IndicatorSpec | 'unparseable' | 'unk
   if (!isNonEmptyString(spec.indicator)) return 'unparseable';
   if (!INDICATOR_KIND_SET.has(spec.indicator)) return 'unknown_indicator';
   if (!isPositiveInteger(spec.lookback)) return 'unparseable';
+  if (spec.lookback > MAX_INVALIDATION_LOOKBACK) return 'lookback_too_large';
   if (!isNonEmptyString(spec.timeframe)) return 'unparseable';
 
   const params: Record<string, number> = {};
@@ -223,18 +242,24 @@ function readIndicatorSpec(value: unknown): IndicatorSpec | 'unparseable' | 'unk
   };
 }
 
-function readBarWindow(value: unknown): BarWindow | null {
-  if (typeof value !== 'object' || value === null) return null;
+function readBarWindow(value: unknown): BarWindow | 'unparseable' | 'lookback_too_large' {
+  if (typeof value !== 'object' || value === null) return 'unparseable';
   const window = value as { timeframe?: unknown; lookback?: unknown };
-  if (!isNonEmptyString(window.timeframe)) return null;
+  if (!isNonEmptyString(window.timeframe)) return 'unparseable';
   // Two bars minimum: the ratio needs a latest bar AND a baseline to divide by.
-  if (!isPositiveInteger(window.lookback) || window.lookback < 2) return null;
+  if (!isPositiveInteger(window.lookback) || window.lookback < 2) return 'unparseable';
+  if (window.lookback > MAX_INVALIDATION_LOOKBACK) return 'lookback_too_large';
   return { timeframe: window.timeframe, lookback: window.lookback };
 }
 
 function readObservable(
   value: unknown,
-): InvalidationObservable | 'unparseable' | 'unknown_observable' | 'unknown_indicator' {
+):
+  | InvalidationObservable
+  | 'unparseable'
+  | 'unknown_observable'
+  | 'unknown_indicator'
+  | 'lookback_too_large' {
   if (typeof value !== 'object' || value === null) return 'unparseable';
   const observable = value as {
     kind?: unknown;
@@ -247,14 +272,16 @@ function readObservable(
 
   if (observable.kind === 'indicator') {
     const spec = readIndicatorSpec(observable.spec);
-    if (spec === 'unparseable' || spec === 'unknown_indicator') return spec;
+    if (spec === 'unparseable' || spec === 'unknown_indicator' || spec === 'lookback_too_large') {
+      return spec;
+    }
     return { kind: 'indicator', spec };
   }
 
   if (observable.kind === 'bars') {
     if (observable.measure !== 'volume_ratio') return 'unparseable';
     const window = readBarWindow(observable.window);
-    if (window === null) return 'unparseable';
+    if (window === 'unparseable' || window === 'lookback_too_large') return window;
     return { kind: 'bars', window, measure: 'volume_ratio' };
   }
 
@@ -365,6 +392,10 @@ export function validateConditions(raw: unknown, side: OrderIntent['side']): Val
       dropped.push(drop(id, element, 'unknown_indicator'));
       continue;
     }
+    if (observable === 'lookback_too_large') {
+      dropped.push(drop(id, element, 'lookback_too_large'));
+      continue;
+    }
 
     const comparator = candidate.comparator as Comparator;
     if (!thresholdInRange(observable, candidate.threshold)) {
@@ -460,6 +491,7 @@ const DROP_REASONS: readonly InvalidationDropReason[] = [
   'unparseable',
   'unknown_observable',
   'unknown_indicator',
+  'lookback_too_large',
   'threshold_out_of_range',
   'direction_incoherent',
   'over_cap',

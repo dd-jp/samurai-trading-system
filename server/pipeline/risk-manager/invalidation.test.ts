@@ -21,6 +21,7 @@ import {
   invalidationReasons,
   MAX_INSPECTED_CONDITIONS,
   MAX_INVALIDATION_CONDITIONS,
+  MAX_INVALIDATION_LOOKBACK,
   NO_CONDITIONS_REASON,
   readPersistedConditions,
   readPersistedDroppedConditions,
@@ -236,6 +237,88 @@ describe('validateConditions', () => {
       },
     });
     const { accepted, dropped } = validateConditions([undeclared], 'buy');
+    expect(dropped).toEqual([]);
+    expect(accepted).toHaveLength(1);
+  });
+
+  it('drops an indicator condition whose lookback exceeds the cap, without ever reading it', async () => {
+    const overLookback = raw({
+      observable: {
+        kind: 'indicator',
+        spec: {
+          indicator: 'rsi',
+          params: { period: 14 },
+          lookback: MAX_INVALIDATION_LOOKBACK + 1,
+          timeframe: '1h',
+        },
+      },
+    });
+    const { accepted, dropped } = validateConditions([overLookback], 'buy');
+    expect(accepted).toEqual([]);
+    expect(dropped[0]?.reason).toBe('lookback_too_large');
+
+    // Dropped at validation means it never reaches `evaluateConditions` — the
+    // fake throws if `getIndicator` is ever called, so a call would fail loud.
+    const results = await evaluateConditions({
+      conditions: accepted,
+      instrument: '3USL',
+      marketData: marketData({
+        getIndicator: () => Promise.reject(new Error('must not be called')),
+      }),
+      asOf: NOW,
+    });
+    expect(results).toEqual([]);
+  });
+
+  it('drops a bars condition whose lookback exceeds the cap, without ever reading it', async () => {
+    const overLookback = raw({
+      comparator: '<',
+      observable: {
+        kind: 'bars',
+        window: { timeframe: '1h', lookback: MAX_INVALIDATION_LOOKBACK + 1 },
+        measure: 'volume_ratio',
+      },
+    });
+    const { accepted, dropped } = validateConditions([overLookback], 'buy');
+    expect(accepted).toEqual([]);
+    expect(dropped[0]?.reason).toBe('lookback_too_large');
+
+    const results = await evaluateConditions({
+      conditions: accepted,
+      instrument: '3USL',
+      marketData: marketData({ getBars: () => Promise.reject(new Error('must not be called')) }),
+      asOf: NOW,
+    });
+    expect(results).toEqual([]);
+  });
+
+  it('accepts an indicator condition at exactly the lookback cap', () => {
+    const atCap = raw({
+      observable: {
+        kind: 'indicator',
+        spec: {
+          indicator: 'rsi',
+          params: { period: 14 },
+          lookback: MAX_INVALIDATION_LOOKBACK,
+          timeframe: '1h',
+        },
+      },
+    });
+    const { accepted, dropped } = validateConditions([atCap], 'buy');
+    expect(dropped).toEqual([]);
+    expect(accepted).toHaveLength(1);
+  });
+
+  it('accepts a bars condition at exactly the lookback cap', () => {
+    const atCap = raw({
+      comparator: '<',
+      observable: {
+        kind: 'bars',
+        window: { timeframe: '1h', lookback: MAX_INVALIDATION_LOOKBACK },
+        measure: 'volume_ratio',
+      },
+    });
+    const { accepted, dropped } = validateConditions([atCap], 'buy');
     expect(dropped).toEqual([]);
     expect(accepted).toHaveLength(1);
   });

@@ -523,6 +523,8 @@ export type InvalidationDropReason =
   | 'unknown_observable'
   /** The named indicator is not in the Market Data Service's `INDICATOR_KINDS` registry. */
   | 'unknown_indicator'
+  /** `spec.lookback` (indicator) or `window.lookback` (bars) exceeds `MAX_INVALIDATION_LOOKBACK` — refused before it can trigger an unbounded market-data read (#994 review, PR #1067). */
+  | 'lookback_too_large'
   /** The threshold is outside the observable's declared range, so the predicate is permanently true or permanently false. */
   | 'threshold_out_of_range'
   /** The condition would fire when the thesis is WORKING rather than failing. */

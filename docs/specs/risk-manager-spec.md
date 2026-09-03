@@ -345,7 +345,7 @@ interface DroppedCondition {
   id: string | null;
   /** What the model said, bounded, for audit. */
   raw: string;
-  reason: 'unparseable' | 'unknown_observable' | 'unknown_indicator'
+  reason: 'unparseable' | 'unknown_observable' | 'unknown_indicator' | 'lookback_too_large'
         | 'threshold_out_of_range' | 'direction_incoherent' | 'over_cap';
 }
 ```
@@ -369,8 +369,9 @@ Deterministic, between parse and evaluation, and every drop is persisted with it
 1. **`unparseable`** — the emitted element is not a readable condition object (missing/blank `id`, non-numeric or non-finite `threshold`, unknown comparator, absent `rationale`). Malformed output is refused, never coerced.
 2. **`unknown_observable`** — the `kind` is not one of `indicator` / `mark` / `bars`, i.e. it does not bind to a service the Risk Manager can already read deterministically at decision time.
 3. **`unknown_indicator`** — the named indicator is not in the Market Data Service's `INDICATOR_KINDS` registry.
-4. **`threshold_out_of_range`** — the threshold falls outside the observable's declared valid range (an RSI condition thresholded at 140 can only ever be permanently breached or permanently not). Ranges are declared as a `Partial<Record<IndicatorKind, …>>`, so **an indicator kind with no declared range falls through un-dropped**; adding a kind to `INDICATOR_KINDS` must never become a trade-blocking event.
-5. **`direction_incoherent`** — the condition would fire when the thesis is *working* rather than failing. Per-observable direction semantics, declared in code, **not** a naive side↔comparator mapping (`devils-advocate-spec.md` gives the counterexample):
+4. **`lookback_too_large`** (#994 review, PR #1067) — an indicator's `spec.lookback` or a bars observable's `window.lookback` exceeds `MAX_INVALIDATION_LOOKBACK` (1000 bars, chosen comfortably above `technical-analyst.ts`'s `RVOL_5M_LOOKBACK` = 936, the largest lookback any existing caller requests on this path). Refused at validation, before it can reach `observe()` and trigger an unbounded `getBars`/indicator read on the path an order is waiting on — `withinDeadline` races that read against the budget but does not cancel it.
+5. **`threshold_out_of_range`** — the threshold falls outside the observable's declared valid range (an RSI condition thresholded at 140 can only ever be permanently breached or permanently not). Ranges are declared as a `Partial<Record<IndicatorKind, …>>`, so **an indicator kind with no declared range falls through un-dropped**; adding a kind to `INDICATOR_KINDS` must never become a trade-blocking event.
+6. **`direction_incoherent`** — the condition would fire when the thesis is *working* rather than failing. Per-observable direction semantics, declared in code, **not** a naive side↔comparator mapping (`devils-advocate-spec.md` gives the counterexample):
 
    | Observable | Which direction means "thesis failing" |
    | --- | --- |
@@ -379,7 +380,7 @@ Deterministic, between parse and evaluation, and every drop is persisted with it
    | `bars` / `volume_ratio` | Always `<`/`<=` — conviction is falsified by *thinning* participation regardless of side. |
    | Any other indicator kind | Undeclared. **Not dropped by this rule**, falls through to the others. |
 
-6. **`over_cap`** — see the cap above.
+7. **`over_cap`** — see the cap above.
 
 A dropped condition is **dropped, not breached**. If dropping empties the list, the result is reported exactly as a zero-condition emission (`no_conditions`); one code path for "nothing checkable came out", regardless of cause.
 
