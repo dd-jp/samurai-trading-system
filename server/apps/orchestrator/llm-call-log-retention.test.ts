@@ -83,6 +83,15 @@ describe('the prune is actually wired into the composition root', () => {
     expect(source).toMatch(callSite('daily'));
   });
 
+  it('routes the sweep through the owning stage rather than a raw handle', () => {
+    // The guard is default-permissive (#1048), so dropping the wrap would make
+    // the prune bypass the sole-writer check silently and every other test here
+    // would still pass — the exact shape this file exists to catch, one level
+    // down. `llm_call_log` is the debate engine's table; the orchestrator runs
+    // the sweep but does not own the rows.
+    expect(source).toMatch(/pruneLlmCallLog\(\s*guardedStore\(db, 'debate-engine'\)/);
+  });
+
   it('keeps the daily prune OUTSIDE the feedback cycle try block', () => {
     // Inside it, a persistently throwing `runDailyCycle` would silently
     // disable retention as well: the catch would fire every day while the
