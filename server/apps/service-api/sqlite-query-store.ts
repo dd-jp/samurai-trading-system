@@ -646,7 +646,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * unconstrained TEXT and the HITL Telegram callback writes
    * `verdict.hitl.telegram_callback` rows under the pipeline's own `trace_id`
    * (telegram-bot-api-client.ts:112). Without the filter those land in a lane
-   * as an eighth, unrenderable stage.
+   * as a seventh, unrenderable stage.
    *
    * `ORDER BY … timestamp, rowid` is `SqliteAuditLog.getByTraceId`'s ordering,
    * for its reason: `audit_log` has no primary key, SQLite's tie-break for

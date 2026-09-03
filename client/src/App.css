@@ -446,13 +446,6 @@ main {
   background: rgb(var(--ink-rgb) / 0.4);
 }
 
-/* Room 04 while the invalidation stage is unbuilt: lights off, and it says so
-   in the blurb rather than only by opacity. */
-.room-lights-off {
-  border-style: dashed;
-  opacity: 0.55;
-}
-
 .room-live {
   border-color: rgb(var(--cyan-rgb) / 0.55);
   /* Static glow only: the resting frame is also the full signal, so

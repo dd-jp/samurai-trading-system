@@ -381,33 +381,6 @@ describe('buildPipelineView', () => {
     expect(onlyLane(view)).toMatchObject({ trace_id: 'trace-new', outcome: 'stopped' });
   });
 
-  it('leaves a stage that does not exist in the runtime yet as not_reached', () => {
-    const view = buildPipelineView(
-      activity({
-        events: [
-          event('trace-1', 'analysts', 'quorum_met', 0),
-          event('trace-1', 'debate', 'bullish', 1),
-          event('trace-1', 'trader', 'entry', 2),
-          event('trace-1', 'risk', 'approved', 3),
-          event('trace-1', 'verdict', 'go', 4),
-          event('trace-1', 'execution', 'filled', 5),
-        ],
-      }),
-    );
-
-    // `invalidation` is specced (devils-advocate-spec.md) and not built: it is
-    // absent from the orchestrator's `TickStage` union, so nothing can write
-    // it. Its gap must not read as `skipped` — that would claim the tick
-    // decided to omit a stage that does not exist.
-    expect(cell(view, 'invalidation')).toMatchObject({
-      state: 'not_reached',
-      attempts: 0,
-      decision: null,
-      duration_ms: null,
-      recorded_at: null,
-    });
-  });
-
   it('reads a gap in a stage the runtime CAN write as skipped', () => {
     const view = buildPipelineView(
       activity({

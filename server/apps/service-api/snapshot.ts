@@ -52,10 +52,10 @@ const RECENT_ARM_COMPARISONS_LIMIT = 14;
 const RECENT_OUTSIDE_BENCHMARKS_LIMIT = RECENT_ARM_COMPARISONS_LIMIT * OUTSIDE_BENCHMARKS.length;
 
 /**
- * The directions the wire may carry, as a value rather than a type. Same
- * `Record<Union, true>` device as `pipeline-query.ts`'s `RUNTIME_STAGES`: the
- * `Direction` union is the authority, so a new member stops this compiling
- * instead of silently passing an unrenderable stance through.
+ * The directions the wire may carry, as a value rather than a type.
+ * `Record<Union, true>` so the `Direction` union is the authority — a new
+ * member stops this compiling instead of silently passing an unrenderable
+ * stance through.
  */
 const WIRE_DIRECTIONS: Record<Direction, true> = { bullish: true, bearish: true, neutral: true };
 

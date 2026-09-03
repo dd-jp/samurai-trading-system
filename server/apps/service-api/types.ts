@@ -104,7 +104,7 @@ export interface AttributionSummary {
  * TEXT: `audit_log.stage` is unconstrained and genuinely carries non-pipeline
  * values under a pipeline `trace_id` (the HITL Telegram callback writes
  * `verdict.hitl.telegram_callback`, telegram-bot-api-client.ts:112), so the
- * store MUST filter to the seven known stages before handing rows over.
+ * store MUST filter to the six known stages before handing rows over.
  */
 export interface PipelineStageEvent {
   trace_id: string;

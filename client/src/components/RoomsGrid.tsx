@@ -1,5 +1,5 @@
 /**
- * The rooms hero (dashboard-spec.md, "Rooms hero"): seven numbered rooms plus
+ * The rooms hero (dashboard-spec.md, "Rooms hero"): six numbered rooms plus
  * the Lobby in a 4x2 grid, with one sigil chip per instrument standing in the
  * room its trace last reached.
  *
@@ -8,14 +8,9 @@
  * child of its room cannot animate into another one. The floor is a child of
  * the scrolling container so chips scroll with the rooms rather than detaching
  * from them.
- *
- * **Room 04's lights-off is derived, not hardcoded.** The spec's rule is that
- * the caveat "retires itself from the data rather than needing an edit" —
- * `audit_log.stage` is unconstrained TEXT, so the day the invalidation stage
- * ships its rows appear and this room lights up with no change to this file.
  */
 
-import type { PipelineLane, PipelineView } from '@contracts';
+import type { PipelineView } from '@contracts';
 import type { CSSProperties, RefObject } from 'react';
 import type { RoomId, RoomsLayout } from '../lib/room-layout.ts';
 import { ROOM_META } from '../lib/vocabulary.ts';
@@ -31,23 +26,11 @@ export interface RoomsGridProps {
   registerChipRef: (instrument: string, element: HTMLElement | null) => void;
 }
 
-/**
- * True once any lane has an invalidation cell that is not `not_reached` — i.e.
- * once the stage has actually run for somebody. Until then the room is drawn
- * lights-off and says why.
- */
-function invalidationHasShipped(lanes: readonly PipelineLane[]): boolean {
-  return lanes.some((lane) =>
-    lane.cells.some((cell) => cell.stage === 'invalidation' && cell.state !== 'not_reached'),
-  );
-}
-
 export function RoomsGrid(props: RoomsGridProps) {
   const { view, layout, selectedInstrument, onSelect, floorRef } = props;
   const { registerRoomRef, registerChipRef } = props;
 
   const lanesByInstrument = new Map(view.lanes.map((lane) => [lane.instrument, lane]));
-  const lightsOff = !invalidationHasShipped(view.lanes);
 
   const liveLane =
     view.live_trace_id === null
@@ -70,12 +53,10 @@ export function RoomsGrid(props: RoomsGridProps) {
         <div className="rooms-hero">
           {layout.rooms.map((room, index) => {
             const meta = ROOM_META[room.room];
-            const isDark = room.room === 'invalidation' && lightsOff;
             const isLive = liveRoom === room.room;
             const className = [
               'room',
               room.room === 'lobby' ? 'room-lobby' : '',
-              isDark ? 'room-lights-off' : '',
               isLive ? 'room-live' : '',
               selectedRoom === room.room ? 'room-selected' : '',
             ]
@@ -87,7 +68,7 @@ export function RoomsGrid(props: RoomsGridProps) {
                 className={className}
                 data-room={room.room}
                 // Per-room delay for the power-on keyframe. A custom property
-                // rather than a class per room: 8 rooms, one rule.
+                // rather than a class per room: 7 rooms, one rule.
                 style={{ '--room-index': index } as CSSProperties}
                 ref={(element) => registerRoomRef(room.room, element)}
               >
@@ -98,9 +79,7 @@ export function RoomsGrid(props: RoomsGridProps) {
                   <h3 className="room-name">{meta.name}</h3>
                   {isLive && <span className="room-live-word">live</span>}
                 </div>
-                <p className="room-blurb">
-                  {isDark ? 'specced and not built — devils-advocate-spec.md' : meta.blurb}
-                </p>
+                <p className="room-blurb">{meta.blurb}</p>
                 {room.overflowCount > 0 && (
                   <span
                     className="room-overflow"

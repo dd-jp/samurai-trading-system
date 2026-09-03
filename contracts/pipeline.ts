@@ -22,33 +22,16 @@ import type { AssetClass } from './primitives.js';
 /**
  * The stages a tick passes through, in pipeline order.
  *
- * **This array is seven wide, but the pipeline is six stages and stays six.**
- * `invalidation` was specced between `trader` and `risk` on 2026-08-05
- * (docs/specs/devils-advocate-spec.md) and declared here at full width so the
- * column would fill in on its own the day the stage shipped — `audit_log.stage`
- * is unconstrained TEXT, so no migration on the read path would have been needed.
- *
- * **That day is not coming.** The standalone stage was **declined 2026-09-02**;
- * its typed invalidation-condition mechanism folds into the Risk Critic instead
- * (issue #994). Nothing has ever written an `invalidation` row and nothing ever
- * will, so the member is now a dead placeholder rendering a permanently
- * never-reached column.
- *
- * Left seven wide **deliberately, for now**: `PipelineStage` derives from this
- * array and the dashboard iterates it to render rooms (dashboard-spec.md's
- * "Seven stages, not six" section, room 04 lights-off). Narrowing it to six is a
- * typed contract change with client render ripple, owned by #994 — not a tail on
- * the docs pass that recorded the ruling.
- *
- * Do not re-derive a seven-stage pipeline from this array. Prior text here quoted
- * orchestrator-spec.md's "the pipeline is SEVEN stages"; that line has since been
- * corrected at its source and the quote removed.
+ * **Six stages, and stays six.** Every member here is a stage the runtime can
+ * actually write; a proposed `invalidation` stage was declined 2026-09-02
+ * (its mechanism folds into the Risk Critic instead, issue #994) and does not
+ * belong in this array. Do not re-widen it to seven on that mechanism's
+ * account — a wire-visible stage for it would be a new, separate decision.
  */
 export const PIPELINE_STAGES = [
   'analysts',
   'debate',
   'trader',
-  'invalidation',
   'risk',
   'verdict',
   'execution',
@@ -60,10 +43,10 @@ export type PipelineStage = (typeof PIPELINE_STAGES)[number];
  * What happened to one ticker at one stage.
  *
  * `skipped` and `stopped` are separate on purpose. A skipped stage is normal
- * traffic — `invalidation` runs only for `entry`/`scale_in` intents and an
- * `exit` skips it, and that stage "never terminates the tick" — whereas
- * `stopped` means the tick ended there. Collapsing the two would report a
- * routine exit trade as a halted pipeline.
+ * traffic — a stage reached by a later one in the trace but carrying no row of
+ * its own — whereas `stopped` means the tick ended there. Collapsing the two
+ * would report routine traffic as a halted pipeline. `cellState`'s rule is
+ * mechanical over any stage-index gap, not tied to any one stage.
  */
 export type PipelineCellState =
   /** Reached, completed, tick continued past it. */
@@ -123,7 +106,7 @@ export type PipelineOutcome =
   /** No trace at all in the window — a closed market, or an instrument not yet ticked. */
   | 'idle';
 
-/** One instrument's row: its most recent trace across all seven stages. */
+/** One instrument's row: its most recent trace across all six stages. */
 export interface PipelineLane {
   instrument: string;
   asset_class: AssetClass;

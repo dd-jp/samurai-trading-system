@@ -1016,7 +1016,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
     // The HITL Telegram callback writes to `audit_log` under the SAME
     // `trace_id` with its own stage name (telegram-bot-api-client.ts:112).
     // `audit_log.stage` is unconstrained TEXT, so nothing but this filter stops
-    // it landing in a lane as an eighth, unrenderable stage.
+    // it landing in a lane as a seventh, unrenderable stage.
     seedAudit(db, {
       trace_id: 'trace-1',
       stage: 'verdict.hitl.telegram_callback',

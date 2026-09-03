@@ -34,8 +34,8 @@
  *
  * The `planned` reason inverts: a `planned` citation FAILS once its path starts
  * resolving. Without that, the widest exemption in the set would silently outlive its own
- * truth — `invalidation` ships, and a marker asserting the path does not exist yet stays
- * on a live citation forever. It is the one exemption that clears itself.
+ * truth — the module ships, and a marker asserting the path does not exist yet stays on
+ * a live citation forever. It is the one exemption that clears itself.
  *
  * ## The tree is the git index, never the working directory (#866)
  *
@@ -61,9 +61,10 @@
  * `--cached` alone, deliberately — NOT `--others --exclude-standard`. Untracked-but-not-
  * ignored files are still runtime state as far as this checker is concerned, and letting
  * them in would re-open the same hole through the `planned` rule: scaffold
- * `server/pipeline/invalidation/index.ts` locally without staging it and every `planned`
- * marker on that path turns into a `stale-planned-exemption` — green on a clean checkout,
- * red on a machine where work has happened, which is exactly the bug being fixed here.
+ * `server/pipeline/universe-selector/index.ts` locally without staging it and every
+ * `planned` marker on that path turns into a `stale-planned-exemption` — green on a clean
+ * checkout, red on a machine where work has happened, which is exactly the bug being
+ * fixed here.
  *
  * Two accepted costs, both in the direction this file is allowed to err:
  *
