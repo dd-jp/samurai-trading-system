@@ -6,9 +6,11 @@ import {
 } from '../../pipeline/trader/subclass-bracket.js';
 import {
   assertKnownSubclass,
+  assertValidFallbackSubset,
   assertValidPool,
   buildRoutingMap,
   countRankableUnderlyings,
+  FALLBACK_DEFAULT_MAX_ROWS,
   KNOWN_SUBCLASSES,
   LSE_ETP_POOL,
   type LseEtpPoolRow,
@@ -29,6 +31,7 @@ function makeRow(overrides: Partial<LseEtpPoolRow> = {}): LseEtpPoolRow {
     currency: 'GBX',
     t212_isa: true,
     subclass_envelope_measured: true,
+    fallback_default: true,
     provenance: {
       isin: 'XX0000000000',
       issuer: 'Leverage Shares',
@@ -41,7 +44,7 @@ function makeRow(overrides: Partial<LseEtpPoolRow> = {}): LseEtpPoolRow {
 }
 
 describe('LSE_ETP_POOL — the checked-in pool', () => {
-  it('is non-empty and every row has all eight required fields plus provenance', () => {
+  it('is non-empty and every row has all nine required fields plus provenance', () => {
     expect(LSE_ETP_POOL.length).toBeGreaterThan(0);
     for (const row of LSE_ETP_POOL) {
       expect(row.lse_ticker).toBeTruthy();
@@ -53,6 +56,7 @@ describe('LSE_ETP_POOL — the checked-in pool', () => {
       expect(row.currency).toBeTruthy();
       expect(typeof row.t212_isa).toBe('boolean');
       expect(typeof row.subclass_envelope_measured).toBe('boolean');
+      expect(typeof row.fallback_default).toBe('boolean');
       expect(row.provenance.isin).toBeTruthy();
       expect(row.provenance.issuer).toBeTruthy();
       expect(row.provenance.source_url).toMatch(/^https:\/\//);
@@ -92,6 +96,73 @@ describe('LSE_ETP_POOL — the checked-in pool', () => {
 
   it('is internally valid (subclass known, both identities non-empty)', () => {
     expect(() => assertValidPool(LSE_ETP_POOL)).not.toThrow();
+  });
+});
+
+describe('the declared fallback subset (#1058, sweep finding F4)', () => {
+  // The fallback is the only thing standing between a bad screener run and a
+  // fully dark session (universe-selector-spec.md, "Candidate pool", after
+  // story 26 was withdrawn), so its failure mode is a *silent* one: a pool
+  // that declares no fallback presents as a healthy no-trade session on the
+  // one day it matters. These tests are the load-time half of that; #751's
+  // provider tests own the behavioural half.
+
+  it('the checked-in pool declares a non-empty fallback subset that is not the whole pool', () => {
+    const fallback = LSE_ETP_POOL.filter((row) => row.fallback_default);
+    expect(fallback.length).toBeGreaterThan(0);
+    expect(fallback.length).toBeLessThanOrEqual(FALLBACK_DEFAULT_MAX_ROWS);
+    expect(fallback.length).toBeLessThan(LSE_ETP_POOL.length);
+  });
+
+  it('every fallback row has a measured subclass envelope', () => {
+    // ADR-0018 D3's bracket and D5's fraction were never measured against the
+    // four #903 rows (3VT/3KOR/3KWE/3XLE). Degraded mode is the worst place
+    // to discover that, so the subset is drawn from measured rows only.
+    for (const row of LSE_ETP_POOL.filter((r) => r.fallback_default)) {
+      expect(row.subclass_envelope_measured).toBe(true);
+    }
+  });
+
+  it('no two fallback rows rank on the same screening_instrument', () => {
+    const underlyings = LSE_ETP_POOL.filter((r) => r.fallback_default).map(
+      (r) => r.screening_instrument,
+    );
+    expect(new Set(underlyings).size).toBe(underlyings.length);
+  });
+
+  it('assertValidPool rejects a pool that declares no fallback row at all', () => {
+    const dark = LSE_ETP_POOL.map((row) => ({ ...row, fallback_default: false }));
+    expect(() => assertValidPool(dark)).toThrow(/no fallback_default row/);
+    expect(() => assertValidFallbackSubset(dark)).toThrow(/healthy no-trade session/);
+  });
+
+  it('assertValidPool rejects a pool that marks more rows than the ceiling', () => {
+    const everything = LSE_ETP_POOL.map((row) => ({ ...row, fallback_default: true }));
+    expect(everything.filter((r) => r.fallback_default).length).toBeGreaterThan(
+      FALLBACK_DEFAULT_MAX_ROWS,
+    );
+    expect(() => assertValidPool(everything)).toThrow(/above the 10-row ceiling/);
+  });
+
+  it('assertValidPool rejects two fallback rows on one underlying, naming both lines', () => {
+    // SPY, QQQ, PLTR and NVDA each carry two ETP lines; marking both is
+    // doubled exposure to one name in the mode with no screener to notice.
+    // This rule is the module's own, not the spec's — the throw says so.
+    const doubled = [
+      makeRow({ lse_ticker: '3SPY', screening_instrument: 'SPY', fallback_default: true }),
+      makeRow({ lse_ticker: '3USL', screening_instrument: 'SPY', fallback_default: true }),
+    ];
+    expect(() => assertValidPool(doubled)).toThrow(/'3SPY' and '3USL'/);
+    expect(() => assertValidPool(doubled)).toThrow(/own invariant/);
+  });
+
+  it('accepts two rows on one underlying when only one of them is the fallback', () => {
+    expect(() =>
+      assertValidPool([
+        makeRow({ lse_ticker: '3SPY', screening_instrument: 'SPY', fallback_default: true }),
+        makeRow({ lse_ticker: '3USL', screening_instrument: 'SPY', fallback_default: false }),
+      ]),
+    ).not.toThrow();
   });
 });
 
