@@ -93,9 +93,14 @@ const dashboardCredential = process.env[DASHBOARD_CREDENTIAL_ENV_VAR];
 const mode = resolveStoreMode();
 const dbPath = sharedStorePath(mode);
 // #837 M9: the dashboard process is a READER. `'service-api'` declares an empty
-// write set, so any statement in this process that writes any table at all
-// throws in dev/CI — the spec's "service-api is a reader only" made mechanical
-// rather than left to review.
+// write set, so any INSERT/REPLACE/UPDATE/DELETE issued in this process — to
+// any table at all — throws in dev/CI, which turns the spec's "service-api is
+// a reader only" from a review convention into an assertion.
+//
+// DML only, and the guard says so itself (write-guard.ts, limit 4): `CREATE`,
+// `DROP` and `ALTER` are not scanned, so this declaration does not prove the
+// process cannot touch the schema. Detection where it plausibly goes wrong,
+// not a sandbox.
 const db = guardedStore(openSharedStore(dbPath), 'service-api');
 // #940: `sharedStorePath` returns a path RELATIVE to the process's working
 // directory (see file header), so two processes started from different

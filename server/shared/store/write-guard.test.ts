@@ -35,7 +35,24 @@ describe('isStoreWriteGuardEnabled', () => {
   it('lets an explicit override win in both directions', () => {
     expect(isStoreWriteGuardEnabled({ nodeEnv: 'test', override: 'off' })).toBe(false);
     expect(isStoreWriteGuardEnabled({ nodeEnv: 'production', override: 'on' })).toBe(true);
-    expect(isStoreWriteGuardEnabled({ samuraiMode: 'live', override: 'on' })).toBe(true);
+  });
+
+  it('refuses to let `on` re-enable the guard on a live-money run', () => {
+    // PR #1048 review: the overrides are deliberately asymmetric. `off` is
+    // always safe (it can only cost detection); `on` reaching a live run would
+    // put this module's SQL parser on the order path, which is exactly what
+    // "off in production" exists to prevent.
+    expect(isStoreWriteGuardEnabled({ samuraiMode: 'live', override: 'on' })).toBe(false);
+    expect(
+      isStoreWriteGuardEnabled({ nodeEnv: 'production', samuraiMode: 'live', override: 'on' }),
+    ).toBe(false);
+    // …but it still wins over a production BUILD that is not live-money, which
+    // is the case the escape hatch is for.
+    expect(
+      isStoreWriteGuardEnabled({ nodeEnv: 'production', samuraiMode: 'paper', override: 'on' }),
+    ).toBe(true);
+    // `off` keeps beating everything, live included.
+    expect(isStoreWriteGuardEnabled({ samuraiMode: 'live', override: 'off' })).toBe(false);
   });
 
   it('ignores an unrecognised override rather than guessing', () => {
@@ -237,6 +254,23 @@ describe('guardedStore', () => {
       );
     } finally {
       db.close();
+    }
+  });
+
+  it('refuses every write from a stage that declares no tables', () => {
+    for (const stage of ['service-api', 'control-arm'] as const) {
+      const { db, guarded } = openGuarded(stage);
+      try {
+        expect(() => guarded.prepare('INSERT INTO audit_log (trace_id) VALUES (?)')).toThrow(
+          new RegExp(`'${stage}' may write \\(nothing — it is a reader\\)`),
+        );
+        expect(() => guarded.exec('DELETE FROM current_tick')).toThrow(/it is a reader/);
+        expect(() => guarded.prepare('UPDATE bars SET close = 1')).toThrow(
+          new RegExp(`the '${stage}' handle wrote to 'bars'`),
+        );
+      } finally {
+        db.close();
+      }
     }
   });
 

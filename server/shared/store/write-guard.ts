@@ -16,7 +16,7 @@
  * statement's write target against the tables that stage declares below.
  * Reads are never touched.
  *
- * Three properties are the whole design, and each is a deliberate limit:
+ * Four properties are the whole design, and each is a deliberate limit:
  *
  * 1. **Default permissive.** An UNDECLARED handle — the raw `SharedStore` —
  *    stays exactly as it is today. Wiring is therefore incremental and
@@ -33,6 +33,16 @@
  *    failure. A statement whose write target cannot be read is allowed. The
  *    guard's job is catching a real cross-stage write in dev and CI, not
  *    proving the absence of one.
+ * 4. **DML only — `INSERT`/`REPLACE`/`UPDATE`/`DELETE`.** `CREATE`, `DROP`
+ *    and `ALTER` are NOT scanned, so a guarded handle — a declared-empty
+ *    reader one included — can still change the schema through `exec()`
+ *    without tripping anything. Deliberate (PR #1048 review): widening the
+ *    scan widens the false-positive surface that limit 3 exists to contain,
+ *    and DDL is out of scope by construction anyway, since migrations run on
+ *    the RAW handle before any guarding. A stage issuing DDL at runtime would
+ *    be a wild bug, and this is not the net for it. Stated here rather than
+ *    left implicit because a guard that overstates its coverage is worse than
+ *    one whose narrow scope is written down.
  *
  * No new abstraction over `SharedStore` and no change to the `transaction()`
  * seam: the guarded handle is a `Proxy` whose methods delegate to the same
@@ -149,8 +159,19 @@ export interface StoreWriteGuardEnvironment {
  * and a cross-stage write found there is found before it can matter.
  *
  * `SAMURAI_STORE_GUARD=off` is the escape hatch if the guard ever misfires on
- * a paper soak, and `=on` forces it back on anywhere; anything else is ignored
- * rather than guessed at.
+ * a paper soak, and `=on` forces it back on; anything else is ignored rather
+ * than guessed at.
+ *
+ * **The two overrides are deliberately NOT symmetric, because their failure
+ * modes are not** (PR #1048 review). `off` beats everything: disabling a dev
+ * assertion can only ever cost detection. `on` beats a `NODE_ENV=production`
+ * BUILD — the case the escape hatch exists for, a production build being
+ * exercised somewhere that is not trading real money — but it does **not**
+ * beat `SAMURAI_MODE=live`. A live-money run never enables the guard, full
+ * stop: were `on` able to reach it, a stray variable in a live deployment
+ * would put a parser this module might have got wrong on the order path, and
+ * limit 2 above ("cannot be taken down by a parser this module got wrong")
+ * would be a claim this predicate does not keep.
  */
 export function isStoreWriteGuardEnabled(
   environment: StoreWriteGuardEnvironment = {
@@ -159,10 +180,11 @@ export function isStoreWriteGuardEnabled(
     override: process.env.SAMURAI_STORE_GUARD,
   },
 ): boolean {
-  if (environment.override === 'on') return true;
   if (environment.override === 'off') return false;
-  if (environment.nodeEnv === 'production') return false;
+  // Ordered ABOVE `on` on purpose — see the doc comment's asymmetry note.
   if (environment.samuraiMode === 'live') return false;
+  if (environment.override === 'on') return true;
+  if (environment.nodeEnv === 'production') return false;
   return true;
 }
 
