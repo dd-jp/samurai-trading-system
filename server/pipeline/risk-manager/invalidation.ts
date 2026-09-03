@@ -451,12 +451,12 @@ export function validateConditions(raw: unknown, side: OrderIntent['side']): Val
  * the storage layer.
  *
  * So the FULL shape is checked on read (`risk-manager-spec.md`, "persistence &
- * replay", 2026-09-03 tightening): finite `observed` on a measured state,
- * `observed: null` on `unevaluable`, and — new in #1068 — a well-formed
- * `window` on a `bars` observable (previously only `measure` was checked) and
- * an indicator `lookback` at or under `MAX_INVALIDATION_LOOKBACK` (previously
- * unchecked on read, even though the validator has enforced it on emission
- * since PR #1067).
+ * replay"): finite `observed` on a measured state, `observed: null` on
+ * `unevaluable`, a well-formed `window` on a `bars` observable, and an
+ * indicator `lookback` at or under `MAX_INVALIDATION_LOOKBACK` — the lookback
+ * cap is enforced independently of whether the indicator `kind` itself is
+ * still recognized, so a retired `kind` cannot smuggle an oversized lookback
+ * past the registry-drift leniency below.
  *
  * Per-element, not whole-list: a malformed element is DROPPED from the
  * replayed list rather than collapsing the whole row. If nothing survives,
@@ -484,11 +484,17 @@ function isObservable(value: unknown): value is InvalidationObservable {
   if (observable.kind === 'mark') return true;
   if (observable.kind === 'indicator') {
     const spec = readIndicatorSpec(observable.spec);
+    if (spec === 'unparseable' || spec === 'lookback_too_large') return false;
     // `unknown_indicator` is deliberately still accepted (registry-drift
-    // leniency, above). `lookback_too_large` is NOT: the cap exists to stop
-    // an unbounded market-data read, and a persisted row honours that cap on
-    // replay exactly as the validator enforces it on emission.
-    return spec !== 'unparseable' && spec !== 'lookback_too_large';
+    // leniency, above) — but `readIndicatorSpec` reports the retired-`kind`
+    // case before it ever inspects `lookback`, so the cap has to be checked
+    // independently here: registry drift may not smuggle an oversized
+    // lookback past the read-time safety cap.
+    if (spec === 'unknown_indicator') {
+      const rawSpec = observable.spec as { lookback?: unknown };
+      return isPositiveInteger(rawSpec.lookback) && rawSpec.lookback <= MAX_INVALIDATION_LOOKBACK;
+    }
+    return true;
   }
   if (observable.kind === 'bars') {
     if (observable.measure !== 'volume_ratio') return false;
@@ -568,10 +574,10 @@ export function readPersistedConditions(parsed: unknown): EvaluatedCondition[] |
 }
 
 /**
- * Parses a persisted `dropped_conditions` list. Unlike `readPersistedConditions`
- * above, this keeps the original ALL-OR-NOTHING rule: this column is audit-only
- * (zero enforcement effect either way), so #1068 does not extend the
- * element-wise tightening to it.
+ * Parses a persisted `dropped_conditions` list, ALL-OR-NOTHING (unlike
+ * `readPersistedConditions` above): this column is audit-only, with zero
+ * enforcement effect either way, so a malformed element voids the whole list
+ * rather than being salvaged element-wise.
  */
 export function readPersistedDroppedConditions(parsed: unknown): DroppedCondition[] | undefined {
   return readListStrict(parsed, isDroppedCondition);

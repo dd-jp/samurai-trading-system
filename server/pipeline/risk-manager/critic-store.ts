@@ -88,13 +88,14 @@ function readJsonList<T>(
  *
  * `readPersistedConditions` is a pure function on purpose — it stays a plain
  * shape-check callable from a unit test with no `Logger` in scope — so it
- * reports nothing about drops itself. This wrapper compares the raw parsed
- * array length against the survivor count `readPersistedConditions` returns
- * to detect "some element failed the tightened shape check" without
- * duplicating the shape logic, and logs one WARN per malformed row through
- * the store's own logger seam. A row that is not a JSON array at all (NULL,
- * unparseable JSON, a non-array payload) is unchanged from before this ticket
- * — it silently reads as `no_conditions`, exactly as a pre-fold row does.
+ * reports nothing about drops itself. This wrapper detects "the row was
+ * malformed" independently at each stage (unparseable JSON, a non-array
+ * payload, or — by diffing the raw parsed array length against the survivor
+ * count `readPersistedConditions` returns — a partially-corrupt array) and
+ * logs one WARN per malformed row through the store's own logger seam,
+ * naming a reason and the debate id but never the row's raw content.
+ * `stored === null` is not malformed — it is the ordinary "nothing was ever
+ * emitted" case a pre-fold row also produces — so it never logs.
  */
 function readConditionsJson(
   stored: string | null,
@@ -102,29 +103,48 @@ function readConditionsJson(
   logger: Logger | undefined,
 ): EvaluatedCondition[] | undefined {
   if (stored === null) return undefined;
+
   let parsed: unknown;
   try {
     parsed = JSON.parse(stored);
   } catch {
+    logger?.log({
+      trace_id: debate_id,
+      stage: 'risk',
+      level: 'warn',
+      message:
+        'risk_critic_log: conditions_json is not valid JSON; the row replays as no_conditions (#1068)',
+      payload: { debate_id, reason: 'unparseable_json' },
+    });
+    return undefined;
+  }
+
+  if (!Array.isArray(parsed)) {
+    logger?.log({
+      trace_id: debate_id,
+      stage: 'risk',
+      level: 'warn',
+      message:
+        'risk_critic_log: conditions_json is not a JSON array; the row replays as no_conditions (#1068)',
+      payload: { debate_id, reason: 'not_an_array' },
+    });
     return undefined;
   }
 
   const conditions = readPersistedConditions(parsed);
-  if (Array.isArray(parsed)) {
-    const survived = conditions?.length ?? 0;
-    const dropped = parsed.length - survived;
-    if (dropped > 0) {
-      logger?.log({
-        trace_id: debate_id,
-        stage: 'risk',
-        level: 'warn',
-        message:
-          'risk_critic_log: persisted invalidation condition(s) failed the tightened shape ' +
-          'check on read and were dropped from replay; surviving conditions (if any) replay ' +
-          'unaffected, and the row falls back to no_conditions only if nothing survived (#1068)',
-        payload: { debate_id, emitted: parsed.length, survived, dropped },
-      });
-    }
+  const survived = conditions?.length ?? 0;
+  const dropped = parsed.length - survived;
+  if (dropped > 0) {
+    logger?.log({
+      trace_id: debate_id,
+      stage: 'risk',
+      level: 'warn',
+      message:
+        'risk_critic_log: persisted invalidation condition(s) failed the tightened shape ' +
+        'check on read and were dropped from replay; surviving conditions (if any) replay ' +
+        'unaffected, and the row falls back to no_conditions only if nothing survived (#1068)',
+      payload: { debate_id, emitted: parsed.length, survived, dropped },
+    });
   }
   return conditions;
 }
@@ -135,14 +155,10 @@ function writeJsonList(list: readonly unknown[] | undefined): string | null {
 }
 
 export class SqliteRiskCriticStore implements RiskCriticStore {
-  readonly #logger: Logger | undefined;
-
   constructor(
     private readonly db: Db,
-    logger?: Logger,
-  ) {
-    this.#logger = logger;
-  }
+    private readonly logger?: Logger,
+  ) {}
 
   writeVerdict(entry: RiskCriticLog): void {
     this.db
@@ -174,7 +190,7 @@ export class SqliteRiskCriticStore implements RiskCriticStore {
       .get(debate_id) as RiskCriticRow | undefined;
     if (row === undefined) return undefined;
 
-    const conditions = readConditionsJson(row.conditions_json, row.debate_id, this.#logger);
+    const conditions = readConditionsJson(row.conditions_json, row.debate_id, this.logger);
     const dropped = readJsonList(row.dropped_conditions_json, readPersistedDroppedConditions);
     return {
       debate_id: row.debate_id,

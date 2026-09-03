@@ -574,9 +574,8 @@ describe('readPersistedConditions / readPersistedDroppedConditions', () => {
   });
 
   it('drops only the malformed element and keeps the surviving subset (#1068)', () => {
-    // Was "collapses the WHOLE list" pre-#1068. The tightened reader salvages
-    // element-wise: a corrupt sibling must not cost a well-formed condition
-    // its place in the replayed checklist.
+    // Element-wise salvage: a corrupt sibling must not cost a well-formed
+    // condition its place in the replayed checklist.
     expect(readPersistedConditions([wellFormed, {}])).toEqual([wellFormed]);
   });
 
@@ -691,6 +690,29 @@ describe('readPersistedConditions / readPersistedDroppedConditions', () => {
     expect(readPersistedConditions([retired])).toEqual([retired]);
   });
 
+  it('rejects a retired indicator kind whose lookback is over the cap — registry drift does not waive the safety cap', () => {
+    const retiredOverCap: EvaluatedCondition = {
+      condition: {
+        id: 'c3',
+        observable: {
+          kind: 'indicator',
+          spec: {
+            indicator: 'stochastic_rsi' as never,
+            params: {},
+            lookback: MAX_INVALIDATION_LOOKBACK + 1,
+            timeframe: '1h',
+          },
+        },
+        comparator: '<',
+        threshold: 20,
+        rationale: 'a retired indicator kind with an oversized lookback',
+      },
+      state: 'not_breached',
+      observed: 55,
+    };
+    expect(readPersistedConditions([retiredOverCap])).toBeUndefined();
+  });
+
   it.each([
     ['no window at all', { kind: 'bars', measure: 'volume_ratio' }],
     [
@@ -709,7 +731,7 @@ describe('readPersistedConditions / readPersistedDroppedConditions', () => {
         window: { timeframe: '1h', lookback: MAX_INVALIDATION_LOOKBACK + 1 },
       },
     ],
-  ])('rejects a bars observable with %s — previously only `measure` was checked', (_label, observable) => {
+  ])('rejects a bars observable with %s', (_label, observable) => {
     const malformedBars: EvaluatedCondition = {
       condition: {
         id: 'c4',

@@ -148,10 +148,16 @@ function fakeLlm(text: string): { client: LlmClient; calls: () => number } {
   return { client, calls: () => calls };
 }
 
-function collectingLogger(): { logger: Logger; entries: { level: string; message: string }[] } {
-  const entries: { level: string; message: string }[] = [];
+function collectingLogger(): {
+  logger: Logger;
+  entries: { level: string; message: string; payload?: unknown }[];
+} {
+  const entries: { level: string; message: string; payload?: unknown }[] = [];
   return {
-    logger: { log: (entry) => entries.push({ level: entry.level, message: entry.message }) },
+    logger: {
+      log: (entry) =>
+        entries.push({ level: entry.level, message: entry.message, payload: entry.payload }),
+    },
     entries,
   };
 }
@@ -868,6 +874,40 @@ describe('SqliteRiskCriticStore', () => {
     ).toBeUndefined();
   });
 
+  it('logs a WARN naming the reason when conditions_json is not valid JSON (#1068)', () => {
+    db.prepare(
+      `INSERT INTO risk_critic_log
+         (debate_id, verdict, max_notional, reasoning, created_at, conditions_json)
+       VALUES (?, 'pass', NULL, 'garbled', ?, '{not json')`,
+    ).run(DEBATE_ID, NOW.toISOString());
+
+    const { logger, entries } = collectingLogger();
+    expect(
+      new SqliteRiskCriticStore(db, logger).getByDebateId(DEBATE_ID)?.verdict.conditions,
+    ).toBeUndefined();
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.level).toBe('warn');
+    expect(entries[0]?.payload).toEqual({ debate_id: DEBATE_ID, reason: 'unparseable_json' });
+  });
+
+  it('logs a WARN naming the reason when conditions_json parses to a non-array payload (#1068)', () => {
+    db.prepare(
+      `INSERT INTO risk_critic_log
+         (debate_id, verdict, max_notional, reasoning, created_at, conditions_json)
+       VALUES (?, 'pass', NULL, 'garbled', ?, '{"conditions":[]}')`,
+    ).run(DEBATE_ID, NOW.toISOString());
+
+    const { logger, entries } = collectingLogger();
+    expect(
+      new SqliteRiskCriticStore(db, logger).getByDebateId(DEBATE_ID)?.verdict.conditions,
+    ).toBeUndefined();
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.level).toBe('warn');
+    expect(entries[0]?.payload).toEqual({ debate_id: DEBATE_ID, reason: 'not_an_array' });
+  });
+
   it.each([
     ['an element with no fields at all', '[{}]'],
     ['a bare model-shaped state assertion', '[{"state":"breached"}]'],
@@ -929,6 +969,12 @@ describe('SqliteRiskCriticStore', () => {
     expect(readBack?.verdict.conditions).toEqual([survivor]);
     expect(entries).toHaveLength(1);
     expect(entries[0]?.level).toBe('warn');
+    expect(entries[0]?.payload).toEqual({
+      debate_id: DEBATE_ID,
+      emitted: 2,
+      survived: 1,
+      dropped: 1,
+    });
   });
 
   it('a real breach still fires when a corrupt sibling is dropped from the same row (#1068)', () => {
@@ -961,6 +1007,12 @@ describe('SqliteRiskCriticStore', () => {
     expect(breachedConditions(readBack.verdict)).toEqual([realBreach]);
     expect(entries).toHaveLength(1);
     expect(entries[0]?.level).toBe('warn');
+    expect(entries[0]?.payload).toEqual({
+      debate_id: DEBATE_ID,
+      emitted: 2,
+      survived: 1,
+      dropped: 1,
+    });
   });
 
   it('does not log when every persisted condition is well-formed', () => {
