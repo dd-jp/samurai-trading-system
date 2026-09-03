@@ -1,6 +1,6 @@
 # Samurai Trading System
 
-Live-money multi-agent trading system covering **crypto and stocks**.
+Live-money multi-agent trading system for **equities**. Crypto left the system's scope on 2026-08-16 (ADR-0015's amendment) and a future separate system inherits it; the crypto code paths named below (the ccxt data source, the BTC-USD smoke run, the per-asset-class breakers) are still in the tree and still run.
 
 The runtime tick is **six stages** — Analysts → Debate → Trader → Risk → Verdict → Execution — driven by `SequentialTickRunner` (`server/apps/orchestrator/tick-runner.ts`), with a Feedback Loop that adjusts analyst weights and risk thresholds post-trade.
 
@@ -42,8 +42,8 @@ Market Data Service ─┐
 - **Package manager:** Yarn 4.18.0 (via Corepack; `packageManager` field). There is no `package-lock.json`
 - **Tests:** Vitest
 - **Linter/formatter:** Biome
-- **State:** SQLite via `better-sqlite3`, one file per environment (`data/samurai-<env>.sqlite`), 25 forward migrations
-- **Brokers:** Alpaca (MVP paper), Simulated (backtest); ccxt/IBKR are long-term targets behind the same `BrokerAdapter` interface
+- **State:** SQLite via `better-sqlite3`, one file per environment (`data/samurai-<env>.sqlite`), 39 forward migrations
+- **Brokers:** Alpaca (MVP paper) and Simulated (backtest) are the only order adapters in the tree. The decided live equities venue is **Saxo Capital Markets UK (GIA), over OpenAPI** (ADR-0015's 2026-08-30 amendment) — no adapter is built yet. IBKR was disqualified on cost (#906) and Trading 212 is barred by its own algo-trading terms (#896); ccxt/IBKR survive as data sources
 - **LLM:** single provider — Nous (ADR-0009), per-role models
 
 ## Prerequisites
@@ -87,7 +87,7 @@ made the gate abort on precisely the fault the next step existed to fix.
 yarn orchestrator
 ```
 
-Runs the full pipeline: market data → analysts → debate → trader → risk → verdict → execution. The scheduler routes crypto (24/7) and stocks (market hours via the trading calendar). Default universe is SPY, QQQ, AAPL, TSLA, BTC-USD, ETH-USD (`DEFAULT_UNIVERSE` in `server/apps/orchestrator/scheduler.ts`).
+Runs the full pipeline: market data → analysts → debate → trader → risk → verdict → execution. The scheduler routes crypto (24/7) and stocks (market hours via the trading calendar). Default universe is QQQ, AAPL, TSLA (`DEFAULT_UNIVERSE` in `server/apps/orchestrator/scheduler.ts`) — SPY was dropped in #1006 and the crypto pair left with the scope change. It is not the live universe either: ADR-0016 puts live instruments on LSE leveraged ETPs.
 
 `yarn orchestrator` builds first, then runs `node --env-file=.env.local dist/server/apps/orchestrator/index.js`. The built entrypoint does **not** read a `.env` file on its own — pass `--env-file` or export the variables. The tracked `.env` holds empty placeholders and is not a configured environment; real credentials belong in the gitignored `.env.local`. An empty or whitespace-only value counts as **missing**, not as configured.
 
@@ -97,7 +97,8 @@ The orchestrator refuses to start rather than guess, and names *every* missing v
 
 | Variable | Values | Purpose |
 | --- | --- | --- |
-| `SAMURAI_MODE` | `paper` (default) / `backtest` / `live` | Selects the broker environment and HITL posture. Not trimmed on purpose — `live` is reachable only by typing it exactly. The shipped entrypoint refuses `live`; see `server/apps/orchestrator/paper-profile.ts` |
+| `SAMURAI_MODE` | `paper` (default) / `backtest` / `live` | Selects the broker environment and HITL posture. Not trimmed on purpose — `live` is reachable only by typing it exactly. `live` now boots `liveStartingProfile` (`server/apps/orchestrator/live-profile.ts`, #511) rather than being refused: `paperStartingProfile` still refuses it, but the shipped entrypoint routes around it via `startingProfileForMode`. A live run additionally needs `SAMURAI_LIVE_MAX_CAPITAL_USD` below, and still cannot price an LSE book — see [#895](https://github.com/dd-jp/samurai-trading-system/issues/895) |
+| `SAMURAI_LIVE_MAX_CAPITAL_USD` | | **Required when `SAMURAI_MODE=live`**, and only then. The capital ceiling every live cap and position size is derived from — a positive number of US dollars, with no default and no fallback. It is a ceiling, not a funding: sizing takes `min(ceiling, account equity)`. A value below the floor is refused rather than clamped. It is USD-denominated against a GBP book and nothing converts — see [#949](https://github.com/dd-jp/samurai-trading-system/issues/949) |
 | `SAMURAI_ALERTS` | `telegram` / `log-only` — **required, no default** | Where operator alerts go |
 | `ALPACA_API_KEY`, `ALPACA_API_SECRET` | | Broker + market data (one per-account rate budget covers both) |
 | `NOUS_BASE_URL` | | LLM endpoint. Unconditional — there is deliberately no default in source |
@@ -141,7 +142,7 @@ They are overridable because **a rate limit is a property of the account, not of
 
 Alpaca's published limit is **200 requests per minute per account**, shared by the broker calls and the market-data calls. Since #391 both consumers sit inside one bucket, so the sustained default is a deliberate 75% of that ceiling (2.5/s = 150/min), leaving margin for retry attempts and any future consumer on the same key.
 
-**Polygon is paced separately** (`SAMURAI_PACING_POLYGON_*`, same variable shapes, ceiling 5/min) and is deliberately **not** a venue key: the live composition root never validates or builds it, so a typo in a Stage-2-only variable cannot kill orchestrator boot mid-soak (#510/#520).
+**Polygon, Coinbase and Bitstamp are paced separately** (`SAMURAI_PACING_POLYGON_*` / `_COINBASE_*` / `_BITSTAMP_*`, same variable shapes; Polygon's ceiling is 5/min) and are deliberately **not** venue keys — `VENUE_KEYS` is `alpaca`/`ccxt`/`ibkr` only. The live composition root never validates or builds them, so a typo in a Stage-2-only variable cannot kill orchestrator boot mid-soak (#510/#520).
 
 #### Optional — durable log sink
 
@@ -151,6 +152,8 @@ Alpaca's published limit is **200 requests per minute per account**, shared by t
 | --- | --- | --- |
 | `SAMURAI_LOG_FILE` | `logs/orchestrator.log` | Active log file. Created `0o600` in a `0o700` directory; `logs/` is gitignored |
 | `SAMURAI_LOG_MAX_BYTES` | `16777216` (16 MiB) | Rotate when the active file would exceed this |
+| `SAMURAI_LOG_LEVEL` | `info` | Only the literal `debug` does anything — it turns the verbose `debug` lines on. Every other level is structurally unfilterable on purpose: `warn`/`error` carry the sink-degradation notices, so no setting can configure the process into silence (#1035) |
+| `SAMURAI_LLM_CAPTURE` | unset (**on**) | Only the literal `off` disables capturing LLM prompt/response text into `llm_call_log`. On by default, redacted centrally (#1035) |
 | `SAMURAI_LOG_MAX_FILES` | `10` | Rotated generations kept (`orchestrator.log.1` … `.10`), excluding the active file. On-disk ceiling is therefore ~176 MiB. `0` means **keep nothing**: rotation discards the full file rather than renaming it, so only the last `SAMURAI_LOG_MAX_BYTES` of history survive. It does not mean "never rotate" |
 
 A malformed value is refused at startup rather than defaulted. An **unwritable** path is not: the sink degrades to stdout-only, logs one `warn` saying file logging is off until restart, and the process keeps running — a logging problem must never end a trading run.
@@ -285,7 +288,7 @@ yarn test:local
 yarn vitest run server/pipeline/debate-engine/
 ```
 
-The suite is **2920 tests across 188 files** (2919 passing; one `describe.skipIf` integration test that runs only when live LLM credentials are present). Measured 2026-08-09 on `yarn test`.
+The suite is **4578 tests across 266 files** (4577 passing; one `describe.skipIf` integration test — `server/pipeline/debate-engine/disagreement-detector.integration.test.ts` — that runs only when live LLM credentials are present). Measured 2026-09-03 on `yarn test`.
 
 `vitest.config.ts` also writes a durable, machine-readable per-test record to
 `.vitest-reports/junit.xml` (gitignored) on every run, alongside the normal
@@ -293,12 +296,13 @@ console output. If a gate run fails and the terminal scrollback that showed
 the failing test's name is gone, read that file instead of re-running —
 it survives after the process exits ([#809](https://github.com/dd-jp/samurai-trading-system/issues/809)).
 
-CI (`.github/workflows/ci.yml`) runs on every PR and has two jobs:
+CI (`.github/workflows/ci.yml`) runs on every PR and has three jobs:
 
-- **checks** — `yarn lint`, `yarn typecheck`, `yarn build`, `yarn test`. Each runs even if an earlier one fails, so a lint break can't hide a test break.
+- **checks** — `yarn lint`, `yarn typecheck`, `yarn build`, `yarn build:web`, `yarn test`, `yarn check:citations`, and a guard that the indicator golden fixture was generated rather than hand-edited. Each runs even if an earlier one fails, so a lint break can't hide a test break.
+- **e2e** — the Playwright suite against the built bundle, on its own runner with Chromium installed; failures upload traces.
 - **review-harness** — `pytest .github/scripts` for the Python AI-review harness, which `yarn test` cannot see.
 
-Both must pass before merge.
+All three must pass before merge.
 
 ## Project Structure
 
@@ -335,7 +339,12 @@ samurai-trading-system/
 │   ├── shared/            # Types, clock, SQLite store + migrations, HTTP, LLM
 │   └── tools/             # offline only, never on the money path
 │       ├── backtest/      # Fill simulation, validation, replay, Stage-2 selection
-│       └── data-cli.ts    # `yarn data` — history ingestion, market-data backfill
+│       ├── data-cli.ts    # `yarn data` — history ingestion, market-data backfill
+│       ├── check-path-citations.ts    # `yarn check:citations` — CI gate over the docs
+│       ├── check-live-money-gates.ts  # `yarn check:live-gates` — the cited gates are still open
+│       ├── report-arm-comparison.ts   # `yarn report:arms`
+│       ├── place-soak-position.ts     # `yarn place-soak-position`
+│       └── run-stage2*.ts, measure-conviction-ceiling.ts  # hand-run, no script
 │
 ├── contracts/             # THE WIRE BOUNDARY — imported by both, importing neither
 │                          # JSON-serializable shapes only; boundary.test.ts enforces it
@@ -346,6 +355,7 @@ samurai-trading-system/
 │   ├── research/          # Strategy evaluation, deployment plan, provider research
 │   ├── reviews/           # Audit + readiness reports
 │   ├── specs/             # Synthesized PRDs per stage + cross-spec verification
+│   ├── dashboard-v2/      # Dashboard v2 design material
 │   ├── wayfinder/         # Historical design maps (new ones are GitHub issues)
 │   └── coding-standards.md
 ├── .github/workflows/     # CI + AI review
@@ -369,7 +379,7 @@ dist/server/apps/supervisor/index.js      # yarn start
 
 ## Scripts
 
-Every script in `package.json`, all 23 of them. There are no others.
+Every script in `package.json`, all 27 of them. There are no others.
 
 | Tier | Script | What it does |
 | --- | --- | --- |
@@ -396,6 +406,10 @@ Every script in `package.json`, all 23 of them. There are no others.
 | quality | `yarn lint` | `biome check .` — lint **and** formatting, both gated in CI |
 | quality | `yarn lint:fix` | `biome check --write .` — fixes both |
 | quality | `yarn precommit` | `lint:fix` → `typecheck` → `test:coverage` |
+| quality | `yarn check:citations` | `tsx server/tools/check-path-citations.ts` — every backticked path in the tracked docs resolves. **A CI step**, and it reads this file too |
+| ops | `yarn check:live-gates` | `tsx server/tools/check-live-money-gates.ts` — re-verifies that the issues the live-money gate list cites are still open, so a closed issue cannot silently falsify the gate |
+| ops | `yarn report:arms` | `tsx server/tools/report-arm-comparison.ts` — the LLM arm vs. the indicator-only control |
+| ops | `yarn place-soak-position` | `tsx --env-file=.env.local server/tools/place-soak-position.ts` — hand-places a soak position. Reads `.env.local`, so it touches the venue |
 
 **Five run scripts build first** (`start`, `orchestrator`, `api`, `smoke`,
 `data`), deliberately. A stale `dist/` fails *silently* — the process boots and
@@ -419,9 +433,9 @@ rewrites it — a check-only `format` was a strict subset of `lint` that could
 only ever duplicate its verdict.
 
 The Stage-2 tools (`run-stage2`, `run-spread-calibration`,
-`run-stage2-cost-decomposition`) have **no** script and are not missing one.
-They are hand-run research jobs, invoked as `node --env-file=.env.local
-dist/server/tools/<name>.js` after a build — see
+`run-stage2-cost-decomposition`) and `measure-conviction-ceiling` have **no**
+script and are not missing one. They are hand-run research jobs, invoked as
+`node --env-file=.env.local dist/server/tools/<name>.js` after a build — see
 [Stage-2 backtest / validation](#stage-2-backtest--validation).
 
 ## Documentation
