@@ -327,6 +327,45 @@ export class SubclassBracketUnresolvableError extends Error {
  * bracket is `null` (crypto) is an instrument ADR-0018 deliberately prices no
  * bracket for and which therefore must not be entered on this rule at all.
  */
+/**
+ * Refuses a `headroom_reserve_fraction` outside `[0, 1)` (#897).
+ *
+ * The failure this guards is quiet, not loud. A percent-vs-fraction typo (`10`
+ * for `0.10`) makes `riskFractionFor` negative, which makes `size` negative —
+ * finite, so `Number.isFinite` admits it — and `decide.ts`'s
+ * `submittableSize * entry < config.min_viable_notional` check then turns EVERY
+ * entry in that subclass into `skip('below_min_notional')`. Nothing wrong is
+ * submitted; the system simply stops trading the subclass, and the only trace
+ * is a skip reason indistinguishable in a soak log from a market that offered
+ * no setups. `1` is refused for the same reason with a different sign: it
+ * reserves the whole envelope and sizes every entry to exactly zero.
+ *
+ * That is the same class of silent-wrong-config failure `resolveStoreMode` and
+ * `SubclassBracketUnresolvableError` already throw over, so it takes the same
+ * posture — throw, naming the field, the offending value and the subclass —
+ * rather than clamping to a plausible number and continuing.
+ *
+ * `0` is valid: it is the pre-#897 behaviour, and a deliberate `0` is how a
+ * future amendment would turn the reserve off without deleting the field.
+ */
+function assertValidHeadroomReserve(
+  bracket: SubclassBracket,
+  subclass: InstrumentSubclass,
+  instrument: string,
+): void {
+  const reserve = bracket.headroom_reserve_fraction;
+  if (!Number.isFinite(reserve) || reserve < 0 || reserve >= 1) {
+    throw new SubclassBracketUnresolvableError(
+      `${instrument} is classified '${subclass}', whose bracket declares ` +
+        `headroom_reserve_fraction = ${String(reserve)} — outside [0, 1). ` +
+        `It is a FRACTION of the D5 envelope, not a percentage — 10% is 0.1, not ` +
+        `10. Outside that range riskFractionFor goes negative or to zero, and every entry in this ` +
+        `subclass is silently skipped as below_min_notional rather than refused visibly.`,
+      instrument,
+    );
+  }
+}
+
 export function resolveSubclassBracket(
   instrument: string,
   subclassOf: Readonly<Record<string, InstrumentSubclass>>,
@@ -355,6 +394,8 @@ export function resolveSubclassBracket(
       instrument,
     );
   }
+
+  assertValidHeadroomReserve(bracket, subclass, instrument);
 
   return bracket;
 }

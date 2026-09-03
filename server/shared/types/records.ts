@@ -192,8 +192,22 @@ export interface OrderIntentMetadata {
        * `deployment_fraction` would over-state what was committed. Persisted
        * for the same reason `round_trip_cost_pct` is: it is injected config
        * that a later amendment may move.
+       *
+       * **Optional because its ABSENCE is meaningful, not because it is
+       * sometimes unwritten.** `decide.ts` spreads the whole frozen bracket, so
+       * every row written after #897 carries it. A row WITHOUT it is a
+       * pre-#897 intent, sized at the full `deployment_fraction` with no
+       * reserve — which is strictly more than a read-side default of `0` would
+       * tell a reader, since `0` is also a legal post-#897 configured value and
+       * the two would then be indistinguishable. Declaring it required would
+       * make this type claim something untrue of every journaled row predating
+       * this change.
+       *
+       * There is no reader of `frozen_bracket` in the tree today, so this is a
+       * latent type-vs-reality mismatch for a FUTURE expectancy accounting, not
+       * a live arithmetic bug.
        */
-      headroom_reserve_fraction: number;
+      headroom_reserve_fraction?: number;
     };
     /**
      * The size D5 actually sized, before `whole_share_sizing` floored it to the

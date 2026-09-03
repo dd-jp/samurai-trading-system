@@ -370,6 +370,67 @@ describe('an unresolvable subclass fails loud', () => {
   });
 });
 
+describe('an out-of-range headroom reserve fails loud, not silently (#897)', () => {
+  // The failure being guarded is quiet: a percent-vs-fraction typo makes
+  // `riskFractionFor` negative, `size` negative-but-finite, and `decide.ts`'s
+  // `min_viable_notional` check then turns EVERY entry in the subclass into
+  // `skip('below_min_notional')` — indistinguishable in a soak log from a
+  // market that offered no setups. These tests pin the throw that replaces it.
+  const withReserve = (reserve: number): TraderConfig =>
+    armedConfig({
+      subclass_brackets: {
+        ...ADR_0018_SUBCLASS_BRACKETS,
+        index_etp_3x: {
+          ...(ADR_0018_SUBCLASS_BRACKETS.index_etp_3x as SubclassBracket),
+          headroom_reserve_fraction: reserve,
+        },
+      },
+    });
+
+  const resolveWith = (reserve: number): SubclassBracket | null =>
+    resolveSubclassBracket(INDEX_ETP, SUBCLASS_OF, withReserve(reserve).subclass_brackets);
+
+  it('throws on a PERCENT written where a fraction belongs — 10, not 0.10', () => {
+    expect(() => resolveWith(10)).toThrow(SubclassBracketUnresolvableError);
+    // The message has to carry all three, or the operator cannot act on it.
+    expect(() => resolveWith(10)).toThrow(/headroom_reserve_fraction = 10/);
+    expect(() => resolveWith(10)).toThrow(/index_etp_3x/);
+    expect(() => resolveWith(10)).toThrow(new RegExp(INDEX_ETP));
+  });
+
+  it('throws on 1 — reserving the WHOLE envelope sizes every entry to zero', () => {
+    expect(() => resolveWith(1)).toThrow(SubclassBracketUnresolvableError);
+  });
+
+  it('throws on a negative reserve', () => {
+    expect(() => resolveWith(-0.1)).toThrow(SubclassBracketUnresolvableError);
+  });
+
+  it('ACCEPTS 0 — the pre-#897 behaviour, and how an amendment turns the reserve off', () => {
+    const bracket = resolveWith(0);
+
+    expect(bracket).not.toBeNull();
+    // And it is a real zero, not a coerced one: sizing collapses back to the
+    // full envelope exactly as it did before #897.
+    expect(riskFractionFor(bracket as SubclassBracket)).toBeCloseTo(
+      D5_INDEX_ETP_DEPLOYMENT_FRACTION * 0.0216,
+      9,
+    );
+  });
+
+  it('validates in the RESOLVER, which is the only production path to riskFractionFor', () => {
+    // `decide.ts` reaches `riskFractionFor` (line ~581) only through
+    // `resolveSubclassBracket` (line ~556), so the resolver covers every real
+    // sizing call while keeping the per-decision hot function pure. Both are
+    // exported from the module, so a FUTURE caller could still hold a bracket
+    // that never passed the resolver — this test states the assumption so it
+    // fails visibly if that stops being true.
+    const unvalidated = withReserve(10).subclass_brackets.index_etp_3x as SubclassBracket;
+
+    expect(riskFractionFor(unvalidated)).toBeLessThan(0);
+  });
+});
+
 describe('the round trip is injected config, never a constant', () => {
   it('records the quote the decision was made under', async () => {
     // #666 may move 0.18% / 0.41%, and the accuracy bar moves directly with
