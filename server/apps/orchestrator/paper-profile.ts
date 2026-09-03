@@ -182,10 +182,15 @@ export const PAPER_PROFILE_PROVENANCE = {
   'traderConfig.subclass_brackets.index_etp_3x.stop_pct': 'SPEC',
   'traderConfig.subclass_brackets.index_etp_3x.deployment_fraction': 'SPEC',
   'traderConfig.subclass_brackets.index_etp_3x.round_trip_cost_pct': 'SPEC',
+  // #897. SPEC: ADR-0018's 2026-09-03 amendment declares the reserve and its
+  // arithmetic; nothing here computes it from another config value.
+  'traderConfig.subclass_brackets.index_etp_3x.headroom_reserve_fraction': 'SPEC',
   'traderConfig.subclass_brackets.single_stock_etp_3x.take_profit_pct': 'SPEC',
   'traderConfig.subclass_brackets.single_stock_etp_3x.stop_pct': 'SPEC',
   'traderConfig.subclass_brackets.single_stock_etp_3x.deployment_fraction': 'SPEC',
   'traderConfig.subclass_brackets.single_stock_etp_3x.round_trip_cost_pct': 'SPEC',
+  // #897, as above.
+  'traderConfig.subclass_brackets.single_stock_etp_3x.headroom_reserve_fraction': 'SPEC',
   // `crypto: null` — "ADR-0018 sets no bracket here" — is a leaf value like any
   // other and carries the same provenance: it is the ADR's own answer.
   'traderConfig.subclass_brackets.crypto': 'SPEC',
