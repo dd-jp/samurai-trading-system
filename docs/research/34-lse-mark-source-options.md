@@ -33,6 +33,19 @@ entitlement, the OpenAPI endpoint/field carrying the tick timestamp, and per-ins
 the pool's leveraged ETPs/ETCs (3USL, 3UKL, an oil ETC) rather than ordinary shares — chased in a
 2026-09-01 follow-up on the same ticket, not yet answered.
 
+**Update 2026-09-03 — the chase is over; support won't confirm the rest in writing.** Alex's
+2026-09-03 reply on ticket 20084 declined the entitlement-match and ETP-coverage questions outright
+("We do not advise on what market data subscriptions include" / "Same as answer 1, I am afraid"),
+pointing instead to the public [market-data subscriptions page](https://www.home.saxo/products/market-data-subscriptions)
+and the in-platform subscription agreements shown before purchase. It did answer the endpoint
+question: the price feed is `POST /trade/v1/subscriptions/prices`
+([reference docs](https://www.developer.saxo/openapi/referencedocs/trade/v1/prices/post__trade__subscriptions)),
+still without naming the tick-timestamp response field. So 1 of 3 chased specifics has a concrete
+OpenAPI answer; the other 2 (exact entitlement name/price, per-instrument leveraged-ETP/ETC coverage)
+are **not obtainable from support by further ticket replies** — resolving them means reading the
+linked pricing/subscription pages, or probing the endpoint against a funded live account, not
+emailing again. This does not change the Saxo-over-IBKR recommendation.
+
 **Read §4 before anything else.** It is not a data-vendor finding, and it is larger than this ticket.
 
 ---
@@ -45,7 +58,7 @@ the pool's leveraged ETPs/ETCs (3USL, 3UKL, an oil ETC) rather than ordinary sha
 | **Polygon** (integrated, fallback) | **No — VERIFIED** | Cannot serve the equity leg at any price. |
 | **Trading 212** (the account provider) | **No — VERIFIED from its own docs** | No quote endpoint exists; the one price field has no timestamp; the API Terms bar algorithmic trading outright (§4). |
 | **Yahoo Finance** | **Yes, 11/11 at 1-minute — VERIFIED** | Technically able for *bars*, but last-trade only, ~20 min delayed, and unlicensed. Research only. |
-| **Saxo** (the execution venue) | **Yes — real-time over OpenAPI on a live account, per written vendor confirmation (not HTTP-probed)** | **The recommendation as of 2026-09-01.** Same account as execution; entitlement price/endpoint/per-instrument coverage still being chased (ticket 20084). See update note above and §6. |
+| **Saxo** (the execution venue) | **Yes — real-time over OpenAPI on a live account, per written vendor confirmation (not HTTP-probed)** | **The recommendation as of 2026-09-01.** Same account as execution; endpoint confirmed (`POST /trade/v1/subscriptions/prices`), entitlement price and per-instrument ETP coverage support declined to confirm — see the 2026-09-03 update note above and §6. |
 | **Interactive Brokers** | **Yes — LSE L1, GBP 1.00/month non-professional** | **Runner-up as of 2026-09-01** (was the recommendation). Real-time bid/ask at a retail price, but a second account, USD 500 minimum equity, and unverified LSEETF coverage lost it to Saxo's single-account path. |
 | Twelve Data / EODHD / FMP / Databento | **No real-time XLON found** (not the same as none existing) | Delayed, EOD, Cboe-not-LSE, or US-only in what was checked; Twelve Data's real-time-EU add-on advertises Cboe Europe and its LSE price was NOT FOUND rather than shown to be absent. See §5. |
 | Finnhub / Tiingo / marketstack / Alpha Vantage / IEX Cloud | **NOT VERIFIED** | Not confirmed against the pool or their own terms; recorded as open, not rejected. |
@@ -322,8 +335,12 @@ one account for both execution and data beats IBKR's cheaper sticker price once 
 account, USD 500 minimum-equity tie-up, and unverified LSEETF coverage are counted against it. Saxo's
 own load-bearing unknowns — whether the confirmed real-time feed is the same ~£7/month L1 entitlement,
 which endpoint/field carries the tick timestamp, and whether leveraged ETPs/ETCs are covered, not
-just ordinary shares — are chased in a 2026-09-01 follow-up on Saxo support ticket 20084 and not yet
-answered. The IBKR analysis below is kept as the record of the runner-up, not retracted.
+just ordinary shares — were chased in a 2026-09-01 follow-up on Saxo support ticket 20084. **Closed
+out 2026-09-03:** support confirmed the endpoint (`POST /trade/v1/subscriptions/prices`, timestamp
+field still unnamed) and declined the other two outright, pointing to the public subscriptions page
+and in-platform agreements instead of answering directly — see the §0 update note. The remaining two
+unknowns need a docs read or a live-account probe, not another ticket reply. The IBKR analysis below
+is kept as the record of the runner-up, not retracted.
 
 **Original recommendation (2026-08-19): Interactive Brokers, "LSE UK (L1)", GBP 1.00/month non-professional.**
 
@@ -392,10 +409,12 @@ implementation ships everything that does not depend on the answer:
    on a premise these terms contradict.
 2. **Which vendor may serve the live mark** — filed as
    [#895](https://github.com/dd-jp/samurai-trading-system/issues/895). Recommended as of 2026-09-01:
-   Saxo, over OpenAPI, on the execution account (§0 update note, §6), subject to the entitlement/
-   endpoint/ETP-coverage questions chased on ticket 20084 and not yet answered. IBKR LSE UK (L1) at
-   £1/month non-pro (§6) is the runner-up, still gated on the same class of open question
-   (LSEETF-segment coverage) plus its own second-account/USD 500 minimum overhead.
+   Saxo, over OpenAPI, on the execution account (§0 update note, §6). Of the three specifics chased
+   on ticket 20084, the endpoint is confirmed (`POST /trade/v1/subscriptions/prices`) and the other
+   two — exact entitlement name/price, per-instrument leveraged-ETP/ETC coverage — were declined by
+   support as of 2026-09-03 and now need a docs read or live-account probe, not another ticket reply.
+   IBKR LSE UK (L1) at £1/month non-pro (§6) is the runner-up, still gated on the same class of open
+   question (LSEETF-segment coverage) plus its own second-account/USD 500 minimum overhead.
 3. **The USD majority (§3.2).** Narrow the universe to the GBP/GBX lines, or answer the FX question.
    Until then the orchestrator refuses to boot on a USD-declared line rather than guessing a rate.
 4. **The 15-minute bound versus print frequency (§3.3).** Every non-IBKR option is ≥15 min delayed,
