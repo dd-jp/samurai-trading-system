@@ -164,14 +164,23 @@ export const DEFAULT_VENUE_PACING: VenuePacingConfig = {
    * against a 6-instrument universe and would have throttled a cold start into
    * `withRetry` back-off rather than failing loudly.
    *
-   * **`reserveForPriority: 20` — WORKLOAD-DERIVED.** The tokens market data may
-   * not spend. One full fill-poll sweep of the 20-instrument universe is 20
-   * `getOrder` calls, so this guarantees the order path can always complete a
-   * sweep — and place a leg — without waiting behind a bar burst. Market data
-   * is therefore capped at `capacity - reserve` = 21 back-to-back calls, which
-   * still covers a cold-start bar sweep of all 20 with one to spare. That
-   * margin is now thin by construction: it is the reason `capacity` is derived
-   * from the universe rather than rounded up casually.
+   * **`reserveForPriority: 21` — WORKLOAD-DERIVED, and the `+1` is the whole
+   * point.** The tokens market data may not spend. The guarantee this reserve
+   * makes is that the order path can complete a sweep **and place a leg**
+   * without waiting behind a bar burst — and that is `20 + 1`, not 20: one full
+   * fill-poll sweep of the 20-instrument universe is 20 `getOrder` calls, and a
+   * `submitBracket` is a 21st. At 20 the order path could sweep but would then
+   * park on a refill before submitting, which is the same stall this reserve
+   * exists to prevent, one call later. (The pre-widening pair had the same
+   * off-by-one — `6` against a 6-instrument sweep plus a submit — so this
+   * corrects a latent error rather than introducing a new margin.)
+   *
+   * Market data is therefore capped at `capacity - reserve` = 20 back-to-back
+   * calls, which is EXACTLY a cold-start bar sweep of all 20 and not one more.
+   * The three numbers now partition `capacity` with nothing spare — 20 bars +
+   * 20 `getOrder` + 1 submit = 41 — which is deliberate: it is the reason
+   * `capacity` is derived from the universe rather than rounded up casually,
+   * and the reason all three have to be re-derived together when it changes.
    *
    * **`refillPerSecond: 2.0` — LOWERED FROM 2.5 BY THE CAPACITY RAISE, and set
    * against MEASURED steady-state demand rather than against the ceiling
@@ -223,7 +232,7 @@ export const DEFAULT_VENUE_PACING: VenuePacingConfig = {
    * paper host is the one the soak uses; nothing was found that documents a
    * separate paper allowance, so the same ceiling is applied to both.
    */
-  alpaca: { capacity: 41, refillPerSecond: 2.0, reserveForPriority: 20 },
+  alpaca: { capacity: 41, refillPerSecond: 2.0, reserveForPriority: 21 },
   /**
    * UNVERIFIED, and kept conservative on purpose.
    *

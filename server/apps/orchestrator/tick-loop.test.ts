@@ -161,9 +161,19 @@ describe('runTickPlan', () => {
     // hang the rest.
     let drains = 0;
     let settled = false;
-    void pending.then(() => {
-      settled = true;
-    });
+    // Both branches flip the flag. If only the fulfil branch did, a REJECTED
+    // `pending` would spin the pump until the drain guard threw — masking the
+    // real failure behind a bookkeeping error — and the detached promise would
+    // reject unhandled on top of it. `await pending` below is what surfaces the
+    // rejection, so this handler must not swallow it, only observe it.
+    pending.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
     while (!settled) {
       releaseAll();
       await settle();
