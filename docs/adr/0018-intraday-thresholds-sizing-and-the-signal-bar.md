@@ -278,7 +278,7 @@ No new drawdown measurement is published here. Producing one for the reserved fi
 
 **The baseline is an unconditional long at the open.** That is deliberately naive — it is the bar, not a prediction that the strategy loses money. It is also **long-only**; the short ETP lines are unmeasured.
 
-**Underlying tape, not ETP tape.** No tracking error, no ETP spread beyond the assumed round trip, and **no GBP/USD leg** — the GBP lines sit on USD underlyings and hedging is unconfirmed. [#666](https://github.com/dd-jp/samurai-trading-system/issues/666) owns the real spreads per subclass; **both brackets and both bars move directly with them**, since each cost figure is currently a single quote.
+**Underlying tape, not ETP tape.** No tracking error, no ETP spread beyond the assumed round trip, and **no GBP/USD leg** — the GBP lines sit on USD underlyings and hedging is unconfirmed. The real spreads per subclass remain unmeasured: [#666](https://github.com/dd-jp/samurai-trading-system/issues/666), which would have measured them, closed 2026-08-27 out of scope without delivering that measurement; [#750](https://github.com/dd-jp/samurai-trading-system/issues/750) now gates on it instead, and no open ticket currently delivers it. **Both brackets and both bars move directly with them**, since each cost figure is currently a single quote.
 
 **Two instruments, not the universe.** SPY and TSLA stand in for their subclasses.
 

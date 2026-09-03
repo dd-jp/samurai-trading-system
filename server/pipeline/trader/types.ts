@@ -69,9 +69,12 @@ export interface TraderConfig {
    * (#739) — the live exit geometry and the live sizing denominator wherever
    * `subclass_of` classifies the instrument.
    *
-   * Config rather than constants because every number in it is a single quote
-   * that #666 may move: ADR-0018 says "both brackets and both bars move
-   * directly with them". `ADR_0018_SUBCLASS_BRACKETS` is the checked-in default.
+   * Config rather than constants because every number in it is a single quote:
+   * #666, which would have measured it, closed 2026-08-27 out of scope
+   * without delivering that measurement; #750 now gates on it instead, and no
+   * open ticket currently delivers it. ADR-0018 says "both brackets and both
+   * bars move directly with them". `ADR_0018_SUBCLASS_BRACKETS` is the
+   * checked-in default.
    */
   subclass_brackets: SubclassBracketTable;
   /**
