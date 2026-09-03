@@ -19,6 +19,7 @@ import { RSI_SPEC, SMA_SPEC } from '../../pipeline/analysts/technical-analyst.js
 import type { ArmPerformance } from '../../pipeline/control-arm/index.js';
 import { computeIndicator } from '../../providers/market-data-service/index.js';
 import { GUARDED_THRESHOLD_NAMES } from '../../shared/index.js';
+import { STAGE_OWNED_TABLES } from '../../shared/store/write-guard.js';
 import {
   type ArmComparisonEvidence,
   buildSmokeFixtureBars,
@@ -29,6 +30,7 @@ import {
   type ExitPathEvidence,
   evaluateSmokeGate,
   FAILOVER_IN_SESSION_OPEN_TIMES,
+  type FillSyncFailure,
   type FillSyncFailureEvidence,
   FillSyncFailureRecorder,
   FixedAccountStateProvider,
@@ -42,6 +44,7 @@ import {
   type SmokeObservations,
   type ThresholdClampEvidence,
   UnreachableAlpacaClient,
+  untoleratedFillSyncFailures,
 } from './smoke-run.js';
 
 /** Both sticky tiers persisted untripped — what a healthy run leaves in `breaker_state` (B1). */
@@ -1008,7 +1011,7 @@ describe('evaluateSmokeGate', () => {
 });
 
 describe('evaluateSmokeGate — fill-sync contained failures (#1049)', () => {
-  const containedFailure = (key: string) => ({
+  const containedFailure = (key: string): FillSyncFailure => ({
     message: 'fill poll failed',
     error:
       `ingestFills: 1 contained failure(s) — every other lot in this poll was advanced; ` +
@@ -1035,6 +1038,20 @@ describe('evaluateSmokeGate — fill-sync contained failures (#1049)', () => {
     expect(gate.failures[0]).toContain('#1049');
   });
 
+  it('fails on a periodic reconcile failure the same way — the first catch in the same poll', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        fillSync: healthyFillSync({
+          failures: [{ message: 'periodic reconcile failed', error: 'SQLITE_BUSY' }],
+        }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures).toEqual([expect.stringContaining('periodic reconcile failed')]);
+  });
+
   it('fails on a residual-protection sweep failure the same way — same poll loop, same silence', () => {
     const gate = evaluateSmokeGate(
       transactedObservations(),
@@ -1054,6 +1071,27 @@ describe('evaluateSmokeGate — fill-sync contained failures (#1049)', () => {
 
     expect(gate.failures).toEqual([]);
   });
+
+  describe('the tolerated allowlist', () => {
+    const failures: FillSyncFailure[] = [
+      containedFailure('lot-scripted'),
+      containedFailure('lot-real'),
+    ];
+
+    it('is empty — a healthy run has no poll rejection to tolerate', () => {
+      expect(untoleratedFillSyncFailures(failures)).toEqual(failures);
+    });
+
+    it('suppresses a failure by error substring and leaves every other one', () => {
+      expect(untoleratedFillSyncFailures(failures, ["lot-advance 'lot-scripted'"])).toEqual([
+        containedFailure('lot-real'),
+      ]);
+    });
+
+    it('ignores an empty entry rather than letting it tolerate everything', () => {
+      expect(untoleratedFillSyncFailures(failures, [''])).toEqual(failures);
+    });
+  });
 });
 
 describe('FillSyncFailureRecorder (#1049)', () => {
@@ -1069,6 +1107,7 @@ describe('FillSyncFailureRecorder (#1049)', () => {
     const forwarded: string[] = [];
     const recorder = new FillSyncFailureRecorder({ log: (line) => forwarded.push(line.message) });
 
+    recorder.log(entry('error', 'periodic reconcile failed', 'reconcile boom'));
     recorder.log(entry('error', 'fill poll failed', 'ingestFills: 1 contained failure(s)'));
     recorder.log(entry('error', 'residual-protection sweep failed', 'boom'));
     recorder.log(entry('warn', 'fill poll skipped: previous poll still running'));
@@ -1077,11 +1116,12 @@ describe('FillSyncFailureRecorder (#1049)', () => {
 
     expect(recorder.evidence()).toEqual({
       failures: [
+        { message: 'periodic reconcile failed', error: 'reconcile boom' },
         { message: 'fill poll failed', error: 'ingestFills: 1 contained failure(s)' },
         { message: 'residual-protection sweep failed', error: 'boom' },
       ],
     });
-    expect(forwarded).toHaveLength(5);
+    expect(forwarded).toHaveLength(6);
   });
 
   it('records a rejection whose payload carries no error string, rather than dropping it', () => {
@@ -1393,6 +1433,42 @@ describe('runSmoke (end-to-end, real composition root)', () => {
     expect(result.observations.flattenSubmissions.every((row) => row.status === 'submitted')).toBe(
       true,
     );
+  });
+
+  /**
+   * #1049 — the recorder is WIRED, not merely built: the same fault #1048's
+   * measurement used (Execution's owned-table set without `fills`, so the
+   * sole-writer guard rejects every `ingestFills` write) must flip the gate
+   * to FAIL through `runSmoke` itself, naming the fill-sync line. A
+   * `fillSync: { failures: [] }` regression in `runSmoke` leaves every other
+   * `runSmoke` case green and only this one red. `guardedStore` reads
+   * `STAGE_OWNED_TABLES` at construction, so the swap has to precede the run
+   * and is restored whatever the outcome.
+   */
+  it('fails the gate through the real run when every ingestFills poll rejects (#1049)', {
+    timeout: 30_000,
+  }, async () => {
+    const owned = STAGE_OWNED_TABLES.execution;
+    STAGE_OWNED_TABLES.execution = owned.filter((table) => table !== 'fills');
+    try {
+      const result = await runSmoke({
+        ticks: 1,
+        tickIntervalMs: 50,
+        fillPollIntervalMs: 25,
+        deadlineMs: 20_000,
+        logger: { log: () => undefined },
+      });
+
+      expect(result.gate.passed).toBe(false);
+      expect(result.gate.failures).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(/^\d+ fill-sync poll failure\(s\) were logged and survived/),
+        ]),
+      );
+      expect(result.gate.failures.join('\n')).toContain('fill poll failed: ingestFills:');
+    } finally {
+      STAGE_OWNED_TABLES.execution = owned;
+    }
   });
 
   /**

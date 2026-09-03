@@ -876,13 +876,33 @@ export class RecordingFlattenReconcileAlertChannel implements FlattenReconcileAl
 }
 
 /**
- * One rejection the fill-sync loop (orchestrator/fill-sync.ts) logged and
- * survived (#1049). `error` is the message the loop put in its payload —
- * for `ingestFills` that is `throwContainedFailures`'s summary, which names
- * each contained scope and key and never carries column content.
+ * The `error`-level lines `startFillSync`'s three `catch` blocks
+ * (orchestrator/fill-sync.ts `runPoll`/`runOnce`) write when a pass rejects.
+ * All three are the SAME hole: the loop logs, keeps polling, and nothing else
+ * in the process reacts — so a `reconcile()`/`ingestFills()`/sweep that
+ * rejects on every poll is invisible to every other check in this gate,
+ * which reads effects (rows, alerts, snapshots) rather than log lines.
+ */
+const FILL_SYNC_FAILURE_MESSAGES = [
+  'periodic reconcile failed',
+  'fill poll failed',
+  'residual-protection sweep failed',
+] as const;
+
+export type FillSyncFailureMessage = (typeof FILL_SYNC_FAILURE_MESSAGES)[number];
+
+function isFillSyncFailureMessage(message: string): message is FillSyncFailureMessage {
+  return (FILL_SYNC_FAILURE_MESSAGES as readonly string[]).includes(message);
+}
+
+/**
+ * One rejection the fill-sync loop logged and survived (#1049). `error` is the
+ * message the loop put in its payload — for `ingestFills` that is
+ * `throwContainedFailures`'s summary, which names each contained scope and
+ * key and never carries column content.
  */
 export interface FillSyncFailure {
-  message: string;
+  message: FillSyncFailureMessage;
   error: string;
 }
 
@@ -890,20 +910,6 @@ export interface FillSyncFailure {
 export interface FillSyncFailureEvidence {
   failures: readonly FillSyncFailure[];
 }
-
-/**
- * The `error`-level lines `startFillSync`'s two `catch` blocks write when a
- * poll rejects. Both are the SAME hole: the loop logs, keeps polling, and
- * nothing else in the process reacts — so an `ingestFills` that rejects on
- * every poll is invisible to every other check in this gate (the entry lot
- * still reads `filled` when only one lot of many is broken, and a run whose
- * fill-sync is wholly dead fails downstream as "no fill ingested" without
- * naming the cause).
- */
-const FILL_SYNC_FAILURE_MESSAGES: ReadonlySet<string> = new Set([
-  'fill poll failed',
-  'residual-protection sweep failed',
-]);
 
 /**
  * Fill-sync rejections a healthy smoke run is ALLOWED to produce, matched by
@@ -917,19 +923,27 @@ const FILL_SYNC_FAILURE_MESSAGES: ReadonlySet<string> = new Set([
 export const TOLERATED_FILL_SYNC_FAILURES: readonly string[] = [];
 
 /**
- * Records every fill-sync rejection (#1049) on the way to the real logger.
+ * The rejections the gate fails on: every recorded failure whose `error`
+ * contains no tolerated substring. An empty tolerated entry is IGNORED rather
+ * than honoured — `'x'.includes('')` is true, so one blank line in the
+ * allowlist would otherwise tolerate every failure the loop ever logs.
+ */
+export function untoleratedFillSyncFailures(
+  failures: readonly FillSyncFailure[],
+  tolerated: readonly string[] = TOLERATED_FILL_SYNC_FAILURES,
+): FillSyncFailure[] {
+  const allowed = tolerated.filter((entry) => entry.length > 0);
+  return failures.filter((failure) => !allowed.some((entry) => failure.error.includes(entry)));
+}
+
+/**
+ * Records every fill-sync rejection (#1049) on the way to the real logger, so
+ * the gate can read the one channel the poll loop's failures reach.
  *
- * Found by #1048's fault injection: with `'fills'` removed from Execution's
- * owned tables, every `ingestFills` poll rejected with `1 contained
- * failure(s)` — 44 `fill poll failed` lines per run — and `yarn smoke` still
- * reported `GATE: PASS`. Fills are how the system learns a position exists;
- * a gate that passes with that path wholly broken is not a pre-soak gate.
- *
- * A wrapper rather than a `Logger` the gate reads back in full, so the check
- * is scoped to the two messages above and nothing else — the gate's other
- * checks read effects (rows, alerts, snapshots), not log lines, and this
- * stays as narrow as the hole it closes. Never throws: a recorder that could
- * fail would take the logger it wraps down with it.
+ * A wrapper scoped to `FILL_SYNC_FAILURE_MESSAGES` rather than a `Logger` the
+ * gate reads back in full: the gate's other checks read effects, not log
+ * lines, and this stays as narrow as the hole it closes. Never throws: a
+ * recorder that could fail would take the logger it wraps down with it.
  */
 export class FillSyncFailureRecorder implements Logger {
   private readonly failures: FillSyncFailure[] = [];
@@ -937,7 +951,7 @@ export class FillSyncFailureRecorder implements Logger {
   constructor(private readonly inner: Logger) {}
 
   log(entry: LogEntry): void {
-    if (entry.level === 'error' && FILL_SYNC_FAILURE_MESSAGES.has(entry.message)) {
+    if (entry.level === 'error' && isFillSyncFailureMessage(entry.message)) {
       this.failures.push({ message: entry.message, error: payloadError(entry.payload) });
     }
     this.inner.log(entry);
@@ -3149,8 +3163,8 @@ export function evaluateSmokeGate(
      * The fill-sync loop's rejections (#1049) — required, not optional, for the
      * same "compile error, not a silent no-op" reason every mechanism above is.
      * This is the only check in the gate that reads the poll loop's own
-     * failure channel; drop the argument and `ingestFills` can reject on every
-     * poll with the gate green, which is the measured defect exactly.
+     * failure channel; without it `ingestFills` can reject on every poll with
+     * the gate green.
      */
     fillSync: FillSyncFailureEvidence;
   },
@@ -4010,16 +4024,14 @@ export function evaluateSmokeGate(
   // #1049 — the fill-sync loop must never have rejected a poll. It logs and
   // keeps polling by design (fill-sync.ts `runOnce`), so this is the only
   // place a run whose `ingestFills` fails on every call is visible at all.
-  const untolerated = options.fillSync.failures.filter(
-    (failure) => !TOLERATED_FILL_SYNC_FAILURES.some((allowed) => failure.error.includes(allowed)),
-  );
+  const untolerated = untoleratedFillSyncFailures(options.fillSync.failures);
   if (untolerated.length > 0) {
     const distinct = [
       ...new Set(untolerated.map((failure) => `${failure.message}: ${failure.error}`)),
     ];
     failures.push(
       `${untolerated.length} fill-sync poll failure(s) were logged and survived — the loop keeps ` +
-        'polling by design, so nothing else in this gate sees an ingestFills/reconcile path that ' +
+        'polling by design, so nothing else in this gate sees a reconcile/ingestFills/sweep path that ' +
         `rejects on every call (#1049). Distinct: ${distinct.join(' | ')}`,
     );
   }
