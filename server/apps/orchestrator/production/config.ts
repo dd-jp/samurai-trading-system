@@ -715,6 +715,21 @@ export interface ProductionConfig extends AlertChannelSlots {
    */
   sentimentEnabled?: boolean;
   /**
+   * Whether the sentiment agent RETRIEVES live X posts rather than asking a
+   * model what it remembers (#969). Defaults from
+   * `SAMURAI_SENTIMENT_RETRIEVAL` (`on` enables; anything else, including
+   * absent, does not) — note the polarity is the OPPOSITE of
+   * `sentimentEnabled`'s `!== 'off'`, and deliberately so: this one changes
+   * both what the soak costs and what experiment it is running, so it must be
+   * switched on by an explicit act rather than left on by an operator who
+   * never set the variable.
+   *
+   * Independent of `sentimentEnabled`: with sentiment off entirely there is no
+   * agent for this to apply to, and the composition root warns rather than
+   * silently doing nothing.
+   */
+  sentimentRetrieval?: boolean;
+  /**
    * The Market Intelligence archive (#554, map #552) — its own database, NOT
    * `db`.
    *

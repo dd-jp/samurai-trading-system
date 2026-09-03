@@ -139,6 +139,63 @@ export interface MarketIntelligenceRefresh {
   refresh(trace_id: string, instrument: string, assetClass: AssetClass): Promise<boolean>;
 }
 
+/**
+ * Runs several MI agents behind the single-refresher seam (#969).
+ *
+ * ## Why this is needed rather than tidy
+ *
+ * The composition root used to pick ONE agent: the deterministic news path
+ * when it could be built, the sentiment agent only as a fallback. That was
+ * correct on its own terms — the sentiment agent ingested `[]` by
+ * construction, so a run with both would have paid for a second agent that
+ * contributed nothing.
+ *
+ * It stops being correct the moment sentiment actually retrieves, because the
+ * two agents do not overlap: `MiIngestAgent` writes the `news` bucket and
+ * `GrokAgent` writes `social`, and `MarketContext` has a slot for each.
+ * Choosing between them means one bucket is empty by construction whichever
+ * way the choice falls — and with the news path available, the empty one is
+ * `social`, which is the bucket #969 exists to fill. A retrieving client that
+ * the shipped path never calls is this repo's characteristic defect, not a
+ * new one.
+ *
+ * SEQUENTIAL, not `Promise.all`: these agents are independent but their spend
+ * checks are not — both meter into `llm_spend` and both read
+ * `SqliteSpendCap` before calling, so running them concurrently lets two
+ * calls each pass a check the pair would fail. Bucketed refreshes make the
+ * common case two immediate returns anyway.
+ *
+ * NEVER THROWS, matching what the seam already promises: an MI outage must
+ * degrade the debate to NO_DATA_MARKER, not fail a tick that would otherwise
+ * have traded. Both implementations already catch internally; this holds the
+ * line for any future one that forgets.
+ */
+export function composeMarketIntelligence(
+  agents: readonly (MarketIntelligenceRefresh | undefined)[],
+): MarketIntelligenceRefresh | undefined {
+  const present = agents.filter((agent): agent is MarketIntelligenceRefresh => agent !== undefined);
+  if (present.length === 0) return undefined;
+  if (present.length === 1) return present[0];
+
+  return {
+    async refresh(trace_id, instrument, assetClass) {
+      let refreshed = false;
+      for (const agent of present) {
+        // `catch` rather than trusting the contract: one agent's failure must
+        // not stop the others from filling their own bucket.
+        try {
+          if (await agent.refresh(trace_id, instrument, assetClass)) refreshed = true;
+        } catch {
+          // Deliberately swallowed here. Both shipped agents log their own
+          // failures with the instrument and the cause; re-logging without
+          // that context would add noise, and rethrowing would fail the tick.
+        }
+      }
+      return refreshed;
+    },
+  };
+}
+
 export function buildAnalystsStep(
   orchestrator: AnalystOrchestrator,
   logger?: Logger,

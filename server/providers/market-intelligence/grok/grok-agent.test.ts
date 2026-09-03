@@ -99,26 +99,37 @@ function build(
 }
 
 describe('floorToRefreshBucket', () => {
-  it('floors to the 4h grid, epoch-relative like floorToBar (#393)', () => {
-    expect(floorToRefreshBucket(new Date('2026-08-06T03:59:59Z')).toISOString()).toBe(
+  it('floors to the 2h grid, epoch-relative like floorToBar (#393)', () => {
+    expect(floorToRefreshBucket(new Date('2026-08-06T01:59:59Z')).toISOString()).toBe(
       '2026-08-06T00:00:00.000Z',
     );
-    expect(floorToRefreshBucket(new Date('2026-08-06T04:00:00Z')).toISOString()).toBe(
-      '2026-08-06T04:00:00.000Z',
+    expect(floorToRefreshBucket(new Date('2026-08-06T02:00:00Z')).toISOString()).toBe(
+      '2026-08-06T02:00:00.000Z',
     );
   });
 
-  it('is derived from the analysts 24h context window — six buckets a day', () => {
-    // Not a round number picked for looks: 1/6th of `MI_CONTEXT_WINDOW_MS`
-    // bounds staleness under 17% of what the window covers.
-    expect((24 * 60 * 60 * 1000) / GROK_REFRESH_MS).toBe(6);
+  it('is twelve buckets a day, which is the sample-size decision (#969)', () => {
+    // This assertion used to read `=== 6`, deriving a 4h interval as 1/6th of
+    // `MI_CONTEXT_WINDOW_MS` on a STALENESS argument. That argument was made
+    // while nothing retrieved and the ingested item count was structurally
+    // zero, so it was bounding the freshness of an empty set.
+    //
+    // With real retrieval the binding constraint is SAMPLE SIZE:
+    // `sentiment-analyst.ts` averages `social` wholesale, so buckets x
+    // results-per-bucket is what decides whether three bot posts can swing
+    // the lens. 12 x 3 = 36 posts/instrument/day.
+    //
+    // It is also a cost decision — 504 calls over a 14-day, 3-instrument soak
+    // — which is why the interval and `max_search_results` move together and
+    // neither can be retuned alone. See `x-search-client.ts`.
+    expect((24 * 60 * 60 * 1000) / GROK_REFRESH_MS).toBe(12);
   });
 });
 
 describe('GrokAgent', () => {
   it('calls once per bucket, however many passes arrive inside it', async () => {
     // The property the whole cadence decision rests on: at a 15-minute tick
-    // there are 16 passes per 4h bucket, and 15 of them must cost nothing.
+    // there are 8 passes per 2h bucket, and 7 of them must cost nothing.
     const { agent, clock, fetches } = build();
 
     expect(await agent.refresh('t1', 'BTC-USD', 'crypto')).toBe(true);

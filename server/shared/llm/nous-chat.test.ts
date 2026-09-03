@@ -117,7 +117,13 @@ describe('nousChat', () => {
     const result = await nousChat(OPTIONS, REQUEST);
 
     expect(result.text).toBe('{"ok":true}');
-    expect(result.usage).toEqual({ input_tokens: 11, output_tokens: 22 });
+    // `cache_read_input_tokens` is present and zero rather than absent: a
+    // response reporting no cache hit is a real zero, not an unknown.
+    expect(result.usage).toEqual({
+      input_tokens: 11,
+      output_tokens: 22,
+      cache_read_input_tokens: 0,
+    });
   });
 
   it('treats an absent usage block as zero rather than NaN', async () => {
@@ -127,7 +133,11 @@ describe('nousChat', () => {
 
     const result = await nousChat(OPTIONS, REQUEST);
 
-    expect(result.usage).toEqual({ input_tokens: 0, output_tokens: 0 });
+    expect(result.usage).toEqual({
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_input_tokens: 0,
+    });
   });
 
   describe('truncation', () => {
@@ -181,7 +191,11 @@ describe('nousChat', () => {
       const error = (await nousChat(OPTIONS, REQUEST).catch(
         (e: unknown) => e,
       )) as NousTruncatedError;
-      expect(error.usage).toEqual({ input_tokens: 100, output_tokens: 1024 });
+      expect(error.usage).toEqual({
+        input_tokens: 100,
+        output_tokens: 1024,
+        cache_read_input_tokens: 0,
+      });
     });
   });
 
@@ -281,23 +295,33 @@ describe('nousChat', () => {
      * before it caches anything, so nothing in this repo requests caching —
      * see the comment on `anthropic-client.ts`'s `renderMessageContent`.
      *
-     * This test pins the SEPARATE, structural half of that same zero: even
-     * if some future request DID clear the minimum and a provider/proxy
-     * returned cache usage, this function only ever reads `prompt_tokens`
-     * and `completion_tokens` off the response body and has no field to
-     * carry a cache count through. A cache hit upstream would currently be
-     * invisible here. If this test starts failing, it means someone widened
-     * `usage` parsing without also widening `NousChatResult['usage']` and
-     * `AnthropicUsage` (pricing.ts) to match — check both stay in sync before
-     * "fixing" this assertion.
+     * This test used to pin the SEPARATE, structural half of that same zero:
+     * the parser read only `prompt_tokens`/`completion_tokens` and had no
+     * field to carry a cache count through, so a cache hit upstream was
+     * invisible. #969 CLOSED that half — the retrieval path gets large
+     * prompts cached by the provider on its own initiative, whether or not
+     * anything here asks for it, so an invisible cache line became a real
+     * mispricing rather than a hypothetical one.
      *
-     * The exact field name a caching-aware Nous response would use is
-     * UNVERIFIED (Nous's own docs are not in this repo — see the deferral
-     * note in pricing.ts) so this checks both an OpenAI-shaped
-     * (`prompt_tokens_details.cached_tokens`) and an Anthropic-shaped
-     * (`cache_read_input_tokens`) guess; either way, both are dropped today.
+     * What it pins now is the SUBTRACTION, which is the part that is easy to
+     * get wrong in the expensive direction. Nous reports usage the OpenAI
+     * way — `cached_tokens` is a SUBSET of `prompt_tokens` — while
+     * `AnthropicUsage` means the Anthropic thing, where the two are disjoint
+     * and `priceUsage` bills both. Carrying the count across without
+     * subtracting bills the cached tokens twice.
+     *
+     * #1010's other finding is untouched and still true: nothing in this repo
+     * REQUESTS caching, and the pinned debate model's requests fall short of
+     * the minimum anyway — see `never sends a cache_control breakpoint` below,
+     * which is now the canary for that half.
+     *
+     * The Anthropic-shaped `cache_read_input_tokens` guess is deliberately
+     * still present in the fixture and deliberately still ignored: Nous is
+     * OpenAI-shaped on both endpoints (verified on a live `/responses` probe,
+     * 2026-09-03), and reading both would double-count a provider that sent
+     * both spellings of the same number.
      */
-    it('drops any cache-related usage fields a provider response might carry', async () => {
+    it('subtracts provider-reported cached tokens out of the input count', async () => {
       stubFetch(
         completion({
           usage: {
@@ -312,9 +336,41 @@ describe('nousChat', () => {
 
       const result = await nousChat(OPTIONS, REQUEST);
 
-      expect(result.usage).toEqual({ input_tokens: 11, output_tokens: 22 });
-      expect(result.usage).not.toHaveProperty('cache_read_input_tokens');
+      // 11 prompt tokens of which 9 were cached = 2 fresh, not 11 fresh plus
+      // 9 cached. The wrong reading over-counts this call by ~80%.
+      expect(result.usage).toEqual({
+        input_tokens: 2,
+        output_tokens: 22,
+        cache_read_input_tokens: 9,
+      });
+      // Cache WRITES stay dropped: nothing in this system writes a cache
+      // entry, so a provider reporting one is not a case this meter has a
+      // rate for (`CACHE_WRITE_MULTIPLIER` remains inert in pricing.ts).
       expect(result.usage).not.toHaveProperty('cache_creation_input_tokens');
+    });
+
+    it('never reports more cached tokens than the prompt contained', async () => {
+      // Defensive against an inverted provider report. Without the clamp,
+      // `input_tokens` goes negative, `priceUsage` returns a NEGATIVE cost,
+      // and the row BUYS BACK headroom under ADR-0008's ceiling — a spend
+      // meter that can be credited by a malformed response is not a ceiling.
+      stubFetch(
+        completion({
+          usage: {
+            prompt_tokens: 5,
+            completion_tokens: 22,
+            prompt_tokens_details: { cached_tokens: 9000 },
+          },
+        }),
+      );
+
+      const result = await nousChat(OPTIONS, REQUEST);
+
+      expect(result.usage).toEqual({
+        input_tokens: 0,
+        output_tokens: 22,
+        cache_read_input_tokens: 5,
+      });
     });
 
     it('never sends a cache_control breakpoint in the POSTed request body', async () => {
