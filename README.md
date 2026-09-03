@@ -23,7 +23,7 @@ Market Data Service ─┐
 | Analysts | `server/pipeline/analysts/` | Stateless per-tick agents (technical, fundamental, sentiment). Pure function of data + weight |
 | Debate Engine | `server/pipeline/debate-engine/` | Bull/Bear/Mediator personas, round orchestration, semantic disagreement detection, weighted conviction scoring, LLM rate limiting + spend cap |
 | Trader | `server/pipeline/trader/` | Consolidates debate result into broker-agnostic bracket (OrderIntent). Position-aware branching, setup vectors, cosine precedent lookup |
-| Risk Manager | `server/pipeline/risk-manager/` | Position-size caps, drawdown/volatility circuit breakers, portfolio exposure limits, correlation checks, CII mapping, live-read risk thresholds |
+| Risk Manager | `server/pipeline/risk-manager/` | Position-size caps, drawdown/volatility circuit breakers, portfolio exposure limits, correlation checks, CII mapping, live-read risk thresholds, and the Risk Critic (`server/pipeline/risk-manager/critic.ts`) |
 | Verdict | `server/pipeline/verdict/` | Final go/no-go gate. Idempotency dedup, market-open check, kill-switch re-check, Telegram/Discord notification + approval callbacks |
 | Execution | `server/pipeline/execution/` | Broker abstraction (Alpaca MVP, Simulated for backtest; ccxt/IBKR sources exist, adapters are long-term). Bracket expansion, fill ingestion, reconcile-on-restart, unpriced-fill alerting |
 | Feedback Loop | `server/pipeline/feedback-loop/` | Post-trade attribution, bounded weight adjustment, daily cycle, metrics suite (Sharpe/Sortino/etc.), kill-threshold guardrails |
@@ -152,11 +152,9 @@ Alpaca's published limit is **200 requests per minute per account**, shared by t
 | --- | --- | --- |
 | `SAMURAI_LOG_FILE` | `logs/orchestrator.log` | Active log file. Created `0o600` in a `0o700` directory; `logs/` is gitignored |
 | `SAMURAI_LOG_MAX_BYTES` | `16777216` (16 MiB) | Rotate when the active file would exceed this |
-| `SAMURAI_LOG_LEVEL` | `info` | Only the literal `debug` does anything — it turns the verbose `debug` lines on. Every other level is structurally unfilterable on purpose: `warn`/`error` carry the sink-degradation notices, so no setting can configure the process into silence (#1035) |
-| `SAMURAI_LLM_CAPTURE` | unset (**on**) | Only the literal `off` disables capturing LLM prompt/response text into `llm_call_log`. On by default, redacted centrally (#1035) |
 | `SAMURAI_LOG_MAX_FILES` | `10` | Rotated generations kept (`orchestrator.log.1` … `.10`), excluding the active file. On-disk ceiling is therefore ~176 MiB. `0` means **keep nothing**: rotation discards the full file rather than renaming it, so only the last `SAMURAI_LOG_MAX_BYTES` of history survive. It does not mean "never rotate" |
 
-A malformed value is refused at startup rather than defaulted. An **unwritable** path is not: the sink degrades to stdout-only, logs one `warn` saying file logging is off until restart, and the process keeps running — a logging problem must never end a trading run.
+A malformed value in these three rotation variables is refused at startup rather than defaulted. An **unwritable** path is not: the sink degrades to stdout-only, logs one `warn` saying file logging is off until restart, and the process keeps running — a logging problem must never end a trading run.
 
 Retention is deliberately short. These files are the *diagnostic* record; the durable trade record (every signal, order and fill, and so the UK CGT disposal history) is SQLite, and nothing in it depends on a log generation surviving.
 
@@ -165,7 +163,7 @@ Retention is deliberately short. These files are the *diagnostic* record; the du
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `SAMURAI_LOG_LEVEL` | `info` | `debug` also writes `debug`-level lines. It is the **only** filterable level: `warn` and `error` always write, because they carry the sink-degradation notices a run's last trace depends on, and a verbosity setting must not be able to configure the process into silence |
-| `SAMURAI_LLM_CAPTURE` | on | The prompt sent and the text returned for every metered LLM call, persisted to `llm_call_log` and written on one `llm call:` log line alongside model, both token counts, `cost_usd` and latency. `off` disables. Measured cost of leaving it on: ~7 MB per 14-day soak |
+| `SAMURAI_LLM_CAPTURE` | on (unset) | The prompt sent and the text returned for every metered LLM call, persisted to `llm_call_log` and written on one `llm call:` log line alongside model, both token counts, `cost_usd` and latency. `off` disables. Both variables parse leniently — only the literal `debug` / `off` (case-insensitive, trimmed) does anything, so a typo silently resolves to the default rather than being refused (`server/apps/orchestrator/logger.ts`, `server/apps/orchestrator/production.ts`). Measured cost of leaving it on: ~7 MB per 14-day soak |
 
 Capture answers "what was this call actually asked, and what did it say" — `llm_spend` already records everything *about* a call, and `audit_log` holds digests from which no value can be reconstructed. Text is masked for known credential syntaxes and capped (16 KB prompt, 4 KB response) on the way in. Treat it as a capture, not a scrub: the masker is deliberately narrow, and prompts embed news bodies and analyst free text.
 
@@ -416,8 +414,8 @@ Every script in `package.json`, all 27 of them. There are no others.
 serves the previous build — and `sharedStorePath()` resolving against the
 working directory means the wrong cwd yields a fresh empty database and a
 healthy-looking blank page. Redundant `tsc` invocations are the cheaper side of
-that trade. The two `dev:*` scripts are the exception: they run from source
-(Vite, `tsx`), which is the whole point of them.
+that trade. The `dev:*` and `tsx`-run tool scripts are the exception: they
+run from source, which is the whole point of them.
 
 **The four aliases are kept on purpose**, not left over. `serve`/`dashboard`
 are the names an operator's muscle memory and several source comments still
@@ -466,6 +464,6 @@ script and are not missing one. They are hand-run research jobs, invoked as
 All twelve charted components are implemented and under test; the pipeline runs end-to-end offline (`yarn smoke`). Outstanding:
 
 - **One real Alpaca paper tick** — ADR-0004 §5's "wiring validated" bar. `yarn smoke` is offline and does not clear it.
-- **14-day unattended soak** (#238) — the "paper trading achieved" bar; not yet run.
-- **ccxt / IBKR broker adapters** — data sources exist, order adapters are the long-term path.
+- **14-day unattended soak** (#238) — the "paper trading achieved" bar. Shorter soaks have run, and a hand-placed lifecycle probe on 2026-08-26 took one position entry → bracket → flat-by-close → venue fill → store close against live paper Alpaca (surfacing and fixing #921/#922). The qualifying 14-day unattended window has not.
+- **A Saxo order adapter** — Saxo Capital Markets UK (GIA) over OpenAPI is the decided live venue (ADR-0015, 2026-08-30) and no adapter exists. ccxt and IBKR remain data sources only; IBKR was disqualified as a venue on cost (#906).
 - **WorldMonitor CII feed** — consumer seam built, live wiring parked pending `WORLDMONITOR_API_KEY`.
