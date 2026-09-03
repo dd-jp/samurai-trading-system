@@ -752,17 +752,33 @@ CREATE INDEX idx_outside_benchmark_samples_computed_at
 ```
 Market Data Service → bars, latest_mark
 Execution           → open_positions, fills, closed_trades  (sole writer)
-Cost-Model/Backtest → config_trials
-Feedback Loop       → analyst_weights, strategy_params, risk_thresholds, dial_adjustments, cosine_setups (labels only; Trader writes)
-Trader              → cosine_setups (writes; FL labels)
-Debate Engine       → debate_log
+                      flatten_submissions, broker_brackets,
+                      broker_observed_fills, broker_unpriced_fills
+Cost-Model/Backtest → config_trials, stage2_selected_config
+Feedback Loop       → analyst_weights, strategy_params, risk_thresholds, dial_adjustments,
+                      arm_comparison_samples, outside_benchmark_samples,
+                      cosine_setups (labels only; Trader writes)
+Trader              → cosine_setups (writes; FL labels), trader_log
+Risk                → breaker_state, risk_log, risk_critic_log
+Debate Engine       → debate_log, llm_spend, llm_call_log
 Verdict             → verdict_log
-Orchestrator        → audit_log, current_tick
+Orchestrator        → audit_log, current_tick, daily_equity
 Transport Layer     → account_state (AccountStateProvider, peak_equity)
 Transport Layer     → session_equity (AccountStateProvider, per-class daily PnL basis)
+service-api         → (nothing — reader only)
+control-arm         → (nothing — reader only; its comparison source reads both arms)
 ```
 
 Every stage above reads/writes through the one `SharedStore` handle from `openSharedStore(dbPath)`, injected at each stage's construction.
+
+**The ownership above is asserted in debug builds, not left to convention ([#837](https://github.com/dd-jp/samurai-trading-system/issues/837) M9, 2026-09-03).** `server/shared/store/write-guard.ts` holds the machine-readable copy of this map (`STAGE_OWNED_TABLES`) and `guardedStore(db, stage)` returns a handle that throws when a statement writes a table the stage does not own. Four properties define its scope, and each is deliberate:
+
+- **Per-owning-stage, not per-table** — matching how cross-spec-contracts.md §4 states the guarantee.
+- **Debug/test only** — `isStoreWriteGuardEnabled` is a pure predicate that answers `false` under `NODE_ENV=production` and for `SAMURAI_MODE=live`, so the live-money path pays nothing and cannot be taken down by the guard's own SQL parsing. `SAMURAI_STORE_GUARD=on|off` overrides either way.
+- **Default permissive** — an undeclared handle (the raw `SharedStore`) behaves exactly as before, so wiring is incremental and a missed construction site loses detection there rather than breaking it.
+- **Fails open** — a statement whose write target cannot be parsed is allowed; reads are never inspected.
+
+The stage names are the store class's **owning directory**, not the caller: one instance can legitimately serve two stages (`SqliteSetupStore` is constructed once and handed to both the Trader, which writes `cosine_setups`, and Execution's trade-close hookup, which labels them), and the declaration lives on the handle. `account_state`/`session_equity` are the Transport Layer's tables above but their stores live under `apps/orchestrator/` and are built in the orchestrator's composition root, so the guard declares them `orchestrator`. `schema_migrations` (written by the migration runner before any handle is guarded) and `cii_snapshots` (no writer in code yet) are unowned and therefore unguarded.
 
 ### Domain Glossary Alignment
 

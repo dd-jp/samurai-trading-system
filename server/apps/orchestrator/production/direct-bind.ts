@@ -102,6 +102,7 @@ import {
 // form only surfaces a shape mismatch at the `new SqliteVerdictLogStore(...)`
 // call site, not here at the interface).
 import type { SharedStore as VerdictLogDb } from '../../../shared/store/index.js';
+import { guardedStore } from '../../../shared/store/index.js';
 import type { CostModel } from '../../../tools/backtest/index.js';
 import { OrphanVerdictScanner } from '../orphan-verdict-scan.js';
 import { SqliteAuditLog } from '../sqlite-audit-log.js';
@@ -1252,7 +1253,11 @@ export function buildVerdictStep(deps: VerdictStepDeps): TickSteps['verdict'] {
   // #465: `NotifyingVerdict` OUTSIDE `LoggingVerdict`, so the row is written
   // before anyone is told. A notification about a verdict that failed to
   // persist would point an operator at a `verdict_log` entry that is not there.
-  const logging = new LoggingVerdict(new VerdictImpl(), new SqliteVerdictLogStore(deps.store));
+  const logging = new LoggingVerdict(
+    new VerdictImpl(),
+    // #837 M9: the Verdict stage owns `verdict_log` and nothing else.
+    new SqliteVerdictLogStore(guardedStore(deps.store, 'verdict')),
+  );
   const verdict =
     deps.verdictAlerts === undefined ? logging : new NotifyingVerdict(logging, deps.verdictAlerts);
 
@@ -1394,8 +1399,10 @@ export function buildPersistence(
   store: ConstructorParameters<typeof SqliteAuditLog>[0],
 ): PersistenceInstances {
   return {
-    auditLog: new SqliteAuditLog(store),
-    currentTickStore: new SqliteCurrentTickStore(store),
+    // #837 M9: both are the Orchestrator's own tables (`audit_log`,
+    // `current_tick`), declared on the handle rather than on the caller.
+    auditLog: new SqliteAuditLog(guardedStore(store, 'orchestrator')),
+    currentTickStore: new SqliteCurrentTickStore(guardedStore(store, 'orchestrator')),
     orphanScanner: new OrphanVerdictScanner(),
   };
 }
