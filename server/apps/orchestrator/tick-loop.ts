@@ -19,6 +19,25 @@
  * this worker's `Promise.all` entry and settle the whole tick early while
  * sibling workers are still mid-pipeline (and still billing LLM debates). See
  * the `worker()` function below and `TickOutcome.error`.
+ *
+ * ## The phase split (#1040)
+ *
+ * The cap fans out WHOLE pipelines, which since #1013 set
+ * `maxConcurrentInstruments: 6` for paper and live means sibling instruments
+ * reach Risk concurrently and each clears the gross-exposure cap against
+ * pre-trade exposure (#1019). So this file also owns the other half of the
+ * bargain: `TailSequencer` below hands each instrument a turnstile
+ * (`TickContext.beginPortfolioTail`) that the runner awaits at its Trader
+ * entry point, and turns are granted STRICTLY IN PLAN ORDER. The expensive,
+ * portfolio-free head (Analysts + Debate — 93-96% of wall time) still overlaps
+ * at the configured width; the portfolio-mutating tail runs one instrument at
+ * a time, in the same order every run.
+ *
+ * No second knob: `max_concurrent_instruments` is the phase-1 limit, which is
+ * also what bounds provider burst and the `SpendCap` check-then-act overshoot
+ * to at most `(width - 1)` debates in flight. At a width of 1 every turn is
+ * already free when it is asked for, so the turnstile is inert and the pass is
+ * byte-for-byte the serial pass replay has always run.
  */
 import { randomUUID } from 'node:crypto';
 import type { Signal } from '../../pipeline/analysts/index.js';
@@ -34,6 +53,7 @@ import { digest } from './digest.js';
 import type {
   AuditLog,
   CurrentTickStore,
+  DecisionBar,
   Logger,
   TickOutcome,
   TickPlan,
@@ -73,6 +93,62 @@ export interface TickLoopConfig {
 }
 
 /**
+ * Orders the portfolio-mutating tails of one plan (#1040).
+ *
+ * Turns are granted by PLAN INDEX, never by head-completion order — the
+ * property ADR-0003 §2's replay-from-log rests on. `begin(i)` resolves when
+ * every index below `i` has SETTLED (reached its own tail and finished it, or
+ * ended before ever asking for a turn — a quorum skip, a null exit intent, or
+ * a head that threw); `finish(i)` is what reports that settlement, and the
+ * tick loop calls it from a `finally` so a crash cannot strand the queue.
+ *
+ * Out-of-order `finish` is normal, not exceptional: an instrument whose head
+ * threw settles without ever entering the turnstile, possibly long before the
+ * instrument ahead of it. So settlement is recorded in a set and the cursor
+ * walks forward over whatever run of settled indices it finds.
+ *
+ * Deliberately NOT a mutex. A mutex grants in arrival order, which is head
+ * completion order — exactly the phase-1 scheduling that must not be
+ * observable downstream.
+ */
+class TailSequencer {
+  /** The one index whose tail may run. Advances only over SETTLED indices. */
+  #turn = 0;
+  #settled = new Set<number>();
+  #granted = new Set<number>();
+  /** Resolvers for indices that asked for a turn before it was theirs. */
+  #waiting = new Map<number, () => void>();
+
+  /**
+   * Resolves when it is `index`'s turn. Idempotent: a second call after the
+   * turn was granted resolves immediately, so adding a second call site
+   * (another Trader entry point, say) cannot deadlock a pass against itself.
+   */
+  begin(index: number): Promise<void> {
+    if (this.#granted.has(index)) return Promise.resolve();
+    if (index === this.#turn) {
+      this.#granted.add(index);
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      this.#waiting.set(index, resolve);
+    });
+  }
+
+  /** Reports that `index`'s pass has settled, whether or not it took a turn. */
+  finish(index: number): void {
+    this.#settled.add(index);
+    while (this.#settled.has(this.#turn)) this.#turn++;
+    const waiter = this.#waiting.get(this.#turn);
+    if (waiter !== undefined) {
+      this.#waiting.delete(this.#turn);
+      this.#granted.add(this.#turn);
+      waiter();
+    }
+  }
+}
+
+/**
  * Runs every instrument in `plan`, at most `max_concurrent_instruments` at a
  * time. Outcomes are returned in plan order, not completion order.
  */
@@ -90,6 +166,9 @@ export async function runTickPlan(
   // it (orchestrator-spec.md story 5) — unlike fixed-size chunking, where a
   // chunk runs only as fast as its slowest member.
   let cursor = 0;
+  // The tail turnstile (#1040) — see `TailSequencer`. Built per plan, so its
+  // indices are this plan's indices and it cannot outlive the pass.
+  const tails = new TailSequencer();
   const workerCount = Math.min(
     Math.max(Math.floor(config.max_concurrent_instruments), 1),
     plan.instruments.length,
@@ -112,7 +191,20 @@ export async function runTickPlan(
       // same instant — the same argument `UniverseScheduler.nextTick` makes
       // for reading the calendar once — and in replay the plan time is the
       // deterministic coordinate.
-      const decisionBar = config.decisionGate.claim(instrument.asset, plan.tick_time);
+      let decisionBar: DecisionBar | undefined;
+      try {
+        decisionBar = config.decisionGate.claim(instrument.asset, plan.tick_time);
+      } catch (error) {
+        // The turnstile queue must not be STRANDED if the gate itself throws
+        // (#1040). The `finally` below reports this index as settled, but it is
+        // only reached once the try block is entered; a throw from the claim
+        // would leave every later index waiting on a turn that never comes —
+        // promises that never settle, inside a plan that is already failing.
+        // Behaviour is otherwise unchanged: a throwing gate still rejects the
+        // whole plan through `Promise.all`, exactly as it did before.
+        tails.finish(index);
+        throw error;
+      }
 
       // See the file header (#507) for why this is caught here rather than
       // left to reject `Promise.all`.
@@ -126,6 +218,12 @@ export async function runTickPlan(
           // Conditional spread under `exactOptionalPropertyTypes`: absent
           // means "tick path only", never an explicit `undefined`.
           ...(decisionBar === undefined ? {} : { decision_bar: decisionBar }),
+          // Supplied unconditionally, at every width (#1040). Passing it only
+          // when the width exceeds 1 would make the wide path the only tested
+          // one and leave the narrow path taking a second, untested route
+          // through the runner — and at a width of 1 the turn is always
+          // already free, so the await costs a microtask and changes nothing.
+          beginPortfolioTail: () => tails.begin(index),
         });
       } catch (error) {
         // A claimed decision whose pass THREW is handed back to the gate, so
@@ -229,6 +327,14 @@ export async function runTickPlan(
           });
         }
         outcomes[index] = { trace_id, error: message };
+      } finally {
+        // Reported from a `finally` (#1040), not from the success path: a
+        // pass that threw — including one that threw INSIDE its tail, after
+        // taking its turn — must still release the queue, or every later
+        // instrument in the plan would wait out the tick and the plan would
+        // never settle. The catch above already turned the throw into an
+        // outcome; this only reports that the pass is over.
+        tails.finish(index);
       }
     }
   }

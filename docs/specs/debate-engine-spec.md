@@ -236,6 +236,14 @@ Mediator always produces a full synthesis regardless of convergence status:
 
 When hard cap is hit without convergence, `converged: false` and `open_items` is non-empty. Downstream components (Trader, Risk) can apply caution but are not blocked.
 
+**Bull and bear stay SEQUENTIAL within a round — decided 2026-09-02 (#1011), do not re-propose.**
+
+The round format above (bull → bear → mediator) is not an implementation accident to be optimised away. The bear reads the bull's argument *from this round* and answers it; that same-round rebuttal is the mechanism `CONTEXT.md` names as debate-as-edge. Running the two in parallel would leave each arguing against the other's *previous*-round position — two monologues with a lag, priced as a debate.
+
+The latency it was proposed to fix is real but was the wrong target. `DEBATE_BAR_TIMEFRAME_MS` is 1 hour, so every instrument's decision pass lands on the same bar boundary, and debate is 93-96% of pipeline wall time at ~35-55s; the cost was the *serial fan-out across instruments*, not the ordering inside one debate. Parallelising bull and bear would have roughly halved a figure that was over budget by more than an order of magnitude, while spending the edge. The fix went to the orchestrator instead — see orchestrator-spec.md, "Phase split: concurrent heads, serial portfolio tail (2026-09-03)" (#1040), which fans Analysts + Debate out across instruments and keeps the portfolio-mutating tail serial.
+
+Caveat on the figure, recorded so it is not quoted as measurement: the ~50s comes from **two traces**, not a distribution. Termination breaks early on convergence (above), so debates may routinely run fewer than the 3-round cap. Measure before tuning the fan-out width beyond its default.
+
 **Debate log write.** Immediately after the mediator produces the final synthesis (converged or hard-cap), the Debate Engine writes one `DebateLog` record to the shared store (append-only, keyed by `debate_id`). This is the only write in the debate lifecycle — it happens once, after resolution, and is separate from (does not require) the ephemeral round-by-round state described in State Persistence below.
 
 ### Module: Analyst Failure Handling

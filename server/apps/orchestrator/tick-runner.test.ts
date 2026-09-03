@@ -1226,3 +1226,126 @@ describe('SequentialTickRunner.runInstrument — execution stage error log level
     expect(verdictLines[0]).toMatchObject({ stage: 'verdict', level: 'info' });
   });
 });
+
+/**
+ * The phase split's runner half (#1040): the pass waits for its turn at the
+ * Trader entry point, and only there.
+ *
+ * The head — Analysts and Debate — is the 93-96% of wall time that touches no
+ * portfolio state, so it must run BEFORE the turnstile is entered, or the
+ * fan-out buys nothing. The tail reads and mutates the book, so it must run
+ * after. The assertions below are that boundary, at each of the two Trader
+ * entry points; `tick-loop.test.ts` and `phase-split.test.ts` own the other
+ * half (that turns are granted in plan order).
+ */
+describe('SequentialTickRunner.runInstrument — the portfolio-tail turnstile (#1040)', () => {
+  /** A ctx whose turnstile records when it was entered, relative to the stages. */
+  function ctxWithTurnstile(
+    order: string[],
+    overrides: { decision_bar?: TickContext['decision_bar'] } = {},
+  ): TickContext {
+    return {
+      ...makeCtx(overrides),
+      beginPortfolioTail: async () => {
+        order.push('turnstile');
+      },
+    };
+  }
+
+  it('enters the turnstile AFTER the debate and BEFORE the trader on a decision pass', async () => {
+    const order: string[] = [];
+    const intent = makeIntent();
+    const steps = makeSteps({
+      analysts: async () => {
+        order.push('analysts');
+        return [makeView()];
+      },
+      debate: async () => {
+        order.push('debate');
+        return makeDebate();
+      },
+      trader: async () => {
+        order.push('trader');
+        return intent;
+      },
+      risk: async () => {
+        order.push('risk');
+        return approvedRisk(intent);
+      },
+      verdict: async () => {
+        order.push('verdict');
+        return goVerdict(intent);
+      },
+      execution: async () => {
+        order.push('execution');
+        return makeExecutionResult();
+      },
+    });
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctxWithTurnstile(order));
+
+    expect(order).toEqual([
+      'analysts',
+      'debate',
+      'turnstile',
+      'trader',
+      'risk',
+      'verdict',
+      'execution',
+    ]);
+  });
+
+  it('enters the turnstile before the exit check on a tick pass', async () => {
+    const order: string[] = [];
+    const steps = makeSteps({
+      exitCheck: async () => {
+        order.push('exitCheck');
+        return null;
+      },
+    });
+
+    const outcome = await new SequentialTickRunner(steps).runInstrument(
+      SIGNAL,
+      ctxWithTurnstile(order, { decision_bar: undefined }),
+    );
+
+    // The exit check IS the Trader's exit-only entry point, so the rule is
+    // uniform — serial from the Trader entry point onward, on both paths.
+    expect(order).toEqual(['turnstile', 'exitCheck']);
+    expect(outcome.final_stage).toBe('position_check');
+  });
+
+  it('enters the turnstile once, before the exit check, on a quorum-skipped pass', async () => {
+    const order: string[] = [];
+    const steps = makeSteps({
+      analysts: async () => {
+        order.push('analysts');
+        return [];
+      },
+      exitCheck: async () => {
+        order.push('exitCheck');
+        return null;
+      },
+    });
+
+    // #785's path: no Trader entry point of its own until the exit check, so
+    // the head (analysts) still runs outside the turnstile.
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctxWithTurnstile(order));
+
+    expect(order).toEqual(['analysts', 'turnstile', 'exitCheck']);
+  });
+
+  it('runs the whole pass when no turnstile is supplied (backtest, smoke, control arm)', async () => {
+    // Absent means "run now": a caller with one pass in flight has no siblings
+    // to order against, and every existing caller of `runInstrument` outside
+    // `runTickPlan` is exactly that.
+    const steps = makeSteps();
+    const ctx = makeCtx();
+    expect(ctx.beginPortfolioTail).toBeUndefined();
+
+    const outcome = await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    expect(outcome.final_stage).toBe('execution');
+    expect(steps.execution).toHaveBeenCalledTimes(1);
+  });
+});

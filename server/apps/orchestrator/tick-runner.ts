@@ -38,6 +38,25 @@
  * usually not need to. See `runExitCheckPass` below, shared with the tick
  * path so there is exactly one place that evaluates a flatten.
  *
+ * ## The phase split (#1040)
+ *
+ * The pass is in two halves. The HEAD — Analysts and Debate — touches no
+ * portfolio state (neither step input carries one; neither stage references
+ * one), takes 93-96% of the pipeline's wall time, and is safe to overlap
+ * across instruments. The TAIL — from whichever Trader entry point this pass
+ * uses, through Risk -> Verdict -> Execution — reads and mutates the book,
+ * and must not overlap: `RiskManager.evaluate()` reads a portfolio snapshot,
+ * so two instruments evaluating concurrently would each clear the gross cap
+ * against pre-trade exposure and breach it combined (#1019).
+ *
+ * This module's part in that is one line at each of the two Trader entry
+ * points: `await ctx.beginPortfolioTail?.()`. The ordering itself lives in
+ * `tick-loop.ts`, which grants turns in PLAN order regardless of which head
+ * finished first — the runner does not know, and must not know, its place in
+ * the queue. Absent turnstile (backtest, smoke, control arm, direct unit
+ * construction) means "run now", which is what a caller with one pass in
+ * flight already is.
+ *
  * Short-circuit exits, each returning the stage that ended the pass:
  *   position_check — null exit intent (the common case: ~29 of 30 passes;
  *                    also reached from a quorum-skipped decision pass, #785)
@@ -228,6 +247,13 @@ export class SequentialTickRunner implements TickRunner {
      * their own to carry the flatten.
      */
     const runExitCheckPass = async (bar: Date): Promise<TickOutcome> => {
+      // PHASE SPLIT (#1040): the exit check is the Trader's exit-only entry
+      // point, so the turnstile is entered HERE, ahead of it, for the same
+      // reason the decision path enters it ahead of `steps.trader` — the rule
+      // is "serial from the Trader entry point onward", uniform across both
+      // entry points, not "serial from Risk onward on one of them". Inert
+      // when the caller supplied no turnstile (see `TickContext`).
+      await ctx.beginPortfolioTail?.();
       markStage('position_check');
       const exitInput = { trace_id, instrument, bar, clock };
       const exitCheckTimer = startStageTimer();
@@ -369,6 +395,13 @@ export class SequentialTickRunner implements TickRunner {
         },
       });
     }
+
+    // PHASE SPLIT (#1040): everything above this line is the portfolio-free
+    // head — Analysts and Debate, whose step inputs carry no portfolio state
+    // and whose stages never reference one — and may overlap with sibling
+    // instruments' heads. Everything below reads or mutates the book, so it
+    // waits for this instrument's turn. See `TickContext.beginPortfolioTail`.
+    await ctx.beginPortfolioTail?.();
 
     markStage('trader');
     const traderInput = { trace_id, instrument, debate, clock };
