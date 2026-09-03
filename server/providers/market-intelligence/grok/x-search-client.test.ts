@@ -303,6 +303,65 @@ describe('XSearchClient', () => {
     expect(logger.entries.some((entry) => entry.level === 'warn')).toBe(true);
   });
 
+  it('reports zero rather than throwing when the body parses to a NON-OBJECT', async () => {
+    // Review round 1 (#1055). `JSON.parse` succeeding does not mean an object
+    // came back: the literal `null` parses fine, and reading `.items` off it
+    // throws a TypeError that escapes the parser entirely — converting "a
+    // shape we cannot read" into an exception, which is exactly what the
+    // parse-to-zero contract promises not to do.
+    for (const text of ['null', '5', '"just a string"']) {
+      const logger = recordingLogger();
+      stubFetch({
+        ...responsesBody(),
+        output: [{ type: 'message', content: [{ type: 'output_text', text }] }],
+      });
+
+      const result = await new XSearchClient({ ...OPTIONS, logger }).fetchSentiment('TSLA', AS_OF);
+
+      expect(result.items).toEqual([]);
+      expect(logger.entries.some((entry) => entry.level === 'warn')).toBe(true);
+    }
+  });
+
+  it('drops a malformed ITEM without losing the well-formed ones beside it', async () => {
+    // Review round 1 (#1055). `items: [null]` is a well-formed array whose
+    // element throws on the first field read. One bad element must cost that
+    // element, not the whole response — nine good items and one null yields
+    // nine, not an exception.
+    stubFetch(
+      responsesBody({
+        items: [null, item({ url: FRESH_URL }), 'not an object', 42],
+        citations: [FRESH_URL],
+      }),
+    );
+
+    const result = await new XSearchClient(OPTIONS).fetchSentiment('TSLA', AS_OF);
+
+    expect(result.items).toHaveLength(1);
+  });
+
+  it('bills a search that RAN and returned nothing, rather than zero', async () => {
+    // Review round 1 (#1055). Deriving the count from citations alone
+    // under-counts in one specific case: a search that ran and found nothing
+    // has zero citations and would bill zero, though the provider charges per
+    // call. A cap fed an under-count is not a cap, so a reported tool-call
+    // item is a floor under the citation count.
+    stubFetch({
+      ...responsesBody({ citations: [] }),
+      output: [
+        { type: 'x_search_call' },
+        { type: 'message', content: [{ type: 'output_text', text: '{"items":[]}' }] },
+      ],
+    });
+
+    const result = await new XSearchClient(OPTIONS).fetchSentiment('TSLA', AS_OF);
+
+    expect(result.items).toEqual([]);
+    expect(result.server_tool_calls).toBe(1);
+    // Still "we looked", which is the distinction #485 exists to preserve.
+    expect(result.retrievalEvidence).toBe(false);
+  });
+
   it('rejects a post that postdates the response citing it', async () => {
     // A citation cannot be to the future. One that appears to be is a decode
     // or clock fault, not a scoop.

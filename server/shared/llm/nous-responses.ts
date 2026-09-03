@@ -225,6 +225,30 @@ function toCitation(annotation: unknown): NousCitation | null {
  * Nth citation when the model does not label them, so a set that reordered on
  * every call would scramble the pairing.
  */
+/**
+ * How many server-side tool calls the provider reported making.
+ *
+ * The Responses API reports each one as its own `output` item whose `type`
+ * names the tool and ends in `_call` — `x_search_call`, `web_search_call`.
+ * Matching the SUFFIX rather than an allowlist of tool names is deliberate:
+ * this number feeds the spend cap, and a tool added upstream that this repo
+ * has never heard of should bill as a call rather than silently as zero. The
+ * cost of the loose match is over-charging for a hypothetical `_call` item
+ * that is free, which is the safe direction.
+ *
+ * Returns 0 when `output` is absent or carries no such item — the provider may
+ * simply not report them, which is why the caller treats this as a FLOOR under
+ * the citation count rather than as the answer.
+ */
+function countServerToolCalls(body: ResponsesBody): number {
+  if (!Array.isArray(body.output)) return 0;
+  let calls = 0;
+  for (const item of body.output as OutputItem[]) {
+    if (typeof item?.type === 'string' && item.type.endsWith('_call')) calls += 1;
+  }
+  return calls;
+}
+
 function extractCitations(body: ResponsesBody): NousCitation[] {
   const seen = new Set<string>();
   const citations: NousCitation[] = [];
@@ -314,6 +338,20 @@ export async function nousResponses(
     );
   }
 
+  // A 200 whose body is `null` or a primitive would otherwise reach the
+  // `parsed.output` read below and throw a TypeError, which is neither of this
+  // function's two documented outcomes (a result, or a `NousApiError` naming
+  // what came back). Refused here so the failure is classified.
+  if (typeof body !== 'object' || body === null) {
+    throw new NousApiError(
+      response.status,
+      `Nous API error: response body was not a JSON object (${truncateForError(
+        JSON.stringify(body) ?? String(body),
+      )})`,
+      body,
+    );
+  }
+
   const parsed = body as ResponsesBody;
 
   // A body with neither output nor an `output_text` field is not an empty
@@ -338,9 +376,23 @@ export async function nousResponses(
   }
 
   const citations = extractCitations(parsed);
+
+  // Nous's `usage` block carries TOKENS ONLY — no search count — so this is an
+  // estimate, and the direction it errs in is the whole point: a spend cap fed
+  // an under-count is not a cap.
+  //
+  // Citations alone under-count in one specific case, which is why they are
+  // not used alone: a search that RAN and returned nothing has zero citations
+  // and would bill zero, even though the provider charges per call. So the
+  // estimate takes the larger of (a) the number of server-tool-call items the
+  // provider reported in `output`, and (b) the citation count — which keeps
+  // the deliberate over-charge when many citations come back from one call,
+  // and adds a floor of the real call count when few or none do.
+  const toolCalls = countServerToolCalls(parsed);
+  const estimated = Math.max(toolCalls, citations.length);
   const ceiling = options.maxServerToolCalls;
   const server_tool_calls =
-    ceiling === undefined ? citations.length : Math.min(citations.length, ceiling);
+    ceiling === undefined ? estimated : Math.min(estimated, Math.max(ceiling, toolCalls));
 
   return {
     text: extractText(parsed),

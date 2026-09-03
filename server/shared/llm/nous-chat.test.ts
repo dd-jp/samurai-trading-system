@@ -400,6 +400,23 @@ describe('nousChat', () => {
       expect(error.message).toContain('rate_limit_error');
     });
 
+    it('truncates an unbounded provider message before it reaches the log line', async () => {
+      // Review round 1 (#1055). `error.message` is a provider-supplied string
+      // of unbounded length, and this message goes to the log sink and to
+      // alert transports. An upstream returning a megabyte of prose would
+      // otherwise put a megabyte into EVERY retry's log line. The full body
+      // stays available unmodified on `.body` for anyone who needs it.
+      const huge = 'x'.repeat(20_000);
+      stubFetch({ error: { type: 'server_error', message: huge } }, { status: 500 });
+
+      const error = (await nousChat(OPTIONS, REQUEST).catch((e: unknown) => e)) as NousApiError;
+
+      expect(error.message.length).toBeLessThan(2_000);
+      expect(error.message).toContain('truncated');
+      expect(error.message).toContain('server_error');
+      expect(JSON.stringify(error.body)).toContain(huge);
+    });
+
     it('never puts the API key in an error message', async () => {
       // Error strings go straight to logs, and a provider echoing the request
       // back is exactly how a key ends up in one.

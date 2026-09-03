@@ -110,8 +110,9 @@ is deliberately unwired. Seven hourly bars is a US-session count.
 > retrieval** — do not carry the £58 figure across.
 >
 > Three things follow, and none of them is "spend more". **(1)** Retrieval defaults **off**; it is a dated,
-> deliberate switch, not an operator default. **(2)** The soak is NOT where this binds — 3 x 4 x 14 = 168
-> calls is $3-5 — so the live universe width is the lever that matters, not the soak's result count.
+> deliberate switch, not an operator default. **(2)** The soak IS where this binds, on the 20-name paper
+> universe: 20 x 4 x 10 = ~800 calls, ~$16 at 3 results and ~$71 at 10, against a $50 cap shared with a
+> ~$8.40 debate leg. (An earlier draft of this bullet said the opposite, off the pre-#1051 3-name universe.)
 > **(3)** The figures here are a **range, not a point** (output tokens were never measured at 3 results,
 > and reasoning tokens do not scale down with result count), *and the call count is a derived assumption on
 > the same footing*, descending from the scheduler and `GROK_REFRESH_MS`. The reconciliation against the

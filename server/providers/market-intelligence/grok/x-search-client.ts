@@ -332,22 +332,33 @@ export class XSearchClient implements GrokSentimentClient {
   ): IntelligenceItem[] {
     if (content.trim() === '') return [];
 
-    let parsed: { items?: unknown };
+    let parsed: unknown;
     try {
-      parsed = JSON.parse(content) as { items?: unknown };
+      parsed = JSON.parse(content);
     } catch {
       // Recover a fenced or prose-wrapped object before giving up — the same
       // salvage `NousSentimentClient` does, for the same reason.
       const match = content.match(/\{[\s\S]*\}/);
       if (match === null) return this.#unreadable(context.instrument);
       try {
-        parsed = JSON.parse(match[0]) as { items?: unknown };
+        parsed = JSON.parse(match[0]);
       } catch {
         return this.#unreadable(context.instrument);
       }
     }
 
-    if (!Array.isArray(parsed.items)) return this.#unreadable(context.instrument);
+    // `JSON.parse` succeeding does NOT mean an object came back: the literal
+    // `null` parses fine, and reading `.items` off it throws a TypeError that
+    // escapes this method entirely — turning "a shape we cannot read" into an
+    // exception, which is the one thing the parse-to-zero contract above
+    // promises not to do. A primitive (`5`, `"text"`) would not throw, but it
+    // is equally unreadable, so both are refused by the same check.
+    if (typeof parsed !== 'object' || parsed === null) {
+      return this.#unreadable(context.instrument);
+    }
+
+    const items_ = (parsed as { items?: unknown }).items;
+    if (!Array.isArray(items_)) return this.#unreadable(context.instrument);
 
     // Keyed by status id, not by raw URL string: the same post cited as
     // `x.com/u/status/1` and `www.x.com/u/status/1?s=20` is one post, and a
@@ -367,8 +378,18 @@ export class XSearchClient implements GrokSentimentClient {
     const seen = new Set<string>();
     let unevidenced = 0;
     let stale = 0;
+    let unreadableItems = 0;
 
-    for (const raw of parsed.items.slice(0, MAX_ITEMS)) {
+    for (const raw of items_.slice(0, MAX_ITEMS)) {
+      // Same reason as the body check above, one level down: `items: [null]`
+      // is a well-formed array whose element throws on the first field read in
+      // `#toItem`. One malformed element must cost that element, not the whole
+      // response — a model that returns nine good items and one null should
+      // yield nine, not an exception.
+      if (typeof raw !== 'object' || raw === null) {
+        unreadableItems += 1;
+        continue;
+      }
       const outcome = this.#toItem(raw as RawSentiment, cited, context);
       if (outcome === 'unevidenced') {
         unevidenced += 1;
@@ -403,6 +424,7 @@ export class XSearchClient implements GrokSentimentClient {
           instrument: context.instrument,
           unevidenced,
           stale,
+          unreadable_items: unreadableItems,
           kept: items.length,
           citations: cited.size,
         },

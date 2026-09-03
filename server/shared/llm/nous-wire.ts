@@ -128,7 +128,13 @@ export async function buildApiError(response: Response): Promise<NousApiError> {
   } catch {
     body = undefined;
   }
-  const detail = describeErrorBody(body) ?? response.statusText;
+  // TRUNCATED before interpolation, not after. `detail` is a provider-supplied
+  // string of unbounded length — `error.message` from a body we do not control,
+  // or `statusText` — and this message goes to the log sink and to alert
+  // transports. An upstream that returns a megabyte of prose in `error.message`
+  // would otherwise put a megabyte into every retry's log line. The full body
+  // is still available unmodified on `.body` for anyone who needs it.
+  const detail = truncateForError(describeErrorBody(body) ?? response.statusText);
   return new NousApiError(response.status, `Nous API error: ${response.status} ${detail}`, body);
 }
 
