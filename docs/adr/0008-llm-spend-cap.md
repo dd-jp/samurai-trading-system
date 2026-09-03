@@ -153,6 +153,50 @@ the soak from a fresh store if it is meant to have the full budget.**
 > `debate: 'anthropic/claude-haiku-4.5'`, chosen later on measured latency while
 > explicitly accepting the higher bill.
 
+> **Amended 2026-09-03 by [#969](https://github.com/dd-jp/samurai-trading-system/issues/969)
+> — the cap now has a SECOND unit, and it is an order of magnitude larger than
+> the first.** `$0.0060 per debate run` is unchanged and still describes the
+> debate leg; nothing below is withdrawn. What changed is that the market-
+> intelligence leg stopped being a rounding error. A sentiment call that
+> *retrieves* — the server-side `x_search` tool, live from 2026-09-03 behind
+> `SAMURAI_SENTIMENT_RETRIEVAL=on` — carries its search results **in the
+> prompt**, so it measures **$0.089** at 10 results and roughly **$0.02** at the
+> default 3, against the ~$0.001 a recall-only sentiment call cost.
+>
+> **The call count has two multipliers, and both were got wrong once each
+> before this settled. Re-derive them rather than quoting them.**
+>
+> 1. **Buckets are session-derived.** `UniverseScheduler.nextTick` returns an
+>    empty instrument list when the calendar says closed, so the sentiment
+>    refresh never fires outside the session: a 6.5h US session touches **4**
+>    two-hour buckets, not the 12 a first draft read off a calendar.
+> 2. **The universe is 20 names.** [#1051](https://github.com/dd-jp/samurai-trading-system/issues/1051)
+>    widened `DEFAULT_UNIVERSE` from 3 to 20 while the #969 branch was open.
+>
+> So the soak is **20 x 4 x 10 sessions = 800 calls** — **~$16** at the default
+> 3 results, **~$71** at 10, alongside #1051's ~$8.40 debate leg.
+>
+> **This cap therefore DOES bind the MI leg, and at 3 results the MI leg is now
+> the LARGER of the two** (~$16 against ~$8.40) — the first time anything has
+> outweighed the debate under this cap. Together ~$24, about half the ceiling.
+>
+> **`SAMURAI_X_MAX_RESULTS=10` on a 20-name universe does not fit.** The clamp
+> to 10 bounds an operator TYPO; it does not bound the budget. What bounds the
+> budget is this cap, and it fails closed — a breach short-circuits the tick —
+> so the failure is the soak **going dark partway through**, invalidating the
+> experiment rather than overspending. Better failure, still a failure. On the
+> live LSE pool (7 underlyings) the annual figures are ~$141/yr at 3 and
+> ~$630/yr at 10, against a ~$74/yr debate leg.
+>
+> **Two metering corrections were required before this could run unattended**,
+> both of which had been under-counting: Nous reports **OpenAI-inclusive**
+> usage (`cached_tokens` is a subset of `prompt_tokens`, not disjoint as
+> `AnthropicUsage` means it), and the vendor applies a **large-prompt tier**
+> above 200k prompt tokens that `pricing.ts` did not model. A cap that
+> under-counts is not a cap. [ADR-0020](0020-x-retrieval-through-nous.md)
+> carries the full regime; the range above is a **range, not a point**, until
+> reconciled against the provider's invoice.
+
 `paperStartingProfile` now carries `tickIntervalMs: 15 * 60_000`, up from the
 60s `DEFAULT_TICK_INTERVAL_MS`, and `llmBudgetUsd: 50`. *(Superseded 2026-08-16
 — it now carries `2 * 60_000`; see the amendment box above. `DEFAULT_TICK_INTERVAL_MS`

@@ -40,6 +40,17 @@ export const MI_SOURCES = {
   gdeltGkg: 'gdelt-gkg',
   /** `PolymarketAgent` — the curated macro/event probabilities. */
   polymarket: 'polymarket',
+  /**
+   * `GrokAgent` + `XSearchClient` — scored X posts retrieved through the
+   * provider's server-side `x_search` tool (#969).
+   *
+   * `reddit` is the reserved sibling: #976's access request is with Reddit's
+   * App Review, and when it lands it writes the same score-plus-permalink
+   * projection into `social` alongside this one. It is NOT registered here
+   * yet — an unused source id would compile a hydration policy for something
+   * with no writer, which is the placeholder this Record exists to prevent.
+   */
+  x: 'x',
 } as const;
 
 export type MiSourceId = (typeof MI_SOURCES)[keyof typeof MI_SOURCES];
@@ -71,6 +82,24 @@ export const MI_SOURCE_HYDRATION: Record<MiSourceId, MiHydrationPolicy> = {
   // in `polymarket-agent.ts`'s limitation 3. The archived items exist so the
   // source is replayable offline, which is what #835 restored.
   [MI_SOURCES.polymarket]: 'archive-only',
+  // A post is a DATED OBSERVATION in exactly the sense the `hydrate` policy
+  // means: `IntelligenceItem.timestamp` is the post's own publication time
+  // (snowflake-decoded from the status id), not the time we fetched it, and
+  // not a trailing-window statistic like Polymarket's 24h delta. Replaying
+  // yesterday's posts at boot restores what a run that never restarted would
+  // hold, and `getContext`'s window filter drops the ones that have aged out.
+  //
+  // Two things make this safe that were NOT true when this file was written.
+  // First, `MarketIntelligenceStore.ingest` now dedupes by item id (#969), so
+  // a replay followed by a live bucket cannot double-count a post — the
+  // compounding this file's header warns about. Second, the ids are stable
+  // across calls (`x:<statusId>`), which is what gives that dedupe something
+  // to match on.
+  //
+  // Note this implies no vendor backfill: `hydrate()` replays `mi_items` from
+  // disk. It could not do otherwise here — `x_search` is a live search tool
+  // with day-granular dates and no historical fetch path.
+  [MI_SOURCES.x]: 'hydrate',
 };
 
 /**

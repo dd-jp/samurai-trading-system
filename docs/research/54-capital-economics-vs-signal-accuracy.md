@@ -80,6 +80,45 @@ is deliberately unwired. Seven hourly bars is a US-session count.
 
 **≈ $74/yr ≈ £58/yr** over 252 sessions, at the $1.27/£ rate the earlier figures were converted at.
 
+> **Amended 2026-09-03 by [#969](https://github.com/dd-jp/samurai-trading-system/issues/969): this bill is
+> the DEBATE leg only, and the market-intelligence leg has stopped being negligible.** The $0.0060/run unit
+> above is unchanged. What changed is that the sentiment stage now *retrieves* — the server-side `x_search`
+> tool, behind `SAMURAI_SENTIMENT_RETRIEVAL=on` — and a retrieving call carries its search results in the
+> **prompt**, so it costs roughly **$0.02** at the default 3 results (measured **$0.089** at 10) against the
+> ~$0.001 a recall-only sentiment call cost.
+>
+> **Buckets are session-derived, which is the first thing to check and the thing a first pass of this
+> amendment got wrong.** `UniverseScheduler.nextTick` returns an **empty** instrument list whenever the
+> calendar says closed, so the sentiment refresh never fires outside the session: a 6.5h US session touches
+> **4** two-hour buckets, not the 12 a 24-hour day gives. On the same 7-instrument, 252-session basis:
+> 7 x 4 x 252 ≈ **7,100 calls/yr ≈ $141/yr ≈ £111/yr** at the default 3 search results. (An earlier draft
+> of this box said £330/yr off a 12-bucket calendar reading. Same error class as the one #969 exists to
+> correct: a downstream conclusion computed from a premise nobody checked against the code.)
+>
+> **The other multiplier is universe width, and it is NOT the 7 used here.** This section's 7 is the live
+> LSE pool's underlying count, which is the right basis for a live-bill estimate. The *paper* universe is
+> 20 names since [#1051](https://github.com/dd-jp/samurai-trading-system/issues/1051), where the same
+> arithmetic gives ~$16 of MI spend per 14-day soak against a ~$8.40 debate leg — i.e. **the sentiment leg
+> outweighs the debate leg**, which is not true at any figure this document computed before. Read the two
+> bases separately and do not average them.
+>
+> **What that does to this section's conclusion.** The total bill goes from **£58/yr to ~£169/yr — roughly
+> triple**, with MI now the larger leg. That is not "second-order" in the sense of ignorable, but neither
+> does it overturn the section: the break-even accuracy thresholds in §4 shift by the ratio of the bill to
+> the trading term, and at 10 search results (~£495/yr at 7 instruments) they shift materially further.
+> **Recompute §4's thresholds against the actual bill before quoting them for a universe running
+> retrieval** — do not carry the £58 figure across.
+>
+> Three things follow, and none of them is "spend more". **(1)** Retrieval defaults **off**; it is a dated,
+> deliberate switch, not an operator default. **(2)** The soak IS where this binds, on the 20-name paper
+> universe: 20 x 4 x 10 = ~800 calls, ~$16 at 3 results and ~$71 at 10, against a $50 cap shared with a
+> ~$8.40 debate leg. (An earlier draft of this bullet said the opposite, off the pre-#1051 3-name universe.)
+> **(3)** The figures here are a **range, not a point** (output tokens were never measured at 3 results,
+> and reasoning tokens do not scale down with result count), *and the call count is a derived assumption on
+> the same footing*, descending from the scheduler and `GROK_REFRESH_MS`. The reconciliation against the
+> provider's invoice is what replaces both. [ADR-0020](../adr/0020-x-retrieval-through-nous.md) carries the
+> regime; ADR-0008 §2's 2026-09-03 amendment carries the cap arithmetic.
+
 ## 4. The restatement
 
 Annual net, per **£1,000 of position notional**, at accuracy `p` over `N` sessions traded:

@@ -305,6 +305,75 @@ describe('MarketIntelligenceStore.getContext', () => {
   });
 });
 
+describe('MarketIntelligenceStore.ingest dedupe (#969)', () => {
+  const AS_OF = new Date('2026-07-14T09:30:00Z');
+
+  function store(): MarketIntelligenceStore {
+    return new MarketIntelligenceStore(new FixedClock(AS_OF));
+  }
+
+  function socialItem(overrides: Partial<IntelligenceItem> = {}): IntelligenceItem {
+    return newsItem({ id: 'x:1234567890', source: 'x', type: 'sentiment', ...overrides });
+  }
+
+  /** The `social` bucket for one entity, at a window wide enough to hold it. */
+  function social(s: MarketIntelligenceStore, entity: string): IntelligenceItem[] {
+    return s.getContext('stocks', 60 * 60_000, 'trace-1', undefined, entity).social;
+  }
+
+  it('drops the SAME post repeated for the SAME instrument', () => {
+    // The case dedupe was added for. `x_search`'s date filter is day-granular
+    // while the bucket is two hours, so consecutive buckets return overlapping
+    // posts by construction — and `sentiment-analyst.ts` averages `social`
+    // wholesale, so an un-deduped post votes once per bucket it survives in.
+    // A post that stayed relevant for six hours would read as three people
+    // agreeing.
+    const s = store();
+
+    s.ingest(envelope([socialItem()]));
+    s.ingest(envelope([socialItem()]));
+
+    expect(social(s, 'AAPL')).toHaveLength(1);
+  });
+
+  it('KEEPS the same post ingested as evidence for a different instrument', () => {
+    // Review round 2 (#1055). An X status id carries no entity, and this store
+    // is shared across the whole universe — so a post mentioning two names is
+    // retrieved once for each, and an id-only key would admit it for whichever
+    // was ingested first and silently drop it for the second. Those are two
+    // different observations that happen to share a source post, and the
+    // analyst reads them per entity, so the second is a real loss.
+    const s = store();
+
+    s.ingest(envelope([socialItem({ entity: 'AAPL' })]));
+    s.ingest(envelope([socialItem({ entity: 'TSLA' })]));
+
+    expect(social(s, 'AAPL')).toHaveLength(1);
+    expect(social(s, 'TSLA')).toHaveLength(1);
+  });
+
+  it('does not notify subscribers again for an item it just dropped', () => {
+    // A duplicate must not reach a subscriber either: push delivery is the
+    // other consumer of the same batch, and a dedupe that only filtered the
+    // store would leave it double-counting.
+    //
+    // Asserted as "the second ingest adds nothing" rather than as an absolute
+    // count, because delivery is throttled and the throttle is not this
+    // test's subject.
+    const s = store();
+    let notifications = 0;
+    s.subscribe('stocks', () => {
+      notifications += 1;
+    });
+
+    s.ingest(envelope([socialItem()]));
+    const afterFirst = notifications;
+    s.ingest(envelope([socialItem()]));
+
+    expect(notifications).toBe(afterFirst);
+  });
+});
+
 describe('MarketIntelligenceStore staleness', () => {
   it('flags an asset with no recent update as stale', () => {
     const asOf = new Date('2026-07-14T09:00:00Z');

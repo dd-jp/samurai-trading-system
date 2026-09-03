@@ -180,8 +180,10 @@ import {
 import {
   AlpacaNewsClient,
   CiiConsumer,
+  DEFAULT_MAX_SEARCH_RESULTS,
   GdeltGkgClient,
   GdeltIngestAgent,
+  GROK_REFRESH_MS,
   GrokAgent,
   MarketIntelligenceStore,
   type MiArchiveStore,
@@ -189,6 +191,8 @@ import {
   NousSentimentClient,
   PolymarketAgent,
   PolymarketClient,
+  X_SEARCH_MODEL,
+  XSearchClient,
 } from '../../providers/market-intelligence/index.js';
 import { positiveIntegerFromEnv } from '../../shared/env-integer.js';
 import type { AssetClass, Clock, TuningStore } from '../../shared/index.js';
@@ -234,7 +238,7 @@ import { JsonLogger } from './logger.js';
 import type { OrphanGoVerdict, OrphanVerdictScanner } from './orphan-verdict-scan.js';
 import { LIVE_BOOK_GBP } from './paper-profile.js';
 import { AlpacaAccountStateProvider } from './production/account-state.js';
-import { buildAnalystsStep } from './production/analysts-adapter.js';
+import { buildAnalystsStep, composeMarketIntelligence } from './production/analysts-adapter.js';
 // #753: the control arm's own account scalars — see `control-account-state.ts`.
 import {
   buildControlBookAnchorResolver,
@@ -567,6 +571,9 @@ export function captureLlmTextFromEnvironment(
 
 /** The variable that overrides `llm_call_log`'s row ceiling (#1045). */
 export const ENV_LLM_CALL_LOG_MAX_ROWS = 'SAMURAI_LLM_CALL_LOG_MAX_ROWS';
+
+/** The variable that overrides how many X posts a sentiment call fetches (#969). */
+export const ENV_X_MAX_SEARCH_RESULTS = 'SAMURAI_X_MAX_RESULTS';
 
 /**
  * How many `llm_call_log` rows to keep (#1045).
@@ -1381,11 +1388,76 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       new SqliteLlmSpendStore(guardedStore(config.db, 'debate-engine'), logger, captureLlmText),
     );
 
+  /**
+   * Whether the sentiment agent RETRIEVES (#969), as opposed to asking a model
+   * what it remembers.
+   *
+   * A separate switch from `sentimentEnabled`, not a widening of it, and
+   * DEFAULT OFF. Three reasons, in the order they bite:
+   *
+   * 1. It changes what the soak measures. `sentiment` has been excluded from
+   *    the evidence average while mute (#676); real items put it back in, and
+   *    that is the same gate that produced #625's zero-trade result. A run
+   *    with this on is a different experiment from #625/#752, and flipping it
+   *    by accident would make two soaks silently incomparable.
+   * 2. It changes what the run costs. Search results ride in the prompt —
+   *    roughly 5,300 input tokens per call at the default result count — so
+   *    this is the soak's main LLM cost lever after the debate itself.
+   * 3. The metered figure has not yet been reconciled against the provider's
+   *    invoice (the plan's V3). Until it has, turning this on is a deliberate,
+   *    dated act by an operator, not a default.
+   *
+   * `SAMURAI_X_MAX_RESULTS` is the dial, and it is read through the SHARED
+   * `positiveIntegerFromEnv` (#1045) rather than a validator of its own. That
+   * helper's header makes the argument — "two env vars in one system come to
+   * disagree about whether `\"abc\"` means abc, the default, or 0" — and a
+   * spend dial is the last place to disagree about it. Concretely it means a
+   * malformed value **throws at startup naming the variable** instead of
+   * silently falling back, which is the right failure for a setting whose
+   * whole job is bounding cost: an operator who typed `SAMURAI_X_MAX_RESULTS=ten`
+   * meant to change the spend and should not discover days later that nothing
+   * changed.
+   *
+   * The ceiling is enforced separately and does NOT throw. `XSearchClient`
+   * clamps to `[1, MAX_SEARCH_RESULTS_CEILING]` and warns, because 100 is a
+   * well-formed integer that an operator plausibly meant as "as many as you
+   * can" — refusing to boot over it would be worse than capping it and saying
+   * so. So: unusable input refuses, excessive input clamps.
+   */
+  const sentimentRetrieval =
+    config.sentimentRetrieval ??
+    process.env.SAMURAI_SENTIMENT_RETRIEVAL?.trim().toLowerCase() === 'on';
+  const xMaxSearchResults = positiveIntegerFromEnv(
+    process.env[ENV_X_MAX_SEARCH_RESULTS],
+    ENV_X_MAX_SEARCH_RESULTS,
+    DEFAULT_MAX_SEARCH_RESULTS,
+    1,
+    "the number of X posts each sentiment call retrieves, the soak's main LLM cost lever after " +
+      'the debate itself (#969)',
+  );
+
   const grokAgent =
     sentimentCredentials === undefined
       ? undefined
       : new GrokAgent({
-          client: new NousSentimentClient({ ...sentimentCredentials, logger }),
+          // The ONE construction-time difference between a sentiment stage
+          // that fills `social` and one that has never filled it. Everything
+          // downstream — the spend gate, the evidence guard, the bucket cache
+          // — is identical, which is the property `grok-agent.ts` claimed and
+          // this line is the test of.
+          client: sentimentRetrieval
+            ? new XSearchClient({
+                ...sentimentCredentials,
+                // The credentials' model is the PINNED `x-ai/grok-4.5`, on
+                // which `x_search` 400s ("supported only on OpenRouter-routed
+                // models"). The routed alias is not a preference here, it is
+                // the only thing that works — see `X_SEARCH_MODEL`.
+                model: X_SEARCH_MODEL,
+                maxSearchResults: xMaxSearchResults,
+                windowMs: GROK_REFRESH_MS,
+                logger,
+              })
+            : new NousSentimentClient({ ...sentimentCredentials, logger }),
           store: marketIntelligence,
           spendCap,
           spendSink: new SqliteLlmSpendStore(
@@ -1395,7 +1467,22 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
           ),
           clock,
           logger,
+          // Absent on runs with no archive, which is a working configuration:
+          // it costs replay and the post-hoc bot-share check, not correctness.
+          archive: config.miArchive,
         });
+
+  if (sentimentRetrieval && sentimentCredentials === undefined) {
+    logger.log({
+      trace_id: 'boot',
+      stage: 'market_intelligence',
+      level: 'warn',
+      message:
+        'SAMURAI_SENTIMENT_RETRIEVAL=on but no sentiment credentials are configured, so no ' +
+        'sentiment agent was built at all. `social` will be empty for this run and the ' +
+        'analysts will report NO DATA — the retrieval switch is doing nothing.',
+    });
+  }
 
   /**
    * The deterministic news path (map #552) — the writer that actually fills
@@ -1726,21 +1813,32 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
         monitor: miCoverageMonitor,
         logger,
       },
-      // #464: the only writer `MarketIntelligenceStore` has. Absent under
-      // SAMURAI_SENTIMENT=off — no agent, no calls, and the analysts keep
-      // reporting NO_DATA_MARKER (#463), which is the honest default rather
-      // than a silent no-op. The agent's own 4h bucket makes calling it on
-      // every pass cheap: it returns immediately unless the bucket rolled.
-      // #552: the deterministic path when it is available, the retrieval-era
-      // agent only as a fallback. Not a preference — `GrokAgent` ingests `[]`
-      // by construction (`retrievalEvidence: false` is hard-coded), which is
-      // what pinned both news-fed analysts at confidence 0.05 and produced
-      // #625's 0.5478 conviction ceiling.
-      ...(miIngestAgent !== undefined
-        ? { marketIntelligence: miIngestAgent }
-        : grokAgent === undefined
+      // The writers `MarketIntelligenceStore` has. Absent entirely under
+      // SAMURAI_SENTIMENT=off with no archive — no agent, no calls, and the
+      // analysts keep reporting NO_DATA_MARKER (#463), which is the honest
+      // default rather than a silent no-op. Each agent's own refresh bucket
+      // makes calling them on every pass cheap: they return immediately
+      // unless the bucket rolled.
+      //
+      // BOTH, not one (#969). This was `miIngestAgent ?? grokAgent` — the
+      // deterministic path preferred, the sentiment agent kept only as a
+      // fallback — and #552's reasoning for that was sound at the time:
+      // `GrokAgent` ingested `[]` by construction, so running it alongside
+      // bought a second agent that contributed nothing.
+      //
+      // That inverts once sentiment retrieves. The two write DIFFERENT
+      // buckets — `MiIngestAgent` fills `news`, `GrokAgent` fills `social` —
+      // so picking one leaves the other empty by construction, and with the
+      // news path available the empty one is `social`: the bucket #969 exists
+      // to fill, and the one `sentiment-analyst.ts` has never once been given
+      // data for. Composing them is what makes the retrieving client reachable
+      // on the shipped path at all.
+      ...(() => {
+        const marketIntelligenceRefresh = composeMarketIntelligence([miIngestAgent, grokAgent]);
+        return marketIntelligenceRefresh === undefined
           ? {}
-          : { marketIntelligence: grokAgent }),
+          : { marketIntelligence: marketIntelligenceRefresh };
+      })(),
     }),
     // Two independent stores hang off this one step, both over `config.db`:
     // #367's `SqliteLlmSpendStore` meters what the debate COSTS (the

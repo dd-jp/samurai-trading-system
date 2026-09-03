@@ -2279,6 +2279,32 @@ export function buildStartingProfileConfigs(
      * stepped the interval to 2 min. Per-run units are $0.0060 measured, not
      * the $0.008-$0.036 estimated above.
      *
+     * **The debate is no longer the only unit under `llmBudgetUsd` (#969).**
+     * Everything above prices the DEBATE leg. With
+     * `SAMURAI_SENTIMENT_RETRIEVAL=on` the market-intelligence leg runs a
+     * server-side `x_search` call per instrument per 2h bucket, and search
+     * results ride in the PROMPT: ~$0.02 at the default 3 results, a measured
+     * $0.089 at 10.
+     *
+     * Two multipliers set the call count. Buckets are SESSION-derived:
+     * `UniverseScheduler` returns an empty instrument list whenever the
+     * calendar says closed, so the refresh never fires outside the session and
+     * a 6.5h US session touches 4 two-hour buckets, not 12. And the universe
+     * is the 20 names above (#1051). A soak is therefore 20 x 4 x 10 = ~800
+     * calls: **~$16** at the default 3 results and **~$71** at 10, against
+     * this profile's $50 `llmBudgetUsd` shared with #1051's ~$8.40 debate leg.
+     *
+     * So the cap BINDS the sentiment leg, and at 3 results that leg is the
+     * LARGER of the two — the first thing under this budget to outweigh the
+     * debate. `SAMURAI_X_MAX_RESULTS` is clamped to 10, but that clamp bounds
+     * an operator typo rather than the budget: 10 on 20 names does not fit,
+     * and `SpendCap` failing closed turns the overshoot into a soak that goes
+     * dark partway through. Re-derive the default when the universe width
+     * changes. Retrieval is OFF by default, so the arithmetic above still
+     * describes an unflagged run. ADR-0008 §2's 2026-09-03 amendment and ADR-0020 carry the regime;
+     * treat the retrieval figures as a range until reconciled against the
+     * provider invoice.
+     *
      * Two things that make the range wide rather than the estimate precise,
      * both stated rather than smoothed over: debates that complete FASTER than
      * the budget cost more per day, not less (a shorter pass means more

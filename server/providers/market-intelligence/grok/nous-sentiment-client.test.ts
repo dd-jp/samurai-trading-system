@@ -73,7 +73,14 @@ describe('NousSentimentClient', () => {
       sentiment: 1,
       confidence: 0.7,
     });
-    expect(result.usage).toEqual({ input_tokens: 40, output_tokens: 60 });
+    // `cache_read_input_tokens` present and zero: `nousChat` now reports the
+    // cache line rather than dropping it (#969), and no cache hit is a real
+    // zero rather than an unknown.
+    expect(result.usage).toEqual({
+      input_tokens: 40,
+      output_tokens: 60,
+      cache_read_input_tokens: 0,
+    });
   });
 
   it('reports an empty list as zero items, not as a failure', async () => {

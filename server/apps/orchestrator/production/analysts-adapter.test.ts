@@ -1,7 +1,11 @@
 import type { AnalystOrchestrator } from '../../../pipeline/analysts/index.js';
 import type { AnalystView } from '../../../pipeline/debate-engine/index.js';
 import type { Clock, LogEntry, Logger } from '../../../shared/index.js';
-import { type AnalystSkipAlert, buildAnalystsStep } from './analysts-adapter.js';
+import {
+  type AnalystSkipAlert,
+  buildAnalystsStep,
+  composeMarketIntelligence,
+} from './analysts-adapter.js';
 import { MiCoverageMonitor } from './mi-coverage.js';
 
 const NOW = new Date('2026-07-28T14:00:00Z');
@@ -611,5 +615,58 @@ describe('buildAnalystsStep', () => {
         }),
       ).resolves.toHaveLength(1);
     });
+  });
+});
+
+describe('composeMarketIntelligence (#969)', () => {
+  function refresher(calls: string[], name: string, options: { throws?: boolean } = {}) {
+    return {
+      async refresh() {
+        calls.push(name);
+        if (options.throws === true) throw new Error(`${name} failed`);
+        return true;
+      },
+    };
+  }
+
+  it('runs every agent, because they write different buckets', async () => {
+    // The defect this exists to prevent: the composition root used to bind
+    // ONE agent, so with the news path available the sentiment agent — the
+    // only `social` writer — was never called at all. A retrieving client
+    // nothing calls is this repo's characteristic bug, not a new one.
+    const calls: string[] = [];
+
+    const composed = composeMarketIntelligence([
+      refresher(calls, 'news'),
+      refresher(calls, 'social'),
+    ]);
+    await composed?.refresh('t1', 'TSLA', 'stocks');
+
+    expect(calls).toEqual(['news', 'social']);
+  });
+
+  it('keeps going when one agent fails', async () => {
+    // One provider's outage must not empty the other's bucket, and must not
+    // fail a tick that would otherwise have traded.
+    const calls: string[] = [];
+
+    const composed = composeMarketIntelligence([
+      refresher(calls, 'news', { throws: true }),
+      refresher(calls, 'social'),
+    ]);
+
+    await expect(composed?.refresh('t1', 'TSLA', 'stocks')).resolves.toBe(true);
+    expect(calls).toEqual(['news', 'social']);
+  });
+
+  it('returns undefined when there is nothing to run', () => {
+    // `undefined` is the honest "no writer" state the analysts step already
+    // handles — not a no-op refresher that would look like a working one.
+    expect(composeMarketIntelligence([undefined, undefined])).toBeUndefined();
+  });
+
+  it('passes a single agent through unwrapped', () => {
+    const single = refresher([], 'only');
+    expect(composeMarketIntelligence([undefined, single])).toBe(single);
   });
 });
