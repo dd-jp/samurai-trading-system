@@ -713,6 +713,55 @@ describe('readPersistedConditions / readPersistedDroppedConditions', () => {
     expect(readPersistedConditions([retiredOverCap])).toBeUndefined();
   });
 
+  it('rejects a retired indicator kind with no timeframe — registry drift does not waive the timeframe check', () => {
+    const retiredNoTimeframe: EvaluatedCondition = {
+      condition: {
+        id: 'c3',
+        observable: {
+          kind: 'indicator',
+          // No `timeframe` at all — `readIndicatorSpec` would reject this for
+          // a known kind; the retired-kind leniency must not skip it. Cast:
+          // the missing field is the point of the fixture.
+          spec: {
+            indicator: 'stochastic_rsi',
+            params: {},
+            lookback: 20,
+          } as never,
+        },
+        comparator: '<',
+        threshold: 20,
+        rationale: 'a retired indicator kind with no timeframe',
+      },
+      state: 'not_breached',
+      observed: 55,
+    };
+    expect(readPersistedConditions([retiredNoTimeframe])).toBeUndefined();
+  });
+
+  it('rejects a retired indicator kind with a non-numeric param — registry drift does not waive the params check', () => {
+    const retiredBadParams: EvaluatedCondition = {
+      condition: {
+        id: 'c3',
+        observable: {
+          kind: 'indicator',
+          spec: {
+            indicator: 'stochastic_rsi' as never,
+            // `params` present but with a non-finite/non-number value.
+            params: { period: 'not-a-number' as never },
+            lookback: 20,
+            timeframe: '1h',
+          },
+        },
+        comparator: '<',
+        threshold: 20,
+        rationale: 'a retired indicator kind with a malformed param',
+      },
+      state: 'not_breached',
+      observed: 55,
+    };
+    expect(readPersistedConditions([retiredBadParams])).toBeUndefined();
+  });
+
   it.each([
     ['no window at all', { kind: 'bars', measure: 'volume_ratio' }],
     [

@@ -210,6 +210,18 @@ export interface ValidatedConditions {
   dropped: DroppedCondition[];
 }
 
+/**
+ * `params` is optional; when present it must be a plain object whose every
+ * value is a finite number. Shared by `readIndicatorSpec` (known `kind`) and
+ * `isObservable`'s retired-`kind` branch (#1068), so the two never drift on
+ * what counts as a well-formed `params` map.
+ */
+function isWellFormedParams(value: unknown): value is Record<string, number> | undefined {
+  if (value === undefined) return true;
+  if (typeof value !== 'object' || value === null) return false;
+  return Object.values(value as Record<string, unknown>).every(isFiniteNumber);
+}
+
 function readIndicatorSpec(
   value: unknown,
 ): IndicatorSpec | 'unparseable' | 'unknown_indicator' | 'lookback_too_large' {
@@ -225,18 +237,11 @@ function readIndicatorSpec(
   if (!isPositiveInteger(spec.lookback)) return 'unparseable';
   if (spec.lookback > MAX_INVALIDATION_LOOKBACK) return 'lookback_too_large';
   if (!isNonEmptyString(spec.timeframe)) return 'unparseable';
+  if (!isWellFormedParams(spec.params)) return 'unparseable';
 
-  const params: Record<string, number> = {};
-  if (spec.params !== undefined) {
-    if (typeof spec.params !== 'object' || spec.params === null) return 'unparseable';
-    for (const [key, raw] of Object.entries(spec.params as Record<string, unknown>)) {
-      if (!isFiniteNumber(raw)) return 'unparseable';
-      params[key] = raw;
-    }
-  }
   return {
     indicator: spec.indicator as IndicatorKind,
-    params,
+    params: spec.params === undefined ? {} : (spec.params as Record<string, number>),
     lookback: spec.lookback,
     timeframe: spec.timeframe,
   };
@@ -453,10 +458,11 @@ export function validateConditions(raw: unknown, side: OrderIntent['side']): Val
  * So the FULL shape is checked on read (`risk-manager-spec.md`, "persistence &
  * replay"): finite `observed` on a measured state, `observed: null` on
  * `unevaluable`, a well-formed `window` on a `bars` observable, and an
- * indicator `lookback` at or under `MAX_INVALIDATION_LOOKBACK` — the lookback
- * cap is enforced independently of whether the indicator `kind` itself is
- * still recognized, so a retired `kind` cannot smuggle an oversized lookback
- * past the registry-drift leniency below.
+ * indicator's `lookback` (at or under `MAX_INVALIDATION_LOOKBACK`),
+ * `timeframe`, and `params` — all three are re-checked independently of
+ * whether the indicator `kind` itself is still recognized, so a retired
+ * `kind` cannot smuggle an oversized lookback, a missing timeframe, or a
+ * malformed params map past the registry-drift leniency below.
  *
  * Per-element, not whole-list: a malformed element is DROPPED from the
  * replayed list rather than collapsing the whole row. If nothing survives,
@@ -487,12 +493,22 @@ function isObservable(value: unknown): value is InvalidationObservable {
     if (spec === 'unparseable' || spec === 'lookback_too_large') return false;
     // `unknown_indicator` is deliberately still accepted (registry-drift
     // leniency, above) — but `readIndicatorSpec` reports the retired-`kind`
-    // case before it ever inspects `lookback`, so the cap has to be checked
-    // independently here: registry drift may not smuggle an oversized
-    // lookback past the read-time safety cap.
+    // case before it ever inspects `lookback`, `timeframe`, or `params`, so
+    // all three have to be re-checked independently here: registry drift may
+    // not smuggle an oversized lookback, a missing timeframe, or a malformed
+    // params map past the read-time safety checks.
     if (spec === 'unknown_indicator') {
-      const rawSpec = observable.spec as { lookback?: unknown };
-      return isPositiveInteger(rawSpec.lookback) && rawSpec.lookback <= MAX_INVALIDATION_LOOKBACK;
+      const rawSpec = observable.spec as {
+        lookback?: unknown;
+        timeframe?: unknown;
+        params?: unknown;
+      };
+      return (
+        isPositiveInteger(rawSpec.lookback) &&
+        rawSpec.lookback <= MAX_INVALIDATION_LOOKBACK &&
+        isNonEmptyString(rawSpec.timeframe) &&
+        isWellFormedParams(rawSpec.params)
+      );
     }
     return true;
   }
