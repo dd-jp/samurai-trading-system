@@ -69,10 +69,23 @@ describe('the prune is actually wired into the composition root', () => {
 
   // Matched by regex, not exact string: the formatter is free to wrap a call
   // across lines, and a retention guard that fails on reformatting would be
-  // deleted by the first person it inconvenienced. `[\s\S]*?` spans a wrapped
-  // argument list; the trigger literal is what identifies the call site.
+  // deleted by the first person it inconvenienced.
+  //
+  // The FULL known argument list is required, in order, rather than a lazy
+  // `[\s\S]*?` scan from the function name to the trigger literal. A lazy
+  // scan anchored only on the function name also matches the function's own
+  // DECLARATION (whose signature contains the literal text `'startup'` by
+  // way of the `trigger: 'startup' | 'daily'` parameter type) and then keeps
+  // scanning forward past it into whatever `'startup')` text comes next in
+  // the file — proven by actually deleting the real call site and watching
+  // this test stay green. Requiring the full parameter sequence, anchored on
+  // `config.db` as the first argument, bounds the match to one statement and
+  // nothing an unrelated later line can satisfy. Mirrors
+  // `mi-archive-retention.test.ts` (#1060).
   const callSite = (trigger: string): RegExp =>
-    new RegExp(`pruneLlmCallLogWithLog\\([\\s\\S]*?'${trigger}'\\)`);
+    new RegExp(
+      `pruneLlmCallLogWithLog\\(\\s*config\\.db,\\s*llmCallLogMaxRows,\\s*logger,\\s*'${trigger}',?\\s*\\)`,
+    );
 
   it('runs at startup and on the daily timer, not in one place only', () => {
     // Startup alone fires once when the table is smallest and never again
