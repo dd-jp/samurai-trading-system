@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   buildEntrypointLogger,
+  formatLogLine,
   JsonLogger,
   type StdoutStream,
   watchStdoutErrors,
@@ -174,6 +175,118 @@ describe('JsonLogger', () => {
     }).log(ENTRY);
 
     expect(attempts).toBe(1);
+  });
+});
+
+describe('formatLogLine payload serialization (#1061)', () => {
+  const BASE = {
+    trace_id: 't1',
+    stage: 's',
+    level: 'info' as const,
+    message: 'm',
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('serializes a payload exactly once', () => {
+    // `redactPayload`'s walk always returns FUNCTION-typed values unchanged
+    // (they fail the `typeof value !== 'object'` check), so an own `toJSON`
+    // property on a payload survives the redaction walk by reference and is
+    // still there — and still callable — on the redacted object that gets
+    // put on the wire. That makes it a reliable probe for how many times the
+    // *redacted* structure, not just the original payload, is actually run
+    // through JSON serialization: once per invocation of this `toJSON`.
+    let calls = 0;
+    const inner = {
+      toJSON(): unknown {
+        calls += 1;
+        return { value: 42 };
+      },
+    };
+
+    formatLogLine({ ...BASE, payload: { nested: inner } });
+
+    expect(calls).toBe(1);
+  });
+
+  it('is byte-identical to the pre-fix output for a non-cyclic, mixed-type payload', () => {
+    // Captured from the logger before #1061's change, with the system clock
+    // fixed so the timestamp field is reproducible.
+    const line = formatLogLine({
+      ...BASE,
+      payload: { a: 1, b: { c: 2, d: [1, 2, 3] }, e: 'hello', token: 'secret123' },
+      started_at: '2026-01-01T00:00:00.000Z',
+      duration_ms: 42,
+    });
+
+    expect(line).toBe(
+      '{"timestamp":"2026-01-01T00:00:00.000Z","trace_id":"t1","stage":"s","level":"info",' +
+        '"message":"m","payload":{"a":1,"b":{"c":2,"d":[1,2,3]},"e":"hello","token":"[REDACTED]"},' +
+        '"started_at":"2026-01-01T00:00:00.000Z","duration_ms":42}\n',
+    );
+  });
+
+  it('is byte-identical to the pre-fix output when there is no payload', () => {
+    const line = formatLogLine(BASE);
+
+    expect(line).toBe(
+      '{"timestamp":"2026-01-01T00:00:00.000Z","trace_id":"t1","stage":"s","level":"info","message":"m"}\n',
+    );
+  });
+
+  it('is byte-identical to the pre-fix output for a payload the depth bound flattens', () => {
+    // An ordinary self-referential object never reaches `JSON.stringify` as an
+    // actual cycle: `redactPayload`'s walk rebuilds a fresh plain object at
+    // every level and is depth-bounded, so it bottoms out at
+    // `MAX_DEPTH` with a marker string well before any native stringifier
+    // would see a cycle. Captured from the logger before #1061's change.
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+
+    const line = formatLogLine({ ...BASE, payload: cyclic });
+
+    expect(line).toBe(
+      '{"timestamp":"2026-01-01T00:00:00.000Z","trace_id":"t1","stage":"s","level":"info",' +
+        '"message":"m","payload":{"self":{"self":{"self":{"self":{"self":{"self":' +
+        '"[REDACTION_DEPTH_LIMIT]"}}}}}}}\n',
+    );
+  });
+
+  it('still detects a genuinely cyclic payload inside the guard and degrades it the same way as before', () => {
+    // The depth bound cannot save a payload whose cycle is hidden behind a
+    // `toJSON` — the walker preserves that function by reference (see the
+    // first test in this block) without ever calling it, so the cycle is
+    // invisible to the walk and only surfaces when the redacted structure is
+    // actually serialized. This is the real shape of "a cyclic payload that
+    // survives the walk" the module doc warns about, and it must still be
+    // caught inside `formatLogLine`'s guard rather than escaping from it.
+    let calls = 0;
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    const inner = {
+      toJSON(): unknown {
+        calls += 1;
+        return cyclic;
+      },
+    };
+
+    const line = formatLogLine({ ...BASE, payload: { nested: inner } });
+
+    // Same fallback payload as before the fix, and the throwing structure was
+    // only ever handed to the serializer once — never escaping to a second,
+    // unguarded pass.
+    expect(line).toBe(
+      '{"timestamp":"2026-01-01T00:00:00.000Z","trace_id":"t1","stage":"s","level":"info",' +
+        '"message":"m","payload":{"redaction_failed":true}}\n',
+    );
+    expect(calls).toBe(1);
   });
 });
 

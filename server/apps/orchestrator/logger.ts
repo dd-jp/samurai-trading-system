@@ -145,7 +145,8 @@ export interface ErrorStream {
 }
 
 /**
- * Redacts a payload for the wire, and CANNOT throw (#1035).
+ * Redacts a payload for the wire and returns it already serialized, and
+ * CANNOT throw (#1035).
  *
  * The guard is not defensive habit — it is what keeps `redact-payload.ts` off
  * #714's critical path. `formatLogLine` is what `degradationLine` builds on,
@@ -154,22 +155,25 @@ export interface ErrorStream {
  * walker there would destroy that write and convert a logging degradation into
  * silence. So a redaction failure degrades the PAYLOAD and never the line.
  *
- * `JSON.stringify` runs inside the guard too, so a payload that cannot be
- * serialized at all (a cycle — an uncaught throw here before this existed)
- * costs its payload rather than the log line.
+ * `JSON.stringify` runs inside the guard for the same reason it always did: a
+ * payload that cannot be serialized at all (a cycle — an uncaught throw here
+ * before this existed) must be discovered HERE, where it can be turned into
+ * `{ redaction_failed: true }`, rather than from a second `JSON.stringify`
+ * call the caller makes while it is partway through building the log line.
+ *
+ * Unlike before #1061, this serialization is not a discarded probe — it is
+ * the payload's actual on-the-wire representation, which `formatLogLine`
+ * splices in as raw JSON rather than handing the object back for the caller
+ * to serialize a second time. A payload is therefore serialized exactly once
+ * per log line, whether or not it turns out to be redactable at all.
  */
-function redactedPayload(payload: unknown): unknown {
+function redactedPayloadJson(payload: unknown): string | undefined {
   if (payload === undefined) return undefined;
   try {
     const redacted = redactPayload(payload);
-    // Serialized here, discarded, and serialized again by the caller: the
-    // point is to find out INSIDE the guard whether this payload can be put
-    // on the wire at all. A cyclic payload that survives the walk would
-    // otherwise throw from the caller's `JSON.stringify`, outside any catch.
-    JSON.stringify(redacted);
-    return redacted;
+    return JSON.stringify(redacted);
   } catch {
-    return { redaction_failed: true };
+    return JSON.stringify({ redaction_failed: true });
   }
 }
 
@@ -182,18 +186,34 @@ function redactedPayload(payload: unknown): unknown {
  * Before this, `sanitizeLogText` was applied only where a caller remembered
  * to — ten sites out of every logging call in the system — so the guarantee
  * was "redacted where someone thought about it", which is not a guarantee.
+ *
+ * Built field-by-field rather than through one outer `JSON.stringify` call,
+ * so `redactedPayloadJson`'s already-serialized string can be spliced in as
+ * raw JSON instead of being handed back as an object and re-serialized here
+ * (#1061). Every other field is a primitive, so serializing each
+ * independently costs nothing extra; a key is omitted exactly where
+ * `JSON.stringify` would have dropped it (an `undefined` value), so the
+ * output is unchanged from before.
  */
 export function formatLogLine(entry: LogEntry): string {
-  return `${JSON.stringify({
-    timestamp: new Date().toISOString(),
-    trace_id: entry.trace_id,
-    stage: entry.stage,
-    level: entry.level,
-    message: entry.message,
-    payload: redactedPayload(entry.payload),
-    started_at: entry.started_at,
-    duration_ms: entry.duration_ms,
-  })}\n`;
+  const payloadJson = redactedPayloadJson(entry.payload);
+
+  const segments: string[] = [];
+  const field = (key: string, value: unknown): void => {
+    if (value === undefined) return;
+    segments.push(`${JSON.stringify(key)}:${JSON.stringify(value)}`);
+  };
+
+  field('timestamp', new Date().toISOString());
+  field('trace_id', entry.trace_id);
+  field('stage', entry.stage);
+  field('level', entry.level);
+  field('message', entry.message);
+  if (payloadJson !== undefined) segments.push(`"payload":${payloadJson}`);
+  field('started_at', entry.started_at);
+  field('duration_ms', entry.duration_ms);
+
+  return `{${segments.join(',')}}\n`;
 }
 
 /**
