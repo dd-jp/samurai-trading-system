@@ -177,11 +177,9 @@ export interface OrderIntentMetadata {
      * frozen; the cost only sets the accuracy bar the debate layer must clear,
      * which the Trader does not compute), so persisting the quote the decision
      * was made under is what keeps a later expectancy accounting from pricing
-     * the decision against a spread it was never taken at. The figure is
-     * still ADR-0018's single quote (0.18% / 0.41%), unmoved: #666, which
-     * would have measured it, closed 2026-08-27 out of scope without
-     * delivering that measurement; #750 now gates on it instead, and no open
-     * ticket currently delivers it.
+     * the decision against a spread it was never taken at. The figure
+     * (0.18% / 0.41%) is still ADR-0018's single unmeasured quote, unmoved
+     * (ADR-0016 Known weakness; delivery owned by #1053).
      */
     frozen_bracket?: {
       take_profit_pct: number;

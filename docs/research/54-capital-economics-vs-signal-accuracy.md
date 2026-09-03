@@ -198,7 +198,7 @@ is profitable or unprofitable."* `p_u` and `p_g` are both unmeasured because the
    [#666](https://github.com/dd-jp/samurai-trading-system/issues/666), which would have measured
    them, closed 2026-08-27 out of scope without delivering that measurement;
    [#750](https://github.com/dd-jp/samurai-trading-system/issues/750) now gates on it instead, and
-   no open ticket currently delivers it.
+   [#1053](https://github.com/dd-jp/samurai-trading-system/issues/1053) (open) owns delivering it.
    [`53-intraday-cost-calibration.md`](53-intraday-cost-calibration.md) calibrates the *backtest* cost model
    at 1-minute resolution on a US-equity proxy; it does not supply an LSE ETP round trip either, so it
    narrows nothing here.
