@@ -197,6 +197,7 @@ import { tryNousCredentials } from '../../shared/llm/index.js';
 import type { SharedStore as SqliteHandle } from '../../shared/store/index.js';
 import {
   DEFAULT_MAX_LLM_CALL_ROWS,
+  guardedStore,
   pruneLlmCallLog,
   SqliteRiskLogStore,
   SqliteTraderLogStore,
@@ -615,7 +616,15 @@ function pruneLlmCallLogWithLog(
   trigger: 'startup' | 'daily',
 ): void {
   try {
-    const deleted = pruneLlmCallLog(db, maxRows);
+    // Declared as a `debate-engine` write, not an `orchestrator` one (#1048):
+    // `llm_call_log` is owned by the debate engine, which is the only writer of
+    // records into it. This sweep is housekeeping on that table rather than a
+    // second writer of records, but it is still a DML statement against it, so
+    // it goes through the guard under the owning stage instead of slipping past
+    // on a raw handle. Passing 'orchestrator' here would trip the guard, which
+    // is the correct answer to the question "may the orchestrator write rows to
+    // the debate engine's table?" — it may not.
+    const deleted = pruneLlmCallLog(guardedStore(db, 'debate-engine'), maxRows);
     if (deleted === 0) return;
     logger.log({
       trace_id: trigger === 'startup' ? 'startup' : 'feedback-cycle',
@@ -885,7 +894,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * service below, which gets its own (`benchmarkMarketDataStore`). See that
    * instance's doc for why the two writers' shared key space is safe.
    */
-  const marketDataStore = new SqliteMarketDataStore(config.db);
+  const marketDataStore = new SqliteMarketDataStore(guardedStore(config.db, 'market-data'));
   const marketData: MarketDataService = new MarketDataServiceImpl(
     dataSource,
     clock,
@@ -939,7 +948,9 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * Reopen once #751 lands (the guard's structural condition disappears) or
    * before this collision condition can be reached any other way.
    */
-  const benchmarkMarketDataStore = new SqliteMarketDataStore(config.db);
+  const benchmarkMarketDataStore = new SqliteMarketDataStore(
+    guardedStore(config.db, 'market-data'),
+  );
   /**
    * The OUTSIDE BENCHMARKS' own market-data path (#981, under #636) —
    * deliberately NOT `marketData` above.
@@ -1016,7 +1027,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // WRITES the setup at decision time and `onTradeClose` LABELS it with the
   // realized R on close. Constructed here rather than inline below so the two
   // halves cannot drift into separate stores.
-  const setupStore = new SqliteSetupStore(config.db);
+  const setupStore = new SqliteSetupStore(guardedStore(config.db, 'trader'));
 
   /**
    * Hoisted above the tick steps (#433). It used to be constructed down in
@@ -1025,7 +1036,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * time, and a threshold `autoTighten` writes has to be the same row Risk
    * reads. One instance, both ends of the dial.
    */
-  const tuningStore = new SqliteTuningStore(config.db, clock);
+  const tuningStore = new SqliteTuningStore(guardedStore(config.db, 'feedback-loop'), clock);
 
   /**
    * Hoisted above `spendCap` (below) rather than left beside the Feedback
@@ -1066,11 +1077,15 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     });
     spendCap = UNCAPPED_SPEND;
   } else {
-    const cap = new SqliteSpendCap(config.db, config.llmBudgetUsd, logger, () =>
-      breachAlerts.postBreachAlert({
-        breaches: ['llm_spend_cap'],
-        reported_at: clock.now(),
-      }),
+    const cap = new SqliteSpendCap(
+      guardedStore(config.db, 'debate-engine'),
+      config.llmBudgetUsd,
+      logger,
+      () =>
+        breachAlerts.postBreachAlert({
+          breaches: ['llm_spend_cap'],
+          reported_at: clock.now(),
+        }),
     );
     spendCap = cap;
 
@@ -1119,7 +1134,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // `store` all read/write through this same instance, so `onTradeClose`
   // fires no matter which of them eventually calls `writeClosedTrade`.
   const executionStore = withOnTradeClose(
-    new SqliteExecutionStore(config.db),
+    new SqliteExecutionStore(guardedStore(config.db, 'execution')),
     { setup_store: setupStore },
     logger,
   );
@@ -1138,7 +1153,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       // blind, and `fetchNewFills` polls nothing for lots that were already
       // filling when the process died. The in-memory default is only ever
       // right for a test.
-      state: new SqliteBrokerStateStore(config.db),
+      state: new SqliteBrokerStateStore(guardedStore(config.db, 'execution')),
       // #298: the same store carries the age-out clock for a fill the venue
       // will not price, which is why it must be the durable one here — a
       // restart that reset the clock would age nothing out across a soak.
@@ -1162,7 +1177,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // The sticky breakers' durable home (#203, review 2026-08-06 B1): loaded
   // here so a trip survives restart, written by every breaker evaluation on
   // the tick path (direct-bind.ts `computeCurrentPortfolioAndBreakers`).
-  const breakerStateStore = new SqliteBreakerStateStore(config.db);
+  const breakerStateStore = new SqliteBreakerStateStore(guardedStore(config.db, 'risk'));
   const circuitBreakers = new CircuitBreakers(
     config.breakerConfig,
     config.initialBreakerState ?? breakerStateStore.load(),
@@ -1209,20 +1224,20 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       config.accountState ??
       new AlpacaAccountStateProvider({
         client: brokerClient,
-        store: new SqliteAccountStateStore(config.db),
+        store: new SqliteAccountStateStore(guardedStore(config.db, 'orchestrator')),
         // Per-class session-open equity snapshots (#332) — the local
         // replacement for Alpaca's blended `last_equity` (GAP-8).
-        sessionEquity: new SqliteSessionEquityStore(config.db),
+        sessionEquity: new SqliteSessionEquityStore(guardedStore(config.db, 'orchestrator')),
         // The append-only daily equity series (#345). Wired unconditionally,
         // and on the same boundary as the snapshot above, because a return
         // series cannot be backfilled: equity not sampled on the day is gone.
         // Capture starts from the first tick of the first run; whether it is
         // ever EVALUATED is a separate, gated decision that lives in
         // `SqliteDailyEquityMetricsSource`.
-        dailyEquity: new SqliteDailyEquityStore(config.db),
+        dailyEquity: new SqliteDailyEquityStore(guardedStore(config.db, 'orchestrator')),
         // The existing ClosedTrade reader, per spec story 25 — no new
         // realized-PnL ledger is built when one already exists.
-        closedTrades: new SqliteClosedTradeStore(config.db),
+        closedTrades: new SqliteClosedTradeStore(guardedStore(config.db, 'feedback-loop')),
         // Two calendars: crypto resets at 00:00 UTC, stocks at the prior 16:00
         // ET close. `tradingCalendar` is the equity one (it gates market-hours
         // scheduling), so only it is overridable here — a crypto session has no
@@ -1361,7 +1376,10 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    */
   const llmClient =
     config.llmClient ??
-    buildDefaultLlmClient(logger, new SqliteLlmSpendStore(config.db, logger, captureLlmText));
+    buildDefaultLlmClient(
+      logger,
+      new SqliteLlmSpendStore(guardedStore(config.db, 'debate-engine'), logger, captureLlmText),
+    );
 
   const grokAgent =
     sentimentCredentials === undefined
@@ -1370,7 +1388,11 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
           client: new NousSentimentClient({ ...sentimentCredentials, logger }),
           store: marketIntelligence,
           spendCap,
-          spendSink: new SqliteLlmSpendStore(config.db, logger, captureLlmText),
+          spendSink: new SqliteLlmSpendStore(
+            guardedStore(config.db, 'debate-engine'),
+            logger,
+            captureLlmText,
+          ),
           clock,
           logger,
         });
@@ -1484,7 +1506,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // does this lot still hold", which is the divergence #568 was.
     getExitFillSizes: (idempotency_keys) => executionStore.getExitFillSizes(idempotency_keys),
     setupStore,
-    traderLog: new SqliteTraderLogStore(config.db),
+    traderLog: new SqliteTraderLogStore(guardedStore(config.db, 'trader')),
     // #511: the declared capital ceiling, spread through rather than read
     // from the environment here — this is the ONE hop that carries it from
     // `liveStartingProfile` to the arithmetic that turns equity into a size.
@@ -1519,7 +1541,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     config: config.riskConfig,
     correlationConfig: config.correlationConfig,
     ciiConsumer,
-    riskLog: new SqliteRiskLogStore(config.db),
+    riskLog: new SqliteRiskLogStore(guardedStore(config.db, 'risk')),
     // #433: the live dial. Without this Risk freezes its RiskConfig at
     // construction and `autoTighten`'s response to a kill-line breach
     // changes no decision.
@@ -1547,7 +1569,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     critic: buildRiskCriticProducer({
       mode: config.mode,
       llm: llmClient,
-      store: new SqliteRiskCriticStore(config.db),
+      store: new SqliteRiskCriticStore(guardedStore(config.db, 'risk')),
       spendCap,
       logger,
     }),
@@ -1600,7 +1622,10 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * would corrupt the live arm rather than measure it — see
    * `control-arm-wiring.ts` for the full argument.
    */
-  const controlExecutionStore = new SqliteExecutionStore(config.db, 'control');
+  const controlExecutionStore = new SqliteExecutionStore(
+    guardedStore(config.db, 'execution'),
+    'control',
+  );
   const controlBreakerState = new InMemoryBreakerStatePersistence();
   const controlArmWiring = buildControlArmWiring({
     trader: traderStepDeps,
@@ -1649,7 +1674,10 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       // than a coupling — see `buildControlBookAnchorResolver`.
       resolveBook: buildControlBookAnchorResolver({
         liveAccountState: breakerStateDeps.accountState,
-        store: new SqliteAccountStateStore(config.db, CONTROL_BOOK_ANCHOR_KEY),
+        store: new SqliteAccountStateStore(
+          guardedStore(config.db, 'orchestrator'),
+          CONTROL_BOOK_ANCHOR_KEY,
+        ),
         // Gated on `same_currency_verified` exactly like the primary live-read
         // clamp below — an unverified ceiling must not cap one path and leave
         // the other uncapped, or #972 fix 3 reopens itself in that one state.
@@ -1663,7 +1691,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       }),
       // `arm: 'control'` — the one caller that asks this store for the other
       // arm. Handing it the default would restore the coupling exactly.
-      closedTrades: new SqliteClosedTradeStore(config.db, 'control'),
+      closedTrades: new SqliteClosedTradeStore(guardedStore(config.db, 'feedback-loop'), 'control'),
       getOpenPositions: () => controlExecutionStore.getOpenPositions(),
       // The SAME two calendars the live provider is given: the arms must
       // measure a "day" over identical boundaries or their daily figures are
@@ -1723,7 +1751,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // soak.
     debate: buildDebateStep(
       llmClient,
-      new SqliteDebateLogStore(config.db),
+      new SqliteDebateLogStore(guardedStore(config.db, 'debate-engine')),
       llmRateLimiter,
       spendCap,
       logger,
@@ -2332,10 +2360,10 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
   // stateless over the shared handle, so a fresh set each cycle bought
   // nothing (code-review 2026-08-01, H7).
   const feedbackStores = {
-    trades: new SqliteClosedTradeStore(config.db),
-    debate_log: new SqliteDebateLogStore(config.db),
+    trades: new SqliteClosedTradeStore(guardedStore(config.db, 'feedback-loop')),
+    debate_log: new SqliteDebateLogStore(guardedStore(config.db, 'debate-engine')),
     tuning: components.tuning,
-    adjustments: new SqliteAdjustmentLog(config.db),
+    adjustments: new SqliteAdjustmentLog(guardedStore(config.db, 'feedback-loop')),
   };
   /**
    * #366, retargeted by #736. Resolved once, outside the timer callback, for
@@ -2372,7 +2400,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
    * baseline below. Both must see the same row — a selection good enough to
    * arm three kill-lines and not the fourth would be incoherent.
    */
-  const selectionStore = new SqliteStage2SelectionStore(config.db);
+  const selectionStore = new SqliteStage2SelectionStore(guardedStore(config.db, 'backtest'));
 
   const metricsSource =
     config.feedback?.metrics === undefined
@@ -2475,8 +2503,10 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
    * never tunes on the control's outcomes, and this question needs both arms out
    * of ONE window query (doc 12 gate 4).
    */
-  const armComparisonSource = new SqliteArmComparisonSource(config.db);
-  const armComparisonSamples = new SqliteArmComparisonSampleStore(config.db);
+  const armComparisonSource = new SqliteArmComparisonSource(guardedStore(config.db, 'control-arm'));
+  const armComparisonSamples = new SqliteArmComparisonSampleStore(
+    guardedStore(config.db, 'feedback-loop'),
+  );
 
   /**
    * The outside benchmarks' production caller (#981, under #636) — the half of
@@ -2498,7 +2528,9 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
    * real-time L1 mark vendor) is a different data need and does not gate this.
    */
   const outsideBenchmarkSeries = components.benchmarkSeries;
-  const outsideBenchmarkSamples = new SqliteOutsideBenchmarkSampleStore(config.db);
+  const outsideBenchmarkSamples = new SqliteOutsideBenchmarkSampleStore(
+    guardedStore(config.db, 'feedback-loop'),
+  );
 
   /**
    * Fire-and-forget, but NEVER unhandled.

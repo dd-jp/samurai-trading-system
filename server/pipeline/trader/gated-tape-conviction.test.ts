@@ -84,6 +84,7 @@ import type { AnalystView, DebateResult, Direction } from '../debate-engine/inde
 import { decide, decideWithReason } from './decide.js';
 import {
   D5_INDEX_ETP_DEPLOYMENT_FRACTION,
+  D5_SCALE_IN_HEADROOM_RESERVE_FRACTION,
   D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION,
 } from './subclass-bracket.js';
 import { DEFAULT_TRADER_CONFIG, type TraderConfig, type TraderInput } from './types.js';
@@ -413,11 +414,22 @@ describe('#870 — what the damping is worth at the composition root', () => {
     const deployed = await deploymentAt(conviction);
 
     expect(expectedMultiplier).toBeCloseTo(0.0667, 4);
-    expect(deployed).toBeCloseTo(D5_INDEX_ETP_DEPLOYMENT_FRACTION * EQUITY * expectedMultiplier, 6);
+    // `(1 - D5_SCALE_IN_HEADROOM_RESERVE_FRACTION)` is #897's headroom reserve:
+    // the first tranche is sized at 90% of the envelope so a scale-in remains
+    // admissible. It scales the whole span this test measures; the ~6.7%
+    // multiplier the test is actually about is untouched by it.
+    expect(deployed).toBeCloseTo(
+      D5_INDEX_ETP_DEPLOYMENT_FRACTION *
+        (1 - D5_SCALE_IN_HEADROOM_RESERVE_FRACTION) *
+        EQUITY *
+        expectedMultiplier,
+      6,
+    );
     // Stated absolutely as well, because the line above is derived from the
     // same `conviction` the deployment is: if the cap stopped binding, both
-    // sides would move together and only this number would notice.
-    expect(deployed).toBeCloseTo(2_333.33, 2);
+    // sides would move together and only this number would notice. £2,333.33
+    // until #897 reserved the headroom.
+    expect(deployed).toBeCloseTo(2_100.0, 2);
   });
 
   it('and 6.7% really is a CEILING — a weaker gated read deploys less, and the weakest deploys nothing', async () => {
@@ -433,7 +445,8 @@ describe('#870 — what the damping is worth at the composition root', () => {
 
     const middlingConviction = convictionOf(absentDesk(middling), 'bullish');
     expect(middlingConviction).toBeCloseTo(0.5667, 4);
-    expect(await deploymentAt(middlingConviction, LIVE_BOOK)).toBeCloseTo(12.96, 2);
+    // £12.96 until #897 reserved 10% of the envelope as scale-in headroom.
+    expect(await deploymentAt(middlingConviction, LIVE_BOOK)).toBeCloseTo(11.66, 2);
 
     // The bottom of the span, taken from the Trader's OWN skip reason rather
     // than derived from `decide.ts:426`'s `<`: this read lands exactly ON the
@@ -469,22 +482,32 @@ describe('#870 — what the damping is worth at the composition root', () => {
     //
     // Both frozen ADR-0018 D5 brackets are checked, because the conclusion has
     // to hold on the whole live universe, not just the index row. Deployment is
-    // `deployment_fraction x equity x multiplier` on both — the stop cancels
-    // out of `risk_fraction = deployment_fraction x stop_pct` — so the
-    // single-stock row lands lower and still clears the minimum.
+    // `deployment_fraction x (1 - headroom_reserve_fraction) x equity x
+    // multiplier` on both — the stop cancels out of `risk_fraction =
+    // deployment_fraction x stop_pct x (1 - reserve)` — so the single-stock row
+    // lands lower and still clears the minimum.
+    //
+    // #897 shrank both figures by the 10% headroom reserve (23.33 -> 21.00,
+    // 16.67 -> 15.00). The NEGATIVE result this test reports is unchanged by
+    // that: neither row is anywhere near the £10 floor, so the floor still does
+    // not enforce #745.
     const conviction = convictionOf(absentDesk(gatedAssessment()), 'bullish');
     const multiplier = (conviction - FLOOR) / (1 - FLOOR);
+    const reserved = 1 - D5_SCALE_IN_HEADROOM_RESERVE_FRACTION;
 
     const onIndex = await deploymentAt(conviction, LIVE_BOOK, INDEX_ETP);
     const onSingleStock = await deploymentAt(conviction, LIVE_BOOK, SINGLE_STOCK_ETP);
 
-    expect(onIndex).toBeCloseTo(D5_INDEX_ETP_DEPLOYMENT_FRACTION * LIVE_BOOK * multiplier, 6);
-    expect(onIndex).toBeCloseTo(23.33, 2);
-    expect(onSingleStock).toBeCloseTo(
-      D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION * LIVE_BOOK * multiplier,
+    expect(onIndex).toBeCloseTo(
+      D5_INDEX_ETP_DEPLOYMENT_FRACTION * reserved * LIVE_BOOK * multiplier,
       6,
     );
-    expect(onSingleStock).toBeCloseTo(16.67, 2);
+    expect(onIndex).toBeCloseTo(21.0, 2);
+    expect(onSingleStock).toBeCloseTo(
+      D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION * reserved * LIVE_BOOK * multiplier,
+      6,
+    );
+    expect(onSingleStock).toBeCloseTo(15.0, 2);
 
     expect(onIndex).toBeGreaterThan(DEFAULT_TRADER_CONFIG.min_viable_notional);
     expect(onSingleStock).toBeGreaterThan(DEFAULT_TRADER_CONFIG.min_viable_notional);

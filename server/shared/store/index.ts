@@ -30,3 +30,12 @@ export {
   toStoredTimestamp,
   toStoredTimestampOrNull,
 } from './sqlite-utils.js';
+export {
+  guardedStore,
+  isStoreWriteGuardEnabled,
+  STAGE_OWNED_TABLES,
+  STORE_OWNER_STAGES,
+  type StoreOwnerStage,
+  type StoreWriteGuardEnvironment,
+  writeTargetTables,
+} from './write-guard.js';

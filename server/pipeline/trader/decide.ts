@@ -566,9 +566,14 @@ async function buildBracket(
     bracket === null ? config.reward_risk_multiple * stopDistance : bracket.take_profit_pct * entry;
 
   const convictionMult = convictionMultiplier(debate.confidence, config.conviction_floor);
-  // `riskFractionFor` is D5's deployment converted through D3's frozen stop, so
-  // that `size x entry` lands on `deployment_fraction x equity` — the assertion
-  // that discriminates it from both of the ADR's recorded error modes. The
+  // `riskFractionFor` is D5's deployment converted through D3's frozen stop and
+  // net of #897's headroom reserve, so that `size x entry` lands on
+  // `deployment_fraction x (1 - headroom_reserve_fraction) x equity` — the
+  // assertion that discriminates it from both of the ADR's recorded error
+  // modes. The first tranche therefore lands BELOW the Risk Manager's
+  // `per_subclass_deployment_cap` (unchanged at 35%/25%), which is what leaves
+  // a later `scale_in` — sized by this same line, then trimmed by that cap to
+  // the remaining headroom — admissible rather than rejected at zero. The
   // asset-class multiplier is superseded on this path (trader-spec.md: the
   // surviving dial is `risk_fraction` keyed on subclass) and cannot express
   // ADR-0018's split, because both ETP subclasses are the same asset class.

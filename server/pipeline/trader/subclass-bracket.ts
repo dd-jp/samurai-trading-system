@@ -26,6 +26,13 @@
  * when the stop later floats (D5's target state, volatility-targeted sizing)
  * nothing has to be un-hardcoded.
  *
+ * **#897 (ADR-0018's 2026-09-03 amendment) adds one factor to that conversion
+ * and nothing else**: the first tranche is sized at
+ * `deployment_fraction x (1 - headroom_reserve_fraction)` so the D5 envelope
+ * is drawn on rather than spent, and a later `scale_in` is admissible. The
+ * envelope itself — and the Risk Manager's cap that enforces it — is unchanged
+ * at 35% / 25%.
+ *
  * **`risk_fraction` is DERIVED here, never stored.** ADR-0018's sizing
  * amendment records two silent ways to get the stored form wrong: writing the
  * deployment fraction itself (`0.35` at a 2.16% stop sizes to 16.2x equity),
@@ -84,6 +91,77 @@ export interface SubclassBracket {
    * later analysis. #666 may move both figures.
    */
   round_trip_cost_pct: number;
+  /**
+   * The slice of `deployment_fraction` the FIRST tranche must leave unspent, so
+   * a later scale-in into the same subclass is admissible (#897, resolved
+   * 2026-09-03).
+   *
+   * ## Why this exists
+   *
+   * Before #897, `riskFractionFor` sized a full-conviction entry to land
+   * exactly on `deployment_fraction x equity`. The Risk Manager's
+   * `per_subclass_deployment_cap` allows total subclass exposure up to the same
+   * fraction, so the first fill spent the envelope entirely: every subsequent
+   * `scale_in` was trimmed to `allowedAdditional <= 0` and rejected under
+   * `min_viable_size`. David ruled that accidental rather than intended — D5 is
+   * an envelope, not a per-position-and-done budget — so the first tranche is
+   * sized BELOW it and the remainder is what a scale-in draws on.
+   *
+   * ## Why a uniform multiplier rather than an intent-kind branch
+   *
+   * `riskFractionFor` never sees whether it is sizing an `entry` or a
+   * `scale_in`, and it deliberately still does not. Both are sized at
+   * `deployment x stop_pct x (1 - reserve)`; the scale-in is then trimmed by
+   * the D5 cap to whatever headroom actually remains. The cap fraction is
+   * UNCHANGED at 0.35 / 0.25 — that is what makes the reserved slice reachable,
+   * and lowering the cap to match would delete the headroom this field creates.
+   *
+   * ## Why 0.10, and what it has to survive
+   *
+   * The reserved slice is `deployment_fraction x reserve x equity`: **3.5% of
+   * equity on the index row, 2.5% on the single-stock row** — £35 and £25 at
+   * ADR-0015's £1,000 book, against first fills of £315 and £225. It is only a
+   * real tranche if it survives three floors:
+   *
+   * 1. **`min_viable_size` (£10, derived from `min_viable_notional`).** The
+   *    Risk Manager tests the TRIMMED notional, so the reserved slice is what
+   *    is tested. £35 and £25 clear £10 at the book.
+   * 2. **`whole_share_sizing`'s `Math.floor` (#941, on in the shipped
+   *    profile).** The slice must buy at least one share, which makes the
+   *    reserve a **per-share price ceiling** as well: £35 (index) / £25
+   *    (single-stock) at the book. This one is NOT verifiable from the repo —
+   *    `lse-etp-pool.ts` carries no prices and mixes GBX and USD lines — so it
+   *    is recorded as a boundary rather than claimed to be met.
+   * 3. **Live equity, not the £1,000 anchor.** D5 resolves against
+   *    `portfolio.equity`, so the reserved slice shrinks with the account. It
+   *    drops under the £10 dust floor at **equity £285.71 on the index row
+   *    (10 / 0.035)** and **equity £400 on the single-stock row (10 / 0.025)**
+   *    — below those, scale-ins are inadmissible again. **The single-stock row
+   *    loses admissibility FIRST despite the smaller envelope**, because a
+   *    smaller envelope reserves less cash. Recorded rather than engineered
+   *    away: both boundaries sit below the drawdown breaker's own trip point
+   *    (`max_drawdown_pct: 0.44` fires at £560 against a £1,000 peak), so on a
+   *    book funded to the anchor the breaker halts trading before either
+   *    boundary is reached.
+   *
+   * Raising the reserve would lower those boundary equities, but only by
+   * deploying less of a measured envelope on the first fill, and nothing except
+   * the unverifiable price ceiling in (2) pushes it up. 0.10 is the smaller
+   * deviation from D5's measurement, which is the direction ADR-0018 declares a
+   * preference for ("errs small").
+   *
+   * ## What the reserve yields: one scale-in, not a ladder
+   *
+   * A second scale-in asks for the same `deployment x (1 - reserve)`, is
+   * trimmed to the £0 that remains, and is rejected under `min_viable_size`.
+   * That is deliberate and is what keeps this consistent with #708's rejection
+   * of the tranche ladder: the envelope admits exactly one top-up, not a
+   * schedule of them.
+   *
+   * INJECTED CONFIG like every other field here — it moves when an ADR
+   * amendment moves it, not when code is edited.
+   */
+  headroom_reserve_fraction: number;
 }
 
 /**
@@ -126,6 +204,22 @@ export const D5_INDEX_ETP_DEPLOYMENT_FRACTION = 0.35;
 export const D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION = 0.25;
 
 /**
+ * #897's scale-in headroom reserve, as a fraction of the D5 envelope, for both
+ * subclasses.
+ *
+ * One number on both rows rather than one global constant. The per-subclass
+ * granularity is justified by where the field lives and by what it implies —
+ * NOT by the two values differing today. Every field on `SubclassBracket` is
+ * injected config by this module's stated design, and the same 0.10 applied to
+ * two different envelopes yields boundary equities 40% apart (£285.71 index vs
+ * £400 single-stock — see `SubclassBracket.headroom_reserve_fraction` for that
+ * arithmetic). A module-level constant would make the identical seeding read as
+ * a property of the system rather than the coincidence it is. Both rows are
+ * seeded at 0.10 because nothing measured distinguishes them.
+ */
+export const D5_SCALE_IN_HEADROOM_RESERVE_FRACTION = 0.1;
+
+/**
  * ADR-0018 D3 + D5 as config, per subclass.
  *
  * `null` is an ANSWER, not a gap: ADR-0018's Consequences say in as many words
@@ -144,29 +238,46 @@ export const ADR_0018_SUBCLASS_BRACKETS: SubclassBracketTable = {
     stop_pct: 0.0216,
     deployment_fraction: D5_INDEX_ETP_DEPLOYMENT_FRACTION,
     round_trip_cost_pct: 0.0018,
+    headroom_reserve_fraction: D5_SCALE_IN_HEADROOM_RESERVE_FRACTION,
   },
   single_stock_etp_3x: {
     take_profit_pct: 0.06,
     stop_pct: 0.0625,
     deployment_fraction: D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION,
     round_trip_cost_pct: 0.0041,
+    headroom_reserve_fraction: D5_SCALE_IN_HEADROOM_RESERVE_FRACTION,
   },
   crypto: null,
 };
 
 /**
- * ADR-0018's sizing amendment, point 3: `risk_fraction = deployment x stop_pct`,
- * per subclass.
+ * ADR-0018's sizing amendment, point 3, less #897's headroom reserve:
+ * `risk_fraction = deployment x stop_pct x (1 - headroom_reserve)`, per
+ * subclass.
  *
- * Reproduces the amendment's own table — 0.35 x 0.0216 = **0.00756** for the
- * index row, 0.25 x 0.0625 = **0.015625** for the single-stock row. Asserting
- * those constants is NOT a test of this function: both published error modes
- * also produce a number that matches something in the ADR. The assertion that
- * discriminates is on the resulting deployment (`size x entry ~= 0.35 x equity`),
- * which is what `subclass-bracket.test.ts` asserts.
+ * The amendment's own table is the `reserve = 0` case — 0.35 x 0.0216 =
+ * 0.00756 for the index row, 0.25 x 0.0625 = 0.015625 for the single-stock row.
+ * At the reserve ADR-0018's 2026-09-03 amendment declares (0.10 on both rows)
+ * this returns **0.006804** and **0.0140625**, which deploy **31.5%** and
+ * **22.5%** of equity on the first tranche and leave 3.5% / 2.5% of headroom
+ * for a scale-in the D5 cap then trims to fit.
+ *
+ * Asserting any of those constants is NOT a test of this function: both of the
+ * ADR's published error modes also produce a number that matches something in
+ * the ADR. The assertion that discriminates is on the resulting deployment
+ * (`size x entry ~= 0.35 x (1 - reserve) x equity`), which is what
+ * `subclass-bracket.test.ts` asserts.
+ *
+ * **The reserve belongs here and NOT on `per_subclass_deployment_cap`.** The
+ * Risk Manager's cap stays at the full 0.35 / 0.25, which is precisely what
+ * makes the reserved slice reachable by a later tranche; applying the reserve
+ * to both sides would move the ceiling down with the entry and leave no
+ * headroom at all. See `SubclassBracket.headroom_reserve_fraction` for the
+ * floors the reserved slice has to clear and the equities below which it
+ * stops clearing them.
  */
 export function riskFractionFor(bracket: SubclassBracket): number {
-  return bracket.deployment_fraction * bracket.stop_pct;
+  return bracket.deployment_fraction * bracket.stop_pct * (1 - bracket.headroom_reserve_fraction);
 }
 
 /**
@@ -216,6 +327,45 @@ export class SubclassBracketUnresolvableError extends Error {
  * bracket is `null` (crypto) is an instrument ADR-0018 deliberately prices no
  * bracket for and which therefore must not be entered on this rule at all.
  */
+/**
+ * Refuses a `headroom_reserve_fraction` outside `[0, 1)` (#897).
+ *
+ * The failure this guards is quiet, not loud. A percent-vs-fraction typo (`10`
+ * for `0.10`) makes `riskFractionFor` negative, which makes `size` negative —
+ * finite, so `Number.isFinite` admits it — and `decide.ts`'s
+ * `submittableSize * entry < config.min_viable_notional` check then turns EVERY
+ * entry in that subclass into `skip('below_min_notional')`. Nothing wrong is
+ * submitted; the system simply stops trading the subclass, and the only trace
+ * is a skip reason indistinguishable in a soak log from a market that offered
+ * no setups. `1` is refused for the same reason with a different sign: it
+ * reserves the whole envelope and sizes every entry to exactly zero.
+ *
+ * That is the same class of silent-wrong-config failure `resolveStoreMode` and
+ * `SubclassBracketUnresolvableError` already throw over, so it takes the same
+ * posture — throw, naming the field, the offending value and the subclass —
+ * rather than clamping to a plausible number and continuing.
+ *
+ * `0` is valid: it is the pre-#897 behaviour, and a deliberate `0` is how a
+ * future amendment would turn the reserve off without deleting the field.
+ */
+function assertValidHeadroomReserve(
+  bracket: SubclassBracket,
+  subclass: InstrumentSubclass,
+  instrument: string,
+): void {
+  const reserve = bracket.headroom_reserve_fraction;
+  if (!Number.isFinite(reserve) || reserve < 0 || reserve >= 1) {
+    throw new SubclassBracketUnresolvableError(
+      `${instrument} is classified '${subclass}', whose bracket declares ` +
+        `headroom_reserve_fraction = ${String(reserve)} — outside [0, 1). ` +
+        `It is a FRACTION of the D5 envelope, not a percentage — 10% is 0.1, not ` +
+        `10. Outside that range riskFractionFor goes negative or to zero, and every entry in this ` +
+        `subclass is silently skipped as below_min_notional rather than refused visibly.`,
+      instrument,
+    );
+  }
+}
+
 export function resolveSubclassBracket(
   instrument: string,
   subclassOf: Readonly<Record<string, InstrumentSubclass>>,
@@ -244,6 +394,8 @@ export function resolveSubclassBracket(
       instrument,
     );
   }
+
+  assertValidHeadroomReserve(bracket, subclass, instrument);
 
   return bracket;
 }

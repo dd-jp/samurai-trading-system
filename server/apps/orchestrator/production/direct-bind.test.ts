@@ -270,10 +270,12 @@ describe('buildTraderStep', () => {
     // Mark is 100 and the index row is +2.00% / -2.16%.
     expect(intent.stop).toBeCloseTo(97.84, 9);
     expect(intent.target).toBeCloseTo(102, 9);
-    // Equity is the fake account's $10,000, and the no-precedent haircut is
-    // 0.75x — stated rather than divided out, so the number below is the whole
-    // deployment this binding actually produces: 0.35 x 10,000 x 0.75.
-    expect(intent.size * intent.entry).toBeCloseTo(0.35 * 10_000 * 0.75, 6);
+    // Equity is the fake account's $10,000, the no-precedent haircut is 0.75x,
+    // and #897's headroom reserve keeps the first tranche at 0.9x the envelope
+    // — all stated rather than divided out, so the number below is the whole
+    // deployment this binding actually produces: 0.35 x 0.9 x 10,000 x 0.75.
+    expect(intent.size * intent.entry).toBeCloseTo(0.35 * 0.9 * 10_000 * 0.75, 6);
+    expect(intent.metadata.sizing.frozen_bracket?.headroom_reserve_fraction).toBe(0.1);
     expect(intent.metadata.sizing.frozen_bracket?.stop_pct).toBe(0.0216);
   });
 

@@ -15,6 +15,7 @@
  */
 import { openSharedStore, type SharedStore } from './open-shared-store.js';
 import { DEFAULT_MAX_LLM_CALL_ROWS, pruneLlmCallLog } from './prune-llm-call-log.js';
+import { guardedStore } from './write-guard.js';
 
 function insertCalls(db: SharedStore, count: number): void {
   const insert = db.prepare(
@@ -126,5 +127,34 @@ describe('pruneLlmCallLog', () => {
     // to update, not a silent change of retention. See the module doc for the
     // arithmetic (~78 days and ~39 MB at the measured rate, ~100 MB worst case).
     expect(DEFAULT_MAX_LLM_CALL_ROWS).toBe(5_000);
+  });
+});
+
+describe('under the sole-writer guard (#1048)', () => {
+  // The guard is default-permissive, so a prune on a RAW handle would pass
+  // whether or not the stage attribution were right. These two cases pin the
+  // attribution itself: `llm_call_log` belongs to the debate engine, and the
+  // orchestrator — which is where both call sites live — is not entitled to
+  // write records into it. Passing the owning stage is what makes the sweep
+  // checkable rather than merely unchecked.
+  it('is allowed through a debate-engine handle', () => {
+    const db = openSharedStore(':memory:');
+    insertCalls(db, 5);
+
+    expect(pruneLlmCallLog(guardedStore(db, 'debate-engine', { enabled: true }), 2)).toBe(3);
+    expect(remainingTraceIds(db)).toEqual(['trace-4', 'trace-5']);
+  });
+
+  it('is refused through an orchestrator handle', () => {
+    // Not a limitation being worked around: an orchestrator-attributed write to
+    // the debate engine's table is exactly the cross-stage write #1048 exists
+    // to catch, and the production call sites therefore declare 'debate-engine'.
+    const db = openSharedStore(':memory:');
+    insertCalls(db, 5);
+
+    expect(() => pruneLlmCallLog(guardedStore(db, 'orchestrator', { enabled: true }), 2)).toThrow(
+      /llm_call_log/,
+    );
+    expect(remainingTraceIds(db)).toHaveLength(5);
   });
 });

@@ -184,12 +184,37 @@ export interface OrderIntentMetadata {
       stop_pct: number;
       deployment_fraction: number;
       round_trip_cost_pct: number;
+      /**
+       * #897's scale-in headroom reserve, as it stood for THIS decision. The
+       * intent is deployed at `deployment_fraction x (1 -
+       * headroom_reserve_fraction) x equity`, not at `deployment_fraction x
+       * equity`, so an expectancy accounting that read only
+       * `deployment_fraction` would over-state what was committed. Persisted
+       * for the same reason `round_trip_cost_pct` is: it is injected config
+       * that a later amendment may move.
+       *
+       * **Optional because its ABSENCE is meaningful, not because it is
+       * sometimes unwritten.** `decide.ts` spreads the whole frozen bracket, so
+       * every row written after #897 carries it. A row WITHOUT it is a
+       * pre-#897 intent, sized at the full `deployment_fraction` with no
+       * reserve — which is strictly more than a read-side default of `0` would
+       * tell a reader, since `0` is also a legal post-#897 configured value and
+       * the two would then be indistinguishable. Declaring it required would
+       * make this type claim something untrue of every journaled row predating
+       * this change.
+       *
+       * There is no reader of `frozen_bracket` in the tree today, so this is a
+       * latent type-vs-reality mismatch for a FUTURE expectancy accounting, not
+       * a live arithmetic bug.
+       */
+      headroom_reserve_fraction?: number;
     };
     /**
      * The size D5 actually sized, before `whole_share_sizing` floored it to the
      * venue's quantity grid (#941). Present exactly when the flag is on AND the
      * floor moved the number, absent otherwise — so its presence is the signal
-     * that this intent is NOT deployed at `deployment_fraction x equity`.
+     * that this intent is NOT deployed at the sized fraction of equity
+     * (`deployment_fraction x (1 - headroom_reserve_fraction)` since #897).
      *
      * Recorded because the quantisation is a deviation from the ADR's declared
      * sizing, and a deviation that leaves no trace is one no later expectancy
