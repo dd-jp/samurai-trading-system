@@ -689,7 +689,7 @@ CREATE INDEX idx_outside_benchmark_samples_computed_at
 
 **Why the raw emission rather than the validated list.** The validator is deterministic code and re-runs on replay; the model emission is the nondeterministic artifact and is what must be stored. Storing the post-validator list would freeze a determinable transform into the row, so a replay of a window predating a validator fix would silently carry the old bug. It is also what makes validator-drop reasons inspectable on the dashboard.
 
-**`current_tick.stage` needs a table-rebuild migration.** Its `CHECK` enumerates the six original stage names and must gain `'invalidation'`; SQLite cannot alter a `CHECK` in place. `audit_log.stage` is unconstrained `TEXT` and needs no migration.
+**`current_tick.stage`'s `CHECK` stays at the six original stage names.** The standalone `invalidation` stage was declined 2026-09-02 (its mechanism folds into the Risk Critic instead, [#994](https://github.com/dd-jp/samurai-trading-system/issues/994)), so the table-rebuild migration this entry previously anticipated for a seventh name is never needed — SQLite cannot alter a `CHECK` in place, but there is no new name to add it for. `audit_log.stage` is unconstrained `TEXT` and needs no migration either way.
 
 ### Non-Collision Verification
 

@@ -73,7 +73,7 @@ describe('computeWalkPlan — same-trace walks', () => {
 
   it('never walks through a skipped stage — a null recorded_at room is hopped over', () => {
     const prev = makeView([doneThrough('BTC-USD', 't1', 'trader')]);
-    // Same trace, advanced to execution; invalidation was skipped (null recorded_at).
+    // Same trace, advanced to execution; verdict was skipped (null recorded_at).
     const next = makeView([
       makeLane({
         instrument: 'BTC-USD',
@@ -83,16 +83,15 @@ describe('computeWalkPlan — same-trace walks', () => {
           analysts: { state: 'done', recorded_at: at(1_000) },
           debate: { state: 'done', recorded_at: at(2_000) },
           trader: { state: 'done', recorded_at: at(3_000) },
-          invalidation: { state: 'skipped' },
           risk: { state: 'done', recorded_at: at(4_000) },
-          verdict: { state: 'done', recorded_at: at(5_000) },
-          execution: { state: 'done', recorded_at: at(6_000) },
+          verdict: { state: 'skipped' },
+          execution: { state: 'done', recorded_at: at(5_000) },
         },
         started_at: at(0),
       }),
     ]);
     const walk = walkFor(computeWalkPlan(prev, next, NO_OPTS), 'BTC-USD');
-    expect(walk.hops.map((h) => h.room)).toEqual(['risk', 'verdict', 'execution']);
+    expect(walk.hops.map((h) => h.room)).toEqual(['risk', 'execution']);
   });
 
   it('walks into a live destination room using live_entered_at as its clock', () => {
@@ -107,7 +106,6 @@ describe('computeWalkPlan — same-trace walks', () => {
             analysts: { state: 'done', recorded_at: at(1_000) },
             debate: { state: 'done', recorded_at: at(2_000) },
             trader: { state: 'done', recorded_at: at(3_000) },
-            invalidation: { state: 'skipped' },
             risk: { state: 'live' },
           },
           started_at: at(0),
@@ -208,8 +206,8 @@ describe('computeWalkPlan — durations', () => {
   });
 
   it('keeps a full-pipeline replay inside the 1.2s budget with every hop >= 150ms', () => {
-    // Rotation from execution: 7 hops, each with a whole minute recorded gap —
-    // unclamped that is 7 x 450 = 3150ms, which must scale down to <= 1200.
+    // Rotation from execution: 6 hops, each with a whole minute recorded gap —
+    // unclamped that is 6 x 450 = 2700ms, which must scale down to <= 1200.
     const prev = makeView([doneThrough('BTC-USD', 'old', 'execution', { outcome: 'go' })]);
     const next = makeView([
       doneThrough('BTC-USD', 'new', 'execution', {
@@ -219,7 +217,7 @@ describe('computeWalkPlan — durations', () => {
       }),
     ]);
     const walk = walkFor(computeWalkPlan(prev, next, NO_OPTS), 'BTC-USD');
-    expect(walk.hops).toHaveLength(7);
+    expect(walk.hops).toHaveLength(6);
     const total = walk.hops.reduce((sum, h) => sum + h.duration_ms, 0);
     expect(total).toBeLessThanOrEqual(WALK_BUDGET_MS);
     for (const hop of walk.hops) {

@@ -15,7 +15,7 @@
 
 import type { PipelineLane, PipelineStage, PipelineView } from '@contracts';
 
-/** A room in the theater: one of the seven stages, or the Lobby for idle lanes. */
+/** A room in the theater: one of the six stages, or the Lobby for idle lanes. */
 export type RoomId = PipelineStage | 'lobby';
 
 /**
@@ -36,7 +36,6 @@ const STAGE_ORDER = [
   'analysts',
   'debate',
   'trader',
-  'invalidation',
   'risk',
   'verdict',
   'execution',
@@ -48,11 +47,11 @@ void _stageOrderIsExhaustive;
 
 /**
  * Canonical room order — matches the `ROOMS` list in `App.tsx`: Lobby first,
- * then rooms 01–07 in pipeline order.
+ * then rooms 01–06 in pipeline order.
  */
 export const ROOM_ORDER = ['lobby', ...STAGE_ORDER] as const satisfies readonly RoomId[];
 
-/** 4x2 grid: 4 columns, so the row wraps between room 03 (trader) and 04 (invalidation). */
+/** 4x2 grid: 4 columns, so the row wraps between room 03 (trader) and 04 (risk). */
 const GRID_COLUMNS = 4;
 
 /** More than this many chips in one room collapse to the first 3 plus a "+N" affordance. */
@@ -67,7 +66,7 @@ export function roomIndex(room: RoomId): number {
   return room === 'lobby' ? -1 : STAGE_INDEX[room];
 }
 
-/** The stage at walk-path index `i` (0 = analysts … 6 = execution). */
+/** The stage at walk-path index `i` (0 = analysts … 5 = execution). */
 export function stageAt(i: number): PipelineStage | undefined {
   return STAGE_ORDER[i];
 }
@@ -120,7 +119,7 @@ export interface ChipPlacement {
 }
 
 export interface RoomsLayout {
-  /** All 8 rooms in canonical `ROOM_ORDER`, occupied or not — the grid never reflows. */
+  /** All 7 rooms in canonical `ROOM_ORDER`, occupied or not — the grid never reflows. */
   rooms: RoomOccupancy[];
   /** Per-instrument placement lookup. */
   chips: Record<string, ChipPlacement>;

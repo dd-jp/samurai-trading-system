@@ -11,7 +11,8 @@
  * which the broken build still carried after its transition was cancelled. It
  * samples the chip's position every 20ms and asserts it STOOD at each recorded
  * room on the way: many distinct positions, a landing at trader, risk and
- * verdict, and never a landing at invalidation, whose row was never recorded.
+ * execution, and never a landing at verdict, whose row was never recorded
+ * (see `SKIPPED_ROOM`, support/snapshot.ts).
  *
  * Seam: `page.route` over the harness server's own payload, because the
  * scenario is a sequence — poll 1 in flight at Debate, poll 2 settled at
@@ -34,7 +35,7 @@ const WALKER = 'SPY';
 const LIVE_CHIP = 'SPY, stocks, in flight, in Debate';
 const SETTLED_CHIP = 'SPY, stocks, go, in Execution';
 
-/** The walk is 4 hops x 300ms; this leaves the sampler room either side of it. */
+/** The walk is 3 hops x 400ms; this leaves the sampler room either side of it. */
 const WALK_OBSERVATION_MS = 2_500;
 
 /**
@@ -86,8 +87,8 @@ test('replay walk: the chip walks its recorded rooms and never enters the skippe
     expect(touched(samples, anchor(room)), `the chip never stood in ${room}`).toBe(true);
   }
 
-  // Motion rule 6: no recorded transition exists for the invalidation stage,
-  // so the chip hops over room 04 rather than through it.
+  // Motion rule 6: no recorded transition exists for the skipped stage, so
+  // the chip hops over its room rather than through it.
   expect(touched(samples, anchor(SKIPPED_ROOM)), 'the chip entered the skipped room').toBe(false);
 
   // Secondary, and only ever secondary: the pre-#605 build kept this class on

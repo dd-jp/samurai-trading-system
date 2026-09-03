@@ -36,11 +36,11 @@ export interface TickStatus {
   asset_class: AssetClass;
   /**
    * Derived from `PipelineStage` rather than re-typed, so this directory
-   * publishes ONE stage vocabulary. `invalidation` is excluded because it is
-   * specced and not built (see `PIPELINE_STAGES`): the runtime chain is six
-   * stages and a tick can never report standing in a stage that does not run.
-   * Deriving it means a seventh stage becoming real surfaces here as a type
-   * error instead of silently going unreported.
+   * publishes ONE stage vocabulary: every member of `PIPELINE_STAGES` is a
+   * stage a tick can genuinely be standing in, so this is a plain union
+   * rather than an `Exclude` over it. Deriving it means a stage the pipeline
+   * ever grows surfaces here as a type error rather than silently going
+   * unreported.
    *
    * `'position_check'` (#743) is the tick path's own stage — the
    * exit-check-only pass that runs every tick between decisions. It is a
@@ -50,7 +50,7 @@ export interface TickStatus {
    * "position check in progress", since after the tick/decision split that
    * is the most common in-flight state the system has.
    */
-  stage: Exclude<PipelineStage, 'invalidation'> | 'position_check';
+  stage: PipelineStage | 'position_check';
   trace_id: string;
 }
 

@@ -53,7 +53,7 @@ export const SEAL_GLYPH: Readonly<Record<SettledOutcome, string>> = {
 };
 
 export interface RoomMeta {
-  /** `01`–`07`, or `null` for the Lobby, which is not a pipeline stage. */
+  /** `01`–`06`, or `null` for the Lobby, which is not a pipeline stage. */
   number: string | null;
   name: string;
   /** Watermark kanji — decorative, `aria-hidden` at the render site. */
@@ -62,19 +62,18 @@ export interface RoomMeta {
   blurb: string;
 }
 
-/** Room numbers, names, kanji watermarks (待析議商反危決行) and blurbs. */
+/** Room numbers, names, kanji watermarks (待析議商危決行) and blurbs. */
 export const ROOM_META: Readonly<Record<RoomId, RoomMeta>> = {
   lobby: { number: null, name: 'Lobby', kanji: '待', blurb: 'idle instruments' },
   analysts: { number: '01', name: 'Analysts', kanji: '析', blurb: 'quorum gate' },
   debate: { number: '02', name: 'Debate', kanji: '議', blurb: 'personas · rounds' },
   trader: { number: '03', name: 'Trader', kanji: '商', blurb: 'intent' },
-  invalidation: { number: '04', name: 'Invalidation', kanji: '反', blurb: 'thesis attack' },
-  risk: { number: '05', name: 'Risk', kanji: '危', blurb: 'sizing · gates' },
-  verdict: { number: '06', name: 'Verdict', kanji: '決', blurb: 'go / no-go' },
-  execution: { number: '07', name: 'Execution', kanji: '行', blurb: 'fills' },
+  risk: { number: '04', name: 'Risk', kanji: '危', blurb: 'sizing · gates' },
+  verdict: { number: '05', name: 'Verdict', kanji: '決', blurb: 'go / no-go' },
+  execution: { number: '06', name: 'Execution', kanji: '行', blurb: 'fills' },
 };
 
-/** Stage names for the drawer's stage strip, which lists all seven. */
+/** Stage names for the drawer's stage strip, which lists all six. */
 export function stageName(stage: PipelineStage): string {
   return ROOM_META[stage].name;
 }

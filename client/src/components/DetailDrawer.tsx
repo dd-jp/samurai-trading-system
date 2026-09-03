@@ -6,7 +6,7 @@
  * **The stage strip is the sole per-stage record.** A sigil chip is a single
  * point, so a skipped stage and a retried stage have no room to show
  * themselves in the hero (spec, "The primitive's accepted cost"). The strip
- * therefore lists all seven stages including the never-reached ones, with
+ * therefore lists all six stages including the never-reached ones, with
  * state word, decision, duration, attempts and recorded time.
  *
  * **Every empty state names its reason.** Never a bare dash, never a spinner
@@ -22,7 +22,7 @@ import { CELL_STATE_WORD, OUTCOME_WORD, stageName } from '../lib/vocabulary.ts';
 import { StanceStrip } from './StanceStrip.tsx';
 
 /**
- * The seven stages, in pipeline order, taken from `ROOM_ORDER` rather than
+ * The six stages, in pipeline order, taken from `ROOM_ORDER` rather than
  * imported as a value from the backend's `PIPELINE_STAGES`: the client's
  * modules keep the backend out of the bundle by importing only types from it,
  * and `room-layout.ts` already redeclares this order under a compile-time
@@ -232,16 +232,18 @@ export function DetailDrawer(props: DetailDrawerProps) {
           {/*
             The reserved invalidation section (spec, "Information Inventory":
             required, not optional, and not yet buildable). `invalidation_log`
-            does not exist in the codebase — the stage is specced and not
-            built — so this names the reason rather than rendering nothing or
+            does not exist in the codebase — the standalone stage was declined
+            2026-09-02 and its mechanism folds into the Risk Critic instead
+            (#994) — so this names the reason rather than rendering nothing or
             inventing a field. Reserving the slot now means the layout does
             not move the day the data arrives.
           */}
           <h3 className="drawer-section">Invalidation</h3>
           <p className="empty-state" data-section="invalidation">
-            Reserved — the invalidation stage is specced and not built (devils-advocate-spec.md).
-            When it ships this section carries the restated thesis, its conditions with evaluation
-            states, and the validator-dropped conditions with their drop reasons — with{' '}
+            Reserved — the standalone invalidation stage was declined 2026-09-02; its typed
+            invalidation-condition mechanism folds into the Risk Critic instead (#994). When that
+            lands this section carries the restated thesis, its conditions with evaluation states,
+            and the validator-dropped conditions with their drop reasons — with{' '}
             <code>no_conditions</code> and <code>unavailable</code> rendered as distinct states.
             Note that a Risk reject is inferable from a breached condition but is never recorded
             (#328), so this section will not claim it.

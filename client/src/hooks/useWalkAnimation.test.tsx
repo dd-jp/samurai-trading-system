@@ -40,7 +40,7 @@ import { useWalkAnimation } from './useWalkAnimation.ts';
 
 /**
  * Recorded stages 50ms apart. Every gap is below `HOP_MIN_MS`, so every hop
- * lands on the 150ms floor and a four-hop walk finishes in well under a
+ * lands on the 150ms floor and a three-hop walk finishes in well under a
  * second of real time — these tests run on real timers because the hop chain
  * is driven by `setTimeout` and `transitionend`, both of which a fake clock
  * would have to stand in for anyway.
@@ -55,7 +55,7 @@ function laneReaching(stage: Parameters<typeof doneThrough>[2]): PipelineView {
 /** Analysts → Debate: the single-stage advance a 3-second poll usually produces. */
 const AT_ANALYSTS = laneReaching('analysts');
 const AT_DEBATE = laneReaching('debate');
-/** Analysts → Risk: four hops, the case that animated BACKWARDS on main. */
+/** Analysts → Risk: three hops, the case that animated BACKWARDS on main. */
 const AT_RISK = laneReaching('risk');
 
 interface TheaterProps {
@@ -212,9 +212,9 @@ describe('useWalkAnimation — re-placement must not cancel the walk (#595)', ()
     log.stop();
   });
 
-  it('runs a 4-hop walk forwards through every room, never backwards', async () => {
+  it('runs a 3-hop walk forwards through every room, never backwards', async () => {
     const walk = plannedWalk(AT_ANALYSTS, AT_RISK);
-    expect(walk.hops.map((hop) => hop.room)).toEqual(['debate', 'trader', 'invalidation', 'risk']);
+    expect(walk.hops.map((hop) => hop.room)).toEqual(['debate', 'trader', 'risk']);
 
     const view = render(<Theater view={AT_ANALYSTS} previous={null} firstPaint={true} />);
     const log = recordStyle(chip());
@@ -230,19 +230,19 @@ describe('useWalkAnimation — re-placement must not cancel the walk (#595)', ()
     ).toEqual([]);
 
     await waitFor(
-      () => expect(transformOf(chip().getAttribute('style') ?? '')).toEqual(walk.points[3]),
+      () => expect(transformOf(chip().getAttribute('style') ?? '')).toEqual(walk.points[2]),
       { timeout: 3_000 },
     );
 
     const path = trail(log.states().slice(started));
-    // On main this read [analysts, debate, RISK, trader, invalidation, risk]:
-    // the re-placement snapped the chip to its destination, then the fallback
+    // On main this read [analysts, debate, RISK, trader, risk]: the
+    // re-placement snapped the chip to its destination, then the fallback
     // timer walked it back to hop 1 and forwards again.
     expect(path).toEqual([walk.origin, ...walk.points]);
     // Said the other way round, because it is the symptom the issue reports:
     // the chip reaches Risk once, at the END. On main it arrived there first
     // and then animated backwards to Trader.
-    const destination = walk.points[3];
+    const destination = walk.points[2];
     expect(path.at(-1)).toEqual(destination);
     expect(
       path.filter((point) => point.x === destination?.x && point.y === destination?.y),
@@ -368,7 +368,7 @@ describe('useWalkAnimation — re-placement must not cancel the walk (#595)', ()
         .filter(isSnapped),
     ).toEqual([]);
     await waitFor(
-      () => expect(transformOf(chip().getAttribute('style') ?? '')).toEqual(walk.points[3]),
+      () => expect(transformOf(chip().getAttribute('style') ?? '')).toEqual(walk.points[2]),
       { timeout: 3_000 },
     );
     expect(trail(log.states().slice(started))).toEqual([walk.origin, ...walk.points]);
@@ -421,7 +421,7 @@ describe('useWalkAnimation — transitionend guards (#596 item 2)', () => {
 
     // And the chain still completes, on timers.
     await waitFor(
-      () => expect(transformOf(chip().getAttribute('style') ?? '')).toEqual(walk.points[3]),
+      () => expect(transformOf(chip().getAttribute('style') ?? '')).toEqual(walk.points[2]),
       { timeout: 3_000 },
     );
     await waitFor(() => expect(chip().classList.contains('chip-walking')).toBe(false), {
@@ -435,25 +435,27 @@ describe('useWalkAnimation — room placement is real geometry (#595)', () => {
     useHarness();
   });
 
-  it('puts a chip in Risk at a different x from a chip in the Lobby', async () => {
-    const inRisk = doneThrough('AAA', 'trace-a', 'risk', { outcome: 'stopped' });
+  it('puts a chip in Verdict at a different x from a chip in the Lobby', async () => {
+    const inVerdict = doneThrough('AAA', 'trace-a', 'verdict', { outcome: 'stopped' });
     const idle = makeLane({ instrument: 'BBB' });
-    const view = makeView([inRisk, idle]);
+    const view = makeView([inVerdict, idle]);
     expect(computeLayout(view).chips.BBB?.room).toBe('lobby');
 
     render(<Theater view={view} previous={null} firstPaint={true} />);
     await flushMicrotasks();
 
-    const risk = transformOf(chip('AAA').getAttribute('style') ?? '');
+    const verdict = transformOf(chip('AAA').getAttribute('style') ?? '');
     const lobby = transformOf(chip('BBB').getAttribute('style') ?? '');
     // Room 05 sits on the grid's second row, second column; the Lobby is
     // first row, first column. Different x AND different y — the assertion
     // PR #591 could not make, because every jsdom rect is zero and both
-    // chips resolved to the same point plus slot pitch.
-    expect(risk).toEqual(harness.pointFor('risk', 0));
+    // chips resolved to the same point plus slot pitch. (Room 04, `risk`,
+    // no longer demonstrates this since the seventh-stage retirement (#998)
+    // put it in the grid's first column, sharing an x with the Lobby.)
+    expect(verdict).toEqual(harness.pointFor('verdict', 0));
     expect(lobby).toEqual(harness.pointFor('lobby', 0));
-    expect(risk?.x).not.toBe(lobby?.x);
-    expect(risk?.y).not.toBe(lobby?.y);
+    expect(verdict?.x).not.toBe(lobby?.x);
+    expect(verdict?.y).not.toBe(lobby?.y);
   });
 
   it('stacks two chips in one room by slot, measured from that room rect', async () => {
@@ -495,7 +497,7 @@ describe('usePrefersReducedMotion → the planner and the hook (#595)', () => {
     const styleLog = recordStyle(chip());
     const classLog = recordAttribute(chip(), 'class');
 
-    // The second poll lands: same lane, four rooms further on.
+    // The second poll lands: same lane, three rooms further on.
     await screen.findByText('12:00:03Z');
     await flushMicrotasks();
 
@@ -522,7 +524,7 @@ describe('usePrefersReducedMotion → the planner and the hook (#595)', () => {
     );
     await flushMicrotasks();
 
-    // Without reduced motion this poll is a four-hop walk (the tests above run
+    // Without reduced motion this poll is a three-hop walk (the tests above run
     // exactly it). `usePrefersReducedMotion` reached `computeWalkPlan`, so the
     // planner emitted a snap — the half no DOM assertion can see.
     const last = plans.at(-1);
@@ -580,7 +582,7 @@ describe('usePrefersReducedMotion → the planner and the hook (#595)', () => {
     );
     await flushMicrotasks();
 
-    // Same poll that walks four hops when motion is allowed.
+    // Same poll that walks three hops when motion is allowed.
     const last = plans.at(-1);
     expect(last?.motions.map((motion) => motion.kind)).toEqual(['snap']);
     expect(last?.total_ms).toBe(0);

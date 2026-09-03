@@ -62,28 +62,21 @@ export const PIPELINE_LOOKBACK_MS = 15 * 60 * 1_000;
 export const PIPELINE_MAX_LANES = 24;
 
 /**
- * The stages the RUNTIME can currently write, as a value rather than a type.
+ * Every `PIPELINE_STAGES` member is a stage the runtime can actually write, as
+ * a type-level check rather than a value one (#998).
  *
- * `Record<TickStage, true>` is load-bearing: the orchestrator's `TickStage`
- * union is the authority on which stages exist, and the day `invalidation`
- * joins it this object stops compiling until the key is added — at which point
- * `invalidation` gaps start reading as `skipped` on their own. Hard-coding the
- * not-yet-built stage instead would have left a lie that type-checks.
+ * This used to be `RUNTIME_STAGES`, a `Record<TickStage, true>` value that
+ * `cellState` looked up at runtime to tell "specced but not built"
+ * (`invalidation`) apart from a genuine `skipped` gap. That branch is gone
+ * because `PIPELINE_STAGES` no longer carries a member nothing can write — but
+ * the property it guarded is still worth pinning: if `PIPELINE_STAGES` ever
+ * regrows a stage ahead of the orchestrator's `TickStage` union, THIS line
+ * stops compiling, which is the same failure-closed guarantee the value gave,
+ * without a live branch that would otherwise go permanently dead.
  */
-const RUNTIME_STAGES: Record<TickStage, true> = {
-  // #743's tick-path stage. Present so this record keeps compiling against the
-  // orchestrator's `TickStage` union (the property this object exists for);
-  // never looked up here, because the lane view iterates `PIPELINE_STAGES`,
-  // which deliberately does not include the tick path — see
-  // `getPipelineActivity`'s live-row filter for where that exclusion lives.
-  position_check: true,
-  analysts: true,
-  debate: true,
-  trader: true,
-  risk: true,
-  verdict: true,
-  execution: true,
-};
+type _PipelineStagesAreWritable = PipelineStage extends TickStage ? true : never;
+const _pipelineStagesAreWritable: _PipelineStagesAreWritable = true;
+void _pipelineStagesAreWritable;
 
 const LAST_STAGE = PIPELINE_STAGES[PIPELINE_STAGES.length - 1];
 
@@ -340,14 +333,11 @@ function cellState(input: {
     // follows it, so a trace that got there ran the pipeline to its end.
     return live === null && stage === finalStage && stage !== LAST_STAGE ? 'stopped' : 'done';
   }
-  if (!(stage in RUNTIME_STAGES)) {
-    // Specced but not built (`invalidation`). A gap here is not a decision to
-    // omit the stage — nothing can write it yet — so it must never read as
-    // `skipped`, which would claim a choice the tick never made.
-    return 'not_reached';
-  }
   // No row, yet the trace carried on past this stage: a deliberate skip, which
-  // is normal traffic and must not read as a halted pipeline.
+  // is normal traffic and must not read as a halted pipeline. (This used to
+  // also cover `invalidation`'s permanent gap before the stage was retired
+  // from `PIPELINE_STAGES` — #998; every stage reaching this line now is one
+  // the runtime can genuinely write, per `_PipelineStagesAreWritable` above.)
   return index < reachedIndex ? 'skipped' : 'not_reached';
 }
 

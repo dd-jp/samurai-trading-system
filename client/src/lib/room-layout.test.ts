@@ -41,7 +41,7 @@ describe('roomFor', () => {
       cells: {
         analysts: { state: 'done', recorded_at: at(1_000) },
         debate: { state: 'stopped', recorded_at: at(2_000) },
-        invalidation: { state: 'skipped' },
+        trader: { state: 'skipped' },
       },
     });
     expect(roomFor(lane)).toBe('debate');
@@ -53,15 +53,15 @@ describe('roomFor', () => {
 });
 
 describe('computeLayout', () => {
-  it('lays the 8 rooms out on a 4-column grid, wrapping between rooms 03 and 04', () => {
+  it('lays the 7 rooms out on a 4-column grid, wrapping between rooms 03 and 04', () => {
     const layout = computeLayout(makeView([]));
     expect(layout.rooms.map((r) => r.room)).toEqual([...ROOM_ORDER]);
-    // Row 0: Lobby, 01 Analysts, 02 Debate, 03 Trader. Row 1: 04-07.
+    // Row 0: Lobby, 01 Analysts, 02 Debate, 03 Trader. Row 1: 04-06.
     const grid = Object.fromEntries(layout.rooms.map((r) => [r.room, r.grid]));
     expect(grid.lobby).toEqual({ row: 0, column: 0 });
     expect(grid.trader).toEqual({ row: 0, column: 3 });
-    expect(grid.invalidation).toEqual({ row: 1, column: 0 });
-    expect(grid.execution).toEqual({ row: 1, column: 3 });
+    expect(grid.risk).toEqual({ row: 1, column: 0 });
+    expect(grid.execution).toEqual({ row: 1, column: 2 });
   });
 
   it('assigns slots within a room in wire order', () => {
@@ -169,7 +169,6 @@ describe('computeLayout', () => {
         doneThrough('A', 'a', 'analysts'),
         doneThrough('B', 'b', 'debate'),
         doneThrough('C', 'c', 'trader'),
-        doneThrough('D', 'd', 'invalidation'),
         doneThrough('E', 'e', 'risk'),
         doneThrough('F', 'f', 'verdict'),
         doneThrough('G', 'g', 'execution'),

@@ -119,16 +119,6 @@ describe('mission control', () => {
     expect(within(debateRoom as HTMLElement).getByText('live')).toBeTruthy();
   });
 
-  it('draws room 04 lights-off from the data, with its reason', async () => {
-    renderApp([makeSnapshot({ pipeline: theaterView() })]);
-
-    const room = (await screen.findByRole('heading', { name: 'Invalidation' })).closest(
-      '[data-room="invalidation"]',
-    );
-    expect(room?.classList.contains('room-lights-off')).toBe(true);
-    expect(screen.getByText(/specced and not built/i)).toBeTruthy();
-  });
-
   it('stamps a settled lane into the ledger once, and never again on a re-poll', async () => {
     const settled = doneThrough('ETH-USD', 'trace-eth', 'execution', { outcome: 'go' });
     const first = makeSnapshot({ pipeline: makeView([settled]) });
@@ -184,14 +174,12 @@ describe('mission control', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /QQQ, stocks, stopped/ }));
     // The reserved invalidation section, named rather than rendered blank.
-    expect(
-      within(drawer).getByText(/the invalidation stage is specced and not built/i),
-    ).toBeTruthy();
+    expect(within(drawer).getByText(/declined 2026-09-02/i)).toBeTruthy();
     // Trader and Risk persist no decision content — #328, spelled out.
     expect(within(drawer).getAllByText(/not persisted \(#328\)/i).length).toBeGreaterThan(0);
     // A debate that never completed says so, rather than spinning forever.
     expect(within(drawer).getByText(/no completed debate recorded/i)).toBeTruthy();
-    // The stage strip lists all seven stages, including the never-reached ones.
+    // The stage strip lists all six stages, including the never-reached ones.
     expect(within(drawer).getAllByText('not reached').length).toBeGreaterThan(0);
   });
 
