@@ -136,15 +136,17 @@ export const DEFAULT_VENUE_PACING: VenuePacingConfig = {
    * simply running the broker at 45% of the ceiling — headroom a consumer
    * that could exceed it freely was expected to respect.
    *
-   * **`refillPerSecond: 2.5` — SUSTAINED, CEILING VERIFIED / RATE UNVERIFIED.**
-   * RE-DERIVED, not inherited (#391's fourth criterion): with both consumers
-   * inside the budget there is no unpaced third party to leave 55% for, so
-   * the split is now a deliberate 75% of the documented 200 req/min = 3.33/s
-   * ceiling — 2.5/s = 150/min. The remaining 25% is margin for what this
-   * bucket still does NOT pace: `withRetry`'s own retry attempts, and any
-   * future consumer on the same key. This is an OPERATING rate under a
-   * verified ceiling, not a figure Alpaca publishes — it has not been
-   * measured against a real account under load.
+   * **SUSTAINED, CEILING VERIFIED / RATE UNVERIFIED.** RE-DERIVED, not
+   * inherited (#391's fourth criterion): with both consumers inside the budget
+   * there is no unpaced third party to leave 55% for, so the split was set as a
+   * deliberate 75% of the documented 200 req/min = 3.33/s ceiling — `2.5/s =
+   * 150/min` — with the remaining 25% as margin for what this bucket still does
+   * NOT pace (`withRetry`'s own retry attempts, and any future consumer on the
+   * same key). This is an OPERATING rate under a verified ceiling, not a figure
+   * Alpaca publishes; it has not been measured against a real account under
+   * load. **The rate is now `2.0`, and the 75% posture is now 80% — see
+   * `refillPerSecond` below for why the 20-instrument universe forced that
+   * trade and why it is the better half of it.**
    *
    * **`capacity: 41` — BURST, and NO PUBLISHED ALPACA BURST LIMIT COULD BE
    * ESTABLISHED.** Alpaca's own support page states only "200 requests per
@@ -171,20 +173,45 @@ export const DEFAULT_VENUE_PACING: VenuePacingConfig = {
    * margin is now thin by construction: it is the reason `capacity` is derived
    * from the universe rather than rounded up casually.
    *
-   * **`refillPerSecond: 1.8` — LOWERED FROM 2.5 BY THE CAPACITY RAISE, not an
-   * independent retune.** The 75%-of-ceiling budget above is a claim about
-   * what this bucket can spend against a documented 200 req/min, and a token
-   * bucket's worst first minute is `capacity + 60 x refillPerSecond`, not the
-   * refill alone. At the old pair that was `14 + 150 = 164/min` (82%); holding
-   * `refillPerSecond` at 2.5 while raising capacity to 41 would have made it
-   * `191/min` — 96% of a ceiling this module deliberately stays a quarter clear
-   * of, and the burst raise would have quietly eaten the sustained margin it
-   * was never scoped to touch. `1.8/s` restores it: `41 + 108 = 149/min`, i.e.
-   * ~75%, the same posture the original split states. Steady state is
-   * unaffected — one `tickIntervalMs` (2 min) needs ~45 calls across both
-   * consumers, ~0.4/s, far under 1.8. What genuinely slows is bulk historical
-   * backfill (`yarn backfill-market-data`), by ~28%; that is an offline tool
-   * and not a reason to spend live-path margin.
+   * **`refillPerSecond: 2.0` — LOWERED FROM 2.5 BY THE CAPACITY RAISE, and set
+   * against MEASURED steady-state demand rather than against the ceiling
+   * alone.** Two facts collide here and the number is the compromise, so both
+   * are stated rather than one being quietly dropped:
+   *
+   * - **Ceiling side.** A token bucket's worst first minute is
+   *   `capacity + 60 x refillPerSecond`, not the refill alone. At the old pair
+   *   that was `14 + 150 = 164/min` (82% of the documented 200). Holding 2.5
+   *   while raising capacity to 41 would have made it `191/min` — 96%, and the
+   *   burst raise would have quietly eaten sustained margin it was never scoped
+   *   to touch.
+   * - **Demand side.** The dominant consumer is NOT the tick. `fetchNewFills`
+   *   (alpaca-adapter.ts) issues one `getOrder` per tracked bracket on EVERY
+   *   fill poll, and that poll runs on `DEFAULT_FILL_POLL_INTERVAL_MS`
+   *   (15_000), independently of `tickIntervalMs`. At 20 open brackets — a
+   *   reachable paper state, since the caps are 5%/10% of ~$100k equity — that
+   *   alone is `20 / 15s = 1.33 tok/s` sustained, before the bar sweep
+   *   (`20 / 120s = 0.17`) and submits (~0.05). Call it **~1.55 tok/s**.
+   *
+   * So `1.8` — the value the "restore exactly 75%" arithmetic suggests — leaves
+   * only ~14% headroom over real demand, and the failure it invites is the same
+   * silent trade-loss this universe widening exists to avoid, arriving by a
+   * different door: bar fetches starve behind the 20-token priority reserve,
+   * `withRetry` backs off, marks go stale, and Verdict refuses on
+   * `max_mark_age`. `2.0` gives ~29% headroom at `41 + 120 = 161/min`, i.e. 80%
+   * of the ceiling rather than 75%.
+   *
+   * **That 75% -> 80% is a deliberate, named regression, not an oversight.** At
+   * 20 instruments on ONE shared bucket the two postures cannot both hold with
+   * `capacity` pinned at 41 by the universe-derived test above; spending 5
+   * points of ceiling margin to buy sustained headroom is the better half of
+   * that trade, because exceeding a burst allowance returns 429 (which
+   * `withRetry` handles) while starving the mark path loses trades silently.
+   * Revisit BOTH numbers together if the universe widens again — they are one
+   * decision, not two.
+   *
+   * What genuinely slows against the old 2.5 is bulk historical backfill
+   * (`yarn backfill-market-data`), by ~20%; that is an offline tool and not a
+   * reason to spend live-path margin.
    *
    * Why an unverified burst is an acceptable risk where an unverified
    * SUSTAINED rate would not be: exceeding a burst allowance returns 429,
@@ -196,7 +223,7 @@ export const DEFAULT_VENUE_PACING: VenuePacingConfig = {
    * paper host is the one the soak uses; nothing was found that documents a
    * separate paper allowance, so the same ceiling is applied to both.
    */
-  alpaca: { capacity: 41, refillPerSecond: 1.8, reserveForPriority: 20 },
+  alpaca: { capacity: 41, refillPerSecond: 2.0, reserveForPriority: 20 },
   /**
    * UNVERIFIED, and kept conservative on purpose.
    *
