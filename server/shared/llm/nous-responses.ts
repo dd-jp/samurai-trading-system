@@ -142,10 +142,24 @@ export interface NousResponsesOptions {
   timeoutMs?: number;
   signal?: AbortSignal | undefined;
   /**
-   * Ceiling for `server_tool_calls`. The caller's own
-   * `max_search_results` — see that field's doc comment for why the count is
-   * bounded rather than reported. Omitted means unbounded, which is only
-   * correct for a tool with no result cap.
+   * Ceiling on the CITATION-DERIVED ESTIMATE of `server_tool_calls` — not a
+   * limit on tool calls, and not a cap on the reported count.
+   *
+   * Pass the caller's own `max_search_results`. The estimate exists because a
+   * provider that reports no call items would otherwise bill zero, and it
+   * needs this bound because one call returns up to `max_search_results`
+   * citations — unclamped, N results would read as N calls.
+   *
+   * It does NOT bound what the provider says it did. If the response reports
+   * more `*_call` items than this, that is a fact about what will be billed
+   * and the higher number is used (review round 2, #1055 — an earlier version
+   * of this comment called it a plain ceiling while the code let reported
+   * calls exceed it, which was the docs being wrong rather than the code).
+   * Nothing here limits the provider; only `max_search_results` on the request
+   * does that.
+   *
+   * Omitted means the estimate is unbounded, which is only correct for a tool
+   * with no result cap.
    */
   maxServerToolCalls?: number | undefined;
 }
@@ -377,22 +391,31 @@ export async function nousResponses(
 
   const citations = extractCitations(parsed);
 
-  // Nous's `usage` block carries TOKENS ONLY — no search count — so this is an
-  // estimate, and the direction it errs in is the whole point: a spend cap fed
-  // an under-count is not a cap.
+  // Nous's `usage` block carries TOKENS ONLY — no search count — so part of
+  // this is an estimate, and the direction it errs in is the whole point: a
+  // spend cap fed an under-count is not a cap.
   //
-  // Citations alone under-count in one specific case, which is why they are
-  // not used alone: a search that RAN and returned nothing has zero citations
-  // and would bill zero, even though the provider charges per call. So the
-  // estimate takes the larger of (a) the number of server-tool-call items the
-  // provider reported in `output`, and (b) the citation count — which keeps
-  // the deliberate over-charge when many citations come back from one call,
-  // and adds a floor of the real call count when few or none do.
+  // Two sources, and they are NOT the same kind of thing (review round 2,
+  // #1055 — the earlier code blurred them and its clamp contradicted its own
+  // docs):
+  //
+  // - `countServerToolCalls` is a REPORTED FACT. The provider says it made
+  //   these calls, so it will bill for them, and `maxServerToolCalls` cannot
+  //   make that untrue. It is never clamped.
+  // - `citations.length` is an ESTIMATE, used because a provider that does not
+  //   report call items would otherwise bill zero — including for the case
+  //   that matters most, a search that RAN and returned nothing. This one IS
+  //   clamped by `maxServerToolCalls`, which is what that option was always
+  //   for: one call returns up to `max_search_results` citations, so an
+  //   unclamped citation count reads N results as N calls.
+  //
+  // Taking the max keeps the deliberate over-charge when many citations come
+  // back from one call, and keeps the floor when few or none do.
   const toolCalls = countServerToolCalls(parsed);
-  const estimated = Math.max(toolCalls, citations.length);
   const ceiling = options.maxServerToolCalls;
-  const server_tool_calls =
-    ceiling === undefined ? estimated : Math.min(estimated, Math.max(ceiling, toolCalls));
+  const estimatedFromCitations =
+    ceiling === undefined ? citations.length : Math.min(citations.length, ceiling);
+  const server_tool_calls = Math.max(toolCalls, estimatedFromCitations);
 
   return {
     text: extractText(parsed),

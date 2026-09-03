@@ -249,6 +249,35 @@ describe('XSearchClient', () => {
     expect(result.server_tool_calls).toBe(2);
   });
 
+  it('bills what the provider REPORTS, even above the caller ceiling', async () => {
+    // Review round 2 (#1055). `maxServerToolCalls` bounds the citation-derived
+    // ESTIMATE — one call returns up to `max_search_results` citations, so an
+    // unclamped citation count would read N results as N calls. It does not
+    // bound what the provider says it did: reported `*_call` items are a fact
+    // about what will be billed, and a ceiling cannot make that untrue.
+    // Clamping them would under-count, and a cap fed an under-count is not a
+    // cap.
+    stubFetch({
+      ...responsesBody({ citations: [FRESH_URL] }),
+      output: [
+        { type: 'x_search_call' },
+        { type: 'x_search_call' },
+        { type: 'x_search_call' },
+        {
+          type: 'message',
+          content: [{ type: 'output_text', text: '{"items":[]}', annotations: [] }],
+        },
+      ],
+    });
+
+    const result = await new XSearchClient({ ...OPTIONS, maxSearchResults: 1 }).fetchSentiment(
+      'TSLA',
+      AS_OF,
+    );
+
+    expect(result.server_tool_calls).toBe(3);
+  });
+
   it('subtracts cached tokens out of the metered input count', async () => {
     stubFetch({
       ...responsesBody(),

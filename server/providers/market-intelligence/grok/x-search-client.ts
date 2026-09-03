@@ -273,6 +273,13 @@ export class XSearchClient implements GrokSentimentClient {
         apiKey: this.#apiKey,
         baseUrl: this.#baseUrl,
         timeoutMs: this.#timeoutMs,
+        // Bounds the citation-derived ESTIMATE, not the number of searches
+        // (review round 2, #1055). One `x_search` call returns up to
+        // `max_search_results` citations, so this is the right bound for
+        // "N citations came back, how many calls was that at most?" — it is
+        // not a 10x10 multiplier, and it does not authorise anything. If the
+        // model issues several searches the provider reports them and the
+        // reported count wins, which is the only number that matches the bill.
         maxServerToolCalls: this.#maxSearchResults,
       },
       {

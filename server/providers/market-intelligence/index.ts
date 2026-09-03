@@ -117,10 +117,26 @@ export class MarketIntelligenceStore {
     // makes cross-call identity meaningful. `mi-sources.ts` names this same
     // missing dedupe as the mechanism that would compound a boot replay, so
     // this is also what makes `hydrate` safe for an item-writing source.
+    //
+    // The key is (asset_class, entity, id), NOT the id alone (review round 2,
+    // #1055). This store is shared across the whole universe, and an X status
+    // id carries no entity — so a post that mentions two names in the universe
+    // is retrieved once as evidence for each, and an id-only key would admit
+    // it for whichever instrument was ingested first and silently drop it for
+    // the second. That is a real loss, not a duplicate avoided: the two are
+    // different observations about different instruments that happen to share
+    // a source post, and the analyst reads them per entity.
+    //
+    // What the key still catches is the case it was added for — the SAME post
+    // for the SAME instrument arriving again in the next bucket, because
+    // `x_search`'s date filter is day-granular while the bucket is two hours.
+    // Widening the key does not weaken that, because both components are
+    // constant across those repeats.
     const admitted: IntelligenceItem[] = [];
     for (const item of intelligence.items) {
-      if (this.ingestedIds.has(item.id)) continue;
-      this.ingestedIds.add(item.id);
+      const key = `${intelligence.asset_class}\u0000${item.entity}\u0000${item.id}`;
+      if (this.ingestedIds.has(key)) continue;
+      this.ingestedIds.add(key);
       this.stored.push({ asset_class: intelligence.asset_class, item });
       admitted.push(item);
     }
