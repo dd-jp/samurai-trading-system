@@ -22,13 +22,8 @@
 
 import type { SharedStore as Db } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
-import type {
-  DroppedCondition,
-  EvaluatedCondition,
-  RiskCriticLog,
-  RiskCriticStore,
-  RiskCriticVerdict,
-} from './types.js';
+import { readPersistedConditions, readPersistedDroppedConditions } from './invalidation.js';
+import type { RiskCriticLog, RiskCriticStore, RiskCriticVerdict } from './types.js';
 
 export class InMemoryRiskCriticStore implements RiskCriticStore {
   readonly #rows = new Map<string, RiskCriticLog>();
@@ -55,18 +50,29 @@ interface RiskCriticRow {
 }
 
 /**
- * NULL, unreadable JSON and a non-array payload all collapse to `undefined`
- * (#997 Q3 / Q2a): the verdict then carries no `conditions`, which the whole
- * pipeline reads as `no_conditions`. A pre-fold row and a corrupted column are
- * the same fact — "nothing checkable came out" — and neither may throw on the
- * replay path, because a backtest spanning the fold date must keep running and
- * reach the decision the live run reached.
+ * NULL, unreadable JSON, a non-array payload AND a payload whose elements do
+ * not have the persisted shape all collapse to `undefined` (#997 Q3 / Q2a):
+ * the verdict then carries no `conditions`, which the whole pipeline reads as
+ * `no_conditions`.
+ *
+ * The element check is what makes this safe, not decoration. A cast would let
+ * `[{}]` throw inside `evaluate()` on the replay path, and let
+ * `[{"state":"breached"}]` hard-reject a trade with nothing measured behind
+ * it — the storage layer handing a model-shaped assertion the authority the
+ * types deny it. `invalidation.ts` owns that check, because it owns the shape.
+ *
+ * A pre-fold row and a corrupted column are the same fact — "nothing checkable
+ * came out" — and neither may throw on the replay path, because a backtest
+ * spanning the fold date must keep running and reach the decision the live run
+ * reached.
  */
-function readJsonList<T>(stored: string | null): T[] | undefined {
+function readJsonList<T>(
+  stored: string | null,
+  read: (parsed: unknown) => T[] | undefined,
+): T[] | undefined {
   if (stored === null) return undefined;
   try {
-    const parsed: unknown = JSON.parse(stored);
-    return Array.isArray(parsed) ? (parsed as T[]) : undefined;
+    return read(JSON.parse(stored));
   } catch {
     return undefined;
   }
@@ -110,8 +116,8 @@ export class SqliteRiskCriticStore implements RiskCriticStore {
       .get(debate_id) as RiskCriticRow | undefined;
     if (row === undefined) return undefined;
 
-    const conditions = readJsonList<EvaluatedCondition>(row.conditions_json);
-    const dropped = readJsonList<DroppedCondition>(row.dropped_conditions_json);
+    const conditions = readJsonList(row.conditions_json, readPersistedConditions);
+    const dropped = readJsonList(row.dropped_conditions_json, readPersistedDroppedConditions);
     return {
       debate_id: row.debate_id,
       verdict: {

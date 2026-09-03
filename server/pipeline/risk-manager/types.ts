@@ -484,10 +484,13 @@ export type InvalidationObservable =
  * No severity, weight or confidence, by spec: nothing model-assigned may reach
  * sizing or enforcement.
  */
+/** The only comparators a condition may use. Declared once here; `invalidation.ts` validates against this same union. */
+export type InvalidationComparator = '<' | '<=' | '>' | '>=';
+
 export interface InvalidationCondition {
   id: string;
   observable: InvalidationObservable;
-  comparator: '<' | '<=' | '>' | '>=';
+  comparator: InvalidationComparator;
   threshold: number;
   /** Why this falsifies the thesis. Free text, audit only — never machine-read. */
   rationale: string;
@@ -556,7 +559,9 @@ export interface RiskCriticVerdict {
    * half was unreadable, or the row was written before the fold and has no
    * such field at all (#997 Q3). All four report identically and enforce
    * nothing, so there is exactly one "nothing checkable came out" branch and a
-   * pre-fold row replays to a byte-identical `RiskDecision`.
+   * pre-fold row replays to the same decision it always reached — same status,
+   * size and `binding_constraint`, plus the one `no_conditions` reason line
+   * that says the checklist enforced nothing.
    *
    * A malformed conditions half NEVER voids the prose verdict (#997 Q2a):
    * discarding a valid `reject` because the advisory half was garbage would

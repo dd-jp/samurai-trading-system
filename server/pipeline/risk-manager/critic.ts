@@ -17,9 +17,8 @@
  *
  * ## What it is for
  *
- * TWO things since the 2026-09-03 invalidation fold (#994) — the scope line
- * here read "narrative/qualitative risk ONLY" until then, and that boundary is
- * false now that conditions ride the same verdict:
+ * TWO things, and they ride ONE verdict (the 2026-09-03 invalidation fold,
+ * #994):
  *
  * 1. **Narrative/qualitative risk** — the thing the six mechanical steps
  *    structurally cannot express (ADR-0003 §1, #955's resolution). Position
@@ -96,7 +95,12 @@ import type { Logger, OrderIntent } from '../../shared/index.js';
 import type { LlmClient, SpendCap } from '../debate-engine/index.js';
 import { BARE_JSON_INSTRUCTION, unwrapFencedJson, wrapUntrusted } from '../debate-engine/index.js';
 import { evaluateConditions, validateConditions } from './invalidation.js';
-import type { RiskCriticStore, RiskCriticVerdict } from './types.js';
+import type {
+  DroppedCondition,
+  EvaluatedCondition,
+  RiskCriticStore,
+  RiskCriticVerdict,
+} from './types.js';
 
 /**
  * The whole critic's wall-clock budget, retries included.
@@ -395,6 +399,31 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.#budgetMs);
+    // The budget spans BOTH halves: the model call, and the market-data reads
+    // the conditions half runs in front of the same order.
+    try {
+      return await this.#produceWithin(request, controller);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * The two halves, in two SEPARATE failure domains.
+   *
+   * The conditions step is deliberately outside the LLM `try`: while it lived
+   * inside it, an unexpected throw from the conditions half — including one
+   * from its own catch body — landed in the LLM catch and returned
+   * `unavailable`, voiding a prose verdict that had already parsed. #997 Q2a
+   * says the prose verdict survives ANY conditions failure, so nothing after
+   * the parse may reach that catch.
+   */
+  async #produceWithin(
+    request: RiskCriticRequest,
+    controller: AbortController,
+  ): Promise<RiskCriticVerdict | undefined> {
+    const debate_id = request.intent.metadata.debate_id;
+    let parsed: ParsedCriticResponse;
     try {
       const response = await Promise.race([
         this.#llm.complete({
@@ -412,7 +441,7 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
         }),
         this.#expiry(controller.signal),
       ]);
-      return this.#record(request, await this.#withConditions(request, response.data));
+      parsed = response.data;
     } catch (error) {
       // EVERY failure lands here and fails open: provider error, cancellation
       // on the budget above, or a response that could not be read.
@@ -426,9 +455,9 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
         payload: { instrument: request.intent.instrument, debate_id, error: describeThrown(error) },
       });
       return this.#record(request, unavailable(describeThrown(error)));
-    } finally {
-      clearTimeout(timer);
     }
+
+    return this.#record(request, await this.#withConditions(request, parsed, controller.signal));
   }
 
   /**
@@ -451,6 +480,7 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
   async #withConditions(
     request: RiskCriticRequest,
     parsed: ParsedCriticResponse,
+    signal: AbortSignal,
   ): Promise<RiskCriticVerdict> {
     try {
       const { accepted, dropped } = validateConditions(parsed.raw_conditions, request.intent.side);
@@ -459,19 +489,63 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
         instrument: request.intent.instrument,
         marketData: this.#marketData,
         asOf: request.asOf,
+        signal,
       });
+      this.#reportThinEmission(request, conditions, dropped);
       return { ...parsed.verdict, conditions, dropped_conditions: dropped };
     } catch (error) {
+      this.#warn(
+        request,
+        'risk critic invalidation conditions could not be evaluated; the PROSE verdict ' +
+          'stands with full authority and the conditions report no_conditions',
+        { instrument: request.intent.instrument, error: describeThrown(error) },
+      );
+      return { ...parsed.verdict, conditions: [], dropped_conditions: [] };
+    }
+  }
+
+  /**
+   * Makes a thin or refused emission audible AT PRODUCTION TIME, not only in
+   * the `risk_log` reason lines one layer down.
+   *
+   * `risk-manager-spec.md` promises drops and `no_conditions` are surfaced;
+   * a reason line alone is surfaced only to whoever queries that row. A
+   * systematically malformed prompt otherwise degrades into "conditions never
+   * fire" and hides — the exact failure `devils-advocate-spec.md` user story
+   * 23 names.
+   */
+  #reportThinEmission(
+    request: RiskCriticRequest,
+    conditions: readonly EvaluatedCondition[],
+    dropped: readonly DroppedCondition[],
+  ): void {
+    if (dropped.length === 0 && conditions.length > 0) return;
+    this.#warn(
+      request,
+      conditions.length === 0
+        ? 'risk critic emitted NO checkable invalidation condition; the prose verdict stands ' +
+            'alone and conditions enforce nothing (no_conditions)'
+        : 'risk critic emitted invalidation conditions the validator refused in part',
+      {
+        instrument: request.intent.instrument,
+        accepted: conditions.length,
+        dropped: dropped.map((entry) => ({ id: entry.id, reason: entry.reason })),
+      },
+    );
+  }
+
+  /** Logging must never be the thing that voids a verdict — see `#produceWithin`. */
+  #warn(request: RiskCriticRequest, message: string, payload: Record<string, unknown>): void {
+    try {
       this.#logger?.log({
         trace_id: request.trace_id,
         stage: 'risk',
         level: 'warn',
-        message:
-          'risk critic invalidation conditions could not be evaluated; the PROSE verdict ' +
-          'stands with full authority and the conditions report no_conditions',
-        payload: { instrument: request.intent.instrument, error: describeThrown(error) },
+        message,
+        payload,
       });
-      return { ...parsed.verdict, conditions: [], dropped_conditions: [] };
+    } catch {
+      // A logger that throws is not a reason to lose a parsed verdict.
     }
   }
 
@@ -589,8 +663,8 @@ export interface BuildRiskCriticProducerOptions extends LlmRiskCriticProducerOpt
  * Mode branch, in ONE place: `backtest` gets a producer with no LLM client at
  * all — and no `MarketDataService` either. The replay producer re-measures
  * nothing; it replays the `EvaluatedCondition[]` persisted beside the verdict,
- * which is what makes a replayed decision byte-identical to the live one and
- * keeps the "this producer cannot reach a live dependency" property structural
+ * which is what makes a replayed decision identical to the live one in status,
+ * size and `binding_constraint`, and keeps the "this producer cannot reach a live dependency" property structural
  * rather than a runtime check (`risk-manager-spec.md`, "the invalidation fold").
  */
 export function buildRiskCriticProducer(

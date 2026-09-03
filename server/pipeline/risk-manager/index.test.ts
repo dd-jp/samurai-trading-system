@@ -1110,25 +1110,39 @@ describe('RiskManagerImpl.evaluate — invalidation conditions (#994, per #997)'
     expect(decision.reasons.some((reason) => reason.includes('unknown_observable'))).toBe(true);
   });
 
-  it('replays a PRE-FOLD verdict — no `conditions` field at all — identically to before the fold', () => {
-    // #997 Q3's acceptance criterion. `RiskCriticLog` persists the whole
-    // verdict and rows written before the fold lack the field; the reader must
-    // treat absence as `no_conditions`, never crash and never reject.
+  it('replays a PRE-FOLD verdict — no `conditions` field — to the same DECISION, plus one reason line', () => {
+    // #997 Q3's acceptance criterion, stated precisely. The comparison that
+    // matters is against the decision the code made BEFORE the fold existed,
+    // not against a post-fold sibling — two post-fold inputs agreeing proves
+    // only that absence and emptiness share a code path.
+    //
+    // So: frozen expectations. Status, size and binding constraint are
+    // UNCHANGED, which is what a backtest spanning the fold date depends on.
+    // `reasons` gains exactly one line — `no_conditions` — and that addition
+    // is deliberate: a replayed row that enforces nothing must say so rather
+    // than look like a checked one.
     const preFold: RiskCriticVerdict = {
       verdict: 'pass',
       max_notional: null,
       reasoning: 'nothing narrative',
     };
-    const withEmpty: RiskCriticVerdict = { ...preFold, conditions: [], dropped_conditions: [] };
 
-    const before = new RiskManagerImpl(makeConfig()).evaluate(makeInput({ critic: preFold }));
-    const after = new RiskManagerImpl(makeConfig()).evaluate(makeInput({ critic: withEmpty }));
+    const decision = new RiskManagerImpl(makeConfig()).evaluate(makeInput({ critic: preFold }));
 
-    expect(before.status).toBe('approved');
-    expect(before.reasons).toContain(NO_CONDITIONS_REASON);
-    // Byte-identical: absence and emptiness are ONE code path, so a backtest
-    // spanning the fold date reaches the same decision either side of it.
-    expect(before).toEqual(after);
+    const preFoldReasons = decision.reasons.filter((reason) => reason !== NO_CONDITIONS_REASON);
+    expect(decision.status).toBe('approved');
+    // Frozen: the decision this input produced BEFORE the fold shipped —
+    // untrimmed, unconstrained, and with no reason line of its own.
+    expect(decision.binding_constraint).toBeNull();
+    expect(decision.modifications).toEqual({
+      original_size: 100,
+      final_size: 100,
+      stop_tightened: false,
+    });
+    expect(decision.order_intent?.size).toBe(makeInput().intent.size);
+    // Exactly one line is added, and it is the `no_conditions` one.
+    expect(decision.reasons).toEqual([NO_CONDITIONS_REASON]);
+    expect(preFoldReasons).toEqual([]);
   });
 });
 

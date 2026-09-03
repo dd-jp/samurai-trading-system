@@ -348,16 +348,22 @@ function healthyFillSync(
 }
 
 /**
- * What `runRiskCriticScenario` (#957) reports when the composition root wires
- * check-pipeline step 7's producer.
+ * What `runRiskCriticScenario` reports when the composition root wires
+ * check-pipeline step 7's producer (#957) AND the invalidation half measures
+ * the fixture feed (#994).
  *
- * `unavailable` rather than a real verdict, matching what the scenario
- * actually records: `ConstantResponseLlmClient` answers with the debate's
- * fixture payload, which the critic's parser refuses, so the producer fails
- * open and persists the failure. The row is the evidence, not its content.
+ * A `pass` verdict carrying one condition the evaluator measured as
+ * `breached`, which `evaluate()` then rejects under `risk_critic:invalidated`
+ * — the outcome `SmokeLlmClient`'s fixture pins deterministically.
  */
 function healthyRiskCritic(overrides: Partial<RiskCriticEvidence> = {}): RiskCriticEvidence {
-  return { loggedVerdicts: ['unavailable'], stepError: null, ...overrides };
+  return {
+    loggedVerdicts: ['pass'],
+    stepError: null,
+    conditionStates: ['breached'],
+    bindingConstraint: 'risk_critic:invalidated',
+    ...overrides,
+  };
 }
 
 /** What `runDataFailoverScenario` (#562) reports when the root builds a FailoverDataSource. */

@@ -2966,12 +2966,70 @@ async function runDataFailoverScenario(logger: Logger): Promise<DataFailoverEvid
   }
 }
 
-/** What `evaluateSmokeGate` needs from the risk-critic scenario (#957). */
+/** What `evaluateSmokeGate` needs from the risk-critic scenario (#957, extended by the invalidation fold #994). */
 export interface RiskCriticEvidence {
   /** `risk_critic_log.verdict` values the run's own composition root wrote, in insertion order. */
   loggedVerdicts: readonly string[];
   /** The step's throw, if consulting the critic took the risk stage down instead of failing open. */
   stepError: string | null;
+  /** `state` of every persisted invalidation condition — MEASURED by `invalidation.ts`, never asserted by the model (#994). */
+  conditionStates: readonly string[];
+  /** The decision's `binding_constraint`. `risk_critic:invalidated` is the fold's own enforcement path. */
+  bindingConstraint: string | null;
+}
+
+/**
+ * The one LLM double in the smoke process, answering BOTH call sites (#994).
+ *
+ * The shared debate fixture does not satisfy the critic's parser, so before
+ * the fold the critic could only ever be observed failing open. That is enough
+ * to prove the producer is wired, and NOT enough to prove the invalidation
+ * half runs: a conditions block that is never emitted is measured by nothing,
+ * and "conditions never fire" is precisely this repo's dominant defect shape.
+ *
+ * So this client branches on the attribution stage the producer already sets
+ * for metering, and hands the critic call one well-formed condition whose
+ * outcome is FIXED BY THE FIXTURE: the mark is `SMOKE_MARK_PRICE`, the
+ * threshold sits one unit above it, and `<` on a `buy` is the coherent
+ * direction — so a correctly wired evaluator must measure `breached`, and
+ * `evaluate()` must reject under its own constraint. Nothing here asserts a
+ * state; the state is measured from the same fixture feed the rest of the run
+ * uses.
+ */
+export class SmokeLlmClient implements LlmClient {
+  readonly #debate = new ConstantResponseLlmClient();
+
+  get calls(): number {
+    return this.#debate.calls;
+  }
+
+  async complete<T>(request: LlmRequest<T>): Promise<LlmResponse<T>> {
+    if (request.context.attribution?.stage !== 'risk_critic') {
+      return this.#debate.complete(request);
+    }
+    const rawText = JSON.stringify({
+      verdict: 'pass',
+      max_notional: null,
+      reasoning: 'smoke fixture: no narrative risk, one falsifying condition',
+      conditions: [
+        {
+          id: 'smoke-thesis-needs-price-above-threshold',
+          observable: { kind: 'mark' },
+          comparator: '<',
+          threshold: SMOKE_MARK_PRICE + 1,
+          rationale: 'below this the breakout that justified the entry has already failed',
+        },
+      ],
+    });
+    const parsed = request.parseResponse(rawText);
+    if (!parsed.valid) {
+      throw new Error(
+        `SmokeLlmClient: the critic fixture no longer satisfies the critic parser ` +
+          `(${parsed.reason}) — the stub payload and the critic schema have drifted apart.`,
+      );
+    }
+    return { data: parsed.data, raw_text: rawText, latency_ms: 0 };
+  }
 }
 
 /**
@@ -3021,7 +3079,7 @@ async function runRiskCriticScenario(logger: Logger): Promise<RiskCriticEvidence
       miArchive: new MiArchiveStore(),
       accountState: new FixedAccountStateProvider(),
       alpacaBrokerClient: new UnreachableAlpacaClient(),
-      llmClient: new ConstantResponseLlmClient(),
+      llmClient: new SmokeLlmClient(),
     });
 
     // A viable ENTRY — the population #955's cadence names. An exit would
@@ -3040,19 +3098,42 @@ async function runRiskCriticScenario(logger: Logger): Promise<RiskCriticEvidence
     );
 
     let stepError: string | null = null;
+    let bindingConstraint: string | null = null;
     try {
-      await components.steps.risk({ trace_id: 'smoke-risk-critic', intent, clock });
+      const decision = await components.steps.risk({
+        trace_id: 'smoke-risk-critic',
+        intent,
+        clock,
+      });
+      bindingConstraint = decision.binding_constraint;
     } catch (error) {
       stepError = error instanceof Error ? error.message : String(error);
     }
 
-    const logged = db.prepare('SELECT verdict FROM risk_critic_log ORDER BY rowid').all() as {
-      verdict: string;
-    }[];
+    const logged = db
+      .prepare('SELECT verdict, conditions_json FROM risk_critic_log ORDER BY rowid')
+      .all() as { verdict: string; conditions_json: string | null }[];
 
-    return { loggedVerdicts: logged.map((row) => row.verdict), stepError };
+    return {
+      loggedVerdicts: logged.map((row) => row.verdict),
+      stepError,
+      conditionStates: logged.flatMap((row) => readSmokeConditionStates(row.conditions_json)),
+      bindingConstraint,
+    };
   } finally {
     db.close();
+  }
+}
+
+/** Reads persisted condition states for the gate, tolerating a NULL or unreadable column exactly as the replay path does. */
+function readSmokeConditionStates(stored: string | null): string[] {
+  if (stored === null) return [];
+  try {
+    const parsed: unknown = JSON.parse(stored);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((entry) => String((entry as { state?: unknown }).state));
+  } catch {
+    return [];
   }
 }
 
@@ -3589,6 +3670,27 @@ export function evaluateSmokeGate(
         'risk_critic_log row was written — the critic producer is not wired at all, so ' +
         'check-pipeline step 7 is back to the never-run state review F-5 recorded, and every ' +
         'decision silently records risk_critic: skipped while looking healthy (#957)',
+    );
+  }
+
+  // #994: the fold's own enforcement assertion. The fixture pins the outcome
+  // — a mark of SMOKE_MARK_PRICE against a threshold one unit above it — so a
+  // measured `breached` and the reject that follows are the ONLY correct
+  // result. Delete the `marketData:` line from `buildRiskCriticProducer`, or
+  // the `breachedConditions` block from `evaluate()`, and this fails.
+  if (!critic.conditionStates.includes('breached')) {
+    failures.push(
+      'the risk critic emitted a well-formed invalidation condition and no persisted ' +
+        `condition measured \`breached\` (states: ${JSON.stringify(critic.conditionStates)}) — ` +
+        'the deterministic evaluator did not run over the fixture feed, so the typed ' +
+        'invalidation half is emitted and measured by nothing (#994)',
+    );
+  } else if (critic.bindingConstraint !== 'risk_critic:invalidated') {
+    failures.push(
+      'a measured BREACHED invalidation condition did not reject the intent (binding ' +
+        `constraint: ${critic.bindingConstraint ?? 'none'}) — \`evaluate()\` holds that ` +
+        'authority (#997 Q2b), so a breach that only gets logged is a checklist with no ' +
+        'teeth (#994)',
     );
   }
 

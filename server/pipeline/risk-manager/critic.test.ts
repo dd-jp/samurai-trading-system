@@ -35,6 +35,7 @@ import {
   renderCriticPrompt,
 } from './critic.js';
 import { InMemoryRiskCriticStore, SqliteRiskCriticStore } from './critic-store.js';
+import { breachedConditions, invalidationReasons, NO_CONDITIONS_REASON } from './invalidation.js';
 import type { RiskCriticVerdict } from './types.js';
 
 const NOW = new Date('2026-09-01T14:00:00.000Z');
@@ -666,6 +667,73 @@ describe('LlmRiskCriticProducer — the invalidation fold (#994)', () => {
     expect(verdict?.verdict).toBe('pass');
   });
 
+  it('keeps a prose REJECT even when the logger itself throws inside the conditions half', async () => {
+    // The failure domains are separate ON PURPOSE. While the conditions step
+    // ran inside the LLM `try`, a throw from its own reporting path landed in
+    // the LLM catch and returned `unavailable` — silently voiding a reject the
+    // model had already produced, which is the one outcome #997 Q2a forbids.
+    const { client } = fakeLlm(
+      JSON.stringify({
+        verdict: 'reject',
+        max_notional: null,
+        reasoning: 'the catalyst is already priced in',
+        conditions: [],
+      }),
+    );
+    const throwingLogger: Logger = {
+      log: () => {
+        throw new Error('log sink unreachable');
+      },
+    };
+
+    const verdict = await new LlmRiskCriticProducer({
+      llm: client,
+      store: new InMemoryRiskCriticStore(),
+      spendCap: UNCAPPED_SPEND,
+      marketData: stubMarketData(),
+      logger: throwingLogger,
+    }).produce(makeRequest());
+
+    expect(verdict?.verdict).toBe('reject');
+    expect(verdict?.conditions).toEqual([]);
+  });
+
+  it('warns when the emission is thin, so "conditions never fire" cannot hide', async () => {
+    const { client } = fakeLlm(conditionsAnswer([]));
+    const lines: string[] = [];
+
+    await new LlmRiskCriticProducer({
+      llm: client,
+      store: new InMemoryRiskCriticStore(),
+      spendCap: UNCAPPED_SPEND,
+      marketData: stubMarketData(),
+      logger: { log: (entry) => lines.push(`${entry.level}:${entry.message}`) },
+    }).produce(makeRequest());
+
+    expect(lines.some((line) => line.startsWith('warn:') && line.includes('no_conditions'))).toBe(
+      true,
+    );
+  });
+
+  it('stops measuring when the producer budget expires, reporting unevaluable rather than hanging', async () => {
+    // The budget spans BOTH halves. A market-data seam that never answers used
+    // to be an unbounded wait in front of an order the tick is waiting on: the
+    // AbortController cancelled the model call and nothing in the conditions
+    // half listened to it.
+    const { client } = fakeLlm(conditionsAnswer([markCondition()]));
+
+    const verdict = await new LlmRiskCriticProducer({
+      llm: client,
+      store: new InMemoryRiskCriticStore(),
+      spendCap: UNCAPPED_SPEND,
+      marketData: stubMarketData({ getMark: () => new Promise(() => {}) }),
+      budgetMs: 20,
+    }).produce(makeRequest());
+
+    expect(verdict?.verdict).toBe('pass');
+    expect(verdict?.conditions?.[0]?.state).toBe('unevaluable');
+  });
+
   it('replays the persisted conditions in backtest without measuring anything', async () => {
     const store = new InMemoryRiskCriticStore();
     const breached: RiskCriticVerdict = {
@@ -696,6 +764,13 @@ describe('LlmRiskCriticProducer — the invalidation fold (#994)', () => {
     expect(verdict).toEqual(breached);
   });
 });
+
+/** Reads the row back through the real store, failing loudly rather than casting an absent row into shape. */
+function readStoredVerdict(db: SharedStore): RiskCriticVerdict {
+  const logged = new SqliteRiskCriticStore(db).getByDebateId(DEBATE_ID);
+  if (logged === undefined) throw new Error('the test wrote no row for this debate');
+  return logged.verdict;
+}
 
 describe('SqliteRiskCriticStore', () => {
   let db: SharedStore;
@@ -780,6 +855,51 @@ describe('SqliteRiskCriticStore', () => {
     expect(
       new SqliteRiskCriticStore(db).getByDebateId(DEBATE_ID)?.verdict.conditions,
     ).toBeUndefined();
+  });
+
+  it.each([
+    ['an element with no fields at all', '[{}]'],
+    ['a bare model-shaped state assertion', '[{"state":"breached"}]'],
+    [
+      'a condition whose observable binds to nothing readable',
+      '[{"condition":{"id":"c","observable":{"kind":"tea_leaves"},"comparator":"<","threshold":1,"rationale":"r"},"state":"breached","observed":1}]',
+    ],
+    [
+      'a state outside the tri-state union',
+      '[{"condition":{"id":"c","observable":{"kind":"mark"},"comparator":"<","threshold":95,"rationale":"r"},"state":"very_breached","observed":1}]',
+    ],
+    [
+      'a breach with no measurement behind it',
+      '[{"condition":{"id":"c","observable":{"kind":"mark"},"comparator":"<","threshold":95,"rationale":"r"},"state":"breached","observed":null}]',
+    ],
+  ])('collapses a persisted conditions list containing %s to no_conditions, never a half-trusted breach', (_case, stored) => {
+    // The column is TEXT and its contents are whatever a past process — or a
+    // hand-edit — left there. A cast on read would let `[{}]` throw inside
+    // `evaluate()` and let a bare `{"state":"breached"}` hard-reject a trade
+    // with NOTHING measured behind it, handing the storage layer the
+    // authority the types deny the model.
+    db.prepare(
+      `INSERT INTO risk_critic_log
+           (debate_id, verdict, max_notional, reasoning, created_at, conditions_json)
+         VALUES (?, 'pass', NULL, 'prose stands', ?, ?)`,
+    ).run(DEBATE_ID, NOW.toISOString(), stored);
+
+    const verdict = readStoredVerdict(db);
+    expect(verdict.conditions).toBeUndefined();
+    expect(breachedConditions(verdict)).toEqual([]);
+    expect(invalidationReasons(verdict)).toContain(NO_CONDITIONS_REASON);
+  });
+
+  it('collapses a malformed DROPPED list too, rather than letting a reason line throw', () => {
+    db.prepare(
+      `INSERT INTO risk_critic_log
+         (debate_id, verdict, max_notional, reasoning, created_at, dropped_conditions_json)
+       VALUES (?, 'pass', NULL, 'prose stands', ?, '[{"reason":"nonsense"}]')`,
+    ).run(DEBATE_ID, NOW.toISOString());
+
+    const verdict = readStoredVerdict(db);
+    expect(verdict.dropped_conditions).toBeUndefined();
+    expect(() => invalidationReasons(verdict)).not.toThrow();
   });
 
   it('keeps the FIRST verdict for a debate — the one a replay will see', () => {

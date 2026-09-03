@@ -377,9 +377,9 @@ export class RiskManagerImpl implements RiskManager {
     if (critic) {
       // The invalidation half (#994), recorded BEFORE the prose branch acts so
       // that the condition states and every validator drop reason land on
-      // `reasons` on every path — a clean pass, a trim, the prose reject that
-      // returns two lines below, and a breach reject alike. Ordering then
-      // decides only which `binding_constraint` wins, never what is audited.
+      // `reasons` on every path — a clean pass, a trim, a prose reject and a
+      // breach reject alike. Ordering then decides only which
+      // `binding_constraint` wins, never what is audited.
       reasons.push(...invalidationReasons(critic));
 
       const criticTrim = applyCritic(critic, notional, reasons);

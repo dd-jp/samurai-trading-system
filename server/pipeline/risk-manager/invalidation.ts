@@ -47,7 +47,9 @@ import type { OrderIntent } from '../../shared/index.js';
 import type {
   DroppedCondition,
   EvaluatedCondition,
+  InvalidationComparator,
   InvalidationCondition,
+  InvalidationDropReason,
   InvalidationObservable,
   RiskCriticVerdict,
 } from './types.js';
@@ -69,8 +71,9 @@ export const INVALIDATED_BINDING_CONSTRAINT = 'risk_critic:invalidated';
 /** Cap on any single audit string kept from the model's output. */
 const MAX_RAW_CHARS = 200;
 
-const COMPARATORS = ['<', '<=', '>', '>='] as const;
-type Comparator = (typeof COMPARATORS)[number];
+/** The one runtime list of the union `types.ts` declares — the union is the source, this is its checkable form. */
+const COMPARATORS: readonly InvalidationComparator[] = ['<', '<=', '>', '>='];
+type Comparator = InvalidationComparator;
 
 const INDICATOR_KIND_SET: ReadonlySet<string> = new Set<string>(INDICATOR_KINDS);
 
@@ -380,12 +383,101 @@ export function validateConditions(raw: unknown, side: OrderIntent['side']): Val
   return { accepted, dropped };
 }
 
+/**
+ * ## Reading a PERSISTED conditions half back (#994 review)
+ *
+ * `risk_critic_log.conditions_json` is a TEXT column: its contents are
+ * whatever a past process wrote, plus whatever a hand-edit or a partial write
+ * left behind. A cast alone (`parsed as EvaluatedCondition[]`) buys nothing —
+ * `[{}]` then reaches `evaluate()` and throws reading `.observable`, and
+ * `[{"state":"breached"}]` reaches a HARD REJECT with no measurement behind
+ * it, which is exactly the "a model cannot produce a breach" rule defeated by
+ * the storage layer.
+ *
+ * So the shape is CHECKED on read, and a list with any malformed element
+ * collapses whole to `undefined` — the same `no_conditions` outcome a pre-fold
+ * row produces (#997 Q3). Element-wise salvage is deliberately not attempted:
+ * a partially unreadable record is not evidence about the trade, and keeping
+ * half of it would make enforcement depend on which half survived.
+ */
+function isObservable(value: unknown): value is InvalidationObservable {
+  if (typeof value !== 'object' || value === null) return false;
+  const observable = value as { kind?: unknown; spec?: unknown; measure?: unknown };
+  if (observable.kind === 'mark') return true;
+  if (observable.kind === 'indicator') return readIndicatorSpec(observable.spec) !== 'unparseable';
+  if (observable.kind === 'bars') return observable.measure === 'volume_ratio';
+  return false;
+}
+
+function isInvalidationCondition(value: unknown): value is InvalidationCondition {
+  if (typeof value !== 'object' || value === null) return false;
+  const condition = value as Partial<InvalidationCondition>;
+  return (
+    isNonEmptyString(condition.id) &&
+    isNonEmptyString(condition.rationale) &&
+    isFiniteNumber(condition.threshold) &&
+    COMPARATORS.includes(condition.comparator as Comparator) &&
+    isObservable(condition.observable)
+  );
+}
+
+/** A well-formed, MEASURED entry: a readable condition, a state in the tri-state union, and `observed` null iff `unevaluable`. */
+function isEvaluatedCondition(value: unknown): value is EvaluatedCondition {
+  if (typeof value !== 'object' || value === null) return false;
+  const evaluated = value as Partial<EvaluatedCondition>;
+  if (!isInvalidationCondition(evaluated.condition)) return false;
+  if (evaluated.state === 'unevaluable') return evaluated.observed === null;
+  if (evaluated.state !== 'breached' && evaluated.state !== 'not_breached') return false;
+  return isFiniteNumber(evaluated.observed);
+}
+
+const DROP_REASONS: readonly InvalidationDropReason[] = [
+  'unparseable',
+  'unknown_observable',
+  'unknown_indicator',
+  'threshold_out_of_range',
+  'direction_incoherent',
+  'over_cap',
+];
+
+function isDroppedCondition(value: unknown): value is DroppedCondition {
+  if (typeof value !== 'object' || value === null) return false;
+  const dropped = value as Partial<DroppedCondition>;
+  if (dropped.id !== null && !isNonEmptyString(dropped.id)) return false;
+  if (typeof dropped.raw !== 'string') return false;
+  return DROP_REASONS.includes(dropped.reason as InvalidationDropReason);
+}
+
+function readList<T>(parsed: unknown, isElement: (value: unknown) => value is T): T[] | undefined {
+  if (!Array.isArray(parsed)) return undefined;
+  return parsed.every(isElement) ? (parsed as T[]) : undefined;
+}
+
+/** Parses a persisted `conditions` list. Any malformed element collapses the whole list to `undefined` (= `no_conditions`). */
+export function readPersistedConditions(parsed: unknown): EvaluatedCondition[] | undefined {
+  return readList(parsed, isEvaluatedCondition);
+}
+
+/** Parses a persisted `dropped_conditions` list, on the same all-or-nothing rule. */
+export function readPersistedDroppedConditions(parsed: unknown): DroppedCondition[] | undefined {
+  return readList(parsed, isDroppedCondition);
+}
+
 export interface EvaluateConditionsInput {
   conditions: readonly InvalidationCondition[];
   instrument: string;
   marketData: MarketDataService;
   /** Point-in-time read for every lookup — never wall-clock. */
   asOf: Date;
+  /**
+   * The producer's own budget, shared with the LLM call in front of it.
+   *
+   * Without it these reads run unbounded in front of an order the tick is
+   * waiting on: the producer's `AbortController` cancels the model call, but a
+   * market-data seam that never answers is a second, unbounded wait. An
+   * aborted read is a data gap like any other, so it lands on `unevaluable`.
+   */
+  signal?: AbortSignal;
 }
 
 /**
@@ -434,6 +526,21 @@ async function observe(
   }
 }
 
+/** Resolves to `null` — a data gap, hence `unevaluable` — as soon as the budget expires, whether or not the read ever answers. */
+async function withinDeadline(
+  read: Promise<number | null>,
+  signal: AbortSignal | undefined,
+): Promise<number | null> {
+  if (signal === undefined) return read;
+  if (signal.aborted) return null;
+  return Promise.race([
+    read,
+    new Promise<null>((resolve) => {
+      signal.addEventListener('abort', () => resolve(null), { once: true });
+    }),
+  ]);
+}
+
 function isBreached(observed: number, comparator: Comparator, threshold: number): boolean {
   switch (comparator) {
     case '<':
@@ -457,10 +564,13 @@ function isBreached(observed: number, comparator: Comparator, threshold: number)
 export async function evaluateConditions(
   input: EvaluateConditionsInput,
 ): Promise<EvaluatedCondition[]> {
-  const { conditions, instrument, marketData, asOf } = input;
+  const { conditions, instrument, marketData, asOf, signal } = input;
   return Promise.all(
     conditions.map(async (condition): Promise<EvaluatedCondition> => {
-      const observed = await observe(condition.observable, instrument, marketData, asOf);
+      const observed = await withinDeadline(
+        observe(condition.observable, instrument, marketData, asOf),
+        signal,
+      );
       if (observed === null) {
         return { condition, state: 'unevaluable', observed: null };
       }
@@ -500,11 +610,21 @@ function describeCondition(evaluated: EvaluatedCondition): string {
   return `${condition.id} (${kind} ${condition.comparator} ${condition.threshold}) ${state}, ${measured}`;
 }
 
-/** Every `breached` condition on a verdict. Empty for an absent verdict or an absent list. */
+/**
+ * Every `breached` condition on a verdict. Empty for an absent verdict, an
+ * absent list, or an entry that is not a well-formed `EvaluatedCondition`.
+ *
+ * The last clause is not defensive decoration. `RiskCriticVerdict` is a public
+ * seam fed by a SQLite column and by callers this module does not control, and
+ * a `[{"state":"breached"}]` payload with no measurement behind it must not
+ * reach a hard reject. Only a fully-formed, measured entry has teeth.
+ */
 export function breachedConditions(
   verdict: RiskCriticVerdict | undefined,
 ): readonly EvaluatedCondition[] {
-  return (verdict?.conditions ?? []).filter((evaluated) => evaluated.state === 'breached');
+  return (verdict?.conditions ?? []).filter(
+    (evaluated) => isEvaluatedCondition(evaluated) && evaluated.state === 'breached',
+  );
 }
 
 /**
@@ -517,13 +637,17 @@ export function breachedConditions(
  */
 export function invalidationReasons(verdict: RiskCriticVerdict): string[] {
   const reasons: string[] = [];
+  // Every field read below is `bounded()`-ed rather than trusted: these two
+  // lists can arrive from a hand-written or corrupted `risk_critic_log` row,
+  // and a reason line must never be the thing that throws inside `evaluate()`.
   for (const dropped of verdict.dropped_conditions ?? []) {
+    const entry = (dropped ?? {}) as Partial<DroppedCondition>;
     reasons.push(
-      `risk_critic: dropped condition ${dropped.id ?? '<no id>'} (${dropped.reason}): ${dropped.raw}`,
+      `risk_critic: dropped condition ${entry.id ?? '<no id>'} (${entry.reason ?? 'unparseable'}): ${bounded(entry.raw)}`,
     );
   }
 
-  const conditions = verdict.conditions ?? [];
+  const conditions = (verdict.conditions ?? []).filter(isEvaluatedCondition);
   if (conditions.length === 0) {
     reasons.push(NO_CONDITIONS_REASON);
     return reasons;
