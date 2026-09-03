@@ -20,6 +20,7 @@ export {
   type StoreMode,
   sharedStorePath,
 } from './open-shared-store.js';
+export { DEFAULT_MAX_LLM_CALL_ROWS, pruneLlmCallLog } from './prune-llm-call-log.js';
 export { SqliteRiskLogStore, SqliteTraderLogStore } from './sqlite-decision-record-stores.js';
 export {
   fromStoredTimestamp,
