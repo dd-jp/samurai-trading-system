@@ -197,4 +197,103 @@ describe('MiArchiveStore', () => {
 
     expect(store.rawRows(MI_SOURCES.alpacaNews)[0]?.fidelity).toBe('backfill');
   });
+
+  /**
+   * The specced 90-day purge (#1060). Keyed on `ingested_at` — the same
+   * column `itemsKnownAt`/`hasItem` treat as the visibility gate — NOT
+   * `updated_at`, which is the vendor's revision stamp and can be back-dated
+   * relative to when we actually received the row.
+   */
+  describe('purgeOlderThan (#1060)', () => {
+    const NOW = new Date('2026-09-03T00:00:00Z');
+    const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
+    const cutoff = new Date(NOW.getTime() - NINETY_DAYS_MS);
+
+    it('deletes rows strictly older than the cutoff and leaves the rest untouched', () => {
+      const store = new MiArchiveStore();
+      const old = new Date(cutoff.getTime() - 1); // 1ms older than the window
+      const fresh = new Date(cutoff.getTime() + 1); // 1ms inside the window
+
+      store.write(
+        [
+          raw({ native_id: 'old', updated_at: old, ingested_at: old }),
+          raw({ native_id: 'fresh', updated_at: fresh, ingested_at: fresh }),
+        ],
+        [
+          archived({ native_id: 'old', updated_at: old, ingested_at: old }),
+          archived({ native_id: 'fresh', updated_at: fresh, ingested_at: fresh }),
+        ],
+      );
+
+      const result = store.purgeOlderThan(cutoff);
+
+      expect(result).toEqual({ rawDeleted: 1, itemsDeleted: 1 });
+      expect(store.rawRows(MI_SOURCES.alpacaNews).map((r) => r.native_id)).toEqual(['fresh']);
+      expect(store.itemsKnownAt('stocks', NOW, ALL_SOURCES)).toHaveLength(1);
+    });
+
+    /**
+     * The off-by-one this predicate invites: a row EXACTLY on the cutoff is
+     * exactly 90 days old, not OLDER than 90 days, so "purge records older
+     * than 90 days" keeps it. `< cutoff` (not `<=`) is what that reading
+     * requires.
+     */
+    it('keeps a row exactly on the cutoff — exactly 90 days old is not "older than" 90 days', () => {
+      const store = new MiArchiveStore();
+
+      store.write(
+        [raw({ native_id: 'on-edge', updated_at: cutoff, ingested_at: cutoff })],
+        [archived({ native_id: 'on-edge', updated_at: cutoff, ingested_at: cutoff })],
+      );
+
+      const result = store.purgeOlderThan(cutoff);
+
+      expect(result).toEqual({ rawDeleted: 0, itemsDeleted: 0 });
+      expect(store.rawRows(MI_SOURCES.alpacaNews)).toHaveLength(1);
+      expect(store.itemsKnownAt('stocks', NOW, ALL_SOURCES)).toHaveLength(1);
+    });
+
+    /**
+     * #1042 proposes a payload exemption for Reddit vendor bytes — the purge
+     * must not assume every row carries one. `payload` is `NOT NULL` today,
+     * so an empty string stands in for "no payload"; the predicate never
+     * references the column at all, so age is the only thing that decides.
+     */
+    it('deletes or retains a row with no payload purely by age, never by payload presence', () => {
+      const store = new MiArchiveStore();
+      const old = new Date(cutoff.getTime() - 1);
+      const fresh = new Date(cutoff.getTime() + 1);
+
+      store.write(
+        [
+          raw({ native_id: 'old-no-payload', updated_at: old, ingested_at: old, payload: '' }),
+          raw({
+            native_id: 'fresh-no-payload',
+            updated_at: fresh,
+            ingested_at: fresh,
+            payload: '',
+          }),
+        ],
+        [],
+      );
+
+      store.purgeOlderThan(cutoff);
+
+      const remaining = store.rawRows(MI_SOURCES.alpacaNews).map((r) => r.native_id);
+      expect(remaining).toEqual(['fresh-no-payload']);
+    });
+
+    it('does nothing when every row is inside the window', () => {
+      const store = new MiArchiveStore();
+      store.write([raw()], [archived()]);
+
+      expect(store.purgeOlderThan(cutoff)).toEqual({ rawDeleted: 0, itemsDeleted: 0 });
+      expect(store.rawRows(MI_SOURCES.alpacaNews)).toHaveLength(1);
+    });
+
+    it('does nothing against an empty store', () => {
+      const store = new MiArchiveStore();
+      expect(store.purgeOlderThan(cutoff)).toEqual({ rawDeleted: 0, itemsDeleted: 0 });
+    });
+  });
 });

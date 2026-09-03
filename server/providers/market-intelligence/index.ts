@@ -400,6 +400,7 @@ export class MarketIntelligenceStore {
 export {
   type ArchivedItem,
   type ArchiveFidelity,
+  DEFAULT_MI_ARCHIVE_RETENTION_DAYS,
   MiArchiveStore,
   miArchivePath,
   type RawArchiveRow,

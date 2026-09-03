@@ -181,6 +181,7 @@ import {
   AlpacaNewsClient,
   CiiConsumer,
   DEFAULT_MAX_SEARCH_RESULTS,
+  DEFAULT_MI_ARCHIVE_RETENTION_DAYS,
   GdeltGkgClient,
   GdeltIngestAgent,
   GROK_REFRESH_MS,
@@ -572,6 +573,9 @@ export function captureLlmTextFromEnvironment(
 /** The variable that overrides `llm_call_log`'s row ceiling (#1045). */
 export const ENV_LLM_CALL_LOG_MAX_ROWS = 'SAMURAI_LLM_CALL_LOG_MAX_ROWS';
 
+/** The variable that overrides the MI archive's retention window (#1060). */
+export const ENV_MI_ARCHIVE_RETENTION_DAYS = 'SAMURAI_MI_ARCHIVE_RETENTION_DAYS';
+
 /** The variable that overrides how many X posts a sentiment call fetches (#969). */
 export const ENV_X_MAX_SEARCH_RESULTS = 'SAMURAI_X_MAX_RESULTS';
 
@@ -648,6 +652,77 @@ function pruneLlmCallLogWithLog(
       message:
         'llm_call_log prune failed — captured prompts and responses are unaffected, but the ' +
         'table is not bounded until this succeeds',
+      payload: { error: error instanceof Error ? error.message : String(error), trigger },
+    });
+  }
+}
+
+/**
+ * How many days of MI archive history to keep (#1060).
+ *
+ * The specced rule here is a DAY WINDOW, not a row ceiling — the opposite of
+ * `llmCallLogMaxRowsFromEnvironment` above, and deliberately so: LLM capture
+ * volume is cadence-bound (a 15-minute-debate measurement does not hold at a
+ * different cadence), whereas the archive's value genuinely is time-bound — a
+ * 90-day-old news item is not useful to a backtest replay of last week. The
+ * six spec statements this settles are reconciled in
+ * `docs/specs/market-intelligence-spec.md`.
+ *
+ * `min = 1`, matching `llmCallLogMaxRowsFromEnvironment`'s reasoning: there is
+ * no "keep nothing" spelling to protect here (unlike `SAMURAI_LLM_CAPTURE`),
+ * but a zero-day window would purge same-tick writes before `hydrate()` could
+ * ever read them back, which is not a retention policy anyone would choose on
+ * purpose.
+ */
+export function miArchiveRetentionDaysFromEnvironment(
+  value: string | undefined = process.env[ENV_MI_ARCHIVE_RETENTION_DAYS],
+): number {
+  return positiveIntegerFromEnv(
+    value,
+    ENV_MI_ARCHIVE_RETENTION_DAYS,
+    DEFAULT_MI_ARCHIVE_RETENTION_DAYS,
+    1,
+    "the MI archive's specced retention window (#1060)",
+  );
+}
+
+/**
+ * Prunes the MI archive, reports what it removed, and never throws — same
+ * posture as `pruneLlmCallLogWithLog` and for the same reason: a throw at
+ * boot would abort a trading process over housekeeping, and a throw on the
+ * timer would take down the daily feedback cycle.
+ *
+ * `archive` is optional because `ProductionConfig.miArchive` is: some tests,
+ * and any run that deliberately omits the deterministic news path, inject
+ * nothing. A missing archive means nothing to prune, not an error.
+ */
+function pruneMiArchiveWithLog(
+  archive: MiArchiveStore | undefined,
+  retentionDays: number,
+  clock: Clock,
+  logger: Logger,
+  trigger: 'startup' | 'daily',
+): void {
+  if (archive === undefined) return;
+  try {
+    const cutoff = new Date(clock.now().getTime() - retentionDays * 24 * 60 * 60 * 1000);
+    const { rawDeleted, itemsDeleted } = archive.purgeOlderThan(cutoff);
+    if (rawDeleted === 0 && itemsDeleted === 0) return;
+    logger.log({
+      trace_id: trigger === 'startup' ? 'startup' : 'feedback-cycle',
+      stage: 'orchestrator',
+      level: 'info',
+      message: `purged MI archive rows older than the ${retentionDays}-day retention window`,
+      payload: { rawDeleted, itemsDeleted, retention_days: retentionDays, trigger },
+    });
+  } catch (error) {
+    logger.log({
+      trace_id: trigger === 'startup' ? 'startup' : 'feedback-cycle',
+      stage: 'orchestrator',
+      level: 'warn',
+      message:
+        'MI archive purge failed — archived rows are unaffected, but the archive is not bounded ' +
+        'until this succeeds',
       payload: { error: error instanceof Error ? error.message : String(error), trigger },
     });
   }
@@ -1369,6 +1444,23 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    */
   const llmCallLogMaxRows = llmCallLogMaxRowsFromEnvironment();
   pruneLlmCallLogWithLog(config.db, llmCallLogMaxRows, logger, 'startup');
+
+  /**
+   * #1060. The specced 90-day MI archive purge, read and applied here at
+   * boot and again on the daily timer below — same two-call-site shape as
+   * the row ceiling immediately above, and for the same reason: startup
+   * alone never fires again during an unattended run, and the daily sweep
+   * alone leaves a restart-heavy dev loop pruning nothing.
+   *
+   * Wired here rather than inside `MiArchiveStore.write` on purpose, for the
+   * same reason as above: the store persists rows, deciding how long the
+   * SYSTEM keeps them is a deployment policy, and burying it in the writer
+   * is exactly how the MI archive's purge went unimplemented in the first
+   * place (#1060's own gap) and how `pruneIngestedObservedFills` (#313)
+   * shipped uncalled.
+   */
+  const miArchiveRetentionDays = miArchiveRetentionDaysFromEnvironment();
+  pruneMiArchiveWithLog(config.miArchive, miArchiveRetentionDays, clock, logger, 'startup');
   // `tryNousCredentials` rather than `nousCredentials`: an unconfigured Nous
   // environment degrades this optional stage to no-agent instead of failing
   // the boot, which is how the absent `XAI_API_KEY` behaved before ADR-0009
@@ -2741,6 +2833,8 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
   // they cannot disagree. Threading it through `ProductionComponents` would
   // widen a public shape to carry a housekeeping constant.
   const llmCallLogMaxRows = llmCallLogMaxRowsFromEnvironment();
+  // #1060. Same reasoning, same shape, for the MI archive's 90-day window.
+  const miArchiveRetentionDays = miArchiveRetentionDaysFromEnvironment();
 
   const runFeedbackCycle = (feedback: FeedbackCycleConfig): void => {
     // #1045, and FIRST — outside the try below, before any of the tuning work.
@@ -2759,6 +2853,9 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     // uptime, not a calendar midnight — fine for a retention sweep, but it is
     // not a nightly job and should not be described as one.
     pruneLlmCallLogWithLog(config.db, llmCallLogMaxRows, logger, 'daily');
+    // #1060. Same placement rule applies: outside the try, so a persistently
+    // failing feedback cycle cannot silently disable the MI archive's purge.
+    pruneMiArchiveWithLog(config.miArchive, miArchiveRetentionDays, clock, logger, 'daily');
 
     try {
       const result = runDailyCycle({

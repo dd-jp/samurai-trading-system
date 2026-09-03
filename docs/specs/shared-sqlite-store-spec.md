@@ -737,7 +737,7 @@ CREATE INDEX idx_outside_benchmark_samples_computed_at
 
 ## Out of Scope
 
-**Market Intelligence's replay store** — confirmed a separate SQLite file (90-day auto-purge policy incompatible with this store's permanent-retention requirement — CLAUDE.md: track everything for HMRC/CGT). Not part of this spec.
+**Market Intelligence's replay store** — confirmed a separate SQLite file (90-day auto-purge policy incompatible with this store's permanent-retention requirement — CLAUDE.md: track everything for HMRC/CGT). Not part of this spec. The purge itself is implemented in `server/providers/market-intelligence/archive/mi-archive-store.ts` and wired at the orchestrator composition root, not here — see `docs/specs/market-intelligence-spec.md`'s "Retention" section and [#1060](https://github.com/dd-jp/samurai-trading-system/issues/1060).
 
 **Per-component cutover order/sequencing** — deferred to `/to-tickets`, not a spec-content decision.
 
