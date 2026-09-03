@@ -74,10 +74,11 @@ SINGLE = [("TSLA", "1Min"), ("NVDA", "1Min"), ("AAPL", "1Min"),
           ("MSTR", "1Min"), ("PLTR", "1Min")]
 
 LEV = 3.0
-# ADR-0018 D3's round trips. These are SUBCLASS figures: #666 owns the measured
-# per-instrument spreads and they are not applied per name here, so a per-name
-# ranking inherits its subclass's cost. Stated because it is the main reason a
-# per-name figure below is weaker evidence than a per-subclass one.
+# ADR-0018 D3's round trips. These are SUBCLASS figures: measured per-instrument
+# spreads are still a single unmeasured quote (ADR-0016 Known weakness;
+# delivery owned by #1053) and they are not applied per name here, so a
+# per-name ranking inherits its subclass's cost. Stated because it is the main
+# reason a per-name figure below is weaker evidence than a per-subclass one.
 COST = {"index": 0.18, "single": 0.41}
 DECLARED_TP = {"index": 2.00, "single": 6.00}
 DECLARED_SL = {"index": 2.16, "single": 6.25}

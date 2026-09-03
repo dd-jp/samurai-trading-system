@@ -157,9 +157,10 @@ script computes the reduction both ways and asserts they agree.
 *Cost cancels from the headline.* `bar = (cost − E_gross)/W`, and both arms share `cost` and `W`,
 so the on/off **delta** is invariant to the 0.18% / 0.41% spread assumptions. A real per-subclass
 spread measurement — never delivered; [#666](https://github.com/dd-jp/samurai-trading-system/issues/666)
-closed 2026-08-27 out of scope without doing so, and [#750](https://github.com/dd-jp/samurai-trading-system/issues/750)
-now gates on it instead with no open ticket delivering it — would move the **absolute** bars in §6
-but cannot move the verdict. (This is a method note, not a limitation.)
+closed 2026-08-27 out of scope without doing so, [#750](https://github.com/dd-jp/samurai-trading-system/issues/750)
+now gates on it instead, and [#1053](https://github.com/dd-jp/samurai-trading-system/issues/1053)
+(open) owns delivering it — would move the **absolute** bars in §6 but cannot move the verdict.
+(This is a method note, not a limitation.)
 
 *Minimum detectable effect, computed from in-sample dispersion before the out-of-sample arm is
 scored.* §6.2 reports the smallest bar reduction this design could detect at 80% power / 5%
@@ -379,8 +380,9 @@ bootstrap over. That is a deliberate consequence of keeping the grid small, not 
    every absolute bar in §6.3. The real spreads remain unmeasured: [#666](https://github.com/dd-jp/samurai-trading-system/issues/666),
    which would have measured them, closed 2026-08-27 out of scope without delivering that
    measurement; [#750](https://github.com/dd-jp/samurai-trading-system/issues/750) now gates on it
-   instead, and no open ticket currently delivers it. A single-stock spread materially above 0.41%
-   would raise all four single-stock bars together.
+   instead, and [#1053](https://github.com/dd-jp/samurai-trading-system/issues/1053) (open) owns
+   delivering it. A single-stock spread materially above 0.41% would raise all four single-stock
+   bars together.
 7. **Underlying US tape, not the ETP tape that would actually be traded.** No tracking error, no
    ETP spread beyond the assumed round trip, and **no GBP/USD leg** — ADR-0015's equity book is
    GBP-settled on USD underlyings. Inherited from ADR-0018 and unchanged here, but it means every
