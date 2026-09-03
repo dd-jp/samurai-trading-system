@@ -194,8 +194,11 @@ is profitable or unprofitable."* `p_u` and `p_g` are both unmeasured because the
    Real ETP tracking error, LSE-hours liquidity and the ETPs' own spreads are absent. #658 is a question
    about the live equity leg, so these are anchors with a stated proxy gap.
 3. **Costs are per-subclass, not per-instrument (doc 52 §9.3).** Every £/yr figure here inherits a subclass
-   round trip (0.18% / 0.41%), both of which rest on a single quote until
-   [#666](https://github.com/dd-jp/samurai-trading-system/issues/666) measures them.
+   round trip (0.18% / 0.41%), both of which rest on a single quote:
+   [#666](https://github.com/dd-jp/samurai-trading-system/issues/666), which would have measured
+   them, closed 2026-08-27 out of scope without delivering that measurement;
+   [#750](https://github.com/dd-jp/samurai-trading-system/issues/750) now gates on it instead, and
+   no open ticket currently delivers it.
    [`53-intraday-cost-calibration.md`](53-intraday-cost-calibration.md) calibrates the *backtest* cost model
    at 1-minute resolution on a US-equity proxy; it does not supply an LSE ETP round trip either, so it
    narrows nothing here.

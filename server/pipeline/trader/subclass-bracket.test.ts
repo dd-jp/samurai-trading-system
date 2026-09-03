@@ -433,9 +433,12 @@ describe('an out-of-range headroom reserve fails loud, not silently (#897)', () 
 
 describe('the round trip is injected config, never a constant', () => {
   it('records the quote the decision was made under', async () => {
-    // #666 may move 0.18% / 0.41%, and the accuracy bar moves directly with
-    // them. A constant compiled into a later analysis would silently price a
-    // decision against a spread it was never taken at.
+    // #666, which would have measured 0.18% / 0.41%, closed 2026-08-27 out of
+    // scope without delivering that measurement; #750 now gates on it
+    // instead, and no open ticket currently delivers it. The accuracy bar
+    // still moves directly with these figures — a constant compiled into a
+    // later analysis would silently price a decision against a spread it was
+    // never taken at.
     const moved: SubclassBracket = {
       ...(ADR_0018_SUBCLASS_BRACKETS.index_etp_3x as SubclassBracket),
       round_trip_cost_pct: 0.0031,
