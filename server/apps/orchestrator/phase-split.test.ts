@@ -451,6 +451,41 @@ describe('phase split — the turnstile is idempotent before the grant (#1040)',
 
     expect(bothResolved).toBe(true);
   });
+
+  it('resolves a repeated request from the index that already HOLDS the turn', async () => {
+    // The other branch of the same claim: once granted, a second `begin` must
+    // return immediately rather than queue behind a `finish` that will never
+    // come for an index already running. Untested, this is a self-deadlock
+    // waiting for the second portfolio read someone adds later.
+    //
+    // Honest limit: this asserts the OUTCOME (no self-deadlock), not the
+    // `#granted` branch specifically. While a pass holds the turn its index
+    // still equals `#turn`, so `#granted` and the turn check agree and either
+    // alone would resolve this. `#granted` is what keeps them agreeing after
+    // `finish` advances the cursor past the index — a state no pass can reach
+    // for itself, since `finish` runs only once `runInstrument` has returned.
+    let calls = 0;
+
+    const runner: TickRunner = {
+      async runInstrument(_signal, ctx): Promise<TickOutcome> {
+        await ctx.beginPortfolioTail?.();
+        calls++;
+        // No `finish` can have run for this index — the pass is still inside
+        // its own tail — so this resolves only via the granted-set shortcut.
+        await ctx.beginPortfolioTail?.();
+        calls++;
+        return { trace_id: ctx.trace_id, final_stage: 'execution' };
+      },
+    };
+
+    const outcomes = await runTickPlan(makePlan('SPY'), runner, CLOCK, {
+      ...loopConfig(),
+      max_concurrent_instruments: 1,
+    });
+
+    expect(calls).toBe(2);
+    expect(outcomes[0]).toMatchObject({ final_stage: 'execution' });
+  });
 });
 
 describe('phase split — the #669 claim is held through the tail (#1040)', () => {

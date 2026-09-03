@@ -2444,9 +2444,13 @@ export function startTickLoop(deps: {
       //
       // The wait now spans up to W passes serialized behind one another's
       // portfolio tails (#1040), not W fully-parallel passes. It is still
-      // bounded: the head's LLM work is capped by `raceWithTimeout` in
-      // `debate-engine/analyst-response-collector.ts`, and the tails it queues behind are
-      // sub-second book operations.
+      // bounded, but NOT because a tail is cheap: since #957 folded the Risk
+      // Critic into `steps.risk`, a tail contains a live LLM call of its own,
+      // bounded by `DEFAULT_CRITIC_BUDGET_MS` (10s, `risk-manager/critic.ts`)
+      // and by nothing here. So each tail costs that budget plus sub-second
+      // book operations, the head's LLM work is capped by `raceWithTimeout` in
+      // `debate-engine/analyst-response-collector.ts`, and this waits at most
+      // W x (head timeout + critic budget).
       await Promise.all([...passes]);
     },
   };

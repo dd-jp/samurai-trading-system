@@ -288,13 +288,21 @@ export class SequentialTickRunner implements TickRunner {
       // the whole cheapness of the cheap path (#743). Taking the turn earlier
       // would queue every tick pass — and ~29 of 30 passes are tick passes that
       // produce no intent at all — behind the settled tails of every instrument
-      // ahead of it in the plan, for nothing. Three costs, all real: a
-      // null-intent pass would hold the queue; a held position's flatten would
-      // wait behind a full LLM decision pass, and the ADR-0014 flatten window
-      // is five minutes wide; and `buildGuardedRunner` releases the #669 claim
-      // when `runInstrument` RETURNS, so a fast instrument's release would come
-      // to depend on a slow one ahead of it — the exact starvation #669 exists
-      // to remove.
+      // ahead of it in the plan, for nothing. What moving the wait here buys,
+      // stated no wider than it is true — the decision gate is claimed PER
+      // INSTRUMENT, so one plan mixes decision and tick passes, and an
+      // intent-bearing pass at index i still waits for 0..i-1 to settle,
+      // heads included:
+      //   - The ~29-of-30 passes that produce no intent no longer wait behind
+      //     a full LLM decision pass at all. A pass that DOES produce a
+      //     flatten still queues, but only after its check has run, so the
+      //     wait is shorter by the exit check and no more. The ADR-0014
+      //     flatten window is five minutes wide, which is why even that
+      //     matters.
+      //   - `buildGuardedRunner` releases the #669 claim when `runInstrument`
+      //     RETURNS, so a null-intent pass's release no longer depends on a
+      //     slow instrument ahead of it — the starvation #669 exists to
+      //     remove. An intent-bearing pass's release still does.
       //
       // Nothing above this line is book state: `traderLog.write` and
       // `escalateTraderDiagnostics` inside the exit check are a record and an

@@ -127,9 +127,16 @@ class TailSequencer {
 
   /**
    * Resolves when it is `index`'s turn. Idempotent at every point in the
-   * lifecycle — before the grant it returns the pending promise, after it
-   * resolves immediately — so adding a second call site (another portfolio
-   * read, say) cannot deadlock a pass against itself.
+   * lifecycle — before the grant it hands back the pending promise, at or
+   * after the grant it resolves immediately — so adding a second call site
+   * (another portfolio read, say) cannot deadlock a pass against itself.
+   *
+   * The `#granted` check is the only one of the three that no pass can reach
+   * for itself today: while a pass holds the turn its index still equals
+   * `#turn`, and `finish` advances past it only once `runInstrument` has
+   * returned. It is kept because the cost is a set lookup and the failure it
+   * prevents — an await that never settles, for the life of the process — is
+   * not one worth relying on call-site discipline to avoid.
    */
   begin(index: number): Promise<void> {
     if (this.#granted.has(index)) return Promise.resolve();
