@@ -325,6 +325,15 @@ export class MiArchiveStore {
    *
    * One transaction, so a crash between the two deletes cannot leave a
    * `mi_items` row pointing at a raw row that is already gone.
+   *
+   * Both deletes are indexed. `mi_archive_raw` had `idx_mi_archive_raw_
+   * ingested (ingested_at)` since migration 0001; `mi_items` did not —
+   * `idx_mi_items_class_ingested (asset_class, ingested_at)` is a composite
+   * keyed FIRST on `asset_class`, which SQLite cannot use for a range on the
+   * trailing column when the query has no `asset_class` predicate, as this
+   * one does not. Migration 0002 adds `idx_mi_items_ingested (ingested_at)`
+   * for exactly this delete; `mi-archive-store.test.ts` pins both plans via
+   * `EXPLAIN QUERY PLAN` against a real on-disk file.
    */
   purgeOlderThan(cutoff: Date): { rawDeleted: number; itemsDeleted: number } {
     const cutoffIso = cutoff.toISOString();

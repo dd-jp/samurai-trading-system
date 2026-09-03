@@ -70,8 +70,23 @@ describe('the MI archive purge is actually wired into the composition root', () 
   // Matched by regex, not exact string: the formatter is free to wrap a call
   // across lines, and a retention guard that fails on reformatting would be
   // deleted by the first person it inconvenienced.
+  //
+  // The FULL known argument list is required, in order, rather than a lazy
+  // `[\s\S]*?` scan from the function name to the trigger literal. A lazy
+  // scan anchored only on the function name also matches the function's own
+  // DECLARATION (whose signature contains the literal text `'startup'`) and
+  // then keeps scanning forward past it — and even a scan anchored on
+  // `config.miArchive` as the first argument still keeps scanning forward
+  // from a MATCHING call (e.g. the daily one) straight past its own closing
+  // paren into a later, unrelated `'startup')` elsewhere in the file (a
+  // string literal, another call). Both were tried and both left this test
+  // green after the real call site was deleted — proven by actually deleting
+  // it. Requiring the full parameter sequence bounds the match to one
+  // statement and nothing an unrelated later line can satisfy.
   const callSite = (trigger: string): RegExp =>
-    new RegExp(`pruneMiArchiveWithLog\\([\\s\\S]*?'${trigger}'\\)`);
+    new RegExp(
+      `pruneMiArchiveWithLog\\(\\s*config\\.miArchive,\\s*miArchiveRetentionDays,\\s*clock,\\s*logger,\\s*'${trigger}',?\\s*\\)`,
+    );
 
   it('runs at startup and on the daily timer, not in one place only', () => {
     // Startup alone fires once when the table is smallest and never again

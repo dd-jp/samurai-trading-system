@@ -1,3 +1,7 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import BetterSqlite3 from 'better-sqlite3';
 import type { AssetClass } from '../../../shared/index.js';
 import type { IntelligenceItem } from '../types.js';
 import { type ArchivedItem, MiArchiveStore, type RawArchiveRow } from './mi-archive-store.js';
@@ -294,6 +298,51 @@ describe('MiArchiveStore', () => {
     it('does nothing against an empty store', () => {
       const store = new MiArchiveStore();
       expect(store.purgeOlderThan(cutoff)).toEqual({ rawDeleted: 0, itemsDeleted: 0 });
+    });
+
+    /**
+     * A real review caught this: `mi_archive_raw` has `idx_mi_archive_raw_
+     * ingested (ingested_at)` from migration 0001, so its delete uses it
+     * directly, but `mi_items` only had `idx_mi_items_class_ingested
+     * (asset_class, ingested_at)` — a composite keyed FIRST on `asset_class`,
+     * which SQLite cannot use for a range on the trailing column when the
+     * query has no `asset_class` predicate (as this delete does not). Without
+     * migration 0002's `idx_mi_items_ingested (ingested_at)`, the `mi_items`
+     * half of every sweep (boot + daily) was a full table scan against the
+     * table this store exists to keep re-normalizable, and therefore the one
+     * most likely to grow large.
+     *
+     * Checked against a SEPARATE readonly connection to the same on-disk
+     * file, matching `stage2-historical-store.test.ts`'s precedent: an
+     * `:memory:` store's private handle cannot be reached from outside the
+     * class, and `EXPLAIN QUERY PLAN` never executes the statement, so
+     * running it through a second, readonly handle is safe.
+     */
+    it('deletes through an index on both tables, not a full scan (#1060)', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'mi-archive-plan-'));
+      const dbPath = join(dir, 'archive.sqlite');
+      const store = new MiArchiveStore(dbPath);
+      store.write([raw()], [archived()]);
+      store.close();
+
+      const db = new BetterSqlite3(dbPath, { readonly: true });
+      const planFor = (table: 'mi_archive_raw' | 'mi_items'): string =>
+        (
+          db
+            .prepare(`EXPLAIN QUERY PLAN DELETE FROM ${table} WHERE ingested_at < ?`)
+            .all(cutoff.toISOString()) as { detail: string }[]
+        )
+          .map((row) => row.detail)
+          .join(' | ');
+
+      const rawPlan = planFor('mi_archive_raw');
+      const itemsPlan = planFor('mi_items');
+      db.close();
+
+      expect(rawPlan).toContain('idx_mi_archive_raw_ingested');
+      expect(rawPlan).not.toContain('SCAN');
+      expect(itemsPlan).toContain('idx_mi_items_ingested');
+      expect(itemsPlan).not.toContain('SCAN');
     });
   });
 });
