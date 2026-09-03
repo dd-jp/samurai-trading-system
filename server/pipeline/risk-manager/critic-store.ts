@@ -22,6 +22,7 @@
 
 import type { SharedStore as Db } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
+import { readPersistedConditions, readPersistedDroppedConditions } from './invalidation.js';
 import type { RiskCriticLog, RiskCriticStore, RiskCriticVerdict } from './types.js';
 
 export class InMemoryRiskCriticStore implements RiskCriticStore {
@@ -43,6 +44,43 @@ interface RiskCriticRow {
   max_notional: number | null;
   reasoning: string;
   created_at: string;
+  /** NULL on every row written before the invalidation fold (migration 0040, #994). */
+  conditions_json: string | null;
+  dropped_conditions_json: string | null;
+}
+
+/**
+ * NULL, unreadable JSON, a non-array payload AND a payload whose elements do
+ * not have the persisted shape all collapse to `undefined` (#997 Q3 / Q2a):
+ * the verdict then carries no `conditions`, which the whole pipeline reads as
+ * `no_conditions`.
+ *
+ * The element check is what makes this safe, not decoration. A cast would let
+ * `[{}]` throw inside `evaluate()` on the replay path, and let
+ * `[{"state":"breached"}]` hard-reject a trade with nothing measured behind
+ * it — the storage layer handing a model-shaped assertion the authority the
+ * types deny it. `invalidation.ts` owns that check, because it owns the shape.
+ *
+ * A pre-fold row and a corrupted column are the same fact — "nothing checkable
+ * came out" — and neither may throw on the replay path, because a backtest
+ * spanning the fold date must keep running and reach the decision the live run
+ * reached.
+ */
+function readJsonList<T>(
+  stored: string | null,
+  read: (parsed: unknown) => T[] | undefined,
+): T[] | undefined {
+  if (stored === null) return undefined;
+  try {
+    return read(JSON.parse(stored));
+  } catch {
+    return undefined;
+  }
+}
+
+/** Absent stays absent: an empty list is written as `[]`, so "never emitted" and "all dropped" stay distinguishable in the row. */
+function writeJsonList(list: readonly unknown[] | undefined): string | null {
+  return list === undefined ? null : JSON.stringify(list);
 }
 
 export class SqliteRiskCriticStore implements RiskCriticStore {
@@ -51,8 +89,10 @@ export class SqliteRiskCriticStore implements RiskCriticStore {
   writeVerdict(entry: RiskCriticLog): void {
     this.db
       .prepare(
-        `INSERT INTO risk_critic_log (debate_id, verdict, max_notional, reasoning, created_at)
-         VALUES (?, ?, ?, ?, ?)
+        `INSERT INTO risk_critic_log
+           (debate_id, verdict, max_notional, reasoning, created_at,
+            conditions_json, dropped_conditions_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(debate_id) DO NOTHING`,
       )
       .run(
@@ -61,22 +101,31 @@ export class SqliteRiskCriticStore implements RiskCriticStore {
         entry.verdict.max_notional,
         entry.verdict.reasoning,
         toStoredTimestamp(entry.created_at),
+        writeJsonList(entry.verdict.conditions),
+        writeJsonList(entry.verdict.dropped_conditions),
       );
   }
 
   getByDebateId(debate_id: string): RiskCriticLog | undefined {
     const row = this.db
       .prepare(
-        'SELECT debate_id, verdict, max_notional, reasoning, created_at FROM risk_critic_log WHERE debate_id = ?',
+        `SELECT debate_id, verdict, max_notional, reasoning, created_at,
+                conditions_json, dropped_conditions_json
+         FROM risk_critic_log WHERE debate_id = ?`,
       )
       .get(debate_id) as RiskCriticRow | undefined;
     if (row === undefined) return undefined;
+
+    const conditions = readJsonList(row.conditions_json, readPersistedConditions);
+    const dropped = readJsonList(row.dropped_conditions_json, readPersistedDroppedConditions);
     return {
       debate_id: row.debate_id,
       verdict: {
         verdict: row.verdict,
         max_notional: row.max_notional,
         reasoning: row.reasoning,
+        ...(conditions === undefined ? {} : { conditions }),
+        ...(dropped === undefined ? {} : { dropped_conditions: dropped }),
       },
       created_at: fromStoredTimestamp(row.created_at),
     };

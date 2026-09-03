@@ -19,6 +19,11 @@
  * or rejecting.
  */
 import { countryForInstrument } from './cii-mapping.js';
+import {
+  breachedConditions,
+  INVALIDATED_BINDING_CONSTRAINT,
+  invalidationReasons,
+} from './invalidation.js';
 import { type RiskThresholdSource, resolveRiskConfig } from './risk-thresholds.js';
 import type {
   BreakerState,
@@ -45,6 +50,7 @@ export type {
   BuildRiskCriticProducerOptions,
   CriticHeldPosition,
   LlmRiskCriticProducerOptions,
+  ParsedCriticResponse,
   ReplayRiskCriticProducerOptions,
   RiskCriticProducer,
   RiskCriticRequest,
@@ -58,6 +64,16 @@ export {
   renderCriticPrompt,
 } from './critic.js';
 export { InMemoryRiskCriticStore, SqliteRiskCriticStore } from './critic-store.js';
+export type { EvaluateConditionsInput, ValidatedConditions } from './invalidation.js';
+export {
+  breachedConditions,
+  evaluateConditions,
+  INVALIDATED_BINDING_CONSTRAINT,
+  invalidationReasons,
+  MAX_INVALIDATION_CONDITIONS,
+  NO_CONDITIONS_REASON,
+  validateConditions,
+} from './invalidation.js';
 export type { PortfolioAccountingInput } from './portfolio-view.js';
 export { computePortfolioView } from './portfolio-view.js';
 export {
@@ -74,6 +90,12 @@ export type {
   CorrelationEstimate,
   DailyPnl,
   DailyPnlByClass,
+  DroppedCondition,
+  EvaluatedCondition,
+  InvalidationCondition,
+  InvalidationConditionState,
+  InvalidationDropReason,
+  InvalidationObservable,
   PersistedBreakerState,
   PortfolioView,
   RiskConfig,
@@ -353,9 +375,32 @@ export class RiskManagerImpl implements RiskManager {
       reasons.push(RISK_CRITIC_SKIPPED_REASON);
     }
     if (critic) {
+      // The invalidation half (#994), recorded BEFORE the prose branch acts so
+      // that the condition states and every validator drop reason land on
+      // `reasons` on every path — a clean pass, a trim, a prose reject and a
+      // breach reject alike. Ordering then decides only which
+      // `binding_constraint` wins, never what is audited.
+      reasons.push(...invalidationReasons(critic));
+
       const criticTrim = applyCritic(critic, notional, reasons);
       if (criticTrim.rejected) {
         return rejected('risk_critic:reject', reasons);
+      }
+      // #997 Q2b: a MEASURED breach rejects even when the prose said `pass`.
+      // The producer never pre-computes this — it reports `verdict: 'pass'`
+      // beside a `breached` condition and `evaluate()` holds the authority,
+      // which is ADR-0003's seam exactly and keeps the persisted row honest
+      // about what the model actually said. The constraint is its own, so
+      // "how often do prose and predicates disagree?" stays answerable: this
+      // line is reached only when the prose verdict did NOT itself reject.
+      //
+      // `unevaluable` is deliberately absent from this test. A data gap must
+      // never block a trade (`devils-advocate-spec.md`:94), and an absent or
+      // empty `conditions` list — a pre-fold row, or a malformed conditions
+      // half — yields no breaches and therefore no effect at all.
+      const breached = breachedConditions(critic);
+      if (breached.length > 0) {
+        return rejected(INVALIDATED_BINDING_CONSTRAINT, reasons);
       }
       if (criticTrim.changed) {
         notional = criticTrim.notional;

@@ -5,6 +5,7 @@
  * #76 — the pipeline only. `PortfolioView` computation is #78; breaker-trip
  * computation is #77 — both are consumed here as pre-built inputs.
  */
+import type { BarWindow, IndicatorSpec } from '../../providers/market-data-service/index.js';
 import type { Clock, InstrumentSubclass, OrderIntent } from '../../shared/index.js';
 
 /**
@@ -455,6 +456,90 @@ export interface SubclassDeploymentCap {
   };
 }
 
+/**
+ * What an invalidation condition is measured AGAINST — the vocabulary a
+ * proposed condition may bind to (#994's fold of `devils-advocate-spec.md`
+ * into the Risk Critic, per #997 Q1).
+ *
+ * Exactly the three reads the Risk step already performs deterministically at
+ * decision time, off the `MarketDataService` it already holds for
+ * `correlation.ts` and `portfolio-view.ts`. The 2026-08-05 proposal also had
+ * an `mi_context` member; it is deliberately NOT here, because the Risk step
+ * holds no Market Intelligence context store and the fold adds no data
+ * dependency. A condition naming anything else is dropped
+ * (`unknown_observable`), never evaluated.
+ */
+export type InvalidationObservable =
+  | { kind: 'indicator'; spec: IndicatorSpec }
+  | { kind: 'mark' }
+  /** Latest bar's volume over the mean of the preceding bars in the window. */
+  | { kind: 'bars'; window: BarWindow; measure: 'volume_ratio' };
+
+/**
+ * One falsifying predicate the critic PROPOSED. A model can only ever
+ * construct this — never an `EvaluatedCondition` — which is what makes "the
+ * LLM names what to check; deterministic code does the checking" a property of
+ * the types rather than of a prompt instruction.
+ *
+ * No severity, weight or confidence, by spec: nothing model-assigned may reach
+ * sizing or enforcement.
+ */
+/** The only comparators a condition may use. Declared once here; `invalidation.ts` validates against this same union. */
+export type InvalidationComparator = '<' | '<=' | '>' | '>=';
+
+export interface InvalidationCondition {
+  id: string;
+  observable: InvalidationObservable;
+  comparator: InvalidationComparator;
+  threshold: number;
+  /** Why this falsifies the thesis. Free text, audit only — never machine-read. */
+  rationale: string;
+}
+
+/**
+ * Tri-state, derived MECHANICALLY. `unevaluable` means the read failed or
+ * returned too little data — it is never a judgement, and it carries no
+ * enforcement effect (a data gap must not block a trade).
+ */
+export type InvalidationConditionState = 'breached' | 'not_breached' | 'unevaluable';
+
+/** A condition plus the measured fact about it. `observed` is null iff `unevaluable`. */
+export interface EvaluatedCondition {
+  condition: InvalidationCondition;
+  state: InvalidationConditionState;
+  observed: number | null;
+}
+
+/**
+ * Why the deterministic validator refused a proposed condition. Persisted
+ * rather than discarded (`devils-advocate-spec.md` user story 23): without
+ * this, a systematically malformed prompt degrades into "conditions never
+ * fire" and hides for a month.
+ */
+export type InvalidationDropReason =
+  /** Not a readable condition object: blank id, non-finite threshold, unknown comparator, no rationale. */
+  | 'unparseable'
+  /** The `kind` is not one the Risk step can read deterministically at decision time. */
+  | 'unknown_observable'
+  /** The named indicator is not in the Market Data Service's `INDICATOR_KINDS` registry. */
+  | 'unknown_indicator'
+  /** `spec.lookback` (indicator) or `window.lookback` (bars) exceeds `MAX_INVALIDATION_LOOKBACK` — refused before it can trigger an unbounded market-data read (#994 review, PR #1067). */
+  | 'lookback_too_large'
+  /** The threshold is outside the observable's declared range, so the predicate is permanently true or permanently false. */
+  | 'threshold_out_of_range'
+  /** The condition would fire when the thesis is WORKING rather than failing. */
+  | 'direction_incoherent'
+  /** Beyond the 5-condition ceiling. Only the ceiling is enforced — a short list is recorded, never dropped. */
+  | 'over_cap';
+
+/** A refused condition, kept for audit. `id` is null when the emission was too malformed to carry one. */
+export interface DroppedCondition {
+  id: string | null;
+  /** What the model said, bounded. Audit only. */
+  raw: string;
+  reason: InvalidationDropReason;
+}
+
 /** The red-team critic's verdict on one gated `OrderIntent` (ADR-0003, #204). Produced *outside* `evaluate()` by critic.ts (built by #957) and consumed here as pre-built data.
  *
  * `unavailable` is what a failed critic call PERSISTS (fail-open, per ADR-0003 §Consequences): the mechanical steps remain the safety net. It is
@@ -466,6 +551,27 @@ export interface RiskCriticVerdict {
   max_notional: number | null;
   /** The critic's argument text (audit). Surfaces on `RiskDecision.reasons`. */
   reasoning: string;
+  /**
+   * The invalidation half (#994, folding `devils-advocate-spec.md` in here per
+   * #997 Q1). Emitted by the SAME single LLM call as the prose above, then
+   * validated and evaluated by deterministic code in `invalidation.ts`.
+   *
+   * OPTIONAL, and absent-or-empty is ONE state — `no_conditions` — whatever
+   * the cause: the model emitted none, every one was dropped, the conditions
+   * half was unreadable, or the row was written before the fold and has no
+   * such field at all (#997 Q3). All four report identically and enforce
+   * nothing, so there is exactly one "nothing checkable came out" branch and a
+   * pre-fold row replays to the same decision it always reached — same status,
+   * size and `binding_constraint`, plus the one `no_conditions` reason line
+   * that says the checklist enforced nothing.
+   *
+   * A malformed conditions half NEVER voids the prose verdict (#997 Q2a):
+   * discarding a valid `reject` because the advisory half was garbage would
+   * make the system strictly less safe than it is without the fold.
+   */
+  conditions?: EvaluatedCondition[];
+  /** What the validator refused, with reasons. Surfaced on `RiskDecision.reasons` and persisted. */
+  dropped_conditions?: DroppedCondition[];
 }
 
 /** Persisted critic row, keyed by `debate_id` — joined with `debate_log` and `cosine_setups` (#162). */

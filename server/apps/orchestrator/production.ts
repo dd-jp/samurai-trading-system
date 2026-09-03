@@ -1653,11 +1653,17 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // `mode` picks the implementation: `backtest` gets a producer holding no
     // LLM client at all, which is what makes "no live call in a replayed
     // path" (ADR-0003 §2) structural rather than a runtime check.
+    // `marketData` is where the invalidation conditions the same call emits are
+    // MEASURED (#994). Not a new dependency — this is the service the risk step
+    // already reads for `computeCorrelationEstimate` and `computePortfolioView`
+    // — and required rather than optional so that deleting this line is a
+    // compile error rather than a silently permanent `no_conditions`.
     critic: buildRiskCriticProducer({
       mode: config.mode,
       llm: llmClient,
       store: new SqliteRiskCriticStore(guardedStore(config.db, 'risk')),
       spendCap,
+      marketData,
       logger,
     }),
   };

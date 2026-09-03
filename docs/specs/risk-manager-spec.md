@@ -130,11 +130,11 @@ interface RiskInput {
                                           // wired 2026-09-01 by #957. Added to this interface block 2026-09-02: the field was
                                           // referenced pervasively in this spec's prose from the start but had never actually
                                           // been declared here — see docs/reviews/devils-advocate-spec-cross-verify-2026-09-02.md.
-  invalidation?: InvalidationResult;     // pre-built, external — the same seam as `critic`, produced by the `invalidation`
-                                          // stage (devils-advocate-spec.md). NOT YET WIRED: `invalidation` is specced but not
-                                          // built (CLAUDE.md), so this field has no producer today. Declared here ahead of the
-                                          // implementation per cross-spec-contracts.md §8 and devils-advocate-spec.md, so the
-                                          // seam is visible before the stage ships rather than discovered as a gap when it does.
+                                          // Since the 2026-09-03 invalidation fold (#994) it ALSO carries the evaluated
+                                          // invalidation conditions — there is no separate `invalidation?` field. A previous
+                                          // revision of this block declared `invalidation?: InvalidationResult` "ahead of the
+                                          // implementation"; that seam never existed in `types.ts` and never will, because
+                                          // #997 Q1 folded the conditions onto this verdict instead. See "Module: Risk Critic".
 }
 
 // Crash-restart-safe row shape for the two sticky breakers (hard drawdown, kill-switch),
@@ -208,7 +208,7 @@ Ordered; each step trims or hard-rejects; **exits skip all entry gates and alway
 4. **Per-asset-class exposure cap** — trim so the crypto/stocks bucket ≤ limit.
 5. **Portfolio gross exposure cap** — trim so total gross ≤ limit.
 6. **Concentration check (dynamic correlation matrix)** — point-in-time pairwise Pearson correlation over trailing returns (`server/pipeline/risk-manager/correlation.ts`), trim to fit the correlated-risk cap. (Implemented per backlog ticket #50 — the "v1 static buckets" description in earlier drafts of this spec was stale; corrected 2026-07-26 during #186's grilling.) A pair with fewer than `min_bars` overlapping returns still cannot bind this cap — the warm-up fallback — but is now reported, see "Module: Correlation Warm-up Visibility" below.
-7. **Risk critic (advisory-authority, external verdict)** — consumes an optional, pre-built verdict on `RiskInput.critic` (narrative/qualitative risk only); when present, trims or hard-rejects with the same authority as the mechanical steps above. **The LLM pass this verdict would come from, if ever built, runs entirely outside `evaluate()`** — this step never constructs a prompt or calls a model itself, the same seam `cii` and `correlation` already use. See "Module: Risk Critic" below for ADR-0003's shape and the producer #957 built for it (`risk-manager/critic.ts`, wired via `RiskStepDeps.critic`). (Added per [ADR-0003](../adr/0003-risk-manager-critic-layer.md).)
+7. **Risk critic (advisory-authority, external verdict)** — consumes an optional, pre-built verdict on `RiskInput.critic`, carrying **two things**: a narrative/qualitative *prose* verdict, and a list of **typed, deterministically-evaluated invalidation conditions** (the 2026-09-03 fold, #994/#997 — the scope statement here read "narrative/qualitative risk only" until then, and that boundary is false now that conditions ride the same verdict). When present, the prose half trims or hard-rejects with the same authority as the mechanical steps above; independently, a `breached` condition hard-rejects with its own `binding_constraint: 'risk_critic:invalidated'`, distinct from the prose `risk_critic:reject`. **The LLM pass this verdict comes from runs entirely outside `evaluate()`** (built by #957) — this step never constructs a prompt or calls a model itself, the same seam `cii` and `correlation` already use, and the conditions it now also carries were validated and evaluated deterministically upstream, never by a model. See "Module: Risk Critic" below for ADR-0003's shape and the producer #957 built for it (`risk-manager/critic.ts`, wired via `RiskStepDeps.critic`). (Added per [ADR-0003](../adr/0003-risk-manager-critic-layer.md).)
 8. **Min-viable-size re-check** — if trimming pushed size below viable (respecting broker min order size), reject.
 
 Monotonic: each step only reduces risk. `binding_constraint` records the step that trimmed/killed the intent.
@@ -288,7 +288,7 @@ The gap: check-pipeline step 6 reads an instrument absent from `CorrelationEstim
 
 ### Module: Risk Critic
 
-Adopted per [ADR-0003](../adr/0003-risk-manager-critic-layer.md) (Risk Manager gains a single red-team critic), resolved via [#186](https://github.com/dd-jp/samurai-trading-system/issues/186) grilling. Answers the question `../research/16-risk-debate-finding.md` raised: the mechanical checks (including the now-dynamic correlation concentration check, step 6) cover quantitative risk well; this module exists only for the narrative/qualitative risk they structurally cannot express.
+Adopted per [ADR-0003](../adr/0003-risk-manager-critic-layer.md) (Risk Manager gains a single red-team critic), resolved via [#186](https://github.com/dd-jp/samurai-trading-system/issues/186) grilling. Answers the question `../research/16-risk-debate-finding.md` raised: the mechanical checks (including the now-dynamic correlation concentration check, step 6) cover quantitative risk well; this module was originally scoped to the narrative/qualitative risk they structurally cannot express, **and since the 2026-09-03 invalidation fold it carries a second, deterministic half as well** — see "The invalidation fold" below, which restates this scope boundary rather than leaving it as "narrative/qualitative only".
 
 - **The LLM pass, if it exists, is never inside `evaluate()`.** This is the load-bearing fact for "Fully mechanical, deterministic, no LLM" in the Solution above: whatever produces a critic verdict — a prompt, a model call, its own retry/timeout handling — runs as a separate step *before* `RiskManager.evaluate()` is called, and hands its result in as plain data on `RiskInput.critic`. `evaluate()` reads `critic.verdict`/`critic.max_notional`/`critic.reasoning` exactly like it reads `cii` and `correlation` — it does not know, and cannot tell, whether the value came from a model, a replayed log row, or a test fixture.
 - **Scope: single critic, not a 3-persona debate.** The Debate Engine (Stage 3) already spends the multi-persona-adversarial-tension budget; a second full debate in Stage 4 is redundant given how narrow the blind spot is. One LLM pass, framed as "argue why this trade should be trimmed or rejected."
@@ -298,13 +298,147 @@ Adopted per [ADR-0003](../adr/0003-risk-manager-critic-layer.md) (Risk Manager g
 - **Built and wired 2026-09-01 by [#957](https://github.com/dd-jp/samurai-trading-system/issues/957)**, per [#955](https://github.com/dd-jp/samurai-trading-system/issues/955)'s "build it" resolution under map [#513](https://github.com/dd-jp/samurai-trading-system/issues/513). The producer is `server/pipeline/risk-manager/critic.ts`: `LlmRiskCriticProducer` in `live`/`paper`, `ReplayRiskCriticProducer` in `backtest` (which holds NO LLM client, so "no live call in a replayed path" is structural rather than a runtime check), selected by `buildRiskCriticProducer` and wired onto `RiskStepDeps.critic` in `production.ts`. Verdicts persist to `risk_critic_log` (migration 0032, `SqliteRiskCriticStore`) keyed by `debate_id`. Spend meters into `llm_spend` under `stage: 'risk_critic'` through the same `LlmClient` and the same ADR-0008 `SpendCap` as the debate — **no critic-specific cap**, per #955 (~1-2 calls/day, ~$1/yr at the measured $0.0015/call).
 - **Cadence, and how the caller knows step 7 was reached.** `buildRiskStep` evaluates ONCE with no verdict — pure, synchronous, no I/O — and consults the critic only if that pass pushed `RISK_CRITIC_SKIPPED_REASON`, which is exactly the marker of reaching step 7. It then re-evaluates with the verdict; only the second decision is logged and returned, so one intent still writes one `risk_log` row. This keeps `evaluate()` pure (#642) while firing on precisely the population #955 specifies: every viable entry that survived the exit bypass, the unvalued-book refusal, the breaker gate and the `min_viable_size` reject. Exits, breaker rejections and dust refusals cost nothing.
 - **Fail-open, by record.** Every producer-side failure — provider error, spend-cap refusal, unreadable answer, the producer's own 10s budget expiring in front of the order, **or a failure to PERSIST a verdict the model did return** — yields NO verdict, so the decision keeps its explicit `risk_critic: skipped` reason and the mechanical steps remain the safety net (#640's precedent). Where the log is reachable a row is still written with `verdict: 'unavailable'` for the operator and so a later backtest replays the same "no verdict" input the live run had. A `debate_id` with no logged row replays the same way, never as a fresh call. **The persistence case is not an exception to that, it is an instance of it:** a verdict with no row is a verdict the replay cannot see, so acting on it live would put the live decision on a path no backtest can reproduce — the same-code-path-live-and-replay invariant below, broken silently and only for the trades taken while the store was down. The verdict is discarded and the write failure logged at `warn`; a store fault still never throws out of the risk stage.
-- **Prompt/context contract (was "not yet decided").** One pass, framed "argue why this trade should be trimmed or rejected", told which risks the mechanical steps already cover and told that "pass" is a complete answer. It sees the intent (side, instrument, notional, bracket, conviction, convergence) and the book (equity, gross exposure, held instruments and their notionals) — the co-catalyst read §1 names as the blind spot. The reply is JSON, validated field by field: a `trim` needs a finite `max_notional` above zero (a non-finite one would pass `applyCritic`'s comparison and the later size guards as `NaN`), reasoning is bounded before it reaches `risk_log`, and anything unreadable is refused into the fail-open path rather than half-acted-on. Dashboard surfacing of verdicts remains out of scope (#957).
+- **Prompt/context contract (was "not yet decided").** One pass, framed "argue why this trade should be trimmed or rejected", told which risks the mechanical steps already cover and told that "pass" is a complete answer. It sees the intent (side, instrument, notional, bracket, conviction, convergence) and the book (equity, gross exposure, held instruments and their notionals) — the co-catalyst read §1 names as the blind spot. The reply is JSON, validated field by field: a `trim` needs a finite `max_notional` above zero (a non-finite one would pass `applyCritic`'s comparison and the later size guards as `NaN`), reasoning is bounded before it reaches `risk_log`, and anything unreadable is refused into the fail-open path rather than half-acted-on. Dashboard surfacing of verdicts remains out of scope (#957). Since the 2026-09-03 fold the same reply also carries the raw invalidation conditions — see "Module: Risk Critic — the invalidation fold" for the contract, and note that a malformed conditions half never voids the prose verdict.
+
+### Module: Risk Critic — the invalidation fold *(2026-09-03)*
+
+David ruled 2026-09-02 *"fold this to risk critic"*: no standalone `invalidation` stage ships, and the typed, falsifiable invalidation-condition mechanism designed in [`devils-advocate-spec.md`](devils-advocate-spec.md) (preserved verbatim as the declined-proposal record) becomes part of this module instead. The design questions the ruling left open were resolved by grilling ticket [#997](https://github.com/dd-jp/samurai-trading-system/issues/997) on 2026-09-02; **this section records those answers, it does not re-decide them.** Implementation is [#994](https://github.com/dd-jp/samurai-trading-system/issues/994).
+
+The load-bearing rule is carried over unchanged from `devils-advocate-spec.md`: **the LLM names what to check; deterministic code does the checking, so a model cannot produce a breach — only propose a condition.**
+
+#### Scope — what step 7 is now (#997 Q1: one LLM call, separate deterministic evaluator)
+
+Neither "merge everything into `critic.ts`" nor "a second sibling producer". Only condition *emission* is LLM work; the validator and the tri-state evaluator are deterministic code, and they resolve differently:
+
+- **`critic.ts`'s existing single LLM call emits prose *and* raw conditions.** No second pass and no second parser-fed call — that honours #513's argument that the step-7 seam must not accumulate LLM passes, and keeps the ~$1/yr envelope #955 accepted.
+- **The validator and the tri-state evaluator live in their own module** (`server/pipeline/risk-manager/invalidation.ts`), not inside `critic.ts`. Deterministic evaluation stays unit-testable in isolation and out of the module this spec defines as the qualitative-judgement pass.
+- **`RiskCriticVerdict` gains `conditions?: EvaluatedCondition[]` and `dropped_conditions?: DroppedCondition[]`.** `evaluate()` reads them as plain data, exactly as it reads `cii` and `correlation` — [ADR-0003](../adr/0003-risk-manager-critic-layer.md)'s "no LLM inside `evaluate()`" invariant is untouched. There is **no** `RiskInput.invalidation` field and no `InvalidationResult` transported into Risk; conditions ride the critic's verdict.
+
+Consequence, stated plainly because it is a deliberate reversal: **step 7 is no longer "narrative/qualitative risk only".** That boundary was set deliberately in ADR-0003 and it is false under this answer — the check-pipeline entry and the Resolved Decisions list are amended to match.
+
+#### The typed condition contract
+
+```typescript
+type InvalidationObservable =
+  | { kind: 'indicator'; spec: IndicatorSpec }          // reuses IndicatorSpec verbatim (cross-spec-contracts §3)
+  | { kind: 'mark' }
+  | { kind: 'bars'; window: BarWindow; measure: 'volume_ratio' };
+
+interface InvalidationCondition {
+  id: string;
+  observable: InvalidationObservable;
+  comparator: '<' | '<=' | '>' | '>=';
+  threshold: number;
+  /** Why this falsifies the thesis. Free text, audit only — never machine-read. */
+  rationale: string;
+}
+
+interface EvaluatedCondition {
+  condition: InvalidationCondition;
+  state: 'breached' | 'not_breached' | 'unevaluable';
+  /** The measured value the state was derived from; null iff unevaluable. */
+  observed: number | null;
+}
+
+interface DroppedCondition {
+  /** The emitted `id` where one could be read, else null. */
+  id: string | null;
+  /** What the model said, bounded, for audit. */
+  raw: string;
+  reason: 'unparseable' | 'unknown_observable' | 'unknown_indicator' | 'lookback_too_large'
+        | 'threshold_out_of_range' | 'direction_incoherent' | 'over_cap';
+}
+```
+
+**The `mi_context` observable from `devils-advocate-spec.md` is NOT carried over.** The Risk step reads marks, bars and indicators off the Market Data Service it already holds (`correlation.ts`, `portfolio-view.ts`); it holds no Market Intelligence context store, and the fold explicitly adds no new data dependency. A condition naming an observable outside the three above is dropped `unknown_observable`.
+
+**No severity, weight or confidence, and no `thesis_holds`** — carried over from `devils-advocate-spec.md` unchanged. Nothing model-assigned may flow into sizing or enforcement, and the derived answer is computed at the point of use. `state` is likewise **not** readable from the model's output: the raw-parse shape structurally has no `state` field, so a model emitting `"state":"breached"` changes nothing.
+
+#### The 3-5 condition cap, and both of its bounds
+
+The upper bound is enforced, the lower bound is not:
+
+- **More than 5 surviving conditions:** the excess is dropped (in emission order, keeping the first 5) with reason `over_cap`. A checklist longer than 5 is not one a human reads.
+- **More than 16 emitted elements:** only the first 16 are *inspected*. The accepted ceiling bounds what is enforced; it does not bound the audit trail, and every refusal becomes a `DroppedCondition`, a `risk_log` reason line and JSON in `risk_critic_log`. Validating the whole array would make the model's emission length the only limit on all three, so a looping or hostile emission of 1000 elements writes 1000 of each. Past the inspection bound the remainder is recorded as **one** summarising `over_cap` drop naming the uninspected count and the emitted total — the flood stays auditable without being amplified.
+- **Fewer than 3:** **recorded, not dropped.** Discarding a valid 2-condition set would be the same safety regression as discarding the prose verdict — the system would enforce *less* than it does with the conditions present. The count is persisted and surfaced so a systematically thin prompt is visible — the producer emits a `warn` log line naming the accepted count and every drop reason at the moment of emission, and `evaluate()` records the same facts as `risk_log` reason lines. It never voids the conditions that did survive.
+
+#### Validator drop rules
+
+Deterministic, between parse and evaluation, and every drop is persisted with its reason (`devils-advocate-spec.md` user story 23):
+
+1. **`unparseable`** — the emitted element is not a readable condition object (missing/blank `id`, non-numeric or non-finite `threshold`, unknown comparator, absent `rationale`). Malformed output is refused, never coerced.
+2. **`unknown_observable`** — the `kind` is not one of `indicator` / `mark` / `bars`, i.e. it does not bind to a service the Risk Manager can already read deterministically at decision time.
+3. **`unknown_indicator`** — the named indicator is not in the Market Data Service's `INDICATOR_KINDS` registry.
+4. **`lookback_too_large`** (#994 review, PR #1067) — an indicator's `spec.lookback` or a bars observable's `window.lookback` exceeds `MAX_INVALIDATION_LOOKBACK` (1000 bars, chosen comfortably above `technical-analyst.ts`'s `RVOL_5M_LOOKBACK` = 936, the largest lookback any existing caller requests on this path). Refused at validation, before it can reach `observe()` and trigger an unbounded `getBars`/indicator read on the path an order is waiting on — `withinDeadline` races that read against the budget but does not cancel it.
+5. **`threshold_out_of_range`** — the threshold falls outside the observable's declared valid range (an RSI condition thresholded at 140 can only ever be permanently breached or permanently not). Ranges are declared as a `Partial<Record<IndicatorKind, …>>`, so **an indicator kind with no declared range falls through un-dropped**; adding a kind to `INDICATOR_KINDS` must never become a trade-blocking event.
+6. **`direction_incoherent`** — the condition would fire when the thesis is *working* rather than failing. Per-observable direction semantics, declared in code, **not** a naive side↔comparator mapping (`devils-advocate-spec.md` gives the counterexample):
+
+   | Observable | Which direction means "thesis failing" |
+   | --- | --- |
+   | `mark`, price-like indicators (`sma`, `ema`) | Opposite the intent's side — `<`/`<=` for a `buy`, `>`/`>=` for a `sell`. |
+   | Momentum indicators (`rsi`) | Opposite the intent's side. |
+   | `bars` / `volume_ratio` | Always `<`/`<=` — conviction is falsified by *thinning* participation regardless of side. |
+   | Any other indicator kind | Undeclared. **Not dropped by this rule**, falls through to the others. |
+
+7. **`over_cap`** — see the cap above.
+
+A dropped condition is **dropped, not breached**. If dropping empties the list, the result is reported exactly as a zero-condition emission (`no_conditions`); one code path for "nothing checkable came out", regardless of cause.
+
+#### Evaluation — tri-state, mechanical
+
+Each surviving condition is evaluated once, at `asOf` = the producer's decision time, against the same Market Data Service seams the rest of the Risk step reads. `unevaluable` is **derived mechanically, never judged**: the read threw, returned no value, or returned fewer bars than the measure needs. There is no discretionary path into it, and `observed` is `null` exactly when the state is `unevaluable`.
+
+#### Failure matrix (#997 Q2a — partial-tolerant)
+
+| What happened | Prose verdict | Conditions | Enforcement |
+| --- | --- | --- | --- |
+| Call returns, prose parses, conditions parse and survive | Stands, full trim/reject authority | `EvaluatedCondition[]` | Prose trims/rejects; a `breached` condition hard-rejects |
+| Call returns, prose parses, conditions absent / unparseable / all dropped | **Stands, full trim/reject authority** | `no_conditions` (empty or absent list) | Prose only; conditions have **no** enforcement effect |
+| Call returns, **prose** unreadable | Refused → `unavailable` → `undefined` | Discarded with it | Today's fail-open path, unchanged: `risk_critic: skipped` |
+| Whole call fails (provider, timeout, spend cap, persistence) | `unavailable` → `undefined` | none | Today's fail-open path, unchanged |
+| A surviving condition is `unevaluable` | Unaffected | Reported `unevaluable` | **No enforcement effect** — a data gap never blocks a trade |
+
+The rationale for row 2 is the binding one: discarding a valid `reject` because the *advisory* half of the response was malformed would make the system strictly **less** safe than it is today. **Binding condition on that answer:** drop reasons and `no_conditions` are persisted and surfaced on `RiskDecision.reasons` (`devils-advocate-spec.md` user stories 23 and 52). Without that, a systematically malformed prompt degrades silently into "conditions never fire" and hides for a month.
+
+#### Enforcement (#997 Q2b — `evaluate()` enforces, the producer reports facts)
+
+A `breached` condition rejects **even when the prose verdict says `pass`**. The producer does **not** overwrite the verdict: it reports `verdict: 'pass'` alongside `conditions: [{ state: 'breached', … }]`, and `evaluate()` reads the array and rejects with its own distinct `binding_constraint`:
+
+- **`risk_critic:invalidated`** — a breached condition, i.e. the thesis was falsified before the order was placed.
+- **`risk_critic:reject`** — the prose verdict said reject. Unchanged.
+
+Two reasons the producer must not pre-compute the rejection: the persisted row keeps what the LLM actually *said* (a pre-computed reject destroys that), and the two rejection causes stay separable in the logs, so "how often do prose and predicates disagree?" remains an answerable question. This is ADR-0003's seam exactly — producer supplies data, `evaluate()` holds authority — and `evaluate()` stays pure and deterministic given its inputs.
+
+**Ordering inside step 7:** the condition summary (states, drops, `no_conditions`) is pushed onto `reasons` *before* the prose branch, so it is recorded on every path including a prose reject and a clean pass. The prose branch then runs first and the breach check second, which means `risk_critic:invalidated` names precisely the disagreement case — a prose verdict that did not itself reject, overruled by a measured predicate.
+
+#### Two failure domains, one budget
+
+The conditions step runs **outside** the LLM call's `try`. A throw anywhere after the prose parse — including from the reporting path itself — must not reach the catch that returns `unavailable`, because that catch would void a prose `reject` the model had already produced, the one outcome Q2a forbids. Logging is wrapped defensively for the same reason: a log sink that throws is not a reason to lose a verdict.
+
+The producer's budget (`budgetMs`, default `DEFAULT_CRITIC_BUDGET_MS`) spans **both** halves. Its `AbortSignal` is handed to the evaluator, and a read still outstanding when the budget expires is a data gap like any other: `unevaluable`, no enforcement effect. Without this the market-data reads run unbounded in front of an order the tick is waiting on.
+
+#### Persistence and replay (#997 Q3 — absent `conditions` = `no_conditions`)
+
+`RiskCriticLog` persists the whole verdict (`risk_critic_log`, migration 0032). The fold adds two **nullable** columns for the evaluated conditions and the drops; the field is additive and optional, and **there is no backfill**.
+
+- **A row written before the fold has no `conditions`, and neither does one whose persisted list is unreadable.** The store validates the SHAPE of every persisted element on read — observable kind, comparator, finite threshold, a `state` inside the tri-state union, `observed` null iff `unevaluable` — and collapses a list with any malformed element whole. A cast would let `[{}]` throw inside `evaluate()` and let `[{"state":"breached"}]` hard-reject a trade with nothing measured behind it, which is the "a model cannot produce a breach" rule defeated by the storage layer. Either way it replays as an empty list reported `no_conditions` — the *same code path* as a partial failure, so there is exactly one "nothing checkable came out" branch regardless of cause. The prose verdict replays with the authority it always had, so **historical backtest results are unchanged by the fold**. Rejected alternatives: synthesising an `unevaluable` set fabricates a condition that never existed (forbidden by "derived mechanically, never judged", and worth nothing since `unevaluable` and `no_conditions` have identical zero enforcement effect); refusing to replay pre-fold rows breaks every backtest spanning the fold date with nothing truthful to backfill from.
+- **The `backtest` producer replays the persisted `EvaluatedCondition[]` and does not re-evaluate.** This is a **deliberate deviation** from `devils-advocate-spec.md`'s split-by-nondeterminism-source design (emission replayed, evaluation re-run), and it is recorded here rather than left to be discovered: under the fold the persisted unit is the *verdict*, ADR-0003 §2 makes the verdict replay-from-log, and re-running evaluation would require handing the backtest producer the Market Data Service it deliberately holds none of — the same structural property that makes "no live LLM call in a replayed path" true by construction rather than by a runtime check. It also gives the replay property #997 set as an acceptance criterion, stated precisely: a replayed decision is **identical in status, size and `binding_constraint`** to the one the live run reached. `reasons` is not byte-identical and is not meant to be — a pre-fold row gains exactly one line, the `no_conditions` marker, because a replayed row that enforces nothing must say so rather than read like a checked one. **Its cost, stated:** a validator or evaluator fix does **not** retroactively apply to already-logged post-fold rows; only newly-emitted conditions get the corrected behaviour.
+
+#### Prompt safety
+
+The conditions half inherits the pass's existing posture: all data blocks are wrapped by `wrapUntrusted` before interpolation, and an injected instruction is **structurally incapable of producing a false breach** — the model can only propose a condition, the validator can only drop it, and the state comes from a measured read. The worst an injection can do is degrade the checklist to `no_conditions`, which is persisted and surfaced rather than silent.
+
+#### Deliberately out of scope for the fold
+
+- **No new pipeline stage and no stage rename.** `PIPELINE_STAGES` stays six ([#998](https://github.com/dd-jp/samurai-trading-system/issues/998) retired the seventh slot on the strength of this same Q1 answer).
+- **No dashboard rendering of conditions** beyond the existing critic surface. `client/src/components/DetailDrawer.tsx` holds a reserved section; wiring it is follow-up work, not this fold.
+- **No `invalidation_log` table, no `(instrument, bar_timestamp)` content-addressed retrieval, no `BacktestReport` attestation, and no dedicated invalidation reject alert.** All four belong to the standalone stage that was declined; conditions ride `risk_critic_log`'s `debate_id` key with the verdict they were emitted beside.
 
 ### Module: State & Accounting
 
 - A small **portfolio-accounting module** computes the `PortfolioView` from the shared SQLite store (positions + fills written by Execution) **plus current marks (last price) from the Market Data Service**: equity = cash + mark-to-market of open positions, drawdown = peak-to-trough of the equity curve, notional exposure = `OpenPosition.filled_size × current mark` (freeze §4 — always reads `filled_size`, **never requested size**, so partially-filled positions are marked at what was actually filled). The *realized* components (round-trip PnL, consecutive losses) come from fills alone; only the *unrealized* mark-to-market components need current prices.
 - Risk reads this **synchronously**, independent of the Feedback Loop (which reads the same data for its slower tuning, but is never in Risk's hot path).
-- **Dependency:** this makes the Risk Manager a consumer of the **Market Data Service** via **two calls** (freeze §3): `getMark(instrument, asOf)` for current/last price (mark-to-market of open positions) **and** `getIndicator(instrument, spec, asOf)` for the **volatility-halt baseline** (the realized/implied-volatility reference the volatility circuit breaker trips against). Alongside the Analysts (`getBars`/`getIndicator`) and Verdict (`getMark`). The Market Data Service is still unbuilt and needs its own map; its scope must include serving current/last price for mark-to-market and indicators for the volatility baseline.
+- **Dependency:** this makes the Risk Manager a consumer of the **Market Data Service** via **two calls** (freeze §3): `getMark(instrument, asOf)` for current/last price (mark-to-market of open positions) **and** `getIndicator(instrument, spec, asOf)` for the **volatility-halt baseline** (the realized/implied-volatility reference the volatility circuit breaker trips against). Alongside the Analysts (`getBars`/`getIndicator`) and Verdict (`getMark`). The Market Data Service is built (`server/providers/market-data-service/`); its scope covers serving current/last price for mark-to-market and indicators for the volatility baseline.
 - **Also a consumer of Market Intelligence's WorldMonitor adapter** (via its `cii-consumer.ts`, ADR-0002) for the CII soft signal — a separate, lower-frequency read than the Market Data Service dependency above, feeding the CII Soft Signal module.
 
 ### Module: Upstream Read Failure
@@ -410,6 +544,7 @@ Wayfinder decisions for this stage live in [docs/wayfinder/risk-manager-map.md](
 - **Exit & kill-switch** — exits pass verbatim; kill halts new entries; forced liquidation out of scope.
 - **CII soft signal** (resolved 2026-07-23, see [ADR-0002](../adr/0002-worldmonitor-mi-source.md) and [#174](https://github.com/dd-jp/samurai-trading-system/issues/174)) — WorldMonitor's Country Instability Index enters as an advisory `warnings` field on `RiskDecision`, warning-only in v1 (no sizing), Samurai-owned static instrument→country mapping, fires on absolute level not delta, unpinned threshold, never overrides breakers or the pipeline outcome.
 - **Correlation warm-up visibility** (resolved 2026-08-05, see [#303](https://github.com/dd-jp/samurai-trading-system/issues/303)) — option (b): under-`min_bars` pairs are named in `CorrelationEstimate.insufficient_history` and surfaced as `correlation_warmup:<instrument>` advisory warnings, read by `SequentialTickRunner` as a `warn` log line. No limit or sizing behaviour changes; the warm-up fallback itself is unchanged. See "Module: Correlation Warm-up Visibility".
-- **Risk critic** (resolved 2026-07-26, see [ADR-0003](../adr/0003-risk-manager-critic-layer.md) and [#186](https://github.com/dd-jp/samurai-trading-system/issues/186)) — a single red-team LLM pass added as check-pipeline step 7, narrative/qualitative risk only, trim/hard-reject authority, replay-from-log for backtest determinism, runs on every gated intent single-pass with no rebuttal round.
+- **Risk critic** (resolved 2026-07-26, see [ADR-0003](../adr/0003-risk-manager-critic-layer.md) and [#186](https://github.com/dd-jp/samurai-trading-system/issues/186)) — a single red-team LLM pass added as check-pipeline step 7, trim/hard-reject authority, replay-from-log for backtest determinism, runs on every gated intent single-pass with no rebuttal round. Scoped to "narrative/qualitative risk only" until the 2026-09-03 fold below, which is why that phrase no longer appears here.
+- **Invalidation fold** (resolved 2026-09-02 by David's *"fold this to risk critic"* ruling and grilling ticket [#997](https://github.com/dd-jp/samurai-trading-system/issues/997); implemented by [#994](https://github.com/dd-jp/samurai-trading-system/issues/994)) — no standalone `invalidation` stage; `devils-advocate-spec.md`'s typed invalidation-condition mechanism rides the critic's own verdict. One LLM call emits prose *and* raw conditions; a separate deterministic module validates and evaluates them tri-state; `evaluate()` hard-rejects a `breached` condition with `risk_critic:invalidated`, distinct from the prose `risk_critic:reject`; a malformed conditions half leaves the prose verdict's authority intact (`no_conditions`); an absent `conditions` field on a pre-fold row replays as `no_conditions`. See "Module: Risk Critic — the invalidation fold".
 
-**Dependencies:** the portfolio-accounting view + shared position store (also used by the Trader, #48); the **Market Data Service** (current marks for mark-to-market — a second consumer alongside Analysts; still unbuilt, needs its own map); the Feedback Loop (Stage 6, not yet charted) which tunes limits; **Market Intelligence's WorldMonitor adapter** (CII soft signal, per ADR-0002); and the **shared SQLite store's `debate_id`-keyed log tables** (risk critic verdict persistence, per ADR-0003 and #162).
+**Dependencies:** the portfolio-accounting view + shared position store (also used by the Trader, #48); the **Market Data Service** (built — current marks for mark-to-market, plus, since the #994 invalidation fold, marks/indicators/bars read by the *critic producer* outside `evaluate()`; a consumer alongside Analysts and Verdict); the Feedback Loop (Stage 6, not yet charted) which tunes limits; **Market Intelligence's WorldMonitor adapter** (CII soft signal, per ADR-0002); and the **shared SQLite store's `debate_id`-keyed log tables** (risk critic verdict persistence, per ADR-0003 and #162).

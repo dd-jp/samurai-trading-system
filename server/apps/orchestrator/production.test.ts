@@ -4897,6 +4897,126 @@ describe('risk critic in backtest mode is replay-only at the composition root (#
     fetchSpy.mockRestore();
   });
 
+  it('#994: a logged BREACHED condition rejects at the composition root, under its own constraint', async () => {
+    // The fold's enforcement assertion, driven through the real
+    // `buildProductionComponents` rather than a unit fixture: the prose verdict
+    // says `pass`, the measured predicate says the thesis was already falsified,
+    // and `evaluate()` — not the producer — turns that into a reject. A
+    // construction check would pass for a conditions half nothing acts on,
+    // which is precisely this repo's dominant defect shape.
+    const clock = new SimulatedClock(START);
+    const intent = goVerdict().order as OrderIntent;
+    new SqliteRiskCriticStore(db).writeVerdict({
+      debate_id: intent.metadata.debate_id,
+      verdict: {
+        verdict: 'pass',
+        max_notional: null,
+        reasoning: 'no narrative risk in the book',
+        conditions: [
+          {
+            condition: {
+              id: 'thesis-needs-price-above-95',
+              observable: { kind: 'mark' },
+              comparator: '<',
+              threshold: 95,
+              rationale: 'below 95 the breakout that justified the entry has already failed',
+            },
+            state: 'breached',
+            observed: 90,
+          },
+        ],
+        dropped_conditions: [],
+      },
+      created_at: START,
+    });
+
+    const config = stubConfig(db, {
+      ...REAL_CONFIGS,
+      mode: 'backtest',
+      clock,
+      llmClient: { complete: vi.fn() } as unknown as NonNullable<ProductionConfig['llmClient']>,
+    });
+    const { steps } = buildProductionComponents(config);
+
+    const decision = await steps.risk({ trace_id: 'trace-994-invalidated', intent, clock });
+
+    expect(decision.status).toBe('rejected');
+    expect(decision.binding_constraint).toBe('risk_critic:invalidated');
+    expect(decision.binding_constraint).not.toBe('risk_critic:reject');
+    expect(decision.reasons.join(' ')).toContain('breached');
+  });
+
+  it.each([
+    ['an element with no fields at all', '[{}]'],
+    ['a bare model-shaped state assertion', '[{"state":"breached"}]'],
+  ])('#994: a persisted conditions column holding %s neither throws nor rejects on the replay path', async (_case, stored) => {
+    // The threat is the storage layer, not the model: a TEXT column read
+    // with a cast would hand `evaluate()` an object with no `observable`
+    // (a TypeError inside the risk stage, i.e. a dead tick) or an
+    // unmeasured `breached` (a hard reject with nothing behind it).
+    const clock = new SimulatedClock(START);
+    const intent = goVerdict().order as OrderIntent;
+    db.prepare(
+      `INSERT INTO risk_critic_log
+           (debate_id, verdict, max_notional, reasoning, created_at, conditions_json)
+         VALUES (?, 'pass', NULL, 'prose stands', ?, ?)`,
+    ).run(intent.metadata.debate_id, START.toISOString(), stored);
+
+    const config = stubConfig(db, {
+      ...REAL_CONFIGS,
+      mode: 'backtest',
+      clock,
+      llmClient: { complete: vi.fn() } as unknown as NonNullable<ProductionConfig['llmClient']>,
+    });
+    const { steps } = buildProductionComponents(config);
+
+    const decision = await steps.risk({ trace_id: 'trace-994-corrupt', intent, clock });
+
+    expect(decision.status).toBe('approved');
+    expect(decision.binding_constraint).not.toBe('risk_critic:invalidated');
+    expect(decision.reasons.join(' ')).toContain('no_conditions');
+  });
+
+  it('#994: drop reasons and `no_conditions` reach the PERSISTED `risk_log` row of an APPROVED decision', async () => {
+    // Surfacing is what makes "the conditions half never fires" noticeable, and
+    // an operator notices it by querying `risk_log`, not by holding the returned
+    // `RiskDecision`. The rejecting case above would carry its reasons into the
+    // row too — so this one deliberately APPROVES: the quiet path, where an
+    // unsurfaced drop would otherwise leave no trace anywhere.
+    const clock = new SimulatedClock(START);
+    const intent = goVerdict().order as OrderIntent;
+    new SqliteRiskCriticStore(db).writeVerdict({
+      debate_id: intent.metadata.debate_id,
+      verdict: {
+        verdict: 'pass',
+        max_notional: null,
+        reasoning: 'no narrative risk in the book',
+        conditions: [],
+        dropped_conditions: [
+          { id: 'rsi-over-140', raw: '{"id":"rsi-over-140"}', reason: 'threshold_out_of_range' },
+        ],
+      },
+      created_at: START,
+    });
+
+    const config = stubConfig(db, {
+      ...REAL_CONFIGS,
+      mode: 'backtest',
+      clock,
+      llmClient: { complete: vi.fn() } as unknown as NonNullable<ProductionConfig['llmClient']>,
+    });
+    const { steps } = buildProductionComponents(config);
+
+    const decision = await steps.risk({ trace_id: 'trace-994-surfaced', intent, clock });
+    expect(decision.status).toBe('approved');
+
+    const row = db
+      .prepare('SELECT reasons_json FROM risk_log WHERE trace_id = ?')
+      .get('trace-994-surfaced') as { reasons_json: string } | undefined;
+    expect(row?.reasons_json).toContain('threshold_out_of_range');
+    expect(row?.reasons_json).toContain('no_conditions');
+  });
+
   it('replays UNSEEN history as no verdict rather than dialling — the mode branch, not the log hit', async () => {
     // The case above alone cannot catch a `production.ts` that passed a
     // hard-coded `'paper'`: the live producer reuses a logged verdict for the
