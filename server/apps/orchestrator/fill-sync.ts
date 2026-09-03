@@ -83,6 +83,17 @@ import type {
 import type { Clock } from '../../shared/index.js';
 import type { Logger } from './types.js';
 
+/**
+ * The `error`-level messages this loop writes when a pass rejects — one per
+ * `catch` below. Exported because the smoke gate's `FillSyncFailureRecorder`
+ * (smoke-run.ts, #1049) matches on them: a reworded literal here with a stale
+ * copy there would leave the recorder capturing nothing and the gate green,
+ * which is the invisible-failure hole that gate check exists to close.
+ */
+export const FILL_SYNC_RECONCILE_FAILED = 'periodic reconcile failed' as const;
+export const FILL_SYNC_SWEEP_FAILED = 'residual-protection sweep failed' as const;
+export const FILL_SYNC_POLL_FAILED = 'fill poll failed' as const;
+
 /** Execution's polled surfaces — the subset of `Execution` this loop drives. */
 export interface FillSyncSurface {
   reconcile(): Promise<ReconcileReport>;
@@ -242,7 +253,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
         trace_id: FILL_SYNC_TRACE_ID,
         stage: 'execution',
         level: 'error',
-        message: 'periodic reconcile failed',
+        message: FILL_SYNC_RECONCILE_FAILED,
         payload: {
           error: reconcileError instanceof Error ? reconcileError.message : String(reconcileError),
         },
@@ -279,7 +290,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
           trace_id: FILL_SYNC_TRACE_ID,
           stage: 'execution',
           level: 'error',
-          message: 'residual-protection sweep failed',
+          message: FILL_SYNC_SWEEP_FAILED,
           payload: {
             error: sweepError instanceof Error ? sweepError.message : String(sweepError),
           },
@@ -314,7 +325,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
         trace_id: FILL_SYNC_TRACE_ID,
         stage: 'execution',
         level: 'error',
-        message: 'fill poll failed',
+        message: FILL_SYNC_POLL_FAILED,
         payload: { error: error instanceof Error ? error.message : String(error) },
       });
     } finally {

@@ -19,7 +19,7 @@ import { RSI_SPEC, SMA_SPEC } from '../../pipeline/analysts/technical-analyst.js
 import type { ArmPerformance } from '../../pipeline/control-arm/index.js';
 import { computeIndicator } from '../../providers/market-data-service/index.js';
 import { GUARDED_THRESHOLD_NAMES } from '../../shared/index.js';
-import { STAGE_OWNED_TABLES } from '../../shared/store/write-guard.js';
+import { STAGE_OWNED_TABLES } from '../../shared/store/index.js';
 import {
   type ArmComparisonEvidence,
   buildSmokeFixtureBars,

@@ -246,6 +246,11 @@ import {
   LoggingResidualExposureAlertChannel,
   LoggingUnpricedFillAlertChannel,
 } from './console-channels.js';
+import {
+  FILL_SYNC_POLL_FAILED,
+  FILL_SYNC_RECONCILE_FAILED,
+  FILL_SYNC_SWEEP_FAILED,
+} from './fill-sync.js';
 import { installFaultHandlers, startFromEnvironment } from './index.js';
 import { buildEntrypointLogger, JsonLogger, type StdoutStream } from './logger.js';
 import {
@@ -877,16 +882,17 @@ export class RecordingFlattenReconcileAlertChannel implements FlattenReconcileAl
 
 /**
  * The `error`-level lines `startFillSync`'s three `catch` blocks
- * (orchestrator/fill-sync.ts `runPoll`/`runOnce`) write when a pass rejects.
- * All three are the SAME hole: the loop logs, keeps polling, and nothing else
+ * (orchestrator/fill-sync.ts `runPoll`/`runOnce`) write when a pass rejects,
+ * referenced from that module's exports so a rewording there cannot leave a
+ * stale literal here. All three are the SAME hole: the loop logs, keeps polling, and nothing else
  * in the process reacts — so a `reconcile()`/`ingestFills()`/sweep that
  * rejects on every poll is invisible to every other check in this gate,
  * which reads effects (rows, alerts, snapshots) rather than log lines.
  */
 const FILL_SYNC_FAILURE_MESSAGES = [
-  'periodic reconcile failed',
-  'fill poll failed',
-  'residual-protection sweep failed',
+  FILL_SYNC_RECONCILE_FAILED,
+  FILL_SYNC_POLL_FAILED,
+  FILL_SYNC_SWEEP_FAILED,
 ] as const;
 
 export type FillSyncFailureMessage = (typeof FILL_SYNC_FAILURE_MESSAGES)[number];
