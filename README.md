@@ -1,21 +1,19 @@
 # Samurai Trading System
 
-Live-money multi-agent trading system covering **crypto and stocks**.
+Live-money multi-agent trading system for **equities**. Crypto left the system's scope on 2026-08-16 (ADR-0015's amendment) and a future separate system inherits it; the crypto code paths named below (the ccxt data source, the BTC-USD smoke run, the per-asset-class breakers) are still in the tree and still run.
 
 The runtime tick is **six stages** — Analysts → Debate → Trader → Risk → Verdict → Execution — driven by `SequentialTickRunner` (`server/apps/orchestrator/tick-runner.ts`), with a Feedback Loop that adjusts analyst weights and risk thresholds post-trade.
 
-A seventh stage, **Invalidation** (the devil's-advocate critic, between Trader and Risk), is **specced but not built** — see `docs/specs/devils-advocate-spec.md`. The dashboard already reserves its room in the pipeline layout so its rows appear the day it ships (`client/src/lib/room-layout.ts`, whose `STAGE_ORDER` includes `invalidation`), but nothing writes an `invalidation` row today.
+A seventh **Invalidation** stage (the devil's-advocate critic, between Trader and Risk) was proposed in `docs/specs/devils-advocate-spec.md` and **declined as a standalone stage on 2026-09-02** — the pipeline is six stages and stays six. Its typed, falsifiable invalidation-condition mechanism folds into the already-built Risk Critic inside the Risk Manager instead ([#957](https://github.com/dd-jp/samurai-trading-system/issues/957) built, fold tracked as [#994](https://github.com/dd-jp/samurai-trading-system/issues/994)). Two artifacts still carry the seventh stage as a live placeholder — `PIPELINE_STAGES` in `contracts/pipeline.ts` and the dashboard's room 04 (`client/src/lib/room-layout.ts`) — and are retired by [#998](https://github.com/dd-jp/samurai-trading-system/issues/998). Nothing has ever written an `invalidation` row and nothing ever will.
 
 ## Architecture
 
 ```
 Market Data Service ─┐
-                     ├─→ Analysts (parallel) → Debate Engine → Trader → [Invalidation*] → Risk Manager → Verdict → Execution → Feedback Loop
-Market Intelligence ─┘                                                                                                             │
-                                                                                                                                   ↑
-                                                                                                                    adjusts weights, thresholds
-
-* specced, not built — the runtime chain goes Trader → Risk today
+                     ├─→ Analysts (parallel) → Debate Engine → Trader → Risk Manager → Verdict → Execution → Feedback Loop
+                                                                                                                   │
+                                                                                                                   ↑
+                                                                                    adjusts weights, thresholds
 ```
 
 | Stage | Directory | What it does |
@@ -25,7 +23,7 @@ Market Intelligence ─┘                                                      
 | Analysts | `server/pipeline/analysts/` | Stateless per-tick agents (technical, fundamental, sentiment). Pure function of data + weight |
 | Debate Engine | `server/pipeline/debate-engine/` | Bull/Bear/Mediator personas, round orchestration, semantic disagreement detection, weighted conviction scoring, LLM rate limiting + spend cap |
 | Trader | `server/pipeline/trader/` | Consolidates debate result into broker-agnostic bracket (OrderIntent). Position-aware branching, setup vectors, cosine precedent lookup |
-| Risk Manager | `server/pipeline/risk-manager/` | Position-size caps, drawdown/volatility circuit breakers, portfolio exposure limits, correlation checks, CII mapping, live-read risk thresholds |
+| Risk Manager | `server/pipeline/risk-manager/` | Position-size caps, drawdown/volatility circuit breakers, portfolio exposure limits, correlation checks, CII mapping, live-read risk thresholds, and the Risk Critic (`server/pipeline/risk-manager/critic.ts`) |
 | Verdict | `server/pipeline/verdict/` | Final go/no-go gate. Idempotency dedup, market-open check, kill-switch re-check, Telegram/Discord notification + approval callbacks |
 | Execution | `server/pipeline/execution/` | Broker abstraction (Alpaca MVP, Simulated for backtest; ccxt/IBKR sources exist, adapters are long-term). Bracket expansion, fill ingestion, reconcile-on-restart, unpriced-fill alerting |
 | Feedback Loop | `server/pipeline/feedback-loop/` | Post-trade attribution, bounded weight adjustment, daily cycle, metrics suite (Sharpe/Sortino/etc.), kill-threshold guardrails |
@@ -44,8 +42,8 @@ Market Intelligence ─┘                                                      
 - **Package manager:** Yarn 4.18.0 (via Corepack; `packageManager` field). There is no `package-lock.json`
 - **Tests:** Vitest
 - **Linter/formatter:** Biome
-- **State:** SQLite via `better-sqlite3`, one file per environment (`data/samurai-<env>.sqlite`), 25 forward migrations
-- **Brokers:** Alpaca (MVP paper), Simulated (backtest); ccxt/IBKR are long-term targets behind the same `BrokerAdapter` interface
+- **State:** SQLite via `better-sqlite3`, one file per environment (`data/samurai-<env>.sqlite`), 39 forward migrations
+- **Brokers:** Alpaca (MVP paper) and Simulated (backtest) are the only order adapters in the tree. The decided live equities venue is **Saxo Capital Markets UK (GIA), over OpenAPI** (ADR-0015's 2026-08-30 amendment) — no adapter is built yet. IBKR was disqualified on cost (#906) and Trading 212 is barred by its own algo-trading terms (#896); ccxt/IBKR survive as data sources
 - **LLM:** single provider — Nous (ADR-0009), per-role models
 
 ## Prerequisites
@@ -89,7 +87,7 @@ made the gate abort on precisely the fault the next step existed to fix.
 yarn orchestrator
 ```
 
-Runs the full pipeline: market data → analysts → debate → trader → risk → verdict → execution. The scheduler routes crypto (24/7) and stocks (market hours via the trading calendar). Default universe is SPY, QQQ, AAPL, TSLA, BTC-USD, ETH-USD (`DEFAULT_UNIVERSE` in `server/apps/orchestrator/scheduler.ts`).
+Runs the full pipeline: market data → analysts → debate → trader → risk → verdict → execution. The scheduler routes crypto (24/7) and stocks (market hours via the trading calendar). Default universe is QQQ, AAPL, TSLA (`DEFAULT_UNIVERSE` in `server/apps/orchestrator/scheduler.ts`) — SPY was dropped in #1006 and the crypto pair left with the scope change. It is not the live universe either: ADR-0016 puts live instruments on LSE leveraged ETPs.
 
 `yarn orchestrator` builds first, then runs `node --env-file=.env.local dist/server/apps/orchestrator/index.js`. The built entrypoint does **not** read a `.env` file on its own — pass `--env-file` or export the variables. The tracked `.env` holds empty placeholders and is not a configured environment; real credentials belong in the gitignored `.env.local`. An empty or whitespace-only value counts as **missing**, not as configured.
 
@@ -99,7 +97,8 @@ The orchestrator refuses to start rather than guess, and names *every* missing v
 
 | Variable | Values | Purpose |
 | --- | --- | --- |
-| `SAMURAI_MODE` | `paper` (default) / `backtest` / `live` | Selects the broker environment and HITL posture. Not trimmed on purpose — `live` is reachable only by typing it exactly. The shipped entrypoint refuses `live`; see `server/apps/orchestrator/paper-profile.ts` |
+| `SAMURAI_MODE` | `paper` (default) / `backtest` / `live` | Selects the broker environment and HITL posture. Not trimmed on purpose — `live` is reachable only by typing it exactly. `live` now boots `liveStartingProfile` (`server/apps/orchestrator/live-profile.ts`, #511) rather than being refused: `paperStartingProfile` still refuses it, but the shipped entrypoint routes around it via `startingProfileForMode`. A live run additionally needs `SAMURAI_LIVE_MAX_CAPITAL_USD` below, and still cannot price an LSE book — see [#895](https://github.com/dd-jp/samurai-trading-system/issues/895) |
+| `SAMURAI_LIVE_MAX_CAPITAL_USD` | | **Required when `SAMURAI_MODE=live`**, and only then. The capital ceiling every live cap and position size is derived from — a positive number of US dollars, with no default and no fallback. It is a ceiling, not a funding: sizing takes `min(ceiling, account equity)`. A value below the floor is refused rather than clamped. It is USD-denominated against a GBP book and nothing converts — see [#949](https://github.com/dd-jp/samurai-trading-system/issues/949) |
 | `SAMURAI_ALERTS` | `telegram` / `log-only` — **required, no default** | Where operator alerts go |
 | `ALPACA_API_KEY`, `ALPACA_API_SECRET` | | Broker + market data (one per-account rate budget covers both) |
 | `NOUS_BASE_URL` | | LLM endpoint. Unconditional — there is deliberately no default in source |
@@ -143,7 +142,7 @@ They are overridable because **a rate limit is a property of the account, not of
 
 Alpaca's published limit is **200 requests per minute per account**, shared by the broker calls and the market-data calls. Since #391 both consumers sit inside one bucket, so the sustained default is a deliberate 75% of that ceiling (2.5/s = 150/min), leaving margin for retry attempts and any future consumer on the same key.
 
-**Polygon is paced separately** (`SAMURAI_PACING_POLYGON_*`, same variable shapes, ceiling 5/min) and is deliberately **not** a venue key: the live composition root never validates or builds it, so a typo in a Stage-2-only variable cannot kill orchestrator boot mid-soak (#510/#520).
+**Polygon, Coinbase and Bitstamp are paced separately** (`SAMURAI_PACING_POLYGON_*` / `_COINBASE_*` / `_BITSTAMP_*`, same variable shapes; Polygon's ceiling is 5/min) and are deliberately **not** venue keys — `VENUE_KEYS` is `alpaca`/`ccxt`/`ibkr` only. The live composition root never validates or builds them, so a typo in a Stage-2-only variable cannot kill orchestrator boot mid-soak (#510/#520).
 
 #### Optional — durable log sink
 
@@ -155,7 +154,7 @@ Alpaca's published limit is **200 requests per minute per account**, shared by t
 | `SAMURAI_LOG_MAX_BYTES` | `16777216` (16 MiB) | Rotate when the active file would exceed this |
 | `SAMURAI_LOG_MAX_FILES` | `10` | Rotated generations kept (`orchestrator.log.1` … `.10`), excluding the active file. On-disk ceiling is therefore ~176 MiB. `0` means **keep nothing**: rotation discards the full file rather than renaming it, so only the last `SAMURAI_LOG_MAX_BYTES` of history survive. It does not mean "never rotate" |
 
-A malformed value is refused at startup rather than defaulted. An **unwritable** path is not: the sink degrades to stdout-only, logs one `warn` saying file logging is off until restart, and the process keeps running — a logging problem must never end a trading run.
+A malformed value in these three rotation variables is refused at startup rather than defaulted. An **unwritable** path is not: the sink degrades to stdout-only, logs one `warn` saying file logging is off until restart, and the process keeps running — a logging problem must never end a trading run.
 
 Retention is deliberately short. These files are the *diagnostic* record; the durable trade record (every signal, order and fill, and so the UK CGT disposal history) is SQLite, and nothing in it depends on a log generation surviving.
 
@@ -164,7 +163,7 @@ Retention is deliberately short. These files are the *diagnostic* record; the du
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `SAMURAI_LOG_LEVEL` | `info` | `debug` also writes `debug`-level lines. It is the **only** filterable level: `warn` and `error` always write, because they carry the sink-degradation notices a run's last trace depends on, and a verbosity setting must not be able to configure the process into silence |
-| `SAMURAI_LLM_CAPTURE` | on | The prompt sent and the text returned for every metered LLM call, persisted to `llm_call_log` and written on one `llm call:` log line alongside model, both token counts, `cost_usd` and latency. `off` disables. Measured cost of leaving it on: ~7 MB per 14-day soak |
+| `SAMURAI_LLM_CAPTURE` | on (unset) | The prompt sent and the text returned for every metered LLM call, persisted to `llm_call_log` and written on one `llm call:` log line alongside model, both token counts, `cost_usd` and latency. `off` disables. Both variables parse leniently — only the literal `debug` / `off` (case-insensitive, trimmed) does anything, so a typo silently resolves to the default rather than being refused (`server/apps/orchestrator/logger.ts`, `server/apps/orchestrator/production.ts`). Measured cost of leaving it on: ~7 MB per 14-day soak |
 
 Capture answers "what was this call actually asked, and what did it say" — `llm_spend` already records everything *about* a call, and `audit_log` holds digests from which no value can be reconstructed. Text is masked for known credential syntaxes and capped (16 KB prompt, 4 KB response) on the way in. Treat it as a capture, not a scrub: the masker is deliberately narrow, and prompts embed news bodies and analyst free text.
 
@@ -287,7 +286,7 @@ yarn test:local
 yarn vitest run server/pipeline/debate-engine/
 ```
 
-The suite is **2920 tests across 188 files** (2919 passing; one `describe.skipIf` integration test that runs only when live LLM credentials are present). Measured 2026-08-09 on `yarn test`.
+The suite is **4578 tests across 266 files** (4577 passing; one `describe.skipIf` integration test — `server/pipeline/debate-engine/disagreement-detector.integration.test.ts` — that runs only when live LLM credentials are present). Measured 2026-09-03 on `yarn test`.
 
 `vitest.config.ts` also writes a durable, machine-readable per-test record to
 `.vitest-reports/junit.xml` (gitignored) on every run, alongside the normal
@@ -295,12 +294,13 @@ console output. If a gate run fails and the terminal scrollback that showed
 the failing test's name is gone, read that file instead of re-running —
 it survives after the process exits ([#809](https://github.com/dd-jp/samurai-trading-system/issues/809)).
 
-CI (`.github/workflows/ci.yml`) runs on every PR and has two jobs:
+CI (`.github/workflows/ci.yml`) runs on every PR and has three jobs:
 
-- **checks** — `yarn lint`, `yarn typecheck`, `yarn build`, `yarn test`. Each runs even if an earlier one fails, so a lint break can't hide a test break.
+- **checks** — `yarn lint`, `yarn typecheck`, `yarn build`, `yarn build:web`, `yarn test`, `yarn check:citations`, and a guard that the indicator golden fixture was generated rather than hand-edited. Each runs even if an earlier one fails, so a lint break can't hide a test break.
+- **e2e** — the Playwright suite against the built bundle, on its own runner with Chromium installed; failures upload traces.
 - **review-harness** — `pytest .github/scripts` for the Python AI-review harness, which `yarn test` cannot see.
 
-Both must pass before merge.
+All three must pass before merge.
 
 ## Project Structure
 
@@ -323,7 +323,7 @@ samurai-trading-system/
 │   │   ├── orchestrator/  # Tick loop, scheduler, audit, heartbeat, composition root
 │   │   ├── service-api/   # Read-only HTTP :8787; serves /api/snapshot + the bundle
 │   │   └── supervisor/    # Runs orchestrator + service-api as one foreground process
-│   ├── pipeline/          # the seven stages
+│   ├── pipeline/          # the six stages + feedback loop
 │   │   ├── analysts/      # Stateless per-tick agents
 │   │   ├── debate-engine/ # Bull/Bear/Mediator, rounds, conviction, LLM client
 │   │   ├── trader/        # OrderIntent, position-aware branching, setup vectors
@@ -337,7 +337,12 @@ samurai-trading-system/
 │   ├── shared/            # Types, clock, SQLite store + migrations, HTTP, LLM
 │   └── tools/             # offline only, never on the money path
 │       ├── backtest/      # Fill simulation, validation, replay, Stage-2 selection
-│       └── data-cli.ts    # `yarn data` — history ingestion, market-data backfill
+│       ├── data-cli.ts    # `yarn data` — history ingestion, market-data backfill
+│       ├── check-path-citations.ts    # `yarn check:citations` — CI gate over the docs
+│       ├── check-live-money-gates.ts  # `yarn check:live-gates` — the cited gates are still open
+│       ├── report-arm-comparison.ts   # `yarn report:arms`
+│       ├── place-soak-position.ts     # `yarn place-soak-position`
+│       └── run-stage2*.ts, measure-conviction-ceiling.ts  # hand-run, no script
 │
 ├── contracts/             # THE WIRE BOUNDARY — imported by both, importing neither
 │                          # JSON-serializable shapes only; boundary.test.ts enforces it
@@ -348,6 +353,7 @@ samurai-trading-system/
 │   ├── research/          # Strategy evaluation, deployment plan, provider research
 │   ├── reviews/           # Audit + readiness reports
 │   ├── specs/             # Synthesized PRDs per stage + cross-spec verification
+│   ├── dashboard-v2/      # Dashboard v2 design material
 │   ├── wayfinder/         # Historical design maps (new ones are GitHub issues)
 │   └── coding-standards.md
 ├── .github/workflows/     # CI + AI review
@@ -371,7 +377,7 @@ dist/server/apps/supervisor/index.js      # yarn start
 
 ## Scripts
 
-Every script in `package.json`, all 23 of them. There are no others.
+Every script in `package.json`, all 27 of them. There are no others.
 
 | Tier | Script | What it does |
 | --- | --- | --- |
@@ -398,14 +404,18 @@ Every script in `package.json`, all 23 of them. There are no others.
 | quality | `yarn lint` | `biome check .` — lint **and** formatting, both gated in CI |
 | quality | `yarn lint:fix` | `biome check --write .` — fixes both |
 | quality | `yarn precommit` | `lint:fix` → `typecheck` → `test:coverage` |
+| quality | `yarn check:citations` | `tsx server/tools/check-path-citations.ts` — every backticked path in the tracked docs resolves. **A CI step**, and it reads this file too |
+| ops | `yarn check:live-gates` | `tsx server/tools/check-live-money-gates.ts` — re-verifies that the issues the live-money gate list cites are still open, so a closed issue cannot silently falsify the gate |
+| ops | `yarn report:arms` | `tsx server/tools/report-arm-comparison.ts` — the LLM arm vs. the indicator-only control |
+| ops | `yarn place-soak-position` | `tsx --env-file=.env.local server/tools/place-soak-position.ts` — hand-places a soak position. Reads `.env.local`, so it touches the venue |
 
 **Five run scripts build first** (`start`, `orchestrator`, `api`, `smoke`,
 `data`), deliberately. A stale `dist/` fails *silently* — the process boots and
 serves the previous build — and `sharedStorePath()` resolving against the
 working directory means the wrong cwd yields a fresh empty database and a
 healthy-looking blank page. Redundant `tsc` invocations are the cheaper side of
-that trade. The two `dev:*` scripts are the exception: they run from source
-(Vite, `tsx`), which is the whole point of them.
+that trade. The `dev:*` and `tsx`-run tool scripts are the exception: they
+run from source, which is the whole point of them.
 
 **The four aliases are kept on purpose**, not left over. `serve`/`dashboard`
 are the names an operator's muscle memory and several source comments still
@@ -421,9 +431,9 @@ rewrites it — a check-only `format` was a strict subset of `lint` that could
 only ever duplicate its verdict.
 
 The Stage-2 tools (`run-stage2`, `run-spread-calibration`,
-`run-stage2-cost-decomposition`) have **no** script and are not missing one.
-They are hand-run research jobs, invoked as `node --env-file=.env.local
-dist/server/tools/<name>.js` after a build — see
+`run-stage2-cost-decomposition`) and `measure-conviction-ceiling` have **no**
+script and are not missing one. They are hand-run research jobs, invoked as
+`node --env-file=.env.local dist/server/tools/<name>.js` after a build — see
 [Stage-2 backtest / validation](#stage-2-backtest--validation).
 
 ## Documentation
@@ -454,7 +464,6 @@ dist/server/tools/<name>.js` after a build — see
 All twelve charted components are implemented and under test; the pipeline runs end-to-end offline (`yarn smoke`). Outstanding:
 
 - **One real Alpaca paper tick** — ADR-0004 §5's "wiring validated" bar. `yarn smoke` is offline and does not clear it.
-- **Invalidation stage** — specced (`docs/specs/devils-advocate-spec.md`), not built.
-- **14-day unattended soak** (#238) — the "paper trading achieved" bar; not yet run.
-- **ccxt / IBKR broker adapters** — data sources exist, order adapters are the long-term path.
+- **14-day unattended soak** (#238) — the "paper trading achieved" bar. Shorter soaks have run, and a hand-placed lifecycle probe on 2026-08-26 took one position entry → bracket → flat-by-close → venue fill → store close against live paper Alpaca (surfacing and fixing #921/#922). The qualifying 14-day unattended window has not.
+- **A Saxo order adapter** — Saxo Capital Markets UK (GIA) over OpenAPI is the decided live venue (ADR-0015, 2026-08-30) and no adapter exists. ccxt and IBKR remain data sources only; IBKR was disqualified as a venue on cost (#906).
 - **WorldMonitor CII feed** — consumer seam built, live wiring parked pending `WORLDMONITOR_API_KEY`.
