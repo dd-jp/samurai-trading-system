@@ -2398,6 +2398,19 @@ export function buildStartingProfileConfigs(
      * silently becomes the LOOSEST entry — the exact inversion of the rule it
      * claims to follow, with the comment still swearing otherwise. Deriving it
      * makes the claim structural.
+     *
+     * **That hypothetical is now the actual case, and the derivation absorbed
+     * it exactly as designed.** The 20-name widening raised
+     * `STOCKS_MAX_DEBATES_PER_WINDOW` past crypto's 20, so `default` moved from
+     * `min(20, 15) = 15` to `min(20, 24) = 20` — it now mirrors CRYPTO rather
+     * than stocks. Stated rather than left to be rediscovered, because the
+     * number moving is a real consequence of that edit. It changes no behaviour
+     * today: `configFor` reads `default` only for an asset class with no
+     * `perAssetClass` entry, `AssetClass` is `crypto | stocks`, and both are
+     * declared below — so nothing resolves to it, and the widened universe is
+     * stocks-only besides. It stays the most-constrained-of-the-two by
+     * construction, which is the rule; only which class supplies that bound
+     * changed.
      */
     rateLimiterConfig: {
       default: llmBudget(Math.min(CRYPTO_MAX_DEBATES_PER_WINDOW, STOCKS_MAX_DEBATES_PER_WINDOW)),

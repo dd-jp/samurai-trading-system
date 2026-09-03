@@ -182,6 +182,22 @@ export const DEFAULT_VENUE_PACING: VenuePacingConfig = {
    * `capacity` is derived from the universe rather than rounded up casually,
    * and the reason all three have to be re-derived together when it changes.
    *
+   * **Where the link to `DEFAULT_UNIVERSE` actually lives.** These constants sit
+   * in `shared/http` and cannot import an orchestrator array, so nothing here
+   * derives from the universe programmatically — the coupling is enforced from
+   * the other side, by
+   * `server/apps/orchestrator/production/rate-limit-wiring.test.ts`
+   * ("Alpaca's burst covers one fill-poll sweep of the configured universe",
+   * #299), which asserts `capacity >= DEFAULT_UNIVERSE.length * 2 + 1` and
+   * `reserveForPriority >= DEFAULT_UNIVERSE.length` against the live array.
+   * That is what failed when the universe went 3 -> 20 and is why these numbers
+   * moved at all. Named here because a reader of THIS file would otherwise have
+   * no way to find the check, and would reasonably assume the derivation is
+   * unguarded. `refillPerSecond` is anchored in that file only against the
+   * documented CEILING (`<= 200/60`), never against the universe — so its
+   * demand-side derivation below is unguarded on purpose, and a universe change
+   * has to revisit it by hand.
+   *
    * **`refillPerSecond: 2.0` — LOWERED FROM 2.5 BY THE CAPACITY RAISE, and set
    * against MEASURED steady-state demand rather than against the ceiling
    * alone.** Two facts collide here and the number is the compromise, so both
