@@ -45,8 +45,17 @@ const RECENT_CLOSED_TRADES_LIMIT = 10;
  * 3-second poll and must never grow with the decision history. The drawer
  * shows ONE decision at a time and says so when the trace it is showing is
  * older than this window, rather than substituting a newer one.
+ *
+ * Sized to the client's verdict ledger (`LEDGER_CAP`, 30) rather than to the
+ * ten-row lists above: the ledger accumulates chips across polls, so a
+ * flat-by-close burst can leave a still-selectable chip whose decision fell out
+ * of a narrower window — the drawer would then report "no Risk decision" for a
+ * trace visibly on screen. The cost of the wider window is bounded: each row
+ * costs one primary-key read of `risk_critic_log`. The two constants cannot be
+ * shared (neither runtime imports the other), so this one is deliberately a
+ * duplicate of that cap, not a coincidence.
  */
-const RECENT_RISK_CRITICS_LIMIT = 10;
+const RECENT_RISK_CRITICS_LIMIT = 30;
 /**
  * #971: how many Feedback Loop cycles the comparison panel plots. Same
  * fixed-window posture as the lists above; at FL's daily cadence this is a

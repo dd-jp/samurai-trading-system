@@ -29,7 +29,10 @@
  */
 
 import { PIPELINE_STAGES, type PipelineStage } from '../../../contracts/pipeline.js';
-import { CONTROL_DEBATE_ID_PREFIX } from '../../pipeline/control-arm/index.js';
+import {
+  CONTROL_DEBATE_ID_PREFIX,
+  CONTROL_TRACE_SUFFIX,
+} from '../../pipeline/control-arm/index.js';
 import type { AnalystContribution, Direction } from '../../pipeline/debate-engine/index.js';
 import type { ArmComparisonSample } from '../../pipeline/feedback-loop/index.js';
 import {
@@ -375,8 +378,13 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * ## LIVE arm only, like every other read here
    *
    * Falsifier arm 2 writes its own `risk_log`/`trader_log` rows under the
-   * `control:` `debate_id` namespace (`CONTROL_DEBATE_ID_PREFIX`), which is
-   * what makes them separable without a schema change. They are excluded here:
+   * `control:` `debate_id` namespace (`CONTROL_DEBATE_ID_PREFIX`) and under a
+   * `trace_id` carrying `CONTROL_TRACE_SUFFIX`, which is what makes them
+   * separable without a schema change. Both are tested, and the `trace_id` one
+   * is the load-bearing test: it sits on the driving table's own non-nullable
+   * key, so a control decision whose Trader row is missing is still excluded,
+   * where the `debate_id` test alone would let it through on the NULL branch.
+   * They are excluded here:
    * the control arm calls no model, so its decisions carry no critic verdict
    * and no conditions, and letting them fill this bounded window would starve
    * the live arm's decisions of it.
@@ -405,11 +413,17 @@ export class SqliteQueryStore implements DashboardQueryStore {
              ON trader_log.trace_id = risk_log.trace_id
             AND trader_log.instrument = risk_log.instrument
           WHERE risk_log.created_at <= ?
+            AND risk_log.trace_id NOT LIKE ?
             AND (trader_log.debate_id IS NULL OR trader_log.debate_id NOT LIKE ?)
           ORDER BY risk_log.created_at DESC
           LIMIT ?`,
       )
-      .all(toStoredTimestamp(asOf), `${CONTROL_DEBATE_ID_PREFIX}%`, limit) as RiskDecisionJoinRow[];
+      .all(
+        toStoredTimestamp(asOf),
+        `%${CONTROL_TRACE_SUFFIX}`,
+        `${CONTROL_DEBATE_ID_PREFIX}%`,
+        limit,
+      ) as RiskDecisionJoinRow[];
 
     return rows.map((row) => ({
       trace_id: row.trace_id,

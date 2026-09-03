@@ -429,14 +429,17 @@ export function DetailDrawer(props: DetailDrawerProps) {
           {/*
             The stage strip's decision column, specifically — not the whole
             record. `risk_log` DOES persist the Risk decision's status,
-            binding constraint and reasons (migration 0016), which is what the
-            invalidation section above renders; what neither `trader_log` nor
+            binding constraint and reasons (migration 0016); the invalidation
+            section above renders the binding constraint and the critic
+            verdict, and NOT the status or the gate-by-gate reasons, which
+            nothing on this page shows yet. What neither `trader_log` nor
             `audit_log` gives the strip is a per-stage decision word, so those
             two cells still report only that the stage ran.
           */}
           <p className="drawer-caveat">
             The Trader and Risk cells above carry no decision word (#328) — they report that the
-            stage ran, and the invalidation section is where Risk's own record is read. Duration
+            stage ran. The invalidation section reads the Risk row's binding constraint and critic
+            verdict; the decision's own approved/rejected status is not shown anywhere yet. Duration
             shown as {UNKNOWN} means the store recorded none.
           </p>
         </>

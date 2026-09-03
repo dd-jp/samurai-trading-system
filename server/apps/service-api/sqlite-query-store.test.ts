@@ -1377,6 +1377,15 @@ describe('SqliteQueryStore.getRiskCritics', () => {
       debate_id: `${CONTROL_DEBATE_ID_PREFIX}abc`,
       at: NOW,
     });
+    // A control decision with NO trader row: the `debate_id` test cannot see
+    // this one at all (the join yields NULL), so only the `trace_id` suffix on
+    // the driving table keeps it out.
+    seedRisk(db, {
+      trace_id: `trace-2${CONTROL_TRACE_SUFFIX}`,
+      instrument: 'AAPL',
+      binding_constraint: null,
+      at: NOW,
+    });
     seedRisk(db, { trace_id: 'trace-1', instrument: 'AAPL', binding_constraint: null, at: NOW });
     seedTrader(db, { trace_id: 'trace-1', instrument: 'AAPL', debate_id: 'debate-live', at: NOW });
 

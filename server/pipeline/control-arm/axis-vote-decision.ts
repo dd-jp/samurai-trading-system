@@ -88,6 +88,15 @@ export const AXIS_VOTE_ANALYST_TYPE = 'technical';
  */
 export const CONTROL_DEBATE_ID_PREFIX = 'control:';
 
+/**
+ * The `trace_id` suffix every control-arm pass runs under. It lives here, beside
+ * the debate-id prefix, because it is the other half of the same discriminator:
+ * `risk_log`/`trader_log` rows carry it non-nullably on their own key, so a
+ * reader that joins those tables can exclude the control arm without depending
+ * on a join succeeding. The orchestrator's tick hook applies it.
+ */
+export const CONTROL_TRACE_SUFFIX = ':control';
+
 /** Free-text `DebateResult` fields, hoisted so the record says the same thing everywhere. */
 const NO_DEBATE_HAPPENED =
   'Falsifier arm 2 (#753): no debate was held. The direction and confidence below are the ' +
