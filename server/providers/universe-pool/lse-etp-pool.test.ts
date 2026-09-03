@@ -99,7 +99,7 @@ describe('LSE_ETP_POOL — the checked-in pool', () => {
   });
 });
 
-describe('the declared fallback subset (#1058, sweep finding F4)', () => {
+describe('the declared fallback subset (F4, docs/reviews/universe-path-gap-sweep-2026-09-03.md)', () => {
   // The fallback is the only thing standing between a bad screener run and a
   // fully dark session (universe-selector-spec.md, "Candidate pool", after
   // story 26 was withdrawn), so its failure mode is a *silent* one: a pool
