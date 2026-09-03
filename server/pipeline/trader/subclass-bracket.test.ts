@@ -42,6 +42,7 @@ import { decide } from './decide.js';
 import {
   ADR_0018_SUBCLASS_BRACKETS,
   D5_INDEX_ETP_DEPLOYMENT_FRACTION,
+  D5_SCALE_IN_HEADROOM_RESERVE_FRACTION,
   D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION,
   resolveSubclassBracket,
   riskFractionFor,
@@ -198,14 +199,34 @@ async function entryFor(instrument: string, overrides: Partial<TraderInput> = {}
   return intent;
 }
 
+/**
+ * The FIRST tranche's share of the envelope, per #897: the deployment fraction
+ * net of the headroom reserve. Written as the product of the two named
+ * constants rather than as a literal `0.315`, so an ADR amendment that moves
+ * either one moves these assertions with it.
+ */
+const firstTrancheFraction = (deployment: number): number =>
+  deployment * (1 - D5_SCALE_IN_HEADROOM_RESERVE_FRACTION);
+
 describe("the frozen bracket sizes to ADR-0018 D5's deployment", () => {
-  it('commits 35% of equity to a 3x index ETP', async () => {
+  it('commits 31.5% of equity to a 3x index ETP — 35% less #897 headroom', async () => {
+    // Still the DEPLOYMENT assertion, not a constant-equality one: both of
+    // ADR-0018's recorded error modes (a stored `0.35`; the single-stock
+    // deployment paired with the index stop) fail this line, because neither
+    // lands on `deployment x (1 - reserve) x equity`. #897 moved the target,
+    // not the kind of assertion.
     const intent = await entryFor(INDEX_ETP);
 
-    expect(intent.size * intent.entry).toBeCloseTo(D5_INDEX_ETP_DEPLOYMENT_FRACTION * EQUITY, 6);
+    expect(intent.size * intent.entry).toBeCloseTo(
+      firstTrancheFraction(D5_INDEX_ETP_DEPLOYMENT_FRACTION) * EQUITY,
+      6,
+    );
+    // And it lands strictly under the envelope the Risk Manager's D5 cap
+    // enforces — the property that makes a scale-in admissible at all (#897).
+    expect(intent.size * intent.entry).toBeLessThan(D5_INDEX_ETP_DEPLOYMENT_FRACTION * EQUITY);
   });
 
-  it('commits 25% of equity to a 3x single-stock ETP', async () => {
+  it('commits 22.5% of equity to a 3x single-stock ETP — 25% less #897 headroom', async () => {
     // The discriminator. Pairing this row with the INDEX stop gives
     // `risk_fraction = 0.25 x 0.0216 = 0.00540`, which deploys 8.64% here —
     // a number that matches nothing and breaches nothing, which is why the
@@ -213,8 +234,11 @@ describe("the frozen bracket sizes to ADR-0018 D5's deployment", () => {
     const intent = await entryFor(SINGLE_STOCK_ETP);
 
     expect(intent.size * intent.entry).toBeCloseTo(
-      D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION * EQUITY,
+      firstTrancheFraction(D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION) * EQUITY,
       6,
+    );
+    expect(intent.size * intent.entry).toBeLessThan(
+      D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION * EQUITY,
     );
   });
 
@@ -231,7 +255,10 @@ describe("the frozen bracket sizes to ADR-0018 D5's deployment", () => {
   it('scales the deployment with equity rather than with the mark', async () => {
     const half = await entryFor(INDEX_ETP, { equity: async () => EQUITY / 2 });
 
-    expect(half.size * half.entry).toBeCloseTo((D5_INDEX_ETP_DEPLOYMENT_FRACTION * EQUITY) / 2, 6);
+    expect(half.size * half.entry).toBeCloseTo(
+      (firstTrancheFraction(D5_INDEX_ETP_DEPLOYMENT_FRACTION) * EQUITY) / 2,
+      6,
+    );
   });
 });
 
@@ -343,11 +370,75 @@ describe('an unresolvable subclass fails loud', () => {
   });
 });
 
+describe('an out-of-range headroom reserve fails loud, not silently (#897)', () => {
+  // The failure being guarded is quiet: a percent-vs-fraction typo makes
+  // `riskFractionFor` negative, `size` negative-but-finite, and `decide.ts`'s
+  // `min_viable_notional` check then turns EVERY entry in the subclass into
+  // `skip('below_min_notional')` — indistinguishable in a soak log from a
+  // market that offered no setups. These tests pin the throw that replaces it.
+  const withReserve = (reserve: number): TraderConfig =>
+    armedConfig({
+      subclass_brackets: {
+        ...ADR_0018_SUBCLASS_BRACKETS,
+        index_etp_3x: {
+          ...(ADR_0018_SUBCLASS_BRACKETS.index_etp_3x as SubclassBracket),
+          headroom_reserve_fraction: reserve,
+        },
+      },
+    });
+
+  const resolveWith = (reserve: number): SubclassBracket | null =>
+    resolveSubclassBracket(INDEX_ETP, SUBCLASS_OF, withReserve(reserve).subclass_brackets);
+
+  it('throws on a PERCENT written where a fraction belongs — 10, not 0.10', () => {
+    expect(() => resolveWith(10)).toThrow(SubclassBracketUnresolvableError);
+    // The message has to carry all three, or the operator cannot act on it.
+    expect(() => resolveWith(10)).toThrow(/headroom_reserve_fraction = 10/);
+    expect(() => resolveWith(10)).toThrow(/index_etp_3x/);
+    expect(() => resolveWith(10)).toThrow(new RegExp(INDEX_ETP));
+  });
+
+  it('throws on 1 — reserving the WHOLE envelope sizes every entry to zero', () => {
+    expect(() => resolveWith(1)).toThrow(SubclassBracketUnresolvableError);
+  });
+
+  it('throws on a negative reserve', () => {
+    expect(() => resolveWith(-0.1)).toThrow(SubclassBracketUnresolvableError);
+  });
+
+  it('ACCEPTS 0 — the pre-#897 behaviour, and how an amendment turns the reserve off', () => {
+    const bracket = resolveWith(0);
+
+    expect(bracket).not.toBeNull();
+    // And it is a real zero, not a coerced one: sizing collapses back to the
+    // full envelope exactly as it did before #897.
+    expect(riskFractionFor(bracket as SubclassBracket)).toBeCloseTo(
+      D5_INDEX_ETP_DEPLOYMENT_FRACTION * 0.0216,
+      9,
+    );
+  });
+
+  it('validates in the RESOLVER, which is the only production path to riskFractionFor', () => {
+    // `decide.ts` reaches `riskFractionFor` (line ~581) only through
+    // `resolveSubclassBracket` (line ~556), so the resolver covers every real
+    // sizing call while keeping the per-decision hot function pure. Both are
+    // exported from the module, so a FUTURE caller could still hold a bracket
+    // that never passed the resolver — this test states the assumption so it
+    // fails visibly if that stops being true.
+    const unvalidated = withReserve(10).subclass_brackets.index_etp_3x as SubclassBracket;
+
+    expect(riskFractionFor(unvalidated)).toBeLessThan(0);
+  });
+});
+
 describe('the round trip is injected config, never a constant', () => {
   it('records the quote the decision was made under', async () => {
-    // #666 may move 0.18% / 0.41%, and the accuracy bar moves directly with
-    // them. A constant compiled into a later analysis would silently price a
-    // decision against a spread it was never taken at.
+    // #666, which would have measured 0.18% / 0.41%, closed 2026-08-27 out of
+    // scope without delivering that measurement; #750 now gates on it
+    // instead, and no open ticket currently delivers it. The accuracy bar
+    // still moves directly with these figures — a constant compiled into a
+    // later analysis would silently price a decision against a spread it was
+    // never taken at.
     const moved: SubclassBracket = {
       ...(ADR_0018_SUBCLASS_BRACKETS.index_etp_3x as SubclassBracket),
       round_trip_cost_pct: 0.0031,
@@ -378,17 +469,81 @@ describe('the round trip is injected config, never a constant', () => {
   });
 });
 
-describe("riskFractionFor reproduces ADR-0018's conversion table", () => {
-  it('converts each deployment through its OWN subclass stop', () => {
+describe("riskFractionFor reproduces ADR-0018's conversion table, net of #897", () => {
+  it('converts each deployment through its OWN subclass stop, less the headroom reserve', () => {
     // Recorded because the ADR records it — but note this is the WEAK
     // assertion: `0.00540` also appears in the ADR (as the error). The tests
     // above are the ones that discriminate.
+    //
+    // 0.35 x 0.0216 x 0.9 = 0.006804; 0.25 x 0.0625 x 0.9 = 0.0140625.
     expect(riskFractionFor(ADR_0018_SUBCLASS_BRACKETS.index_etp_3x as SubclassBracket)).toBeCloseTo(
-      0.00756,
+      0.00756 * (1 - D5_SCALE_IN_HEADROOM_RESERVE_FRACTION),
       9,
     );
     expect(
       riskFractionFor(ADR_0018_SUBCLASS_BRACKETS.single_stock_etp_3x as SubclassBracket),
-    ).toBeCloseTo(0.015625, 9);
+    ).toBeCloseTo(0.015625 * (1 - D5_SCALE_IN_HEADROOM_RESERVE_FRACTION), 9);
+  });
+
+  it('reserves headroom on BOTH rows — a zero reserve is the state #897 was filed over', () => {
+    // The reserve is per-subclass config precisely so the two rows CAN differ;
+    // this asserts only that neither ships at zero, which is the pre-#897
+    // behaviour.
+    for (const subclass of ['index_etp_3x', 'single_stock_etp_3x'] as const) {
+      const bracket = ADR_0018_SUBCLASS_BRACKETS[subclass] as SubclassBracket;
+      expect(bracket.headroom_reserve_fraction).toBeGreaterThan(0);
+      expect(bracket.headroom_reserve_fraction).toBeLessThan(1);
+      expect(riskFractionFor(bracket)).toBeLessThan(bracket.deployment_fraction * bracket.stop_pct);
+    }
+  });
+
+  it('reads the reserve off the INJECTED bracket rather than a module constant', () => {
+    // The discriminator against an implementation that hardcodes 0.9: an
+    // amended reserve has to move the sizing. Same argument the
+    // `round_trip_cost_pct` injection tests above make for their own field.
+    const doubled: SubclassBracket = {
+      ...(ADR_0018_SUBCLASS_BRACKETS.index_etp_3x as SubclassBracket),
+      headroom_reserve_fraction: 0.2,
+    };
+
+    expect(riskFractionFor(doubled)).toBeCloseTo(0.35 * 0.0216 * 0.8, 9);
+  });
+});
+
+describe('the reserved headroom is a real tranche, not a rounding artefact (#897)', () => {
+  it('reserves 3.5% / 2.5% of equity, clearing the £10 dust floor at the £1,000 book', () => {
+    // The floor arithmetic from `SubclassBracket.headroom_reserve_fraction`,
+    // asserted rather than only written down. £1,000 is ADR-0015's book.
+    const book = 1_000;
+    const index = ADR_0018_SUBCLASS_BRACKETS.index_etp_3x as SubclassBracket;
+    const singleStock = ADR_0018_SUBCLASS_BRACKETS.single_stock_etp_3x as SubclassBracket;
+
+    const indexHeadroom = index.deployment_fraction * index.headroom_reserve_fraction * book;
+    const singleStockHeadroom =
+      singleStock.deployment_fraction * singleStock.headroom_reserve_fraction * book;
+
+    expect(indexHeadroom).toBeCloseTo(35, 9);
+    expect(singleStockHeadroom).toBeCloseTo(25, 9);
+    expect(indexHeadroom).toBeGreaterThan(DEFAULT_TRADER_CONFIG.min_viable_notional);
+    expect(singleStockHeadroom).toBeGreaterThan(DEFAULT_TRADER_CONFIG.min_viable_notional);
+  });
+
+  it('records the equities below which the reserved slice stops clearing that floor', () => {
+    // Recorded, not engineered away (#897). The single-stock row loses
+    // admissibility FIRST despite the smaller envelope, because a smaller
+    // envelope reserves less cash — the counter-intuitive half, so it is
+    // asserted as an ordering rather than left to a doc comment.
+    const floor = DEFAULT_TRADER_CONFIG.min_viable_notional;
+    const boundary = (bracket: SubclassBracket): number =>
+      floor / (bracket.deployment_fraction * bracket.headroom_reserve_fraction);
+
+    const indexBoundary = boundary(ADR_0018_SUBCLASS_BRACKETS.index_etp_3x as SubclassBracket);
+    const singleStockBoundary = boundary(
+      ADR_0018_SUBCLASS_BRACKETS.single_stock_etp_3x as SubclassBracket,
+    );
+
+    expect(indexBoundary).toBeCloseTo(285.714, 3);
+    expect(singleStockBoundary).toBeCloseTo(400, 9);
+    expect(singleStockBoundary).toBeGreaterThan(indexBoundary);
   });
 });

@@ -113,22 +113,30 @@ export const X_SEARCH_MODEL = '~x-ai/grok-latest';
  * measured ~5,300 input tokens, a 10-result call 58,153, costing a measured
  * $0.089.
  *
- * The call count is SESSION-derived: `UniverseScheduler.nextTick` emits no
- * instruments when the calendar says closed, so a 6.5h US session touches 4
- * two-hour buckets, not 12. A 14-session, 3-instrument soak is ~168 calls —
- * ~$3-5 at 3 results, ~$15 at 10 — so ADR-0008's cap does NOT bind the soak.
- * It binds the LIVE universe: 7 instruments x 4 x 252 sessions is ~$141/yr at
- * 3 and ~$630/yr at 10.
+ * Two multipliers set the call count, and BOTH are easy to get wrong — each
+ * was wrong once in this ticket's own history before it merged:
  *
- * The ceiling is therefore the real guard, and it is a hard clamp rather than
- * advice: `SAMURAI_X_MAX_RESULTS` is operator input, and an operator who types
- * 100 should get 10 and a warning, not a blown cap.
+ * 1. Buckets are SESSION-derived. `UniverseScheduler.nextTick` emits no
+ *    instruments when the calendar says closed, so a 6.5h US session touches
+ *    4 two-hour buckets, not the 12 a 24-hour day gives.
+ * 2. The universe is 20 names (#1051 widened `DEFAULT_UNIVERSE` from 3).
  *
- * The default of 3 is a conservative STARTING POINT, not a cap-derived
- * necessity — and on session buckets it is thin: 4 x 3 = 12
- * posts/instrument/session, below the ~17/ticker/day at which Bluesky was
- * judged too sparse to carry a signal (#1041). If it proves too thin the lever
- * is more results per bucket, not more buckets. Measured on soak day 1, not
+ * So a soak is 20 x 4 x 10 sessions = ~800 calls: ~$16 at the default 3
+ * results, ~$71 at 10, against ADR-0008's $50 cap shared with a ~$8.40 debate
+ * leg. The cap BINDS, and at 3 results this leg is the larger of the two.
+ *
+ * The clamp below bounds an operator TYPO, not the budget: 10 on a 20-name
+ * universe does not fit, and what stops it is `SqliteSpendCap` failing closed
+ * — so the failure mode is the soak going dark partway through rather than an
+ * overspend. Better failure, still a failure. Re-derive the default if the
+ * universe width changes; do not inherit it.
+ *
+ * Against that, 4 x 3 = 12 posts/instrument/session is THIN — below the
+ * ~17/ticker/day at which Bluesky was judged too sparse to carry a signal
+ * (#1041) — and it does not improve when the universe widens, since it is
+ * per instrument while the bill is not. The two constraints pull against each
+ * other, so if 12 proves too thin the answer is a narrower retrieval subset
+ * than the trading universe, not a bigger budget. Measured on soak day 1, not
  * guessed at now.
  */
 export const DEFAULT_MAX_SEARCH_RESULTS = 3;

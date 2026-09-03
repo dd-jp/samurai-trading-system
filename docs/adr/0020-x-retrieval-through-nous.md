@@ -85,31 +85,46 @@ the recall-only call ADR-0009 priced at ~$0.001.
 | --- | --- | --- |
 | Prompt tokens | ~5,300 | 58,153 (19,584 cached) |
 | Measured cost | ~$0.02 (est.) | **$0.089** |
-| 168-call soak | **~$3–5** | **~$15** |
+| 800-call soak | **~$16** | **~$71** |
 
-**Buckets are session-derived, and that is the number to check first.**
-`UniverseScheduler.nextTick` returns an **empty** instrument list whenever the
-calendar says closed, so the sentiment refresh never fires outside the session.
-A 6.5h US session touches **4** two-hour buckets, not the 12 a 24-hour day
-would give. The soak is therefore 3 instruments × 4 buckets × 14 sessions =
-**168 calls**, and every figure here moves if the scheduler or `GROK_REFRESH_MS`
-moves.
+**Two multipliers decide that call count, and both were got wrong once each
+before this ADR settled. Re-derive them, do not quote them.**
 
-**So the cap does NOT force 3 results at soak scale** — even 10 costs ~$15
-against a $50 ceiling shared with a ~$0.29/day debate leg. An earlier draft of
-this ADR said it did, on a 12-buckets-a-day reading nobody had checked against
-the scheduler; that is the same failure this ADR indicts ADR-0009 for, caught
-one commit later. The conclusions that survive:
+1. **Buckets are SESSION-derived, not calendar-derived.**
+   `UniverseScheduler.nextTick` returns an **empty** instrument list whenever
+   the calendar says closed, so the refresh never fires outside the session: a
+   6.5h US session touches **4** two-hour buckets, not the 12 a 24-hour day
+   gives. A first draft of this ADR read 12 off a calendar.
+2. **The universe is 20 names, not 3.** [#1051](https://github.com/dd-jp/samurai-trading-system/issues/1051)
+   widened `DEFAULT_UNIVERSE` from 3 to 20 while this branch was open, for
+   Gate 2 breadth. A second draft still said 3.
+
+So the soak is **20 instruments × 4 buckets × 10 sessions = 800 calls** —
+**~$16** at 3 results and **~$71** at 10, against a $50 cap it shares with
+#1051's ~$8.40 debate leg.
+
+**The cap therefore DOES bind, and the default of 3 is cap-derived.** At 3 the
+two legs total ~$24, about half the cap. At 10 the MI leg alone exceeds it.
+
+**And the ceiling of 10 is NOT cap-safe at this universe width** — worth
+stating plainly, because the clamp reads like a safety guarantee and is not one
+here. What protects the run is `SqliteSpendCap`, which **fails closed**: a
+breach short-circuits the tick rather than continuing to spend. So the failure
+mode of `SAMURAI_X_MAX_RESULTS=10` on 20 names is not an overspend, it is the
+soak **going dark partway through** — which invalidates the experiment instead
+of costing money. That is the better failure, and it is still a failure.
+`MAX_SEARCH_RESULTS_CEILING` is a bound on operator typos, not a budget
+guarantee; the budget guarantee is the cap. The conclusions that survive:
 
 - **`max_search_results` defaults to 3, with a hard ceiling of 10.** The
   ceiling is a clamp on operator input, not advice: `SAMURAI_X_MAX_RESULTS` is
   typed by a human, and a typed 100 must yield 10 and a warning rather than an
   order-of-magnitude overspend discovered days later as an exhausted budget.
-  The **ceiling** is now the real guard; the **default** of 3 is a conservative
-  starting point that V5 is expected to move, not a cap-derived necessity.
-  It matters at the *live* universe rather than the soak: 7 instruments × 4
-  buckets × 252 sessions at 10 results is ~$630/yr, where the same at 3 is
-  ~$141/yr.
+  The ceiling bounds a **typo**; it does not bound the **budget** — see above.
+  The default of 3 is cap-derived at the 20-name paper universe and should be
+  re-derived, not inherited, whenever the universe width changes. On the live
+  LSE pool (7 underlyings) the annual figures are ~$141/yr at 3 results and
+  ~$630/yr at 10.
 - **The 3-result figure is a RANGE, not a point.** The probe measured input
   tokens at that setting but never output, and output does not scale with
   result count — the 10-result call spent 2,009 of its 4,007 output tokens on
@@ -117,8 +132,9 @@ one commit later. The conclusions that survive:
   predecessor made with "$0.001/call, ~$0.50 per soak"; the reconciliation
   against the provider's invoice is what replaces the range with a number.
   **The call COUNT is a derived assumption on the same footing** — it descends
-  from the scheduler's session gating and from `GROK_REFRESH_MS`, and neither
-  is a constant of nature.
+  from the scheduler's session gating, from `GROK_REFRESH_MS`, and from the
+  universe width, none of which is a constant of nature. Two of those three
+  moved between this ADR's first draft and its merge.
 - **The cadence and the result count are ONE decision.** `GROK_REFRESH_MS`
   moved 4h → 2h in the same change. The old 4h was derived from a *staleness*
   argument (1/6th of the analysts' 24h window) made while nothing retrieved and
@@ -128,10 +144,15 @@ one commit later. The conclusions that survive:
   `sentiment-analyst.ts` averages `social` wholesale, so 4 × 3 = **12
   posts/instrument/session** is what decides whether three bot posts can swing
   the lens — below the ~17 cashtag posts/ticker/day at which Bluesky was judged
-  too sparse to carry a signal (#1041). The lever if that proves too thin is
-  **more results per bucket, not more buckets**: 4 × 10 = 40 posts/session for
-  ~$15 across the soak. That is the opposite of what an earlier 12-bucket draft
-  concluded, and it is the direction V5's measurement is expected to push.
+  too sparse to carry a signal (#1041). This figure is per instrument and so is
+  **unaffected by the universe widening**; only the bill scales with names.
+  **The two constraints now pull against each other**, which is the honest
+  statement of the trade: sample size wants more results per bucket, and at 20
+  names the cap cannot afford them (4 × 10 = 40 posts/session would cost ~$71).
+  V5 measures which side actually binds — if 12 posts proves too thin, the
+  resolution is a **narrower retrieval subset than the trading universe**, not
+  a bigger budget. Nothing in this ADR requires every traded name to have a
+  sentiment read.
 
 Three metering defects had to be closed before any of this could run
 unattended, all in the under-counting direction — see the commit for #969. The

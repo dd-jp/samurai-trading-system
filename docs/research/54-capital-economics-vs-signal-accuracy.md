@@ -95,6 +95,13 @@ is deliberately unwired. Seven hourly bars is a US-session count.
 > of this box said £330/yr off a 12-bucket calendar reading. Same error class as the one #969 exists to
 > correct: a downstream conclusion computed from a premise nobody checked against the code.)
 >
+> **The other multiplier is universe width, and it is NOT the 7 used here.** This section's 7 is the live
+> LSE pool's underlying count, which is the right basis for a live-bill estimate. The *paper* universe is
+> 20 names since [#1051](https://github.com/dd-jp/samurai-trading-system/issues/1051), where the same
+> arithmetic gives ~$16 of MI spend per 14-day soak against a ~$8.40 debate leg — i.e. **the sentiment leg
+> outweighs the debate leg**, which is not true at any figure this document computed before. Read the two
+> bases separately and do not average them.
+>
 > **What that does to this section's conclusion.** The total bill goes from **£58/yr to ~£169/yr — roughly
 > triple**, with MI now the larger leg. That is not "second-order" in the sense of ignorable, but neither
 > does it overturn the section: the break-even accuracy thresholds in §4 shift by the ratio of the bill to
@@ -225,8 +232,11 @@ is profitable or unprofitable."* `p_u` and `p_g` are both unmeasured because the
    Real ETP tracking error, LSE-hours liquidity and the ETPs' own spreads are absent. #658 is a question
    about the live equity leg, so these are anchors with a stated proxy gap.
 3. **Costs are per-subclass, not per-instrument (doc 52 §9.3).** Every £/yr figure here inherits a subclass
-   round trip (0.18% / 0.41%), both of which rest on a single quote until
-   [#666](https://github.com/dd-jp/samurai-trading-system/issues/666) measures them.
+   round trip (0.18% / 0.41%), both of which rest on a single quote:
+   [#666](https://github.com/dd-jp/samurai-trading-system/issues/666), which would have measured
+   them, closed 2026-08-27 out of scope without delivering that measurement;
+   [#750](https://github.com/dd-jp/samurai-trading-system/issues/750) now gates on it instead, and
+   no open ticket currently delivers it.
    [`53-intraday-cost-calibration.md`](53-intraday-cost-calibration.md) calibrates the *backtest* cost model
    at 1-minute resolution on a US-equity proxy; it does not supply an LSE ETP round trip either, so it
    narrows nothing here.

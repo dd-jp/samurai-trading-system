@@ -91,12 +91,13 @@ soak is roughly **$0.50** against a $50 cap.
 > 3-result call measures ~5,300 input tokens and a 10-result call 58,153,
 > against roughly 200 for the recall-only call priced above. Measured, a
 > 10-result call cost **$0.089** — ninety times this line's figure. The soak
-> arithmetic changes with it, though less than a first pass suggested: the
-> scheduler emits no instruments outside the session, so a 6.5h US session
-> touches 4 two-hour buckets rather than 12, making the soak 3 instruments x 4
-> x 14 = 168 calls — about $3-5 at the default 3 results and ~$15 at 10. The
-> cap binds the LIVE universe (~$141/yr at 3, ~$630/yr at 10 across 7
-> instruments) rather than the soak. ADR-0020 carries the regime.
+> arithmetic changes with it. Two multipliers decide the count and both are
+> easy to get wrong: the scheduler emits no instruments outside the session (so
+> a 6.5h US session touches 4 two-hour buckets, not 12), and #1051 widened the
+> paper universe to 20 names. The soak is 20 x 4 x 10 sessions = **800 calls**
+> — ~$16 at the default 3 results and ~$71 at 10, against a $50 cap shared with
+> a ~$8.40 debate leg. So the cap binds, and at 3 results the sentiment leg is
+> the LARGER of the two. ADR-0020 carries the regime.
 
 **Measured, 2026-08-06: the stage returns `{"items":[]}` on every call, and
 that is the correct behaviour rather than a defect.** The first real exercise of

@@ -213,11 +213,72 @@ D3's frozen bracket (+2.00% / −2.16%, 48.8% resolve level) and D5's 35% deploy
 
 **What this does not settle.** Whether `index_etp_3x` should be split into narrower subclasses (e.g. a separate bracket per single-country/sector/all-world grouping) or re-measured across its now-wider membership is still open; #903 records the interim state, not the final one. Until a split or a re-measurement is decided, these four rows can be ranked and screened but not sized under the per-subclass regime.
 
+## Amendment — 2026-09-03, [#897](https://github.com/dd-jp/samurai-trading-system/issues/897): the first tranche reserves 10% of the D5 envelope as scale-in headroom
+
+- **Status:** accepted, 2026-09-03.
+- **Amends:** Decision 5 and the 2026-08-16 sizing amendment's conversion table — the **first tranche's** share of the envelope, not the envelope.
+- **Source:** [#897](https://github.com/dd-jp/samurai-trading-system/issues/897) (split out of [#800](https://github.com/dd-jp/samurai-trading-system/issues/800) AC3), decided by David.
+
+### The gap
+
+`riskFractionFor` sized a full-conviction entry to land **exactly** on `deployment_fraction × equity`, and the Risk Manager's `per_subclass_deployment_cap` allows total subclass exposure up to the same fraction. The first fill therefore **spent** the envelope rather than drawing on it: `allowedAdditional ≤ 0` from that fill onward, so every subsequent `scale_in` was trimmed to zero and rejected under `min_viable_size`. `main` carried a test asserting exactly that, as a recorded gap.
+
+#897 asked whether single-tranche entry was intended (D5 as a per-*position* budget) or accidental. **David ruled accidental.** D5's fractions are an envelope to draw on; entry sizing must leave headroom.
+
+### The change
+
+One factor is added to the sizing conversion, and nothing else:
+
+```
+risk_fraction = deployment_fraction × stop_pct × (1 − headroom_reserve_fraction)
+```
+
+`headroom_reserve_fraction` is **0.10 on both rows**, carried as a per-subclass field on the frozen bracket (injected config, like every other field there) rather than as a module constant or one global number. The granularity is justified by where the field lives and by what it implies, not by the two values differing today: every field on that bracket is injected config by the module's stated design, and the two rows' boundary equities below differ by 40% (£285.71 vs £400) because the reserve is applied to different envelopes. A module constant would make the identical seeding look like a property of the system rather than the coincidence it is.
+
+| subclass | deployment (D5) | reserve | first tranche | `risk_fraction` | at the £1,000 book |
+| --- | --- | --- | --- | --- | --- |
+| 3× index ETP | 35% | 10% | **31.5%** | 0.35 × 0.0216 × 0.9 = **0.006804** | £315 filled, **£35** reserved |
+| 3× single-stock ETP | 25% | 10% | **22.5%** | 0.25 × 0.0625 × 0.9 = **0.0140625** | £225 filled, **£25** reserved |
+
+**The reserve is applied on the Trader side only.** `per_subclass_deployment_cap.cap_fraction_of_equity` stays at 0.35 / 0.25 — that is precisely what makes the reserved slice reachable. A scale-in is sized by the same formula and then trimmed by the D5 cap to whatever headroom remains, which is what "a scale-in is admissible" means operationally.
+
+### Why 0.10, and the three floors the reserved slice has to clear
+
+The reserved slice is `deployment_fraction × reserve × equity` — 3.5% of equity on the index row, 2.5% on the single-stock row. It is a real tranche only if it survives:
+
+1. **`min_viable_size` (£10, derived from `min_viable_notional`).** The Risk Manager tests the *trimmed* notional, so the reserved slice is what is tested. £35 and £25 clear £10 at the book.
+2. **`whole_share_sizing`'s `Math.floor` ([#941](https://github.com/dd-jp/samurai-trading-system/issues/941), on in the shipped profile).** The slice must buy at least one share, which makes the reserve a **per-share price ceiling** as well: **£35 (index) / £25 (single-stock)** at the book. This one is **not verifiable from the repo** — `lse-etp-pool.ts` carries no prices and mixes GBX and USD lines — so it is recorded as a boundary rather than claimed to be met.
+3. **Live equity, not the £1,000 anchor.** D5 resolves against `portfolio.equity`, so the reserved slice shrinks with the account and eventually drops under the £10 dust floor:
+
+   | subclass | reserved slice | boundary equity |
+   | --- | --- | --- |
+   | 3× index ETP | 3.5% of equity | **£285.71** (10 / 0.035) |
+   | 3× single-stock ETP | 2.5% of equity | **£400.00** (10 / 0.025) |
+
+   Below those equities scale-ins are inadmissible again, exactly as before this amendment. **The single-stock row loses admissibility first despite the smaller envelope**, because a smaller envelope reserves less cash. This is recorded rather than engineered away — and both boundaries sit below the drawdown breaker's own trip point (`max_drawdown_pct: 0.44` fires at £560 against a £1,000 peak), so on a book funded to the anchor the breaker halts trading before either boundary is reached.
+
+Raising the reserve would lower those boundary equities, but only by deploying less of a measured envelope on the first fill; nothing except the unverifiable price ceiling in (2) pushes it up. 0.10 is the smaller deviation from D5's measurement, which is the direction this ADR's sizing amendment already declares a preference for ("errs small").
+
+### One top-up, not a ladder
+
+A second scale-in asks for the same `deployment × (1 − reserve)`, is trimmed to the £0 that remains, and is rejected under `min_viable_size`. The reserve buys **exactly one** admissible top-up. That is deliberate, and it is what keeps this consistent with [#708](https://github.com/dd-jp/samurai-trading-system/issues/708)'s rejection of the tranche ladder: this amendment does not reintroduce a tranche schedule, on entries or on exits.
+
+### Reconciliation with #798's accepted envelope — both halves
+
+- **First-fill exposure falls**, from 35%/25% to 31.5%/22.5% of equity. A book that never scales in therefore carries strictly less exposure than the one #798's figures were measured at, so its drawdown cannot be worse than those figures.
+- **The worst case is unchanged.** Once a scale-in consumes the reserve, total subclass exposure is back at 35%/25% — the cap fraction is untouched, which is both why the headroom is reachable and why the ceiling has not moved. **[#798](https://github.com/dd-jp/samurai-trading-system/issues/798)'s accepted 26.2% (index) / 41.8% (single-stock) max-drawdown figures therefore still describe the worst case and are not revised by this amendment**, and `CONTEXT.md`'s ~26% / ~42% live target stands as written.
+
+No new drawdown measurement is published here. Producing one for the reserved first-fill case would mean re-running `docs/research/18-drawdown-envelope.py` at f = 0.315 / 0.225, which this amendment does not do — and it would answer a question nothing gates on, since the envelope that binds is the one the cap still permits.
+
+### Timing, against #800 AC5
+
+[#800](https://github.com/dd-jp/samurai-trading-system/issues/800) AC5 required this be resolved **before C1's pool file arms the subclass dimension**, since the constraint is silent until then. It is: `resolveSubclassBracket` returns `null` while `subclass_of` is empty and `DEFAULT_UNIVERSE` carries no subclass classification, so the whole per-subclass sizing path — this reserve included — is dark in production today. The change lands ahead of [#751](https://github.com/dd-jp/samurai-trading-system/issues/751)'s `ActiveUniverseProvider`, which is what will arm it.
+
 ## Known weaknesses
 
 **The baseline is an unconditional long at the open.** That is deliberately naive — it is the bar, not a prediction that the strategy loses money. It is also **long-only**; the short ETP lines are unmeasured.
 
-**Underlying tape, not ETP tape.** No tracking error, no ETP spread beyond the assumed round trip, and **no GBP/USD leg** — the GBP lines sit on USD underlyings and hedging is unconfirmed. [#666](https://github.com/dd-jp/samurai-trading-system/issues/666) owns the real spreads per subclass; **both brackets and both bars move directly with them**, since each cost figure is currently a single quote.
+**Underlying tape, not ETP tape.** No tracking error, no ETP spread beyond the assumed round trip, and **no GBP/USD leg** — the GBP lines sit on USD underlyings and hedging is unconfirmed. The real spreads per subclass remain unmeasured: [#666](https://github.com/dd-jp/samurai-trading-system/issues/666), which would have measured them, closed 2026-08-27 out of scope without delivering that measurement; [#750](https://github.com/dd-jp/samurai-trading-system/issues/750) now gates on it instead, and no open ticket currently delivers it. **Both brackets and both bars move directly with them**, since each cost figure is currently a single quote.
 
 **Two instruments, not the universe.** SPY and TSLA stand in for their subclasses.
 

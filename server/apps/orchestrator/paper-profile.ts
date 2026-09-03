@@ -182,10 +182,15 @@ export const PAPER_PROFILE_PROVENANCE = {
   'traderConfig.subclass_brackets.index_etp_3x.stop_pct': 'SPEC',
   'traderConfig.subclass_brackets.index_etp_3x.deployment_fraction': 'SPEC',
   'traderConfig.subclass_brackets.index_etp_3x.round_trip_cost_pct': 'SPEC',
+  // #897. SPEC: ADR-0018's 2026-09-03 amendment declares the reserve and its
+  // arithmetic; nothing here computes it from another config value.
+  'traderConfig.subclass_brackets.index_etp_3x.headroom_reserve_fraction': 'SPEC',
   'traderConfig.subclass_brackets.single_stock_etp_3x.take_profit_pct': 'SPEC',
   'traderConfig.subclass_brackets.single_stock_etp_3x.stop_pct': 'SPEC',
   'traderConfig.subclass_brackets.single_stock_etp_3x.deployment_fraction': 'SPEC',
   'traderConfig.subclass_brackets.single_stock_etp_3x.round_trip_cost_pct': 'SPEC',
+  // #897, as above.
+  'traderConfig.subclass_brackets.single_stock_etp_3x.headroom_reserve_fraction': 'SPEC',
   // `crypto: null` — "ADR-0018 sets no bracket here" — is a leaf value like any
   // other and carries the same provenance: it is the ADR's own answer.
   'traderConfig.subclass_brackets.crypto': 'SPEC',
@@ -1031,10 +1036,42 @@ const LLM_BUDGET_WINDOW_MS = 300_000;
 /**
  * Debates per window, per asset class. Named because `rateLimiterConfig`'s
  * `default` is computed from them (`Math.min`) rather than restating one of
- * them — see that field's comment. Both are ~3x #385's measured cadence.
+ * them — see that field's comment. Crypto's is ~3x #385's measured cadence and
+ * is unexercised (crypto left scope, ADR-0015's 2026-08-16 amendment).
+ *
+ * **Stocks raised 15 -> 24 when `DEFAULT_UNIVERSE` widened 3 -> 20 names.**
+ * Not headroom-for-its-own-sake — the old value would have silently starved the
+ * wider universe, and the failure is invisible in the metric an operator reads:
+ *
+ * - Debates are keyed to the BAR, not the tick (`DEBATE_BAR_TIMEFRAME_MS` = 1h,
+ *   #617). So the first `tickIntervalMs` tick after each hourly close finds a
+ *   fresh bar for EVERY instrument at once: the load is a burst of `N` debates,
+ *   not a smooth rate.
+ * - The burst completes inside one window. At #1013's width 6 and #1012's ~61s
+ *   mean debate latency, 20 names walk in `ceil(20 / 6) = 4` groups, ~4.1 min —
+ *   under `LLM_BUDGET_WINDOW_MS` (5 min), so all 20 reservations land in the
+ *   same window rather than spreading across two.
+ * - A refused reservation is DROPPED, not deferred. `buildDebateStep`
+ *   (debate-adapter.ts) returns `rateLimitedDebateResult` and the tick
+ *   short-circuits at Trader with `no_trade`; nothing re-queues it on the next
+ *   tick, and the bar is gone by the next hour. At 15 the last 5 names of every
+ *   burst would never debate — and would report as a quiet market, not as a
+ *   misconfiguration. That adapter's own warn text names this: "persistent
+ *   refusals mean rateLimiterConfig is sized under the universe's real debate
+ *   rate, not that the market is quiet."
+ *
+ * So the floor is one full universe pass per window — 20, not 15. 24 carries
+ * ~20% over that for the case where a straggler from the previous burst is
+ * still inside the window when the next one opens. `maxLlmCalls` follows
+ * automatically through `llmBudget()`, so the call budget needs no separate
+ * edit. **Re-derive this against `DEFAULT_UNIVERSE.length` whenever the
+ * universe changes; it is not a constant that tolerates being assumed.**
+ *
+ * This does NOT raise spend risk: `SqliteSpendCap` (ADR-0008's $50/14d) is the
+ * dollar control and is untouched. The limiter bounds rate, not total.
  */
 const CRYPTO_MAX_DEBATES_PER_WINDOW = 20;
-const STOCKS_MAX_DEBATES_PER_WINDOW = 15;
+const STOCKS_MAX_DEBATES_PER_WINDOW = 24;
 
 /**
  * `maxConcurrentInstruments` (#1013) — see that field's comment, on the
@@ -1994,12 +2031,13 @@ export function buildStartingProfileConfigs(
      *   slow debate still only spends its own call budget, never another
      *   instrument's debate-count budget — a debate's duration and how many
      *   debates a window admits are separate quantities here.
-     * - `6` clears today's 4-instrument universe with a spare worker, so the
-     *   tick loop's own per-instrument reentrancy guard (#669, `production.ts`
-     *   — never more than one in-flight pass per instrument) is what actually
-     *   bounds concurrent debates today, at `min(6, universe.length) = 4`, not
-     *   this number: raising it further would not raise real concurrency until
-     *   the universe itself grows past 6.
+     * - `6` was originally chosen to clear a 4-instrument universe with a spare
+     *   worker, which made the tick loop's own per-instrument reentrancy guard
+     *   (#669, `production.ts` — never more than one in-flight pass per
+     *   instrument) the binding constraint at `min(6, universe.length) = 4`.
+     *   **That is no longer the case: `DEFAULT_UNIVERSE` is 20 names, so
+     *   `min(6, universe.length) = 6` and THIS dial binds.** See "Revisited at
+     *   20 names" below for why it stays at 6 anyway.
      * - `6` also reuses, rather than re-derives, #388's own headroom check two
      *   screens down (`rateLimiterConfig`'s comment): raising this to 6 was
      *   already shown there to roughly double the stock debate rate to
@@ -2033,6 +2071,29 @@ export function buildStartingProfileConfigs(
      * (seconds to low tens of seconds, #1012's mean-to-tail range) rather than
      * the sum of the instruments ahead of it in a serial walk.
      *
+     * **Revisited at 20 names, and deliberately left at 6.** The tripwire below
+     * says to revisit this dial rather than assume it when the universe widens
+     * past it; the universe widened 3 -> 20 for the paper soak, so here is the
+     * revisit rather than a silent inheritance.
+     *
+     * The width-6 collapse argument in the paragraph above no longer holds: it
+     * rests on EVERY instrument starting its pass in the same tick instant, and
+     * 20 names at width 6 walk in `ceil(20 / 6) = 4` groups instead. The last
+     * group therefore decides on data up to ~3 debates deep — at #1012's ~61s
+     * mean, on the order of ~3 min, the same figure the width-1 serial walk
+     * produced for the old 4-name universe. That is a STALENESS regression, not
+     * a safety one, and it is gated rather than tolerated: `max_signal_age` and
+     * `max_mark_age` for stocks are both 15 min, comfortably above the ~4.1 min
+     * worst-case full pass, so the tail of the walk is well inside the freshness
+     * bounds Verdict enforces. If either of those two gates is ever tightened
+     * below the pass duration, the tail gets refused at Verdict and this dial
+     * has to rise with it.
+     *
+     * Raising it now would trade that measured, gated staleness for #692's
+     * overlapping-pass multiplication and a wider same-tick window for #1019's
+     * race — both unmeasured. The staleness is bounded and checked; the other
+     * two are not. So: unchanged, on evidence.
+     *
      * **NOT sized for the ~30-name live LSE ETP pool (#895).** A universe that
      * wide makes `maxConcurrentInstruments x passes in flight` (#692) actually
      * multiply — a wider universe than this cap gives a second, overlapping
@@ -2054,7 +2115,11 @@ export function buildStartingProfileConfigs(
      * to net same-tick concurrent exposure. **Bounded today**: `DEFAULT_UNIVERSE`
      * has no `subclass_of` entries, so `perSubclassDeploymentCap` is inert and
      * the per-name gates (`perTradeSizeCap`, `perAssetExposureCap`) still bind
-     * independently. **It disappears the moment a D5-classified subclass with
+     * independently. The 3 -> 20 widening keeps that bound deliberately: every
+     * new row is an UNCLASSIFIED US cash equity or index ETF with no
+     * `subclass`, so the widening does not arm the race. Do not classify
+     * these rows until #1019 is closed. **It disappears the moment a
+     * D5-classified subclass with
      * a numeric fraction arms** (`isD5ArmedWithNumericFraction`,
      * `risk-manager/index.ts`) — expected once #895's pool file lands — which
      * nulls out both per-name gates and leaves only the gate that cannot net
@@ -2221,16 +2286,22 @@ export function buildStartingProfileConfigs(
      * results ride in the PROMPT: ~$0.02 at the default 3 results, a measured
      * $0.089 at 10.
      *
-     * The call count is SESSION-derived, not calendar-derived: `UniverseScheduler`
-     * returns an empty instrument list whenever the calendar says closed, so
-     * the refresh never fires outside the session and a 6.5h US session
-     * touches 4 two-hour buckets, not 12. A 14-session soak is therefore
-     * 3 x 4 x 14 = ~168 calls, i.e. ~$3-5 at 3 results and ~$15 at 10 —
-     * comfortably inside this profile's $50 cap. It is the LIVE universe that
-     * binds (7 x 4 x 252 is ~$141/yr at 3 and ~$630/yr at 10), which is why
-     * `SAMURAI_X_MAX_RESULTS` is clamped to 10 rather than merely advised.
-     * Retrieval is OFF by default, so the arithmetic above still describes an
-     * unflagged run. ADR-0008 §2's 2026-09-03 amendment and ADR-0020 carry the regime;
+     * Two multipliers set the call count. Buckets are SESSION-derived:
+     * `UniverseScheduler` returns an empty instrument list whenever the
+     * calendar says closed, so the refresh never fires outside the session and
+     * a 6.5h US session touches 4 two-hour buckets, not 12. And the universe
+     * is the 20 names above (#1051). A soak is therefore 20 x 4 x 10 = ~800
+     * calls: **~$16** at the default 3 results and **~$71** at 10, against
+     * this profile's $50 `llmBudgetUsd` shared with #1051's ~$8.40 debate leg.
+     *
+     * So the cap BINDS the sentiment leg, and at 3 results that leg is the
+     * LARGER of the two — the first thing under this budget to outweigh the
+     * debate. `SAMURAI_X_MAX_RESULTS` is clamped to 10, but that clamp bounds
+     * an operator typo rather than the budget: 10 on 20 names does not fit,
+     * and `SpendCap` failing closed turns the overshoot into a soak that goes
+     * dark partway through. Re-derive the default when the universe width
+     * changes. Retrieval is OFF by default, so the arithmetic above still
+     * describes an unflagged run. ADR-0008 §2's 2026-09-03 amendment and ADR-0020 carry the regime;
      * treat the retrieval figures as a range until reconciled against the
      * provider invoice.
      *
@@ -2358,6 +2429,19 @@ export function buildStartingProfileConfigs(
      * silently becomes the LOOSEST entry — the exact inversion of the rule it
      * claims to follow, with the comment still swearing otherwise. Deriving it
      * makes the claim structural.
+     *
+     * **That hypothetical is now the actual case, and the derivation absorbed
+     * it exactly as designed.** The 20-name widening raised
+     * `STOCKS_MAX_DEBATES_PER_WINDOW` past crypto's 20, so `default` moved from
+     * `min(20, 15) = 15` to `min(20, 24) = 20` — it now mirrors CRYPTO rather
+     * than stocks. Stated rather than left to be rediscovered, because the
+     * number moving is a real consequence of that edit. It changes no behaviour
+     * today: `configFor` reads `default` only for an asset class with no
+     * `perAssetClass` entry, `AssetClass` is `crypto | stocks`, and both are
+     * declared below — so nothing resolves to it, and the widened universe is
+     * stocks-only besides. It stays the most-constrained-of-the-two by
+     * construction, which is the rule; only which class supplies that bound
+     * changed.
      */
     rateLimiterConfig: {
       default: llmBudget(Math.min(CRYPTO_MAX_DEBATES_PER_WINDOW, STOCKS_MAX_DEBATES_PER_WINDOW)),

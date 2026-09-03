@@ -21,7 +21,12 @@
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AlpacaHttpBrokerClient } from '../../pipeline/execution/index.js';
-import { openSharedStore, resolveStoreMode, sharedStorePath } from '../../shared/store/index.js';
+import {
+  guardedStore,
+  openSharedStore,
+  resolveStoreMode,
+  sharedStorePath,
+} from '../../shared/store/index.js';
 import { JsonLogger } from '../orchestrator/logger.js';
 import { DASHBOARD_CREDENTIAL_ENV_VAR } from './bind-guard.js';
 import { installDashboardContinueOnFault, watchDashboardStdout } from './fault-guard.js';
@@ -87,7 +92,16 @@ const dashboardCredential = process.env[DASHBOARD_CREDENTIAL_ENV_VAR];
 // means the page cannot report a mode the database file disagrees with.
 const mode = resolveStoreMode();
 const dbPath = sharedStorePath(mode);
-const db = openSharedStore(dbPath);
+// #837 M9: the dashboard process is a READER. `'service-api'` declares an empty
+// write set, so any INSERT/REPLACE/UPDATE/DELETE issued in this process — to
+// any table at all — throws in dev/CI, which turns the spec's "service-api is
+// a reader only" from a review convention into an assertion.
+//
+// DML only, and the guard says so itself (write-guard.ts, limit 4): `CREATE`,
+// `DROP` and `ALTER` are not scanned, so this declaration does not prove the
+// process cannot touch the schema. Detection where it plausibly goes wrong,
+// not a sandbox.
+const db = guardedStore(openSharedStore(dbPath), 'service-api');
 // #940: `sharedStorePath` returns a path RELATIVE to the process's working
 // directory (see file header), so two processes started from different
 // directories can silently open two different files — a trade lands in one

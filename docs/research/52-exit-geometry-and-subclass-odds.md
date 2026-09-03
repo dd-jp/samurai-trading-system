@@ -223,10 +223,12 @@ that gap.
    underlying scaled by the leverage factor — ADR-0018's own method and its own
    limitation. Real ETP tracking error, LSE-hours liquidity, and the ETPs' own spreads are
    absent.
-3. **Per-name costs are subclass costs.** #666 owns the measured per-instrument spreads;
-   they are not applied per name here. A per-name ranking therefore inherits its
-   subclass's round trip, which is the main reason a per-name figure is weaker evidence
-   than a per-subclass one.
+3. **Per-name costs are subclass costs.** Measured per-instrument spreads were never delivered —
+   [#666](https://github.com/dd-jp/samurai-trading-system/issues/666) closed 2026-08-27 out of
+   scope without doing so, and [#750](https://github.com/dd-jp/samurai-trading-system/issues/750)
+   now gates on it instead with no open ticket delivering it — so per-instrument costs are not
+   applied per name here. A per-name ranking therefore inherits its subclass's round trip, which
+   is the main reason a per-name figure is weaker evidence than a per-subclass one.
 4. **Underpowered for most pairwise claims.** SEs of 0.8–1.6 pp against differences often
    under 1 pp. §5's ordering should be read as "MSTR is clearly worst" plus a soft
    gradient, not as a ranking.

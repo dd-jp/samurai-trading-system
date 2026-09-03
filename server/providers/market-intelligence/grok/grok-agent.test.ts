@@ -122,11 +122,13 @@ describe('floorToRefreshBucket', () => {
     // The assertion below is on the CONSTANT — 12 buckets per 24 hours — not
     // on how many actually fire. The scheduler emits no instruments outside
     // the session, so a 6.5h US session touches 4 of them and the real sample
-    // is 4 x 3 = 12 posts/instrument/session. That is what makes this a
-    // sample-size decision rather than a cost one: ~168 calls over a soak sits
-    // well inside the cap at either end of the `max_search_results` range.
-    // Interval and result count still move together, and neither can be
-    // retuned alone. See `x-search-client.ts`.
+    // is 4 x 3 = 12 posts/instrument/session.
+    //
+    // Cost is the other half of the same decision and it is NOT slack: across
+    // the 20-name universe (#1051) a soak is ~800 calls, ~$16 at the default
+    // result count and ~$71 at the ceiling, against a $50 cap. Interval and
+    // result count move together, and neither can be retuned alone. See
+    // `x-search-client.ts`.
     expect((24 * 60 * 60 * 1000) / GROK_REFRESH_MS).toBe(12);
   });
 });

@@ -180,6 +180,7 @@ import {
 import {
   AlpacaNewsClient,
   CiiConsumer,
+  DEFAULT_MAX_SEARCH_RESULTS,
   GdeltGkgClient,
   GdeltIngestAgent,
   GROK_REFRESH_MS,
@@ -193,10 +194,18 @@ import {
   X_SEARCH_MODEL,
   XSearchClient,
 } from '../../providers/market-intelligence/index.js';
+import { positiveIntegerFromEnv } from '../../shared/env-integer.js';
 import type { AssetClass, Clock, TuningStore } from '../../shared/index.js';
 import { isThresholdBoundViolation, resolveVenuePacing, TokenBucket } from '../../shared/index.js';
 import { tryNousCredentials } from '../../shared/llm/index.js';
-import { SqliteRiskLogStore, SqliteTraderLogStore } from '../../shared/store/index.js';
+import type { SharedStore as SqliteHandle } from '../../shared/store/index.js';
+import {
+  DEFAULT_MAX_LLM_CALL_ROWS,
+  guardedStore,
+  pruneLlmCallLog,
+  SqliteRiskLogStore,
+  SqliteTraderLogStore,
+} from '../../shared/store/index.js';
 import { CostModelImpl, SqliteStage2SelectionStore } from '../../tools/backtest/index.js';
 import {
   LoggingAnalystSkipAlertChannel,
@@ -560,26 +569,88 @@ export function captureLlmTextFromEnvironment(
   return value?.trim().toLowerCase() !== 'off';
 }
 
+/** The variable that overrides `llm_call_log`'s row ceiling (#1045). */
+export const ENV_LLM_CALL_LOG_MAX_ROWS = 'SAMURAI_LLM_CALL_LOG_MAX_ROWS';
+
+/** The variable that overrides how many X posts a sentiment call fetches (#969). */
+export const ENV_X_MAX_SEARCH_RESULTS = 'SAMURAI_X_MAX_RESULTS';
+
 /**
- * Reads an optional positive-integer env value, or `undefined` for anything
- * unusable — absent, empty, non-numeric, zero, negative, fractional.
+ * How many `llm_call_log` rows to keep (#1045).
  *
- * `undefined` means "the component's own default", NOT zero. That distinction
- * is the reason this refuses rather than coerces: `Number('')` is 0 and
- * `Number.parseInt('abc')` is NaN, and a `max_search_results` of 0 or NaN
- * reaching the provider is a call that costs money and retrieves nothing.
+ * `min = 1`, not `0` — the one place this deliberately departs from the file
+ * sink's identical-looking setting, where `0` legally means "keep nothing".
+ * Here "keep nothing" is already spelled `SAMURAI_LLM_CAPTURE=off`, and a
+ * ceiling of zero would mean writing every prompt to disk purely to delete it
+ * on the next sweep. Two spellings for one intention is how a config comes to
+ * disagree with itself, so this one refuses.
  *
- * Exported so the parsing is pinned by a test rather than inferred from a
- * coercion buried in a long composition root — the same reason
- * `captureLlmTextFromEnvironment` is exported.
+ * Exported and tested for the same reason `captureLlmTextFromEnvironment` is:
+ * a retention policy read inline in a 3,000-line composition root is a policy
+ * nobody can see.
  */
-export function readPositiveInteger(value: string | undefined): number | undefined {
-  if (value === undefined) return undefined;
-  const trimmed = value.trim();
-  if (trimmed === '') return undefined;
-  const parsed = Number(trimmed);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) return undefined;
-  return parsed;
+export function llmCallLogMaxRowsFromEnvironment(
+  value: string | undefined = process.env[ENV_LLM_CALL_LOG_MAX_ROWS],
+): number {
+  return positiveIntegerFromEnv(
+    value,
+    ENV_LLM_CALL_LOG_MAX_ROWS,
+    DEFAULT_MAX_LLM_CALL_ROWS,
+    1,
+    "the captured LLM prompt/response table's row ceiling (#1045)",
+  );
+}
+
+/**
+ * Prunes, reports what it removed, and never throws.
+ *
+ * Silence would be wrong in both directions, so both are logged: a sweep that
+ * dropped thousands of prompts is something an operator should be able to find
+ * afterwards when the rows they wanted are gone, and a sweep that keeps
+ * failing is a table growing without a ceiling while everything else looks
+ * healthy. Only a prune that did nothing — the ordinary case, every day below
+ * the ceiling — stays quiet.
+ *
+ * Swallowing is deliberate and matches how the capture itself behaves
+ * (`spend-sink.ts`: bookkeeping must never fail the thing it books). At boot a
+ * throw would abort a trading process over housekeeping; on the timer it would
+ * take down the daily feedback cycle. Neither trade is worth making for disk.
+ */
+function pruneLlmCallLogWithLog(
+  db: SqliteHandle,
+  maxRows: number,
+  logger: Logger,
+  trigger: 'startup' | 'daily',
+): void {
+  try {
+    // Declared as a `debate-engine` write, not an `orchestrator` one (#1048):
+    // `llm_call_log` is owned by the debate engine, which is the only writer of
+    // records into it. This sweep is housekeeping on that table rather than a
+    // second writer of records, but it is still a DML statement against it, so
+    // it goes through the guard under the owning stage instead of slipping past
+    // on a raw handle. Passing 'orchestrator' here would trip the guard, which
+    // is the correct answer to the question "may the orchestrator write rows to
+    // the debate engine's table?" — it may not.
+    const deleted = pruneLlmCallLog(guardedStore(db, 'debate-engine'), maxRows);
+    if (deleted === 0) return;
+    logger.log({
+      trace_id: trigger === 'startup' ? 'startup' : 'feedback-cycle',
+      stage: 'orchestrator',
+      level: 'info',
+      message: `pruned llm_call_log to its ${maxRows}-row ceiling`,
+      payload: { deleted, max_rows: maxRows, trigger },
+    });
+  } catch (error) {
+    logger.log({
+      trace_id: trigger === 'startup' ? 'startup' : 'feedback-cycle',
+      stage: 'orchestrator',
+      level: 'warn',
+      message:
+        'llm_call_log prune failed — captured prompts and responses are unaffected, but the ' +
+        'table is not bounded until this succeeds',
+      payload: { error: error instanceof Error ? error.message : String(error), trigger },
+    });
+  }
 }
 
 export function buildProductionComponents(config: ProductionConfig): ProductionComponents {
@@ -830,7 +901,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * service below, which gets its own (`benchmarkMarketDataStore`). See that
    * instance's doc for why the two writers' shared key space is safe.
    */
-  const marketDataStore = new SqliteMarketDataStore(config.db);
+  const marketDataStore = new SqliteMarketDataStore(guardedStore(config.db, 'market-data'));
   const marketData: MarketDataService = new MarketDataServiceImpl(
     dataSource,
     clock,
@@ -884,7 +955,9 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * Reopen once #751 lands (the guard's structural condition disappears) or
    * before this collision condition can be reached any other way.
    */
-  const benchmarkMarketDataStore = new SqliteMarketDataStore(config.db);
+  const benchmarkMarketDataStore = new SqliteMarketDataStore(
+    guardedStore(config.db, 'market-data'),
+  );
   /**
    * The OUTSIDE BENCHMARKS' own market-data path (#981, under #636) —
    * deliberately NOT `marketData` above.
@@ -961,7 +1034,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // WRITES the setup at decision time and `onTradeClose` LABELS it with the
   // realized R on close. Constructed here rather than inline below so the two
   // halves cannot drift into separate stores.
-  const setupStore = new SqliteSetupStore(config.db);
+  const setupStore = new SqliteSetupStore(guardedStore(config.db, 'trader'));
 
   /**
    * Hoisted above the tick steps (#433). It used to be constructed down in
@@ -970,7 +1043,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * time, and a threshold `autoTighten` writes has to be the same row Risk
    * reads. One instance, both ends of the dial.
    */
-  const tuningStore = new SqliteTuningStore(config.db, clock);
+  const tuningStore = new SqliteTuningStore(guardedStore(config.db, 'feedback-loop'), clock);
 
   /**
    * Hoisted above `spendCap` (below) rather than left beside the Feedback
@@ -1011,11 +1084,15 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     });
     spendCap = UNCAPPED_SPEND;
   } else {
-    const cap = new SqliteSpendCap(config.db, config.llmBudgetUsd, logger, () =>
-      breachAlerts.postBreachAlert({
-        breaches: ['llm_spend_cap'],
-        reported_at: clock.now(),
-      }),
+    const cap = new SqliteSpendCap(
+      guardedStore(config.db, 'debate-engine'),
+      config.llmBudgetUsd,
+      logger,
+      () =>
+        breachAlerts.postBreachAlert({
+          breaches: ['llm_spend_cap'],
+          reported_at: clock.now(),
+        }),
     );
     spendCap = cap;
 
@@ -1064,7 +1141,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // `store` all read/write through this same instance, so `onTradeClose`
   // fires no matter which of them eventually calls `writeClosedTrade`.
   const executionStore = withOnTradeClose(
-    new SqliteExecutionStore(config.db),
+    new SqliteExecutionStore(guardedStore(config.db, 'execution')),
     { setup_store: setupStore },
     logger,
   );
@@ -1083,7 +1160,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       // blind, and `fetchNewFills` polls nothing for lots that were already
       // filling when the process died. The in-memory default is only ever
       // right for a test.
-      state: new SqliteBrokerStateStore(config.db),
+      state: new SqliteBrokerStateStore(guardedStore(config.db, 'execution')),
       // #298: the same store carries the age-out clock for a fill the venue
       // will not price, which is why it must be the durable one here — a
       // restart that reset the clock would age nothing out across a soak.
@@ -1107,7 +1184,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // The sticky breakers' durable home (#203, review 2026-08-06 B1): loaded
   // here so a trip survives restart, written by every breaker evaluation on
   // the tick path (direct-bind.ts `computeCurrentPortfolioAndBreakers`).
-  const breakerStateStore = new SqliteBreakerStateStore(config.db);
+  const breakerStateStore = new SqliteBreakerStateStore(guardedStore(config.db, 'risk'));
   const circuitBreakers = new CircuitBreakers(
     config.breakerConfig,
     config.initialBreakerState ?? breakerStateStore.load(),
@@ -1154,20 +1231,20 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       config.accountState ??
       new AlpacaAccountStateProvider({
         client: brokerClient,
-        store: new SqliteAccountStateStore(config.db),
+        store: new SqliteAccountStateStore(guardedStore(config.db, 'orchestrator')),
         // Per-class session-open equity snapshots (#332) — the local
         // replacement for Alpaca's blended `last_equity` (GAP-8).
-        sessionEquity: new SqliteSessionEquityStore(config.db),
+        sessionEquity: new SqliteSessionEquityStore(guardedStore(config.db, 'orchestrator')),
         // The append-only daily equity series (#345). Wired unconditionally,
         // and on the same boundary as the snapshot above, because a return
         // series cannot be backfilled: equity not sampled on the day is gone.
         // Capture starts from the first tick of the first run; whether it is
         // ever EVALUATED is a separate, gated decision that lives in
         // `SqliteDailyEquityMetricsSource`.
-        dailyEquity: new SqliteDailyEquityStore(config.db),
+        dailyEquity: new SqliteDailyEquityStore(guardedStore(config.db, 'orchestrator')),
         // The existing ClosedTrade reader, per spec story 25 — no new
         // realized-PnL ledger is built when one already exists.
-        closedTrades: new SqliteClosedTradeStore(config.db),
+        closedTrades: new SqliteClosedTradeStore(guardedStore(config.db, 'feedback-loop')),
         // Two calendars: crypto resets at 00:00 UTC, stocks at the prior 16:00
         // ET close. `tradingCalendar` is the equity one (it gates market-hours
         // scheduling), so only it is overridable here — a crypto session has no
@@ -1274,6 +1351,24 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // neither reads the environment for itself — the same rule the file sink
   // follows (`buildEntrypointLogger`).
   const captureLlmText = captureLlmTextFromEnvironment();
+
+  /**
+   * #1045. The row ceiling is read and APPLIED here, at boot, and again on the
+   * daily timer below — two call sites, both at this composition root.
+   *
+   * Both, not one. Startup alone would fire once and then never again for the
+   * length of an unattended run, which is precisely the run the ceiling exists
+   * to bound; the daily sweep alone would leave a restart-heavy dev loop
+   * pruning nothing until 24h of uptime accumulated. Neither is a hot path:
+   * the statement is a no-op below the ceiling and the table has one writer.
+   *
+   * Wired here rather than inside `SqliteLlmSpendStore` on purpose. The store
+   * writes rows; deciding how many the SYSTEM keeps is a deployment policy,
+   * and burying it in the writer is how `pruneIngestedObservedFills` came to
+   * exist, be tested, and never be called from anything that ships (#313).
+   */
+  const llmCallLogMaxRows = llmCallLogMaxRowsFromEnvironment();
+  pruneLlmCallLogWithLog(config.db, llmCallLogMaxRows, logger, 'startup');
   // `tryNousCredentials` rather than `nousCredentials`: an unconfigured Nous
   // environment degrades this optional stage to no-agent instead of failing
   // the boot, which is how the absent `XAI_API_KEY` behaved before ADR-0009
@@ -1288,7 +1383,10 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    */
   const llmClient =
     config.llmClient ??
-    buildDefaultLlmClient(logger, new SqliteLlmSpendStore(config.db, logger, captureLlmText));
+    buildDefaultLlmClient(
+      logger,
+      new SqliteLlmSpendStore(guardedStore(config.db, 'debate-engine'), logger, captureLlmText),
+    );
 
   /**
    * Whether the sentiment agent RETRIEVES (#969), as opposed to asking a model
@@ -1309,14 +1407,34 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    *    invoice (the plan's V3). Until it has, turning this on is a deliberate,
    *    dated act by an operator, not a default.
    *
-   * `SAMURAI_X_MAX_RESULTS` is the dial; `XSearchClient` clamps it to
-   * `[1, MAX_SEARCH_RESULTS_CEILING]` and warns, because an operator typo
-   * here spends an order of magnitude more than intended.
+   * `SAMURAI_X_MAX_RESULTS` is the dial, and it is read through the SHARED
+   * `positiveIntegerFromEnv` (#1045) rather than a validator of its own. That
+   * helper's header makes the argument — "two env vars in one system come to
+   * disagree about whether `\"abc\"` means abc, the default, or 0" — and a
+   * spend dial is the last place to disagree about it. Concretely it means a
+   * malformed value **throws at startup naming the variable** instead of
+   * silently falling back, which is the right failure for a setting whose
+   * whole job is bounding cost: an operator who typed `SAMURAI_X_MAX_RESULTS=ten`
+   * meant to change the spend and should not discover days later that nothing
+   * changed.
+   *
+   * The ceiling is enforced separately and does NOT throw. `XSearchClient`
+   * clamps to `[1, MAX_SEARCH_RESULTS_CEILING]` and warns, because 100 is a
+   * well-formed integer that an operator plausibly meant as "as many as you
+   * can" — refusing to boot over it would be worse than capping it and saying
+   * so. So: unusable input refuses, excessive input clamps.
    */
   const sentimentRetrieval =
     config.sentimentRetrieval ??
     process.env.SAMURAI_SENTIMENT_RETRIEVAL?.trim().toLowerCase() === 'on';
-  const xMaxSearchResults = readPositiveInteger(process.env.SAMURAI_X_MAX_RESULTS);
+  const xMaxSearchResults = positiveIntegerFromEnv(
+    process.env[ENV_X_MAX_SEARCH_RESULTS],
+    ENV_X_MAX_SEARCH_RESULTS,
+    DEFAULT_MAX_SEARCH_RESULTS,
+    1,
+    "the number of X posts each sentiment call retrieves, the soak's main LLM cost lever after " +
+      'the debate itself (#969)',
+  );
 
   const grokAgent =
     sentimentCredentials === undefined
@@ -1335,14 +1453,18 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
                 // models"). The routed alias is not a preference here, it is
                 // the only thing that works — see `X_SEARCH_MODEL`.
                 model: X_SEARCH_MODEL,
-                ...(xMaxSearchResults === undefined ? {} : { maxSearchResults: xMaxSearchResults }),
+                maxSearchResults: xMaxSearchResults,
                 windowMs: GROK_REFRESH_MS,
                 logger,
               })
             : new NousSentimentClient({ ...sentimentCredentials, logger }),
           store: marketIntelligence,
           spendCap,
-          spendSink: new SqliteLlmSpendStore(config.db, logger, captureLlmText),
+          spendSink: new SqliteLlmSpendStore(
+            guardedStore(config.db, 'debate-engine'),
+            logger,
+            captureLlmText,
+          ),
           clock,
           logger,
           // Absent on runs with no archive, which is a working configuration:
@@ -1471,7 +1593,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // does this lot still hold", which is the divergence #568 was.
     getExitFillSizes: (idempotency_keys) => executionStore.getExitFillSizes(idempotency_keys),
     setupStore,
-    traderLog: new SqliteTraderLogStore(config.db),
+    traderLog: new SqliteTraderLogStore(guardedStore(config.db, 'trader')),
     // #511: the declared capital ceiling, spread through rather than read
     // from the environment here — this is the ONE hop that carries it from
     // `liveStartingProfile` to the arithmetic that turns equity into a size.
@@ -1506,7 +1628,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     config: config.riskConfig,
     correlationConfig: config.correlationConfig,
     ciiConsumer,
-    riskLog: new SqliteRiskLogStore(config.db),
+    riskLog: new SqliteRiskLogStore(guardedStore(config.db, 'risk')),
     // #433: the live dial. Without this Risk freezes its RiskConfig at
     // construction and `autoTighten`'s response to a kill-line breach
     // changes no decision.
@@ -1534,7 +1656,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     critic: buildRiskCriticProducer({
       mode: config.mode,
       llm: llmClient,
-      store: new SqliteRiskCriticStore(config.db),
+      store: new SqliteRiskCriticStore(guardedStore(config.db, 'risk')),
       spendCap,
       logger,
     }),
@@ -1587,7 +1709,10 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * would corrupt the live arm rather than measure it — see
    * `control-arm-wiring.ts` for the full argument.
    */
-  const controlExecutionStore = new SqliteExecutionStore(config.db, 'control');
+  const controlExecutionStore = new SqliteExecutionStore(
+    guardedStore(config.db, 'execution'),
+    'control',
+  );
   const controlBreakerState = new InMemoryBreakerStatePersistence();
   const controlArmWiring = buildControlArmWiring({
     trader: traderStepDeps,
@@ -1636,7 +1761,10 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       // than a coupling — see `buildControlBookAnchorResolver`.
       resolveBook: buildControlBookAnchorResolver({
         liveAccountState: breakerStateDeps.accountState,
-        store: new SqliteAccountStateStore(config.db, CONTROL_BOOK_ANCHOR_KEY),
+        store: new SqliteAccountStateStore(
+          guardedStore(config.db, 'orchestrator'),
+          CONTROL_BOOK_ANCHOR_KEY,
+        ),
         // Gated on `same_currency_verified` exactly like the primary live-read
         // clamp below — an unverified ceiling must not cap one path and leave
         // the other uncapped, or #972 fix 3 reopens itself in that one state.
@@ -1650,7 +1778,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       }),
       // `arm: 'control'` — the one caller that asks this store for the other
       // arm. Handing it the default would restore the coupling exactly.
-      closedTrades: new SqliteClosedTradeStore(config.db, 'control'),
+      closedTrades: new SqliteClosedTradeStore(guardedStore(config.db, 'feedback-loop'), 'control'),
       getOpenPositions: () => controlExecutionStore.getOpenPositions(),
       // The SAME two calendars the live provider is given: the arms must
       // measure a "day" over identical boundaries or their daily figures are
@@ -1721,7 +1849,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // soak.
     debate: buildDebateStep(
       llmClient,
-      new SqliteDebateLogStore(config.db),
+      new SqliteDebateLogStore(guardedStore(config.db, 'debate-engine')),
       llmRateLimiter,
       spendCap,
       logger,
@@ -2330,10 +2458,10 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
   // stateless over the shared handle, so a fresh set each cycle bought
   // nothing (code-review 2026-08-01, H7).
   const feedbackStores = {
-    trades: new SqliteClosedTradeStore(config.db),
-    debate_log: new SqliteDebateLogStore(config.db),
+    trades: new SqliteClosedTradeStore(guardedStore(config.db, 'feedback-loop')),
+    debate_log: new SqliteDebateLogStore(guardedStore(config.db, 'debate-engine')),
     tuning: components.tuning,
-    adjustments: new SqliteAdjustmentLog(config.db),
+    adjustments: new SqliteAdjustmentLog(guardedStore(config.db, 'feedback-loop')),
   };
   /**
    * #366, retargeted by #736. Resolved once, outside the timer callback, for
@@ -2370,7 +2498,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
    * baseline below. Both must see the same row — a selection good enough to
    * arm three kill-lines and not the fourth would be incoherent.
    */
-  const selectionStore = new SqliteStage2SelectionStore(config.db);
+  const selectionStore = new SqliteStage2SelectionStore(guardedStore(config.db, 'backtest'));
 
   const metricsSource =
     config.feedback?.metrics === undefined
@@ -2473,8 +2601,10 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
    * never tunes on the control's outcomes, and this question needs both arms out
    * of ONE window query (doc 12 gate 4).
    */
-  const armComparisonSource = new SqliteArmComparisonSource(config.db);
-  const armComparisonSamples = new SqliteArmComparisonSampleStore(config.db);
+  const armComparisonSource = new SqliteArmComparisonSource(guardedStore(config.db, 'control-arm'));
+  const armComparisonSamples = new SqliteArmComparisonSampleStore(
+    guardedStore(config.db, 'feedback-loop'),
+  );
 
   /**
    * The outside benchmarks' production caller (#981, under #636) — the half of
@@ -2496,7 +2626,9 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
    * real-time L1 mark vendor) is a different data need and does not gate this.
    */
   const outsideBenchmarkSeries = components.benchmarkSeries;
-  const outsideBenchmarkSamples = new SqliteOutsideBenchmarkSampleStore(config.db);
+  const outsideBenchmarkSamples = new SqliteOutsideBenchmarkSampleStore(
+    guardedStore(config.db, 'feedback-loop'),
+  );
 
   /**
    * Fire-and-forget, but NEVER unhandled.
@@ -2597,7 +2729,31 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     return sample.comparison;
   };
 
+  // #1045. Read here as well as in `buildProductionComponents`, not passed
+  // between them: these are two separate composition roots, the read is pure
+  // and validated, and both resolve the same variable in the same process, so
+  // they cannot disagree. Threading it through `ProductionComponents` would
+  // widen a public shape to carry a housekeeping constant.
+  const llmCallLogMaxRows = llmCallLogMaxRowsFromEnvironment();
+
   const runFeedbackCycle = (feedback: FeedbackCycleConfig): void => {
+    // #1045, and FIRST — outside the try below, before any of the tuning work.
+    //
+    // Placement is the whole point. Inside that try, after `runDailyCycle`, a
+    // persistently throwing feedback cycle would silently disable retention
+    // too: the catch would fire every day and the table would grow forever
+    // while the log showed only a feedback failure. Housekeeping that depends
+    // on unrelated work succeeding is not housekeeping. `pruneLlmCallLogWithLog`
+    // swallows its own errors, so it cannot cost the cycle anything either.
+    //
+    // Riding this existing 24h timer rather than adding a scheduler follows
+    // #636's rule, stated at `runOutsideBenchmarks` below: additional work
+    // joins the existing daily suite, no new scheduling primitive. Note it is
+    // a plain `setInterval` from process start, so "daily" means every ~24h of
+    // uptime, not a calendar midnight — fine for a retention sweep, but it is
+    // not a nightly job and should not be described as one.
+    pruneLlmCallLogWithLog(config.db, llmCallLogMaxRows, logger, 'daily');
+
     try {
       const result = runDailyCycle({
         clock,

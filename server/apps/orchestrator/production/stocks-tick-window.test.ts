@@ -21,7 +21,7 @@ import { UniverseScheduler } from '../scheduler.js';
 import type { UniverseInstrument } from '../types.js';
 import { withFlattenTail } from './stocks-tick-window.js';
 
-/** `DEFAULT_TRADER_CONFIG.flatten_before_close_ms` (`trader/types.ts:131`). */
+/** `DEFAULT_TRADER_CONFIG.flatten_before_close_ms` (`trader/types.ts:236`). */
 const FLATTEN_MS = 5 * 60 * 1_000;
 
 const UNIVERSE: readonly UniverseInstrument[] = [
@@ -113,8 +113,12 @@ describe('the flatten tail is reachable', () => {
   });
 
   it('tracks the configured window rather than a 5-minute constant', () => {
-    // #666 may move the flatten offset, and a tail hardcoded to 5 minutes would
-    // go stale silently — the same failure shape as the window itself.
+    // The flatten offset is injected config because it is an OFFSET resolved
+    // through the instrument's own TradingCalendar (#657, #668): the paper
+    // venue closes 16:00 ET and the live LSE leg 16:30 London (12:30 on a
+    // half-day), so any shared wall-clock constant would be wrong for one of
+    // them. A tail hardcoded to 5 minutes would go stale silently — the same
+    // failure shape as the window itself.
     const wide = withFlattenTail(londonEntryWindow(), CALENDAR, 30 * 60_000);
 
     expect(wide(at('16:05'))).toBe(true);
