@@ -1753,7 +1753,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     critic: buildRiskCriticProducer({
       mode: config.mode,
       llm: llmClient,
-      store: new SqliteRiskCriticStore(guardedStore(config.db, 'risk')),
+      store: new SqliteRiskCriticStore(guardedStore(config.db, 'risk'), logger),
       spendCap,
       marketData,
       logger,

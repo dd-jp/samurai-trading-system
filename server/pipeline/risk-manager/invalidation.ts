@@ -440,7 +440,7 @@ export function validateConditions(raw: unknown, side: OrderIntent['side']): Val
 }
 
 /**
- * ## Reading a PERSISTED conditions half back (#994 review)
+ * ## Reading a PERSISTED conditions half back (#994 review, tightened #1068)
  *
  * `risk_critic_log.conditions_json` is a TEXT column: its contents are
  * whatever a past process wrote, plus whatever a hand-edit or a partial write
@@ -450,18 +450,51 @@ export function validateConditions(raw: unknown, side: OrderIntent['side']): Val
  * it, which is exactly the "a model cannot produce a breach" rule defeated by
  * the storage layer.
  *
- * So the shape is CHECKED on read, and a list with any malformed element
- * collapses whole to `undefined` — the same `no_conditions` outcome a pre-fold
- * row produces (#997 Q3). Element-wise salvage is deliberately not attempted:
- * a partially unreadable record is not evidence about the trade, and keeping
- * half of it would make enforcement depend on which half survived.
+ * So the FULL shape is checked on read (`risk-manager-spec.md`, "persistence &
+ * replay", 2026-09-03 tightening): finite `observed` on a measured state,
+ * `observed: null` on `unevaluable`, and — new in #1068 — a well-formed
+ * `window` on a `bars` observable (previously only `measure` was checked) and
+ * an indicator `lookback` at or under `MAX_INVALIDATION_LOOKBACK` (previously
+ * unchecked on read, even though the validator has enforced it on emission
+ * since PR #1067).
+ *
+ * Per-element, not whole-list: a malformed element is DROPPED from the
+ * replayed list rather than collapsing the whole row. If nothing survives,
+ * the row reports `no_conditions` — the same marker a pre-fold row produces
+ * (#997 Q3) — never a hard reject and never a silent accept of a breach.
+ * `readPersistedDroppedConditions` (the drop-audit column) is unaffected and
+ * keeps its original all-or-nothing rule: that column has zero enforcement
+ * effect either way, so there is no safety reason to touch it here.
+ *
+ * One deliberate exception survives the tightening: an indicator `kind` that
+ * has since left `INDICATOR_KINDS` is still accepted when everything else
+ * about it is well-formed, so a historical row replays to the decision it
+ * produced when the state was actually measured. Dropping it on registry
+ * drift would silently change a historical verdict for a reason that has
+ * nothing to do with what happened at the time.
  */
 function isObservable(value: unknown): value is InvalidationObservable {
   if (typeof value !== 'object' || value === null) return false;
-  const observable = value as { kind?: unknown; spec?: unknown; measure?: unknown };
+  const observable = value as {
+    kind?: unknown;
+    spec?: unknown;
+    window?: unknown;
+    measure?: unknown;
+  };
   if (observable.kind === 'mark') return true;
-  if (observable.kind === 'indicator') return readIndicatorSpec(observable.spec) !== 'unparseable';
-  if (observable.kind === 'bars') return observable.measure === 'volume_ratio';
+  if (observable.kind === 'indicator') {
+    const spec = readIndicatorSpec(observable.spec);
+    // `unknown_indicator` is deliberately still accepted (registry-drift
+    // leniency, above). `lookback_too_large` is NOT: the cap exists to stop
+    // an unbounded market-data read, and a persisted row honours that cap on
+    // replay exactly as the validator enforces it on emission.
+    return spec !== 'unparseable' && spec !== 'lookback_too_large';
+  }
+  if (observable.kind === 'bars') {
+    if (observable.measure !== 'volume_ratio') return false;
+    const window = readBarWindow(observable.window);
+    return window !== 'unparseable' && window !== 'lookback_too_large';
+  }
   return false;
 }
 
@@ -505,19 +538,43 @@ function isDroppedCondition(value: unknown): value is DroppedCondition {
   return DROP_REASONS.includes(dropped.reason as InvalidationDropReason);
 }
 
-function readList<T>(parsed: unknown, isElement: (value: unknown) => value is T): T[] | undefined {
+function readListStrict<T>(
+  parsed: unknown,
+  isElement: (value: unknown) => value is T,
+): T[] | undefined {
   if (!Array.isArray(parsed)) return undefined;
   return parsed.every(isElement) ? (parsed as T[]) : undefined;
 }
 
-/** Parses a persisted `conditions` list. Any malformed element collapses the whole list to `undefined` (= `no_conditions`). */
+/**
+ * Parses a persisted `conditions` list ELEMENT-WISE (#1068): a malformed
+ * element is dropped, the well-formed survivors are kept, and the result is
+ * `undefined` (= `no_conditions`) only when NOTHING survives — never a hard
+ * reject on a partially-corrupt row, and never enforcement built on an
+ * element that failed the shape check. See the block comment above
+ * `isObservable` for the full rationale and the one deliberate leniency
+ * (registry-drift on `kind`).
+ */
 export function readPersistedConditions(parsed: unknown): EvaluatedCondition[] | undefined {
-  return readList(parsed, isEvaluatedCondition);
+  if (!Array.isArray(parsed)) return undefined;
+  // An emitted-but-empty list stays `[]`, not `undefined` — `writeJsonList`
+  // (critic-store.ts) writes "nothing emitted" as NULL and "everything
+  // dropped at validation time" as `[]` specifically so the two stay
+  // distinguishable in the row; collapsing `[]` to `undefined` here would
+  // erase that distinction on read even though nothing was malformed.
+  if (parsed.length === 0) return [];
+  const survivors = parsed.filter(isEvaluatedCondition);
+  return survivors.length === 0 ? undefined : survivors;
 }
 
-/** Parses a persisted `dropped_conditions` list, on the same all-or-nothing rule. */
+/**
+ * Parses a persisted `dropped_conditions` list. Unlike `readPersistedConditions`
+ * above, this keeps the original ALL-OR-NOTHING rule: this column is audit-only
+ * (zero enforcement effect either way), so #1068 does not extend the
+ * element-wise tightening to it.
+ */
 export function readPersistedDroppedConditions(parsed: unknown): DroppedCondition[] | undefined {
-  return readList(parsed, isDroppedCondition);
+  return readListStrict(parsed, isDroppedCondition);
 }
 
 export interface EvaluateConditionsInput {
