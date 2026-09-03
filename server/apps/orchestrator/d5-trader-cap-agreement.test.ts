@@ -25,6 +25,12 @@
  * criterion: an armed D5 entry lands at the Trader's intended size through
  * the SHIPPED profile, no cap lifted out of the way, at the reference book
  * and below it.
+ *
+ * The last three tests of the first describe are #897's, resolved 2026-09-03:
+ * the Trader's first tranche now sizes to `deployment x (1 -
+ * headroom_reserve_fraction)` while this gate's cap stays at the full
+ * fraction, so a scale-in is admissible. They used to be one test pinning the
+ * opposite as a known gap.
  */
 import { describe, expect, it } from 'vitest';
 
@@ -38,6 +44,7 @@ import type {
 } from '../../pipeline/risk-manager/types.js';
 import {
   D5_INDEX_ETP_DEPLOYMENT_FRACTION,
+  D5_SCALE_IN_HEADROOM_RESERVE_FRACTION,
   D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION,
 } from '../../pipeline/trader/subclass-bracket.js';
 import type { Clock, OrderIntent } from '../../shared/index.js';
@@ -65,6 +72,12 @@ const UNIVERSE: readonly UniverseInstrument[] = [
 
 /** The book, per ADR-0015's 2026-08-18 amendment. */
 const EQUITY = LIVE_BOOK_GBP;
+
+/**
+ * The share of a D5 envelope the FIRST tranche takes, per #897 — the rest is
+ * the scale-in headroom the tests at the end of the first describe draw on.
+ */
+const RESERVED = 1 - D5_SCALE_IN_HEADROOM_RESERVE_FRACTION;
 
 const CLOCK: Clock = { now: () => new Date('2026-08-19T14:35:00Z') };
 
@@ -363,27 +376,78 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
     }
   });
 
-  it('leaves NO room for a scale-in once an entry took the full envelope — #897, unresolved', () => {
-    // Recorded as behaviour, not asserted as desirable. `buildBracket` sizes a
-    // `scale_in` exactly like an entry (decide.ts:391), so a first fill at the
-    // full envelope leaves `allowedAdditional <= 0` and every scale-in is
-    // trimmed to zero, then rejected under `min_viable_size`.
+  it('LEAVES room for a scale-in after the first fill — #897, resolved 2026-09-03', () => {
+    // This test used to pin the OPPOSITE, as a recorded gap: pre-#897 the
+    // Trader sized one entry AT the whole envelope, so `allowedAdditional <= 0`
+    // from the first fill onward and every scale-in was trimmed to zero and
+    // rejected under `min_viable_size`. David ruled that accidental (option 2
+    // on #897) — D5 is an envelope to draw on, not a per-position-and-done
+    // budget — and `riskFractionFor` now sizes the first tranche at
+    // `deployment x (1 - headroom_reserve_fraction)`.
     //
-    // Unscaling the cap neither caused this nor can fix it: it follows from
-    // the Trader sizing ONE entry AT the whole envelope. Resolving it is a
-    // Trader-side or ADR-0018 D5 decision — entries size below the envelope to
-    // leave headroom, or scale-ins are ruled out for D5-capped subclasses —
-    // and it is the half of #800 that survives David's capital ruling. #800
-    // itself closed once its denominator question resolved; this gap is now
-    // owned by #897, which must stay OPEN while this test asserts the gap.
-    const full = D5_INDEX_ETP_DEPLOYMENT_FRACTION * EQUITY;
+    // The reserve lives on the TRADER side only. This gate's
+    // `cap_fraction_of_equity` is deliberately still the full 0.35, which is
+    // exactly what makes the reserved slice reachable here; applying the
+    // reserve to the cap as well would move the ceiling down with the entry
+    // and leave nothing to scale into.
+    //
+    // What this test does NOT cover: `whole_share_sizing`'s one-share floor.
+    // `intentFor` prices every share at £1 (`entry: 1`), so £35 of headroom is
+    // 35 whole shares here regardless of what an LSE ETP actually costs. The
+    // per-share ceiling the reserve implies is recorded on
+    // `SubclassBracket.headroom_reserve_fraction`, not asserted anywhere.
+    const firstFill = D5_INDEX_ETP_DEPLOYMENT_FRACTION * RESERVED * EQUITY; // £315
+    const headroom = D5_INDEX_ETP_DEPLOYMENT_FRACTION * EQUITY - firstFill; // £35
 
-    const decision = decide(d5InIsolation(), intentFor('3USL', full, 'scale_in'), {
+    const decision = decide(d5InIsolation(), intentFor('3USL', firstFill, 'scale_in'), {
+      '3USL': firstFill,
+    });
+
+    expect(decision.status).not.toBe('rejected');
+    // Trimmed to the reserved headroom EXACTLY, and by the D5 gate — "not
+    // rejected" alone would also pass if the cap had stopped binding at all,
+    // which is the failure the "#800" describe above guards against by name.
+    expect(decision.modifications?.final_size).toBeCloseTo(headroom, 6);
+    expect(decision.binding_constraint).toBe('per_subclass_deployment_cap');
+    expect(headroom).toBeGreaterThan(shippedConfig().min_viable_size);
+  });
+
+  it('admits exactly ONE top-up, not a ladder — the second scale-in is rejected', () => {
+    // The other half of #897's resolution, and what keeps it consistent with
+    // #708's rejection of the tranche ladder: once the reserved slice is
+    // consumed the envelope is genuinely spent, and a further scale-in trims to
+    // zero and is rejected under `min_viable_size` exactly as before. The
+    // reserve buys one tranche of headroom, not an open-ended schedule.
+    const full = D5_INDEX_ETP_DEPLOYMENT_FRACTION * EQUITY; // £350 — first fill plus its top-up
+    const ask = D5_INDEX_ETP_DEPLOYMENT_FRACTION * RESERVED * EQUITY;
+
+    const decision = decide(d5InIsolation(), intentFor('3USL', ask, 'scale_in'), {
       '3USL': full,
     });
 
     expect(decision.status).toBe('rejected');
     expect(decision.binding_constraint).toBe('min_viable_size');
+  });
+
+  it('leaves scale-in room on the single-stock row too, at a smaller slice', () => {
+    // Per-subclass, so it has to hold on both rows — and the single-stock row
+    // reserves LESS cash (£25 against £35) despite the identical 10% reserve,
+    // because it reserves 10% of a smaller envelope. That ordering is why the
+    // single-stock row is the one that loses admissibility first as equity
+    // falls (boundary £400 against £285.71 — see
+    // `SubclassBracket.headroom_reserve_fraction`).
+    const firstFill = D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION * RESERVED * EQUITY; // £225
+    const headroom = D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION * EQUITY - firstFill; // £25
+
+    const decision = decide(d5InIsolation(), intentFor('3LAP', firstFill, 'scale_in'), {
+      '3LAP': firstFill,
+    });
+
+    expect(decision.status).not.toBe('rejected');
+    expect(decision.modifications?.final_size).toBeCloseTo(headroom, 6);
+    expect(decision.binding_constraint).toBe('per_subclass_deployment_cap');
+    const indexHeadroom = D5_INDEX_ETP_DEPLOYMENT_FRACTION * EQUITY * (1 - RESERVED); // £35
+    expect(headroom).toBeLessThan(indexHeadroom);
   });
 
   it(

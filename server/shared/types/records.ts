@@ -184,12 +184,23 @@ export interface OrderIntentMetadata {
       stop_pct: number;
       deployment_fraction: number;
       round_trip_cost_pct: number;
+      /**
+       * #897's scale-in headroom reserve, as it stood for THIS decision. The
+       * intent is deployed at `deployment_fraction x (1 -
+       * headroom_reserve_fraction) x equity`, not at `deployment_fraction x
+       * equity`, so an expectancy accounting that read only
+       * `deployment_fraction` would over-state what was committed. Persisted
+       * for the same reason `round_trip_cost_pct` is: it is injected config
+       * that a later amendment may move.
+       */
+      headroom_reserve_fraction: number;
     };
     /**
      * The size D5 actually sized, before `whole_share_sizing` floored it to the
      * venue's quantity grid (#941). Present exactly when the flag is on AND the
      * floor moved the number, absent otherwise — so its presence is the signal
-     * that this intent is NOT deployed at `deployment_fraction x equity`.
+     * that this intent is NOT deployed at the sized fraction of equity
+     * (`deployment_fraction x (1 - headroom_reserve_fraction)` since #897).
      *
      * Recorded because the quantisation is a deviation from the ADR's declared
      * sizing, and a deviation that leaves no trace is one no later expectancy
