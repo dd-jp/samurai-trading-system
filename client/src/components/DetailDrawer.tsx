@@ -1,7 +1,7 @@
 /**
  * The detail drawer (dashboard-spec.md, "Verdict ledger + detail drawer"). A
  * chip or a ledger row opens it; it carries the stage strip, the debate's
- * stances x influence, the reserved invalidation section and the trace id.
+ * stances x influence, the invalidation section and the trace id.
  *
  * **The stage strip is the sole per-stage record.** A sigil chip is a single
  * point, so a skipped stage and a retried stage have no room to show
@@ -10,12 +10,20 @@
  * state word, decision, duration, attempts and recorded time.
  *
  * **Every empty state names its reason.** Never a bare dash, never a spinner
- * that cannot resolve: "Trader and Risk persist no decision content (#328)",
+ * that cannot resolve: "the Trader and Risk cells carry no decision word (#328)",
  * "round-by-round state is not persisted (decision #10)", "no trace in the
  * last 15 minutes".
  */
 
-import type { DebateRow, PipelineCell, PipelineLane, PipelineStage, VerdictRow } from '@contracts';
+import type {
+  DebateRow,
+  EvaluatedConditionWire,
+  PipelineCell,
+  PipelineLane,
+  PipelineStage,
+  RiskCriticRow,
+  VerdictRow,
+} from '@contracts';
 import { formatClockUtc, formatFixed, formatStageDuration, UNKNOWN } from '../lib/format.ts';
 import { ROOM_ORDER } from '../lib/room-layout.ts';
 import { CELL_STATE_WORD, OUTCOME_WORD, stageName } from '../lib/vocabulary.ts';
@@ -45,10 +53,22 @@ export interface DetailDrawerProps {
   lane: PipelineLane | undefined;
   debate: DebateRow | undefined;
   verdict: VerdictRow | undefined;
+  /**
+   * The Risk decision for THIS trace, with its critic verdict and invalidation
+   * conditions (#1066). Resolved by `App` on `(trace_id, instrument)` — the
+   * pair `risk_log` is keyed by — never by the debate, which the drawer
+   * resolves by instrument and which a retried tick shares across traces.
+   */
+  riskCritic: RiskCriticRow | undefined;
 }
 
-/** Stages whose decision content nothing persists — owned by #328. */
-const UNPERSISTED_DECISION_STAGES: readonly PipelineStage[] = ['trader', 'risk'];
+/**
+ * Stages whose decision word `audit_log` does not carry: it holds a digest,
+ * not the stage's decision, so the strip has nothing to print for these two.
+ * `risk_log` does record the Risk binding constraint, and the invalidation
+ * section below reads it; the strip's own column is owned by #328.
+ */
+const STAGES_WITHOUT_RECORDED_DECISION: readonly PipelineStage[] = ['trader', 'risk'];
 
 /**
  * The decision column, which is never blank. A `null` decision has four
@@ -59,12 +79,13 @@ function decisionText(cell: PipelineCell): string {
   if (cell.decision !== null && cell.decision !== '') return cell.decision;
   if (cell.state === 'not_reached') return 'not reached';
   if (cell.state === 'skipped') return 'skipped — the tick continued';
-  // `live` is checked BEFORE the never-persisted stages: a live Trader cell
-  // has no decision yet because it is still running, and reporting that as
-  // "not persisted (#328)" would blame the schema for a stage that simply has
-  // not finished.
+  // `live` is checked BEFORE the stages with no recorded decision word: a
+  // live Trader cell has no decision yet because it is still running, and
+  // blaming the schema for that would misread a stage that simply has not
+  // finished.
   if (cell.state === 'live') return 'in progress';
-  if (UNPERSISTED_DECISION_STAGES.includes(cell.stage)) return 'not persisted (#328)';
+  if (STAGES_WITHOUT_RECORDED_DECISION.includes(cell.stage))
+    return 'no decision word recorded (#328)';
   return 'no decision recorded';
 }
 
@@ -157,8 +178,171 @@ function DebateSection(props: { debate: DebateRow | undefined; lane: PipelineLan
   );
 }
 
+/** The tri-state, in words. `not_breached` reads as two words; the wire keeps the tag. */
+const CONDITION_STATE_WORD: Record<EvaluatedConditionWire['state'], string> = {
+  breached: 'breached',
+  not_breached: 'not breached',
+  unevaluable: 'unevaluable',
+};
+
+/**
+ * What the gate that decided this entry was, in the operator's words.
+ *
+ * The two `risk_critic:` constraints are spelled out rather than printed
+ * bare, because the whole reason #997 Q2b kept them distinct is that they mean
+ * opposite things about the model: `invalidated` is deterministic code
+ * measuring a predicate the critic named, `reject` is the critic's prose. A
+ * row whose conditions all held under an `invalidated` constraint — or whose
+ * conditions breached under a prose `pass` — is the disagreement this section
+ * exists to make visible.
+ */
+function bindingConstraintText(constraint: string | null): string {
+  if (constraint === null) return 'no binding constraint recorded — no gate named one';
+  if (constraint === 'risk_critic:invalidated') {
+    return `bound by ${constraint} — Risk rejected on a MEASURED breach of a condition below, not on the critic's argument`;
+  }
+  if (constraint === 'risk_critic:reject') {
+    return `bound by ${constraint} — Risk rejected on the critic's PROSE verdict; no measured breach decided it`;
+  }
+  return `bound by ${constraint}`;
+}
+
+function criticVerdictText(row: RiskCriticRow): string {
+  if (row.critic_verdict === null) {
+    return 'no critic verdict recorded for this decision — the critic was skipped, or this trace links to no debate';
+  }
+  if (row.critic_verdict === 'unavailable') {
+    return 'critic verdict unavailable — the critic was consulted and could not answer, so the mechanical checks alone decided this';
+  }
+  return `critic verdict ${row.critic_verdict}${row.reasoning === null ? '' : ` · ${row.reasoning}`}`;
+}
+
+/**
+ * The invalidation section (#1066), filling the slot the spec reserved:
+ * `RiskCriticVerdict.conditions` / `dropped_conditions` as #994's fold
+ * persists them, read off `risk_critics` on the snapshot.
+ *
+ * Three empty states, all distinct and all named, because they are three
+ * different facts: no Risk decision for this trace on this snapshot, a
+ * decision whose critic never answered, and a decision whose conditions
+ * enforced nothing (`no_conditions`). The last collapses four causes — none
+ * emitted, all dropped, an unreadable column, and a row written before the
+ * fold — into one state on purpose (#997 Q3), which is why a pre-fold row
+ * needs no branch of its own here.
+ */
+function InvalidationSection({ riskCritic }: { riskCritic: RiskCriticRow | undefined }) {
+  if (riskCritic === undefined) {
+    return (
+      <p className="empty-state" data-section="invalidation" data-invalidation="no-decision">
+        No Risk decision for this trace in the snapshot's recent-decisions window. The ledger keeps
+        a row for the whole session; this list does not reach as far back, and a tick that never
+        reached Risk records no decision at all.
+      </p>
+    );
+  }
+
+  // Keyed by position, not by id: nothing in the validator forbids a model
+  // from emitting two conditions under one id, and a duplicate key would drop
+  // a row an operator is entitled to see. Position is stable within one
+  // decision's fixed audit list.
+  const conditions = (riskCritic.conditions ?? []).map((condition, index) => ({
+    ...condition,
+    key: String(index),
+  }));
+  // A dropped condition may carry no id at all (the emission was too malformed
+  // to have one) and two drops of the same malformed text are two real
+  // records, so neither the id nor the content identifies a row. Position in
+  // the wire list does: this list is a fixed audit record of one decision, not
+  // a reorderable collection.
+  const droppedRows = (riskCritic.dropped_conditions ?? []).map((drop, index) => ({
+    ...drop,
+    key: String(index),
+  }));
+
+  return (
+    <div data-section="invalidation">
+      <p
+        className="drawer-started"
+        data-invalidation="binding"
+        data-binding={riskCritic.binding_constraint ?? 'none'}
+      >
+        {bindingConstraintText(riskCritic.binding_constraint)}
+      </p>
+      <p className="drawer-started">{criticVerdictText(riskCritic)}</p>
+
+      {conditions.length === 0 ? (
+        <p className="empty-state" data-invalidation="no-conditions">
+          <code>no_conditions</code> — nothing checkable came out of this pass, so the conditions
+          enforced nothing and the prose verdict stands on its own. One state for all four causes:
+          none emitted, every one dropped, an unreadable column, and a row written before the fold
+          (which carries no conditions and never will).
+        </p>
+      ) : (
+        <table className="stage-strip">
+          <thead>
+            <tr>
+              <th scope="col">Condition</th>
+              <th scope="col">Observable</th>
+              <th scope="col">Falsifies if</th>
+              <th scope="col" className="numeric">
+                Observed
+              </th>
+              <th scope="col">State</th>
+            </tr>
+          </thead>
+          <tbody>
+            {conditions.map((condition) => (
+              <tr
+                key={condition.key}
+                data-condition={condition.id}
+                data-condition-state={condition.state}
+              >
+                <td title={condition.rationale}>{condition.id}</td>
+                <td>{condition.observable}</td>
+                <td>{`${condition.comparator} ${condition.threshold}`}</td>
+                {/*
+                  `observed` is null exactly when the read failed or returned
+                  too little data. "not read" rather than a dash or a zero: a
+                  zero is a measurement, and this is the absence of one.
+                */}
+                <td className="numeric">
+                  {condition.observed === null ? 'not read' : String(condition.observed)}
+                </td>
+                <td>
+                  <span className={`state-word condition-${condition.state}`}>
+                    {CONDITION_STATE_WORD[condition.state]}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {/*
+        Shown INDEPENDENTLY of the list above, including beside
+        `no_conditions`: "every condition was dropped" and "the model emitted
+        none" report identically as one state, and the drop reasons are the
+        only thing that tells them apart. A systematically malformed prompt
+        hides for a month otherwise (user story 23).
+      */}
+      {droppedRows.length > 0 && (
+        <ul className="stance-list">
+          {droppedRows.map((drop) => (
+            <li key={drop.key} className="stance-row" data-drop-reason={drop.reason}>
+              <span className="stance-name">{drop.id ?? '<no id>'}</span>
+              <span>dropped: {drop.reason}</span>
+              <span className="muted">{drop.raw}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export function DetailDrawer(props: DetailDrawerProps) {
-  const { instrument, traceId, lane, debate, verdict } = props;
+  const { instrument, traceId, lane, debate, verdict, riskCritic } = props;
   // The pinned trace wins over the lane's, and they only ever differ when the
   // lane is absent — `App` resolves the lane BY that trace when one is pinned.
   const shownTrace = traceId ?? lane?.trace_id ?? null;
@@ -230,33 +414,30 @@ export function DetailDrawer(props: DetailDrawerProps) {
           <DebateSection debate={debate} lane={lane} />
 
           {/*
-            The reserved invalidation section (spec, "Information Inventory":
-            required, not optional). Restated 2026-09-03 after #994's fold:
-            there is no `invalidation_log` and never will be — the standalone
-            stage was declined 2026-09-02 and its mechanism folds into the
-            Risk Critic instead. Conditions now ride `RiskCriticVerdict.
-            conditions` / `dropped_conditions`, persisted on `risk_critic_log`
-            via migration 0040, so the data exists; nothing yet reads it onto
-            the dashboard wire or renders it here (#1066 — do not implement
-            rendering as part of an unrelated change). This names the reason
-            rather than rendering nothing or inventing a field. Reserving the
-            slot now means the layout does not move the day the wiring lands.
+            The invalidation section (spec, "Information Inventory": required,
+            not optional). There is no `invalidation_log` and never will be —
+            the standalone stage was declined 2026-09-02 and #994 folded its
+            mechanism into the Risk Critic, where conditions ride
+            `RiskCriticVerdict.conditions` / `dropped_conditions` on
+            `risk_critic_log` (migration 0040). #1066 wired that onto the
+            snapshot as `risk_critics` and renders it here, in the slot the
+            spec reserved for it, so the layout did not move when it landed.
           */}
           <h3 className="drawer-section">Invalidation</h3>
-          <p className="empty-state" data-section="invalidation">
-            Reserved — the standalone invalidation stage was declined 2026-09-02; its typed
-            invalidation-condition mechanism folds into the Risk Critic instead (#994). When that
-            lands this section carries the restated thesis, its conditions with evaluation states,
-            and the validator-dropped conditions with their drop reasons — with{' '}
-            <code>no_conditions</code> and <code>unavailable</code> rendered as distinct states.
-            Note that a Risk reject is inferable from a breached condition but is never recorded
-            (#328), so this section will not claim it.
-          </p>
+          <InvalidationSection riskCritic={riskCritic} />
 
+          {/*
+            The stage strip's decision column, specifically — not the whole
+            record. `risk_log` DOES persist the Risk decision's status,
+            binding constraint and reasons (migration 0016), which is what the
+            invalidation section above renders; what neither `trader_log` nor
+            `audit_log` gives the strip is a per-stage decision word, so those
+            two cells still report only that the stage ran.
+          */}
           <p className="drawer-caveat">
-            Trader and Risk persist no decision content anywhere (#328) — their rows report that the
-            stage ran, and nothing about what it decided. Duration shown as {UNKNOWN} means the
-            store recorded none.
+            The Trader and Risk cells above carry no decision word (#328) — they report that the
+            stage ran, and the invalidation section is where Risk's own record is read. Duration
+            shown as {UNKNOWN} means the store recorded none.
           </p>
         </>
       )}

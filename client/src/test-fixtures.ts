@@ -14,6 +14,7 @@ import type {
   ArmComparisonRow,
   ClosedTradeRow,
   DebateRow,
+  EvaluatedConditionWire,
   FillRow,
   LlmSpendSummary,
   LlmSpendWindow,
@@ -21,6 +22,7 @@ import type {
   OutsideBenchmarkRow,
   PipelineView,
   PositionRow,
+  RiskCriticRow,
   VerdictRow,
 } from '@contracts';
 import type { WireSnapshot } from './hooks/useSnapshot.ts';
@@ -175,6 +177,46 @@ export function makeVerdict(overrides: Partial<VerdictRow> = {}): VerdictRow {
   };
 }
 
+/**
+ * One measured invalidation condition (#1066). Defaults to a breached mark
+ * condition, because the breached branch is the one that carries an
+ * enforcement consequence and so is the one a renderer must never lose.
+ */
+export function makeCondition(
+  overrides: Partial<EvaluatedConditionWire> = {},
+): EvaluatedConditionWire {
+  return {
+    id: 'thesis-fails-below-entry',
+    observable: 'mark',
+    comparator: '<',
+    threshold: 3200,
+    state: 'breached',
+    observed: 3180.5,
+    rationale: 'a break back under the entry level falsifies the breakout',
+    ...overrides,
+  };
+}
+
+/**
+ * One Risk decision with its critic verdict (#1066). Defaults to a decision the
+ * critic passed in prose while a condition was measured breached — the
+ * prose-vs-predicate disagreement the drawer section exists to show.
+ */
+export function makeRiskCritic(overrides: Partial<RiskCriticRow> = {}): RiskCriticRow {
+  return {
+    trace_id: 'trace-eth',
+    instrument: 'ETH-USD',
+    debate_id: 'debate-eth-1',
+    binding_constraint: 'risk_critic:invalidated',
+    critic_verdict: 'pass',
+    reasoning: 'the breakout has volume behind it',
+    conditions: [makeCondition()],
+    dropped_conditions: [],
+    created_at: '2026-08-07T11:58:00.000Z',
+    ...overrides,
+  };
+}
+
 export function makeAnalyst(overrides: Partial<AnalystPerformanceRow> = {}): AnalystPerformanceRow {
   return {
     analyst_id: 'momentum',
@@ -256,6 +298,7 @@ export function makeSnapshot(overrides: Partial<WireSnapshot> = {}): WireSnapsho
     fills: [makeFill()],
     debates: [makeDebate()],
     verdicts: [makeVerdict()],
+    risk_critics: [makeRiskCritic()],
     analysts: [makeAnalyst()],
     metrics: makeMetrics(),
     arm_comparison: [makeArmComparison()],

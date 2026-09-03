@@ -226,6 +226,16 @@ export function App({ snapshotOptions }: AppProps = {}) {
   const selectedDebate = snapshot?.debates.find((debate) => debate.instrument === selected);
   const selectedTrace = selection?.traceId ?? selectedLane?.trace_id ?? null;
   const selectedVerdict = selectedTrace === null ? undefined : verdictsByTrace.get(selectedTrace);
+  // #1066. Matched on BOTH keys `risk_log` is keyed by, never on the
+  // instrument alone: two ticks on one instrument inside the same window are
+  // two decisions, and showing the newer one's conditions under the older
+  // one's trace is the mis-attribution migration 0015 was written to kill.
+  const selectedRiskCritic =
+    selectedTrace === null || selected === null
+      ? undefined
+      : snapshot?.risk_critics?.find(
+          (row) => row.trace_id === selectedTrace && row.instrument === selected,
+        );
 
   return (
     <div className="app">
@@ -264,6 +274,7 @@ export function App({ snapshotOptions }: AppProps = {}) {
             lane={selectedLane}
             debate={selectedDebate}
             verdict={selectedVerdict}
+            riskCritic={selectedRiskCritic}
           />
         </div>
 

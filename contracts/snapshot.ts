@@ -319,6 +319,116 @@ export interface VerdictRow {
   timestamp: string;
 }
 
+/**
+ * The comparators an invalidation condition may use, and the tri-state it
+ * evaluates to. Structural twins of the server-side `InvalidationComparator`
+ * and `InvalidationConditionState` (`server/pipeline/risk-manager/types.ts`),
+ * duplicated for `TradingArmWire`'s reason — `contracts/` may import from
+ * neither runtime. Widen both sides together.
+ */
+export type InvalidationComparatorWire = '<' | '<=' | '>' | '>=';
+export type InvalidationConditionStateWire = 'breached' | 'not_breached' | 'unevaluable';
+
+/**
+ * The validator's drop reasons, mirroring the server's
+ * `InvalidationDropReason`. Same duplication rule as the two unions above.
+ */
+export type InvalidationDropReasonWire =
+  | 'unparseable'
+  | 'unknown_observable'
+  | 'unknown_indicator'
+  | 'lookback_too_large'
+  | 'threshold_out_of_range'
+  | 'direction_incoherent'
+  | 'over_cap';
+
+/**
+ * One invalidation condition as measured (#1066), flattened from the server's
+ * `EvaluatedCondition` — the condition the critic proposed plus the fact
+ * deterministic code measured about it.
+ *
+ * `observable` is a LABEL, not the server's `InvalidationObservable` union.
+ * That union nests `IndicatorSpec` (indicator kind, params, lookback,
+ * timeframe) and `BarWindow`, none of which the drawer renders: it shows what
+ * was measured, and duplicating two deep server types onto the wire to
+ * reconstruct one string in the browser would put the vocabulary in two places
+ * and let them drift. `buildSnapshot` projects the label, using the same
+ * `kind:name` words the `RiskDecision.reasons` audit lines use, so a screen and
+ * a log line name the same observable.
+ *
+ * `observed` is `null` exactly when `state` is `unevaluable` — the read failed
+ * or returned too little data. It is never rendered as `0`, which would be a
+ * measurement that never happened.
+ */
+export interface EvaluatedConditionWire {
+  id: string;
+  observable: string;
+  comparator: InvalidationComparatorWire;
+  threshold: number;
+  state: InvalidationConditionStateWire;
+  observed: number | null;
+  /** Why the critic said this falsifies the thesis. Audit text, never machine-read. */
+  rationale: string;
+}
+
+/** A condition the validator refused, with its reason (#1066). `id` is null when the emission carried none. */
+export interface DroppedConditionWire {
+  id: string | null;
+  /** What the model said, bounded server-side. Audit only. */
+  raw: string;
+  reason: InvalidationDropReasonWire;
+}
+
+/**
+ * One recent Risk decision with its Risk Critic verdict attached (#1066) —
+ * what the drawer's invalidation section renders, after #994 folded the
+ * declined standalone stage's typed conditions into the critic.
+ *
+ * **Keyed by `(trace_id, instrument)`, which is `risk_log`'s primary key and
+ * the pair the drawer already holds.** Not by `debate_id`, deliberately: a
+ * retried tick mints a fresh `trace_id` but keeps its content-hashed
+ * `debate_id` (migration 0015), and the drawer resolves its debate by
+ * INSTRUMENT, so a `debate_id`-keyed row joined in the browser could render one
+ * trace's binding constraint beside another trace's conditions — silently, both
+ * rows real. The join happens server-side against the trace instead.
+ *
+ * Every critic-side field is nullable because the critic genuinely may not have
+ * run: `binding_constraint` is null when no gate named one, and
+ * `critic_verdict` / `reasoning` are null when the decision has no
+ * `risk_critic_log` row at all (the critic was skipped, or the trace has no
+ * `trader_log` row linking it to a debate).
+ */
+export interface RiskCriticRow {
+  trace_id: string;
+  instrument: string;
+  /** The debate this decision attacked, from `trader_log`. Null when the trace links to none. */
+  debate_id: string | null;
+  /**
+   * The gate that decided it, verbatim from `risk_log` — notably
+   * `risk_critic:invalidated` (a measured breach) versus `risk_critic:reject`
+   * (the critic's prose), which #997 Q2b keeps distinct precisely so an
+   * operator can see the two disagree.
+   */
+  binding_constraint: string | null;
+  critic_verdict: 'pass' | 'trim' | 'reject' | 'unavailable' | null;
+  /** The critic's argument text (audit). */
+  reasoning: string | null;
+  /**
+   * The measured conditions, or `null` when the row carries none — a pre-fold
+   * row (migration 0040 backfilled nothing), an unreadable column, or no critic
+   * row at all. Nullable and REQUIRED rather than optional: `JSON.stringify`
+   * drops an `undefined` field, so an optional one would put "absent" and
+   * "null" on the wire as the same bytes while the client still has to branch.
+   *
+   * `null` and `[]` render identically as `no_conditions` — the one "nothing
+   * checkable came out" state, whatever the cause (#997 Q3) — but
+   * `dropped_conditions` is its own surface and is shown either way.
+   */
+  conditions: EvaluatedConditionWire[] | null;
+  dropped_conditions: DroppedConditionWire[] | null;
+  created_at: string;
+}
+
 /** Per-analyst weight + rolling attribution (story 6). */
 export interface AnalystPerformanceRow {
   analyst_id: string;
@@ -442,6 +552,17 @@ export interface DashboardSnapshot {
   fills: FillRow[];
   debates: DebateRow[];
   verdicts: VerdictRow[];
+  /**
+   * Recent Risk decisions with their critic verdicts and invalidation
+   * conditions (#1066), most recent first — the drawer's invalidation section.
+   *
+   * Required and an EMPTY ARRAY when nothing is recorded, matching
+   * `arm_comparison`: an optional field would let a payload that simply never
+   * read the table render identically to one whose window holds no decision,
+   * and the section's whole job is to name which of those an operator is
+   * looking at.
+   */
+  risk_critics: RiskCriticRow[];
   analysts: AnalystPerformanceRow[];
   metrics: MetricsSuiteWire;
   /**
