@@ -262,7 +262,7 @@ import {
   buildProductionOrchestrator,
   SMOKE_TEST_UNIVERSE,
 } from './production.js';
-import type { Logger } from './types.js';
+import type { LogEntry, Logger } from './types.js';
 
 /**
  * How many of `smokeGdeltClient`'s canned rows the theme filter should keep.
@@ -873,6 +873,86 @@ export class RecordingFlattenReconcileAlertChannel implements FlattenReconcileAl
   async postFlattenReconcileAlert(alert: FlattenReconcileAlert): Promise<void> {
     this.alerts.push(alert);
   }
+}
+
+/**
+ * One rejection the fill-sync loop (orchestrator/fill-sync.ts) logged and
+ * survived (#1049). `error` is the message the loop put in its payload —
+ * for `ingestFills` that is `throwContainedFailures`'s summary, which names
+ * each contained scope and key and never carries column content.
+ */
+export interface FillSyncFailure {
+  message: string;
+  error: string;
+}
+
+/** What `evaluateSmokeGate` needs from the fill-sync loop (#1049). */
+export interface FillSyncFailureEvidence {
+  failures: readonly FillSyncFailure[];
+}
+
+/**
+ * The `error`-level lines `startFillSync`'s two `catch` blocks write when a
+ * poll rejects. Both are the SAME hole: the loop logs, keeps polling, and
+ * nothing else in the process reacts — so an `ingestFills` that rejects on
+ * every poll is invisible to every other check in this gate (the entry lot
+ * still reads `filled` when only one lot of many is broken, and a run whose
+ * fill-sync is wholly dead fails downstream as "no fill ingested" without
+ * naming the cause).
+ */
+const FILL_SYNC_FAILURE_MESSAGES: ReadonlySet<string> = new Set([
+  'fill poll failed',
+  'residual-protection sweep failed',
+]);
+
+/**
+ * Fill-sync rejections a healthy smoke run is ALLOWED to produce, matched by
+ * substring against `FillSyncFailure.error`. Empty, and deliberately declared
+ * rather than implied: the one fault the harness scripts on this path
+ * (scenario 5's failed re-arm, #549) is contained inside `maybeRearmResidual`
+ * and surfaces as a residual-exposure alert the gate already counts, never as
+ * a poll rejection. A future scripted fault that DOES reject a poll gets
+ * named here, by its identifier, rather than lifting the gate's count.
+ */
+export const TOLERATED_FILL_SYNC_FAILURES: readonly string[] = [];
+
+/**
+ * Records every fill-sync rejection (#1049) on the way to the real logger.
+ *
+ * Found by #1048's fault injection: with `'fills'` removed from Execution's
+ * owned tables, every `ingestFills` poll rejected with `1 contained
+ * failure(s)` — 44 `fill poll failed` lines per run — and `yarn smoke` still
+ * reported `GATE: PASS`. Fills are how the system learns a position exists;
+ * a gate that passes with that path wholly broken is not a pre-soak gate.
+ *
+ * A wrapper rather than a `Logger` the gate reads back in full, so the check
+ * is scoped to the two messages above and nothing else — the gate's other
+ * checks read effects (rows, alerts, snapshots), not log lines, and this
+ * stays as narrow as the hole it closes. Never throws: a recorder that could
+ * fail would take the logger it wraps down with it.
+ */
+export class FillSyncFailureRecorder implements Logger {
+  private readonly failures: FillSyncFailure[] = [];
+
+  constructor(private readonly inner: Logger) {}
+
+  log(entry: LogEntry): void {
+    if (entry.level === 'error' && FILL_SYNC_FAILURE_MESSAGES.has(entry.message)) {
+      this.failures.push({ message: entry.message, error: payloadError(entry.payload) });
+    }
+    this.inner.log(entry);
+  }
+
+  evidence(): FillSyncFailureEvidence {
+    return { failures: [...this.failures] };
+  }
+}
+
+/** The `error` string `startFillSync` puts in its rejection payloads, or `''` if absent. */
+function payloadError(payload: unknown): string {
+  if (typeof payload !== 'object' || payload === null) return '';
+  const { error } = payload as { error?: unknown };
+  return typeof error === 'string' ? error : '';
 }
 
 /**
@@ -3065,6 +3145,14 @@ export function evaluateSmokeGate(
      * `yarn smoke` green with a dashboard panel that says nothing was measured.
      */
     outsideBenchmarks: OutsideBenchmarkEvidence;
+    /**
+     * The fill-sync loop's rejections (#1049) — required, not optional, for the
+     * same "compile error, not a silent no-op" reason every mechanism above is.
+     * This is the only check in the gate that reads the poll loop's own
+     * failure channel; drop the argument and `ingestFills` can reject on every
+     * poll with the gate green, which is the measured defect exactly.
+     */
+    fillSync: FillSyncFailureEvidence;
   },
 ): SmokeGateResult {
   const failures: string[] = [];
@@ -3919,6 +4007,23 @@ export function evaluateSmokeGate(
     );
   }
 
+  // #1049 — the fill-sync loop must never have rejected a poll. It logs and
+  // keeps polling by design (fill-sync.ts `runOnce`), so this is the only
+  // place a run whose `ingestFills` fails on every call is visible at all.
+  const untolerated = options.fillSync.failures.filter(
+    (failure) => !TOLERATED_FILL_SYNC_FAILURES.some((allowed) => failure.error.includes(allowed)),
+  );
+  if (untolerated.length > 0) {
+    const distinct = [
+      ...new Set(untolerated.map((failure) => `${failure.message}: ${failure.error}`)),
+    ];
+    failures.push(
+      `${untolerated.length} fill-sync poll failure(s) were logged and survived — the loop keeps ` +
+        'polling by design, so nothing else in this gate sees an ingestFills/reconcile path that ' +
+        `rejects on every call (#1049). Distinct: ${distinct.join(' | ')}`,
+    );
+  }
+
   return { passed: failures.length === 0, failures };
 }
 
@@ -4104,7 +4209,11 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
   // no artefacts behind. The store is `:memory:` for the same reason — no
   // `data/*.sqlite` to clean up, and no chance of a smoke run polluting a real
   // paper run's history.
-  const logger = options.logger ?? new JsonLogger();
+  // #1049: every line the run logs passes through the recorder, so the
+  // fill-sync loop's swallowed rejections reach the gate. Forwarding is
+  // unconditional — the operator still sees every line.
+  const fillSyncFailures = new FillSyncFailureRecorder(options.logger ?? new JsonLogger());
+  const logger: Logger = fillSyncFailures;
   const db = openSharedStore(':memory:');
 
   try {
@@ -4468,6 +4577,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // tape has to be complete before the comparison is taken over it.
       armComparison,
       outsideBenchmarks,
+      fillSync: fillSyncFailures.evidence(),
       exitPath: {
         ...exitPathHarnessResult,
         // Alerts from BOTH the six-stage tick loop and the exit-path harness —

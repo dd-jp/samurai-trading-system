@@ -29,6 +29,8 @@ import {
   type ExitPathEvidence,
   evaluateSmokeGate,
   FAILOVER_IN_SESSION_OPEN_TIMES,
+  type FillSyncFailureEvidence,
+  FillSyncFailureRecorder,
   FixedAccountStateProvider,
   formatSmokeReport,
   type LoggerResilienceEvidence,
@@ -255,9 +257,11 @@ function healthyGateOptions(
     riskCritic?: RiskCriticEvidence;
     armComparison?: ArmComparisonEvidence;
     outsideBenchmarks?: OutsideBenchmarkEvidence;
+    fillSync?: FillSyncFailureEvidence;
   } = {},
 ) {
   return {
+    fillSync: overrides.fillSync ?? healthyFillSync(),
     armComparison: overrides.armComparison ?? healthyArmComparison(),
     outsideBenchmarks: overrides.outsideBenchmarks ?? healthyOutsideBenchmarks(),
     minTicks: overrides.minTicks ?? 2,
@@ -326,6 +330,18 @@ function healthyOutsideBenchmarks(
     unmeasured: [],
     ...overrides,
   };
+}
+
+/**
+ * What `FillSyncFailureRecorder` reports on a healthy run (#1049): the
+ * fill-sync poll never rejected. Scenario 5's scripted re-arm failure surfaces
+ * as a residual-exposure alert (gated above), never as a poll rejection, so
+ * the healthy shape is empty rather than a tolerated entry.
+ */
+function healthyFillSync(
+  overrides: Partial<FillSyncFailureEvidence> = {},
+): FillSyncFailureEvidence {
+  return { failures: [], ...overrides };
 }
 
 /**
@@ -988,6 +1004,92 @@ describe('evaluateSmokeGate', () => {
     );
 
     expect(gate.passed).toBe(false);
+  });
+});
+
+describe('evaluateSmokeGate — fill-sync contained failures (#1049)', () => {
+  const containedFailure = (key: string) => ({
+    message: 'fill poll failed',
+    error:
+      `ingestFills: 1 contained failure(s) — every other lot in this poll was advanced; ` +
+      `unresolved: lot-advance '${key}'`,
+  });
+
+  it('fails when the fill-sync poll rejected — every ingestFills call was a contained failure', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        fillSync: healthyFillSync({
+          failures: [
+            containedFailure('lot-a'),
+            containedFailure('lot-a'),
+            containedFailure('lot-b'),
+          ],
+        }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures).toEqual([expect.stringContaining('3 fill-sync poll failure(s)')]);
+    expect(gate.failures[0]).toContain("lot-advance 'lot-a'");
+    expect(gate.failures[0]).toContain('#1049');
+  });
+
+  it('fails on a residual-protection sweep failure the same way — same poll loop, same silence', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        fillSync: healthyFillSync({
+          failures: [{ message: 'residual-protection sweep failed', error: 'SQLITE_BUSY' }],
+        }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures).toEqual([expect.stringContaining('residual-protection sweep failed')]);
+  });
+
+  it('passes when the poll loop never rejected', () => {
+    const gate = evaluateSmokeGate(transactedObservations(), healthyGateOptions());
+
+    expect(gate.failures).toEqual([]);
+  });
+});
+
+describe('FillSyncFailureRecorder (#1049)', () => {
+  const entry = (level: 'info' | 'warn' | 'error', message: string, error?: string) => ({
+    trace_id: 'fill-sync',
+    stage: 'execution',
+    level,
+    message,
+    ...(error === undefined ? {} : { payload: { error } }),
+  });
+
+  it("records only the fill-sync loop's error-level rejections, and forwards every line", () => {
+    const forwarded: string[] = [];
+    const recorder = new FillSyncFailureRecorder({ log: (line) => forwarded.push(line.message) });
+
+    recorder.log(entry('error', 'fill poll failed', 'ingestFills: 1 contained failure(s)'));
+    recorder.log(entry('error', 'residual-protection sweep failed', 'boom'));
+    recorder.log(entry('warn', 'fill poll skipped: previous poll still running'));
+    recorder.log(entry('error', 'tick failed', 'unrelated'));
+    recorder.log(entry('info', 'fill poll failed'));
+
+    expect(recorder.evidence()).toEqual({
+      failures: [
+        { message: 'fill poll failed', error: 'ingestFills: 1 contained failure(s)' },
+        { message: 'residual-protection sweep failed', error: 'boom' },
+      ],
+    });
+    expect(forwarded).toHaveLength(5);
+  });
+
+  it('records a rejection whose payload carries no error string, rather than dropping it', () => {
+    const recorder = new FillSyncFailureRecorder({ log: () => undefined });
+
+    recorder.log(entry('error', 'fill poll failed'));
+
+    expect(recorder.evidence().failures).toEqual([{ message: 'fill poll failed', error: '' }]);
   });
 });
 
