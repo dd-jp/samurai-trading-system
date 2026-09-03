@@ -105,7 +105,7 @@ server/providers/universe-pool/lse-etp-pool.ts:46: * `fallback_default` ... is l
                                                     the fallback watchlist is #751's ... concern, not this pool's.
 ```
 
-One comment, no field. `LseEtpPoolRow` (`lse-etp-pool.ts:274`) has ten fields and none is it; `assertValidPool` (`:1256`) checks `subclass`, `lse_ticker`, `screening_instrument` and their distinctness — there is no such rejection rule.
+One comment, no field. `LseEtpPoolRow` (`lse-etp-pool.ts:272`) has ten fields and none is it; `assertValidPool` (`:1256`) checks `subclass`, `lse_ticker`, `screening_instrument` and their distinctness — there is no such rejection rule.
 
 **And #751 does not carry it either.** Its body never uses the word `fallback_default`; its only fallback reference is Open Question 1 (*"where the watchlist lives … the staleness check and the fallback trigger are both defined against whichever is chosen"*), which is about storage, not about the declared default subset.
 
