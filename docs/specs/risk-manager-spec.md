@@ -359,6 +359,7 @@ interface DroppedCondition {
 The upper bound is enforced, the lower bound is not:
 
 - **More than 5 surviving conditions:** the excess is dropped (in emission order, keeping the first 5) with reason `over_cap`. A checklist longer than 5 is not one a human reads.
+- **More than 16 emitted elements:** only the first 16 are *inspected*. The accepted ceiling bounds what is enforced; it does not bound the audit trail, and every refusal becomes a `DroppedCondition`, a `risk_log` reason line and JSON in `risk_critic_log`. Validating the whole array would make the model's emission length the only limit on all three, so a looping or hostile emission of 1000 elements writes 1000 of each. Past the inspection bound the remainder is recorded as **one** summarising `over_cap` drop naming the uninspected count and the emitted total — the flood stays auditable without being amplified.
 - **Fewer than 3:** **recorded, not dropped.** Discarding a valid 2-condition set would be the same safety regression as discarding the prose verdict — the system would enforce *less* than it does with the conditions present. The count is persisted and surfaced so a systematically thin prompt is visible — the producer emits a `warn` log line naming the accepted count and every drop reason at the moment of emission, and `evaluate()` records the same facts as `risk_log` reason lines. It never voids the conditions that did survive.
 
 #### Validator drop rules

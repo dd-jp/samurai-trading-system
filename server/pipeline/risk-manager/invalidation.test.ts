@@ -19,11 +19,19 @@ import {
   breachedConditions,
   evaluateConditions,
   invalidationReasons,
+  MAX_INSPECTED_CONDITIONS,
   MAX_INVALIDATION_CONDITIONS,
   NO_CONDITIONS_REASON,
+  readPersistedConditions,
+  readPersistedDroppedConditions,
   validateConditions,
 } from './invalidation.js';
-import type { InvalidationCondition, RiskCriticVerdict } from './types.js';
+import type {
+  DroppedCondition,
+  EvaluatedCondition,
+  InvalidationCondition,
+  RiskCriticVerdict,
+} from './types.js';
 
 const NOW = new Date('2026-09-03T14:00:00.000Z');
 
@@ -241,6 +249,44 @@ describe('validateConditions', () => {
     expect(dropped.map((entry) => entry.reason)).toEqual(['over_cap', 'over_cap']);
   });
 
+  it('bounds the INSPECTED length, so a 1000-element emission cannot write 1000 reason lines', () => {
+    // Every drop becomes a reason line on the RiskDecision and a row in
+    // `risk_critic_log.dropped_conditions_json`. Iterating the whole array
+    // makes the model's emission length the only limit on both, so a hostile
+    // or looping emission is a persistence and log-volume amplifier.
+    const flood = Array.from({ length: 1000 }, (_, index) => raw({ id: `c${index}` }));
+    const { accepted, dropped } = validateConditions(flood, 'buy');
+
+    expect(accepted).toHaveLength(MAX_INVALIDATION_CONDITIONS);
+    expect(dropped.length).toBeLessThanOrEqual(MAX_INSPECTED_CONDITIONS + 1);
+    expect(dropped.every((entry) => entry.reason === 'over_cap')).toBe(true);
+
+    // The uninspected remainder is ONE summarising drop that names the count,
+    // so the fact of a flood is still auditable.
+    const summary = dropped[dropped.length - 1];
+    expect(summary?.id).toBeNull();
+    expect(summary?.raw).toContain(String(1000 - MAX_INSPECTED_CONDITIONS));
+    expect(summary?.raw).toContain('1000');
+
+    const reasons = invalidationReasons({
+      verdict: 'pass',
+      reasoning: 'r',
+      conditions: [],
+      dropped_conditions: dropped,
+    } as unknown as RiskCriticVerdict);
+    expect(reasons.length).toBeLessThanOrEqual(MAX_INSPECTED_CONDITIONS + 2);
+  });
+
+  it('does not add a summary drop when the emission fits the inspected bound', () => {
+    const exact = Array.from({ length: MAX_INSPECTED_CONDITIONS }, (_, index) =>
+      raw({ id: `c${index}` }),
+    );
+    const { accepted, dropped } = validateConditions(exact, 'buy');
+    expect(accepted).toHaveLength(MAX_INVALIDATION_CONDITIONS);
+    expect(dropped).toHaveLength(MAX_INSPECTED_CONDITIONS - MAX_INVALIDATION_CONDITIONS);
+    expect(dropped.every((entry) => entry.id !== null)).toBe(true);
+  });
+
   it('KEEPS a list shorter than three — a thin emission is recorded, never dropped', () => {
     // Dropping a valid 2-condition set would enforce strictly less than the
     // emission supports: the same safety regression as discarding the prose
@@ -416,5 +462,68 @@ describe('invalidationReasons / breachedConditions', () => {
         verdict({ conditions: [{ condition: condition(), state: 'breached', observed: 90 }] }),
       ),
     ).toHaveLength(1);
+  });
+});
+
+/**
+ * The persisted-shape readers (#994 review, MUST 1).
+ *
+ * `risk_critic_log`'s two JSON columns are TEXT: a cast alone lets `[{}]`
+ * throw inside `evaluate()` and lets `[{"state":"breached"}]` reach a HARD
+ * REJECT with no measurement behind it. These are the direct tests for that
+ * boundary — the store-level tests exercise it through SQLite.
+ */
+describe('readPersistedConditions / readPersistedDroppedConditions', () => {
+  const wellFormed: EvaluatedCondition = {
+    condition: {
+      id: 'c1',
+      observable: { kind: 'mark' },
+      comparator: '<',
+      threshold: 95,
+      rationale: 'below 95 the breakout that justified the entry has already failed',
+    },
+    state: 'breached',
+    observed: 90,
+  };
+
+  it('round-trips a well-formed list unchanged', () => {
+    expect(readPersistedConditions(JSON.parse(JSON.stringify([wellFormed])))).toEqual([wellFormed]);
+  });
+
+  it('collapses the WHOLE list when a single element is malformed', () => {
+    expect(readPersistedConditions([wellFormed, {}])).toBeUndefined();
+  });
+
+  it.each([
+    ['a non-array', { conditions: [wellFormed] }],
+    ['a string', '[]'],
+    ['null', null],
+    ['undefined', undefined],
+  ])('reads %s as no list at all', (_label, parsed) => {
+    expect(readPersistedConditions(parsed)).toBeUndefined();
+  });
+
+  it('requires observed: null on unevaluable — a measured value contradicts the state', () => {
+    expect(
+      readPersistedConditions([{ ...wellFormed, state: 'unevaluable', observed: null }]),
+    ).toHaveLength(1);
+    expect(
+      readPersistedConditions([{ ...wellFormed, state: 'unevaluable', observed: 90 }]),
+    ).toBeUndefined();
+  });
+
+  it('requires a finite observed on a measured state — a breach with nothing behind it is refused', () => {
+    expect(readPersistedConditions([{ ...wellFormed, observed: null }])).toBeUndefined();
+    expect(readPersistedConditions([{ ...wellFormed, state: 'invented' }])).toBeUndefined();
+  });
+
+  it('reads a well-formed dropped list, and collapses one with a bad reason code', () => {
+    const dropped: DroppedCondition = { id: 'c1', raw: '{}', reason: 'unparseable' };
+    expect(
+      readPersistedDroppedConditions([dropped, { id: null, raw: '', reason: 'over_cap' }]),
+    ).toHaveLength(2);
+    expect(readPersistedDroppedConditions([{ ...dropped, reason: 'made_up' }])).toBeUndefined();
+    expect(readPersistedDroppedConditions([{ ...dropped, raw: 5 }])).toBeUndefined();
+    expect(readPersistedDroppedConditions('[]')).toBeUndefined();
   });
 });

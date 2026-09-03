@@ -65,6 +65,19 @@ import type {
  */
 export const MAX_INVALIDATION_CONDITIONS = 5;
 
+/**
+ * How many elements of a model-supplied `conditions` array are INSPECTED.
+ *
+ * The accepted ceiling above bounds what gets enforced; it does not bound the
+ * audit trail. Every refusal becomes a `DroppedCondition`, a reason line on
+ * the `RiskDecision`, and JSON in `risk_critic_log` — so validating the whole
+ * array makes the emission's length the only limit on all three, and a looping
+ * or hostile emission of 1000 elements writes 1000 of each. Past this bound
+ * the remainder is recorded as ONE summarising `over_cap` drop naming the
+ * count: the flood stays auditable without being amplified.
+ */
+export const MAX_INSPECTED_CONDITIONS = 16;
+
 /** `binding_constraint` for a hard-reject on a measured breach. DISTINCT from `risk_critic:reject` (#997 Q2b). */
 export const INVALIDATED_BINDING_CONSTRAINT = 'risk_critic:invalidated';
 
@@ -322,7 +335,7 @@ export function validateConditions(raw: unknown, side: OrderIntent['side']): Val
   const accepted: InvalidationCondition[] = [];
   const dropped: DroppedCondition[] = [];
 
-  for (const element of raw) {
+  for (const element of raw.slice(0, MAX_INSPECTED_CONDITIONS)) {
     if (typeof element !== 'object' || element === null) {
       dropped.push(drop(null, element, 'unparseable'));
       continue;
@@ -378,6 +391,18 @@ export function validateConditions(raw: unknown, side: OrderIntent['side']): Val
       threshold: candidate.threshold,
       rationale: candidate.rationale.trim().slice(0, MAX_RAW_CHARS),
     });
+  }
+
+  if (raw.length > MAX_INSPECTED_CONDITIONS) {
+    const uninspected = raw.length - MAX_INSPECTED_CONDITIONS;
+    dropped.push(
+      drop(
+        null,
+        `${uninspected} further condition(s) not inspected — the emission carried ${raw.length}, ` +
+          `past the ${MAX_INSPECTED_CONDITIONS}-element inspection bound`,
+        'over_cap',
+      ),
+    );
   }
 
   return { accepted, dropped };
