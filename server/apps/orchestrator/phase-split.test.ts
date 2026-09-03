@@ -408,6 +408,51 @@ describe('phase split — tail order is plan order, not completion order (#1040)
   });
 });
 
+describe('phase split — the turnstile is idempotent before the grant (#1040)', () => {
+  it('hands a repeated pre-grant request the SAME promise, so neither await is orphaned', async () => {
+    // A `Map` keyed on index holds one waiter per index. Storing only the
+    // resolver would let a second `begin` overwrite the first, leaving the
+    // first caller's `await` pending forever — a pass hung for the life of the
+    // process, on a code path (two portfolio reads in one pass) that a future
+    // change could easily add. So the pending PROMISE is kept and handed back.
+    let releaseHead!: () => void;
+    const headParked = new Promise<void>((resolve) => {
+      releaseHead = resolve;
+    });
+    let bothResolved = false;
+
+    const runner: TickRunner = {
+      async runInstrument(_signal, ctx): Promise<TickOutcome> {
+        if (ctx.trace_id.endsWith('-0')) {
+          // Index 0 holds the turn, so index 1's requests must both queue.
+          await headParked;
+          return { trace_id: ctx.trace_id, final_stage: 'execution' };
+        }
+        const first = ctx.beginPortfolioTail?.();
+        const second = ctx.beginPortfolioTail?.();
+        await Promise.all([first, second]);
+        bothResolved = true;
+        return { trace_id: ctx.trace_id, final_stage: 'execution' };
+      },
+    };
+
+    let n = 0;
+    const pending = runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
+      ...loopConfig(),
+      max_concurrent_instruments: 2,
+      newTraceId: () => `trace-${n++}`,
+    });
+
+    await settle();
+    expect(bothResolved).toBe(false);
+
+    releaseHead();
+    await pending;
+
+    expect(bothResolved).toBe(true);
+  });
+});
+
 describe('phase split — the #669 claim is held through the tail (#1040)', () => {
   beforeEach(() => {
     vi.useFakeTimers();

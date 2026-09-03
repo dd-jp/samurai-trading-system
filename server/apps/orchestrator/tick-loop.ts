@@ -116,13 +116,20 @@ class TailSequencer {
   #turn = 0;
   #settled = new Set<number>();
   #granted = new Set<number>();
-  /** Resolvers for indices that asked for a turn before it was theirs. */
-  #waiting = new Map<number, () => void>();
+  /**
+   * Indices that asked for a turn before it was theirs, holding BOTH the
+   * pending promise and its resolver. The promise is kept, not just the
+   * resolver, so a repeated `begin` before the grant hands back the SAME
+   * promise instead of overwriting the resolver and orphaning the first
+   * caller's await forever.
+   */
+  #waiting = new Map<number, { promise: Promise<void>; resolve: () => void }>();
 
   /**
-   * Resolves when it is `index`'s turn. Idempotent: a second call after the
-   * turn was granted resolves immediately, so adding a second call site
-   * (another Trader entry point, say) cannot deadlock a pass against itself.
+   * Resolves when it is `index`'s turn. Idempotent at every point in the
+   * lifecycle — before the grant it returns the pending promise, after it
+   * resolves immediately — so adding a second call site (another portfolio
+   * read, say) cannot deadlock a pass against itself.
    */
   begin(index: number): Promise<void> {
     if (this.#granted.has(index)) return Promise.resolve();
@@ -130,9 +137,14 @@ class TailSequencer {
       this.#granted.add(index);
       return Promise.resolve();
     }
-    return new Promise<void>((resolve) => {
-      this.#waiting.set(index, resolve);
+    const pending = this.#waiting.get(index);
+    if (pending !== undefined) return pending.promise;
+    let resolve!: () => void;
+    const promise = new Promise<void>((r) => {
+      resolve = r;
     });
+    this.#waiting.set(index, { promise, resolve });
+    return promise;
   }
 
   /** Reports that `index`'s pass has settled, whether or not it took a turn. */
@@ -143,7 +155,7 @@ class TailSequencer {
     if (waiter !== undefined) {
       this.#waiting.delete(this.#turn);
       this.#granted.add(this.#turn);
-      waiter();
+      waiter.resolve();
     }
   }
 }
@@ -178,6 +190,14 @@ export async function runTickPlan(
     while (true) {
       const index = cursor++;
       const instrument = plan.instruments[index];
+      // Returns WITHOUT reporting a turn settled (#1040), and that is safe for
+      // one specific reason worth naming: `cursor++` hands out a dense prefix
+      // of the plan, so an index that was never dequeued is strictly greater
+      // than every index that was — and therefore greater than every index
+      // that could be waiting on a turn. The turnstile's cursor never has to
+      // walk past it. Any future change that made index allocation sparse or
+      // out of order would break that, and would have to call `tails.finish`
+      // here instead.
       if (instrument === undefined) return;
 
       const signal: Signal = {

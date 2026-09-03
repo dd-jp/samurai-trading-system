@@ -40,17 +40,28 @@
  *
  * ## The phase split (#1040)
  *
- * The pass is in two halves. The HEAD — Analysts and Debate — touches no
- * portfolio state (neither step input carries one; neither stage references
- * one), takes 93-96% of the pipeline's wall time, and is safe to overlap
- * across instruments. The TAIL — from whichever Trader entry point this pass
- * uses, through Risk -> Verdict -> Execution — reads and mutates the book,
- * and must not overlap: `RiskManager.evaluate()` reads a portfolio snapshot,
- * so two instruments evaluating concurrently would each clear the gross cap
+ * The pass is in two halves, and the boundary is the FIRST PORTFOLIO READ,
+ * not the Trader entry point. The HEAD touches no portfolio state and is safe
+ * to overlap across instruments; the TAIL reads and mutates the book, and must
+ * not overlap, because `RiskManager.evaluate()` reads a portfolio snapshot and
+ * two instruments evaluating concurrently would each clear the gross cap
  * against pre-trade exposure and breach it combined (#1019).
  *
- * This module's part in that is one line at each of the two Trader entry
- * points: `await ctx.beginPortfolioTail?.()`. The ordering itself lives in
+ * Where the boundary falls differs by path, because the two paths read the
+ * book in different places:
+ *   decision path — the head is Analysts and Debate (neither step input
+ *                   carries a portfolio; neither stage references one), 93-96%
+ *                   of the pipeline's wall time. The tail opens at
+ *                   `steps.trader`, which sizes against equity.
+ *   tick path     — the exit check is ALSO head. `direct-bind.ts`'s `exitCheck`
+ *                   skips `snapshotForTick` deliberately: an exit sizes to the
+ *                   held quantity, never to equity, which is the cheapness the
+ *                   cheap path exists for (#743). The tail opens only once the
+ *                   check has produced an intent that will reach Risk — and ~29
+ *                   of 30 passes produce none, so they never queue at all.
+ *
+ * This module's part in that is one line at each boundary:
+ * `await ctx.beginPortfolioTail?.()`. The ordering itself lives in
  * `tick-loop.ts`, which grants turns in PLAN order regardless of which head
  * finished first — the runner does not know, and must not know, its place in
  * the queue. Absent turnstile (backtest, smoke, control arm, direct unit
@@ -247,13 +258,6 @@ export class SequentialTickRunner implements TickRunner {
      * their own to carry the flatten.
      */
     const runExitCheckPass = async (bar: Date): Promise<TickOutcome> => {
-      // PHASE SPLIT (#1040): the exit check is the Trader's exit-only entry
-      // point, so the turnstile is entered HERE, ahead of it, for the same
-      // reason the decision path enters it ahead of `steps.trader` — the rule
-      // is "serial from the Trader entry point onward", uniform across both
-      // entry points, not "serial from Risk onward on one of them". Inert
-      // when the caller supplied no turnstile (see `TickContext`).
-      await ctx.beginPortfolioTail?.();
       markStage('position_check');
       const exitInput = { trace_id, instrument, bar, clock };
       const exitCheckTimer = startStageTimer();
@@ -277,6 +281,30 @@ export class SequentialTickRunner implements TickRunner {
       // `flatten_fired` exists at all: a rejected flatten and a rejected early
       // release are both invisible without a flag, and folding them together
       // would lose exactly the distinction the flag was added to preserve.
+      // PHASE SPLIT (#1040): the turn is taken HERE and not at the top of the
+      // exit check, because the exit check itself reads NO portfolio state —
+      // `direct-bind.ts`'s `exitCheck` skips `snapshotForTick` deliberately,
+      // since an exit sizes to the held quantity and never to equity, which is
+      // the whole cheapness of the cheap path (#743). Taking the turn earlier
+      // would queue every tick pass — and ~29 of 30 passes are tick passes that
+      // produce no intent at all — behind the settled tails of every instrument
+      // ahead of it in the plan, for nothing. Three costs, all real: a
+      // null-intent pass would hold the queue; a held position's flatten would
+      // wait behind a full LLM decision pass, and the ADR-0014 flatten window
+      // is five minutes wide; and `buildGuardedRunner` releases the #669 claim
+      // when `runInstrument` RETURNS, so a fast instrument's release would come
+      // to depend on a slow one ahead of it — the exact starvation #669 exists
+      // to remove.
+      //
+      // Nothing above this line is book state: `traderLog.write` and
+      // `escalateTraderDiagnostics` inside the exit check are a record and an
+      // alert, not a position. Risk re-reads its portfolio snapshot INSIDE the
+      // turn, so cap enforcement is unaffected by where the wait is taken.
+      //
+      // `markStage('position_check')` above runs BEFORE the wait on purpose: a
+      // pass parked on the turnstile must be visible in `current_tick` rather
+      // than looking like a pass that never started.
+      await ctx.beginPortfolioTail?.();
       return runIntentTail(
         exitIntent,
         exitIntent.metadata.exit_reason === 'signal_decay'

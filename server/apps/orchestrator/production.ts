@@ -2441,6 +2441,12 @@ export function startTickLoop(deps: {
       // the wrong way round: `runOnce`'s catch covers its own `await` and
       // nothing else, so with the raw chain in this set a pass failing here
       // would reject `Promise.all` and drop the remaining passes on the floor.
+      //
+      // The wait now spans up to W passes serialized behind one another's
+      // portfolio tails (#1040), not W fully-parallel passes. It is still
+      // bounded: the head's LLM work is capped by `raceWithTimeout` in
+      // `debate-engine/analyst-response-collector.ts`, and the tails it queues behind are
+      // sub-second book operations.
       await Promise.all([...passes]);
     },
   };

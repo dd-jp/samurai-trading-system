@@ -206,17 +206,26 @@ export interface TickContext {
   decision_bar?: DecisionBar;
   /**
    * The phase split's turnstile (#1040). Awaited by the runner immediately
-   * before the pass's Trader entry point — the first step that reads or
-   * mutates book state — and resolved by the tick loop when it is this
-   * instrument's turn, in PLAN order.
+   * before the pass's FIRST PORTFOLIO READ, and resolved by the tick loop when
+   * it is this instrument's turn, in PLAN order.
    *
    * ## What it separates
    *
-   * A pass has a portfolio-free head (Analysts + Debate: neither step's input
-   * carries portfolio state, and neither stage references it) and a
-   * portfolio-facing tail (Trader -> Risk -> Verdict -> Execution, or the tick
-   * path's exit check and the same tail behind it). Heads may safely overlap
-   * across instruments; tails may not.
+   * A pass has a portfolio-free head and a portfolio-facing tail, and the
+   * boundary sits at the first read of book state — which is NOT the same
+   * point on the two paths:
+   *
+   *   decision path — head is Analysts + Debate (neither step's input carries
+   *                   portfolio state, and neither stage references it); the
+   *                   tail opens at Trader, which sizes against equity, and
+   *                   runs Trader -> Risk -> Verdict -> Execution.
+   *   tick path     — the exit check is head too: it skips `snapshotForTick`
+   *                   deliberately, because an exit sizes to the held quantity
+   *                   and never to equity (#743). The tail opens only once the
+   *                   check has produced an intent bound for Risk, so the ~29
+   *                   of 30 passes that produce none never take a turn at all.
+   *
+   * Heads may safely overlap across instruments; tails may not.
    *
    * `RiskManager.evaluate()` reads a portfolio SNAPSHOT — `gross_exposure`,
    * `exposure_by_class`, `drawdown_pct`. Two instruments evaluating

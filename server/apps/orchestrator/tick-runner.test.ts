@@ -1229,17 +1229,28 @@ describe('SequentialTickRunner.runInstrument — execution stage error log level
 
 /**
  * The phase split's runner half (#1040): the pass waits for its turn at the
- * Trader entry point, and only there.
+ * first portfolio READ, and only there.
  *
- * The head — Analysts and Debate — is the 93-96% of wall time that touches no
- * portfolio state, so it must run BEFORE the turnstile is entered, or the
- * fan-out buys nothing. The tail reads and mutates the book, so it must run
- * after. The assertions below are that boundary, at each of the two Trader
- * entry points; `tick-loop.test.ts` and `phase-split.test.ts` own the other
- * half (that turns are granted in plan order).
+ * That point is not the same on the two paths, and the difference is the whole
+ * point of these tests. On the decision path the head is Analysts + Debate —
+ * the 93-96% of wall time that touches no portfolio state — and the tail opens
+ * at Trader, which sizes against equity. On the tick path the EXIT CHECK is
+ * head too: it skips `snapshotForTick` deliberately, because an exit sizes to
+ * the held quantity and never to equity (#743), so a tick pass that produces
+ * no intent must never take a turn at all. Since ~29 of 30 passes are exactly
+ * that, gating the exit check itself would queue almost every pass behind
+ * every instrument ahead of it for nothing — and would make a flatten wait
+ * behind a full LLM decision pass inside a five-minute window.
+ *
+ * `tick-loop.test.ts` and `phase-split.test.ts` own the other half (that turns
+ * are granted in plan order).
  */
 describe('SequentialTickRunner.runInstrument — the portfolio-tail turnstile (#1040)', () => {
-  /** A ctx whose turnstile records when it was entered, relative to the stages. */
+  /**
+   * A ctx whose turnstile records when it was entered, relative to the stages.
+   * The recorded array doubles as the COUNT of entries, which is what proves a
+   * null-intent tick pass never takes a turn.
+   */
   function ctxWithTurnstile(
     order: string[],
     overrides: { decision_bar?: TickContext['decision_bar'] } = {},
@@ -1295,7 +1306,7 @@ describe('SequentialTickRunner.runInstrument — the portfolio-tail turnstile (#
     ]);
   });
 
-  it('enters the turnstile before the exit check on a tick pass', async () => {
+  it('never enters the turnstile on a tick pass with no exit due', async () => {
     const order: string[] = [];
     const steps = makeSteps({
       exitCheck: async () => {
@@ -1309,13 +1320,49 @@ describe('SequentialTickRunner.runInstrument — the portfolio-tail turnstile (#
       ctxWithTurnstile(order, { decision_bar: undefined }),
     );
 
-    // The exit check IS the Trader's exit-only entry point, so the rule is
-    // uniform — serial from the Trader entry point onward, on both paths.
-    expect(order).toEqual(['turnstile', 'exitCheck']);
+    // The COMMON case — ~29 of 30 passes. It reads no portfolio state and
+    // writes nothing, so it has no tail to order and must not hold the queue
+    // for the instruments behind it. `toEqual` here is also a count assertion:
+    // 'turnstile' appears zero times.
+    expect(order).toEqual(['exitCheck']);
     expect(outcome.final_stage).toBe('position_check');
   });
 
-  it('enters the turnstile once, before the exit check, on a quorum-skipped pass', async () => {
+  it('enters the turnstile after the exit check when the check produces an intent', async () => {
+    const order: string[] = [];
+    const intent = exitIntent('flatten');
+    const steps = makeSteps({
+      exitCheck: async () => {
+        order.push('exitCheck');
+        return intent;
+      },
+      risk: async () => {
+        order.push('risk');
+        return approvedRisk(intent);
+      },
+      verdict: async () => {
+        order.push('verdict');
+        return goVerdict(intent);
+      },
+      execution: async () => {
+        order.push('execution');
+        return makeExecutionResult();
+      },
+    });
+
+    const outcome = await new SequentialTickRunner(steps).runInstrument(
+      SIGNAL,
+      ctxWithTurnstile(order, { decision_bar: undefined }),
+    );
+
+    // The exit check runs OUTSIDE the turn (it reads no portfolio state); the
+    // turn is taken only once an intent exists that will reach Risk, which
+    // does read one.
+    expect(order).toEqual(['exitCheck', 'turnstile', 'risk', 'verdict', 'execution']);
+    expect(outcome.final_stage).toBe('execution');
+  });
+
+  it('takes no turn on a quorum-skipped pass that produces no exit intent', async () => {
     const order: string[] = [];
     const steps = makeSteps({
       analysts: async () => {
@@ -1328,11 +1375,11 @@ describe('SequentialTickRunner.runInstrument — the portfolio-tail turnstile (#
       },
     });
 
-    // #785's path: no Trader entry point of its own until the exit check, so
-    // the head (analysts) still runs outside the turnstile.
+    // #785's path: the quorum skip falls through to the same exit check, and
+    // it inherits the same rule — no intent, no turn.
     await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctxWithTurnstile(order));
 
-    expect(order).toEqual(['analysts', 'turnstile', 'exitCheck']);
+    expect(order).toEqual(['analysts', 'exitCheck']);
   });
 
   it('runs the whole pass when no turnstile is supplied (backtest, smoke, control arm)', async () => {
