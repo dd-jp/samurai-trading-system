@@ -80,6 +80,29 @@ is deliberately unwired. Seven hourly bars is a US-session count.
 
 **≈ $74/yr ≈ £58/yr** over 252 sessions, at the $1.27/£ rate the earlier figures were converted at.
 
+> **Amended 2026-09-03 by [#969](https://github.com/dd-jp/samurai-trading-system/issues/969): this bill is
+> the DEBATE leg only, and the market-intelligence leg has stopped being negligible.** The $0.0060/run unit
+> above is unchanged. What changed is that the sentiment stage now *retrieves* — the server-side `x_search`
+> tool, behind `SAMURAI_SENTIMENT_RETRIEVAL=on` — and a retrieving call carries its search results in the
+> **prompt**, so it costs roughly **$0.02** at the default 3 results (measured **$0.089** at 10) against the
+> ~$0.001 a recall-only sentiment call cost.
+>
+> On the same 7-instrument, 252-session basis at a 2-hour bucket: 7 x 12 x 252 ≈ **21,200 calls/yr ≈
+> $420/yr ≈ £330/yr**, which is **~6x the debate leg** and dwarfs the £58 above. On the 3-instrument soak
+> universe it is ≈ $180/yr ≈ £143/yr. Either way the conclusion this section is quoted for — that the
+> LLM bill is second-order against signal accuracy — **does not survive with retrieval on at a
+> 7-instrument universe**: £330/yr against £350 of index-bracket position notional is not a rounding error,
+> it is the whole break-even calculation.
+>
+> Three things follow, and none of them is "spend more". **(1)** Retrieval defaults **off**; it is a dated,
+> deliberate switch, not an operator default. **(2)** The lever is the *shape* of the spend, not its size —
+> fewer buckets at more results buys the same sample at lower cost than more buckets at fewer.
+> **(3)** The figures here are a **range, not a point** (output tokens were never measured at 3 results, and
+> reasoning tokens do not scale down with result count), and the reconciliation against the provider's
+> invoice is what replaces them. [ADR-0020](../adr/0020-x-retrieval-through-nous.md) carries the regime;
+> ADR-0008 §2's 2026-09-03 amendment carries the cap arithmetic. **Recompute this section's break-even
+> before quoting it for a universe running retrieval.**
+
 ## 4. The restatement
 
 Annual net, per **£1,000 of position notional**, at accuracy `p` over `N` sessions traded:

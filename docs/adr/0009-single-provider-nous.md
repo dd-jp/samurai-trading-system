@@ -3,7 +3,37 @@
 - **Status:** Accepted
 - **Date:** 2026-08-06
 - **Decided by:** David — *"we have anthropic api key and xai api, i want to change this to a single provider. lets use Nous API to use models."*
-- **Related:** [ADR-0008](0008-llm-spend-cap.md) (the $50/14d cap — **amended by this ADR**, see below), [#274](https://github.com/dd-jp/samurai-trading-system/issues/274) (the live transport layer this retargets), [#464](https://github.com/dd-jp/samurai-trading-system/issues/464) (the Grok sentiment agent), [#367](https://github.com/dd-jp/samurai-trading-system/issues/367) (`llm_spend`)
+- **Related:** [ADR-0008](0008-llm-spend-cap.md) (the $50/14d cap — **amended by this ADR**, see below), [#274](https://github.com/dd-jp/samurai-trading-system/issues/274) (the live transport layer this retargets), [#464](https://github.com/dd-jp/samurai-trading-system/issues/464) (the Grok sentiment agent), [#367](https://github.com/dd-jp/samurai-trading-system/issues/367) (`llm_spend`), [ADR-0020](0020-x-retrieval-through-nous.md) (what retrieval costs and what a floating alias now carries)
+
+> **AMENDED 2026-09-03 — the decision stands, two of its stated facts do not.**
+> This ADR recorded that "Nous proxies `chat/completions` only" and that
+> "xAI Live Search becomes permanently unreachable". Both are false, and its
+> own escape clause — *"Revisit if retrieval ever becomes reachable"* — has
+> fired.
+>
+> Probed live with the credential this system already holds
+> ([#969](https://github.com/dd-jp/samurai-trading-system/issues/969), map
+> [#522](https://github.com/dd-jp/samurai-trading-system/issues/522)):
+> `POST {NOUS_BASE_URL}/responses` returns 200, and the server-side `x_search`
+> tool runs there on the OpenRouter-routed alias `~x-ai/grok-latest`. It 400s
+> on the pinned `x-ai/grok-4.5` — *"Server-side search tools are not available
+> for model 'x-ai/grok-4.5'. They are supported only on OpenRouter-routed
+> models."*
+>
+> **Retrieval is therefore reachable INSIDE the single-provider rule.** Same
+> vendor, same key, same spend meter — a second endpoint, not a second
+> provider. The decision this ADR makes is not weakened by that; it is
+> strengthened, because the main thing it was recorded as costing turns out
+> not to be a cost at all. No ADR-0009 exception was needed, and the direct
+> xAI path #969 was filed to evaluate was tested and rejected on its merits:
+> the retired `xAI_API_KEY` returns `401 unauthenticated:bad-credentials`, and
+> going direct would cost MORE, since Nous prices the alias 20% under xAI's
+> list on every line (1.6 vs 2.0 in, 4.8 vs 6.0 out, 0.004 vs 0.005 search).
+>
+> Every paragraph below that reasons from "retrieval is unreachable" is marked
+> inline. The cost figures in the Context section are also wrong by two orders
+> of magnitude for a retrieving call — see ADR-0020, which carries the
+> retrieval cost regime and the floating-alias decision this amendment forces.
 
 ## Context
 
@@ -55,6 +85,18 @@ bind (the stage sits off the tick's critical path behind a 4-hour bucket) and
 neither does cost: at a measured ~$0.001 per call and ~36 calls/day, a 14-day
 soak is roughly **$0.50** against a $50 cap.
 
+> **AMENDED 2026-09-03 (#969): this figure describes a NON-RETRIEVING call and
+> must not be quoted for the retrieval path.** A call that runs `x_search`
+> carries its search results in the prompt, which is where the cost is: a
+> 3-result call measures ~5,300 input tokens and a 10-result call 58,153,
+> against roughly 200 for the recall-only call priced above. Measured, a
+> 10-result call cost **$0.089** — ninety times this line's figure. The soak
+> arithmetic changes with it: 3 instruments x 12 two-hour buckets x 14 days =
+> 504 calls, which is ~$45 at 10 results (over the whole $50 cap on its own,
+> before the debate leg) against roughly $10-15 at the default 3. The cap does
+> not merely bound the retrieval path; it SELECTS its result count. ADR-0020
+> carries the regime.
+
 **Measured, 2026-08-06: the stage returns `{"items":[]}` on every call, and
 that is the correct behaviour rather than a defect.** The first real exercise of
 this client — it had never made a live call under `XAI_API_KEY` either — went
@@ -98,6 +140,28 @@ returning invented sentiment into the analyst path, and **no test would catch
 it**, because empty is currently the correct answer and nothing asserts on
 content. So the default pins `x-ai/grok-4.5`. Revisit if retrieval ever becomes
 reachable, at which point recency starts paying again.
+
+> **AMENDED 2026-09-03 (#969): that revisit has happened, and the answer is
+> not the one this paragraph anticipated.** It expected retrieval to make
+> floating worth its risk again on CORPUS RECENCY grounds. What actually
+> happened is that pinning stopped being available at all: `x_search` 400s on
+> every pinned id, so the routed alias is not a preference on the retrieval
+> path, it is the only thing that works.
+>
+> The downside this paragraph names — "a future model behind the alias could
+> start returning invented sentiment into the analyst path, and no test would
+> catch it, because empty is currently the correct answer and nothing asserts
+> on content" — is real and is now ADDRESSED rather than accepted. Empty is no
+> longer the correct answer, and the content is no longer unasserted: every
+> item must name a permalink that appears in the response's own citation set,
+> so an invented item is dropped whatever model produced it
+> (`x-search-client.ts`). Alias re-resolution to a model that cannot run the
+> tool fails loudly instead — the 400 is named explicitly in the agent's error
+> and the resulting empty `social` bucket trips `MiCoverageMonitor` on the
+> first miss. ADR-0020 records the residual risk.
+>
+> The pinned default is UNCHANGED for the non-retrieving client, which still
+> ships as the fallback.
 
 The alias probe is still worth recording, because it validates the
 metered-model rule below: **Nous echoes the concrete model it resolved to.** A
@@ -204,6 +268,34 @@ off is the *fix*. Restoring real retrieval for that stage now needs a genuine
 data source rather than a model swap, and it is separate work. David chose this
 over retiring the agent.
 
+> **WITHDRAWN 2026-09-03 (#969). This section is wrong on the facts, and it is
+> the single most consequential wrong line in this ADR** — it was inherited by
+> `pricing.ts` (which called its server-tool arithmetic inert "because
+> ADR-0009"), by `nous-sentiment-client.ts`'s hard-coded
+> `retrievalEvidence: false`, by `market-intelligence-spec.md`, and by #485 and
+> #969, both of which were framed as needing a second vendor. A whole design
+> branch was priced against a premise nobody re-probed for four weeks.
+>
+> Corrected, point by point:
+>
+> - **"Nous proxies `chat/completions` only"** — false. `POST /responses`
+>   returns 200 on the same base URL and the same key.
+> - **"xAI Live Search becomes permanently unreachable"** — false. The
+>   server-side `x_search` tool runs through Nous on `~x-ai/grok-latest`.
+> - **"needs a genuine data source rather than a model swap"** — inverted. It
+>   needed exactly a model swap: the same endpoint, the same credential, a
+>   routed alias instead of a pinned id.
+>
+> What remains TRUE is the sentence this section leads with: the client that
+> was replaced was already answering from training data, so nothing regressed
+> at cutover. The error was in the forward-looking claim, not the backward one.
+>
+> The lesson is the one this repo keeps relearning and
+> `wayfinder-bodies-go-stale` already records: a capability claim about a
+> third party is a MEASUREMENT with an expiry date, not a fact. This one cost
+> four weeks of `social` being empty, which #625 had already priced at "a stock
+> could not trade at any RSI, in any market".
+
 `source: 'twitter'` and `agent_id: 'grok'` are kept: they are persisted in
 `market_intelligence` rows, so renaming them is a migration rather than a
 rename.
@@ -239,6 +331,11 @@ Both would have shipped green and failed silently in production.
 - **Keep xAI direct for sentiment, move only the debate.** Preserves the Live
   Search option. Rejected: it is two vendors, which is the thing being removed,
   and it preserves an option nothing is scheduled to exercise.
+  *(2026-09-03: this rejection is VINDICATED, not merely upheld. The option it
+  gave up turned out not to require two vendors at all, so the cost this
+  alternative was weighed against was never real — and when #969 re-tested the
+  direct path four weeks later it was both dead, `401 bad-credentials`, and
+  20% more expensive per line than the route that replaced it.)*
 - **Retire the sentiment agent entirely** until a real retrieval source exists.
   The most honest option on the merits — the signal is model recall either way.
   Rejected by David in favour of keeping the stage running.

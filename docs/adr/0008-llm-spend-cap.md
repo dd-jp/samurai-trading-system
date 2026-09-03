@@ -153,6 +153,32 @@ the soak from a fresh store if it is meant to have the full budget.**
 > `debate: 'anthropic/claude-haiku-4.5'`, chosen later on measured latency while
 > explicitly accepting the higher bill.
 
+> **Amended 2026-09-03 by [#969](https://github.com/dd-jp/samurai-trading-system/issues/969)
+> — the cap now has a SECOND unit, and it is an order of magnitude larger than
+> the first.** `$0.0060 per debate run` is unchanged and still describes the
+> debate leg; nothing below is withdrawn. What changed is that the market-
+> intelligence leg stopped being a rounding error. A sentiment call that
+> *retrieves* — the server-side `x_search` tool, live from 2026-09-03 behind
+> `SAMURAI_SENTIMENT_RETRIEVAL=on` — carries its search results **in the
+> prompt**, so it measures **$0.089** at 10 results and roughly **$0.02** at the
+> default 3, against the ~$0.001 a recall-only sentiment call cost.
+>
+> The soak arithmetic that matters for this cap: 3 instruments x 12 two-hour
+> buckets x 14 days = **504 calls**, i.e. **~$45 at 10 results — over this
+> ADR's entire $50 ceiling before the debate leg is counted** — against roughly
+> **$10-15** at 3. So the cap does not merely bound the MI leg, it **selects
+> its `max_search_results`**, which is why that parameter defaults to 3 with a
+> hard ceiling of 10 rather than being left to operator taste.
+>
+> **Two metering corrections were required before this could run unattended**,
+> both of which had been under-counting: Nous reports **OpenAI-inclusive**
+> usage (`cached_tokens` is a subset of `prompt_tokens`, not disjoint as
+> `AnthropicUsage` means it), and the vendor applies a **large-prompt tier**
+> above 200k prompt tokens that `pricing.ts` did not model. A cap that
+> under-counts is not a cap. [ADR-0020](0020-x-retrieval-through-nous.md)
+> carries the full regime; the range above is a **range, not a point**, until
+> reconciled against the provider's invoice.
+
 `paperStartingProfile` now carries `tickIntervalMs: 15 * 60_000`, up from the
 60s `DEFAULT_TICK_INTERVAL_MS`, and `llmBudgetUsd: 50`. *(Superseded 2026-08-16
 — it now carries `2 * 60_000`; see the amendment box above. `DEFAULT_TICK_INTERVAL_MS`

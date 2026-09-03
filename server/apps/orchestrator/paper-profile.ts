@@ -2214,6 +2214,20 @@ export function buildStartingProfileConfigs(
      * stepped the interval to 2 min. Per-run units are $0.0060 measured, not
      * the $0.008-$0.036 estimated above.
      *
+     * **The debate is no longer the only unit under `llmBudgetUsd` (#969).**
+     * Everything above prices the DEBATE leg. With
+     * `SAMURAI_SENTIMENT_RETRIEVAL=on` the market-intelligence leg runs a
+     * server-side `x_search` call per instrument per 2h bucket, and search
+     * results ride in the PROMPT: ~$0.02 at the default 3 results, a measured
+     * $0.089 at 10. Over a 14-day soak that is ~$10-15 at 3 and ~$45 at 10 —
+     * the latter being over this profile's entire $50 cap before a single
+     * debate. So `SAMURAI_X_MAX_RESULTS` is clamped to 10, and the cap does
+     * not merely bound the MI leg, it selects that parameter. Retrieval is
+     * OFF by default, so the arithmetic above still describes an unflagged
+     * run. ADR-0008 §2's 2026-09-03 amendment and ADR-0020 carry the regime;
+     * treat the retrieval figures as a range until reconciled against the
+     * provider invoice.
+     *
      * Two things that make the range wide rather than the estimate precise,
      * both stated rather than smoothed over: debates that complete FASTER than
      * the budget cost more per day, not less (a shorter pass means more
