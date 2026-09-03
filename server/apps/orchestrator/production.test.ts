@@ -4946,6 +4946,46 @@ describe('risk critic in backtest mode is replay-only at the composition root (#
     expect(decision.reasons.join(' ')).toContain('breached');
   });
 
+  it('#994: drop reasons and `no_conditions` reach the PERSISTED `risk_log` row of an APPROVED decision', async () => {
+    // Surfacing is what makes "the conditions half never fires" noticeable, and
+    // an operator notices it by querying `risk_log`, not by holding the returned
+    // `RiskDecision`. The rejecting case above would carry its reasons into the
+    // row too — so this one deliberately APPROVES: the quiet path, where an
+    // unsurfaced drop would otherwise leave no trace anywhere.
+    const clock = new SimulatedClock(START);
+    const intent = goVerdict().order as OrderIntent;
+    new SqliteRiskCriticStore(db).writeVerdict({
+      debate_id: intent.metadata.debate_id,
+      verdict: {
+        verdict: 'pass',
+        max_notional: null,
+        reasoning: 'no narrative risk in the book',
+        conditions: [],
+        dropped_conditions: [
+          { id: 'rsi-over-140', raw: '{"id":"rsi-over-140"}', reason: 'threshold_out_of_range' },
+        ],
+      },
+      created_at: START,
+    });
+
+    const config = stubConfig(db, {
+      ...REAL_CONFIGS,
+      mode: 'backtest',
+      clock,
+      llmClient: { complete: vi.fn() } as unknown as NonNullable<ProductionConfig['llmClient']>,
+    });
+    const { steps } = buildProductionComponents(config);
+
+    const decision = await steps.risk({ trace_id: 'trace-994-surfaced', intent, clock });
+    expect(decision.status).toBe('approved');
+
+    const row = db
+      .prepare('SELECT reasons_json FROM risk_log WHERE trace_id = ?')
+      .get('trace-994-surfaced') as { reasons_json: string } | undefined;
+    expect(row?.reasons_json).toContain('threshold_out_of_range');
+    expect(row?.reasons_json).toContain('no_conditions');
+  });
+
   it('replays UNSEEN history as no verdict rather than dialling — the mode branch, not the log hit', async () => {
     // The case above alone cannot catch a `production.ts` that passed a
     // hard-coded `'paper'`: the live producer reuses a logged verdict for the
