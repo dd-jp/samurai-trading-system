@@ -148,10 +148,16 @@ function fakeLlm(text: string): { client: LlmClient; calls: () => number } {
   return { client, calls: () => calls };
 }
 
-function collectingLogger(): { logger: Logger; entries: { level: string; message: string }[] } {
-  const entries: { level: string; message: string }[] = [];
+function collectingLogger(): {
+  logger: Logger;
+  entries: { level: string; message: string; payload?: unknown }[];
+} {
+  const entries: { level: string; message: string; payload?: unknown }[] = [];
   return {
-    logger: { log: (entry) => entries.push({ level: entry.level, message: entry.message }) },
+    logger: {
+      log: (entry) =>
+        entries.push({ level: entry.level, message: entry.message, payload: entry.payload }),
+    },
     entries,
   };
 }
@@ -868,6 +874,40 @@ describe('SqliteRiskCriticStore', () => {
     ).toBeUndefined();
   });
 
+  it('logs a WARN naming the reason when conditions_json is not valid JSON (#1068)', () => {
+    db.prepare(
+      `INSERT INTO risk_critic_log
+         (debate_id, verdict, max_notional, reasoning, created_at, conditions_json)
+       VALUES (?, 'pass', NULL, 'garbled', ?, '{not json')`,
+    ).run(DEBATE_ID, NOW.toISOString());
+
+    const { logger, entries } = collectingLogger();
+    expect(
+      new SqliteRiskCriticStore(db, logger).getByDebateId(DEBATE_ID)?.verdict.conditions,
+    ).toBeUndefined();
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.level).toBe('warn');
+    expect(entries[0]?.payload).toEqual({ debate_id: DEBATE_ID, reason: 'unparseable_json' });
+  });
+
+  it('logs a WARN naming the reason when conditions_json parses to a non-array payload (#1068)', () => {
+    db.prepare(
+      `INSERT INTO risk_critic_log
+         (debate_id, verdict, max_notional, reasoning, created_at, conditions_json)
+       VALUES (?, 'pass', NULL, 'garbled', ?, '{"conditions":[]}')`,
+    ).run(DEBATE_ID, NOW.toISOString());
+
+    const { logger, entries } = collectingLogger();
+    expect(
+      new SqliteRiskCriticStore(db, logger).getByDebateId(DEBATE_ID)?.verdict.conditions,
+    ).toBeUndefined();
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.level).toBe('warn');
+    expect(entries[0]?.payload).toEqual({ debate_id: DEBATE_ID, reason: 'not_an_array' });
+  });
+
   it.each([
     ['an element with no fields at all', '[{}]'],
     ['a bare model-shaped state assertion', '[{"state":"breached"}]'],
@@ -899,6 +939,104 @@ describe('SqliteRiskCriticStore', () => {
     expect(verdict.conditions).toBeUndefined();
     expect(breachedConditions(verdict)).toEqual([]);
     expect(invalidationReasons(verdict)).toContain(NO_CONDITIONS_REASON);
+  });
+
+  it('keeps the surviving subset of a partially-malformed conditions list and surfaces the drop via the logger (#1068)', () => {
+    const survivor = {
+      condition: {
+        id: 'c1',
+        observable: { kind: 'mark' },
+        comparator: '<',
+        threshold: 95,
+        rationale: 'below 95 the breakout that justified the entry has already failed',
+      },
+      state: 'not_breached',
+      observed: 100,
+    };
+    // One well-formed element (survivor) alongside one that fails the
+    // tightened shape check (a breach with nothing measured behind it). The
+    // corrupt sibling must not cost the survivor its place in the replay.
+    const stored = JSON.stringify([survivor, { state: 'breached', observed: null }]);
+    db.prepare(
+      `INSERT INTO risk_critic_log
+         (debate_id, verdict, max_notional, reasoning, created_at, conditions_json)
+       VALUES (?, 'pass', NULL, 'prose stands', ?, ?)`,
+    ).run(DEBATE_ID, NOW.toISOString(), stored);
+
+    const { logger, entries } = collectingLogger();
+    const readBack = new SqliteRiskCriticStore(db, logger).getByDebateId(DEBATE_ID);
+
+    expect(readBack?.verdict.conditions).toEqual([survivor]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.level).toBe('warn');
+    expect(entries[0]?.payload).toEqual({
+      debate_id: DEBATE_ID,
+      emitted: 2,
+      survived: 1,
+      dropped: 1,
+    });
+  });
+
+  it('a real breach still fires when a corrupt sibling is dropped from the same row (#1068)', () => {
+    // The direction the no-false-breach tests above don't cover: the
+    // tightening must drop the malformed element WITHOUT silently disabling
+    // enforcement for the well-formed breach sitting next to it.
+    const realBreach = {
+      condition: {
+        id: 'c1',
+        observable: { kind: 'mark' },
+        comparator: '<',
+        threshold: 95,
+        rationale: 'below 95 the breakout that justified the entry has already failed',
+      },
+      state: 'breached',
+      observed: 90,
+    };
+    const stored = JSON.stringify([realBreach, { state: 'breached', observed: null }]);
+    db.prepare(
+      `INSERT INTO risk_critic_log
+         (debate_id, verdict, max_notional, reasoning, created_at, conditions_json)
+       VALUES (?, 'pass', NULL, 'prose stands', ?, ?)`,
+    ).run(DEBATE_ID, NOW.toISOString(), stored);
+
+    const { logger, entries } = collectingLogger();
+    const readBack = new SqliteRiskCriticStore(db, logger).getByDebateId(DEBATE_ID);
+    if (readBack === undefined) throw new Error('the test wrote no row for this debate');
+
+    expect(readBack.verdict.conditions).toEqual([realBreach]);
+    expect(breachedConditions(readBack.verdict)).toEqual([realBreach]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.level).toBe('warn');
+    expect(entries[0]?.payload).toEqual({
+      debate_id: DEBATE_ID,
+      emitted: 2,
+      survived: 1,
+      dropped: 1,
+    });
+  });
+
+  it('does not log when every persisted condition is well-formed', () => {
+    const survivor = {
+      condition: {
+        id: 'c1',
+        observable: { kind: 'mark' },
+        comparator: '<',
+        threshold: 95,
+        rationale: 'below 95 the breakout that justified the entry has already failed',
+      },
+      state: 'not_breached',
+      observed: 100,
+    };
+    db.prepare(
+      `INSERT INTO risk_critic_log
+         (debate_id, verdict, max_notional, reasoning, created_at, conditions_json)
+       VALUES (?, 'pass', NULL, 'prose stands', ?, ?)`,
+    ).run(DEBATE_ID, NOW.toISOString(), JSON.stringify([survivor]));
+
+    const { logger, entries } = collectingLogger();
+    new SqliteRiskCriticStore(db, logger).getByDebateId(DEBATE_ID);
+
+    expect(entries).toEqual([]);
   });
 
   it('collapses a malformed DROPPED list too, rather than letting a reason line throw', () => {

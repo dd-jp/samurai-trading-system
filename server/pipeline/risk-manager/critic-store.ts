@@ -20,10 +20,16 @@
  * verdict is the one the replay will see, so it is the one that must stand.
  */
 
+import type { Logger } from '../../shared/index.js';
 import type { SharedStore as Db } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 import { readPersistedConditions, readPersistedDroppedConditions } from './invalidation.js';
-import type { RiskCriticLog, RiskCriticStore, RiskCriticVerdict } from './types.js';
+import type {
+  EvaluatedCondition,
+  RiskCriticLog,
+  RiskCriticStore,
+  RiskCriticVerdict,
+} from './types.js';
 
 export class InMemoryRiskCriticStore implements RiskCriticStore {
   readonly #rows = new Map<string, RiskCriticLog>();
@@ -50,16 +56,15 @@ interface RiskCriticRow {
 }
 
 /**
- * NULL, unreadable JSON, a non-array payload AND a payload whose elements do
- * not have the persisted shape all collapse to `undefined` (#997 Q3 / Q2a):
- * the verdict then carries no `conditions`, which the whole pipeline reads as
- * `no_conditions`.
+ * Generic JSON-list reader, used below only for `dropped_conditions_json`
+ * (audit-only, zero enforcement effect). NULL, unreadable JSON, a non-array
+ * payload, AND a payload whose elements do not have the persisted shape all
+ * collapse to `undefined` — this column's rule is still all-or-nothing
+ * (#997 Q3 / Q2a), unlike `conditions_json`'s element-wise rule below (#1068).
  *
  * The element check is what makes this safe, not decoration. A cast would let
- * `[{}]` throw inside `evaluate()` on the replay path, and let
- * `[{"state":"breached"}]` hard-reject a trade with nothing measured behind
- * it — the storage layer handing a model-shaped assertion the authority the
- * types deny it. `invalidation.ts` owns that check, because it owns the shape.
+ * a malformed reason code reach a reason line unvalidated. `invalidation.ts`
+ * owns that check, because it owns the shape.
  *
  * A pre-fold row and a corrupted column are the same fact — "nothing checkable
  * came out" — and neither may throw on the replay path, because a backtest
@@ -78,13 +83,82 @@ function readJsonList<T>(
   }
 }
 
+/**
+ * `conditions_json` specifically, so a malformed row can be LOGGED (#1068).
+ *
+ * `readPersistedConditions` is a pure function on purpose — it stays a plain
+ * shape-check callable from a unit test with no `Logger` in scope — so it
+ * reports nothing about drops itself. This wrapper detects "the row was
+ * malformed" independently at each stage (unparseable JSON, a non-array
+ * payload, or — by diffing the raw parsed array length against the survivor
+ * count `readPersistedConditions` returns — a partially-corrupt array) and
+ * logs one WARN per malformed row through the store's own logger seam,
+ * naming a reason and the debate id but never the row's raw content.
+ * `stored === null` is not malformed — it is the ordinary "nothing was ever
+ * emitted" case a pre-fold row also produces — so it never logs.
+ */
+function readConditionsJson(
+  stored: string | null,
+  debate_id: string,
+  logger: Logger | undefined,
+): EvaluatedCondition[] | undefined {
+  if (stored === null) return undefined;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stored);
+  } catch {
+    logger?.log({
+      trace_id: debate_id,
+      stage: 'risk',
+      level: 'warn',
+      message:
+        'risk_critic_log: conditions_json is not valid JSON; the row replays as no_conditions (#1068)',
+      payload: { debate_id, reason: 'unparseable_json' },
+    });
+    return undefined;
+  }
+
+  if (!Array.isArray(parsed)) {
+    logger?.log({
+      trace_id: debate_id,
+      stage: 'risk',
+      level: 'warn',
+      message:
+        'risk_critic_log: conditions_json is not a JSON array; the row replays as no_conditions (#1068)',
+      payload: { debate_id, reason: 'not_an_array' },
+    });
+    return undefined;
+  }
+
+  const conditions = readPersistedConditions(parsed);
+  const survived = conditions?.length ?? 0;
+  const dropped = parsed.length - survived;
+  if (dropped > 0) {
+    logger?.log({
+      trace_id: debate_id,
+      stage: 'risk',
+      level: 'warn',
+      message:
+        'risk_critic_log: persisted invalidation condition(s) failed the tightened shape ' +
+        'check on read and were dropped from replay; surviving conditions (if any) replay ' +
+        'unaffected, and the row falls back to no_conditions only if nothing survived (#1068)',
+      payload: { debate_id, emitted: parsed.length, survived, dropped },
+    });
+  }
+  return conditions;
+}
+
 /** Absent stays absent: an empty list is written as `[]`, so "never emitted" and "all dropped" stay distinguishable in the row. */
 function writeJsonList(list: readonly unknown[] | undefined): string | null {
   return list === undefined ? null : JSON.stringify(list);
 }
 
 export class SqliteRiskCriticStore implements RiskCriticStore {
-  constructor(private readonly db: Db) {}
+  constructor(
+    private readonly db: Db,
+    private readonly logger?: Logger,
+  ) {}
 
   writeVerdict(entry: RiskCriticLog): void {
     this.db
@@ -116,7 +190,7 @@ export class SqliteRiskCriticStore implements RiskCriticStore {
       .get(debate_id) as RiskCriticRow | undefined;
     if (row === undefined) return undefined;
 
-    const conditions = readJsonList(row.conditions_json, readPersistedConditions);
+    const conditions = readConditionsJson(row.conditions_json, row.debate_id, this.logger);
     const dropped = readJsonList(row.dropped_conditions_json, readPersistedDroppedConditions);
     return {
       debate_id: row.debate_id,

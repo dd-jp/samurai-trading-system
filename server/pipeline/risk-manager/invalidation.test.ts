@@ -170,6 +170,37 @@ describe('validateConditions', () => {
     expect(dropped[0]?.reason).toBe('unknown_indicator');
   });
 
+  it('drops an indicator spec whose params is an array, not a plain object — Object.values on an array is not a params map', () => {
+    // `typeof [] === 'object'` and `Object.values([1, 2])` are both finite
+    // numbers, so a naive object check would let an array through and
+    // `readIndicatorSpec` would hand it out cast to `Record<string, number>`.
+    const { dropped: droppedEmpty } = validateConditions(
+      [
+        raw({
+          observable: {
+            kind: 'indicator',
+            spec: { indicator: 'rsi', params: [], lookback: 30, timeframe: '1h' },
+          },
+        }),
+      ],
+      'buy',
+    );
+    expect(droppedEmpty[0]?.reason).toBe('unparseable');
+
+    const { dropped: droppedPopulated } = validateConditions(
+      [
+        raw({
+          observable: {
+            kind: 'indicator',
+            spec: { indicator: 'rsi', params: [1, 2], lookback: 30, timeframe: '1h' },
+          },
+        }),
+      ],
+      'buy',
+    );
+    expect(droppedPopulated[0]?.reason).toBe('unparseable');
+  });
+
   it('drops a threshold outside the observable’s range — it could only be permanently true or false', () => {
     const { dropped } = validateConditions(
       [
@@ -573,8 +604,22 @@ describe('readPersistedConditions / readPersistedDroppedConditions', () => {
     expect(readPersistedConditions(JSON.parse(JSON.stringify([wellFormed])))).toEqual([wellFormed]);
   });
 
-  it('collapses the WHOLE list when a single element is malformed', () => {
-    expect(readPersistedConditions([wellFormed, {}])).toBeUndefined();
+  it('drops only the malformed element and keeps the surviving subset (#1068)', () => {
+    // Element-wise salvage: a corrupt sibling must not cost a well-formed
+    // condition its place in the replayed checklist.
+    expect(readPersistedConditions([wellFormed, {}])).toEqual([wellFormed]);
+  });
+
+  it('reports no_conditions only when NOTHING survives', () => {
+    expect(readPersistedConditions([{}, { also: 'garbage' }])).toBeUndefined();
+  });
+
+  it('reads an emitted-but-empty list as [], not no_conditions — the two stay distinguishable (#1068)', () => {
+    // writeJsonList (critic-store.ts) writes "never emitted" as NULL and
+    // "everything dropped at validation time" as `[]` specifically so a
+    // caller can tell them apart. An empty array is not corrupt, so it must
+    // not collapse to undefined alongside the actually-malformed cases above.
+    expect(readPersistedConditions([])).toEqual([]);
   });
 
   it.each([
@@ -598,6 +643,297 @@ describe('readPersistedConditions / readPersistedDroppedConditions', () => {
   it('requires a finite observed on a measured state — a breach with nothing behind it is refused', () => {
     expect(readPersistedConditions([{ ...wellFormed, observed: null }])).toBeUndefined();
     expect(readPersistedConditions([{ ...wellFormed, state: 'invented' }])).toBeUndefined();
+  });
+
+  it.each([
+    ['NaN', Number.NaN],
+    ['+Infinity', Number.POSITIVE_INFINITY],
+    ['-Infinity', Number.NEGATIVE_INFINITY],
+    ['a string', '90'],
+  ])('refuses a non-finite observed (%s) on a measured state', (_label, observed) => {
+    expect(readPersistedConditions([{ ...wellFormed, observed }])).toBeUndefined();
+  });
+
+  it('rejects a persisted indicator lookback above the cap, never re-running the read on replay', () => {
+    const overLookback: EvaluatedCondition = {
+      condition: {
+        id: 'c2',
+        observable: {
+          kind: 'indicator',
+          spec: {
+            indicator: 'rsi',
+            params: { period: 14 },
+            lookback: MAX_INVALIDATION_LOOKBACK + 1,
+            timeframe: '1h',
+          },
+        },
+        comparator: '<',
+        threshold: 30,
+        rationale: 'oversold reversal thesis needs rsi above 30',
+      },
+      state: 'breached',
+      observed: 20,
+    };
+    expect(readPersistedConditions([overLookback])).toBeUndefined();
+  });
+
+  it('accepts a persisted indicator lookback exactly at the cap', () => {
+    const atCap: EvaluatedCondition = {
+      condition: {
+        id: 'c2',
+        observable: {
+          kind: 'indicator',
+          spec: {
+            indicator: 'rsi',
+            params: { period: 14 },
+            lookback: MAX_INVALIDATION_LOOKBACK,
+            timeframe: '1h',
+          },
+        },
+        comparator: '<',
+        threshold: 30,
+        rationale: 'oversold reversal thesis needs rsi above 30',
+      },
+      state: 'not_breached',
+      observed: 45,
+    };
+    expect(readPersistedConditions([atCap])).toEqual([atCap]);
+  });
+
+  it('accepts a persisted indicator kind no longer in INDICATOR_KINDS — registry drift is deliberate leniency', () => {
+    const retired: EvaluatedCondition = {
+      condition: {
+        id: 'c3',
+        observable: {
+          kind: 'indicator',
+          // Cast: this indicator never existed, or has since been retired from
+          // `INDICATOR_KINDS`. The state was measured at the time, so the
+          // historical replay must reach the same decision.
+          spec: { indicator: 'stochastic_rsi' as never, params: {}, lookback: 20, timeframe: '1h' },
+        },
+        comparator: '<',
+        threshold: 20,
+        rationale: 'a retired indicator kind, measured before it left the registry',
+      },
+      state: 'not_breached',
+      observed: 55,
+    };
+    expect(readPersistedConditions([retired])).toEqual([retired]);
+  });
+
+  it('rejects a retired indicator kind whose lookback is over the cap — registry drift does not waive the safety cap', () => {
+    const retiredOverCap: EvaluatedCondition = {
+      condition: {
+        id: 'c3',
+        observable: {
+          kind: 'indicator',
+          spec: {
+            indicator: 'stochastic_rsi' as never,
+            params: {},
+            lookback: MAX_INVALIDATION_LOOKBACK + 1,
+            timeframe: '1h',
+          },
+        },
+        comparator: '<',
+        threshold: 20,
+        rationale: 'a retired indicator kind with an oversized lookback',
+      },
+      state: 'not_breached',
+      observed: 55,
+    };
+    expect(readPersistedConditions([retiredOverCap])).toBeUndefined();
+  });
+
+  it('rejects a retired indicator kind with no timeframe — registry drift does not waive the timeframe check', () => {
+    const retiredNoTimeframe: EvaluatedCondition = {
+      condition: {
+        id: 'c3',
+        observable: {
+          kind: 'indicator',
+          // No `timeframe` at all — `readIndicatorSpec` would reject this for
+          // a known kind; the retired-kind leniency must not skip it. Cast:
+          // the missing field is the point of the fixture.
+          spec: {
+            indicator: 'stochastic_rsi',
+            params: {},
+            lookback: 20,
+          } as never,
+        },
+        comparator: '<',
+        threshold: 20,
+        rationale: 'a retired indicator kind with no timeframe',
+      },
+      state: 'not_breached',
+      observed: 55,
+    };
+    expect(readPersistedConditions([retiredNoTimeframe])).toBeUndefined();
+  });
+
+  it('rejects a retired indicator kind with a non-numeric param — registry drift does not waive the params check', () => {
+    const retiredBadParams: EvaluatedCondition = {
+      condition: {
+        id: 'c3',
+        observable: {
+          kind: 'indicator',
+          spec: {
+            indicator: 'stochastic_rsi' as never,
+            // `params` present but with a non-finite/non-number value.
+            params: { period: 'not-a-number' as never },
+            lookback: 20,
+            timeframe: '1h',
+          },
+        },
+        comparator: '<',
+        threshold: 20,
+        rationale: 'a retired indicator kind with a malformed param',
+      },
+      state: 'not_breached',
+      observed: 55,
+    };
+    expect(readPersistedConditions([retiredBadParams])).toBeUndefined();
+  });
+
+  it('rejects a retired indicator kind whose params is an array — registry drift does not waive the params-is-a-plain-object check', () => {
+    const retiredArrayParams: EvaluatedCondition = {
+      condition: {
+        id: 'c3',
+        observable: {
+          kind: 'indicator',
+          spec: {
+            indicator: 'stochastic_rsi' as never,
+            // Cast: `params` must be a plain object; an array satisfies
+            // `typeof value === 'object'` and every value can be finite, so
+            // this is the shape the shared params check exists to reject.
+            params: [] as never,
+            lookback: 20,
+            timeframe: '1h',
+          },
+        },
+        comparator: '<',
+        threshold: 20,
+        rationale: 'a retired indicator kind with an array params',
+      },
+      state: 'not_breached',
+      observed: 55,
+    };
+    expect(readPersistedConditions([retiredArrayParams])).toBeUndefined();
+  });
+
+  it.each([
+    ['no window at all', { kind: 'bars', measure: 'volume_ratio' }],
+    [
+      'a window missing lookback',
+      { kind: 'bars', measure: 'volume_ratio', window: { timeframe: '1h' } },
+    ],
+    [
+      'a window whose lookback is below the 2-bar minimum',
+      { kind: 'bars', measure: 'volume_ratio', window: { timeframe: '1h', lookback: 1 } },
+    ],
+    [
+      'a window whose lookback exceeds the cap',
+      {
+        kind: 'bars',
+        measure: 'volume_ratio',
+        window: { timeframe: '1h', lookback: MAX_INVALIDATION_LOOKBACK + 1 },
+      },
+    ],
+  ])('rejects a bars observable with %s', (_label, observable) => {
+    const malformedBars: EvaluatedCondition = {
+      condition: {
+        id: 'c4',
+        observable: observable as InvalidationCondition['observable'],
+        comparator: '<',
+        threshold: 0.5,
+        rationale: 'thinning volume falsifies conviction',
+      },
+      state: 'breached',
+      observed: 0.2,
+    };
+    expect(readPersistedConditions([malformedBars])).toBeUndefined();
+  });
+
+  it('accepts a well-formed bars observable with a well-formed window', () => {
+    const wellFormedBars: EvaluatedCondition = {
+      condition: {
+        id: 'c4',
+        observable: {
+          kind: 'bars',
+          measure: 'volume_ratio',
+          window: { timeframe: '1h', lookback: 20 },
+        },
+        comparator: '<',
+        threshold: 0.5,
+        rationale: 'thinning volume falsifies conviction',
+      },
+      state: 'not_breached',
+      observed: 0.8,
+    };
+    expect(readPersistedConditions([wellFormedBars])).toEqual([wellFormedBars]);
+  });
+
+  describe('end-to-end: no corrupt fixture ever reaches breachedConditions as a breach', () => {
+    it.each([
+      ['non-finite observed', [{ ...wellFormed, observed: Number.NaN }]],
+      ['breached with observed: null', [{ ...wellFormed, observed: null }]],
+      [
+        'oversized indicator lookback',
+        [
+          {
+            condition: {
+              id: 'c2',
+              observable: {
+                kind: 'indicator',
+                spec: {
+                  indicator: 'rsi',
+                  params: {},
+                  lookback: MAX_INVALIDATION_LOOKBACK + 1,
+                  timeframe: '1h',
+                },
+              },
+              comparator: '<',
+              threshold: 30,
+              rationale: 'r',
+            },
+            state: 'breached',
+            observed: 20,
+          },
+        ],
+      ],
+      [
+        'bars with a missing window',
+        [
+          {
+            condition: {
+              id: 'c4',
+              observable: { kind: 'bars', measure: 'volume_ratio' },
+              comparator: '<',
+              threshold: 0.5,
+              rationale: 'r',
+            },
+            state: 'breached',
+            observed: 0.2,
+          },
+        ],
+      ],
+      // A well-formed survivor alongside a corrupt sibling must not turn into
+      // a false breach either — only the corrupt element is dropped.
+      [
+        'a mix of one well-formed not_breached entry and one corrupt breached entry',
+        [
+          { ...wellFormed, state: 'not_breached', observed: 100 },
+          { observed: null, state: 'breached' },
+        ],
+      ],
+    ])('%s', (_label, parsed) => {
+      const conditions = readPersistedConditions(parsed);
+      const verdict: RiskCriticVerdict = {
+        verdict: 'pass',
+        max_notional: null,
+        reasoning: 'test',
+        ...(conditions === undefined ? {} : { conditions }),
+      };
+      expect(breachedConditions(verdict)).toEqual([]);
+    });
   });
 
   it('reads a well-formed dropped list, and collapses one with a bad reason code', () => {

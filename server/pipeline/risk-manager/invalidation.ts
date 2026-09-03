@@ -210,6 +210,22 @@ export interface ValidatedConditions {
   dropped: DroppedCondition[];
 }
 
+/**
+ * `params` is optional; when present it must be a plain object whose every
+ * value is a finite number. Arrays are rejected even though
+ * `typeof [] === 'object'` and every element can be finite — `Object.values`
+ * on an array yields its elements, which would otherwise pass this check and
+ * then get cast to `Record<string, number>` downstream. Shared by
+ * `readIndicatorSpec` (known `kind`) and `isObservable`'s retired-`kind`
+ * branch (#1068), so the two never drift on what counts as a well-formed
+ * `params` map.
+ */
+function isWellFormedParams(value: unknown): value is Record<string, number> | undefined {
+  if (value === undefined) return true;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  return Object.values(value as Record<string, unknown>).every(isFiniteNumber);
+}
+
 function readIndicatorSpec(
   value: unknown,
 ): IndicatorSpec | 'unparseable' | 'unknown_indicator' | 'lookback_too_large' {
@@ -225,18 +241,11 @@ function readIndicatorSpec(
   if (!isPositiveInteger(spec.lookback)) return 'unparseable';
   if (spec.lookback > MAX_INVALIDATION_LOOKBACK) return 'lookback_too_large';
   if (!isNonEmptyString(spec.timeframe)) return 'unparseable';
+  if (!isWellFormedParams(spec.params)) return 'unparseable';
 
-  const params: Record<string, number> = {};
-  if (spec.params !== undefined) {
-    if (typeof spec.params !== 'object' || spec.params === null) return 'unparseable';
-    for (const [key, raw] of Object.entries(spec.params as Record<string, unknown>)) {
-      if (!isFiniteNumber(raw)) return 'unparseable';
-      params[key] = raw;
-    }
-  }
   return {
     indicator: spec.indicator as IndicatorKind,
-    params,
+    params: spec.params === undefined ? {} : (spec.params as Record<string, number>),
     lookback: spec.lookback,
     timeframe: spec.timeframe,
   };
@@ -440,7 +449,7 @@ export function validateConditions(raw: unknown, side: OrderIntent['side']): Val
 }
 
 /**
- * ## Reading a PERSISTED conditions half back (#994 review)
+ * ## Reading a PERSISTED conditions half back (#994 review, tightened #1068)
  *
  * `risk_critic_log.conditions_json` is a TEXT column: its contents are
  * whatever a past process wrote, plus whatever a hand-edit or a partial write
@@ -450,18 +459,68 @@ export function validateConditions(raw: unknown, side: OrderIntent['side']): Val
  * it, which is exactly the "a model cannot produce a breach" rule defeated by
  * the storage layer.
  *
- * So the shape is CHECKED on read, and a list with any malformed element
- * collapses whole to `undefined` — the same `no_conditions` outcome a pre-fold
- * row produces (#997 Q3). Element-wise salvage is deliberately not attempted:
- * a partially unreadable record is not evidence about the trade, and keeping
- * half of it would make enforcement depend on which half survived.
+ * So the FULL shape is checked on read (`risk-manager-spec.md`, "persistence &
+ * replay"): finite `observed` on a measured state, `observed: null` on
+ * `unevaluable`, a well-formed `window` on a `bars` observable, and an
+ * indicator's `lookback` (at or under `MAX_INVALIDATION_LOOKBACK`),
+ * `timeframe`, and `params` — all three are re-checked independently of
+ * whether the indicator `kind` itself is still recognized, so a retired
+ * `kind` cannot smuggle an oversized lookback, a missing timeframe, or a
+ * malformed params map past the registry-drift leniency below.
+ *
+ * Per-element, not whole-list: a malformed element is DROPPED from the
+ * replayed list rather than collapsing the whole row. If nothing survives,
+ * the row reports `no_conditions` — the same marker a pre-fold row produces
+ * (#997 Q3) — never a hard reject and never a silent accept of a breach.
+ * `readPersistedDroppedConditions` (the drop-audit column) is unaffected and
+ * keeps its original all-or-nothing rule: that column has zero enforcement
+ * effect either way, so there is no safety reason to touch it here.
+ *
+ * One deliberate exception survives the tightening: an indicator `kind` that
+ * has since left `INDICATOR_KINDS` is still accepted when everything else
+ * about it is well-formed, so a historical row replays to the decision it
+ * produced when the state was actually measured. Dropping it on registry
+ * drift would silently change a historical verdict for a reason that has
+ * nothing to do with what happened at the time.
  */
 function isObservable(value: unknown): value is InvalidationObservable {
   if (typeof value !== 'object' || value === null) return false;
-  const observable = value as { kind?: unknown; spec?: unknown; measure?: unknown };
+  const observable = value as {
+    kind?: unknown;
+    spec?: unknown;
+    window?: unknown;
+    measure?: unknown;
+  };
   if (observable.kind === 'mark') return true;
-  if (observable.kind === 'indicator') return readIndicatorSpec(observable.spec) !== 'unparseable';
-  if (observable.kind === 'bars') return observable.measure === 'volume_ratio';
+  if (observable.kind === 'indicator') {
+    const spec = readIndicatorSpec(observable.spec);
+    if (spec === 'unparseable' || spec === 'lookback_too_large') return false;
+    // `unknown_indicator` is deliberately still accepted (registry-drift
+    // leniency, above) — but `readIndicatorSpec` reports the retired-`kind`
+    // case before it ever inspects `lookback`, `timeframe`, or `params`, so
+    // all three have to be re-checked independently here: registry drift may
+    // not smuggle an oversized lookback, a missing timeframe, or a malformed
+    // params map past the read-time safety checks.
+    if (spec === 'unknown_indicator') {
+      const rawSpec = observable.spec as {
+        lookback?: unknown;
+        timeframe?: unknown;
+        params?: unknown;
+      };
+      return (
+        isPositiveInteger(rawSpec.lookback) &&
+        rawSpec.lookback <= MAX_INVALIDATION_LOOKBACK &&
+        isNonEmptyString(rawSpec.timeframe) &&
+        isWellFormedParams(rawSpec.params)
+      );
+    }
+    return true;
+  }
+  if (observable.kind === 'bars') {
+    if (observable.measure !== 'volume_ratio') return false;
+    const window = readBarWindow(observable.window);
+    return window !== 'unparseable' && window !== 'lookback_too_large';
+  }
   return false;
 }
 
@@ -505,19 +564,43 @@ function isDroppedCondition(value: unknown): value is DroppedCondition {
   return DROP_REASONS.includes(dropped.reason as InvalidationDropReason);
 }
 
-function readList<T>(parsed: unknown, isElement: (value: unknown) => value is T): T[] | undefined {
+function readListStrict<T>(
+  parsed: unknown,
+  isElement: (value: unknown) => value is T,
+): T[] | undefined {
   if (!Array.isArray(parsed)) return undefined;
   return parsed.every(isElement) ? (parsed as T[]) : undefined;
 }
 
-/** Parses a persisted `conditions` list. Any malformed element collapses the whole list to `undefined` (= `no_conditions`). */
+/**
+ * Parses a persisted `conditions` list ELEMENT-WISE (#1068): a malformed
+ * element is dropped, the well-formed survivors are kept, and the result is
+ * `undefined` (= `no_conditions`) only when NOTHING survives — never a hard
+ * reject on a partially-corrupt row, and never enforcement built on an
+ * element that failed the shape check. See the block comment above
+ * `isObservable` for the full rationale and the one deliberate leniency
+ * (registry-drift on `kind`).
+ */
 export function readPersistedConditions(parsed: unknown): EvaluatedCondition[] | undefined {
-  return readList(parsed, isEvaluatedCondition);
+  if (!Array.isArray(parsed)) return undefined;
+  // An emitted-but-empty list stays `[]`, not `undefined` — `writeJsonList`
+  // (critic-store.ts) writes "nothing emitted" as NULL and "everything
+  // dropped at validation time" as `[]` specifically so the two stay
+  // distinguishable in the row; collapsing `[]` to `undefined` here would
+  // erase that distinction on read even though nothing was malformed.
+  if (parsed.length === 0) return [];
+  const survivors = parsed.filter(isEvaluatedCondition);
+  return survivors.length === 0 ? undefined : survivors;
 }
 
-/** Parses a persisted `dropped_conditions` list, on the same all-or-nothing rule. */
+/**
+ * Parses a persisted `dropped_conditions` list, ALL-OR-NOTHING (unlike
+ * `readPersistedConditions` above): this column is audit-only, with zero
+ * enforcement effect either way, so a malformed element voids the whole list
+ * rather than being salvaged element-wise.
+ */
 export function readPersistedDroppedConditions(parsed: unknown): DroppedCondition[] | undefined {
-  return readList(parsed, isDroppedCondition);
+  return readListStrict(parsed, isDroppedCondition);
 }
 
 export interface EvaluateConditionsInput {
