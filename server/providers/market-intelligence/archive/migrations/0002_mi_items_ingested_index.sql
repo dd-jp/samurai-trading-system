@@ -1,0 +1,12 @@
+-- The 90-day purge's delete index for `mi_items` (#1060).
+--
+-- `mi_archive_raw` already has `idx_mi_archive_raw_ingested (ingested_at)` from
+-- migration 0001, so `DELETE FROM mi_archive_raw WHERE ingested_at < ?` uses
+-- it directly. `mi_items` only has `idx_mi_items_class_ingested (asset_class,
+-- ingested_at)` — a composite keyed FIRST on `asset_class` — which SQLite
+-- cannot use for a range scan on the trailing column alone, since the delete
+-- filters on `ingested_at` only, with no `asset_class` predicate. Without this
+-- index `MiArchiveStore.purgeOlderThan`'s `mi_items` delete is a full table
+-- scan on every sweep (boot + daily), against the table this store exists to
+-- keep re-normalizable and therefore the one most likely to be large.
+CREATE INDEX idx_mi_items_ingested ON mi_items (ingested_at);

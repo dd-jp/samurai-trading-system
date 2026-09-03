@@ -186,7 +186,7 @@ The Market Intelligence layer runs three specialized agents that operate continu
 29. As the replay store, I want to provide a `ReplayContext` that implements the same `getContext()` contract as the live MI layer, so that the Analysts layer consumes replayed intelligence through the same code path without knowing whether it is live or backtest
 30. As the replay store, I want to re-assemble `MarketContext` on replay by running the same convergence-engine and assembly logic as the live path, so that the full MI code path — including convergence detection — is exercised during backtest
 31. As the replay store, I want to enforce the no-lookahead invariant at the cursor boundary (`timestamp <= clock.now()`), so that backtests never see future intelligence
-32. As the replay store, I want to auto-purge records older than 90 days, so that the SQLite store remains small and predictable on a single-machine deployment
+32. As the replay store, I want to auto-purge records older than 90 days, so that the SQLite store remains small and predictable on a single-machine deployment. **Implemented by [#1060](https://github.com/dd-jp/samurai-trading-system/issues/1060)**: `MiArchiveStore.purgeOlderThan` deletes both tables' rows keyed on `ingested_at`, the window is `SAMURAI_MI_ARCHIVE_RETENTION_DAYS` (default 90, fail-fast validated), and the sweep runs at orchestrator boot and again on the daily feedback timer — the same two-call-site shape #1045 established for `llm_call_log`'s row ceiling.
 33. As the replay store, I want sidecar writes to fail silently (logged at WARN) if the store is unavailable, so that the live MI system never blocks on the replay store
 34. As the replay store, I want convergence-signal detection to be deterministic given the same IntelligenceItems and clock, so that re-assembled `MarketContext` on replay matches what the live system would have produced
 
@@ -549,7 +549,7 @@ delivery_errors_total{analyst_id}
 **Responsibilities**
 - Record live MI outputs (both raw agent outputs and normalized IntelligenceItems) during normal operation
 - Serve historical IntelligenceItems to the backtest replay engine on demand via a cursor/iterator interface
-- Auto-purge records older than 90 days
+- Auto-purge records older than 90 days (default; `SAMURAI_MI_ARCHIVE_RETENTION_DAYS`, #1060)
 - Provide a `ReplayContext` that implements the same `getContext()` contract as the live MI layer, backed by the historical store instead of live agents
 
 **What Gets Stored**
@@ -611,7 +611,9 @@ The Analysts layer is unaware whether it is consuming live or replayed intellige
 
 **Retention**
 
-Fixed 90-day window. Records older than 90 days are auto-purged. This keeps the SQLite store small and predictable on the single-Mac deployment target. The backtest horizon is limited to accumulated history — acceptable because the system accumulates over time, and older market regimes that predate the store's operation were never recorded.
+Fixed 90-day window, default. Records older than the window are auto-purged. This keeps the SQLite store small and predictable on the single-Mac deployment target. The backtest horizon is limited to accumulated history — acceptable because the system accumulates over time, and older market regimes that predate the store's operation were never recorded.
+
+**Implemented by [#1060](https://github.com/dd-jp/samurai-trading-system/issues/1060).** `MiArchiveStore.purgeOlderThan(cutoff)` deletes rows from both `mi_archive_raw` and `mi_items` whose `ingested_at` — our knowledge time, the same column `itemsKnownAt`/`hasItem` treat as the visibility gate, not the vendor's `updated_at` — is strictly older than the cutoff. The window is `SAMURAI_MI_ARCHIVE_RETENTION_DAYS` (default `90`, fail-fast validated, `min = 1`), and the sweep is wired at the orchestrator composition root (`server/apps/orchestrator/production.ts`), run once at boot and again on the existing daily feedback timer — never inside `MiArchiveStore.write`, so the policy lives at the deployment layer rather than the writer. A row without a payload (#1042's proposed Reddit exemption) is purged or kept purely by age; the predicate never inspects `payload`. Reading beyond the window is not a distinct "fails cleanly" guard — a purged row is simply absent, so a query beyond the window returns fewer or no rows rather than throwing (see the note at the "Retention" testing-strategy bullet below for what this changes there). No replay path currently reaches beyond the window: the only production readers of `itemsKnownAt`/`rawRows` are `MiIngestAgent.hydrate()` (an unbounded-lookback read at boot, but downstream analysts only use recent items in practice) and `smoke-run.ts`'s diagnostics counters — the cursor-based backtest replay this section otherwise describes was never built (#436; see the superseded banner above), so nothing on the shipped path is disqualified by purging history it needed. See [#689](https://github.com/dd-jp/samurai-trading-system/issues/689) for the separate, still-open question of live-mode archive rows never being replayable at all, independent of retention.
 
 **Determinism Requirement**
 
@@ -691,12 +693,12 @@ The Market Intelligence layer does not persist state (no database, no checkpoint
 - Push interface (delivers updates when new intelligence arrives, throttles correctly)
 - Failure handling (removes subscriptions on repeated failures, doesn't block other subscribers)
 
-**Backtesting Replay Store**
+**Backtesting Replay Store** — the four bullets below describe the pre-#554 cursor/`ReplayContext` design, which was never built (#436) and is superseded by the archive-as-replay contract in the "Module: Backtesting Replay Store" section above; they are retained as history, not as a current test plan.
 - Sidecar capture (raw + normalized items written to SQLite on push; live system unaffected if store is unavailable)
 - Cursor interface (returns items in timestamp order, respects `timestamp <= clock.now()` no-lookahead boundary, memory-efficient over long sequences)
 - ReplayContext (implements same `getContext()` contract as live MI; returns correct `MarketContext` from historical items)
 - Re-assembly (convergence engine runs on replay; deterministic given same items + clock)
-- Retention (records older than 90 days are purged; backtest fails cleanly if requesting data beyond retention)
+- Retention — **implemented (#1060):** `MiArchiveStore.purgeOlderThan` deletes rows older than `SAMURAI_MI_ARCHIVE_RETENTION_DAYS` (default 90) from both archive tables, tested against a real SQLite instance (`mi-archive-store.test.ts`) plus a wiring-exists test (`mi-archive-retention.test.ts`) asserting the composition root actually calls it at boot and daily. There is no separate "backtest fails cleanly beyond retention" guard — a purged row is simply absent, so a read past the window returns fewer rows rather than throwing.
 
 ### Prior Art
 
@@ -824,7 +826,7 @@ Wayfinder decisions for this stage live in [docs/wayfinder/market-intelligence-m
 - **Data quality & validation** — schema validation, required fields, value ranges.
 - **Conflict resolution → convergence engine** (superseded 2026-07-23 — see [ADR-0002](../adr/0002-worldmonitor-mi-source.md)) — the original DeepResearch-wins-on-high-impact / Grok-wins-on-viral-narratives priority rule is fully replaced by an N-source convergence engine (convergence, triangulation, and absence signals across DeepResearch, Grok, and WorldMonitor). Full detail: [Integrate WorldMonitor as Market Intelligence source map (#169)](https://github.com/dd-jp/samurai-trading-system/issues/169), tickets #175/#176.
 
-- **Backtesting data requirements** (resolved 2026-07-20) — see "Backtesting replay store" section in Implementation Decisions above. Historical store persists both raw agent outputs + normalized IntelligenceItems in SQLite; new standalone replay service owns the store; push sidecar capture; cursor/iterator query interface; `ReplayContext` wraps cursor to implement same `getContext()` contract; 90-day retention; IntelligenceItems only stored (MarketContext re-assembled on replay to exercise full MI code path).
+- **Backtesting data requirements** (resolved 2026-07-20, and superseded on the store's shape by #554/#558 — see the banner at the top of this file) — see "Backtesting replay store" section in Implementation Decisions above. Historical store persists both raw agent outputs + normalized IntelligenceItems in SQLite; new standalone replay service owns the store; push sidecar capture; cursor/iterator query interface; `ReplayContext` wraps cursor to implement same `getContext()` contract; 90-day retention — **now implemented, #1060** (`SAMURAI_MI_ARCHIVE_RETENTION_DAYS`, default 90, swept at orchestrator boot and on the daily feedback timer); IntelligenceItems only stored (MarketContext re-assembled on replay to exercise full MI code path).
 
 - **WorldMonitor as third MI source + CII soft signal + convergence engine** (resolved 2026-07-23) — see [ADR-0002](../adr/0002-worldmonitor-mi-source.md) and the [Integrate WorldMonitor as Market Intelligence source map (#169)](https://github.com/dd-jp/samurai-trading-system/issues/169) for full decision detail across all eight resolved tickets.
 
