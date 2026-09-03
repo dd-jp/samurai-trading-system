@@ -170,6 +170,37 @@ describe('validateConditions', () => {
     expect(dropped[0]?.reason).toBe('unknown_indicator');
   });
 
+  it('drops an indicator spec whose params is an array, not a plain object — Object.values on an array is not a params map', () => {
+    // `typeof [] === 'object'` and `Object.values([1, 2])` are both finite
+    // numbers, so a naive object check would let an array through and
+    // `readIndicatorSpec` would hand it out cast to `Record<string, number>`.
+    const { dropped: droppedEmpty } = validateConditions(
+      [
+        raw({
+          observable: {
+            kind: 'indicator',
+            spec: { indicator: 'rsi', params: [], lookback: 30, timeframe: '1h' },
+          },
+        }),
+      ],
+      'buy',
+    );
+    expect(droppedEmpty[0]?.reason).toBe('unparseable');
+
+    const { dropped: droppedPopulated } = validateConditions(
+      [
+        raw({
+          observable: {
+            kind: 'indicator',
+            spec: { indicator: 'rsi', params: [1, 2], lookback: 30, timeframe: '1h' },
+          },
+        }),
+      ],
+      'buy',
+    );
+    expect(droppedPopulated[0]?.reason).toBe('unparseable');
+  });
+
   it('drops a threshold outside the observable’s range — it could only be permanently true or false', () => {
     const { dropped } = validateConditions(
       [
@@ -760,6 +791,32 @@ describe('readPersistedConditions / readPersistedDroppedConditions', () => {
       observed: 55,
     };
     expect(readPersistedConditions([retiredBadParams])).toBeUndefined();
+  });
+
+  it('rejects a retired indicator kind whose params is an array — registry drift does not waive the params-is-a-plain-object check', () => {
+    const retiredArrayParams: EvaluatedCondition = {
+      condition: {
+        id: 'c3',
+        observable: {
+          kind: 'indicator',
+          spec: {
+            indicator: 'stochastic_rsi' as never,
+            // Cast: `params` must be a plain object; an array satisfies
+            // `typeof value === 'object'` and every value can be finite, so
+            // this is the shape the shared params check exists to reject.
+            params: [] as never,
+            lookback: 20,
+            timeframe: '1h',
+          },
+        },
+        comparator: '<',
+        threshold: 20,
+        rationale: 'a retired indicator kind with an array params',
+      },
+      state: 'not_breached',
+      observed: 55,
+    };
+    expect(readPersistedConditions([retiredArrayParams])).toBeUndefined();
   });
 
   it.each([

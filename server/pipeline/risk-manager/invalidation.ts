@@ -212,13 +212,17 @@ export interface ValidatedConditions {
 
 /**
  * `params` is optional; when present it must be a plain object whose every
- * value is a finite number. Shared by `readIndicatorSpec` (known `kind`) and
- * `isObservable`'s retired-`kind` branch (#1068), so the two never drift on
- * what counts as a well-formed `params` map.
+ * value is a finite number. Arrays are rejected even though
+ * `typeof [] === 'object'` and every element can be finite — `Object.values`
+ * on an array yields its elements, which would otherwise pass this check and
+ * then get cast to `Record<string, number>` downstream. Shared by
+ * `readIndicatorSpec` (known `kind`) and `isObservable`'s retired-`kind`
+ * branch (#1068), so the two never drift on what counts as a well-formed
+ * `params` map.
  */
 function isWellFormedParams(value: unknown): value is Record<string, number> | undefined {
   if (value === undefined) return true;
-  if (typeof value !== 'object' || value === null) return false;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   return Object.values(value as Record<string, unknown>).every(isFiniteNumber);
 }
 
