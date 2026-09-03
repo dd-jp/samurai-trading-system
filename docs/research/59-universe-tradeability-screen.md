@@ -24,7 +24,9 @@ No data was collected from either path for this document, and no capture script 
 Consequently:
 
 - **The doc 58 F2b / F2c / F6 quote capture is treated as retracted** ([#1036](https://github.com/dd-jp/samurai-trading-system/issues/1036) is retracting it) and **not one figure from it is carried forward or relied on**, including the figures #1002's own body quotes. Where #1002's argument rests on those numbers, the argument is restated below from its structure alone.
-- **Doc 58 F3** (the daily-bar history screen) and **doc 34 §3.3** (within-session print gaps) *are* recorded, non-retracted measurements and are cited. But per [#1054](https://github.com/dd-jp/samurai-trading-system/issues/1054) they carry a status: **the shape of these results survives, the numbers rest on a source the repo has ruled it cannot collect from again, and they cannot be re-measured on that path.** Every figure drawn from them below is marked *recorded 2026-08-19 / 2026-09-02, not re-measurable*. Doc 34 §3.3 carries a second caveat in its own text: Yahoo's 1-minute history reaches back about seven days, so even a permissible re-run would measure different sessions and reproduce the ordering, not the decimals.
+- **Doc 58 F3** (the daily-bar history screen) and **doc 34 §3.3** (within-session print gaps) are cited here under a status: **the shape of these results survives, the numbers rest on a source the repo has ruled it cannot collect from again, and they cannot be re-measured on that path.** Every figure drawn from them below is marked *recorded 2026-08-19 / 2026-09-02, not re-measurable*. Doc 34 §3.3 carries a second caveat in its own text: Yahoo's 1-minute history reaches back about seven days, so even a permissible re-run would measure different sessions and reproduce the ordering, not the decimals.
+
+  **This is a deliberate disagreement with [#1054](https://github.com/dd-jp/samurai-trading-system/issues/1054), and it should be read as one.** #1054's body says both halves of #1002's evidence "cannot be cited until re-measured", and its acceptance criteria say no figure from Yahoo-collected daily bars is cited as live evidence; F3 and doc 34 §3.3 are Yahoo-collected. The position taken here is narrower: [#1036](https://github.com/dd-jp/samurai-trading-system/issues/1036)'s retraction scope names F2b, F2c and F6 only, and the Yahoo bar in doc 34 §5 is a bar on **collection**, which this document did not do — a recorded measurement does not become false because the path that produced it is now closed to re-collection. If David or #1054's owner prefers the stricter reading, the mitigation is that **the headline conclusion does not depend on it**: the five-row survivor identity in §5.2 needs F3, but D5's under-25 finding fires on criterion (e) alone — **18 sterling rows / 18 distinct underlyings**, read straight off the pool file's `currency` field with no Yahoo data anywhere in the chain **[verified]**.
 
 ---
 
@@ -42,7 +44,7 @@ round-trip spread cost (fraction of price)  >=  min_tick / price
 
 **[derived]** — this is the minimum-width case; a wider book costs more, never less. So a cheap-in-pence line with a coarse tick is *structurally* expensive, and no amount of flow fixes it. That floor does not vary with the day's liquidity, which is what makes it a static universe property rather than a cost-model input.
 
-**What the applicable tick table says.** UK MiFID RTS 11 (Commission Delegated Regulation (EU) 2017/588, as onshored) sets the tick regime. FCA Handbook Article 2 **[verified, retrieved 2026-09-03]** scopes it to *shares, depositary receipts and exchange-traded funds*, requires that trading venues "apply to orders in exchange-traded funds a tick size which is equal to or greater than the one corresponding to the liquidity band in the table in the Annex corresponding to the highest average daily number of transactions" — i.e. ETFs always take the *finest* column — and applies that limb **only where the underlying assets consist solely of equities subject to the share tick size regime**.
+**What the applicable tick table says.** UK MiFID RTS 11 (Commission Delegated Regulation (EU) 2017/588, as onshored) sets the tick regime. FCA Handbook Article 2 **[verified, retrieved 2026-09-03]** scopes it to *shares, depositary receipts and exchange-traded funds*, requires that trading venues "apply to orders in exchange-traded funds a tick size which is equal to or greater than the one corresponding to the liquidity band in the table in the Annex corresponding to the highest average daily number of transactions" — i.e. ETFs always take the *finest* column — and applies that limb **only where the underlying assets consist solely of equities "subject to the tick size regime under paragraph 1 or a basket of such equities"**.
 
 The finest-band column of the Annex **[verified, legislation.gov.uk, retrieved 2026-09-03]**, denominated in the quotation currency's major unit:
 
@@ -89,7 +91,7 @@ Thresholds are derived from ADR-0018's bracket geometry and `docs/research/54-ca
 
 ### 3.0 The exchange rate between cost and required accuracy
 
-Doc 54 §2's identity **[verified]**: `E(p) = (p − 0.5) × width + E_net`, with `E_net = E_gross − cost`. With `E_gross = 0` the required directional edge above a coin flip is
+Doc 54 §2's identity **[verified]**: `E(p) = (p − 0.5) × width + E_net`, with `E_net = E_gross − cost`. Setting **`E_gross = 0` is a modelling choice [assumed]**, not a measurement — it credits the instrument with no intrinsic drift over the session — and §3.1 shows it decides the *sign* of one headline, so it is flagged again there. With `E_gross = 0` the required directional edge above a coin flip is
 
 ```
 required edge (pp)  =  round-trip cost (%) / bracket width (%) x 100
@@ -105,7 +107,7 @@ The index bracket is **~3x more cost-sensitive per basis point** than the single
 
 ### 3.1 The accuracy budget, and the spread ceiling that falls out of it
 
-`docs/adr/0017-validation-gates-paper-operational-thesis-expectancy.md` sizes its gates against "a strategy claiming a ~55% win rate" **[verified]** — i.e. **+5.00 pp** over a coin flip, and that is the whole accuracy budget the system is allowed to spend. Doc 54 §5 charges the LLM bill against it at the ADR-0018 D5-resolved notionals (£350 index / £250 single-stock out of the £1,000 book): **1.58 pp (index) / 0.75 pp (single-stock) [verified]**. What remains buys execution cost:
+`docs/adr/0017-validation-gates-paper-operational-thesis-expectancy.md` sizes its gates against "a strategy claiming a ~55% win rate" **[verified]** — i.e. **+5.00 pp** over a coin flip. **Treating that figure as the whole accuracy budget the system is allowed to spend is [assumed], not verified**: in ADR-0017 it is a *claimed* win rate feeding a statistical-power calculation for gate sizing, not an allowance the system is entitled to. It is used here because it is the only edge figure the project has committed to in writing, and §3.1's table shows what happens under other assumptions. Doc 54 §5 charges the LLM bill against it at the ADR-0018 D5-resolved notionals (£350 index / £250 single-stock out of the £1,000 book): **1.58 pp (index) / 0.75 pp (single-stock) [verified]**. What remains buys execution cost:
 
 ```
 max total round-trip cost (bps) = (assumed edge pp − LLM bill pp) x bps-per-pp
@@ -124,6 +126,8 @@ All **[derived]** from the verified inputs above. Published as a function of the
 **Two findings fall straight out.**
 
 1. **At ADR-0017's own assumed win rate the index bracket has a non-positive spread budget: −1.8 bps.** Saxo's commission alone (16 bps) exceeds the 14.2 bps of total cost the index bracket can afford. The index leg does not fail on any *instrument's* spread — it fails on venue commission before a spread is quoted. It needs an assumed edge above **+5.42 pp [derived]** merely to reach a zero spread budget.
+
+   **The sign of this finding depends on the `E_gross = 0` choice [assumed], and on QQQ it flips.** Doc 54's table implies a positive `E_gross` for each name (`E_gross = cost + E_net`): QQQ's is **+5.69 bps** (0.18 − 0.1231), larger than the 1.8 bps deficit, so crediting it gives the index bracket **+3.9 bps** on QQQ (20.8 − 6.57 + 5.69 − 16) **[derived]** — and QQQ is the underlying of LQQ3, the one index line that survives §5.2's screen. SPY's `E_gross` is only **+0.55 bps**, so SPY stays negative either way **[derived]**. The conclusion is not rescued by this, because §3.2's independent route reaches it without the assumption: doc 54's own QQQ bar plus commission plus the LLM bill requires **58.4% accuracy**, against ADR-0017's ~55%. Read finding 1 as *"the index bracket has no meaningful spread budget"* rather than as a precise negative number.
 2. **The single-stock bracket's ceiling is ~36 bps of round-trip quoted spread** at the same assumption — real, but not generous.
 
 **This is a subclass-level result, not a per-line screen.** It discriminates no row from any other row, because no permissible per-line spread source exists (§1.1). Criterion (b) is therefore **derivable but not evaluable per line today**.
@@ -189,7 +193,7 @@ The pool today: **30 rows / 26 distinct screening instruments**, 8 `index_etp_3x
 
 ### 5.2 The combined count
 
-Only (d) and (e) are evaluable across the whole pool, so the combined screen is their intersection:
+Only (d) and (e) are evaluable across the whole pool, so the combined screen is their intersection. **The (d) column below, and therefore the identity of the survivor set, rests entirely on doc 58 F3 — *recorded 2026-09-02, not re-measurable*; the (e) column is read from the pool file and carries no such caveat.**
 
 | Line | Underlying | Subclass | Currency | (d) history | (e) sterling |
 | --- | --- | --- | --- | --- | --- |
@@ -199,7 +203,9 @@ Only (d) and (e) are evaluable across the whole pool, so the combined screen is 
 | 3FB | META | single-stock | GBX | pass | pass |
 | 3ARM | ARM | single-stock | GBX | pass | pass |
 
-**5 rows / 5 distinct underlyings survive. [derived]** The other five F3 passers — 3USL, NVD3, 3LNV, MST3, PLT3 — are all USD-declared and fall to (e). The venue-vs-file currency corrections in doc 34 §3.2 do not change this: 3AAP and 3QQQ, the two rows whose venue currency differs from the file, both fail (d) independently.
+**5 rows / 5 distinct underlyings survive. [derived, on F3 — recorded 2026-09-02, not re-measurable]** The other five F3 passers — 3USL, NVD3, 3LNV, MST3, PLT3 — are all USD-declared and fall to (e). The venue-vs-file currency corrections in doc 34 §3.2 do not change this: 3AAP and 3QQQ, the two rows whose venue currency differs from the file, both fail (d) independently *(also F3, same status)*.
+
+**What this survivor set is not.** It passes a *history-and-currency* screen only. It is not ordered by cost, and it cannot be: the only direct spread observation ever taken on these lines is retracted (#1036), so no survivor here has been shown to be cheap. Worse for comfort — doc 58's estimator **ordering**, which that document stands behind even while disowning its levels, places **LCO3 and 3ARM among the widest of the ten screened names**. Passing (d) and (e) is a necessary condition, not evidence of tradeability.
 
 Layering the partially-measurable criterion (c) on top: **LQQ3 passes all three**; the other four were never in doc 34's 11-row probe. So the survivor count under (c)+(d)+(e) is somewhere between **1 and 5**, and cannot be resolved without a permissible print-frequency source.
 
@@ -209,7 +215,7 @@ Layering the partially-measurable criterion (c) on top: **LQQ3 passes all three*
 
 **The clause does not fire marginally; it fires by a factor of five.** Any threshold set drawn from §3 — indeed criterion (e) on its own, at 18 — puts the pool under 25. There is no plausible reading of the permissible evidence in which a ranked selection over this pool is worth building. That should be recorded as the reason, exactly as the spec asks.
 
-One consequence worth putting in front of David: of the five survivors **one is index and four are single-stock**, and §3.1 says the index bracket's spread budget is non-positive at ADR-0017's assumed win rate. A screen that keeps LQQ3 keeps the subclass with no budget.
+One consequence worth putting in front of David: of the five survivors **one is index and four are single-stock**, and §3.1 says the index bracket has no meaningful spread budget at ADR-0017's assumed win rate — non-positive under the `E_gross = 0` choice **[assumed]**, and about +3.9 bps if QQQ's implied `E_gross` is credited, which is still less than a quarter of the single-stock bracket's. A screen that keeps LQQ3 keeps the subclass with essentially no budget either way.
 
 ---
 
@@ -270,7 +276,7 @@ Each is one question, answerable yes/no or by picking a listed option. Recommend
 *Recommendation: yes.* Evidence: **strong** — 5 of 26, and criterion (e) alone gets under 25 without touching either not-re-measurable figure.
 
 **D6. The index bracket's spread budget is non-positive once Saxo's 16 bps commission is charged. Which way?** (a: drop `index_etp_3x` from the live universe / b: re-derive ADR-0018's index bracket wider under a new ticket / c: accept it, and let the required signal accuracy rise above ADR-0017's assumption)
-Option (a) costs exactly **one of the five survivors** — LQQ3, leaving four, all single-stock. Option (b) is not a free parameter: widening the bracket lowers cost-sensitivity (bps per pp scales with width) but also lowers the probability the take-profit is reached inside the session, and ADR-0018 D3's widths were set against measured reach — so it is a re-derivation with its own cost, not a dial.
+Option (a) costs exactly **one of the five survivors** — LQQ3, leaving four, all single-stock — and narrows ADR-0016's declared universe, so it lands in §6's amendment question too. Option (b) is not a free parameter, on two counts. Mechanically, widening the bracket lowers cost-sensitivity (bps per pp scales with width) but also lowers the probability the take-profit is reached inside the session, and ADR-0018 D3's widths were set against measured reach. Procedurally, **ADR-0018's 2026-08-17 amendment calls the single neutral bracket "the terminal exit rule of this ADR", frozen by #724/#739 and encoded in `server/pipeline/trader/subclass-bracket.ts`** — so choosing (b) means amending an ADR that pre-declared this question closed. That is a reason to be sure of §3.0's inference first, not a reason the option is unavailable.
 *Recommendation: (b).* Evidence: **derived, resting on one inference** — that ADR-0018's 0.18% / 0.41% exclude venue commission (§3.0). If that inference is wrong, D6 dissolves; it should be checked against #1032's confirmed commission schedule before anything is acted on.
 
 **D7. Amend ADR-0016 now, or defer until #1035/#1032 supply per-line evidence?** (a: amend now, picking from §6's options / b: defer)
