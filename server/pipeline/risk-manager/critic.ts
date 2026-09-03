@@ -17,17 +17,32 @@
  *
  * ## What it is for
  *
- * Narrative/qualitative risk ONLY — the thing the six mechanical steps
- * structurally cannot express (ADR-0003 §1, #955's resolution). Position caps,
- * exposure caps, the deployment envelope, the pairwise-correlation
- * concentration check and the circuit breakers are exhaustively quantitative
- * and none of them reasons about a trade's THESIS. The canonical catch is
- * several open positions quietly levered to the same macro catalyst with no
- * shared price history yet for the correlation check to see.
+ * TWO things since the 2026-09-03 invalidation fold (#994) — the scope line
+ * here read "narrative/qualitative risk ONLY" until then, and that boundary is
+ * false now that conditions ride the same verdict:
+ *
+ * 1. **Narrative/qualitative risk** — the thing the six mechanical steps
+ *    structurally cannot express (ADR-0003 §1, #955's resolution). Position
+ *    caps, exposure caps, the deployment envelope, the pairwise-correlation
+ *    concentration check and the circuit breakers are exhaustively
+ *    quantitative and none of them reasons about a trade's THESIS. The
+ *    canonical catch is several open positions quietly levered to the same
+ *    macro catalyst with no shared price history yet for the correlation
+ *    check to see.
+ * 2. **Typed invalidation conditions** — 3-5 falsifying predicates the model
+ *    NAMES and deterministic code MEASURES (`invalidation.ts`). The two halves
+ *    come back from ONE call, which is what keeps the step-7 seam free of a
+ *    second LLM pass (#513) and the cost envelope intact (#955).
  *
  * One pass, framed as "argue why this trade should be trimmed or rejected".
  * Not a 3-persona debate (ADR-0003 §4 — Stage 3 already spends that budget)
  * and no rebuttal round (§5).
+ *
+ * The halves are INDEPENDENT on failure (#997 Q2a): a malformed conditions
+ * list never voids the prose verdict, and a malformed prose verdict discards
+ * the whole answer as it always did — the fail-open path is strictly safer
+ * than a half-read verdict, while discarding a valid `reject` over the
+ * ADVISORY half would make the system less safe than before the fold.
  *
  * ## Cadence and cost
  *
@@ -75,9 +90,12 @@
  * runs on the mechanical steps, and live and replay agree on what step 7 saw.
  */
 
+import type { MarketDataService } from '../../providers/market-data-service/index.js';
+import { INDICATOR_KINDS } from '../../providers/market-data-service/index.js';
 import type { Logger, OrderIntent } from '../../shared/index.js';
 import type { LlmClient, SpendCap } from '../debate-engine/index.js';
 import { BARE_JSON_INSTRUCTION, unwrapFencedJson, wrapUntrusted } from '../debate-engine/index.js';
+import { evaluateConditions, validateConditions } from './invalidation.js';
 import type { RiskCriticStore, RiskCriticVerdict } from './types.js';
 
 /**
@@ -185,12 +203,33 @@ export function renderCriticPrompt(request: RiskCriticRequest): string {
     'If you find no narrative risk, answer "pass". That is a complete and useful',
     'answer; inventing an objection to fill the field is worse than passing.',
     '',
+    'SEPARATELY, name 3 to 5 INVALIDATION CONDITIONS: measurable facts which, if',
+    'already true right now, would mean the thesis behind this trade has already',
+    'failed. You do NOT evaluate them — you only name what to check. They are',
+    'measured by code against market data, so a condition that names something',
+    'unmeasurable is discarded.',
+    '',
     'Reply with JSON only:',
-    '{"verdict":"pass"|"trim"|"reject","max_notional":number|null,"reasoning":string}',
+    '{"verdict":"pass"|"trim"|"reject","max_notional":number|null,"reasoning":string,',
+    ' "conditions":[{"id":string,"observable":Observable,"comparator":"<"|"<="|">"|">=",',
+    '                "threshold":number,"rationale":string}]}',
     '- "trim" requires "max_notional": the notional this position should be capped',
     '  at, strictly greater than 0. It can only reduce the position, never raise it.',
     '- "pass" and "reject" must set "max_notional" to null.',
     '- "reasoning" is one or two sentences, and is recorded verbatim in the audit log.',
+    '- Observable is exactly one of:',
+    '    {"kind":"mark"}  — the instrument\'s current price',
+    `    {"kind":"indicator","spec":{"indicator":<one of ${INDICATOR_KINDS.join('|')}>,`,
+    '                               "params":{"period":number},"lookback":number,"timeframe":"1h"}}',
+    '    {"kind":"bars","window":{"timeframe":"1h","lookback":number},"measure":"volume_ratio"}',
+    "  — the latest bar's volume over the mean of the preceding bars.",
+    '- A condition must fire when the thesis is FAILING, not when it is working:',
+    '  for a "buy" that means price/momentum observables BELOW a threshold, for a',
+    '  "sell" ABOVE one; volume_ratio is always "<" (thinning participation).',
+    '- Give NO severity, weight, confidence or evaluation state. Conditions are',
+    '  predicates; the state is measured, never asserted.',
+    '- An empty or omitted "conditions" list is accepted and recorded. It does not',
+    '  change the verdict above; do not invent conditions to fill it.',
     BARE_JSON_INSTRUCTION,
     '',
     wrapUntrusted(
@@ -211,6 +250,28 @@ interface RawCriticVerdict {
   verdict?: unknown;
   max_notional?: unknown;
   reasoning?: unknown;
+  conditions?: unknown;
+}
+
+/**
+ * What one model answer yields: the PROSE verdict, and the raw conditions
+ * exactly as emitted.
+ *
+ * Two fields rather than one populated `RiskCriticVerdict` because the halves
+ * are validated at different times by different code. The prose half is
+ * validated HERE and its defects are fatal (the fail-open path is strictly
+ * safer than a half-read verdict). The conditions half is passed through
+ * untouched, for `invalidation.ts` to validate against the intent's side and
+ * evaluate against market data — asynchronously, which a `parseResponse`
+ * callback cannot do — and its defects are NEVER fatal (#997 Q2a).
+ *
+ * `raw_conditions` is `unknown` on purpose: nothing about it has been checked
+ * yet, and typing it as anything narrower here would be a claim this function
+ * has not earned.
+ */
+export interface ParsedCriticResponse {
+  verdict: RiskCriticVerdict;
+  raw_conditions: unknown;
 }
 
 /**
@@ -231,7 +292,7 @@ interface RawCriticVerdict {
  */
 export function parseCriticVerdict(
   rawText: string,
-): { valid: true; data: RiskCriticVerdict } | { valid: false; reason: string } {
+): { valid: true; data: ParsedCriticResponse } | { valid: false; reason: string } {
   let parsed: RawCriticVerdict;
   try {
     parsed = JSON.parse(unwrapFencedJson(rawText)) as RawCriticVerdict;
@@ -252,8 +313,16 @@ export function parseCriticVerdict(
   }
   const reasoning = parsed.reasoning.trim().slice(0, MAX_REASONING_CHARS);
 
+  // The conditions half is carried out UNVALIDATED and cannot fail this parse.
+  // #997 Q2a: discarding a valid `reject` because the advisory half was
+  // malformed would make the system strictly less safe than it is today.
+  const raw_conditions = parsed.conditions;
+
   if (verdict !== 'trim') {
-    return { valid: true, data: { verdict, max_notional: null, reasoning } };
+    return {
+      valid: true,
+      data: { verdict: { verdict, max_notional: null, reasoning }, raw_conditions },
+    };
   }
 
   const max_notional = parsed.max_notional;
@@ -266,7 +335,7 @@ export function parseCriticVerdict(
     };
   }
 
-  return { valid: true, data: { verdict, max_notional, reasoning } };
+  return { valid: true, data: { verdict: { verdict, max_notional, reasoning }, raw_conditions } };
 }
 
 export interface LlmRiskCriticProducerOptions {
@@ -274,6 +343,18 @@ export interface LlmRiskCriticProducerOptions {
   store: RiskCriticStore;
   /** ADR-0008's overall ceiling. Checked before dialling; a refusal is a fail-open skip. */
   spendCap: SpendCap;
+  /**
+   * Where the invalidation conditions are MEASURED (#994).
+   *
+   * REQUIRED, not optional-with-a-skip, for the reason `RiskStepDeps.critic`
+   * itself is required: optional, deleting the one line that supplies it in
+   * `production.ts` would compile, pass every test, and silently return the
+   * conditions half to a permanent `no_conditions` — a disarmed check that
+   * still looks healthy. Not a NEW data dependency either: the Risk step
+   * already reads this same service for `correlation.ts` and
+   * `portfolio-view.ts`.
+   */
+  marketData: MarketDataService;
   logger?: Logger;
   /** Overall wall-clock budget, retries included. See `DEFAULT_CRITIC_BUDGET_MS`. */
   budgetMs?: number;
@@ -284,6 +365,7 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
   readonly #llm: LlmClient;
   readonly #store: RiskCriticStore;
   readonly #spendCap: SpendCap;
+  readonly #marketData: MarketDataService;
   readonly #logger: Logger | undefined;
   readonly #budgetMs: number;
 
@@ -291,6 +373,7 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
     this.#llm = options.llm;
     this.#store = options.store;
     this.#spendCap = options.spendCap;
+    this.#marketData = options.marketData;
     this.#logger = options.logger;
     this.#budgetMs = options.budgetMs ?? DEFAULT_CRITIC_BUDGET_MS;
   }
@@ -329,7 +412,7 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
         }),
         this.#expiry(controller.signal),
       ]);
-      return this.#record(request, response.data);
+      return this.#record(request, await this.#withConditions(request, response.data));
     } catch (error) {
       // EVERY failure lands here and fails open: provider error, cancellation
       // on the budget above, or a response that could not be read.
@@ -345,6 +428,50 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
       return this.#record(request, unavailable(describeThrown(error)));
     } finally {
       clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Attaches the INVALIDATION half to a prose verdict that already parsed
+   * (#994, per #997 Q1/Q2a).
+   *
+   * Deterministic from here on: `validateConditions` refuses anything that
+   * does not bind to a service this step can read, and `evaluateConditions`
+   * measures the survivors. The model contributed the predicates and nothing
+   * else — no state it emitted is read, and no failure here can change the
+   * prose verdict.
+   *
+   * Partial-tolerant BY CONSTRUCTION: `validateConditions` never throws and
+   * `evaluateConditions` maps every read failure to `unevaluable`, so the only
+   * outcomes are "some conditions" and "none", the latter reported as
+   * `no_conditions`. The `catch` is a belt-and-braces boundary of the same
+   * kind `criticVerdictFor` puts around the producer itself — an unexpected
+   * throw must degrade the checklist, never the verdict.
+   */
+  async #withConditions(
+    request: RiskCriticRequest,
+    parsed: ParsedCriticResponse,
+  ): Promise<RiskCriticVerdict> {
+    try {
+      const { accepted, dropped } = validateConditions(parsed.raw_conditions, request.intent.side);
+      const conditions = await evaluateConditions({
+        conditions: accepted,
+        instrument: request.intent.instrument,
+        marketData: this.#marketData,
+        asOf: request.asOf,
+      });
+      return { ...parsed.verdict, conditions, dropped_conditions: dropped };
+    } catch (error) {
+      this.#logger?.log({
+        trace_id: request.trace_id,
+        stage: 'risk',
+        level: 'warn',
+        message:
+          'risk critic invalidation conditions could not be evaluated; the PROSE verdict ' +
+          'stands with full authority and the conditions report no_conditions',
+        payload: { instrument: request.intent.instrument, error: describeThrown(error) },
+      });
+      return { ...parsed.verdict, conditions: [], dropped_conditions: [] };
     }
   }
 
@@ -458,7 +585,14 @@ export interface BuildRiskCriticProducerOptions extends LlmRiskCriticProducerOpt
   mode: 'live' | 'paper' | 'backtest';
 }
 
-/** Mode branch, in ONE place: `backtest` gets a producer with no LLM client at all. */
+/**
+ * Mode branch, in ONE place: `backtest` gets a producer with no LLM client at
+ * all — and no `MarketDataService` either. The replay producer re-measures
+ * nothing; it replays the `EvaluatedCondition[]` persisted beside the verdict,
+ * which is what makes a replayed decision byte-identical to the live one and
+ * keeps the "this producer cannot reach a live dependency" property structural
+ * rather than a runtime check (`risk-manager-spec.md`, "the invalidation fold").
+ */
 export function buildRiskCriticProducer(
   options: BuildRiskCriticProducerOptions,
 ): RiskCriticProducer {

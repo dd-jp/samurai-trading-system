@@ -1,12 +1,15 @@
 import type { Clock, OrderIntent } from '../../shared/index.js';
 import { CircuitBreakers } from './breakers.js';
 import { RiskManagerImpl } from './index.js';
+import { INVALIDATED_BINDING_CONSTRAINT, NO_CONDITIONS_REASON } from './invalidation.js';
 import type {
   BreakerState,
   CorrelationEstimate,
+  EvaluatedCondition,
   PersistedBreakerState,
   PortfolioView,
   RiskConfig,
+  RiskCriticVerdict,
   RiskInput,
 } from './types.js';
 
@@ -992,6 +995,140 @@ describe('RiskManagerImpl.evaluate — risk-critic skip record (review 2026-08-0
         reason.includes('risk_critic: trimmed notional from 10000 to 50'),
       ),
     ).toBe(true);
+  });
+});
+
+describe('RiskManagerImpl.evaluate — invalidation conditions (#994, per #997)', () => {
+  const conditionOn = (
+    state: 'breached' | 'not_breached' | 'unevaluable',
+    id = 'thesis-needs-price-above-95',
+  ): EvaluatedCondition => ({
+    condition: {
+      id,
+      observable: { kind: 'mark' },
+      comparator: '<',
+      threshold: 95,
+      rationale: 'below 95 the breakout that justified the entry has already failed',
+    },
+    state,
+    observed: state === 'unevaluable' ? null : 90,
+  });
+
+  it('hard-rejects a MEASURED breach even when the prose verdict says pass', () => {
+    // #997 Q2b: the producer reports facts and never overwrites the verdict —
+    // `evaluate()` holds the authority. The persisted row therefore keeps what
+    // the model actually said, and the two rejection causes stay separable.
+    const decision = new RiskManagerImpl(makeConfig()).evaluate(
+      makeInput({
+        critic: {
+          verdict: 'pass',
+          max_notional: null,
+          reasoning: 'no narrative risk',
+          conditions: [conditionOn('breached')],
+        },
+      }),
+    );
+
+    expect(decision.status).toBe('rejected');
+    expect(decision.binding_constraint).toBe(INVALIDATED_BINDING_CONSTRAINT);
+    expect(decision.binding_constraint).not.toBe('risk_critic:reject');
+  });
+
+  it('rejects on a breach with every OTHER producer failed open — the mechanical steps are clean', () => {
+    // The scenario the mechanism exists for: the book is well inside every cap,
+    // the correlation estimate has no history, no CII score is known, and the
+    // trade would sail through. The measured predicate is the only thing that
+    // stops it.
+    const decision = new RiskManagerImpl(makeConfig()).evaluate(
+      makeInput({
+        cii: {},
+        correlation: { correlations: {}, insufficient_history: ['3LQQ'] },
+        critic: {
+          verdict: 'pass',
+          max_notional: null,
+          reasoning: 'nothing narrative',
+          conditions: [conditionOn('breached')],
+        },
+      }),
+    );
+
+    expect(decision.status).toBe('rejected');
+    expect(decision.binding_constraint).toBe(INVALIDATED_BINDING_CONSTRAINT);
+  });
+
+  it('does NOT reject on an unevaluable condition — a data gap must never block a trade', () => {
+    const decision = new RiskManagerImpl(makeConfig()).evaluate(
+      makeInput({
+        critic: {
+          verdict: 'pass',
+          max_notional: null,
+          reasoning: 'nothing narrative',
+          conditions: [conditionOn('unevaluable')],
+        },
+      }),
+    );
+
+    expect(decision.status).toBe('approved');
+    expect(decision.reasons.some((reason) => reason.includes('unevaluable'))).toBe(true);
+  });
+
+  it('keeps risk_critic:reject for a PROSE reject, and still records the condition states', () => {
+    // Ordering: the summary is pushed before the prose branch acts, so a prose
+    // reject that returns early still carries the audit. `invalidated` is then
+    // reached only when the prose did NOT itself reject — precisely the
+    // disagreement case worth counting.
+    const decision = new RiskManagerImpl(makeConfig()).evaluate(
+      makeInput({
+        critic: {
+          verdict: 'reject',
+          max_notional: null,
+          reasoning: 'the catalyst is already priced',
+          conditions: [conditionOn('breached')],
+        },
+      }),
+    );
+
+    expect(decision.binding_constraint).toBe('risk_critic:reject');
+    expect(decision.reasons.some((reason) => reason.includes('breached'))).toBe(true);
+  });
+
+  it('records no_conditions when the conditions half produced nothing, and enforces nothing', () => {
+    const decision = new RiskManagerImpl(makeConfig()).evaluate(
+      makeInput({
+        critic: {
+          verdict: 'pass',
+          max_notional: null,
+          reasoning: 'nothing narrative',
+          conditions: [],
+          dropped_conditions: [{ id: 'c2', raw: '{"kind":"runes"}', reason: 'unknown_observable' }],
+        },
+      }),
+    );
+
+    expect(decision.status).toBe('approved');
+    expect(decision.reasons).toContain(NO_CONDITIONS_REASON);
+    expect(decision.reasons.some((reason) => reason.includes('unknown_observable'))).toBe(true);
+  });
+
+  it('replays a PRE-FOLD verdict — no `conditions` field at all — identically to before the fold', () => {
+    // #997 Q3's acceptance criterion. `RiskCriticLog` persists the whole
+    // verdict and rows written before the fold lack the field; the reader must
+    // treat absence as `no_conditions`, never crash and never reject.
+    const preFold: RiskCriticVerdict = {
+      verdict: 'pass',
+      max_notional: null,
+      reasoning: 'nothing narrative',
+    };
+    const withEmpty: RiskCriticVerdict = { ...preFold, conditions: [], dropped_conditions: [] };
+
+    const before = new RiskManagerImpl(makeConfig()).evaluate(makeInput({ critic: preFold }));
+    const after = new RiskManagerImpl(makeConfig()).evaluate(makeInput({ critic: withEmpty }));
+
+    expect(before.status).toBe('approved');
+    expect(before.reasons).toContain(NO_CONDITIONS_REASON);
+    // Byte-identical: absence and emptiness are ONE code path, so a backtest
+    // spanning the fold date reaches the same decision either side of it.
+    expect(before).toEqual(after);
   });
 });
 

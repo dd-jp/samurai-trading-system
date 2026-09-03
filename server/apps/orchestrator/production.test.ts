@@ -4897,6 +4897,55 @@ describe('risk critic in backtest mode is replay-only at the composition root (#
     fetchSpy.mockRestore();
   });
 
+  it('#994: a logged BREACHED condition rejects at the composition root, under its own constraint', async () => {
+    // The fold's enforcement assertion, driven through the real
+    // `buildProductionComponents` rather than a unit fixture: the prose verdict
+    // says `pass`, the measured predicate says the thesis was already falsified,
+    // and `evaluate()` — not the producer — turns that into a reject. A
+    // construction check would pass for a conditions half nothing acts on,
+    // which is precisely this repo's dominant defect shape.
+    const clock = new SimulatedClock(START);
+    const intent = goVerdict().order as OrderIntent;
+    new SqliteRiskCriticStore(db).writeVerdict({
+      debate_id: intent.metadata.debate_id,
+      verdict: {
+        verdict: 'pass',
+        max_notional: null,
+        reasoning: 'no narrative risk in the book',
+        conditions: [
+          {
+            condition: {
+              id: 'thesis-needs-price-above-95',
+              observable: { kind: 'mark' },
+              comparator: '<',
+              threshold: 95,
+              rationale: 'below 95 the breakout that justified the entry has already failed',
+            },
+            state: 'breached',
+            observed: 90,
+          },
+        ],
+        dropped_conditions: [],
+      },
+      created_at: START,
+    });
+
+    const config = stubConfig(db, {
+      ...REAL_CONFIGS,
+      mode: 'backtest',
+      clock,
+      llmClient: { complete: vi.fn() } as unknown as NonNullable<ProductionConfig['llmClient']>,
+    });
+    const { steps } = buildProductionComponents(config);
+
+    const decision = await steps.risk({ trace_id: 'trace-994-invalidated', intent, clock });
+
+    expect(decision.status).toBe('rejected');
+    expect(decision.binding_constraint).toBe('risk_critic:invalidated');
+    expect(decision.binding_constraint).not.toBe('risk_critic:reject');
+    expect(decision.reasons.join(' ')).toContain('breached');
+  });
+
   it('replays UNSEEN history as no verdict rather than dialling — the mode branch, not the log hit', async () => {
     // The case above alone cannot catch a `production.ts` that passed a
     // hard-coded `'paper'`: the live producer reuses a logged verdict for the
