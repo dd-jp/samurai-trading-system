@@ -190,10 +190,17 @@ import {
   PolymarketAgent,
   PolymarketClient,
 } from '../../providers/market-intelligence/index.js';
+import { positiveIntegerFromEnv } from '../../shared/env-integer.js';
 import type { AssetClass, Clock, TuningStore } from '../../shared/index.js';
 import { isThresholdBoundViolation, resolveVenuePacing, TokenBucket } from '../../shared/index.js';
 import { tryNousCredentials } from '../../shared/llm/index.js';
-import { SqliteRiskLogStore, SqliteTraderLogStore } from '../../shared/store/index.js';
+import type { SharedStore as SqliteHandle } from '../../shared/store/index.js';
+import {
+  DEFAULT_MAX_LLM_CALL_ROWS,
+  pruneLlmCallLog,
+  SqliteRiskLogStore,
+  SqliteTraderLogStore,
+} from '../../shared/store/index.js';
 import { CostModelImpl, SqliteStage2SelectionStore } from '../../tools/backtest/index.js';
 import {
   LoggingAnalystSkipAlertChannel,
@@ -555,6 +562,79 @@ export function captureLlmTextFromEnvironment(
   value: string | undefined = process.env.SAMURAI_LLM_CAPTURE,
 ): boolean {
   return value?.trim().toLowerCase() !== 'off';
+}
+
+/** The variable that overrides `llm_call_log`'s row ceiling (#1045). */
+export const ENV_LLM_CALL_LOG_MAX_ROWS = 'SAMURAI_LLM_CALL_LOG_MAX_ROWS';
+
+/**
+ * How many `llm_call_log` rows to keep (#1045).
+ *
+ * `min = 1`, not `0` — the one place this deliberately departs from the file
+ * sink's identical-looking setting, where `0` legally means "keep nothing".
+ * Here "keep nothing" is already spelled `SAMURAI_LLM_CAPTURE=off`, and a
+ * ceiling of zero would mean writing every prompt to disk purely to delete it
+ * on the next sweep. Two spellings for one intention is how a config comes to
+ * disagree with itself, so this one refuses.
+ *
+ * Exported and tested for the same reason `captureLlmTextFromEnvironment` is:
+ * a retention policy read inline in a 3,000-line composition root is a policy
+ * nobody can see.
+ */
+export function llmCallLogMaxRowsFromEnvironment(
+  value: string | undefined = process.env[ENV_LLM_CALL_LOG_MAX_ROWS],
+): number {
+  return positiveIntegerFromEnv(
+    value,
+    ENV_LLM_CALL_LOG_MAX_ROWS,
+    DEFAULT_MAX_LLM_CALL_ROWS,
+    1,
+    "the captured LLM prompt/response table's row ceiling (#1045)",
+  );
+}
+
+/**
+ * Prunes, reports what it removed, and never throws.
+ *
+ * Silence would be wrong in both directions, so both are logged: a sweep that
+ * dropped thousands of prompts is something an operator should be able to find
+ * afterwards when the rows they wanted are gone, and a sweep that keeps
+ * failing is a table growing without a ceiling while everything else looks
+ * healthy. Only a prune that did nothing — the ordinary case, every day below
+ * the ceiling — stays quiet.
+ *
+ * Swallowing is deliberate and matches how the capture itself behaves
+ * (`spend-sink.ts`: bookkeeping must never fail the thing it books). At boot a
+ * throw would abort a trading process over housekeeping; on the timer it would
+ * take down the daily feedback cycle. Neither trade is worth making for disk.
+ */
+function pruneLlmCallLogWithLog(
+  db: SqliteHandle,
+  maxRows: number,
+  logger: Logger,
+  trigger: 'startup' | 'daily',
+): void {
+  try {
+    const deleted = pruneLlmCallLog(db, maxRows);
+    if (deleted === 0) return;
+    logger.log({
+      trace_id: trigger === 'startup' ? 'startup' : 'feedback-cycle',
+      stage: 'orchestrator',
+      level: 'info',
+      message: `pruned llm_call_log to its ${maxRows}-row ceiling`,
+      payload: { deleted, max_rows: maxRows, trigger },
+    });
+  } catch (error) {
+    logger.log({
+      trace_id: trigger === 'startup' ? 'startup' : 'feedback-cycle',
+      stage: 'orchestrator',
+      level: 'warn',
+      message:
+        'llm_call_log prune failed — captured prompts and responses are unaffected, but the ' +
+        'table is not bounded until this succeeds',
+      payload: { error: error instanceof Error ? error.message : String(error), trigger },
+    });
+  }
 }
 
 export function buildProductionComponents(config: ProductionConfig): ProductionComponents {
@@ -1249,6 +1329,24 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // neither reads the environment for itself — the same rule the file sink
   // follows (`buildEntrypointLogger`).
   const captureLlmText = captureLlmTextFromEnvironment();
+
+  /**
+   * #1045. The row ceiling is read and APPLIED here, at boot, and again on the
+   * daily timer below — two call sites, both at this composition root.
+   *
+   * Both, not one. Startup alone would fire once and then never again for the
+   * length of an unattended run, which is precisely the run the ceiling exists
+   * to bound; the daily sweep alone would leave a restart-heavy dev loop
+   * pruning nothing until 24h of uptime accumulated. Neither is a hot path:
+   * the statement is a no-op below the ceiling and the table has one writer.
+   *
+   * Wired here rather than inside `SqliteLlmSpendStore` on purpose. The store
+   * writes rows; deciding how many the SYSTEM keeps is a deployment policy,
+   * and burying it in the writer is how `pruneIngestedObservedFills` came to
+   * exist, be tested, and never be called from anything that ships (#313).
+   */
+  const llmCallLogMaxRows = llmCallLogMaxRowsFromEnvironment();
+  pruneLlmCallLogWithLog(config.db, llmCallLogMaxRows, logger, 'startup');
   // `tryNousCredentials` rather than `nousCredentials`: an unconfigured Nous
   // environment degrades this optional stage to no-agent instead of failing
   // the boot, which is how the absent `XAI_API_KEY` behaved before ADR-0009
@@ -2501,7 +2599,31 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     return sample.comparison;
   };
 
+  // #1045. Read here as well as in `buildProductionComponents`, not passed
+  // between them: these are two separate composition roots, the read is pure
+  // and validated, and both resolve the same variable in the same process, so
+  // they cannot disagree. Threading it through `ProductionComponents` would
+  // widen a public shape to carry a housekeeping constant.
+  const llmCallLogMaxRows = llmCallLogMaxRowsFromEnvironment();
+
   const runFeedbackCycle = (feedback: FeedbackCycleConfig): void => {
+    // #1045, and FIRST — outside the try below, before any of the tuning work.
+    //
+    // Placement is the whole point. Inside that try, after `runDailyCycle`, a
+    // persistently throwing feedback cycle would silently disable retention
+    // too: the catch would fire every day and the table would grow forever
+    // while the log showed only a feedback failure. Housekeeping that depends
+    // on unrelated work succeeding is not housekeeping. `pruneLlmCallLogWithLog`
+    // swallows its own errors, so it cannot cost the cycle anything either.
+    //
+    // Riding this existing 24h timer rather than adding a scheduler follows
+    // #636's rule, stated at `runOutsideBenchmarks` below: additional work
+    // joins the existing daily suite, no new scheduling primitive. Note it is
+    // a plain `setInterval` from process start, so "daily" means every ~24h of
+    // uptime, not a calendar midnight — fine for a retention sweep, but it is
+    // not a nightly job and should not be described as one.
+    pruneLlmCallLogWithLog(config.db, llmCallLogMaxRows, logger, 'daily');
+
     try {
       const result = runDailyCycle({
         clock,
