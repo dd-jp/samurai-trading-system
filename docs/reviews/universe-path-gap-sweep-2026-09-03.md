@@ -33,7 +33,7 @@ $ grep -c 't212_isa: true'  server/providers/universe-pool/lse-etp-pool.ts   # 3
 $ grep -c 't212_isa: false' server/providers/universe-pool/lse-etp-pool.ts   #  0
 ```
 
-**All 30 tradeable rows are `true`.** The gate is a constant, so it is a no-op in front of the sort and story 16's invariant is documented rather than enforced — this repo's dominant defect class.
+**All 30 tradeable rows are `true`.** The gate is a constant, so **as specced** it excludes nothing and story 16's invariant is documented rather than enforced — this repo's dominant defect class. Nothing is currently mis-filtering at runtime: `server/pipeline/universe-selector/` does not exist and the spec carries `cite-exempt: planned`. The defect is that #750 would be built to this clause, so it is cheaper to fix now than after the module ships.
 
 Three compounding facts:
 
@@ -115,23 +115,24 @@ So the pool says "#751 owns it", #751 does not mention it, and the spec's loader
 
 ---
 
-### F5 — MEDIUM — `CONTEXT.md`'s "Still outstanding" note is stale on both of its claims
+### F5 — MEDIUM — `CONTEXT.md`'s "Still outstanding" note is stale, and its second half is contradicted two paragraphs above it
 
 `CONTEXT.md:80`:
 
 > **Still outstanding:** `docs/specs/risk-manager-spec.md` repeats the pre-#798 figure under its own sizing section and needs the same update; no Risk Manager rule enforces the per-subclass fractions.
 
-Both halves are now false:
+Both halves are false, and the second is falsified by `CONTEXT.md` itself.
 
 - **The spec was updated.** `risk-manager-spec.md:34` and `:235` both carry *"26.2% index ETPs / 41.8% single-stock … re-measured by #729 and accepted by #798 — this replaces the older 23.1%/26.2% pair."*
-- **The rule exists.** `perSubclassDeploymentCap` is implemented in `server/pipeline/risk-manager/index.ts` (see `:484`, `:521`), with `SubclassDeploymentCap` at `risk-manager/types.ts:363` and a dedicated test file.
+- **The rule exists, and it is armed at exactly those fractions.** `perSubclassDeploymentCap` is implemented in `server/pipeline/risk-manager/index.ts` (`:484`, `:521`), typed as `SubclassDeploymentCap` at `risk-manager/types.ts:363`, and `buildStartingProfileConfigs` populates `per_subclass_deployment_cap.cap_fraction_of_equity` in the **shipped paper profile** — pinned by `d5-trader-cap-agreement.test.ts:227` asserting equality against `D5_INDEX_ETP_DEPLOYMENT_FRACTION` and `D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION`. Only the `equity_ceiling` sub-field is live-only, and that is deliberate (#888: paper is unbounded to the book so classified entries do not refuse against Alpaca's simulated ~$100,000 balance).
 
-The accurate statement is narrower and more useful: **the rule exists and is unarmed.** `lse-etp-pool.ts:40-44` records that the pool *"is deliberately not wired into any `UniverseInstrument[]` a running profile reads"* because #800 is open and unresolved, and `types.ts:196` gates behaviour on `isD5ArmedWithNumericFraction`. A reader acting on the current note would go build a rule that already exists instead of arming the one that does.
+The decisive evidence is two paragraphs earlier in the same file. `CONTEXT.md:78`, added **2026-09-03 by #897**, states: *"the Risk Manager's `per_subclass_deployment_cap` is deliberately left at the full 35%/25%."* A block written today asserts the cap is configured; a block eight lines down says no such rule exists. This is not a citer lagging a ruling — it is one file disagreeing with itself, which is why it is listed separately from the F3/F10/F11 cluster.
 
-**Fix:** replace the note with "the rule exists (`perSubclassDeploymentCap`) and is unarmed pending #800/#751."
+**The residual the note should carry instead** is narrower and real: the cap binds only on an instrument the pool has classified into a subclass, and `lse-etp-pool.ts:40-44` records that the pool *"is deliberately not wired into any `UniverseInstrument[]` a running profile reads"* pending #800. So the rule is enforcing, but on today's unclassified default universe it has nothing to bind against.
+
+**Fix:** replace the note with "the rule exists and is armed (`perSubclassDeploymentCap`, D5 fractions, pinned by test); it binds only once the classified pool is wired in — #800/#751."
 
 ---
-
 ### F6 — MEDIUM — a live risk threshold is justified by a figure that no longer exists
 
 `risk-manager-spec.md:34` justifies the hard drawdown breaker's re-arm edge:
@@ -224,6 +225,28 @@ This is the pattern `universe-selector-spec.md` names and refuses when it delete
 
 **Fix:** strike the clause in place with its replacement adjacent, per the convention the spec pass already applied.
 
+### F13 — MEDIUM — ADR-0008 owns the spend cap and still reports its utilisation from a crypto-in-scope measurement
+
+`CLAUDE.md` states that *"every £/yr LLM figure in ADR-0016 **and ADR-0008 §2** … was measured at a 15-minute cadence with crypto in scope"*, restated equities-only by [#840](https://github.com/dd-jp/samurai-trading-system/issues/840) on 2026-08-18 to **~£58/yr**.
+
+ADR-0016 complied. Its `:49` banner withdraws the `£252`/`£89` bill, the `~£12`/`~£5` pair and the 28:1 ratio by name, and its `:128` amendment records #840 in full.
+
+**ADR-0008 carries no #840 pointer and no crypto-scope withdrawal at all.** Its `:122` correction box still reads as the standing measurement:
+
+> Measured against the soak's actual `llm_spend` (1,151 calls over 42.6h), real spend at this cadence is **$0.878/day**, not $3.00 — **25% of the cap, not 84%**.
+
+That is the same soak measurement ADR-0016 withdraws — and ADR-0016:45 prices crypto at **86% of that bill**. So the "25% of the cap" utilisation figure, in the ADR that *owns* the cap, overstates equities-only consumption by roughly 7×. An operator reading ADR-0008 to judge headroom under `llmBudgetUsd: 50` is reading a number for a system that no longer exists.
+
+Two things that are **not** wrong here, and should not be swept up in the fix:
+
+- **The τ = 2 min cadence survives.** The `:110` amendment derives it from exit resolution on a 3× equity ETP (doc 41 Result 2: a stop overshoot of ≈−1.97% at τ = 15 falling to ≈−0.72% at τ = 2), not from any crypto pass count. The crypto-inclusive `2 × 1,440 + 4 × 390` arithmetic at `:161` sits *below* the superseded box.
+- **The cap itself is unaffected.** A cap that binds less often is not a wrong cap.
+
+The gap is scope, not cadence: `:110`'s box supersedes the section on **cadence** and explicitly preserves everything below it as "the record of how the number was chosen", so a reader has no signal that the cost arithmetic is separately void on scope.
+
+**Fix:** add a one-paragraph 2026-08-18 scope amendment to ADR-0008 §2 pointing at #840 and ADR-0016's `:128`, stating the equities-only bill (~£58/yr) and that the `$0.878/day` → "25% of the cap" utilisation is a crypto-in-scope figure kept for provenance.
+
+
 ## Summary
 
 | ID | Sev | Finding | Disposition |
@@ -232,7 +255,7 @@ This is the pattern `universe-selector-spec.md` names and refuses when it delete
 | F2 | HIGH | #750's cost sort key has no delivering owner; `blocked_by` was empty | **#1053 filed**, edges wired |
 | F3 | HIGH | `CLAUDE.md:11` **and** `ADR-0015:139` name closed #798 as the live-ramp gate, vs a tolerance `CONTEXT.md` replaced | Briefing + ADR edit |
 | F4 | MED | `fallback_default` required by spec, absent from code, unowned by #751 | Add to #751 AC or to the pool row |
-| F5 | MED | `CONTEXT.md:80`'s outstanding-work note false on both claims | Restate as "exists, unarmed pending #800" |
+| F5 | MED | `CONTEXT.md:80` false on both claims — and its second half is contradicted by `CONTEXT.md:78`, written the same day | Restate: rule exists, armed, pinned by test |
 | F6 | MED | Re-arm edge 0.20 justified by a withdrawn design target | Restate basis |
 | F7 | MED | 26 rankable underlyings vs the "<~25 → do not rank" clause; a prune moots #750 | AC on #1054 |
 | F8 | MED | #1036 retracts #1002's LSE half, leaves its Yahoo half on the same defect | Extend #1036 scope |
@@ -240,8 +263,9 @@ This is the pattern `universe-selector-spec.md` names and refuses when it delete
 | F10 | MED | ADR-0015's live-money sizing guard triggers on "the Trading 212 ISA" — an account that cannot exist | Restate against the Saxo GIA |
 | F11 | MED | ADR-0014:77 still asks a capital question ADR-0015 answered 2026-08-18 | Add the `ANSWERED` pointer |
 | F12 | LOW | ADR-0017:35's withdrawn crypto ramp clause is unstruck in the body | Strike in place |
+| F13 | MED | ADR-0008 §2 reports "25% of the cap" from a crypto-in-scope soak ADR-0016 withdrew; ~7× overstated equities-only | Add a #840 scope amendment |
 
-**Three of twelve are the same disease**: a clause, field, or gate declared load-bearing, assigned to a ticket or file that does not carry it, with nothing that fails when it is missing (F1, F2, F4). **Six more are one ruling landing in one document and not its citers** (F3, F5, F6, F8, F11, F12) — the post-2026-08-16 decisions (#798's acceptance, the £1,000 book, the Saxo/GIA venue, the terms-based retractions) are each recorded correctly *somewhere* and stale *somewhere else*. F10 is the sharpest instance because the stale citer is a live-money sizing guard rather than prose.
+**Three of thirteen are the same disease**: a clause, field, or gate declared load-bearing, assigned to a ticket or file that does not carry it, with nothing that fails when it is missing (F1, F2, F4). **Six more are one ruling landing in one document and not its citers** (F3, F6, F8, F11, F12, F13) — the post-2026-08-16 decisions (#798's acceptance, the £1,000 book, the Saxo/GIA venue, the terms-based retractions) are each recorded correctly *somewhere* and stale *somewhere else*. F10 is the sharpest instance because the stale citer is a live-money sizing guard rather than prose; F13 is the second-sharpest, because the stale figure is the utilisation of a live spend cap and it is wrong by ~7×. F5 is the degenerate case — not a citer lagging at all, but one file contradicting itself on the same day.
 
 **The pattern worth acting on:** every one of those six was written by an author who *did* update the document they were editing. What is missing is the reverse index — nothing enumerates who cites a figure when that figure changes. That is a process gap, not nine independent oversights.
 
