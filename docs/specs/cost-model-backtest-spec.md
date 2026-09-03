@@ -190,16 +190,13 @@ interface BacktestReport {
   };
   capacity_ceiling: number;            // from the √-law impact
   lookahead_audit: 'passed' | 'failed';// a failure fails the run
-  invalidation_replay: 'warm' | 'cold';// 'cold' = window predates the invalidation stage's history, so it ran permanently
-                                        // inert and this report's trade count is only an upper bound on the live system's.
-                                        // Non-optional so callers cannot silently pool warm- and cold-window reports as
-                                        // comparable (devils-advocate-spec.md story 47). NOT YET WIRED: the standalone
-                                        // `invalidation` stage was declined 2026-09-02; its mechanism folds into the Risk
-                                        // Critic instead (#994, not yet built), so every report is 'cold' until that lands.
-                                        // Added to this interface 2026-09-02 — see
-                                        // docs/reviews/devils-advocate-spec-cross-verify-2026-09-02.md GAP-E: this field was
-                                        // asserted in this spec's own prose ("Module: Determinism") but never actually added
-                                        // to the type it was supposed to be on.
+  // No `invalidation_replay` field (restated 2026-09-03 after #994's fold — see
+  // "The replay property is a byte-identical decision, not an attestation" below).
+  // The standalone `invalidation` stage this field was specced for (added to this
+  // interface 2026-09-02 per docs/reviews/devils-advocate-spec-cross-verify-2026-09-02.md
+  // GAP-E) was declined that same day; its cold-window inertness has nothing to attest
+  // to, since conditions now ride the same verdict the backtest already replays either
+  // way. `server/tools/backtest/types.ts`'s real `BacktestReport` has no such field.
 }
 ```
 
