@@ -27,10 +27,15 @@
  * retrieval is real the binding constraint changes: what matters is not how
  * stale the window is but how many posts land in it, because
  * `sentiment-analyst.ts` averages them and a three-post average is noise.
- * 2 hours doubles the sample for a bounded cost — 3 instruments x 12
- * buckets/day x 14 days = 504 calls over a soak, which the cap clears at the
- * default `max_search_results` and does not at the ceiling. That is why the
- * cadence and the result count are one decision, not two (#969).
+ * 2 hours doubles the sample for a bounded cost. Note the count is
+ * SESSION-derived, not calendar-derived: `UniverseScheduler.nextTick` returns
+ * an empty instrument list whenever the calendar says closed, so this refresh
+ * never fires outside the session and a 6.5h US session touches 4 two-hour
+ * buckets, not 12. A 3-instrument, 14-session soak is therefore ~168 calls,
+ * which the cap clears at either end of the `max_search_results` range; it is
+ * the LIVE universe the cap binds. What 4 buckets does bind is the SAMPLE:
+ * 4 x 3 = 12 posts/instrument/session is thin. That is why the cadence and
+ * the result count are one decision, not two (#969).
  *
  * **Metered into `llm_spend`, so ADR-0008's cap is cross-provider.** The cap
  * sums `cost_usd` and does not care which provider produced the row. Two

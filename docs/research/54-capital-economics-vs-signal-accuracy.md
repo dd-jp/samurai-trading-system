@@ -87,21 +87,29 @@ is deliberately unwired. Seven hourly bars is a US-session count.
 > **prompt**, so it costs roughly **$0.02** at the default 3 results (measured **$0.089** at 10) against the
 > ~$0.001 a recall-only sentiment call cost.
 >
-> On the same 7-instrument, 252-session basis at a 2-hour bucket: 7 x 12 x 252 ≈ **21,200 calls/yr ≈
-> $420/yr ≈ £330/yr**, which is **~6x the debate leg** and dwarfs the £58 above. On the 3-instrument soak
-> universe it is ≈ $180/yr ≈ £143/yr. Either way the conclusion this section is quoted for — that the
-> LLM bill is second-order against signal accuracy — **does not survive with retrieval on at a
-> 7-instrument universe**: £330/yr against £350 of index-bracket position notional is not a rounding error,
-> it is the whole break-even calculation.
+> **Buckets are session-derived, which is the first thing to check and the thing a first pass of this
+> amendment got wrong.** `UniverseScheduler.nextTick` returns an **empty** instrument list whenever the
+> calendar says closed, so the sentiment refresh never fires outside the session: a 6.5h US session touches
+> **4** two-hour buckets, not the 12 a 24-hour day gives. On the same 7-instrument, 252-session basis:
+> 7 x 4 x 252 ≈ **7,100 calls/yr ≈ $141/yr ≈ £111/yr** at the default 3 search results. (An earlier draft
+> of this box said £330/yr off a 12-bucket calendar reading. Same error class as the one #969 exists to
+> correct: a downstream conclusion computed from a premise nobody checked against the code.)
+>
+> **What that does to this section's conclusion.** The total bill goes from **£58/yr to ~£169/yr — roughly
+> triple**, with MI now the larger leg. That is not "second-order" in the sense of ignorable, but neither
+> does it overturn the section: the break-even accuracy thresholds in §4 shift by the ratio of the bill to
+> the trading term, and at 10 search results (~£495/yr at 7 instruments) they shift materially further.
+> **Recompute §4's thresholds against the actual bill before quoting them for a universe running
+> retrieval** — do not carry the £58 figure across.
 >
 > Three things follow, and none of them is "spend more". **(1)** Retrieval defaults **off**; it is a dated,
-> deliberate switch, not an operator default. **(2)** The lever is the *shape* of the spend, not its size —
-> fewer buckets at more results buys the same sample at lower cost than more buckets at fewer.
-> **(3)** The figures here are a **range, not a point** (output tokens were never measured at 3 results, and
-> reasoning tokens do not scale down with result count), and the reconciliation against the provider's
-> invoice is what replaces them. [ADR-0020](../adr/0020-x-retrieval-through-nous.md) carries the regime;
-> ADR-0008 §2's 2026-09-03 amendment carries the cap arithmetic. **Recompute this section's break-even
-> before quoting it for a universe running retrieval.**
+> deliberate switch, not an operator default. **(2)** The soak is NOT where this binds — 3 x 4 x 14 = 168
+> calls is $3-5 — so the live universe width is the lever that matters, not the soak's result count.
+> **(3)** The figures here are a **range, not a point** (output tokens were never measured at 3 results,
+> and reasoning tokens do not scale down with result count), *and the call count is a derived assumption on
+> the same footing*, descending from the scheduler and `GROK_REFRESH_MS`. The reconciliation against the
+> provider's invoice is what replaces both. [ADR-0020](../adr/0020-x-retrieval-through-nous.md) carries the
+> regime; ADR-0008 §2's 2026-09-03 amendment carries the cap arithmetic.
 
 ## 4. The restatement
 

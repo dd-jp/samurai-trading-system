@@ -163,12 +163,21 @@ the soak from a fresh store if it is meant to have the full budget.**
 > prompt**, so it measures **$0.089** at 10 results and roughly **$0.02** at the
 > default 3, against the ~$0.001 a recall-only sentiment call cost.
 >
-> The soak arithmetic that matters for this cap: 3 instruments x 12 two-hour
-> buckets x 14 days = **504 calls**, i.e. **~$45 at 10 results — over this
-> ADR's entire $50 ceiling before the debate leg is counted** — against roughly
-> **$10-15** at 3. So the cap does not merely bound the MI leg, it **selects
-> its `max_search_results`**, which is why that parameter defaults to 3 with a
-> hard ceiling of 10 rather than being left to operator taste.
+> **The call count is session-derived, and checking that is what keeps this
+> honest.** `UniverseScheduler.nextTick` returns an empty instrument list when
+> the calendar says closed, so the sentiment refresh never fires outside the
+> session: a 6.5h US session touches **4** two-hour buckets, not 12. The soak
+> is therefore 3 instruments x 4 buckets x 14 sessions = **168 calls** —
+> roughly **$3-5** at the default 3 results and **~$15** at 10.
+>
+> **So this cap does NOT bind the MI leg at soak scale**, and an earlier draft
+> of this amendment that said it did (504 calls, "~$45, over the entire
+> ceiling") was reading 12 buckets a day off a calendar rather than off the
+> scheduler. What the cap does bind is the **live** universe: 7 instruments x 4
+> buckets x 252 sessions is ~$141/yr at 3 results and ~$630/yr at 10, against a
+> ~$74/yr debate leg. `SAMURAI_X_MAX_RESULTS` is clamped to 10 for that reason
+> — a typed 100 must yield 10 and a warning, not an order-of-magnitude
+> overspend found days later as an exhausted budget.
 >
 > **Two metering corrections were required before this could run unattended**,
 > both of which had been under-counting: Nous reports **OpenAI-inclusive**

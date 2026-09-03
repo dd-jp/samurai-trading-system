@@ -2219,12 +2219,18 @@ export function buildStartingProfileConfigs(
      * `SAMURAI_SENTIMENT_RETRIEVAL=on` the market-intelligence leg runs a
      * server-side `x_search` call per instrument per 2h bucket, and search
      * results ride in the PROMPT: ~$0.02 at the default 3 results, a measured
-     * $0.089 at 10. Over a 14-day soak that is ~$10-15 at 3 and ~$45 at 10 —
-     * the latter being over this profile's entire $50 cap before a single
-     * debate. So `SAMURAI_X_MAX_RESULTS` is clamped to 10, and the cap does
-     * not merely bound the MI leg, it selects that parameter. Retrieval is
-     * OFF by default, so the arithmetic above still describes an unflagged
-     * run. ADR-0008 §2's 2026-09-03 amendment and ADR-0020 carry the regime;
+     * $0.089 at 10.
+     *
+     * The call count is SESSION-derived, not calendar-derived: `UniverseScheduler`
+     * returns an empty instrument list whenever the calendar says closed, so
+     * the refresh never fires outside the session and a 6.5h US session
+     * touches 4 two-hour buckets, not 12. A 14-session soak is therefore
+     * 3 x 4 x 14 = ~168 calls, i.e. ~$3-5 at 3 results and ~$15 at 10 —
+     * comfortably inside this profile's $50 cap. It is the LIVE universe that
+     * binds (7 x 4 x 252 is ~$141/yr at 3 and ~$630/yr at 10), which is why
+     * `SAMURAI_X_MAX_RESULTS` is clamped to 10 rather than merely advised.
+     * Retrieval is OFF by default, so the arithmetic above still describes an
+     * unflagged run. ADR-0008 §2's 2026-09-03 amendment and ADR-0020 carry the regime;
      * treat the retrieval figures as a range until reconciled against the
      * provider invoice.
      *

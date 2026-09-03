@@ -117,11 +117,16 @@ describe('floorToRefreshBucket', () => {
     // With real retrieval the binding constraint is SAMPLE SIZE:
     // `sentiment-analyst.ts` averages `social` wholesale, so buckets x
     // results-per-bucket is what decides whether three bot posts can swing
-    // the lens. 12 x 3 = 36 posts/instrument/day.
+    // the lens.
     //
-    // It is also a cost decision — 504 calls over a 14-day, 3-instrument soak
-    // — which is why the interval and `max_search_results` move together and
-    // neither can be retuned alone. See `x-search-client.ts`.
+    // The assertion below is on the CONSTANT — 12 buckets per 24 hours — not
+    // on how many actually fire. The scheduler emits no instruments outside
+    // the session, so a 6.5h US session touches 4 of them and the real sample
+    // is 4 x 3 = 12 posts/instrument/session. That is what makes this a
+    // sample-size decision rather than a cost one: ~168 calls over a soak sits
+    // well inside the cap at either end of the `max_search_results` range.
+    // Interval and result count still move together, and neither can be
+    // retuned alone. See `x-search-client.ts`.
     expect((24 * 60 * 60 * 1000) / GROK_REFRESH_MS).toBe(12);
   });
 });

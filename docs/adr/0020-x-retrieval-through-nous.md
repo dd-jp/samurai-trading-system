@@ -85,31 +85,53 @@ the recall-only call ADR-0009 priced at ~$0.001.
 | --- | --- | --- |
 | Prompt tokens | ~5,300 | 58,153 (19,584 cached) |
 | Measured cost | ~$0.02 (est.) | **$0.089** |
-| 504-call soak | **~$10–15** | **~$45** |
+| 168-call soak | **~$3–5** | **~$15** |
 
-The soak is 3 instruments × 12 two-hour buckets × 14 days = **504 calls**. At
-10 results that is over ADR-0008's entire $50 ceiling *before the debate leg*.
-So:
+**Buckets are session-derived, and that is the number to check first.**
+`UniverseScheduler.nextTick` returns an **empty** instrument list whenever the
+calendar says closed, so the sentiment refresh never fires outside the session.
+A 6.5h US session touches **4** two-hour buckets, not the 12 a 24-hour day
+would give. The soak is therefore 3 instruments × 4 buckets × 14 sessions =
+**168 calls**, and every figure here moves if the scheduler or `GROK_REFRESH_MS`
+moves.
+
+**So the cap does NOT force 3 results at soak scale** — even 10 costs ~$15
+against a $50 ceiling shared with a ~$0.29/day debate leg. An earlier draft of
+this ADR said it did, on a 12-buckets-a-day reading nobody had checked against
+the scheduler; that is the same failure this ADR indicts ADR-0009 for, caught
+one commit later. The conclusions that survive:
 
 - **`max_search_results` defaults to 3, with a hard ceiling of 10.** The
   ceiling is a clamp on operator input, not advice: `SAMURAI_X_MAX_RESULTS` is
   typed by a human, and a typed 100 must yield 10 and a warning rather than an
   order-of-magnitude overspend discovered days later as an exhausted budget.
+  The **ceiling** is now the real guard; the **default** of 3 is a conservative
+  starting point that V5 is expected to move, not a cap-derived necessity.
+  It matters at the *live* universe rather than the soak: 7 instruments × 4
+  buckets × 252 sessions at 10 results is ~$630/yr, where the same at 3 is
+  ~$141/yr.
 - **The 3-result figure is a RANGE, not a point.** The probe measured input
   tokens at that setting but never output, and output does not scale with
   result count — the 10-result call spent 2,009 of its 4,007 output tokens on
   reasoning. Quoting a point estimate here is the error this ADR's own
   predecessor made with "$0.001/call, ~$0.50 per soak"; the reconciliation
   against the provider's invoice is what replaces the range with a number.
+  **The call COUNT is a derived assumption on the same footing** — it descends
+  from the scheduler's session gating and from `GROK_REFRESH_MS`, and neither
+  is a constant of nature.
 - **The cadence and the result count are ONE decision.** `GROK_REFRESH_MS`
   moved 4h → 2h in the same change. The old 4h was derived from a *staleness*
   argument (1/6th of the analysts' 24h window) made while nothing retrieved and
   the ingested item count was structurally zero — it was bounding the freshness
   of an empty set. With real retrieval the binding constraint is **sample
-  size**: `sentiment-analyst.ts` averages `social` wholesale, so 12 × 3 = 36
-  posts/instrument/day is what decides whether three bot posts can swing the
-  lens. If 3 proves too thin the lever is **fewer buckets at more results**
-  (6 × 10 ≈ $37), not more spend.
+  size**, and on session-derived buckets that is **thin**:
+  `sentiment-analyst.ts` averages `social` wholesale, so 4 × 3 = **12
+  posts/instrument/session** is what decides whether three bot posts can swing
+  the lens — below the ~17 cashtag posts/ticker/day at which Bluesky was judged
+  too sparse to carry a signal (#1041). The lever if that proves too thin is
+  **more results per bucket, not more buckets**: 4 × 10 = 40 posts/session for
+  ~$15 across the soak. That is the opposite of what an earlier 12-bucket draft
+  concluded, and it is the direction V5's measurement is expected to push.
 
 Three metering defects had to be closed before any of this could run
 unattended, all in the under-counting direction — see the commit for #969. The

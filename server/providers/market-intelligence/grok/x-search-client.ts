@@ -109,20 +109,27 @@ export const X_SEARCH_MODEL = '~x-ai/grok-latest';
 /**
  * Default and ceiling for `max_search_results`.
  *
- * This is the one dial, and it is selected by ADR-0008's cap rather than by
- * taste. Search results ride in the PROMPT: a 3-result call measured ~5,300
- * input tokens, a 10-result call 58,153. Over a 14-day soak (3 instruments x
- * 12 two-hour buckets x 14 days = 504 calls) that is ~$45 at 10 results —
- * over the $50 ceiling on its own, before the debate leg — against roughly
- * $10-15 at 3.
+ * This is the one dial. Search results ride in the PROMPT: a 3-result call
+ * measured ~5,300 input tokens, a 10-result call 58,153, costing a measured
+ * $0.089.
  *
- * The ceiling is a hard clamp, not advice: `SAMURAI_X_MAX_RESULTS` is operator
- * input, and an operator who types 100 should get 10 and a warning, not a
- * blown cap.
+ * The call count is SESSION-derived: `UniverseScheduler.nextTick` emits no
+ * instruments when the calendar says closed, so a 6.5h US session touches 4
+ * two-hour buckets, not 12. A 14-session, 3-instrument soak is ~168 calls —
+ * ~$3-5 at 3 results, ~$15 at 10 — so ADR-0008's cap does NOT bind the soak.
+ * It binds the LIVE universe: 7 instruments x 4 x 252 sessions is ~$141/yr at
+ * 3 and ~$630/yr at 10.
  *
- * If 3 proves too THIN — 36 posts/instrument/day, where three bot posts can
- * swing an average — the lever is fewer buckets at more results, not more
- * spend. That trade is measured on soak day 1, not guessed at now.
+ * The ceiling is therefore the real guard, and it is a hard clamp rather than
+ * advice: `SAMURAI_X_MAX_RESULTS` is operator input, and an operator who types
+ * 100 should get 10 and a warning, not a blown cap.
+ *
+ * The default of 3 is a conservative STARTING POINT, not a cap-derived
+ * necessity — and on session buckets it is thin: 4 x 3 = 12
+ * posts/instrument/session, below the ~17/ticker/day at which Bluesky was
+ * judged too sparse to carry a signal (#1041). If it proves too thin the lever
+ * is more results per bucket, not more buckets. Measured on soak day 1, not
+ * guessed at now.
  */
 export const DEFAULT_MAX_SEARCH_RESULTS = 3;
 export const MAX_SEARCH_RESULTS_CEILING = 10;

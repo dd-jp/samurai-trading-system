@@ -91,11 +91,12 @@ soak is roughly **$0.50** against a $50 cap.
 > 3-result call measures ~5,300 input tokens and a 10-result call 58,153,
 > against roughly 200 for the recall-only call priced above. Measured, a
 > 10-result call cost **$0.089** — ninety times this line's figure. The soak
-> arithmetic changes with it: 3 instruments x 12 two-hour buckets x 14 days =
-> 504 calls, which is ~$45 at 10 results (over the whole $50 cap on its own,
-> before the debate leg) against roughly $10-15 at the default 3. The cap does
-> not merely bound the retrieval path; it SELECTS its result count. ADR-0020
-> carries the regime.
+> arithmetic changes with it, though less than a first pass suggested: the
+> scheduler emits no instruments outside the session, so a 6.5h US session
+> touches 4 two-hour buckets rather than 12, making the soak 3 instruments x 4
+> x 14 = 168 calls — about $3-5 at the default 3 results and ~$15 at 10. The
+> cap binds the LIVE universe (~$141/yr at 3, ~$630/yr at 10 across 7
+> instruments) rather than the soak. ADR-0020 carries the regime.
 
 **Measured, 2026-08-06: the stage returns `{"items":[]}` on every call, and
 that is the correct behaviour rather than a defect.** The first real exercise of
