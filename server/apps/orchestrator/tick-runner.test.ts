@@ -1226,3 +1226,173 @@ describe('SequentialTickRunner.runInstrument — execution stage error log level
     expect(verdictLines[0]).toMatchObject({ stage: 'verdict', level: 'info' });
   });
 });
+
+/**
+ * The phase split's runner half (#1040): the pass waits for its turn at the
+ * first portfolio READ, and only there.
+ *
+ * That point is not the same on the two paths, and the difference is the whole
+ * point of these tests. On the decision path the head is Analysts + Debate —
+ * the 93-96% of wall time that touches no portfolio state — and the tail opens
+ * at Trader, which sizes against equity. On the tick path the EXIT CHECK is
+ * head too: it skips `snapshotForTick` deliberately, because an exit sizes to
+ * the held quantity and never to equity (#743), so a tick pass that produces
+ * no intent must never take a turn at all. Since ~29 of 30 passes are exactly
+ * that, gating the exit check itself would queue almost every pass behind
+ * every instrument ahead of it for nothing — and would make a flatten wait
+ * behind a full LLM decision pass inside a five-minute window.
+ *
+ * `tick-loop.test.ts` and `phase-split.test.ts` own the other half (that turns
+ * are granted in plan order).
+ */
+describe('SequentialTickRunner.runInstrument — the portfolio-tail turnstile (#1040)', () => {
+  /**
+   * A ctx whose turnstile records when it was entered, relative to the stages.
+   * The recorded array doubles as the COUNT of entries, which is what proves a
+   * null-intent tick pass never takes a turn.
+   */
+  function ctxWithTurnstile(
+    order: string[],
+    overrides: { decision_bar?: TickContext['decision_bar'] } = {},
+  ): TickContext {
+    return {
+      ...makeCtx(overrides),
+      beginPortfolioTail: async () => {
+        order.push('turnstile');
+      },
+    };
+  }
+
+  it('enters the turnstile AFTER the debate and BEFORE the trader on a decision pass', async () => {
+    const order: string[] = [];
+    const intent = makeIntent();
+    const steps = makeSteps({
+      analysts: async () => {
+        order.push('analysts');
+        return [makeView()];
+      },
+      debate: async () => {
+        order.push('debate');
+        return makeDebate();
+      },
+      trader: async () => {
+        order.push('trader');
+        return intent;
+      },
+      risk: async () => {
+        order.push('risk');
+        return approvedRisk(intent);
+      },
+      verdict: async () => {
+        order.push('verdict');
+        return goVerdict(intent);
+      },
+      execution: async () => {
+        order.push('execution');
+        return makeExecutionResult();
+      },
+    });
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctxWithTurnstile(order));
+
+    expect(order).toEqual([
+      'analysts',
+      'debate',
+      'turnstile',
+      'trader',
+      'risk',
+      'verdict',
+      'execution',
+    ]);
+  });
+
+  it('never enters the turnstile on a tick pass with no exit due', async () => {
+    const order: string[] = [];
+    const steps = makeSteps({
+      exitCheck: async () => {
+        order.push('exitCheck');
+        return null;
+      },
+    });
+
+    const outcome = await new SequentialTickRunner(steps).runInstrument(
+      SIGNAL,
+      ctxWithTurnstile(order, { decision_bar: undefined }),
+    );
+
+    // The COMMON case — ~29 of 30 passes. It reads no portfolio state and
+    // writes nothing, so it has no tail to order and must not hold the queue
+    // for the instruments behind it. `toEqual` here is also a count assertion:
+    // 'turnstile' appears zero times.
+    expect(order).toEqual(['exitCheck']);
+    expect(outcome.final_stage).toBe('position_check');
+  });
+
+  it('enters the turnstile after the exit check when the check produces an intent', async () => {
+    const order: string[] = [];
+    const intent = exitIntent('flatten');
+    const steps = makeSteps({
+      exitCheck: async () => {
+        order.push('exitCheck');
+        return intent;
+      },
+      risk: async () => {
+        order.push('risk');
+        return approvedRisk(intent);
+      },
+      verdict: async () => {
+        order.push('verdict');
+        return goVerdict(intent);
+      },
+      execution: async () => {
+        order.push('execution');
+        return makeExecutionResult();
+      },
+    });
+
+    const outcome = await new SequentialTickRunner(steps).runInstrument(
+      SIGNAL,
+      ctxWithTurnstile(order, { decision_bar: undefined }),
+    );
+
+    // The exit check runs OUTSIDE the turn (it reads no portfolio state); the
+    // turn is taken only once an intent exists that will reach Risk, which
+    // does read one.
+    expect(order).toEqual(['exitCheck', 'turnstile', 'risk', 'verdict', 'execution']);
+    expect(outcome.final_stage).toBe('execution');
+  });
+
+  it('takes no turn on a quorum-skipped pass that produces no exit intent', async () => {
+    const order: string[] = [];
+    const steps = makeSteps({
+      analysts: async () => {
+        order.push('analysts');
+        return [];
+      },
+      exitCheck: async () => {
+        order.push('exitCheck');
+        return null;
+      },
+    });
+
+    // #785's path: the quorum skip falls through to the same exit check, and
+    // it inherits the same rule — no intent, no turn.
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctxWithTurnstile(order));
+
+    expect(order).toEqual(['analysts', 'exitCheck']);
+  });
+
+  it('runs the whole pass when no turnstile is supplied (backtest, smoke, control arm)', async () => {
+    // Absent means "run now": a caller with one pass in flight has no siblings
+    // to order against, and every existing caller of `runInstrument` outside
+    // `runTickPlan` is exactly that.
+    const steps = makeSteps();
+    const ctx = makeCtx();
+    expect(ctx.beginPortfolioTail).toBeUndefined();
+
+    const outcome = await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    expect(outcome.final_stage).toBe('execution');
+    expect(steps.execution).toHaveBeenCalledTimes(1);
+  });
+});

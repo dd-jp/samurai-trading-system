@@ -2152,6 +2152,16 @@ function buildMiIngestAgent(deps: {
  * why it is bounded today (no subclass classification on `DEFAULT_UNIVERSE`),
  * and why it stops being bounded once #895's pool arms D5 classification.
  *
+ * **#1040 narrowed that to the CROSS-PASS case, and only that.** The phase
+ * split (`tick-loop.ts`'s `TailSequencer`) makes the portfolio-mutating tail
+ * of one plan run one instrument at a time, in plan order, so two instruments
+ * of the SAME pass can no longer reach Risk against the same pre-trade
+ * snapshot. What it does not close is two overlapping PASSES — the state this
+ * whole section is about, reachable because the interval is re-armed ahead of
+ * the pass (#669) — since each pass carries its own sequencer over its own
+ * plan and the two do not order against each other. #1019's submit-time
+ * reservation ledger is still the fix for that, and remains open.
+ *
  * ## Scheduling
  *
  * The next tick is scheduled when the previous pass STARTS, not when it
@@ -2431,6 +2441,16 @@ export function startTickLoop(deps: {
       // the wrong way round: `runOnce`'s catch covers its own `await` and
       // nothing else, so with the raw chain in this set a pass failing here
       // would reject `Promise.all` and drop the remaining passes on the floor.
+      //
+      // The wait now spans up to W passes serialized behind one another's
+      // portfolio tails (#1040), not W fully-parallel passes. It is still
+      // bounded, but NOT because a tail is cheap: since #957 folded the Risk
+      // Critic into `steps.risk`, a tail contains a live LLM call of its own,
+      // bounded by `DEFAULT_CRITIC_BUDGET_MS` (10s, `risk-manager/critic.ts`)
+      // and by nothing here. So each tail costs that budget plus sub-second
+      // book operations, the head's LLM work is capped by `raceWithTimeout` in
+      // `debate-engine/analyst-response-collector.ts`, and this waits at most
+      // W x (head timeout + critic budget).
       await Promise.all([...passes]);
     },
   };

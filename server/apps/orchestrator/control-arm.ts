@@ -269,6 +269,12 @@ export function buildControlArmStep(deps: ControlArmDeps): ControlArmStep {
         // tick path on the same ticks. Conditional spread under
         // `exactOptionalPropertyTypes`.
         ...(ctx.decision_bar === undefined ? {} : { decision_bar: ctx.decision_bar }),
+        // `beginPortfolioTail` is DELIBERATELY not forwarded (#1040). The
+        // turnstile orders passes that mutate the LIVE book; the control arm
+        // writes to its own shadow book and mutates nothing the live arm reads,
+        // so it needs no turn — and taking one would make the live pass hold
+        // the serial section open across the control pass's whole chain, which
+        // is measurement latency charged to the arm that trades.
       });
     } catch (error) {
       // The measurement must never take down the arm that trades the book. See
