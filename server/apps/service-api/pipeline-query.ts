@@ -62,17 +62,9 @@ export const PIPELINE_LOOKBACK_MS = 15 * 60 * 1_000;
 export const PIPELINE_MAX_LANES = 24;
 
 /**
- * Every `PIPELINE_STAGES` member is a stage the runtime can actually write, as
- * a type-level check rather than a value one (#998).
- *
- * This used to be `RUNTIME_STAGES`, a `Record<TickStage, true>` value that
- * `cellState` looked up at runtime to tell "specced but not built"
- * (`invalidation`) apart from a genuine `skipped` gap. That branch is gone
- * because `PIPELINE_STAGES` no longer carries a member nothing can write — but
- * the property it guarded is still worth pinning: if `PIPELINE_STAGES` ever
- * regrows a stage ahead of the orchestrator's `TickStage` union, THIS line
- * stops compiling, which is the same failure-closed guarantee the value gave,
- * without a live branch that would otherwise go permanently dead.
+ * Every `PIPELINE_STAGES` member must be a stage `TickStage` can actually
+ * write — checked at the type level so a stage `PIPELINE_STAGES` regrows
+ * ahead of the orchestrator's union fails the build, not a `cellState` call.
  */
 type _PipelineStagesAreWritable = PipelineStage extends TickStage ? true : never;
 const _pipelineStagesAreWritable: _PipelineStagesAreWritable = true;
@@ -334,10 +326,7 @@ function cellState(input: {
     return live === null && stage === finalStage && stage !== LAST_STAGE ? 'stopped' : 'done';
   }
   // No row, yet the trace carried on past this stage: a deliberate skip, which
-  // is normal traffic and must not read as a halted pipeline. (This used to
-  // also cover `invalidation`'s permanent gap before the stage was retired
-  // from `PIPELINE_STAGES` — #998; every stage reaching this line now is one
-  // the runtime can genuinely write, per `_PipelineStagesAreWritable` above.)
+  // is normal traffic and must not read as a halted pipeline.
   return index < reachedIndex ? 'skipped' : 'not_reached';
 }
 

@@ -22,23 +22,11 @@ import type { AssetClass } from './primitives.js';
 /**
  * The stages a tick passes through, in pipeline order.
  *
- * **Six stages, and stays six.** `invalidation` was specced between `trader`
- * and `risk` on 2026-08-05 (docs/specs/devils-advocate-spec.md) and, until
- * this array narrowed, declared here at full width so the column would fill
- * in on its own the day the stage shipped — `audit_log.stage` is
- * unconstrained TEXT, so no migration on the read path would have been
- * needed.
- *
- * **That day did not come.** The standalone stage was **declined 2026-09-02**;
- * its typed invalidation-condition mechanism folds into the Risk Critic
- * instead (issue #994). Nothing ever wrote an `invalidation` row and nothing
- * ever will, so the member was retired — narrowed here, and its client render
- * ripple (dashboard room 04, the walk-plan hop count) resolved in the same
- * change (#998).
- *
- * Do not re-widen this array to seven. If issue #994 ever gives the folded
- * invalidation-condition mechanism its own wire-visible stage, that is a new,
- * separate decision to make then — not a restoration of this one.
+ * **Six stages, and stays six.** Every member here is a stage the runtime can
+ * actually write; a proposed `invalidation` stage was declined 2026-09-02
+ * (its mechanism folds into the Risk Critic instead, issue #994) and does not
+ * belong in this array. Do not re-widen it to seven on that mechanism's
+ * account — a wire-visible stage for it would be a new, separate decision.
  */
 export const PIPELINE_STAGES = [
   'analysts',
@@ -57,11 +45,8 @@ export type PipelineStage = (typeof PIPELINE_STAGES)[number];
  * `skipped` and `stopped` are separate on purpose. A skipped stage is normal
  * traffic — a stage reached by a later one in the trace but carrying no row of
  * its own — whereas `stopped` means the tick ended there. Collapsing the two
- * would report routine traffic as a halted pipeline. No current stage
- * produces `skipped` today (the one mechanism that did, `invalidation`, was
- * declined 2026-09-02 — see `PIPELINE_STAGES`); the state stays in this union
- * because `cellState`'s rule is mechanical over any stage index gap, not
- * specific to the stage that used to trigger it.
+ * would report routine traffic as a halted pipeline. `cellState`'s rule is
+ * mechanical over any stage-index gap, not tied to any one stage.
  */
 export type PipelineCellState =
   /** Reached, completed, tick continued past it. */

@@ -82,9 +82,15 @@ export function settleAtExecution(
   let recorded = 0;
   const cells = SETTLED_STAGES.map<PipelineCell>(({ stage, decision }) => {
     if (stage === SKIPPED_ROOM) {
+      // Synthetic: the real tick-runner records sequentially and Verdict
+      // gates Execution, so the runtime can never reach Execution without a
+      // Verdict row. This gap is fabricated purely to give `cellState` a
+      // stage index below the furthest-reached one — the same shape it
+      // produces for a genuine mid-pipeline skip — so Motion rule 6 (a chip
+      // hops over a stage with no row) has something to exercise.
       return {
         stage,
-        state: 'not_reached',
+        state: 'skipped',
         duration_ms: null,
         decision: null,
         recorded_at: null,

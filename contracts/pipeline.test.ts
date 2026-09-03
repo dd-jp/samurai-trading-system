@@ -5,7 +5,6 @@
  * three modules away.
  */
 
-import { describe, expect, it } from 'vitest';
 import { PIPELINE_STAGES } from './pipeline.js';
 
 describe('PIPELINE_STAGES', () => {
