@@ -3044,12 +3044,15 @@ export class SmokeLlmClient implements LlmClient {
  * external ever asserts fires (#388, #364, #562), and step 7 spent its entire
  * life so far in exactly that state (docs/reviews/triage-2026-08-06.md F-5).
  *
- * VERDICT-AGNOSTIC on purpose. `ConstantResponseLlmClient` answers with the
- * debate's fixture payload, which does not satisfy the critic's parser, so the
- * producer fails open and records `unavailable`. That row still proves the
- * producer was wired, dialled, metered and persisted — and asserting the row
- * rather than its content keeps this gate from turning red on an unrelated
- * change to the shared fixture response.
+ * The fold (#994) is asserted too, not just the wiring. `SmokeLlmClient`
+ * answers the `risk_critic` stage — and only that stage — with a `pass` prose
+ * verdict carrying one condition the fixture mark already violates
+ * (`mark < SMOKE_MARK_PRICE + 1`, against a fixture mark of
+ * `SMOKE_MARK_PRICE`). So the gate can assert content without drifting with
+ * the shared debate fixture: the persisted condition must read `breached`,
+ * proving deterministic code measured it rather than trusting the model, and
+ * the decision's binding constraint must be `risk_critic:invalidated`, proving
+ * a measured breach rejects an intent whose prose verdict said `pass`.
  */
 async function runRiskCriticScenario(logger: Logger): Promise<RiskCriticEvidence> {
   const db = openSharedStore(':memory:');
