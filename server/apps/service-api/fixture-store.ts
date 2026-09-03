@@ -39,6 +39,7 @@ import type {
   PipelineActivity,
   PipelineLiveTick,
   PipelineStageEvent,
+  RiskCriticRecord,
   TickStatus,
   VerdictAuditEntry,
 } from './types.js';
@@ -411,6 +412,104 @@ const VERDICT_HISTORY: VerdictAuditEntry[] = [
   },
 ];
 
+/**
+ * Risk decisions with their critic verdicts (#1066), keyed by the same
+ * `(trace_id, instrument)` pairs the verdict history above uses so the drawer
+ * finds one for a trace an operator can actually click.
+ *
+ * Three rows, three different facts, because a fixture store whose job is "the
+ * dashboard runs out of the box" must exercise the branches or they ship
+ * having never been drawn: a decision rejected on a MEASURED breach while the
+ * critic's prose passed, a decision whose conditions were all refused by the
+ * validator, and a row written before #994's fold that carries none at all.
+ */
+const RISK_CRITICS: RiskCriticRecord[] = [
+  {
+    trace_id: 'trace-001',
+    instrument: 'BTC-USD',
+    debate_id: 'debate-btc-001',
+    binding_constraint: 'risk_critic:invalidated',
+    critic: {
+      verdict: 'pass',
+      max_notional: null,
+      reasoning: 'the breakout has volume behind it and the stop sits under structure',
+      conditions: [
+        {
+          condition: {
+            id: 'mark-breaks-back-under-entry',
+            observable: { kind: 'mark' },
+            comparator: '<',
+            threshold: 61_200,
+            rationale: 'a break back under the entry level falsifies the breakout',
+          },
+          state: 'breached',
+          observed: 60_940.5,
+        },
+        {
+          condition: {
+            id: 'participation-thins',
+            observable: {
+              kind: 'bars',
+              window: { timeframe: '5m', lookback: 20 },
+              measure: 'volume_ratio',
+            },
+            comparator: '<',
+            threshold: 0.8,
+            rationale: 'a breakout on thinning volume is not a breakout',
+          },
+          state: 'not_breached',
+          observed: 1.42,
+        },
+        {
+          condition: {
+            id: 'momentum-rolls-over',
+            observable: {
+              kind: 'indicator',
+              spec: { indicator: 'rsi', params: {}, lookback: 14, timeframe: '5m' },
+            },
+            comparator: '<',
+            threshold: 45,
+            rationale: 'momentum leaving falsifies the continuation thesis',
+          },
+          state: 'unevaluable',
+          observed: null,
+        },
+      ],
+      dropped_conditions: [],
+    },
+    created_at: hoursAgo(1.5),
+  },
+  {
+    trace_id: 'trace-002',
+    instrument: 'ETH-USD',
+    debate_id: 'debate-eth-002',
+    binding_constraint: null,
+    critic: {
+      verdict: 'trim',
+      max_notional: 250,
+      reasoning: 'the size is too large for the depth on this tape',
+      conditions: [],
+      dropped_conditions: [
+        { id: 'rsi-over-9000', raw: '{"threshold":9000}', reason: 'threshold_out_of_range' },
+        { id: null, raw: 'sentiment turns negative', reason: 'unknown_observable' },
+      ],
+    },
+    created_at: hoursAgo(3),
+  },
+  {
+    trace_id: 'trace-003',
+    instrument: 'AAPL',
+    debate_id: 'debate-aapl-003',
+    binding_constraint: 'risk_critic:reject',
+    critic: {
+      verdict: 'reject',
+      max_notional: null,
+      reasoning: 'the thesis rests on an earnings move that has already happened',
+    },
+    created_at: hoursAgo(5),
+  },
+];
+
 const ANALYST_WEIGHTS: Record<string, number> = {
   'technical-analyst': 0.4,
   'fundamental-analyst': 0.35,
@@ -723,6 +822,11 @@ export class InMemoryQueryStore implements DashboardQueryStore {
 
   getVerdictHistory(limit: number, _asOf: Date): VerdictAuditEntry[] {
     return VERDICT_HISTORY.slice(0, limit);
+  }
+
+  /** #1066. `limit` is honoured for `getPipelineActivity`'s reason. */
+  getRiskCritics(limit: number, _asOf: Date): RiskCriticRecord[] {
+    return RISK_CRITICS.slice(0, limit).map((record) => ({ ...record }));
   }
 
   getAnalystWeights(_asOf: Date): Record<string, number> {

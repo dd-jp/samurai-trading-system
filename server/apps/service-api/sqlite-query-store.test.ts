@@ -6,11 +6,20 @@
  * tables with no cut-over writer yet (`verdict_log`, `analyst_weights`,
  * `latest_mark`, `current_tick`).
  */
+import { CONTROL_TRACE_SUFFIX } from '../../apps/orchestrator/control-arm.js';
+import { CONTROL_DEBATE_ID_PREFIX } from '../../pipeline/control-arm/index.js';
 import type { AnalystContribution } from '../../pipeline/debate-engine/index.js';
 import { SqliteDebateLogStore } from '../../pipeline/debate-engine/index.js';
 import { SqliteExecutionStore } from '../../pipeline/execution/index.js';
+import type { EvaluatedCondition, RiskCriticVerdict } from '../../pipeline/risk-manager/index.js';
+import { SqliteRiskCriticStore } from '../../pipeline/risk-manager/index.js';
 import type { ClosedTrade, DebateLog, Fill, OpenPosition } from '../../shared/index.js';
-import { openSharedStore, type SharedStore } from '../../shared/store/index.js';
+import {
+  openSharedStore,
+  type SharedStore,
+  SqliteRiskLogStore,
+  SqliteTraderLogStore,
+} from '../../shared/store/index.js';
 import { percentile, SqliteQueryStore } from './sqlite-query-store.js';
 
 const NOW = new Date('2026-07-27T12:00:00Z');
@@ -1158,5 +1167,256 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
 
     expect(activity.events.map((e) => e.trace_id)).toEqual(['real', 'real']);
     expect(activity.events.map((e) => e.stage)).toEqual(['analysts', 'trader']);
+  });
+});
+
+/**
+ * `getRiskCritics` (#1066) — the drawer's invalidation section, joined
+ * server-side from `risk_log` through `trader_log` to `risk_critic_log`.
+ */
+describe('SqliteQueryStore.getRiskCritics', () => {
+  function seedRisk(
+    db: SharedStore,
+    spec: { trace_id: string; instrument: string; binding_constraint: string | null; at: Date },
+  ): void {
+    new SqliteRiskLogStore(db).write({
+      trace_id: spec.trace_id,
+      instrument: spec.instrument,
+      status: spec.binding_constraint === null ? 'approved' : 'rejected',
+      binding_constraint: spec.binding_constraint,
+      reasons: ['seeded'],
+      original_size: 10,
+      final_size: 10,
+      stop_tightened: false,
+      breakers: {
+        portfolio_tripped: false,
+        crypto_tripped: false,
+        stocks_tripped: false,
+        armed_breakers: [],
+      },
+      portfolio: {
+        equity: 1000,
+        drawdown_pct: 0,
+        gross_exposure: 0,
+        consecutive_losses: 0,
+        daily_pnl_portfolio_pct: 0,
+        daily_pnl_crypto_pct: null,
+        daily_pnl_stocks_pct: 0,
+        daily_pnl_unknown_reason: null,
+      },
+      created_at: spec.at,
+    });
+  }
+
+  function seedTrader(
+    db: SharedStore,
+    spec: { trace_id: string; instrument: string; debate_id: string; at: Date },
+  ): void {
+    new SqliteTraderLogStore(db).write({
+      trace_id: spec.trace_id,
+      instrument: spec.instrument,
+      debate_id: spec.debate_id,
+      intent_type: 'entry',
+      exit_reason: null,
+      skip_reason: null,
+      sizing: null,
+      cosine_precedent: null,
+      atr: null,
+      entry: null,
+      stop: null,
+      size: null,
+      created_at: spec.at,
+    });
+  }
+
+  function seedCritic(db: SharedStore, debate_id: string, verdict: RiskCriticVerdict): void {
+    new SqliteRiskCriticStore(db).writeVerdict({ debate_id, verdict, created_at: NOW });
+  }
+
+  const BREACHED_CONDITION: EvaluatedCondition = {
+    condition: {
+      id: 'mark-breaks-entry',
+      observable: { kind: 'mark' },
+      comparator: '<',
+      threshold: 100,
+      rationale: 'a break back under entry falsifies the breakout',
+    },
+    state: 'breached',
+    observed: 98.5,
+  };
+
+  it('joins a decision to the critic verdict of the debate its trader row names', () => {
+    const db = makeDb();
+    seedRisk(db, {
+      trace_id: 'trace-1',
+      instrument: 'AAPL',
+      binding_constraint: 'risk_critic:invalidated',
+      at: NOW,
+    });
+    seedTrader(db, { trace_id: 'trace-1', instrument: 'AAPL', debate_id: 'debate-1', at: NOW });
+    seedCritic(db, 'debate-1', {
+      verdict: 'pass',
+      max_notional: null,
+      reasoning: 'prose says pass',
+      conditions: [BREACHED_CONDITION],
+      dropped_conditions: [{ id: null, raw: 'nonsense', reason: 'unparseable' }],
+    });
+
+    const records = new SqliteQueryStore(db).getRiskCritics(10, NOW);
+
+    expect(records).toHaveLength(1);
+    expect(records[0]?.trace_id).toBe('trace-1');
+    expect(records[0]?.debate_id).toBe('debate-1');
+    expect(records[0]?.binding_constraint).toBe('risk_critic:invalidated');
+    expect(records[0]?.critic?.verdict).toBe('pass');
+    expect(records[0]?.critic?.conditions).toEqual([BREACHED_CONDITION]);
+    expect(records[0]?.critic?.dropped_conditions).toEqual([
+      { id: null, raw: 'nonsense', reason: 'unparseable' },
+    ]);
+  });
+
+  /**
+   * The reason this query is driven by `risk_log` rather than by
+   * `risk_critic_log`: a retried tick mints a fresh `trace_id` but keeps the
+   * content-hashed `debate_id` (migrations 0012/0015), so ONE critic row
+   * belongs to two decisions. Each decision must come back once, carrying that
+   * same verdict — never one decision twice, and never a fanned-out row.
+   */
+  it('returns one row per decision when two traces share a debate', () => {
+    const db = makeDb();
+    for (const trace_id of ['trace-first', 'trace-retry']) {
+      seedRisk(db, { trace_id, instrument: 'AAPL', binding_constraint: null, at: NOW });
+      seedTrader(db, { trace_id, instrument: 'AAPL', debate_id: 'debate-shared', at: NOW });
+    }
+    seedCritic(db, 'debate-shared', {
+      verdict: 'trim',
+      max_notional: 250,
+      reasoning: 'too big',
+      conditions: [BREACHED_CONDITION],
+    });
+
+    const records = new SqliteQueryStore(db).getRiskCritics(10, NOW);
+
+    expect(records).toHaveLength(2);
+    expect(new Set(records.map((r) => r.trace_id))).toEqual(
+      new Set(['trace-first', 'trace-retry']),
+    );
+    expect(records.every((r) => r.critic?.verdict === 'trim')).toBe(true);
+  });
+
+  /**
+   * A row written before #994's fold has no `conditions_json` at all
+   * (migration 0040 backfilled nothing). It must read back as a verdict with
+   * no conditions — not as an empty list, which would claim the critic emitted
+   * some and the validator refused them all — and must not throw.
+   */
+  it('reads a pre-fold critic row as a verdict carrying no conditions', () => {
+    const db = makeDb();
+    seedRisk(db, { trace_id: 'trace-old', instrument: 'AAPL', binding_constraint: null, at: NOW });
+    seedTrader(db, { trace_id: 'trace-old', instrument: 'AAPL', debate_id: 'debate-old', at: NOW });
+    db.prepare(
+      `INSERT INTO risk_critic_log (debate_id, verdict, max_notional, reasoning, created_at)
+       VALUES ('debate-old', 'pass', NULL, 'written before the fold', '2026-07-27T12:00:00.000Z')`,
+    ).run();
+
+    const records = new SqliteQueryStore(db).getRiskCritics(10, NOW);
+
+    expect(records[0]?.critic?.verdict).toBe('pass');
+    expect(records[0]?.critic?.conditions).toBeUndefined();
+    expect(records[0]?.critic?.dropped_conditions).toBeUndefined();
+  });
+
+  it('reports a decision with no trader row, and one with no critic row, as having no verdict', () => {
+    const db = makeDb();
+    seedRisk(db, {
+      trace_id: 'trace-no-trader',
+      instrument: 'AAPL',
+      binding_constraint: 'per_asset_class_cap',
+      at: NOW,
+    });
+    seedRisk(db, {
+      trace_id: 'trace-no-critic',
+      instrument: 'TSLA',
+      binding_constraint: null,
+      at: NOW,
+    });
+    seedTrader(db, {
+      trace_id: 'trace-no-critic',
+      instrument: 'TSLA',
+      debate_id: 'debate-uncriticised',
+      at: NOW,
+    });
+
+    const byTrace = new Map(
+      new SqliteQueryStore(db).getRiskCritics(10, NOW).map((record) => [record.trace_id, record]),
+    );
+
+    expect(byTrace.get('trace-no-trader')?.debate_id).toBeNull();
+    expect(byTrace.get('trace-no-trader')?.critic).toBeUndefined();
+    expect(byTrace.get('trace-no-critic')?.debate_id).toBe('debate-uncriticised');
+    expect(byTrace.get('trace-no-critic')?.critic).toBeUndefined();
+  });
+
+  /**
+   * Falsifier arm 2's decisions are excluded, like every other read on this
+   * store (#753): the control arm calls no model, so its rows carry no critic
+   * verdict, and letting them fill this bounded window would starve the live
+   * arm's decisions of it.
+   */
+  it('excludes control-arm decisions', () => {
+    const db = makeDb();
+    seedRisk(db, {
+      trace_id: `trace-1${CONTROL_TRACE_SUFFIX}`,
+      instrument: 'AAPL',
+      binding_constraint: null,
+      at: NOW,
+    });
+    seedTrader(db, {
+      trace_id: `trace-1${CONTROL_TRACE_SUFFIX}`,
+      instrument: 'AAPL',
+      debate_id: `${CONTROL_DEBATE_ID_PREFIX}abc`,
+      at: NOW,
+    });
+    // A control decision with NO trader row: the `debate_id` test cannot see
+    // this one at all (the join yields NULL), so only the `trace_id` suffix on
+    // the driving table keeps it out.
+    seedRisk(db, {
+      trace_id: `trace-2${CONTROL_TRACE_SUFFIX}`,
+      instrument: 'AAPL',
+      binding_constraint: null,
+      at: NOW,
+    });
+    seedRisk(db, { trace_id: 'trace-1', instrument: 'AAPL', binding_constraint: null, at: NOW });
+    seedTrader(db, { trace_id: 'trace-1', instrument: 'AAPL', debate_id: 'debate-live', at: NOW });
+
+    const records = new SqliteQueryStore(db).getRiskCritics(10, NOW);
+
+    expect(records.map((record) => record.trace_id)).toEqual(['trace-1']);
+  });
+
+  it('returns the most recent decisions first, bounded by the limit and by asOf', () => {
+    const db = makeDb();
+    const at = (minutes: number) => new Date(NOW.getTime() - minutes * 60_000);
+    seedRisk(db, { trace_id: 'oldest', instrument: 'AAPL', binding_constraint: null, at: at(30) });
+    seedRisk(db, { trace_id: 'middle', instrument: 'AAPL', binding_constraint: null, at: at(20) });
+    seedRisk(db, { trace_id: 'newest', instrument: 'AAPL', binding_constraint: null, at: at(10) });
+    seedRisk(db, {
+      trace_id: 'after-asof',
+      instrument: 'AAPL',
+      binding_constraint: null,
+      at: new Date(NOW.getTime() + 60_000),
+    });
+
+    const store = new SqliteQueryStore(db);
+
+    expect(store.getRiskCritics(10, NOW).map((record) => record.trace_id)).toEqual([
+      'newest',
+      'middle',
+      'oldest',
+    ]);
+    expect(store.getRiskCritics(2, NOW).map((record) => record.trace_id)).toEqual([
+      'newest',
+      'middle',
+    ]);
   });
 });

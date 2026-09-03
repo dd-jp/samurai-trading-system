@@ -965,6 +965,23 @@ main {
   color: var(--muted);
 }
 
+/*
+  Invalidation condition states (#1066). `unevaluable` is muted, NOT alarmed:
+  a failed read carries no enforcement effect, and colouring it like a breach
+  would report a data gap as a falsified thesis.
+*/
+.condition-breached {
+  color: var(--vermilion);
+}
+
+.condition-not_breached {
+  color: var(--go);
+}
+
+.condition-unevaluable {
+  color: var(--muted);
+}
+
 /* ----------------------------------------------------------- stance strips */
 
 .stance-list,

@@ -29,6 +29,10 @@
  */
 
 import { PIPELINE_STAGES, type PipelineStage } from '../../../contracts/pipeline.js';
+import {
+  CONTROL_DEBATE_ID_PREFIX,
+  CONTROL_TRACE_SUFFIX,
+} from '../../pipeline/control-arm/index.js';
 import type { AnalystContribution, Direction } from '../../pipeline/debate-engine/index.js';
 import type { ArmComparisonSample } from '../../pipeline/feedback-loop/index.js';
 import {
@@ -38,6 +42,7 @@ import {
   SqliteOutsideBenchmarkSampleStore,
 } from '../../pipeline/feedback-loop/index.js';
 import type { OutsideBenchmarkSample } from '../../pipeline/outside-benchmark/index.js';
+import { SqliteRiskCriticStore } from '../../pipeline/risk-manager/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
 import type { ClosedTrade, DebateLog, Fill, OpenPosition, OrderState } from '../../shared/index.js';
 import {
@@ -57,6 +62,7 @@ import type {
   PipelineActivity,
   PipelineLiveTick,
   PipelineStageEvent,
+  RiskCriticRecord,
   TickStatus,
   VerdictAuditEntry,
 } from './types.js';
@@ -101,6 +107,19 @@ interface VerdictLogRow {
   no_go_reason: string | null;
   hitl_override: number;
   timestamp: string;
+}
+
+/**
+ * One `risk_log` row with the `debate_id` its `trader_log` twin recorded
+ * (#1066). `debate_id` is NULL when the trace has no `trader_log` row — a
+ * decision reached on a path that wrote none, or a row predating that table.
+ */
+interface RiskDecisionJoinRow {
+  trace_id: string;
+  instrument: string;
+  binding_constraint: string | null;
+  created_at: string;
+  debate_id: string | null;
 }
 
 interface AnalystWeightRow {
@@ -245,6 +264,8 @@ export class SqliteQueryStore implements DashboardQueryStore {
   /** #971: the Feedback Loop's own sample store, read (never written) here. */
   private readonly armComparisons: SqliteArmComparisonSampleStore;
   private readonly outsideBenchmarks: SqliteOutsideBenchmarkSampleStore;
+  /** #1066: the Risk Manager's own critic log, read (never written) here. */
+  private readonly critics: SqliteRiskCriticStore;
 
   constructor(
     private readonly db: SharedStore,
@@ -252,6 +273,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
   ) {
     this.armComparisons = new SqliteArmComparisonSampleStore(db);
     this.outsideBenchmarks = new SqliteOutsideBenchmarkSampleStore(db);
+    this.critics = new SqliteRiskCriticStore(db);
   }
 
   /**
@@ -336,6 +358,82 @@ export class SqliteQueryStore implements DashboardQueryStore {
       .prepare(`SELECT * FROM verdict_log WHERE timestamp <= ? ORDER BY timestamp DESC LIMIT ?`)
       .all(toStoredTimestamp(asOf), limit) as VerdictLogRow[];
     return rows.map(fromVerdictLogRow);
+  }
+
+  /**
+   * The drawer's invalidation section (#1066): recent Risk decisions, each
+   * with the critic verdict it was reached with.
+   *
+   * ## Why `risk_log` drives the query
+   *
+   * The drawer holds a `(trace_id, instrument)` pair, which is exactly
+   * `risk_log`'s primary key. Driving from `risk_critic_log` instead would key
+   * the result by `debate_id` — and a retried tick mints a fresh `trace_id`
+   * while keeping its content-hashed `debate_id` (migrations 0012/0015), so
+   * one critic row can belong to two traces and the join would fan out. Both
+   * joins below are onto primary keys (`trader_log` on the same pair,
+   * `risk_critic_log` on `debate_id`), so exactly one row comes back per
+   * decision.
+   *
+   * ## LIVE arm only, like every other read here
+   *
+   * Falsifier arm 2 writes its own `risk_log`/`trader_log` rows under the
+   * `control:` `debate_id` namespace (`CONTROL_DEBATE_ID_PREFIX`) and under a
+   * `trace_id` carrying `CONTROL_TRACE_SUFFIX`, which is what makes them
+   * separable without a schema change. Both are tested, and the `trace_id` one
+   * is the load-bearing test: it sits on the driving table's own non-nullable
+   * key, so a control decision whose Trader row is missing is still excluded,
+   * where the `debate_id` test alone would let it through on the NULL branch.
+   * They are excluded here:
+   * the control arm calls no model, so its decisions carry no critic verdict
+   * and no conditions, and letting them fill this bounded window would starve
+   * the live arm's decisions of it.
+   *
+   * ## The per-row critic read
+   *
+   * `SqliteRiskCriticStore.getByDebateId` rather than a fourth JOIN and a
+   * second copy of the JSON reading: that store owns the tightened shape check
+   * and the pre-fold/corrupt-column fallbacks (#1068), and a hand-written
+   * `JSON.parse` here would be a second, laxer reader of the same two columns.
+   * At most `limit` reads, once per dashboard HTTP request rather than per
+   * tick. It is constructed with NO logger deliberately — the store WARNs once
+   * per malformed row, and this query runs on a 3-second poll, so the
+   * orchestrator's own read is where that belongs, not the dashboard's.
+   */
+  getRiskCritics(limit: number, asOf: Date): RiskCriticRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT risk_log.trace_id AS trace_id,
+                risk_log.instrument AS instrument,
+                risk_log.binding_constraint AS binding_constraint,
+                risk_log.created_at AS created_at,
+                trader_log.debate_id AS debate_id
+           FROM risk_log
+           LEFT JOIN trader_log
+             ON trader_log.trace_id = risk_log.trace_id
+            AND trader_log.instrument = risk_log.instrument
+          WHERE risk_log.created_at <= ?
+            AND risk_log.trace_id NOT LIKE ?
+            AND (trader_log.debate_id IS NULL OR trader_log.debate_id NOT LIKE ?)
+          ORDER BY risk_log.created_at DESC
+          LIMIT ?`,
+      )
+      .all(
+        toStoredTimestamp(asOf),
+        `%${CONTROL_TRACE_SUFFIX}`,
+        `${CONTROL_DEBATE_ID_PREFIX}%`,
+        limit,
+      ) as RiskDecisionJoinRow[];
+
+    return rows.map((row) => ({
+      trace_id: row.trace_id,
+      instrument: row.instrument,
+      debate_id: row.debate_id,
+      binding_constraint: row.binding_constraint,
+      critic:
+        row.debate_id === null ? undefined : this.critics.getByDebateId(row.debate_id)?.verdict,
+      created_at: fromStoredTimestamp(row.created_at),
+    }));
   }
 
   getAnalystWeights(asOf: Date): Record<string, number> {

@@ -13,6 +13,10 @@
  */
 import type { AnalystContribution, Direction } from '../../pipeline/debate-engine/index.js';
 import { OUTSIDE_BENCHMARKS } from '../../pipeline/outside-benchmark/index.js';
+import type {
+  EvaluatedCondition,
+  InvalidationObservable,
+} from '../../pipeline/risk-manager/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
 import type { ClosedTrade, Fill, OpenPosition } from '../../shared/index.js';
 import type { StoreMode } from '../../shared/store/index.js';
@@ -23,9 +27,12 @@ import type {
   ClosedTradeRow,
   DashboardQueryStore,
   DashboardSnapshot,
+  EvaluatedConditionWire,
   FillRow,
   OutsideBenchmarkRow,
   PositionRow,
+  RiskCriticRecord,
+  RiskCriticRow,
 } from './types.js';
 
 /** Matches the CLI views' default recent-history window; no config surface yet. */
@@ -33,6 +40,22 @@ const RECENT_DEBATES_LIMIT = 10;
 const RECENT_VERDICTS_LIMIT = 10;
 /** #940: same window size as the other recent-history lists above. */
 const RECENT_CLOSED_TRADES_LIMIT = 10;
+/**
+ * #1066: the same fixed window again, for the same reason — this rides the
+ * 3-second poll and must never grow with the decision history. The drawer
+ * shows ONE decision at a time and says so when the trace it is showing is
+ * older than this window, rather than substituting a newer one.
+ *
+ * Sized to the client's verdict ledger (`LEDGER_CAP`, 30) rather than to the
+ * ten-row lists above: the ledger accumulates chips across polls, so a
+ * flat-by-close burst can leave a still-selectable chip whose decision fell out
+ * of a narrower window — the drawer would then report "no Risk decision" for a
+ * trace visibly on screen. The cost of the wider window is bounded: each row
+ * costs one primary-key read of `risk_critic_log`. The two constants cannot be
+ * shared (neither runtime imports the other), so this one is deliberately a
+ * duplicate of that cap, not a coincidence.
+ */
+const RECENT_RISK_CRITICS_LIMIT = 30;
 /**
  * #971: how many Feedback Loop cycles the comparison panel plots. Same
  * fixed-window posture as the lists above; at FL's daily cadence this is a
@@ -76,6 +99,76 @@ function stanceDuringDebate(
   const stances = contribution.stance_during_debate;
   if (!Array.isArray(stances) || !stances.every(isDirection)) return {};
   return { stance_during_debate: stances };
+}
+
+/**
+ * What a condition measured, as one label (#1066).
+ *
+ * The same `kind:name` vocabulary `invalidationReasons` writes onto
+ * `RiskDecision.reasons`, so a drawer row and an audit line name the same
+ * observable — with the timeframe appended, which the reason line leaves to
+ * the id and the drawer has room for. Projected HERE rather than on the wire
+ * because `InvalidationObservable` nests `IndicatorSpec` and `BarWindow`, and
+ * duplicating two server types into `contracts/` to rebuild one string in the
+ * browser would put this vocabulary in two places and let them drift.
+ */
+function observableLabel(observable: InvalidationObservable): string {
+  switch (observable.kind) {
+    case 'mark':
+      return 'mark';
+    case 'indicator':
+      return `indicator:${observable.spec.indicator}@${observable.spec.timeframe}`;
+    case 'bars':
+      return `bars:${observable.measure}@${observable.window.timeframe}`;
+  }
+}
+
+/**
+ * One measured condition, flattened. `observed` is carried across untouched —
+ * `null` is "the read failed", and substituting a 0 would report a
+ * measurement that never happened.
+ */
+function conditionRow(evaluated: EvaluatedCondition): EvaluatedConditionWire {
+  return {
+    id: evaluated.condition.id,
+    observable: observableLabel(evaluated.condition.observable),
+    comparator: evaluated.condition.comparator,
+    threshold: evaluated.condition.threshold,
+    state: evaluated.state,
+    observed: evaluated.observed,
+    rationale: evaluated.condition.rationale,
+  };
+}
+
+/**
+ * The critic's optional lists, projected as `null` when absent.
+ *
+ * `undefined` would be dropped by `JSON.stringify`, so "the row carries no
+ * conditions" and "the field was never projected" would reach the browser as
+ * the same bytes. A pre-fold row (migration 0040 backfilled nothing) takes
+ * this path, and so does a post-fold verdict whose conditions half was absent
+ * — which is correct: both are the one `no_conditions` state (#997 Q3).
+ */
+function nullableList<T, U>(list: readonly T[] | undefined, project: (item: T) => U): U[] | null {
+  return list === undefined ? null : list.map(project);
+}
+
+function riskCriticRow(record: RiskCriticRecord): RiskCriticRow {
+  const critic = record.critic;
+  return {
+    trace_id: record.trace_id,
+    instrument: record.instrument,
+    debate_id: record.debate_id,
+    binding_constraint: record.binding_constraint,
+    critic_verdict: critic?.verdict ?? null,
+    reasoning: critic?.reasoning ?? null,
+    conditions: critic === undefined ? null : nullableList(critic.conditions, conditionRow),
+    dropped_conditions:
+      critic === undefined
+        ? null
+        : nullableList(critic.dropped_conditions, (dropped) => ({ ...dropped })),
+    created_at: record.created_at.toISOString(),
+  };
 }
 
 /**
@@ -209,6 +302,12 @@ export function buildSnapshot(
     timestamp: v.timestamp.toISOString(),
   }));
 
+  // #1066: the Risk decisions the drawer's invalidation section reads, with
+  // their critic verdicts and measured conditions already joined by the store.
+  const risk_critics = store
+    .getRiskCritics(RECENT_RISK_CRITICS_LIMIT, asOf)
+    .map<RiskCriticRow>(riskCriticRow);
+
   const weights = store.getAnalystWeights(asOf);
   const attribution = store.getAttribution(asOf);
   const analysts = Object.keys(weights).map((analyst_id) => ({
@@ -319,6 +418,7 @@ export function buildSnapshot(
     fills,
     debates,
     verdicts,
+    risk_critics,
     analysts,
     metrics,
     arm_comparison,

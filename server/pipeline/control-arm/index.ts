@@ -20,6 +20,7 @@ export {
 export {
   AXIS_VOTE_ANALYST_TYPE,
   CONTROL_DEBATE_ID_PREFIX,
+  CONTROL_TRACE_SUFFIX,
   controlArmDecision,
 } from './axis-vote-decision.js';
 export {

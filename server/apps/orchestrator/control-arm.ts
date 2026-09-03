@@ -78,13 +78,19 @@
  */
 
 import type { Signal } from '../../pipeline/analysts/index.js';
-import { CONTROL_DEBATE_ID_PREFIX, controlArmDecision } from '../../pipeline/control-arm/index.js';
+import {
+  CONTROL_DEBATE_ID_PREFIX,
+  CONTROL_TRACE_SUFFIX,
+  controlArmDecision,
+} from '../../pipeline/control-arm/index.js';
 import type { AnalystView, DebateResult } from '../../pipeline/debate-engine/index.js';
 import type { Logger } from '../../shared/index.js';
 import type { CurrentTick, CurrentTickStore, TickContext, TickRunner, TickSteps } from './types.js';
 
-/** The `trace_id` suffix every control-arm pass runs under. */
-export const CONTROL_TRACE_SUFFIX = ':control';
+// Re-exported from its definition in `pipeline/control-arm`, where it sits
+// beside the debate-id prefix: this module applies it, but the readers that
+// exclude the control arm must not import the orchestrator to get it.
+export { CONTROL_TRACE_SUFFIX };
 
 /**
  * The live pass's `AnalystView[]`, handed to the control arm's `analysts` step.
