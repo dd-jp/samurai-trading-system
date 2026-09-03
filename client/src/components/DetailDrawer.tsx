@@ -231,12 +231,16 @@ export function DetailDrawer(props: DetailDrawerProps) {
 
           {/*
             The reserved invalidation section (spec, "Information Inventory":
-            required, not optional, and not yet buildable). `invalidation_log`
-            does not exist in the codebase — the standalone stage was declined
-            2026-09-02 and its mechanism folds into the Risk Critic instead
-            (#994) — so this names the reason rather than rendering nothing or
-            inventing a field. Reserving the slot now means the layout does
-            not move the day the data arrives.
+            required, not optional). Restated 2026-09-03 after #994's fold:
+            there is no `invalidation_log` and never will be — the standalone
+            stage was declined 2026-09-02 and its mechanism folds into the
+            Risk Critic instead. Conditions now ride `RiskCriticVerdict.
+            conditions` / `dropped_conditions`, persisted on `risk_critic_log`
+            via migration 0040, so the data exists; nothing yet reads it onto
+            the dashboard wire or renders it here (#1066 — do not implement
+            rendering as part of an unrelated change). This names the reason
+            rather than rendering nothing or inventing a field. Reserving the
+            slot now means the layout does not move the day the wiring lands.
           */}
           <h3 className="drawer-section">Invalidation</h3>
           <p className="empty-state" data-section="invalidation">
