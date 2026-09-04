@@ -67,7 +67,7 @@
  * update objects are never logged for the same reason.
  */
 import type { Logger, RetryConfig } from '../../../../shared/index.js';
-import { fetchWithTimeout, withRetry } from '../../../../shared/index.js';
+import { currentTraceId, fetchWithTimeout, withRetry } from '../../../../shared/index.js';
 import type { ApprovalButtonTarget, ApprovalCallback, TelegramClient } from '../types.js';
 import { parseOptionalAllowedUserIds } from './allowlist.js';
 import { CorrelationTokenStore, tokenLogPrefix } from './correlation-tokens.js';
@@ -120,7 +120,8 @@ export const TELEGRAM_MAX_MESSAGE_CHARS = 4096;
  * log — `#capForWire` is the only caller and logs it before truncating, so a
  * truncated alert never becomes a lost record. The suffix names the original
  * length, so a reader knows to go to the log rather than assuming the alert
- * is all there was.
+ * is all there was. Nothing bridges log output back into an alert channel, so
+ * that warn cannot re-enter this transport.
  */
 export function capOutboundText(text: string): string {
   if (text.length <= TELEGRAM_MAX_MESSAGE_CHARS) return text;
@@ -283,9 +284,10 @@ export class TelegramBotApiClient implements TelegramClient {
     if (capped === text) return text;
     this.#log(
       'warn',
-      `telegram: outbound body is ${text.length} chars, over the ` +
-        `${TELEGRAM_MAX_MESSAGE_CHARS}-char limit; the wire got a truncated alert and the ` +
-        `full body follows — ${text}`,
+      `telegram_body_truncated: outbound body is ${text.length} chars, over the ` +
+        `${TELEGRAM_MAX_MESSAGE_CHARS}-char limit; the wire got a truncated alert and ` +
+        'the full body is in the payload',
+      { event: 'telegram_body_truncated', chars: text.length, body: text },
     );
     return capped;
   }
@@ -641,9 +643,15 @@ export class TelegramBotApiClient implements TelegramClient {
     });
   }
 
-  #log(level: 'info' | 'warn' | 'error', message: string): void {
+  #log(level: 'info' | 'warn' | 'error', message: string, payload?: unknown): void {
     if (this.#logger !== undefined) {
-      this.#logger.log({ trace_id: '', stage: AUDIT_STAGE, level, message });
+      this.#logger.log({
+        trace_id: currentTraceId() ?? '',
+        stage: AUDIT_STAGE,
+        level,
+        message,
+        ...(payload === undefined ? {} : { payload }),
+      });
       return;
     }
     if (level !== 'info') {

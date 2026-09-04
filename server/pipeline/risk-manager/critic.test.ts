@@ -17,6 +17,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MarketDataService } from '../../providers/market-data-service/index.js';
 import type { Logger, OrderIntent } from '../../shared/index.js';
+import { runWithTraceId } from '../../shared/index.js';
 import { openSharedStore, type SharedStore } from '../../shared/store/index.js';
 import type {
   AnthropicMessageRequest,
@@ -150,13 +151,18 @@ function fakeLlm(text: string): { client: LlmClient; calls: () => number } {
 
 function collectingLogger(): {
   logger: Logger;
-  entries: { level: string; message: string; payload?: unknown }[];
+  entries: { trace_id: string; level: string; message: string; payload?: unknown }[];
 } {
-  const entries: { level: string; message: string; payload?: unknown }[] = [];
+  const entries: { trace_id: string; level: string; message: string; payload?: unknown }[] = [];
   return {
     logger: {
       log: (entry) =>
-        entries.push({ level: entry.level, message: entry.message, payload: entry.payload }),
+        entries.push({
+          trace_id: entry.trace_id,
+          level: entry.level,
+          message: entry.message,
+          payload: entry.payload,
+        }),
     },
     entries,
   };
@@ -889,6 +895,35 @@ describe('SqliteRiskCriticStore', () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]?.level).toBe('warn');
     expect(entries[0]?.payload).toEqual({ debate_id: DEBATE_ID, reason: 'unparseable_json' });
+  });
+
+  it('attributes a malformed-row WARN to the enclosing tick when the Risk stage is reading', () => {
+    db.prepare(
+      `INSERT INTO risk_critic_log
+         (debate_id, verdict, max_notional, reasoning, created_at, conditions_json)
+       VALUES (?, 'pass', NULL, 'garbled', ?, '{not json')`,
+    ).run(DEBATE_ID, NOW.toISOString());
+
+    const { logger, entries } = collectingLogger();
+    runWithTraceId('tick-42', () => {
+      new SqliteRiskCriticStore(db, logger).getByDebateId(DEBATE_ID);
+    });
+
+    expect(entries[0]?.trace_id).toBe('tick-42');
+    expect(entries[0]?.payload).toEqual({ debate_id: DEBATE_ID, reason: 'unparseable_json' });
+  });
+
+  it('falls back to the debate_id when the reader is not a tick (dashboard, feedback loop)', () => {
+    db.prepare(
+      `INSERT INTO risk_critic_log
+         (debate_id, verdict, max_notional, reasoning, created_at, conditions_json)
+       VALUES (?, 'pass', NULL, 'garbled', ?, '{not json')`,
+    ).run(DEBATE_ID, NOW.toISOString());
+
+    const { logger, entries } = collectingLogger();
+    new SqliteRiskCriticStore(db, logger).getByDebateId(DEBATE_ID);
+
+    expect(entries[0]?.trace_id).toBe(DEBATE_ID);
   });
 
   it('logs a WARN naming the reason when conditions_json parses to a non-array payload (#1068)', () => {

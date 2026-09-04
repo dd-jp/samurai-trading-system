@@ -776,10 +776,14 @@ describe('outbound message cap (Telegram 4096)', () => {
 
     await client.sendMessage(CHAT_ID, `head ${tail}`);
 
-    const logged = entries.filter((entry) => entry.message.includes('outbound body'));
+    const logged = entries.filter((entry) => entry.message.startsWith('telegram_body_truncated'));
     expect(logged).toHaveLength(1);
     expect(logged[0]?.level).toBe('warn');
-    expect(logged[0]?.message).toContain(tail);
+    expect(logged[0]?.payload).toEqual({
+      event: 'telegram_body_truncated',
+      chars: `head ${tail}`.length,
+      body: `head ${tail}`,
+    });
   });
 
   it('logs nothing extra when the body already fits', async () => {
@@ -788,7 +792,9 @@ describe('outbound message cap (Telegram 4096)', () => {
 
     await client.sendMessage(CHAT_ID, 'Samurai heartbeat: 4 instruments, 0 open positions.');
 
-    expect(entries.filter((entry) => entry.message.includes('outbound body'))).toEqual([]);
+    expect(entries.filter((entry) => entry.message.startsWith('telegram_body_truncated'))).toEqual(
+      [],
+    );
   });
 });
 
