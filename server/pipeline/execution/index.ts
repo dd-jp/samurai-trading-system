@@ -87,6 +87,7 @@ export type {
   NativeBracketRequest,
   NormalizedFill,
   NormalizedOrder,
+  NormalizedPosition,
   ReconcileDivergence,
   ReconcileReport,
   ResidualProtectionSweepResult,

@@ -16,11 +16,17 @@
  * surface at all.
  *
  * `smoke-run.ts` deliberately does NOT cover this (see its own comment at
- * the `filledZeroSizeThrottle:` line): reproducing the wedge there means
- * reintroducing, in a fixture, the exact `SimulatedBrokerAdapter` defect
- * #1087 fixed at the source. This file is the documented substitute the
- * review asked for — option (b): a mutation-verified composition-root wiring
- * test, run through `buildProductionComponents`/`buildExecutionSurface`
+ * the `filledZeroSizeThrottle:` line). Not because the wedge is
+ * unconstructible post-fix — this file's own `WedgingBroker` constructs it
+ * store-side, without touching `SimulatedBrokerAdapter` at all, proving the
+ * opposite. The reason is structural: smoke's exit-path harness wires a
+ * single `innerBroker` (`SimulatedBrokerAdapter`) through the one composition
+ * root it drives; putting a wedged lot through that gate needs a second
+ * broker/harness surface smoke doesn't have today, not a fixture that
+ * reintroduces the fixed defect. That's deferred fixture work, tracked as a
+ * PR follow-up; this file is the documented substitute the review asked
+ * for now — option (b): a mutation-verified composition-root wiring test,
+ * run through `buildProductionComponents`/`buildExecutionSurface`
  * (production.ts, direct-bind.ts) rather than through the smoke gate.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -31,9 +37,9 @@ import type {
   SharedStore as ExecutionSharedStore,
   NormalizedFill,
   NormalizedOrder,
+  NormalizedPosition,
 } from '../../../pipeline/execution/index.js';
 import { FILLED_WITH_ZERO_SIZE } from '../../../pipeline/execution/ingest-fills.js';
-import type { NormalizedPosition } from '../../../pipeline/execution/types.js';
 import { DEFAULT_TRADER_CONFIG } from '../../../pipeline/trader/index.js';
 import type { Logger, OpenPosition } from '../../../shared/index.js';
 import { SimulatedClock } from '../../../shared/index.js';
@@ -205,18 +211,22 @@ describe('the FILLED_WITH_ZERO_SIZE throttle is wired through the real compositi
   });
 
   /**
-   * THE MUTATION THIS KILLS: drop `filledZeroSizeThrottle: new
-   * FilledZeroSizeThrottle()` from `executionDeps` in `production.ts` (or
-   * omit `filledZeroSizeThrottle: deps.filledZeroSizeThrottle,` from either
-   * `new ExecutionImpl({...})` call in `direct-bind.ts`) and pass an
-   * always-fresh throttle at the `ingestFills()` call site instead. Every
-   * unit test in `ingest-fills.test.ts` and `filled-zero-size-throttle.test.ts`
-   * still passes — they build one `ExecutionInput` by hand and drive it
-   * directly, never touching `buildExecutionSurface`. Only a test that goes
-   * through the REAL root and builds two surfaces off the SAME
-   * `executionDeps` — exactly what production does when it builds
-   * `fillSyncExecution` once at startup and polls it forever — can see a
-   * throttle that quietly stopped being shared.
+   * THE MUTATION THIS KILLS (verified by hand, not just asserted): change
+   * `buildExecutionSurface` in `direct-bind.ts` to construct
+   * `new FilledZeroSizeThrottle()` fresh on every call instead of passing
+   * through `deps.filledZeroSizeThrottle`. Dropping the field entirely is
+   * a `tsc` error (it's required on `ExecutionStepDeps`) — this is the
+   * mutation that survives typecheck and still breaks the shared-instance
+   * property. Every unit test in `ingest-fills.test.ts` and
+   * `filled-zero-size-throttle.test.ts` still passes under it — they build
+   * one `ExecutionInput` by hand and drive it directly, never touching
+   * `buildExecutionSurface`. Only a test that goes through the REAL root and
+   * builds two surfaces off the SAME `executionDeps` — exactly what
+   * production does when it builds `fillSyncExecution` once at startup and
+   * polls it forever — can see a throttle that quietly stopped being shared.
+   * Applying that exact mutation locally: this test goes red at
+   * `consecutive: 1` on `surfaceB`'s first poll (a fresh count, not a
+   * continuation of `surfaceA`'s streak); reverting restores green.
    */
   it('shares one throttle across every surface built from the same executionDeps, so the warning reaches the root logger throttled', async () => {
     const logger = recordingLogger();

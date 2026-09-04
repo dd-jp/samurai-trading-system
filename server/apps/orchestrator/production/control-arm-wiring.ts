@@ -178,10 +178,14 @@ export function buildControlArmWiring(deps: ControlArmWiringDeps): ControlArmWir
     marketData: deps.marketData,
     config: deps.executionConfig,
     logger: deps.logger,
-    // #1087: an OWN throttle, not the spread-in live arm's — the two arms
-    // poll independently (`fillSyncExecution` below is this arm's, distinct
-    // from the live root's) and must not share, or leak into, each other's
-    // per-lot wedge state. Same reasoning as `broker`/`store`/`costModel`/
+    // #1087: an OWN throttle, not the spread-in live arm's. The Map is keyed
+    // by `idempotency_key`, and `arm` is itself an input to that key (#753,
+    // `computeIdempotencyKey`), so live/control keys never collide even if
+    // one instance were shared — this isn't guarding against cross-arm
+    // leakage. It's process-scoped state matching the live root's own
+    // instance lifetime: this arm gets its own `Execution` built fresh here
+    // (`fillSyncExecution` below is distinct from the live root's), so it
+    // gets its own throttle too, same as `broker`/`store`/`costModel`/
     // `marketData`/`config` above.
     filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
   };
