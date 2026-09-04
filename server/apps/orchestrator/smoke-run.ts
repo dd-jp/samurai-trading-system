@@ -2196,7 +2196,14 @@ export interface SmokeObservations {
    * invisible to every other check in this file: the tick's `audit_log` line
    * says `debate: bullish` whether or not a row was ever written.
    */
-  debates: { debate_id: string; instrument: string; direction: string; rounds: number }[];
+  debates: {
+    debate_id: string;
+    instrument: string;
+    direction: string;
+    rounds: number;
+    /** #1081. Null would mean `buildDebateLog` stopped setting it — see the gate below. */
+    termination: string | null;
+  }[];
   /** From `verdict_log` — the row `OrphanVerdictScanner` reads at restart. */
   verdicts: { trace_id: string; instrument: string; status: string; no_go_reason: string | null }[];
   /** From `open_positions` — written ahead by `ExecutionImpl` before the broker call. */
@@ -2332,7 +2339,9 @@ export function readSmokeObservations(
   return {
     ticks: [...byTrace.values()],
     debates: db
-      .prepare('SELECT debate_id, instrument, direction, rounds FROM debate_log ORDER BY rowid')
+      .prepare(
+        'SELECT debate_id, instrument, direction, rounds, termination FROM debate_log ORDER BY rowid',
+      )
       .all() as SmokeObservations['debates'],
     verdicts: db
       .prepare('SELECT trace_id, instrument, status, no_go_reason FROM verdict_log ORDER BY rowid')
@@ -3323,6 +3332,21 @@ export function evaluateSmokeGate(
         "the Feedback Loop's weight attribution (attribution.ts joins closed_trades.debate_id " +
         'against debate_log) has no input and the debate itself is unreconstructable after the ' +
         'fact (audit_log holds digests only). This is the #364 defect exactly',
+    );
+  }
+
+  // #1081: every row `buildDebateLog` writes must classify itself — the whole
+  // point of the fix is that no `debate_log` row can be silently ambiguous
+  // between a converged/non-converged debate and one the latency budget cut
+  // short. Hung off `debates.length` for the same reason as 3b above: a run
+  // with no rows at all fails on the check above, naming the real cause.
+  const unclassified = debates.filter((debate) => debate.termination === null);
+  if (debates.length > 0 && unclassified.length > 0) {
+    failures.push(
+      `${unclassified.length} of ${debates.length} debate_log row(s) have a NULL termination — ` +
+        'buildDebateLog (debate-log-store.ts) stopped setting it. That reopens #1081: a debate ' +
+        'the latency budget truncated becomes indistinguishable, in the stored record, from one ' +
+        'the analysts genuinely could not agree on.',
     );
   }
 

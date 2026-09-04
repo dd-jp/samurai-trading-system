@@ -141,7 +141,15 @@ function transactedObservations(): SmokeObservations {
       },
       { trace_id: 'trace-2', stages: [{ stage: 'analysts', decision: 'quorum_met' }] },
     ],
-    debates: [{ debate_id: 'debate-1', instrument: 'BTC-USD', direction: 'bullish', rounds: 1 }],
+    debates: [
+      {
+        debate_id: 'debate-1',
+        instrument: 'BTC-USD',
+        direction: 'bullish',
+        rounds: 1,
+        termination: 'converged',
+      },
+    ],
     verdicts: [{ trace_id: 'trace-1', instrument: 'BTC-USD', status: 'go', no_go_reason: null }],
     positions: [
       {
@@ -658,6 +666,40 @@ describe('evaluateSmokeGate', () => {
 
     expect(gate.passed).toBe(false);
     expect(gate.failures.some((failure) => failure.includes('no row in debate_log'))).toBe(true);
+  });
+
+  /**
+   * The #1081 defect, expressed as a gate condition: a `debate_log` row
+   * exists — #364's check passes — but its `termination` is NULL, meaning
+   * `buildDebateLog` stopped classifying the row. A truncated debate would
+   * again be indistinguishable from a genuinely non-converged one, which is
+   * exactly the ambiguity #1081 closes. Deleting the `termination` assignment
+   * from an otherwise-healthy observation set is what this test proves the
+   * gate catches — mirroring the "prove the assertion can fail" standard
+   * PR #390 was reviewed against.
+   */
+  it('fails when a debate_log row has no termination classification (#1081)', () => {
+    const observations = transactedObservations();
+    const gate = evaluateSmokeGate(
+      {
+        ...observations,
+        debates: observations.debates.map((debate) => ({ ...debate, termination: null })),
+      },
+      healthyGateOptions(),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('NULL termination'))).toBe(true);
+  });
+
+  it('does not demand termination from a run that never debated — that fails as #364 instead', () => {
+    const gate = evaluateSmokeGate(
+      { ...transactedObservations(), debates: [] },
+      healthyGateOptions(),
+    );
+
+    expect(gate.failures.some((failure) => failure.includes('no row in debate_log'))).toBe(true);
+    expect(gate.failures.some((failure) => failure.includes('NULL termination'))).toBe(false);
   });
 
   /**

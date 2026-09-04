@@ -318,6 +318,39 @@ describe('SqliteQueryStore', () => {
     expect(store.getAttribution(NOW)).toEqual({});
   });
 
+  /**
+   * #1081: `getAttribution` reads `debate_log` through its own SQL join,
+   * independent of `getContributionsForAttribution` (the Feedback Loop's
+   * read path in `debate-attribution-lookup.ts`) — this pins that the
+   * exclusion was applied here too, not just there. Without it this
+   * dashboard panel would credit a latency-truncated debate's analysts
+   * while the Feedback Loop itself skipped that exact trade.
+   */
+  it('excludes attribution for trades whose debate was latency-truncated', async () => {
+    const db = makeDb();
+    const execStore = new SqliteExecutionStore(db);
+    const debateStore = new SqliteDebateLogStore(db);
+
+    debateStore.writeLog(makeDebateLog({ termination: 'latency_truncated' }));
+    await seedClosedTrade(execStore, makeClosedTrade({ realized_pnl_net: 50 }));
+
+    const store = new SqliteQueryStore(db);
+    expect(store.getAttribution(NOW)).toEqual({});
+  });
+
+  it('keeps attribution for a pre-#1081 row with no termination recorded (indeterminate, not excluded)', async () => {
+    const db = makeDb();
+    const execStore = new SqliteExecutionStore(db);
+    const debateStore = new SqliteDebateLogStore(db);
+
+    // No `termination` supplied — mirrors a row written before migration 0041.
+    debateStore.writeLog(makeDebateLog());
+    await seedClosedTrade(execStore, makeClosedTrade({ realized_pnl_net: 50 }));
+
+    const store = new SqliteQueryStore(db);
+    expect(store.getAttribution(NOW)['technical-analyst']?.rolling_r).toBeCloseTo(1);
+  });
+
   // #940: closed trades and their fills, surfaced for the dashboard.
   describe('getRecentClosedTrades / getFillsForTrades (#940)', () => {
     it('reads recent closed trades newest-first, respecting the limit', async () => {

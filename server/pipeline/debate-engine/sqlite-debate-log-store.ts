@@ -14,7 +14,7 @@
  * the same debate resolved twice — a bug, not a legitimate re-run.
  */
 
-import type { DebateLog, DebateLogStore } from '../../shared/index.js';
+import type { DebateLog, DebateLogStore, DebateTermination } from '../../shared/index.js';
 import { isUniqueConstraintError, type SharedStore } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 import type { AnalystContribution, Direction } from './types.js';
@@ -37,6 +37,8 @@ interface DebateLogRow {
   open_items_json: string | null;
   /** SQLite has no boolean — 1/0, or null on a pre-0026 row. */
   converged: number | null;
+  /** #1081 (migration 0041). Null on a pre-migration row — genuinely indeterminate. */
+  termination: DebateTermination | null;
 }
 
 export class SqliteDebateLogStore implements DebateLogStore {
@@ -49,8 +51,8 @@ export class SqliteDebateLogStore implements DebateLogStore {
           `INSERT INTO debate_log (
              debate_id, instrument, bar_timestamp, contributions_json, direction, rounds,
              created_at, trace_id, confidence, synthesis, position, disagreement_summary,
-             open_items_json, converged
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             open_items_json, converged, termination
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           entry.debate_id,
@@ -76,6 +78,11 @@ export class SqliteDebateLogStore implements DebateLogStore {
           entry.disagreement_summary ?? null,
           entry.open_items === undefined ? null : JSON.stringify(entry.open_items),
           entry.converged === undefined ? null : entry.converged ? 1 : 0,
+          // #1081. Null when the caller supplies none, same convention as
+          // every other optional column here — a pre-0041 caller (tests, a
+          // fixture) still writes a valid row, and the column's own NULL is
+          // the honest "not recorded" rather than a guessed classification.
+          entry.termination ?? null,
         );
     } catch (cause) {
       if (isUniqueConstraintError(cause)) {
@@ -122,6 +129,7 @@ export class SqliteDebateLogStore implements DebateLogStore {
       ...(row.converged === null || row.converged === undefined
         ? {}
         : { converged: row.converged === 1 }),
+      ...nullableField('termination', row.termination),
     };
   }
 }

@@ -452,6 +452,17 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * with no matching debate row is excluded by the `JOIN` itself (same
    * "skip, don't zero-attribute" behaviour as a missing row would give),
    * so no post-filter is needed.
+   *
+   * #1081: this is a second, independent read of the same credit join the
+   * Feedback Loop computes (`getContributionsForAttribution` in
+   * `debate-attribution-lookup.ts`) — it does not go through that function,
+   * so its own exclusion has to be applied here too, or this dashboard panel
+   * and the Feedback Loop's weight updates would credit analysts on
+   * disjoint row sets over the same window. `termination IS NOT
+   * 'latency_truncated'` is SQLite's NULL-safe comparison: a pre-migration
+   * row (`termination IS NULL`, indeterminate) is kept, exactly as
+   * `getContributionsForAttribution` keeps it — only a row this build
+   * itself classified as latency-truncated is dropped.
    */
   getAttribution(asOf: Date): Record<string, AttributionSummary> {
     const from = new Date(asOf.getTime() - this.attributionWindowDays * 24 * 60 * 60 * 1000);
@@ -461,7 +472,8 @@ export class SqliteQueryStore implements DashboardQueryStore {
            FROM closed_trades
            JOIN debate_log ON debate_log.debate_id = closed_trades.debate_id
           WHERE closed_trades.arm = 'live'
-            AND closed_trades.closed_at > ? AND closed_trades.closed_at <= ?`,
+            AND closed_trades.closed_at > ? AND closed_trades.closed_at <= ?
+            AND debate_log.termination IS NOT 'latency_truncated'`,
       )
       .all(toStoredTimestamp(from), toStoredTimestamp(asOf)) as AttributionRow[];
 

@@ -110,9 +110,12 @@ export function creditForContribution(
 /**
  * Accumulate per-analyst credit across the cycle's closed trades.
  *
- * A trade is SKIPPED (not zero-attributed) when its debate log row is missing
- * or its R is undefined: attributing a trade we cannot explain would move
- * weights on no evidence.
+ * A trade is SKIPPED (not zero-attributed) when its debate log row is missing,
+ * its R is undefined, or the debate it was decided on was force-terminated by
+ * the latency budget (#1081 — `getContributionsForAttribution` excludes a
+ * `termination: 'latency_truncated'` row the same way it excludes a missing
+ * one): attributing a trade we cannot explain, or whose only "explanation" is
+ * partial state cut short by a timeout, would move weights on no evidence.
  */
 export function accumulateCredit(
   trades: readonly ClosedTrade[],

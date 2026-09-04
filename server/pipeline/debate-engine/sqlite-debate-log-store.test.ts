@@ -58,6 +58,10 @@ describe('SqliteDebateLogStore.writeLog', () => {
         disagreement_summary: null,
         open_items_json: null,
         converged: null,
+        // #1081 (migration 0041). NULL for the same reason: this caller
+        // supplies none, and NULL is the honest "indeterminate" rather than a
+        // guessed classification.
+        termination: null,
       },
     ]);
   });
@@ -102,6 +106,9 @@ describe('SqliteDebateLogStore.writeLog', () => {
     expect(read).not.toHaveProperty('confidence');
     expect(read).not.toHaveProperty('converged');
     expect(read).not.toHaveProperty('open_items');
+    // #1081: absent, not a guessed classification — this row predates
+    // migration 0041 by construction (the writer supplied no `termination`).
+    expect(read).not.toHaveProperty('termination');
   });
 
   it('preserves converged: false rather than dropping it as falsy', () => {
@@ -111,6 +118,50 @@ describe('SqliteDebateLogStore.writeLog', () => {
     store.writeLog(makeLog({ confidence: 0.6, converged: false }));
 
     expect(store.getByDebateId('debate-1')?.converged).toBe(false);
+  });
+
+  /**
+   * #1081 — the column that lets a truncated debate be told apart from a
+   * genuinely non-converged one from the stored record alone, without
+   * reading logs.
+   */
+  it('round-trips termination', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+
+    store.writeLog(makeLog({ debate_id: 'debate-truncated', termination: 'latency_truncated' }));
+
+    expect(
+      db.prepare('SELECT termination FROM debate_log WHERE debate_id = ?').get('debate-truncated'),
+    ).toEqual({
+      termination: 'latency_truncated',
+    });
+    expect(store.getByDebateId('debate-truncated')?.termination).toBe('latency_truncated');
+  });
+
+  it('distinguishes latency_truncated from non_converged in the persisted row', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+
+    store.writeLog(
+      makeLog({
+        debate_id: 'debate-truncated',
+        converged: false,
+        termination: 'latency_truncated',
+      }),
+    );
+    store.writeLog(
+      makeLog({ debate_id: 'debate-disagreed', converged: false, termination: 'non_converged' }),
+    );
+
+    const truncated = store.getByDebateId('debate-truncated');
+    const disagreed = store.getByDebateId('debate-disagreed');
+
+    // Same converged: false — the pre-#1081 ambiguity.
+    expect(truncated?.converged).toBe(disagreed?.converged);
+    // Different termination — the fix.
+    expect(truncated?.termination).toBe('latency_truncated');
+    expect(disagreed?.termination).toBe('non_converged');
   });
 
   /** #426 — the column the Pipeline drawer joins on. */
