@@ -34,7 +34,7 @@ export interface AppProps {
 
 export function App({ snapshotOptions }: AppProps = {}) {
   const feed = useSnapshot(snapshotOptions);
-  const { snapshot, previous } = feed;
+  const { snapshot } = feed;
 
   const [tab, setTab] = useState<Tab>(tabFromHash);
   useEffect(() => {
@@ -62,8 +62,8 @@ export function App({ snapshotOptions }: AppProps = {}) {
   const [ledger, setLedger] = useState(createLedger);
   useEffect(() => {
     if (snapshot === null) return;
-    setLedger((state) => updateLedger(state, previous?.pipeline ?? null, snapshot.pipeline));
-  }, [snapshot, previous]);
+    setLedger((state) => updateLedger(state, snapshot.pipeline));
+  }, [snapshot]);
 
   const [equitySamples, setEquitySamples] = useState<readonly EquitySample[]>([]);
   useEffect(() => {
@@ -96,14 +96,7 @@ export function App({ snapshotOptions }: AppProps = {}) {
 
   return (
     <div className={`app app-${tab}`}>
-      <Rail
-        snapshot={snapshot}
-        stale={feed.stale}
-        lastSuccessAt={feed.lastSuccessAt}
-        error={feed.error}
-        tab={tab}
-        onTab={openTab}
-      />
+      <Rail feed={feed} tab={tab} onTab={openTab} />
       <main id={`panel-${tab}`} role="tabpanel" aria-labelledby={`tab-${tab}`}>
         {tab === 'glance' && (
           <GlanceTab

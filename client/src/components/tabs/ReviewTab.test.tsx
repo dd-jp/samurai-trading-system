@@ -164,6 +164,7 @@ describe('closed trades', () => {
     expect(within(drawer).getByText(/No trade selected/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /^SPY, long/ }));
     expect(within(drawer).getByText('measured reclaim')).toBeTruthy();
+    expect(within(drawer).getByRole('img', { name: 'go' })).toBeTruthy();
     expect(within(drawer).queryByText('WRONG ROW')).toBeNull();
     expect(within(drawer).getByText(/approved · /)).toBeTruthy();
     expect(within(drawer).getByText('+$11.20')).toBeTruthy();
@@ -187,6 +188,7 @@ describe('closed trades', () => {
     fireEvent.click(screen.getByRole('button', { name: /^SPY, long/ }));
     const drawer = screen.getByRole('complementary', { name: 'Trade detail' });
     expect(within(drawer).getByText(/No trace id reaches this trade/)).toBeTruthy();
+    expect(within(drawer).queryByRole('img')).toBeNull();
     expect(drawer.querySelector('[data-invalidation="no-decision"]')).toBeTruthy();
     expect(
       within(drawer).getByText(/debate not in the recent-debates window|No completed debate/),

@@ -10,6 +10,7 @@ import {
 import { settledOutcome } from '../../lib/ledger.ts';
 import {
   cellsByStageOf,
+  decisionOf,
   fillsFor,
   laneFor,
   latestDebateFor,
@@ -17,7 +18,13 @@ import {
   riskCriticFor,
   verdictFor,
 } from '../../lib/trace.ts';
-import { cellStateWord, OUTCOME_WORD, sideWord, stageName } from '../../lib/vocabulary.ts';
+import {
+  cellStateWord,
+  OUTCOME_WORD,
+  sideWord,
+  stageName,
+  WAITING_FOR_FIRST_SNAPSHOT,
+} from '../../lib/vocabulary.ts';
 import { Seal } from '../Seal.tsx';
 import { cellTone, StateWord } from '../StateWord.tsx';
 import { DebateSection, FillsList, GatesSection, Timeline } from '../TraceSections.tsx';
@@ -72,7 +79,7 @@ function LaneRow(props: { lane: PipelineLane; selected: boolean; onSelect: () =>
               </span>
             );
           }
-          const decision = cell.decision !== null && cell.decision !== '' ? cell.decision : null;
+          const decision = decisionOf(cell);
           return (
             <span key={stage} className="lane-cell" data-stage={stage} data-state={cell.state}>
               <StateWord tone={cellTone(cell.state)}>
@@ -97,7 +104,7 @@ function LaneList(props: LiveTabProps) {
         <h2>Lanes</h2>
         <span className="muted small">
           {snapshot === null
-            ? 'waiting for the first snapshot'
+            ? WAITING_FOR_FIRST_SNAPSHOT
             : `${lanes.length} in the 15-minute window · ${running} running`}
         </span>
       </div>
@@ -141,7 +148,7 @@ function TraceDrawer(props: LiveTabProps) {
       <aside className="drawer" aria-label="Trace detail">
         <p className="empty-state">
           {snapshot === null
-            ? 'waiting for the first snapshot'
+            ? WAITING_FOR_FIRST_SNAPSHOT
             : 'No lane selected — choose a lane, or a verdict row on Glance, to see its trace.'}
         </p>
       </aside>

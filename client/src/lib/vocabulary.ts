@@ -80,16 +80,8 @@ export const CLOSE_REASON_WORD: Readonly<Record<CloseReason, string>> = {
   direction_flip: 'direction flip',
 };
 
-/**
- * Which visual family a close reason belongs to. A stop is the trade's own
- * failure; a target its success; everything else is the system closing a
- * position for a reason that is neither — the flat-by-close rule most often.
- */
-export function closeReasonTone(reason: CloseReason): 'stop' | 'done' | 'skip' {
-  if (reason === 'stop') return 'stop';
-  if (reason === 'target') return 'done';
-  return 'skip';
-}
+/** What every surface says before the first successful poll. */
+export const WAITING_FOR_FIRST_SNAPSHOT = 'waiting for the first snapshot';
 
 export const CONDITION_STATE_WORD: Readonly<Record<EvaluatedConditionWire['state'], string>> = {
   breached: 'breached',

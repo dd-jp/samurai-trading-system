@@ -155,7 +155,7 @@ test('review: a closed trade opens its P&L breakdown and fills', async ({ page }
   await expect(drawer.getByRole('list', { name: 'Fills' }).getByRole('listitem')).toHaveCount(2);
 });
 
-test('a11y: tabs, lanes and verdict rows are reachable by Tab and operated by Enter', async ({
+test('a11y: tabs, lanes, verdict rows and trade rows are reachable by Tab and operated by Enter', async ({
   page,
 }) => {
   await tabTo(page, '[role="tab"][id="tab-live"]');
@@ -173,6 +173,13 @@ test('a11y: tabs, lanes and verdict rows are reachable by Tab and operated by En
   await page.keyboard.press('Enter');
   await expect(drawer.getByRole('heading', { level: 2 })).toHaveText('BTC-USD');
   await expect(drawer).toContainText('trace-p-btc');
+
+  await tabTo(page, '[role="tab"][id="tab-review"]');
+  await page.keyboard.press('Enter');
+  const tradeDrawer = page.getByRole('complementary', { name: 'Trade detail' });
+  await tabTo(page, '.trade-row');
+  await page.keyboard.press('Enter');
+  await expect(tradeDrawer.getByRole('heading', { level: 2 })).toHaveText(/SPY|QQQ/);
 });
 
 /** Presses Tab until the focused element matches, so tab ORDER is what is asserted. */

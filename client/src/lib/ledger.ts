@@ -1,7 +1,7 @@
 /**
  * Verdict ledger accumulation (issue #537; dashboard-spec.md "Verdict ledger
- * + detail drawer"). Pure state transition — no React, no clock: a seeded or
- * appended entry is stamped with the lane's last recorded timestamp, never
+ * + detail drawer"). Pure state transition — no React, no clock: every
+ * entry is stamped with the lane's last recorded timestamp, never
  * with `Date.now()`, so an entry can never claim to have just happened.
  *
  * Fed from settled pipeline lanes, not `verdicts[]` alone: a lane that ended
@@ -29,12 +29,6 @@ export interface LedgerEntry {
    * which the wire contract does not produce but the type permits.
    */
   settled_at: string | null;
-  /**
-   * True when this entry was seeded on first paint rather than observed
-   * settling. The renderer stamps (animates) only un-seeded entries — a
-   * seeded entry must not claim to have just happened.
-   */
-  seeded: boolean;
 }
 
 export interface LedgerState {
@@ -120,17 +114,13 @@ function orderNewestFirst(entries: readonly LedgerEntry[]): LedgerEntry[] {
 }
 
 /**
- * Fold one poll into the ledger. `prev === null` marks first paint: the
- * currently-settled lanes seed the ledger (flagged `seeded`); on any later
- * poll a newly-settled, never-seen trace is appended as a live settle.
+ * Fold one poll into the ledger. On first paint the currently-settled lanes
+ * seed it; on any later poll a newly-settled, never-seen trace is appended.
  * Re-polls of an unchanged lane are deduped by `trace_id` against ALL seen
- * traces, so nothing is ever stamped twice — even after cap eviction.
+ * traces, so nothing is ever stamped twice — even after cap eviction. The
+ * previous poll is not needed for that: the `seen` set is the memory.
  */
-export function updateLedger(
-  state: LedgerState,
-  prev: PipelineView | null,
-  next: PipelineView,
-): LedgerState {
+export function updateLedger(state: LedgerState, next: PipelineView): LedgerState {
   const additions: LedgerEntry[] = [];
   for (const lane of next.lanes) {
     if (lane.trace_id === null) continue;
@@ -144,7 +134,6 @@ export function updateLedger(
       outcome,
       final_stage: lane.final_stage,
       settled_at: lastRecordedAt(lane),
-      seeded: prev === null,
     });
   }
 

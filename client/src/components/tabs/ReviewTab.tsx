@@ -10,7 +10,6 @@ import type {
 } from '@contracts';
 import type { WireSnapshot } from '../../hooks/useSnapshot.ts';
 import {
-  barWidth,
   formatClockUtc,
   formatCount,
   formatDateUtc,
@@ -32,10 +31,11 @@ import {
   riskCriticForDebate,
   verdictFor,
 } from '../../lib/trace.ts';
-import { CLOSE_REASON_WORD, closeReasonTone, sideWord } from '../../lib/vocabulary.ts';
+import { CLOSE_REASON_WORD, sideWord, WAITING_FOR_FIRST_SNAPSHOT } from '../../lib/vocabulary.ts';
 import { Seal } from '../Seal.tsx';
-import { pnlTone, StateWord } from '../StateWord.tsx';
+import { closeReasonTone, pnlTone, StateWord } from '../StateWord.tsx';
 import { DebateSection, FillsList, GatesSection, Timeline } from '../TraceSections.tsx';
+import { Track } from '../Track.tsx';
 
 export interface ReviewTabProps {
   snapshot: WireSnapshot | null;
@@ -200,7 +200,7 @@ function ArmCard({ comparisons }: { comparisons: readonly ArmComparisonRow[] }) 
           </ul>
           <p className="muted small">
             {formatDateUtc(latest.window_from)} to {formatDateUtc(latest.window_to)} · one window,
-            both arms · basis £{latest.basis.toFixed(2)}
+            both arms · basis £{formatFixed(latest.basis, 2)}
           </p>
           <ArmVerdict row={latest} />
           {comparisons.length > 1 ? (
@@ -225,9 +225,8 @@ function ArmCard({ comparisons }: { comparisons: readonly ArmComparisonRow[] }) 
             </ul>
           ) : null}
           <p className="muted small">
-            The control has no debate rounds, so it is always treated as converged: on bars where
-            the live debate did not converge, the live arm takes a size haircut and refuses a
-            scale-in and the control takes neither.
+            The control has no debate rounds, so it always trades where the indicator fires; the
+            live arm can decline to. Read return and drawdown together — the wire reports both.
           </p>
         </>
       )}
@@ -302,20 +301,17 @@ function AnalystsCard({ analysts }: { analysts: readonly AnalystPerformanceRow[]
       ) : (
         <ul className="analyst-list">
           {analysts.map((row) => {
-            const width = barWidth(row.weight);
             return (
               <li key={row.analyst_id} className="analyst-row">
                 <span className="analyst-name">{row.analyst_id}</span>
-                {width === null ? (
-                  <span className="muted">weight not a number</span>
+                {Number.isFinite(row.weight) ? (
+                  <Track
+                    fraction={row.weight}
+                    tone="cyan"
+                    label={`${row.analyst_id} weight ${formatPercent(row.weight, 0)}`}
+                  />
                 ) : (
-                  <span
-                    className="track"
-                    role="img"
-                    aria-label={`${row.analyst_id} weight ${formatPercent(row.weight, 0)}`}
-                  >
-                    <i className="track-fill track-cyan" style={{ width }} />
-                  </span>
+                  <span className="muted">weight not a number</span>
                 )}
                 <span className="mono analyst-weight">{formatPercent(row.weight, 0)}</span>
                 <span className="mono muted small">
@@ -388,7 +384,7 @@ function TradesTable(props: ReviewTabProps) {
         <h2>Closed trades</h2>
         <span className="muted small">
           {snapshot === null
-            ? 'waiting for the first snapshot'
+            ? WAITING_FOR_FIRST_SNAPSHOT
             : `${trades.length} on this snapshot · newest first · select a row for the full trace`}
         </span>
       </div>
@@ -434,7 +430,7 @@ function TradeDrawer({ snapshot, selectedKey }: Pick<ReviewTabProps, 'snapshot' 
       <aside className="drawer" aria-label="Trade detail">
         <p className="empty-state">
           {snapshot === null
-            ? 'waiting for the first snapshot'
+            ? WAITING_FOR_FIRST_SNAPSHOT
             : selectedKey === null
               ? 'No trade selected — choose a closed trade to see why it was taken and how it ended.'
               : 'The selected trade is no longer in the recent-history window.'}
@@ -453,7 +449,7 @@ function TradeDrawer({ snapshot, selectedKey }: Pick<ReviewTabProps, 'snapshot' 
   return (
     <aside className="drawer" aria-label="Trade detail" data-key={trade.idempotency_key}>
       <div className="drawer-head">
-        <Seal outcome="go" />
+        {verdict !== undefined && <Seal outcome={verdict.status} />}
         <h2 className="display">{trade.instrument}</h2>
         <b className={tone}>{formatSignedUsd(trade.realized_pnl_net)}</b>
         <span className="mono muted drawer-trace">{trade.idempotency_key}</span>
@@ -517,7 +513,7 @@ export function ReviewTab(props: ReviewTabProps) {
           <h2 className="display review-title">Review</h2>
           <span className="muted small">
             {snapshot === null
-              ? 'waiting for the first snapshot'
+              ? WAITING_FOR_FIRST_SNAPSHOT
               : `as of ${formatDateUtc(snapshot.as_of)} ${formatClockUtc(snapshot.as_of)}`}
           </span>
         </div>

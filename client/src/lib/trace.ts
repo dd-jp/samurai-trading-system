@@ -39,6 +39,11 @@ export function laneFor(
 }
 
 /** A lane's cells keyed by stage, for the renderers that walk `PIPELINE_STAGES` in order. */
+/** A cell's decision word, or `null` when the store recorded none (an empty string counts as none). */
+export function decisionOf(cell: PipelineCell): string | null {
+  return cell.decision !== null && cell.decision !== '' ? cell.decision : null;
+}
+
 export function cellsByStageOf(lane: PipelineLane): ReadonlyMap<PipelineStage, PipelineCell> {
   return new Map(lane.cells.map((cell) => [cell.stage, cell]));
 }

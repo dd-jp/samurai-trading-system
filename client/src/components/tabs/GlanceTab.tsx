@@ -1,7 +1,6 @@
 import type { VerdictRow } from '@contracts';
 import type { WireSnapshot } from '../../hooks/useSnapshot.ts';
 import {
-  barWidth,
   formatClockUtc,
   formatPercent,
   formatPrice,
@@ -13,9 +12,15 @@ import {
 } from '../../lib/format.ts';
 import { deployedNotional, openRiskRow, pnlToday } from '../../lib/glance.ts';
 import type { LedgerEntry } from '../../lib/ledger.ts';
-import { OUTCOME_WORD, sideWord, stageName } from '../../lib/vocabulary.ts';
+import {
+  OUTCOME_WORD,
+  sideWord,
+  stageName,
+  WAITING_FOR_FIRST_SNAPSHOT,
+} from '../../lib/vocabulary.ts';
 import { Seal } from '../Seal.tsx';
 import { pnlTone } from '../StateWord.tsx';
+import { Track } from '../Track.tsx';
 import type { Selection } from './LiveTab.tsx';
 
 export interface EquitySample {
@@ -88,7 +93,7 @@ function PnlCard({ snapshot, equitySamples }: Pick<GlanceTabProps, 'snapshot' | 
     return (
       <section className="panel" aria-label="P&L today">
         <h2>P&amp;L today</h2>
-        <p className="empty-state">waiting for the first snapshot</p>
+        <p className="empty-state">{WAITING_FOR_FIRST_SNAPSHOT}</p>
       </section>
     );
   }
@@ -156,7 +161,7 @@ function OpenRiskCard({ snapshot }: Pick<GlanceTabProps, 'snapshot'>) {
         )}
       </h2>
       {snapshot === null ? (
-        <p className="empty-state">waiting for the first snapshot</p>
+        <p className="empty-state">{WAITING_FOR_FIRST_SNAPSHOT}</p>
       ) : positions.length === 0 ? (
         <p className="empty-state">
           No open position — nothing at risk. This is a reading from the store, not a missing panel.
@@ -166,7 +171,6 @@ function OpenRiskCard({ snapshot }: Pick<GlanceTabProps, 'snapshot'>) {
           {positions.map((position) => {
             const row = openRiskRow(position);
             const tone = pnlTone(position.unrealized_pnl);
-            const width = row.progress === null ? null : barWidth(row.progress);
             return (
               <li
                 key={position.idempotency_key}
@@ -183,19 +187,18 @@ function OpenRiskCard({ snapshot }: Pick<GlanceTabProps, 'snapshot'>) {
                   </span>
                   <span className={`mono ${tone}`}>{formatSignedUsd(position.unrealized_pnl)}</span>
                 </div>
-                {width === null ? (
+                {row.progress === null ? (
                   <p className="muted small">bracket has no width — stop equals target</p>
                 ) : (
-                  <span
-                    className="track track-thick"
-                    role="img"
-                    aria-label={`${position.instrument}: mark ${formatPercent(
-                      row.progress ?? Number.NaN,
+                  <Track
+                    fraction={row.progress}
+                    tone={tone}
+                    thick
+                    label={`${position.instrument}: mark ${formatPercent(
+                      row.progress,
                       0,
                     )} of the way from stop to target`}
-                  >
-                    <i className={`track-fill track-${tone}`} style={{ width }} />
-                  </span>
+                  />
                 )}
                 <div className="risk-foot mono muted">
                   <span>

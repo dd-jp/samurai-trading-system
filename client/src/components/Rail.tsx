@@ -1,7 +1,8 @@
 import type { MetricsSuiteWire } from '@contracts';
-import type { WireSnapshot } from '../hooks/useSnapshot.ts';
-import { barWidth, formatClockUtc, formatPercent, formatUsd, UNKNOWN } from '../lib/format.ts';
-import { providerStateWord } from '../lib/vocabulary.ts';
+import type { SnapshotFeed, WireSnapshot } from '../hooks/useSnapshot.ts';
+import { formatClockUtc, formatPercent, formatUsd, UNKNOWN } from '../lib/format.ts';
+import { providerStateWord, WAITING_FOR_FIRST_SNAPSHOT } from '../lib/vocabulary.ts';
+import { Track } from './Track.tsx';
 
 /** ADR-0008's spend cap. The rail draws all-time spend against it. */
 const LLM_SPEND_CAP_USD = 50;
@@ -23,36 +24,45 @@ export const TABS: readonly { id: Tab; label: string }[] = [
 ];
 
 export interface RailProps {
-  snapshot: WireSnapshot | null;
-  stale: boolean;
-  lastSuccessAt: string | null;
-  error: string | null;
+  feed: SnapshotFeed;
   tab: Tab;
   onTab: (tab: Tab) => void;
 }
 
-function HealthBlock(props: {
-  snapshot: WireSnapshot | null;
-  stale: boolean;
-  error: string | null;
-}) {
-  const { snapshot, stale, error } = props;
-  const state = snapshot === null ? 'waiting' : stale ? 'stale' : 'alive';
-  const word = state === 'alive' ? 'ALIVE' : state === 'stale' ? 'STALE' : 'WAITING';
+type HealthState = 'waiting' | 'stale' | 'alive';
+
+const HEALTH: Readonly<
+  Record<HealthState, { word: string; note: (feed: SnapshotFeed) => string }>
+> = {
+  waiting: {
+    word: 'WAITING',
+    note: ({ error }) =>
+      error === null
+        ? WAITING_FOR_FIRST_SNAPSHOT
+        : `no snapshot yet — last attempt failed: ${error}`,
+  },
+  stale: {
+    word: 'STALE',
+    note: ({ snapshot, error }) =>
+      `stale — last update ${formatClockUtc(snapshot?.generated_at ?? '')}${
+        error === null ? '' : ` · ${error}`
+      }`,
+  },
+  alive: {
+    word: 'ALIVE',
+    note: ({ snapshot }) => `polled ${formatClockUtc(snapshot?.generated_at ?? '')}`,
+  },
+};
+
+function HealthBlock({ feed }: { feed: SnapshotFeed }) {
+  const state: HealthState = feed.snapshot === null ? 'waiting' : feed.stale ? 'stale' : 'alive';
+  const { word, note } = HEALTH[state];
   return (
     <div className="rail-block" data-field="health" data-health={state}>
       <span className="label">Bot</span>
       <span className={`rail-health rail-health-${state}`}>{word}</span>
-      <span className="rail-note" role={stale ? 'status' : undefined}>
-        {state === 'waiting'
-          ? error === null
-            ? 'waiting for the first snapshot'
-            : `no snapshot yet — last attempt failed: ${error}`
-          : state === 'stale'
-            ? `stale — last update ${formatClockUtc(snapshot?.generated_at ?? '')}${
-                error === null ? '' : ` · ${error}`
-              }`
-            : `polled ${formatClockUtc(snapshot?.generated_at ?? '')}`}
+      <span className="rail-note" role={state === 'stale' ? 'status' : undefined}>
+        {note(feed)}
       </span>
     </div>
   );
@@ -124,22 +134,21 @@ function ProvidersBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
             {alpaca.detail === '' ? 'the probe did not read ok' : alpaca.detail}
           </span>
         ) : (
-          <span className="rail-note mono">equity {formatUsd(alpaca.balance.equity)}</span>
+          <span className="rail-note mono" data-field="alpaca-balance">
+            equity {formatUsd(alpaca.balance.equity)} · cash {formatUsd(alpaca.balance.cash)} ·
+            buying power{' '}
+            {alpaca.balance.buying_power === null
+              ? 'not sent'
+              : formatUsd(alpaca.balance.buying_power)}
+          </span>
         ))}
+      {alpaca !== undefined && alpaca.balance !== null && alpaca.detail !== '' && (
+        <span className="rail-note">Alpaca · {alpaca.detail}</span>
+      )}
       {polygon !== undefined && polygon.detail !== '' && (
         <span className="rail-note">Polygon · {polygon.detail}</span>
       )}
     </div>
-  );
-}
-
-function Track(props: { fraction: number; tone: 'cyan' | 'amber' | 'bad'; label: string }) {
-  const width = barWidth(props.fraction);
-  if (width === null) return null;
-  return (
-    <span className="track" role="img" aria-label={props.label}>
-      <i className={`track-fill track-${props.tone}`} style={{ width }} />
-    </span>
   );
 }
 
@@ -170,7 +179,8 @@ function SpendBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
       )}
       {windows != null && (
         <span className="rail-note mono" data-field="llm-windows">
-          24h {formatUsd(windows.last_24h.cost_usd)} · 7d {formatUsd(windows.last_7d.cost_usd)}
+          24h {formatUsd(windows.last_24h.cost_usd)} · 7d {formatUsd(windows.last_7d.cost_usd)} ·
+          all {formatUsd(windows.all_time.cost_usd)}
         </span>
       )}
       <span className="rail-note">
@@ -226,7 +236,8 @@ function tabForKey(key: string, current: Tab): Tab | null {
 }
 
 export function Rail(props: RailProps) {
-  const { snapshot, stale, lastSuccessAt, error, tab, onTab } = props;
+  const { feed, tab, onTab } = props;
+  const { snapshot, stale, lastSuccessAt } = feed;
   const onTabKey = (event: React.KeyboardEvent<HTMLDivElement>) => {
     const next = tabForKey(event.key, tab);
     if (next === null) return;
@@ -259,7 +270,7 @@ export function Rail(props: RailProps) {
         </div>
       </nav>
       <div className="rail-status">
-        <HealthBlock snapshot={snapshot} stale={stale} error={error} />
+        <HealthBlock feed={feed} />
         <ModeBlock snapshot={snapshot} />
         <LiveTickBlock snapshot={snapshot} />
         <ProvidersBlock snapshot={snapshot} />

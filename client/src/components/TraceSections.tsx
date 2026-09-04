@@ -24,7 +24,7 @@ import {
   formatQty,
   formatStageDuration,
 } from '../lib/format.ts';
-import { cellsByStageOf } from '../lib/trace.ts';
+import { cellsByStageOf, decisionOf } from '../lib/trace.ts';
 import {
   CONDITION_STATE_WORD,
   cellStateWord,
@@ -32,12 +32,13 @@ import {
   stageName,
 } from '../lib/vocabulary.ts';
 import { StanceStrip } from './StanceStrip.tsx';
-import { cellTone, conditionTone, type StateTone, StateWord } from './StateWord.tsx';
+import { cellTone, conditionTone, criticTone, StateWord } from './StateWord.tsx';
 
 const STAGES_WITHOUT_RECORDED_DECISION: readonly PipelineStage[] = ['trader', 'risk'];
 
 function decisionText(cell: PipelineCell): string {
-  if (cell.decision !== null && cell.decision !== '') return cell.decision;
+  const decision = decisionOf(cell);
+  if (decision !== null) return decision;
   if (cell.state === 'not_reached') return 'not reached';
   if (cell.state === 'skipped') return 'skipped — the tick continued';
   if (cell.state === 'live') return 'in progress';
@@ -83,13 +84,6 @@ export function Timeline({ lane }: { lane: PipelineLane }) {
     </ol>
   );
 }
-
-const CRITIC_TONE: Readonly<Record<NonNullable<RiskCriticRow['critic_verdict']>, StateTone>> = {
-  pass: 'done',
-  trim: 'live',
-  reject: 'stop',
-  unavailable: 'wait',
-};
 
 function bindingConstraintText(constraint: string | null): string {
   if (constraint === null) return 'no binding constraint recorded — no gate named one';
@@ -149,8 +143,6 @@ export function GatesSection({ riskCritic, verdict, keyedBy }: GatesSectionProps
 function RiskCriticBody({ riskCritic }: { riskCritic: RiskCriticRow }) {
   const conditions = riskCritic.conditions ?? [];
   const dropped = riskCritic.dropped_conditions ?? [];
-  const criticTone =
-    riskCritic.critic_verdict === null ? 'wait' : CRITIC_TONE[riskCritic.critic_verdict];
   return (
     <>
       <p
@@ -164,7 +156,9 @@ function RiskCriticBody({ riskCritic }: { riskCritic: RiskCriticRow }) {
         <span>{bindingConstraintText(riskCritic.binding_constraint)}</span>
       </p>
       <p className="gate-line" data-critic={riskCritic.critic_verdict ?? 'none'}>
-        <StateWord tone={criticTone}>{criticVerdictWord(riskCritic.critic_verdict)}</StateWord>
+        <StateWord tone={criticTone(riskCritic.critic_verdict)}>
+          {criticVerdictWord(riskCritic.critic_verdict)}
+        </StateWord>
         <span>{criticVerdictText(riskCritic)}</span>
       </p>
       {conditions.length === 0 ? (

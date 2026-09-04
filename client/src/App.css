@@ -638,6 +638,12 @@ main {
   min-width: 0;
 }
 
+/* Wide content scrolls inside its own box; the page body never scrolls sideways (spec, accessibility floor). */
+.lane-list,
+.trade-list {
+  overflow-x: auto;
+}
+
 .lane-head {
   display: inline-flex;
   align-items: center;
