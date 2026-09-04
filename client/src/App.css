@@ -626,7 +626,9 @@ main {
 .review {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 460px;
-  min-height: 100vh;
+  /* Pinned to the viewport: the main column and the drawer each scroll on their own; the page does not. */
+  height: 100vh;
+  min-height: 0;
 }
 
 .lanes,
@@ -636,6 +638,8 @@ main {
   flex-direction: column;
   gap: 10px;
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 /* Wide content scrolls inside its own box; the page body never scrolls sideways (spec, accessibility floor). */
@@ -725,6 +729,8 @@ main {
   flex-direction: column;
   gap: 20px;
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .drawer h3 {
