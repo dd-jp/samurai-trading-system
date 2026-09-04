@@ -8,8 +8,10 @@
  * rather than papering over it with a dash.
  */
 import {
+  DEGRADED_DECISIONS,
   type DebateRow,
   type FillRow,
+  isDegradedDecision,
   PIPELINE_STAGES,
   type PipelineCell,
   type PipelineLane,
@@ -36,8 +38,18 @@ import { cellTone, conditionTone, criticTone, StateWord } from './StateWord.tsx'
 
 const STAGES_WITHOUT_RECORDED_DECISION: readonly PipelineStage[] = ['trader', 'risk'];
 
+/**
+ * The sentence that separates a degraded stage from a market outcome (#1080).
+ *
+ * `budget_exhausted` on its own is a word an operator has to look up, and the
+ * thing it has to be told apart from — a debate that genuinely found nothing —
+ * renders as the equally bare `neutral`. The gloss travels with the word from
+ * `contracts/`, so the server that writes it and the page that explains it
+ * cannot disagree about what it means.
+ */
 function decisionText(cell: PipelineCell): string {
   const decision = decisionOf(cell);
+  if (isDegradedDecision(decision)) return `${decision} — ${DEGRADED_DECISIONS[decision]}`;
   if (decision !== null) return decision;
   if (cell.state === 'not_reached') return 'not reached';
   if (cell.state === 'skipped') return 'skipped — the tick continued';
@@ -63,7 +75,15 @@ export function Timeline({ lane }: { lane: PipelineLane }) {
           );
         }
         return (
-          <li key={stage} className="timeline-row" data-stage={stage} data-state={cell.state}>
+          <li
+            key={stage}
+            className="timeline-row"
+            data-stage={stage}
+            data-state={cell.state}
+            // Set only when it applies, so a test (and a stylesheet) can select
+            // the degraded rows without matching every healthy one (#1080).
+            data-degraded={isDegradedDecision(decisionOf(cell)) ? 'true' : undefined}
+          >
             <span className="timeline-stage">
               {stageName(stage)}
               <StateWord tone={cellTone(cell.state)}>

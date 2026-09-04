@@ -220,6 +220,10 @@ describe('AnalystOrchestrator', () => {
       // #431: the reason now records that the retry was spent, so a log line
       // cannot be read as "failed once" when it failed twice.
       reason: 'technical unavailable (after 2 attempts)',
+      // #1080: a thrown persona is a fault, not a deadline — the two are acted
+      // on differently downstream, and the reason string is the only other
+      // place the difference exists.
+      kind: 'error',
     });
 
     // The exact TickSteps.analysts shape must also report the skip as an empty array.
@@ -254,6 +258,7 @@ describe('AnalystOrchestrator', () => {
         analyst_type: 'sentiment',
         role: 'optional',
         reason: 'sentiment unavailable (after 2 attempts)',
+        kind: 'error',
       },
     ]);
   });
@@ -403,6 +408,44 @@ describe('AnalystOrchestrator', () => {
       expect(result.skipped).toBe(true);
       // Story 20: one failure path, differing only in the logged reason.
       expect(result.failures[0]?.reason).toContain('did not answer within 5ms');
+      // #1080: and in the kind, which is the discriminator a reader downstream
+      // gets instead of having to match on the reason's wording. This is the
+      // failure mode that starved the analyst stage in the 2026-09-03 session.
+      expect(result.failures[0]?.kind).toBe('timeout');
+    });
+
+    it('reports a deadline as a timeout even when an earlier attempt threw', async () => {
+      // The kind describes the attempt the stage GAVE UP on. A persona that
+      // threw once and then hung is a stage waiting on a deadline it cannot
+      // meet, which is acted on differently from a data gap.
+      const { clock, marketData, marketIntelligence } = buildDeps('crypto');
+      let attempts = 0;
+      const orchestrator = new AnalystOrchestrator(
+        { market_data: marketData, market_intelligence: marketIntelligence },
+        [
+          {
+            analyst_type: 'technical',
+            role: 'mandatory',
+            applies_to: () => true,
+            run: async (): Promise<AnalystView> => {
+              attempts += 1;
+              if (attempts === 1) throw new Error('technical unavailable');
+              return await new Promise<AnalystView>(() => {});
+            },
+          },
+        ],
+        { timeout_ms: 5 },
+      );
+
+      const result = await orchestrator.runAnalysts(
+        'trace-1',
+        { asset: INSTRUMENT, asset_class: 'crypto' },
+        clock,
+        ASOF,
+      );
+
+      expect(attempts).toBe(2);
+      expect(result.failures[0]?.kind).toBe('timeout');
     });
 
     it('lets a healthy persona through unretried', async () => {

@@ -16,10 +16,17 @@
  * to drop `failures` on the floor, and that drop is why a total market-data
  * outage — every crypto request 404ing against a wrong API version — looked
  * like a quiet decision for a whole paper run. `SequentialTickRunner` sees only
- * the view array, so it logs `analysts: quorum_skip` at `info` with an empty
- * payload; the only place the reasons still exist is right here, between
- * `runAnalysts` returning and the narrowing throwing them away. So this is
- * where they get emitted, on the same `trace_id` the tick's own lines carry.
+ * the view array, so its own line carries no reason at all; the only place the
+ * reasons still exist is right here, between `runAnalysts` returning and the
+ * narrowing throwing them away. So this is where they get emitted, on the same
+ * `trace_id` the tick's own lines carry.
+ *
+ * #1080 carried ONE bit of that back to the runner rather than all of it: the
+ * `skipKinds` relay below reports whether the mandatory failure was a deadline
+ * or a fault, which is what the audit row and the dashboard need to stop
+ * reading a starved sub-budget as a quiet market. The reasons themselves stay
+ * here — `audit_log.decision` is a word, not a place for upstream-controlled
+ * text.
  *
  * Level splits on `role`, because the two cases are operationally different:
  * a mandatory persona failing HALTED trading for this instrument (`error`); an
@@ -56,6 +63,7 @@ import type {
   AssetClass,
 } from '../../../pipeline/analysts/index.js';
 import { type Logger, sanitizeLogText } from '../../../shared/index.js';
+import { type AnalystSkipKindRelay, skipKindOf } from '../analysts-decision.js';
 import type { TickSteps } from '../types.js';
 import { type CheckMiCoverageDeps, checkMiCoverage } from './mi-coverage.js';
 
@@ -132,6 +140,13 @@ export interface AnalystsStepOptions {
    * not a refusal.
    */
   coverage?: CheckMiCoverageDeps;
+  /**
+   * Where this pass's quorum-skip KIND goes (#1080), for the tick runner to
+   * read back through `TickSteps.analystSkipKind`. Absent means every skip
+   * records the undifferentiated `quorum_skip`, which is what a caller with no
+   * runner attached (a focused unit test) should get.
+   */
+  skipKinds?: AnalystSkipKindRelay;
 }
 
 /** The one method the analysts step calls on `GrokAgent`. */
@@ -241,6 +256,7 @@ export function buildAnalystsStep(
         analyst_type: failure.analyst_type,
         role: failure.role,
         reason: sanitizeLogText(failure.reason),
+        kind: failure.kind,
       }));
       const detail = safe
         .map((failure) => `${failure.analyst_type} (${failure.role}): ${failure.reason}`)
@@ -261,6 +277,14 @@ export function buildAnalystsStep(
     // #431. The tick boundary is here, not inside `runAnalysts`, which knows
     // nothing about consecutive ticks — `result.skipped` is this tick's answer
     // and the counter is what turns a series of them into a signal.
+    // Before the alerting below, and unconditionally on a skip: the runner
+    // reads this immediately after the step returns, so a throw from the alert
+    // transport must not be able to cost the audit row its reason (#1080).
+    const skipKind = skipKindOf(result.skipped, result.failures);
+    if (skipKind !== undefined) {
+      options.skipKinds?.set(trace_id, skipKind);
+    }
+
     if (result.skipped) {
       const count = (consecutiveSkips.get(signal.asset) ?? 0) + 1;
       consecutiveSkips.set(signal.asset, count);
@@ -272,6 +296,7 @@ export function buildAnalystsStep(
             analyst_type: failure.analyst_type,
             role: failure.role,
             reason: sanitizeLogText(failure.reason),
+            kind: failure.kind,
           })),
           reported_at: clock.now(),
         });

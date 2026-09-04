@@ -1,6 +1,8 @@
 import type { AnalystOrchestrator } from '../../../pipeline/analysts/index.js';
 import type { AnalystView } from '../../../pipeline/debate-engine/index.js';
 import type { Clock, LogEntry, Logger } from '../../../shared/index.js';
+import { AnalystSkipKindRelay } from '../analysts-decision.js';
+import type { TickSteps } from '../types.js';
 import {
   type AnalystSkipAlert,
   buildAnalystsStep,
@@ -51,6 +53,89 @@ describe('buildAnalystsStep', () => {
       CLOCK,
       BAR,
     );
+  });
+
+  describe('skip kinds (#1080)', () => {
+    function skippingOrchestrator(kind: 'timeout' | 'error'): AnalystOrchestrator {
+      const runAnalysts = vi.fn(async () => ({
+        views: [],
+        analyst_count: 2,
+        skipped: true,
+        failures: [
+          {
+            analyst_type: 'technical',
+            role: 'mandatory' as const,
+            reason: 'technical did not answer within 10000ms (after 2 attempts)',
+            kind,
+          },
+        ],
+      }));
+      return { runAnalysts } as unknown as AnalystOrchestrator;
+    }
+
+    async function run(step: TickSteps['analysts'], trace_id = 'trace-1') {
+      await step({
+        trace_id,
+        signal: { asset: 'AAPL', asset_class: 'stocks' },
+        clock: CLOCK,
+        bar: BAR,
+      });
+    }
+
+    it('hands the runner the cause of the skip it just returned', async () => {
+      // The narrowing to `views` is what threw the reasons away; this carries
+      // back the one bit the audit row needs, keyed on the pass that produced
+      // it so concurrent instruments cannot read each other's.
+      const skipKinds = new AnalystSkipKindRelay();
+      await run(buildAnalystsStep(skippingOrchestrator('timeout'), undefined, { skipKinds }));
+
+      expect(skipKinds.take('trace-1')).toBe('timeout');
+    });
+
+    it('distinguishes a fault from a deadline', async () => {
+      const skipKinds = new AnalystSkipKindRelay();
+      await run(buildAnalystsStep(skippingOrchestrator('error'), undefined, { skipKinds }));
+
+      expect(skipKinds.take('trace-1')).toBe('fault');
+    });
+
+    it('records nothing for a pass that produced views', async () => {
+      const runAnalysts = vi.fn(async () => ({
+        views: [makeView()],
+        analyst_count: 1,
+        skipped: false,
+        failures: [],
+      }));
+      const skipKinds = new AnalystSkipKindRelay();
+      await run(
+        buildAnalystsStep({ runAnalysts } as unknown as AnalystOrchestrator, undefined, {
+          skipKinds,
+        }),
+      );
+
+      expect(skipKinds.take('trace-1')).toBeUndefined();
+    });
+
+    it('records the kind even when the alert transport throws', async () => {
+      // The alert fires on the second consecutive skip and is deliberately
+      // allowed to fail without taking the tick down. The audit row's reason
+      // must not be collateral damage from that: the runner reads the relay
+      // immediately after this step returns.
+      const skipKinds = new AnalystSkipKindRelay();
+      const step = buildAnalystsStep(skippingOrchestrator('timeout'), undefined, {
+        skipKinds,
+        skipAlerts: {
+          postAnalystSkipAlert: async () => {
+            throw new Error('telegram is down');
+          },
+        },
+      });
+
+      await run(step, 'trace-1');
+      await run(step, 'trace-2');
+
+      expect(skipKinds.take('trace-2')).toBe('timeout');
+    });
   });
 
   it('preserves the empty-array quorum-skip contract', async () => {

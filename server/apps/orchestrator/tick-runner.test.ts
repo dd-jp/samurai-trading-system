@@ -285,6 +285,64 @@ describe('SequentialTickRunner.runInstrument', () => {
     expect(outcome).toEqual({ trace_id: TRACE_ID, final_stage: 'position_check' });
   });
 
+  it('names the cause of a quorum skip when the analysts step reports one (#1080)', async () => {
+    // The whole defect: `views.length === 0` is all the runner can see, so a
+    // starved 10s analyst deadline and a quiet market wrote the same word at
+    // the same level. The kind comes back through the optional step hook, and
+    // it has to reach BOTH the log line's level and the `audit_log` decision —
+    // an operator reads the first and the dashboard drawer glosses the second.
+    // The concrete store, held by the test so the recorded row can be read
+    // back: the log line and the `audit_log` decision come from one variable
+    // in `record`, but the dashboard reads only the second.
+    const auditLog = new SqliteAuditLog(openSharedStore(':memory:'));
+    const ctx = { ...makeCtx(), auditLog };
+    const steps = makeSteps({
+      analysts: vi.fn(async () => []),
+      analystSkipKind: vi.fn(() => 'timeout' as const),
+    });
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    expect(steps.analystSkipKind).toHaveBeenCalledWith(TRACE_ID);
+    const log = ctx.logger.log as ReturnType<typeof vi.fn>;
+    const analystsLine = log.mock.calls
+      .map(([entry]) => entry)
+      .find((entry) => entry.stage === 'analysts');
+    expect(analystsLine.message).toBe('analysts: quorum_skip_timeout');
+    expect(analystsLine.level).toBe('warn');
+
+    const rows = auditLog.getByTraceId(TRACE_ID);
+    expect(rows.find((row) => row.stage === 'analysts')?.decision).toBe('quorum_skip_timeout');
+  });
+
+  it('keeps the undifferentiated quorum_skip when no cause is reported', async () => {
+    // The control arm's analysts step relays views and holds no failures of
+    // its own, and the backtest has no production adapter — in both, a skip
+    // genuinely has no cause to name, and inventing one would be worse than
+    // the word they already write.
+    const ctx = makeCtx();
+    const steps = makeSteps({ analysts: vi.fn(async () => []) });
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    const log = ctx.logger.log as ReturnType<typeof vi.fn>;
+    const analystsLine = log.mock.calls
+      .map(([entry]) => entry)
+      .find((entry) => entry.stage === 'analysts');
+    expect(analystsLine.message).toBe('analysts: quorum_skip');
+    expect(analystsLine.level).toBe('info');
+  });
+
+  it('does not ask for a skip cause on a pass that produced views', async () => {
+    // Reads are destructive, so an unconditional read would consume the entry
+    // a genuinely skipped pass is about to need.
+    const steps = makeSteps({ analystSkipKind: vi.fn(() => undefined) });
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, makeCtx());
+
+    expect(steps.analystSkipKind).not.toHaveBeenCalled();
+  });
+
   it('short-circuits at the Trader on a null intent (no-trade)', async () => {
     const steps = makeSteps({ trader: vi.fn(async () => null) });
 
@@ -1394,5 +1452,74 @@ describe('SequentialTickRunner.runInstrument — the portfolio-tail turnstile (#
 
     expect(outcome.final_stage).toBe('execution');
     expect(steps.execution).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * #1080. Both sub-budgets on the decision path degrade to a no-trade, and
+ * until this the debate one degraded to the word `neutral` — the same word a
+ * converged debate writes when the panel genuinely finds nothing. The
+ * dashboard renders `audit_log.decision` verbatim, so the row asserted here is
+ * the whole legibility path.
+ */
+describe('SequentialTickRunner degraded-debate legibility (#1080)', () => {
+  /** `enforceLatencyBudget`'s fallback: no synthesis, no rounds, neutral, zero. */
+  function starvedDebate(): DebateResult {
+    return makeDebate({
+      synthesis: 'Debate terminated before any round completed; no synthesis available.',
+      confidence: 0,
+      converged: false,
+      rounds_completed: 0,
+      direction: 'neutral',
+      open_items: ['debate did not complete within latency budget'],
+      timed_out: { budget_ms: 60_000, elapsed_ms: 60_002 },
+    });
+  }
+
+  it('records a starved debate as budget_exhausted, not as a neutral direction', async () => {
+    const steps = makeSteps({
+      debate: vi.fn(async () => starvedDebate()),
+      trader: vi.fn(async () => null),
+    });
+    const ctx = makeCtx();
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    const rows = (ctx.auditLog as SqliteAuditLog).getByTraceId(TRACE_ID);
+    const debateRow = rows.find((row) => row.stage === 'debate');
+    expect(debateRow?.decision).toBe('budget_exhausted');
+    // The trader row is unchanged — a no_trade is still a no_trade. What the
+    // pair now says is WHY, which is the distinction #1080 is about.
+    expect(rows.find((row) => row.stage === 'trader')?.decision).toBe('no_trade');
+  });
+
+  it('raises the log level for a starved debate above ordinary stage traffic', async () => {
+    const steps = makeSteps({
+      debate: vi.fn(async () => starvedDebate()),
+      trader: vi.fn(async () => null),
+    });
+    const ctx = makeCtx();
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    const logged = (ctx.logger.log as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([entry]) => entry as { stage: string; level: string; message: string },
+    );
+    const debateLine = logged.find((entry) => entry.message === 'debate: budget_exhausted');
+    expect(debateLine?.level).toBe('warn');
+    // Everything else stays at info: a soak log where routine stages shout is
+    // a soak log nobody reads.
+    expect(logged.find((entry) => entry.message === 'analysts: quorum_met')?.level).toBe('info');
+    expect(logged.find((entry) => entry.message === 'trader: no_trade')?.level).toBe('info');
+  });
+
+  it('keeps a debate that resolved on its own terms recording its direction', async () => {
+    const steps = makeSteps();
+    const ctx = makeCtx();
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    const rows = (ctx.auditLog as SqliteAuditLog).getByTraceId(TRACE_ID);
+    expect(rows.find((row) => row.stage === 'debate')?.decision).toBe('bullish');
   });
 });

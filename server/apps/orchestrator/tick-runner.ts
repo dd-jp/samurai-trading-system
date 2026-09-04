@@ -108,6 +108,8 @@
 import type { Signal } from '../../pipeline/analysts/index.js';
 import { DEBATE_BAR_TIMEFRAME_MS, floorToBar } from '../../pipeline/debate-engine/index.js';
 import type { OrderIntent } from '../../shared/index.js';
+import { analystsSkipDecisionWord } from './analysts-decision.js';
+import { debateDecisionWord, isDegradedDecision } from './debate-decision.js';
 import { digest } from './digest.js';
 import type { TickContext, TickOutcome, TickRunner, TickStage, TickSteps } from './types.js';
 
@@ -148,6 +150,30 @@ export class SequentialTickRunner implements TickRunner {
     // is read.
     const startStageTimer = () => ({ wallMs: Date.now(), perfMs: performance.now() });
 
+    /**
+     * A degraded decision word (#1080) — `budget_exhausted`,
+     * `timed_out_partial`, `not_admitted` — means a resource control produced
+     * this stage's output instead of the market, and a soak log where that
+     * reads at `info` alongside every healthy stage is how 22 of 26 starved
+     * debates went unnoticed for a full session. The vocabulary is shared with
+     * the dashboard (contracts/pipeline.ts) so the two cannot drift.
+     *
+     * Deliberately NOT "any stage whose decision looks unusual": Risk vetoes
+     * and Verdict `no_go` are routine, decided outcomes and stay at `info`.
+     */
+    const recordLevel = (stage: TickStage, decision: string): 'info' | 'warn' | 'error' => {
+      // #921: the mandatory flat-by-close exit's execution result flows
+      // through this SAME shared helper as every other stage (the only call
+      // site passing `'execution'` is the Risk -> Verdict -> Execution tail
+      // below, reached by both entries and exits), so an execution failure —
+      // including the exact failure mode #921's resilience gaps are about —
+      // used to log at `'info'` like a normal status update.
+      if (stage === 'execution' && decision === 'error') {
+        return 'error';
+      }
+      return isDegradedDecision(decision) ? 'warn' : 'info';
+    };
+
     const record = (
       stage: TickStage,
       decision: string,
@@ -159,17 +185,7 @@ export class SequentialTickRunner implements TickRunner {
       logger.log({
         trace_id,
         stage,
-        // #921: the mandatory flat-by-close exit's execution result flows
-        // through this SAME shared helper as every other stage (the only
-        // call site passing `'execution'` is the Risk -> Verdict ->
-        // Execution tail below, reached by both entries and exits), so an
-        // execution failure — including the exact failure mode #921's
-        // resilience gaps are about — used to log at `'info'` like a normal
-        // status update. Scoped exactly to this one stage/decision pair:
-        // Risk vetoes and Verdict no_go are expected, routine outcomes and
-        // must stay at `'info'`, so this must NOT be broadened to "any
-        // stage whose decision string happens to be 'error'".
-        level: stage === 'execution' && decision === 'error' ? 'error' : 'info',
+        level: recordLevel(stage, decision),
         message: `${stage}: ${decision}`,
         payload: output,
         started_at: new Date(startedAt.wallMs).toISOString(),
@@ -352,13 +368,14 @@ export class SequentialTickRunner implements TickRunner {
     const analystsInput = { trace_id, signal, clock, bar: decisionBar.open_time };
     const analystsTimer = startStageTimer();
     const views = await this.steps.analysts(analystsInput);
-    record(
-      'analysts',
-      views.length === 0 ? 'quorum_skip' : 'quorum_met',
-      analystsInput,
-      views,
-      analystsTimer,
-    );
+    // Read only on the empty branch, and destructively (#1080): a kind belongs
+    // to one pass, and the relay is a side channel for the fact the step's
+    // return type cannot carry, not a store to be queried later.
+    const analystsDecision =
+      views.length === 0
+        ? analystsSkipDecisionWord(this.steps.analystSkipKind?.(trace_id))
+        : 'quorum_met';
+    record('analysts', analystsDecision, analystsInput, views, analystsTimer);
 
     // ── FALSIFIER ARM 2, decision cadence (#753). ──────────────────────────
     // Sited HERE — after the analysts step, before the debate — because that is
@@ -403,7 +420,10 @@ export class SequentialTickRunner implements TickRunner {
     };
     const debateTimer = startStageTimer();
     const debate = await this.steps.debate(debateInput);
-    record('debate', debate.direction, debateInput, debate, debateTimer);
+    // NOT `debate.direction` (#1080): every degraded debate resolves to
+    // `neutral`, which made a starved budget and a genuine wash the same word
+    // in `audit_log` and on the dashboard. See `debateDecisionWord`.
+    record('debate', debateDecisionWord(debate), debateInput, debate, debateTimer);
 
     // BAR-IDENTITY ASSERTION (#743, acceptance: a suppressed entry must be
     // observable). The Trader keys its intent on `debate.bar_timestamp`; if

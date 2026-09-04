@@ -209,6 +209,7 @@ import {
   SqliteTraderLogStore,
 } from '../../shared/store/index.js';
 import { CostModelImpl, SqliteStage2SelectionStore } from '../../tools/backtest/index.js';
+import { AnalystSkipKindRelay } from './analysts-decision.js';
 import {
   LoggingAnalystSkipAlertChannel,
   LoggingAnalystTelemetry,
@@ -1921,6 +1922,12 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     logger,
   });
 
+  // #1080. Both ends are wired HERE, in one place, because a relay with a
+  // writer and no reader is this repo's characteristic defect: the adapter
+  // would classify every skip and the audit row would keep saying
+  // `quorum_skip`, with nothing failing.
+  const analystSkipKinds = new AnalystSkipKindRelay();
+
   const steps: TickSteps = {
     // #743: the tick path's position-facing exit check — the Trader's
     // exit-only entry point, runnable without analysts or a debate.
@@ -1929,6 +1936,8 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // adapter's doc comment (issue #358 item 4).
     analysts: buildAnalystsStep(analysts, logger, {
       skipAlerts: config.analystSkipAlerts ?? new LoggingAnalystSkipAlertChannel(logger),
+      // #1080: why a skip happened, for the runner to read back below.
+      skipKinds: analystSkipKinds,
       // #752: the per-name/per-subclass NO_DATA counter and the
       // degraded-coverage alert. `subclassOfUniverse` is the SAME derivation
       // #739 uses for the Risk Manager gate and the Trader's frozen bracket
@@ -1970,6 +1979,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
           : { marketIntelligence: marketIntelligenceRefresh };
       })(),
     }),
+    analystSkipKind: (trace_id) => analystSkipKinds.take(trace_id),
     // Two independent stores hang off this one step, both over `config.db`:
     // #367's `SqliteLlmSpendStore` meters what the debate COSTS (the
     // dashboard's spend tile), and #364's `SqliteDebateLogStore` records what

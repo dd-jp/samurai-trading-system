@@ -17,6 +17,7 @@ export { technicalAnalyst } from './technical-analyst.js';
 export type {
   Analyst,
   AnalystFailure,
+  AnalystFailureKind,
   AnalystInput,
   AnalystRunResult,
   AnalystTelemetry,

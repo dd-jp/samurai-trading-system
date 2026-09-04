@@ -11,6 +11,39 @@
 
 import { delay } from './delay.js';
 
+/**
+ * One failed attempt that is ABOUT TO BE RETRIED, handed to `withRetry`'s
+ * observer (#1080).
+ *
+ * The observer exists because this loop was silent. A first attempt that timed
+ * out and was retried left no trace anywhere: `AnthropicLlmClient` starts its
+ * `latency_ms` clock inside the attempt and meters only the attempt that
+ * RETURNS, so the failed one is absent from `llm_spend`, and nothing logged it.
+ * A debate whose 60s latency budget was half-consumed by an invisible 30s
+ * attempt therefore looked, in the log and in the spend table, exactly like a
+ * debate that was merely slow — which is how #1080's hidden retries had to be
+ * inferred from gaps between timestamps rather than read off a line.
+ *
+ * `elapsed_ms` is THIS attempt's own duration, measured around `fn()` by the
+ * loop, not the cumulative time across attempts: the cumulative figure is
+ * recoverable by summing, and the per-attempt one is not recoverable from it.
+ */
+export interface RetryAttemptReport {
+  /** 1-based index of the attempt that just failed. */
+  attempt: number;
+  /** `RetryConfig.maxAttempts`, so a reader need not look up the config to see how many are left. */
+  maxAttempts: number;
+  /** How long the failed attempt itself ran, in milliseconds. */
+  elapsed_ms: number;
+  /** The backoff about to be slept before the next attempt. */
+  delay_ms: number;
+  /** The error that made the attempt retryable. */
+  error: unknown;
+}
+
+/** Observes each retried attempt. Must not throw — see `withRetry`. */
+export type RetryObserver = (report: RetryAttemptReport) => void;
+
 export interface RetryConfig {
   /** Total attempts including the first, e.g. 3 = up to 2 retries. */
   maxAttempts: number;
@@ -64,11 +97,26 @@ function retryAfterHintMs(error: unknown, config: RetryConfig): number | undefin
  * that attempt's delay and is used as-is — an explicit provider instruction is
  * not ours to randomize). The last error is rethrown once attempts are exhausted
  * or `isRetryable` rejects it.
+ *
+ * `onRetry` (#1080) is called once per attempt that is actually retried —
+ * after `isRetryable` accepts the error and while attempts remain, before the
+ * backoff is slept. It is NOT called for the final failing attempt, whose
+ * error the caller sees and can log itself; the point is the attempts a caller
+ * never learns about. Optional, so every existing call site is unchanged and
+ * simply reports nothing.
+ *
+ * A throwing observer is contained rather than allowed to replace the
+ * provider's error: this loop is on the path of every LLM and HTTP call in the
+ * system, and a telemetry sink that fails must not convert a recoverable
+ * timeout into an unclassified crash. It is silently swallowed here because
+ * the only sink is a logger, and a logger that cannot log has nowhere left to
+ * report to.
  */
 export async function withRetry<T>(
   fn: () => Promise<T>,
   config: RetryConfig,
   isRetryable: (error: unknown) => boolean,
+  onRetry?: RetryObserver,
 ): Promise<T> {
   if (config.maxAttempts < 1) {
     throw new Error(`RetryConfig.maxAttempts must be >= 1, got ${config.maxAttempts}`);
@@ -77,6 +125,10 @@ export async function withRetry<T>(
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= config.maxAttempts; attempt++) {
+    // Real elapsed time, not the injected `Clock`: the backtest harness steps
+    // that clock by hand and would report every attempt as instantaneous,
+    // which is the exact figure this observer exists to produce.
+    const startedAt = Date.now();
     try {
       return await fn();
     } catch (error) {
@@ -84,7 +136,21 @@ export async function withRetry<T>(
       if (!isRetryable(error) || attempt === config.maxAttempts) {
         throw error;
       }
-      await delay(retryAfterHintMs(error, config) ?? backoffDelayMs(attempt, config));
+      const delay_ms = retryAfterHintMs(error, config) ?? backoffDelayMs(attempt, config);
+      if (onRetry !== undefined) {
+        try {
+          onRetry({
+            attempt,
+            maxAttempts: config.maxAttempts,
+            elapsed_ms: Date.now() - startedAt,
+            delay_ms,
+            error,
+          });
+        } catch {
+          // See the doc comment: telemetry must not mask the provider error.
+        }
+      }
+      await delay(delay_ms);
     }
   }
 

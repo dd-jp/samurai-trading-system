@@ -77,6 +77,16 @@ export const UNCAPPED_SPEND: SpendCap = {
  * The cost of the choice is that the operator's "$50 for this run" and the
  * cap's arithmetic can disagree at boot, so `startingTotal()` exists to make
  * the opening figure loud rather than leaving it assumed to be zero.
+ *
+ * THE SUM IS A FLOOR, NOT A TOTAL (#1080). `llm_spend` holds a row only for a
+ * call that RETURNED — `AnthropicLlmClient.recordSpend` is unreachable from
+ * the timeout and error paths — so every attempt the provider generated and
+ * billed but that never came back is missing from this arithmetic, and the
+ * ceiling enforced here is therefore looser than $50 by exactly that amount.
+ * See `recordSpend`'s doc comment for the measured size of the gap in the
+ * 2026-09-03 session and for the retry log that now makes it countable. The
+ * direction of the error is the unsafe one, which is why it is stated here
+ * and not only at the writer.
  */
 export class SqliteSpendCap implements SpendCap {
   /**

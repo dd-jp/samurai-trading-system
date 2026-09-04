@@ -181,6 +181,22 @@ describe('buildPipelineView', () => {
     expect(cell(view, 'analysts')).toMatchObject({ state: 'stopped', decision: 'quorum_skip' });
   });
 
+  it('keeps the quorum-skip outcome when the skip names its cause (#1080)', () => {
+    // The lane outcome is one word for all three skip spellings — it is a
+    // closed union that drives lane rendering — and the distinction rides on
+    // the CELL's decision, which the drawer glosses from `DEGRADED_DECISIONS`.
+    // Without this, a named skip would fall through to `stopped` and a starved
+    // analyst budget would render as a halted pipeline.
+    for (const decision of ['quorum_skip_timeout', 'quorum_skip_fault'] as const) {
+      const view = buildPipelineView(
+        activity({ events: [event('trace-1', 'analysts', decision, 0)] }),
+      );
+
+      expect(onlyLane(view)).toMatchObject({ outcome: 'quorum_skip', final_stage: 'analysts' });
+      expect(cell(view, 'analysts')).toMatchObject({ state: 'stopped', decision });
+    }
+  });
+
   it('reports a verdict no_go as a completed traversal, not a short-circuit', () => {
     const view = buildPipelineView(
       activity({

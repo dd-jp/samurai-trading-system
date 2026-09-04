@@ -18,6 +18,7 @@ import type { ExecutionResult } from '../../pipeline/execution/index.js';
 import type { RiskDecision } from '../../pipeline/risk-manager/index.js';
 import type { VerdictDecision } from '../../pipeline/verdict/index.js';
 import type { AssetClass, Clock, InstrumentSubclass, OrderIntent } from '../../shared/index.js';
+import type { AnalystSkipKind } from './analysts-decision.js';
 
 export type { AssetClass, InstrumentSubclass };
 
@@ -368,6 +369,18 @@ export interface TickSteps {
      */
     bar: Date;
   }): Promise<AnalystView[]>;
+  /**
+   * Why the pass just handed to `analysts` produced no views (#1080), read
+   * once, immediately after that call, and only when the view set is empty.
+   *
+   * Optional because only the production adapter can answer it:
+   * `AnalystOrchestrator` returns its failures, `TickSteps.analysts` narrows
+   * them away, and this is the seam that carries the one bit back. Absent
+   * means the runner records the undifferentiated `quorum_skip` it always did
+   * — see `analystsSkipDecisionWord` for why that is the honest fallback for
+   * the control arm and the backtest rather than a hole.
+   */
+  analystSkipKind?(trace_id: string): AnalystSkipKind | undefined;
   debate(input: {
     trace_id: string;
     instrument: string;

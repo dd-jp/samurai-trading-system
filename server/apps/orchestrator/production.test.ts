@@ -14,6 +14,7 @@
 import { INDICATOR_UNAVAILABLE_COUNTER } from '../../pipeline/analysts/index.js';
 import {
   AnthropicLlmClient,
+  LATENCY_BUDGET_MS,
   MockLlmClient,
   SqliteDebateLogStore,
 } from '../../pipeline/debate-engine/index.js';
@@ -600,6 +601,39 @@ describe('buildProductionComponents', () => {
     }
   });
 
+  /**
+   * #1080's wiring proof, and the defect class it belongs to: a relay with a
+   * writer and no reader. `buildAnalystsStep` can classify every skip it
+   * returns, and if the root forgets either `skipKinds` (the writer) or
+   * `analystSkipKind` (the reader) the audit row keeps saying `quorum_skip`
+   * with every unit test still green — the shape of #388's unconstructed rate
+   * limiter and #433's unread tuning dial.
+   *
+   * Driven through the SHIPPED step rather than a hand-built adapter: the
+   * question is what the composition root wired, not what the adapter can do.
+   *
+   * This is the wiring evidence in place of a smoke-gate assertion, and the
+   * exclusion is structural rather than a shortcut: `yarn smoke` gates on the
+   * pipeline TRANSACTING end to end, so its fixtures produce views on every
+   * tick and no quorum skip occurs in a passing smoke run at all. A gate
+   * assertion would have to make the smoke run fail to have anything to read.
+   */
+  it('reports the cause of a quorum skip back through the steps it exposes (#1080)', async () => {
+    const { steps } = buildProductionComponents(stubConfig(db));
+
+    const views = await steps.analysts({
+      trace_id: 'trace-skip',
+      signal: { asset: 'AAPL', asset_class: 'stocks' },
+      clock: new SimulatedClock(START),
+      bar: START,
+    });
+
+    // The fixture source has no bars for this name, so the mandatory technical
+    // analyst fails on a data gap — a fault, not a deadline.
+    expect(views).toEqual([]);
+    expect(steps.analystSkipKind?.('trace-skip')).toBe('fault');
+  });
+
   it('binds the execution step onto the injected Alpaca client', async () => {
     const config = stubConfig(db);
     const { steps } = buildProductionComponents(config);
@@ -1094,9 +1128,103 @@ describe('buildProductionComponents (default llmClient fallback)', () => {
     expect(client).toBeInstanceOf(AnthropicLlmClient);
     expect(DEFAULT_LLM_CLIENT_CONFIG).toEqual({
       max_tokens: 1024,
-      timeoutMs: 30_000,
+      // 28,000ms, DERIVED from the budget invariant asserted below (#1080)
+      // rather than chosen. Written as the literal it must resolve to, so a
+      // change to the derivation has to be re-read here instead of being
+      // silently absorbed.
+      timeoutMs: 28_000,
       retry: { maxAttempts: 2, baseDelayMs: 500, maxDelayMs: 2_000 },
     });
+  });
+
+  /**
+   * #1080: the previous retry schedule let ONE logical LLM call occupy
+   * `2 * (30,000 + 2,000)` = 64,000ms, more than the whole budget the debate
+   * issuing it was racing. See `LOGICAL_LLM_CALL_BUDGET_MS` (defaults.ts) for
+   * the arithmetic and for why the crypto budget is knowingly out of bounds.
+   *
+   * The BUDGET side is a literal here on purpose. `DEFAULT_LLM_TIMEOUT_MS` is
+   * derived from `LATENCY_BUDGET_MS.stocks`, so comparing the shipped config
+   * against that same constant is an identity — it holds for any budget,
+   * including one nobody chose, and would keep passing if the derivation were
+   * replaced by a hand-picked wider timeout. Pinning 60,000 makes both sides
+   * independent: a hand-edited `timeoutMs` fails the inequality, and a moved
+   * latency budget fails the literal and has to be re-read here.
+   *
+   * What this is NOT: an allocation of the budget across a debate's calls. A
+   * three-round debate issues nine of them sequentially, so a per-attempt
+   * ceiling cannot make the budget reachable — that is the open question #1080
+   * leaves to a session that can measure it.
+   */
+  it('cannot let one logical LLM call outlast the latency budget it runs inside', () => {
+    expect(LATENCY_BUDGET_MS.stocks).toBe(60_000);
+
+    const { maxAttempts, maxDelayMs } = DEFAULT_LLM_CLIENT_CONFIG.retry;
+    const worstCaseLogicalCallMs = maxAttempts * (DEFAULT_LLM_CLIENT_CONFIG.timeoutMs + maxDelayMs);
+
+    expect(worstCaseLogicalCallMs).toBeLessThanOrEqual(60_000);
+  });
+
+  /**
+   * #1080, and the reason it had to be inferred rather than read: a retried
+   * attempt was invisible everywhere. `AnthropicLlmClient` starts its
+   * `latency_ms` clock inside the attempt and meters only through
+   * `recordSpend`, which a failed attempt never reaches — so a timeout that
+   * halved a debate's budget left no log line and no `llm_spend` row.
+   *
+   * Driven through the REAL client the composition root builds, not through
+   * `withRetry` directly (that loop has its own tests): the defect class this
+   * guards is a mechanism that exists, is tested, and is wired nowhere.
+   */
+  it('logs each retried LLM attempt through the client the composition root builds', async () => {
+    const logger = recordingLogger();
+    // Every attempt gets a well-formed HTTP response; what makes the call
+    // retryable is the caller's own parse rejecting it, which is the cheapest
+    // retryable error to provoke without a timer.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              choices: [{ message: { content: 'not json' }, finish_reason: 'stop' }],
+              usage: { prompt_tokens: 10, completion_tokens: 5 },
+              model: DEFAULT_NOUS_MODELS.debate,
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          ),
+      ),
+    );
+    const client = buildDefaultLlmClient(logger);
+    let parses = 0;
+
+    await expect(
+      client.complete({
+        prompt: 'p',
+        context: {
+          analyst_views: [],
+          attribution: { trace_id: 'trace-1', stage: 'debate', debate_id: 'debate-9' },
+        },
+        parseResponse: () => {
+          parses += 1;
+          return { valid: false, reason: 'unparseable' };
+        },
+      }),
+    ).rejects.toThrow();
+
+    // Two attempts made, and the FIRST one — the attempt no other record keeps
+    // — is on the log.
+    expect(parses).toBe(2);
+    const retryLine = logger.entries.find((entry) => entry.message.startsWith('llm retry:'));
+    expect(retryLine?.level).toBe('warn');
+    expect(retryLine?.trace_id).toBe('trace-1');
+    expect(retryLine?.payload).toMatchObject({
+      attempt: 1,
+      max_attempts: 2,
+      debate_id: 'debate-9',
+      model: DEFAULT_NOUS_MODELS.debate,
+    });
+    vi.unstubAllGlobals();
   });
 });
 

@@ -270,3 +270,37 @@ later admissible debate needs. Pinned by test.
 An absent `llmBudgetUsd` warns loudly at startup rather than defaulting
 silently, the same posture `SAMURAI_ALERTS` takes: no safe default, say what
 was chosen.
+
+### Amendment 2026-09-04 (#1080) — the cap's sum is a floor, and the size of the gap is now readable
+
+`SqliteSpendCap` sums `llm_spend.cost_usd`, and `llm_spend` holds a row only
+for an LLM call that **returned**: `AnthropicLlmClient.recordSpend` is
+unreachable from the timeout and error paths, because a failed call carries no
+usage block to read. Every attempt the provider generated and billed but that
+never came back is therefore missing from the cap's arithmetic, and the
+ceiling this ADR enforces is looser than $50 by exactly that amount. The
+direction of the error is the unsafe one.
+
+That was already stated at the writer as "a known floor, not an oversight".
+What #1080 adds is a measurement and a way to keep measuring it:
+
+- **Measured.** In the 2026-09-03 paper session, at least 9 of the 26
+  timed-out debates contained a full 30s attempt that timed out and was
+  retried — provably, because one attempt is bounded by
+  `AnthropicLlmClientConfig.timeoutMs`, so any interval between consecutive
+  logged calls that exceeds it must contain one. One debate (`9d9e505f3493`)
+  consumed its entire 60s budget with **zero** `llm_spend` rows. At the
+  session's mean metered debate-call cost of $0.002332, those attempts are a
+  floor of roughly **$0.021** the cap could not see.
+- **Readable.** `AnthropicLlmClientConfig.onRetryAttempt` now logs every
+  retried attempt at `warn` with its elapsed milliseconds
+  (`llm retry: <model> attempt N of M failed after Xms …`), wired at the
+  composition root. The rows are still not written — the information does not
+  exist client-side — so the sum remains a floor, but a floor whose size can
+  be checked against the log instead of inferred from timestamp gaps.
+
+The retry schedule itself is now bounded by the latency budget it runs inside:
+`maxAttempts * (timeoutMs + maxDelayMs) <= LATENCY_BUDGET_MS.stocks`, pinned by
+test in `production.test.ts`. Before #1080 that product was 64,000ms against a
+60,000ms budget — one logical call could, alone and invisibly, exceed the
+deadline it was supposed to be helping the caller meet.

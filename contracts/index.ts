@@ -24,6 +24,9 @@
 
 export type { MetricsSuite } from './metrics.js';
 export {
+  DEGRADED_DECISIONS,
+  type DegradedDecision,
+  isDegradedDecision,
   PIPELINE_STAGES,
   type PipelineCell,
   type PipelineCellState,
