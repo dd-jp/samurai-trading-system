@@ -191,20 +191,28 @@ export interface Analyst {
   run(input: AnalystInput): Promise<AnalystView>;
 }
 
-/** One persona's failure this tick, reason-tagged (analysts-spec.md "Module: Failure Handling"). */
 /**
  * Why a persona failed, as a discriminator rather than as prose (#1080).
  *
- * `'timeout'` means every attempt hit `AnalystOrchestrator`'s per-attempt
- * deadline; `'error'` means the persona threw (a data gap, a provider fault, a
- * malformed response). The reason string already names both, but only by
- * spelling — a reader downstream had to match on the words
- * `did not answer within` to tell them apart, and the two are acted on
- * differently: a deadline that no attempt can meet is a budget that has become
- * unreachable, an upstream fault is not.
+ * The kind describes THE ATTEMPT THE STAGE GAVE UP ON, not all of them:
+ * `'timeout'` means the final attempt hit `AnalystOrchestrator`'s per-attempt
+ * deadline, `'error'` means it threw (a data gap, a provider fault, a malformed
+ * response). A run that threw once and then timed out reports `'timeout'`.
+ *
+ * That is the terminal condition, and it is the one worth surfacing. The
+ * alternative — `'timeout'` only when EVERY attempt hit the deadline — would
+ * report a throw-then-timeout run as an upstream fault, which is exactly the
+ * misattribution #1080 exists to remove: it hides a deadline that has become
+ * unreachable behind a word an operator reads as someone else's outage. The
+ * same preference decides a mixed set of personas one layer up (`skipKindOf`).
+ *
+ * The reason string already names both, but only by spelling — a reader
+ * downstream had to match on the words `did not answer within` to tell them
+ * apart, and the two are acted on differently.
  */
 export type AnalystFailureKind = 'timeout' | 'error';
 
+/** One persona's failure this tick, reason-tagged (analysts-spec.md "Module: Failure Handling"). */
 export interface AnalystFailure {
   analyst_type: string;
   role: 'mandatory' | 'optional';
