@@ -286,7 +286,18 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   private readonly logger: Logger;
 
   constructor(private readonly input: AlpacaBrokerAdapterInput) {
-    this.rateLimiter = input.rateLimiter ?? new TokenBucket(DEFAULT_VENUE_PACING.alpaca);
+    // `{ logger, name: 'alpaca' }` (#1083): the production root always injects
+    // `rateLimiter` (`production.ts`'s shared `alpacaBucket`, wired the same
+    // way), so this default is a fallback for a caller that constructs the
+    // adapter standalone — a tool or a test with no injected bucket. Telemetry
+    // is wired here too so that path is not silently worse-observed than the
+    // production one.
+    this.rateLimiter =
+      input.rateLimiter ??
+      new TokenBucket(DEFAULT_VENUE_PACING.alpaca, undefined, {
+        logger: input.logger,
+        name: 'alpaca',
+      });
     this.state = input.state ?? new InMemoryBrokerStateStore();
     this.clock = input.clock ?? new SystemClock();
     this.unpricedFillAgeOutMs = input.unpricedFillAgeOutMs ?? DEFAULT_UNPRICED_FILL_AGE_OUT_MS;

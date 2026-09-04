@@ -19,7 +19,11 @@ import {
 } from '../../../pipeline/debate-engine/index.js';
 import { DEFAULT_TRADER_CONFIG } from '../../../pipeline/trader/index.js';
 import type { AssetClass, Clock, LogEntry, Logger } from '../../../shared/index.js';
-import { DEFAULT_VENUE_PACING, SimulatedClock } from '../../../shared/index.js';
+import {
+  DEFAULT_VENUE_PACING,
+  SimulatedClock,
+  TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS,
+} from '../../../shared/index.js';
 import { openSharedStore, type SharedStore } from '../../../shared/store/index.js';
 import { DebateBarDecisionGate } from '../decision-bar-gate.js';
 import { paperStartingProfile } from '../paper-profile.js';
@@ -490,6 +494,76 @@ describe('the composition root paces the broker from ops config (#299)', () => {
     // Drained so the pending promise does not outlive the test.
     await vi.advanceTimersByTimeAsync(1_000_000);
     await second;
+  });
+});
+
+/**
+ * #1083's wiring proof: the shared `alpacaBucket` `production.ts` builds is
+ * constructed WITH telemetry, not just constructed. Exercised through the
+ * real composition root and the real broker — the same shape of gap #388's
+ * own file-header describes (a mechanism that is implemented, unit-tested and
+ * exported, but never actually wired at the root).
+ */
+describe('the composition root wires wait telemetry onto the shared Alpaca bucket (#1083)', () => {
+  let db: SharedStore;
+
+  beforeEach(() => {
+    db = openSharedStore(':memory:');
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    db.close();
+  });
+
+  /**
+   * THE MUTATION THIS KILLS: drop `{ logger, name: 'alpaca' }` from the
+   * `new TokenBucket(...)` call in `production.ts` and go back to
+   * `new TokenBucket(venuePacing.alpaca)`. Every test above this one still
+   * passes — the bucket still paces identically — so only an assertion on the
+   * LOG LINE itself, not on pacing behaviour, can catch it.
+   */
+  it('logs a wait on the real broker path once the shared bucket parks a caller', async () => {
+    const { logger, entries } = recordingLogger();
+    const components = buildProductionComponents(
+      stubConfig(db, {
+        llmClient: countingLlmClient(),
+        logger,
+        // Same shape as the pacing test above: one token, and a refill slow
+        // enough that the second call is still parked well past the
+        // threshold when this test checks it.
+        venuePacing: {
+          alpaca: { capacity: 1, refillPerSecond: 0.001 },
+          ccxt: { capacity: 1, refillPerSecond: 1 },
+          ibkr: { capacity: 5, refillPerSecond: 5 },
+        },
+      }),
+    );
+
+    await components.broker.submitBracket(bracketRequest('key-1'));
+    const second = components.broker.submitBracket(bracketRequest('key-2'));
+
+    // This test's job is the `{ logger, name }` argument reaching the shared
+    // bucket, not pinning the threshold value itself — that belongs to
+    // `token-bucket.test.ts`'s "wait under the threshold" case, which is the
+    // one actually discriminating on the constant. So drain in one step
+    // rather than stopping at the threshold first; this config's refill
+    // takes ~1000s, three orders of magnitude past the threshold, which
+    // would pass here even if the constant were 1 or 100.
+    await vi.advanceTimersByTimeAsync(1_000_000);
+    await second;
+
+    const waits = entries.filter(
+      (entry) => (entry.payload as { event?: string } | undefined)?.event === 'token_bucket_wait',
+    );
+    expect(waits).toHaveLength(1);
+    const [wait] = waits;
+    if (wait === undefined) throw new Error('unreachable — length asserted above');
+    expect(wait.payload).toMatchObject({ bucket: 'alpaca', lane: 'priority' });
+    expect((wait.payload as { wait_ms: number }).wait_ms).toBeGreaterThanOrEqual(
+      TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS,
+    );
   });
 });
 

@@ -3257,6 +3257,35 @@ export function evaluateSmokeGate(
      * the gate green.
      */
     fillSync: FillSyncFailureEvidence;
+    // #1083's wait telemetry has DELIBERATELY no evidence field here, unlike
+    // every mechanism above — the standard's "wiring a mechanism means
+    // asserting it here" still applies, but this mechanism does not fit the
+    // shape this gate checks:
+    //
+    // - Every field above reads back a DURABLE effect a fixture-driven run
+    //   produces for free (a risk_critic_log row, a RateLimiterSnapshot,
+    //   persisted bars). #1083 is a log line with no row — there is nothing
+    //   to read back once the run ends.
+    // - Producing that line requires a REAL wait past
+    //   TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS: `delay()` (shared/http/delay.ts)
+    //   is real `setTimeout` by design ("every caller is a backoff or a
+    //   pacing wait that vitest drives with fake timers") — `yarn smoke` has
+    //   no fake-timer escape hatch, so asserting the line's PRESENCE would
+    //   spend real wall-clock seconds pacing this gate for a scenario built
+    //   only to trigger it, and asserting its ABSENCE is vacuously green:
+    //   the smoke universe's own call volume never drains a healthy-sized
+    //   bucket, so the line does not fire whether the wiring is correct or
+    //   deleted — precisely the `llmRateLimiterSnapshot` comment's warning
+    //   above, reproduced.
+    //
+    // Enforcement instead lives in
+    // `server/apps/orchestrator/production/rate-limit-wiring.test.ts`, describe
+    // block "the composition root wires wait telemetry onto the shared Alpaca
+    // bucket (#1083)" — driven through the same real `buildProductionComponents`
+    // this gate uses, with fake timers standing in for the real wait, and
+    // mutation-killed (drop `{ logger, name: 'alpaca' }` from `production.ts`'s
+    // `new TokenBucket(...)` and that test fails; nothing here would notice
+    // either way).
   },
 ): SmokeGateResult {
   const failures: string[] = [];

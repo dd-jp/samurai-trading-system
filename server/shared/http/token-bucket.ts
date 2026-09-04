@@ -13,8 +13,19 @@
  * Deliberately dependency-free and clock-injectable: the same reason the rest
  * of this codebase takes a `Clock` — a bucket that reads wall-clock directly
  * cannot be tested without sleeping through real seconds.
+ *
+ * #1083: throttling was completely silent — a caller parked here for eight
+ * seconds and one served instantly produced the same (nonexistent) trace, so
+ * a starved fetch could be neither confirmed nor ruled out as an explanation
+ * for a session's timeouts. `TokenBucketTelemetry` closes that gap with an
+ * OPTIONAL wait-observed log line; see `take()` and
+ * `TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS` for what gets logged and when. It does
+ * not change what `acquire()`/`acquireBackground()` resolve on or when —
+ * observation only, never a second control on pacing.
  */
 
+import { safeLog } from '../safe-log.js';
+import type { Logger } from '../types/primitives.js';
 import { delay } from './delay.js';
 
 export interface TokenBucketConfig {
@@ -41,6 +52,39 @@ export interface TokenBucketConfig {
   reserveForPriority?: number;
 }
 
+/** Which of the two lanes `take()` was called through — see `acquire()` vs `acquireBackground()`. */
+type TokenBucketLane = 'priority' | 'background';
+
+/**
+ * Optional wait-observed telemetry (#1083). A bucket built without this
+ * argument behaves exactly as before — no import, no log line, nothing to
+ * wire — which is why every pre-#1083 call site still compiles unchanged.
+ */
+export interface TokenBucketTelemetry {
+  logger: Logger;
+  /**
+   * Which bucket this is, e.g. `'alpaca'` — the venue/consumer label a reader
+   * would use to tell two buckets' waits apart, not the class name (every
+   * bucket is a `TokenBucket`, so that would tell them nothing).
+   */
+  name: string;
+}
+
+/**
+ * A wait shorter than this is ordinary contention among concurrent callers on
+ * a shared bucket — e.g. two callers racing an almost-full bucket, the loser
+ * waiting out a single token's refill — and logging every one of those would
+ * make a healthy run noisy rather than legible. Above it, on the fastest
+ * bucket wired in production today (Alpaca, 2 tok/s — half a second per
+ * token), the caller has waited longer than two tokens'-worth of refill,
+ * which one concurrent rival no longer explains: it is either a real burst
+ * queue or the priority reserve holding a background caller back (#391) —
+ * exactly the case #1083 needs made visible. Named rather than inlined so a
+ * reader can find the number without re-deriving it, and so a future,
+ * slower-refilling venue does not have to reason about a magic `1_000`.
+ */
+export const TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS = 1_000;
+
 export class TokenBucket {
   private tokens: number;
   private lastRefill: number;
@@ -48,6 +92,7 @@ export class TokenBucket {
   constructor(
     private readonly config: TokenBucketConfig,
     private readonly now: () => number = Date.now,
+    private readonly telemetry?: TokenBucketTelemetry,
   ) {
     // Starts full: the first calls after process start are a legitimate burst,
     // and starting empty would delay the first order for no protective gain.
@@ -76,7 +121,7 @@ export class TokenBucket {
    * into the request that follows.
    */
   async acquire(signal?: AbortSignal): Promise<void> {
-    await this.take(0, signal);
+    await this.take(0, 'priority', signal);
   }
 
   /**
@@ -91,16 +136,23 @@ export class TokenBucket {
    * fetch on shutdown, so it would be plumbing nothing calls.
    */
   async acquireBackground(): Promise<void> {
-    await this.take(this.config.reserveForPriority ?? 0);
+    await this.take(this.config.reserveForPriority ?? 0, 'background');
   }
 
-  private async take(reserve: number, signal?: AbortSignal): Promise<void> {
+  private async take(reserve: number, lane: TokenBucketLane, signal?: AbortSignal): Promise<void> {
     const needed = 1 + reserve;
+    // Wall-clock start, not a flag: most calls never park at all, and reading
+    // `this.now()` once up front costs nothing on that (overwhelmingly common)
+    // path. Uses the SAME injected clock as `refill()` deliberately — a
+    // second, unrelated clock here could disagree with it under a faked timer
+    // and turn an instant grant into a phantom logged wait.
+    const startedAt = this.now();
     while (true) {
       signal?.throwIfAborted();
       this.refill();
       if (this.tokens >= needed) {
         this.tokens -= 1;
+        this.logIfMaterialWait(lane, this.now() - startedAt);
         return;
       }
       // Time until the deficit is minted. `refillPerSecond` is trusted to be
@@ -109,6 +161,59 @@ export class TokenBucket {
       const waitMs = ((needed - this.tokens) / this.config.refillPerSecond) * 1000;
       await this.waitOrAbort(Math.max(waitMs, 0), signal);
     }
+  }
+
+  /**
+   * #1083. `undefined` telemetry (every call site that hasn't wired it) and a
+   * wait under the threshold are both silent by design — see
+   * `TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS` for why the second one is a floor
+   * and not a lower one.
+   *
+   * The event name is `token_bucket_wait`, chosen to survive a grep that a
+   * bare `token` or a bare `429` cannot: an LLM `input_tokens` field
+   * substring-matches the former, and a digit run substring-matches the
+   * latter — both were false positives that made a real session's throttling
+   * unanswerable (#1083's own motivating search).
+   *
+   * `waitedMs` is a `this.now()` delta, the same injected clock `refill()`
+   * uses (deliberately, per `take()`'s comment) rather than a monotonic
+   * `performance.now()` — so under the real `Date.now` default, a backward
+   * wall-clock step mid-wait can make a genuine wait compute small or
+   * negative. The threshold check right below is what that actually hits:
+   * a negative or shrunk `waitedMs` fails `>= TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS`
+   * the same as a short real wait would, so the line is silently dropped
+   * rather than logged with a nonsense value. Accepted: an NTP step is rare
+   * enough, and losing one line to it is a smaller cost than a `wait_ms`
+   * field a reader has to distrust on every line.
+   *
+   * Runs AFTER `take()` has already decremented `this.tokens` (the caller has
+   * been granted its token by the time this is called) and `take()` is
+   * `async`, so a synchronous throw from `this.telemetry.logger.log` here
+   * would otherwise become a REJECTED `acquire()`/`acquireBackground()` for a
+   * caller pacing already granted — an observation-only mechanism turning
+   * into a spurious order-submit failure on the production broker path if a
+   * custom or buggy `Logger` throws. `safeLog` (shared/safe-log.ts, #573) is
+   * exactly this guarantee already extracted once for the identical reason at
+   * three other call sites — reused rather than a fourth local try/catch.
+   */
+  private logIfMaterialWait(lane: TokenBucketLane, waitedMs: number): void {
+    if (this.telemetry === undefined) return;
+    if (waitedMs < TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS) return;
+    const roundedWaitMs = Math.round(waitedMs);
+    safeLog(this.telemetry.logger, {
+      trace_id: 'token-bucket',
+      stage: 'rate_limit',
+      level: 'warn',
+      message:
+        `token_bucket_wait: the '${this.telemetry.name}' bucket paced a ${lane} caller for ` +
+        `${roundedWaitMs}ms before granting a token.`,
+      payload: {
+        event: 'token_bucket_wait',
+        bucket: this.telemetry.name,
+        lane,
+        wait_ms: roundedWaitMs,
+      },
+    });
   }
 
   /**
