@@ -1429,33 +1429,36 @@ export type LiquidityGateStatus =
 export function liquidityGateStatus(
   pool: readonly LseEtpPoolRow[] = LSE_ETP_POOL,
 ): LiquidityGateStatus {
-  if (pool.length === 0) {
+  // Walked as a loop rather than `new Set(pool.map(...))` + destructure:
+  // `noUncheckedIndexedAccess` types both a `Set`'s iterated members and
+  // `pool[0]` as possibly-`undefined`, which would force a second,
+  // unreachable "empty pool" branch below the one this function already has
+  // to have for `pool.length === 0`. `only` stays `undefined` only when the
+  // pool is empty, so the single length check below is the only guard this
+  // function needs.
+  let only: SaxoTradeability | undefined;
+  let discriminates = false;
+  for (const row of pool) {
+    if (only === undefined) {
+      only = row.saxo_tradeable;
+    } else if (row.saxo_tradeable !== only) {
+      discriminates = true;
+      break;
+    }
+  }
+  if (pool.length === 0 || only === undefined) {
     return {
       state: 'unarmed',
       reason: 'Empty pool — there is nothing for the gate to exclude on.',
     };
   }
-  const distinct = new Set(pool.map((row) => row.saxo_tradeable));
-  if (distinct.size > 1) {
+  if (discriminates) {
     return {
       state: 'armed',
       reason:
         'saxo_tradeable discriminates between rows — the gate has real exclusion information.',
     };
   }
-  // Reads the first row rather than destructuring `distinct` itself: `Set`
-  // iteration types every member as possibly-`undefined`, and so does
-  // `noUncheckedIndexedAccess` on `pool[0]` — this guard satisfies the
-  // latter and is unreachable in practice, since the empty-pool case
-  // returned above.
-  const firstRow = pool[0];
-  if (firstRow === undefined) {
-    return {
-      state: 'unarmed',
-      reason: 'Empty pool — there is nothing for the gate to exclude on.',
-    };
-  }
-  const only = firstRow.saxo_tradeable;
   if (only === 'unverified') {
     return {
       state: 'unarmed',
@@ -1544,7 +1547,7 @@ export function assertValidPool(pool: readonly LseEtpPoolRow[]): void {
  * real gate has to come from #1054 Part 2's cost ceiling instead — never a
  * reason to flip one row back to the other value just to silence this check.
  */
-export function assertLiquidityGateNotVacuous(pool: readonly LseEtpPoolRow[]): void {
+function assertLiquidityGateNotVacuous(pool: readonly LseEtpPoolRow[]): void {
   const status = liquidityGateStatus(pool);
   if (status.state === 'vacuous') {
     throw new Error(
