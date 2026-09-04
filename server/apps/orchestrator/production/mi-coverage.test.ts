@@ -373,6 +373,67 @@ describe('checkMiCoverage', () => {
     expect(alertsPosted).toHaveLength(1);
   });
 
+  it('loses nothing by skipping observe for a COVERED name MI has not reached yet (#1085)', async () => {
+    // The gate sits above `observe`, so a covered instrument is skipped too
+    // while the gate is closed — the hydrated-archive case, where a name reads
+    // covered before a single refresh has run. That skip is a no-op rather
+    // than a lost reset: `observe(x, true)` only DELETES `x` from the
+    // consecutive and currently-missing maps, and `x` cannot be in either.
+    // Both are populated exclusively by `observe(x, false)`, which this same
+    // gate blocks, and `MiRefreshQueue`'s `#attempted` set is add-only — one
+    // `add` and no delete, not even in `stop()` — so `refreshAttempted` never
+    // goes true then false again. The monitor is also constructed per process
+    // (`production.ts`) and reads nothing back, so there is no earlier run's
+    // streak to strand.
+    const monitor = new MiCoverageMonitor();
+    let attempted = false;
+    const { deps, alertsPosted } = buildDeps({
+      covered: true,
+      monitor,
+      refreshAttempted: () => attempted,
+    });
+
+    await checkMiCoverage(deps, {
+      trace_id: 'trace-1',
+      instrument: '3USL',
+      assetClass: 'stocks',
+      reportedAt: NOW,
+    });
+
+    expect(alertsPosted).toHaveLength(0);
+    expect(monitor.degraded).toBe(false);
+    expect(monitor.everDegraded).toBe(false);
+
+    // A gated MISS on the same name, still before the first sweep — the other
+    // half of what the gate suppresses.
+    const gatedMiss = buildDeps({ covered: false, monitor, refreshAttempted: () => attempted });
+
+    await checkMiCoverage(gatedMiss.deps, {
+      trace_id: 'trace-2',
+      instrument: '3USL',
+      assetClass: 'stocks',
+      reportedAt: NOW,
+    });
+
+    expect(gatedMiss.alertsPosted).toHaveLength(0);
+
+    // The discriminating assertion: once MI has looked, the next miss is the
+    // FIRST one the monitor has seen and alerts immediately. Move `observe`
+    // above the gate — so either gated pass advanced the counter — and this
+    // miss becomes the second, which `shouldAlertAt` skips, and this goes red.
+    attempted = true;
+    const missing = buildDeps({ covered: false, monitor, refreshAttempted: () => true });
+
+    await checkMiCoverage(missing.deps, {
+      trace_id: 'trace-3',
+      instrument: '3USL',
+      assetClass: 'stocks',
+      reportedAt: NOW,
+    });
+
+    expect(missing.alertsPosted).toHaveLength(1);
+  });
+
   it('alerts on the first miss when no gate is supplied, because nothing will ever look', async () => {
     // The honest default for a run with no MI writer wired at all.
     const { deps, alertsPosted } = buildDeps({ covered: false });
