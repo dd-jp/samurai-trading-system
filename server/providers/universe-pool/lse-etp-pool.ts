@@ -1405,13 +1405,31 @@ export function assertValidPool(pool: readonly LseEtpPoolRow[]): void {
 export const FALLBACK_DEFAULT_MAX_ROWS = 10;
 
 /**
- * Enforces the three rules on the pool's declared fallback subset.
+ * Enforces the four rules on the pool's declared fallback subset.
  *
- * Rules 1 and 2 are the spec's ("a pool with no `fallback_default` row is
- * rejected at load, not at fallback time", and "Not the full pool"). **Rule 3
- * — no two fallback rows may share a `screening_instrument` — is this
- * module's own invariant, not the spec's**, and is called out as such here
- * and in its throw message so it can be removed without hunting for a
+ * Rule 1 is the spec's: "a pool with no `fallback_default` row is rejected at
+ * load, not at fallback time".
+ *
+ * **Rule 2 is a ceiling, not the spec's "Not the full pool" clause**, and the
+ * difference matters: a pool of ten rows or fewer may mark every row and
+ * still pass. A strict `fallback.length < pool.length` subset rule is
+ * deliberately not enforced, for the same reason the 5-row floor is not — it
+ * would reject a legitimately small future pool for violating a range written
+ * against this 30-row one. At any pool size the ceiling is the binding
+ * constraint the spec gives a reason for (the refusal storm, and the tick
+ * budget); "not the full pool" is a property of a pool this size, which
+ * `lse-etp-pool.test.ts` pins on the checked-in artifact rather than here.
+ *
+ * **Rule 3 — every fallback row must carry a measured subclass envelope.**
+ * Degraded mode is the worst place to discover an unmeasured envelope: there
+ * is no screener running to notice, and `liveSizingSubclassFor` omits the
+ * unmeasured rows, so a fallback list holding one would size against nothing.
+ * The subset selection was made on this basis (#903); the rule stops a later
+ * edit from marking a widened row without re-reading that reasoning.
+ *
+ * **Rule 4 — no two fallback rows may share a `screening_instrument` — is
+ * this module's own invariant, not the spec's**, and is called out as such
+ * here and in its throw message so it can be removed without hunting for a
  * document that required it. It exists because four underlyings in this pool
  * (SPY, QQQ, PLTR, NVDA) carry two ETP lines each, and a fallback list that
  * picked up both lines of one underlying would concentrate a degraded-mode
@@ -1436,6 +1454,16 @@ export function assertValidFallbackSubset(pool: readonly LseEtpPoolRow[]): void 
         'produces a refusal storm instead of trading, and it breaches the same tick budget the ' +
         'active-list cap exists to bound.',
     );
+  }
+  for (const row of fallback) {
+    if (!row.subclass_envelope_measured) {
+      throw new Error(
+        `LSE ETP pool marks '${row.lse_ticker}' as a fallback_default row, but its subclass ` +
+          'envelope was never measured (#903). Degraded mode is the worst place to discover an ' +
+          'unmeasured envelope: no screener is running to notice, and liveSizingSubclassFor omits ' +
+          'the unmeasured rows, so the fallback would size against nothing.',
+      );
+    }
   }
   const seen = new Map<string, string>();
   for (const row of fallback) {

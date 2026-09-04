@@ -160,6 +160,22 @@ describe('the declared fallback subset (F4, docs/reviews/universe-path-gap-sweep
     expect(() => assertValidPool(doubled)).toThrow(/own invariant/);
   });
 
+  it('assertValidPool rejects a fallback row whose subclass envelope was never measured', () => {
+    // #903's four widened rows are excluded from liveSizingSubclassFor, so a
+    // fallback holding one would size against nothing — in the one mode with
+    // no screener running to notice.
+    const widened = [
+      makeRow({
+        lse_ticker: '3VT',
+        screening_instrument: 'VT',
+        fallback_default: true,
+        subclass_envelope_measured: false,
+      }),
+    ];
+    expect(() => assertValidPool(widened)).toThrow(/'3VT'/);
+    expect(() => assertValidPool(widened)).toThrow(/never measured/);
+  });
+
   it('accepts two rows on one underlying when only one of them is the fallback', () => {
     expect(() =>
       assertValidPool([
