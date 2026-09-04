@@ -356,4 +356,41 @@ describe('TokenBucket wait telemetry (#1083)', () => {
     await pending;
     expect(admitted).toBe(true);
   });
+
+  /**
+   * Bot review on PR #1091: `take()` decrements `this.tokens` BEFORE logging
+   * the wait, so a throwing `Logger.log` — a buggy or custom sink — must not
+   * be able to reject `acquire()`/`acquireBackground()` for a caller pacing
+   * already granted. On the production broker path that would convert a
+   * logging fault into a spurious order-submit failure. Observation must
+   * never be able to break the control path.
+   */
+  it('does not reject the caller, and still grants the token, when the logger throws', async () => {
+    const throwingLogger: Logger = {
+      log: () => {
+        throw new Error('sink is down');
+      },
+    };
+    const bucket = new TokenBucket({ capacity: 1, refillPerSecond: 1 }, undefined, {
+      logger: throwingLogger,
+      name: 'alpaca',
+    });
+    await bucket.acquire();
+
+    let admitted = false;
+    let rejected: unknown;
+    const pending = bucket
+      .acquire()
+      .then(() => {
+        admitted = true;
+      })
+      .catch((error: unknown) => {
+        rejected = error;
+      });
+    await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS);
+    await pending;
+
+    expect(admitted).toBe(true);
+    expect(rejected).toBeUndefined();
+  });
 });

@@ -24,6 +24,7 @@
  * observation only, never a second control on pacing.
  */
 
+import { safeLog } from '../safe-log.js';
 import type { Logger } from '../types/primitives.js';
 import { delay } from './delay.js';
 
@@ -184,12 +185,22 @@ export class TokenBucket {
    * rather than logged with a nonsense value. Accepted: an NTP step is rare
    * enough, and losing one line to it is a smaller cost than a `wait_ms`
    * field a reader has to distrust on every line.
+   *
+   * Runs AFTER `take()` has already decremented `this.tokens` (the caller has
+   * been granted its token by the time this is called) and `take()` is
+   * `async`, so a synchronous throw from `this.telemetry.logger.log` here
+   * would otherwise become a REJECTED `acquire()`/`acquireBackground()` for a
+   * caller pacing already granted — an observation-only mechanism turning
+   * into a spurious order-submit failure on the production broker path if a
+   * custom or buggy `Logger` throws. `safeLog` (shared/safe-log.ts, #573) is
+   * exactly this guarantee already extracted once for the identical reason at
+   * three other call sites — reused rather than a fourth local try/catch.
    */
   private logIfMaterialWait(lane: TokenBucketLane, waitedMs: number): void {
     if (this.telemetry === undefined) return;
     if (waitedMs < TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS) return;
     const roundedWaitMs = Math.round(waitedMs);
-    this.telemetry.logger.log({
+    safeLog(this.telemetry.logger, {
       trace_id: 'token-bucket',
       stage: 'rate_limit',
       level: 'warn',
