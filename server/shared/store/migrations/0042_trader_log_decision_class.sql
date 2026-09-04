@@ -22,18 +22,19 @@
 --
 -- `reason_detail_compared_value` / `reason_detail_threshold` are two columns,
 -- not one JSON blob: both are numeric and both are populated together, on
--- exactly the three skip reasons that compare a value to a configured
+-- exactly the four skip reasons that compare a value to a configured
 -- threshold (`below_conviction_floor`, `below_min_notional`,
--- `scale_in_conviction_delta_not_met`). Two typed columns let a query filter
--- or aggregate on either number directly; a soak asking "how many were
--- near-misses within 0.02 of the floor" cannot do that against a JSON string.
+-- `scale_in_conviction_delta_not_met`, `atr_insufficient_bars`). Two typed
+-- columns let a query filter or aggregate on either number directly; a soak
+-- asking "how many were near-misses within 0.02 of the floor" cannot do that
+-- against a JSON string.
 --
 -- A plain ADD COLUMN, not a table rebuild, mirroring 0030 and 0041: all three
 -- columns are new and nullable, and `trader_log` carries no CHECK constraint
 -- over any of them. Rows written before this migration carry NULL, which is
 -- the honest reading — classification was not recorded, not "declined on the
 -- signal" by default. NULL is also correct going forward for every skip that
--- is not one of the three threshold sites, and for every non-skip row.
+-- is not one of the four threshold sites, and for every non-skip row.
 ALTER TABLE trader_log ADD COLUMN decision_class TEXT;
 ALTER TABLE trader_log ADD COLUMN reason_detail_compared_value REAL;
 ALTER TABLE trader_log ADD COLUMN reason_detail_threshold REAL;

@@ -49,11 +49,12 @@ export interface TraderDecisionRecord {
    */
   decision_class: string | null;
   /**
-   * The compared value and the threshold it missed, for the three skip
+   * The compared value and the threshold it missed, for the four skip
    * reasons that are numeric gates (`below_conviction_floor`,
-   * `below_min_notional`, `scale_in_conviction_delta_not_met`) — without both
-   * numbers a near-miss and a decisive refusal are the same row. `null` for
-   * every other skip and always null when an order was produced.
+   * `below_min_notional`, `scale_in_conviction_delta_not_met`,
+   * `atr_insufficient_bars`) — without both numbers a near-miss and a
+   * decisive refusal are the same row. `null` for every other skip and
+   * always null when an order was produced.
    */
   reason_detail: { compared_value: number; threshold: number } | null;
   /**

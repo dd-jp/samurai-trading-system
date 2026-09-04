@@ -2136,6 +2136,30 @@ describe('decideWithReason — decision class and reason detail (#1109)', () => 
     expect(outcome.decision_class).toBe('could_not_decide');
   });
 
+  it('classifies session_closing as declined_on_signal even when the debate is degraded', async () => {
+    // Second-pass review of #1109's fix: unlike `below_conviction_floor`
+    // above, `session_closing` fires purely off `withinFlattenWindow`'s
+    // clock/calendar read — it would fire identically against a fully
+    // converged debate — so a starved debate must not flip it to
+    // `could_not_decide` the way a genuine `declined_on_signal` reason does.
+    // Reachable because `below_conviction_floor` is checked first: this needs
+    // a confidence at or above the floor inside the flatten window.
+    const outcome = await decideWithReason(
+      traderInput({
+        clock: new ManualClock(new Date('2026-07-15T19:56:00Z')),
+        debate: debateResult({
+          direction: 'bullish',
+          converged: false,
+          rounds_completed: 1,
+          timed_out: { budget_ms: 8_000, elapsed_ms: 8_050 },
+        }),
+      }),
+    );
+
+    expect(outcome.skip_reason).toBe('session_closing');
+    expect(outcome.decision_class).toBe('declined_on_signal');
+  });
+
   it('carries the compared value and the threshold on a conviction-floor decline', async () => {
     const outcome = await decideWithReason(
       traderInput({ debate: debateResult({ confidence: 0.1 }) }),

@@ -1270,6 +1270,23 @@ function debateWasDegraded(debate: DebateResult): boolean {
 }
 
 /**
+ * `declined_on_signal` reasons whose baseline is NOT actually a read of the
+ * debate, and so must sit out `classifyDecision`'s degraded-debate override.
+ *
+ * `session_closing` is the one member: `withinFlattenWindow` decides off the
+ * clock and the session calendar, ahead of the conviction-floor read
+ * (`decide.ts`'s `buildBracket`), and would fire identically against a fully
+ * converged debate. Second-pass review of #1109's fix found the override
+ * flipping it to `could_not_decide` on a merely degraded debate, pointing an
+ * operator at an upstream failure that is not there. A future reason added
+ * here needs the same argument — "this baseline never reads `debate` at
+ * all" — not just a baseline of `declined_on_signal`.
+ */
+const DECLINED_ON_SIGNAL_NOT_DEBATE_DERIVED: ReadonlySet<TraderSkipReason> = new Set([
+  'session_closing',
+]);
+
+/**
  * `skip_reason` plus the debate that produced it, resolved to the class an
  * operator's response turns on.
  *
@@ -1282,21 +1299,22 @@ function debateWasDegraded(debate: DebateResult): boolean {
  * check on that path at all. Every `buildBracket` skip downstream of that —
  * `below_conviction_floor` among them — is then a read of a debate that never
  * finished, not a genuine decline. So the override is keyed on the
- * BASELINE CLASS, not the specific reason: any reason whose baseline is
- * `declined_on_signal` is read off the debate, and a degraded debate makes
+ * BASELINE CLASS, not the specific reason: MOST reasons whose baseline is
+ * `declined_on_signal` are read off the debate, and a degraded debate makes
  * that read untrustworthy regardless of which `declined_on_signal` reason it
- * produced. `input_unusable` reasons are a different fault (the Trader's own
- * priced inputs, downstream of the debate) and are never overridden by the
- * debate's health.
+ * produced — except the ones in `DECLINED_ON_SIGNAL_NOT_DEBATE_DERIVED`
+ * above, whose baseline reads something else entirely. `input_unusable`
+ * reasons are a different fault (the Trader's own priced inputs, downstream
+ * of the debate) and are never overridden by the debate's health.
  */
 function classifyDecision(
   skip_reason: TraderSkipReason,
   debate: DebateResult,
 ): TraderDecisionClass {
   const baseClass = SKIP_REASON_CLASS[skip_reason];
-  return baseClass === 'declined_on_signal' && debateWasDegraded(debate)
-    ? 'could_not_decide'
-    : baseClass;
+  const isDebateDerivedDecline =
+    baseClass === 'declined_on_signal' && !DECLINED_ON_SIGNAL_NOT_DEBATE_DERIVED.has(skip_reason);
+  return isDebateDerivedDecline && debateWasDegraded(debate) ? 'could_not_decide' : baseClass;
 }
 
 /**
@@ -1499,7 +1517,7 @@ export async function decide(input: TraderInput): Promise<OrderIntent | null> {
 /**
  * `decide`, but saying WHY when it declines (#475).
  *
- * The Trader has twenty distinct ways to produce no order, and until this
+ * The Trader has nineteen distinct ways to produce no order, and until this
  * existed `trader_log.skip_reason` recorded the same string —
  * `'decide() returned no intent'` — for every one of them. #328's resolution
  * called the skip row "the highest-value row of the lot", and the whole point
