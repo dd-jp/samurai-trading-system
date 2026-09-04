@@ -451,6 +451,136 @@ describe('buildTraderStep', () => {
   });
 });
 
+/**
+ * #1109. Proves the composition root, not just `decide.ts` — the no-caller
+ * failure this codebase's own defect history keeps producing (see
+ * `decide.test.ts`'s equivalent unit coverage for the classification itself).
+ * Every one of these fails on the pre-#1109 shape of `TraderDecisionRecord`
+ * (no `decision_class`/`reason_detail` fields to read), which is the empty
+ * payload issue #1109 reports: 63 no_trade rows in the 2026-09-04 session,
+ * none of them answering why without a manual join back to `debate_log`.
+ */
+describe('buildTraderStep — decision_class on trader_log (#1109)', () => {
+  const CONFIG: TraderConfig = {
+    conviction_floor: 0.5,
+    max_risk_per_trade: 0.01,
+    asset_class_risk_multiplier: { crypto: 0.5, stocks: 1 },
+    subclass_brackets: ADR_0018_SUBCLASS_BRACKETS,
+    subclass_of: {},
+    atr_timeframe: '1h',
+    atr_lookback: 14,
+    atr_k: 2,
+    vol_floor_fraction: 0.002,
+    non_converged_haircut: 0.5,
+    reward_risk_multiple: 2,
+    min_viable_notional: 10,
+    whole_share_sizing: false,
+    scale_in_conviction_delta: 0.1,
+    early_exit: DEFAULT_EARLY_EXIT_CONFIG,
+    time_in_force: { crypto: 'gtc', stocks: 'day' },
+    flatten_before_close_ms: 5 * 60 * 1_000,
+  };
+
+  function makeStep(writes: TraderDecisionRecord[]) {
+    return buildTraderStep({
+      marketData: FAKE_MARKET_DATA,
+      circuitBreakers: new CircuitBreakers({
+        daily_loss_pct: 0.05,
+        daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
+        max_drawdown_pct: 0.2,
+        max_consecutive_losses: 5,
+        volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
+        auto_rearm: { recovery_drawdown_pct: 0.05, max_days_tripped: 5 },
+      }),
+      accountState: FAKE_ACCOUNT_STATE,
+      volatility: FAKE_VOLATILITY,
+      getOpenPositions: async () => NO_POSITIONS,
+      maxMarkAge: TEST_MAX_MARK_AGE,
+      mode: 'paper',
+      breakerState: NOOP_BREAKER_STATE,
+      portfolioSnapshots: new Map(),
+      config: CONFIG,
+      setupStore: new FixtureSetupStore(),
+      getExitFillSizes: async () => new Map<string, number>(),
+      sessionCalendars: {
+        crypto: new AlwaysOpenCalendar(),
+        stocks: new UsEquityRegularHoursCalendar(),
+      },
+      traderLog: { write: (record) => writes.push(record) },
+    });
+  }
+
+  it('persists could_not_decide, not a bare skip_reason, when the debate that read neutral had timed out', async () => {
+    const writes: TraderDecisionRecord[] = [];
+    const step = makeStep(writes);
+
+    const intent = await step({
+      trace_id: TRACE_ID,
+      instrument: 'AAPL',
+      debate: makeDebate({
+        direction: 'neutral',
+        synthesis: 'neutral',
+        converged: false,
+        rounds_completed: 0,
+        timed_out: { budget_ms: 8_000, elapsed_ms: 8_050 },
+      }),
+      clock: CLOCK,
+    });
+
+    expect(intent).toBeNull();
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.skip_reason).toBe('neutral_direction_while_flat');
+    expect(writes[0]?.decision_class).toBe('could_not_decide');
+  });
+
+  it('persists declined_on_signal, not the same row, when the debate genuinely converged on neutral', async () => {
+    const writes: TraderDecisionRecord[] = [];
+    const step = makeStep(writes);
+
+    const intent = await step({
+      trace_id: TRACE_ID,
+      instrument: 'AAPL',
+      debate: makeDebate({ direction: 'neutral', synthesis: 'neutral', converged: true }),
+      clock: CLOCK,
+    });
+
+    expect(intent).toBeNull();
+    expect(writes[0]?.skip_reason).toBe('neutral_direction_while_flat');
+    expect(writes[0]?.decision_class).toBe('declined_on_signal');
+  });
+
+  it('persists the compared value and the threshold on a conviction-floor decline', async () => {
+    const writes: TraderDecisionRecord[] = [];
+    const step = makeStep(writes);
+
+    await step({
+      trace_id: TRACE_ID,
+      instrument: 'AAPL',
+      debate: makeDebate({ confidence: 0.1 }),
+      clock: CLOCK,
+    });
+
+    expect(writes[0]?.skip_reason).toBe('below_conviction_floor');
+    expect(writes[0]?.reason_detail).toEqual({ compared_value: 0.1, threshold: 0.5 });
+  });
+
+  it('persists no decision_class and no reason_detail on an emitted order', async () => {
+    const writes: TraderDecisionRecord[] = [];
+    const step = makeStep(writes);
+
+    const intent = await step({
+      trace_id: TRACE_ID,
+      instrument: 'AAPL',
+      debate: makeDebate(),
+      clock: CLOCK,
+    });
+
+    expect(intent).not.toBeNull();
+    expect(writes[0]?.decision_class).toBeNull();
+    expect(writes[0]?.reason_detail).toBeNull();
+  });
+});
+
 describe('sizingEquity (#511)', () => {
   it('takes the ceiling when equity exceeds it — a funded account cannot widen the run', () => {
     expect(sizingEquity(250_000, 2_000)).toBe(2_000);

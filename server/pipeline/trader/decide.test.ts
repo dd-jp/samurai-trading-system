@@ -2012,6 +2012,176 @@ describe('decideWithReason — named skip reasons (#475)', () => {
 });
 
 /**
+ * #1109. A `no_trade` decision and its `skip_reason` answer WHAT the Trader
+ * declined; neither answers whether the debate it read was itself usable.
+ * `neutral_direction_while_flat` and `holding_neutral_or_non_converged` are
+ * identical strings whether the debate genuinely read neutral or never
+ * finished — a starved debate (#1080: 41 of 44 live debates timed out in the
+ * 2026-09-04 session, 32 with zero completed rounds) hands the Trader a
+ * `direction: 'neutral'` it cannot tell apart from a converged one. These
+ * assertions are what stop that collapse from being silent.
+ */
+describe('decideWithReason — decision class and reason detail (#1109)', () => {
+  it('classifies a genuinely neutral, converged debate as declined_on_signal', async () => {
+    const outcome = await decideWithReason(
+      traderInput({ debate: debateResult({ direction: 'neutral', converged: true }) }),
+    );
+
+    expect(outcome.skip_reason).toBe('neutral_direction_while_flat');
+    expect(outcome.decision_class).toBe('declined_on_signal');
+  });
+
+  it('classifies a flat-side neutral as could_not_decide when the debate timed out with zero rounds', async () => {
+    const outcome = await decideWithReason(
+      traderInput({
+        debate: debateResult({
+          direction: 'neutral',
+          converged: false,
+          rounds_completed: 0,
+          timed_out: { budget_ms: 8_000, elapsed_ms: 8_050 },
+        }),
+      }),
+    );
+
+    expect(outcome.skip_reason).toBe('neutral_direction_while_flat');
+    expect(outcome.decision_class).toBe('could_not_decide');
+  });
+
+  it('classifies a flat-side neutral as could_not_decide when the debate timed out with some rounds completed', async () => {
+    // #1080's `timed_out_partial`: the budget still fired, so the read is no
+    // more trustworthy than the zero-round case — a partial debate is not a
+    // completed one.
+    const outcome = await decideWithReason(
+      traderInput({
+        debate: debateResult({
+          direction: 'neutral',
+          converged: false,
+          rounds_completed: 1,
+          timed_out: { budget_ms: 8_000, elapsed_ms: 8_050 },
+        }),
+      }),
+    );
+
+    expect(outcome.decision_class).toBe('could_not_decide');
+  });
+
+  it('classifies a flat-side neutral as could_not_decide when the debate was rate-limited (not admitted)', async () => {
+    const outcome = await decideWithReason(
+      traderInput({
+        debate: debateResult({
+          direction: 'neutral',
+          converged: false,
+          rounds_completed: 0,
+          rate_limited: { reason: 'model rate limit' },
+        }),
+      }),
+    );
+
+    expect(outcome.decision_class).toBe('could_not_decide');
+  });
+
+  it('classifies a holding refusal as declined_on_signal when the debate genuinely did not converge', async () => {
+    const outcome = await decideWithReason(
+      traderInput({
+        debate: debateResult({ direction: 'bullish', converged: false }),
+        positionState: async () => [openPosition()],
+      }),
+    );
+
+    expect(outcome.skip_reason).toBe('holding_neutral_or_non_converged');
+    expect(outcome.decision_class).toBe('declined_on_signal');
+  });
+
+  it('classifies a holding refusal as could_not_decide when the non-convergence is a timeout', async () => {
+    const outcome = await decideWithReason(
+      traderInput({
+        debate: debateResult({
+          direction: 'bullish',
+          converged: false,
+          rounds_completed: 0,
+          timed_out: { budget_ms: 8_000, elapsed_ms: 8_050 },
+        }),
+        positionState: async () => [openPosition()],
+      }),
+    );
+
+    expect(outcome.skip_reason).toBe('holding_neutral_or_non_converged');
+    expect(outcome.decision_class).toBe('could_not_decide');
+  });
+
+  it('carries the compared value and the threshold on a conviction-floor decline', async () => {
+    const outcome = await decideWithReason(
+      traderInput({ debate: debateResult({ confidence: 0.1 }) }),
+    );
+
+    expect(outcome.skip_reason).toBe('below_conviction_floor');
+    expect(outcome.decision_class).toBe('declined_on_signal');
+    expect(outcome.reason_detail).toEqual({
+      compared_value: 0.1,
+      threshold: DEFAULT_TRADER_CONFIG.conviction_floor,
+    });
+  });
+
+  it('carries the compared value and the threshold on a below-minimum-notional decline', async () => {
+    const outcome = await decideWithReason(
+      traderInput({ config: configWith({ min_viable_notional: 1_000_000 }) }),
+    );
+
+    expect(outcome.skip_reason).toBe('below_min_notional');
+    expect(outcome.reason_detail?.threshold).toBe(1_000_000);
+    // A near-miss and a decisive refusal both read `below_min_notional`; only
+    // the compared value tells them apart.
+    expect(outcome.reason_detail?.compared_value).toBeGreaterThan(0);
+  });
+
+  it('carries the compared value and the threshold on a scale-in conviction-delta decline', async () => {
+    const outcome = await decideWithReason(
+      traderInput({
+        debate: debateResult({ confidence: 0.6 }),
+        positionState: async () => [openPosition({ conviction: 0.6 })],
+      }),
+    );
+
+    expect(outcome.skip_reason).toBe('scale_in_conviction_delta_not_met');
+    expect(outcome.reason_detail).toEqual({
+      compared_value: 0.6 - 0.6,
+      threshold: DEFAULT_TRADER_CONFIG.scale_in_conviction_delta,
+    });
+  });
+
+  it('carries no reason_detail on a skip that has no threshold to compare', async () => {
+    const outcome = await decideWithReason(
+      traderInput({ marketData: new FixtureMarketData(bars(2, 2)) }),
+    );
+
+    expect(outcome.skip_reason).toBe('atr_insufficient_bars');
+    expect(outcome.reason_detail).toBeNull();
+  });
+
+  it('classifies a data-quality skip as input_unusable, not declined_on_signal', async () => {
+    const outcome = await decideWithReason(
+      traderInput({
+        debate: debateResult({ direction: 'bearish' }),
+        positionState: async () => [
+          openPosition({ side: 'buy', filled_size: 0, order_state: 'submitted' }),
+        ],
+      }),
+    );
+
+    expect(outcome.skip_reason).toBe('exit_no_filled_size');
+    expect(outcome.decision_class).toBe('input_unusable');
+  });
+
+  it('reports no decision_class and no reason_detail when an order was produced', async () => {
+    const outcome = await decideWithReason(traderInput());
+
+    expect(outcome.intent).not.toBeNull();
+    expect(outcome.decision_class).toBeNull();
+    expect(outcome.reason_detail).toBeNull();
+  });
+});
+
+/**
  * The Trader's exit-only entry point (#743) — what the tick path runs 29 of
  * every 30 passes. `ExitCheckInput` carries no `debate` and no views by
  * construction; everything asserted here must be reachable from position

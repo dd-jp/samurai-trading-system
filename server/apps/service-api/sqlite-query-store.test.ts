@@ -1252,6 +1252,8 @@ describe('SqliteQueryStore.getRiskCritics', () => {
       intent_type: 'entry',
       exit_reason: null,
       skip_reason: null,
+      decision_class: null,
+      reason_detail: null,
       sizing: null,
       cosine_precedent: null,
       atr: null,

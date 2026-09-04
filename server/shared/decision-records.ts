@@ -37,6 +37,26 @@ export interface TraderDecisionRecord {
   /** Why no order was produced. Present exactly when `intent_type` is null. */
   skip_reason: string | null;
   /**
+   * WHY `skip_reason` fired, at the operator-response granularity #1109
+   * exists to give: `'declined_on_signal'` (the debate or position state was
+   * read and said no — nothing to fix), `'could_not_decide'` (the debate
+   * itself produced nothing usable — a starved debate, not a market read), or
+   * `'input_unusable'` (the Trader's own priced inputs were bad — a data-feed
+   * problem). Not typed as `TraderSkipReason`'s sibling union here because
+   * `pipeline/trader/decide.ts` is the owner of that vocabulary and this port
+   * only needs to persist its string; see `TraderDecisionClass` there for the
+   * authoritative three values. Present exactly when `skip_reason` is set.
+   */
+  decision_class: string | null;
+  /**
+   * The compared value and the threshold it missed, for the three skip
+   * reasons that are numeric gates (`below_conviction_floor`,
+   * `below_min_notional`, `scale_in_conviction_delta_not_met`) — without both
+   * numbers a near-miss and a decisive refusal are the same row. `null` for
+   * every other skip and always null when an order was produced.
+   */
+  reason_detail: { compared_value: number; threshold: number } | null;
+  /**
    * The five factors whose product is the size. Null on a skip that happened
    * before sizing ran — which is most of them, and the distinction matters:
    * "sized and then rejected" and "never got as far as sizing" are different

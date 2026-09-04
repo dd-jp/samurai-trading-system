@@ -1,0 +1,39 @@
+-- Classifies WHY a trader_log skip fired, at the granularity an operator's
+-- next action needs, and records the threshold a numeric gate compared
+-- against (#1109).
+--
+-- WHY. `skip_reason` names WHAT the Trader declined but not whether the
+-- refusal is the system working or the system starving, and those demand
+-- opposite responses. #1080 found 41 of 44 live debates in the 2026-09-04
+-- paper session timed out (32 with zero completed rounds); every one still
+-- resolved to `direction: 'neutral'`, so `neutral_direction_while_flat` and
+-- `holding_neutral_or_non_converged` landed identically in `trader_log`
+-- whether the debate genuinely read neutral or never finished reading
+-- anything. Reconstructing which had happened required joining back to
+-- `debate_log` by `debate_id` and knowing to do it — the exact operator
+-- burden this ticket exists to remove.
+--
+-- `decision_class` is `decideWithReason`'s (pipeline/trader/decide.ts)
+-- `TraderDecisionClass`, persisted as its string value rather than a foreign
+-- key or a CHECK constraint: `decision-records.ts` deliberately does not
+-- import the pipeline's skip-reason vocabulary (same posture `skip_reason`
+-- itself already takes as a bare `TEXT` column), and the three-way
+-- classification is exhaustive over `TraderSkipReason` in code, not in SQL.
+--
+-- `reason_detail_compared_value` / `reason_detail_threshold` are two columns,
+-- not one JSON blob: both are numeric and both are populated together, on
+-- exactly the three skip reasons that compare a value to a configured
+-- threshold (`below_conviction_floor`, `below_min_notional`,
+-- `scale_in_conviction_delta_not_met`). Two typed columns let a query filter
+-- or aggregate on either number directly; a soak asking "how many were
+-- near-misses within 0.02 of the floor" cannot do that against a JSON string.
+--
+-- A plain ADD COLUMN, not a table rebuild, mirroring 0030 and 0041: all three
+-- columns are new and nullable, and `trader_log` carries no CHECK constraint
+-- over any of them. Rows written before this migration carry NULL, which is
+-- the honest reading — classification was not recorded, not "declined on the
+-- signal" by default. NULL is also correct going forward for every skip that
+-- is not one of the three threshold sites, and for every non-skip row.
+ALTER TABLE trader_log ADD COLUMN decision_class TEXT;
+ALTER TABLE trader_log ADD COLUMN reason_detail_compared_value REAL;
+ALTER TABLE trader_log ADD COLUMN reason_detail_threshold REAL;
