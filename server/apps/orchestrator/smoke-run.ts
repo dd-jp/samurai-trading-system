@@ -377,7 +377,8 @@ export const SMOKE_GDELT_EXPECTED_ROWS = SMOKE_GDELT_SEEDED_ROWS + 1;
  * derivation is covered by `gdelt-scoring-pass.test.ts` and the composition-
  * root wiring test only. Second, the aggregate this gate observes reaches no
  * analyst that scores it: `fundamentalAnalyst.applies_to` is stocks-only and
- * no other analyst reads `MarketContext.news`, so on a crypto universe the
+ * no other analyst scores `MarketContext.news` (the technical analyst only
+ * quotes it into `key_points`), so on a crypto universe the
  * item is stored and served but never voted on. The gate asserts the pass is
  * CALLED and its item reaches the store — not that an analyst consumed it.
  * Adding an equity leg to the fixture is not the fix: `SMOKE_TEST_UNIVERSE`
