@@ -86,6 +86,36 @@ export class MarketDataServiceImpl implements MarketDataService {
    * increments nor resets, which is correct: no venue fetch happened, so
    * the streak legitimately stands unchanged until the next real `getBars`
    * call resolves it one way or the other.
+   *
+   * BOUND (review on #1095, deepseek): this map's key space is
+   * (instrument x static analyst indicator window), not unbounded. Every
+   * `BarWindow` a caller passes is a module-level constant computed once
+   * at load time (`technical-analyst.ts`'s `WARMUP_5M`, `RVOL_5M_LOOKBACK`,
+   * `INDICATOR_LOOKBACK`-derived specs, etc. — see that file, not a value
+   * derived per-tick from live data), and today's instrument set
+   * (`DEFAULT_UNIVERSE`, `scheduler.ts`) is a hardcoded, compile-time array
+   * of ~20 names — there is no runtime re-rank or screener wiring it yet
+   * ("This is a paper-soak widening, NOT #751", per that file's own doc
+   * comment; `ActiveUniverseProvider` does not exist in this codebase as
+   * of #1082/#1095 — it is a NAME for #751's not-yet-built future cutover,
+   * referenced only in comments). So today this map holds at most
+   * instruments x windows keys for the LIFE OF THE PROCESS (one
+   * `MarketDataServiceImpl` is constructed once in
+   * `buildProductionComponents` and never recreated) — measured at ~8
+   * windows/instrument (see `logFetch`'s AC3 comment), that's a firm,
+   * small ceiling (~160 for a 20-name universe), not a leak. If #751 later
+   * makes the universe re-rank across days within one long-running
+   * process, an instrument dropped from the universe would orphan its keys
+   * here indefinitely — revisit bounding this (e.g. evict on universe
+   * change, which #751 would be positioned to signal) when that lands, not
+   * speculatively now.
+   *
+   * Skipped entirely in backtest mode (`getBars` never calls
+   * `recordCacheMiss` there) — see that call site's comment: backtest
+   * disables the cache unconditionally, so every call would otherwise be
+   * an uninformative "miss" that could run many symbols over long
+   * historical replay windows, which is the one mode where this map's
+   * size was NOT already bounded by the live/paper universe above.
    */
   private readonly consecutiveFetchMisses = new Map<string, number>();
 
@@ -160,7 +190,18 @@ export class MarketDataServiceImpl implements MarketDataService {
       return cached;
     }
 
-    const consecutiveMisses = this.recordCacheMiss(instrument, window);
+    // Backtest never touches `consecutiveFetchMisses` at all (review on
+    // #1095, deepseek) — `cachedBars` disables itself unconditionally in
+    // that mode (see its own doc comment), so EVERY replay step lands here,
+    // and a backtest run can walk many symbols over long historical
+    // windows. Bumping the map on every one of those calls would be the one
+    // path where its size isn't already bounded by the live/paper universe
+    // (see the map's own doc comment) — so skip the bump entirely rather
+    // than rely on `logFetch`'s later `mode === 'backtest'` short-circuit to
+    // make the wasted increment harmless. `0` is never read: `logFetch`
+    // returns before consulting `consecutiveMisses` in backtest mode.
+    const consecutiveMisses =
+      this.mode === 'backtest' ? 0 : this.recordCacheMiss(instrument, window);
     const startedAt = Date.now();
     let fetched: Bar[];
     try {

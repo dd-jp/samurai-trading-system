@@ -740,6 +740,26 @@ describe('MarketDataServiceImpl — market_data_fetch telemetry (#1082)', () => 
     expect(fetchEvents(entries)).toHaveLength(0);
   });
 
+  it(
+    'leaves consecutiveFetchMisses empty in backtest mode — a long replay over many ' +
+      'symbols/windows must not grow the map (review on #1095, deepseek)',
+    async () => {
+      const { service } = serviceWithTelemetry('backtest', new ManualClock(ASOF));
+
+      // Several DISTINCT (instrument, timeframe, lookback) keys, the shape
+      // that would otherwise accumulate one map entry each — a stand-in for
+      // a backtest walking many symbols/windows over a long historical
+      // replay.
+      await service.getBars('AAPL', { timeframe: TIMEFRAME, lookback: 2 }, ASOF);
+      await service.getBars('MSFT', { timeframe: TIMEFRAME, lookback: 5 }, ASOF);
+      await service.getBars(INSTRUMENT, { timeframe: TIMEFRAME, lookback: 50 }, ASOF);
+
+      const misses = (service as unknown as { consecutiveFetchMisses: Map<string, number> })
+        .consecutiveFetchMisses;
+      expect(misses.size).toBe(0);
+    },
+  );
+
   it('is a no-op when telemetry is not wired — fully backward-compatible', async () => {
     const service = new MarketDataServiceImpl(
       fixtureSource(),
