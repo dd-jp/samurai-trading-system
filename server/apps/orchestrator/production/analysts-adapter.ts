@@ -116,15 +116,23 @@ export interface AnalystsStepOptions {
   /** Absent = no alerting, log-only. `production.ts` supplies its log-only default. */
   skipAlerts?: AnalystSkipAlertChannel;
   /**
-   * #464: the Grok market-intelligence refresh, run BEFORE the analysts so
-   * `sentiment` and `fundamental` read a populated store rather than reporting
-   * `NO_DATA_MARKER`.
+   * #464: the market-intelligence refresh, TRIGGERED here so it stays inside
+   * the tick's in-flight guard and inside the session the scheduler defines —
+   * the same reason #397's cadence gating belongs in the Scheduler, and why a
+   * second timer was rejected.
    *
-   * Here rather than on its own timer for the same reason #397's cadence
-   * gating belongs in the Scheduler: a second timer would run independently of
-   * the tick's in-flight guard, and the agent's own 4h bucket already makes
-   * calling it every pass cheap — it returns immediately unless the bucket has
-   * rolled.
+   * **Triggered, not awaited (#1085).** In production this is a
+   * `MiRefreshQueue`, whose `refresh` enqueues and returns at once, so the
+   * analysts read whatever the store already holds. Awaiting it here is what
+   * put two LLM round trips in front of every instrument's analyst stage and
+   * pushed the pass past the tick interval (#1084). The consequence is that
+   * the first tick after news arrives sees the previous context; against the
+   * 24h window the analysts read (`COVERAGE_WINDOW_MS`) and a minutes-scale
+   * tick, that is a staleness this stage cannot measure.
+   *
+   * A caller that supplies a bare agent instead gets the old blocking
+   * behaviour, which is correct for a focused test that wants the refresh's
+   * effect visible to the same call.
    *
    * Absent under `SAMURAI_SENTIMENT=off`, or when Nous is unconfigured —
    * which is the honest default: no agent, no calls, and the analysts keep
@@ -175,10 +183,18 @@ export interface MarketIntelligenceRefresh {
  * new one.
  *
  * SEQUENTIAL, not `Promise.all`: these agents are independent but their spend
- * checks are not — both meter into `llm_spend` and both read
- * `SqliteSpendCap` before calling, so running them concurrently lets two
- * calls each pass a check the pair would fail. Bucketed refreshes make the
+ * accounting is not — both meter into `llm_spend`, and the cap is a pure read
+ * that reserves nothing, so concurrent calls all see the same pre-spend total
+ * and can each pass a check the pair would fail. Bucketed refreshes make the
  * common case two immediate returns anyway.
+ *
+ * **This ordering is necessary and was never sufficient (#1085).** It holds
+ * only WITHIN one instrument, and #1013 admits several instrument passes
+ * concurrently — so up to four of these ran against the same total. In
+ * production the composed refresher is wrapped in `MiRefreshQueue`, which
+ * serialises across instruments too and puts one cap check in front of each
+ * dispatch. That is where the property is actually enforced; this stays
+ * sequential so the guarantee does not depend on the wrapper being present.
  *
  * NEVER THROWS, matching what the seam already promises: an MI outage must
  * degrade the debate to NO_DATA_MARKER, not fail a tick that would otherwise
@@ -228,10 +244,18 @@ export function buildAnalystsStep(
   const consecutiveSkips = new Map<string, number>();
 
   return async ({ trace_id, signal, clock, bar }) => {
-    // BEFORE the analysts, so a refreshed window is visible to the very tick
-    // that paid for it. `GrokAgent.refresh` never throws — market intelligence
-    // is an optional input, and an xAI outage must degrade the debate to
-    // NO_DATA_MARKER rather than fail a tick that would otherwise have traded.
+    // The refresh is triggered here and, in production, completes elsewhere —
+    // see `AnalystsStepOptions.marketIntelligence`. Still awaited, because what
+    // `MiRefreshQueue.refresh` costs is a map insert: NO LLM CALL runs inline,
+    // and not even the queue's own `spendCap.check()` does — `#pump` schedules
+    // the drain on a microtask rather than entering it, so nothing of the
+    // refresh runs on this stack at all. That is the whole difference from the
+    // multi-second round trips this line used to await.
+    // Keeping the `await` keeps the ordering with the coverage check below
+    // deterministic for a caller that does supply a blocking agent.
+    // No refresher throws: market intelligence is an optional input, and an
+    // outage must degrade the debate to NO_DATA_MARKER rather than fail a tick
+    // that would otherwise have traded.
     await options.marketIntelligence?.refresh(trace_id, signal.asset, signal.asset_class);
 
     // #752: after the refresh, so the freshest write for this tick is what

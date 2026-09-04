@@ -216,6 +216,34 @@ export interface CheckMiCoverageDeps {
   monitor: MiCoverageMonitor;
   alertChannel: MiCoverageAlertChannel | undefined;
   logger: Logger | undefined;
+  /**
+   * Whether MI has finished looking at this instrument at least once in this
+   * process (#1085). While it answers `false`, `telemetry.noDataObserved` still
+   * fires — the no-data RATE keeps its true denominator — but the instrument
+   * never reaches `monitor.observe`, so `MiCoverageMonitor`'s consecutive-miss
+   * counter does NOT advance and no alert is raised. Two different counters:
+   * the telemetry one moves, the monitor's does not.
+   *
+   * Needed because the refresh is now queued rather than awaited
+   * (`MiRefreshQueue`): a name whose only items would have come from this
+   * tick's own refresh reads uncovered at analyst time, and with
+   * `ALERT_AFTER_CONSECUTIVE_NO_DATA = 1` that is an alert on tick 1 for a
+   * name that does have news. Hydration covers the restart case — `hydrate()`
+   * replays the archive into the store at boot, so any name with news inside
+   * `COVERAGE_WINDOW_MS` reads covered before a single refresh runs — but it
+   * cannot cover a FRESH archive, which is exactly where the spurious alert
+   * would land.
+   *
+   * ATTEMPTED, not succeeded: a refresh that failed or was refused by the
+   * spend cap has no data and is not going to get any, so it must alert. The
+   * gate therefore holds for at most the few ticks between the first request
+   * and the first completed sweep, and cannot silence coverage for a run.
+   *
+   * Absent means no gate, which is the honest default for a caller with no MI
+   * writer wired at all: nothing will ever look, so the first miss should
+   * alert immediately.
+   */
+  refreshAttempted?: ((instrument: string) => boolean) | undefined;
 }
 
 export interface CheckMiCoverageParams {
@@ -256,8 +284,10 @@ export async function checkMiCoverage(
   // compared to the right entity.
   const covered = hasCoverageFor(context, resolveMiSubject(params.instrument));
   const subclass = subclassFor(params.instrument, deps.subclassOf);
-  const { alert } = deps.monitor.observe(params.instrument, covered);
 
+  // ALWAYS, whatever the refresh timing is (#1085): the counter is the
+  // measurement, and a rate whose denominator silently dropped the ticks
+  // before MI's first sweep would be the wrong number, not a quieter one.
   if (!covered) {
     deps.telemetry.noDataObserved({
       trace_id: params.trace_id,
@@ -268,6 +298,17 @@ export async function checkMiCoverage(
     });
   }
 
+  // #1085: the alert machinery, not the measurement, is what a queued refresh
+  // makes spurious — so the gate is here, ABOVE `observe`, rather than on the
+  // alert branch below. Gating the branch alone would let the suppressed miss
+  // still advance the consecutive counter, and `shouldAlertAt` would then skip
+  // the next 8 misses before speaking: a gap meant to hold one tick would
+  // silence the first real one. Not observing at all leaves the run's
+  // `degraded`/`everDegraded` flags saying what they should — "MI has not
+  // looked yet" is not "this name has no coverage".
+  if (deps.refreshAttempted?.(params.instrument) === false) return;
+
+  const { alert } = deps.monitor.observe(params.instrument, covered);
   if (!alert) return;
 
   try {

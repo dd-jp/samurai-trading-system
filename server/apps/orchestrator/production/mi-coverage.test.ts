@@ -236,6 +236,7 @@ function buildDeps(overrides: {
   alertChannel?: MiCoverageAlertChannel;
   logger?: Logger;
   monitor?: MiCoverageMonitor;
+  refreshAttempted?: (instrument: string) => boolean;
 }) {
   const contextSource: MiCoverageContextSource = {
     getContext: vi.fn(() =>
@@ -288,6 +289,7 @@ function buildDeps(overrides: {
       monitor: overrides.monitor ?? new MiCoverageMonitor(),
       alertChannel,
       logger: overrides.logger,
+      refreshAttempted: overrides.refreshAttempted,
     },
   };
 }
@@ -319,6 +321,131 @@ describe('checkMiCoverage', () => {
       subclass: 'index_etp_3x',
       asset_class: 'stocks',
     });
+  });
+
+  it('counts the miss but holds the alert for a name MI has not finished looking at yet (#1085)', async () => {
+    // The refresh is queued now, not awaited, so a name whose only items would
+    // have come from THIS tick's refresh reads uncovered at analyst time. At
+    // `ALERT_AFTER_CONSECUTIVE_NO_DATA = 1` that is an alert on tick 1 for a
+    // name that does have news — the spurious fire AC5 rules out. The COUNTER
+    // still fires: it is the measurement, and a rate whose denominator
+    // silently dropped these ticks would be the wrong number.
+    const monitor = new MiCoverageMonitor();
+    const { deps, noDataEvents, alertsPosted } = buildDeps({
+      covered: false,
+      monitor,
+      refreshAttempted: () => false,
+    });
+
+    await checkMiCoverage(deps, {
+      trace_id: 'trace-1',
+      instrument: '3USL',
+      assetClass: 'stocks',
+      reportedAt: NOW,
+    });
+
+    expect(noDataEvents).toHaveLength(1);
+    expect(alertsPosted).toHaveLength(0);
+    // Not merely unalerted — unOBSERVED. Had the miss advanced the consecutive
+    // counter, `shouldAlertAt` would then skip the next 8 misses before
+    // speaking, so a gate meant to hold one tick would silence the first real
+    // one. "MI has not looked yet" is also not "this name has no coverage",
+    // which is what `degraded` reports.
+    expect(monitor.degraded).toBe(false);
+  });
+
+  it('alerts on the first miss once MI has looked, even if that look failed (#1085)', async () => {
+    // ATTEMPTED, not succeeded. A name whose refresh threw or was refused by
+    // the spend cap has no data and is not going to get any, so the gate must
+    // not be able to silence coverage for a whole run.
+    const { deps, alertsPosted } = buildDeps({
+      covered: false,
+      refreshAttempted: () => true,
+    });
+
+    await checkMiCoverage(deps, {
+      trace_id: 'trace-1',
+      instrument: '3USL',
+      assetClass: 'stocks',
+      reportedAt: NOW,
+    });
+
+    expect(alertsPosted).toHaveLength(1);
+  });
+
+  it('loses nothing by skipping observe for a COVERED name MI has not reached yet (#1085)', async () => {
+    // The gate sits above `observe`, so a covered instrument is skipped too
+    // while the gate is closed — the hydrated-archive case, where a name reads
+    // covered before a single refresh has run. That skip is a no-op rather
+    // than a lost reset: `observe(x, true)` only DELETES `x` from the
+    // consecutive and currently-missing maps, and `x` cannot be in either.
+    // Both are populated exclusively by `observe(x, false)`, which this same
+    // gate blocks, and `MiRefreshQueue`'s `#attempted` set is add-only — one
+    // `add` and no delete, not even in `stop()` — so `refreshAttempted` never
+    // goes true then false again. The monitor is also constructed per process
+    // (`production.ts`) and reads nothing back, so there is no earlier run's
+    // streak to strand.
+    const monitor = new MiCoverageMonitor();
+    let attempted = false;
+    const { deps, alertsPosted } = buildDeps({
+      covered: true,
+      monitor,
+      refreshAttempted: () => attempted,
+    });
+
+    await checkMiCoverage(deps, {
+      trace_id: 'trace-1',
+      instrument: '3USL',
+      assetClass: 'stocks',
+      reportedAt: NOW,
+    });
+
+    expect(alertsPosted).toHaveLength(0);
+    expect(monitor.degraded).toBe(false);
+    expect(monitor.everDegraded).toBe(false);
+
+    // A gated MISS on the same name, still before the first sweep — the other
+    // half of what the gate suppresses.
+    const gatedMiss = buildDeps({ covered: false, monitor, refreshAttempted: () => attempted });
+
+    await checkMiCoverage(gatedMiss.deps, {
+      trace_id: 'trace-2',
+      instrument: '3USL',
+      assetClass: 'stocks',
+      reportedAt: NOW,
+    });
+
+    expect(gatedMiss.alertsPosted).toHaveLength(0);
+
+    // The discriminating assertion: once MI has looked, the next miss is the
+    // FIRST one the monitor has seen and alerts immediately. Move `observe`
+    // above the gate — so either gated pass advanced the counter — and this
+    // miss becomes the second, which `shouldAlertAt` skips, and this goes red.
+    attempted = true;
+    const missing = buildDeps({ covered: false, monitor, refreshAttempted: () => true });
+
+    await checkMiCoverage(missing.deps, {
+      trace_id: 'trace-3',
+      instrument: '3USL',
+      assetClass: 'stocks',
+      reportedAt: NOW,
+    });
+
+    expect(missing.alertsPosted).toHaveLength(1);
+  });
+
+  it('alerts on the first miss when no gate is supplied, because nothing will ever look', async () => {
+    // The honest default for a run with no MI writer wired at all.
+    const { deps, alertsPosted } = buildDeps({ covered: false });
+
+    await checkMiCoverage(deps, {
+      trace_id: 'trace-1',
+      instrument: '3USL',
+      assetClass: 'stocks',
+      reportedAt: NOW,
+    });
+
+    expect(alertsPosted).toHaveLength(1);
   });
 
   it('bucketes the counter under UNCLASSIFIED_SUBCLASS when the universe declares no subclass', async () => {
