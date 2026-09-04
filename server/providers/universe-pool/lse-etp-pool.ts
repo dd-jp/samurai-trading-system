@@ -122,7 +122,13 @@
  * 3). A future evidence pass fills real `true`/`false` values in row by row
  * once one is captured — that pass does not need a `BrokerAdapter` to exist
  * first, only the list itself; the adapter is a precondition for trading
- * what the pass verifies, not for verifying it.
+ * what the pass verifies, not for verifying it. **A partial pass that fills
+ * only `true` values, with no `false` anywhere, will not load**:
+ * `gateAdmits` then admits every row (verified `true` and still-`'unverified'`
+ * alike), which `liquidityGateStatus` reports as `'vacuous'` and
+ * `assertValidPool` refuses — so the evidence pass has to land at least one
+ * verified `false`, or fill every row, in the same change that adds any
+ * `true`.
  *
  * ## Provenance
  *
