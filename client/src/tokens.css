@@ -1,10 +1,9 @@
 /*
  * Design tokens — dashboard-spec.md, "Design system".
  *
- * Values are the spec's colour table verbatim. The visual-reference
- * prototype (docs/prototypes/dashboard-v2-mission-control.html) spells the
- * loss/error colour `--red` for the same hex; this file uses the spec's
- * name, `--vermilion`, because the spec is the naming source of truth.
+ * Values are the spec's colour table verbatim, under the spec's names: the
+ * loss/error colour is `--vermilion`, not `--red`, because the spec is the
+ * naming source of truth.
  *
  * `--border` and the font-family stacks are not individually named in the
  * spec's colour table but are implied by it (`--panel`'s "1px #40322A
