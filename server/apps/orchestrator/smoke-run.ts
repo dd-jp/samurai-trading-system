@@ -160,6 +160,7 @@ import {
   SimulatedBrokerAdapter,
   SqliteBrokerStateStore,
   SqliteExecutionStore,
+  TERMINAL_SWEEP_AGE_MS,
 } from '../../pipeline/execution/index.js';
 import {
   assertKillThresholdsWithinBounds,
@@ -1362,6 +1363,22 @@ export interface ExitPathEvidence {
     /** The restarted reconcile()'s divergence for the LOT's own key, if any. */
     sweepDivergenceAction: ReconcileDivergence['action'] | undefined;
   };
+  /**
+   * #1088: a `rejected`, `filled_size = 0` row seeded with a `decision_timestamp`
+   * already past `TERMINAL_SWEEP_AGE_MS` (reconcile.ts) — the durable effect
+   * `sweepTerminalPositions` exists to produce. Named separately from
+   * `crashRestart` above: that scenario's `ReconcileReport` proves the
+   * FLATTEN sweep ran, which is a different mechanism (#519/#526) reading a
+   * different table (`flatten_submissions`) than this one reads
+   * (`open_positions`), so a regression in either must be caught on its own.
+   */
+  terminalSweep: {
+    seededKey: string;
+    /** `true` = the seeded row is STILL in `open_positions` after the restarted `reconcile()` — a failure. */
+    rowPresentAfterSweep: boolean;
+    /** The restarted reconcile()'s own `swept` count, read the same pass. */
+    swept: number;
+  };
 }
 
 /**
@@ -1668,6 +1685,38 @@ async function runExitPathScenarios(input: {
   // restart would otherwise strand if a live adapter's process-local
   // `flattens` map (`AlpacaBrokerAdapter`) were the only record of it.
 
+  // --- Scenario 6 (#1088): the terminal-row sweep. Seeded directly via the
+  // store port, never through `submit()` — the point is a row that already
+  // IS terminal and old enough for `sweepTerminalPositions` to act on, not
+  // one this harness drives there through a live broker round-trip. The
+  // clock has only advanced by a handful of `tick()` seconds since
+  // `SMOKE_RUN_INSTANT`, so `decision_timestamp` is set the full
+  // `TERMINAL_SWEEP_AGE_MS` (+ margin) behind `clock.now()` directly, rather
+  // than relying on the smoke clock ever running that far forward.
+  const terminalSweepKey = 'smoke-terminal-sweep-target';
+  const terminalSweepDecisionTimestamp = new Date(
+    clock.now().getTime() - TERMINAL_SWEEP_AGE_MS - 60 * 60 * 1_000,
+  );
+  await positionStore.writeAheadPosition({
+    idempotency_key: terminalSweepKey,
+    debate_id: 'debate-smoke-terminal-sweep',
+    instrument: EXIT_PATH_INSTRUMENTS.crashRestart,
+    asset_class: 'crypto',
+    side: 'buy',
+    intent_type: 'entry',
+    requested_size: 10,
+    filled_size: 0,
+    avg_entry_price: 0,
+    stop: 1,
+    target: 2,
+    order_state: 'rejected',
+    broker_order_ids: [],
+    opened_at: terminalSweepDecisionTimestamp,
+    decision_timestamp: terminalSweepDecisionTimestamp,
+    conviction: 0.5,
+    converged: true,
+  });
+
   // --- restart: a SECOND `Execution` over the SAME store + SAME broker,
   // `buildExecutionSurface` (the real composition-root binding function)
   // called again — `reconcile.test.ts`'s own definition of "a restart".
@@ -1703,6 +1752,13 @@ async function runExitPathScenarios(input: {
     .prepare('SELECT residual_unprotected_since FROM open_positions WHERE idempotency_key = ?')
     .get(lot5) as { residual_unprotected_since: string | null } | undefined;
 
+  // #1088: the seeded row's fate, read the same way — raw SQL rather than
+  // `getOpenPositions()`, which would never have shown a terminal row either
+  // way and so cannot distinguish "swept" from "was never open".
+  const terminalSweepRow = db
+    .prepare('SELECT 1 FROM open_positions WHERE idempotency_key = ?')
+    .get(terminalSweepKey);
+
   return {
     brokerCallSequence: broker.callSequence,
     residualAlerts: residualAlerts.alerts,
@@ -1724,6 +1780,11 @@ async function runExitPathScenarios(input: {
       sweepDivergenceAction: restartReconcile.divergences.find(
         (divergence) => divergence.idempotency_key === lot5,
       )?.action,
+    },
+    terminalSweep: {
+      seededKey: terminalSweepKey,
+      rowPresentAfterSweep: terminalSweepRow !== undefined,
+      swept: restartReconcile.swept,
     },
   };
 }
@@ -4151,6 +4212,25 @@ export function evaluateSmokeGate(
         `run (flatten(s): ${flattenReconcileAlertsFired.map((alert) => alert.idempotency_key).join(', ')}) ` +
         "— scenario 4's flatten resolves cleanly against a deterministic offline broker; an " +
         'alert here means reconcile() could not settle a row it should have',
+    );
+  }
+
+  // #1088 — the terminal-row sweep's ENFORCEMENT assertion (#430's
+  // convention again): scenario 6 seeded a `rejected`, `filled_size = 0`
+  // `open_positions` row already older than `TERMINAL_SWEEP_AGE_MS`. Nothing
+  // else in this run ever reads or clears that row — `getOpenPositions()`
+  // already excluded it from every other check above by virtue of being
+  // terminal — so its continued presence after the restarted `reconcile()`
+  // can only mean `sweepTerminalPositions` was deleted, stopped being
+  // called from `reconcile()`, or regressed its own predicate.
+  const { terminalSweep } = options.exitPath;
+  if (terminalSweep.rowPresentAfterSweep) {
+    failures.push(
+      `open_positions row '${terminalSweep.seededKey}' (seeded 'rejected', filled_size 0, ` +
+        `decision_timestamp past TERMINAL_SWEEP_AGE_MS) is STILL present after the restarted ` +
+        `reconcile() (swept=${terminalSweep.swept}) — the #1088 terminal-row sweep either never ` +
+        'ran or no longer deletes what it should; a table this leaves growing forever is the ' +
+        'exact defect #1088 closed',
     );
   }
 

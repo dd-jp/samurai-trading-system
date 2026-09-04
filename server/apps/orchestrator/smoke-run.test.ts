@@ -109,6 +109,7 @@ function healthyExitPath(overrides: Partial<ExitPathEvidence> = {}): ExitPathEvi
             reason: "flatten journal said 'submitted'; broker reports 'submitted'",
           },
         ],
+        swept: 0,
         timestamp: SMOKE_RUN_INSTANT,
       },
     },
@@ -121,6 +122,13 @@ function healthyExitPath(overrides: Partial<ExitPathEvidence> = {}): ExitPathEvi
       protectedQty: 6,
       markerCleared: true,
       sweepDivergenceAction: 'adopted',
+    },
+    // #1088: scenario 6's healthy outcome — the seeded terminal row is gone
+    // after the restarted reconcile()'s sweep.
+    terminalSweep: {
+      seededKey: 'smoke-terminal-sweep-target',
+      rowPresentAfterSweep: false,
+      swept: 1,
     },
     ...overrides,
   };
@@ -1988,6 +1996,39 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
           failure.includes('0 means the failed re-arm no longer pages'),
         ),
       ).toBe(true);
+    });
+  });
+
+  // #1088 — the terminal-row sweep's own enforcement branch. The mutation
+  // this kills: deleting `sweepTerminalPositions`'s call from `reconcile()`
+  // (or narrowing/breaking its predicate) leaves scenario 6's seeded row in
+  // `open_positions` forever — nothing else in the gate would notice, since
+  // every other check reads `getOpenPositions()`, which already excluded a
+  // terminal row from its view whether or not the sweep ever ran.
+  describe('the terminal-row sweep (#1088)', () => {
+    it('fails when the seeded terminal row survives the restarted reconcile()', () => {
+      const gate = gateFor({
+        terminalSweep: {
+          seededKey: 'smoke-terminal-sweep-target',
+          rowPresentAfterSweep: true,
+          swept: 0,
+        },
+      });
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.some((failure) => failure.includes('STILL present'))).toBe(true);
+    });
+
+    it('passes when the seeded row is gone, whatever else the pass swept', () => {
+      const gate = gateFor({
+        terminalSweep: {
+          seededKey: 'smoke-terminal-sweep-target',
+          rowPresentAfterSweep: false,
+          swept: 3,
+        },
+      });
+
+      expect(gate.passed).toBe(true);
     });
   });
 

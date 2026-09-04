@@ -483,6 +483,216 @@ describe('reconcile — scope and safety', () => {
 });
 
 /**
+ * The terminal-row sweep (#1088) — `sweepTerminalPositions`, called
+ * unconditionally at the end of every `reconcile()` pass. `NOW` is fixed at
+ * '2026-07-15T14:00:00Z'; `TERMINAL_SWEEP_AGE_MS` is 24h, so a
+ * `decision_timestamp` of '2026-07-14T13:59:59Z' or earlier is old enough
+ * and one of '2026-07-14T14:00:01Z' or later is not.
+ */
+describe('reconcile — the terminal-row sweep (#1088)', () => {
+  const OLD_ENOUGH = new Date('2026-07-14T13:00:00Z');
+  const TOO_RECENT = new Date('2026-07-14T15:00:00Z');
+
+  it('deletes an old enough rejected row with filled_size = 0', async () => {
+    const { store } = openTestExecutionStore();
+    await store.writeAheadPosition(
+      pendingPosition({
+        idempotency_key: 'key-old-rejected',
+        order_state: 'rejected',
+        filled_size: 0,
+        decision_timestamp: OLD_ENOUGH,
+      }),
+    );
+
+    const report = await new ExecutionImpl(makeInput(store, makeBroker())).reconcile();
+
+    expect(report.swept).toBe(1);
+    expect(await store.getPosition('key-old-rejected')).toBeNull();
+  });
+
+  it.each([
+    'rejected',
+    'cancelled',
+    'expired',
+  ] as const)('sweeps an old enough %s row with filled_size = 0', async (order_state) => {
+    const { store } = openTestExecutionStore();
+    await store.writeAheadPosition(
+      pendingPosition({
+        idempotency_key: `key-old-${order_state}`,
+        order_state,
+        filled_size: 0,
+        decision_timestamp: OLD_ENOUGH,
+      }),
+    );
+
+    const report = await new ExecutionImpl(makeInput(store, makeBroker())).reconcile();
+
+    expect(report.swept).toBe(1);
+    expect(await store.getPosition(`key-old-${order_state}`)).toBeNull();
+  });
+
+  it('leaves a terminal row untouched when it is not old enough yet', async () => {
+    const { store } = openTestExecutionStore();
+    await store.writeAheadPosition(
+      pendingPosition({
+        idempotency_key: 'key-recent-rejected',
+        order_state: 'rejected',
+        filled_size: 0,
+        decision_timestamp: TOO_RECENT,
+      }),
+    );
+
+    const report = await new ExecutionImpl(makeInput(store, makeBroker())).reconcile();
+
+    expect(report.swept).toBe(0);
+    expect((await store.getPosition('key-recent-rejected'))?.order_state).toBe('rejected');
+  });
+
+  it('never sweeps a closed row, however old — retained per the HMRC/CGT retention requirement', async () => {
+    const { store } = openTestExecutionStore();
+    await store.writeAheadPosition(
+      pendingPosition({
+        idempotency_key: 'key-old-closed',
+        order_state: 'closed',
+        filled_size: 100,
+        decision_timestamp: OLD_ENOUGH,
+      }),
+    );
+
+    const report = await new ExecutionImpl(makeInput(store, makeBroker())).reconcile();
+
+    expect(report.swept).toBe(0);
+    expect((await store.getPosition('key-old-closed'))?.order_state).toBe('closed');
+  });
+
+  it('never sweeps a terminal row with filled_size > 0 that is not closed — left as an unexplained anomaly, not guessed at', async () => {
+    const { store } = openTestExecutionStore();
+    await store.writeAheadPosition(
+      pendingPosition({
+        idempotency_key: 'key-old-rejected-partial',
+        order_state: 'rejected',
+        filled_size: 50,
+        decision_timestamp: OLD_ENOUGH,
+      }),
+    );
+
+    const report = await new ExecutionImpl(makeInput(store, makeBroker())).reconcile();
+
+    expect(report.swept).toBe(0);
+    expect((await store.getPosition('key-old-rejected-partial'))?.order_state).toBe('rejected');
+  });
+
+  it('never sweeps a live (non-terminal) row', async () => {
+    const { store } = openTestExecutionStore();
+    await store.writeAheadPosition(
+      pendingPosition({
+        idempotency_key: 'key-live',
+        order_state: 'pending',
+        filled_size: 0,
+        decision_timestamp: OLD_ENOUGH,
+      }),
+    );
+    const broker = makeBroker();
+    // Matches the store row exactly (`agrees()`), so reconcileLot writes
+    // nothing and the row stays `pending` — never terminal, so the sweep
+    // was never going to touch it either way; this asserts that directly.
+    broker.book.set('key-live', {
+      client_order_id: 'key-live',
+      broker_order_ids: [],
+      order_state: 'pending',
+      filled_qty: 0,
+    });
+
+    const report = await new ExecutionImpl(makeInput(store, broker)).reconcile();
+
+    expect(report.swept).toBe(0);
+    expect((await store.getPosition('key-live'))?.order_state).toBe('pending');
+  });
+
+  it(
+    'AC3: crash-restart recovers the same live positions before and after the sweep runs — ' +
+      'seeded live rows plus old and recent terminal rows',
+    async () => {
+      const { store } = openTestExecutionStore();
+      // Two live lots the recovery path must still see afterward.
+      await store.writeAheadPosition(
+        pendingPosition({
+          idempotency_key: 'key-live-1',
+          instrument: 'AAPL',
+          order_state: 'submitted',
+          filled_size: 0,
+          decision_timestamp: OLD_ENOUGH,
+        }),
+      );
+      await store.writeAheadPosition(
+        pendingPosition({
+          idempotency_key: 'key-live-2',
+          instrument: 'MSFT',
+          order_state: 'partially_filled',
+          filled_size: 40,
+          decision_timestamp: OLD_ENOUGH,
+        }),
+      );
+      // Terminal rows: some sweepable, some not (per the rules above).
+      await store.writeAheadPosition(
+        pendingPosition({
+          idempotency_key: 'key-term-old-rejected',
+          order_state: 'rejected',
+          filled_size: 0,
+          decision_timestamp: OLD_ENOUGH,
+        }),
+      );
+      await store.writeAheadPosition(
+        pendingPosition({
+          idempotency_key: 'key-term-recent-cancelled',
+          order_state: 'cancelled',
+          filled_size: 0,
+          decision_timestamp: TOO_RECENT,
+        }),
+      );
+      await store.writeAheadPosition(
+        pendingPosition({
+          idempotency_key: 'key-term-old-closed',
+          order_state: 'closed',
+          filled_size: 100,
+          decision_timestamp: OLD_ENOUGH,
+        }),
+      );
+
+      const broker = makeBroker();
+      // Matches the store row exactly, so this lot agrees and is untouched
+      // by the in-flight reconciliation — it must stay live through the
+      // SAME pass that runs the sweep, not just survive a later one.
+      broker.book.set('key-live-1', {
+        client_order_id: 'key-live-1',
+        broker_order_ids: [],
+        order_state: 'submitted',
+        filled_qty: 0,
+      });
+
+      // Recovery BEFORE the sweep-bearing reconcile pass runs.
+      const before = await store.getOpenPositions();
+
+      const report = await new ExecutionImpl(makeInput(store, broker)).reconcile();
+      expect(report.swept).toBe(1); // only key-term-old-rejected
+
+      // Recovery AFTER — same live set, by key and by order_state.
+      const after = await store.getOpenPositions();
+      expect(after.map((p) => p.idempotency_key).sort()).toEqual(
+        before.map((p) => p.idempotency_key).sort(),
+      );
+      expect(after.map((p) => p.idempotency_key).sort()).toEqual(['key-live-1', 'key-live-2']);
+
+      // The non-swept terminal rows are still present (just not "open").
+      expect(await store.getPosition('key-term-recent-cancelled')).not.toBeNull();
+      expect(await store.getPosition('key-term-old-closed')).not.toBeNull();
+      // The swept one is gone.
+      expect(await store.getPosition('key-term-old-rejected')).toBeNull();
+    },
+  );
+});
+
+/**
  * The flatten-journal sweep (#519, #526) — `reconcile()`'s second worklist,
  * over `flatten_submissions` rather than `open_positions`. Mirrors the
  * bracket-side describe blocks above in shape (crash between write-ahead and

@@ -135,6 +135,20 @@ export class TestExecutionStore extends SqliteExecutionStore {
     return super.markResidualAlerted(idempotency_key, alerted_at);
   }
 
+  /**
+   * Logged only when it actually deletes something — unlike every other
+   * override above, this one is called UNCONDITIONALLY on every `reconcile()`
+   * pass (#1088), so logging every call (including a 0-row no-op) would
+   * turn `writeLog` from "what this pass durably changed" into "what this
+   * pass merely invoked", breaking every existing `writeLog` assertion that
+   * predates this mechanism.
+   */
+  override async sweepTerminalPositions(cutoff: Date): Promise<number> {
+    const swept = await super.sweepTerminalPositions(cutoff);
+    if (swept > 0) this.writeLog.push(`sweep-terminal-positions:${swept}`);
+    return swept;
+  }
+
   /** Raw read of the #549 marker columns (migration 0024) — production reads them only via `getUnprotectedResidualLots`. */
   async getResidualProtectionMarker(
     idempotency_key: string,

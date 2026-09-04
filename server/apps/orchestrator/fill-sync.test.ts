@@ -12,6 +12,7 @@ function makeReport(overrides: Partial<ReconcileReport> = {}): ReconcileReport {
     checked: 0,
     corrected: 0,
     divergences: [],
+    swept: 0,
     timestamp: new Date('2026-08-03T12:00:00Z'),
     ...overrides,
   };
@@ -74,6 +75,39 @@ describe('runStartupReconcile', () => {
 
     await expect(runStartupReconcile({ execution, logger: makeLogger() })).rejects.toThrow(
       'store unreadable',
+    );
+  });
+
+  // #1088: the sweep runs unconditionally on every reconcile() pass but is
+  // not a divergence, so it needed its own trace — otherwise a DELETE
+  // against open_positions happened with nothing anywhere to show it.
+  it('logs the terminal-row sweep count when it deleted rows, and not otherwise', async () => {
+    const logger = makeLogger();
+    const execution = makeExecution({
+      reconcile: vi.fn().mockResolvedValue(makeReport({ swept: 3 })),
+    });
+
+    await runStartupReconcile({ execution, logger });
+
+    expect(logger.entries).toContainEqual(
+      expect.objectContaining({
+        message: 'reconcile: terminal-row sweep',
+        level: 'info',
+        payload: { swept: 3 },
+      }),
+    );
+  });
+
+  it('does not log a terminal-row sweep line when nothing was swept', async () => {
+    const logger = makeLogger();
+    const execution = makeExecution({
+      reconcile: vi.fn().mockResolvedValue(makeReport({ swept: 0 })),
+    });
+
+    await runStartupReconcile({ execution, logger });
+
+    expect(logger.entries).not.toContainEqual(
+      expect.objectContaining({ message: 'reconcile: terminal-row sweep' }),
     );
   });
 });
@@ -447,6 +481,36 @@ describe('startFillSync', () => {
       expect(
         divergenceLines.map((entry) => (entry.payload as { instrument: string }).instrument),
       ).toEqual(['AAPL', 'TSLA']);
+
+      await sync.stop();
+    });
+
+    // #1088: the sweep runs unconditionally on every periodic reconcile()
+    // pass but is not a divergence, so it needed its own trace at this call
+    // site too — otherwise a DELETE against open_positions happened on every
+    // poll cadence with nothing anywhere to show it.
+    it('logs the terminal-row sweep count on a poll that deleted rows, and not on one that did not', async () => {
+      const logger = makeLogger();
+      const execution = makeExecution({
+        reconcile: vi
+          .fn()
+          .mockResolvedValueOnce(makeReport({ swept: 2 }))
+          .mockResolvedValueOnce(makeReport({ swept: 0 })),
+      });
+      const sync = startFillSync({
+        execution,
+        clock: { now: () => new Date() },
+        logger,
+        fillPollIntervalMs: 1_000,
+      });
+
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      const sweepLines = logger.entries.filter(
+        (entry) => entry.message === 'reconcile: terminal-row sweep',
+      );
+      expect(sweepLines).toHaveLength(1);
+      expect(sweepLines[0]?.payload).toEqual({ swept: 2 });
 
       await sync.stop();
     });

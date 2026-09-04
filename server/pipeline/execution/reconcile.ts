@@ -49,6 +49,33 @@
  * `ReconcileDivergence`/`ReconcileReport` are WIDENED to also carry a
  * flatten's outcome rather than gaining a sibling type — see
  * `ReconcileDivergence`'s own doc (types/execution.ts) for why.
+ *
+ * ## The terminal-row sweep (#1088)
+ *
+ * `getOpenPositions()` already excludes every terminal `open_positions` row
+ * from every live read (crash recovery, exposure sizing, the dashboard), so
+ * a `rejected`/`cancelled`/`expired` row sitting in the table is inert — but
+ * before #1088 nothing ever deleted one, so the table grew without bound
+ * (observed: 10 terminal rows to 1 live row). `sweepTerminalPositions`
+ * (`SqliteExecutionStore`) is the fix: called unconditionally at the end of
+ * every `reconcile()` pass, which — like the flatten and residual sweeps
+ * above — gives it both of `reconcile()`'s existing production call sites
+ * (startup, and the periodic poll per #921) for free, live and control arm
+ * alike (`control-arm-wiring.ts` builds both arms' `reconcile()` off this
+ * same function). See `sqlite-shared-store.ts`'s "row lifecycle" doc for the
+ * full lifecycle and why `closed` rows are deliberately never swept.
+ *
+ * `TERMINAL_SWEEP_AGE_MS` below is the age gate: `sweepTerminalPositions`
+ * only deletes a row once its `decision_timestamp` is this old. The reason
+ * is idempotency-key reuse — `idempotency_key` hashes
+ * `(instrument, bar, side, arm)` (`computeIdempotencyKey`), not `debate_id`,
+ * specifically so a crash-restart replay of the SAME bar coordinate reuses
+ * the SAME key and dedupes against the row `execute()` already wrote for it
+ * (`findByKey`). Deleting a terminal row the moment it turns terminal would
+ * free that key for reuse while a same-bar replay is still plausible; fixed
+ * at 24h — 24x `DEBATE_BAR_TIMEFRAME_MS` (the bar grid a replay's coordinate
+ * is measured against, debate-log-store.ts), comfortably past any realistic
+ * crash-recovery gap.
  */
 
 import type { OpenPosition, OrderState } from '../../shared/index.js';
@@ -63,6 +90,15 @@ import type {
 
 /** The states a crash can strand: written ahead, or acked but not advanced. */
 const IN_FLIGHT: readonly OrderState[] = ['pending', 'submitted'];
+
+/**
+ * #1088: how old a terminal, size-0 `open_positions` row's
+ * `decision_timestamp` (the original write-ahead time — there is no
+ * separate terminal-transition timestamp to anchor on) must be before
+ * `sweepTerminalPositions` deletes it. See this file's "terminal-row sweep"
+ * doc above for the idempotency-key-reuse-safety reasoning behind the value.
+ */
+export const TERMINAL_SWEEP_AGE_MS = 24 * 60 * 60 * 1_000;
 
 export async function reconcile(input: ExecutionInput): Promise<ReconcileReport> {
   const { clock, store } = input;
@@ -110,10 +146,17 @@ export async function reconcile(input: ExecutionInput): Promise<ReconcileReport>
 
   divergences.push(...(await findUnrecordedVenuePositions(input, positions)));
 
+  // #1088 — see the file doc's "terminal-row sweep" section. Unconditional:
+  // every pass ages out whatever has crossed the cutoff since the last one,
+  // live and control arm alike.
+  const cutoff = new Date(now.getTime() - TERMINAL_SWEEP_AGE_MS);
+  const swept = await store.sweepTerminalPositions(cutoff);
+
   return {
     checked: inFlight.length + unresolvedFlattens.length + residualSweep.checked,
     corrected,
     divergences,
+    swept,
     timestamp: now,
   };
 }

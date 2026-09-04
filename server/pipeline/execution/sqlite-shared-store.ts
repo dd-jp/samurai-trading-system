@@ -26,6 +26,53 @@
  * 2. **JSON columns** (`broker_order_ids`, `cost_breakdown_json`) round-trip
  *    through `JSON.stringify`/`JSON.parse` at this boundary only — the port
  *    never sees the serialized form.
+ *
+ * ## `open_positions` row lifecycle (#1088)
+ *
+ * A row is write-ahead INSERTed at `pending` by `writeAheadPosition`, before
+ * the broker call — so a crash in that gap always leaves a recoverable
+ * record (`reconcile()`, #86). From there it moves through exactly one of
+ * two paths:
+ *
+ * - **Never lands**: `pending` → `rejected` when `reconcile()` asks the
+ *   venue and the venue authoritatively has no such order (the write-ahead
+ *   died, or was cancelled before ack). Also reachable directly from
+ *   `pending`/`submitted` as `cancelled` or `expired` when the venue reports
+ *   one of those states instead. None of these ever advance again — no code
+ *   path resubmits a terminal lot under its own key (a NEW decision, if one
+ *   is made, gets a NEW `idempotency_key`, per `computeIdempotencyKey`'s
+ *   `(instrument, bar, side, arm)` hash).
+ * - **Lands and fills**: `pending` → `submitted` → `partially_filled` →
+ *   `filled` (`ingestFills`, driven by persisted `Fill` rows, never by this
+ *   store's own state) → `closed` on round-trip-to-flat, atomically with a
+ *   `closed_trades` row (`applyLotAdvance`'s single transaction). `closed`
+ *   is therefore the one terminal state that is never reached with
+ *   `filled_size = 0`.
+ *
+ * `getOpenPositions()` (below) excludes all four terminal states from every
+ * live read — crash recovery, Risk's exposure caps, the dashboard — so a
+ * terminal row sitting in the table is inert to every reader; it does not
+ * corrupt anything downstream. Before #1088, though, nothing ever removed
+ * one: the table was an unbounded, growing journal, and a `rejected` row
+ * accumulated indefinitely (observed: 10 terminal rows to 1 live row, one
+ * `rejected` row eight days old). That is a RETENTION defect, not a
+ * correctness one — the fix (`sweepTerminalPositions`, called from
+ * `reconcile()`) deletes what is provably safe to lose and leaves the rest:
+ *
+ * - `rejected`/`cancelled`/`expired` rows with `filled_size = 0` were never
+ *   real positions — no fill, no `closed_trades` row, ever. Their
+ *   originating decision is separately, durably logged (`debate_log`,
+ *   `verdict_log`), so nothing HMRC/CGT-relevant is lost. Age-gated (see
+ *   `sweepTerminalPositions`'s own doc, types/store.ts) so a hard-delete
+ *   cannot free an `idempotency_key` a still-plausible crash-restart replay
+ *   would reuse.
+ * - `closed` rows are RETAINED, not swept — see `sweepTerminalPositions`'s
+ *   doc for why (the #1001 submit-time snapshot columns have no
+ *   `closed_trades` counterpart, and CLAUDE.md's HMRC/CGT "track everything"
+ *   retention requirement makes deleting them a separate decision).
+ * - A terminal row with `filled_size > 0` that never reached `closed` (this
+ *   should not occur; nothing in this file writes one) is left untouched
+ *   rather than guessed at.
  */
 
 import type {
@@ -63,6 +110,16 @@ import type {
  * original name.
  */
 const TERMINAL_STATES: readonly OrderState[] = TERMINAL_ORDER_STATES;
+
+/**
+ * The subset of `TERMINAL_STATES` `sweepTerminalPositions` deletes —
+ * `TERMINAL_ORDER_STATES` minus `closed` (#1088). See that method's doc
+ * (types/store.ts) and this file's "row lifecycle" section above for why
+ * `closed` is excluded.
+ */
+const SWEEPABLE_TERMINAL_STATES: readonly OrderState[] = TERMINAL_ORDER_STATES.filter(
+  (state) => state !== 'closed',
+);
 
 /**
  * The only two leg predicates `fillSizesByLeg` will put in its SQL, chosen by
@@ -316,6 +373,22 @@ export class SqliteExecutionStore implements SharedStore {
       )
       .all(this.arm, ...TERMINAL_STATES) as OpenPositionRow[];
     return rows.map(fromPositionRow);
+  }
+
+  /** See `SharedStore.sweepTerminalPositions` (types/store.ts) for the full contract. */
+  async sweepTerminalPositions(cutoff: Date): Promise<number> {
+    const placeholders = SWEEPABLE_TERMINAL_STATES.map(() => '?').join(', ');
+    const result = this.db
+      .prepare(
+        // #753: arm-scoped, same reason as every other scan in this class —
+        // a control-arm row must never be swept (or left unswept) by the
+        // live arm's cadence, or vice-versa.
+        `DELETE FROM open_positions
+          WHERE arm = ? AND order_state IN (${placeholders})
+            AND filled_size = 0 AND decision_timestamp < ?`,
+      )
+      .run(this.arm, ...SWEEPABLE_TERMINAL_STATES, toStoredTimestamp(cutoff));
+    return result.changes;
   }
 
   /** Dedup gate for the fill feed's re-offered fills. */

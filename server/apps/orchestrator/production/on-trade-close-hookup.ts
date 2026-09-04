@@ -142,6 +142,8 @@ export function withOnTradeClose(
     getUnprotectedResidualLots: (): Promise<UnprotectedResidualLot[]> =>
       store.getUnprotectedResidualLots(),
 
+    sweepTerminalPositions: (cutoff: Date): Promise<number> => store.sweepTerminalPositions(cutoff),
+
     applyLotAdvance: async (advance: LotAdvance): Promise<void> => {
       await store.applyLotAdvance(advance);
       const trade = advance.closed_trade;
