@@ -43,7 +43,7 @@ describe.skipIf(credentials === undefined)('detectDisagreements (real LLM integr
     const client = new AnthropicLlmClient(new NousMessagesClient({ apiKey, baseUrl }), {
       model,
       max_tokens: 1024,
-      timeoutMs: 30_000,
+      timeoutMs: 28_000,
       retry: { maxAttempts: 2, baseDelayMs: 500, maxDelayMs: 2_000 },
     });
 

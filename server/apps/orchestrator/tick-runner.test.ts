@@ -1396,3 +1396,72 @@ describe('SequentialTickRunner.runInstrument — the portfolio-tail turnstile (#
     expect(steps.execution).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * #1080. Both sub-budgets on the decision path degrade to a no-trade, and
+ * until this the debate one degraded to the word `neutral` — the same word a
+ * converged debate writes when the panel genuinely finds nothing. The
+ * dashboard renders `audit_log.decision` verbatim, so the row asserted here is
+ * the whole legibility path.
+ */
+describe('SequentialTickRunner degraded-debate legibility (#1080)', () => {
+  /** `enforceLatencyBudget`'s fallback: no synthesis, no rounds, neutral, zero. */
+  function starvedDebate(): DebateResult {
+    return makeDebate({
+      synthesis: 'Debate terminated before any round completed; no synthesis available.',
+      confidence: 0,
+      converged: false,
+      rounds_completed: 0,
+      direction: 'neutral',
+      open_items: ['debate did not complete within latency budget'],
+      timed_out: { budget_ms: 60_000, elapsed_ms: 60_002 },
+    });
+  }
+
+  it('records a starved debate as budget_exhausted, not as a neutral direction', async () => {
+    const steps = makeSteps({
+      debate: vi.fn(async () => starvedDebate()),
+      trader: vi.fn(async () => null),
+    });
+    const ctx = makeCtx();
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    const rows = (ctx.auditLog as SqliteAuditLog).getByTraceId(TRACE_ID);
+    const debateRow = rows.find((row) => row.stage === 'debate');
+    expect(debateRow?.decision).toBe('budget_exhausted');
+    // The trader row is unchanged — a no_trade is still a no_trade. What the
+    // pair now says is WHY, which is the distinction #1080 is about.
+    expect(rows.find((row) => row.stage === 'trader')?.decision).toBe('no_trade');
+  });
+
+  it('raises the log level for a starved debate above ordinary stage traffic', async () => {
+    const steps = makeSteps({
+      debate: vi.fn(async () => starvedDebate()),
+      trader: vi.fn(async () => null),
+    });
+    const ctx = makeCtx();
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    const logged = (ctx.logger.log as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([entry]) => entry as { stage: string; level: string; message: string },
+    );
+    const debateLine = logged.find((entry) => entry.message === 'debate: budget_exhausted');
+    expect(debateLine?.level).toBe('warn');
+    // Everything else stays at info: a soak log where routine stages shout is
+    // a soak log nobody reads.
+    expect(logged.find((entry) => entry.message === 'analysts: quorum_met')?.level).toBe('info');
+    expect(logged.find((entry) => entry.message === 'trader: no_trade')?.level).toBe('info');
+  });
+
+  it('keeps a debate that resolved on its own terms recording its direction', async () => {
+    const steps = makeSteps();
+    const ctx = makeCtx();
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    const rows = (ctx.auditLog as SqliteAuditLog).getByTraceId(TRACE_ID);
+    expect(rows.find((row) => row.stage === 'debate')?.decision).toBe('bullish');
+  });
+});

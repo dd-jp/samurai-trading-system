@@ -31,7 +31,7 @@ export {
   readErrorDetail,
   truncateForError,
 } from './http/response-errors.js';
-export type { RetryConfig } from './http/retry.js';
+export type { RetryAttemptReport, RetryConfig, RetryObserver } from './http/retry.js';
 export { withRetry } from './http/retry.js';
 export type { TokenBucketConfig, TokenBucketTelemetry } from './http/token-bucket.js';
 export { TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS, TokenBucket } from './http/token-bucket.js';

@@ -8,7 +8,7 @@
  * without a hard dependency on a specific SDK package.
  */
 
-import { withRetry } from '../../../shared/index.js';
+import { type RetryAttemptReport, withRetry } from '../../../shared/index.js';
 import type { AnthropicUsage } from '../../../shared/llm/pricing.js';
 import {
   LlmCancelledError,
@@ -106,12 +106,41 @@ export interface AnthropicMessagesClient {
   ): Promise<AnthropicMessageResponse>;
 }
 
+/**
+ * One retried attempt, as reported to `AnthropicLlmClientConfig.onRetryAttempt`
+ * (#1080): the shared loop's report plus the identity fields only this client
+ * holds, so a log line can name which model, which trace and which debate paid
+ * for the attempt that vanished.
+ */
+export interface LlmRetryAttemptReport extends RetryAttemptReport {
+  model: string;
+  trace_id: string | undefined;
+  stage: string | undefined;
+  debate_id: string | undefined;
+}
+
 export interface AnthropicLlmClientConfig {
   model: string;
   max_tokens: number;
   /** Per-attempt timeout; exceeding this raises `LlmTimeoutError` and may be retried. */
   timeoutMs: number;
   retry: LlmRetryConfig;
+  /**
+   * Observes every attempt this client retries (#1080). Optional, so the many
+   * test and backtest construction sites are unchanged and simply report
+   * nothing; the production composition root supplies one that logs at `warn`.
+   *
+   * A RETRIED ATTEMPT IS OTHERWISE INVISIBLE, and that is what this closes.
+   * `attempt()` starts its own `latency_ms` clock and meters only through
+   * `recordSpend`, which a failed attempt never reaches — so the attempt is
+   * absent from `llm_spend`, absent from the `llm call:` log stream, and
+   * absent from every derived figure. It still consumed real wall-clock time
+   * inside whatever latency budget the caller was racing (`enforceLatencyBudget`
+   * for a debate), and still billed the provider. #1080 had to infer those
+   * attempts from >30s gaps between logged calls; with this wired they are
+   * read off a line.
+   */
+  onRetryAttempt?: ((report: LlmRetryAttemptReport) => void) | undefined;
 }
 
 /**
@@ -270,7 +299,28 @@ export class AnthropicLlmClient implements LlmClient {
         new LlmCancelledError('LLM call cancelled before dispatch: caller signal already aborted'),
       );
     }
-    return withRetry(() => this.attempt(request), this.config.retry, isRetryable);
+    const onRetryAttempt = this.config.onRetryAttempt;
+    return withRetry(
+      () => this.attempt(request),
+      this.config.retry,
+      isRetryable,
+      onRetryAttempt === undefined
+        ? undefined
+        : (report) => {
+            // Read off the request's own attribution rather than threaded
+            // separately: it is the SAME source `recordSpend` bills against,
+            // so a retried attempt and the attempt that eventually succeeded
+            // are joinable on `debate_id` without a second convention.
+            const attribution = request.context.attribution;
+            onRetryAttempt({
+              ...report,
+              model: this.config.model,
+              trace_id: attribution?.trace_id,
+              stage: attribution?.stage,
+              debate_id: attribution?.debate_id,
+            });
+          },
+    );
   }
 
   private async attempt<T>(request: LlmRequest<T>): Promise<LlmResponse<T>> {
@@ -324,6 +374,23 @@ export class AnthropicLlmClient implements LlmClient {
    * failed call — the information does not exist client-side — so this is a
    * known floor on the figure, not an oversight. Retries are each counted
    * separately, which is correct: each attempt is separately billed.
+   *
+   * #1080 MEASURED THAT FLOOR for the first time, and the number is not
+   * negligible. In the 2026-09-03 paper session, at least nine of the 26
+   * timed-out debates contained a full 30s attempt that timed out and was
+   * retried — provably, because a single attempt is bounded by
+   * `config.timeoutMs`, so any interval between one logged call and the next
+   * that exceeds it must contain one. One debate (`9d9e505f3493`) burned its
+   * entire 60s budget with ZERO rows in `llm_spend` at all. At the session's
+   * mean metered debate-call cost of $0.002332, those nine attempts are a
+   * floor of ~$0.021 the cap could not see — small against ADR-0008's $50, but
+   * unbounded in principle, since nothing counted them.
+   *
+   * They are counted now: `AnthropicLlmClientConfig.onRetryAttempt` logs each
+   * retried attempt with its elapsed time, so the gap between billed and
+   * metered is readable from the log rather than inferable from timestamps.
+   * The rows are still not written — there is still no usage block on a failed
+   * call — so this remains a floor, but a floor whose size can be checked.
    *
    * `latency_ms` (#326) is the SAME number returned to the caller on
    * `LlmResponse` — measured once, around `callWithTimeout`, and passed in

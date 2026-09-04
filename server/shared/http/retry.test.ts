@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { RetryConfig } from './retry.js';
+import type { RetryAttemptReport, RetryConfig } from './retry.js';
 import { withRetry } from './retry.js';
 
 const CONFIG: RetryConfig = { maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 1_000 };
@@ -260,5 +260,96 @@ describe('withRetry (generic)', () => {
     expect(fn).toHaveBeenCalledTimes(2);
 
     await expect(promise).resolves.toBe('ok');
+  });
+});
+
+/**
+ * #1080: the loop was silent, and that silence is what made a 30s timed-out
+ * attempt inside a 60s debate budget unmeasurable — it appears in no log line
+ * and, because `AnthropicLlmClient` meters only attempts that RETURN, in no
+ * `llm_spend` row either.
+ */
+describe('withRetry retry observer (#1080)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(1);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('reports every attempt it retries, and not the attempt the caller sees fail', async () => {
+    const reports: RetryAttemptReport[] = [];
+    const boom = new RetryableError('slow');
+    // Three attempts configured, all failing: attempts 1 and 2 are retried and
+    // must be reported; attempt 3's error is rethrown to the caller, which can
+    // log it itself, so reporting it here would double-count.
+    const fn = vi.fn().mockRejectedValue(boom);
+
+    const promise = withRetry(fn, CONFIG, isRetryable, (report) => reports.push(report));
+    const settled = expect(promise).rejects.toBe(boom);
+    await vi.advanceTimersByTimeAsync(CONFIG.maxDelayMs * CONFIG.maxAttempts);
+    await settled;
+
+    expect(fn).toHaveBeenCalledTimes(3);
+    expect(reports.map((report) => report.attempt)).toEqual([1, 2]);
+    expect(reports.map((report) => report.maxAttempts)).toEqual([3, 3]);
+    expect(reports.map((report) => report.error)).toEqual([boom, boom]);
+    // The delay the loop is about to sleep, not one it already slept: full
+    // jitter pinned to its upper bound, doubling per attempt to the cap.
+    expect(reports.map((report) => report.delay_ms)).toEqual([100, 200]);
+  });
+
+  it('reports the failed attempt OWN elapsed time, not the cumulative time', async () => {
+    const reports: RetryAttemptReport[] = [];
+    let call = 0;
+    const fn = vi.fn().mockImplementation(async () => {
+      call += 1;
+      const spend = call * 1_000;
+      await new Promise((resolve) => setTimeout(resolve, spend));
+      if (call === 1) {
+        throw new RetryableError('slow');
+      }
+      return 'ok';
+    });
+
+    const promise = withRetry(fn, CONFIG, isRetryable, (report) => reports.push(report));
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await expect(promise).resolves.toBe('ok');
+    expect(reports).toHaveLength(1);
+    // 1,000ms of attempt 1 — the backoff and attempt 2's own 2,000ms are not
+    // part of it. The cumulative figure is recoverable by summing these; the
+    // per-attempt one is not recoverable from a cumulative total.
+    expect(reports[0]?.elapsed_ms).toBe(1_000);
+  });
+
+  it('does not report an error the predicate rejects', async () => {
+    const reports: RetryAttemptReport[] = [];
+    const fn = vi.fn().mockRejectedValue(new FatalError('bad request'));
+
+    await expect(
+      withRetry(fn, CONFIG, isRetryable, (report) => reports.push(report)),
+    ).rejects.toBeInstanceOf(FatalError);
+
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(reports).toEqual([]);
+  });
+
+  it('lets the provider error through when the observer itself throws', async () => {
+    // This loop is on the path of every LLM and HTTP call in the system. A
+    // telemetry sink that fails must not convert a recoverable timeout into an
+    // unclassified crash.
+    const fn = vi.fn().mockRejectedValueOnce(new RetryableError('slow')).mockResolvedValue('ok');
+
+    const promise = withRetry(fn, CONFIG, isRetryable, () => {
+      throw new Error('logger is broken');
+    });
+    await vi.advanceTimersByTimeAsync(CONFIG.baseDelayMs);
+
+    await expect(promise).resolves.toBe('ok');
+    expect(fn).toHaveBeenCalledTimes(2);
   });
 });

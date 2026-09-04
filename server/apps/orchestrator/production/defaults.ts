@@ -4,7 +4,11 @@ import type {
   LlmSpendSink,
   RateLimiterConfig,
 } from '../../../pipeline/debate-engine/index.js';
-import { AnthropicLlmClient, NousMessagesClient } from '../../../pipeline/debate-engine/index.js';
+import {
+  AnthropicLlmClient,
+  LATENCY_BUDGET_MS,
+  NousMessagesClient,
+} from '../../../pipeline/debate-engine/index.js';
 import type {
   AlpacaBrokerClient,
   AlpacaTradingEnvironment,
@@ -30,7 +34,7 @@ import {
   type TradingCalendar,
 } from '../../../providers/market-data-service/index.js';
 import { buildRoutingMap, LSE_ETP_POOL } from '../../../providers/universe-pool/lse-etp-pool.js';
-import type { AssetClass, TokenBucket } from '../../../shared/index.js';
+import { type AssetClass, sanitizeLogText, type TokenBucket } from '../../../shared/index.js';
 import { nousCredentials } from '../../../shared/llm/index.js';
 import type { Logger, UniverseInstrument } from '../types.js';
 import type { ProductionConfig } from './config.js';
@@ -134,20 +138,67 @@ export const DEFAULT_VOLATILITY_INDICATOR: IndicatorSpec = {
  */
 export const DEFAULT_FEEDBACK_INTERVAL_MS = 24 * 60 * 60 * 1_000;
 
+const DEFAULT_LLM_RETRY = { maxAttempts: 2, baseDelayMs: 500, maxDelayMs: 2_000 } as const;
+
+/**
+ * The wall-clock ceiling ONE LOGICAL LLM CALL may occupy: the latency budget of
+ * the debate that issues it (#1080).
+ *
+ * `LATENCY_BUDGET_MS.stocks`, not the crypto entry, because Samurai is an
+ * equities system — crypto left scope 2026-08-16 (ADR-0015's amendment) and no
+ * production tick runs the crypto budget. A crypto system re-entering scope
+ * would have to revisit this: at a 30s budget the same arithmetic below admits
+ * only a 13s per-attempt timeout, which is under the measured p90 of an
+ * UNCONTENDED debate call (#1080: 17.0s), i.e. no retry schedule fits a 30s
+ * budget at this model's latency at all.
+ */
+const LOGICAL_LLM_CALL_BUDGET_MS = LATENCY_BUDGET_MS.stocks;
+
+/**
+ * The per-attempt timeout, DERIVED from the budget above rather than chosen.
+ *
+ * #1080 measured what the previous constant (30,000ms) meant in production: a
+ * single logical call could consume `maxAttempts * (timeoutMs + maxDelayMs)` =
+ * 2 * 32,000 = 64,000ms — MORE than the whole 60s stocks budget it runs inside,
+ * and more than twice the crypto budget. That is incoherent by construction:
+ * the retry loop was free to blow, on its own, the deadline it was supposed to
+ * be helping the caller meet, and it did so invisibly (see
+ * `AnthropicLlmClientConfig.onRetryAttempt`). Nine of the 26 timed-out debates
+ * in the 2026-09-03 session contained at least one such attempt.
+ *
+ * The invariant is `maxAttempts * (timeoutMs + maxDelayMs) <=
+ * LOGICAL_LLM_CALL_BUDGET_MS`, pinned by a test so the two cannot drift apart
+ * again — a retry schedule and the budget it runs inside are one decision, the
+ * same coupling `LATENCY_BUDGET_MS` and `MAX_ROUNDS_BY_ASSET_CLASS` already
+ * carry for the round cap.
+ *
+ * What this does NOT claim: that 28,000ms makes the budget reachable. It does
+ * not, and no per-attempt timeout can — #1080 measured an uncontended debate
+ * call at a 7.4s median, and a three-round debate is nine sequential calls, so
+ * the 60s budget is marginal at zero contention before any retry exists. That
+ * is a round-cap-versus-budget question, deliberately left open on #1080 for a
+ * session that can measure it. This constant only removes the case where the
+ * retry alone is allowed to exceed the budget.
+ */
+const DEFAULT_LLM_TIMEOUT_MS =
+  LOGICAL_LLM_CALL_BUDGET_MS / DEFAULT_LLM_RETRY.maxAttempts - DEFAULT_LLM_RETRY.maxDelayMs;
+
 /**
  * Debate/disagreement-detection's LLM knobs (max tokens, per-attempt
  * timeout, retry budget) are not yet exposed as their own `ProductionConfig`
  * field — no ticket has asked for them to be tuned independently of these
- * defaults, which match the values `disagreement-detector.integration.test.ts`
- * already exercises against the real API. `model` is the one knob threaded
+ * defaults, which are mirrored by `disagreement-detector.integration.test.ts`
+ * so the one suite that talks to the real API exercises the shipped numbers.
+ * That mirror is by hand: moving `timeoutMs` here means moving it there too
+ * (#1080 moved both). `model` is the one knob threaded
  * from the environment (#274 AC), since a stale/rotated model id is the one
  * failure mode ops needs to fix without a redeploy.
  */
 /** Exported for `production.test.ts` — asserts the actual retry/timeout budget wired into the live default, not just the model threaded through the startup warn log (PR #284 review). */
 export const DEFAULT_LLM_CLIENT_CONFIG: Omit<AnthropicLlmClientConfig, 'model'> = {
   max_tokens: 1024,
-  timeoutMs: 30_000,
-  retry: { maxAttempts: 2, baseDelayMs: 500, maxDelayMs: 2_000 },
+  timeoutMs: DEFAULT_LLM_TIMEOUT_MS,
+  retry: DEFAULT_LLM_RETRY,
 };
 
 /**
@@ -189,6 +240,39 @@ export function buildDefaultLlmClient(logger: Logger, spendSink?: LlmSpendSink):
   const config: AnthropicLlmClientConfig = {
     ...DEFAULT_LLM_CLIENT_CONFIG,
     model,
+    // #1080. Without this the retry loop is silent: a first attempt that timed
+    // out never reaches `recordSpend`, so it appears in no log line and in no
+    // `llm_spend` row, while still having consumed up to a full `timeoutMs` of
+    // the caller's latency budget and still having been billed by the provider.
+    // `warn`, not `info`: a retried attempt is the system paying twice and
+    // halving the budget it had left, which is a condition an operator reading
+    // a soak log should see without filtering for it.
+    onRetryAttempt: (report) => {
+      logger.log({
+        trace_id: report.trace_id ?? 'llm',
+        stage: 'debate',
+        level: 'warn',
+        message:
+          `llm retry: ${report.model} attempt ${report.attempt} of ${report.maxAttempts} failed ` +
+          `after ${Math.round(report.elapsed_ms)}ms and is being retried in ` +
+          `${Math.round(report.delay_ms)}ms. THIS ATTEMPT IS NOT IN llm_spend — it never ` +
+          "completed, so its tokens are missing from the spend cap's sum and its wall time is " +
+          'missing from every latency figure derived from that table, while still counting ' +
+          "against the caller's latency budget (#1080): " +
+          sanitizeLogText(
+            report.error instanceof Error ? report.error.message : String(report.error),
+          ),
+        payload: {
+          model: report.model,
+          attempt: report.attempt,
+          max_attempts: report.maxAttempts,
+          elapsed_ms: Math.round(report.elapsed_ms),
+          delay_ms: Math.round(report.delay_ms),
+          debate_id: report.debate_id,
+          llm_stage: report.stage,
+        },
+      });
+    },
   };
   const client = new NousMessagesClient({ apiKey, baseUrl });
   // `spendSink` is only ever supplied on this default path, and deliberately

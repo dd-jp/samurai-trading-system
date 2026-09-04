@@ -14,6 +14,7 @@
 import { INDICATOR_UNAVAILABLE_COUNTER } from '../../pipeline/analysts/index.js';
 import {
   AnthropicLlmClient,
+  LATENCY_BUDGET_MS,
   MockLlmClient,
   SqliteDebateLogStore,
 } from '../../pipeline/debate-engine/index.js';
@@ -1094,9 +1095,93 @@ describe('buildProductionComponents (default llmClient fallback)', () => {
     expect(client).toBeInstanceOf(AnthropicLlmClient);
     expect(DEFAULT_LLM_CLIENT_CONFIG).toEqual({
       max_tokens: 1024,
-      timeoutMs: 30_000,
+      // 28,000ms, DERIVED from the budget invariant asserted below (#1080)
+      // rather than chosen. Written as the literal it must resolve to, so a
+      // change to the derivation has to be re-read here instead of being
+      // silently absorbed.
+      timeoutMs: 28_000,
       retry: { maxAttempts: 2, baseDelayMs: 500, maxDelayMs: 2_000 },
     });
+  });
+
+  /**
+   * #1080. The previous constant let ONE logical LLM call occupy
+   * `2 * (30,000 + 2,000)` = 64,000ms — more than the entire 60s stocks
+   * latency budget the debate issuing it was racing, and it did so invisibly,
+   * because a failed attempt reaches neither the log nor `llm_spend`. Nine of
+   * the 26 timed-out debates in the 2026-09-03 session contained one.
+   *
+   * Asserted as an inequality over the two constants rather than as a pair of
+   * literals: a retry schedule and the budget it runs inside are ONE decision,
+   * so moving either one alone has to fail here.
+   */
+  it('cannot let one logical LLM call outlast the latency budget it runs inside', () => {
+    const { maxAttempts, maxDelayMs } = DEFAULT_LLM_CLIENT_CONFIG.retry;
+    const worstCaseLogicalCallMs = maxAttempts * (DEFAULT_LLM_CLIENT_CONFIG.timeoutMs + maxDelayMs);
+
+    expect(worstCaseLogicalCallMs).toBeLessThanOrEqual(LATENCY_BUDGET_MS.stocks);
+  });
+
+  /**
+   * #1080, and the reason it had to be inferred rather than read: a retried
+   * attempt was invisible everywhere. `AnthropicLlmClient` starts its
+   * `latency_ms` clock inside the attempt and meters only through
+   * `recordSpend`, which a failed attempt never reaches — so a timeout that
+   * halved a debate's budget left no log line and no `llm_spend` row.
+   *
+   * Driven through the REAL client the composition root builds, not through
+   * `withRetry` directly (that loop has its own tests): the defect class this
+   * guards is a mechanism that exists, is tested, and is wired nowhere.
+   */
+  it('logs each retried LLM attempt through the client the composition root builds', async () => {
+    const logger = recordingLogger();
+    // Every attempt gets a well-formed HTTP response; what makes the call
+    // retryable is the caller's own parse rejecting it, which is the cheapest
+    // retryable error to provoke without a timer.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              choices: [{ message: { content: 'not json' }, finish_reason: 'stop' }],
+              usage: { prompt_tokens: 10, completion_tokens: 5 },
+              model: DEFAULT_NOUS_MODELS.debate,
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          ),
+      ),
+    );
+    const client = buildDefaultLlmClient(logger);
+    let parses = 0;
+
+    await expect(
+      client.complete({
+        prompt: 'p',
+        context: {
+          analyst_views: [],
+          attribution: { trace_id: 'trace-1', stage: 'debate', debate_id: 'debate-9' },
+        },
+        parseResponse: () => {
+          parses += 1;
+          return { valid: false, reason: 'unparseable' };
+        },
+      }),
+    ).rejects.toThrow();
+
+    // Two attempts made, and the FIRST one — the attempt no other record keeps
+    // — is on the log.
+    expect(parses).toBe(2);
+    const retryLine = logger.entries.find((entry) => entry.message.startsWith('llm retry:'));
+    expect(retryLine?.level).toBe('warn');
+    expect(retryLine?.trace_id).toBe('trace-1');
+    expect(retryLine?.payload).toMatchObject({
+      attempt: 1,
+      max_attempts: 2,
+      debate_id: 'debate-9',
+      model: DEFAULT_NOUS_MODELS.debate,
+    });
+    vi.unstubAllGlobals();
   });
 });
 

@@ -51,6 +51,7 @@ export type {
   AnthropicMessageRequest,
   AnthropicMessageResponse,
   AnthropicMessagesClient,
+  LlmRetryAttemptReport,
 } from './llm/anthropic-client.js';
 export { AnthropicLlmClient } from './llm/anthropic-client.js';
 export type { LlmError } from './llm/errors.js';

@@ -93,6 +93,46 @@ export interface PipelineCell {
   attempts: number;
 }
 
+/**
+ * The `audit_log` decision words that name a DEGRADED stage — one whose output
+ * was produced by a resource control firing, not by the market (#1080) — mapped
+ * to the sentence a reader needs to tell the two apart.
+ *
+ * The problem this closes: a debate that hit its latency budget before any
+ * round completed returns `direction: 'neutral', confidence: 0`, and the tick
+ * runner recorded that bare direction. `debate: neutral` followed by
+ * `trader: no_trade` is then byte-identical to a debate that ran to
+ * convergence and genuinely found nothing — the two outcomes an operator must
+ * act on most differently (fix the budget vs. accept the quiet market) were
+ * indistinguishable in the log, in `audit_log`, and on the dashboard. In the
+ * 2026-09-03 session that was 22 of 26 timed-out debates.
+ *
+ * Lives in `contracts/` because both runtimes read it: the server writes these
+ * words, the dashboard glosses them. Plain strings rather than a widening of
+ * `PipelineOutcome` — `PipelineCell.decision` is already free text, so a new
+ * word reaches the client with no wire change, whereas `PipelineOutcome` is a
+ * closed union whose members drive lane-level rendering.
+ */
+export const DEGRADED_DECISIONS = {
+  budget_exhausted:
+    'the debate hit its latency budget before any round completed — no synthesis exists, so the ' +
+    'neutral direction and zero confidence are the absence of an answer, not an answer',
+  timed_out_partial:
+    'the debate hit its latency budget mid-debate — the direction is a real but truncated ' +
+    'synthesis from the last round that finished',
+  not_admitted:
+    'the debate never started — the LLM rate limiter or the spend cap refused it, so no model ' +
+    'was asked anything',
+} as const satisfies Record<string, string>;
+
+/** One of `DEGRADED_DECISIONS`'s keys. */
+export type DegradedDecision = keyof typeof DEGRADED_DECISIONS;
+
+/** Whether an `audit_log` decision word names a degraded stage rather than a market outcome. */
+export function isDegradedDecision(decision: string | null): decision is DegradedDecision {
+  return decision !== null && Object.hasOwn(DEGRADED_DECISIONS, decision);
+}
+
 /** How a trace ended, or that it hasn't. */
 export type PipelineOutcome =
   | 'go'
