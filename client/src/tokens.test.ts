@@ -88,6 +88,11 @@ describe('colour channel tokens', () => {
     const literals = [...APP.matchAll(/rgba\((\d{1,3}), (\d{1,3}), (\d{1,3}),[^)]*\)/g)].map(
       (m) => `${m[1]} ${m[2]} ${m[3]}`,
     );
-    expect(new Set(literals)).toEqual(new Set(['0 0 0', '13 20 38']));
+    // v3 writes every colour through a token; the allow-list is what an
+    // earlier stylesheet needed for shadows and is kept so a future literal
+    // has to be argued in here rather than slipped in.
+    for (const literal of literals) {
+      expect(['0 0 0', '13 20 38']).toContain(literal);
+    }
   });
 });

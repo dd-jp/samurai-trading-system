@@ -20,14 +20,13 @@ describe('updateLedger — first-paint seeding', () => {
         started_at: at(9_000),
       }),
     ]);
-    const state = updateLedger(createLedger(), null, next);
+    const state = updateLedger(createLedger(), next);
     expect(state.entries.map((e) => e.trace_id)).toEqual(['stop-1', 'go-1']); // newest first
     expect(state.entries[0]).toMatchObject({
       instrument: 'ETH-USD',
       outcome: 'stopped',
       final_stage: 'risk',
       settled_at: at(13_000),
-      seeded: true,
     });
     expect(state.entries[1]?.settled_at).toBe(at(6_000)); // execution's recorded_at
   });
@@ -37,21 +36,20 @@ describe('updateLedger — first-paint seeding', () => {
       doneThrough('BTC-USD', 'run-1', 'debate', { outcome: 'in_flight' }),
       makeLane({ instrument: 'SPY', outcome: 'idle' }),
     ]);
-    expect(updateLedger(createLedger(), null, next).entries).toEqual([]);
+    expect(updateLedger(createLedger(), next).entries).toEqual([]);
   });
 });
 
 describe('updateLedger — settles while watching', () => {
-  it('appends a lane that settled, newest first and not marked seeded', () => {
+  it('appends a lane that settled, newest first', () => {
     const prev = makeView([doneThrough('BTC-USD', 'go-1', 'execution', { outcome: 'go' })]);
-    const seeded = updateLedger(createLedger(), null, prev);
+    const seeded = updateLedger(createLedger(), prev);
     const next = makeView([
       doneThrough('BTC-USD', 'go-1', 'execution', { outcome: 'go' }),
       doneThrough('ETH-USD', 'ng-1', 'verdict', { startMs: 50_000, outcome: 'no_go' }),
     ]);
-    const state = updateLedger(seeded, prev, next);
+    const state = updateLedger(seeded, next);
     expect(state.entries.map((e) => e.trace_id)).toEqual(['ng-1', 'go-1']);
-    expect(state.entries[0]?.seeded).toBe(false);
     expect(state.entries[0]?.outcome).toBe('no_go');
   });
 
@@ -74,7 +72,7 @@ describe('updateLedger — settles while watching', () => {
         cells: { analysts: { state: 'stopped', recorded_at: at(30_000) } },
       }),
     ]);
-    const state = updateLedger(createLedger(), null, next);
+    const state = updateLedger(createLedger(), next);
     expect(state.entries.map((e) => e.outcome)).toEqual(['quorum_skip', 'stopped', 'no_go', 'go']);
   });
 });
@@ -82,32 +80,30 @@ describe('updateLedger — settles while watching', () => {
 describe('updateLedger — dedupe', () => {
   it('never re-adds a trace on a re-poll of an unchanged lane', () => {
     const view = makeView([doneThrough('BTC-USD', 'go-1', 'execution', { outcome: 'go' })]);
-    let state = updateLedger(createLedger(), null, view);
-    state = updateLedger(state, view, view);
-    state = updateLedger(state, view, view);
+    let state = updateLedger(createLedger(), view);
+    state = updateLedger(state, view);
+    state = updateLedger(state, view);
     expect(state.entries).toHaveLength(1);
   });
 
   it('dedupes against ALL seen traces, even ones the cap evicted', () => {
     let state = updateLedger(
       createLedger(),
-      null,
       makeView([doneThrough('BTC-USD', 'old-trace', 'execution', { outcome: 'go' })]),
     );
     // 30 fresh settles push 'old-trace' out of the capped entries…
-    let prevView = makeView([]);
     for (let i = 0; i < LEDGER_CAP; i++) {
-      const nextView = makeView([
-        doneThrough('ETH-USD', `t-${i}`, 'verdict', { startMs: i * 1_000, outcome: 'no_go' }),
-      ]);
-      state = updateLedger(state, prevView, nextView);
-      prevView = nextView;
+      state = updateLedger(
+        state,
+        makeView([
+          doneThrough('ETH-USD', `t-${i}`, 'verdict', { startMs: i * 1_000, outcome: 'no_go' }),
+        ]),
+      );
     }
     expect(state.entries.some((e) => e.trace_id === 'old-trace')).toBe(false);
     // …and a re-observation of it must not re-stamp it.
     const again = updateLedger(
       state,
-      prevView,
       makeView([doneThrough('BTC-USD', 'old-trace', 'execution', { outcome: 'go' })]),
     );
     expect(again.entries.some((e) => e.trace_id === 'old-trace')).toBe(false);
@@ -118,13 +114,13 @@ describe('updateLedger — dedupe', () => {
 describe('updateLedger — cap and ordering', () => {
   it('caps entries at 30, evicting the oldest', () => {
     let state = createLedger();
-    let prevView = makeView([]);
     for (let i = 0; i < LEDGER_CAP + 5; i++) {
-      const nextView = makeView([
-        doneThrough('BTC-USD', `t-${i}`, 'verdict', { startMs: i * 1_000, outcome: 'no_go' }),
-      ]);
-      state = updateLedger(state, i === 0 ? null : prevView, nextView);
-      prevView = nextView;
+      state = updateLedger(
+        state,
+        makeView([
+          doneThrough('BTC-USD', `t-${i}`, 'verdict', { startMs: i * 1_000, outcome: 'no_go' }),
+        ]),
+      );
     }
     expect(state.entries).toHaveLength(LEDGER_CAP);
     expect(state.entries[0]?.trace_id).toBe(`t-${LEDGER_CAP + 4}`);
@@ -155,7 +151,7 @@ describe('updateLedger — cap and ordering', () => {
       }),
       doneThrough('C', 't-c', 'verdict', { startMs: 20_000, outcome: 'no_go' }),
     ]);
-    const state = updateLedger(createLedger(), null, next);
+    const state = updateLedger(createLedger(), next);
     // The three parseable entries hold newest-first; the two unparseable ones
     // sink to the end in the order the wire delivered them.
     expect(state.entries.map((e) => e.trace_id)).toEqual([
@@ -173,7 +169,7 @@ describe('updateLedger — cap and ordering', () => {
       doneThrough('B', 't-b', 'verdict', { startMs: 10_000, outcome: 'no_go' }),
       doneThrough('C', 't-c', 'verdict', { startMs: 20_000, outcome: 'no_go' }),
     ]);
-    const state = updateLedger(createLedger(), null, next);
+    const state = updateLedger(createLedger(), next);
     expect(state.entries.map((e) => e.trace_id)).toEqual(['t-a', 't-c', 't-b']);
   });
 });

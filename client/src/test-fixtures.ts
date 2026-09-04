@@ -346,9 +346,11 @@ export const HANGS = Symbol('a request that never settles');
  * A `fetch` stand-in that answers every call from a queue of payloads, holding
  * the last one once the queue drains. A payload of `null` is a failed poll —
  * the request rejects, which is what the staleness watchdog must survive — and
- * `HANGS` is a request that never settles at all.
+ * `HANGS` is a request that never settles at all. Payloads are `unknown` on
+ * purpose: a fetch serves bytes, and the degradation tests feed it bodies the
+ * wire type forbids.
  */
-export function fakeFetch(payloads: readonly (WireSnapshot | null | typeof HANGS)[]): typeof fetch {
+export function fakeFetch(payloads: readonly unknown[]): typeof fetch {
   let index = 0;
   const impl = async (): Promise<Response> => {
     const payload = payloads[Math.min(index, payloads.length - 1)];

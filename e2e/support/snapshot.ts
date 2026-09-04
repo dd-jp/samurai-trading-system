@@ -21,27 +21,13 @@ import type {
   VerdictRow,
 } from '../../contracts/index.ts';
 
-/**
- * Recorded gap between the settled stages below.
- *
- * Chosen so the replay is deterministic rather than timing-lucky: every gap
- * exceeds `HOP_MAX_MS` (450ms), so all three hops clamp to the ceiling
- * (1350ms unclamped), which then scales down to the 1200ms `WALK_BUDGET_MS`
- * as 400ms per hop with nothing pinned at the floor. A ~1.2s walk, sampled at
- * `motion.ts`'s `SAMPLE_INTERVAL_MS`, is dozens of intermediate positions.
- */
+/** Recorded gap between the settled stages below — arbitrary but deterministic. */
 export const STAGE_GAP_MS = 20_000;
 
 /**
  * The settled trace this suite replays: recorded rows for five of the six
- * stages, and NONE for `SKIPPED_ROOM`.
- *
- * The gap is the point: Motion rule 6 says a stage with no recorded
- * transition is never entered, so the chip must hop trader → risk → execution
- * straight over the skipped room. `SKIPPED_ROOM` is an otherwise-arbitrary
- * mid-path stage chosen only to exercise that rule — a fixture that recorded
- * all six stages could not tell a compliant walk from a walk that visits
- * every room it passes.
+ * stages, and NONE for `SKIPPED_STAGE`, so the drawer's timeline has a
+ * `skipped` row to render alongside the done ones.
  */
 const SETTLED_STAGES: readonly { stage: PipelineStage; decision: string | null }[] = [
   { stage: 'analysts', decision: 'quorum_met' },
@@ -52,11 +38,8 @@ const SETTLED_STAGES: readonly { stage: PipelineStage; decision: string | null }
   { stage: 'execution', decision: 'filled' },
 ];
 
-/** The rooms a chip must step through for `settleAtExecution`, in order. */
-export const WALKED_ROOMS: readonly PipelineStage[] = ['trader', 'risk', 'execution'];
-
-/** The room the walk must never enter — no recorded transition exists for it. */
-export const SKIPPED_ROOM: PipelineStage = 'verdict';
+/** The stage left without a recorded row. */
+const SKIPPED_STAGE: PipelineStage = 'verdict';
 
 export function laneOf(snapshot: DashboardSnapshot, instrument: string): PipelineLane {
   const lane = snapshot.pipeline.lanes.find((candidate) => candidate.instrument === instrument);
@@ -66,11 +49,8 @@ export function laneOf(snapshot: DashboardSnapshot, instrument: string): Pipelin
 
 /**
  * The same lane, one poll later: its in-flight trace has finished, recorded a
- * row at every stage it visited, and settled `go` at Execution.
- *
- * The `trace_id` is deliberately UNCHANGED. A rotated trace takes
- * `computeWalkPlan`'s rule-7 branch and walks from Analysts instead, which is
- * a different hop list than the one these scenarios assert.
+ * row at every stage it visited, and settled `go` at Execution. The
+ * `trace_id` is unchanged, so the verdict row the scenario adds joins to it.
  */
 export function settleAtExecution(
   snapshot: DashboardSnapshot,
@@ -81,13 +61,11 @@ export function settleAtExecution(
 
   let recorded = 0;
   const cells = SETTLED_STAGES.map<PipelineCell>(({ stage, decision }) => {
-    if (stage === SKIPPED_ROOM) {
+    if (stage === SKIPPED_STAGE) {
       // Synthetic: the real tick-runner records sequentially and Verdict
       // gates Execution, so the runtime can never reach Execution without a
-      // Verdict row. This gap is fabricated purely to give `cellState` a
-      // stage index below the furthest-reached one — the same shape it
-      // produces for a genuine mid-pipeline skip — so Motion rule 6 (a chip
-      // hops over a stage with no row) has something to exercise.
+      // Verdict row. The gap is fabricated purely so the timeline renders a
+      // `skipped` row — the same shape a genuine mid-pipeline skip produces.
       return {
         stage,
         state: 'skipped',

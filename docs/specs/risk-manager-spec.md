@@ -436,7 +436,7 @@ The conditions half inherits the pass's existing posture: all data blocks are wr
 #### Deliberately out of scope for the fold
 
 - **No new pipeline stage and no stage rename.** `PIPELINE_STAGES` stays six ([#998](https://github.com/dd-jp/samurai-trading-system/issues/998) retired the seventh slot on the strength of this same Q1 answer).
-- **No dashboard rendering of conditions** beyond the existing critic surface. `client/src/components/DetailDrawer.tsx` holds a reserved section; wiring it is follow-up work, not this fold.
+- **No dashboard rendering of conditions** beyond the existing critic surface. The dashboard drawer held a reserved section at the time; wiring it was follow-up work, not this fold — shipped since by [#1066](https://github.com/dd-jp/samurai-trading-system/issues/1066), and in the v3 client it lives in `client/src/components/TraceSections.tsx`'s gates section.
 - **No `invalidation_log` table, no `(instrument, bar_timestamp)` content-addressed retrieval, no `BacktestReport` attestation, and no dedicated invalidation reject alert.** All four belong to the standalone stage that was declined; conditions ride `risk_critic_log`'s `debate_id` key with the verdict they were emitted beside.
 
 ### Module: State & Accounting

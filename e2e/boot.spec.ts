@@ -1,6 +1,7 @@
 /**
- * Boot, placement, ledger, drawer and keyboard operation against the REAL
- * server (#544 scenarios 1, 2, 4-partial, 5, 8).
+ * Boot, the three tabs, lane naming, the verdict list and keyboard operation
+ * against the REAL server (#544 scenarios 1, 2, 4-partial, 5, 8; Rail layout
+ * per ADR-0021 / map #1090).
  *
  * Seam: no `page.route` for `/api/snapshot` at all. These tests read
  * `dist/server/apps/service-api/fixture-server.js` — production `createDashboardServer`,
@@ -8,140 +9,177 @@
  * — over an in-memory fixture store. That makes them the only tests here that
  * would catch a break in the server half of the dashboard.
  *
- * Assertions are on roles and accessible names wherever the scenario allows,
- * because #540 is reshaping this page's classes and spacing in parallel. Two
- * deliberate exceptions, both data attributes rather than styling hooks:
+ * Assertions are on roles and accessible names wherever the scenario allows.
+ * Two deliberate exceptions, both data attributes rather than styling hooks:
  * `[data-instrument]` plus `[data-trace-id]` for the keyboard walk, which asks
  * whether `document.activeElement` IS a given element — a question only a
- * selector can answer from inside the page. The ledger row is doubly
- * unnameable there: its accessible name states instrument, outcome, clock and
- * reason, never the `trace_id` that picks one row out of several.
+ * selector can answer from inside the page.
  */
 import { expect, test } from './support/test.ts';
 
-/** The settled crypto lane — the first chip to appear, and the readiness signal. */
-const BTC_CHIP = 'BTC-USD, crypto, go, in Execution';
+/** The settled crypto lane — present on Live and, via its verdict row, on Glance. */
+const BTC_LANE = 'BTC-USD, crypto, go, at Execution';
 
 /**
- * The fixture universe, as accessible names. Every cell state and outcome the
- * renderer can draw is here: a live lane, four settled ones across all four
- * outcomes, and an idle lane in the Lobby.
+ * The fixture universe, as lane accessible names. Every outcome the renderer
+ * can draw is here: a live lane, four settled ones across all four outcomes,
+ * and an idle lane with no trace in the window.
  */
-const CHIPS = [
-  BTC_CHIP,
-  'ETH-USD, crypto, no-go, in Verdict',
-  'AAPL, stocks, stopped, in Trader',
-  'QQQ, stocks, idle, in Lobby',
-  'SPY, stocks, in flight, in Debate',
-  'TSLA, stocks, quorum skip, in Analysts',
+const LANES = [
+  BTC_LANE,
+  'ETH-USD, crypto, no-go, at Verdict',
+  'AAPL, stocks, stopped, at Trader',
+  'QQQ, stocks, idle, no trace in the window',
+  'SPY, stocks, in flight, at Debate',
+  'TSLA, stocks, quorum skip, at Analysts',
 ];
 
-/** Every panel the spec's information inventory requires on the page at boot. */
-const REGIONS = [
-  'Telemetry',
-  'Pipeline rooms',
-  'Verdict ledger',
-  'Instrument detail',
-  'Open positions',
-  'Closed trades',
+/** Every named region each tab owes the spec's information inventory. */
+const GLANCE_REGIONS = ['P&L today', 'Open risk', 'Verdicts this session'];
+const LIVE_REGIONS = ['Lanes'];
+const REVIEW_REGIONS = [
   'Metrics suite',
+  'Arm comparison',
+  'Outside benchmarks',
   'Analysts',
-  'LLM spend',
-  'Recent debates',
+  'Closed trades',
 ];
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
-  // The first poll has landed once a chip exists; everything below reads the
-  // same painted snapshot.
-  await expect(page.getByRole('button', { name: BTC_CHIP })).toBeVisible();
+  // The first poll has landed once the rail reads ALIVE; everything below
+  // reads the same painted snapshot.
+  await expect(page.getByRole('complementary', { name: 'Rail' })).toContainText('ALIVE');
 });
 
-test('boot: seven rooms, every panel present', async ({ page }) => {
-  const rooms = page.getByRole('region', { name: 'Pipeline rooms' });
-  await expect(rooms.getByRole('heading', { level: 3 })).toHaveText([
-    'Lobby',
-    'Analysts',
-    'Debate',
-    'Trader',
-    'Risk',
-    'Verdict',
-    'Execution',
-  ]);
+test('boot: the rail reads the mode, providers and budgets; Glance is the first tab', async ({
+  page,
+}) => {
+  const rail = page.getByRole('complementary', { name: 'Rail' });
+  await expect(rail.getByRole('tab')).toHaveText(['Glance', 'Live', 'Review']);
+  await expect(rail.getByRole('tab', { name: 'Glance' })).toHaveAttribute('aria-selected', 'true');
 
-  for (const region of REGIONS) {
+  // The rail resolved its mode from SAMURAI_MODE rather than defaulting.
+  await expect(rail).toContainText('PAPER');
+  await expect(rail).toContainText('Alpaca');
+  await expect(rail).toContainText('Polygon');
+  await expect(rail.getByRole('img', { name: /LLM budget used/ })).toBeVisible();
+  await expect(rail.getByRole('img', { name: /max drawdown/ })).toBeVisible();
+
+  for (const region of GLANCE_REGIONS) {
     await expect(page.getByRole('region', { name: region, exact: true })).toBeVisible();
   }
-
-  // The strip resolved its mode from SAMURAI_MODE rather than defaulting.
-  await expect(page.getByRole('region', { name: 'Telemetry' })).toContainText('PAPER');
-
-  // Spend caveats: the two counts a summary is most likely to drop.
-  const spend = page.getByRole('region', { name: 'LLM spend' });
-  await expect(spend).toContainText('unpriced calls (all time)');
-  await expect(spend).toContainText('carry no');
-
-  // Positions and metrics carry real numbers, not empty states.
-  await expect(page.getByRole('region', { name: 'Open positions' })).toContainText('BTC-USD');
-  await expect(page.getByRole('region', { name: 'Metrics suite' })).toContainText('Sharpe');
+  // Open risk carries the fixture book, not an empty state.
+  await expect(page.getByRole('region', { name: 'Open risk' })).toContainText('BTC-USD');
 });
 
-test('chip placement: live, settled and idle chips stand in their own rooms', async ({ page }) => {
-  for (const chip of CHIPS) {
-    await expect(page.getByRole('button', { name: chip, exact: true })).toBeVisible();
+test('tabs: Live and Review each carry their regions, and the hash follows the tab', async ({
+  page,
+}) => {
+  await page.getByRole('tab', { name: 'Live' }).click();
+  await expect(page).toHaveURL(/#live$/);
+  for (const region of LIVE_REGIONS) {
+    await expect(page.getByRole('region', { name: region, exact: true })).toBeVisible();
+  }
+  await expect(page.getByRole('complementary', { name: 'Trace detail' })).toBeVisible();
+
+  await page.getByRole('tab', { name: 'Review' }).click();
+  await expect(page).toHaveURL(/#review$/);
+  for (const region of REVIEW_REGIONS) {
+    await expect(page.getByRole('region', { name: region, exact: true })).toBeVisible();
+  }
+  await expect(page.getByRole('complementary', { name: 'Trade detail' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Metrics suite' })).toContainText('Sharpe');
+  await expect(page.getByRole('region', { name: 'Closed trades' })).toContainText('SPY');
+});
+
+test('lanes: every outcome is named in words, with the stage it reached', async ({ page }) => {
+  await page.getByRole('tab', { name: 'Live' }).click();
+  for (const lane of LANES) {
+    await expect(page.getByRole('button', { name: lane, exact: true })).toBeVisible();
   }
 });
 
-test('ledger: settled lanes seed rows, newest first, with the HITL badge', async ({ page }) => {
-  const ledger = page.getByRole('region', { name: 'Verdict ledger' });
-  const rows = ledger.getByRole('button');
+test('verdicts: settled lanes seed rows, newest first, with the HITL badge', async ({ page }) => {
+  const verdicts = page.getByRole('region', { name: 'Verdicts this session' });
+  const rows = verdicts.getByRole('button');
   await expect(rows).toHaveCount(4);
 
   // Newest settle first: TSLA (47s), AAPL (84s), ETH (112s), BTC (170s).
-  await expect(rows.nth(0)).toHaveAccessibleName(/^TSLA, quorum skip,/);
-  await expect(rows.nth(1)).toHaveAccessibleName(/^AAPL, stopped,/);
-  await expect(rows.nth(3)).toHaveAccessibleName(/^BTC-USD, go,/);
+  await expect(rows.nth(0)).toHaveAccessibleName(/^TSLA, quorum skip/);
+  await expect(rows.nth(1)).toHaveAccessibleName(/^AAPL, stopped/);
+  await expect(rows.nth(3)).toHaveAccessibleName(/^BTC-USD, go/);
 
   // The verdict row for this trace carries `hitl_override`, so the badge and
   // the gate wording both reach the row.
   await expect(rows.nth(2)).toHaveAccessibleName(
-    /^ETH-USD, no-go, human override, .*risk_correlation$/,
+    /^ETH-USD, no-go, human override, risk_correlation$/,
   );
   await expect(rows.nth(2)).toContainText('HITL');
 });
 
-test('drawer: a chip opens its stage strip and stances; an idle lane names its reason', async ({
+test('drawer: a verdict row jumps to Live with its trace; a lane opens its timeline and debate', async ({
   page,
 }) => {
-  const drawer = page.getByRole('region', { name: 'Instrument detail' });
-  await expect(drawer).toContainText('no instrument selected');
-
-  await page.getByRole('button', { name: BTC_CHIP }).click();
+  await page.getByRole('button', { name: /^BTC-USD, go/ }).click();
+  await expect(page).toHaveURL(/#live$/);
+  const drawer = page.getByRole('complementary', { name: 'Trace detail' });
   await expect(drawer.getByRole('heading', { level: 2 })).toHaveText('BTC-USD');
-  // All six stages, one header row plus one row per stage — BTC's clean run
-  // to Execution recorded every one of them, so none reads `not reached`.
-  await expect(drawer.getByRole('row')).toHaveCount(7);
+  await expect(drawer).toContainText('trace-p-btc');
+  // All six stages recorded — BTC's clean run to Execution — so none reads `not reached`.
+  await expect(
+    drawer.getByRole('list', { name: 'Stage timeline' }).getByRole('listitem'),
+  ).toHaveCount(6);
+  await expect(drawer).not.toContainText('not reached');
   await expect(drawer).toContainText('technical-analyst');
   await expect(drawer).toContainText('influence');
+  // The fixture's open BTC position carries no fill row on the wire: the
+  // drawer must say so rather than draw an empty list.
+  await expect(drawer).toContainText('long 0.3 @ 66,100.00');
+  await expect(drawer).toContainText('No fill recorded against this order key');
 
-  await page.getByRole('button', { name: 'QQQ, stocks, idle, in Lobby' }).click();
+  await page.getByRole('button', { name: 'QQQ, stocks, idle, no trace in the window' }).click();
   await expect(drawer.getByRole('heading', { level: 2 })).toHaveText('QQQ');
-  await expect(drawer).toContainText(
-    'No trace in the last 15 minutes — this instrument is idle and stands in the Lobby.',
-  );
+  await expect(drawer).toContainText('idle — no trace in the last 15 minutes');
 });
 
-test('a11y: chips and ledger rows are reachable by Tab and operated by Enter', async ({ page }) => {
-  const drawer = page.getByRole('region', { name: 'Instrument detail' });
+test('review: a closed trade opens its P&L breakdown and fills', async ({ page }) => {
+  await page.getByRole('tab', { name: 'Review' }).click();
+  const drawer = page.getByRole('complementary', { name: 'Trade detail' });
+  await expect(drawer).toContainText('No trade selected');
 
+  await page.getByRole('button', { name: /^QQQ, .*, stop hit/ }).click();
+  await expect(drawer.getByRole('heading', { level: 2 })).toHaveText('QQQ');
+  await expect(drawer).toContainText('Gross');
+  await expect(drawer).toContainText('Fees');
+  await expect(drawer.getByRole('list', { name: 'Fills' }).getByRole('listitem')).toHaveCount(2);
+});
+
+test('a11y: tabs, lanes, verdict rows and trade rows are reachable by Tab and operated by Enter', async ({
+  page,
+}) => {
+  await tabTo(page, '[role="tab"][id="tab-live"]');
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('region', { name: 'Lanes' })).toBeVisible();
+
+  const drawer = page.getByRole('complementary', { name: 'Trace detail' });
   await tabTo(page, '[data-instrument="SPY"]');
   await page.keyboard.press('Enter');
   await expect(drawer.getByRole('heading', { level: 2 })).toHaveText('SPY');
 
+  await tabTo(page, '[role="tab"][id="tab-glance"]');
+  await page.keyboard.press('Enter');
   await tabTo(page, '[data-trace-id="trace-p-btc"]');
   await page.keyboard.press('Enter');
   await expect(drawer.getByRole('heading', { level: 2 })).toHaveText('BTC-USD');
-  await expect(drawer).toContainText('trace trace-p-btc');
+  await expect(drawer).toContainText('trace-p-btc');
+
+  await tabTo(page, '[role="tab"][id="tab-review"]');
+  await page.keyboard.press('Enter');
+  const tradeDrawer = page.getByRole('complementary', { name: 'Trade detail' });
+  await tabTo(page, '.trade-row');
+  await page.keyboard.press('Enter');
+  await expect(tradeDrawer.getByRole('heading', { level: 2 })).toHaveText(/SPY|QQQ/);
 });
 
 /** Presses Tab until the focused element matches, so tab ORDER is what is asserted. */
