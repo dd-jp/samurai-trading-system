@@ -379,7 +379,7 @@ function healthyFillSync(
 function healthyMarketDataFetch(
   overrides: Partial<MarketDataFetchEvidence> = {},
 ): MarketDataFetchEvidence {
-  return { fetchCount: 1, ...overrides };
+  return { fetchCount: 1, traceIds: ['trace-1'], ...overrides };
 }
 
 /**
@@ -1187,6 +1187,49 @@ describe('evaluateSmokeGate — market-data fetch telemetry (#1082)', () => {
     expect(gate.passed).toBe(true);
     expect(gate.failures).toEqual([]);
   });
+
+  /**
+   * The mutation this gate exists to catch: dropping `runWithTraceId` from
+   * `SequentialTickRunner.runInstrument` leaves the fetch count untouched and
+   * every site's fallback is a legal return, so the count check above still
+   * passes and only the join fails.
+   */
+  it('fails when every fetch fell back to the category label instead of a tick trace', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        marketDataFetch: healthyMarketDataFetch({ traceIds: ['market-data'] }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures).toEqual([
+      expect.stringContaining('no market_data_fetch line carried a tick trace_id'),
+    ]);
+  });
+
+  it('passes when one fetch joins, even though others ran outside a tick', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        marketDataFetch: healthyMarketDataFetch({ traceIds: ['market-data', 'trace-1'] }),
+      }),
+    );
+
+    expect(gate.passed).toBe(true);
+    expect(gate.failures).toEqual([]);
+  });
+
+  it('does not fire the join check when nothing fetched — the count check owns that', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        marketDataFetch: healthyMarketDataFetch({ fetchCount: 0, traceIds: [] }),
+      }),
+    );
+
+    expect(gate.failures).toEqual([expect.stringContaining('zero market_data_fetch lines')]);
+  });
 });
 
 describe('MarketDataFetchRecorder (#1082)', () => {
@@ -1217,7 +1260,7 @@ describe('MarketDataFetchRecorder (#1082)', () => {
       message: 'no payload at all',
     });
 
-    expect(recorder.evidence()).toEqual({ fetchCount: 1 });
+    expect(recorder.evidence()).toEqual({ fetchCount: 1, traceIds: ['t1'] });
     expect(forwarded).toEqual([
       'market_data_fetch: AAPL 1h fetched 2 row(s) in 5ms.',
       'unrelated line',
@@ -1667,7 +1710,16 @@ describe('runSmoke (end-to-end, real composition root)', () => {
       riskDecisions: [],
     };
 
-    const gate = evaluateSmokeGate(observations, healthyGateOptions({ minTicks: 1 }));
+    const gate = evaluateSmokeGate(
+      observations,
+      // The fetch telemetry joins to this fixture's own tick: the run below
+      // is about an EMPTY STORE, not about traces, and a mismatched trace
+      // here would add an unrelated failure to the count.
+      healthyGateOptions({
+        minTicks: 1,
+        marketDataFetch: healthyMarketDataFetch({ traceIds: ['t'] }),
+      }),
+    );
 
     expect(gate.passed).toBe(false);
     // Eight since #430 added the seeded-mechanism checks, plus three since

@@ -202,11 +202,9 @@ export class TokenBucket {
     if (waitedMs < TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS) return;
     const roundedWaitMs = Math.round(waitedMs);
     safeLog(this.telemetry.logger, {
-      // The enclosing tick when there is one, so a pacing wait can be joined
-      // to the stage that waited; `'token-bucket'` only when there is no tick
-      // (a scheduled refresh, a CLI tool). NOT decided by `lane` — that is a
-      // priority, and bar fetches take the background lane from inside a tick
-      // precisely so they yield to the order path. See shared/trace-context.ts.
+      // The enclosing tick when there is one, so a pacing wait joins to the
+      // stage that waited; `'token-bucket'` only outside one. Deliberately
+      // not derived from `lane` — see shared/trace-context.ts.
       trace_id: currentTraceId() ?? 'token-bucket',
       stage: 'rate_limit',
       level: 'warn',

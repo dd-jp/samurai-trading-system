@@ -5,9 +5,8 @@
  * Enforcement, Module: Marks, Module: Indicators, Module: Caching) and
  * docs/specs/cross-spec-contracts.md §3.
  */
-import type { Clock } from '../../shared/index.js';
+import { type Clock, currentTraceId } from '../../shared/index.js';
 import { logCaughtFailure, safeLog } from '../../shared/safe-log.js';
-import { currentTraceId } from '../../shared/trace-context.js';
 import type { Logger } from '../../shared/types/primitives.js';
 import { buildIndicatorCacheKey, IndicatorCache } from './indicator-cache.js';
 import { computeIndicator } from './indicators.js';

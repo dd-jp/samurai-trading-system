@@ -1,4 +1,3 @@
-import { describe, expect, it } from 'vitest';
 import { currentTraceId, runWithTraceId } from './trace-context.js';
 
 describe('trace context', () => {

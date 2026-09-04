@@ -116,19 +116,19 @@ export const TELEGRAM_MAX_MESSAGE_CHARS = 4096;
  * came from `describeThrown` over a multi-member `AggregateError`, whose size
  * scales with the number of open positions.
  *
- * The log keeps the FULL text: this bounds only what goes on the wire, so a
+ * This bounds only what goes on the wire. The FULL text still reaches the
+ * log — `#capForWire` is the only caller and logs it before truncating, so a
  * truncated alert never becomes a lost record. The suffix names the original
  * length, so a reader knows to go to the log rather than assuming the alert
  * is all there was.
  */
-export function capOutboundText(text: string, limit = TELEGRAM_MAX_MESSAGE_CHARS): string {
-  if (text.length <= limit) return text;
+export function capOutboundText(text: string): string {
+  if (text.length <= TELEGRAM_MAX_MESSAGE_CHARS) return text;
+  // Slicing to the limit and appending after would still exceed it and still
+  // 400. No guard is needed on `cut`: `suffix` is ~30 chars plus the digits
+  // of `text.length`, and no JS string is long enough to make that 4,096.
   const suffix = `… (truncated, ${text.length} chars total)`;
-  // Subtracting the suffix is what makes this correct rather than decorative:
-  // slicing to `limit` and then appending would still exceed `limit` and
-  // still 400 — the exact failure this exists to stop.
-  let cut = limit - suffix.length;
-  if (cut <= 0) return text.slice(0, limit);
+  let cut = TELEGRAM_MAX_MESSAGE_CHARS - suffix.length;
   // A lone high surrogate is not valid UTF-8 on the wire. Telegram counts
   // UTF-16 code units, so `.length` is the right unit and a split pair is the
   // only slicing hazard it leaves.
@@ -272,8 +272,26 @@ export class TelegramBotApiClient implements TelegramClient {
     return this.#tokens.size;
   }
 
+  /**
+   * The wire bound and its record, together. Capping without logging the
+   * original would make the truncation the very data loss it exists to
+   * prevent: the ten alert channels log only in their `.catch`, and a capped
+   * send SUCCEEDS, so no other line would ever carry the dropped tail.
+   */
+  #capForWire(text: string): string {
+    const capped = capOutboundText(text);
+    if (capped === text) return text;
+    this.#log(
+      'warn',
+      `telegram: outbound body is ${text.length} chars, over the ` +
+        `${TELEGRAM_MAX_MESSAGE_CHARS}-char limit; the wire got a truncated alert and the ` +
+        `full body follows — ${text}`,
+    );
+    return capped;
+  }
+
   async sendMessage(chatId: string, text: string): Promise<void> {
-    await this.#call('sendMessage', { chat_id: chatId, text: capOutboundText(text) });
+    await this.#call('sendMessage', { chat_id: chatId, text: this.#capForWire(text) });
   }
 
   /**
@@ -317,7 +335,7 @@ export class TelegramBotApiClient implements TelegramClient {
     try {
       await this.#call('sendMessage', {
         chat_id: chatId,
-        text: capOutboundText(text),
+        text: this.#capForWire(text),
         reply_markup: {
           inline_keyboard: [
             [

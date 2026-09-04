@@ -1,4 +1,5 @@
 import type { Clock, LogEntry, Logger } from '../../shared/index.js';
+import { runWithTraceId } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { FixtureDataSource } from './fixture-data-source.js';
 import { MARKET_DATA_REPEATED_MISS_WARN_THRESHOLD, MarketDataServiceImpl } from './service.js';
@@ -642,6 +643,39 @@ describe('MarketDataServiceImpl — market_data_fetch telemetry (#1082)', () => 
       rows: 2, // FixtureDataSource's own PIT filter: only 2 bars close at-or-before ASOF
     });
     expect(typeof events[0].duration_ms).toBe('number');
+  });
+
+  /**
+   * The other half of the same line: `#1082` proved it FIRES, this proves it
+   * is JOINABLE. A fetch inside a tick must carry that tick's id — the
+   * `'market-data'` label is a fallback for a fetch with no enclosing tick
+   * (a scheduled refresh, a CLI tool), not the normal case.
+   */
+  it("carries the enclosing tick's trace_id, not the category label", async () => {
+    const { service, entries } = serviceWithTelemetry('live', new ManualClock(ASOF));
+    const window = { timeframe: TIMEFRAME, lookback: 2 };
+
+    await runWithTraceId('tick-xyz', async () => {
+      await service.getBars(INSTRUMENT, window, ASOF);
+    });
+
+    expect(entries.filter((entry) => entry.message.startsWith('market_data_fetch'))).toHaveLength(
+      1,
+    );
+    expect(entries.find((entry) => entry.message.startsWith('market_data_fetch'))?.trace_id).toBe(
+      'tick-xyz',
+    );
+  });
+
+  it("falls back to 'market-data' outside a tick, rather than inventing one", async () => {
+    const { service, entries } = serviceWithTelemetry('live', new ManualClock(ASOF));
+    const window = { timeframe: TIMEFRAME, lookback: 2 };
+
+    await service.getBars(INSTRUMENT, window, ASOF);
+
+    expect(entries.find((entry) => entry.message.startsWith('market_data_fetch'))?.trace_id).toBe(
+      'market-data',
+    );
   });
 
   it(

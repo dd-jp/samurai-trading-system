@@ -1,4 +1,5 @@
 import type { SqliteAuditLog } from '../../../../apps/orchestrator/index.js';
+import type { LogEntry, Logger } from '../../../../shared/index.js';
 import type { CallbackAuditLog } from './telegram-bot-api-client.js';
 import {
   capOutboundText,
@@ -59,7 +60,7 @@ interface ClientHarness {
 }
 
 function makeClient(
-  overrides: { updates?: unknown[][]; alertChatId?: string } = {},
+  overrides: { updates?: unknown[][]; alertChatId?: string; logger?: Logger } = {},
 ): ClientHarness {
   const queued = overrides.updates ?? [];
   let poll = 0;
@@ -81,7 +82,7 @@ function makeClient(
     // same as omitting it. Callers that leave it out must produce a config
     // with no `alertChatId` key at all.
     ...(overrides.alertChatId === undefined ? {} : { alertChatId: overrides.alertChatId }),
-    logger: { log: () => {} },
+    logger: overrides.logger ?? { log: () => {} },
     retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
   });
 
@@ -714,16 +715,12 @@ describe('CallbackAuditLog port', () => {
 });
 
 /**
- * Live failure, 2026-09-04: `control_arm_valuation_refused` for NFLX was sent
- * and rejected with `400 Bad Request: message is too long`. That rejection is
- * permanent — the retry re-sends the same over-long body — so the alert was
- * never delivered and only the log recorded the condition.
- *
- * The body is ~700 chars of fixed prose plus `describeThrown` over an
- * `AggregateError` whose member count scales with the open book, which is
- * what pushes it past the limit. The cap belongs in the transport rather than
- * in each formatter: ten channels build bodies, and a bound only some of them
- * remember to apply is not a bound.
+ * An over-long body is a PERMANENT 400, not transport flake — the retry
+ * re-sends the same bytes — so the cap has to hold in the transport: ten
+ * channels build bodies, and a bound only some of them remember to apply is
+ * not a bound. Bodies grow past the limit because they interpolate
+ * `describeThrown` over an `AggregateError` whose member count scales with
+ * the open book, which is the reproduction the first case below builds.
  */
 describe('outbound message cap (Telegram 4096)', () => {
   it('caps an over-long sendMessage body on the wire', async () => {
@@ -765,9 +762,37 @@ describe('outbound message cap (Telegram 4096)', () => {
 
     expect(calls().at(-1)?.body.text).toBe(body);
   });
+
+  /**
+   * Without this the cap would be the data loss it exists to prevent. The
+   * alert channels log only in their `.catch`, and a capped send SUCCEEDS —
+   * so if the transport does not record the original here, the dropped tail
+   * exists nowhere.
+   */
+  it('puts the full pre-cap body in the log, so truncation loses nothing', async () => {
+    const entries: LogEntry[] = [];
+    const { client } = makeClient({ logger: { log: (entry) => entries.push(entry) } });
+    const tail = 'z'.repeat(9000);
+
+    await client.sendMessage(CHAT_ID, `head ${tail}`);
+
+    const logged = entries.filter((entry) => entry.message.includes('outbound body'));
+    expect(logged).toHaveLength(1);
+    expect(logged[0]?.level).toBe('warn');
+    expect(logged[0]?.message).toContain(tail);
+  });
+
+  it('logs nothing extra when the body already fits', async () => {
+    const entries: LogEntry[] = [];
+    const { client } = makeClient({ logger: { log: (entry) => entries.push(entry) } });
+
+    await client.sendMessage(CHAT_ID, 'Samurai heartbeat: 4 instruments, 0 open positions.');
+
+    expect(entries.filter((entry) => entry.message.includes('outbound body'))).toEqual([]);
+  });
 });
 
-describe('capOutboundText (#1087 follow-up: 400 "message is too long")', () => {
+describe('capOutboundText', () => {
   it('leaves a message that already fits completely untouched', () => {
     const text = 'Samurai TRADER DEGRADED: NFLX reported atr_not_finite.';
     expect(capOutboundText(text)).toBe(text);
@@ -806,10 +831,5 @@ describe('capOutboundText (#1087 follow-up: 400 "message is too long")', () => {
       expect(capped.length).toBeLessThanOrEqual(TELEGRAM_MAX_MESSAGE_CHARS);
       expect(Buffer.from(capped, 'utf8').toString('utf8')).toBe(capped);
     }
-  });
-
-  it('degrades to a hard slice when the limit cannot even hold the suffix', () => {
-    const capped = capOutboundText('x'.repeat(500), 10);
-    expect(capped).toHaveLength(10);
   });
 });
