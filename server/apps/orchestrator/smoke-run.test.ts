@@ -36,6 +36,8 @@ import {
   FixedAccountStateProvider,
   formatSmokeReport,
   type LoggerResilienceEvidence,
+  type MarketDataFetchEvidence,
+  MarketDataFetchRecorder,
   type OutsideBenchmarkEvidence,
   type RiskCriticEvidence,
   runSmoke,
@@ -269,10 +271,12 @@ function healthyGateOptions(
     armComparison?: ArmComparisonEvidence;
     outsideBenchmarks?: OutsideBenchmarkEvidence;
     fillSync?: FillSyncFailureEvidence;
+    marketDataFetch?: MarketDataFetchEvidence;
   } = {},
 ) {
   return {
     fillSync: overrides.fillSync ?? healthyFillSync(),
+    marketDataFetch: overrides.marketDataFetch ?? healthyMarketDataFetch(),
     armComparison: overrides.armComparison ?? healthyArmComparison(),
     outsideBenchmarks: overrides.outsideBenchmarks ?? healthyOutsideBenchmarks(),
     minTicks: overrides.minTicks ?? 2,
@@ -353,6 +357,18 @@ function healthyFillSync(
   overrides: Partial<FillSyncFailureEvidence> = {},
 ): FillSyncFailureEvidence {
   return { failures: [], ...overrides };
+}
+
+/**
+ * What `MarketDataFetchRecorder` reports on a healthy run (#1082): at least
+ * one `market_data_fetch` line, guaranteed by the cold `:memory:` store's
+ * first bar fetch through the composition root's primary `marketData`
+ * instance.
+ */
+function healthyMarketDataFetch(
+  overrides: Partial<MarketDataFetchEvidence> = {},
+): MarketDataFetchEvidence {
+  return { fetchCount: 1, ...overrides };
 }
 
 /**
@@ -1139,6 +1155,63 @@ describe('evaluateSmokeGate — fill-sync contained failures (#1049)', () => {
     it('ignores an empty entry rather than letting it tolerate everything', () => {
       expect(untoleratedFillSyncFailures(failures, [''])).toEqual(failures);
     });
+  });
+});
+
+describe('evaluateSmokeGate — market-data fetch telemetry (#1082)', () => {
+  it('fails when zero market_data_fetch lines were recorded', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({ marketDataFetch: healthyMarketDataFetch({ fetchCount: 0 }) }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures).toEqual([expect.stringContaining('zero market_data_fetch lines')]);
+    expect(gate.failures[0]).toContain('#1082');
+  });
+
+  it('passes when at least one market_data_fetch line was recorded', () => {
+    const gate = evaluateSmokeGate(transactedObservations(), healthyGateOptions());
+
+    expect(gate.passed).toBe(true);
+    expect(gate.failures).toEqual([]);
+  });
+});
+
+describe('MarketDataFetchRecorder (#1082)', () => {
+  it('counts only lines carrying the market_data_fetch event and forwards every line unconditionally', () => {
+    const forwarded: unknown[] = [];
+    const recorder = new MarketDataFetchRecorder({
+      log: (entry) => forwarded.push(entry.message),
+    });
+
+    recorder.log({
+      trace_id: 't1',
+      stage: 'market_data',
+      level: 'info',
+      message: 'market_data_fetch: AAPL 1h fetched 2 row(s) in 5ms.',
+      payload: { event: 'market_data_fetch' },
+    });
+    recorder.log({
+      trace_id: 't2',
+      stage: 'debate',
+      level: 'info',
+      message: 'unrelated line',
+      payload: { event: 'debate_something_else' },
+    });
+    recorder.log({
+      trace_id: 't3',
+      stage: 'market_data',
+      level: 'info',
+      message: 'no payload at all',
+    });
+
+    expect(recorder.evidence()).toEqual({ fetchCount: 1 });
+    expect(forwarded).toEqual([
+      'market_data_fetch: AAPL 1h fetched 2 row(s) in 5ms.',
+      'unrelated line',
+      'no payload at all',
+    ]);
   });
 });
 

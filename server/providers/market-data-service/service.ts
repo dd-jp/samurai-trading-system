@@ -6,6 +6,8 @@
  * docs/specs/cross-spec-contracts.md §3.
  */
 import type { Clock } from '../../shared/index.js';
+import { logCaughtFailure, safeLog } from '../../shared/safe-log.js';
+import type { Logger } from '../../shared/types/primitives.js';
 import { buildIndicatorCacheKey, IndicatorCache } from './indicator-cache.js';
 import { computeIndicator } from './indicators.js';
 import { collectMarks } from './marks-batch.js';
@@ -22,6 +24,30 @@ import type {
   MarkRead,
   Quote,
 } from './types.js';
+
+/**
+ * Optional venue-fetch telemetry (#1082). A service built without this
+ * argument behaves exactly as before — no import, no log line, nothing to
+ * wire — matching the `TokenBucketTelemetry` (#1083) precedent this mirrors:
+ * `undefined` is the fully backward-compatible default at every pre-#1082
+ * call site.
+ */
+export interface MarketDataFetchTelemetry {
+  logger: Logger;
+}
+
+/**
+ * A cache MISS whose (instrument, timeframe, lookback) has already missed
+ * this many times in a row escalates from `info` to `warn` (#1082) — the
+ * issue's own pathological case: a window the venue can never fully satisfy
+ * (e.g. a 936-bar RVOL lookback on a thin symbol) re-walks pages every tick
+ * forever, and that steady state deserves louder-than-routine visibility
+ * without needing a SEPARATE mechanism to detect it. 3 is not tuned against
+ * measured data (there is none yet — that is this ticket's whole premise);
+ * it is chosen so a single cold-start miss (every instrument's first tick)
+ * stays `info`, and only a run REPEATING the same failing window warns.
+ */
+export const MARKET_DATA_REPEATED_MISS_WARN_THRESHOLD = 3;
 
 /**
  * `IndicatorSpec` (per spec) pins `indicator`/`params`/`lookback` but not a
@@ -44,6 +70,24 @@ export class MarketDataServiceImpl implements MarketDataService {
    * restart-clean, like `lastBarFetch` — a fresh process refetches.
    */
   private readonly lastMarkFetch = new Map<string, number>();
+  /**
+   * `instrument|timeframe|lookback` -> consecutive cache-miss count (#1082).
+   * Deliberately a DIFFERENT key shape than `barCacheKey` (which ignores
+   * lookback): the issue's pathological case is one (instrument, timeframe)
+   * whose SHALLOW window hits every tick (e.g. `WARMUP_5M`'s 260) while its
+   * DEEP window misses every tick (e.g. `RVOL_5M_LOOKBACK`'s 936) — reusing
+   * `barCacheKey` would let the shallow hit reset the deep window's counter
+   * every tick and hide the exact repeated-miss pattern this exists to show.
+   * In-process and restart-clean, like the other fetch-history maps above.
+   *
+   * Only touched from `getBars`'s hit/miss branches. `getIndicator`'s own
+   * Tier-1 cache (above, `indicatorCache`) can satisfy a request without
+   * ever calling `getBars` at all — on that path this counter neither
+   * increments nor resets, which is correct: no venue fetch happened, so
+   * the streak legitimately stands unchanged until the next real `getBars`
+   * call resolves it one way or the other.
+   */
+  private readonly consecutiveFetchMisses = new Map<string, number>();
 
   constructor(
     private readonly dataSource: DataSource,
@@ -58,6 +102,8 @@ export class MarketDataServiceImpl implements MarketDataService {
      * Zero disables the reuse window entirely.
      */
     private readonly markTtlMs: number = 5_000,
+    /** #1082 — see `MarketDataFetchTelemetry`. Optional, backward-compatible. */
+    private readonly telemetry?: MarketDataFetchTelemetry,
   ) {}
 
   /**
@@ -106,14 +152,150 @@ export class MarketDataServiceImpl implements MarketDataService {
   ): Promise<Bar[]> {
     const cached = this.cachedBars(instrument, window, asOf);
     if (cached !== undefined) {
+      // Cache HITS stay silent (#1082 AC3) — a healthy, warmed run logs ~0
+      // lines/tick. A hit also clears this exact window's miss streak, so
+      // `consecutive_misses` on the next miss counts only the CURRENT run of
+      // failures, not a stale accumulation from before the window recovered.
+      this.consecutiveFetchMisses.delete(this.missCounterKey(instrument, window));
       return cached;
     }
 
-    const fetched = await this.dataSource.fetchBars(instrument, window, asOf);
+    const consecutiveMisses = this.recordCacheMiss(instrument, window);
+    const startedAt = Date.now();
+    let fetched: Bar[];
+    try {
+      fetched = await this.dataSource.fetchBars(instrument, window, asOf);
+    } catch (error) {
+      // #1082's whole premise: the 106 undiagnosable analyst timeouts are the
+      // fetches that never RETURNED. Log the failed attempt with its elapsed
+      // time — a line with duration_ms far past the analyst's 10s deadline is
+      // exactly the fetch that stalled it — then rethrow UNCHANGED (AC5: this
+      // observes, it never changes fetch behaviour or outcome).
+      this.logFetch(instrument, window, 'error', consecutiveMisses, Date.now() - startedAt, error);
+      throw error;
+    }
+    const durationMs = Date.now() - startedAt;
+    this.logFetch(
+      instrument,
+      window,
+      'ok',
+      consecutiveMisses,
+      durationMs,
+      undefined,
+      fetched.length,
+    );
+
     const completed = fetched.filter((bar) => bar.close_time.getTime() <= asOf.getTime());
     this.store.appendBars(completed);
     this.recordFetch(instrument, window, asOf);
     return this.store.readBars(instrument, window.timeframe, asOf, window.lookback);
+  }
+
+  /** `${instrument}|${timeframe}|${lookback}` — see `consecutiveFetchMisses`'s doc comment for why lookback is part of this key and `barCacheKey` is not reused. */
+  private missCounterKey(instrument: string, window: BarWindow): string {
+    return `${instrument}|${window.timeframe}|${window.lookback}`;
+  }
+
+  /** Bumps and returns the new consecutive-miss count for this exact (instrument, timeframe, lookback). */
+  private recordCacheMiss(instrument: string, window: BarWindow): number {
+    const key = this.missCounterKey(instrument, window);
+    const next = (this.consecutiveFetchMisses.get(key) ?? 0) + 1;
+    this.consecutiveFetchMisses.set(key, next);
+    return next;
+  }
+
+  /**
+   * The single `market_data_fetch` emission point (#1082) — every venue-
+   * reaching fetch, success or failure, goes through here.
+   *
+   * `event: 'market_data_fetch'` is grep-unique the same way #1083's
+   * `token_bucket_wait` is: chosen to survive a search that a bare
+   * `market_data`/`fetch` cannot, since both substring-match unrelated log
+   * lines elsewhere in the pipeline.
+   *
+   * Fields deliberately OMITTED, and why: `pages` (Alpaca's HTTP client
+   * tracks its own pagination loop internally and `DataSource.fetchBars`'s
+   * return type carries no channel to surface it — plumbing one through
+   * every `DataSource` implementation, live and fixture alike, is a
+   * different-shaped change than "observe the existing choke point") and
+   * `trace_id` (no `MarketDataService` method accepts one — same reasoning).
+   * Both are exactly the issue's own "if available" qualifier; a reader
+   * chasing pagination detail still has this line's `duration_ms` as the
+   * signal that a fetch paginated slowly, just not how many pages it took.
+   *
+   * AC3 volume bound (measured, not estimated — `yarn smoke`, 4 ticks,
+   * paper/live mode): a single instrument's technical analyst issues 8
+   * distinct (timeframe, lookback) `getBars` windows per tick (observed:
+   * 5m/260, 1h/20, 5m/112, 5m/84, 5m/81, 5m/936, 1h/57, 1d/30). Cache hits
+   * are silent, so that's also the worst-case ceiling PER INSTRUMENT PER
+   * TICK — reached only on a cold store (first tick after startup/restart,
+   * or any window whose bar interval never lines up with the cache's
+   * recency check, e.g. RVOL's 936-bar lookback, which can stay a "miss"
+   * indefinitely and is exactly what `consecutive_misses` surfaces). Once
+   * the store is warm, most windows hit every tick and this drops to ~0-2
+   * lines/instrument/tick — only a bar-interval rollover re-triggers a
+   * fetch. Across a 20-name universe that's ~160 lines on a cold start,
+   * not ~160/tick steady-state. Backtest mode is silent unconditionally
+   * (see the `mode === 'backtest'` check below), so it never adds to this.
+   */
+  private logFetch(
+    instrument: string,
+    window: BarWindow,
+    outcome: 'ok' | 'error',
+    consecutiveMisses: number,
+    durationMs: number,
+    error?: unknown,
+    rows?: number,
+  ): void {
+    if (this.telemetry === undefined) return;
+    // Backtest re-fetches on EVERY call by design (`cachedBars` disables
+    // itself there — see its doc comment) — every replay step is therefore a
+    // "miss" that carries no information, and logging each one would flood a
+    // backtest run's output with lines this ticket's AC3 volume bound is
+    // meant to prevent. Live/paper is the mode #1082's 106 timeouts were
+    // observed in, and where a stalled venue fetch is the diagnostic this
+    // exists for.
+    if (this.mode === 'backtest') return;
+
+    const level = consecutiveMisses >= MARKET_DATA_REPEATED_MISS_WARN_THRESHOLD ? 'warn' : 'info';
+    const payload = {
+      event: 'market_data_fetch',
+      instrument,
+      timeframe: window.timeframe,
+      lookback: window.lookback,
+      cache: 'miss' as const,
+      consecutive_misses: consecutiveMisses,
+      outcome,
+      rows,
+      duration_ms: Math.round(durationMs),
+    };
+
+    if (outcome === 'error') {
+      logCaughtFailure(
+        this.telemetry.logger,
+        {
+          trace_id: 'market-data',
+          stage: 'market_data',
+          level,
+          message: `market_data_fetch: ${instrument} ${window.timeframe} (lookback ${window.lookback}) failed after ${Math.round(durationMs)}ms.`,
+          started_at: new Date(Date.now() - durationMs).toISOString(),
+          duration_ms: Math.round(durationMs),
+        },
+        error,
+        payload,
+      );
+      return;
+    }
+
+    safeLog(this.telemetry.logger, {
+      trace_id: 'market-data',
+      stage: 'market_data',
+      level,
+      message: `market_data_fetch: ${instrument} ${window.timeframe} (lookback ${window.lookback}) fetched ${rows} row(s) in ${Math.round(durationMs)}ms.`,
+      payload,
+      started_at: new Date(Date.now() - durationMs).toISOString(),
+      duration_ms: Math.round(durationMs),
+    });
   }
 
   /** The bar interval `asOf` falls in — the cache's unit of freshness. */
