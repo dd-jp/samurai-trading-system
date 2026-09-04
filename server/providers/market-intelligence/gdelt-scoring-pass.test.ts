@@ -18,7 +18,11 @@ import {
 } from './gdelt-scoring-pass.js';
 import { MarketIntelligenceStore } from './index.js';
 import { PROJECTED_COLUMNS } from './sources/gdelt-gkg-client.js';
-import { GDELT_MACRO_ENTITY, MIN_BASELINE_RECORDS_PER_BUCKET } from './sources/gdelt-scorer.js';
+import {
+  GDELT_MACRO_ENTITY,
+  MIN_BASELINE_RECORDS_PER_BUCKET,
+  MIN_SIGNAL_RECORDS,
+} from './sources/gdelt-scorer.js';
 
 const NOW = new Date('2026-09-03T12:34:00Z');
 /** `floorToBar(NOW)` on the 1h debate grid — the window end every derivation uses. */
@@ -69,6 +73,25 @@ function seededArchive(baselineTone = 0, signalTone = 2): MiArchiveStore {
   }
   for (let n = 0; n < 5; n += 1) {
     rows.push(row(new Date(BAR.getTime() - HOUR_MS + n * 60_000), signalTone, `s${n}`));
+  }
+  archive.write(rows, []);
+  return archive;
+}
+
+/**
+ * An archive that stays healthy across `bars` consecutive debate bars: every
+ * hour from a full baseline before `BAR` up to the last bar's signal hour
+ * carries enough records to clear every coverage rule, with the tone
+ * alternating so each bar's delta is non-zero.
+ */
+function continuousArchive(bars: number): MiArchiveStore {
+  const archive = new MiArchiveStore();
+  const rows: RawArchiveRow[] = [];
+  for (let offset = -25; offset <= bars - 2; offset += 1) {
+    const hourStart = BAR.getTime() + offset * HOUR_MS;
+    for (let n = 0; n < MIN_SIGNAL_RECORDS; n += 1) {
+      rows.push(row(new Date(hourStart + n * 60_000), offset % 2 === 0 ? 0 : 2, `h${offset}-${n}`));
+    }
   }
   archive.write(rows, []);
   return archive;
@@ -219,6 +242,41 @@ describe('GdeltScoringPass', () => {
     expect(entries.some((entry) => entry.level === 'warn')).toBe(true);
   });
 
+  it('leaves the analyst ONE aggregate after a day of bars, and it is the newest', () => {
+    // The hazard this pins: the pass emits one item per bar, `ingest` drops a
+    // repeat rather than replacing it, and nothing evicts — so without the
+    // read-time collapse in `index.ts` a 24h read would hold 24 restatements
+    // of one measurement, which `fundamental-analyst.ts` averages unweighted
+    // against the 0-1 items an LSE ETP gets from the wire.
+    const bars = 12;
+    const clock = new SimulatedClock(NOW);
+    const store = new MarketIntelligenceStore(clock);
+    const pass = new GdeltScoringPass({
+      archive: continuousArchive(bars),
+      store,
+      clock,
+      assetClasses: ['stocks'],
+    });
+
+    for (let bar = 0; bar < bars; bar += 1) {
+      clock.advanceTo(new Date(NOW.getTime() + bar * HOUR_MS));
+      pass.run(`trace-${bar}`);
+    }
+
+    const lastBar = new Date(BAR.getTime() + (bars - 1) * HOUR_MS);
+    const context = store.getContext('stocks', CONTEXT_WINDOW_MS, 'trace-read', lastBar, 'SPY');
+    const news = context.news;
+    expect(news).toHaveLength(1);
+    // `last_updated` answers "did a source speak recently", not "how many
+    // items survived the read-time collapse", so it stays on the raw ingest
+    // record and must keep reporting the newest emit.
+    expect(context.last_updated?.toISOString()).toBe(lastBar.toISOString());
+    // WHICH one survives, not merely how many: keeping the FIRST bar's item
+    // would satisfy the count and serve a day-old measurement forever.
+    expect(news[0]?.timestamp.toISOString()).toBe(lastBar.toISOString());
+    expect(news[0]?.entity).toBe(GDELT_MACRO_ENTITY);
+  });
+
   it('derives once per asset class per debate bar, not once per poll', () => {
     const archive = seededArchive();
     const store = new MarketIntelligenceStore(new SimulatedClock(NOW));
@@ -229,8 +287,8 @@ describe('GdeltScoringPass', () => {
     pass.run('trace-2');
     pass.run('trace-3');
 
-    // ~20k rows per read on the paper archive: the bar guard is what keeps a
-    // 15-minute poll from paying for it four times an hour.
+    // ~20k rows per read on the paper archive: the bar guard is what keeps
+    // the shipped 5-minute poll from paying for it twelve times an hour.
     expect(reads).toHaveBeenCalledTimes(1);
   });
 });

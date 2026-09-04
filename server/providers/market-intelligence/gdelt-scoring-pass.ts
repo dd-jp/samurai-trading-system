@@ -30,7 +30,8 @@
  * the timer is one indexed SQLite range read (migration 0003) plus a tab-split
  * per row over the window: ~20,000 rows on the 2026-09-03 paper archive's
  * cadence, against 168,026 GDELT rows in the table. The bar guard below is
- * what keeps that from being paid four times an hour at a 15-minute poll.
+ * what keeps that from being paid once per poll — twelve times an hour at the
+ * shipped 5-minute cadence (`DEFAULT_GDELT_POLL_INTERVAL_MS`).
  *
  * ## Cadence, and why the window end is the debate bar
  *
@@ -40,6 +41,12 @@
  * item, whose id is a function of (source, class, window end) — so the store's
  * id dedupe makes the repeat a no-op rather than a second vote on the same
  * hour. The guard makes it free as well as harmless.
+ *
+ * ACROSS bars the id differs, so the store accumulates one item per bar and
+ * the dedupe cannot help: `getContext` serves only the latest class-wide item
+ * per (source, entity, type) for that reason, and `index.ts` carries the
+ * argument. A day of these is a day of restatements of one trailing
+ * statistic, not a day of independent evidence.
  *
  * A REFUSAL does not set the guard, deliberately: the reason a refusal is
  * usually a cold or gapped archive, and the next poll may be the one that
@@ -73,12 +80,14 @@ export const REFUSAL_LOG_AFTER_CONSECUTIVE = 1;
 /**
  * How many further consecutive refusals pass before the log repeats.
  *
- * Twelve at the shipped 15-minute poll is roughly three hours — long enough
- * that a cold archive filling on its own (24 hours) reports about eight times
- * rather than a hundred, short enough that a gap nobody is watching still
- * surfaces within a session.
+ * Counted in POLLS, not wall-clock, so its span tracks
+ * `gdeltPollIntervalMs` — at the shipped 5-minute default
+ * (`DEFAULT_GDELT_POLL_INTERVAL_MS`) thirty-six polls is three hours. That is
+ * long enough that a cold archive filling on its own (24 hours = 288 polls)
+ * reports eight times rather than 288, short enough that a gap nobody is
+ * watching still surfaces within a session.
  */
-export const REFUSAL_REPEAT_EVERY = 12;
+export const REFUSAL_REPEAT_EVERY = 36;
 
 export function shouldLogRefusalAt(consecutive: number): boolean {
   if (consecutive < REFUSAL_LOG_AFTER_CONSECUTIVE) return false;

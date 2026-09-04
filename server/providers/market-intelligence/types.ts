@@ -21,14 +21,13 @@ export type Duration = number;
  */
 export interface AgentIntelligence {
   /**
-   * `alpaca-news` added by the MI rework (#553, map #552) — the first
-   * deterministic fetcher, alongside the two retrieval-era agent ids.
-   * `polymarket` added by #504, the macro/event path. `gdelt-gkg` added by
-   * #1086, the GKG scoring pass — the first writer whose items are class-wide
-   * (`IntelligenceItem.scope`) rather than per-entity. Widening this union is a
-   * TYPE change and nothing more: there is no `market_intelligence` table
-   * (`index.ts` — the store is in-memory and restart-clean), so no migration
-   * is involved, whatever `nous-sentiment-client.ts`'s header claims.
+   * `gdelt-gkg` is the one writer whose items are class-wide
+   * (`IntelligenceItem.scope`); every other id files per entity.
+   *
+   * Widening this union is a TYPE change and nothing more: there is no
+   * `market_intelligence` table (`index.ts` — the store is in-memory and
+   * restart-clean), so no migration is involved, whatever
+   * `nous-sentiment-client.ts`'s header claims.
    */
   agent_id: 'deepresearch' | 'grok' | 'alpaca-news' | 'polymarket' | 'gdelt-gkg';
   timestamp: Date;

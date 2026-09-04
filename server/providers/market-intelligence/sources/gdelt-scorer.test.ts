@@ -72,6 +72,46 @@ function healthyBaseline(tone: number): RawArchiveRow[] {
   return rows;
 }
 
+/**
+ * `healthyBaseline`'s coverage with a DIFFERENT tone on every row, so an
+ * order-sensitive derivation (a first-row read, a sort, a running statistic)
+ * has something to disagree about that uniform tones would hide.
+ *
+ * Every tone is a multiple of 0.25 — exact in binary, and the sums stay exact
+ * at these magnitudes — so re-ordering cannot change the mean by a last bit
+ * and turn a real determinism assertion into a flake.
+ */
+const VARIED_BASELINE_TONES = [-0.5, 0.25, 1.5, -1.25] as const;
+const VARIED_SIGNAL_TONES = [2.5, 1.75, 3, 2.25, 1.5] as const;
+
+function variedBaseline(): RawArchiveRow[] {
+  const rows: RawArchiveRow[] = [];
+  for (let bucket = 0; bucket < BUCKETS; bucket += 1) {
+    for (let n = 0; n < MIN_BASELINE_RECORDS_PER_BUCKET; n += 1) {
+      const tone = VARIED_BASELINE_TONES[(bucket + n) % VARIED_BASELINE_TONES.length] ?? 0;
+      rows.push(
+        row(
+          new Date(BASELINE_START + bucket * SIGNAL_MS + n * 60_000),
+          ['ECON_INTEREST_RATES'],
+          tone,
+        ),
+      );
+    }
+  }
+  return rows;
+}
+
+function variedSignalRows(): RawArchiveRow[] {
+  const start = WINDOW_END.getTime() - SIGNAL_MS;
+  return Array.from({ length: MIN_SIGNAL_RECORDS }, (_, n) =>
+    row(
+      new Date(start + n * 60_000),
+      ['ECON_INTEREST_RATES'],
+      VARIED_SIGNAL_TONES[n % VARIED_SIGNAL_TONES.length] ?? 0,
+    ),
+  );
+}
+
 function signalRows(tone: number, count = MIN_SIGNAL_RECORDS): RawArchiveRow[] {
   const start = WINDOW_END.getTime() - SIGNAL_MS;
   return Array.from({ length: count }, (_, n) =>
@@ -157,9 +197,12 @@ describe('deriveGdeltAggregate', () => {
   });
 
   it('is deterministic — the same rows in any order derive the same item', () => {
-    const rows = [...healthyBaseline(0.5), ...signalRows(-1.5)];
+    const rows = [...variedBaseline(), ...variedSignalRows()];
     const first = derive(rows);
     const second = derive([...rows].reverse());
+    // Both halves emitted, or the comparison below is two refusals agreeing.
+    expect(first.emitted).toBe(true);
+    expect(second.emitted).toBe(true);
     expect(JSON.stringify(second)).toBe(JSON.stringify(first));
   });
 
@@ -234,6 +277,13 @@ describe('deriveGdeltAggregate', () => {
     expect(result.reason).toBe('baseline_too_sparse');
   });
 
+  it('keeps a populated signal window a precondition of emitting, not an assumption', () => {
+    // The emission path throws if a window mean is undefined, on the grounds
+    // that the floors above already ruled it out. A floor of zero would make
+    // that throw reachable on a quiet hour.
+    expect(MIN_SIGNAL_RECORDS).toBeGreaterThanOrEqual(1);
+  });
+
   it('refuses a quiet signal window under its OWN reason, not a coverage one', () => {
     const result = derive([...healthyBaseline(0), ...signalRows(2, MIN_SIGNAL_RECORDS - 1)]);
     expect(result.emitted).toBe(false);
@@ -245,6 +295,10 @@ describe('deriveGdeltAggregate', () => {
     const future = row(new Date(WINDOW_END.getTime() + 60_000), ['ECON_INTEREST_RATES'], 50);
     const withFuture = derive([...healthyBaseline(0), ...signalRows(2), future]);
     const without = derive([...healthyBaseline(0), ...signalRows(2)]);
+    // Emitted on both sides, or a tone of 50 could be excluded by a refusal
+    // rather than by the window end.
+    expect(withFuture.emitted).toBe(true);
+    expect(without.emitted).toBe(true);
     expect(JSON.stringify(withFuture)).toBe(JSON.stringify(without));
   });
 });

@@ -114,7 +114,13 @@ export const MIN_BASELINE_BUCKET_FRACTION = 0.75;
 /** Mean records per baseline bucket below which the baseline is a sample, not a level. */
 export const MIN_BASELINE_RECORDS_PER_BUCKET = 2;
 
-/** Records the signal window must carry before its mean is worth a delta. */
+/**
+ * Records the signal window must carry before its mean is worth a delta.
+ *
+ * At least 1, always: below the emission path this floor is what establishes
+ * that the signal mean is defined, and a zero would turn the invariant throw
+ * there into a reachable crash on a quiet hour.
+ */
 export const MIN_SIGNAL_RECORDS = 5;
 
 /**
@@ -269,8 +275,18 @@ export function deriveGdeltAggregate(
   if (signalTones.length < MIN_SIGNAL_RECORDS) {
     return { emitted: false, reason: 'signal_window_thin', stats };
   }
+  // Unreachable: the three rules above already establish both windows hold
+  // records, so both means are defined. It THROWS rather than refusing,
+  // because if it ever fires the guards and the means have gone out of step —
+  // a code fault, not a thin window — and `signal_window_thin` is an
+  // info-level "the world was quiet" that would bury it. `GdeltScoringPass.run`
+  // catches per asset class and degrades to a logged warn, so this cannot take
+  // the poll timer down.
   if (signalMean === undefined || baselineMean === undefined || stats.tone_delta === undefined) {
-    return { emitted: false, reason: 'signal_window_thin', stats };
+    throw new Error(
+      'deriveGdeltAggregate: coverage rules passed but a window mean is undefined ' +
+        `(signal ${signalTones.length} records, baseline ${baselineTones.length})`,
+    );
   }
 
   const toneDelta = stats.tone_delta;
