@@ -1091,6 +1091,13 @@ export class FillSyncFailureRecorder implements Logger {
 export interface MarketDataFetchEvidence {
   /** How many `market_data_fetch` lines the run recorded — see `MarketDataFetchRecorder`. */
   fetchCount: number;
+  /**
+   * The distinct `trace_id`s those lines carried. A bar fetch inside a tick
+   * takes that tick's id from `shared/trace-context.ts`; `'market-data'` is
+   * the fallback for a fetch with no enclosing tick. The gate joins these
+   * against `audit_log`'s traces — see the check on this field.
+   */
+  traceIds: string[];
 }
 
 /**
@@ -1115,18 +1122,20 @@ export interface MarketDataFetchEvidence {
  */
 export class MarketDataFetchRecorder implements Logger {
   private fetchCount = 0;
+  private readonly traceIds = new Set<string>();
 
   constructor(private readonly inner: Logger) {}
 
   log(entry: LogEntry): void {
     if ((entry.payload as { event?: string } | undefined)?.event === 'market_data_fetch') {
       this.fetchCount += 1;
+      this.traceIds.add(entry.trace_id);
     }
     this.inner.log(entry);
   }
 
   evidence(): MarketDataFetchEvidence {
-    return { fetchCount: this.fetchCount };
+    return { fetchCount: this.fetchCount, traceIds: [...this.traceIds] };
   }
 }
 
@@ -4530,6 +4539,31 @@ export function evaluateSmokeGate(
         'correctly wired composition root; a zero count means the `telemetry` argument was dropped ' +
         "from production.ts's primary `MarketDataServiceImpl` construction, and the market-data " +
         'path is back to emitting no telemetry at all (#1082)',
+    );
+  }
+
+  // The fetch telemetry must be JOINABLE to the tick that caused it, which is
+  // the whole point of putting the tick's `trace_id` in ambient context: a
+  // fetch inside a tick carries that tick's id, and `'market-data'` is the
+  // fallback for one with no enclosing tick.
+  //
+  // A run with no ticks at all is not this check's business — the tick and
+  // minTicks checks above own that, and piling on would report a trace defect
+  // for a run that never got far enough to have one.
+  //
+  // Asserted here because nothing else can. Deleting the `runWithTraceId`
+  // wrapper from `SequentialTickRunner.runInstrument` leaves every fetch
+  // byte-identical, every unit test green (each site's fallback is a legal
+  // return), and every other check in this gate green — the lines just
+  // quietly revert to the category label and join to nothing.
+  const tickTraces = new Set(observations.ticks.map((tick) => tick.trace_id));
+  const joined = options.marketDataFetch.traceIds.some((trace_id) => tickTraces.has(trace_id));
+  if (tickTraces.size > 0 && options.marketDataFetch.fetchCount > 0 && !joined) {
+    failures.push(
+      'no market_data_fetch line carried a tick trace_id — every recorded fetch fell back to ' +
+        "the 'market-data' category label, so the bar path's telemetry joins to no tick in " +
+        'audit_log. Either `runWithTraceId` has been dropped from ' +
+        'SequentialTickRunner.runInstrument, or the fetch no longer runs inside the tick',
     );
   }
 

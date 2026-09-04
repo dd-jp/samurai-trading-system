@@ -20,7 +20,7 @@
  * verdict is the one the replay will see, so it is the one that must stand.
  */
 
-import type { Logger } from '../../shared/index.js';
+import { currentTraceId, type Logger } from '../../shared/index.js';
 import type { SharedStore as Db } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 import { readPersistedConditions, readPersistedDroppedConditions } from './invalidation.js';
@@ -109,7 +109,7 @@ function readConditionsJson(
     parsed = JSON.parse(stored);
   } catch {
     logger?.log({
-      trace_id: debate_id,
+      trace_id: currentTraceId() ?? debate_id,
       stage: 'risk',
       level: 'warn',
       message:
@@ -121,7 +121,7 @@ function readConditionsJson(
 
   if (!Array.isArray(parsed)) {
     logger?.log({
-      trace_id: debate_id,
+      trace_id: currentTraceId() ?? debate_id,
       stage: 'risk',
       level: 'warn',
       message:
@@ -136,7 +136,7 @@ function readConditionsJson(
   const dropped = parsed.length - survived;
   if (dropped > 0) {
     logger?.log({
-      trace_id: debate_id,
+      trace_id: currentTraceId() ?? debate_id,
       stage: 'risk',
       level: 'warn',
       message:

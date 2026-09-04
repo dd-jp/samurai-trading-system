@@ -67,7 +67,7 @@
  * update objects are never logged for the same reason.
  */
 import type { Logger, RetryConfig } from '../../../../shared/index.js';
-import { fetchWithTimeout, withRetry } from '../../../../shared/index.js';
+import { currentTraceId, fetchWithTimeout, withRetry } from '../../../../shared/index.js';
 import type { ApprovalButtonTarget, ApprovalCallback, TelegramClient } from '../types.js';
 import { parseOptionalAllowedUserIds } from './allowlist.js';
 import { CorrelationTokenStore, tokenLogPrefix } from './correlation-tokens.js';
@@ -92,6 +92,49 @@ const POLL_HTTP_TIMEOUT_MS = (POLL_TIMEOUT_SECONDS + 10) * 1000;
 
 /** Ordinary (non-polling) request timeout — `sendMessage`, `answerCallbackQuery`. */
 const DEFAULT_TIMEOUT_MS = 10_000;
+
+/**
+ * Telegram's hard `sendMessage` limit, counted in UTF-16 code units.
+ *
+ * Exceeding it is a `400 Bad Request: message is too long`, which is
+ * PERMANENT: `DEFAULT_RETRY` re-sends the same over-long body twice more and
+ * the alert is then dropped, having never been delivered. Observed live on
+ * 2026-09-04 — `control_arm_valuation_refused` for NFLX failed this way, and
+ * the operator learned nothing.
+ */
+export const TELEGRAM_MAX_MESSAGE_CHARS = 4096;
+
+/**
+ * Bounds an outbound message so an over-long body degrades to a truncated
+ * alert instead of no alert at all.
+ *
+ * Applied HERE, in the transport, rather than in each alert formatter, for
+ * the reason `formatLogLine` gives about redaction: a guarantee that holds
+ * only where a formatter remembered it is not a guarantee. Ten channels build
+ * bodies (`trader-diagnostic-alert-channel.ts`, `oco-double-fill-channel.ts`,
+ * …) and any of them can interpolate an unbounded `detail` — the NFLX failure
+ * came from `describeThrown` over a multi-member `AggregateError`, whose size
+ * scales with the number of open positions.
+ *
+ * This bounds only what goes on the wire; `#capForWire` is the sole caller
+ * and owns keeping the record. The suffix names the original length, so a
+ * reader knows to go to the log rather than assuming the alert was all there
+ * was.
+ */
+export function capOutboundText(text: string): string {
+  if (text.length <= TELEGRAM_MAX_MESSAGE_CHARS) return text;
+  // Slicing to the limit and appending after would still exceed it and still
+  // 400. No guard is needed on `cut`: `suffix` is ~30 chars plus the digits
+  // of `text.length`, and no JS string is long enough to make that 4,096.
+  const suffix = `… (truncated, ${text.length} chars total)`;
+  let cut = TELEGRAM_MAX_MESSAGE_CHARS - suffix.length;
+  // A lone high surrogate is not valid UTF-8 on the wire. Telegram counts
+  // UTF-16 code units, so `.length` is the right unit and a split pair is the
+  // only slicing hazard it leaves.
+  const last = text.charCodeAt(cut - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut -= 1;
+  return `${text.slice(0, cut)}${suffix}`;
+}
 
 /** Sized for Telegram's ~30 messages/second ceiling; a send is not on the tick's critical path. */
 const DEFAULT_RETRY: RetryConfig = { maxAttempts: 3, baseDelayMs: 500, maxDelayMs: 5_000 };
@@ -228,8 +271,37 @@ export class TelegramBotApiClient implements TelegramClient {
     return this.#tokens.size;
   }
 
+  /**
+   * The wire bound and its record, together. Capping without logging the
+   * original would make the truncation the very data loss it exists to
+   * prevent: the ten alert channels log only in their `.catch`, and a capped
+   * send SUCCEEDS, so no other line would ever carry the dropped tail.
+   *
+   * The body goes in `payload`, not `message`, and that is what keeps this
+   * module's "never log the bot token" promise intact across an arbitrary
+   * blob: `redactPayload` walks every string it reaches and runs
+   * `maskCredentials` over it, so a token appearing in alert prose is masked
+   * by pattern rather than by the accident that `text` does not carry one
+   * today. Anything moving this body back into `message` loses that.
+   *
+   * Nothing bridges logger output into an alert channel, so this warn cannot
+   * re-enter the transport that emitted it.
+   */
+  #capForWire(text: string): string {
+    const capped = capOutboundText(text);
+    if (capped === text) return text;
+    this.#log(
+      'warn',
+      `telegram_body_truncated: outbound body is ${text.length} chars, over the ` +
+        `${TELEGRAM_MAX_MESSAGE_CHARS}-char limit; the wire got a truncated alert and ` +
+        'the full body is in the payload',
+      { event: 'telegram_body_truncated', chars: text.length, body: text },
+    );
+    return capped;
+  }
+
   async sendMessage(chatId: string, text: string): Promise<void> {
-    await this.#call('sendMessage', { chat_id: chatId, text });
+    await this.#call('sendMessage', { chat_id: chatId, text: this.#capForWire(text) });
   }
 
   /**
@@ -273,7 +345,7 @@ export class TelegramBotApiClient implements TelegramClient {
     try {
       await this.#call('sendMessage', {
         chat_id: chatId,
-        text,
+        text: this.#capForWire(text),
         reply_markup: {
           inline_keyboard: [
             [
@@ -579,9 +651,15 @@ export class TelegramBotApiClient implements TelegramClient {
     });
   }
 
-  #log(level: 'info' | 'warn' | 'error', message: string): void {
+  #log(level: 'info' | 'warn' | 'error', message: string, payload?: unknown): void {
     if (this.#logger !== undefined) {
-      this.#logger.log({ trace_id: '', stage: AUDIT_STAGE, level, message });
+      this.#logger.log({
+        trace_id: currentTraceId() ?? '',
+        stage: AUDIT_STAGE,
+        level,
+        message,
+        ...(payload === undefined ? {} : { payload }),
+      });
       return;
     }
     if (level !== 'info') {

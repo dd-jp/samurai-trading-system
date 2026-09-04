@@ -1,6 +1,11 @@
 import type { SqliteAuditLog } from '../../../../apps/orchestrator/index.js';
+import type { LogEntry, Logger } from '../../../../shared/index.js';
 import type { CallbackAuditLog } from './telegram-bot-api-client.js';
-import { TelegramBotApiClient } from './telegram-bot-api-client.js';
+import {
+  capOutboundText,
+  TELEGRAM_MAX_MESSAGE_CHARS,
+  TelegramBotApiClient,
+} from './telegram-bot-api-client.js';
 
 const FAKE_TOKEN = '1234567:test-fake-bot-token';
 const ALLOWED_ID = 4242;
@@ -55,7 +60,7 @@ interface ClientHarness {
 }
 
 function makeClient(
-  overrides: { updates?: unknown[][]; alertChatId?: string } = {},
+  overrides: { updates?: unknown[][]; alertChatId?: string; logger?: Logger } = {},
 ): ClientHarness {
   const queued = overrides.updates ?? [];
   let poll = 0;
@@ -77,7 +82,7 @@ function makeClient(
     // same as omitting it. Callers that leave it out must produce a config
     // with no `alertChatId` key at all.
     ...(overrides.alertChatId === undefined ? {} : { alertChatId: overrides.alertChatId }),
-    logger: { log: () => {} },
+    logger: overrides.logger ?? { log: () => {} },
     retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
   });
 
@@ -706,5 +711,126 @@ describe('TelegramBotApiClient long-poll loop lifecycle', () => {
 describe('CallbackAuditLog port', () => {
   it('is structurally satisfied by the orchestrator SqliteAuditLog', () => {
     expectTypeOf<SqliteAuditLog>().toExtend<CallbackAuditLog>();
+  });
+});
+
+/**
+ * An over-long body is a PERMANENT 400, not transport flake — the retry
+ * re-sends the same bytes — so the cap has to hold in the transport: ten
+ * channels build bodies, and a bound only some of them remember to apply is
+ * not a bound. Bodies grow past the limit because they interpolate
+ * `describeThrown` over an `AggregateError` whose member count scales with
+ * the open book, which is the reproduction the first case below builds.
+ */
+describe('outbound message cap (Telegram 4096)', () => {
+  it('caps an over-long sendMessage body on the wire', async () => {
+    const { client, calls } = makeClient();
+    const members = Array.from(
+      { length: 64 },
+      (_, i) => `position ${i}: no mark available for the LSE ticker within the staleness bound`,
+    );
+    const body =
+      'Samurai TRADER DEGRADED: NFLX reported control_arm_valuation_refused.\n' +
+      `Detail: the control arm could not value the book (AggregateError: ${members.join('; ')})`;
+    expect(body.length).toBeGreaterThan(TELEGRAM_MAX_MESSAGE_CHARS);
+
+    await client.sendMessage(CHAT_ID, body);
+
+    const sent = calls().at(-1)?.body.text as string;
+    expect(sent.length).toBeLessThanOrEqual(TELEGRAM_MAX_MESSAGE_CHARS);
+    expect(sent.startsWith('Samurai TRADER DEGRADED: NFLX')).toBe(true);
+  });
+
+  it('caps an approval-button body too — the other text-bearing send', async () => {
+    const { client, calls } = makeClient();
+
+    await client.sendApprovalButtons(CHAT_ID, 'y'.repeat(9000), {
+      trace_id: 'trace-1',
+      idempotency_key: 'key-1',
+      timeout_ms: 1_000,
+    });
+
+    const sent = calls().at(-1)?.body.text as string;
+    expect(sent.length).toBeLessThanOrEqual(TELEGRAM_MAX_MESSAGE_CHARS);
+  });
+
+  it('leaves an ordinary alert untouched', async () => {
+    const { client, calls } = makeClient();
+    const body = 'Samurai heartbeat: 4 instruments, 0 open positions.';
+
+    await client.sendMessage(CHAT_ID, body);
+
+    expect(calls().at(-1)?.body.text).toBe(body);
+  });
+
+  /** The record half of the bound — see `#capForWire`. */
+  it('puts the full pre-cap body in the log, so truncation loses nothing', async () => {
+    const entries: LogEntry[] = [];
+    const { client } = makeClient({ logger: { log: (entry) => entries.push(entry) } });
+    const tail = 'z'.repeat(9000);
+
+    await client.sendMessage(CHAT_ID, `head ${tail}`);
+
+    const logged = entries.filter((entry) => entry.message.startsWith('telegram_body_truncated'));
+    expect(logged).toHaveLength(1);
+    expect(logged[0]?.level).toBe('warn');
+    expect(logged[0]?.payload).toEqual({
+      event: 'telegram_body_truncated',
+      chars: `head ${tail}`.length,
+      body: `head ${tail}`,
+    });
+  });
+
+  it('logs nothing extra when the body already fits', async () => {
+    const entries: LogEntry[] = [];
+    const { client } = makeClient({ logger: { log: (entry) => entries.push(entry) } });
+
+    await client.sendMessage(CHAT_ID, 'Samurai heartbeat: 4 instruments, 0 open positions.');
+
+    expect(entries.filter((entry) => entry.message.startsWith('telegram_body_truncated'))).toEqual(
+      [],
+    );
+  });
+});
+
+describe('capOutboundText', () => {
+  it('leaves a message that already fits completely untouched', () => {
+    const text = 'Samurai TRADER DEGRADED: NFLX reported atr_not_finite.';
+    expect(capOutboundText(text)).toBe(text);
+  });
+
+  it('leaves a message of exactly the limit untouched', () => {
+    const text = 'x'.repeat(TELEGRAM_MAX_MESSAGE_CHARS);
+    expect(capOutboundText(text)).toBe(text);
+  });
+
+  /**
+   * The whole defect in one assertion: a cap that slices to the limit and
+   * then appends a suffix still exceeds the limit, still 400s, and still
+   * never delivers.
+   */
+  it('produces a result within the limit, suffix included', () => {
+    const capped = capOutboundText('x'.repeat(10_000));
+    expect(capped.length).toBeLessThanOrEqual(TELEGRAM_MAX_MESSAGE_CHARS);
+  });
+
+  it('says how much was dropped, so the reader knows to go to the log', () => {
+    const capped = capOutboundText('x'.repeat(10_000));
+    expect(capped).toContain('truncated, 10000 chars total');
+  });
+
+  it('keeps the head, where the alert states what happened', () => {
+    const capped = capOutboundText(`Samurai TRADER DEGRADED: NFLX${'x'.repeat(10_000)}`);
+    expect(capped.startsWith('Samurai TRADER DEGRADED: NFLX')).toBe(true);
+  });
+
+  it('never splits a surrogate pair — a lone high surrogate is not valid UTF-8 on the wire', () => {
+    // '📈' is one astral code point, two UTF-16 code units. Repeating it to
+    // straddle the cut point lands the boundary mid-pair on some offsets.
+    for (let pad = 0; pad < 4; pad += 1) {
+      const capped = capOutboundText(`${'a'.repeat(pad)}${'📈'.repeat(6000)}`);
+      expect(capped.length).toBeLessThanOrEqual(TELEGRAM_MAX_MESSAGE_CHARS);
+      expect(Buffer.from(capped, 'utf8').toString('utf8')).toBe(capped);
+    }
   });
 });

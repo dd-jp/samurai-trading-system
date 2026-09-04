@@ -9,6 +9,7 @@
  */
 import type { SpendCap, SpendCapVerdict } from '../../../pipeline/debate-engine/index.js';
 import type { LogEntry, Logger } from '../../../shared/index.js';
+import { currentTraceId, runWithTraceId } from '../../../shared/index.js';
 import { composeMarketIntelligence, type MarketIntelligenceRefresh } from './analysts-adapter.js';
 import { MI_REFRESH_TRACE_ID, MiRefreshQueue, REFUSAL_LOG_EVERY } from './mi-refresh-queue.js';
 
@@ -368,6 +369,74 @@ describe('MiRefreshQueue (#1085)', () => {
     await settle();
 
     expect(seen).toEqual([MI_REFRESH_TRACE_ID]);
+  });
+
+  /**
+   * The AMBIENT half of the test above. `AsyncLocalStorage` captures at the
+   * point a continuation is registered, so a drain scheduled from inside the
+   * analysts step would otherwise run under the enqueuing tick and the deep
+   * log sites — `TokenBucket`, `MarketDataService` — would stamp that tick on
+   * work it never waited for.
+   */
+  it("does not leak the enqueuing tick's id into the drain", async () => {
+    const seen: (string | undefined)[] = [];
+    const queue = new MiRefreshQueue({
+      spendCap: UNCAPPED,
+      refresher: {
+        async refresh() {
+          seen.push(currentTraceId());
+          return true;
+        },
+      },
+    });
+
+    await runWithTraceId('tick-abc', async () => {
+      await queue.refresh('tick-abc', 'TSLA', 'stocks');
+    });
+    await settle();
+
+    expect(seen).toEqual([MI_REFRESH_TRACE_ID]);
+    await queue.stop();
+  });
+
+  /**
+   * The worse arm: one drain serves every queued name, so a leaked context
+   * does not merely mislabel the tick that started it — it stamps that tick
+   * on a LATER instrument's refresh, which is a wrong join rather than a
+   * missing one.
+   */
+  it("does not stamp one tick's id on a later instrument's refresh", async () => {
+    let release = (): void => {};
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const seen: { instrument: string; trace: string | undefined }[] = [];
+    const queue = new MiRefreshQueue({
+      spendCap: UNCAPPED,
+      refresher: {
+        async refresh(_trace_id, instrument) {
+          seen.push({ instrument, trace: currentTraceId() });
+          await blocked;
+          return true;
+        },
+      },
+    });
+
+    await runWithTraceId('tick-a', async () => {
+      await queue.refresh('tick-a', 'TSLA', 'stocks');
+    });
+    await runWithTraceId('tick-b', async () => {
+      await queue.refresh('tick-b', 'AAPL', 'stocks');
+    });
+
+    release();
+    await settle();
+
+    expect(seen).toEqual([
+      { instrument: 'TSLA', trace: MI_REFRESH_TRACE_ID },
+      { instrument: 'AAPL', trace: MI_REFRESH_TRACE_ID },
+    ]);
+    await queue.stop();
   });
 
   it('reports a refresh as attempted however it ended, and not before', async () => {
