@@ -231,8 +231,11 @@ its reason.
 
 ### Blocking
 
-**P1 — A tripped breaker blocks the flat-by-close flatten at Verdict. Two specs contradict each other,
-and code follows the wrong one.**
+**None.** The finding that stood here (P1, below) was verified against ADR-0014 before publication and
+resolved the other way: the code is correct and one spec is stale. Recorded in full because the
+stale line is a live-money safety claim that reads as an absolute invariant.
+
+**P1 — `risk-manager-spec.md:24` is stale against ADR-0014. Type (ii). The code is right.**
 
 `risk-manager-spec.md:24` states an absolute, system-wide invariant:
 
@@ -240,34 +243,47 @@ and code follows the wrong one.**
 > would hold a position overnight *specifically because* the book was in trouble — the worst possible
 > time.
 
-`verdict-spec.md:190` authorises exactly that: gate 6 "**Fire-time kill-switch / breaker re-check** —
-tripped → no-go (`breaker`)", with no flatten carve-out — and the #826 amendment at `:145` reaffirms it
-in terms ("Gates 1, 4, 5, 6 and 7 all still run").
+`verdict/index.ts:229-234` is `if (breakerTripped) return noGo('breaker', …)` with **no
+`mandatory_flatten` exemption**, while gate 1 (`:185`) and the price gates (`:211`) both carry one.
+That looked like code following one spec against another. It is not — **ADR-0014 §"The resolution"
+rules on it directly**, and ADR-0014 outranks every spec file on the trading path (CLAUDE.md):
 
-Code follows `verdict-spec`, deliberately and in writing. `verdict/index.ts:229-234` is
-`if (breakerTripped) return noGo('breaker', …)` with **no `mandatory_flatten` exemption**, while gate 1
-(`:185`) and the price gates (`:211`) both carry one; two separate comments state the intent ("the
-breaker re-check (5) still applies"), and tests lock it (`verdict/index.test.ts:911`, `:1007`).
-Nothing recovers it: `residual-protection-sweep.ts:228` only calls `broker.rearmProtectiveLegs` and
-never submits a flatten, so each subsequent tick's flatten re-hits the same gate. The outcome is a
-leveraged ETP held overnight because the book drew down — ADR-0014's invariant broken at the one moment
-it matters.
+> Gates 2–6 are untouched: dedup still stops a repeated flatten double-submitting, and the fire-time
+> breaker re-check still applies.
 
-`cross-spec-contracts.md:353` (CV-27) enumerates the flatten's path as "Trader → Risk → Execution",
-omitting Verdict. That is precisely how this survived a frozen-registry pass.
+The ADR then rejects the wider exemption by name — candidate **(4) "Make the flatten bypass Verdict
+entirely"** — as *"largest blast radius, and it discards the two protections that are still doing real
+work for this intent — dedup and the fire-time breaker re-check."* `verdict-spec.md:190` (gate 6) and
+its #826 amendment at `:145` ("Gates 1, 4, 5, 6 and 7 all still run") agree, as do the two in-file
+comments and the tests at `verdict/index.test.ts:911`, `:1007`.
 
-**This is a ruling for David, not a patch to apply.** Both documents are current and they disagree on
-a live-money safety property; the code implements one of them on purpose. Whichever way it goes, the
-losing spec and CV-27's path both need amending in the same change.
+So the exemption's scoping to gate 1 (and, at #826, the price gates) is a decision that was made,
+argued and recorded — not a hole. What is defective is `risk-manager-spec.md:24`'s unqualified
+"**No** breaker … may block the flatten", which no longer describes the system and reads as licence to
+"fix" `verdict/index.ts` by widening the exemption — the exact change ADR-0014 refused.
+
+*Fix (no ruling needed):* qualify `risk-manager-spec.md:24` to the Risk stage, where it is true —
+`risk-manager/index.ts` returns at `intent.intent_type === 'exit'` before `ENTRY_CAP_GATES` — and cite
+ADR-0014 for Verdict's gates 4/5. Separately, `cross-spec-contracts.md:353` (CV-27) enumerates the
+flatten's path as "Trader → Risk → Execution", omitting Verdict; that omission is real and worth
+correcting on its own account (see P17's neighbours in the frozen registry).
 
 *Correction to the reviewing agent's framing:* it cited `risk-manager/index.ts:665-667` as falsified by
 this. It is not — that claim is scoped to throws inside `ENTRY_CAP_GATES`, which `evaluate()` returns
 before on an exit, and is true as written.
 
-**P2 — Gate 4 (`market_closed`) has the same hole.** `verdict/index.ts:222-226`, with
-`allow_extended_hours: false` (`paper-profile.ts:1575`). The first attempt inside the close−5min window
-passes, but any retry after the bell — or a `TradingCalendar` disagreeing with the venue — no-gos the
-mandatory exit. Same seam, same fix, decided by the same ruling.
+**P2 — Gate 4 (`market_closed`) is likewise settled, and separately from P1.** `verdict/index.ts:222-226`
+with `allow_extended_hours: false` (`paper-profile.ts:1575`) no-gos a mandatory exit that reaches Verdict
+after the bell. ADR-0014 states this outcome explicitly and calls it correct:
+
+> The flatten still passes gate 4: a tick that reaches Verdict after `sessionEnd` is refused as
+> `market_closed` … That is pre-existing and correct — a shut venue cannot fill — but it means this
+> amendment makes the flatten survive *staleness*, not that flat-by-close is now unconditional.
+
+Gate 4 is a calendar disagreement and gate 5 a risk state, so they would not have resolved together in
+any case. No finding. The residual exposure the ADR names — the flatten's benefit is bounded by tick
+latency inside the five-minute window, and `residual-protection-sweep.ts:228` only re-arms protective
+legs rather than re-submitting — is stated by ADR-0014 as accepted, not missed.
 
 ### (i) Code is wrong
 
@@ -436,10 +452,12 @@ repo's own named dominant defect class is live in seven places, and `createDataS
 unconstructed source classes alive, including the `kind: 'lse'` arm added for the live venue's mark
 problem.
 
-**Spec — 2 blocking + 6 code-wrong + 12 spec-stale.** Worst: `risk-manager-spec.md:24` and
-`verdict-spec.md:190` contradict each other on whether a tripped breaker may block the flat-by-close
-flatten, and `verdict/index.ts:229` implements the permissive reading on purpose. That is a live-money
-ruling David has to make, and CV-27's path enumeration is why a frozen-registry pass did not catch it.
+**Spec — 0 blocking + 6 code-wrong + 13 spec-stale (P2 withdrawn).** Worst: P3, every Polymarket item
+invisible to every analyst. The blocking pair this report first carried — a tripped breaker blocking
+the flat-by-close flatten at Verdict — was checked against ADR-0014 before publication and does not
+stand: the ADR rules on both gates by name, upholds the code, and rejects the wider exemption as
+candidate (4). What survives is `risk-manager-spec.md:24`'s unqualified "**No** breaker … may block the
+flatten" being stale (P1, type (ii)) and reading as licence to make the change ADR-0014 refused.
 
 The two axes are not cross-ranked. Note their shapes rhyme: the Standards axis found seven mechanisms
 with no caller, and the Spec axis found an adopted intelligence feed (#481's Polymarket) whose items
