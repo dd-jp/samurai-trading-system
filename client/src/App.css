@@ -1,42 +1,42 @@
 /*
- * Mission-control screen styling (issue #538; dashboard-spec.md "Layout" and
- * "Design system"). All colours come from tokens.css custom properties;
- * nothing here hard-codes a palette colour, per the Design system's rule.
+ * Samurai dashboard v3 — the Rail layout.
  *
- * Glows and washes are written `rgb(var(--cyan-rgb) / 0.06)` rather than
- * `rgba(56, 225, 255, 0.06)` (#606 item 6): the previous form repeated each
- * palette triple across ~20 literals, so a token change meant hand-editing all
- * of them and the claim above was only true of the opaque colours. The two
- * remaining literals are `rgba(0, 0, 0, …)` drop shadows, which are shadow
- * depth rather than palette, and one opaque chip background that has no token
- * counterpart.
+ * Desktop only, 1440 wide: a 240px rail on the left of every tab, the tab's
+ * content in the middle, and on Live and Review a 460px drawer on the right.
+ * Type is 14px body, labels never below 11px, key figures 28–40px. The only
+ * motif is the hanko seal and the brand mark; there is no animation.
  *
- * Motion here is CSS keyframes and transitions only — no JS animation loop and
- * no requestAnimationFrame anywhere in the app (Motion rule 10).
+ * Every colour comes from tokens.css. Colour is never the only carrier of a
+ * signal — every state has a word beside it.
  */
-
-* {
-  box-sizing: border-box;
-}
 
 .app {
   min-height: 100vh;
-  /* A single ink-bleed wash from the top, in `--lacquer` rather than the
-     technical cyan grid the previous pass used — the page's ground reads as
-     paper the ink has soaked into, not an instrument display. */
-  background:
-    radial-gradient(1400px 700px at 50% -240px, rgb(var(--lacquer-rgb) / 0.08), transparent 62%),
-    var(--bg);
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
   color: var(--text);
   font-family: var(--font-body);
   font-size: 14px;
   line-height: 1.5;
+  background: var(--bg);
 }
 
-.numeric,
 .mono {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
+}
+
+.display {
+  font-family: var(--font-display);
+  font-weight: 600;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.small {
+  font-size: 12px;
 }
 
 .gain {
@@ -47,12 +47,17 @@
   color: var(--vermilion);
 }
 
-.muted {
-  color: var(--muted);
+.warn {
+  color: var(--amber);
 }
 
-/* Available to assistive technology, invisible on screen — never used to hide
-   a signal, only to say in words what a glyph shows visually. */
+.label {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  font-weight: 500;
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;
@@ -60,31 +65,9 @@
   margin: -1px;
   padding: 0;
   overflow: hidden;
-  clip-path: inset(50%);
+  clip: rect(0 0 0 0);
   white-space: nowrap;
   border: 0;
-}
-
-/* Empty states name their reason; they are content, not absence, so they are
-   styled as readable prose rather than as a greyed-out placeholder. */
-.empty-state {
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.6;
-  margin: 8px 0;
-  max-width: 62ch;
-}
-
-.caveat {
-  color: var(--amber);
-  font-size: 11px;
-  line-height: 1.6;
-  margin: 8px 0 0;
-  max-width: 62ch;
-}
-
-button {
-  font: inherit;
 }
 
 :focus-visible {
@@ -92,44 +75,34 @@ button {
   outline-offset: 2px;
 }
 
-/* ---------------------------------------------------------------- telemetry */
-
-/*
- * Docked flush to the viewport top (sticky, no margin, sharp corners) — this
- * is what removes the white band trackpad overscroll used to reveal above
- * it: there is no gap above this element for the un-backgrounded page
- * ground (fixed in tokens.css) to show through.
- */
-.telemetry-strip {
-  position: sticky;
-  top: 0;
-  z-index: 30;
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 22px;
-  padding: var(--space-3) var(--space-5);
-  border: 0;
-  border-bottom: 1px solid var(--border);
-  border-radius: 0;
-  background: var(--panel);
-  backdrop-filter: blur(12px);
-  box-shadow: 0 1px 0 rgb(var(--gold-rgb) / 0.3);
-  transition: border-color 0.3s;
+code {
+  font-family: var(--font-mono);
+  font-size: 13px;
 }
 
-/* Staleness is a label plus a border, never a disappearance. The colour
-   override of the labels themselves lives below, after their base rules, so
-   the stylesheet never descends in specificity. */
-.telemetry-strip-stale {
-  border-color: var(--amber);
+/* ---------- rail ---------- */
+
+.rail {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  box-sizing: border-box;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+  padding: var(--space-5) 20px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.rail-stale {
+  border-right-color: var(--amber);
 }
 
 .brand {
   font-family: var(--font-accent);
   font-weight: 700;
-  font-size: 16px;
+  font-size: 18px;
   letter-spacing: 0.08em;
 }
 
@@ -138,677 +111,285 @@ button {
   color: var(--cyan);
 }
 
-.brand small {
-  color: var(--muted);
-  font-size: 10px;
-  letter-spacing: 0.2em;
-  margin-left: 8px;
-  font-weight: 600;
+.rail-tabs [role="tablist"] {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
 }
 
-.telemetry-cell {
+.tab {
+  font: inherit;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.tab-on {
+  color: var(--text);
+  background: rgb(var(--border-rgb) / 0.6);
+}
+
+.rail-status {
+  border-top: 1px solid var(--border);
+  padding-top: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.rail-block {
   display: flex;
   flex-direction: column;
   gap: 2px;
-}
-
-.telemetry-spacer {
-  flex: 1;
-}
-
-.telemetry-label {
-  font-size: 9px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--muted);
-  font-weight: 600;
-}
-
-.telemetry-value {
-  font-family: var(--font-mono);
   font-size: 13px;
 }
 
-.telemetry-muted {
-  color: var(--muted);
-}
-
-.telemetry-strip-stale .telemetry-label,
-.telemetry-strip-stale .telemetry-value {
-  color: var(--amber);
-}
-
-.telemetry-since,
-.telemetry-caveat {
-  color: var(--muted);
-  font-size: 10px;
-}
-
-.telemetry-stale-note {
-  color: var(--amber);
-}
-
-.telemetry-mode {
-  border: 1px solid var(--amber);
-  color: var(--amber);
-  border-radius: 5px;
-  padding: 2px 9px;
+.rail-health {
   font-family: var(--font-display);
   font-weight: 600;
-  font-size: 11px;
-  letter-spacing: 0.18em;
-  align-self: flex-start;
+  font-size: 20px;
+  line-height: 1.2;
 }
 
-.telemetry-mode-live {
+.rail-health-alive {
+  color: var(--go);
+}
+
+.rail-health-stale {
+  color: var(--amber);
+}
+
+.rail-health-waiting {
+  color: var(--muted);
+}
+
+.rail-note {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.rail-value {
+  font-size: 13px;
+}
+
+.pill {
+  display: inline-block;
+  align-self: flex-start;
+  margin-top: var(--space-1);
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  border: 1px solid var(--amber);
+  color: var(--amber);
+  border-radius: 6px;
+  padding: 3px 10px;
+}
+
+.pill-live {
   border-color: var(--vermilion);
   color: var(--vermilion);
 }
 
-.telemetry-mode-unknown {
-  color: var(--amber);
-  font-size: 12px;
-  font-family: var(--font-mono);
+.rail-provider {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
 }
 
-/* Provider state words. The colour is redundant with the word — never the only
-   carrier of the meaning. */
 .provider-ok {
   color: var(--go);
 }
 
 .provider-rate_limited,
-.provider-forbidden,
 .provider-not_configured {
   color: var(--amber);
 }
 
 .provider-unauthorized,
+.provider-forbidden,
 .provider-error {
   color: var(--vermilion);
 }
 
-.burn-meter {
-  width: 120px;
-  height: 4px;
-  border-radius: 2px;
-  background: var(--border);
-  margin-top: 3px;
-  position: relative;
-  overflow: hidden;
+.rail-meter-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
 }
 
-.burn-fill {
+.track {
+  display: block;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  position: relative;
+  overflow: hidden;
+  margin-top: 5px;
+}
+
+.track-thick {
+  height: 8px;
+}
+
+.track-fill {
   position: absolute;
   left: 0;
   top: 0;
   bottom: 0;
+  border-radius: 3px;
   background: var(--cyan);
-  border-radius: 2px;
 }
 
-.burn-fill-over {
+.track-cyan {
+  background: var(--cyan);
+}
+
+.track-amber {
+  background: var(--amber);
+}
+
+.track-bad,
+.track-loss {
   background: var(--vermilion);
 }
 
-/* ------------------------------------------------------------------- layout */
+.track-gain {
+  background: var(--go);
+}
+
+.rail-foot {
+  margin-top: auto;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------- shared content chrome ---------- */
 
 main {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-5);
-  /* Top padding replaces the telemetry strip's old bottom margin now that the
-     strip is flush/sticky with no margin of its own. */
-  padding: var(--space-5) var(--space-5) var(--space-8);
+  min-width: 0;
 }
 
-/*
- * No `backdrop-filter` on the panels (#606 item 6). Backdrop blur makes the
- * compositor re-snapshot and blur everything behind the element on every
- * repaint, and this page repaints every 3 seconds, forever, on a machine that
- * is also running the trading process. What it was blurring is the page's
- * static radial gradient — the panels are opaque enough that the blur bought
- * close to nothing visible, and it was paid for once per panel per repaint.
- * The translucent tint (`--panel`) that carries the glass look is unchanged.
- *
- * The telemetry strip keeps its blur: one element rather than eight (five bento
- * panels, the rooms hero, the ledger and the drawer), and it is the one thing
- * the rooms hero actually scrolls behind.
- */
-/*
- * "Blade & Ink" replaces the rounded-corner HUD reticle with a single cut
- * corner (top-right), the way a blade squares a sheet of paper: `clip-path`
- * on the panel itself instead of a rounded border, plus a small lacquer-red
- * wedge on a pseudo-element that fills the cut notch — the "ink at the
- * blade's edge" this direction is named for. No component file needs to
- * change to pick this up, since all four already share this selector.
- */
-.panel,
-.rooms-panel,
-.ledger-panel,
-.drawer-panel {
-  position: relative;
+.panel {
   border: 1px solid var(--border);
-  clip-path: polygon(0 0, calc(100% - var(--space-4)) 0, 100% var(--space-4), 100% 100%, 0 100%);
+  border-radius: 8px;
   background: var(--panel);
-  padding: var(--space-4) var(--space-5);
+  padding: 20px var(--space-5);
 }
 
-.panel::before,
-.rooms-panel::before,
-.ledger-panel::before,
-.drawer-panel::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  right: 0;
-  width: var(--space-4);
-  height: var(--space-4);
-  background: rgb(var(--lacquer-rgb) / 0.5);
-  clip-path: polygon(100% 0, 100% 100%, 0 0);
-  pointer-events: none;
-}
-
-.panel-head {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-bottom: 12px;
-  border-bottom: 1px solid rgb(var(--lacquer-rgb) / 0.35);
-  padding-bottom: var(--space-2);
-}
-
-.panel-head h2 {
-  font-family: var(--font-accent);
-  font-weight: 700;
-  font-size: 13px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  margin: 0;
-}
-
-.panel-sub {
-  font-size: 11px;
-  color: var(--muted);
-}
-
-.mid-row {
-  display: grid;
-  grid-template-columns: minmax(340px, 1fr) minmax(400px, 1.4fr);
-  gap: var(--space-5);
-}
-
-.bento {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: var(--space-5);
-}
-
-.panel-positions,
-.panel-metrics {
-  grid-column: span 2;
-}
-
-@media (max-width: 1100px) {
-  .mid-row {
-    grid-template-columns: 1fr;
-  }
-
-  .panel-positions,
-  .panel-metrics {
-    grid-column: auto;
-  }
-}
-
-/* -------------------------------------------------------------- rooms hero */
-
-/* The grid scrolls inside its own container on narrow viewports; the page body
-   never scrolls sideways (spec, Accessibility floor). */
-.rooms-scroll {
-  overflow-x: auto;
-  padding-bottom: 6px;
-}
-
-.rooms-hero {
-  position: relative;
-  display: grid;
-  /* The minmax floor is what makes the overflow rule engage: bare `1fr`
-     tracks shrink to fit, so the grid would never overflow — rooms would just
-     get crushed on narrow viewports. */
-  grid-template-columns: repeat(4, minmax(200px, 1fr));
-  grid-auto-rows: minmax(150px, auto);
-  gap: var(--space-3);
-  min-width: 880px;
-}
-
-.room {
-  position: relative;
-  border: 1px solid var(--border);
-  clip-path: polygon(0 0, calc(100% - var(--space-2)) 0, 100% var(--space-2), 100% 100%, 0 100%);
-  background: rgb(var(--ink-rgb) / 0.72);
-  padding: 10px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  transition:
-    border-color 0.3s,
-    box-shadow 0.3s;
-  animation: room-power-on 0.5s both;
-  animation-delay: calc(var(--room-index, 0) * 70ms);
-}
-
-@keyframes room-power-on {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-.room::before {
-  content: "";
-  position: absolute;
-  left: 14px;
-  right: 14px;
-  top: 0;
-  height: 3px;
-  border-radius: 0 0 3px 3px;
-  background: var(--border);
-}
-
-/*
- * Assembly-line trace between horizontally-adjacent stages, into the grid gap
- * (the gap's width, `--space-3`). `.rooms-hero` is fixed at 4 columns, so
- * "not the 4th of a group of 4" is exactly "not the last column" — every room
- * except the row's last gets a line reaching toward the next one. The one
- * connection this does not draw is the row wrap (column 4 to the next row's
- * column 1); a straight CSS line there would run through unrelated rooms, so
- * that jump is left to the room order and numbering alone.
- */
-.room:not(:nth-child(4n))::after {
-  content: "";
-  position: absolute;
-  top: 50%;
-  right: calc(-1 * var(--space-3));
-  width: var(--space-3);
-  height: 1px;
-  background: rgb(var(--border-rgb) / 0.8);
-  pointer-events: none;
-}
-
-.room-lobby {
-  border-style: dashed;
-  background: rgb(var(--ink-rgb) / 0.4);
-}
-
-.room-live {
-  border-color: rgb(var(--cyan-rgb) / 0.55);
-  /* Static glow only: the resting frame is also the full signal, so
-     prefers-reduced-motion needs no override here to keep "live" marked. */
-  box-shadow:
-    0 0 18px rgb(var(--cyan-rgb) / 0.12),
-    inset 0 0 24px rgb(var(--cyan-rgb) / 0.04);
-}
-
-.room-live::before {
-  background: var(--cyan);
-}
-
-.room-selected {
-  box-shadow:
-    0 0 0 1px var(--cyan),
-    0 0 18px rgb(var(--cyan-rgb) / 0.15);
-}
-
-.room-corner {
-  position: absolute;
-  width: 10px;
-  height: 10px;
-  border: 2px solid var(--cyan);
-  opacity: 0;
-  transition: opacity 0.2s;
-  pointer-events: none;
-}
-
-.room-selected .room-corner {
-  opacity: 1;
-}
-
-/*
- * Inset to 0, not the -2px outset the rounded-corner frame used: `.room` now
- * clips to its `clip-path` polygon regardless of `overflow`, so anything
- * placed outside the border box (as -2px was) gets silently cut off instead
- * of hanging past the edge as it did under `border-radius`.
- */
-.room-corner-tl {
-  top: 0;
-  left: 0;
-  border-right: 0;
-  border-bottom: 0;
-}
-
-.room-corner-br {
-  bottom: 0;
-  right: 0;
-  border-left: 0;
-  border-top: 0;
-}
-
-.room-heading {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.room-number {
-  font-family: var(--font-mono);
-  font-size: 9px;
-  color: var(--muted);
-  letter-spacing: 0.1em;
-}
-
-.room-name {
+.panel h2,
+.section-head h2 {
   font-family: var(--font-display);
   font-weight: 600;
-  font-size: 11px;
-  letter-spacing: 0.16em;
+  font-size: 13px;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
-  margin: 0;
+  margin: 0 0 14px;
   color: var(--muted);
 }
 
-/* Declared after `.room-name` so specificity ascends down the file. */
-.room-live .room-name {
-  color: var(--cyan);
-}
-
-.room-live-word {
-  font-size: 9px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  font-weight: 600;
-  color: var(--cyan);
-}
-
-.room-blurb {
-  font-size: 10px;
-  color: var(--muted);
-  margin: 0;
-  max-width: 22ch;
-}
-
-.room-overflow {
-  position: absolute;
-  right: 10px;
-  top: 10px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--cyan);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 0 6px;
-}
-
-/*
- * The signature watermark: large enough to read as the card's dominant
- * graphic device rather than a corner ornament, tinted `--lacquer` (ink) so
- * it also carries the "red over grey" chrome shift the rest of the room
- * card doesn't otherwise get much of. Bottom-right, not top-right, so it
- * never falls under `.room`'s cut-corner clip-path.
- */
-.room-kanji {
-  position: absolute;
-  right: -4px;
-  bottom: -8px;
-  font-size: 76px;
-  line-height: 1;
-  color: rgb(var(--lacquer-rgb) / 0.22);
-  pointer-events: none;
-  user-select: none;
-}
-
-/* ------------------------------------------------------------ sigil chips */
-
-.rooms-floor {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 5;
-}
-
-.chip {
-  position: absolute;
-  left: 0;
-  top: 0;
-  pointer-events: auto;
+.section-head {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  background: rgba(13, 20, 38, 1);
-  color: var(--text);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  padding: 4px 10px 4px 6px;
-  cursor: pointer;
-  /* The transform transition IS the walk. Its duration is set per hop by
-     useWalkAnimation; this is the resting default. */
-  transition:
-    transform 0.38s cubic-bezier(0.45, 0.08, 0.3, 1),
-    opacity 0.4s,
-    box-shadow 0.3s;
-  will-change: transform;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
-  animation: chip-appear 0.4s both;
+  align-items: baseline;
+  gap: 14px;
 }
 
-@keyframes chip-appear {
-  from {
-    opacity: 0;
-  }
-
-  to {
-    opacity: 1;
-  }
-}
-
-.chip:hover {
-  border-color: var(--cyan);
-}
-
-.chip-selected {
-  border-color: var(--cyan);
-  box-shadow:
-    0 0 0 1px rgb(var(--cyan-rgb) / 0.6),
-    0 2px 12px rgb(var(--cyan-rgb) / 0.2);
-}
-
-.chip-walking {
-  border-color: var(--cyan);
-  box-shadow: 0 4px 16px rgb(var(--cyan-rgb) / 0.25);
-}
-
-/* The settle ring: what moved, when it did not walk (Motion rule 5/8). A
-   static ring rather than a keyframe, precisely so reduced motion keeps it. */
-.chip-settled {
-  box-shadow:
-    0 0 0 2px var(--cyan),
-    0 2px 10px rgba(0, 0, 0, 0.5);
-}
-
-.chip-ring {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  border: 2.5px solid var(--muted);
-  flex: none;
-}
-
-.chip-glyph {
-  color: var(--muted);
-  font-size: 10px;
-}
-
-.chip-in_flight {
-  border-color: rgb(var(--cyan-rgb) / 0.5);
-}
-
-.chip-in_flight .chip-ring {
-  border-color: var(--cyan);
-}
-
-/*
- * The lane holding `pipeline.live_trace_id`. `SigilChip` has always set this
- * class and nothing styled it, so the chip's only visual claim to being live
- * was the shimmer — which `prefers-reduced-motion` suppresses, leaving a
- * reduced-motion operator with no chip-level mark at all (#540). A static edge
- * is the version of that signal which survives rule 5, and "live" is still a
- * word in the room heading and in the chip's accessible name; nothing here is
- * carried by colour alone.
- */
-.chip-live {
-  border-color: var(--cyan);
-}
-
-.chip-go .chip-ring {
-  border-color: var(--go);
-  background: rgb(var(--go-rgb) / 0.25);
-}
-
-.chip-no_go .chip-ring {
-  border-color: var(--amber);
-}
-
-.chip-stopped .chip-ring {
-  border-color: var(--vermilion);
-  background: rgb(var(--vermilion-rgb) / 0.25);
-}
-
-.chip-quorum_skip .chip-ring {
-  border-style: dashed;
-  border-color: var(--amber);
-}
-
-.chip-idle {
-  opacity: 0.7;
-}
-
-.chip-idle .chip-ring {
-  border-style: dashed;
-}
-
-.chip-bob {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  animation: chip-bob 3.4s ease-in-out infinite;
-}
-
-@keyframes chip-bob {
-  50% {
-    transform: translateY(-2px);
-  }
-}
-
-/* Scanline shimmer while live. Not a pulsing status dot — it is a sweep across
-   the chip, and the word "live" carries the same fact in the room heading and
-   in the chip's accessible name. */
-.chip-shimmer {
-  position: absolute;
-  inset: 0;
-  border-radius: 16px;
-  overflow: hidden;
-  pointer-events: none;
-}
-
-.chip-shimmer::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 36%;
-  background: linear-gradient(105deg, transparent, rgb(var(--cyan-rgb) / 0.14), transparent);
-  animation: chip-scan 2.4s infinite;
-}
-
-@keyframes chip-scan {
-  from {
-    left: -40%;
-  }
-
-  to {
-    left: 110%;
-  }
-}
-
-/* ---------------------------------------------------------------- ledger */
-
-.ledger-list {
-  list-style: none;
+.section-head h2 {
   margin: 0;
-  padding: 0;
 }
 
-.ledger-row {
-  display: grid;
-  grid-template-columns: 30px 82px 92px 1fr 92px;
-  gap: 10px;
-  align-items: center;
-  width: 100%;
-  text-align: left;
-  padding: 7px 4px;
-  border: 0;
-  border-bottom: 1px solid rgb(var(--border-rgb) / 0.6);
-  background: transparent;
-  color: inherit;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  cursor: pointer;
-  border-radius: 4px;
-}
-
-.ledger-row:hover {
-  background: rgb(var(--lacquer-rgb) / 0.08);
-}
-
-.ledger-row-selected {
-  background: rgb(var(--lacquer-rgb) / 0.14);
-}
-
-.ledger-time,
-.ledger-trace {
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.ledger-reason {
-  color: var(--muted);
-  font-size: 11px;
+.h2-note {
+  text-transform: none;
+  letter-spacing: 0;
   font-family: var(--font-body);
+  font-weight: 400;
+}
+
+.card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgb(var(--ink-rgb) / 0.5);
+  padding: 14px var(--space-4);
+}
+
+.card h3,
+.drawer h3 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 10px;
+}
+
+.card-secondary {
+  border-style: dashed;
+}
+
+.empty-state {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.state {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 1px 7px;
+  border-radius: 4px;
+  border: 1px solid;
+  line-height: 1.5;
+}
+
+.state-done {
+  color: var(--go);
+  border-color: rgb(var(--go-rgb) / 0.45);
+}
+
+.state-live {
+  color: var(--cyan);
+  border-color: rgb(var(--cyan-rgb) / 0.55);
+  background: rgb(var(--cyan-rgb) / 0.08);
+}
+
+.state-stop {
+  color: var(--vermilion);
+  border-color: rgb(var(--vermilion-rgb) / 0.5);
+}
+
+.state-skip,
+.state-wait {
+  color: var(--muted);
+  border-color: var(--border);
 }
 
 .seal {
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   border-radius: 50%;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
-  font-weight: 600;
+  font-family: var(--font-accent);
+  font-size: 13px;
+  font-weight: 700;
   border: 1.5px solid;
   transform: rotate(-6deg);
-  flex: none;
-  /* A thin gold ink-ring outside the outcome-coloured border — ceremony, not
-     a signal. The outcome colour (border + text) still carries the meaning;
-     this never appears anywhere it would compete with that. */
   box-shadow: 0 0 0 1px rgb(var(--gold-rgb) / 0.45);
+  flex: none;
 }
 
 .seal-go {
@@ -834,41 +415,11 @@ main {
   border-color: var(--muted);
 }
 
-/* Stamped on entries observed settling; a seeded entry never animates,
-   because it did not just happen. */
-.ledger-row-stamped .seal {
-  animation: hanko-stamp 0.38s cubic-bezier(0.2, 1.6, 0.4, 1);
-}
-
-@keyframes hanko-stamp {
-  0% {
-    transform: rotate(-6deg) scale(2.6);
-    opacity: 0;
-  }
-
-  60% {
-    transform: rotate(-6deg) scale(0.92);
-    opacity: 1;
-  }
-
-  100% {
-    transform: rotate(-6deg) scale(1);
-  }
-}
-
-.outcome-word {
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  font-weight: 600;
-}
-
 .outcome-go {
   color: var(--cyan);
 }
 
-.outcome-no_go,
-.outcome-quorum_skip {
+.outcome-no_go {
   color: var(--amber);
 }
 
@@ -876,151 +427,401 @@ main {
   color: var(--vermilion);
 }
 
-.hitl-badge {
-  font-size: 9px;
-  letter-spacing: 0.1em;
-  font-weight: 600;
-  color: var(--bg);
-  background: var(--amber);
-  border-radius: 3px;
-  padding: 0 4px;
-  margin-left: 6px;
-}
-
-/* ---------------------------------------------------------------- drawer */
-
-.drawer-trace {
-  margin-left: auto;
-  font-family: var(--font-mono);
-  font-size: 10px;
+.outcome-quorum_skip,
+.outcome-idle {
   color: var(--muted);
-  word-break: break-all;
 }
 
-.drawer-section {
-  font-family: var(--font-display);
-  font-weight: 600;
-  font-size: 11px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  margin: 16px 0 8px;
-}
-
-.drawer-started,
-.drawer-caveat {
-  font-size: 11px;
-  color: var(--muted);
-  margin: 8px 0 0;
-}
-
-.stage-strip {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12px;
-}
-
-.stage-strip th {
-  font-family: var(--font-display);
-  font-weight: 600;
-  font-size: 9px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--muted);
-  text-align: left;
-  padding: 4px 8px;
-  border-bottom: 1px solid var(--border);
-}
-
-.stage-strip td {
-  padding: 5px 8px;
-  border-bottom: 1px solid rgb(var(--border-rgb) / 0.5);
-  font-family: var(--font-mono);
-}
-
-.stage-strip .numeric {
-  text-align: right;
-}
-
-.state-word {
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  font-weight: 600;
-}
-
-.state-done {
-  color: var(--go);
-}
-
-.state-live {
+.outcome-in_flight {
   color: var(--cyan);
 }
 
-.state-stopped {
-  color: var(--vermilion);
+.hitl {
+  display: inline-block;
+  margin-left: var(--space-2);
+  font-family: var(--font-display);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--amber);
+  border: 1px solid var(--amber);
+  border-radius: 4px;
+  padding: 0 5px;
 }
 
-.state-skipped,
-.state-not_reached {
+.kv-list {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 13px;
+}
+
+.kv {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.kv dt {
   color: var(--muted);
 }
 
-/*
-  Invalidation condition states (#1066). `unevaluable` is muted, NOT alarmed:
-  a failed read carries no enforcement effect, and colouring it like a breach
-  would report a data gap as a falsified thesis.
-*/
-.condition-breached {
-  color: var(--vermilion);
+.kv dd {
+  margin: 0;
 }
 
-.condition-not_breached {
-  color: var(--go);
+.kv-total {
+  border-top: 1px solid var(--border);
+  padding-top: 5px;
 }
 
-.condition-unevaluable {
-  color: var(--muted);
+.kv-total dt {
+  color: var(--text);
 }
 
-/* ----------------------------------------------------------- stance strips */
+/* ---------- glance ---------- */
 
-.stance-list,
-.debate-list,
-.debate-contributions,
+.glance {
+  padding: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.glance-top {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-5);
+}
+
+.big-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-4);
+}
+
+.big {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  font-size: 40px;
+  line-height: 1.1;
+}
+
+.figure-row {
+  display: flex;
+  gap: 28px;
+  margin-top: 14px;
+  font-size: 13px;
+}
+
+.figure-row > div {
+  display: flex;
+  flex-direction: column;
+}
+
+.glance .small {
+  margin: 10px 0 0;
+}
+
+.spark-figure {
+  margin: var(--space-4) 0 0;
+}
+
+.spark {
+  display: block;
+  width: 100%;
+  height: 60px;
+}
+
+.spark-line {
+  fill: none;
+  stroke: var(--go);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.spark-fill {
+  fill: rgb(var(--go-rgb) / 0.12);
+}
+
+.spark-loss .spark-line {
+  stroke: var(--vermilion);
+}
+
+.spark-loss .spark-fill {
+  fill: rgb(var(--vermilion-rgb) / 0.12);
+}
+
+.spark-figure figcaption {
+  font-size: 12px;
+  margin-top: var(--space-1);
+}
+
+.risk-list,
+.verdict-list,
+.lane-list,
+.trade-list,
+.arm-list,
+.benchmark-list,
 .analyst-list,
-.position-list,
-.stat-grid,
-.spend-grid {
+.stance-list,
+.condition-list,
+.fill-list,
+.timeline,
+.tile-grid,
+.arm-trend {
   list-style: none;
   margin: 0;
   padding: 0;
 }
 
-.stance-row,
-.debate-contribution {
+.risk-list {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 5px 0;
-  font-size: 11px;
-  font-family: var(--font-mono);
+  flex-direction: column;
+  gap: 14px;
 }
 
-.stance-name {
-  min-width: 90px;
+.risk-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  margin-bottom: 5px;
+}
+
+.risk-foot {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  margin-top: var(--space-1);
+}
+
+.verdict-row {
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: 34px 80px 90px 1fr;
+  gap: 14px;
+  align-items: center;
+  padding: 9px 0;
+  font-size: 13px;
+}
+
+.verdict-row:hover {
+  background: rgb(var(--border-rgb) / 0.25);
+}
+
+.verdict-list li + li .verdict-row {
+  border-top: 1px solid rgb(var(--border-rgb) / 0.6);
+}
+
+/* ---------- live ---------- */
+
+.live,
+.review {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 460px;
+  min-height: 100vh;
+}
+
+.lanes,
+.review-main {
+  padding: var(--space-6) var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.lane {
+  display: grid;
+  grid-template-columns: 70px repeat(6, minmax(0, 1fr));
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.lane-header {
+  padding: var(--space-1) 14px 0;
+}
+
+.lane-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.lane-list .lane {
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgb(var(--ink-rgb) / 0.5);
+  padding: 10px 14px;
+}
+
+.lane-list .lane:hover {
+  border-color: var(--muted);
+}
+
+.lane-in_flight {
+  border-color: rgb(var(--cyan-rgb) / 0.4);
+}
+
+.lane-idle {
+  opacity: 0.6;
+}
+
+.lane-selected,
+.lane-list .lane-selected {
+  background: rgb(var(--lacquer-rgb) / 0.14);
+  border-color: rgb(var(--gold-rgb) / 0.5);
+}
+
+.lane-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+}
+
+.lane-decision {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* ---------- drawer ---------- */
+
+.drawer {
+  border-left: 1px solid var(--border);
+  background: var(--panel);
+  padding: 28px var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+
+.drawer h3 {
+  margin-bottom: 0;
+}
+
+.drawer h3 + * {
+  margin-top: -10px;
+}
+
+.drawer-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.drawer-head h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.drawer-trace {
+  margin-left: auto;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drawer-line {
+  margin: 0;
+  font-size: 13px;
+}
+
+.drawer-caveat {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.timeline-row {
+  display: grid;
+  grid-template-columns: 130px 1fr auto;
+  gap: var(--space-2);
+  align-items: baseline;
+}
+
+.timeline-stage {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.timeline-decision {
+  color: var(--muted);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.gate-line,
+.condition-list li {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  margin: 0;
+  font-size: 13px;
+}
+
+.gate-line + .gate-line,
+.condition-list {
+  margin-top: 6px;
+}
+
+.condition-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.stance-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 13px;
+}
+
+.stance-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  gap: 10px;
+  align-items: center;
 }
 
 .stance-strip {
   display: inline-flex;
   gap: 3px;
-  align-items: center;
 }
 
 .stance-mark {
-  width: 11px;
-  height: 11px;
-  border-radius: 3px;
-  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
   background: var(--muted);
 }
 
@@ -1036,662 +837,223 @@ main {
   background: var(--muted);
 }
 
-.stance-empty,
+.stance-empty {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .stance-final,
 .stance-influence {
-  color: var(--muted);
-  font-size: 10px;
-}
-
-.stance-influence {
-  margin-left: auto;
-}
-
-.legend {
-  display: flex;
-  gap: 14px;
-  flex-wrap: wrap;
-  font-size: 10px;
-  color: var(--muted);
-  margin-top: 10px;
-}
-
-.legend i {
-  margin-right: 5px;
-  vertical-align: -1px;
-}
-
-.legend-note {
-  margin-left: auto;
-}
-
-/* ------------------------------------------------------------- positions */
-
-.position-card {
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  padding: 12px 14px;
-  margin-bottom: 10px;
-  background: rgb(var(--ink-rgb) / 0.5);
-}
-
-.position-top {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-bottom: 12px;
-}
-
-.position-symbol {
-  font-family: var(--font-display);
-  font-weight: 600;
-  font-size: 14px;
-  letter-spacing: 0.06em;
-}
-
-.side {
-  font-size: 10px;
-  letter-spacing: 0.12em;
-  font-weight: 600;
-  padding: 1px 7px;
-  border-radius: 4px;
-  border: 1px solid;
-  text-transform: uppercase;
-}
-
-.side-buy {
-  color: var(--go);
-  border-color: rgb(var(--go-rgb) / 0.5);
-}
-
-.side-sell {
-  color: var(--vermilion);
-  border-color: rgb(var(--vermilion-rgb) / 0.5);
-}
-
-.position-size {
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.position-pnl {
-  margin-left: auto;
-  font-family: var(--font-mono);
-  font-weight: 600;
-  font-size: 15px;
-}
-
-/*
- * Tall enough for the mark's label above the rail and THREE stacked label rows
- * below it (#540). The height is a constant, not a function of how far apart
- * this snapshot's prices happen to be: a poll must never change the page's
- * geometry (spec, "WorldMonitor Deferred-Shell Contract"), and a rail that
- * grew a row when a stop tightened would reflow the whole positions panel.
- */
-.rail-wrap {
-  position: relative;
-  height: 58px;
-  margin: 18px 0 6px;
-}
-
-.rail {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 11px;
-  height: 3px;
-  border-radius: 2px;
-  background: var(--border);
-}
-
-.rail-tick {
-  position: absolute;
-  top: 4px;
-  width: 2px;
-  height: 17px;
-  border-radius: 1px;
-}
-
-/*
- * One row per below-rail label, assigned left-to-right in `PositionsPanel`, so
- * two labels cannot overlap however tightly the prices cluster — which is
- * precisely when the rail is worth reading.
- */
-.rail-label {
-  position: absolute;
-  top: calc(18px + var(--rail-row, 0) * 13px);
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 9px;
-  line-height: 13px;
-  color: var(--muted);
-  font-family: var(--font-mono);
-  white-space: nowrap;
-}
-
-/* An outermost label anchors to its marker rather than straddling it, so the
-   price at either end of the axis cannot overflow the position card. */
-.rail-label-start {
-  left: 0;
-  transform: none;
-}
-
-.rail-label-end {
-  left: auto;
-  right: 0;
-  transform: none;
-}
-
-.rail-stop {
-  background: var(--vermilion);
-}
-
-.rail-entry {
-  background: var(--muted);
-}
-
-.rail-target {
-  background: var(--go);
-}
-
-.rail-mark {
-  background: var(--cyan);
-  height: 22px;
-  top: 2px;
-}
-
-.rail-mark .rail-label {
-  top: -14px;
-  color: var(--cyan);
-}
-
-.position-meta {
-  display: flex;
-  gap: 14px;
-  flex-wrap: wrap;
-  margin-top: 14px;
-  font-size: 11px;
-  color: var(--muted);
-  font-family: var(--font-mono);
-}
-
-/* ------------------------------------------------------------- closed trades */
-
-/* Same card chrome as `.position-card` — a closed trade is the same kind of
-   row, one step later in its life — but named separately (#940) so the two
-   panels can diverge without one's tuning silently reaching the other. */
-.trade-card {
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  padding: 12px 14px;
-  margin-bottom: 10px;
-  background: rgb(var(--ink-rgb) / 0.5);
-}
-
-.trade-top {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-bottom: 10px;
-}
-
-.trade-symbol {
-  font-family: var(--font-display);
-  font-weight: 600;
-  font-size: 14px;
-  letter-spacing: 0.06em;
-}
-
-.trade-size {
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.close-reason {
-  font-size: 10px;
-  letter-spacing: 0.1em;
-  font-weight: 600;
-  padding: 1px 6px;
-  border-radius: 4px;
-  border: 1px solid var(--border);
-  text-transform: uppercase;
+  font-size: 12px;
   color: var(--muted);
 }
 
-.trade-pnl {
-  margin-left: auto;
-  font-family: var(--font-mono);
-  font-weight: 600;
-  font-size: 15px;
-}
-
-.trade-meta {
-  display: flex;
-  gap: 14px;
-  flex-wrap: wrap;
-  font-size: 11px;
-  color: var(--muted);
-  font-family: var(--font-mono);
-}
-
-.trade-fills {
-  list-style: none;
-  margin: 10px 0 0;
-  padding: 8px 0 0;
-  border-top: 1px solid var(--border);
-}
-
-.trade-fill-row {
-  display: flex;
-  gap: 10px;
-  align-items: baseline;
-  font-size: 10px;
-  font-family: var(--font-mono);
-  color: var(--muted);
-  padding: 2px 0;
-  flex-wrap: wrap;
-}
-
-.trade-fill-leg {
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text);
-}
-
-.trade-fill-id {
-  margin-left: auto;
-  opacity: 0.7;
-}
-
-/* --------------------------------------------------------------- metrics */
-
-.stat-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-  gap: 10px;
-}
-
-.stat,
-.spend-cell {
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  padding: 10px 12px;
-  background: rgb(var(--ink-rgb) / 0.5);
+.fill-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-}
-
-.stat-label {
-  font-size: 9px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--muted);
-  font-weight: 600;
-}
-
-.stat-value {
-  font-size: 19px;
-  font-weight: 600;
-}
-
-.stat-note {
-  font-size: 10px;
-  color: var(--muted);
-}
-
-.spark-figure {
-  margin: 14px 0 0;
-}
-
-.spark {
-  max-width: 100%;
-}
-
-.spark-line {
-  fill: none;
-  stroke: var(--lacquer);
-  stroke-width: 2;
-  stroke-linecap: round;
-}
-
-.spark-fill {
-  fill: rgb(var(--lacquer-rgb) / 0.14);
-  stroke: none;
-}
-
-/* -------------------------------------------------------------- analysts */
-
-.analyst-row {
-  display: grid;
-  grid-template-columns: 96px 1fr 48px 66px 88px;
-  gap: 10px;
-  align-items: center;
-  padding: 6px 0;
-  border-bottom: 1px solid rgb(var(--border-rgb) / 0.5);
+  gap: 5px;
   font-size: 12px;
 }
 
-.analyst-row:last-child {
-  border-bottom: 0;
+/* ---------- review ---------- */
+
+.review-main {
+  gap: 20px;
 }
 
-.analyst-name {
-  font-family: var(--font-mono);
-  font-size: 11px;
-}
-
-.analyst-bar {
-  height: 6px;
-  border-radius: 3px;
-  background: var(--border);
-  position: relative;
-  overflow: hidden;
-  display: block;
-}
-
-.analyst-bar i {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  background: var(--lacquer);
-  border-radius: 3px;
-}
-
-.analyst-bar-missing,
-.analyst-window {
-  font-size: 10px;
-  color: var(--muted);
-}
-
-.analyst-weight,
-.analyst-r {
-  text-align: right;
-  font-size: 11px;
-}
-
-/* ----------------------------------------------------------------- spend */
-
-.spend-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
-.kv-list {
-  margin: 0;
-}
-
-.kv {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: 11px;
-  padding: 3px 0;
-  font-family: var(--font-mono);
-  color: var(--muted);
-}
-
-.kv dt {
-  margin: 0;
-}
-
-.kv dd {
-  margin: 0;
+.review-title {
+  font-size: 16px;
+  text-transform: none;
+  letter-spacing: 0;
   color: var(--text);
 }
 
-/* --------------------------------------------------------------- debates */
-
-.debate-row {
-  padding: 8px 0;
-  border-bottom: 1px solid rgb(var(--border-rgb) / 0.5);
+.review-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-4);
+  align-items: start;
 }
 
-.debate-row:last-child {
-  border-bottom: 0;
-}
-
-.debate-head {
+.review-arms {
   display: flex;
-  gap: 10px;
-  align-items: baseline;
-  font-family: var(--font-mono);
-  font-size: 12px;
+  flex-direction: column;
+  gap: var(--space-4);
 }
 
-.debate-rounds,
-.debate-time {
-  color: var(--muted);
-  font-size: 11px;
+.tile-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 16px;
 }
 
-.debate-time {
-  margin-left: auto;
+.tile {
+  display: flex;
+  flex-direction: column;
 }
 
-.direction {
-  font-size: 10px;
+.tile-value {
+  font-size: 22px;
   font-weight: 600;
-  letter-spacing: 0.1em;
-  padding: 1px 6px;
-  border-radius: 4px;
-  border: 1px solid;
-  text-transform: uppercase;
+  line-height: 1.2;
 }
 
-.direction-bullish {
-  color: var(--go);
-  border-color: rgb(var(--go-rgb) / 0.5);
+.card .kv-list {
+  margin-top: 12px;
 }
 
-.direction-bearish {
-  color: var(--vermilion);
-  border-color: rgb(var(--vermilion-rgb) / 0.5);
-}
-
-.direction-neutral {
-  color: var(--muted);
-  border-color: var(--border);
-}
-
-/* --------------------------------------------------- prefers-reduced-motion
- *
- * Motion rule 5: snap, with a settle ring. Suppression is scoped to bob,
- * shimmer, power-on and the hanko stamp — NOT a blanket
- * `*{animation-duration:.01ms}`, which would kill `.chip-settled` (the ring is
- * a static box-shadow, but a blanket rule also collapses the chip's transform
- * transition to zero, and with it the only signal that reduced motion is meant
- * to preserve). The walk itself is already suppressed upstream: the planner
- * emits snaps, so no chip crosses the screen regardless of what CSS allows.
- */
-@media (prefers-reduced-motion: reduce) {
-  .chip-bob,
-  .chip-shimmer::after,
-  .room,
-  .ledger-row-stamped .seal,
-  .chip {
-    animation: none;
-  }
-
-  .chip {
-    transition: box-shadow 0.3s;
-  }
-}
-
-/* --------------------------------------------------------- arm comparison */
-
-/* #971 — falsifier arm 2 against the live arm. The two arm rows are laid out
-   identically on purpose: the panel's whole claim is that the arms are matched,
-   and a control styled as a footnote to the live arm would undercut it. */
-.arm-window {
-  margin: 0 0 10px;
-  font-size: 11px;
-  color: var(--muted);
-  font-family: var(--font-mono);
+.card .small {
+  margin: 10px 0 0;
 }
 
 .arm-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: 13px;
 }
 
 .arm-row {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-  align-items: baseline;
-  padding: 8px 10px;
-  margin-bottom: 8px;
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  background: rgb(var(--ink-rgb) / 0.5);
-  font-size: 11px;
-  font-family: var(--font-mono);
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px var(--space-3);
 }
 
-.arm-name {
-  font-family: var(--font-display);
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  font-size: 12px;
+.arm-row .small {
+  grid-column: 1 / -1;
+  margin: 0;
 }
 
 .arm-pnl {
-  margin-left: auto;
   font-weight: 600;
+  font-size: 16px;
 }
 
-.arm-divergence {
-  margin: 0 0 10px;
-  font-size: 11px;
-  font-weight: 600;
+.arm-verdict {
+  margin: 10px 0 0;
+  font-size: 13px;
+}
+
+.arm-diverged {
   color: var(--vermilion);
 }
 
-.arm-divergence.arm-ok,
-.arm-divergence.arm-below-floor {
+.arm-below-floor {
   color: var(--muted);
-  font-weight: 400;
 }
 
 .arm-trend {
-  list-style: none;
-  margin: 0 0 10px;
-  padding: 8px 0 0;
-  border-top: 1px solid var(--border);
-  font-size: 10px;
-  font-family: var(--font-mono);
-  color: var(--muted);
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
 }
 
 .arm-trend li {
   display: flex;
-  gap: 12px;
+  gap: var(--space-3);
   flex-wrap: wrap;
-  padding: 2px 0;
 }
 
 .arm-trend-diverged {
   color: var(--vermilion);
 }
 
-/*
- * `.arm-trend-below-floor` carries no rule here on purpose: a below-floor row
- * is an absent verdict, not an escalation, so it stays at `.arm-trend`'s own
- * muted colour rather than taking `.arm-trend-diverged`'s alert colour (#982).
- * The "below floor" word in the row's own markup is what distinguishes it,
- * not colour.
- */
-
-.arm-caveat {
-  margin: 0;
-  font-size: 10px;
-  line-height: 1.5;
+.arm-trend-below-floor {
   color: var(--muted);
-}
-
-/*
- * Outside benchmarks (#981) — the arm comparison's quieter companion.
- *
- * #981: the outside benchmark "must not be laid out so it reads as the thing to
- * beat". The visual weight here is deliberately BELOW `.panel-arm-comparison`'s,
- * and the difference is carried by more than opacity:
- *
- *  - there is NO alert colour anywhere in this block. `.arm-divergence` can go
- *    `--vermilion` because a diverged control is a falsifying result; a
- *    benchmark has no verdict to escalate, so nothing here may ever take a
- *    state colour. The panel would have nothing to compute one from either —
- *    `OutsideBenchmarkRow` carries no `diverged` field.
- *  - the rows sit at `.arm-row`'s size but WITHOUT its filled background and
- *    with a dashed border, so a glance separates "the control" from "context"
- *    before any text is read;
- *  - and the panel says "secondary context, not the control" in words, because
- *    colour and weight are never the sole carrier of a signal on this page.
- */
-.panel-secondary .panel-head h2 {
-  color: var(--muted);
-}
-
-.benchmark-window {
-  margin: 0 0 10px;
-  font-size: 11px;
-  color: var(--muted);
-  font-family: var(--font-mono);
 }
 
 .benchmark-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  margin-top: 10px;
 }
 
 .benchmark-row {
   display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-  align-items: baseline;
-  padding: 6px 10px;
-  margin-bottom: 6px;
-  /* Dashed, and no background fill: the arm rows are the solid ones. */
-  border: 1px dashed var(--border);
-  border-radius: 9px;
-  font-size: 11px;
-  font-family: var(--font-mono);
-  color: var(--muted);
+  flex-direction: column;
 }
 
-.benchmark-name {
-  font-family: var(--font-display);
-  font-weight: 500;
-  letter-spacing: 0.06em;
-  font-size: 11px;
+.analyst-list {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  font-size: 13px;
 }
 
-.benchmark-observations {
-  margin-left: auto;
+.analyst-row {
+  display: grid;
+  grid-template-columns: 110px 1fr 44px;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.analyst-row .track {
+  margin-top: 0;
+}
+
+.analyst-weight {
+  text-align: right;
+}
+
+.analyst-row .small {
+  grid-column: 1 / -1;
+  margin: -4px 0 0;
+}
+
+.trade-row {
+  display: grid;
+  grid-template-columns: 90px 80px 130px 70px 110px 1fr 90px;
+  gap: var(--space-3);
+  align-items: center;
+  padding: 10px var(--space-3);
+  font-size: 13px;
+}
+
+.trade-header {
+  padding-top: 0;
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.trade-list li .trade-row {
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid rgb(var(--border-rgb) / 0.6);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.trade-list li .trade-row:hover {
+  background: rgb(var(--border-rgb) / 0.25);
+}
+
+.trade-list li .trade-row-selected {
+  background: rgb(var(--lacquer-rgb) / 0.14);
+  outline: 1px solid rgb(var(--gold-rgb) / 0.5);
+}
+
+.trade-why {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trade-pnl {
+  text-align: right;
+  font-weight: 600;
 }
 
 /*
- * "Not measured this cycle" is muted, never an alert colour: an absent
- * benchmark is a missing measurement, not a breach. It is stated in words for
- * exactly that reason.
+ * There is no `prefers-reduced-motion` block because there is nothing to
+ * reduce: v3 declares no transition and no animation anywhere. Keep it that
+ * way — a page that watches live money must never pulse.
  */
-.benchmark-unmeasured {
-  margin: 0 0 10px;
-  font-size: 10px;
-  color: var(--muted);
-  font-family: var(--font-mono);
-}
-
-.benchmark-caveat {
-  margin: 0;
-  font-size: 10px;
-  line-height: 1.5;
-  color: var(--muted);
-}

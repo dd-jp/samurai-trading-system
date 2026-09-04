@@ -146,3 +146,50 @@ export function barWidth(fraction: number): string | null {
   if (!Number.isFinite(fraction)) return null;
   return `${Math.min(100, Math.max(0, fraction * 100)).toFixed(1)}%`;
 }
+
+/** `+1.87%` / `−0.40%`, sign always explicit — colour is never the only carrier. */
+export function formatSignedPercent(fraction: number, digits = 2): string {
+  if (!Number.isFinite(fraction)) return EM_DASH;
+  const sign = fraction < 0 ? MINUS : '+';
+  return `${sign}${(Math.abs(fraction) * 100).toFixed(digits)}%`;
+}
+
+/**
+ * A quantity of an instrument. Whole units print as an integer; a fractional
+ * fill keeps up to four decimals, which is the precision the store carries.
+ */
+export function formatQty(value: number): string {
+  if (!Number.isFinite(value)) return EM_DASH;
+  if (Number.isInteger(value)) return String(value);
+  return value.toFixed(4).replace(/0+$/, '');
+}
+
+/** How long a trade was held: `41m`, `1h 12m`, `2d 3h`. */
+export function formatHeld(fromIso: string, toIso: string): string {
+  const from = Date.parse(fromIso);
+  const to = Date.parse(toIso);
+  if (Number.isNaN(from) || Number.isNaN(to) || to < from) return EM_DASH;
+  const minutes = Math.round((to - from) / 60_000);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ${String(minutes % 60).padStart(2, '0')}m`;
+  return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+}
+
+/** The UTC calendar date of an ISO timestamp, `YYYY-MM-DD`; `—` if unparseable. */
+export function formatDateUtc(iso: string): string {
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return EM_DASH;
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+/**
+ * A timestamp for a list that spans days: the clock alone when it falls on
+ * `todayIso`'s UTC date, the date otherwise. Saves the operator reading a
+ * date on every row of a list that is mostly today.
+ */
+export function formatWhen(iso: string, todayIso: string): string {
+  const day = formatDateUtc(iso);
+  if (day === EM_DASH) return EM_DASH;
+  return day === formatDateUtc(todayIso) ? formatClockUtc(iso) : day;
+}

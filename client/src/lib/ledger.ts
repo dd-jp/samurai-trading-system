@@ -61,7 +61,7 @@ export function createLedger(): LedgerState {
   return { entries: [], seen: new Set() };
 }
 
-function settledOutcome(outcome: PipelineOutcome): SettledOutcome | null {
+export function settledOutcome(outcome: PipelineOutcome): SettledOutcome | null {
   switch (outcome) {
     case 'go':
     case 'no_go':

@@ -1,8 +1,8 @@
 # Dashboard Specification
 
-**Status:** Draft (v2 — mission control; resolved wayfinder decisions synthesized)
+**Status:** Draft (v3 — the Rail; resolved wayfinder decisions synthesized)
 **Owner:** David (Deepak)
-**Date:** 2026-08-07 (v2 rewrite; supersedes the 2026-07-21 two-tab spec, which superseded the 2026-07-14 CLI spec — see "Further Notes")
+**Date:** 2026-09-04 (v3 rewrite; supersedes the 2026-08-07 mission-control spec, which superseded the 2026-07-21 two-tab spec, which superseded the 2026-07-14 CLI spec — see "Further Notes")
 
 ## Problem Statement
 
@@ -10,7 +10,9 @@ Every other component in this system writes to the shared SQLite store — posit
 
 **The Dashboard** is that missing operator view: a read-only web tool an operator opens in a browser on (or on the LAN of) the same MacBook the Orchestrator runs on, to see what the system holds, what it decided, and how it's performing — without touching anything.
 
-**What v2 changes.** v1 answered the question and read as a debug page: two tabs, four tables, and a stage rail whose chips teleported. The system it describes is a machine with six rooms that instruments walk through, and the page should read that way at a glance from across the desk. v2 is a wholesale UI rewrite — one mission-control screen, a pipeline theater as its hero, a verdict ledger as its permanent record — with **no change to what the backend computes**. Every datum v1 showed still appears (see "Information Inventory"); the honesty conventions v1 established are unchanged and, in the motion rules, sharpened.
+**What v3 changes.** v2 (2026-08-07) put everything on one mission-control screen with a rooms grid as its hero and chips that walked between rooms on recorded transitions. David rejected it on 2026-09-04 on **layout and density** — nothing was first, the hero spent itself on a metaphor while the per-stage record hid in a drawer, and P&L weighed the same as a latency percentile. v3 is a from-scratch client rewrite to the **Rail** design locked that day ([ADR-0021](../adr/0021-dashboard-v3-rail-layout.md), map [#1090](https://github.com/dd-jp/samurai-trading-system/issues/1090)): three tabs (Glance, Live, Review) behind a persistent left rail, a lane matrix for the pipeline, a detail drawer, larger type, no motion — with **no change to what the backend computes**. Every datum v2 showed still appears (see "Information Inventory", re-homed); every honesty convention v1 and v2 established is unchanged.
+
+**What v2 changed**, for the record: v1 read as a debug page — two tabs, four tables, a stage rail whose chips teleported — and v2 replaced it with the mission-control screen described above, reversing v1's no-framework and no-motion rules ([ADR-0010](../adr/0010-dashboard-vite-react-rewrite.md), [ADR-0011](../adr/0011-pipeline-theater-replay-motion.md)). ADR-0010 stands; ADR-0011 is superseded by ADR-0021.
 
 ## Solution
 
@@ -25,43 +27,49 @@ Key architectural decisions:
 - **Client-side polling refresh at 3s** — the page re-fetches `/api/snapshot` on an interval; no push, no SSE, no WebSocket. Explicitly re-affirmed for v2 ([map #533](https://github.com/dd-jp/samurai-trading-system/issues/533) decision 4): the animation runs off what two polls recorded, which needs no new transport.
 - **One payload, one `as_of`** — everything the screen renders comes from a single `DashboardSnapshot`. A second endpoint would let panels disagree about what time it is.
 - **A built React client, not a hand-rolled HTML string** — reverses v1's no-framework/no-build-step decision. See [ADR-0010](../adr/0010-dashboard-vite-react-rewrite.md). Runtime dependencies are unchanged: `react`/`vite`/`@fontsource` are **devDependencies** compiled to static assets, and `better-sqlite3` stays the only entry in `dependencies`.
-- **Motion is replay, never interpolation** — a persona walks only along transitions the store actually recorded. Reverses v1's "no transit animation" rule. See [ADR-0011](../adr/0011-pipeline-theater-replay-motion.md) and "Motion" below.
+- **No motion.** Nothing on the page animates; a poll repaints and the rail's clock says when. v2's replay motion ([ADR-0011](../adr/0011-pipeline-theater-replay-motion.md)) is superseded by [ADR-0021](../adr/0021-dashboard-v3-rail-layout.md) — see "Motion" below.
+- **Three tabs behind one rail** — Glance, Live and Review are separate surfaces because they answer questions asked at different moments; the rail keeps health, mode, budgets and the clock in view on all three. Tab state lives in the URL hash so a bookmark opens the right tab.
 - **"Pending debates" scope reduction, explicitly flagged** — the Debate Engine doesn't persist in-flight round state (decision #10, unchanged); the screen shows recent completed debates plus a coarse "tick in progress" line from the Orchestrator, not a live debate-round view.
 - **No interactivity beyond viewing** — selection, drawers and keyboard navigation only. No manual overrides, no kill-switch, no config editing. `GET` is the only method the server implements.
 - **LAN-only, and `HOST` alone no longer opts in** — binds `127.0.0.1` by default; reachability from another device on the operator's LAN needs a `HOST` outside the loopback allowlist **and** a configured (non-empty) `SAMURAI_DASHBOARD_TOKEN` — `HOST` alone now makes the server refuse to start ([ADR-0019](../adr/0019-dashboard-hosting-topology.md), [#887](https://github.com/dd-jp/samurai-trading-system/issues/887)). No per-request auth, no HTTPS, no public exposure.
-- **Test seams: `buildSnapshot` on the server, pure `lib/` modules on the client** — the walk plan, room layout and ledger are pure functions of two snapshots, unit-tested without a DOM.
+- **Test seams: `buildSnapshot` on the server, pure `lib/` modules on the client** — the ledger, the Glance figures (P&L today, open risk) and the trace joins are pure functions of snapshot rows, unit-tested without a DOM.
 
 ### Visual source of truth
 
-`docs/prototypes/dashboard-v2-mission-control.html` is a self-contained, offline-openable prototype of this screen, chosen by David on 2026-08-07 over a "Gate Path" transit-row alternative. It is the reference for layout, spacing, palette in situ, room grid, sigil chips, hanko stamps and walk feel. Two caveats for whoever implements against it:
+The **Rail design canvas** locked by David on 2026-09-04 (design session; three directions drawn, two further variations of the Rail, one comment fixed, then locked) is the reference for layout, the rail's contents, the lane matrix, the drawers, type sizes and the restrained motif. Its decisions are recorded in [ADR-0021](../adr/0021-dashboard-v3-rail-layout.md) and on map [#1090](https://github.com/dd-jp/samurai-trading-system/issues/1090). Two caveats for whoever implements against it:
 
-- The prototype's **"protobar"** (the floating layout/scenario toggles) is a prototyping affordance only and must not ship.
-- The prototype runs on scripted fixtures, so its animation is unconstrained by recorded data. **This spec's Motion section wins over the prototype wherever they differ** — the prototype shows what a walk should look like, not when one is allowed.
+- The canvas drew a **£30 daily-loss stop, a three-position cap, a flat-by-close countdown and GBP figures**. None of those are on `DashboardSnapshot`; the page renders only what the wire carries and stays in USD. **This spec's "Layout" section wins over the canvas wherever they differ.**
+- `docs/prototypes/dashboard-v2-mission-control.html` is the **v2** record and is no longer a source of truth for anything on screen.
 
 ## Information Inventory
 
-Every datum v1 rendered must survive the rewrite ([map #533](https://github.com/dd-jp/samurai-trading-system/issues/533) decision 1). This table is the checklist a reviewer walks to prove nothing was lost; it is the acceptance instrument for the component tickets.
+Every datum v1 rendered must survive each rewrite ([map #533](https://github.com/dd-jp/samurai-trading-system/issues/533) decision 1, re-affirmed for v3 on [#1090](https://github.com/dd-jp/samurai-trading-system/issues/1090)). This table is the checklist a reviewer walks to prove nothing was lost; it is the acceptance instrument for the component tickets.
 
-| Datum | Wire source | v2 home |
+| Datum | Wire source | v3 home |
 | --- | --- | --- |
-| Run mode (paper/live) | `mode` (see "Wire Shape") | Telemetry strip |
-| Snapshot clock, staleness | `generated_at` / `as_of` | Telemetry strip |
-| Tick in progress (instrument, stage, trace) | `tick_status` | Telemetry strip live-tick readout |
-| Alpaca cash / equity / buying power | `providers.alpaca.balance` (null unless `state === 'ok'`) | Telemetry strip |
-| Polygon reachability + detail | `providers.polygon.state` / `.detail` | Telemetry strip, as a coloured word |
-| LLM spend vs the ADR-0008 cap | `llm_spend.all_time.cost_usd` | Telemetry strip burn meter |
-| Open positions: instrument, side, filled size, avg entry, stop, target, mark, unrealized PnL, order state, opened at | `positions[]` | Bento → Positions (price rail) |
-| Recent debates: direction, rounds, per-analyst final position, influence, per-round stance | `debates[]` | Bento → Recent debates (stance strips); full detail in drawer |
-| Verdict history: status, gate/reason, HITL override, trace id, timestamp | `verdicts[]` | Verdict ledger |
-| Settled lanes that never reach Verdict (`stopped`, `quorum_skip`) | `pipeline.lanes[]` | Verdict ledger (see "Verdict ledger") |
-| Analyst weights, rolling-R, window days | `analysts[]` | Bento → Analysts |
-| Full `MetricsSuite` — Sharpe, Sortino, Calmar, max drawdown, profit factor, expectancy, skew/kurtosis, turnover, exposure | `metrics` | Bento → Metrics suite (reported together, never one number) |
-| LLM spend 24h / 7d / all-time, per-debate cost p50/p95, LLM latency p50/p95, `unpriced_calls`, `unattributed_calls` | `llm_spend` | Bento → LLM spend |
-| Per-instrument pipeline position | `pipeline.lanes[].cells[].state` | Rooms hero — sigil chip placement |
-| Per-stage record: state, duration, decision, attempts, recorded time | `pipeline.lanes[].cells[]` | Drawer → stage strip |
-| Trace outcome, final stage, started at, total ms | `pipeline.lanes[]` | Chip outcome ring + drawer header |
-| Live trace + when it entered its stage | `pipeline.live_trace_id` / `live_entered_at` | Telemetry strip + live-room glow |
-| Invalidation: conditions with evaluation states, validator-dropped conditions with reasons, `no_conditions` vs the critic verdict's `unavailable`, and the binding constraint the Risk decision was reached under | `risk_critics[]` (**built 2026-09-03, [#1066](https://github.com/dd-jp/samurai-trading-system/issues/1066)**) — projected from `risk_log` joined through `trader_log` to `risk_critic_log.conditions_json` / `dropped_conditions_json` (`RiskCriticVerdict.conditions` / `dropped_conditions`, migration 0040), which hold the data since [#994](https://github.com/dd-jp/samurai-trading-system/issues/994)'s fold; there is no `thesis_restated` (dropped, cross-spec-contracts.md §8) | Drawer → invalidation section |
+| Run mode (paper/live) | `mode` (see "Wire Shape") | Rail — mode pill |
+| Snapshot clock, staleness | `generated_at` / `as_of` | Rail — ALIVE/STALE word, poll clock, snapshot clock |
+| Tick in progress (instrument, stage, trace) | `tick_status` | Rail — live tick block |
+| Alpaca cash / equity / buying power | `providers.alpaca.balance` (null unless `state === 'ok'`) | Rail — providers block (equity); Glance uses equity as the denominator for "% of equity" and "deployed of" |
+| Polygon reachability + detail | `providers.polygon.state` / `.detail` | Rail — providers block, as a coloured word |
+| LLM spend vs the ADR-0008 cap | `llm_spend.all_time.cost_usd` | Rail — LLM cap bar |
+| Open positions: instrument, side, filled size, avg entry, stop, target, mark, unrealized PnL, order state, opened at | `positions[]` | Glance → Open risk (one row per position with the stop→target track); Live drawer → Order and fills |
+| Recent debates: direction, rounds, per-analyst final position, influence, per-round stance | `debates[]` | Live drawer → Debate (stance strips); Review drawer → Debate (joined by `debate_id`); Review table → "why taken" summary |
+| Verdict history: status, gate/reason, HITL override, trace id, timestamp | `verdicts[]` | Glance → Verdicts this session; both drawers' gate line |
+| Settled lanes that never reach Verdict (`stopped`, `quorum_skip`) | `pipeline.lanes[]` | Glance → Verdicts this session (see "Verdicts this session") |
+| Analyst weights, rolling-R, window days | `analysts[]` | Review → Analysts card |
+| Full `MetricsSuite` — Sharpe, Sortino, Calmar, max drawdown, profit factor, expectancy, skew/kurtosis, turnover, exposure | `metrics` | Review → Metrics suite (reported together, never one number); max drawdown also drives the rail's drawdown bar |
+| LLM spend 24h / 7d / all-time, `unpriced_calls`, `unattributed_calls` | `llm_spend` | Rail — LLM cap bar with the three windows and the unpriced-calls floor caveat |
+| Per-instrument pipeline position | `pipeline.lanes[].cells[].state` | Live → lane matrix, one row per instrument, six cells |
+| Per-stage record: state, duration, decision, attempts, recorded time | `pipeline.lanes[].cells[]` | Live drawer → stage timeline; Review drawer → stages (when the trace is still in the window) |
+| Trace outcome, final stage, started at, total ms | `pipeline.lanes[]` | Lane's seal, outcome word and accessible name; drawer header |
+| Live trace + when it entered its stage | `pipeline.live_trace_id` / `live_entered_at` | Rail — live tick block; the running lane's `live` cell |
+| Closed trades: entry/exit, size, net P&L, fees, opened/closed, close reason | `closed_trades[]` | Review → closed-trade table; Review drawer → P&L breakdown (gross, fees, net) |
+| Fills per order key | `fills[]` | Live drawer (open position) and Review drawer (closed trade) → Fills |
+| Arm comparison and outside benchmarks | `arm_comparison[]` / `outside_benchmarks[]` | Review → Live vs matched control card; Outside benchmarks card (secondary) |
+| Invalidation: conditions with evaluation states, validator-dropped conditions with reasons, `no_conditions` vs the critic verdict's `unavailable`, and the binding constraint the Risk decision was reached under | `risk_critics[]` (**built 2026-09-03, [#1066](https://github.com/dd-jp/samurai-trading-system/issues/1066)**) — projected from `risk_log` joined through `trader_log` to `risk_critic_log.conditions_json` / `dropped_conditions_json` (`RiskCriticVerdict.conditions` / `dropped_conditions`, migration 0040), which hold the data since [#994](https://github.com/dd-jp/samurai-trading-system/issues/994)'s fold; there is no `thesis_restated` (dropped, cross-spec-contracts.md §8) | Both drawers → Gates and conditions (Live keyed by `trace_id`+instrument, Review by `debate_id`) |
+
+**Dropped from the screen in v3, deliberately:** per-debate cost p50/p95 and LLM latency p50/p95. They are still on the wire (`llm_spend.*.per_debate`) and reachable by `curl`; the rail's cap bar carries the figure that changes an operator's behaviour (cost against the cap, and whether it is a floor). Re-adding them is a card on Review, not a wire change.
 
 **The invalidation section is required, not optional — and it is now built ([#1066](https://github.com/dd-jp/samurai-trading-system/issues/1066), 2026-09-03).** It arrives from [devils-advocate-spec.md](devils-advocate-spec.md) via [Wayfinder: Devil's Advocate](https://github.com/dd-jp/samurai-trading-system/issues/291) as a mandated dashboard surface. The standalone stage that spec designed it for was declined 2026-09-02; [#994](https://github.com/dd-jp/samurai-trading-system/issues/994) folded its mechanism into the Risk Critic, and #1066 wired that onto the dashboard wire and into the drawer's reserved slot — so the layout did not move when it landed, which is what reserving it was for. Stories 4a–4c below are acceptance criteria now, not a forward contract.
 
@@ -120,19 +128,19 @@ Added by [Wayfinder: Devil's Advocate](https://github.com/dd-jp/samurai-trading-
 19a. As an operator, I want all-time spend drawn as a **burn meter against the $50 cap**, so that "how much runway is left" is readable without arithmetic.
 20. As an operator, I want per-*decision* cost and LLM latency at p50/p95, so that I can answer "what does one debate cost me, and is round 3 earning its latency?" rather than only "what did today cost".
 
-### Pipeline theater (v2 hero — supersedes the v1 stage-rail tab)
+### Pipeline lanes (v3 Live tab — supersedes v2's rooms theater)
 
-Charted in [Wayfinder: dashboard v2 — mission-control rewrite (Vite+React) + rooms pipeline theater](https://github.com/dd-jp/samurai-trading-system/issues/533), which supersedes the pipeline-tab portions of [#411](https://github.com/dd-jp/samurai-trading-system/issues/411)/[#412](https://github.com/dd-jp/samurai-trading-system/issues/412). The tables answer *what the system holds and what it decided*; the theater answers *where each instrument is in the pipeline right now, and where the last one stopped* — and it is now the top of the screen rather than a second tab.
+Charted in [Wayfinder map: dashboard v3 — Rail client rewrite](https://github.com/dd-jp/samurai-trading-system/issues/1090), which supersedes the rooms-theater portions of [#533](https://github.com/dd-jp/samurai-trading-system/issues/533) (which in turn superseded the pipeline-tab portions of [#411](https://github.com/dd-jp/samurai-trading-system/issues/411)/[#412](https://github.com/dd-jp/samurai-trading-system/issues/412)). The Review tab answers *what the system decided and how it is doing*; the Live tab answers *where each instrument is in the pipeline right now, and where the last one stopped*.
 
-**Primitive: rooms, not a rail.** Six numbered rooms (01–06) plus a Lobby, laid out as a **4×2 grid**, with one **sigil chip** per instrument standing in the room its trace last reached. Chosen over the v1 rail and over a "Gate Path" transit row (both prototyped; David chose Rooms on 2026-08-07). The rooms read as the system-as-machine: **where the load is, and where ticks are dying.** Four chips crowded into Risk is the diagnostic that makes the primitive worth choosing.
+**Primitive: a lane matrix, not rooms.** One **row per instrument**, six **stage cells** across (Analysts → Debate → Trader → Risk → Verdict → Execution), a stage-name header row above the lanes, each cell carrying its state word and, where the stage recorded one, its decision word. Chosen by David on 2026-09-04 over the v2 rooms grid, because the rooms could show a pile-up but not a journey — and the drawer, not the hero, held the only per-stage record. The matrix reads both: a column of `stopped` cells under Risk is the pile-up; a single row read left to right is the journey.
 
-12. As an operator, I want to see every instrument standing in the room for the stage it last reached, so that a pile-up at one stage is visible without reading a single row.
+12. As an operator, I want every instrument on its own row with the stage it reached visible in that row, so that a pile-up at one stage is a column I can see without reading a single drawer.
 13. As an operator, I want a stage that was **skipped** to read differently from one that **stopped** the tick, so that routine traffic is never displayed as a halt. A skipped stage never terminates the tick, so "skipped" must never collapse into a halted read.
-14. As an operator, I want a stage reached more than once in a trace to show its attempt count, so that a retry storm is visible rather than collapsed.
-15. As an operator, I want a dormant instrument (market closed, no tick) to read as idle rather than vanish, so that absence of activity is distinguishable from absence of the instrument. Idle chips stand in the **Lobby**, drawn with a dashed edge.
-16. As an operator, I want to open one instrument and see that trace's full stage sequence and, for a completed debate, its per-analyst contributions — with the live case stating plainly that round-by-round state is not persisted (decision #10) rather than showing a spinner that will never resolve.
+14. As an operator, I want a stage reached more than once in a trace to show its attempt count, so that a retry storm is visible rather than collapsed. (Attempts render in the drawer's timeline; the cell carries state and decision only.)
+15. As an operator, I want a dormant instrument (market closed, no tick) to read as idle rather than vanish, so that absence of activity is distinguishable from absence of the instrument. An idle lane's six cells all read `idle`, and its accessible name says "no trace in the window".
+16. As an operator, I want to open one instrument and see that trace's full stage timeline with durations and, for a completed debate, its per-analyst contributions — with the live case stating plainly that round-by-round state is not persisted (decision #10) rather than showing a spinner that will never resolve.
 
-**The primitive's accepted cost, and where the detail went — unchanged from v1.** A sigil chip is a single point, exactly as a rail chip was, so one instrument's own journey is not readable across the rooms, and stories 13 and 14 are *not renderable in the hero at all*: a tick that skipped a stage is not standing in that stage's room, and a stage retried before the chip moved on has no room to badge. Both therefore live in the drawer's stage strip, which under this primitive stops being supplementary detail and becomes the **sole per-stage record**. The strip must keep listing all six stages with state, duration, decision and attempt count, including the never-reached ones. Rooms does not fix this; it inherits it, and it was accepted when the primitive was chosen.
+**What the lane cannot show, and where it went.** A cell is a word, not a record: durations, `recorded_at` clocks and attempt counts live in the drawer's **stage timeline**, which lists all six stages including the never-reached ones. A lane holds one trace — the instrument's most recent inside the 15-minute window — so an older trace opened from Glance's verdict list renders its drawer with the timeline replaced by "this trace has aged out of the 15-minute pipeline window" rather than with the current trace's cells.
 
 **Six stages, and stays six.** `analysts → debate → trader → risk → verdict → execution`. A standalone `invalidation` stage was specced between `trader` and `risk` on 2026-08-05 (devils-advocate-spec.md) but **declined 2026-09-02**; its typed invalidation-condition mechanism folds into the Risk Critic instead ([#994](https://github.com/dd-jp/samurai-trading-system/issues/994)). It never rendered a room here beyond a permanently lights-off placeholder at 04, which — along with the seven-wide `PIPELINE_STAGES` in `contracts/pipeline.ts` it was drawn from — was retired in the same change that closed this decision ([#998](https://github.com/dd-jp/samurai-trading-system/issues/998)). Room numbers 04–06 now name Risk, Verdict and Execution.
 
@@ -150,49 +158,54 @@ Charted in [Wayfinder: dashboard v2 — mission-control rewrite (Vite+React) + r
 11. As an operator, I want the server to stay off my network by default, so that a stray port isn't exposed unless I explicitly ask for it.
 21. As an operator, I want the page to work with no internet connection, so that a dead link to a font CDN can never blank the screen I use to watch live money. **Zero external requests** — fonts are bundled, nothing is fetched from any host but the page's own origin.
 
-## Layout — one mission-control screen
+## Layout — the Rail: three tabs behind one rail
 
-**No tabs.** v1's two-tab split is gone; everything is one vertically-scrolling screen, ordered by how urgently an operator needs it.
+Desktop, 1440px wide as the design width. A **240px left rail** on every tab; the tab panel fills the rest. Tab state is the URL hash (`#glance`, `#live`, `#review`); the rail's tab list is a real `tablist` with keyboard operation, and the panel is its `tabpanel`.
 
-### 1. Telemetry strip (top)
+### 1. The rail (every tab)
 
-A single horizontal strip: run **mode**, the live-tick readout (instrument + stage, or "idle"), the **LLM burn meter** against the $50 ADR-0008 cap, the **Alpaca balance**, **Polygon reachability**, and the snapshot clock.
+Top to bottom: the brand mark (侍 SAMURAI), the three vertical tabs, then the always-on facts.
 
-- **Status is a coloured word, never a dot.** No pulsing status indicators anywhere on the page (David's call, [map #533](https://github.com/dd-jp/samurai-trading-system/issues/533) decision 7). `ok` / `degraded` / `error` / `not_configured` are rendered as those words, coloured; the colour is redundant with the word, never the only carrier of the meaning.
-- **Staleness is a label plus a border, not a disappearance.** Two consecutive missed polls put the whole strip into a stale state: an amber "stale — last update HH:MM:SSZ" label and an amber border. Numbers keep their last values and are *marked* stale rather than blanked, because a blank field reads as zero.
-- **The Alpaca balance is `null` unless `state === 'ok'`** and renders as "unavailable" with the probe's `detail` — a stale balance shown next to a failed probe reads as current, which is worse than showing nothing.
+- **Bot health as a word: ALIVE / STALE / WAITING**, with "polled HH:MM:SSZ" beneath it. **Staleness is a label plus a border, not a disappearance.** Two consecutive missed polls put the rail into a stale state: "stale — last update HH:MM:SSZ" as a live-region status, an amber border on the rail, and `data-stale` on it. Numbers keep their last values and are *marked* stale rather than blanked, because a blank field reads as zero.
+- **Mode pill: PAPER / LIVE**, or "mode unknown" when the wire carries no recognised mode. Never defaulted.
+- **Live tick**: instrument · stage · since HH:MM:SSZ and the trace id from `tick_status`; "live — a trace is running" when only `pipeline.live_trace_id` says so; "idle — no tick in progress" otherwise.
+- **Providers**: Alpaca and Polygon as **coloured words, never dots** (David's call, [map #533](https://github.com/dd-jp/samurai-trading-system/issues/533) decision 7, kept). `ok` / `degraded` / `error` / `not_configured` render as those words; Alpaca's equity sits beneath its word. **The Alpaca balance is `null` unless `state === 'ok'`** and renders as unavailable with the probe's `detail`.
+- **LLM cap bar**: `llm_spend.all_time.cost_usd` against the $50 ADR-0008 cap, with the three windows beneath, "floor — N unpriced calls" whenever `unpriced_calls > 0`, and "no spend figure on this snapshot — meter not drawable" when the summary is missing or malformed.
+- **Drawdown bar**: `metrics.max_drawdown` against `CONTEXT.md`'s 26.2% index-bracket tolerance ([#798](https://github.com/dd-jp/samurai-trading-system/issues/798)), labelled as that tolerance. The single-stock bracket's 41.8% is not drawn: one bar, one stated reference.
+- **Snapshot clock** at the foot.
 
-### 2. Rooms hero
+**Nothing else is drawn on the rail.** The canvas's daily-loss stop, position cap and flat-by-close clock are not on the wire and are not rendered.
 
-The 4×2 grid of rooms 01–06 + Lobby described under "Pipeline theater". Per room: number, stage name, a kanji watermark, and its occupants.
+### 2. Glance
 
-- **The Lobby is dashed**, holding idle lanes — instruments with no trace inside the window.
-- **The live-occupied room carries a cyan edge glow.** One room at most; `pipeline.live_trace_id` decides it.
-- **Sigil chip** per instrument: callsign (the instrument's short form), an asset-class glyph distinguishing crypto from stocks, and an **outcome ring** whose colour follows the lane outcome. The chip is a focusable control; selecting it opens that instrument's drawer.
-- **Multi-occupancy** is the normal case and the whole point — chips stack within a room. **More than 3 chips in one room collapse to the first 3 plus a "+N" affordance**, so a pile-up is visible without the room overflowing its cell.
-- **Colour is never the sole signal.** Every outcome that a ring colour encodes is also present as a word in the chip's accessible name and in the drawer.
+The tab the page opens on. Three cards, no table:
 
-### 3. Verdict ledger + detail drawer
+- **P&L today** — the headline figure (28–40px, signed), computed on the client from the snapshot: realized `realized_pnl_net` over the closes on the **snapshot's UTC date** (never the browser's) plus every open position's `unrealized_pnl`, with realized / unrealized / costs (`fees_total`) / trade counts beneath and "% of equity" against Alpaca equity (or "Alpaca equity unavailable" when there is none). A sparkline of Alpaca equity as observed by this page's polls, with its sample count in its accessible name and a named empty state until two distinct observations exist.
+- **Open risk** — "$deployed of $equity", then one row per open position: side, size, notional, mark, stop with its distance ("X% away" or "X% through" when the mark has passed it), target, unrealized P&L, and a stop→target progress track with its percentage in the accessible name. Empty state: "No open position — nothing at risk".
+- **Verdicts this session** — the v2 ledger, unchanged in rule: **fed from settled pipeline lanes, not from `verdicts[]` alone** (a `stopped` or `quorum_skip` lane never reaches `verdict_log`); **deduped by `trace_id`** for the session; **newest first, capped at 30**; seeded on first paint from the currently-settled lanes, stamped with their last non-null `recorded_at` rather than the wall clock; the **HITL badge** on any row with `hitl_override === true`; each row stamped with a **hanko seal** — 可 (go), 否 (no_go), 止 (stopped), 略 (quorum_skip). **A row opens the Live tab with that exact trace selected**, not the instrument's current one.
 
-A running ledger of settled decisions, each stamped with a **hanko seal**: 可 (go), 否 (no_go), 止 (stopped), 略 (quorum_skip).
+### 3. Live
 
-- **Fed from settled pipeline lanes, not from `verdicts[]` alone.** A lane that ended at `stopped` or `quorum_skip` never reaches `verdict_log` and would be invisible in a verdict-table-only ledger — those are exactly the decisions an operator most wants to see accumulate. `verdicts[]` supplies the gate/reason wording and the `hitl_override` flag for the lanes that did reach Verdict.
-- **Deduped by `trace_id`** against every entry ever seen this session, so a re-poll of an unchanged lane never re-stamps it.
-- **Newest first, capped at 30 entries.** On first paint the ledger is seeded from the currently-settled lanes, stamped with their last non-null `recorded_at` rather than with the wall clock — a seeded entry must not claim to have just happened.
-- **HITL badge** on any row with `hitl_override === true` (see story 5's note: expected never to fire).
-- **A row click opens that trace's drawer**, the same drawer a chip opens.
-- **The drawer** carries: the stage strip (all six stages with state word, duration, decision, attempt count), the debate's per-analyst stances × influence, the invalidation section (stories 4a–4c, built by [#1066](https://github.com/dd-jp/samurai-trading-system/issues/1066) off `risk_critics[]`), and the trace id. Every empty state **names its reason** — "the Trader and Risk cells carry no decision word (#328)", "round-by-round state is not persisted (decision #10)", "no trace in the last 15 minutes", "no Risk decision for this trace in the recent window" — never a bare dash and never a spinner that cannot resolve.
+Left: the **lane matrix** (see "Pipeline lanes"), a section named `Lanes` with the count of instruments in the 15-minute window and how many are running. Each lane is a focusable button whose accessible name is "{instrument}, {asset class}, {outcome word}, at {Stage}" or "…, idle, no trace in the window"; the running lane's `live` cell is the cyan accent; the selected lane is `aria-pressed`. **Colour is never the sole signal** — every outcome a colour encodes is also a word in the lane's name and in the drawer.
 
-### 4. Bento panels (bottom)
+Right: the **460px trace drawer** (`Trace detail`), carrying the seal, instrument, outcome word and trace id, then four sections:
 
-A grid of equal-citizen panels, none of which is a hero:
+- **Stage timeline** — all six stages with state word, duration, decision, attempt count and recorded clock, including the never-reached ones.
+- **Gates and conditions** — the verdict gate line (status, reason, HITL, clock) and the invalidation section (stories 4a–4c, [#1066](https://github.com/dd-jp/samurai-trading-system/issues/1066)) keyed by `trace_id` **and** instrument off `risk_critics[]`.
+- **Debate** — the most recent completed debate for the instrument (not keyed to the trace: `DebateRow` carries no `trace_id`, and the drawer says so), per-analyst stance strips and influence, with the decision #10 caveat.
+- **Order and fills** — the open position for the instrument with its fills, or "No open position for this instrument".
 
-- **Positions** — one row per open position with the stop / entry / mark / target **price rail**, plus side, filled size and unrealized PnL. PnL sign is carried by an explicit `+`/`−` as well as by colour.
-- **Metrics suite** — the full `MetricsSuite` as stat tiles, **reported together**. No single headline number; the research constraints exist because one metric in isolation misleads.
-- **Analysts** — weight bar with the **numeric percentage** beside it, and signed rolling-R with its window in days.
-- **LLM spend** — the three rolling windows, per-debate cost p50/p95 and LLM latency p50/p95, and **both** honest caveats (see below) whenever their counts are non-zero.
-- **Recent debates** — direction, rounds, and per-analyst stance strips with a legend.
-- **Arm comparison** — the live arm and **falsifier arm 2** (the matched control: same names, same exit rule, same stop, entry by indicator alone, no LLM) side by side, from the Feedback Loop's most recent sample. See below.
+Every empty state **names its reason** — "No lane selected", "idle — no trace in the last 15 minutes", "this trace has aged out of the 15-minute pipeline window", "Trader and Risk carry no decision word (#328)", "No completed debate recorded", "No fill recorded against this order key" — never a bare dash and never a spinner that cannot resolve.
+
+### 4. Review
+
+Three summary cards across the top, the closed-trade table as the spine, and a 460px trade drawer on the right.
+
+- **Metrics suite** — the full `MetricsSuite` as tiles, **reported together**. No single headline number; the research constraints exist because one metric in isolation misleads.
+- **Live vs matched control** — the arm comparison (see below), with **Outside benchmarks** as a secondary card beneath it (see below).
+- **Analysts** — weight track with the **numeric percentage** beside it and signed rolling-R with its window in days, with the note that neither is a hit rate: the wire carries no per-analyst accuracy.
+- **Closed trades** — one row per `closed_trades[]` entry: instrument, side, when (clock on the snapshot's day, date otherwise), held duration, close reason **as a word** (stop hit / target hit / exit / flattened / signal decay / direction flip), a "why taken" summary from the joined debate (direction · rounds · lead analyst by influence), and signed net P&L. A row opens the drawer.
+- **Trade drawer** (`Trade detail`) — why taken, the stage timeline when the trace is still inside the window (else the aged-out sentence), gates and conditions keyed by **`debate_id`** (the only key a closed trade carries; the drawer says when no trace id reaches the trade), the debate, a **P&L breakdown** (gross, fees, net), and the fills under the trade's order key.
 
 #### Arm comparison panel ([#971](https://github.com/dd-jp/samurai-trading-system/issues/971), under [#636](https://github.com/dd-jp/samurai-trading-system/issues/636)/[#913](https://github.com/dd-jp/samurai-trading-system/issues/913))
 
@@ -235,22 +248,11 @@ The trend list (below the headline) renders many historical rows at once, and wi
 
 **Read-only, and computed elsewhere.** The panel projects `outside_benchmark_samples` rows FL wrote (`feedback-loop-spec.md`, "The risk-adjusted outside benchmarks"). `buildSnapshot` must not compute a benchmark.
 
-## Motion — replay only
+## Motion — none
 
-**A persona walks only where the store recorded it walking.** This reverses v1's "no transit animation" rule; the reversal and its reasoning are recorded in [ADR-0011](../adr/0011-pipeline-theater-replay-motion.md). The rule, in full:
+**Nothing on the page animates.** A poll repaints the page in place; the rail's poll clock and snapshot clock say when. v2's replay motion — chips walking between rooms along recorded transitions, [ADR-0011](../adr/0011-pipeline-theater-replay-motion.md) — is superseded by [ADR-0021](../adr/0021-dashboard-v3-rail-layout.md): the lane matrix has no rooms to walk between, and a cell that reads `done` on the poll that recorded it is already what a repaint does. With no motion there is no `prefers-reduced-motion` branch, no `transitionend` chaining, no `requestAnimationFrame`, and no mid-walk poll to cancel. The stylesheet carries no `transition` or `animation` rule; a reviewer can grep for that.
 
-1. **Only recorded transitions animate.** A chip may walk from room A to room B only along stage transitions present in `audit_log` (via `pipeline.lanes[].cells[].recorded_at`) or `current_tick`. The client is replaying timestamped rows, not interpolating between two observations.
-2. **Hop durations are proportional to the recorded gaps**, so a stage that genuinely took longer takes longer to walk — **clamped to 150–450 ms per hop**, and **≤1.2 s total per poll** across all hops. The clamp and the budget mean the replay is a time-compressed retelling, never a literal one, and it always finishes before the next 3-second poll.
-3. **First paint places without walking.** There is no previous snapshot, so there is no recorded transition to replay; chips appear where they are.
-4. **A hidden tab snaps on return.** `document.hidden` during a poll means the transitions were never observed by this client; on return the chips snap to the current state. No marathon replay of everything that happened while the tab was in the background.
-5. **`prefers-reduced-motion` snaps, with a settle ring.** The change is still signalled — a ring on what moved — but no chip crosses the screen. Bob, shimmer, power-on and stamp-scale animations are all suppressed.
-6. **Skipped stages are never walked through.** A cell with a `null` `recorded_at` was not visited; a walk that passes a skipped stage hops *over* its room, it does not enter it.
-7. **A rotated trace walks to Analysts first, then forward.** When a lane's `trace_id` changes, the old trace ended and a new one began at Analysts; the chip returns to room 01 and then replays the new trace's recorded stages. It never cuts diagonally from where the last trace died to where the new one is.
-8. **Aging to idle snaps to the Lobby, as a non-event.** A trace falling out of the 15-minute window is the clock passing, not something the system did. The chip is placed in the Lobby without a walk and without a settle ring.
-9. **A new poll mid-walk wins.** Outstanding hops are cancelled and the chip snaps to the observed state. The data is the authority; the animation is a retelling that yields to it.
-10. **No `requestAnimationFrame` for critical rendering.** CSS keyframes and transitions only — driven by class and transform changes, chained on `transitionend` with a `setTimeout` fallback. (Prototyping finding: rAF never fired in the sandboxed artifact frame, and a page whose chips only appear if a frame callback runs is a page that can render empty.)
-
-Everything that is *not* a recorded transition still follows v1's rule: a ring on whatever changed between two polls. Appearance and disappearance of a lane fade rather than travel. A tick shorter than the poll interval legitimately appears as a completed replay.
+Two rules survive from v1 and v2 because they are about honesty, not motion: **a poll must never change the page's geometry** (cards are drawn at full size from first paint, empty states included, and data fills reserved space), and **focus must survive a repaint** (story 20's keyboard operation depends on it).
 
 ## Design system
 
@@ -268,16 +270,16 @@ Tokens are defined once as CSS custom properties and consumed everywhere; nothin
 | `--vermilion` | `#FF4D5E` | `stopped`, loss, error |
 | `--text` | `#F0E6D8` | Body text (warm off-white) |
 | `--muted` | `#9E8C76` | Secondary text, labels |
-| `--gold` | `#C9A25A` | Chrome only — the seal ring, the telemetry-strip hairline, the focus ring. Never a state signal; the six rows above own that job |
-| `--lacquer` | `#982420` | Chrome only — panel corner-cut wedges, section-header rules, the page's ink-bleed wash. A separate token from `--vermilion` on purpose: that colour already means stopped/loss/error, and decorative chrome must never share a hue with a live risk signal |
+| `--gold` | `#C9A25A` | Chrome only — the seal ring, the brand mark, the focus ring. Never a state signal; the six rows above own that job |
+| `--lacquer` | `#982420` | Chrome only — section-header rules and the brand mark's accent. A separate token from `--vermilion` on purpose: that colour already means stopped/loss/error, and decorative chrome must never share a hue with a live risk signal. (v2 also spent it on corner-cut wedges and an ink-bleed wash; v3 does not) |
 
 The palette was checked for common colour-vision deficiencies when it was chosen. That check is a floor, not a licence: **colour is never the sole carrier of a signal** anywhere on this page — every state that has a colour also has a word.
 
-**Type** — Chakra Petch (display: room names, small uppercase labels, callsigns — legible at 9–11px), IBM Plex Sans (body), IBM Plex Mono (all numerics, so columns of figures align), Shippori Mincho (accent: the brand mark and panel section headers only, where its brush-serif stroke contrast reads at a glance; never used below ~13px). **Self-hosted via `@fontsource`** and bundled into the build. Zero external requests is a hard requirement (story 21), not a preference.
+**Type** — Chakra Petch (display: stage names, tab names, uppercase labels), IBM Plex Sans (body), IBM Plex Mono (all numerics, so columns of figures align), Shippori Mincho (accent: the brand mark and card section headers only). **Sizes are a v3 decision** (David, 2026-09-04, density grilling): **body 14px, labels never below 11px, headline figures 28–40px**. v2's 9–11px display labels are gone. **Self-hosted via `@fontsource`** and bundled into the build. Zero external requests is a hard requirement (story 21), not a preference.
 
-**Spacing** — an 8px baseline scale (`--space-1`…`--space-8`, 4–48px), applied at the outer layout level (page shell, telemetry strip, panel padding, section gaps). Component-internal spacing with its own documented reason (e.g. the position rail's 13px label-row stride) stays off the scale.
+**Spacing** — an 8px baseline scale (`--space-1`…`--space-8`, 4–48px), applied at the outer layout level (rail, panel padding, card gaps, drawer sections). Component-internal spacing with its own documented reason stays off the scale.
 
-**Signature element** — a single blade-cut corner (top-right, via `clip-path`) on every panel and pipeline room, in place of the earlier rounded-corner HUD reticle bracket. A small `--lacquer` wedge fills the cut notch — ink at the blade's edge. The hanko seal stamp on ledger entries keeps its `--gold` ink-ring, unchanged.
+**Motif — restrained.** Only two elements carry the theme: the **hanko seals** (可 否 止 略, `--gold` ink-ring) on verdict rows, lane heads and drawer heads, and the **brand mark** on the rail. No kanji watermarks, no blade-cut corners, no lacquer wedges, no ink-bleed wash, no rooms — David's ruling when the Rail was locked. Cards are plain panels with a 1px border.
 
 ## Wire Shape
 
@@ -456,18 +458,20 @@ function buildSnapshot(store: DashboardQueryStore, asOf: Date): DashboardSnapsho
 ### Module: Web client (`client/`)
 
 **Responsibilities**
-- Render the mission-control screen from `DashboardSnapshot`, and nothing else. It holds no domain logic: every number it shows is computed server-side.
+- Render the Rail — three tabs and the rail — from `DashboardSnapshot`, and nothing else. It holds no domain logic: every number it shows is computed server-side, with two stated presentation-level exceptions (P&L today and open risk, `lib/glance.ts`), which are arithmetic over wire rows and are labelled on screen with what they are computed from.
 
 **Structure**
 - **Vite + React**, output to `dist/client/` with a relative `base` so the bundle is servable from disk without a path prefix.
 - `react`, `react-dom`, `vite`, `@vitejs/plugin-react`, the `@fontsource` packages and the test tooling are **devDependencies**. `dependencies` remains exactly `better-sqlite3`. The build becomes `tsc && vite build`; `client/` falls outside `tsconfig.build.json`'s `include` (`server/` + `contracts/`) and owns its own tsconfig. It needs no `exclude` entry — being a sibling of `server/` rather than a directory inside it is what removed the need.
 - **`client/src/lib/` is pure and React-free** — this is where the client's real logic lives and where it is tested:
-  - `room-layout.ts` — which room a lane occupies (a `live` cell wins outright; otherwise the furthest `done`/`stopped` stage; otherwise the Lobby), stable slot assignment within a room across polls, and the `>3 → +N` collapse.
-  - `walk-plan.ts` — `computeWalkPlan(prev, next, opts)` implementing the Motion rules as a pure function of two snapshots. Every rule in the Motion section is a test case here.
-  - `ledger.ts` — settle detection, `trace_id` dedupe, ordering, the 30-entry cap, and first-paint seeding.
-  - `format.ts` — durations, `HH:MM:SSZ` clocks, signed money and R.
-- **`hooks/useWalkAnimation.ts` is the only DOM-imperative code** in the app, applying a `WalkPlan` to chip elements via transform transitions. Confining imperative work to one hook is what keeps the rest of the tree ordinary declarative React.
-- **`hooks/useSnapshot.ts`** owns the 3s poll (`cache: 'no-store'`), the two-missed-polls staleness watchdog, and retention of the previous snapshot for the walk plan.
+  - `ledger.ts` — settle detection, `trace_id` dedupe, ordering, the 30-entry cap, and first-paint seeding (unchanged from v2).
+  - `glance.ts` — P&L today (closes on the snapshot's UTC date plus open unrealized, fees separately) and open risk (notional, stop distance, stop→target progress) as pure functions of `positions[]` / `closed_trades[]`.
+  - `trace.ts` — the joins the drawers make: lane by instrument or trace, verdict by trace, Risk critic by `trace_id`+instrument or by `debate_id`, latest debate by instrument, debate by id, fills by order key.
+  - `vocabulary.ts` — every state, outcome, close reason, condition state and provider state as a **word**, and the seal glyphs. The one place a wire enum becomes screen text.
+  - `format.ts` — durations, `HH:MM:SSZ` clocks, dates, held durations, signed money, percentages and R.
+- **`components/`** — `Rail`, `Seal`, `StateWord`, `StanceStrip`, the shared drawer sections (`TraceSections`: timeline, gates and conditions, debate, fills) and the three tabs under `components/tabs/`. All declarative; there is no DOM-imperative code in the app.
+- **`hooks/useSnapshot.ts`** owns the 3s poll (`cache: 'no-store'`), the two-missed-polls staleness watchdog, and retention of the previous snapshot for the ledger's settle detection.
+- **`App.tsx`** owns the tab (read from and written to `location.hash`), the Live and Review selections, the session ledger, the equity samples the Glance sparkline draws, and the Glance→Live jump that carries a `trace_id`.
 
 **Untrusted strings.** `instrument` and `decision` reach the page from the database and are rendered as text, never as markup — React's default escaping is the mechanism, and a hostile instrument string is a test case, not an assumption.
 
@@ -505,19 +509,20 @@ interface DashboardServer {
 
 Non-negotiable, and unchanged in spirit from v1 — the screen got more visual, so these get more important, not less.
 
-- **Outcome words in accessible names.** Every sigil chip's `aria-label` names its instrument and its outcome **in words** (`"BTC-USD, stopped at risk"`), so the outcome ring's colour is decoration rather than data.
-- **Colour is never the only signal** — states carry words, PnL carries an explicit sign, the live room carries a label as well as a glow.
-- **Keyboard-operable.** Chips, ledger rows and the drawer are reachable and operable by keyboard, with a visible `:focus-visible` style. **Focus must survive repaints and walks** — a 3-second poll that steals focus makes the page unusable with a keyboard.
-- **Empty states name their reason.** Never a bare dash, never a spinner that cannot resolve. "Trader and Risk persist no decision content (#328)" is a legitimate empty state; a blank cell is not.
-- **`prefers-reduced-motion` is honoured everywhere**, per Motion rule 5.
+- **Outcome words in accessible names.** Every lane's `aria-label` names its instrument, asset class, outcome and stage **in words** (`"BTC-USD, crypto, go, at Execution"`); every verdict row names instrument, outcome, any human override and the reason; every closed-trade row names instrument, side, close reason and signed P&L. Colour is decoration rather than data.
+- **Colour is never the only signal** — states carry words, PnL carries an explicit sign, the live cell carries the word `live` as well as the accent, the stale rail carries a status sentence as well as a border.
+- **Keyboard-operable.** Tabs, lanes, verdict rows, trade rows and both drawers are reachable and operable by keyboard, with a visible `:focus-visible` style. **Focus must survive repaints** — a 3-second poll that steals focus makes the page unusable with a keyboard.
+- **Empty states name their reason.** Never a bare dash, never a spinner that cannot resolve. "Trader and Risk carry no decision word (#328)" is a legitimate empty state; a blank cell is not.
+- **No motion, so nothing to reduce.** There is no `prefers-reduced-motion` branch because there is no animation for it to suppress (see "Motion").
 - **No pulsing.** Beyond the design preference, a page whose status indicators pulse indefinitely is a page that is harder to read for anyone sensitive to motion.
-- **The rooms grid scrolls inside its own container** on narrow viewports; the page body never scrolls sideways.
+- **Wide content scrolls inside its own container** (the lane matrix, the closed-trade table); the page body never scrolls sideways.
 
 ## Testing Decisions
 
 - **Server seam: `buildSnapshot`.** Good tests assert on the *returned snapshot given fixed `DashboardQueryStore` data* (e.g., a fake store returning two open positions produces two `PositionRow`s with correct PnL), not on HTTP internals or real database state.
-- **Client seam: `client/src/lib/`.** The walk plan, room layout and ledger are pure functions of two snapshots and are tested without a DOM: first-paint snap, single hop, multi-hop skipping an unrecorded stage, trace rotation via Analysts, appear/depart, duration clamps and the 1.2 s budget, ledger dedupe/cap/ordering/seeding, room precedence (live wins → furthest → Lobby), stable slots across polls, `+N` collapse.
-- **Component tests (RTL)** cover what a screenshot cannot: chip `aria-label` wording, ledger dedupe as rendered, the HITL badge, drawer empty-state wording, the stale banner, and a hostile instrument string rendering inert.
+- **Client seam: `client/src/lib/`.** The ledger, the Glance figures and the trace joins are pure functions of snapshot rows and are tested without a DOM: ledger dedupe/cap/ordering/seeding; P&L today counting only the snapshot's UTC date and refusing an unparseable `as_of`; open risk for long and short, a mark through the stop, and a zero-width bracket; the Risk-critic join matching trace **and** instrument, never one alone; fills filtered by order key.
+- **Component tests (RTL)** cover what a screenshot cannot: lane, verdict-row and trade-row accessible names; the ledger deduped across a re-poll; the HITL badge; a verdict row opening Live on **its** trace rather than the instrument's current one; the selected trace's conditions rather than an older row's; every named empty state on both drawers and all three tabs; the stale rail with its status sentence; "mode unknown"; the spend meter's floor caveat and not-drawable state; focus surviving a poll; and a hostile instrument string rendering inert.
+- **End-to-end (Playwright) against the real fixture server** (`e2e/`): boot regions on all three tabs, the hash following the tab, every lane name from the fixture universe, the seeded verdict list with its HITL row, the Glance→Live jump, a closed trade's P&L breakdown and fills, keyboard reachability of tabs/lanes/rows, a settle between polls stamping exactly one row, and two missed polls marking the rail stale while the numbers stay. Every request the page makes is same-origin or the test fails.
 - **Server tests** assert on HTTP status/body for each route (`GET /`, a bundle asset, `GET /api/snapshot`, unknown path, non-`GET` method) and on the **static containment guard** against an injected fake store — no real network dependency beyond binding to an ephemeral port (`port: 0`). Two escapes must both be covered: `..`/percent-encoded-`..` traversal, **and** a sibling directory whose name shares the bundle root's prefix (`dist/client-evil/`). The second is the one a naive `startsWith` passes the first test while remaining open to, so a suite that only tests `..` proves nothing about it.
 - **`QueryStore` implementation** is tested against a real (test) SQLite instance seeded with rows matching the other components' own fixture patterns — reuses their existing test data shapes, no new schema.
 - **Offline check is part of acceptance:** the built bundle contains no external URL. A grep for `https://` over `dist/client/` is the crude version; the network panel showing zero third-party requests is the real one.
@@ -528,24 +533,27 @@ Non-negotiable, and unchanged in spirit from v1 — the screen got more visual, 
 
 - **Any write path** — no manual trade actions, kill-switch trigger, or config editing. Strictly read-only (decision, not an oversight).
 - **A terminal CLI** — superseded by this dashboard; `src/cli/` was removed when v1 landed. <!-- cite-exempt: historical — a statement about a removed tree; the sentence is true precisely because the path does not resolve -->
-- **Real-time push/streaming** — client-side polling only. Re-affirmed for v2: the replay animation is driven by recorded timestamps, so it needs no new transport.
+- **Real-time push/streaming** — client-side polling only. Re-affirmed for v2 and v3: nothing on the page needs finer than the 3-second poll.
+- **Any limit the wire does not carry** — the design canvas's daily-loss stop, position cap and flat-by-close countdown. They reach the rail when a component that enforces them puts them on `DashboardSnapshot`, never from a client constant ([ADR-0021](../adr/0021-dashboard-v3-rail-layout.md)).
+- **Per-debate cost and LLM latency percentiles on screen** — still on the wire, not rendered (see the Information Inventory note).
 - **A true in-flight/live debate-round view** — the Debate Engine's ephemeral operational round state isn't persisted (decision #10); only completed debates plus a coarse tick-status line are observable.
 - **Remote/public access, per-request auth, HTTPS** — LAN reachability needs a `HOST` outside the loopback allowlist plus a configured (non-empty) `SAMURAI_DASHBOARD_TOKEN` ([ADR-0019](../adr/0019-dashboard-hosting-topology.md), [#887](https://github.com/dd-jp/samurai-trading-system/issues/887)); that token gates the boot-time bind only and is not verified against any individual request ([#1038](https://github.com/dd-jp/samurai-trading-system/issues/1038)). Matches the single-MacBook deployment target — a hosted multi-user product is a different problem, not designed here.
 - **Alerting** — the dead-man's-switch heartbeat and trade notifications are the Orchestrator's/Verdict's concern (already specced); the Dashboard is a pull, not a push, mechanism.
 - **Trader/Risk drill-down in the STAGE STRIP** — `audit_log` holds only a digest per stage, so those two cells report that a stage ran and nothing about what it decided. Restated 2026-09-03: `trader_log` and `risk_log` do exist (migration 0016, [#328](https://github.com/dd-jp/samurai-trading-system/issues/328)) and [#1066](https://github.com/dd-jp/samurai-trading-system/issues/1066) now reads the Risk row's binding constraint, and the critic verdict joined from it, into the drawer's invalidation section. `risk_log.status` (approved/rejected/error) stays unread — nothing on the dashboard renders it yet. What is still out of scope here is the rest of the drill-down: the Trader's sizing chain and the full `RiskDecision` (gate-by-gate reasons, exposure snapshot, breaker state), which #328 owns and [#417](https://github.com/dd-jp/samurai-trading-system/issues/417) reserves a surface for. The strip shows an honest empty slot rather than inventing content.
-- **Queryable pipeline history.** The verdict ledger is a **bounded settle-log** — the last 30 decisions observed while the page has been open — not a searchable archive. A chip holds one trace, the most recent inside the 15-minute window. The chronological record of what the pipeline decided remains `verdict_log`, surfaced through `verdicts[]`; a second query path to the same facts is maintenance cost, not a feature.
-- **Any change to what the backend computes.** v2 is a UI rewrite. The only wire changes are the additive fields listed in "Wire Shape", each of which reads or joins rows another component already writes.
+- **Queryable pipeline history.** Glance's verdict list is a **bounded settle-log** — the last 30 decisions observed while the page has been open — not a searchable archive. A lane holds one trace, the most recent inside the 15-minute window. The chronological record of what the pipeline decided remains `verdict_log`, surfaced through `verdicts[]`; a second query path to the same facts is maintenance cost, not a feature.
+- **Any change to what the backend computes.** v3, like v2, is a UI rewrite. The wire is unchanged by v3; the additive fields listed in "Wire Shape" each read or join rows another component already writes.
 
 ## Further Notes
 
-**Current wayfinder map: [Wayfinder: dashboard v2 — mission-control rewrite (Vite+React) + rooms pipeline theater](https://github.com/dd-jp/samurai-trading-system/issues/533)** (2026-08-07), which locked the decisions this v2 synthesizes and supersedes the pipeline-tab portions of [Wayfinder: dashboard pipeline view](https://github.com/dd-jp/samurai-trading-system/issues/411)/[#412](https://github.com/dd-jp/samurai-trading-system/issues/412). The original dashboard decisions are in [docs/wayfinder/dashboard-map.md](../wayfinder/dashboard-map.md), kept as the historical record from before maps moved to GitHub issues — its "not a framework SPA" line is superseded by ADR-0010 and is not a live constraint.
+**Current wayfinder map: [Wayfinder map: dashboard v3 — Rail client rewrite](https://github.com/dd-jp/samurai-trading-system/issues/1090)** (2026-09-04), which locked the decisions this v3 synthesizes and supersedes the layout, rooms-theater and motion portions of [Wayfinder: dashboard v2 — mission-control rewrite (Vite+React) + rooms pipeline theater](https://github.com/dd-jp/samurai-trading-system/issues/533) (2026-08-07). #533's data-inventory, honesty and hosting decisions carry forward unchanged; #533 in turn superseded the pipeline-tab portions of [Wayfinder: dashboard pipeline view](https://github.com/dd-jp/samurai-trading-system/issues/411)/[#412](https://github.com/dd-jp/samurai-trading-system/issues/412). The original dashboard decisions are in [docs/wayfinder/dashboard-map.md](../wayfinder/dashboard-map.md), kept as the historical record from before maps moved to GitHub issues — its "not a framework SPA" line is superseded by ADR-0010 and is not a live constraint.
 
-Two architectural reversals ride with this rewrite and are recorded as ADRs rather than buried here:
-- [ADR-0010 — Dashboard v2: a built Vite+React client](../adr/0010-dashboard-vite-react-rewrite.md)
-- [ADR-0011 — Pipeline theater: motion as replay, not interpolation](../adr/0011-pipeline-theater-replay-motion.md)
+Three architectural decisions ride with the rewrites and are recorded as ADRs rather than buried here:
+- [ADR-0010 — Dashboard v2: a built Vite+React client](../adr/0010-dashboard-vite-react-rewrite.md) — stands.
+- [ADR-0011 — Pipeline theater: motion as replay, not interpolation](../adr/0011-pipeline-theater-replay-motion.md) — **superseded** by ADR-0021.
+- [ADR-0021 — Dashboard v3: the Rail layout, three tabs, no motion](../adr/0021-dashboard-v3-rail-layout.md) — the record of this rewrite.
 
 This closes OPEN-GAP-B (docs/specs/cross-spec-contracts.md) — the Dashboard is the 12th and final charted/specced component. It has zero write-path risk by construction, so it can be implemented and iterated on independently of the trading-critical components without affecting their correctness.
 
 **Supersedes the CLI spec (2026-07-14).** OPEN-GAP-B originally resolved to a terminal CLI, explicitly declining a web dashboard. That decision was reversed on 2026-07-21 after `src/dashboard/` (now `server/apps/service-api/`) was built ahead of any map or spec (discovered during a project health check) and grilled to a decision: the dashboard replaces the CLI rather than complementing it, since it subsumes every read the CLI provided with better ergonomics. `src/cli/` (render functions + types, tested, but with a placeholder entry point never wired to a runnable command) was removed in that change. This file was `cli-spec.md`, renamed and rewritten in place, then rewritten again here for v2. <!-- cite-exempt: historical — both cited paths on this line describe trees removed in the 2026-07-21 reversal -->
 
-**WorldMonitor Deferred-Shell Contract (#177 resolution), now discharged.** The pattern — reserve a live-updating region's slot before its async data arrives, rather than reflowing the layout when it does — is exactly what the rooms grid, the telemetry strip and the bento panels do: the grid is drawn at full size from first paint, empty rooms and unavailable tiles included, and data fills reserved space. A poll must never change the page's geometry.
+**WorldMonitor Deferred-Shell Contract (#177 resolution), now discharged.** The pattern — reserve a live-updating region's slot before its async data arrives, rather than reflowing the layout when it does — is exactly what the rail, the cards and the drawers do: each is drawn at full size from first paint, empty states and unavailable figures included, and data fills reserved space. A poll must never change the page's geometry.

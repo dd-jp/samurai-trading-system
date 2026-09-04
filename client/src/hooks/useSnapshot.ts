@@ -52,7 +52,7 @@ export const RECOGNISED_MODES = [
  * Not a plain alias of `DashboardSnapshot` (PR #597 review). That version
  * asserted `mode` was always one of three literals while its own docblock
  * admitted an older server or a rewriting proxy may omit it — leaving
- * `TelemetryStrip`'s literal check as the only thing standing between a
+ * the rail's mode-pill literal check as the only thing standing between a
  * missing field and a mis-render, and the next consumer to read
  * `snapshot.mode` would have trusted the type and been wrong. A type that
  * lies is worse than one that is wide: `null` is the honest name for "the
@@ -63,11 +63,11 @@ export type WireSnapshot = Omit<DashboardSnapshot, 'mode' | 'llm_spend'> & {
   mode: ServerMode | null;
   /**
    * Widened to `| null` for the same reason `mode` is, and settled the same
-   * way (#606 item 2). `SpendPanel` takes `LlmSpendSummary | null` and renders
-   * a deliberate empty state naming the reason, and `TelemetryStrip`'s burn
-   * meter renders "meter not drawable" — so both consumers of this field
-   * already degrade honestly, and the boundary rejecting the payload was the
-   * only thing standing between a missing spend read and those renderings.
+   * way (#606 item 2). The rail's LLM cap bar takes `LlmSpendSummary | null`
+   * and renders "meter not drawable" naming the reason — so the consumer of
+   * this field already degrades honestly, and the boundary rejecting the
+   * payload was the only thing standing between a missing spend read and
+   * that rendering.
    *
    * The server cannot send `null` today: `DashboardSnapshot.llm_spend` is
    * non-nullable and a failed `getLlmSpend` throws out of `buildSnapshot`,

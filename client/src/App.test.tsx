@@ -1,17 +1,12 @@
 // @vitest-environment jsdom
-//
-// Component tests for the mission-control screen (issue #538;
-// dashboard-spec.md "Testing Decisions": "Component tests (RTL) cover what a
-// screenshot cannot"). Everything here is driven by an injected fake `fetch`
-// over the fixtures in `test-fixtures.ts` — no network, no database, no wall
-// clock beyond the short poll interval each test sets.
-//
-// The pure logic these components consume (room placement, the walk plan, the
-// ledger state machine) is tested without a DOM under `lib/`; these tests are
-// deliberately about the things only a rendered tree can answer: accessible
-// names, the words an empty state chooses, and whether a repaint steals focus.
+/**
+ * The shell: one poll feeds a rail and three tabs. These tests cover what a
+ * screenshot cannot — the words in accessible names, the honest empty
+ * states, focus surviving a poll, and a hostile string rendering inert —
+ * against a fake `fetch`, so nothing here touches a network.
+ */
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { App } from './App.tsx';
 import { doneThrough, makeLane, makeView } from './lib/test-support.ts';
 import {
@@ -23,20 +18,13 @@ import {
   makeVerdict,
 } from './test-fixtures.ts';
 
-// No `@testing-library/jest-dom` matchers in this repo's devDependencies, so
-// assertions use plain DOM properties.
 const POLL_MS = 20;
 
 function renderApp(payloads: Parameters<typeof fakeFetch>[0]) {
   return render(<App snapshotOptions={{ fetchImpl: fakeFetch(payloads), intervalMs: POLL_MS }} />);
 }
 
-/** BTC live in debate, QQQ stopped at risk, SPY idle in the Lobby. */
-function theaterView() {
-  // Built with `makeLane` rather than `doneThrough` plus a `cells[1]` write:
-  // the index was an unstated bet on `doneThrough`'s stage ordering, and
-  // `doneThrough` only emits `done` cells, so a live stage was never something
-  // it could express (#606 item 6).
+function laneView() {
   const btc = makeLane({
     instrument: 'BTC-USD',
     trace_id: 'trace-btc',
@@ -75,38 +63,19 @@ function theaterView() {
   });
 }
 
-describe('mission control', () => {
-  it('names every chip outcome in words in its accessible name', async () => {
-    renderApp([makeSnapshot({ pipeline: theaterView() })]);
+function openTab(name: 'Glance' | 'Live' | 'Review') {
+  fireEvent.click(screen.getByRole('tab', { name }));
+}
 
-    // The outcome ring is a colour; the word is what carries the meaning.
-    expect(
-      await screen.findByRole('button', { name: /BTC-USD, crypto, in flight, in Debate/ }),
-    ).toBeTruthy();
-    expect(screen.getByRole('button', { name: /QQQ, stocks, stopped, in Risk/ })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /SPY, stocks, idle, in Lobby/ })).toBeTruthy();
-  });
+afterEach(() => {
+  window.history.replaceState(null, '', '#');
+});
 
-  it('places every mounted chip, including ones the walk plan never mentions', async () => {
-    // `computeWalkPlan` emits no motion for a lane that did not change room,
-    // so a plan-only placement pass would leave these two chips stacked at the
-    // grid's top-left corner. Both stand in Risk, so they must differ by one
-    // slot's vertical pitch.
-    const first = doneThrough('AAA', 'trace-a', 'risk', { outcome: 'stopped' });
-    const second = doneThrough('BBB', 'trace-b', 'risk', { outcome: 'stopped' });
-    renderApp([makeSnapshot({ pipeline: makeView([first, second]) })]);
-
-    const a = await screen.findByRole('button', { name: /AAA, crypto, stopped, in Risk/ });
-    const b = screen.getByRole('button', { name: /BBB, crypto, stopped, in Risk/ });
-    expect(a.style.transform).toMatch(/^translate\(/);
-    expect(b.style.transform).toMatch(/^translate\(/);
-    expect(a.style.transform).not.toBe(b.style.transform);
-  });
-
-  it('reads out the live tick with its instrument, stage and trace', async () => {
+describe('rail', () => {
+  it('reads ALIVE with the poll clock, PAPER, the live tick and both providers', async () => {
     renderApp([
       makeSnapshot({
-        pipeline: theaterView(),
+        pipeline: laneView(),
         tick_status: {
           instrument: 'BTC-USD',
           asset_class: 'crypto',
@@ -115,18 +84,82 @@ describe('mission control', () => {
         },
       }),
     ]);
-
-    const strip = screen.getByRole('region', { name: 'Telemetry' });
-    expect(await within(strip).findByText(/BTC-USD · crypto · debate/)).toBeTruthy();
-    expect(within(strip).getByText(/since 11:59:50Z/)).toBeTruthy();
-    expect(within(strip).getByText('trace trace-btc')).toBeTruthy();
-    // The live room carries the word as well as the glow.
-    const debateRoom = screen.getByRole('heading', { name: 'Debate' }).closest('.room');
-    expect(debateRoom?.classList.contains('room-live')).toBe(true);
-    expect(within(debateRoom as HTMLElement).getByText('live')).toBeTruthy();
+    const rail = screen.getByRole('complementary', { name: 'Rail' });
+    expect(await within(rail).findByText('ALIVE')).toBeTruthy();
+    expect(within(rail).getByText('polled 12:00:00Z')).toBeTruthy();
+    expect(within(rail).getByText('PAPER')).toBeTruthy();
+    expect(within(rail).getByText(/BTC-USD · debate · since 11:59:50Z/)).toBeTruthy();
+    expect(within(rail).getByText('trace-btc')).toBeTruthy();
+    expect(within(rail).getAllByText('ok')).toHaveLength(2);
+    expect(within(rail).getByRole('img', { name: /LLM budget used/ })).toBeTruthy();
+    expect(within(rail).getByRole('img', { name: /max drawdown .* index tolerance/ })).toBeTruthy();
   });
 
-  it('stamps a settled lane into the ledger once, and never again on a re-poll', async () => {
+  it('marks the page STALE after two missed polls and keeps the last clock', async () => {
+    renderApp([makeSnapshot(), null]);
+    const rail = screen.getByRole('complementary', { name: 'Rail' });
+    await within(rail).findByText('ALIVE');
+    await waitFor(() => expect(within(rail).getByText('STALE')).toBeTruthy(), {
+      timeout: 2_000,
+    });
+    expect(rail.getAttribute('data-stale')).toBe('true');
+    expect(within(rail).getByRole('status').textContent).toMatch(/^stale — last update 12:00:00Z/);
+    expect(within(rail).getByText('snapshot 12:00:00Z')).toBeTruthy();
+  });
+
+  it('renders "mode unknown" when the wire carries no mode, never "paper"', async () => {
+    const snapshot = makeSnapshot();
+    delete (snapshot as { mode?: unknown }).mode;
+    renderApp([snapshot]);
+    expect(await screen.findByText('mode unknown')).toBeTruthy();
+    expect(screen.queryByText('PAPER')).toBeNull();
+  });
+
+  it('reads live, not idle, when a trace is running but tick_status is absent', async () => {
+    renderApp([makeSnapshot({ pipeline: laneView(), tick_status: null })]);
+    const rail = screen.getByRole('complementary', { name: 'Rail' });
+    expect(await within(rail).findByText(/live — a trace is running/)).toBeTruthy();
+    expect(within(rail).queryByText(/idle — no tick in progress/)).toBeNull();
+  });
+
+  it('degrades the LLM meter to words when the spend summary is missing or malformed', async () => {
+    const snapshot = makeSnapshot();
+    (snapshot as { llm_spend?: unknown }).llm_spend = [];
+    renderApp([snapshot]);
+    const rail = screen.getByRole('complementary', { name: 'Rail' });
+    expect(await within(rail).findByText(/meter not drawable/)).toBeTruthy();
+    expect(within(rail).queryByRole('img', { name: /LLM budget used/ })).toBeNull();
+  });
+
+  it('calls the meter a floor whenever unpriced calls exist', async () => {
+    const spend = makeSpend();
+    spend.all_time = { ...spend.all_time, unpriced_calls: 3 };
+    renderApp([makeSnapshot({ llm_spend: spend })]);
+    expect(await screen.findByText(/floor — 3 unpriced calls/)).toBeTruthy();
+  });
+});
+
+describe('tabs', () => {
+  it('opens on Glance, switches by tab, and reflects the tab in the hash', async () => {
+    renderApp([makeSnapshot()]);
+    expect(screen.getByRole('tab', { name: 'Glance' }).getAttribute('aria-selected')).toBe('true');
+    await screen.findByRole('region', { name: 'P&L today' });
+    openTab('Review');
+    expect(window.location.hash).toBe('#review');
+    expect(screen.getByRole('region', { name: 'Closed trades' })).toBeTruthy();
+    openTab('Live');
+    expect(screen.getByRole('region', { name: 'Lanes' })).toBeTruthy();
+  });
+
+  it('boots on the tab the hash names', async () => {
+    window.history.replaceState(null, '', '#review');
+    renderApp([makeSnapshot()]);
+    expect(await screen.findByRole('region', { name: 'Closed trades' })).toBeTruthy();
+  });
+});
+
+describe('glance → live', () => {
+  it('stamps a settled lane into the verdict list once, and never again on a re-poll', async () => {
     const settled = doneThrough('ETH-USD', 'trace-eth', 'execution', { outcome: 'go' });
     const first = makeSnapshot({ pipeline: makeView([settled]) });
     const second = makeSnapshot({
@@ -135,16 +168,13 @@ describe('mission control', () => {
       generated_at: '2026-08-07T12:00:03.000Z',
     });
     renderApp([first, second]);
-
-    const ledger = await screen.findByRole('region', { name: 'Verdict ledger' });
-    await within(ledger).findByRole('button', { name: /ETH-USD, go/ });
-
-    // Wait for the second poll to land — the clock is what proves it did.
-    await screen.findByText('12:00:03Z');
-    expect(within(ledger).getAllByRole('button', { name: /ETH-USD, go/ })).toHaveLength(1);
+    const verdicts = await screen.findByRole('region', { name: 'Verdicts this session' });
+    await within(verdicts).findByRole('button', { name: /ETH-USD, go/ });
+    await screen.findByText('snapshot 12:00:03Z');
+    expect(within(verdicts).getAllByRole('button', { name: /ETH-USD, go/ })).toHaveLength(1);
   });
 
-  it('badges a HITL override on the ledger row that carries one', async () => {
+  it('badges a HITL override and carries the verdict reason', async () => {
     const settled = doneThrough('ETH-USD', 'trace-eth', 'verdict', { outcome: 'no_go' });
     renderApp([
       makeSnapshot({
@@ -159,51 +189,63 @@ describe('mission control', () => {
         ],
       }),
     ]);
-
-    const row = await screen.findByRole('button', { name: /ETH-USD, no-go, human override/ });
+    const row = await screen.findByRole('button', {
+      name: 'ETH-USD, no-go, human override, drawdown gate',
+    });
     expect(within(row).getByText('HITL')).toBeTruthy();
-    expect(within(row).getByText(/drawdown gate/)).toBeTruthy();
   });
 
-  it('opens the drawer from a ledger row and from a chip, and names its empty states', async () => {
-    renderApp([makeSnapshot({ pipeline: theaterView(), debates: [] })]);
+  it('opens the trace stamped on a verdict row on Live, not the instrument’s current one', async () => {
+    const old = doneThrough('ETH-USD', 'trace-old', 'verdict', { outcome: 'no_go' });
+    const current = doneThrough('ETH-USD', 'trace-new', 'execution', { outcome: 'go' });
+    const first = makeSnapshot({
+      pipeline: makeView([old]),
+      verdicts: [makeVerdict({ trace_id: 'trace-old', status: 'no_go', reason: 'drawdown gate' })],
+    });
+    const second = makeSnapshot({
+      pipeline: makeView([current]),
+      as_of: '2026-08-07T12:00:03.000Z',
+      generated_at: '2026-08-07T12:00:03.000Z',
+      verdicts: [
+        makeVerdict({ trace_id: 'trace-new', status: 'go', reason: 'approved' }),
+        makeVerdict({ trace_id: 'trace-old', status: 'no_go', reason: 'drawdown gate' }),
+      ],
+    });
+    renderApp([first, second]);
+    await screen.findByText('snapshot 12:00:03Z');
+    fireEvent.click(await screen.findByRole('button', { name: /ETH-USD, no-go/ }));
+    expect(window.location.hash).toBe('#live');
+    const drawer = screen.getByRole('complementary', { name: 'Trace detail' });
+    expect(within(drawer).getByText('trace-old')).toBeTruthy();
+    expect(within(drawer).queryByText('trace-new')).toBeNull();
+    expect(within(drawer).getByText(/aged out of the 15-minute pipeline window/)).toBeTruthy();
+    expect(within(drawer).getByText(/drawdown gate/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /^ETH-USD, crypto, go/ }));
+    expect(within(drawer).getByText('trace-new')).toBeTruthy();
+    expect(within(drawer).getByRole('list', { name: 'Stage timeline' })).toBeTruthy();
+  });
+});
 
-    // Wait on a chip — a data-dependent node — rather than on the drawer
-    // region, which is drawn from first paint (the deferred-shell contract) and
-    // would resolve before the first payload landed.
-    const spy = await screen.findByRole('button', { name: /SPY, stocks, idle/ });
-    const drawer = screen.getByRole('region', { name: 'Instrument detail' });
-    // Nothing selected yet: the drawer says why it is empty rather than sitting blank.
-    expect(within(drawer).getByText(/no instrument selected/i)).toBeTruthy();
-
-    fireEvent.click(spy);
-    expect(within(drawer).getByText(/no trace in the last 15 minutes/i)).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('button', { name: /QQQ, stocks, stopped/ }));
-    // The invalidation section with no Risk decision on the snapshot for this
-    // trace (#1066): named, not rendered blank.
-    expect(drawer.querySelector('[data-invalidation="no-decision"]')).toBeTruthy();
-    // The Trader and Risk cells carry no decision word — #328, spelled out.
+describe('live', () => {
+  it('names every lane’s outcome and stage in words, and reads a stopped cell’s decision', async () => {
+    renderApp([makeSnapshot({ pipeline: laneView() })]);
+    openTab('Live');
     expect(
-      within(drawer).getAllByText(/no decision word recorded \(#328\)/i).length,
-    ).toBeGreaterThan(0);
-    // A debate that never completed says so, rather than spinning forever.
-    expect(within(drawer).getByText(/no completed debate recorded/i)).toBeTruthy();
-    // The stage strip lists all six stages, including the never-reached ones.
-    expect(within(drawer).getAllByText('not reached').length).toBeGreaterThan(0);
+      await screen.findByRole('button', { name: 'BTC-USD, crypto, in flight, at Debate' }),
+    ).toBeTruthy();
+    const qqq = screen.getByRole('button', { name: 'QQQ, stocks, stopped, at Risk' });
+    expect(within(qqq).getByText('rejected · exposure cap')).toBeTruthy();
+    expect(within(qqq).getAllByText('not reached').length).toBeGreaterThan(0);
+    const spy = screen.getByRole('button', { name: 'SPY, stocks, idle, no trace in the window' });
+    expect(within(spy).getAllByText('idle')).toHaveLength(6);
+    const btc = screen.getByRole('button', { name: /BTC-USD/ });
+    expect(within(btc).getAllByText('wait')).toHaveLength(4);
   });
 
-  /**
-   * #1066. The Risk decision the drawer shows is the one belonging to the
-   * TRACE it is showing, matched on `(trace_id, instrument)`. Two decisions on
-   * one instrument in the same window are two different arguments, and showing
-   * the wrong one's conditions is the silent mis-attribution migration 0015
-   * exists to prevent — so the fixture below carries both.
-   */
   it('shows the invalidation conditions of the selected trace, not the instrument’s other one', async () => {
     renderApp([
       makeSnapshot({
-        pipeline: theaterView(),
+        pipeline: laneView(),
         risk_critics: [
           makeRiskCritic({
             trace_id: 'trace-qqq-older',
@@ -219,10 +261,9 @@ describe('mission control', () => {
         ],
       }),
     ]);
-
+    openTab('Live');
     fireEvent.click(await screen.findByRole('button', { name: /QQQ, stocks, stopped/ }));
-    const drawer = screen.getByRole('region', { name: 'Instrument detail' });
-
+    const drawer = screen.getByRole('complementary', { name: 'Trace detail' });
     expect(drawer.querySelector('[data-condition="shown-trace-condition"]')).toBeTruthy();
     expect(drawer.querySelector('[data-condition="older-trace-condition"]')).toBeNull();
     expect(
@@ -230,361 +271,46 @@ describe('mission control', () => {
     ).toBe('risk_critic:invalidated');
   });
 
-  it('marks the strip stale after two missed polls, keeping the last numbers', async () => {
-    renderApp([makeSnapshot(), null]);
-
-    await screen.findByText('12:00:00Z');
-    await waitFor(() => expect(screen.getByText(/^stale — last update/)).toBeTruthy(), {
-      timeout: 2_000,
-    });
-    const strip = screen.getByRole('region', { name: 'Telemetry' });
-    expect(strip.getAttribute('data-stale')).toBe('true');
-    // Numbers are marked stale, never blanked — a blank field reads as zero.
-    expect(within(strip).getByText('12:00:00Z')).toBeTruthy();
+  it('names its empty states: no selection, an idle lane, no debate, no Risk decision', async () => {
+    renderApp([makeSnapshot({ pipeline: laneView(), debates: [], positions: [] })]);
+    openTab('Live');
+    const drawer = screen.getByRole('complementary', { name: 'Trace detail' });
+    expect(await within(drawer).findByText(/No lane selected/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /SPY, stocks, idle/ }));
+    expect(within(drawer).getByText(/idle — no trace in the last 15 minutes/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /QQQ, stocks, stopped/ }));
+    expect(drawer.querySelector('[data-invalidation="no-decision"]')).toBeTruthy();
+    expect(within(drawer).getByText(/no completed debate recorded/i)).toBeTruthy();
+    expect(within(drawer).getByText(/No open position for this instrument/)).toBeTruthy();
+    expect(within(drawer).getAllByText(/no decision word recorded \(#328\)/).length).toBe(1);
   });
 
-  it('renders "mode unknown" when the wire carries no mode, never "paper"', async () => {
-    const snapshot = makeSnapshot();
-    // Deleted rather than assigned, and cast because the wire type says the
-    // field is there: the case under test is a payload from a server that
-    // does not send it (an older build, a proxy that rewrote the body), which
-    // no type can rule out at runtime. This goes through the real fetch
-    // boundary, so it also covers `toWireSnapshot` narrowing it to `null`.
-    delete (snapshot as { mode?: unknown }).mode;
-    renderApp([snapshot]);
-
-    expect(await screen.findByText('mode unknown')).toBeTruthy();
-    expect(screen.queryByText('PAPER')).toBeNull();
-  });
-
-  it('renders "mode unknown" for a mode word this client does not recognise', async () => {
-    const snapshot = makeSnapshot();
-    (snapshot as { mode?: unknown }).mode = 'staging';
-    renderApp([snapshot]);
-
-    // The unrecognised word is never printed — rendering whatever the server
-    // sent is the "trust the wire" failure the boundary check exists to end.
-    expect(await screen.findByText('mode unknown')).toBeTruthy();
-    expect(screen.queryByText('STAGING')).toBeNull();
-    expect(screen.queryByText('PAPER')).toBeNull();
+  it('keeps keyboard focus on a lane across a poll', async () => {
+    const view = laneView();
+    renderApp([
+      makeSnapshot({ pipeline: view }),
+      makeSnapshot({
+        pipeline: view,
+        as_of: '2026-08-07T12:00:03.000Z',
+        generated_at: '2026-08-07T12:00:03.000Z',
+      }),
+    ]);
+    openTab('Live');
+    const lane = await screen.findByRole('button', { name: /QQQ, stocks, stopped/ });
+    lane.focus();
+    await screen.findByText('snapshot 12:00:03Z');
+    expect(document.activeElement).toBe(lane);
   });
 
   it('renders a hostile instrument string as inert text', async () => {
     const hostile = '<img src=x onerror="alert(1)">';
     const lane = doneThrough(hostile, 'trace-x', 'verdict', { outcome: 'no_go' });
     renderApp([makeSnapshot({ pipeline: makeView([lane]), positions: [], debates: [] })]);
-
-    const chip = await screen.findByRole('button', { name: /img src=x/ });
-    // The property that matters is that the string became TEXT, not markup:
-    // the callsign holds it verbatim with no element children, and nothing in
-    // the document parsed it into a tag. Asserting on `innerHTML` would prove
-    // nothing either way — an escaped text node serializes back to a string
-    // that still contains the characters.
-    const callsign = chip.querySelector('.chip-callsign');
-    expect(callsign?.textContent).toBe(hostile);
-    expect(callsign?.childElementCount).toBe(0);
+    openTab('Live');
+    const button = await screen.findByRole('button', { name: /img src=x/ });
+    const name = button.querySelector('.lane-instrument');
+    expect(name?.textContent).toBe(hostile);
+    expect(name?.childElementCount).toBe(0);
     expect(document.querySelectorAll('img, script').length).toBe(0);
-    // The ledger renders the same untrusted string on its own path.
-    const ledger = screen.getByRole('region', { name: 'Verdict ledger' });
-    // `findBy`, not `getBy`: the ledger is folded in by an effect, so it lands
-    // one render after the chip the assertion above already waited for.
-    const row = await within(ledger).findByRole('button');
-    expect(row.querySelector('.ledger-instrument')?.textContent).toBe(hostile);
-  });
-
-  it('keeps keyboard focus on a chip across a poll', async () => {
-    const view = theaterView();
-    const next = makeSnapshot({
-      pipeline: view,
-      as_of: '2026-08-07T12:00:03.000Z',
-      generated_at: '2026-08-07T12:00:03.000Z',
-    });
-    renderApp([makeSnapshot({ pipeline: view }), next]);
-
-    const chip = await screen.findByRole('button', { name: /QQQ, stocks, stopped/ });
-    chip.focus();
-    expect(document.activeElement).toBe(chip);
-
-    await screen.findByText('12:00:03Z');
-    // A 3-second poll that steals focus makes the page unusable with a
-    // keyboard (spec, Accessibility floor).
-    expect(document.activeElement).toBe(chip);
-  });
-
-  // The spec asks for focus to survive repaints AND walks (Accessibility
-  // floor). The test above covers the repaint; a walk is the harder case,
-  // because `useWalkAnimation` reaches into the focused element imperatively —
-  // it rewrites `style.transform`, adds and removes classes, and attaches a
-  // `transitionend` listener to it — on every poll that moves a chip.
-  it('keeps keyboard focus on a chip while that chip walks between rooms', async () => {
-    const before = makeView([doneThrough('BTC-USD', 'trace-btc', 'debate')]);
-    const after = makeView([doneThrough('BTC-USD', 'trace-btc', 'risk')]);
-    renderApp([
-      makeSnapshot({ pipeline: before }),
-      makeSnapshot({
-        pipeline: after,
-        as_of: '2026-08-07T12:00:03.000Z',
-        generated_at: '2026-08-07T12:00:03.000Z',
-      }),
-    ]);
-
-    const chip = await screen.findByRole('button', { name: /BTC-USD/ });
-    chip.focus();
-    expect(document.activeElement).toBe(chip);
-
-    await screen.findByText('12:00:03Z');
-    // The walk is a class and transform change on the focused element; neither
-    // may take the caret with it.
-    expect(document.activeElement).toBe(chip);
-    // Same element, not a remount that happened to be re-found by name — a
-    // remounted chip would have dropped focus to `<body>` on the way.
-    expect(screen.getByRole('button', { name: /BTC-USD/ })).toBe(chip);
-  });
-
-  it('keeps keyboard focus on a ledger row across a poll that stamps a new one', async () => {
-    const settled = makeView([doneThrough('BTC-USD', 'trace-btc', 'verdict', { outcome: 'go' })]);
-    const plusOne = makeView([
-      doneThrough('BTC-USD', 'trace-btc', 'verdict', { outcome: 'go' }),
-      doneThrough('SPY', 'trace-spy', 'risk', { outcome: 'stopped' }),
-    ]);
-    renderApp([
-      makeSnapshot({ pipeline: settled }),
-      makeSnapshot({
-        pipeline: plusOne,
-        as_of: '2026-08-07T12:00:03.000Z',
-        generated_at: '2026-08-07T12:00:03.000Z',
-      }),
-    ]);
-
-    const ledger = screen.getByRole('region', { name: 'Verdict ledger' });
-    const row = await within(ledger).findByRole('button', { name: /BTC-USD/ });
-    row.focus();
-    expect(document.activeElement).toBe(row);
-
-    // A second row stamps in above it; the ledger is keyed by `trace_id`, so
-    // the focused row must not be recycled into the new one's position.
-    await within(ledger).findByRole('button', { name: /SPY/ });
-    expect(document.activeElement).toBe(row);
-  });
-
-  it('carries both spend caveats whenever their counts are non-zero', async () => {
-    // Both counts sit on `all_time` — the window the caveats report — because
-    // the windows are nested and a call inside 24h is inside all time too.
-    const spend = makeSpend();
-    spend.all_time = {
-      ...spend.all_time,
-      unpriced_calls: 3,
-      per_debate: { ...spend.all_time.per_debate, unattributed_calls: 7 },
-    };
-    renderApp([makeSnapshot({ llm_spend: spend })]);
-
-    const panel = screen.getByRole('region', { name: 'LLM spend' });
-    expect(await within(panel).findByText(/unpriced calls/)).toBeTruthy();
-    expect(within(panel).getByText(/floor, not a total/)).toBeTruthy();
-    expect(within(panel).getByText(/carry no/)).toBeTruthy();
-  });
-
-  it('counts each unpriced call ONCE across the nested spend windows', async () => {
-    // #606 item 1. The same 3 unpriced and 7 unattributed calls appear in all
-    // three windows, because 24h ⊂ 7d ⊂ all time (`getLlmSpend` leaves
-    // `all_time` open-ended and bounds the other two by timestamp). Summing
-    // the windows reported 9 and 21 — a caveat that exists to stop a spend
-    // figure reading as more complete than it is, inflating its own count.
-    const spend = makeSpend();
-    for (const key of ['last_24h', 'last_7d', 'all_time'] as const) {
-      spend[key] = {
-        ...spend[key],
-        unpriced_calls: 3,
-        per_debate: { ...spend[key].per_debate, unattributed_calls: 7 },
-      };
-    }
-    renderApp([makeSnapshot({ llm_spend: spend })]);
-
-    const panel = screen.getByRole('region', { name: 'LLM spend' });
-    const unpriced = await within(panel).findByText(/unpriced calls/);
-    expect(unpriced.textContent).toContain('3 unpriced calls (all time)');
-    expect(unpriced.textContent).not.toContain('9 unpriced');
-    const unattributed = within(panel).getByText(/carry no/);
-    expect(unattributed.textContent).toContain('7 calls (all time)');
-    expect(unattributed.textContent).not.toContain('21 calls');
-    // The strip's burn caveat already quoted `all_time`; the two agree now.
-    const strip = screen.getByRole('region', { name: 'Telemetry' });
-    expect(within(strip).getByText(/3 unpriced calls/)).toBeTruthy();
-  });
-
-  it('degrades to the spend panel’s empty state when the spend read is missing', async () => {
-    // #606 item 2. The panel and the burn meter both have an honest rendering
-    // for an absent summary; the boundary used to throw the whole payload away
-    // instead, freezing every OTHER panel into stale to spare the one built to
-    // degrade. Deleted rather than assigned, because the case is a server or
-    // proxy that does not send the field.
-    const snapshot = makeSnapshot({ pipeline: theaterView() });
-    delete (snapshot as { llm_spend?: unknown }).llm_spend;
-    renderApp([snapshot]);
-
-    // The rest of the page is alive: positions, the theater and the clock all
-    // landed from the very payload the boundary used to reject.
-    expect(await screen.findByText('12:00:00Z')).toBeTruthy();
-    expect(screen.getByRole('button', { name: /QQQ, stocks, stopped/ })).toBeTruthy();
-    const spend = screen.getByRole('region', { name: 'LLM spend' });
-    expect(within(spend).getByText(/an absent summary means the read failed/)).toBeTruthy();
-    const strip = screen.getByRole('region', { name: 'Telemetry' });
-    // Not a zero-width bar reading as "nothing spent".
-    expect(within(strip).getByText(/meter not drawable/)).toBeTruthy();
-    expect(strip.getAttribute('data-stale')).toBe('false');
-  });
-
-  it('renders the spend empty state, not a white screen, for a malformed spend summary', async () => {
-    // PR #607 review round 1. An array passes `typeof x === 'object'`, so the
-    // first narrowing handed `[]` to `SpendPanel` as a summary and the read of
-    // `spend.all_time.per_debate` threw — and `main.tsx` mounts `<App/>` with
-    // no error boundary, so the whole operator surface goes blank. This is the
-    // end-to-end version of the boundary test: the page must survive it.
-    const snapshot = makeSnapshot({ pipeline: theaterView() });
-    (snapshot as { llm_spend?: unknown }).llm_spend = [];
-    renderApp([snapshot]);
-
-    expect(await screen.findByText('12:00:00Z')).toBeTruthy();
-    expect(screen.getByRole('button', { name: /QQQ, stocks, stopped/ })).toBeTruthy();
-    const spend = screen.getByRole('region', { name: 'LLM spend' });
-    expect(within(spend).getByText(/an absent summary means the read failed/)).toBeTruthy();
-    // Not a grid of em dashes reading as a real, empty spend summary.
-    expect(within(spend).queryByText('24 hours')).toBeNull();
-  });
-
-  it('reads live, not idle, when a trace is running but tick_status is absent', async () => {
-    // #606 item 4. `tick_status` is null while `pipeline.live_trace_id` is
-    // set: the rooms hero glows and the cell's own caveat prints the trace, so
-    // "idle — no tick in progress" left the strip contradicting the rest of
-    // the page — and "the system has gone quiet" is the reading that makes an
-    // operator intervene.
-    renderApp([makeSnapshot({ pipeline: theaterView(), tick_status: null })]);
-
-    const strip = screen.getByRole('region', { name: 'Telemetry' });
-    expect(await within(strip).findByText('trace trace-btc')).toBeTruthy();
-    expect(within(strip).queryByText(/idle — no tick in progress/)).toBeNull();
-    expect(within(strip).getByText(/live — a trace is running/)).toBeTruthy();
-    // The room it disagreed with, still glowing.
-    const debateRoom = screen.getByRole('heading', { name: 'Debate' }).closest('.room');
-    expect(debateRoom?.classList.contains('room-live')).toBe(true);
-  });
-
-  it('still reads idle when there is no tick AND no live trace', async () => {
-    // The other half of item 4: the muted idle wording is not gone, it is
-    // reserved for the case where both fields agree there is nothing running.
-    renderApp([makeSnapshot({ tick_status: null })]);
-
-    const strip = screen.getByRole('region', { name: 'Telemetry' });
-    expect(await within(strip).findByText(/idle — no tick in progress/)).toBeTruthy();
-    expect(within(strip).getByText('no live trace')).toBeTruthy();
-  });
-
-  it('opens the trace stamped on a ledger row, not the instrument’s current one', async () => {
-    // #606 item 5. ETH-USD settles twice this session. The drawer used to be
-    // keyed by instrument, so clicking the OLDER row showed the trace ETH-USD
-    // is on now — a different decision than the one the row is stamped with,
-    // under a subheading promising "click a row for its trace".
-    const old = doneThrough('ETH-USD', 'trace-old', 'verdict', { outcome: 'no_go' });
-    const current = doneThrough('ETH-USD', 'trace-new', 'execution', { outcome: 'go' });
-    const first = makeSnapshot({
-      pipeline: makeView([old]),
-      verdicts: [makeVerdict({ trace_id: 'trace-old', status: 'no_go', reason: 'drawdown gate' })],
-    });
-    const second = makeSnapshot({
-      pipeline: makeView([current]),
-      as_of: '2026-08-07T12:00:03.000Z',
-      generated_at: '2026-08-07T12:00:03.000Z',
-      // Both, as the wire carries them: `verdicts[]` is the last ten settled
-      // decisions, not just the current tick's.
-      verdicts: [
-        makeVerdict({ trace_id: 'trace-new', status: 'go', reason: 'approved' }),
-        makeVerdict({ trace_id: 'trace-old', status: 'no_go', reason: 'drawdown gate' }),
-      ],
-    });
-    renderApp([first, second]);
-
-    // Wait for the second poll, so the ledger holds both rows and the only
-    // lane on the wire is the newer trace.
-    await screen.findByText('12:00:03Z');
-    const ledger = await screen.findByRole('region', { name: 'Verdict ledger' });
-    const older = await within(ledger).findByRole('button', { name: /ETH-USD, no-go/ });
-    fireEvent.click(older);
-
-    const drawer = screen.getByRole('region', { name: 'Instrument detail' });
-    expect(within(drawer).getByText('trace trace-old')).toBeTruthy();
-    expect(within(drawer).queryByText('trace trace-new')).toBeNull();
-    // Its own verdict travels with it, even though the lane has aged out.
-    expect(within(drawer).getByText(/drawdown gate/)).toBeTruthy();
-    expect(within(drawer).getByText(/aged out of the 15-minute pipeline window/)).toBeTruthy();
-    // Only the row being described is highlighted.
-    expect(older.classList.contains('ledger-row-selected')).toBe(true);
-    const newer = within(ledger).getByRole('button', { name: /ETH-USD, go/ });
-    expect(newer.classList.contains('ledger-row-selected')).toBe(false);
-
-    // And the current row still resolves to the live lane's stage strip.
-    fireEvent.click(newer);
-    expect(within(drawer).getByText('trace trace-new')).toBeTruthy();
-    // A trace still inside the window keeps its full stage strip.
-    expect(within(drawer).getByRole('columnheader', { name: 'Stage' })).toBeTruthy();
-  });
-
-  it('samples equity per probe observation, not per poll', async () => {
-    // The Alpaca tile is refreshed on its own 60-second poller, so the same
-    // balance is re-served across ~20 of these 3-second polls. Counting each
-    // one would draw a "curve" of one repeated number.
-    const polls = [0, 1, 2, 3].map((step) =>
-      makeSnapshot({
-        as_of: `2026-08-07T12:00:0${step}.000Z`,
-        generated_at: `2026-08-07T12:00:0${step}.000Z`,
-      }),
-    );
-    // The fifth poll carries a genuinely new probe observation.
-    const moved = makeSnapshot({
-      as_of: '2026-08-07T12:00:04.000Z',
-      generated_at: '2026-08-07T12:00:04.000Z',
-    });
-    moved.providers.alpaca = {
-      ...moved.providers.alpaca,
-      observed_at: '2026-08-07T12:01:00.000Z',
-      balance: { cash: 99_000, equity: 100_500.5, buying_power: 198_000 },
-    };
-    renderApp([...polls, moved]);
-
-    const metrics = screen.getByRole('region', { name: 'Metrics suite' });
-    // Four snapshots, one unchanged observation between them: still no series.
-    await screen.findByText('12:00:03Z');
-    expect(within(metrics).getByText(/No equity series yet/)).toBeTruthy();
-    expect(within(metrics).getByText(/one distinct observation so far/)).toBeTruthy();
-
-    // The moved observation is a second point, and the line appears — so the
-    // assertion above is about de-duplication, not about never accumulating.
-    await screen.findByText('12:00:04Z');
-    expect(await within(metrics).findByRole('img', { name: /Alpaca equity/ })).toBeTruthy();
-    expect(within(metrics).getByText(/2 probe observations this session/)).toBeTruthy();
-  });
-
-  it('shows the whole metrics suite and the honest empty states around it', async () => {
-    renderApp([makeSnapshot({ positions: [], analysts: [], debates: [] })]);
-
-    const metrics = screen.getByRole('region', { name: 'Metrics suite' });
-    await within(metrics).findByText('Sharpe');
-    for (const label of [
-      'Sharpe',
-      'Sortino',
-      'Calmar',
-      'Max drawdown',
-      'Profit factor',
-      'Expectancy',
-      'Skew',
-      'Excess kurtosis',
-      'Turnover',
-      'Exposure',
-    ]) {
-      expect(within(metrics).getByText(label)).toBeTruthy();
-    }
-    // One equity sample is not a series, and the panel says so.
-    expect(within(metrics).getByText(/No equity series yet/)).toBeTruthy();
-    expect(screen.getByText(/No open position/)).toBeTruthy();
-    expect(screen.getByText(/No analyst weights/)).toBeTruthy();
   });
 });

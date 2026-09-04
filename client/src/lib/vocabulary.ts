@@ -1,26 +1,22 @@
 /**
- * The page's words (issue #538). Every state that carries a colour also
- * carries a word, and this module is where those words are defined once —
- * "colour is never the sole carrier of a signal" (dashboard-spec.md, Design
- * system / Accessibility floor) is only enforceable if there is a single
- * table a reviewer can check rather than a string literal per component.
+ * Every word the page uses for a wire enum, in one place.
  *
- * Pure and React-free, like the rest of `lib/`. Every lookup is total over
- * its wire union, so a wire value that grows a member fails to compile here
- * rather than rendering blank somewhere on the screen.
+ * Rendering `no_go` as "no_go" leaks the store's spelling onto the operator's
+ * screen; rendering it as a colour alone hides it from anyone who cannot see
+ * the colour. Colour is never the sole signal on this page (dashboard-spec.md,
+ * "Accessibility floor"), so every state has a word, and the word lives here so
+ * a tab, a drawer and an accessible name cannot disagree about it.
  */
-
 import type {
   CloseReason,
+  EvaluatedConditionWire,
   PipelineCellState,
-  PipelineLane,
   PipelineOutcome,
   PipelineStage,
+  RiskCriticRow,
 } from '@contracts';
 import type { SettledOutcome } from './ledger.ts';
-import type { RoomId } from './room-layout.ts';
 
-/** How a trace ended, in words — the text half of the chip's outcome ring. */
 export const OUTCOME_WORD: Readonly<Record<PipelineOutcome, string>> = {
   go: 'go',
   no_go: 'no-go',
@@ -30,7 +26,6 @@ export const OUTCOME_WORD: Readonly<Record<PipelineOutcome, string>> = {
   idle: 'idle',
 };
 
-/** What happened at one stage, in words — the drawer's state column. */
 export const CELL_STATE_WORD: Readonly<Record<PipelineCellState, string>> = {
   done: 'done',
   live: 'live',
@@ -40,11 +35,18 @@ export const CELL_STATE_WORD: Readonly<Record<PipelineCellState, string>> = {
 };
 
 /**
- * The hanko seals (dashboard-spec.md, "Verdict ledger"): 可 go, 否 no_go,
- * 止 stopped, 略 quorum_skip. A seal is ornament with a job, so its meaning is
- * always rendered beside it as `OUTCOME_WORD` too — the glyph is never the
- * only carrier either.
+ * The word a lane-matrix cell shows. `not_reached` reads as "wait" while the
+ * lane is still running — the stage is ahead of the tick — and as "not
+ * reached" once it has settled, where nothing will ever reach it. An idle lane
+ * has no trace at all, so every cell says so.
  */
+export function cellStateWord(state: PipelineCellState, laneOutcome: PipelineOutcome): string {
+  if (laneOutcome === 'idle') return 'idle';
+  if (state === 'not_reached' && laneOutcome === 'in_flight') return 'wait';
+  return CELL_STATE_WORD[state];
+}
+
+/** The hanko glyphs. 可 go · 否 no-go · 止 stopped · 略 quorum skip. */
 export const SEAL_GLYPH: Readonly<Record<SettledOutcome, string>> = {
   go: '可',
   no_go: '否',
@@ -52,58 +54,23 @@ export const SEAL_GLYPH: Readonly<Record<SettledOutcome, string>> = {
   quorum_skip: '略',
 };
 
-export interface RoomMeta {
-  /** `01`–`06`, or `null` for the Lobby, which is not a pipeline stage. */
-  number: string | null;
-  name: string;
-  /** Watermark kanji — decorative, `aria-hidden` at the render site. */
-  kanji: string;
-  /** One-line description of what the room does. */
-  blurb: string;
-}
-
-/** Room numbers, names, kanji watermarks (待析議商危決行) and blurbs. */
-export const ROOM_META: Readonly<Record<RoomId, RoomMeta>> = {
-  lobby: { number: null, name: 'Lobby', kanji: '待', blurb: 'idle instruments' },
-  analysts: { number: '01', name: 'Analysts', kanji: '析', blurb: 'quorum gate' },
-  debate: { number: '02', name: 'Debate', kanji: '議', blurb: 'personas · rounds' },
-  trader: { number: '03', name: 'Trader', kanji: '商', blurb: 'intent' },
-  risk: { number: '04', name: 'Risk', kanji: '危', blurb: 'sizing · gates' },
-  verdict: { number: '05', name: 'Verdict', kanji: '決', blurb: 'go / no-go' },
-  execution: { number: '06', name: 'Execution', kanji: '行', blurb: 'fills' },
+export const STAGE_NAME: Readonly<Record<PipelineStage, string>> = {
+  analysts: 'Analysts',
+  debate: 'Debate',
+  trader: 'Trader',
+  risk: 'Risk',
+  verdict: 'Verdict',
+  execution: 'Execution',
 };
 
-/** Stage names for the drawer's stage strip, which lists all six. */
 export function stageName(stage: PipelineStage): string {
-  return ROOM_META[stage].name;
+  return STAGE_NAME[stage];
 }
 
-export interface AssetGlyph {
-  /** A short mark distinguishing crypto from stocks. Decoration. */
-  glyph: string;
-  /** The same distinction in words — what a screen reader announces. */
-  word: string;
-}
-
-/**
- * The asset-class mark on a sigil chip. The glyph is decoration; `word` is the
- * part that carries the meaning, and both are rendered (the word visually
- * hidden on the chip, spoken in its accessible name).
- */
-export function assetGlyph(assetClass: PipelineLane['asset_class']): AssetGlyph {
-  return assetClass === 'crypto' ? { glyph: '₿', word: 'crypto' } : { glyph: '$', word: 'stocks' };
-}
-
-/** `buy`/`sell` as the position words an operator reads on the panel. */
 export function sideWord(side: 'buy' | 'sell'): string {
   return side === 'buy' ? 'long' : 'short';
 }
 
-/**
- * Why a closed trade closed, in words (#940). Total over the wire's
- * `CloseReason` union (`contracts/snapshot.ts`) — a member added there and not
- * here fails to compile, matching every other table in this file.
- */
 export const CLOSE_REASON_WORD: Readonly<Record<CloseReason, string>> = {
   stop: 'stop hit',
   target: 'target hit',
@@ -114,14 +81,36 @@ export const CLOSE_REASON_WORD: Readonly<Record<CloseReason, string>> = {
 };
 
 /**
- * The six `ProviderState` values, as words. Typed as a plain record rather
- * than against the wire union so an unknown string from the wire can be
- * detected (`providerStateWord` returns `null`) instead of rendering
- * `undefined` — a provider tile that invents a status is worse than one that
- * says it does not recognise the one it was given.
+ * Which visual family a close reason belongs to. A stop is the trade's own
+ * failure; a target its success; everything else is the system closing a
+ * position for a reason that is neither — the flat-by-close rule most often.
  */
+export function closeReasonTone(reason: CloseReason): 'stop' | 'done' | 'skip' {
+  if (reason === 'stop') return 'stop';
+  if (reason === 'target') return 'done';
+  return 'skip';
+}
+
+export const CONDITION_STATE_WORD: Readonly<Record<EvaluatedConditionWire['state'], string>> = {
+  breached: 'breached',
+  not_breached: 'holds',
+  unevaluable: 'unevaluable',
+};
+
+const CRITIC_VERDICT_WORD: Readonly<Record<NonNullable<RiskCriticRow['critic_verdict']>, string>> =
+  {
+    pass: 'pass',
+    trim: 'trim',
+    reject: 'reject',
+    unavailable: 'unavailable',
+  };
+
+export function criticVerdictWord(verdict: RiskCriticRow['critic_verdict']): string {
+  return verdict === null ? 'no verdict' : CRITIC_VERDICT_WORD[verdict];
+}
+
 const PROVIDER_STATE_WORD: Readonly<Record<string, string>> = {
-  ok: 'reachable',
+  ok: 'ok',
   unauthorized: 'unauthorized',
   forbidden: 'forbidden',
   rate_limited: 'rate limited',
@@ -129,7 +118,7 @@ const PROVIDER_STATE_WORD: Readonly<Record<string, string>> = {
   not_configured: 'not configured',
 };
 
-/** The provider state as a word, or `null` when the wire sent something unknown. */
+/** `null` for a state word this client does not know — never a guess. */
 export function providerStateWord(state: string): string | null {
   return PROVIDER_STATE_WORD[state] ?? null;
 }
