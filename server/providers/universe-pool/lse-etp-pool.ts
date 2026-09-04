@@ -93,12 +93,14 @@
  *    seeded from the same leaderboard inherits them identically. The six are
  *    the pool's largest, most heavily traded US underlyings on ordinary
  *    market knowledge, which is a hand-declaration and is labelled as one.
- * 5. **Liquidity is NOT verified.** The spec asks for a subset that is
- *    "liquid and `t212_isa: true`". Neither half is available today:
- *    `t212_isa` is `true` on 30/30 rows so it excludes nothing, and it names
- *    a venue Samurai is barred from (#896/#912, #1054); no spread or volume
- *    measurement exists until #1035 → #1053 land. This subset is therefore
- *    declared pending that measurement, not screened against it.
+ * 5. **Liquidity is NOT verified.** The spec used to ask for a subset that is
+ *    "liquid and `t212_isa: true`" — that wording named the wrong field and
+ *    is corrected by #1054 Part 1, because `t212_isa` names a venue Samurai
+ *    is barred from (#896/#912). The field the gate actually reads is
+ *    `saxo_tradeable`, and it is `'unverified'` on all 30 rows: no Saxo
+ *    instrument list has been captured (#1032 item 3), and no spread or
+ *    volume measurement exists until #1035 → #1053 land. This subset is
+ *    therefore declared pending both, not screened against either.
  *
  * ## Saxo venue change — what changed here and what did not
  *
@@ -114,13 +116,14 @@
  * ticker", not "does Saxo" — those are different, unverified claims, and
  * mechanically relabelling the field would assert a Saxo fact this pool has
  * never checked. #946's own scope excluded building a Saxo `BrokerAdapter`
- * or doing Saxo outreach, so no such check happened here — and, as of this
- * writing, no open ticket tracks that Saxo-side re-verification either. A
- * future pass that re-verifies this pool's rows (or a subset) against Saxo's
- * own tradeable
- * list, once a `BrokerAdapter` for Saxo exists, is the right place to either
- * add a parallel `saxo_tradeable`-style field or retire `t212_isa` — not this
- * change.
+ * or doing Saxo outreach, so no such check happened here. **#1054 Part 1
+ * adds the parallel field this paragraph used to say nothing tracked**:
+ * `saxo_tradeable` (see `LseEtpPoolRow`), `'unverified'` on every row below
+ * because no Saxo instrument list has been captured anywhere in this repo
+ * yet (#1032 item 3). A future evidence pass fills real `true`/`false`
+ * values in row by row once one is captured — that pass does not need a
+ * `BrokerAdapter` to exist first, only the list itself; the adapter is a
+ * precondition for trading what the pass verifies, not for verifying it.
  *
  * ## Provenance
  *
@@ -298,6 +301,17 @@ import type { AssetClass, InstrumentSubclass } from '../../shared/index.js';
 export type EtpDirection = 'long' | 'short';
 
 /**
+ * Tri-state Saxo tradeability. `true`/`false` are a verified claim, sourced
+ * from Saxo's own instrument list — nothing in this repo may set either
+ * without that source (#1032 item 3). `'unverified'` is not a placeholder
+ * default; it is the explicit, recorded statement that no such list has been
+ * captured yet, so there is nothing to source a boolean from. See
+ * `LseEtpPoolRow.saxo_tradeable` and `liquidityGateStatus` for how a caller
+ * must read this.
+ */
+export type SaxoTradeability = true | false | 'unverified';
+
+/**
  * Per-row citation. Not decoration: #749's acceptance criteria require
  * "dated provenance naming the issuer sources and the T212 metadata
  * cross-reference", and a shared file-level date does not say which specific
@@ -362,6 +376,32 @@ export interface LseEtpPoolRow {
    * checked.
    */
   readonly t212_isa: boolean;
+  /**
+   * Whether this instrument is tradeable on Saxo Capital Markets UK (GIA) —
+   * the live equity venue since 2026-08-30 (ADR-0015's amendment, map #905)
+   * — sourced from SAXO'S OWN instrument list. **This is the field
+   * `docs/specs/universe-selector-spec.md` story 16 / #750 AC7 name as the
+   * hard liquidity gate.** `t212_isa` above answers a different,
+   * no-longer-live question (does Trading 212 list it) and must never be
+   * read as this one — #1054 is the ticket that caught the gate reading the
+   * wrong field.
+   *
+   * `'unverified'` on every row as of #1054 Part 1: no Saxo instrument list
+   * has been captured anywhere in this repo (#1032 item 3), so there is
+   * nothing to source a `true`/`false` value from, and inventing one would
+   * assert a Saxo fact nobody checked — the same mistake `t212_isa` was
+   * built to avoid making about T212. `'unverified'` is not a quiet
+   * placeholder for `true`; it is the explicit, recorded statement that the
+   * liquidity gate is UNARMED. A caller must read it through
+   * `liquidityGateStatus`, which treats a pool-wide constant `'unverified'`
+   * as pass-through (armed: false) rather than as an exclusion — and
+   * `assertValidPool` refuses a pool where this field is instead constant
+   * `true` or `false`, because a gate that excludes nothing (or everything)
+   * on every row is a bug, not a legitimate configuration. A future
+   * evidence pass fills real values in row by row once a Saxo instrument
+   * list exists.
+   */
+  readonly saxo_tradeable: SaxoTradeability;
   /**
    * Whether ADR-0018's D3/D5 numbers for THIS row's `subclass` were actually
    * measured against an instrument like this one — not just whether the
@@ -475,6 +515,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    saxo_tradeable: 'unverified',
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -499,6 +540,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    saxo_tradeable: 'unverified',
     fallback_default: true,
     subclass_envelope_measured: true,
     provenance: {
@@ -522,6 +564,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    saxo_tradeable: 'unverified',
     fallback_default: true,
     subclass_envelope_measured: true,
     provenance: {
@@ -545,6 +588,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    saxo_tradeable: 'unverified',
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -568,6 +612,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    saxo_tradeable: 'unverified',
     fallback_default: true,
     subclass_envelope_measured: true,
     provenance: {
@@ -593,6 +638,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBP',
     t212_isa: true,
+    saxo_tradeable: 'unverified',
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -615,6 +661,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    saxo_tradeable: 'unverified',
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -639,6 +686,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    saxo_tradeable: 'unverified',
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -661,6 +709,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    saxo_tradeable: 'unverified',
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -686,6 +735,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    saxo_tradeable: 'unverified',
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -709,6 +759,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    saxo_tradeable: 'unverified',
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -742,6 +793,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'EUR',
     t212_isa: true,
+    saxo_tradeable: 'unverified',
     fallback_default: true,
     subclass_envelope_measured: true,
     provenance: {
@@ -767,6 +819,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    saxo_tradeable: 'unverified',
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -791,6 +844,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    saxo_tradeable: 'unverified',
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -817,6 +871,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    saxo_tradeable: 'unverified',
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -840,6 +895,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    saxo_tradeable: 'unverified',
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -864,6 +920,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    saxo_tradeable: 'unverified',
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -889,6 +946,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    saxo_tradeable: 'unverified',
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -914,6 +972,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    saxo_tradeable: 'unverified',
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -938,6 +997,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    saxo_tradeable: 'unverified',
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -962,6 +1022,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    saxo_tradeable: 'unverified',
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -988,6 +1049,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    saxo_tradeable: 'unverified',
     fallback_default: true,
     subclass_envelope_measured: true,
     provenance: {
@@ -1012,6 +1074,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    saxo_tradeable: 'unverified',
     fallback_default: true,
     subclass_envelope_measured: true,
     provenance: {
@@ -1037,6 +1100,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    saxo_tradeable: 'unverified',
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -1061,6 +1125,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    saxo_tradeable: 'unverified',
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -1087,6 +1152,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    saxo_tradeable: 'unverified',
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -1111,6 +1177,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    saxo_tradeable: 'unverified',
     fallback_default: false,
     subclass_envelope_measured: false,
     provenance: {
@@ -1139,6 +1206,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    saxo_tradeable: 'unverified',
     fallback_default: false,
     subclass_envelope_measured: false,
     provenance: {
@@ -1167,6 +1235,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    saxo_tradeable: 'unverified',
     fallback_default: false,
     subclass_envelope_measured: false,
     provenance: {
@@ -1193,6 +1262,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    saxo_tradeable: 'unverified',
     fallback_default: false,
     subclass_envelope_measured: false,
     provenance: {
@@ -1334,6 +1404,77 @@ export function liveSizingSubclassFor(row: LseEtpPoolRow): InstrumentSubclass | 
 }
 
 /**
+ * The gate's own account of whether `saxo_tradeable` is doing anything,
+ * classified from the pool rather than asserted separately from it — so this
+ * can never drift from what `assertValidPool` actually checks (it is
+ * `assertValidPool`'s own source of truth, not a parallel description of it).
+ *
+ * - `'unarmed'` — every row (or an empty pool) carries `'unverified'`. The
+ *   gate has nothing to exclude on yet and MUST be read as pass-through, not
+ *   as "nothing is tradeable". This is the checked-in pool's state today
+ *   (#1054 Part 1): no Saxo instrument list has been captured (#1032 item
+ *   3).
+ * - `'vacuous'` — every row carries the SAME verified value (`true` or
+ *   `false`). This is not a legitimate configuration: a gate that excludes
+ *   nothing, or excludes everything, on every input is a bug. `value` names
+ *   which constant it is. `assertValidPool` refuses a pool in this state.
+ * - `'armed'` — `saxo_tradeable` discriminates between at least two rows.
+ *   The gate has real information to exclude on.
+ */
+export type LiquidityGateStatus =
+  | { readonly state: 'unarmed'; readonly reason: string }
+  | { readonly state: 'armed'; readonly reason: string }
+  | { readonly state: 'vacuous'; readonly value: true | false; readonly reason: string };
+
+export function liquidityGateStatus(
+  pool: readonly LseEtpPoolRow[] = LSE_ETP_POOL,
+): LiquidityGateStatus {
+  if (pool.length === 0) {
+    return {
+      state: 'unarmed',
+      reason: 'Empty pool — there is nothing for the gate to exclude on.',
+    };
+  }
+  const distinct = new Set(pool.map((row) => row.saxo_tradeable));
+  if (distinct.size > 1) {
+    return {
+      state: 'armed',
+      reason:
+        'saxo_tradeable discriminates between rows — the gate has real exclusion information.',
+    };
+  }
+  // Reads the first row rather than destructuring `distinct` itself: `Set`
+  // iteration types every member as possibly-`undefined`, and so does
+  // `noUncheckedIndexedAccess` on `pool[0]` — this guard satisfies the
+  // latter and is unreachable in practice, since the empty-pool case
+  // returned above.
+  const firstRow = pool[0];
+  if (firstRow === undefined) {
+    return {
+      state: 'unarmed',
+      reason: 'Empty pool — there is nothing for the gate to exclude on.',
+    };
+  }
+  const only = firstRow.saxo_tradeable;
+  if (only === 'unverified') {
+    return {
+      state: 'unarmed',
+      reason:
+        'No Saxo instrument list has been captured anywhere in this repo (#1032 item 3), so every ' +
+        "row's saxo_tradeable is 'unverified'. The gate is explicitly UNARMED: it passes every row " +
+        'through rather than excluding on a tradeability claim nothing has verified.',
+    };
+  }
+  return {
+    state: 'vacuous',
+    value: only,
+    reason:
+      `saxo_tradeable is ${only} on every row. A gate constant at 'true' excludes nothing; one ` +
+      "constant at 'false' excludes everything. Either is a bug, not a legitimate configuration.",
+  };
+}
+
+/**
  * Validates every row of a pool: subclass is recognised (fails loud per
  * `assertKnownSubclass`), and both instrument-identity fields are non-empty
  * and distinct — distinct meaning UNEQUAL AFTER TRIMMING AND CASE-FOLDING
@@ -1382,7 +1523,38 @@ export function assertValidPool(pool: readonly LseEtpPoolRow[]): void {
       );
     }
   }
+  assertLiquidityGateNotVacuous(pool);
   assertValidFallbackSubset(pool);
+}
+
+/**
+ * Refuses a pool whose liquidity gate (`saxo_tradeable`) is 'vacuous' per
+ * `liquidityGateStatus` — constant `true` or constant `false` across every
+ * row. Both are a no-op-or-total gate shipping silently, this repo's
+ * dominant defect class (a mechanism that runs but enforces nothing) one
+ * level up: the ORIGINAL version of this defect was exactly this, with
+ * `t212_isa` constant `true` on all 30 rows (#1054).
+ *
+ * The `'unarmed'` state (constant `'unverified'`) does NOT throw here — see
+ * `liquidityGateStatus`'s own doc for why that state is the honest one, not
+ * the bug. If a future evidence pass verifies every row to the SAME value,
+ * that is either a coincidence worth recording explicitly (not just leaving
+ * the field uniform and silent) or, if it is genuinely accurate, a signal
+ * that `saxo_tradeable` has stopped carrying exclusion information and the
+ * real gate has to come from #1054 Part 2's cost ceiling instead — never a
+ * reason to flip one row back to the other value just to silence this check.
+ */
+export function assertLiquidityGateNotVacuous(pool: readonly LseEtpPoolRow[]): void {
+  const status = liquidityGateStatus(pool);
+  if (status.state === 'vacuous') {
+    throw new Error(
+      `LSE ETP pool's liquidity gate (saxo_tradeable) is constant '${status.value}' across all ` +
+        `${pool.length} rows. ${status.reason} If Saxo tradeability is now genuinely uniform, record ` +
+        'that explicitly (this function, or a comment on the pool) rather than shipping a field that ' +
+        "looks armed but excludes nothing — and land #1054 Part 2's cost ceiling as the real gate, " +
+        'since a uniform-true tradeability flag can no longer do that job.',
+    );
+  }
 }
 
 /**
