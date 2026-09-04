@@ -414,6 +414,42 @@ describe('MiRefreshQueue (#1085)', () => {
     expect(calls).toEqual([]);
   });
 
+  it('does not resolve stop until the refresh already dispatched has finished', async () => {
+    // The half `mi-refresh-wiring.test.ts` cannot see: a refresh can only be
+    // held open here. This is what the orchestrator's drain line buys — the
+    // in-flight refresh ends in an archive and store write, so a `stop()` that
+    // resolved early would let it race a closing store.
+    let release = (): void => {};
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let finished = false;
+    const queue = new MiRefreshQueue({
+      spendCap: UNCAPPED,
+      refresher: {
+        async refresh() {
+          await blocked;
+          finished = true;
+          return true;
+        },
+      },
+    });
+
+    await queue.refresh('tick-1', 'TSLA', 'stocks');
+    let stopped = false;
+    const stopping = queue.stop().then(() => {
+      stopped = true;
+    });
+
+    await settle();
+    expect(finished).toBe(false);
+    expect(stopped).toBe(false);
+
+    release();
+    await stopping;
+    expect(finished).toBe(true);
+  });
+
   it('picks up a request enqueued while a refresh is in flight', async () => {
     const calls: string[] = [];
     const queue = new MiRefreshQueue({
@@ -431,5 +467,48 @@ describe('MiRefreshQueue (#1085)', () => {
     await settle();
 
     expect(calls).toEqual(['TSLA', 'AAPL']);
+  });
+
+  it('serialises a re-entrant enqueue rather than starting a second worker', async () => {
+    // The test above proves the request is not LOST, and would pass just as
+    // well if a second worker picked it up — which is what a re-entrant
+    // enqueue used to cause. `#pump` is entered from inside the first
+    // dispatch's SYNCHRONOUS prefix, so it must already see a worker by then
+    // or two dispatches overlap and both read one pre-spend total, defeating
+    // the single property this class exists for.
+    const cap = meteredCap(1);
+    const calls: string[] = [];
+    let inFlight = 0;
+    let mostInFlightAtOnce = 0;
+    let reentered = false;
+    const queue = new MiRefreshQueue({
+      spendCap: cap,
+      refresher: {
+        async refresh(_trace_id, instrument) {
+          // Before the first await, so this runs while `#pump` is still on
+          // the stack below it.
+          if (!reentered) {
+            reentered = true;
+            void queue.refresh('tick-2', 'AAPL', 'stocks');
+          }
+          inFlight += 1;
+          mostInFlightAtOnce = Math.max(mostInFlightAtOnce, inFlight);
+          calls.push(instrument);
+          await Promise.resolve();
+          cap.spentUsd += 1;
+          inFlight -= 1;
+          return true;
+        },
+      },
+    });
+
+    await queue.refresh('tick-1', 'TSLA', 'stocks');
+    await settle();
+
+    expect(mostInFlightAtOnce).toBe(1);
+    // The budget is the real assertion: overlapping dispatches would both
+    // read a spent total of 0 and bill on top of each other.
+    expect(cap.spentUsd).toBe(1);
+    expect(calls).toEqual(['TSLA']);
   });
 });

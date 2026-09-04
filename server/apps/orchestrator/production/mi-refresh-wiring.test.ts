@@ -46,7 +46,11 @@ import { DEFAULT_TRADER_CONFIG } from '../../../pipeline/trader/index.js';
 import type { LogEntry, Logger } from '../../../shared/index.js';
 import { SimulatedClock } from '../../../shared/index.js';
 import { openSharedStore, type SharedStore } from '../../../shared/store/index.js';
-import { buildProductionComponents, type ProductionConfig } from '../production.js';
+import {
+  buildProductionComponents,
+  buildProductionOrchestrator,
+  type ProductionConfig,
+} from '../production.js';
 import { MI_REFRESH_TRACE_ID } from './mi-refresh-queue.js';
 
 const NOW = new Date('2026-09-03T14:00:00Z');
@@ -220,14 +224,43 @@ describe('MI refresh wiring (#1085)', () => {
     expect(components.marketIntelligenceRefresh?.refreshAttempted('TSLA')).toBe(false);
   });
 
-  it('drains the queue on stop, so a refresh cannot outlive the store', async () => {
+  it('drains the queue from the orchestrator own stop, so a refresh cannot outlive the store', async () => {
     // The price of moving the refresh off the tick: the tick drain no longer
     // covers it, and its archive/store write can land after the store closes.
-    const components = buildProductionComponents(
-      stubConfig(db, { logger: recordingLogger().logger, llmBudgetUsd: 50 }),
+    //
+    // Through `buildProductionOrchestrator`, NOT the components — the drain is
+    // a line inside that `stop()`, and a test calling `queue.stop()` itself
+    // would pass with the line deleted (it did, until #1105's review). The
+    // observable is the LATCH: the orchestrator's `stop()` is the only thing
+    // between an idle queue and a stopped one, and a stopped queue drops a
+    // refresh instead of dispatching it.
+    const { logger, entries } = recordingLogger();
+    recordSpend(db, 50);
+    const orchestrator = buildProductionOrchestrator(
+      stubConfig(db, {
+        logger,
+        llmBudgetUsd: 50,
+        universe: [{ asset: 'AAPL', asset_class: 'stocks' }],
+      }),
     );
+    const queue = orchestrator.marketIntelligenceRefresh;
+    expect(queue).toBeDefined();
 
-    expect(components.marketIntelligenceRefresh).toBeDefined();
-    await expect(components.marketIntelligenceRefresh?.stop()).resolves.toBeUndefined();
+    await orchestrator.stop();
+
+    // Post-stop, so it can only be admitted by a queue the shutdown never
+    // reached. Delete the drain line from `stop()` and this dispatches, logs
+    // its refusal, and both assertions go red.
+    await queue?.refresh('tick-after-stop', 'AAPL', 'stocks');
+    await settle();
+
+    expect(queue?.depth).toBe(0);
+    expect(entries.find((entry) => entry.trace_id === MI_REFRESH_TRACE_ID)).toBeUndefined();
   });
+
+  // The other half of the shutdown contract — that `stop()` AWAITS the refresh
+  // already dispatched rather than merely latching — is pinned in
+  // `mi-refresh-queue.test.ts`, where a refresher can be held open. It cannot
+  // be observed here: the only refresh reachable offline is one the cap
+  // refuses, which completes instantly.
 });

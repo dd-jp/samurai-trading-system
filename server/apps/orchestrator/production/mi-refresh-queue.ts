@@ -211,7 +211,17 @@ export class MiRefreshQueue implements MarketIntelligenceRefresh {
   /** Starts the worker if it is not already running; re-arms it if work arrived as it finished. */
   #pump(): void {
     if (this.#worker !== undefined) return;
-    const worker = this.#drain();
+    // DEFERRED, not called inline, and this is the whole single-worker
+    // guarantee. `#drain()` is an async function: calling it runs its body
+    // SYNCHRONOUSLY as far as its first await — through `spendCap.check()`
+    // and on into the refresher's own synchronous prefix — which is before
+    // `#worker` is assigned on the next line. A refresher that enqueues from
+    // that prefix would re-enter `#pump`, see no worker, and start a second
+    // one: two dispatches overlapping, both reading the same pre-spend total
+    // and both admitted, which is the one invariant this class exists for.
+    // Scheduling the drain on a microtask closes the window, because nothing
+    // else can run between here and the assignment below.
+    const worker = Promise.resolve().then(() => this.#drain());
     this.#worker = worker;
     // The window between `#drain` seeing an empty queue and this callback is
     // reachable from `refresh()`, and an enqueue landing in it would find

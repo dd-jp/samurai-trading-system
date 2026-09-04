@@ -393,6 +393,16 @@ export interface ProductionOrchestrator {
   /** #752: the market-intelligence coverage monitor — see `ProductionComponents.marketIntelligenceCoverage`. */
   marketIntelligenceCoverage: MiCoverageMonitor;
   /**
+   * The MI refresh queue (#1085), exposed for the same reason
+   * `marketIntelligenceCoverage` is: the only proof that `stop()` below
+   * actually reaches it is a test that drives the REAL shutdown path and then
+   * observes the queue. Without this the drain line inside `stop()` can be
+   * deleted with every test still green — which it could, until #1105's
+   * review. `undefined` whenever no MI agent was built (no credentials), which
+   * is the offline smoke gate's normal state.
+   */
+  marketIntelligenceRefresh: MiRefreshQueue | undefined;
+  /**
    * The MI store itself (#504), exposed for `marketIntelligenceCoverage`'s
    * reason: the offline smoke gate has to read back what the ingestion agents
    * actually put in front of the analysts. An archive row proves a fetch
@@ -3071,6 +3081,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     logger,
     marketIntelligenceCoverage: components.marketIntelligenceCoverage,
     marketIntelligence: components.marketIntelligence,
+    marketIntelligenceRefresh: components.marketIntelligenceRefresh,
 
     async start(): Promise<OrphanGoVerdict[]> {
       const orphans = await persistence.orphanScanner.scan(

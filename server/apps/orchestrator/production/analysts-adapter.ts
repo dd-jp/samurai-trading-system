@@ -246,11 +246,11 @@ export function buildAnalystsStep(
   return async ({ trace_id, signal, clock, bar }) => {
     // The refresh is triggered here and, in production, completes elsewhere —
     // see `AnalystsStepOptions.marketIntelligence`. Still awaited, because what
-    // `MiRefreshQueue.refresh` costs is bounded and small: NO LLM CALL runs
-    // inline, but the enqueue drives the worker synchronously as far as its
-    // first await, so ONE `spendCap.check()` — a local SQLite
-    // `SELECT SUM(cost_usd)` — can land on this stack. That is the whole
-    // difference from the multi-second round trips this line used to await.
+    // `MiRefreshQueue.refresh` costs is a map insert: NO LLM CALL runs inline,
+    // and not even the queue's own `spendCap.check()` does — `#pump` schedules
+    // the drain on a microtask rather than entering it, so nothing of the
+    // refresh runs on this stack at all. That is the whole difference from the
+    // multi-second round trips this line used to await.
     // Keeping the `await` keeps the ordering with the coverage check below
     // deterministic for a caller that does supply a blocking agent.
     // No refresher throws: market intelligence is an optional input, and an
