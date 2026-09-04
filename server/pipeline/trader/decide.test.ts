@@ -1035,6 +1035,37 @@ describe('decide — flat by close (#668)', () => {
     ).rejects.toThrow(/portfolio view refused/);
   });
 
+  /**
+   * #1089 — the CONTROL arm's own version of the two cases just above.
+   *
+   * The live arm's rethrow (immediately above) is deliberately unaffected by
+   * this change: `arm` defaults to `'live'`, so that case is unchanged. This
+   * is the OTHER side of the same equity-read refusal, only for
+   * `arm: 'control'` — the arm that has no `tick-loop.ts` `#507` catch to
+   * abort into (it inherits `ctx.decision_bar` from the live pass rather than
+   * holding a decision gate of its own) and no equivalent bounded retry, so
+   * the unhandled rejection killed the whole control-arm pass (#1089's six
+   * lost passes on 2026-09-03T19:58Z). It must resolve with a named skip
+   * rather than reject, so `decideWithReason`'s caller — and, one layer up,
+   * `SequentialTickRunner.runInstrument`, which wraps no stage in a try/catch
+   * of its own — can finish the pass instead of crashing it.
+   */
+  it('the control arm skips instead of refusing, with a distinct named reason (#1089)', async () => {
+    const outcome = await decideWithReason(
+      traderInput({
+        clock: new ManualClock(OUTSIDE_WINDOW),
+        positionState: async () => [],
+        arm: 'control',
+        equity: async () => {
+          throw new Error('portfolio view refused: SPY mark is stale');
+        },
+      }),
+    );
+
+    expect(outcome.intent).toBeNull();
+    expect(outcome.skip_reason).toBe('control_arm_valuation_refused');
+  });
+
   it('holds normally just outside the window', async () => {
     const outcome = await decideWithReason(
       traderInput({

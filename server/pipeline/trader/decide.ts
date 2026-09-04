@@ -413,18 +413,36 @@ async function buildBracket(
   // it. Two properties, both load-bearing:
   //
   //  1. Reaching sizing at all requires a whole-book valuation to have
-  //     succeeded. The thunk throws when the book cannot be fully valued, and
-  //     that throw aborts the tick exactly as the eager read did before #847
-  //     — it is NOT converted into a `skip_reason`. A read failure is a fault
-  //     and must stay audible in `tick-loop.ts`'s `error`-level catch (#507),
-  //     not become a thirteenth quiet skip row.
+  //     succeeded. On the LIVE arm the thunk's rejection propagates unchanged
+  //     — that throw aborts the tick exactly as the eager read did before
+  //     #847, and it is NOT converted into a `skip_reason` there. A read
+  //     failure is a fault and must stay audible in `tick-loop.ts`'s
+  //     `error`-level catch (#507), which retries via `decisionGate.rescind()`
+  //     and forfeits the bar loudly on exhaustion.
+  //
+  //     #1089: the CONTROL arm has no decision gate to rescind (it inherits
+  //     `ctx.decision_bar` from the live pass) and nothing upstream of
+  //     `buildControlArmStep`'s warn-only catch to retry it — so the same
+  //     unhandled rejection that #507 turns into a bounded retry on the live
+  //     arm instead kills the whole control-arm pass outright, one dark
+  //     control-only lot at a time, with nothing but a warn log line to show
+  //     for it. `arm === 'control'` converts the rejection into
+  //     `control_arm_valuation_refused` instead of rethrowing — a durable,
+  //     queryable decision row rather than a crash — and does so ONLY for the
+  //     control arm; the live arm's rethrow below is byte-for-byte unchanged.
   //  2. Nothing that does NOT size pays for it or fails on it. `routeDecision`
   //     evaluates flat-by-close before it can ever get here, so a dark mark
   //     elsewhere in the book no longer suppresses this pass's flatten.
   //
   // Awaited at the TOP rather than at the use site so a future edit cannot
   // reach the `size` computation on some path that skipped the read.
-  const equity = await input.equity();
+  let equity: number;
+  try {
+    equity = await input.equity();
+  } catch (error) {
+    if (arm === 'control') return skip('control_arm_valuation_refused');
+    throw error;
+  }
 
   if (debate.confidence < config.conviction_floor) return skip('below_conviction_floor');
 
@@ -1095,7 +1113,24 @@ export type TraderSkipReason =
   // #941: the entry sized to less than one whole share on a venue that only
   // accepts whole shares (`whole_share_sizing`). Not a data-quality failure
   // and not dust — see the guard's own comment in `decide`.
-  | 'rounds_to_zero_shares';
+  | 'rounds_to_zero_shares'
+  // #1089, `arm === 'control'` ONLY. `equity()` rejected — the whole-book
+  // valuation `#847` captured could not be produced (a held instrument's mark
+  // is dark or stale). On the LIVE arm this same rejection is deliberately
+  // left to propagate unwrapped out of `buildBracket` — #847's own comment
+  // above the read says why: it must abort the tick into `tick-loop.ts`'s
+  // `#507` catch, which retries on `decisionGate.rescind()` and forfeits the
+  // bar loudly on exhaustion. The control arm has no decision gate of its own
+  // to rescind (it inherits `ctx.decision_bar` from the live pass) and no
+  // equivalent outer retry — its only containment is `buildControlArmStep`'s
+  // warn-level catch in `control-arm.ts`, which is not a decision record. Left
+  // unhandled, the SAME rejection that the live arm retries instead silently
+  // kills the whole control-arm pass for every instrument on the tick, one
+  // dark control-only lot at a time (#1089's six lost passes). Converting it
+  // to a skip HERE, and only for `arm === 'control'`, lets `routeDecision`'s
+  // caller finish the pass with a durable, queryable row instead of a crash —
+  // without changing one byte of the live arm's fault-handling.
+  | 'control_arm_valuation_refused';
 
 /**
  * A condition the Trader DETECTED but did not treat as fatal (#698).
