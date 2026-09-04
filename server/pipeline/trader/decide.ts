@@ -1274,8 +1274,7 @@ function debateWasDegraded(debate: DebateResult): boolean {
  * debate, and so must sit out `classifyDecision`'s degraded-debate override.
  *
  * `session_closing` is the one member: `withinFlattenWindow` decides off the
- * clock and the session calendar, ahead of the conviction-floor read
- * (`decide.ts`'s `buildBracket`), and would fire identically against a fully
+ * clock and the session calendar, and would fire identically against a fully
  * converged debate. Second-pass review of #1109's fix found the override
  * flipping it to `could_not_decide` on a merely degraded debate, pointing an
  * operator at an upstream failure that is not there. A future reason added
