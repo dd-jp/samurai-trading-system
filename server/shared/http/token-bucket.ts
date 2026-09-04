@@ -177,16 +177,18 @@ export class TokenBucket {
    * `waitedMs` is a `this.now()` delta, the same injected clock `refill()`
    * uses (deliberately, per `take()`'s comment) rather than a monotonic
    * `performance.now()` — so under the real `Date.now` default, a backward
-   * wall-clock step mid-wait could in principle produce a negative delta.
-   * Clamped to 0 so a log consumer never has to reason about a negative
-   * `wait_ms`; the field is diagnostic (surfacing that SOME wait happened),
-   * not load-bearing, so a clamped-away step still leaves the strictly more
-   * useful outcome of #1083 — a visible line where today there is silence.
+   * wall-clock step mid-wait can make a genuine wait compute small or
+   * negative. The threshold check right below is what that actually hits:
+   * a negative or shrunk `waitedMs` fails `>= TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS`
+   * the same as a short real wait would, so the line is silently dropped
+   * rather than logged with a nonsense value. Accepted: an NTP step is rare
+   * enough, and losing one line to it is a smaller cost than a `wait_ms`
+   * field a reader has to distrust on every line.
    */
   private logIfMaterialWait(lane: TokenBucketLane, waitedMs: number): void {
     if (this.telemetry === undefined) return;
     if (waitedMs < TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS) return;
-    const roundedWaitMs = Math.round(Math.max(waitedMs, 0));
+    const roundedWaitMs = Math.round(waitedMs);
     this.telemetry.logger.log({
       trace_id: 'token-bucket',
       stage: 'rate_limit',
