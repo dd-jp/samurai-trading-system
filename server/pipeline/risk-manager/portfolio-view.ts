@@ -88,16 +88,16 @@ export type UnvaluableMarkPolicy = 'refuse' | 'exclude';
  * `decide.ts`'s `buildBracket` is that caller: it converts a whole-book
  * valuation refusal into a named skip on the control arm while letting every
  * OTHER rejection (e.g. `sizingEquity`'s #569 non-finite-ceiling guard)
- * propagate unchanged on either arm. #1089 shipped with the narrower
- * `StaleMarkError`-only check and missed that `readMarks` below has a SECOND
- * failure shape — a mark READ failing outright (feed timeout, unknown
- * symbol) or a batch response omitting an instrument entirely — that also
- * reaches `buildBracket` bare, either directly (`failures.length === 1`) or
- * folded into an `AggregateError` (`failures.length > 1`, still narrowed
- * separately in `decide.ts` since it can wrap a mix of subclasses). A single
- * base class lets `instanceof BookValuationError` catch both without the
- * caller needing to enumerate every subclass or reason about which shape a
- * single failure takes.
+ * propagate unchanged on either arm. `readMarks` below has two failure
+ * shapes under this base — a stale mark (`StaleMarkError`) and a mark that
+ * could not be read at all (`MarkReadError`: feed timeout, unknown symbol,
+ * or a batch response omitting the instrument) — reaching `buildBracket`
+ * bare, either directly (`failures.length === 1`) or folded into an
+ * `AggregateError` (`failures.length > 1`, still narrowed separately in
+ * `decide.ts` since it can wrap a mix of subclasses). A single base class
+ * lets `instanceof BookValuationError` catch every shape without the caller
+ * needing to enumerate subclasses or reason about which one a given failure
+ * takes.
  */
 export abstract class BookValuationError extends Error {}
 
@@ -280,11 +280,9 @@ async function readMarks(
     if (read === undefined) {
       // A service that answered the batch but omitted an instrument it was
       // asked for. Not distinguished from a read failure here: either way this
-      // book has an unvalued position in it. `MarkReadError`, not a bare
-      // `Error` (#1089's second review pass): a caller narrowing on
-      // `BookValuationError` must catch this shape too, or one held
-      // instrument's omitted batch entry still crashes the whole control-arm
-      // pass exactly the way a stale mark used to.
+      // book has an unvalued position in it. Typed `MarkReadError`, not a
+      // bare `Error`, so a caller narrowing on `BookValuationError` (#1089)
+      // catches this shape too.
       failures.push(
         new MarkReadError(
           instrument,
@@ -302,10 +300,6 @@ async function readMarks(
       // the whole book. The source reason is folded into the MESSAGE, not left
       // to `cause`: `describeThrown` prints the message alone, so a reason that
       // travels only as `cause` is a reason the operator never reads.
-      //
-      // `MarkReadError`, not a bare `Error` — see the omitted-entry case just
-      // above for why a caller narrowing on `BookValuationError` needs this
-      // typed too.
       failures.push(
         new MarkReadError(
           instrument,

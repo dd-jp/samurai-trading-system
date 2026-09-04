@@ -44,10 +44,9 @@ import type { DebateResult } from '../debate-engine/types.js';
 // what it threw needs to tell a genuine whole-book valuation refusal apart
 // from any OTHER rejection the thunk's implementation might raise (e.g.
 // `sizingEquity`'s #569 non-finite-ceiling guard) — see `buildBracket`.
-// `BookValuationError`, not `StaleMarkError` alone (code review pass 2):
-// `readMarks` (portfolio-view.ts) has a second failure shape — a mark READ
-// failing outright, or a batch response omitting an instrument — that also
-// reaches here bare, and the narrower check missed it.
+// `BookValuationError` (#1089), not `StaleMarkError` alone: `readMarks`
+// (portfolio-view.ts) throws it bare on either a stale mark or a failed/
+// omitted mark read, and the base type is what catches both.
 import { BookValuationError } from '../risk-manager/index.js';
 import { NO_PRECEDENT_MULTIPLIER, retrieveCosinePrecedent } from './cosine-precedent.js';
 import { readSignalDecay } from './early-exit.js';
