@@ -717,6 +717,17 @@ describe('MarketDataServiceImpl — market_data_fetch telemetry (#1082)', () => 
     });
     expect(typeof events[0].duration_ms).toBe('number');
     expect(typeof events[0].error).toBe('string');
+
+    const fetchLines = entries.filter(
+      (entry) => (entry.payload as { event?: string } | undefined)?.event === 'market_data_fetch',
+    );
+    // A single throw on a key with NO prior misses (consecutive_misses: 1,
+    // below the escalation threshold) must still log at `warn` — the
+    // consecutive-miss escalation applies to the `ok` branch only. A fetch
+    // that throws is itself the anomaly this issue exists to surface;
+    // gating its visibility on an unrelated counter would hide the very
+    // "fetch that never returned" case #1082 was filed for.
+    expect(fetchLines[0]?.level).toBe('warn');
   });
 
   it('logs nothing in backtest mode, even on a miss — every replay step is a miss by design and carries no information', async () => {

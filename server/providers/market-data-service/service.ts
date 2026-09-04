@@ -257,7 +257,20 @@ export class MarketDataServiceImpl implements MarketDataService {
     // exists for.
     if (this.mode === 'backtest') return;
 
-    const level = consecutiveMisses >= MARKET_DATA_REPEATED_MISS_WARN_THRESHOLD ? 'warn' : 'info';
+    // Consecutive-miss escalation applies to the `ok` branch only. A thrown
+    // fetch — "the fetch that never returned" this issue exists to surface —
+    // must not depend on happening to land on the 3rd+ consecutive miss on
+    // this exact key to be visible at `warn`; a single throw on an otherwise
+    // healthy key is itself the anomaly. Matches the sibling `logCaughtFailure`
+    // sites (`residual-protection-sweep.ts`, `ingest-fills.ts`), which both
+    // derive `level` from the failure's own severity, not from an unrelated
+    // counter.
+    const level =
+      outcome === 'error'
+        ? 'warn'
+        : consecutiveMisses >= MARKET_DATA_REPEATED_MISS_WARN_THRESHOLD
+          ? 'warn'
+          : 'info';
     const payload = {
       event: 'market_data_fetch',
       instrument,
