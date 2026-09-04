@@ -2198,6 +2198,161 @@ describe('startTickLoop', () => {
     await vi.advanceTimersByTimeAsync(10_000);
     expect(runInstrument).toHaveBeenCalledTimes(1);
   });
+
+  describe('tick-skip escalation (#1084)', () => {
+    const fourInstrumentPlan: TickPlan = {
+      instruments: [
+        { asset: 'A', asset_class: 'crypto' },
+        { asset: 'B', asset_class: 'crypto' },
+        { asset: 'C', asset_class: 'crypto' },
+        { asset: 'D', asset_class: 'crypto' },
+      ],
+      tick_time: START,
+    };
+
+    /** Never resolves until the test releases it — every claimed instrument stays "busy". */
+    const blockingRunner = () => {
+      const releases: Array<() => void> = [];
+      const runInstrument = vi.fn(async (): Promise<TickOutcome> => {
+        await new Promise<void>((resolve) => releases.push(resolve));
+        return { trace_id: 't', final_stage: 'execution' };
+      });
+      return {
+        runInstrument,
+        releaseAll: () => {
+          for (const release of releases.splice(0)) release();
+        },
+      };
+    };
+
+    it('escalates a materially degraded pass (majority of the plan busy)', async () => {
+      const logger = recordingLogger();
+      const { runInstrument, releaseAll } = blockingRunner();
+      const tickSkipAlerts = { postTickSkipAlert: vi.fn(async () => {}) };
+
+      const loop = startTickLoop({
+        scheduler: planScheduler(fourInstrumentPlan),
+        runner: { runInstrument } as TickRunner,
+        clock: new SimulatedClock(START),
+        logger,
+        persistence: persistence() as never,
+        decisionGate: new DebateBarDecisionGate(),
+        tickIntervalMs: 1_000,
+        maxConcurrentInstruments: 4,
+        tickSkipAlerts,
+      });
+
+      // Tick 1: all four instruments claimed and dispatched — nothing is
+      // skipped yet, so no escalation.
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(runInstrument).toHaveBeenCalledTimes(4);
+      expect(tickSkipAlerts.postTickSkipAlert).not.toHaveBeenCalled();
+
+      // Tick 2: all four are still busy from tick 1 (4 of 4 planned) — a
+      // materially degraded pass, escalated on its first occurrence.
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(tickSkipAlerts.postTickSkipAlert).toHaveBeenCalledTimes(1);
+      expect(tickSkipAlerts.postTickSkipAlert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          skipped: 4,
+          planned: 4,
+          skipped_instruments: ['A', 'B', 'C', 'D'],
+          consecutive_ticks: 1,
+        }),
+      );
+
+      // Skip behaviour itself is UNCHANGED (#692): no new dispatch happened
+      // on tick 2 for any of the four busy instruments, and the existing
+      // `info` skip log still fires exactly as before.
+      expect(runInstrument).toHaveBeenCalledTimes(4);
+      expect(
+        logger.entries.some((entry) =>
+          entry.message.includes('still running from a previous pass'),
+        ),
+      ).toBe(true);
+
+      releaseAll();
+      await loop.stop();
+    });
+
+    it('leaves a small routine skip quiet (one instrument busy, below the floor)', async () => {
+      const logger = recordingLogger();
+      let release!: () => void;
+      const runInstrument = vi.fn(async (): Promise<TickOutcome> => {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return { trace_id: 't', final_stage: 'analysts' };
+      });
+      const tickSkipAlerts = { postTickSkipAlert: vi.fn(async () => {}) };
+
+      const loop = startTickLoop({
+        scheduler: planScheduler(plan), // single-instrument plan
+        runner: { runInstrument } as TickRunner,
+        clock: new SimulatedClock(START),
+        logger,
+        persistence: persistence() as never,
+        decisionGate: new DebateBarDecisionGate(),
+        tickIntervalMs: 1_000,
+        maxConcurrentInstruments: 1,
+        tickSkipAlerts,
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000); // tick 1: dispatches, blocks
+      // Several further ticks all see the one instrument still busy (1 of 1
+      // planned) — below TICK_SKIP_ALERT_MIN_INSTRUMENTS, so this is the
+      // ordinary "one slow debate" case and must stay quiet.
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(tickSkipAlerts.postTickSkipAlert).not.toHaveBeenCalled();
+      // The existing quiet `info` log is untouched.
+      expect(
+        logger.entries.some((entry) =>
+          entry.message.includes('still running from a previous pass'),
+        ),
+      ).toBe(true);
+
+      release();
+      await loop.stop();
+    });
+
+    it('does not spam on repeated degraded ticks, and repeats every 8th (#1084 throttle convention)', async () => {
+      const { runInstrument, releaseAll } = blockingRunner();
+      const tickSkipAlerts = { postTickSkipAlert: vi.fn(async () => {}) };
+
+      const loop = startTickLoop({
+        scheduler: planScheduler(fourInstrumentPlan),
+        runner: { runInstrument } as TickRunner,
+        clock: new SimulatedClock(START),
+        logger: recordingLogger(),
+        persistence: persistence() as never,
+        decisionGate: new DebateBarDecisionGate(),
+        tickIntervalMs: 1_000,
+        maxConcurrentInstruments: 4,
+        tickSkipAlerts,
+      });
+
+      // Tick 1 is clean (nothing busy yet). Ticks 2-10 are all degraded
+      // (4 of 4 busy each time): alert on the 1st degraded tick (tick 2)
+      // and again on the 9th (tick 10) — never in between.
+      for (let i = 0; i < 10; i += 1) {
+        await vi.advanceTimersByTimeAsync(1_000);
+      }
+
+      expect(tickSkipAlerts.postTickSkipAlert).toHaveBeenCalledTimes(2);
+      expect(tickSkipAlerts.postTickSkipAlert).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ consecutive_ticks: 1 }),
+      );
+      expect(tickSkipAlerts.postTickSkipAlert).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ consecutive_ticks: 9 }),
+      );
+
+      releaseAll();
+      await loop.stop();
+    });
+  });
 });
 
 describe('buildProductionOrchestrator', () => {

@@ -65,6 +65,7 @@ import {
   type MiCoverageEvent,
   type MiCoverageTelemetry,
 } from './production/mi-coverage.js';
+import type { TickSkipAlert, TickSkipAlertChannel } from './production/tick-skip-alert.js';
 import type { Logger } from './types.js';
 
 /**
@@ -432,6 +433,39 @@ export class LoggingMiCoverageAlertChannel implements MiCoverageAlertChannel {
         instrument: alert.instrument,
         asset_class: alert.asset_class,
         subclass: alert.subclass,
+        reported_at: alert.reported_at.toISOString(),
+      },
+    });
+  }
+}
+
+/**
+ * A materially degraded tick pass (#1084), written to the log at `warn`.
+ *
+ * Named instruments, not just a count — the same reasoning `runOnce`'s own
+ * "still running from a previous pass" line gives (production.ts): WHICH
+ * instruments are stuck decides whether this is one venue lagging or the
+ * whole universe.
+ */
+export class LoggingTickSkipAlertChannel implements TickSkipAlertChannel {
+  constructor(private readonly logger: Logger) {}
+
+  async postTickSkipAlert(alert: TickSkipAlert): Promise<void> {
+    this.logger.log({
+      trace_id: 'tick-skip',
+      stage: 'tick-loop',
+      level: 'warn',
+      message:
+        `tick pass materially degraded: ${alert.skipped} of ${alert.planned} planned ` +
+        `instrument(s) skipped (still running from a previous pass), ` +
+        `${alert.consecutive_ticks} consecutive tick(s). ` +
+        'SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram ' +
+        'for an unattended run.',
+      payload: {
+        skipped: alert.skipped,
+        planned: alert.planned,
+        skipped_instruments: alert.skipped_instruments,
+        consecutive_ticks: alert.consecutive_ticks,
         reported_at: alert.reported_at.toISOString(),
       },
     });

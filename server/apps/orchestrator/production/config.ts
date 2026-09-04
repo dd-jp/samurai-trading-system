@@ -67,6 +67,7 @@ import type { AccountStateProvider, VolatilityReadingProvider } from './direct-b
 import type { ExitValuationDegradedAlertChannel } from './exit-valuation-alert.js';
 import type { MiCoverageAlertChannel } from './mi-coverage.js';
 import type { ThresholdClampAlertChannel } from './threshold-clamp-alert.js';
+import type { TickSkipAlertChannel } from './tick-skip-alert.js';
 import type { TraderDiagnosticAlertChannel } from './trader-diagnostic-alert.js';
 
 /**
@@ -349,6 +350,31 @@ export interface AlertChannelSlots {
    * the £58/yr debate layer is no longer earning its bill.
    */
   armDivergenceAlerts?: ArmDivergenceAlertChannel;
+  /**
+   * Where a materially degraded tick pass is escalated (#1084) — the
+   * eighteenth `ALERT_CHANNEL_FIELDS` member, channel type and transport
+   * landing in the SAME change like `armDivergenceAlerts`/
+   * `calendarFallbackAlerts` before it. Defaults to
+   * `LoggingTickSkipAlertChannel`, with the same caveat as
+   * `calendarFallbackAlerts`: log-only cannot page anyone, and a real
+   * paper-soak session recorded a tick dropping 15 of 20 instruments (75% of
+   * the universe) with nobody told.
+   * `TradeChannelTickSkipAlert` (tick-skip-alert-channel.ts) is what
+   * `SAMURAI_ALERTS=telegram` (#322) supplies.
+   *
+   * Never a change to the skip mechanism itself: `startTickLoop`'s existing
+   * `info`-level "still running from a previous pass" log and its
+   * `busy`/`ready`/`duplicated` classification (#669, #692) are untouched —
+   * see `tick-skip-alert.ts`'s file doc. `isMateriallyDegraded` there states,
+   * as a named constant with its reasoning, the fraction-of-plan-plus-floor
+   * threshold this slot is escalated against.
+   *
+   * The condition it reports is invisible from outside by construction: a
+   * degraded pass produces no thrown error and no missed heartbeat — the
+   * loop just quietly does less work on more of the universe than the
+   * operator sized it for.
+   */
+  tickSkipAlerts?: TickSkipAlertChannel;
 }
 
 /**

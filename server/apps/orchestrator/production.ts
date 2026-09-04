@@ -223,6 +223,7 @@ import {
   LoggingOcoDoubleFillAlertChannel,
   LoggingOrphanAlertChannel,
   LoggingResidualExposureAlertChannel,
+  LoggingTickSkipAlertChannel,
   LoggingUnpricedFillAlertChannel,
   ParkedCiiScoreProvider,
   UnwiredApprovalChannel,
@@ -271,6 +272,11 @@ import { assertFlattenWindowCoversTickInterval } from './production/flatten-tick
 import { MiCoverageMonitor } from './production/mi-coverage.js';
 import { withOnTradeClose } from './production/on-trade-close-hookup.js';
 import { withFlattenTail } from './production/stocks-tick-window.js';
+import {
+  reportTickSkip,
+  type TickSkipAlertChannel,
+  TickSkipThrottle,
+} from './production/tick-skip-alert.js';
 import { MarketDataVolatilityReadingProvider } from './production/volatility-reading-provider.js';
 import { UniverseScheduler } from './scheduler.js';
 import { CONTROL_BOOK_ANCHOR_KEY, SqliteAccountStateStore } from './sqlite-account-state-store.js';
@@ -2209,8 +2215,18 @@ export function startTickLoop(deps: {
   maxConcurrentInstruments: number;
   /** The tick/decision split's gate (#743) — see `TickLoopConfig.decisionGate`. */
   decisionGate: DecisionGate;
+  /**
+   * Where a materially degraded tick pass is escalated (#1084). Absent = no
+   * alerting — the honest default for a caller (a focused unit test) that
+   * has not wired one through; `production.ts`'s own composition root always
+   * supplies at least `LoggingTickSkipAlertChannel`. Never changes the skip
+   * itself — see `tick-skip-alert.ts`'s file doc.
+   */
+  tickSkipAlerts?: TickSkipAlertChannel;
 }): { stop: () => Promise<void> } {
   let stopped = false;
+  /** Consecutive-degraded-tick counter for the escalation above (#1084). */
+  const tickSkipThrottle = new TickSkipThrottle();
   /**
    * Instruments with a pass still in flight — the reentrancy guard (#669) —
    * each mapped to the TOKEN of the claim that owns it.
@@ -2354,6 +2370,27 @@ export function startTickLoop(deps: {
           payload: { duplicated },
         });
       }
+
+      // #1084: escalates a materially degraded PASS, separately from the
+      // `info` log above which is deliberately quiet for the ordinary case.
+      // Computed and AWAITED unconditionally — every tick, not only busy
+      // ones (a clean tick has to clear the throttle's run) — and BEFORE the
+      // early return below. A 100%-skipped tick (every planned instrument
+      // still busy, `ready.length === 0`) is the single most degraded case
+      // this escalation exists to catch, and placing it after that return
+      // would silently skip past exactly that case (see "Guards Before
+      // Early Returns", the same class of bug #692's own flatten-window
+      // guard hit).
+      //
+      // `planned` is `ready.length + busy.length`, NOT
+      // `plan.instruments.length`: the raw plan length also counts
+      // `duplicated` entries, which would inflate the denominator and could
+      // silently suppress an alert a smaller, correct denominator would fire.
+      await reportTickSkip(tickSkipThrottle, deps.tickSkipAlerts, deps.logger, {
+        skipped: busy,
+        planned: ready.length + busy.length,
+        reportedAt: deps.clock.now(),
+      });
 
       if (ready.length === 0) return;
 
@@ -3144,6 +3181,8 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         // #743: one gate per orchestrator, held across ticks — its per-bar
         // claims are what turn the 2-minute tick into a once-per-bar decision.
         decisionGate: new DebateBarDecisionGate(),
+        // #1084 — the eighteenth `ALERT_CHANNEL_FIELDS` member.
+        tickSkipAlerts: config.tickSkipAlerts ?? new LoggingTickSkipAlertChannel(logger),
       });
 
       // #327: both of these degraded modes were previously reached by pure
