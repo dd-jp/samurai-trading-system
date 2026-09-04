@@ -268,7 +268,16 @@ export class MarketIntelligenceStore {
       .filter(
         (item) => item.timestamp.getTime() <= windowEnd && item.timestamp.getTime() >= windowStart,
       )
-      .filter((item) => entity === undefined || item.entity === entity);
+      // A CLASS-WIDE item (#1086) is admitted past the entity filter: it is
+      // evidence for every instrument in the class, so an entity-scoped read
+      // that dropped it would hide the macro backdrop from exactly the
+      // callers #914 narrowed. This does not re-open #914's defect — an item
+      // filed against a ticker is still returned only for that ticker, and
+      // `mi-coverage.ts` keys on `entity`, so a class-wide item still counts
+      // as coverage for nothing.
+      .filter(
+        (item) => entity === undefined || item.scope === 'asset_class' || item.entity === entity,
+      );
 
     const lastUpdated = this.lastUpdated(assetClass, asOf);
 
@@ -417,6 +426,7 @@ export {
   type GdeltIngestAgentDeps,
   SOURCE_GDELT,
 } from './gdelt-ingest-agent.js';
+export { GdeltScoringPass, type GdeltScoringPassDeps } from './gdelt-scoring-pass.js';
 export {
   floorToRefreshBucket,
   GROK_REFRESH_MS,
@@ -473,4 +483,16 @@ export {
   // than assume GKG column order.
   PROJECTED_COLUMNS,
 } from './sources/gdelt-gkg-client.js';
+export {
+  CONFIDENCE_HALF_POINT_TONE,
+  confidenceFromToneDelta,
+  DEFAULT_GDELT_WINDOWS,
+  deriveGdeltAggregate,
+  GDELT_MACRO_ENTITY,
+  type GdeltAggregateStats,
+  type GdeltDerivation,
+  type GdeltRefusalReason,
+  type GdeltWindows,
+  parseGdeltProjection,
+} from './sources/gdelt-scorer.js';
 export { allWatchedThemes, themesFor } from './sources/gdelt-themes.js';

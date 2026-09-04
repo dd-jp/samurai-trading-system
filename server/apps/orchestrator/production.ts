@@ -185,6 +185,7 @@ import {
   DEFAULT_MI_ARCHIVE_RETENTION_DAYS,
   GdeltGkgClient,
   GdeltIngestAgent,
+  GdeltScoringPass,
   GROK_REFRESH_MS,
   GrokAgent,
   MarketIntelligenceStore,
@@ -200,6 +201,7 @@ import { positiveIntegerFromEnv } from '../../shared/env-integer.js';
 import type { AssetClass, Clock, TuningStore } from '../../shared/index.js';
 import { isThresholdBoundViolation, resolveVenuePacing, TokenBucket } from '../../shared/index.js';
 import { tryNousCredentials } from '../../shared/llm/index.js';
+import { logCaughtFailure } from '../../shared/safe-log.js';
 import type { SharedStore as SqliteHandle } from '../../shared/store/index.js';
 import {
   DEFAULT_MAX_LLM_CALL_ROWS,
@@ -522,6 +524,15 @@ export interface ProductionComponents {
    * download for one set of rows.
    */
   gdeltIngestAgent: GdeltIngestAgent | undefined;
+  /**
+   * The GDELT scoring pass (#1086, the derivation half of #556), or undefined
+   * on a run with no MI archive to derive from.
+   *
+   * Exposed for `gdeltIngestAgent`'s reason and one more: it holds the
+   * per-bar guard and the refusal throttle in memory, so a second instance
+   * would re-derive and re-log what the first already did.
+   */
+  gdeltScoringPass: GdeltScoringPass | undefined;
   /**
    * The Polymarket macro/event ingester (#504) — the second writer of the
    * `news` bucket, beside `MiIngestAgent`.
@@ -1721,6 +1732,31 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
         });
 
   /**
+   * The other half of #556 (#1086): what turns those archived bytes into an
+   * `IntelligenceItem` an analyst can read.
+   *
+   * Built beside the archiver and driven from the SAME timer, after each poll
+   * — see `start()`. It reads the archive and writes the store; it makes no
+   * network call, no LLM call, and no `mi_items` write, because the aggregate
+   * is derived at read every time (`gdelt-scoring-pass.ts` has the argument).
+   *
+   * The asset classes come from the UNIVERSE, not from every class the type
+   * admits. Deriving a crypto aggregate on an equities-only book would spend
+   * a read and log a refusal every poll for a leg no instrument belongs to —
+   * and crypto left Samurai's scope on 2026-08-16 (ADR-0015's amendment).
+   */
+  const gdeltScoringPass =
+    config.miArchive === undefined
+      ? undefined
+      : new GdeltScoringPass({
+          archive: config.miArchive,
+          store: marketIntelligence,
+          clock,
+          assetClasses: [...new Set(universe.map((instrument) => instrument.asset_class))],
+          logger,
+        });
+
+  /**
    * The Polymarket macro/event layer (#504) — the second `news` writer.
    *
    * Built unconditionally: no credentials to check (the read APIs are keyless),
@@ -2082,6 +2118,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     controlArmWiring,
     llmRateLimiter,
     gdeltIngestAgent,
+    gdeltScoringPass,
     polymarketAgent,
     marketIntelligence,
     marketIntelligenceCoverage: miCoverageMonitor,
@@ -3192,6 +3229,9 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
       }, config.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS);
 
       const gdeltIngestAgent = components.gdeltIngestAgent;
+      // Built or absent together: both hang off `config.miArchive`, so the
+      // optional call below is narrowing, never a live "one without the other".
+      const gdeltScoringPass = components.gdeltScoringPass;
       if (gdeltIngestAgent !== undefined) {
         /**
          * GDELT polls on its OWN timer, deliberately not from the analysts step
@@ -3204,17 +3244,56 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
          * tick's critical path would add seconds BEFORE the analysts run, which
          * is the same starvation shape #669 had to unpick.
          *
-         * Fire-and-forget is safe here specifically because `refresh` never
-         * throws and returns `false` on any vendor failure — the contract its
-         * own tests pin.
+         * Archive, THEN derive (#1086) — one timer, both halves, in that
+         * order.
+         *
+         * Ordered rather than merely adjacent: the poll that just archived
+         * the newest batch is the one whose rows the derivation wants, and a
+         * derivation that ran first would measure the signal window one batch
+         * short of what the archive holds. The scoring pass reads the
+         * archive and writes the store, and does neither on the analyst
+         * critical path.
+         *
+         * Fire-and-forget is safe for BOTH halves. `refresh` never throws and
+         * returns `false` on any vendor failure, and `run` is synchronous and
+         * never throws — each contract pinned by that module's own tests — so
+         * the continuation adds no new rejection path, and the `catch` below
+         * can only be reached by one of the two breaking its contract. It
+         * logs rather than swallowing, because #714's `unhandledRejection`
+         * handler EXITS the process and a silent `catch` would be trading a
+         * visible crash for an invisible stall.
          */
+        const pollGdelt = (trace_id: string): void => {
+          void gdeltIngestAgent
+            .refresh(trace_id)
+            .then(() => {
+              gdeltScoringPass?.run(trace_id);
+            })
+            .catch((error: unknown) => {
+              logCaughtFailure(
+                logger,
+                {
+                  trace_id,
+                  stage: 'market_intelligence',
+                  level: 'warn',
+                  message:
+                    'market intelligence: the GDELT poll/score chain broke its never-throws ' +
+                    'contract; no macro aggregate this poll. The archive is unchanged and the ' +
+                    'next poll retries.',
+                },
+                error,
+                {},
+              );
+            });
+        };
+
         // Immediately, then on the interval: waiting a full period before the
         // first poll would throw away the oldest 15 minutes of every restart,
         // and the baseline this archive exists to accumulate is measured in
         // hours.
-        void gdeltIngestAgent.refresh('startup');
+        pollGdelt('startup');
         gdeltHandle = setInterval(() => {
-          void gdeltIngestAgent.refresh('gdelt-poll');
+          pollGdelt('gdelt-poll');
         }, config.gdeltPollIntervalMs ?? DEFAULT_GDELT_POLL_INTERVAL_MS);
       }
 

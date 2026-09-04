@@ -24,8 +24,11 @@ function formatMiCoverageAlert(alert: MiCoverageAlert): string {
     `(${alert.asset_class}, subclass=${alert.subclass}) has no scored intelligence item inside ` +
     `the staleness window as of ${alert.reported_at.toISOString()}.\n` +
     'The debate is still running on this name — coverage is measured, never gated (ADR-0016 ' +
-    "D2) — but the desk is narrowed by one analyst's worth of evidence until this clears. If " +
-    "the GDELT scoring pass (#556) has not landed yet, this is the gap it's meant to close."
+    "D2) — but the desk is narrowed by one analyst's worth of evidence until this clears. " +
+    'This is a PER-TICKER gap: the macro layers (GDELT, Polymarket) file class-wide items ' +
+    'under macro series names on purpose, so they never clear it. See the coverage section of ' +
+    'docs/specs/market-intelligence-spec.md for which sources can cover a ticker and what to ' +
+    'check when one stops.'
   );
 }
 

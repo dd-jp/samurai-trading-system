@@ -69,13 +69,14 @@ export const MI_SOURCE_HYDRATION: Record<MiSourceId, MiHydrationPolicy> = {
   // Publisher-dated articles with stored scores. A restart that dropped them
   // is the exact defect `hydrate()` was built for (#554).
   [MI_SOURCES.alpacaNews]: 'hydrate',
-  // Archive-only for a second reason as well as this one: the GKG scoring half
-  // is deliberately unbuilt (`market-intelligence-spec.md`, "BUILT: the archive
-  // half"), so this source writes no `mi_items` at all today. When the scoring
-  // pass lands, its 1h-window-vs-24h-baseline score is a trailing statistic in
-  // the same sense Polymarket's delta is, and re-serving it at boot would carry
-  // the same staleness — so this entry is a decision, not a placeholder for
-  // "nothing to hydrate".
+  // Archive-only for a second reason as well as this one, and #1086 settled
+  // it: the GKG scoring pass derives AT READ and writes no `mi_items` at all,
+  // so there is nothing on disk here to hydrate. Nor should there be — its
+  // 1h-window-vs-24h-baseline score is a trailing statistic in the same sense
+  // Polymarket's delta is, and re-serving one at boot would carry the same
+  // staleness. This entry is a decision, not a placeholder for "nothing to
+  // hydrate": a future writer that started storing these items would still be
+  // wrong to replay them.
   [MI_SOURCES.gdeltGkg]: 'archive-only',
   // A trailing 24h delta, replayed hourly. Boot re-ingestion would re-serve a
   // stale measurement as current AND compound the time-axis inflation recorded

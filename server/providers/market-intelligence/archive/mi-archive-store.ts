@@ -96,6 +96,27 @@ interface ItemRow {
   item_json: string;
 }
 
+/** `mi_archive_raw` as SQLite hands it back — every column a string. */
+interface RawRow {
+  source: MiSourceId;
+  native_id: string;
+  updated_at: string;
+  payload: string;
+  ingested_at: string;
+  fidelity: ArchiveFidelity;
+}
+
+function toRawArchiveRow(row: RawRow): RawArchiveRow {
+  return {
+    source: row.source,
+    native_id: row.native_id,
+    updated_at: new Date(row.updated_at),
+    payload: row.payload,
+    ingested_at: new Date(row.ingested_at),
+    fidelity: row.fidelity,
+  };
+}
+
 /**
  * SQLite creates the database FILE, never the directory holding it, and the
  * scratch path convention is `data/…` which is gitignored — so it is absent on
@@ -282,23 +303,44 @@ export class MiArchiveStore {
   rawRows(source: MiSourceId): RawArchiveRow[] {
     const rows = this.db
       .prepare('SELECT * FROM mi_archive_raw WHERE source = ? ORDER BY ingested_at ASC')
-      .all(source) as {
-      source: MiSourceId;
-      native_id: string;
-      updated_at: string;
-      payload: string;
-      ingested_at: string;
-      fidelity: ArchiveFidelity;
-    }[];
+      .all(source) as RawRow[];
 
-    return rows.map((row) => ({
-      source: row.source,
-      native_id: row.native_id,
-      updated_at: new Date(row.updated_at),
-      payload: row.payload,
-      ingested_at: new Date(row.ingested_at),
-      fidelity: row.fidelity,
-    }));
+    return rows.map(toRawArchiveRow);
+  }
+
+  /**
+   * Raw rows for one source over a half-open span of VENDOR time, `[from, to)`.
+   *
+   * The read a trailing-window derivation needs (#1086). `rawRows` above is
+   * the whole table for a source, which is the right shape for an offline
+   * re-normalization and the wrong one for a statistic recomputed every poll:
+   * the GDELT half of the paper archive is 168,026 rows and this window is
+   * ~20,000 of them.
+   *
+   * Keyed on `updated_at`, NOT `ingested_at`, and the two are different
+   * questions. `ingested_at` is our knowledge time — the replay visibility
+   * gate, and the right key for "everything knowable at t". `updated_at` is
+   * the vendor's own stamp, which is what a window ABOUT the news has to be
+   * measured over. The distinction is safe for GDELT specifically because its
+   * batch time IS its knowledge time (`0001_mi_archive.sql` records why its
+   * backfill is `'live'` fidelity), so windowing on the vendor stamp admits
+   * nothing we did not hold. A source whose `updated_at` can precede its
+   * `ingested_at` — Alpaca's publisher time — must not use this read for a
+   * lookahead-sensitive purpose without adding that filter.
+   *
+   * Half-open so consecutive windows tile without double-counting the row on
+   * the boundary, and indexed by migration 0003.
+   */
+  rawRowsBetween(source: MiSourceId, from: Date, to: Date): RawArchiveRow[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM mi_archive_raw
+          WHERE source = ? AND updated_at >= ? AND updated_at < ?
+          ORDER BY updated_at ASC`,
+      )
+      .all(source, from.toISOString(), to.toISOString()) as RawRow[];
+
+    return rows.map(toRawArchiveRow);
   }
 
   /**

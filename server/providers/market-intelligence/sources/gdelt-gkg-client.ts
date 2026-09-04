@@ -41,9 +41,10 @@
  *
  * It does not score, aggregate, or emit an `IntelligenceItem`. It returns
  * records; `GdeltIngestAgent` archives the bytes. Tone windowing and the
- * `sign(toneDelta)` scoring #556 specified are a separate, later step, kept
- * apart on purpose — see that agent's header for why the archive has to lead
- * the signal by a full baseline window.
+ * `sign(toneDelta)` scoring #556 specified live in `gdelt-scorer.ts`, which
+ * reads them back out of the archive (#1086) — kept apart on purpose, see
+ * that agent's header for why the archive has to lead the signal by a full
+ * baseline window.
  *
  * ## Shutdown, and why the abort signal stops at the rate limiter (#702)
  *
