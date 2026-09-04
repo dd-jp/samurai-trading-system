@@ -1145,6 +1145,34 @@ describe('decide — flat by close (#668)', () => {
     ).rejects.toThrow(/capitalCeilingUsd must be finite/);
   });
 
+  it('the control arm rethrows an AggregateError whose members are not all BookValuationError (#1089)', async () => {
+    // A code-review pass 2 finding: `instanceof AggregateError` alone is
+    // broader than `readMarks`'s own wrap (portfolio-view.ts), which is
+    // always all-`BookValuationError` — but `input.equity()` is an opaque
+    // thunk, and a future non-valuation `AggregateError` (e.g. a batched
+    // sub-read inside `sizingEquity`) must still propagate as a fault on
+    // the control arm, not get silently downgraded to a skip because it
+    // happens to share the wrapper type.
+    await expect(
+      decideWithReason(
+        traderInput({
+          clock: new ManualClock(OUTSIDE_WINDOW),
+          positionState: async () => [],
+          arm: 'control',
+          equity: async () => {
+            throw new AggregateError(
+              [
+                new StaleMarkError('QQQ', new Date(0), OUTSIDE_WINDOW, 60_000),
+                new Error('sizingEquity: some unrelated batched sub-read failed'),
+              ],
+              '2 errors occurred',
+            );
+          },
+        }),
+      ),
+    ).rejects.toThrow(/2 errors occurred/);
+  });
+
   it('holds normally just outside the window', async () => {
     const outcome = await decideWithReason(
       traderInput({

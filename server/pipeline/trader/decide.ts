@@ -435,7 +435,7 @@ async function buildBracket(
   //     #1089: `arm === 'control'` converts ONE specific shape of that
   //     rejection — a genuine whole-book valuation refusal, any
   //     `BookValuationError` (a stale mark OR a failed/omitted mark read) or
-  //     an `AggregateError` wrapping a mix of them — into
+  //     an `AggregateError` whose members are ALL `BookValuationError` — into
   //     `control_arm_valuation_refused` instead of rethrowing. See that skip
   //     reason's own doc for why the control arm needs this and the live arm
   //     must not get it. Narrowed by TYPE, not just by arm: `input.equity()`
@@ -443,7 +443,11 @@ async function buildBracket(
   //     (`sizingEquity`'s #569 non-finite-ceiling guard, a fail-open refusal
   //     that must stay a fault on EITHER arm), and only these two shapes
   //     identify "the book could not be valued" as opposed to "sizing itself
-  //     refused".
+  //     refused". The `AggregateError` check inspects `.errors`, not just the
+  //     wrapper type: `readMarks`'s own wrap (portfolio-view.ts) is always
+  //     all-`BookValuationError`, but `input.equity()` is opaque and a future
+  //     non-valuation `AggregateError` (e.g. a batched sub-read inside
+  //     `sizingEquity`) must not be silently downgraded to a skip.
   //  2. Nothing that does NOT size pays for it or fails on it. `routeDecision`
   //     evaluates flat-by-close before it can ever get here, so a dark mark
   //     elsewhere in the book no longer suppresses this pass's flatten.
@@ -455,7 +459,10 @@ async function buildBracket(
     equity = await input.equity();
   } catch (error) {
     const isValuationRefusal =
-      error instanceof BookValuationError || error instanceof AggregateError;
+      error instanceof BookValuationError ||
+      (error instanceof AggregateError &&
+        error.errors.length > 0 &&
+        error.errors.every((member: unknown) => member instanceof BookValuationError));
     if (arm === 'control' && isValuationRefusal) {
       // #1089: paired with the skip so `escalateTraderDiagnostics` (the
       // pre-existing #698 mechanism — a `trader_log` write plus a REAL alert

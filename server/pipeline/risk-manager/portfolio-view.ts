@@ -93,11 +93,13 @@ export type UnvaluableMarkPolicy = 'refuse' | 'exclude';
  * could not be read at all (`MarkReadError`: feed timeout, unknown symbol,
  * or a batch response omitting the instrument) — reaching `buildBracket`
  * bare, either directly (`failures.length === 1`) or folded into an
- * `AggregateError` (`failures.length > 1`, still narrowed separately in
- * `decide.ts` since it can wrap a mix of subclasses). A single base class
- * lets `instanceof BookValuationError` catch every shape without the caller
- * needing to enumerate subclasses or reason about which one a given failure
- * takes.
+ * `AggregateError` (`failures.length > 1`). `readMarks`'s own wrap is always
+ * all-`BookValuationError` members, but `decide.ts`'s caller narrows on that
+ * explicitly rather than trusting the wrapper type alone — `AggregateError`
+ * is a JS built-in any opaque thunk can reject with, so the caller inspects
+ * `.errors` and requires every member be a `BookValuationError` before
+ * treating it as a valuation refusal. A single base class still means the
+ * caller enumerates a PREDICATE, not a list of subclasses.
  */
 export abstract class BookValuationError extends Error {}
 
