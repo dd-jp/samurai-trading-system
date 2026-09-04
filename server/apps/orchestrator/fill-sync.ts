@@ -159,6 +159,22 @@ export async function runStartupReconcile(deps: {
     payload: { checked: report.checked, corrected: report.corrected },
   });
 
+  // #1088: `sweepTerminalPositions` runs unconditionally on every
+  // `reconcile()` pass, so it needs its own operator-visible trace even
+  // though it isn't a divergence — otherwise a DELETE against
+  // `open_positions` happens on every startup with no line anywhere to show
+  // it. Only when it actually deleted something, matching every other
+  // dedup/no-spam convention in this file.
+  if (report.swept > 0) {
+    deps.logger.log({
+      trace_id: RECONCILE_TRACE_ID,
+      stage: 'execution',
+      level: 'info',
+      message: 'reconcile: terminal-row sweep',
+      payload: { swept: report.swept },
+    });
+  }
+
   return report;
 }
 
@@ -247,6 +263,18 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
       }
       for (const key of [...lastReconcileAction.keys()]) {
         if (!reportedThisPass.has(key)) lastReconcileAction.delete(key);
+      }
+      // #1088: same trace `runStartupReconcile` logs above — the sweep is
+      // not a divergence and runs on every pass, so it needs its own
+      // operator-visible line, logged only when it deleted something.
+      if (report.swept > 0) {
+        deps.logger.log({
+          trace_id: RECONCILE_TRACE_ID,
+          stage: 'execution',
+          level: 'info',
+          message: 'reconcile: terminal-row sweep',
+          payload: { swept: report.swept },
+        });
       }
     } catch (reconcileError) {
       deps.logger.log({

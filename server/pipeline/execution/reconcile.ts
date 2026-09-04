@@ -92,7 +92,9 @@ import type {
 const IN_FLIGHT: readonly OrderState[] = ['pending', 'submitted'];
 
 /**
- * #1088: how old a terminal, size-0 `open_positions` row must be before
+ * #1088: how old a terminal, size-0 `open_positions` row's
+ * `decision_timestamp` (the original write-ahead time — there is no
+ * separate terminal-transition timestamp to anchor on) must be before
  * `sweepTerminalPositions` deletes it. See this file's "terminal-row sweep"
  * doc above for the idempotency-key-reuse-safety reasoning behind the value.
  */
