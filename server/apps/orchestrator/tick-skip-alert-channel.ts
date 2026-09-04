@@ -4,15 +4,15 @@
  *
  * Same shape as `TradeChannelAnalystSkipAlert` / `TradeChannelMiCoverageAlert`:
  * wrap the already-provisioned Telegram client and post to the ESCALATION
- * chat, never the heartbeat chat (#342) — a pass that dropped a majority of
+ * chat, never the heartbeat chat (#342) — a pass that dropped at least half
  * the universe is a decision waiting on the operator (is the concurrency cap
  * sized right? is one instrument's debate hanging?), not a beat.
  *
  * What it replaces on that path is `LoggingTickSkipAlertChannel`
  * (console-channels.ts), which writes the same facts to the log at `warn` —
- * fine for a supervised run, and not reachable from a phone, which is exactly
- * what a real paper-soak session (15 of 20 instruments dropped, unseen) shows
- * is not enough for an unattended run.
+ * fine for a supervised run, but not reachable from a phone. See
+ * `tick-skip-alert.ts`'s file doc for the real-world measurement that shows
+ * why that gap is not enough for an unattended run.
  *
  * A failed post rejects rather than being swallowed; `reportTickSkip`
  * (production/tick-skip-alert.ts) catches and logs it, so the tick still

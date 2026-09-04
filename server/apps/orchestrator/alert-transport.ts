@@ -254,12 +254,12 @@ export const ALERT_CHANNEL_FIELDS = [
   'armDivergenceAlerts',
   // #1084 — the eighteenth. Channel type and transport in the SAME change,
   // like `armDivergenceAlerts`/`calendarFallbackAlerts` before it. The
-  // condition it reports (a tick pass that dropped a majority of the planned
+  // condition it reports (a tick pass that dropped at least half the planned
   // universe because the previous pass had not finished) previously had no
   // alert at all — only an `info` log line the busy-skip comment in
-  // `production.ts` deliberately keeps quiet for the ordinary case. A real
-  // paper-soak session recorded a tick dropping 15 of 20 instruments (75% of
-  // the universe) with nobody told.
+  // `production.ts` deliberately keeps quiet for the ordinary case. The
+  // real-world measurement behind the threshold lives in
+  // `tick-skip-alert.ts`'s file doc, not repeated here.
   'tickSkipAlerts',
 ] as const satisfies readonly (keyof AlertChannelSlots)[];
 
@@ -546,7 +546,7 @@ export function buildAlertChannels(deps: {
         }
       : {}),
     // #1084. The escalation chat, never the heartbeat chat: a tick pass that
-    // dropped a majority of the universe is a decision waiting on the
+    // dropped at least half the universe is a decision waiting on the
     // operator (is one instrument's debate hung, does the concurrency cap
     // need revisiting), not a beat — same reasoning as `calendarFallbackAlerts`.
     ...(deps.injected.tickSkipAlerts === undefined

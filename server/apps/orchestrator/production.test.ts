@@ -101,7 +101,14 @@ import { buildTrendingCloses } from './smoke-run.js';
 import { CONTROL_BOOK_ANCHOR_KEY } from './sqlite-account-state-store.js';
 import { SqliteDailyEquityStore } from './sqlite-daily-equity-store.js';
 import { SequentialTickRunner } from './tick-runner.js';
-import type { Logger, Scheduler, TickOutcome, TickPlan, TickRunner } from './types.js';
+import type {
+  Logger,
+  Scheduler,
+  TickOutcome,
+  TickPlan,
+  TickRunner,
+  UniverseInstrument,
+} from './types.js';
 
 const START = new Date('2026-07-29T12:00:00.000Z');
 
@@ -1261,6 +1268,137 @@ describe('market-intelligence coverage is wired by the composition root (#752)',
     // Criterion 2: the degraded-coverage flag is set on the run.
     expect(components.marketIntelligenceCoverage.degraded).toBe(true);
     expect(components.marketIntelligenceCoverage.missingInstruments).toContain('BTC-USD');
+  });
+});
+
+/**
+ * #1084 — `tickSkipAlerts` is threaded from `ProductionConfig` through
+ * `buildProductionOrchestrator`'s own `startTickLoop({...})` call, not just
+ * proven against `startTickLoop` directly. The "tick-skip escalation (#1084)"
+ * suite nested under `describe('startTickLoop', ...)` elsewhere in this file
+ * injects a mock channel straight into `startTickLoop`'s deps — it proves the
+ * threshold/throttle/escalation LOGIC is correct, not that
+ * `buildProductionOrchestrator` actually wires a real channel to it. Same
+ * defect class #745/#746/#752 above document: a mechanism implemented,
+ * unit-tested, and never actually called from the composition root.
+ *
+ * `yarn smoke` cannot exercise this (see its `tickSkipAlerts` comment):
+ * overlapping tick passes never occur in a seconds-long offline run where
+ * everything settles inside one `tickIntervalMs`. This suite is the
+ * enforcement evidence that comment points to.
+ */
+describe('tickSkipAlerts is wired by the composition root (#1084)', () => {
+  let db: SqliteHandle;
+
+  beforeEach(() => {
+    db = openSharedStore(':memory:');
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    db.close();
+  });
+
+  const fourInstrumentUniverse: UniverseInstrument[] = [
+    { asset: 'A', asset_class: 'crypto' },
+    { asset: 'B', asset_class: 'crypto' },
+    { asset: 'C', asset_class: 'crypto' },
+    { asset: 'D', asset_class: 'crypto' },
+  ];
+
+  /** Same shape as `blockingRunner` (the `startTickLoop` suite, above): every claimed
+   *  instrument stays "busy" until the test explicitly releases it. */
+  function blockingTickRunner() {
+    const releases: Array<() => void> = [];
+    const runInstrument = vi.fn(
+      () =>
+        new Promise<TickOutcome>((resolve) => {
+          releases.push(() => resolve({ trace_id: 't', final_stage: 'execution' }));
+        }),
+    );
+    return {
+      runInstrument,
+      releaseAll: () => {
+        for (const release of releases.splice(0)) release();
+      },
+    };
+  }
+
+  /**
+   * THE MUTATION THIS KILLS: drop `tickSkipAlerts: config.tickSkipAlerts ??
+   * new LoggingTickSkipAlertChannel(logger)` from the `startTickLoop({...})`
+   * call in `buildProductionOrchestrator` (production.ts). Every test in the
+   * `startTickLoop`-level "tick-skip escalation (#1084)" suite still passes —
+   * they call `startTickLoop` directly — while a real, injected channel
+   * (Telegram in a live run) would silently never receive a materially
+   * degraded pass.
+   */
+  it('reaches a real materially-degraded tick pass through buildProductionOrchestrator', async () => {
+    const tickSkipAlerts = { postTickSkipAlert: vi.fn(async () => {}) };
+    const { runInstrument, releaseAll } = blockingTickRunner();
+    const config = stubConfig(db, {
+      universe: fourInstrumentUniverse,
+      tradingCalendar: new AlwaysOpenCalendar(),
+      tickIntervalMs: 1_000,
+      heartbeatIntervalMs: 1_000,
+      maxConcurrentInstruments: 4,
+      tickSkipAlerts,
+    });
+
+    const orchestrator = buildProductionOrchestrator(config);
+    vi.spyOn(orchestrator.tickRunner, 'runInstrument').mockImplementation(runInstrument);
+
+    await orchestrator.start();
+    await vi.advanceTimersByTimeAsync(1_000); // tick 1: claims all four, hangs
+    expect(tickSkipAlerts.postTickSkipAlert).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1_000); // tick 2: all four still busy
+    expect(tickSkipAlerts.postTickSkipAlert).toHaveBeenCalledTimes(1);
+    expect(tickSkipAlerts.postTickSkipAlert).toHaveBeenCalledWith(
+      expect.objectContaining({ skipped: 4, planned: 4 }),
+    );
+
+    releaseAll();
+    await vi.advanceTimersByTimeAsync(0);
+    await orchestrator.stop();
+  });
+
+  /**
+   * THE OTHER HALF of the same mutation: drop only the `?? new
+   * LoggingTickSkipAlertChannel(logger)` fallback and pass `config.tickSkipAlerts`
+   * bare. An unconfigured run (nothing injected — `SAMURAI_ALERTS` unset in a
+   * programmatic caller) would then silently regress to #1084's original bug:
+   * a degraded pass with nowhere to escalate to, not even the log.
+   */
+  it('falls back to the logging default when nothing is injected', async () => {
+    const logger = recordingLogger();
+    const { runInstrument, releaseAll } = blockingTickRunner();
+    const config = stubConfig(db, {
+      universe: fourInstrumentUniverse,
+      tradingCalendar: new AlwaysOpenCalendar(),
+      logger,
+      tickIntervalMs: 1_000,
+      heartbeatIntervalMs: 1_000,
+      maxConcurrentInstruments: 4,
+    });
+
+    const orchestrator = buildProductionOrchestrator(config);
+    vi.spyOn(orchestrator.tickRunner, 'runInstrument').mockImplementation(runInstrument);
+
+    await orchestrator.start();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    const warned = logger.entries.find((entry) =>
+      entry.message.includes('tick pass materially degraded'),
+    );
+    expect(warned?.level).toBe('warn');
+    expect(warned?.message).toContain('4 of 4');
+
+    releaseAll();
+    await vi.advanceTimersByTimeAsync(0);
+    await orchestrator.stop();
   });
 });
 

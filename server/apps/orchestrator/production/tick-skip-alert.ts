@@ -1,7 +1,7 @@
 /**
  * Escalation for a materially degraded tick pass (#1084) — when the
  * per-instrument reentrancy guard (#669) and the per-pass concurrency cap
- * (#692) cause a majority of a tick's planned instruments to be skipped
+ * (#692) cause at least half of a tick's planned instruments to be skipped
  * because their previous pass has not finished yet.
  *
  * `startTickLoop`'s `runOnce` (production.ts) already logs every busy skip at
@@ -69,15 +69,16 @@ export const TICK_SKIP_ALERT_MIN_INSTRUMENTS = 3;
  *
  * Chosen against the six measurements #1084 itself quotes from a real
  * paper-soak session — (skipped/planned): 2/20, 1/20, 3/20, 7/20, 11/20,
- * 15/20. At 0.5: 11/20 (55%) and 15/20 (75%) — the two runs where a MAJORITY
- * of the universe went missing — alert; 2/20 and 1/20 stay quiet under the
- * floor above; 3/20 (15%) also stays quiet under the fraction; 7/20 (35%)
+ * 15/20. At 0.5: 11/20 (55%) and 15/20 (75%) — the two runs where AT LEAST
+ * HALF of the universe went missing — alert; 2/20 and 1/20 stay quiet under
+ * the floor above; 3/20 (15%) also stays quiet under the fraction; 7/20 (35%)
  * stays quiet too — just over a third of the universe running long is still
  * short of "the pass itself is degraded", the same "small routine skip" the
- * busy-log's own comment treats as ordinary, just at a bigger denominator. A
- * majority is the bar #1084 sets: strictly larger than the single-name
- * degradations this repo already escalates (MI coverage #752, analyst skip
- * #431).
+ * busy-log's own comment treats as ordinary, just at a bigger denominator.
+ * The threshold is INCLUSIVE (`>=`, not `>`) — a pass exactly split down the
+ * middle (e.g. 10/20) still fires — so "at least half" is the bar #1084
+ * sets: strictly larger than the single-name degradations this repo already
+ * escalates (MI coverage #752, analyst skip #431).
  */
 export const TICK_SKIP_ALERT_FRACTION = 0.5;
 
@@ -110,7 +111,7 @@ export function isMateriallyDegraded(skipped: number, planned: number): boolean 
  *
  * The difference is the same one `ALERT_AFTER_CONSECUTIVE_DIAGNOSTICS`
  * draws (trader-diagnostic-alert.ts): a single instrument's skip is usually
- * transient (a slow crypto debate), but a MAJORITY of the planned universe
+ * transient (a slow crypto debate), but AT LEAST HALF of the planned universe
  * stuck behind a previous pass should never happen in a healthy run —
  * waiting for a second occurrence before saying so buys nothing except a
  * later alert.
@@ -141,7 +142,7 @@ function shouldAlertAt(consecutive: number): boolean {
  * Consecutive-degraded-tick counter for one running orchestrator.
  *
  * A SINGLE scalar, unlike the analyst-skip and MI-coverage throttles' maps:
- * this is a whole-PASS event. "The pass dropped a majority of the universe"
+ * this is a whole-PASS event. "The pass dropped at least half the universe"
  * has one answer per tick, not one per instrument, so there is nothing to key
  * a map on.
  *

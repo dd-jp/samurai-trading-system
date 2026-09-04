@@ -56,7 +56,7 @@ describe('isMateriallyDegraded', () => {
     expect(isMateriallyDegraded(1, 1)).toBe(false);
   });
 
-  it('alerts at exactly the floor when it is also a majority', () => {
+  it('alerts at exactly the floor when it is also at least half the plan', () => {
     expect(isMateriallyDegraded(3, 4)).toBe(true);
     expect(
       isMateriallyDegraded(TICK_SKIP_ALERT_MIN_INSTRUMENTS, TICK_SKIP_ALERT_MIN_INSTRUMENTS),
@@ -65,6 +65,14 @@ describe('isMateriallyDegraded', () => {
 
   it('is false for an empty plan — nothing was skipped, nothing was planned', () => {
     expect(isMateriallyDegraded(0, 0)).toBe(false);
+  });
+
+  it('is inclusive at the fraction boundary on a plan well above the floor', () => {
+    // A plan large enough that TICK_SKIP_ALERT_MIN_INSTRUMENTS is not the
+    // binding constraint — this pins the `>=` in `isMateriallyDegraded`
+    // itself, not the floor. Exactly half fires; one below does not.
+    expect(isMateriallyDegraded(10, 20)).toBe(true);
+    expect(isMateriallyDegraded(9, 20)).toBe(false);
   });
 
   it('the fraction constant is what the module doc claims', () => {

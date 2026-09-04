@@ -356,9 +356,9 @@ export interface AlertChannelSlots {
    * landing in the SAME change like `armDivergenceAlerts`/
    * `calendarFallbackAlerts` before it. Defaults to
    * `LoggingTickSkipAlertChannel`, with the same caveat as
-   * `calendarFallbackAlerts`: log-only cannot page anyone, and a real
-   * paper-soak session recorded a tick dropping 15 of 20 instruments (75% of
-   * the universe) with nobody told.
+   * `calendarFallbackAlerts`: log-only cannot page anyone. The real-world
+   * measurement that motivated this slot lives in `tick-skip-alert.ts`'s file
+   * doc, not repeated here.
    * `TradeChannelTickSkipAlert` (tick-skip-alert-channel.ts) is what
    * `SAMURAI_ALERTS=telegram` (#322) supplies.
    *

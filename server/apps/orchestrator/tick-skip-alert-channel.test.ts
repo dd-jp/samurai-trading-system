@@ -51,17 +51,14 @@ describe('TradeChannelTickSkipAlert', () => {
     await new TradeChannelTickSkipAlert(telegram, 'chat-escalation').postTickSkipAlert(ALERT);
 
     expect(telegram.sendMessage).toHaveBeenCalledTimes(1);
-    const [chatId, text] = (telegram.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0] as [
-      string,
-      string,
-    ];
+    const [chatId, text] = vi.mocked(telegram.sendMessage).mock.calls[0];
     expect(chatId).toBe('chat-escalation');
     expect(text).toBe(formatTickSkipAlert(ALERT));
   });
 
   it('rejects when the send fails, so the caller (reportTickSkip) can log and swallow it', async () => {
     const telegram = makeTelegram();
-    (telegram.sendMessage as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('telegram 502'));
+    vi.mocked(telegram.sendMessage).mockRejectedValue(new Error('telegram 502'));
 
     await expect(
       new TradeChannelTickSkipAlert(telegram, 'chat-escalation').postTickSkipAlert(ALERT),
