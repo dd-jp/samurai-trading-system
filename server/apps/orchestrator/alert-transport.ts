@@ -120,6 +120,7 @@ import type { AlertChannelSlots, ProductionConfig } from './production.js';
 import { TradeChannelResidualExposureAlert } from './residual-exposure-alert-channel.js';
 import { SqliteAuditLog } from './sqlite-audit-log.js';
 import { TradeChannelThresholdClampAlert } from './threshold-clamp-alert-channel.js';
+import { TradeChannelTickSkipAlert } from './tick-skip-alert-channel.js';
 import { TradeChannelTraderDiagnosticAlert } from './trader-diagnostic-alert-channel.js';
 import type { Logger } from './types.js';
 import { TradeChannelUnpricedFillAlert } from './unpriced-fill-channel.js';
@@ -251,6 +252,15 @@ export const ALERT_CHANNEL_FIELDS = [
   // happened is that the debate layer stopped earning its cost — which is
   // precisely the falsifier ADR-0014 amendment 2 mandates the system watch for.
   'armDivergenceAlerts',
+  // #1084 — the eighteenth. Channel type and transport in the SAME change,
+  // like `armDivergenceAlerts`/`calendarFallbackAlerts` before it. The
+  // condition it reports (a tick pass that dropped at least half the planned
+  // universe because the previous pass had not finished) previously had no
+  // alert at all — only an `info` log line the busy-skip comment in
+  // `production.ts` deliberately keeps quiet for the ordinary case. The
+  // real-world measurement behind the threshold lives in
+  // `tick-skip-alert.ts`'s file doc, not repeated here.
+  'tickSkipAlerts',
 ] as const satisfies readonly (keyof AlertChannelSlots)[];
 
 /**
@@ -534,6 +544,13 @@ export function buildAlertChannels(deps: {
       ? {
           armDivergenceAlerts: new TradeChannelArmDivergenceAlert(telegram, chatId, deps.logger),
         }
+      : {}),
+    // #1084. The escalation chat, never the heartbeat chat: a tick pass that
+    // dropped at least half the universe is a decision waiting on the
+    // operator (is one instrument's debate hung, does the concurrency cap
+    // need revisiting), not a beat — same reasoning as `calendarFallbackAlerts`.
+    ...(deps.injected.tickSkipAlerts === undefined
+      ? { tickSkipAlerts: new TradeChannelTickSkipAlert(telegram, chatId) }
       : {}),
   };
 }

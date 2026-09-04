@@ -4508,6 +4508,20 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // cycle" pair, which drive `buildProductionOrchestrator`'s own timer
       // under fake timers — the one thing a seconds-long smoke run cannot.
       armDivergenceAlerts: new LoggingArmDivergenceAlertChannel(logger),
+      // #1084 — the eighteenth `ALERT_CHANNEL_FIELDS` member. A bare no-op,
+      // same reason as `traderDiagnosticAlerts` above: overlapping tick
+      // passes are unreachable in an offline smoke run — everything here
+      // settles well inside one `tickIntervalMs`, so the reentrancy guard
+      // (#669) never has anything to report as busy, let alone a materially
+      // degraded pass, and this slot is never exercised here. The real
+      // enforcement evidence is `production.test.ts`'s `startTickLoop` suite,
+      // which drives multi-tick busy/degraded sequences under fake timers,
+      // PLUS `production.test.ts`'s "tickSkipAlerts is wired by the
+      // composition root (#1084)" suite, which proves `config.tickSkipAlerts`
+      // actually reaches a real `buildProductionOrchestrator` tick loop
+      // rather than only a directly-called `startTickLoop` — the one thing a
+      // seconds-long smoke run cannot.
+      tickSkipAlerts: { postTickSkipAlert: async () => {} },
     } satisfies Required<AlertChannels>;
 
     const orchestrator = await startFromEnvironment({

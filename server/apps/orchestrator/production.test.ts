@@ -101,7 +101,14 @@ import { buildTrendingCloses } from './smoke-run.js';
 import { CONTROL_BOOK_ANCHOR_KEY } from './sqlite-account-state-store.js';
 import { SqliteDailyEquityStore } from './sqlite-daily-equity-store.js';
 import { SequentialTickRunner } from './tick-runner.js';
-import type { Logger, Scheduler, TickOutcome, TickPlan, TickRunner } from './types.js';
+import type {
+  Logger,
+  Scheduler,
+  TickOutcome,
+  TickPlan,
+  TickRunner,
+  UniverseInstrument,
+} from './types.js';
 
 const START = new Date('2026-07-29T12:00:00.000Z');
 
@@ -1265,6 +1272,137 @@ describe('market-intelligence coverage is wired by the composition root (#752)',
 });
 
 /**
+ * #1084 — `tickSkipAlerts` is threaded from `ProductionConfig` through
+ * `buildProductionOrchestrator`'s own `startTickLoop({...})` call, not just
+ * proven against `startTickLoop` directly. The "tick-skip escalation (#1084)"
+ * suite nested under `describe('startTickLoop', ...)` elsewhere in this file
+ * injects a mock channel straight into `startTickLoop`'s deps — it proves the
+ * threshold/throttle/escalation LOGIC is correct, not that
+ * `buildProductionOrchestrator` actually wires a real channel to it. Same
+ * defect class #745/#746/#752 above document: a mechanism implemented,
+ * unit-tested, and never actually called from the composition root.
+ *
+ * `yarn smoke` cannot exercise this (see its `tickSkipAlerts` comment):
+ * overlapping tick passes never occur in a seconds-long offline run where
+ * everything settles inside one `tickIntervalMs`. This suite is the
+ * enforcement evidence that comment points to.
+ */
+describe('tickSkipAlerts is wired by the composition root (#1084)', () => {
+  let db: SqliteHandle;
+
+  beforeEach(() => {
+    db = openSharedStore(':memory:');
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    db.close();
+  });
+
+  const fourInstrumentUniverse: UniverseInstrument[] = [
+    { asset: 'A', asset_class: 'crypto' },
+    { asset: 'B', asset_class: 'crypto' },
+    { asset: 'C', asset_class: 'crypto' },
+    { asset: 'D', asset_class: 'crypto' },
+  ];
+
+  /** Same shape as `blockingRunner` (the `startTickLoop` suite, above): every claimed
+   *  instrument stays "busy" until the test explicitly releases it. */
+  function blockingTickRunner() {
+    const releases: Array<() => void> = [];
+    const runInstrument = vi.fn(
+      () =>
+        new Promise<TickOutcome>((resolve) => {
+          releases.push(() => resolve({ trace_id: 't', final_stage: 'execution' }));
+        }),
+    );
+    return {
+      runInstrument,
+      releaseAll: () => {
+        for (const release of releases.splice(0)) release();
+      },
+    };
+  }
+
+  /**
+   * THE MUTATION THIS KILLS: drop `tickSkipAlerts: config.tickSkipAlerts ??
+   * new LoggingTickSkipAlertChannel(logger)` from the `startTickLoop({...})`
+   * call in `buildProductionOrchestrator` (production.ts). Every test in the
+   * `startTickLoop`-level "tick-skip escalation (#1084)" suite still passes —
+   * they call `startTickLoop` directly — while a real, injected channel
+   * (Telegram in a live run) would silently never receive a materially
+   * degraded pass.
+   */
+  it('reaches a real materially-degraded tick pass through buildProductionOrchestrator', async () => {
+    const tickSkipAlerts = { postTickSkipAlert: vi.fn(async () => {}) };
+    const { runInstrument, releaseAll } = blockingTickRunner();
+    const config = stubConfig(db, {
+      universe: fourInstrumentUniverse,
+      tradingCalendar: new AlwaysOpenCalendar(),
+      tickIntervalMs: 1_000,
+      heartbeatIntervalMs: 1_000,
+      maxConcurrentInstruments: 4,
+      tickSkipAlerts,
+    });
+
+    const orchestrator = buildProductionOrchestrator(config);
+    vi.spyOn(orchestrator.tickRunner, 'runInstrument').mockImplementation(runInstrument);
+
+    await orchestrator.start();
+    await vi.advanceTimersByTimeAsync(1_000); // tick 1: claims all four, hangs
+    expect(tickSkipAlerts.postTickSkipAlert).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1_000); // tick 2: all four still busy
+    expect(tickSkipAlerts.postTickSkipAlert).toHaveBeenCalledTimes(1);
+    expect(tickSkipAlerts.postTickSkipAlert).toHaveBeenCalledWith(
+      expect.objectContaining({ skipped: 4, planned: 4 }),
+    );
+
+    releaseAll();
+    await vi.advanceTimersByTimeAsync(0);
+    await orchestrator.stop();
+  });
+
+  /**
+   * THE OTHER HALF of the same mutation: drop only the `?? new
+   * LoggingTickSkipAlertChannel(logger)` fallback and pass `config.tickSkipAlerts`
+   * bare. An unconfigured run (nothing injected — `SAMURAI_ALERTS` unset in a
+   * programmatic caller) would then silently regress to #1084's original bug:
+   * a degraded pass with nowhere to escalate to, not even the log.
+   */
+  it('falls back to the logging default when nothing is injected', async () => {
+    const logger = recordingLogger();
+    const { runInstrument, releaseAll } = blockingTickRunner();
+    const config = stubConfig(db, {
+      universe: fourInstrumentUniverse,
+      tradingCalendar: new AlwaysOpenCalendar(),
+      logger,
+      tickIntervalMs: 1_000,
+      heartbeatIntervalMs: 1_000,
+      maxConcurrentInstruments: 4,
+    });
+
+    const orchestrator = buildProductionOrchestrator(config);
+    vi.spyOn(orchestrator.tickRunner, 'runInstrument').mockImplementation(runInstrument);
+
+    await orchestrator.start();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    const warned = logger.entries.find((entry) =>
+      entry.message.includes('tick pass materially degraded'),
+    );
+    expect(warned?.level).toBe('warn');
+    expect(warned?.message).toContain('4 of 4');
+
+    releaseAll();
+    await vi.advanceTimersByTimeAsync(0);
+    await orchestrator.stop();
+  });
+});
+
+/**
  * #746 — `AnalystOrchestratorDeps.sessionCalendars` is wired by the
  * composition root, mirroring the #745 telemetry-wiring test immediately
  * above for the same defect class: a mechanism nothing calls. Driven against
@@ -2197,6 +2335,161 @@ describe('startTickLoop', () => {
     await loop.stop();
     await vi.advanceTimersByTimeAsync(10_000);
     expect(runInstrument).toHaveBeenCalledTimes(1);
+  });
+
+  describe('tick-skip escalation (#1084)', () => {
+    const fourInstrumentPlan: TickPlan = {
+      instruments: [
+        { asset: 'A', asset_class: 'crypto' },
+        { asset: 'B', asset_class: 'crypto' },
+        { asset: 'C', asset_class: 'crypto' },
+        { asset: 'D', asset_class: 'crypto' },
+      ],
+      tick_time: START,
+    };
+
+    /** Never resolves until the test releases it — every claimed instrument stays "busy". */
+    const blockingRunner = () => {
+      const releases: Array<() => void> = [];
+      const runInstrument = vi.fn(async (): Promise<TickOutcome> => {
+        await new Promise<void>((resolve) => releases.push(resolve));
+        return { trace_id: 't', final_stage: 'execution' };
+      });
+      return {
+        runInstrument,
+        releaseAll: () => {
+          for (const release of releases.splice(0)) release();
+        },
+      };
+    };
+
+    it('escalates a materially degraded pass (majority of the plan busy)', async () => {
+      const logger = recordingLogger();
+      const { runInstrument, releaseAll } = blockingRunner();
+      const tickSkipAlerts = { postTickSkipAlert: vi.fn(async () => {}) };
+
+      const loop = startTickLoop({
+        scheduler: planScheduler(fourInstrumentPlan),
+        runner: { runInstrument } as TickRunner,
+        clock: new SimulatedClock(START),
+        logger,
+        persistence: persistence() as never,
+        decisionGate: new DebateBarDecisionGate(),
+        tickIntervalMs: 1_000,
+        maxConcurrentInstruments: 4,
+        tickSkipAlerts,
+      });
+
+      // Tick 1: all four instruments claimed and dispatched — nothing is
+      // skipped yet, so no escalation.
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(runInstrument).toHaveBeenCalledTimes(4);
+      expect(tickSkipAlerts.postTickSkipAlert).not.toHaveBeenCalled();
+
+      // Tick 2: all four are still busy from tick 1 (4 of 4 planned) — a
+      // materially degraded pass, escalated on its first occurrence.
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(tickSkipAlerts.postTickSkipAlert).toHaveBeenCalledTimes(1);
+      expect(tickSkipAlerts.postTickSkipAlert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          skipped: 4,
+          planned: 4,
+          skipped_instruments: ['A', 'B', 'C', 'D'],
+          consecutive_ticks: 1,
+        }),
+      );
+
+      // Skip behaviour itself is UNCHANGED (#692): no new dispatch happened
+      // on tick 2 for any of the four busy instruments, and the existing
+      // `info` skip log still fires exactly as before.
+      expect(runInstrument).toHaveBeenCalledTimes(4);
+      expect(
+        logger.entries.some((entry) =>
+          entry.message.includes('still running from a previous pass'),
+        ),
+      ).toBe(true);
+
+      releaseAll();
+      await loop.stop();
+    });
+
+    it('leaves a small routine skip quiet (one instrument busy, below the floor)', async () => {
+      const logger = recordingLogger();
+      let release!: () => void;
+      const runInstrument = vi.fn(async (): Promise<TickOutcome> => {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return { trace_id: 't', final_stage: 'analysts' };
+      });
+      const tickSkipAlerts = { postTickSkipAlert: vi.fn(async () => {}) };
+
+      const loop = startTickLoop({
+        scheduler: planScheduler(plan), // single-instrument plan
+        runner: { runInstrument } as TickRunner,
+        clock: new SimulatedClock(START),
+        logger,
+        persistence: persistence() as never,
+        decisionGate: new DebateBarDecisionGate(),
+        tickIntervalMs: 1_000,
+        maxConcurrentInstruments: 1,
+        tickSkipAlerts,
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000); // tick 1: dispatches, blocks
+      // Several further ticks all see the one instrument still busy (1 of 1
+      // planned) — below TICK_SKIP_ALERT_MIN_INSTRUMENTS, so this is the
+      // ordinary "one slow debate" case and must stay quiet.
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(tickSkipAlerts.postTickSkipAlert).not.toHaveBeenCalled();
+      // The existing quiet `info` log is untouched.
+      expect(
+        logger.entries.some((entry) =>
+          entry.message.includes('still running from a previous pass'),
+        ),
+      ).toBe(true);
+
+      release();
+      await loop.stop();
+    });
+
+    it('does not spam on repeated degraded ticks, and repeats every 8th (#1084 throttle convention)', async () => {
+      const { runInstrument, releaseAll } = blockingRunner();
+      const tickSkipAlerts = { postTickSkipAlert: vi.fn(async () => {}) };
+
+      const loop = startTickLoop({
+        scheduler: planScheduler(fourInstrumentPlan),
+        runner: { runInstrument } as TickRunner,
+        clock: new SimulatedClock(START),
+        logger: recordingLogger(),
+        persistence: persistence() as never,
+        decisionGate: new DebateBarDecisionGate(),
+        tickIntervalMs: 1_000,
+        maxConcurrentInstruments: 4,
+        tickSkipAlerts,
+      });
+
+      // Tick 1 is clean (nothing busy yet). Ticks 2-10 are all degraded
+      // (4 of 4 busy each time): alert on the 1st degraded tick (tick 2)
+      // and again on the 9th (tick 10) — never in between.
+      for (let i = 0; i < 10; i += 1) {
+        await vi.advanceTimersByTimeAsync(1_000);
+      }
+
+      expect(tickSkipAlerts.postTickSkipAlert).toHaveBeenCalledTimes(2);
+      expect(tickSkipAlerts.postTickSkipAlert).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ consecutive_ticks: 1 }),
+      );
+      expect(tickSkipAlerts.postTickSkipAlert).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ consecutive_ticks: 9 }),
+      );
+
+      releaseAll();
+      await loop.stop();
+    });
   });
 });
 

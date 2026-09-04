@@ -5,6 +5,7 @@ import {
   LoggingMiCoverageAlertChannel,
   LoggingMiCoverageTelemetry,
   LoggingOrphanAlertChannel,
+  LoggingTickSkipAlertChannel,
   LoggingUnpricedFillAlertChannel,
   ParkedCiiScoreProvider,
   UnwiredApprovalChannel,
@@ -88,6 +89,32 @@ describe('LoggingMiCoverageAlertChannel (#752)', () => {
     expect(logger.entries[0]?.level).toBe('warn');
     expect(logger.entries[0]?.message).toContain('SAMURAI_ALERTS=log-only cannot page anyone');
     expect(logger.entries[0]?.message).toContain('BTC-USD');
+  });
+});
+
+describe('LoggingTickSkipAlertChannel (#1084)', () => {
+  // Same pin as LoggingMiCoverageAlertChannel: log-only alerting must be
+  // OBSERVABLY non-satisfying, not silently accepted as if it reached
+  // someone.
+  it('states in its own message that log-only cannot page anyone, naming severity and instruments', async () => {
+    const logger = makeLogger();
+
+    await new LoggingTickSkipAlertChannel(logger).postTickSkipAlert({
+      skipped: 15,
+      planned: 20,
+      skipped_instruments: ['3USL', '2LQQ', 'BTC-USD'],
+      consecutive_ticks: 1,
+      reported_at: new Date('2026-08-17T09:00:00Z'),
+    });
+
+    expect(logger.entries[0]?.level).toBe('warn');
+    expect(logger.entries[0]?.message).toContain('SAMURAI_ALERTS=log-only cannot page anyone');
+    expect(logger.entries[0]?.message).toContain('15 of 20');
+    expect(logger.entries[0]?.payload).toMatchObject({
+      skipped: 15,
+      planned: 20,
+      skipped_instruments: ['3USL', '2LQQ', 'BTC-USD'],
+    });
   });
 });
 
