@@ -99,15 +99,6 @@ export function formatUsd(value: number): string {
   return `$${USD.format(value)}`;
 }
 
-/**
- * Unsigned USD at a caller-chosen precision — per-debate costs are cents-scale
- * and round to `$0.00` under the two-decimal default, which reads as free.
- */
-export function formatUsdPrecise(value: number, digits: number): string {
-  if (!Number.isFinite(value)) return EM_DASH;
-  return `$${value.toFixed(digits)}`;
-}
-
 /** A fixed-precision figure (Sharpe, profit factor, …). Non-finite is an em dash. */
 export function formatFixed(value: number, digits = 2): string {
   if (!Number.isFinite(value)) return EM_DASH;

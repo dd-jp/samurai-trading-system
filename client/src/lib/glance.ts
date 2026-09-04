@@ -8,6 +8,7 @@
  * means, and it is the snapshot's own UTC date, never the browser's clock.
  */
 import type { ClosedTradeRow, PositionRow } from '@contracts';
+import { formatDateUtc, UNKNOWN } from './format.ts';
 
 export interface PnlToday {
   /** Net realized P&L of the closed trades whose `closed_at` falls on the snapshot's UTC date. */
@@ -23,8 +24,8 @@ export interface PnlToday {
 }
 
 function utcDay(iso: string): string | null {
-  const ms = Date.parse(iso);
-  return Number.isNaN(ms) ? null : new Date(ms).toISOString().slice(0, 10);
+  const day = formatDateUtc(iso);
+  return day === UNKNOWN ? null : day;
 }
 
 export function pnlToday(

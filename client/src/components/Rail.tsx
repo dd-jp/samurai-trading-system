@@ -4,7 +4,7 @@ import { barWidth, formatClockUtc, formatPercent, formatUsd, UNKNOWN } from '../
 import { providerStateWord } from '../lib/vocabulary.ts';
 
 /** ADR-0008's spend cap. The rail draws all-time spend against it. */
-export const LLM_SPEND_CAP_USD = 50;
+const LLM_SPEND_CAP_USD = 50;
 
 /**
  * The tighter of CONTEXT.md's two stated drawdown tolerances (#798,
@@ -12,7 +12,7 @@ export const LLM_SPEND_CAP_USD = 50;
  * The daily suite's `max_drawdown` is one figure for the whole book, so the
  * rail measures it against the tighter bound and says which one it chose.
  */
-export const DRAWDOWN_TOLERANCE = 0.262;
+const DRAWDOWN_TOLERANCE = 0.262;
 
 export type Tab = 'glance' | 'live' | 'review';
 
@@ -111,17 +111,23 @@ function ProvidersBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
         return (
           <div key={name} className="rail-provider" data-provider-state={tile?.state ?? 'unknown'}>
             <span className="muted">{name}</span>
-            <span
-              className={`rail-provider-state provider-${tile?.state ?? 'unknown'}`}
-              title={tile?.detail}
-            >
+            <span className={`rail-provider-state provider-${tile?.state ?? 'unknown'}`}>
               {tile === undefined ? 'not polled' : (word ?? 'state not recognised')}
             </span>
           </div>
         );
       })}
-      {alpaca?.balance != null && (
-        <span className="rail-note mono">equity {formatUsd(alpaca.balance.equity)}</span>
+      {alpaca !== undefined &&
+        (alpaca.balance === null ? (
+          <span className="rail-note">
+            equity unavailable —{' '}
+            {alpaca.detail === '' ? 'the probe did not read ok' : alpaca.detail}
+          </span>
+        ) : (
+          <span className="rail-note mono">equity {formatUsd(alpaca.balance.equity)}</span>
+        ))}
+      {polygon !== undefined && polygon.detail !== '' && (
+        <span className="rail-note">Polygon · {polygon.detail}</span>
       )}
     </div>
   );
@@ -143,6 +149,8 @@ function SpendBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
   const fraction = spent === undefined ? Number.NaN : spent / LLM_SPEND_CAP_USD;
   const overCap = spent !== undefined && Number.isFinite(spent) && spent >= LLM_SPEND_CAP_USD;
   const unpriced = allTime?.unpriced_calls ?? 0;
+  const unattributed = allTime?.per_debate.unattributed_calls ?? 0;
+  const windows = snapshot?.llm_spend;
   return (
     <div className="rail-block" data-field="llm-cap">
       <div className="rail-meter-head">
@@ -160,9 +168,15 @@ function SpendBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
       ) : (
         <span className="rail-note">no spend figure on this snapshot — meter not drawable</span>
       )}
+      {windows != null && (
+        <span className="rail-note mono" data-field="llm-windows">
+          24h {formatUsd(windows.last_24h.cost_usd)} · 7d {formatUsd(windows.last_7d.cost_usd)}
+        </span>
+      )}
       <span className="rail-note">
         {overCap ? 'over cap · ' : ''}
         {unpriced > 0 ? `floor — ${unpriced} unpriced calls` : 'all time, metered locally'}
+        {unattributed > 0 ? ` · ${unattributed} calls carry no debate id` : ''}
       </span>
     </div>
   );
@@ -197,15 +211,37 @@ function DrawdownBlock({ metrics }: { metrics: MetricsSuiteWire | null }) {
   );
 }
 
+/**
+ * Arrow keys move the selected tab, as the tablist pattern requires of a
+ * vertical list; Home and End jump to the ends. Focus follows the selection
+ * so a keyboard user is never left on a tab that is no longer selected.
+ */
+function tabForKey(key: string, current: Tab): Tab | null {
+  const index = TABS.findIndex((entry) => entry.id === current);
+  if (key === 'ArrowDown') return TABS[(index + 1) % TABS.length]?.id ?? null;
+  if (key === 'ArrowUp') return TABS[(index - 1 + TABS.length) % TABS.length]?.id ?? null;
+  if (key === 'Home') return TABS[0]?.id ?? null;
+  if (key === 'End') return TABS[TABS.length - 1]?.id ?? null;
+  return null;
+}
+
 export function Rail(props: RailProps) {
   const { snapshot, stale, lastSuccessAt, error, tab, onTab } = props;
+  const onTabKey = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const next = tabForKey(event.key, tab);
+    if (next === null) return;
+    event.preventDefault();
+    onTab(next);
+    document.getElementById(`tab-${next}`)?.focus();
+  };
   return (
     <aside className={stale ? 'rail rail-stale' : 'rail'} aria-label="Rail" data-stale={stale}>
       <span className="brand">
         <i aria-hidden="true">侍</i> SAMURAI
       </span>
       <nav className="rail-tabs" aria-label="Tabs">
-        <div role="tablist" aria-orientation="vertical">
+        {/* biome-ignore lint/a11y/useKeyWithClickEvents: no click handler here — the key handler implements the tablist arrow-key contract for the tab buttons inside. */}
+        <div role="tablist" aria-orientation="vertical" onKeyDown={onTabKey}>
           {TABS.map((entry) => (
             <button
               key={entry.id}

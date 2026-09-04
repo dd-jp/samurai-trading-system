@@ -91,7 +91,9 @@ describe('rail', () => {
     expect(within(rail).getByText(/BTC-USD · debate · since 11:59:50Z/)).toBeTruthy();
     expect(within(rail).getByText('trace-btc')).toBeTruthy();
     expect(within(rail).getAllByText('ok')).toHaveLength(2);
+    expect(within(rail).getByText(/^equity \$/)).toBeTruthy();
     expect(within(rail).getByRole('img', { name: /LLM budget used/ })).toBeTruthy();
+    expect(within(rail).getByText(/^24h \$.* · 7d \$/)).toBeTruthy();
     expect(within(rail).getByRole('img', { name: /max drawdown .* index tolerance/ })).toBeTruthy();
   });
 
@@ -108,9 +110,10 @@ describe('rail', () => {
   });
 
   it('renders "mode unknown" when the wire carries no mode, never "paper"', async () => {
-    const snapshot = makeSnapshot();
-    delete (snapshot as { mode?: unknown }).mode;
-    renderApp([snapshot]);
+    const withoutMode = Object.fromEntries(
+      Object.entries(makeSnapshot()).filter(([key]) => key !== 'mode'),
+    );
+    renderApp([withoutMode]);
     expect(await screen.findByText('mode unknown')).toBeTruthy();
     expect(screen.queryByText('PAPER')).toBeNull();
   });
@@ -123,12 +126,24 @@ describe('rail', () => {
   });
 
   it('degrades the LLM meter to words when the spend summary is missing or malformed', async () => {
-    const snapshot = makeSnapshot();
-    (snapshot as { llm_spend?: unknown }).llm_spend = [];
-    renderApp([snapshot]);
+    renderApp([{ ...makeSnapshot(), llm_spend: [] }]);
     const rail = screen.getByRole('complementary', { name: 'Rail' });
     expect(await within(rail).findByText(/meter not drawable/)).toBeTruthy();
     expect(within(rail).queryByRole('img', { name: /LLM budget used/ })).toBeNull();
+  });
+
+  it('says the Alpaca equity is unavailable, with the probe detail, when the probe is not ok', async () => {
+    const snapshot = makeSnapshot();
+    snapshot.providers.alpaca = {
+      ...snapshot.providers.alpaca,
+      state: 'unauthorized',
+      detail: 'key rejected',
+      balance: null,
+    };
+    renderApp([snapshot]);
+    const rail = screen.getByRole('complementary', { name: 'Rail' });
+    expect(await within(rail).findByText('unauthorized')).toBeTruthy();
+    expect(within(rail).getByText('equity unavailable — key rejected')).toBeTruthy();
   });
 
   it('calls the meter a floor whenever unpriced calls exist', async () => {
@@ -149,6 +164,20 @@ describe('tabs', () => {
     expect(screen.getByRole('region', { name: 'Closed trades' })).toBeTruthy();
     openTab('Live');
     expect(screen.getByRole('region', { name: 'Lanes' })).toBeTruthy();
+  });
+
+  it('moves the selected tab with the arrow keys and keeps focus on it', async () => {
+    renderApp([makeSnapshot()]);
+    const glance = screen.getByRole('tab', { name: 'Glance' });
+    glance.focus();
+    fireEvent.keyDown(glance, { key: 'ArrowDown' });
+    const live = screen.getByRole('tab', { name: 'Live' });
+    expect(live.getAttribute('aria-selected')).toBe('true');
+    expect(document.activeElement).toBe(live);
+    fireEvent.keyDown(live, { key: 'End' });
+    expect(screen.getByRole('tab', { name: 'Review' }).getAttribute('aria-selected')).toBe('true');
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'Review' }), { key: 'ArrowDown' });
+    expect(glance.getAttribute('aria-selected')).toBe('true');
   });
 
   it('boots on the tab the hash names', async () => {
@@ -235,6 +264,7 @@ describe('live', () => {
     ).toBeTruthy();
     const qqq = screen.getByRole('button', { name: 'QQQ, stocks, stopped, at Risk' });
     expect(within(qqq).getByText('rejected · exposure cap')).toBeTruthy();
+    expect(within(qqq).getByRole('img', { name: 'stopped' })).toBeTruthy();
     expect(within(qqq).getAllByText('not reached').length).toBeGreaterThan(0);
     const spy = screen.getByRole('button', { name: 'SPY, stocks, idle, no trace in the window' });
     expect(within(spy).getAllByText('idle')).toHaveLength(6);
@@ -269,6 +299,9 @@ describe('live', () => {
     expect(
       drawer.querySelector('[data-invalidation="binding"]')?.getAttribute('data-binding'),
     ).toBe('risk_critic:invalidated');
+    // The timeline carries each recorded stage's clock beside its duration.
+    const riskRow = drawer.querySelector('[data-stage="risk"]');
+    expect(riskRow?.textContent).toContain('11:58:31Z · 2.6s');
   });
 
   it('names its empty states: no selection, an idle lane, no debate, no Risk decision', async () => {

@@ -26,7 +26,7 @@ export const OUTCOME_WORD: Readonly<Record<PipelineOutcome, string>> = {
   idle: 'idle',
 };
 
-export const CELL_STATE_WORD: Readonly<Record<PipelineCellState, string>> = {
+const CELL_STATE_WORD: Readonly<Record<PipelineCellState, string>> = {
   done: 'done',
   live: 'live',
   stopped: 'stopped',
@@ -54,7 +54,7 @@ export const SEAL_GLYPH: Readonly<Record<SettledOutcome, string>> = {
   quorum_skip: '略',
 };
 
-export const STAGE_NAME: Readonly<Record<PipelineStage, string>> = {
+const STAGE_NAME: Readonly<Record<PipelineStage, string>> = {
   analysts: 'Analysts',
   debate: 'Debate',
   trader: 'Trader',
@@ -75,7 +75,7 @@ export const CLOSE_REASON_WORD: Readonly<Record<CloseReason, string>> = {
   stop: 'stop hit',
   target: 'target hit',
   exit: 'exit',
-  flatten: 'flat-by-close',
+  flatten: 'flattened',
   signal_decay: 'signal decay',
   direction_flip: 'direction flip',
 };

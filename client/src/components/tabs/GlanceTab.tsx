@@ -15,6 +15,8 @@ import { deployedNotional, openRiskRow, pnlToday } from '../../lib/glance.ts';
 import type { LedgerEntry } from '../../lib/ledger.ts';
 import { OUTCOME_WORD, sideWord, stageName } from '../../lib/vocabulary.ts';
 import { Seal } from '../Seal.tsx';
+import { pnlTone } from '../StateWord.tsx';
+import type { Selection } from './LiveTab.tsx';
 
 export interface EquitySample {
   observed_at: string | null;
@@ -27,7 +29,7 @@ export interface GlanceTabProps {
   ledger: readonly LedgerEntry[];
   verdictsByTrace: ReadonlyMap<string, VerdictRow>;
   /** Opens the trace on the Live tab. */
-  onOpenTrace: (instrument: string, traceId: string) => void;
+  onOpenTrace: (selection: Selection) => void;
 }
 
 const SPARK_WIDTH = 560;
@@ -92,7 +94,7 @@ function PnlCard({ snapshot, equitySamples }: Pick<GlanceTabProps, 'snapshot' | 
   }
   const pnl = pnlToday(snapshot.positions, snapshot.closed_trades, snapshot.as_of);
   const equity = snapshot.providers.alpaca.balance?.equity ?? null;
-  const tone = pnl.total >= 0 ? 'gain' : 'loss';
+  const tone = pnlTone(pnl.total);
   return (
     <section className="panel" aria-label="P&L today">
       <h2>P&amp;L today</h2>
@@ -109,13 +111,11 @@ function PnlCard({ snapshot, equitySamples }: Pick<GlanceTabProps, 'snapshot' | 
       <div className="figure-row">
         <div>
           <span className="label">Realized</span>
-          <span className={`mono ${pnl.realized >= 0 ? 'gain' : 'loss'}`}>
-            {formatSignedUsd(pnl.realized)}
-          </span>
+          <span className={`mono ${pnlTone(pnl.realized)}`}>{formatSignedUsd(pnl.realized)}</span>
         </div>
         <div>
           <span className="label">Unrealized</span>
-          <span className={`mono ${pnl.unrealized >= 0 ? 'gain' : 'loss'}`}>
+          <span className={`mono ${pnlTone(pnl.unrealized)}`}>
             {formatSignedUsd(pnl.unrealized)}
           </span>
         </div>
@@ -165,7 +165,7 @@ function OpenRiskCard({ snapshot }: Pick<GlanceTabProps, 'snapshot'>) {
         <ul className="risk-list">
           {positions.map((position) => {
             const row = openRiskRow(position);
-            const tone = position.unrealized_pnl >= 0 ? 'gain' : 'loss';
+            const tone = pnlTone(position.unrealized_pnl);
             const width = row.progress === null ? null : barWidth(row.progress);
             return (
               <li
@@ -253,7 +253,9 @@ function VerdictsCard(props: Pick<GlanceTabProps, 'ledger' | 'verdictsByTrace' |
                   className="verdict-row"
                   data-trace-id={entry.trace_id}
                   aria-label={name}
-                  onClick={() => onOpenTrace(entry.instrument, entry.trace_id)}
+                  onClick={() =>
+                    onOpenTrace({ instrument: entry.instrument, traceId: entry.trace_id })
+                  }
                 >
                   <Seal outcome={entry.outcome} />
                   <span className="mono muted">

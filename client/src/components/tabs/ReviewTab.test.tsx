@@ -15,7 +15,7 @@ import { ReviewTab } from './ReviewTab.tsx';
 
 function renderReview(
   snapshot: ReturnType<typeof makeSnapshot> | null,
-  selectedKey = null as string | null,
+  selectedKey: string | null = null,
 ) {
   let key = selectedKey;
   const view = render(
@@ -76,17 +76,14 @@ describe('summary cards', () => {
   });
 
   it('names every missing measurement', () => {
-    renderReview(
-      makeSnapshot({
-        arm_comparison: [],
-        outside_benchmarks: [],
-        analysts: [],
-        metrics: null as never,
-      }),
-    );
+    renderReview(makeSnapshot({ arm_comparison: [], outside_benchmarks: [], analysts: [] }));
     expect(screen.getByText(/has not computed a comparison yet/)).toBeTruthy();
     expect(screen.getByText(/has not measured an outside benchmark yet/)).toBeTruthy();
     expect(screen.getByText(/No analyst weights on this snapshot/)).toBeTruthy();
+  });
+
+  it('names the missing suite before the first snapshot', () => {
+    renderReview(null);
     expect(screen.getByText(/No metrics on this snapshot/)).toBeTruthy();
   });
 });
@@ -194,6 +191,15 @@ describe('closed trades', () => {
     expect(
       within(drawer).getByText(/debate not in the recent-debates window|No completed debate/),
     ).toBeTruthy();
+  });
+
+  it('names a flat-by-close exit "flattened"', () => {
+    renderReview(
+      makeSnapshot({
+        closed_trades: [makeClosedTrade({ close_reason: 'flatten', realized_pnl_net: 1 })],
+      }),
+    );
+    expect(screen.getByRole('button', { name: 'SPY, long, flattened, +$1.00' })).toBeTruthy();
   });
 
   it('names an empty history', () => {

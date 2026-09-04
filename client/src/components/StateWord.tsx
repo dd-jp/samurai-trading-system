@@ -25,6 +25,11 @@ export function conditionTone(state: EvaluatedConditionWire['state']): StateTone
   return CONDITION_TONE[state];
 }
 
+/** The class a signed money figure wears. The sign in the text is the signal; this is its colour. */
+export function pnlTone(value: number): 'gain' | 'loss' {
+  return value >= 0 ? 'gain' : 'loss';
+}
+
 export interface StateWordProps {
   tone: StateTone;
   children: string;

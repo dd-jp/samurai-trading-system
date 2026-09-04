@@ -21,7 +21,7 @@ Three design directions were drawn (Rail, and two others), then two more variati
 - **Restraint on the motif.** Only the hanko seals (可 否 止 略) and the brand mark remain. Kanji watermarks, blade-cut corners, lacquer wedges and the ink-bleed wash are out.
 - **Keep Blade & Ink** — the token palette and the four fonts are unchanged.
 
-One constraint arrived with the mockup and had to be refused: it drew a £30 daily-loss stop, a three-position cap, a flat-by-close countdown and GBP figures. **None of those are on `DashboardSnapshot`.** The rail and Glance render what the wire carries — the ADR-0008 $50 LLM cap and `CONTEXT.md`'s 26.2% index-bracket drawdown tolerance are the only limits drawn, both cited on screen — and figures stay USD, because that is what the wire denominates.
+One constraint arrived with the mockup and had to be refused: it drew a £30 daily-loss stop, a three-position cap, a flat-by-close countdown and GBP figures. **None of those are on `DashboardSnapshot`.** The rail and Glance render what the wire carries — the ADR-0008 $50 LLM cap and `CONTEXT.md`'s 26.2% index-bracket drawdown tolerance are the only limits drawn, both cited on screen — and figures stay in the wire's own denomination — USD everywhere except the arm comparison's `basis`, which the Feedback Loop reports in GBP and the card labels as such.
 
 ## Decision
 

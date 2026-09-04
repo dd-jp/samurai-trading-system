@@ -24,6 +24,7 @@ import {
   formatQty,
   formatStageDuration,
 } from '../lib/format.ts';
+import { cellsByStageOf } from '../lib/trace.ts';
 import {
   CONDITION_STATE_WORD,
   cellStateWord,
@@ -31,9 +32,7 @@ import {
   stageName,
 } from '../lib/vocabulary.ts';
 import { StanceStrip } from './StanceStrip.tsx';
-import { cellTone, conditionTone, StateWord } from './StateWord.tsx';
-
-const STAGES: readonly PipelineStage[] = PIPELINE_STAGES;
+import { cellTone, conditionTone, type StateTone, StateWord } from './StateWord.tsx';
 
 const STAGES_WITHOUT_RECORDED_DECISION: readonly PipelineStage[] = ['trader', 'risk'];
 
@@ -49,10 +48,10 @@ function decisionText(cell: PipelineCell): string {
 }
 
 export function Timeline({ lane }: { lane: PipelineLane }) {
-  const cellsByStage = new Map(lane.cells.map((cell) => [cell.stage, cell]));
+  const cellsByStage = cellsByStageOf(lane);
   return (
     <ol className="timeline" aria-label="Stage timeline">
-      {STAGES.map((stage) => {
+      {PIPELINE_STAGES.map((stage) => {
         const cell = cellsByStage.get(stage);
         if (cell === undefined) {
           return (
@@ -75,6 +74,7 @@ export function Timeline({ lane }: { lane: PipelineLane }) {
               {cell.attempts > 1 ? ` · ${cell.attempts} attempts` : ''}
             </span>
             <span className="timeline-duration mono muted">
+              {cell.recorded_at !== null ? `${formatClockUtc(cell.recorded_at)} · ` : ''}
               {formatStageDuration(cell.duration_ms)}
             </span>
           </li>
@@ -83,6 +83,13 @@ export function Timeline({ lane }: { lane: PipelineLane }) {
     </ol>
   );
 }
+
+const CRITIC_TONE: Readonly<Record<NonNullable<RiskCriticRow['critic_verdict']>, StateTone>> = {
+  pass: 'done',
+  trim: 'live',
+  reject: 'stop',
+  unavailable: 'wait',
+};
 
 function bindingConstraintText(constraint: string | null): string {
   if (constraint === null) return 'no binding constraint recorded — no gate named one';
@@ -143,13 +150,7 @@ function RiskCriticBody({ riskCritic }: { riskCritic: RiskCriticRow }) {
   const conditions = riskCritic.conditions ?? [];
   const dropped = riskCritic.dropped_conditions ?? [];
   const criticTone =
-    riskCritic.critic_verdict === 'pass'
-      ? 'done'
-      : riskCritic.critic_verdict === 'reject'
-        ? 'stop'
-        : riskCritic.critic_verdict === 'trim'
-          ? 'live'
-          : 'wait';
+    riskCritic.critic_verdict === null ? 'wait' : CRITIC_TONE[riskCritic.critic_verdict];
   return (
     <>
       <p

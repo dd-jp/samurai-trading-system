@@ -9,6 +9,7 @@ import {
 } from '../../lib/format.ts';
 import { settledOutcome } from '../../lib/ledger.ts';
 import {
+  cellsByStageOf,
   fillsFor,
   laneFor,
   latestDebateFor,
@@ -45,7 +46,8 @@ function laneName(lane: PipelineLane): string {
 
 function LaneRow(props: { lane: PipelineLane; selected: boolean; onSelect: () => void }) {
   const { lane, selected, onSelect } = props;
-  const cellsByStage = new Map(lane.cells.map((cell) => [cell.stage, cell]));
+  const cellsByStage = cellsByStageOf(lane);
+  const settled = settledOutcome(lane.outcome);
   return (
     <li>
       <button
@@ -57,7 +59,10 @@ function LaneRow(props: { lane: PipelineLane; selected: boolean; onSelect: () =>
         aria-pressed={selected}
         onClick={onSelect}
       >
-        <b className="display lane-instrument">{lane.instrument}</b>
+        <span className="lane-head">
+          {settled !== null && <Seal outcome={settled} />}
+          <b className="display lane-instrument">{lane.instrument}</b>
+        </span>
         {PIPELINE_STAGES.map((stage) => {
           const cell = cellsByStage.get(stage);
           if (cell === undefined) {

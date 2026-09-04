@@ -333,7 +333,7 @@ main {
   margin: 0 0 10px;
 }
 
-.card-secondary {
+.panel-secondary {
   border-style: dashed;
 }
 
@@ -638,9 +638,16 @@ main {
   min-width: 0;
 }
 
+.lane-head {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
 .lane {
   display: grid;
-  grid-template-columns: 70px repeat(6, minmax(0, 1fr));
+  grid-template-columns: 96px repeat(6, minmax(0, 1fr));
   gap: var(--space-2);
   align-items: center;
 }

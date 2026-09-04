@@ -19,7 +19,9 @@ import type {
   ClosedTradeRow,
   DebateRow,
   FillRow,
+  PipelineCell,
   PipelineLane,
+  PipelineStage,
   PipelineView,
   PositionRow,
   RiskCriticRow,
@@ -34,6 +36,11 @@ export function laneFor(
   return traceId === null
     ? view.lanes.find((lane) => lane.instrument === instrument)
     : view.lanes.find((lane) => lane.trace_id === traceId);
+}
+
+/** A lane's cells keyed by stage, for the renderers that walk `PIPELINE_STAGES` in order. */
+export function cellsByStageOf(lane: PipelineLane): ReadonlyMap<PipelineStage, PipelineCell> {
+  return new Map(lane.cells.map((cell) => [cell.stage, cell]));
 }
 
 export function verdictFor(

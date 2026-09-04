@@ -24,7 +24,6 @@ function isTab(value: string): value is Tab {
 
 /** The tab named by `location.hash`, so a tab survives a reload and can be linked. */
 function tabFromHash(): Tab {
-  if (typeof window === 'undefined') return 'glance';
   const hash = window.location.hash.replace(/^#/, '');
   return isTab(hash) ? hash : 'glance';
 }
@@ -45,7 +44,7 @@ export function App({ snapshotOptions }: AppProps = {}) {
   }, []);
   const openTab = useCallback((next: Tab) => {
     setTab(next);
-    if (typeof window !== 'undefined' && window.location.hash !== `#${next}`) {
+    if (window.location.hash !== `#${next}`) {
       window.history.replaceState(null, '', `#${next}`);
     }
   }, []);
@@ -53,8 +52,8 @@ export function App({ snapshotOptions }: AppProps = {}) {
   const [liveSelection, setLiveSelection] = useState<Selection | null>(null);
   const [reviewKey, setReviewKey] = useState<string | null>(null);
   const openTrace = useCallback(
-    (instrument: string, traceId: string) => {
-      setLiveSelection({ instrument, traceId });
+    (selection: Selection) => {
+      setLiveSelection(selection);
       openTab('live');
     },
     [openTab],

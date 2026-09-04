@@ -34,7 +34,7 @@ import {
 } from '../../lib/trace.ts';
 import { CLOSE_REASON_WORD, closeReasonTone, sideWord } from '../../lib/vocabulary.ts';
 import { Seal } from '../Seal.tsx';
-import { StateWord } from '../StateWord.tsx';
+import { pnlTone, StateWord } from '../StateWord.tsx';
 import { DebateSection, FillsList, GatesSection, Timeline } from '../TraceSections.tsx';
 
 export interface ReviewTabProps {
@@ -132,6 +132,38 @@ function armVerdictState(row: ArmComparisonRow): ArmVerdictState {
   return 'ok';
 }
 
+const ARM_TREND_CLASS: Readonly<Record<ArmVerdictState, string>> = {
+  diverged: 'arm-trend-diverged',
+  'below-floor': 'arm-trend-below-floor',
+  ok: '',
+};
+
+/** The one sentence the sample earns: FL's own divergence reason, the floor, or "did not diverge". */
+function ArmVerdict({ row }: { row: ArmComparisonRow }) {
+  const state = armVerdictState(row);
+  if (state === 'diverged') {
+    return (
+      <p className="arm-verdict arm-diverged" data-arm-state="diverged">
+        DIVERGED: {row.divergence_reason}.
+      </p>
+    );
+  }
+  if (state === 'below-floor') {
+    return (
+      <p className="arm-verdict arm-below-floor" data-arm-state="below-floor">
+        No verdict until {row.min_trades_per_arm} closed trades per arm (live {row.live.trade_count}
+        , control {row.control.trade_count}).
+      </p>
+    );
+  }
+  return (
+    <p className="arm-verdict arm-ok" data-arm-state="ok">
+      Did not diverge: the control is not ahead of the live arm on both return and drawdown
+      together.
+    </p>
+  );
+}
+
 function ArmLine({ arm }: { arm: ArmPerformanceWire }) {
   return (
     <li className="arm-row" data-arm={arm.arm}>
@@ -139,7 +171,7 @@ function ArmLine({ arm }: { arm: ArmPerformanceWire }) {
         <b className="display">{ARM_LABEL[arm.arm]}</b>
         {arm.arm === 'control' ? <span className="muted"> indicator only, no LLM</span> : null}
       </span>
-      <span className={`mono arm-pnl ${arm.realized_pnl_net >= 0 ? 'gain' : 'loss'}`}>
+      <span className={`mono arm-pnl ${pnlTone(arm.realized_pnl_net)}`}>
         {formatSignedUsd(arm.realized_pnl_net)}
       </span>
       <span className="mono muted small">
@@ -170,45 +202,13 @@ function ArmCard({ comparisons }: { comparisons: readonly ArmComparisonRow[] }) 
             {formatDateUtc(latest.window_from)} to {formatDateUtc(latest.window_to)} · one window,
             both arms · basis £{latest.basis.toFixed(2)}
           </p>
-          {(() => {
-            const state = armVerdictState(latest);
-            if (state === 'diverged') {
-              return (
-                <p className="arm-verdict arm-diverged" data-arm-state="diverged">
-                  DIVERGED: {latest.divergence_reason}.
-                </p>
-              );
-            }
-            if (state === 'below-floor') {
-              return (
-                <p className="arm-verdict arm-below-floor" data-arm-state="below-floor">
-                  No verdict until {latest.min_trades_per_arm} closed trades per arm (live{' '}
-                  {latest.live.trade_count}, control {latest.control.trade_count}).
-                </p>
-              );
-            }
-            return (
-              <p className="arm-verdict arm-ok" data-arm-state="ok">
-                Did not diverge: the control is not ahead of the live arm on both return and
-                drawdown together.
-              </p>
-            );
-          })()}
+          <ArmVerdict row={latest} />
           {comparisons.length > 1 ? (
             <ul className="arm-trend">
               {comparisons.map((row) => {
                 const state = armVerdictState(row);
                 return (
-                  <li
-                    key={row.computed_at}
-                    className={
-                      state === 'diverged'
-                        ? 'arm-trend-diverged'
-                        : state === 'below-floor'
-                          ? 'arm-trend-below-floor'
-                          : ''
-                    }
-                  >
+                  <li key={row.computed_at} className={ARM_TREND_CLASS[state]}>
                     <span className="mono muted">{formatDateUtc(row.computed_at)}</span>
                     <span className="mono">
                       live {formatPercent(row.live.return_pct, 2)} /{' '}
@@ -249,9 +249,12 @@ function BenchmarksCard({ benchmarks }: { benchmarks: readonly OutsideBenchmarkR
   const measured = new Set(latestCycle.map((row) => row.benchmark));
   const missing = ALL_BENCHMARKS.filter((id) => !measured.has(id));
   return (
-    <section className="card card-secondary" aria-label="Outside benchmarks">
+    <section className="card panel-secondary" aria-label="Outside benchmarks">
       <h3>Outside benchmarks</h3>
-      <p className="muted small">secondary context, not the control · return and drawdown</p>
+      <p className="muted small">
+        secondary context, not the control — falsifier arm 2 is the matched control · return and
+        drawdown
+      </p>
       {latest === undefined ? (
         <p className="empty-state">
           The Feedback Loop has not measured an outside benchmark yet — a missing measurement, not a
@@ -348,7 +351,7 @@ function TradeRow(props: {
   onSelect: () => void;
 }) {
   const { trade, debate, asOf, selected, onSelect } = props;
-  const tone = trade.realized_pnl_net >= 0 ? 'gain' : 'loss';
+  const tone = pnlTone(trade.realized_pnl_net);
   const reason = CLOSE_REASON_WORD[trade.close_reason];
   return (
     <li>
@@ -446,7 +449,7 @@ function TradeDrawer({ snapshot, selectedKey }: Pick<ReviewTabProps, 'snapshot' 
   const lane = laneFor(snapshot.pipeline, trade.instrument, traceId);
   const fills = fillsFor(snapshot.fills, trade.idempotency_key);
   const gross = trade.realized_pnl_net + trade.fees_total;
-  const tone = trade.realized_pnl_net >= 0 ? 'gain' : 'loss';
+  const tone = pnlTone(trade.realized_pnl_net);
   return (
     <aside className="drawer" aria-label="Trade detail" data-key={trade.idempotency_key}>
       <div className="drawer-head">
@@ -482,7 +485,7 @@ function TradeDrawer({ snapshot, selectedKey }: Pick<ReviewTabProps, 'snapshot' 
       <dl className="kv-list" data-section="pnl">
         <div className="kv">
           <dt>Gross</dt>
-          <dd className={`mono ${gross >= 0 ? 'gain' : 'loss'}`}>{formatSignedUsd(gross)}</dd>
+          <dd className={`mono ${pnlTone(gross)}`}>{formatSignedUsd(gross)}</dd>
         </div>
         <div className="kv">
           <dt>Fees</dt>
