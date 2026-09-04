@@ -12,6 +12,7 @@ import {
 } from '../../../contracts/pipeline.js';
 import type { AnalystFailure } from '../../pipeline/analysts/index.js';
 import { AnalystSkipKindRelay, analystsSkipDecisionWord, skipKindOf } from './analysts-decision.js';
+import { CONTROL_TRACE_SUFFIX } from './control-arm.js';
 
 function failure(overrides: Partial<AnalystFailure> = {}): AnalystFailure {
   return {
@@ -110,6 +111,24 @@ describe('AnalystSkipKindRelay', () => {
 
     expect(relay.take('trace-a')).toBe('timeout');
     expect(relay.take('trace-a')).toBeUndefined();
+  });
+
+  /**
+   * The live arm's kind must not be reachable from the control pass that
+   * shadows it. `take` is destructive, so a key shared across the two arms
+   * would let whichever ran first consume the kind and leave the other
+   * recording an undifferentiated `quorum_skip` — the exact silent degradation
+   * #1080 exists to remove, reintroduced one arm over.
+   *
+   * The separation is structural rather than conventional: a control pass runs
+   * under a suffixed trace, and nothing writes a kind under that key.
+   */
+  it('cannot let the control pass reach the live pass it shadows (#1080)', () => {
+    const relay = new AnalystSkipKindRelay();
+    relay.set('trace-1', 'timeout');
+
+    expect(relay.take(`trace-1${CONTROL_TRACE_SUFFIX}`)).toBeUndefined();
+    expect(relay.take('trace-1')).toBe('timeout');
   });
 
   it('bounds itself when the writer is wired and the reader is not', () => {

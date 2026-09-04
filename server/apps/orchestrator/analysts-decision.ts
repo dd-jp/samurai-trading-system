@@ -99,10 +99,31 @@ export function skipKindOf(
  * The decision word for a stage that produced no views.
  *
  * `undefined` — no relay wired, or nothing recorded for this pass — keeps the
- * original `quorum_skip`. That is the honest answer rather than a defensive
- * one: the control arm's `analysts` step relays the live arm's views and can
- * hold no failure of its own, and the backtest harness has no production
- * adapter, so in both a skip genuinely has no kind to report.
+ * original `quorum_skip`.
+ *
+ * For the backtest harness that is because no kind exists: it runs no
+ * production adapter, so nothing ever writes one. The control arm is NOT that
+ * case, and saying so would be wrong. `buildControlArmStep` relays the live
+ * pass's views, so on a skipped bar the control arm's empty view set has
+ * exactly the live arm's cause — it is unreported here, not absent.
+ *
+ * What keeps that from being a latent bug is structural, not conventional.
+ * `controlSteps` wires no `analystSkipKind` reader today, but that is a member
+ * nobody can be stopped from adding, so it is not what the safety rests on: the
+ * two arms are KEY-separated. A control pass runs under
+ * `${trace_id}${CONTROL_TRACE_SUFFIX}` (`control-arm.ts`), a key the production
+ * adapter never writes. `take` is destructive, so a shared key would let
+ * whichever arm ran first consume the kind and leave the other recording an
+ * undifferentiated `quorum_skip` — this ticket's own defect, one arm over. With
+ * the suffix, a reader wired into `controlSteps` by mistake reads `undefined`
+ * and the live arm keeps its cause.
+ *
+ * The resulting asymmetry is deliberate and is AC6: on the same bar the live
+ * lane writes `quorum_skip_timeout` at `warn` while the control lane writes
+ * `quorum_skip` at `info`. The control arm has no analyst layer of its own, so
+ * a named cause on its row would attribute the live arm's budget failure to the
+ * arm that did not run it, and would break comparability with every control row
+ * recorded before #1080.
  */
 export function analystsSkipDecisionWord(kind: AnalystSkipKind | undefined): QuorumSkipDecision {
   if (kind === 'timeout') return 'quorum_skip_timeout';
