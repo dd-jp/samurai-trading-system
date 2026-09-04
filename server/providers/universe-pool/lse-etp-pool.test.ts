@@ -11,9 +11,11 @@ import {
   buildRoutingMap,
   countRankableUnderlyings,
   FALLBACK_DEFAULT_MAX_ROWS,
+  gateAdmits,
   KNOWN_SUBCLASSES,
   LSE_ETP_POOL,
   type LseEtpPoolRow,
+  liquidityGateStatus,
   liveSizingSubclassFor,
   resolveMiSubject,
   screeningInstrumentFor,
@@ -30,6 +32,7 @@ function makeRow(overrides: Partial<LseEtpPoolRow> = {}): LseEtpPoolRow {
     subclass: 'index_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    saxo_tradeable: 'unverified',
     subclass_envelope_measured: true,
     // Opt in explicitly, so a future multi-row pool built from this helper does
     // not silently exercise the fallback ceiling and duplicate-underlying rules.
@@ -57,6 +60,7 @@ describe('LSE_ETP_POOL — the checked-in pool', () => {
       expect(row.subclass).toBeTruthy();
       expect(row.currency).toBeTruthy();
       expect(typeof row.t212_isa).toBe('boolean');
+      expect([true, false, 'unverified']).toContain(row.saxo_tradeable);
       expect(typeof row.subclass_envelope_measured).toBe('boolean');
       expect(typeof row.fallback_default).toBe('boolean');
       expect(row.provenance.isin).toBeTruthy();
@@ -184,6 +188,42 @@ describe('the declared fallback subset (F4, docs/reviews/universe-path-gap-sweep
       ]),
     ).not.toThrow();
   });
+
+  // Rule 5 (#1100 review): docs/specs/universe-selector-spec.md "Fallback
+  // behaviour" requires no fallback row be one gateAdmits excludes — a
+  // Saxo-VERIFIED saxo_tradeable: false. The checked-in pool cannot exercise
+  // this today (every row is 'unverified', which gateAdmits always admits),
+  // so it is proven on a synthetic fixture.
+  it('assertValidPool rejects a fallback row that is Saxo-verified false — a fallback naming an instrument Saxo does not list', () => {
+    // A second, non-fallback row carries saxo_tradeable: true so gateAdmits
+    // genuinely disagrees across the pool (armed) — proving rule 5 fires on
+    // its own, not riding on the pool-wide vacuous check the single excluded
+    // fallback row would also trip alone.
+    const excluded = [
+      makeRow({
+        lse_ticker: '3EXC',
+        screening_instrument: 'EXC',
+        fallback_default: true,
+        saxo_tradeable: false,
+      }),
+      makeRow({ lse_ticker: '3OTH', screening_instrument: 'OTH', saxo_tradeable: true }),
+    ];
+    expect(() => assertValidPool(excluded)).toThrow(/'3EXC'/);
+    expect(() => assertValidPool(excluded)).toThrow(/saxo_tradeable/);
+  });
+
+  it('accepts a fallback row whose saxo_tradeable is unverified — the unarmed gate does not exclude it', () => {
+    expect(() =>
+      assertValidPool([
+        makeRow({
+          lse_ticker: '3OK',
+          screening_instrument: 'OK',
+          fallback_default: true,
+          saxo_tradeable: 'unverified',
+        }),
+      ]),
+    ).not.toThrow();
+  });
 });
 
 describe('routing binds on lse_ticker only', () => {
@@ -282,6 +322,117 @@ describe('t212_isa is populated for every row', () => {
     for (const row of LSE_ETP_POOL) {
       expect(row.t212_isa === true || row.t212_isa === false).toBe(true);
     }
+  });
+});
+
+// #1054 Part 1: `saxo_tradeable` is the field docs/specs/universe-selector-spec.md
+// story 16 / #750 AC7 name as the liquidity gate — `t212_isa` above answers a
+// different, no-longer-live question (does Trading 212 list it) and must
+// never be read as the gate. No Saxo instrument list has been captured
+// anywhere in this repo (#1032 item 3), so every row is 'unverified' today;
+// that is a recorded, explicit statement that the gate is UNARMED, not a
+// placeholder silently standing in for `true`.
+describe('saxo_tradeable — the field the liquidity gate actually reads (#1054 Part 1)', () => {
+  it('is unverified on every checked-in row — no Saxo instrument list has been captured (#1032 item 3)', () => {
+    for (const row of LSE_ETP_POOL) {
+      expect(row.saxo_tradeable).toBe('unverified');
+    }
+  });
+
+  it('liquidityGateStatus reports the checked-in pool as unarmed', () => {
+    const status = liquidityGateStatus(LSE_ETP_POOL);
+    expect(status.state).toBe('unarmed');
+    expect(status.reason).toMatch(/unverified/i);
+  });
+
+  it('liquidityGateStatus reports armed when a verified true row and a verified false row both admit differently', () => {
+    const pool = [
+      makeRow({ lse_ticker: 'A1', screening_instrument: 'AAA', saxo_tradeable: true }),
+      makeRow({ lse_ticker: 'A2', screening_instrument: 'BBB', saxo_tradeable: false }),
+    ];
+    expect(liquidityGateStatus(pool).state).toBe('armed');
+  });
+
+  it('liquidityGateStatus treats an empty pool as unarmed rather than throwing', () => {
+    expect(liquidityGateStatus([]).state).toBe('unarmed');
+  });
+
+  it('defaults to the checked-in pool when called with no argument', () => {
+    expect(liquidityGateStatus().state).toBe('unarmed');
+  });
+
+  describe('gateAdmits — the row-level predicate the pool-level status is built from', () => {
+    it('admits an unverified row: the unarmed gate is pass-through, not a silent exclusion', () => {
+      expect(gateAdmits(makeRow({ saxo_tradeable: 'unverified' }))).toBe(true);
+    });
+
+    it('admits a Saxo-verified true row', () => {
+      expect(gateAdmits(makeRow({ saxo_tradeable: true }))).toBe(true);
+    });
+
+    it('excludes only a Saxo-verified false row', () => {
+      expect(gateAdmits(makeRow({ saxo_tradeable: false }))).toBe(false);
+    });
+  });
+
+  it('a mix of unverified and verified-true rows is vacuous (admits everything), not armed — gateAdmits agrees on every row even though saxo_tradeable itself is not constant', () => {
+    // This is the case a `saxo_tradeable`-distinctness check gets wrong:
+    // the raw field takes two different values across these rows, but
+    // admit-unless-false admits both of them, so the gate excludes nothing.
+    const pool = [
+      makeRow({ lse_ticker: 'A1', screening_instrument: 'AAA', saxo_tradeable: 'unverified' }),
+      makeRow({ lse_ticker: 'A2', screening_instrument: 'BBB', saxo_tradeable: true }),
+    ];
+    const status = liquidityGateStatus(pool);
+    expect(status.state).toBe('vacuous');
+    expect(status.state === 'vacuous' && status.admits).toBe(true);
+  });
+
+  it('a mix of unverified and verified-false rows is armed — gateAdmits genuinely disagrees', () => {
+    const pool = [
+      makeRow({ lse_ticker: 'A1', screening_instrument: 'AAA', saxo_tradeable: 'unverified' }),
+      makeRow({ lse_ticker: 'A2', screening_instrument: 'BBB', saxo_tradeable: false }),
+    ];
+    expect(liquidityGateStatus(pool).state).toBe('armed');
+  });
+});
+
+// AC: "A test fails if the liquidity gate is constant across the whole pool"
+// (no-op gate is a build break). The unarmed state (constant 'unverified') is
+// the one exception — see the module doc's `saxo_tradeable` field comment for
+// why that state is distinct from a constant verified value, which is a bug.
+describe('assertValidPool fails loud when the liquidity gate is constant (#1054)', () => {
+  it('does not throw on the checked-in pool, whose gate is constant "unverified" — the explicit unarmed state', () => {
+    expect(() => assertValidPool(LSE_ETP_POOL)).not.toThrow();
+  });
+
+  it('throws when saxo_tradeable is true on every row — a gate that excludes nothing is a bug, not configuration', () => {
+    const allTrue = LSE_ETP_POOL.map((row) => ({ ...row, saxo_tradeable: true as const }));
+    expect(() => assertValidPool(allTrue)).toThrow(/saxo_tradeable/);
+    expect(() => assertValidPool(allTrue)).toThrow(/constant/);
+  });
+
+  it('throws when saxo_tradeable is false on every row — a gate that excludes everything is equally broken', () => {
+    const allFalse = LSE_ETP_POOL.map((row) => ({ ...row, saxo_tradeable: false as const }));
+    expect(() => assertValidPool(allFalse)).toThrow(/saxo_tradeable/);
+    expect(() => assertValidPool(allFalse)).toThrow(/constant/);
+  });
+
+  it('does not throw when saxo_tradeable discriminates between rows', () => {
+    const mixed = [
+      makeRow({
+        lse_ticker: 'A1',
+        screening_instrument: 'AAA',
+        saxo_tradeable: true,
+        fallback_default: true,
+      }),
+      makeRow({ lse_ticker: 'A2', screening_instrument: 'BBB', saxo_tradeable: false }),
+    ];
+    expect(() => assertValidPool(mixed)).not.toThrow();
+  });
+
+  it('does not throw on a single-row pool whose lone value is "unverified"', () => {
+    expect(() => assertValidPool([makeRow({ fallback_default: true })])).not.toThrow();
   });
 });
 
