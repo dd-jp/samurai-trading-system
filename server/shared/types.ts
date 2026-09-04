@@ -23,6 +23,7 @@ export type {
 export type {
   ClosedTrade,
   DebateLog,
+  DebateTermination,
   ExitReason,
   Fill,
   OpenPosition,

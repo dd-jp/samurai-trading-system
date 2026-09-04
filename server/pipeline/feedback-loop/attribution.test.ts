@@ -225,6 +225,38 @@ describe('accumulateCredit — the DebateLog join', () => {
     const credits = accumulateCredit([makeTrade({ stop: 100 })], log);
     expect(credits.size).toBe(0);
   });
+
+  /**
+   * #1081 — the Feedback Loop consumer this ticket's fix has to reach. A
+   * latency-truncated debate's `contributions` are partial mediator state,
+   * not evidence of any analyst's real performance; crediting or blaming an
+   * analyst off it would tune weights on an infrastructure timeout.
+   */
+  it('skips a trade whose debate was truncated by the latency budget — no evidence to attribute', () => {
+    const log = new InMemoryDebateLogStore();
+    log.writeLog({
+      ...makeLog('debate-1', [makeContribution({ analyst_id: 'bull' })]),
+      converged: false,
+      termination: 'latency_truncated',
+    });
+
+    const credits = accumulateCredit([makeTrade({ debate_id: 'debate-1' })], log);
+
+    expect(credits.size).toBe(0);
+  });
+
+  it('still attributes a trade whose debate genuinely failed to converge', () => {
+    const log = new InMemoryDebateLogStore();
+    log.writeLog({
+      ...makeLog('debate-1', [makeContribution({ analyst_id: 'bull', final_position: 'bullish' })]),
+      converged: false,
+      termination: 'non_converged',
+    });
+
+    const credits = accumulateCredit([makeTrade({ debate_id: 'debate-1' })], log);
+
+    expect(credits.get('bull')?.trade_count).toBe(1);
+  });
 });
 
 describe('impliedWeight', () => {

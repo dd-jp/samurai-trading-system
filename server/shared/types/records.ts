@@ -261,6 +261,23 @@ export interface SetupNeighbor {
 }
 
 /**
+ * How a debate resolved (#1081) — distinguishes a debate that genuinely
+ * completed deliberation from one the latency budget force-stopped, which
+ * `DebateLog.converged: false` alone cannot: both land there identically.
+ *
+ *  - `'converged'`: the mediator signalled agreement before the round cap.
+ *  - `'non_converged'`: the round cap was reached without the mediator
+ *    agreeing, and the latency budget did NOT fire — real, deliberated
+ *    disagreement, the signal the debate-as-edge thesis is built on.
+ *  - `'latency_truncated'`: `enforceLatencyBudget` cut the debate off before
+ *    it produced a result (`DebateResult.timed_out` is set); the row holds
+ *    whatever partial mediator synthesis existed at that instant, not a
+ *    completed assessment. Measured dominating a soak's neutral rate — see
+ *    `DebateLog.termination`.
+ */
+export type DebateTermination = 'converged' | 'non_converged' | 'latency_truncated';
+
+/**
  * Persisted analytics/audit record (debate-engine-spec.md story 20). Written
  * ONCE per completed debate to the shared store (append-only), AFTER the
  * debate resolves — distinct from the ephemeral round-by-round operational
@@ -307,6 +324,18 @@ export interface DebateLog {
   disagreement_summary?: string;
   open_items?: string[];
   converged?: boolean;
+  /**
+   * Present from migration 0041 onward; absent (NULL) on every row written
+   * before it — NOT "converged" and NOT "non_converged", genuinely
+   * indeterminate (#1081). `buildDebateLog` derives it from the resolved
+   * `DebateResult` (`timed_out` set ⇒ `'latency_truncated'`, else `converged`
+   * mirrors the boolean above), so every row written by this build classifies
+   * itself. `server/tools/classify-debate-termination.ts` backfills specific
+   * pre-migration rows from run logs where the correlation (a `debate.timeout`
+   * line naming the same `debate_id`) is unambiguous; the column itself never
+   * guesses a value for a row it cannot derive one for.
+   */
+  termination?: DebateTermination;
 }
 
 /**

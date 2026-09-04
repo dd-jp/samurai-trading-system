@@ -46,6 +46,20 @@ export function buildDebateLog(
     disagreement_summary: result.disagreement_summary,
     open_items: result.open_items,
     converged: result.converged,
+    // #1081. Derived from the SAME `result` the row's other fields come off,
+    // so a truncated debate cannot be mis-tagged converged by a caller that
+    // forgot to pass a separate flag: `timed_out` is set by exactly one
+    // producer, `enforceLatencyBudget`, and set only when it force-terminated
+    // the debate before a result was produced. Every other producer of a
+    // `DebateResult` — a completed round, the round-cap hybrid termination —
+    // leaves it unset, so `converged` alone decides between the other two
+    // states.
+    termination:
+      result.timed_out !== undefined
+        ? 'latency_truncated'
+        : result.converged
+          ? 'converged'
+          : 'non_converged',
   };
 }
 

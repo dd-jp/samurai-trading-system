@@ -1,0 +1,38 @@
+-- Distinguishes a debate the latency budget force-terminated from one that
+-- genuinely failed to converge (#1081).
+--
+-- WHY. `debate_log.converged` records only one bit — did the mediator signal
+-- agreement before the round cap — and a latency-truncated debate lands as
+-- `converged = 0` identically to a debate where the analysts genuinely
+-- disagreed. Analysing the 2026-09-03 paper soak against its own run logs
+-- found every one of that session's 26 `debate_log` rows correlated to a
+-- `debate.timeout` log line: the entire session's neutral rate (24 of those
+-- 26 rows) was the latency budget firing, not the market. `converged` alone
+-- cannot tell that apart from real deliberated disagreement — the signal the
+-- debate-as-edge thesis is built on — and the Feedback Loop's weight
+-- attribution (attribution.ts) and any expectancy work read `debate_log`
+-- without knowing which kind of row they have.
+--
+-- `termination` is three-valued rather than a second boolean, mirroring
+-- `trader_log.exit_reason` (migration 0030): 'converged' | 'non_converged' |
+-- 'latency_truncated'. `buildDebateLog` (debate-log-store.ts) derives it from
+-- the resolved `DebateResult` — `timed_out` set means 'latency_truncated',
+-- otherwise it mirrors `converged` — so every row this build writes
+-- classifies itself.
+--
+-- A plain ADD COLUMN, not a table rebuild: the column is new, nullable, and
+-- `debate_log` carries no CHECK constraint over it (same posture as 0030's
+-- `exit_reason`). Rows written before this migration carry NULL, which is the
+-- ONLY honest reading — this migration does not and cannot know whether any
+-- pre-existing row was truncated or genuinely non-converged. NULL means
+-- INDETERMINATE, not "converged" and not "non_converged"; nothing downstream
+-- may read a pre-migration `converged = 0` row as deliberated disagreement.
+--
+-- Backfilling specific historical rows is possible where the correlation is
+-- unambiguous — a `debate.timeout` log line naming the same `debate_id` — and
+-- `server/tools/classify-debate-termination.ts` does exactly that from a
+-- store path and a run log, on operator request. It is a read/report tool by
+-- default and only writes under an explicit `--apply` flag; it never runs as
+-- part of this migration, and it never guesses a value for a row whose run
+-- log is unavailable or silent.
+ALTER TABLE debate_log ADD COLUMN termination TEXT;

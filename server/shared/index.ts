@@ -95,6 +95,7 @@ export type {
   ClosedTradeStore,
   DebateLog,
   DebateLogStore,
+  DebateTermination,
   ExitReason,
   Fill,
   InstrumentSubclass,

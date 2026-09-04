@@ -51,4 +51,46 @@ describe('getContributionsForAttribution', () => {
 
     expect(getContributionsForAttribution(store, 'debate-never-completed')).toBeUndefined();
   });
+
+  /**
+   * #1081 — a debate the latency budget cut short has `contributions` that
+   * are partial mediator state, not a completed per-analyst assessment.
+   * Attributing off it would move Feedback Loop weights on an infrastructure
+   * timeout rather than evidence, so it is excluded the same way a missing
+   * row is.
+   */
+  it('returns undefined for a debate the latency budget truncated, even though a row exists', () => {
+    const store = new InMemoryDebateLogStore();
+    const result = makeResult({
+      converged: false,
+      timed_out: { budget_ms: 60_000, elapsed_ms: 60_003 },
+    });
+    store.writeLog(buildDebateLog(result, 'AAPL', new Date('2026-07-14T09:00:08Z')));
+
+    expect(getContributionsForAttribution(store, 'debate-1')).toBeUndefined();
+  });
+
+  it('still attributes a debate that genuinely failed to converge — no timeout', () => {
+    const store = new InMemoryDebateLogStore();
+    const result = makeResult({ converged: false });
+    store.writeLog(buildDebateLog(result, 'AAPL', new Date('2026-07-14T09:00:08Z')));
+
+    expect(getContributionsForAttribution(store, 'debate-1')).toEqual(result.contributions);
+  });
+
+  it('still attributes a pre-#1081 row with no termination recorded — makes no claim either way', () => {
+    const store = new InMemoryDebateLogStore();
+    store.writeLog({
+      debate_id: 'debate-pre-1081',
+      instrument: 'AAPL',
+      bar_timestamp: new Date('2026-07-14T09:00:00Z'),
+      contributions: [makeContribution()],
+      direction: 'bullish',
+      rounds: 2,
+      created_at: new Date('2026-07-14T09:00:08Z'),
+      // No `termination` field at all — a row written before migration 0041.
+    });
+
+    expect(getContributionsForAttribution(store, 'debate-pre-1081')).toEqual([makeContribution()]);
+  });
 });

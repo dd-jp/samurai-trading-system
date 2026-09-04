@@ -16,7 +16,7 @@ export {
   priceUsage,
   rateFor,
 } from '../../shared/llm/pricing.js';
-export type { DebateLog, DebateLogStore } from '../../shared/types.js';
+export type { DebateLog, DebateLogStore, DebateTermination } from '../../shared/types.js';
 export type { AnalystRoundStance } from './analyst-contribution.js';
 export { buildAnalystContributions } from './analyst-contribution.js';
 export type { AnalystCollectionResult, ExpectedAnalyst } from './analyst-response-collector.js';

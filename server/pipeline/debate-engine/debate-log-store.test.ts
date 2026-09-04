@@ -64,6 +64,8 @@ describe('buildDebateLog', () => {
       disagreement_summary: result.disagreement_summary,
       open_items: result.open_items,
       converged: result.converged,
+      // #1081: a completed, converged debate.
+      termination: 'converged',
     });
   });
 
@@ -78,6 +80,85 @@ describe('buildDebateLog', () => {
     );
 
     expect(log.confidence).toBe(0.83);
+  });
+});
+
+/**
+ * #1081 — a debate truncated by the latency budget must be identifiable in
+ * the stored record alone, and distinct from a debate that genuinely failed
+ * to converge. Both land as `converged: false`; only `termination` tells them
+ * apart.
+ */
+describe('buildDebateLog — termination (#1081)', () => {
+  it('records latency_truncated for a debate the latency budget cut short', () => {
+    const truncated = makeResult({
+      converged: false,
+      rounds_completed: 1,
+      confidence: 0.219,
+      // Set by `enforceLatencyBudget` exactly when it force-terminates a
+      // debate before a result was produced — the one signal this migration
+      // exists to not drop on the floor before persistence.
+      timed_out: { budget_ms: 60_000, elapsed_ms: 60_003 },
+    });
+
+    const log = buildDebateLog(truncated, 'AAPL', new Date('2026-07-14T09:00:08Z'));
+
+    expect(log.converged).toBe(false);
+    expect(log.termination).toBe('latency_truncated');
+  });
+
+  it('records non_converged for a debate that genuinely failed to converge — no timeout', () => {
+    const genuinelyDisagreed = makeResult({
+      converged: false,
+      rounds_completed: 3,
+      confidence: 0.4,
+      // No `timed_out` — this is the round-cap hybrid-termination path, not
+      // the latency budget.
+    });
+
+    const log = buildDebateLog(genuinelyDisagreed, 'AAPL', new Date('2026-07-14T09:00:08Z'));
+
+    expect(log.converged).toBe(false);
+    expect(log.termination).toBe('non_converged');
+  });
+
+  it('a truncated debate and a genuinely non-converged debate produce different stored records', () => {
+    const truncated = buildDebateLog(
+      makeResult({
+        debate_id: 'debate-truncated',
+        converged: false,
+        rounds_completed: 1,
+        timed_out: { budget_ms: 60_000, elapsed_ms: 60_005 },
+      }),
+      'AAPL',
+      new Date('2026-07-14T09:00:08Z'),
+    );
+    const genuinelyDisagreed = buildDebateLog(
+      makeResult({
+        debate_id: 'debate-disagreed',
+        converged: false,
+        rounds_completed: 3,
+      }),
+      'AAPL',
+      new Date('2026-07-14T09:00:08Z'),
+    );
+
+    // Same `converged: false` — the pre-#1081 ambiguity this closes.
+    expect(truncated.converged).toBe(genuinelyDisagreed.converged);
+    // Different `termination` — the distinguishing signal.
+    expect(truncated.termination).not.toBe(genuinelyDisagreed.termination);
+    expect(truncated.termination).toBe('latency_truncated');
+    expect(genuinelyDisagreed.termination).toBe('non_converged');
+  });
+
+  it('records converged for a debate the mediator actually converged', () => {
+    const log = buildDebateLog(
+      makeResult({ converged: true }),
+      'AAPL',
+      new Date('2026-07-14T09:00:08Z'),
+    );
+
+    expect(log.termination).toBe('converged');
   });
 });
 
