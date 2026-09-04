@@ -37,7 +37,10 @@
  * whose `debate_id` has no direct `debate.timeout` match — is left NULL and
  * reported separately as `uncovered`, exactly like a row with no log at
  * all. Nothing here ever treats "we didn't see a timeout for it" as proof
- * the debate wasn't truncated.
+ * the debate wasn't truncated. A row that IS covered but whose own
+ * `converged` column is SQLite NULL (never recorded, distinct from `0`) is
+ * left NULL too, reported as `indeterminate` — coverage cannot manufacture a
+ * signal the row itself never wrote down.
  *
  * ## Read-only by default, for `debate_log.termination`
  *
@@ -74,7 +77,7 @@
  * apply when the operator names the file directly. `--db` plus `--apply`
  * together still only ever write into the named file.
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import { assertStorePathMatchesMode } from '../apps/orchestrator/index.js';
 import type { DebateTermination } from '../shared/index.js';
@@ -151,10 +154,16 @@ export const MAX_INTER_LINE_GAP_MS = 15 * 60_000;
  *  - a boot line — every log line emitted during orchestrator startup
  *    carries `trace_id: 'startup'` (`JsonLogger`'s convention across
  *    `orchestrator/index.ts`, `production.ts`, etc.) — closes the span
- *    unconditionally, regardless of the elapsed gap: it is direct evidence
- *    the process just (re)started, so whatever ran before it cannot vouch
- *    for anything after. The boot line itself then opens the next span from
- *    its own timestamp.
+ *    unconditionally, regardless of the elapsed gap AND regardless of
+ *    whether the boot line itself carries a usable timestamp: it is direct
+ *    evidence the process just (re)started, so whatever ran before it
+ *    cannot vouch for anything after, whether or not this function can also
+ *    place the boot line itself in time. When the boot line DOES carry a
+ *    usable timestamp, it then opens the next span from it; when it
+ *    doesn't, the span stays closed until the next timestamped line.
+ *  - any OTHER line with no usable `timestamp` (not a boot line) neither
+ *    extends nor closes the current span — a well-formed line this function
+ *    simply cannot place in time is not evidence of a gap.
  *
  * The debates that fell in a closed gap are not something this log can vouch
  * for either way, so the span must not claim to cover them.
@@ -203,11 +212,21 @@ export function parseLogCoverage(lines: Iterable<string>): LogCoverage {
       }
     }
 
+    // A boot line is direct evidence the process just (re)started, so it
+    // closes the current span unconditionally — even one with no usable
+    // timestamp of its own to open the next span from. Checked before the
+    // timestamp gate below, deliberately: a boot line that failed to log a
+    // parseable timestamp is still a boot line, and must not be silently
+    // treated as ordinary untimestamped chatter that leaves the span open.
+    if (record.trace_id === 'startup') {
+      closeSpan();
+    }
+
     const rawTimestamp = record.timestamp;
     if (typeof rawTimestamp !== 'string') {
-      // A well-formed line with no timestamp at all neither extends nor
-      // closes the current span — it is not evidence of a gap, just a line
-      // this function cannot place in time.
+      // A well-formed, non-boot line with no timestamp at all neither
+      // extends nor closes the current span — it is not evidence of a gap,
+      // just a line this function cannot place in time.
       continue;
     }
     const parsedMs = Date.parse(rawTimestamp);
@@ -220,9 +239,8 @@ export function parseLogCoverage(lines: Iterable<string>): LogCoverage {
     // against it.
     const timestamp = new Date(parsedMs).toISOString();
 
-    const isBootLine = record.trace_id === 'startup';
     const gapTooLarge = spanEndMs !== undefined && parsedMs - spanEndMs > MAX_INTER_LINE_GAP_MS;
-    if (isBootLine || gapTooLarge) {
+    if (gapTooLarge) {
       closeSpan();
     }
 
@@ -260,6 +278,16 @@ export interface ClassificationResult {
   classified: ClassifiedRow[];
   /** `debate_id`s left NULL — no `debate.timeout` match AND no log span covers the row's `created_at`. */
   uncovered: string[];
+  /**
+   * `debate_id`s left NULL for a different reason than `uncovered`: the log
+   * DOES positively cover the row's `created_at` and names no timeout for it,
+   * but the row's own `converged` column is SQLite NULL — `DebateLog.converged`
+   * is optional (`server/shared/types/records.ts`), and a writer that never
+   * set it leaves no signal to classify from. `0` (explicit false) still
+   * classifies `'non_converged'`; only NULL lands here. Log coverage cannot
+   * supply what the row itself never recorded.
+   */
+  indeterminate: string[];
 }
 
 /**
@@ -279,6 +307,14 @@ export interface ClassificationResult {
  * `timeoutIds` alone proves nothing — a row outside every covered span stays
  * NULL and is reported in `uncovered` instead of being guessed at.
  *
+ * Even inside a covered span, `row.converged` is only a signal when it is
+ * `0` or `1` — SQLite NULL (`DebateLog.converged` is optional) means the row
+ * itself never recorded whether the debate converged, and log coverage
+ * cannot supply that: `'non_converged'` is a positive claim the row does not
+ * support. Such a row is left NULL too, reported in `indeterminate` rather
+ * than folded into `uncovered` — the log DID cover it, unlike an `uncovered`
+ * row, so conflating the two would hide which kind of gap caused the miss.
+ *
  * A row that already carries a `termination` (post-0041 write, or a prior
  * run of this same tool) is skipped entirely — this function only proposes
  * values for what migration 0041 left indeterminate, never reclassifies a
@@ -290,6 +326,7 @@ export function classifyRows(
 ): ClassificationResult {
   const classified: ClassifiedRow[] = [];
   const uncovered: string[] = [];
+  const indeterminate: string[] = [];
 
   for (const row of rows) {
     if (row.termination !== null) continue;
@@ -300,6 +337,10 @@ export function classifyRows(
     }
 
     if (isCovered(row.created_at, coverage.intervals)) {
+      if (row.converged === null) {
+        indeterminate.push(row.debate_id);
+        continue;
+      }
       classified.push({
         debate_id: row.debate_id,
         termination: row.converged === 1 ? 'converged' : 'non_converged',
@@ -310,7 +351,7 @@ export function classifyRows(
     uncovered.push(row.debate_id);
   }
 
-  return { classified, uncovered };
+  return { classified, uncovered, indeterminate };
 }
 
 /** Per-`termination` counts, for the operator-facing report. */
@@ -331,7 +372,8 @@ export function summarizeClassification(
 /** Renders the classification as a human-readable report. */
 export function formatClassificationReport(result: ClassificationResult, applied: boolean): string {
   const summary = summarizeClassification(result.classified);
-  const totalRead = result.classified.length + result.uncovered.length;
+  const totalRead =
+    result.classified.length + result.uncovered.length + result.indeterminate.length;
   const lines = [
     `#1081 debate_log termination classification (${applied ? 'APPLIED' : 'DRY RUN — no rows written'})`,
     `  rows read (termination IS NULL): ${totalRead}`,
@@ -340,6 +382,7 @@ export function formatClassificationReport(result: ClassificationResult, applied
     `    non_converged:     ${summary.non_converged}`,
     `    latency_truncated: ${summary.latency_truncated}`,
     `  left uncovered — no log evidence either way, termination stays NULL: ${result.uncovered.length}`,
+    `  left indeterminate — log covers it but converged is itself NULL, termination stays NULL: ${result.indeterminate.length}`,
   ];
 
   if (result.classified.length > 0) {
@@ -372,6 +415,20 @@ export function parseLogPaths(argv: readonly string[]): string[] {
     }
   }
   return [...new Set(paths)];
+}
+
+/**
+ * Guards an explicit `--db <path>` before it reaches `openSharedStore`.
+ * `better-sqlite3` opens a nonexistent path by silently CREATING an empty
+ * database file (no `fileMustExist` option is passed here) — without this
+ * check, a typo'd `--db` would open (and migrate!) a brand-new empty file
+ * and this tool would report a confident "0 rows" instead of failing loudly
+ * (#1081 code review round 3, kimi).
+ */
+export function assertDbPathExists(dbPath: string): void {
+  if (!existsSync(dbPath)) {
+    throw new Error(`--db ${dbPath} does not exist — refusing to create a new database file.`);
+  }
 }
 
 function parseIsoFlag(argv: readonly string[], flag: string): string | undefined {
@@ -412,6 +469,7 @@ if (isMain) {
   if (explicitDbPath !== undefined) {
     // An explicit path names its own file — the paper/live filename guard
     // below exists to protect the environment-resolved default, not this.
+    assertDbPathExists(explicitDbPath);
     dbPath = explicitDbPath;
   } else {
     const mode = resolveStoreMode();

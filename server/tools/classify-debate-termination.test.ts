@@ -1,4 +1,8 @@
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
+  assertDbPathExists,
   classifyRows,
   type DebateLogTerminationRow,
   formatClassificationReport,
@@ -198,6 +202,30 @@ describe('parseLogCoverage', () => {
       { start: '2026-09-03T13:00:00.000Z', end: '2026-09-03T13:05:00.000Z' },
     ]);
   });
+
+  /**
+   * #1081 code review round 3, deepseek: the doc said a boot line closes the
+   * span "unconditionally", but the code only checked `trace_id === 'startup'`
+   * AFTER the "no timestamp -> continue" gate, so a boot line with no usable
+   * timestamp of its own never reached that check and silently left the span
+   * open. A boot line is direct evidence of a restart whether or not it also
+   * carries a timestamp — it must still close the span.
+   */
+  it('closes the span at a boot line even when the boot line itself has no usable timestamp', () => {
+    const lines = [
+      otherLine('2026-09-03T13:00:00.000Z'),
+      otherLine('2026-09-03T13:01:00.000Z'),
+      JSON.stringify({ trace_id: 'startup', message: 'orchestrator store opened', payload: {} }),
+      otherLine('2026-09-03T13:01:15.000Z'),
+    ];
+
+    const coverage = parseLogCoverage(lines);
+
+    expect(coverage.intervals).toEqual([
+      { start: '2026-09-03T13:00:00.000Z', end: '2026-09-03T13:01:00.000Z' },
+      { start: '2026-09-03T13:01:15.000Z', end: '2026-09-03T13:01:15.000Z' },
+    ]);
+  });
 });
 
 describe('isCovered', () => {
@@ -247,6 +275,7 @@ describe('classifyRows', () => {
       { debate_id: 'debate-1', termination: 'latency_truncated' },
     ]);
     expect(result.uncovered).toEqual([]);
+    expect(result.indeterminate).toEqual([]);
   });
 
   it('classifies a non-matching converged row as converged, when its timestamp is covered', () => {
@@ -272,6 +301,7 @@ describe('classifyRows', () => {
 
     expect(result.classified).toEqual([]);
     expect(result.uncovered).toEqual(['debate-1']);
+    expect(result.indeterminate).toEqual([]);
   });
 
   it("leaves a row inside a torn log's gap as uncovered", () => {
@@ -385,10 +415,40 @@ describe('classifyRows', () => {
     expect(result.uncovered).toEqual([]);
   });
 
-  it('treats converged: null (SQLite NULL) as non_converged when covered and not truncated', () => {
+  /**
+   * #1081 code review round 3 (blocker, kimi + deepseek): `converged` is
+   * `number | null` on the raw row, and NULL means the row itself never
+   * recorded a value (`DebateLog.converged` is optional) — distinct from `0`
+   * (an explicit, recorded non-convergence). Folding NULL into
+   * `'non_converged'` asserted a fact the row does not support. A covered
+   * row with `converged: null` and no timeout match must stay NULL, reported
+   * as `indeterminate` — not silently written as `'non_converged'`.
+   */
+  it('leaves a covered, non-truncated row with converged: null (SQLite NULL) as indeterminate, not non_converged', () => {
     const result = classifyRows([makeRow({ converged: null })], fullCoverage());
 
+    expect(result.classified).toEqual([]);
+    expect(result.uncovered).toEqual([]);
+    expect(result.indeterminate).toEqual(['debate-1']);
+  });
+
+  it('still classifies converged: 0 (explicit, recorded) as non_converged, distinct from NULL', () => {
+    const result = classifyRows([makeRow({ converged: 0 })], fullCoverage());
+
     expect(result.classified[0]?.termination).toBe('non_converged');
+    expect(result.indeterminate).toEqual([]);
+  });
+
+  it('a timeout match still wins over converged: null — direct evidence needs no converged value at all', () => {
+    const result = classifyRows(
+      [makeRow({ debate_id: 'debate-1', converged: null })],
+      fullCoverage(['debate-1']),
+    );
+
+    expect(result.classified).toEqual([
+      { debate_id: 'debate-1', termination: 'latency_truncated' },
+    ]);
+    expect(result.indeterminate).toEqual([]);
   });
 });
 
@@ -407,7 +467,11 @@ describe('summarizeClassification', () => {
 describe('formatClassificationReport', () => {
   it('names the dry-run mode and the apply instruction when not applied', () => {
     const report = formatClassificationReport(
-      { classified: [{ debate_id: 'a', termination: 'latency_truncated' }], uncovered: [] },
+      {
+        classified: [{ debate_id: 'a', termination: 'latency_truncated' }],
+        uncovered: [],
+        indeterminate: [],
+      },
       false,
     );
 
@@ -417,7 +481,11 @@ describe('formatClassificationReport', () => {
 
   it('names APPLIED and omits the apply instruction when applied', () => {
     const report = formatClassificationReport(
-      { classified: [{ debate_id: 'a', termination: 'latency_truncated' }], uncovered: [] },
+      {
+        classified: [{ debate_id: 'a', termination: 'latency_truncated' }],
+        uncovered: [],
+        indeterminate: [],
+      },
       true,
     );
 
@@ -430,6 +498,7 @@ describe('formatClassificationReport', () => {
       {
         classified: [{ debate_id: 'a', termination: 'non_converged' }],
         uncovered: ['b', 'c'],
+        indeterminate: [],
       },
       false,
     );
@@ -437,6 +506,48 @@ describe('formatClassificationReport', () => {
     expect(report).toContain('classified from positive log evidence: 1');
     expect(report).toContain('left uncovered');
     expect(report).toContain('2');
+  });
+
+  it('reports the indeterminate count separately from both classified and uncovered', () => {
+    const report = formatClassificationReport(
+      {
+        classified: [{ debate_id: 'a', termination: 'non_converged' }],
+        uncovered: ['b'],
+        indeterminate: ['c', 'd'],
+      },
+      false,
+    );
+
+    expect(report).toContain('classified from positive log evidence: 1');
+    expect(report).toContain('left uncovered');
+    expect(report).toContain('left indeterminate');
+    expect(report).toContain('rows read (termination IS NULL): 4');
+  });
+});
+
+describe('assertDbPathExists', () => {
+  /**
+   * #1081 code review round 3 (kimi): `better-sqlite3` opens a nonexistent
+   * path by silently creating an empty database file rather than throwing —
+   * an explicit `--db` pointed at a typo'd path would otherwise open (and
+   * migrate!) a brand-new empty file and report a confident "0 rows".
+   */
+  it('throws for a path that does not exist', () => {
+    const missingPath = join(
+      mkdtempSync(join(tmpdir(), 'classify-debate-termination-')),
+      'nope.sqlite',
+    );
+
+    expect(() => assertDbPathExists(missingPath)).toThrow(missingPath);
+    expect(() => assertDbPathExists(missingPath)).toThrow('does not exist');
+  });
+
+  it('does not throw for a path that exists', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'classify-debate-termination-'));
+    const existingPath = join(dir, 'real.sqlite');
+    writeFileSync(existingPath, '');
+
+    expect(() => assertDbPathExists(existingPath)).not.toThrow();
   });
 });
 
