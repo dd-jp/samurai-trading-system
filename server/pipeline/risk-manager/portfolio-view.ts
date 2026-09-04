@@ -80,6 +80,52 @@ export interface PortfolioAccountingInput {
 export type UnvaluableMarkPolicy = 'refuse' | 'exclude';
 
 /**
+ * Base for every reason `computePortfolioView` refuses to value a held
+ * instrument (#640, widened #1089) — the common type a caller narrows on to
+ * catch "the book could not be valued" without matching on message text
+ * (docs/coding-standards.md, "Typed errors only where a caller branches").
+ *
+ * `decide.ts`'s `buildBracket` is that caller: it converts a whole-book
+ * valuation refusal into a named skip on the control arm while letting every
+ * OTHER rejection (e.g. `sizingEquity`'s #569 non-finite-ceiling guard)
+ * propagate unchanged on either arm. `readMarks` below has two failure
+ * shapes under this base — a stale mark (`StaleMarkError`) and a mark that
+ * could not be read at all (`MarkReadError`: feed timeout, unknown symbol,
+ * or a batch response omitting the instrument) — reaching `buildBracket`
+ * bare, either directly (`failures.length === 1`) or folded into an
+ * `AggregateError` (`failures.length > 1`). `readMarks`'s own wrap is always
+ * all-`BookValuationError` members, but `decide.ts`'s caller narrows on that
+ * explicitly rather than trusting the wrapper type alone — `AggregateError`
+ * is a JS built-in any opaque thunk can reject with, so the caller inspects
+ * `.errors` and requires every member be a `BookValuationError` before
+ * treating it as a valuation refusal. A single base class still means the
+ * caller enumerates a PREDICATE, not a list of subclasses.
+ */
+export abstract class BookValuationError extends Error {}
+
+/**
+ * Thrown when a held instrument's mark could not be obtained at all — the
+ * batch read omitted it, or the source rejected the individual lookup
+ * (timeout, unknown symbol). Distinct from `StaleMarkError`: this means "no
+ * price", not "a price we don't trust any more" — the feed may simply be
+ * unreachable, which is not the "alive and lying" signal `StaleMarkError`
+ * carries. `cause` holds the source error where there was one (the omitted-
+ * entry case has none); the MESSAGE always carries the reason too, since
+ * `describeThrown` (safe-log.ts) prints only `error.message` and never
+ * `cause`.
+ */
+export class MarkReadError extends BookValuationError {
+  constructor(
+    readonly instrument: string,
+    message: string,
+    options?: { cause: unknown },
+  ) {
+    super(message, options);
+    this.name = 'MarkReadError';
+  }
+}
+
+/**
  * Thrown when a held instrument's mark is too old to value the book with
  * (#640).
  *
@@ -90,7 +136,7 @@ export type UnvaluableMarkPolicy = 'refuse' | 'exclude';
  * timeout. It carries the numbers so the log line can say how stale, not just
  * that it was stale.
  */
-export class StaleMarkError extends Error {
+export class StaleMarkError extends BookValuationError {
   constructor(
     readonly instrument: string,
     readonly observed_at: Date,
@@ -229,16 +275,19 @@ async function readMarks(
   const reads = await marketData.getMarks(instruments, asOf);
 
   const marks = new Map<string, number>();
-  const failures: Error[] = [];
+  const failures: BookValuationError[] = [];
 
   for (const instrument of instruments) {
     const read = reads.get(instrument);
     if (read === undefined) {
       // A service that answered the batch but omitted an instrument it was
       // asked for. Not distinguished from a read failure here: either way this
-      // book has an unvalued position in it.
+      // book has an unvalued position in it. Typed `MarkReadError`, not a
+      // bare `Error`, so a caller narrowing on `BookValuationError` (#1089)
+      // catches this shape too.
       failures.push(
-        new Error(
+        new MarkReadError(
+          instrument,
           `computePortfolioView: the batch mark read returned no entry for held instrument ` +
             `'${instrument}'.`,
         ),
@@ -254,7 +303,8 @@ async function readMarks(
       // to `cause`: `describeThrown` prints the message alone, so a reason that
       // travels only as `cause` is a reason the operator never reads.
       failures.push(
-        new Error(
+        new MarkReadError(
+          instrument,
           `computePortfolioView: the mark read for held instrument '${instrument}' failed, so ` +
             `the book cannot be valued: ${describeThrown(read.error)}`,
           { cause: read.error },

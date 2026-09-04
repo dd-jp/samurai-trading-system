@@ -20,6 +20,7 @@ import {
   recommendedWarmupFor,
 } from '../../providers/market-data-service/index.js';
 import {
+  describeThrown,
   type ExitReason,
   heldQuantitiesFor,
   type OpenPosition,
@@ -35,6 +36,18 @@ import {
 // here as values so the Trader could re-derive the decision bar; it no longer
 // is, because the Trader no longer derives it (#687).
 import type { DebateResult } from '../debate-engine/types.js';
+// #1089: the ONE typed dependency this otherwise risk-manager-free module
+// takes, and only for `instanceof` discrimination (coding-standards.md
+// "Typed errors only where a caller branches" — the same posture
+// `DuplicatePositionError` models). `TraderInput.equity` stays an opaque
+// thunk everywhere else in this file; the single call site that inspects
+// what it threw needs to tell a genuine whole-book valuation refusal apart
+// from any OTHER rejection the thunk's implementation might raise (e.g.
+// `sizingEquity`'s #569 non-finite-ceiling guard) — see `buildBracket`.
+// `BookValuationError` (#1089), not `StaleMarkError` alone: `readMarks`
+// (portfolio-view.ts) throws it bare on either a stale mark or a failed/
+// omitted mark read, and the base type is what catches both.
+import { BookValuationError } from '../risk-manager/index.js';
 import { NO_PRECEDENT_MULTIPLIER, retrieveCosinePrecedent } from './cosine-precedent.js';
 import { readSignalDecay } from './early-exit.js';
 import { computeIdempotencyKey, intentSideFor } from './idempotency-key.js';
@@ -413,18 +426,60 @@ async function buildBracket(
   // it. Two properties, both load-bearing:
   //
   //  1. Reaching sizing at all requires a whole-book valuation to have
-  //     succeeded. The thunk throws when the book cannot be fully valued, and
-  //     that throw aborts the tick exactly as the eager read did before #847
-  //     — it is NOT converted into a `skip_reason`. A read failure is a fault
-  //     and must stay audible in `tick-loop.ts`'s `error`-level catch (#507),
-  //     not become a thirteenth quiet skip row.
+  //     succeeded. On the LIVE arm the thunk's rejection propagates unchanged
+  //     — that throw aborts the tick exactly as the eager read did before
+  //     #847, and it is NOT converted into a `skip_reason` there. A read
+  //     failure is a fault and must stay audible in `tick-loop.ts`'s
+  //     `error`-level catch (#507).
+  //
+  //     #1089: `arm === 'control'` converts ONE specific shape of that
+  //     rejection — a genuine whole-book valuation refusal, any
+  //     `BookValuationError` (a stale mark OR a failed/omitted mark read) or
+  //     an `AggregateError` whose members are ALL `BookValuationError` — into
+  //     `control_arm_valuation_refused` instead of rethrowing. See that skip
+  //     reason's own doc for why the control arm needs this and the live arm
+  //     must not get it. Narrowed by TYPE, not just by arm: `input.equity()`
+  //     is an opaque thunk that can reject for an unrelated reason
+  //     (`sizingEquity`'s #569 non-finite-ceiling guard, a fail-open refusal
+  //     that must stay a fault on EITHER arm), and only these two shapes
+  //     identify "the book could not be valued" as opposed to "sizing itself
+  //     refused". The `AggregateError` check inspects `.errors`, not just the
+  //     wrapper type: `readMarks`'s own wrap (portfolio-view.ts) is always
+  //     all-`BookValuationError`, but `input.equity()` is opaque and a future
+  //     non-valuation `AggregateError` (e.g. a batched sub-read inside
+  //     `sizingEquity`) must not be silently downgraded to a skip.
   //  2. Nothing that does NOT size pays for it or fails on it. `routeDecision`
   //     evaluates flat-by-close before it can ever get here, so a dark mark
   //     elsewhere in the book no longer suppresses this pass's flatten.
   //
   // Awaited at the TOP rather than at the use site so a future edit cannot
   // reach the `size` computation on some path that skipped the read.
-  const equity = await input.equity();
+  let equity: number;
+  try {
+    equity = await input.equity();
+  } catch (error) {
+    const isValuationRefusal =
+      error instanceof BookValuationError ||
+      (error instanceof AggregateError &&
+        error.errors.length > 0 &&
+        error.errors.every((member: unknown) => member instanceof BookValuationError));
+    if (arm === 'control' && isValuationRefusal) {
+      // #1089: paired with the skip so `escalateTraderDiagnostics` (the
+      // pre-existing #698 mechanism — a `trader_log` write plus a REAL alert
+      // transport when one is configured) makes this audible above `warn`,
+      // rather than a bespoke log line with no consumer. `asset_class` is
+      // `undefined` here on purpose — see `TraderDiagnostic.asset_class`.
+      diagnostics.push({
+        kind: 'control_arm_valuation_refused',
+        asset_class: undefined,
+        detail:
+          `${instrument}: the control arm could not value the book (${describeThrown(error)}) ` +
+          'and skipped this pass instead of crashing it.',
+      });
+      return skip('control_arm_valuation_refused');
+    }
+    throw error;
+  }
 
   if (debate.confidence < config.conviction_floor) return skip('below_conviction_floor');
 
@@ -1095,7 +1150,12 @@ export type TraderSkipReason =
   // #941: the entry sized to less than one whole share on a venue that only
   // accepts whole shares (`whole_share_sizing`). Not a data-quality failure
   // and not dust — see the guard's own comment in `decide`.
-  | 'rounds_to_zero_shares';
+  | 'rounds_to_zero_shares'
+  // #1089, `arm === 'control'` ONLY: a whole-book valuation refusal
+  // (`BookValuationError`/`AggregateError`) from `equity()` that the live arm
+  // would instead let propagate into `#507`'s retry. See `buildBracket`'s
+  // read of `input.equity()` for the full reasoning.
+  | 'control_arm_valuation_refused';
 
 /**
  * A condition the Trader DETECTED but did not treat as fatal (#698).
@@ -1144,13 +1204,30 @@ export type TraderDiagnosticKind =
    * deliberately NOT here: that one is a warm-up or a data gap, is expected
    * early in a soak, and alerting it would fire on day 1 for every instrument.
    */
-  | 'atr_not_finite';
+  | 'atr_not_finite'
+  /**
+   * #1089, `arm === 'control'` ONLY: paired with the `control_arm_valuation_
+   * refused` skip reason, for exactly the reason `atr_not_finite` is listed
+   * here despite already having one — a durable `trader_log` row is not an
+   * alert. Raised from `buildBracket`'s equity read, before the mark read
+   * that would otherwise supply `asset_class` — see `TraderDiagnostic.
+   * asset_class` for why this is the one kind that can carry `undefined`.
+   */
+  | 'control_arm_valuation_refused';
 
 /** One detected degradation, with enough context for an operator to act. */
 export interface TraderDiagnostic {
   kind: TraderDiagnosticKind;
-  /** Which leg — the calendar and the venue both follow the instrument's class. */
-  asset_class: AssetClass;
+  /**
+   * Which leg — the calendar and the venue both follow the instrument's
+   * class. `undefined` for exactly `control_arm_valuation_refused`: it fires
+   * from the equity read at the top of `buildBracket`, before the mark read a
+   * few lines later ever resolves an `asset_class` on the entry branch —
+   * there is no class in scope yet to carry, and this diagnostic must not
+   * wait for one (that would put the sizing read behind the mark read,
+   * changing the live arm's fault-handling order for no live-arm benefit).
+   */
+  asset_class: AssetClass | undefined;
   /** Human-readable specifics (the resolved close, how stale it is). Never raw vendor payloads. */
   detail: string;
 }

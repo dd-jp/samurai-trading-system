@@ -264,7 +264,7 @@ describe('buildControlArmStep', () => {
    * containment is HERE and not in `SequentialTickRunner`, whose lack of a
    * try/catch is a deliberate, documented invariant.
    */
-  it('contains a control-arm failure, logs it at warn, and clears the relay', async () => {
+  it('contains a control-arm failure, logs it at error, and clears the relay', async () => {
     const { step, relay, logger } = harness(async () => {
       throw new Error('control blew up');
     });
@@ -273,11 +273,13 @@ describe('buildControlArmStep', () => {
       step({ signal: SIGNAL, ctx: tickContext(), views: [view()] }),
     ).resolves.toBeUndefined();
 
-    const warned = logger.entries.filter((entry) => entry.stage === 'control_arm');
-    expect(warned).toHaveLength(1);
-    expect(warned[0]?.level).toBe('warn');
-    expect(warned[0]?.trace_id).toBe(`trace-live${CONTROL_TRACE_SUFFIX}`);
-    expect(warned[0]?.message).toContain('BTC-USD');
+    const logged = logger.entries.filter((entry) => entry.stage === 'control_arm');
+    expect(logged).toHaveLength(1);
+    // #1089: 'error', not 'warn' — a contained crash from any cause must
+    // surface above the level an unattended soak's operator actually reads.
+    expect(logged[0]?.level).toBe('error');
+    expect(logged[0]?.trace_id).toBe(`trace-live${CONTROL_TRACE_SUFFIX}`);
+    expect(logged[0]?.message).toContain('BTC-USD');
     // A crashed pass must not leave views behind for a later one to decide from.
     expect(relay.get(`trace-live${CONTROL_TRACE_SUFFIX}`)).toEqual([]);
   });

@@ -46,12 +46,22 @@ const CONSEQUENCE: Record<TraderDiagnosticAlert['diagnostic']['kind'], string> =
   atr_not_finite:
     'ATR was not finite on a FULL bar window, which means corrupt market data rather than a ' +
     'warm-up gap. This instrument cannot price a stop and is skipping every tick.',
+  control_arm_valuation_refused:
+    'The control arm (#753 falsifier arm 2) could not value its shadow book and skipped this ' +
+    'pass instead of crashing it. The live arm is unaffected, but a control that keeps skipping ' +
+    'cannot answer the debate-beats-indicators question at the end of the soak (#1089).',
 };
 
 function formatTraderDiagnosticAlert(alert: TraderDiagnosticAlert): string {
   const { diagnostic } = alert;
+  // `asset_class` is `undefined` for exactly `control_arm_valuation_refused`
+  // (see `TraderDiagnostic.asset_class`'s own doc) — it fires before the mark
+  // read that would otherwise resolve one, so the parenthetical is omitted
+  // rather than rendering the literal string "undefined".
+  const assetClassSuffix =
+    diagnostic.asset_class === undefined ? '' : ` (${diagnostic.asset_class})`;
   return (
-    `Samurai TRADER DEGRADED: ${alert.instrument} (${diagnostic.asset_class}) reported ` +
+    `Samurai TRADER DEGRADED: ${alert.instrument}${assetClassSuffix} reported ` +
     `${diagnostic.kind} on ${alert.consecutive_ticks} consecutive tick(s) as of ` +
     `${alert.reported_at.toISOString()}.\n` +
     `${CONSEQUENCE[diagnostic.kind]}\n` +

@@ -26,6 +26,13 @@ import type { Clock, OpenPosition } from '../../shared/index.js';
 // THOSE rather than hand-rebuilt copies that would keep passing on drift.
 import { MACD_SPEC, RSI_SPEC } from '../analysts/technical-analyst.js';
 import type { DebateResult } from '../debate-engine/index.js';
+// #1089: `StaleMarkError`/`MarkReadError` are imported for the SAME reason
+// `decide.ts` itself takes `BookValuationError` — proving the narrowing is by
+// error TYPE, not merely `arm === 'control'`, requires throwing the real
+// shapes rather than a look-alike `Error`. `MarkReadError` pins the second
+// failure shape a code-review pass 2 caught: `readMarks` (portfolio-view.ts)
+// also throws bare on a failed/omitted mark READ, not only a stale one.
+import { MarkReadError, StaleMarkError } from '../risk-manager/index.js';
 import {
   atrIndicatorSpec,
   checkExitsWithReason,
@@ -1033,6 +1040,137 @@ describe('decide — flat by close (#668)', () => {
         }),
       ),
     ).rejects.toThrow(/portfolio view refused/);
+  });
+
+  /**
+   * #1089 — the CONTROL arm's own version of the two cases just above.
+   *
+   * The live arm's rethrow (immediately above) is deliberately unaffected by
+   * this change: `arm` defaults to `'live'`, so that case is unchanged. This
+   * is the OTHER side of the same equity-read refusal, only for
+   * `arm: 'control'` — the arm that has no `tick-loop.ts` `#507` catch to
+   * abort into (it inherits `ctx.decision_bar` from the live pass rather than
+   * holding a decision gate of its own) and no equivalent bounded retry, so
+   * the unhandled rejection killed the whole control-arm pass (#1089's six
+   * lost passes on 2026-09-03T19:58Z). It must resolve with a named skip
+   * rather than reject, so `decideWithReason`'s caller — and, one layer up,
+   * `SequentialTickRunner.runInstrument`, which wraps no stage in a try/catch
+   * of its own — can finish the pass instead of crashing it.
+   */
+  it('the control arm skips instead of refusing, with a distinct named reason (#1089)', async () => {
+    const outcome = await decideWithReason(
+      traderInput({
+        clock: new ManualClock(OUTSIDE_WINDOW),
+        positionState: async () => [],
+        arm: 'control',
+        equity: async () => {
+          throw new StaleMarkError('SPY', new Date(0), OUTSIDE_WINDOW, 60_000);
+        },
+      }),
+    );
+
+    expect(outcome.intent).toBeNull();
+    expect(outcome.skip_reason).toBe('control_arm_valuation_refused');
+  });
+
+  it('the control arm also skips on the multi-instrument AggregateError shape (#1089)', async () => {
+    // The real 2026-09-03T19:58Z incident's six lost passes were all this
+    // shape — `computePortfolioView` wraps more than one unvaluable held
+    // instrument into one `AggregateError` (portfolio-view.ts), not a lone
+    // `StaleMarkError`. Both must convert to the same named skip.
+    const outcome = await decideWithReason(
+      traderInput({
+        clock: new ManualClock(OUTSIDE_WINDOW),
+        positionState: async () => [],
+        arm: 'control',
+        equity: async () => {
+          throw new AggregateError(
+            [
+              new StaleMarkError('QQQ', new Date(0), OUTSIDE_WINDOW, 60_000),
+              new StaleMarkError('MSTR', new Date(0), OUTSIDE_WINDOW, 60_000),
+            ],
+            '2 held instrument(s) could not be valued',
+          );
+        },
+      }),
+    );
+
+    expect(outcome.intent).toBeNull();
+    expect(outcome.skip_reason).toBe('control_arm_valuation_refused');
+  });
+
+  it('the control arm also skips on a single mark-READ failure, not only a stale mark (#1089)', async () => {
+    // A code-review pass 2 finding: `readMarks` (portfolio-view.ts) throws
+    // `MarkReadError` bare (`failures.length === 1`) when a held instrument's
+    // mark read fails outright (feed timeout, unknown symbol) or the batch
+    // response omits it — a DIFFERENT shape from `StaleMarkError`, and the
+    // original `StaleMarkError`-only narrowing missed it, leaving one such
+    // lot able to crash the control pass exactly like the original incident.
+    const outcome = await decideWithReason(
+      traderInput({
+        clock: new ManualClock(OUTSIDE_WINDOW),
+        positionState: async () => [],
+        arm: 'control',
+        equity: async () => {
+          throw new MarkReadError(
+            'AMD',
+            "computePortfolioView: the mark read for held instrument 'AMD' failed, so the book " +
+              'cannot be valued: 429 rate limited',
+          );
+        },
+      }),
+    );
+
+    expect(outcome.intent).toBeNull();
+    expect(outcome.skip_reason).toBe('control_arm_valuation_refused');
+  });
+
+  it('the control arm still rethrows a non-valuation equity rejection — #569’s ceiling guard is a fault, not a skip (#1089)', async () => {
+    // Narrowed by error TYPE, not merely by `arm === 'control'`: this pins
+    // that a plain `Error` from the same thunk (the shape `sizingEquity`'s
+    // #569 non-finite-ceiling guard actually throws) is NOT downgraded to a
+    // skip on the control arm — it must stay audible in `tick-loop.ts`'s
+    // `#507` catch exactly as it does on the live arm.
+    await expect(
+      decideWithReason(
+        traderInput({
+          clock: new ManualClock(OUTSIDE_WINDOW),
+          positionState: async () => [],
+          arm: 'control',
+          equity: async () => {
+            throw new Error('sizingEquity: capitalCeilingUsd must be finite, got NaN');
+          },
+        }),
+      ),
+    ).rejects.toThrow(/capitalCeilingUsd must be finite/);
+  });
+
+  it('the control arm rethrows an AggregateError whose members are not all BookValuationError (#1089)', async () => {
+    // A code-review pass 2 finding: `instanceof AggregateError` alone is
+    // broader than `readMarks`'s own wrap (portfolio-view.ts), which is
+    // always all-`BookValuationError` — but `input.equity()` is an opaque
+    // thunk, and a future non-valuation `AggregateError` (e.g. a batched
+    // sub-read inside `sizingEquity`) must still propagate as a fault on
+    // the control arm, not get silently downgraded to a skip because it
+    // happens to share the wrapper type.
+    await expect(
+      decideWithReason(
+        traderInput({
+          clock: new ManualClock(OUTSIDE_WINDOW),
+          positionState: async () => [],
+          arm: 'control',
+          equity: async () => {
+            throw new AggregateError(
+              [
+                new StaleMarkError('QQQ', new Date(0), OUTSIDE_WINDOW, 60_000),
+                new Error('sizingEquity: some unrelated batched sub-read failed'),
+              ],
+              '2 errors occurred',
+            );
+          },
+        }),
+      ),
+    ).rejects.toThrow(/2 errors occurred/);
   });
 
   it('holds normally just outside the window', async () => {

@@ -573,6 +573,48 @@ describe('buildTraderStep capital ceiling (#511)', () => {
     // case, deliberately not the same input.
     await expect(sizeFor(Number.NaN)).rejects.toThrow(/finite/);
   });
+
+  it('rejects instead of skipping when the CONTROL arm hits the #569 non-finite-ceiling guard (#1089)', async () => {
+    // #1089's new `control_arm_valuation_refused` skip is narrowed by error
+    // TYPE (`StaleMarkError`/`AggregateError`), not merely by `arm === 'control'`
+    // — this pins that the narrowing actually holds. `sizingEquity` throws a
+    // plain `Error` for a declared-but-unusable ceiling, which is a fail-open
+    // refusal that must stay a FAULT on either arm; if the catch in
+    // `buildBracket` only checked `arm`, this would be silently downgraded to
+    // a skip instead of rethrown, and a broken control-arm ceiling would go
+    // unnoticed for the rest of the soak.
+    const step = buildTraderStep({
+      marketData: FAKE_MARKET_DATA,
+      circuitBreakers: new CircuitBreakers({
+        daily_loss_pct: 0.05,
+        daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
+        max_drawdown_pct: 0.2,
+        max_consecutive_losses: 5,
+        volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
+        auto_rearm: { recovery_drawdown_pct: 0.05, max_days_tripped: 5 },
+      }),
+      accountState: FAKE_ACCOUNT_STATE,
+      volatility: FAKE_VOLATILITY,
+      getOpenPositions: async () => NO_POSITIONS,
+      maxMarkAge: TEST_MAX_MARK_AGE,
+      mode: 'paper',
+      breakerState: NOOP_BREAKER_STATE,
+      portfolioSnapshots: new Map(),
+      config: CEILING_CONFIG,
+      setupStore: new FixtureSetupStore(),
+      getExitFillSizes: async () => new Map<string, number>(),
+      sessionCalendars: {
+        crypto: new AlwaysOpenCalendar(),
+        stocks: new UsEquityRegularHoursCalendar(),
+      },
+      capitalCeilingUsd: Number.NaN,
+      arm: 'control',
+    });
+
+    await expect(
+      step({ trace_id: TRACE_ID, instrument: 'AAPL', debate: makeDebate(), clock: CLOCK }),
+    ).rejects.toThrow(/finite/);
+  });
 });
 
 /**
@@ -2788,5 +2830,155 @@ describe('#847: a dark mark must not suppress a newly decided flatten', () => {
     // entry against the same observation the Trader sized it against — and
     // `CircuitBreakers.evaluate()` ran (and persisted) on this pass.
     expect(snapshots.size).toBe(1);
+  });
+
+  /**
+   * #1089 — the CONTROL arm's version of "still refuses to size an ENTRY when
+   * one held name is dark", above, only it must NOT refuse.
+   *
+   * `buildTraderStep`, exercised directly here, is the exact function bound
+   * as `TickSteps['trader']` — `SequentialTickRunner.runInstrument` calls it
+   * with no try/catch of its own (`tick-runner.ts`'s module header documents
+   * that absence as a deliberate, enforced invariant: containment lives at
+   * each stage's own call site, not in the runner). So a `step(...)` call
+   * here that resolves rather than rejects IS the same fact as
+   * `runInstrument` completing rather than throwing — there is no wrapper in
+   * between that could make this pass vacuously.
+   *
+   * Two held names are dark, matching #1089's real six lost passes: `DARK`
+   * (a normal position with a stale mark, mirroring QQQ/MSTR/MARA mid-
+   * flatten) and `ZERO` (`avg_entry_price: 0.0`, mirroring the permanently
+   * zero-priced META lot #1087/#1088 separately own — `readMarks` only
+   * inspects the MARK, so `ZERO` is unvaluable here because its mark is dark
+   * too, not because its entry price is zero). Both together produce the
+   * exact `AggregateError` shape #1089 quotes: "2 held instrument(s) could
+   * not be valued".
+   */
+  describe('#1089: a dark or zero-priced held instrument must not crash the CONTROL arm', () => {
+    const CONTROL_DARK_MARKET_DATA = {
+      ...FAKE_MARKET_DATA,
+      getMark: vi.fn(async (instrument: string, asOf: Date) => {
+        if (instrument === 'DARK' || instrument === 'ZERO') {
+          throw new Error(`feed timeout for ${instrument}`);
+        }
+        return FAKE_GET_MARK(instrument, asOf);
+      }),
+      getMarks: vi.fn(async (instruments: readonly string[], asOf: Date) =>
+        collectMarks(
+          async (instrument: string, at: Date) => {
+            if (instrument === 'DARK' || instrument === 'ZERO') {
+              throw new Error(`feed timeout for ${instrument}`);
+            }
+            return FAKE_GET_MARK(instrument, at);
+          },
+          instruments,
+          asOf,
+        ),
+      ),
+    };
+
+    function makeControlDeps(
+      held: OpenPosition[],
+      writes: TraderDecisionRecord[],
+      logs: LogEntry[],
+    ) {
+      return {
+        ...makeDeps(held, new Map<string, never>()),
+        marketData: CONTROL_DARK_MARKET_DATA,
+        arm: 'control' as const,
+        traderLog: { write: (record: TraderDecisionRecord) => writes.push(record) },
+        logger: { log: (entry: LogEntry) => logs.push(entry) },
+      };
+    }
+
+    it('completes rather than throwing — the step resolves with a named skip, not a rejection', async () => {
+      const writes: TraderDecisionRecord[] = [];
+      const logs: LogEntry[] = [];
+      const step = buildTraderStep(
+        makeControlDeps(
+          [{ ...makeHeld('DARK') }, { ...makeHeld('ZERO'), avg_entry_price: 0 }],
+          writes,
+          logs,
+        ),
+      );
+
+      const intent = await step({
+        trace_id: `${TRACE_ID}:control`,
+        instrument: 'MSFT',
+        debate: makeDebate(),
+        clock: CLOCK,
+      });
+
+      expect(intent).toBeNull();
+    });
+
+    it('records the skip on trader_log — recoverable from the store, not only a warn log line', async () => {
+      const writes: TraderDecisionRecord[] = [];
+      const logs: LogEntry[] = [];
+      const step = buildTraderStep(
+        makeControlDeps(
+          [{ ...makeHeld('DARK') }, { ...makeHeld('ZERO'), avg_entry_price: 0 }],
+          writes,
+          logs,
+        ),
+      );
+
+      await step({
+        trace_id: `${TRACE_ID}:control`,
+        instrument: 'MSFT',
+        debate: makeDebate(),
+        clock: CLOCK,
+      });
+
+      expect(writes).toHaveLength(1);
+      expect(writes[0]?.skip_reason).toBe('control_arm_valuation_refused');
+      expect(writes[0]?.intent_type).toBeNull();
+    });
+
+    it('is visible above warn — an error-level line, not the containment catch’s warn alone', async () => {
+      const writes: TraderDecisionRecord[] = [];
+      const logs: LogEntry[] = [];
+      const step = buildTraderStep(
+        makeControlDeps(
+          [{ ...makeHeld('DARK') }, { ...makeHeld('ZERO'), avg_entry_price: 0 }],
+          writes,
+          logs,
+        ),
+      );
+
+      await step({
+        trace_id: `${TRACE_ID}:control`,
+        instrument: 'MSFT',
+        debate: makeDebate(),
+        clock: CLOCK,
+      });
+
+      // Pinned on `payload.kind`, not a substring of the free-text `message`
+      // — a reword of the diagnostic's `detail` string must not silently
+      // stop this test from proving the mechanism.
+      const errorLine = logs.find(
+        (entry) =>
+          entry.level === 'error' &&
+          (entry.payload as { kind?: string } | undefined)?.kind ===
+            'control_arm_valuation_refused',
+      );
+      expect(errorLine).toBeDefined();
+    });
+
+    it('the LIVE arm is unaffected — the same dark book still throws for arm: live', async () => {
+      const writes: TraderDecisionRecord[] = [];
+      const logs: LogEntry[] = [];
+      const deps = makeControlDeps(
+        [{ ...makeHeld('DARK') }, { ...makeHeld('ZERO'), avg_entry_price: 0 }],
+        writes,
+        logs,
+      );
+      const step = buildTraderStep({ ...deps, arm: 'live' });
+
+      await expect(
+        step({ trace_id: TRACE_ID, instrument: 'MSFT', debate: makeDebate(), clock: CLOCK }),
+      ).rejects.toThrow(/DARK|ZERO/);
+      expect(writes).toHaveLength(0);
+    });
   });
 });

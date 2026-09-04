@@ -289,7 +289,11 @@ export function buildControlArmStep(deps: ControlArmDeps): ControlArmStep {
       deps.logger.log({
         trace_id,
         stage: 'control_arm',
-        level: 'warn',
+        // #1089: 'error', not 'warn' — a contained crash from ANY cause (not
+        // only the whole-book valuation refusal that Trader now converts to a
+        // named skip before it ever reaches here) must surface above the
+        // level an unattended soak's operator actually reads.
+        level: 'error',
         message:
           `control arm: ${signal.asset} — the control pass failed and was contained. The live ` +
           'arm is unaffected, but falsifier arm 2 produced no decision for this tick, and a ' +

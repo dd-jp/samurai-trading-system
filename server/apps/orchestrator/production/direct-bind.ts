@@ -403,6 +403,14 @@ export function buildTraderSteps(deps: TraderStepDeps): {
     });
 
     // #698: escalate anything the decision noticed but did not treat as fatal.
+    // #1089's control-arm valuation refusal is one of these now (`decide.ts`
+    // pushes a `TraderDiagnostic` with `asset_class: undefined` from inside
+    // `buildBracket`, right where it decides to skip) — a durable row (written
+    // just above) plus the real alert transport below, rather than a bespoke
+    // log line with no consumer. See `TraderDiagnostic.asset_class` for why
+    // that field is optional and `buildControlArmStep`'s catch in
+    // `control-arm.ts` (now also `error`-level) for the pass this is paired
+    // with.
     //
     // AFTER the `trader_log` write on purpose — the durable record is the thing
     // that must not be lost, and it lands whether or not a transport is
