@@ -98,6 +98,14 @@ Comments here carry *reasons* — that is an asset (ruled in `docs/reviews/code-
 
 If comments apply the same taxonomy to many values (e.g. `paper-profile.ts`'s SPEC/DERIVED/UNSOURCED provenance labels), make it a typed field. Typed classification is greppable and assertable in a test ("no UNSOURCED value ships to live"); prose is neither.
 
+## Paired presentation values are returned together, never joined at the call site
+
+Where a wire enum needs more than one display value — a word and a colour, a label and an icon — one function returns them as a unit; callers never look up the halves from separate tables. The client's accessibility floor ("colour is never the sole carrier of a signal", `dashboard-spec.md`) currently rests on 9 call sites each pairing `conditionTone(x)` with `CONDITION_STATE_WORD[x]` correctly by hand, out of two tables that take different inputs and so cannot be kept in sync by construction (`cellStateWord(state, laneOutcome)` vs `cellTone(state)`). A `present*(x): {word, tone}` interface makes the invariant structural: a caller cannot supply the colour without the word. (Review 2026-09-04 F3.)
+
+## One display of a wire row, one module
+
+Two renderers of the same wire structure re-derive its display rules independently and drift. The lane matrix and the drawer timeline both walk `PIPELINE_STAGES` over a lane's cells; only the drawer glossed degraded decisions, so #1080's starved-debate legibility never reached the surface an operator scans first, and no test could catch it because only one renderer set the `data-degraded` hook. Resolve the row once into a display shape (`resolveLaneCells(lane): readonly ResolvedCell[]`) and let each renderer choose how much of it to paint. (Review 2026-09-04 F1.)
+
 ## Test stubs must type-check without casts
 
 No `as SomeType` / `as unknown as` / `@ts-expect-error` on fixtures. A wrong-shaped stub behind a cast silently disables the very check the test exists for — a mis-shaped `VolatilityReading` stub meant the volatility breaker never evaluated in the composed-tick test while the suite stayed green. Use `satisfies`, real builders, or shared fixtures.
