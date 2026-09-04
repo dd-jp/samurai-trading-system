@@ -291,6 +291,35 @@ describe('GdeltScoringPass', () => {
     // the shipped 5-minute poll from paying for it twelve times an hour.
     expect(reads).toHaveBeenCalledTimes(1);
   });
+
+  it('reads the bar window ONCE for a two-class run, and not at all once both emitted', () => {
+    const archive = seededArchive();
+    const store = new MarketIntelligenceStore(new SimulatedClock(NOW));
+    const reads = vi.spyOn(archive, 'rawRowsBetween');
+    const pass = new GdeltScoringPass({
+      archive,
+      store,
+      clock: new SimulatedClock(NOW),
+      assetClasses: ['stocks', 'crypto'],
+    });
+
+    pass.run('trace-1');
+    // Both legs share (source, window end, windows), so the slice is one read
+    // per BAR, not one per class — the whole point of the shared memo.
+    expect(reads).toHaveBeenCalledTimes(1);
+    // Which class a row belongs to is still decided per class, over the one
+    // slice: a shared read must not collapse the two legs into one item.
+    const stocks = store.getContext('stocks', CONTEXT_WINDOW_MS, 't', BAR, 'SPY').news;
+    const crypto = store.getContext('crypto', CONTEXT_WINDOW_MS, 't', BAR, 'BTC-USD').news;
+    expect(stocks).toHaveLength(1);
+    expect(crypto).toHaveLength(1);
+
+    reads.mockClear();
+    pass.run('trace-2');
+    // The `#emittedBar` guard runs BEFORE the read, so a bar every class has
+    // already emitted for costs no archive read at all.
+    expect(reads).toHaveBeenCalledTimes(0);
+  });
 });
 
 describe('shouldLogRefusalAt', () => {

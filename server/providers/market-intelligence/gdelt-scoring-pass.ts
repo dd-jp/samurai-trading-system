@@ -3,9 +3,9 @@
  *
  * `GdeltIngestAgent` archives raw GKG bytes and emits nothing. This pass is
  * what turns that archive into intelligence the analysts can see: once per
- * debate bar per asset class it reads the 25-hour slice behind the bar,
- * derives one aggregate through `gdelt-scorer.ts`, and ingests it into
- * `MarketIntelligenceStore`.
+ * debate bar it reads the 25-hour slice behind the bar, and per asset class
+ * derives one aggregate from that slice through `gdelt-scorer.ts` and ingests
+ * it into `MarketIntelligenceStore`.
  *
  * ## Derived at read, nothing stored (#556 point 3)
  *
@@ -27,10 +27,13 @@
  * Driven from `production.ts`'s own GDELT timer, after each poll — not from
  * the analyst stage. The analyst stage reads the STORE (#1085 moved even MI
  * refresh off that path), so what it costs a tick is nothing. What it costs
- * the timer is one indexed SQLite range read (migration 0003) plus a tab-split
- * per row over the window: ~20,000 rows on the 2026-09-03 paper archive's
- * cadence, against 168,026 GDELT rows in the table. The bar guard below is
- * what keeps that from being paid once per poll — twelve times an hour at the
+ * the timer is one indexed SQLite range read (migration 0003) per BAR —
+ * ~20,000 rows on the 2026-09-03 paper archive's cadence, against 168,026
+ * GDELT rows in the table — plus a tab-split per row per ASSET CLASS, because
+ * the theme filter deciding which leg a row belongs to is per class and
+ * `deriveGdeltAggregate` stays a pure function of (rows, spec). The read is
+ * shared across the legs (`SharedBarRead`); the parse is not, and both are
+ * kept off a per-poll cadence by the bar guard — twelve polls an hour at the
  * shipped 5-minute cadence (`DEFAULT_GDELT_POLL_INTERVAL_MS`).
  *
  * ## Cadence, and why the window end is the debate bar
@@ -61,7 +64,7 @@ import {
 } from '../../pipeline/debate-engine/debate-log-store.js';
 import type { AssetClass, Clock, LogEntry, Logger } from '../../shared/index.js';
 import { logCaughtFailure, safeLog } from '../../shared/safe-log.js';
-import type { MiArchiveStore } from './archive/mi-archive-store.js';
+import type { MiArchiveStore, RawArchiveRow } from './archive/mi-archive-store.js';
 import { MI_SOURCES } from './archive/mi-sources.js';
 import type { MarketIntelligenceStore } from './index.js';
 import {
@@ -117,6 +120,25 @@ const REFUSAL_MESSAGE: Record<GdeltRefusalReason, string> = {
     'normal and self-correcting.',
 };
 
+/**
+ * The per-bar work every asset class shares, resolved at most once per `run`.
+ *
+ * `windowEnd` and the archive slice behind it are functions of (source, bar,
+ * windows) alone — identical for every leg — so a two-class run must pay one
+ * clock read and one ~20,000-row archive read per bar, not two of each.
+ *
+ * Both are thunks rather than values because `run` must never throw: a closed
+ * store or a throwing clock has to surface inside the PER-CLASS catch, not
+ * above the loop where it would take the whole poll down. Neither memoizes a
+ * throw, so one leg's failed read still leaves the other leg its own attempt,
+ * exactly as when each leg read for itself.
+ */
+interface SharedBarRead {
+  windows: GdeltWindows;
+  end: () => Date;
+  rows: () => readonly RawArchiveRow[];
+}
+
 export interface GdeltScoringPassDeps {
   archive: MiArchiveStore;
   store: MarketIntelligenceStore;
@@ -163,9 +185,10 @@ export class GdeltScoringPass {
    * are synchronous already, so there is no promise to leave unhandled.
    */
   run(trace_id = 'gdelt-scoring'): void {
+    const bar = this.sharedBarRead();
     for (const asset_class of this.deps.assetClasses) {
       try {
-        this.derive(trace_id, asset_class);
+        this.derive(trace_id, asset_class, bar);
       } catch (error) {
         // Per class, not around the loop: one leg's failure must not silently
         // cost the other leg its aggregate.
@@ -185,14 +208,41 @@ export class GdeltScoringPass {
     }
   }
 
-  private derive(trace_id: string, asset_class: AssetClass): void {
+  /** One bar's shared clock read and archive slice, each resolved on first use. */
+  private sharedBarRead(): SharedBarRead {
     const windows = this.deps.windows ?? DEFAULT_GDELT_WINDOWS;
-    const windowEnd = floorToBar(this.deps.clock.now(), DEBATE_BAR_TIMEFRAME_MS);
+    let windowEnd: Date | undefined;
+    let rows: readonly RawArchiveRow[] | undefined;
+
+    // Memoized rather than re-read per class for a second reason beyond the
+    // cost: a loop that read the clock twice could straddle a bar boundary and
+    // derive the two legs against different windows.
+    const end = (): Date =>
+      (windowEnd ??= floorToBar(this.deps.clock.now(), DEBATE_BAR_TIMEFRAME_MS));
+
+    return {
+      windows,
+      end,
+      rows: () => {
+        if (rows === undefined) {
+          const to = end();
+          const from = new Date(to.getTime() - windows.signalWindowMs - windows.baselineWindowMs);
+          rows = this.deps.archive.rawRowsBetween(SOURCE_GDELT, from, to);
+        }
+        return rows;
+      },
+    };
+  }
+
+  private derive(trace_id: string, asset_class: AssetClass, bar: SharedBarRead): void {
+    const windows = bar.windows;
+    const windowEnd = bar.end();
+    // Strictly before `bar.rows()`: a bar every class has already emitted for
+    // must cost no archive read at all, which only holds while this guard
+    // returns ahead of the first row read.
     if (this.#emittedBar.get(asset_class) === windowEnd.getTime()) return;
 
-    const from = new Date(windowEnd.getTime() - windows.signalWindowMs - windows.baselineWindowMs);
-    const rows = this.deps.archive.rawRowsBetween(SOURCE_GDELT, from, windowEnd);
-    const derivation = deriveGdeltAggregate(rows, { asset_class, windowEnd, windows });
+    const derivation = deriveGdeltAggregate(bar.rows(), { asset_class, windowEnd, windows });
 
     if (!derivation.emitted) {
       const previous = this.#refusals.get(asset_class);
