@@ -2953,8 +2953,14 @@ describe('#847: a dark mark must not suppress a newly decided flatten', () => {
         clock: CLOCK,
       });
 
+      // Pinned on `payload.kind`, not a substring of the free-text `message`
+      // — a reword of the diagnostic's `detail` string must not silently
+      // stop this test from proving the mechanism.
       const errorLine = logs.find(
-        (entry) => entry.level === 'error' && entry.message.includes('control arm'),
+        (entry) =>
+          entry.level === 'error' &&
+          (entry.payload as { kind?: string } | undefined)?.kind ===
+            'control_arm_valuation_refused',
       );
       expect(errorLine).toBeDefined();
     });
