@@ -67,6 +67,52 @@ const SLOW_CALLBACK_MS = 5_000;
 const MAX_SLOW_CALLBACKS = 3;
 
 /**
+ * Collapses class-wide items to the LATEST one per (source, entity, type).
+ *
+ * A `scope: 'asset_class'` item is a trailing statistic over a window, not a
+ * dated observation: `gdelt-scoring-pass.ts` derives one every debate bar, and
+ * consecutive ones share 23 of the 24 hours of their baseline. So an analyst's
+ * 24h read holds ~24 restatements of one measurement, and
+ * `fundamental-analyst.ts` takes an UNWEIGHTED mean over `news` — leaving them
+ * all in lets one macro source outvote every genuinely distinct item an
+ * instrument has (an LSE ETP gets 0-1 from the Benzinga wire). That is the
+ * time-axis inflation `polymarket-agent.ts` records as its limitation 3,
+ * arriving through a second source.
+ *
+ * Entity-scoped items are untouched, because two articles about one ticker
+ * ARE two observations. The key carries `entity` and `type` as well as
+ * `source`: one source may file several macro series under different names
+ * (Polymarket does), and a class-wide `news` and a class-wide `sentiment`
+ * item are different evidence in different buckets.
+ *
+ * `ingest` cannot do this job, which is why it is done here. Its
+ * `(asset_class, entity, id)` dedupe DROPS a repeat rather than replacing it,
+ * so a per-bar id accumulates and a stable id would pin the FIRST bar's
+ * aggregate forever. The latest restatement is the one that describes now.
+ */
+function latestClassWideRestatementOnly(
+  items: readonly IntelligenceItem[],
+): readonly IntelligenceItem[] {
+  const latest = new Map<string, IntelligenceItem>();
+  for (const item of items) {
+    if (item.scope !== 'asset_class') continue;
+    const key = `${item.source}\u0000${item.entity}\u0000${item.type}`;
+    const held = latest.get(key);
+    // `>=`, so a tie goes to the later-ingested item: two derivations of one
+    // window differ only by a re-derivation, and the newer one is the current
+    // description of it. Stated because the tie-break has to be TOTAL for the
+    // replay determinism #1086 AC2 asserts — `stored` is in ingest order, so
+    // this makes the survivor a function of the ingest sequence alone.
+    if (held === undefined || item.timestamp.getTime() >= held.timestamp.getTime()) {
+      latest.set(key, item);
+    }
+  }
+  if (latest.size === 0) return items;
+  const kept = new Set(latest.values());
+  return items.filter((item) => item.scope !== 'asset_class' || kept.has(item));
+}
+
+/**
  * In-memory store + pull-mode serving for news/sentiment intelligence.
  * The store holds the injected Clock (consumers stay clock-blind) so getContext
  * resolves `asOf = clock.now()` internally — the same pattern as MarketDataService
@@ -268,15 +314,25 @@ export class MarketIntelligenceStore {
       .filter(
         (item) => item.timestamp.getTime() <= windowEnd && item.timestamp.getTime() >= windowStart,
       )
-      .filter((item) => entity === undefined || item.entity === entity);
+      // A CLASS-WIDE item (#1086) is admitted past the entity filter: it is
+      // evidence for every instrument in the class, so an entity-scoped read
+      // that dropped it would hide the macro backdrop from exactly the
+      // callers #914 narrowed. This does not re-open #914's defect — an item
+      // filed against a ticker is still returned only for that ticker, and
+      // `mi-coverage.ts` keys on `entity`, so a class-wide item still counts
+      // as coverage for nothing.
+      .filter(
+        (item) => entity === undefined || item.scope === 'asset_class' || item.entity === entity,
+      );
+    const visible = latestClassWideRestatementOnly(inWindow);
 
     const lastUpdated = this.lastUpdated(assetClass, asOf);
 
     return {
       timestamp: asOf,
       asset_class: assetClass,
-      news: inWindow.filter((item) => item.type === 'news'),
-      social: inWindow.filter((item) => item.type === 'sentiment'),
+      news: visible.filter((item) => item.type === 'news'),
+      social: visible.filter((item) => item.type === 'sentiment'),
       conflicts: [],
       last_updated: lastUpdated,
       stale: this.isStale(assetClass, asOf, lastUpdated),
@@ -417,6 +473,7 @@ export {
   type GdeltIngestAgentDeps,
   SOURCE_GDELT,
 } from './gdelt-ingest-agent.js';
+export { GdeltScoringPass, type GdeltScoringPassDeps } from './gdelt-scoring-pass.js';
 export {
   floorToRefreshBucket,
   GROK_REFRESH_MS,
@@ -473,4 +530,16 @@ export {
   // than assume GKG column order.
   PROJECTED_COLUMNS,
 } from './sources/gdelt-gkg-client.js';
+export {
+  CONFIDENCE_HALF_POINT_TONE,
+  confidenceFromToneDelta,
+  DEFAULT_GDELT_WINDOWS,
+  deriveGdeltAggregate,
+  GDELT_MACRO_ENTITY,
+  type GdeltAggregateStats,
+  type GdeltDerivation,
+  type GdeltRefusalReason,
+  type GdeltWindows,
+  parseGdeltProjection,
+} from './sources/gdelt-scorer.js';
 export { allWatchedThemes, themesFor } from './sources/gdelt-themes.js';

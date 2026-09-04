@@ -4,11 +4,14 @@
  * ## What this does, and what it deliberately does not
  *
  * It fetches each 15-minute GKG batch, theme-filters it, and writes the
- * matching rows to `mi_archive_raw`. It writes **no `mi_items`**, ingests
- * nothing into `MarketIntelligenceStore`, and therefore reaches no analyst.
- * Nothing downstream can see this data yet.
+ * matching rows to `mi_archive_raw`. It writes **no `mi_items`** and ingests
+ * nothing into `MarketIntelligenceStore`.
  *
- * That is the point, not an unfinished edge. #556 scores GDELT as
+ * That is the point, not an unfinished edge. The reader is
+ * `gdelt-scoring-pass.ts` (#1086), which derives the aggregates AT READ over
+ * these rows and is driven from the same timer, after each poll — so this
+ * half stays a pure archiver and the window lengths stay changeable
+ * retroactively over history already collected. #556 scores GDELT as
  * `sentiment = sign(toneDelta)` where `toneDelta` is a **1-hour signal window
  * against a trailing 24-hour baseline**. On a cold archive there is no
  * baseline. A partial one is worse than none: 90 minutes of history yields a
@@ -18,11 +21,11 @@
  * `no-caller-defect-pattern` — an unknown silently coerced into a number.
  *
  * So the archive leads the signal by a full baseline window. This agent starts
- * accruing history immediately and safely; the scoring pass (which must refuse
- * to emit until it holds a minimum baseline coverage, and log the refusal)
- * lands on top of an archive that already has 24 hours in it. Splitting them
- * also means a scoring change landing mid-soak cannot alter what the run is
- * measuring, because this half emits nothing to alter.
+ * accruing history immediately and safely; the scoring pass refuses to emit
+ * until it holds a minimum baseline coverage and logs the refusal (three
+ * rules, in `gdelt-scorer.ts`'s header). Splitting them also means a scoring
+ * change landing mid-soak cannot alter what THIS half archived, because it
+ * emits nothing to alter.
  *
  * ## Cursor and idempotency
  *

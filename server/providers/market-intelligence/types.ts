@@ -21,14 +21,15 @@ export type Duration = number;
  */
 export interface AgentIntelligence {
   /**
-   * `alpaca-news` added by the MI rework (#553, map #552) — the first
-   * deterministic fetcher, alongside the two retrieval-era agent ids.
-   * `polymarket` added by #504, the macro/event path. Widening this union is a
-   * TYPE change and nothing more: there is no `market_intelligence` table
-   * (`index.ts` — the store is in-memory and restart-clean), so no migration
-   * is involved, whatever `nous-sentiment-client.ts`'s header claims.
+   * `gdelt-gkg` is the one writer whose items are class-wide
+   * (`IntelligenceItem.scope`); every other id files per entity.
+   *
+   * Widening this union is a TYPE change and nothing more: there is no
+   * `market_intelligence` table (`index.ts` — the store is in-memory and
+   * restart-clean), so no migration is involved, whatever
+   * `nous-sentiment-client.ts`'s header claims.
    */
-  agent_id: 'deepresearch' | 'grok' | 'alpaca-news' | 'polymarket';
+  agent_id: 'deepresearch' | 'grok' | 'alpaca-news' | 'polymarket' | 'gdelt-gkg';
   timestamp: Date;
   asset_class: AssetClass;
   items: IntelligenceItem[];
@@ -43,6 +44,22 @@ export interface IntelligenceItem {
   timestamp: Date;
   /** Ticker, company name, or event. */
   entity: string;
+  /**
+   * Who this item is evidence FOR (#1086). Absent means `'entity'` — the
+   * item speaks about `entity` and nothing else, which is what every item
+   * before the GDELT scoring pass was.
+   *
+   * `'asset_class'` marks a CLASS-WIDE item: a macro aggregate that is
+   * evidence for every instrument in its class and for no one instrument in
+   * particular. `getContext`'s entity filter admits these past an
+   * entity-scoped read (an entity-scoped caller wants the macro backdrop
+   * too), while `mi-coverage.ts`'s `hasCoverageFor` still does not count
+   * them, because it compares `entity` to the instrument and a macro series
+   * name never matches one. That asymmetry is the point: the analysts see the
+   * macro tone, and the per-ticker coverage counter stays honest about the
+   * hole a class-wide item does not fill.
+   */
+  scope?: 'entity' | 'asset_class';
   headline: string;
   /** 1 = bullish, 0 = neutral, -1 = bearish. */
   sentiment: 1 | 0 | -1;

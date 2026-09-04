@@ -134,7 +134,12 @@ import type {
   LlmResponse,
   RateLimiterSnapshot,
 } from '../../pipeline/debate-engine/index.js';
-import { MAX_ROUNDS_BY_ASSET_CLASS, RateLimiter } from '../../pipeline/debate-engine/index.js';
+import {
+  DEBATE_BAR_TIMEFRAME_MS,
+  floorToBar,
+  MAX_ROUNDS_BY_ASSET_CLASS,
+  RateLimiter,
+} from '../../pipeline/debate-engine/index.js';
 import type {
   AlpacaBrokerClient,
   AlpacaLimitOrderRequest,
@@ -199,11 +204,14 @@ import {
 } from '../../providers/market-data-service/index.js';
 import {
   CURATED_MACRO_MARKETS,
+  GDELT_MACRO_ENTITY,
   GdeltGkgClient,
   type MarketIntelligenceStore,
   MiArchiveStore,
   POLYMARKET_ASSET_CLASS,
   PolymarketClient,
+  PROJECTED_COLUMNS,
+  type RawArchiveRow,
   SOURCE_GDELT,
   SOURCE_POLYMARKET,
 } from '../../providers/market-intelligence/index.js';
@@ -271,14 +279,118 @@ import {
 } from './production.js';
 import type { LogEntry, Logger } from './types.js';
 
+/** Baseline buckets the seed below fills, and records in each. */
+const SMOKE_GDELT_SEED_BUCKETS = 24;
+const SMOKE_GDELT_SEED_PER_BUCKET = 2;
+/** Records the seed puts in the signal hour — above `MIN_SIGNAL_RECORDS`. */
+const SMOKE_GDELT_SEED_SIGNAL_ROWS = 5;
+const SMOKE_GDELT_SEEDED_ROWS =
+  SMOKE_GDELT_SEED_BUCKETS * SMOKE_GDELT_SEED_PER_BUCKET + SMOKE_GDELT_SEED_SIGNAL_ROWS;
+
 /**
- * How many of `smokeGdeltClient`'s canned rows the theme filter should keep.
+ * Puts 25 hours of GDELT history in the archive before the run starts.
+ *
+ * Without it this gate could only ever observe the scoring pass REFUSING: a
+ * smoke run holds one canned batch at one instant, and the pass leads the
+ * signal by a full 24h baseline by design (`gdelt-scoring-pass.ts`). A gate
+ * that asserted the refusal would pass just as happily for a pass that is
+ * built and never called, which is the defect the archive-half-with-no-reader
+ * state WAS.
+ *
+ * These rows are written directly rather than served through
+ * `smokeGdeltClient`, and that is not a shortcut around the decode path: the
+ * client serves ONE batch (GDELT publishes one file per 15 minutes and the
+ * fetcher's cursor takes the latest), so 25 hours of history cannot be
+ * fetched inside one run at all. The decode path stays covered by the canned
+ * batch; this covers the derivation over an archive that has run for a day.
+ *
+ * A MACRO theme, which is on every leg's watchlist, so whatever classes
+ * `SMOKE_TEST_UNIVERSE` carries derive — one today, crypto, per
+ * `SMOKE_GDELT_EXPECTED_AGGREGATES`, which states what that leaves uncovered.
+ * The tones are flat across the baseline and one point higher in the signal
+ * hour, so the derived aggregate is a modest positive with a deterministic
+ * confidence rather than an extreme that would dominate whatever else reaches
+ * `fundamental`.
+ */
+function seedSmokeGdeltBaseline(archive: MiArchiveStore): void {
+  const bar = floorToBar(SMOKE_RUN_INSTANT, DEBATE_BAR_TIMEFRAME_MS);
+  const hourMs = 60 * 60 * 1000;
+  const line = (tone: number): string => {
+    const columns = new Array<string>(27).fill('');
+    columns[0] = 'smoke-seed';
+    columns[1] = '20260804120000';
+    columns[3] = 'smoke.seed';
+    columns[4] = 'https://smoke.test/seed';
+    columns[7] = 'ECON_INTEREST_RATES';
+    columns[15] = `${tone},2.0,0.5,2.5,20,0.1,400`;
+    return PROJECTED_COLUMNS.map((column) => columns[column] ?? '').join('\t');
+  };
+  const rows: RawArchiveRow[] = [];
+  const push = (at: number, tone: number, id: string): void => {
+    rows.push({
+      source: SOURCE_GDELT,
+      native_id: `smoke-seed-${id}`,
+      updated_at: new Date(at),
+      payload: line(tone),
+      ingested_at: new Date(at),
+      fidelity: 'live',
+    });
+  };
+  const baselineStart = bar.getTime() - (SMOKE_GDELT_SEED_BUCKETS + 1) * hourMs;
+  for (let bucket = 0; bucket < SMOKE_GDELT_SEED_BUCKETS; bucket += 1) {
+    for (let n = 0; n < SMOKE_GDELT_SEED_PER_BUCKET; n += 1) {
+      push(baselineStart + bucket * hourMs + n * 60_000, 0, `b${bucket}-${n}`);
+    }
+  }
+  for (let n = 0; n < SMOKE_GDELT_SEED_SIGNAL_ROWS; n += 1) {
+    push(bar.getTime() - hourMs + n * 60_000, 1, `s${n}`);
+  }
+  archive.write(rows, []);
+}
+
+/**
+ * How many rows the archive should hold: the seed above, plus the one canned
+ * batch row `smokeGdeltClient`'s theme filter keeps.
  *
  * Named because the gate below and the fixture above are the same fact stated
- * twice: edit the fixture to carry three rows and a hardcoded `1` in the gate
- * turns a correct run red, or worse, keeps passing for the wrong reason.
+ * twice: edit the fixture to carry three matching rows and a hardcoded number
+ * in the gate turns a correct run red, or worse, keeps passing for the wrong
+ * reason.
  */
-const SMOKE_GDELT_EXPECTED_ROWS = 1;
+export const SMOKE_GDELT_EXPECTED_ROWS = SMOKE_GDELT_SEEDED_ROWS + 1;
+
+/**
+ * The asset classes the scoring pass derives for on a smoke run, and the
+ * aggregates it should therefore produce from the seeded baseline: one each.
+ *
+ * Derived from `SMOKE_TEST_UNIVERSE` rather than written as a literal, for
+ * `SMOKE_GDELT_EXPECTED_ROWS`' reason — `production.ts` passes the pass the
+ * universe's own classes, so adding an equity name to that fixture would
+ * otherwise turn a correct run red. The seed carries a MACRO theme, which is
+ * on both legs' watchlists (`gdelt-themes.ts`), so every leg present derives
+ * one. A zero here means the pass is built and never called, which is the
+ * exact defect the archive-half-with-no-reader state was.
+ *
+ * **What this gate does NOT cover, stated because the count reads like it
+ * does:** `SMOKE_TEST_UNIVERSE` is BTC-USD alone, so only the CRYPTO leg is
+ * exercised end-to-end here. Two consequences. First, the equities leg's
+ * derivation is covered by `gdelt-scoring-pass.test.ts` and the composition-
+ * root wiring test only. Second, the aggregate this gate observes reaches no
+ * analyst that scores it: `fundamentalAnalyst.applies_to` is stocks-only and
+ * no other analyst scores `MarketContext.news` (the technical analyst only
+ * quotes it into `key_points`), so on a crypto universe the
+ * item is stored and served but never voted on. The gate asserts the pass is
+ * CALLED and its item reaches the store — not that an analyst consumed it.
+ * Adding an equity leg to the fixture is not the fix: `SMOKE_TEST_UNIVERSE`
+ * is crypto-only on purpose, because crypto bypasses `UniverseScheduler`'s
+ * calendar gate and a stock leg would make the whole gate hostage to US
+ * market hours.
+ */
+export const SMOKE_GDELT_ASSET_CLASSES: readonly AssetClass[] = [
+  ...new Set(SMOKE_TEST_UNIVERSE.map((instrument) => instrument.asset_class)),
+];
+
+export const SMOKE_GDELT_EXPECTED_AGGREGATES = SMOKE_GDELT_ASSET_CLASSES.length;
 
 /**
  * A GDELT client serving one canned batch, over a real deflate zip.
@@ -303,7 +415,12 @@ const SMOKE_GDELT_EXPECTED_ROWS = 1;
  * suffix, not by line position", not by smoke.
  */
 function smokeGdeltClient(): GdeltGkgClient {
-  const stamp = '20260101120000';
+  // Fifteen minutes before `SMOKE_RUN_INSTANT`, which is what a live poll
+  // sees. It has to be NEWER than `seedSmokeGdeltBaseline`'s rows or the
+  // fetcher's cursor (`latestUpdatedAt`) skips the download as already held,
+  // and the whole decode path — zip, inflate, TSV split, theme filter, tone
+  // parse — would stop being exercised the moment the archive was seeded.
+  const stamp = '20260804114500';
   const url = `http://data.gdeltproject.org/gdeltv2/${stamp}.gkg.csv.zip`;
   const lastupdate = [
     `44212 c2b1cae80b87a07106acb37a837c014d http://data.gdeltproject.org/gdeltv2/${stamp}.export.CSV.zip`,
@@ -2388,6 +2505,16 @@ export interface SmokeObservations {
    */
   gdeltRowsArchived: number;
   /**
+   * Aggregates the GDELT scoring pass (#1086) put in front of the analysts.
+   *
+   * BOTH this and `gdeltRowsArchived`, for the reason the Polymarket pair
+   * below states: the archive count proves bytes were fetched, and only the
+   * store read proves anything derived from them reached the `news` bucket an
+   * analyst queries. #556 shipped the first half alone for a year, which is
+   * exactly the gap this number closes.
+   */
+  gdeltAggregateItems: number;
+  /**
    * Rows the Polymarket macro layer archived, and the items it actually put in
    * front of `fundamental` (#504).
    *
@@ -2507,6 +2634,21 @@ export function readSmokeObservations(
       .prepare('SELECT idempotency_key, instrument, status FROM flatten_submissions ORDER BY rowid')
       .all() as SmokeObservations['flattenSubmissions'],
     gdeltRowsArchived: miArchive?.rawRows(SOURCE_GDELT).length ?? 0,
+    // Counted across every leg of `SMOKE_TEST_UNIVERSE` — the same list
+    // `SMOKE_GDELT_EXPECTED_AGGREGATES` is sized from, so the observation and
+    // the expectation cannot drift apart — because the pass derives per asset
+    // class and a per-class read would hide a leg that stopped deriving. The
+    // 24h window is `fundamental`'s own (`MI_CONTEXT_WINDOW_MS`), on the same
+    // store instance, so this counts what the analyst would have seen rather
+    // than what was merely written.
+    gdeltAggregateItems: SMOKE_GDELT_ASSET_CLASSES.reduce(
+      (total, asset_class) =>
+        total +
+        (marketIntelligence
+          ?.getContext(asset_class, 24 * 60 * 60 * 1000, 'smoke')
+          .news.filter((item) => item.entity === GDELT_MACRO_ENTITY).length ?? 0),
+      0,
+    ),
     polymarketRowsArchived: miArchive?.rawRows(SOURCE_POLYMARKET).length ?? 0,
     // #835: the ITEMS table, not the raw one. This source wrote `[]` for its
     // items, which no raw-row count could see, and `hydrate()` deliberately
@@ -4289,18 +4431,35 @@ export function evaluateSmokeGate(
     );
   }
 
-  // The canned batch carries exactly two rows, one on a watched theme. Asserted
-  // rather than merely printed, because the two ways this can be wrong are the
-  // two this observation exists to catch and neither shows up anywhere else: 0
-  // means the poller never fired from the composition root (the no-caller
-  // defect this repo keeps producing), and 2 means the theme filter stopped
-  // filtering and the archive is taking the whole world's news.
+  // The seeded 25h baseline plus the canned batch's one row on a watched
+  // theme (the batch carries two, one off-watchlist). Asserted rather than
+  // merely printed, because the two ways this can be wrong are the two this
+  // observation exists to catch and neither shows up anywhere else: the seed
+  // count alone means the poller never fired from the composition root (the
+  // no-caller defect this repo keeps producing), and one more than expected
+  // means the theme filter stopped filtering and the archive is taking the
+  // whole world's news.
   if (observations.gdeltRowsArchived !== SMOKE_GDELT_EXPECTED_ROWS) {
     failures.push(
       `GDELT archived ${observations.gdeltRowsArchived} macro rows, expected exactly ` +
         `${SMOKE_GDELT_EXPECTED_ROWS} — ` +
-        '0 means the poller never ran from the composition root, 2 means the theme filter ' +
-        'matched both canned rows and is no longer filtering (#556)',
+        `${SMOKE_GDELT_SEEDED_ROWS} means the poller never ran from the composition root, ` +
+        `${SMOKE_GDELT_EXPECTED_ROWS + 1} means the theme filter matched both canned rows and ` +
+        'is no longer filtering (#556)',
+    );
+  }
+
+  // #1086, and the half the line above cannot see: bytes in the archive are
+  // not intelligence until something derives them. This is the scoring pass
+  // observed through the store the analysts read, on the real composition
+  // root — 0 means it is built and never called, which is the state #556's
+  // archive half shipped in.
+  if (observations.gdeltAggregateItems !== SMOKE_GDELT_EXPECTED_AGGREGATES) {
+    failures.push(
+      `GDELT scoring derived ${observations.gdeltAggregateItems} macro aggregates, expected ` +
+        `exactly ${SMOKE_GDELT_EXPECTED_AGGREGATES} (one per asset class) — 0 means the ` +
+        'scoring pass never ran from the composition root, or refused on a baseline the seed ' +
+        'was supposed to have filled (#1086)',
     );
   }
 
@@ -4451,9 +4610,11 @@ export function formatSmokeReport(
     lines.push(`  ${row.instrument} status=${row.status} [${row.idempotency_key}]`);
   }
 
-  // One canned batch of two rows, one of which carries a watched theme — so 1
-  // is correct and 2 would mean the theme filter has stopped filtering.
+  // `SMOKE_GDELT_EXPECTED_ROWS`: the seeded 25h baseline plus the ONE row of
+  // the canned two-row batch that carries a watched theme. One row more than
+  // expected means the theme filter has stopped filtering.
   lines.push('', `GDELT macro rows archived: ${observations.gdeltRowsArchived}`);
+  lines.push(`GDELT macro aggregates derived: ${observations.gdeltAggregateItems}`);
   // One healthy market, one refused on thin volume, the rest served as rotted
   // slugs — so 1 and 1 is correct and anything else is a wiring or guard
   // change.
@@ -4619,6 +4780,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
     // has to READ it afterwards to report how many macro rows the run actually
     // archived. In-memory, as the config comment below explains.
     const smokeMiArchive = new MiArchiveStore();
+    seedSmokeGdeltBaseline(smokeMiArchive);
 
     // Every `ALERT_CHANNEL_FIELDS` member (alert-transport.ts), typed as
     // `Required<AlertChannels>` so a future field added to `AlertChannelSlots`

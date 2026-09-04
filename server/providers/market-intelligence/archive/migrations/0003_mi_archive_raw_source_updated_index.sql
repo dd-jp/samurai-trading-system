@@ -1,0 +1,14 @@
+-- The GKG scoring pass's read (#1086, the derivation half of #556).
+--
+-- `MiArchiveStore.rawRowsBetween` asks for one source over a 25-hour span of
+-- `updated_at` — the 1h signal window plus the 24h baseline behind it. The
+-- table's PRIMARY KEY is (source, native_id, updated_at), so `native_id` sits
+-- between the equality and the range and the autoindex can only narrow to the
+-- source: on the 2026-09-03 paper archive that is 168,026 of 168,785 rows,
+-- read and payload-decoded, to answer for the ~20,000 in the window.
+--
+-- Ordered (source, updated_at) so the equality and the range are one seek plus
+-- a scan of exactly the span asked for. `idx_mi_archive_raw_ingested` is not a
+-- substitute: it is keyed on OUR knowledge time, which is the replay
+-- visibility gate, not the news window a trailing statistic is measured over.
+CREATE INDEX idx_mi_archive_raw_source_updated ON mi_archive_raw (source, updated_at);

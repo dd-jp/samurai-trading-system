@@ -345,4 +345,63 @@ describe('MiArchiveStore', () => {
       expect(itemsPlan).not.toContain('SCAN');
     });
   });
+
+  describe('rawRowsBetween (#1086)', () => {
+    const hour = (n: number): Date => new Date(T0.getTime() + n * 60 * 60 * 1000);
+
+    function seeded(): MiArchiveStore {
+      const store = new MiArchiveStore();
+      store.write(
+        [
+          raw({ source: MI_SOURCES.gdeltGkg, native_id: 'a', updated_at: hour(0) }),
+          raw({ source: MI_SOURCES.gdeltGkg, native_id: 'b', updated_at: hour(1) }),
+          raw({ source: MI_SOURCES.gdeltGkg, native_id: 'c', updated_at: hour(2) }),
+          raw({ source: MI_SOURCES.alpacaNews, native_id: 'd', updated_at: hour(1) }),
+        ],
+        [],
+      );
+      return store;
+    }
+
+    it('returns one source over a half-open span of vendor time, in order', () => {
+      const rows = seeded().rawRowsBetween(MI_SOURCES.gdeltGkg, hour(0), hour(2));
+
+      // `c` sits exactly on the exclusive end, so consecutive windows tile
+      // without counting it twice; `d` is another source in range.
+      expect(rows.map((row) => row.native_id)).toEqual(['a', 'b']);
+    });
+
+    it('returns nothing for a span the archive does not reach', () => {
+      expect(seeded().rawRowsBetween(MI_SOURCES.gdeltGkg, hour(-5), hour(-1))).toEqual([]);
+    });
+
+    it('seeks through migration 0003s index rather than scanning the source', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'mi-archive-window-plan-'));
+      const dbPath = join(dir, 'archive.sqlite');
+      const store = new MiArchiveStore(dbPath);
+      store.write([raw({ source: MI_SOURCES.gdeltGkg })], []);
+      store.close();
+
+      // A separate readonly handle, for the reason the purge plan test states:
+      // the class's own connection is private and EXPLAIN never executes.
+      const db = new BetterSqlite3(dbPath, { readonly: true });
+      const plan = (
+        db
+          .prepare(
+            `EXPLAIN QUERY PLAN SELECT * FROM mi_archive_raw
+              WHERE source = ? AND updated_at >= ? AND updated_at < ?
+              ORDER BY updated_at ASC`,
+          )
+          .all(MI_SOURCES.gdeltGkg, T0.toISOString(), T0.toISOString()) as { detail: string }[]
+      )
+        .map((row) => row.detail)
+        .join(' | ');
+      db.close();
+
+      // Without the index the planner falls back to the PRIMARY KEY autoindex,
+      // which can only narrow to the source — 168k rows on the paper archive.
+      expect(plan).toContain('idx_mi_archive_raw_source_updated');
+      expect(plan).not.toContain('SCAN');
+    });
+  });
 });

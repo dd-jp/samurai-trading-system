@@ -295,6 +295,70 @@ describe('MarketIntelligenceStore.getContext', () => {
     expect(context.news).toEqual([]);
   });
 
+  /**
+   * #1086 review: a class-wide item is a trailing statistic re-derived every
+   * bar, so N of them in one read are N restatements of one measurement, not
+   * N observations — and `fundamental-analyst.ts` averages `news` unweighted.
+   */
+  it('serves only the LATEST class-wide item per source, entity and type', () => {
+    const asOf = new Date('2026-07-14T09:00:00Z');
+    const store = new MarketIntelligenceStore(new FixedClock(asOf));
+    const macro = (id: string, at: string): IntelligenceItem =>
+      newsItem({
+        id,
+        source: 'gdelt-gkg',
+        entity: 'GDELT-MACRO',
+        scope: 'asset_class',
+        timestamp: new Date(at),
+      });
+
+    // Ingested oldest-first, so a "keep the first seen" collapse would serve
+    // the stale one and pass a count-only assertion.
+    store.ingest(
+      envelope([
+        macro('bar-07', '2026-07-14T07:00:00Z'),
+        macro('bar-08', '2026-07-14T08:00:00Z'),
+        macro('bar-09', '2026-07-14T09:00:00Z'),
+      ]),
+    );
+
+    const context = store.getContext('stocks', 24 * 60 * 60_000, 'trace-1', undefined, 'SPY');
+
+    expect(context.news.map((item) => item.id)).toEqual(['bar-09']);
+  });
+
+  it('collapses class-wide items per macro series, not per source', () => {
+    const asOf = new Date('2026-07-14T09:00:00Z');
+    const store = new MarketIntelligenceStore(new FixedClock(asOf));
+    const series = (entity: string, id: string): IntelligenceItem =>
+      newsItem({ id, source: 'polymarket', entity, scope: 'asset_class' });
+
+    // One source may file several macro series under different names
+    // (`polymarket-agent.ts` does); those are different evidence, not
+    // restatements of each other.
+    store.ingest(envelope([series('FED-RATES', 'rates'), series('CPI', 'cpi')]));
+
+    const context = store.getContext('stocks', 60_000, 'trace-1', undefined, 'SPY');
+
+    expect(context.news.map((item) => item.id).sort()).toEqual(['cpi', 'rates']);
+  });
+
+  it('leaves entity-scoped items alone — two articles about one ticker are two observations', () => {
+    const asOf = new Date('2026-07-14T09:00:00Z');
+    const store = new MarketIntelligenceStore(new FixedClock(asOf));
+
+    store.ingest(
+      envelope([
+        newsItem({ id: 'first', entity: 'AAPL', timestamp: new Date('2026-07-14T08:59:00Z') }),
+        newsItem({ id: 'second', entity: 'AAPL' }),
+      ]),
+    );
+
+    const context = store.getContext('stocks', 60 * 60_000, 'trace-1', undefined, 'AAPL');
+
+    expect(context.news.map((item) => item.id).sort()).toEqual(['first', 'second']);
+  });
+
   it('conflicts is always empty — conflict resolution is not ticketed under epic #52', () => {
     const store = new MarketIntelligenceStore(new FixedClock(new Date('2026-07-14T09:00:00Z')));
     store.ingest(envelope([newsItem()]));
