@@ -18,6 +18,8 @@ import {
   UNCAPPED_SPEND,
 } from '../../../pipeline/debate-engine/index.js';
 import { DEFAULT_TRADER_CONFIG } from '../../../pipeline/trader/index.js';
+import type { Bar } from '../../../providers/market-data-service/index.js';
+import { FixtureDataSource } from '../../../providers/market-data-service/index.js';
 import type { AssetClass, Clock, LogEntry, Logger } from '../../../shared/index.js';
 import {
   DEFAULT_VENUE_PACING,
@@ -564,6 +566,81 @@ describe('the composition root wires wait telemetry onto the shared Alpaca bucke
     expect((wait.payload as { wait_ms: number }).wait_ms).toBeGreaterThanOrEqual(
       TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS,
     );
+  });
+});
+
+/**
+ * #1082's wiring proof: the PRIMARY `marketData` instance `production.ts`
+ * builds is constructed WITH telemetry, not just constructed — the same
+ * shape of gap #388's file header and #1083's block above both cover. A
+ * cold-store bar fetch is a GUARANTEED miss (unlike #1083's wait, which needs
+ * a real threshold-crossing delay), so this is a real, non-vacuous
+ * assertion rather than a documented exclusion.
+ */
+describe('the composition root wires market-data fetch telemetry (#1082)', () => {
+  let db: SharedStore;
+
+  beforeEach(() => {
+    db = openSharedStore(':memory:');
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  function bar(closeTime: string, close: number): Bar {
+    const closeDate = new Date(closeTime);
+    return {
+      instrument: 'AAPL',
+      timeframe: '1h',
+      open_time: new Date(closeDate.getTime() - 60 * 60 * 1000),
+      close_time: closeDate,
+      open: close,
+      high: close,
+      low: close,
+      close,
+      volume: 100,
+      source: 'fixture',
+    };
+  }
+
+  /**
+   * THE MUTATION THIS KILLS: drop the `5_000, { logger }` arguments from the
+   * primary `new MarketDataServiceImpl(...)` call in `production.ts` (back
+   * to the pre-#1082 4-arg call). Every OTHER test in this file and in
+   * `production.test.ts` still passes — the bars served are identical —
+   * because telemetry is observation-only; only an assertion on the LOG LINE
+   * itself, not on served data, can catch it.
+   */
+  it('logs a market_data_fetch line on a cold-store bar fetch reached through the real composition root', async () => {
+    const { logger, entries } = recordingLogger();
+    const dataSource = new FixtureDataSource(
+      [bar('2026-08-05T12:00:00Z', 100), bar('2026-08-05T13:00:00Z', 101)],
+      { price: 101, observed_at: NOW, source: 'fixture-live' },
+      'stocks',
+    );
+    const components = buildProductionComponents(
+      stubConfig(db, {
+        llmClient: countingLlmClient(),
+        logger,
+        dataSource,
+      }),
+    );
+
+    await components.marketData.getBars('AAPL', { timeframe: '1h', lookback: 2 }, NOW);
+
+    const events = entries.filter(
+      (entry) => (entry.payload as { event?: string } | undefined)?.event === 'market_data_fetch',
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]?.payload).toMatchObject({
+      event: 'market_data_fetch',
+      instrument: 'AAPL',
+      timeframe: '1h',
+      lookback: 2,
+      cache: 'miss',
+      outcome: 'ok',
+    });
   });
 });
 

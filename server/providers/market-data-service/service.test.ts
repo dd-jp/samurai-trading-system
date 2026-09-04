@@ -1,9 +1,22 @@
-import type { Clock } from '../../shared/index.js';
+import type { Clock, LogEntry, Logger } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { FixtureDataSource } from './fixture-data-source.js';
-import { MarketDataServiceImpl } from './service.js';
+import { MARKET_DATA_REPEATED_MISS_WARN_THRESHOLD, MarketDataServiceImpl } from './service.js';
 import { SqliteMarketDataStore } from './sqlite-market-data-store.js';
 import type { Bar, BarWindow, DataSource, Mark, Quote } from './types.js';
+
+function recordingLogger(): { logger: Logger; entries: LogEntry[] } {
+  const entries: LogEntry[] = [];
+  return { logger: { log: (entry) => entries.push(entry) }, entries };
+}
+
+function fetchEvents(entries: LogEntry[]): Array<Record<string, unknown>> {
+  return entries
+    .map((entry) => entry.payload as Record<string, unknown> | undefined)
+    .filter(
+      (payload): payload is Record<string, unknown> => payload?.event === 'market_data_fetch',
+    );
+}
 
 class ManualClock implements Clock {
   constructor(private time: Date) {}
@@ -546,5 +559,258 @@ describe('MarketDataServiceImpl.getADV', () => {
     await expect(
       service.getADV(INSTRUMENT, { timeframe: TIMEFRAME, lookback: 10 }, ASOF),
     ).rejects.toThrow();
+  });
+});
+
+/**
+ * #1082: the bar/market-data path emitted ZERO telemetry, so 106 analyst
+ * timeouts in one session were undiagnosable — the technical analyst's only
+ * external I/O is a bar fetch through here, and nothing recorded whether a
+ * slow tick was a cache hit, a slow venue fetch, or a fetch that never
+ * returned at all. These tests exercise `MarketDataServiceImpl`'s own
+ * `market_data_fetch` emission, the same choke point `getIndicator` and
+ * `getADV` both route through — the composition-root WIRING is instead
+ * covered by `production/rate-limit-wiring.test.ts`'s
+ * "wires market-data fetch telemetry (#1082)" block.
+ */
+describe('MarketDataServiceImpl — market_data_fetch telemetry (#1082)', () => {
+  class ThrowingDataSource implements DataSource {
+    constructor(private readonly error: Error) {}
+
+    async fetchBars(): Promise<Bar[]> {
+      throw this.error;
+    }
+
+    async fetchMark(): Promise<Mark> {
+      throw this.error;
+    }
+  }
+
+  function fixtureSource(): FixtureDataSource {
+    return new FixtureDataSource(
+      BARS,
+      { price: 999, observed_at: new Date('2026-07-15T10:59:59Z'), source: 'fixture-live' },
+      'crypto',
+    );
+  }
+
+  function serviceWithTelemetry(
+    mode: 'live' | 'backtest',
+    clock: Clock,
+    dataSource: DataSource = fixtureSource(),
+  ): { service: MarketDataServiceImpl; entries: LogEntry[] } {
+    const { logger, entries } = recordingLogger();
+    const service = new MarketDataServiceImpl(
+      dataSource,
+      clock,
+      mode,
+      new SqliteMarketDataStore(openSharedStore(':memory:')),
+      5_000,
+      { logger },
+    );
+    return { service, entries };
+  }
+
+  it('stays silent on a cache HIT — a healthy, warmed run logs nothing (AC3)', async () => {
+    const { service, entries } = serviceWithTelemetry('live', new ManualClock(ASOF));
+    const window = { timeframe: TIMEFRAME, lookback: 2 };
+
+    await service.getBars(INSTRUMENT, window, ASOF); // cold miss — fetches and warms the store
+    entries.length = 0;
+    // 20 minutes later, same 1h bar interval — route 1 (#391) hits.
+    await service.getBars(INSTRUMENT, window, new Date(ASOF.getTime() + 20 * 60_000));
+
+    expect(fetchEvents(entries)).toHaveLength(0);
+  });
+
+  it('logs a cache MISS that reaches the venue with the full field set (AC1, AC2)', async () => {
+    const { service, entries } = serviceWithTelemetry('live', new ManualClock(ASOF));
+    const window = { timeframe: TIMEFRAME, lookback: 2 };
+
+    await service.getBars(INSTRUMENT, window, ASOF);
+
+    const events = fetchEvents(entries);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      event: 'market_data_fetch',
+      instrument: INSTRUMENT,
+      timeframe: TIMEFRAME,
+      lookback: 2,
+      cache: 'miss',
+      consecutive_misses: 1,
+      outcome: 'ok',
+      rows: 2, // FixtureDataSource's own PIT filter: only 2 bars close at-or-before ASOF
+    });
+    expect(typeof events[0].duration_ms).toBe('number');
+  });
+
+  it(
+    'increments consecutive_misses across repeated misses on the same (instrument, timeframe, lookback) — ' +
+      "the issue's own RVOL-936 pathological case, a window the venue can never fully satisfy (AC2)",
+    async () => {
+      const { service, entries } = serviceWithTelemetry('live', new ManualClock(ASOF));
+      // Only 2 completed bars ever exist at ASOF — a lookback the store can
+      // never reach, so every call misses, forever, exactly like a symbol
+      // that can't reach the full RVOL window.
+      const window = { timeframe: TIMEFRAME, lookback: 50 };
+
+      await service.getBars(INSTRUMENT, window, ASOF);
+      await service.getBars(INSTRUMENT, window, ASOF);
+      await service.getBars(INSTRUMENT, window, ASOF);
+
+      const events = fetchEvents(entries);
+      expect(events.map((event) => event.consecutive_misses)).toEqual([1, 2, 3]);
+    },
+  );
+
+  it('escalates to warn once consecutive_misses reaches the repeated-miss threshold', async () => {
+    const { service, entries } = serviceWithTelemetry('live', new ManualClock(ASOF));
+    const window = { timeframe: TIMEFRAME, lookback: 50 };
+
+    for (let i = 0; i < MARKET_DATA_REPEATED_MISS_WARN_THRESHOLD; i += 1) {
+      await service.getBars(INSTRUMENT, window, ASOF);
+    }
+
+    const fetchLines = entries.filter(
+      (entry) => (entry.payload as { event?: string } | undefined)?.event === 'market_data_fetch',
+    );
+    expect(fetchLines[0]?.level).toBe('info');
+    expect(fetchLines.at(-1)?.level).toBe('warn');
+  });
+
+  it('resets consecutive_misses after an intervening cache hit', async () => {
+    const { service, entries } = serviceWithTelemetry('live', new ManualClock(ASOF));
+    const window = { timeframe: TIMEFRAME, lookback: 2 };
+
+    await service.getBars(INSTRUMENT, window, ASOF); // miss #1 — cold, warms the store
+    // Same interval, 20 minutes later — a hit (#391), clearing the streak.
+    await service.getBars(INSTRUMENT, window, new Date(ASOF.getTime() + 20 * 60_000));
+    // A new bar interval — store recency (#512) now falls outside one
+    // timeframe width, so this misses again.
+    await service.getBars(INSTRUMENT, window, new Date(ASOF.getTime() + 60 * 60_000));
+
+    const events = fetchEvents(entries);
+    expect(events.map((event) => event.consecutive_misses)).toEqual([1, 1]);
+  });
+
+  it('logs the failed fetch and rethrows the ORIGINAL error unchanged (AC1, AC5)', async () => {
+    const boom = new Error('venue timeout');
+    const { service, entries } = serviceWithTelemetry(
+      'live',
+      new ManualClock(ASOF),
+      new ThrowingDataSource(boom),
+    );
+    const window = { timeframe: TIMEFRAME, lookback: 2 };
+
+    await expect(service.getBars(INSTRUMENT, window, ASOF)).rejects.toBe(boom);
+
+    const events = fetchEvents(entries);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      event: 'market_data_fetch',
+      instrument: INSTRUMENT,
+      timeframe: TIMEFRAME,
+      lookback: 2,
+      cache: 'miss',
+      consecutive_misses: 1,
+      outcome: 'error',
+    });
+    expect(typeof events[0].duration_ms).toBe('number');
+    expect(typeof events[0].error).toBe('string');
+
+    const fetchLines = entries.filter(
+      (entry) => (entry.payload as { event?: string } | undefined)?.event === 'market_data_fetch',
+    );
+    // A single throw on a key with NO prior misses (consecutive_misses: 1,
+    // below the escalation threshold) must still log at `warn` — the
+    // consecutive-miss escalation applies to the `ok` branch only. A fetch
+    // that throws is itself the anomaly this issue exists to surface;
+    // gating its visibility on an unrelated counter would hide the very
+    // "fetch that never returned" case #1082 was filed for.
+    expect(fetchLines[0]?.level).toBe('warn');
+  });
+
+  it('logs nothing in backtest mode, even on a miss — every replay step is a miss by design and carries no information', async () => {
+    const { service, entries } = serviceWithTelemetry('backtest', new ManualClock(ASOF));
+    const window = { timeframe: TIMEFRAME, lookback: 2 };
+
+    await service.getBars(INSTRUMENT, window, ASOF);
+    await service.getBars(INSTRUMENT, window, ASOF);
+
+    expect(fetchEvents(entries)).toHaveLength(0);
+  });
+
+  it(
+    'leaves consecutiveFetchMisses empty in backtest mode — a long replay over many ' +
+      'symbols/windows must not grow the map (review on #1095, deepseek)',
+    async () => {
+      const { service } = serviceWithTelemetry('backtest', new ManualClock(ASOF));
+
+      // Several DISTINCT (instrument, timeframe, lookback) keys, the shape
+      // that would otherwise accumulate one map entry each — a stand-in for
+      // a backtest walking many symbols/windows over a long historical
+      // replay.
+      await service.getBars('AAPL', { timeframe: TIMEFRAME, lookback: 2 }, ASOF);
+      await service.getBars('MSFT', { timeframe: TIMEFRAME, lookback: 5 }, ASOF);
+      await service.getBars(INSTRUMENT, { timeframe: TIMEFRAME, lookback: 50 }, ASOF);
+
+      const misses = (service as unknown as { consecutiveFetchMisses: Map<string, number> })
+        .consecutiveFetchMisses;
+      expect(misses.size).toBe(0);
+    },
+  );
+
+  it('is a no-op when telemetry is not wired — fully backward-compatible', async () => {
+    const service = new MarketDataServiceImpl(
+      fixtureSource(),
+      new ManualClock(ASOF),
+      'live',
+      new SqliteMarketDataStore(openSharedStore(':memory:')),
+    );
+
+    await expect(
+      service.getBars(INSTRUMENT, { timeframe: TIMEFRAME, lookback: 2 }, ASOF),
+    ).resolves.toHaveLength(2);
+  });
+
+  it('does not let a throwing logger break the caller on the success path (safeLog guarantee)', async () => {
+    const throwingLogger: Logger = {
+      log: () => {
+        throw new Error('logger exploded');
+      },
+    };
+    const service = new MarketDataServiceImpl(
+      fixtureSource(),
+      new ManualClock(ASOF),
+      'live',
+      new SqliteMarketDataStore(openSharedStore(':memory:')),
+      5_000,
+      { logger: throwingLogger },
+    );
+
+    await expect(
+      service.getBars(INSTRUMENT, { timeframe: TIMEFRAME, lookback: 2 }, ASOF),
+    ).resolves.toHaveLength(2);
+  });
+
+  it('does not let a throwing logger mask the original fetch error (logCaughtFailure guarantee)', async () => {
+    const boom = new Error('venue timeout');
+    const throwingLogger: Logger = {
+      log: () => {
+        throw new Error('logger exploded');
+      },
+    };
+    const service = new MarketDataServiceImpl(
+      new ThrowingDataSource(boom),
+      new ManualClock(ASOF),
+      'live',
+      new SqliteMarketDataStore(openSharedStore(':memory:')),
+      5_000,
+      { logger: throwingLogger },
+    );
+
+    await expect(
+      service.getBars(INSTRUMENT, { timeframe: TIMEFRAME, lookback: 2 }, ASOF),
+    ).rejects.toBe(boom);
   });
 });

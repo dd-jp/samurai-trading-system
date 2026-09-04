@@ -968,6 +968,49 @@ export class FillSyncFailureRecorder implements Logger {
   }
 }
 
+/** What `evaluateSmokeGate` needs from the market-data fetch path (#1082). */
+export interface MarketDataFetchEvidence {
+  /** How many `market_data_fetch` lines the run recorded — see `MarketDataFetchRecorder`. */
+  fetchCount: number;
+}
+
+/**
+ * Records every `market_data_fetch` line (#1082) on the way to the real
+ * logger, so the gate can prove the telemetry mechanism actually FIRES
+ * through the real composition root — not merely that `MarketDataServiceImpl`
+ * was constructed with a `telemetry` argument (#430's dominant defect class:
+ * built, unit-tested, never wired, every test green).
+ *
+ * Matched by `payload.event`, unlike `FillSyncFailureRecorder` above (which
+ * matches a closed, enumerated `message` set): this line's message is
+ * instrument/timeframe-specific prose, so the grep-unique event name —
+ * `market_data_fetch`, same convention as `token_bucket_wait` (#1083) — is
+ * the one fixed field every line carries.
+ *
+ * Unlike #1083's `token_bucket_wait` (deliberately given NO evidence field —
+ * see the comment on `evaluateSmokeGate`'s options), a cache-miss line here
+ * fires for free on the FIRST bar fetch any fixture-driven run makes against
+ * a cold `:memory:` store — no artificial real-time wait needed — which is
+ * what makes a real (non-vacuous) assertion on this mechanism's DURABLE
+ * effect achievable, unlike the wait case.
+ */
+export class MarketDataFetchRecorder implements Logger {
+  private fetchCount = 0;
+
+  constructor(private readonly inner: Logger) {}
+
+  log(entry: LogEntry): void {
+    if ((entry.payload as { event?: string } | undefined)?.event === 'market_data_fetch') {
+      this.fetchCount += 1;
+    }
+    this.inner.log(entry);
+  }
+
+  evidence(): MarketDataFetchEvidence {
+    return { fetchCount: this.fetchCount };
+  }
+}
+
 /** The `error` string `startFillSync` puts in its rejection payloads, or `''` if absent. */
 function payloadError(payload: unknown): string {
   if (typeof payload !== 'object' || payload === null) return '';
@@ -3266,6 +3309,20 @@ export function evaluateSmokeGate(
      * the gate green.
      */
     fillSync: FillSyncFailureEvidence;
+    /**
+     * The market-data fetch telemetry's evidence (#1082) — required, not
+     * optional, for the same "compile error, not a silent no-op" reason
+     * every mechanism above is. Unlike #1083's `token_bucket_wait` just
+     * below (deliberately given NO evidence field), a cache-miss
+     * `market_data_fetch` line fires for free on the first bar fetch any
+     * fixture-driven run makes against a cold `:memory:` store — no
+     * artificial wait needed — so this check is a real, non-vacuous
+     * assertion on the mechanism's DURABLE effect: deleting `{ logger }`
+     * from the primary `new MarketDataServiceImpl(...)` call in
+     * `production.ts` leaves every fetch identical and every other check
+     * here green, and only this one would notice.
+     */
+    marketDataFetch: MarketDataFetchEvidence;
     // #1083's wait telemetry has DELIBERATELY no evidence field here, unlike
     // every mechanism above — the standard's "wiring a mechanism means
     // asserting it here" still applies, but this mechanism does not fit the
@@ -4200,6 +4257,23 @@ export function evaluateSmokeGate(
     );
   }
 
+  // #1082 — the market-data fetch path must have logged at least one
+  // `market_data_fetch` line. `MarketDataServiceImpl`'s store starts cold
+  // (`:memory:`), so the run's very first bar fetch through the composition
+  // root's PRIMARY `marketData` instance is a guaranteed cache miss; zero
+  // lines means the `telemetry` argument was dropped from `production.ts`'s
+  // `new MarketDataServiceImpl(...)` call, returning the bar/indicator path
+  // to the undiagnosable-silence state #1082 was filed against.
+  if (options.marketDataFetch.fetchCount === 0) {
+    failures.push(
+      'zero market_data_fetch lines were recorded over the run — the store starts cold, so at ' +
+        'least one venue-reaching bar fetch (and therefore one recorded miss) is guaranteed on a ' +
+        'correctly wired composition root; a zero count means the `telemetry` argument was dropped ' +
+        "from production.ts's primary `MarketDataServiceImpl` construction, and the market-data " +
+        'path is back to emitting no telemetry at all (#1082)',
+    );
+  }
+
   return { passed: failures.length === 0, failures };
 }
 
@@ -4389,7 +4463,11 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
   // fill-sync loop's swallowed rejections reach the gate. Forwarding is
   // unconditional — the operator still sees every line.
   const fillSyncFailures = new FillSyncFailureRecorder(options.logger ?? new JsonLogger());
-  const logger: Logger = fillSyncFailures;
+  // #1082: chained on top, same unconditional-forwarding shape — every line
+  // still reaches the operator, and this recorder additionally counts
+  // `market_data_fetch` lines for the gate below.
+  const marketDataFetch = new MarketDataFetchRecorder(fillSyncFailures);
+  const logger: Logger = marketDataFetch;
   const db = openSharedStore(':memory:');
 
   try {
@@ -4768,6 +4846,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       armComparison,
       outsideBenchmarks,
       fillSync: fillSyncFailures.evidence(),
+      marketDataFetch: marketDataFetch.evidence(),
       exitPath: {
         ...exitPathHarnessResult,
         // Alerts from BOTH the six-stage tick loop and the exit-path harness —

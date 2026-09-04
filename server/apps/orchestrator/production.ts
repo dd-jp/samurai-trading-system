@@ -992,11 +992,21 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * instance's doc for why the two writers' shared key space is safe.
    */
   const marketDataStore = new SqliteMarketDataStore(guardedStore(config.db, 'market-data'));
+  // #1082: telemetry wired on the PRIMARY instance only, not the benchmark
+  // instance below — the benchmark path runs at Feedback Loop's daily
+  // cadence, not the per-tick path the 106 analyst timeouts were observed
+  // on, so instrumenting it would add lines with no diagnostic value for
+  // the failure this exists to make visible. `5_000` is the same
+  // `markTtlMs` default the 4-arg call this replaces relied on implicitly —
+  // spelled out here only because a 6th positional argument (`telemetry`)
+  // now follows it.
   const marketData: MarketDataService = new MarketDataServiceImpl(
     dataSource,
     clock,
     marketDataMode,
     marketDataStore,
+    5_000,
+    { logger },
   );
 
   /**
