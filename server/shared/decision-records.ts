@@ -41,11 +41,15 @@ export interface TraderDecisionRecord {
    * exists to give: `'declined_on_signal'` (the debate or position state was
    * read and said no — nothing to fix), `'could_not_decide'` (the debate
    * itself produced nothing usable — a starved debate, not a market read), or
-   * `'input_unusable'` (the Trader's own priced inputs were bad — a data-feed
-   * problem). Not typed as `TraderSkipReason`'s sibling union here because
-   * `pipeline/trader/decide.ts` is the owner of that vocabulary and this port
-   * only needs to persist its string; see `TraderDecisionClass` there for the
-   * authoritative three values. Present exactly when `skip_reason` is set.
+   * `'input_unusable'` (the Trader's own priced inputs could not be used this
+   * tick — missing, not yet available, or non-finite). Not typed as
+   * `TraderSkipReason`'s sibling union here because `pipeline/trader/decide.ts`
+   * is the owner of that vocabulary and this port only needs to persist its
+   * string; see `TraderDecisionClass` there for the authoritative three
+   * values — including why `input_unusable` deliberately mixes a benign
+   * warm-up reason (`atr_insufficient_bars`) in with the genuinely corrupt
+   * ones: `reason_detail` (below) and `TraderDiagnostic` carry that severity
+   * split, not this column. Present exactly when `skip_reason` is set.
    */
   decision_class: string | null;
   /**

@@ -2216,6 +2216,12 @@ describe('decideWithReason — decision class and reason detail (#1109)', () => 
 
     expect(outcome.skip_reason).toBe('atr_not_finite');
     expect(outcome.reason_detail).toBeNull();
+    // Both ATR failures classify as `input_unusable` (they are the Trader's
+    // own priced input, not a debate read) — but only `atr_insufficient_bars`
+    // (below) carries a `reason_detail`. That contrast, not `decision_class`
+    // alone, is what lets an operator tell this corrupt-data row apart from
+    // the benign warm-up one without pattern-matching `skip_reason` strings.
+    expect(outcome.decision_class).toBe('input_unusable');
   });
 
   it('carries the compared value and the threshold on an insufficient-bars decline', async () => {
@@ -2233,6 +2239,14 @@ describe('decideWithReason — decision class and reason detail (#1109)', () => 
         atrIndicatorSpec(DEFAULT_TRADER_CONFIG.atr_lookback, DEFAULT_TRADER_CONFIG.atr_timeframe),
       ),
     });
+    // Pinned `input_unusable` deliberately, not `could_not_decide`: this is a
+    // benign warm-up/data-gap case (#475), but folding it into
+    // `could_not_decide` would corrupt that class's #1109 acceptance-criterion
+    // count (pinned to #1080's 41 debate timeouts) with routine warm-up ticks.
+    // See `TraderDecisionClass`'s doc for the full argument; `reason_detail`
+    // above is the row-level signal that this is the benign case, not the
+    // class.
+    expect(outcome.decision_class).toBe('input_unusable');
   });
 
   it('classifies a data-quality skip as input_unusable, not declined_on_signal', async () => {

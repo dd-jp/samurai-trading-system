@@ -1205,9 +1205,31 @@ export type TraderSkipReason =
  *   (`timed_out` or `rate_limited`); the Trader's `neutral`-shaped refusal is
  *   a correct response to a bad input, not a reading of the market.
  * - `input_unusable` — the Trader's OWN priced inputs (a mark, an ATR, a
- *   fill record) were missing or non-finite. A data-feed or venue-state
- *   problem, distinct from `could_not_decide` because the debate itself was
- *   fine — the corruption is downstream of it.
+ *   fill record) could not be used this tick — missing, not yet available,
+ *   or non-finite. Distinct from `could_not_decide` because the debate
+ *   itself was fine; the problem is downstream of it.
+ *
+ * `input_unusable` is not uniformly alarming. `atr_insufficient_bars` is a
+ * warm-up/data-gap case — expected early in a soak or when an instrument is
+ * new to the universe (#475) — not evidence of corrupt data, and it sits
+ * here rather than in `could_not_decide` on purpose: `could_not_decide` has
+ * no static baseline anywhere in `SKIP_REASON_CLASS` (below) — it exists
+ * ONLY as `classifyDecision`'s degraded-debate override — and #1109's
+ * acceptance criterion pins its count to #1080's 41 debate timeouts. Giving
+ * `atr_insufficient_bars` a baseline of `could_not_decide` would fold every
+ * routine warm-up tick into that count and make it stop meaning "the debate
+ * starved."
+ *
+ * So the class alone is not the operator's within-bucket severity signal for
+ * `input_unusable` — two things downstream of it are. `reason_detail` is one:
+ * `atr_insufficient_bars` is the ONLY `input_unusable` reason that carries a
+ * non-null one (bars compared against the configured minimum), so a query
+ * can isolate it from its genuinely-corrupt siblings without pattern-matching
+ * `skip_reason` strings. `TraderDiagnostic` is the other: it already excludes
+ * `atr_insufficient_bars` from the alarming `atr_not_finite` kind for exactly
+ * this reason (see `TraderDiagnosticKind`) — the class this reviewer's
+ * concern actually describes ("a class meant to signal corrupt inputs") is
+ * `TraderDiagnostic`, not `TraderDecisionClass`.
  *
  * `null` on any outcome that is not a skip: an emitted order has nothing to
  * classify.
@@ -1248,7 +1270,7 @@ const SKIP_REASON_CLASS: Record<TraderSkipReason, TraderDecisionClass> = {
   exit_held_quantity_diverged: 'input_unusable',
   early_exit_signal_unavailable: 'input_unusable',
   no_position_side: 'input_unusable',
-  atr_insufficient_bars: 'input_unusable',
+  atr_insufficient_bars: 'input_unusable', // benign warm-up, not corruption — see the class doc above
   atr_not_finite: 'input_unusable',
   mark_not_finite: 'input_unusable',
   stop_distance_not_positive: 'input_unusable',
