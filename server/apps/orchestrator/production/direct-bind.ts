@@ -28,6 +28,7 @@
 import type {
   BrokerAdapter,
   ExecutionConfig,
+  FilledZeroSizeThrottle,
   FlattenOverfillAlertChannel,
   FlattenReconcileAlertChannel,
   ResidualExposureAlertChannel,
@@ -1323,6 +1324,8 @@ export interface ExecutionStepDeps {
   flattenReconcileAlerts: FlattenReconcileAlertChannel;
   /** #573's local diagnostic trace — see `ExecutionInput.logger`'s decision doc. */
   logger: Logger;
+  /** #1087's per-lot throttle — see `ExecutionInput.filledZeroSizeThrottle`. */
+  filledZeroSizeThrottle: FilledZeroSizeThrottle;
 }
 
 /**
@@ -1350,6 +1353,7 @@ export function buildExecutionStep(deps: ExecutionStepDeps): TickSteps['executio
       flattenOverfillAlerts: deps.flattenOverfillAlerts,
       flattenReconcileAlerts: deps.flattenReconcileAlerts,
       logger: deps.logger,
+      filledZeroSizeThrottle: deps.filledZeroSizeThrottle,
     });
     return execution.execute(verdict);
   };
@@ -1385,6 +1389,7 @@ export function buildExecutionSurface(deps: ExecutionStepDeps, traceId: string):
     flattenOverfillAlerts: deps.flattenOverfillAlerts,
     flattenReconcileAlerts: deps.flattenReconcileAlerts,
     logger: deps.logger,
+    filledZeroSizeThrottle: deps.filledZeroSizeThrottle,
   });
 }
 

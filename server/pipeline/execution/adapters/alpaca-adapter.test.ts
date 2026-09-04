@@ -7,6 +7,7 @@ import type { VerdictDecision } from '../../verdict/index.js';
 import { BrokerError } from '../broker-error.js';
 import { InMemoryBrokerStateStore } from '../broker-state-store.js';
 import { ExecutionImpl } from '../execute.js';
+import { FilledZeroSizeThrottle } from '../filled-zero-size-throttle.js';
 import type { OcoDoubleFillAlert, OcoDoubleFillAlertChannel } from '../oco-double-fill-alert.js';
 import { openTestExecutionStore } from '../sqlite-store-harness.js';
 import type { ExecutionConfig, ExecutionInput, NativeBracketRequest } from '../types.js';
@@ -2588,6 +2589,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
       config: executionConfig(),
       mode: 'paper',
       residualExposureAlerts: { postResidualExposureAlert: async () => {} },
+      filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
       flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
       logger: { log: () => {} },
@@ -2719,6 +2721,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
       config: executionConfig(),
       mode: 'paper',
       residualExposureAlerts: { postResidualExposureAlert: async () => {} },
+      filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
       flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
       logger: { log: () => {} },
@@ -2802,6 +2805,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
       config: executionConfig(),
       mode: 'paper',
       residualExposureAlerts: { postResidualExposureAlert: async () => {} },
+      filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
       flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
       logger: { log: () => {} },

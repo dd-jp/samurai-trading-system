@@ -47,6 +47,11 @@ export type {
 } from './broker-state-store.js';
 export { InMemoryBrokerStateStore } from './broker-state-store.js';
 export { ExecutionImpl } from './execute.js';
+export {
+  ALERT_AFTER_CONSECUTIVE_ZERO_SIZE,
+  ALERT_REPEAT_EVERY_ZERO_SIZE,
+  FilledZeroSizeThrottle,
+} from './filled-zero-size-throttle.js';
 export type {
   FlattenOverfillAlertChannel,
   FlattenOverfillWarning,
@@ -82,6 +87,7 @@ export type {
   NativeBracketRequest,
   NormalizedFill,
   NormalizedOrder,
+  NormalizedPosition,
   ReconcileDivergence,
   ReconcileReport,
   ResidualProtectionSweepResult,

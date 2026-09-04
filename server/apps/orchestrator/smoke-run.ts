@@ -156,6 +156,7 @@ import type {
 } from '../../pipeline/execution/index.js';
 import {
   AlpacaBrokerAdapter,
+  FilledZeroSizeThrottle,
   SimulatedBrokerAdapter,
   SqliteBrokerStateStore,
   SqliteExecutionStore,
@@ -1421,6 +1422,21 @@ async function runExitPathScenarios(input: {
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
       flattenReconcileAlerts,
       logger,
+      // #1087: NOT recorded/gated, unlike `residualAlerts`/`flattenReconcileAlerts`
+      // above. `FILLED_WITH_ZERO_SIZE` fires only when a broker violates the
+      // "no fill predates its own lot's `opened_at`" invariant — the exact
+      // defect #1087 fixed at the source. Not unconstructible post-fix (a
+      // scripted broker can still hand back a pre-`opened_at` fill without
+      // touching `SimulatedBrokerAdapter`), just not reachable through THIS
+      // harness: this exit-path smoke scenario wires a single `innerBroker`
+      // (`SimulatedBrokerAdapter`) through one composition root, and driving
+      // a wedged lot needs a second broker/harness surface this gate doesn't
+      // have today — deferred as fixture work, not done here. Targeted
+      // regression coverage lives in simulated-adapter.test.ts and
+      // ingest-fills.test.ts instead. See `filled-zero-size-wiring.test.ts`
+      // for proof this mechanism reaches the real production logger through
+      // this same `buildExecutionSurface` binding.
+      filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
     },
     'smoke-exit-path',
   );
@@ -1668,6 +1684,10 @@ async function runExitPathScenarios(input: {
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
       flattenReconcileAlerts,
       logger,
+      // Fresh, not the pre-restart `execution`'s instance — a real restart's
+      // process is gone too, and `FilledZeroSizeThrottle` is documented
+      // restart-clean by design (filled-zero-size-throttle.ts).
+      filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
     },
     'smoke-exit-path-restart',
   );

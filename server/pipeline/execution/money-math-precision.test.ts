@@ -33,6 +33,7 @@ import type { CostModel } from '../../tools/backtest/index.js';
 import { realizedR } from '../feedback-loop/index.js';
 import { computePortfolioView } from '../risk-manager/index.js';
 import { ExecutionImpl } from './execute.js';
+import { FilledZeroSizeThrottle } from './filled-zero-size-throttle.js';
 import { openTestExecutionStore, type TestExecutionStore } from './sqlite-store-harness.js';
 import type {
   BrokerAck,
@@ -313,6 +314,7 @@ function makeInput(broker: BrokerAdapter, store: TestExecutionStore): ExecutionI
     residualExposureAlerts: { postResidualExposureAlert: async () => {} },
     flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
     flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
+    filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
     logger: { log: () => {} },
   };
 }

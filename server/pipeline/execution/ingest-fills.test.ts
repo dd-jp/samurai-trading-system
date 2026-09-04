@@ -10,6 +10,8 @@ import type { Clock, Logger, OpenPosition } from '../../shared/index.js';
 import { recordingLogger } from '../../shared/recording-logger.js';
 import type { CostModel } from '../../tools/backtest/index.js';
 import { ExecutionImpl } from './execute.js';
+import { FilledZeroSizeThrottle } from './filled-zero-size-throttle.js';
+import { FILLED_WITH_ZERO_SIZE } from './ingest-fills.js';
 import { openTestExecutionStore, TestExecutionStore } from './sqlite-store-harness.js';
 import type {
   BrokerAck,
@@ -22,6 +24,7 @@ import type {
   NativeBracketRequest,
   NormalizedFill,
   NormalizedOrder,
+  NormalizedPosition,
   ResidualExposureAlert,
   ResidualExposureAlertChannel,
 } from './types.js';
@@ -115,9 +118,15 @@ class ScriptedBroker implements BrokerAdapter {
     this.rearmCalls.push({ clientOrderId, instrument, side, qty, stop, target });
     if (this.rearmFailure !== undefined) throw this.rearmFailure;
   }
-  /** #86's surface. `ingestFills()` never reconciles, so it is never called. */
+  /**
+   * #86's surface. `ingestFills()` itself never calls this — `reconcile()`
+   * does. Settable (#1087) so a test can drive `reconcile()` then
+   * `ingestFills()` back to back, the same order `fill-sync.ts`'s `runPoll`
+   * uses, and check the two stay coherent.
+   */
+  scriptedOrder: NormalizedOrder | null = null;
   async getOrder(): Promise<NormalizedOrder | null> {
-    return null;
+    return this.scriptedOrder;
   }
   /** #519/#526's reconcile-only surface — likewise untouched by the fill loop. */
   async resumeFlatten(): Promise<never> {
@@ -130,8 +139,16 @@ class ScriptedBroker implements BrokerAdapter {
   async cancel(): Promise<never> {
     throw new Error('ScriptedBroker.cancel: ingestFills() does not cancel');
   }
-  async getOpenPositions(): Promise<never> {
-    throw new Error('ScriptedBroker.getOpenPositions: ingestFills() does not reconcile');
+  /**
+   * `reconcile()`'s `findUnrecordedVenuePositions` surface (#1087: some tests
+   * in this file now drive `reconcile()` immediately before `ingestFills()`,
+   * `fill-sync.ts`'s own poll order). Empty — no venue position the store
+   * does not already know about — rather than throwing: every fill this
+   * broker can report is scripted up front, so there is nothing unrecorded
+   * for it to find.
+   */
+  async getOpenPositions(): Promise<NormalizedPosition[]> {
+    return [];
   }
 }
 
@@ -180,6 +197,11 @@ function makeInput(
   residualExposureAlerts: ResidualExposureAlertChannel = makeResidualExposureAlerts(),
   flattenOverfillAlerts: FlattenOverfillAlertChannel = makeFlattenOverfillAlerts(),
   logger: Logger = recordingLogger(),
+  // Overridable (#1087 review, pass 2) so a test can hold its own reference
+  // and probe `observe()` directly — the throttle's public API, same as
+  // `advanceLot` itself calls — to read a consecutive count that never
+  // crosses a warn boundary and so never appears in `logger.entries`.
+  throttle: FilledZeroSizeThrottle = new FilledZeroSizeThrottle(),
 ): ExecutionInput {
   const config: ExecutionConfig = {
     simulated: {
@@ -207,6 +229,11 @@ function makeInput(
     // #519: `ingestFills()` never reconciles, so this is never posted to.
     flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
     logger,
+    // Fresh per call by default — matches production's one-throttle-per-
+    // composition-root lifetime, since `makeInput()` itself is called once
+    // per test/scenario and its returned `ExecutionInput` (and this throttle
+    // within it) is what every `ingestFills()` call in that test shares.
+    filledZeroSizeThrottle: throttle,
   };
 }
 
@@ -2040,5 +2067,198 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
     for (const row of fills) {
       expect(row.flatten_idempotency_key).toBeUndefined();
     }
+  });
+});
+
+/**
+ * #1087: `fill-sync.ts`'s `runPoll` calls `reconcile()` then `ingestFills()`
+ * back to back, every poll — the same order these tests drive `ExecutionImpl`
+ * in. `reconcile()` adopts the broker's `order_state` without ever touching
+ * `filled_size` (its own doc); only `ingestFills()` writes that. The two
+ * calls must never leave a position `filled`/`partially_filled` with a
+ * `filled_size` of zero — that combination is not a valid state for any
+ * venue to report, and it is exactly the anomaly the 2026-09-03 paper soak
+ * measured (issue #1087: a control-arm META lot, `order_state: 'filled'`,
+ * `filled_size: 0.0`, permanently, after reconcile adopted it at 14:04Z).
+ */
+describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reconcile path', () => {
+  it('produces a coherent position record: filled_size matches once ingestFills runs', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 10 });
+    const broker = new ScriptedBroker([
+      // Respects the invariant `ingestFills()`'s global `since` floor relies
+      // on (ingest-fills.ts's #838 comment): dated at/after the lot's own
+      // `opened_at`, which every real adapter and the fixed Simulated one
+      // (#1087) both guarantee.
+      fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100 }),
+    ]);
+    broker.scriptedOrder = {
+      client_order_id: 'key-1',
+      broker_order_ids: ['key-1:entry', 'key-1:stop', 'key-1:target'],
+      order_state: 'filled',
+      filled_qty: 10,
+    };
+    const logger = recordingLogger();
+    const execution = new ExecutionImpl(makeInput(broker, store, undefined, undefined, logger));
+
+    const report = await execution.reconcile();
+    expect(report.divergences).toEqual([
+      expect.objectContaining({
+        idempotency_key: 'key-1',
+        action: 'adopted',
+        broker_state: 'filled',
+      }),
+    ]);
+    // Reconcile alone leaves this — by design (reconcile.ts's own doc,
+    // "filled_size stays at whatever the Fill rows say"). If ingestFills
+    // never ran, or its own fill were excluded, THIS is where the record
+    // would freeze — the exact META shape.
+    expect((await store.getPosition('key-1'))?.filled_size).toBe(0);
+
+    await execution.ingestFills();
+
+    const position = await store.getPosition('key-1');
+    expect(position?.order_state).toBe('filled');
+    expect(position?.filled_size).toBe(10);
+    expect(position?.avg_entry_price).toBe(100);
+    // The anomaly detector must not fire on the coherent path.
+    expect(logger.entries.some((e) => e.message === FILLED_WITH_ZERO_SIZE)).toBe(false);
+  });
+
+  it('reports and re-reports the anomaly (never self-resolves) when the broker offers a fill dated before the lot it belongs to', async () => {
+    // The shape a broker that VIOLATES the invariant produces (what
+    // `SimulatedBrokerAdapter` did before #1087): a fill dated earlier than
+    // its own lot's `opened_at`. `ScriptedBroker.fetchNewFills` filters by
+    // `since` exactly like every real adapter, so — with this lot the SOLE
+    // open position, making its own `opened_at` the poll's floor — the fill
+    // is excluded on every poll, forever.
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 10 });
+    const broker = new ScriptedBroker([
+      fill({
+        broker_fill_id: 'e1',
+        leg: 'entry',
+        qty: 10,
+        price: 100,
+        timestamp: new Date(OPENED_AT.getTime() - 1),
+      }),
+    ]);
+    broker.scriptedOrder = {
+      client_order_id: 'key-1',
+      broker_order_ids: ['key-1:entry', 'key-1:stop', 'key-1:target'],
+      order_state: 'filled',
+      filled_qty: 10,
+    };
+    const logger = recordingLogger();
+    const execution = new ExecutionImpl(makeInput(broker, store, undefined, undefined, logger));
+
+    await execution.reconcile();
+    // Throttled (#1087 review, `FilledZeroSizeThrottle`): quiet for the first
+    // two consecutive wedged polls (`ALERT_AFTER_CONSECUTIVE_ZERO_SIZE=3` —
+    // review pass 2's fix for the documented benign "once or twice" Alpaca
+    // propagation lag), warns on the 3rd, then every 8th thereafter
+    // (`ALERT_REPEAT_EVERY_ZERO_SIZE`) — 11 polls is the minimum that proves
+    // both ends, not just the first. Not a race that resolves on any of
+    // them — genuinely permanent.
+    for (let poll = 0; poll < 11; poll += 1) {
+      await execution.ingestFills();
+    }
+
+    const position = await store.getPosition('key-1');
+    expect(position?.order_state).toBe('filled');
+    expect(position?.filled_size).toBe(0);
+    expect(await store.getFills('key-1')).toHaveLength(0);
+
+    const warnings = logger.entries.filter((e) => e.message === FILLED_WITH_ZERO_SIZE);
+    expect(warnings).toHaveLength(2);
+    expect(warnings[0]?.payload).toMatchObject({
+      idempotency_key: 'key-1',
+      instrument: 'AAPL',
+      order_state: 'filled',
+      consecutive: 3,
+    });
+    expect(warnings[1]?.payload).toMatchObject({
+      idempotency_key: 'key-1',
+      instrument: 'AAPL',
+      order_state: 'filled',
+      consecutive: 11,
+    });
+  });
+
+  it('does not reset the wedge streak when a non-entry fill lands on a still-wedged lot (#1087 review, pass 2)', async () => {
+    // `advanceLot` unconditionally cleared the throttle as soon as
+    // `newFills.length > 0` — but a non-entry fill (e.g. a stray stop/target
+    // report) can arrive for a lot whose OWN entry fill is still excluded by
+    // the `since` floor, so the recomputed `filledSize` is still 0 after that
+    // poll. Clearing there restarts the streak at `consecutive: 1` on the
+    // very next wedged poll instead of continuing it — this test drives
+    // exactly that shape and proves the streak survives.
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 10 });
+    const entryFill = fill({
+      broker_fill_id: 'e1',
+      leg: 'entry',
+      qty: 10,
+      price: 100,
+      // Same permanent-exclusion shape as the test above: dated before the
+      // lot's own `opened_at`, so `ScriptedBroker.fetchNewFills` (mirroring
+      // every real adapter) filters it out on every single poll.
+      timestamp: new Date(OPENED_AT.getTime() - 1),
+    });
+    const broker = new ScriptedBroker([entryFill]);
+    broker.scriptedOrder = {
+      client_order_id: 'key-1',
+      broker_order_ids: ['key-1:entry', 'key-1:stop', 'key-1:target'],
+      order_state: 'filled',
+      filled_qty: 10,
+    };
+    const logger = recordingLogger();
+    const throttle = new FilledZeroSizeThrottle();
+    const execution = new ExecutionImpl(
+      makeInput(broker, store, undefined, undefined, logger, throttle),
+    );
+
+    await execution.reconcile();
+    // Two wedged polls: consecutive 1, then 2 — both quiet
+    // (`ALERT_AFTER_CONSECUTIVE_ZERO_SIZE=3`, review pass 2's fix; the first
+    // boundary is the 3rd consecutive poll, not the 1st).
+    await execution.ingestFills();
+    await execution.ingestFills();
+
+    // A non-entry fill arrives this poll. The lot's OWN entry fill (`e1`) is
+    // still excluded — `filledSize` recomputes to 0 again, so this is the
+    // exact "new fill, but the lot is still wedged at zero" shape the review
+    // named, not a genuine advance.
+    const stopFill = fill({
+      broker_fill_id: 's1',
+      leg: 'stop',
+      qty: 10,
+      price: 95,
+      timestamp: new Date('2026-07-20T15:00:00Z'),
+    });
+    broker.replaceFills([entryFill, stopFill]);
+    await execution.ingestFills();
+
+    // The stop fill WAS persisted — this branch stores new rows before
+    // returning, it just must not treat the lot as no-longer-wedged.
+    expect(await store.getFills('key-1')).toHaveLength(1);
+    expect((await store.getPosition('key-1'))?.filled_size).toBe(0);
+
+    // No warning fired anywhere yet: polls 1-2 are below threshold
+    // (`ALERT_AFTER_CONSECUTIVE_ZERO_SIZE=3`) and the interruption poll skips
+    // the wedge-detector branch entirely (`newFills.length > 0`), fixed or
+    // buggy.
+    const warningsSoFar = logger.entries.filter((e) => e.message === FILLED_WITH_ZERO_SIZE);
+    expect(warningsSoFar).toHaveLength(0);
+
+    // THE ASSERTION: probe the throttle directly for what the NEXT wedged
+    // poll would observe. Fixed: the streak continued through the
+    // interruption (1, 2, [interruption, no observe], 3) — this call lands
+    // exactly on `ALERT_AFTER_CONSECUTIVE_ZERO_SIZE` and reports
+    // `{ warn: true, consecutive: 3 }`. Bugged (`clear()` ran on the
+    // interruption poll): the streak restarted, and this call would report
+    // `{ warn: false, consecutive: 1 }` instead — silently missing the
+    // alert a genuinely wedged lot is due, not merely mis-numbering it.
+    expect(throttle.observe('key-1')).toEqual({ warn: true, consecutive: 3 });
   });
 });

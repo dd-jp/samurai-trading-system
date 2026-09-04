@@ -12,6 +12,7 @@ import { recordingLogger } from '../../shared/recording-logger.js';
 import type { CostModel } from '../../tools/backtest/index.js';
 import type { VerdictDecision } from '../verdict/index.js';
 import { ExecutionImpl } from './execute.js';
+import { FilledZeroSizeThrottle } from './filled-zero-size-throttle.js';
 import { openTestExecutionStore, type TestExecutionStore } from './sqlite-store-harness.js';
 import type {
   BrokerAck,
@@ -217,6 +218,7 @@ function makeInput(
     residualExposureAlerts: { postResidualExposureAlert: async () => {} },
     flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
     flattenReconcileAlerts,
+    filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
     logger,
   };
 }
