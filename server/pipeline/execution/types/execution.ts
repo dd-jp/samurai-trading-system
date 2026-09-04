@@ -246,6 +246,15 @@ export interface ReconcileReport {
   corrected: number;
   /** One entry per lot or flatten row where store and broker disagreed. */
   divergences: ReconcileDivergence[];
+  /**
+   * #1088: terminal, size-0 `open_positions` rows (`rejected`/`cancelled`/
+   * `expired`, old enough — see `sweepTerminalPositions`, types/store.ts)
+   * deleted this pass. Counted separately from `checked`/`corrected`: a
+   * sweep is neither an in-flight lot examined nor a store/broker
+   * divergence corrected, and folding it into either would misstate what
+   * those two already mean (see `ReconcileReport.checked`'s own doc).
+   */
+  swept: number;
   timestamp: Date;
 }
 

@@ -251,6 +251,34 @@ export interface SharedStore {
    * target, requested_size) plus the marker's own two timestamps.
    */
   getUnprotectedResidualLots(): Promise<UnprotectedResidualLot[]>;
+  /**
+   * #1088: deletes the `open_positions` rows that were never real positions
+   * and never will be — `rejected`/`cancelled`/`expired` lots with
+   * `filled_size = 0`, whose `decision_timestamp` is older than `cutoff`.
+   * Returns the count deleted.
+   *
+   * **`closed` is deliberately never swept here**, and neither is a terminal
+   * row with `filled_size > 0`. `getOpenPositions()`'s terminal filter
+   * already keeps every one of these rows out of every live read (crash
+   * recovery, exposure sizing, the dashboard) — the defect this closes is
+   * retention (unbounded accumulation), not correctness. A `closed` row is
+   * NOT fully redundant with its `closed_trades` counterpart: it alone
+   * carries the #1001 submit-time snapshot (`decision_price`, `quote_bid`,
+   * `quote_ask`, `quote_mid`, `quote_observed_at`,
+   * `modelled_cost_breakdown`) that `closed_trades` has no columns for, and
+   * CLAUDE.md's HMRC/CGT "track everything" retention requirement
+   * (docs/specs/shared-sqlite-store-spec.md's contrast with the MI store's
+   * 90-day purge) makes deleting it someone else's call, not this sweep's. A
+   * terminal row with `filled_size > 0` that never reached `closed` is an
+   * inconsistency this sweep does not try to interpret — left untouched
+   * rather than guessed at.
+   *
+   * `cutoff` is the caller's to compute (`reconcile.ts` holds the age
+   * policy and the idempotency-key-reuse-safety reasoning behind it) — this
+   * method is the mechanical DELETE only, arm-scoped like every other scan
+   * here.
+   */
+  sweepTerminalPositions(cutoff: Date): Promise<number>;
 }
 
 /**

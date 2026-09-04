@@ -113,6 +113,9 @@ class FakeSharedStore implements SharedStore {
   async getUnprotectedResidualLots(): Promise<UnprotectedResidualLot[]> {
     return [];
   }
+  async sweepTerminalPositions(_cutoff: Date): Promise<number> {
+    return 0;
+  }
   async applyLotAdvance(advance: LotAdvance): Promise<void> {
     if (this.shouldThrow) {
       throw new Error('boom');
