@@ -2153,11 +2153,14 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
     const execution = new ExecutionImpl(makeInput(broker, store, undefined, undefined, logger));
 
     await execution.reconcile();
-    // Throttled (#1087 review, `FilledZeroSizeThrottle`): warns on the FIRST
-    // wedged poll, then every 8th thereafter (`ALERT_REPEAT_EVERY_ZERO_SIZE`)
-    // — 9 polls is the minimum that proves both ends, not just the first.
-    // Not a race that resolves on any of them — genuinely permanent.
-    for (let poll = 0; poll < 9; poll += 1) {
+    // Throttled (#1087 review, `FilledZeroSizeThrottle`): quiet for the first
+    // two consecutive wedged polls (`ALERT_AFTER_CONSECUTIVE_ZERO_SIZE=3` —
+    // review pass 2's fix for the documented benign "once or twice" Alpaca
+    // propagation lag), warns on the 3rd, then every 8th thereafter
+    // (`ALERT_REPEAT_EVERY_ZERO_SIZE`) — 11 polls is the minimum that proves
+    // both ends, not just the first. Not a race that resolves on any of
+    // them — genuinely permanent.
+    for (let poll = 0; poll < 11; poll += 1) {
       await execution.ingestFills();
     }
 
@@ -2172,13 +2175,13 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
       idempotency_key: 'key-1',
       instrument: 'AAPL',
       order_state: 'filled',
-      consecutive: 1,
+      consecutive: 3,
     });
     expect(warnings[1]?.payload).toMatchObject({
       idempotency_key: 'key-1',
       instrument: 'AAPL',
       order_state: 'filled',
-      consecutive: 9,
+      consecutive: 11,
     });
   });
 
@@ -2216,8 +2219,9 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
     );
 
     await execution.reconcile();
-    // Two wedged polls: consecutive 1 (warns — `ALERT_AFTER_CONSECUTIVE_ZERO_SIZE`)
-    // then 2 (does not — the next boundary is 9).
+    // Two wedged polls: consecutive 1, then 2 — both quiet
+    // (`ALERT_AFTER_CONSECUTIVE_ZERO_SIZE=3`, review pass 2's fix; the first
+    // boundary is the 3rd consecutive poll, not the 1st).
     await execution.ingestFills();
     await execution.ingestFills();
 
@@ -2240,19 +2244,21 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
     expect(await store.getFills('key-1')).toHaveLength(1);
     expect((await store.getPosition('key-1'))?.filled_size).toBe(0);
 
-    // No warning fired on the interruption poll itself (newFills.length > 0
-    // skips the wedge-detector branch entirely, fixed or buggy).
+    // No warning fired anywhere yet: polls 1-2 are below threshold
+    // (`ALERT_AFTER_CONSECUTIVE_ZERO_SIZE=3`) and the interruption poll skips
+    // the wedge-detector branch entirely (`newFills.length > 0`), fixed or
+    // buggy.
     const warningsSoFar = logger.entries.filter((e) => e.message === FILLED_WITH_ZERO_SIZE);
-    expect(warningsSoFar).toHaveLength(1);
+    expect(warningsSoFar).toHaveLength(0);
 
     // THE ASSERTION: probe the throttle directly for what the NEXT wedged
     // poll would observe. Fixed: the streak continued through the
-    // interruption (1, 2, [interruption, no observe], 3) — this call reports
-    // `consecutive: 3`. Bugged (`clear()` ran on the interruption poll): the
-    // streak restarted, and this call would report `consecutive: 1` instead
-    // — which is ALSO a warn boundary, so the real next `ingestFills()` poll
-    // would incorrectly warn again immediately instead of staying silent
-    // until the true 9th consecutive wedged poll.
-    expect(throttle.observe('key-1')).toEqual({ warn: false, consecutive: 3 });
+    // interruption (1, 2, [interruption, no observe], 3) — this call lands
+    // exactly on `ALERT_AFTER_CONSECUTIVE_ZERO_SIZE` and reports
+    // `{ warn: true, consecutive: 3 }`. Bugged (`clear()` ran on the
+    // interruption poll): the streak restarted, and this call would report
+    // `{ warn: false, consecutive: 1 }` instead — silently missing the
+    // alert a genuinely wedged lot is due, not merely mis-numbering it.
+    expect(throttle.observe('key-1')).toEqual({ warn: true, consecutive: 3 });
   });
 });

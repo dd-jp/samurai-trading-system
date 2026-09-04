@@ -73,6 +73,7 @@ import {
   ALPACA_CREDENTIAL_ENV_VARS,
   AlpacaBrokerAdapter,
   ExecutionImpl,
+  FilledZeroSizeThrottle,
   SqliteBrokerStateStore,
   SqliteExecutionStore,
 } from '../pipeline/execution/index.js';
@@ -260,10 +261,16 @@ async function main(): Promise<void> {
     residualExposureAlerts: unreachable('residualExposureAlerts'),
     flattenOverfillAlerts: unreachable('flattenOverfillAlerts'),
     flattenReconcileAlerts: unreachable('flattenReconcileAlerts'),
-    // #1087: only `ingestFills()` reads this throttle, and this probe only
-    // ever calls `execute()` (the entry path) — same "provably never
-    // touches it" reasoning as the alert channels above.
-    filledZeroSizeThrottle: unreachable('filledZeroSizeThrottle'),
+    // #1087 review, pass 2: a real instance, not `unreachable()` like the
+    // alert channels above. Those are provably dead here (this probe never
+    // hits a flatten/reconcile path); this one is merely UNUSED today (the
+    // probe only calls `execute()`, never `ingestFills()`) — a distinction
+    // worth keeping separate, because this tool runs against the LIVE
+    // broker, and a future call added here for symmetry (or a copy-paste
+    // into a sibling tool that does poll) would throw against production
+    // instead of harmlessly counting nothing. A throttle is one Map, empty
+    // until observed — free to construct even when never read.
+    filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
   });
 
   // One probe lot at a time. `executeExit` assumes every lot it finds for an

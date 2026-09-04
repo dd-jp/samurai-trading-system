@@ -2487,6 +2487,84 @@ describe('ExecutionImpl.execute', () => {
 });
 
 /**
+ * #1087 review, pass 2 (kimi): `simulated-adapter.test.ts`'s stale-mark
+ * regression test drives `SimulatedBrokerAdapter` directly — it never calls
+ * `execute()` (so no `OpenPosition.opened_at` is ever written) and never
+ * calls `ingestFills()` (so the global `since` floor `ingestFills()` itself
+ * computes from `getOpenPositions()` is never exercised; the adapter test
+ * hands `fetchNewFills` a hand-picked `NOW`, standing in for what it ASSUMES
+ * `since` would be). This block closes that gap: `execute()` writes the real
+ * `opened_at`, `SimulatedBrokerAdapter` prices against a genuinely laggy
+ * mark, and `ingestFills()` computes `since` off the real store — the exact
+ * end-to-end path the 2026-09-03 paper-soak incident (META) went through.
+ */
+describe('ExecutionImpl.execute() → ingestFills() — the stale-mark case end-to-end (#1087 review, pass 2)', () => {
+  it('never excludes its own entry fill via the since floor, even when the priced mark is laggy', async () => {
+    const { store } = openTestExecutionStore();
+    // A mark `observed_at` 5 minutes STALE relative to `fixedClock` — the
+    // exact shape that pre-#1087 stamped the fill early enough to predate
+    // the lot's own `opened_at` when this lot is the store's SOLE open
+    // position (making its own `opened_at` the poll's `since` floor).
+    const laggyObservedAt = new Date(NOW.getTime() - 5 * 60_000);
+    const marketData: MarketDataService = {
+      getBars: vi.fn(),
+      getMark: vi.fn().mockResolvedValue({
+        price: 100,
+        observed_at: laggyObservedAt,
+        source: 'fixture',
+        asset_class: 'stocks',
+      }),
+      getIndicator: vi.fn().mockResolvedValue({ indicator: 'atr', value: 2, as_of_bar_close: NOW }),
+      getSpreadEstimate: vi.fn().mockResolvedValue(0.04),
+      getADV: vi.fn().mockResolvedValue(1_000_000),
+    } as unknown as MarketDataService;
+    const costModel: CostModel = {
+      fill: vi.fn().mockReturnValue({
+        fill_price: 100,
+        filled_size: 100,
+        cost_breakdown: { spread_cost: 0.1, commission: 0.2, slippage: 0.05, market_impact: 0.01 },
+      }),
+    };
+    const broker = new SimulatedBrokerAdapter({
+      clock: fixedClock,
+      costModel,
+      marketData,
+      config: {
+        volatility_indicator: {
+          indicator: 'atr',
+          params: { period: 14 },
+          timeframe: '1h',
+          lookback: 15,
+        },
+        adv_window: { timeframe: '1d', lookback: 20 },
+      },
+    });
+    const execution = new ExecutionImpl(
+      makeInput({ store, broker, costModel, marketData, clock: fixedClock }),
+    );
+
+    const result = await execution.execute(makeGo());
+    expect(result.status).toBe('submitted');
+    // `execute()`'s own write-ahead — `opened_at` is `fixedClock.now()`,
+    // read strictly BEFORE `broker.submitBracket` is ever called (execute.ts).
+    expect((await store.getPosition('key-aapl-1355'))?.opened_at).toEqual(NOW);
+    expect((await store.getPosition('key-aapl-1355'))?.filled_size).toBe(0);
+
+    await execution.ingestFills();
+
+    // The self-referential trap this closes: `since` is this lot's own
+    // `opened_at` (the SOLE open position), yet its fill — priced against a
+    // mark whose OWN `observed_at` is 5 minutes earlier than that — still
+    // lands, because `SimulatedBrokerAdapter` stamps the fill at submit
+    // time, never at the mark's (possibly stale) observation time.
+    const position = await store.getPosition('key-aapl-1355');
+    expect(position?.filled_size).toBe(100);
+    expect(position?.order_state).toBe('filled');
+    expect(await store.getFills('key-aapl-1355')).toHaveLength(1);
+  });
+});
+
+/**
  * #1001: the submit-time snapshot `captureSubmitSnapshot` (execute.ts)
  * attaches to every write-ahead — `decision_price` (always, from
  * `order.entry`, no I/O), a best-effort quote (`MarketDataService.getQuote`)

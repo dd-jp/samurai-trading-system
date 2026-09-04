@@ -224,9 +224,10 @@ describe('the FILLED_WITH_ZERO_SIZE throttle is wired through the real compositi
    * builds two surfaces off the SAME `executionDeps` — exactly what
    * production does when it builds `fillSyncExecution` once at startup and
    * polls it forever — can see a throttle that quietly stopped being shared.
-   * Applying that exact mutation locally: this test goes red at
-   * `consecutive: 1` on `surfaceB`'s first poll (a fresh count, not a
-   * continuation of `surfaceA`'s streak); reverting restores green.
+   * Applying that exact mutation locally: this test goes red — the second
+   * warning's `consecutive` no longer reaches 11 (`surfaceB` restarts its
+   * own fresh count instead of continuing `surfaceA`'s streak); reverting
+   * restores green.
    */
   it('shares one throttle across every surface built from the same executionDeps, so the warning reaches the root logger throttled', async () => {
     const logger = recordingLogger();
@@ -262,10 +263,10 @@ describe('the FILLED_WITH_ZERO_SIZE throttle is wired through the real compositi
     // `buildExecutionSurface(components.executionDeps, ...)`, built once.
     const surfaceA = buildExecutionSurface(components.executionDeps, 'trace-wiring-a');
     await surfaceA.reconcile();
-    // Four polls: `ALERT_AFTER_CONSECUTIVE_ZERO_SIZE=1` warns on the first,
-    // `ALERT_REPEAT_EVERY_ZERO_SIZE=8` withholds the next three
-    // (consecutive 2, 3, 4).
-    for (let poll = 0; poll < 4; poll += 1) {
+    // Six polls: `ALERT_AFTER_CONSECUTIVE_ZERO_SIZE=3` stays quiet for the
+    // first two (consecutive 1, 2), warns on the 3rd, then
+    // `ALERT_REPEAT_EVERY_ZERO_SIZE=8` withholds the rest (consecutive 4, 5, 6).
+    for (let poll = 0; poll < 6; poll += 1) {
       await surfaceA.ingestFills();
     }
 
@@ -273,10 +274,11 @@ describe('the FILLED_WITH_ZERO_SIZE throttle is wired through the real compositi
     // `components.executionDeps` — the shape a second consumer of the same
     // root's deps takes. If the root silently stopped threading one shared
     // throttle instance, this surface would start its own count at 1 and
-    // warn again immediately; instead the streak must continue from 4.
+    // stay quiet through its whole run below (5 polls never reaches 3 twice
+    // over); instead the streak must continue from 6.
     const surfaceB = buildExecutionSurface(components.executionDeps, 'trace-wiring-b');
-    // Five more polls: consecutive 5, 6, 7, 8, 9 — the 9th is the next
-    // Nth-repeat boundary after the first warning at 1 (1, 9, 17, ...).
+    // Five more polls: consecutive 7, 8, 9, 10, 11 — the 11th is the next
+    // Nth-repeat boundary after the first warning at 3 (3, 11, 19, ...).
     for (let poll = 0; poll < 5; poll += 1) {
       await surfaceB.ingestFills();
     }
@@ -291,20 +293,20 @@ describe('the FILLED_WITH_ZERO_SIZE throttle is wired through the real compositi
     expect(await components.executionStore.getFills('key-1')).toHaveLength(0);
 
     const warnings = entries.filter((entry) => entry.message === FILLED_WITH_ZERO_SIZE);
-    // Exactly two: the throttle counted nine polls as ONE continuous streak
-    // across two independently-built surfaces, not two streaks of one-each.
+    // Exactly two: the throttle counted eleven polls as ONE continuous streak
+    // across two independently-built surfaces, not two streaks of their own.
     expect(warnings).toHaveLength(2);
     expect(warnings[0]?.payload).toMatchObject({
       idempotency_key: 'key-1',
       instrument: 'AAPL',
       order_state: 'filled',
-      consecutive: 1,
+      consecutive: 3,
     });
     expect(warnings[1]?.payload).toMatchObject({
       idempotency_key: 'key-1',
       instrument: 'AAPL',
       order_state: 'filled',
-      consecutive: 9,
+      consecutive: 11,
     });
     // Every warning carries how long the lot has been stuck, so a throttled
     // (silent) poll still leaves the ONE line that does get through
