@@ -7,6 +7,7 @@
  */
 import type { Clock } from '../../shared/index.js';
 import { logCaughtFailure, safeLog } from '../../shared/safe-log.js';
+import { currentTraceId } from '../../shared/trace-context.js';
 import type { Logger } from '../../shared/types/primitives.js';
 import { buildIndicatorCacheKey, IndicatorCache } from './indicator-cache.js';
 import { computeIndicator } from './indicators.js';
@@ -258,9 +259,14 @@ export class MarketDataServiceImpl implements MarketDataService {
    * tracks its own pagination loop internally and `DataSource.fetchBars`'s
    * return type carries no channel to surface it — plumbing one through
    * every `DataSource` implementation, live and fixture alike, is a
-   * different-shaped change than "observe the existing choke point") and
-   * `trace_id` (no `MarketDataService` method accepts one — same reasoning).
-   * Both are exactly the issue's own "if available" qualifier; a reader
+   * different-shaped change than "observe the existing choke point").
+   * `trace_id` used to be omitted for that same reason and no longer is: no
+   * `MarketDataService` method accepts one, so it comes from the ambient tick
+   * context instead (`shared/trace-context.ts`), falling back to the
+   * `'market-data'` label when there is genuinely no tick. That is exactly
+   * the AC3 note below: the analyst's 8 windows per tick are in-tick fetches,
+   * and they now say which tick.
+   * `pages` remains the issue's own "if available" qualifier; a reader
    * chasing pagination detail still has this line's `duration_ms` as the
    * signal that a fetch paginated slowly, just not how many pages it took.
    *
@@ -328,7 +334,7 @@ export class MarketDataServiceImpl implements MarketDataService {
       logCaughtFailure(
         this.telemetry.logger,
         {
-          trace_id: 'market-data',
+          trace_id: currentTraceId() ?? 'market-data',
           stage: 'market_data',
           level,
           message: `market_data_fetch: ${instrument} ${window.timeframe} (lookback ${window.lookback}) failed after ${Math.round(durationMs)}ms.`,
@@ -342,7 +348,7 @@ export class MarketDataServiceImpl implements MarketDataService {
     }
 
     safeLog(this.telemetry.logger, {
-      trace_id: 'market-data',
+      trace_id: currentTraceId() ?? 'market-data',
       stage: 'market_data',
       level,
       message: `market_data_fetch: ${instrument} ${window.timeframe} (lookback ${window.lookback}) fetched ${rows} row(s) in ${Math.round(durationMs)}ms.`,

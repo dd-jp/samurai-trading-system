@@ -107,7 +107,7 @@
  */
 import type { Signal } from '../../pipeline/analysts/index.js';
 import { DEBATE_BAR_TIMEFRAME_MS, floorToBar } from '../../pipeline/debate-engine/index.js';
-import type { OrderIntent } from '../../shared/index.js';
+import { type OrderIntent, runWithTraceId } from '../../shared/index.js';
 import { analystsSkipDecisionWord } from './analysts-decision.js';
 import { debateDecisionWord, isDegradedDecision } from './debate-decision.js';
 import { digest } from './digest.js';
@@ -127,7 +127,17 @@ export class SequentialTickRunner implements TickRunner {
 
   constructor(private readonly steps: TickSteps) {}
 
+  /**
+   * Publishes `trace_id` as ambient context for the whole tick before running
+   * it, so log sites with no channel to receive one — `TokenBucket`'s pacing
+   * warn, `MarketDataService`'s fetch telemetry — can name the tick they
+   * belong to instead of a category label. See shared/trace-context.ts.
+   */
   async runInstrument(signal: Signal, ctx: TickContext): Promise<TickOutcome> {
+    return runWithTraceId(ctx.trace_id, () => this.#runInstrument(signal, ctx));
+  }
+
+  async #runInstrument(signal: Signal, ctx: TickContext): Promise<TickOutcome> {
     const { trace_id, clock, logger, auditLog, currentTickStore } = ctx;
     const instrument = signal.asset;
 

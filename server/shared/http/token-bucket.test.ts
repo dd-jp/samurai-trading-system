@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { runWithTraceId } from '../trace-context.js';
 import type { LogEntry, Logger } from '../types/primitives.js';
 import { TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS, TokenBucket } from './token-bucket.js';
 
@@ -392,5 +393,62 @@ describe('TokenBucket wait telemetry (#1083)', () => {
 
     expect(admitted).toBe(true);
     expect(rejected).toBeUndefined();
+  });
+
+  it('labels the wait with the enclosing tick, so a pacing wait can be joined to the stage that waited', async () => {
+    const { logger, entries } = recordingLogger();
+    const bucket = new TokenBucket({ capacity: 1, refillPerSecond: 1 }, undefined, {
+      logger,
+      name: 'alpaca',
+    });
+
+    await runWithTraceId('tick-abc', async () => {
+      await bucket.acquire();
+      const pending = bucket.acquire();
+      await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS);
+      await pending;
+    });
+
+    expect(entries[0]?.trace_id).toBe('tick-abc');
+  });
+
+  /**
+   * The background LANE is a priority, not a provenance —
+   * `alpaca-http-client.ts` takes it for bar fetches from inside a tick so a
+   * burst cannot park an order. So a background wait inside a tick must still
+   * carry that tick, or the 476 background lines of the 2026-09-04 soak stay
+   * unjoinable to the analyst timeouts they sit beside.
+   */
+  it('labels a background wait with the tick too', async () => {
+    const { logger, entries } = recordingLogger();
+    const bucket = new TokenBucket(
+      { capacity: 1, refillPerSecond: 1, reserveForPriority: 0 },
+      undefined,
+      { logger, name: 'alpaca' },
+    );
+
+    await runWithTraceId('tick-xyz', async () => {
+      await bucket.acquireBackground();
+      const pending = bucket.acquireBackground();
+      await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS);
+      await pending;
+    });
+
+    expect(entries[0]).toMatchObject({ trace_id: 'tick-xyz', payload: { lane: 'background' } });
+  });
+
+  it("falls back to 'token-bucket' outside a tick, where there is no trace to name", async () => {
+    const { logger, entries } = recordingLogger();
+    const bucket = new TokenBucket({ capacity: 1, refillPerSecond: 1 }, undefined, {
+      logger,
+      name: 'alpaca',
+    });
+    await bucket.acquire();
+
+    const pending = bucket.acquire();
+    await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS);
+    await pending;
+
+    expect(entries[0]?.trace_id).toBe('token-bucket');
   });
 });

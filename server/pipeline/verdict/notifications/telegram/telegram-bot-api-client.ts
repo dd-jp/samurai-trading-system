@@ -93,6 +93,50 @@ const POLL_HTTP_TIMEOUT_MS = (POLL_TIMEOUT_SECONDS + 10) * 1000;
 /** Ordinary (non-polling) request timeout — `sendMessage`, `answerCallbackQuery`. */
 const DEFAULT_TIMEOUT_MS = 10_000;
 
+/**
+ * Telegram's hard `sendMessage` limit, counted in UTF-16 code units.
+ *
+ * Exceeding it is a `400 Bad Request: message is too long`, which is
+ * PERMANENT: `DEFAULT_RETRY` re-sends the same over-long body twice more and
+ * the alert is then dropped, having never been delivered. Observed live on
+ * 2026-09-04 — `control_arm_valuation_refused` for NFLX failed this way, and
+ * the operator learned nothing.
+ */
+export const TELEGRAM_MAX_MESSAGE_CHARS = 4096;
+
+/**
+ * Bounds an outbound message so an over-long body degrades to a truncated
+ * alert instead of no alert at all.
+ *
+ * Applied HERE, in the transport, rather than in each alert formatter, for
+ * the reason `formatLogLine` gives about redaction: a guarantee that holds
+ * only where a formatter remembered it is not a guarantee. Ten channels build
+ * bodies (`trader-diagnostic-alert-channel.ts`, `oco-double-fill-channel.ts`,
+ * …) and any of them can interpolate an unbounded `detail` — the NFLX failure
+ * came from `describeThrown` over a multi-member `AggregateError`, whose size
+ * scales with the number of open positions.
+ *
+ * The log keeps the FULL text: this bounds only what goes on the wire, so a
+ * truncated alert never becomes a lost record. The suffix names the original
+ * length, so a reader knows to go to the log rather than assuming the alert
+ * is all there was.
+ */
+export function capOutboundText(text: string, limit = TELEGRAM_MAX_MESSAGE_CHARS): string {
+  if (text.length <= limit) return text;
+  const suffix = `… (truncated, ${text.length} chars total)`;
+  // Subtracting the suffix is what makes this correct rather than decorative:
+  // slicing to `limit` and then appending would still exceed `limit` and
+  // still 400 — the exact failure this exists to stop.
+  let cut = limit - suffix.length;
+  if (cut <= 0) return text.slice(0, limit);
+  // A lone high surrogate is not valid UTF-8 on the wire. Telegram counts
+  // UTF-16 code units, so `.length` is the right unit and a split pair is the
+  // only slicing hazard it leaves.
+  const last = text.charCodeAt(cut - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut -= 1;
+  return `${text.slice(0, cut)}${suffix}`;
+}
+
 /** Sized for Telegram's ~30 messages/second ceiling; a send is not on the tick's critical path. */
 const DEFAULT_RETRY: RetryConfig = { maxAttempts: 3, baseDelayMs: 500, maxDelayMs: 5_000 };
 
@@ -229,7 +273,7 @@ export class TelegramBotApiClient implements TelegramClient {
   }
 
   async sendMessage(chatId: string, text: string): Promise<void> {
-    await this.#call('sendMessage', { chat_id: chatId, text });
+    await this.#call('sendMessage', { chat_id: chatId, text: capOutboundText(text) });
   }
 
   /**
@@ -273,7 +317,7 @@ export class TelegramBotApiClient implements TelegramClient {
     try {
       await this.#call('sendMessage', {
         chat_id: chatId,
-        text,
+        text: capOutboundText(text),
         reply_markup: {
           inline_keyboard: [
             [

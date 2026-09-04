@@ -25,6 +25,7 @@
  */
 
 import { safeLog } from '../safe-log.js';
+import { currentTraceId } from '../trace-context.js';
 import type { Logger } from '../types/primitives.js';
 import { delay } from './delay.js';
 
@@ -201,7 +202,12 @@ export class TokenBucket {
     if (waitedMs < TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS) return;
     const roundedWaitMs = Math.round(waitedMs);
     safeLog(this.telemetry.logger, {
-      trace_id: 'token-bucket',
+      // The enclosing tick when there is one, so a pacing wait can be joined
+      // to the stage that waited; `'token-bucket'` only when there is no tick
+      // (a scheduled refresh, a CLI tool). NOT decided by `lane` — that is a
+      // priority, and bar fetches take the background lane from inside a tick
+      // precisely so they yield to the order path. See shared/trace-context.ts.
+      trace_id: currentTraceId() ?? 'token-bucket',
       stage: 'rate_limit',
       level: 'warn',
       message:

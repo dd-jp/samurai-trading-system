@@ -89,6 +89,7 @@ export {
   isThresholdBoundViolation,
   ThresholdBoundViolationError,
 } from './threshold-bounds.js';
+export { currentTraceId, runWithTraceId } from './trace-context.js';
 export type {
   AssetClass,
   ClosedTrade,

@@ -1,6 +1,6 @@
 import type { SqliteAuditLog } from '../../../../apps/orchestrator/index.js';
 import type { CallbackAuditLog } from './telegram-bot-api-client.js';
-import { TelegramBotApiClient } from './telegram-bot-api-client.js';
+import { TELEGRAM_MAX_MESSAGE_CHARS, TelegramBotApiClient } from './telegram-bot-api-client.js';
 
 const FAKE_TOKEN = '1234567:test-fake-bot-token';
 const ALLOWED_ID = 4242;
@@ -706,5 +706,59 @@ describe('TelegramBotApiClient long-poll loop lifecycle', () => {
 describe('CallbackAuditLog port', () => {
   it('is structurally satisfied by the orchestrator SqliteAuditLog', () => {
     expectTypeOf<SqliteAuditLog>().toExtend<CallbackAuditLog>();
+  });
+});
+
+/**
+ * Live failure, 2026-09-04: `control_arm_valuation_refused` for NFLX was sent
+ * and rejected with `400 Bad Request: message is too long`. That rejection is
+ * permanent — the retry re-sends the same over-long body — so the alert was
+ * never delivered and only the log recorded the condition.
+ *
+ * The body is ~700 chars of fixed prose plus `describeThrown` over an
+ * `AggregateError` whose member count scales with the open book, which is
+ * what pushes it past the limit. The cap belongs in the transport rather than
+ * in each formatter: ten channels build bodies, and a bound only some of them
+ * remember to apply is not a bound.
+ */
+describe('outbound message cap (Telegram 4096)', () => {
+  it('caps an over-long sendMessage body on the wire', async () => {
+    const { client, calls } = makeClient();
+    const members = Array.from(
+      { length: 64 },
+      (_, i) => `position ${i}: no mark available for the LSE ticker within the staleness bound`,
+    );
+    const body =
+      'Samurai TRADER DEGRADED: NFLX reported control_arm_valuation_refused.\n' +
+      `Detail: the control arm could not value the book (AggregateError: ${members.join('; ')})`;
+    expect(body.length).toBeGreaterThan(TELEGRAM_MAX_MESSAGE_CHARS);
+
+    await client.sendMessage(CHAT_ID, body);
+
+    const sent = calls().at(-1)?.body.text as string;
+    expect(sent.length).toBeLessThanOrEqual(TELEGRAM_MAX_MESSAGE_CHARS);
+    expect(sent.startsWith('Samurai TRADER DEGRADED: NFLX')).toBe(true);
+  });
+
+  it('caps an approval-button body too — the other text-bearing send', async () => {
+    const { client, calls } = makeClient();
+
+    await client.sendApprovalButtons(CHAT_ID, 'y'.repeat(9000), {
+      trace_id: 'trace-1',
+      idempotency_key: 'key-1',
+      timeout_ms: 1_000,
+    });
+
+    const sent = calls().at(-1)?.body.text as string;
+    expect(sent.length).toBeLessThanOrEqual(TELEGRAM_MAX_MESSAGE_CHARS);
+  });
+
+  it('leaves an ordinary alert untouched', async () => {
+    const { client, calls } = makeClient();
+    const body = 'Samurai heartbeat: 4 instruments, 0 open positions.';
+
+    await client.sendMessage(CHAT_ID, body);
+
+    expect(calls().at(-1)?.body.text).toBe(body);
   });
 });
