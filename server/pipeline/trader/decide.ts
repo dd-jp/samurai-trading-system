@@ -44,7 +44,11 @@ import type { DebateResult } from '../debate-engine/types.js';
 // what it threw needs to tell a genuine whole-book valuation refusal apart
 // from any OTHER rejection the thunk's implementation might raise (e.g.
 // `sizingEquity`'s #569 non-finite-ceiling guard) — see `buildBracket`.
-import { StaleMarkError } from '../risk-manager/index.js';
+// `BookValuationError`, not `StaleMarkError` alone (code review pass 2):
+// `readMarks` (portfolio-view.ts) has a second failure shape — a mark READ
+// failing outright, or a batch response omitting an instrument — that also
+// reaches here bare, and the narrower check missed it.
+import { BookValuationError } from '../risk-manager/index.js';
 import { NO_PRECEDENT_MULTIPLIER, retrieveCosinePrecedent } from './cosine-precedent.js';
 import { readSignalDecay } from './early-exit.js';
 import { computeIdempotencyKey, intentSideFor } from './idempotency-key.js';
@@ -430,15 +434,17 @@ async function buildBracket(
   //     `error`-level catch (#507).
   //
   //     #1089: `arm === 'control'` converts ONE specific shape of that
-  //     rejection — a genuine whole-book valuation refusal, `StaleMarkError`
-  //     or `AggregateError` — into `control_arm_valuation_refused` instead of
-  //     rethrowing. See that skip reason's own doc for why the control arm
-  //     needs this and the live arm must not get it. Narrowed by TYPE, not
-  //     just by arm: `input.equity()` is an opaque thunk that can reject for
-  //     an unrelated reason (`sizingEquity`'s #569 non-finite-ceiling guard,
-  //     a fail-open refusal that must stay a fault on EITHER arm), and only
-  //     these two error shapes identify "the book could not be valued" as
-  //     opposed to "sizing itself refused".
+  //     rejection — a genuine whole-book valuation refusal, any
+  //     `BookValuationError` (a stale mark OR a failed/omitted mark read) or
+  //     an `AggregateError` wrapping a mix of them — into
+  //     `control_arm_valuation_refused` instead of rethrowing. See that skip
+  //     reason's own doc for why the control arm needs this and the live arm
+  //     must not get it. Narrowed by TYPE, not just by arm: `input.equity()`
+  //     is an opaque thunk that can reject for an unrelated reason
+  //     (`sizingEquity`'s #569 non-finite-ceiling guard, a fail-open refusal
+  //     that must stay a fault on EITHER arm), and only these two shapes
+  //     identify "the book could not be valued" as opposed to "sizing itself
+  //     refused".
   //  2. Nothing that does NOT size pays for it or fails on it. `routeDecision`
   //     evaluates flat-by-close before it can ever get here, so a dark mark
   //     elsewhere in the book no longer suppresses this pass's flatten.
@@ -449,7 +455,8 @@ async function buildBracket(
   try {
     equity = await input.equity();
   } catch (error) {
-    const isValuationRefusal = error instanceof StaleMarkError || error instanceof AggregateError;
+    const isValuationRefusal =
+      error instanceof BookValuationError || error instanceof AggregateError;
     if (arm === 'control' && isValuationRefusal) {
       // #1089: paired with the skip so `escalateTraderDiagnostics` (the
       // pre-existing #698 mechanism — a `trader_log` write plus a REAL alert
@@ -1139,7 +1146,7 @@ export type TraderSkipReason =
   // and not dust — see the guard's own comment in `decide`.
   | 'rounds_to_zero_shares'
   // #1089, `arm === 'control'` ONLY: a whole-book valuation refusal
-  // (`StaleMarkError`/`AggregateError`) from `equity()` that the live arm
+  // (`BookValuationError`/`AggregateError`) from `equity()` that the live arm
   // would instead let propagate into `#507`'s retry. See `buildBracket`'s
   // read of `input.equity()` for the full reasoning.
   | 'control_arm_valuation_refused';

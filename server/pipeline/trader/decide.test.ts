@@ -26,11 +26,13 @@ import type { Clock, OpenPosition } from '../../shared/index.js';
 // THOSE rather than hand-rebuilt copies that would keep passing on drift.
 import { MACD_SPEC, RSI_SPEC } from '../analysts/technical-analyst.js';
 import type { DebateResult } from '../debate-engine/index.js';
-// #1089: `StaleMarkError` is imported for the SAME reason `decide.ts` itself
-// takes it — proving the narrowing is by error TYPE, not merely `arm ===
-// 'control'`, requires throwing the real shape rather than a look-alike
-// `Error`.
-import { StaleMarkError } from '../risk-manager/index.js';
+// #1089: `StaleMarkError`/`MarkReadError` are imported for the SAME reason
+// `decide.ts` itself takes `BookValuationError` — proving the narrowing is by
+// error TYPE, not merely `arm === 'control'`, requires throwing the real
+// shapes rather than a look-alike `Error`. `MarkReadError` pins the second
+// failure shape a code-review pass 2 caught: `readMarks` (portfolio-view.ts)
+// also throws bare on a failed/omitted mark READ, not only a stale one.
+import { MarkReadError, StaleMarkError } from '../risk-manager/index.js';
 import {
   atrIndicatorSpec,
   checkExitsWithReason,
@@ -1088,6 +1090,32 @@ describe('decide — flat by close (#668)', () => {
               new StaleMarkError('MSTR', new Date(0), OUTSIDE_WINDOW, 60_000),
             ],
             '2 held instrument(s) could not be valued',
+          );
+        },
+      }),
+    );
+
+    expect(outcome.intent).toBeNull();
+    expect(outcome.skip_reason).toBe('control_arm_valuation_refused');
+  });
+
+  it('the control arm also skips on a single mark-READ failure, not only a stale mark (#1089)', async () => {
+    // A code-review pass 2 finding: `readMarks` (portfolio-view.ts) throws
+    // `MarkReadError` bare (`failures.length === 1`) when a held instrument's
+    // mark read fails outright (feed timeout, unknown symbol) or the batch
+    // response omits it — a DIFFERENT shape from `StaleMarkError`, and the
+    // original `StaleMarkError`-only narrowing missed it, leaving one such
+    // lot able to crash the control pass exactly like the original incident.
+    const outcome = await decideWithReason(
+      traderInput({
+        clock: new ManualClock(OUTSIDE_WINDOW),
+        positionState: async () => [],
+        arm: 'control',
+        equity: async () => {
+          throw new MarkReadError(
+            'AMD',
+            "computePortfolioView: the mark read for held instrument 'AMD' failed, so the book " +
+              'cannot be valued: 429 rate limited',
           );
         },
       }),

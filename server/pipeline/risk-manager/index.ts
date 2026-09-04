@@ -75,7 +75,12 @@ export {
   validateConditions,
 } from './invalidation.js';
 export type { PortfolioAccountingInput } from './portfolio-view.js';
-export { computePortfolioView, StaleMarkError } from './portfolio-view.js';
+export {
+  BookValuationError,
+  computePortfolioView,
+  MarkReadError,
+  StaleMarkError,
+} from './portfolio-view.js';
 export {
   RISK_THRESHOLD_KEYS,
   type RiskThresholdKey,
