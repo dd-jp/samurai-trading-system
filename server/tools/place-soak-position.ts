@@ -260,6 +260,10 @@ async function main(): Promise<void> {
     residualExposureAlerts: unreachable('residualExposureAlerts'),
     flattenOverfillAlerts: unreachable('flattenOverfillAlerts'),
     flattenReconcileAlerts: unreachable('flattenReconcileAlerts'),
+    // #1087: only `ingestFills()` reads this throttle, and this probe only
+    // ever calls `execute()` (the entry path) — same "provably never
+    // touches it" reasoning as the alert channels above.
+    filledZeroSizeThrottle: unreachable('filledZeroSizeThrottle'),
   });
 
   // One probe lot at a time. `executeExit` assumes every lot it finds for an

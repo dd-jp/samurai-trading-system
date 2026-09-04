@@ -1,5 +1,9 @@
 import type { DebateResult } from '../../../pipeline/debate-engine/index.js';
-import { type ExecutionConfig, SqliteExecutionStore } from '../../../pipeline/execution/index.js';
+import {
+  type ExecutionConfig,
+  FilledZeroSizeThrottle,
+  SqliteExecutionStore,
+} from '../../../pipeline/execution/index.js';
 import type {
   RiskConfig,
   RiskCriticProducer,
@@ -2497,6 +2501,7 @@ describe('buildExecutionStep', () => {
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
       flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
       logger: { log: vi.fn() },
+      filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
     });
 
     const verdict: VerdictDecision = {

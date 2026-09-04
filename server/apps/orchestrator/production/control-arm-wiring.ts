@@ -34,6 +34,7 @@ import type {
   ExecutionConfig,
   SharedStore as ExecutionSharedStore,
 } from '../../../pipeline/execution/index.js';
+import { FilledZeroSizeThrottle } from '../../../pipeline/execution/index.js';
 import type {
   BreakerStatePersistence,
   CircuitBreakers,
@@ -177,6 +178,12 @@ export function buildControlArmWiring(deps: ControlArmWiringDeps): ControlArmWir
     marketData: deps.marketData,
     config: deps.executionConfig,
     logger: deps.logger,
+    // #1087: an OWN throttle, not the spread-in live arm's — the two arms
+    // poll independently (`fillSyncExecution` below is this arm's, distinct
+    // from the live root's) and must not share, or leak into, each other's
+    // per-lot wedge state. Same reasoning as `broker`/`store`/`costModel`/
+    // `marketData`/`config` above.
+    filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
   };
 
   // Per-arm breaker plumbing, spread into all three stage builders exactly as

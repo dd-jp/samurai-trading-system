@@ -4,6 +4,7 @@ import type { CostModel } from '../../tools/backtest/index.js';
 import type { VerdictDecision } from '../verdict/index.js';
 import { sanitizeBrokerError } from './broker-error.js';
 import { ExecutionImpl } from './execute.js';
+import { FilledZeroSizeThrottle } from './filled-zero-size-throttle.js';
 import { SimulatedBrokerAdapter } from './simulated-adapter.js';
 import { openTestExecutionStore, TestExecutionStore } from './sqlite-store-harness.js';
 import type {
@@ -257,6 +258,7 @@ function makeInput(overrides: Partial<ExecutionInput> = {}): ExecutionInput {
     // #573: `execute()` never logs — every failure it observes flows into
     // the `ExecutionResult` it returns instead. A no-op is enough here.
     logger: { log: () => {} },
+    filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
     ...overrides,
   };
 }

@@ -98,18 +98,12 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
       // Commission is the cash fee; the other components are already
       // expressed in the adverse fill price (cost-model-backtest-spec.md).
       fee: result.cost_breakdown.commission,
-      // #1087: the fill event's own time, NOT `marketState.timestamp` (the
-      // PRICED MARK's observation time — see `buildMarketState`, which can
-      // lag `now` by however stale the feed is). Pricing and fill-event time
-      // are different clock domains: `execute()` write-aheads the
-      // `OpenPosition` at a `now` read BEFORE this call, off the same real
-      // clock, so a fill dated at `marketState.timestamp` can retroactively
-      // predate the very lot it belongs to. `ingestFills()`'s global `since`
-      // floor (ingest-fills.ts) is keyed on `opened_at` and documents this as
-      // an invariant it relies on ("no fill of ours predates the execute()
-      // that opened the lot"); this adapter was the one violating it. `now`
-      // is still never AHEAD of simulated T — it IS T, the same read used to
-      // build `marketState` above — so no lookahead is introduced.
+      // A fill's timestamp must never predate the `opened_at` of the lot it
+      // belongs to (`ingestFills`'s global `since` floor relies on this,
+      // ingest-fills.ts) — so this stamps `now`, not `marketState.timestamp`
+      // (the priced mark's own, possibly-stale observation time, #1087).
+      // `now` is still never AHEAD of simulated T: it IS T, the same read
+      // used to build `marketState` above.
       timestamp: now,
       cost_breakdown: result.cost_breakdown,
     });

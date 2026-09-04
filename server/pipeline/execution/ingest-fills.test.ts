@@ -10,6 +10,7 @@ import type { Clock, Logger, OpenPosition } from '../../shared/index.js';
 import { recordingLogger } from '../../shared/recording-logger.js';
 import type { CostModel } from '../../tools/backtest/index.js';
 import { ExecutionImpl } from './execute.js';
+import { FilledZeroSizeThrottle } from './filled-zero-size-throttle.js';
 import { FILLED_WITH_ZERO_SIZE } from './ingest-fills.js';
 import { openTestExecutionStore, TestExecutionStore } from './sqlite-store-harness.js';
 import type {
@@ -223,6 +224,11 @@ function makeInput(
     // #519: `ingestFills()` never reconciles, so this is never posted to.
     flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
     logger,
+    // Fresh per call — matches production's one-throttle-per-composition-root
+    // lifetime, since `makeInput()` itself is called once per test/scenario
+    // and its returned `ExecutionInput` (and this throttle within it) is what
+    // every `ingestFills()` call in that test shares.
+    filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
   };
 }
 
@@ -2142,9 +2148,13 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
     const execution = new ExecutionImpl(makeInput(broker, store, undefined, undefined, logger));
 
     await execution.reconcile();
-    await execution.ingestFills();
-    // Not a race that resolves on the next poll — genuinely permanent.
-    await execution.ingestFills();
+    // Throttled (#1087 review, `FilledZeroSizeThrottle`): warns on the FIRST
+    // wedged poll, then every 8th thereafter (`ALERT_REPEAT_EVERY_ZERO_SIZE`)
+    // — 9 polls is the minimum that proves both ends, not just the first.
+    // Not a race that resolves on any of them — genuinely permanent.
+    for (let poll = 0; poll < 9; poll += 1) {
+      await execution.ingestFills();
+    }
 
     const position = await store.getPosition('key-1');
     expect(position?.order_state).toBe('filled');
@@ -2157,6 +2167,13 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
       idempotency_key: 'key-1',
       instrument: 'AAPL',
       order_state: 'filled',
+      consecutive: 1,
+    });
+    expect(warnings[1]?.payload).toMatchObject({
+      idempotency_key: 'key-1',
+      instrument: 'AAPL',
+      order_state: 'filled',
+      consecutive: 9,
     });
   });
 });

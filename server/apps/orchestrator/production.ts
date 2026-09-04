@@ -128,6 +128,7 @@ import type {
 } from '../../pipeline/execution/index.js';
 import {
   AlpacaBrokerAdapter,
+  FilledZeroSizeThrottle,
   // #753: falsifier arm 2's venue. A measurement, not a second book.
   SimulatedBrokerAdapter,
   SqliteBrokerStateStore,
@@ -1429,6 +1430,12 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // `ExecutionInput.logger`'s decision doc. Required, so a composition
     // root that forgets it is a `tsc` error rather than a silent gap.
     logger,
+    // #1087: one throttle for this arm's whole process lifetime, shared by
+    // `fillSyncExecution`/`reconcileExecution` below (both close over this
+    // same `executionDeps` object) — only the former ever calls
+    // `ingestFills()`, but the throttle is process-scoped, not
+    // surface-scoped, so sharing the reference is correct, not incidental.
+    filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
   };
 
   // #464, retargeted at Nous by ADR-0009. The off switch used to be the

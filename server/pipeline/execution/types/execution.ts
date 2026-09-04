@@ -11,6 +11,7 @@ import type {
 import type { Clock, Logger, OrderState } from '../../../shared/index.js';
 import type { CostModel } from '../../../tools/backtest/index.js';
 import type { VerdictDecision } from '../../verdict/index.js';
+import type { FilledZeroSizeThrottle } from '../filled-zero-size-throttle.js';
 import type { FlattenOverfillAlertChannel } from '../flatten-overfill-alert.js';
 import type { FlattenReconcileAlertChannel } from '../flatten-reconcile-alert.js';
 import type { ResidualExposureAlertChannel } from '../residual-exposure-alert.js';
@@ -125,6 +126,17 @@ export interface ExecutionInput {
    * never turn a handled failure into an unhandled one.
    */
   logger: Logger;
+  /**
+   * #1087's `FILLED_WITH_ZERO_SIZE` per-lot throttle (filled-zero-size-
+   * throttle.ts) — required for the same "no silent default" reason
+   * `residualExposureAlerts` et al. above are: an omitted throttle would
+   * mean either no warning ever fires (silently, if the caller guarded on
+   * its presence) or an unthrottled flood (if it did not) — both are the
+   * defect this ticket exists to close, not an acceptable default. One
+   * instance per composition root, constructed once and threaded here, not
+   * a module-level singleton — see the class doc for why.
+   */
+  filledZeroSizeThrottle: FilledZeroSizeThrottle;
 }
 
 export interface ExecutionResult {

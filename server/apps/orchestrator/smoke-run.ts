@@ -156,6 +156,7 @@ import type {
 } from '../../pipeline/execution/index.js';
 import {
   AlpacaBrokerAdapter,
+  FilledZeroSizeThrottle,
   SimulatedBrokerAdapter,
   SqliteBrokerStateStore,
   SqliteExecutionStore,
@@ -1421,6 +1422,17 @@ async function runExitPathScenarios(input: {
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
       flattenReconcileAlerts,
       logger,
+      // #1087: NOT recorded/gated, unlike `residualAlerts`/`flattenReconcileAlerts`
+      // above. `FILLED_WITH_ZERO_SIZE` fires only when a broker violates the
+      // "no fill predates its own lot's `opened_at`" invariant — the exact
+      // defect #1087 fixed at the source (`SimulatedBrokerAdapter`, the only
+      // broker this harness's `innerBroker` wraps). Reproducing the wedge
+      // here would mean reintroducing that defect into a fixture; the
+      // targeted regression coverage lives in simulated-adapter.test.ts and
+      // ingest-fills.test.ts instead. See `filled-zero-size-wiring.test.ts`
+      // for proof this mechanism reaches the real production logger through
+      // this same `buildExecutionSurface` binding.
+      filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
     },
     'smoke-exit-path',
   );
@@ -1668,6 +1680,10 @@ async function runExitPathScenarios(input: {
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
       flattenReconcileAlerts,
       logger,
+      // Fresh, not the pre-restart `execution`'s instance — a real restart's
+      // process is gone too, and `FilledZeroSizeThrottle` is documented
+      // restart-clean by design (filled-zero-size-throttle.ts).
+      filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
     },
     'smoke-exit-path-restart',
   );

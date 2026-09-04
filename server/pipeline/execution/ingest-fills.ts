@@ -117,17 +117,11 @@ export async function ingestFills(input: ExecutionInput): Promise<void> {
   //    UNDER-fetching.
   //  * The GLOBAL floor has no such failure mode PROVIDED every adapter
   //    upholds the invariant it rests on — no fill dated earlier than the
-  //    `opened_at` of the lot it belongs to. #1087 found `SimulatedBrokerAdapter`
-  //    violating exactly that: it stamped a fill at the PRICED MARK's own
-  //    (potentially stale) observation time rather than the order's submit
-  //    time, so a laggy quote could retroactively predate `opened_at`. When
-  //    the affected lot was also the SOLE open position — making its own
-  //    `opened_at` the floor — its own fill was excluded forever, since
-  //    neither value ever changes and a lot with zero `filled_size` never
-  //    closes to stop being the floor-setter. Fixed at the source
-  //    (`simulated-adapter.ts` stamps fills at submit time now), not here —
-  //    this floor is still correct, PROVIDED that invariant genuinely holds.
-  //    Re-verify it for any adapter before trusting this comment again.
+  //    `opened_at` of the lot it belongs to. #1087: `SimulatedBrokerAdapter`
+  //    violated it and has been fixed at the source (simulated-adapter.ts),
+  //    not here — this floor is still correct, PROVIDED that invariant
+  //    genuinely holds. Re-verify it for any adapter before trusting this
+  //    comment again.
   //  * `BrokerAdapter.fetchNewFills` deliberately does NOT promise per-lot
   //    timestamp monotonicity, and cannot — see its doc in types/broker.ts.
   //  * The win would have been small anyway: `since` does not bound the venue
@@ -1051,25 +1045,40 @@ async function advanceLot(
     // growing `stuck_ms` of a genuinely wedged lot (#1087's META case, caused
     // at the source — see `simulated-adapter.ts` — by a fill excluded forever
     // from every subsequent poll's `since` floor).
+    //
+    // Throttled (`filledZeroSizeThrottle`, filled-zero-size-throttle.ts):
+    // unthrottled, a lot wedged for hours logs an identical line on every
+    // 15-second poll. `consecutive` rides in the payload alongside `stuck_ms`
+    // so a THROTTLED line still carries how long the condition has held.
     if (
       (position.order_state === 'filled' || position.order_state === 'partially_filled') &&
       position.filled_size === 0
     ) {
-      safeLog(input.logger, {
-        trace_id: input.trace_id,
-        stage: 'execution',
-        level: 'warn',
-        message: FILLED_WITH_ZERO_SIZE,
-        payload: {
-          idempotency_key: position.idempotency_key,
-          instrument: position.instrument,
-          order_state: position.order_state,
-          stuck_ms: now.getTime() - position.opened_at.getTime(),
-        },
-      });
+      const { warn, consecutive } = input.filledZeroSizeThrottle.observe(position.idempotency_key);
+      if (warn) {
+        safeLog(input.logger, {
+          trace_id: input.trace_id,
+          stage: 'execution',
+          level: 'warn',
+          message: FILLED_WITH_ZERO_SIZE,
+          payload: {
+            idempotency_key: position.idempotency_key,
+            instrument: position.instrument,
+            order_state: position.order_state,
+            stuck_ms: now.getTime() - position.opened_at.getTime(),
+            consecutive,
+          },
+        });
+      }
     }
     return;
   }
+
+  // The lot advanced — any zero-size-wedge streak this throttle was counting
+  // for it is over. Clears an entry that never warned (never reached the
+  // repeat threshold) as readily as one that did; either way there is
+  // nothing left to throttle once `filled_size` can no longer be zero.
+  input.filledZeroSizeThrottle.clear(position.idempotency_key);
 
   // Recomputed from the full fill record (persisted rows + this poll's new
   // ones, in the order the atomic write below will persist them), never from
