@@ -515,7 +515,7 @@ Non-negotiable, and unchanged in spirit from v1 — the screen got more visual, 
 - **Empty states name their reason.** Never a bare dash, never a spinner that cannot resolve. "Trader and Risk carry no decision word (#328)" is a legitimate empty state; a blank cell is not.
 - **No motion, so nothing to reduce.** There is no `prefers-reduced-motion` branch because there is no animation for it to suppress (see "Motion").
 - **No pulsing.** Beyond the design preference, a page whose status indicators pulse indefinitely is a page that is harder to read for anyone sensitive to motion.
-- **Wide content scrolls inside its own container** (the lane matrix, the closed-trade table); the page body never scrolls sideways.
+- **Wide content scrolls inside its own container** (the lane matrix, the closed-trade table); the page body never scrolls sideways. On Live and Review the tab is pinned to the viewport: the main column and the drawer scroll vertically on their own, independently, and the page does not scroll (on Live the lane list scrolls beneath its pinned header row). Glance keeps ordinary page scrolling.
 
 ## Testing Decisions
 
