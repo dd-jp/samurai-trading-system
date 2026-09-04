@@ -29,13 +29,15 @@
  * supplied logs positively COVER its `created_at` — `parseLogCoverage`
  * builds contiguous `[start, end]` timestamp spans from consecutive,
  * successfully-parsed, timestamped log lines, closing the span (not
- * bridging across it) at every unparseable line, so a torn log or a gap
- * between rotated files does not silently claim coverage it does not have.
- * A row whose `created_at` falls outside every span — and whose `debate_id`
- * has no direct `debate.timeout` match — is left NULL and reported
- * separately as `uncovered`, exactly like a row with no log at all. Nothing
- * here ever treats "we didn't see a timeout for it" as proof the debate
- * wasn't truncated.
+ * bridging across it) at every unparseable line, at any gap longer than
+ * `MAX_INTER_LINE_GAP_MS` between two otherwise-clean lines, and at every
+ * boot line — so neither a torn log, nor a gap between rotated files, nor a
+ * clean shutdown/restart with no torn line at all silently claims coverage
+ * it does not have. A row whose `created_at` falls outside every span — and
+ * whose `debate_id` has no direct `debate.timeout` match — is left NULL and
+ * reported separately as `uncovered`, exactly like a row with no log at
+ * all. Nothing here ever treats "we didn't see a timeout for it" as proof
+ * the debate wasn't truncated.
  *
  * ## Read-only by default, for `debate_log.termination`
  *
@@ -106,25 +108,63 @@ export interface LogCoverage {
 }
 
 /**
+ * Maximum gap, in ms, between two consecutive well-formed, timestamped log
+ * lines that still counts as unbroken coverage (#1081 code review round 2).
+ *
+ * A healthy orchestrator process emits SOMETHING well inside this window
+ * even when nothing debate-related is happening: the paper profile ticks
+ * every 2 minutes (`tickIntervalMs: 2 * 60_000`, `paper-profile.ts`), and the
+ * slowest scheduled poll is Polymarket's, every 15 minutes
+ * (`DEFAULT_POLYMARKET_POLL_INTERVAL_MS`, `production/defaults.ts`) — GDELT
+ * polls every 5. 15 minutes is set to that slowest cadence: a gap this long
+ * means the process (or its log stream) was down for the whole gap, not that
+ * it simply had nothing to log — deliberately generous over the 2-minute
+ * tick interval so one slow tick or GC pause never closes a span a genuinely
+ * running process produced. Without this, a clean shutdown and a much later
+ * restart appending to the SAME file (no torn line at all — a graceful stop
+ * writes nothing further, and the next line is a clean boot) would read as
+ * one unbroken span across the entire downtime, and every `debate_log` row
+ * created while the process was down would be `isCovered` on no evidence.
+ */
+export const MAX_INTER_LINE_GAP_MS = 15 * 60_000;
+
+/**
  * Parses one JSONL run log (`JsonLogger`'s wire format — one JSON object per
  * line, each carrying its own `timestamp`) into a `LogCoverage`.
  *
  * `debate.timeout` lines are collected into `timeoutIds` regardless of
  * whether they carry a parseable `timestamp` — that match is direct evidence
  * on its own, independent of coverage spans. Every other successfully-parsed,
- * timestamped line extends the current coverage span; a line that fails to
- * parse (or parses to something with no usable `timestamp`) is NOT bridged
- * over — malformed/non-empty lines close the current span, and the next
- * timestamped line starts a new one. A log file accumulated over a live soak
- * routinely carries a torn line from a restart mid-write; the debates that
- * fell in the resulting gap are not something this log can vouch for either
- * way, so the span must not claim to cover them.
+ * timestamped line extends the current coverage span, UNLESS it closes the
+ * span first:
+ *
+ *  - a line that fails to parse (or parses to something with no usable
+ *    `timestamp`) is NOT bridged over — malformed/non-empty lines close the
+ *    span, and the next timestamped line starts a new one. A log file
+ *    accumulated over a live soak routinely carries a torn line from a
+ *    restart mid-write.
+ *  - a gap of more than `MAX_INTER_LINE_GAP_MS` since the previous
+ *    timestamped line ALSO closes the span, even when both lines parse
+ *    cleanly — a graceful shutdown followed by a much later restart leaves
+ *    no torn line at all, just a long silent stretch in an otherwise
+ *    well-formed file.
+ *  - a boot line — every log line emitted during orchestrator startup
+ *    carries `trace_id: 'startup'` (`JsonLogger`'s convention across
+ *    `orchestrator/index.ts`, `production.ts`, etc.) — closes the span
+ *    unconditionally, regardless of the elapsed gap: it is direct evidence
+ *    the process just (re)started, so whatever ran before it cannot vouch
+ *    for anything after. The boot line itself then opens the next span from
+ *    its own timestamp.
+ *
+ * The debates that fell in a closed gap are not something this log can vouch
+ * for either way, so the span must not claim to cover them.
  */
 export function parseLogCoverage(lines: Iterable<string>): LogCoverage {
   const timeoutIds = new Set<string>();
   const intervals: CoverageInterval[] = [];
   let spanStart: string | undefined;
   let spanEnd: string | undefined;
+  let spanEndMs: number | undefined;
 
   const closeSpan = (): void => {
     if (spanStart !== undefined && spanEnd !== undefined) {
@@ -132,6 +172,7 @@ export function parseLogCoverage(lines: Iterable<string>): LogCoverage {
     }
     spanStart = undefined;
     spanEnd = undefined;
+    spanEndMs = undefined;
   };
 
   for (const rawLine of lines) {
@@ -162,14 +203,32 @@ export function parseLogCoverage(lines: Iterable<string>): LogCoverage {
       }
     }
 
-    const timestamp = record.timestamp;
-    if (typeof timestamp === 'string' && !Number.isNaN(Date.parse(timestamp))) {
-      if (spanStart === undefined) spanStart = timestamp;
-      spanEnd = timestamp;
+    const rawTimestamp = record.timestamp;
+    if (typeof rawTimestamp !== 'string') {
+      // A well-formed line with no timestamp at all neither extends nor
+      // closes the current span — it is not evidence of a gap, just a line
+      // this function cannot place in time.
+      continue;
     }
-    // A well-formed line with no usable timestamp neither extends nor closes
-    // the current span — it is not evidence of a gap, just a line this
-    // function cannot place in time.
+    const parsedMs = Date.parse(rawTimestamp);
+    if (Number.isNaN(parsedMs)) {
+      continue;
+    }
+    // Canonicalise before storing — `isCovered` compares this against
+    // `debate_log.created_at`, which is always written via `.toISOString()`;
+    // a parseable-but-non-canonical timestamp string must not sort wrong
+    // against it.
+    const timestamp = new Date(parsedMs).toISOString();
+
+    const isBootLine = record.trace_id === 'startup';
+    const gapTooLarge = spanEndMs !== undefined && parsedMs - spanEndMs > MAX_INTER_LINE_GAP_MS;
+    if (isBootLine || gapTooLarge) {
+      closeSpan();
+    }
+
+    if (spanStart === undefined) spanStart = timestamp;
+    spanEnd = timestamp;
+    spanEndMs = parsedMs;
   }
   closeSpan();
 

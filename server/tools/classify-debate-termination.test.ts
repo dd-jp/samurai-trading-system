@@ -65,6 +65,16 @@ function otherLine(timestamp: string, message = 'debate.round'): string {
   return JSON.stringify({ timestamp, message, payload: {} });
 }
 
+/** A startup-stage log line — `JsonLogger`'s `trace_id: 'startup'` convention. */
+function bootLine(timestamp: string): string {
+  return JSON.stringify({
+    timestamp,
+    trace_id: 'startup',
+    message: 'orchestrator store opened',
+    payload: {},
+  });
+}
+
 describe('parseLogCoverage', () => {
   it('builds one span from consecutive well-formed, timestamped lines', () => {
     const lines = [
@@ -100,6 +110,66 @@ describe('parseLogCoverage', () => {
     expect(coverage.intervals).toEqual([
       { start: '2026-09-03T13:00:00.000Z', end: '2026-09-03T13:05:00.000Z' },
       { start: '2026-09-03T13:20:00.000Z', end: '2026-09-03T13:25:00.000Z' },
+    ]);
+  });
+
+  /**
+   * #1081 code review round 2 (the blocker): closing only on a torn line
+   * missed the more common case — a clean shutdown and a much later restart
+   * appending to the SAME file leaves no torn line at all, just a long
+   * silent stretch between two perfectly well-formed lines. Without a
+   * max-gap check this reads as ONE unbroken span across the whole
+   * downtime, and every row created during it would be wrongly `isCovered`.
+   */
+  it('closes the span when the gap between two clean lines exceeds MAX_INTER_LINE_GAP_MS, even with no torn line', () => {
+    const lines = [
+      otherLine('2026-09-03T13:00:00.000Z'),
+      otherLine('2026-09-03T13:05:00.000Z'),
+      // Clean shutdown here, clean restart hours later — no torn line.
+      otherLine('2026-09-03T20:00:00.000Z'),
+      otherLine('2026-09-03T20:05:00.000Z'),
+    ];
+
+    const coverage = parseLogCoverage(lines);
+
+    expect(coverage.intervals).toEqual([
+      { start: '2026-09-03T13:00:00.000Z', end: '2026-09-03T13:05:00.000Z' },
+      { start: '2026-09-03T20:00:00.000Z', end: '2026-09-03T20:05:00.000Z' },
+    ]);
+  });
+
+  it('does not close the span for a gap that is well inside a healthy tick cadence', () => {
+    const lines = [
+      otherLine('2026-09-03T13:00:00.000Z'),
+      otherLine('2026-09-03T13:12:00.000Z'), // 12 minutes — under the 15-minute threshold
+    ];
+
+    const coverage = parseLogCoverage(lines);
+
+    expect(coverage.intervals).toEqual([
+      { start: '2026-09-03T13:00:00.000Z', end: '2026-09-03T13:12:00.000Z' },
+    ]);
+  });
+
+  /**
+   * #1081 code review round 2, "even better": a boot line is direct evidence
+   * the process just (re)started, so it closes the span unconditionally —
+   * even when the elapsed gap alone would not have (a crash-and-immediate-
+   * restart can leave a gap far under MAX_INTER_LINE_GAP_MS).
+   */
+  it('closes the span at a boot line even when the elapsed gap is small', () => {
+    const lines = [
+      otherLine('2026-09-03T13:00:00.000Z'),
+      otherLine('2026-09-03T13:01:00.000Z'),
+      bootLine('2026-09-03T13:01:30.000Z'), // crash + restart, 30s later
+      otherLine('2026-09-03T13:02:00.000Z'),
+    ];
+
+    const coverage = parseLogCoverage(lines);
+
+    expect(coverage.intervals).toEqual([
+      { start: '2026-09-03T13:00:00.000Z', end: '2026-09-03T13:01:00.000Z' },
+      { start: '2026-09-03T13:01:30.000Z', end: '2026-09-03T13:02:00.000Z' },
     ]);
   });
 
@@ -218,6 +288,32 @@ describe('classifyRows', () => {
 
     expect(result.classified).toEqual([]);
     expect(result.uncovered).toEqual(['debate-in-gap']);
+  });
+
+  /**
+   * #1081 code review round 2 (the blocker), end-to-end: a real log — no
+   * torn line, just a clean shutdown and a much later clean restart — fed
+   * through `parseLogCoverage` must leave a row created in the downtime
+   * uncovered, not silently classified on no evidence.
+   */
+  it('leaves a row created during a clean-shutdown-to-restart gap uncovered, via parseLogCoverage', () => {
+    const lines = [
+      otherLine('2026-09-03T13:00:00.000Z'),
+      otherLine('2026-09-03T13:05:00.000Z'),
+      // Process stopped here — nothing written. Restarts hours later.
+      otherLine('2026-09-03T20:00:00.000Z'),
+      otherLine('2026-09-03T20:05:00.000Z'),
+    ];
+    const coverage = parseLogCoverage(lines);
+    const rowDuringDowntime = makeRow({
+      debate_id: 'debate-during-downtime',
+      created_at: '2026-09-03T16:00:00.000Z',
+    });
+
+    const result = classifyRows([rowDuringDowntime], coverage);
+
+    expect(result.classified).toEqual([]);
+    expect(result.uncovered).toEqual(['debate-during-downtime']);
   });
 
   it('classifies a row whose timestamp falls inside a covered span, even with other rows uncovered', () => {
