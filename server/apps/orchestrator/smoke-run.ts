@@ -4555,8 +4555,7 @@ export function evaluateSmokeGate(
   // wrapper from `SequentialTickRunner.runInstrument` leaves every fetch
   // byte-identical, every unit test green (each site's fallback is a legal
   // return), and every other check in this gate green — the lines just
-  // quietly revert to the category label and join to nothing, which is the
-  // state the fix was written against.
+  // quietly revert to the category label and join to nothing.
   const tickTraces = new Set(observations.ticks.map((tick) => tick.trace_id));
   const joined = options.marketDataFetch.traceIds.some((trace_id) => tickTraces.has(trace_id));
   if (tickTraces.size > 0 && options.marketDataFetch.fetchCount > 0 && !joined) {

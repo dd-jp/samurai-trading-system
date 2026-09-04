@@ -259,10 +259,10 @@ export class MarketDataServiceImpl implements MarketDataService {
    * return type carries no channel to surface it — plumbing one through
    * every `DataSource` implementation, live and fixture alike, is a
    * different-shaped change than "observe the existing choke point").
-   * `trace_id` used to be omitted for that same reason and no longer is: no
-   * `MarketDataService` method accepts one, so it comes from the ambient tick
-   * context instead (`shared/trace-context.ts`), falling back to the
-   * `'market-data'` label when there is genuinely no tick. That is exactly
+   * `trace_id` is subject to that same constraint — no `MarketDataService`
+   * method accepts one — so it comes from the ambient tick context
+   * (`shared/trace-context.ts`), falling back to the `'market-data'` label
+   * when there is genuinely no tick. That is exactly
    * the AC3 note below: the analyst's 8 windows per tick are in-tick fetches,
    * and they now say which tick.
    * `pages` remains the issue's own "if available" qualifier; a reader

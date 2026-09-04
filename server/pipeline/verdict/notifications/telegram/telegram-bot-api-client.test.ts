@@ -763,12 +763,7 @@ describe('outbound message cap (Telegram 4096)', () => {
     expect(calls().at(-1)?.body.text).toBe(body);
   });
 
-  /**
-   * Without this the cap would be the data loss it exists to prevent. The
-   * alert channels log only in their `.catch`, and a capped send SUCCEEDS —
-   * so if the transport does not record the original here, the dropped tail
-   * exists nowhere.
-   */
+  /** The record half of the bound — see `#capForWire`. */
   it('puts the full pre-cap body in the log, so truncation loses nothing', async () => {
     const entries: LogEntry[] = [];
     const { client } = makeClient({ logger: { log: (entry) => entries.push(entry) } });

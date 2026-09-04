@@ -65,7 +65,7 @@
  */
 import type { SpendCap, SpendCapVerdict } from '../../../pipeline/debate-engine/index.js';
 import type { AssetClass, Logger } from '../../../shared/index.js';
-import { logCaughtFailure, safeLog } from '../../../shared/index.js';
+import { logCaughtFailure, runWithTraceId, safeLog } from '../../../shared/index.js';
 import type { MarketIntelligenceRefresh } from './analysts-adapter.js';
 
 /**
@@ -221,7 +221,18 @@ export class MiRefreshQueue implements MarketIntelligenceRefresh {
     // and both admitted, which is the one invariant this class exists for.
     // Scheduling the drain on a microtask closes the window, because nothing
     // else can run between here and the assignment below.
-    const worker = Promise.resolve().then(() => this.#drain());
+    // Under `MI_REFRESH_TRACE_ID`, matching the id `#dispatch` threads
+    // explicitly. `AsyncLocalStorage` captures at REGISTRATION, so without
+    // this the drain inherits whichever tick's analysts step happened to call
+    // `refresh()` — and since one drain serves every queued name, and `rearm`
+    // re-enters from that same captured context, a later instrument's refresh
+    // would be stamped with an earlier instrument's tick. That is a wrong
+    // join, not a missing one. The work is off the tick's critical path
+    // (#1085) and `refresh()` returns `false` because no tick waits on it, so
+    // no tick's id is the honest answer here.
+    const worker = Promise.resolve().then(() =>
+      runWithTraceId(MI_REFRESH_TRACE_ID, () => this.#drain()),
+    );
     this.#worker = worker;
     // The window between `#drain` seeing an empty queue and this callback is
     // reachable from `refresh()`, and an enqueue landing in it would find

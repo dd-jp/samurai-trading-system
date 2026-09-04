@@ -29,9 +29,19 @@
  * `currentTraceId()` returns `undefined` outside a tick, and every call site
  * keeps its existing constant for that case. So this does not assert which
  * calls are in-tick — it answers that per call, at runtime, and the log then
- * records the truth either way. A scheduled market-intelligence refresh
- * (#1085 moved it off the analyst's critical path) genuinely has no tick and
- * correctly keeps `'market-data'`.
+ * records the truth either way.
+ *
+ * ## Deferred work must re-label, not inherit
+ *
+ * `AsyncLocalStorage` captures at the point a continuation is REGISTERED, so
+ * fire-and-forget work started inside a tick keeps that tick's id for as long
+ * as it runs — and a shared worker re-entered from that captured context will
+ * stamp it on a LATER instrument's work. That is a wrong join, strictly worse
+ * than the constant it replaced. `MiRefreshQueue.#pump` is the live case and
+ * shows the fix: it wraps its drain in `runWithTraceId(MI_REFRESH_TRACE_ID)`,
+ * so an off-critical-path refresh (#1085) reports its own id rather than
+ * borrowing the tick whose analysts step happened to enqueue it. Anything
+ * else deferring work past the end of a tick owes the same wrap.
  *
  * Note that `TokenBucket`'s `background` lane is a PRIORITY, not a
  * provenance: `alpaca-http-client.ts` takes `acquireBackground()` for bar
@@ -47,8 +57,9 @@ const storage = new AsyncLocalStorage<string>();
  * Runs `fn` with `trace_id` readable by `currentTraceId()`, including across
  * every `await` inside it.
  *
- * Nested calls shadow rather than merge: the innermost wins, which is what a
- * caller establishing a narrower scope means. Nothing nests today.
+ * Nested calls shadow rather than merge: the innermost wins. That is what
+ * `MiRefreshQueue.#pump` relies on to stop deferred work inheriting the tick
+ * that enqueued it, so merging here would reintroduce that leak.
  */
 export function runWithTraceId<T>(trace_id: string, fn: () => T): T {
   return storage.run(trace_id, fn);

@@ -116,12 +116,10 @@ export const TELEGRAM_MAX_MESSAGE_CHARS = 4096;
  * came from `describeThrown` over a multi-member `AggregateError`, whose size
  * scales with the number of open positions.
  *
- * This bounds only what goes on the wire. The FULL text still reaches the
- * log — `#capForWire` is the only caller and logs it before truncating, so a
- * truncated alert never becomes a lost record. The suffix names the original
- * length, so a reader knows to go to the log rather than assuming the alert
- * is all there was. Nothing bridges log output back into an alert channel, so
- * that warn cannot re-enter this transport.
+ * This bounds only what goes on the wire; `#capForWire` is the sole caller
+ * and owns keeping the record. The suffix names the original length, so a
+ * reader knows to go to the log rather than assuming the alert was all there
+ * was.
  */
 export function capOutboundText(text: string): string {
   if (text.length <= TELEGRAM_MAX_MESSAGE_CHARS) return text;
@@ -278,6 +276,16 @@ export class TelegramBotApiClient implements TelegramClient {
    * original would make the truncation the very data loss it exists to
    * prevent: the ten alert channels log only in their `.catch`, and a capped
    * send SUCCEEDS, so no other line would ever carry the dropped tail.
+   *
+   * The body goes in `payload`, not `message`, and that is what keeps this
+   * module's "never log the bot token" promise intact across an arbitrary
+   * blob: `redactPayload` walks every string it reaches and runs
+   * `maskCredentials` over it, so a token appearing in alert prose is masked
+   * by pattern rather than by the accident that `text` does not carry one
+   * today. Anything moving this body back into `message` loses that.
+   *
+   * Nothing bridges logger output into an alert channel, so this warn cannot
+   * re-enter the transport that emitted it.
    */
   #capForWire(text: string): string {
     const capped = capOutboundText(text);
