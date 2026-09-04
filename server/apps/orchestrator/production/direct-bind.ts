@@ -402,35 +402,15 @@ export function buildTraderSteps(deps: TraderStepDeps): {
       created_at: clock.now(),
     });
 
-    // #1089: the control arm's own version of the #698 pairing just below —
-    // a durable row (written just above) plus an AUDIBLE copy. This does NOT
-    // go through `escalateTraderDiagnostics`/`TraderDiagnostic`: that shape
-    // requires an `asset_class`, and this fault fires from the #847 equity
-    // thunk INSIDE `buildBracket`, before the mark read a few lines later in
-    // that function ever runs on the entry branch — there is no asset class
-    // in scope to carry. And it must not be silent: `sqlite-arm-comparison-
-    // source.ts` reads only `closed_trades` for #753's report, so a
-    // `trader_log` skip row with no matching trade is invisible to that
-    // comparison. This line is the one place a lost control-arm pass becomes
-    // audible above `warn` — see `buildControlArmStep`'s catch in
-    // `control-arm.ts`, which only warns, for the pass this is paired with.
-    if (skip_reason === 'control_arm_valuation_refused') {
-      deps.logger?.log({
-        trace_id,
-        stage: 'trader',
-        level: 'error',
-        message:
-          `trader: ${instrument} — control arm could not value the book and skipped this ` +
-          'pass instead of crashing it (#1089).',
-        payload: {
-          instrument,
-          arm: deps.arm ?? 'live',
-          reason: snapshotError instanceof Error ? snapshotError.message : String(snapshotError),
-        },
-      });
-    }
-
     // #698: escalate anything the decision noticed but did not treat as fatal.
+    // #1089's control-arm valuation refusal is one of these now (`decide.ts`
+    // pushes a `TraderDiagnostic` with `asset_class: undefined` from inside
+    // `buildBracket`, right where it decides to skip) — a durable row (written
+    // just above) plus the real alert transport below, rather than a bespoke
+    // log line with no consumer. See `TraderDiagnostic.asset_class` for why
+    // that field is optional and `buildControlArmStep`'s catch in
+    // `control-arm.ts` (now also `error`-level) for the pass this is paired
+    // with.
     //
     // AFTER the `trader_log` write on purpose — the durable record is the thing
     // that must not be lost, and it lands whether or not a transport is

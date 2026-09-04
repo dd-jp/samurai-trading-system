@@ -26,6 +26,11 @@ import type { Clock, OpenPosition } from '../../shared/index.js';
 // THOSE rather than hand-rebuilt copies that would keep passing on drift.
 import { MACD_SPEC, RSI_SPEC } from '../analysts/technical-analyst.js';
 import type { DebateResult } from '../debate-engine/index.js';
+// #1089: `StaleMarkError` is imported for the SAME reason `decide.ts` itself
+// takes it — proving the narrowing is by error TYPE, not merely `arm ===
+// 'control'`, requires throwing the real shape rather than a look-alike
+// `Error`.
+import { StaleMarkError } from '../risk-manager/index.js';
 import {
   atrIndicatorSpec,
   checkExitsWithReason,
@@ -1057,13 +1062,59 @@ describe('decide — flat by close (#668)', () => {
         positionState: async () => [],
         arm: 'control',
         equity: async () => {
-          throw new Error('portfolio view refused: SPY mark is stale');
+          throw new StaleMarkError('SPY', new Date(0), OUTSIDE_WINDOW, 60_000);
         },
       }),
     );
 
     expect(outcome.intent).toBeNull();
     expect(outcome.skip_reason).toBe('control_arm_valuation_refused');
+  });
+
+  it('the control arm also skips on the multi-instrument AggregateError shape (#1089)', async () => {
+    // The real 2026-09-03T19:58Z incident's six lost passes were all this
+    // shape — `computePortfolioView` wraps more than one unvaluable held
+    // instrument into one `AggregateError` (portfolio-view.ts), not a lone
+    // `StaleMarkError`. Both must convert to the same named skip.
+    const outcome = await decideWithReason(
+      traderInput({
+        clock: new ManualClock(OUTSIDE_WINDOW),
+        positionState: async () => [],
+        arm: 'control',
+        equity: async () => {
+          throw new AggregateError(
+            [
+              new StaleMarkError('QQQ', new Date(0), OUTSIDE_WINDOW, 60_000),
+              new StaleMarkError('MSTR', new Date(0), OUTSIDE_WINDOW, 60_000),
+            ],
+            '2 held instrument(s) could not be valued',
+          );
+        },
+      }),
+    );
+
+    expect(outcome.intent).toBeNull();
+    expect(outcome.skip_reason).toBe('control_arm_valuation_refused');
+  });
+
+  it('the control arm still rethrows a non-valuation equity rejection — #569’s ceiling guard is a fault, not a skip (#1089)', async () => {
+    // Narrowed by error TYPE, not merely by `arm === 'control'`: this pins
+    // that a plain `Error` from the same thunk (the shape `sizingEquity`'s
+    // #569 non-finite-ceiling guard actually throws) is NOT downgraded to a
+    // skip on the control arm — it must stay audible in `tick-loop.ts`'s
+    // `#507` catch exactly as it does on the live arm.
+    await expect(
+      decideWithReason(
+        traderInput({
+          clock: new ManualClock(OUTSIDE_WINDOW),
+          positionState: async () => [],
+          arm: 'control',
+          equity: async () => {
+            throw new Error('sizingEquity: capitalCeilingUsd must be finite, got NaN');
+          },
+        }),
+      ),
+    ).rejects.toThrow(/capitalCeilingUsd must be finite/);
   });
 
   it('holds normally just outside the window', async () => {

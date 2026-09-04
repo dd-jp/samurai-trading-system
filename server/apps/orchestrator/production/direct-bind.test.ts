@@ -573,6 +573,48 @@ describe('buildTraderStep capital ceiling (#511)', () => {
     // case, deliberately not the same input.
     await expect(sizeFor(Number.NaN)).rejects.toThrow(/finite/);
   });
+
+  it('rejects instead of skipping when the CONTROL arm hits the #569 non-finite-ceiling guard (#1089)', async () => {
+    // #1089's new `control_arm_valuation_refused` skip is narrowed by error
+    // TYPE (`StaleMarkError`/`AggregateError`), not merely by `arm === 'control'`
+    // — this pins that the narrowing actually holds. `sizingEquity` throws a
+    // plain `Error` for a declared-but-unusable ceiling, which is a fail-open
+    // refusal that must stay a FAULT on either arm; if the catch in
+    // `buildBracket` only checked `arm`, this would be silently downgraded to
+    // a skip instead of rethrown, and a broken control-arm ceiling would go
+    // unnoticed for the rest of the soak.
+    const step = buildTraderStep({
+      marketData: FAKE_MARKET_DATA,
+      circuitBreakers: new CircuitBreakers({
+        daily_loss_pct: 0.05,
+        daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
+        max_drawdown_pct: 0.2,
+        max_consecutive_losses: 5,
+        volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
+        auto_rearm: { recovery_drawdown_pct: 0.05, max_days_tripped: 5 },
+      }),
+      accountState: FAKE_ACCOUNT_STATE,
+      volatility: FAKE_VOLATILITY,
+      getOpenPositions: async () => NO_POSITIONS,
+      maxMarkAge: TEST_MAX_MARK_AGE,
+      mode: 'paper',
+      breakerState: NOOP_BREAKER_STATE,
+      portfolioSnapshots: new Map(),
+      config: CEILING_CONFIG,
+      setupStore: new FixtureSetupStore(),
+      getExitFillSizes: async () => new Map<string, number>(),
+      sessionCalendars: {
+        crypto: new AlwaysOpenCalendar(),
+        stocks: new UsEquityRegularHoursCalendar(),
+      },
+      capitalCeilingUsd: Number.NaN,
+      arm: 'control',
+    });
+
+    await expect(
+      step({ trace_id: TRACE_ID, instrument: 'AAPL', debate: makeDebate(), clock: CLOCK }),
+    ).rejects.toThrow(/finite/);
+  });
 });
 
 /**
