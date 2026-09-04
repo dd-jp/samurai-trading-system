@@ -121,7 +121,7 @@ describe('toWireSnapshot', () => {
     expect(toWireSnapshot(null)).toBeNull();
     expect(toWireSnapshot('<html>captive portal</html>')).toBeNull();
     expect(toWireSnapshot({})).toBeNull();
-    // Parses, has a mode, but carries no pipeline lanes — an empty theater
+    // Parses, has a mode, but carries no pipeline lanes — an empty lane matrix
     // would read as "the system went quiet".
     const body = raw();
     delete body.pipeline;
