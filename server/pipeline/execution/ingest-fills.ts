@@ -64,6 +64,14 @@ import type { ExecutionInput, NormalizedFill } from './types.js';
 /** A fill on a protective/closing leg — anything that isn't opening the lot. */
 type ExitFill = Fill & { leg: 'stop' | 'target' | 'exit' };
 
+/**
+ * #1087: a lot `reconcile()` adopted as `filled`/`partially_filled` from
+ * broker truth but whose `filled_size` is still zero — an invariant
+ * violation nothing else in this poll reports, since `advanceLot` has
+ * nothing new to advance and would otherwise return in total silence.
+ */
+export const FILLED_WITH_ZERO_SIZE = 'filled position has zero filled_size' as const;
+
 export async function ingestFills(input: ExecutionInput): Promise<void> {
   const { clock, broker, store } = input;
 
@@ -107,9 +115,19 @@ export async function ingestFills(input: ExecutionInput): Promise<void> {
   //    to the exposure caps, not exited by flat-by-close. `hasFill` cannot
   //    recover it: dedup protects against OVER-fetching, and this is
   //    UNDER-fetching.
-  //  * The GLOBAL floor has no such failure mode: it never rises above a
-  //    lot's own `opened_at`, so a fill dated below anything already ingested
-  //    still lands. The per-lot floor CREATES the drop.
+  //  * The GLOBAL floor has no such failure mode PROVIDED every adapter
+  //    upholds the invariant it rests on — no fill dated earlier than the
+  //    `opened_at` of the lot it belongs to. #1087 found `SimulatedBrokerAdapter`
+  //    violating exactly that: it stamped a fill at the PRICED MARK's own
+  //    (potentially stale) observation time rather than the order's submit
+  //    time, so a laggy quote could retroactively predate `opened_at`. When
+  //    the affected lot was also the SOLE open position — making its own
+  //    `opened_at` the floor — its own fill was excluded forever, since
+  //    neither value ever changes and a lot with zero `filled_size` never
+  //    closes to stop being the floor-setter. Fixed at the source
+  //    (`simulated-adapter.ts` stamps fills at submit time now), not here —
+  //    this floor is still correct, PROVIDED that invariant genuinely holds.
+  //    Re-verify it for any adapter before trusting this comment again.
   //  * `BrokerAdapter.fetchNewFills` deliberately does NOT promise per-lot
   //    timestamp monotonicity, and cannot — see its doc in types/broker.ts.
   //  * The win would have been small anyway: `since` does not bound the venue
@@ -182,7 +200,12 @@ export async function ingestFills(input: ExecutionInput): Promise<void> {
         flattenTargetedLots.has(position.idempotency_key),
       );
     } catch (error) {
-      failures.push({ scope: 'lot-advance', key: position.idempotency_key, error });
+      failures.push({
+        scope: 'lot-advance',
+        key: position.idempotency_key,
+        instrument: position.instrument,
+        error,
+      });
     }
   }
 
@@ -229,7 +252,7 @@ export async function ingestFills(input: ExecutionInput): Promise<void> {
         error,
         { flatten_key: flattenKey },
       );
-      failures.push({ scope: 'flatten-sweep-mark', key: flattenKey, error });
+      failures.push({ scope: 'flatten-sweep-mark', key: flattenKey, instrument: null, error });
     }
   }
 
@@ -290,6 +313,16 @@ interface ContainedFailure {
    * this key and withhold the row.
    */
   key: string;
+  /**
+   * #1087: the lot's instrument, when the scope has one cheaply to hand
+   * (`lot-advance` always does — it is a field on the `OpenPosition` already
+   * in scope). `null` for a flatten-keyed scope, where recovering it would
+   * mean reading the flatten journal row on the failure path itself. Safe to
+   * name unconditionally: instrument tickers are a small, controlled
+   * vocabulary, not the untrusted payload `key`'s own doc above guards
+   * against.
+   */
+  instrument: string | null;
   /** The original throw, preserved whole rather than stringified here. */
   error: unknown;
 }
@@ -317,10 +350,26 @@ interface ContainedFailure {
  * `AggregateError` rather than a bare `Error` for the reason
  * `AlpacaBrokerAdapter.fetchNewFills` uses one: a pass over independent units
  * can fail in several at once, and picking one to report discards the rest.
+ *
+ * #1087: `instrument` and a `reason` ride in the message alongside `scope`
+ * and `key` now (#1049 found this the smoke gate's blind spot; this is the
+ * same blind spot in a live run's own log). `reason` is the thrown value's
+ * CLASS NAME, never `error.message` — this function still may not inspect or
+ * format the error's own content (`ContainedFailure.key`'s doc above), and a
+ * store failure reaching here has not been curated the way `reconcile.ts`'s
+ * #297-sanitized `BrokerError` has. A debugger holding the object still has
+ * `error.message` via `AggregateError.errors`/`cause`.
  */
 function throwContainedFailures(failures: readonly ContainedFailure[]): void {
   if (failures.length === 0) return;
-  const named = failures.map((failure) => `${failure.scope} '${failure.key}'`).join(', ');
+  const named = failures
+    .map((failure) => {
+      const instrument = failure.instrument === null ? '' : ` (${failure.instrument})`;
+      const reason =
+        failure.error instanceof Error ? failure.error.constructor.name : typeof failure.error;
+      return `${failure.scope} '${failure.key}'${instrument} [${reason}]`;
+    })
+    .join(', ');
   throw new AggregateError(
     failures.map((failure) => failure.error),
     `ingestFills: ${failures.length} contained failure(s) — every other lot in this poll was ` +
@@ -443,7 +492,7 @@ async function redistributeFlattenFills(
         flattenNamedLots.set(clientOrderId, targetedByThisFlatten);
       }
     } catch (error) {
-      failures.push({ scope: 'flatten-attribution', key: clientOrderId, error });
+      failures.push({ scope: 'flatten-attribution', key: clientOrderId, instrument: null, error });
     }
   }
 
@@ -982,6 +1031,42 @@ async function advanceLot(
     // (empty) one.
     if (flattenTargetedThisPoll) {
       await maybeRearmResidual(input, position, now);
+    }
+
+    // #1087: `reconcile()` runs immediately before this call, same poll (see
+    // `fill-sync.ts`'s `runPoll`), and adopts the broker's `order_state`
+    // without touching `filled_size` (`reconcile.ts`'s own doc) — so a lot
+    // reconcile just adopted as `filled`/`partially_filled` but whose fill
+    // was never ingested lands HERE, with nothing new to advance, and would
+    // otherwise return in total silence.
+    //
+    // This is a WARNING, not necessarily a defect: on the live arm, Alpaca
+    // can report `filled_qty > 0` on the order a poll or two before its
+    // separate fill feed catches up, so a lot can legitimately pass through
+    // this branch once or twice and self-clear on the next poll once
+    // `ingestFills` sees the fill. `stuck_ms` (from `opened_at`, no new
+    // tracked state needed — a lot in this state can only have been wedged
+    // since close to when it opened) is what tells the two apart: a poll or
+    // two of propagation lag looks nothing like the hours-long, monotonically
+    // growing `stuck_ms` of a genuinely wedged lot (#1087's META case, caused
+    // at the source — see `simulated-adapter.ts` — by a fill excluded forever
+    // from every subsequent poll's `since` floor).
+    if (
+      (position.order_state === 'filled' || position.order_state === 'partially_filled') &&
+      position.filled_size === 0
+    ) {
+      safeLog(input.logger, {
+        trace_id: input.trace_id,
+        stage: 'execution',
+        level: 'warn',
+        message: FILLED_WITH_ZERO_SIZE,
+        payload: {
+          idempotency_key: position.idempotency_key,
+          instrument: position.instrument,
+          order_state: position.order_state,
+          stuck_ms: now.getTime() - position.opened_at.getTime(),
+        },
+      });
     }
     return;
   }

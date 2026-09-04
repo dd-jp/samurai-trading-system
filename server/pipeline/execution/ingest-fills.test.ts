@@ -10,6 +10,7 @@ import type { Clock, Logger, OpenPosition } from '../../shared/index.js';
 import { recordingLogger } from '../../shared/recording-logger.js';
 import type { CostModel } from '../../tools/backtest/index.js';
 import { ExecutionImpl } from './execute.js';
+import { FILLED_WITH_ZERO_SIZE } from './ingest-fills.js';
 import { openTestExecutionStore, TestExecutionStore } from './sqlite-store-harness.js';
 import type {
   BrokerAck,
@@ -22,6 +23,7 @@ import type {
   NativeBracketRequest,
   NormalizedFill,
   NormalizedOrder,
+  NormalizedPosition,
   ResidualExposureAlert,
   ResidualExposureAlertChannel,
 } from './types.js';
@@ -115,9 +117,15 @@ class ScriptedBroker implements BrokerAdapter {
     this.rearmCalls.push({ clientOrderId, instrument, side, qty, stop, target });
     if (this.rearmFailure !== undefined) throw this.rearmFailure;
   }
-  /** #86's surface. `ingestFills()` never reconciles, so it is never called. */
+  /**
+   * #86's surface. `ingestFills()` itself never calls this — `reconcile()`
+   * does. Settable (#1087) so a test can drive `reconcile()` then
+   * `ingestFills()` back to back, the same order `fill-sync.ts`'s `runPoll`
+   * uses, and check the two stay coherent.
+   */
+  scriptedOrder: NormalizedOrder | null = null;
   async getOrder(): Promise<NormalizedOrder | null> {
-    return null;
+    return this.scriptedOrder;
   }
   /** #519/#526's reconcile-only surface — likewise untouched by the fill loop. */
   async resumeFlatten(): Promise<never> {
@@ -130,8 +138,16 @@ class ScriptedBroker implements BrokerAdapter {
   async cancel(): Promise<never> {
     throw new Error('ScriptedBroker.cancel: ingestFills() does not cancel');
   }
-  async getOpenPositions(): Promise<never> {
-    throw new Error('ScriptedBroker.getOpenPositions: ingestFills() does not reconcile');
+  /**
+   * `reconcile()`'s `findUnrecordedVenuePositions` surface (#1087: some tests
+   * in this file now drive `reconcile()` immediately before `ingestFills()`,
+   * `fill-sync.ts`'s own poll order). Empty — no venue position the store
+   * does not already know about — rather than throwing: every fill this
+   * broker can report is scripted up front, so there is nothing unrecorded
+   * for it to find.
+   */
+  async getOpenPositions(): Promise<NormalizedPosition[]> {
+    return [];
   }
 }
 
@@ -2040,5 +2056,107 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
     for (const row of fills) {
       expect(row.flatten_idempotency_key).toBeUndefined();
     }
+  });
+});
+
+/**
+ * #1087: `fill-sync.ts`'s `runPoll` calls `reconcile()` then `ingestFills()`
+ * back to back, every poll — the same order these tests drive `ExecutionImpl`
+ * in. `reconcile()` adopts the broker's `order_state` without ever touching
+ * `filled_size` (its own doc); only `ingestFills()` writes that. The two
+ * calls must never leave a position `filled`/`partially_filled` with a
+ * `filled_size` of zero — that combination is not a valid state for any
+ * venue to report, and it is exactly the anomaly the 2026-09-03 paper soak
+ * measured (issue #1087: a control-arm META lot, `order_state: 'filled'`,
+ * `filled_size: 0.0`, permanently, after reconcile adopted it at 14:04Z).
+ */
+describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reconcile path', () => {
+  it('produces a coherent position record: filled_size matches once ingestFills runs', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 10 });
+    const broker = new ScriptedBroker([
+      // Respects the invariant `ingestFills()`'s global `since` floor relies
+      // on (ingest-fills.ts's #838 comment): dated at/after the lot's own
+      // `opened_at`, which every real adapter and the fixed Simulated one
+      // (#1087) both guarantee.
+      fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100 }),
+    ]);
+    broker.scriptedOrder = {
+      client_order_id: 'key-1',
+      broker_order_ids: ['key-1:entry', 'key-1:stop', 'key-1:target'],
+      order_state: 'filled',
+      filled_qty: 10,
+    };
+    const logger = recordingLogger();
+    const execution = new ExecutionImpl(makeInput(broker, store, undefined, undefined, logger));
+
+    const report = await execution.reconcile();
+    expect(report.divergences).toEqual([
+      expect.objectContaining({
+        idempotency_key: 'key-1',
+        action: 'adopted',
+        broker_state: 'filled',
+      }),
+    ]);
+    // Reconcile alone leaves this — by design (reconcile.ts's own doc,
+    // "filled_size stays at whatever the Fill rows say"). If ingestFills
+    // never ran, or its own fill were excluded, THIS is where the record
+    // would freeze — the exact META shape.
+    expect((await store.getPosition('key-1'))?.filled_size).toBe(0);
+
+    await execution.ingestFills();
+
+    const position = await store.getPosition('key-1');
+    expect(position?.order_state).toBe('filled');
+    expect(position?.filled_size).toBe(10);
+    expect(position?.avg_entry_price).toBe(100);
+    // The anomaly detector must not fire on the coherent path.
+    expect(logger.entries.some((e) => e.message === FILLED_WITH_ZERO_SIZE)).toBe(false);
+  });
+
+  it('reports and re-reports the anomaly (never self-resolves) when the broker offers a fill dated before the lot it belongs to', async () => {
+    // The shape a broker that VIOLATES the invariant produces (what
+    // `SimulatedBrokerAdapter` did before #1087): a fill dated earlier than
+    // its own lot's `opened_at`. `ScriptedBroker.fetchNewFills` filters by
+    // `since` exactly like every real adapter, so — with this lot the SOLE
+    // open position, making its own `opened_at` the poll's floor — the fill
+    // is excluded on every poll, forever.
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 10 });
+    const broker = new ScriptedBroker([
+      fill({
+        broker_fill_id: 'e1',
+        leg: 'entry',
+        qty: 10,
+        price: 100,
+        timestamp: new Date(OPENED_AT.getTime() - 1),
+      }),
+    ]);
+    broker.scriptedOrder = {
+      client_order_id: 'key-1',
+      broker_order_ids: ['key-1:entry', 'key-1:stop', 'key-1:target'],
+      order_state: 'filled',
+      filled_qty: 10,
+    };
+    const logger = recordingLogger();
+    const execution = new ExecutionImpl(makeInput(broker, store, undefined, undefined, logger));
+
+    await execution.reconcile();
+    await execution.ingestFills();
+    // Not a race that resolves on the next poll — genuinely permanent.
+    await execution.ingestFills();
+
+    const position = await store.getPosition('key-1');
+    expect(position?.order_state).toBe('filled');
+    expect(position?.filled_size).toBe(0);
+    expect(await store.getFills('key-1')).toHaveLength(0);
+
+    const warnings = logger.entries.filter((e) => e.message === FILLED_WITH_ZERO_SIZE);
+    expect(warnings).toHaveLength(2);
+    expect(warnings[0]?.payload).toMatchObject({
+      idempotency_key: 'key-1',
+      instrument: 'AAPL',
+      order_state: 'filled',
+    });
   });
 });

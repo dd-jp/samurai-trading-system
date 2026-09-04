@@ -163,7 +163,10 @@ describe('SimulatedBrokerAdapter.submitBracket', () => {
       client_order_id: 'key-aapl-1355',
       leg: 'entry',
       qty: 100,
-      timestamp: OBSERVED_AT,
+      // #1087: the fill's own timestamp — submit time (NOW), not the
+      // priced mark's own (earlier) observation time. See "never stamps a
+      // fill earlier than the order's own submit time" below for why.
+      timestamp: NOW,
     });
     // Buy fills adversely above mid; commission is the cash fee.
     expect(fills[0]?.price).toBeGreaterThan(100);
@@ -210,8 +213,9 @@ describe('SimulatedBrokerAdapter.submitBracket', () => {
     expect(fills[0]?.price).toBeLessThan(100);
   });
 
-  // No lookahead: the fill is stamped at the mark's observation time, which
-  // is at/before simulated T — never ahead of it.
+  // No lookahead: the fill is stamped at the order's own submit-time clock
+  // read (the same `now` used to build MarketState) — never ahead of
+  // simulated T, because it IS simulated T.
   it('stamps the fill at or before simulated T', async () => {
     const adapter = makeAdapter();
     await adapter.submitBracket(makeBracket());
@@ -220,13 +224,46 @@ describe('SimulatedBrokerAdapter.submitBracket', () => {
     expect(fills[0]?.timestamp.getTime()).toBeLessThanOrEqual(NOW.getTime());
   });
 
+  // #1087: the root cause. Stamping the fill at `marketState.timestamp` (the
+  // priced mark's own, possibly-stale observation time) rather than the
+  // order's own submit time let a laggy quote retroactively predate the
+  // lot's `opened_at` (`execute()`'s write-ahead, read off the same real
+  // clock strictly EARLIER in the same call). `ingestFills()`'s global
+  // `since` floor is keyed on `opened_at`, and when the affected lot was
+  // also the SOLE open position, its own fill was excluded from every future
+  // poll forever — this is the mechanism observed in the 2026-09-03 paper
+  // soak (a META control-arm lot: `order_state: 'filled'`, `filled_size: 0`,
+  // permanently). A fill must never be dated earlier than the moment the
+  // order was actually submitted, no matter how stale the priced mark is.
+  it("never stamps a fill earlier than the order's own submit time, even when the priced mark lags", async () => {
+    const laggyObservedAt = new Date(NOW.getTime() - 5 * 60_000);
+    const marketData = makeMarketData({
+      getMark: vi.fn().mockResolvedValue({
+        price: 100,
+        observed_at: laggyObservedAt,
+        source: 'fixture',
+        asset_class: 'stocks',
+      }),
+    });
+
+    const adapter = makeAdapter(marketData);
+    await adapter.submitBracket(makeBracket());
+
+    const fills = await adapter.fetchNewFills(new Date(0));
+    expect(fills[0]?.timestamp.getTime()).toBeGreaterThanOrEqual(NOW.getTime());
+    // The self-referential trap this fixes: a poll floored on this lot's own
+    // `opened_at` (NOW, its only reasonable value for a lone open position)
+    // must still see its own fill.
+    expect(await adapter.fetchNewFills(NOW)).toHaveLength(1);
+  });
+
   it('serves fills from the poll cursor forward', async () => {
     const adapter = makeAdapter();
     await adapter.submitBracket(makeBracket());
 
-    expect(await adapter.fetchNewFills(OBSERVED_AT)).toHaveLength(1);
+    expect(await adapter.fetchNewFills(NOW)).toHaveLength(1);
     // Already drained as of a later cursor.
-    expect(await adapter.fetchNewFills(new Date(OBSERVED_AT.getTime() + 1))).toHaveLength(0);
+    expect(await adapter.fetchNewFills(new Date(NOW.getTime() + 1))).toHaveLength(0);
   });
 });
 
