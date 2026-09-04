@@ -77,6 +77,18 @@ const MAX_SLOW_CALLBACKS = 3;
 export class MarketIntelligenceStore {
   private readonly stored: StoredItem[] = [];
   private readonly subscriptions: Subscription[] = [];
+  /**
+   * Item ids already ingested, so the same underlying observation cannot be
+   * counted twice (#969).
+   *
+   * Grows with the run and is never pruned, deliberately. The store is
+   * in-memory and restart-clean, `getContext` already filters to a time
+   * window, and the set holds only short id strings — at the observed rates
+   * (tens of items per instrument per day) a 14-day soak is thousands of
+   * entries, which is not worth the risk of a prune that reopens the window
+   * it was protecting.
+   */
+  private readonly ingestedIds = new Set<string>();
 
   constructor(private readonly clock: Clock) {}
 
@@ -88,11 +100,48 @@ export class MarketIntelligenceStore {
    * notified with the newly ingested items, subject to throttling.
    */
   ingest(intelligence: AgentIntelligence): void {
+    // DEDUPED BY ITEM ID (#969). This used to append unconditionally, which
+    // was safe only because every producer emitted call-unique ids: the old
+    // sentiment client's `grok:<instrument>:<asOf>:<index>` could not collide
+    // with itself by construction.
+    //
+    // Real retrieval breaks that. `x_search`'s date filter is DAY-granular
+    // while the refresh bucket is two hours, so consecutive buckets return
+    // overlapping posts as a matter of course — and `sentiment-analyst.ts`
+    // averages `social` wholesale, so an un-deduped post votes once per bucket
+    // it survives in. A post that stayed relevant for six hours would count
+    // three times, which reads as three people agreeing.
+    //
+    // Keyed on the item id rather than on content because the id is now
+    // derived from the observation itself (`x:<statusId>`), which is what
+    // makes cross-call identity meaningful. `mi-sources.ts` names this same
+    // missing dedupe as the mechanism that would compound a boot replay, so
+    // this is also what makes `hydrate` safe for an item-writing source.
+    //
+    // The key is (asset_class, entity, id), NOT the id alone (review round 2,
+    // #1055). This store is shared across the whole universe, and an X status
+    // id carries no entity — so a post that mentions two names in the universe
+    // is retrieved once as evidence for each, and an id-only key would admit
+    // it for whichever instrument was ingested first and silently drop it for
+    // the second. That is a real loss, not a duplicate avoided: the two are
+    // different observations about different instruments that happen to share
+    // a source post, and the analyst reads them per entity.
+    //
+    // What the key still catches is the case it was added for — the SAME post
+    // for the SAME instrument arriving again in the next bucket, because
+    // `x_search`'s date filter is day-granular while the bucket is two hours.
+    // Widening the key does not weaken that, because both components are
+    // constant across those repeats.
+    const admitted: IntelligenceItem[] = [];
     for (const item of intelligence.items) {
+      const key = `${intelligence.asset_class}\u0000${item.entity}\u0000${item.id}`;
+      if (this.ingestedIds.has(key)) continue;
+      this.ingestedIds.add(key);
       this.stored.push({ asset_class: intelligence.asset_class, item });
+      admitted.push(item);
     }
-    if (intelligence.items.length > 0) {
-      this.notifySubscribers(intelligence.asset_class, intelligence.items);
+    if (admitted.length > 0) {
+      this.notifySubscribers(intelligence.asset_class, admitted);
     }
   }
 
@@ -351,6 +400,7 @@ export class MarketIntelligenceStore {
 export {
   type ArchivedItem,
   type ArchiveFidelity,
+  DEFAULT_MI_ARCHIVE_RETENTION_DAYS,
   MiArchiveStore,
   miArchivePath,
   type RawArchiveRow,
@@ -379,6 +429,14 @@ export {
   NousSentimentClient,
   type NousSentimentClientOptions,
 } from './grok/nous-sentiment-client.js';
+export {
+  DEFAULT_MAX_SEARCH_RESULTS,
+  MAX_SEARCH_RESULTS_CEILING,
+  parseStatusUrl,
+  X_SEARCH_MODEL,
+  XSearchClient,
+  type XSearchClientOptions,
+} from './grok/x-search-client.js';
 export { MiIngestAgent, type MiIngestAgentDeps, wireSymbol } from './mi-ingest-agent.js';
 // The Polymarket macro/event path (#504) — the second `news` writer, added for
 // the measured LSE-ETP coverage hole rather than for an empty bucket.

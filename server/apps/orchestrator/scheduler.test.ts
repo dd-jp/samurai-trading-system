@@ -57,7 +57,11 @@ describe('UniverseScheduler.nextTick', () => {
   it('fires the full universe when the market is open', () => {
     const plan = makeScheduler().nextTick(clockAt(MARKET_OPEN));
 
-    expect(assets(plan.instruments)).toEqual(['QQQ', 'AAPL', 'TSLA']);
+    // Pinned against `DEFAULT_UNIVERSE` itself rather than a transcribed copy:
+    // the property is "the scheduler fires the WHOLE configured universe", and
+    // a hardcoded list only re-asserts that someone edited two places.
+    expect(assets(plan.instruments)).toEqual(DEFAULT_UNIVERSE.map((row) => row.asset));
+    expect(plan.instruments).toHaveLength(20);
   });
 
   it('never fires a stock instrument on a holiday', () => {

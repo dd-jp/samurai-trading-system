@@ -864,7 +864,16 @@ export function buildDebateStep(
     // (`min(6, universe.length) = 4` concurrent today, #669's reentrancy
     // guard), worst case is ~4 debates over budget at the measured
     // ~$0.0060/debate rate (`paper-profile.ts`'s cost-per-day derivation),
-    // i.e. ~$0.024 — accepted as financially trivial. Unlike `RateLimiter`,
+    // i.e. ~$0.024 — accepted as financially trivial.
+    //
+    // (#969) The debate unit is no longer the largest one sharing this cap. A
+    // retrieving market-intelligence call (`x_search`) costs ~$0.02 at the
+    // default 3 results and a measured $0.089 at 10, because search results
+    // ride in the prompt. The MI agents are composed SEQUENTIALLY for exactly
+    // this reason (`composeMarketIntelligence`), so they cannot race each
+    // other — but they can still race a debate through the same check. The
+    // overshoot bound is therefore ~$0.024 + one MI call, not ~$0.024. Still
+    // trivial against a $50 cap; recompute it if either unit moves again. Unlike `RateLimiter`,
     // which pairs a real reservation (`debatesUsed`) with a derived call
     // ceiling, `SpendCap` has no analogous reservation; nothing in this
     // repo's history says that was a deliberate trade against building one,

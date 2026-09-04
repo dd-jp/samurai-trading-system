@@ -652,6 +652,8 @@ they are not needed for the specified design.**
 
 ## 9. What this means for #969
 
+> **RESOLVED 2026-09-03, and not by any of the branches below ([#969](https://github.com/dd-jp/samurai-trading-system/issues/969), [ADR-0020](../adr/0020-x-retrieval-through-nous.md)).** The question this section answers — *is an ADR-0009 exception needed?* — turned out to have no subject. ADR-0009 recorded that Nous "proxies `chat/completions` only", so `x_search` was unreachable; that was false. Nous serves `POST /responses`, and the tool runs there on the routed alias `~x-ai/grok-latest` with the credential this system already holds. **X retrieval ships INSIDE the single-provider rule — no exception, no second vendor, no new key** — and the direct xAI path, re-tested, is both dead (`401 bad-credentials`) and 20% more expensive per line. Everything below stands as licensing and volume research; only its framing as an exception decision is superseded. **Reddit ([#976](https://github.com/dd-jp/samurai-trading-system/issues/976)) remains wanted** — David's ruling is to soak with X now and merge Reddit when App Review reports, so the ladder did not stop, it gained a rung.
+
 **Bluesky is the first of the three social sources examined whose terms do not block this use case.**
 
 - StockTwits (doc 24 §1): **UNUSABLE** — the only lawful automated channel is closed to registration.
@@ -696,6 +698,13 @@ usable only if it can actually serve the lens; Bluesky cannot. The ladder theref
 Bluesky to the remaining rung: **Reddit ([#976](https://github.com/dd-jp/samurai-trading-system/issues/976))**,
 still awaiting submission. The ADR-0009 exception becomes live **only if Reddit also fails** — that
 condition is now one outcome away rather than two.
+
+> **Superseded 2026-09-03: the exception never became live, because it was never needed** (ADR-0020).
+> X retrieval runs through Nous on the existing credential, so the ladder's last rung was reachable
+> without leaving the single-provider rule. This section's verdict on **Bluesky is unchanged and
+> stands** — 0 cashtag hits in 25,269 posts, and the only finance-worded hits affiliate spam and
+> tokenised-stock pump bots. That measurement is now the *bar X must clear*: soak day 1 records the
+> human-vs-bot split of cited handles, which is why the X archive keeps the handle.
 
 ---
 

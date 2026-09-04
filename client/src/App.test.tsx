@@ -14,7 +14,14 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { describe, expect, it } from 'vitest';
 import { App } from './App.tsx';
 import { doneThrough, makeLane, makeView } from './lib/test-support.ts';
-import { fakeFetch, makeSnapshot, makeSpend, makeVerdict } from './test-fixtures.ts';
+import {
+  fakeFetch,
+  makeCondition,
+  makeRiskCritic,
+  makeSnapshot,
+  makeSpend,
+  makeVerdict,
+} from './test-fixtures.ts';
 
 // No `@testing-library/jest-dom` matchers in this repo's devDependencies, so
 // assertions use plain DOM properties.
@@ -119,16 +126,6 @@ describe('mission control', () => {
     expect(within(debateRoom as HTMLElement).getByText('live')).toBeTruthy();
   });
 
-  it('draws room 04 lights-off from the data, with its reason', async () => {
-    renderApp([makeSnapshot({ pipeline: theaterView() })]);
-
-    const room = (await screen.findByRole('heading', { name: 'Invalidation' })).closest(
-      '[data-room="invalidation"]',
-    );
-    expect(room?.classList.contains('room-lights-off')).toBe(true);
-    expect(screen.getByText(/specced and not built/i)).toBeTruthy();
-  });
-
   it('stamps a settled lane into the ledger once, and never again on a re-poll', async () => {
     const settled = doneThrough('ETH-USD', 'trace-eth', 'execution', { outcome: 'go' });
     const first = makeSnapshot({ pipeline: makeView([settled]) });
@@ -183,16 +180,54 @@ describe('mission control', () => {
     expect(within(drawer).getByText(/no trace in the last 15 minutes/i)).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: /QQQ, stocks, stopped/ }));
-    // The reserved invalidation section, named rather than rendered blank.
+    // The invalidation section with no Risk decision on the snapshot for this
+    // trace (#1066): named, not rendered blank.
+    expect(drawer.querySelector('[data-invalidation="no-decision"]')).toBeTruthy();
+    // The Trader and Risk cells carry no decision word — #328, spelled out.
     expect(
-      within(drawer).getByText(/the invalidation stage is specced and not built/i),
-    ).toBeTruthy();
-    // Trader and Risk persist no decision content — #328, spelled out.
-    expect(within(drawer).getAllByText(/not persisted \(#328\)/i).length).toBeGreaterThan(0);
+      within(drawer).getAllByText(/no decision word recorded \(#328\)/i).length,
+    ).toBeGreaterThan(0);
     // A debate that never completed says so, rather than spinning forever.
     expect(within(drawer).getByText(/no completed debate recorded/i)).toBeTruthy();
-    // The stage strip lists all seven stages, including the never-reached ones.
+    // The stage strip lists all six stages, including the never-reached ones.
     expect(within(drawer).getAllByText('not reached').length).toBeGreaterThan(0);
+  });
+
+  /**
+   * #1066. The Risk decision the drawer shows is the one belonging to the
+   * TRACE it is showing, matched on `(trace_id, instrument)`. Two decisions on
+   * one instrument in the same window are two different arguments, and showing
+   * the wrong one's conditions is the silent mis-attribution migration 0015
+   * exists to prevent — so the fixture below carries both.
+   */
+  it('shows the invalidation conditions of the selected trace, not the instrument’s other one', async () => {
+    renderApp([
+      makeSnapshot({
+        pipeline: theaterView(),
+        risk_critics: [
+          makeRiskCritic({
+            trace_id: 'trace-qqq-older',
+            instrument: 'QQQ',
+            conditions: [makeCondition({ id: 'older-trace-condition' })],
+          }),
+          makeRiskCritic({
+            trace_id: 'trace-qqq',
+            instrument: 'QQQ',
+            binding_constraint: 'risk_critic:invalidated',
+            conditions: [makeCondition({ id: 'shown-trace-condition', observed: 401.25 })],
+          }),
+        ],
+      }),
+    ]);
+
+    fireEvent.click(await screen.findByRole('button', { name: /QQQ, stocks, stopped/ }));
+    const drawer = screen.getByRole('region', { name: 'Instrument detail' });
+
+    expect(drawer.querySelector('[data-condition="shown-trace-condition"]')).toBeTruthy();
+    expect(drawer.querySelector('[data-condition="older-trace-condition"]')).toBeNull();
+    expect(
+      drawer.querySelector('[data-invalidation="binding"]')?.getAttribute('data-binding'),
+    ).toBe('risk_critic:invalidated');
   });
 
   it('marks the strip stale after two missed polls, keeping the last numbers', async () => {

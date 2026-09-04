@@ -115,6 +115,15 @@ export function miArchivePath(mode: string): string {
   return `data/samurai-mi-${mode}.sqlite`;
 }
 
+/**
+ * The specced retention window (#1060), in days. `docs/specs/market-
+ * intelligence-spec.md` states it in six places, none of which had an
+ * implementation until this one — a 90-day-old news item is not useful to a
+ * backtest replay of last week, and the archive stores vendor payloads, the
+ * largest rows this system persists.
+ */
+export const DEFAULT_MI_ARCHIVE_RETENTION_DAYS = 90;
+
 export class MiArchiveStore {
   private readonly db: BetterSqlite3.Database;
 
@@ -290,6 +299,53 @@ export class MiArchiveStore {
       ingested_at: new Date(row.ingested_at),
       fidelity: row.fidelity,
     }));
+  }
+
+  /**
+   * The specced 90-day purge (#1060), applied against BOTH tables.
+   *
+   * Keyed on `ingested_at` — the same visibility-gate column `itemsKnownAt`
+   * and `hasItem` key on — not `updated_at`, which is the vendor's revision
+   * stamp and can be back-dated relative to when we actually received a row.
+   * A window measured on `updated_at` could purge a row we only just
+   * received, which is exactly backwards for a retention policy meant to
+   * bound disk by AGE of our own knowledge.
+   *
+   * `< cutoff`, not `<=`: a row exactly on the cutoff is exactly as old as
+   * the window allows, not OLDER than it, so "purge records older than N
+   * days" keeps it.
+   *
+   * Both tables, not just `mi_archive_raw`. This store does not turn on
+   * `PRAGMA foreign_keys` (see `toArchivedItem` in `polymarket-agent.ts` for
+   * why), so purging only the parent table would silently orphan `mi_items`
+   * rows rather than fail loudly — the same drift-goes-unnoticed hazard that
+   * comment already names. The predicate never references `payload`, so a
+   * row with no payload (#1042's proposed Reddit exemption) is purged or kept
+   * purely by age, exactly like every other row.
+   *
+   * One transaction, so a crash between the two deletes cannot leave a
+   * `mi_items` row pointing at a raw row that is already gone.
+   *
+   * Both deletes are indexed. `mi_archive_raw` had `idx_mi_archive_raw_
+   * ingested (ingested_at)` since migration 0001; `mi_items` did not —
+   * `idx_mi_items_class_ingested (asset_class, ingested_at)` is a composite
+   * keyed FIRST on `asset_class`, which SQLite cannot use for a range on the
+   * trailing column when the query has no `asset_class` predicate, as this
+   * one does not. Migration 0002 adds `idx_mi_items_ingested (ingested_at)`
+   * for exactly this delete; `mi-archive-store.test.ts` pins both plans via
+   * `EXPLAIN QUERY PLAN` against a real on-disk file.
+   */
+  purgeOlderThan(cutoff: Date): { rawDeleted: number; itemsDeleted: number } {
+    const cutoffIso = cutoff.toISOString();
+    return this.db.transaction(() => {
+      const itemsDeleted = this.db
+        .prepare('DELETE FROM mi_items WHERE ingested_at < ?')
+        .run(cutoffIso).changes;
+      const rawDeleted = this.db
+        .prepare('DELETE FROM mi_archive_raw WHERE ingested_at < ?')
+        .run(cutoffIso).changes;
+      return { rawDeleted, itemsDeleted };
+    })();
   }
 
   close(): void {

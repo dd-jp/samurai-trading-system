@@ -113,7 +113,7 @@ body.stale #t-snap .tlabel{color:var(--amber)}
 .stagepanel{position:relative;margin-bottom:18px}
 .stagescroll{overflow-x:auto;padding-bottom:4px}
 .gates{position:relative;display:grid;gap:12px;min-width:1180px}
-.gates.v-path{grid-template-columns:repeat(8,1fr)}
+.gates.v-path{grid-template-columns:repeat(7,1fr)}
 .gates.v-rooms{grid-template-columns:repeat(4,1fr);min-width:900px}
 .gates.v-path::before{content:"";position:absolute;left:2%;right:2%;top:132px;height:2px;z-index:0;
   background:linear-gradient(90deg,transparent,rgba(56,225,255,.3) 8%,rgba(56,225,255,.3) 92%,transparent);
@@ -130,8 +130,6 @@ body.stale #t-snap .tlabel{color:var(--amber)}
 .gate.live{border-color:rgba(56,225,255,.55);box-shadow:0 0 18px rgba(56,225,255,.12),inset 0 0 24px rgba(56,225,255,.04)}
 .gate.live::before{background:var(--cyan);box-shadow:0 0 8px rgba(56,225,255,.8)}
 .gate.live .gname{color:var(--cyan)}
-.gate.dark{border-style:dashed;opacity:.55!important}
-.gate.dark .gname,.gate.dark .gdesc{color:var(--dim)}
 .gate.lobby{border-style:dashed;background:rgba(11,16,32,.4)}
 .gdesc{font-size:10px;color:var(--dim);margin-top:1px}
 .gate.selected{box-shadow:0 0 0 1px var(--cyan),0 0 18px rgba(56,225,255,.15)}
@@ -362,10 +360,9 @@ const GATES=[
   {id:'analysts',name:'Analysts',num:'01',kanji:'析',desc:'quorum gate'},
   {id:'debate',name:'Debate',num:'02',kanji:'議',desc:'3 personas · 3 rounds'},
   {id:'trader',name:'Trader',num:'03',kanji:'商',desc:'intent'},
-  {id:'invalidation',name:'Invalidation',num:'04',kanji:'反',desc:'not yet wired',cls:'dark'},
-  {id:'risk',name:'Risk',num:'05',kanji:'危',desc:'sizing · gates'},
-  {id:'verdict',name:'Verdict',num:'06',kanji:'決',desc:'go / no-go'},
-  {id:'execution',name:'Execution',num:'07',kanji:'行',desc:'fills'},
+  {id:'risk',name:'Risk',num:'04',kanji:'危',desc:'sizing · gates'},
+  {id:'verdict',name:'Verdict',num:'05',kanji:'決',desc:'go / no-go'},
+  {id:'execution',name:'Execution',num:'06',kanji:'行',desc:'fills'},
 ];
 const OUT_WORD={go:'go',no_go:'no-go',stopped:'stopped',quorum_skip:'quorum skip',in_flight:'in flight',idle:'idle'};
 const SEAL={go:'可',no_go:'否',stopped:'止',quorum_skip:'略'};

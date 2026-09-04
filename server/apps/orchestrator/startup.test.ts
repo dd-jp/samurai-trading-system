@@ -476,7 +476,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
       // longer includes BTC-USD/ETH-USD.
       expect(started?.payload).toMatchObject({
         mode: 'paper',
-        universe: ['QQQ', 'AAPL', 'TSLA'],
+        universe: DEFAULT_UNIVERSE.map((instrument) => instrument.asset),
       });
 
       // ...and the equity half is genuinely wired, not merely listed. Before

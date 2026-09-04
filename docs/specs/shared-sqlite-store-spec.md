@@ -502,25 +502,18 @@ CREATE TABLE daily_equity (
 );
 ```
 
-#### `invalidation_log` (2026-08-05, [Wayfinder: Devil's Advocate](https://github.com/dd-jp/samurai-trading-system/issues/291))
+#### `invalidation_log` — does not exist, and never will (restated 2026-09-03)
+
+Specced 2026-08-05 ([Wayfinder: Devil's Advocate](https://github.com/dd-jp/samurai-trading-system/issues/291)) as a standalone table for a standalone `invalidation` stage. David declined that stage 2026-09-02 (*"fold this to risk critic"*); [#994](https://github.com/dd-jp/samurai-trading-system/issues/994) folded the typed invalidation-condition mechanism into the Risk Critic instead, per `risk-manager-spec.md`'s "Module: Risk Critic — the invalidation fold" and `cross-spec-contracts.md` §8. This table, its `(instrument, bar_timestamp)` unique index, and its `evaluated`/`no_conditions`/`unavailable` status column are retired with the stage — none of it was ever built, and none of it is coming.
+
+What exists instead: `risk_critic_log` (migration 0032) gains two **nullable** `TEXT` columns via migration 0040 —
 
 ```sql
-CREATE TABLE invalidation_log (
-  id                TEXT PRIMARY KEY,
-  instrument        TEXT NOT NULL,
-  -- MUST be floored to the instrument's bar boundary; see the retrieval note below.
-  bar_timestamp     TEXT NOT NULL,
-  trace_id          TEXT NOT NULL,          -- audit join only, NOT a retrieval key
-  debate_id         TEXT,                   -- nullable by contract: thesis_source is {debate_id} | null
-  status            TEXT NOT NULL CHECK(status IN ('evaluated','no_conditions','unavailable')),
-  thesis_restated   TEXT,
-  -- RAW model emission: every condition as emitted, each tagged accepted/dropped:<reason>,
-  -- plus its tri-state evaluation where evaluated. NOT the post-validator list.
-  conditions_json   TEXT NOT NULL,
-  created_at        TEXT NOT NULL
-);
-CREATE UNIQUE INDEX invalidation_log_coord ON invalidation_log(instrument, bar_timestamp);
+ALTER TABLE risk_critic_log ADD COLUMN conditions_json TEXT NULL;
+ALTER TABLE risk_critic_log ADD COLUMN dropped_conditions_json TEXT NULL;
 ```
+
+`conditions_json` holds the persisted `EvaluatedCondition[]`, `dropped_conditions_json` the persisted `DroppedCondition[]` — both additive and optional, with **no backfill**: a row written before the fold, or one whose persisted list is unreadable, replays as an empty list reported `no_conditions`. Both columns are keyed by the same `debate_id` the rest of `risk_critic_log` already uses; there is no separate `(instrument, bar_timestamp)` coordinate and no `thesis_restated` column — the critic's verdict is already keyed by the debate it attacks, so a second, model-restated thesis has nothing to answer that the key doesn't already answer.
 
 #### `llm_spend` (added retroactively 2026-08-06 — was in code since #367, never in this spec)
 
@@ -580,6 +573,8 @@ could not answer (provider failure, spend-cap refusal, unreadable response). `ev
 handed NOTHING in that case, so the decision keeps its explicit `risk_critic: skipped` reason —
 the row is for the operator, and so a replay sees the same "no verdict" input the live run had.
 
+**Migration `0040` (added 2026-09-03 as part of #994's invalidation fold) adds two further nullable columns, not shown in the original `0032` DDL below.** See "`invalidation_log` — does not exist, and never will" above for the full account of what they hold and why there is no separate table.
+
 ```sql
 CREATE TABLE risk_critic_log (
   debate_id    TEXT NOT NULL PRIMARY KEY,
@@ -589,6 +584,7 @@ CREATE TABLE risk_critic_log (
   max_notional REAL NULL,
   reasoning    TEXT NOT NULL,
   created_at   TEXT NOT NULL
+  -- 0040 adds: conditions_json TEXT NULL, dropped_conditions_json TEXT NULL
 );
 
 CREATE INDEX idx_risk_critic_log_created_at ON risk_critic_log(created_at);
@@ -683,13 +679,9 @@ CREATE INDEX idx_outside_benchmark_samples_computed_at
   ON outside_benchmark_samples(computed_at DESC);
 ```
 
-**Retrieval is by `(instrument, bar_timestamp)`, never by an id.** A replay mints fresh `trace_id` and `debate_id` values, so neither can bridge a live row to a replayed lookup. The id column is row identity; the unique index is the lookup path — the same arrangement `debate_log` already relies on.
+**(restated 2026-09-03 after #994's fold.)** The three paragraphs this replaces — retrieval by `(instrument, bar_timestamp)`, a `floorToBar` write-path requirement, and "raw emission over validated list" as the reason for that table's `conditions_json` shape — were design rationale for `invalidation_log`, the table declined along with the standalone stage (see "`invalidation_log` — does not exist, and never will" above). None of it applies to what replaced it: `risk_critic_log`'s `conditions_json`/`dropped_conditions_json` (migration 0040) are retrieved by the same `debate_id` every other column on that row already uses — no separate coordinate, and so no floor-to-bar-boundary write discipline to get right or wrong. The raw-vs-validated distinction is unchanged in substance (`conditions_json` still means the raw, tagged emission per `EvaluatedCondition`/`DroppedCondition`, not a post-validator-only list), it simply now lives on an existing row rather than a bespoke table.
 
-**`bar_timestamp` must be floored to the bar boundary on write.** An unfloored write would have this table repeat exactly the failure `debate_log` used to have: a live tick at 14:32:07 files under 14:32:07 while a replay stepping bar boundaries looks up 14:30:00 and misses every row, invisibly, since the backtest harness's simulated clock sits exactly on the bar close and never exercises the mismatch. **This is not still open on `debate_log` to mirror — it was fixed there by #687** (`floorToBar`/`DEBATE_BAR_TIMEFRAME_MS`, applied at write in `debate-log-store.ts`). `invalidation_log`'s write path should apply the same `floorToBar` pattern `debate_log` now uses, not treat the old bug as a precedent to inherit. *(Corrected 2026-09-02 — this line previously asserted the `debate_log` defect was still live "today" and that fixing this table "does not fix `debate_log`"; both were stale. See `docs/reviews/devils-advocate-spec-cross-verify-2026-09-02.md` GAP-D. `invalidation_log` itself has no write path yet — `invalidation` is specced, not built.)*
-
-**Why the raw emission rather than the validated list.** The validator is deterministic code and re-runs on replay; the model emission is the nondeterministic artifact and is what must be stored. Storing the post-validator list would freeze a determinable transform into the row, so a replay of a window predating a validator fix would silently carry the old bug. It is also what makes validator-drop reasons inspectable on the dashboard.
-
-**`current_tick.stage` needs a table-rebuild migration.** Its `CHECK` enumerates the six original stage names and must gain `'invalidation'`; SQLite cannot alter a `CHECK` in place. `audit_log.stage` is unconstrained `TEXT` and needs no migration.
+**`current_tick.stage`'s `CHECK` stays at the six original stage names.** The standalone `invalidation` stage was declined 2026-09-02 (its mechanism folds into the Risk Critic instead, [#994](https://github.com/dd-jp/samurai-trading-system/issues/994)), so the table-rebuild migration this entry previously anticipated for a seventh name is never needed — SQLite cannot alter a `CHECK` in place, but there is no new name to add it for. `audit_log.stage` is unconstrained `TEXT` and needs no migration either way.
 
 ### Non-Collision Verification
 
@@ -737,7 +729,7 @@ CREATE INDEX idx_outside_benchmark_samples_computed_at
 
 ## Out of Scope
 
-**Market Intelligence's replay store** — confirmed a separate SQLite file (90-day auto-purge policy incompatible with this store's permanent-retention requirement — CLAUDE.md: track everything for HMRC/CGT). Not part of this spec.
+**Market Intelligence's replay store** — confirmed a separate SQLite file (90-day auto-purge policy incompatible with this store's permanent-retention requirement — CLAUDE.md: track everything for HMRC/CGT). Not part of this spec. The purge itself is implemented in `server/providers/market-intelligence/archive/mi-archive-store.ts` and wired at the orchestrator composition root, not here — see `docs/specs/market-intelligence-spec.md`'s "Retention" section and [#1060](https://github.com/dd-jp/samurai-trading-system/issues/1060).
 
 **Per-component cutover order/sequencing** — deferred to `/to-tickets`, not a spec-content decision.
 

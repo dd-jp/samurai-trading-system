@@ -13,10 +13,12 @@ import { DEFAULT_NOUS_MODELS, nousCredentials } from './nous-config.js';
 import {
   CACHE_READ_MULTIPLIER,
   CACHE_WRITE_MULTIPLIER,
+  crossesPromptTier,
   MODEL_RATES,
   pricedModels,
   priceServerToolCalls,
   priceUsage,
+  promptTokensOf,
   rateFor,
   SERVER_TOOL_USD_PER_CALL,
 } from './pricing.js';
@@ -160,7 +162,85 @@ describe('priceServerToolCalls (#476)', () => {
     // invocations." A meter that priced only tokens under-counted every such
     // call, and ADR-0008's ceiling quietly stopped being a ceiling.
     expect(priceServerToolCalls(1)).toBeCloseTo(SERVER_TOOL_USD_PER_CALL, 10);
-    expect(priceServerToolCalls(200)).toBeCloseTo(1, 10);
+    // 200 calls at the Nous-published $4.00/1,000. This literal is pinned
+    // rather than derived from the constant on purpose — it is the assertion
+    // that notices if the rate is edited without the edit being intended.
+    // It read $1.00 while the constant was the unconfirmable third-party
+    // $5.00/1,000 figure; #969 re-sourced it to the rate Nous actually bills.
+    expect(priceServerToolCalls(200)).toBeCloseTo(0.8, 10);
+  });
+
+  it('is the measured retrieval probe, decomposed', () => {
+    // THE GOLDEN CASE (#969). Not a synthetic example: this is the usage
+    // block a live `x_search` call returned on 2026-09-03, at
+    // `max_search_results: 10`, through `~x-ai/grok-latest` (which echoed
+    // `x-ai/grok-4.5`, so the pinned row is what prices it).
+    //
+    //   58,153 prompt tokens, of which 19,584 cached
+    //    4,007 output tokens, of which 2,009 reasoning
+    //
+    // The arithmetic below is what CONFIRMS the OpenAI-inclusive reading of
+    // that block: 38,569 fresh @ $1.60/M + 19,584 cached @ $0.40/M + 4,007
+    // out @ $4.80/M = $0.088778. Reading `cached` as a sibling of `prompt`
+    // instead of a subset gives $0.10012 — 13% high — and pricing the cache
+    // line at `CACHE_READ_MULTIPLIER` (0.1x = $0.16/M) instead of the
+    // published $0.40/M gives $0.084102. Only one reading lands here, which
+    // is why this test is the evidence and not just a regression guard.
+    const usage = {
+      input_tokens: 58_153 - 19_584,
+      output_tokens: 4_007,
+      cache_read_input_tokens: 19_584,
+    };
+
+    expect(priceUsage('x-ai/grok-4.5', usage)).toBeCloseTo(0.088_778, 6);
+    // The alias must agree with the id it resolves to, or the meter's answer
+    // would depend on whether the provider happened to echo.
+    expect(priceUsage('~x-ai/grok-latest', usage)).toBeCloseTo(0.088_778, 6);
+  });
+
+  it('applies the large-prompt tier to the whole request once crossed', () => {
+    // The cap-safe reading: at 200,001 prompt tokens EVERY token prices at
+    // the tier rate, not just the one over the line. Under-counting here
+    // spends past ADR-0008's ceiling; over-counting stops trading early.
+    const under = { input_tokens: 200_000, output_tokens: 1_000 };
+    const over = { input_tokens: 200_001, output_tokens: 1_000 };
+
+    // 200,000 @ $1.60/M + 1,000 @ $4.80/M
+    expect(priceUsage('x-ai/grok-4.5', under)).toBeCloseTo(0.3248, 6);
+    // 200,001 @ $4.00/M + 1,000 @ $12.00/M — a 2.5x step, not a marginal one.
+    expect(priceUsage('x-ai/grok-4.5', over)).toBeCloseTo(0.812_004, 6);
+
+    expect(crossesPromptTier('x-ai/grok-4.5', under)).toBe(false);
+    expect(crossesPromptTier('x-ai/grok-4.5', over)).toBe(true);
+  });
+
+  it('counts cached tokens toward the tier threshold', () => {
+    // A cached token still occupied the context window, which is what the
+    // vendor's threshold measures. Summing only `input_tokens` — which is
+    // EXCLUSIVE of cache by this repo's convention — would let a
+    // heavily-cached 300k-token prompt price at the base rate.
+    const usage = {
+      input_tokens: 100_000,
+      output_tokens: 1_000,
+      cache_read_input_tokens: 150_000,
+    };
+
+    expect(promptTokensOf(usage)).toBe(250_000);
+    expect(crossesPromptTier('x-ai/grok-4.5', usage)).toBe(true);
+  });
+
+  it('has no tier for models the vendor does not publish one for', () => {
+    const huge = { input_tokens: 5_000_000, output_tokens: 1 };
+    expect(crossesPromptTier('anthropic/claude-haiku-4.5', huge)).toBe(false);
+    // An unpriced model cannot cross a tier it has no row for.
+    expect(crossesPromptTier('not/a-real-model', huge)).toBe(false);
+  });
+
+  it('falls back to the multiplier for rows with no published cache rate', () => {
+    // Unchanged behaviour for every row that did not need a `cache_read`
+    // column: 1,000 cached @ 0.1 x $0.80/M input.
+    const usage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 1_000 };
+    expect(priceUsage('anthropic/claude-haiku-4.5', usage)).toBeCloseTo(0.000_08, 8);
   });
 
   it('never returns null, unlike priceUsage', () => {

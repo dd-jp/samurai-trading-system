@@ -23,13 +23,27 @@
  */
 
 import { fetchWithTimeout } from '../http/fetch-with-timeout.js';
-import { rateFor } from './pricing.js';
+import {
+  buildApiError,
+  DEFAULT_NOUS_TIMEOUT_MS,
+  NousApiError,
+  NousTruncatedError,
+  type NousWireUsage,
+  normaliseUsage,
+  resolveMeteredModel,
+  truncateForError,
+} from './nous-wire.js';
+import type { AnthropicUsage } from './pricing.js';
 
-/** Wider than the callers' own timeouts — a backstop that reaps a dangling socket after an outer race has settled, not a race partner. */
-export const DEFAULT_NOUS_TIMEOUT_MS = 60_000;
-
-/** Caps how much of a response body is ever baked into an error message (goes straight to logs). */
-const MAX_ERROR_BODY_CHARS = 500;
+// Re-exported, not redefined: `nous-wire.ts` owns these now so
+// `nous-responses.ts` cannot fork them (see that module's header). Existing
+// importers — `shared/llm/index.ts`, `nous-messages-client.ts`,
+// `nous-sentiment-client.ts`, `nous-chat.test.ts` — are unaffected.
+export {
+  DEFAULT_NOUS_TIMEOUT_MS,
+  NousApiError,
+  NousTruncatedError,
+} from './nous-wire.js';
 
 export interface NousChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -45,7 +59,21 @@ export interface NousChatRequest {
 export interface NousChatResult {
   /** The assistant's text. Never `undefined` — an absent content field reads as the empty string. */
   text: string;
-  usage: { input_tokens: number; output_tokens: number };
+  /**
+   * Normalised by `normaliseUsage`, so `input_tokens` EXCLUDES cached tokens
+   * and `cache_read_input_tokens` carries them separately — the Anthropic
+   * convention `priceUsage` bills against, not the OpenAI-inclusive one Nous
+   * reports on the wire.
+   */
+  usage: AnthropicUsage;
+  /**
+   * Server-side tool invocations this call billed for, when the endpoint
+   * reports any. Always absent here: `chat/completions` takes FUNCTION tools,
+   * which run on the caller's side and bill no invocation fee. The field is on
+   * the shared result shape so `spend-sink.ts` has one path to read, and
+   * `nous-responses.ts` is what populates it.
+   */
+  server_tool_calls?: number;
   /**
    * The model id to METER against — see `resolveMeteredModel`. Not necessarily
    * the string the provider echoed.
@@ -75,75 +103,6 @@ export interface NousChatOptions {
   signal?: AbortSignal | undefined;
 }
 
-/**
- * Typed failure for this client's network boundary.
- *
- * Carries `.status` because that is the field
- * `AnthropicLlmClient.classifyProviderError` duck-types into the typed LLM
- * error hierarchy — 429 becomes `LlmRateLimitError`, 408/504 become
- * `LlmTimeoutError`, both of which retry. Dropping the status would turn every
- * rate limit into an unretried hard failure.
- */
-export class NousApiError extends Error {
-  readonly status: number;
-  readonly body: unknown;
-
-  constructor(status: number, message: string, body?: unknown) {
-    super(message);
-    this.name = 'NousApiError';
-    this.status = status;
-    this.body = body;
-  }
-}
-
-/**
- * The response ran out of `max_tokens` before the model finished
- * (`finish_reason === 'length'`).
- *
- * Deliberately carries NO `.status`, so `classifyProviderError` lands it on
- * `LlmProviderError`, which `isRetryable` (anthropic-client.ts) rejects. That
- * is the whole reason this class exists.
- *
- * A truncated completion arrives as partial — often empty — text. Without this
- * it would reach `parseResponse`, fail, become `LlmMalformedResponseError`,
- * and be RETRIED, which re-bills a deterministic failure at the same
- * `max_tokens` that just failed. The repo has already paid for this lesson
- * once: `.github/workflows/ai-review.yml` records kimi-k3 spending its entire
- * budget on hidden chain-of-thought and returning `finish_reason=length` with
- * zero content, every time.
- *
- * The tokens it burned are NOT metered — every throw at this wire boundary
- * skips `AnthropicLlmClient.recordSpend`, which runs only on a returned
- * response. `usage` is carried on the error so the cost is at least visible in
- * the log rather than merely absent. Closing that gap properly means metering
- * failures too, which is a change to the spend sink's contract and its own
- * ticket; not retrying is what keeps the unmetered amount bounded to one call.
- */
-export class NousTruncatedError extends Error {
-  readonly model: string;
-  readonly max_tokens: number;
-  /** Tokens the provider billed for this truncated call. Unmetered — see the class doc comment. */
-  readonly usage: { input_tokens: number; output_tokens: number };
-
-  constructor(
-    model: string,
-    max_tokens: number,
-    usage: { input_tokens: number; output_tokens: number },
-  ) {
-    const output_tokens = usage.output_tokens;
-    super(
-      `Nous response truncated: ${model} hit finish_reason="length" after ${output_tokens} ` +
-        `output tokens against max_tokens=${max_tokens}. Not retried — a retry at the same ` +
-        'budget fails identically and bills again. Raise max_tokens or choose a model that ' +
-        'does not spend the budget on hidden reasoning tokens.',
-    );
-    this.name = 'NousTruncatedError';
-    this.model = model;
-    this.max_tokens = max_tokens;
-    this.usage = usage;
-  }
-}
-
 interface NousChoice {
   message?: { content?: unknown };
   finish_reason?: unknown;
@@ -152,58 +111,7 @@ interface NousChoice {
 interface NousResponseBody {
   choices?: NousChoice[];
   model?: unknown;
-  usage?: { prompt_tokens?: unknown; completion_tokens?: unknown };
-}
-
-function truncateForError(text: string): string {
-  return text.length > MAX_ERROR_BODY_CHARS
-    ? `${text.slice(0, MAX_ERROR_BODY_CHARS)}… (truncated, ${text.length} chars total)`
-    : text;
-}
-
-/** Best-effort extraction of an OpenAI-style `{ error: { type, message } }` envelope. */
-function describeErrorBody(body: unknown): string | undefined {
-  if (typeof body !== 'object' || body === null || !('error' in body)) return undefined;
-  const detail = (body as { error?: { type?: unknown; message?: unknown } }).error;
-  if (typeof detail !== 'object' || detail === null) return undefined;
-  const type = typeof detail.type === 'string' ? detail.type : 'error';
-  const message = typeof detail.message === 'string' ? detail.message : undefined;
-  return message === undefined ? undefined : `${type}: ${message}`;
-}
-
-async function buildApiError(response: Response): Promise<NousApiError> {
-  let body: unknown;
-  try {
-    body = await response.json();
-  } catch {
-    body = undefined;
-  }
-  const detail = describeErrorBody(body) ?? response.statusText;
-  return new NousApiError(response.status, `Nous API error: ${response.status} ${detail}`, body);
-}
-
-function toTokenCount(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
-}
-
-/**
- * Which model id the spend meter should price against.
- *
- * The meter prefers the model the provider says actually ran over the one that
- * was asked for, because a server-side reroute bills what ran. Through a proxy
- * that reasoning still holds, but the echoed string is no longer guaranteed to
- * be a Nous id — an upstream vendor's own id (`claude-haiku-4-5-20251001`) can
- * come back instead, and either it prices at nothing or, worse, at some other
- * table entry's rate.
- *
- * Both outcomes are wrong in the same direction as the cap: unpriced rows
- * contribute ZERO to `spend-cap.ts`'s sum, so an unrecognised echo silently
- * lifts the $50/14d ceiling. So the echo is honoured only when this table can
- * price it; otherwise the requested id — which `nousCredentials` has already
- * proved is priceable — is what gets metered.
- */
-function resolveMeteredModel(echoed: unknown, requested: string): string {
-  return typeof echoed === 'string' && rateFor(echoed) !== null ? echoed : requested;
+  usage?: NousWireUsage;
 }
 
 /** POSTs one non-streaming chat completion to Nous and normalises the reply. */
@@ -269,25 +177,19 @@ export async function nousChat(
     );
   }
 
-  // #1010: this reads exactly two fields off the OpenAI-shaped `usage`
-  // object and drops everything else — including any cache-related fields a
-  // provider or proxy might return (e.g. an OpenAI-style
-  // `prompt_tokens_details.cached_tokens`, or an Anthropic-style
-  // `cache_read_input_tokens` passed through verbatim). `NousChatResult.usage`
-  // above has no slot for them either. So even in a world where caching WAS
-  // requested and honoured upstream, this function would still report zero
-  // cache tokens to `AnthropicLlmClient.recordSpend` -> `spend-sink.ts` ->
-  // `llm_spend`, which is a structurally separate cause of the all-zero
-  // `cache_creation_input_tokens`/`cache_read_input_tokens` columns #1010
-  // measured, from "nothing ever asks for caching" (anthropic-client.ts's
-  // `renderMessageContent`, which #1010 also found does not clear the
-  // model's minimum). `nous-chat.test.ts`'s "cache accounting" block
-  // characterizes this drop so it can't silently persist unnoticed if the
-  // token-size gate above is ever cleared by a future model change.
-  const usage = {
-    input_tokens: toTokenCount(parsed.usage?.prompt_tokens),
-    output_tokens: toTokenCount(parsed.usage?.completion_tokens),
-  };
+  // #1010 characterized this site as DROPPING every cache field the provider
+  // reported, which made the all-zero `cache_read_input_tokens` column a
+  // property of this parser as well as of "nothing ever asks for caching".
+  // The drop is now fixed: `normaliseUsage` reads
+  // `prompt_tokens_details.cached_tokens` and — critically — subtracts it out
+  // of `input_tokens`, because Nous reports OpenAI-inclusive usage where a
+  // cached token is also a prompt token. #1010's other finding stands
+  // unchanged: nothing here REQUESTS caching, and the pinned debate model's
+  // requests measure under its cache minimum anyway, so this path normally
+  // sees a zero and reports a real zero. It stops being zero on the retrieval
+  // path (#969), where the provider caches large search prompts on its own
+  // initiative — which is exactly why the drop had to go.
+  const usage = normaliseUsage(parsed.usage);
   const finish_reason = typeof choice.finish_reason === 'string' ? choice.finish_reason : null;
 
   if (finish_reason === 'length') {

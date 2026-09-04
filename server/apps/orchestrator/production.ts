@@ -180,8 +180,11 @@ import {
 import {
   AlpacaNewsClient,
   CiiConsumer,
+  DEFAULT_MAX_SEARCH_RESULTS,
+  DEFAULT_MI_ARCHIVE_RETENTION_DAYS,
   GdeltGkgClient,
   GdeltIngestAgent,
+  GROK_REFRESH_MS,
   GrokAgent,
   MarketIntelligenceStore,
   type MiArchiveStore,
@@ -189,12 +192,18 @@ import {
   NousSentimentClient,
   PolymarketAgent,
   PolymarketClient,
+  X_SEARCH_MODEL,
+  XSearchClient,
 } from '../../providers/market-intelligence/index.js';
+import { positiveIntegerFromEnv } from '../../shared/env-integer.js';
 import type { AssetClass, Clock, TuningStore } from '../../shared/index.js';
 import { isThresholdBoundViolation, resolveVenuePacing, TokenBucket } from '../../shared/index.js';
 import { tryNousCredentials } from '../../shared/llm/index.js';
+import type { SharedStore as SqliteHandle } from '../../shared/store/index.js';
 import {
+  DEFAULT_MAX_LLM_CALL_ROWS,
   guardedStore,
+  pruneLlmCallLog,
   SqliteRiskLogStore,
   SqliteTraderLogStore,
 } from '../../shared/store/index.js';
@@ -230,7 +239,7 @@ import { JsonLogger } from './logger.js';
 import type { OrphanGoVerdict, OrphanVerdictScanner } from './orphan-verdict-scan.js';
 import { LIVE_BOOK_GBP } from './paper-profile.js';
 import { AlpacaAccountStateProvider } from './production/account-state.js';
-import { buildAnalystsStep } from './production/analysts-adapter.js';
+import { buildAnalystsStep, composeMarketIntelligence } from './production/analysts-adapter.js';
 // #753: the control arm's own account scalars — see `control-account-state.ts`.
 import {
   buildControlBookAnchorResolver,
@@ -559,6 +568,164 @@ export function captureLlmTextFromEnvironment(
   value: string | undefined = process.env.SAMURAI_LLM_CAPTURE,
 ): boolean {
   return value?.trim().toLowerCase() !== 'off';
+}
+
+/** The variable that overrides `llm_call_log`'s row ceiling (#1045). */
+export const ENV_LLM_CALL_LOG_MAX_ROWS = 'SAMURAI_LLM_CALL_LOG_MAX_ROWS';
+
+/** The variable that overrides the MI archive's retention window (#1060). */
+export const ENV_MI_ARCHIVE_RETENTION_DAYS = 'SAMURAI_MI_ARCHIVE_RETENTION_DAYS';
+
+/** The variable that overrides how many X posts a sentiment call fetches (#969). */
+export const ENV_X_MAX_SEARCH_RESULTS = 'SAMURAI_X_MAX_RESULTS';
+
+/**
+ * How many `llm_call_log` rows to keep (#1045).
+ *
+ * `min = 1`, not `0` — the one place this deliberately departs from the file
+ * sink's identical-looking setting, where `0` legally means "keep nothing".
+ * Here "keep nothing" is already spelled `SAMURAI_LLM_CAPTURE=off`, and a
+ * ceiling of zero would mean writing every prompt to disk purely to delete it
+ * on the next sweep. Two spellings for one intention is how a config comes to
+ * disagree with itself, so this one refuses.
+ *
+ * Exported and tested for the same reason `captureLlmTextFromEnvironment` is:
+ * a retention policy read inline in a 3,000-line composition root is a policy
+ * nobody can see.
+ */
+export function llmCallLogMaxRowsFromEnvironment(
+  value: string | undefined = process.env[ENV_LLM_CALL_LOG_MAX_ROWS],
+): number {
+  return positiveIntegerFromEnv(
+    value,
+    ENV_LLM_CALL_LOG_MAX_ROWS,
+    DEFAULT_MAX_LLM_CALL_ROWS,
+    1,
+    "the captured LLM prompt/response table's row ceiling (#1045)",
+  );
+}
+
+/**
+ * Prunes, reports what it removed, and never throws.
+ *
+ * Silence would be wrong in both directions, so both are logged: a sweep that
+ * dropped thousands of prompts is something an operator should be able to find
+ * afterwards when the rows they wanted are gone, and a sweep that keeps
+ * failing is a table growing without a ceiling while everything else looks
+ * healthy. Only a prune that did nothing — the ordinary case, every day below
+ * the ceiling — stays quiet.
+ *
+ * Swallowing is deliberate and matches how the capture itself behaves
+ * (`spend-sink.ts`: bookkeeping must never fail the thing it books). At boot a
+ * throw would abort a trading process over housekeeping; on the timer it would
+ * take down the daily feedback cycle. Neither trade is worth making for disk.
+ */
+function pruneLlmCallLogWithLog(
+  db: SqliteHandle,
+  maxRows: number,
+  logger: Logger,
+  trigger: 'startup' | 'daily',
+): void {
+  try {
+    // Declared as a `debate-engine` write, not an `orchestrator` one (#1048):
+    // `llm_call_log` is owned by the debate engine, which is the only writer of
+    // records into it. This sweep is housekeeping on that table rather than a
+    // second writer of records, but it is still a DML statement against it, so
+    // it goes through the guard under the owning stage instead of slipping past
+    // on a raw handle. Passing 'orchestrator' here would trip the guard, which
+    // is the correct answer to the question "may the orchestrator write rows to
+    // the debate engine's table?" — it may not.
+    const deleted = pruneLlmCallLog(guardedStore(db, 'debate-engine'), maxRows);
+    if (deleted === 0) return;
+    logger.log({
+      trace_id: trigger === 'startup' ? 'startup' : 'feedback-cycle',
+      stage: 'orchestrator',
+      level: 'info',
+      message: `pruned llm_call_log to its ${maxRows}-row ceiling`,
+      payload: { deleted, max_rows: maxRows, trigger },
+    });
+  } catch (error) {
+    logger.log({
+      trace_id: trigger === 'startup' ? 'startup' : 'feedback-cycle',
+      stage: 'orchestrator',
+      level: 'warn',
+      message:
+        'llm_call_log prune failed — captured prompts and responses are unaffected, but the ' +
+        'table is not bounded until this succeeds',
+      payload: { error: error instanceof Error ? error.message : String(error), trigger },
+    });
+  }
+}
+
+/**
+ * How many days of MI archive history to keep (#1060).
+ *
+ * The specced rule here is a DAY WINDOW, not a row ceiling — the opposite of
+ * `llmCallLogMaxRowsFromEnvironment` above, and deliberately so: LLM capture
+ * volume is cadence-bound (a 15-minute-debate measurement does not hold at a
+ * different cadence), whereas the archive's value genuinely is time-bound — a
+ * 90-day-old news item is not useful to a backtest replay of last week. The
+ * six spec statements this settles are reconciled in
+ * `docs/specs/market-intelligence-spec.md`.
+ *
+ * `min = 1`, matching `llmCallLogMaxRowsFromEnvironment`'s reasoning: there is
+ * no "keep nothing" spelling to protect here (unlike `SAMURAI_LLM_CAPTURE`),
+ * but a zero-day window would purge same-tick writes before `hydrate()` could
+ * ever read them back, which is not a retention policy anyone would choose on
+ * purpose.
+ */
+export function miArchiveRetentionDaysFromEnvironment(
+  value: string | undefined = process.env[ENV_MI_ARCHIVE_RETENTION_DAYS],
+): number {
+  return positiveIntegerFromEnv(
+    value,
+    ENV_MI_ARCHIVE_RETENTION_DAYS,
+    DEFAULT_MI_ARCHIVE_RETENTION_DAYS,
+    1,
+    "the MI archive's specced retention window (#1060)",
+  );
+}
+
+/**
+ * Prunes the MI archive, reports what it removed, and never throws — same
+ * posture as `pruneLlmCallLogWithLog` and for the same reason: a throw at
+ * boot would abort a trading process over housekeeping, and a throw on the
+ * timer would take down the daily feedback cycle.
+ *
+ * `archive` is optional because `ProductionConfig.miArchive` is: some tests,
+ * and any run that deliberately omits the deterministic news path, inject
+ * nothing. A missing archive means nothing to prune, not an error.
+ */
+function pruneMiArchiveWithLog(
+  archive: MiArchiveStore | undefined,
+  retentionDays: number,
+  clock: Clock,
+  logger: Logger,
+  trigger: 'startup' | 'daily',
+): void {
+  if (archive === undefined) return;
+  try {
+    const cutoff = new Date(clock.now().getTime() - retentionDays * 24 * 60 * 60 * 1000);
+    const { rawDeleted, itemsDeleted } = archive.purgeOlderThan(cutoff);
+    if (rawDeleted === 0 && itemsDeleted === 0) return;
+    logger.log({
+      trace_id: trigger === 'startup' ? 'startup' : 'feedback-cycle',
+      stage: 'orchestrator',
+      level: 'info',
+      message: `purged MI archive rows older than the ${retentionDays}-day retention window`,
+      payload: { rawDeleted, itemsDeleted, retention_days: retentionDays, trigger },
+    });
+  } catch (error) {
+    logger.log({
+      trace_id: trigger === 'startup' ? 'startup' : 'feedback-cycle',
+      stage: 'orchestrator',
+      level: 'warn',
+      message:
+        'MI archive purge failed — archived rows are unaffected, but the archive is not bounded ' +
+        'until this succeeds',
+      payload: { error: error instanceof Error ? error.message : String(error), trigger },
+    });
+  }
 }
 
 export function buildProductionComponents(config: ProductionConfig): ProductionComponents {
@@ -1259,6 +1426,41 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // neither reads the environment for itself — the same rule the file sink
   // follows (`buildEntrypointLogger`).
   const captureLlmText = captureLlmTextFromEnvironment();
+
+  /**
+   * #1045. The row ceiling is read and APPLIED here, at boot, and again on the
+   * daily timer below — two call sites, both at this composition root.
+   *
+   * Both, not one. Startup alone would fire once and then never again for the
+   * length of an unattended run, which is precisely the run the ceiling exists
+   * to bound; the daily sweep alone would leave a restart-heavy dev loop
+   * pruning nothing until 24h of uptime accumulated. Neither is a hot path:
+   * the statement is a no-op below the ceiling and the table has one writer.
+   *
+   * Wired here rather than inside `SqliteLlmSpendStore` on purpose. The store
+   * writes rows; deciding how many the SYSTEM keeps is a deployment policy,
+   * and burying it in the writer is how `pruneIngestedObservedFills` came to
+   * exist, be tested, and never be called from anything that ships (#313).
+   */
+  const llmCallLogMaxRows = llmCallLogMaxRowsFromEnvironment();
+  pruneLlmCallLogWithLog(config.db, llmCallLogMaxRows, logger, 'startup');
+
+  /**
+   * #1060. The specced 90-day MI archive purge, read and applied here at
+   * boot and again on the daily timer below — same two-call-site shape as
+   * the row ceiling immediately above, and for the same reason: startup
+   * alone never fires again during an unattended run, and the daily sweep
+   * alone leaves a restart-heavy dev loop pruning nothing.
+   *
+   * Wired here rather than inside `MiArchiveStore.write` on purpose, for the
+   * same reason as above: the store persists rows, deciding how long the
+   * SYSTEM keeps them is a deployment policy, and burying it in the writer
+   * is exactly how the MI archive's purge went unimplemented in the first
+   * place (#1060's own gap) and how `pruneIngestedObservedFills` (#313)
+   * shipped uncalled.
+   */
+  const miArchiveRetentionDays = miArchiveRetentionDaysFromEnvironment();
+  pruneMiArchiveWithLog(config.miArchive, miArchiveRetentionDays, clock, logger, 'startup');
   // `tryNousCredentials` rather than `nousCredentials`: an unconfigured Nous
   // environment degrades this optional stage to no-agent instead of failing
   // the boot, which is how the absent `XAI_API_KEY` behaved before ADR-0009
@@ -1278,11 +1480,76 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       new SqliteLlmSpendStore(guardedStore(config.db, 'debate-engine'), logger, captureLlmText),
     );
 
+  /**
+   * Whether the sentiment agent RETRIEVES (#969), as opposed to asking a model
+   * what it remembers.
+   *
+   * A separate switch from `sentimentEnabled`, not a widening of it, and
+   * DEFAULT OFF. Three reasons, in the order they bite:
+   *
+   * 1. It changes what the soak measures. `sentiment` has been excluded from
+   *    the evidence average while mute (#676); real items put it back in, and
+   *    that is the same gate that produced #625's zero-trade result. A run
+   *    with this on is a different experiment from #625/#752, and flipping it
+   *    by accident would make two soaks silently incomparable.
+   * 2. It changes what the run costs. Search results ride in the prompt —
+   *    roughly 5,300 input tokens per call at the default result count — so
+   *    this is the soak's main LLM cost lever after the debate itself.
+   * 3. The metered figure has not yet been reconciled against the provider's
+   *    invoice (the plan's V3). Until it has, turning this on is a deliberate,
+   *    dated act by an operator, not a default.
+   *
+   * `SAMURAI_X_MAX_RESULTS` is the dial, and it is read through the SHARED
+   * `positiveIntegerFromEnv` (#1045) rather than a validator of its own. That
+   * helper's header makes the argument — "two env vars in one system come to
+   * disagree about whether `\"abc\"` means abc, the default, or 0" — and a
+   * spend dial is the last place to disagree about it. Concretely it means a
+   * malformed value **throws at startup naming the variable** instead of
+   * silently falling back, which is the right failure for a setting whose
+   * whole job is bounding cost: an operator who typed `SAMURAI_X_MAX_RESULTS=ten`
+   * meant to change the spend and should not discover days later that nothing
+   * changed.
+   *
+   * The ceiling is enforced separately and does NOT throw. `XSearchClient`
+   * clamps to `[1, MAX_SEARCH_RESULTS_CEILING]` and warns, because 100 is a
+   * well-formed integer that an operator plausibly meant as "as many as you
+   * can" — refusing to boot over it would be worse than capping it and saying
+   * so. So: unusable input refuses, excessive input clamps.
+   */
+  const sentimentRetrieval =
+    config.sentimentRetrieval ??
+    process.env.SAMURAI_SENTIMENT_RETRIEVAL?.trim().toLowerCase() === 'on';
+  const xMaxSearchResults = positiveIntegerFromEnv(
+    process.env[ENV_X_MAX_SEARCH_RESULTS],
+    ENV_X_MAX_SEARCH_RESULTS,
+    DEFAULT_MAX_SEARCH_RESULTS,
+    1,
+    "the number of X posts each sentiment call retrieves, the soak's main LLM cost lever after " +
+      'the debate itself (#969)',
+  );
+
   const grokAgent =
     sentimentCredentials === undefined
       ? undefined
       : new GrokAgent({
-          client: new NousSentimentClient({ ...sentimentCredentials, logger }),
+          // The ONE construction-time difference between a sentiment stage
+          // that fills `social` and one that has never filled it. Everything
+          // downstream — the spend gate, the evidence guard, the bucket cache
+          // — is identical, which is the property `grok-agent.ts` claimed and
+          // this line is the test of.
+          client: sentimentRetrieval
+            ? new XSearchClient({
+                ...sentimentCredentials,
+                // The credentials' model is the PINNED `x-ai/grok-4.5`, on
+                // which `x_search` 400s ("supported only on OpenRouter-routed
+                // models"). The routed alias is not a preference here, it is
+                // the only thing that works — see `X_SEARCH_MODEL`.
+                model: X_SEARCH_MODEL,
+                maxSearchResults: xMaxSearchResults,
+                windowMs: GROK_REFRESH_MS,
+                logger,
+              })
+            : new NousSentimentClient({ ...sentimentCredentials, logger }),
           store: marketIntelligence,
           spendCap,
           spendSink: new SqliteLlmSpendStore(
@@ -1292,7 +1559,22 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
           ),
           clock,
           logger,
+          // Absent on runs with no archive, which is a working configuration:
+          // it costs replay and the post-hoc bot-share check, not correctness.
+          archive: config.miArchive,
         });
+
+  if (sentimentRetrieval && sentimentCredentials === undefined) {
+    logger.log({
+      trace_id: 'boot',
+      stage: 'market_intelligence',
+      level: 'warn',
+      message:
+        'SAMURAI_SENTIMENT_RETRIEVAL=on but no sentiment credentials are configured, so no ' +
+        'sentiment agent was built at all. `social` will be empty for this run and the ' +
+        'analysts will report NO DATA — the retrieval switch is doing nothing.',
+    });
+  }
 
   /**
    * The deterministic news path (map #552) — the writer that actually fills
@@ -1463,11 +1745,17 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // `mode` picks the implementation: `backtest` gets a producer holding no
     // LLM client at all, which is what makes "no live call in a replayed
     // path" (ADR-0003 §2) structural rather than a runtime check.
+    // `marketData` is where the invalidation conditions the same call emits are
+    // MEASURED (#994). Not a new dependency — this is the service the risk step
+    // already reads for `computeCorrelationEstimate` and `computePortfolioView`
+    // — and required rather than optional so that deleting this line is a
+    // compile error rather than a silently permanent `no_conditions`.
     critic: buildRiskCriticProducer({
       mode: config.mode,
       llm: llmClient,
-      store: new SqliteRiskCriticStore(guardedStore(config.db, 'risk')),
+      store: new SqliteRiskCriticStore(guardedStore(config.db, 'risk'), logger),
       spendCap,
+      marketData,
       logger,
     }),
   };
@@ -1623,21 +1911,32 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
         monitor: miCoverageMonitor,
         logger,
       },
-      // #464: the only writer `MarketIntelligenceStore` has. Absent under
-      // SAMURAI_SENTIMENT=off — no agent, no calls, and the analysts keep
-      // reporting NO_DATA_MARKER (#463), which is the honest default rather
-      // than a silent no-op. The agent's own 4h bucket makes calling it on
-      // every pass cheap: it returns immediately unless the bucket rolled.
-      // #552: the deterministic path when it is available, the retrieval-era
-      // agent only as a fallback. Not a preference — `GrokAgent` ingests `[]`
-      // by construction (`retrievalEvidence: false` is hard-coded), which is
-      // what pinned both news-fed analysts at confidence 0.05 and produced
-      // #625's 0.5478 conviction ceiling.
-      ...(miIngestAgent !== undefined
-        ? { marketIntelligence: miIngestAgent }
-        : grokAgent === undefined
+      // The writers `MarketIntelligenceStore` has. Absent entirely under
+      // SAMURAI_SENTIMENT=off with no archive — no agent, no calls, and the
+      // analysts keep reporting NO_DATA_MARKER (#463), which is the honest
+      // default rather than a silent no-op. Each agent's own refresh bucket
+      // makes calling them on every pass cheap: they return immediately
+      // unless the bucket rolled.
+      //
+      // BOTH, not one (#969). This was `miIngestAgent ?? grokAgent` — the
+      // deterministic path preferred, the sentiment agent kept only as a
+      // fallback — and #552's reasoning for that was sound at the time:
+      // `GrokAgent` ingested `[]` by construction, so running it alongside
+      // bought a second agent that contributed nothing.
+      //
+      // That inverts once sentiment retrieves. The two write DIFFERENT
+      // buckets — `MiIngestAgent` fills `news`, `GrokAgent` fills `social` —
+      // so picking one leaves the other empty by construction, and with the
+      // news path available the empty one is `social`: the bucket #969 exists
+      // to fill, and the one `sentiment-analyst.ts` has never once been given
+      // data for. Composing them is what makes the retrieving client reachable
+      // on the shipped path at all.
+      ...(() => {
+        const marketIntelligenceRefresh = composeMarketIntelligence([miIngestAgent, grokAgent]);
+        return marketIntelligenceRefresh === undefined
           ? {}
-          : { marketIntelligence: grokAgent }),
+          : { marketIntelligence: marketIntelligenceRefresh };
+      })(),
     }),
     // Two independent stores hang off this one step, both over `config.db`:
     // #367's `SqliteLlmSpendStore` meters what the debate COSTS (the
@@ -1852,6 +2151,16 @@ function buildMiIngestAgent(deps: {
  * cannot see same-tick concurrent exposure. See #1019 for the full mechanism,
  * why it is bounded today (no subclass classification on `DEFAULT_UNIVERSE`),
  * and why it stops being bounded once #895's pool arms D5 classification.
+ *
+ * **#1040 narrowed that to the CROSS-PASS case, and only that.** The phase
+ * split (`tick-loop.ts`'s `TailSequencer`) makes the portfolio-mutating tail
+ * of one plan run one instrument at a time, in plan order, so two instruments
+ * of the SAME pass can no longer reach Risk against the same pre-trade
+ * snapshot. What it does not close is two overlapping PASSES — the state this
+ * whole section is about, reachable because the interval is re-armed ahead of
+ * the pass (#669) — since each pass carries its own sequencer over its own
+ * plan and the two do not order against each other. #1019's submit-time
+ * reservation ledger is still the fix for that, and remains open.
  *
  * ## Scheduling
  *
@@ -2132,6 +2441,16 @@ export function startTickLoop(deps: {
       // the wrong way round: `runOnce`'s catch covers its own `await` and
       // nothing else, so with the raw chain in this set a pass failing here
       // would reject `Promise.all` and drop the remaining passes on the floor.
+      //
+      // The wait now spans up to W passes serialized behind one another's
+      // portfolio tails (#1040), not W fully-parallel passes. It is still
+      // bounded, but NOT because a tail is cheap: since #957 folded the Risk
+      // Critic into `steps.risk`, a tail contains a live LLM call of its own,
+      // bounded by `DEFAULT_CRITIC_BUDGET_MS` (10s, `risk-manager/critic.ts`)
+      // and by nothing here. So each tail costs that budget plus sub-second
+      // book operations, the head's LLM work is capped by `raceWithTimeout` in
+      // `debate-engine/analyst-response-collector.ts`, and this waits at most
+      // W x (head timeout + critic budget).
       await Promise.all([...passes]);
     },
   };
@@ -2528,7 +2847,36 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     return sample.comparison;
   };
 
+  // #1045. Read here as well as in `buildProductionComponents`, not passed
+  // between them: these are two separate composition roots, the read is pure
+  // and validated, and both resolve the same variable in the same process, so
+  // they cannot disagree. Threading it through `ProductionComponents` would
+  // widen a public shape to carry a housekeeping constant.
+  const llmCallLogMaxRows = llmCallLogMaxRowsFromEnvironment();
+  // #1060. Same reasoning, same shape, for the MI archive's 90-day window.
+  const miArchiveRetentionDays = miArchiveRetentionDaysFromEnvironment();
+
   const runFeedbackCycle = (feedback: FeedbackCycleConfig): void => {
+    // #1045, and FIRST — outside the try below, before any of the tuning work.
+    //
+    // Placement is the whole point. Inside that try, after `runDailyCycle`, a
+    // persistently throwing feedback cycle would silently disable retention
+    // too: the catch would fire every day and the table would grow forever
+    // while the log showed only a feedback failure. Housekeeping that depends
+    // on unrelated work succeeding is not housekeeping. `pruneLlmCallLogWithLog`
+    // swallows its own errors, so it cannot cost the cycle anything either.
+    //
+    // Riding this existing 24h timer rather than adding a scheduler follows
+    // #636's rule, stated at `runOutsideBenchmarks` below: additional work
+    // joins the existing daily suite, no new scheduling primitive. Note it is
+    // a plain `setInterval` from process start, so "daily" means every ~24h of
+    // uptime, not a calendar midnight — fine for a retention sweep, but it is
+    // not a nightly job and should not be described as one.
+    pruneLlmCallLogWithLog(config.db, llmCallLogMaxRows, logger, 'daily');
+    // #1060. Same placement rule applies: outside the try, so a persistently
+    // failing feedback cycle cannot silently disable the MI archive's purge.
+    pruneMiArchiveWithLog(config.miArchive, miArchiveRetentionDays, clock, logger, 'daily');
+
     try {
       const result = runDailyCycle({
         clock,

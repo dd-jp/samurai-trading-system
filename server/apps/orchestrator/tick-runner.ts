@@ -38,6 +38,36 @@
  * usually not need to. See `runExitCheckPass` below, shared with the tick
  * path so there is exactly one place that evaluates a flatten.
  *
+ * ## The phase split (#1040)
+ *
+ * The pass is in two halves, and the boundary is the FIRST PORTFOLIO READ,
+ * not the Trader entry point. The HEAD touches no portfolio state and is safe
+ * to overlap across instruments; the TAIL reads and mutates the book, and must
+ * not overlap, because `RiskManager.evaluate()` reads a portfolio snapshot and
+ * two instruments evaluating concurrently would each clear the gross cap
+ * against pre-trade exposure and breach it combined (#1019).
+ *
+ * Where the boundary falls differs by path, because the two paths read the
+ * book in different places:
+ *   decision path — the head is Analysts and Debate (neither step input
+ *                   carries a portfolio; neither stage references one), 93-96%
+ *                   of the pipeline's wall time. The tail opens at
+ *                   `steps.trader`, which sizes against equity.
+ *   tick path     — the exit check is ALSO head. `direct-bind.ts`'s `exitCheck`
+ *                   skips `snapshotForTick` deliberately: an exit sizes to the
+ *                   held quantity, never to equity, which is the cheapness the
+ *                   cheap path exists for (#743). The tail opens only once the
+ *                   check has produced an intent that will reach Risk — and ~29
+ *                   of 30 passes produce none, so they never queue at all.
+ *
+ * This module's part in that is one line at each boundary:
+ * `await ctx.beginPortfolioTail?.()`. The ordering itself lives in
+ * `tick-loop.ts`, which grants turns in PLAN order regardless of which head
+ * finished first — the runner does not know, and must not know, its place in
+ * the queue. Absent turnstile (backtest, smoke, control arm, direct unit
+ * construction) means "run now", which is what a caller with one pass in
+ * flight already is.
+ *
  * Short-circuit exits, each returning the stage that ended the pass:
  *   position_check — null exit intent (the common case: ~29 of 30 passes;
  *                    also reached from a quorum-skipped decision pass, #785)
@@ -251,6 +281,38 @@ export class SequentialTickRunner implements TickRunner {
       // `flatten_fired` exists at all: a rejected flatten and a rejected early
       // release are both invisible without a flag, and folding them together
       // would lose exactly the distinction the flag was added to preserve.
+      // PHASE SPLIT (#1040): the turn is taken HERE and not at the top of the
+      // exit check, because the exit check itself reads NO portfolio state —
+      // `direct-bind.ts`'s `exitCheck` skips `snapshotForTick` deliberately,
+      // since an exit sizes to the held quantity and never to equity, which is
+      // the whole cheapness of the cheap path (#743). Taking the turn earlier
+      // would queue every tick pass — and ~29 of 30 passes are tick passes that
+      // produce no intent at all — behind the settled tails of every instrument
+      // ahead of it in the plan, for nothing. What moving the wait here buys,
+      // stated no wider than it is true — the decision gate is claimed PER
+      // INSTRUMENT, so one plan mixes decision and tick passes, and an
+      // intent-bearing pass at index i still waits for 0..i-1 to settle,
+      // heads included:
+      //   - The ~29-of-30 passes that produce no intent no longer wait behind
+      //     a full LLM decision pass at all. A pass that DOES produce a
+      //     flatten still queues, but only after its check has run, so the
+      //     wait is shorter by the exit check and no more. The ADR-0014
+      //     flatten window is five minutes wide, which is why even that
+      //     matters.
+      //   - `buildGuardedRunner` releases the #669 claim when `runInstrument`
+      //     RETURNS, so a null-intent pass's release no longer depends on a
+      //     slow instrument ahead of it — the starvation #669 exists to
+      //     remove. An intent-bearing pass's release still does.
+      //
+      // Nothing above this line is book state: `traderLog.write` and
+      // `escalateTraderDiagnostics` inside the exit check are a record and an
+      // alert, not a position. Risk re-reads its portfolio snapshot INSIDE the
+      // turn, so cap enforcement is unaffected by where the wait is taken.
+      //
+      // `markStage('position_check')` above runs BEFORE the wait on purpose: a
+      // pass parked on the turnstile must be visible in `current_tick` rather
+      // than looking like a pass that never started.
+      await ctx.beginPortfolioTail?.();
       return runIntentTail(
         exitIntent,
         exitIntent.metadata.exit_reason === 'signal_decay'
@@ -369,6 +431,13 @@ export class SequentialTickRunner implements TickRunner {
         },
       });
     }
+
+    // PHASE SPLIT (#1040): everything above this line is the portfolio-free
+    // head — Analysts and Debate, whose step inputs carry no portfolio state
+    // and whose stages never reference one — and may overlap with sibling
+    // instruments' heads. Everything below reads or mutates the book, so it
+    // waits for this instrument's turn. See `TickContext.beginPortfolioTail`.
+    await ctx.beginPortfolioTail?.();
 
     markStage('trader');
     const traderInput = { trace_id, instrument, debate, clock };

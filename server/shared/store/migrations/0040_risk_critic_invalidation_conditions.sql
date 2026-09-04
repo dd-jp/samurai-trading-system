@@ -1,0 +1,32 @@
+-- The invalidation half of the risk critic's verdict (#994), folding
+-- `docs/specs/devils-advocate-spec.md`'s typed condition mechanism into
+-- check-pipeline step 7 per #997.
+--
+-- ADDITIVE AND NULLABLE, with NO backfill, and that is the whole design (#997
+-- Q3). ADR-0003 §2's replay-from-log means a `backtest` run reads rows a
+-- `live`/`paper` run wrote, so every row written before the fold has no
+-- conditions and never will. A NULL here replays as an empty list reported
+-- `no_conditions` — the SAME code path as a post-fold verdict whose conditions
+-- half was absent, unparseable, or emptied by the validator's drop rules. One
+-- branch for "nothing checkable came out", regardless of cause, which is what
+-- makes historical backtest results byte-identical across the fold.
+--
+-- Synthesising an `unevaluable` set for old rows was rejected: it fabricates a
+-- condition that never existed, and buys nothing, because `unevaluable` and
+-- `no_conditions` have identical (zero) enforcement effect.
+--
+-- JSON TEXT rather than a child table, matching how the rest of this store
+-- holds decision-record sub-structures: the list is read only as a whole,
+-- always by the `debate_id` that keys this row, and is never queried per
+-- condition. `dropped_conditions_json` is not an afterthought — a drop reason
+-- that is not persisted lets a systematically malformed prompt degrade into
+-- "conditions never fire" and hide for a month, which is exactly the failure
+-- `devils-advocate-spec.md` user story 23 exists to prevent.
+--
+-- The `verdict` CHECK is unchanged: a breach is not a verdict value. The
+-- producer reports facts and `RiskManagerImpl.evaluate()` holds the authority
+-- to reject on them (#997 Q2b), under its own `risk_critic:invalidated`
+-- binding constraint, so what the model actually SAID survives in this row.
+
+ALTER TABLE risk_critic_log ADD COLUMN conditions_json TEXT NULL;
+ALTER TABLE risk_critic_log ADD COLUMN dropped_conditions_json TEXT NULL;

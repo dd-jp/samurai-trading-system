@@ -19,6 +19,7 @@ import { RSI_SPEC, SMA_SPEC } from '../../pipeline/analysts/technical-analyst.js
 import type { ArmPerformance } from '../../pipeline/control-arm/index.js';
 import { computeIndicator } from '../../providers/market-data-service/index.js';
 import { GUARDED_THRESHOLD_NAMES } from '../../shared/index.js';
+import { STAGE_OWNED_TABLES } from '../../shared/store/index.js';
 import {
   type ArmComparisonEvidence,
   buildSmokeFixtureBars,
@@ -29,6 +30,9 @@ import {
   type ExitPathEvidence,
   evaluateSmokeGate,
   FAILOVER_IN_SESSION_OPEN_TIMES,
+  type FillSyncFailure,
+  type FillSyncFailureEvidence,
+  FillSyncFailureRecorder,
   FixedAccountStateProvider,
   formatSmokeReport,
   type LoggerResilienceEvidence,
@@ -40,6 +44,7 @@ import {
   type SmokeObservations,
   type ThresholdClampEvidence,
   UnreachableAlpacaClient,
+  untoleratedFillSyncFailures,
 } from './smoke-run.js';
 
 /** Both sticky tiers persisted untripped — what a healthy run leaves in `breaker_state` (B1). */
@@ -255,9 +260,11 @@ function healthyGateOptions(
     riskCritic?: RiskCriticEvidence;
     armComparison?: ArmComparisonEvidence;
     outsideBenchmarks?: OutsideBenchmarkEvidence;
+    fillSync?: FillSyncFailureEvidence;
   } = {},
 ) {
   return {
+    fillSync: overrides.fillSync ?? healthyFillSync(),
     armComparison: overrides.armComparison ?? healthyArmComparison(),
     outsideBenchmarks: overrides.outsideBenchmarks ?? healthyOutsideBenchmarks(),
     minTicks: overrides.minTicks ?? 2,
@@ -329,16 +336,34 @@ function healthyOutsideBenchmarks(
 }
 
 /**
- * What `runRiskCriticScenario` (#957) reports when the composition root wires
- * check-pipeline step 7's producer.
+ * What `FillSyncFailureRecorder` reports on a healthy run (#1049): the
+ * fill-sync poll never rejected. Scenario 5's scripted re-arm failure surfaces
+ * as a residual-exposure alert (gated above), never as a poll rejection, so
+ * the healthy shape is empty rather than a tolerated entry.
+ */
+function healthyFillSync(
+  overrides: Partial<FillSyncFailureEvidence> = {},
+): FillSyncFailureEvidence {
+  return { failures: [], ...overrides };
+}
+
+/**
+ * What `runRiskCriticScenario` reports when the composition root wires
+ * check-pipeline step 7's producer (#957) AND the invalidation half measures
+ * the fixture feed (#994).
  *
- * `unavailable` rather than a real verdict, matching what the scenario
- * actually records: `ConstantResponseLlmClient` answers with the debate's
- * fixture payload, which the critic's parser refuses, so the producer fails
- * open and persists the failure. The row is the evidence, not its content.
+ * A `pass` verdict carrying one condition the evaluator measured as
+ * `breached`, which `evaluate()` then rejects under `risk_critic:invalidated`
+ * — the outcome `SmokeLlmClient`'s fixture pins deterministically.
  */
 function healthyRiskCritic(overrides: Partial<RiskCriticEvidence> = {}): RiskCriticEvidence {
-  return { loggedVerdicts: ['unavailable'], stepError: null, ...overrides };
+  return {
+    loggedVerdicts: ['pass'],
+    stepError: null,
+    conditionStates: ['breached'],
+    bindingConstraint: 'risk_critic:invalidated',
+    ...overrides,
+  };
 }
 
 /** What `runDataFailoverScenario` (#562) reports when the root builds a FailoverDataSource. */
@@ -991,6 +1016,129 @@ describe('evaluateSmokeGate', () => {
   });
 });
 
+describe('evaluateSmokeGate — fill-sync contained failures (#1049)', () => {
+  const containedFailure = (key: string): FillSyncFailure => ({
+    message: 'fill poll failed',
+    error:
+      `ingestFills: 1 contained failure(s) — every other lot in this poll was advanced; ` +
+      `unresolved: lot-advance '${key}'`,
+  });
+
+  it('fails when the fill-sync poll rejected — every ingestFills call was a contained failure', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        fillSync: healthyFillSync({
+          failures: [
+            containedFailure('lot-a'),
+            containedFailure('lot-a'),
+            containedFailure('lot-b'),
+          ],
+        }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures).toEqual([expect.stringContaining('3 fill-sync poll failure(s)')]);
+    expect(gate.failures[0]).toContain("lot-advance 'lot-a'");
+    expect(gate.failures[0]).toContain('#1049');
+  });
+
+  it('fails on a periodic reconcile failure the same way — the first catch in the same poll', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        fillSync: healthyFillSync({
+          failures: [{ message: 'periodic reconcile failed', error: 'SQLITE_BUSY' }],
+        }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures).toEqual([expect.stringContaining('periodic reconcile failed')]);
+  });
+
+  it('fails on a residual-protection sweep failure the same way — same poll loop, same silence', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        fillSync: healthyFillSync({
+          failures: [{ message: 'residual-protection sweep failed', error: 'SQLITE_BUSY' }],
+        }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures).toEqual([expect.stringContaining('residual-protection sweep failed')]);
+  });
+
+  it('passes when the poll loop never rejected', () => {
+    const gate = evaluateSmokeGate(transactedObservations(), healthyGateOptions());
+
+    expect(gate.failures).toEqual([]);
+  });
+
+  describe('the tolerated allowlist', () => {
+    const failures: FillSyncFailure[] = [
+      containedFailure('lot-scripted'),
+      containedFailure('lot-real'),
+    ];
+
+    it('is empty — a healthy run has no poll rejection to tolerate', () => {
+      expect(untoleratedFillSyncFailures(failures)).toEqual(failures);
+    });
+
+    it('suppresses a failure by error substring and leaves every other one', () => {
+      expect(untoleratedFillSyncFailures(failures, ["lot-advance 'lot-scripted'"])).toEqual([
+        containedFailure('lot-real'),
+      ]);
+    });
+
+    it('ignores an empty entry rather than letting it tolerate everything', () => {
+      expect(untoleratedFillSyncFailures(failures, [''])).toEqual(failures);
+    });
+  });
+});
+
+describe('FillSyncFailureRecorder (#1049)', () => {
+  const entry = (level: 'info' | 'warn' | 'error', message: string, error?: string) => ({
+    trace_id: 'fill-sync',
+    stage: 'execution',
+    level,
+    message,
+    ...(error === undefined ? {} : { payload: { error } }),
+  });
+
+  it("records only the fill-sync loop's error-level rejections, and forwards every line", () => {
+    const forwarded: string[] = [];
+    const recorder = new FillSyncFailureRecorder({ log: (line) => forwarded.push(line.message) });
+
+    recorder.log(entry('error', 'periodic reconcile failed', 'reconcile boom'));
+    recorder.log(entry('error', 'fill poll failed', 'ingestFills: 1 contained failure(s)'));
+    recorder.log(entry('error', 'residual-protection sweep failed', 'boom'));
+    recorder.log(entry('warn', 'fill poll skipped: previous poll still running'));
+    recorder.log(entry('error', 'tick failed', 'unrelated'));
+    recorder.log(entry('info', 'fill poll failed'));
+
+    expect(recorder.evidence()).toEqual({
+      failures: [
+        { message: 'periodic reconcile failed', error: 'reconcile boom' },
+        { message: 'fill poll failed', error: 'ingestFills: 1 contained failure(s)' },
+        { message: 'residual-protection sweep failed', error: 'boom' },
+      ],
+    });
+    expect(forwarded).toHaveLength(6);
+  });
+
+  it('records a rejection whose payload carries no error string, rather than dropping it', () => {
+    const recorder = new FillSyncFailureRecorder({ log: () => undefined });
+
+    recorder.log(entry('error', 'fill poll failed'));
+
+    expect(recorder.evidence().failures).toEqual([{ message: 'fill poll failed', error: '' }]);
+  });
+});
+
 describe('formatSmokeReport', () => {
   it('states the reached stages, the verdict, the lot and the fill', () => {
     const observations = transactedObservations();
@@ -1291,6 +1439,42 @@ describe('runSmoke (end-to-end, real composition root)', () => {
     expect(result.observations.flattenSubmissions.every((row) => row.status === 'submitted')).toBe(
       true,
     );
+  });
+
+  /**
+   * #1049 — the recorder is WIRED, not merely built: the same fault #1048's
+   * measurement used (Execution's owned-table set without `fills`, so the
+   * sole-writer guard rejects every `ingestFills` write) must flip the gate
+   * to FAIL through `runSmoke` itself, naming the fill-sync line. A
+   * `fillSync: { failures: [] }` regression in `runSmoke` leaves every other
+   * `runSmoke` case green and only this one red. `guardedStore` reads
+   * `STAGE_OWNED_TABLES` at construction, so the swap has to precede the run
+   * and is restored whatever the outcome.
+   */
+  it('fails the gate through the real run when every ingestFills poll rejects (#1049)', {
+    timeout: 30_000,
+  }, async () => {
+    const owned = STAGE_OWNED_TABLES.execution;
+    STAGE_OWNED_TABLES.execution = owned.filter((table) => table !== 'fills');
+    try {
+      const result = await runSmoke({
+        ticks: 1,
+        tickIntervalMs: 50,
+        fillPollIntervalMs: 25,
+        deadlineMs: 20_000,
+        logger: { log: () => undefined },
+      });
+
+      expect(result.gate.passed).toBe(false);
+      expect(result.gate.failures).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(/^\d+ fill-sync poll failure\(s\) were logged and survived/),
+        ]),
+      );
+      expect(result.gate.failures.join('\n')).toContain('fill poll failed: ingestFills:');
+    } finally {
+      STAGE_OWNED_TABLES.execution = owned;
+    }
   });
 
   /**

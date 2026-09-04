@@ -53,7 +53,7 @@ Run to test whether a London-hours strategy on a US-underlying ETP gives up too 
 
 It is doubly favourable: 14:30–16:30 London is both where the range concentrates *and* the window in which LSE and US are simultaneously open, so LSE-side spreads on a US-underlying ETP are tightest exactly then. The London morning is the worst of both — thin LSE liquidity against a shut underlying, where an RSI reading is computed on a market-maker's guess rather than a live market.
 
-**This does not decide the session window.** It is an input to [#666](https://github.com/dd-jp/samurai-trading-system/issues/666), which measures LSE ETP behaviour directly rather than inferring it from the underlying.
+**This does not decide the session window.** It is an input to the LSE ETP spread measurement that would have been done directly rather than inferred from the underlying — [#666](https://github.com/dd-jp/samurai-trading-system/issues/666) closed 2026-08-27 out of scope without delivering it; [#750](https://github.com/dd-jp/samurai-trading-system/issues/750) now gates on it instead, and [#1053](https://github.com/dd-jp/samurai-trading-system/issues/1053) (open) owns delivering it.
 
 ## Result 4 — the same test run properly: every threshold pair is negative on unconditional entry
 
@@ -244,5 +244,5 @@ This is the first quantity in the project that makes the debate layer's contribu
 ## Limitations
 
 - Every figure uses **US instruments as proxies**. [#656](https://github.com/dd-jp/samurai-trading-system/issues/656) established there is no free LSE intraday history at this depth, so these characterise the *underlying's* physics, not the LSE ETP's own tape.
-- **The entire leveraged-ETP case rests on one observed 0.18% spread quote for 3USL.** #666 must measure it and may overturn ADR-0016.
+- **The entire leveraged-ETP case rests on one observed 0.18% spread quote for 3USL.** [#666](https://github.com/dd-jp/samurai-trading-system/issues/666), which would have measured it, closed 2026-08-27 out of scope without delivering that measurement; [#750](https://github.com/dd-jp/samurai-trading-system/issues/750) now gates on it instead, and [#1053](https://github.com/dd-jp/samurai-trading-system/issues/1053) (open) owns delivering it. Per [ADR-0016](../adr/0016-universe-leveraged-etps-ungated.md)'s Known weakness: if the real spread is materially wider than 0.18%, the expectancy uplift that justifies leverage still disappears.
 - Reach rates are computed from the daily open. A strategy entering on an indicator later in the session faces a different — and probably worse — conditional distribution, since part of the day's range is already spent. See [`41-tick-latency-economics.md`](41-tick-latency-economics.md) Result 1 for the intraday drift structure.

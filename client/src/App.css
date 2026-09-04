@@ -446,13 +446,6 @@ main {
   background: rgb(var(--ink-rgb) / 0.4);
 }
 
-/* Room 04 while the invalidation stage is unbuilt: lights off, and it says so
-   in the blurb rather than only by opacity. */
-.room-lights-off {
-  border-style: dashed;
-  opacity: 0.55;
-}
-
 .room-live {
   border-color: rgb(var(--cyan-rgb) / 0.55);
   /* Static glow only: the resting frame is also the full signal, so
@@ -969,6 +962,23 @@ main {
 
 .state-skipped,
 .state-not_reached {
+  color: var(--muted);
+}
+
+/*
+  Invalidation condition states (#1066). `unevaluable` is muted, NOT alarmed:
+  a failed read carries no enforcement effect, and colouring it like a breach
+  would report a data gap as a falsified thesis.
+*/
+.condition-breached {
+  color: var(--vermilion);
+}
+
+.condition-not_breached {
+  color: var(--go);
+}
+
+.condition-unevaluable {
   color: var(--muted);
 }
 

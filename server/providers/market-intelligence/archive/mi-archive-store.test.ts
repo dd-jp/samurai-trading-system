@@ -1,3 +1,7 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import BetterSqlite3 from 'better-sqlite3';
 import type { AssetClass } from '../../../shared/index.js';
 import type { IntelligenceItem } from '../types.js';
 import { type ArchivedItem, MiArchiveStore, type RawArchiveRow } from './mi-archive-store.js';
@@ -196,5 +200,149 @@ describe('MiArchiveStore', () => {
     store.write([raw({ fidelity: 'backfill' })], [archived()]);
 
     expect(store.rawRows(MI_SOURCES.alpacaNews)[0]?.fidelity).toBe('backfill');
+  });
+
+  /**
+   * The specced 90-day purge (#1060). Keyed on `ingested_at` — the same
+   * column `itemsKnownAt`/`hasItem` treat as the visibility gate — NOT
+   * `updated_at`, which is the vendor's revision stamp and can be back-dated
+   * relative to when we actually received the row.
+   */
+  describe('purgeOlderThan (#1060)', () => {
+    const NOW = new Date('2026-09-03T00:00:00Z');
+    const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
+    const cutoff = new Date(NOW.getTime() - NINETY_DAYS_MS);
+
+    it('deletes rows strictly older than the cutoff and leaves the rest untouched', () => {
+      const store = new MiArchiveStore();
+      const old = new Date(cutoff.getTime() - 1); // 1ms older than the window
+      const fresh = new Date(cutoff.getTime() + 1); // 1ms inside the window
+
+      store.write(
+        [
+          raw({ native_id: 'old', updated_at: old, ingested_at: old }),
+          raw({ native_id: 'fresh', updated_at: fresh, ingested_at: fresh }),
+        ],
+        [
+          archived({ native_id: 'old', updated_at: old, ingested_at: old }),
+          archived({ native_id: 'fresh', updated_at: fresh, ingested_at: fresh }),
+        ],
+      );
+
+      const result = store.purgeOlderThan(cutoff);
+
+      expect(result).toEqual({ rawDeleted: 1, itemsDeleted: 1 });
+      expect(store.rawRows(MI_SOURCES.alpacaNews).map((r) => r.native_id)).toEqual(['fresh']);
+      expect(store.itemsKnownAt('stocks', NOW, ALL_SOURCES)).toHaveLength(1);
+    });
+
+    /**
+     * The off-by-one this predicate invites: a row EXACTLY on the cutoff is
+     * exactly 90 days old, not OLDER than 90 days, so "purge records older
+     * than 90 days" keeps it. `< cutoff` (not `<=`) is what that reading
+     * requires.
+     */
+    it('keeps a row exactly on the cutoff — exactly 90 days old is not "older than" 90 days', () => {
+      const store = new MiArchiveStore();
+
+      store.write(
+        [raw({ native_id: 'on-edge', updated_at: cutoff, ingested_at: cutoff })],
+        [archived({ native_id: 'on-edge', updated_at: cutoff, ingested_at: cutoff })],
+      );
+
+      const result = store.purgeOlderThan(cutoff);
+
+      expect(result).toEqual({ rawDeleted: 0, itemsDeleted: 0 });
+      expect(store.rawRows(MI_SOURCES.alpacaNews)).toHaveLength(1);
+      expect(store.itemsKnownAt('stocks', NOW, ALL_SOURCES)).toHaveLength(1);
+    });
+
+    /**
+     * #1042 proposes a payload exemption for Reddit vendor bytes — the purge
+     * must not assume every row carries one. `payload` is `NOT NULL` today,
+     * so an empty string stands in for "no payload"; the predicate never
+     * references the column at all, so age is the only thing that decides.
+     */
+    it('deletes or retains a row with no payload purely by age, never by payload presence', () => {
+      const store = new MiArchiveStore();
+      const old = new Date(cutoff.getTime() - 1);
+      const fresh = new Date(cutoff.getTime() + 1);
+
+      store.write(
+        [
+          raw({ native_id: 'old-no-payload', updated_at: old, ingested_at: old, payload: '' }),
+          raw({
+            native_id: 'fresh-no-payload',
+            updated_at: fresh,
+            ingested_at: fresh,
+            payload: '',
+          }),
+        ],
+        [],
+      );
+
+      store.purgeOlderThan(cutoff);
+
+      const remaining = store.rawRows(MI_SOURCES.alpacaNews).map((r) => r.native_id);
+      expect(remaining).toEqual(['fresh-no-payload']);
+    });
+
+    it('does nothing when every row is inside the window', () => {
+      const store = new MiArchiveStore();
+      store.write([raw()], [archived()]);
+
+      expect(store.purgeOlderThan(cutoff)).toEqual({ rawDeleted: 0, itemsDeleted: 0 });
+      expect(store.rawRows(MI_SOURCES.alpacaNews)).toHaveLength(1);
+    });
+
+    it('does nothing against an empty store', () => {
+      const store = new MiArchiveStore();
+      expect(store.purgeOlderThan(cutoff)).toEqual({ rawDeleted: 0, itemsDeleted: 0 });
+    });
+
+    /**
+     * A real review caught this: `mi_archive_raw` has `idx_mi_archive_raw_
+     * ingested (ingested_at)` from migration 0001, so its delete uses it
+     * directly, but `mi_items` only had `idx_mi_items_class_ingested
+     * (asset_class, ingested_at)` — a composite keyed FIRST on `asset_class`,
+     * which SQLite cannot use for a range on the trailing column when the
+     * query has no `asset_class` predicate (as this delete does not). Without
+     * migration 0002's `idx_mi_items_ingested (ingested_at)`, the `mi_items`
+     * half of every sweep (boot + daily) was a full table scan against the
+     * table this store exists to keep re-normalizable, and therefore the one
+     * most likely to grow large.
+     *
+     * Checked against a SEPARATE readonly connection to the same on-disk
+     * file, matching `stage2-historical-store.test.ts`'s precedent: an
+     * `:memory:` store's private handle cannot be reached from outside the
+     * class, and `EXPLAIN QUERY PLAN` never executes the statement, so
+     * running it through a second, readonly handle is safe.
+     */
+    it('deletes through an index on both tables, not a full scan (#1060)', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'mi-archive-plan-'));
+      const dbPath = join(dir, 'archive.sqlite');
+      const store = new MiArchiveStore(dbPath);
+      store.write([raw()], [archived()]);
+      store.close();
+
+      const db = new BetterSqlite3(dbPath, { readonly: true });
+      const planFor = (table: 'mi_archive_raw' | 'mi_items'): string =>
+        (
+          db
+            .prepare(`EXPLAIN QUERY PLAN DELETE FROM ${table} WHERE ingested_at < ?`)
+            .all(cutoff.toISOString()) as { detail: string }[]
+        )
+          .map((row) => row.detail)
+          .join(' | ');
+
+      const rawPlan = planFor('mi_archive_raw');
+      const itemsPlan = planFor('mi_items');
+      db.close();
+
+      expect(rawPlan).toContain('idx_mi_archive_raw_ingested');
+      expect(rawPlan).not.toContain('SCAN');
+      expect(itemsPlan).toContain('idx_mi_items_ingested');
+      expect(itemsPlan).not.toContain('SCAN');
+    });
   });
 });

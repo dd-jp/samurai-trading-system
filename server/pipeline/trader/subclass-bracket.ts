@@ -53,9 +53,10 @@ import type { InstrumentSubclass } from '../../shared/index.js';
  * One subclass's frozen bracket and its deployment envelope.
  *
  * Every field is INJECTED CONFIG rather than a module constant, including the
- * round trip: #666 owns the measured per-subclass spreads and ADR-0018 states
- * plainly that "both brackets and both bars move directly with them, since each
- * cost figure is currently a single quote."
+ * round trip: it is still a single unmeasured quote (ADR-0016 Known
+ * weakness; delivery owned by #1053). ADR-0018 states plainly that "both
+ * brackets and both bars move directly with them, since each cost figure is
+ * currently a single quote."
  */
 export interface SubclassBracket {
   /**
@@ -88,7 +89,8 @@ export interface SubclassBracket {
    * Trader does not compute. It is carried as config and emitted on the
    * intent's metadata so the expectancy accounting reads the quote the
    * decision was actually made under rather than a constant compiled into a
-   * later analysis. #666 may move both figures.
+   * later analysis. Still a single unmeasured quote for both figures
+   * (ADR-0016 Known weakness; delivery owned by #1053).
    */
   round_trip_cost_pct: number;
   /**

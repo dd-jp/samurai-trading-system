@@ -246,6 +246,11 @@ import {
   LoggingResidualExposureAlertChannel,
   LoggingUnpricedFillAlertChannel,
 } from './console-channels.js';
+import {
+  FILL_SYNC_POLL_FAILED,
+  FILL_SYNC_RECONCILE_FAILED,
+  FILL_SYNC_SWEEP_FAILED,
+} from './fill-sync.js';
 import { installFaultHandlers, startFromEnvironment } from './index.js';
 import { buildEntrypointLogger, JsonLogger, type StdoutStream } from './logger.js';
 import {
@@ -262,7 +267,7 @@ import {
   buildProductionOrchestrator,
   SMOKE_TEST_UNIVERSE,
 } from './production.js';
-import type { Logger } from './types.js';
+import type { LogEntry, Logger } from './types.js';
 
 /**
  * How many of `smokeGdeltClient`'s canned rows the theme filter should keep.
@@ -873,6 +878,101 @@ export class RecordingFlattenReconcileAlertChannel implements FlattenReconcileAl
   async postFlattenReconcileAlert(alert: FlattenReconcileAlert): Promise<void> {
     this.alerts.push(alert);
   }
+}
+
+/**
+ * The `error`-level lines `startFillSync`'s three `catch` blocks
+ * (orchestrator/fill-sync.ts `runPoll`/`runOnce`) write when a pass rejects,
+ * referenced from that module's exports so a rewording there cannot leave a
+ * stale literal here. All three are the SAME hole: the loop logs, keeps polling, and nothing else
+ * in the process reacts — so a `reconcile()`/`ingestFills()`/sweep that
+ * rejects on every poll is invisible to every other check in this gate,
+ * which reads effects (rows, alerts, snapshots) rather than log lines.
+ */
+const FILL_SYNC_FAILURE_MESSAGES = [
+  FILL_SYNC_RECONCILE_FAILED,
+  FILL_SYNC_POLL_FAILED,
+  FILL_SYNC_SWEEP_FAILED,
+] as const;
+
+export type FillSyncFailureMessage = (typeof FILL_SYNC_FAILURE_MESSAGES)[number];
+
+function isFillSyncFailureMessage(message: string): message is FillSyncFailureMessage {
+  return (FILL_SYNC_FAILURE_MESSAGES as readonly string[]).includes(message);
+}
+
+/**
+ * One rejection the fill-sync loop logged and survived (#1049). `error` is the
+ * message the loop put in its payload — for `ingestFills` that is
+ * `throwContainedFailures`'s summary, which names each contained scope and
+ * key and never carries column content.
+ */
+export interface FillSyncFailure {
+  message: FillSyncFailureMessage;
+  error: string;
+}
+
+/** What `evaluateSmokeGate` needs from the fill-sync loop (#1049). */
+export interface FillSyncFailureEvidence {
+  failures: readonly FillSyncFailure[];
+}
+
+/**
+ * Fill-sync rejections a healthy smoke run is ALLOWED to produce, matched by
+ * substring against `FillSyncFailure.error`. Empty, and deliberately declared
+ * rather than implied: the one fault the harness scripts on this path
+ * (scenario 5's failed re-arm, #549) is contained inside `maybeRearmResidual`
+ * and surfaces as a residual-exposure alert the gate already counts, never as
+ * a poll rejection. A future scripted fault that DOES reject a poll gets
+ * named here, by its identifier, rather than lifting the gate's count.
+ */
+export const TOLERATED_FILL_SYNC_FAILURES: readonly string[] = [];
+
+/**
+ * The rejections the gate fails on: every recorded failure whose `error`
+ * contains no tolerated substring. An empty tolerated entry is IGNORED rather
+ * than honoured — `'x'.includes('')` is true, so one blank line in the
+ * allowlist would otherwise tolerate every failure the loop ever logs.
+ */
+export function untoleratedFillSyncFailures(
+  failures: readonly FillSyncFailure[],
+  tolerated: readonly string[] = TOLERATED_FILL_SYNC_FAILURES,
+): FillSyncFailure[] {
+  const allowed = tolerated.filter((entry) => entry.length > 0);
+  return failures.filter((failure) => !allowed.some((entry) => failure.error.includes(entry)));
+}
+
+/**
+ * Records every fill-sync rejection (#1049) on the way to the real logger, so
+ * the gate can read the one channel the poll loop's failures reach.
+ *
+ * A wrapper scoped to `FILL_SYNC_FAILURE_MESSAGES` rather than a `Logger` the
+ * gate reads back in full: the gate's other checks read effects, not log
+ * lines, and this stays as narrow as the hole it closes. Never throws: a
+ * recorder that could fail would take the logger it wraps down with it.
+ */
+export class FillSyncFailureRecorder implements Logger {
+  private readonly failures: FillSyncFailure[] = [];
+
+  constructor(private readonly inner: Logger) {}
+
+  log(entry: LogEntry): void {
+    if (entry.level === 'error' && isFillSyncFailureMessage(entry.message)) {
+      this.failures.push({ message: entry.message, error: payloadError(entry.payload) });
+    }
+    this.inner.log(entry);
+  }
+
+  evidence(): FillSyncFailureEvidence {
+    return { failures: [...this.failures] };
+  }
+}
+
+/** The `error` string `startFillSync` puts in its rejection payloads, or `''` if absent. */
+function payloadError(payload: unknown): string {
+  if (typeof payload !== 'object' || payload === null) return '';
+  const { error } = payload as { error?: unknown };
+  return typeof error === 'string' ? error : '';
 }
 
 /**
@@ -2866,12 +2966,70 @@ async function runDataFailoverScenario(logger: Logger): Promise<DataFailoverEvid
   }
 }
 
-/** What `evaluateSmokeGate` needs from the risk-critic scenario (#957). */
+/** What `evaluateSmokeGate` needs from the risk-critic scenario (#957, extended by the invalidation fold #994). */
 export interface RiskCriticEvidence {
   /** `risk_critic_log.verdict` values the run's own composition root wrote, in insertion order. */
   loggedVerdicts: readonly string[];
   /** The step's throw, if consulting the critic took the risk stage down instead of failing open. */
   stepError: string | null;
+  /** `state` of every persisted invalidation condition — MEASURED by `invalidation.ts`, never asserted by the model (#994). */
+  conditionStates: readonly string[];
+  /** The decision's `binding_constraint`. `risk_critic:invalidated` is the fold's own enforcement path. */
+  bindingConstraint: string | null;
+}
+
+/**
+ * The one LLM double in the smoke process, answering BOTH call sites (#994).
+ *
+ * The shared debate fixture does not satisfy the critic's parser, so before
+ * the fold the critic could only ever be observed failing open. That is enough
+ * to prove the producer is wired, and NOT enough to prove the invalidation
+ * half runs: a conditions block that is never emitted is measured by nothing,
+ * and "conditions never fire" is precisely this repo's dominant defect shape.
+ *
+ * So this client branches on the attribution stage the producer already sets
+ * for metering, and hands the critic call one well-formed condition whose
+ * outcome is FIXED BY THE FIXTURE: the mark is `SMOKE_MARK_PRICE`, the
+ * threshold sits one unit above it, and `<` on a `buy` is the coherent
+ * direction — so a correctly wired evaluator must measure `breached`, and
+ * `evaluate()` must reject under its own constraint. Nothing here asserts a
+ * state; the state is measured from the same fixture feed the rest of the run
+ * uses.
+ */
+export class SmokeLlmClient implements LlmClient {
+  readonly #debate = new ConstantResponseLlmClient();
+
+  get calls(): number {
+    return this.#debate.calls;
+  }
+
+  async complete<T>(request: LlmRequest<T>): Promise<LlmResponse<T>> {
+    if (request.context.attribution?.stage !== 'risk_critic') {
+      return this.#debate.complete(request);
+    }
+    const rawText = JSON.stringify({
+      verdict: 'pass',
+      max_notional: null,
+      reasoning: 'smoke fixture: no narrative risk, one falsifying condition',
+      conditions: [
+        {
+          id: 'smoke-thesis-needs-price-above-threshold',
+          observable: { kind: 'mark' },
+          comparator: '<',
+          threshold: SMOKE_MARK_PRICE + 1,
+          rationale: 'below this the breakout that justified the entry has already failed',
+        },
+      ],
+    });
+    const parsed = request.parseResponse(rawText);
+    if (!parsed.valid) {
+      throw new Error(
+        `SmokeLlmClient: the critic fixture no longer satisfies the critic parser ` +
+          `(${parsed.reason}) — the stub payload and the critic schema have drifted apart.`,
+      );
+    }
+    return { data: parsed.data, raw_text: rawText, latency_ms: 0 };
+  }
 }
 
 /**
@@ -2886,12 +3044,15 @@ export interface RiskCriticEvidence {
  * external ever asserts fires (#388, #364, #562), and step 7 spent its entire
  * life so far in exactly that state (docs/reviews/triage-2026-08-06.md F-5).
  *
- * VERDICT-AGNOSTIC on purpose. `ConstantResponseLlmClient` answers with the
- * debate's fixture payload, which does not satisfy the critic's parser, so the
- * producer fails open and records `unavailable`. That row still proves the
- * producer was wired, dialled, metered and persisted — and asserting the row
- * rather than its content keeps this gate from turning red on an unrelated
- * change to the shared fixture response.
+ * The fold (#994) is asserted too, not just the wiring. `SmokeLlmClient`
+ * answers the `risk_critic` stage — and only that stage — with a `pass` prose
+ * verdict carrying one condition the fixture mark already violates
+ * (`mark < SMOKE_MARK_PRICE + 1`, against a fixture mark of
+ * `SMOKE_MARK_PRICE`). So the gate can assert content without drifting with
+ * the shared debate fixture: the persisted condition must read `breached`,
+ * proving deterministic code measured it rather than trusting the model, and
+ * the decision's binding constraint must be `risk_critic:invalidated`, proving
+ * a measured breach rejects an intent whose prose verdict said `pass`.
  */
 async function runRiskCriticScenario(logger: Logger): Promise<RiskCriticEvidence> {
   const db = openSharedStore(':memory:');
@@ -2921,7 +3082,7 @@ async function runRiskCriticScenario(logger: Logger): Promise<RiskCriticEvidence
       miArchive: new MiArchiveStore(),
       accountState: new FixedAccountStateProvider(),
       alpacaBrokerClient: new UnreachableAlpacaClient(),
-      llmClient: new ConstantResponseLlmClient(),
+      llmClient: new SmokeLlmClient(),
     });
 
     // A viable ENTRY — the population #955's cadence names. An exit would
@@ -2940,19 +3101,42 @@ async function runRiskCriticScenario(logger: Logger): Promise<RiskCriticEvidence
     );
 
     let stepError: string | null = null;
+    let bindingConstraint: string | null = null;
     try {
-      await components.steps.risk({ trace_id: 'smoke-risk-critic', intent, clock });
+      const decision = await components.steps.risk({
+        trace_id: 'smoke-risk-critic',
+        intent,
+        clock,
+      });
+      bindingConstraint = decision.binding_constraint;
     } catch (error) {
       stepError = error instanceof Error ? error.message : String(error);
     }
 
-    const logged = db.prepare('SELECT verdict FROM risk_critic_log ORDER BY rowid').all() as {
-      verdict: string;
-    }[];
+    const logged = db
+      .prepare('SELECT verdict, conditions_json FROM risk_critic_log ORDER BY rowid')
+      .all() as { verdict: string; conditions_json: string | null }[];
 
-    return { loggedVerdicts: logged.map((row) => row.verdict), stepError };
+    return {
+      loggedVerdicts: logged.map((row) => row.verdict),
+      stepError,
+      conditionStates: logged.flatMap((row) => readSmokeConditionStates(row.conditions_json)),
+      bindingConstraint,
+    };
   } finally {
     db.close();
+  }
+}
+
+/** Reads persisted condition states for the gate, tolerating a NULL or unreadable column exactly as the replay path does. */
+function readSmokeConditionStates(stored: string | null): string[] {
+  if (stored === null) return [];
+  try {
+    const parsed: unknown = JSON.parse(stored);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((entry) => String((entry as { state?: unknown }).state));
+  } catch {
+    return [];
   }
 }
 
@@ -3065,6 +3249,14 @@ export function evaluateSmokeGate(
      * `yarn smoke` green with a dashboard panel that says nothing was measured.
      */
     outsideBenchmarks: OutsideBenchmarkEvidence;
+    /**
+     * The fill-sync loop's rejections (#1049) — required, not optional, for the
+     * same "compile error, not a silent no-op" reason every mechanism above is.
+     * This is the only check in the gate that reads the poll loop's own
+     * failure channel; without it `ingestFills` can reject on every poll with
+     * the gate green.
+     */
+    fillSync: FillSyncFailureEvidence;
   },
 ): SmokeGateResult {
   const failures: string[] = [];
@@ -3481,6 +3673,27 @@ export function evaluateSmokeGate(
         'risk_critic_log row was written — the critic producer is not wired at all, so ' +
         'check-pipeline step 7 is back to the never-run state review F-5 recorded, and every ' +
         'decision silently records risk_critic: skipped while looking healthy (#957)',
+    );
+  }
+
+  // #994: the fold's own enforcement assertion. The fixture pins the outcome
+  // — a mark of SMOKE_MARK_PRICE against a threshold one unit above it — so a
+  // measured `breached` and the reject that follows are the ONLY correct
+  // result. Delete the `marketData:` line from `buildRiskCriticProducer`, or
+  // the `breachedConditions` block from `evaluate()`, and this fails.
+  if (!critic.conditionStates.includes('breached')) {
+    failures.push(
+      'the risk critic emitted a well-formed invalidation condition and no persisted ' +
+        `condition measured \`breached\` (states: ${JSON.stringify(critic.conditionStates)}) — ` +
+        'the deterministic evaluator did not run over the fixture feed, so the typed ' +
+        'invalidation half is emitted and measured by nothing (#994)',
+    );
+  } else if (critic.bindingConstraint !== 'risk_critic:invalidated') {
+    failures.push(
+      'a measured BREACHED invalidation condition did not reject the intent (binding ' +
+        `constraint: ${critic.bindingConstraint ?? 'none'}) — \`evaluate()\` holds that ` +
+        'authority (#997 Q2b), so a breach that only gets logged is a checklist with no ' +
+        'teeth (#994)',
     );
   }
 
@@ -3919,6 +4132,21 @@ export function evaluateSmokeGate(
     );
   }
 
+  // #1049 — the fill-sync loop must never have rejected a poll. It logs and
+  // keeps polling by design (fill-sync.ts `runOnce`), so this is the only
+  // place a run whose `ingestFills` fails on every call is visible at all.
+  const untolerated = untoleratedFillSyncFailures(options.fillSync.failures);
+  if (untolerated.length > 0) {
+    const distinct = [
+      ...new Set(untolerated.map((failure) => `${failure.message}: ${failure.error}`)),
+    ];
+    failures.push(
+      `${untolerated.length} fill-sync poll failure(s) were logged and survived — the loop keeps ` +
+        'polling by design, so nothing else in this gate sees a reconcile/ingestFills/sweep path that ' +
+        `rejects on every call (#1049). Distinct: ${distinct.join(' | ')}`,
+    );
+  }
+
   return { passed: failures.length === 0, failures };
 }
 
@@ -4104,7 +4332,11 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
   // no artefacts behind. The store is `:memory:` for the same reason — no
   // `data/*.sqlite` to clean up, and no chance of a smoke run polluting a real
   // paper run's history.
-  const logger = options.logger ?? new JsonLogger();
+  // #1049: every line the run logs passes through the recorder, so the
+  // fill-sync loop's swallowed rejections reach the gate. Forwarding is
+  // unconditional — the operator still sees every line.
+  const fillSyncFailures = new FillSyncFailureRecorder(options.logger ?? new JsonLogger());
+  const logger: Logger = fillSyncFailures;
   const db = openSharedStore(':memory:');
 
   try {
@@ -4468,6 +4700,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // tape has to be complete before the comparison is taken over it.
       armComparison,
       outsideBenchmarks,
+      fillSync: fillSyncFailures.evidence(),
       exitPath: {
         ...exitPathHarnessResult,
         // Alerts from BOTH the six-stage tick loop and the exit-path harness —

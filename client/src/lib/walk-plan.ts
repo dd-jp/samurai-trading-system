@@ -31,8 +31,8 @@ export const HOP_MAX_MS = 450;
 /**
  * Whole-walk budget per chip per poll. Chips walk in parallel, so this bounds
  * when the replay finishes: always before the next 3-second poll. The floor
- * is always satisfiable inside it — the longest possible walk is 7 hops
- * (Lobby/rotation through all seven rooms), and 7 x 150 = 1050 <= 1200.
+ * is always satisfiable inside it — the longest possible walk is 6 hops
+ * (Lobby/rotation through all six rooms), and 6 x 150 = 900 <= 1200.
  */
 export const WALK_BUDGET_MS = 1_200;
 

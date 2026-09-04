@@ -155,9 +155,12 @@ which reduces the headline to a two-sample gross-expectancy gap between **disjoi
 script computes the reduction both ways and asserts they agree.
 
 *Cost cancels from the headline.* `bar = (cost − E_gross)/W`, and both arms share `cost` and `W`,
-so the on/off **delta** is invariant to the 0.18% / 0.41% spread assumptions. #666's open question
-about real spreads moves the **absolute** bars in §6 but cannot move the verdict. (This is a
-method note, not a limitation.)
+so the on/off **delta** is invariant to the 0.18% / 0.41% spread assumptions. A real per-subclass
+spread measurement — never delivered; [#666](https://github.com/dd-jp/samurai-trading-system/issues/666)
+closed 2026-08-27 out of scope without doing so, [#750](https://github.com/dd-jp/samurai-trading-system/issues/750)
+now gates on it instead, and [#1053](https://github.com/dd-jp/samurai-trading-system/issues/1053)
+(open) owns delivering it — would move the **absolute** bars in §6 but cannot move the verdict.
+(This is a method note, not a limitation.)
 
 *Minimum detectable effect, computed from in-sample dispersion before the out-of-sample arm is
 scored.* §6.2 reports the smallest bar reduction this design could detect at 80% power / 5%
@@ -374,9 +377,12 @@ bootstrap over. That is a deliberate consequence of keeping the grid small, not 
 6. **Costs are per-subclass constants applied to names they were not measured on.** 0.18% and
    0.41% come from ADR-0018, quoted off SPY and TSLA, and are applied here to QQQ, MSTR, NVDA and
    PLTR. Per §5 this **cancels from the on/off delta** and cannot move the verdict; it does move
-   every absolute bar in §6.3, and [#666](https://github.com/dd-jp/samurai-trading-system/issues/666)
-   owns the real spreads. A single-stock spread materially above 0.41% would raise all four
-   single-stock bars together.
+   every absolute bar in §6.3. The real spreads remain unmeasured: [#666](https://github.com/dd-jp/samurai-trading-system/issues/666),
+   which would have measured them, closed 2026-08-27 out of scope without delivering that
+   measurement; [#750](https://github.com/dd-jp/samurai-trading-system/issues/750) now gates on it
+   instead, and [#1053](https://github.com/dd-jp/samurai-trading-system/issues/1053) (open) owns
+   delivering it. A single-stock spread materially above 0.41% would raise all four single-stock
+   bars together.
 7. **Underlying US tape, not the ETP tape that would actually be traded.** No tracking error, no
    ETP spread beyond the assumed round trip, and **no GBP/USD leg** — ADR-0015's equity book is
    GBP-settled on USD underlyings. Inherited from ADR-0018 and unchanged here, but it means every

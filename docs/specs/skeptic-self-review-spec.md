@@ -7,6 +7,14 @@
 **Supersedes:** Nothing  
 **Research basis:** `docs/research/README.md` doc 16 (open finding), Quant Vault "play the skeptic" prompt, AI Vault "Silent AI Agent Failure Checklist" pattern
 
+> **Contract note added 2026-09-03.** This spec was declined 2026-08-17 on its own grounds (below), a decision that stands unchanged. Separately and later, the `InvalidationResult` / `invalidation` stage contract this proposal amends — the base layer of `devils-advocate-spec.md` it builds on — was **declined as a standalone stage on 2026-09-02** (David: *"fold this to risk critic"*; CLAUDE.md's Architecture line, grilling ticket [#997](https://github.com/dd-jp/samurai-trading-system/issues/997), implemented by [#994](https://github.com/dd-jp/samurai-trading-system/issues/994)).
+>
+> Under that fold, conditions ride `RiskCriticVerdict.conditions` / `dropped_conditions` (`server/pipeline/risk-manager/types.ts`, persisted on `risk_critic_log` via migration 0040); there is no `InvalidationResult`, no `invalidation_log`, and no `final_stage: 'invalidation'` — see `docs/specs/risk-manager-spec.md`'s "Module: Risk Critic — the invalidation fold" and `docs/specs/cross-spec-contracts.md` §8 for the current, live contract.
+>
+> There is also no `contracts/invalidation.ts`, and never was: it was a planned path for the unbuilt stage below, never adopted. <!-- cite-exempt: historical — contracts/invalidation.ts was never built; the stage it would have served was declined 2026-09-02, folded into the Risk Critic instead -->
+>
+> Every reference to `InvalidationResult` and to `invalidation` as a pipeline stage below this line is therefore doubly historical — first as an unbuilt design, second as a contract that was never adopted at all — and the body is preserved verbatim as the declined-proposal record rather than rewritten to match either later ruling.
+
 ## Why this was declined
 
 Stated here in the body rather than as a banner, so a later reader does not find an unbuilt spec and assume it is pending work. **Everything below this section is the declined proposal, preserved as the record of what was considered — it is not a plan.**

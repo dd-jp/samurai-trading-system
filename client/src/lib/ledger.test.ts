@@ -29,7 +29,7 @@ describe('updateLedger — first-paint seeding', () => {
       settled_at: at(13_000),
       seeded: true,
     });
-    expect(state.entries[1]?.settled_at).toBe(at(7_000)); // execution's recorded_at
+    expect(state.entries[1]?.settled_at).toBe(at(6_000)); // execution's recorded_at
   });
 
   it('does not seed in-flight or idle lanes', () => {

@@ -21,7 +21,6 @@ const STAGES: readonly PipelineStage[] = [
   'analysts',
   'debate',
   'trader',
-  'invalidation',
   'risk',
   'verdict',
   'execution',

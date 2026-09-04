@@ -274,6 +274,8 @@ social — so it does not serve this lens.
 
 ## 4. What this means for #969
 
+> **RESOLVED 2026-09-03, and not by any of the branches below ([#969](https://github.com/dd-jp/samurai-trading-system/issues/969), [ADR-0020](../adr/0020-x-retrieval-through-nous.md)).** The question this section answers — *is an ADR-0009 exception needed?* — turned out to have no subject. ADR-0009 recorded that Nous "proxies `chat/completions` only", so `x_search` was unreachable; that was false. Nous serves `POST /responses`, and the tool runs there on the routed alias `~x-ai/grok-latest` with the credential this system already holds. **X retrieval ships INSIDE the single-provider rule — no exception, no second vendor, no new key** — and the direct xAI path, re-tested, is both dead (`401 bad-credentials`) and 20% more expensive per line. Everything below stands as licensing and volume research; only its framing as an exception decision is superseded. **Reddit ([#976](https://github.com/dd-jp/samurai-trading-system/issues/976)) remains wanted** — David's ruling is to soak with X now and merge Reddit when App Review reports, so the ladder did not stop, it gained a rung.
+
 **On today's evidence, neither source is a clean drop-in that removes the need for the xAI exception.**
 StockTwits cannot be adopted at any price while registration is closed. Reddit is available only
 behind a discretionary approval, under retention terms incompatible with the archive design as

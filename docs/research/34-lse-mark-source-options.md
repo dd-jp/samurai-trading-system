@@ -33,6 +33,33 @@ entitlement, the OpenAPI endpoint/field carrying the tick timestamp, and per-ins
 the pool's leveraged ETPs/ETCs (3USL, 3UKL, an oil ETC) rather than ordinary shares — chased in a
 2026-09-01 follow-up on the same ticket, not yet answered.
 
+**Update 2026-09-03 — the chase is over; support won't confirm the rest in writing.** Alex's
+2026-09-03 reply on ticket 20084 declined the entitlement-match and ETP-coverage questions outright
+("We do not advise on what market data subscriptions include" / "Same as answer 1, I am afraid"),
+pointing instead to the public [market-data subscriptions page](https://www.home.saxo/products/market-data-subscriptions)
+and the in-platform subscription agreements shown before purchase. It did answer the endpoint
+question: the price feed is `POST /trade/v1/subscriptions/prices`
+([reference docs](https://www.developer.saxo/openapi/referencedocs/trade/v1/prices/post__trade__subscriptions)),
+still without naming the tick-timestamp response field. So 1 of 3 chased specifics has a concrete
+OpenAPI answer; the other 2 (exact entitlement name/price, per-instrument leveraged-ETP/ETC coverage)
+are **not obtainable from support by further ticket replies** — resolving them means reading the
+linked pricing/subscription pages, or probing the endpoint against a funded live account, not
+emailing again. This does not change the Saxo-over-IBKR recommendation.
+
+**Update 2026-09-03 (continued) — entitlement name/price resolved from the linked page, VERIFIED.**
+The [market-data subscriptions page](https://www.home.saxo/products/market-data-subscriptions),
+fetched directly at that URL, lists **"London Stock Exchange" — Level 1 - Private — 7.00 GBP**/month
+(Professional tier is 65.00 GBP; Level 2 tiers are 8.00/229.00 GBP). This matches the ~£7/month figure
+used throughout this document and closes the first of the two remaining unknowns under this document's
+own VERIFIED convention (§0: "quoted from a vendor document retrieved at the URL given"). The same
+page states coverage generically: *"A subscription to live price data from an exchange gives you
+access to live prices on Stocks, Single Stock CFDs, ETFs/ETCs and CFDs on ETFs/ETCs from the
+particular exchange."* ETFs/ETCs are named, which covers the pool's instrument *wrapper* (3USL, 3UKL,
+the oil ETC are themselves ETPs/ETCs) — but the page does not say "leveraged" or "short" anywhere, so
+whether the *leverage* is what's covered, not just the wrapper, is **still NOT VERIFIED** and is the
+one unknown left before #895 can close. That one needs a live-account probe, not a docs read — the
+public page has nothing more granular to offer.
+
 **Read §4 before anything else.** It is not a data-vendor finding, and it is larger than this ticket.
 
 ---
@@ -45,7 +72,7 @@ the pool's leveraged ETPs/ETCs (3USL, 3UKL, an oil ETC) rather than ordinary sha
 | **Polygon** (integrated, fallback) | **No — VERIFIED** | Cannot serve the equity leg at any price. |
 | **Trading 212** (the account provider) | **No — VERIFIED from its own docs** | No quote endpoint exists; the one price field has no timestamp; the API Terms bar algorithmic trading outright (§4). |
 | **Yahoo Finance** | **Yes, 11/11 at 1-minute — VERIFIED** | Technically able for *bars*, but last-trade only, ~20 min delayed, and unlicensed. Research only. |
-| **Saxo** (the execution venue) | **Yes — real-time over OpenAPI on a live account, per written vendor confirmation (not HTTP-probed)** | **The recommendation as of 2026-09-01.** Same account as execution; entitlement price/endpoint/per-instrument coverage still being chased (ticket 20084). See update note above and §6. |
+| **Saxo** (the execution venue) | **Yes — real-time over OpenAPI on a live account; entitlement name/price VERIFIED from vendor page** | **The recommendation as of 2026-09-01.** Same account as execution; endpoint confirmed (`POST /trade/v1/subscriptions/prices`); entitlement is "LSE, Level 1 - Private, £7.00/mo" (VERIFIED); whether *leveraged* ETPs/ETCs specifically are covered is the one item still NOT VERIFIED — see the 2026-09-03 update notes above and §6. |
 | **Interactive Brokers** | **Yes — LSE L1, GBP 1.00/month non-professional** | **Runner-up as of 2026-09-01** (was the recommendation). Real-time bid/ask at a retail price, but a second account, USD 500 minimum equity, and unverified LSEETF coverage lost it to Saxo's single-account path. |
 | Twelve Data / EODHD / FMP / Databento | **No real-time XLON found** (not the same as none existing) | Delayed, EOD, Cboe-not-LSE, or US-only in what was checked; Twelve Data's real-time-EU add-on advertises Cboe Europe and its LSE price was NOT FOUND rather than shown to be absent. See §5. |
 | Finnhub / Tiingo / marketstack / Alpha Vantage / IEX Cloud | **NOT VERIFIED** | Not confirmed against the pool or their own terms; recorded as open, not rejected. |
@@ -322,8 +349,14 @@ one account for both execution and data beats IBKR's cheaper sticker price once 
 account, USD 500 minimum-equity tie-up, and unverified LSEETF coverage are counted against it. Saxo's
 own load-bearing unknowns — whether the confirmed real-time feed is the same ~£7/month L1 entitlement,
 which endpoint/field carries the tick timestamp, and whether leveraged ETPs/ETCs are covered, not
-just ordinary shares — are chased in a 2026-09-01 follow-up on Saxo support ticket 20084 and not yet
-answered. The IBKR analysis below is kept as the record of the runner-up, not retracted.
+just ordinary shares — were chased in a 2026-09-01 follow-up on Saxo support ticket 20084. **Closed
+out 2026-09-03:** support confirmed the endpoint (`POST /trade/v1/subscriptions/prices`, timestamp
+field still unnamed) and declined the other two outright, pointing to the public subscriptions page
+instead of answering directly. That page **VERIFIED the entitlement — "LSE, Level 1 - Private,
+£7.00/month"** — but only describes coverage generically ("Stocks... ETFs/ETCs..."), leaving
+**whether the leverage itself is covered, not just the ETP/ETC wrapper, as the one item still open**
+(§0's second 2026-09-03 note). That needs a live-account probe, not a docs read. The IBKR analysis
+below is kept as the record of the runner-up, not retracted.
 
 **Original recommendation (2026-08-19): Interactive Brokers, "LSE UK (L1)", GBP 1.00/month non-professional.**
 
@@ -392,10 +425,13 @@ implementation ships everything that does not depend on the answer:
    on a premise these terms contradict.
 2. **Which vendor may serve the live mark** — filed as
    [#895](https://github.com/dd-jp/samurai-trading-system/issues/895). Recommended as of 2026-09-01:
-   Saxo, over OpenAPI, on the execution account (§0 update note, §6), subject to the entitlement/
-   endpoint/ETP-coverage questions chased on ticket 20084 and not yet answered. IBKR LSE UK (L1) at
-   £1/month non-pro (§6) is the runner-up, still gated on the same class of open question
-   (LSEETF-segment coverage) plus its own second-account/USD 500 minimum overhead.
+   Saxo, over OpenAPI, on the execution account (§0 update note, §6). Of the three specifics chased
+   on ticket 20084: the endpoint is confirmed (`POST /trade/v1/subscriptions/prices`); the entitlement
+   is VERIFIED from Saxo's public page as "LSE, Level 1 - Private, £7.00/month"; **only whether
+   leveraged ETPs/ETCs specifically are covered (not just the wrapper) remains open**, and needs a
+   live-account probe, not a docs read or another ticket reply.
+   IBKR LSE UK (L1) at £1/month non-pro (§6) is the runner-up, still gated on the same class of open
+   question (LSEETF-segment coverage) plus its own second-account/USD 500 minimum overhead.
 3. **The USD majority (§3.2).** Narrow the universe to the GBP/GBX lines, or answer the FX question.
    Until then the orchestrator refuses to boot on a USD-declared line rather than guessing a rate.
 4. **The 15-minute bound versus print frequency (§3.3).** Every non-IBKR option is ≥15 min delayed,

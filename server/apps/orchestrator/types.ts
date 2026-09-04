@@ -204,6 +204,59 @@ export interface TickContext {
    * crashed pass can be rescinded for the next tick to retry.
    */
   decision_bar?: DecisionBar;
+  /**
+   * The phase split's turnstile (#1040). Awaited by the runner immediately
+   * before the pass's FIRST PORTFOLIO READ, and resolved by the tick loop when
+   * it is this instrument's turn, in PLAN order.
+   *
+   * ## What it separates
+   *
+   * A pass has a portfolio-free head and a portfolio-facing tail, and the
+   * boundary sits at the first read of book state — which is NOT the same
+   * point on the two paths:
+   *
+   *   decision path — head is Analysts + Debate (neither step's input carries
+   *                   portfolio state, and neither stage references it); the
+   *                   tail opens at Trader, which sizes against equity, and
+   *                   runs Trader -> Risk -> Verdict -> Execution.
+   *   tick path     — the exit check is head too: it skips `snapshotForTick`
+   *                   deliberately, because an exit sizes to the held quantity
+   *                   and never to equity (#743). The tail opens only once the
+   *                   check has produced an intent bound for Risk, so the ~29
+   *                   of 30 passes that produce none never take a turn at all.
+   *
+   * Heads may safely overlap across instruments; tails may not.
+   *
+   * `RiskManager.evaluate()` reads a portfolio SNAPSHOT — `gross_exposure`,
+   * `exposure_by_class`, `drawdown_pct`. Two instruments evaluating
+   * concurrently each read PRE-TRADE exposure, each pass the gross cap, and
+   * the book breaches it combined (#1019). That race is live today: #1013 set
+   * `maxConcurrentInstruments: 6` for paper and live, so whole pipelines
+   * already overlap. This field is what makes the tail serial again while the
+   * expensive head stays fanned out.
+   *
+   * ## Why a turnstile rather than a lock
+   *
+   * Turns are granted in PLAN index order, never in head-completion order.
+   * ADR-0003 §2's replay-from-log needs a backtest to reproduce a live run; if
+   * phase-1 completion order leaked into tail sequencing, cap allocation would
+   * vary run to run. A mutex would grant in arrival order and lose exactly
+   * that. So phase 1's scheduling is not observable downstream.
+   *
+   * ## Optional, and absent means "run now"
+   *
+   * Absent for every caller that is already serial by construction: the
+   * backtest harness's bar loop, the smoke run, the control arm's own runner
+   * (which builds its own context), and the direct-construction unit tests. A
+   * caller with one pass in flight has no siblings to order against, so an
+   * un-awaited tail there IS the serial tail. `runTickPlan` always supplies it
+   * — including at `max_concurrent_instruments: 1`, where every turn is
+   * already free when it is asked for and the await is inert.
+   *
+   * Idempotent per pass: a second call after the turn is granted resolves
+   * immediately, so an added call site cannot deadlock a pass against itself.
+   */
+  beginPortfolioTail?: () => Promise<void>;
 }
 
 export interface TickOutcome {

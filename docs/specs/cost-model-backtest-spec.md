@@ -190,15 +190,13 @@ interface BacktestReport {
   };
   capacity_ceiling: number;            // from the √-law impact
   lookahead_audit: 'passed' | 'failed';// a failure fails the run
-  invalidation_replay: 'warm' | 'cold';// 'cold' = window predates the invalidation stage's history, so it ran permanently
-                                        // inert and this report's trade count is only an upper bound on the live system's.
-                                        // Non-optional so callers cannot silently pool warm- and cold-window reports as
-                                        // comparable (devils-advocate-spec.md story 47). NOT YET WIRED: `invalidation` is
-                                        // specced but not built (CLAUDE.md), so every report is 'cold' until it ships.
-                                        // Added to this interface 2026-09-02 — see
-                                        // docs/reviews/devils-advocate-spec-cross-verify-2026-09-02.md GAP-E: this field was
-                                        // asserted in this spec's own prose ("Module: Determinism") but never actually added
-                                        // to the type it was supposed to be on.
+  // No `invalidation_replay` field (restated 2026-09-03 after #994's fold — see
+  // "The replay property is a byte-identical decision, not an attestation" below).
+  // The standalone `invalidation` stage this field was specced for (added to this
+  // interface 2026-09-02 per docs/reviews/devils-advocate-spec-cross-verify-2026-09-02.md
+  // GAP-E) was declined that same day; its cold-window inertness has nothing to attest
+  // to, since conditions now ride the same verdict the backtest already replays either
+  // way. `server/tools/backtest/types.ts`'s real `BacktestReport` has no such field.
 }
 ```
 
@@ -281,13 +279,13 @@ interface MetricsSuite {                  // reported together — never one num
 
 - **Seed + injected clock ⇒ reproducible run.** Seed recorded in `BacktestReport`; slippage stochastic mode draws only from the seeded RNG.
 - **Conditional on the analyst response cache.** Trader / Debate / Risk / Verdict / FL are already deterministic. The Analysts are LLM; end-to-end reproducibility rests on the **analysts' temperature-0 + input-hash response cache** (analysts-spec). Determinism is guaranteed *given the analyst cache*, not asserted over live LLM calls.
-- **The `invalidation` stage splits by nondeterminism source** (2026-08-05, [Wayfinder: Devil's Advocate](https://github.com/dd-jp/samurai-trading-system/issues/291); devils-advocate-spec.md). The stage is a second LLM call in the chain and is handled differently from the analyst cache:
-  - **The emission replays from `invalidation_log`; validation and evaluation re-run.** Mechanically this is an injected `InvalidationEmissionSource` port with live-LLM and replay-from-log implementations, rather than a `mode` branch inside the stage — which is what makes the validator and evaluator provably identical on both paths, so a validator fix applies to replayed windows instead of being baked into old rows.
-  - **Lookup is by `(instrument, bar_timestamp)`, not by id** — a replay mints fresh `trace_id`/`debate_id` values and cannot bridge to live rows.
-  - **A log miss yields the `unavailable` fail-open marker.** A live LLM call inside a replayed path is disqualified on determinism grounds (ADR-0003), and restricting backtests to already-ticked windows would kill historical backtesting.
-  - **Consequence, and it belongs in the report rather than in a metric:** over a cold window the stage is permanently inert, so the run's trade count is an **upper bound** on the live system's. `BacktestReport` gains an `invalidation_replay` attestation, and — per this spec's standing position that an attestation a caller can ignore is worthless — it must be one consumers cannot silently pool across warm and cold windows.
-  - **Replayed evaluation states may legitimately differ from live ones.** Evaluation reads `asOf` = the intent's decision time while the row is filed at the floored bar boundary; live those differ, under the harness they coincide. That follows from re-running evaluation rather than replaying it, and is not a reproducibility defect.
-  - Only the `BacktestHarness` path can run this stage at all: Stage-2's `ReplayDriver` refuses by construction to import the Trader, Risk Manager, or Verdict, enforced by a test over its import list.
+- **Invalidation conditions replay with the Risk Critic's verdict; there is no separate stage and no separate replay port (restated 2026-09-03 after #994's fold).** The five bullets this replaces described a standalone `invalidation` stage (2026-08-05, [Wayfinder: Devil's Advocate](https://github.com/dd-jp/samurai-trading-system/issues/291); devils-advocate-spec.md) with its own `InvalidationEmissionSource` replay port. David declined that stage 2026-09-02 and #994 folded the mechanism into the Risk Critic instead, per `risk-manager-spec.md`'s "Module: Risk Critic — the invalidation fold" and cross-spec-contracts.md §8:
+  - **The `backtest` producer replays the persisted `EvaluatedCondition[]` from `risk_critic_log` and does not re-evaluate.** This is a deliberate deviation from `devils-advocate-spec.md`'s split-by-nondeterminism-source design (emission replayed, evaluation re-run): under the fold the persisted unit is the whole *verdict*, ADR-0003 §2 already makes the verdict replay-from-log, and re-running evaluation would require handing the backtest producer the Market Data Service it deliberately holds none of. `ReplayRiskCriticProducer` holds no LLM client, so "no live call in a replayed path" is structural, not a runtime check.
+  - **Lookup is by `debate_id`, not `(instrument, bar_timestamp)`** — the same key `risk_critic_log` already uses for the prose verdict; there is no separate coordinate and no `invalidation_log` to look it up in.
+  - **A row with no persisted conditions — pre-fold, or a persisted list that fails shape validation on read — replays as `no_conditions`.** This is the *same* code path the live run uses for "nothing checkable came out," not a distinct `unavailable` marker: the prose verdict replays with the authority it always had, so historical backtest results are unchanged by the fold.
+  - **The replay property is a byte-identical decision, not an attestation.** There is no `BacktestReport.invalidation_replay` field — that belonged to the declined stage's cold-window inertness, which no longer applies (conditions ride the same verdict the backtest already replays either way). #997's acceptance criterion instead states the invariant directly: a replayed decision is identical in status, size and `binding_constraint` to the one the live run reached; `reasons` gains exactly one `no_conditions` line where the live run had none, and is not otherwise byte-identical.
+  - **A validator or evaluator fix does not retroactively apply to already-logged post-fold rows** — only newly-emitted conditions get corrected behaviour. This is the cost of replaying the verdict rather than re-running the validator, recorded here rather than left to be discovered.
+  - The Risk Critic step still only runs on the `BacktestHarness` path — Stage-2's `ReplayDriver` refuses by construction to import the Trader, Risk Manager, or Verdict, enforced by a test over its import list.
 
 ## Testing Decisions
 

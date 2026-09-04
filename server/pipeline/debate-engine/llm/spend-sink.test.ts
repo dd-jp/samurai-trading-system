@@ -213,11 +213,10 @@ describe('SqliteLlmSpendStore', () => {
 
   it('adds the server-side tool charge on top of tokens (#476)', () => {
     // "Tool requests are priced based on two components: token usage and tool
-    // invocations." No client reports a non-zero count since ADR-0009 — Nous
-    // proxies `chat/completions`, which runs no server-side tool — so this
-    // exercises the path by hand. Kept live rather than deleted: the sink, the
-    // arithmetic and the `server_tool_calls` column are one unit, and an
-    // untested half is how a re-enabled tool silently under-charges the cap.
+    // invocations." This stopped being a hand-exercised hypothetical in #969:
+    // `nous-responses.ts` reports a real count from the `x_search` path, and
+    // the rate is now Nous's published $4.00/1,000 rather than the
+    // unconfirmable third-party $5.00 figure it read against before.
     const db = openSharedStore(':memory:');
     new SqliteLlmSpendStore(db).record({
       trace_id: 'trace-1',
@@ -230,9 +229,34 @@ describe('SqliteLlmSpendStore', () => {
     });
 
     const [row] = rows(db);
-    // 1M input at $1.60/M, plus 4 invocations at $0.005 = $0.02.
-    expect(row?.cost_usd).toBeCloseTo(1.62, 10);
+    // 1M input tokens is PAST the 200k large-prompt threshold, so the whole
+    // request prices at the tier's $4.00/M, not the base $1.60/M: $4.00 plus
+    // 4 invocations at $0.004 = $0.016.
+    //
+    // This assertion read $1.62 before #969, and the difference is the point.
+    // A retrieval call's prompt carries its search results, so crossing that
+    // threshold is a routine event on this path rather than an exotic one —
+    // and pricing a crossed request at the base rate under-counts it by 2.5x
+    // against a cap whose whole job is to stop an unattended run.
+    expect(row?.cost_usd).toBeCloseTo(4.016, 10);
     expect(row?.server_tool_calls).toBe(4);
+  });
+
+  it('prices below the tier at the base rate', () => {
+    // The other side of the same threshold, so the tier cannot silently
+    // become unconditional: 100k input at $1.60/M = $0.16, plus 4 invocations.
+    const db = openSharedStore(':memory:');
+    new SqliteLlmSpendStore(db).record({
+      trace_id: 'trace-1',
+      stage: 'market_intelligence',
+      model: 'x-ai/grok-4.5',
+      usage: { input_tokens: 100_000, output_tokens: 0 },
+      server_tool_calls: 4,
+      latency_ms: 10,
+      timestamp: NOW,
+    });
+
+    expect(rows(db)[0]?.cost_usd).toBeCloseTo(0.176, 10);
   });
 
   it('records the tool cost even when the model is unpriced, and warns', () => {
@@ -253,7 +277,9 @@ describe('SqliteLlmSpendStore', () => {
     });
 
     const [row] = rows(db);
-    expect(row?.cost_usd).toBeCloseTo(0.01, 10);
+    // 2 invocations at the published $4.00/1,000. The token half is unknown
+    // and stays unknown; the tool half is knowable and is recorded.
+    expect(row?.cost_usd).toBeCloseTo(0.008, 10);
     expect(row?.server_tool_calls).toBe(2);
 
     const warn = entries.find((entry) => entry.level === 'warn');

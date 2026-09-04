@@ -78,13 +78,19 @@
  */
 
 import type { Signal } from '../../pipeline/analysts/index.js';
-import { CONTROL_DEBATE_ID_PREFIX, controlArmDecision } from '../../pipeline/control-arm/index.js';
+import {
+  CONTROL_DEBATE_ID_PREFIX,
+  CONTROL_TRACE_SUFFIX,
+  controlArmDecision,
+} from '../../pipeline/control-arm/index.js';
 import type { AnalystView, DebateResult } from '../../pipeline/debate-engine/index.js';
 import type { Logger } from '../../shared/index.js';
 import type { CurrentTick, CurrentTickStore, TickContext, TickRunner, TickSteps } from './types.js';
 
-/** The `trace_id` suffix every control-arm pass runs under. */
-export const CONTROL_TRACE_SUFFIX = ':control';
+// Re-exported from its definition in `pipeline/control-arm`, where it sits
+// beside the debate-id prefix: this module applies it, but the readers that
+// exclude the control arm must not import the orchestrator to get it.
+export { CONTROL_TRACE_SUFFIX };
 
 /**
  * The live pass's `AnalystView[]`, handed to the control arm's `analysts` step.
@@ -269,6 +275,12 @@ export function buildControlArmStep(deps: ControlArmDeps): ControlArmStep {
         // tick path on the same ticks. Conditional spread under
         // `exactOptionalPropertyTypes`.
         ...(ctx.decision_bar === undefined ? {} : { decision_bar: ctx.decision_bar }),
+        // `beginPortfolioTail` is DELIBERATELY not forwarded (#1040). The
+        // turnstile orders passes that mutate the LIVE book; the control arm
+        // writes to its own shadow book and mutates nothing the live arm reads,
+        // so it needs no turn — and taking one would make the live pass hold
+        // the serial section open across the control pass's whole chain, which
+        // is measurement latency charged to the arm that trades.
       });
     } catch (error) {
       // The measurement must never take down the arm that trades the book. See

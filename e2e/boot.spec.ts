@@ -9,12 +9,11 @@
  * would catch a break in the server half of the dashboard.
  *
  * Assertions are on roles and accessible names wherever the scenario allows,
- * because #540 is reshaping this page's classes and spacing in parallel. Three
- * deliberate exceptions, all data attributes rather than styling hooks:
- * `[data-room]` for the lights-off room, which carries no accessible name at
- * all; and `[data-instrument]` plus `[data-trace-id]` for the keyboard walk,
- * which asks whether `document.activeElement` IS a given element — a question
- * only a selector can answer from inside the page. The ledger row is doubly
+ * because #540 is reshaping this page's classes and spacing in parallel. Two
+ * deliberate exceptions, both data attributes rather than styling hooks:
+ * `[data-instrument]` plus `[data-trace-id]` for the keyboard walk, which asks
+ * whether `document.activeElement` IS a given element — a question only a
+ * selector can answer from inside the page. The ledger row is doubly
  * unnameable there: its accessible name states instrument, outcome, clock and
  * reason, never the `trace_id` that picks one row out of several.
  */
@@ -58,24 +57,17 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByRole('button', { name: BTC_CHIP })).toBeVisible();
 });
 
-test('boot: eight rooms, invalidation lights-off, every panel present', async ({ page }) => {
+test('boot: seven rooms, every panel present', async ({ page }) => {
   const rooms = page.getByRole('region', { name: 'Pipeline rooms' });
   await expect(rooms.getByRole('heading', { level: 3 })).toHaveText([
     'Lobby',
     'Analysts',
     'Debate',
     'Trader',
-    'Invalidation',
     'Risk',
     'Verdict',
     'Execution',
   ]);
-
-  // Room 04 is drawn dark and says why, derived from the data rather than
-  // hardcoded — no lane has an invalidation cell that was ever reached.
-  await expect(rooms.locator('[data-room="invalidation"]')).toContainText(
-    'specced and not built — devils-advocate-spec.md',
-  );
 
   for (const region of REGIONS) {
     await expect(page.getByRole('region', { name: region, exact: true })).toBeVisible();
@@ -126,9 +118,9 @@ test('drawer: a chip opens its stage strip and stances; an idle lane names its r
 
   await page.getByRole('button', { name: BTC_CHIP }).click();
   await expect(drawer.getByRole('heading', { level: 2 })).toHaveText('BTC-USD');
-  // All seven stages, including the one that never ran.
-  await expect(drawer.getByRole('row')).toHaveCount(8);
-  await expect(drawer.getByRole('row').nth(4)).toContainText('not reached');
+  // All six stages, one header row plus one row per stage — BTC's clean run
+  // to Execution recorded every one of them, so none reads `not reached`.
+  await expect(drawer.getByRole('row')).toHaveCount(7);
   await expect(drawer).toContainText('technical-analyst');
   await expect(drawer).toContainText('influence');
 

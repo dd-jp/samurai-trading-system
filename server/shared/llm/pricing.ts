@@ -36,7 +36,47 @@
 export interface ModelRate {
   input: number;
   output: number;
+  /**
+   * Dollars per million CACHE-READ tokens, when the vendor publishes a rate
+   * for them rather than a multiple of `input`.
+   *
+   * Optional because most rows do not need it: `priceUsage` falls back to
+   * `input * CACHE_READ_MULTIPLIER` when it is absent, which is what every
+   * caller got before this column existed. Populated where the fallback is
+   * measurably wrong — see the grok rows, where 0.1x understates the real
+   * charge by 2.5x and would have under-counted the cap on every retrieval
+   * call (#969).
+   */
+  cache_read?: number;
+  /**
+   * A LARGE-PROMPT RATE OVERRIDE, applied to the WHOLE request once the
+   * prompt crosses `above_prompt_tokens`.
+   *
+   * Server-side retrieval is what makes this reachable: search results ride
+   * in the prompt, so an `x_search` call is not a small request. A measured
+   * 10-result call carried 58,153 prompt tokens against the ~5,000 of a
+   * 3-result one, and the ceiling is the vendor's, not ours.
+   *
+   * "Whole request, not just the excess" is the CAP-SAFE reading of ambiguous
+   * vendor wording, chosen deliberately: an over-count trips ADR-0008's
+   * ceiling early and stops trading, an under-count spends past it. When the
+   * vendor clarifies, `pricing.test.ts`'s tier case is where the reading is
+   * pinned.
+   */
+  tier?: { above_prompt_tokens: number; input: number; output: number };
 }
+
+/**
+ * xAI's large-prompt tier, shared by BOTH grok rows below.
+ *
+ * Both, not just the alias, because `resolveMeteredModel` (`nous-chat.ts`)
+ * meters against the id the provider ECHOED, and `~x-ai/grok-latest` echoes
+ * `x-ai/grok-4.5`. The row that actually prices a retrieval call is therefore
+ * the pinned one, so a tier on the alias alone would never fire (#969).
+ */
+const GROK_LARGE_PROMPT_TIER = {
+  tier: { above_prompt_tokens: 200_000, input: 4, output: 12 },
+} as const;
 
 /**
  * Keys are EXACT Nous model ids — `vendor/model`, matched literally by
@@ -84,7 +124,7 @@ export const MODEL_RATES: Readonly<Record<string, ModelRate>> = Object.freeze({
   // xAI, via Nous — the sentiment role's model. Grok is the defensible pick
   // for X/Twitter sentiment because it is the model trained on that discourse,
   // even though nothing here retrieves from X live (see ADR-0009).
-  'x-ai/grok-4.5': { input: 1.6, output: 4.8 },
+  'x-ai/grok-4.5': { input: 1.6, output: 4.8, cache_read: 0.4, ...GROK_LARGE_PROMPT_TIER },
   /**
    * A FLOATING ALIAS, and the only one in this table. The leading `~` is the
    * portal's own marker for one — `x-ai/grok-latest` without it is a 404,
@@ -108,7 +148,7 @@ export const MODEL_RATES: Readonly<Record<string, ModelRate>> = Object.freeze({
    * This entry stays priced so the alias remains one env var away if live
    * retrieval ever makes corpus recency pay again.
    */
-  '~x-ai/grok-latest': { input: 1.6, output: 4.8 },
+  '~x-ai/grok-latest': { input: 1.6, output: 4.8, cache_read: 0.4, ...GROK_LARGE_PROMPT_TIER },
   // DeepSeek, via Nous.
   'deepseek/deepseek-v4-pro': { input: 0.35, output: 0.7 },
   'deepseek/deepseek-v4-flash': { input: 0.07, output: 0.14 },
@@ -148,10 +188,17 @@ export const MODEL_RATES: Readonly<Record<string, ModelRate>> = Object.freeze({
  * the `:free` tiers read at zero. A single constant would misprice most of the
  * table.
  *
- * So: before anything sets a cache breakpoint, `ModelRate` needs a per-model
- * `cache_read` column and these constants have to go. Deliberately NOT built
- * now — a column no caller populates is a second thing to keep in sync for no
- * behavioural gain. This comment is the flag.
+ * That flag has since been acted on for the rows that needed it: `ModelRate`
+ * now carries an optional per-model `cache_read`, and `CACHE_READ_MULTIPLIER`
+ * is the FALLBACK for rows without one rather than the universal rule. The
+ * grok rows are populated because retrieval made their cache line load-bearing
+ * — a measured `x_search` call reported 19,584 cached of 58,153 prompt tokens,
+ * and pricing those at 0.1x rather than the published 0.4/M under-counted the
+ * cap (#969). The remaining rows keep the fallback: nothing requests caching
+ * on them, so the multiplier still multiplies zero there.
+ *
+ * `CACHE_WRITE_MULTIPLIER` is untouched and genuinely inert — nothing in this
+ * system writes a cache entry, on any vendor.
  *
  * #1010 measured whether "nothing requests caching" was itself worth fixing
  * and found it moot for the pinned debate model (Claude Haiku 4.5) on token
@@ -176,27 +223,36 @@ export const CACHE_WRITE_MULTIPLIER = 1.25;
  * two components: token usage and tool invocations." A meter that prices only
  * tokens under-counts every such call.
  *
- * CURRENTLY INERT, and that is a consequence of ADR-0009 rather than an
- * oversight. Nous proxies `chat/completions` only, whose `tools` field takes
- * functions — server-side tools live on xAI's `/v1/responses`, which is no
- * longer reachable. Every call this system makes therefore reports zero
- * invocations. Kept because the column, the arithmetic and the sink path are
- * one unit (migration `0018_llm_spend_server_tool_calls.sql`): half-applying
- * them is a broken INSERT, and the day a provider grows a server-side tool the
- * meter should already be honest about it.
+ * NO LONGER INERT, as of 2026-09-03 (#969). This was documented as
+ * unreachable on the reasoning that "Nous proxies `chat/completions` only, so
+ * server-side tools live on an endpoint ADR-0009 gave up". That premise was
+ * false on both halves: Nous serves `POST /responses`, and `x_search` runs
+ * there on the OpenRouter-routed alias `~x-ai/grok-latest`. The comment kept
+ * the arithmetic alive for "the day a provider grows a server-side tool"; that
+ * day arrived, and `nous-responses.ts` now populates the count this prices.
  *
- * PROVENANCE, STATED HONESTLY: the two-component billing MODEL is confirmed
- * against xAI's own documentation. The FIGURE — $5.00 per 1,000 calls — comes
- * from third-party pricing summaries (retrieved 2026-08-06) and could NOT be
- * confirmed against x.ai's own pricing page, which is not publicly fetchable.
- * Treat it as an estimate of the right order, not a quoted rate.
+ * PROVENANCE, RE-SOURCED: the two-component billing MODEL was always confirmed
+ * against xAI's own documentation. The FIGURE was previously $5.00/1,000 calls
+ * taken from third-party summaries and explicitly flagged as unconfirmable.
+ * It is now the rate Nous publishes for the search tool on its own pricing
+ * block — $4.00 per 1,000 calls — which is the rate this system is actually
+ * billed at, and is 20% under xAI's list in exactly the way every token line
+ * in `MODEL_RATES` is. Metering a Nous call at the upstream figure would
+ * over-count the cap by the discount, the same error the table header warns
+ * about for tokens.
+ *
+ * WHAT IS STILL UNCONFIRMED is whether this fee bills as a separate line or is
+ * already folded into the token charge. `nous-responses.ts` counts invocations
+ * conservatively (upper bound) and the V3 reconciliation against the portal
+ * invoice is what settles it. If it turns out to be folded in, this constant
+ * goes to zero — the wiring stays.
  *
  * Independent of `MODEL_RATES` on purpose: the charge is per invocation, not
  * per token, so it applies whether or not the model itself is in the rate
  * table. That is what lets an unpriced model still record the tool dollars it
  * definitely cost.
  */
-export const SERVER_TOOL_USD_PER_CALL = 0.005;
+export const SERVER_TOOL_USD_PER_CALL = 0.004;
 
 /**
  * Cost of `count` server-side tool invocations.
@@ -263,12 +319,60 @@ export function priceUsage(model: string, usage: AnthropicUsage): number | null 
   const cacheWrite = usage.cache_creation_input_tokens ?? 0;
   const cacheRead = usage.cache_read_input_tokens ?? 0;
 
+  // The tier is keyed on the WHOLE prompt, cached tokens included: they
+  // occupied the context window whatever they were charged at, which is what
+  // the vendor's threshold counts. `promptTokensOf` is the one definition of
+  // that sum, shared with `crossesPromptTier` so a caller's warning and this
+  // arithmetic can never disagree.
+  const tier =
+    rate.tier !== undefined && promptTokensOf(usage) > rate.tier.above_prompt_tokens
+      ? rate.tier
+      : null;
+  const inputRate = tier?.input ?? rate.input;
+  const outputRate = tier?.output ?? rate.output;
+
+  // A published per-million cache-read rate wins over the multiplier. Note it
+  // scales off the row's BASE input rate, not the tier's: no vendor publishes
+  // a tiered cache-read multiple, so inventing one would be a guess in the
+  // under-counting direction for rows using the fallback.
+  const cacheReadRate = rate.cache_read ?? rate.input * CACHE_READ_MULTIPLIER;
+
   const inputCost =
-    (usage.input_tokens * rate.input +
-      cacheWrite * rate.input * CACHE_WRITE_MULTIPLIER +
-      cacheRead * rate.input * CACHE_READ_MULTIPLIER) /
+    (usage.input_tokens * inputRate +
+      cacheWrite * inputRate * CACHE_WRITE_MULTIPLIER +
+      cacheRead * cacheReadRate) /
     TOKENS_PER_MILLION;
-  const outputCost = (usage.output_tokens * rate.output) / TOKENS_PER_MILLION;
+  const outputCost = (usage.output_tokens * outputRate) / TOKENS_PER_MILLION;
 
   return inputCost + outputCost;
+}
+
+/**
+ * Total prompt tokens a usage record represents — fresh input plus everything
+ * that was read from or written to cache.
+ *
+ * `AnthropicUsage.input_tokens` is EXCLUSIVE of cached tokens by this repo's
+ * convention (the Nous wire clients subtract, because Nous reports the
+ * OpenAI-style inclusive count where `cached_tokens` is a subset of
+ * `prompt_tokens`). So the prompt total has to be re-summed here rather than
+ * read off one field, and this function is the only place that knows it.
+ */
+export function promptTokensOf(usage: AnthropicUsage): number {
+  return (
+    usage.input_tokens +
+    (usage.cache_creation_input_tokens ?? 0) +
+    (usage.cache_read_input_tokens ?? 0)
+  );
+}
+
+/**
+ * Whether this call priced at a model's large-prompt tier.
+ *
+ * Exists so a caller can WARN on a crossing rather than have a 2.5x unit-cost
+ * change happen silently inside the meter. Returns false for a model with no
+ * tier and for an unpriced one — neither can cross something it does not have.
+ */
+export function crossesPromptTier(model: string, usage: AnthropicUsage): boolean {
+  const tier = rateFor(model)?.tier;
+  return tier !== undefined && promptTokensOf(usage) > tier.above_prompt_tokens;
 }

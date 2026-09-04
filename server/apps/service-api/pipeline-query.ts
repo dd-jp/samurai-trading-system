@@ -62,28 +62,13 @@ export const PIPELINE_LOOKBACK_MS = 15 * 60 * 1_000;
 export const PIPELINE_MAX_LANES = 24;
 
 /**
- * The stages the RUNTIME can currently write, as a value rather than a type.
- *
- * `Record<TickStage, true>` is load-bearing: the orchestrator's `TickStage`
- * union is the authority on which stages exist, and the day `invalidation`
- * joins it this object stops compiling until the key is added — at which point
- * `invalidation` gaps start reading as `skipped` on their own. Hard-coding the
- * not-yet-built stage instead would have left a lie that type-checks.
+ * Every `PIPELINE_STAGES` member must be a stage `TickStage` can actually
+ * write — checked at the type level so a stage `PIPELINE_STAGES` regrows
+ * ahead of the orchestrator's union fails the build, not a `cellState` call.
  */
-const RUNTIME_STAGES: Record<TickStage, true> = {
-  // #743's tick-path stage. Present so this record keeps compiling against the
-  // orchestrator's `TickStage` union (the property this object exists for);
-  // never looked up here, because the lane view iterates `PIPELINE_STAGES`,
-  // which deliberately does not include the tick path — see
-  // `getPipelineActivity`'s live-row filter for where that exclusion lives.
-  position_check: true,
-  analysts: true,
-  debate: true,
-  trader: true,
-  risk: true,
-  verdict: true,
-  execution: true,
-};
+type _PipelineStagesAreWritable = PipelineStage extends TickStage ? true : never;
+const _pipelineStagesAreWritable: _PipelineStagesAreWritable = true;
+void _pipelineStagesAreWritable;
 
 const LAST_STAGE = PIPELINE_STAGES[PIPELINE_STAGES.length - 1];
 
@@ -339,12 +324,6 @@ function cellState(input: {
     // short-circuited tick went no further. Execution is exempt: nothing
     // follows it, so a trace that got there ran the pipeline to its end.
     return live === null && stage === finalStage && stage !== LAST_STAGE ? 'stopped' : 'done';
-  }
-  if (!(stage in RUNTIME_STAGES)) {
-    // Specced but not built (`invalidation`). A gap here is not a decision to
-    // omit the stage — nothing can write it yet — so it must never read as
-    // `skipped`, which would claim a choice the tick never made.
-    return 'not_reached';
   }
   // No row, yet the trace carried on past this stage: a deliberate skip, which
   // is normal traffic and must not read as a halted pipeline.

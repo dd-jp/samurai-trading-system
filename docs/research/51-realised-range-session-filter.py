@@ -17,7 +17,8 @@ Design notes that matter for reading the output:
   only as fenced post-hoc sensitivity that cannot flip the verdict.
 * **Cost cancels from the headline.** `bar = (cost - E_gross)/W`, and both arms
   share `cost` and `W`, so the on/off *delta* is invariant to the 0.18% / 0.41%
-  spread assumptions (#666 owns those). It is only the absolute bars that move
+  spread assumptions (still a single unmeasured quote each — ADR-0016 Known
+  weakness; delivery owned by #1053). It is only the absolute bars that move
   with them.
 * **Standard errors are clustered by ET date.** Five single-stock names on the
   same date are one market shock, not five draws. The naive `sd/sqrt(n)` is

@@ -115,6 +115,7 @@ import {
   writeSync,
 } from 'node:fs';
 import { dirname } from 'node:path';
+import { nonEmpty, positiveIntegerFromEnv } from '../../shared/env-integer.js';
 
 /**
  * Default path. Relative to the process CWD, sibling to `data/` where the
@@ -178,50 +179,33 @@ export interface RotatingFileSinkOptions extends FileSinkConfig {
 export function fileSinkConfigFromEnvironment(
   env: NodeJS.ProcessEnv = process.env,
 ): FileSinkConfig {
+  // `nonEmpty` on the path, not just on the integers, and the trim is not
+  // cosmetic — raised in review on #349. `Number(' ')` is `0`, and `0` is a
+  // *legal* value for `SAMURAI_LOG_MAX_FILES` meaning "keep nothing". So a
+  // stray space — a misconfigured compose file, a quoted-empty shell
+  // variable, a copy-paste — would have silently switched retention from ten
+  // generations to none, which is exactly the "retention window nobody chose"
+  // that the validator refuses on every other malformed input. It would not
+  // have been caught by `SAMURAI_LOG_MAX_BYTES` either being wrong, because
+  // that one has `min = 1` and so already rejects `0`.
+  const purpose = "the durable log sink's rotation policy (#325)";
   return {
     filePath: nonEmpty(env[ENV_FILE]) ?? DEFAULT_LOG_FILE,
-    maxBytes: positiveInteger(env[ENV_MAX_BYTES], ENV_MAX_BYTES, DEFAULT_MAX_BYTES, 1),
-    maxRotatedFiles: positiveInteger(env[ENV_MAX_FILES], ENV_MAX_FILES, DEFAULT_MAX_ROTATED_FILES),
+    maxBytes: positiveIntegerFromEnv(
+      env[ENV_MAX_BYTES],
+      ENV_MAX_BYTES,
+      DEFAULT_MAX_BYTES,
+      1,
+      purpose,
+    ),
+    maxRotatedFiles: positiveIntegerFromEnv(
+      env[ENV_MAX_FILES],
+      ENV_MAX_FILES,
+      DEFAULT_MAX_ROTATED_FILES,
+      0,
+      purpose,
+    ),
   };
-}
-
-/**
- * The value, or `undefined` when the variable is absent or holds nothing but
- * whitespace.
- *
- * The trim is not cosmetic — raised in review on #349. `Number(' ')` is `0`,
- * and `0` is a *legal* value for `SAMURAI_LOG_MAX_FILES` meaning "keep
- * nothing". So a stray space — a misconfigured compose file, a quoted-empty
- * shell variable, a copy-paste — would have silently switched retention from
- * ten generations to none, which is exactly the "retention window nobody
- * chose" that `positiveInteger` refuses on every other malformed input. It
- * would not have been caught by `SAMURAI_LOG_MAX_BYTES` either being wrong,
- * because that one has `min = 1` and so already rejects `0`.
- *
- * Whitespace-only is treated as *unset*, not as an error, matching the
- * established rule that an empty value counts as absent (`missingCredentialEnvVars`
- * in index.ts takes the same line). Incidental surrounding whitespace on a real
- * value is trimmed and accepted: `' 3 '` is unambiguous.
- */
-function nonEmpty(raw: string | undefined): string | undefined {
-  const trimmed = raw?.trim();
-  return trimmed !== undefined && trimmed.length > 0 ? trimmed : undefined;
-}
-
-function positiveInteger(raw: string | undefined, name: string, fallback: number, min = 0): number {
-  const value = nonEmpty(raw);
-  if (value === undefined) return fallback;
-
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < min) {
-    throw new Error(
-      `Orchestrator cannot start: ${name} must be an integer >= ${min}, not ` +
-        `${JSON.stringify(value)}. It is the durable log sink's rotation policy (#325); a ` +
-        'value nobody meant is a retention window nobody chose, so it is refused rather than ' +
-        `defaulted. Unset it to accept the default (${fallback}).`,
-    );
-  }
-  return parsed;
 }
 
 /**

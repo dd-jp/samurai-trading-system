@@ -15,6 +15,7 @@ import { buildSnapshot } from './snapshot.js';
 import type {
   AttributionSummary,
   DashboardQueryStore,
+  RiskCriticRecord,
   TickStatus,
   VerdictAuditEntry,
 } from './types.js';
@@ -148,6 +149,7 @@ function fakeStore(overrides: Partial<DashboardQueryStore> = {}): DashboardQuery
     getRecentClosedTrades: () => [],
     getFillsForTrades: () => [],
     getVerdictHistory: () => [],
+    getRiskCritics: () => [],
     getAnalystWeights: () => ({}),
     getAttribution: () => ({}),
     getDailyMetrics: () => ({ ...METRICS }),
@@ -662,6 +664,207 @@ describe('buildSnapshot', () => {
 
       expect(snap.arm_comparison).toEqual([]);
       expect('arm_comparison' in snap).toBe(true);
+    });
+  });
+
+  describe('risk critic and invalidation conditions (#1066)', () => {
+    function makeRiskCriticRecord(overrides: Partial<RiskCriticRecord> = {}): RiskCriticRecord {
+      return {
+        trace_id: 'trace-1',
+        instrument: 'AAPL',
+        debate_id: 'debate-abc123',
+        binding_constraint: null,
+        critic: {
+          verdict: 'pass',
+          max_notional: null,
+          reasoning: 'the setup survives the attack',
+        },
+        created_at: AS_OF,
+        ...overrides,
+      };
+    }
+
+    it('flattens each evaluated condition, labelling the observable it measured', () => {
+      const store = fakeStore({
+        getRiskCritics: () => [
+          makeRiskCriticRecord({
+            binding_constraint: 'risk_critic:invalidated',
+            critic: {
+              verdict: 'pass',
+              max_notional: null,
+              reasoning: 'prose says pass',
+              conditions: [
+                {
+                  condition: {
+                    id: 'mark-breaks-entry',
+                    observable: { kind: 'mark' },
+                    comparator: '<',
+                    threshold: 190,
+                    rationale: 'a break back under entry falsifies the breakout',
+                  },
+                  state: 'breached',
+                  observed: 188.5,
+                },
+                {
+                  condition: {
+                    id: 'rsi-rolls-over',
+                    observable: {
+                      kind: 'indicator',
+                      spec: { indicator: 'rsi', params: {}, lookback: 14, timeframe: '5m' },
+                    },
+                    comparator: '<',
+                    threshold: 45,
+                    rationale: 'momentum gone',
+                  },
+                  state: 'unevaluable',
+                  observed: null,
+                },
+                {
+                  condition: {
+                    id: 'volume-thins',
+                    observable: {
+                      kind: 'bars',
+                      window: { timeframe: '5m', lookback: 20 },
+                      measure: 'volume_ratio',
+                    },
+                    comparator: '<',
+                    threshold: 0.8,
+                    rationale: 'participation gone',
+                  },
+                  state: 'not_breached',
+                  observed: 1.4,
+                },
+              ],
+            },
+          }),
+        ],
+      });
+
+      const snap = buildSnapshot(store, AS_OF, 'paper');
+
+      expect(snap.risk_critics).toHaveLength(1);
+      const row = snap.risk_critics[0];
+      // The binding constraint is carried verbatim: `risk_critic:invalidated`
+      // (a measured breach) and `risk_critic:reject` (the critic's prose) are
+      // distinct facts (#997 Q2b), and the wire must not blur them.
+      expect(row?.binding_constraint).toBe('risk_critic:invalidated');
+      expect(row?.critic_verdict).toBe('pass');
+      expect(row?.conditions).toEqual([
+        {
+          id: 'mark-breaks-entry',
+          observable: 'mark',
+          comparator: '<',
+          threshold: 190,
+          state: 'breached',
+          observed: 188.5,
+          rationale: 'a break back under entry falsifies the breakout',
+        },
+        {
+          id: 'rsi-rolls-over',
+          observable: 'indicator:rsi@5m',
+          comparator: '<',
+          threshold: 45,
+          state: 'unevaluable',
+          // Null, never 0: `unevaluable` means the read failed, and a zero
+          // there would be a measurement that never happened.
+          observed: null,
+          rationale: 'momentum gone',
+        },
+        {
+          id: 'volume-thins',
+          observable: 'bars:volume_ratio@5m',
+          comparator: '<',
+          threshold: 0.8,
+          state: 'not_breached',
+          observed: 1.4,
+          rationale: 'participation gone',
+        },
+      ]);
+      expect(row?.created_at).toBe(AS_OF.toISOString());
+    });
+
+    it('carries every drop reason across, even when nothing survived to be evaluated', () => {
+      const store = fakeStore({
+        getRiskCritics: () => [
+          makeRiskCriticRecord({
+            critic: {
+              verdict: 'trim',
+              max_notional: 250,
+              reasoning: 'too big for the tape',
+              conditions: [],
+              dropped_conditions: [
+                {
+                  id: 'rsi-over-9000',
+                  raw: '{"threshold":9000}',
+                  reason: 'threshold_out_of_range',
+                },
+                { id: null, raw: 'not an object', reason: 'unparseable' },
+              ],
+            },
+          }),
+        ],
+      });
+
+      const snap = buildSnapshot(store, AS_OF, 'paper');
+
+      expect(snap.risk_critics[0]?.conditions).toEqual([]);
+      expect(snap.risk_critics[0]?.dropped_conditions).toEqual([
+        { id: 'rsi-over-9000', raw: '{"threshold":9000}', reason: 'threshold_out_of_range' },
+        { id: null, raw: 'not an object', reason: 'unparseable' },
+      ]);
+    });
+
+    /**
+     * A row written before #994's fold has no conditions column at all
+     * (migration 0040 backfilled nothing) and never will. It must serialize as
+     * `null` — not as an absent field, which `JSON.stringify` would produce
+     * from `undefined` — and it must not throw.
+     */
+    it('serializes a pre-fold verdict as null conditions rather than an absent field', () => {
+      const store = fakeStore({
+        getRiskCritics: () => [
+          makeRiskCriticRecord({
+            critic: { verdict: 'pass', max_notional: null, reasoning: 'pre-fold row' },
+          }),
+        ],
+      });
+
+      const snap = buildSnapshot(store, AS_OF, 'paper');
+
+      expect(snap.risk_critics[0]?.conditions).toBeNull();
+      expect(snap.risk_critics[0]?.dropped_conditions).toBeNull();
+      const roundTripped = JSON.parse(JSON.stringify(snap)) as { risk_critics: unknown[] };
+      expect(roundTripped.risk_critics[0]).toMatchObject({
+        conditions: null,
+        dropped_conditions: null,
+      });
+    });
+
+    it('reports a decision the critic never saw as a null verdict, not a pass', () => {
+      const store = fakeStore({
+        getRiskCritics: () => [
+          makeRiskCriticRecord({
+            debate_id: null,
+            binding_constraint: 'per_asset_class_cap',
+            critic: undefined,
+          }),
+        ],
+      });
+
+      const snap = buildSnapshot(store, AS_OF, 'paper');
+
+      expect(snap.risk_critics[0]?.critic_verdict).toBeNull();
+      expect(snap.risk_critics[0]?.reasoning).toBeNull();
+      expect(snap.risk_critics[0]?.conditions).toBeNull();
+      expect(snap.risk_critics[0]?.debate_id).toBeNull();
+    });
+
+    /** Empty is a required field holding an empty array, never an absent one. */
+    it('emits an empty array when no Risk decision is on record', () => {
+      const snap = buildSnapshot(fakeStore({ getRiskCritics: () => [] }), AS_OF, 'paper');
+
+      expect(snap.risk_critics).toEqual([]);
+      expect('risk_critics' in snap).toBe(true);
     });
   });
 

@@ -25,6 +25,7 @@ import type {
 } from '../../../contracts/snapshot.js';
 import type { ArmComparisonSample } from '../../pipeline/feedback-loop/index.js';
 import type { OutsideBenchmarkSample } from '../../pipeline/outside-benchmark/index.js';
+import type { RiskCriticVerdict } from '../../pipeline/risk-manager/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
 import type { ClosedTrade, DebateLog, Fill, OpenPosition } from '../../shared/index.js';
 import type { ProviderStatusReader } from './provider-status.js';
@@ -41,6 +42,8 @@ export type {
   CloseReason,
   DashboardSnapshot,
   DebateRow,
+  DroppedConditionWire,
+  EvaluatedConditionWire,
   FillRow,
   LlmPerDebateStats,
   LlmSpendSummary,
@@ -49,6 +52,7 @@ export type {
   OutsideBenchmarkRow,
   OutsideBenchmarkWire,
   PositionRow,
+  RiskCriticRow,
   TickStatus,
   VerdictRow,
 } from '../../../contracts/snapshot.js';
@@ -71,6 +75,31 @@ export interface VerdictAuditEntry {
   reason: string;
   hitl_override: boolean;
   timestamp: Date;
+}
+
+/**
+ * One recent Risk decision joined to the Risk Critic verdict it was reached
+ * with (#1066) — the store-side material behind the wire's `RiskCriticRow`.
+ *
+ * Server-side, not wire: `created_at` is a `Date` and `critic` is the Risk
+ * Manager's own `RiskCriticVerdict`, carried across whole rather than picked
+ * apart, because this store "defines no competing shapes for data owned
+ * elsewhere" — the verdict, its conditions and its drop reasons belong to the
+ * Risk Manager (#994).
+ *
+ * `critic` is `undefined` when the decision has no `risk_critic_log` row: the
+ * critic was skipped, was never consulted, or the trace has no `trader_log`
+ * row naming the debate the verdict would be keyed by. That is a different
+ * fact from a verdict whose conditions half is absent, and the two must not
+ * collapse.
+ */
+export interface RiskCriticRecord {
+  trace_id: string;
+  instrument: string;
+  debate_id: string | null;
+  binding_constraint: string | null;
+  critic: RiskCriticVerdict | undefined;
+  created_at: Date;
 }
 
 /**
@@ -104,7 +133,7 @@ export interface AttributionSummary {
  * TEXT: `audit_log.stage` is unconstrained and genuinely carries non-pipeline
  * values under a pipeline `trace_id` (the HITL Telegram callback writes
  * `verdict.hitl.telegram_callback`, telegram-bot-api-client.ts:112), so the
- * store MUST filter to the seven known stages before handing rows over.
+ * store MUST filter to the six known stages before handing rows over.
  */
 export interface PipelineStageEvent {
   trace_id: string;
@@ -192,6 +221,15 @@ export interface DashboardQueryStore {
    */
   getFillsForTrades(idempotencyKeys: readonly string[], asOf: Date): Fill[];
   getVerdictHistory(limit: number, asOf: Date): VerdictAuditEntry[];
+  /**
+   * Recent Risk decisions with their critic verdicts (#1066), most recent
+   * first — the drawer's invalidation section.
+   *
+   * Keyed by `(trace_id, instrument)` like `risk_log` itself, so the drawer
+   * looks a decision up by the trace it is showing rather than by the debate,
+   * which a retried tick shares across traces (migration 0015).
+   */
+  getRiskCritics(limit: number, asOf: Date): RiskCriticRecord[];
   getAnalystWeights(asOf: Date): Record<string, number>;
   getAttribution(asOf: Date): Record<string, AttributionSummary>;
   getDailyMetrics(asOf: Date): MetricsSuite;

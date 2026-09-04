@@ -27,9 +27,13 @@
 -- queries would read far more pages for data neither one selects. Splitting
 -- also makes retention separable, which matters in one direction only:
 -- `llm_spend` rows must survive forever because the cap's arithmetic sums over
--- all of them, while this table can be pruned on a rolling window. (No pruner
--- ships here — see the size note below for why that is safe for now, and it
--- remains an open question rather than a settled one.)
+-- all of them, while this table alone can be pruned. #1045 settled how: a ROW
+-- CEILING (`DEFAULT_MAX_LLM_CALL_ROWS`, overridable with
+-- `SAMURAI_LLM_CALL_LOG_MAX_ROWS`), applied by `prune-llm-call-log.ts` at boot
+-- and again on the existing daily timer. A row count rather than a rolling
+-- window because it bounds DISK, which is the thing that actually runs out:
+-- the call rate below is cadence-bound, so a day window would quietly hold
+-- that much more after a cadence change, while a row ceiling holds either way.
 --
 -- SIZE, MEASURED NOT GUESSED. Over the 2026-08-26 → 2026-09-02 paper window:
 -- 452 calls in 7.02 days (~64/day), averaging 1,698 input tokens (~6.8 KB
@@ -43,7 +47,9 @@
 -- never fail a trading call), so a real FK would convert a swallowed metering
 -- failure into a cascading failure that ALSO loses the text — turning one
 -- best-effort record's absence into two. `spend_id` is a join convenience read
--- from `lastInsertRowid`, and is NULL when the spend row did not land.
+-- from `lastInsertRowid`. Never NULL from today's writer, which runs only
+-- after the spend row has landed; the column stays nullable so a future writer
+-- that captures text without metering has somewhere to go.
 --
 -- ALL TEXT COLUMNS NULLABLE. Capture is switchable (`SAMURAI_LLM_CAPTURE`) and
 -- a row whose text was not captured is a legitimate row, not a broken one.
