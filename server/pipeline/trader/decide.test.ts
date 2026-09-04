@@ -2179,10 +2179,12 @@ describe('decideWithReason — decision class and reason detail (#1109)', () => 
     );
 
     expect(outcome.skip_reason).toBe('below_min_notional');
-    expect(outcome.reason_detail?.threshold).toBe(1_000_000);
     // A near-miss and a decisive refusal both read `below_min_notional`; only
     // the compared value tells them apart.
-    expect(outcome.reason_detail?.compared_value).toBeGreaterThan(0);
+    expect(outcome.reason_detail).toEqual({
+      compared_value: EXPECTED_SIZE * ENTRY_PRICE,
+      threshold: 1_000_000,
+    });
   });
 
   it('carries the compared value and the threshold on a scale-in conviction-delta decline', async () => {
@@ -2307,6 +2309,20 @@ describe('checkExitsWithReason — the tick-path exit entry point (#743)', () =>
 
     expect(outcome.intent).toBeNull();
     expect(outcome.skip_reason).toBe('no_open_position');
+    expect(outcome.decision_class).toBe('declined_on_signal');
+  });
+
+  it('classifies exit_no_filled_size as input_unusable on the tick path (#1109)', async () => {
+    const outcome = await checkExitsWithReason(
+      exitInput({
+        positionState: async () => [
+          openPosition({ side: 'buy', filled_size: 0, order_state: 'submitted' }),
+        ],
+      }),
+    );
+
+    expect(outcome.skip_reason).toBe('exit_no_filled_size');
+    expect(outcome.decision_class).toBe('input_unusable');
   });
 
   it('skips with signal_still_supports_position when holding outside the window on a live signal — "flat" and "waiting" stay distinguishable', async () => {
