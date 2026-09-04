@@ -37,11 +37,13 @@
  * fire-and-forget work started inside a tick keeps that tick's id for as long
  * as it runs — and a shared worker re-entered from that captured context will
  * stamp it on a LATER instrument's work. That is a wrong join, strictly worse
- * than the constant it replaced. `MiRefreshQueue.#pump` is the live case and
- * shows the fix: it wraps its drain in `runWithTraceId(MI_REFRESH_TRACE_ID)`,
- * so an off-critical-path refresh (#1085) reports its own id rather than
- * borrowing the tick whose analysts step happened to enqueue it. Anything
- * else deferring work past the end of a tick owes the same wrap.
+ * than the constant it replaced.
+ *
+ * So work that outlives the tick that started it must re-label at its own
+ * boundary, with its own `runWithTraceId`, whenever it does not serve that
+ * tick — the market-intelligence refresh queue is the worked example. Work
+ * that DOES serve the tick, such as a fire-and-forget alert the tick caused,
+ * is right to keep it.
  *
  * Note that `TokenBucket`'s `background` lane is a PRIORITY, not a
  * provenance: `alpaca-http-client.ts` takes `acquireBackground()` for bar
@@ -58,8 +60,8 @@ const storage = new AsyncLocalStorage<string>();
  * every `await` inside it.
  *
  * Nested calls shadow rather than merge: the innermost wins. That is what
- * `MiRefreshQueue.#pump` relies on to stop deferred work inheriting the tick
- * that enqueued it, so merging here would reintroduce that leak.
+ * lets deferred work re-label itself out of the tick that enqueued it, so
+ * merging here would reintroduce the leak that shadowing closes.
  */
 export function runWithTraceId<T>(trace_id: string, fn: () => T): T {
   return storage.run(trace_id, fn);
