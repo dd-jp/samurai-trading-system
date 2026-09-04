@@ -93,11 +93,10 @@
  *    seeded from the same leaderboard inherits them identically. The six are
  *    the pool's largest, most heavily traded US underlyings on ordinary
  *    market knowledge, which is a hand-declaration and is labelled as one.
- * 5. **Liquidity is NOT verified.** The spec used to ask for a subset that is
- *    "liquid and `t212_isa: true`" — that wording named the wrong field and
- *    is corrected by #1054 Part 1, because `t212_isa` names a venue Samurai
- *    is barred from (#896/#912). The field the gate actually reads is
- *    `saxo_tradeable`, and it is `'unverified'` on all 30 rows: no Saxo
+ * 5. **Liquidity is NOT verified.** The field the gate reads is
+ *    `saxo_tradeable`, not `t212_isa` — `t212_isa` names a venue Samurai is
+ *    barred from (#896/#912) and answers a different, no-longer-live
+ *    question. `saxo_tradeable` is `'unverified'` on all 30 rows: no Saxo
  *    instrument list has been captured (#1032 item 3), and no spread or
  *    volume measurement exists until #1035 → #1053 land. This subset is
  *    therefore declared pending both, not screened against either.
@@ -116,14 +115,14 @@
  * ticker", not "does Saxo" — those are different, unverified claims, and
  * mechanically relabelling the field would assert a Saxo fact this pool has
  * never checked. #946's own scope excluded building a Saxo `BrokerAdapter`
- * or doing Saxo outreach, so no such check happened here. **#1054 Part 1
- * adds the parallel field this paragraph used to say nothing tracked**:
- * `saxo_tradeable` (see `LseEtpPoolRow`), `'unverified'` on every row below
- * because no Saxo instrument list has been captured anywhere in this repo
- * yet (#1032 item 3). A future evidence pass fills real `true`/`false`
- * values in row by row once one is captured — that pass does not need a
- * `BrokerAdapter` to exist first, only the list itself; the adapter is a
- * precondition for trading what the pass verifies, not for verifying it.
+ * or doing Saxo outreach, so no such check happened here. **The parallel
+ * field this pool tracks for Saxo is `saxo_tradeable`** (see
+ * `LseEtpPoolRow`), `'unverified'` on every row below because no Saxo
+ * instrument list has been captured anywhere in this repo yet (#1032 item
+ * 3). A future evidence pass fills real `true`/`false` values in row by row
+ * once one is captured — that pass does not need a `BrokerAdapter` to exist
+ * first, only the list itself; the adapter is a precondition for trading
+ * what the pass verifies, not for verifying it.
  *
  * ## Provenance
  *
@@ -383,8 +382,7 @@ export interface LseEtpPoolRow {
    * `docs/specs/universe-selector-spec.md` story 16 / #750 AC7 name as the
    * hard liquidity gate.** `t212_isa` above answers a different,
    * no-longer-live question (does Trading 212 list it) and must never be
-   * read as this one — #1054 is the ticket that caught the gate reading the
-   * wrong field.
+   * read as this one.
    *
    * `'unverified'` on every row as of #1054 Part 1: no Saxo instrument list
    * has been captured anywhere in this repo (#1032 item 3), so there is
@@ -1404,76 +1402,91 @@ export function liveSizingSubclassFor(row: LseEtpPoolRow): InstrumentSubclass | 
 }
 
 /**
+ * Row-level admission decision the liquidity gate actually applies:
+ * admit-unless-verified-`false`. An `'unverified'` row is admitted, because
+ * an unarmed gate must pass rows through rather than exclude on a
+ * tradeability claim nobody has checked (see `saxo_tradeable`'s own doc on
+ * `LseEtpPoolRow`); only a Saxo-VERIFIED `false` excludes. `liquidityGateStatus`
+ * and `assertValidFallbackSubset` both read admission through this function
+ * rather than re-deriving it from `saxo_tradeable` a second way — "what does
+ * the gate admit" is answered in exactly one place, so the two can never
+ * silently disagree (#1100 review: they used to — see `liquidityGateStatus`).
+ */
+export function gateAdmits(row: LseEtpPoolRow): boolean {
+  return row.saxo_tradeable !== false;
+}
+
+/**
  * The gate's own account of whether `saxo_tradeable` is doing anything,
- * classified from the pool rather than asserted separately from it — so this
- * can never drift from what `assertValidPool` actually checks (it is
- * `assertValidPool`'s own source of truth, not a parallel description of it).
+ * classified off `gateAdmits`'s row-level decision rather than off
+ * `saxo_tradeable` directly — so this can never say something `gateAdmits`
+ * itself would disagree with (it is `assertValidPool`'s own source of truth,
+ * not a parallel description of it).
  *
- * - `'unarmed'` — every row (or an empty pool) carries `'unverified'`. The
- *   gate has nothing to exclude on yet and MUST be read as pass-through, not
- *   as "nothing is tradeable". This is the checked-in pool's state today
- *   (#1054 Part 1): no Saxo instrument list has been captured (#1032 item
- *   3).
- * - `'vacuous'` — every row carries the SAME verified value (`true` or
- *   `false`). This is not a legitimate configuration: a gate that excludes
- *   nothing, or excludes everything, on every input is a bug. `value` names
- *   which constant it is. `assertValidPool` refuses a pool in this state.
- * - `'armed'` — `saxo_tradeable` discriminates between at least two rows.
- *   The gate has real information to exclude on.
+ * - `'unarmed'` — no row (or an empty pool) carries a Saxo-verified value;
+ *   every row is `'unverified'`. The gate has nothing to exclude on yet and
+ *   MUST be read as pass-through, not as "nothing is tradeable". This is the
+ *   checked-in pool's state today (#1054 Part 1): no Saxo instrument list
+ *   has been captured (#1032 item 3).
+ * - `'vacuous'` — at least one row carries a Saxo-verified value, but
+ *   `gateAdmits` returns the SAME answer for every row — all admitted, or
+ *   all excluded. This is not a legitimate configuration: a gate that
+ *   excludes nothing, or excludes everything, on every input is a bug.
+ *   `admits` names which extreme it is. `assertValidPool` refuses a pool in
+ *   this state.
+ * - `'armed'` — `gateAdmits` disagrees between at least two rows. The gate
+ *   has real information to exclude on.
  */
 export type LiquidityGateStatus =
   | { readonly state: 'unarmed'; readonly reason: string }
   | { readonly state: 'armed'; readonly reason: string }
-  | { readonly state: 'vacuous'; readonly value: true | false; readonly reason: string };
+  | { readonly state: 'vacuous'; readonly admits: boolean; readonly reason: string };
 
 export function liquidityGateStatus(
   pool: readonly LseEtpPoolRow[] = LSE_ETP_POOL,
 ): LiquidityGateStatus {
-  // Walked as a loop rather than `new Set(pool.map(...))` + destructure:
-  // `noUncheckedIndexedAccess` types both a `Set`'s iterated members and
-  // `pool[0]` as possibly-`undefined`, which would force a second,
-  // unreachable "empty pool" branch below the one this function already has
-  // to have for `pool.length === 0`. `only` stays `undefined` only when the
-  // pool is empty, so the single length check below is the only guard this
-  // function needs.
-  let only: SaxoTradeability | undefined;
-  let discriminates = false;
+  // "Armed at all" and "what it decides" are two different questions, asked
+  // in two passes on purpose. Collapsing them into one pass that just tracks
+  // whether `saxo_tradeable` is constant (as an earlier version of this
+  // function did) answers "armed" from `saxo_tradeable`'s raw distinctness
+  // instead of from `gateAdmits`'s actual output, which is the wrong
+  // question: `liquidityGateStatus([{unverified}, {true}])` reported 'armed'
+  // even though admit-unless-false admits both rows, so nothing is excluded.
+  const verifiedCount = pool.filter((row) => row.saxo_tradeable !== 'unverified').length;
+  if (pool.length === 0 || verifiedCount === 0) {
+    return {
+      state: 'unarmed',
+      reason:
+        pool.length === 0
+          ? 'Empty pool — there is nothing for the gate to exclude on.'
+          : 'No Saxo instrument list has been captured anywhere in this repo (#1032 item 3), so ' +
+            "every row's saxo_tradeable is 'unverified'. The gate is explicitly UNARMED: it passes " +
+            'every row through rather than excluding on a tradeability claim nothing has verified.',
+    };
+  }
+  let admitsAll = true;
+  let excludesAll = true;
   for (const row of pool) {
-    if (only === undefined) {
-      only = row.saxo_tradeable;
-    } else if (row.saxo_tradeable !== only) {
-      discriminates = true;
-      break;
+    if (gateAdmits(row)) {
+      excludesAll = false;
+    } else {
+      admitsAll = false;
     }
   }
-  if (pool.length === 0 || only === undefined) {
+  if (admitsAll || excludesAll) {
     return {
-      state: 'unarmed',
-      reason: 'Empty pool — there is nothing for the gate to exclude on.',
-    };
-  }
-  if (discriminates) {
-    return {
-      state: 'armed',
-      reason:
-        'saxo_tradeable discriminates between rows — the gate has real exclusion information.',
-    };
-  }
-  if (only === 'unverified') {
-    return {
-      state: 'unarmed',
-      reason:
-        'No Saxo instrument list has been captured anywhere in this repo (#1032 item 3), so every ' +
-        "row's saxo_tradeable is 'unverified'. The gate is explicitly UNARMED: it passes every row " +
-        'through rather than excluding on a tradeability claim nothing has verified.',
+      state: 'vacuous',
+      admits: admitsAll,
+      reason: admitsAll
+        ? "gateAdmits(row) is true for every row (no row is Saxo-verified 'false'). A gate that " +
+          'excludes nothing on every input is not a legitimate configuration.'
+        : "gateAdmits(row) is false for every row (every row is Saxo-verified 'false'). A gate " +
+          'that excludes everything on every input is equally broken.',
     };
   }
   return {
-    state: 'vacuous',
-    value: only,
-    reason:
-      `saxo_tradeable is ${only} on every row. A gate constant at 'true' excludes nothing; one ` +
-      "constant at 'false' excludes everything. Either is a bug, not a legitimate configuration.",
+    state: 'armed',
+    reason: 'gateAdmits(row) disagrees between rows — the gate has real exclusion information.',
   };
 }
 
@@ -1551,11 +1564,12 @@ function assertLiquidityGateNotVacuous(pool: readonly LseEtpPoolRow[]): void {
   const status = liquidityGateStatus(pool);
   if (status.state === 'vacuous') {
     throw new Error(
-      `LSE ETP pool's liquidity gate (saxo_tradeable) is constant '${status.value}' across all ` +
-        `${pool.length} rows. ${status.reason} If Saxo tradeability is now genuinely uniform, record ` +
-        'that explicitly (this function, or a comment on the pool) rather than shipping a field that ' +
-        "looks armed but excludes nothing — and land #1054 Part 2's cost ceiling as the real gate, " +
-        'since a uniform-true tradeability flag can no longer do that job.',
+      `LSE ETP pool's liquidity gate (saxo_tradeable) is constant across all ${pool.length} rows: ` +
+        `gateAdmits ${status.admits ? 'admits every row' : 'excludes every row'}. ${status.reason} If ` +
+        'Saxo tradeability is now genuinely uniform, record that explicitly (this function, or a ' +
+        'comment on the pool) rather than shipping a field that looks armed but excludes nothing — ' +
+        "and land #1054 Part 2's cost ceiling as the real gate, since a uniform-true tradeability " +
+        'flag can no longer do that job.',
     );
   }
 }
@@ -1610,6 +1624,15 @@ export const FALLBACK_DEFAULT_MAX_ROWS = 10;
  * picked up both lines of one underlying would concentrate a degraded-mode
  * session on a single name — in precisely the mode where no screener is
  * running to notice.
+ *
+ * **Rule 5 is the spec's ("Fallback behaviour"): no fallback row may be one
+ * `gateAdmits` excludes** — i.e. none may carry a Saxo-VERIFIED
+ * `saxo_tradeable: false`. A fallback watchlist that can hand back a name
+ * Saxo has been verified NOT to list is the silent halt wearing the
+ * fallback's name. This is deliberately "not verified ineligible", not
+ * "verified eligible": `saxo_tradeable` is `'unverified'` on every row
+ * today, so an eligibility check would either be vacuously true or reject
+ * the whole pool (#1054 Part 1).
  */
 export function assertValidFallbackSubset(pool: readonly LseEtpPoolRow[]): void {
   const fallback = pool.filter((row) => row.fallback_default);
@@ -1654,6 +1677,16 @@ export function assertValidFallbackSubset(pool: readonly LseEtpPoolRow[]): void 
       );
     }
     seen.set(key, row.lse_ticker);
+  }
+  for (const row of fallback) {
+    if (!gateAdmits(row)) {
+      throw new Error(
+        `LSE ETP pool marks '${row.lse_ticker}' as a fallback_default row, but saxo_tradeable is ` +
+          'Saxo-verified false for it. A fallback watchlist that can return a name Saxo has been ' +
+          "verified NOT to list is the silent halt wearing the fallback's name " +
+          '(docs/specs/universe-selector-spec.md, "Fallback behaviour").',
+      );
+    }
   }
 }
 
