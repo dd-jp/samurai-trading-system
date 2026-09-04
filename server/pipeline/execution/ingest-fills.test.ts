@@ -197,6 +197,11 @@ function makeInput(
   residualExposureAlerts: ResidualExposureAlertChannel = makeResidualExposureAlerts(),
   flattenOverfillAlerts: FlattenOverfillAlertChannel = makeFlattenOverfillAlerts(),
   logger: Logger = recordingLogger(),
+  // Overridable (#1087 review, pass 2) so a test can hold its own reference
+  // and probe `observe()` directly — the throttle's public API, same as
+  // `advanceLot` itself calls — to read a consecutive count that never
+  // crosses a warn boundary and so never appears in `logger.entries`.
+  throttle: FilledZeroSizeThrottle = new FilledZeroSizeThrottle(),
 ): ExecutionInput {
   const config: ExecutionConfig = {
     simulated: {
@@ -224,11 +229,11 @@ function makeInput(
     // #519: `ingestFills()` never reconciles, so this is never posted to.
     flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
     logger,
-    // Fresh per call — matches production's one-throttle-per-composition-root
-    // lifetime, since `makeInput()` itself is called once per test/scenario
-    // and its returned `ExecutionInput` (and this throttle within it) is what
-    // every `ingestFills()` call in that test shares.
-    filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
+    // Fresh per call by default — matches production's one-throttle-per-
+    // composition-root lifetime, since `makeInput()` itself is called once
+    // per test/scenario and its returned `ExecutionInput` (and this throttle
+    // within it) is what every `ingestFills()` call in that test shares.
+    filledZeroSizeThrottle: throttle,
   };
 }
 
@@ -2175,5 +2180,79 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
       order_state: 'filled',
       consecutive: 9,
     });
+  });
+
+  it('does not reset the wedge streak when a non-entry fill lands on a still-wedged lot (#1087 review, pass 2)', async () => {
+    // `advanceLot` unconditionally cleared the throttle as soon as
+    // `newFills.length > 0` — but a non-entry fill (e.g. a stray stop/target
+    // report) can arrive for a lot whose OWN entry fill is still excluded by
+    // the `since` floor, so the recomputed `filledSize` is still 0 after that
+    // poll. Clearing there restarts the streak at `consecutive: 1` on the
+    // very next wedged poll instead of continuing it — this test drives
+    // exactly that shape and proves the streak survives.
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 10 });
+    const entryFill = fill({
+      broker_fill_id: 'e1',
+      leg: 'entry',
+      qty: 10,
+      price: 100,
+      // Same permanent-exclusion shape as the test above: dated before the
+      // lot's own `opened_at`, so `ScriptedBroker.fetchNewFills` (mirroring
+      // every real adapter) filters it out on every single poll.
+      timestamp: new Date(OPENED_AT.getTime() - 1),
+    });
+    const broker = new ScriptedBroker([entryFill]);
+    broker.scriptedOrder = {
+      client_order_id: 'key-1',
+      broker_order_ids: ['key-1:entry', 'key-1:stop', 'key-1:target'],
+      order_state: 'filled',
+      filled_qty: 10,
+    };
+    const logger = recordingLogger();
+    const throttle = new FilledZeroSizeThrottle();
+    const execution = new ExecutionImpl(
+      makeInput(broker, store, undefined, undefined, logger, throttle),
+    );
+
+    await execution.reconcile();
+    // Two wedged polls: consecutive 1 (warns — `ALERT_AFTER_CONSECUTIVE_ZERO_SIZE`)
+    // then 2 (does not — the next boundary is 9).
+    await execution.ingestFills();
+    await execution.ingestFills();
+
+    // A non-entry fill arrives this poll. The lot's OWN entry fill (`e1`) is
+    // still excluded — `filledSize` recomputes to 0 again, so this is the
+    // exact "new fill, but the lot is still wedged at zero" shape the review
+    // named, not a genuine advance.
+    const stopFill = fill({
+      broker_fill_id: 's1',
+      leg: 'stop',
+      qty: 10,
+      price: 95,
+      timestamp: new Date('2026-07-20T15:00:00Z'),
+    });
+    broker.replaceFills([entryFill, stopFill]);
+    await execution.ingestFills();
+
+    // The stop fill WAS persisted — this branch stores new rows before
+    // returning, it just must not treat the lot as no-longer-wedged.
+    expect(await store.getFills('key-1')).toHaveLength(1);
+    expect((await store.getPosition('key-1'))?.filled_size).toBe(0);
+
+    // No warning fired on the interruption poll itself (newFills.length > 0
+    // skips the wedge-detector branch entirely, fixed or buggy).
+    const warningsSoFar = logger.entries.filter((e) => e.message === FILLED_WITH_ZERO_SIZE);
+    expect(warningsSoFar).toHaveLength(1);
+
+    // THE ASSERTION: probe the throttle directly for what the NEXT wedged
+    // poll would observe. Fixed: the streak continued through the
+    // interruption (1, 2, [interruption, no observe], 3) — this call reports
+    // `consecutive: 3`. Bugged (`clear()` ran on the interruption poll): the
+    // streak restarted, and this call would report `consecutive: 1` instead
+    // — which is ALSO a warn boundary, so the real next `ingestFills()` poll
+    // would incorrectly warn again immediately instead of staying silent
+    // until the true 9th consecutive wedged poll.
+    expect(throttle.observe('key-1')).toEqual({ warn: false, consecutive: 3 });
   });
 });

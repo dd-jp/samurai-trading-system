@@ -1074,12 +1074,6 @@ async function advanceLot(
     return;
   }
 
-  // The lot advanced — any zero-size-wedge streak this throttle was counting
-  // for it is over. Clears an entry that never warned (never reached the
-  // repeat threshold) as readily as one that did; either way there is
-  // nothing left to throttle once `filled_size` can no longer be zero.
-  input.filledZeroSizeThrottle.clear(position.idempotency_key);
-
   // Recomputed from the full fill record (persisted rows + this poll's new
   // ones, in the order the atomic write below will persist them), never from
   // a running total — rebuilding from the record is what makes a re-poll
@@ -1094,11 +1088,23 @@ async function advanceLot(
   const filledSize = totalQty(entryFills);
   // An exit fill cannot precede the entry fill that created the lot to exit.
   // If one somehow arrives first, there is no lot to size or close yet —
-  // persist the fill rows alone.
+  // persist the fill rows alone. Deliberately NOT `clear()`ed here: `filled_size`
+  // is still 0 after this recompute (e.g. a non-entry fill landed on an
+  // already-wedged lot), so the streak the throttle above was counting for
+  // it hasn't actually ended — clearing here would restart it at
+  // `consecutive: 1` on the very next poll instead of continuing the
+  // 1-then-every-8th cadence (#1087 review, pass 2).
   if (filledSize === 0) {
     await store.applyLotAdvance({ idempotency_key: position.idempotency_key, fills: newFills });
     return;
   }
+
+  // The lot advanced past zero — any zero-size-wedge streak this throttle
+  // was counting for it is genuinely over now, confirmed by `filledSize > 0`
+  // above (not merely by `newFills.length > 0`, which a non-entry fill on a
+  // still-wedged lot would also satisfy). Clears an entry that never warned
+  // (never reached the repeat threshold) as readily as one that did.
+  input.filledZeroSizeThrottle.clear(position.idempotency_key);
 
   const avgEntryPrice = weightedAvgPrice(entryFills);
   const flat = coversQty(totalQty(exitFills), filledSize);
