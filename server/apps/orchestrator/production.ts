@@ -272,6 +272,9 @@ import {
 } from './production/direct-bind.js';
 import { assertFlattenWindowCoversTickInterval } from './production/flatten-tick-coupling.js';
 import { MiCoverageMonitor } from './production/mi-coverage.js';
+// #1085: the MI refresh, off the analyst stage's critical path and serialised
+// behind one spend check.
+import { MiRefreshQueue } from './production/mi-refresh-queue.js';
 import { withOnTradeClose } from './production/on-trade-close-hookup.js';
 import { withFlattenTail } from './production/stocks-tick-window.js';
 import {
@@ -541,6 +544,15 @@ export interface ProductionComponents {
    * inferring it from an archive row that only proves a fetch happened.
    */
   marketIntelligence: MarketIntelligenceStore;
+  /**
+   * The queue the analysts step triggers the MI refresh through (#1085), or
+   * `undefined` when this run has no MI writer at all.
+   *
+   * Exposed for `gdeltIngestAgent`'s reason and one more: the refresh now
+   * completes AFTER the tick that asked for it, so `stop()` has to drain it or
+   * a shutdown can leave an archive and store write racing a closing store.
+   */
+  marketIntelligenceRefresh: MiRefreshQueue | undefined;
 }
 
 /**
@@ -1638,6 +1650,36 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   });
 
   /**
+   * The MI writers, composed and then taken OFF the analyst stage's critical
+   * path (#1085).
+   *
+   * BOTH agents, not one (#969). This was `miIngestAgent ?? grokAgent` — the
+   * deterministic path preferred, the sentiment agent kept only as a fallback
+   * — and #552's reasoning for that was sound while `GrokAgent` ingested `[]`
+   * by construction. It inverts once sentiment retrieves: the two write
+   * DIFFERENT buckets (`MiIngestAgent` fills `news`, `GrokAgent` fills
+   * `social`), so picking one leaves the other empty by construction, and with
+   * the news path available the empty one is `social` — the bucket #969 exists
+   * to fill.
+   *
+   * `undefined` when neither agent could be built (SAMURAI_SENTIMENT=off, or
+   * no Nous credentials): no queue, no calls, and the analysts keep reporting
+   * NO_DATA_MARKER (#463), which is the honest default rather than a silent
+   * no-op refresher that would read as a working one.
+   *
+   * The queue is what makes the analysts step non-blocking and what serialises
+   * every metered MI call behind one `spendCap.check()` — see
+   * `mi-refresh-queue.ts` for why neither property held before, cross-instrument
+   * concurrency included.
+   */
+  const marketIntelligenceRefresh = ((): MiRefreshQueue | undefined => {
+    const composed = composeMarketIntelligence([miIngestAgent, grokAgent]);
+    return composed === undefined
+      ? undefined
+      : new MiRefreshQueue({ refresher: composed, spendCap, logger });
+  })();
+
+  /**
    * The GDELT macro layer (#556). Runs whenever an archive exists — no
    * credentials to check, because GDELT is open data, and no LLM either: this
    * half only writes bytes.
@@ -1951,33 +1993,24 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
         alertChannel: config.miCoverageAlerts ?? new LoggingMiCoverageAlertChannel(logger),
         monitor: miCoverageMonitor,
         logger,
-      },
-      // The writers `MarketIntelligenceStore` has. Absent entirely under
-      // SAMURAI_SENTIMENT=off with no archive — no agent, no calls, and the
-      // analysts keep reporting NO_DATA_MARKER (#463), which is the honest
-      // default rather than a silent no-op. Each agent's own refresh bucket
-      // makes calling them on every pass cheap: they return immediately
-      // unless the bucket rolled.
-      //
-      // BOTH, not one (#969). This was `miIngestAgent ?? grokAgent` — the
-      // deterministic path preferred, the sentiment agent kept only as a
-      // fallback — and #552's reasoning for that was sound at the time:
-      // `GrokAgent` ingested `[]` by construction, so running it alongside
-      // bought a second agent that contributed nothing.
-      //
-      // That inverts once sentiment retrieves. The two write DIFFERENT
-      // buckets — `MiIngestAgent` fills `news`, `GrokAgent` fills `social` —
-      // so picking one leaves the other empty by construction, and with the
-      // news path available the empty one is `social`: the bucket #969 exists
-      // to fill, and the one `sentiment-analyst.ts` has never once been given
-      // data for. Composing them is what makes the retrieving client reachable
-      // on the shipped path at all.
-      ...(() => {
-        const marketIntelligenceRefresh = composeMarketIntelligence([miIngestAgent, grokAgent]);
-        return marketIntelligenceRefresh === undefined
+        // #1085: hold the alert (never the counter) for a name MI has not
+        // finished looking at once. Bound to the queue's own state, so it
+        // cannot drift from the refresh it is describing; absent when there is
+        // no writer at all, which is when the first miss SHOULD alert
+        // immediately because nothing will ever look.
+        ...(marketIntelligenceRefresh === undefined
           ? {}
-          : { marketIntelligence: marketIntelligenceRefresh };
-      })(),
+          : {
+              refreshAttempted: (instrument: string) =>
+                marketIntelligenceRefresh.refreshAttempted(instrument),
+            }),
+      },
+      // The writers `MarketIntelligenceStore` has, behind the queue that keeps
+      // them off this stage's critical path — see `marketIntelligenceRefresh`'s
+      // construction above.
+      ...(marketIntelligenceRefresh === undefined
+        ? {}
+        : { marketIntelligence: marketIntelligenceRefresh }),
     }),
     analystSkipKind: (trace_id) => analystSkipKinds.take(trace_id),
     // Two independent stores hang off this one step, both over `config.db`:
@@ -2032,6 +2065,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     polymarketAgent,
     marketIntelligence,
     marketIntelligenceCoverage: miCoverageMonitor,
+    marketIntelligenceRefresh,
   };
 }
 
@@ -3420,6 +3454,12 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
       // the NEXT poll, not the one already in flight, and that one ends in a
       // store and archive write.
       const drainingPolymarket = components.polymarketAgent.whenIdle();
+      // #1085: the MI refresh no longer completes inside the tick that asked
+      // for it, so the tick drain above no longer covers it. Without this a
+      // shutdown can leave a refresh's archive and store write racing a
+      // closing store — the same ordering argument as the two drains above,
+      // and the price of taking the refresh off the critical path.
+      const drainingMiRefresh = components.marketIntelligenceRefresh?.whenIdle();
       loop = undefined;
       fillSync = undefined;
       controlFillSync = undefined;
@@ -3435,6 +3475,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         stoppingControlFillSync,
         drainingGdelt,
         drainingPolymarket,
+        drainingMiRefresh,
       ]);
     },
   };
