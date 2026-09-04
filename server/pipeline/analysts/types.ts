@@ -192,10 +192,24 @@ export interface Analyst {
 }
 
 /** One persona's failure this tick, reason-tagged (analysts-spec.md "Module: Failure Handling"). */
+/**
+ * Why a persona failed, as a discriminator rather than as prose (#1080).
+ *
+ * `'timeout'` means every attempt hit `AnalystOrchestrator`'s per-attempt
+ * deadline; `'error'` means the persona threw (a data gap, a provider fault, a
+ * malformed response). The reason string already names both, but only by
+ * spelling — a reader downstream had to match on the words
+ * `did not answer within` to tell them apart, and the two are acted on
+ * differently: a deadline that no attempt can meet is a budget that has become
+ * unreachable, an upstream fault is not.
+ */
+export type AnalystFailureKind = 'timeout' | 'error';
+
 export interface AnalystFailure {
   analyst_type: string;
   role: 'mandatory' | 'optional';
   reason: string;
+  kind: AnalystFailureKind;
 }
 
 /**

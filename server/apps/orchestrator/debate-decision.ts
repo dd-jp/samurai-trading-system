@@ -1,16 +1,13 @@
 /**
  * The `audit_log` decision word for a resolved debate (#1080).
  *
- * Before this, `tick-runner.ts` recorded `debate.direction` verbatim. Every
+ * Before this, `tick-runner.ts` recorded `debate.direction` verbatim, so every
  * degraded path the Debate Engine has — a fired latency budget, a rate-limit
- * refusal, a spend-cap refusal — resolves to a `DebateResult` carrying
- * `direction: 'neutral', confidence: 0`, so all three were recorded as the
- * single word `neutral`: the same word a converged three-round debate writes
- * when the analysts genuinely disagree into a wash. The Trader then
- * short-circuits on the zero confidence and records `no_trade`, and the
- * resulting two-line trace is indistinguishable from a healthy quiet-market
- * tick in the log, in `audit_log`, and on the dashboard, which renders that
- * column. In the 2026-09-03 session that covered 22 of 26 timed-out debates.
+ * refusal, a spend-cap refusal — was written as the single word `neutral`, the
+ * same word a converged debate writes when the analysts disagree into a wash.
+ * `DEGRADED_DECISIONS` (contracts/pipeline.ts) carries what that conflation
+ * cost and why an operator acts on the two differently; this module is the
+ * reader that makes the distinction exist at all.
  *
  * The discriminators were already on the result — `timed_out` (#374) and
  * `rate_limited` (#388/ADR-0008) — and simply had no reader at this seam. This
@@ -33,10 +30,9 @@
  * writing its bare direction. A degraded word appearing on a `control:` trace
  * would mean the falsifier arm had acquired an LLM.
  */
-import { type DegradedDecision, isDegradedDecision } from '../../../contracts/pipeline.js';
+import { isDegradedDecision } from '../../../contracts/pipeline.js';
 import type { DebateResult } from '../../pipeline/debate-engine/index.js';
 
-export type { DegradedDecision };
 export { isDegradedDecision };
 
 /**

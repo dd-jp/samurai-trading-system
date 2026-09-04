@@ -34,7 +34,7 @@ import {
   type TradingCalendar,
 } from '../../../providers/market-data-service/index.js';
 import { buildRoutingMap, LSE_ETP_POOL } from '../../../providers/universe-pool/lse-etp-pool.js';
-import { type AssetClass, sanitizeLogText, type TokenBucket } from '../../../shared/index.js';
+import { type AssetClass, logCaughtFailure, type TokenBucket } from '../../../shared/index.js';
 import { nousCredentials } from '../../../shared/llm/index.js';
 import type { Logger, UniverseInstrument } from '../types.js';
 import type { ProductionConfig } from './config.js';
@@ -256,29 +256,35 @@ export function buildDefaultLlmClient(logger: Logger, spendSink?: LlmSpendSink):
   const config: AnthropicLlmClientConfig = {
     ...DEFAULT_LLM_CLIENT_CONFIG,
     model,
-    // #1080. Without this the retry loop is silent: a first attempt that timed
-    // out never reaches `recordSpend`, so it appears in no log line and in no
-    // `llm_spend` row, while still having consumed up to a full `timeoutMs` of
-    // the caller's latency budget and still having been billed by the provider.
-    // `warn`, not `info`: a retried attempt is the system paying twice and
-    // halving the budget it had left, which is a condition an operator reading
-    // a soak log should see without filtering for it.
+    // #1080. The only line a retried attempt produces anywhere — see
+    // `RetryAttemptReport` (shared/http/retry.ts) for why the loop was
+    // otherwise silent. `warn`, not `info`: a retried attempt is the system
+    // paying twice and halving the budget it had left, which an operator
+    // reading a soak log should see without filtering for it.
+    // `logCaughtFailure`, not a bare `logger.log`: this runs inside the retry
+    // loop's own observer guard, and a throw from here — a hostile
+    // `toString` on the provider's rejection value, or an injected logger
+    // whose sink is gone — would be swallowed there, losing the line this
+    // whole mechanism exists to emit. The shared helper renders and
+    // sanitizes the thrown value behind its own try/catch, so the failure
+    // degrades to `[unrenderable error]` in the payload instead.
     onRetryAttempt: (report) => {
-      logger.log({
-        trace_id: report.trace_id ?? 'llm',
-        stage: 'debate',
-        level: 'warn',
-        message:
-          `llm retry: ${report.model} attempt ${report.attempt} of ${report.maxAttempts} failed ` +
-          `after ${Math.round(report.elapsed_ms)}ms and is being retried in ` +
-          `${Math.round(report.delay_ms)}ms. THIS ATTEMPT IS NOT IN llm_spend — it never ` +
-          "completed, so its tokens are missing from the spend cap's sum and its wall time is " +
-          'missing from every latency figure derived from that table, while still counting ' +
-          "against the caller's latency budget (#1080): " +
-          sanitizeLogText(
-            report.error instanceof Error ? report.error.message : String(report.error),
-          ),
-        payload: {
+      logCaughtFailure(
+        logger,
+        {
+          trace_id: report.trace_id ?? 'llm',
+          stage: 'debate',
+          level: 'warn',
+          message:
+            `llm retry: ${report.model} attempt ${report.attempt} of ${report.maxAttempts} ` +
+            `failed after ${Math.round(report.elapsed_ms)}ms and is being retried in ` +
+            `${Math.round(report.delay_ms)}ms. THIS ATTEMPT IS NOT IN llm_spend — it never ` +
+            "completed, so its tokens are missing from the spend cap's sum and its wall time " +
+            'is missing from every latency figure derived from that table, while still ' +
+            "counting against the caller's latency budget (#1080)",
+        },
+        report.error,
+        {
           model: report.model,
           attempt: report.attempt,
           max_attempts: report.maxAttempts,
@@ -287,7 +293,7 @@ export function buildDefaultLlmClient(logger: Logger, spendSink?: LlmSpendSink):
           debate_id: report.debate_id,
           llm_stage: report.stage,
         },
-      });
+      );
     },
   };
   const client = new NousMessagesClient({ apiKey, baseUrl });

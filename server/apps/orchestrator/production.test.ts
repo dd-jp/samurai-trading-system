@@ -601,6 +601,39 @@ describe('buildProductionComponents', () => {
     }
   });
 
+  /**
+   * #1080's wiring proof, and the defect class it belongs to: a relay with a
+   * writer and no reader. `buildAnalystsStep` can classify every skip it
+   * returns, and if the root forgets either `skipKinds` (the writer) or
+   * `analystSkipKind` (the reader) the audit row keeps saying `quorum_skip`
+   * with every unit test still green — the shape of #388's unconstructed rate
+   * limiter and #433's unread tuning dial.
+   *
+   * Driven through the SHIPPED step rather than a hand-built adapter: the
+   * question is what the composition root wired, not what the adapter can do.
+   *
+   * This is the wiring evidence in place of a smoke-gate assertion, and the
+   * exclusion is structural rather than a shortcut: `yarn smoke` gates on the
+   * pipeline TRANSACTING end to end, so its fixtures produce views on every
+   * tick and no quorum skip occurs in a passing smoke run at all. A gate
+   * assertion would have to make the smoke run fail to have anything to read.
+   */
+  it('reports the cause of a quorum skip back through the steps it exposes (#1080)', async () => {
+    const { steps } = buildProductionComponents(stubConfig(db));
+
+    const views = await steps.analysts({
+      trace_id: 'trace-skip',
+      signal: { asset: 'AAPL', asset_class: 'stocks' },
+      clock: new SimulatedClock(START),
+      bar: START,
+    });
+
+    // The fixture source has no bars for this name, so the mandatory technical
+    // analyst fails on a data gap — a fault, not a deadline.
+    expect(views).toEqual([]);
+    expect(steps.analystSkipKind?.('trace-skip')).toBe('fault');
+  });
+
   it('binds the execution step onto the injected Alpaca client', async () => {
     const config = stubConfig(db);
     const { steps } = buildProductionComponents(config);
@@ -1105,28 +1138,31 @@ describe('buildProductionComponents (default llmClient fallback)', () => {
   });
 
   /**
-   * #1080. The previous constant let ONE logical LLM call occupy
-   * `2 * (30,000 + 2,000)` = 64,000ms — more than the entire 60s stocks
-   * latency budget the debate issuing it was racing, and it did so invisibly,
-   * because a failed attempt reaches neither the log nor `llm_spend`. Nine of
-   * the 26 timed-out debates in the 2026-09-03 session contained one.
+   * #1080: the previous retry schedule let ONE logical LLM call occupy
+   * `2 * (30,000 + 2,000)` = 64,000ms, more than the whole budget the debate
+   * issuing it was racing. See `LOGICAL_LLM_CALL_BUDGET_MS` (defaults.ts) for
+   * the arithmetic and for why the crypto budget is knowingly out of bounds.
    *
-   * Asserted as an inequality over the two constants rather than as a pair of
-   * literals: a retry schedule and the budget it runs inside are ONE decision,
-   * so moving either one alone has to fail here.
+   * The BUDGET side is a literal here on purpose. `DEFAULT_LLM_TIMEOUT_MS` is
+   * derived from `LATENCY_BUDGET_MS.stocks`, so comparing the shipped config
+   * against that same constant is an identity — it holds for any budget,
+   * including one nobody chose, and would keep passing if the derivation were
+   * replaced by a hand-picked wider timeout. Pinning 60,000 makes both sides
+   * independent: a hand-edited `timeoutMs` fails the inequality, and a moved
+   * latency budget fails the literal and has to be re-read here.
    *
-   * Against `LATENCY_BUDGET_MS.stocks` and not the crypto entry, deliberately:
-   * `DEFAULT_UNIVERSE` is all-stocks and crypto left scope 2026-08-16, so the
-   * crypto budget is reached only by the smoke run's stub client. This config
-   * is knowingly out of bounds against it and cannot be brought inside — see
-   * `LOGICAL_LLM_CALL_BUDGET_MS` for the arithmetic. Widening this assertion to
-   * every asset class would fail for a reason no constant here can fix.
+   * What this is NOT: an allocation of the budget across a debate's calls. A
+   * three-round debate issues nine of them sequentially, so a per-attempt
+   * ceiling cannot make the budget reachable — that is the open question #1080
+   * leaves to a session that can measure it.
    */
   it('cannot let one logical LLM call outlast the latency budget it runs inside', () => {
+    expect(LATENCY_BUDGET_MS.stocks).toBe(60_000);
+
     const { maxAttempts, maxDelayMs } = DEFAULT_LLM_CLIENT_CONFIG.retry;
     const worstCaseLogicalCallMs = maxAttempts * (DEFAULT_LLM_CLIENT_CONFIG.timeoutMs + maxDelayMs);
 
-    expect(worstCaseLogicalCallMs).toBeLessThanOrEqual(LATENCY_BUDGET_MS.stocks);
+    expect(worstCaseLogicalCallMs).toBeLessThanOrEqual(60_000);
   });
 
   /**

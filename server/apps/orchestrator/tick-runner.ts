@@ -108,6 +108,7 @@
 import type { Signal } from '../../pipeline/analysts/index.js';
 import { DEBATE_BAR_TIMEFRAME_MS, floorToBar } from '../../pipeline/debate-engine/index.js';
 import type { OrderIntent } from '../../shared/index.js';
+import { analystsSkipDecisionWord } from './analysts-decision.js';
 import { debateDecisionWord, isDegradedDecision } from './debate-decision.js';
 import { digest } from './digest.js';
 import type { TickContext, TickOutcome, TickRunner, TickStage, TickSteps } from './types.js';
@@ -367,13 +368,14 @@ export class SequentialTickRunner implements TickRunner {
     const analystsInput = { trace_id, signal, clock, bar: decisionBar.open_time };
     const analystsTimer = startStageTimer();
     const views = await this.steps.analysts(analystsInput);
-    record(
-      'analysts',
-      views.length === 0 ? 'quorum_skip' : 'quorum_met',
-      analystsInput,
-      views,
-      analystsTimer,
-    );
+    // Read only on the empty branch, and destructively (#1080): a kind belongs
+    // to one pass, and the relay is a side channel for the fact the step's
+    // return type cannot carry, not a store to be queried later.
+    const analystsDecision =
+      views.length === 0
+        ? analystsSkipDecisionWord(this.steps.analystSkipKind?.(trace_id))
+        : 'quorum_met';
+    record('analysts', analystsDecision, analystsInput, views, analystsTimer);
 
     // ── FALSIFIER ARM 2, decision cadence (#753). ──────────────────────────
     // Sited HERE — after the analysts step, before the debate — because that is

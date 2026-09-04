@@ -35,6 +35,7 @@ import { technicalAnalyst } from './technical-analyst.js';
 import type {
   Analyst,
   AnalystFailure,
+  AnalystFailureKind,
   AnalystRunResult,
   AnalystTelemetry,
   Signal,
@@ -209,6 +210,10 @@ export class AnalystOrchestrator {
         // error, or malformed output surfacing as a throw — differing only in
         // the reason string (story 20).
         let lastReason = '';
+        // The LAST attempt's kind, not a summary of both: a persona whose first
+        // attempt threw and whose retry timed out is a timeout at the point the
+        // stage gave up, which is the one the caller is deciding about.
+        let lastKind: AnalystFailureKind = 'error';
         for (let attempt = 1; attempt <= ATTEMPTS_PER_PERSONA; attempt++) {
           try {
             const view = await withTimeout(
@@ -228,6 +233,7 @@ export class AnalystOrchestrator {
             return { persona, status: 'fulfilled' as const, view };
           } catch (error) {
             lastReason = error instanceof Error ? error.message : String(error);
+            lastKind = error instanceof AnalystTimeoutError ? 'timeout' : 'error';
           }
         }
         // The reason says the retry happened, so a log line cannot be read as
@@ -236,6 +242,7 @@ export class AnalystOrchestrator {
           persona,
           status: 'rejected' as const,
           reason: `${lastReason} (after ${ATTEMPTS_PER_PERSONA} attempts)`,
+          kind: lastKind,
         };
       }),
     );
@@ -253,6 +260,7 @@ export class AnalystOrchestrator {
         analyst_type: outcome.persona.analyst_type,
         role: outcome.persona.role,
         reason: outcome.reason,
+        kind: outcome.kind,
       });
       if (outcome.persona.role === 'mandatory') {
         mandatoryFailed = true;

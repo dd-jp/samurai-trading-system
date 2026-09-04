@@ -34,11 +34,15 @@ export interface NousMessagesClientOptions {
   baseUrl: string;
   /**
    * Network backstop. Defaults to `nousChat`'s own, deliberately WIDER than
-   * `AnthropicLlmClientConfig.timeoutMs` (30s): that value governs the outer
+   * `DEFAULT_LLM_CLIENT_CONFIG.timeoutMs`: that value governs the outer
    * race in `AnthropicLlmClient.callWithTimeout`, whose timer starts before
    * `createMessage` is even called, so it is the one that actually decides a
    * slow call's `LlmTimeoutError`. Two timers on an identical deadline would
    * only be ambiguous about which won.
+   *
+   * Named rather than quoted as a number: this comment said "(30s)" until
+   * #1080 moved the shipped value to 28s, and a literal restated here is a
+   * second source of truth that goes stale silently.
    */
   timeoutMs?: number;
 }

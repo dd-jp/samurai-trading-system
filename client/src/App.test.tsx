@@ -404,4 +404,41 @@ describe('degraded stages on the page (#1080)', () => {
     // recoloured — the point is telling the two apart, not flagging the pair.
     expect(drawer.querySelector('[data-stage="trader"]')?.getAttribute('data-degraded')).toBeNull();
   });
+
+  it('explains a starved analyst deadline, and still reads the lane as a quorum skip', async () => {
+    // The same defect one stage earlier and larger (34 of 60 main-arm runs in
+    // the 2026-09-03 session): every quorum skip wrote one word whether an
+    // analyst missed its 10s deadline or threw. The lane outcome stays
+    // `quorum_skip` — that is a closed union the matrix renders from — so the
+    // cause has to be legible in the drawer or it is legible nowhere.
+    const skipped = makeLane({
+      instrument: 'QQQ',
+      trace_id: 'trace-qqq',
+      asset_class: 'stocks',
+      outcome: 'quorum_skip',
+      final_stage: 'analysts',
+      started_at: '2026-08-07T11:58:00.000Z',
+      cells: {
+        analysts: {
+          state: 'stopped',
+          recorded_at: '2026-08-07T11:58:20.000Z',
+          duration_ms: 20_002,
+          decision: 'quorum_skip_timeout',
+        },
+      },
+    });
+    renderApp([
+      makeSnapshot({
+        pipeline: makeView([skipped], { live_trace_id: null, live_entered_at: null }),
+      }),
+    ]);
+    openTab('Live');
+    fireEvent.click(await screen.findByRole('button', { name: /QQQ, stocks, quorum skip/ }));
+
+    const drawer = screen.getByRole('complementary', { name: 'Trace detail' });
+    const analystsRow = drawer.querySelector('[data-stage="analysts"]');
+    expect(analystsRow?.getAttribute('data-degraded')).toBe('true');
+    expect(analystsRow?.textContent).toContain('quorum_skip_timeout');
+    expect(analystsRow?.textContent).toContain('not the analysts finding nothing to trade');
+  });
 });

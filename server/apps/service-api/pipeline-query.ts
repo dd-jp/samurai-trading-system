@@ -27,6 +27,7 @@
  */
 
 import {
+  isQuorumSkipDecision,
   PIPELINE_STAGES,
   type PipelineCell,
   type PipelineCellState,
@@ -349,8 +350,13 @@ function outcomeOf(trace: LaneTrace): PipelineOutcome {
     // on the wire rather than a harmless fallback.
     return 'stopped';
   }
-  if (last.stage === 'analysts' && last.decision === 'quorum_skip') {
-    // Normal quiet-market traffic, not a halt (analysts-spec.md story 21).
+  if (last.stage === 'analysts' && isQuorumSkipDecision(last.decision)) {
+    // A stage that produced no views, however it got there (analysts-spec.md
+    // story 21). The lane outcome stays one word for all three: `quorum_skip`
+    // is a `PipelineOutcome`, a closed union that drives lane rendering, and
+    // #1080's distinction is carried by the CELL's decision word, which the
+    // drawer glosses from `DEGRADED_DECISIONS`. Splitting the lane outcome
+    // would change the wire for a difference the wire already carries.
     return 'quorum_skip';
   }
   if (last.stage === LAST_STAGE) {
