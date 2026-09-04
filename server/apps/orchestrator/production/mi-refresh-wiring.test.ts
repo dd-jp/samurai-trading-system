@@ -228,6 +228,6 @@ describe('MI refresh wiring (#1085)', () => {
     );
 
     expect(components.marketIntelligenceRefresh).toBeDefined();
-    await expect(components.marketIntelligenceRefresh?.whenIdle()).resolves.toBeUndefined();
+    await expect(components.marketIntelligenceRefresh?.stop()).resolves.toBeUndefined();
   });
 });

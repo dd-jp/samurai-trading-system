@@ -17,7 +17,7 @@ import { MI_REFRESH_TRACE_ID, MiRefreshQueue, REFUSAL_LOG_EVERY } from './mi-ref
  *
  * A macrotask turn, so the whole microtask queue — every iteration of the
  * drain loop, since every refresher below settles on it — has run by the time
- * this resolves. NOT `whenIdle()`: that is the shutdown path and it
+ * this resolves. NOT `stop()`: that is the shutdown path and it
  * deliberately discards work still waiting, which would make a test about
  * refusals pass because the item was dropped.
  */
@@ -72,15 +72,48 @@ function billingRefresher(
   };
 }
 
+/**
+ * Bills like `billingRefresher`, but reads the cap first and refuses on a
+ * breach — the `GrokAgent` shape, which is the only MI agent that carries its
+ * own `SpendCap`.
+ */
+function capReadingRefresher(
+  cap: SpendCap & { spentUsd: number },
+  costUsd: number,
+  calls: string[],
+): MarketIntelligenceRefresh {
+  return {
+    async refresh(_trace_id, instrument) {
+      if (!cap.check().admitted) return false;
+      calls.push(instrument);
+      await Promise.resolve();
+      cap.spentUsd += costUsd;
+      return true;
+    },
+  };
+}
+
+/**
+ * The real `composeMarketIntelligence`, narrowed by a throw rather than a cast.
+ * It returns `undefined` only for an empty list, which two agents cannot be.
+ */
+function composePair(
+  first: MarketIntelligenceRefresh,
+  second: MarketIntelligenceRefresh,
+): MarketIntelligenceRefresh {
+  const composed = composeMarketIntelligence([first, second]);
+  if (composed === undefined) throw new Error('test setup: two agents must compose to one');
+  return composed;
+}
+
 const UNCAPPED: SpendCap = {
   check: () => ({ admitted: true, spent_usd: 0, budget_usd: Number.POSITIVE_INFINITY }),
 };
 
 describe('MiRefreshQueue (#1085)', () => {
   it('returns before the refresh has run, so the analyst stage never waits on an LLM call', async () => {
-    // The measured defect: the analysts step awaited a two-round-trip refresh
-    // per instrument, and stage durations inside one tick climbed 911ms ->
-    // 29,982ms until #1084 started dropping instruments.
+    // The property the whole change rests on: the stage's wait no longer
+    // includes the refresh, however long the refresh takes.
     let release = (): void => {};
     const blocked = new Promise<void>((resolve) => {
       release = resolve;
@@ -102,7 +135,7 @@ describe('MiRefreshQueue (#1085)', () => {
     expect(queue.depth).toBe(1);
 
     release();
-    await queue.whenIdle();
+    await queue.stop();
   });
 
   it('never lets two MI calls pass a spend check the pair would fail, across instruments', async () => {
@@ -142,6 +175,51 @@ describe('MiRefreshQueue (#1085)', () => {
     ]);
 
     expect(calls).toEqual(['TSLA', 'AAPL']);
+    expect(cap.spentUsd).toBe(2);
+  });
+
+  it('holds the pair inside the budget only while the agent that reads no cap runs FIRST', async () => {
+    // The queue's ONE check covers a WHOLE composed pass, so within a pass the
+    // agents' order is load-bearing and the root's `[miIngestAgent, grokAgent]`
+    // is the safe one. `MiIngestAgent` bills through the shared `LlmClient` and
+    // reads no cap; `GrokAgent` re-reads the cap itself before it calls. Ingest
+    // first means Grok's own read sees the POST-ingest total and refuses. This
+    // is `A` (bills, reads nothing) then `B` (reads, refuses, bills).
+    const cap = meteredCap(1);
+    const calls: string[] = [];
+    const queue = new MiRefreshQueue({
+      spendCap: cap,
+      refresher: composePair(billingRefresher(cap, 1, calls), capReadingRefresher(cap, 1, calls)),
+    });
+
+    await queue.refresh('tick-1', 'TSLA', 'stocks');
+    await settle();
+
+    // On SPEND, not on which names ran: the invariant is the budget, and an
+    // index assertion would still pass for a pair that both called and both
+    // billed. EXACTLY the budget, not "at most" — `<= 1` would also pass for a
+    // pass that spent nothing at all, which is what a queue refusing
+    // everything looks like.
+    expect(cap.spentUsd).toBe(1);
+  });
+
+  it('and overshoots when that order is reversed, which is why the order is an invariant', async () => {
+    // Same queue, same single check, same budget — only the composition order
+    // changes. `B` reads a total no one has moved yet and admits itself, then
+    // `A` bills under a check made before either ran. Exactly what AC2 forbids,
+    // reachable today by editing one array at the composition root.
+    const cap = meteredCap(1);
+    const calls: string[] = [];
+    const queue = new MiRefreshQueue({
+      spendCap: cap,
+      refresher: composePair(capReadingRefresher(cap, 1, calls), billingRefresher(cap, 1, calls)),
+    });
+
+    await queue.refresh('tick-1', 'TSLA', 'stocks');
+    await settle();
+
+    // Exactly double the budget: both agents called, neither stopped by a check
+    // the pair fails. `> 1` would leave the size of the breach unpinned.
     expect(cap.spentUsd).toBe(2);
   });
 
@@ -268,7 +346,7 @@ describe('MiRefreshQueue (#1085)', () => {
     release();
     await settle();
     expect(calls).toEqual(['TSLA', 'AAPL']);
-    await queue.whenIdle();
+    await queue.stop();
   });
 
   it('runs the refresh under its own trace id, not the tick that asked', async () => {
@@ -314,7 +392,7 @@ describe('MiRefreshQueue (#1085)', () => {
     expect(queue.refreshAttempted('AAPL')).toBe(false);
   });
 
-  it('takes no new work after whenIdle, so a shutdown cannot be outrun by a tick', async () => {
+  it('takes no new work after stop, so a shutdown cannot be outrun by a tick', async () => {
     // `stop()` drains the tick loop and this queue CONCURRENTLY, so a pass
     // still finishing can trigger a refresh after the drain has begun. Latched
     // rather than merely awaited, or that refresh would write to a closing store.
@@ -329,7 +407,7 @@ describe('MiRefreshQueue (#1085)', () => {
       },
     });
 
-    await queue.whenIdle();
+    await queue.stop();
     await queue.refresh('tick-1', 'TSLA', 'stocks');
     await settle();
 

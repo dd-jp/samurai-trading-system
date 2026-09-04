@@ -549,8 +549,9 @@ export interface ProductionComponents {
    * `undefined` when this run has no MI writer at all.
    *
    * Exposed for `gdeltIngestAgent`'s reason and one more: the refresh now
-   * completes AFTER the tick that asked for it, so `stop()` has to drain it or
-   * a shutdown can leave an archive and store write racing a closing store.
+   * completes AFTER the tick that asked for it, so the orchestrator's `stop()`
+   * has to drain this one too, or a shutdown can leave an archive and store
+   * write racing a closing store.
    */
   marketIntelligenceRefresh: MiRefreshQueue | undefined;
 }
@@ -1653,14 +1654,23 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * The MI writers, composed and then taken OFF the analyst stage's critical
    * path (#1085).
    *
-   * BOTH agents, not one (#969). This was `miIngestAgent ?? grokAgent` — the
-   * deterministic path preferred, the sentiment agent kept only as a fallback
-   * — and #552's reasoning for that was sound while `GrokAgent` ingested `[]`
-   * by construction. It inverts once sentiment retrieves: the two write
-   * DIFFERENT buckets (`MiIngestAgent` fills `news`, `GrokAgent` fills
-   * `social`), so picking one leaves the other empty by construction, and with
-   * the news path available the empty one is `social` — the bucket #969 exists
-   * to fill.
+   * BOTH agents, not one (#969): they write DIFFERENT buckets — `MiIngestAgent`
+   * fills `news`, `GrokAgent` fills `social` — so picking one leaves the other
+   * empty by construction.
+   *
+   * ## THE ARRAY ORDER IS AN INVARIANT, NOT A STYLE CHOICE
+   *
+   * The queue makes ONE `spendCap.check()` per composed pass, covering both
+   * agents. Only `GrokAgent` re-reads the cap before its own call;
+   * `MiIngestAgent` scores through the shared `LlmClient`, which meters into
+   * `llm_spend` and reads no cap at all. So INGEST MUST COME FIRST: Grok's own
+   * read then sees the post-ingest total and refuses. Reversed, Grok would
+   * spend under the queue's pre-pass check and ingest would spend after it
+   * under no check — two metered calls passing one check the pair fails, which
+   * is precisely what the serialisation exists to prevent. Pinned by the two
+   * paired tests in `mi-refresh-queue.test.ts` that assert on total SPEND for
+   * each ordering. The invariant disappears once `MiIngestAgent` carries its
+   * own `SpendCap` (#1106).
    *
    * `undefined` when neither agent could be built (SAMURAI_SENTIMENT=off, or
    * no Nous credentials): no queue, no calls, and the analysts keep reporting
@@ -1668,11 +1678,11 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * no-op refresher that would read as a working one.
    *
    * The queue is what makes the analysts step non-blocking and what serialises
-   * every metered MI call behind one `spendCap.check()` — see
-   * `mi-refresh-queue.ts` for why neither property held before, cross-instrument
-   * concurrency included.
+   * every metered MI call behind one check — see `mi-refresh-queue.ts` for why
+   * neither property held before, cross-instrument concurrency included.
    */
   const marketIntelligenceRefresh = ((): MiRefreshQueue | undefined => {
+    // Ingest first — see the ordering invariant above.
     const composed = composeMarketIntelligence([miIngestAgent, grokAgent]);
     return composed === undefined
       ? undefined
@@ -3459,7 +3469,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
       // shutdown can leave a refresh's archive and store write racing a
       // closing store — the same ordering argument as the two drains above,
       // and the price of taking the refresh off the critical path.
-      const drainingMiRefresh = components.marketIntelligenceRefresh?.whenIdle();
+      const drainingMiRefresh = components.marketIntelligenceRefresh?.stop();
       loop = undefined;
       fillSync = undefined;
       controlFillSync = undefined;

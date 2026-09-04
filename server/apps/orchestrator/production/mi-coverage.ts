@@ -218,8 +218,11 @@ export interface CheckMiCoverageDeps {
   logger: Logger | undefined;
   /**
    * Whether MI has finished looking at this instrument at least once in this
-   * process (#1085). While it answers `false` the counter still records the
-   * miss, but the ALERT is held.
+   * process (#1085). While it answers `false`, `telemetry.noDataObserved` still
+   * fires — the no-data RATE keeps its true denominator — but the instrument
+   * never reaches `monitor.observe`, so `MiCoverageMonitor`'s consecutive-miss
+   * counter does NOT advance and no alert is raised. Two different counters:
+   * the telemetry one moves, the monitor's does not.
    *
    * Needed because the refresh is now queued rather than awaited
    * (`MiRefreshQueue`): a name whose only items would have come from this

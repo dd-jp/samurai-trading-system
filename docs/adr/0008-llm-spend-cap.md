@@ -197,6 +197,52 @@ the soak from a fresh store if it is meant to have the full budget.**
 > carries the full regime; the range above is a **range, not a point**, until
 > reconciled against the provider's invoice.
 
+> **Amended 2026-09-04 by [#1085](https://github.com/dd-jp/samurai-trading-system/issues/1085)
+> — three sentences of the #969 amendment above are now false, and the
+> correction is in the MI leg's favour on one count and against it on another.**
+> Nothing about the debate leg changes; the figures are untouched.
+>
+> **1. "This cap therefore DOES bind the MI leg" was only ever half true.**
+> `GrokAgent` reads the cap before it calls. `MiIngestAgent` — the news-scoring
+> half — does not, and never did: it scores through the shared `LlmClient`,
+> which METERS into `llm_spend` but is gated by nothing. So the sentiment half
+> was bound and the news half was merely counted. #1085's `MiRefreshQueue`
+> checks the cap once per composed MI pass and is the first ceiling the news
+> path has ever had. Read the pre-#1085 MI figures as a floor on what could be
+> spent, not as a bound.
+>
+> That check covers both agents at once, which makes the composition ORDER at
+> the root load-bearing (ingest first, so Grok's own read sees the post-ingest
+> total). Documented at the call site, pinned by test on total spend, and
+> [#1106](https://github.com/dd-jp/samurai-trading-system/issues/1106) removes
+> the invariant by giving `MiIngestAgent` its own cap.
+>
+> **2. "It fails closed — a breach short-circuits the tick" no longer describes
+> the MI leg.** It still describes the debate leg exactly: `debate-adapter.ts`
+> refuses at `error` and the tick short-circuits at Trader with `no_trade`. An
+> MI breach does NOT do that. It warn-logs under the `mi-refresh` trace id and
+> the tick continues, with the news-fed analysts reporting `NO_DATA_MARKER`.
+> That is deliberate — the MI seam's standing promise is that an outage
+> degrades the debate rather than failing a tick that would otherwise have
+> traded — but it means the predicted failure mode is wrong for this leg. On an
+> MI breach the soak does not go dark; **it keeps trading on a debate that has
+> stopped hearing from its news and sentiment analysts**, which is quieter and
+> arguably worse to detect. Watch the refusal line, not the trade count.
+>
+> **3. The single breach alert is now more likely to be spent by MI.**
+> `SqliteSpendCap.#refuse` latches `#budgetAnnounced` on the first refusal of
+> ANY kind, and the first refusal is now much more likely to be an MI one,
+> because MI checks the cap on a path that previously did not. The alert body
+> itself is stage-agnostic (`breaches: ['llm_spend_cap']`), so nothing is
+> misphrased and the operator is told the true thing — the budget is gone. What
+> they are NOT told separately is that the debate leg has since stopped too:
+> its own first refusal escalates nothing, leaving only its `error` log line.
+>
+> Left as one latch deliberately. A per-stage latch would emit several alerts
+> for one budget, which is the thing the latch exists to prevent, and the
+> breach is a single fact about a single ceiling. Recorded here so the next
+> reader meets it in the ADR rather than during an incident.
+
 `paperStartingProfile` now carries `tickIntervalMs: 15 * 60_000`, up from the
 60s `DEFAULT_TICK_INTERVAL_MS`, and `llmBudgetUsd: 50`. *(Superseded 2026-08-16
 — it now carries `2 * 60_000`; see the amendment box above. `DEFAULT_TICK_INTERVAL_MS`

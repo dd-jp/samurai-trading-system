@@ -2,15 +2,13 @@
  * `MiRefreshQueue` — the market-intelligence refresh, moved off the analyst
  * stage's critical path and serialised behind one spend check (#1085).
  *
- * ## What was wrong
+ * ## What this is for
  *
- * The analysts step awaited a full MI refresh per instrument before running a
- * single analyst, and since #1055 that prelude is two LLM round trips deep
- * (news scoring, then X retrieval). Measured in the 2026-09-03 paper session:
- * 36 MI scoring calls at 6,062ms mean / 16,933ms max, with analyst stage
- * durations inside one tick climbing 911ms -> 12,991ms -> 17,920ms ->
- * 24,231ms -> 29,982ms. #1084 is the consequence: the pass stopped fitting
- * inside a tick and up to 15 of 20 instruments were dropped.
+ * A full MI refresh is two LLM round trips deep (news scoring, then X
+ * retrieval) and costs seconds, not milliseconds. Awaited per instrument
+ * inside the analyst stage, it made the pass longer than the tick interval, at
+ * which point the scheduler drops instruments (#1084) — so the refresh must
+ * not be on the stage's critical path at all.
  *
  * ## Why a queue rather than "stop awaiting it" or "give it its own timer"
  *
@@ -19,16 +17,16 @@
  * fail — the cap is a pure read over `llm_spend` and reserves nothing, so
  * concurrent callers all see the same pre-spend total.
  *
- * **That property was already broken, and wider than this ticket assumed.**
- * #1013 admits up to `min(6, universe.length)` instrument passes
- * concurrently, and `composeMarketIntelligence` is called *inside* each
- * pass's analyst stage — so its sequencing only ever held within one
- * instrument, while up to four instruments' refreshes raced the same total.
- * Simply not awaiting the refresh (candidate 2) makes that strictly worse: it
- * removes the only thing bounding how many refreshes are in flight. A
- * separate timer (candidate 1) is what `AnalystsStepOptions.marketIntelligence`
- * already argues against — it would run outside the tick's in-flight guard
- * and outside the session the scheduler defines.
+ * **`composeMarketIntelligence`'s sequencing alone does not give that
+ * property.** #1013 admits up to `min(6, universe.length)` instrument passes
+ * concurrently, and `composeMarketIntelligence` is called *inside* each pass's
+ * analyst stage — so its ordering holds only within one instrument, while
+ * several instruments' refreshes race the same total. Simply not awaiting the
+ * refresh is strictly worse: it removes the only thing bounding how many
+ * refreshes are in flight. A separate timer is what
+ * `AnalystsStepOptions.marketIntelligence` already argues against — it would
+ * run outside the tick's in-flight guard and outside the session the scheduler
+ * defines.
  *
  * So: the tick still triggers the refresh (nothing runs outside the session),
  * the trigger returns immediately (nothing blocks an analyst), and ONE worker
@@ -42,13 +40,20 @@
  * through the shared `LlmClient`, which METERS into `llm_spend` but is gated
  * by nothing. So the check below is the only ceiling the news-scoring path
  * has ever had, and a run at its budget now refuses MI scoring instead of
- * spending past it. That is a behaviour change and it is the intended one.
+ * spending past it. That is a behaviour change and it is the intended one;
+ * ADR-0008's 2026-09-04 amendment records it.
+ *
+ * ONE check covers a WHOLE composed pass, which makes the agents' ORDER at the
+ * composition root load-bearing — ingest (no cap of its own) must run before
+ * Grok (which re-reads the cap), or both spend under a single pre-pass check.
+ * See the invariant at `production.ts`'s `composeMarketIntelligence` call;
+ * #1106 removes it by giving `MiIngestAgent` its own cap.
  *
  * ## Cost of the choice
  *
  * Latency becomes a global MI throughput ceiling: when a refresh bucket rolls,
  * every name in the universe comes due at once and the sweep is one
- * (news + social) pair at a time. A name at the back of the queue gets its
+ * (news + social) pair at a time, so a name at the back of the queue gets its
  * `social` bucket minutes late. That is affordable precisely because it is off
  * the critical path and because the analysts read a 24h window
  * (`COVERAGE_WINDOW_MS`) against a minutes-scale tick — a slightly staler
@@ -114,7 +119,7 @@ export class MiRefreshQueue implements MarketIntelligenceRefresh {
   /** The instrument being refreshed right now, so a re-request cannot queue a duplicate of it. */
   #inFlight: string | undefined;
 
-  /** The worker, held as a promise so `whenIdle()` can drain it at shutdown. */
+  /** The worker, held as a promise so `stop()` can drain it at shutdown. */
   #worker: Promise<void> | undefined;
 
   #stopped = false;
@@ -171,29 +176,33 @@ export class MiRefreshQueue implements MarketIntelligenceRefresh {
   /**
    * Stops taking new work and awaits the refresh already dispatched.
    *
-   * Same REASON as `GdeltIngestAgent.whenIdle` / `PolymarketAgent.whenIdle` —
-   * the in-flight refresh ends in an archive and store write, which without
-   * this drain can land after the store is closed — but deliberately not the
-   * same shape: those two only await, and this one latches `#stopped` first.
+   * `stop()`, deliberately NOT `whenIdle()`. It shares the reason
+   * `GdeltIngestAgent.whenIdle` / `PolymarketAgent.whenIdle` exist — the
+   * in-flight refresh ends in an archive and store write, which without a
+   * drain can land after the store is closed — but not their contract: those
+   * two only await and can be called mid-run, while this one latches
+   * `#stopped` and is one-way. Naming it `whenIdle` would invite a caller to
+   * use it as a quiescence probe and silently end MI for the rest of the run.
    *
-   * The difference is what starts the work. A GDELT poll can only be started
-   * by its interval, and `stop()` clears that interval before it drains, so
-   * nothing can arrive mid-drain. THIS queue is started by the analyst stage,
-   * and `stop()` drains the tick loop CONCURRENTLY with this call — so an
+   * The latch is load-bearing, and the difference is what starts the work. A
+   * GDELT poll can only be started by its interval, and the orchestrator's
+   * `stop()` clears that interval before it drains, so nothing can arrive
+   * mid-drain. THIS queue is started by the analyst stage, and the
+   * orchestrator drains the tick loop CONCURRENTLY with this call — so an
    * analyst stage still finishing inside that drain would keep enqueueing
-   * refreshes, and an await-only `whenIdle` could chase a queue that keeps
-   * refilling and let exactly the late store write it exists to prevent.
+   * refreshes, and an await-only drain could chase a queue that keeps
+   * refilling and permit exactly the late store write it exists to prevent.
    *
-   * The latch is therefore process-final, and that is sound because there is
-   * no restart path: `index.ts` calls `start()` exactly once per process, and
-   * `stop()` is the shutdown handler that runs before exit. If a restart is
-   * ever added, this must be split — an unlatching drain here, and the latch
-   * moved to a separate `stop()` — or MI will silently never refresh again.
+   * Being one-way is sound because there is no restart path: `index.ts` calls
+   * `start()` exactly once per process, and the orchestrator's `stop()` is the
+   * shutdown handler that runs before exit. If a restart is ever added, this
+   * must be split — an unlatching drain, and the latch left here — or MI will
+   * silently never refresh again.
    *
    * There is no timer to clear either, this worker being enqueue-driven, so a
    * test that never calls this leaks nothing.
    */
-  async whenIdle(): Promise<void> {
+  async stop(): Promise<void> {
     this.#stopped = true;
     this.#pending.clear();
     await this.#worker;
