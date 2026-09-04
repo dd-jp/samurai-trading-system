@@ -31,7 +31,9 @@ function makeRow(overrides: Partial<LseEtpPoolRow> = {}): LseEtpPoolRow {
     currency: 'GBX',
     t212_isa: true,
     subclass_envelope_measured: true,
-    fallback_default: true,
+    // Opt in explicitly, so a future multi-row pool built from this helper does
+    // not silently exercise the fallback ceiling and duplicate-underlying rules.
+    fallback_default: false,
     provenance: {
       isin: 'XX0000000000',
       issuer: 'Leverage Shares',
@@ -141,7 +143,9 @@ describe('the declared fallback subset (F4, docs/reviews/universe-path-gap-sweep
     expect(everything.filter((r) => r.fallback_default).length).toBeGreaterThan(
       FALLBACK_DEFAULT_MAX_ROWS,
     );
-    expect(() => assertValidPool(everything)).toThrow(/above the 10-row ceiling/);
+    expect(() => assertValidPool(everything)).toThrow(
+      new RegExp(`above the ${FALLBACK_DEFAULT_MAX_ROWS}-row ceiling`),
+    );
   });
 
   it('assertValidPool rejects two fallback rows on one underlying, naming both lines', () => {
@@ -250,7 +254,9 @@ describe('identity distinctness is enforced, not merely observed', () => {
     // The checked-in pool holds 3SPY/SPY and 3QQQ/QQQ: a distinct ETP line and
     // its distinct US underlying. The check is equality, never containment.
     expect(() =>
-      assertValidPool([makeRow({ lse_ticker: '3SPY', screening_instrument: 'SPY' })]),
+      assertValidPool([
+        makeRow({ lse_ticker: '3SPY', screening_instrument: 'SPY', fallback_default: true }),
+      ]),
     ).not.toThrow();
   });
 });
