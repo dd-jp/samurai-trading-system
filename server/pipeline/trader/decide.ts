@@ -146,7 +146,9 @@ function atrFor(
   bars: Bar[],
   lookback: number,
   timeframe: string,
-): { atr: number; reason: null } | { atr: null; reason: TraderSkipReason } {
+):
+  | { atr: number; reason: null; reason_detail: null }
+  | { atr: null; reason: TraderSkipReason; reason_detail: TraderReasonDetail | null } {
   const spec = atrIndicatorSpec(lookback, timeframe);
 
   // `lookback + 1` bars yield `lookback` true ranges — the arity lives in
@@ -159,10 +161,27 @@ function atrFor(
   // corrupt bar data and is never expected. Collapsing them to one null — as
   // this did — made the benign case and the alarming one indistinguishable in
   // `trader_log`.
-  if (bars.length < minimumBarsFor(spec)) return { atr: null, reason: 'atr_insufficient_bars' };
+  //
+  // `minimumBarsFor(spec)` is a configured threshold (#1109) — it derives from
+  // `config.atr_lookback` via `atrIndicatorSpec` — so `bars.length` against it
+  // is the fourth numeric-gate site, alongside the three `TraderReasonDetail`
+  // already covers. Without it "2 bars short" and "13 bars short" are the same
+  // row, and the warm-up case this reason exists to distinguish (see #475's
+  // comment above) is exactly the one a near-miss vs. a decisive shortfall
+  // would tell apart.
+  const minimumBars = minimumBarsFor(spec);
+  if (bars.length < minimumBars) {
+    return {
+      atr: null,
+      reason: 'atr_insufficient_bars',
+      reason_detail: { compared_value: bars.length, threshold: minimumBars },
+    };
+  }
 
   const atr = computeIndicator(bars, spec);
-  return Number.isFinite(atr) ? { atr, reason: null } : { atr: null, reason: 'atr_not_finite' };
+  return Number.isFinite(atr)
+    ? { atr, reason: null, reason_detail: null }
+    : { atr: null, reason: 'atr_not_finite', reason_detail: null };
 }
 
 /**
@@ -481,7 +500,12 @@ async function buildBracket(
     throw error;
   }
 
-  if (debate.confidence < config.conviction_floor) return skip('below_conviction_floor');
+  if (debate.confidence < config.conviction_floor) {
+    return skip('below_conviction_floor', {
+      compared_value: debate.confidence,
+      threshold: config.conviction_floor,
+    });
+  }
 
   // `marketData.getMark` here is the mark read #900 pins for BOTH callers of
   // this function — an entry AND a scale_in (`intentType`, above): it is
@@ -587,7 +611,7 @@ async function buildBracket(
           'was not finite on a full window — the bar data is corrupt, not merely short',
       });
     }
-    return skip(atrResult.reason);
+    return skip(atrResult.reason, atrResult.reason_detail);
   }
   const atr = atrResult.atr;
 
@@ -694,7 +718,12 @@ async function buildBracket(
   // always been reported, and #870's ceiling test asserts precisely that.
   if (submittableSize <= 0 && size > 0) return skip('rounds_to_zero_shares');
 
-  if (submittableSize * entry < config.min_viable_notional) return skip('below_min_notional');
+  if (submittableSize * entry < config.min_viable_notional) {
+    return skip('below_min_notional', {
+      compared_value: submittableSize * entry,
+      threshold: config.min_viable_notional,
+    });
+  }
 
   // Written only once every skip guard has passed, so a decision the Trader
   // itself declined leaves no row.
@@ -1158,6 +1187,181 @@ export type TraderSkipReason =
   | 'control_arm_valuation_refused';
 
 /**
+ * WHY a `TraderSkipReason` fired, at the granularity an operator's next
+ * action needs (#1109).
+ *
+ * `skip_reason` alone answers "the Trader declined" without saying whether
+ * the refusal is the system working or the system starving — and those two
+ * demand opposite responses. #1080 found 41 of 44 live debates in the
+ * 2026-09-04 session timed out (32 with zero completed rounds); every one of
+ * them still resolved to `direction: 'neutral'`, so the Trader's own
+ * `neutral_direction_while_flat` / `holding_neutral_or_non_converged` rows
+ * were byte-identical whether the debate genuinely read neutral or never
+ * finished reading anything.
+ *
+ * - `declined_on_signal` — the debate (or the position/sizing state) was
+ *   read and the read said no. Nothing upstream needs attention.
+ * - `could_not_decide` — the debate itself produced nothing usable
+ *   (`timed_out` or `rate_limited`); the Trader's `neutral`-shaped refusal is
+ *   a correct response to a bad input, not a reading of the market.
+ * - `input_unusable` — the Trader's OWN priced inputs (a mark, an ATR, a
+ *   fill record) could not be used this tick — missing, not yet available,
+ *   or non-finite. Distinct from `could_not_decide` because the debate
+ *   itself was fine; the problem is downstream of it.
+ *
+ * `input_unusable` is not uniformly alarming. `atr_insufficient_bars` is a
+ * warm-up/data-gap case — expected early in a soak or when an instrument is
+ * new to the universe (#475) — not evidence of corrupt data, and it sits
+ * here rather than in `could_not_decide` on purpose: `could_not_decide` has
+ * no static baseline anywhere in `SKIP_REASON_CLASS` (below) — it exists
+ * ONLY as `classifyDecision`'s degraded-debate override — and #1109's
+ * acceptance criterion pins its count to #1080's 41 debate timeouts. Giving
+ * `atr_insufficient_bars` a baseline of `could_not_decide` would fold every
+ * routine warm-up tick into that count and make it stop meaning "the debate
+ * starved."
+ *
+ * So the class alone is not the operator's within-bucket severity signal for
+ * `input_unusable` — two things downstream of it are. `reason_detail` is one:
+ * `atr_insufficient_bars` is the ONLY `input_unusable` reason that carries a
+ * non-null one (bars compared against the configured minimum), so a query
+ * can isolate it from its genuinely-corrupt siblings without pattern-matching
+ * `skip_reason` strings. `TraderDiagnostic` is the other: it already excludes
+ * `atr_insufficient_bars` from the alarming `atr_not_finite` kind for exactly
+ * this reason (see `TraderDiagnosticKind`) — the class this reviewer's
+ * concern actually describes ("a class meant to signal corrupt inputs") is
+ * `TraderDiagnostic`, not `TraderDecisionClass`.
+ *
+ * `null` on any outcome that is not a skip: an emitted order has nothing to
+ * classify.
+ */
+export type TraderDecisionClass = 'declined_on_signal' | 'could_not_decide' | 'input_unusable';
+
+/**
+ * The BASELINE classification for every `TraderSkipReason`, before
+ * `classifyDecision`'s degraded-debate override. A `Record` over the full
+ * union rather than a function with a default case, so a twentieth skip
+ * reason is a compile error here until someone decides which bucket it
+ * belongs to, the same guarantee `TraderSkipReason` itself gives `skip()`'s
+ * call sites.
+ *
+ * `neutral_direction_while_flat` and `holding_neutral_or_non_converged` sit
+ * here too, at their baseline `declined_on_signal` — they read `debate`
+ * exactly the way every other `declined_on_signal` reason can end up doing
+ * (see `classifyDecision`), so there is nothing left that is special about
+ * them once the override lives in one place.
+ *
+ * `rounds_to_zero_shares` sits with `below_min_notional`, not with the
+ * data-quality reasons below it in `TraderSkipReason`'s ordering — its own
+ * comment in `buildBracket` says it "belongs in `below_min_notional` where it
+ * has always been reported": both are the strategy correctly declining to
+ * deploy a real, well-formed size, not a corrupt input.
+ */
+const SKIP_REASON_CLASS: Record<TraderSkipReason, TraderDecisionClass> = {
+  below_conviction_floor: 'declined_on_signal',
+  session_closing: 'declined_on_signal',
+  below_min_notional: 'declined_on_signal',
+  scale_in_conviction_delta_not_met: 'declined_on_signal',
+  rounds_to_zero_shares: 'declined_on_signal',
+  no_open_position: 'declined_on_signal',
+  signal_still_supports_position: 'declined_on_signal',
+  neutral_direction_while_flat: 'declined_on_signal',
+  holding_neutral_or_non_converged: 'declined_on_signal',
+  exit_no_filled_size: 'input_unusable',
+  exit_held_quantity_diverged: 'input_unusable',
+  early_exit_signal_unavailable: 'input_unusable',
+  no_position_side: 'input_unusable',
+  atr_insufficient_bars: 'input_unusable', // benign warm-up, not corruption — see the class doc above
+  atr_not_finite: 'input_unusable',
+  mark_not_finite: 'input_unusable',
+  stop_distance_not_positive: 'input_unusable',
+  size_not_finite: 'input_unusable',
+  control_arm_valuation_refused: 'input_unusable',
+};
+
+/**
+ * `debate.timed_out`/`.rate_limited` mirror the discriminator
+ * `debateDecisionWord` (orchestrator, #1080) uses at the Debate seam — this
+ * is the Trader-side read of the same two fields, not a re-derivation of a
+ * third state. Deliberately does NOT split `timed_out` by
+ * `rounds_completed`: #1080's `timed_out_partial` distinction lives at the
+ * Debate stage, and a partial debate is no more decided than a zero-round one
+ * from the Trader's seat — both handed it a `direction` it should not trust.
+ */
+function debateWasDegraded(debate: DebateResult): boolean {
+  return debate.timed_out !== undefined || debate.rate_limited !== undefined;
+}
+
+/**
+ * `declined_on_signal` reasons whose baseline is NOT actually a read of the
+ * debate, and so must sit out `classifyDecision`'s degraded-debate override.
+ *
+ * `session_closing` is the one member: `withinFlattenWindow` decides off the
+ * clock and the session calendar, and would fire identically against a fully
+ * converged debate. Second-pass review of #1109's fix found the override
+ * flipping it to `could_not_decide` on a merely degraded debate, pointing an
+ * operator at an upstream failure that is not there. A future reason added
+ * here needs the same argument — "this baseline never reads `debate` at
+ * all" — not just a baseline of `declined_on_signal`.
+ */
+const DECLINED_ON_SIGNAL_NOT_DEBATE_DERIVED: ReadonlySet<TraderSkipReason> = new Set([
+  'session_closing',
+]);
+
+/**
+ * `skip_reason` plus the debate that produced it, resolved to the class an
+ * operator's response turns on.
+ *
+ * A degraded debate is not confined to producing
+ * `neutral_direction_while_flat`/`holding_neutral_or_non_converged`. On a flat
+ * instrument, `routeDecision` only special-cases `direction === 'neutral'`
+ * before routing to `buildBracket` — and a timed-out debate with
+ * `rounds_completed > 0` can hand back `partial.direction` as `long`/`short`
+ * (`latency-budget.ts`), which reaches `buildBracket` with no `converged`
+ * check on that path at all. Every `buildBracket` skip downstream of that —
+ * `below_conviction_floor` among them — is then a read of a debate that never
+ * finished, not a genuine decline. So the override is keyed on the
+ * BASELINE CLASS, not the specific reason: MOST reasons whose baseline is
+ * `declined_on_signal` are read off the debate, and a degraded debate makes
+ * that read untrustworthy regardless of which `declined_on_signal` reason it
+ * produced — except the ones in `DECLINED_ON_SIGNAL_NOT_DEBATE_DERIVED`
+ * above, whose baseline reads something else entirely. `input_unusable`
+ * reasons are a different fault (the Trader's own priced inputs, downstream
+ * of the debate) and are never overridden by the debate's health.
+ */
+function classifyDecision(
+  skip_reason: TraderSkipReason,
+  debate: DebateResult,
+): TraderDecisionClass {
+  const baseClass = SKIP_REASON_CLASS[skip_reason];
+  const isDebateDerivedDecline =
+    baseClass === 'declined_on_signal' && !DECLINED_ON_SIGNAL_NOT_DEBATE_DERIVED.has(skip_reason);
+  return isDebateDerivedDecline && debateWasDegraded(debate) ? 'could_not_decide' : baseClass;
+}
+
+/**
+ * The compared value and the threshold it missed, for a skip reason that IS
+ * a numeric gate (#1109). Present only on the four sites that compare a
+ * value to a configured threshold — `below_conviction_floor`,
+ * `below_min_notional`, `scale_in_conviction_delta_not_met`,
+ * `atr_insufficient_bars` — so a near-miss (0.549 against a 0.55 floor) is
+ * distinguishable from a decisive one (0.1 against 0.55) without re-deriving
+ * either number from a raw log line.
+ *
+ * Not attempted for `session_closing`: its comparison lives inside
+ * `withinFlattenWindow`'s own remaining-time arithmetic, and widening that
+ * verdict's shape to export a millisecond figure would touch the flat-by-close
+ * ordering the function's own comment calls load-bearing, for a diagnostic
+ * this ticket does not require. Not attempted for `rounds_to_zero_shares`
+ * either: its comparison is against the literal `1` (`submittableSize <= 0`),
+ * not a configured threshold — see the reason's own siting comment in
+ * `buildBracket`.
+ */
+export interface TraderReasonDetail {
+  compared_value: number;
+  threshold: number;
+}
+
+/**
  * A condition the Trader DETECTED but did not treat as fatal (#698).
  *
  * Distinct from `TraderSkipReason` on purpose, and the distinction is the whole
@@ -1245,6 +1449,22 @@ export interface TraderOutcome {
   intent: OrderIntent | null;
   skip_reason: TraderSkipReason | null;
   /**
+   * WHY `skip_reason` fired, at the operator-response granularity #1109
+   * exists to give — see `TraderDecisionClass`. Set by `decideWithReason`
+   * from `skip_reason` and `input.debate` after routing, not by `skip()`
+   * itself: classification needs the debate that produced the reason, and
+   * threading it through every skip site would break the one-line-per-site
+   * property `skip()` protects. `null` exactly when `skip_reason` is `null`.
+   */
+  decision_class: TraderDecisionClass | null;
+  /**
+   * The compared value and the threshold, for a skip reason that is a
+   * numeric gate (#1109) — see `TraderReasonDetail`. `null` for every skip
+   * that is not one of the four threshold sites, and always `null` when an
+   * order was produced.
+   */
+  reason_detail: TraderReasonDetail | null;
+  /**
    * The ATR this decision priced its stop from (#475).
    *
    * Surfaced because `trader_log.atr` has had a column since migration 0016 and
@@ -1273,21 +1493,42 @@ export interface TraderOutcome {
 }
 
 /**
- * A declined decision. Narrow helper so the twelve skip sites stay one line
- * each — and so adding a fourteenth cannot forget a field.
+ * A declined decision. Narrow helper so the twenty skip sites stay one line
+ * each — and so adding a twenty-first cannot forget a field.
  *
  * Diagnostics are deliberately NOT a parameter here (#698): they are collected
  * in `decideWithReason`'s accumulator and merged onto whatever this returns, so
  * that the one-line-per-skip-site property this helper exists to protect
- * survives a second cross-cutting field.
+ * survives a second cross-cutting field. `decision_class` is likewise not a
+ * parameter (#1109) — it is filled in by `decideWithReason`, which is the one
+ * place that has both `skip_reason` and the debate that produced it.
+ * `reason_detail` IS a parameter: unlike the other two, it is known only at
+ * the call site that compared the value to its threshold.
  */
-function skip(reason: TraderSkipReason): TraderOutcome {
-  return { intent: null, skip_reason: reason, atr: null, diagnostics: [] };
+function skip(
+  reason: TraderSkipReason,
+  reason_detail: TraderReasonDetail | null = null,
+): TraderOutcome {
+  return {
+    intent: null,
+    skip_reason: reason,
+    decision_class: null,
+    reason_detail,
+    atr: null,
+    diagnostics: [],
+  };
 }
 
 /** A decision that produced an order. */
 function emit(intent: OrderIntent, atr: number | null): TraderOutcome {
-  return { intent, skip_reason: null, atr, diagnostics: [] };
+  return {
+    intent,
+    skip_reason: null,
+    decision_class: null,
+    reason_detail: null,
+    atr,
+    diagnostics: [],
+  };
 }
 
 export async function decide(input: TraderInput): Promise<OrderIntent | null> {
@@ -1297,7 +1538,7 @@ export async function decide(input: TraderInput): Promise<OrderIntent | null> {
 /**
  * `decide`, but saying WHY when it declines (#475).
  *
- * The Trader has thirteen distinct ways to produce no order, and until this
+ * The Trader has nineteen distinct ways to produce no order, and until this
  * existed `trader_log.skip_reason` recorded the same string —
  * `'decide() returned no intent'` — for every one of them. #328's resolution
  * called the skip row "the highest-value row of the lot", and the whole point
@@ -1324,9 +1565,18 @@ export async function decideWithReason(input: TraderInput): Promise<TraderOutcom
   const diagnostics: TraderDiagnostic[] = [];
   const outcome = await routeDecision(input, diagnostics);
 
+  // #1109: classified once here, not at each of the twenty `skip()` call
+  // sites — see `TraderOutcome.decision_class`.
+  const decision_class =
+    outcome.skip_reason === null ? null : classifyDecision(outcome.skip_reason, input.debate);
+
   // Merged here rather than at each producing site so the skip helper stays a
   // one-liner and no future skip site can forget the field.
-  return diagnostics.length === 0 ? outcome : { ...outcome, diagnostics };
+  return {
+    ...outcome,
+    decision_class,
+    diagnostics: diagnostics.length === 0 ? outcome.diagnostics : diagnostics,
+  };
 }
 
 /** `decideWithReason`'s routing, with #698's diagnostic accumulator threaded through. */
@@ -1387,7 +1637,10 @@ async function routeDecision(
     lot.opened_at > latest.opened_at ? lot : latest,
   );
   if (debate.confidence - mostRecentLot.conviction < config.scale_in_conviction_delta) {
-    return skip('scale_in_conviction_delta_not_met');
+    return skip('scale_in_conviction_delta_not_met', {
+      compared_value: debate.confidence - mostRecentLot.conviction,
+      threshold: config.scale_in_conviction_delta,
+    });
   }
 
   return buildBracket(input, 'scale_in', diagnostics);
@@ -1460,7 +1713,34 @@ export type ExitCheckInput = Pick<
 export async function checkExitsWithReason(input: ExitCheckInput): Promise<TraderOutcome> {
   const diagnostics: TraderDiagnostic[] = [];
   const outcome = await routeExitCheck(input, diagnostics);
-  return diagnostics.length === 0 ? outcome : { ...outcome, diagnostics };
+  const decision_class =
+    outcome.skip_reason === null ? null : classifyExitCheckSkip(outcome.skip_reason);
+  return {
+    ...outcome,
+    decision_class,
+    diagnostics: diagnostics.length === 0 ? outcome.diagnostics : diagnostics,
+  };
+}
+
+/**
+ * `classifyDecision`'s counterpart for the tick-path exit entry point
+ * (#1109). `ExitCheckInput` carries no `DebateResult` by construction, so
+ * `routeExitCheck` (and the `buildExitIntent` helper it shares with
+ * `routeDecision`) can only produce a skip that reads position/mark/fill
+ * state — never `neutral_direction_while_flat` or
+ * `holding_neutral_or_non_converged`, the two `SKIP_REASON_CLASS` entries
+ * `classifyDecision` overrides using a debate this entry point does not have.
+ *
+ * A plain `SKIP_REASON_CLASS` lookup, not a branch on those two reasons:
+ * this runs on the exit-cadence / flat-by-close path (~30 calls/bar/
+ * instrument, the mandatory flatten among them), where nothing may throw.
+ * `SKIP_REASON_CLASS` being a `Record` over the FULL `TraderSkipReason`
+ * union already gives the same compile-time guarantee a runtime assertion
+ * would — a twentieth reason added there without a class here is a compile
+ * error — without a runtime path that can take the flatten down with it.
+ */
+function classifyExitCheckSkip(skip_reason: TraderSkipReason): TraderDecisionClass {
+  return SKIP_REASON_CLASS[skip_reason];
 }
 
 /** `checkExitsWithReason`'s routing, with the #698 diagnostic accumulator threaded through. */
