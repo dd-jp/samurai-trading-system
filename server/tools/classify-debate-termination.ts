@@ -10,20 +10,44 @@
  * NULL rather than guess: the migration has no access to the run logs, and a
  * schema change is not a truthful place to correlate two different data
  * sources. This command is the honest fix — it reads the SAME store the
- * orchestrator writes and the SAME JSONL logs `JsonLogger` emits, and only
- * classifies a row when the correlation is unambiguous: an exact `debate_id`
- * match against a `debate.timeout` log line. A row with no such match is left
- * NULL rather than guessed at as `'converged'`; there is no positive evidence
- * either way, and inventing one would recreate the ambiguity #1081 exists to
- * remove.
+ * orchestrator writes and the SAME JSONL logs `JsonLogger` emits.
  *
- * ## Read-only by default
+ * ## Positive coverage, not absence-as-evidence
  *
- * Reports counts and writes nothing unless `--apply` is given. `--apply`
- * writes ONLY into rows where `termination IS NULL` — it can never overwrite
- * a value migration 0041's writer already set, matching the append-only
- * posture the rest of `debate_log` keeps (SqliteDebateLogStore's duplicate-
- * write guard).
+ * A `debate_id` present in a `debate.timeout` line is unambiguous positive
+ * evidence of `'latency_truncated'` — direct, regardless of anything else.
+ * But the converse is NOT true: a `debate_id` **absent** from that set is not
+ * evidence the debate converged or genuinely disagreed. `logTimeout` is, as
+ * of this writing, the only `DebateLogger` method any production code path
+ * actually calls (`enforceLatencyBudget` is its one caller) — there is no
+ * "debate completed" log line to confirm a given row's debate was even
+ * covered by the supplied logs. A rotated-away log, a partial `--log` set,
+ * or a torn line from a mid-write restart can all make a row's debate
+ * invisible to this run without that being evidence of anything.
+ *
+ * So a row is only classified `'converged'`/`'non_converged'` when the
+ * supplied logs positively COVER its `created_at` — `parseLogCoverage`
+ * builds contiguous `[start, end]` timestamp spans from consecutive,
+ * successfully-parsed, timestamped log lines, closing the span (not
+ * bridging across it) at every unparseable line, so a torn log or a gap
+ * between rotated files does not silently claim coverage it does not have.
+ * A row whose `created_at` falls outside every span — and whose `debate_id`
+ * has no direct `debate.timeout` match — is left NULL and reported
+ * separately as `uncovered`, exactly like a row with no log at all. Nothing
+ * here ever treats "we didn't see a timeout for it" as proof the debate
+ * wasn't truncated.
+ *
+ * ## Read-only by default, for `debate_log.termination`
+ *
+ * Opening the store (`openSharedStore`) always applies any pending schema
+ * migrations, regardless of `--apply` — that is `openSharedStore`'s own
+ * unconditional behaviour (`open-shared-store.ts`), not something this tool
+ * controls. `--apply` gates only this tool's own writes: without it, no
+ * `debate_log.termination` value is written, this run only reports what it
+ * would write. `--apply` writes ONLY into rows where `termination IS NULL`
+ * — it can never overwrite a value migration 0041's writer already set,
+ * matching the append-only posture the rest of `debate_log` keeps
+ * (SqliteDebateLogStore's duplicate-write guard).
  *
  * ## Usage
  *
@@ -31,8 +55,10 @@
  *
  * `--log` accepts multiple JSONL orchestrator log files (comma-separated or
  * repeated) — a rotated log means the window an operator cares about can span
- * more than one file. `--since`/`--until` filter `debate_log` by
- * `created_at`; both are optional and default to no bound.
+ * more than one file; coverage is computed per file and merged, so a gap
+ * between two rotated files (or inside one of them) still leaves the rows
+ * that fall in it uncovered rather than guessed. `--since`/`--until` filter
+ * `debate_log` by `created_at`; both are optional and default to no bound.
  *
  * `--db <path>` points at an explicit SQLite file instead of the
  * environment-resolved store (`SAMURAI_MODE` → `sharedStorePath`). This is
@@ -59,17 +85,54 @@ export interface DebateLogTerminationRow {
   converged: number | null;
   /** NULL for a pre-0041 row; a row already classified is never reclassified. */
   termination: string | null;
+  /** ISO timestamp — the coordinate `isCovered` checks against a log's spans. */
+  created_at: string;
+}
+
+/** A contiguous span of ISO timestamps a log positively covers — see `parseLogCoverage`. */
+export interface CoverageInterval {
+  start: string;
+  end: string;
 }
 
 /**
- * Parses `debate.timeout` lines out of a run log (JSONL — one JSON object per
- * line, `JsonLogger`'s wire format) and returns the `debate_id`s the latency
- * budget truncated. Malformed lines and every other message are ignored
- * rather than failing the whole read: a log file accumulated over a live soak
- * routinely carries a torn line from a restart mid-write.
+ * What a run log positively establishes: every `debate_id` a `debate.timeout`
+ * line named (direct evidence of `'latency_truncated'`), and the timestamp
+ * spans the log actually saw (coverage evidence for everything else).
  */
-export function parseLatencyTruncatedDebateIds(lines: Iterable<string>): Set<string> {
-  const ids = new Set<string>();
+export interface LogCoverage {
+  timeoutIds: Set<string>;
+  intervals: CoverageInterval[];
+}
+
+/**
+ * Parses one JSONL run log (`JsonLogger`'s wire format — one JSON object per
+ * line, each carrying its own `timestamp`) into a `LogCoverage`.
+ *
+ * `debate.timeout` lines are collected into `timeoutIds` regardless of
+ * whether they carry a parseable `timestamp` — that match is direct evidence
+ * on its own, independent of coverage spans. Every other successfully-parsed,
+ * timestamped line extends the current coverage span; a line that fails to
+ * parse (or parses to something with no usable `timestamp`) is NOT bridged
+ * over — malformed/non-empty lines close the current span, and the next
+ * timestamped line starts a new one. A log file accumulated over a live soak
+ * routinely carries a torn line from a restart mid-write; the debates that
+ * fell in the resulting gap are not something this log can vouch for either
+ * way, so the span must not claim to cover them.
+ */
+export function parseLogCoverage(lines: Iterable<string>): LogCoverage {
+  const timeoutIds = new Set<string>();
+  const intervals: CoverageInterval[] = [];
+  let spanStart: string | undefined;
+  let spanEnd: string | undefined;
+
+  const closeSpan = (): void => {
+    if (spanStart !== undefined && spanEnd !== undefined) {
+      intervals.push({ start: spanStart, end: spanEnd });
+    }
+    spanStart = undefined;
+    spanEnd = undefined;
+  };
 
   for (const rawLine of lines) {
     const line = rawLine.trim();
@@ -79,22 +142,52 @@ export function parseLatencyTruncatedDebateIds(lines: Iterable<string>): Set<str
     try {
       parsed = JSON.parse(line);
     } catch {
+      closeSpan(); // torn line — coverage does not bridge across it
       continue;
     }
 
-    if (typeof parsed !== 'object' || parsed === null) continue;
-    const record = parsed as Record<string, unknown>;
-    if (record.message !== 'debate.timeout') continue;
-
-    const payload = record.payload;
-    if (typeof payload !== 'object' || payload === null) continue;
-    const debate_id = (payload as Record<string, unknown>).debate_id;
-    if (typeof debate_id === 'string') {
-      ids.add(debate_id);
+    if (typeof parsed !== 'object' || parsed === null) {
+      closeSpan();
+      continue;
     }
-  }
+    const record = parsed as Record<string, unknown>;
 
-  return ids;
+    if (record.message === 'debate.timeout') {
+      const payload = record.payload;
+      if (typeof payload === 'object' && payload !== null) {
+        const debate_id = (payload as Record<string, unknown>).debate_id;
+        if (typeof debate_id === 'string') {
+          timeoutIds.add(debate_id);
+        }
+      }
+    }
+
+    const timestamp = record.timestamp;
+    if (typeof timestamp === 'string' && !Number.isNaN(Date.parse(timestamp))) {
+      if (spanStart === undefined) spanStart = timestamp;
+      spanEnd = timestamp;
+    }
+    // A well-formed line with no usable timestamp neither extends nor closes
+    // the current span — it is not evidence of a gap, just a line this
+    // function cannot place in time.
+  }
+  closeSpan();
+
+  return { timeoutIds, intervals };
+}
+
+/**
+ * The `debate_id`s a run log's `debate.timeout` lines name — a thin view over
+ * `parseLogCoverage`, kept as its own export because direct timeout matching
+ * is useful (and testable) independent of coverage-span reasoning.
+ */
+export function parseLatencyTruncatedDebateIds(lines: Iterable<string>): Set<string> {
+  return parseLogCoverage(lines).timeoutIds;
+}
+
+/** Whether `createdAt` falls inside any of the given coverage spans (inclusive). */
+export function isCovered(createdAt: string, intervals: readonly CoverageInterval[]): boolean {
+  return intervals.some((interval) => interval.start <= createdAt && createdAt <= interval.end);
 }
 
 /** One row's proposed classification — `classifyRows` never emits one for a row already classified. */
@@ -103,37 +196,62 @@ export interface ClassifiedRow {
   termination: DebateTermination;
 }
 
+/** `classifyRows`' full output: what it proposes to write, and what it could not. */
+export interface ClassificationResult {
+  classified: ClassifiedRow[];
+  /** `debate_id`s left NULL — no `debate.timeout` match AND no log span covers the row's `created_at`. */
+  uncovered: string[];
+}
+
 /**
- * Classifies every row that carries no `termination` yet. A `debate_id`
- * present in `latencyTruncatedIds` is `'latency_truncated'` regardless of its
- * `converged` value — the log correlation is the unambiguous signal; a row
- * absent from that set falls back to what `converged` alone can say
- * (`'converged'` / `'non_converged'`), the same derivation
- * `buildDebateLog` applies going forward.
+ * Classifies every row that carries no `termination` yet, against a merged
+ * `LogCoverage` (see `parseLogCoverage` — callers merge per-file coverage by
+ * unioning `timeoutIds` and concatenating `intervals`).
  *
- * A row that already carries a `termination` (post-0041 write) is skipped
- * entirely — this function only proposes values for what migration 0041 left
- * indeterminate, never reclassifies a row the writer already settled.
+ * A `debate_id` present in `coverage.timeoutIds` is `'latency_truncated'`
+ * unconditionally — that is direct evidence, independent of span coverage.
+ * Otherwise, the row is classified `'converged'`/`'non_converged'` (from its
+ * `converged` column) ONLY when `coverage.intervals` positively covers its
+ * `created_at` — this is deliberately NOT the same derivation `buildDebateLog`
+ * applies going forward: `buildDebateLog` has a single producer with total
+ * information (the resolved `DebateResult` it just built), so an absent
+ * `timed_out` there is conclusive. This function has partial, external
+ * evidence (whatever logs the operator happened to supply), so absence from
+ * `timeoutIds` alone proves nothing — a row outside every covered span stays
+ * NULL and is reported in `uncovered` instead of being guessed at.
+ *
+ * A row that already carries a `termination` (post-0041 write, or a prior
+ * run of this same tool) is skipped entirely — this function only proposes
+ * values for what migration 0041 left indeterminate, never reclassifies a
+ * row already settled.
  */
 export function classifyRows(
   rows: readonly DebateLogTerminationRow[],
-  latencyTruncatedIds: ReadonlySet<string>,
-): ClassifiedRow[] {
+  coverage: LogCoverage,
+): ClassificationResult {
   const classified: ClassifiedRow[] = [];
+  const uncovered: string[] = [];
 
   for (const row of rows) {
     if (row.termination !== null) continue;
 
-    const termination: DebateTermination = latencyTruncatedIds.has(row.debate_id)
-      ? 'latency_truncated'
-      : row.converged === 1
-        ? 'converged'
-        : 'non_converged';
+    if (coverage.timeoutIds.has(row.debate_id)) {
+      classified.push({ debate_id: row.debate_id, termination: 'latency_truncated' });
+      continue;
+    }
 
-    classified.push({ debate_id: row.debate_id, termination });
+    if (isCovered(row.created_at, coverage.intervals)) {
+      classified.push({
+        debate_id: row.debate_id,
+        termination: row.converged === 1 ? 'converged' : 'non_converged',
+      });
+      continue;
+    }
+
+    uncovered.push(row.debate_id);
   }
 
-  return classified;
+  return { classified, uncovered };
 }
 
 /** Per-`termination` counts, for the operator-facing report. */
@@ -152,21 +270,21 @@ export function summarizeClassification(
 }
 
 /** Renders the classification as a human-readable report. */
-export function formatClassificationReport(
-  classified: readonly ClassifiedRow[],
-  applied: boolean,
-): string {
-  const summary = summarizeClassification(classified);
+export function formatClassificationReport(result: ClassificationResult, applied: boolean): string {
+  const summary = summarizeClassification(result.classified);
+  const totalRead = result.classified.length + result.uncovered.length;
   const lines = [
     `#1081 debate_log termination classification (${applied ? 'APPLIED' : 'DRY RUN — no rows written'})`,
-    `  rows classified: ${classified.length}`,
+    `  rows read (termination IS NULL): ${totalRead}`,
+    `  classified from positive log evidence: ${result.classified.length}`,
     `    converged:         ${summary.converged}`,
     `    non_converged:     ${summary.non_converged}`,
     `    latency_truncated: ${summary.latency_truncated}`,
+    `  left uncovered — no log evidence either way, termination stays NULL: ${result.uncovered.length}`,
   ];
 
-  if (classified.length > 0) {
-    const truncatedPct = ((summary.latency_truncated / classified.length) * 100).toFixed(1);
+  if (result.classified.length > 0) {
+    const truncatedPct = ((summary.latency_truncated / result.classified.length) * 100).toFixed(1);
     lines.push(
       '',
       `  ${truncatedPct}% of the classified rows were the latency budget firing, not the market.`,
@@ -246,12 +364,14 @@ if (isMain) {
   }
   const db = openSharedStore(dbPath);
 
-  const timeoutIds = new Set<string>();
+  const coverage: LogCoverage = { timeoutIds: new Set(), intervals: [] };
   for (const logPath of logPaths) {
     const lines = readFileSync(logPath, 'utf8').split('\n');
-    for (const id of parseLatencyTruncatedDebateIds(lines)) {
-      timeoutIds.add(id);
+    const fileCoverage = parseLogCoverage(lines);
+    for (const id of fileCoverage.timeoutIds) {
+      coverage.timeoutIds.add(id);
     }
+    coverage.intervals.push(...fileCoverage.intervals);
   }
 
   const whereClauses = ['termination IS NULL'];
@@ -267,11 +387,11 @@ if (isMain) {
 
   const rows = db
     .prepare(
-      `SELECT debate_id, converged, termination FROM debate_log WHERE ${whereClauses.join(' AND ')} ORDER BY created_at`,
+      `SELECT debate_id, converged, termination, created_at FROM debate_log WHERE ${whereClauses.join(' AND ')} ORDER BY created_at`,
     )
     .all(...params) as DebateLogTerminationRow[];
 
-  const classified = classifyRows(rows, timeoutIds);
+  const result = classifyRows(rows, coverage);
 
   if (apply) {
     const update = db.prepare(
@@ -282,8 +402,8 @@ if (isMain) {
         update.run(row.termination, row.debate_id);
       }
     });
-    applyAll(classified);
+    applyAll(result.classified);
   }
 
-  console.log(formatClassificationReport(classified, apply));
+  console.log(formatClassificationReport(result, apply));
 }
