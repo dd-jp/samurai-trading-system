@@ -33,8 +33,8 @@ export {
 } from './http/response-errors.js';
 export type { RetryConfig } from './http/retry.js';
 export { withRetry } from './http/retry.js';
-export type { TokenBucketConfig } from './http/token-bucket.js';
-export { TokenBucket } from './http/token-bucket.js';
+export type { TokenBucketConfig, TokenBucketTelemetry } from './http/token-bucket.js';
+export { TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS, TokenBucket } from './http/token-bucket.js';
 // Only what has a real cross-module consumer: `DEFAULT_VENUE_PACING` for the
 // three broker adapters' constructor defaults, `resolveVenuePacing` +
 // `VenuePacingConfig` for the composition root, `resolvePolygonPacing`

@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { TokenBucket } from './token-bucket.js';
+import type { LogEntry, Logger } from '../types/primitives.js';
+import { TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS, TokenBucket } from './token-bucket.js';
+
+function recordingLogger(): { logger: Logger; entries: LogEntry[] } {
+  const entries: LogEntry[] = [];
+  return { logger: { log: (entry) => entries.push(entry) }, entries };
+}
 
 // Vitest's fake timers stub `Date.now` alongside `setTimeout`, so the bucket's
 // default clock advances in lockstep with `advanceTimersByTimeAsync` — same
@@ -241,5 +247,113 @@ describe('TokenBucket priority reserve (#391)', () => {
     await vi.advanceTimersByTimeAsync(1000);
     await pending;
     expect(third).toBe(true);
+  });
+});
+
+/**
+ * #1083: a caller that waits for a token was completely silent — a starved
+ * fetch and an instant one produced the same (nonexistent) trace. These pin
+ * the telemetry that closes that gap, WITHOUT changing when a token is
+ * granted — every assertion above this block still passes unmodified with
+ * telemetry wired in, which is the proof pacing itself did not move.
+ */
+describe('TokenBucket wait telemetry (#1083)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('logs nothing for an instant grant, even with telemetry configured', async () => {
+    const { logger, entries } = recordingLogger();
+    const bucket = new TokenBucket({ capacity: 3, refillPerSecond: 1 }, undefined, {
+      logger,
+      name: 'alpaca',
+    });
+
+    await bucket.acquire();
+    await bucket.acquireBackground();
+
+    expect(entries).toHaveLength(0);
+  });
+
+  it('logs nothing for a wait under the threshold', async () => {
+    const { logger, entries } = recordingLogger();
+    // 10 tok/s: the second acquire waits 100ms, well under the threshold.
+    const bucket = new TokenBucket({ capacity: 1, refillPerSecond: 10 }, undefined, {
+      logger,
+      name: 'alpaca',
+    });
+    await bucket.acquire();
+
+    const pending = bucket.acquire();
+    await vi.advanceTimersByTimeAsync(100);
+    await pending;
+
+    expect(entries).toHaveLength(0);
+  });
+
+  it('logs a wait at or beyond the threshold, naming the bucket and the priority lane', async () => {
+    const { logger, entries } = recordingLogger();
+    // 1 tok/s: the second acquire waits exactly the threshold.
+    const bucket = new TokenBucket({ capacity: 1, refillPerSecond: 1 }, undefined, {
+      logger,
+      name: 'alpaca',
+    });
+    await bucket.acquire();
+
+    const pending = bucket.acquire();
+    await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS);
+    await pending;
+
+    expect(entries).toHaveLength(1);
+    const [entry] = entries;
+    expect(entry.level).toBe('warn');
+    // Grep-distinguishable: neither an LLM token-count field (`input_tokens`)
+    // nor a bare digit run (`429`) can match this event name.
+    expect(entry.message).toContain('token_bucket_wait');
+    expect(entry.payload).toMatchObject({
+      event: 'token_bucket_wait',
+      bucket: 'alpaca',
+      lane: 'priority',
+      wait_ms: expect.any(Number),
+    });
+    expect((entry.payload as { wait_ms: number }).wait_ms).toBeGreaterThanOrEqual(
+      TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS,
+    );
+  });
+
+  it('labels a background wait distinctly from a priority wait, since only background is subject to the reserve', async () => {
+    const { logger, entries } = recordingLogger();
+    const bucket = new TokenBucket(
+      { capacity: 1, refillPerSecond: 1, reserveForPriority: 0 },
+      undefined,
+      { logger, name: 'alpaca' },
+    );
+    await bucket.acquireBackground();
+
+    const pending = bucket.acquireBackground();
+    await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS);
+    await pending;
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.payload).toMatchObject({ lane: 'background' });
+  });
+
+  it('produces no telemetry at all when none is configured — pacing is unaffected either way', async () => {
+    const bucket = new TokenBucket({ capacity: 1, refillPerSecond: 1 });
+    await bucket.acquire();
+
+    let admitted = false;
+    const pending = bucket.acquire().then(() => {
+      admitted = true;
+    });
+    await vi.advanceTimersByTimeAsync(999);
+    expect(admitted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await pending;
+    expect(admitted).toBe(true);
   });
 });

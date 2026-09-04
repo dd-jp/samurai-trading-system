@@ -906,12 +906,21 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     stocks: tradingCalendar,
   };
 
+  /**
+   * Hoisted above the analysts (#745), which now take a telemetry sink built on
+   * it, above the market-data wiring by #562, which logs a malformed
+   * fallback-pacing override through it at boot, and above `alpacaBucket`
+   * below by #1083, which wires it through for wait telemetry. It depends on
+   * nothing but `config`, so all three moves are free — the same reasoning
+   * that hoisted `breachAlerts` below.
+   */
+  const logger = config.logger ?? new JsonLogger();
+
   // One broker wire client for the whole root: the order adapter and the
   // account-state provider both talk to Alpaca's Trading API, and two clients
   // would mean two token budgets against one account's shared rate limit.
   const brokerClient =
-    config.alpacaBrokerClient ??
-    buildDefaultAlpacaBrokerClient(config.mode, config.logger ?? new JsonLogger());
+    config.alpacaBrokerClient ?? buildDefaultAlpacaBrokerClient(config.mode, logger);
 
   // Outbound pacing per venue, from ops config rather than a literal here
   // (#299). Hoisted above the market-data wiring by #391: ONE Alpaca bucket
@@ -920,17 +929,17 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // be two budgets against one limit. The broker takes `acquire()`; market
   // data takes `acquireBackground()` and leaves `reserveForPriority` tokens
   // it may not spend, so a bar sweep cannot park an order behind the refill.
+  //
+  // `{ logger, name: 'alpaca' }` (#1083) makes a wait on THIS shared bucket
+  // observable — the bucket this repo's own analysis names as the plausible
+  // starvation source once the 20-instrument universe drains it, and which
+  // was completely silent before. Pacing itself is unchanged; see
+  // `TokenBucketTelemetry`.
   const venuePacing = config.venuePacing ?? resolveVenuePacing();
-  const alpacaBucket = new TokenBucket(venuePacing.alpaca);
-
-  /**
-   * Hoisted above the analysts (#745), which now take a telemetry sink built on
-   * it, and above the market-data wiring by #562, which logs a malformed
-   * fallback-pacing override through it at boot. It depends on nothing but
-   * `config`, so both moves are free — the same reasoning that hoisted
-   * `breachAlerts` below.
-   */
-  const logger = config.logger ?? new JsonLogger();
+  const alpacaBucket = new TokenBucket(venuePacing.alpaca, undefined, {
+    logger,
+    name: 'alpaca',
+  });
 
   /**
    * #562: the live orchestrator's bars now fail over, per leg, instead of
