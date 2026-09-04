@@ -224,10 +224,32 @@ the soak from a fresh store if it is meant to have the full budget.**
 > the tick continues, with the news-fed analysts reporting `NO_DATA_MARKER`.
 > That is deliberate — the MI seam's standing promise is that an outage
 > degrades the debate rather than failing a tick that would otherwise have
-> traded — but it means the predicted failure mode is wrong for this leg. On an
-> MI breach the soak does not go dark; **it keeps trading on a debate that has
-> stopped hearing from its news and sentiment analysts**, which is quieter and
-> arguably worse to detect. Watch the refusal line, not the trade count.
+> traded.
+>
+> **It does not follow that the soak trades on blind.** There is ONE
+> `SqliteSpendCap` over the whole of `llm_spend` and no per-stage sub-budget:
+> the same instance is handed to the MI queue, the debate step and the Risk
+> Critic. So `spent >= budget` at an MI check implies the same at the debate
+> check, and the debate leg's own refusal short-circuits at Trader with
+> `no_trade` exactly as this ADR says. **The soak DOES go dark and the trade
+> count DOES go to zero** — through the debate leg, not the MI one. The only
+> window where MI is refused while trading continues is a transient: spend
+> crosses the ceiling after a tick's debate was already admitted, and MI's
+> refusal (which since #1085 drains off the tick's stack, so its check can land
+> anywhere relative to a debate) reports first.
+>
+> **The thing to record is the shape of the risk, not a present failure mode.**
+> Give MI its own sub-budget — a plausible next step, and the direction
+> [#1106](https://github.com/dd-jp/samurai-trading-system/issues/1106) points —
+> and the transient becomes a steady state: MI exhausted, debate still funded,
+> the desk **trading on a debate that has stopped hearing from its news and
+> sentiment analysts**, which is quiet and hard to detect. Anyone adding a
+> per-stage budget owes an answer to that before it ships.
+>
+> Until then the operator signal for a budget breach is the DEBATE refusal line
+> (`stage: 'debate'`, level `error`, "not started"), which is what actually
+> stops the desk. The `mi-refresh` warn line tells you the ceiling was reached;
+> it does not by itself tell you trading continued.
 >
 > **3. The single breach alert is now more likely to be spent by MI.**
 > `SqliteSpendCap.#refuse` latches `#budgetAnnounced` on the first refusal of
