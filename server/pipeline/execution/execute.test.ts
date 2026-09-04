@@ -2562,6 +2562,72 @@ describe('ExecutionImpl.execute() → ingestFills() — the stale-mark case end-
     expect(position?.order_state).toBe('filled');
     expect(await store.getFills('key-aapl-1355')).toHaveLength(1);
   });
+
+  it('#1087 review, pass 3 (T3): the since floor is inclusive of a same-millisecond tie between opened_at and the fill', async () => {
+    // Not the laggy-mark case above (an EARLIER fill) — this pins the
+    // boundary itself. `fixedClock` returns the identical `NOW` on every
+    // call, so this lot's `opened_at` (the SOLE open position, hence the
+    // poll's `since` floor) and the fill `SimulatedBrokerAdapter` stamps at
+    // submit time are the exact same instant, not merely close — the tie a
+    // ms-resolution real clock could also produce if `execute()`'s
+    // `opened_at` read and the adapter's own `now` read land in the same
+    // millisecond. Confirms both floor comparisons keep a tie rather than
+    // drop it: `SimulatedBrokerAdapter.fetchNewFills`'s `>= since`
+    // (simulated-adapter.ts) and Alpaca's `collectFill`'s `filledAt < since`
+    // guard, which drops only when STRICTLY earlier
+    // (alpaca-order-normalization.ts) — so a tie sails through both.
+    const { store } = openTestExecutionStore();
+    const marketData: MarketDataService = {
+      getBars: vi.fn(),
+      getMark: vi.fn().mockResolvedValue({
+        price: 100,
+        observed_at: NOW,
+        source: 'fixture',
+        asset_class: 'stocks',
+      }),
+      getIndicator: vi.fn().mockResolvedValue({ indicator: 'atr', value: 2, as_of_bar_close: NOW }),
+      getSpreadEstimate: vi.fn().mockResolvedValue(0.04),
+      getADV: vi.fn().mockResolvedValue(1_000_000),
+    } as unknown as MarketDataService;
+    const costModel: CostModel = {
+      fill: vi.fn().mockReturnValue({
+        fill_price: 100,
+        filled_size: 100,
+        cost_breakdown: { spread_cost: 0.1, commission: 0.2, slippage: 0.05, market_impact: 0.01 },
+      }),
+    };
+    const broker = new SimulatedBrokerAdapter({
+      clock: fixedClock,
+      costModel,
+      marketData,
+      config: {
+        volatility_indicator: {
+          indicator: 'atr',
+          params: { period: 14 },
+          timeframe: '1h',
+          lookback: 15,
+        },
+        adv_window: { timeframe: '1d', lookback: 20 },
+      },
+    });
+    const execution = new ExecutionImpl(
+      makeInput({ store, broker, costModel, marketData, clock: fixedClock }),
+    );
+
+    await execution.execute(makeGo());
+    const opened = await store.getPosition('key-aapl-1355');
+    expect(opened?.opened_at).toEqual(NOW);
+
+    await execution.ingestFills();
+
+    const position = await store.getPosition('key-aapl-1355');
+    expect(position?.filled_size).toBe(100);
+    const fills = await store.getFills('key-aapl-1355');
+    expect(fills).toHaveLength(1);
+    // The actual tie, not just "not excluded": the booked fill's timestamp
+    // equals `opened_at` exactly.
+    expect(fills[0]?.timestamp.getTime()).toBe(opened?.opened_at.getTime());
+  });
 });
 
 /**
