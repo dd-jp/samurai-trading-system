@@ -111,7 +111,13 @@ One comment, no field. `LseEtpPoolRow` (`lse-etp-pool.ts:272`) has ten fields an
 
 So the pool says "#751 owns it", #751 does not mention it, and the spec's loader rejection exists in no loader. The invariant fails the way the spec predicts: as a healthy-looking no-trade session.
 
-**Fix:** add `fallback_default` to #751's acceptance criteria explicitly, or move it back onto the pool row with the loader rejection the spec specifies. Either is fine; the current state — declared required, owned by neither — is not.
+**Fix:** move it onto the pool row with the loader rejection the spec specifies. Not #751: the fallback exists to work *when the screener has failed*, so it cannot be derived from anything the screener produces or consumes — not last known ranking (the spec's own third constraint), and not the per-instrument liquidity and cost #1035 → #1053 will deliver. It has to be statically declared in a checked-in artifact. #751 owns the fallback's *behaviour*, which is why its body never names the field.
+
+**Applied 2026-09-03** (`ea0f35c`), on David's instruction, as the one finding in this report whose fix landed with it. `fallback_default` is now a required field on all 30 rows, six of them `true`, and `assertValidPool` carries three rules: at least one row (the spec's), no more than `FALLBACK_DEFAULT_MAX_ROWS = 10` (the spec's "Not the full pool", which is also the tick budget), and — **this module's own invariant, not the spec's, and labelled as such in the throw** — no two fallback rows on one `screening_instrument`, because SPY/QQQ/PLTR/NVDA each carry two ETP lines and a fallback holding both is doubled exposure to one name in the mode with no screener to notice. The spec's 5–10 *floor* is deliberately not enforced: the only loader rule the spec states is the zero case, and a hard floor of 5 would reject a legitimately small future pool. The `lse-etp-pool.ts:46` text quoted above is replaced in the same commit — leaving it would ship a file whose doc contradicts its own schema.
+
+**Two things about the subset worth reading before revising it.** First, the mixed index/single-stock membership is a **bind, not a preference**: excluding the four rows whose subclass envelope was never measured (#903 — 3VT/3KOR/3KWE/3XLE, and degraded mode is the worst place to discover an unmeasured envelope) leaves exactly four index rows on two underlyings, so an index-only fallback cannot reach the spec's 5–10 range at all. It is emphatically *not* justified by F14's £250-vs-£600 throughput arithmetic — in a mode where the screener has failed, more deployable capital is not better. Second, **no row is included because it ranked well in doc 52.** #750's own body warns that "an axis picked because it topped a table in doc 52 would inherit that doc's 126 trials", and a checked-in artifact seeded from the same leaderboard inherits them identically. The two exclusions are structural rather than positional — MSTR because at 3× "the tape bleeds before any bracket is reached", AAPL because a 9.5% resolve rate means D3's frozen brackets never act.
+
+**What the fix does not do:** the spec asks for a subset that is "liquid and `t212_isa: true`", and neither half is available. `t212_isa` is `true` on 30/30 rows so it filters nothing, and it names a barred venue — F1 and #1054. No spread or volume measurement exists until #1035 → #1053 land. The subset is declared pending that measurement, and the module doc says so rather than implying a screen that did not happen. Consuming the field is still #751's, unbuilt.
 
 ---
 
@@ -247,6 +253,45 @@ The gap is scope, not cadence: `:110`'s box supersedes the section on **cadence*
 **Fix:** add a one-paragraph 2026-08-18 scope amendment to ADR-0008 §2 pointing at #840 and ADR-0016's `:128`, stating the equities-only bill (~£58/yr) and that the `$0.878/day` → "25% of the cap" utilisation is a crypto-in-scope figure kept for provenance.
 
 
+### F14 — HIGH — #750 ranks on round-trip cost, but the objective divides cost by width; the axis selects the *harder* subclass
+
+The screener's ranked axis was changed on 2026-08-17 from reach rate (falsified out of sample) to **measured round-trip cost, ascending**. The reasoning was sound in kind — one axis is a sort, a sort is zero trials against ADR-0018 D4's selection budget, and cost is the only movable term that does not require predicting returns. The axis is nevertheless measuring the wrong quantity.
+
+`docs/research/52-exit-geometry-and-subclass-odds.md:27` defines the bar the signal must clear:
+
+> `edge_pp = (cost − E_gross) / width × 100`
+
+**Cost does not enter the objective. Cost ÷ width does.** And `width` is not a free parameter — ADR-0018 D3 freezes it per subclass: index `+2.00 / −2.16` → **4.16**, single-stock `+6.00 / −6.25` → **12.25**. With ADR-0015's declared round trips (0.18% index, 0.41% single-stock), the cost-only contribution to the bar is:
+
+| Subclass | Round trip | Width (D3) | Cost-only bar |
+|---|---|---|---|
+| Index ETP | 0.18% | 4.16 | **4.33 pp** |
+| Single-stock ETP | 0.41% | 12.25 | **3.35 pp** |
+
+Ascending cost ranks every index row above every single-stock row. But the index row is **~0.98 pp harder** to clear. The specced axis is anti-correlated with the objective it exists to serve — it is not merely imprecise, it is pointed the wrong way.
+
+**This is the same error that killed the reach-rate axis, one level up.** Reach rate was withdrawn because it read `tp%` without its paired `sl%`. Cost-ascending reads cost without its paired width. Both take one half of a ratio and sort on it.
+
+Empirically over the seven names doc 52 measures out of sample (n = 897/name): cost-ascending's top two are QQQ and SPY, bars **2.96** and **4.19** (mean 3.58). Bar-ordered, the two best non-degenerate names are PLTR (**1.29**) and NVDA (**2.84**), mean 2.07 — both single-stock. (AAPL's 0.98 is excluded: doc 52:90 records it as degenerate, only 9.5% of sessions resolve.)
+
+**The fix costs nothing.** Sort on `cost / width`. Width is a frozen constant read from ADR-0018 D3, not a fitted or measured value, so the corrected axis is *exactly* as trial-free as the current one — still one sort, still zero trials, still no return prediction. It is strictly the same design with the denominator restored.
+
+**Corroboration that the project already reasons this way:** ADR-0015:166 evaluated venues *"against a bar-inflation ceiling (1.0 pp added to the required-accuracy bar per subclass)"* — explicitly **rather than a flat round-trip %**. Its published ceilings reproduce exactly as `baseline cost + width/100`: index `0.18 + 4.16/100 = 0.2216` → the stated **0.22%**; single-stock `0.41 + 12.25/100 = 0.5325` → the stated **0.53%**. The venue decision was made on cost-per-unit-width. The screener next to it sorts on raw cost.
+
+**Two consequences to price before adopting the corrected axis** — it is not free of side effects, only free of trials:
+
+1. **It inverts the book.** On subclass-level cost data alone, `cost/width` is constant within a subclass, so the corrected axis sorts all 22 single-stock rows above all 8 index rows — the exact inverse of the current axis's all-index watchlist. The two axes produce **disjoint** watchlists at any cap the pool can fill: the index subclass holds only 8 rows, so cost-ascending cannot even fill a 10-row list from it, while `cost/width` never reaches an index row at all. `perSubclassDeploymentCap` is **netted across the subclass, not per position** (`risk-manager/index.ts:584`, "Netted across the subclass"), so an all-single-stock watchlist caps *total* deployment at D5's 25% — £250 of the £1,000 book — where a mixed watchlist can hold 35% + 25% = £600 across the two buckets. That throughput difference is plausibly larger than the ~1 pp bar improvement, and it is a reason to blend subclasses rather than to keep the wrong axis.
+2. **Every selected name then runs the 41.8% envelope** rather than 26.2%. #798 accepted that tolerance, so this is not a violation — but a uniformly single-stock book is not the mix that ruling was priced against.
+
+**The axis's ceiling is bounded, and worth stating.** Because `cost/width` is constant within a subclass, the corrected axis still cannot separate MSTR (bar **7.16**) from PLTR (bar **1.29**) — a **5.87 pp** spread, versus the ~1 pp the subclass choice is worth. That dispersion lives entirely in `E_gross`, the return-predicting term the single-axis design deliberately forbids. The larger prize is therefore not in the ranking at all: doc 52:101 records MSTR's `E_gross` at **−0.4672%/session**, i.e. *"at 3× the tape bleeds before any bracket is reached"* — a structural property of a 3× ETP on a high-volatility underlying, not a fitted threshold. Removing such a name is a static, one-time pool decision, not a per-session rank. **TSLA's −0.0619 is not in that category** — it is inside noise, and pruning on it would be a fitted threshold wearing a sign test.
+
+**Reach limit:** doc 52 measures 7 of the pool's 26 distinct `screening_instrument`s. Nineteen have no bar measurement at all, so any `E_gross`-based prune acts on 7 names today and the ranking question is unresolved for the rest — which is a further argument for #1035 → #1053 delivering per-instrument cost before #750 is built.
+
+**Fix:** amend #750's ranking AC to sort on `round_trip_cost / subclass_width`, citing ADR-0018 D3 for the widths and doc 52:27 for why; state the subclass-mix consequence so the watchlist is not silently all-single-stock. Track the MSTR-class static prune separately — it is a pool-membership decision, not a screener rank.
+
+**Relation to F7:** distinct. F7 is a *tradeability* prune (can we trade the row at all); this is the axis's *correctness* given whatever rows survive.
+
+
 ## Summary
 
 | ID | Sev | Finding | Disposition |
@@ -254,7 +299,7 @@ The gap is scope, not cadence: `:110`'s box supersedes the section on **cadence*
 | F1 | HIGH | Liquidity gate is `t212_isa`, `true` on 30/30 — excludes nothing, keyed to a barred venue | **#1054 filed**, blocks #750 |
 | F2 | HIGH | #750's cost sort key has no delivering owner; `blocked_by` was empty | **#1053 filed**, edges wired |
 | F3 | HIGH | `CLAUDE.md:11` **and** `ADR-0015:139` name closed #798 as the live-ramp gate, vs a tolerance `CONTEXT.md` replaced | Briefing + ADR edit |
-| F4 | MED | `fallback_default` required by spec, absent from code, unowned by #751 | Add to #751 AC or to the pool row |
+| F4 | MED | `fallback_default` required by spec, absent from code, unowned by #751 | **Applied `ea0f35c`** — field on the pool row + 3 loader rules |
 | F5 | MED | `CONTEXT.md:80` false on both claims — and its second half is contradicted by `CONTEXT.md:78`, written the same day | Restate: rule exists, armed, pinned by test |
 | F6 | MED | Re-arm edge 0.20 justified by a withdrawn design target | Restate basis |
 | F7 | MED | 26 rankable underlyings vs the "<~25 → do not rank" clause; a prune moots #750 | AC on #1054 |
@@ -264,8 +309,9 @@ The gap is scope, not cadence: `:110`'s box supersedes the section on **cadence*
 | F11 | MED | ADR-0014:77 still asks a capital question ADR-0015 answered 2026-08-18 | Add the `ANSWERED` pointer |
 | F12 | LOW | ADR-0017:35's withdrawn crypto ramp clause is unstruck in the body | Strike in place |
 | F13 | MED | ADR-0008 §2 reports "25% of the cap" from a crypto-in-scope soak ADR-0016 withdrew; ~7× overstated equities-only | Add a #840 scope amendment |
+| F14 | HIGH | #750 sorts on raw round-trip cost; the bar divides cost by width, so ascending cost picks the ~0.98 pp *harder* subclass | Sort on `cost / width` (same trial cost) |
 
-**Three of thirteen are the same disease**: a clause, field, or gate declared load-bearing, assigned to a ticket or file that does not carry it, with nothing that fails when it is missing (F1, F2, F4). **Six more are one ruling landing in one document and not its citers** (F3, F6, F8, F11, F12, F13) — the post-2026-08-16 decisions (#798's acceptance, the £1,000 book, the Saxo/GIA venue, the terms-based retractions) are each recorded correctly *somewhere* and stale *somewhere else*. F10 is the sharpest instance because the stale citer is a live-money sizing guard rather than prose; F13 is the second-sharpest, because the stale figure is the utilisation of a live spend cap and it is wrong by ~7×. F5 is the degenerate case — not a citer lagging at all, but one file contradicting itself on the same day.
+**Three of fourteen are the same disease**: a clause, field, or gate declared load-bearing, assigned to a ticket or file that does not carry it, with nothing that fails when it is missing (F1, F2, F4). **Six more are one ruling landing in one document and not its citers** (F3, F6, F8, F11, F12, F13) — the post-2026-08-16 decisions (#798's acceptance, the £1,000 book, the Saxo/GIA venue, the terms-based retractions) are each recorded correctly *somewhere* and stale *somewhere else*. F10 is the sharpest instance because the stale citer is a live-money sizing guard rather than prose; F13 is the second-sharpest, because the stale figure is the utilisation of a live spend cap and it is wrong by ~7×. F5 is the degenerate case — not a citer lagging at all, but one file contradicting itself on the same day. **F14 belongs to neither cluster**: it is not a stale citation but a live design error in an unbuilt module — the screener's ranked axis measures cost where its own objective measures cost per unit of bracket width, which is why it is cheapest to fix before #750 is written.
 
 **The pattern worth acting on:** every one of those six was written by an author who *did* update the document they were editing. What is missing is the reverse index — nothing enumerates who cites a figure when that figure changes. That is a process gap, not nine independent oversights.
 
@@ -273,5 +319,34 @@ The gap is scope, not cadence: `:110`'s box supersedes the section on **cadence*
 
 ## Open questions for David
 
-1. **F7 is a product decision, not a cleanup.** If a real tradeability floor takes the pool under ~25 rankable underlyings, the spec says ship unranked and trade the whole pool — which deletes #750's reason to exist. Prune first and let the count decide, or keep the ranked axis regardless?
-2. **F4's ownership.** `fallback_default` on the pool row (with the loader rejection the spec specifies), or as part of #751's watchlist artifact? The spec says the former; the code comment asserts the latter.
+Both questions David raised on the first pass are answered below from the artifacts, with the residual decision named. Neither answer required new measurement.
+
+### 1. F7 — prune or rank? **The dichotomy is false; build the axis, and fix it first (F14).**
+
+The premise was that a tradeability prune could take the pool under the spec's *"if the pool lands under ~25 rows, ship without the ranking and trade the whole pool"* clause (`universe-selector-spec.md:231`) and thereby moot #750. It cannot, because the same document refutes it two lines later (`:233`):
+
+> **"Trade the whole pool" does not lift the active-list cap.** The 5–10 watchlist size is not a property of the ranking — it is the **tick budget**, set by τ = 2 min against the instrument-pass cost, and it binds whatever produced the list.
+
+So "don't rank" does not mean *trade 30 names*. It means *take the first N of the pool in checked-in file order, N = the same configured cap*. Both branches select 5–10 rows from the same pool; the only difference is whether the 5–10 are chosen by a cost-ordered sort or by the arbitrary order rows happen to sit in the file. **The sort becomes an identity at N (≈10), not at 25** — the `~25` threshold and its "close to a rename" rationale are inconsistent with line 233's own argument, and `:231` should be corrected to say so.
+
+Consequence: a tradeability prune moots #750 only if it takes the pool to **≤ ~10 rows**, not ≤ 25. That is a far stronger claim than F7 assumed, and nothing in evidence today suggests the floor is that aggressive. **F7 stays a real finding** — the gate must still filter on something that filters (#1054) — but it no longer has authority over whether #750 is built.
+
+The live question is therefore not *whether* to rank but *on what*, which is **F14**: the specced axis sorts on raw round-trip cost while the objective divides cost by width, so it selects the ~0.98 pp harder subclass. Correcting it to `cost / width` costs no additional trials.
+
+**Residual for David** (a genuine trade-off, not a defect): the corrected axis produces an all-single-stock watchlist on today's subclass-level data, and `perSubclassDeploymentCap` nets across the subclass, so that caps deployment at £250 of the £1,000 book against £600 for a mixed list. Ranking within a per-subclass quota, rather than globally, keeps both the corrected axis and the throughput — but that is a design choice #750 should make explicitly rather than inherit.
+
+**Recorded on #750, 2026-09-03, on David's instruction.** The ticket's ranking AC now reads `cost / width` rather than raw cost, with a dated banner carrying the derivation and the zero-trial argument (width is a frozen D3 constant, so the corrected axis is still one sort and no trials). Three ACs were added: a test that the axis is `cost / width` and not `cost`, with widths read through the shared bracket path rather than re-declared; the per-subclass quota, stated as a quota on the ranking and explicitly not a second ranked axis, so the zero-trial property survives; and an explicit non-goal — this ticket does not prune pool membership, since `cost / width` is constant within a subclass and cannot separate MSTR from PLTR. The dead `#666` source is repointed to #1053 in both the AC and the blocked-by list, with doc 52's reach limit (7 of 26 underlyings measured) named there.
+
+### 2. F4 — who owns `fallback_default`? **The pool file, and the spec already says so twice.**
+
+The code comment at `lse-etp-pool.ts:46` disclaims the field as *"#751's active-list/rotation concern, not this pool's"*. That conflates the **data** with the **behaviour**:
+
+- The **spec puts the field in the pool schema** (`:204`, a required boolean) and puts its enforcement **at pool load**: *"a pool with no `fallback_default` row is rejected at load, not at fallback time"* (`:319`). A load-time rejection can only live where loading happens.
+- **#751 owns the behaviour** — when the fallback triggers, the alert, returning the list. Its body names "fallback" once (the staleness/trigger definition) and never names `fallback_default`; no AC covers it. So #751 is the correct owner of *when*, and was never the owner of *which rows*.
+- **Nothing enforces it anywhere today.** `assertValidPool` (`lse-etp-pool.ts:1256`) checks subclass validity, non-empty `lse_ticker`, non-empty `screening_instrument`, and that the two are not the same identity — nothing about `fallback_default`. The spec's *"only thing standing between a bad screener run and a fully dark session"* has no failing test and no failing load.
+
+**The reason this is not merely tidier — and the thing worth adding to the answer:** the fallback exists to work *when the screener has failed*. If `fallback_default` were derived from screener inputs — liquidity, measured cost, the very data #1035/#1053 will deliver — it would be unavailable in exactly the scenario it exists for. It must be **statically declared** in a checked-in artifact. That is a correctness argument for the pool file, independent of ownership convention.
+
+Note the spec's own constraint on the subset (`:207`): *not* the full pool — sized to the watchlist range (5–10 names), liquid. And its `t212_isa: true` qualifier there inherits F1/#1054's defect, so the fallback subset must be re-qualified against Saxo when that gate is fixed.
+
+**Fix — applied 2026-09-03 (`ea0f35c`), on David's instruction.** `fallback_default: boolean` is now a required field on all 30 rows with six marked, `assertValidPool` rejects a pool with zero of them and one with more than `FALLBACK_DEFAULT_MAX_ROWS = 10`, and the `:46` disclaimer is replaced by the ownership reason above. A third rule — no two fallback rows on one `screening_instrument` — is **this module's invariant rather than the spec's**, and says so in its own throw message so it can be removed without hunting for a document that required it. #751 still owns trigger and alert, and consuming the field remains its job. See F4 above for the subset's declared criteria, the two structural exclusions, and the liquidity claim the fix deliberately does **not** make.

@@ -43,9 +43,62 @@
  * `UniverseInstrument[]` a running profile reads. Consuming it is a later
  * ticket's job (#751, ActiveUniverseProvider).
  *
- * `fallback_default` (the story-12 fallback subset the universe-selector spec
- * also asks for) is likewise NOT part of this file — the fallback watchlist
- * is #751's active-list/rotation concern, not this pool's.
+ * ## The fallback subset
+ *
+ * `fallback_default` IS part of this file, and an earlier version of this
+ * doc said it was not — "the fallback watchlist is #751's
+ * active-list/rotation concern, not this pool's". That was wrong, and the
+ * reason is worth keeping rather than quietly deleting: it confused the
+ * fallback's *data* with its *behaviour*. #751 owns the behaviour — when the
+ * fallback triggers and what alert fires — and its acceptance criteria never
+ * name this field. The data has to live here, because a fallback that is
+ * derived from anything the screener produces or consumes is unavailable in
+ * the one scenario it exists for. `docs/specs/universe-selector-spec.md`
+ * agrees twice over: it puts the field in the pool schema ("Candidate pool")
+ * and puts its enforcement at pool load ("a pool with no `fallback_default`
+ * row is rejected at load, not at fallback time"). Recorded as finding F4 of
+ * `docs/reviews/universe-path-gap-sweep-2026-09-03.md`.
+ *
+ * **Which six rows carry it, and on what basis.** The subset is
+ * hand-declared, per the spec's third constraint, and these are the criteria
+ * — stated so David can revise the membership without reverse-engineering
+ * the intent:
+ *
+ * 1. **`subclass_envelope_measured: true` only.** ADR-0018 D3's bracket and
+ *    D5's fraction were never measured against 3VT/3KOR/3KWE/3XLE (#903 is
+ *    open), and degraded mode is the worst place to discover that.
+ * 2. **This forces a mixed subset — it is a bind, not a preference.** With
+ *    the four #903 rows excluded, the pool holds exactly four index rows
+ *    (3USL, LQQ3, 3SPY, 3QQQ) resolving to two underlyings, so an
+ *    index-only fallback cannot reach the spec's 5–10 range at all without
+ *    readmitting them. Single-stock rows are here because of that
+ *    arithmetic. (Not for throughput: the netted `per_subclass_deployment_cap`
+ *    would give a mixed list more deployable capital than an index-only one,
+ *    and in a mode where the screener has failed, more is not better.)
+ * 3. **One ETP line per `screening_instrument`.** SPY, QQQ, PLTR and NVDA
+ *    each carry two lines; two lines on one underlying is doubled exposure
+ *    to a single name in the one mode with no screener to notice. Where an
+ *    underlying has two lines, the GBP/GBX-quoted one is preferred (3SPY
+ *    over 3USL, LQQ3 over 3QQQ) to avoid the spec's residual risk 2 twice
+ *    over; where both are USD, the earlier-compiled line wins (NVD3).
+ * 4. **Two structural exclusions, from geometry rather than from a
+ *    leaderboard.** MSTR is excluded because at 3x "the tape bleeds before
+ *    any bracket is reached" (`docs/research/52-exit-geometry-and-subclass-odds.md`,
+ *    E_gross −0.4672%/session), and AAPL because it resolves only 9.5% of
+ *    sessions (doc 52) — D3's frozen brackets effectively never act, so the
+ *    slot would be dead. Both are statements about leverage and bracket
+ *    geometry. **No row is included because it ranked well in doc 52**:
+ *    #750's own body warns that "an axis picked because it topped a table in
+ *    doc 52 would inherit that doc's 126 trials", and a checked-in artifact
+ *    seeded from the same leaderboard inherits them identically. The six are
+ *    the pool's largest, most heavily traded US underlyings on ordinary
+ *    market knowledge, which is a hand-declaration and is labelled as one.
+ * 5. **Liquidity is NOT verified.** The spec asks for a subset that is
+ *    "liquid and `t212_isa: true`". Neither half is available today:
+ *    `t212_isa` is `true` on 30/30 rows so it excludes nothing, and it names
+ *    a venue Samurai is barred from (#896/#912, #1054); no spread or volume
+ *    measurement exists until #1035 → #1053 land. This subset is therefore
+ *    declared pending that measurement, not screened against it.
  *
  * ## Saxo venue change — what changed here and what did not
  *
@@ -328,6 +381,30 @@ export interface LseEtpPoolRow {
    * `subclassOf` map from. #903 records the interim resolution.
    */
   readonly subclass_envelope_measured: boolean;
+  /**
+   * Whether this row is part of the pool's DECLARED DEFAULT SUBSET — the
+   * watchlist Samurai falls back to when the screener's output is stale,
+   * empty or unreadable (`docs/specs/universe-selector-spec.md`, "Candidate
+   * pool", story 12's invariant 3).
+   *
+   * **Why this field lives in the pool file and not in #751's rotation
+   * logic.** The fallback exists to work *when the screener has failed*, so
+   * it cannot be derived from anything the screener produces or consumes —
+   * not last known ranking (the spec's own third constraint), and not the
+   * per-instrument liquidity or cost #1035 → #1053 will deliver, because a
+   * screener run that could not read its inputs is exactly the run that
+   * triggers the fallback. It has to be statically declared in a checked-in
+   * artifact, which is this one. #751 owns the fallback's *behaviour* — when
+   * it triggers, what alert fires — and never names this field. (This
+   * module doc previously said the opposite; see "## The fallback subset"
+   * above for what that error was and why it mattered.)
+   *
+   * Enforced by `assertValidPool`: at least one row must carry `true`, and
+   * no more than `FALLBACK_DEFAULT_MAX_ROWS` may. A pool that cannot answer
+   * "what do we trade when the screener fails" fails silently on the one day
+   * it matters, and the failure presents as a healthy no-trade session.
+   */
+  readonly fallback_default: boolean;
   readonly provenance: RowProvenance;
 }
 
@@ -398,6 +475,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'IE00B7Y34M31',
@@ -421,6 +499,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    fallback_default: true,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'IE00BLRPRL42',
@@ -443,6 +522,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    fallback_default: true,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2472197149',
@@ -465,6 +545,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2656472193',
@@ -487,6 +568,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    fallback_default: true,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2820604770',
@@ -511,6 +593,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBP',
     t212_isa: true,
+    fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'IE00BK5BZS07',
@@ -532,6 +615,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2734938835',
@@ -555,6 +639,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2472197065',
@@ -576,6 +661,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2901882618',
@@ -600,6 +686,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2856105833',
@@ -622,6 +709,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2663694680',
@@ -654,6 +742,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'EUR',
     t212_isa: true,
+    fallback_default: true,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2662640627',
@@ -678,6 +767,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'XS3075487713',
@@ -701,6 +791,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2675292309',
@@ -726,6 +817,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2596087671',
@@ -748,6 +840,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2856106302',
@@ -771,6 +864,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2575914176',
@@ -795,6 +889,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2842095320',
@@ -819,6 +914,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'XS3069877556',
@@ -842,6 +938,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'XS3075487044',
@@ -865,6 +962,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
+    fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2596085972',
@@ -890,6 +988,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    fallback_default: true,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'IE00BK5BZQ82',
@@ -913,6 +1012,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    fallback_default: true,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'IE00BK5C1B80',
@@ -937,6 +1037,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2337092550',
@@ -960,6 +1061,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2595673190',
@@ -985,6 +1087,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2691006303',
@@ -1008,6 +1111,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    fallback_default: false,
     subclass_envelope_measured: false,
     provenance: {
       isin: 'XS2399364822',
@@ -1035,6 +1139,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    fallback_default: false,
     subclass_envelope_measured: false,
     provenance: {
       isin: 'XS2472196257',
@@ -1062,6 +1167,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    fallback_default: false,
     subclass_envelope_measured: false,
     provenance: {
       isin: 'XS2800709128',
@@ -1087,6 +1193,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'GBX',
     t212_isa: true,
+    fallback_default: false,
     subclass_envelope_measured: false,
     provenance: {
       isin: 'XS2399370555',
@@ -1274,6 +1381,104 @@ export function assertValidPool(pool: readonly LseEtpPoolRow[]): void {
           'is what buildRoutingMap binding only on lse_ticker exists to make impossible.',
       );
     }
+  }
+  assertValidFallbackSubset(pool);
+}
+
+/**
+ * The most rows `assertValidPool` will accept as the fallback subset.
+ *
+ * The spec does not put a number on the loader; it puts one on the subset
+ * ("sized to the watchlist range (5–10 names)") and gives the reason at the
+ * top of the range: falling back to every row "would deploy into 40–80 names
+ * at once, which the subclass envelope refuses anyway — so the fallback would
+ * produce a refusal storm instead of trading". The same 10 is also the tick
+ * budget (τ = 2 min against the instrument-pass cost), which "binds whatever
+ * produced the list" — the fallback included. So the ceiling is enforced.
+ *
+ * **The floor deliberately is not.** The spec's only stated loader rule is
+ * that a pool carrying NO fallback row is rejected; "5–10" describes how the
+ * subset should be sized, not a condition the loader was asked to fail on,
+ * and a hard floor of 5 would reject a legitimately small future pool for
+ * violating a range written against this one.
+ */
+export const FALLBACK_DEFAULT_MAX_ROWS = 10;
+
+/**
+ * Enforces the four rules on the pool's declared fallback subset.
+ *
+ * Rule 1 is the spec's: "a pool with no `fallback_default` row is rejected at
+ * load, not at fallback time".
+ *
+ * **Rule 2 is a ceiling, not the spec's "Not the full pool" clause**, and the
+ * difference matters: a pool of ten rows or fewer may mark every row and
+ * still pass. A strict `fallback.length < pool.length` subset rule is
+ * deliberately not enforced, for the same reason the 5-row floor is not — it
+ * would reject a legitimately small future pool for violating a range written
+ * against this 30-row one. At any pool size the ceiling is the binding
+ * constraint the spec gives a reason for (the refusal storm, and the tick
+ * budget); "not the full pool" is a property of a pool this size, which
+ * `lse-etp-pool.test.ts` pins on the checked-in artifact rather than here.
+ *
+ * **Rule 3 — every fallback row must carry a measured subclass envelope.**
+ * Degraded mode is the worst place to discover an unmeasured envelope: there
+ * is no screener running to notice, and `liveSizingSubclassFor` omits the
+ * unmeasured rows, so a fallback list holding one would size against nothing.
+ * The subset selection was made on this basis (#903); the rule stops a later
+ * edit from marking a widened row without re-reading that reasoning.
+ *
+ * **Rule 4 — no two fallback rows may share a `screening_instrument` — is
+ * this module's own invariant, not the spec's**, and is called out as such
+ * here and in its throw message so it can be removed without hunting for a
+ * document that required it. It exists because four underlyings in this pool
+ * (SPY, QQQ, PLTR, NVDA) carry two ETP lines each, and a fallback list that
+ * picked up both lines of one underlying would concentrate a degraded-mode
+ * session on a single name — in precisely the mode where no screener is
+ * running to notice.
+ */
+export function assertValidFallbackSubset(pool: readonly LseEtpPoolRow[]): void {
+  const fallback = pool.filter((row) => row.fallback_default);
+  if (fallback.length === 0) {
+    throw new Error(
+      'LSE ETP pool declares no fallback_default row. A pool that cannot answer "what do we ' +
+        'trade when the screener fails" fails silently on the one day it matters, and the failure ' +
+        'presents as a healthy no-trade session — so it is refused at load rather than at fallback ' +
+        'time (docs/specs/universe-selector-spec.md, "Candidate pool").',
+    );
+  }
+  if (fallback.length > FALLBACK_DEFAULT_MAX_ROWS) {
+    throw new Error(
+      `LSE ETP pool declares ${fallback.length} fallback_default rows, above the ` +
+        `${FALLBACK_DEFAULT_MAX_ROWS}-row ceiling. The fallback is a subset, not the pool: falling ` +
+        'back to every row deploys into more names than the subclass envelope admits, so it ' +
+        'produces a refusal storm instead of trading, and it breaches the same tick budget the ' +
+        'active-list cap exists to bound.',
+    );
+  }
+  for (const row of fallback) {
+    if (!row.subclass_envelope_measured) {
+      throw new Error(
+        `LSE ETP pool marks '${row.lse_ticker}' as a fallback_default row, but its subclass ` +
+          'envelope was never measured (#903). Degraded mode is the worst place to discover an ' +
+          'unmeasured envelope: no screener is running to notice, and liveSizingSubclassFor omits ' +
+          'the unmeasured rows, so the fallback would size against nothing.',
+      );
+    }
+  }
+  const seen = new Map<string, string>();
+  for (const row of fallback) {
+    const key = row.screening_instrument.trim().toUpperCase();
+    const prior = seen.get(key);
+    if (prior !== undefined) {
+      throw new Error(
+        `LSE ETP pool marks two fallback_default rows on the same screening_instrument ` +
+          `('${prior}' and '${row.lse_ticker}' both rank on '${row.screening_instrument}'). This ` +
+          "rule is this module's own invariant, not one docs/specs/universe-selector-spec.md " +
+          'states: two ETP lines on one underlying is doubled exposure to a single name in the ' +
+          'one mode where no screener is running to notice.',
+      );
+    }
+    seen.set(key, row.lse_ticker);
   }
 }
 
