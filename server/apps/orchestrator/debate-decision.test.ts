@@ -4,6 +4,8 @@
  * the healthy path that must keep recording exactly what it recorded before.
  */
 import type { DebateResult } from '../../pipeline/debate-engine/index.js';
+import { SimulatedClock } from '../../shared/index.js';
+import { AnalystViewRelay, buildControlDebateStep } from './control-arm.js';
 import { debateDecisionWord, isDegradedDecision } from './debate-decision.js';
 
 const BAR = new Date('2026-09-03T14:00:00.000Z');
@@ -73,6 +75,33 @@ describe('debateDecisionWord', () => {
     });
 
     expect(debateDecisionWord(refused)).toBe('not_admitted');
+  });
+
+  it('leaves the control arm writing its bare direction (#1080 AC6)', async () => {
+    // The control arm runs a `debate` step like any other and its results reach
+    // the same `record` call, so the comparability claim has to hold HERE, not
+    // in prose. Its no-axis-vote branch is the adversarial case on purpose:
+    // neutral, zero confidence, `rounds_completed: 0` — the exact shape of a
+    // `budget_exhausted` fallback, minus the `timed_out` field that would make
+    // it one. A classifier keying on the shape instead of the discriminator
+    // would relabel the falsifier arm as broken and change what the comparison
+    // measures.
+    const relay = new AnalystViewRelay();
+    const control = buildControlDebateStep(relay);
+
+    const result = await control({
+      trace_id: 'trace-1:control',
+      instrument: 'QQQ',
+      asset_class: 'stocks',
+      views: [],
+      clock: new SimulatedClock(BAR),
+      bar: BAR,
+    });
+
+    expect(result.rounds_completed).toBe(0);
+    expect(result.confidence).toBe(0);
+    expect(debateDecisionWord(result)).toBe('neutral');
+    expect(isDegradedDecision(debateDecisionWord(result))).toBe(false);
   });
 
   it('reports exactly the degraded words as degraded', () => {

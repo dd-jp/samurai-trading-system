@@ -145,12 +145,18 @@ const DEFAULT_LLM_RETRY = { maxAttempts: 2, baseDelayMs: 500, maxDelayMs: 2_000 
  * the debate that issues it (#1080).
  *
  * `LATENCY_BUDGET_MS.stocks`, not the crypto entry, because Samurai is an
- * equities system — crypto left scope 2026-08-16 (ADR-0015's amendment) and no
- * production tick runs the crypto budget. A crypto system re-entering scope
- * would have to revisit this: at a 30s budget the same arithmetic below admits
- * only a 13s per-attempt timeout, which is under the measured p90 of an
- * UNCONTENDED debate call (#1080: 17.0s), i.e. no retry schedule fits a 30s
- * budget at this model's latency at all.
+ * equities system — crypto left scope 2026-08-16 (ADR-0015's amendment) and
+ * `DEFAULT_UNIVERSE` is all-stocks, so no production tick runs the crypto
+ * budget. The crypto branch is not dead code (`SMOKE_TEST_UNIVERSE` is BTC/ETH
+ * and `MAX_ROUNDS_BY_ASSET_CLASS.crypto` is still read), so state the gap
+ * plainly: against the 30s crypto budget this timeout is KNOWINGLY out of
+ * bounds, at `2 * (28,000 + 2,000)` = 200% of it, and the invariant test
+ * asserts the stocks budget alone. That is not an oversight to be tightened
+ * later — solving the arithmetic below for 30s admits only a 13s per-attempt
+ * timeout, which is under the measured p90 of an UNCONTENDED debate call
+ * (#1080: 17.0s). No retry schedule fits a 30s budget at this model's latency.
+ * A crypto system re-entering scope inherits that as an open problem, not as a
+ * constant to copy.
  */
 const LOGICAL_LLM_CALL_BUDGET_MS = LATENCY_BUDGET_MS.stocks;
 
@@ -179,6 +185,16 @@ const LOGICAL_LLM_CALL_BUDGET_MS = LATENCY_BUDGET_MS.stocks;
  * is a round-cap-versus-budget question, deliberately left open on #1080 for a
  * session that can measure it. This constant only removes the case where the
  * retry alone is allowed to exceed the budget.
+ *
+ * What it DOES cost, stated rather than hidden: attempts between 28s and 30s
+ * used to succeed and will now time out and be retried — 9 of the 61 debate
+ * calls in that session (14.8%) sat in that band. The trade is still right on
+ * the measurement, because every one of those 9 belonged to a debate that timed
+ * out anyway: a call that has already spent 47% of a 60s budget cannot be
+ * followed by the eight others a three-round debate needs. Under 30,000ms the
+ * retry those calls would have earned could not have landed inside the budget
+ * either — the race would have discarded it at 60s. The band is a real cost;
+ * it bought nothing in the one session that has been measured.
  */
 const DEFAULT_LLM_TIMEOUT_MS =
   LOGICAL_LLM_CALL_BUDGET_MS / DEFAULT_LLM_RETRY.maxAttempts - DEFAULT_LLM_RETRY.maxDelayMs;

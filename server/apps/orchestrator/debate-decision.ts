@@ -24,6 +24,14 @@
  * budget that fires before ANY round completed hands back
  * `LOW_CONFIDENCE_FALLBACK`, which is not an answer at all. Only the second
  * guarantees a no-trade.
+ *
+ * The control arm reaches this too — `buildControlDebateStep` is a `debate`
+ * step like any other and its results run through the same `record` call — and
+ * that is exactly why the arms stay comparable: a control result is computed by
+ * `controlArmDecision` from relayed views with no client and no I/O, so it can
+ * carry neither `timed_out` nor `rate_limited`, and every control row keeps
+ * writing its bare direction. A degraded word appearing on a `control:` trace
+ * would mean the falsifier arm had acquired an LLM.
  */
 import { type DegradedDecision, isDegradedDecision } from '../../../contracts/pipeline.js';
 import type { DebateResult } from '../../pipeline/debate-engine/index.js';

@@ -1114,6 +1114,13 @@ describe('buildProductionComponents (default llmClient fallback)', () => {
    * Asserted as an inequality over the two constants rather than as a pair of
    * literals: a retry schedule and the budget it runs inside are ONE decision,
    * so moving either one alone has to fail here.
+   *
+   * Against `LATENCY_BUDGET_MS.stocks` and not the crypto entry, deliberately:
+   * `DEFAULT_UNIVERSE` is all-stocks and crypto left scope 2026-08-16, so the
+   * crypto budget is reached only by the smoke run's stub client. This config
+   * is knowingly out of bounds against it and cannot be brought inside — see
+   * `LOGICAL_LLM_CALL_BUDGET_MS` for the arithmetic. Widening this assertion to
+   * every asset class would fail for a reason no constant here can fix.
    */
   it('cannot let one logical LLM call outlast the latency budget it runs inside', () => {
     const { maxAttempts, maxDelayMs } = DEFAULT_LLM_CLIENT_CONFIG.retry;
