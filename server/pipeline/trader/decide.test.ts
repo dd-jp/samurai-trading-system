@@ -17,6 +17,7 @@ import {
   type Mark,
   type MarketDataService,
   type MarkRead,
+  minimumBarsFor,
   recommendedWarmupFor,
   type TradingCalendar,
   UsEquityRegularHoursCalendar,
@@ -2109,6 +2110,32 @@ describe('decideWithReason — decision class and reason detail (#1109)', () => 
     expect(outcome.decision_class).toBe('could_not_decide');
   });
 
+  it('classifies a below-conviction-floor decline as could_not_decide when the entry debate is a degraded partial', async () => {
+    // A starved debate on a FLAT instrument never reaches
+    // `neutral_direction_while_flat`: a timed-out debate with
+    // `rounds_completed > 0` can hand back a non-neutral `partial.direction`
+    // (`latency-budget.ts`), and `routeDecision`'s flat branch has no
+    // `converged` check — it routes straight to `buildBracket`, which reads
+    // `debate.confidence` next. Without checking the debate's health at every
+    // `declined_on_signal` reason, this row would read as the Trader having
+    // genuinely declined a low-conviction signal, when the debate that
+    // produced the confidence figure never finished.
+    const outcome = await decideWithReason(
+      traderInput({
+        debate: debateResult({
+          direction: 'bullish',
+          confidence: 0.1,
+          converged: false,
+          rounds_completed: 1,
+          timed_out: { budget_ms: 8_000, elapsed_ms: 8_050 },
+        }),
+      }),
+    );
+
+    expect(outcome.skip_reason).toBe('below_conviction_floor');
+    expect(outcome.decision_class).toBe('could_not_decide');
+  });
+
   it('carries the compared value and the threshold on a conviction-floor decline', async () => {
     const outcome = await decideWithReason(
       traderInput({ debate: debateResult({ confidence: 0.1 }) }),
@@ -2150,12 +2177,36 @@ describe('decideWithReason — decision class and reason detail (#1109)', () => 
   });
 
   it('carries no reason_detail on a skip that has no threshold to compare', async () => {
+    // `atr_not_finite` (unlike `atr_insufficient_bars`, below) has nothing
+    // configured to compare against — a non-finite ATR on a full window is
+    // corrupt bar data, not a value read against a threshold.
+    const corrupt = bars(15, 2).map((bar, index) =>
+      index === 7 ? { ...bar, high: Number.NaN } : bar,
+    );
+
+    const outcome = await decideWithReason(
+      traderInput({ marketData: new FixtureMarketData(corrupt) }),
+    );
+
+    expect(outcome.skip_reason).toBe('atr_not_finite');
+    expect(outcome.reason_detail).toBeNull();
+  });
+
+  it('carries the compared value and the threshold on an insufficient-bars decline', async () => {
+    // #1109: `minimumBarsFor(spec)` derives from the configured
+    // `atr_lookback`, so this is a fourth numeric-gate site — "2 bars short"
+    // and "13 bars short" must not read as the same row.
     const outcome = await decideWithReason(
       traderInput({ marketData: new FixtureMarketData(bars(2, 2)) }),
     );
 
     expect(outcome.skip_reason).toBe('atr_insufficient_bars');
-    expect(outcome.reason_detail).toBeNull();
+    expect(outcome.reason_detail).toEqual({
+      compared_value: 2,
+      threshold: minimumBarsFor(
+        atrIndicatorSpec(DEFAULT_TRADER_CONFIG.atr_lookback, DEFAULT_TRADER_CONFIG.atr_timeframe),
+      ),
+    });
   });
 
   it('classifies a data-quality skip as input_unusable, not declined_on_signal', async () => {
