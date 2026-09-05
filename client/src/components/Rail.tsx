@@ -134,13 +134,24 @@ function ProvidersBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
             {alpaca.detail === '' ? 'the probe did not read ok' : alpaca.detail}
           </span>
         ) : (
-          <span className="rail-note mono" data-field="alpaca-balance">
-            equity {formatUsd(alpaca.balance.equity)} · cash {formatUsd(alpaca.balance.cash)} ·
-            buying power{' '}
-            {alpaca.balance.buying_power === null
-              ? 'not sent'
-              : formatUsd(alpaca.balance.buying_power)}
-          </span>
+          <div className="rail-figures" data-field="alpaca-balance">
+            {[
+              { name: 'Equity', value: formatUsd(alpaca.balance.equity) },
+              { name: 'Cash', value: formatUsd(alpaca.balance.cash) },
+              {
+                name: 'Buying power',
+                value:
+                  alpaca.balance.buying_power === null
+                    ? 'not sent'
+                    : formatUsd(alpaca.balance.buying_power),
+              },
+            ].map(({ name, value }) => (
+              <div key={name} className="rail-provider">
+                <span className="muted">{name}</span>
+                <span className="mono">{value}</span>
+              </div>
+            ))}
+          </div>
         ))}
       {alpaca !== undefined && alpaca.balance !== null && alpaca.detail !== '' && (
         <span className="rail-note">Alpaca · {alpaca.detail}</span>
