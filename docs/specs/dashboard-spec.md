@@ -471,7 +471,9 @@ function buildSnapshot(store: DashboardQueryStore, asOf: Date): DashboardSnapsho
   - `format.ts` — durations, `HH:MM:SSZ` clocks, dates, held durations, signed money, percentages and R.
 - **`components/`** — `Rail`, `Seal`, `StateWord` (every wire-state-to-tone mapping lives there), `Track` (the one horizontal meter), `StanceStrip`, the shared drawer sections (`TraceSections`: timeline, gates and conditions, debate, fills) and the three tabs under `components/tabs/`. All declarative; there is no DOM-imperative code in the app.
 - **`hooks/useSnapshot.ts`** owns the 3s poll (`cache: 'no-store'`), the two-missed-polls staleness watchdog, and retention of the previous snapshot for the ledger's settle detection.
-- **`App.tsx`** owns the tab (read from and written to `location.hash`), the Live and Review selections, the session ledger, the equity samples the Glance sparkline draws, and the Glance→Live jump that carries a `trace_id`.
+- **`hooks/useLedger.ts`** folds each polled snapshot into `lib/ledger.ts`'s transition, producing the session's verdict ledger.
+- **`hooks/useEquitySamples.ts`** owns the equity-sampling rule the Glance sparkline draws from: dedupe on an unchanged poll, the non-finite-equity guard, and the front-eviction cap.
+- **`App.tsx`** owns the tab (read from and written to `location.hash`), the Live and Review selections, and the Glance→Live jump that carries a `trace_id`.
 
 **Untrusted strings.** `instrument` and `decision` reach the page from the database and are rendered as text, never as markup — React's default escaping is the mechanism, and a hostile instrument string is a test case, not an assumption.
 

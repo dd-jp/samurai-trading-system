@@ -1,22 +1,21 @@
 /**
  * The composition root: one poll, one rail, three tabs.
  *
- * State that outlives a poll lives here — which tab is open, what each tab
- * has selected, the session's verdict ledger, and the equity samples the
- * Alpaca probe has reported — so a 3-second re-render never resets any of it.
+ * State that outlives a poll lives here — which tab is open and what each
+ * tab has selected — so a 3-second re-render never resets any of it. The
+ * verdict ledger and equity series live in `useLedger`/`useEquitySamples`.
  * Everything below is a pure function of `snapshot` plus that state.
  */
 import type { VerdictRow } from '@contracts';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Rail, TABS, type Tab } from './components/Rail.tsx';
-import { type EquitySample, GlanceTab } from './components/tabs/GlanceTab.tsx';
+import { GlanceTab } from './components/tabs/GlanceTab.tsx';
 import { LiveTab, type Selection } from './components/tabs/LiveTab.tsx';
 import { ReviewTab } from './components/tabs/ReviewTab.tsx';
+import { useEquitySamples } from './hooks/useEquitySamples.ts';
+import { useLedger } from './hooks/useLedger.ts';
 import { type UseSnapshotOptions, useSnapshot } from './hooks/useSnapshot.ts';
-import { createLedger, updateLedger } from './lib/ledger.ts';
 import './App.css';
-
-const MAX_EQUITY_SAMPLES = 120;
 
 function isTab(value: string): value is Tab {
   return TABS.some((entry) => entry.id === value);
@@ -59,32 +58,8 @@ export function App({ snapshotOptions }: AppProps = {}) {
     [openTab],
   );
 
-  const [ledger, setLedger] = useState(createLedger);
-  useEffect(() => {
-    if (snapshot === null) return;
-    setLedger((state) => updateLedger(state, snapshot.pipeline));
-  }, [snapshot]);
-
-  const [equitySamples, setEquitySamples] = useState<readonly EquitySample[]>([]);
-  useEffect(() => {
-    if (snapshot === null) return;
-    const alpaca = snapshot.providers.alpaca;
-    const balance = alpaca.balance;
-    if (balance === null || !Number.isFinite(balance.equity)) return;
-    setEquitySamples((samples) => {
-      const last = samples[samples.length - 1];
-      if (
-        last !== undefined &&
-        last.observed_at === alpaca.observed_at &&
-        last.equity === balance.equity
-      ) {
-        return samples;
-      }
-      return [...samples, { observed_at: alpaca.observed_at, equity: balance.equity }].slice(
-        -MAX_EQUITY_SAMPLES,
-      );
-    });
-  }, [snapshot]);
+  const ledger = useLedger(snapshot);
+  const equitySamples = useEquitySamples(snapshot);
 
   const verdictsByTrace = useMemo(
     () =>
@@ -102,7 +77,7 @@ export function App({ snapshotOptions }: AppProps = {}) {
           <GlanceTab
             snapshot={snapshot}
             equitySamples={equitySamples}
-            ledger={ledger.entries}
+            ledger={ledger}
             verdictsByTrace={verdictsByTrace}
             onOpenTrace={openTrace}
           />

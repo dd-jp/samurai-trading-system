@@ -1,6 +1,6 @@
 /**
- * Fixture builders shared by the `lib/` unit tests (issue #537). Test-only —
- * nothing under `lib/` imports this at runtime.
+ * Fixture builders shared by the client's `lib/` and `hooks/` unit tests
+ * (issue #537). Test-only — nothing under `lib/` imports this at runtime.
  *
  * Type-only imports from the wire contract, matching the modules under test:
  * the shapes come from `contracts/pipeline.ts` and nothing here redefines

@@ -208,21 +208,6 @@ describe('tabs', () => {
 });
 
 describe('glance → live', () => {
-  it('stamps a settled lane into the verdict list once, and never again on a re-poll', async () => {
-    const settled = doneThrough('ETH-USD', 'trace-eth', 'execution', { outcome: 'go' });
-    const first = makeSnapshot({ pipeline: makeView([settled]) });
-    const second = makeSnapshot({
-      pipeline: makeView([settled]),
-      as_of: '2026-08-07T12:00:03.000Z',
-      generated_at: '2026-08-07T12:00:03.000Z',
-    });
-    renderApp([first, second]);
-    const verdicts = await screen.findByRole('region', { name: 'Verdicts this session' });
-    await within(verdicts).findByRole('button', { name: /ETH-USD, go/ });
-    await screen.findByText('snapshot 12:00:03Z');
-    expect(within(verdicts).getAllByRole('button', { name: /ETH-USD, go/ })).toHaveLength(1);
-  });
-
   it('badges a HITL override and carries the verdict reason', async () => {
     const settled = doneThrough('ETH-USD', 'trace-eth', 'verdict', { outcome: 'no_go' });
     renderApp([
