@@ -91,11 +91,12 @@ describe('rail', () => {
     expect(within(rail).getByText(/BTC-USD · debate · since 11:59:50Z/)).toBeTruthy();
     expect(within(rail).getByText('trace-btc')).toBeTruthy();
     expect(within(rail).getAllByText('ok')).toHaveLength(2);
-    expect(
-      within(rail).getByText(
-        /^equity \$100,112\.98 · cash \$99,213\.40 · buying power \$198,426\.80$/,
-      ),
-    ).toBeTruthy();
+    const balance = rail.querySelector('[data-field="alpaca-balance"]');
+    expect([...(balance?.children ?? [])].map((row) => row.textContent)).toEqual([
+      'Equity$100,112.98',
+      'Cash$99,213.40',
+      'Buying power$198,426.80',
+    ]);
     expect(within(rail).getByText('Alpaca · account reachable')).toBeTruthy();
     expect(within(rail).getByRole('img', { name: /LLM budget used/ })).toBeTruthy();
     expect(within(rail).getByText(/^24h \$.* · 7d \$.* · all \$/)).toBeTruthy();

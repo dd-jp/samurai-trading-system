@@ -1,4 +1,4 @@
-import type { MetricsSuiteWire } from '@contracts';
+import type { AlpacaBalanceWire, MetricsSuiteWire } from '@contracts';
 import type { SnapshotFeed, WireSnapshot } from '../hooks/useSnapshot.ts';
 import { formatClockUtc, formatPercent, formatUsd, UNKNOWN } from '../lib/format.ts';
 import { providerStateWord, WAITING_FOR_FIRST_SNAPSHOT } from '../lib/vocabulary.ts';
@@ -107,6 +107,17 @@ function LiveTickBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
   );
 }
 
+function balanceFigures(balance: AlpacaBalanceWire) {
+  return [
+    { name: 'Equity', value: formatUsd(balance.equity) },
+    { name: 'Cash', value: formatUsd(balance.cash) },
+    {
+      name: 'Buying power',
+      value: balance.buying_power === null ? 'not sent' : formatUsd(balance.buying_power),
+    },
+  ];
+}
+
 function ProvidersBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
   const alpaca = snapshot?.providers.alpaca;
   const polygon = snapshot?.providers.polygon;
@@ -119,7 +130,7 @@ function ProvidersBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
       {rows.map(({ name, tile }) => {
         const word = tile === undefined ? null : providerStateWord(tile.state);
         return (
-          <div key={name} className="rail-provider" data-provider-state={tile?.state ?? 'unknown'}>
+          <div key={name} className="rail-row" data-provider-state={tile?.state ?? 'unknown'}>
             <span className="muted">{name}</span>
             <span className={`rail-provider-state provider-${tile?.state ?? 'unknown'}`}>
               {tile === undefined ? 'not polled' : (word ?? 'state not recognised')}
@@ -134,13 +145,14 @@ function ProvidersBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
             {alpaca.detail === '' ? 'the probe did not read ok' : alpaca.detail}
           </span>
         ) : (
-          <span className="rail-note mono" data-field="alpaca-balance">
-            equity {formatUsd(alpaca.balance.equity)} · cash {formatUsd(alpaca.balance.cash)} ·
-            buying power{' '}
-            {alpaca.balance.buying_power === null
-              ? 'not sent'
-              : formatUsd(alpaca.balance.buying_power)}
-          </span>
+          <div className="rail-figures" data-field="alpaca-balance">
+            {balanceFigures(alpaca.balance).map(({ name, value }) => (
+              <div key={name} className="rail-row">
+                <span className="muted">{name}</span>
+                <span className="mono">{value}</span>
+              </div>
+            ))}
+          </div>
         ))}
       {alpaca !== undefined && alpaca.balance !== null && alpaca.detail !== '' && (
         <span className="rail-note">Alpaca · {alpaca.detail}</span>
