@@ -1182,6 +1182,18 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
      * log, rather than by inspecting the field.
      */
     telemetry: new LoggingAnalystTelemetry(logger),
+    /**
+     * #1114: the cause behind a stage failure — an abandoned attempt's late
+     * settlement, and a non-timeout rejection's full detail — both logged at
+     * `debug` only, never changing the existing error/warn "quorum NOT met"
+     * line `analysts-adapter.ts` builds one layer up. Smoke-gate enforcement:
+     * `runAnalystFailureCauseScenario` in `smoke-run.ts` drives a genuine
+     * non-timeout rejection through this exact composition-root instance and
+     * asserts the debug entries it produced; deleting this line collapses
+     * `AnalystOrchestrator`'s logger back to `NOOP_LOGGER` and that scenario
+     * observes nothing.
+     */
+    logger,
   });
 
   // One instance, both ends of `cosine_setups` (#432): the Trader's `decide`
