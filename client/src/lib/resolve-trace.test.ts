@@ -153,6 +153,7 @@ describe('resolveTrace', () => {
         doneThrough('QQQ', 'trace-1-qqq', 'risk', { outcome: 'stopped' }),
       ]),
       risk_critics: [
+        makeRiskCritic({ trace_id: 'trace-0', instrument: 'SPY', reasoning: 'older trace' }),
         makeRiskCritic({ trace_id: 'trace-1', instrument: 'QQQ', reasoning: 'wrong row' }),
         makeRiskCritic({ trace_id: 'trace-1', instrument: 'SPY', reasoning: 'right row' }),
       ],
@@ -165,14 +166,18 @@ describe('resolveTrace', () => {
     ).toBeUndefined();
   });
 
-  it('says an idle lane is idle rather than absent', () => {
+  it('says an idle lane is idle rather than absent, and joins it to no critic row', () => {
     const detail = resolveTrace(
-      makeSnapshot({ pipeline: makeView([makeLane({ instrument: 'SPY', outcome: 'idle' })]) }),
+      makeSnapshot({
+        pipeline: makeView([makeLane({ instrument: 'SPY', outcome: 'idle' })]),
+        risk_critics: [makeRiskCritic({ trace_id: 'trace-spy', instrument: 'SPY' })],
+      }),
       { instrument: 'SPY', traceId: null },
     );
     expect(detail.traceId).toBeNull();
     expect(detail.cells).toBeNull();
     expect(detail.absence.lane).toBe('idle');
+    expect(detail.riskCritic).toBeUndefined();
   });
 
   it('separates a trace that aged out of the window from an instrument with no lane', () => {

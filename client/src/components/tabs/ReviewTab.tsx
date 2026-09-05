@@ -23,7 +23,7 @@ import {
   formatUsd,
   formatWhen,
 } from '../../lib/format.ts';
-import { resolveTrade, type TradeDetail } from '../../lib/resolve-trace.ts';
+import { resolveTrade, type TradeDetail, tradeDebate } from '../../lib/resolve-trace.ts';
 import { presentCloseReason } from '../../lib/state-presentation.ts';
 import { sideWord, WAITING_FOR_FIRST_SNAPSHOT } from '../../lib/vocabulary.ts';
 import { Seal } from '../Seal.tsx';
@@ -408,7 +408,7 @@ function TradesTable(props: ReviewTabProps) {
             <TradeRow
               key={trade.idempotency_key}
               trade={trade}
-              debate={resolveTrade(snapshot, trade.idempotency_key)?.debate}
+              debate={tradeDebate(snapshot.debates, trade)}
               asOf={snapshot.as_of}
               selected={selectedKey === trade.idempotency_key}
               onSelect={() => onSelect(trade.idempotency_key)}

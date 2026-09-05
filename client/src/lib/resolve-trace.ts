@@ -140,6 +140,17 @@ export function resolveTrace(snapshot: WireSnapshot, selection: Selection): Trac
   };
 }
 
+/**
+ * The one join a Review row needs, without the rest of `resolveTrade`'s
+ * sequence: a table of N rows would otherwise re-run all of it per poll.
+ */
+export function tradeDebate(
+  debates: readonly DebateRow[],
+  trade: ClosedTradeRow,
+): DebateRow | undefined {
+  return debateById(debates, trade.debate_id);
+}
+
 /** Every row the Review drawer shows for one closed trade, or `null` if it has left the window. */
 export function resolveTrade(snapshot: WireSnapshot, idempotencyKey: string): TradeDetail | null {
   const trade = closedTradeByKey(snapshot.closed_trades, idempotencyKey);
