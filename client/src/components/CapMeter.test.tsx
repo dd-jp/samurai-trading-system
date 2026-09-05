@@ -91,6 +91,12 @@ describe('CapMeter', () => {
     expect(screen.queryByRole('img')).toBeNull();
   });
 
+  it('is not drawable when a finite value and a finite positive cap divide to a non-finite quotient', () => {
+    renderMeter({ value: Number.MAX_VALUE, cap: Number.MIN_VALUE });
+    expect(screen.getByText('not drawable')).toBeTruthy();
+    expect(screen.queryByRole('img')).toBeNull();
+  });
+
   it('renders the footnote in both the drawable and empty-state cases', () => {
     const { rerender } = renderMeter({ value: 50, cap: 200 });
     expect(screen.getByTestId('footnote')).toBeTruthy();
