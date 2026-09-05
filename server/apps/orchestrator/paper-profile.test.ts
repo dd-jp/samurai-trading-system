@@ -19,7 +19,7 @@ import { SimulatedClock, SystemClock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { SqliteStage2SelectionStore } from '../../tools/backtest/index.js';
 import { REQUIRED_INJECTED_CONFIG } from './index.js';
-import { paperStartingProfile, subclassOfUniverse } from './paper-profile.js';
+import { LIVE_BOOK_GBP, paperStartingProfile, subclassOfUniverse } from './paper-profile.js';
 import { SqliteDailyEquityMetricsSource } from './production/daily-equity-metrics-source.js';
 import { BENCHMARK_INSTRUMENTS, DEFAULT_FEEDBACK_INTERVAL_MS } from './production.js';
 import { DEFAULT_UNIVERSE } from './scheduler.js';
@@ -31,6 +31,30 @@ describe('paperStartingProfile', () => {
     for (const key of REQUIRED_INJECTED_CONFIG) {
       expect(profile[key]).toBeDefined();
     }
+  });
+
+  /**
+   * #1112 (AC1/AC2): before this, `paperStartingProfile('paper')` carried no
+   * `capitalCeilingUsd`, so `sizingEquity` (direct-bind.ts) never clamped in
+   * paper mode and the Trader sized off the simulated Alpaca balance
+   * (~$100,000) directly — ~100x `LIVE_BOOK_GBP`. Pinning the value here
+   * (rather than only `toBeDefined()`) is what a regression that reverted the
+   * default to `undefined`, or drifted it to some OTHER number, would trip.
+   */
+  it('sizes paper against the declared book, not funded equity (#1112)', () => {
+    expect(paperStartingProfile('paper').capitalCeilingUsd).toBe(LIVE_BOOK_GBP);
+  });
+
+  /**
+   * `backtest` deliberately keeps `capitalCeilingUsd` unset (#1112 scope
+   * line): backtest's cost-model calibration and Stage-2 tooling read
+   * `portfolio.equity` unclamped today, and widening that blast radius is a
+   * separate decision #1112 does not make. Pinned so a future edit that
+   * "simplifies" the conditional spread to apply to every mode fails here
+   * first, not in a Stage-2 run months later.
+   */
+  it('does NOT set a capital ceiling for backtest (#1112 scope)', () => {
+    expect(paperStartingProfile('backtest').capitalCeilingUsd).toBeUndefined();
   });
 
   /**

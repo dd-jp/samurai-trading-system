@@ -1295,7 +1295,16 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // `store` all read/write through this same instance, so `onTradeClose`
   // fires no matter which of them eventually calls `writeClosedTrade`.
   const executionStore = withOnTradeClose(
-    new SqliteExecutionStore(guardedStore(config.db, 'execution')),
+    // #1112 AC5 (migration 0045): `config.capitalCeilingUsd` is the same
+    // ceiling `sizingEquity` (direct-bind.ts) clamps this arm's sizing
+    // against, stamped onto every row this instance writes so a later
+    // `arm_comparison_samples`/`closed_trades` window can tell whether it
+    // mixes rows sized under two different regimes.
+    new SqliteExecutionStore(
+      guardedStore(config.db, 'execution'),
+      'live',
+      config.capitalCeilingUsd,
+    ),
     { setup_store: setupStore },
     logger,
   );
@@ -1959,6 +1968,11 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   const controlExecutionStore = new SqliteExecutionStore(
     guardedStore(config.db, 'execution'),
     'control',
+    // #1112 AC5 (migration 0045): the SAME ceiling as the live arm's store
+    // above — `deps.trader` (and so `capitalCeilingUsd`) reaches this arm by
+    // the verbatim spread `buildControlArmWiring` does, so its sizing is
+    // clamped identically and its rows should be stamped identically.
+    config.capitalCeilingUsd,
   );
   const controlBreakerState = new InMemoryBreakerStatePersistence();
   const controlArmWiring = buildControlArmWiring({

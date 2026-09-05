@@ -1160,4 +1160,70 @@ describe('SqliteExecutionStore', () => {
       expect(armsOf(db, 'open_positions')).toEqual(['key-1=live']);
     });
   });
+
+  /**
+   * #1112 AC5, migration 0045 — the sizing regime a row was written under,
+   * so a `closed_trades`/`arm_comparison_samples` window can tell whether it
+   * mixes rows sized off funded equity (no declared ceiling) with rows sized
+   * off the declared book.
+   */
+  describe('sizing capital ceiling stamp (#1112)', () => {
+    function ceilingsOf(db: Db, table: 'open_positions' | 'closed_trades'): (number | null)[] {
+      return (
+        db
+          .prepare(`SELECT sizing_capital_ceiling_gbp FROM ${table} ORDER BY idempotency_key`)
+          .all() as { sizing_capital_ceiling_gbp: number | null }[]
+      ).map((row) => row.sizing_capital_ceiling_gbp);
+    }
+
+    it('stamps both tables with the ceiling the constructor was given', async () => {
+      const db = openSharedStore(':memory:');
+      const store = new SqliteExecutionStore(db, 'live', 1_000);
+
+      await store.writeAheadPosition(makePosition({ idempotency_key: 'ceiling-key' }));
+      await store.applyLotAdvance({
+        idempotency_key: 'ceiling-key',
+        fills: [],
+        closed_trade: makeClosedTrade({ idempotency_key: 'ceiling-key' }),
+      });
+
+      expect(ceilingsOf(db, 'open_positions')).toEqual([1_000]);
+      expect(ceilingsOf(db, 'closed_trades')).toEqual([1_000]);
+    });
+
+    it('stamps NULL when no ceiling is given — the true pre-#1112 and backtest state, not a placeholder', async () => {
+      const { db, store } = makeStore();
+      await store.writeAheadPosition(makePosition());
+
+      expect(ceilingsOf(db, 'open_positions')).toEqual([null]);
+    });
+
+    it('a window mixing a declared ceiling with none is a real, queryable property', async () => {
+      const db = openSharedStore(':memory:');
+      const unclamped = new SqliteExecutionStore(db);
+      const clamped = new SqliteExecutionStore(db, 'live', 1_000);
+
+      await unclamped.writeAheadPosition(makePosition({ idempotency_key: 'pre-fix' }));
+      await unclamped.applyLotAdvance({
+        idempotency_key: 'pre-fix',
+        fills: [],
+        closed_trade: makeClosedTrade({ idempotency_key: 'pre-fix' }),
+      });
+      await clamped.writeAheadPosition(makePosition({ idempotency_key: 'post-fix' }));
+      await clamped.applyLotAdvance({
+        idempotency_key: 'post-fix',
+        fills: [],
+        closed_trade: makeClosedTrade({ idempotency_key: 'post-fix' }),
+      });
+
+      const distinctCeilings = db
+        .prepare(
+          'SELECT DISTINCT sizing_capital_ceiling_gbp FROM closed_trades ORDER BY sizing_capital_ceiling_gbp',
+        )
+        .all() as { sizing_capital_ceiling_gbp: number | null }[];
+      // More than one distinct value in the window: exactly the condition a
+      // report must refuse to average over.
+      expect(distinctCeilings).toHaveLength(2);
+    });
+  });
 });

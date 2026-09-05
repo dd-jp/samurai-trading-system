@@ -1,0 +1,41 @@
+-- The sizing regime a lot was written under (#1112, AC5).
+--
+-- #1112 found that paper's Trader sized every entry against the simulated
+-- broker's funded equity (~$100,000) rather than the declared book
+-- (`LIVE_BOOK_GBP`, £1,000) — `capitalCeilingUsd` was `undefined` for paper,
+-- so `sizingEquity` (direct-bind.ts) never clamped. The fix makes
+-- `capitalCeilingUsd` non-`undefined` for paper for the first time. That
+-- changes the SCALE of every notional (and therefore every realized pnl) a
+-- row after the fix carries, by roughly the ratio of the two equities — so a
+-- `closed_trades` window straddling the fix mixes two incomparable scales
+-- into one `return_pct` (`buildArmComparison`), and nothing before this
+-- migration could tell the two kinds of row apart.
+--
+-- ## Why nullable, not `DEFAULT 0`/`DEFAULT 'live'`
+--
+-- Migrations 0033 and 0035 default to the value every existing row actually
+-- had. This column follows the same rule, but here that value is `NULL`:
+-- every row written before this migration was sized with `capitalCeilingUsd
+-- === undefined` (paper's ceiling did not exist yet; the same was already
+-- true for backtest and remains true for it), so NULL is not "unknown" here
+-- — it is the true, historically-accurate record of "no declared ceiling was
+-- in effect." A `DEFAULT 0` would read as a real ceiling of zero.
+--
+-- ## Why a value, not a boolean
+--
+-- The ceiling itself, not a `sized_post_1112` flag, so a report can also
+-- catch the narrower case of the SAME regime at two different ceiling
+-- values (an operator changing `LIVE_BOOK_GBP` or
+-- `SAMURAI_LIVE_MAX_CAPITAL_USD` mid-window) — `GROUP BY
+-- sizing_capital_ceiling_gbp` over a window answers both "is this window
+-- entirely post-fix" and "is it entirely on one declared book" in the same
+-- column.
+--
+-- ## ALTER TABLE, not a rebuild
+--
+-- Same reasoning as 0033/0035/0037: an additive, nullable column with no
+-- CHECK, so SQLite's `ALTER TABLE ... ADD COLUMN` applies without a table
+-- rebuild.
+
+ALTER TABLE open_positions ADD COLUMN sizing_capital_ceiling_gbp REAL;
+ALTER TABLE closed_trades ADD COLUMN sizing_capital_ceiling_gbp REAL;

@@ -159,6 +159,11 @@ export const PAPER_PROFILE_PROVENANCE = {
   // field's own comment for the arithmetic.
   maxConcurrentInstruments: 'DERIVED',
   universe: 'SPEC',
+  // #1112: `LIVE_BOOK_GBP` itself — ADR-0015's 2026-08-18 amendment's £1,000
+  // book, the same literal the arm comparison's `basis` (production.ts,
+  // smoke-run.ts) is stated against. Not DERIVED: nothing here computes it,
+  // it is pinned to the one already-decided figure.
+  capitalCeilingUsd: 'SPEC',
   'traderConfig.conviction_floor': 'SPEC',
   // #668. SPEC rather than DERIVED: close − 5 minutes is not calculated from
   // anything here, it is the value #657 resolved on 2026-08-09 and ADR-0014's
@@ -2499,6 +2504,7 @@ export function paperStartingProfile(
     | 'riskConfig'
     | 'verdictConfig'
     | 'executionConfig'
+    | 'capitalCeilingUsd'
     | 'correlationConfig'
     | 'breakerConfig'
     | 'costConfig'
@@ -2538,6 +2544,31 @@ export function paperStartingProfile(
   return {
     ...buildStartingProfileConfigs(),
     mode,
+    // #1112: `paper` sizes against a simulated Alpaca account whose funded
+    // equity (~$100,000) has nothing to do with the declared book
+    // (`LIVE_BOOK_GBP`) both the arm comparison's `return_pct` basis (below,
+    // and production.ts/smoke-run.ts) and `perTradeSizeCap`'s uncapped gates
+    // are stated against. Without this, `sizingEquity` (direct-bind.ts) never
+    // clamps in paper mode (`capitalCeilingUsd` was `undefined`), so the
+    // Trader sizes off the simulated balance directly — ~100x the book —
+    // which is the defect #1112 reports. `capitalCeilingUsd` is the SAME
+    // clamp `liveStartingProfile()` sets from `SAMURAI_LIVE_MAX_CAPITAL_USD`;
+    // here it is pinned to `LIVE_BOOK_GBP` itself rather than to an
+    // independently-configured value, so paper's sizing denominator and the
+    // arm comparison's `basis` are provably the same literal, not two
+    // constants that happen to agree.
+    //
+    // `buildControlArmWiring` (control-arm-wiring.ts) spreads the live arm's
+    // `TraderStepDeps` verbatim into the control arm's, so this one line
+    // reaches both arms — no separate control-arm override is needed or
+    // wanted (a second knob that has to be kept in sync is exactly what
+    // framing (2) below rejects).
+    //
+    // Scoped to `paper` only, not `backtest`: backtest's cost-model
+    // calibration and Stage-2 tooling read `portfolio.equity` unclamped today
+    // and #1112 does not ask that path to change; widening the blast radius
+    // there is a separate decision.
+    ...(mode === 'paper' ? { capitalCeilingUsd: LIVE_BOOK_GBP } : {}),
     // `backtest` keeps `maxConcurrentInstruments: 1` explicitly (#1013 fix-up
     // H1) rather than inheriting `buildStartingProfileConfigs()`'s `6` —
     // `tick-loop.ts`'s determinism-rationale comment is specific about why: a
