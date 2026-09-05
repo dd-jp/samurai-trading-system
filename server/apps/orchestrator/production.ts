@@ -3700,7 +3700,27 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         // (DESIGN DECISION 1) — not `clock.now()`.
         const feedbackIntervalMs = feedback.intervalMs ?? DEFAULT_FEEDBACK_INTERVAL_MS;
         const feedbackBoundaryNow = currentBoundary(new Date(), feedbackIntervalMs);
-        const feedbackStoredBoundary = feedbackScheduleStore.lastBoundary();
+        // #1110 gap: an unreadable schedule store is not on the order path —
+        // it must not stop the process that manages open positions from
+        // booting, and `runIfDue` below already swallows the identical
+        // failure, so letting this diagnostic read crash boot would be
+        // incoherent with it.
+        let feedbackStoredBoundary: Date | null = null;
+        let feedbackScheduleReadFailed = false;
+        try {
+          feedbackStoredBoundary = feedbackScheduleStore.lastBoundary();
+        } catch (error) {
+          feedbackScheduleReadFailed = true;
+          logger.log({
+            trace_id: 'startup',
+            stage: 'feedback-loop',
+            level: 'error',
+            message:
+              'could not read the feedback cycle schedule store at startup — proceeding with ' +
+              "boot; runIfDue's own guarded read (below) will retry it on the first pass (#1110)",
+            payload: { error: error instanceof Error ? error.message : String(error) },
+          });
+        }
         const feedbackDueNow = isBoundaryDue(feedbackBoundaryNow, feedbackStoredBoundary);
         // Computed once and carried structurally on BOTH branches' payload
         // (#1110): the due-now branch is a fresh deploy or a restart after an
@@ -3712,15 +3732,20 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
           trace_id: 'startup',
           stage: 'feedback-loop',
           level: 'info',
-          message: feedbackDueNow
-            ? 'daily feedback cycle is due now — catching up on the current boundary, then ' +
-              `resuming the normal schedule, next due at ${feedbackNextDue.toISOString()} (#1110)`
-            : 'daily feedback cycle already ran for the current boundary — next due at ' +
-              `${feedbackNextDue.toISOString()}`,
+          message: feedbackScheduleReadFailed
+            ? 'daily feedback cycle schedule is UNKNOWN — the store could not be read at ' +
+              "startup, so no catch-up decision was made here; runIfDue's own guarded read " +
+              `decides on its first pass, next boundary at ${feedbackNextDue.toISOString()} (#1110)`
+            : feedbackDueNow
+              ? 'daily feedback cycle is due now — catching up on the current boundary, then ' +
+                `resuming the normal schedule, next due at ${feedbackNextDue.toISOString()} (#1110)`
+              : 'daily feedback cycle already ran for the current boundary — next due at ' +
+                `${feedbackNextDue.toISOString()}`,
           payload: {
             boundary: feedbackBoundaryNow.toISOString(),
             interval_ms: feedbackIntervalMs,
             stored_boundary: feedbackStoredBoundary?.toISOString() ?? null,
+            stored_boundary_read_failed: feedbackScheduleReadFailed,
             next_due: feedbackNextDue.toISOString(),
           },
         });

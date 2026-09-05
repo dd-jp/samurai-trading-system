@@ -3665,6 +3665,82 @@ describe('buildProductionOrchestrator', () => {
       await orchestrator.stop();
     });
 
+    it('a throwing schedule store at the startup-log call site does not crash start() — it logs and lets the guarded runIfDue read decide', async () => {
+      const clock = new SimulatedClock(START);
+      const intervalMs = 1_000;
+      const logger = recordingLogger();
+
+      const orchestrator = buildProductionOrchestrator(
+        restartDurableConfig(clock, intervalMs, { logger }),
+      );
+
+      // Sabotage BEFORE `start()`, not after: this is `start()`'s own direct
+      // `lastBoundary()` call for the startup log (production.ts, just above
+      // `scheduleFeedbackCycle`), a separate call site from `runIfDue`'s
+      // guarded one. Before the fix this line threw an uncaught
+      // `SqliteError` straight out of `start()` — dropping the table after
+      // `start()` returns (as "finding 1" above does) never exercises it,
+      // because by then the startup log has already read successfully.
+      db.exec('DROP TABLE feedback_cycle_schedule');
+
+      await expect(orchestrator.start()).resolves.toBeDefined();
+
+      // The startup-log read failure is reported on its own, distinct from
+      // `runIfDue`'s "feedback cycle schedule check failed" message.
+      expect(
+        logger.entries.filter(
+          (entry) =>
+            entry.trace_id === 'startup' &&
+            entry.level === 'error' &&
+            entry.message.includes('could not read the feedback cycle schedule store at startup'),
+        ).length,
+      ).toBe(1);
+
+      // `runIfDue` runs synchronously inside `start()` too (same table, same
+      // failure) — it must be guarded the same way, not left to throw just
+      // because the startup log already swallowed its own copy of the error.
+      expect(
+        logger.entries.filter(
+          (entry) =>
+            entry.trace_id === 'feedback-cycle' &&
+            entry.level === 'error' &&
+            entry.message.includes('feedback cycle schedule check failed'),
+        ).length,
+      ).toBeGreaterThanOrEqual(1);
+
+      // Neither call site could read the store, so no cycle ran yet — the
+      // operator-facing `info` line must not claim a catch-up that did not
+      // happen (the read failed, so `feedbackDueNow` cannot be trusted).
+      expect(sampleRows()).toHaveLength(0);
+      const feedbackScheduleInfoLines = logger.entries.filter(
+        (entry) =>
+          entry.trace_id === 'startup' &&
+          entry.stage === 'feedback-loop' &&
+          entry.level === 'info' &&
+          entry.message.includes('daily feedback cycle'),
+      );
+      expect(feedbackScheduleInfoLines).toHaveLength(1);
+      expect(feedbackScheduleInfoLines[0]?.message).toContain('UNKNOWN');
+      expect(feedbackScheduleInfoLines[0]?.message).not.toContain(
+        'catching up on the current boundary',
+      );
+      expect(feedbackScheduleInfoLines[0]?.payload).toMatchObject({
+        stored_boundary_read_failed: true,
+      });
+
+      // The store recovers and the timer — which still re-armed despite both
+      // failures — catches up on its next fire.
+      db.exec(
+        'CREATE TABLE feedback_cycle_schedule (key TEXT PRIMARY KEY, last_boundary TEXT NOT NULL, updated_at TEXT NOT NULL)',
+      );
+      await advanceBoth(clock, intervalMs);
+
+      expect(sampleRows()).toHaveLength(1);
+      expect(feedbackScheduleLastBoundary()).not.toBeNull();
+
+      await orchestrator.stop();
+    });
+
     it('records the boundary AFTER the cycle runs — a schedule-store write failure does not erase the cycle work, and the unstamped boundary retries on restart (finding 5)', async () => {
       const clock = new SimulatedClock(START);
       const intervalMs = 1_000;
