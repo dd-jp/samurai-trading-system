@@ -8,6 +8,10 @@
  * export surface as well as the entrypoint); every test below relies on that
  * implicitly, since a top-level start would hang the suite.
  */
+import { mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { LogEntry } from '../../shared/index.js';
 import {
   assertStorePathMatchesMode,
@@ -16,6 +20,7 @@ import {
   missingCredentialEnvVars,
   paperStartingProfile,
   REQUIRED_INJECTED_CONFIG,
+  runEntrypointLogRetention,
   startFromEnvironment,
   storePathEncodesTradingMode,
 } from './index.js';
@@ -625,5 +630,89 @@ describe('installFaultHandlers (#714)', () => {
     expect(h.errors.join('')).toMatch(/boom/);
     expect(h.errors.join('')).not.toMatch(/sk-live-must-not-leak/);
     expect(JSON.stringify(h.logged)).not.toMatch(/sk-live-must-not-leak/);
+  });
+});
+
+describe('runEntrypointLogRetention (#1116)', () => {
+  const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'samurai-entrypoint-retention-'));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function backdate(path: string, ageMs: number): string {
+    const seconds = (Date.now() - ageMs) / 1000;
+    writeFileSync(path, 'line\n');
+    utimesSync(path, seconds, seconds);
+    return path;
+  }
+
+  function sinkConfig() {
+    return { filePath: join(dir, 'orchestrator.log'), maxBytes: 1000, maxRotatedFiles: 2 };
+  }
+
+  /** The whole point of the helper: the swept directory comes from the sink path. */
+  it('sweeps the directory holding the configured sink file, and nothing else in it', () => {
+    const stale = backdate(join(dir, 'orchestrator-20260101-0000.log'), 100 * ONE_DAY_MS);
+    const untouched = backdate(join(dir, '.env.local'), 100 * ONE_DAY_MS);
+
+    runEntrypointLogRetention(sinkConfig(), { log: () => {} }, {});
+
+    expect(() => statSync(stale)).toThrow();
+    expect(statSync(untouched).isFile()).toBe(true);
+  });
+
+  it("protects the sink's own rotation generations, and only as many as are configured", () => {
+    const rotated = backdate(join(dir, 'orchestrator.log.2'), 100 * ONE_DAY_MS);
+    const orphaned = backdate(join(dir, 'orchestrator.log.9'), 100 * ONE_DAY_MS);
+
+    runEntrypointLogRetention(sinkConfig(), { log: () => {} }, {});
+
+    expect(statSync(rotated).isFile()).toBe(true);
+    expect(() => statSync(orphaned)).toThrow();
+  });
+
+  it('reads the window and the keep-list from the environment it is handed', () => {
+    const kept = backdate(join(dir, 'supervisor-20260101-0000.log'), 5 * ONE_DAY_MS);
+    const swept = backdate(join(dir, 'orchestrator-20260101-0000.log'), 5 * ONE_DAY_MS);
+
+    runEntrypointLogRetention(
+      sinkConfig(),
+      { log: () => {} },
+      {
+        SAMURAI_LOG_RETENTION_DAYS: '2',
+        SAMURAI_LOG_RETENTION_KEEP: 'supervisor-20260101-0000.log',
+      },
+    );
+
+    expect(statSync(kept).isFile()).toBe(true);
+    expect(() => statSync(swept)).toThrow();
+  });
+
+  /**
+   * The enforcement, not the construction: the helper above only runs on a
+   * real boot if the entrypoint guard calls it, and that guard executes only
+   * under `npm run orchestrator` — no in-process caller can reach it. So the
+   * assertion is over the guard's own source text, sliced from the
+   * `import.meta.url` line so the exported declaration cannot satisfy it.
+   * Precedent for reading a source file in a test:
+   * `pipeline/analysts/analyst-prompt-cost.test.ts`.
+   */
+  it('is called from the entrypoint guard', () => {
+    const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8');
+    const guardIndex = source.indexOf('if (process.argv[1] !== undefined');
+
+    expect(guardIndex).toBeGreaterThan(-1);
+    // Anchored to the start of a line so a commented-out or otherwise
+    // disabled call fails: a `toContain` on the bare call text passes on
+    // `// runEntrypointLogRetention(...)`, which is the exact state this
+    // asserts against — the guard runs only under `node index.js`, so no
+    // in-process test can observe the call's effect instead.
+    expect(source.slice(guardIndex)).toMatch(/^\s*runEntrypointLogRetention\(/m);
   });
 });

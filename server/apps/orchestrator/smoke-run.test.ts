@@ -38,6 +38,7 @@ import {
   FixedAccountStateProvider,
   formatSmokeReport,
   type LoggerResilienceEvidence,
+  type LogRetentionEvidence,
   type MarketDataFetchEvidence,
   MarketDataFetchRecorder,
   type OutsideBenchmarkEvidence,
@@ -287,6 +288,7 @@ function healthyGateOptions(
     exitPath?: ExitPathEvidence;
     cryptoEmulation?: CryptoEmulationEvidence;
     loggerResilience?: LoggerResilienceEvidence;
+    logRetention?: LogRetentionEvidence;
     entrypointFaultGuards?: EntrypointFaultGuardEvidence;
     thresholdClamp?: ThresholdClampEvidence;
     dataFailover?: DataFailoverEvidence;
@@ -319,6 +321,7 @@ function healthyGateOptions(
     exitPath: overrides.exitPath ?? healthyExitPath(),
     cryptoEmulation: overrides.cryptoEmulation ?? healthyCryptoEmulation(),
     loggerResilience: overrides.loggerResilience ?? healthyLoggerResilience(),
+    logRetention: overrides.logRetention ?? healthyLogRetention(),
     entrypointFaultGuards: overrides.entrypointFaultGuards ?? healthyEntrypointFaultGuards(),
     thresholdClamp: overrides.thresholdClamp ?? healthyThresholdClamp(),
     dataFailover: overrides.dataFailover ?? healthyDataFailover(),
@@ -522,6 +525,19 @@ function healthyLoggerResilience(
     lastResortTraceOnStderr: true,
     fatalRecordedInFile: true,
     fatalExitCode: 1,
+    ...overrides,
+  };
+}
+
+/** What `runLogRetentionScenario` reports when the #1116 sweep behaves correctly. */
+function healthyLogRetention(overrides: Partial<LogRetentionEvidence> = {}): LogRetentionEvidence {
+  return {
+    staleFileRemoved: true,
+    freshFileKept: true,
+    protectedFileKeptDespiteAge: true,
+    liveShapedFileKeptDespiteAge: true,
+    nonLogFileKeptDespiteAge: true,
+    bytesReclaimed: 11,
     ...overrides,
   };
 }
@@ -1005,6 +1021,84 @@ describe('evaluateSmokeGate', () => {
 
     expect(gate.passed).toBe(false);
     expect(gate.failures.some((failure) => failure.includes('unknown state'))).toBe(true);
+  });
+
+  // #1116 — the logs/ retention sweep. Each of these fails the gate on its
+  // own, same basis as #714's above: a sweep that doesn't remove stale files
+  // leaves unbounded growth on an always-on host, and one that removes live
+  // ones destroys evidence of a run in progress.
+  it('fails when the retention sweep did not remove a stale file', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        logRetention: healthyLogRetention({ staleFileRemoved: false }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('did not remove a file'))).toBe(true);
+  });
+
+  it('fails when the retention sweep removed a fresh file', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        logRetention: healthyLogRetention({ freshFileKept: false }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(
+      gate.failures.some((failure) => failure.includes('removed a file inside its retention')),
+    ).toBe(true);
+  });
+
+  it('fails when the retention sweep removed a protected path despite its age', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        logRetention: healthyLogRetention({ protectedFileKeptDespiteAge: false }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('passed as protected'))).toBe(true);
+  });
+
+  it('fails when the retention sweep removed an undated bare name despite its age', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        logRetention: healthyLogRetention({ liveShapedFileKeptDespiteAge: false }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('undated bare name'))).toBe(true);
+  });
+
+  it('fails when the retention sweep removed a non-log file', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        logRetention: healthyLogRetention({ nonLogFileKeptDespiteAge: false }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('removed a non-log file'))).toBe(true);
+  });
+
+  it('fails when the retention sweep removed a file but reclaimed no bytes', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        logRetention: healthyLogRetention({ bytesReclaimed: 0 }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('0 bytes reclaimed'))).toBe(true);
   });
 
   // #764 — the service-api and supervisor entrypoint fault guards, on the
