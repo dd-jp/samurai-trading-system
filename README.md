@@ -153,10 +153,11 @@ Alpaca's published limit is **200 requests per minute per account**, shared by t
 | `SAMURAI_LOG_FILE` | `logs/orchestrator.log` | Active log file. Created `0o600` in a `0o700` directory; `logs/` is gitignored |
 | `SAMURAI_LOG_MAX_BYTES` | `16777216` (16 MiB) | Rotate when the active file would exceed this |
 | `SAMURAI_LOG_MAX_FILES` | `10` | Rotated generations kept (`orchestrator.log.1` … `.10`), excluding the active file. On-disk ceiling is therefore ~176 MiB. `0` means **keep nothing**: rotation discards the full file rather than renaming it, so only the last `SAMURAI_LOG_MAX_BYTES` of history survive. It does not mean "never rotate" |
+| `SAMURAI_LOG_RETENTION_DAYS` | `30` | How many days a file in `logs/` may go unmodified before the boot-time sweep (#1116) removes it. `RotatingFileSink` above bounds only its own configured file; everything else a run leaves in `logs/` — a supervisor's own redirected stdout, a hand-run `> logs/orchestrator-DATE.log` — is unbounded without this. The active sink file and its `.1`…`.N` rotation set are excluded from the sweep outright, regardless of age; everything else is judged by mtime, so a file some other still-running process is quietly appending to survives as long as it keeps being written inside the window. 30 days rather than 14 (the soak's own length, #238) so a completed soak's opening days are still on disk when anyone goes looking afterwards. Refused at startup if malformed or `0`, same reasoning as `SAMURAI_MI_ARCHIVE_RETENTION_DAYS` below (`server/apps/orchestrator/log-retention.ts`) |
 
-A malformed value in these three rotation variables is refused at startup rather than defaulted. An **unwritable** path is not: the sink degrades to stdout-only, logs one `warn` saying file logging is off until restart, and the process keeps running — a logging problem must never end a trading run.
+A malformed value in these four variables is refused at startup rather than defaulted. An **unwritable** path is not: the sink degrades to stdout-only, logs one `warn` saying file logging is off until restart, and the process keeps running — a logging problem must never end a trading run.
 
-Retention is deliberately short. These files are the *diagnostic* record; the durable trade record (every signal, order and fill, and so the UK CGT disposal history) is SQLite, and nothing in it depends on a log generation surviving.
+Retention is deliberately short. These files are the *diagnostic* record; the durable trade record (every signal, order and fill, and so the UK CGT disposal history) is SQLite, and nothing in it depends on a log generation, or a whole file in `logs/`, surviving.
 
 #### Optional — verbosity and LLM call capture
 

@@ -117,7 +117,7 @@
  * forever — the run would submit orders and never ingest a fill. One frozen
  * instant for both collapses that gap to zero.
  */
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -264,6 +264,7 @@ import {
   FILL_SYNC_SWEEP_FAILED,
 } from './fill-sync.js';
 import { installFaultHandlers, startFromEnvironment } from './index.js';
+import { sweepStaleLogs } from './log-retention.js';
 import { buildEntrypointLogger, JsonLogger, type StdoutStream } from './logger.js';
 import {
   buildStartingProfileConfigs,
@@ -2303,6 +2304,76 @@ function runLoggerResilienceScenario(): LoggerResilienceEvidence {
 }
 
 /**
+ * What the #1116 retention sweep observed. Every field is an EFFECT of
+ * driving the REAL `sweepStaleLogs` against files on disk — not "the
+ * function exists".
+ */
+export interface LogRetentionEvidence {
+  /** A file well outside the retention window was actually removed. */
+  staleFileRemoved: boolean;
+  /** A file inside the retention window survived — a sweep must not eat evidence of a live run. */
+  freshFileKept: boolean;
+  /** A path passed as `protectedPaths` survived despite being old. */
+  protectedFileKeptDespiteAge: boolean;
+  /** `bytesReclaimed` actually accounted for the file that was removed. */
+  bytesReclaimed: number;
+}
+
+/**
+ * The #1116 retention-sweep scenario — the pre-soak gate's leg for `logs/`
+ * housekeeping.
+ *
+ * `sweepStaleLogsWithLog` is called only from the real entrypoint guard in
+ * `index.ts`'s `import.meta.url` block, which no unit test can reach — the
+ * same limitation `runLoggerResilienceScenario` has for `buildEntrypointLogger`
+ * above. This drives the REAL exported `sweepStaleLogs` against real files in
+ * a temp directory, so a regression in the sweep's own logic fails here; it
+ * proves the exported boot helper behaves correctly, not that the unreachable
+ * guard actually calls it on every real boot.
+ *
+ * The directory goes to `os.tmpdir()`, removed afterwards: like the other
+ * scenarios above, a gate must leave no artefacts in the checkout, and in
+ * particular must never run the sweep against the real `logs/` a soak writes
+ * to.
+ */
+function runLogRetentionScenario(): LogRetentionEvidence {
+  const directory = mkdtempSync(join(tmpdir(), 'samurai-smoke-log-retention-'));
+  try {
+    const oneDayMs = 24 * 60 * 60 * 1000;
+    const stalePath = join(directory, 'orchestrator-20260101-0000.log');
+    const freshPath = join(directory, 'orchestrator-20260904-0000.log');
+    const activePath = join(directory, 'orchestrator.log');
+    writeFileSync(stalePath, 'stale-line\n');
+    writeFileSync(freshPath, 'fresh-line\n');
+    writeFileSync(activePath, 'active-line\n');
+
+    const oldSeconds = (Date.now() - 40 * oneDayMs) / 1000;
+    const recentSeconds = (Date.now() - oneDayMs) / 1000;
+    utimesSync(stalePath, oldSeconds, oldSeconds);
+    utimesSync(activePath, oldSeconds, oldSeconds);
+    utimesSync(freshPath, recentSeconds, recentSeconds);
+
+    // The REAL sweep function, not a stand-in, so a regression that stops
+    // deleting stale files, starts deleting fresh ones, or stops honouring
+    // `protectedPaths` fails this run.
+    const result = sweepStaleLogs({
+      directory,
+      maxAgeMs: 30 * oneDayMs,
+      protectedPaths: [activePath],
+    });
+
+    return {
+      staleFileRemoved: !existsSync(stalePath),
+      freshFileKept: existsSync(freshPath),
+      protectedFileKeptDespiteAge: existsSync(activePath),
+      bytesReclaimed: result.bytesReclaimed,
+    };
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+/**
  * What the #764 entrypoint fault guards observed, per entrypoint. Every field
  * is an EFFECT of driving the REAL exported guard functions
  * (`service-api/fault-guard.ts`, `supervisor/fault-guard.ts`) against a fake
@@ -3690,6 +3761,14 @@ export function evaluateSmokeGate(
      */
     loggerResilience: LoggerResilienceEvidence;
     /**
+     * The logs/ retention sweep's evidence (#1116) — required for the same
+     * "compile error, not a silent no-op" reason the mechanism above is:
+     * `runLogRetentionScenario` always runs as part of `runSmoke`, and
+     * nothing else in this gate, and no unit test, drives the real
+     * `sweepStaleLogs` against files on disk.
+     */
+    logRetention: LogRetentionEvidence;
+    /**
      * The threshold-clamp probe's evidence (#638) — required, not optional,
      * for the same "compile error, not a silent no-op" reason the four above
      * are. What it gates is the only stop ADR-0013 leaves standing: with no
@@ -4186,6 +4265,38 @@ export function evaluateSmokeGate(
         `${logging.fatalExitCode ?? 'no code'} rather than 1 — the fault net must record where ` +
         'a soak can find it and STOP. A live-money process that keeps running in an unknown ' +
         'state with open positions is worse than one that dies (#714)',
+    );
+  }
+
+  // #1116 — the logs/ retention sweep, asserted on its durable effects: a
+  // stale file actually gone, a fresh one and an explicitly protected one
+  // actually surviving. `bytesReclaimed` is aspirational rather than exact
+  // when another process still holds a removed file open, but it is not
+  // aspirational here — the fixture is single-process — so a mutation that
+  // drops the byte accounting on an otherwise-correct removal is caught too.
+  const retention = options.logRetention;
+  if (!retention.staleFileRemoved) {
+    failures.push(
+      'the logs/ retention sweep did not remove a file well outside its retention window — ' +
+        'unbounded growth in logs/ on an always-on host is exactly what #1116 exists to bound',
+    );
+  }
+  if (!retention.freshFileKept) {
+    failures.push(
+      'the logs/ retention sweep removed a file inside its retention window — deleting a ' +
+        'file this recent risks deleting evidence of a run still in progress (#1116)',
+    );
+  }
+  if (!retention.protectedFileKeptDespiteAge) {
+    failures.push(
+      'the logs/ retention sweep removed a path passed as protected despite it being old — ' +
+        "the active sink's own file must survive regardless of mtime (#1116)",
+    );
+  }
+  if (retention.staleFileRemoved && retention.bytesReclaimed <= 0) {
+    failures.push(
+      'the logs/ retention sweep removed a file but reported 0 bytes reclaimed — the byte ' +
+        "accounting a soak's own artefact depends on (#1116) is not tracking what was deleted",
     );
   }
 
@@ -5513,6 +5624,11 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
     // beside the three scenarios above rather than inside any of them.
     const loggerResilience = runLoggerResilienceScenario();
 
+    // #1116: the logs/ retention sweep, on real files in its own temp
+    // directory. Independent of the store and the clock, so it runs beside
+    // the scenarios above rather than inside any of them.
+    const logRetention = runLogRetentionScenario();
+
     // #764: the service-api and supervisor entrypoints' own stdout + fault
     // guards, driven for real — see runEntrypointFaultGuardScenario's doc.
     const entrypointFaultGuards = runEntrypointFaultGuardScenario();
@@ -5559,6 +5675,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       llmRateLimiterSnapshot: llmRateLimiter.snapshot(),
       cryptoEmulation,
       loggerResilience,
+      logRetention,
       entrypointFaultGuards,
       thresholdClamp,
       dataFailover,

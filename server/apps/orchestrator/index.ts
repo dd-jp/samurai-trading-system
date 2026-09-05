@@ -46,7 +46,7 @@
  * process fast, naming every missing variable, rather than starting a
  * half-wired process against real money.
  */
-import { basename, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { ALPACA_CREDENTIAL_ENV_VARS } from '../../pipeline/execution/index.js';
 import { MiArchiveStore, miArchivePath } from '../../providers/market-intelligence/index.js';
@@ -64,6 +64,7 @@ import {
   TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR,
 } from './alert-transport.js';
 import { type LiveStartingProfile, liveStartingProfile } from './live-profile.js';
+import { logRetentionDaysFromEnvironment, sweepStaleLogsWithLog } from './log-retention.js';
 import { buildEntrypointLogger, JsonLogger } from './logger.js';
 import { paperStartingProfile } from './paper-profile.js';
 import { resolveUsEquitySessionCalendar } from './production/us-equity-session-source.js';
@@ -73,6 +74,7 @@ import {
   type ProductionOrchestrator,
   SMOKE_TEST_UNIVERSE,
 } from './production.js';
+import { fileSinkConfigFromEnvironment } from './rotating-file-sink.js';
 import type { Logger } from './types.js';
 
 export { type AlertDeliveryFailure, SqliteAlertDeliveryLog } from './alert-delivery-log.js';
@@ -880,8 +882,33 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
     // asynchronous on a pipe rather than a throw — degrades to the file
     // instead of reaching the handler installed next. That handler is the
     // opposite posture on purpose: it ends the process. See both doc comments.
-    const entrypointLogger = buildEntrypointLogger();
+    const fileSinkConfig = fileSinkConfigFromEnvironment();
+    const entrypointLogger = buildEntrypointLogger(fileSinkConfig);
     installFaultHandlers(entrypointLogger);
+    // #1116: `RotatingFileSink` bounds only `fileSinkConfig.filePath` — every
+    // other file a run leaves in `logs/` (a supervisor's own redirected
+    // stdout, a hand-run `> logs/orchestrator-DATE.log`) is unbounded, which
+    // is unattended growth on the host holding live position state. Swept
+    // here rather than inside `buildProductionComponents`, matching
+    // `buildEntrypointLogger` above: a real filesystem side effect belongs on
+    // the deployment path, not on every test's composition root. The active
+    // sink file and its rotation set are named explicitly so this sweep never
+    // fights `RotatingFileSink`'s own count-based retention over the same
+    // files; see `log-retention.ts` for the rest of the liveness rule.
+    sweepStaleLogsWithLog(
+      {
+        directory: dirname(fileSinkConfig.filePath),
+        maxAgeMs: logRetentionDaysFromEnvironment() * 24 * 60 * 60 * 1000,
+        protectedPaths: [
+          fileSinkConfig.filePath,
+          ...Array.from(
+            { length: fileSinkConfig.maxRotatedFiles },
+            (_, index) => `${fileSinkConfig.filePath}.${index + 1}`,
+          ),
+        ],
+      },
+      entrypointLogger,
+    );
     const mode = parseMode(process.env.SAMURAI_MODE);
     // #684. Resolved HERE, at the real deployment, and not inside
     // `startFromEnvironment` itself — deliberately, the same reason
