@@ -35,13 +35,15 @@
  * - **The name must be archival-shaped**: either a `RotatingFileSink`
  *   generation (`orchestrator.log.1`) or a datestamped artefact
  *   (`orchestrator-20260902-1842.log`, `supervisor-20260904-1020-v3.log`,
- *   `soak-boot-20260903-1007.out`). Every file a run finishes with carries
- *   one of those two shapes; the files a run is still WRITING carry the
- *   undated bare name (`orchestrator.log`, `service-api.log`,
- *   `soak-boot.out`). Making an undated bare name ineligible for age-based
- *   deletion outright is what closes the descriptor gap below structurally
- *   instead of probabilistically, and it makes `.env.local`, `LICENSE` and
- *   every other non-log file ineligible as a side effect of the same rule.
+ *   `soak-boot-20260903-1007.out`). The rule is one-directional and only
+ *   one-directional: an undated bare name is never swept, which is what
+ *   closes the descriptor gap below structurally rather than
+ *   probabilistically, and makes `.env.local`, `LICENSE` and every other
+ *   non-log file ineligible as a side effect. The converse does NOT hold —
+ *   an archival-shaped name is not evidence the file is finished
+ *   (`supervisor-20260904-1020-v3.log` is datestamped and was live at
+ *   #1116's audit), and a finished file is not always archival-shaped
+ *   (`soak-boot.out` is bare, so it stays unbounded; see #1116's gap 1).
  *
  * ## Liveness rule
  *
@@ -77,11 +79,14 @@
  *   is worse than losing a file: the writer keeps appending to the now
  *   unlinked inode, so the space stays allocated but invisible to `ls`/`du`
  *   and the content is unrecoverable when the writer exits — the fix for
- *   unbounded growth would become invisible unbounded growth. What makes
- *   this unreachable is the archival-name rule above, not the window:
- *   `service-api.log` is an undated bare name and can never be a candidate.
- *   Recency is the last check on files that already look finished, not the
- *   thing standing between a live writer and deletion.
+ *   unbounded growth would become invisible unbounded growth. For a BARE
+ *   name the archival-name rule above removes that reachability entirely —
+ *   `service-api.log` can never be a candidate, whatever its mtime. For a
+ *   datestamped name it does not: the name rule contributes nothing, so a
+ *   live datestamped file rests on the descriptor check, which covers the
+ *   supervisor-spawned path (inherited fd 1/2) and nothing else. A sibling
+ *   process writing one slowly enough to age past the window is the residual
+ *   case, and `SAMURAI_LOG_RETENTION_KEEP` is the only thing that closes it.
  *
  * `protectedPaths` is a third, deterministic backstop: this process's OWN
  * configuration can name a file outright (the active rotating sink's path,

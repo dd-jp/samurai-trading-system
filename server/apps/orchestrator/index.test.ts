@@ -708,6 +708,11 @@ describe('runEntrypointLogRetention (#1116)', () => {
     const guardIndex = source.indexOf('if (process.argv[1] !== undefined');
 
     expect(guardIndex).toBeGreaterThan(-1);
-    expect(source.slice(guardIndex)).toContain('runEntrypointLogRetention(fileSinkConfig');
+    // Anchored to the start of a line so a commented-out or otherwise
+    // disabled call fails: a `toContain` on the bare call text passes on
+    // `// runEntrypointLogRetention(...)`, which is the exact state this
+    // asserts against — the guard runs only under `node index.js`, so no
+    // in-process test can observe the call's effect instead.
+    expect(source.slice(guardIndex)).toMatch(/^\s*runEntrypointLogRetention\(/m);
   });
 });
