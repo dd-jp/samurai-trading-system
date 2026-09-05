@@ -2666,10 +2666,10 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
     it('fails when a genuine rejection happened and nothing was logged at debug', () => {
       // The mutation this check exists to catch, verified by hand: delete
       // `logger` from `production.ts`'s `new AnalystOrchestrator({...})` and
-      // `yarn smoke` goes red here, while every unit test stays green (the
-      // orchestrator falls back to its internal NOOP_LOGGER, which is a
+      // the orchestrator falls back to its internal NOOP_LOGGER — a
       // legitimate default for every caller EXCEPT the one composition root
-      // this check is aimed at).
+      // this check is aimed at, which is why the fallback cannot be a type
+      // error and has to be caught here instead.
       const gate = evaluateSmokeGate(
         transactedObservations(),
         healthyGateOptions({

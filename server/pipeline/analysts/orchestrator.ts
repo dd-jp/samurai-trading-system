@@ -106,11 +106,6 @@ export interface AnalystOrchestratorDeps {
    * way `telemetry` above is: optional here, with a safe no-op default
    * (`NOOP_LOGGER`) rather than a missing field, so a caller that omits it
    * gets silence, not a crash, and `production.ts` wires the real one.
-   *
-   * Everything this class logs through it is `debug` — the existing
-   * error/warn "quorum NOT met" line (`analysts-adapter.ts`) is unchanged by
-   * this dependency; it only adds the cause that line's `reason` string had
-   * already collapsed away.
    */
   logger?: Logger;
 }
@@ -144,11 +139,25 @@ const NOOP_LOGGER: Logger = {
  * query params, and `cause` is arbitrary.
  */
 function renderErrorDetail(error: unknown): Record<string, unknown> {
+  try {
+    return renderErrorFields(error);
+  } catch {
+    // Guards the RENDER, which `safeLog` cannot: a hostile value's throwing
+    // `toString`/`Symbol.toPrimitive` (or a lazy `stack`/`message` getter)
+    // throws while the payload is still being built, before `safeLog`'s own
+    // try/catch is ever entered — `logCaughtFailure`'s doc comment describes
+    // the same hole. On the late-settlement path the escape would reject a
+    // derived promise nobody holds, which Node 22 turns into process exit.
+    return { message: '[unrenderable error]' };
+  }
+}
+
+function renderErrorFields(error: unknown): Record<string, unknown> {
   if (!(error instanceof Error)) {
     return { message: sanitizeLogText(describeThrown(error)) };
   }
   const detail: Record<string, unknown> = {
-    name: error.name,
+    name: sanitizeLogText(error.name),
     message: sanitizeLogText(error.message),
   };
   if (typeof error.stack === 'string') {

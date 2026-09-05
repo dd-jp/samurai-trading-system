@@ -5,7 +5,7 @@ import {
   SqliteMarketDataStore,
 } from '../../providers/market-data-service/index.js';
 import { MarketIntelligenceStore } from '../../providers/market-intelligence/index.js';
-import type { Clock } from '../../shared/index.js';
+import { type Clock, MAX_ERROR_BODY_CHARS } from '../../shared/index.js';
 import { recordingLogger } from '../../shared/recording-logger.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import type { AnalystView } from '../debate-engine/index.js';
@@ -785,6 +785,91 @@ describe('AnalystOrchestrator', () => {
           cause: expect.stringContaining('root cause: malformed payload'),
         });
       }
+    });
+
+    it('masks credentials and caps the stack — the widest text surface #1114 adds', async () => {
+      const { clock, marketData, marketIntelligence } = buildDeps('crypto');
+      const logger = recordingLogger();
+      const cause = new Error('POST /v1/chat failed: Bearer sk-live-abcdef0123456789');
+      const failing: Analyst = {
+        analyst_type: 'technical',
+        role: 'mandatory',
+        applies_to: () => true,
+        run: async () => {
+          const error = new Error('technical unavailable', { cause });
+          error.stack = `Error: technical unavailable\n${'    at frame (/app/x.js:1:1)\n'.repeat(60)}`;
+          throw error;
+        },
+      };
+      const orchestrator = new AnalystOrchestrator(
+        { market_data: marketData, market_intelligence: marketIntelligence, logger },
+        [failing],
+      );
+
+      await orchestrator.runAnalysts(
+        'trace-secret',
+        { asset: INSTRUMENT, asset_class: 'crypto' },
+        clock,
+        ASOF,
+      );
+
+      const payload = logger.entries.find((entry) => entry.level === 'debug')?.payload as
+        | { cause?: string; stack?: string }
+        | undefined;
+      expect(payload?.cause).toContain('[REDACTED]');
+      expect(payload?.cause).not.toContain('sk-live-abcdef0123456789');
+      // A stack is thousands of chars of upstream-controlled text and is the
+      // one field here never logged before #1114; the cap is what keeps a
+      // debug line from carrying the whole frame list into the soak log.
+      // `truncateForError` appends its own "chars total" note past the bound,
+      // so the kept prefix is what MAX_ERROR_BODY_CHARS limits, not the whole
+      // string.
+      expect(payload?.stack).toContain('(truncated,');
+      expect(payload?.stack?.split('… (truncated,')[0]?.length).toBeLessThanOrEqual(
+        MAX_ERROR_BODY_CHARS,
+      );
+    });
+
+    it('logs a placeholder rather than throwing when the caught value cannot be rendered', async () => {
+      const { clock, marketData, marketIntelligence } = buildDeps('crypto');
+      const logger = recordingLogger();
+      const failing: Analyst = {
+        analyst_type: 'technical',
+        role: 'mandatory',
+        applies_to: () => true,
+        run: async () => {
+          const error = new Error('technical unavailable');
+          // A lazily-computed `stack` is real: several runtimes and error
+          // wrappers define it as a getter. #1114 is what first put this
+          // field in a log payload, so its throw is this diff's to contain.
+          Object.defineProperty(error, 'stack', {
+            get(): string {
+              throw new Error('render boom');
+            },
+          });
+          throw error;
+        },
+      };
+      const orchestrator = new AnalystOrchestrator(
+        { market_data: marketData, market_intelligence: marketIntelligence, logger },
+        [failing],
+      );
+
+      // The render happens while the payload is still being built, so a throw
+      // here escapes `safeLog` entirely: at the catch site it would turn a
+      // handled analyst failure into a failed tick, and on the late path it
+      // would reject a promise nobody holds, which Node 22 exits on.
+      const result = await orchestrator.runAnalysts(
+        'trace-hostile',
+        { asset: INSTRUMENT, asset_class: 'crypto' },
+        clock,
+        ASOF,
+      );
+
+      expect(result.skipped).toBe(true);
+      expect(logger.entries.find((entry) => entry.level === 'debug')?.payload).toMatchObject({
+        message: '[unrenderable error]',
+      });
     });
 
     it('never logs above debug — the existing error/warn posture is unchanged', async () => {
