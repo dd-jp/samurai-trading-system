@@ -7,11 +7,9 @@ import {
   formatStageDuration,
   formatUsd,
 } from '../../lib/format.ts';
+import { resolveLaneCells } from '../../lib/lane-cells.ts';
 import { settledOutcome } from '../../lib/ledger.ts';
-import { presentCell } from '../../lib/state-presentation.ts';
 import {
-  cellsByStageOf,
-  decisionOf,
   fillsFor,
   laneFor,
   latestDebateFor,
@@ -53,7 +51,6 @@ function laneName(lane: PipelineLane): string {
 
 function LaneRow(props: { lane: PipelineLane; selected: boolean; onSelect: () => void }) {
   const { lane, selected, onSelect } = props;
-  const cellsByStage = cellsByStageOf(lane);
   const settled = settledOutcome(lane.outcome);
   return (
     <li>
@@ -70,23 +67,20 @@ function LaneRow(props: { lane: PipelineLane; selected: boolean; onSelect: () =>
           {settled !== null && <Seal outcome={settled} />}
           <b className="display lane-instrument">{lane.instrument}</b>
         </span>
-        {PIPELINE_STAGES.map((stage) => {
-          const cell = cellsByStage.get(stage);
-          if (cell === undefined) {
-            return (
-              <span key={stage} className="lane-cell" data-stage={stage}>
-                <StateWord state={{ word: 'no cell', tone: 'wait' }} />
-              </span>
-            );
-          }
-          const decision = decisionOf(cell);
-          return (
-            <span key={stage} className="lane-cell" data-stage={stage} data-state={cell.state}>
-              <StateWord state={presentCell(cell.state, lane.outcome)} />
-              {decision !== null && <span className="lane-decision">{decision}</span>}
-            </span>
-          );
-        })}
+        {resolveLaneCells(lane).map((cell) => (
+          <span
+            key={cell.stage}
+            className="lane-cell"
+            data-stage={cell.stage}
+            // Same hook the drawer timeline sets (#1080, #1142) — a degraded
+            // decision must read differently on the surface an operator
+            // scans first, not only once they open the trace.
+            data-degraded={cell.degraded ? 'true' : undefined}
+          >
+            <StateWord state={{ word: cell.word, tone: cell.tone }} />
+            {cell.decision !== null && <span className="lane-decision">{cell.decision}</span>}
+          </span>
+        ))}
       </button>
     </li>
   );

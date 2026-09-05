@@ -7,18 +7,7 @@
  * round-by-round debate state (decision #10) — and the page repeats that
  * rather than papering over it with a dash.
  */
-import {
-  DEGRADED_DECISIONS,
-  type DebateRow,
-  type FillRow,
-  isDegradedDecision,
-  PIPELINE_STAGES,
-  type PipelineCell,
-  type PipelineLane,
-  type PipelineStage,
-  type RiskCriticRow,
-  type VerdictRow,
-} from '@contracts';
+import type { DebateRow, FillRow, PipelineLane, RiskCriticRow, VerdictRow } from '@contracts';
 import {
   formatClockUtc,
   formatFixed,
@@ -26,76 +15,48 @@ import {
   formatQty,
   formatStageDuration,
 } from '../lib/format.ts';
+import { resolveLaneCells } from '../lib/lane-cells.ts';
 import {
-  presentCell,
   presentCondition,
   presentCriticVerdict,
   presentVerdictStatus,
 } from '../lib/state-presentation.ts';
-import { cellsByStageOf, decisionOf } from '../lib/trace.ts';
 import { stageName } from '../lib/vocabulary.ts';
 import { StanceStrip } from './StanceStrip.tsx';
 import { StateWord } from './StateWord.tsx';
 
-const STAGES_WITHOUT_RECORDED_DECISION: readonly PipelineStage[] = ['trader', 'risk'];
-
-/**
- * The sentence that separates a degraded stage from a market outcome (#1080).
- *
- * `budget_exhausted` on its own is a word an operator has to look up, and the
- * thing it has to be told apart from — a debate that genuinely found nothing —
- * renders as the equally bare `neutral`. The gloss travels with the word from
- * `contracts/`, so the server that writes it and the page that explains it
- * cannot disagree about what it means.
- */
-function decisionText(cell: PipelineCell): string {
-  const decision = decisionOf(cell);
-  if (isDegradedDecision(decision)) return `${decision} — ${DEGRADED_DECISIONS[decision]}`;
-  if (decision !== null) return decision;
-  if (cell.state === 'not_reached') return 'not reached';
-  if (cell.state === 'skipped') return 'skipped — the tick continued';
-  if (cell.state === 'live') return 'in progress';
-  if (STAGES_WITHOUT_RECORDED_DECISION.includes(cell.stage)) {
-    return 'no decision word recorded (#328)';
-  }
-  return 'no decision recorded';
-}
-
 export function Timeline({ lane }: { lane: PipelineLane }) {
-  const cellsByStage = cellsByStageOf(lane);
   return (
     <ol className="timeline" aria-label="Stage timeline">
-      {PIPELINE_STAGES.map((stage) => {
-        const cell = cellsByStage.get(stage);
-        if (cell === undefined) {
+      {resolveLaneCells(lane).map((cell) => {
+        if (!cell.present) {
           return (
-            <li key={stage} className="timeline-row" data-stage={stage}>
-              <span className="timeline-stage">{stageName(stage)}</span>
+            <li key={cell.stage} className="timeline-row" data-stage={cell.stage}>
+              <span className="timeline-stage">{stageName(cell.stage)}</span>
               <span className="muted">no cell for this stage on the wire</span>
             </li>
           );
         }
         return (
           <li
-            key={stage}
+            key={cell.stage}
             className="timeline-row"
-            data-stage={stage}
-            data-state={cell.state}
+            data-stage={cell.stage}
             // Set only when it applies, so a test (and a stylesheet) can select
             // the degraded rows without matching every healthy one (#1080).
-            data-degraded={isDegradedDecision(decisionOf(cell)) ? 'true' : undefined}
+            data-degraded={cell.degraded ? 'true' : undefined}
           >
             <span className="timeline-stage">
-              {stageName(stage)}
-              <StateWord state={presentCell(cell.state, lane.outcome)} />
+              {stageName(cell.stage)}
+              <StateWord state={{ word: cell.word, tone: cell.tone }} />
             </span>
             <span className="timeline-decision">
-              {decisionText(cell)}
+              {cell.decisionText}
               {cell.attempts > 1 ? ` · ${cell.attempts} attempts` : ''}
             </span>
             <span className="timeline-duration mono muted">
-              {cell.recorded_at !== null ? `${formatClockUtc(cell.recorded_at)} · ` : ''}
-              {formatStageDuration(cell.duration_ms)}
+              {cell.recordedAt !== null ? `${formatClockUtc(cell.recordedAt)} · ` : ''}
+              {formatStageDuration(cell.durationMs)}
             </span>
           </li>
         );
