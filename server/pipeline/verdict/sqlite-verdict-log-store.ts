@@ -55,8 +55,9 @@ export class SqliteVerdictLogStore implements VerdictLogStore {
     this.db
       .prepare(
         `INSERT INTO verdict_log (
-           trace_id, idempotency_key, instrument, status, no_go_reason, hitl_override, timestamp
-         ) VALUES (?, ?, ?, ?, ?, ?, ?)
+           trace_id, idempotency_key, instrument, status, no_go_reason,
+           no_go_detail_measured_ms, no_go_detail_bound_ms, hitl_override, timestamp
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(trace_id) DO NOTHING`,
       )
       .run(
@@ -65,6 +66,8 @@ export class SqliteVerdictLogStore implements VerdictLogStore {
         entry.instrument,
         entry.status,
         entry.no_go_reason,
+        entry.no_go_detail_measured_ms,
+        entry.no_go_detail_bound_ms,
         entry.hitl_override ? 1 : 0,
         toStoredTimestamp(entry.timestamp),
       );

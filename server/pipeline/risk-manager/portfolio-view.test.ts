@@ -75,6 +75,11 @@ function makeInput(overrides: Partial<PortfolioAccountingInput> = {}): Portfolio
     positions: [],
     marketData: makeMarketData({}),
     asOf,
+    // The default pass is instantaneous: marks come back at the same instant
+    // the tick asked for them, so `readAt` and `asOf` coincide and every case
+    // written before #1111 keeps its original arithmetic. The pass-latency
+    // cases below set their own clock.
+    clock: { now: () => asOf },
     cash: 100_000,
     peak_equity: 100_000,
     daily_basis: {
@@ -366,7 +371,7 @@ describe('computePortfolioView — feed staleness (#640)', () => {
     // and daily PnL all derive from this number, so a frozen mark freezes
     // every limit that reads it — including the drawdown breaker, during
     // exactly the conditions that trip it.
-    await expect(computePortfolioView(input)).rejects.toThrow(/exceeds the 900000ms bound/);
+    await expect(computePortfolioView(input)).rejects.toThrow(/past the 900000ms bound/);
   });
 
   it('names the instrument and the observed age', async () => {
@@ -378,7 +383,7 @@ describe('computePortfolioView — feed staleness (#640)', () => {
     });
 
     await expect(computePortfolioView(input)).rejects.toThrow(/'AAPL'/);
-    await expect(computePortfolioView(input)).rejects.toThrow(/1200000ms before/);
+    await expect(computePortfolioView(input)).rejects.toThrow(/1200000ms old when read at/);
   });
 
   it('says so explicitly when the mark is AHEAD of our clock', async () => {
@@ -392,7 +397,7 @@ describe('computePortfolioView — feed staleness (#640)', () => {
     // A future observation is a clock disagreement, not a fresh mark, and the
     // operator reading the log needs to be pointed at the clock rather than at
     // the feed.
-    await expect(computePortfolioView(input)).rejects.toThrow(/AHEAD of our clock/);
+    await expect(computePortfolioView(input)).rejects.toThrow(/AHEAD of/);
   });
 
   // #939: `asOf` is the tick's START instant, and `getMark` is called some
@@ -423,6 +428,96 @@ describe('computePortfolioView — feed staleness (#640)', () => {
     await expect(computePortfolioView(input)).resolves.toBeDefined();
   });
 
+  // #1111: #939 bounded the same artifact at a 5000ms constant, calibrated
+  // against the two sub-second cases above. The offset is our own elapsed time
+  // between `asOf` and the read, so it scales with the pass — the 2026-09-04
+  // paper session produced 67 refusals between 5020ms and ~145s ahead, not one
+  // of them a mark past its own age bound. Freshness now measures from the
+  // READ instant, at which no such offset exists at any pass duration.
+  //
+  // The offsets below are that session's real ones, from `orchestrator.log`
+  // (AC7), each with its own instrument.
+  describe('pass latency does not refuse the book (#1111)', () => {
+    it.each([
+      ['GOOGL', 5_022],
+      ['META', 55_815],
+      ['MARA', 82_730],
+      ['COIN', 89_718],
+      ['MSTR', 144_576],
+    ])('values the book when %s’s mark arrives %sms after asOf, itself fresh', async (instrument, passLatencyMs) => {
+      const readAt = new Date(asOf.getTime() + passLatencyMs);
+      const input = makeInput({
+        positions: [makePosition({ instrument })],
+        clock: { now: () => readAt },
+        marketData: makeMarketDataObservedAt({
+          // Stamped a beat before the read returned, which is where a live
+          // quote clock puts it — and far ahead of `asOf`, which is what the
+          // pre-#1111 coordinate refused on.
+          [instrument]: { price: 100, observed_at: new Date(readAt.getTime() - 200) },
+        }),
+      });
+
+      await expect(computePortfolioView(input)).resolves.toBeDefined();
+    });
+
+    it('still refuses a mark genuinely past its bound, however long the pass took', async () => {
+      // #640 is not weakened by the coordinate change: same 145s pass, but the
+      // mark has not printed for 20 minutes.
+      const input = makeInput({
+        positions: [makePosition()],
+        clock: { now: () => new Date(asOf.getTime() + 144_576) },
+        marketData: makeMarketDataObservedAt({
+          AAPL: { price: 100, observed_at: new Date(asOf.getTime() - 20 * 60_000) },
+        }),
+      });
+
+      await expect(computePortfolioView(input)).rejects.toThrow(StaleMarkError);
+    });
+
+    it('never blames the clocks for a slow pass, at any magnitude', async () => {
+      // AC4. The old message asserted "the two disagree" for what was only our
+      // own elapsed time; that reading must be unreachable from pass latency.
+      const input = makeInput({
+        positions: [makePosition()],
+        clock: { now: () => new Date(asOf.getTime() + 144_576) },
+        marketData: makeMarketDataObservedAt({
+          AAPL: { price: 100, observed_at: new Date(asOf.getTime() - 20 * 60_000) },
+        }),
+      });
+
+      await expect(computePortfolioView(input)).rejects.toThrow(/past the 900000ms bound/);
+      await expect(computePortfolioView(input)).rejects.not.toThrow(/AHEAD/);
+    });
+
+    it('reports how long the pass took alongside the refusal', async () => {
+      const input = makeInput({
+        positions: [makePosition()],
+        clock: { now: () => new Date(asOf.getTime() + 55_815) },
+        marketData: makeMarketDataObservedAt({
+          AAPL: { price: 100, observed_at: new Date(asOf.getTime() - 20 * 60_000) },
+        }),
+      });
+
+      await expect(computePortfolioView(input)).rejects.toThrow(/read it 55815ms after its asOf/);
+    });
+
+    it('still reports a mark stamped ahead of the READ instant as a clock disagreement', async () => {
+      // AC2's other half: the distinction survives. A mark the venue stamped
+      // after we already had it in hand cannot be pass latency at all.
+      const readAt = new Date(asOf.getTime() + 55_815);
+      const input = makeInput({
+        positions: [makePosition()],
+        clock: { now: () => readAt },
+        marketData: makeMarketDataObservedAt({
+          AAPL: { price: 100, observed_at: new Date(readAt.getTime() + 60_000) },
+        }),
+      });
+
+      await expect(computePortfolioView(input)).rejects.toThrow(/60000ms AHEAD of/);
+      await expect(computePortfolioView(input)).rejects.toThrow(/clock and the venue.s disagree/);
+    });
+  });
+
   it('applies the bound for each position’s OWN asset class', async () => {
     // One mark age, 5 minutes, held under both classes: past the 2-minute
     // crypto bound, inside the 15-minute stocks one.
@@ -446,7 +541,7 @@ describe('computePortfolioView — feed staleness (#640)', () => {
     });
 
     await expect(computePortfolioView(asStocks)).resolves.toBeDefined();
-    await expect(computePortfolioView(asCrypto)).rejects.toThrow(/exceeds the 120000ms bound/);
+    await expect(computePortfolioView(asCrypto)).rejects.toThrow(/past the 120000ms bound/);
   });
 
   it('takes the class from the POSITION, not from the mark the source returned', async () => {

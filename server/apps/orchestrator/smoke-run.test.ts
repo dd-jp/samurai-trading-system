@@ -164,7 +164,16 @@ function transactedObservations(): SmokeObservations {
         termination: 'converged',
       },
     ],
-    verdicts: [{ trace_id: 'trace-1', instrument: 'BTC-USD', status: 'go', no_go_reason: null }],
+    verdicts: [
+      {
+        trace_id: 'trace-1',
+        instrument: 'BTC-USD',
+        status: 'go',
+        no_go_reason: null,
+        no_go_detail_measured_ms: null,
+        no_go_detail_bound_ms: null,
+      },
+    ],
     positions: [
       {
         idempotency_key: 'idem-1',
@@ -1020,6 +1029,8 @@ describe('evaluateSmokeGate', () => {
             instrument: 'BTC-USD',
             status: 'no_go',
             no_go_reason: 'stale_signal',
+            no_go_detail_measured_ms: null,
+            no_go_detail_bound_ms: null,
           },
         ],
       },
@@ -1028,6 +1039,60 @@ describe('evaluateSmokeGate', () => {
 
     expect(gate.passed).toBe(false);
     expect(gate.failures.some((failure) => failure.includes('no_go:stale_signal'))).toBe(true);
+  });
+
+  it('fails when a staleness no-go recorded no measurement (#1111)', () => {
+    // The column is written by `buildVerdictLog` for exactly these two gates;
+    // a NULL here means that projection stopped happening and the row is back
+    // to naming a gate without the number behind it.
+    const observations = transactedObservations();
+    const gate = evaluateSmokeGate(
+      {
+        ...observations,
+        verdicts: [
+          ...observations.verdicts,
+          {
+            trace_id: 'trace-2',
+            instrument: 'BTC-USD',
+            status: 'no_go',
+            no_go_reason: 'stale_feed',
+            no_go_detail_measured_ms: null,
+            no_go_detail_bound_ms: null,
+          },
+        ],
+      },
+      healthyGateOptions(),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(
+      gate.failures.some((failure) => failure.includes('without recording what was measured')),
+    ).toBe(true);
+  });
+
+  it('passes a staleness no-go that recorded its measurement (#1111)', () => {
+    const observations = transactedObservations();
+    const gate = evaluateSmokeGate(
+      {
+        ...observations,
+        verdicts: [
+          ...observations.verdicts,
+          {
+            trace_id: 'trace-2',
+            instrument: 'BTC-USD',
+            status: 'no_go',
+            no_go_reason: 'stale_feed',
+            no_go_detail_measured_ms: 1_200_000,
+            no_go_detail_bound_ms: 900_000,
+          },
+        ],
+      },
+      healthyGateOptions(),
+    );
+
+    expect(
+      gate.failures.some((failure) => failure.includes('without recording what was measured')),
+    ).toBe(false);
   });
 
   it('fails when a GO was recorded but Execution never reported submitted', () => {

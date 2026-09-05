@@ -160,6 +160,33 @@ export interface VerdictDecision {
     | 'timeout'
     | 'human_rejected'
     | null;
+  /**
+   * What the gate that fired actually MEASURED, for the two gates whose
+   * refusal is a number against a bound (#1111): `staleness` (signal age vs
+   * `max_signal_age`) and `stale_feed` (mark age at the read instant vs
+   * `max_mark_age`, or — when negative — the mark stamped ahead of us vs the
+   * receipt tolerance).
+   *
+   * Null for every other reason and for every `go`. A reason alone cannot say
+   * whether a refusal was a near miss or an order of magnitude out, and the
+   * two staleness-family gates measure different quantities under names that
+   * read alike; recovering either meant correlating timestamps across
+   * `debate_log` and the run log by hand.
+   *
+   * Two numbers rather than a formatted string, mirroring #1109's
+   * `reason_detail_compared_value`/`reason_detail_threshold` on `trader_log`:
+   * a soak asking "how many missed by under a second" can filter on a column
+   * and cannot filter on prose.
+   *
+   * `measured_ms` carries `classifyMarkFreshness`'s sign: positive for a
+   * `stale` refusal (the feed went quiet), NEGATIVE for an `ahead` one (the
+   * mark is stamped ahead of the read instant). `bound_ms` is always
+   * positive. A query written as `measured_ms > bound_ms` — the natural
+   * "missed by how much" filter — therefore matches every `stale` row and
+   * silently matches NONE of the `ahead` rows; a caller that wants both must
+   * branch on the sign of `measured_ms` (or compare `Math.abs(measured_ms)`).
+   */
+  no_go_detail: { measured_ms: number; bound_ms: number } | null;
   approval_path: 'automated' | 'human' | 'human_timeout';
   /** Recorded even when the gate is bypassed (backtest) or never reached (earlier no-go). */
   would_require_approval: boolean;

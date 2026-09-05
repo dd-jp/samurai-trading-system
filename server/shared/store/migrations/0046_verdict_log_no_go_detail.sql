@@ -1,0 +1,27 @@
+-- Records WHAT a no-go gate measured and the bound it broke (#1111).
+--
+-- WHY. `no_go_reason` names the gate that fired and nothing about the
+-- quantity behind it, and the two gates whose names read alike measure
+-- different things: `staleness` is the signal's age against
+-- `max_signal_age`, `stale_feed` is the mark's age at the read instant
+-- against `max_mark_age`. The paper store carries 23 `staleness` rows (7 of
+-- them from the 2026-09-04 session) and zero `stale_feed` rows, and telling a
+-- near miss from an hour-old opinion on any of them means joining back to
+-- `debate_log` by `debate_id` and knowing to do it — the same
+-- operator burden #1109 removed one stage earlier, in `trader_log`.
+--
+-- Two numeric columns, not one JSON blob, following 0042: both are
+-- milliseconds and both are written together, so a query asking "how many
+-- missed by under a second" can filter on a column. `measured_ms` is SIGNED —
+-- negative on `stale_feed` means the mark was stamped AHEAD of the instant we
+-- received it, which is a venue-vs-us clock disagreement rather than a quiet
+-- feed, and the sign is the only thing that separates the two on the row.
+--
+-- A plain ADD COLUMN, not a table rebuild, mirroring 0041/0042: both columns
+-- are new and nullable, and `verdict_log` carries no CHECK constraint over
+-- either. NULL is the honest reading for rows written before this migration
+-- and stays correct going forward for every gate that does not compare a
+-- number to a bound (`dedup`, `market_closed`, `breaker`, `drift`, the two
+-- HITL outcomes) and for every `go`.
+ALTER TABLE verdict_log ADD COLUMN no_go_detail_measured_ms REAL;
+ALTER TABLE verdict_log ADD COLUMN no_go_detail_bound_ms REAL;

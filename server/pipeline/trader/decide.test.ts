@@ -1065,7 +1065,11 @@ describe('decide — flat by close (#668)', () => {
         positionState: async () => [],
         arm: 'control',
         equity: async () => {
-          throw new StaleMarkError('SPY', new Date(0), OUTSIDE_WINDOW, 60_000);
+          throw new StaleMarkError('SPY', new Date(0), OUTSIDE_WINDOW, OUTSIDE_WINDOW, {
+            status: 'stale',
+            age_ms: OUTSIDE_WINDOW.getTime(),
+            bound_ms: 60_000,
+          });
         },
       }),
     );
@@ -1087,8 +1091,16 @@ describe('decide — flat by close (#668)', () => {
         equity: async () => {
           throw new AggregateError(
             [
-              new StaleMarkError('QQQ', new Date(0), OUTSIDE_WINDOW, 60_000),
-              new StaleMarkError('MSTR', new Date(0), OUTSIDE_WINDOW, 60_000),
+              new StaleMarkError('QQQ', new Date(0), OUTSIDE_WINDOW, OUTSIDE_WINDOW, {
+                status: 'stale',
+                age_ms: OUTSIDE_WINDOW.getTime(),
+                bound_ms: 60_000,
+              }),
+              new StaleMarkError('MSTR', new Date(0), OUTSIDE_WINDOW, OUTSIDE_WINDOW, {
+                status: 'stale',
+                age_ms: OUTSIDE_WINDOW.getTime(),
+                bound_ms: 60_000,
+              }),
             ],
             '2 held instrument(s) could not be valued',
           );
@@ -1163,7 +1175,11 @@ describe('decide — flat by close (#668)', () => {
           equity: async () => {
             throw new AggregateError(
               [
-                new StaleMarkError('QQQ', new Date(0), OUTSIDE_WINDOW, 60_000),
+                new StaleMarkError('QQQ', new Date(0), OUTSIDE_WINDOW, OUTSIDE_WINDOW, {
+                  status: 'stale',
+                  age_ms: OUTSIDE_WINDOW.getTime(),
+                  bound_ms: 60_000,
+                }),
                 new Error('sizingEquity: some unrelated batched sub-read failed'),
               ],
               '2 errors occurred',

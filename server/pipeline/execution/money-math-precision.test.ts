@@ -517,6 +517,7 @@ describe('money-math precision (ADR-0005)', () => {
       positions,
       marketData,
       asOf: NOW,
+      clock: { now: () => NOW },
       cash: Number(cash),
       peak_equity: 2_000_000,
       daily_basis: {

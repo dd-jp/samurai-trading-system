@@ -40,9 +40,10 @@
  *     re-evaluates. Only the TIME rule needs a tick, because no venue order
  *     expresses "flat by close".
  *   - **Marks do not go stale from it.** `getMark` fetches through the data
- *     source per call (`service.ts:224`), and `isMarkStale` compares
- *     `mark.observed_at` against now — how long ago the market spoke, not how
- *     long ago we last ticked. A tail tick carries a fresh mark.
+ *     source per call (`service.ts:224`), and `classifyMarkFreshness` compares
+ *     `mark.observed_at` against the instant it was read — how long ago the
+ *     market spoke, not how long ago we last ticked. A tail tick carries a
+ *     fresh mark.
  *   - **Fills are not missed by it.** `ingestFills()` runs on its own cadence,
  *     deliberately not on the tick loop (`production.ts:105-109`).
  *

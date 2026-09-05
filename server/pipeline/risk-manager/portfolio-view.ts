@@ -14,11 +14,16 @@
  * for the same instruments at the same instant.
  */
 import {
-  isMarkStale,
-  MARK_FORWARD_TOLERANCE_MS,
+  classifyMarkFreshness,
   type MarketDataService,
+  type MarkFreshness,
 } from '../../providers/market-data-service/index.js';
-import { type AssetClass, describeThrown, type OpenPosition } from '../../shared/index.js';
+import {
+  type AssetClass,
+  type Clock,
+  describeThrown,
+  type OpenPosition,
+} from '../../shared/index.js';
 import type { DailyPnl, PortfolioView, SessionBasis, SessionBasisByClass } from './types.js';
 
 export interface PortfolioAccountingInput {
@@ -26,6 +31,23 @@ export interface PortfolioAccountingInput {
   marketData: MarketDataService;
   /** Point-in-time read for every mark lookup — never wall-clock. */
   asOf: Date;
+  /**
+   * Reads the instant the marks came back, which is when this view VALUES the
+   * book — the coordinate feed freshness is judged at (#1111).
+   *
+   * Required rather than defaulted to `asOf`, and required rather than
+   * optional: a caller that skips it is a caller measuring freshness from the
+   * tick's start instant again, and the whole defect #1111 fixes is that the
+   * gap between those two instants is unbounded — 145s in the 2026-09-04 paper
+   * session, against a 5000ms tolerance. A compile error at every call site is
+   * how that stays fixed.
+   *
+   * Injected rather than read off `Date.now()` so backtest stays deterministic:
+   * the replay driver advances its `SimulatedClock` to the bar BEFORE the tick
+   * and never within one, so `clock.now()` there is `asOf` and this change is
+   * inert in replay.
+   */
+  clock: Clock;
   cash: number;
   peak_equity: number;
   /**
@@ -140,28 +162,32 @@ export class StaleMarkError extends BookValuationError {
   constructor(
     readonly instrument: string,
     readonly observed_at: Date,
+    /** When the mark was RECEIVED — the coordinate freshness is judged at (#1111). */
+    readonly readAt: Date,
+    /** The tick's point-in-time coordinate, carried for the pass-duration it implies. */
     readonly asOf: Date,
-    readonly max_age_ms: number,
+    readonly freshness: Exclude<MarkFreshness, { status: 'fresh' }>,
   ) {
-    const ageMs = asOf.getTime() - observed_at.getTime();
-    // #939: `isMarkStale` already admits a mark observed up to
-    // `MARK_FORWARD_TOLERANCE_MS` ahead of `asOf` as ordinary pass latency —
-    // `asOf` is the tick's START instant, and this mark was read some
-    // milliseconds into the same pass. So by the time this error is even
-    // constructed, a negative `ageMs` has already been checked against that
-    // tolerance and found to exceed it: this IS a genuine clock disagreement,
-    // not the sub-second case the old wording used to lump in with it.
+    // #1111: the two statuses are two different faults and each says only its
+    // own. `stale` is the market having gone quiet; `ahead` is our clock and
+    // the venue's disagreeing AFTER the mark was already in hand, which pass
+    // latency can no longer explain at any magnitude — the pre-#1111 wording
+    // asserted that disagreement for an offset that was only our own elapsed
+    // time between `asOf` and the read.
+    const passMs = readAt.getTime() - asOf.getTime();
+    const detail =
+      freshness.status === 'stale'
+        ? `${freshness.age_ms}ms old when read at ${readAt.toISOString()}, past the ` +
+          `${freshness.bound_ms}ms bound for its asset class`
+        : `stamped ${-freshness.age_ms}ms AHEAD of ${readAt.toISOString()}, the instant we ` +
+          `received it — beyond the ${freshness.tolerance_ms}ms receipt tolerance, so our ` +
+          "clock and the venue's disagree";
     super(
       `computePortfolioView: mark for held instrument '${instrument}' was observed ` +
-        `${observed_at.toISOString()}, ${ageMs}ms before ${asOf.toISOString()}, which exceeds ` +
-        `the ${max_age_ms}ms bound for its asset class` +
-        (ageMs < 0
-          ? ` (the mark is ${-ageMs}ms AHEAD of our clock, beyond the ` +
-            `${MARK_FORWARD_TOLERANCE_MS}ms pass-latency tolerance — the two disagree)`
-          : '') +
-        '. Refusing to value the book on a price the market may no longer support: exposure, ' +
-        'drawdown and daily PnL all derive from these marks, so a frozen price freezes every ' +
-        'risk limit that reads them.',
+        `${observed_at.toISOString()}, ${detail} (this pass read it ${passMs}ms after its ` +
+        `asOf ${asOf.toISOString()}). Refusing to value the book on a price the market may no ` +
+        'longer support: exposure, drawdown and daily PnL all derive from these marks, so a ' +
+        'frozen price freezes every risk limit that reads them.',
     );
     this.name = 'StaleMarkError';
   }
@@ -268,11 +294,20 @@ async function readMarks(
   marketData: MarketDataService,
   classByInstrument: ReadonlyMap<string, AssetClass>,
   asOf: Date,
+  clock: Clock,
   max_mark_age: Record<AssetClass, number>,
   policy: UnvaluableMarkPolicy,
 ): Promise<{ marks: Map<string, number>; unvalued: readonly string[] }> {
   const instruments = [...classByInstrument.keys()];
   const reads = await marketData.getMarks(instruments, asOf);
+  // #1111: taken once, after the whole batch resolves, and applied to every
+  // mark in it. Not an approximation of a per-mark read instant — it is the
+  // instant this view VALUES the book, and a mark fetched early in a batch
+  // that took a minute genuinely is a minute old by the time its price reaches
+  // the exposure arithmetic. Judging each mark at its own arrival would call a
+  // price fresh that is not fresh any more at the moment it is used, which is
+  // the direction #640 exists to refuse.
+  const readAt = clock.now();
 
   const marks = new Map<string, number>();
   const failures: BookValuationError[] = [];
@@ -326,10 +361,9 @@ async function readMarks(
     // Collected rather than thrown on sight, so one stale name does not hide a
     // second dark one from the same report.
     const assetClass = classByInstrument.get(instrument) ?? read.mark.asset_class;
-    if (isMarkStale(read.mark, asOf, max_mark_age[assetClass])) {
-      failures.push(
-        new StaleMarkError(instrument, read.mark.observed_at, asOf, max_mark_age[assetClass]),
-      );
+    const freshness = classifyMarkFreshness(read.mark, readAt, max_mark_age[assetClass]);
+    if (freshness.status !== 'fresh') {
+      failures.push(new StaleMarkError(instrument, read.mark.observed_at, readAt, asOf, freshness));
       continue;
     }
 
@@ -383,6 +417,7 @@ export async function computePortfolioView(
     peak_equity,
     daily_basis,
     consecutive_losses,
+    clock,
     max_mark_age,
     unvaluable_marks = 'refuse',
   } = input;
@@ -400,6 +435,7 @@ export async function computePortfolioView(
     marketData,
     classByInstrument,
     asOf,
+    clock,
     max_mark_age,
     unvaluable_marks,
   );

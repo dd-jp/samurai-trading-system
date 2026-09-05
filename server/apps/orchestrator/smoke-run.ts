@@ -2456,7 +2456,15 @@ export interface SmokeObservations {
     termination: string | null;
   }[];
   /** From `verdict_log` — the row `OrphanVerdictScanner` reads at restart. */
-  verdicts: { trace_id: string; instrument: string; status: string; no_go_reason: string | null }[];
+  verdicts: {
+    trace_id: string;
+    instrument: string;
+    status: string;
+    no_go_reason: string | null;
+    /** #1111, migration 0046 — what the gate measured and the bound it broke. */
+    no_go_detail_measured_ms: number | null;
+    no_go_detail_bound_ms: number | null;
+  }[];
   /** From `open_positions` — written ahead by `ExecutionImpl` before the broker call. */
   positions: {
     idempotency_key: string;
@@ -2605,7 +2613,10 @@ export function readSmokeObservations(
       )
       .all() as SmokeObservations['debates'],
     verdicts: db
-      .prepare('SELECT trace_id, instrument, status, no_go_reason FROM verdict_log ORDER BY rowid')
+      .prepare(
+        'SELECT trace_id, instrument, status, no_go_reason, no_go_detail_measured_ms, ' +
+          'no_go_detail_bound_ms FROM verdict_log ORDER BY rowid',
+      )
       .all() as SmokeObservations['verdicts'],
     // #1028: ordered by content (`arm`/`idempotency_key`/`leg`), not `rowid`.
     // `rowid` reflects insertion order, which for these two tables is
@@ -3732,7 +3743,7 @@ export function evaluateSmokeGate(
   // between a converged/non-converged debate and one the latency budget cut
   // short. Hung off `debates.length` for the same reason as 3b above: a run
   // with no rows at all fails on the check above, naming the real cause.
-  const unclassified = debates.filter((debate) => debate.termination === null);
+  const unclassified = debates.filter((debate) => debate.termination == null);
   if (debates.length > 0 && unclassified.length > 0) {
     failures.push(
       `${unclassified.length} of ${debates.length} debate_log row(s) have a NULL termination — ` +
@@ -4245,6 +4256,40 @@ export function evaluateSmokeGate(
     );
   }
 
+  // #1111: the two gates whose refusal is a number against a bound must write
+  // that number. A column written by `buildVerdictLog` and never read back is
+  // the same defect one table over — the reason a `staleness` row could not be
+  // diagnosed without joining to `debate_log` in the first place.
+  //
+  // This is the only #1111 assertion this gate carries. It does not, and
+  // cannot, assert on the `readAt` coordinate itself: a smoke run's fixture
+  // marks stay fresh by construction. The six-stage run's fixture mark is
+  // frozen at `SMOKE_RUN_INSTANT`, and the run's total wall-clock span
+  // (default 3 ticks at 250ms, see `tickIntervalMs`'s own doc, which sizes
+  // that gap against `max_signal_age`) stays far below `max_mark_age` too —
+  // its smaller value here is 2 minutes (paper-profile.ts, crypto); the
+  // exit-path harness instead overrides `max_mark_age` to 24h because it
+  // advances its own clock between phases. Either way, no staleness/
+  // stale_feed verdict is ever produced here to check the detail on. The
+  // one structural guard on `readAt` reaching a real caller is
+  // `PortfolioAccountingInput.clock` being a required (non-optional) field —
+  // a compile-time check, not a runtime one — so a caller that regresses to
+  // threading `asOf` through both parameters would still type-check and this
+  // gate would not see it.
+  const undetailedStaleness = verdicts.filter(
+    (verdict) =>
+      (verdict.no_go_reason === 'staleness' || verdict.no_go_reason === 'stale_feed') &&
+      (verdict.no_go_detail_measured_ms == null || verdict.no_go_detail_bound_ms == null),
+  );
+  if (undetailedStaleness.length > 0) {
+    failures.push(
+      `${undetailedStaleness.length} verdict_log row(s) refused on staleness/stale_feed without ` +
+        `recording what was measured (${undetailedStaleness
+          .map((verdict) => `${verdict.instrument}:${verdict.no_go_reason}`)
+          .join(', ')}) — the cause is unrecoverable from the row, which is what #1111 fixed`,
+    );
+  }
+
   if (!verdicts.some((verdict) => verdict.status === 'go')) {
     failures.push(
       `no GO verdict was recorded in verdict_log (${verdicts.length} verdict row(s): ` +
@@ -4546,8 +4591,8 @@ export function evaluateSmokeGate(
     );
   } else {
     if (
-      emulation.journalRow.stop_order_id === null ||
-      emulation.journalRow.target_order_id === null
+      emulation.journalRow.stop_order_id == null ||
+      emulation.journalRow.target_order_id == null
     ) {
       failures.push(
         "the crypto-emulation scenario's journal row is missing protective-leg order ids after " +

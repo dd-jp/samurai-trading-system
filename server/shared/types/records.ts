@@ -355,6 +355,15 @@ export interface VerdictLog {
   /** The gate that fired; null iff `status === 'go'`. */
   no_go_reason: string | null;
   /**
+   * What that gate measured, and the bound it broke (#1111) — signal age for
+   * `staleness`, mark age at the read instant for `stale_feed` (negative when
+   * the mark was stamped ahead of us, where the bound is the receipt
+   * tolerance). Null for every other reason and for a `go`; see
+   * `VerdictDecision.no_go_detail`.
+   */
+  no_go_detail_measured_ms: number | null;
+  no_go_detail_bound_ms: number | null;
+  /**
    * True whenever a human path was actually taken — live approval/rejection/
    * timeout, or backtest's bypassed-but-recorded HITL gate — i.e.
    * `approval_path !== 'automated'`. NOT `would_require_approval`, which is

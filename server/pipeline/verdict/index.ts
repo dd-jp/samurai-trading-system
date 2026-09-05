@@ -34,7 +34,7 @@
  * flag is set (non-converged, no-precedent, size-over, or near-limit —
  * `risk_decision.modifications != null`).
  */
-import { isMarkStale } from '../../providers/market-data-service/index.js';
+import { classifyMarkFreshness } from '../../providers/market-data-service/index.js';
 import type { OrderIntent } from '../../shared/index.js';
 import type { RiskDecision } from '../risk-manager/index.js';
 import type {
@@ -115,6 +115,7 @@ function noGo(
   reason: NonNullable<VerdictDecision['no_go_reason']>,
   idempotencyKey: string,
   now: Date,
+  detail: VerdictDecision['no_go_detail'] = null,
   approvalPath: VerdictDecision['approval_path'] = 'automated',
   wouldRequireApproval = false,
 ): VerdictDecision {
@@ -122,6 +123,7 @@ function noGo(
     status: 'no_go',
     order: null,
     no_go_reason: reason,
+    no_go_detail: detail,
     approval_path: approvalPath,
     would_require_approval: wouldRequireApproval,
     idempotency_key: idempotencyKey,
@@ -183,7 +185,15 @@ export class VerdictImpl implements Verdict {
     const signalAgeMs = now.getTime() - orderIntent.decision_timestamp.getTime();
     const maxAgeMs = config.max_signal_age[orderIntent.asset_class];
     if (orderIntent.metadata.mandatory_flatten !== true && signalAgeMs > maxAgeMs) {
-      return noGo('staleness', idempotencyKey, now);
+      // #1111: the age and the bound travel with the refusal. Without them a
+      // `staleness` row says only that SOMETHING was too old, and the two
+      // gates that can say that measure different quantities — this one the
+      // opinion's age, `stale_feed` the price's. Reconstructing which, and by
+      // how much, meant joining `verdict_log` back to `debate_log` by hand.
+      return noGo('staleness', idempotencyKey, now, {
+        measured_ms: signalAgeMs,
+        bound_ms: maxAgeMs,
+      });
     }
 
     // #826 — THE UNPRICED MANDATORY FLATTEN SKIPS BOTH PRICE GATES.
@@ -209,7 +219,7 @@ export class VerdictImpl implements Verdict {
     // dedup gate in particular is what keeps a repeated flatten from
     // double-submitting while the feed is down.
     if (orderIntent.metadata.unpriced_exit !== true) {
-      const noGoOnPrice = await this.#priceGates(orderIntent, marketData, config, now);
+      const noGoOnPrice = await this.#priceGates(orderIntent, marketData, config, clock, now);
       if (noGoOnPrice !== null) return noGoOnPrice;
     }
 
@@ -239,6 +249,7 @@ export class VerdictImpl implements Verdict {
         status: 'go',
         order: orderIntent,
         no_go_reason: null,
+        no_go_detail: null,
         approval_path: 'automated',
         would_require_approval: false,
         idempotency_key: idempotencyKey,
@@ -281,6 +292,7 @@ export class VerdictImpl implements Verdict {
         status: 'go',
         order: orderIntent,
         no_go_reason: null,
+        no_go_detail: null,
         approval_path: 'automated',
         would_require_approval: true,
         idempotency_key: idempotencyKey,
@@ -289,16 +301,17 @@ export class VerdictImpl implements Verdict {
     }
 
     if (outcome === 'timeout') {
-      return noGo('timeout', idempotencyKey, now, 'human_timeout', true);
+      return noGo('timeout', idempotencyKey, now, null, 'human_timeout', true);
     }
     if (outcome === 'rejected') {
-      return noGo('human_rejected', idempotencyKey, now, 'human', true);
+      return noGo('human_rejected', idempotencyKey, now, null, 'human', true);
     }
 
     return {
       status: 'go',
       order: orderIntent,
       no_go_reason: null,
+      no_go_detail: null,
       approval_path: 'human',
       would_require_approval: true,
       idempotency_key: idempotencyKey,
@@ -321,10 +334,17 @@ export class VerdictImpl implements Verdict {
     orderIntent: OrderIntent,
     marketData: VerdictInput['marketData'],
     config: VerdictConfig,
+    clock: VerdictInput['clock'],
     now: Date,
   ): Promise<VerdictDecision | null> {
     const idempotencyKey = orderIntent.idempotency_key;
     const mark = await marketData.getMark(orderIntent.instrument, now);
+    // #1111: freshness is judged at the instant the mark ARRIVED, not at the
+    // `now` the read was issued with. `now` is still the point-in-time
+    // coordinate the read is made AGAINST — the two are the same question only
+    // when the fetch is instant, and a stalled vendor fetch (`getMark` has no
+    // failover and a ~30s retry budget) makes them minutes apart.
+    const readAt = clock.now();
 
     // Gate 2a: FEED staleness (#641) — how long ago the market last spoke,
     // measured off `Mark.observed_at`.
@@ -339,8 +359,19 @@ export class VerdictImpl implements Verdict {
     //
     // Distinct from gate 1: that bounds how old our DECISION is, this bounds
     // how old the PRICE is. Both must hold — see `VerdictConfig.max_mark_age`.
-    if (isMarkStale(mark, now, config.max_mark_age[orderIntent.asset_class])) {
-      return noGo('stale_feed', idempotencyKey, now);
+    const boundMs = config.max_mark_age[orderIntent.asset_class];
+    const freshness = classifyMarkFreshness(mark, readAt, boundMs);
+    if (freshness.status !== 'fresh') {
+      // `measured_ms` keeps `classifyMarkFreshness`'s sign, which is what
+      // separates the two faults on the row: negative means the mark was
+      // stamped ahead of us (clock disagreement, bounded by the receipt
+      // tolerance), positive means the feed went quiet (bounded by
+      // `max_mark_age`). The instrument is already a `verdict_log` column, so
+      // what the row was missing is the pair of numbers, not the name.
+      return noGo('stale_feed', idempotencyKey, now, {
+        measured_ms: freshness.age_ms,
+        bound_ms: freshness.status === 'stale' ? freshness.bound_ms : freshness.tolerance_ms,
+      });
     }
 
     // Gate 2: drift — current price vs the bracket's entry, as a FRACTION of

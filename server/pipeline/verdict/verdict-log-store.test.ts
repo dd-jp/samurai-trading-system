@@ -62,6 +62,7 @@ function makeDecision(overrides: Partial<VerdictDecision> = {}): VerdictDecision
     status: 'go',
     order: makeIntent(),
     no_go_reason: null,
+    no_go_detail: null,
     approval_path: 'automated',
     would_require_approval: false,
     idempotency_key: 'AAPL-2026-07-15T13:55:00Z',
@@ -81,6 +82,8 @@ describe('buildVerdictLog', () => {
       instrument: 'AAPL',
       status: 'go',
       no_go_reason: null,
+      no_go_detail_measured_ms: null,
+      no_go_detail_bound_ms: null,
       hitl_override: false,
       timestamp: decision.timestamp,
     });

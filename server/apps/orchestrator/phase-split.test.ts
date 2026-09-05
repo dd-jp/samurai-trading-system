@@ -170,6 +170,7 @@ function goVerdict(intent: OrderIntent): VerdictDecision {
     status: 'go',
     order: intent,
     no_go_reason: null,
+    no_go_detail: null,
     approval_path: 'automated',
     would_require_approval: false,
     idempotency_key: intent.idempotency_key,
