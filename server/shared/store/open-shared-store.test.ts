@@ -80,9 +80,8 @@ const TABLES = [
   // answerable after the fact, not just visible in a log line.
   'alert_delivery_failures',
   // `feedback_cycle_schedule` (0044) — the daily feedback cycle's
-  // restart-durable schedule (#1110). Before this table the cycle's timer
-  // was armed at boot with nothing persisted, so a soak restarted more often
-  // than daily never accumulated 24h of uptime and the cycle never fired.
+  // restart-durable schedule (#1110); see production.ts's
+  // `scheduleFeedbackCycle` for why.
   'feedback_cycle_schedule',
 ];
 

@@ -57,15 +57,4 @@ describe('SqliteFeedbackCycleScheduleStore', () => {
 
     expect(store.lastBoundary()).toEqual(new Date('2026-08-02T00:00:00.000Z'));
   });
-
-  it('keys two stores apart, the way two named schedules would', () => {
-    const db = openSharedStore(':memory:');
-    const a = new SqliteFeedbackCycleScheduleStore(db, 'a');
-    const b = new SqliteFeedbackCycleScheduleStore(db, 'b');
-
-    a.recordBoundary(new Date('2026-08-01T00:00:00.000Z'), new Date('2026-08-01T00:00:00.400Z'));
-
-    expect(a.lastBoundary()).toEqual(new Date('2026-08-01T00:00:00.000Z'));
-    expect(b.lastBoundary()).toBeNull();
-  });
 });

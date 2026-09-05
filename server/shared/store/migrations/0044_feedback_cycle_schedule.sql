@@ -1,11 +1,5 @@
--- The Feedback Loop daily cycle's restart-durable schedule (#1110).
---
--- Before this table the cycle was armed by a plain `setInterval` started at
--- process boot, with nothing written down about when it last ran. A soak
--- restarted more often than once a day therefore never accumulated 24h of
--- continuous uptime, so the timer never fired even once in the store's whole
--- history — `arm_comparison_samples` held 0 rows ever, silently, because
--- nothing here recorded that the cycle owed one.
+-- The Feedback Loop daily cycle's restart-durable schedule (#1110) — see
+-- production.ts's `scheduleFeedbackCycle` for why the table exists at all.
 --
 -- ## What is persisted: the boundary, not the instant
 --

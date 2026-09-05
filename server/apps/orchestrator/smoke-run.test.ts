@@ -281,6 +281,7 @@ function healthyGateOptions(
     riskCritic?: RiskCriticEvidence;
     armComparison?: ArmComparisonEvidence;
     outsideBenchmarks?: OutsideBenchmarkEvidence;
+    feedbackCycleScheduleWritten?: boolean;
     fillSync?: FillSyncFailureEvidence;
     marketDataFetch?: MarketDataFetchEvidence;
   } = {},
@@ -290,6 +291,7 @@ function healthyGateOptions(
     marketDataFetch: overrides.marketDataFetch ?? healthyMarketDataFetch(),
     armComparison: overrides.armComparison ?? healthyArmComparison(),
     outsideBenchmarks: overrides.outsideBenchmarks ?? healthyOutsideBenchmarks(),
+    feedbackCycleScheduleWritten: overrides.feedbackCycleScheduleWritten ?? true,
     minTicks: overrides.minTicks ?? 2,
     llmRateLimiterSnapshot: meteredSnapshot(),
     exitPath: overrides.exitPath ?? healthyExitPath(),
@@ -2370,6 +2372,31 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
       const gate = evaluateSmokeGate(transactedObservations(), healthyGateOptions());
 
       expect(gate.failures.filter((failure) => failure.includes('arm-comparison'))).toEqual([]);
+    });
+  });
+
+  describe('the daily feedback cycle schedule (#1110)', () => {
+    it('fails when the composition root never wrote a schedule row', () => {
+      // The mutation this catches: delete `scheduleFeedbackCycle` (or its
+      // call site in `start()`) from production.ts. `armComparison` and
+      // `outsideBenchmarks` above stay green throughout, because both are
+      // read from probes that call the shipped cycle functions DIRECTLY —
+      // this is the one check that can only pass if the real timer ran.
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({ feedbackCycleScheduleWritten: false }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('feedback_cycle_schedule');
+    });
+
+    it('passes when the composition root caught up on a boundary', () => {
+      const gate = evaluateSmokeGate(transactedObservations(), healthyGateOptions());
+
+      expect(
+        gate.failures.filter((failure) => failure.includes('feedback_cycle_schedule')),
+      ).toEqual([]);
     });
   });
 

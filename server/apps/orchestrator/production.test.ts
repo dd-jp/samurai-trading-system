@@ -20,7 +20,11 @@ import {
 } from '../../pipeline/debate-engine/index.js';
 import { SimulatedBrokerAdapter, SqliteExecutionStore } from '../../pipeline/execution/index.js';
 import type { DailyMetricsSample, FeedbackConfig } from '../../pipeline/feedback-loop/index.js';
-import { SqliteTuningStore } from '../../pipeline/feedback-loop/index.js';
+import {
+  DEFAULT_ARM_COMPARISON_WINDOW_MS,
+  nextBoundary,
+  SqliteTuningStore,
+} from '../../pipeline/feedback-loop/index.js';
 import type {
   BenchmarkObservation,
   BenchmarkSeriesSource,
@@ -3409,19 +3413,16 @@ describe('buildProductionOrchestrator', () => {
   });
 
   /**
-   * #1110 — the daily cycle's cadence used to be a plain `setInterval` armed
-   * at process boot, with nothing durable recording when it last ran. A soak
-   * bounced more often than once a day therefore never accumulated 24h of
-   * continuous uptime, so the timer never fired even once in the store's
-   * whole lifetime — `arm_comparison_samples` held 0 rows ever, silently.
+   * #1110 — see `scheduleFeedbackCycle`'s doc comment (production.ts) for
+   * what this fixes and why.
    *
    * These drive the real composition root through repeated boot/stop cycles
    * on the SAME store (`db` is never recreated between them, only the
    * orchestrator instance is — the honest shape of a process restart) and
    * assert directly on `arm_comparison_samples`, the table #1110 reports as
-   * permanently empty. `scheduleFeedbackCycle`'s own doc comment
-   * (production.ts) carries the two recorded design decisions this exercises
-   * end to end rather than merely by construction.
+   * permanently empty. `scheduleFeedbackCycle`'s own doc comment carries the
+   * recorded design decisions this exercises end to end rather than merely
+   * by construction.
    */
   describe('the daily cycle survives process restarts (#1110)', () => {
     /**
@@ -3455,10 +3456,19 @@ describe('buildProductionOrchestrator', () => {
       });
     }
 
-    function sampleRows(): { computed_at: string; window_to: string }[] {
+    function sampleRows(): { computed_at: string; window_from: string; window_to: string }[] {
       return db
-        .prepare('SELECT computed_at, window_to FROM arm_comparison_samples ORDER BY computed_at')
-        .all() as { computed_at: string; window_to: string }[];
+        .prepare(
+          'SELECT computed_at, window_from, window_to FROM arm_comparison_samples ORDER BY computed_at',
+        )
+        .all() as { computed_at: string; window_from: string; window_to: string }[];
+    }
+
+    function feedbackScheduleLastBoundary(): string | null {
+      const row = db.prepare('SELECT last_boundary FROM feedback_cycle_schedule').get() as
+        | { last_boundary: string }
+        | undefined;
+      return row?.last_boundary ?? null;
     }
 
     /**
@@ -3499,8 +3509,7 @@ describe('buildProductionOrchestrator', () => {
       let remaining = ms;
       while (remaining > 0) {
         const now = clock.now().getTime();
-        const nextBoundaryMs = (Math.floor(now / boundaryMs) + 1) * boundaryMs;
-        const step = Math.min(remaining, nextBoundaryMs - now);
+        const step = Math.min(remaining, nextBoundary(clock.now(), boundaryMs).getTime() - now);
         await advanceBoth(clock, step);
         remaining -= step;
       }
@@ -3588,12 +3597,127 @@ describe('buildProductionOrchestrator', () => {
       expect(rows).toHaveLength(4);
 
       // Each row's own window: consecutive `window_to` values exactly one
-      // day apart, never merged and never skipped.
+      // day apart, never merged and never skipped — spacing alone. Also
+      // `window_from` (#1110 finding 6): the arm comparison's window is a
+      // ROLLING `DEFAULT_ARM_COMPARISON_WINDOW_MS` lookback from `now`
+      // (`from = now - window_ms`, arm-comparison-cycle.ts), not a sliding
+      // window chained to the previous row's `window_to` — so the invariant
+      // finding 6 is actually after is that the span stays constant as
+      // `window_to` advances. A regression that pinned `window_from` to the
+      // run's start (cumulative windows instead of rolling ones) would still
+      // pass a `window_to`-only check, and cumulative windows would corrupt
+      // the #753 comparison silently, but a GROWING span here catches it.
       for (let i = 1; i < rows.length; i += 1) {
-        const prev = new Date(rows[i - 1]?.window_to as string).getTime();
-        const curr = new Date(rows[i]?.window_to as string).getTime();
-        expect(curr - prev).toBe(DAY_MS);
+        const prevTo = new Date(rows[i - 1]?.window_to as string).getTime();
+        const currTo = new Date(rows[i]?.window_to as string).getTime();
+        const currFrom = new Date(rows[i]?.window_from as string).getTime();
+        expect(currTo - prevTo).toBe(DAY_MS);
+        expect(currTo - currFrom).toBe(DEFAULT_ARM_COMPARISON_WINDOW_MS);
       }
+    });
+
+    it('a throwing schedule store still re-arms the timer, and a later boundary fires once the store recovers (finding 1)', async () => {
+      const clock = new SimulatedClock(START);
+      const intervalMs = 1_000;
+      const logger = recordingLogger();
+
+      const orchestrator = buildProductionOrchestrator(
+        restartDurableConfig(clock, intervalMs, { logger }),
+      );
+      // The boot catch-up runs with the table intact, so it is `start()`'s
+      // OWN startup-log read of `lastBoundary()` (a separate call site, not
+      // `runIfDue`) that this test must not disturb — sabotage happens only
+      // after `start()` returns.
+      await orchestrator.start();
+      expect(sampleRows()).toHaveLength(1);
+
+      // Sabotage the table: the NEXT scheduled `runIfDue` — armed by the
+      // boot catch-up's own `finally` — throws reading `lastBoundary()`
+      // instead of getting `null`/a real boundary, simulating a transient
+      // `SQLITE_BUSY` from the shared WAL file the service-api process also
+      // reads.
+      db.exec('DROP TABLE feedback_cycle_schedule');
+      await advanceBoth(clock, intervalMs);
+
+      // Before this fix, an uncaught throw here left the re-arm — the
+      // function's last statement — never reached, and the cycle never fired
+      // again for the rest of the process's life, silently.
+      expect(
+        logger.entries.filter(
+          (entry) =>
+            entry.trace_id === 'feedback-cycle' &&
+            entry.level === 'error' &&
+            entry.message.includes('feedback cycle schedule check failed'),
+        ).length,
+      ).toBeGreaterThanOrEqual(1);
+      expect(sampleRows()).toHaveLength(1);
+
+      // The store recovers (a transient failure clearing on its own) and the
+      // timer — which DID re-arm despite the throw — fires the next boundary.
+      db.exec(
+        'CREATE TABLE feedback_cycle_schedule (key TEXT PRIMARY KEY, last_boundary TEXT NOT NULL, updated_at TEXT NOT NULL)',
+      );
+      await advanceBoth(clock, intervalMs);
+
+      expect(sampleRows().length).toBeGreaterThanOrEqual(2);
+      expect(feedbackScheduleLastBoundary()).not.toBeNull();
+
+      await orchestrator.stop();
+    });
+
+    it('records the boundary AFTER the cycle runs — a schedule-store write failure does not erase the cycle work, and the unstamped boundary retries on restart (finding 5)', async () => {
+      const clock = new SimulatedClock(START);
+      const intervalMs = 1_000;
+      const logger = recordingLogger();
+
+      // Blocks writes to `feedback_cycle_schedule` specifically — SELECT
+      // still works, so `runIfDue` reaches `runFeedbackCycle` and only the
+      // trailing `recordBoundary` fails. Isolates the store call the ordering
+      // note above is about from the cycle's own (unrelated) work.
+      db.exec(`
+        CREATE TRIGGER block_schedule_write
+        BEFORE INSERT ON feedback_cycle_schedule
+        BEGIN
+          SELECT RAISE(ABORT, 'simulated write failure');
+        END;
+      `);
+
+      const first = buildProductionOrchestrator(
+        restartDurableConfig(clock, intervalMs, { logger }),
+      );
+      await first.start();
+
+      // The cycle's own substantive work ran and persisted despite the
+      // trailing schedule write failing — proof `runFeedbackCycle` is called
+      // BEFORE `recordBoundary`, not gated behind a successful write.
+      expect(sampleRows()).toHaveLength(1);
+      expect(feedbackScheduleLastBoundary()).toBeNull();
+      expect(
+        logger.entries.filter(
+          (entry) =>
+            entry.trace_id === 'feedback-cycle' &&
+            entry.level === 'error' &&
+            entry.message.includes('feedback cycle schedule check failed'),
+        ).length,
+      ).toBeGreaterThanOrEqual(1);
+      await first.stop();
+
+      // Restart with the write no longer blocked. The boundary was never
+      // stamped, so the SAME boundary is still "due" and the cycle retries it
+      // — the retry an inverted (record-before) ordering would have lost,
+      // per finding 5. `clock` (not the wall-clock boundary check) advances a
+      // little, the way a restart's own elapsed time naturally would, so the
+      // retry's `computed_at` is distinct rather than colliding with the
+      // first attempt's under migration 0034's `INSERT OR REPLACE`.
+      db.exec('DROP TRIGGER block_schedule_write');
+      clock.advanceTo(new Date(clock.now().getTime() + 500));
+      const second = buildProductionOrchestrator(restartDurableConfig(clock, intervalMs));
+      await second.start();
+
+      expect(sampleRows()).toHaveLength(2);
+      expect(feedbackScheduleLastBoundary()).not.toBeNull();
+
+      await second.stop();
     });
   });
 

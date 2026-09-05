@@ -21,7 +21,7 @@ export {
   impliedWeight,
   realizedR,
 } from './attribution.js';
-export { currentBoundary, nextBoundary } from './cycle-schedule.js';
+export { currentBoundary, isBoundaryDue, nextBoundary } from './cycle-schedule.js';
 export { runDailyCycle } from './daily-cycle.js';
 export { getContributionsForAttribution } from './debate-attribution-lookup.js';
 export {

@@ -63,16 +63,9 @@
  * startup at `warn` (#327)** — it used to be reached by pure omission, which
  * is the same silent-by-omission bug #293/#320/#322 closed elsewhere.
  *
- * **The schedule survives a process restart (#1110).** It used to be a plain
- * `setInterval` armed at boot, so a soak restarted more often than once a day
- * never accumulated 24h of continuous uptime and the cycle never fired in the
- * store's whole history. `scheduleFeedbackCycle` below replaces that with a
- * self-rescheduling `setTimeout` keyed to a wall-clock boundary
- * (`feedback-loop/cycle-schedule.ts`) and persisted in
- * `feedback_cycle_schedule` (migration 0044,
- * `SqliteFeedbackCycleScheduleStore`), so a restart mid-period is a no-op and
- * a restart after the period elapsed catches up exactly once — see that
- * function's doc comment for both design decisions in full.
+ * **The schedule survives a process restart (#1110)** — `scheduleFeedbackCycle`
+ * below is the canonical explanation; this composition root, not the
+ * migration or the tests, is the right home for it.
  *
  * **And a paper run now supplies it (#366).** The two inputs that used to have
  * no in-repo source have the same two homes every comparable input already
@@ -157,6 +150,7 @@ import {
   currentBoundary,
   DEFAULT_ARM_COMPARISON_WINDOW_MS,
   DEFAULT_ARM_DIVERGENCE_THRESHOLDS,
+  isBoundaryDue,
   nextBoundary,
   runArmComparisonCycle,
   runDailyCycle,
@@ -634,6 +628,16 @@ export const ENV_MI_ARCHIVE_RETENTION_DAYS = 'SAMURAI_MI_ARCHIVE_RETENTION_DAYS'
 
 /** The variable that overrides how many X posts a sentiment call fetches (#969). */
 export const ENV_X_MAX_SEARCH_RESULTS = 'SAMURAI_X_MAX_RESULTS';
+
+/**
+ * Node clamps a `setTimeout` delay above this (2^31 - 1 ms, ~24.85 days) and
+ * fires immediately instead — undocumented in the public API but stable
+ * platform behavior. `scheduleFeedbackCycle`'s delay is always `<= intervalMs`
+ * (never accumulated across missed boundaries — DESIGN DECISION 2), so this
+ * only bites an operator-configured `intervalMs` above the clamp, which would
+ * otherwise tight-loop instead of waiting.
+ */
+const MAX_SET_TIMEOUT_DELAY_MS = 2 ** 31 - 1;
 
 /**
  * How many `llm_call_log` rows to keep (#1045).
@@ -2736,6 +2740,10 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
   let controlFillSync: { stop: () => Promise<void> } | undefined;
   let heartbeatHandle: NodeJS.Timeout | undefined;
   let feedbackHandle: NodeJS.Timeout | undefined;
+  // Mirrors `fill-sync.ts`'s own `stopped` flag (#1110) — see
+  // `scheduleFeedbackCycle`'s doc comment for why it is defence against a
+  // future change rather than something today's synchronous `runIfDue` needs.
+  let feedbackScheduleStopped = false;
   let gdeltHandle: NodeJS.Timeout | undefined;
   let polymarketHandle: NodeJS.Timeout | undefined;
 
@@ -3058,10 +3066,14 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     // Riding this existing daily cycle rather than adding a second scheduler
     // follows #636's rule, stated at `runOutsideBenchmarks` below: additional
     // work joins the existing daily suite, no new scheduling primitive. Since
-    // #1110 the cycle fires on a wall-clock UTC boundary (`scheduleFeedbackCycle`
-    // below), not an elapsed interval from process start — so unlike before,
-    // "daily" now does mean a calendar-UTC-midnight-aligned cadence, including
-    // for this retention sweep.
+    // #1110 the cycle fires on a wall-clock, epoch-anchored boundary
+    // (`scheduleFeedbackCycle` below), not an elapsed interval from process
+    // start. That lands on UTC midnight at the shipped 24h `intervalMs`
+    // (epoch 0 is itself a UTC midnight), but the anchoring is to the epoch,
+    // not to the calendar: an operator-configured interval that does not
+    // evenly divide 24h drifts across the day instead of staying
+    // midnight-aligned. This retention sweep inherits whatever cadence is
+    // configured, same as the rest of the cycle.
     pruneLlmCallLogWithLog(config.db, llmCallLogMaxRows, logger, 'daily');
     // #1060. Same placement rule applies: outside the try, so a persistently
     // failing feedback cycle cannot silently disable the MI archive's purge.
@@ -3123,11 +3135,30 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
       // no latch is needed the way the live-read seam's per-tick catch needs
       // one.
       if (isThresholdBoundViolation(error)) {
-        config.thresholdClampAlerts?.postThresholdClampAlert({
-          where: 'daily-kill-line-check',
-          message: error instanceof Error ? error.message : String(error),
-          reported_at: clock.now(),
-        });
+        // #1110: guarded. `scheduleFeedbackCycle` now records the schedule
+        // boundary only AFTER this function returns, on the premise that
+        // `runFeedbackCycle` cannot throw — true everywhere else in this
+        // function (every other fallible call is already caught), but
+        // `thresholdClampAlerts` is a caller-supplied channel with no such
+        // guarantee. This `try` is what keeps the premise actually true,
+        // rather than merely true until an alert transport misbehaves.
+        try {
+          config.thresholdClampAlerts?.postThresholdClampAlert({
+            where: 'daily-kill-line-check',
+            message: error instanceof Error ? error.message : String(error),
+            reported_at: clock.now(),
+          });
+        } catch (alertError) {
+          logger.log({
+            trace_id: 'feedback-cycle',
+            stage: 'feedback-loop',
+            level: 'error',
+            message: 'threshold clamp alert channel failed',
+            payload: {
+              error: alertError instanceof Error ? alertError.message : String(alertError),
+            },
+          });
+        }
       }
     }
   };
@@ -3144,40 +3175,31 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
    * ## DESIGN DECISION 1 — wall-clock boundary, not elapsed interval from boot
    *
    * `currentBoundary`/`nextBoundary` (feedback-loop/cycle-schedule.ts)
-   * floor-divide `clock.now()` against the Unix epoch, not against this
-   * process's start time. Epoch 0 is itself a UTC midnight, so the default
-   * 24h `intervalMs` produces exact UTC-midnight boundaries for free, with no
-   * new "calendar day" concept layered on top of the existing knob. This is
-   * what makes consecutive `runArmComparisonCycle` windows comparable across
-   * restarts (#753 / `docs/research/12-edge-hypothesis-critique.md` D4): an
-   * interval anchored to boot time gives every restart a different,
-   * incomparable phase; a wall-clock boundary gives the same phase regardless
-   * of how many times the process has restarted.
+   * floor-divide against the Unix epoch, not against this process's start
+   * time — see that module's doc comment for why this makes consecutive
+   * `runArmComparisonCycle` windows comparable across restarts (#753 /
+   * `docs/research/12-edge-hypothesis-critique.md` D4).
    *
-   * `Date.now()`, deliberately NOT the injected `clock`, drives the boundary
-   * math — a split already precedented in this file's sibling `tick-runner.ts`
-   * (`startStageTimer`'s `Date.now()`/`performance.now()` pair, kept apart
-   * from the business clock for the same reason: real process scheduling and
-   * simulated business time answer different questions and must not be
-   * forced onto one clock). Here: `clock.now()` still stamps every business
-   * timestamp `runFeedbackCycle` writes (`computed_at`, window bounds) —
-   * that is unchanged — but the scheduler's own "is a boundary due" check
-   * uses real wall time. This was tried the other way first (`clock.now()`
-   * for the boundary too, on the reasoning that ONE time source is simpler
-   * than two) and reverted: every existing feedback-cycle test in
-   * `production.test.ts` constructs an explicit `new SimulatedClock(START)`
-   * and never calls `.advanceTo()`, relying on `vi.advanceTimersByTimeAsync`
-   * alone to move time forward. A boundary computed from a `clock.now()` that
-   * never advances is the same boundary forever, so the self-rescheduling
-   * timer below would fire its first catch-up cycle and then never again —
-   * observed directly as a regression (an 8-test failure spread) before this
-   * comment was corrected. `Date.now()` tracks vitest's faked timers exactly
-   * (`vi.useFakeTimers()` fakes `Date` alongside `setTimeout`), so the
-   * schedule advances with the fake clock the existing tests already drive,
-   * while `computed_at` stays pinned to `START` in those same tests — which
-   * is also why `INSERT OR REPLACE` collapsing repeat fires into one
-   * `arm_comparison_samples` row (migration 0034) was already this suite's
-   * behavior before #1110, not something this change introduces.
+   * `runIfDue` below reads `Date.now()`/`new Date()` for that boundary check,
+   * NOT the injected `clock` — `clock.now()` still stamps every business
+   * timestamp `runFeedbackCycle` writes (`computed_at`, window bounds), only
+   * the scheduler's own "is a boundary due" check uses real wall time. **This
+   * is deliberate accepted debt**, not something the codebase has real
+   * precedent for: `tick-runner.ts`'s own `Date.now()`/`performance.now()`
+   * split (`startStageTimer`) does not justify it — that pair measures real
+   * elapsed LATENCY, which correctly is not business time, whereas a daily
+   * business cadence IS business time. The actual reason is test-shaped:
+   * every feedback-cycle test outside the "#1110" describe block below
+   * constructs a `SimulatedClock` and never advances it, relying on
+   * `vi.advanceTimersByTimeAsync` alone to move time. Measured directly:
+   * switching this boundary check to `clock.now()` breaks 12 of those tests
+   * across several `describe` blocks, because a `clock.now()` that never
+   * advances is the same boundary forever, so the timer would fire its first
+   * catch-up cycle and never again. **Do not make that switch without first
+   * advancing `SimulatedClock` in every affected test** — that is the
+   * invariant this comment protects. `Date.now()` tracks vitest's faked
+   * timers exactly (`vi.useFakeTimers()` fakes `Date` alongside
+   * `setTimeout`), which is why the existing tests pass unmodified today.
    *
    * Recomputing the boundary from `Date.now()` on every fire, rather than
    * trusting the elapsed `setTimeout` delay to have been accurate, also means
@@ -3190,53 +3212,79 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
    *
    * `feedbackScheduleStore` persists only the single most-recently-completed
    * boundary, never a queue of missed ones. Every check — at boot or at a
-   * normal fire — asks one binary question: "has THIS boundary run yet?" A
-   * virgin store (no row) answers "no" for the current boundary, so a fresh
-   * process runs its first cycle immediately rather than waiting up to a full
-   * `intervalMs` — this is deliberate: a virgin store has genuinely never run
-   * the cycle, which is precisely the bug #1110 reports. A process that comes
-   * back after a week of downtime sees the same "no" exactly once, runs
-   * exactly one catch-up cycle, and stamps the CURRENT boundary — it cannot
-   * fire a burst of seven for the boundaries that were missed silently, and
-   * it does not try to reconstruct how long it was down.
+   * normal fire — asks one binary question via `isBoundaryDue`: "has THIS
+   * boundary run yet?" A virgin store (no row) answers "no" for the current
+   * boundary, so a fresh process runs its first cycle immediately rather than
+   * waiting up to a full `intervalMs` — deliberate: a virgin store has
+   * genuinely never run the cycle, which is precisely the bug #1110 reports.
+   * A process that comes back after a week of downtime sees the same "no"
+   * exactly once, runs exactly one catch-up cycle, and stamps the CURRENT
+   * boundary — it cannot fire a burst of seven for the boundaries that were
+   * missed silently, and it does not try to reconstruct how long it was down.
    *
-   * ## The state this creates that #1110's three-way taxonomy does not name
+   * ## Ordering: the boundary is recorded AFTER the cycle runs, not before
    *
-   * The boundary is recorded BEFORE `runFeedbackCycle` is called (the same
-   * ordering `pruneLlmCallLogWithLog` uses inside `runFeedbackCycle`, for the
-   * analogous reason: a persistently-throwing cycle must not re-run forever
-   * either). That makes "boundary marked done, `runFeedbackCycle` threw, no
-   * `arm_comparison_samples` row for it" a reachable fourth state beside "ran
-   * normally" / "ran on an empty window" / "never ran". It is diagnosable,
-   * not silent: `runFeedbackCycle`'s own `catch` already logs 'daily feedback
-   * cycle failed' at `error` for exactly this case — but an operator reading
-   * only `feedback_cycle_schedule` would see that boundary as "handled" for a
-   * cycle that in fact threw, so the schedule table is a record of what was
-   * ATTEMPTED, not of what succeeded.
+   * `runFeedbackCycle` cannot throw — every fallible call inside it,
+   * including the threshold-clamp alert, is caught and logged internally —
+   * so recording after it returns costs nothing when the cycle itself runs
+   * cleanly. It buys a real retry when the STORE is the thing that fails
+   * (below): if `recordBoundary` throws — e.g. `SQLITE_BUSY` from the shared
+   * WAL file the service-api process also reads — the boundary stays
+   * unstamped and the next fire retries the same boundary's cycle, safe
+   * because `arm_comparison_samples`/`outside_benchmark_samples` key on
+   * `computed_at` with `INSERT OR REPLACE` (migration 0034), so a retry
+   * collapses into the existing row rather than duplicating it.
    *
-   * No re-entrancy guard is needed the way `fill-sync.ts`'s poll needs one:
-   * `runIfDue` runs start-to-finish synchronously (`runFeedbackCycle` has no
-   * `await` seam — see its own doc comment), so `feedbackHandle` always holds
-   * the next-armed timer by the time this function returns, and `stop()`'s
-   * `clearTimeout` cannot race a scheduling gap.
+   * `runIfDue` still runs start-to-finish synchronously today, so `stop()`
+   * cannot race a scheduling gap and no re-entrancy guard is needed the way
+   * `fill-sync.ts`'s (already-async) poll needs one. The `finally` below and
+   * the `feedbackScheduleStopped` check inside it exist anyway, mirroring
+   * `fill-sync.ts`: they cost nothing while `runFeedbackCycle` stays
+   * synchronous, and they are what keeps a throw from the store — the case
+   * this whole comment is about — from silently taking the timer down if
+   * that ever changes.
    */
   const scheduleFeedbackCycle = (feedback: FeedbackCycleConfig, intervalMs: number): void => {
     const runIfDue = (): void => {
-      // `new Date()` (real/faked wall time), not `clock.now()` — see DESIGN
-      // DECISION 1 above for why the scheduler and the cycle's own business
-      // timestamps deliberately use different time sources.
-      const now = new Date();
-      const boundary = currentBoundary(now, intervalMs);
-      const last = feedbackScheduleStore.lastBoundary();
+      try {
+        // `new Date()` (real/faked wall time), not `clock.now()` — see
+        // DESIGN DECISION 1 above.
+        const now = new Date();
+        const boundary = currentBoundary(now, intervalMs);
+        const last = feedbackScheduleStore.lastBoundary();
 
-      if (last === null || boundary.getTime() > last.getTime()) {
-        feedbackScheduleStore.recordBoundary(boundary, now);
-        runFeedbackCycle(feedback);
+        if (isBoundaryDue(boundary, last)) {
+          runFeedbackCycle(feedback);
+          // AFTER `runFeedbackCycle`, not before — see the ordering note above.
+          feedbackScheduleStore.recordBoundary(boundary, now);
+        }
+      } catch (error) {
+        // #1110: a throw here — most likely from the store, `SQLITE_BUSY` on
+        // the shared WAL file — must not take the timer down. Before this
+        // `try`, it did: the re-arm was the function's last statement, not in
+        // a `finally`, so an uncaught throw left `feedbackHandle` unset and
+        // the cycle never fired again for the rest of the process's life,
+        // with no further log line — the exact symptom #1110 was filed to
+        // fix, reintroduced through a different door.
+        logger.log({
+          trace_id: 'feedback-cycle',
+          stage: 'feedback-loop',
+          level: 'error',
+          message:
+            'feedback cycle schedule check failed — re-arming; the boundary was not ' +
+            'recorded, so the next check retries it (#1110)',
+          payload: { error: error instanceof Error ? error.message : String(error) },
+        });
+      } finally {
+        if (!feedbackScheduleStopped) {
+          const upcoming = nextBoundary(new Date(), intervalMs);
+          const delayMs = Math.min(
+            Math.max(0, upcoming.getTime() - Date.now()),
+            MAX_SET_TIMEOUT_DELAY_MS,
+          );
+          feedbackHandle = setTimeout(runIfDue, delayMs);
+        }
       }
-
-      const upcoming = nextBoundary(new Date(), intervalMs);
-      const delayMs = Math.max(0, upcoming.getTime() - Date.now());
-      feedbackHandle = setTimeout(runIfDue, delayMs);
     };
 
     runIfDue();
@@ -3653,22 +3701,27 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         const feedbackIntervalMs = feedback.intervalMs ?? DEFAULT_FEEDBACK_INTERVAL_MS;
         const feedbackBoundaryNow = currentBoundary(new Date(), feedbackIntervalMs);
         const feedbackStoredBoundary = feedbackScheduleStore.lastBoundary();
-        const feedbackDueNow =
-          feedbackStoredBoundary === null ||
-          feedbackBoundaryNow.getTime() > feedbackStoredBoundary.getTime();
+        const feedbackDueNow = isBoundaryDue(feedbackBoundaryNow, feedbackStoredBoundary);
+        // Computed once and carried structurally on BOTH branches' payload
+        // (#1110): the due-now branch is a fresh deploy or a restart after an
+        // outage — exactly the case an operator most needs the
+        // next-scheduled instant for, since "catching up" alone doesn't say
+        // when the normal cadence resumes.
+        const feedbackNextDue = nextBoundary(new Date(), feedbackIntervalMs);
         logger.log({
           trace_id: 'startup',
           stage: 'feedback-loop',
           level: 'info',
           message: feedbackDueNow
             ? 'daily feedback cycle is due now — catching up on the current boundary, then ' +
-              'resuming the normal schedule (#1110)'
+              `resuming the normal schedule, next due at ${feedbackNextDue.toISOString()} (#1110)`
             : 'daily feedback cycle already ran for the current boundary — next due at ' +
-              `${nextBoundary(new Date(), feedbackIntervalMs).toISOString()}`,
+              `${feedbackNextDue.toISOString()}`,
           payload: {
             boundary: feedbackBoundaryNow.toISOString(),
             interval_ms: feedbackIntervalMs,
             stored_boundary: feedbackStoredBoundary?.toISOString() ?? null,
+            next_due: feedbackNextDue.toISOString(),
           },
         });
 
@@ -3685,11 +3738,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         clearInterval(heartbeatHandle);
         heartbeatHandle = undefined;
       }
-      // `clearTimeout`, not `clearInterval`: #1110 replaced the feedback
-      // cycle's plain `setInterval` with `scheduleFeedbackCycle`'s
-      // self-rescheduling `setTimeout` (both APIs accept either clear
-      // function in Node, but stating the matching one documents which timer
-      // primitive is actually in play here).
+      feedbackScheduleStopped = true;
       if (feedbackHandle !== undefined) {
         clearTimeout(feedbackHandle);
         feedbackHandle = undefined;

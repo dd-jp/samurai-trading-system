@@ -1,4 +1,4 @@
-import { currentBoundary, nextBoundary } from './cycle-schedule.js';
+import { currentBoundary, isBoundaryDue, nextBoundary } from './cycle-schedule.js';
 
 describe('currentBoundary', () => {
   it('floors an exact-boundary instant to itself', () => {
@@ -13,7 +13,7 @@ describe('currentBoundary', () => {
     );
   });
 
-  it('is epoch-anchored, not anchored to an arbitrary process start time — two different', () => {
+  it('is epoch-anchored, not anchored to an arbitrary process start time — two different restarts a day apart land on the same phase', () => {
     // Two instants a day apart both floor to a UTC midnight, without either
     // one being handed in as a reference point. An interval anchored to
     // "when the process booted" could not do this: it would need that boot
@@ -47,5 +47,29 @@ describe('nextBoundary', () => {
     const midnight = new Date('2026-08-01T00:00:00.000Z');
     const DAY_MS = 24 * 60 * 60 * 1_000;
     expect(nextBoundary(midnight, DAY_MS)).toEqual(new Date('2026-08-02T00:00:00.000Z'));
+  });
+});
+
+describe('isBoundaryDue', () => {
+  it('is due when nothing has ever completed', () => {
+    const boundary = new Date('2026-08-01T00:00:00.000Z');
+    expect(isBoundaryDue(boundary, null)).toBe(true);
+  });
+
+  it('is due when the boundary is strictly after the last completed one', () => {
+    const last = new Date('2026-08-01T00:00:00.000Z');
+    const boundary = new Date('2026-08-02T00:00:00.000Z');
+    expect(isBoundaryDue(boundary, last)).toBe(true);
+  });
+
+  it('is not due when the boundary already equals the last completed one', () => {
+    const same = new Date('2026-08-01T00:00:00.000Z');
+    expect(isBoundaryDue(same, same)).toBe(false);
+  });
+
+  it('is not due when the boundary is before the last completed one', () => {
+    const last = new Date('2026-08-02T00:00:00.000Z');
+    const boundary = new Date('2026-08-01T00:00:00.000Z');
+    expect(isBoundaryDue(boundary, last)).toBe(false);
   });
 });

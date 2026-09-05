@@ -30,3 +30,14 @@ export function currentBoundary(now: Date, intervalMs: number): Date {
 export function nextBoundary(now: Date, intervalMs: number): Date {
   return new Date(currentBoundary(now, intervalMs).getTime() + intervalMs);
 }
+
+/**
+ * Whether `boundary` has not yet been recorded as completed. `last` is
+ * whatever `FeedbackCycleScheduleStore.lastBoundary()` returned — `null`
+ * before any cycle has ever run. The single check both `scheduleFeedbackCycle`
+ * and its own startup log in production.ts perform, so the two cannot
+ * silently disagree about what "due" means (#1110).
+ */
+export function isBoundaryDue(boundary: Date, last: Date | null): boolean {
+  return last === null || boundary.getTime() > last.getTime();
+}
