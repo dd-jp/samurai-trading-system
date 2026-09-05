@@ -4,8 +4,9 @@
  * rather than a row in `audit_log`.
  */
 
+import { maskCredentials } from '../../shared/sanitize-log-text.js';
 import type { SharedStore } from '../../shared/store/index.js';
-import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
+import { toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 
 export interface AlertDeliveryFailure {
   chat_id: string;
@@ -15,25 +16,16 @@ export interface AlertDeliveryFailure {
   timestamp: Date;
 }
 
-export interface AlertDeliveryLog {
-  recordFailure(entry: AlertDeliveryFailure): void;
-  /** Total permanently-undeliverable alerts recorded — #1108's "count… answerable after the fact". */
-  countFailures(): number;
-  /** Most recent failures, newest first — the forensic detail behind the count. */
-  getRecentFailures(limit: number): AlertDeliveryFailure[];
-}
-
-interface AlertDeliveryFailureRow {
-  chat_id: string;
-  method: string;
-  body: string;
-  error: string;
-  timestamp: string;
-}
-
-export class SqliteAlertDeliveryLog implements AlertDeliveryLog {
+export class SqliteAlertDeliveryLog {
   constructor(private readonly db: SharedStore) {}
 
+  /**
+   * `body`/`error` are attacker/upstream-influenced free text (an alert's
+   * rendered content, a thrown error's message) reaching a durable table
+   * outside `formatLogLine`'s central redaction (#1035) — masked here so a
+   * misconfigured `baseUrl` that puts the bot token in a `TypeError`'s
+   * message (see `classifyTelegramThrown`) cannot leave it on disk.
+   */
   recordFailure(entry: AlertDeliveryFailure): void {
     this.db
       .prepare(
@@ -43,23 +35,17 @@ export class SqliteAlertDeliveryLog implements AlertDeliveryLog {
       .run(
         entry.chat_id,
         entry.method,
-        entry.body,
-        entry.error,
+        maskCredentials(entry.body),
+        maskCredentials(entry.error),
         toStoredTimestamp(entry.timestamp),
       );
   }
 
-  countFailures(): number {
-    const row = this.db.prepare('SELECT COUNT(*) AS n FROM alert_delivery_failures').get() as {
-      n: number;
-    };
+  /** Total permanently-undeliverable alerts recorded as of `asOf` — #1108's "count… answerable after the fact". */
+  countFailures(asOf: Date): number {
+    const row = this.db
+      .prepare('SELECT COUNT(*) AS n FROM alert_delivery_failures WHERE timestamp <= ?')
+      .get(toStoredTimestamp(asOf)) as { n: number };
     return row.n;
-  }
-
-  getRecentFailures(limit: number): AlertDeliveryFailure[] {
-    const rows = this.db
-      .prepare('SELECT * FROM alert_delivery_failures ORDER BY timestamp DESC, rowid DESC LIMIT ?')
-      .all(limit) as AlertDeliveryFailureRow[];
-    return rows.map((row) => ({ ...row, timestamp: fromStoredTimestamp(row.timestamp) }));
   }
 }

@@ -157,9 +157,17 @@ export async function classifyTelegramResponse(
  * `TimeoutError` `DOMException`) into the typed hierarchy. A caller-initiated
  * `AbortError` — the poll loop's own `stop()` — is deliberately mapped to
  * `TelegramProviderError` with no status: not a timeout, and not retryable.
- * Everything else thrown (a bare `TypeError: fetch failed` — DNS/connection
- * failure, no response and no abort) is a `TelegramNetworkError` (#1108):
- * transient, so retryable, unlike the abort case it's checked ahead of.
+ *
+ * Only a genuine bare network failure is a `TelegramNetworkError` (#1108):
+ * Node/undici's `fetch` throws a `TypeError` with the exact message `fetch
+ * failed` (cause carries the DNS/connection detail) when the request never
+ * reached a server, and that is the sole signal accepted here. Everything
+ * else thrown by `#request`'s try block — `JSON.stringify` on a circular
+ * body, `new URL()` on a malformed `baseUrl`, or any other deterministic
+ * programming/config fault — falls to `TelegramProviderError` (non-retryable)
+ * instead: those are not transient, and retrying one 3x with backoff on
+ * every alert send would fail the same way every time while masking the
+ * actual defect.
  */
 export function classifyTelegramThrown(error: unknown, context: string): TelegramError {
   if (
@@ -185,5 +193,8 @@ export function classifyTelegramThrown(error: unknown, context: string): Telegra
   if (name === 'AbortError') {
     return new TelegramProviderError(`Telegram Bot API transport failure: ${detail} (${context})`);
   }
-  return new TelegramNetworkError(`Telegram Bot API transport failure: ${detail} (${context})`);
+  if (error instanceof TypeError && error.message.startsWith('fetch failed')) {
+    return new TelegramNetworkError(`Telegram Bot API transport failure: ${detail} (${context})`);
+  }
+  return new TelegramProviderError(`Telegram Bot API transport failure: ${detail} (${context})`);
 }

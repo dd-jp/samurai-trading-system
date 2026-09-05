@@ -112,6 +112,53 @@ describe('classifyTelegramThrown', () => {
     expect(isRetryableTelegramError(error)).toBe(true);
   });
 
+  it('maps a bare network failure whose message carries the cause’s detail too', () => {
+    const error = classifyTelegramThrown(
+      new TypeError('fetch failed: connect ECONNREFUSED 127.0.0.1:443'),
+      'sendMessage',
+    );
+    expect(error).toBeInstanceOf(TelegramNetworkError);
+  });
+
+  it('maps a circular-JSON TypeError to a non-retryable provider error, not a network error (finding 3)', () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    let thrown: unknown;
+    try {
+      JSON.stringify(circular);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(TypeError);
+
+    const error = classifyTelegramThrown(thrown, 'sendMessage');
+    expect(error).toBeInstanceOf(TelegramProviderError);
+    expect(error).not.toBeInstanceOf(TelegramNetworkError);
+    expect(isRetryableTelegramError(error)).toBe(false);
+  });
+
+  it('maps a bad-baseUrl TypeError to a non-retryable provider error, not a network error (finding 3)', () => {
+    let thrown: unknown;
+    try {
+      new URL('not a valid url');
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(TypeError);
+
+    const error = classifyTelegramThrown(thrown, 'sendMessage');
+    expect(error).toBeInstanceOf(TelegramProviderError);
+    expect(error).not.toBeInstanceOf(TelegramNetworkError);
+    expect(isRetryableTelegramError(error)).toBe(false);
+  });
+
+  it('maps a RangeError to a non-retryable provider error, not a network error (finding 3)', () => {
+    const error = classifyTelegramThrown(new RangeError('Invalid string length'), 'sendMessage');
+    expect(error).toBeInstanceOf(TelegramProviderError);
+    expect(error).not.toBeInstanceOf(TelegramNetworkError);
+    expect(isRetryableTelegramError(error)).toBe(false);
+  });
+
   it('passes an already-classified error through untouched', () => {
     const original = new TelegramRateLimitError('r', 5);
     expect(classifyTelegramThrown(original, 'sendMessage')).toBe(original);

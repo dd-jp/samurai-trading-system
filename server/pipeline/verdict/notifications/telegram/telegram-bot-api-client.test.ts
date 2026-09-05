@@ -467,9 +467,11 @@ describe('TelegramBotApiClient — transient network failures and undeliverable 
   it('a failure on a DIFFERENT chat than the escalation chat never triggers escalation (#342 isolation)', async () => {
     // The heartbeat posts to its own chat, never the escalation chat (#342) —
     // a dead heartbeat destination must not mute or drown the escalations
-    // sent elsewhere. Reproduces that shape directly against `sendMessage`
-    // rather than via `TradeChannelHeartbeat`, which alert-transport.test.ts
-    // already covers end-to-end.
+    // sent elsewhere. alert-transport.test.ts's #342 suite covers a failing
+    // heartbeat CHANNEL end-to-end, but only against the pre-#1108 send path;
+    // this is the one place a heartbeat-chat failure is driven through the
+    // #1108 delivery-failure counter itself, to pin that it durably records
+    // without ever advancing or triggering the escalation-chat alert.
     const h = makeClient({
       alertChatId: CHAT_ID,
       retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },

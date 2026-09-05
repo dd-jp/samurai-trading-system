@@ -159,9 +159,9 @@ const REJECTION_ALERT_EVERY = 3;
 /**
  * Escalate on the Nth permanently-undeliverable alert send and every Nth
  * after (#1108) — the same "don't sit silently" posture `REJECTION_ALERT_EVERY`
- * takes, for the same reason: ten failed sends on 2026-09-04 were each
- * individually swallowed by a caller's `.catch`, and nothing surfaced that a
- * pattern was forming until an operator went looking.
+ * takes: a failed send is individually swallowed by the caller's own
+ * `.catch`, so nothing else surfaces that a pattern is forming until an
+ * operator goes looking.
  */
 const DELIVERY_FAILURE_ALERT_EVERY = 3;
 
@@ -190,7 +190,7 @@ export interface CallbackAuditLog {
 }
 
 /**
- * Write-only view of the orchestrator's `AlertDeliveryLog`
+ * Write-only view of the orchestrator's `SqliteAlertDeliveryLog`
  * (alert-delivery-log.ts), declared here for the same reason
  * `CallbackAuditLog` is: `verdict/` must not depend on `orchestrator/`.
  * `SqliteAlertDeliveryLog` satisfies this structurally.

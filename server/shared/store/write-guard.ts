@@ -130,7 +130,14 @@ export const STAGE_OWNED_TABLES: Record<StoreOwnerStage, readonly string[]> = {
   // spec's own map, but their stores live under `apps/orchestrator/` and are
   // constructed in the orchestrator's composition root, so the handle's
   // identity is the orchestrator's. Recorded that way in the spec too.
-  orchestrator: ['account_state', 'audit_log', 'current_tick', 'daily_equity', 'session_equity'],
+  orchestrator: [
+    'account_state',
+    'alert_delivery_failures',
+    'audit_log',
+    'current_tick',
+    'daily_equity',
+    'session_equity',
+  ],
   risk: ['breaker_state', 'risk_critic_log', 'risk_log'],
   // Reader only — the dashboard's process must never write. Declaring it with
   // an empty set is the strongest statement available here, and doubles as

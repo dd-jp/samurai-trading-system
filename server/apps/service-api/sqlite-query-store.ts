@@ -52,7 +52,7 @@ import {
 } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
-import type { AssetClass, TickStage } from '../orchestrator/index.js';
+import { type AssetClass, SqliteAlertDeliveryLog, type TickStage } from '../orchestrator/index.js';
 import type {
   AttributionSummary,
   DashboardQueryStore,
@@ -266,6 +266,8 @@ export class SqliteQueryStore implements DashboardQueryStore {
   private readonly outsideBenchmarks: SqliteOutsideBenchmarkSampleStore;
   /** #1066: the Risk Manager's own critic log, read (never written) here. */
   private readonly critics: SqliteRiskCriticStore;
+  /** #1108: the orchestrator's own alert-delivery-failure log, read (never written) here. */
+  private readonly alertDeliveryLog: SqliteAlertDeliveryLog;
 
   constructor(
     private readonly db: SharedStore,
@@ -274,6 +276,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
     this.armComparisons = new SqliteArmComparisonSampleStore(db);
     this.outsideBenchmarks = new SqliteOutsideBenchmarkSampleStore(db);
     this.critics = new SqliteRiskCriticStore(db);
+    this.alertDeliveryLog = new SqliteAlertDeliveryLog(db);
   }
 
   /**
@@ -896,10 +899,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
   }
 
   getAlertDeliveryFailureCount(asOf: Date): number {
-    const row = this.db
-      .prepare('SELECT COUNT(*) AS n FROM alert_delivery_failures WHERE timestamp <= ?')
-      .get(toStoredTimestamp(asOf)) as { n: number };
-    return row.n;
+    return this.alertDeliveryLog.countFailures(asOf);
   }
 }
 
