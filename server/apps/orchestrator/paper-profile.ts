@@ -2612,24 +2612,43 @@ export function paperStartingProfile(
     // Deployment fraction (`size * entry / equity`) on this path is
     // proportional to `asset_class_risk_multiplier.stocks` and otherwise
     // scale-invariant to equity, so #1112's own logged pre-fix risk-stage
-    // figure for a real MU entry is valid evidence post-fix: the Trader's
-    // untrimmed ask was `trimmed notional from 12939.225` against a session
-    // equity of 99876.86 (13 whole shares at ~$995.33; the Risk Manager's
-    // separate, since-diagnosed-as-non-binding `per_trade_size_cap`, #1135,
-    // did the trimming that followed) — a measured deployment fraction of
-    // 12939.225 / 99876.86 ≈ 12.96% at the shipped multiplier of 1.0.
+    // figure for a real MU entry is valid evidence post-fix — but the two
+    // numbers in that log line are NOT from the same tick. `trimmed notional
+    // from 12939.225 to 5284.256672816591` is the Risk Manager's own record
+    // for a 14:03:54Z evaluation; 99876.86 is #1112's separately-quoted
+    // SESSION-OPEN equity, an earlier read. Dividing the first tick's
+    // notional by a different tick's equity conflates the two and cannot be
+    // trusted as the deployment fraction at either one.
     //
-    // Scaling that measurement up to D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION
-    // (0.25, the single-stock ETP cap D5 states for a DIFFERENT sizing path)
-    // gives 0.25 / 0.1296 ≈ 1.93x; D5's cap is what bounds this derivation,
-    // not the reverse — 1.9x is chosen (not 2.0x) because 1.9 keeps that
-    // same reference MU entry at ≈24.6% of equity, under the cap, while 2.0
-    // pushes it to ≈25.9%, over it. Rejected: reusing D5's frozen
-    // single-stock `stop_pct` (6.25%) as a stand-in for this path's stop
-    // fraction (giving 0.015625 / 0.01 = 1.5625x) — that stop is calibrated
-    // for a 3x-leveraged ETP, materially more volatile than an unlevered
-    // stock's realized ATR, so it understates the multiplier needed to
-    // reach the same cap.
+    // What the trim line DOES pin, without needing the equity at that tick:
+    // `per_trade_size_cap`'s fraction is `RISK_CAP_EQUITY_FRACTIONS.max_position_size_fraction_of_equity`
+    // (0.05), and `capDial`'s `ceiling: shipped` means the feedback loop can
+    // only tighten it from there, never widen it past 0.05 — so the fraction
+    // live at that trim was `f <= 0.05`. A binding cap trims to exactly
+    // `f * equity`, so `f * equity = 5284.256672816591`, giving
+    // `equity >= 5284.256672816591 / 0.05 = 105685.13`. The Trader's
+    // untrimmed ask on that SAME tick was 12939.225, so the true deployment
+    // fraction is bounded — not measured — at
+    // `12939.225 / 105685.13 <= 12.243%`, tighter than the 12.96% an
+    // equity-conflated division gives.
+    //
+    // Scaling that bound by D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION (0.25,
+    // the single-stock ETP cap D5 states for a DIFFERENT sizing path) shows
+    // BOTH 1.9x and 2.0x clear it on this reference tick: 1.9x bounds
+    // deployment at <=23.26%, and 2.0x at <=24.49% — under 0.25, not over
+    // it. D5's cap does not force 1.9x over 2.0x; the real reason 1.9x is
+    // chosen is conservatism, not the cap: the bound above comes from an
+    // inequality on an unobserved equity, not a direct measurement, and the
+    // "Caveat" paragraph below shows this path has no code-enforced ceiling
+    // at all once conviction and precedent multiplier move off this
+    // reference tick's values — so the smaller of two cap-clearing
+    // candidates is preferred, leaving more of that unenforced margin
+    // unspent. Rejected: reusing D5's frozen single-stock `stop_pct` (6.25%)
+    // as a stand-in for this path's stop fraction (giving
+    // 0.015625 / 0.01 = 1.5625x) — that stop is calibrated for a
+    // 3x-leveraged ETP, materially more volatile than an unlevered stock's
+    // realized ATR, so it understates the multiplier needed to reach the
+    // same cap.
     //
     // Caveat this does not fix: this path has no code-enforced ceiling at
     // D5's 25%. At the `vol_floor_fraction` edge (the tightest stop the ATR
@@ -2639,9 +2658,9 @@ export function paperStartingProfile(
     // (atr_k * vol_floor_fraction)` = 712.5% of equity at 1.9x (already 375%
     // at the shipped 1.0x) — a pre-existing gap this retune does not create
     // and does not close (#1135 tracks the Risk Manager caps that should
-    // backstop it but currently read unclamped equity). 1.9x pins the
-    // OBSERVED reference entry under the cap; a higher-conviction entry at
-    // the same realized ATR is not prevented from exceeding it.
+    // backstop it but currently read unclamped equity). 1.9x keeps the
+    // reference tick's BOUNDED deployment under the cap; a higher-conviction
+    // entry at the same realized ATR is not prevented from exceeding it.
     //
     // Structurally unreachable regardless of this multiplier: any name whose
     // share price exceeds D5's ~$250 single-stock per-position cash (25% of
