@@ -239,6 +239,34 @@ describe('openSharedStore', () => {
     ]);
   });
 
+  // #1112 review: version 45 in `schema_migrations` proves only that
+  // migration 0045 did not throw — a column added to one table, or to the
+  // wrong one, would pass that check and fail at runtime on the other's
+  // INSERT. Asserted against the schema both tables actually carry.
+  it('migration 0045 adds a nullable sizing_capital_ceiling to both lot tables (#1112)', () => {
+    const db = openSharedStore(':memory:');
+
+    for (const table of ['open_positions', 'closed_trades']) {
+      const column = (
+        db.prepare(`PRAGMA table_info(${table})`).all() as {
+          name: string;
+          type: string;
+          notnull: number;
+          dflt_value: unknown;
+        }[]
+      ).find((candidate) => candidate.name === 'sizing_capital_ceiling');
+
+      expect(column, `${table} is missing column sizing_capital_ceiling`).toBeDefined();
+      expect(column?.type).toBe('REAL');
+      // Nullable with no default: NULL is the historically-true "no declared
+      // ceiling was in effect" for every pre-#1112 row, and
+      // `oneSizingRegime` (sqlite-arm-comparison-source.ts) reads it as
+      // exactly that.
+      expect(column?.notnull).toBe(0);
+      expect(column?.dflt_value).toBeNull();
+    }
+  });
+
   // #549 review: version 24 in `schema_migrations` alone would stay green
   // through a column-name typo in the migration file — every marker query
   // would then fail only at runtime. Asserted against the SCHEMA the
