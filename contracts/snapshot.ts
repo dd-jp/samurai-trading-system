@@ -598,6 +598,22 @@ export interface DashboardSnapshot {
    */
   outside_benchmarks: OutsideBenchmarkRow[];
   /**
+   * Count of alert sends TO THE ESCALATION CHAT that exhausted retry and
+   * were durably recorded in `alert_delivery_failures` (#1108) — the answer
+   * to "is the alert channel down", so an operator reads a number instead of
+   * reading silence as calm. All-time, not windowed: the table has no
+   * retention policy yet, and a nonzero count is meant to stay visible until
+   * someone looks.
+   *
+   * Scoped to the escalation chat (`TELEGRAM_CHAT_ID`), not every row in the
+   * table (#1108 third review pass): the same table durably records
+   * heartbeat-chat delivery failures too (#342's isolation), and those would
+   * otherwise falsely degrade a tile that is specifically about the
+   * escalation channel. 0 when the escalation chat is not configured (no
+   * known channel to answer the question about), not the unfiltered total.
+   */
+  alert_delivery_failures: number;
+  /**
    * Third-party provider tiles. Three providers, three different realities,
    * and the shapes differ because the underlying facts do rather than for
    * presentational convenience:

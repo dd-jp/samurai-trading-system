@@ -67,7 +67,12 @@
  * update objects are never logged for the same reason.
  */
 import type { Logger, RetryConfig } from '../../../../shared/index.js';
-import { currentTraceId, fetchWithTimeout, withRetry } from '../../../../shared/index.js';
+import {
+  currentTraceId,
+  fetchWithTimeout,
+  sanitizeLogText,
+  withRetry,
+} from '../../../../shared/index.js';
 import type { ApprovalButtonTarget, ApprovalCallback, TelegramClient } from '../types.js';
 import { parseOptionalAllowedUserIds } from './allowlist.js';
 import { CorrelationTokenStore, tokenLogPrefix } from './correlation-tokens.js';
@@ -151,6 +156,15 @@ const POLL_CONFLICT_BACKOFF_MS = 60_000;
  */
 const REJECTION_ALERT_EVERY = 3;
 
+/**
+ * Escalate on the Nth permanently-undeliverable alert send and every Nth
+ * after (#1108) — the same "don't sit silently" posture `REJECTION_ALERT_EVERY`
+ * takes: a failed send is individually swallowed by the caller's own
+ * `.catch`, so nothing else surfaces that a pattern is forming until an
+ * operator goes looking.
+ */
+const DELIVERY_FAILURE_ALERT_EVERY = 3;
+
 /** Audit `stage` for an inbound HITL callback — the audit log's `stage` is a free-form string. */
 const AUDIT_STAGE = 'verdict.hitl.telegram_callback';
 /** Recorded when the rejected token matches nothing, so the trace is genuinely unknown. */
@@ -175,6 +189,22 @@ export interface CallbackAuditLog {
   }): void;
 }
 
+/**
+ * Write-only view of the orchestrator's `SqliteAlertDeliveryLog`
+ * (alert-delivery-log.ts), declared here for the same reason
+ * `CallbackAuditLog` is: `verdict/` must not depend on `orchestrator/`.
+ * `SqliteAlertDeliveryLog` satisfies this structurally.
+ */
+export interface AlertDeliveryFailureLog {
+  recordFailure(entry: {
+    chat_id: string;
+    method: string;
+    body: string;
+    error: string;
+    timestamp: Date;
+  }): void;
+}
+
 export interface TelegramBotApiClientOptions {
   /**
    * Defaults to `process.env.TELEGRAM_BOT_TOKEN`. Never logged, and never
@@ -190,6 +220,12 @@ export interface TelegramBotApiClientOptions {
   auditLog: CallbackAuditLog;
   /** Chat for repeated-rejection security alerts (the existing heartbeat/notify channel). Omit to disable alerting. */
   alertChatId?: string;
+  /**
+   * Where a send that exhausted `retry` is durably recorded (#1108). Omit to
+   * skip durable recording — the failure still logs loudly either way, same
+   * as `#recordAllowlistRejection`'s audit write.
+   */
+  alertDeliveryLog?: AlertDeliveryFailureLog;
   /** Defaults to `https://api.telegram.org`. */
   baseUrl?: string;
   /** Per-request timeout for non-polling calls. Default 10s. The poll has its own, wider, budget. */
@@ -218,6 +254,7 @@ export class TelegramBotApiClient implements TelegramClient {
   readonly #allowedUserIds: ReadonlySet<number>;
   readonly #auditLog: CallbackAuditLog;
   readonly #alertChatId: string | undefined;
+  readonly #alertDeliveryLog: AlertDeliveryFailureLog | undefined;
   readonly #baseUrl: string;
   readonly #timeoutMs: number;
   readonly #retry: RetryConfig;
@@ -228,6 +265,7 @@ export class TelegramBotApiClient implements TelegramClient {
 
   #offset: number | undefined;
   #rejectionCount = 0;
+  #deliveryFailureCount = 0;
   #running = false;
   #loop: Promise<void> | undefined;
   #pollAbort: AbortController | undefined;
@@ -260,6 +298,7 @@ export class TelegramBotApiClient implements TelegramClient {
     this.#botToken = botToken;
     this.#auditLog = options.auditLog;
     this.#alertChatId = options.alertChatId;
+    this.#alertDeliveryLog = options.alertDeliveryLog;
     this.#baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
     this.#timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.#retry = options.retry ?? DEFAULT_RETRY;
@@ -301,7 +340,12 @@ export class TelegramBotApiClient implements TelegramClient {
   }
 
   async sendMessage(chatId: string, text: string): Promise<void> {
-    await this.#call('sendMessage', { chat_id: chatId, text: this.#capForWire(text) });
+    try {
+      await this.#call('sendMessage', { chat_id: chatId, text: this.#capForWire(text) });
+    } catch (error) {
+      this.#recordDeliveryFailure(chatId, 'sendMessage', text, error);
+      throw error;
+    }
   }
 
   /**
@@ -357,6 +401,7 @@ export class TelegramBotApiClient implements TelegramClient {
       });
     } catch (error) {
       this.#tokens.consume(pair.approved);
+      this.#recordDeliveryFailure(chatId, 'sendMessage', text, error);
       throw error;
     }
   }
@@ -570,6 +615,106 @@ export class TelegramBotApiClient implements TelegramClient {
           }`,
         );
       }
+    }
+  }
+
+  /**
+   * Durable record of a send that exhausted `#retry` (#1108) — `#call`
+   * already gave it `#retry.maxAttempts` tries; by the time this runs the
+   * alert is genuinely undelivered, not merely slow. Never throws past this
+   * point: a broken durable write must not replace the original send
+   * failure the caller is about to see, mirroring
+   * `#recordAllowlistRejection`'s audit try/catch above.
+   *
+   * Passes `text`/`detail` through uncapped, not the wire-capped body —
+   * `SqliteAlertDeliveryLog.recordFailure` owns masking-then-capping the
+   * durable row (mask first, so a bot token cannot be bisected by a cap
+   * applied ahead of it and left half-unmasked); capping here first would
+   * just re-do that decision in the wrong order. The row ends up holding as
+   * much of the original alert as that shared 500-char error-body cap
+   * allows, independent of what Telegram's 4096-char limit happened to let
+   * through.
+   *
+   * The repeated-failure escalation reuses `#call` directly rather than
+   * `sendMessage`, deliberately: routing it back through `sendMessage` would
+   * re-enter this method on a further failure, and an outage that never lets
+   * up would recurse. `#call`'s own failure here is best-effort and logged,
+   * never recorded as a second delivery failure.
+   *
+   * The escalation counter only advances for a failure on `#alertChatId`
+   * itself — every real alert/approval send targets that one chat (module
+   * doc, "all posting to the same escalation chatId"). The heartbeat is the
+   * deliberate exception (#342: a different chat, precisely so a dead
+   * heartbeat destination cannot mute or drown the escalation channel); a
+   * heartbeat failure is still durably recorded below, but must not count
+   * toward — or itself trigger — a "the escalation channel is degraded"
+   * alert posted to the very channel #342 protects.
+   *
+   * `error: detail` in the `#log` payload below is masked centrally by
+   * `formatLogLine`'s `redactPayload` walk — but `message` is a plain string
+   * the logger never touches, so `detail` must be masked with
+   * `sanitizeLogText` before it is interpolated there, or a bot-token-shaped
+   * `TypeError` message (a misconfigured `baseUrl`, say) would reach the log
+   * unmasked in `message` while its `payload` twin was protected.
+   */
+  #recordDeliveryFailure(chatId: string, method: string, text: string, error: unknown): void {
+    const detail = error instanceof Error ? error.message : String(error);
+
+    if (this.#alertDeliveryLog !== undefined) {
+      try {
+        this.#alertDeliveryLog.recordFailure({
+          chat_id: chatId,
+          method,
+          body: text,
+          error: detail,
+          timestamp: new Date(),
+        });
+      } catch (recordError) {
+        // Same reason `detail` below is wrapped: `redactPayload` never walks
+        // this plain string `message`, so an unmasked `recordError` here is
+        // exactly the token-bearing-`TypeError` threat this module's header
+        // documents — e.g. a misconfigured storage `baseUrl`/driver whose
+        // thrown message happens to echo back the failed insert's own
+        // token-bearing text (#1108 third review pass).
+        this.#log(
+          'error',
+          `failed to durably record an undelivered alert (chat_id=${chatId}): ${sanitizeLogText(
+            recordError instanceof Error ? recordError.message : String(recordError),
+          )}`,
+        );
+      }
+    }
+
+    this.#log(
+      'error',
+      `alert delivery to Telegram failed permanently after retries (chat_id=${chatId}, ` +
+        `method=${method}): ${sanitizeLogText(detail)}`,
+      { event: 'telegram_delivery_failed', chat_id: chatId, method, error: detail },
+    );
+
+    if (this.#alertChatId === undefined || chatId !== this.#alertChatId) return;
+
+    this.#deliveryFailureCount++;
+    if (this.#deliveryFailureCount % DELIVERY_FAILURE_ALERT_EVERY === 0) {
+      this.#call('sendMessage', {
+        chat_id: this.#alertChatId,
+        text:
+          `Samurai alert channel degraded: ${this.#deliveryFailureCount} Telegram sends have ` +
+          'failed permanently after retries so far this run. Recent escalations may not have ' +
+          'reached you — check alert_delivery_failures for the record.',
+      }).catch((escalationError: unknown) => {
+        // Same reason `detail` above is wrapped: this escalation send itself
+        // reaches `#call`/`#request` and can fail against the very
+        // misconfigured `baseUrl` this module's header names as the threat —
+        // `redactPayload` never walks this plain string `message` (#1108
+        // third review pass).
+        this.#log(
+          'error',
+          `failed to post the repeated-delivery-failure escalation: ${sanitizeLogText(
+            escalationError instanceof Error ? escalationError.message : String(escalationError),
+          )}`,
+        );
+      });
     }
   }
 

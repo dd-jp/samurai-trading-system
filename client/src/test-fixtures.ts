@@ -310,6 +310,7 @@ export function makeSnapshot(overrides: Partial<WireSnapshot> = {}): WireSnapsho
         max_drawdown_pct: 0.0289,
       }),
     ],
+    alert_delivery_failures: 0,
     providers: {
       alpaca: {
         provider: 'alpaca',

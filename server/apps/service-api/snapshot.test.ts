@@ -162,6 +162,7 @@ function fakeStore(overrides: Partial<DashboardQueryStore> = {}): DashboardQuery
       all_time: { ...EMPTY_SPEND_WINDOW },
     }),
     getPipelineActivity: () => ({ universe: [], events: [], live: [] }),
+    getAlertDeliveryFailureCount: () => 0,
     ...overrides,
   };
 
@@ -444,6 +445,24 @@ describe('buildSnapshot', () => {
       lookbackMs: PIPELINE_LOOKBACK_MS,
       asOf: AS_OF,
     });
+  });
+
+  // #1108: the count of permanently-undeliverable alert sends rides this same
+  // payload, so an operator reading the dashboard can tell the alert channel
+  // is down instead of reading silence as calm.
+  it('projects the alert delivery failure count, bounded by the same asOf', () => {
+    let asked: Date | null = null;
+    const store = fakeStore({
+      getAlertDeliveryFailureCount: (asOf) => {
+        asked = asOf;
+        return 4;
+      },
+    });
+
+    const snap = buildSnapshot(store, AS_OF, 'paper');
+
+    expect(snap.alert_delivery_failures).toBe(4);
+    expect(asked).toEqual(AS_OF);
   });
 
   // #940: closed trades and their fills appear on the wire — the surface the

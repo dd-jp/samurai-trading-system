@@ -179,10 +179,40 @@ function buildAlpacaClient(): AlpacaHttpBrokerClient | undefined {
 
 const providers = new ProviderStatusPoller({ alpaca: buildAlpacaClient() });
 
+/**
+ * The escalation chat the `alert_delivery_failures` tile (#1108) scopes its
+ * count to — read here, not inside `SqliteQueryStore`, per this repo's
+ * env-var convention (composition code takes a config field; see
+ * `docs/coding-standards.md`, "Environment variables"). Normalized the same
+ * way `alert-transport.ts`'s `requireEnv` normalizes it for the orchestrator
+ * (trimmed, empty-as-unset) so the two processes — which load the same
+ * `.env.local` under `yarn serve`/`yarn dashboard` — agree on what counts as
+ * "configured".
+ *
+ * Absent is a real, common state: it is exactly what `SAMURAI_ALERTS=log-only`
+ * leaves it at, and under that mode the orchestrator never constructs a
+ * `TelegramBotApiClient` either, so no real row ever lands in
+ * `alert_delivery_failures`. The tile then correctly reads 0 — but named at
+ * boot below rather than reached silently, so an operator who expected
+ * `telegram` mode and sees this warning knows the tile cannot tell them
+ * anything, rather than reading a healthy 0.
+ */
+const alertChatId = ((): string | undefined => {
+  const raw = (process.env.TELEGRAM_CHAT_ID ?? '').trim();
+  return raw.length === 0 ? undefined : raw;
+})();
+if (alertChatId === undefined) {
+  bootLog('warn', 'alert-channel-failure tile disabled: TELEGRAM_CHAT_ID is not set', {
+    note:
+      'expected under SAMURAI_ALERTS=log-only; alert_delivery_failures will read 0 rather ' +
+      'than filter on an unknown chat',
+  });
+}
+
 const server = createDashboardServer({
   port,
   host,
-  store: new SqliteQueryStore(db),
+  store: new SqliteQueryStore(db, 30, alertChatId),
   bundleRoot,
   mode,
   providers,

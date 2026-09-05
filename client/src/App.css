@@ -221,6 +221,11 @@ code {
   color: var(--vermilion);
 }
 
+/* #1108: the alert channel's own degraded state — only rendered when there is one. */
+.rail-alert-degraded [data-alert-degraded="true"] {
+  color: var(--vermilion);
+}
+
 .rail-meter-head {
   display: flex;
   justify-content: space-between;

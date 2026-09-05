@@ -104,6 +104,7 @@
  */
 import { TelegramBotApiClient, TelegramChannel } from '../../pipeline/verdict/index.js';
 import type { SharedStore as SqliteHandle } from '../../shared/store/index.js';
+import { SqliteAlertDeliveryLog } from './alert-delivery-log.js';
 import { TradeChannelAnalystSkipAlert } from './analyst-skip-alert-channel.js';
 import { TradeChannelArmDivergenceAlert } from './arm-divergence-alert-channel.js';
 import { TradeChannelBreachAlert } from './breach-alert-channel.js';
@@ -394,6 +395,10 @@ export function buildAlertChannels(deps: {
     // is the durable one every other component here writes to, so the day
     // approvals are wired there is no second decision to get wrong.
     auditLog: new SqliteAuditLog(deps.db),
+    // Durable record of a send that exhausts retries (#1108) — the same
+    // shared store every other component here writes to, so "how many
+    // escalations went undelivered" survives the process that raised them.
+    alertDeliveryLog: new SqliteAlertDeliveryLog(deps.db),
     logger: deps.logger,
   });
 
