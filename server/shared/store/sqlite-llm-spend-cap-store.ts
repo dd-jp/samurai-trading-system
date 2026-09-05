@@ -32,17 +32,9 @@ export class SqliteLlmSpendCapStore {
 
   /**
    * Records the ceiling this process is enforcing, replacing whatever the
-   * previous run left.
-   *
-   * REPLACE rather than insert-if-absent, deliberately: a stale row is worse
-   * than no row here. The dashboard reads this to say what bounds the spend it
-   * is showing, and a run started with a raised budget that inherited its
-   * predecessor's $50 would report a breach the enforcer is not enforcing —
-   * the exact defect the field exists to end.
-   *
-   * `null` is a real, recordable state, not a missing write: `llmBudgetUsd`
-   * unset means UNCAPPED, and a reader must be told that rather than left to
-   * assume the last cap still stands.
+   * previous run left: a run started with a raised budget that inherited its
+   * predecessor's $50 would report a breach the enforcer is not enforcing.
+   * `null` is a recordable state, not a missing write — see the header.
    */
   arm(budgetUsd: number | null, armedAt: Date): void {
     this.db
@@ -51,23 +43,15 @@ export class SqliteLlmSpendCapStore {
   }
 
   /**
-   * The armed ceiling, or `null` when nothing bounds the spend.
-   *
-   * `null` collapses two states on purpose — armed uncapped, and never armed
-   * at all (a database no orchestrator has booted against). They differ in
-   * cause and not in consequence: in both, no budget is configured and there
-   * is no denominator any reader may draw a meter against. A caller that
-   * substituted one would be re-inventing the client-side constant this
-   * replaces.
+   * The armed ceiling, or `null` when nothing bounds the spend — armed
+   * uncapped and never armed at all differ in cause, not in consequence.
    */
   read(): number | null {
     const row = this.db.prepare('SELECT budget_usd FROM llm_spend_cap WHERE id = 1').get() as
       | LlmSpendCapRow
       | undefined;
     const budget = row?.budget_usd ?? null;
-    // A non-finite REAL would divide into a meter that renders as `Infinity%`
-    // or vanishes; treated as "no cap" for the same reason `SqliteSpendCap`
-    // refuses a non-finite total rather than comparing against it.
+    // A non-finite REAL divides into a meter that renders as `Infinity%`.
     return budget !== null && Number.isFinite(budget) ? budget : null;
   }
 }

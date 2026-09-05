@@ -134,8 +134,21 @@ describe('rail', () => {
   it('degrades the LLM meter to words when the spend summary is missing or malformed', async () => {
     renderApp([{ ...makeSnapshot(), llm_spend: [] }]);
     const rail = screen.getByRole('complementary', { name: 'Rail' });
-    expect(await within(rail).findByText(/meter not drawable/)).toBeTruthy();
+    expect(
+      await within(rail).findByText('no spend figure on this snapshot — meter not drawable'),
+    ).toBeTruthy();
     expect(within(rail).queryByRole('img', { name: /LLM budget used/ })).toBeNull();
+  });
+
+  // A snapshotless client knows nothing about the operator's budget: claiming
+  // none is configured is as false as drawing a meter against an invented one.
+  it('does not claim the budget is unconfigured before the first poll lands', () => {
+    renderApp([makeSnapshot()]);
+    const rail = screen.getByRole('complementary', { name: 'Rail' });
+    expect(
+      within(rail).getByText('no spend figure on this snapshot — meter not drawable'),
+    ).toBeTruthy();
+    expect(within(rail).queryByText(/no LLM budget configured/)).toBeNull();
   });
 
   // #1140: the denominator is the enforcer's, so a raised budget must move the

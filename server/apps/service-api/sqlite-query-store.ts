@@ -632,12 +632,8 @@ export class SqliteQueryStore implements DashboardQueryStore {
       // comparison against '' is true for every well-formed timestamp, but
       // relying on that is a trick the next reader has to decode.
       all_time: this.spendBetween(null, until),
-      /**
-       * #1140: read from `llm_spend_cap`, never defaulted here. A fallback in
-       * this layer would be the client's deleted `LLM_SPEND_CAP_USD` moved one
-       * process to the left — it would agree with the enforcer by luck and
-       * report a cap on a run that has none.
-       */
+      // Never defaulted here: a fallback in this layer is the client's deleted
+      // `LLM_SPEND_CAP_USD` moved one process left (#1140).
       cap_usd: this.spendCap.read(),
     };
   }

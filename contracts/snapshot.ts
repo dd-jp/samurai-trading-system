@@ -518,16 +518,9 @@ export interface LlmSpendSummary {
   all_time: LlmSpendWindow;
   /**
    * The ceiling the enforcer is actually applying (ADR-0008), armed at boot by
-   * the orchestrator's composition root from the same
-   * `ProductionConfig.llmBudgetUsd` it hands `SqliteSpendCap`. On the wire
-   * because the alternative — a reader holding its own copy of the number —
-   * agrees with the enforcer only by luck, and ADR-0008 records that the
-   * budget moves ("can increase for live trading").
-   *
-   * `null` means no budget is configured: `llmBudgetUsd` unset leaves the run
-   * UNCAPPED (production.ts), and a store no orchestrator has ever armed
-   * against says the same thing — nothing here bounds the spend. A reader may
-   * NOT substitute a denominator for it; there is no cap to draw against.
+   * the orchestrator's composition root; `null` means no budget is configured
+   * and a reader may NOT substitute a denominator. See
+   * `server/shared/store/sqlite-llm-spend-cap-store.ts` (#1140).
    */
   cap_usd: number | null;
 }

@@ -1213,6 +1213,15 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     config.armDivergenceAlerts ?? new LoggingArmDivergenceAlertChannel(logger);
 
   /**
+   * #1140: the SAME `config.llmBudgetUsd` the enforcer is built from, recorded
+   * where the dashboard process — which cannot see this config object — can
+   * read it. Armed inside the branch below, on both sides, so the published
+   * cap and the enforced one are one expression apart rather than two copies
+   * of a number in two runtimes.
+   */
+  const publishedSpendCap = new SqliteLlmSpendCapStore(guardedStore(config.db, 'orchestrator'));
+
+  /**
    * The hard dollar ceiling (ADR-0008). Distinct from `llmRateLimiter`, which
    * bounds CALLS PER WINDOW and refills with time: this bounds TOTAL DOLLARS
    * and never refills. A run can be comfortably inside its rate limit and
@@ -1224,15 +1233,6 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * (#238) with no ceiling is the case this exists for, so if it is ever
    * missing there, the log says so in as many words.
    */
-  /**
-   * #1140: the SAME `config.llmBudgetUsd` the enforcer is built from, recorded
-   * where the dashboard process — which cannot see this config object — can
-   * read it. Armed inside the branch below, on both sides, so the published
-   * cap and the enforced one are one expression apart rather than two copies
-   * of a number in two runtimes.
-   */
-  const publishedSpendCap = new SqliteLlmSpendCapStore(guardedStore(config.db, 'orchestrator'));
-
   let spendCap: SpendCap;
   if (config.llmBudgetUsd === undefined) {
     logger.log({

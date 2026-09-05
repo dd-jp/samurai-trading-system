@@ -181,18 +181,7 @@ function AlertDeliveryBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
   );
 }
 
-/**
- * The enforced ceiling, or `null` when nothing bounds this run's spend
- * (#1140). Read off the wire rather than held here: `SqliteSpendCap` enforces
- * `ProductionConfig.llmBudgetUsd`, ADR-0008 records that the figure moves for
- * live, and a copy of it in this file would keep drawing $50 against a budget
- * nobody is enforcing.
- *
- * `typeof`-checked rather than trusted, like every other wire read behind
- * `toWireSnapshot`: a server that sends no cap at all, or a non-number, means
- * this client cannot state a denominator — which is the same rendering as
- * `null`, not a reason to invent one.
- */
+/** The enforced ceiling, or `null` when nothing bounds this run's spend (#1140). */
 function capOf(snapshot: WireSnapshot | null): number | null {
   const cap = snapshot?.llm_spend?.cap_usd;
   return typeof cap === 'number' && Number.isFinite(cap) && cap > 0 ? cap : null;
@@ -202,8 +191,10 @@ function SpendBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
   const allTime = snapshot?.llm_spend?.all_time;
   const spent = allTime?.cost_usd;
   const cap = capOf(snapshot);
-  const fraction = spent === undefined || cap === null ? Number.NaN : spent / cap;
-  const overCap = cap !== null && spent !== undefined && Number.isFinite(spent) && spent >= cap;
+  const spendKnown = spent !== undefined && Number.isFinite(spent);
+  const drawable = cap !== null && spent !== undefined && Number.isFinite(spent);
+  const fraction = drawable ? spent / cap : Number.NaN;
+  const overCap = drawable && spent >= cap;
   const unpriced = allTime?.unpriced_calls ?? 0;
   const unattributed = allTime?.per_debate.unattributed_calls ?? 0;
   const windows = snapshot?.llm_spend;
@@ -216,15 +207,17 @@ function SpendBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
           {cap === null ? UNKNOWN : formatUsd(cap)}
         </span>
       </div>
-      {Number.isFinite(fraction) ? (
+      {drawable ? (
         <Track
           fraction={fraction}
           tone={overCap ? 'bad' : 'cyan'}
-          label={`LLM budget used: ${formatPercent(fraction)} of the ${formatUsd(cap ?? Number.NaN)} cap`}
+          label={`LLM budget used: ${formatPercent(fraction)} of the ${formatUsd(cap)} cap`}
         />
       ) : (
         <span className="rail-note">
-          {cap === null
+          {/* Missing spend is reported first: with no snapshot this client knows
+              nothing about the operator's budget and must not assert one. */}
+          {spendKnown
             ? 'no LLM budget configured — meter not drawable'
             : 'no spend figure on this snapshot — meter not drawable'}
         </span>

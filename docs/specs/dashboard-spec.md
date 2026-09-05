@@ -52,7 +52,7 @@ Every datum v1 rendered must survive each rewrite ([map #533](https://github.com
 | Tick in progress (instrument, stage, trace) | `tick_status` | Rail — live tick block |
 | Alpaca cash / equity / buying power | `providers.alpaca.balance` (null unless `state === 'ok'`) | Rail — providers block (equity, cash and buying power as label/figure rows, "not sent" when Alpaca omits buying power); Glance uses equity as the denominator for "% of equity" and "deployed of" |
 | Polygon reachability + detail | `providers.polygon.state` / `.detail` | Rail — providers block, as a coloured word |
-| LLM spend vs the ADR-0008 cap | `llm_spend.all_time.cost_usd` | Rail — LLM cap bar |
+| LLM spend vs the ADR-0008 cap | `llm_spend.all_time.cost_usd` against `llm_spend.cap_usd` | Rail — LLM cap bar |
 | Open positions: instrument, side, filled size, avg entry, stop, target, mark, unrealized PnL, order state, opened at | `positions[]` | Glance → Open risk (one row per position with the stop→target track); Live drawer → Order and fills |
 | Recent debates: direction, rounds, per-analyst final position, influence, per-round stance | `debates[]` | Live drawer → Debate (stance strips); Review drawer → Debate (joined by `debate_id`); Review table → "why taken" summary |
 | Verdict history: status, gate/reason, HITL override, trace id, timestamp | `verdicts[]` | Glance → Verdicts this session; both drawers' gate line |
@@ -125,7 +125,7 @@ Added by [Wayfinder: Devil's Advocate](https://github.com/dd-jp/samurai-trading-
 17. As an operator, I want my live Alpaca account balance on the page, so that I can see the broker's own view of equity without opening Alpaca.
 18. As an operator, I want to know whether Polygon is reachable, so that a dead market-data key is visible as itself rather than as an inexplicably quiet pipeline.
 19. As an operator, I want locally-metered LLM spend over 24h/7d/all-time, so that I can see the ADR-0008 budget being consumed while there is still time to act on it.
-19a. As an operator, I want all-time spend drawn as a **burn meter against the $50 cap**, so that "how much runway is left" is readable without arithmetic.
+19a. As an operator, I want all-time spend drawn as a **burn meter against the cap the enforcer applied**, carried on the wire rather than copied into the client ([#1140](https://github.com/dd-jp/samurai-trading-system/issues/1140)), so that "how much runway is left" is readable without arithmetic.
 20. As an operator, I want per-*decision* cost and LLM latency at p50/p95, so that I can answer "what does one debate cost me, and is round 3 earning its latency?" rather than only "what did today cost".
 
 ### Pipeline lanes (v3 Live tab — supersedes v2's rooms theater)
@@ -170,7 +170,7 @@ Top to bottom: the brand mark (侍 SAMURAI), the three vertical tabs, then the a
 - **Mode pill: PAPER / LIVE**, or "mode unknown" when the wire carries no recognised mode. Never defaulted.
 - **Live tick**: instrument · stage from `tick_status`, "since HH:MM:SSZ" from `pipeline.live_entered_at` (`tick_status` carries no timestamp), and the trace id; "live — a trace is running" when only `pipeline.live_trace_id` says so; "idle — no tick in progress" otherwise.
 - **Providers**: Alpaca and Polygon as **coloured words, never dots** (David's call, [map #533](https://github.com/dd-jp/samurai-trading-system/issues/533) decision 7, kept). `ok` / `unauthorized` / `forbidden` / `rate_limited` / `error` / `not_configured` (the contract's `ProviderState`) render as words, and a state the client does not recognise reads "state not recognised"; Alpaca's equity, cash and buying power sit beneath its word, and each probe's `detail` is printed on its own line whenever it is non-empty, never tucked into a tooltip. **The Alpaca balance is `null` unless `state === 'ok'`** and renders as unavailable with the probe's `detail`.
-- **LLM cap bar**: `llm_spend.all_time.cost_usd` against the $50 ADR-0008 cap, with the three windows (24h · 7d · all) and the count of calls carrying no debate id beneath, "floor — N unpriced calls" whenever `unpriced_calls > 0`, and "no spend figure on this snapshot — meter not drawable" when the summary is missing or malformed.
+- **LLM cap bar**: `llm_spend.all_time.cost_usd` against `llm_spend.cap_usd` — the ADR-0008 ceiling the orchestrator's composition root armed, never a figure held in the client ([#1140](https://github.com/dd-jp/samurai-trading-system/issues/1140)) — with the three windows (24h · 7d · all) and the count of calls carrying no debate id beneath, and "floor — N unpriced calls" whenever `unpriced_calls > 0`. Two empty states, missing spend reported first: "no spend figure on this snapshot — meter not drawable" when the summary is missing or malformed (including before the first poll lands, where the client knows nothing of the operator's budget), and "no LLM budget configured — meter not drawable" when spend is known but `cap_usd` is `null`. Neither substitutes a denominator.
 - **Drawdown bar**: `metrics.max_drawdown` against `CONTEXT.md`'s 26.2% index-bracket tolerance ([#798](https://github.com/dd-jp/samurai-trading-system/issues/798)), labelled as that tolerance. The single-stock bracket's 41.8% is not drawn: one bar, one stated reference.
 - **Snapshot clock** at the foot.
 
@@ -383,7 +383,7 @@ interface DashboardQueryStore {
   getAttribution(asOf: Date): Record<string, AttributionSummary>;    // Feedback Loop
   getDailyMetrics(asOf: Date): MetricsSuite;                   // Feedback Loop (cost-model-owned computation)
   getMark(instrument: string, asOf: Date): Mark;               // Market Data Service, for unrealized PnL
-  getLlmSpend(asOf: Date): LlmSpendSummary;                    // llm_spend (migration 0010)
+  getLlmSpend(asOf: Date): LlmSpendSummary;                    // llm_spend (0010) + llm_spend_cap (0047)
   getPipelineActivity(asOf: Date): PipelineActivity;           // audit_log + current_tick (migration 0013)
 }
 
