@@ -1,4 +1,5 @@
 import type { VerdictRow } from '@contracts';
+import type { EquitySample } from '../../hooks/useEquitySamples.ts';
 import type { WireSnapshot } from '../../hooks/useSnapshot.ts';
 import {
   formatClockUtc,
@@ -22,11 +23,6 @@ import { Seal } from '../Seal.tsx';
 import { pnlTone } from '../StateWord.tsx';
 import { Track } from '../Track.tsx';
 import type { Selection } from './LiveTab.tsx';
-
-export interface EquitySample {
-  observed_at: string | null;
-  equity: number;
-}
 
 export interface GlanceTabProps {
   snapshot: WireSnapshot | null;
