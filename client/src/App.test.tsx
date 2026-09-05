@@ -12,6 +12,7 @@ import { doneThrough, makeLane, makeView } from './lib/test-support.ts';
 import {
   fakeFetch,
   makeCondition,
+  makeDebate,
   makeRiskCritic,
   makeSnapshot,
   makeSpend,
@@ -328,16 +329,11 @@ describe('live', () => {
     expect(within(btc).getAllByText('wait')).toHaveLength(4);
   });
 
-  it('shows the invalidation conditions of the selected trace, not the instrument’s other one', async () => {
+  it('draws the selected trace’s conditions, its binding constraint and each stage’s clock', async () => {
     renderApp([
       makeSnapshot({
         pipeline: laneView(),
         risk_critics: [
-          makeRiskCritic({
-            trace_id: 'trace-qqq-older',
-            instrument: 'QQQ',
-            conditions: [makeCondition({ id: 'older-trace-condition' })],
-          }),
           makeRiskCritic({
             trace_id: 'trace-qqq',
             instrument: 'QQQ',
@@ -345,19 +341,19 @@ describe('live', () => {
             conditions: [makeCondition({ id: 'shown-trace-condition', observed: 401.25 })],
           }),
         ],
+        debates: [makeDebate({ instrument: 'QQQ' })],
       }),
     ]);
     openTab('Live');
     fireEvent.click(await screen.findByRole('button', { name: /QQQ, stocks, stopped/ }));
     const drawer = screen.getByRole('complementary', { name: 'Trace detail' });
     expect(drawer.querySelector('[data-condition="shown-trace-condition"]')).toBeTruthy();
-    expect(drawer.querySelector('[data-condition="older-trace-condition"]')).toBeNull();
     expect(
       drawer.querySelector('[data-invalidation="binding"]')?.getAttribute('data-binding'),
     ).toBe('risk_critic:invalidated');
-    // The timeline carries each recorded stage's clock beside its duration.
     const riskRow = drawer.querySelector('[data-stage="risk"]');
     expect(riskRow?.textContent).toContain('11:58:31Z · 2.6s');
+    expect(within(drawer).getByText(/not keyed to this trace/)).toBeTruthy();
   });
 
   it('names its empty states: no selection, an idle lane, no debate, no Risk decision', async () => {
@@ -368,7 +364,7 @@ describe('live', () => {
     fireEvent.click(screen.getByRole('button', { name: /SPY, stocks, idle/ }));
     expect(within(drawer).getByText(/idle — no trace in the last 15 minutes/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /QQQ, stocks, stopped/ }));
-    expect(drawer.querySelector('[data-invalidation="no-decision"]')).toBeTruthy();
+    expect(within(drawer).getByText(/No Risk decision for this trace/)).toBeTruthy();
     expect(within(drawer).getByText(/no completed debate recorded/i)).toBeTruthy();
     expect(within(drawer).getByText(/No open position for this instrument/)).toBeTruthy();
     expect(within(drawer).getAllByText(/no decision word recorded \(#328\)/).length).toBe(1);

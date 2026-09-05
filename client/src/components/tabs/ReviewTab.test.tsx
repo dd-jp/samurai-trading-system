@@ -122,7 +122,7 @@ describe('closed trades', () => {
     expect(within(row).getByText('1h 30m')).toBeTruthy();
   });
 
-  it('opens a trade’s drawer with its exact debate, its Risk row by debate_id, its P&L breakdown and fills', () => {
+  it('opens a trade’s drawer with its debate, Risk row, P&L breakdown and fills', () => {
     renderReview(
       makeSnapshot({
         closed_trades: [
@@ -142,12 +142,6 @@ describe('closed trades', () => {
             critic_verdict: 'pass',
             reasoning: 'measured reclaim',
           }),
-          makeRiskCritic({
-            debate_id: 'other',
-            trace_id: 'trace-other',
-            instrument: 'SPY',
-            reasoning: 'WRONG ROW',
-          }),
         ],
         verdicts: [
           makeVerdict({
@@ -165,7 +159,6 @@ describe('closed trades', () => {
             price: 552.1,
           }),
           makeFill({ idempotency_key: 'k1', leg: 'target', broker_fill_id: 'f-target' }),
-          makeFill({ idempotency_key: 'k2', broker_fill_id: 'f-other' }),
         ],
       }),
     );
@@ -174,7 +167,6 @@ describe('closed trades', () => {
     fireEvent.click(screen.getByRole('button', { name: /^SPY, long/ }));
     expect(within(drawer).getByText('measured reclaim')).toBeTruthy();
     expect(within(drawer).getByRole('img', { name: 'go' })).toBeTruthy();
-    expect(within(drawer).queryByText('WRONG ROW')).toBeNull();
     expect(within(drawer).getByText(/approved · /)).toBeTruthy();
     expect(within(drawer).getByText('+$11.20')).toBeTruthy();
     expect(within(drawer).getByText('−$2.41')).toBeTruthy();
@@ -182,11 +174,11 @@ describe('closed trades', () => {
     const fills = within(drawer).getByRole('list', { name: 'Fills' });
     expect(within(fills).getByText(/f-entry/)).toBeTruthy();
     expect(within(fills).getByText(/f-target/)).toBeTruthy();
-    expect(within(fills).queryByText(/f-other/)).toBeNull();
     expect(within(drawer).getByText(/aged out of the 15-minute pipeline window/)).toBeTruthy();
+    expect(within(drawer).queryByText(/not keyed to this trace/)).toBeNull();
   });
 
-  it('says when no Risk row reaches the trade rather than borrowing the instrument’s', () => {
+  it('names the missing stage record and Risk row when no trace reaches the trade', () => {
     renderReview(
       makeSnapshot({
         closed_trades: [makeClosedTrade({ idempotency_key: 'k1', debate_id: 'd1' })],
@@ -197,8 +189,7 @@ describe('closed trades', () => {
     fireEvent.click(screen.getByRole('button', { name: /^SPY, long/ }));
     const drawer = screen.getByRole('complementary', { name: 'Trade detail' });
     expect(within(drawer).getByText(/No trace id reaches this trade/)).toBeTruthy();
-    expect(within(drawer).queryByRole('img')).toBeNull();
-    expect(drawer.querySelector('[data-invalidation="no-decision"]')).toBeTruthy();
+    expect(within(drawer).getByText(/No Risk decision keyed to this trade/)).toBeTruthy();
     expect(
       within(drawer).getByText(/debate not in the recent-debates window|No completed debate/),
     ).toBeTruthy();

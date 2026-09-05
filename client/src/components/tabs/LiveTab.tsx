@@ -1,4 +1,4 @@
-import { PIPELINE_STAGES, type PipelineLane } from '@contracts';
+import { type FillRow, PIPELINE_STAGES, type PipelineLane, type PositionRow } from '@contracts';
 import type { WireSnapshot } from '../../hooks/useSnapshot.ts';
 import {
   formatClockUtc,
@@ -9,14 +9,7 @@ import {
 } from '../../lib/format.ts';
 import { type ResolvedCell, resolveLaneCells } from '../../lib/lane-cells.ts';
 import { settledOutcome } from '../../lib/ledger.ts';
-import {
-  fillsFor,
-  laneFor,
-  latestDebateFor,
-  openPositionFor,
-  riskCriticFor,
-  verdictFor,
-} from '../../lib/trace.ts';
+import { resolveTrace, type Selection, type TraceDetail } from '../../lib/resolve-trace.ts';
 import {
   OUTCOME_WORD,
   sideWord,
@@ -26,12 +19,6 @@ import {
 import { Seal } from '../Seal.tsx';
 import { StateWord } from '../StateWord.tsx';
 import { DebateSection, FillsList, GatesSection, Timeline } from '../TraceSections.tsx';
-
-export interface Selection {
-  instrument: string;
-  /** `null` selects the instrument's current lane; a trace id pins one trace. */
-  traceId: string | null;
-}
 
 export interface LiveTabProps {
   snapshot: WireSnapshot | null;
@@ -156,6 +143,37 @@ function LaneList(props: LiveTabProps) {
   );
 }
 
+const NO_LANE_LINE: Readonly<Record<'none' | 'aged_out' | 'idle', string>> = {
+  none: 'no lane on this snapshot for this instrument',
+  aged_out:
+    'this trace has aged out of the 15-minute pipeline window — the verdict row is what remains',
+  idle: 'idle — no trace in the last 15 minutes',
+};
+
+function whereLine({ lane, absence }: TraceDetail): string {
+  if (absence.lane !== null || lane === undefined) return NO_LANE_LINE[absence.lane ?? 'none'];
+  return `${lane.asset_class}${
+    lane.started_at === null ? '' : ` · started ${formatClockUtc(lane.started_at)}`
+  }${lane.total_ms === null ? '' : ` · ${formatStageDuration(lane.total_ms)} total`}`;
+}
+
+function OrderSection({ position, fills }: { position: PositionRow; fills: readonly FillRow[] }) {
+  return (
+    <div data-section="order">
+      <p className="drawer-line mono">
+        {sideWord(position.side)} {formatQty(position.filled_size)} @{' '}
+        {formatPrice(position.avg_entry_price)} · stop {formatPrice(position.stop)} · target{' '}
+        {formatPrice(position.target)} · {position.order_state}
+      </p>
+      <p className="drawer-line mono muted">
+        opened {formatClockUtc(position.opened_at)} · mark {formatPrice(position.mark_price)} ·{' '}
+        {formatUsd(position.unrealized_pnl)} unrealized · key {position.idempotency_key}
+      </p>
+      <FillsList fills={fills} />
+    </div>
+  );
+}
+
 function TraceDrawer(props: LiveTabProps) {
   const { snapshot, selection } = props;
   if (snapshot === null || selection === null) {
@@ -169,39 +187,23 @@ function TraceDrawer(props: LiveTabProps) {
       </aside>
     );
   }
-  const lane = laneFor(snapshot.pipeline, selection.instrument, selection.traceId);
-  const traceId = selection.traceId ?? lane?.trace_id ?? null;
-  const verdict = verdictFor(snapshot.verdicts, traceId);
-  const riskCritic = riskCriticFor(snapshot.risk_critics ?? [], traceId, selection.instrument);
-  const debate = latestDebateFor(snapshot.debates, selection.instrument);
-  const position = openPositionFor(snapshot.positions, selection.instrument);
-  const fills = position === undefined ? [] : fillsFor(snapshot.fills, position.idempotency_key);
-  const settled = lane === undefined ? null : settledOutcome(lane.outcome);
+  const detail = resolveTrace(snapshot, selection);
+  const { lane, traceId, settled } = detail;
   return (
     <aside className="drawer" aria-label="Trace detail" data-trace-id={traceId ?? ''}>
       <div className="drawer-head">
         {settled !== null && <Seal outcome={settled} />}
-        <h2 className="display">{selection.instrument}</h2>
+        <h2 className="display">{detail.instrument}</h2>
         {lane !== undefined && (
           <b className={`outcome-${lane.outcome}`}>{OUTCOME_WORD[lane.outcome]}</b>
         )}
         <span className="mono muted drawer-trace">{traceId === null ? 'no trace' : traceId}</span>
       </div>
-      <p className="drawer-line muted">
-        {lane === undefined
-          ? traceId === null
-            ? 'no lane on this snapshot for this instrument'
-            : 'this trace has aged out of the 15-minute pipeline window — the verdict row is what remains'
-          : lane.trace_id === null
-            ? 'idle — no trace in the last 15 minutes'
-            : `${lane.asset_class}${
-                lane.started_at === null ? '' : ` · started ${formatClockUtc(lane.started_at)}`
-              }${lane.total_ms === null ? '' : ` · ${formatStageDuration(lane.total_ms)} total`}`}
-      </p>
+      <p className="drawer-line muted">{whereLine(detail)}</p>
 
       <h3>Timeline</h3>
-      {lane !== undefined && lane.trace_id !== null ? (
-        <Timeline lane={lane} />
+      {detail.cells !== null ? (
+        <Timeline cells={detail.cells} />
       ) : (
         <p className="empty-state">No stage record — there is no trace to draw a timeline from.</p>
       )}
@@ -210,34 +212,27 @@ function TraceDrawer(props: LiveTabProps) {
       </p>
 
       <h3>Gates and conditions</h3>
-      <GatesSection riskCritic={riskCritic} verdict={verdict} keyedBy="trace" />
+      <GatesSection
+        riskCritic={detail.riskCritic}
+        verdict={detail.verdict}
+        keyedBy={detail.riskCriticJoin}
+      />
 
       <h3>Debate</h3>
       <DebateSection
-        debate={debate}
-        inFlight={lane?.outcome === 'in_flight'}
-        linkedBy="instrument"
+        debate={detail.debate}
+        inFlight={detail.inFlight}
+        linkedBy={detail.debateJoin}
       />
 
       <h3>Order and fills</h3>
-      {position === undefined ? (
+      {detail.position === undefined ? (
         <p className="empty-state">
           No open position for this instrument — nothing was filled, or the round trip has already
           closed and lives on Review.
         </p>
       ) : (
-        <div data-section="order">
-          <p className="drawer-line mono">
-            {sideWord(position.side)} {formatQty(position.filled_size)} @{' '}
-            {formatPrice(position.avg_entry_price)} · stop {formatPrice(position.stop)} · target{' '}
-            {formatPrice(position.target)} · {position.order_state}
-          </p>
-          <p className="drawer-line mono muted">
-            opened {formatClockUtc(position.opened_at)} · mark {formatPrice(position.mark_price)} ·{' '}
-            {formatUsd(position.unrealized_pnl)} unrealized · key {position.idempotency_key}
-          </p>
-          <FillsList fills={fills} />
-        </div>
+        <OrderSection position={detail.position} fills={detail.fills} />
       )}
     </aside>
   );
