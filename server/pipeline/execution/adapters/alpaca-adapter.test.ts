@@ -2467,6 +2467,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
       status: 'go',
       order,
       no_go_reason: null,
+      no_go_detail: null,
       approval_path: 'automated',
       would_require_approval: true,
       idempotency_key: order.idempotency_key,

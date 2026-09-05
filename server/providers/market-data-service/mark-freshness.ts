@@ -4,7 +4,7 @@
  * ## Why this is not the staleness gate Verdict already had
  *
  * Verdict's `'staleness'` gate measures SIGNAL age: `now - decision_timestamp`,
- * i.e. how long ago *we* decided. This measures FEED age: `now -
+ * i.e. how long ago *we* decided. This measures FEED age: `readAt -
  * mark.observed_at`, i.e. how long ago the *market* last spoke. They fail
  * independently, and the second is the one nothing checked. A signal decided
  * four seconds ago against a mark last observed at yesterday's close passes the
@@ -31,53 +31,85 @@
 import type { Mark } from './types.js';
 
 /**
- * How far a mark may be observed AHEAD of `now` before `isMarkStale` treats it
- * as a clock disagreement rather than pass latency (#939).
+ * How far a mark may be observed AHEAD of the instant it was RECEIVED before
+ * `classifyMarkFreshness` calls it a venue-vs-us clock disagreement.
  *
- * `now` (the `asOf` a caller passes in) is typically the tick's START instant,
- * while a mark is read some milliseconds or seconds later in the SAME pass —
- * a data source that stamps `observed_at` from a live quote clock (e.g.
- * `AlpacaDataSource`, from the venue's own quote timestamp) then legitimately
- * produces a mark "ahead" of `now` by however long the pass has taken so far.
- * That is ordering by construction, not evidence either clock is wrong.
+ * Measured against the read instant, a forward offset can no longer be our own
+ * elapsed time: the mark was already in hand when that instant was taken, so
+ * whatever is still ahead of it is the venue's stamp disagreeing with our
+ * clock. What remains to absorb is receipt-side slop — the stamp is made at
+ * the venue, this instant is taken after the response is parsed, and a quote
+ * stamped a moment ahead by a venue running slightly fast is not a fault. Five
+ * seconds covers that with room while staying far below a genuine skew, which
+ * shows up in minutes.
  *
- * A few seconds comfortably covers realistic pass latency (soak observed
- * 149ms and 1083ms) while staying far below a genuine venue-vs-us skew, which
- * shows up in minutes, not milliseconds. Kept as its own named constant
- * rather than folded into `maxAgeMs` — the two bound different things: this
- * one caps ORDERING slop within a pass, `maxAgeMs` caps how OLD a mark may be.
+ * Its own named constant rather than folded into `maxAgeMs`: the two bound
+ * different things — this one caps CLOCK disagreement, `maxAgeMs` caps how OLD
+ * a mark may be.
  */
-export const MARK_FORWARD_TOLERANCE_MS = 5_000;
+export const MARK_CLOCK_SKEW_TOLERANCE_MS = 5_000;
 
 /**
- * How old `mark` is at `now`, in milliseconds.
+ * How old `mark` is at `readAt`, in milliseconds.
  *
- * Can be NEGATIVE: a mark observed after `now` is either normal pass latency
- * (within `MARK_FORWARD_TOLERANCE_MS`, see `isMarkStale`) or a genuine clock
- * disagreement between this process and the venue, not a fresh mark. Callers
- * must not treat a negative age as "very fresh" on their own — leave that
- * distinction to `isMarkStale`, which applies the tolerance.
+ * Negative when the mark is stamped ahead of `readAt`. Callers must not read a
+ * negative age as "very fresh" on their own — leave that to
+ * `classifyMarkFreshness`, which separates receipt slop from real skew.
  */
-export function markAgeMs(mark: Mark, now: Date): number {
-  return now.getTime() - mark.observed_at.getTime();
+export function markAgeMs(mark: Mark, readAt: Date): number {
+  return readAt.getTime() - mark.observed_at.getTime();
 }
 
 /**
- * True when `mark` must not be acted on: older than `maxAgeMs`, OR observed
- * further ahead of `now` than `MARK_FORWARD_TOLERANCE_MS` allows.
+ * Why a mark may not be acted on — or that it may.
  *
- * The forward case is deliberately folded in here rather than left to each
- * caller, but it is NOT a bare `age < 0` check (#939). `now` is typically a
- * tick-start `asOf`, and marks are read later in the same pass, so a mark
- * legitimately lands a few hundred milliseconds "ahead" of `now` on every
- * busy tick — that is our own pipeline latency, not two clocks disagreeing.
- * Only once the mark is ahead by more than `MARK_FORWARD_TOLERANCE_MS` does
- * this stop being explainable by ordering and start being evidence that one
- * of the two clocks is actually wrong: if OUR clock is behind, the mark may
- * be genuinely fine, but every other time comparison in the pass — signal
- * age, the flatten window, the bar coordinate — is also being computed
- * against a clock we have just caught being wrong. Refusing costs one tick;
- * trusting it means trading on arithmetic we have direct evidence against.
+ * `stale` and `ahead` are separate members because they call for opposite
+ * responses: `stale` means the market has gone quiet and the price in hand has
+ * stopped being true, `ahead` means our clock and the venue's disagree and
+ * every other time comparison in the pass is suspect with it. A boolean
+ * collapsed the two, and the collapsed form is what let a refusal report the
+ * wrong cause. The numbers ride along so a caller can say BY HOW MUCH without
+ * re-deriving the arithmetic.
+ */
+export type MarkFreshness =
+  | { status: 'fresh'; age_ms: number }
+  | { status: 'stale'; age_ms: number; bound_ms: number }
+  | { status: 'ahead'; age_ms: number; tolerance_ms: number };
+
+/**
+ * Judges `mark` against `readAt` — THE INSTANT THE MARK WAS RECEIVED, not the
+ * tick's `asOf` (#1111).
+ *
+ * ## Why the read instant, and not a wider forward tolerance (#939's option 2)
+ *
+ * #939 ranked three fixes for a mark stamped after the tick's `asOf` and took
+ * the first: a constant forward tolerance, 5000ms, calibrated against two
+ * observations of 149ms and 1083ms. What that constant bounds is the elapsed
+ * time between `asOf` and the read, and that is not a constant — the
+ * 2026-09-04 paper session produced 67 such refusals, from 5020ms to 145s
+ * ahead, not one of them a mark past its own age bound, because the
+ * valuation's mark batch itself was taking minutes. Any constant loses this
+ * race at the next latency step; #939 said as much when it noted the artifact
+ * "gets worse under load".
+ *
+ * `readAt` removes the dependence rather than re-tuning it. Freshness asks how
+ * old the price is AT THE MOMENT IT IS USED, which is when the read returned.
+ * That is a different question from `asOf`, which is the point-in-time
+ * coordinate for WHICH data may be used — and `asOf` keeps that meaning
+ * untouched for every other consumer (bar windows, the indicator cache key,
+ * the account and volatility reads). This adds a second coordinate, read by
+ * this predicate alone; it does not redefine the first.
+ *
+ * Option 3 (clamp forward-stamped marks at the source, as `getSpreadEstimate`
+ * does) was rejected here: clamping makes a genuine skew unrepresentable, so
+ * it would be silently absorbed rather than reported. `getSpreadEstimate` can
+ * afford that because it declines one optional value; this predicate is what
+ * refuses to value the book.
+ *
+ * The change is STRICTLY MORE CONSERVATIVE in the stale direction — `readAt`
+ * is never earlier than `asOf`, so every age computed here is at least as
+ * large as the one the old coordinate gave. #640's refusal is tightened by
+ * this, not weakened.
  *
  * A `maxAgeMs` of 0 or less is rejected as a configuration error rather than
  * silently making every mark stale. That shape is how a gate becomes a
@@ -85,15 +117,22 @@ export function markAgeMs(mark: Mark, now: Date): number {
  * `Record` lookup, and "the system stopped trading and logged stale_feed on
  * every tick" is a very expensive way to discover a typo.
  */
-export function isMarkStale(mark: Mark, now: Date, maxAgeMs: number): boolean {
+export function classifyMarkFreshness(mark: Mark, readAt: Date, maxAgeMs: number): MarkFreshness {
   if (!(maxAgeMs > 0)) {
     throw new Error(
-      `isMarkStale: max mark age must be a positive number of milliseconds, got ${maxAgeMs}. ` +
-        'A non-positive bound would make every mark stale and halt trading entirely; if that ' +
-        'is what you want, stop the process rather than configuring a gate to reject forever.',
+      `classifyMarkFreshness: max mark age must be a positive number of milliseconds, got ` +
+        `${maxAgeMs}. A non-positive bound would make every mark stale and halt trading ` +
+        'entirely; if that is what you want, stop the process rather than configuring a gate ' +
+        'to reject forever.',
     );
   }
 
-  const age = markAgeMs(mark, now);
-  return age < -MARK_FORWARD_TOLERANCE_MS || age > maxAgeMs;
+  const age_ms = markAgeMs(mark, readAt);
+  if (age_ms < -MARK_CLOCK_SKEW_TOLERANCE_MS) {
+    return { status: 'ahead', age_ms, tolerance_ms: MARK_CLOCK_SKEW_TOLERANCE_MS };
+  }
+  if (age_ms > maxAgeMs) {
+    return { status: 'stale', age_ms, bound_ms: maxAgeMs };
+  }
+  return { status: 'fresh', age_ms };
 }

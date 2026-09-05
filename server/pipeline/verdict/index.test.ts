@@ -175,6 +175,24 @@ describe('VerdictImpl.decide — staleness gate', () => {
     expect(decision.no_go_reason).toBe('staleness');
     expect(decision.order).toBeNull();
   });
+
+  it('records the signal age it measured and the bound it broke (#1111)', async () => {
+    // The gate that actually produced the 2026-09-04 session's `staleness`
+    // rows. Its measurement is the OPINION's age — a different quantity from
+    // `stale_feed`'s, under a name that reads alike — and the row carried
+    // neither number, so telling a near miss from an hour-old debate meant
+    // joining back to `debate_log` by hand.
+    const verdict = new VerdictImpl();
+    const decision = await verdict.decide(
+      makeInput({
+        risk_decision: makeRiskDecision({
+          order_intent: makeIntent({ decision_timestamp: new Date('2026-07-15T13:00:00Z') }),
+        }),
+      }),
+    );
+
+    expect(decision.no_go_detail).toEqual({ measured_ms: 60 * 60_000, bound_ms: 30 * 60_000 });
+  });
 });
 
 describe('VerdictImpl.decide — stale_feed gate (#641)', () => {
@@ -261,6 +279,91 @@ describe('VerdictImpl.decide — stale_feed gate (#641)', () => {
     );
 
     expect(decision.no_go_reason).toBe('stale_feed');
+  });
+
+  // #1111: `now` is taken before `getMark` is issued and the fetch has no
+  // failover and a ~30s retry budget, so a stalled vendor puts the two
+  // instants minutes apart. Freshness is judged at the instant the mark came
+  // BACK — a slow fetch must not read as a clock disagreement.
+  describe('freshness is judged at the read instant, not the gate instant (#1111)', () => {
+    /** A clock that jumps forward by `fetchMs` once the mark has been fetched. */
+    function slowFetchClock(fetchMs: number): Clock {
+      let issued = false;
+      return {
+        now: () => {
+          if (!issued) {
+            issued = true;
+            return NOW;
+          }
+          return new Date(NOW.getTime() + fetchMs);
+        },
+      };
+    }
+
+    it('passes a mark stamped 80s after the gate instant when the fetch took that long', async () => {
+      const verdict = new VerdictImpl();
+      const decision = await verdict.decide(
+        makeInput({
+          config: makeConfig({ automation_level: { crypto: 'auto', stocks: 'auto' } }),
+          clock: slowFetchClock(83_993),
+          // Stamped a beat before the read returned — 83s AHEAD of the gate's
+          // own `now`, which is what the pre-#1111 coordinate refused on.
+          marketData: makeMarketData(makeMark({ observed_at: new Date(NOW.getTime() + 83_793) })),
+        }),
+      );
+
+      expect(decision.no_go_reason).toBeNull();
+      expect(decision.status).toBe('go');
+    });
+
+    it('still refuses a mark stamped ahead of the READ instant', async () => {
+      const verdict = new VerdictImpl();
+      const decision = await verdict.decide(
+        makeInput({
+          clock: slowFetchClock(83_993),
+          marketData: makeMarketData(
+            makeMark({ observed_at: new Date(NOW.getTime() + 83_993 + 60_000) }),
+          ),
+        }),
+      );
+
+      expect(decision.no_go_reason).toBe('stale_feed');
+      expect(decision.no_go_detail).toEqual({ measured_ms: -60_000, bound_ms: 5_000 });
+    });
+
+    it('still refuses a mark genuinely past its bound after a slow fetch', async () => {
+      const verdict = new VerdictImpl();
+      const decision = await verdict.decide(
+        makeInput({
+          clock: slowFetchClock(83_993),
+          marketData: makeMarketData(
+            makeMark({ observed_at: new Date(NOW.getTime() - 20 * 60_000) }),
+          ),
+        }),
+      );
+
+      expect(decision.no_go_reason).toBe('stale_feed');
+      expect(decision.no_go_detail).toEqual({
+        measured_ms: 20 * 60_000 + 83_993,
+        bound_ms: 15 * 60_000,
+      });
+    });
+  });
+
+  it('records what the gate measured and the bound it broke (#1111)', async () => {
+    const verdict = new VerdictImpl();
+    const decision = await verdict.decide(
+      makeInput({
+        marketData: makeMarketData(
+          makeMark({ observed_at: new Date(NOW.getTime() - 20 * 60_000) }),
+        ),
+      }),
+    );
+
+    // Recoverable from the row alone: the instrument is already a
+    // `verdict_log` column, so what was missing is how far past the bound the
+    // mark was.
+    expect(decision.no_go_detail).toEqual({ measured_ms: 20 * 60_000, bound_ms: 15 * 60_000 });
   });
 
   it('passes a fresh mark through to the later gates', async () => {

@@ -42,6 +42,8 @@ export function buildVerdictLog(input: VerdictInput, decision: VerdictDecision):
     instrument: orderIntent.instrument,
     status: decision.status,
     no_go_reason: decision.no_go_reason,
+    no_go_detail_measured_ms: decision.no_go_detail?.measured_ms ?? null,
+    no_go_detail_bound_ms: decision.no_go_detail?.bound_ms ?? null,
     hitl_override: decision.approval_path !== 'automated',
     timestamp: decision.timestamp,
   };

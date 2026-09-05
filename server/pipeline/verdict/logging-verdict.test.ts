@@ -180,6 +180,10 @@ describe('LoggingVerdict.decide', () => {
       instrument: 'AAPL',
       status: 'no_go',
       no_go_reason: 'staleness',
+      // #1111: the row carries what the gate measured, so a `staleness` row is
+      // readable without joining back to `debate_log` for the decision bar.
+      no_go_detail_measured_ms: 60 * 60_000,
+      no_go_detail_bound_ms: 30 * 60_000,
       hitl_override: false,
       timestamp: decision.timestamp,
     });

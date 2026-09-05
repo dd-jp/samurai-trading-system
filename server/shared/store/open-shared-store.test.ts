@@ -188,6 +188,7 @@ describe('openSharedStore', () => {
       { version: 43 },
       { version: 44 },
       { version: 45 },
+      { version: 46 },
     ]);
     expect(runMigrations(db)).toEqual([]);
     expect(db.prepare('SELECT version FROM schema_migrations').all()).toEqual([
@@ -236,6 +237,7 @@ describe('openSharedStore', () => {
       { version: 43 },
       { version: 44 },
       { version: 45 },
+      { version: 46 },
     ]);
   });
 
@@ -262,6 +264,32 @@ describe('openSharedStore', () => {
       // ceiling was in effect" for every pre-#1112 row, and
       // `oneSizingRegime` (sqlite-arm-comparison-source.ts) reads it as
       // exactly that.
+      expect(column?.notnull).toBe(0);
+      expect(column?.dflt_value).toBeNull();
+    }
+  });
+
+  it('migration 0046 adds the nullable no-go detail columns to verdict_log (#1111)', () => {
+    const db = openSharedStore(':memory:');
+
+    const byName = new Map(
+      (
+        db.prepare('PRAGMA table_info(verdict_log)').all() as {
+          name: string;
+          type: string;
+          notnull: number;
+          dflt_value: unknown;
+        }[]
+      ).map((column) => [column.name, column]),
+    );
+
+    for (const name of ['no_go_detail_measured_ms', 'no_go_detail_bound_ms']) {
+      const column = byName.get(name);
+      expect(column, `verdict_log is missing column ${name}`).toBeDefined();
+      expect(column?.type).toBe('REAL');
+      // Nullable with no default: NULL is "this gate does not compare a number
+      // to a bound", which is the truth for every pre-#1111 row and for every
+      // `go` and non-staleness refusal written since.
       expect(column?.notnull).toBe(0);
       expect(column?.dflt_value).toBeNull();
     }

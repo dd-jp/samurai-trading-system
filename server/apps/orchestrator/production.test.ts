@@ -375,6 +375,7 @@ function goVerdict(): VerdictDecision {
     status: 'go',
     order,
     no_go_reason: null,
+    no_go_detail: null,
     approval_path: 'automated',
     would_require_approval: false,
     idempotency_key: order.idempotency_key,

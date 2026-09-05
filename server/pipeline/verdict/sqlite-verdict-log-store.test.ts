@@ -17,6 +17,8 @@ function makeLog(overrides: Partial<VerdictLog> = {}): VerdictLog {
     instrument: 'AAPL',
     status: 'go',
     no_go_reason: null,
+    no_go_detail_measured_ms: null,
+    no_go_detail_bound_ms: null,
     hitl_override: false,
     timestamp: new Date('2026-07-15T14:00:00Z'),
     ...overrides,
@@ -53,6 +55,8 @@ describe('SqliteVerdictLogStore', () => {
       instrument: 'AAPL',
       status: 'go',
       no_go_reason: null,
+      no_go_detail_measured_ms: null,
+      no_go_detail_bound_ms: null,
       hitl_override: 0,
       timestamp: '2026-07-15T14:00:00.000Z',
     });

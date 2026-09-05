@@ -2456,7 +2456,15 @@ export interface SmokeObservations {
     termination: string | null;
   }[];
   /** From `verdict_log` — the row `OrphanVerdictScanner` reads at restart. */
-  verdicts: { trace_id: string; instrument: string; status: string; no_go_reason: string | null }[];
+  verdicts: {
+    trace_id: string;
+    instrument: string;
+    status: string;
+    no_go_reason: string | null;
+    /** #1111, migration 0046 — what the gate measured and the bound it broke. */
+    no_go_detail_measured_ms: number | null;
+    no_go_detail_bound_ms: number | null;
+  }[];
   /** From `open_positions` — written ahead by `ExecutionImpl` before the broker call. */
   positions: {
     idempotency_key: string;
@@ -2605,7 +2613,10 @@ export function readSmokeObservations(
       )
       .all() as SmokeObservations['debates'],
     verdicts: db
-      .prepare('SELECT trace_id, instrument, status, no_go_reason FROM verdict_log ORDER BY rowid')
+      .prepare(
+        'SELECT trace_id, instrument, status, no_go_reason, no_go_detail_measured_ms, ' +
+          'no_go_detail_bound_ms FROM verdict_log ORDER BY rowid',
+      )
       .all() as SmokeObservations['verdicts'],
     // #1028: ordered by content (`arm`/`idempotency_key`/`leg`), not `rowid`.
     // `rowid` reflects insertion order, which for these two tables is
@@ -4242,6 +4253,24 @@ export function evaluateSmokeGate(
         "breakers' state, so a tripped hard-drawdown breaker or kill switch re-arms itself on " +
         'restart. Under ADR-0007 the breakers are the only remaining stop; this table sat ' +
         'unwritten behind a doc comment claiming "the caller persists this" (review 2026-08-06 B1)',
+    );
+  }
+
+  // #1111: the two gates whose refusal is a number against a bound must write
+  // that number. A column written by `buildVerdictLog` and never read back is
+  // the same defect one table over — the reason a `staleness` row could not be
+  // diagnosed without joining to `debate_log` in the first place.
+  const undetailedStaleness = verdicts.filter(
+    (verdict) =>
+      (verdict.no_go_reason === 'staleness' || verdict.no_go_reason === 'stale_feed') &&
+      (verdict.no_go_detail_measured_ms === null || verdict.no_go_detail_bound_ms === null),
+  );
+  if (undetailedStaleness.length > 0) {
+    failures.push(
+      `${undetailedStaleness.length} verdict_log row(s) refused on staleness/stale_feed without ` +
+        `recording what was measured (${undetailedStaleness
+          .map((verdict) => `${verdict.instrument}:${verdict.no_go_reason}`)
+          .join(', ')}) — the cause is unrecoverable from the row, which is what #1111 fixed`,
     );
   }
 

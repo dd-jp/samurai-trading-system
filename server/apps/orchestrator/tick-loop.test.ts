@@ -993,6 +993,7 @@ describe('runTickPlan decision gate (#743)', () => {
         status: 'go' as const,
         order: exit,
         no_go_reason: null,
+        no_go_detail: null,
         approval_path: 'automated' as const,
         would_require_approval: false,
         idempotency_key: exit.idempotency_key,

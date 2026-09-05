@@ -51,6 +51,7 @@ function makeDecision(overrides: Partial<VerdictDecision> = {}): VerdictDecision
     status: 'no_go',
     order: null,
     no_go_reason: 'staleness',
+    no_go_detail: null,
     approval_path: 'automated',
     would_require_approval: false,
     idempotency_key: 'AAPL-2026-07-15T13:55:00Z',
