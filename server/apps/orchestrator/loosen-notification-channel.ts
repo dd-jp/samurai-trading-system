@@ -112,6 +112,7 @@ export class TradeChannelLoosenNotice implements LoosenNotificationChannel {
       this.#logger.log({
         trace_id: 'feedback-cycle',
         stage: 'feedback-loop',
+        event: 'loosen_notice_send_failed',
         // `error`, and more clearly so than before #736: the move is already
         // in force, so a lost notice means the operator's picture of the risk
         // limits is wrong until they read the adjustment log.

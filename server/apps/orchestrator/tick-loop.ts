@@ -274,6 +274,7 @@ export async function runTickPlan(
             safeLog(config.logger, {
               trace_id,
               stage: 'tick-loop',
+              event: 'decision_pass_bar_forfeit',
               level: 'error',
               message:
                 `decision pass retry budget exhausted, bar forfeit: ${instrument.asset} — ` +
@@ -307,6 +308,7 @@ export async function runTickPlan(
         safeLog(config.logger, {
           trace_id,
           stage: 'tick-loop',
+          event: 'instrument_pass_failed',
           level: 'error',
           message: `instrument failed: ${instrument.asset}`,
           payload: {
@@ -343,6 +345,7 @@ export async function runTickPlan(
           safeLog(config.logger, {
             trace_id,
             stage: 'tick-loop',
+            event: 'audit_log_write_failed',
             level: 'error',
             message: `audit_log record failed for crashed instrument: ${instrument.asset}`,
             payload: {

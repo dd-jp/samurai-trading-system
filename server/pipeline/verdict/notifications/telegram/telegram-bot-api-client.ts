@@ -66,7 +66,7 @@
  * only ever reach a log through `tokenLogPrefix` (first 8 hex chars). Raw
  * update objects are never logged for the same reason.
  */
-import type { Logger, RetryConfig } from '../../../../shared/index.js';
+import type { LogEventCode, Logger, RetryConfig } from '../../../../shared/index.js';
 import {
   currentTraceId,
   fetchWithTimeout,
@@ -331,10 +331,11 @@ export class TelegramBotApiClient implements TelegramClient {
     if (capped === text) return text;
     this.#log(
       'warn',
+      'telegram_body_truncated',
       `telegram_body_truncated: outbound body is ${text.length} chars, over the ` +
         `${TELEGRAM_MAX_MESSAGE_CHARS}-char limit; the wire got a truncated alert and ` +
         'the full body is in the payload',
-      { event: 'telegram_body_truncated', chars: text.length, body: text },
+      { chars: text.length, body: text },
     );
     return capped;
   }
@@ -461,6 +462,7 @@ export class TelegramBotApiClient implements TelegramClient {
         const conflict = error instanceof TelegramProviderError && error.status === 409;
         this.#log(
           'error',
+          'telegram_get_updates_failed',
           conflict
             ? 'getUpdates returned 409 Conflict — another process is polling this bot token. ' +
                 'Exactly one process may poll; inbound approvals are NOT being observed here.'
@@ -512,6 +514,7 @@ export class TelegramBotApiClient implements TelegramClient {
       if (target === undefined) {
         this.#log(
           'info',
+          'telegram_callback_token_unknown',
           `callback_query carried an unknown or expired correlation token (${tokenLogPrefix(token)}…)`,
         );
         return;
@@ -525,6 +528,7 @@ export class TelegramBotApiClient implements TelegramClient {
         } catch (error) {
           this.#log(
             'error',
+            'telegram_approval_handler_threw',
             `approval callback handler threw: ${error instanceof Error ? error.message : String(error)}`,
           );
         }
@@ -540,6 +544,7 @@ export class TelegramBotApiClient implements TelegramClient {
         } catch (error) {
           this.#log(
             'error',
+            'telegram_answer_callback_failed',
             `answerCallbackQuery failed: ${error instanceof Error ? error.message : String(error)}`,
           );
         }
@@ -586,6 +591,7 @@ export class TelegramBotApiClient implements TelegramClient {
       // must be loud — this is the only record of a security signal.
       this.#log(
         'error',
+        'telegram_allowlist_audit_write_failed',
         `failed to audit-log an allowlist rejection (from_id=${fromId ?? 'absent'}): ${
           error instanceof Error ? error.message : String(error)
         }`,
@@ -595,6 +601,7 @@ export class TelegramBotApiClient implements TelegramClient {
     this.#rejectionCount++;
     this.#log(
       'warn',
+      'telegram_allowlist_rejected',
       `rejected a callback_query from a non-allowlisted user (from_id=${fromId ?? 'absent'}, ` +
         `chat_id=${chatId ?? 'absent'}, token=${tokenLogPrefix(token)}…)`,
     );
@@ -610,6 +617,7 @@ export class TelegramBotApiClient implements TelegramClient {
       } catch (error) {
         this.#log(
           'error',
+          'telegram_rejection_alert_send_failed',
           `failed to post the repeated-rejection alert: ${
             error instanceof Error ? error.message : String(error)
           }`,
@@ -678,6 +686,7 @@ export class TelegramBotApiClient implements TelegramClient {
         // token-bearing text (#1108 third review pass).
         this.#log(
           'error',
+          'telegram_delivery_record_failed',
           `failed to durably record an undelivered alert (chat_id=${chatId}): ${sanitizeLogText(
             recordError instanceof Error ? recordError.message : String(recordError),
           )}`,
@@ -687,9 +696,10 @@ export class TelegramBotApiClient implements TelegramClient {
 
     this.#log(
       'error',
+      'telegram_delivery_failed',
       `alert delivery to Telegram failed permanently after retries (chat_id=${chatId}, ` +
         `method=${method}): ${sanitizeLogText(detail)}`,
-      { event: 'telegram_delivery_failed', chat_id: chatId, method, error: detail },
+      { chat_id: chatId, method, error: detail },
     );
 
     if (this.#alertChatId === undefined || chatId !== this.#alertChatId) return;
@@ -710,6 +720,7 @@ export class TelegramBotApiClient implements TelegramClient {
         // third review pass).
         this.#log(
           'error',
+          'telegram_delivery_escalation_failed',
           `failed to post the repeated-delivery-failure escalation: ${sanitizeLogText(
             escalationError instanceof Error ? escalationError.message : String(escalationError),
           )}`,
@@ -796,11 +807,17 @@ export class TelegramBotApiClient implements TelegramClient {
     });
   }
 
-  #log(level: 'info' | 'warn' | 'error', message: string, payload?: unknown): void {
+  #log(
+    level: 'info' | 'warn' | 'error',
+    event: LogEventCode,
+    message: string,
+    payload?: unknown,
+  ): void {
     if (this.#logger !== undefined) {
       this.#logger.log({
         trace_id: currentTraceId() ?? '',
         stage: AUDIT_STAGE,
+        event,
         level,
         message,
         ...(payload === undefined ? {} : { payload }),

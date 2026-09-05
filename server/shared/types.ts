@@ -16,6 +16,8 @@ export type {
   AssetClass,
   InstrumentSubclass,
   LogEntry,
+  LogEntryTemplate,
+  LogEventCode,
   Logger,
   LogLevel,
   TradingArm,

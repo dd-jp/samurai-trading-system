@@ -15,7 +15,7 @@
  * instead of three copies that can silently drift apart.
  */
 import { sanitizeLogText } from './sanitize-log-text.js';
-import type { LogEntry, Logger } from './types.js';
+import type { LogEntry, LogEntryTemplate, Logger } from './types.js';
 
 /**
  * Renders a thrown value into a log-safe string.
@@ -63,7 +63,7 @@ export function safeLog(logger: Logger, entry: LogEntry): void {
 }
 
 /** The parts of a `LogEntry` fixed at the call site — everything but the payload. */
-export type CaughtFailureLogTemplate = Omit<LogEntry, 'payload'>;
+export type CaughtFailureLogTemplate = LogEntryTemplate;
 
 /**
  * Logs a caught failure whose OWN text is the diagnostic payload — a store or

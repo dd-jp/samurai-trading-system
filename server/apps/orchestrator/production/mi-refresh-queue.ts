@@ -298,6 +298,7 @@ export class MiRefreshQueue implements MarketIntelligenceRefresh {
           {
             trace_id: MI_REFRESH_TRACE_ID,
             stage: 'market_intelligence',
+            event: 'mi_refresh_threw',
             level: 'warn',
             message:
               `market intelligence: the queued refresh for ${request.instrument} threw; that ` +
@@ -317,6 +318,7 @@ export class MiRefreshQueue implements MarketIntelligenceRefresh {
     safeLog(this.deps.logger, {
       trace_id: MI_REFRESH_TRACE_ID,
       stage: 'market_intelligence',
+      event: 'mi_refresh_refused_spend_cap',
       level: 'warn',
       message:
         `market intelligence: refresh for ${request.instrument} not started — ` +

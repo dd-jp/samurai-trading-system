@@ -102,6 +102,7 @@ export class LoggingOrphanAlertChannel implements OrphanAlertChannel {
     this.logger.log({
       trace_id: orphan.trace_id,
       stage: 'orchestrator',
+      event: 'orphan_verdict_found',
       level: 'error',
       message: 'orphaned go verdict found at startup — verify against the venue',
       payload: { ...orphan },
@@ -133,6 +134,7 @@ export class LoggingUnpricedFillAlertChannel implements UnpricedFillAlertChannel
       // use for work that belongs to no pipeline pass.
       trace_id: 'unpriced-fill',
       stage: 'execution',
+      event: 'unpriced_fill_stuck',
       level: 'error',
       message:
         'broker reports a filled quantity it will not price — the lot is stuck; ' +
@@ -169,6 +171,7 @@ export class LoggingResidualExposureAlertChannel implements ResidualExposureAler
       // at once rather than belonging to one pipeline pass.
       trace_id: 'residual-exposure',
       stage: 'execution',
+      event: 'residual_exposure_unprotected',
       level: 'error',
       message:
         'a partially-filled flatten left a residual position and re-arming its protective ' +
@@ -206,6 +209,7 @@ export class LoggingFlattenReconcileAlertChannel implements FlattenReconcileAler
       // flatten at once rather than belonging to one pipeline pass.
       trace_id: 'reconcile',
       stage: 'execution',
+      event: 'flatten_reconcile_unresolved',
       level: 'error',
       message:
         "reconcile() could not settle a flatten_submissions row — the flatten's outcome is " +
@@ -243,6 +247,7 @@ export class LoggingFlattenOverfillAlertChannel implements FlattenOverfillAlertC
       // above: this is observed by the fill poll, not any one tick.
       trace_id: 'flatten-overfill',
       stage: 'execution',
+      event: 'flatten_overfill_dropped',
       level: 'warn',
       message:
         "a flatten filled more than its named lots' journalled share — the excess was " +
@@ -279,6 +284,7 @@ export class LoggingOcoDoubleFillAlertChannel implements OcoDoubleFillAlertChann
       // observed by the fill poll, not any one tick.
       trace_id: 'oco-double-fill',
       stage: 'execution',
+      event: 'oco_double_fill',
       level: 'error',
       message:
         'both protective legs of an emulated crypto OCO filled — the lot is over-closed and a ' +
@@ -320,6 +326,7 @@ export class LoggingAnalystSkipAlertChannel implements AnalystSkipAlertChannel {
       // heartbeat and orphan scan use.
       trace_id: 'analyst-skip',
       stage: 'analysts',
+      event: 'analyst_consecutive_skips',
       level: 'error',
       message:
         `analysts have skipped ${alert.consecutive_skips} consecutive ticks for ` +
@@ -360,6 +367,7 @@ export class LoggingAnalystTelemetry implements AnalystTelemetry {
     this.logger.log({
       trace_id: event.trace_id,
       stage: 'analysts',
+      event: 'indicator_unavailable',
       level: 'warn',
       message:
         `${INDICATOR_UNAVAILABLE_COUNTER}{kind="${event.kind}"}: ${event.instrument} ` +
@@ -392,6 +400,7 @@ export class LoggingMiCoverageTelemetry implements MiCoverageTelemetry {
     this.logger.log({
       trace_id: event.trace_id,
       stage: 'analysts',
+      event: 'mi_no_data_observed',
       level: 'warn',
       message:
         `${MI_NO_DATA_BY_NAME_COUNTER}{instrument="${event.instrument}"} ` +
@@ -423,6 +432,7 @@ export class LoggingMiCoverageAlertChannel implements MiCoverageAlertChannel {
     this.logger.log({
       trace_id: 'mi-coverage',
       stage: 'analysts',
+      event: 'mi_coverage_degraded',
       level: 'warn',
       message:
         `market-intelligence coverage degraded for ${alert.instrument} (subclass=` +
@@ -454,6 +464,7 @@ export class LoggingTickSkipAlertChannel implements TickSkipAlertChannel {
     this.logger.log({
       trace_id: 'tick-skip',
       stage: 'tick-loop',
+      event: 'tick_pass_degraded',
       level: 'warn',
       message:
         `tick pass materially degraded: ${alert.skipped} of ${alert.planned} planned ` +
@@ -495,6 +506,7 @@ export class LoggingDataFailoverAlertChannel implements DataFailoverAlertChannel
     this.logger.log({
       trace_id: 'data-failover',
       stage: 'orchestrator',
+      event: 'ohlcv_failover_engaged',
       level: 'warn',
       message:
         `OHLCV failover on the ${alert.leg} leg: ${alert.primaryName} failed for ` +
@@ -536,6 +548,7 @@ export class LoggingArmDivergenceAlertChannel implements ArmDivergenceAlertChann
     this.logger.log({
       trace_id: 'arm-divergence',
       stage: 'feedback-loop',
+      event: 'arm_divergence_detected',
       level: 'warn',
       message:
         'ARM DIVERGENCE — the matched control (falsifier arm 2) is out-performing the live ' +
@@ -581,6 +594,7 @@ export class LoggingCalendarFallbackAlertChannel implements CalendarFallbackAler
     this.logger.log({
       trace_id: 'startup',
       stage: 'orchestrator',
+      event: 'calendar_fallback_engaged',
       level: 'error',
       message:
         "paper equity leg's Alpaca calendar fetch failed at boot — fell back to the " +
@@ -620,6 +634,7 @@ export class LoggingBreachAlertChannel implements BreachAlertChannel {
       // synthetic trace the feedback cycle already logs under.
       trace_id: 'feedback-cycle',
       stage: 'feedback-loop',
+      event: 'kill_threshold_breach',
       level: 'error',
       message:
         'kill-threshold breach — risk thresholds auto-tightened; review the strategy and ' +
@@ -678,6 +693,7 @@ export class LoggingLoosenNotificationChannel implements LoosenNotificationChann
       // trace the feedback cycle already logs under.
       trace_id: 'feedback-cycle',
       stage: 'feedback-loop',
+      event: 'risk_threshold_loosened',
       level: 'warn',
       message:
         'risk-threshold LOOSENING applied — the Feedback Loop widened its own limit, capped at ' +
@@ -727,6 +743,7 @@ export class ConsoleApprovalChannel implements ApprovalChannel {
     this.logger.log({
       trace_id: request.trace_id,
       stage: 'verdict',
+      event: 'hitl_gate_auto_approved',
       level: 'warn',
       message: 'HITL gate auto-approved by ConsoleApprovalChannel — no human reviewed this trade',
       payload: {

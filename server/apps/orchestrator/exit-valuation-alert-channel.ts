@@ -100,6 +100,7 @@ export class TradeChannelExitValuationDegradedAlert implements ExitValuationDegr
         // `trader` seam, and a line naming the wrong stage is worse than a
         // generic one when the operator is grepping for the feed fault.
         stage: alert.seam,
+        event: 'exit_valuation_alert_send_failed',
         level: 'error',
         message:
           'exit-valuation-degraded alert failed to send — an exit was priced on a partly-' +

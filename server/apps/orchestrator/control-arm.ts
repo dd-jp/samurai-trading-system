@@ -289,6 +289,7 @@ export function buildControlArmStep(deps: ControlArmDeps): ControlArmStep {
       deps.logger.log({
         trace_id,
         stage: 'control_arm',
+        event: 'control_arm_pass_failed',
         // #1089: 'error', not 'warn' — a contained crash from ANY cause (not
         // only the whole-book valuation refusal that Trader now converts to a
         // named skip before it ever reaches here) must surface above the

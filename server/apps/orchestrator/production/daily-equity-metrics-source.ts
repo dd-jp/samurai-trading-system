@@ -340,6 +340,7 @@ export class SqliteDailyEquityMetricsSource implements DailyMetricsSource {
     this.input.logger.log({
       trace_id: 'feedback-cycle',
       stage: 'feedback-loop',
+      event: 'revalidation_snapshot_absent',
       level: 'warn',
       message:
         `no revalidation snapshot — ${reason}. The pbo_over_max, oos_sharpe_under_min and ` +
@@ -352,6 +353,7 @@ export class SqliteDailyEquityMetricsSource implements DailyMetricsSource {
     this.input.logger.log({
       trace_id: 'feedback-cycle',
       stage: 'feedback-loop',
+      event: 'daily_metrics_suite_absent',
       level: 'warn',
       message: `no daily MetricsSuite — ${reason}`,
       payload,

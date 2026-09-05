@@ -54,6 +54,7 @@ export class TradeChannelThresholdClampAlert implements ThresholdClampAlertChann
       this.#logger.log({
         trace_id: 'threshold-clamp',
         stage: 'risk',
+        event: 'threshold_clamp_alert_send_failed',
         level: 'error',
         message: 'threshold-clamp alert failed to send — the clamp trip still stands',
         payload: {

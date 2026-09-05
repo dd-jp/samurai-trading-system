@@ -113,7 +113,13 @@
  * converge.
  */
 
-import type { AssetClass, Clock, LogEntry, Logger } from '../../../shared/index.js';
+import type {
+  AssetClass,
+  Clock,
+  LogEntry,
+  LogEntryTemplate,
+  Logger,
+} from '../../../shared/index.js';
 import { logCaughtFailure, safeLog } from '../../../shared/safe-log.js';
 import type { ArchivedItem, MiArchiveStore, RawArchiveRow } from '../archive/mi-archive-store.js';
 import { MI_SOURCES } from '../archive/mi-sources.js';
@@ -435,11 +441,7 @@ export class PolymarketAgent {
     if (logger !== undefined) safeLog(logger, entry);
   }
 
-  #logFailure(
-    template: Omit<LogEntry, 'payload'>,
-    error: unknown,
-    payload: Record<string, unknown>,
-  ): void {
+  #logFailure(template: LogEntryTemplate, error: unknown, payload: Record<string, unknown>): void {
     const logger = this.#deps.logger;
     if (logger !== undefined) logCaughtFailure(logger, template, error, payload);
   }
@@ -461,6 +463,7 @@ export class PolymarketAgent {
         {
           trace_id,
           stage: 'market_intelligence',
+          event: 'polymarket_pass_failed',
           level: 'warn',
           message:
             'market intelligence: the Polymarket pass failed outside the per-market paths; ' +
@@ -507,6 +510,7 @@ export class PolymarketAgent {
           {
             trace_id,
             stage: 'market_intelligence',
+            event: 'polymarket_market_fetch_failed',
             level: 'warn',
             message:
               `polymarket: fetching '${entry.id}' failed; it contributes nothing this refresh. ` +
@@ -526,6 +530,7 @@ export class PolymarketAgent {
         this.#log({
           trace_id,
           stage: 'market_intelligence',
+          event: 'polymarket_curated_row_rotted',
           level: 'warn',
           message:
             `polymarket: curated row '${entry.id}' resolves to no open market ` +
@@ -592,6 +597,7 @@ export class PolymarketAgent {
         {
           trace_id,
           stage: 'market_intelligence',
+          event: 'polymarket_store_write_failed',
           level: 'warn',
           message:
             'market intelligence: the Polymarket store/archive write failed; nothing ingested ' +
@@ -683,6 +689,7 @@ export class PolymarketAgent {
         {
           trace_id,
           stage: 'market_intelligence',
+          event: 'polymarket_price_history_failed',
           level: 'warn',
           message:
             `polymarket: price history for '${entry.id}' failed; it contributes nothing this ` +
@@ -789,6 +796,7 @@ export class PolymarketAgent {
     this.#log({
       trace_id,
       stage: 'market_intelligence',
+      event: 'polymarket_row_refused',
       level: persistent ? 'warn' : 'info',
       message: persistent
         ? `polymarket: curated row '${entry.id}' has been refused ${streak} passes in a row — ` +

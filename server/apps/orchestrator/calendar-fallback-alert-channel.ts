@@ -44,6 +44,7 @@ export class TradeChannelCalendarFallbackAlert implements CalendarFallbackAlertC
       this.#logger.log({
         trace_id: 'calendar-fallback',
         stage: 'orchestrator',
+        event: 'calendar_fallback_alert_send_failed',
         level: 'error',
         message: 'calendar-fallback alert failed to send — the fallback still stands',
         payload: {

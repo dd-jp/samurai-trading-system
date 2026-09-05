@@ -177,6 +177,7 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
         this.logger?.log({
           trace_id: entry.trace_id,
           stage: 'orchestrator',
+          event: 'llm_model_unpriced',
           level: 'warn',
           message:
             `llm spend: model '${entry.model}' is not in MODEL_RATES, so its TOKEN cost is ` +
@@ -231,6 +232,7 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
         this.logger?.log({
           trace_id: entry.trace_id,
           stage: 'orchestrator',
+          event: 'llm_call_capture_failed',
           level: 'warn',
           message:
             'llm call text capture failed — the API call and its spend row are unaffected, ' +
@@ -245,6 +247,7 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
       this.logger?.log({
         trace_id: entry.trace_id,
         stage: 'orchestrator',
+        event: 'llm_spend_write_failed',
         level: 'warn',
         message:
           'llm spend metering write failed — the API call itself succeeded and is unaffected, ' +

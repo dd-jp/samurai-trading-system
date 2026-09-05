@@ -116,6 +116,7 @@ describe('JsonDebateLogger', () => {
     expect(log).toHaveBeenCalledWith({
       trace_id: 'trace-1',
       stage: 'debate',
+      event: 'debate_latency',
       level: 'info',
       message: 'debate.latency',
       payload: { debate_id: 'debate-1', latency_ms: 9000, budget_ms: 15000 },
@@ -153,6 +154,7 @@ describe('JsonDebateLogger', () => {
     expect(log).toHaveBeenCalledWith({
       trace_id: 'trace-1',
       stage: 'debate',
+      event: 'debate_timeout',
       level: 'warn',
       message: 'debate.timeout',
       payload: {
@@ -181,6 +183,7 @@ describe('JsonDebateLogger', () => {
     expect(log).toHaveBeenCalledWith({
       trace_id: 'trace-1',
       stage: 'debate',
+      event: 'debate_analyst_failure',
       level: 'warn',
       message: 'debate.analyst_failure',
       payload: {

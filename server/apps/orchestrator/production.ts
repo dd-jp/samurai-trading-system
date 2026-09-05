@@ -709,6 +709,7 @@ function pruneLlmCallLogWithLog(
     logger.log({
       trace_id: trigger === 'startup' ? 'startup' : 'feedback-cycle',
       stage: 'orchestrator',
+      event: 'llm_call_log_prune_failed',
       level: 'warn',
       message:
         'llm_call_log prune failed — captured prompts and responses are unaffected, but the ' +
@@ -780,6 +781,7 @@ function pruneMiArchiveWithLog(
     logger.log({
       trace_id: trigger === 'startup' ? 'startup' : 'feedback-cycle',
       stage: 'orchestrator',
+      event: 'mi_archive_purge_failed',
       level: 'warn',
       message:
         'MI archive purge failed — archived rows are unaffected, but the archive is not bounded ' +
@@ -1245,6 +1247,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     logger.log({
       trace_id: 'startup',
       stage: 'orchestrator',
+      event: 'llm_budget_uncapped',
       level: 'warn',
       message:
         'ProductionConfig.llmBudgetUsd is not set — LLM spend is UNCAPPED. Nothing will ' +
@@ -1292,6 +1295,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     logger.log({
       trace_id: 'startup',
       stage: 'orchestrator',
+      event: 'llm_spend_cap_armed',
       level: opening.admitted ? 'info' : 'error',
       message: opening.admitted
         ? `LLM spend cap armed: $${opening.spent_usd.toFixed(2)} of ` +
@@ -1681,6 +1685,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     logger.log({
       trace_id: 'boot',
       stage: 'market_intelligence',
+      event: 'sentiment_credentials_absent',
       level: 'warn',
       message:
         'SAMURAI_SENTIMENT_RETRIEVAL=on but no sentiment credentials are configured, so no ' +
@@ -1832,6 +1837,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     logger.log({
       trace_id: 'startup',
       stage: 'market_intelligence',
+      event: 'mi_agent_absent',
       level: 'warn',
       message:
         (sentimentEnabled
@@ -2241,6 +2247,7 @@ function buildMiIngestAgent(deps: {
     deps.logger.log({
       trace_id: 'startup',
       stage: 'market_intelligence',
+      event: 'mi_news_path_absent',
       level: 'warn',
       message:
         'market intelligence: the deterministic news path is NOT running because Alpaca data ' +
@@ -2550,6 +2557,7 @@ export function startTickLoop(deps: {
         deps.logger.log({
           trace_id: 'tick-loop',
           stage: 'tick-loop',
+          event: 'tick_plan_duplicates_dropped',
           level: 'warn',
           message: `tick: scheduler returned ${duplicated.length} duplicate instrument(s) in one plan, extras dropped`,
           payload: { duplicated },
@@ -2632,6 +2640,7 @@ export function startTickLoop(deps: {
       deps.logger.log({
         trace_id: 'tick-loop',
         stage: 'tick-loop',
+        event: 'tick_failed',
         level: 'error',
         message: 'tick failed',
         payload: { error: error instanceof Error ? error.message : String(error) },
@@ -2894,6 +2903,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
       logger.log({
         trace_id: 'feedback-cycle',
         stage: 'feedback-loop',
+        event: 'daily_metrics_suite_absent',
         level: 'warn',
         message:
           'no daily MetricsSuite this cycle — all four kill-lines were skipped, NOT passed ' +
@@ -2925,6 +2935,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     logger.log({
       trace_id: 'feedback-cycle',
       stage: 'feedback-loop',
+      event: 'daily_metrics_computed',
       // A breach is an `error` even though the alert channel also carries it:
       // the log is the record an operator reads back after the fact.
       level: report.breaches.length > 0 ? 'error' : 'info',
@@ -3026,6 +3037,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         logger.log({
           trace_id: 'feedback-cycle',
           stage: 'feedback-loop',
+          event: 'outside_benchmarks_computed',
           // `warn` only when a benchmark could not be measured at all. A
           // benchmark out-performing the book is NOT a warning — it is context,
           // and an outside benchmark can never raise a verdict (#636: secondary,
@@ -3052,6 +3064,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         logger.log({
           trace_id: 'feedback-cycle',
           stage: 'feedback-loop',
+          event: 'outside_benchmark_cycle_failed',
           level: 'error',
           message: 'outside benchmark cycle failed',
           payload: { error: error instanceof Error ? error.message : String(error) },
@@ -3076,6 +3089,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     logger.log({
       trace_id: 'feedback-cycle',
       stage: 'feedback-loop',
+      event: 'arm_comparison_computed',
       // A divergence is `warn`, not `error`: nothing failed and no dial moved
       // (contrast the kill-line breach above, which auto-tightens). It is the
       // measurement #636 asked for, and the operator decides what it means.
@@ -3179,6 +3193,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
       logger.log({
         trace_id: 'feedback-cycle',
         stage: 'feedback-loop',
+        event: 'feedback_cycle_failed',
         level: 'error',
         message: 'daily feedback cycle failed',
         payload: { error: error instanceof Error ? error.message : String(error) },
@@ -3209,6 +3224,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
           logger.log({
             trace_id: 'feedback-cycle',
             stage: 'feedback-loop',
+            event: 'threshold_clamp_alert_failed',
             level: 'error',
             message: 'threshold clamp alert channel failed',
             payload: {
@@ -3377,6 +3393,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
             logger.log({
               trace_id: 'feedback-cycle',
               stage: 'feedback-loop',
+              event: 'feedback_cycle_already_attempted',
               level: 'warn',
               message:
                 'feedback cycle for this boundary was already attempted — not running it ' +
@@ -3396,6 +3413,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
               logger.log({
                 trace_id: 'feedback-cycle',
                 stage: 'feedback-loop',
+                event: 'feedback_attempt_marker_failed',
                 level: 'error',
                 message:
                   'could not record the feedback-cycle attempt marker — running the cycle ' +
@@ -3428,6 +3446,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         logger.log({
           trace_id: 'feedback-cycle',
           stage: 'feedback-loop',
+          event: 'feedback_cycle_pass_failed',
           level: 'error',
           message:
             'feedback cycle pass failed — re-arming for the next boundary; a restart retries ' +
@@ -3619,6 +3638,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
                 {
                   trace_id,
                   stage: 'market_intelligence',
+                  event: 'gdelt_chain_threw',
                   level: 'warn',
                   message:
                     'market intelligence: the GDELT poll/score chain broke its never-throws ' +
@@ -3700,6 +3720,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         logger.log({
           trace_id: 'startup',
           stage: 'feedback-loop',
+          event: 'feedback_cycle_unconfigured',
           level: 'warn',
           message:
             'ProductionConfig.feedback is not set — the daily feedback cycle will NEVER run. ' +
@@ -3716,6 +3737,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
           logger.log({
             trace_id: 'startup',
             stage: 'feedback-loop',
+            event: 'feedback_metrics_unconfigured',
             level: 'warn',
             message:
               'FeedbackCycleConfig.metrics is not set — the daily cycle will tune dials but ' +
@@ -3785,6 +3807,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
             logger.log({
               trace_id: 'startup',
               stage: 'feedback-loop',
+              event: 'revalidation_selection_absent',
               level: 'warn',
               message:
                 'pbo_over_max, oos_sharpe_under_min and dsr_insignificant are evaluated ONLY ' +
@@ -3838,6 +3861,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
             logger.log({
               trace_id: 'startup',
               stage: 'feedback-loop',
+              event: 'backtest_reference_sharpe_inert',
               level: 'warn',
               message:
                 'backtest_reference_sharpe <= 0 — live_backtest_divergence_over_max is INERT and ' +
@@ -3892,6 +3916,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
           logger.log({
             trace_id: 'startup',
             stage: 'feedback-loop',
+            event: 'feedback_schedule_read_failed',
             level: 'error',
             message:
               'could not read the feedback cycle schedule store at startup — proceeding with ' +

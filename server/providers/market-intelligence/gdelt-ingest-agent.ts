@@ -36,7 +36,7 @@
  * no pre-scoring dedup to do here, because nothing in this half costs tokens.
  */
 
-import type { Clock, LogEntry, Logger } from '../../shared/index.js';
+import type { Clock, LogEntry, LogEntryTemplate, Logger } from '../../shared/index.js';
 import { logCaughtFailure, safeLog } from '../../shared/safe-log.js';
 import type { MiArchiveStore, RawArchiveRow } from './archive/mi-archive-store.js';
 import { MI_SOURCES } from './archive/mi-sources.js';
@@ -119,7 +119,7 @@ export class GdeltIngestAgent {
 
   /** `log`, for the two catch blocks whose thrown value IS the diagnostic. */
   private logFailure(
-    template: Omit<LogEntry, 'payload'>,
+    template: LogEntryTemplate,
     error: unknown,
     payload: Record<string, unknown>,
   ): void {
@@ -176,6 +176,7 @@ export class GdeltIngestAgent {
         {
           trace_id,
           stage: 'market_intelligence',
+          event: 'gdelt_poll_failed',
           level: 'warn',
           message:
             'market intelligence: GDELT poll failed outside the fetch/write paths (cursor read ' +
@@ -246,6 +247,7 @@ export class GdeltIngestAgent {
         this.log({
           trace_id,
           stage: 'market_intelligence',
+          event: 'gdelt_batch_timestamp_unreadable',
           level: 'warn',
           message:
             'market intelligence: GDELT batch URL carries no readable timestamp; the batch cannot ' +
@@ -265,6 +267,7 @@ export class GdeltIngestAgent {
         {
           trace_id,
           stage: 'market_intelligence',
+          event: 'gdelt_batch_fetch_failed',
           level: 'warn',
           message:
             'market intelligence: GDELT batch fetch failed; no macro rows archived this poll. ' +
@@ -332,6 +335,7 @@ export class GdeltIngestAgent {
         {
           trace_id,
           stage: 'market_intelligence',
+          event: 'gdelt_archive_write_failed',
           level: 'warn',
           message:
             'market intelligence: GDELT archive write failed; batch not stored. ' +

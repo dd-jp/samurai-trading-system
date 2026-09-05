@@ -102,6 +102,8 @@ export type {
   Fill,
   InstrumentSubclass,
   LogEntry,
+  LogEntryTemplate,
+  LogEventCode,
   Logger,
   LogLevel,
   OpenPosition,

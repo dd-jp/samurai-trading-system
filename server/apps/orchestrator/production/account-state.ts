@@ -283,6 +283,7 @@ export class AlpacaAccountStateProvider implements AccountStateProvider {
         this.input.logger.log({
           trace_id: 'account-state',
           stage: 'orchestrator',
+          event: 'daily_pnl_unknown',
           level: 'warn',
           message:
             `daily PnL for '${key}' is UNKNOWN: no equity was observed at the session start ` +
@@ -303,6 +304,7 @@ export class AlpacaAccountStateProvider implements AccountStateProvider {
       this.input.logger.log({
         trace_id: 'account-state',
         stage: 'orchestrator',
+        event: 'session_open_equity_midsession',
         level: 'warn',
         message:
           `session-open equity for '${key}' is a mid-session base (${openEquity}) rather than ` +

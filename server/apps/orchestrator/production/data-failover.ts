@@ -157,6 +157,7 @@ export function resolveFallbackPacing(logger: Logger, env: NodeJS.ProcessEnv = p
     logger.log({
       trace_id: 'startup',
       stage: 'orchestrator',
+      event: 'polygon_pacing_malformed',
       level: 'warn',
       message:
         'SAMURAI_PACING_POLYGON_* is malformed and was IGNORED: ' +
@@ -211,6 +212,7 @@ export function guardFallbackPacing(pacing: TokenBucketConfig, logger: Logger): 
   logger.log({
     trace_id: 'startup',
     stage: 'orchestrator',
+    event: 'polygon_pacing_unusable',
     level: 'warn',
     message:
       `Polygon fallback pacing is unusable (capacity ${pacing.capacity}, refillPerSecond ` +
@@ -398,6 +400,7 @@ export function buildFailoverDataSource(deps: LiveDataFailoverDeps): DataSource 
           deps.logger.log({
             trace_id: currentTraceId() ?? 'data-failover',
             stage: 'orchestrator',
+            event: 'ohlcv_failover_alert_send_failed',
             level: 'error',
             message:
               `OHLCV failover alert for ${event.symbol} ${event.timeframe} could not be ` +

@@ -207,12 +207,12 @@ export class TokenBucket {
       // not derived from `lane` — see shared/trace-context.ts.
       trace_id: currentTraceId() ?? 'token-bucket',
       stage: 'rate_limit',
+      event: 'token_bucket_wait',
       level: 'warn',
       message:
         `token_bucket_wait: the '${this.telemetry.name}' bucket paced a ${lane} caller for ` +
         `${roundedWaitMs}ms before granting a token.`,
       payload: {
-        event: 'token_bucket_wait',
         bucket: this.telemetry.name,
         lane,
         wait_ms: roundedWaitMs,

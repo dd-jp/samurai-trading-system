@@ -419,6 +419,7 @@ export class XSearchClient implements GrokSentimentClient {
       this.#logger?.log({
         trace_id: 'grok',
         stage: 'market_intelligence',
+        event: 'x_search_items_dropped',
         level: 'warn',
         message:
           `x_search: dropped ${unevidenced + stale} item(s) for ${context.instrument} — ` +
@@ -503,6 +504,7 @@ export class XSearchClient implements GrokSentimentClient {
     this.#logger?.log({
       trace_id: 'grok',
       stage: 'market_intelligence',
+      event: 'x_search_response_unparseable',
       level: 'warn',
       message:
         `x_search: could not parse the response for ${instrument}; reporting zero items. ` +
@@ -535,6 +537,7 @@ function clampSearchResults(requested: number | undefined, logger: Logger | unde
     logger?.log({
       trace_id: 'grok',
       stage: 'market_intelligence',
+      event: 'x_search_results_clamped',
       level: 'warn',
       message:
         `x_search: max_search_results ${requested} clamped to ${clamped}. Search results ride ` +

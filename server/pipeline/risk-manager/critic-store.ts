@@ -111,6 +111,7 @@ function readConditionsJson(
     logger?.log({
       trace_id: currentTraceId() ?? debate_id,
       stage: 'risk',
+      event: 'risk_critic_conditions_unparseable',
       level: 'warn',
       message:
         'risk_critic_log: conditions_json is not valid JSON; the row replays as no_conditions (#1068)',
@@ -123,6 +124,7 @@ function readConditionsJson(
     logger?.log({
       trace_id: currentTraceId() ?? debate_id,
       stage: 'risk',
+      event: 'risk_critic_conditions_not_array',
       level: 'warn',
       message:
         'risk_critic_log: conditions_json is not a JSON array; the row replays as no_conditions (#1068)',
@@ -138,6 +140,7 @@ function readConditionsJson(
     logger?.log({
       trace_id: currentTraceId() ?? debate_id,
       stage: 'risk',
+      event: 'risk_critic_conditions_dropped_on_read',
       level: 'warn',
       message:
         'risk_critic_log: persisted invalidation condition(s) failed the tightened shape ' +

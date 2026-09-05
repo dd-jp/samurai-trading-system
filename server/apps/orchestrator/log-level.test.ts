@@ -24,12 +24,16 @@ class FakeStdout implements StdoutStream {
   }
 }
 
-const ENTRY: LogEntry = {
+// `satisfies`, not an annotation: annotating widens to the `LogEntry` union,
+// and the `{ ...ENTRY, level }` spread below then loses the fact that `event`
+// is present — which the union's warn/error arm requires.
+const ENTRY = {
   trace_id: 'trace-1',
   stage: 'trader',
+  event: 'trader_candidate_rejected',
   level: 'debug',
   message: 'considered and rejected',
-};
+} satisfies LogEntry;
 
 describe('debugEnabledFromEnvironment', () => {
   it('enables only on an explicit debug value, trimmed and case-insensitive', () => {

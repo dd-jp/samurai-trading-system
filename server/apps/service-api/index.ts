@@ -21,6 +21,7 @@
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AlpacaHttpBrokerClient } from '../../pipeline/execution/index.js';
+import type { LogEventCode } from '../../shared/index.js';
 import {
   guardedStore,
   openSharedStore,
@@ -62,8 +63,13 @@ watchDashboardStdout();
  * lines that belong to the process rather than to a tick.
  */
 const logger = new JsonLogger();
-const bootLog = (level: 'info' | 'warn' | 'error', message: string, payload?: unknown) => {
-  logger.log({ trace_id: 'startup', stage: 'dashboard', level, message, payload });
+const bootLog = (
+  level: 'info' | 'warn' | 'error',
+  event: LogEventCode,
+  message: string,
+  payload?: unknown,
+) => {
+  logger.log({ trace_id: 'startup', stage: 'dashboard', event, level, message, payload });
 };
 
 const port = Number(process.env.PORT ?? 8787);
@@ -109,7 +115,7 @@ const db = guardedStore(openSharedStore(dbPath), 'service-api');
 // anywhere. Naming the resolved absolute path at boot is the one thing that
 // would have made that mismatch visible instead of merely fixable in
 // hindsight.
-bootLog('info', `Samurai dashboard store → ${resolve(dbPath)}`, {
+bootLog('info', 'dashboard_store_resolved', `Samurai dashboard store → ${resolve(dbPath)}`, {
   store_path: resolve(dbPath),
   mode,
 });
@@ -147,9 +153,14 @@ const bundleRoot = fileURLToPath(new URL('../../../client/', import.meta.url));
  */
 const bundleProblem = bundleDiagnostic(bundleRoot);
 if (bundleProblem !== null) {
-  bootLog('error', 'dashboard UI not servable — /api/snapshot is still up', {
-    bundle_problem: bundleProblem,
-  });
+  bootLog(
+    'error',
+    'dashboard_bundle_unservable',
+    'dashboard UI not servable — /api/snapshot is still up',
+    {
+      bundle_problem: bundleProblem,
+    },
+  );
 }
 
 /**
@@ -170,7 +181,7 @@ function buildAlpacaClient(): AlpacaHttpBrokerClient | undefined {
     // orchestrator and merely a missing tile here, so it is caught rather than
     // propagated — the operator still gets positions, verdicts and metrics off
     // the store.
-    bootLog('warn', 'Alpaca balance tile disabled', {
+    bootLog('warn', 'dashboard_balance_tile_disabled', 'Alpaca balance tile disabled', {
       error: error instanceof Error ? error.message : String(error),
     });
     return undefined;
@@ -202,11 +213,16 @@ const alertChatId = ((): string | undefined => {
   return raw.length === 0 ? undefined : raw;
 })();
 if (alertChatId === undefined) {
-  bootLog('warn', 'alert-channel-failure tile disabled: TELEGRAM_CHAT_ID is not set', {
-    note:
-      'expected under SAMURAI_ALERTS=log-only; alert_delivery_failures will read 0 rather ' +
-      'than filter on an unknown chat',
-  });
+  bootLog(
+    'warn',
+    'dashboard_alert_tile_disabled',
+    'alert-channel-failure tile disabled: TELEGRAM_CHAT_ID is not set',
+    {
+      note:
+        'expected under SAMURAI_ALERTS=log-only; alert_delivery_failures will read 0 rather ' +
+        'than filter on an unknown chat',
+    },
+  );
 }
 
 const server = createDashboardServer({
@@ -233,7 +249,7 @@ installDashboardContinueOnFault();
 // invert the priority — the store-backed views need no provider at all.
 void providers.start();
 
-bootLog('info', `Samurai dashboard → ${server.url}`, {
+bootLog('info', 'dashboard_listening', `Samurai dashboard → ${server.url}`, {
   url: server.url,
   note: 'read-only operator view; Ctrl+C to stop',
 });

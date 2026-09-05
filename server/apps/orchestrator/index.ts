@@ -668,6 +668,7 @@ export async function startFromEnvironment(
   orchestrator.logger.log({
     trace_id: 'startup',
     stage: 'orchestrator',
+    event: 'orchestrator_started',
     level: orphans.length > 0 ? 'warn' : 'info',
     message: 'orchestrator started',
     payload: {
@@ -842,6 +843,7 @@ export function installFaultHandlers(
       {
         trace_id: 'fatal',
         stage: 'orchestrator',
+        event: 'orchestrator_fatal_fault',
         level: 'error',
         message:
           `${fault} — the orchestrator is exiting rather than continuing in an unknown state ` +
