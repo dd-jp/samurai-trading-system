@@ -6,13 +6,14 @@
  */
 import { renderHook } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
+import { at } from '../lib/test-support.ts';
 import { makeSnapshot } from '../test-fixtures.ts';
 import { MAX_EQUITY_SAMPLES, useEquitySamples } from './useEquitySamples.ts';
 import type { WireSnapshot } from './useSnapshot.ts';
 
 function snapshotWithBalance(
   balance: WireSnapshot['providers']['alpaca']['balance'],
-  observed_at: string,
+  observed_at: string | null,
 ): WireSnapshot {
   const base = makeSnapshot();
   return {
@@ -147,18 +148,12 @@ describe('useEquitySamples', () => {
       ({ snapshot }: { snapshot: WireSnapshot }) => useEquitySamples(snapshot),
       {
         initialProps: {
-          snapshot: snapshotWithBalance(
-            { cash: 1, equity: 1_000, buying_power: 1 },
-            null as unknown as string,
-          ),
+          snapshot: snapshotWithBalance({ cash: 1, equity: 1_000, buying_power: 1 }, null),
         },
       },
     );
     rerender({
-      snapshot: snapshotWithBalance(
-        { cash: 1, equity: 1_000, buying_power: 1 },
-        null as unknown as string,
-      ),
+      snapshot: snapshotWithBalance({ cash: 1, equity: 1_000, buying_power: 1 }, null),
     });
     expect(result.current).toEqual([{ observed_at: null, equity: 1_000 }]);
   });
@@ -169,13 +164,13 @@ describe('useEquitySamples', () => {
       ({ snapshot }: { snapshot: WireSnapshot }) => useEquitySamples(snapshot),
       {
         initialProps: {
-          snapshot: snapshotWithBalance({ cash: 1, equity: 0, buying_power: 1 }, 'poll-0'),
+          snapshot: snapshotWithBalance({ cash: 1, equity: 0, buying_power: 1 }, at(0)),
         },
       },
     );
     for (let i = 1; i < total; i++) {
       rerender({
-        snapshot: snapshotWithBalance({ cash: 1, equity: i, buying_power: 1 }, `poll-${i}`),
+        snapshot: snapshotWithBalance({ cash: 1, equity: i, buying_power: 1 }, at(i * 1000)),
       });
     }
     expect(result.current).toHaveLength(MAX_EQUITY_SAMPLES);
