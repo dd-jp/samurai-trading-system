@@ -298,6 +298,8 @@ function healthyGateOptions(
     sizingCeiling?: Partial<SizingCeilingEvidence>;
     fillSync?: FillSyncFailureEvidence;
     marketDataFetch?: MarketDataFetchEvidence;
+    publishedLlmCapUsd?: number | null;
+    configuredLlmBudgetUsd?: number | undefined;
   } = {},
 ) {
   return {
@@ -322,6 +324,11 @@ function healthyGateOptions(
     dataFailover: overrides.dataFailover ?? healthyDataFailover(),
     riskCritic: overrides.riskCritic ?? healthyRiskCritic(),
     analystFailureCause: overrides.analystFailureCause ?? healthyAnalystFailureCause(),
+    // #1140: healthy means the published cap IS the run's configured budget.
+    publishedLlmCapUsd:
+      'publishedLlmCapUsd' in overrides ? (overrides.publishedLlmCapUsd ?? null) : 50,
+    configuredLlmBudgetUsd:
+      'configuredLlmBudgetUsd' in overrides ? overrides.configuredLlmBudgetUsd : 50,
   };
 }
 
@@ -2542,6 +2549,43 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
       const gate = evaluateSmokeGate(transactedObservations(), healthyGateOptions());
 
       expect(gate.failures.filter((failure) => failure.includes('sizing_capital_ceiling'))).toEqual(
+        [],
+      );
+    });
+  });
+
+  describe("the dashboard's LLM cap (#1140)", () => {
+    it('fails when the published cap is not the budget this run armed', () => {
+      // The mutation this catches: drop `publishedSpendCap.arm(...)` from
+      // production.ts and let the row a previous run left stand. The cap still
+      // enforces at 275, the wire still carries a number, and the rail draws
+      // its meter against 50.
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({ publishedLlmCapUsd: 50, configuredLlmBudgetUsd: 275 }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain("dashboard's LLM cap");
+    });
+
+    it('fails when nothing published a cap at all for a capped run', () => {
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({ publishedLlmCapUsd: null }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain("dashboard's LLM cap");
+    });
+
+    it('passes when the wire carries the enforced budget', () => {
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({ publishedLlmCapUsd: 275, configuredLlmBudgetUsd: 275 }),
+      );
+
+      expect(gate.failures.filter((failure) => failure.includes("dashboard's LLM cap"))).toEqual(
         [],
       );
     });

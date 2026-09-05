@@ -237,6 +237,7 @@ import {
   installDashboardContinueOnFault,
   watchDashboardStdout,
 } from '../service-api/fault-guard.js';
+import { SqliteQueryStore } from '../service-api/sqlite-query-store.js';
 import {
   installSupervisorContinueOnFault,
   watchSupervisorStdout,
@@ -3103,6 +3104,21 @@ function readSizingCeilingStamps(
   };
 }
 
+/**
+ * #1140 — what the DASHBOARD would read as this run's LLM cap.
+ *
+ * Read through `SqliteQueryStore.getLlmSpend`, the shipped read that fills
+ * `DashboardSnapshot.llm_spend`, rather than off `llm_spend_cap` directly:
+ * the ticket's defect is a denominator that agrees with the enforcer by luck,
+ * and only the whole path — composition root writes, dashboard's own query
+ * reads — falsifies it. Dropping `publishedSpendCap.arm(...)` from
+ * `production.ts`, or defaulting the field in the query layer, makes this
+ * disagree with the run's own profile while every other check stays green.
+ */
+function readPublishedLlmCap(db: SqliteHandle): number | null {
+  return new SqliteQueryStore(db).getLlmSpend(SMOKE_RUN_INSTANT).cap_usd;
+}
+
 /** Drives the shipped arm-comparison cycle over the smoke run's own store. */
 function runArmComparisonProbe(db: SqliteHandle): ArmComparisonEvidence {
   let alerts = 0;
@@ -3771,6 +3787,17 @@ export function evaluateSmokeGate(
      */
     sizingCeiling: SizingCeilingEvidence;
     /**
+     * #1140 — required, not optional, for the same "compile error, not a
+     * silent no-op" reason every mechanism above is. The cap the dashboard
+     * would draw its meter against, compared to the budget THIS run armed its
+     * enforcer with: a published cap that is merely non-null, or one that
+     * matches by having been retyped somewhere, is the defect the field
+     * exists to end.
+     */
+    publishedLlmCapUsd: number | null;
+    /** The budget THIS run's profile armed the enforcer with — the expected value above. */
+    configuredLlmBudgetUsd: number | undefined;
+    /**
      * The fill-sync loop's rejections (#1049) — required, not optional, for the
      * same "compile error, not a silent no-op" reason every mechanism above is.
      * This is the only check in the gate that reads the poll loop's own
@@ -4015,6 +4042,16 @@ export function evaluateSmokeGate(
         `${configuredCeiling} — \`production.ts\` stopped passing \`config.capitalCeilingUsd\` ` +
         'into `new SqliteExecutionStore(...)`, so a `closed_trades` window could once again ' +
         'silently mix rows sized under two different equity bases (#1112)',
+    );
+  }
+
+  // #1140 — the meter's denominator on the wire is the enforcer's own budget.
+  if (options.publishedLlmCapUsd !== (options.configuredLlmBudgetUsd ?? null)) {
+    failures.push(
+      `the dashboard's LLM cap reads ${options.publishedLlmCapUsd ?? 'null'} while this run ` +
+        `armed its spend cap at ${options.configuredLlmBudgetUsd ?? 'null'} — ` +
+        '`publishedSpendCap.arm(...)` is no longer beside the `SqliteSpendCap` construction in ' +
+        'production.ts, so the rail measures spend against a cap nobody is enforcing (#1140)',
     );
   }
 
@@ -5538,6 +5575,12 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // have run at all.
       feedbackCycleScheduleWritten: feedbackCycleScheduleWasWritten(db),
       sizingCeiling: readSizingCeilingStamps(db, profile.capitalCeilingUsd),
+      // #1140. Both halves come from this run: the published cap off the
+      // dashboard's own read, the expected one off the profile the
+      // orchestrator booted on — never a literal 50, which would pass on a
+      // wire that had stopped carrying anything from the config at all.
+      publishedLlmCapUsd: readPublishedLlmCap(db),
+      configuredLlmBudgetUsd: profile.llmBudgetUsd,
       fillSync: fillSyncFailures.evidence(),
       marketDataFetch: marketDataFetch.evidence(),
       exitPath: {

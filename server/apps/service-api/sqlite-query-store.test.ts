@@ -17,6 +17,7 @@ import type { ClosedTrade, DebateLog, Fill, OpenPosition } from '../../shared/in
 import {
   openSharedStore,
   type SharedStore,
+  SqliteLlmSpendCapStore,
   SqliteRiskLogStore,
   SqliteTraderLogStore,
 } from '../../shared/store/index.js';
@@ -434,6 +435,27 @@ describe('SqliteQueryStore.getLlmSpend', () => {
   function hoursBefore(hours: number): Date {
     return new Date(NOW.getTime() - hours * 60 * 60 * 1000);
   }
+
+  // #1140: the denominator the dashboard draws against is the one the
+  // orchestrator armed, so a raised budget moves the meter instead of leaving
+  // it measuring against a stale figure.
+  it('reports the cap the orchestrator armed, whatever it was set to', () => {
+    const db = makeDb();
+    new SqliteLlmSpendCapStore(db).arm(275, NOW);
+    expect(new SqliteQueryStore(db).getLlmSpend(NOW).cap_usd).toBe(275);
+  });
+
+  it('reports a null cap for an uncapped run, and never a default', () => {
+    const db = makeDb();
+    new SqliteLlmSpendCapStore(db).arm(null, NOW);
+    expect(new SqliteQueryStore(db).getLlmSpend(NOW).cap_usd).toBeNull();
+  });
+
+  // A store no orchestrator has ever booted against bounds nothing either —
+  // the one thing it must not do is invent a denominator.
+  it('reports a null cap when nothing has armed one', () => {
+    expect(new SqliteQueryStore(makeDb()).getLlmSpend(NOW).cap_usd).toBeNull();
+  });
 
   it('returns zeroed windows on an empty table rather than throwing or returning null', () => {
     const store = new SqliteQueryStore(makeDb());

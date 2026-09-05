@@ -754,7 +754,7 @@ Trader              → cosine_setups (writes; FL labels), trader_log
 Risk                → breaker_state, risk_log, risk_critic_log
 Debate Engine       → debate_log, llm_spend, llm_call_log
 Verdict             → verdict_log
-Orchestrator        → audit_log, current_tick, daily_equity
+Orchestrator        → audit_log, current_tick, daily_equity, llm_spend_cap
 Transport Layer     → account_state (AccountStateProvider, peak_equity)
 Transport Layer     → session_equity (AccountStateProvider, per-class daily PnL basis)
 service-api         → (nothing — reader only)

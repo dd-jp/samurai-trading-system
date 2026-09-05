@@ -26,7 +26,11 @@ import {
   SimulatedClock,
   TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS,
 } from '../../../shared/index.js';
-import { openSharedStore, type SharedStore } from '../../../shared/store/index.js';
+import {
+  openSharedStore,
+  type SharedStore,
+  SqliteLlmSpendCapStore,
+} from '../../../shared/store/index.js';
 import { DebateBarDecisionGate } from '../decision-bar-gate.js';
 import { paperStartingProfile } from '../paper-profile.js';
 import { buildProductionComponents, type ProductionConfig } from '../production.js';
@@ -857,6 +861,30 @@ describe('the LLM spend cap is in the production path (ADR-0008)', () => {
     const warning = entries.find((entry) => entry.message.includes('llmBudgetUsd is not set'));
     expect(warning?.level).toBe('warn');
     expect(warning?.message).toContain('UNCAPPED');
+  });
+
+  /**
+   * #1140 — THE MUTATION THIS KILLS: drop `publishedSpendCap.arm(...)` from
+   * `buildProductionComponents`. The cap still enforces, every test above
+   * still passes, and the dashboard silently draws its meter against whatever
+   * a previous run left behind (or against nothing at all).
+   *
+   * Asserted against the config's OWN budget rather than against 50: a wire
+   * that publishes some other number is the same broken wire, and a 50 on
+   * both sides would pass whether the value flowed or was retyped.
+   */
+  it('publishes the budget it armed the cap with, whatever the config says', () => {
+    buildProductionComponents(
+      stubConfig(db, { llmClient: countingLlmClient(), llmBudgetUsd: 275 }),
+    );
+
+    expect(new SqliteLlmSpendCapStore(db).read()).toBe(275);
+  });
+
+  it('publishes a null cap for the uncapped run it warned about', () => {
+    buildProductionComponents(stubConfig(db, { llmClient: countingLlmClient() }));
+
+    expect(new SqliteLlmSpendCapStore(db).read()).toBeNull();
   });
 
   it('is what the checked-in paper profile actually carries', () => {

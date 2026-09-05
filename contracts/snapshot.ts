@@ -516,6 +516,13 @@ export interface LlmSpendSummary {
   last_24h: LlmSpendWindow;
   last_7d: LlmSpendWindow;
   all_time: LlmSpendWindow;
+  /**
+   * The ceiling the enforcer is actually applying (ADR-0008), armed at boot by
+   * the orchestrator's composition root; `null` means no budget is configured
+   * and a reader may NOT substitute a denominator. See
+   * `server/shared/store/sqlite-llm-spend-cap-store.ts` (#1140).
+   */
+  cap_usd: number | null;
 }
 
 /**
