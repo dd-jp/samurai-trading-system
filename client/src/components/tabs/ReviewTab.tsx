@@ -127,7 +127,11 @@ function isBelowTradeFloor(row: ArmComparisonRow): boolean {
 type ArmVerdictState = 'diverged' | 'below-floor' | 'ok';
 
 function armVerdictState(row: ArmComparisonRow): ArmVerdictState {
-  if (row.diverged && row.divergence_reason !== null) return 'diverged';
+  // `diverged` ALONE. `divergence_reason` is `null` exactly when `diverged` is
+  // false (`contracts/snapshot.ts`), so a divergence carrying no reason is a
+  // wire-contract violation — and requiring the reason here rendered it as
+  // "Did not diverge", the one reassurance this panel exists to withhold.
+  if (row.diverged) return 'diverged';
   if (isBelowTradeFloor(row)) return 'below-floor';
   return 'ok';
 }
@@ -144,7 +148,7 @@ function ArmVerdict({ row }: { row: ArmComparisonRow }) {
   if (state === 'diverged') {
     return (
       <p className="arm-verdict arm-diverged" data-arm-state="diverged">
-        DIVERGED: {row.divergence_reason}.
+        DIVERGED: {row.divergence_reason ?? 'no reason recorded (contract violation upstream)'}.
       </p>
     );
   }

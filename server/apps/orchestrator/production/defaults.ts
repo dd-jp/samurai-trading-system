@@ -33,7 +33,7 @@ import {
   recommendedWarmupFor,
   type TradingCalendar,
 } from '../../../providers/market-data-service/index.js';
-import { buildRoutingMap, LSE_ETP_POOL } from '../../../providers/universe-pool/lse-etp-pool.js';
+import { buildRoutingMap, LSE_ETP_POOL } from '../../../providers/universe-pool/index.js';
 import { type AssetClass, logCaughtFailure, type TokenBucket } from '../../../shared/index.js';
 import { nousCredentials } from '../../../shared/llm/index.js';
 import type { Logger, UniverseInstrument } from '../types.js';

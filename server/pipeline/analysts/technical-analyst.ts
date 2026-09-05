@@ -77,7 +77,7 @@ import {
   type RvolReading,
   recommendedWarmupFor,
 } from '../../providers/market-data-service/index.js';
-import { screeningInstrumentFor } from '../../providers/universe-pool/lse-etp-pool.js';
+import { screeningInstrumentFor } from '../../providers/universe-pool/index.js';
 import type { AnalystView, Direction } from '../debate-engine/index.js';
 import type { Analyst, AnalystInput, AnalystTelemetry, AssetClass } from './types.js';
 

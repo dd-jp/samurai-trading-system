@@ -107,6 +107,31 @@ describe('PolymarketAgent.refresh', () => {
     expect(news[0]?.headline).toContain('0.705');
   });
 
+  /**
+   * The read that matters. `newsFor` passes no entity, which is the shape of
+   * NO production caller: `fundamental-analyst` and `sentiment-analyst` both
+   * pass `resolveMiSubject(signal.asset)` (#914/#960), and a curated market is
+   * filed under a macro series name that equals no ticker. Asserted through an
+   * entity-scoped read rather than on the item's `scope` field, because the
+   * defect this guards was a whole adopted feed reaching no analyst while
+   * every construction-shaped assertion above stayed green.
+   */
+  it('reaches an ENTITY-SCOPED read, the only kind an analyst performs', async () => {
+    const { agent, store } = agentWith({});
+
+    await agent.refresh('t1');
+
+    const scoped = store.getContext(
+      POLYMARKET_ASSET_CLASS,
+      24 * 60 * 60 * 1000,
+      'test',
+      undefined,
+      'SPY',
+    );
+
+    expect(scoped.news.map((item) => item.entity)).toEqual(['FOMC-2026-09']);
+  });
+
   it('reads the delta on the BULLISH outcome token, not the first one', async () => {
     const { agent, fetchPriceHistory } = agentWith({});
 

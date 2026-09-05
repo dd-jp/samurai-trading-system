@@ -188,6 +188,7 @@ describe('formatQty', () => {
     expect(formatQty(18)).toBe('18');
     expect(formatQty(2.4)).toBe('2.4');
     expect(formatQty(0.00025)).toBe('0.0003');
+    expect(formatQty(1.00001)).toBe('1');
   });
 });
 

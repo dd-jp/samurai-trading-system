@@ -52,7 +52,7 @@
 
 import type { Bar } from '../providers/market-data-service/index.js';
 import { closeTimeOf, computeIndicator } from '../providers/market-data-service/index.js';
-import { TokenBucket } from '../shared/http/token-bucket.js';
+import { TokenBucket } from '../shared/index.js';
 import type { DateRange } from './backtest/index.js';
 import {
   DEFAULT_STAGE2_TIMEFRAME,

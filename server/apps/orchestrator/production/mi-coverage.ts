@@ -43,7 +43,7 @@
  * explicitly, never dropped and never left to read as healthy.
  */
 import type { MarketContext } from '../../../providers/market-intelligence/index.js';
-import { resolveMiSubject } from '../../../providers/universe-pool/lse-etp-pool.js';
+import { resolveMiSubject } from '../../../providers/universe-pool/index.js';
 import type { AssetClass, InstrumentSubclass, Logger } from '../../../shared/index.js';
 
 /** The bucket a per-subclass counter uses when the universe declares no subclass for a name. */

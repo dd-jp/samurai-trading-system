@@ -68,17 +68,22 @@
  * saying anything about that ticker — gaming the metric, and it would break
  * one-item-per-event too.
  *
- * **2. One direction for a whole asset class.** `getContext` filters by
- * `asset_class` alone, so every item here reaches every `stocks` debate —
- * including SGLN, where a rising recession probability is plausibly BULLISH
- * while it is bearish for 3USL. `IntelligenceItem` has no per-instrument
- * direction to express that with.
+ * **2. One direction for a whole asset class.** These items are `scope:
+ * 'asset_class'`, so every one reaches every `stocks` debate — including
+ * SGLN, where a rising recession probability is plausibly BULLISH while it is
+ * bearish for 3USL. `IntelligenceItem` has no per-instrument direction to
+ * express that with. (Before #1086 this read "`getContext` filters by
+ * `asset_class` alone", which #914's entity narrowing had already made false:
+ * the items were reaching no content-reading analyst at all.)
  *
- * **3. Time-axis vote inflation.** `MarketIntelligenceStore.ingest` does no
- * dedup by `id`, and `directionFrom` is an unweighted mean of signs — so at
- * an hourly cadence one curated row contributes up to 24 items to the
- * analysts' 24h window. Decision 4 stops one event casting five votes along
- * the OUTCOME axis; the time axis is the same inflation and is not addressed.
+ * **3. Time-axis vote inflation — now bounded, not by design.**
+ * `MarketIntelligenceStore.ingest` does no dedup by `id` and `directionFrom`
+ * is an unweighted mean of signs, so at an hourly cadence one curated row
+ * ingests up to 24 items into the analysts' 24h window. What holds the vote
+ * to one is `latestClassWideRestatementOnly` (`index.ts`), which keys
+ * class-wide items on `(source, entity, type)` and serves only the latest —
+ * so the read collapses the repeats even though the store keeps them.
+ * Narrowing `scope` here would restore the inflation.
  *
  * Archiving the items (#835) does not change this, and does not make replay
  * of this source clean: a replay reading `mi_items` back replays the same
@@ -709,6 +714,13 @@ export class PolymarketAgent {
       // same grid, which a wall-clock instant is not.
       timestamp: now,
       entity: entry.entity,
+      // A curated macro market is evidence for the whole class and for no one
+      // instrument: `entry.entity` is a series name (`FOMC-2026-09`), never a
+      // ticker. Without this the item is dropped by `getContext`'s entity
+      // filter for every entity-scoped caller (#914) — which is both analysts
+      // that read the CONTENT — while still reaching `technical-analyst`,
+      // whose read passes no entity, as a bare `news.length`.
+      scope: 'asset_class',
       headline:
         `${entry.label}: ${baseline.probability.toFixed(3)} -> ` +
         `${latest.probability.toFixed(3)} over 24h ` +

@@ -216,10 +216,10 @@ import {
   SOURCE_GDELT,
   SOURCE_POLYMARKET,
 } from '../../providers/market-intelligence/index.js';
-import { delay } from '../../shared/http/delay.js';
 import type { OrderIntent, TradingArm } from '../../shared/index.js';
 import {
   boundFor,
+  delay,
   GUARDED_THRESHOLD_NAMES,
   isThresholdBoundViolation,
   SimulatedClock,
@@ -2668,11 +2668,16 @@ export function readSmokeObservations(
       miArchive?.itemsKnownAt(POLYMARKET_ASSET_CLASS, SMOKE_RUN_INSTANT, [SOURCE_POLYMARKET])
         .length ?? 0,
     // The SAME 24h window `fundamental` reads (`MI_CONTEXT_WINDOW_MS`), on the
-    // same store instance, so this counts what the analyst would have seen and
-    // not merely what was written.
+    // same store instance, AND entity-scoped like every analyst read is
+    // (`resolveMiSubject(signal.asset)`, #914/#960) — so this counts what the
+    // analyst would have seen. Unscoped it did not: a curated market is filed
+    // under a macro series name, so an item missing `scope: 'asset_class'`
+    // reached this count and no analyst, and the gate stayed green while the
+    // whole feed was dark. The ticker is arbitrary — a class-wide item is
+    // admitted for any entity, and one filed per entity is admitted for none.
     polymarketNewsItems:
       marketIntelligence
-        ?.getContext(POLYMARKET_ASSET_CLASS, 24 * 60 * 60 * 1000, 'smoke')
+        ?.getContext(POLYMARKET_ASSET_CLASS, 24 * 60 * 60 * 1000, 'smoke', undefined, 'SPY')
         .news.filter((item) => item.source === SOURCE_POLYMARKET).length ?? 0,
     // #430. Each of these is a mechanism that was, at some point, fully built,
     // fully unit-tested and called by nothing in production. The table row is
@@ -4592,8 +4597,11 @@ export function evaluateSmokeGate(
     failures.push(
       `Polymarket put ${observations.polymarketNewsItems} items in the news bucket, expected ` +
         `exactly ${SMOKE_POLYMARKET_EXPECTED_ITEMS} — 0 with rows archived means the items ` +
-        'never reached MarketIntelligenceStore, or were stamped outside the debate bar the ' +
-        'analysts query. Items now carry the INGEST INSTANT (#782), and getContext floors its ' +
+        'never reached MarketIntelligenceStore, were dropped by the entity filter, or were ' +
+        'stamped outside the debate bar the analysts query. This read is ENTITY-SCOPED like ' +
+        "every analyst read, so an item that lost `scope: 'asset_class'` reads 0 here with " +
+        'a row archived: filed under a macro series name, it matches no ticker (#914/#960). ' +
+        'Items also carry the INGEST INSTANT (#782), and getContext floors its ' +
         'window to the hour, so this count depends on SMOKE_RUN_INSTANT being exactly ' +
         'hour-aligned — a smoke clock that drifts off the hour before the startup refresh ' +
         'lands would read 0 here with a row archived (#504, #782)',
