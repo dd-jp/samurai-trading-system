@@ -2740,9 +2740,17 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
   let controlFillSync: { stop: () => Promise<void> } | undefined;
   let heartbeatHandle: NodeJS.Timeout | undefined;
   let feedbackHandle: NodeJS.Timeout | undefined;
-  // Mirrors `fill-sync.ts`'s own `stopped` flag (#1110) — see
-  // `scheduleFeedbackCycle`'s doc comment for why it is defence against a
-  // future change rather than something today's synchronous `runIfDue` needs.
+  // Mirrors the SHAPE of `fill-sync.ts`'s own `stopped` flag (#1110), not its
+  // scope — see `scheduleFeedbackCycle`'s doc comment for why it is defence
+  // against a future change rather than something today's synchronous
+  // `runIfDue` needs. `fill-sync.ts`'s `stopped` is LOCAL to each
+  // `startFillSync()` call, so a restart gets a fresh closure with
+  // `stopped === false` for free; this flag is builder-scope and monotonic
+  // (`stop()` below sets it `true` and never resets it), so
+  // `scheduleFeedbackCycle` resets it itself on every call instead
+  // (pass-2 finding 2) — without that reset, a `start()` after a `stop()`
+  // would run its boot catch-up cycle once and then have this flag refuse to
+  // let it re-arm, #1110's exact symptom through a third door.
   let feedbackScheduleStopped = false;
   let gdeltHandle: NodeJS.Timeout | undefined;
   let polymarketHandle: NodeJS.Timeout | undefined;
@@ -3227,24 +3235,61 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
    * `runFeedbackCycle` cannot throw — every fallible call inside it,
    * including the threshold-clamp alert, is caught and logged internally —
    * so recording after it returns costs nothing when the cycle itself runs
-   * cleanly. It buys a real retry when the STORE is the thing that fails
-   * (below): if `recordBoundary` throws — e.g. `SQLITE_BUSY` from the shared
-   * WAL file the service-api process also reads — the boundary stays
-   * unstamped and the next fire retries the same boundary's cycle, safe
-   * because `arm_comparison_samples`/`outside_benchmark_samples` key on
-   * `computed_at` with `INSERT OR REPLACE` (migration 0034), so a retry
-   * collapses into the existing row rather than duplicating it.
+   * cleanly. Recording before it, the ordering this replaced, had the
+   * opposite failure mode: a process that died between the stamp and the
+   * cycle actually running lost that boundary's cycle forever, since the
+   * next fire would see the boundary already marked complete.
+   *
+   * That earlier version of this comment claimed the after-ordering "buys a
+   * real retry when the STORE is the thing that fails" and that the retry
+   * "collapses into the existing row" via `arm_comparison_samples`'/
+   * `outside_benchmark_samples`' `INSERT OR REPLACE` on `computed_at`
+   * (migration 0034). Both halves were wrong, caught in #1110 pass-2 review
+   * (finding 1): there is no in-process retry — a throw here re-arms for
+   * `nextBoundary`, not the same boundary again, so nothing in this process
+   * ever retries boundary B — and the only real retry path, a process
+   * restart inside the same boundary period, does NOT collapse: `computed_at`
+   * is `clock.now()` at the moment the retried cycle runs
+   * (`arm-comparison-cycle.ts`), not the boundary, so a restart-driven retry
+   * writes a SECOND primary key rather than replacing the first.
+   *
+   * `feedbackScheduleStore.recordAttempt` (stamped just below, before
+   * `runFeedbackCycle`) is what actually closes that hole: a restart that
+   * lands after the attempt was stamped but before `recordBoundary` completed
+   * finds `attemptedBoundary() === boundary` and does NOT call
+   * `runFeedbackCycle` a second time — only the completion stamp is retried.
+   * `dial_adjustments` and the analyst-weight/risk-threshold step it drives
+   * are not idempotent (each cycle applies one more guardrail-capped move),
+   * so re-running the cycle itself for a boundary already attempted would
+   * double that move; re-running only the completion write cannot. The
+   * residual gap this does NOT close: if the ATTEMPT write itself never
+   * lands (e.g. the same store failure hits it too), a restart still cannot
+   * tell "attempted" from "never started" and will re-run the cycle — kept
+   * narrow by attempting the write inside its own try/catch, immediately
+   * before `runFeedbackCycle`, rather than widening it further.
    *
    * `runIfDue` still runs start-to-finish synchronously today, so `stop()`
    * cannot race a scheduling gap and no re-entrancy guard is needed the way
    * `fill-sync.ts`'s (already-async) poll needs one. The `finally` below and
-   * the `feedbackScheduleStopped` check inside it exist anyway, mirroring
-   * `fill-sync.ts`: they cost nothing while `runFeedbackCycle` stays
-   * synchronous, and they are what keeps a throw from the store — the case
-   * this whole comment is about — from silently taking the timer down if
-   * that ever changes.
+   * the `feedbackScheduleStopped` check inside it exist anyway, mirroring the
+   * SHAPE of `fill-sync.ts`'s own `stopped` flag — not its scope, see that
+   * flag's declaration above — because they cost nothing while
+   * `runFeedbackCycle` stays synchronous, and they are what keeps a throw
+   * from the store — the case this whole comment is about — from silently
+   * taking the timer down if that ever changes. They do NOT cover a throw
+   * before `scheduleFeedbackCycle` is even reached — see `start()`'s
+   * `intervalMs` validation, just above the call site below, for why a bad
+   * interval fails loudly at boot instead.
    */
   const scheduleFeedbackCycle = (feedback: FeedbackCycleConfig, intervalMs: number): void => {
+    // Reset on every call (production.ts calls this exactly once per
+    // `start()`, at the bottom of the block below) rather than only at
+    // module load — `stop()` sets this `true` and never resets it itself, so
+    // without this line a second `start()` after a `stop()` would run the
+    // boot catch-up cycle and then have its own `finally` refuse to re-arm,
+    // #1110's exact symptom through a third door (pass-2 finding 2).
+    feedbackScheduleStopped = false;
+
     const runIfDue = (): void => {
       try {
         // `new Date()` (real/faked wall time), not `clock.now()` — see
@@ -3254,7 +3299,50 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         const last = feedbackScheduleStore.lastBoundary();
 
         if (isBoundaryDue(boundary, last)) {
-          runFeedbackCycle(feedback);
+          const attempted = feedbackScheduleStore.attemptedBoundary();
+          const alreadyAttempted = attempted !== null && attempted.getTime() === boundary.getTime();
+
+          if (alreadyAttempted) {
+            // See the "Ordering" comment above (pass-2 finding 1): a prior
+            // attempt for this EXACT boundary was stamped but never
+            // completed, most likely a restart landing between
+            // `runFeedbackCycle` and `recordBoundary`. Running the cycle
+            // again would double-apply its guardrail-capped step, so only
+            // the completion stamp below is retried.
+            logger.log({
+              trace_id: 'feedback-cycle',
+              stage: 'feedback-loop',
+              level: 'warn',
+              message:
+                'feedback cycle for this boundary was already attempted — not running it ' +
+                'again, only retrying the completion stamp (#1110)',
+              payload: { boundary: boundary.toISOString() },
+            });
+          } else {
+            try {
+              // BEFORE `runFeedbackCycle` — see the ordering note above.
+              feedbackScheduleStore.recordAttempt(boundary, now);
+            } catch (attemptError) {
+              // Best-effort: a failure here must not block the cycle from
+              // running (that guarantee predates this attempt marker), it
+              // only means a restart before `recordBoundary` completes will
+              // not be recognised as a retry, and could re-run the cycle —
+              // the residual gap the comment above names.
+              logger.log({
+                trace_id: 'feedback-cycle',
+                stage: 'feedback-loop',
+                level: 'error',
+                message:
+                  'could not record the feedback-cycle attempt marker — running the cycle ' +
+                  'anyway; a restart before completion will not be recognised as a retry (#1110)',
+                payload: {
+                  error:
+                    attemptError instanceof Error ? attemptError.message : String(attemptError),
+                },
+              });
+            }
+            runFeedbackCycle(feedback);
+          }
           // AFTER `runFeedbackCycle`, not before — see the ordering note above.
           feedbackScheduleStore.recordBoundary(boundary, now);
         }
@@ -3265,14 +3353,20 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         // a `finally`, so an uncaught throw left `feedbackHandle` unset and
         // the cycle never fired again for the rest of the process's life,
         // with no further log line — the exact symptom #1110 was filed to
-        // fix, reintroduced through a different door.
+        // fix, reintroduced through a different door. Covers a store read
+        // failure (`lastBoundary`/`attemptedBoundary`), a `recordBoundary`
+        // failure, and any throw escaping `runFeedbackCycle` itself (it is
+        // documented not to, but this catch does not depend on that holding)
+        // — worded generically because none of those is "a schedule check",
+        // and only a restart-driven retry (not "the next check") is real
+        // (pass-2 finding 5).
         logger.log({
           trace_id: 'feedback-cycle',
           stage: 'feedback-loop',
           level: 'error',
           message:
-            'feedback cycle schedule check failed — re-arming; the boundary was not ' +
-            'recorded, so the next check retries it (#1110)',
+            'feedback cycle pass failed — re-arming for the next boundary; a restart ' +
+            'before this boundary is recorded complete retries it (#1110)',
           payload: { error: error instanceof Error ? error.message : String(error) },
         });
       } finally {
@@ -3699,6 +3793,20 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         // `new Date()`, matching `scheduleFeedbackCycle`'s own boundary math
         // (DESIGN DECISION 1) — not `clock.now()`.
         const feedbackIntervalMs = feedback.intervalMs ?? DEFAULT_FEEDBACK_INTERVAL_MS;
+        // Named validation, not a bare `currentBoundary` throw (pass-2
+        // finding 3): `FeedbackCycleConfig.intervalMs` is unvalidated
+        // anywhere else, so a non-positive value (e.g. `0`) would otherwise
+        // fail here with `cycle-schedule.ts`'s generic "intervalMs must be
+        // positive" message and no mention of which config field caused it.
+        // This is deliberately still a boot crash, not a caught-and-logged
+        // path: the old `setInterval(fn, 0)` this schedule replaced would
+        // have hot-looped on the same bad config, so failing loudly at boot
+        // is strictly better, not a regression to soften.
+        if (feedbackIntervalMs <= 0) {
+          throw new Error(
+            `FeedbackCycleConfig.intervalMs must be positive, got ${feedbackIntervalMs}`,
+          );
+        }
         const feedbackBoundaryNow = currentBoundary(new Date(), feedbackIntervalMs);
         // #1110 gap: an unreadable schedule store is not on the order path —
         // it must not stop the process that manages open positions from

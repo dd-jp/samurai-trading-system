@@ -21,12 +21,21 @@
 -- (wall-clock boundary vs. elapsed interval; capped catch-up) recorded in
 -- full where the table is read and written.
 --
--- ## Single durable row (key = 'default')
+-- ## Two durable rows (key = 'default' / 'attempt'), not one
 --
--- Same shape as `account_state` (migration 0006) for the same reason: there
--- is exactly one feedback cycle per process, so a free-form TEXT primary key
--- with one row upserted forever is simpler than inventing an identity for a
--- schedule that never has a second instance.
+-- Same shape as `account_state` (migration 0006) for the same reason: a
+-- free-form TEXT primary key with a row upserted forever is simpler than
+-- inventing an identity for a schedule that never has more than a handful of
+-- instances. This started as a single row (`key = 'default'`, the most
+-- recently COMPLETED boundary) and gained a second, `key = 'attempt'`, in
+-- #1110's pass-2 fix: `SqliteFeedbackCycleScheduleStore.recordAttempt` stamps
+-- the boundary about to be run BEFORE `runFeedbackCycle` executes, so a
+-- restart that lands between "the cycle ran" and "`recordBoundary` completed"
+-- can be told apart from a restart before the cycle ever started — without
+-- that distinction, the retry re-runs `runFeedbackCycle` and double-applies a
+-- guardrail-capped analyst-weight/risk-threshold step. See
+-- `sqlite-feedback-cycle-schedule-store.ts`'s own doc comment and
+-- `scheduleFeedbackCycle` (production.ts) for the full account.
 CREATE TABLE feedback_cycle_schedule (
   key           TEXT PRIMARY KEY,
   last_boundary TEXT NOT NULL,

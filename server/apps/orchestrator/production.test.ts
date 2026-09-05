@@ -3464,10 +3464,24 @@ describe('buildProductionOrchestrator', () => {
         .all() as { computed_at: string; window_from: string; window_to: string }[];
     }
 
+    /**
+     * Scoped to `key = 'default'` (the COMPLETED boundary) — not a bare
+     * `SELECT`, because pass-2's `key = 'attempt'` row (finding 1) can now
+     * share this table, and an unscoped query would return whichever of the
+     * two rows SQLite happens to return first.
+     */
     function feedbackScheduleLastBoundary(): string | null {
-      const row = db.prepare('SELECT last_boundary FROM feedback_cycle_schedule').get() as
-        | { last_boundary: string }
-        | undefined;
+      const row = db
+        .prepare("SELECT last_boundary FROM feedback_cycle_schedule WHERE key = 'default'")
+        .get() as { last_boundary: string } | undefined;
+      return row?.last_boundary ?? null;
+    }
+
+    /** Scoped to `key = 'attempt'` — see `feedbackScheduleLastBoundary` above. */
+    function feedbackScheduleAttemptedBoundary(): string | null {
+      const row = db
+        .prepare("SELECT last_boundary FROM feedback_cycle_schedule WHERE key = 'attempt'")
+        .get() as { last_boundary: string } | undefined;
       return row?.last_boundary ?? null;
     }
 
@@ -3647,7 +3661,7 @@ describe('buildProductionOrchestrator', () => {
           (entry) =>
             entry.trace_id === 'feedback-cycle' &&
             entry.level === 'error' &&
-            entry.message.includes('feedback cycle schedule check failed'),
+            entry.message.includes('feedback cycle pass failed'),
         ).length,
       ).toBeGreaterThanOrEqual(1);
       expect(sampleRows()).toHaveLength(1);
@@ -3686,7 +3700,7 @@ describe('buildProductionOrchestrator', () => {
       await expect(orchestrator.start()).resolves.toBeDefined();
 
       // The startup-log read failure is reported on its own, distinct from
-      // `runIfDue`'s "feedback cycle schedule check failed" message.
+      // `runIfDue`'s "feedback cycle pass failed" message.
       expect(
         logger.entries.filter(
           (entry) =>
@@ -3704,7 +3718,7 @@ describe('buildProductionOrchestrator', () => {
           (entry) =>
             entry.trace_id === 'feedback-cycle' &&
             entry.level === 'error' &&
-            entry.message.includes('feedback cycle schedule check failed'),
+            entry.message.includes('feedback cycle pass failed'),
         ).length,
       ).toBeGreaterThanOrEqual(1);
 
@@ -3741,60 +3755,191 @@ describe('buildProductionOrchestrator', () => {
       await orchestrator.stop();
     });
 
-    it('records the boundary AFTER the cycle runs — a schedule-store write failure does not erase the cycle work, and the unstamped boundary retries on restart (finding 5)', async () => {
-      const clock = new SimulatedClock(START);
-      const intervalMs = 1_000;
-      const logger = recordingLogger();
+    /** The dial `dialAdjustmentValues` and the finding-1/5 test below tune. */
+    const RISK_DIAL_NAME = 'max_position_size_fraction_of_equity';
+    const RISK_DIAL_SHIPPED = 0.05;
 
-      // Blocks writes to `feedback_cycle_schedule` specifically — SELECT
-      // still works, so `runIfDue` reaches `runFeedbackCycle` and only the
-      // trailing `recordBoundary` fails. Isolates the store call the ordering
-      // note above is about from the cycle's own (unrelated) work.
-      db.exec(`
+    /**
+     * `to_value`s recorded for one risk-threshold dial, oldest first — for
+     * counting steps. Scoped to `dial_type = 'risk_threshold'` too, not just
+     * `dial_name`, since an analyst weight and a risk threshold could share a
+     * name and this helper must not silently mix their rows.
+     */
+    function dialAdjustmentValues(dialName: string): number[] {
+      return (
+        db
+          .prepare(
+            "SELECT to_value FROM dial_adjustments WHERE dial_type = 'risk_threshold' AND dial_name = ? ORDER BY id",
+          )
+          .all(dialName) as { to_value: number }[]
+      ).map((row) => row.to_value);
+    }
+
+    /**
+     * A restart-durable config whose feedback cycle has real, unconditional
+     * tuning work to do — a `risk_threshold` proposal, rather than the bare
+     * zero-trade cycle every other case in this describe block uses. Needed
+     * to observe whether a restart-driven retry applies the guardrail-capped
+     * step a SECOND time (finding 1), which a zero-trade cycle can never show
+     * since it has no dial to move.
+     */
+    function restartDurableConfigWithDial(
+      clock: SimulatedClock,
+      intervalMs: number,
+      overrides: Partial<ProductionConfig> = {},
+    ): StubConfig {
+      return restartDurableConfig(clock, intervalMs, {
+        riskConfig: {
+          [RISK_DIAL_NAME]: RISK_DIAL_SHIPPED,
+        } as ProductionConfig['riskConfig'],
+        feedback: {
+          intervalMs,
+          config: paperStartingProfile('paper').feedback?.config as FeedbackConfig,
+          // Target the dial's own floor (a quarter of `RISK_DIAL_SHIPPED`,
+          // `capDial` in paper-profile.ts) — far enough below the ceiling
+          // that two consecutive `max_step` moves both land short of it, so
+          // a double-apply is visible as two distinct `to_value`s rather than
+          // both moves being swallowed by the same floor clamp.
+          proposals: [
+            { kind: 'risk_threshold', name: RISK_DIAL_NAME, target: RISK_DIAL_SHIPPED * 0.25 },
+          ],
+        },
+        ...overrides,
+      });
+    }
+
+    it(
+      'records the boundary AFTER the cycle runs — a schedule-store write failure does not erase ' +
+        'the cycle work, and a restart does not re-run it a second time (finding 1 / finding 5)',
+      async () => {
+        const clock = new SimulatedClock(START);
+        const intervalMs = 1_000;
+        const logger = recordingLogger();
+
+        // Blocks writes to the COMPLETION row only (`key = 'default'`) — the
+        // attempt row (`key = 'attempt'`, pass-2 finding 1) still writes
+        // successfully, so `runIfDue` reaches `runFeedbackCycle` and only the
+        // trailing `recordBoundary` fails. Isolates the store call the
+        // ordering note above is about from the cycle's own (unrelated) work.
+        db.exec(`
         CREATE TRIGGER block_schedule_write
         BEFORE INSERT ON feedback_cycle_schedule
+        WHEN NEW.key = 'default'
         BEGIN
           SELECT RAISE(ABORT, 'simulated write failure');
         END;
       `);
 
-      const first = buildProductionOrchestrator(
-        restartDurableConfig(clock, intervalMs, { logger }),
-      );
-      await first.start();
+        const first = buildProductionOrchestrator(
+          restartDurableConfigWithDial(clock, intervalMs, { logger }),
+        );
+        await first.start();
 
-      // The cycle's own substantive work ran and persisted despite the
-      // trailing schedule write failing — proof `runFeedbackCycle` is called
-      // BEFORE `recordBoundary`, not gated behind a successful write.
+        // The cycle's own substantive work ran and persisted despite the
+        // trailing schedule write failing — proof `runFeedbackCycle` is called
+        // BEFORE `recordBoundary`, not gated behind a successful write. One
+        // guardrail-capped step applied: 0.05 - 0.005 = 0.045.
+        expect(sampleRows()).toHaveLength(1);
+        expect(dialAdjustmentValues(RISK_DIAL_NAME)).toEqual([0.045]);
+        expect(feedbackScheduleLastBoundary()).toBeNull();
+        expect(feedbackScheduleAttemptedBoundary()).not.toBeNull();
+        expect(
+          logger.entries.filter(
+            (entry) =>
+              entry.trace_id === 'feedback-cycle' &&
+              entry.level === 'error' &&
+              entry.message.includes('feedback cycle pass failed'),
+          ).length,
+        ).toBeGreaterThanOrEqual(1);
+        await first.stop();
+
+        // Restart with the write no longer blocked. The boundary was never
+        // stamped complete, so it is still "due" — but it WAS attempted, so
+        // the retry must not run `runFeedbackCycle` again (finding 1): doing
+        // so would apply the risk-threshold guardrail step a second time,
+        // 0.045 -> 0.04, silently doubling the per-cycle move the guardrail
+        // exists to cap. `clock` (not the wall-clock boundary check) advances
+        // a little, the way a restart's own elapsed time naturally would.
+        db.exec('DROP TRIGGER block_schedule_write');
+        clock.advanceTo(new Date(clock.now().getTime() + 500));
+        const secondLogger = recordingLogger();
+        const second = buildProductionOrchestrator(
+          restartDurableConfigWithDial(clock, intervalMs, { logger: secondLogger }),
+        );
+        await second.start();
+
+        // Still exactly one sample and one dial step — the retry recorded
+        // completion for the already-attempted boundary without re-running
+        // the cycle.
+        expect(sampleRows()).toHaveLength(1);
+        expect(dialAdjustmentValues(RISK_DIAL_NAME)).toEqual([0.045]);
+        expect(
+          secondLogger.entries.filter(
+            (entry) =>
+              entry.trace_id === 'feedback-cycle' &&
+              entry.level === 'warn' &&
+              entry.message.includes('already attempted'),
+          ),
+        ).toHaveLength(1);
+        expect(feedbackScheduleLastBoundary()).not.toBeNull();
+
+        await second.stop();
+      },
+    );
+
+    it('a stop() followed by a second start() on the SAME orchestrator re-arms the feedback cycle (pass-2 finding 2)', async () => {
+      const clock = new SimulatedClock(START);
+      const intervalMs = 1_000;
+      const orchestrator = buildProductionOrchestrator(restartDurableConfig(clock, intervalMs));
+
+      await orchestrator.start();
       expect(sampleRows()).toHaveLength(1);
-      expect(feedbackScheduleLastBoundary()).toBeNull();
-      expect(
-        logger.entries.filter(
-          (entry) =>
-            entry.trace_id === 'feedback-cycle' &&
-            entry.level === 'error' &&
-            entry.message.includes('feedback cycle schedule check failed'),
-        ).length,
-      ).toBeGreaterThanOrEqual(1);
-      await first.stop();
+      await orchestrator.stop();
 
-      // Restart with the write no longer blocked. The boundary was never
-      // stamped, so the SAME boundary is still "due" and the cycle retries it
-      // — the retry an inverted (record-before) ordering would have lost,
-      // per finding 5. `clock` (not the wall-clock boundary check) advances a
-      // little, the way a restart's own elapsed time naturally would, so the
-      // retry's `computed_at` is distinct rather than colliding with the
-      // first attempt's under migration 0034's `INSERT OR REPLACE`.
-      db.exec('DROP TRIGGER block_schedule_write');
-      clock.advanceTo(new Date(clock.now().getTime() + 500));
-      const second = buildProductionOrchestrator(restartDurableConfig(clock, intervalMs));
-      await second.start();
+      // `stop()` sets `feedbackScheduleStopped = true`. Before pass-2's fix
+      // nothing ever reset it back to `false` — `scheduleFeedbackCycle`'s own
+      // `runIfDue` only checks it inside the `finally` AFTER a pass
+      // completes, so this SAME builder's second `start()` below would run
+      // its boot catch-up cycle once (unconditional on the flag) and then
+      // have the `finally` refuse to re-arm for anything after it — #1110's
+      // exact symptom through a third door, on a second `start()` rather
+      // than a fresh process.
+      await advanceBoth(clock, 10_000);
+      const beforeSecondStart = sampleRows().length;
+      await orchestrator.start();
+      // Boot catch-up on the second `start()`: without the reset this is a
+      // no-op (the stale `true` from the first `stop()` blocks it), so the
+      // count would not move at all.
+      expect(sampleRows().length).toBeGreaterThan(beforeSecondStart);
 
-      expect(sampleRows()).toHaveLength(2);
-      expect(feedbackScheduleLastBoundary()).not.toBeNull();
+      // The re-arm, not just the boot catch-up: a normal fire past the
+      // second `start()` must still happen too — proven the same way, by an
+      // increase, not by an exact count that also depends on boundary phase.
+      const beforeNextTick = sampleRows().length;
+      await advanceBoth(clock, intervalMs);
+      expect(sampleRows().length).toBeGreaterThan(beforeNextTick);
 
-      await second.stop();
+      await orchestrator.stop();
     });
+
+    it(
+      'refuses to start with a non-positive FeedbackCycleConfig.intervalMs, naming the ' +
+        'cause (pass-2 finding 3)',
+      async () => {
+        const clock = new SimulatedClock(START);
+        const orchestrator = buildProductionOrchestrator(restartDurableConfig(clock, 0));
+
+        // Not a regression to soften: the plain `setInterval(fn, 0)` this
+        // schedule replaced would have hot-looped on the same bad config, so
+        // failing loudly at boot is strictly better. The fix is naming the
+        // cause instead of letting `cycle-schedule.ts`'s generic
+        // "intervalMs must be positive" surface with no mention of which
+        // config field produced it.
+        await expect(orchestrator.start()).rejects.toThrow(
+          /FeedbackCycleConfig\.intervalMs must be positive, got 0/,
+        );
+      },
+    );
   });
 
   /**

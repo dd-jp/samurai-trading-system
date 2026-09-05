@@ -3026,7 +3026,6 @@ export interface OutsideBenchmarkEvidence {
   unmeasured: readonly string[];
 }
 
-/** Drives the shipped arm-comparison cycle over the smoke run's own store. */
 /**
  * Whether `scheduleFeedbackCycle` (production.ts, #1110) actually ran inside
  * THIS run's `start()`/`stop()` — read from the same store, after `stop()`
@@ -3040,6 +3039,7 @@ function feedbackCycleScheduleWasWritten(db: SqliteHandle): boolean {
   return new SqliteFeedbackCycleScheduleStore(db).lastBoundary() !== null;
 }
 
+/** Drives the shipped arm-comparison cycle over the smoke run's own store. */
 function runArmComparisonProbe(db: SqliteHandle): ArmComparisonEvidence {
   let alerts = 0;
   const samples = new SqliteArmComparisonSampleStore(db);
