@@ -670,11 +670,17 @@ export class TelegramBotApiClient implements TelegramClient {
           timestamp: new Date(),
         });
       } catch (recordError) {
+        // Same reason `detail` below is wrapped: `redactPayload` never walks
+        // this plain string `message`, so an unmasked `recordError` here is
+        // exactly the token-bearing-`TypeError` threat this module's header
+        // documents — e.g. a misconfigured storage `baseUrl`/driver whose
+        // thrown message happens to echo back the failed insert's own
+        // token-bearing text (#1108 third review pass).
         this.#log(
           'error',
-          `failed to durably record an undelivered alert (chat_id=${chatId}): ${
-            recordError instanceof Error ? recordError.message : String(recordError)
-          }`,
+          `failed to durably record an undelivered alert (chat_id=${chatId}): ${sanitizeLogText(
+            recordError instanceof Error ? recordError.message : String(recordError),
+          )}`,
         );
       }
     }
@@ -697,11 +703,16 @@ export class TelegramBotApiClient implements TelegramClient {
           'failed permanently after retries so far this run. Recent escalations may not have ' +
           'reached you — check alert_delivery_failures for the record.',
       }).catch((escalationError: unknown) => {
+        // Same reason `detail` above is wrapped: this escalation send itself
+        // reaches `#call`/`#request` and can fail against the very
+        // misconfigured `baseUrl` this module's header names as the threat —
+        // `redactPayload` never walks this plain string `message` (#1108
+        // third review pass).
         this.#log(
           'error',
-          `failed to post the repeated-delivery-failure escalation: ${
-            escalationError instanceof Error ? escalationError.message : String(escalationError)
-          }`,
+          `failed to post the repeated-delivery-failure escalation: ${sanitizeLogText(
+            escalationError instanceof Error ? escalationError.message : String(escalationError),
+          )}`,
         );
       });
     }

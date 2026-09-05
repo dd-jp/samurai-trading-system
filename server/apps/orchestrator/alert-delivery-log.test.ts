@@ -8,10 +8,12 @@ import { fromStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 import { type AlertDeliveryFailure, SqliteAlertDeliveryLog } from './alert-delivery-log.js';
 
 const ASOF = new Date('2026-09-04T15:00:00Z');
+const ALERT_CHAT_ID = '-100200300';
+const HEARTBEAT_CHAT_ID = '-100200301';
 
 function failure(overrides: Partial<AlertDeliveryFailure> = {}): AlertDeliveryFailure {
   return {
-    chat_id: '-100200300',
+    chat_id: ALERT_CHAT_ID,
     method: 'sendMessage',
     body: 'Samurai TRADER DEGRADED: AAPL reported timeout on 3 consecutive tick(s).',
     error: 'Telegram Bot API transport failure: fetch failed (sendMessage)',
@@ -27,16 +29,35 @@ function makeStore(): { log: SqliteAlertDeliveryLog; db: SharedStore } {
 
 describe('SqliteAlertDeliveryLog', () => {
   it('counts zero with no rows recorded', () => {
-    expect(makeStore().log.countFailures(ASOF)).toBe(0);
+    expect(makeStore().log.countFailures(ASOF, ALERT_CHAT_ID)).toBe(0);
   });
 
-  it('counts one row per recordFailure() call', () => {
+  it('counts one row per recordFailure() call on the same chat', () => {
     const { log } = makeStore();
 
     log.recordFailure(failure());
-    log.recordFailure(failure({ chat_id: '-100200301' }));
+    log.recordFailure(failure());
 
-    expect(log.countFailures(ASOF)).toBe(2);
+    expect(log.countFailures(ASOF, ALERT_CHAT_ID)).toBe(2);
+  });
+
+  // #1108 third review pass: the CI-bot finding this closes. Heartbeat sends
+  // (#342) are recorded into the same table as escalation sends — #342's
+  // isolation only stops a heartbeat failure from advancing or triggering
+  // the escalation-chat alert in telegram-bot-api-client.ts, it does not stop
+  // the row from being written — so an unfiltered COUNT(*) would let a
+  // heartbeat outage falsely degrade the "alert channel" tile. `chatId` is
+  // the fix: a heartbeat-chat row must not count, an alert-chat row must.
+  it('excludes a non-alert (heartbeat) chat_id row from the count, and counts an alert-chat row', () => {
+    const { log } = makeStore();
+
+    log.recordFailure(failure({ chat_id: HEARTBEAT_CHAT_ID }));
+    log.recordFailure(failure({ chat_id: ALERT_CHAT_ID }));
+
+    expect(log.countFailures(ASOF, ALERT_CHAT_ID)).toBe(1);
+    // The heartbeat row is still durably recorded — just not counted toward
+    // the alert-channel tile. Same table, different chat, both rows present.
+    expect(log.countFailures(ASOF, HEARTBEAT_CHAT_ID)).toBe(1);
   });
 
   it('excludes rows recorded after asOf', () => {
@@ -45,17 +66,26 @@ describe('SqliteAlertDeliveryLog', () => {
     log.recordFailure(failure({ timestamp: new Date('2026-09-04T14:00:00Z') }));
     log.recordFailure(failure({ timestamp: new Date('2026-09-04T16:00:00Z') }));
 
-    expect(log.countFailures(ASOF)).toBe(1);
+    expect(log.countFailures(ASOF, ALERT_CHAT_ID)).toBe(1);
   });
 
   it('answers the count of the 2026-09-04 session-style burst — ten failed sends', () => {
     const { log } = makeStore();
 
+    // `Date.UTC(...)`, not `new Date(2026, 8, ...)` (#1108 third review pass):
+    // the latter is HOST-LOCAL time, while `ASOF` above is a fixed UTC
+    // instant — on any machine west of UTC-1 (US timezones, say) `new
+    // Date(2026, 8, 4, 14, i)` lands after `ASOF` and every row here would be
+    // silently excluded, failing this assertion only on CI/dev machines set
+    // to those zones. Every other timestamp in this file is already an ISO
+    // string for the same reason.
     for (let i = 0; i < 10; i++) {
-      log.recordFailure(failure({ body: `alert #${i}`, timestamp: new Date(2026, 8, 4, 14, i) }));
+      log.recordFailure(
+        failure({ body: `alert #${i}`, timestamp: new Date(Date.UTC(2026, 8, 4, 14, i)) }),
+      );
     }
 
-    expect(log.countFailures(ASOF)).toBe(10);
+    expect(log.countFailures(ASOF, ALERT_CHAT_ID)).toBe(10);
   });
 
   it('masks a bot-token-shaped string in body/error before it reaches the table (#1108 finding 6)', () => {

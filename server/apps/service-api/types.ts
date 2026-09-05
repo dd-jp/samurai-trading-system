@@ -284,12 +284,19 @@ export interface DashboardQueryStore {
    */
   getPipelineActivity(maxLanes: number, lookbackMs: number, asOf: Date): PipelineActivity;
   /**
-   * Count of alert sends recorded in `alert_delivery_failures` up to `asOf`
-   * (#1108) — same relationship to that table `getLlmSpend` has to
-   * `llm_spend`: written by another component (the Telegram client), read
-   * here. All-time from the lower bound (the table carries no retention
-   * window), `asOf`-bounded above like every other reader here, so a replay
-   * against an older snapshot cannot see a failure that hadn't happened yet.
+   * Count of alert sends to the ESCALATION chat recorded in
+   * `alert_delivery_failures` up to `asOf` (#1108) — same relationship to
+   * that table `getLlmSpend` has to `llm_spend`: written by another
+   * component (the Telegram client), read here. All-time from the lower
+   * bound (the table carries no retention window), `asOf`-bounded above like
+   * every other reader here, so a replay against an older snapshot cannot
+   * see a failure that hadn't happened yet.
+   *
+   * Scoped to the chat `alert-transport.ts` reads `TELEGRAM_CHAT_ID` into
+   * (#1108 third review pass): the table also durably records heartbeat-chat
+   * sends (#342's isolation only stops those from advancing the escalation
+   * counter, not from being written), and this tile answers "is the alert
+   * channel down" — a heartbeat hiccup on its own chat must not degrade it.
    */
   getAlertDeliveryFailureCount(asOf: Date): number;
 }

@@ -272,6 +272,18 @@ export class SqliteQueryStore implements DashboardQueryStore {
   constructor(
     private readonly db: SharedStore,
     private readonly attributionWindowDays = 30,
+    /**
+     * The escalation chat `alert_delivery_failures.chat_id` is scoped
+     * against (#1108 third review pass) — the same chat `alert-transport.ts`
+     * reads `TELEGRAM_CHAT_ID` into, normalized the same way (trimmed,
+     * empty-as-unset) so the entry point's read agrees with the
+     * orchestrator's. `undefined` when unconfigured (the only configuration
+     * under which the orchestrator itself never writes real Telegram rows
+     * either: `SAMURAI_ALERTS=log-only`) — `getAlertDeliveryFailureCount`
+     * reads 0 rather than guessing a chat, and the entry point names that
+     * state at boot instead of it being reached silently.
+     */
+    private readonly alertChatId?: string,
   ) {
     this.armComparisons = new SqliteArmComparisonSampleStore(db);
     this.outsideBenchmarks = new SqliteOutsideBenchmarkSampleStore(db);
@@ -899,7 +911,8 @@ export class SqliteQueryStore implements DashboardQueryStore {
   }
 
   getAlertDeliveryFailureCount(asOf: Date): number {
-    return this.alertDeliveryLog.countFailures(asOf);
+    if (this.alertChatId === undefined) return 0;
+    return this.alertDeliveryLog.countFailures(asOf, this.alertChatId);
   }
 }
 

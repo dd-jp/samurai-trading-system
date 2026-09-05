@@ -544,6 +544,32 @@ describe('TelegramBotApiClient — transient network failures and undeliverable 
     await expect(h.client.sendMessage(CHAT_ID, 'hi')).rejects.toThrow(/fetch failed/);
   });
 
+  // #1108 third review pass: two log interpolations remained unsanitised
+  // after the `detail` fix above — this is the first, the `recordError`
+  // interpolated into "failed to durably record an undelivered alert".
+  // `redactPayload` never walks this plain string `message`, so a
+  // bot-token-shaped `recordError.message` reaches the log unmasked without
+  // `sanitizeLogText` around it, the same threat the `detail` test above
+  // pins for the main line.
+  it('masks a bot-token-shaped recordError message in the "failed to durably record" log line', async () => {
+    const entries: LogEntry[] = [];
+    const h = makeClient({ logger: { log: (entry) => entries.push(entry) } });
+    h.fetchMock.mockRejectedValue(new TypeError('fetch failed'));
+    const tokenLike = 'bot123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    h.alertDeliveryLog.recordFailure = () => {
+      throw new Error(`db write failed against ${tokenLike}`);
+    };
+
+    await expect(h.client.sendMessage(CHAT_ID, 'hi')).rejects.toThrow();
+
+    const failureEntry = entries.find((entry) =>
+      entry.message.startsWith('failed to durably record an undelivered alert'),
+    );
+    expect(failureEntry).toBeDefined();
+    expect(failureEntry?.message).not.toContain(tokenLike);
+    expect(failureEntry?.message).toContain('[REDACTED]');
+  });
+
   it('escalates on the Nth permanently-undeliverable send and every Nth after', async () => {
     const h = makeClient({
       alertChatId: CHAT_ID,
@@ -577,6 +603,36 @@ describe('TelegramBotApiClient — transient network failures and undeliverable 
     await new Promise((resolve) => setTimeout(resolve, 5));
 
     expect(h.alertDeliveryLog.failures).toHaveLength(3);
+  });
+
+  // #1108 third review pass: the second of the two remaining unsanitised
+  // interpolations — `escalationError` in the fire-and-forget `.catch` above.
+  // The escalation send itself goes through `#call`/`#request`, which can
+  // fail against the same misconfigured `baseUrl` this module's header names
+  // as the threat, so a bot-token-shaped message here must be masked too.
+  it('masks a bot-token-shaped escalationError message in the "failed to post the ... escalation" log line', async () => {
+    const entries: LogEntry[] = [];
+    const h = makeClient({
+      alertChatId: CHAT_ID,
+      retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
+      logger: { log: (entry) => entries.push(entry) },
+    });
+    const tokenLike = 'bot123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    h.fetchMock.mockRejectedValue(new TypeError(`bad baseUrl config: ${tokenLike}`));
+
+    for (let i = 0; i < 3; i++) {
+      await expect(h.client.sendMessage(CHAT_ID, `alert ${i}`)).rejects.toThrow();
+    }
+    // Let the fire-and-forget escalation attempt (itself rejected, since
+    // fetchMock always rejects) settle before asserting.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const escalationLogEntry = entries.find((entry) =>
+      entry.message.startsWith('failed to post the repeated-delivery-failure escalation'),
+    );
+    expect(escalationLogEntry).toBeDefined();
+    expect(escalationLogEntry?.message).not.toContain(tokenLike);
+    expect(escalationLogEntry?.message).toContain('[REDACTED]');
   });
 
   it('a failure on a DIFFERENT chat than the escalation chat never triggers escalation (#342 isolation)', async () => {

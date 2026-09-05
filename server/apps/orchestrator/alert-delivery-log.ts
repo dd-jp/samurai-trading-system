@@ -47,11 +47,26 @@ export class SqliteAlertDeliveryLog {
       );
   }
 
-  /** Total permanently-undeliverable alerts recorded as of `asOf` — #1108's "count… answerable after the fact". */
-  countFailures(asOf: Date): number {
+  /**
+   * Permanently-undeliverable alerts recorded FOR `chatId` as of `asOf`
+   * — #1108's "count… answerable after the fact", scoped by the third
+   * review pass's finding: `alert_delivery_failures` holds rows for every
+   * chat a send targeted, heartbeat included (#342's isolation only stops a
+   * heartbeat failure from advancing or triggering the escalation-chat
+   * alert in `telegram-bot-api-client.ts` — it does not stop the row being
+   * written here). An unfiltered `COUNT(*)` would answer "how many sends
+   * failed anywhere", not "is the alert channel down", so `chatId` is a
+   * required parameter rather than a default: the caller (the one place
+   * that knows which chat IS the alert/escalation channel) must say so
+   * explicitly, the same way `getMarks`/`getFillsForTrades` take their scope
+   * as a parameter rather than this store inventing one.
+   */
+  countFailures(asOf: Date, chatId: string): number {
     const row = this.db
-      .prepare('SELECT COUNT(*) AS n FROM alert_delivery_failures WHERE timestamp <= ?')
-      .get(toStoredTimestamp(asOf)) as { n: number };
+      .prepare(
+        'SELECT COUNT(*) AS n FROM alert_delivery_failures WHERE timestamp <= ? AND chat_id = ?',
+      )
+      .get(toStoredTimestamp(asOf), chatId) as { n: number };
     return row.n;
   }
 }
