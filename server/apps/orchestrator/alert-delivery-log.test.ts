@@ -4,6 +4,7 @@
  */
 import type { SharedStore } from '../../shared/store/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
+import { fromStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 import { type AlertDeliveryFailure, SqliteAlertDeliveryLog } from './alert-delivery-log.js';
 
 const ASOF = new Date('2026-09-04T15:00:00Z');
@@ -76,5 +77,39 @@ describe('SqliteAlertDeliveryLog', () => {
     expect(row?.error).not.toContain('AAFakeTokenValueHere');
     expect(row?.body).toContain('[REDACTED]');
     expect(row?.error).toContain('[REDACTED]');
+  });
+
+  // #1108 finding 4: the deleted round-trip test left nothing pinning that
+  // each column lands in the right place. Every field below is a DISTINCT
+  // value, so a body/error (or method) transposition in the INSERT's
+  // parameter order fails this even though every other test in the file
+  // would still pass (the finding-6/blocker tests above both seed body AND
+  // error with token-bearing text, which can't detect a swap).
+  it('round-trips every column to a distinct value, catching a body/error/method transposition', () => {
+    const { log, db } = makeStore();
+    const entry: AlertDeliveryFailure = {
+      chat_id: '-100999888',
+      method: 'sendApprovalButtons',
+      body: 'ROUND-TRIP-BODY-MARKER: approve TSLA entry?',
+      error: 'ROUND-TRIP-ERROR-MARKER: fetch failed',
+      timestamp: new Date('2026-09-04T13:30:00Z'),
+    };
+
+    log.recordFailure(entry);
+
+    const [row] = db
+      .prepare('SELECT chat_id, method, body, error, timestamp FROM alert_delivery_failures')
+      .all() as Array<{
+      chat_id: string;
+      method: string;
+      body: string;
+      error: string;
+      timestamp: string;
+    }>;
+    expect(row?.chat_id).toBe(entry.chat_id);
+    expect(row?.method).toBe(entry.method);
+    expect(row?.body).toBe(entry.body);
+    expect(row?.error).toBe(entry.error);
+    expect(fromStoredTimestamp(row?.timestamp ?? '')).toEqual(entry.timestamp);
   });
 });

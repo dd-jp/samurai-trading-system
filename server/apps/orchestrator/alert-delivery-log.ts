@@ -4,7 +4,7 @@
  * rather than a row in `audit_log`.
  */
 
-import { maskCredentials } from '../../shared/sanitize-log-text.js';
+import { sanitizeLogText } from '../../shared/sanitize-log-text.js';
 import type { SharedStore } from '../../shared/store/index.js';
 import { toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 
@@ -25,6 +25,12 @@ export class SqliteAlertDeliveryLog {
    * outside `formatLogLine`'s central redaction (#1035) — masked here so a
    * misconfigured `baseUrl` that puts the bot token in a `TypeError`'s
    * message (see `classifyTelegramThrown`) cannot leave it on disk.
+   *
+   * `sanitizeLogText` (mask-then-cap), not a caller-side truncate before this
+   * call: `sanitize-log-text.ts` is explicit that truncating before masking
+   * can bisect a token mid-string and leave an unmasked remainder that no
+   * longer matches the credential patterns — this method is the one place
+   * both decisions happen, in the order that avoids that.
    */
   recordFailure(entry: AlertDeliveryFailure): void {
     this.db
@@ -35,8 +41,8 @@ export class SqliteAlertDeliveryLog {
       .run(
         entry.chat_id,
         entry.method,
-        maskCredentials(entry.body),
-        maskCredentials(entry.error),
+        sanitizeLogText(entry.body),
+        sanitizeLogText(entry.error),
         toStoredTimestamp(entry.timestamp),
       );
   }

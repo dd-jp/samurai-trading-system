@@ -67,12 +67,7 @@
  * update objects are never logged for the same reason.
  */
 import type { Logger, RetryConfig } from '../../../../shared/index.js';
-import {
-  currentTraceId,
-  fetchWithTimeout,
-  truncateForError,
-  withRetry,
-} from '../../../../shared/index.js';
+import { currentTraceId, fetchWithTimeout, withRetry } from '../../../../shared/index.js';
 import type { ApprovalButtonTarget, ApprovalCallback, TelegramClient } from '../types.js';
 import { parseOptionalAllowedUserIds } from './allowlist.js';
 import { CorrelationTokenStore, tokenLogPrefix } from './correlation-tokens.js';
@@ -626,8 +621,12 @@ export class TelegramBotApiClient implements TelegramClient {
    * failure the caller is about to see, mirroring
    * `#recordAllowlistRejection`'s audit try/catch above.
    *
-   * Records `text`, not the wire-capped body — the durable row should hold
-   * as much of the original alert as the shared 500-char error-body cap
+   * Passes `text`/`detail` through uncapped, not the wire-capped body —
+   * `SqliteAlertDeliveryLog.recordFailure` owns masking-then-capping the
+   * durable row (mask first, so a bot token cannot be bisected by a cap
+   * applied ahead of it and left half-unmasked); capping here first would
+   * just re-do that decision in the wrong order. The row ends up holding as
+   * much of the original alert as that shared 500-char error-body cap
    * allows, independent of what Telegram's 4096-char limit happened to let
    * through.
    *
@@ -654,8 +653,8 @@ export class TelegramBotApiClient implements TelegramClient {
         this.#alertDeliveryLog.recordFailure({
           chat_id: chatId,
           method,
-          body: truncateForError(text),
-          error: truncateForError(detail),
+          body: text,
+          error: detail,
           timestamp: new Date(),
         });
       } catch (recordError) {

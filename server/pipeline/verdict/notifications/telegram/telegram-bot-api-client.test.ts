@@ -1,14 +1,15 @@
-import type {
-  SqliteAlertDeliveryLog,
-  SqliteAuditLog,
-} from '../../../../apps/orchestrator/index.js';
+import type { SqliteAuditLog } from '../../../../apps/orchestrator/index.js';
+import { SqliteAlertDeliveryLog } from '../../../../apps/orchestrator/index.js';
 import type { LogEntry, Logger, RetryConfig } from '../../../../shared/index.js';
+import { MAX_ERROR_BODY_CHARS } from '../../../../shared/index.js';
+import { openSharedStore } from '../../../../shared/store/index.js';
 import type { AlertDeliveryFailureLog, CallbackAuditLog } from './telegram-bot-api-client.js';
 import {
   capOutboundText,
   TELEGRAM_MAX_MESSAGE_CHARS,
   TelegramBotApiClient,
 } from './telegram-bot-api-client.js';
+import { classifyTelegramThrown } from './telegram-errors.js';
 
 const FAKE_TOKEN = '1234567:test-fake-bot-token';
 const ALLOWED_ID = 4242;
@@ -408,15 +409,106 @@ describe('TelegramBotApiClient — transient network failures and undeliverable 
     expect(h.alertDeliveryLog.failures[0]?.body).toBe('Approve TSLA entry?');
   });
 
-  it('truncates an oversized body/error before it reaches the durable record', async () => {
+  it('passes the full, uncapped body/error to the durable record — capping is recordFailure’s job, not the caller’s', async () => {
+    // `SqliteAlertDeliveryLog.recordFailure` mask-then-caps (see
+    // alert-delivery-log.ts and the end-to-end blocker regression test just
+    // below); capping here first would truncate ahead of that mask, which is
+    // exactly the ordering bug the blocker fixed. This test double only
+    // records what it's given, so this pins that the client hands over the
+    // ORIGINAL length rather than pre-truncating.
     const h = makeClient();
-    h.fetchMock.mockRejectedValue(new TypeError(`fetch failed: ${'y'.repeat(1_000)}`));
+    const errorMessage = `fetch failed: ${'y'.repeat(1_000)}`;
+    h.fetchMock.mockRejectedValue(new TypeError(errorMessage));
+    // `#call` classifies the thrown error before it reaches
+    // `#recordDeliveryFailure`, wrapping the raw message — compute the same
+    // wrapping rather than hardcode it, so this doesn't drift from
+    // telegram-errors.ts's own wording.
+    const expectedError = classifyTelegramThrown(
+      new TypeError(errorMessage),
+      'sendMessage',
+    ).message;
 
     await expect(h.client.sendMessage(CHAT_ID, 'z'.repeat(1_000))).rejects.toThrow();
 
     const [recorded] = h.alertDeliveryLog.failures;
-    expect(recorded?.body.length).toBeLessThan(1_000);
-    expect(recorded?.error.length).toBeLessThan(1_000);
+    expect(recorded?.body.length).toBe(1_000);
+    expect(recorded?.error).toBe(expectedError);
+  });
+
+  // #1108 blocker, end-to-end: a token-shaped secret straddling the 500-char
+  // truncation boundary must still be fully redacted once it reaches disk.
+  // The `alertDeliveryLog` test double above only records what it's handed —
+  // it can't catch a truncate-then-mask bug that lives in the INTERACTION
+  // between this client (the former truncation site) and the real
+  // `SqliteAlertDeliveryLog` (the masking site), so this test wires the real
+  // one in over an in-memory DB. Truncating before masking bisects the bare
+  // `\d{6,}:[A-Za-z0-9_-]{20,}` pattern so only a short remainder of the
+  // opaque suffix survives the cut — too short to clear the `{20,}` floor —
+  // leaving a partial secret on disk. This is red against the pre-fix
+  // truncate-then-mask ordering and green once masking runs before the cap.
+  it('fully redacts a secret straddling the truncation boundary once it reaches the real durable log', async () => {
+    const db = openSharedStore(':memory:');
+    const realLog = new SqliteAlertDeliveryLog(db);
+    const h = makeClient({
+      alertDeliveryLog: realLog,
+      retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
+    });
+
+    // A word-boundary (space) on both sides is required for the bare-token
+    // pattern's `\b` anchors to fire against the surrounding filler —
+    // without it, filler and token blend into one run of word characters and
+    // the pattern never matches.
+    const digits = '123456789012'; // 12 digits — clears the {6,} floor
+    const suffix = 'F'.repeat(40); // 40 chars — clears the {20,} floor
+    const secret = `${digits}:${suffix}`; // 53 chars
+    const after = ` ${'y'.repeat(200)}`; // boundary, then filler well past the cap
+
+    // `#call` classifies the thrown error before it reaches
+    // `#recordDeliveryFailure`, wrapping the raw message in fixed prose —
+    // measured here via a marker rather than hardcoded, so this doesn't drift
+    // from telegram-errors.ts's own wording. The cut must land far enough
+    // into the opaque suffix that fewer than 20 of its chars survive — a
+    // shallower cut leaves enough of the run intact to still clear the
+    // pattern's `{20,}` floor even after truncation, which would falsely
+    // "pass" a truncate-then-mask bug.
+    const MARKER = 'Z';
+    const wrapperPrefixLen = classifyTelegramThrown(
+      new TypeError(MARKER),
+      'sendMessage',
+    ).message.indexOf(MARKER);
+    // 12(digits) + 1(colon) + 2 = 15 chars of the secret survive the cap.
+    const targetSecretStart = MAX_ERROR_BODY_CHARS - 15;
+    const beforeContentLen = targetSecretStart - wrapperPrefixLen - 1; // -1 reserves the boundary space
+    const before = `${'x'.repeat(beforeContentLen)} `; // ends on a boundary
+    const rawMessage = `${before}${secret}${after}`;
+
+    const wrapped = classifyTelegramThrown(new TypeError(rawMessage), 'sendMessage').message;
+    expect(wrapped.length).toBeGreaterThan(MAX_ERROR_BODY_CHARS); // must actually trigger the cap
+    expect(wrapped.indexOf(secret)).toBe(targetSecretStart);
+    const survivingSuffixChars = MAX_ERROR_BODY_CHARS - (targetSecretStart + digits.length + 1);
+    expect(survivingSuffixChars).toBeGreaterThan(0); // still straddles into the opaque suffix
+    expect(survivingSuffixChars).toBeLessThan(20); // too little of it survives to match {20,}
+
+    h.fetchMock.mockRejectedValue(new TypeError(rawMessage));
+
+    await expect(h.client.sendMessage(CHAT_ID, 'hi')).rejects.toThrow();
+
+    const [row] = db.prepare('SELECT error FROM alert_delivery_failures').all() as Array<{
+      error: string;
+    }>;
+    expect(row?.error).toContain('[REDACTED]');
+    expect(row?.error).not.toContain(digits);
+    expect(row?.error).not.toContain(suffix.slice(0, 20));
+
+    // Masking is not a substitute for capping: assert the row is STILL
+    // truncated, and that the reported "chars total" count reflects the
+    // POST-mask length (shorter than the raw wrapped message) rather than
+    // the pre-mask length — the latter is exactly what a reverted
+    // truncate-then-mask ordering would report, since it caps before the
+    // secret has been shrunk to '[REDACTED]'.
+    const reportedTotal = row?.error.match(/\(truncated, (\d+) chars total\)$/);
+    expect(reportedTotal).not.toBeNull();
+    expect(Number(reportedTotal?.[1])).toBeLessThan(wrapped.length);
   });
 
   it('a broken durable write never replaces the original send failure', async () => {

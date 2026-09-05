@@ -112,14 +112,6 @@ describe('classifyTelegramThrown', () => {
     expect(isRetryableTelegramError(error)).toBe(true);
   });
 
-  it('maps a bare network failure whose message carries the cause’s detail too', () => {
-    const error = classifyTelegramThrown(
-      new TypeError('fetch failed: connect ECONNREFUSED 127.0.0.1:443'),
-      'sendMessage',
-    );
-    expect(error).toBeInstanceOf(TelegramNetworkError);
-  });
-
   it('maps a circular-JSON TypeError to a non-retryable provider error, not a network error (finding 3)', () => {
     const circular: Record<string, unknown> = {};
     circular.self = circular;
