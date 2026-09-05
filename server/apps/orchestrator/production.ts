@@ -215,6 +215,7 @@ import {
   DEFAULT_MAX_LLM_CALL_ROWS,
   guardedStore,
   pruneLlmCallLog,
+  SqliteLlmSpendCapStore,
   SqliteRiskLogStore,
   SqliteTraderLogStore,
 } from '../../shared/store/index.js';
@@ -1212,6 +1213,15 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     config.armDivergenceAlerts ?? new LoggingArmDivergenceAlertChannel(logger);
 
   /**
+   * #1140: the SAME `config.llmBudgetUsd` the enforcer is built from, recorded
+   * where the dashboard process — which cannot see this config object — can
+   * read it. Armed inside the branch below, on both sides, so the published
+   * cap and the enforced one are one expression apart rather than two copies
+   * of a number in two runtimes.
+   */
+  const publishedSpendCap = new SqliteLlmSpendCapStore(guardedStore(config.db, 'orchestrator'));
+
+  /**
    * The hard dollar ceiling (ADR-0008). Distinct from `llmRateLimiter`, which
    * bounds CALLS PER WINDOW and refills with time: this bounds TOTAL DOLLARS
    * and never refills. A run can be comfortably inside its rate limit and
@@ -1236,6 +1246,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
         'unattended soak (#238) must set a budget.',
       payload: { llm_budget_usd: null },
     });
+    publishedSpendCap.arm(null, clock.now());
     spendCap = UNCAPPED_SPEND;
   } else {
     const cap = new SqliteSpendCap(
@@ -1249,6 +1260,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
         }),
     );
     spendCap = cap;
+    publishedSpendCap.arm(config.llmBudgetUsd, clock.now());
 
     /**
      * Announce what this database has ALREADY spent, because the cap's window

@@ -55,6 +55,7 @@ export function makeSpend(overrides: Partial<LlmSpendSummary> = {}): LlmSpendSum
     last_24h: spendWindow(),
     last_7d: spendWindow({ cost_usd: 11.2, calls: 402 }),
     all_time: spendWindow({ cost_usd: 23.71, calls: 866 }),
+    cap_usd: 50,
     ...overrides,
   };
 }

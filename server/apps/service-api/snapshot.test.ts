@@ -160,6 +160,7 @@ function fakeStore(overrides: Partial<DashboardQueryStore> = {}): DashboardQuery
       last_24h: { ...EMPTY_SPEND_WINDOW },
       last_7d: { ...EMPTY_SPEND_WINDOW },
       all_time: { ...EMPTY_SPEND_WINDOW },
+      cap_usd: 50,
     }),
     getPipelineActivity: () => ({ universe: [], events: [], live: [] }),
     getAlertDeliveryFailureCount: () => 0,
@@ -463,6 +464,18 @@ describe('buildSnapshot', () => {
 
     expect(snap.alert_delivery_failures).toBe(4);
     expect(asked).toEqual(AS_OF);
+  });
+
+  // #1140: the enforced cap rides the same payload as the spend it bounds, so
+  // the rail's denominator is the enforcer's rather than a client constant.
+  it("carries the store's LLM cap onto the wire, uncapped included", () => {
+    const spend = fakeStore().getLlmSpend(AS_OF);
+
+    expect(buildSnapshot(fakeStore(), AS_OF, 'paper').llm_spend.cap_usd).toBe(spend.cap_usd);
+    expect(
+      buildSnapshot(fakeStore({ getLlmSpend: () => ({ ...spend, cap_usd: null }) }), AS_OF, 'paper')
+        .llm_spend.cap_usd,
+    ).toBeNull();
   });
 
   // #940: closed trades and their fills appear on the wire — the surface the

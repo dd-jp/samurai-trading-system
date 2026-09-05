@@ -137,6 +137,11 @@ export const STAGE_OWNED_TABLES: Record<StoreOwnerStage, readonly string[]> = {
     'audit_log',
     'current_tick',
     'daily_equity',
+    // #1140: `SqliteLlmSpendCapStore` lives in `shared/store` because the
+    // dashboard reads it, but the WRITE is a boot-time statement of the
+    // config the composition root armed — the orchestrator's, by the same
+    // handle-identity rule `account_state` above follows.
+    'llm_spend_cap',
     'session_equity',
   ],
   risk: ['breaker_state', 'risk_critic_log', 'risk_log'],

@@ -49,6 +49,7 @@ import {
   type ClosedTradeRow,
   fromClosedTradeRow,
   type SharedStore,
+  SqliteLlmSpendCapStore,
 } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
@@ -268,6 +269,12 @@ export class SqliteQueryStore implements DashboardQueryStore {
   private readonly critics: SqliteRiskCriticStore;
   /** #1108: the orchestrator's own alert-delivery-failure log, read (never written) here. */
   private readonly alertDeliveryLog: SqliteAlertDeliveryLog;
+  /**
+   * #1140: the cap the orchestrator armed, read (never written) here — the
+   * same store class its composition root writes through, so the denominator
+   * on the wire cannot be a second copy of the number this process invented.
+   */
+  private readonly spendCap: SqliteLlmSpendCapStore;
 
   constructor(
     private readonly db: SharedStore,
@@ -289,6 +296,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
     this.outsideBenchmarks = new SqliteOutsideBenchmarkSampleStore(db);
     this.critics = new SqliteRiskCriticStore(db);
     this.alertDeliveryLog = new SqliteAlertDeliveryLog(db);
+    this.spendCap = new SqliteLlmSpendCapStore(db);
   }
 
   /**
@@ -624,6 +632,9 @@ export class SqliteQueryStore implements DashboardQueryStore {
       // comparison against '' is true for every well-formed timestamp, but
       // relying on that is a trick the next reader has to decode.
       all_time: this.spendBetween(null, until),
+      // Never defaulted here: a fallback in this layer is the client's deleted
+      // `LLM_SPEND_CAP_USD` moved one process left (#1140).
+      cap_usd: this.spendCap.read(),
     };
   }
 

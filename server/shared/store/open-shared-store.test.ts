@@ -83,6 +83,10 @@ const TABLES = [
   // restart-durable schedule (#1110); see production.ts's
   // `scheduleFeedbackCycle` for why.
   'feedback_cycle_schedule',
+  // `llm_spend_cap` (0047) — the LLM budget the orchestrator's composition
+  // root armed its spend cap with (#1140), so the dashboard's meter measures
+  // against the cap being enforced rather than a copy of the number.
+  'llm_spend_cap',
 ];
 
 /**
@@ -91,7 +95,7 @@ const TABLES = [
  * That prose number silently drifted twice (it read "twenty" and "twenty-one"
  * simultaneously while the schema held 22), so it is pinned here.
  */
-const CONSOLIDATED_SCHEMA_TABLE_COUNT = 34;
+const CONSOLIDATED_SCHEMA_TABLE_COUNT = 35;
 
 const tempDirs: string[] = [];
 
@@ -189,6 +193,7 @@ describe('openSharedStore', () => {
       { version: 44 },
       { version: 45 },
       { version: 46 },
+      { version: 47 },
     ]);
     expect(runMigrations(db)).toEqual([]);
     expect(db.prepare('SELECT version FROM schema_migrations').all()).toEqual([
@@ -238,6 +243,7 @@ describe('openSharedStore', () => {
       { version: 44 },
       { version: 45 },
       { version: 46 },
+      { version: 47 },
     ]);
   });
 
