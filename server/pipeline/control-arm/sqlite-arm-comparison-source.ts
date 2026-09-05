@@ -99,10 +99,10 @@ export class SqliteArmComparisonSource {
  * `sizing_capital_ceiling` carries no currency suffix (#949): it is whatever
  * raw value `ProductionConfig.capitalCeilingUsd` held when a row was written,
  * unconverted, so "different regimes" here means "different declared-ceiling
- * VALUES", not necessarily different currencies. When #949 adds FX
+ * VALUES", not necessarily different currencies. When #1180 adds FX
  * conversion, today's `1000` rows and that change's converted rows become a
  * THIRD case — two distinct non-null ceilings, so this throws — even though
- * the book never moved. #949 owns backfilling the stamp; this guard cannot
+ * the book never moved. #1180 owns backfilling the stamp; this guard cannot
  * tell that apart from a real mid-window book change.
  */
 function oneSizingRegime<Row extends { sizing_capital_ceiling: number | null }>(
