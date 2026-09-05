@@ -1042,6 +1042,113 @@ describe('SequentialTickRunner tick pass (#743)', () => {
 });
 
 /**
+ * #1113: `no_exit_due` was 51% of a soak's log lines by itself — one line per
+ * instrument per tick for the ~29-of-30 passes with nothing to report. Every
+ * value it carried is already durable elsewhere: `audit_log.decision` is
+ * cleartext (unlike `input_digest`/`output_digest`), and `record()` writes
+ * both from the one call, so the row survives regardless of what the log
+ * line does. A REAL exit must not follow it down — `flatten`, `signal_decay`,
+ * and the unreached `exit_reason`-less fallback all stay at `info`.
+ */
+describe('SequentialTickRunner tick pass logging level (#1113)', () => {
+  function recordLines(ctx: TickContext) {
+    const log = ctx.logger.log as ReturnType<typeof vi.fn>;
+    return log.mock.calls.map((call) => call[0]);
+  }
+
+  it('logs a no-exit tick at debug, not info', async () => {
+    const steps = makeSteps();
+    const ctx = makeCtx({ decision_bar: undefined });
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    const lines = recordLines(ctx).filter((entry) => entry.stage === 'position_check');
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({
+      stage: 'position_check',
+      level: 'debug',
+      message: 'position_check: no_exit_due',
+    });
+
+    // The volume this ticket exists to cut is the log line — the audit row
+    // this same `record()` call writes is unaffected by the level change.
+    const rows = (ctx.auditLog as SqliteAuditLog).getByTraceId(TRACE_ID);
+    expect(rows.map((row) => row.stage)).toEqual(['position_check']);
+    expect(rows[0]?.decision).toBe('no_exit_due');
+  });
+
+  it('keeps a flatten at info, not debug', async () => {
+    const exit = exitIntent('flatten');
+    const steps = makeSteps({
+      exitCheck: vi.fn(async () => exit),
+      risk: vi.fn(async () => approvedRisk(exit)),
+      verdict: vi.fn(async () => goVerdict(exit)),
+    });
+    const ctx = makeCtx({ decision_bar: undefined });
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    const lines = recordLines(ctx).filter((entry) => entry.stage === 'position_check');
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({
+      stage: 'position_check',
+      level: 'info',
+      message: 'position_check: flatten',
+    });
+  });
+
+  it('keeps an indicator-based early exit (signal_decay) at info, not debug', async () => {
+    const exit = exitIntent('signal_decay');
+    const steps = makeSteps({
+      exitCheck: vi.fn(async () => exit),
+      risk: vi.fn(async () => approvedRisk(exit)),
+      verdict: vi.fn(async () => goVerdict(exit)),
+    });
+    const ctx = makeCtx({ decision_bar: undefined });
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    const lines = recordLines(ctx).filter((entry) => entry.stage === 'position_check');
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({
+      stage: 'position_check',
+      level: 'info',
+      message: 'position_check: signal_decay',
+    });
+  });
+
+  it('keeps an exit intent with no exit_reason at info — the whitelist is on the decision word, not on "any exit"', async () => {
+    // Not reachable through `buildFlattenExit`/the early-exit builder in
+    // production (both always set `exit_reason`), but the field is optional
+    // in the TYPE, so `recordLevel` must not derive 'debug' from "position_check
+    // and not a real exit_reason" — only from the exact decision word
+    // 'no_exit_due'. Guards against the inverted, wrong-direction form of the
+    // whitelist.
+    const exit: OrderIntent = {
+      ...exitIntent('flatten'),
+      metadata: { ...exitIntent('flatten').metadata },
+    };
+    delete (exit.metadata as { exit_reason?: string }).exit_reason;
+    const steps = makeSteps({
+      exitCheck: vi.fn(async () => exit),
+      risk: vi.fn(async () => approvedRisk(exit)),
+      verdict: vi.fn(async () => goVerdict(exit)),
+    });
+    const ctx = makeCtx({ decision_bar: undefined });
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    const lines = recordLines(ctx).filter((entry) => entry.stage === 'position_check');
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({
+      stage: 'position_check',
+      level: 'info',
+      message: 'position_check: exit',
+    });
+  });
+});
+
+/**
  * #785: a quorum-skipped decision pass has no Trader entry point of its own
  * to carry the flatten (the Trader's routing is what evaluates it on every
  * OTHER pass, per `decide.ts` #668), so it must run the exit check itself

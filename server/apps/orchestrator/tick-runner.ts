@@ -97,6 +97,10 @@
  * `payload.advisory: true`. It adds no audit row (the decision is already
  * recorded) and never alters control flow. See `reportAdvisoryWarnings` for
  * why it reports transitions rather than repeating state every tick.
+ * A second exception, added by #1113: a `position_check` stage reached with
+ * decision `no_exit_due` still produces its `audit_log` row, but its log line
+ * is emitted at `debug`, so at the default level the row exists with no
+ * corresponding line. See `recordLevel` for why that decision alone is quieted.
  *
  * The `current_tick` progress row the spec attaches to this module (#96):
  * upserted before each stage call, deleted on every normal terminal return.
@@ -171,7 +175,10 @@ export class SequentialTickRunner implements TickRunner {
      * Deliberately NOT "any stage whose decision looks unusual": Risk vetoes
      * and Verdict `no_go` are routine, decided outcomes and stay at `info`.
      */
-    const recordLevel = (stage: TickStage, decision: string): 'info' | 'warn' | 'error' => {
+    const recordLevel = (
+      stage: TickStage,
+      decision: string,
+    ): 'debug' | 'info' | 'warn' | 'error' => {
       // #921: the mandatory flat-by-close exit's execution result flows
       // through this SAME shared helper as every other stage (the only call
       // site passing `'execution'` is the Risk -> Verdict -> Execution tail
@@ -180,6 +187,22 @@ export class SequentialTickRunner implements TickRunner {
       // used to log at `'info'` like a normal status update.
       if (stage === 'execution' && decision === 'error') {
         return 'error';
+      }
+      // #1113: this exact decision word, not "position_check and no
+      // exit_reason" — the latter would also swallow the type-level `?? 'exit'`
+      // fallback below, which is a real (if unreached) exit. `no_exit_due` was
+      // 51% of a soak's log lines on its own (~29 of 30 passes produce it) and
+      // is the one decision at this stage that carries no information the
+      // audit spine doesn't already: `record()` writes the `audit_log` row —
+      // decision cleartext, unlike `input_digest`/`output_digest` — from this
+      // same call regardless of level, so nothing is lost, only quieted. A
+      // human tailing the log for "is the exit check alive" has two surfaces
+      // this does not touch: the once-an-hour `analysts`/`debate` lines every
+      // instrument still emits at `info` on its decision cadence
+      // (`DEBATE_BAR_TIMEFRAME_MS`) regardless of position state, and
+      // `SAMURAI_LOG_LEVEL=debug` for this line itself.
+      if (stage === 'position_check' && decision === 'no_exit_due') {
+        return 'debug';
       }
       return isDegradedDecision(decision) ? 'warn' : 'info';
     };
