@@ -506,6 +506,12 @@ never a hard violation, so each needs a ruling before it is work. They are chart
 | P19 — six minor stale items | [#1178](https://github.com/dd-jp/samurai-trading-system/issues/1178) |
 | P20 | *scope note, not a finding* |
 
+**Four of the 28 are not agent-grabbable.** #1151, #1152, #1157 and #1158 each carry an unresolved
+ruling rather than specified work — which arm of `DataSourceConfig` survives, whether a live-money
+human-approval path may be deleted, whether the crypto candle clients are kept for the future crypto
+system, and whether `docs/coding-standards.md` or the import gets changed. They are labelled
+`needs-decision`, not `ready-for-agent`.
+
 **Overlaps checked before filing.** No existing issue referenced this report. Two genuine overlaps
 found and narrowed rather than re-filed: [#1119](https://github.com/dd-jp/samurai-trading-system/issues/1119)
 already tracks P11's code-side cause (`subclassOfUniverse` empty), so #1170 is the spec correction
