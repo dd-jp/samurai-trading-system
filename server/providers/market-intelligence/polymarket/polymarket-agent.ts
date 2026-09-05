@@ -655,7 +655,12 @@ export class PolymarketAgent {
     // outage, and re-asking inside the hour would only repeat it.
     const probability = market.outcomePrices[outcomeIndex];
     if (probability === undefined || !Number.isFinite(probability)) {
-      return this.#refuse(trace_id, entry, 'the bullish outcome carries no quoted probability', now);
+      return this.#refuse(
+        trace_id,
+        entry,
+        'the bullish outcome carries no quoted probability',
+        now,
+      );
     }
     if (isPinnedProbability(probability)) {
       return this.#refuse(
