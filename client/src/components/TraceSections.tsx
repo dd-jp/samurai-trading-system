@@ -7,7 +7,7 @@
  * round-by-round debate state (decision #10) — and the page repeats that
  * rather than papering over it with a dash.
  */
-import type { DebateRow, FillRow, PipelineLane, RiskCriticRow, VerdictRow } from '@contracts';
+import type { DebateRow, FillRow, RiskCriticRow, VerdictRow } from '@contracts';
 import {
   formatClockUtc,
   formatFixed,
@@ -15,7 +15,8 @@ import {
   formatQty,
   formatStageDuration,
 } from '../lib/format.ts';
-import { resolveLaneCells } from '../lib/lane-cells.ts';
+import type { ResolvedCell } from '../lib/lane-cells.ts';
+import type { DebateJoin, RiskCriticJoin } from '../lib/resolve-trace.ts';
 import {
   presentCondition,
   presentCriticVerdict,
@@ -25,10 +26,10 @@ import { stageName } from '../lib/vocabulary.ts';
 import { StanceStrip } from './StanceStrip.tsx';
 import { StateWord } from './StateWord.tsx';
 
-export function Timeline({ lane }: { lane: PipelineLane }) {
+export function Timeline({ cells }: { cells: readonly ResolvedCell[] }) {
   return (
     <ol className="timeline" aria-label="Stage timeline">
-      {resolveLaneCells(lane).map((cell) => {
+      {cells.map((cell) => {
         if (!cell.present) {
           return (
             <li key={cell.stage} className="timeline-row" data-stage={cell.stage}>
@@ -89,8 +90,8 @@ function criticVerdictText(row: RiskCriticRow): string {
 export interface GatesSectionProps {
   riskCritic: RiskCriticRow | undefined;
   verdict: VerdictRow | undefined;
-  /** What the empty state says the row was looked up by. */
-  keyedBy: 'trace' | 'debate';
+  /** How the row was found — the empty state names the key that found nothing. */
+  keyedBy: RiskCriticJoin;
 }
 
 export function GatesSection({ riskCritic, verdict, keyedBy }: GatesSectionProps) {
@@ -107,7 +108,7 @@ export function GatesSection({ riskCritic, verdict, keyedBy }: GatesSectionProps
       )}
       {riskCritic === undefined ? (
         <p className="empty-state" data-invalidation="no-decision">
-          {keyedBy === 'trace'
+          {keyedBy.by === 'trace_id'
             ? "No Risk decision for this trace in the snapshot's recent-decisions window — a tick that never reached Risk records none, and older ones age out of the list."
             : "No Risk decision keyed to this trade's debate in the snapshot's recent-decisions window."}
         </p>
@@ -187,8 +188,7 @@ export interface DebateSectionProps {
   debate: DebateRow | undefined;
   /** `true` while the selected lane is still running — changes the empty state. */
   inFlight: boolean;
-  /** Whether the debate was found by exact `debate_id` or by instrument only. */
-  linkedBy: 'debate_id' | 'instrument';
+  linkedBy: DebateJoin;
 }
 
 export function DebateSection({ debate, inFlight, linkedBy }: DebateSectionProps) {
@@ -206,12 +206,12 @@ export function DebateSection({ debate, inFlight, linkedBy }: DebateSectionProps
       <p className="drawer-line">
         <b>{debate.direction}</b> · {debate.rounds} rounds · opened{' '}
         {formatClockUtc(debate.created_at)}
-        {linkedBy === 'instrument' ? (
+        {linkedBy.exact ? null : (
           <span className="muted">
             {' '}
             · the instrument's latest completed debate, not keyed to this trace
           </span>
-        ) : null}
+        )}
       </p>
       <ul className="stance-list">
         {debate.contributions.map((contribution) => (

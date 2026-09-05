@@ -10,11 +10,12 @@ import type { VerdictRow } from '@contracts';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Rail, TABS, type Tab } from './components/Rail.tsx';
 import { GlanceTab } from './components/tabs/GlanceTab.tsx';
-import { LiveTab, type Selection } from './components/tabs/LiveTab.tsx';
+import { LiveTab } from './components/tabs/LiveTab.tsx';
 import { ReviewTab } from './components/tabs/ReviewTab.tsx';
 import { useEquitySamples } from './hooks/useEquitySamples.ts';
 import { useLedger } from './hooks/useLedger.ts';
 import { type UseSnapshotOptions, useSnapshot } from './hooks/useSnapshot.ts';
+import type { Selection } from './lib/resolve-trace.ts';
 import './App.css';
 
 function isTab(value: string): value is Tab {

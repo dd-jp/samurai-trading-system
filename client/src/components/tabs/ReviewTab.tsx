@@ -23,15 +23,8 @@ import {
   formatUsd,
   formatWhen,
 } from '../../lib/format.ts';
+import { resolveTrade, type TradeDetail } from '../../lib/resolve-trace.ts';
 import { presentCloseReason } from '../../lib/state-presentation.ts';
-import {
-  closedTradeByKey,
-  debateById,
-  fillsFor,
-  laneFor,
-  riskCriticForDebate,
-  verdictFor,
-} from '../../lib/trace.ts';
 import { sideWord, WAITING_FOR_FIRST_SNAPSHOT } from '../../lib/vocabulary.ts';
 import { Seal } from '../Seal.tsx';
 import { pnlTone, StateWord } from '../StateWord.tsx';
@@ -413,7 +406,11 @@ function TradesTable(props: ReviewTabProps) {
             <TradeRow
               key={trade.idempotency_key}
               trade={trade}
-              debate={debateById(snapshot?.debates ?? [], trade.debate_id)}
+              debate={
+                snapshot === null
+                  ? undefined
+                  : resolveTrade(snapshot, trade.idempotency_key)?.debate
+              }
               asOf={snapshot?.as_of ?? ''}
               selected={selectedKey === trade.idempotency_key}
               onSelect={() => onSelect(trade.idempotency_key)}
@@ -425,12 +422,17 @@ function TradesTable(props: ReviewTabProps) {
   );
 }
 
+const NO_TIMELINE: Readonly<Record<NonNullable<TradeDetail['absence']['trace']>, string>> = {
+  unreachable:
+    'No trace id reaches this trade — the stage record keys on the Risk decision, and none in the recent-decisions window names its debate.',
+  aged_out:
+    'This trace has aged out of the 15-minute pipeline window; the Risk decision and verdict below are what remain.',
+};
+
 function TradeDrawer({ snapshot, selectedKey }: Pick<ReviewTabProps, 'snapshot' | 'selectedKey'>) {
-  const trade =
-    snapshot === null || selectedKey === null
-      ? undefined
-      : closedTradeByKey(snapshot.closed_trades, selectedKey);
-  if (snapshot === null || trade === undefined) {
+  const detail =
+    snapshot === null || selectedKey === null ? null : resolveTrade(snapshot, selectedKey);
+  if (snapshot === null || detail === null) {
     return (
       <aside className="drawer" aria-label="Trade detail">
         <p className="empty-state">
@@ -443,12 +445,7 @@ function TradeDrawer({ snapshot, selectedKey }: Pick<ReviewTabProps, 'snapshot' 
       </aside>
     );
   }
-  const debate = debateById(snapshot.debates, trade.debate_id);
-  const riskCritic = riskCriticForDebate(snapshot.risk_critics ?? [], trade.debate_id);
-  const traceId = riskCritic?.trace_id ?? null;
-  const verdict = verdictFor(snapshot.verdicts, traceId);
-  const lane = laneFor(snapshot.pipeline, trade.instrument, traceId);
-  const fills = fillsFor(snapshot.fills, trade.idempotency_key);
+  const { trade, verdict } = detail;
   const gross = trade.realized_pnl_net + trade.fees_total;
   const tone = pnlTone(trade.realized_pnl_net);
   return (
@@ -466,21 +463,21 @@ function TradeDrawer({ snapshot, selectedKey }: Pick<ReviewTabProps, 'snapshot' 
       </p>
 
       <h3>Why it was taken</h3>
-      <DebateSection debate={debate} inFlight={false} linkedBy="debate_id" />
+      <DebateSection debate={detail.debate} inFlight={false} linkedBy={detail.debateJoin} />
 
       <h3>Stages</h3>
-      {lane !== undefined && lane.trace_id !== null && traceId !== null ? (
-        <Timeline lane={lane} />
+      {detail.cells !== null ? (
+        <Timeline cells={detail.cells} />
       ) : (
-        <p className="empty-state">
-          {traceId === null
-            ? 'No trace id reaches this trade — the stage record keys on the Risk decision, and none in the recent-decisions window names its debate.'
-            : 'This trace has aged out of the 15-minute pipeline window; the Risk decision and verdict below are what remain.'}
-        </p>
+        <p className="empty-state">{NO_TIMELINE[detail.absence.trace ?? 'unreachable']}</p>
       )}
 
       <h3>Gates and conditions</h3>
-      <GatesSection riskCritic={riskCritic} verdict={verdict} keyedBy="debate" />
+      <GatesSection
+        riskCritic={detail.riskCritic}
+        verdict={verdict}
+        keyedBy={detail.riskCriticJoin}
+      />
 
       <h3>P&amp;L breakdown</h3>
       <dl className="kv-list" data-section="pnl">
@@ -504,7 +501,7 @@ function TradeDrawer({ snapshot, selectedKey }: Pick<ReviewTabProps, 'snapshot' 
       </p>
 
       <h3>Fills</h3>
-      <FillsList fills={fills} />
+      <FillsList fills={detail.fills} />
     </aside>
   );
 }

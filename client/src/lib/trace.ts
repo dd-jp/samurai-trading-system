@@ -1,19 +1,7 @@
 /**
- * How the drawers find the rows that belong to one trace or one trade.
- *
- * The wire carries no single "trace record": a lane, a debate, a verdict, a
- * Risk decision, a position and its fills are separate lists keyed
- * differently, and the joins that ARE exact are worth stating so nobody
- * "improves" one into a guess later.
- *
- * - `verdicts[]` and `risk_critics[]` key on `trace_id` (the critic row also
- *   carries `instrument`, and both are matched — #1066 explains the
- *   mis-attribution a looser match invites).
- * - `closed_trades[]` carry their `debate_id`, so a closed trade's debate is
- *   an exact join; a live lane's debate is NOT (`DebateRow` has no
- *   `trace_id`), so the Live drawer shows the instrument's most recent
- *   completed debate and says so.
- * - `fills[]` and `positions[]` key on `idempotency_key`.
+ * The individual lookups the two join sequences are built from — private to
+ * `resolve-trace.ts`, which owns the sequences and the provenance each join
+ * carries.
  */
 import type {
   ClosedTradeRow,
@@ -43,6 +31,7 @@ export function verdictFor(
   return traceId === null ? undefined : verdicts.find((row) => row.trace_id === traceId);
 }
 
+/** Matches `trace_id` AND `instrument`; a looser match mis-attributes a row (#1066). */
 export function riskCriticFor(
   critics: readonly RiskCriticRow[],
   traceId: string | null,
@@ -53,7 +42,6 @@ export function riskCriticFor(
     : critics.find((row) => row.trace_id === traceId && row.instrument === instrument);
 }
 
-/** The instrument's most recent completed debate — NOT keyed to a trace. */
 export function latestDebateFor(
   debates: readonly DebateRow[],
   instrument: string,
@@ -65,7 +53,6 @@ export function debateById(debates: readonly DebateRow[], debateId: string): Deb
   return debates.find((row) => row.debate_id === debateId);
 }
 
-/** The Risk decision that attacked one debate — the exact join a closed trade allows. */
 export function riskCriticForDebate(
   critics: readonly RiskCriticRow[],
   debateId: string,

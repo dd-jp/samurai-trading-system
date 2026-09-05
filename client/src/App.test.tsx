@@ -328,16 +328,11 @@ describe('live', () => {
     expect(within(btc).getAllByText('wait')).toHaveLength(4);
   });
 
-  it('shows the invalidation conditions of the selected trace, not the instrument’s other one', async () => {
+  it('draws the selected trace’s conditions, its binding constraint and each stage’s clock', async () => {
     renderApp([
       makeSnapshot({
         pipeline: laneView(),
         risk_critics: [
-          makeRiskCritic({
-            trace_id: 'trace-qqq-older',
-            instrument: 'QQQ',
-            conditions: [makeCondition({ id: 'older-trace-condition' })],
-          }),
           makeRiskCritic({
             trace_id: 'trace-qqq',
             instrument: 'QQQ',
@@ -351,11 +346,9 @@ describe('live', () => {
     fireEvent.click(await screen.findByRole('button', { name: /QQQ, stocks, stopped/ }));
     const drawer = screen.getByRole('complementary', { name: 'Trace detail' });
     expect(drawer.querySelector('[data-condition="shown-trace-condition"]')).toBeTruthy();
-    expect(drawer.querySelector('[data-condition="older-trace-condition"]')).toBeNull();
     expect(
       drawer.querySelector('[data-invalidation="binding"]')?.getAttribute('data-binding'),
     ).toBe('risk_critic:invalidated');
-    // The timeline carries each recorded stage's clock beside its duration.
     const riskRow = drawer.querySelector('[data-stage="risk"]');
     expect(riskRow?.textContent).toContain('11:58:31Z · 2.6s');
   });

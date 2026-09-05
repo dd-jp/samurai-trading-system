@@ -13,6 +13,7 @@ import {
 } from '../../lib/format.ts';
 import { deployedNotional, openRiskRow, pnlToday } from '../../lib/glance.ts';
 import type { LedgerEntry } from '../../lib/ledger.ts';
+import type { Selection } from '../../lib/resolve-trace.ts';
 import {
   OUTCOME_WORD,
   sideWord,
@@ -22,7 +23,6 @@ import {
 import { Seal } from '../Seal.tsx';
 import { pnlTone } from '../StateWord.tsx';
 import { Track } from '../Track.tsx';
-import type { Selection } from './LiveTab.tsx';
 
 export interface GlanceTabProps {
   snapshot: WireSnapshot | null;
