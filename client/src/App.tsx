@@ -1,9 +1,9 @@
 /**
  * The composition root: one poll, one rail, three tabs.
  *
- * State that outlives a poll lives here — which tab is open, what each tab
- * has selected, the session's verdict ledger, and the equity samples the
- * Alpaca probe has reported — so a 3-second re-render never resets any of it.
+ * State that outlives a poll lives here — which tab is open and what each
+ * tab has selected — so a 3-second re-render never resets any of it. The
+ * verdict ledger and equity series live in `useLedger`/`useEquitySamples`.
  * Everything below is a pure function of `snapshot` plus that state.
  */
 import type { VerdictRow } from '@contracts';
