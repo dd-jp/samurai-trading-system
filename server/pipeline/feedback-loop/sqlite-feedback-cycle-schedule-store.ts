@@ -9,14 +9,17 @@
  * `recordBoundary`), `'attempt'` is the most recently ATTEMPTED one
  * (`attemptedBoundary` / `recordAttempt`), stamped before `runFeedbackCycle`
  * runs rather than after. The pass-2 fix for #1110 finding 1: without a
- * record of what was attempted, a restart between "the cycle ran" and "the
- * boundary was recorded complete" cannot tell those two states apart from a
- * restart between "the cycle never started" and the same unstamped boundary
- * — and re-running the cycle in the first case double-applies a
- * guardrail-capped analyst-weight/risk-threshold step. Two rows rather than
- * a second column: both need the exact same `MAX`-guarded upsert shape
- * `recordBoundary` already has, and a second column would need `last_boundary`
- * relaxed off `NOT NULL` to be writable before any cycle has ever completed.
+ * record of what was attempted, a restart after the boundary was stamped
+ * attempted cannot be told apart from one before the cycle ever started —
+ * and re-running the cycle in the former case double-applies a
+ * guardrail-capped analyst-weight/risk-threshold step. The attempt marker
+ * does not itself distinguish a cycle that ran to completion from one that
+ * died mid-run (a residual gap kept deliberately narrow) — see the
+ * "Ordering" doc comment on `scheduleFeedbackCycle` (production.ts) for the
+ * full account. Two rows rather than a second column: both need the exact
+ * same `MAX`-guarded upsert shape `recordBoundary` already has, and a second
+ * column would need `last_boundary` relaxed off `NOT NULL` to be writable
+ * before any cycle has ever completed.
  */
 import type { SharedStore } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';

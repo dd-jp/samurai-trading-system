@@ -3261,12 +3261,23 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
    * `dial_adjustments` and the analyst-weight/risk-threshold step it drives
    * are not idempotent (each cycle applies one more guardrail-capped move),
    * so re-running the cycle itself for a boundary already attempted would
-   * double that move; re-running only the completion write cannot. The
-   * residual gap this does NOT close: if the ATTEMPT write itself never
-   * lands (e.g. the same store failure hits it too), a restart still cannot
-   * tell "attempted" from "never started" and will re-run the cycle — kept
-   * narrow by attempting the write inside its own try/catch, immediately
-   * before `runFeedbackCycle`, rather than widening it further.
+   * double that move; re-running only the completion write cannot.
+   *
+   * Two residual gaps remain, both deliberate and both narrow. (1) If the
+   * ATTEMPT write itself never lands (e.g. the same store failure hits it
+   * too), a restart cannot tell "attempted" from "never started" and
+   * re-runs the cycle — kept narrow by attempting the write in its own
+   * try/catch, immediately before `runFeedbackCycle`, rather than widening
+   * it further. (2) If the attempt write DOES land and the process then
+   * dies (SIGKILL/OOM/a lid-close power loss — CLAUDE.md's own Deployment
+   * Target risk) anywhere before `runFeedbackCycle` returns — including
+   * inside the prune calls just above it, bulk deletes that take seconds on
+   * a grown table — the next boot's `alreadyAttempted` check (below) cannot
+   * tell that from a cycle that ran to completion, so it skips the boundary
+   * and stamps it complete: the cadence resumes at the next boundary, but
+   * this boundary's dial step, `arm_comparison_samples` row and benchmark
+   * are lost for good. Kept over the alternative — a double-applied
+   * guardrail-capped move is worse than one missing data point.
    *
    * `runIfDue` still runs start-to-finish synchronously today, so `stop()`
    * cannot race a scheduling gap and no re-entrancy guard is needed the way
@@ -3287,7 +3298,10 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     // module load — `stop()` sets this `true` and never resets it itself, so
     // without this line a second `start()` after a `stop()` would run the
     // boot catch-up cycle and then have its own `finally` refuse to re-arm,
-    // #1110's exact symptom through a third door (pass-2 finding 2).
+    // #1110's exact symptom through a third door (pass-2 finding 2). A
+    // `stop()` landing concurrently with an in-flight `start()` (this call
+    // sits after two awaited reconciles) would have its `true` undone by
+    // this reset — contrived, since nothing calls them concurrently today.
     feedbackScheduleStopped = false;
 
     const runIfDue = (): void => {
@@ -3303,12 +3317,17 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
           const alreadyAttempted = attempted !== null && attempted.getTime() === boundary.getTime();
 
           if (alreadyAttempted) {
-            // See the "Ordering" comment above (pass-2 finding 1): a prior
-            // attempt for this EXACT boundary was stamped but never
-            // completed, most likely a restart landing between
-            // `runFeedbackCycle` and `recordBoundary`. Running the cycle
-            // again would double-apply its guardrail-capped step, so only
-            // the completion stamp below is retried.
+            // See the residual-gap paragraph above (pass-2 finding 1): a
+            // prior attempt for this EXACT boundary was stamped, and this
+            // restart cannot tell whether the cycle ran to completion (only
+            // `recordBoundary` was interrupted) or the cycle itself died
+            // mid-run (residual gap 2, same paragraph). Either way, running
+            // it again risks double-applying its guardrail-capped step, so
+            // only the completion stamp below is retried. This also skips
+            // the #1045 prune calls above (`runFeedbackCycle` is not
+            // invoked) — harmless, since this branch only fires on a boot
+            // pass and both prunes already ran from their own 'startup'
+            // call sites before this scheduler runs.
             logger.log({
               trace_id: 'feedback-cycle',
               stage: 'feedback-loop',
@@ -3365,8 +3384,9 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
           stage: 'feedback-loop',
           level: 'error',
           message:
-            'feedback cycle pass failed — re-arming for the next boundary; a restart ' +
-            'before this boundary is recorded complete retries it (#1110)',
+            'feedback cycle pass failed — re-arming for the next boundary; a restart retries ' +
+            'the cycle, or only its completion stamp if this boundary is already recorded as ' +
+            'attempted (#1110)',
           payload: { error: error instanceof Error ? error.message : String(error) },
         });
       } finally {
@@ -3801,8 +3821,12 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         // This is deliberately still a boot crash, not a caught-and-logged
         // path: the old `setInterval(fn, 0)` this schedule replaced would
         // have hot-looped on the same bad config, so failing loudly at boot
-        // is strictly better, not a regression to soften.
-        if (feedbackIntervalMs <= 0) {
+        // is strictly better, not a regression to soften. `Number.isFinite`
+        // also rejects `NaN`/`Infinity` (#1110-p3 finding 4): both pass
+        // `<= 0`, and without this check `currentBoundary` below yields an
+        // Invalid Date that dies at `.toISOString()` with a bare, unattributed
+        // `RangeError` instead of this named message.
+        if (!Number.isFinite(feedbackIntervalMs) || feedbackIntervalMs <= 0) {
           throw new Error(
             `FeedbackCycleConfig.intervalMs must be positive, got ${feedbackIntervalMs}`,
           );

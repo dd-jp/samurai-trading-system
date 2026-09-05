@@ -30,12 +30,16 @@
 -- recently COMPLETED boundary) and gained a second, `key = 'attempt'`, in
 -- #1110's pass-2 fix: `SqliteFeedbackCycleScheduleStore.recordAttempt` stamps
 -- the boundary about to be run BEFORE `runFeedbackCycle` executes, so a
--- restart that lands between "the cycle ran" and "`recordBoundary` completed"
--- can be told apart from a restart before the cycle ever started — without
--- that distinction, the retry re-runs `runFeedbackCycle` and double-applies a
--- guardrail-capped analyst-weight/risk-threshold step. See
--- `sqlite-feedback-cycle-schedule-store.ts`'s own doc comment and
--- `scheduleFeedbackCycle` (production.ts) for the full account.
+-- restart before the cycle ever started can be told apart from one landing
+-- after the attempt was stamped — without that distinction, the retry
+-- re-runs `runFeedbackCycle` and double-applies a guardrail-capped
+-- analyst-weight/risk-threshold step. The after-attempt case is not itself a
+-- single state: the attempt marker cannot distinguish a cycle that ran to
+-- completion (only `recordBoundary` was interrupted) from one that died
+-- mid-run, which is a residual gap kept deliberately narrow — see the
+-- "Ordering" doc comment on `scheduleFeedbackCycle` (production.ts) for the
+-- full account, and `sqlite-feedback-cycle-schedule-store.ts`'s own doc
+-- comment for this table's two rows.
 CREATE TABLE feedback_cycle_schedule (
   key           TEXT PRIMARY KEY,
   last_boundary TEXT NOT NULL,

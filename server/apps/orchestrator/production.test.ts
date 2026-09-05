@@ -3907,9 +3907,14 @@ describe('buildProductionOrchestrator', () => {
       await advanceBoth(clock, 10_000);
       const beforeSecondStart = sampleRows().length;
       await orchestrator.start();
-      // Boot catch-up on the second `start()`: without the reset this is a
-      // no-op (the stale `true` from the first `stop()` blocks it), so the
-      // count would not move at all.
+      // Boot catch-up on the second `start()`: `runIfDue`'s `try` body never
+      // reads `feedbackScheduleStopped` (only the `finally`, to decide
+      // re-arming), so this catch-up runs regardless of the reset above —
+      // this assertion would still pass even under the pass-2 finding-2
+      // regression. What actually discriminates that regression is the
+      // re-arm assertion below: without the reset, `stop()`'s stale `true`
+      // survives into this `finally` and blocks the timer from ever being
+      // armed again.
       expect(sampleRows().length).toBeGreaterThan(beforeSecondStart);
 
       // The re-arm, not just the boot catch-up: a normal fire past the
@@ -3922,12 +3927,20 @@ describe('buildProductionOrchestrator', () => {
       await orchestrator.stop();
     });
 
-    it(
-      'refuses to start with a non-positive FeedbackCycleConfig.intervalMs, naming the ' +
-        'cause (pass-2 finding 3)',
-      async () => {
+    it.each([
+      [0, /FeedbackCycleConfig\.intervalMs must be positive, got 0/],
+      // #1110-p3 finding 4: `NaN <= 0` and `Infinity <= 0` are both `false`,
+      // so the bare `<= 0` guard let both through — `currentBoundary` then
+      // produced an Invalid Date and boot died at `.toISOString()` with a
+      // bare, unattributed `RangeError` instead of this named message.
+      [Number.NaN, /FeedbackCycleConfig\.intervalMs must be positive, got NaN/],
+      [Number.POSITIVE_INFINITY, /FeedbackCycleConfig\.intervalMs must be positive, got Infinity/],
+    ])(
+      'refuses to start with a non-finite or non-positive FeedbackCycleConfig.intervalMs ' +
+        '(%p), naming the cause (pass-2 finding 3, #1110-p3 finding 4)',
+      async (intervalMs, expectedMessage) => {
         const clock = new SimulatedClock(START);
-        const orchestrator = buildProductionOrchestrator(restartDurableConfig(clock, 0));
+        const orchestrator = buildProductionOrchestrator(restartDurableConfig(clock, intervalMs));
 
         // Not a regression to soften: the plain `setInterval(fn, 0)` this
         // schedule replaced would have hot-looped on the same bad config, so
@@ -3935,9 +3948,7 @@ describe('buildProductionOrchestrator', () => {
         // cause instead of letting `cycle-schedule.ts`'s generic
         // "intervalMs must be positive" surface with no mention of which
         // config field produced it.
-        await expect(orchestrator.start()).rejects.toThrow(
-          /FeedbackCycleConfig\.intervalMs must be positive, got 0/,
-        );
+        await expect(orchestrator.start()).rejects.toThrow(expectedMessage);
       },
     );
   });
