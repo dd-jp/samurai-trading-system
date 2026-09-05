@@ -70,6 +70,15 @@ describe('summary cards', () => {
     expect(screen.queryByText(/Did not diverge/)).toBeNull();
   });
 
+  it('still says DIVERGED when the reason is missing, rather than reporting no divergence', () => {
+    const row = makeArmComparison();
+    row.diverged = true;
+    row.divergence_reason = null;
+    renderReview(makeSnapshot({ arm_comparison: [row] }));
+    expect(screen.getByText(/DIVERGED/)).toBeTruthy();
+    expect(screen.queryByText(/Did not diverge/)).toBeNull();
+  });
+
   it('names an unmeasured benchmark rather than drawing it as zero', () => {
     renderReview(makeSnapshot({ outside_benchmarks: [makeOutsideBenchmark()] }));
     expect(screen.getByText(/Not measured this cycle: 60\/40/)).toBeTruthy();

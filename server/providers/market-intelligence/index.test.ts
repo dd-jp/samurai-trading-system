@@ -268,6 +268,30 @@ describe('MarketIntelligenceStore.getContext', () => {
     expect(tslaContext.news.map((item) => item.id)).toEqual(['tsla-item']);
   });
 
+  /**
+   * A class-wide item survives an entity-scoped read. Aimed at the EFFECT the
+   * `scope` field exists for, not at the field: a macro item is filed under a
+   * series name no ticker equals, so without the carve-out #914's filter drops
+   * it from both analysts that read the content, and the only surviving
+   * consumer is `technical-analyst`'s bare `news.length`.
+   */
+  it('admits a class-wide item past an entity-scoped read, and still keeps other entities out', () => {
+    const asOf = new Date('2026-07-14T09:00:00Z');
+    const store = new MarketIntelligenceStore(new FixedClock(asOf));
+
+    store.ingest(
+      envelope([
+        newsItem({ id: 'aapl-item', entity: 'AAPL' }),
+        newsItem({ id: 'tsla-item', entity: 'TSLA' }),
+        newsItem({ id: 'macro-item', entity: 'FOMC-2026-09', scope: 'asset_class' }),
+      ]),
+    );
+
+    const aaplContext = store.getContext('stocks', 60_000, 'trace-1', undefined, 'AAPL');
+
+    expect(aaplContext.news.map((item) => item.id).sort()).toEqual(['aapl-item', 'macro-item']);
+  });
+
   it('omitting the entity filter still returns the full class-wide bag — additive, not a breaking change', () => {
     const asOf = new Date('2026-07-14T09:00:00Z');
     const store = new MarketIntelligenceStore(new FixedClock(asOf));

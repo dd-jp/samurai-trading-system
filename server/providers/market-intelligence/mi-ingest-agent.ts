@@ -38,7 +38,7 @@
 
 import type { LlmClient } from '../../pipeline/debate-engine/index.js';
 import type { AssetClass, Clock, Logger } from '../../shared/index.js';
-import { resolveMiSubject } from '../universe-pool/lse-etp-pool.js';
+import { resolveMiSubject } from '../universe-pool/index.js';
 import type { ArchivedItem, MiArchiveStore, RawArchiveRow } from './archive/mi-archive-store.js';
 import { HYDRATING_MI_SOURCES, MI_SOURCES } from './archive/mi-sources.js';
 import type { MarketIntelligenceStore } from './index.js';

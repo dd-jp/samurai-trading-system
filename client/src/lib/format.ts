@@ -150,7 +150,10 @@ export function formatSignedPercent(fraction: number, digits = 2): string {
 export function formatQty(value: number): string {
   if (!Number.isFinite(value)) return UNKNOWN;
   if (Number.isInteger(value)) return String(value);
-  return value.toFixed(4).replace(/0+$/, '');
+  // `\.?` so a value that rounds to a whole number at four decimals without
+  // being one (1.00001 -> "1.0000") does not print as "1." — the integer
+  // branch above cannot catch it.
+  return value.toFixed(4).replace(/\.?0+$/, '');
 }
 
 /** How long a trade was held: `41m`, `1h 12m`, `2d 3h`. */

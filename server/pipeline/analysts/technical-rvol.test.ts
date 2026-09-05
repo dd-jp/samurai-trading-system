@@ -27,7 +27,7 @@ import {
   UsEquityRegularHoursCalendar,
 } from '../../providers/market-data-service/index.js';
 import { MarketIntelligenceStore } from '../../providers/market-intelligence/index.js';
-import { screeningInstrumentFor } from '../../providers/universe-pool/lse-etp-pool.js';
+import { screeningInstrumentFor } from '../../providers/universe-pool/index.js';
 import type { Clock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import type { AnalystView } from '../debate-engine/index.js';

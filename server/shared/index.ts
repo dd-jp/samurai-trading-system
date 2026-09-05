@@ -20,6 +20,7 @@ export type {
 // either stage's own module.
 export type { LotHeldQuantity } from './held-quantity.js';
 export { heldQuantitiesFor, totalHeldQuantity } from './held-quantity.js';
+export { delay } from './http/delay.js';
 export { fetchWithTimeout } from './http/fetch-with-timeout.js';
 export {
   classifyStatus,

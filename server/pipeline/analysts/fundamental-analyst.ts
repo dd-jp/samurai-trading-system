@@ -12,7 +12,7 @@
  */
 
 import type { IntelligenceItem } from '../../providers/market-intelligence/index.js';
-import { resolveMiSubject } from '../../providers/universe-pool/lse-etp-pool.js';
+import { resolveMiSubject } from '../../providers/universe-pool/index.js';
 import type { AnalystView, Direction } from '../debate-engine/index.js';
 import type { Analyst, AnalystInput, AssetClass } from './types.js';
 import { NO_DATA_MARKER } from './types.js';

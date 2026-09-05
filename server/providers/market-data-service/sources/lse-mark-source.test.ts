@@ -8,7 +8,7 @@
  * traps that the real venue actually sets.
  */
 import { describe, expect, it } from 'vitest';
-import { buildRoutingMap, LSE_ETP_POOL } from '../../universe-pool/lse-etp-pool.js';
+import { buildRoutingMap, LSE_ETP_POOL } from '../../universe-pool/index.js';
 import {
   BOOK_CURRENCY,
   isBookCurrency,

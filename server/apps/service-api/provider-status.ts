@@ -40,7 +40,7 @@
  */
 
 import type { AlpacaBrokerClient } from '../../pipeline/execution/adapters/alpaca-client.js';
-import { fetchWithTimeout } from '../../shared/http/fetch-with-timeout.js';
+import { fetchWithTimeout } from '../../shared/index.js';
 
 /**
  * The rendered tile shapes live in `contracts/providers.ts` — the browser
