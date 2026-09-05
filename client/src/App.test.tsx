@@ -405,40 +405,37 @@ describe('degraded stages on the page (#1080)', () => {
     expect(drawer.querySelector('[data-stage="trader"]')?.getAttribute('data-degraded')).toBeNull();
   });
 
-  it('explains a starved analyst deadline, and still reads the lane as a quorum skip', async () => {
-    // The same defect one stage earlier and larger (34 of 60 main-arm runs in
-    // the 2026-09-03 session): every quorum skip wrote one word whether an
-    // analyst missed its 10s deadline or threw. The lane outcome stays
-    // `quorum_skip` — that is a closed union the matrix renders from — so the
-    // cause has to be legible in the drawer or it is legible nowhere.
-    const skipped = makeLane({
-      instrument: 'QQQ',
-      trace_id: 'trace-qqq',
-      asset_class: 'stocks',
-      outcome: 'quorum_skip',
-      final_stage: 'analysts',
-      started_at: '2026-08-07T11:58:00.000Z',
-      cells: {
-        analysts: {
-          state: 'stopped',
-          recorded_at: '2026-08-07T11:58:20.000Z',
-          duration_ms: 20_002,
-          decision: 'quorum_skip_timeout',
-        },
-      },
-    });
-    renderApp([
-      makeSnapshot({
-        pipeline: makeView([skipped], { live_trace_id: null, live_entered_at: null }),
-      }),
-    ]);
+  // F1 (#1142): the lane matrix walked the same cells as the drawer but
+  // rendered a bare `decisionOf(cell)`, so this same starved debate read
+  // glossed in the drawer and unglossed in the matrix — the surface an
+  // operator scans first. Both now render from `resolveLaneCells`, so the
+  // matrix carries the drawer's `data-degraded` hook too. The per-word
+  // coverage (which decisions gloss, and what they say) lives at the
+  // resolver in `lane-cells.test.ts`; this is the DOM wiring proof for the
+  // renderer the drawer test above does not touch.
+  it('explains a starved sub-budget in the LANE MATRIX too, not only the drawer', async () => {
+    renderApp([makeSnapshot({ pipeline: starvedLaneView() })]);
     openTab('Live');
-    fireEvent.click(await screen.findByRole('button', { name: /QQQ, stocks, quorum skip/ }));
 
-    const drawer = screen.getByRole('complementary', { name: 'Trace detail' });
-    const analystsRow = drawer.querySelector('[data-stage="analysts"]');
-    expect(analystsRow?.getAttribute('data-degraded')).toBe('true');
-    expect(analystsRow?.textContent).toContain('quorum_skip_timeout');
-    expect(analystsRow?.textContent).toContain('not the analysts finding nothing to trade');
+    // aria-label overrides inner text for assistive tech (LiveTab.tsx's
+    // button), so the lane's own accessible name has to say "degraded" too —
+    // otherwise the fix is sighted-only.
+    const qqq = await screen.findByRole('button', { name: /QQQ, stocks, stopped, .*degraded/ });
+    const debateCell = qqq.querySelector('[data-stage="debate"]');
+    expect(debateCell?.getAttribute('data-degraded')).toBe('true');
+
+    // The cell paints its decision WORD (dashboard-spec.md:135), not the
+    // gloss sentence — a sentence overflows the matrix column. The gloss
+    // reaches the surface as `title` and as the non-colour glyph, not as the
+    // cell's visible text.
+    const decisionSpan = debateCell?.querySelector('.lane-decision');
+    expect(decisionSpan?.textContent).toContain('budget_exhausted');
+    expect(decisionSpan?.textContent).not.toContain('before any round completed');
+    expect(decisionSpan?.getAttribute('title')).toContain('before any round completed');
+    expect(decisionSpan?.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe(
+      'degraded',
+    );
+
+    expect(qqq.querySelector('[data-stage="trader"]')?.getAttribute('data-degraded')).toBeNull();
   });
 });
