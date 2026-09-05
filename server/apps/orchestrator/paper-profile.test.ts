@@ -8,17 +8,30 @@
  * then rejects or halts everything is indistinguishable, at a glance, from a
  * clean run that decided not to trade (`SMOKE_TEST_UNIVERSE`'s doc comment).
  */
+import type { DebateResult } from '../../pipeline/debate-engine/index.js';
 import { InMemoryDebateLogStore, LATENCY_BUDGET_MS } from '../../pipeline/debate-engine/index.js';
 import {
   InMemoryClosedTradeStore,
   InMemoryTuningStore,
   runDailyCycle,
 } from '../../pipeline/feedback-loop/index.js';
-import { DEFAULT_TRADER_CONFIG } from '../../pipeline/trader/index.js';
+import { DEFAULT_TRADER_CONFIG, decide, FixtureSetupStore } from '../../pipeline/trader/index.js';
+import {
+  AlwaysOpenCalendar,
+  type Bar,
+  collectMarks,
+  type IndicatorValue,
+  type Mark,
+  type MarketDataService,
+  type MarkRead,
+  UsEquityRegularHoursCalendar,
+} from '../../providers/market-data-service/index.js';
+import type { Clock } from '../../shared/index.js';
 import { SimulatedClock, SystemClock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { SqliteStage2SelectionStore } from '../../tools/backtest/index.js';
 import { REQUIRED_INJECTED_CONFIG } from './index.js';
+import { liveStartingProfile } from './live-profile.js';
 import { LIVE_BOOK_GBP, paperStartingProfile, subclassOfUniverse } from './paper-profile.js';
 import { SqliteDailyEquityMetricsSource } from './production/daily-equity-metrics-source.js';
 import { BENCHMARK_INSTRUMENTS, DEFAULT_FEEDBACK_INTERVAL_MS } from './production.js';
@@ -251,22 +264,22 @@ describe('paperStartingProfile', () => {
     // (see the caveat in the assignment site's comment).
     const D5_SINGLE_STOCK_CAP = 0.25;
 
-    // #1112's own logged risk-stage figure for a real MU entry, pre-fix:
-    // `trimmed notional from 12939.225` against a session equity of
-    // 99876.86. Deployment fraction on this path is `size * entry / equity`,
-    // which is proportional to `asset_class_risk_multiplier.stocks` and
-    // otherwise scale-invariant to equity — so this pre-fix measurement at
-    // the shipped multiplier (1.0) is valid evidence of what the SAME tick
-    // produces post-fix, at any multiplier, by simple rescaling.
-    const MU_REFERENCE_NOTIONAL = 12939.225;
-    const MU_REFERENCE_EQUITY = 99876.86;
-    const measuredDeploymentAtDefaultMultiplier = MU_REFERENCE_NOTIONAL / MU_REFERENCE_EQUITY;
-
-    it('departs from the shared default for paper only', () => {
+    it('departs from the shared default for paper only, and never reaches live', () => {
       const { traderConfig } = paperStartingProfile('paper');
 
       expect(traderConfig.asset_class_risk_multiplier.stocks).toBe(1.9);
       expect(traderConfig.asset_class_risk_multiplier.stocks).not.toBe(
+        DEFAULT_TRADER_CONFIG.asset_class_risk_multiplier.stocks,
+      );
+
+      // `liveStartingProfile` spreads the same `DEFAULT_TRADER_CONFIG` and
+      // carries no override of its own for this field — pinned here, not
+      // just asserted absent, so a future live-side override that copies
+      // paper's 1.9 without a fresh derivation fails this test rather than
+      // shipping unreviewed.
+      const live = liveStartingProfile(LIVE_BOOK_GBP);
+      expect(live.traderConfig.asset_class_risk_multiplier.stocks).toBe(1.0);
+      expect(live.traderConfig.asset_class_risk_multiplier.stocks).toBe(
         DEFAULT_TRADER_CONFIG.asset_class_risk_multiplier.stocks,
       );
     });
@@ -295,25 +308,134 @@ describe('paperStartingProfile', () => {
       );
     });
 
-    it("keeps the reference MU deployment under D5's single-stock cap (#1112)", () => {
-      // Deployment scales linearly with the multiplier for a fixed tick, so
-      // rescaling #1112's own logged measurement by (new / shipped) predicts
-      // the deployment fraction the SAME MU entry produces at the retuned
-      // multiplier — asserting the DEPLOYMENT the retune targets, not the
-      // raw config value, per ADR-0018's own warning that storing or reading
-      // the wrong quantity here is silent (D5's "two ways to get this wrong").
-      const { traderConfig } = paperStartingProfile('paper');
-      const shippedMultiplier = DEFAULT_TRADER_CONFIG.asset_class_risk_multiplier.stocks;
-      const retunedMultiplier = traderConfig.asset_class_risk_multiplier.stocks;
+    /**
+     * Drives `decide.ts` end to end with the SHIPPED paper profile, rather
+     * than hand-rescaling a logged number — the earlier version of this test
+     * asserted `measuredDeploymentAtDefaultMultiplier * (retuned / shipped)`,
+     * a linear function of two hardcoded constants that never called
+     * `decide.ts` at all, despite a comment claiming otherwise.
+     *
+     * It is not a replay of #1112's own logged MU incident: that incident's
+     * ATR and confidence were never recorded, only the resulting notional
+     * (12939.225) and a SESSION-OPEN equity (99876.86) quoted from a
+     * different tick than the one that produced that notional — conflating
+     * the two is the arithmetic error `paper-profile.ts`'s derivation
+     * comment (the retuned multiplier's assignment site) now corrects. A
+     * faithful replay of that exact tick is not reachable from what #1112
+     * logged, so this test instead exercises the same code path
+     * (`decide.ts`'s generic ATR sizing, `bracket === null`) on a
+     * constructed, fully-specified fixture at a representative
+     * mid-conviction confidence, and asserts the real invariant: the
+     * SHIPPED config's deployment on that fixture stays under D5's
+     * single-stock cap.
+     */
+    describe('drives decide.ts end to end and stays under D5 cap', () => {
+      const ENTRY_PRICE = 100;
+      const ATR = 2;
+      const DECISION_BAR = new Date('2026-07-15T10:00:00Z');
+      const SIZING_EQUITY = 100_000;
 
-      const projectedDeployment =
-        measuredDeploymentAtDefaultMultiplier * (retunedMultiplier / shippedMultiplier);
+      class FixedClock implements Clock {
+        now(): Date {
+          return DECISION_BAR;
+        }
+      }
 
-      expect(projectedDeployment).toBeLessThan(D5_SINGLE_STOCK_CAP);
-      // Not just under the cap — close to it: this is the arithmetic that
-      // picked 1.9 over the next-cleanest candidate (2.0), which would have
-      // pushed the same entry to ≈25.9%, over the cap.
-      expect(projectedDeployment).toBeGreaterThan(0.24);
+      function sizingBars(): Bar[] {
+        return Array.from({ length: 15 }, (_, i) => {
+          const closeTime = new Date(DECISION_BAR.getTime() - (14 - i) * 60 * 60 * 1000);
+          return {
+            instrument: 'MU',
+            timeframe: '1h',
+            open_time: new Date(closeTime.getTime() - 60 * 60 * 1000),
+            close_time: closeTime,
+            open: ENTRY_PRICE,
+            high: ENTRY_PRICE + ATR / 2,
+            low: ENTRY_PRICE - ATR / 2,
+            close: ENTRY_PRICE,
+            volume: 1,
+            source: 'fixture',
+          };
+        });
+      }
+
+      class SizingFixtureMarketData implements MarketDataService {
+        async getBars(): Promise<Bar[]> {
+          return sizingBars();
+        }
+        async getMark(): Promise<Mark> {
+          return {
+            price: ENTRY_PRICE,
+            observed_at: DECISION_BAR,
+            source: 'fixture',
+            asset_class: 'stocks',
+          };
+        }
+        async getMarks(instruments: readonly string[], asOf: Date): Promise<Map<string, MarkRead>> {
+          return collectMarks((_instrument, _at) => this.getMark(), instruments, asOf);
+        }
+        async getIndicator(): Promise<IndicatorValue> {
+          throw new Error('SizingFixtureMarketData.getIndicator: not part of the entry path');
+        }
+        async getSpreadEstimate(): Promise<number | null> {
+          throw new Error('SizingFixtureMarketData.getSpreadEstimate: not part of the Trader path');
+        }
+        async getQuote(): Promise<null> {
+          throw new Error('SizingFixtureMarketData.getQuote: not part of the Trader path');
+        }
+        async getADV(): Promise<number> {
+          throw new Error('SizingFixtureMarketData.getADV: not part of the Trader path');
+        }
+      }
+
+      function sizingDebate(): DebateResult {
+        return {
+          synthesis: 'Analysts converge on upside momentum.',
+          position: 'Enter long.',
+          confidence: 0.775,
+          contributions: [],
+          disagreement_summary: '',
+          open_items: [],
+          converged: true,
+          rounds_completed: 2,
+          latency_ms: 9_000,
+          direction: 'bullish',
+          debate_id: 'debate-1112-sizing',
+          bar_timestamp: DECISION_BAR,
+        };
+      }
+
+      // This drives `decide.ts` end to end so the deployment figure is real,
+      // not a hand-rescale — but at this fixture's conviction/vol/precedent
+      // inputs the cap only trips above mult ~2.67, so it does not distinguish
+      // 1.9 from 2.0 (neither should: M1's derivation shows the D5 cap does
+      // not force that choice). The test above that pins `stocks: 1.9` via
+      // `toBe` is what guards the shipped value; this one guards the
+      // consequence of whatever that value is.
+      it("keeps the shipped multiplier's deployment under D5's single-stock cap", async () => {
+        const { traderConfig } = paperStartingProfile('paper');
+
+        const intent = await decide({
+          trace_id: 'trace-1112-sizing',
+          instrument: 'MU',
+          debate: sizingDebate(),
+          clock: new FixedClock(),
+          marketData: new SizingFixtureMarketData(),
+          equity: async () => SIZING_EQUITY,
+          config: traderConfig,
+          positionState: async () => [],
+          exitFillSizes: async () => new Map<string, number>(),
+          setupStore: new FixtureSetupStore(),
+          sessionCalendars: {
+            crypto: new AlwaysOpenCalendar(),
+            stocks: new UsEquityRegularHoursCalendar(),
+          },
+        });
+
+        expect(intent).not.toBeNull();
+        const deployment = ((intent?.size ?? 0) * (intent?.entry ?? 0)) / SIZING_EQUITY;
+        expect(deployment).toBeLessThan(D5_SINGLE_STOCK_CAP);
+      });
     });
   });
 
