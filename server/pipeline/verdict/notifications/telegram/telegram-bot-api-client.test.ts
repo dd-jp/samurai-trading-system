@@ -409,6 +409,29 @@ describe('TelegramBotApiClient — transient network failures and undeliverable 
     expect(h.alertDeliveryLog.failures[0]?.body).toBe('Approve TSLA entry?');
   });
 
+  // Finding 2 (third #1108 review pass): `#recordDeliveryFailure`'s `#log`
+  // payload's `error` field is masked centrally by `formatLogLine`'s
+  // `redactPayload` walk, but `message` is a plain string the logger never
+  // touches — so a bot-token-shaped detail (e.g. a misconfigured `baseUrl`
+  // landing the token in a thrown `TypeError`'s message, exactly what this
+  // module's header doc names as the threat) must be masked before it's
+  // interpolated into `message`, not just left to `payload`'s protection.
+  it('masks a bot-token-shaped detail in the log message, not just in the payload', async () => {
+    const entries: LogEntry[] = [];
+    const h = makeClient({ logger: { log: (entry) => entries.push(entry) } });
+    const tokenLike = 'bot123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    h.fetchMock.mockRejectedValue(new TypeError(`bad baseUrl config: ${tokenLike}`));
+
+    await expect(h.client.sendMessage(CHAT_ID, 'hi')).rejects.toThrow();
+
+    const failureEntry = entries.find((entry) =>
+      entry.message.startsWith('alert delivery to Telegram failed permanently'),
+    );
+    expect(failureEntry).toBeDefined();
+    expect(failureEntry?.message).not.toContain(tokenLike);
+    expect(failureEntry?.message).toContain('[REDACTED]');
+  });
+
   it('passes the full, uncapped body/error to the durable record — capping is recordFailure’s job, not the caller’s', async () => {
     // `SqliteAlertDeliveryLog.recordFailure` mask-then-caps (see
     // alert-delivery-log.ts and the end-to-end blocker regression test just

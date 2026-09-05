@@ -112,6 +112,24 @@ describe('classifyTelegramThrown', () => {
     expect(isRetryableTelegramError(error)).toBe(true);
   });
 
+  // The classifier's own doc says undici's `TypeError` carries the exact
+  // message `fetch failed` with the DNS/connection detail on `.cause`, not
+  // appended to `.message` — verified empirically against Node's built-in
+  // fetch (both ECONNREFUSED and ENOTFOUND) when this was tightened from
+  // `startsWith` to `===`. A message that merely starts with the phrase is
+  // therefore not a signal this classifier has ever actually seen in the
+  // wild; treating it as a non-retryable provider error (rather than
+  // silently widening what's retryable) is the conservative default.
+  it('does not treat a merely-prefixed message as the bare network signal', () => {
+    const error = classifyTelegramThrown(
+      new TypeError('fetch failed: connect ECONNREFUSED 127.0.0.1:443'),
+      'sendMessage',
+    );
+    expect(error).toBeInstanceOf(TelegramProviderError);
+    expect(error).not.toBeInstanceOf(TelegramNetworkError);
+    expect(isRetryableTelegramError(error)).toBe(false);
+  });
+
   it('maps a circular-JSON TypeError to a non-retryable provider error, not a network error (finding 3)', () => {
     const circular: Record<string, unknown> = {};
     circular.self = circular;

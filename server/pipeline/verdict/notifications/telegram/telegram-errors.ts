@@ -193,7 +193,7 @@ export function classifyTelegramThrown(error: unknown, context: string): Telegra
   if (name === 'AbortError') {
     return new TelegramProviderError(`Telegram Bot API transport failure: ${detail} (${context})`);
   }
-  if (error instanceof TypeError && error.message.startsWith('fetch failed')) {
+  if (error instanceof TypeError && error.message === 'fetch failed') {
     return new TelegramNetworkError(`Telegram Bot API transport failure: ${detail} (${context})`);
   }
   return new TelegramProviderError(`Telegram Bot API transport failure: ${detail} (${context})`);

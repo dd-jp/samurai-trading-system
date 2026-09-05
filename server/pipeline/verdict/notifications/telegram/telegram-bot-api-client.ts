@@ -67,7 +67,12 @@
  * update objects are never logged for the same reason.
  */
 import type { Logger, RetryConfig } from '../../../../shared/index.js';
-import { currentTraceId, fetchWithTimeout, withRetry } from '../../../../shared/index.js';
+import {
+  currentTraceId,
+  fetchWithTimeout,
+  sanitizeLogText,
+  withRetry,
+} from '../../../../shared/index.js';
 import type { ApprovalButtonTarget, ApprovalCallback, TelegramClient } from '../types.js';
 import { parseOptionalAllowedUserIds } from './allowlist.js';
 import { CorrelationTokenStore, tokenLogPrefix } from './correlation-tokens.js';
@@ -644,6 +649,13 @@ export class TelegramBotApiClient implements TelegramClient {
    * heartbeat failure is still durably recorded below, but must not count
    * toward — or itself trigger — a "the escalation channel is degraded"
    * alert posted to the very channel #342 protects.
+   *
+   * `error: detail` in the `#log` payload below is masked centrally by
+   * `formatLogLine`'s `redactPayload` walk — but `message` is a plain string
+   * the logger never touches, so `detail` must be masked with
+   * `sanitizeLogText` before it is interpolated there, or a bot-token-shaped
+   * `TypeError` message (a misconfigured `baseUrl`, say) would reach the log
+   * unmasked in `message` while its `payload` twin was protected.
    */
   #recordDeliveryFailure(chatId: string, method: string, text: string, error: unknown): void {
     const detail = error instanceof Error ? error.message : String(error);
@@ -670,7 +682,7 @@ export class TelegramBotApiClient implements TelegramClient {
     this.#log(
       'error',
       `alert delivery to Telegram failed permanently after retries (chat_id=${chatId}, ` +
-        `method=${method}): ${detail}`,
+        `method=${method}): ${sanitizeLogText(detail)}`,
       { event: 'telegram_delivery_failed', chat_id: chatId, method, error: detail },
     );
 
