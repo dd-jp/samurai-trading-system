@@ -3040,7 +3040,7 @@ function feedbackCycleScheduleWasWritten(db: SqliteHandle): boolean {
 }
 
 /**
- * #1112 AC5 — see `sizingCeilingStamped`'s own doc (evaluateSmokeGate).
+ * #1112 AC5 — see the `sizingCeiling` branches in `evaluateSmokeGate`.
  *
  * Filtered to `BTC-USD`, `SMOKE_TEST_UNIVERSE`'s only instrument: the exit
  * scenarios below trade five OTHER underlyings through their own

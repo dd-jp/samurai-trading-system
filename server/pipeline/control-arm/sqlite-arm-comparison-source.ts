@@ -75,10 +75,18 @@ export class SqliteArmComparisonSource {
  * comparison at all for a full window, exactly when #1112's corrected sizing
  * first becomes observable, and "narrow the window" is not an instruction an
  * automated caller can act on. Averaging a known-wrong scale into
- * `return_pct` is worse than excluding it, and the exclusion is not silent to
- * the consumers that matter: `min_trades_per_arm` (arm-comparison-cycle.ts)
- * sees the filtered count and withholds the comparison on its own terms if
- * too little survives.
+ * `return_pct` is worse than excluding it, and the drop is visible downstream:
+ * it lands in each arm's `trade_count`, which `evaluateArmDivergence`
+ * (arm-comparison-cycle.ts) floors PER ARM at `min_trades_per_arm` before it
+ * will call a divergence — so a window gutted by this filter yields no
+ * verdict and no alert rather than a confident one off two rows. The sample
+ * itself is still computed and persisted every cycle; a reader wanting the
+ * dropped count must diff it against the raw table.
+ *
+ * The filter cannot preferentially gut one arm: both arms'
+ * `SqliteExecutionStore`s are constructed in the same composition root from
+ * the same `config.capitalCeilingUsd`, so the cutover boundary falls at one
+ * instant across both.
  *
  * **Two distinct non-null ceilings still throw.** That is an operator moving
  * `LIVE_BOOK_GBP` or `SAMURAI_LIVE_MAX_CAPITAL_USD` mid-window — no row in
