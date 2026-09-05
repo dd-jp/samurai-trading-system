@@ -2,6 +2,7 @@ import {
   classifyTelegramResponse,
   classifyTelegramThrown,
   isRetryableTelegramError,
+  TelegramNetworkError,
   TelegramProviderError,
   TelegramRateLimitError,
   TelegramTimeoutError,
@@ -83,6 +84,10 @@ describe('isRetryableTelegramError', () => {
     expect(isRetryableTelegramError(new Error('boom'))).toBe(false);
     expect(isRetryableTelegramError(undefined)).toBe(false);
   });
+
+  it('retries a bare network failure (#1108)', () => {
+    expect(isRetryableTelegramError(new TelegramNetworkError('n'))).toBe(true);
+  });
 });
 
 describe('classifyTelegramThrown', () => {
@@ -100,10 +105,11 @@ describe('classifyTelegramThrown', () => {
     expect(isRetryableTelegramError(error)).toBe(false);
   });
 
-  it('maps a bare network failure to a provider error', () => {
-    expect(classifyTelegramThrown(new TypeError('fetch failed'), 'sendMessage')).toBeInstanceOf(
-      TelegramProviderError,
-    );
+  it('maps a bare network failure to a retryable network error, not a provider error (#1108)', () => {
+    const error = classifyTelegramThrown(new TypeError('fetch failed'), 'sendMessage');
+    expect(error).toBeInstanceOf(TelegramNetworkError);
+    expect(error).not.toBeInstanceOf(TelegramProviderError);
+    expect(isRetryableTelegramError(error)).toBe(true);
   });
 
   it('passes an already-classified error through untouched', () => {

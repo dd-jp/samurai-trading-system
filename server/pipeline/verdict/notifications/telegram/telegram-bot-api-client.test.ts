@@ -1,6 +1,9 @@
-import type { SqliteAuditLog } from '../../../../apps/orchestrator/index.js';
-import type { LogEntry, Logger } from '../../../../shared/index.js';
-import type { CallbackAuditLog } from './telegram-bot-api-client.js';
+import type {
+  SqliteAlertDeliveryLog,
+  SqliteAuditLog,
+} from '../../../../apps/orchestrator/index.js';
+import type { LogEntry, Logger, RetryConfig } from '../../../../shared/index.js';
+import type { AlertDeliveryFailureLog, CallbackAuditLog } from './telegram-bot-api-client.js';
 import {
   capOutboundText,
   TELEGRAM_MAX_MESSAGE_CHARS,
@@ -52,15 +55,40 @@ function makeAuditLog(): CallbackAuditLog & { entries: RecordedEntry[] } {
   };
 }
 
+interface RecordedFailure {
+  chat_id: string;
+  method: string;
+  body: string;
+  error: string;
+  timestamp: Date;
+}
+
+function makeAlertDeliveryLog(): AlertDeliveryFailureLog & { failures: RecordedFailure[] } {
+  const failures: RecordedFailure[] = [];
+  return {
+    failures,
+    recordFailure(entry) {
+      failures.push(entry);
+    },
+  };
+}
+
 interface ClientHarness {
   client: TelegramBotApiClient;
   fetchMock: ReturnType<typeof vi.fn>;
   auditLog: ReturnType<typeof makeAuditLog>;
+  alertDeliveryLog: ReturnType<typeof makeAlertDeliveryLog>;
   calls: () => { url: string; body: Record<string, unknown> }[];
 }
 
 function makeClient(
-  overrides: { updates?: unknown[][]; alertChatId?: string; logger?: Logger } = {},
+  overrides: {
+    updates?: unknown[][];
+    alertChatId?: string;
+    logger?: Logger;
+    alertDeliveryLog?: AlertDeliveryFailureLog;
+    retry?: RetryConfig;
+  } = {},
 ): ClientHarness {
   const queued = overrides.updates ?? [];
   let poll = 0;
@@ -73,23 +101,26 @@ function makeClient(
   vi.stubGlobal('fetch', fetchMock);
 
   const auditLog = makeAuditLog();
+  const alertDeliveryLog = makeAlertDeliveryLog();
   const client = new TelegramBotApiClient({
     botToken: FAKE_TOKEN,
     allowedUserIds: String(ALLOWED_ID),
     auditLog,
+    alertDeliveryLog: overrides.alertDeliveryLog ?? alertDeliveryLog,
     // Spread rather than assigned: `alertChatId` is optional, and under
     // `exactOptionalPropertyTypes` passing an explicit `undefined` is not the
     // same as omitting it. Callers that leave it out must produce a config
     // with no `alertChatId` key at all.
     ...(overrides.alertChatId === undefined ? {} : { alertChatId: overrides.alertChatId }),
     logger: overrides.logger ?? { log: () => {} },
-    retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
+    retry: overrides.retry ?? { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
   });
 
   return {
     client,
     fetchMock,
     auditLog,
+    alertDeliveryLog,
     calls: () =>
       fetchMock.mock.calls.map(([url, init]) => ({
         url: String(url),
@@ -320,6 +351,148 @@ describe('TelegramBotApiClient.sendApprovalButtons', () => {
       }),
     ).rejects.toThrow();
     expect(h.client.pendingTokenCount).toBe(0);
+  });
+});
+
+describe('TelegramBotApiClient — transient network failures and undeliverable alerts (#1108)', () => {
+  it('retries a bare fetch rejection and delivers on a later attempt', async () => {
+    const h = makeClient({ retry: { maxAttempts: 3, baseDelayMs: 1, maxDelayMs: 1 } });
+    h.fetchMock
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockResolvedValueOnce(okResponse());
+
+    await expect(h.client.sendMessage(CHAT_ID, 'hi')).resolves.toBeUndefined();
+
+    expect(h.fetchMock).toHaveBeenCalledTimes(2);
+    expect(h.alertDeliveryLog.failures).toEqual([]);
+  });
+
+  it('never retries a caller-initiated abort, unlike a bare network failure (pins #1108’s documented exception)', async () => {
+    const h = makeClient({ retry: { maxAttempts: 3, baseDelayMs: 1, maxDelayMs: 1 } });
+    h.fetchMock.mockRejectedValue(new DOMException('Aborted.', 'AbortError'));
+
+    await expect(h.client.sendMessage(CHAT_ID, 'hi')).rejects.toThrow();
+
+    expect(h.fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('durably records a send that exhausts retries on a bare network failure', async () => {
+    const h = makeClient({ retry: { maxAttempts: 2, baseDelayMs: 1, maxDelayMs: 1 } });
+    h.fetchMock.mockRejectedValue(new TypeError('fetch failed'));
+
+    await expect(h.client.sendMessage(CHAT_ID, 'Samurai VERDICT: TSLA bullish')).rejects.toThrow();
+
+    expect(h.fetchMock).toHaveBeenCalledTimes(2);
+    expect(h.alertDeliveryLog.failures).toHaveLength(1);
+    expect(h.alertDeliveryLog.failures[0]).toMatchObject({
+      chat_id: CHAT_ID,
+      method: 'sendMessage',
+      body: 'Samurai VERDICT: TSLA bullish',
+    });
+    expect(h.alertDeliveryLog.failures[0]?.error).toContain('fetch failed');
+  });
+
+  it('durably records a permanently-undeliverable approval-button send too', async () => {
+    const h = makeClient();
+    h.fetchMock.mockRejectedValue(new TypeError('fetch failed'));
+
+    await expect(
+      h.client.sendApprovalButtons(CHAT_ID, 'Approve TSLA entry?', {
+        trace_id: 't',
+        idempotency_key: 'k',
+        timeout_ms: 60_000,
+      }),
+    ).rejects.toThrow();
+
+    expect(h.alertDeliveryLog.failures).toHaveLength(1);
+    expect(h.alertDeliveryLog.failures[0]?.body).toBe('Approve TSLA entry?');
+  });
+
+  it('truncates an oversized body/error before it reaches the durable record', async () => {
+    const h = makeClient();
+    h.fetchMock.mockRejectedValue(new TypeError(`fetch failed: ${'y'.repeat(1_000)}`));
+
+    await expect(h.client.sendMessage(CHAT_ID, 'z'.repeat(1_000))).rejects.toThrow();
+
+    const [recorded] = h.alertDeliveryLog.failures;
+    expect(recorded?.body.length).toBeLessThan(1_000);
+    expect(recorded?.error.length).toBeLessThan(1_000);
+  });
+
+  it('a broken durable write never replaces the original send failure', async () => {
+    const h = makeClient();
+    h.fetchMock.mockRejectedValue(new TypeError('fetch failed'));
+    h.alertDeliveryLog.recordFailure = () => {
+      throw new Error('db locked');
+    };
+
+    await expect(h.client.sendMessage(CHAT_ID, 'hi')).rejects.toThrow(/fetch failed/);
+  });
+
+  it('escalates on the Nth permanently-undeliverable send and every Nth after', async () => {
+    const h = makeClient({
+      alertChatId: CHAT_ID,
+      retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
+    });
+    h.fetchMock.mockRejectedValue(new TypeError('fetch failed'));
+
+    for (let i = 0; i < 3; i++) {
+      await expect(h.client.sendMessage(CHAT_ID, `alert ${i}`)).rejects.toThrow();
+    }
+
+    const escalations = h
+      .calls()
+      .filter((c) => c.url.includes('/sendMessage') && String(c.body.text).includes('degraded'));
+    expect(escalations).toHaveLength(1);
+    expect(String(escalations[0]?.body.text)).toContain('3 Telegram sends');
+  });
+
+  it('an escalation attempt that itself fails is swallowed, not recorded as a second failure', async () => {
+    const h = makeClient({
+      alertChatId: CHAT_ID,
+      retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
+    });
+    h.fetchMock.mockRejectedValue(new TypeError('fetch failed'));
+
+    for (let i = 0; i < 3; i++) {
+      await expect(h.client.sendMessage(CHAT_ID, `alert ${i}`)).rejects.toThrow();
+    }
+    // Let the fire-and-forget escalation attempt (itself rejected, since
+    // fetchMock always rejects) settle before asserting.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    expect(h.alertDeliveryLog.failures).toHaveLength(3);
+  });
+
+  it('a failure on a DIFFERENT chat than the escalation chat never triggers escalation (#342 isolation)', async () => {
+    // The heartbeat posts to its own chat, never the escalation chat (#342) —
+    // a dead heartbeat destination must not mute or drown the escalations
+    // sent elsewhere. Reproduces that shape directly against `sendMessage`
+    // rather than via `TradeChannelHeartbeat`, which alert-transport.test.ts
+    // already covers end-to-end.
+    const h = makeClient({
+      alertChatId: CHAT_ID,
+      retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
+    });
+    h.fetchMock.mockRejectedValue(new TypeError('fetch failed'));
+
+    for (let i = 0; i < 5; i++) {
+      await expect(h.client.sendMessage('heartbeat-chat', `beat ${i}`)).rejects.toThrow();
+    }
+
+    expect(
+      h
+        .calls()
+        .filter((c) => c.url.includes('/sendMessage') && String(c.body.text).includes('degraded')),
+    ).toEqual([]);
+    // Still durably recorded — just never counted toward, or itself escalated to, the alert chat.
+    expect(h.alertDeliveryLog.failures).toHaveLength(5);
+  });
+});
+
+describe('AlertDeliveryLog port', () => {
+  it('is structurally satisfied by the orchestrator SqliteAlertDeliveryLog', () => {
+    expectTypeOf<SqliteAlertDeliveryLog>().toExtend<AlertDeliveryFailureLog>();
   });
 });
 
@@ -779,6 +952,20 @@ describe('outbound message cap (Telegram 4096)', () => {
       chars: `head ${tail}`.length,
       body: `head ${tail}`,
     });
+  });
+
+  it('delivers a 4096+ char body instead of dropping it to Telegram’s 400 (#1108 AC1)', async () => {
+    const h = makeClient();
+    const body = `Samurai VERDICT: AAPL bearish. Detail: ${'x'.repeat(5_000)}`;
+    expect(body.length).toBeGreaterThan(TELEGRAM_MAX_MESSAGE_CHARS);
+
+    await expect(h.client.sendMessage(CHAT_ID, body)).resolves.toBeUndefined();
+
+    const sent = h.calls().at(-1)?.body.text as string;
+    expect(sent.length).toBeLessThanOrEqual(TELEGRAM_MAX_MESSAGE_CHARS);
+    expect(sent).toContain('Samurai VERDICT: AAPL bearish');
+    expect(sent).toContain('truncated');
+    expect(h.alertDeliveryLog.failures).toEqual([]);
   });
 
   it('logs nothing extra when the body already fits', async () => {

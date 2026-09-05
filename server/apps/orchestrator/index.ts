@@ -76,6 +76,11 @@ import {
 import type { Logger } from './types.js';
 
 export {
+  type AlertDeliveryFailure,
+  type AlertDeliveryLog,
+  SqliteAlertDeliveryLog,
+} from './alert-delivery-log.js';
+export {
   ALERT_CHANNEL_FIELDS,
   ALERTS_MODES,
   type AlertChannels,

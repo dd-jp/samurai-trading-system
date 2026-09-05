@@ -48,18 +48,44 @@ export class TelegramProviderError extends Error {
   }
 }
 
-export type TelegramError = TelegramTimeoutError | TelegramRateLimitError | TelegramProviderError;
+/**
+ * A bare network failure (DNS/connection refused/reset — Node/undici's
+ * `TypeError: fetch failed`, with no response and no abort involved). Split
+ * out from `TelegramProviderError` (#1108) because the two must be retried
+ * differently: this is a transient local/transport blip, not Telegram
+ * rejecting the request, so it belongs in the retryable set the same way a
+ * timeout does.
+ */
+export class TelegramNetworkError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TelegramNetworkError';
+  }
+}
+
+export type TelegramError =
+  | TelegramTimeoutError
+  | TelegramRateLimitError
+  | TelegramProviderError
+  | TelegramNetworkError;
 
 /**
  * Retryable set per transport-layer-spec.md's shared-conventions module:
- * Timeout | RateLimit | ProviderError-with-5xx-status. 4xx `ProviderError`s
- * stay non-retryable — including 409 Conflict, which under `getUpdates` means
- * a *second poller holds the bot token*; retrying that in a tight loop only
- * fights the other consumer (the poll loop handles it with a long backoff and
- * a loud log instead, see telegram-bot-api-client.ts).
+ * Timeout | RateLimit | NetworkError | ProviderError-with-5xx-status. 4xx
+ * `ProviderError`s stay non-retryable — including 409 Conflict, which under
+ * `getUpdates` means a *second poller holds the bot token*; retrying that in
+ * a tight loop only fights the other consumer (the poll loop handles it with
+ * a long backoff and a loud log instead, see telegram-bot-api-client.ts) —
+ * and including the caller-initiated abort that `classifyTelegramThrown`
+ * deliberately keeps as a `ProviderError` with no status, not a
+ * `NetworkError`.
  */
 export function isRetryableTelegramError(error: unknown): boolean {
-  if (error instanceof TelegramTimeoutError || error instanceof TelegramRateLimitError) {
+  if (
+    error instanceof TelegramTimeoutError ||
+    error instanceof TelegramRateLimitError ||
+    error instanceof TelegramNetworkError
+  ) {
     return true;
   }
   if (error instanceof TelegramProviderError) {
@@ -131,9 +157,16 @@ export async function classifyTelegramResponse(
  * `TimeoutError` `DOMException`) into the typed hierarchy. A caller-initiated
  * `AbortError` — the poll loop's own `stop()` — is deliberately mapped to
  * `TelegramProviderError` with no status: not a timeout, and not retryable.
+ * Everything else thrown (a bare `TypeError: fetch failed` — DNS/connection
+ * failure, no response and no abort) is a `TelegramNetworkError` (#1108):
+ * transient, so retryable, unlike the abort case it's checked ahead of.
  */
 export function classifyTelegramThrown(error: unknown, context: string): TelegramError {
-  if (error instanceof TelegramTimeoutError || error instanceof TelegramRateLimitError) {
+  if (
+    error instanceof TelegramTimeoutError ||
+    error instanceof TelegramRateLimitError ||
+    error instanceof TelegramNetworkError
+  ) {
     return error;
   }
   if (error instanceof TelegramProviderError) {
@@ -149,5 +182,8 @@ export function classifyTelegramThrown(error: unknown, context: string): Telegra
   if (name === 'TimeoutError') {
     return new TelegramTimeoutError(`Telegram Bot API timeout: ${detail} (${context})`);
   }
-  return new TelegramProviderError(`Telegram Bot API transport failure: ${detail} (${context})`);
+  if (name === 'AbortError') {
+    return new TelegramProviderError(`Telegram Bot API transport failure: ${detail} (${context})`);
+  }
+  return new TelegramNetworkError(`Telegram Bot API transport failure: ${detail} (${context})`);
 }
