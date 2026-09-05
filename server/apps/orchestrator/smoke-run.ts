@@ -4264,12 +4264,14 @@ export function evaluateSmokeGate(
   // This is the only #1111 assertion this gate carries. It does not, and
   // cannot, assert on the `readAt` coordinate itself: a smoke run's fixture
   // marks stay fresh by construction. The six-stage run's fixture mark is
-  // frozen at `SMOKE_RUN_INSTANT` and the run itself is seconds long
-  // (`tickIntervalMs` deliberately kept far below `max_signal_age`, see its
-  // doc); the exit-path harness additionally overrides `max_mark_age` to 24h
-  // because it advances its own clock between phases. Either way, no
-  // staleness/stale_feed verdict is ever produced here to check the detail
-  // on. The one structural guard on `readAt` reaching a real caller is
+  // frozen at `SMOKE_RUN_INSTANT`, and the run's total wall-clock span
+  // (default 3 ticks at 250ms, see `tickIntervalMs`'s own doc, which sizes
+  // that gap against `max_signal_age`) stays far below `max_mark_age` too —
+  // its smaller value here is 2 minutes (paper-profile.ts, crypto); the
+  // exit-path harness instead overrides `max_mark_age` to 24h because it
+  // advances its own clock between phases. Either way, no staleness/
+  // stale_feed verdict is ever produced here to check the detail on. The
+  // one structural guard on `readAt` reaching a real caller is
   // `PortfolioAccountingInput.clock` being a required (non-optional) field —
   // a compile-time check, not a runtime one — so a caller that regresses to
   // threading `asOf` through both parameters would still type-check and this
