@@ -2,7 +2,7 @@ import type { AlpacaBalanceWire, MetricsSuiteWire } from '@contracts';
 import type { SnapshotFeed, WireSnapshot } from '../hooks/useSnapshot.ts';
 import { formatClockUtc, formatPercent, formatUsd, UNKNOWN } from '../lib/format.ts';
 import { providerStateWord, WAITING_FOR_FIRST_SNAPSHOT } from '../lib/vocabulary.ts';
-import { Track } from './Track.tsx';
+import { CapMeter } from './CapMeter.tsx';
 
 /**
  * The tighter of CONTEXT.md's two stated drawdown tolerances (#798,
@@ -192,77 +192,63 @@ function SpendBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
   const spent = allTime?.cost_usd;
   const cap = capOf(snapshot);
   const spendKnown = spent !== undefined && Number.isFinite(spent);
-  const drawable = cap !== null && spent !== undefined && Number.isFinite(spent);
-  const fraction = drawable ? spent / cap : Number.NaN;
-  const overCap = drawable && spent >= cap;
   const unpriced = allTime?.unpriced_calls ?? 0;
   const unattributed = allTime?.per_debate.unattributed_calls ?? 0;
   const windows = snapshot?.llm_spend;
   return (
-    <div className="rail-block" data-field="llm-cap">
-      <div className="rail-meter-head">
-        <span className="muted">LLM cap</span>
-        <span className="mono">
-          {spent === undefined ? UNKNOWN : formatUsd(spent)} /{' '}
-          {cap === null ? UNKNOWN : formatUsd(cap)}
-        </span>
-      </div>
-      {drawable ? (
-        <Track
-          fraction={fraction}
-          tone={overCap ? 'bad' : 'cyan'}
-          label={`LLM budget used: ${formatPercent(fraction)} of the ${formatUsd(cap)} cap`}
-        />
-      ) : (
-        <span className="rail-note">
-          {/* Missing spend is reported first: with no snapshot this client knows
-              nothing about the operator's budget and must not assert one. */}
-          {spendKnown
-            ? 'no LLM budget configured — meter not drawable'
-            : 'no spend figure on this snapshot — meter not drawable'}
-        </span>
+    <CapMeter
+      dataField="llm-cap"
+      heading="LLM cap"
+      value={spent}
+      cap={cap}
+      format={formatUsd}
+      tone="cyan"
+      // Missing spend is reported first: with no snapshot this client knows
+      // nothing about the operator's budget and must not assert one.
+      emptyState={
+        spendKnown
+          ? 'no LLM budget configured — meter not drawable'
+          : 'no spend figure on this snapshot — meter not drawable'
+      }
+      trackLabel={(fraction, _value, cap) =>
+        `LLM budget used: ${formatPercent(fraction)} of the ${formatUsd(cap)} cap`
+      }
+      footnote={(over) => (
+        <>
+          {windows != null && (
+            <span className="rail-note mono" data-field="llm-windows">
+              24h {formatUsd(windows.last_24h.cost_usd)} · 7d {formatUsd(windows.last_7d.cost_usd)}{' '}
+              · all {formatUsd(windows.all_time.cost_usd)}
+            </span>
+          )}
+          <span className="rail-note">
+            {over ? 'over cap · ' : ''}
+            {unpriced > 0 ? `floor — ${unpriced} unpriced calls` : 'all time, metered locally'}
+            {unattributed > 0 ? ` · ${unattributed} calls carry no debate id` : ''}
+          </span>
+        </>
       )}
-      {windows != null && (
-        <span className="rail-note mono" data-field="llm-windows">
-          24h {formatUsd(windows.last_24h.cost_usd)} · 7d {formatUsd(windows.last_7d.cost_usd)} ·
-          all {formatUsd(windows.all_time.cost_usd)}
-        </span>
-      )}
-      <span className="rail-note">
-        {overCap ? 'over cap · ' : ''}
-        {unpriced > 0 ? `floor — ${unpriced} unpriced calls` : 'all time, metered locally'}
-        {unattributed > 0 ? ` · ${unattributed} calls carry no debate id` : ''}
-      </span>
-    </div>
+    />
   );
 }
 
 function DrawdownBlock({ metrics }: { metrics: MetricsSuiteWire | null }) {
-  const drawdown = metrics?.max_drawdown;
-  const fraction = drawdown === undefined ? Number.NaN : drawdown / DRAWDOWN_TOLERANCE;
-  const over = Number.isFinite(fraction) && fraction >= 1;
   return (
-    <div className="rail-block" data-field="drawdown">
-      <div className="rail-meter-head">
-        <span className="muted">Drawdown</span>
-        <span className="mono">
-          {drawdown === undefined ? UNKNOWN : formatPercent(drawdown)} /{' '}
-          {formatPercent(DRAWDOWN_TOLERANCE)}
-        </span>
-      </div>
-      {Number.isFinite(fraction) ? (
-        <Track
-          fraction={fraction}
-          tone={over ? 'bad' : 'amber'}
-          label={`max drawdown ${formatPercent(drawdown ?? Number.NaN)} of the ${formatPercent(
-            DRAWDOWN_TOLERANCE,
-          )} index tolerance`}
-        />
-      ) : (
-        <span className="rail-note">no daily suite yet — meter not drawable</span>
-      )}
-      <span className="rail-note">daily suite max · index tolerance (#798)</span>
-    </div>
+    <CapMeter
+      dataField="drawdown"
+      heading="Drawdown"
+      value={metrics?.max_drawdown}
+      cap={DRAWDOWN_TOLERANCE}
+      format={formatPercent}
+      tone="amber"
+      emptyState="no daily suite yet — meter not drawable"
+      trackLabel={(_fraction, value) =>
+        `max drawdown ${formatPercent(value)} of the ${formatPercent(
+          DRAWDOWN_TOLERANCE,
+        )} index tolerance`
+      }
+      footnote={() => <span className="rail-note">daily suite max · index tolerance (#798)</span>}
+    />
   );
 }
 
