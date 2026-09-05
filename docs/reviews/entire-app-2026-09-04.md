@@ -97,14 +97,17 @@ Two distinct defects wear one label:
   `shared/store/sqlite-utils.js` is deep-imported at ~10 sites across `orchestrator/`, `service-api/`,
   `pipeline/` and `tools/` despite being exported at `shared/store/index.ts:32`; `safe-log` likewise
   (`shared/index.ts:75`) at `production.ts:204` and both fault-guards.
-- *No legal route exists.* **`server/shared/http/` has no `index.ts` at all** — `delay.ts`,
-  `fetch-with-timeout.ts`, `retry.ts`, `response-errors.ts`, `token-bucket.ts`, `venue-pacing.ts` —
-  so `smoke-run.ts:218` and `provider-status.ts:43` *cannot* comply. **`server/providers/universe-pool/`
-  likewise has no barrel**, and six cross-module files reach into `lse-etp-pool.ts` directly
-  (`analysts/{sentiment,fundamental,technical}-analyst.ts`, `mi-ingest-agent.ts:41`,
-  `production/mi-coverage.ts:46`, `production/defaults.ts:36`). `env-integer.ts` and
-  `stdout-fault-guard.ts` are re-exported from nowhere. **These are missing-barrel defects, not
-  importer defects** — fix the barrels first, then the importers.
+- *No legal route exists.* **PARTLY WRONG AS FIRST PUBLISHED, and FIXED 2026-09-05.** `shared/http/`
+  having no `index.ts` is true but was not the defect: `shared/` is the module and `shared/index.ts`
+  is its barrel, and it already re-exported `fetchWithTimeout`, `withRetry`, `TokenBucket` and the
+  response-error helpers. So the three deep importers *could* comply and were ordinary breaches, not
+  blocked ones — repointed at `shared/index.js`, with `delay` added to that barrel (the one symbol
+  genuinely absent). **`server/providers/universe-pool/` having no barrel was real** — six non-test
+  cross-module files plus two tests reached into `lse-etp-pool.ts` directly; a barrel was added and
+  all eight repointed. The "~15 importers cannot comply" figure in this report's own summary was
+  inflated by grep hits on prose mentions of these paths inside comments; the true count of deep
+  cross-module imports was eleven, all now routed. `env-integer.ts` and `stdout-fault-guard.ts` are
+  still re-exported from nowhere.
 - *Not repointable.* `trader/early-exit.ts:86` is a **value** import into another module's internals
   for symbols the barrel doesn't carry: `import { type AxisVote, MACD_SPEC, momentumVote, RSI_SPEC }
   from '../analysts/technical-analyst.js'`. Needs those four added to `analysts/index.ts`.
@@ -287,7 +290,12 @@ legs rather than re-submitting — is stated by ADR-0014 as accepted, not missed
 
 ### (i) Code is wrong
 
-**P3 — Every Polymarket item is invisible to every analyst.** Verified directly.
+**P3 — FIXED 2026-09-05. Every Polymarket item was invisible to both analysts that read MI content.**
+*(The heading first published here said "invisible to every analyst". That overstated it:
+`technical-analyst.ts:1031` passes no entity, so it received the items — but it uses only
+`marketContext.news.length`, a bare count it puts in `key_points`. The two analysts that read the
+content, `fundamental` via `news` and `sentiment` via `social`, both pass `resolveMiSubject(...)` and
+saw nothing. Corrected on direct re-verification while applying the fix.)* Verified directly.
 `polymarket-agent.ts` sets **no `scope` field anywhere in the file**, and `IntelligenceItem.scope`
 (`market-intelligence/types.ts:62`) is optional, so items default to `'entity'`. Their entities are
 macro series names from `curated-markets.ts` — `FOMC-2026-09`, `US-RECESSION-2026`. The filter at
@@ -298,8 +306,16 @@ analysts pass a resolved ticker (`fundamental-analyst.ts:60-75`, `sentiment-anal
 debate**. GDELT does it correctly at `gdelt-scorer.ts:306` (`scope: 'asset_class'`). Second
 consequence: `latestClassWideRestatementOnly` (`index.ts:93-113`) `continue`s on anything not
 `scope === 'asset_class'`, so Polymarket's trailing-24h restatements are never collapsed — the exact
-time-axis inflation that mechanism exists to prevent. Hidden because `smoke-run.ts:2674` calls
-`getContext` with no entity. **One-line fix:** set `scope: 'asset_class'` on the constructed item.
+time-axis inflation that mechanism exists to prevent. Hidden because `smoke-run.ts:2674` called
+`getContext` with no entity — while its comment claimed it "counts what the analyst would have seen".
+
+**Applied.** `scope: 'asset_class'` on the constructed item; the two stale limitation notes in that
+file's header rewritten (limitation 2 asserted the items reached every `stocks` debate, which #914 had
+already made false; limitation 3's time-axis inflation turns out to be bounded by
+`latestClassWideRestatementOnly`, which now applies to these items). The smoke gate's Polymarket read
+is now entity-scoped, so it fails on a regression, and its diagnostic names the cause. Mutation-proved
+both ways: deleting the one field turns the entity-scoped read to `[]` and takes `yarn smoke` red —
+while the other 33 tests in `polymarket-agent.test.ts` stay green, which is the defect class exactly.
 This is #481's adopted macro/event feed, built and dark — the same defect class as the unwired
 mechanisms above, one level down in the data.
 
@@ -464,8 +480,10 @@ with no caller, and the Spec axis found an adopted intelligence feed (#481's Pol
 cannot reach a single consumer for want of one field. Both are the composition-root defect class the
 coding standard already names — the second one just lives in data rather than wiring.
 
-**Cheapest high-value fixes**, none of which need a ruling: `scope: 'asset_class'` in
-`polymarket-agent.ts` (P3, one line, restores a whole feed); `/\.?0+$/` in `format.ts:155` (S5);
-branching on `row.diverged` alone in `ReviewTab.tsx:124` (P4); adding barrels to `shared/http/` and
-`universe-pool/` (S1, unblocks ~15 importers that cannot currently comply); correcting the four wrong
-comments in S2.
+**Cheapest high-value fixes — ALL FIVE APPLIED 2026-09-05**, none of which needed a ruling:
+`scope: 'asset_class'` in `polymarket-agent.ts` (P3, restores a whole feed, plus an entity-scoped
+smoke gate so it cannot go dark again); `/\.?0+$/` in `format.ts:155` (S5); branching on
+`row.diverged` alone in `ReviewTab.tsx:124` (P4); the `universe-pool` barrel and eleven repointed
+imports (S1 — see the correction there: `shared/http/` was never actually blocked); and the P1 spec
+qualification. Two of this report's own claims were falsified while applying them and are corrected
+in place, at P3 and S1.
