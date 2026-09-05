@@ -31,11 +31,19 @@ export function parseRetryAfterMs(response: Response): number | undefined {
  */
 export const MAX_ERROR_BODY_CHARS = 500;
 
-/** Truncates `text` to `MAX_ERROR_BODY_CHARS`, appending a note of the original length when it does. */
+/**
+ * Truncates `text` to `MAX_ERROR_BODY_CHARS`, appending a note of the
+ * original length when it does. Backs off one character when the cut would
+ * land inside a surrogate pair — same hazard and same guard as
+ * `capOutboundText` (telegram-bot-api-client.ts): a lone high surrogate is
+ * not valid UTF-8 on the wire or on disk.
+ */
 export function truncateForError(text: string): string {
-  return text.length > MAX_ERROR_BODY_CHARS
-    ? `${text.slice(0, MAX_ERROR_BODY_CHARS)}… (truncated, ${text.length} chars total)`
-    : text;
+  if (text.length <= MAX_ERROR_BODY_CHARS) return text;
+  let cut = MAX_ERROR_BODY_CHARS;
+  const last = text.charCodeAt(cut - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut -= 1;
+  return `${text.slice(0, cut)}… (truncated, ${text.length} chars total)`;
 }
 
 /**

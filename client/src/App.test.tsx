@@ -91,11 +91,12 @@ describe('rail', () => {
     expect(within(rail).getByText(/BTC-USD · debate · since 11:59:50Z/)).toBeTruthy();
     expect(within(rail).getByText('trace-btc')).toBeTruthy();
     expect(within(rail).getAllByText('ok')).toHaveLength(2);
-    expect(
-      within(rail).getByText(
-        /^equity \$100,112\.98 · cash \$99,213\.40 · buying power \$198,426\.80$/,
-      ),
-    ).toBeTruthy();
+    const balance = rail.querySelector('[data-field="alpaca-balance"]');
+    expect([...(balance?.children ?? [])].map((row) => row.textContent)).toEqual([
+      'Equity$100,112.98',
+      'Cash$99,213.40',
+      'Buying power$198,426.80',
+    ]);
     expect(within(rail).getByText('Alpaca · account reachable')).toBeTruthy();
     expect(within(rail).getByRole('img', { name: /LLM budget used/ })).toBeTruthy();
     expect(within(rail).getByText(/^24h \$.* · 7d \$.* · all \$/)).toBeTruthy();
@@ -156,6 +157,20 @@ describe('rail', () => {
     spend.all_time = { ...spend.all_time, unpriced_calls: 3 };
     renderApp([makeSnapshot({ llm_spend: spend })]);
     expect(await screen.findByText(/floor — 3 unpriced calls/)).toBeTruthy();
+  });
+
+  it('says nothing about the alert channel when nothing has failed to deliver', async () => {
+    renderApp([makeSnapshot()]);
+    const rail = screen.getByRole('complementary', { name: 'Rail' });
+    await within(rail).findByText('ALIVE');
+    expect(within(rail).queryByText(/failed to deliver/)).toBeNull();
+  });
+
+  // #1108: silence must not read as calm — the rail names the count instead.
+  it('surfaces a nonzero alert_delivery_failures count as a degraded channel', async () => {
+    renderApp([makeSnapshot({ alert_delivery_failures: 4 })]);
+    const rail = screen.getByRole('complementary', { name: 'Rail' });
+    expect(await within(rail).findByText('4 alerts failed to deliver')).toBeTruthy();
   });
 });
 

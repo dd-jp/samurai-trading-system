@@ -651,6 +651,66 @@ describe('SqliteQueryStore.getLlmSpend per-debate percentiles', () => {
   }
 });
 
+describe('SqliteQueryStore.getAlertDeliveryFailureCount (#1108)', () => {
+  const ALERT_CHAT_ID = 'chat-1';
+  const HEARTBEAT_CHAT_ID = 'chat-heartbeat';
+
+  function seedFailure(db: SharedStore, at: Date, chatId: string = ALERT_CHAT_ID): void {
+    db.prepare(
+      `INSERT INTO alert_delivery_failures (chat_id, method, body, error, timestamp)
+       VALUES (?, 'sendMessage', 'body', 'fetch failed', ?)`,
+    ).run(chatId, at.toISOString());
+  }
+
+  it('returns 0 on an empty table rather than throwing or returning null', () => {
+    const store = new SqliteQueryStore(makeDb(), 30, ALERT_CHAT_ID);
+    expect(store.getAlertDeliveryFailureCount(NOW)).toBe(0);
+  });
+
+  it('counts every recorded ALERT-chat failure up to and including asOf', () => {
+    const db = makeDb();
+    seedFailure(db, new Date(NOW.getTime() - 1_000));
+    seedFailure(db, NOW);
+    seedFailure(db, new Date(NOW.getTime() + 1_000));
+
+    expect(new SqliteQueryStore(db, 30, ALERT_CHAT_ID).getAlertDeliveryFailureCount(NOW)).toBe(2);
+  });
+
+  // #1108 third review pass: the CI-bot finding this closes. COUNT(*) with no
+  // chat_id predicate previously counted every row in the table, heartbeat
+  // sends included — but the tile is labeled "Alert channel" and answers "is
+  // the alert channel down", so a heartbeat-chat outage must not degrade it
+  // (#342's isolation already keeps a heartbeat failure from advancing or
+  // triggering the escalation alert itself; this is the read-side twin).
+  it('excludes a non-alert (heartbeat) chat_id row from the dashboard count', () => {
+    const db = makeDb();
+    seedFailure(db, NOW, HEARTBEAT_CHAT_ID);
+
+    expect(new SqliteQueryStore(db, 30, ALERT_CHAT_ID).getAlertDeliveryFailureCount(NOW)).toBe(0);
+  });
+
+  it('counts an alert-chat row while a heartbeat-chat row in the same table is excluded', () => {
+    const db = makeDb();
+    seedFailure(db, NOW, ALERT_CHAT_ID);
+    seedFailure(db, NOW, HEARTBEAT_CHAT_ID);
+    seedFailure(db, NOW, HEARTBEAT_CHAT_ID);
+
+    expect(new SqliteQueryStore(db, 30, ALERT_CHAT_ID).getAlertDeliveryFailureCount(NOW)).toBe(1);
+  });
+
+  // The escalation chat id is unknown only under `SAMURAI_ALERTS=log-only`
+  // (service-api/index.ts), the same configuration under which the
+  // orchestrator never constructs a real Telegram client either — so this is
+  // the "no known channel to answer the question about" case, not a bug
+  // being papered over by returning 0.
+  it('returns 0 when no alert chat id is configured, even with matching rows present', () => {
+    const db = makeDb();
+    seedFailure(db, NOW, ALERT_CHAT_ID);
+
+    expect(new SqliteQueryStore(db).getAlertDeliveryFailureCount(NOW)).toBe(0);
+  });
+});
+
 describe('percentile', () => {
   it('returns 0 for an empty sample rather than NaN or undefined', () => {
     // A fresh database has no debates; the tile must render, not crash.
@@ -1252,6 +1312,8 @@ describe('SqliteQueryStore.getRiskCritics', () => {
       intent_type: 'entry',
       exit_reason: null,
       skip_reason: null,
+      decision_class: null,
+      reason_detail: null,
       sizing: null,
       cosine_precedent: null,
       atr: null,

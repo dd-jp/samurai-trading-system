@@ -52,7 +52,7 @@ import {
 } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
-import type { AssetClass, TickStage } from '../orchestrator/index.js';
+import { type AssetClass, SqliteAlertDeliveryLog, type TickStage } from '../orchestrator/index.js';
 import type {
   AttributionSummary,
   DashboardQueryStore,
@@ -266,14 +266,29 @@ export class SqliteQueryStore implements DashboardQueryStore {
   private readonly outsideBenchmarks: SqliteOutsideBenchmarkSampleStore;
   /** #1066: the Risk Manager's own critic log, read (never written) here. */
   private readonly critics: SqliteRiskCriticStore;
+  /** #1108: the orchestrator's own alert-delivery-failure log, read (never written) here. */
+  private readonly alertDeliveryLog: SqliteAlertDeliveryLog;
 
   constructor(
     private readonly db: SharedStore,
     private readonly attributionWindowDays = 30,
+    /**
+     * The escalation chat `alert_delivery_failures.chat_id` is scoped
+     * against (#1108 third review pass) — the same chat `alert-transport.ts`
+     * reads `TELEGRAM_CHAT_ID` into, normalized the same way (trimmed,
+     * empty-as-unset) so the entry point's read agrees with the
+     * orchestrator's. `undefined` when unconfigured (the only configuration
+     * under which the orchestrator itself never writes real Telegram rows
+     * either: `SAMURAI_ALERTS=log-only`) — `getAlertDeliveryFailureCount`
+     * reads 0 rather than guessing a chat, and the entry point names that
+     * state at boot instead of it being reached silently.
+     */
+    private readonly alertChatId?: string,
   ) {
     this.armComparisons = new SqliteArmComparisonSampleStore(db);
     this.outsideBenchmarks = new SqliteOutsideBenchmarkSampleStore(db);
     this.critics = new SqliteRiskCriticStore(db);
+    this.alertDeliveryLog = new SqliteAlertDeliveryLog(db);
   }
 
   /**
@@ -893,6 +908,11 @@ export class SqliteQueryStore implements DashboardQueryStore {
       llm_latency_ms_p50: percentile(latencies, 0.5),
       llm_latency_ms_p95: percentile(latencies, 0.95),
     };
+  }
+
+  getAlertDeliveryFailureCount(asOf: Date): number {
+    if (this.alertChatId === undefined) return 0;
+    return this.alertDeliveryLog.countFailures(asOf, this.alertChatId);
   }
 }
 

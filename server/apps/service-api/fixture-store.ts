@@ -522,6 +522,9 @@ const ATTRIBUTION: Record<string, AttributionSummary> = {
   'sentiment-analyst': { analyst_id: 'sentiment-analyst', rolling_r: -0.47, window_days: 30 },
 };
 
+/** #1108. Zero — the fixture's baseline is a healthy alert channel, like every other tile here. */
+const ALERT_DELIVERY_FAILURE_COUNT = 0;
+
 const TICK_STATUS: TickStatus = {
   instrument: 'SPY',
   asset_class: 'stocks',
@@ -895,6 +898,10 @@ export class InMemoryQueryStore implements DashboardQueryStore {
       events: PIPELINE_EVENTS.filter((event) => laneInstruments.has(event.instrument)),
       live: PIPELINE_LIVE.filter((tick) => laneInstruments.has(tick.instrument)),
     };
+  }
+
+  getAlertDeliveryFailureCount(_asOf: Date): number {
+    return ALERT_DELIVERY_FAILURE_COUNT;
   }
 }
 

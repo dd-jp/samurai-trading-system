@@ -17,6 +17,7 @@ import {
   type Mark,
   type MarketDataService,
   type MarkRead,
+  minimumBarsFor,
   recommendedWarmupFor,
   type TradingCalendar,
   UsEquityRegularHoursCalendar,
@@ -2012,6 +2013,266 @@ describe('decideWithReason — named skip reasons (#475)', () => {
 });
 
 /**
+ * #1109. A `no_trade` decision and its `skip_reason` answer WHAT the Trader
+ * declined; neither answers whether the debate it read was itself usable.
+ * `neutral_direction_while_flat` and `holding_neutral_or_non_converged` are
+ * identical strings whether the debate genuinely read neutral or never
+ * finished — a starved debate (#1080: 41 of 44 live debates timed out in the
+ * 2026-09-04 session, 32 with zero completed rounds) hands the Trader a
+ * `direction: 'neutral'` it cannot tell apart from a converged one. These
+ * assertions are what stop that collapse from being silent.
+ */
+describe('decideWithReason — decision class and reason detail (#1109)', () => {
+  it('classifies a genuinely neutral, converged debate as declined_on_signal', async () => {
+    const outcome = await decideWithReason(
+      traderInput({ debate: debateResult({ direction: 'neutral', converged: true }) }),
+    );
+
+    expect(outcome.skip_reason).toBe('neutral_direction_while_flat');
+    expect(outcome.decision_class).toBe('declined_on_signal');
+  });
+
+  it('classifies a flat-side neutral as could_not_decide when the debate timed out with zero rounds', async () => {
+    const outcome = await decideWithReason(
+      traderInput({
+        debate: debateResult({
+          direction: 'neutral',
+          converged: false,
+          rounds_completed: 0,
+          timed_out: { budget_ms: 8_000, elapsed_ms: 8_050 },
+        }),
+      }),
+    );
+
+    expect(outcome.skip_reason).toBe('neutral_direction_while_flat');
+    expect(outcome.decision_class).toBe('could_not_decide');
+  });
+
+  it('classifies a flat-side neutral as could_not_decide when the debate timed out with some rounds completed', async () => {
+    // #1080's `timed_out_partial`: the budget still fired, so the read is no
+    // more trustworthy than the zero-round case — a partial debate is not a
+    // completed one.
+    const outcome = await decideWithReason(
+      traderInput({
+        debate: debateResult({
+          direction: 'neutral',
+          converged: false,
+          rounds_completed: 1,
+          timed_out: { budget_ms: 8_000, elapsed_ms: 8_050 },
+        }),
+      }),
+    );
+
+    expect(outcome.decision_class).toBe('could_not_decide');
+  });
+
+  it('classifies a flat-side neutral as could_not_decide when the debate was rate-limited (not admitted)', async () => {
+    const outcome = await decideWithReason(
+      traderInput({
+        debate: debateResult({
+          direction: 'neutral',
+          converged: false,
+          rounds_completed: 0,
+          rate_limited: { reason: 'model rate limit' },
+        }),
+      }),
+    );
+
+    expect(outcome.decision_class).toBe('could_not_decide');
+  });
+
+  it('classifies a holding refusal as declined_on_signal when the debate genuinely did not converge', async () => {
+    const outcome = await decideWithReason(
+      traderInput({
+        debate: debateResult({ direction: 'bullish', converged: false }),
+        positionState: async () => [openPosition()],
+      }),
+    );
+
+    expect(outcome.skip_reason).toBe('holding_neutral_or_non_converged');
+    expect(outcome.decision_class).toBe('declined_on_signal');
+  });
+
+  it('classifies a holding refusal as could_not_decide when the non-convergence is a timeout', async () => {
+    const outcome = await decideWithReason(
+      traderInput({
+        debate: debateResult({
+          direction: 'bullish',
+          converged: false,
+          rounds_completed: 0,
+          timed_out: { budget_ms: 8_000, elapsed_ms: 8_050 },
+        }),
+        positionState: async () => [openPosition()],
+      }),
+    );
+
+    expect(outcome.skip_reason).toBe('holding_neutral_or_non_converged');
+    expect(outcome.decision_class).toBe('could_not_decide');
+  });
+
+  it('classifies a below-conviction-floor decline as could_not_decide when the entry debate is a degraded partial', async () => {
+    // A starved debate on a FLAT instrument never reaches
+    // `neutral_direction_while_flat`: a timed-out debate with
+    // `rounds_completed > 0` can hand back a non-neutral `partial.direction`
+    // (`latency-budget.ts`), and `routeDecision`'s flat branch has no
+    // `converged` check — it routes straight to `buildBracket`, which reads
+    // `debate.confidence` next. Without checking the debate's health at every
+    // `declined_on_signal` reason, this row would read as the Trader having
+    // genuinely declined a low-conviction signal, when the debate that
+    // produced the confidence figure never finished.
+    const outcome = await decideWithReason(
+      traderInput({
+        debate: debateResult({
+          direction: 'bullish',
+          confidence: 0.1,
+          converged: false,
+          rounds_completed: 1,
+          timed_out: { budget_ms: 8_000, elapsed_ms: 8_050 },
+        }),
+      }),
+    );
+
+    expect(outcome.skip_reason).toBe('below_conviction_floor');
+    expect(outcome.decision_class).toBe('could_not_decide');
+  });
+
+  it('classifies session_closing as declined_on_signal even when the debate is degraded', async () => {
+    // Second-pass review of #1109's fix: unlike `below_conviction_floor`
+    // above, `session_closing` fires purely off `withinFlattenWindow`'s
+    // clock/calendar read — it would fire identically against a fully
+    // converged debate — so a starved debate must not flip it to
+    // `could_not_decide` the way a genuine `declined_on_signal` reason does.
+    // Reachable because `below_conviction_floor` is checked first: this needs
+    // a confidence at or above the floor inside the flatten window.
+    const outcome = await decideWithReason(
+      traderInput({
+        clock: new ManualClock(new Date('2026-07-15T19:56:00Z')),
+        debate: debateResult({
+          direction: 'bullish',
+          converged: false,
+          rounds_completed: 1,
+          timed_out: { budget_ms: 8_000, elapsed_ms: 8_050 },
+        }),
+      }),
+    );
+
+    expect(outcome.skip_reason).toBe('session_closing');
+    expect(outcome.decision_class).toBe('declined_on_signal');
+  });
+
+  it('carries the compared value and the threshold on a conviction-floor decline', async () => {
+    const outcome = await decideWithReason(
+      traderInput({ debate: debateResult({ confidence: 0.1 }) }),
+    );
+
+    expect(outcome.skip_reason).toBe('below_conviction_floor');
+    expect(outcome.decision_class).toBe('declined_on_signal');
+    expect(outcome.reason_detail).toEqual({
+      compared_value: 0.1,
+      threshold: DEFAULT_TRADER_CONFIG.conviction_floor,
+    });
+  });
+
+  it('carries the compared value and the threshold on a below-minimum-notional decline', async () => {
+    const outcome = await decideWithReason(
+      traderInput({ config: configWith({ min_viable_notional: 1_000_000 }) }),
+    );
+
+    expect(outcome.skip_reason).toBe('below_min_notional');
+    // A near-miss and a decisive refusal both read `below_min_notional`; only
+    // the compared value tells them apart.
+    expect(outcome.reason_detail).toEqual({
+      compared_value: EXPECTED_SIZE * ENTRY_PRICE,
+      threshold: 1_000_000,
+    });
+  });
+
+  it('carries the compared value and the threshold on a scale-in conviction-delta decline', async () => {
+    const outcome = await decideWithReason(
+      traderInput({
+        debate: debateResult({ confidence: 0.6 }),
+        positionState: async () => [openPosition({ conviction: 0.6 })],
+      }),
+    );
+
+    expect(outcome.skip_reason).toBe('scale_in_conviction_delta_not_met');
+    expect(outcome.reason_detail).toEqual({
+      compared_value: 0.6 - 0.6,
+      threshold: DEFAULT_TRADER_CONFIG.scale_in_conviction_delta,
+    });
+  });
+
+  it('carries no reason_detail on a skip that has no threshold to compare', async () => {
+    // `atr_not_finite` (unlike `atr_insufficient_bars`, below) has nothing
+    // configured to compare against — a non-finite ATR on a full window is
+    // corrupt bar data, not a value read against a threshold.
+    const corrupt = bars(15, 2).map((bar, index) =>
+      index === 7 ? { ...bar, high: Number.NaN } : bar,
+    );
+
+    const outcome = await decideWithReason(
+      traderInput({ marketData: new FixtureMarketData(corrupt) }),
+    );
+
+    expect(outcome.skip_reason).toBe('atr_not_finite');
+    expect(outcome.reason_detail).toBeNull();
+    // Both ATR failures classify as `input_unusable` (they are the Trader's
+    // own priced input, not a debate read) — but only `atr_insufficient_bars`
+    // (below) carries a `reason_detail`. That contrast, not `decision_class`
+    // alone, is what lets an operator tell this corrupt-data row apart from
+    // the benign warm-up one without pattern-matching `skip_reason` strings.
+    expect(outcome.decision_class).toBe('input_unusable');
+  });
+
+  it('carries the compared value and the threshold on an insufficient-bars decline', async () => {
+    // #1109: `minimumBarsFor(spec)` derives from the configured
+    // `atr_lookback`, so this is a fourth numeric-gate site — "2 bars short"
+    // and "13 bars short" must not read as the same row.
+    const outcome = await decideWithReason(
+      traderInput({ marketData: new FixtureMarketData(bars(2, 2)) }),
+    );
+
+    expect(outcome.skip_reason).toBe('atr_insufficient_bars');
+    expect(outcome.reason_detail).toEqual({
+      compared_value: 2,
+      threshold: minimumBarsFor(
+        atrIndicatorSpec(DEFAULT_TRADER_CONFIG.atr_lookback, DEFAULT_TRADER_CONFIG.atr_timeframe),
+      ),
+    });
+    // Pinned `input_unusable` deliberately, not `could_not_decide`: this is a
+    // benign warm-up/data-gap case (#475), but folding it into
+    // `could_not_decide` would corrupt that class's #1109 acceptance-criterion
+    // count (pinned to #1080's 41 debate timeouts) with routine warm-up ticks.
+    // See `TraderDecisionClass`'s doc for the full argument; `reason_detail`
+    // above is the row-level signal that this is the benign case, not the
+    // class.
+    expect(outcome.decision_class).toBe('input_unusable');
+  });
+
+  it('classifies a data-quality skip as input_unusable, not declined_on_signal', async () => {
+    const outcome = await decideWithReason(
+      traderInput({
+        debate: debateResult({ direction: 'bearish' }),
+        positionState: async () => [
+          openPosition({ side: 'buy', filled_size: 0, order_state: 'submitted' }),
+        ],
+      }),
+    );
+
+    expect(outcome.skip_reason).toBe('exit_no_filled_size');
+    expect(outcome.decision_class).toBe('input_unusable');
+  });
+
+  it('reports no decision_class and no reason_detail when an order was produced', async () => {
+    const outcome = await decideWithReason(traderInput());
+
+    expect(outcome.intent).not.toBeNull();
+    expect(outcome.decision_class).toBeNull();
+    expect(outcome.reason_detail).toBeNull();
+  });
+});
+
+/**
  * The Trader's exit-only entry point (#743) — what the tick path runs 29 of
  * every 30 passes. `ExitCheckInput` carries no `debate` and no views by
  * construction; everything asserted here must be reachable from position
@@ -2062,6 +2323,20 @@ describe('checkExitsWithReason — the tick-path exit entry point (#743)', () =>
 
     expect(outcome.intent).toBeNull();
     expect(outcome.skip_reason).toBe('no_open_position');
+    expect(outcome.decision_class).toBe('declined_on_signal');
+  });
+
+  it('classifies exit_no_filled_size as input_unusable on the tick path (#1109)', async () => {
+    const outcome = await checkExitsWithReason(
+      exitInput({
+        positionState: async () => [
+          openPosition({ side: 'buy', filled_size: 0, order_state: 'submitted' }),
+        ],
+      }),
+    );
+
+    expect(outcome.skip_reason).toBe('exit_no_filled_size');
+    expect(outcome.decision_class).toBe('input_unusable');
   });
 
   it('skips with signal_still_supports_position when holding outside the window on a live signal — "flat" and "waiting" stay distinguishable', async () => {

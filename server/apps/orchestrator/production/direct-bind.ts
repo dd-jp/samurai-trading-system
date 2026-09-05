@@ -324,49 +324,50 @@ export function buildTraderSteps(deps: TraderStepDeps): {
     } catch (error) {
       snapshotError = error;
     }
-    const { intent, skip_reason, atr, diagnostics } = await decideWithReason({
-      trace_id,
-      instrument,
-      debate,
-      clock,
-      // #753. Conditional spread under `exactOptionalPropertyTypes`: omitted
-      // rather than passed as `undefined` on the live bind, which is the
-      // pre-#753 behaviour and the value `TraderInput.arm` defaults to.
-      ...(deps.arm === undefined ? {} : { arm: deps.arm }),
-      marketData: deps.marketData,
-      // #511: bounded by the declared capital ceiling on a live run, verbatim
-      // portfolio equity everywhere else.
-      //
-      // #847: either the STRICT whole-book equity or the strict read's own
-      // throw — never a partial figure. A degraded view omits a held
-      // instrument, and every exposure cap reads an absent instrument as ZERO
-      // exposure, so sizing against one would silently over-size.
-      equity: async () => {
-        if (snapshot === null) throw snapshotError;
-        return sizingEquity(snapshot.portfolio.equity, deps.capitalCeilingUsd);
-      },
-      config: deps.config,
-      positionState: deps.getOpenPositions,
-      // #568: the same store the lots came from, so the exit the Trader sizes
-      // and the exit `executeExit` validates are computed off ONE fill record.
-      exitFillSizes: deps.getExitFillSizes,
-      setupStore: deps.setupStore,
-      // #668: the same pair every other session-boundary consumer reads (the
-      // daily-PnL boundary #331/#332, the volatility reading #386), threaded
-      // through rather than rebuilt — two literals would be two calendars and
-      // two places for an override to be applied to only one.
-      sessionCalendars: deps.sessionCalendars,
-      // #826. Wired on BOTH trader binds — the decision path can reach the
-      // flatten too (`routeDecision`'s holding branch), so a hook on only the
-      // tick path would go quiet for exactly the exits a debate bar decides.
-      onUnpricedFlatten: (report) =>
-        reportExitValuationDegraded(
-          deps,
-          'trader',
-          { trace_id, instrument, clock },
-          { unvalued_instruments: [report.instrument], reason: report.reason },
-        ),
-    });
+    const { intent, skip_reason, decision_class, reason_detail, atr, diagnostics } =
+      await decideWithReason({
+        trace_id,
+        instrument,
+        debate,
+        clock,
+        // #753. Conditional spread under `exactOptionalPropertyTypes`: omitted
+        // rather than passed as `undefined` on the live bind, which is the
+        // pre-#753 behaviour and the value `TraderInput.arm` defaults to.
+        ...(deps.arm === undefined ? {} : { arm: deps.arm }),
+        marketData: deps.marketData,
+        // #511: bounded by the declared capital ceiling on a live run, verbatim
+        // portfolio equity everywhere else.
+        //
+        // #847: either the STRICT whole-book equity or the strict read's own
+        // throw — never a partial figure. A degraded view omits a held
+        // instrument, and every exposure cap reads an absent instrument as ZERO
+        // exposure, so sizing against one would silently over-size.
+        equity: async () => {
+          if (snapshot === null) throw snapshotError;
+          return sizingEquity(snapshot.portfolio.equity, deps.capitalCeilingUsd);
+        },
+        config: deps.config,
+        positionState: deps.getOpenPositions,
+        // #568: the same store the lots came from, so the exit the Trader sizes
+        // and the exit `executeExit` validates are computed off ONE fill record.
+        exitFillSizes: deps.getExitFillSizes,
+        setupStore: deps.setupStore,
+        // #668: the same pair every other session-boundary consumer reads (the
+        // daily-PnL boundary #331/#332, the volatility reading #386), threaded
+        // through rather than rebuilt — two literals would be two calendars and
+        // two places for an override to be applied to only one.
+        sessionCalendars: deps.sessionCalendars,
+        // #826. Wired on BOTH trader binds — the decision path can reach the
+        // flatten too (`routeDecision`'s holding branch), so a hook on only the
+        // tick path would go quiet for exactly the exits a debate bar decides.
+        onUnpricedFlatten: (report) =>
+          reportExitValuationDegraded(
+            deps,
+            'trader',
+            { trace_id, instrument, clock },
+            { unvalued_instruments: [report.instrument], reason: report.reason },
+          ),
+      });
 
     // Written for a null intent too (#328). `TickOutcome.final_stage` records
     // where a tick stopped and never why, and "why did nothing trade for six
@@ -389,6 +390,12 @@ export function buildTraderSteps(deps: TraderStepDeps): {
       // remains what distinguishes "sized then rejected" from "never reached
       // sizing".
       skip_reason,
+      // #1109. Distinguishes "the debate said no" from "the debate produced
+      // nothing usable" for the same `skip_reason` string — see
+      // `TraderDecisionClass`'s docblock for the full three-way split and
+      // migration 0042 for why it lands as two typed columns rather than one.
+      decision_class,
+      reason_detail,
       sizing: intent?.metadata.sizing ?? null,
       cosine_precedent: intent?.metadata.cosine_precedent ?? null,
       // Real since #475. The column has existed since migration 0016 and was
@@ -470,6 +477,8 @@ export function buildTraderSteps(deps: TraderStepDeps): {
         intent_type: intent.intent_type,
         exit_reason: intent.metadata.exit_reason ?? null,
         skip_reason: null,
+        decision_class: null,
+        reason_detail: null,
         sizing: intent.metadata.sizing,
         cosine_precedent: intent.metadata.cosine_precedent,
         atr: null,

@@ -20,7 +20,11 @@ import {
 } from '../../pipeline/debate-engine/index.js';
 import { SimulatedBrokerAdapter, SqliteExecutionStore } from '../../pipeline/execution/index.js';
 import type { DailyMetricsSample, FeedbackConfig } from '../../pipeline/feedback-loop/index.js';
-import { SqliteTuningStore } from '../../pipeline/feedback-loop/index.js';
+import {
+  DEFAULT_ARM_COMPARISON_WINDOW_MS,
+  nextBoundary,
+  SqliteTuningStore,
+} from '../../pipeline/feedback-loop/index.js';
 import type {
   BenchmarkObservation,
   BenchmarkSeriesSource,
@@ -2627,6 +2631,20 @@ describe('buildProductionOrchestrator', () => {
   beforeEach(() => {
     db = openSharedStore(':memory:');
     vi.useFakeTimers();
+    // #1110: `scheduleFeedbackCycle`'s boundary math runs on `Date.now()`,
+    // deliberately independent of the injected (often-frozen) `clock` — see
+    // that function's DESIGN DECISION 1 comment. Left unpinned,
+    // `vi.useFakeTimers()` starts the faked clock at the REAL wall-clock
+    // instant the test happened to run at, so a UTC-day/interval boundary
+    // could fall anywhere inside a short `advanceTimersByTimeAsync` window —
+    // any test asserting an exact feedback-cycle fire count would pass or
+    // fail depending on the real second it ran in. `START` is exactly
+    // divisible by 1_000ms, so pinning to it puts a boundary AT `START`
+    // itself (the virgin-store catch-up fires immediately, at t=0) with
+    // every later one landing on a clean +1_000ms mark — making every fire
+    // count asserted in this file reproducible regardless of wall-clock time
+    // at test-run.
+    vi.setSystemTime(START);
   });
 
   afterEach(() => {
@@ -2972,7 +2990,11 @@ describe('buildProductionOrchestrator', () => {
     await vi.advanceTimersByTimeAsync(2_000);
 
     const cycleEntries = logger.entries.filter((entry) => entry.trace_id === 'feedback-cycle');
-    expect(cycleEntries).toHaveLength(2);
+    // 3, not 2: #1110 makes a virgin schedule fire on `start()` itself (the
+    // bug it fixes is exactly "a restarted process never accumulates a full
+    // interval of uptime"), then two more at the 1s-interval boundaries
+    // `advanceTimersByTimeAsync(2_000)` crosses.
+    expect(cycleEntries).toHaveLength(3);
 
     // No `metrics` block, so the kill-line detector is still inert — and says
     // so at startup rather than leaving it to be discovered (#327).
@@ -2989,7 +3011,10 @@ describe('buildProductionOrchestrator', () => {
 
     await orchestrator.stop();
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(logger.entries.filter((entry) => entry.trace_id === 'feedback-cycle')).toHaveLength(2);
+    // Still 3 — `stop()`'s `clearTimeout` actually cancels the pending
+    // re-arm, matching the count asserted above rather than the pre-#1110
+    // count of 2.
+    expect(logger.entries.filter((entry) => entry.trace_id === 'feedback-cycle')).toHaveLength(3);
   });
 
   /**
@@ -3053,7 +3078,11 @@ describe('buildProductionOrchestrator', () => {
       const computed = logger.entries.filter(
         (entry) => entry.message === 'arm comparison computed',
       );
-      expect(computed).toHaveLength(1);
+      // 2 log lines, not 1: #1110's virgin-store catch-up fires once on
+      // `start()`, then the 1s boundary fires again inside the 1_000ms
+      // advance below. Both log — logging happens on every cycle regardless
+      // of whether the DB row changes.
+      expect(computed).toHaveLength(2);
       // Both arms, both columns — a log line carrying a return without its
       // drawdown would re-open doc 12 D4 at the surface.
       const payload = computed[0]?.payload as {
@@ -3063,6 +3092,12 @@ describe('buildProductionOrchestrator', () => {
       expect(payload.live.max_drawdown_pct).toBeTypeOf('number');
       expect(payload.control.max_drawdown_pct).toBeTypeOf('number');
 
+      // Still 1 ROW: `stubConfig`'s default `clock` is a `SimulatedClock`
+      // frozen at `START` (never advanced by this test), so both cycles
+      // compute the identical `computed_at` and `INSERT OR REPLACE`
+      // (migration 0034) collapses them — this collapsing was already the
+      // suite's behavior pre-#1110, not something the restart-durable
+      // schedule changes.
       const rows = db.prepare('SELECT diverged FROM arm_comparison_samples').all() as {
         diverged: number;
       }[];
@@ -3084,7 +3119,9 @@ describe('buildProductionOrchestrator', () => {
       await vi.advanceTimersByTimeAsync(1_000);
       await orchestrator.stop();
 
-      expect(postArmDivergenceAlert).toHaveBeenCalledTimes(1);
+      // 2, not 1 — see the boot-catch-up comment above; the alert channel is
+      // called per cycle, unaffected by the store's `INSERT OR REPLACE`.
+      expect(postArmDivergenceAlert).toHaveBeenCalledTimes(2);
       const alert = postArmDivergenceAlert.mock.calls[0]?.[0] as {
         comparison: {
           live: { return_pct: number; max_drawdown_pct: number };
@@ -3218,9 +3255,11 @@ describe('buildProductionOrchestrator', () => {
         expect(row.window_to).toBe(armWindows[0]?.window_to);
       }
 
+      // 2, not 1 — #1110's boot catch-up fires once immediately, then the 1s
+      // boundary fires again inside the advance above; each cycle logs.
       expect(
         logger.entries.filter((entry) => entry.message === 'outside benchmarks computed'),
-      ).toHaveLength(1);
+      ).toHaveLength(2);
     });
   });
 
@@ -3365,10 +3404,553 @@ describe('buildProductionOrchestrator', () => {
       // column.
       expect(rows.find((row) => row.benchmark === 'spy')?.max_drawdown_pct).toBeGreaterThan(0);
 
+      // 2, not 1 — #1110's boot catch-up fires once immediately, then the 1s
+      // boundary fires again inside the advance above; each cycle logs.
       expect(
         logger.entries.filter((entry) => entry.message === 'outside benchmarks computed'),
-      ).toHaveLength(1);
+      ).toHaveLength(2);
     });
+  });
+
+  /**
+   * #1110 — see `scheduleFeedbackCycle`'s doc comment (production.ts) for
+   * what this fixes and why.
+   *
+   * These drive the real composition root through repeated boot/stop cycles
+   * on the SAME store (`db` is never recreated between them, only the
+   * orchestrator instance is — the honest shape of a process restart) and
+   * assert directly on `arm_comparison_samples`, the table #1110 reports as
+   * permanently empty. `scheduleFeedbackCycle`'s own doc comment carries the
+   * recorded design decisions this exercises end to end rather than merely
+   * by construction.
+   */
+  describe('the daily cycle survives process restarts (#1110)', () => {
+    /**
+     * `clock` is a parameter, not a default, because these cases need it to
+     * ADVANCE in lockstep with the fake timers driving the schedule (see
+     * `advanceBoth` below) — the opposite of every other case in this file,
+     * which relies on `stubConfig`'s frozen default specifically so repeat
+     * fires collapse to one row via `INSERT OR REPLACE`. Collapsing is
+     * exactly what these cases must NOT do: distinct rows per day are the
+     * property under test.
+     */
+    function restartDurableConfig(
+      clock: SimulatedClock,
+      intervalMs: number,
+      overrides: Partial<ProductionConfig> = {},
+    ): StubConfig {
+      return stubConfig(db, {
+        clock,
+        tickIntervalMs: 48 * 60 * 60 * 1_000,
+        heartbeatIntervalMs: 48 * 60 * 60 * 1_000,
+        fillPollIntervalMs: NO_FILL_POLL_MS,
+        traderConfig: {
+          ...DEFAULT_TRADER_CONFIG,
+          flatten_before_close_ms: MIN_TICKS_INSIDE_FLATTEN_WINDOW * 48 * 60 * 60 * 1_000,
+        },
+        feedback: {
+          intervalMs,
+          config: paperStartingProfile('paper').feedback?.config as FeedbackConfig,
+        },
+        ...overrides,
+      });
+    }
+
+    function sampleRows(): { computed_at: string; window_from: string; window_to: string }[] {
+      return db
+        .prepare(
+          'SELECT computed_at, window_from, window_to FROM arm_comparison_samples ORDER BY computed_at',
+        )
+        .all() as { computed_at: string; window_from: string; window_to: string }[];
+    }
+
+    /**
+     * Scoped to `key = 'default'` (the COMPLETED boundary) — not a bare
+     * `SELECT`, because pass-2's `key = 'attempt'` row (finding 1) can now
+     * share this table, and an unscoped query would return whichever of the
+     * two rows SQLite happens to return first.
+     */
+    function feedbackScheduleLastBoundary(): string | null {
+      const row = db
+        .prepare("SELECT last_boundary FROM feedback_cycle_schedule WHERE key = 'default'")
+        .get() as { last_boundary: string } | undefined;
+      return row?.last_boundary ?? null;
+    }
+
+    /** Scoped to `key = 'attempt'` — see `feedbackScheduleLastBoundary` above. */
+    function feedbackScheduleAttemptedBoundary(): string | null {
+      const row = db
+        .prepare("SELECT last_boundary FROM feedback_cycle_schedule WHERE key = 'attempt'")
+        .get() as { last_boundary: string } | undefined;
+      return row?.last_boundary ?? null;
+    }
+
+    /**
+     * Moves BOTH time sources #1110 deliberately keeps separate
+     * (`scheduleFeedbackCycle`'s DESIGN DECISION 1 comment): the fake
+     * `Date`/timers the scheduler reads, and the injected `clock` the
+     * cycle's own business timestamps (`computed_at`, the window) read. They
+     * are independent by design and nothing keeps them in lockstep
+     * automatically — a real process needs no such helper because `clock` IS
+     * `SystemClock` there, so this exists only because the test wants
+     * distinct, dated windows instead of the frozen-clock collapse every
+     * other case in this file relies on.
+     */
+    async function advanceBoth(clock: SimulatedClock, ms: number): Promise<void> {
+      clock.advanceTo(new Date(clock.now().getTime() + ms));
+      await vi.advanceTimersByTimeAsync(ms);
+    }
+
+    /**
+     * `advanceBoth`, chunked at every `boundaryMs` boundary in between.
+     *
+     * `scheduleFeedbackCycle` only ever fires (past the synchronous boot
+     * catch-up, which needs no help from this) at an EXACT
+     * `currentBoundary` — `nextBoundary`'s delay is computed to land there
+     * precisely — so the only place `clock` can be read mid-advance is
+     * exactly on a boundary. Chunking there means `clock` is never preset
+     * past the instant a fire can actually happen: unlike `advanceBoth`,
+     * which sets `clock` to the FAR end of the whole step before any of it
+     * elapses (fine when nothing reads `clock` mid-step, wrong here since a
+     * boundary fire in the middle would read tomorrow's clock value for
+     * today's boundary).
+     */
+    async function advanceAcrossBoundaries(
+      clock: SimulatedClock,
+      ms: number,
+      boundaryMs: number,
+    ): Promise<void> {
+      let remaining = ms;
+      while (remaining > 0) {
+        const now = clock.now().getTime();
+        const step = Math.min(remaining, nextBoundary(clock.now(), boundaryMs).getTime() - now);
+        await advanceBoth(clock, step);
+        remaining -= step;
+      }
+    }
+
+    it('boots into an immediate catch-up, a sub-interval restart does not re-fire, and an over-interval restart fires exactly once', async () => {
+      const clock = new SimulatedClock(START);
+      const intervalMs = 1_000;
+
+      // Boot: a virgin schedule/store catches up immediately — #1110's bug
+      // was precisely that this never happened on its own.
+      const first = buildProductionOrchestrator(restartDurableConfig(clock, intervalMs));
+      await first.start();
+      expect(sampleRows()).toHaveLength(1);
+      await first.stop();
+
+      // Sub-interval restart: well under the 1_000ms interval, so the
+      // current boundary is unchanged and already stamped by `first` — no
+      // second row. Two restarts in a row, to prove "repeated restarts
+      // inside one period do not produce repeated cycles for that period"
+      // rather than merely "one restart doesn't."
+      await advanceBoth(clock, 200);
+      const second = buildProductionOrchestrator(restartDurableConfig(clock, intervalMs));
+      await second.start();
+      expect(sampleRows()).toHaveLength(1);
+      await second.stop();
+
+      await advanceBoth(clock, 200);
+      const third = buildProductionOrchestrator(restartDurableConfig(clock, intervalMs));
+      await third.start();
+      expect(sampleRows()).toHaveLength(1);
+      await third.stop();
+
+      // Over-interval restart: down for 10 whole intervals (10_000ms against
+      // a 1_000ms interval). A burst-fire bug would produce 10 catch-up rows
+      // for the boundaries missed; DESIGN DECISION 2 caps catch-up at
+      // exactly one.
+      await advanceBoth(clock, 10_000);
+      const fourth = buildProductionOrchestrator(restartDurableConfig(clock, intervalMs));
+      await fourth.start();
+      expect(sampleRows()).toHaveLength(2);
+      await fourth.stop();
+    });
+
+    it('one sample per day, each carrying its own window, over a multi-day run restarted more often than the interval', async () => {
+      const DAY_MS = 24 * 60 * 60 * 1_000;
+      // A UTC-midnight-aligned start, so `currentBoundary` lands exactly on
+      // calendar days — the same alignment DESIGN DECISION 1 gets for free
+      // in production from epoch-anchoring.
+      const DAY0 = new Date('2026-08-01T00:00:00.000Z');
+      vi.setSystemTime(DAY0);
+      const clock = new SimulatedClock(DAY0);
+
+      // 5h, not a divisor of the 24h interval: every restart lands at a
+      // different phase of the day, so no restart boundary can coincide with
+      // a day boundary and leave the "did the boundary check happen just
+      // before or just after the restart" case unexercised.
+      const RESTART_GAP_MS = 5 * 60 * 60 * 1_000;
+      // 15 restarts * 5h = 75h — enough to cross all three of the next
+      // calendar days (at the 24h/48h/72h marks) while still restarting
+      // between every crossing, not just once per day.
+      const RESTARTS = 15;
+
+      for (let i = 0; i < RESTARTS; i += 1) {
+        const orchestrator = buildProductionOrchestrator(
+          restartDurableConfig(clock, DAY_MS, { logger: recordingLogger() }),
+        );
+        await orchestrator.start();
+
+        // Checked once, well before the first day boundary (20h elapsed,
+        // 4h short of the 24h mark): four restarts in, still exactly the
+        // one boot-catch-up row — proving the frequent restarts alone,
+        // absent an actual day boundary, produce nothing extra.
+        if (i === 3) {
+          expect(sampleRows()).toHaveLength(1);
+        }
+
+        await advanceAcrossBoundaries(clock, RESTART_GAP_MS, DAY_MS);
+        await orchestrator.stop();
+      }
+
+      const rows = sampleRows();
+      // One row for the initial boot (day 0) plus one for each of the three
+      // day boundaries the 75h run crossed — despite 15 separate restarts.
+      expect(rows).toHaveLength(4);
+
+      // Each row's own window: consecutive `window_to` values exactly one
+      // day apart, never merged and never skipped — spacing alone. Also
+      // `window_from` (#1110 finding 6): the arm comparison's window is a
+      // ROLLING `DEFAULT_ARM_COMPARISON_WINDOW_MS` lookback from `now`
+      // (`from = now - window_ms`, arm-comparison-cycle.ts), not a sliding
+      // window chained to the previous row's `window_to` — so the invariant
+      // finding 6 is actually after is that the span stays constant as
+      // `window_to` advances. A regression that pinned `window_from` to the
+      // run's start (cumulative windows instead of rolling ones) would still
+      // pass a `window_to`-only check, and cumulative windows would corrupt
+      // the #753 comparison silently, but a GROWING span here catches it.
+      for (let i = 1; i < rows.length; i += 1) {
+        const prevTo = new Date(rows[i - 1]?.window_to as string).getTime();
+        const currTo = new Date(rows[i]?.window_to as string).getTime();
+        const currFrom = new Date(rows[i]?.window_from as string).getTime();
+        expect(currTo - prevTo).toBe(DAY_MS);
+        expect(currTo - currFrom).toBe(DEFAULT_ARM_COMPARISON_WINDOW_MS);
+      }
+    });
+
+    it('a throwing schedule store still re-arms the timer, and a later boundary fires once the store recovers (finding 1)', async () => {
+      const clock = new SimulatedClock(START);
+      const intervalMs = 1_000;
+      const logger = recordingLogger();
+
+      const orchestrator = buildProductionOrchestrator(
+        restartDurableConfig(clock, intervalMs, { logger }),
+      );
+      // The boot catch-up runs with the table intact, so it is `start()`'s
+      // OWN startup-log read of `lastBoundary()` (a separate call site, not
+      // `runIfDue`) that this test must not disturb — sabotage happens only
+      // after `start()` returns.
+      await orchestrator.start();
+      expect(sampleRows()).toHaveLength(1);
+
+      // Sabotage the table: the NEXT scheduled `runIfDue` — armed by the
+      // boot catch-up's own `finally` — throws reading `lastBoundary()`
+      // instead of getting `null`/a real boundary, simulating a transient
+      // `SQLITE_BUSY` from the shared WAL file the service-api process also
+      // reads.
+      db.exec('DROP TABLE feedback_cycle_schedule');
+      await advanceBoth(clock, intervalMs);
+
+      // Before this fix, an uncaught throw here left the re-arm — the
+      // function's last statement — never reached, and the cycle never fired
+      // again for the rest of the process's life, silently.
+      expect(
+        logger.entries.filter(
+          (entry) =>
+            entry.trace_id === 'feedback-cycle' &&
+            entry.level === 'error' &&
+            entry.message.includes('feedback cycle pass failed'),
+        ).length,
+      ).toBeGreaterThanOrEqual(1);
+      expect(sampleRows()).toHaveLength(1);
+
+      // The store recovers (a transient failure clearing on its own) and the
+      // timer — which DID re-arm despite the throw — fires the next boundary.
+      db.exec(
+        'CREATE TABLE feedback_cycle_schedule (key TEXT PRIMARY KEY, last_boundary TEXT NOT NULL, updated_at TEXT NOT NULL)',
+      );
+      await advanceBoth(clock, intervalMs);
+
+      expect(sampleRows().length).toBeGreaterThanOrEqual(2);
+      expect(feedbackScheduleLastBoundary()).not.toBeNull();
+
+      await orchestrator.stop();
+    });
+
+    it('a throwing schedule store at the startup-log call site does not crash start() — it logs and lets the guarded runIfDue read decide', async () => {
+      const clock = new SimulatedClock(START);
+      const intervalMs = 1_000;
+      const logger = recordingLogger();
+
+      const orchestrator = buildProductionOrchestrator(
+        restartDurableConfig(clock, intervalMs, { logger }),
+      );
+
+      // Sabotage BEFORE `start()`, not after: this is `start()`'s own direct
+      // `lastBoundary()` call for the startup log (production.ts, just above
+      // `scheduleFeedbackCycle`), a separate call site from `runIfDue`'s
+      // guarded one. Before the fix this line threw an uncaught
+      // `SqliteError` straight out of `start()` — dropping the table after
+      // `start()` returns (as "finding 1" above does) never exercises it,
+      // because by then the startup log has already read successfully.
+      db.exec('DROP TABLE feedback_cycle_schedule');
+
+      await expect(orchestrator.start()).resolves.toBeDefined();
+
+      // The startup-log read failure is reported on its own, distinct from
+      // `runIfDue`'s "feedback cycle pass failed" message.
+      expect(
+        logger.entries.filter(
+          (entry) =>
+            entry.trace_id === 'startup' &&
+            entry.level === 'error' &&
+            entry.message.includes('could not read the feedback cycle schedule store at startup'),
+        ).length,
+      ).toBe(1);
+
+      // `runIfDue` runs synchronously inside `start()` too (same table, same
+      // failure) — it must be guarded the same way, not left to throw just
+      // because the startup log already swallowed its own copy of the error.
+      expect(
+        logger.entries.filter(
+          (entry) =>
+            entry.trace_id === 'feedback-cycle' &&
+            entry.level === 'error' &&
+            entry.message.includes('feedback cycle pass failed'),
+        ).length,
+      ).toBeGreaterThanOrEqual(1);
+
+      // Neither call site could read the store, so no cycle ran yet — the
+      // operator-facing `info` line must not claim a catch-up that did not
+      // happen (the read failed, so `feedbackDueNow` cannot be trusted).
+      expect(sampleRows()).toHaveLength(0);
+      const feedbackScheduleInfoLines = logger.entries.filter(
+        (entry) =>
+          entry.trace_id === 'startup' &&
+          entry.stage === 'feedback-loop' &&
+          entry.level === 'info' &&
+          entry.message.includes('daily feedback cycle'),
+      );
+      expect(feedbackScheduleInfoLines).toHaveLength(1);
+      expect(feedbackScheduleInfoLines[0]?.message).toContain('UNKNOWN');
+      expect(feedbackScheduleInfoLines[0]?.message).not.toContain(
+        'catching up on the current boundary',
+      );
+      expect(feedbackScheduleInfoLines[0]?.payload).toMatchObject({
+        stored_boundary_read_failed: true,
+      });
+
+      // The store recovers and the timer — which still re-armed despite both
+      // failures — catches up on its next fire.
+      db.exec(
+        'CREATE TABLE feedback_cycle_schedule (key TEXT PRIMARY KEY, last_boundary TEXT NOT NULL, updated_at TEXT NOT NULL)',
+      );
+      await advanceBoth(clock, intervalMs);
+
+      expect(sampleRows()).toHaveLength(1);
+      expect(feedbackScheduleLastBoundary()).not.toBeNull();
+
+      await orchestrator.stop();
+    });
+
+    /** The dial `dialAdjustmentValues` and the finding-1/5 test below tune. */
+    const RISK_DIAL_NAME = 'max_position_size_fraction_of_equity';
+    const RISK_DIAL_SHIPPED = 0.05;
+
+    /**
+     * `to_value`s recorded for one risk-threshold dial, oldest first — for
+     * counting steps. Scoped to `dial_type = 'risk_threshold'` too, not just
+     * `dial_name`, since an analyst weight and a risk threshold could share a
+     * name and this helper must not silently mix their rows.
+     */
+    function dialAdjustmentValues(dialName: string): number[] {
+      return (
+        db
+          .prepare(
+            "SELECT to_value FROM dial_adjustments WHERE dial_type = 'risk_threshold' AND dial_name = ? ORDER BY id",
+          )
+          .all(dialName) as { to_value: number }[]
+      ).map((row) => row.to_value);
+    }
+
+    /**
+     * A restart-durable config whose feedback cycle has real, unconditional
+     * tuning work to do — a `risk_threshold` proposal, rather than the bare
+     * zero-trade cycle every other case in this describe block uses. Needed
+     * to observe whether a restart-driven retry applies the guardrail-capped
+     * step a SECOND time (finding 1), which a zero-trade cycle can never show
+     * since it has no dial to move.
+     */
+    function restartDurableConfigWithDial(
+      clock: SimulatedClock,
+      intervalMs: number,
+      overrides: Partial<ProductionConfig> = {},
+    ): StubConfig {
+      return restartDurableConfig(clock, intervalMs, {
+        riskConfig: {
+          [RISK_DIAL_NAME]: RISK_DIAL_SHIPPED,
+        } as ProductionConfig['riskConfig'],
+        feedback: {
+          intervalMs,
+          config: paperStartingProfile('paper').feedback?.config as FeedbackConfig,
+          // Target the dial's own floor (a quarter of `RISK_DIAL_SHIPPED`,
+          // `capDial` in paper-profile.ts) — far enough below the ceiling
+          // that two consecutive `max_step` moves both land short of it, so
+          // a double-apply is visible as two distinct `to_value`s rather than
+          // both moves being swallowed by the same floor clamp.
+          proposals: [
+            { kind: 'risk_threshold', name: RISK_DIAL_NAME, target: RISK_DIAL_SHIPPED * 0.25 },
+          ],
+        },
+        ...overrides,
+      });
+    }
+
+    it(
+      'records the boundary AFTER the cycle runs — a schedule-store write failure does not erase ' +
+        'the cycle work, and a restart does not re-run it a second time (finding 1 / finding 5)',
+      async () => {
+        const clock = new SimulatedClock(START);
+        const intervalMs = 1_000;
+        const logger = recordingLogger();
+
+        // Blocks writes to the COMPLETION row only (`key = 'default'`) — the
+        // attempt row (`key = 'attempt'`) still writes
+        // successfully, so `runIfDue` reaches `runFeedbackCycle` and only the
+        // trailing `recordBoundary` fails. Isolates the store call the
+        // ordering note above is about from the cycle's own (unrelated) work.
+        db.exec(`
+        CREATE TRIGGER block_schedule_write
+        BEFORE INSERT ON feedback_cycle_schedule
+        WHEN NEW.key = 'default'
+        BEGIN
+          SELECT RAISE(ABORT, 'simulated write failure');
+        END;
+      `);
+
+        const first = buildProductionOrchestrator(
+          restartDurableConfigWithDial(clock, intervalMs, { logger }),
+        );
+        await first.start();
+
+        // The cycle's own substantive work ran and persisted despite the
+        // trailing schedule write failing — proof `runFeedbackCycle` is called
+        // BEFORE `recordBoundary`, not gated behind a successful write. One
+        // guardrail-capped step applied: 0.05 - 0.005 = 0.045.
+        expect(sampleRows()).toHaveLength(1);
+        expect(dialAdjustmentValues(RISK_DIAL_NAME)).toEqual([0.045]);
+        expect(feedbackScheduleLastBoundary()).toBeNull();
+        expect(feedbackScheduleAttemptedBoundary()).not.toBeNull();
+        expect(
+          logger.entries.filter(
+            (entry) =>
+              entry.trace_id === 'feedback-cycle' &&
+              entry.level === 'error' &&
+              entry.message.includes('feedback cycle pass failed'),
+          ).length,
+        ).toBeGreaterThanOrEqual(1);
+        await first.stop();
+
+        // Restart with the write no longer blocked. The boundary was never
+        // stamped complete, so it is still "due" — but it WAS attempted, so
+        // the retry must not run `runFeedbackCycle` again (finding 1): doing
+        // so would apply the risk-threshold guardrail step a second time,
+        // 0.045 -> 0.04, silently doubling the per-cycle move the guardrail
+        // exists to cap. `clock` (not the wall-clock boundary check) advances
+        // a little, the way a restart's own elapsed time naturally would.
+        db.exec('DROP TRIGGER block_schedule_write');
+        clock.advanceTo(new Date(clock.now().getTime() + 500));
+        const secondLogger = recordingLogger();
+        const second = buildProductionOrchestrator(
+          restartDurableConfigWithDial(clock, intervalMs, { logger: secondLogger }),
+        );
+        await second.start();
+
+        // Still exactly one sample and one dial step — the retry recorded
+        // completion for the already-attempted boundary without re-running
+        // the cycle.
+        expect(sampleRows()).toHaveLength(1);
+        expect(dialAdjustmentValues(RISK_DIAL_NAME)).toEqual([0.045]);
+        expect(
+          secondLogger.entries.filter(
+            (entry) =>
+              entry.trace_id === 'feedback-cycle' &&
+              entry.level === 'warn' &&
+              entry.message.includes('already attempted'),
+          ),
+        ).toHaveLength(1);
+        expect(feedbackScheduleLastBoundary()).not.toBeNull();
+
+        await second.stop();
+      },
+    );
+
+    it('a stop() followed by a second start() on the SAME orchestrator re-arms the feedback cycle (#1110)', async () => {
+      const clock = new SimulatedClock(START);
+      const intervalMs = 1_000;
+      const orchestrator = buildProductionOrchestrator(restartDurableConfig(clock, intervalMs));
+
+      await orchestrator.start();
+      expect(sampleRows()).toHaveLength(1);
+      await orchestrator.stop();
+
+      // `stop()` sets `feedbackScheduleStopped = true`. Before pass-2's fix
+      // nothing ever reset it back to `false` — `scheduleFeedbackCycle`'s own
+      // `runIfDue` only checks it inside the `finally` AFTER a pass
+      // completes, so this SAME builder's second `start()` below would run
+      // its boot catch-up cycle once (unconditional on the flag) and then
+      // have the `finally` refuse to re-arm for anything after it — #1110's
+      // exact symptom through a third door, on a second `start()` rather
+      // than a fresh process.
+      await advanceBoth(clock, 10_000);
+      const beforeSecondStart = sampleRows().length;
+      await orchestrator.start();
+      // Boot catch-up on the second `start()`: `runIfDue`'s `try` body never
+      // reads `feedbackScheduleStopped` (only the `finally`, to decide
+      // re-arming), so this catch-up runs regardless of the reset above —
+      // this assertion would still pass even under the missing-reset
+      // regression. What actually discriminates that regression is the
+      // re-arm assertion below: without the reset, `stop()`'s stale `true`
+      // survives into this `finally` and blocks the timer from ever being
+      // armed again.
+      expect(sampleRows().length).toBeGreaterThan(beforeSecondStart);
+
+      // The re-arm, not just the boot catch-up: a normal fire past the
+      // second `start()` must still happen too — proven the same way, by an
+      // increase, not by an exact count that also depends on boundary phase.
+      const beforeNextTick = sampleRows().length;
+      await advanceBoth(clock, intervalMs);
+      expect(sampleRows().length).toBeGreaterThan(beforeNextTick);
+
+      await orchestrator.stop();
+    });
+
+    it.each([
+      [0, /FeedbackCycleConfig\.intervalMs must be positive, got 0/],
+      // `NaN <= 0` and `Infinity <= 0` are both `false`,
+      // so the bare `<= 0` guard let both through — `currentBoundary` then
+      // produced an Invalid Date and boot died at `.toISOString()` with a
+      // bare, unattributed `RangeError` instead of this named message.
+      [Number.NaN, /FeedbackCycleConfig\.intervalMs must be positive, got NaN/],
+      [Number.POSITIVE_INFINITY, /FeedbackCycleConfig\.intervalMs must be positive, got Infinity/],
+    ])(
+      'refuses to start with a non-finite or non-positive FeedbackCycleConfig.intervalMs ' +
+        '(%p), naming the cause (#1110)',
+      async (intervalMs, expectedMessage) => {
+        const clock = new SimulatedClock(START);
+        const orchestrator = buildProductionOrchestrator(restartDurableConfig(clock, intervalMs));
+
+        // Not a regression to soften: the plain `setInterval(fn, 0)` this
+        // schedule replaced would have hot-looped on the same bad config, so
+        // failing loudly at boot is strictly better. The fix is naming the
+        // cause instead of letting `cycle-schedule.ts`'s generic
+        // "intervalMs must be positive" surface with no mention of which
+        // config field produced it.
+        await expect(orchestrator.start()).rejects.toThrow(expectedMessage);
+      },
+    );
   });
 
   /**
@@ -3455,10 +4037,14 @@ describe('buildProductionOrchestrator', () => {
         logger.entries.filter((entry) => entry.message.includes('ProductionConfig.feedback')),
       ).toHaveLength(0);
 
-      // ...and the cycle really ran, rather than merely not warning.
+      // ...and the cycle really ran, rather than merely not warning. 2, not
+      // 1: #1110's boot catch-up fires immediately on a virgin store (START
+      // is midday, so the FIRST UTC-midnight boundary after boot falls ~12h
+      // in, well inside the 25h advance), then the wall-clock boundary fires
+      // once more.
       expect(
         logger.entries.filter((entry) => entry.message === 'daily feedback cycle complete'),
-      ).toHaveLength(1);
+      ).toHaveLength(2);
 
       await orchestrator.stop();
     });
@@ -3651,7 +4237,13 @@ describe('buildProductionOrchestrator', () => {
       const orchestrator = buildProductionOrchestrator(config);
 
       await orchestrator.start();
-      await vi.advanceTimersByTimeAsync(1_500);
+      // #1110: `start()` already ran the first cycle synchronously (a virgin
+      // schedule catches up immediately), so this case's single application
+      // is done before any advance. Held under the 1_000ms `intervalMs` so a
+      // second boundary — and a second, compounding loosening step — does
+      // not also fire; that scenario belongs to the restart/cadence tests,
+      // not to this one.
+      await vi.advanceTimersByTimeAsync(500);
 
       // THE assertion of #736, and the exact line this test used to assert the
       // negation of. Bounded to one `max_step`, not the 6,000 proposed.
@@ -3703,7 +4295,9 @@ describe('buildProductionOrchestrator', () => {
       const orchestrator = buildProductionOrchestrator(config);
 
       await orchestrator.start();
-      await vi.advanceTimersByTimeAsync(1_500);
+      // #1110: the boot cycle already ran inside `start()`; stay under the
+      // 1_000ms interval so a second cycle does not also fire.
+      await vi.advanceTimersByTimeAsync(500);
 
       expect(notifyLoosenApplied).toHaveBeenCalledTimes(1);
       expect(notifyLoosenApplied.mock.calls[0]?.[0]).toMatchObject({
@@ -3731,7 +4325,9 @@ describe('buildProductionOrchestrator', () => {
       });
 
       await orchestrator.start();
-      await vi.advanceTimersByTimeAsync(1_500);
+      // #1110: the boot cycle already ran inside `start()`; stay under the
+      // 1_000ms interval so a second cycle does not also fire.
+      await vi.advanceTimersByTimeAsync(500);
 
       expect(perCycle).toHaveBeenCalledTimes(1);
       expect(topLevel).not.toHaveBeenCalled();
@@ -3827,15 +4423,29 @@ describe('buildProductionOrchestrator', () => {
 
         await orchestrator.start();
 
-        // Seeded before the first cycle, for every analyst the root builds —
-        // including the two this debate never mentions.
+        // Seeded, then immediately cycled — not seeded-then-idle: #1110 makes
+        // a virgin schedule catch up inside `start()` itself, so by the time
+        // `start()` resolves the root has already seeded every analyst
+        // neutral (proven below by the 'analyst weight rows ready' log line's
+        // `seeded: [...]`) AND run the one cycle that had real evidence
+        // waiting for it. That the seed-then-tune ordering held (rather than
+        // the seed being skipped, or the cycle reading a not-yet-seeded row)
+        // is exactly what `technical` already having moved off its neutral
+        // seed demonstrates.
         expect(tuning.getAnalystWeights()).toEqual({
-          technical: 1,
+          technical: 1 + ONE_STEP,
           fundamental: 1,
           sentiment: 1,
         });
 
-        await vi.advanceTimersByTimeAsync(1_500);
+        // Held under the 1_000ms `intervalMs` so a second boundary — and a
+        // second, compounding attribution of the SAME frozen-clock window's
+        // trade — does not also fire; that compounding is real (the window is
+        // `(clock.now() − attribution_window_ms, clock.now()]` and this
+        // suite's `clock` never advances) but is a distinct property from the
+        // one this case tests, and is exercised by
+        // `does not reset a tuned weight when the process restarts` instead.
+        await vi.advanceTimersByTimeAsync(500);
 
         // THE assertion #371 exists for: a weight actually moved, off real
         // closed trades joined to a real debate log row.
@@ -3920,7 +4530,11 @@ describe('buildProductionOrchestrator', () => {
 
         const first = buildProductionOrchestrator(paperConfigWithFastCycle().config);
         await first.start();
-        await vi.advanceTimersByTimeAsync(1_500);
+        // #1110: `start()` already ran the boot catch-up cycle (step 1). Held
+        // under the 1_000ms `intervalMs` so a second boundary does not also
+        // fire here — the second step below is deliberately the SECOND
+        // process's own boundary crossing, not a second one from the first.
+        await vi.advanceTimersByTimeAsync(500);
         await first.stop();
 
         const tuning = new SqliteTuningStore(db, new SimulatedClock(START));
@@ -3945,8 +4559,12 @@ describe('buildProductionOrchestrator', () => {
         });
 
         // And the second process's cycle carries on from where the first
-        // stopped — a second step, not a repeat of the first.
-        await vi.advanceTimersByTimeAsync(1_500);
+        // stopped — a second step, not a repeat of the first. `second`'s own
+        // boot check (above) found the current boundary already stamped by
+        // `first`, so it waited for the NEXT boundary rather than firing
+        // immediately — this advance is exactly the remaining half of that
+        // 1_000ms interval.
+        await vi.advanceTimersByTimeAsync(500);
         expect(tuning.getAnalystWeights().technical).toBeCloseTo(1 + 2 * ONE_STEP, 10);
 
         await second.stop();
@@ -4046,7 +4664,10 @@ describe('buildProductionOrchestrator', () => {
       const orchestrator = buildProductionOrchestrator(config);
 
       await orchestrator.start();
-      await vi.advanceTimersByTimeAsync(1_500);
+      // #1110: `start()` already ran the boot catch-up cycle. Held under the
+      // 1_000ms `intervalMs` so a second boundary — and a second breach alert
+      // — does not also fire.
+      await vi.advanceTimersByTimeAsync(500);
 
       // The operator alert actually fired, through the real channel seam.
       expect(postBreachAlert).toHaveBeenCalledTimes(1);
@@ -4301,7 +4922,11 @@ describe('buildProductionOrchestrator', () => {
       const orchestrator = buildProductionOrchestrator(config);
 
       await orchestrator.start();
-      await vi.advanceTimersByTimeAsync(CYCLE_MS + 500);
+      // #1110: `start()` already ran the boot catch-up cycle. Held under
+      // `CYCLE_MS` so a second boundary — and a second refusal — does not
+      // also fire; this case is about ONE gate check, not the cadence
+      // ('logs the refusal once per CYCLE' below covers repeats).
+      await vi.advanceTimersByTimeAsync(500);
 
       // The gate refused, and said why — with the count, so an operator can
       // see the run approaching the threshold rather than merely being under
@@ -4355,7 +4980,10 @@ describe('buildProductionOrchestrator', () => {
       const orchestrator = buildProductionOrchestrator(config);
 
       await orchestrator.start();
-      await vi.advanceTimersByTimeAsync(CYCLE_MS + 500);
+      // #1110: `start()` already ran the boot catch-up cycle. Held under
+      // `CYCLE_MS` so a second boundary — and a second breach/tighten — does
+      // not also fire.
+      await vi.advanceTimersByTimeAsync(500);
 
       // It ran: a real suite, derived from the real series.
       const computed = logger.entries.find((e) => e.message.includes('daily metrics computed'));
@@ -4418,14 +5046,19 @@ describe('buildProductionOrchestrator', () => {
       await orchestrator.start();
       await vi.advanceTimersByTimeAsync(3 * CYCLE_MS + 500);
 
+      // 4 cycles, not 3: #1110's boot catch-up fires immediately on the
+      // virgin schedule, then the three `CYCLE_MS` boundaries this advance
+      // crosses. The property under test — once per CYCLE, never per tick —
+      // is unaffected by which count is correct, only by whether every
+      // firing logs exactly once.
       expect(
         logger.entries.filter((e) => e.message.includes('insufficient observations')),
-      ).toHaveLength(3);
+      ).toHaveLength(4);
       // The orchestrator's own "nothing to check this cycle" line keeps the
       // same cadence — one per cycle, never per tick.
       expect(
         logger.entries.filter((e) => e.message.includes('no daily MetricsSuite this cycle')),
-      ).toHaveLength(3);
+      ).toHaveLength(4);
 
       await orchestrator.stop();
     });

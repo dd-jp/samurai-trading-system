@@ -75,6 +75,14 @@ const TABLES = [
   // spend cap sums that table on the trading path and the dashboard
   // range-scans it, and neither reads the text; see the migration's header.
   'llm_call_log',
+  // `alert_delivery_failures` (0043) — a Telegram alert send that exhausted
+  // retries (#1108). Durable so "how many escalations went undelivered" is
+  // answerable after the fact, not just visible in a log line.
+  'alert_delivery_failures',
+  // `feedback_cycle_schedule` (0044) — the daily feedback cycle's
+  // restart-durable schedule (#1110); see production.ts's
+  // `scheduleFeedbackCycle` for why.
+  'feedback_cycle_schedule',
 ];
 
 /**
@@ -83,7 +91,7 @@ const TABLES = [
  * That prose number silently drifted twice (it read "twenty" and "twenty-one"
  * simultaneously while the schema held 22), so it is pinned here.
  */
-const CONSOLIDATED_SCHEMA_TABLE_COUNT = 32;
+const CONSOLIDATED_SCHEMA_TABLE_COUNT = 34;
 
 const tempDirs: string[] = [];
 
@@ -176,6 +184,9 @@ describe('openSharedStore', () => {
       { version: 39 },
       { version: 40 },
       { version: 41 },
+      { version: 42 },
+      { version: 43 },
+      { version: 44 },
     ]);
     expect(runMigrations(db)).toEqual([]);
     expect(db.prepare('SELECT version FROM schema_migrations').all()).toEqual([
@@ -220,6 +231,9 @@ describe('openSharedStore', () => {
       { version: 39 },
       { version: 40 },
       { version: 41 },
+      { version: 42 },
+      { version: 43 },
+      { version: 44 },
     ]);
   });
 

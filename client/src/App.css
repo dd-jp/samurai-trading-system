@@ -200,10 +200,19 @@ code {
   color: var(--vermilion);
 }
 
-.rail-provider {
+.rail-row {
   display: flex;
   justify-content: space-between;
   gap: var(--space-2);
+}
+
+/* Off the 8px scale on purpose: the figures sit inside `.rail-block`, whose
+   own 2px gap sets the spacing of the provider rows they line up with. */
+.rail-figures {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: var(--space-1);
 }
 
 .provider-ok {
@@ -218,6 +227,11 @@ code {
 .provider-unauthorized,
 .provider-forbidden,
 .provider-error {
+  color: var(--vermilion);
+}
+
+/* #1108: the alert channel's own degraded state — only rendered when there is one. */
+.rail-alert-degraded [data-alert-degraded="true"] {
   color: var(--vermilion);
 }
 

@@ -120,9 +120,11 @@ describe('SqliteRiskLogStore (#726)', () => {
 // shape #549 warned about — a version row in `schema_migrations` stays green
 // through a column-name typo, and every OTHER test that writes a trader record
 // in this repo uses a fake `TraderLogStore`, so nothing proves the real SQL
-// still binds 19 values to 19 columns in the right ORDER. A silent
-// off-by-one here would land `skip_reason`'s value in `exit_reason` and shift
-// every sizing scalar one place, which no type checks.
+// still binds every value to the right column, in order. A silent off-by-one
+// here would land `skip_reason`'s value in `exit_reason` and shift every
+// sizing scalar one place, which no type checks. (#1109 added three more
+// columns — `decision_class` and the two `reason_detail_*` — to the same
+// INSERT; see the round-trip test below for that pair.)
 describe('SqliteTraderLogStore exit_reason (#748)', () => {
   function makeRecord(overrides: Partial<TraderDecisionRecord> = {}): TraderDecisionRecord {
     return {
@@ -132,6 +134,8 @@ describe('SqliteTraderLogStore exit_reason (#748)', () => {
       intent_type: 'exit',
       exit_reason: 'signal_decay',
       skip_reason: null,
+      decision_class: null,
+      reason_detail: null,
       sizing: null,
       cosine_precedent: null,
       atr: null,
@@ -175,5 +179,121 @@ describe('SqliteTraderLogStore exit_reason (#748)', () => {
       .prepare("SELECT exit_reason FROM trader_log WHERE trace_id = 't-entry'")
       .get() as { exit_reason: string | null };
     expect(row.exit_reason).toBeNull();
+  });
+});
+
+// #1109: `trader_log` gained `decision_class` and the two `reason_detail_*`
+// columns in migration 0042. This is the CURRENT behaviour the issue's
+// acceptance criteria says must fail without the fix: before this ticket
+// `TraderDecisionRecord` had no such fields, so a no_trade row was
+// unclassified everywhere — durable record included, not only the process
+// log a join back to `debate_log` was needed to explain.
+describe('SqliteTraderLogStore decision_class and reason_detail (#1109)', () => {
+  function makeSkipRecord(overrides: Partial<TraderDecisionRecord> = {}): TraderDecisionRecord {
+    return {
+      trace_id: 't-skip',
+      instrument: '3USL',
+      debate_id: 'd1',
+      intent_type: null,
+      exit_reason: null,
+      skip_reason: 'below_conviction_floor',
+      decision_class: 'declined_on_signal',
+      reason_detail: { compared_value: 0.4, threshold: 0.55 },
+      sizing: null,
+      cosine_precedent: null,
+      atr: null,
+      entry: null,
+      stop: null,
+      size: null,
+      created_at: new Date('2026-09-04T12:00:00.000Z'),
+      ...overrides,
+    };
+  }
+
+  it('persists a classified no_trade decision, non-empty and readable without joining debate_log', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteTraderLogStore(db);
+
+    store.write(makeSkipRecord());
+
+    const row = db
+      .prepare(
+        `SELECT skip_reason, decision_class, reason_detail_compared_value, reason_detail_threshold
+         FROM trader_log WHERE trace_id = 't-skip'`,
+      )
+      .get() as {
+      skip_reason: string | null;
+      decision_class: string | null;
+      reason_detail_compared_value: number | null;
+      reason_detail_threshold: number | null;
+    };
+
+    expect(row.skip_reason).toBe('below_conviction_floor');
+    expect(row.decision_class).toBe('declined_on_signal');
+    expect(row.reason_detail_compared_value).toBe(0.4);
+    expect(row.reason_detail_threshold).toBe(0.55);
+  });
+
+  it('distinguishes declined_on_signal from could_not_decide on the same skip_reason string', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteTraderLogStore(db);
+
+    store.write(
+      makeSkipRecord({
+        trace_id: 't-signal',
+        skip_reason: 'neutral_direction_while_flat',
+        decision_class: 'declined_on_signal',
+        reason_detail: null,
+      }),
+    );
+    store.write(
+      makeSkipRecord({
+        trace_id: 't-starved',
+        skip_reason: 'neutral_direction_while_flat',
+        decision_class: 'could_not_decide',
+        reason_detail: null,
+      }),
+    );
+
+    const rows = db
+      .prepare(
+        'SELECT trace_id, decision_class FROM trader_log WHERE trace_id IN (?, ?) ORDER BY trace_id',
+      )
+      .all('t-signal', 't-starved') as { trace_id: string; decision_class: string }[];
+
+    expect(rows).toEqual([
+      { trace_id: 't-signal', decision_class: 'declined_on_signal' },
+      { trace_id: 't-starved', decision_class: 'could_not_decide' },
+    ]);
+  });
+
+  it('writes NULL for decision_class and both reason_detail columns when an order was produced', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteTraderLogStore(db);
+
+    store.write(
+      makeSkipRecord({
+        trace_id: 't-entry',
+        intent_type: 'entry',
+        skip_reason: null,
+        decision_class: null,
+        reason_detail: null,
+      }),
+    );
+
+    const row = db
+      .prepare(
+        `SELECT decision_class, reason_detail_compared_value, reason_detail_threshold
+         FROM trader_log WHERE trace_id = 't-entry'`,
+      )
+      .get() as {
+      decision_class: string | null;
+      reason_detail_compared_value: number | null;
+      reason_detail_threshold: number | null;
+    };
+
+    expect(row.decision_class).toBeNull();
+    expect(row.reason_detail_compared_value).toBeNull();
+    expect(row.reason_detail_threshold).toBeNull();
   });
 });

@@ -649,3 +649,36 @@ describe('buildAlertChannels — heartbeat destination is separate from escalati
     expect(logger.entries.some((e) => e.message.includes('TELEGRAM_HEARTBEAT_CHAT_ID'))).toBe(true);
   });
 });
+
+/**
+ * #1108. The real composition root, not a stand-in: this is the module that
+ * would silently omit `alertDeliveryLog` from the `TelegramBotApiClient` it
+ * constructs if the wiring were left untested — exactly the "tested
+ * mechanism nothing calls" defect class this repo names as its dominant bug.
+ * Reads the row back off the SAME `db` handle `buildAlertChannels` was
+ * given, so this proves the durable record reaches the real shared store,
+ * not a fake passed only to a unit test.
+ */
+describe('buildAlertChannels — durable delivery-failure recording (#1108)', () => {
+  it('records a permanently-undeliverable escalation in the real alert_delivery_failures table', async () => {
+    configureTelegramEnv();
+    // 403 is `isRetryableTelegramError`'s terminal case — one attempt, no
+    // retry sleep, so the failure resolves immediately.
+    stubTelegramFetch((chatId) => chatId === ESCALATION_CHAT_ID);
+    const db = openSharedStore(':memory:');
+
+    const channels = buildAlertChannels({
+      alertsMode: 'telegram',
+      injected: {},
+      db,
+      logger: recordingLogger(),
+    });
+    await expect(channels.orphanAlerts?.postOrphanAlert(ORPHAN)).rejects.toThrow();
+
+    const rows = db.prepare('SELECT chat_id, method FROM alert_delivery_failures').all() as {
+      chat_id: string;
+      method: string;
+    }[];
+    expect(rows).toEqual([{ chat_id: ESCALATION_CHAT_ID, method: 'sendMessage' }]);
+  });
+});

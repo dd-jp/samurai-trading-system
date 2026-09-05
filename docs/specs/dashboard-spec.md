@@ -50,7 +50,7 @@ Every datum v1 rendered must survive each rewrite ([map #533](https://github.com
 | Run mode (paper/live) | `mode` (see "Wire Shape") | Rail — mode pill |
 | Snapshot clock, staleness | `generated_at` / `as_of` | Rail — ALIVE/STALE word, poll clock, snapshot clock |
 | Tick in progress (instrument, stage, trace) | `tick_status` | Rail — live tick block |
-| Alpaca cash / equity / buying power | `providers.alpaca.balance` (null unless `state === 'ok'`) | Rail — providers block (equity · cash · buying power, "not sent" when Alpaca omits buying power); Glance uses equity as the denominator for "% of equity" and "deployed of" |
+| Alpaca cash / equity / buying power | `providers.alpaca.balance` (null unless `state === 'ok'`) | Rail — providers block (equity, cash and buying power as label/figure rows, "not sent" when Alpaca omits buying power); Glance uses equity as the denominator for "% of equity" and "deployed of" |
 | Polygon reachability + detail | `providers.polygon.state` / `.detail` | Rail — providers block, as a coloured word |
 | LLM spend vs the ADR-0008 cap | `llm_spend.all_time.cost_usd` | Rail — LLM cap bar |
 | Open positions: instrument, side, filled size, avg entry, stop, target, mark, unrealized PnL, order state, opened at | `positions[]` | Glance → Open risk (one row per position with the stop→target track); Live drawer → Order and fills |

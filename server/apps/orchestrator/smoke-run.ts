@@ -174,6 +174,7 @@ import {
   runArmComparisonCycle,
   runOutsideBenchmarkCycle,
   SqliteArmComparisonSampleStore,
+  SqliteFeedbackCycleScheduleStore,
   SqliteOutsideBenchmarkSampleStore,
   SqliteTuningStore,
 } from '../../pipeline/feedback-loop/index.js';
@@ -3030,6 +3031,19 @@ export interface OutsideBenchmarkEvidence {
   unmeasured: readonly string[];
 }
 
+/**
+ * Whether `scheduleFeedbackCycle` (production.ts, #1110) actually ran inside
+ * THIS run's `start()`/`stop()` — read from the same store, after `stop()`
+ * drains everything. Unlike `runArmComparisonProbe` below, this reads no
+ * shipped class directly: `feedback_cycle_schedule.last_boundary` is written
+ * ONLY by the composition root's own timer, so a row present here is
+ * evidence the real scheduler ran, not evidence a probe standing in for it
+ * ran.
+ */
+function feedbackCycleScheduleWasWritten(db: SqliteHandle): boolean {
+  return new SqliteFeedbackCycleScheduleStore(db).lastBoundary() !== null;
+}
+
 /** Drives the shipped arm-comparison cycle over the smoke run's own store. */
 function runArmComparisonProbe(db: SqliteHandle): ArmComparisonEvidence {
   let alerts = 0;
@@ -3539,6 +3553,20 @@ export function evaluateSmokeGate(
      */
     outsideBenchmarks: OutsideBenchmarkEvidence;
     /**
+     * The daily feedback cycle's restart-durable schedule (#1110) — required,
+     * not optional, for the same reason every mechanism above is. Neither
+     * `armComparison` nor `outsideBenchmarks` above cover this: both are
+     * evidence from `runArmComparisonProbe`/`runOutsideBenchmarkProbe`, which
+     * call `runArmComparisonCycle`/`runOutsideBenchmarkCycle` DIRECTLY, never
+     * through `scheduleFeedbackCycle`. This is the one piece of evidence in
+     * the whole gate that only the composition root's OWN timer — not a
+     * probe standing in for it — can produce, so deleting
+     * `SqliteFeedbackCycleScheduleStore`/`scheduleFeedbackCycle` from
+     * `production.ts` and leaving both probes in place would leave every
+     * other check here green.
+     */
+    feedbackCycleScheduleWritten: boolean;
+    /**
      * The fill-sync loop's rejections (#1049) — required, not optional, for the
      * same "compile error, not a silent no-op" reason every mechanism above is.
      * This is the only check in the gate that reads the poll loop's own
@@ -3741,6 +3769,24 @@ export function evaluateSmokeGate(
       `the arm comparison reported diverged=${String(arms.diverged)} but posted ${arms.alerts} ` +
         'alert(s) — the divergence verdict and the escalation have come apart, so either a ' +
         'divergence reaches nobody or an alert fires on a comparison that did not diverge (#971)',
+    );
+  }
+
+  // #1110 — the daily cycle's restart-durable schedule must have a row after
+  // a real `start()`/`stop()` through the composition root. `arms` above
+  // proves nothing about this: `runArmComparisonProbe` calls
+  // `runArmComparisonCycle` DIRECTLY, never through `scheduleFeedbackCycle`,
+  // so it stays green even if the scheduler is deleted entirely. This is the
+  // one check in the gate that can only pass if the composition root's own
+  // timer actually ran.
+  if (!options.feedbackCycleScheduleWritten) {
+    failures.push(
+      'no row in `feedback_cycle_schedule` after the run — either `scheduleFeedbackCycle` was ' +
+        "dropped from production.ts's composition root, or `paperStartingProfile`'s `feedback` " +
+        "block stopped reaching `start()`. This is exactly #1110's defect: a mechanism that " +
+        'every unit test exercises directly but the real composition root never calls, so a ' +
+        'soak restarted more often than once a day would go back to accumulating zero ' +
+        '`arm_comparison_samples` rows for its whole life',
     );
   }
 
@@ -4903,16 +4949,26 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // `dataFailoverAlerts` above.
       calendarFallbackAlerts: new LoggingCalendarFallbackAlertChannel(logger),
       // #971 — the seventeenth `ALERT_CHANNEL_FIELDS` member. Log-only like the
-      // rest of this attended, offline run. The Feedback Loop's daily timer is
-      // 24h and this run lasts seconds, so this slot is never reached from the
-      // orchestrator here; the enforcement that the comparison has a caller at
-      // all is `runArmComparisonProbe`, run after `orchestrator.stop()` below,
-      // which drives the real `runArmComparisonCycle` over the tape this run
-      // just produced. That the composition root RESOLVES this slot at all is
-      // held by `satisfies Required<AlertChannels>` on this object plus
-      // `production.test.ts`'s "arm comparison runs on the daily feedback
-      // cycle" pair, which drive `buildProductionOrchestrator`'s own timer
-      // under fake timers — the one thing a seconds-long smoke run cannot.
+      // rest of this attended, offline run.
+      //
+      // Since #1110 this slot IS reached from the orchestrator here: a virgin
+      // `feedback_cycle_schedule` catches up on its first boundary inside
+      // `start()` (see `paperStartingProfile('paper')`'s `feedback` block
+      // above), so the real daily cycle — and therefore this channel, if the
+      // arms diverge — runs during this run, not just seconds-long-and-never.
+      // The gate's `feedback_cycle_schedule.last_boundary` assertion below
+      // (`evaluateSmokeGate`) is what proves that reach on every run,
+      // regardless of whether this run's fixtures happen to diverge.
+      //
+      // What this run's short fixture window does NOT reliably exercise is
+      // divergence itself — `runArmComparisonProbe`, run after
+      // `orchestrator.stop()` below, drives the real `runArmComparisonCycle`
+      // again over the complete tape for that. That the composition root
+      // RESOLVES this slot at all is additionally held by `satisfies
+      // Required<AlertChannels>` on this object plus `production.test.ts`'s
+      // "arm comparison runs on the daily feedback cycle" pair, which drive
+      // `buildProductionOrchestrator`'s own timer under fake timers to a
+      // divergent outcome — the one thing this offline run cannot guarantee.
       armDivergenceAlerts: new LoggingArmDivergenceAlertChannel(logger),
       // #1084 — the eighteenth `ALERT_CHANNEL_FIELDS` member. A bare no-op,
       // same reason as `traderDiagnosticAlerts` above: overlapping tick
@@ -5149,6 +5205,11 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // tape has to be complete before the comparison is taken over it.
       armComparison,
       outsideBenchmarks,
+      // #1110. Read after `orchestrator.stop()`, same as `armComparison`
+      // above and for the same reason — though unlike `armComparison`, this
+      // one is unaffected by tape completeness; it only needs `start()` to
+      // have run at all.
+      feedbackCycleScheduleWritten: feedbackCycleScheduleWasWritten(db),
       fillSync: fillSyncFailures.evidence(),
       marketDataFetch: marketDataFetch.evidence(),
       exitPath: {

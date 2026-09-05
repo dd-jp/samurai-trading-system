@@ -31,8 +31,12 @@
  * the previous pass settles, plus an `inFlight` guard — and this mirrors it
  * deliberately rather than inventing a second concurrency posture.
  *
- * Contrast `runFeedbackCycle`, which does use `setInterval`: `runDailyCycle`
- * is synchronous, so it cannot overlap itself. That precedent does not
+ * Contrast the feedback cycle's own `scheduleFeedbackCycle` (production.ts),
+ * which ALSO now self-reschedules a `setTimeout` — but for a different
+ * reason (#1110): `runDailyCycle` is synchronous, so it cannot overlap
+ * itself the way `ingestFills()` can, and its re-arming exists to recompute a
+ * wall-clock boundary on every fire, not to guard against re-entrancy. This
+ * loop's re-arming is the re-entrancy guard itself; that precedent does not
  * transfer here.
  *
  * ## Ordering: reconcile before the tick loop, and before every ingest
