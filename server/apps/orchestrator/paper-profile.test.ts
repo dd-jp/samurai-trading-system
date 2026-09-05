@@ -19,7 +19,7 @@ import { SimulatedClock, SystemClock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { SqliteStage2SelectionStore } from '../../tools/backtest/index.js';
 import { REQUIRED_INJECTED_CONFIG } from './index.js';
-import { paperStartingProfile, subclassOfUniverse } from './paper-profile.js';
+import { LIVE_BOOK_GBP, paperStartingProfile, subclassOfUniverse } from './paper-profile.js';
 import { SqliteDailyEquityMetricsSource } from './production/daily-equity-metrics-source.js';
 import { BENCHMARK_INSTRUMENTS, DEFAULT_FEEDBACK_INTERVAL_MS } from './production.js';
 import { DEFAULT_UNIVERSE } from './scheduler.js';
@@ -31,6 +31,30 @@ describe('paperStartingProfile', () => {
     for (const key of REQUIRED_INJECTED_CONFIG) {
       expect(profile[key]).toBeDefined();
     }
+  });
+
+  /**
+   * #1112 (AC1/AC2): before this, `paperStartingProfile('paper')` carried no
+   * `capitalCeilingUsd`, so `sizingEquity` (direct-bind.ts) never clamped in
+   * paper mode and the Trader sized off the simulated Alpaca balance
+   * (~$100,000) directly — ~100x `LIVE_BOOK_GBP`. Pinning the value here
+   * (rather than only `toBeDefined()`) is what a regression that reverted the
+   * default to `undefined`, or drifted it to some OTHER number, would trip.
+   */
+  it('sizes paper against the declared book, not funded equity (#1112)', () => {
+    expect(paperStartingProfile('paper').capitalCeilingUsd).toBe(LIVE_BOOK_GBP);
+  });
+
+  /**
+   * `backtest` deliberately keeps `capitalCeilingUsd` unset (#1112 scope
+   * line): backtest's cost-model calibration and Stage-2 tooling read
+   * `portfolio.equity` unclamped today, and widening that blast radius is a
+   * separate decision #1112 does not make. Pinned so a future edit that
+   * "simplifies" the conditional spread to apply to every mode fails here
+   * first, not in a Stage-2 run months later.
+   */
+  it('does NOT set a capital ceiling for backtest (#1112 scope)', () => {
+    expect(paperStartingProfile('backtest').capitalCeilingUsd).toBeUndefined();
   });
 
   /**
@@ -205,14 +229,92 @@ describe('paperStartingProfile', () => {
 
   it('reuses DEFAULT_TRADER_CONFIG rather than restating its values', () => {
     // One source of truth for the sizing constants: a copy here would drift
-    // silently from `server/pipeline/trader/types.ts`.
+    // silently from `server/pipeline/trader/types.ts`. `asset_class_risk_multiplier`
+    // is asserted per-key, not by object equality against the default, because
+    // `stocks` is a deliberate #1112 departure (see the dedicated block below)
+    // while `crypto` still passes through unchanged.
     const { traderConfig } = paperStartingProfile('paper');
 
     expect(traderConfig.conviction_floor).toBe(DEFAULT_TRADER_CONFIG.conviction_floor);
     expect(traderConfig.max_risk_per_trade).toBe(DEFAULT_TRADER_CONFIG.max_risk_per_trade);
-    expect(traderConfig.asset_class_risk_multiplier).toEqual(
-      DEFAULT_TRADER_CONFIG.asset_class_risk_multiplier,
+    expect(traderConfig.asset_class_risk_multiplier.crypto).toBe(
+      DEFAULT_TRADER_CONFIG.asset_class_risk_multiplier.crypto,
     );
+  });
+
+  describe('asset_class_risk_multiplier.stocks (#1112 follow-up)', () => {
+    // ADR-0018 D5's single-stock ETP deployment cap: 25% of equity. This
+    // path (`decide.ts`'s generic ATR sizing, `bracket === null`) has no
+    // deployment fraction of its own — D5's cap is reused here only as the
+    // target the retuned multiplier must not exceed on the reference
+    // scenario below, not as a claim that this path enforces it in general
+    // (see the caveat in the assignment site's comment).
+    const D5_SINGLE_STOCK_CAP = 0.25;
+
+    // #1112's own logged risk-stage figure for a real MU entry, pre-fix:
+    // `trimmed notional from 12939.225` against a session equity of
+    // 99876.86. Deployment fraction on this path is `size * entry / equity`,
+    // which is proportional to `asset_class_risk_multiplier.stocks` and
+    // otherwise scale-invariant to equity — so this pre-fix measurement at
+    // the shipped multiplier (1.0) is valid evidence of what the SAME tick
+    // produces post-fix, at any multiplier, by simple rescaling.
+    const MU_REFERENCE_NOTIONAL = 12939.225;
+    const MU_REFERENCE_EQUITY = 99876.86;
+    const measuredDeploymentAtDefaultMultiplier = MU_REFERENCE_NOTIONAL / MU_REFERENCE_EQUITY;
+
+    it('departs from the shared default for paper only', () => {
+      const { traderConfig } = paperStartingProfile('paper');
+
+      expect(traderConfig.asset_class_risk_multiplier.stocks).toBe(1.9);
+      expect(traderConfig.asset_class_risk_multiplier.stocks).not.toBe(
+        DEFAULT_TRADER_CONFIG.asset_class_risk_multiplier.stocks,
+      );
+    });
+
+    it('leaves DEFAULT_TRADER_CONFIG itself untouched (paper-only scope, #1112)', () => {
+      // Pins the scope by test, not by care: `paperStartingProfile` must not
+      // mutate the shared default it spreads from, which would otherwise
+      // leak this departure into `liveStartingProfile` (spreads the SAME
+      // `buildStartingProfileConfigs()`/`DEFAULT_TRADER_CONFIG`) and every
+      // other caller of the shared constant.
+      paperStartingProfile('paper');
+
+      expect(DEFAULT_TRADER_CONFIG.asset_class_risk_multiplier.stocks).toBe(1.0);
+    });
+
+    it('does not touch backtest mode', () => {
+      // Same scoping rationale as `capitalCeilingUsd` (#1112): backtest's
+      // cost-model calibration reads `portfolio.equity` unclamped and never
+      // exercises `whole_share_sizing`'s floor the way a real paper fill
+      // can, so retuning this path for backtest would be an unrelated
+      // change riding along.
+      const { traderConfig } = paperStartingProfile('backtest');
+
+      expect(traderConfig.asset_class_risk_multiplier.stocks).toBe(
+        DEFAULT_TRADER_CONFIG.asset_class_risk_multiplier.stocks,
+      );
+    });
+
+    it("keeps the reference MU deployment under D5's single-stock cap (#1112)", () => {
+      // Deployment scales linearly with the multiplier for a fixed tick, so
+      // rescaling #1112's own logged measurement by (new / shipped) predicts
+      // the deployment fraction the SAME MU entry produces at the retuned
+      // multiplier — asserting the DEPLOYMENT the retune targets, not the
+      // raw config value, per ADR-0018's own warning that storing or reading
+      // the wrong quantity here is silent (D5's "two ways to get this wrong").
+      const { traderConfig } = paperStartingProfile('paper');
+      const shippedMultiplier = DEFAULT_TRADER_CONFIG.asset_class_risk_multiplier.stocks;
+      const retunedMultiplier = traderConfig.asset_class_risk_multiplier.stocks;
+
+      const projectedDeployment =
+        measuredDeploymentAtDefaultMultiplier * (retunedMultiplier / shippedMultiplier);
+
+      expect(projectedDeployment).toBeLessThan(D5_SINGLE_STOCK_CAP);
+      // Not just under the cap — close to it: this is the arithmetic that
+      // picked 1.9 over the next-cleanest candidate (2.0), which would have
+      // pushed the same entry to ≈25.9%, over the cap.
+      expect(projectedDeployment).toBeGreaterThan(0.24);
+    });
   });
 
   it('uses a time-in-force each venue accepts, per asset class (#381)', () => {

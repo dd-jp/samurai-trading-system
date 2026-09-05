@@ -159,6 +159,11 @@ export const PAPER_PROFILE_PROVENANCE = {
   // field's own comment for the arithmetic.
   maxConcurrentInstruments: 'DERIVED',
   universe: 'SPEC',
+  // #1112: `LIVE_BOOK_GBP` itself — ADR-0015's 2026-08-18 amendment's £1,000
+  // book, the same literal the arm comparison's `basis` (production.ts,
+  // smoke-run.ts) is stated against. Not DERIVED: nothing here computes it,
+  // it is pinned to the one already-decided figure.
+  capitalCeilingUsd: 'SPEC',
   'traderConfig.conviction_floor': 'SPEC',
   // #668. SPEC rather than DERIVED: close − 5 minutes is not calculated from
   // anything here, it is the value #657 resolved on 2026-08-09 and ADR-0014's
@@ -166,7 +171,11 @@ export const PAPER_PROFILE_PROVENANCE = {
   'traderConfig.flatten_before_close_ms': 'SPEC',
   'traderConfig.max_risk_per_trade': 'SPEC',
   'traderConfig.asset_class_risk_multiplier.crypto': 'SPEC',
-  'traderConfig.asset_class_risk_multiplier.stocks': 'SPEC',
+  // #1112 follow-up — DERIVED, not SPEC: 1.9x is computed from
+  // D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION and #1112's own logged MU
+  // deployment measurement, not stated directly by an ADR. See the
+  // assignment site's comment for the arithmetic.
+  'traderConfig.asset_class_risk_multiplier.stocks': 'DERIVED',
   'traderConfig.atr_timeframe': 'SPEC',
   'traderConfig.atr_lookback': 'SPEC',
   'traderConfig.atr_k': 'SPEC',
@@ -2499,6 +2508,7 @@ export function paperStartingProfile(
     | 'riskConfig'
     | 'verdictConfig'
     | 'executionConfig'
+    | 'capitalCeilingUsd'
     | 'correlationConfig'
     | 'breakerConfig'
     | 'costConfig'
@@ -2535,9 +2545,123 @@ export function paperStartingProfile(
     );
   }
 
+  const configs = buildStartingProfileConfigs();
+
   return {
-    ...buildStartingProfileConfigs(),
+    ...configs,
     mode,
+    // #1112: `paper` sizes against a simulated Alpaca account whose funded
+    // equity (~$100,000) has nothing to do with the declared book
+    // (`LIVE_BOOK_GBP`) both the arm comparison's `return_pct` basis (below,
+    // and production.ts/smoke-run.ts) and `perTradeSizeCap`'s uncapped gates
+    // are stated against. Without this, `sizingEquity` (direct-bind.ts) never
+    // clamps in paper mode (`capitalCeilingUsd` was `undefined`), so the
+    // Trader sizes off the simulated balance directly — ~100x the book —
+    // which is the defect #1112 reports. `capitalCeilingUsd` is the SAME
+    // clamp `liveStartingProfile()` sets from `SAMURAI_LIVE_MAX_CAPITAL_USD`;
+    // here it is pinned to `LIVE_BOOK_GBP` itself rather than to an
+    // independently-configured value, so paper's sizing denominator and the
+    // arm comparison's `basis` are provably the same literal, not two
+    // constants that happen to agree.
+    //
+    // `buildControlArmWiring` (control-arm-wiring.ts) spreads the live arm's
+    // `TraderStepDeps` verbatim into the control arm's, so this one line
+    // reaches both arms — no separate control-arm override is needed or
+    // wanted (a second knob that has to be kept in sync is exactly what
+    // framing (2) below rejects).
+    //
+    // Scoped to `paper` only, not `backtest`: backtest's cost-model
+    // calibration and Stage-2 tooling read `portfolio.equity` unclamped today
+    // and #1112 does not ask that path to change; widening the blast radius
+    // there is a separate decision.
+    //
+    // **#949, carried into paper by this line: `capitalCeilingUsd` is a GBP
+    // value here, unconverted.** `LIVE_BOOK_GBP` is £1,000; `sizingEquity`
+    // (direct-bind.ts) does `Math.min(ceiling, equity)` against `equity` as
+    // the paper Alpaca account (USD) reports it, with no FX step — the same
+    // gap `live-profile.ts` already documents for `SAMURAI_LIVE_MAX_CAPITAL_USD`
+    // against a real USD account, now also live on THIS path. The practical
+    // effect: paper's declared "£1,000" book clamps at $1,000, which is
+    // roughly £790 at a ~1.27 USD/GBP rate — about 21% under the book this
+    // profile claims to size against. Left unconverted deliberately, same as
+    // #949: there is no FX-rate provider in this codebase, and paper's
+    // purpose is proving the clamp reaches the Trader at all (#1112), not
+    // proving it reaches the exact right number. Fixing the rate is #949's
+    // job, not this ticket's.
+    ...(mode === 'paper' ? { capitalCeilingUsd: LIVE_BOOK_GBP } : {}),
+    // #1112 follow-up — DERIVED from ADR-0018 D5, paper only: `backtest`
+    // keeps `configs.traderConfig` verbatim, same scoping rationale as
+    // `capitalCeilingUsd` above (backtest's cost-model calibration reads
+    // `portfolio.equity` unclamped and never hits `whole_share_sizing`'s
+    // floor the way a real paper fill can). `live` is untouched by
+    // construction — this key only exists in `paperStartingProfile`'s
+    // return, never in `liveStartingProfile`'s.
+    //
+    // `DEFAULT_UNIVERSE` carries no `subclass_of` entries, so every stocks
+    // entry sizes on `decide.ts`'s generic ATR path (`bracket === null`),
+    // not D5's frozen per-subclass bracket — that path has no deployment
+    // fraction of its own to retune; the only lever is the RISK fraction
+    // `max_risk_per_trade * asset_class_risk_multiplier.stocks` gets divided
+    // by a live ATR-based stop. #1112 corrected `capitalCeilingUsd` from the
+    // simulated broker's ~$99,876.86 funded equity to the declared $1,000
+    // book (paper's `sizingEquity` is unconverted GBP-as-USD, #949) — at
+    // that basis, `whole_share_sizing` (#941, mandatory: Alpaca 422s
+    // fractional brackets) floors several real `DEFAULT_UNIVERSE` names to
+    // zero shares (MU, GOOGL logged in #1112).
+    //
+    // Deployment fraction (`size * entry / equity`) on this path is
+    // proportional to `asset_class_risk_multiplier.stocks` and otherwise
+    // scale-invariant to equity, so #1112's own logged pre-fix risk-stage
+    // figure for a real MU entry is valid evidence post-fix: the Trader's
+    // untrimmed ask was `trimmed notional from 12939.225` against a session
+    // equity of 99876.86 (13 whole shares at ~$995.33; the Risk Manager's
+    // separate, since-diagnosed-as-non-binding `per_trade_size_cap`, #1135,
+    // did the trimming that followed) — a measured deployment fraction of
+    // 12939.225 / 99876.86 ≈ 12.96% at the shipped multiplier of 1.0.
+    //
+    // Scaling that measurement up to D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION
+    // (0.25, the single-stock ETP cap D5 states for a DIFFERENT sizing path)
+    // gives 0.25 / 0.1296 ≈ 1.93x; D5's cap is what bounds this derivation,
+    // not the reverse — 1.9x is chosen (not 2.0x) because 1.9 keeps that
+    // same reference MU entry at ≈24.6% of equity, under the cap, while 2.0
+    // pushes it to ≈25.9%, over it. Rejected: reusing D5's frozen
+    // single-stock `stop_pct` (6.25%) as a stand-in for this path's stop
+    // fraction (giving 0.015625 / 0.01 = 1.5625x) — that stop is calibrated
+    // for a 3x-leveraged ETP, materially more volatile than an unlevered
+    // stock's realized ATR, so it understates the multiplier needed to
+    // reach the same cap.
+    //
+    // Caveat this does not fix: this path has no code-enforced ceiling at
+    // D5's 25%. At the `vol_floor_fraction` edge (the tightest stop the ATR
+    // floor allows) and full conviction plus the cosine precedent's
+    // MAX_MULTIPLIER (1.5, cosine-precedent.ts), deployment is
+    // `max_risk_per_trade * asset_class_risk_multiplier.stocks * 1.5 /
+    // (atr_k * vol_floor_fraction)` = 712.5% of equity at 1.9x (already 375%
+    // at the shipped 1.0x) — a pre-existing gap this retune does not create
+    // and does not close (#1135 tracks the Risk Manager caps that should
+    // backstop it but currently read unclamped equity). 1.9x pins the
+    // OBSERVED reference entry under the cap; a higher-conviction entry at
+    // the same realized ATR is not prevented from exceeding it.
+    //
+    // Structurally unreachable regardless of this multiplier: any name whose
+    // share price exceeds D5's ~$250 single-stock per-position cash (25% of
+    // the $1,000 book) cannot be entered in whole shares at any deployment at
+    // or under that cap — e.g. MU (~$996) and GOOGL (~$342). This is
+    // arithmetic, not a tuning failure, and is exactly what ADR-0016
+    // anticipates: `DEFAULT_UNIVERSE`'s SPY/QQQ/AAPL/TSLA-style names are not
+    // the tradeable product; LSE leveraged ETPs are. See the follow-up issue
+    // this PR links for the fuller census of excluded names.
+    ...(mode === 'paper'
+      ? {
+          traderConfig: {
+            ...configs.traderConfig,
+            asset_class_risk_multiplier: {
+              ...configs.traderConfig.asset_class_risk_multiplier,
+              stocks: 1.9,
+            },
+          },
+        }
+      : {}),
     // `backtest` keeps `maxConcurrentInstruments: 1` explicitly (#1013 fix-up
     // H1) rather than inheriting `buildStartingProfileConfigs()`'s `6` —
     // `tick-loop.ts`'s determinism-rationale comment is specific about why: a

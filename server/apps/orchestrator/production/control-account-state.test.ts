@@ -317,11 +317,17 @@ describe('the control arm is wired to its own account state, not the live one (#
  * The book ANCHOR (#753, second pass).
  *
  * The first version of this provider took a constant `LIVE_BOOK_GBP`. `yarn
- * smoke` proved what that costs on a paper account: the live arm sizes against
- * the broker's ~100,000 equity (the £1,000 ceiling gate does not arm without
- * `same_currency_verified`), so every control intent came back
- * `rounds_to_zero_shares` and the arm took no trade at all — a control that
- * cannot be told apart from one that never found a setup.
+ * smoke` proved what that costs on a paper account — measured BEFORE #1112,
+ * when paper's `capitalCeilingUsd` did not exist and neither arm's Trader
+ * ask was clamped: the live arm sized off its full ~100,000 broker equity
+ * while a control anchored at £1,000 sized off £1,000 alone, so every
+ * control intent came back `rounds_to_zero_shares` and the arm took no trade
+ * at all — a control that cannot be told apart from one that never found a
+ * setup. Since #1112, both arms clamp to the same declared
+ * `capitalCeilingUsd`, so this anchor's remaining job is only to stay above
+ * that shared ceiling — see `ControlArmAccountStateProviderInput.resolveBook`'s
+ * own doc for what is and is not settled about anchoring at the ceiling
+ * itself.
  *
  * The property is therefore two-sided, exactly like the independence tests
  * above: the anchor must TRACK the live arm once, at boot, and must never track

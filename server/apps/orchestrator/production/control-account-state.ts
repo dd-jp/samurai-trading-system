@@ -72,13 +72,17 @@
  *    reason. Nothing here makes that worse, and it is not this ticket's to fix.
  * 4. **The starting book is the live arm's equity at first boot, not the
  *    declared £1,000.** A matched control has to start at the same capital as
- *    the arm it is matched against, and in `paper` mode the live arm sizes
- *    against the broker's equity rather than `LIVE_BOOK_GBP` (the ceiling gate
- *    does not arm without `same_currency_verified`). The anchor is read ONCE and
- *    persisted first-write-wins, so this is a single boot-time observation and
- *    not an ongoing coupling — but it does mean the control's book is stated in
- *    the live account's currency and scale, which is what makes the two arms'
- *    per-trade sizes comparable in the first place.
+ *    the arm it is matched against. Since #1112, both arms' Trader-ask sizing
+ *    clamps to the SAME declared `capitalCeilingUsd` (`buildControlArmWiring`
+ *    spreads it from the live arm's `TraderStepDeps` into the control's), so
+ *    `sizingEquity`'s `min(equity, ceiling)` only lands both arms on the same
+ *    clamped figure while this anchor stays comfortably above that ceiling —
+ *    an anchor at or below the ceiling would remove the margin the clamp
+ *    relies on. The anchor is read ONCE and persisted first-write-wins, so
+ *    this is a single boot-time observation and not an ongoing coupling.
+ *    Whether anchoring at the ceiling itself (rather than at the live arm's
+ *    much larger real equity) is now safe post-#1112 is an open sizing
+ *    question escalated to the owner, not settled here.
  */
 import type {
   RiskConfig,
@@ -109,13 +113,25 @@ export interface ControlArmAccountStateProviderInput {
    * A resolver rather than a constant because the anchor has to be the LIVE
    * arm's starting equity, and that is not known at construction. It was a
    * constant (`LIVE_BOOK_GBP`) in this module's first version, and `yarn smoke`
-   * caught what that costs: the live arm sizes against the broker's equity
-   * (~100,000 on an Alpaca paper account, and the £1,000 `live_book_ceiling`
-   * does not arm without `same_currency_verified`), so a control arm anchored at
-   * £1,000 sized every intent to `rounds_to_zero_shares` and took no trade at
+   * caught what that costs — measured BEFORE #1112, when paper's
+   * `capitalCeilingUsd` did not exist and neither arm's Trader ask was
+   * clamped: the live arm sized off its full ~$100,000 broker equity while a
+   * control anchored at £1,000 sized off £1,000 alone, so every control
+   * intent came back `rounds_to_zero_shares` and the arm took no trade at
    * all. A control that never trades is indistinguishable from a control that
    * never found a setup — the exact row `formatArmComparison` warns about, and
    * a whole soak wasted.
+   *
+   * Since #1112, both arms clamp to the SAME declared `capitalCeilingUsd`, so
+   * this anchor's job is narrower than it was when the measurement above was
+   * taken: it only has to stay above that shared ceiling for both arms to
+   * clamp to the identical figure regardless of which one's raw equity is
+   * bigger. Anchoring directly at the ceiling instead of at the live arm's
+   * (much larger) real equity might be safe now, or might still starve the
+   * control once `whole_share_sizing` floors a smaller notional — that is
+   * the sizing question escalated to the owner, not decided here, so this
+   * resolver keeps observing the live arm's real equity rather than the
+   * ceiling.
    *
    * "Matched control" means the same starting capital and then INDEPENDENT
    * evolution. Resolving once gives that: the anchor is a boot-time observation,

@@ -282,6 +282,7 @@ function healthyGateOptions(
     armComparison?: ArmComparisonEvidence;
     outsideBenchmarks?: OutsideBenchmarkEvidence;
     feedbackCycleScheduleWritten?: boolean;
+    sizingCeilingStamped?: boolean;
     fillSync?: FillSyncFailureEvidence;
     marketDataFetch?: MarketDataFetchEvidence;
   } = {},
@@ -292,6 +293,7 @@ function healthyGateOptions(
     armComparison: overrides.armComparison ?? healthyArmComparison(),
     outsideBenchmarks: overrides.outsideBenchmarks ?? healthyOutsideBenchmarks(),
     feedbackCycleScheduleWritten: overrides.feedbackCycleScheduleWritten ?? true,
+    sizingCeilingStamped: overrides.sizingCeilingStamped ?? true,
     minTicks: overrides.minTicks ?? 2,
     llmRateLimiterSnapshot: meteredSnapshot(),
     exitPath: overrides.exitPath ?? healthyExitPath(),
@@ -2397,6 +2399,31 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
       expect(
         gate.failures.filter((failure) => failure.includes('feedback_cycle_schedule')),
       ).toEqual([]);
+    });
+  });
+
+  describe('the sizing capital ceiling stamp (#1112)', () => {
+    it('fails when a BTC-USD open_positions row carries no declared ceiling', () => {
+      // The mutation this catches: drop `config.capitalCeilingUsd` from
+      // `new SqliteExecutionStore(...)` in production.ts. Every other check
+      // in the gate stays green — the Trader still sizes and the position
+      // still fills — because the missing wire is in the STAMP, not in the
+      // sizing arithmetic itself.
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({ sizingCeilingStamped: false }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('sizing_capital_ceiling');
+    });
+
+    it('passes when every BTC-USD row carries the declared ceiling', () => {
+      const gate = evaluateSmokeGate(transactedObservations(), healthyGateOptions());
+
+      expect(gate.failures.filter((failure) => failure.includes('sizing_capital_ceiling'))).toEqual(
+        [],
+      );
     });
   });
 

@@ -1295,7 +1295,16 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // `store` all read/write through this same instance, so `onTradeClose`
   // fires no matter which of them eventually calls `writeClosedTrade`.
   const executionStore = withOnTradeClose(
-    new SqliteExecutionStore(guardedStore(config.db, 'execution')),
+    // #1112 AC5 (migration 0045): `config.capitalCeilingUsd` is the same
+    // ceiling `sizingEquity` (direct-bind.ts) clamps this arm's sizing
+    // against, stamped onto every row this instance writes so a later
+    // `arm_comparison_samples`/`closed_trades` window can tell whether it
+    // mixes rows sized under two different regimes.
+    new SqliteExecutionStore(
+      guardedStore(config.db, 'execution'),
+      'live',
+      config.capitalCeilingUsd,
+    ),
     { setup_store: setupStore },
     logger,
   );
@@ -1959,6 +1968,11 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   const controlExecutionStore = new SqliteExecutionStore(
     guardedStore(config.db, 'execution'),
     'control',
+    // #1112 AC5 (migration 0045): the SAME ceiling as the live arm's store
+    // above — `deps.trader` (and so `capitalCeilingUsd`) reaches this arm by
+    // the verbatim spread `buildControlArmWiring` does, so its sizing is
+    // clamped identically and its rows should be stamped identically.
+    config.capitalCeilingUsd,
   );
   const controlBreakerState = new InMemoryBreakerStatePersistence();
   const controlArmWiring = buildControlArmWiring({
@@ -1996,16 +2010,32 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // control was not an independent measurement over the same tape. See
     // `control-account-state.ts`.
     accountState: new ControlArmAccountStateProvider({
-      // The live arm's equity, observed ONCE at first boot and then persisted
-      // first-write-wins — not the declared £1,000.
+      // The live arm's REAL equity, observed ONCE at first boot and then
+      // persisted first-write-wins — not the declared £1,000.
       //
       // A matched control starts at the same capital as the arm it is matched
-      // against. In `paper` mode the live arm sizes against the broker's equity
-      // (the £1,000 ceiling gate does not arm without `same_currency_verified`),
-      // and `yarn smoke` proved what a declared-£1,000 control costs there:
-      // every control intent came back `rounds_to_zero_shares` and the arm took
-      // no trade at all. Reading it once is what keeps this an anchor rather
-      // than a coupling — see `buildControlBookAnchorResolver`.
+      // against. Since #1112, BOTH arms' Trader-ask sizing clamps to the SAME
+      // declared `capitalCeilingUsd` (`buildControlArmWiring` spreads the live
+      // arm's `TraderStepDeps`, ceiling included, into the control's), so as
+      // long as this anchor stays above that ceiling, `sizingEquity`'s
+      // `min(equity, ceiling)` lands both arms on the identical clamped figure
+      // regardless of which one's raw equity is bigger. Anchoring to the live
+      // arm's real equity — reliably far above the ceiling — is what keeps
+      // that true; anchoring to the ceiling itself would remove the margin
+      // and is untested territory.
+      //
+      // `yarn smoke` once measured a declared-£1,000-anchored control taking
+      // zero trades (`rounds_to_zero_shares` on every intent), recorded
+      // BEFORE #1112, when paper's `capitalCeilingUsd` did not exist at all:
+      // the live arm sized off its full ~$100,000 broker equity unclamped
+      // while a £1,000-anchored control sized off £1,000 alone — a real
+      // scale mismatch, not evidence about today's shared-ceiling clamp.
+      // Whether an equity-relative anchor still starves the control
+      // post-#1112 (once `whole_share_sizing` floors a much smaller notional)
+      // is the sizing question now escalated to the owner, not resolved
+      // here — this anchor policy is unchanged pending that call. Reading it
+      // once is what keeps this an anchor rather than a coupling — see
+      // `buildControlBookAnchorResolver`.
       resolveBook: buildControlBookAnchorResolver({
         liveAccountState: breakerStateDeps.accountState,
         store: new SqliteAccountStateStore(

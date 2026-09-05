@@ -12,6 +12,7 @@
  */
 
 import { INDICATOR_UNAVAILABLE_COUNTER } from '../../pipeline/analysts/index.js';
+import { buildArmComparison } from '../../pipeline/control-arm/index.js';
 import {
   AnthropicLlmClient,
   LATENCY_BUDGET_MS,
@@ -21,6 +22,7 @@ import {
 import { SimulatedBrokerAdapter, SqliteExecutionStore } from '../../pipeline/execution/index.js';
 import type { DailyMetricsSample, FeedbackConfig } from '../../pipeline/feedback-loop/index.js';
 import {
+  ARM_DIVERGENCE_RETURN_GAP_PCT,
   DEFAULT_ARM_COMPARISON_WINDOW_MS,
   nextBoundary,
   SqliteTuningStore,
@@ -38,6 +40,7 @@ import {
 import {
   ADR_0018_SUBCLASS_BRACKETS,
   DEFAULT_TRADER_CONFIG,
+  NO_PRECEDENT_MULTIPLIER,
   SqliteSetupStore,
 } from '../../pipeline/trader/index.js';
 import type {
@@ -67,14 +70,14 @@ import {
   UsEquityRegularHoursCalendar,
 } from '../../providers/market-data-service/index.js';
 import { PolymarketClient } from '../../providers/market-intelligence/index.js';
-import type { OrderIntent } from '../../shared/index.js';
+import type { ClosedTrade, OrderIntent, TradingArm } from '../../shared/index.js';
 import { SimulatedClock, TokenBucket } from '../../shared/index.js';
 import { DEFAULT_NOUS_MODELS } from '../../shared/llm/index.js';
 import { openSharedStore, type SharedStore as SqliteHandle } from '../../shared/store/index.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
 import { CostModelImpl, SqliteStage2SelectionStore } from '../../tools/backtest/index.js';
 import { DebateBarDecisionGate } from './decision-bar-gate.js';
-import { paperStartingProfile } from './paper-profile.js';
+import { LIVE_BOOK_GBP, paperStartingProfile } from './paper-profile.js';
 import { MIN_RETURN_OBSERVATIONS } from './production/daily-equity-metrics-source.js';
 import type { DataFailoverAlert } from './production/data-failover.js';
 import { buildPersistence } from './production/direct-bind.js';
@@ -3138,6 +3141,36 @@ describe('buildProductionOrchestrator', () => {
       }[];
       expect(rows[0]?.diverged).toBe(1);
     });
+
+    /**
+     * #1112 AC3 — the comparison's denominator and the Trader's sizing
+     * denominator resolve from ONE source, made falsifiable rather than
+     * asserted by code review.
+     *
+     * `production.ts`'s `runArmComparison` closes over the `LIVE_BOOK_GBP`
+     * module constant directly for `basis` — it does not read
+     * `config.capitalCeilingUsd` at all, so a version of this test that
+     * derives its expectation from a second, independent
+     * `paperStartingProfile('paper')` call (rather than from `config`, the
+     * object actually passed to `buildProductionOrchestrator`) passes
+     * regardless of what `capitalCeilingUsd` the running config carries,
+     * including `undefined`. Reading the expectation off `config` instead
+     * ties the assertion to this run's actual wiring.
+     */
+    it('the arm comparison basis and the paper sizing ceiling are the same value (#1112)', async () => {
+      const config = feedbackOnlyConfig({ capitalCeilingUsd: LIVE_BOOK_GBP });
+      const orchestrator = buildProductionOrchestrator(config);
+
+      await orchestrator.start();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await orchestrator.stop();
+
+      const row = db
+        .prepare('SELECT basis FROM arm_comparison_samples ORDER BY computed_at DESC LIMIT 1')
+        .get() as { basis: number } | undefined;
+      expect(row?.basis).toBeDefined();
+      expect(row?.basis).toBe(config.capitalCeilingUsd);
+    });
   });
 
   /**
@@ -6187,6 +6220,14 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
     traderConfig?: ProductionConfig['traderConfig'];
     /** Defaults to BTC-USD; the D3-bracket case drives a real LSE ETP instead. */
     signal?: { asset: string; asset_class: 'crypto' | 'stocks' };
+    /**
+     * #1112: additional `ProductionConfig` fields (e.g. `capitalCeilingUsd`,
+     * `riskConfig`) a case needs, applied AFTER `REAL_CONFIGS`/`traderConfig`
+     * so a case can add a field neither of those carry, but BEFORE the fixed
+     * `clock`/`dataSource`/`llmClient`/`broker` below so it cannot shadow the
+     * wiring this harness's determinism depends on.
+     */
+    configOverrides?: Partial<ProductionConfig>;
   }) {
     const signal = options.signal ?? DEFAULT_INSTRUMENT;
     const clock = new SimulatedClock(START);
@@ -6202,6 +6243,7 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
     const config = stubConfig(options.handle, {
       ...(REAL_CONFIGS as unknown as Partial<ProductionConfig>),
       ...(options.traderConfig === undefined ? {} : { traderConfig: options.traderConfig }),
+      ...options.configOverrides,
       clock,
       dataSource,
       llmClient: options.llmClient,
@@ -6236,7 +6278,7 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
     return handle
       .prepare(
         'SELECT arm, idempotency_key, instrument, side, stop, target, avg_entry_price, ' +
-          'decision_timestamp FROM open_positions ORDER BY arm',
+          'requested_size, decision_timestamp, conviction FROM open_positions ORDER BY arm',
       )
       .all() as {
       arm: string;
@@ -6246,7 +6288,9 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
       stop: number;
       target: number;
       avg_entry_price: number;
+      requested_size: number;
       decision_timestamp: string;
+      conviction: number;
     }[];
   }
 
@@ -6533,6 +6577,97 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
   });
 
   /**
+   * #1112 finding 4 (code review of #1137) — an ABSOLUTE check, on top of the
+   * scale-invariance one above.
+   *
+   * Scale-invariance (the "scales the requested size with the declared
+   * ceiling" case below) passes even if every size this fix produces is off
+   * by a constant factor — which is exactly what finding 2 of that review
+   * found: `capitalCeilingUsd` carries a GBP value into paper with no FX
+   * step, so the effective book is ~21% under what `LIVE_BOOK_GBP` declares.
+   * A ratio test cannot see that. This one pins the single-stock entry's
+   * NOTIONAL to ADR-0018 D5's formula against the declared ceiling, on both
+   * arms, through the armed `subclass_of` path (not the pre-D3 `atr_k`
+   * fallback) so it exercises the geometry the live system will actually run
+   * once the pool file lands.
+   *
+   * **This is not a full-conviction entry, and forcing one is not attempted.**
+   * `decide.ts`'s formula is
+   * `size x entry = conviction_multiplier x non_converged_haircut x
+   * cosine_multiplier x risk_fraction x equity`. `risk_fraction`
+   * (`riskFractionFor`) is the piece ADR-0018 D5 states and this test exists
+   * to pin; the other three multipliers are the debate engine's and the
+   * cosine-precedent module's, already covered by their own unit tests
+   * (`conviction-score.test.ts`, `cosine-precedent.test.ts`) and legitimately
+   * data-dependent (the stocks desk's evidence-strength term is haircut by
+   * `NO_DATA_MARKER` pinning with no Market Intelligence wired here). Rather
+   * than reverse-engineer the debate-engine's confidence output to force it to
+   * 1, this test reads the REAL confidence the fixture produced straight off
+   * the persisted row (`conviction` — `debate.confidence` verbatim, per
+   * `decide.ts`'s intent metadata) and derives `conviction_multiplier` from
+   * it, so the assertion is exact rather than approximate. The other two
+   * multipliers are pinned by the fixture's own construction:
+   * `non_converged_haircut` is 1 because `llmForOneDebate` always emits
+   * `converged: true`, and `cosine_multiplier` is `NO_PRECEDENT_MULTIPLIER`
+   * because `db` is fresh in `beforeEach` — no prior setup for
+   * `retrieveCosinePrecedent` to find.
+   *
+   * `entry` is derived from `stop` rather than read off `avg_entry_price`
+   * (0 on a write-ahead row, per the D3 test above) via the single-stock
+   * bracket's own `stop_pct`, the same technique the D3 test uses for
+   * `target / stop`.
+   *
+   * **The full-conviction fraction is 0.225, not D5's bare 0.25.**
+   * `riskFractionFor` (subclass-bracket.ts) sizes the FIRST tranche at
+   * `deployment_fraction x (1 - headroom_reserve_fraction)` since #897
+   * (2026-09-03) — 0.25 x (1 - 0.10) = 0.225. CLAUDE.md still states the
+   * per-position cash as "£350 / £250" (the bare D5 fractions, pre-#897);
+   * that line is stale against the shipped `riskFractionFor`, not this test —
+   * see the code-review report for the discrepancy.
+   */
+  it('sizes a single-stock entry to D5’s formula against the declared ceiling, on both arms (#1112)', async () => {
+    const LSE_ETP = { asset: 'LQQ3', asset_class: 'stocks' as const };
+    const singleStockBracket = ADR_0018_SUBCLASS_BRACKETS.single_stock_etp_3x;
+    if (singleStockBracket === null) {
+      throw new Error('ADR-0018 declares a bracket for the single-stock-ETP subclass');
+    }
+    const convictionFloor = REAL_CONFIGS.traderConfig.conviction_floor;
+
+    await runOneDecisionPass({
+      handle: db,
+      llmClient: llmForOneDebate(),
+      signal: LSE_ETP,
+      traderConfig: {
+        ...REAL_CONFIGS.traderConfig,
+        subclass_of: { [LSE_ETP.asset]: 'single_stock_etp_3x' },
+      } as unknown as ProductionConfig['traderConfig'],
+      configOverrides: { capitalCeilingUsd: LIVE_BOOK_GBP },
+    });
+
+    const lots = lotsByArm(db);
+    expect(lots.map((lot) => lot.arm)).toEqual(['control', 'live']);
+
+    const riskFraction =
+      singleStockBracket.deployment_fraction * (1 - singleStockBracket.headroom_reserve_fraction);
+
+    for (const lot of lots) {
+      expect(lot.side).toBe('buy');
+      // Both arms debate independently but off the same fixture tape and the
+      // same scripted LLM responses, so this is a real per-arm read, not an
+      // assumed shared value.
+      expect(lot.conviction).toBeGreaterThan(convictionFloor);
+      const convictionMultiplier = (lot.conviction - convictionFloor) / (1 - convictionFloor);
+      const expectedNotional =
+        convictionMultiplier * NO_PRECEDENT_MULTIPLIER * riskFraction * LIVE_BOOK_GBP;
+
+      // Long: stop = entry x (1 - stop_pct), so entry = stop / (1 - stop_pct).
+      const entry = lot.stop / (1 - singleStockBracket.stop_pct);
+      const notional = lot.requested_size * entry;
+      expect(notional).toBeCloseTo(expectedNotional, 6);
+    }
+  });
+
+  /**
    * The same mutation on the PRE-D3 fallback geometry, kept because
    * `subclass_of` is `{}` on every shipped profile until the pool file lands —
    * so `atr_k` is the width the two arms actually run on today.
@@ -6565,5 +6700,149 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
     } finally {
       widened.close();
     }
+  });
+
+  /**
+   * #1112 AC1/AC2/AC6 — through the real composition root, on BOTH arms.
+   *
+   * The bug this regresses: the Trader sized off `REAL_CONFIGS`' stub account
+   * equity (~100,000) because `capitalCeilingUsd` was `undefined` for paper,
+   * so `sizingEquity` (direct-bind.ts) never clamped. Reproducing the exact
+   * pre-fix notional would require reverse-engineering this fixture's debate
+   * conviction and cosine-precedent haircut; instead this proves the
+   * SCALE-INVARIANT property the fix is supposed to hold: sizing tracks the
+   * declared ceiling, not the account's funded equity, on both arms at once,
+   * because `capitalCeilingUsd` reaches the control arm by construction — its
+   * `deps.trader` is the live arm's own, spread verbatim in
+   * `control-arm-wiring.ts` — rather than by a second config that happens to
+   * agree.
+   *
+   * A ceiling of exactly 100x produces a notional of exactly 100x on both
+   * rows: that is "sized against the declared book, not funded equity" (AC1)
+   * and "funded equity does not change position size" (AC2, since the stub
+   * account's equity is IDENTICAL in both runs — only `capitalCeilingUsd`
+   * moves) made falsifiable, and it exercises both arms end-to-end (AC6).
+   * `REAL_CONFIGS.traderConfig` sets no `whole_share_sizing`, so BTC-USD's
+   * fractional size is not floored and the ratio is exact rather than
+   * integer-rounded.
+   */
+  it('scales the requested size with the declared ceiling, not with funded equity, on both arms (#1112)', async () => {
+    await runOneDecisionPass({
+      handle: db,
+      llmClient: llmForOneDebate(),
+      configOverrides: { capitalCeilingUsd: LIVE_BOOK_GBP },
+    });
+    const clamped = lotsByArm(db);
+    expect(clamped.map((lot) => lot.arm)).toEqual(['control', 'live']);
+    for (const lot of clamped) {
+      expect(lot.requested_size).toBeGreaterThan(0);
+    }
+
+    const unclamped = openSharedStore(':memory:');
+    try {
+      await runOneDecisionPass({
+        handle: unclamped,
+        llmClient: llmForOneDebate(),
+        // Matches `stubConfig`'s default account equity exactly (100,000) —
+        // a ceiling that never binds, which is what `capitalCeilingUsd ===
+        // undefined` behaved like before this fix (`sizingEquity` is a
+        // passthrough once the ceiling is >= equity).
+        configOverrides: { capitalCeilingUsd: LIVE_BOOK_GBP * 100 },
+      });
+      const raw = lotsByArm(unclamped);
+      expect(raw.map((lot) => lot.arm)).toEqual(['control', 'live']);
+
+      for (let i = 0; i < clamped.length; i += 1) {
+        expect(raw[i]?.requested_size).toBeCloseTo((clamped[i]?.requested_size ?? 0) * 100, 6);
+      }
+    } finally {
+      unclamped.close();
+    }
+  });
+
+  /**
+   * #1112 AC7 — the return-magnitude fix, without fabricating a local replay.
+   *
+   * No local paper-soak history exists at the corrected sizing to replay
+   * "today's control-arm session" against, and inventing a `return_pct`
+   * number would be worse than not answering. The defect was never in
+   * `production.ts`'s `basis` — it hardcodes `LIVE_BOOK_GBP` regardless of
+   * this bug (see the AC3 case above) — it was in the Trader's sizing
+   * numerator: `capitalCeilingUsd` was `undefined` for paper, so every
+   * notional, and therefore every trade's realized pnl, ran ~100x too large
+   * relative to the declared book. `return_pct = pnl / basis`
+   * (`buildArmComparison`) with a FIXED, correct `basis` therefore reports a
+   * return ~100x too large whenever the pnl feeding it came from a ~100x
+   * oversized position — which is exactly today's pre-fix control-arm
+   * session the issue reports at +13.5%.
+   *
+   * This runs both readings through the REAL `buildArmComparison` (not a
+   * reimplementation of its division) and checks each one's `return_pct`
+   * against `cumulative / basis` directly — not the ratio of the two
+   * readings, which holds by algebra for any linear pnl scaling regardless
+   * of whether `basis` itself is correct, so it could not have caught this
+   * bug. The instantiation is the issue's own documented reading: the same
+   * trade, re-run at this fix's ~100x-smaller sizing, reports a return on
+   * the order of the 0.5pp divergence threshold rather than ~27x above it.
+   */
+  it("buildArmComparison's return_pct falls ~100x when the same trade is sized against the corrected book instead of broker equity (#1112 AC7)", () => {
+    const CLOSED_AT = new Date(START.getTime() - 60_000);
+    const window = { from: new Date(CLOSED_AT.getTime() - 3_600_000), to: START };
+    const SIZING_INFLATION = 99_876 / LIVE_BOOK_GBP; // the issue's own ~100x figure.
+
+    const tradeWith = (realized_pnl_net: number): ClosedTrade & { arm: TradingArm } => ({
+      idempotency_key: 'ac7-fixture',
+      debate_id: 'ac7-fixture',
+      instrument: 'BTC-USD',
+      asset_class: 'crypto',
+      side: 'buy',
+      entry: 100,
+      stop: 90,
+      filled_size: 1,
+      realized_pnl_net,
+      fees_total: 0,
+      opened_at: new Date(CLOSED_AT.getTime() - 60_000),
+      closed_at: CLOSED_AT,
+      close_reason: 'target',
+      arm: 'control',
+    });
+
+    // Today's reported reading: +13.5%, produced by a position sized off
+    // broker equity — the pre-fix behaviour, held fixed at the CORRECT basis
+    // (`production.ts` never divided by the wrong thing; only the numerator
+    // was wrong).
+    const preFixPnl = 0.135 * LIVE_BOOK_GBP;
+    const preFix = buildArmComparison({
+      trades: [tradeWith(preFixPnl)],
+      ...window,
+      basis: LIVE_BOOK_GBP,
+    });
+    // Same trade, sized against the declared book instead: the pnl this fix
+    // produces is smaller by the same ratio the notional is.
+    const postFixPnl = preFixPnl / SIZING_INFLATION;
+    const postFix = buildArmComparison({
+      trades: [tradeWith(postFixPnl)],
+      ...window,
+      basis: LIVE_BOOK_GBP,
+    });
+
+    expect(preFix.control.return_pct).toBeCloseTo(0.135, 10);
+    // Against the real formula (`cumulative / basis`) at postFix's own pnl,
+    // not `preFix.control.return_pct / postFix.control.return_pct` — that
+    // ratio holds by algebra for ANY linear scaling once `postFixPnl` is
+    // defined as `preFixPnl / SIZING_INFLATION`, for whatever `basis` the two
+    // calls share, correct or not, so it cannot fail on the basis-swap bug
+    // this ticket fixes. This instead re-derives the expectation from
+    // `postFixPnl` and `LIVE_BOOK_GBP` directly, the same way the assertion
+    // above does for `preFix`.
+    expect(postFix.control.return_pct).toBeCloseTo(postFixPnl / LIVE_BOOK_GBP, 10);
+    // Pre-fix: ~27x the 0.5pp divergence threshold — "two orders above" as
+    // the acceptance criterion states.
+    expect(Math.abs(preFix.control.return_pct)).toBeGreaterThan(ARM_DIVERGENCE_RETURN_GAP_PCT * 10);
+    // Post-fix: same order as the threshold, not two above it.
+    expect(Math.abs(postFix.control.return_pct)).toBeLessThan(ARM_DIVERGENCE_RETURN_GAP_PCT * 10);
+    expect(Math.abs(postFix.control.return_pct)).toBeGreaterThan(
+      ARM_DIVERGENCE_RETURN_GAP_PCT / 10,
+    );
   });
 });
