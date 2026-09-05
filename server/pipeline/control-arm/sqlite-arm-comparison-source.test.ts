@@ -57,7 +57,7 @@ const from = new Date('2026-07-18T00:00:00Z');
 const to = new Date('2026-07-19T00:00:00Z');
 
 describe('SqliteArmComparisonSource.getClosedTradesBetween — #1112 AC5 regime guard', () => {
-  it('throws when the window mixes a declared-ceiling row with a no-ceiling row', () => {
+  it('drops the pre-fix rows when a window straddles the #1112 cutover', () => {
     const db = openSharedStore(':memory:');
     seed(db, makeTrade({ idempotency_key: 'live-1' }), 'live', 1000);
     seed(
@@ -68,8 +68,24 @@ describe('SqliteArmComparisonSource.getClosedTradesBetween — #1112 AC5 regime 
     );
     const source = new SqliteArmComparisonSource(db);
 
+    const trades = source.getClosedTradesBetween(from, to);
+
+    expect(trades.map((trade) => trade.idempotency_key)).toEqual(['live-1']);
+  });
+
+  it('throws when the window mixes two different declared ceilings', () => {
+    const db = openSharedStore(':memory:');
+    seed(db, makeTrade({ idempotency_key: 'live-1' }), 'live', 1000);
+    seed(
+      db,
+      makeTrade({ idempotency_key: 'control-1', closed_at: new Date('2026-07-18T21:00:00Z') }),
+      'control',
+      2000,
+    );
+    const source = new SqliteArmComparisonSource(db);
+
     expect(() => source.getClosedTradesBetween(from, to)).toThrow(
-      /mixes closed_trades sized under different regimes.*no declared ceiling.*a 1000 ceiling/,
+      /mixes closed_trades sized under different declared ceilings \(1000, 2000\)/,
     );
   });
 

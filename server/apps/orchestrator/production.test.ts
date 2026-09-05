@@ -3147,18 +3147,32 @@ describe('buildProductionOrchestrator', () => {
      * denominator resolve from ONE source, made falsifiable rather than
      * asserted by code review.
      *
-     * `production.ts`'s `runArmComparison` closes over the `LIVE_BOOK_GBP`
-     * module constant directly for `basis` — it does not read
-     * `config.capitalCeilingUsd` at all, so a version of this test that
-     * derives its expectation from a second, independent
-     * `paperStartingProfile('paper')` call (rather than from `config`, the
-     * object actually passed to `buildProductionOrchestrator`) passes
-     * regardless of what `capitalCeilingUsd` the running config carries,
-     * including `undefined`. Reading the expectation off `config` instead
-     * ties the assertion to this run's actual wiring.
+     * Both halves of that are load-bearing, and each one alone is a test that
+     * cannot fail. `production.ts`'s `runArmComparison` closes over the
+     * `LIVE_BOOK_GBP` module constant directly for `basis` — it does not read
+     * `config.capitalCeilingUsd` at all — so:
+     *
+     * - The expectation must be read off `config`, the object actually handed
+     *   to `buildProductionOrchestrator`, not re-derived from a second
+     *   independent `paperStartingProfile('paper')` call. Otherwise both sides
+     *   are the module constant and the assertion holds for any ceiling the
+     *   running config carries, `undefined` included.
+     * - The config's ceiling must come from the PROFILE, not from an inline
+     *   `LIVE_BOOK_GBP` literal here. `stubConfig` (which `feedbackOnlyConfig`
+     *   builds on) declares no ceiling of its own, so an inline literal pins
+     *   two references to one constant and survives `paperStartingProfile`
+     *   dropping `capitalCeilingUsd` entirely — the #1112 defect itself.
      */
     it('the arm comparison basis and the paper sizing ceiling are the same value (#1112)', async () => {
-      const config = feedbackOnlyConfig({ capitalCeilingUsd: LIVE_BOOK_GBP });
+      // Spread conditionally under `exactOptionalPropertyTypes`, matching
+      // `paper-profile.ts`'s own idiom: a profile that stopped declaring a
+      // ceiling leaves it ABSENT here, and the final assertion then compares
+      // the persisted `basis` against `undefined` and fails, which is the
+      // point.
+      const ceiling = paperStartingProfile('paper').capitalCeilingUsd;
+      const config = feedbackOnlyConfig(
+        ceiling === undefined ? {} : { capitalCeilingUsd: ceiling },
+      );
       const orchestrator = buildProductionOrchestrator(config);
 
       await orchestrator.start();
