@@ -20,6 +20,7 @@ import type { ArmPerformance } from '../../pipeline/control-arm/index.js';
 import { computeIndicator } from '../../providers/market-data-service/index.js';
 import { GUARDED_THRESHOLD_NAMES } from '../../shared/index.js';
 import { STAGE_OWNED_TABLES } from '../../shared/store/index.js';
+import { LIVE_BOOK_GBP } from './paper-profile.js';
 import {
   type ArmComparisonEvidence,
   buildSmokeFixtureBars,
@@ -41,6 +42,7 @@ import {
   type OutsideBenchmarkEvidence,
   type RiskCriticEvidence,
   runSmoke,
+  type SizingCeilingEvidence,
   SMOKE_GDELT_EXPECTED_AGGREGATES,
   SMOKE_GDELT_EXPECTED_ROWS,
   SMOKE_LLM_RESPONSE,
@@ -282,6 +284,7 @@ function healthyGateOptions(
     armComparison?: ArmComparisonEvidence;
     outsideBenchmarks?: OutsideBenchmarkEvidence;
     feedbackCycleScheduleWritten?: boolean;
+    sizingCeiling?: Partial<SizingCeilingEvidence>;
     fillSync?: FillSyncFailureEvidence;
     marketDataFetch?: MarketDataFetchEvidence;
   } = {},
@@ -292,6 +295,12 @@ function healthyGateOptions(
     armComparison: overrides.armComparison ?? healthyArmComparison(),
     outsideBenchmarks: overrides.outsideBenchmarks ?? healthyOutsideBenchmarks(),
     feedbackCycleScheduleWritten: overrides.feedbackCycleScheduleWritten ?? true,
+    sizingCeiling: {
+      configuredCeiling: LIVE_BOOK_GBP,
+      rows: 1,
+      allMatchConfiguredCeiling: true,
+      ...overrides.sizingCeiling,
+    },
     minTicks: overrides.minTicks ?? 2,
     llmRateLimiterSnapshot: meteredSnapshot(),
     exitPath: overrides.exitPath ?? healthyExitPath(),
@@ -2397,6 +2406,56 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
       expect(
         gate.failures.filter((failure) => failure.includes('feedback_cycle_schedule')),
       ).toEqual([]);
+    });
+  });
+
+  describe('the sizing capital ceiling stamp (#1112)', () => {
+    it('fails when a BTC-USD row carries a ceiling other than the configured one', () => {
+      // The mutation this catches: pass a literal, or another store's
+      // ceiling, into `new SqliteExecutionStore(...)` in production.ts
+      // instead of `config.capitalCeilingUsd`. Every other check in the gate
+      // stays green — the Trader still sizes and the position still fills —
+      // because the wrong wire is in the STAMP, not in the sizing arithmetic
+      // itself, and a null check alone would pass it.
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({ sizingCeiling: { allMatchConfiguredCeiling: false } }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('sizing_capital_ceiling');
+    });
+
+    it('names the missing profile ceiling, not the stamp wire, when the profile stopped setting one', () => {
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({
+          sizingCeiling: { configuredCeiling: undefined, allMatchConfiguredCeiling: false },
+        }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('capitalCeilingUsd');
+    });
+
+    it('names the absent row as no-evidence rather than a broken wire', () => {
+      // #1112 review: reading only `open_positions` failed a run whose only
+      // BTC-USD lot had already closed, and blamed the config wire for it.
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({ sizingCeiling: { rows: 0, allMatchConfiguredCeiling: false } }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('no evidence either way');
+    });
+
+    it('passes when every BTC-USD row carries the declared ceiling', () => {
+      const gate = evaluateSmokeGate(transactedObservations(), healthyGateOptions());
+
+      expect(gate.failures.filter((failure) => failure.includes('sizing_capital_ceiling'))).toEqual(
+        [],
+      );
     });
   });
 

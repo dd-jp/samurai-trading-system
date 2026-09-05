@@ -8,6 +8,7 @@ import {
   formatUsd,
 } from '../../lib/format.ts';
 import { settledOutcome } from '../../lib/ledger.ts';
+import { presentCell } from '../../lib/state-presentation.ts';
 import {
   cellsByStageOf,
   decisionOf,
@@ -19,14 +20,13 @@ import {
   verdictFor,
 } from '../../lib/trace.ts';
 import {
-  cellStateWord,
   OUTCOME_WORD,
   sideWord,
   stageName,
   WAITING_FOR_FIRST_SNAPSHOT,
 } from '../../lib/vocabulary.ts';
 import { Seal } from '../Seal.tsx';
-import { cellTone, StateWord } from '../StateWord.tsx';
+import { StateWord } from '../StateWord.tsx';
 import { DebateSection, FillsList, GatesSection, Timeline } from '../TraceSections.tsx';
 
 export interface Selection {
@@ -75,16 +75,14 @@ function LaneRow(props: { lane: PipelineLane; selected: boolean; onSelect: () =>
           if (cell === undefined) {
             return (
               <span key={stage} className="lane-cell" data-stage={stage}>
-                <StateWord tone="wait">no cell</StateWord>
+                <StateWord state={{ word: 'no cell', tone: 'wait' }} />
               </span>
             );
           }
           const decision = decisionOf(cell);
           return (
             <span key={stage} className="lane-cell" data-stage={stage} data-state={cell.state}>
-              <StateWord tone={cellTone(cell.state)}>
-                {cellStateWord(cell.state, lane.outcome)}
-              </StateWord>
+              <StateWord state={presentCell(cell.state, lane.outcome)} />
               {decision !== null && <span className="lane-decision">{decision}</span>}
             </span>
           );

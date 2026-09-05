@@ -1,0 +1,35 @@
+-- The sizing regime a lot was written under (#1112, AC5).
+--
+-- ## Why nullable, not `DEFAULT 0`
+--
+-- Migrations 0033 and 0035 default to the value every existing row actually
+-- had. This column follows the same rule, and here that value is `NULL`:
+-- every row written before this migration was sized with `capitalCeilingUsd
+-- === undefined` (paper's ceiling did not exist yet; the same remains true
+-- for backtest), so NULL is not "unknown" — it is the historically-accurate
+-- record of "no declared ceiling was in effect", which is what
+-- `oneSizingRegime` (sqlite-arm-comparison-source.ts) reads it as when it
+-- drops pre-#1112 rows from a window that straddles the fix. A `DEFAULT 0`
+-- would read as a real ceiling of zero.
+--
+-- ## Why a value, not a boolean
+--
+-- The ceiling itself, not a `sized_post_1112` flag, so a `GROUP BY` also
+-- catches the narrower case of one regime at two different ceiling values
+-- (an operator changing `LIVE_BOOK_GBP` or `SAMURAI_LIVE_MAX_CAPITAL_USD`
+-- mid-window).
+--
+-- ## Named without a currency suffix, deliberately (#949, now #1180)
+--
+-- This stores `ProductionConfig.capitalCeilingUsd` verbatim, unconverted: a
+-- real USD figure on a live run (`SAMURAI_LIVE_MAX_CAPITAL_USD`), and, as of
+-- this migration, a GBP figure (`LIVE_BOOK_GBP`) on a paper run, with no FX
+-- step either way. A `_gbp` suffix would assert a currency this column
+-- cannot guarantee. Only equality over it is meaningful across a mixed
+-- paper/live window; ordering or averaging is not. #949 recorded the
+-- mismatch and is CLOSED — it resolved by refusing the comparison, not by
+-- converting. #1180 owns the conversion, and the backfill it will owe this
+-- column when it lands.
+
+ALTER TABLE open_positions ADD COLUMN sizing_capital_ceiling REAL;
+ALTER TABLE closed_trades ADD COLUMN sizing_capital_ceiling REAL;

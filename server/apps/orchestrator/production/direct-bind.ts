@@ -201,8 +201,10 @@ export interface TraderStepDeps extends BreakerStateDeps {
   traderLog?: TraderLogStore;
   /**
    * The declared capital ceiling (#511, `ProductionConfig.capitalCeilingUsd`).
-   * Undefined on every paper/backtest run and in every test — absent means "no
-   * ceiling declared", never "a ceiling of zero". See `sizingEquity`.
+   * Undefined on every backtest run and in most tests; defined on paper runs
+   * too since #1112, at `LIVE_BOOK_GBP` (paper-profile.ts), and on live runs
+   * at `SAMURAI_LIVE_MAX_CAPITAL_USD`. Absent means "no ceiling declared",
+   * never "a ceiling of zero". See `sizingEquity`.
    */
   capitalCeilingUsd?: number;
   /**
@@ -231,12 +233,23 @@ export interface TraderStepDeps extends BreakerStateDeps {
  * The equity the Trader may SIZE against — `min(declared ceiling, real equity)`
  * (#511).
  *
- * This is the place the ceiling binds, and it is the only place it needs to:
- * `decide` computes `size = (equity * riskFraction) / stopDistance`
- * (trader/decide.ts), so `equity` is the single input in the system that scales
- * a position with the account balance. The `RiskConfig` notional caps are
- * absolute dollars derived from the same ceiling at profile-build time, so they
- * cannot widen with a funded account on their own.
+ * This is the place the ceiling binds for the TRADER's sizing inlet, but it is
+ * not the only equity-scaled inlet in the system: `decide` computes
+ * `size = (equity * riskFraction) / stopDistance` (trader/decide.ts) against
+ * THIS function's return, so the EQUITY the Trader sizes against cannot exceed
+ * the declared ceiling — `riskFraction / stopDistance` is not itself bounded
+ * by 1 (see the `vol_floor_fraction` caveat below), so this does not bound the
+ * resulting notional, only its equity input. The `RiskConfig` notional caps
+ * are a separate path — since #886
+ * they are FRACTIONS (`RISK_CAP_EQUITY_FRACTIONS`, paper-profile.ts), not the
+ * absolute-dollar figures `riskCapsFor` (deleted) once derived from a ceiling
+ * at profile-build time — and `risk-manager/index.ts` multiplies them against
+ * live `portfolio.equity` at EVALUATE time, not against this function's
+ * clamped return. They therefore track a funded account's real balance
+ * directly and DO widen with it: #1135 (open) is exactly this gap — the
+ * generic per-asset/per-class/gross/concentration caps resolve against raw
+ * broker equity, not the #1112-corrected sizing ceiling this function
+ * enforces.
  *
  * **Applied here and NOT inside `computePortfolioView`**, which is the tempting
  * shortcut and would be wrong: that same `equity` is the denominator of
@@ -335,8 +348,9 @@ export function buildTraderSteps(deps: TraderStepDeps): {
         // pre-#753 behaviour and the value `TraderInput.arm` defaults to.
         ...(deps.arm === undefined ? {} : { arm: deps.arm }),
         marketData: deps.marketData,
-        // #511: bounded by the declared capital ceiling on a live run, verbatim
-        // portfolio equity everywhere else.
+        // #511: bounded by the declared capital ceiling whenever one is
+        // declared (live always; paper since #1112), verbatim portfolio
+        // equity only on backtest and undeclared tests.
         //
         // #847: either the STRICT whole-book equity or the strict read's own
         // throw — never a partial figure. A degraded view omits a held

@@ -107,6 +107,7 @@ import {
   withSessionNormalization,
 } from '../../../providers/market-data-service/index.js';
 import {
+  currentTraceId,
   DEFAULT_POLYGON_PACING,
   type Logger,
   resolvePolygonPacing,
@@ -395,7 +396,7 @@ export function buildFailoverDataSource(deps: LiveDataFailoverDeps): DataSource 
         })
         .catch((error: unknown) => {
           deps.logger.log({
-            trace_id: 'data-failover',
+            trace_id: currentTraceId() ?? 'data-failover',
             stage: 'orchestrator',
             level: 'error',
             message:
