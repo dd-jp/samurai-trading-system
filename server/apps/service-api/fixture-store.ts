@@ -704,6 +704,13 @@ const ARM_COMPARISONS: ArmComparisonSample[] = [
   },
 ];
 
+/**
+ * #1140: the fixture server states a cap rather than sending `null`, so the
+ * demo exercises the meter rather than its empty state. ADR-0008's paper
+ * figure, which is what a fixture run stands in for.
+ */
+const FIXTURE_LLM_CAP_USD = 50;
+
 const LLM_SPEND_ALL = {
   cost_usd: 6.7742,
   input_tokens: 3_488_900,
@@ -878,6 +885,7 @@ export class InMemoryQueryStore implements DashboardQueryStore {
       last_24h: { ...LLM_SPEND_24H },
       last_7d: { ...LLM_SPEND_7D },
       all_time: { ...LLM_SPEND_ALL },
+      cap_usd: FIXTURE_LLM_CAP_USD,
     };
   }
 

@@ -138,6 +138,44 @@ describe('rail', () => {
     expect(within(rail).queryByRole('img', { name: /LLM budget used/ })).toBeNull();
   });
 
+  // #1140: the denominator is the enforcer's, so a raised budget must move the
+  // meter — with a client-side constant this test reads $50 whatever the wire
+  // says, which is the defect.
+  it('draws the meter against the cap the wire carries, not a fixed figure', async () => {
+    const spend = makeSpend({ cap_usd: 200 });
+    spend.all_time = { ...spend.all_time, cost_usd: 50 };
+    renderApp([makeSnapshot({ llm_spend: spend })]);
+    const rail = screen.getByRole('complementary', { name: 'Rail' });
+
+    expect(await within(rail).findByText('$50.00 / $200.00')).toBeTruthy();
+    expect(
+      within(rail).getByRole('img', { name: 'LLM budget used: 25.0% of the $200.00 cap' }),
+    ).toBeTruthy();
+    expect(within(rail).queryByText(/over cap/)).toBeNull();
+  });
+
+  it('says over cap only against the enforced cap, never a stale one', async () => {
+    const spend = makeSpend({ cap_usd: 20 });
+    spend.all_time = { ...spend.all_time, cost_usd: 25 };
+    renderApp([makeSnapshot({ llm_spend: spend })]);
+    const rail = screen.getByRole('complementary', { name: 'Rail' });
+
+    expect(await within(rail).findByText(/over cap/)).toBeTruthy();
+  });
+
+  // An uncapped run has no denominator, and inventing one would report a
+  // breach of a budget nobody is enforcing.
+  it('names the reason instead of drawing a meter when no budget is configured', async () => {
+    renderApp([makeSnapshot({ llm_spend: makeSpend({ cap_usd: null }) })]);
+    const rail = screen.getByRole('complementary', { name: 'Rail' });
+
+    expect(
+      await within(rail).findByText('no LLM budget configured — meter not drawable'),
+    ).toBeTruthy();
+    expect(within(rail).queryByRole('img', { name: /LLM budget used/ })).toBeNull();
+    expect(within(rail).queryByText(/over cap/)).toBeNull();
+  });
+
   it('says the Alpaca equity is unavailable, with the probe detail, when the probe is not ok', async () => {
     const snapshot = makeSnapshot();
     snapshot.providers.alpaca = {

@@ -4,9 +4,6 @@ import { formatClockUtc, formatPercent, formatUsd, UNKNOWN } from '../lib/format
 import { providerStateWord, WAITING_FOR_FIRST_SNAPSHOT } from '../lib/vocabulary.ts';
 import { Track } from './Track.tsx';
 
-/** ADR-0008's spend cap. The rail draws all-time spend against it. */
-const LLM_SPEND_CAP_USD = 50;
-
 /**
  * The tighter of CONTEXT.md's two stated drawdown tolerances (#798,
  * 2026-08-26): ~26.2% for 3× index ETPs, ~41.8% for 3× single-stock ETPs.
@@ -184,11 +181,29 @@ function AlertDeliveryBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
   );
 }
 
+/**
+ * The enforced ceiling, or `null` when nothing bounds this run's spend
+ * (#1140). Read off the wire rather than held here: `SqliteSpendCap` enforces
+ * `ProductionConfig.llmBudgetUsd`, ADR-0008 records that the figure moves for
+ * live, and a copy of it in this file would keep drawing $50 against a budget
+ * nobody is enforcing.
+ *
+ * `typeof`-checked rather than trusted, like every other wire read behind
+ * `toWireSnapshot`: a server that sends no cap at all, or a non-number, means
+ * this client cannot state a denominator — which is the same rendering as
+ * `null`, not a reason to invent one.
+ */
+function capOf(snapshot: WireSnapshot | null): number | null {
+  const cap = snapshot?.llm_spend?.cap_usd;
+  return typeof cap === 'number' && Number.isFinite(cap) && cap > 0 ? cap : null;
+}
+
 function SpendBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
   const allTime = snapshot?.llm_spend?.all_time;
   const spent = allTime?.cost_usd;
-  const fraction = spent === undefined ? Number.NaN : spent / LLM_SPEND_CAP_USD;
-  const overCap = spent !== undefined && Number.isFinite(spent) && spent >= LLM_SPEND_CAP_USD;
+  const cap = capOf(snapshot);
+  const fraction = spent === undefined || cap === null ? Number.NaN : spent / cap;
+  const overCap = cap !== null && spent !== undefined && Number.isFinite(spent) && spent >= cap;
   const unpriced = allTime?.unpriced_calls ?? 0;
   const unattributed = allTime?.per_debate.unattributed_calls ?? 0;
   const windows = snapshot?.llm_spend;
@@ -197,17 +212,22 @@ function SpendBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
       <div className="rail-meter-head">
         <span className="muted">LLM cap</span>
         <span className="mono">
-          {spent === undefined ? UNKNOWN : formatUsd(spent)} / ${LLM_SPEND_CAP_USD}
+          {spent === undefined ? UNKNOWN : formatUsd(spent)} /{' '}
+          {cap === null ? UNKNOWN : formatUsd(cap)}
         </span>
       </div>
       {Number.isFinite(fraction) ? (
         <Track
           fraction={fraction}
           tone={overCap ? 'bad' : 'cyan'}
-          label={`LLM budget used: ${formatPercent(fraction)} of the $${LLM_SPEND_CAP_USD} cap`}
+          label={`LLM budget used: ${formatPercent(fraction)} of the ${formatUsd(cap ?? Number.NaN)} cap`}
         />
       ) : (
-        <span className="rail-note">no spend figure on this snapshot — meter not drawable</span>
+        <span className="rail-note">
+          {cap === null
+            ? 'no LLM budget configured — meter not drawable'
+            : 'no spend figure on this snapshot — meter not drawable'}
+        </span>
       )}
       {windows != null && (
         <span className="rail-note mono" data-field="llm-windows">
