@@ -423,6 +423,7 @@ export function buildSnapshot(
     metrics,
     arm_comparison,
     outside_benchmarks,
+    alert_delivery_failures: store.getAlertDeliveryFailureCount(asOf),
     providers: providers.readProviderStatus(),
     llm_spend: store.getLlmSpend(asOf),
     // Same `asOf` as every other field above, which is the reason the Pipeline

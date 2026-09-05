@@ -152,6 +152,26 @@ function ProvidersBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
   );
 }
 
+/**
+ * #1108: renders only when `alert_delivery_failures` is nonzero — an
+ * operator reading the dashboard must be able to tell the alert channel is
+ * down, but a healthy channel needs no permanent tile saying so, matching
+ * `LiveTickBlock`'s "idle" posture rather than `ProvidersBlock`'s
+ * always-shown tiles.
+ */
+function AlertDeliveryBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
+  const count = snapshot?.alert_delivery_failures ?? 0;
+  if (count === 0) return null;
+  return (
+    <div className="rail-block rail-alert-degraded" data-field="alert-delivery-failures">
+      <span className="label">Alert channel</span>
+      <span className="rail-value" data-alert-degraded="true">
+        {count} alert{count === 1 ? '' : 's'} failed to deliver
+      </span>
+    </div>
+  );
+}
+
 function SpendBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
   const allTime = snapshot?.llm_spend?.all_time;
   const spent = allTime?.cost_usd;
@@ -273,6 +293,7 @@ export function Rail(props: RailProps) {
         <HealthBlock feed={feed} />
         <ModeBlock snapshot={snapshot} />
         <LiveTickBlock snapshot={snapshot} />
+        <AlertDeliveryBlock snapshot={snapshot} />
         <ProvidersBlock snapshot={snapshot} />
         <SpendBlock snapshot={snapshot} />
         <DrawdownBlock metrics={snapshot?.metrics ?? null} />

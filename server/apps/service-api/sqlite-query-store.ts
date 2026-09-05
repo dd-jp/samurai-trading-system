@@ -894,6 +894,13 @@ export class SqliteQueryStore implements DashboardQueryStore {
       llm_latency_ms_p95: percentile(latencies, 0.95),
     };
   }
+
+  getAlertDeliveryFailureCount(asOf: Date): number {
+    const row = this.db
+      .prepare('SELECT COUNT(*) AS n FROM alert_delivery_failures WHERE timestamp <= ?')
+      .get(toStoredTimestamp(asOf)) as { n: number };
+    return row.n;
+  }
 }
 
 /**

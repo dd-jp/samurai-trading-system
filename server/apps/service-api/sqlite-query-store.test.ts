@@ -651,6 +651,29 @@ describe('SqliteQueryStore.getLlmSpend per-debate percentiles', () => {
   }
 });
 
+describe('SqliteQueryStore.getAlertDeliveryFailureCount (#1108)', () => {
+  function seedFailure(db: SharedStore, at: Date): void {
+    db.prepare(
+      `INSERT INTO alert_delivery_failures (chat_id, method, body, error, timestamp)
+       VALUES ('chat-1', 'sendMessage', 'body', 'fetch failed', ?)`,
+    ).run(at.toISOString());
+  }
+
+  it('returns 0 on an empty table rather than throwing or returning null', () => {
+    const store = new SqliteQueryStore(makeDb());
+    expect(store.getAlertDeliveryFailureCount(NOW)).toBe(0);
+  });
+
+  it('counts every recorded failure up to and including asOf', () => {
+    const db = makeDb();
+    seedFailure(db, new Date(NOW.getTime() - 1_000));
+    seedFailure(db, NOW);
+    seedFailure(db, new Date(NOW.getTime() + 1_000));
+
+    expect(new SqliteQueryStore(db).getAlertDeliveryFailureCount(NOW)).toBe(2);
+  });
+});
+
 describe('percentile', () => {
   it('returns 0 for an empty sample rather than NaN or undefined', () => {
     // A fresh database has no debates; the tile must render, not crash.

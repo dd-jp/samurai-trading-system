@@ -157,6 +157,20 @@ describe('rail', () => {
     renderApp([makeSnapshot({ llm_spend: spend })]);
     expect(await screen.findByText(/floor — 3 unpriced calls/)).toBeTruthy();
   });
+
+  it('says nothing about the alert channel when nothing has failed to deliver', async () => {
+    renderApp([makeSnapshot()]);
+    const rail = screen.getByRole('complementary', { name: 'Rail' });
+    await within(rail).findByText('ALIVE');
+    expect(within(rail).queryByText(/failed to deliver/)).toBeNull();
+  });
+
+  // #1108: silence must not read as calm — the rail names the count instead.
+  it('surfaces a nonzero alert_delivery_failures count as a degraded channel', async () => {
+    renderApp([makeSnapshot({ alert_delivery_failures: 4 })]);
+    const rail = screen.getByRole('complementary', { name: 'Rail' });
+    expect(await within(rail).findByText('4 alerts failed to deliver')).toBeTruthy();
+  });
 });
 
 describe('tabs', () => {

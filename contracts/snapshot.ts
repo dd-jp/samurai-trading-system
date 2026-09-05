@@ -598,6 +598,14 @@ export interface DashboardSnapshot {
    */
   outside_benchmarks: OutsideBenchmarkRow[];
   /**
+   * Count of alert sends that exhausted retry and were durably recorded in
+   * `alert_delivery_failures` (#1108) — the answer to "is the alert channel
+   * down", so an operator reads a number instead of reading silence as calm.
+   * All-time, not windowed: the table has no retention policy yet, and a
+   * nonzero count is meant to stay visible until someone looks.
+   */
+  alert_delivery_failures: number;
+  /**
    * Third-party provider tiles. Three providers, three different realities,
    * and the shapes differ because the underlying facts do rather than for
    * presentational convenience:
