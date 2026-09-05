@@ -87,21 +87,16 @@
  * because `p` is a live quote; there is nothing in this file to test at build
  * time.
  *
- * `us-recession-2026` is DELIBERATELY kept despite sitting at 0.925 — headroom
- * 0.075, inside the bound — and this is the case that shows why the guard and
- * not the deletion is the fix. On the 2026-08-18 re-probe it carried $763 of
- * 24h volume, above `MIN_VOLUME_24H_USD`: it CLEARS book quality now, so
- * without the guard it would already be emitting the permanent zero vote #833
- * predicted.
- *
- * The discriminator between deleting and keeping is PLAUSIBLE RETURN TO RANGE,
- * and nothing else — both a deleted row and a kept-but-pinned one are silent,
- * and both the CPI legs and this row would log the same escalating `warn`, so
- * log noise cannot be the argument in either direction. A CPI print bucket at
- * 0.9945 days from resolution is settled and will only harden; a recession
- * probability with months left to run can come back under 0.90, and if it does
- * this row resumes on its own with no edit. That is the whole reason one is
- * deleted and the other kept.
+ * `us-recession-2026` was, at this point, KEPT despite sitting at 0.925 —
+ * headroom 0.075, inside the bound — on the bet that PLAUSIBLE RETURN TO RANGE
+ * (months left to run, unlike a CPI print days from resolution) would
+ * eventually pull it back over the line rather than the CPI tails' one-way
+ * hardening. **#1120 is that bet called**: re-measured 2026-09-04 the row had
+ * drifted the other way, to 0.935 (headroom 0.065), and `consecutive_refusals`
+ * had reached 12 in one process's lifetime with no sign of recovery — the
+ * exact permanent-zero-vote state this section predicted #833's guard would
+ * have to catch. See "#1120: the two recession rows replaced" below for the
+ * resolution: both `us-recession-2026` and `us-recession-2027` are gone.
  *
  * WHICH rows both clear book quality and have room to move is a per-probe
  * fact, not a property of the table. On 2026-08-17 it was `fed-2026-09`
@@ -114,9 +109,57 @@
  * half of the vote-inflation limitation recorded in `polymarket-agent.ts`.
  *
  * A row that never recovers must not decay in silence, which is what the
- * consecutive-refusal escalation in `polymarket-agent.ts#refuse` is for.
+ * consecutive-refusal escalation in `polymarket-agent.ts#refuse` is for — and,
+ * since #1120, what makes that escalation survive a process restart: the
+ * streak is now persisted through `MiArchiveStore` (migration 0004), so a soak
+ * that bounces more than once a day still accumulates past
+ * `REFUSAL_WARN_STREAK` instead of resetting to 1 on every restart.
  * Whether these floors are the right floors is David's call; they are set where
  * a market's quoted probability is a price someone actually paid.
+ *
+ * ## #1120: the two recession rows replaced
+ *
+ * `us-recession-2026`'s bet did not pay off (see above) and `us-recession-2027`
+ * never cleared the volume floor for long: its 24h volume swung from $278
+ * (2026-08-17) to $3.23 (2026-08-18) to $258.58 (2026-09-05, live-checked while
+ * fixing this issue) — thin enough that a full day of hourly polls landing on
+ * the wrong side of $100 is unsurprising, not anomalous. Both were refusing on
+ * every poll `consecutive_refusals` had a record of as of 2026-09-04.
+ *
+ * Replaced rather than re-pointed at another recession horizon: a market
+ * priced against a fixed year-end deadline structurally hardens as the
+ * deadline nears (the CPI tails' failure mode, and now this one's), so a THIRD
+ * recession-by-date row would only defer the same problem. The replacements
+ * are event risk from a DIFFERENT macro driver than every surviving row (the
+ * four Fed rows are one interest-rate view measured four ways) so the table's
+ * cross-row vote-inflation limitation is not made worse:
+ *
+ * | row | eventSlug | bullish price | 24h volume | liquidity | verdict (2026-09-05) |
+ * | --- | --- | --- | --- | --- | --- |
+ * | `ru-ua-ceasefire-2026` | `russia-x-ukraine-ceasefire-agreement-by` (Dec 31, 2026 market) | 0.265 | $219,232 | $116,303 | ingests |
+ * | `hormuz-traffic-2026` | `strait-of-hormuz-traffic-returns-to-normal-by-december-31` | 0.265 | $40,237 | $432,446 | ingests |
+ *
+ * **`ru-ua-ceasefire-2026`** tracks the Gamma event's December-31-2026 market
+ * (of five horizons on the same event, from May 2026 to June 2027 — #504 scope
+ * item 4 still means picking the one market, not one per horizon). A ceasefire
+ * resolves the war-risk premium sitting in energy prices and risk sentiment
+ * generally, so rising P(ceasefire) is BULLISH for equities; `bullishOutcome`
+ * is therefore `'Yes'`.
+ *
+ * **`hormuz-traffic-2026`** tracks whether Strait-of-Hormuz shipping normalizes
+ * by the same year-end deadline the recession rows used to carry, which keeps
+ * this table's overall time-decay character unchanged. Hormuz disruption is an
+ * oil-supply shock; traffic returning to normal removes that tail risk, so
+ * rising P(Yes) is BULLISH. `bullishOutcome` is `'Yes'`.
+ *
+ * Both prices sit at 0.265 — the same live 2026-09-05 measurement, a
+ * coincidence of the day, not a property of either market — for 0.265 of
+ * headroom, well clear of `MIN_PROBABILITY_HEADROOM` (0.10), and both cleared
+ * `MIN_VOLUME_24H_USD`/`MIN_LIQUIDITY_USD` by one to two orders of magnitude
+ * rather than the single-digit margins `us-recession-2027` lived on — the
+ * `fed-2026-12`/`fed-2027-01` book-quality margins in the table above are the
+ * same kind of thin this change was trying to move away from, and it does not
+ * touch those rows because the acceptance criteria named these two.
  *
  * ## Slug rot is a known, unmitigated limitation
  *
@@ -172,9 +215,10 @@ export interface CuratedMacroMarket {
 }
 
 /**
- * The tracked set. Six rows: four Fed decisions and two US recession horizons.
- * #504 asks for 6–10 series, so this sits at the floor of that range after
- * #833 removed the two pinned CPI tails.
+ * The tracked set. Six rows: four Fed decisions and two geopolitical event
+ * risks (#1120 replaced the two US recession horizons — see that section
+ * above). #504 asks for 6–10 series, so this sits at the floor of that range
+ * after #833 removed the two pinned CPI tails.
  */
 export const CURATED_MACRO_MARKETS: readonly CuratedMacroMarket[] = [
   {
@@ -220,25 +264,40 @@ export const CURATED_MACRO_MARKETS: readonly CuratedMacroMarket[] = [
     rationale: 'Same as the September row, the first meeting of the next calendar year.',
   },
   {
-    id: 'us-recession-2026',
-    eventSlug: 'us-recession-by-end-of-2026',
-    marketSlug: 'us-recession-by-end-of-2026',
-    bullishOutcome: 'No',
-    entity: 'US-RECESSION-2026',
-    label: 'P(no US recession by end of 2026)',
+    // #1120 replaced `us-recession-2026` (pinned at 0.935, 0.065 of headroom —
+    // below MIN_PROBABILITY_HEADROOM) with this row. See "#1120: the two
+    // recession rows replaced" above for the live evidence and why a
+    // different macro driver was chosen over another recession horizon.
+    id: 'ru-ua-ceasefire-2026',
+    eventSlug: 'russia-x-ukraine-ceasefire-agreement-by',
+    marketSlug: 'russia-x-ukraine-ceasefire-agreement-by-december-31-2026',
+    bullishOutcome: 'Yes',
+    entity: 'RU-UA-CEASEFIRE-2026',
+    label: 'P(Russia x Ukraine ceasefire agreement by December 31, 2026)',
     rationale:
-      'A rising recession probability is bearish for a long equity book. Stated with the ' +
-      'caveat this file cannot resolve: the same item reaches SGLN (gold) through the ' +
-      'asset-class filter, where a recession bid is plausibly BULLISH. The contract carries ' +
-      'no per-instrument direction — see the limitation in polymarket-agent.ts.',
+      'A ceasefire resolves the war-risk premium sitting in energy prices and risk sentiment ' +
+      'generally, so a rising probability is bullish for a long equity book. "Yes" is ' +
+      'therefore the bullish side. Stated with the same caveat the row it replaced carried: the ' +
+      'same item reaches SGLN (gold) through the asset-class filter, where a ceasefire is ' +
+      'plausibly BEARISH — a war-risk safe-haven bid unwinding. The contract carries no ' +
+      'per-instrument direction — see the limitation in polymarket-agent.ts.',
   },
   {
-    id: 'us-recession-2027',
-    eventSlug: 'us-recession-by-end-of-2027-20260807185409760',
-    marketSlug: 'us-recession-by-end-of-2027-20260807185409760',
-    bullishOutcome: 'No',
-    entity: 'US-RECESSION-2027',
-    label: 'P(no US recession by end of 2027)',
-    rationale: 'Same as the 2026 row, one year further out.',
+    // #1120 replaced `us-recession-2027` (24h volume swinging from $278 to
+    // $3.23 to $258.58 across three probes — never durably above the $100
+    // floor) with this row.
+    id: 'hormuz-traffic-2026',
+    eventSlug: 'strait-of-hormuz-traffic-returns-to-normal-by-december-31',
+    marketSlug: 'strait-of-hormuz-traffic-returns-to-normal-by-december-31',
+    bullishOutcome: 'Yes',
+    entity: 'HORMUZ-TRAFFIC-2026',
+    label: 'P(Strait of Hormuz traffic returns to normal by December 31, 2026)',
+    rationale:
+      'A Strait of Hormuz disruption is an oil-supply shock; traffic normalizing removes that ' +
+      'tail risk, so a rising probability is bullish for a long equity book. "Yes" is ' +
+      'therefore the bullish side. Stated with the same caveat the row it replaced carried: the ' +
+      'same item reaches SGLN (gold) through the asset-class filter, where normalizing traffic ' +
+      'is plausibly BEARISH — a supply-shock safe-haven bid unwinding. The contract carries no ' +
+      'per-instrument direction — see the limitation in polymarket-agent.ts.',
   },
 ];

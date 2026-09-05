@@ -444,6 +444,110 @@ describe('PolymarketAgent fail-closed guards (#504 scope item 7)', () => {
     expect(refusal?.level).toBe('info');
   });
 
+  /**
+   * The #1120 regression: `#refusals` is an in-memory `Map`, so a restart
+   * used to reset a row's streak to 1 no matter how long it had been dead —
+   * `us-recession-2026` reached 12 in one process's lifetime and reset on the
+   * next boot, which is exactly what let a permanently-refusing row read as
+   * merely occasional on a soak that bounces more than once a day. Two
+   * SEPARATE `PolymarketAgent` instances sharing one archive is the fixture
+   * for "a restart happened": the second agent's in-memory map starts empty,
+   * the way a fresh process's does.
+   */
+  it('resumes a refusal streak from the archive after a simulated restart', async () => {
+    const archive = new MiArchiveStore();
+    let at = new Date('2026-08-17T00:00:00Z');
+    const store = new MarketIntelligenceStore({ now: () => at });
+    const client = {
+      fetchEventMarket: async () => market({ volume24hr: 5, updatedAt: at }),
+      fetchPriceHistory: async () => [],
+    };
+
+    const beforeRestart = new PolymarketAgent({
+      client,
+      store,
+      clock: { now: () => at },
+      table: [ENTRY],
+      archive,
+    });
+    for (let pass = 0; pass < 12; pass += 1) {
+      at = new Date(at.getTime() + 60 * 60 * 1000);
+      await beforeRestart.refresh(`before-${pass}`);
+    }
+    expect(archive.refusalStreak(SOURCE_POLYMARKET, ENTRY.id)).toBe(12);
+
+    // A brand-new instance, sharing only the archive — the in-memory `#refusals`
+    // map this process never populated.
+    const log = vi.fn();
+    const afterRestart = new PolymarketAgent({
+      client,
+      store,
+      clock: { now: () => at },
+      table: [ENTRY],
+      archive,
+      logger: { log },
+    });
+    for (let pass = 0; pass < 12; pass += 1) {
+      at = new Date(at.getTime() + 60 * 60 * 1000);
+      log.mockClear();
+      await afterRestart.refresh(`after-${pass}`);
+    }
+
+    // 24 total passes across the restart, not 12 — the escalation threshold
+    // fires on this pass rather than needing a further 24 in the new process.
+    expect(archive.refusalStreak(SOURCE_POLYMARKET, ENTRY.id)).toBe(24);
+    const refusal = log.mock.calls
+      .map(([entry]) => entry)
+      .find((entry) => String(entry.message).includes(ENTRY.id));
+    expect(refusal?.level).toBe('warn');
+    expect(refusal?.payload).toMatchObject({ consecutive_refusals: 24 });
+    archive.close();
+  });
+
+  it('clears the persisted streak once a row answers again, across a restart', async () => {
+    const archive = new MiArchiveStore();
+    let at = new Date('2026-08-17T00:00:00Z');
+    const store = new MarketIntelligenceStore({ now: () => at });
+
+    const beforeRestart = new PolymarketAgent({
+      client: {
+        fetchEventMarket: async () => market({ volume24hr: 5, updatedAt: at }),
+        fetchPriceHistory: async () => [],
+      },
+      store,
+      clock: { now: () => at },
+      table: [ENTRY],
+      archive,
+    });
+    at = new Date(at.getTime() + 60 * 60 * 1000);
+    await beforeRestart.refresh('t1');
+    expect(archive.refusalStreak(SOURCE_POLYMARKET, ENTRY.id)).toBe(1);
+
+    // The row answers on the second agent — simulating the market recovering
+    // after a restart, not just within the process that saw it refuse.
+    const log = vi.fn();
+    const afterRestart = new PolymarketAgent({
+      client: {
+        fetchEventMarket: async () => market({ updatedAt: at }),
+        fetchPriceHistory: async () =>
+          history(0.67, 0.705).map((point) => ({
+            ...point,
+            at: new Date(point.at.getTime() + (at.getTime() - NOW.getTime())),
+          })),
+      },
+      store,
+      clock: { now: () => at },
+      table: [ENTRY],
+      archive,
+      logger: { log },
+    });
+    at = new Date(at.getTime() + 60 * 60 * 1000);
+    await afterRestart.refresh('t2');
+
+    expect(archive.refusalStreak(SOURCE_POLYMARKET, ENTRY.id)).toBe(0);
+    archive.close();
+  });
+
   it('refuses when the price history does not span a full 24h', async () => {
     // Three hours of history: a large move over it would otherwise land as a
     // HIGH-confidence signal built on almost no data.
@@ -495,7 +599,9 @@ describe('PolymarketAgent fail-closed guards (#504 scope item 7)', () => {
   it('refuses at 0.075 of headroom and ingests at 0.10 — the bound itself, not just the extremes', async () => {
     // 0.925 is `us-recession-2026` as measured on 2026-08-17: headroom 0.075,
     // inside the bound, so it is refused. This is the case that goes red if
-    // MIN_PROBABILITY_HEADROOM is loosened.
+    // MIN_PROBABILITY_HEADROOM is loosened. (That row later drifted to 0.935
+    // and was removed by #1120 — see curated-markets.ts — but the boundary
+    // value is still worth pinning on its own.)
     const marginal = agentWith({
       market: market({ outcomePrices: [0.075, 0.925], bestBid: 0.92, bestAsk: 0.93 }),
       history: history(0.88, 0.925),
