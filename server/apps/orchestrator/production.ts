@@ -2748,7 +2748,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
   // `stopped === false` for free; this flag is builder-scope and monotonic
   // (`stop()` below sets it `true` and never resets it), so
   // `scheduleFeedbackCycle` resets it itself on every call instead
-  // (pass-2 finding 2) — without that reset, a `start()` after a `stop()`
+  // — without that reset, a `start()` after a `stop()`
   // would run its boot catch-up cycle once and then have this flag refuse to
   // let it re-arm, #1110's exact symptom through a third door.
   let feedbackScheduleStopped = false;
@@ -3240,18 +3240,15 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
    * cycle actually running lost that boundary's cycle forever, since the
    * next fire would see the boundary already marked complete.
    *
-   * That earlier version of this comment claimed the after-ordering "buys a
-   * real retry when the STORE is the thing that fails" and that the retry
-   * "collapses into the existing row" via `arm_comparison_samples`'/
-   * `outside_benchmark_samples`' `INSERT OR REPLACE` on `computed_at`
-   * (migration 0034). Both halves were wrong, caught in #1110 pass-2 review
-   * (finding 1): there is no in-process retry — a throw here re-arms for
+   * Two things that look like retries are not. A throw here re-arms for
    * `nextBoundary`, not the same boundary again, so nothing in this process
-   * ever retries boundary B — and the only real retry path, a process
-   * restart inside the same boundary period, does NOT collapse: `computed_at`
-   * is `clock.now()` at the moment the retried cycle runs
-   * (`arm-comparison-cycle.ts`), not the boundary, so a restart-driven retry
-   * writes a SECOND primary key rather than replacing the first.
+   * ever retries boundary B. And a restart-driven retry inside the same
+   * boundary period does NOT collapse into the existing
+   * `arm_comparison_samples`/`outside_benchmark_samples` row despite
+   * migration 0034's `INSERT OR REPLACE` on `computed_at`: `computed_at` is
+   * `clock.now()` at the moment the retried cycle runs
+   * (`arm-comparison-cycle.ts`), not the boundary, so it writes a SECOND
+   * primary key rather than replacing the first.
    *
    * `feedbackScheduleStore.recordAttempt` (stamped just below, before
    * `runFeedbackCycle`) is what actually closes that hole: a restart that
@@ -3298,7 +3295,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     // module load — `stop()` sets this `true` and never resets it itself, so
     // without this line a second `start()` after a `stop()` would run the
     // boot catch-up cycle and then have its own `finally` refuse to re-arm,
-    // #1110's exact symptom through a third door (pass-2 finding 2). A
+    // #1110's exact symptom through a third door. A
     // `stop()` landing concurrently with an in-flight `start()` (this call
     // sits after two awaited reconciles) would have its `true` undone by
     // this reset — contrived, since nothing calls them concurrently today.
@@ -3317,7 +3314,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
           const alreadyAttempted = attempted !== null && attempted.getTime() === boundary.getTime();
 
           if (alreadyAttempted) {
-            // See the residual-gap paragraph above (pass-2 finding 1): a
+            // See the residual-gap paragraph above: a
             // prior attempt for this EXACT boundary was stamped, and this
             // restart cannot tell whether the cycle ran to completion (only
             // `recordBoundary` was interrupted) or the cycle itself died
@@ -3377,8 +3374,8 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         // failure, and any throw escaping `runFeedbackCycle` itself (it is
         // documented not to, but this catch does not depend on that holding)
         // — worded generically because none of those is "a schedule check",
-        // and only a restart-driven retry (not "the next check") is real
-        // (pass-2 finding 5).
+        // and because only a restart-driven retry, not "the next check", is
+        // real.
         logger.log({
           trace_id: 'feedback-cycle',
           stage: 'feedback-loop',
@@ -3822,7 +3819,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         // path: the old `setInterval(fn, 0)` this schedule replaced would
         // have hot-looped on the same bad config, so failing loudly at boot
         // is strictly better, not a regression to soften. `Number.isFinite`
-        // also rejects `NaN`/`Infinity` (#1110-p3 finding 4): both pass
+        // also rejects `NaN`/`Infinity`: both pass
         // `<= 0`, and without this check `currentBoundary` below yields an
         // Invalid Date that dies at `.toISOString()` with a bare, unattributed
         // `RangeError` instead of this named message.

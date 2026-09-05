@@ -3817,7 +3817,7 @@ describe('buildProductionOrchestrator', () => {
         const logger = recordingLogger();
 
         // Blocks writes to the COMPLETION row only (`key = 'default'`) — the
-        // attempt row (`key = 'attempt'`, pass-2 finding 1) still writes
+        // attempt row (`key = 'attempt'`) still writes
         // successfully, so `runIfDue` reaches `runFeedbackCycle` and only the
         // trailing `recordBoundary` fails. Isolates the store call the
         // ordering note above is about from the cycle's own (unrelated) work.
@@ -3887,7 +3887,7 @@ describe('buildProductionOrchestrator', () => {
       },
     );
 
-    it('a stop() followed by a second start() on the SAME orchestrator re-arms the feedback cycle (pass-2 finding 2)', async () => {
+    it('a stop() followed by a second start() on the SAME orchestrator re-arms the feedback cycle (#1110)', async () => {
       const clock = new SimulatedClock(START);
       const intervalMs = 1_000;
       const orchestrator = buildProductionOrchestrator(restartDurableConfig(clock, intervalMs));
@@ -3910,7 +3910,7 @@ describe('buildProductionOrchestrator', () => {
       // Boot catch-up on the second `start()`: `runIfDue`'s `try` body never
       // reads `feedbackScheduleStopped` (only the `finally`, to decide
       // re-arming), so this catch-up runs regardless of the reset above —
-      // this assertion would still pass even under the pass-2 finding-2
+      // this assertion would still pass even under the missing-reset
       // regression. What actually discriminates that regression is the
       // re-arm assertion below: without the reset, `stop()`'s stale `true`
       // survives into this `finally` and blocks the timer from ever being
@@ -3929,7 +3929,7 @@ describe('buildProductionOrchestrator', () => {
 
     it.each([
       [0, /FeedbackCycleConfig\.intervalMs must be positive, got 0/],
-      // #1110-p3 finding 4: `NaN <= 0` and `Infinity <= 0` are both `false`,
+      // `NaN <= 0` and `Infinity <= 0` are both `false`,
       // so the bare `<= 0` guard let both through — `currentBoundary` then
       // produced an Invalid Date and boot died at `.toISOString()` with a
       // bare, unattributed `RangeError` instead of this named message.
@@ -3937,7 +3937,7 @@ describe('buildProductionOrchestrator', () => {
       [Number.POSITIVE_INFINITY, /FeedbackCycleConfig\.intervalMs must be positive, got Infinity/],
     ])(
       'refuses to start with a non-finite or non-positive FeedbackCycleConfig.intervalMs ' +
-        '(%p), naming the cause (pass-2 finding 3, #1110-p3 finding 4)',
+        '(%p), naming the cause (#1110)',
       async (intervalMs, expectedMessage) => {
         const clock = new SimulatedClock(START);
         const orchestrator = buildProductionOrchestrator(restartDurableConfig(clock, intervalMs));
