@@ -9,7 +9,7 @@ export interface CapMeterProps {
   cap: number | null;
   format: (n: number) => string;
   /** Tone below the cap; at or above it the meter always reads `bad`. */
-  tone: MeterTone;
+  tone: Exclude<MeterTone, 'bad'>;
   /** What the note says when the meter cannot be drawn — the caller's own reason. */
   emptyState: string;
   trackLabel: (fraction: number, value: number, cap: number) => string;
@@ -34,9 +34,13 @@ export function CapMeter({
   trackLabel,
   footnote,
 }: CapMeterProps) {
+  const fraction =
+    value === undefined || cap === null || !Number.isFinite(cap) || cap <= 0
+      ? Number.NaN
+      : value / cap;
   const meter =
-    value !== undefined && Number.isFinite(value) && cap !== null && Number.isFinite(cap) && cap > 0
-      ? { fraction: value / cap, value, cap }
+    Number.isFinite(fraction) && value !== undefined && cap !== null
+      ? { fraction, value, cap }
       : null;
   const over = meter !== null && meter.fraction >= 1;
   return (
