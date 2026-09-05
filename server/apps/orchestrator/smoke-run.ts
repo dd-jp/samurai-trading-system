@@ -3743,7 +3743,7 @@ export function evaluateSmokeGate(
   // between a converged/non-converged debate and one the latency budget cut
   // short. Hung off `debates.length` for the same reason as 3b above: a run
   // with no rows at all fails on the check above, naming the real cause.
-  const unclassified = debates.filter((debate) => debate.termination === null);
+  const unclassified = debates.filter((debate) => debate.termination == null);
   if (debates.length > 0 && unclassified.length > 0) {
     failures.push(
       `${unclassified.length} of ${debates.length} debate_log row(s) have a NULL termination — ` +
@@ -4260,10 +4260,24 @@ export function evaluateSmokeGate(
   // that number. A column written by `buildVerdictLog` and never read back is
   // the same defect one table over — the reason a `staleness` row could not be
   // diagnosed without joining to `debate_log` in the first place.
+  //
+  // This is the only #1111 assertion this gate carries. It does not, and
+  // cannot, assert on the `readAt` coordinate itself: a smoke run's fixture
+  // marks stay fresh by construction. The six-stage run's fixture mark is
+  // frozen at `SMOKE_RUN_INSTANT` and the run itself is seconds long
+  // (`tickIntervalMs` deliberately kept far below `max_signal_age`, see its
+  // doc); the exit-path harness additionally overrides `max_mark_age` to 24h
+  // because it advances its own clock between phases. Either way, no
+  // staleness/stale_feed verdict is ever produced here to check the detail
+  // on. The one structural guard on `readAt` reaching a real caller is
+  // `PortfolioAccountingInput.clock` being a required (non-optional) field —
+  // a compile-time check, not a runtime one — so a caller that regresses to
+  // threading `asOf` through both parameters would still type-check and this
+  // gate would not see it.
   const undetailedStaleness = verdicts.filter(
     (verdict) =>
       (verdict.no_go_reason === 'staleness' || verdict.no_go_reason === 'stale_feed') &&
-      (verdict.no_go_detail_measured_ms === null || verdict.no_go_detail_bound_ms === null),
+      (verdict.no_go_detail_measured_ms == null || verdict.no_go_detail_bound_ms == null),
   );
   if (undetailedStaleness.length > 0) {
     failures.push(
@@ -4575,8 +4589,8 @@ export function evaluateSmokeGate(
     );
   } else {
     if (
-      emulation.journalRow.stop_order_id === null ||
-      emulation.journalRow.target_order_id === null
+      emulation.journalRow.stop_order_id == null ||
+      emulation.journalRow.target_order_id == null
     ) {
       failures.push(
         "the crypto-emulation scenario's journal row is missing protective-leg order ids after " +

@@ -9,12 +9,17 @@
  * mark, which is why the count attributable to forward offset is the count
  * itself.
  *
- * The reconstruction makes one assumption and only one: the mark was in hand
- * when the refusal was built, so the instant it was RECEIVED is at or after
- * `observed_at`. `ARRIVAL_LAG_MS` stands in for the network leg the log does
- * not record. The result does not depend on its value — what matters is that
- * `readAt` lies on the far side of `observed_at`, where the offset the old
- * coordinate measured cannot exist at all.
+ * The reconstruction shares `readAt` across every row, matching production:
+ * `PortfolioAccountingInput.clock` values one whole book in a single read, not
+ * one instant per mark. `readAt = asOf + OBSERVED_PASS_DURATION_MS`, so each
+ * row's real `forwardOffsetMs` sets `asOf` and therefore its own measured age
+ * at `readAt` — this is not vacuous over `forwardOffsetMs`: raising a row's
+ * offset past `OBSERVED_PASS_DURATION_MS + MARK_CLOCK_SKEW_TOLERANCE_MS`
+ * pushes that mark's still-`ahead` gap past tolerance and the row refuses
+ * again (between the two, it goes `ahead`-but-tolerated instead).
+ * `OBSERVED_PASS_DURATION_MS` is one fixed pass duration applied to rows
+ * spanning ~15 distinct ticks across two days — an assumed worst case, not a
+ * per-tick measurement; see its own doc below.
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -27,8 +32,16 @@ import type { Mark } from './types.js';
 /** `max_mark_age.stocks` (paper-profile.ts) — the bound these marks were judged against. */
 const STOCKS_BOUND_MS = 15 * 60_000;
 
-/** Unlogged: the leg between the venue's stamp and our receipt. */
-const ARRIVAL_LAG_MS = 100;
+/**
+ * `asOf` to `readAt` for the whole pass. 145,000ms is not a per-tick
+ * measurement — it is the worst-case gap cited in `portfolio-view.ts`'s
+ * `clock` doc ("145s in the 2026-09-04 paper session", the same session this
+ * file replays), applied here as one assumed pass duration across every row
+ * even though the rows span ~15 distinct ticks over two days. It is larger
+ * than every `forwardOffsetMs` here (max 144,576ms), so every reconstructed
+ * `readAt` still lands at or after `observed_at`.
+ */
+const OBSERVED_PASS_DURATION_MS = 145_000;
 
 const SESSION_REFUSALS: [instrument: string, observedAt: string, forwardOffsetMs: number][] = [
   ['COIN', '2026-09-04T19:57:00.053Z', 89625],
@@ -104,21 +117,28 @@ function markObservedAt(iso: string): Mark {
   return { price: 100, observed_at: new Date(iso), source: 'alpaca', asset_class: 'stocks' };
 }
 
+/** The tick's frozen `asOf`, reconstructed from the logged `(observed_at, forwardOffsetMs)` pair. */
+function asOfFor(observedAt: string, forwardOffsetMs: number): Date {
+  return new Date(new Date(observedAt).getTime() - forwardOffsetMs);
+}
+
 describe('the 2026-09-04 session’s valuation refusals, replayed (#1111)', () => {
   it('every one of them was a forward offset past the old tolerance, not an aged mark', () => {
     // Non-vacuity for the case below: each row really did refuse under the
     // pre-#1111 coordinate, and refused for being AHEAD rather than for being
     // old.
     for (const [, observedAt, forwardOffsetMs] of SESSION_REFUSALS) {
-      const asOf = new Date(new Date(observedAt).getTime() - forwardOffsetMs);
+      const asOf = asOfFor(observedAt, forwardOffsetMs);
       expect(markAgeMs(markObservedAt(observedAt), asOf)).toBe(-forwardOffsetMs);
       expect(forwardOffsetMs).toBeGreaterThan(MARK_CLOCK_SKEW_TOLERANCE_MS);
     }
   });
 
   it('none of them refuses once freshness is judged at the read instant', () => {
-    const stillRefused = SESSION_REFUSALS.filter(([, observedAt]) => {
-      const readAt = new Date(new Date(observedAt).getTime() + ARRIVAL_LAG_MS);
+    const stillRefused = SESSION_REFUSALS.filter(([, observedAt, forwardOffsetMs]) => {
+      const readAt = new Date(
+        asOfFor(observedAt, forwardOffsetMs).getTime() + OBSERVED_PASS_DURATION_MS,
+      );
       const freshness = classifyMarkFreshness(markObservedAt(observedAt), readAt, STOCKS_BOUND_MS);
       return freshness.status !== 'fresh';
     });

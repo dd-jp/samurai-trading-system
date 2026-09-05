@@ -173,8 +173,7 @@ export class StaleMarkError extends BookValuationError {
     // the venue's disagreeing AFTER the mark was already in hand, which pass
     // latency can no longer explain at any magnitude — the pre-#1111 wording
     // asserted that disagreement for an offset that was only our own elapsed
-    // time between `asOf` and the read, and sent an investigation down the
-    // wrong path for it.
+    // time between `asOf` and the read.
     const passMs = readAt.getTime() - asOf.getTime();
     const detail =
       freshness.status === 'stale'

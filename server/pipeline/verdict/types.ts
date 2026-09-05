@@ -177,6 +177,14 @@ export interface VerdictDecision {
    * `reason_detail_compared_value`/`reason_detail_threshold` on `trader_log`:
    * a soak asking "how many missed by under a second" can filter on a column
    * and cannot filter on prose.
+   *
+   * `measured_ms` carries `classifyMarkFreshness`'s sign: positive for a
+   * `stale` refusal (the feed went quiet), NEGATIVE for an `ahead` one (the
+   * mark is stamped ahead of the read instant). `bound_ms` is always
+   * positive. A query written as `measured_ms > bound_ms` — the natural
+   * "missed by how much" filter — therefore matches every `stale` row and
+   * silently matches NONE of the `ahead` rows; a caller that wants both must
+   * branch on the sign of `measured_ms` (or compare `Math.abs(measured_ms)`).
    */
   no_go_detail: { measured_ms: number; bound_ms: number } | null;
   approval_path: 'automated' | 'human' | 'human_timeout';

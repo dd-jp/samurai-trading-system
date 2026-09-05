@@ -1329,6 +1329,12 @@ export function buildStartingProfileConfigs(
      * gate to loosen the valuation gate with it. Same starting values, two
      * dials, and the soak's observed mark-age distribution is what separates
      * them.
+     *
+     * `crypto` is dead weight, not a live bound: crypto left Samurai's scope
+     * entirely (ADR-0015's 2026-08-16 amendment), so no crypto position is
+     * ever valued against it. Kept only because `RiskConfig.max_mark_age` is
+     * typed `Record<'crypto' | 'stocks', number>` — the key stays required
+     * whether or not the value means anything.
      */
     max_mark_age: { crypto: 2 * 60_000, stocks: 15 * 60_000 },
     /**
@@ -1530,6 +1536,12 @@ export function buildStartingProfileConfigs(
      * the tail off the distribution. Until then they are set to fire on
      * "stopped", not on "thin", which is the conservative direction for a
      * gate whose false positives halt trading.
+     *
+     * `crypto` above describes a venue Samurai no longer trades: it left
+     * scope entirely (ADR-0015's 2026-08-16 amendment). The key stays only
+     * because `VerdictConfig.max_mark_age` is typed
+     * `Record<'crypto' | 'stocks', number>`, and no crypto order can reach
+     * this gate to read it.
      */
     max_mark_age: { crypto: 2 * 60_000, stocks: 15 * 60_000 },
     /**
