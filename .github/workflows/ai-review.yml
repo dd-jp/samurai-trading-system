@@ -1,11 +1,10 @@
-name: AI Code Review (Nous Portal — DeepSeek + Kimi)
+name: AI Code Review (Nous Portal — DeepSeek)
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
-  # Re-review any PR on demand, including a CLOSED or MERGED one — #591 was
-  # merged on a review that had read 37% of it and there was no way to ask for
-  # another look without pushing a commit to a merged branch (#594).
+  # On-demand re-review, including of a CLOSED or MERGED PR, which otherwise
+  # cannot be re-reviewed without pushing to a merged branch (#594).
   workflow_dispatch:
     inputs:
       pr_number:
@@ -17,49 +16,21 @@ permissions:
   contents: read
   pull-requests: write
 
-# Keyed on the resolved PR number (not run id) so a manual dispatch racing a
-# `synchronize` on the same PR — or two dispatches — share ONE group instead
-# of both running to completion in parallel and both posting (#610): with
-# slices taking 300-430s each, a simultaneous duplicate is real model spend
-# and a duplicated review body.
-#
-# Deliberately at WORKFLOW level, not job level. The review job below has a
-# 2-leg matrix (nous-deepseek, nous-kimi); a job-level group whose key omits
-# matrix.* evaluates to the SAME string for both legs of one run, so it would
-# put both legs of a single run in one group and serialize/cancel-cross them
-# against each other — halving review coverage while reading like a guard.
-# The duplication this exists to stop is the whole RUN, not one leg of it.
-#
-# `github.event.pull_request.number` and `github.event.inputs.pr_number` both
-# stringify to the same PR number, so a `pull_request` run and a
-# `workflow_dispatch` run for the same PR land in the same group.
+# Keyed on the PR number rather than the run id so a manual dispatch racing a
+# `synchronize` on the same PR queues instead of running alongside it and
+# double-spending/double-posting (#610).
 concurrency:
   group: ai-review-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
-  # Cancel a stale run only when a FRESH `pull_request` event supersedes it:
-  # a new push makes the in-progress review of an old commit obsolete, and
-  # the fresh run reproduces whatever failure signal (#567's
-  # "no usable review", or this run's own review) still applies. Never
-  # cancel on `workflow_dispatch` — that trigger is an explicit, deliberate
-  # request (often for a MERGED or CLOSED PR, per the comment on the trigger
-  # below), and cancelling it would both waste spend already committed and
-  # silently drop the request nobody would think to retry. A
-  # `workflow_dispatch` run still queues behind whatever is in-flight in the
-  # same group rather than running alongside it, which is what actually
-  # prevents the concurrent double-spend/double-post #610 exists to stop —
-  # queueing does that without cancelling anything.
+  # Never cancel a `workflow_dispatch` run: it is a deliberate request, often
+  # for a merged PR nobody would think to retry. Queueing alone is what
+  # prevents the concurrent double-post; cancelling is not needed for it.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   review:
     runs-on: ubuntu-latest
-    # The diff is now reviewed in slices, so one reviewer can make up to
-    # MAX_SLICES (10) model calls. Absolute worst case is every slice
-    # exhausting its retries: 3 x 170s timeout + 20s + 90s backoff ~= 10min per
-    # slice, ~103min for ten. This is a BACKSTOP against a stuck endpoint
-    # holding a runner for the 6h default, not a target — a healthy run of the
-    # 3-slice #591 diff is a few minutes. Sized above the worst case on
-    # purpose: a timeout kills the job with no review posted at all, which is
-    # strictly worse than a slow one.
+    # Backstop against a stuck endpoint holding a runner for the 6h default,
+    # not a target: worst case is 10 slices x ~10min of retries and backoff.
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -70,47 +41,14 @@ jobs:
             api_key_secret: NOUS_API_KEY
             app_id_var: NOUS_APP_ID
             app_key_secret: NOUS_APP_PRIVATE_KEY
-            # 32768 (#1008 Mode A): deepseek is a reasoning model too, so the
-            # same shape of failure the kimi comment below documents in detail
-            # applies here — hidden chain-of-thought tokens count against
-            # max_tokens and are spent before any answer text. On PR #996 this
-            # leg burned the whole 8192 budget on a single ~26k-char slice and
+            # Hidden chain-of-thought tokens count against max_tokens and are
+            # spent before any answer text: at 8192 a single ~26k-char slice
             # returned finish_reason=length with content_chars=0 on all three
-            # attempts. Raised to match kimi's 32768 rather than re-deriving a
-            # separate number: same failure mode, same fix, same headroom
-            # rationale (input is sliced to <=60k chars/call, so reasoning
-            # burn per call is bounded the same way for both legs).
+            # attempts (#996). Input is sliced to <=60k chars/call, so the
+            # reasoning burn per call is bounded and 32768 leaves headroom for
+            # the answer (#1008 Mode A).
             max_tokens: "32768"
             inline_only: "false"
-          - reviewer: nous-kimi
-            model_var: KIMI_MODEL
-            api_key_secret: KIMI_NOUS_API_KEY
-            app_id_var: KIMI_APP_ID
-            app_key_secret: KIMI_APP_PRIVATE_KEY
-            # kimi-k3 is a reasoning model: hidden chain-of-thought tokens
-            # count against max_tokens and are spent before any answer text.
-            # At max_tokens=3000 it burned the whole budget on reasoning and
-            # returned finish_reason=length with zero content, every time —
-            # confirmed via the debug log in review_lib.py. 8192 makes that
-            # rarer but does NOT fix it (#409 logged content_chars=0 and a
-            # truncated 910-char body at this budget); review_lib.py now
-            # retries an unusable response instead of posting the fragment.
-            #
-            # 32768 (#594): on #591 this model spent all 8192 on reasoning and
-            # posted "no usable review in 3 attempts
-            # (finish_reason=length, content_chars=0)" — three rolls of the
-            # same loaded die, because the budget was structurally too small,
-            # not flaky. Two changes make 32768 the right number rather than
-            # just a bigger one: reasoning burn scales with INPUT size and the
-            # diff is now sliced to <=60k chars per call, so each call reasons
-            # over a fraction of what it used to; and 4x headroom leaves room
-            # for the answer text after the chain-of-thought instead of
-            # betting the whole budget on it. If Nous's endpoint refuses this
-            # value it returns 4xx, and review_lib._is_fatal_request_error
-            # re-raises rather than retrying — the job goes red with the
-            # provider's own error instead of degrading to a skipped reviewer.
-            max_tokens: "32768"
-            inline_only: "true"
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -119,8 +57,8 @@ jobs:
       - name: Resolve PR number
         id: pr
         env:
-          # Via env, never interpolated straight into the script: a dispatch
-          # input is attacker-controlled text as far as the shell is concerned.
+          # Via env, never interpolated into the script: a dispatch input is
+          # attacker-controlled text as far as the shell is concerned.
           PR_INPUT: ${{ inputs.pr_number }}
           PR_EVENT: ${{ github.event.pull_request.number }}
         run: |
@@ -129,15 +67,12 @@ jobs:
           else
             PR="$PR_EVENT"
           fi
-          # Rejects empty, non-digits, and leading zeros. `0` and `00` passed
-          # the digits-only test and then failed downstream as a confusing
-          # `pulls/0` 404 rather than as a bad input.
+          # Leading zeros are rejected too: `0` passes a digits-only test and
+          # then fails downstream as a confusing `pulls/0` 404.
           case "$PR" in
             ''|*[!0-9]*|0*)
-              # NOT "$PR" verbatim: a `::error::` line is a workflow COMMAND,
-              # so a newline in the value makes every following line parse as
-              # another command. Strip to printable, drop the `::` delimiter,
-              # and bound the length before it can reach the log.
+              # An `::error::` line is a workflow COMMAND, so a newline in the
+              # value would make every following line parse as another one.
               SAFE=$(printf '%s' "$PR" | tr -cd '[:alnum:]._/-' | cut -c1-32)
               echo "::error::pr_number must be a positive integer without leading zeros (got: '${SAFE}')"
               exit 1
@@ -149,46 +84,32 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
-          # Via env, like PR_INPUT above: a git ref name may contain shell
-          # metacharacters, and interpolating one straight into the script
-          # would run them.
+          # Via env, like PR_INPUT above: a ref name may contain shell
+          # metacharacters.
           BASE_REF: ${{ github.base_ref }}
         run: |
-          # core.quotePath=false on the diff commands below: git C-quotes
-          # paths with non-ASCII bytes by default, and a quoted `diff --git`
-          # header is a different shape for the slicer to parse. review_lib
-          # handles both, but emitting the plain form keeps the common path
-          # simple. Inline `-c`, not `git config` — no repo state mutated.
+          # core.quotePath=false: git C-quotes non-ASCII paths by default, and
+          # a quoted `diff --git` header is a different shape for the slicer.
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            # `github.base_ref` is empty on a manual dispatch, and for a MERGED
-            # PR the base branch has moved past the fork point: diffing against
+            # `github.base_ref` is empty on a dispatch, and for a MERGED PR the
+            # base branch has moved past the fork point — diffing against
             # origin/main would find the merge base AT the PR head and print an
             # empty diff. Use the base SHA GitHub recorded on the PR itself.
             BASE_SHA=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .base.sha)
             git fetch origin "refs/pull/$PR_NUMBER/head:refs/remotes/origin/pr-$PR_NUMBER"
-            # fetch-depth: 0 usually has it already; fetch only if it doesn't,
-            # and let a genuine failure fail the step rather than `|| true`.
             git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null || git fetch origin "$BASE_SHA"
             git -c core.quotePath=false diff "$BASE_SHA...refs/remotes/origin/pr-$PR_NUMBER" > diff.txt
           else
-            # NOT `--depth=1`. `checkout` above already fetched full history
-            # (`fetch-depth: 0`), and a shallow re-fetch of the base truncates
-            # it again — after which `...` (which needs a MERGE BASE, not just
-            # the two tips) fails with `fatal: origin/main...HEAD: no merge
-            # base` and the whole review job exits 128 in under ten seconds.
-            #
-            # It only bites on a branch that has been REBASED: before that, the
-            # shallow tip happens to be an ancestor of HEAD and the merge base
-            # is found by luck. Every rebase-onto-main — which is the normal way
-            # to clear a conflict — broke both reviewers until this line changed.
+            # NOT `--depth=1`: a shallow re-fetch re-truncates the history
+            # `fetch-depth: 0` just fetched, after which `...` cannot find a
+            # merge base on any REBASED branch and the job exits 128.
             git fetch origin "$BASE_REF"
             git -c core.quotePath=false diff "origin/$BASE_REF...HEAD" > diff.txt
           fi
           echo "diff bytes: $(wc -c < diff.txt)"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ ! -s diff.txt ]; then
-            # A diff-resolution bug on a merged PR would otherwise post
-            # "_No diff detected — nothing to review._" and go green: the same
-            # shape of lie as the silent truncation this ticket fixes.
+            # Otherwise a diff-resolution bug on a merged PR posts "no diff
+            # detected" and goes green — a silent lie.
             echo "::error::Resolved an empty diff for PR #$PR_NUMBER — refusing to post a review that would read as 'nothing to review'."
             exit 1
           fi
@@ -201,47 +122,28 @@ jobs:
       - name: Install deps
         run: pip install openai
 
-      # Fetched BEFORE the review runs, on purpose. Every `synchronize` push
-      # re-reviews the whole branch diff (see "Get PR diff" above — the range
-      # is merge-base...HEAD, not the pushed commits), and with no memory of
-      # what it already said the reviewer re-posted the same findings on
-      # unchanged code after every push. `run_review.py` matches these against
-      # the marker it stamps on its own comments and drops repeats.
-      #
-      # Skipped on `workflow_dispatch`: that trigger is a deliberate request to
-      # look again — often at a merged PR whose earlier review was the problem
-      # (#594) — and deduping it against that very review would post an empty
-      # one. No file written means dedup is off, which is what the script's
-      # missing-file branch documents.
-      #
-      # `github.token` suffices: the workflow already holds
-      # `pull-requests: write`, and reading needs less than that. Failing the
-      # step on a fetch error rather than `|| true`-ing it: a silent fetch
-      # failure would look exactly like "nothing was flagged before" and
-      # quietly bring the duplicates back.
+      # Every `synchronize` re-reviews the whole merge-base...HEAD diff, so
+      # without this the reviewer re-posts the same findings on unchanged code
+      # after every push; `run_review.py` matches these against its own marker.
+      # Skipped on `workflow_dispatch` because deduping a deliberate re-look
+      # against the very review that prompted it would post an empty one (#594)
+      # — no file written means dedup is off. A fetch error fails the step: a
+      # silent one looks exactly like "nothing was flagged before".
       - name: Fetch this reviewer's existing comments
         if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
         run: |
-          # `pipefail` because the pipeline below ends in `jq`: without it a
-          # failing `gh` exits 0 through the pipe, writing an empty array that
-          # reads as "nothing was flagged before" — the silent-disable this
-          # step is supposed to fail loudly on.
+          # Without pipefail a failing `gh` exits 0 through the pipe and writes
+          # an empty array that reads as "nothing was flagged before".
           set -o pipefail
-          # NOT `--paginate --slurp`. On a list endpoint that returns an array
-          # per page, `--slurp` produces an array OF PAGES — `[[c1, c2]]`, not
-          # `[c1, c2]`. `json.load` still yields a list, so a top-level type
-          # check passes and every element then fails the per-comment dict
-          # check downstream, turning dedup off while looking like it worked.
-          # `--jq '.[]'` streams the comments as NDJSON and `jq -s` collects
-          # them into one flat array. (`--slurp` cannot be combined with
-          # `--jq` at all: gh rejects the pair outright.)
+          # NOT `--paginate --slurp`: on a list endpoint that returns an array
+          # per page, `--slurp` yields an array OF PAGES, which still loads as a
+          # list and so passes the top-level type check while every element
+          # fails the per-comment check — dedup off, looking like it worked.
           gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/comments" \
             --paginate --jq '.[]' | jq -s '.' > existing_comments.json
-          # Counts COMMENTS. The earlier form counted pages, which would have
-          # printed a reassuring "1" for an empty PR and masked the bug above.
           echo "existing review comments: $(jq 'length' existing_comments.json)"
 
       - name: Run review (${{ matrix.reviewer }})
@@ -268,7 +170,7 @@ jobs:
         env:
           PR_NUMBER: ${{ steps.pr.outputs.number }}
           # A merged PR can't be gated by an approval, and GitHub is stricter
-          # about review events on a closed PR. Dispatch runs post as comments.
+          # about review events on a closed PR.
           FORCE_COMMENT_EVENT: ${{ github.event_name == 'workflow_dispatch' }}
         with:
           github-token: ${{ steps.app-token.outputs.token }}
@@ -287,35 +189,24 @@ jobs:
             try {
               await github.rest.pulls.createReview({ ...base, comments: payload.comments });
             } catch (error) {
-              // GitHub rejects the ENTIRE review if any one comment anchors to a
-              // line it cannot resolve — "Unprocessable Entity: Line could not be
-              // resolved". `commentable_lines` filters against our own
-              // `git diff`, which can disagree with GitHub's view of the PR, and
-              // when it does the whole reviewer job fails and the PR's checks go
-              // red for a reason that has nothing to do with the code.
-              //
-              // Retry once with the findings folded into the body instead. A
-              // review that reads slightly worse beats no review and a red check.
-              // Matched on the MESSAGE, not just the status. 422 also covers an
-              // invalid `event`, an oversized body and other validation faults,
-              // and retrying those without inline comments would "succeed"
-              // while masking a real bug behind a misleading warning.
+              // GitHub rejects the ENTIRE review if one comment anchors to a
+              // line it cannot resolve, and its view of the PR can disagree
+              // with the `git diff` we filter against. Retry once with the
+              // findings folded into the body. Matched on the message, not the
+              // status alone: 422 also covers an invalid event or an oversized
+              // body, and retrying those would mask a real bug.
               const unresolvable =
                 error.status === 422 && /could not be resolved/i.test(error.message ?? '');
               if (!unresolvable) throw error;
 
-              // GitHub caps a review body at 65536 characters. An untruncated
-              // appendix can exceed that and raise the very 422 this fallback
-              // exists to handle — failing the job anyway, one step later.
+              // GitHub caps a review body at 65536 characters; an untruncated
+              // appendix would raise the very 422 this fallback handles.
               const BODY_LIMIT = 65536;
               const header =
                 `${payload.summary_markdown}\n\n---\n_GitHub would not anchor these inline ` +
                 '(line not resolvable in its diff view):_\n';
-              // The dedup marker is stamped on every inline body so a later
-              // run can recognise its own findings. It is an HTML comment, so
-              // it is invisible where it was meant to live — but folded into
-              // the review body as prose it becomes a stray tag in a bullet
-              // list, and it would anchor nothing there anyway.
+              // The dedup marker is an HTML comment, invisible only where it
+              // was meant to live; in the body it becomes a stray tag.
               const strip = (body) => body.replace(/\n*<!-- ai-review:[^>]*-->\s*$/, '');
               const lines = payload.comments.map((c) => `- **${c.path}:${c.line}**: ${strip(c.body)}`);
 
@@ -341,16 +232,10 @@ jobs:
               await github.rest.pulls.createReview({ ...base, body });
             }
 
-      # #567: a reviewer whose every attempted slice came back unusable
-      # (finish_reason=length with zero content, in the observed case) used
-      # to post that fact ONLY inside the review body — a place nobody reads
-      # once the check shows green — while the job itself exited 0. This
-      # step and the one below fix that: this one puts the fact where an
-      # operator scanning the PR conversation will actually see it, using
-      # `github.token` (not the minted app token from the step above) because
-      # the workflow's own `pull-requests: write` permission is already
-      # enough to comment and doesn't require granting the review app any
-      # additional Issues scope just for this.
+      # #567: a reviewer whose every slice came back unusable used to report
+      # that only inside the review body — unread once the check shows green —
+      # while the job exited 0. `github.token` suffices here and avoids
+      # granting the review app an Issues scope just to comment.
       - name: Flag it in the conversation if this reviewer produced nothing
         if: always()
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
@@ -372,17 +257,12 @@ jobs:
                 `**${process.env.REVIEWER} produced no review.** Every diff slice it ` +
                 'attempted came back with no usable output (see that review\'s body for ' +
                 'the retry detail). This PR has NOT received a review from this reviewer ' +
-                '— re-run it via `workflow_dispatch` once the cause is addressed, or treat ' +
-                'the remaining reviewer(s) as the only coverage this PR has.',
+                '— re-run it via `workflow_dispatch` once the cause is addressed.',
             });
 
-      # Last on purpose: both the review and the conversation comment above
-      # must post FIRST. Failing here after they've landed keeps both signals
-      # intact; failing earlier (e.g. in "Run review") would kill the job
-      # before either one existed, trading the one signal this check had for
-      # a red X and nothing else (see PR body for why a red X alone doesn't
-      # block a merge on this repo — there's no branch protection to enforce
-      # it against).
+      # Last on purpose: failing earlier would kill the job before the review
+      # and the conversation comment above had posted, trading the one signal
+      # this check had for a red X and nothing else.
       - name: Fail when this reviewer produced no usable review
         run: |
           python3 - <<'PY'
