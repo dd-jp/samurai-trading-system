@@ -97,7 +97,12 @@
  * generations fall outside `protectedPaths` on the next boot, because the
  * sink itself will never revisit them again either — the age window is the
  * only thing left bounding them, which is the correct owner once a
- * generation is orphaned like this, not a gap.
+ * generation is orphaned like this, not a gap. That last part holds only
+ * while `SAMURAI_LOG_FILE` ends in `.log`: point the sink at some other
+ * extension and its generations match neither eligible shape, so orphans of
+ * it are never swept at all. Erring towards keeping them is the safe
+ * direction, and widening the rule to any `<name>.<ext>.<n>` would admit
+ * archives that are not logs.
  *
  * `keepNames` (`SAMURAI_LOG_RETENTION_KEEP`) is the operator's own version of
  * that backstop, for the file this process has no way to know about: a
