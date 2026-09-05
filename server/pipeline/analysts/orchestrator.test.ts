@@ -830,7 +830,7 @@ describe('AnalystOrchestrator', () => {
       );
     });
 
-    it('logs a placeholder rather than throwing when the caught value cannot be rendered', async () => {
+    it('degrades only the field that cannot be rendered, keeping the rest of the cause', async () => {
       const { clock, marketData, marketIntelligence } = buildDeps('crypto');
       const logger = recordingLogger();
       const failing: Analyst = {
@@ -855,10 +855,6 @@ describe('AnalystOrchestrator', () => {
         [failing],
       );
 
-      // The render happens while the payload is still being built, so a throw
-      // here escapes `safeLog` entirely: at the catch site it would turn a
-      // handled analyst failure into a failed tick, and on the late path it
-      // would reject a promise nobody holds, which Node 22 exits on.
       const result = await orchestrator.runAnalysts(
         'trace-hostile',
         { asset: INSTRUMENT, asset_class: 'crypto' },
@@ -867,9 +863,98 @@ describe('AnalystOrchestrator', () => {
       );
 
       expect(result.skipped).toBe(true);
+      // The render happens while the payload is still being built, so a throw
+      // here escapes `safeLog` entirely — and losing the whole payload would
+      // cost the diagnostic the ticket exists to provide.
       expect(logger.entries.find((entry) => entry.level === 'debug')?.payload).toMatchObject({
-        message: '[unrenderable error]',
+        analyst_type: 'technical',
+        message: 'technical unavailable',
+        stack: '[unrenderable]',
       });
+    });
+
+    it('masks a credential-carrying error name', async () => {
+      const { clock, marketData, marketIntelligence } = buildDeps('crypto');
+      const logger = recordingLogger();
+      const failing: Analyst = {
+        analyst_type: 'technical',
+        role: 'mandatory',
+        applies_to: () => true,
+        run: async () => {
+          const error = new Error('technical unavailable');
+          // `name` is upstream-settable like every other field here, and was
+          // the one rendered raw.
+          error.name = 'HttpError(auth=sk-live-abcdef0123456789)';
+          throw error;
+        },
+      };
+      const orchestrator = new AnalystOrchestrator(
+        { market_data: marketData, market_intelligence: marketIntelligence, logger },
+        [failing],
+      );
+
+      await orchestrator.runAnalysts(
+        'trace-name',
+        { asset: INSTRUMENT, asset_class: 'crypto' },
+        clock,
+        ASOF,
+      );
+
+      const name = (
+        logger.entries.find((entry) => entry.level === 'debug')?.payload as
+          | { name?: string }
+          | undefined
+      )?.name;
+      expect(name).toContain('[REDACTED]');
+      expect(name).not.toContain('sk-live-abcdef0123456789');
+    });
+
+    it('contains an unrenderable late settlement instead of rejecting a promise nobody holds', async () => {
+      const { clock, marketData, marketIntelligence } = buildDeps('crypto');
+      const logger = recordingLogger();
+      const { analyst, settlers } = controlledAnalyst('technical');
+      const unhandled = vi.fn();
+      process.on('unhandledRejection', unhandled);
+
+      try {
+        const orchestrator = new AnalystOrchestrator(
+          { market_data: marketData, market_intelligence: marketIntelligence, logger },
+          [analyst],
+          { timeout_ms: 5 },
+        );
+
+        const resultPromise = orchestrator.runAnalysts(
+          'trace-late-hostile',
+          { asset: INSTRUMENT, asset_class: 'crypto' },
+          clock,
+          ASOF,
+        );
+        await vi.advanceTimersByTimeAsync(20);
+        await resultPromise;
+
+        // The late path is the one where an escaping render is worst: it
+        // rejects the derived `work.then(...)` promise, which nobody holds,
+        // and Node 22 exits the process on an unhandled rejection.
+        const hostile = new Error('late boom');
+        Object.defineProperty(hostile, 'message', {
+          get(): string {
+            throw new Error('render boom');
+          },
+        });
+        settlers[1]?.(hostile);
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(unhandled).not.toHaveBeenCalled();
+        expect(
+          logger.entries.find(
+            (entry) =>
+              entry.level === 'debug' &&
+              (entry.payload as { attempt?: number } | undefined)?.attempt === 2,
+          )?.payload,
+        ).toMatchObject({ outcome: 'rejected', message: '[unrenderable error]' });
+      } finally {
+        process.off('unhandledRejection', unhandled);
+      }
     });
 
     it('never logs above debug — the existing error/warn posture is unchanged', async () => {

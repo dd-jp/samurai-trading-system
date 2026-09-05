@@ -143,12 +143,25 @@ function renderErrorDetail(error: unknown): Record<string, unknown> {
     return renderErrorFields(error);
   } catch {
     // Guards the RENDER, which `safeLog` cannot: a hostile value's throwing
-    // `toString`/`Symbol.toPrimitive` (or a lazy `stack`/`message` getter)
-    // throws while the payload is still being built, before `safeLog`'s own
+    // `toString`/`Symbol.toPrimitive` (or a lazy `message` getter) throws
+    // while the payload is still being built, before `safeLog`'s own
     // try/catch is ever entered — `logCaughtFailure`'s doc comment describes
     // the same hole. On the late-settlement path the escape would reject a
     // derived promise nobody holds, which Node 22 turns into process exit.
     return { message: '[unrenderable error]' };
+  }
+}
+
+/**
+ * Per field, so one hostile getter costs only its own field: a thrown `stack`
+ * must not take the `name`/`message`/`cause` that rendered fine down with it,
+ * which is the whole diagnostic value of the line.
+ */
+function renderField(render: () => string): string {
+  try {
+    return render();
+  } catch {
+    return '[unrenderable]';
   }
 }
 
@@ -157,14 +170,15 @@ function renderErrorFields(error: unknown): Record<string, unknown> {
     return { message: sanitizeLogText(describeThrown(error)) };
   }
   const detail: Record<string, unknown> = {
-    name: sanitizeLogText(error.name),
+    name: renderField(() => sanitizeLogText(error.name)),
     message: sanitizeLogText(error.message),
   };
-  if (typeof error.stack === 'string') {
-    detail.stack = maskAndCap(error.stack, MAX_ERROR_BODY_CHARS);
-  }
+  const stack = renderField(() =>
+    typeof error.stack === 'string' ? maskAndCap(error.stack, MAX_ERROR_BODY_CHARS) : '',
+  );
+  if (stack !== '') detail.stack = stack;
   if (error.cause !== undefined) {
-    detail.cause = sanitizeLogText(describeThrown(error.cause));
+    detail.cause = renderField(() => sanitizeLogText(describeThrown(error.cause)));
   }
   return detail;
 }
