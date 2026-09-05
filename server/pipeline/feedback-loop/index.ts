@@ -21,6 +21,7 @@ export {
   impliedWeight,
   realizedR,
 } from './attribution.js';
+export { currentBoundary, isBoundaryDue, nextBoundary } from './cycle-schedule.js';
 export { runDailyCycle } from './daily-cycle.js';
 export { getContributionsForAttribution } from './debate-attribution-lookup.js';
 export {
@@ -51,6 +52,7 @@ export {
 export { SqliteAdjustmentLog } from './sqlite-adjustment-log.js';
 export { SqliteArmComparisonSampleStore } from './sqlite-arm-comparison-sample-store.js';
 export { SqliteClosedTradeStore } from './sqlite-closed-trade-store.js';
+export { SqliteFeedbackCycleScheduleStore } from './sqlite-feedback-cycle-schedule-store.js';
 export { SqliteOutsideBenchmarkSampleStore } from './sqlite-outside-benchmark-sample-store.js';
 export { SqliteTuningStore } from './sqlite-tuning-store.js';
 export type {

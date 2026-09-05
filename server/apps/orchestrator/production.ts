@@ -57,11 +57,15 @@
  *
  * ADR-0004 asks for Feedback Loop's `onTradeClose` and `runDailyCycle` at
  * this composition point, "not as `TickSteps` members". `runDailyCycle` is
- * wired, on its own daily timer independent of the tick chain, and starts
+ * wired, on its own daily schedule independent of the tick chain, and starts
  * only when `ProductionConfig.feedback` is supplied; its four stores are all
  * SQLite-backed and constructed here. **Not starting it is announced at
  * startup at `warn` (#327)** — it used to be reached by pure omission, which
  * is the same silent-by-omission bug #293/#320/#322 closed elsewhere.
+ *
+ * **The schedule survives a process restart (#1110)** — `scheduleFeedbackCycle`
+ * below is the canonical explanation; this composition root, not the
+ * migration or the tests, is the right home for it.
  *
  * **And a paper run now supplies it (#366).** The two inputs that used to have
  * no in-repo source have the same two homes every comparable input already
@@ -143,14 +147,18 @@ import type {
 import {
   assertKillThresholdsWithinBounds,
   computeMetrics,
+  currentBoundary,
   DEFAULT_ARM_COMPARISON_WINDOW_MS,
   DEFAULT_ARM_DIVERGENCE_THRESHOLDS,
+  isBoundaryDue,
+  nextBoundary,
   runArmComparisonCycle,
   runDailyCycle,
   runOutsideBenchmarkCycle,
   SqliteAdjustmentLog,
   SqliteArmComparisonSampleStore,
   SqliteClosedTradeStore,
+  SqliteFeedbackCycleScheduleStore,
   SqliteOutsideBenchmarkSampleStore,
   SqliteTuningStore,
   seedAnalystWeights,
@@ -620,6 +628,16 @@ export const ENV_MI_ARCHIVE_RETENTION_DAYS = 'SAMURAI_MI_ARCHIVE_RETENTION_DAYS'
 
 /** The variable that overrides how many X posts a sentiment call fetches (#969). */
 export const ENV_X_MAX_SEARCH_RESULTS = 'SAMURAI_X_MAX_RESULTS';
+
+/**
+ * Node clamps a `setTimeout` delay above this (2^31 - 1 ms, ~24.85 days) and
+ * fires immediately instead — undocumented in the public API but stable
+ * platform behavior. `scheduleFeedbackCycle`'s delay is always `<= intervalMs`
+ * (never accumulated across missed boundaries — DESIGN DECISION 2), so this
+ * only bites an operator-configured `intervalMs` above the clamp, which would
+ * otherwise tight-loop instead of waiting.
+ */
+const MAX_SET_TIMEOUT_DELAY_MS = 2 ** 31 - 1;
 
 /**
  * How many `llm_call_log` rows to keep (#1045).
@@ -2722,6 +2740,18 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
   let controlFillSync: { stop: () => Promise<void> } | undefined;
   let heartbeatHandle: NodeJS.Timeout | undefined;
   let feedbackHandle: NodeJS.Timeout | undefined;
+  // Mirrors the SHAPE of `fill-sync.ts`'s own `stopped` flag (#1110), not its
+  // scope — see `scheduleFeedbackCycle`'s doc comment for why it is defence
+  // against a future change rather than something today's synchronous
+  // `runIfDue` needs. `fill-sync.ts`'s `stopped` is LOCAL to each
+  // `startFillSync()` call, so a restart gets a fresh closure with
+  // `stopped === false` for free; this flag is builder-scope and monotonic
+  // (`stop()` below sets it `true` and never resets it), so
+  // `scheduleFeedbackCycle` resets it itself on every call instead
+  // — without that reset, a `start()` after a `stop()`
+  // would run its boot catch-up cycle once and then have this flag refuse to
+  // let it re-arm, #1110's exact symptom through a third door.
+  let feedbackScheduleStopped = false;
   let gdeltHandle: NodeJS.Timeout | undefined;
   let polymarketHandle: NodeJS.Timeout | undefined;
 
@@ -2889,6 +2919,17 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
   );
 
   /**
+   * The daily cycle's restart-durable schedule (#1110, migration 0044) — see
+   * `scheduleFeedbackCycle` below for how it is read and written, and the
+   * migration for why only the single most recently completed boundary is
+   * kept. Constructed unconditionally, like `armComparisonSamples` above,
+   * even though it is only ever touched when `config.feedback` is supplied.
+   */
+  const feedbackScheduleStore = new SqliteFeedbackCycleScheduleStore(
+    guardedStore(config.db, 'feedback-loop'),
+  );
+
+  /**
    * The outside benchmarks' production caller (#981, under #636) — the half of
    * #636 that #971 left open. SPY and 60/40 over the MATCHED CONTROL'S window,
    * on FL's existing daily cadence.
@@ -2915,8 +2956,8 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
   /**
    * Fire-and-forget, but NEVER unhandled.
    *
-   * `runFeedbackCycle` is synchronous and is called from a `setInterval`, so
-   * there is no `await` seam here. An unawaited promise whose fetch rejects
+   * `runFeedbackCycle` is synchronous and is called from `scheduleFeedbackCycle`'s
+   * self-rescheduling `setTimeout`, so there is no `await` seam here. An unawaited promise whose fetch rejects
    * would be an unhandled rejection AND a benchmark that silently never
    * persists — this repo's dominant defect class arriving through the back
    * door. So the rejection is handled explicitly, and logged, rather than left
@@ -3030,12 +3071,17 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     // on unrelated work succeeding is not housekeeping. `pruneLlmCallLogWithLog`
     // swallows its own errors, so it cannot cost the cycle anything either.
     //
-    // Riding this existing 24h timer rather than adding a scheduler follows
-    // #636's rule, stated at `runOutsideBenchmarks` below: additional work
-    // joins the existing daily suite, no new scheduling primitive. Note it is
-    // a plain `setInterval` from process start, so "daily" means every ~24h of
-    // uptime, not a calendar midnight — fine for a retention sweep, but it is
-    // not a nightly job and should not be described as one.
+    // Riding this existing daily cycle rather than adding a second scheduler
+    // follows #636's rule, stated at `runOutsideBenchmarks` below: additional
+    // work joins the existing daily suite, no new scheduling primitive. Since
+    // #1110 the cycle fires on a wall-clock, epoch-anchored boundary
+    // (`scheduleFeedbackCycle` below), not an elapsed interval from process
+    // start. That lands on UTC midnight at the shipped 24h `intervalMs`
+    // (epoch 0 is itself a UTC midnight), but the anchoring is to the epoch,
+    // not to the calendar: an operator-configured interval that does not
+    // evenly divide 24h drifts across the day instead of staying
+    // midnight-aligned. This retention sweep inherits whatever cadence is
+    // configured, same as the rest of the cycle.
     pruneLlmCallLogWithLog(config.db, llmCallLogMaxRows, logger, 'daily');
     // #1060. Same placement rule applies: outside the try, so a persistently
     // failing feedback cycle cannot silently disable the MI archive's purge.
@@ -3097,13 +3143,262 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
       // no latch is needed the way the live-read seam's per-tick catch needs
       // one.
       if (isThresholdBoundViolation(error)) {
-        config.thresholdClampAlerts?.postThresholdClampAlert({
-          where: 'daily-kill-line-check',
-          message: error instanceof Error ? error.message : String(error),
-          reported_at: clock.now(),
-        });
+        // #1110: guarded. `scheduleFeedbackCycle` now records the schedule
+        // boundary only AFTER this function returns, on the premise that
+        // `runFeedbackCycle` cannot throw — true everywhere else in this
+        // function (every other fallible call is already caught), but
+        // `thresholdClampAlerts` is a caller-supplied channel with no such
+        // guarantee. This `try` is what keeps the premise actually true,
+        // rather than merely true until an alert transport misbehaves.
+        try {
+          config.thresholdClampAlerts?.postThresholdClampAlert({
+            where: 'daily-kill-line-check',
+            message: error instanceof Error ? error.message : String(error),
+            reported_at: clock.now(),
+          });
+        } catch (alertError) {
+          logger.log({
+            trace_id: 'feedback-cycle',
+            stage: 'feedback-loop',
+            level: 'error',
+            message: 'threshold clamp alert channel failed',
+            payload: {
+              error: alertError instanceof Error ? alertError.message : String(alertError),
+            },
+          });
+        }
       }
     }
+  };
+
+  /**
+   * Arms the daily feedback cycle on a restart-durable, wall-clock-boundary
+   * schedule (#1110). Replaces a plain `setInterval` armed at process boot,
+   * which on a soak restarted more often than once a day never accumulated
+   * 24h of continuous uptime — so `runFeedbackCycle` never fired even once in
+   * `data/samurai-paper.sqlite`'s whole history, and `arm_comparison_samples`
+   * held 0 rows ever despite `runArmComparisonCycle` persisting one on every
+   * call, including zero-trade ones.
+   *
+   * ## DESIGN DECISION 1 — wall-clock boundary, not elapsed interval from boot
+   *
+   * `currentBoundary`/`nextBoundary` (feedback-loop/cycle-schedule.ts)
+   * floor-divide against the Unix epoch, not against this process's start
+   * time — see that module's doc comment for why this makes consecutive
+   * `runArmComparisonCycle` windows comparable across restarts (#753 /
+   * `docs/research/12-edge-hypothesis-critique.md` D4).
+   *
+   * `runIfDue` below reads `Date.now()`/`new Date()` for that boundary check,
+   * NOT the injected `clock` — `clock.now()` still stamps every business
+   * timestamp `runFeedbackCycle` writes (`computed_at`, window bounds), only
+   * the scheduler's own "is a boundary due" check uses real wall time. **This
+   * is deliberate accepted debt**, not something the codebase has real
+   * precedent for: `tick-runner.ts`'s own `Date.now()`/`performance.now()`
+   * split (`startStageTimer`) does not justify it — that pair measures real
+   * elapsed LATENCY, which correctly is not business time, whereas a daily
+   * business cadence IS business time. The actual reason is test-shaped:
+   * every feedback-cycle test outside the "#1110" describe block below
+   * constructs a `SimulatedClock` and never advances it, relying on
+   * `vi.advanceTimersByTimeAsync` alone to move time. Measured directly:
+   * switching this boundary check to `clock.now()` breaks 12 of those tests
+   * across several `describe` blocks, because a `clock.now()` that never
+   * advances is the same boundary forever, so the timer would fire its first
+   * catch-up cycle and never again. **Do not make that switch without first
+   * advancing `SimulatedClock` in every affected test** — that is the
+   * invariant this comment protects. `Date.now()` tracks vitest's faked
+   * timers exactly (`vi.useFakeTimers()` fakes `Date` alongside
+   * `setTimeout`), which is why the existing tests pass unmodified today.
+   *
+   * Recomputing the boundary from `Date.now()` on every fire, rather than
+   * trusting the elapsed `setTimeout` delay to have been accurate, also means
+   * a MacBook waking from a lid-close (CLAUDE.md's "Deployment Target" risk)
+   * sees itself overdue and catches up on the next event-loop tick, instead
+   * of a `setTimeout` that fired late continuing to believe the boundary it
+   * was originally armed for is still the current one.
+   *
+   * ## DESIGN DECISION 2 — catch-up is capped at exactly one cycle
+   *
+   * `feedbackScheduleStore` persists only the single most-recently-completed
+   * boundary, never a queue of missed ones. Every check — at boot or at a
+   * normal fire — asks one binary question via `isBoundaryDue`: "has THIS
+   * boundary run yet?" A virgin store (no row) answers "no" for the current
+   * boundary, so a fresh process runs its first cycle immediately rather than
+   * waiting up to a full `intervalMs` — deliberate: a virgin store has
+   * genuinely never run the cycle, which is precisely the bug #1110 reports.
+   * A process that comes back after a week of downtime sees the same "no"
+   * exactly once, runs exactly one catch-up cycle, and stamps the CURRENT
+   * boundary — it cannot fire a burst of seven for the boundaries that were
+   * missed silently, and it does not try to reconstruct how long it was down.
+   *
+   * ## Ordering: the boundary is recorded AFTER the cycle runs, not before
+   *
+   * `runFeedbackCycle` cannot throw — every fallible call inside it,
+   * including the threshold-clamp alert, is caught and logged internally —
+   * so recording after it returns costs nothing when the cycle itself runs
+   * cleanly. Recording before it, the ordering this replaced, had the
+   * opposite failure mode: a process that died between the stamp and the
+   * cycle actually running lost that boundary's cycle forever, since the
+   * next fire would see the boundary already marked complete.
+   *
+   * Two things that look like retries are not. A throw here re-arms for
+   * `nextBoundary`, not the same boundary again, so nothing in this process
+   * ever retries boundary B. And a restart-driven retry inside the same
+   * boundary period does NOT collapse into the existing
+   * `arm_comparison_samples`/`outside_benchmark_samples` row despite
+   * migration 0034's `INSERT OR REPLACE` on `computed_at`: `computed_at` is
+   * `clock.now()` at the moment the retried cycle runs
+   * (`arm-comparison-cycle.ts`), not the boundary, so it writes a SECOND
+   * primary key rather than replacing the first.
+   *
+   * `feedbackScheduleStore.recordAttempt` (stamped just below, before
+   * `runFeedbackCycle`) is what actually closes that hole: a restart that
+   * lands after the attempt was stamped but before `recordBoundary` completed
+   * finds `attemptedBoundary() === boundary` and does NOT call
+   * `runFeedbackCycle` a second time — only the completion stamp is retried.
+   * `dial_adjustments` and the analyst-weight/risk-threshold step it drives
+   * are not idempotent (each cycle applies one more guardrail-capped move),
+   * so re-running the cycle itself for a boundary already attempted would
+   * double that move; re-running only the completion write cannot.
+   *
+   * Two residual gaps remain, both deliberate and both narrow. (1) If the
+   * ATTEMPT write itself never lands (e.g. the same store failure hits it
+   * too), a restart cannot tell "attempted" from "never started" and
+   * re-runs the cycle — kept narrow by attempting the write in its own
+   * try/catch, immediately before `runFeedbackCycle`, rather than widening
+   * it further. (2) If the attempt write DOES land and the process then
+   * dies (SIGKILL/OOM/a lid-close power loss — CLAUDE.md's own Deployment
+   * Target risk) anywhere before `runFeedbackCycle` returns — including
+   * inside the prune calls just above it, bulk deletes that take seconds on
+   * a grown table — the next boot's `alreadyAttempted` check (below) cannot
+   * tell that from a cycle that ran to completion, so it skips the boundary
+   * and stamps it complete: the cadence resumes at the next boundary, but
+   * this boundary's dial step, `arm_comparison_samples` row and benchmark
+   * are lost for good. Kept over the alternative — a double-applied
+   * guardrail-capped move is worse than one missing data point.
+   *
+   * `runIfDue` still runs start-to-finish synchronously today, so `stop()`
+   * cannot race a scheduling gap and no re-entrancy guard is needed the way
+   * `fill-sync.ts`'s (already-async) poll needs one. The `finally` below and
+   * the `feedbackScheduleStopped` check inside it exist anyway, mirroring the
+   * SHAPE of `fill-sync.ts`'s own `stopped` flag — not its scope, see that
+   * flag's declaration above — because they cost nothing while
+   * `runFeedbackCycle` stays synchronous, and they are what keeps a throw
+   * from the store — the case this whole comment is about — from silently
+   * taking the timer down if that ever changes. They do NOT cover a throw
+   * before `scheduleFeedbackCycle` is even reached — see `start()`'s
+   * `intervalMs` validation, just above the call site below, for why a bad
+   * interval fails loudly at boot instead.
+   */
+  const scheduleFeedbackCycle = (feedback: FeedbackCycleConfig, intervalMs: number): void => {
+    // Reset on every call (production.ts calls this exactly once per
+    // `start()`, at the bottom of the block below) rather than only at
+    // module load — `stop()` sets this `true` and never resets it itself, so
+    // without this line a second `start()` after a `stop()` would run the
+    // boot catch-up cycle and then have its own `finally` refuse to re-arm,
+    // #1110's exact symptom through a third door. A
+    // `stop()` landing concurrently with an in-flight `start()` (this call
+    // sits after two awaited reconciles) would have its `true` undone by
+    // this reset — contrived, since nothing calls them concurrently today.
+    feedbackScheduleStopped = false;
+
+    const runIfDue = (): void => {
+      try {
+        // `new Date()` (real/faked wall time), not `clock.now()` — see
+        // DESIGN DECISION 1 above.
+        const now = new Date();
+        const boundary = currentBoundary(now, intervalMs);
+        const last = feedbackScheduleStore.lastBoundary();
+
+        if (isBoundaryDue(boundary, last)) {
+          const attempted = feedbackScheduleStore.attemptedBoundary();
+          const alreadyAttempted = attempted !== null && attempted.getTime() === boundary.getTime();
+
+          if (alreadyAttempted) {
+            // See the residual-gap paragraph above: a
+            // prior attempt for this EXACT boundary was stamped, and this
+            // restart cannot tell whether the cycle ran to completion (only
+            // `recordBoundary` was interrupted) or the cycle itself died
+            // mid-run (residual gap 2, same paragraph). Either way, running
+            // it again risks double-applying its guardrail-capped step, so
+            // only the completion stamp below is retried. This also skips
+            // the #1045 prune calls above (`runFeedbackCycle` is not
+            // invoked) — harmless, since this branch only fires on a boot
+            // pass and both prunes already ran from their own 'startup'
+            // call sites before this scheduler runs.
+            logger.log({
+              trace_id: 'feedback-cycle',
+              stage: 'feedback-loop',
+              level: 'warn',
+              message:
+                'feedback cycle for this boundary was already attempted — not running it ' +
+                'again, only retrying the completion stamp (#1110)',
+              payload: { boundary: boundary.toISOString() },
+            });
+          } else {
+            try {
+              // BEFORE `runFeedbackCycle` — see the ordering note above.
+              feedbackScheduleStore.recordAttempt(boundary, now);
+            } catch (attemptError) {
+              // Best-effort: a failure here must not block the cycle from
+              // running (that guarantee predates this attempt marker), it
+              // only means a restart before `recordBoundary` completes will
+              // not be recognised as a retry, and could re-run the cycle —
+              // the residual gap the comment above names.
+              logger.log({
+                trace_id: 'feedback-cycle',
+                stage: 'feedback-loop',
+                level: 'error',
+                message:
+                  'could not record the feedback-cycle attempt marker — running the cycle ' +
+                  'anyway; a restart before completion will not be recognised as a retry (#1110)',
+                payload: {
+                  error:
+                    attemptError instanceof Error ? attemptError.message : String(attemptError),
+                },
+              });
+            }
+            runFeedbackCycle(feedback);
+          }
+          // AFTER `runFeedbackCycle`, not before — see the ordering note above.
+          feedbackScheduleStore.recordBoundary(boundary, now);
+        }
+      } catch (error) {
+        // #1110: a throw here — most likely from the store, `SQLITE_BUSY` on
+        // the shared WAL file — must not take the timer down. Before this
+        // `try`, it did: the re-arm was the function's last statement, not in
+        // a `finally`, so an uncaught throw left `feedbackHandle` unset and
+        // the cycle never fired again for the rest of the process's life,
+        // with no further log line — the exact symptom #1110 was filed to
+        // fix, reintroduced through a different door. Covers a store read
+        // failure (`lastBoundary`/`attemptedBoundary`), a `recordBoundary`
+        // failure, and any throw escaping `runFeedbackCycle` itself (it is
+        // documented not to, but this catch does not depend on that holding)
+        // — worded generically because none of those is "a schedule check",
+        // and because only a restart-driven retry, not "the next check", is
+        // real.
+        logger.log({
+          trace_id: 'feedback-cycle',
+          stage: 'feedback-loop',
+          level: 'error',
+          message:
+            'feedback cycle pass failed — re-arming for the next boundary; a restart retries ' +
+            'the cycle, or only its completion stamp if this boundary is already recorded as ' +
+            'attempted (#1110)',
+          payload: { error: error instanceof Error ? error.message : String(error) },
+        });
+      } finally {
+        if (!feedbackScheduleStopped) {
+          const upcoming = nextBoundary(new Date(), intervalMs);
+          const delayMs = Math.min(
+            Math.max(0, upcoming.getTime() - Date.now()),
+            MAX_SET_TIMEOUT_DELAY_MS,
+          );
+          feedbackHandle = setTimeout(runIfDue, delayMs);
+        }
+      }
+    };
+
+    runIfDue();
   };
 
   return {
@@ -3508,10 +3803,83 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
             });
           }
         }
-        feedbackHandle = setInterval(
-          () => runFeedbackCycle(feedback),
-          feedback.intervalMs ?? DEFAULT_FEEDBACK_INTERVAL_MS,
-        );
+        // #1110: state the schedule at startup rather than leaving an operator
+        // to infer it — read BEFORE `scheduleFeedbackCycle` below runs its
+        // first check, so this reports what was true when the process came
+        // up, not the post-catch-up state.
+        // `new Date()`, matching `scheduleFeedbackCycle`'s own boundary math
+        // (DESIGN DECISION 1) — not `clock.now()`.
+        const feedbackIntervalMs = feedback.intervalMs ?? DEFAULT_FEEDBACK_INTERVAL_MS;
+        // Named validation, not a bare `currentBoundary` throw (pass-2
+        // finding 3): `FeedbackCycleConfig.intervalMs` is unvalidated
+        // anywhere else, so a non-positive value (e.g. `0`) would otherwise
+        // fail here with `cycle-schedule.ts`'s generic "intervalMs must be
+        // positive" message and no mention of which config field caused it.
+        // This is deliberately still a boot crash, not a caught-and-logged
+        // path: the old `setInterval(fn, 0)` this schedule replaced would
+        // have hot-looped on the same bad config, so failing loudly at boot
+        // is strictly better, not a regression to soften. `Number.isFinite`
+        // also rejects `NaN`/`Infinity`: both pass
+        // `<= 0`, and without this check `currentBoundary` below yields an
+        // Invalid Date that dies at `.toISOString()` with a bare, unattributed
+        // `RangeError` instead of this named message.
+        if (!Number.isFinite(feedbackIntervalMs) || feedbackIntervalMs <= 0) {
+          throw new Error(
+            `FeedbackCycleConfig.intervalMs must be positive, got ${feedbackIntervalMs}`,
+          );
+        }
+        const feedbackBoundaryNow = currentBoundary(new Date(), feedbackIntervalMs);
+        // #1110 gap: an unreadable schedule store is not on the order path —
+        // it must not stop the process that manages open positions from
+        // booting, and `runIfDue` below already swallows the identical
+        // failure, so letting this diagnostic read crash boot would be
+        // incoherent with it.
+        let feedbackStoredBoundary: Date | null = null;
+        let feedbackScheduleReadFailed = false;
+        try {
+          feedbackStoredBoundary = feedbackScheduleStore.lastBoundary();
+        } catch (error) {
+          feedbackScheduleReadFailed = true;
+          logger.log({
+            trace_id: 'startup',
+            stage: 'feedback-loop',
+            level: 'error',
+            message:
+              'could not read the feedback cycle schedule store at startup — proceeding with ' +
+              "boot; runIfDue's own guarded read (below) will retry it on the first pass (#1110)",
+            payload: { error: error instanceof Error ? error.message : String(error) },
+          });
+        }
+        const feedbackDueNow = isBoundaryDue(feedbackBoundaryNow, feedbackStoredBoundary);
+        // Computed once and carried structurally on BOTH branches' payload
+        // (#1110): the due-now branch is a fresh deploy or a restart after an
+        // outage — exactly the case an operator most needs the
+        // next-scheduled instant for, since "catching up" alone doesn't say
+        // when the normal cadence resumes.
+        const feedbackNextDue = nextBoundary(new Date(), feedbackIntervalMs);
+        logger.log({
+          trace_id: 'startup',
+          stage: 'feedback-loop',
+          level: 'info',
+          message: feedbackScheduleReadFailed
+            ? 'daily feedback cycle schedule is UNKNOWN — the store could not be read at ' +
+              "startup, so no catch-up decision was made here; runIfDue's own guarded read " +
+              `decides on its first pass, next boundary at ${feedbackNextDue.toISOString()} (#1110)`
+            : feedbackDueNow
+              ? 'daily feedback cycle is due now — catching up on the current boundary, then ' +
+                `resuming the normal schedule, next due at ${feedbackNextDue.toISOString()} (#1110)`
+              : 'daily feedback cycle already ran for the current boundary — next due at ' +
+                `${feedbackNextDue.toISOString()}`,
+          payload: {
+            boundary: feedbackBoundaryNow.toISOString(),
+            interval_ms: feedbackIntervalMs,
+            stored_boundary: feedbackStoredBoundary?.toISOString() ?? null,
+            stored_boundary_read_failed: feedbackScheduleReadFailed,
+            next_due: feedbackNextDue.toISOString(),
+          },
+        });
+
+        scheduleFeedbackCycle(feedback, feedbackIntervalMs);
       }
 
       return orphans;
@@ -3524,8 +3892,9 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         clearInterval(heartbeatHandle);
         heartbeatHandle = undefined;
       }
+      feedbackScheduleStopped = true;
       if (feedbackHandle !== undefined) {
-        clearInterval(feedbackHandle);
+        clearTimeout(feedbackHandle);
         feedbackHandle = undefined;
       }
       if (gdeltHandle !== undefined) {

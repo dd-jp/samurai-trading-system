@@ -121,6 +121,7 @@ export const STAGE_OWNED_TABLES: Record<StoreOwnerStage, readonly string[]> = {
     'analyst_weights',
     'arm_comparison_samples',
     'dial_adjustments',
+    'feedback_cycle_schedule',
     'outside_benchmark_samples',
     'risk_thresholds',
     'strategy_params',
