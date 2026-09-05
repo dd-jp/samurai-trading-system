@@ -390,6 +390,47 @@ export class MiArchiveStore {
     })();
   }
 
+  /**
+   * The persisted consecutive-refusal streak for one curated row (#1120),
+   * `0` when it has never been refused or has answered since. Read before a
+   * fresh process's first refusal so the count continues across a restart
+   * instead of restarting at 1 — see migration 0004.
+   */
+  refusalStreak(source: MiSourceId, row_id: string): number {
+    const row = this.db
+      .prepare('SELECT streak FROM mi_refusal_streaks WHERE source = ? AND row_id = ?')
+      .get(source, row_id) as { streak: number } | undefined;
+
+    return row?.streak ?? 0;
+  }
+
+  /** Persists `streak` as the row's current consecutive-refusal count. */
+  recordRefusalStreak(
+    source: MiSourceId,
+    row_id: string,
+    streak: number,
+    reason: string,
+    asOf: Date,
+  ): void {
+    this.db
+      .prepare(
+        `INSERT INTO mi_refusal_streaks (source, row_id, streak, last_reason, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(source, row_id) DO UPDATE SET
+           streak = excluded.streak,
+           last_reason = excluded.last_reason,
+           updated_at = excluded.updated_at`,
+      )
+      .run(source, row_id, streak, reason, asOf.toISOString());
+  }
+
+  /** Clears the persisted streak once a row answers again — see `recordRefusalStreak`. */
+  clearRefusalStreak(source: MiSourceId, row_id: string): void {
+    this.db
+      .prepare('DELETE FROM mi_refusal_streaks WHERE source = ? AND row_id = ?')
+      .run(source, row_id);
+  }
+
   close(): void {
     this.db.close();
   }

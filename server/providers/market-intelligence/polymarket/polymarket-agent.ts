@@ -253,7 +253,9 @@ export interface PolymarketAgentDeps {
   /**
    * The MI archive, when this run has one. Both the raw bytes and the derived
    * items are written (#835); `archive/mi-sources.ts` is what keeps the items
-   * from being re-ingested at boot.
+   * from being re-ingested at boot. Also where each curated row's consecutive-
+   * refusal streak is persisted (#1120) — `#nextRefusalStreak` reads it back
+   * so a restart resumes an escalation instead of restarting it at 1.
    */
   archive?: MiArchiveStore | undefined;
   logger?: Logger | undefined;
@@ -401,7 +403,15 @@ export class PolymarketAgent {
   /** The bucket already fetched. In-memory: a restart refetches, which is correct. */
   #bucket: number | undefined;
   #current: Promise<boolean> | undefined;
-  /** Consecutive book-quality refusals per curated row — see `#refuse`. */
+  /**
+   * Consecutive book-quality refusals per curated row — see `#refuse`.
+   *
+   * In-memory only; the archive (when present) is the durable copy (#1120)
+   * that survives this map resetting on every restart. `#nextRefusalStreak`
+   * reads the archive on this map's first miss for a row so the count picked
+   * up here continues an escalation the archive was already tracking rather
+   * than restarting it at 1.
+   */
   readonly #refusals = new Map<string, number>();
   readonly #deps: PolymarketAgentDeps;
   readonly #refreshMs: number;
@@ -619,7 +629,7 @@ export class PolymarketAgent {
     bucketAt: Date,
   ): Promise<BuiltRow> {
     const refusal = refuseOnBook(market, now);
-    if (refusal !== undefined) return this.#refuse(trace_id, entry, refusal);
+    if (refusal !== undefined) return this.#refuse(trace_id, entry, refusal, now);
 
     const outcomeIndex = market.outcomes.indexOf(entry.bullishOutcome);
     if (outcomeIndex < 0) {
@@ -628,11 +638,12 @@ export class PolymarketAgent {
         entry,
         `the curated bullish outcome '${entry.bullishOutcome}' is not among the market's ` +
           `outcomes [${market.outcomes.join(', ')}] — the market's shape changed under the table`,
+        now,
       );
     }
     const tokenId = market.tokenIds[outcomeIndex];
     if (tokenId === undefined) {
-      return this.#refuse(trace_id, entry, 'the bullish outcome has no CLOB token id');
+      return this.#refuse(trace_id, entry, 'the bullish outcome has no CLOB token id', now);
     }
 
     // #833. Above the price-history fetch on purpose: a pinned row can never
@@ -644,7 +655,12 @@ export class PolymarketAgent {
     // outage, and re-asking inside the hour would only repeat it.
     const probability = market.outcomePrices[outcomeIndex];
     if (probability === undefined || !Number.isFinite(probability)) {
-      return this.#refuse(trace_id, entry, 'the bullish outcome carries no quoted probability');
+      return this.#refuse(
+        trace_id,
+        entry,
+        'the bullish outcome carries no quoted probability',
+        now,
+      );
     }
     if (isPinnedProbability(probability)) {
       return this.#refuse(
@@ -655,6 +671,7 @@ export class PolymarketAgent {
           `${MIN_PROBABILITY_HEADROOM} minimum — a contract pinned this near certainty cannot ` +
           'carry a 24h delta, so it would emit a zero vote every hour rather than a signal. ' +
           'Re-point this row at a bucket with room to move, or drop it, in curated-markets.ts',
+        now,
       );
     }
 
@@ -680,7 +697,7 @@ export class PolymarketAgent {
     }
 
     const endpoints = endpointsOf(history, now);
-    if (typeof endpoints === 'string') return this.#refuse(trace_id, entry, endpoints);
+    if (typeof endpoints === 'string') return this.#refuse(trace_id, entry, endpoints, now);
 
     const { baseline, latest } = endpoints;
     const delta = latest.probability - baseline.probability;
@@ -753,12 +770,14 @@ export class PolymarketAgent {
     // The row answered, so its refusal streak starts over: the escalation must
     // fire on a row that is dead, not on one that was quiet last Tuesday.
     this.#refusals.delete(entry.id);
+    this.#deps.archive?.clearRefusalStreak(SOURCE_POLYMARKET, entry.id);
     return { outcome: 'item', item, raw };
   }
 
-  #refuse(trace_id: string, entry: CuratedMacroMarket, reason: string): BuiltRow {
-    const streak = (this.#refusals.get(entry.id) ?? 0) + 1;
+  #refuse(trace_id: string, entry: CuratedMacroMarket, reason: string, now: Date): BuiltRow {
+    const streak = this.#nextRefusalStreak(entry.id);
     this.#refusals.set(entry.id, streak);
+    this.#deps.archive?.recordRefusalStreak(SOURCE_POLYMARKET, entry.id, streak, reason, now);
     // A row parked below the book-quality floors forever is functionally a
     // rotted row: it never contributes, and nobody greps `info`. One refusal is
     // routine (a quiet hour on a market that trades around a print), so the
@@ -781,5 +800,19 @@ export class PolymarketAgent {
       payload: { source: SOURCE_POLYMARKET, curated_id: entry.id, consecutive_refusals: streak },
     });
     return { outcome: 'refused' };
+  }
+
+  /**
+   * The next streak value for `id` (#1120). Continues the in-memory count on
+   * a hit; on this process's first refusal for `id` it falls back to what the
+   * archive already had persisted rather than 0, which is what makes the
+   * escalation resume after a restart instead of restarting at 1 — the exact
+   * failure that let a permanently-dead row read as merely occasional on a
+   * soak that bounces more than once a day.
+   */
+  #nextRefusalStreak(id: string): number {
+    const inMemory = this.#refusals.get(id);
+    if (inMemory !== undefined) return inMemory + 1;
+    return (this.#deps.archive?.refusalStreak(SOURCE_POLYMARKET, id) ?? 0) + 1;
   }
 }
