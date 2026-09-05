@@ -411,3 +411,34 @@ the client grows.
 F2, F3 and F4 change interfaces across the component layer and want a wayfinder map first — F4 in
 particular carries an operator-facing policy question (§5) that is David's to settle, not a
 refactor's.
+
+## 11. Tickets filed
+
+All seven were filed 2026-09-05. Two departures from a one-finding-one-ticket mapping, both
+deliberate:
+
+- **F1 was narrowed to a delta of [#1080](https://github.com/dd-jp/samurai-trading-system/issues/1080)**,
+  which is open and whose acceptance criterion already reads "distinguishable … in whatever the
+  dashboard renders". The drawer half of that criterion landed at `c0bdec2`; the ticket covers the
+  matrix half only, and does not restate #1080's diagnosis. #1080 was not closed or re-scoped.
+- **F4 was filed as a decision ticket (`wayfinder:grilling`), not an implementation ticket**, per
+  §5 and Standing Pipeline Rule 1. Its central question is an operator-facing product choice; an
+  agent holding a `ready-for-agent` ticket would settle it by picking whichever default made the
+  diff smallest.
+
+| Finding | Issue | Size / Model | Blocked by |
+|---|---|---|---|
+| F3 | [#1138](https://github.com/dd-jp/samurai-trading-system/issues/1138) | M → sonnet | — |
+| F2 | [#1139](https://github.com/dd-jp/samurai-trading-system/issues/1139) | L → opus | — |
+| F5 | [#1140](https://github.com/dd-jp/samurai-trading-system/issues/1140) | L → opus | — |
+| F7 | [#1141](https://github.com/dd-jp/samurai-trading-system/issues/1141) | S → sonnet | — |
+| F1 | [#1142](https://github.com/dd-jp/samurai-trading-system/issues/1142) | M → sonnet | #1138 |
+| F6 | [#1143](https://github.com/dd-jp/samurai-trading-system/issues/1143) | S → sonnet | #1140 |
+| F4 | [#1144](https://github.com/dd-jp/samurai-trading-system/issues/1144) | L → opus (decision) | — |
+
+F5 was sized **L**, not M as this report's body implies: it crosses `contracts/` → the server
+writer → the client read, and a declared wire field with no production writer is this repo's
+dominant defect class, so its ticket carries an explicit composition-root criterion.
+
+Both blocking edges are wired through the **dependencies API**, not prose alone — a "Blocked by"
+line in a body renders as takable on the board.
