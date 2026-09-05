@@ -460,6 +460,59 @@ on the live path. `service-api/index.ts:104` opening the store write-capable is 
 
 ---
 
+## Where each finding went (filed 2026-09-05)
+
+Five findings were applied directly (see the Summary). Everything else the review calls a **defect**
+is now one issue on board #1, labelled `ready-for-agent` with a size/model tier. The 16 Fowler
+**judgement calls** are deliberately *not* issues — the review's own rule is that a baseline smell is
+never a hard violation, so each needs a ruling before it is work. They are charted as a wayfinder map.
+
+| Finding | Issue |
+|---|---|
+| Unwired 1 — `createDataSource` | [#1151](https://github.com/dd-jp/samurai-trading-system/issues/1151) |
+| Unwired 2 — `ConsoleApprovalChannel` | [#1152](https://github.com/dd-jp/samurai-trading-system/issues/1152) |
+| Unwired 3 — `SignedApprovalChannel` | [#1153](https://github.com/dd-jp/samurai-trading-system/issues/1153) |
+| Unwired 4 — `DiscordChannel` | [#1154](https://github.com/dd-jp/samurai-trading-system/issues/1154) |
+| Unwired 5 — `crossesPromptTier` | [#1155](https://github.com/dd-jp/samurai-trading-system/issues/1155) |
+| Unwired 6 — `BacktestHarness` / `SqliteConfigTrialLog` | [#1156](https://github.com/dd-jp/samurai-trading-system/issues/1156) |
+| Unwired 7 — crypto candle clients | [#1157](https://github.com/dd-jp/samurai-trading-system/issues/1157) |
+| S1 (remainder — `contracts/`, the two sub-cases, the type-only ruling) | [#1158](https://github.com/dd-jp/samurai-trading-system/issues/1158) |
+| S2 — wrong comments | [#1159](https://github.com/dd-jp/samurai-trading-system/issues/1159) |
+| S3 — changelog comments | [#1160](https://github.com/dd-jp/samurai-trading-system/issues/1160) |
+| S4 — mid-wiring `process.env` | [#1161](https://github.com/dd-jp/samurai-trading-system/issues/1161) |
+| S5 — `formatQty` | **applied 2026-09-05** |
+| S6 — test stubs behind casts | [#1162](https://github.com/dd-jp/samurai-trading-system/issues/1162) |
+| S7 — test fixture in production source | *referenced, not re-filed* (`codebase-review-2026-08-06.md`) |
+| S8 — section-header banners | [#1163](https://github.com/dd-jp/samurai-trading-system/issues/1163) |
+| Judgement calls (all 16) | wayfinder map [#1179](https://github.com/dd-jp/samurai-trading-system/issues/1179) |
+| P1 — `risk-manager-spec.md` | **applied 2026-09-05** |
+| P2 | **withdrawn** (ADR-0014) |
+| P3 — Polymarket visibility | **applied 2026-09-05** |
+| P4 — null-reason divergence | **applied 2026-09-05** |
+| P5 — no `intel` bucket | [#1164](https://github.com/dd-jp/samurai-trading-system/issues/1164) |
+| P6 — closed rows drop `side` | [#1165](https://github.com/dd-jp/samurai-trading-system/issues/1165) |
+| P7 — the rail's poll clock | [#1166](https://github.com/dd-jp/samurai-trading-system/issues/1166) |
+| P8 — universe resolved thrice | [#1167](https://github.com/dd-jp/samurai-trading-system/issues/1167) |
+| P9 — `current_tick.stage` CHECK | [#1168](https://github.com/dd-jp/samurai-trading-system/issues/1168) |
+| P10 — `verdict_log` upsert | [#1169](https://github.com/dd-jp/samurai-trading-system/issues/1169) |
+| P11 — `atr_k` absolutism | [#1170](https://github.com/dd-jp/samurai-trading-system/issues/1170) (code side already #1119) |
+| P12 — trader interfaces vs the control arm | [#1171](https://github.com/dd-jp/samurai-trading-system/issues/1171) |
+| P13 — "No jitter" | [#1172](https://github.com/dd-jp/samurai-trading-system/issues/1172) |
+| P14 — mediator rule | [#1173](https://github.com/dd-jp/samurai-trading-system/issues/1173) |
+| P15 — four undeclared tables | [#1174](https://github.com/dd-jp/samurai-trading-system/issues/1174) |
+| P16 — pool geometry | [#1175](https://github.com/dd-jp/samurai-trading-system/issues/1175) |
+| P17 + CV-27 — the frozen registry | [#1176](https://github.com/dd-jp/samurai-trading-system/issues/1176) |
+| P18 — feedback-loop story 7 | [#1177](https://github.com/dd-jp/samurai-trading-system/issues/1177) |
+| P19 — six minor stale items | [#1178](https://github.com/dd-jp/samurai-trading-system/issues/1178) |
+| P20 | *scope note, not a finding* |
+
+**Overlaps checked before filing.** No existing issue referenced this report. Two genuine overlaps
+found and narrowed rather than re-filed: [#1119](https://github.com/dd-jp/samurai-trading-system/issues/1119)
+already tracks P11's code-side cause (`subclassOfUniverse` empty), so #1170 is the spec correction
+only; [#946](https://github.com/dd-jp/samurai-trading-system/issues/946) already tracks the missing
+Saxo adapter, so #1178 excludes it. S7 was already carried by an earlier review and is referenced, per
+this directory's own convention.
+
 ## Summary
 
 **Standards — 8 hard-violation groups + 7 unwired mechanisms + 16 judgement calls.** Worst: the
