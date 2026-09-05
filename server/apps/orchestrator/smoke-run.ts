@@ -263,8 +263,7 @@ import {
   FILL_SYNC_RECONCILE_FAILED,
   FILL_SYNC_SWEEP_FAILED,
 } from './fill-sync.js';
-import { installFaultHandlers, startFromEnvironment } from './index.js';
-import { sweepStaleLogs } from './log-retention.js';
+import { installFaultHandlers, runEntrypointLogRetention, startFromEnvironment } from './index.js';
 import { buildEntrypointLogger, JsonLogger, type StdoutStream } from './logger.js';
 import {
   buildStartingProfileConfigs,
@@ -2305,16 +2304,24 @@ function runLoggerResilienceScenario(): LoggerResilienceEvidence {
 
 /**
  * What the #1116 retention sweep observed. Every field is an EFFECT of
- * driving the REAL `sweepStaleLogs` against files on disk — not "the
- * function exists".
+ * driving the REAL `runEntrypointLogRetention` against files on disk — not
+ * "the function exists".
  */
 export interface LogRetentionEvidence {
   /** A file well outside the retention window was actually removed. */
   staleFileRemoved: boolean;
   /** A file inside the retention window survived — a sweep must not eat evidence of a live run. */
   freshFileKept: boolean;
-  /** A path passed as `protectedPaths` survived despite being old. */
+  /** The sink's own rotation generation survived despite being old. */
   protectedFileKeptDespiteAge: boolean;
+  /**
+   * An undated bare name survived despite being old — the shape a still-open
+   * writer holds (`service-api.log`), which unlinking would turn into
+   * invisible growth rather than reclaimed space.
+   */
+  liveShapedFileKeptDespiteAge: boolean;
+  /** A non-log file in the swept directory survived despite being old. */
+  nonLogFileKeptDespiteAge: boolean;
   /** `bytesReclaimed` actually accounted for the file that was removed. */
   bytesReclaimed: number;
 }
@@ -2323,18 +2330,20 @@ export interface LogRetentionEvidence {
  * The #1116 retention-sweep scenario — the pre-soak gate's leg for `logs/`
  * housekeeping.
  *
- * `sweepStaleLogsWithLog` is called only from the real entrypoint guard in
- * `index.ts`'s `import.meta.url` block, which no unit test can reach — the
- * same limitation `runLoggerResilienceScenario` has for `buildEntrypointLogger`
- * above. This drives the REAL exported `sweepStaleLogs` against real files in
- * a temp directory, so a regression in the sweep's own logic fails here; it
- * proves the exported boot helper behaves correctly, not that the unreachable
- * guard actually calls it on every real boot.
+ * Driven through `runEntrypointLogRetention`, the exported boot helper the
+ * `import.meta.url` guard in `index.ts` calls, so the ARGUMENT DERIVATION is
+ * covered too — which directory `dirname(SAMURAI_LOG_FILE)` picks, and which
+ * paths are protected — and not just the sweep it delegates to. The guard
+ * itself is unreachable from any in-process caller; `index.test.ts` asserts
+ * on its source that the call is still there.
+ *
+ * The `FileSinkConfig` is built literally rather than through
+ * `fileSinkConfigFromEnvironment`, and `env` is passed explicitly: both
+ * default to the real `logs/` a soak is writing to, and a gate must never run
+ * the sweep against that, nor let an operator's shell perturb its window.
  *
  * The directory goes to `os.tmpdir()`, removed afterwards: like the other
- * scenarios above, a gate must leave no artefacts in the checkout, and in
- * particular must never run the sweep against the real `logs/` a soak writes
- * to.
+ * scenarios above, a gate must leave no artefacts in the checkout.
  */
 function runLogRetentionScenario(): LogRetentionEvidence {
   const directory = mkdtempSync(join(tmpdir(), 'samurai-smoke-log-retention-'));
@@ -2343,29 +2352,47 @@ function runLogRetentionScenario(): LogRetentionEvidence {
     const stalePath = join(directory, 'orchestrator-20260101-0000.log');
     const freshPath = join(directory, 'orchestrator-20260904-0000.log');
     const activePath = join(directory, 'orchestrator.log');
-    writeFileSync(stalePath, 'stale-line\n');
-    writeFileSync(freshPath, 'fresh-line\n');
-    writeFileSync(activePath, 'active-line\n');
+    // Archival-shaped, so `protectedPaths` — not the name rule — is the only
+    // thing keeping it, which is what makes the assertion on it falsifiable.
+    const rotatedPath = `${activePath}.1`;
+    // The `service-api.log` shape: undated, bare, and quietly held open by a
+    // sibling process for weeks at a time.
+    const liveShapedPath = join(directory, 'service-api.log');
+    const nonLogPath = join(directory, '.env.local');
+    for (const path of [
+      stalePath,
+      freshPath,
+      activePath,
+      rotatedPath,
+      liveShapedPath,
+      nonLogPath,
+    ]) {
+      writeFileSync(path, 'line\n');
+    }
 
     const oldSeconds = (Date.now() - 40 * oneDayMs) / 1000;
     const recentSeconds = (Date.now() - oneDayMs) / 1000;
-    utimesSync(stalePath, oldSeconds, oldSeconds);
-    utimesSync(activePath, oldSeconds, oldSeconds);
+    for (const path of [stalePath, rotatedPath, liveShapedPath, nonLogPath]) {
+      utimesSync(path, oldSeconds, oldSeconds);
+    }
     utimesSync(freshPath, recentSeconds, recentSeconds);
 
-    // The REAL sweep function, not a stand-in, so a regression that stops
-    // deleting stale files, starts deleting fresh ones, or stops honouring
-    // `protectedPaths` fails this run.
-    const result = sweepStaleLogs({
-      directory,
-      maxAgeMs: 30 * oneDayMs,
-      protectedPaths: [activePath],
-    });
+    // The REAL boot helper, not a stand-in, so a regression that stops
+    // deleting stale files, starts deleting live-shaped or non-log ones,
+    // stops honouring `protectedPaths`, or derives the wrong directory from
+    // the sink config fails this run.
+    const result = runEntrypointLogRetention(
+      { filePath: activePath, maxBytes: 1_000_000, maxRotatedFiles: 1 },
+      { log: () => {} },
+      { SAMURAI_LOG_RETENTION_DAYS: '30' },
+    );
 
     return {
       staleFileRemoved: !existsSync(stalePath),
       freshFileKept: existsSync(freshPath),
-      protectedFileKeptDespiteAge: existsSync(activePath),
+      protectedFileKeptDespiteAge: existsSync(rotatedPath),
+      liveShapedFileKeptDespiteAge: existsSync(liveShapedPath),
+      nonLogFileKeptDespiteAge: existsSync(nonLogPath),
       bytesReclaimed: result.bytesReclaimed,
     };
   } finally {
@@ -4290,7 +4317,21 @@ export function evaluateSmokeGate(
   if (!retention.protectedFileKeptDespiteAge) {
     failures.push(
       'the logs/ retention sweep removed a path passed as protected despite it being old — ' +
-        "the active sink's own file must survive regardless of mtime (#1116)",
+        "the active sink's own rotation set must survive regardless of mtime (#1116)",
+    );
+  }
+  if (!retention.liveShapedFileKeptDespiteAge) {
+    failures.push(
+      'the logs/ retention sweep removed an undated bare name (the service-api.log shape) — ' +
+        'a writer still holding that file open keeps appending to the unlinked inode, so the ' +
+        'space is never reclaimed and the content is unrecoverable (#1116)',
+    );
+  }
+  if (!retention.nonLogFileKeptDespiteAge) {
+    failures.push(
+      'the logs/ retention sweep removed a non-log file — pointed at a directory that is not ' +
+        'logs/ this is how it reaches .env.local, and no age window can make that recoverable ' +
+        '(#1116)',
     );
   }
   if (retention.staleFileRemoved && retention.bytesReclaimed <= 0) {

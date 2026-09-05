@@ -64,7 +64,12 @@ import {
   TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR,
 } from './alert-transport.js';
 import { type LiveStartingProfile, liveStartingProfile } from './live-profile.js';
-import { logRetentionDaysFromEnvironment, sweepStaleLogsWithLog } from './log-retention.js';
+import {
+  type LogRetentionResult,
+  logRetentionDaysFromEnvironment,
+  logRetentionKeepNamesFromEnvironment,
+  sweepStaleLogsWithLog,
+} from './log-retention.js';
 import { buildEntrypointLogger, JsonLogger } from './logger.js';
 import { paperStartingProfile } from './paper-profile.js';
 import { resolveUsEquitySessionCalendar } from './production/us-equity-session-source.js';
@@ -74,7 +79,7 @@ import {
   type ProductionOrchestrator,
   SMOKE_TEST_UNIVERSE,
 } from './production.js';
-import { fileSinkConfigFromEnvironment } from './rotating-file-sink.js';
+import { type FileSinkConfig, fileSinkConfigFromEnvironment } from './rotating-file-sink.js';
 import type { Logger } from './types.js';
 
 export { type AlertDeliveryFailure, SqliteAlertDeliveryLog } from './alert-delivery-log.js';
@@ -857,6 +862,51 @@ export function installFaultHandlers(
   effects.on('unhandledRejection', fatal('unhandledRejection'));
 }
 
+/**
+ * The #1116 boot sweep over `logs/`, argument derivation included.
+ *
+ * `RotatingFileSink` bounds only `fileSinkConfig.filePath` — every other file
+ * a run leaves in `logs/` (a supervisor's own redirected stdout, a hand-run
+ * `> logs/orchestrator-DATE.log`) is unbounded, which is unattended growth on
+ * the host holding live position state. Swept from the entrypoint rather than
+ * inside `buildProductionComponents`, matching `buildEntrypointLogger`: a
+ * real filesystem side effect belongs on the deployment path, not on every
+ * test's composition root.
+ *
+ * It is a separate exported function and not an inline block in the
+ * `import.meta.url` guard below for the same reason `startingProfileForMode`
+ * is: the guard is unreachable from any in-process test, and the derivation
+ * is where this feature's sharp edge lives — `dirname` of an operator's
+ * `SAMURAI_LOG_FILE` decides which directory gets files deleted from it. The
+ * guard is left holding only the call, which `index.test.ts` asserts on the
+ * source text because there is no runtime seam into it.
+ *
+ * The active sink file and its rotation set are named explicitly so this
+ * sweep never fights `RotatingFileSink`'s own count-based retention over the
+ * same files; see `log-retention.ts` for the rest of the liveness rule.
+ */
+export function runEntrypointLogRetention(
+  fileSinkConfig: FileSinkConfig,
+  logger: Logger,
+  env: NodeJS.ProcessEnv = process.env,
+): LogRetentionResult {
+  return sweepStaleLogsWithLog(
+    {
+      directory: dirname(fileSinkConfig.filePath),
+      maxAgeMs: logRetentionDaysFromEnvironment(env) * 24 * 60 * 60 * 1000,
+      keepNames: logRetentionKeepNamesFromEnvironment(env),
+      protectedPaths: [
+        fileSinkConfig.filePath,
+        ...Array.from(
+          { length: fileSinkConfig.maxRotatedFiles },
+          (_, index) => `${fileSinkConfig.filePath}.${index + 1}`,
+        ),
+      ],
+    },
+    logger,
+  );
+}
+
 // Entrypoint guard: `npm run orchestrator` runs this file directly, but it is
 // also the package's export surface — importing it must not start a trading
 // process.
@@ -885,30 +935,7 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
     const fileSinkConfig = fileSinkConfigFromEnvironment();
     const entrypointLogger = buildEntrypointLogger(fileSinkConfig);
     installFaultHandlers(entrypointLogger);
-    // #1116: `RotatingFileSink` bounds only `fileSinkConfig.filePath` — every
-    // other file a run leaves in `logs/` (a supervisor's own redirected
-    // stdout, a hand-run `> logs/orchestrator-DATE.log`) is unbounded, which
-    // is unattended growth on the host holding live position state. Swept
-    // here rather than inside `buildProductionComponents`, matching
-    // `buildEntrypointLogger` above: a real filesystem side effect belongs on
-    // the deployment path, not on every test's composition root. The active
-    // sink file and its rotation set are named explicitly so this sweep never
-    // fights `RotatingFileSink`'s own count-based retention over the same
-    // files; see `log-retention.ts` for the rest of the liveness rule.
-    sweepStaleLogsWithLog(
-      {
-        directory: dirname(fileSinkConfig.filePath),
-        maxAgeMs: logRetentionDaysFromEnvironment() * 24 * 60 * 60 * 1000,
-        protectedPaths: [
-          fileSinkConfig.filePath,
-          ...Array.from(
-            { length: fileSinkConfig.maxRotatedFiles },
-            (_, index) => `${fileSinkConfig.filePath}.${index + 1}`,
-          ),
-        ],
-      },
-      entrypointLogger,
-    );
+    runEntrypointLogRetention(fileSinkConfig, entrypointLogger);
     const mode = parseMode(process.env.SAMURAI_MODE);
     // #684. Resolved HERE, at the real deployment, and not inside
     // `startFromEnvironment` itself — deliberately, the same reason

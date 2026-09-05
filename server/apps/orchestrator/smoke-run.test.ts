@@ -535,6 +535,8 @@ function healthyLogRetention(overrides: Partial<LogRetentionEvidence> = {}): Log
     staleFileRemoved: true,
     freshFileKept: true,
     protectedFileKeptDespiteAge: true,
+    liveShapedFileKeptDespiteAge: true,
+    nonLogFileKeptDespiteAge: true,
     bytesReclaimed: 11,
     ...overrides,
   };
@@ -1061,6 +1063,30 @@ describe('evaluateSmokeGate', () => {
 
     expect(gate.passed).toBe(false);
     expect(gate.failures.some((failure) => failure.includes('passed as protected'))).toBe(true);
+  });
+
+  it('fails when the retention sweep removed an undated bare name despite its age', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        logRetention: healthyLogRetention({ liveShapedFileKeptDespiteAge: false }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('undated bare name'))).toBe(true);
+  });
+
+  it('fails when the retention sweep removed a non-log file', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        logRetention: healthyLogRetention({ nonLogFileKeptDespiteAge: false }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('removed a non-log file'))).toBe(true);
   });
 
   it('fails when the retention sweep removed a file but reclaimed no bytes', () => {
