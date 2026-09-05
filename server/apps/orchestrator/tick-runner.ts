@@ -196,10 +196,12 @@ export class SequentialTickRunner implements TickRunner {
       // audit spine doesn't already: `record()` writes the `audit_log` row —
       // decision cleartext, unlike `input_digest`/`output_digest` — from this
       // same call regardless of level, so nothing is lost, only quieted. A
-      // human tailing the log for "is the exit check alive" has two surfaces
-      // this does not touch: the once-an-hour `analysts`/`debate` lines every
+      // human tailing the log for "is the exit check alive" has three surfaces
+      // this does not touch: `LoggingHeartbeatChannel`'s own periodic `info`
+      // `heartbeat` line, which lands in this same file whenever it is the
+      // selected transport; the once-an-hour `analysts`/`debate` lines every
       // instrument still emits at `info` on its decision cadence
-      // (`DEBATE_BAR_TIMEFRAME_MS`) regardless of position state, and
+      // (`DEBATE_BAR_TIMEFRAME_MS`) regardless of position state; and
       // `SAMURAI_LOG_LEVEL=debug` for this line itself.
       if (stage === 'position_check' && decision === 'no_exit_due') {
         return 'debug';

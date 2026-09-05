@@ -10,8 +10,9 @@
  * Stdout **and** an optional durable file — both, never either. Stdout keeps a
  * foreground run readable; the file is what makes a 14-day unattended soak
  * (#238) diagnosable after the fact, since the structured log is the only
- * surface carrying stage-level detail (`audit_log` persists digests, from
- * which no value can be reconstructed). Story 11's "stdout + rotated file" was
+ * surface carrying a stage's full payload — `audit_log` holds a cleartext
+ * `decision` per stage, but its inputs and outputs are digests from which no
+ * value can be reconstructed. Story 11's "stdout + rotated file" was
  * deferred by #95 and is closed here; the rotation itself lives in
  * `./rotating-file-sink.ts`.
  *
