@@ -1171,9 +1171,9 @@ describe('SqliteExecutionStore', () => {
     function ceilingsOf(db: Db, table: 'open_positions' | 'closed_trades'): (number | null)[] {
       return (
         db
-          .prepare(`SELECT sizing_capital_ceiling_gbp FROM ${table} ORDER BY idempotency_key`)
-          .all() as { sizing_capital_ceiling_gbp: number | null }[]
-      ).map((row) => row.sizing_capital_ceiling_gbp);
+          .prepare(`SELECT sizing_capital_ceiling FROM ${table} ORDER BY idempotency_key`)
+          .all() as { sizing_capital_ceiling: number | null }[]
+      ).map((row) => row.sizing_capital_ceiling);
     }
 
     it('stamps both tables with the ceiling the constructor was given', async () => {
@@ -1218,9 +1218,9 @@ describe('SqliteExecutionStore', () => {
 
       const distinctCeilings = db
         .prepare(
-          'SELECT DISTINCT sizing_capital_ceiling_gbp FROM closed_trades ORDER BY sizing_capital_ceiling_gbp',
+          'SELECT DISTINCT sizing_capital_ceiling FROM closed_trades ORDER BY sizing_capital_ceiling',
         )
-        .all() as { sizing_capital_ceiling_gbp: number | null }[];
+        .all() as { sizing_capital_ceiling: number | null }[];
       // More than one distinct value in the window: exactly the condition a
       // report must refuse to average over.
       expect(distinctCeilings).toHaveLength(2);

@@ -3051,9 +3051,9 @@ function feedbackCycleScheduleWasWritten(db: SqliteHandle): boolean {
  */
 function sizingCeilingWasStamped(db: SqliteHandle): boolean {
   const rows = db
-    .prepare("SELECT sizing_capital_ceiling_gbp FROM open_positions WHERE instrument = 'BTC-USD'")
-    .all() as { sizing_capital_ceiling_gbp: number | null }[];
-  return rows.length > 0 && rows.every((row) => row.sizing_capital_ceiling_gbp !== null);
+    .prepare("SELECT sizing_capital_ceiling FROM open_positions WHERE instrument = 'BTC-USD'")
+    .all() as { sizing_capital_ceiling: number | null }[];
+  return rows.length > 0 && rows.every((row) => row.sizing_capital_ceiling !== null);
 }
 
 /** Drives the shipped arm-comparison cycle over the smoke run's own store. */
@@ -3822,7 +3822,7 @@ export function evaluateSmokeGate(
   // #1112 AC5 (migration 0045) — see `sizingCeilingStamped`'s own doc.
   if (!options.sizingCeilingStamped) {
     failures.push(
-      'a BTC-USD `open_positions` row after the run carries no `sizing_capital_ceiling_gbp` — ' +
+      'a BTC-USD `open_positions` row after the run carries no `sizing_capital_ceiling` — ' +
         '`production.ts` stopped passing `config.capitalCeilingUsd` into `new ' +
         'SqliteExecutionStore(...)`, so a `closed_trades` window could once again silently mix ' +
         'rows sized under two different equity bases (#1112)',

@@ -201,8 +201,10 @@ export interface TraderStepDeps extends BreakerStateDeps {
   traderLog?: TraderLogStore;
   /**
    * The declared capital ceiling (#511, `ProductionConfig.capitalCeilingUsd`).
-   * Undefined on every paper/backtest run and in every test — absent means "no
-   * ceiling declared", never "a ceiling of zero". See `sizingEquity`.
+   * Undefined on every backtest run and in most tests; defined on paper runs
+   * too since #1112, at `LIVE_BOOK_GBP` (paper-profile.ts), and on live runs
+   * at `SAMURAI_LIVE_MAX_CAPITAL_USD`. Absent means "no ceiling declared",
+   * never "a ceiling of zero". See `sizingEquity`.
    */
   capitalCeilingUsd?: number;
   /**
@@ -335,8 +337,9 @@ export function buildTraderSteps(deps: TraderStepDeps): {
         // pre-#753 behaviour and the value `TraderInput.arm` defaults to.
         ...(deps.arm === undefined ? {} : { arm: deps.arm }),
         marketData: deps.marketData,
-        // #511: bounded by the declared capital ceiling on a live run, verbatim
-        // portfolio equity everywhere else.
+        // #511: bounded by the declared capital ceiling whenever one is
+        // declared (live always; paper since #1112), verbatim portfolio
+        // equity only on backtest and undeclared tests.
         //
         // #847: either the STRICT whole-book equity or the strict read's own
         // throw — never a partial figure. A degraded view omits a held

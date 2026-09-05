@@ -2415,15 +2415,15 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
       );
 
       expect(gate.passed).toBe(false);
-      expect(gate.failures.join(' ')).toContain('sizing_capital_ceiling_gbp');
+      expect(gate.failures.join(' ')).toContain('sizing_capital_ceiling');
     });
 
     it('passes when every BTC-USD row carries the declared ceiling', () => {
       const gate = evaluateSmokeGate(transactedObservations(), healthyGateOptions());
 
-      expect(
-        gate.failures.filter((failure) => failure.includes('sizing_capital_ceiling_gbp')),
-      ).toEqual([]);
+      expect(gate.failures.filter((failure) => failure.includes('sizing_capital_ceiling'))).toEqual(
+        [],
+      );
     });
   });
 

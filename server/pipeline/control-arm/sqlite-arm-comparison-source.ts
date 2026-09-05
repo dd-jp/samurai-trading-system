@@ -40,15 +40,57 @@ export class SqliteArmComparisonSource {
       .prepare(
         `SELECT idempotency_key, debate_id, instrument, asset_class, side,
                 entry, stop, filled_size, realized_pnl_net, fees_total,
-                opened_at, closed_at, close_reason, arm
+                opened_at, closed_at, close_reason, arm, sizing_capital_ceiling
            FROM closed_trades
           WHERE closed_at > ? AND closed_at <= ?
           ORDER BY closed_at`,
       )
       .all(toStoredTimestamp(from), toStoredTimestamp(to)) as (ClosedTradeRow & {
       arm: TradingArm;
+      sizing_capital_ceiling: number | null;
     })[];
+
+    assertSingleSizingRegime(rows, from, to);
 
     return rows.map((row) => ({ ...fromClosedTradeRow(row), arm: row.arm }));
   }
+}
+
+/**
+ * #1112 AC5, migration 0045: the mechanism the column exists for. Without
+ * this, `sizing_capital_ceiling` is written on every row and read by nobody
+ * — the exact "tested mechanism nothing calls" pattern this repo keeps
+ * reintroducing. Refusing (rather than excluding pre-fix rows and computing
+ * an answer anyway) because the caller is `buildArmComparison`'s sole trade
+ * source for BOTH the Feedback Loop's daily cycle and `yarn report:arms`:
+ * silently dropping rows would change the trade counts and drawdown series
+ * those consumers reason about without either one asking for it, and a
+ * `min_trades_per_arm` gate elsewhere could then pass or fail on a filtered
+ * count nobody chose. A thrown, descriptive error is caught one frame up in
+ * both callers' composition roots (`production.ts`'s daily-cycle try/catch;
+ * a CLI tool's uncaught exit) — loud, but not fatal to the process.
+ *
+ * `sizing_capital_ceiling` carries no currency suffix (#949): it is
+ * whatever raw value `ProductionConfig.capitalCeilingUsd` held when a row
+ * was written, unconverted, so "different regimes" here means "different
+ * declared-ceiling VALUES", not necessarily different currencies.
+ */
+function assertSingleSizingRegime(
+  rows: readonly { sizing_capital_ceiling: number | null }[],
+  from: Date,
+  to: Date,
+): void {
+  const regimes = new Set(rows.map((row) => row.sizing_capital_ceiling));
+  if (regimes.size <= 1) return;
+
+  const described = [...regimes]
+    .sort((a, b) => (a === null ? -1 : b === null ? 1 : a - b))
+    .map((value) => (value === null ? 'no declared ceiling' : `a ${value} ceiling`));
+
+  throw new Error(
+    `SqliteArmComparisonSource.getClosedTradesBetween: window ${from.toISOString()}..` +
+      `${to.toISOString()} mixes closed_trades sized under different regimes ` +
+      `(${described.join(', ')}) — #1112 migration 0045. Averaging them into one ` +
+      'return_pct would compare incomparable notional scales; narrow the window to one regime.',
+  );
 }

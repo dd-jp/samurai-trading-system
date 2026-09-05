@@ -258,16 +258,23 @@ export class SqliteExecutionStore implements SharedStore {
    * construction since (backtest, `smoke-run.ts`, `place-soak-position.ts`),
    * which is exactly why it defaults to `undefined` rather than to a
    * sentinel number.
+   *
+   * Carries whatever value `ProductionConfig.capitalCeilingUsd` held,
+   * unconverted — a real USD figure on a live run, a GBP figure
+   * (`LIVE_BOOK_GBP`) on a paper run since this ticket, with no FX step
+   * either way (#949). The column this stamps (`sizing_capital_ceiling`) is
+   * named without a currency suffix for the same reason: it records the
+   * declared ceiling's value, not a claim about its unit.
    */
-  private readonly sizingCapitalCeilingGbp: number | undefined;
+  private readonly sizingCapitalCeiling: number | undefined;
 
   constructor(
     private readonly db: Db,
     arm: TradingArm = 'live',
-    sizingCapitalCeilingGbp?: number,
+    sizingCapitalCeiling?: number,
   ) {
     this.arm = arm;
-    this.sizingCapitalCeilingGbp = sizingCapitalCeilingGbp;
+    this.sizingCapitalCeiling = sizingCapitalCeiling;
   }
 
   /**
@@ -311,7 +318,7 @@ export class SqliteExecutionStore implements SharedStore {
              order_state, broker_order_ids, opened_at, decision_timestamp,
              conviction, converged, arm,
              decision_price, quote_bid, quote_ask, quote_mid, quote_observed_at,
-             modelled_cost_breakdown_json, sizing_capital_ceiling_gbp
+             modelled_cost_breakdown_json, sizing_capital_ceiling
            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
@@ -349,8 +356,8 @@ export class SqliteExecutionStore implements SharedStore {
           position.modelled_cost_breakdown === undefined
             ? null
             : JSON.stringify(position.modelled_cost_breakdown),
-          // #1112 AC5, migration 0045 — see `sizingCapitalCeilingGbp`'s own doc.
-          this.sizingCapitalCeilingGbp ?? null,
+          // #1112 AC5, migration 0045 — see `sizingCapitalCeiling`'s own doc.
+          this.sizingCapitalCeiling ?? null,
         );
     } catch (cause) {
       if (isUniqueConstraintError(cause)) {
@@ -561,7 +568,7 @@ export class SqliteExecutionStore implements SharedStore {
           `INSERT INTO closed_trades (
              idempotency_key, debate_id, instrument, asset_class, side,
              entry, stop, filled_size, realized_pnl_net, fees_total,
-             opened_at, closed_at, close_reason, arm, sizing_capital_ceiling_gbp
+             opened_at, closed_at, close_reason, arm, sizing_capital_ceiling
            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
@@ -584,10 +591,10 @@ export class SqliteExecutionStore implements SharedStore {
           // "the control arm's trades are distinguishable in the trade record" a
           // queryable property rather than an inference.
           this.arm,
-          // #1112 AC5, migration 0045 — see `sizingCapitalCeilingGbp`'s own doc.
+          // #1112 AC5, migration 0045 — see `sizingCapitalCeiling`'s own doc.
           // A window that mixes NULL and non-NULL (or two different non-NULL)
           // values here mixes two sizing regimes into one `return_pct`.
-          this.sizingCapitalCeilingGbp ?? null,
+          this.sizingCapitalCeiling ?? null,
         );
     } catch (cause) {
       if (isUniqueConstraintError(cause)) {

@@ -2568,6 +2568,20 @@ export function paperStartingProfile(
     // calibration and Stage-2 tooling read `portfolio.equity` unclamped today
     // and #1112 does not ask that path to change; widening the blast radius
     // there is a separate decision.
+    //
+    // **#949, carried into paper by this line: `capitalCeilingUsd` is a GBP
+    // value here, unconverted.** `LIVE_BOOK_GBP` is £1,000; `sizingEquity`
+    // (direct-bind.ts) does `Math.min(ceiling, equity)` against `equity` as
+    // the paper Alpaca account (USD) reports it, with no FX step — the same
+    // gap `live-profile.ts` already documents for `SAMURAI_LIVE_MAX_CAPITAL_USD`
+    // against a real USD account, now also live on THIS path. The practical
+    // effect: paper's declared "£1,000" book clamps at $1,000, which is
+    // roughly £790 at a ~1.27 USD/GBP rate — about 21% under the book this
+    // profile claims to size against. Left unconverted deliberately, same as
+    // #949: there is no FX-rate provider in this codebase, and paper's
+    // purpose is proving the clamp reaches the Trader at all (#1112), not
+    // proving it reaches the exact right number. Fixing the rate is #949's
+    // job, not this ticket's.
     ...(mode === 'paper' ? { capitalCeilingUsd: LIVE_BOOK_GBP } : {}),
     // `backtest` keeps `maxConcurrentInstruments: 1` explicitly (#1013 fix-up
     // H1) rather than inheriting `buildStartingProfileConfigs()`'s `6` —
