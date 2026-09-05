@@ -23,6 +23,7 @@ import {
   formatUsd,
   formatWhen,
 } from '../../lib/format.ts';
+import { presentCloseReason } from '../../lib/state-presentation.ts';
 import {
   closedTradeByKey,
   debateById,
@@ -31,9 +32,9 @@ import {
   riskCriticForDebate,
   verdictFor,
 } from '../../lib/trace.ts';
-import { CLOSE_REASON_WORD, sideWord, WAITING_FOR_FIRST_SNAPSHOT } from '../../lib/vocabulary.ts';
+import { sideWord, WAITING_FOR_FIRST_SNAPSHOT } from '../../lib/vocabulary.ts';
 import { Seal } from '../Seal.tsx';
-import { closeReasonTone, pnlTone, StateWord } from '../StateWord.tsx';
+import { pnlTone, StateWord } from '../StateWord.tsx';
 import { DebateSection, FillsList, GatesSection, Timeline } from '../TraceSections.tsx';
 import { Track } from '../Track.tsx';
 
@@ -348,7 +349,7 @@ function TradeRow(props: {
 }) {
   const { trade, debate, asOf, selected, onSelect } = props;
   const tone = pnlTone(trade.realized_pnl_net);
-  const reason = CLOSE_REASON_WORD[trade.close_reason];
+  const closeReason = presentCloseReason(trade.close_reason);
   return (
     <li>
       <button
@@ -356,9 +357,9 @@ function TradeRow(props: {
         className={`trade-row${selected ? ' trade-row-selected' : ''}`}
         data-key={trade.idempotency_key}
         aria-pressed={selected}
-        aria-label={`${trade.instrument}, ${sideWord(trade.side)}, ${reason}, ${formatSignedUsd(
-          trade.realized_pnl_net,
-        )}`}
+        aria-label={`${trade.instrument}, ${sideWord(trade.side)}, ${
+          closeReason.word
+        }, ${formatSignedUsd(trade.realized_pnl_net)}`}
         onClick={onSelect}
       >
         <span className="mono muted">{formatWhen(trade.closed_at, asOf)}</span>
@@ -367,7 +368,7 @@ function TradeRow(props: {
           {formatPrice(trade.entry_price)} → {formatPrice(trade.exit_price)}
         </span>
         <span className="mono muted">{formatHeld(trade.opened_at, trade.closed_at)}</span>
-        <StateWord tone={closeReasonTone(trade.close_reason)}>{reason}</StateWord>
+        <StateWord state={closeReason} />
         <span className="muted trade-why">{whyTaken(debate)}</span>
         <span className={`mono trade-pnl ${tone}`}>{formatSignedUsd(trade.realized_pnl_net)}</span>
       </button>
@@ -456,7 +457,7 @@ function TradeDrawer({ snapshot, selectedKey }: Pick<ReviewTabProps, 'snapshot' 
       </div>
       <p className="drawer-line muted">
         {sideWord(trade.side)} {formatQty(trade.filled_size)} · {trade.asset_class} ·{' '}
-        {CLOSE_REASON_WORD[trade.close_reason]} · {formatClockUtc(trade.opened_at)} to{' '}
+        {presentCloseReason(trade.close_reason).word} · {formatClockUtc(trade.opened_at)} to{' '}
         {formatClockUtc(trade.closed_at)}
       </p>
 

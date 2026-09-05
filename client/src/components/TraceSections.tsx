@@ -26,15 +26,11 @@ import {
   formatQty,
   formatStageDuration,
 } from '../lib/format.ts';
+import { presentCell, presentCondition, presentCriticVerdict } from '../lib/state-presentation.ts';
 import { cellsByStageOf, decisionOf } from '../lib/trace.ts';
-import {
-  CONDITION_STATE_WORD,
-  cellStateWord,
-  criticVerdictWord,
-  stageName,
-} from '../lib/vocabulary.ts';
+import { stageName } from '../lib/vocabulary.ts';
 import { StanceStrip } from './StanceStrip.tsx';
-import { cellTone, conditionTone, criticTone, StateWord } from './StateWord.tsx';
+import { StateWord } from './StateWord.tsx';
 
 const STAGES_WITHOUT_RECORDED_DECISION: readonly PipelineStage[] = ['trader', 'risk'];
 
@@ -86,9 +82,7 @@ export function Timeline({ lane }: { lane: PipelineLane }) {
           >
             <span className="timeline-stage">
               {stageName(stage)}
-              <StateWord tone={cellTone(cell.state)}>
-                {cellStateWord(cell.state, lane.outcome)}
-              </StateWord>
+              <StateWord state={presentCell(cell.state, lane.outcome)} />
             </span>
             <span className="timeline-decision">
               {decisionText(cell)}
@@ -138,9 +132,12 @@ export function GatesSection({ riskCritic, verdict, keyedBy }: GatesSectionProps
     <div data-section="gates">
       {verdict !== undefined && (
         <p className="gate-line" data-verdict={verdict.status}>
-          <StateWord tone={verdict.status === 'go' ? 'done' : 'stop'}>
-            {verdict.status === 'go' ? 'go' : 'no-go'}
-          </StateWord>
+          <StateWord
+            state={{
+              word: verdict.status === 'go' ? 'go' : 'no-go',
+              tone: verdict.status === 'go' ? 'done' : 'stop',
+            }}
+          />
           <span>
             {verdict.reason} · {formatClockUtc(verdict.timestamp)}
             {verdict.hitl_override ? ' · human override' : ''}
@@ -170,15 +167,16 @@ function RiskCriticBody({ riskCritic }: { riskCritic: RiskCriticRow }) {
         data-invalidation="binding"
         data-binding={riskCritic.binding_constraint ?? 'none'}
       >
-        <StateWord tone={riskCritic.binding_constraint === null ? 'done' : 'stop'}>
-          {riskCritic.binding_constraint === null ? 'gates' : 'bound'}
-        </StateWord>
+        <StateWord
+          state={{
+            word: riskCritic.binding_constraint === null ? 'gates' : 'bound',
+            tone: riskCritic.binding_constraint === null ? 'done' : 'stop',
+          }}
+        />
         <span>{bindingConstraintText(riskCritic.binding_constraint)}</span>
       </p>
       <p className="gate-line" data-critic={riskCritic.critic_verdict ?? 'none'}>
-        <StateWord tone={criticTone(riskCritic.critic_verdict)}>
-          {criticVerdictWord(riskCritic.critic_verdict)}
-        </StateWord>
+        <StateWord state={presentCriticVerdict(riskCritic.critic_verdict)} />
         <span>{criticVerdictText(riskCritic)}</span>
       </p>
       {conditions.length === 0 ? (
@@ -196,9 +194,7 @@ function RiskCriticBody({ riskCritic }: { riskCritic: RiskCriticRow }) {
               data-condition={condition.id}
               data-condition-state={condition.state}
             >
-              <StateWord tone={conditionTone(condition.state)} title={condition.rationale}>
-                {CONDITION_STATE_WORD[condition.state]}
-              </StateWord>
+              <StateWord state={presentCondition(condition.state)} title={condition.rationale} />
               <span>
                 {condition.observable} {condition.comparator} {condition.threshold}
                 <span className="muted mono">
@@ -214,7 +210,7 @@ function RiskCriticBody({ riskCritic }: { riskCritic: RiskCriticRow }) {
         <ul className="condition-list condition-dropped">
           {dropped.map((drop) => (
             <li key={`${drop.id ?? 'no-id'}:${drop.raw}`} data-drop-reason={drop.reason}>
-              <StateWord tone="skip">dropped</StateWord>
+              <StateWord state={{ word: 'dropped', tone: 'skip' }} />
               <span>
                 {drop.reason} <span className="muted">· {drop.raw}</span>
               </span>
