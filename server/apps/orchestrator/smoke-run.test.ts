@@ -1442,29 +1442,29 @@ describe('MarketDataFetchRecorder (#1082)', () => {
     recorder.log({
       trace_id: 't1',
       stage: 'market_data',
+      event: 'market_data_fetch',
       level: 'info',
       message: 'market_data_fetch: AAPL 1h fetched 2 row(s) in 5ms.',
-      payload: { event: 'market_data_fetch' },
     });
     recorder.log({
       trace_id: 't2',
       stage: 'debate',
+      event: 'debate_something_else',
       level: 'info',
       message: 'unrelated line',
-      payload: { event: 'debate_something_else' },
     });
     recorder.log({
       trace_id: 't3',
       stage: 'market_data',
       level: 'info',
-      message: 'no payload at all',
+      message: 'no event at all',
     });
 
     expect(recorder.evidence()).toEqual({ fetchCount: 1, traceIds: ['t1'] });
     expect(forwarded).toEqual([
       'market_data_fetch: AAPL 1h fetched 2 row(s) in 5ms.',
       'unrelated line',
-      'no payload at all',
+      'no event at all',
     ]);
   });
 });
@@ -1473,6 +1473,7 @@ describe('FillSyncFailureRecorder (#1049)', () => {
   const entry = (level: 'info' | 'warn' | 'error', message: string, error?: string) => ({
     trace_id: 'fill-sync',
     stage: 'execution',
+    event: 'fill_sync_line',
     level,
     message,
     ...(error === undefined ? {} : { payload: { error } }),

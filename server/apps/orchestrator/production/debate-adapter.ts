@@ -392,6 +392,7 @@ function persistDebateLog(params: {
     logger?.log({
       trace_id,
       stage: 'debate',
+      event: 'debate_log_duplicate_write',
       level: 'warn',
       message:
         `debate: ${instrument} already has a debate_log row for debate_id ` +
@@ -884,6 +885,7 @@ export function buildDebateStep(
       logger?.log({
         trace_id,
         stage: 'debate',
+        event: 'debate_refused_spend_cap',
         level: 'error',
         message:
           `debate: ${instrument} not started — ${sanitizeLogText(spend.reason ?? 'spend cap')}. ` +
@@ -912,6 +914,7 @@ export function buildDebateStep(
       logger?.log({
         trace_id,
         stage: 'debate',
+        event: 'debate_refused_rate_limit',
         level: 'warn',
         message:
           `debate: ${instrument} not started — ${sanitizeLogText(reservation.reason)}. No LLM ` +
@@ -1059,6 +1062,7 @@ function logDebateFailure(params: {
   logger.log({
     trace_id,
     stage: 'debate',
+    event: 'debate_unresolved',
     level: 'error',
     message:
       `debate: ${instrument} failed before resolving — no debate_log row is written for a ` +

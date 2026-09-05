@@ -171,6 +171,7 @@ export function startSupervisor(effects: SupervisorEffects = {}): Supervisor {
       supervisorLogger.log({
         trace_id: 'startup',
         stage: 'supervisor',
+        event: 'supervisor_notice',
         level: 'warn',
         message,
       });

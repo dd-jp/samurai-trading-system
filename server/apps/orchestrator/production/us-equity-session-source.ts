@@ -106,6 +106,7 @@ export async function resolveUsEquitySessionCalendar(
     logger.log({
       trace_id: 'startup',
       stage: 'orchestrator',
+      event: 'calendar_fetch_failed',
       level: 'error',
       message:
         "paper equity leg's Alpaca GET /v2/calendar fetch failed at boot: " +

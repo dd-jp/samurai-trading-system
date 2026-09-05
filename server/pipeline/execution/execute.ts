@@ -337,6 +337,7 @@ async function captureSubmitSnapshot(
           safeLog(input.logger, {
             trace_id: input.trace_id,
             stage: 'execution',
+            event: 'submit_snapshot_budget_exceeded',
             level: 'warn',
             message:
               `#1001: captureSubmitSnapshot exceeded its ${budget_ms}ms exit budget — the quote ` +
@@ -417,6 +418,7 @@ async function readSubmitSnapshot(
         {
           trace_id,
           stage: 'execution',
+          event: 'submit_snapshot_quote_unavailable',
           level: 'warn',
           message:
             '#1001: captureSubmitSnapshot could not read a quote at submit time — ' +
@@ -506,6 +508,7 @@ async function readSubmitSnapshot(
         {
           trace_id,
           stage: 'execution',
+          event: 'submit_snapshot_cost_unavailable',
           level: 'warn',
           message:
             '#1001: captureSubmitSnapshot could not assemble a MarketState / price the modelled ' +
@@ -869,6 +872,7 @@ async function markLotsUnprotected(
     {
       trace_id: input.trace_id,
       stage: 'execution',
+      event: 'exit_cancel_failed',
       level: 'error',
       message:
         'executeExit: cancelling a held lot failed, so the flatten was refused — any lot ' +
@@ -891,6 +895,7 @@ async function markLotsUnprotected(
         {
           trace_id: input.trace_id,
           stage: 'execution',
+          event: 'residual_mark_failed',
           level: 'error',
           message:
             'executeExit: markResidualUnprotected failed for a lot whose protective legs were ' +

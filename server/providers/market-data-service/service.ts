@@ -318,7 +318,6 @@ export class MarketDataServiceImpl implements MarketDataService {
           ? 'warn'
           : 'info';
     const payload = {
-      event: 'market_data_fetch',
       instrument,
       timeframe: window.timeframe,
       lookback: window.lookback,
@@ -335,6 +334,7 @@ export class MarketDataServiceImpl implements MarketDataService {
         {
           trace_id: currentTraceId() ?? 'market-data',
           stage: 'market_data',
+          event: 'market_data_fetch',
           level,
           message: `market_data_fetch: ${instrument} ${window.timeframe} (lookback ${window.lookback}) failed after ${Math.round(durationMs)}ms.`,
           started_at: new Date(Date.now() - durationMs).toISOString(),
@@ -349,6 +349,7 @@ export class MarketDataServiceImpl implements MarketDataService {
     safeLog(this.telemetry.logger, {
       trace_id: currentTraceId() ?? 'market-data',
       stage: 'market_data',
+      event: 'market_data_fetch',
       level,
       message: `market_data_fetch: ${instrument} ${window.timeframe} (lookback ${window.lookback}) fetched ${rows} row(s) in ${Math.round(durationMs)}ms.`,
       payload,

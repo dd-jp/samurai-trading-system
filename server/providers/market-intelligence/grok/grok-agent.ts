@@ -296,6 +296,7 @@ export class GrokAgent {
       this.#deps.logger?.log({
         trace_id,
         stage: 'market_intelligence',
+        event: 'grok_refresh_refused_spend_cap',
         level: 'warn',
         message:
           `grok: refusing to refresh ${instrument} — ${verdict.reason ?? 'spend cap reached'}. ` +
@@ -353,6 +354,7 @@ export class GrokAgent {
         this.#deps.logger?.log({
           trace_id,
           stage: 'market_intelligence',
+          event: 'grok_retrieval_evidence_absent',
           level: result.items.length > 0 ? 'warn' : 'info',
           message:
             result.items.length > 0
@@ -401,6 +403,7 @@ export class GrokAgent {
       this.#deps.logger?.log({
         trace_id,
         stage: 'market_intelligence',
+        event: 'grok_refresh_failed',
         level: 'error',
         message: unroutedModel
           ? `grok: RETRIEVAL IS DARK for ${instrument} — the provider refused the server-side ` +
@@ -480,6 +483,7 @@ export class GrokAgent {
       this.#deps.logger?.log({
         trace_id: 'grok',
         stage: 'market_intelligence',
+        event: 'grok_archive_write_failed',
         level: 'warn',
         message:
           `grok: archiving ${raws.length} retrieved item(s) failed — ` +

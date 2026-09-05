@@ -43,11 +43,26 @@ export type { AssetClass, InstrumentSubclass, TradingArm } from '../../../contra
  */
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
-/** One structured log line; `trace_id` threads every line (#95). */
-export interface LogEntry {
+/**
+ * The stable machine-matchable identifier on a log line (#1115).
+ *
+ * `message` is prose written for a human and may be reworded at any time;
+ * `event` is what an alert rule, a grep or a dashboard filter keys on, so a
+ * shipped code never changes. Codes are snake_case with at least two segments
+ * and are chosen so a grep for one cannot collide with unrelated prose —
+ * `token_bucket_wait`, not `wait` — which is the reasoning the two codes that
+ * predate this type were already hand-rolled around.
+ *
+ * Deliberately not a union of every code. A central registry would make each
+ * new log line an edit to a file every module imports, and nothing consumes
+ * the codes as a set; `log-event-code.test.ts` enforces the spelling instead.
+ */
+export type LogEventCode = string;
+
+/** The parts of a log line that do not vary with its level; see `LogEntry`. */
+interface LogEntryFields {
   trace_id: string;
   stage: string;
-  level: LogLevel;
   message: string;
   payload?: unknown;
   /** Real wall-clock start of the stage, ISO 8601 — not `Clock.now()`, which doesn't advance on its own in backtest. */
@@ -55,6 +70,33 @@ export interface LogEntry {
   /** Monotonic elapsed time for the stage (`performance.now()` deltas), in milliseconds — not wall-clock, so an NTP step mid-stage can't produce a negative value. */
   duration_ms?: number;
 }
+
+/**
+ * One structured log line; `trace_id` threads every line (#95).
+ *
+ * A union rather than one interface so the compiler, not a convention, makes a
+ * `warn`/`error` line without an `event` code impossible to write (#1115).
+ *
+ * The second arm is keyed on the whole `LogLevel` and not on `'warn' | 'error'`
+ * because a dozen sites compute their level (`divergence.action ===
+ * 'undetermined' ? 'warn' : 'info'`, `recordLevel(stage, decision)`), and an
+ * object literal whose `level` is `'warn' | 'info'` matches neither a
+ * `'debug' | 'info'` arm nor a `'warn' | 'error'` one. As written, such a site
+ * fails to match the first arm and so must satisfy the second — it has to
+ * carry an `event`, which is the right answer for a line that may come out as
+ * a warning. The cost is an `event` on that site's `info` branch too.
+ */
+export type LogEntry = LogEntryFields &
+  ({ level: 'debug' | 'info'; event?: LogEventCode } | { level: LogLevel; event: LogEventCode });
+
+/**
+ * `LogEntry` minus the keys a caller fills in later, distributing over the
+ * union so the `event` requirement survives. A plain `Omit<LogEntry, K>` keys
+ * off `keyof (A | B)` and collapses both arms into one shape whose `event` is
+ * optional everywhere — the enforcement would be silently gone.
+ */
+export type LogEntryTemplate<Deferred extends keyof LogEntryFields = 'payload'> =
+  LogEntry extends infer Arm ? (Arm extends LogEntry ? Omit<Arm, Deferred> : never) : never;
 
 /**
  * Shared structured-logging interface. Canonical home (code-review

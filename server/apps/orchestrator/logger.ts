@@ -97,7 +97,7 @@
  *    degradation has been durably recorded on the file sink. Stdout is then
  *    skipped for the life of the process; the file carries the run.
  */
-import type { LogEntry } from '../../shared/index.js';
+import type { LogEntry, LogEventCode } from '../../shared/index.js';
 import { redactPayload } from './redact-payload.js';
 import {
   type FileSinkConfig,
@@ -208,6 +208,7 @@ export function formatLogLine(entry: LogEntry): string {
   field('timestamp', new Date().toISOString());
   field('trace_id', entry.trace_id);
   field('stage', entry.stage);
+  field('event', entry.event);
   field('level', entry.level);
   field('message', entry.message);
   if (payloadJson !== undefined) segments.push(`"payload":${payloadJson}`);
@@ -226,11 +227,16 @@ export function formatLogLine(entry: LogEntry): string {
  * nothing to mask, and this is the path that runs when the sinks are failing —
  * the one place in the system where doing less work is the whole point.
  */
-function degradationLine(message: string, payload: Record<string, unknown>): string {
+function degradationLine(
+  event: LogEventCode,
+  message: string,
+  payload: Record<string, unknown>,
+): string {
   return `${JSON.stringify({
     timestamp: new Date().toISOString(),
     trace_id: 'startup',
     stage: 'orchestrator',
+    event,
     level: 'warn',
     message,
     payload,
@@ -241,7 +247,7 @@ function degradationLine(message: string, payload: Record<string, unknown>): str
 
 /** Reports a file-sink failure on the one stream that may still work. */
 function warnOnStdout(message: string, stdout: StdoutStream = process.stdout): void {
-  stdout.write(degradationLine(message, { log_file_sink: 'degraded' }));
+  stdout.write(degradationLine('log_file_sink_degraded', message, { log_file_sink: 'degraded' }));
 }
 
 function describe(error: unknown): string {
@@ -377,6 +383,7 @@ export class JsonLogger implements Logger {
     if (this.stdoutDegraded) return true;
     const recorded = this.recordDurably(
       degradationLine(
+        'log_stdout_sink_degraded',
         `structured log stdout sink failed and is retired for the rest of this process: ${describe(error)}. ` +
           'Logging continues to the log file only. A soak does not stop for this (#714), but ' +
           'the console half of the trace ends here.',
@@ -400,6 +407,7 @@ export class JsonLogger implements Logger {
     this.noSinkReported = true;
     this.lastResort(
       degradationLine(
+        'log_sinks_exhausted',
         'structured logging has no sink left: stdout is unavailable and the log file is not ' +
           'recording. Subsequent log lines are written here, on stderr, and are the only trace ' +
           'this run still produces (#714).',

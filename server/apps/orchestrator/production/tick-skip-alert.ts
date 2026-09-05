@@ -227,6 +227,7 @@ export async function reportTickSkip(
     logger?.log({
       trace_id: 'tick-skip',
       stage: 'tick-loop',
+      event: 'tick_skip_alert_send_failed',
       level: 'error',
       message:
         'tick-skip alert could not be delivered — a materially degraded pass is still ' +

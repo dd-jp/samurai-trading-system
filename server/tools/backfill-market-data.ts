@@ -391,6 +391,7 @@ export function buildBackfillFailoverAlerter(deps: {
       deps.logger.log({
         trace_id: 'backfill-market-data',
         stage: 'orchestrator',
+        event: 'ohlcv_failover_alert_send_failed',
         level: 'error',
         message:
           `OHLCV failover alert for ${event.symbol} ${event.timeframe} could not be delivered: ` +

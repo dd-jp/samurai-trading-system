@@ -91,6 +91,7 @@ export class TradeChannelBreachAlert implements BreachAlertChannel {
       this.#logger.log({
         trace_id: 'feedback-cycle',
         stage: 'feedback-loop',
+        event: 'breach_alert_send_failed',
         level: 'error',
         message: 'kill-threshold breach alert failed to send — the breach still stands',
         payload: {

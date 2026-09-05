@@ -164,6 +164,7 @@ export class JsonDebateLogger implements DebateLogger {
     this.sink.log({
       trace_id: entry.trace_id,
       stage: 'debate',
+      event: 'debate_latency',
       level: entry.latency_ms > entry.budget_ms ? 'warn' : 'info',
       message: 'debate.latency',
       payload: {
@@ -184,6 +185,7 @@ export class JsonDebateLogger implements DebateLogger {
     this.sink.log({
       trace_id: entry.trace_id,
       stage: 'debate',
+      event: 'debate_timeout',
       level: 'warn',
       message: 'debate.timeout',
       payload: {
@@ -203,6 +205,7 @@ export class JsonDebateLogger implements DebateLogger {
     this.sink.log({
       trace_id: entry.trace_id,
       stage: 'debate',
+      event: 'debate_analyst_failure',
       level: 'warn',
       message: 'debate.analyst_failure',
       payload: {

@@ -376,6 +376,7 @@ export function sweepStaleLogsWithLog(
       logger.log({
         trace_id: 'startup',
         stage: 'orchestrator',
+        event: 'log_retention_refused',
         level: 'warn',
         message: `logs/ retention sweep refused to sweep ${options.directory} — growth there is unbounded until SAMURAI_LOG_FILE names a dedicated log directory`,
         payload: { directory: options.directory, reason: result.refusedReason },
@@ -396,6 +397,7 @@ export function sweepStaleLogsWithLog(
     logger.log({
       trace_id: 'startup',
       stage: 'orchestrator',
+      event: 'log_retention_failed',
       level: 'warn',
       message:
         'logs/ retention sweep failed — logging continues, but growth in logs/ is unbounded ' +
