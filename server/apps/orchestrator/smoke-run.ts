@@ -3048,12 +3048,43 @@ function feedbackCycleScheduleWasWritten(db: SqliteHandle): boolean {
  * but not its `config.capitalCeilingUsd` — including them would let a
  * genuinely broken composition-root wire pass on the exit scenarios' rows
  * alone.
+ *
+ * Both tables, because a lot that opened and closed inside the run leaves
+ * `open_positions` empty and `closed_trades` populated; reading only the
+ * former would report "the wire is broken" for a run that merely finished its
+ * position, which is a misdiagnosis, not a gate.
+ *
+ * Compared against the run's own `config.capitalCeilingUsd` rather than
+ * null-checked: a wire that stamps any non-null number — a literal that has
+ * drifted from the config, another store's ceiling — is exactly the defect
+ * this field exists to catch, and a null check passes it.
  */
-function sizingCeilingWasStamped(db: SqliteHandle): boolean {
+export type SizingCeilingEvidence = {
+  /** `paperStartingProfile('paper').capitalCeilingUsd` for this run — `undefined` is itself the #1112 defect. */
+  configuredCeiling: number | undefined;
+  /** BTC-USD rows across both tables; zero is no-evidence, not a passing gate. */
+  rows: number;
+  allMatchConfiguredCeiling: boolean;
+};
+
+function readSizingCeilingStamps(
+  db: SqliteHandle,
+  expected: number | undefined,
+): SizingCeilingEvidence {
   const rows = db
-    .prepare("SELECT sizing_capital_ceiling FROM open_positions WHERE instrument = 'BTC-USD'")
+    .prepare(
+      `SELECT sizing_capital_ceiling FROM open_positions WHERE instrument = 'BTC-USD'
+       UNION ALL
+       SELECT sizing_capital_ceiling FROM closed_trades WHERE instrument = 'BTC-USD'`,
+    )
     .all() as { sizing_capital_ceiling: number | null }[];
-  return rows.length > 0 && rows.every((row) => row.sizing_capital_ceiling !== null);
+
+  return {
+    configuredCeiling: expected,
+    rows: rows.length,
+    allMatchConfiguredCeiling:
+      expected !== undefined && rows.every((row) => row.sizing_capital_ceiling === expected),
+  };
 }
 
 /** Drives the shipped arm-comparison cycle over the smoke run's own store. */
@@ -3592,9 +3623,14 @@ export function evaluateSmokeGate(
      * `startFromEnvironment`, as opposed to the exit-path scenarios' own
      * directly-constructed `SqliteExecutionStore` instances (#576), which
      * share this run's database but not its config and so are not evidence
-     * either way.
+     * either way — and against `closed_trades` as well as `open_positions`,
+     * so a lot that closed inside the run is evidence rather than a spurious
+     * failure. The stamped value is compared to this run's OWN
+     * `paperStartingProfile('paper').capitalCeilingUsd`, not merely
+     * null-checked: a wire stamping some other non-null number is the same
+     * broken wire.
      */
-    sizingCeilingStamped: boolean;
+    sizingCeiling: SizingCeilingEvidence;
     /**
      * The fill-sync loop's rejections (#1049) — required, not optional, for the
      * same "compile error, not a silent no-op" reason every mechanism above is.
@@ -3819,13 +3855,27 @@ export function evaluateSmokeGate(
     );
   }
 
-  // #1112 AC5 (migration 0045) — see `sizingCeilingStamped`'s own doc.
-  if (!options.sizingCeilingStamped) {
+  // #1112 AC5 (migration 0045) — see `sizingCeiling`'s own doc. Three
+  // distinct failures, named separately: a gate that reports "the wire is
+  // broken" for a run that produced no row at all is a misdiagnosis.
+  const { configuredCeiling, rows, allMatchConfiguredCeiling } = options.sizingCeiling;
+  if (configuredCeiling === undefined) {
     failures.push(
-      'a BTC-USD `open_positions` row after the run carries no `sizing_capital_ceiling` — ' +
-        '`production.ts` stopped passing `config.capitalCeilingUsd` into `new ' +
-        'SqliteExecutionStore(...)`, so a `closed_trades` window could once again silently mix ' +
-        'rows sized under two different equity bases (#1112)',
+      "`paperStartingProfile('paper')` no longer sets `capitalCeilingUsd` — the Trader is back " +
+        "to sizing off the paper broker's funded equity rather than the declared book (#1112)",
+    );
+  } else if (rows === 0) {
+    failures.push(
+      'no BTC-USD row in `open_positions` or `closed_trades` after the run, so the ' +
+        '`sizing_capital_ceiling` stamp has no evidence either way — the six-stage tick loop ' +
+        'took no position at all (#1112)',
+    );
+  } else if (!allMatchConfiguredCeiling) {
+    failures.push(
+      `a BTC-USD row carries a \`sizing_capital_ceiling\` other than this run's configured ` +
+        `${configuredCeiling} — \`production.ts\` stopped passing \`config.capitalCeilingUsd\` ` +
+        'into `new SqliteExecutionStore(...)`, so a `closed_trades` window could once again ' +
+        'silently mix rows sized under two different equity bases (#1112)',
     );
   }
 
@@ -5268,7 +5318,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // one is unaffected by tape completeness; it only needs `start()` to
       // have run at all.
       feedbackCycleScheduleWritten: feedbackCycleScheduleWasWritten(db),
-      sizingCeilingStamped: sizingCeilingWasStamped(db),
+      sizingCeiling: readSizingCeilingStamps(db, profile.capitalCeilingUsd),
       fillSync: fillSyncFailures.evidence(),
       marketDataFetch: marketDataFetch.evidence(),
       exitPath: {
