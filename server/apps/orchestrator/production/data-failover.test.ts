@@ -21,6 +21,7 @@ import {
   DEFAULT_POLYGON_PACING,
   type LogEntry,
   type Logger,
+  runWithTraceId,
   TokenBucket,
 } from '../../../shared/index.js';
 import {
@@ -255,6 +256,59 @@ describe('buildFailoverDataSource', () => {
     const errors = logger.entries.filter((entry) => entry.level === 'error');
     expect(errors).toHaveLength(1);
     expect(errors[0]?.message).toContain('telegram 502');
+  });
+
+  it('falls back to the data-failover constant when the alert POST fails outside a tick (#1118)', async () => {
+    const logger = recordingLogger();
+    const source = buildFailoverDataSource({
+      primary: stallingPrimary(),
+      calendar: new UsEquityRegularHoursCalendar(),
+      universe: [{ asset: 'SPY', asset_class: 'stocks' }],
+      equitiesFallbackBarFetcher: async () => [fallbackBar()],
+      alertChannel: {
+        postDataFailoverAlert: async () => {
+          throw new Error('telegram 502');
+        },
+      },
+      logger,
+      now: () => ASOF,
+    });
+
+    await source.fetchBars('SPY', WINDOW, ASOF);
+    await Promise.resolve();
+
+    const errors = logger.entries.filter((entry) => entry.level === 'error');
+    expect(errors[0]?.trace_id).toBe('data-failover');
+  });
+
+  it('joins a failed alert POST to the enclosing tick instead (#1118)', async () => {
+    // #1117 threaded `currentTraceId()` through the rest of the market-data
+    // logging path but deliberately left this catch-line on its constant to
+    // keep that diff honest. Without this join, the transport's own log for
+    // the same failover carries the tick id while this line carries
+    // 'data-failover' — one event, two taxonomies, nothing linking them.
+    const logger = recordingLogger();
+    const source = buildFailoverDataSource({
+      primary: stallingPrimary(),
+      calendar: new UsEquityRegularHoursCalendar(),
+      universe: [{ asset: 'SPY', asset_class: 'stocks' }],
+      equitiesFallbackBarFetcher: async () => [fallbackBar()],
+      alertChannel: {
+        postDataFailoverAlert: async () => {
+          throw new Error('telegram 502');
+        },
+      },
+      logger,
+      now: () => ASOF,
+    });
+
+    await runWithTraceId('tick-x', () => source.fetchBars('SPY', WINDOW, ASOF));
+    // The alert POST's `.catch` is fire-and-forget, registered inside the
+    // tick's context but settling after `fetchBars` already resolved.
+    await Promise.resolve();
+
+    const errors = logger.entries.filter((entry) => entry.level === 'error');
+    expect(errors[0]?.trace_id).toBe('tick-x');
   });
 });
 
