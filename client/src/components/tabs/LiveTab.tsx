@@ -151,8 +151,7 @@ const NO_LANE_LINE: Readonly<Record<'none' | 'aged_out' | 'idle', string>> = {
 };
 
 function whereLine({ lane, absence }: TraceDetail): string {
-  if (absence.lane !== null) return NO_LANE_LINE[absence.lane];
-  if (lane === undefined) return NO_LANE_LINE.none;
+  if (absence.lane !== null || lane === undefined) return NO_LANE_LINE[absence.lane ?? 'none'];
   return `${lane.asset_class}${
     lane.started_at === null ? '' : ` · started ${formatClockUtc(lane.started_at)}`
   }${lane.total_ms === null ? '' : ` · ${formatStageDuration(lane.total_ms)} total`}`;
@@ -194,7 +193,7 @@ function TraceDrawer(props: LiveTabProps) {
     <aside className="drawer" aria-label="Trace detail" data-trace-id={traceId ?? ''}>
       <div className="drawer-head">
         {settled !== null && <Seal outcome={settled} />}
-        <h2 className="display">{selection.instrument}</h2>
+        <h2 className="display">{detail.instrument}</h2>
         {lane !== undefined && (
           <b className={`outcome-${lane.outcome}`}>{OUTCOME_WORD[lane.outcome]}</b>
         )}

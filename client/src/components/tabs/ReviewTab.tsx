@@ -395,23 +395,21 @@ function TradesTable(props: ReviewTabProps) {
         <span className="label">Why it was taken</span>
         <span className="label trade-pnl">P&amp;L</span>
       </div>
-      {snapshot !== null && trades.length === 0 ? (
+      {snapshot === null ? (
+        <ul className="trade-list" />
+      ) : trades.length === 0 ? (
         <p className="empty-state">
           No closed trade in the recent-history window. A round trip appears here once it flattens —
           this is a reading, not a missing panel.
         </p>
       ) : (
         <ul className="trade-list">
-          {trades.map((trade) => (
+          {snapshot.closed_trades.map((trade) => (
             <TradeRow
               key={trade.idempotency_key}
               trade={trade}
-              debate={
-                snapshot === null
-                  ? undefined
-                  : resolveTrade(snapshot, trade.idempotency_key)?.debate
-              }
-              asOf={snapshot?.as_of ?? ''}
+              debate={resolveTrade(snapshot, trade.idempotency_key)?.debate}
+              asOf={snapshot.as_of}
               selected={selectedKey === trade.idempotency_key}
               onSelect={() => onSelect(trade.idempotency_key)}
             />

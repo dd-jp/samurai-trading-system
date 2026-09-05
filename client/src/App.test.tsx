@@ -12,6 +12,7 @@ import { doneThrough, makeLane, makeView } from './lib/test-support.ts';
 import {
   fakeFetch,
   makeCondition,
+  makeDebate,
   makeRiskCritic,
   makeSnapshot,
   makeSpend,
@@ -340,6 +341,7 @@ describe('live', () => {
             conditions: [makeCondition({ id: 'shown-trace-condition', observed: 401.25 })],
           }),
         ],
+        debates: [makeDebate({ instrument: 'QQQ' })],
       }),
     ]);
     openTab('Live');
@@ -351,6 +353,7 @@ describe('live', () => {
     ).toBe('risk_critic:invalidated');
     const riskRow = drawer.querySelector('[data-stage="risk"]');
     expect(riskRow?.textContent).toContain('11:58:31Z · 2.6s');
+    expect(within(drawer).getByText(/not keyed to this trace/)).toBeTruthy();
   });
 
   it('names its empty states: no selection, an idle lane, no debate, no Risk decision', async () => {
@@ -361,7 +364,7 @@ describe('live', () => {
     fireEvent.click(screen.getByRole('button', { name: /SPY, stocks, idle/ }));
     expect(within(drawer).getByText(/idle — no trace in the last 15 minutes/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /QQQ, stocks, stopped/ }));
-    expect(drawer.querySelector('[data-invalidation="no-decision"]')).toBeTruthy();
+    expect(within(drawer).getByText(/No Risk decision for this trace/)).toBeTruthy();
     expect(within(drawer).getByText(/no completed debate recorded/i)).toBeTruthy();
     expect(within(drawer).getByText(/No open position for this instrument/)).toBeTruthy();
     expect(within(drawer).getAllByText(/no decision word recorded \(#328\)/).length).toBe(1);

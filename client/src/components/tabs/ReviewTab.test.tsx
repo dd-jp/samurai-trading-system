@@ -175,6 +175,7 @@ describe('closed trades', () => {
     expect(within(fills).getByText(/f-entry/)).toBeTruthy();
     expect(within(fills).getByText(/f-target/)).toBeTruthy();
     expect(within(drawer).getByText(/aged out of the 15-minute pipeline window/)).toBeTruthy();
+    expect(within(drawer).queryByText(/not keyed to this trace/)).toBeNull();
   });
 
   it('names the missing stage record and Risk row when no trace reaches the trade', () => {
@@ -188,7 +189,7 @@ describe('closed trades', () => {
     fireEvent.click(screen.getByRole('button', { name: /^SPY, long/ }));
     const drawer = screen.getByRole('complementary', { name: 'Trade detail' });
     expect(within(drawer).getByText(/No trace id reaches this trade/)).toBeTruthy();
-    expect(drawer.querySelector('[data-invalidation="no-decision"]')).toBeTruthy();
+    expect(within(drawer).getByText(/No Risk decision keyed to this trade/)).toBeTruthy();
     expect(
       within(drawer).getByText(/debate not in the recent-debates window|No completed debate/),
     ).toBeTruthy();
