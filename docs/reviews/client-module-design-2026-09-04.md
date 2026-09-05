@@ -442,3 +442,45 @@ dominant defect class, so its ticket carries an explicit composition-root criter
 
 Both blocking edges are wired through the **dependencies API**, not prose alone — a "Blocked by"
 line in a body renders as takable on the board.
+
+## 12. Outcomes
+
+Six of the seven were implemented and merged on 2026-09-05, one ticket at a time, each with an
+independent review pass against `origin/main` before merge. **F4 was not implemented** — it is a
+decision ticket ([#1144](https://github.com/dd-jp/samurai-trading-system/issues/1144)), still open
+and unassigned, waiting on the operator-facing ruling §5 describes. This report stays **live** until
+it is settled.
+
+| Finding | Issue | PR(s) | What landed |
+|---|---|---|---|
+| F3 | [#1138](https://github.com/dd-jp/samurai-trading-system/issues/1138) | [#1150](https://github.com/dd-jp/samurai-trading-system/pull/1150), [#1191](https://github.com/dd-jp/samurai-trading-system/pull/1191) | `client/src/lib/state-presentation.ts` — word and tone resolved together as one `Presented { word, tone }`; `StateWord` narrowed from `{ tone, children }` to `{ state }`, so a caller cannot pair a word with a contradicting tone |
+| F7 | [#1141](https://github.com/dd-jp/samurai-trading-system/issues/1141) | [#1192](https://github.com/dd-jp/samurai-trading-system/pull/1192) | `useLedger` / `useEquitySamples` extracted from `App.tsx`'s inline effects, behaviour byte-identical (dedup key, non-finite guard, 120-sample cap dropping from the front) |
+| F1 | [#1142](https://github.com/dd-jp/samurai-trading-system/issues/1142) | [#1193](https://github.com/dd-jp/samurai-trading-system/pull/1193) | `client/src/lib/lane-cells.ts` — `resolveLaneCells` is now the single decider of a cell's word, tone, decision text and degraded flag, absorbing `decisionText` from `TraceSections.tsx`; `decisionOf`/`cellsByStageOf` deleted from `trace.ts` |
+| F5 | [#1140](https://github.com/dd-jp/samurai-trading-system/issues/1140) | [#1195](https://github.com/dd-jp/samurai-trading-system/pull/1195) | `cap_usd` added to `LlmSpendSummary` as a **required** field (so every implementer breaks at compile time), a `llm_spend_cap` table + migration `0047`, an arming call in `production.ts` on the same `config` the enforcer reads, and `LLM_SPEND_CAP_USD` deleted from the rail |
+| F6 | [#1143](https://github.com/dd-jp/samurai-trading-system/issues/1143) | [#1197](https://github.com/dd-jp/samurai-trading-system/pull/1197), [#1202](https://github.com/dd-jp/samurai-trading-system/pull/1202) | `CapMeter` — one meter module behind both rail gauges, with `tone: Exclude<MeterTone, 'bad'>` so a caller cannot hand it a tone the fill logic owns |
+| F2 | [#1139](https://github.com/dd-jp/samurai-trading-system/issues/1139) | [#1203](https://github.com/dd-jp/samurai-trading-system/pull/1203) | `client/src/lib/resolve-trace.ts` — `resolveTrace`/`resolveTrade` lift both join sequences out of the drawers and publish **join provenance** as a union where `{by:'instrument', exact:true}` does not type-check, so a fallback cannot be rendered as a key match; `trace.test.ts`'s DOM-bound join tests replaced by DOM-free resolver tests |
+| F4 | [#1144](https://github.com/dd-jp/samurai-trading-system/issues/1144) | — | **Open.** Decision ticket, not implementation work |
+
+**Two PRs were merged before their review fixes landed** ([#1150](https://github.com/dd-jp/samurai-trading-system/pull/1150) and [#1197](https://github.com/dd-jp/samurai-trading-system/pull/1197)), so the fixes were cherry-picked onto fresh branches off `main` — [#1191](https://github.com/dd-jp/samurai-trading-system/pull/1191) and [#1202](https://github.com/dd-jp/samurai-trading-system/pull/1202). That is why six findings account for eight PRs.
+
+**Two of the review passes caught a fix that had not reached the screen**, which is worth recording
+because both would have merged green:
+
+- **F1's first cut** put the degraded gloss in the lane cell, where `.lane-decision` is
+  `11px / nowrap / ellipsis` — it was clipped, and **no** `data-degraded` CSS rule existed. Landed
+  instead as the bare word plus a `[data-degraded]` colour rule, a `title` gloss, a non-colour glyph
+  and a degraded count in the lane's aria-label.
+- **F5's first cut** made the rail say *"no LLM budget configured"* before the first poll returned,
+  because `capOf(null)` is `null` and that branch was tested first — a confident falsehood on a
+  live-money surface. Landed instead testing the missing-spend reason first.
+
+Four follow-ups were filed rather than scope-crept into the PRs:
+[#1196](https://github.com/dd-jp/samurai-trading-system/issues/1196) (uncapped and never-armed
+collapse to the same rendering; `armed_at` is written but never read),
+[#1201](https://github.com/dd-jp/samurai-trading-system/issues/1201) (the drawdown meter signals
+over-tolerance by colour alone, against the floor F3 was meant to hold),
+[#1204](https://github.com/dd-jp/samurai-trading-system/issues/1204) (join-provenance assertions
+compare a constant against itself, so provenance cannot drift without a test noticing) and
+[#1205](https://github.com/dd-jp/samurai-trading-system/issues/1205) (`laneFor` matches on
+`trace_id` alone while `riskCriticFor` requires `instrument` too — unreachable from either current
+`Selection` producer, but now part of a published interface).
