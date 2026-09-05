@@ -27,7 +27,14 @@ import {
   type TradingCalendar,
 } from '../../providers/market-data-service/index.js';
 import type { MarketIntelligenceStore } from '../../providers/market-intelligence/index.js';
-import type { AssetClass, Clock } from '../../shared/index.js';
+import type { AssetClass, Clock, Logger } from '../../shared/index.js';
+import {
+  describeThrown,
+  MAX_ERROR_BODY_CHARS,
+  maskAndCap,
+  safeLog,
+  sanitizeLogText,
+} from '../../shared/index.js';
 import type { AnalystView } from '../debate-engine/index.js';
 import { fundamentalAnalyst } from './fundamental-analyst.js';
 import { sentimentAnalyst } from './sentiment-analyst.js';
@@ -94,6 +101,13 @@ export interface AnalystOrchestratorDeps {
    * field going missing on the input every persona receives.
    */
   telemetry?: AnalystTelemetry;
+  /**
+   * Where the cause behind a stage failure goes (#1114). Threaded the same
+   * way `telemetry` above is: optional here, with a safe no-op default
+   * (`NOOP_LOGGER`) rather than a missing field, so a caller that omits it
+   * gets silence, not a crash, and `production.ts` wires the real one.
+   */
+  logger?: Logger;
 }
 
 /** The safe default for `AnalystOrchestratorDeps.sessionCalendars` — see its doc comment. */
@@ -102,6 +116,71 @@ function defaultSessionCalendars(): Record<AssetClass, TradingCalendar> {
     crypto: new AlwaysOpenCalendar(),
     stocks: new AlwaysOpenCalendar(),
   };
+}
+
+/** The safe default for `AnalystOrchestratorDeps.logger` — see its doc comment. */
+const NOOP_LOGGER: Logger = {
+  log(): void {
+    // Intentionally does nothing — same posture as `NOOP_ANALYST_TELEMETRY`:
+    // a missing logger must never be able to fail a tick.
+  },
+};
+
+/**
+ * Renders a caught value's name, message, stack and cause into a bounded,
+ * credential-safe payload (#1114).
+ *
+ * `describeThrown` alone collapses an `Error` to its `.message` — exactly the
+ * information loss the ticket exists to close (a soak's `stage=analysts
+ * level=error` line named a timeout with no way to tell an HTTP timeout from
+ * a 429 from a malformed body). This keeps `name`/`stack`/`cause` too, masked
+ * and capped the same way `analysts-adapter.ts` already treats every other
+ * upstream-controlled failure string — a stack frame can carry a URL with
+ * query params, and `cause` is arbitrary.
+ */
+function renderErrorDetail(error: unknown): Record<string, unknown> {
+  try {
+    return renderErrorFields(error);
+  } catch {
+    // Guards the RENDER, which `safeLog` cannot: a hostile value's throwing
+    // `toString`/`Symbol.toPrimitive` (or a lazy `message` getter) throws
+    // while the payload is still being built, before `safeLog`'s own
+    // try/catch is ever entered — `logCaughtFailure`'s doc comment describes
+    // the same hole. On the late-settlement path the escape would reject a
+    // derived promise nobody holds, which Node 22 turns into process exit.
+    return { message: '[unrenderable error]' };
+  }
+}
+
+/**
+ * Per field, so one hostile getter costs only its own field: a thrown `stack`
+ * must not take the `name`/`message`/`cause` that rendered fine down with it,
+ * which is the whole diagnostic value of the line.
+ */
+function renderField(render: () => string): string {
+  try {
+    return render();
+  } catch {
+    return '[unrenderable]';
+  }
+}
+
+function renderErrorFields(error: unknown): Record<string, unknown> {
+  if (!(error instanceof Error)) {
+    return { message: sanitizeLogText(describeThrown(error)) };
+  }
+  const detail: Record<string, unknown> = {
+    name: renderField(() => sanitizeLogText(error.name)),
+    message: renderField(() => sanitizeLogText(error.message)),
+  };
+  const stack = renderField(() =>
+    typeof error.stack === 'string' ? maskAndCap(error.stack, MAX_ERROR_BODY_CHARS) : '',
+  );
+  if (stack !== '') detail.stack = stack;
+  if (error.cause !== undefined) {
+    detail.cause = renderField(() => sanitizeLogText(describeThrown(error.cause)));
+  }
+  return detail;
 }
 
 export interface AnalystOrchestratorOptions {
@@ -127,21 +206,50 @@ class AnalystTimeoutError extends Error {
  * `AbortSignal` on the `Analyst` port to cancel it with. That is acceptable
  * here and deliberately not papered over: the personas have no side effects,
  * so a late arrival is discarded, not applied.
+ *
+ * `onLateSettlement` (#1114) is how that discarded arrival is still OBSERVED.
+ * It fires at most once, only on the timeout branch, with whatever `work`
+ * eventually does — logged by the caller, never fed back into this
+ * function's return value or anything downstream of it.
  */
 async function withTimeout<T>(
   work: Promise<T>,
   timeout_ms: number,
   analyst_type: string,
+  onLateSettlement?: (
+    outcome: { status: 'fulfilled'; value: T } | { status: 'rejected'; error: unknown },
+  ) => void,
 ): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       work,
       new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(
-          () => reject(new AnalystTimeoutError(analyst_type, timeout_ms)),
-          timeout_ms,
-        );
+        timer = setTimeout(() => {
+          // Reaching this callback means `work` genuinely has not settled
+          // yet: `Promise.race` resolves via whichever side settles first,
+          // and a `work` that had already settled would have won the race in
+          // an earlier microtask checkpoint, before this macrotask-scheduled
+          // callback could run. So it is safe — and correct — to attach
+          // observers to `work` here, and only here: attaching eagerly at
+          // call time would fire on every attempt, not only the abandoned
+          // one this branch already knows was abandoned.
+          //
+          // This does not change what `Promise.race` does with `work`'s
+          // eventual rejection: `Promise.race` already attaches its own
+          // handler to every promise it's given, so a late rejection here is
+          // handled-and-ignored the same way latency-budget.ts's identical
+          // situation documents — `onLateSettlement` only lets the caller
+          // learn what happened, it is not what prevents an unhandled
+          // rejection.
+          if (onLateSettlement !== undefined) {
+            work.then(
+              (value) => onLateSettlement({ status: 'fulfilled', value }),
+              (error: unknown) => onLateSettlement({ status: 'rejected', error }),
+            );
+          }
+          reject(new AnalystTimeoutError(analyst_type, timeout_ms));
+        }, timeout_ms);
       }),
     ]);
   } finally {
@@ -152,6 +260,7 @@ async function withTimeout<T>(
 export class AnalystOrchestrator {
   private readonly timeoutMs: number;
   private readonly sessionCalendars: Record<AssetClass, TradingCalendar>;
+  private readonly logger: Logger;
 
   constructor(
     private readonly deps: AnalystOrchestratorDeps,
@@ -160,6 +269,7 @@ export class AnalystOrchestrator {
   ) {
     this.timeoutMs = options.timeout_ms ?? DEFAULT_ANALYST_TIMEOUT_MS;
     this.sessionCalendars = deps.sessionCalendars ?? defaultSessionCalendars();
+    this.logger = deps.logger ?? NOOP_LOGGER;
   }
 
   /**
@@ -229,11 +339,53 @@ export class AnalystOrchestrator {
               }),
               this.timeoutMs,
               persona.analyst_type,
+              (outcome) => {
+                // #1114: this fires strictly after the tick has already moved
+                // on from this attempt (it lost the race to the deadline
+                // above). Logged only — see `withTimeout`'s doc comment for
+                // why the invariant "a late arrival is logged, never applied"
+                // holds structurally, not by convention.
+                safeLog(this.logger, {
+                  trace_id,
+                  stage: 'analysts',
+                  level: 'debug',
+                  message:
+                    `analysts: ${persona.analyst_type} attempt ${attempt} settled after its ` +
+                    `${this.timeoutMs}ms deadline had already been reported as a timeout — the ` +
+                    `cause below, discarded rather than applied to this tick`,
+                  payload: {
+                    analyst_type: persona.analyst_type,
+                    attempt,
+                    outcome: outcome.status,
+                    ...(outcome.status === 'rejected' ? renderErrorDetail(outcome.error) : {}),
+                  },
+                });
+              },
             );
             return { persona, status: 'fulfilled' as const, view };
           } catch (error) {
             lastReason = error instanceof Error ? error.message : String(error);
             lastKind = error instanceof AnalystTimeoutError ? 'timeout' : 'error';
+            // #1114's cheap half: a genuine (non-timeout) rejection already
+            // carries a full `Error` right here, and the line above collapses
+            // it to `lastReason`'s bare message — the same loss the ticket
+            // names, just without `withTimeout`'s abandoned-promise problem.
+            // Logged in addition to, never instead of, the existing
+            // `lastReason`/`lastKind` bookkeeping and the error/warn line
+            // `analysts-adapter.ts` builds from it.
+            if (lastKind === 'error') {
+              safeLog(this.logger, {
+                trace_id,
+                stage: 'analysts',
+                level: 'debug',
+                message: `analysts: ${persona.analyst_type} attempt ${attempt} rejected — cause below`,
+                payload: {
+                  analyst_type: persona.analyst_type,
+                  attempt,
+                  ...renderErrorDetail(error),
+                },
+              });
+            }
           }
         }
         // The reason says the retry happened, so a log line cannot be read as

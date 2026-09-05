@@ -22,6 +22,7 @@ import { GUARDED_THRESHOLD_NAMES } from '../../shared/index.js';
 import { STAGE_OWNED_TABLES } from '../../shared/store/index.js';
 import { LIVE_BOOK_GBP } from './paper-profile.js';
 import {
+  type AnalystFailureCauseEvidence,
   type ArmComparisonEvidence,
   buildSmokeFixtureBars,
   ConstantResponseLlmClient,
@@ -290,6 +291,7 @@ function healthyGateOptions(
     thresholdClamp?: ThresholdClampEvidence;
     dataFailover?: DataFailoverEvidence;
     riskCritic?: RiskCriticEvidence;
+    analystFailureCause?: AnalystFailureCauseEvidence;
     armComparison?: ArmComparisonEvidence;
     outsideBenchmarks?: OutsideBenchmarkEvidence;
     feedbackCycleScheduleWritten?: boolean;
@@ -321,6 +323,7 @@ function healthyGateOptions(
     thresholdClamp: overrides.thresholdClamp ?? healthyThresholdClamp(),
     dataFailover: overrides.dataFailover ?? healthyDataFailover(),
     riskCritic: overrides.riskCritic ?? healthyRiskCritic(),
+    analystFailureCause: overrides.analystFailureCause ?? healthyAnalystFailureCause(),
     // #1140: healthy means the published cap IS the run's configured budget.
     publishedLlmCapUsd:
       'publishedLlmCapUsd' in overrides ? (overrides.publishedLlmCapUsd ?? null) : 50,
@@ -424,6 +427,26 @@ function healthyRiskCritic(overrides: Partial<RiskCriticEvidence> = {}): RiskCri
     stepError: null,
     conditionStates: ['breached'],
     bindingConstraint: 'risk_critic:invalidated',
+    ...overrides,
+  };
+}
+
+/** What `runAnalystFailureCauseScenario` (#1114) reports when the cause-logging mechanism is wired. */
+function healthyAnalystFailureCause(
+  overrides: Partial<AnalystFailureCauseEvidence> = {},
+): AnalystFailureCauseEvidence {
+  return {
+    failureKinds: ['error'],
+    debugPayloads: [
+      {
+        analyst_type: 'technical',
+        attempt: 1,
+        name: 'Error',
+        message:
+          'equities bars for SPY 5m: alpaca (primary, failed: alpaca down) and polygon (fallback) failed.',
+        cause: 'polygon down too',
+      },
+    ],
     ...overrides,
   };
 }
@@ -2665,6 +2688,64 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
       const gate = evaluateSmokeGate(transactedObservations(), healthyGateOptions());
 
       expect(gate.failures.filter((failure) => failure.includes('#957'))).toEqual([]);
+    });
+  });
+
+  describe('the analyst failure-cause logging (#1114)', () => {
+    it('fails when the probe itself produced no genuine (non-timeout) rejection', () => {
+      // A broken probe (both legs answering, or the failure coming back as a
+      // timeout) must not read as a healthy mechanism — this names the probe,
+      // not the mechanism, as the thing to fix.
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({
+          analystFailureCause: healthyAnalystFailureCause({ failureKinds: ['timeout'] }),
+        }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('probe itself is broken');
+    });
+
+    it('fails when a genuine rejection happened and nothing was logged at debug', () => {
+      // The mutation this check exists to catch, verified by hand: delete
+      // `logger` from `production.ts`'s `new AnalystOrchestrator({...})` and
+      // the orchestrator falls back to its internal NOOP_LOGGER — a
+      // legitimate default for every caller EXCEPT the one composition root
+      // this check is aimed at, which is why the fallback cannot be a type
+      // error and has to be caught here instead.
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({
+          analystFailureCause: healthyAnalystFailureCause({ debugPayloads: [] }),
+        }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('no `stage: "analysts", level: "debug"` line');
+    });
+
+    it('fails when the recorded debug lines carry no rendered cause', () => {
+      // The mutation this check exists to catch: strip `renderErrorDetail`'s
+      // fields out of the payload (or stop calling it) and the line still
+      // fires, just with nothing #1114 asked for in it.
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({
+          analystFailureCause: healthyAnalystFailureCause({
+            debugPayloads: [{ analyst_type: 'technical', attempt: 1 }],
+          }),
+        }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('none carried the rendered name/message/cause');
+    });
+
+    it('passes when the probe rejected genuinely and the cause reached the logger', () => {
+      const gate = evaluateSmokeGate(transactedObservations(), healthyGateOptions());
+
+      expect(gate.failures.filter((failure) => failure.includes('#1114'))).toEqual([]);
     });
   });
 });

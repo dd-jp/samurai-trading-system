@@ -1183,6 +1183,13 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
      * log, rather than by inspecting the field.
      */
     telemetry: new LoggingAnalystTelemetry(logger),
+    /**
+     * #1114. Deleting this line collapses `AnalystOrchestrator`'s logger back
+     * to `NOOP_LOGGER` silently, so `runAnalystFailureCauseScenario` in
+     * `smoke-run.ts` drives a real rejection through this instance and fails
+     * the gate when it observes nothing.
+     */
+    logger,
   });
 
   // One instance, both ends of `cosine_setups` (#432): the Trader's `decide`

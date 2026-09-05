@@ -5,7 +5,8 @@ import {
   SqliteMarketDataStore,
 } from '../../providers/market-data-service/index.js';
 import { MarketIntelligenceStore } from '../../providers/market-intelligence/index.js';
-import type { Clock } from '../../shared/index.js';
+import { type Clock, MAX_ERROR_BODY_CHARS } from '../../shared/index.js';
+import { recordingLogger } from '../../shared/recording-logger.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import type { AnalystView } from '../debate-engine/index.js';
 import { fundamentalAnalyst } from './fundamental-analyst.js';
@@ -613,6 +614,477 @@ describe('AnalystOrchestrator', () => {
       // to `mandatory` can only tighten the gate, never loosen it.
       expect(result.skipped).toBe(true);
       expect(result.views).toEqual([]);
+    });
+  });
+
+  /**
+   * #1114: a soak's `stage=analysts level=error` line named a verdict
+   * ("quorum NOT met... did not answer within 10000ms") but never the cause
+   * — 40+ occurrences, 100% timeouts by tally, zero non-timeout rejections.
+   * `withTimeout`'s `Promise.race` means the timeout branch fires while
+   * `work` is still pending, so the cause literally does not exist at the
+   * failure branch on that path — hence the late-settlement handler these
+   * tests pin, plus the cheap non-timeout half the ticket also asks for.
+   */
+  describe('failure cause logging (#1114)', () => {
+    /** Never settles on its own — the caller controls exactly when (and how) it finally does. */
+    function controlledAnalyst(analyst_type: string): {
+      analyst: Analyst;
+      settlers: Array<(error: Error) => void>;
+    } {
+      const settlers: Array<(error: Error) => void> = [];
+      const analyst: Analyst = {
+        analyst_type,
+        role: 'mandatory',
+        applies_to: () => true,
+        run: () =>
+          new Promise<AnalystView>((_resolve, reject) => {
+            settlers.push(reject);
+          }),
+      };
+      return { analyst, settlers };
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('logs a late rejection at debug, tagged with the attempt, without letting it reach quorum or views', async () => {
+      const { clock, marketData, marketIntelligence } = buildDeps('crypto');
+      const logger = recordingLogger();
+      const { analyst, settlers } = controlledAnalyst('technical');
+      const unhandled = vi.fn();
+      process.on('unhandledRejection', unhandled);
+
+      try {
+        const orchestrator = new AnalystOrchestrator(
+          { market_data: marketData, market_intelligence: marketIntelligence, logger },
+          [analyst],
+          { timeout_ms: 5 },
+        );
+
+        const resultPromise = orchestrator.runAnalysts(
+          'trace-late',
+          { asset: INSTRUMENT, asset_class: 'crypto' },
+          clock,
+          ASOF,
+        );
+
+        // Both attempts (ATTEMPTS_PER_PERSONA = 2) time out at 5ms each —
+        // `controlledAnalyst` never resolves or rejects on its own.
+        await vi.advanceTimersByTimeAsync(20);
+        const result = await resultPromise;
+
+        // Captured BEFORE the late rejection below fires — proves what
+        // `runAnalysts` already decided, so a later mutation of that decision
+        // by the late arrival would show up as a diff against these values.
+        expect(result.skipped).toBe(true);
+        expect(result.views).toEqual([]);
+        expect(result.failures[0]?.kind).toBe('timeout');
+        expect(settlers).toHaveLength(2);
+
+        // The SECOND (last, abandoned) attempt's work finally rejects, long
+        // after runAnalysts already returned.
+        settlers[1]?.(new Error('late boom: connection reset'));
+        await vi.advanceTimersByTimeAsync(0);
+
+        // Invariant: logged, never applied. Same object, unchanged.
+        expect(result.skipped).toBe(true);
+        expect(result.views).toEqual([]);
+
+        const late = logger.entries.find(
+          (entry) =>
+            entry.level === 'debug' &&
+            (entry.payload as { attempt?: number } | undefined)?.attempt === 2,
+        );
+        expect(late).toBeDefined();
+        expect(late?.trace_id).toBe('trace-late');
+        expect(late?.stage).toBe('analysts');
+        expect(late?.payload).toMatchObject({
+          analyst_type: 'technical',
+          attempt: 2,
+          outcome: 'rejected',
+          message: expect.stringContaining('late boom: connection reset'),
+        });
+
+        // No unhandled rejection escaped — `Promise.race` already handles
+        // the losing side; the late-settlement observer above must not
+        // change that.
+        expect(unhandled).not.toHaveBeenCalled();
+      } finally {
+        process.off('unhandledRejection', unhandled);
+      }
+    });
+
+    it('does not log anything when the abandoned attempt never settles at all', async () => {
+      const { clock, marketData, marketIntelligence } = buildDeps('crypto');
+      const logger = recordingLogger();
+      const { analyst } = controlledAnalyst('technical');
+      const orchestrator = new AnalystOrchestrator(
+        { market_data: marketData, market_intelligence: marketIntelligence, logger },
+        [analyst],
+        { timeout_ms: 5 },
+      );
+
+      const resultPromise = orchestrator.runAnalysts(
+        'trace-hang',
+        { asset: INSTRUMENT, asset_class: 'crypto' },
+        clock,
+        ASOF,
+      );
+      await vi.advanceTimersByTimeAsync(20);
+      const result = await resultPromise;
+
+      expect(result.skipped).toBe(true);
+      expect(logger.entries.filter((entry) => entry.level === 'debug')).toEqual([]);
+    });
+
+    it('logs the underlying cause of a non-timeout rejection at debug, without changing the existing failure reason', async () => {
+      const { clock, marketData, marketIntelligence } = buildDeps('crypto');
+      const logger = recordingLogger();
+      const cause = new Error('root cause: malformed payload');
+      const failing: Analyst = {
+        analyst_type: 'technical',
+        role: 'mandatory',
+        applies_to: () => true,
+        run: async () => {
+          throw new Error('technical unavailable', { cause });
+        },
+      };
+      const orchestrator = new AnalystOrchestrator(
+        { market_data: marketData, market_intelligence: marketIntelligence, logger },
+        [failing],
+      );
+
+      const result = await orchestrator.runAnalysts(
+        'trace-cause',
+        { asset: INSTRUMENT, asset_class: 'crypto' },
+        clock,
+        ASOF,
+      );
+
+      // Unchanged existing behaviour: the reason/kind the adapter's
+      // error/warn line reads are exactly what they were before #1114.
+      expect(result.failures[0]?.kind).toBe('error');
+      expect(result.failures[0]?.reason).toContain('technical unavailable (after 2 attempts)');
+
+      const debugEntries = logger.entries.filter((entry) => entry.level === 'debug');
+      expect(debugEntries).toHaveLength(2); // one per attempt — both attempts reject the same way
+      for (const [index, entry] of debugEntries.entries()) {
+        expect(entry.trace_id).toBe('trace-cause');
+        expect(entry.stage).toBe('analysts');
+        expect(entry.payload).toMatchObject({
+          analyst_type: 'technical',
+          attempt: index + 1,
+          name: 'Error',
+          message: expect.stringContaining('technical unavailable'),
+          cause: expect.stringContaining('root cause: malformed payload'),
+        });
+      }
+    });
+
+    it('masks credentials and caps the stack — the widest text surface #1114 adds', async () => {
+      const { clock, marketData, marketIntelligence } = buildDeps('crypto');
+      const logger = recordingLogger();
+      const cause = new Error('POST /v1/chat failed: Bearer sk-live-abcdef0123456789');
+      const failing: Analyst = {
+        analyst_type: 'technical',
+        role: 'mandatory',
+        applies_to: () => true,
+        run: async () => {
+          const error = new Error('technical unavailable', { cause });
+          error.stack = `Error: technical unavailable\n${'    at frame (/app/x.js:1:1)\n'.repeat(60)}`;
+          throw error;
+        },
+      };
+      const orchestrator = new AnalystOrchestrator(
+        { market_data: marketData, market_intelligence: marketIntelligence, logger },
+        [failing],
+      );
+
+      await orchestrator.runAnalysts(
+        'trace-secret',
+        { asset: INSTRUMENT, asset_class: 'crypto' },
+        clock,
+        ASOF,
+      );
+
+      const payload = logger.entries.find((entry) => entry.level === 'debug')?.payload as
+        | { cause?: string; stack?: string }
+        | undefined;
+      expect(payload?.cause).toContain('[REDACTED]');
+      expect(payload?.cause).not.toContain('sk-live-abcdef0123456789');
+      // A stack is thousands of chars of upstream-controlled text and is the
+      // one field here never logged before #1114; the cap is what keeps a
+      // debug line from carrying the whole frame list into the soak log.
+      // `truncateForError` appends its own "chars total" note past the bound,
+      // so the kept prefix is what MAX_ERROR_BODY_CHARS limits, not the whole
+      // string.
+      expect(payload?.stack).toContain('(truncated,');
+      expect(payload?.stack?.split('… (truncated,')[0]?.length).toBeLessThanOrEqual(
+        MAX_ERROR_BODY_CHARS,
+      );
+    });
+
+    it('degrades only the field that cannot be rendered, keeping the rest of the cause', async () => {
+      const { clock, marketData, marketIntelligence } = buildDeps('crypto');
+      const logger = recordingLogger();
+      const failing: Analyst = {
+        analyst_type: 'technical',
+        role: 'mandatory',
+        applies_to: () => true,
+        run: async () => {
+          const error = new Error('technical unavailable');
+          // A lazily-computed `stack` is real: several runtimes and error
+          // wrappers define it as a getter. #1114 is what first put this
+          // field in a log payload, so its throw is this diff's to contain.
+          Object.defineProperty(error, 'stack', {
+            get(): string {
+              throw new Error('render boom');
+            },
+          });
+          throw error;
+        },
+      };
+      const orchestrator = new AnalystOrchestrator(
+        { market_data: marketData, market_intelligence: marketIntelligence, logger },
+        [failing],
+      );
+
+      const result = await orchestrator.runAnalysts(
+        'trace-hostile',
+        { asset: INSTRUMENT, asset_class: 'crypto' },
+        clock,
+        ASOF,
+      );
+
+      expect(result.skipped).toBe(true);
+      // The render happens while the payload is still being built, so a throw
+      // here escapes `safeLog` entirely — and losing the whole payload would
+      // cost the diagnostic the ticket exists to provide.
+      expect(logger.entries.find((entry) => entry.level === 'debug')?.payload).toMatchObject({
+        analyst_type: 'technical',
+        message: 'technical unavailable',
+        stack: '[unrenderable]',
+      });
+    });
+
+    it('masks a credential-carrying error name', async () => {
+      const { clock, marketData, marketIntelligence } = buildDeps('crypto');
+      const logger = recordingLogger();
+      const failing: Analyst = {
+        analyst_type: 'technical',
+        role: 'mandatory',
+        applies_to: () => true,
+        run: async () => {
+          const error = new Error('technical unavailable');
+          // `name` is upstream-settable like every other field here, and was
+          // the one rendered raw.
+          error.name = 'HttpError(auth=sk-live-abcdef0123456789)';
+          throw error;
+        },
+      };
+      const orchestrator = new AnalystOrchestrator(
+        { market_data: marketData, market_intelligence: marketIntelligence, logger },
+        [failing],
+      );
+
+      await orchestrator.runAnalysts(
+        'trace-name',
+        { asset: INSTRUMENT, asset_class: 'crypto' },
+        clock,
+        ASOF,
+      );
+
+      const name = (
+        logger.entries.find((entry) => entry.level === 'debug')?.payload as
+          | { name?: string }
+          | undefined
+      )?.name;
+      expect(name).toContain('[REDACTED]');
+      expect(name).not.toContain('sk-live-abcdef0123456789');
+    });
+
+    it('contains an unrenderable late settlement instead of rejecting a promise nobody holds', async () => {
+      const { clock, marketData, marketIntelligence } = buildDeps('crypto');
+      const logger = recordingLogger();
+      const { analyst, settlers } = controlledAnalyst('technical');
+      const unhandled = vi.fn();
+      process.on('unhandledRejection', unhandled);
+
+      try {
+        const orchestrator = new AnalystOrchestrator(
+          { market_data: marketData, market_intelligence: marketIntelligence, logger },
+          [analyst],
+          { timeout_ms: 5 },
+        );
+
+        const resultPromise = orchestrator.runAnalysts(
+          'trace-late-hostile',
+          { asset: INSTRUMENT, asset_class: 'crypto' },
+          clock,
+          ASOF,
+        );
+        await vi.advanceTimersByTimeAsync(20);
+        await resultPromise;
+
+        // The late path is the one where an escaping render is worst: it
+        // rejects the derived `work.then(...)` promise, which nobody holds,
+        // and Node 22 exits the process on an unhandled rejection.
+        // Not an `Error`, and defeats both of `describeThrown`'s steps: the
+        // self-reference makes `JSON.stringify` throw, and the throwing
+        // `Symbol.toPrimitive` makes its `String(value)` fallback throw too.
+        // That is the one render failure no per-field guard sits under.
+        const hostile: Record<string, unknown> = {
+          [Symbol.toPrimitive]() {
+            throw new Error('render boom');
+          },
+        };
+        hostile.self = hostile;
+        settlers[1]?.(hostile as unknown as Error);
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(unhandled).not.toHaveBeenCalled();
+        expect(
+          logger.entries.find(
+            (entry) =>
+              entry.level === 'debug' &&
+              (entry.payload as { attempt?: number } | undefined)?.attempt === 2,
+          )?.payload,
+        ).toMatchObject({ outcome: 'rejected', message: '[unrenderable error]' });
+      } finally {
+        process.off('unhandledRejection', unhandled);
+      }
+    });
+
+    it('keeps the rest of a late cause when only its message cannot be rendered', async () => {
+      const { clock, marketData, marketIntelligence } = buildDeps('crypto');
+      const logger = recordingLogger();
+      const { analyst, settlers } = controlledAnalyst('technical');
+      const orchestrator = new AnalystOrchestrator(
+        { market_data: marketData, market_intelligence: marketIntelligence, logger },
+        [analyst],
+        { timeout_ms: 5 },
+      );
+
+      const resultPromise = orchestrator.runAnalysts(
+        'trace-late-message',
+        { asset: INSTRUMENT, asset_class: 'crypto' },
+        clock,
+        ASOF,
+      );
+      await vi.advanceTimersByTimeAsync(20);
+      await resultPromise;
+
+      // Only the late path reaches the render with a throwing `message`: the
+      // catch site reads `error.message` for `lastReason` first and throws
+      // there instead (#1199).
+      const hostile = new Error('unused');
+      hostile.name = 'LateBoomError';
+      Object.defineProperty(hostile, 'message', {
+        get(): string {
+          throw new Error('render boom');
+        },
+      });
+      settlers[1]?.(hostile);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(
+        logger.entries.find(
+          (entry) =>
+            entry.level === 'debug' &&
+            (entry.payload as { attempt?: number } | undefined)?.attempt === 2,
+        )?.payload,
+      ).toMatchObject({ name: 'LateBoomError', message: '[unrenderable]' });
+    });
+
+    it('never logs above debug — the existing error/warn posture is unchanged', async () => {
+      const { clock, marketData, marketIntelligence } = buildDeps('crypto');
+      const logger = recordingLogger();
+      const failing: Analyst = {
+        analyst_type: 'technical',
+        role: 'mandatory',
+        applies_to: () => true,
+        run: async () => {
+          throw new Error('technical unavailable');
+        },
+      };
+      const orchestrator = new AnalystOrchestrator(
+        { market_data: marketData, market_intelligence: marketIntelligence, logger },
+        [failing],
+      );
+
+      await orchestrator.runAnalysts(
+        'trace-level',
+        { asset: INSTRUMENT, asset_class: 'crypto' },
+        clock,
+        ASOF,
+      );
+
+      expect(logger.entries.every((entry) => entry.level === 'debug')).toBe(true);
+    });
+
+    it('a throwing logger does not turn an analyst failure into a crash', async () => {
+      const { clock, marketData, marketIntelligence } = buildDeps('crypto');
+      const throwingLogger = {
+        log(): void {
+          throw new Error('logger transport is down');
+        },
+      };
+      const failing: Analyst = {
+        analyst_type: 'technical',
+        role: 'mandatory',
+        applies_to: () => true,
+        run: async () => {
+          throw new Error('technical unavailable');
+        },
+      };
+      const orchestrator = new AnalystOrchestrator(
+        {
+          market_data: marketData,
+          market_intelligence: marketIntelligence,
+          logger: throwingLogger,
+        },
+        [failing],
+      );
+
+      await expect(
+        orchestrator.runAnalysts(
+          'trace-throwing-logger',
+          { asset: INSTRUMENT, asset_class: 'crypto' },
+          clock,
+          ASOF,
+        ),
+      ).resolves.toMatchObject({ skipped: true });
+    });
+
+    it('omitting the logger dependency entirely does not crash — the safe default is silence', async () => {
+      const { clock, marketData, marketIntelligence } = buildDeps('crypto');
+      const failing: Analyst = {
+        analyst_type: 'technical',
+        role: 'mandatory',
+        applies_to: () => true,
+        run: async () => {
+          throw new Error('technical unavailable');
+        },
+      };
+      const orchestrator = new AnalystOrchestrator(
+        { market_data: marketData, market_intelligence: marketIntelligence },
+        [failing],
+      );
+
+      await expect(
+        orchestrator.runAnalysts(
+          'trace-no-logger',
+          { asset: INSTRUMENT, asset_class: 'crypto' },
+          clock,
+          ASOF,
+        ),
+      ).resolves.toMatchObject({ skipped: true });
     });
   });
 });

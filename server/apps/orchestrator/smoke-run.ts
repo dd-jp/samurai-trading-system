@@ -3344,6 +3344,119 @@ async function runDataFailoverScenario(logger: Logger): Promise<DataFailoverEvid
   }
 }
 
+/** What `evaluateSmokeGate` needs from the analyst failure-cause scenario (#1114). */
+export interface AnalystFailureCauseEvidence {
+  /** Every `stage: 'analysts', level: 'debug'` payload the run's own `AnalystOrchestrator` recorded. */
+  debugPayloads: readonly Record<string, unknown>[];
+  /** The run's own `AnalystRunResult.failures[].kind` values, so the gate can tell a genuine rejection happened rather than trusting the payloads alone. */
+  failureKinds: readonly string[];
+}
+
+/**
+ * Records every `stage: 'analysts', level: 'debug'` line on the way to the
+ * real logger — the one channel #1114's cause-logging mechanism reaches.
+ * Mirrors `FillSyncFailureRecorder`'s shape: scoped to the hole it closes,
+ * never throws itself, and passes everything through to `inner` unchanged.
+ */
+class AnalystDebugRecorder implements Logger {
+  private readonly payloads: Record<string, unknown>[] = [];
+
+  constructor(private readonly inner: Logger) {}
+
+  log(entry: LogEntry): void {
+    if (entry.stage === 'analysts' && entry.level === 'debug') {
+      this.payloads.push((entry.payload ?? {}) as Record<string, unknown>);
+    }
+    this.inner.log(entry);
+  }
+
+  evidence(failureKinds: readonly string[]): AnalystFailureCauseEvidence {
+    return { debugPayloads: [...this.payloads], failureKinds };
+  }
+}
+
+/**
+ * #1114's enforcement assertion, per the standard that wiring a mechanism
+ * means asserting it HERE (#430).
+ *
+ * Driven through `buildProductionOrchestrator` — the same real composition
+ * root `runDataFailoverScenario` above uses — with BOTH the primary AND the
+ * equities fallback throwing, so the technical analyst's `market_data.getBars`
+ * genuinely REJECTS (a real combined error carrying a `.cause` chain,
+ * `ohlcv-failover.ts`'s `withOhlcvFailover`) rather than timing out.
+ *
+ * That choice is deliberate, not an oversight of the timeout path: #1114's
+ * own soak tally found 100% of the historical failures were timeouts, and a
+ * timeout's cause is unrecoverable by construction at the point it is
+ * detected (see `withTimeout`'s doc comment in `pipeline/analysts/
+ * orchestrator.ts`) — proving THAT path fired for real here would mean
+ * waiting out a genuine multi-second deadline inside every `yarn smoke` run
+ * for a probe that cannot assert anything a fake-timer unit test
+ * (`orchestrator.test.ts`, "failure cause logging (#1114)") doesn't already
+ * mutation-test more cheaply. The non-timeout half is the one this gate CAN
+ * prove in milliseconds, through the exact composition root and the exact
+ * `AnalystOrchestrator` instance `production.ts` builds — which is also
+ * literally what the ticket asks for (a non-timeout rejection's collapsed
+ * detail), just not the headline failure mode.
+ *
+ * Asserted on the DURABLE effect, not construction: the `debug` payloads the
+ * real `AnalystOrchestrator` recorded through the real `logger` `production.ts`
+ * wires into it via `new AnalystOrchestrator({ ..., logger })`. Delete that
+ * one field and this scenario records nothing (the orchestrator falls back to
+ * its internal `NOOP_LOGGER`) — the gate's whole point.
+ */
+async function runAnalystFailureCauseScenario(
+  logger: Logger,
+): Promise<AnalystFailureCauseEvidence> {
+  const db = openSharedStore(':memory:');
+  const recorder = new AnalystDebugRecorder(logger);
+  try {
+    const clock = new SimulatedClock(SMOKE_RUN_INSTANT);
+    const profile = paperStartingProfile('paper');
+    const signal = { asset: 'SPY', asset_class: 'stocks' as const };
+
+    const orchestrator = buildProductionOrchestrator({
+      ...profile,
+      db,
+      clock,
+      logger: recorder,
+      universe: [{ asset: signal.asset, asset_class: signal.asset_class }],
+      tradingCalendar: new UsEquityRegularHoursCalendar(),
+      stocksTradingWindow: () => true,
+      // Both legs down — see the doc comment above for why a double failure,
+      // not a single one that would fail over cleanly like
+      // `runDataFailoverScenario`'s probe.
+      alpacaDataClient: {
+        getBars: async () => {
+          throw new Error('alpaca down (smoke analyst-failure-cause probe, #1114)');
+        },
+        getLatestQuote: async () => ({ t: SMOKE_RUN_INSTANT.toISOString(), ap: 100, bp: 99 }),
+      },
+      equitiesFallbackBarFetcher: async () => {
+        throw new Error('polygon down too (smoke analyst-failure-cause probe, #1114)');
+      },
+      dataFailoverAlerts: {
+        postDataFailoverAlert: async () => {},
+      },
+      miArchive: new MiArchiveStore(),
+      accountState: new FixedAccountStateProvider(),
+      alpacaBrokerClient: new UnreachableAlpacaClient(),
+      llmClient: new ConstantResponseLlmClient(),
+    });
+
+    const result = await orchestrator.analysts.runAnalysts(
+      'smoke-analyst-failure-cause',
+      signal,
+      clock,
+      SMOKE_RUN_INSTANT,
+    );
+
+    return recorder.evidence(result.failures.map((failure) => failure.kind));
+  } finally {
+    db.close();
+  }
+}
+
 /** What `evaluateSmokeGate` needs from the risk-critic scenario (#957, extended by the invalidation fold #994). */
 export interface RiskCriticEvidence {
   /** `risk_critic_log.verdict` values the run's own composition root wrote, in insertion order. */
@@ -3611,6 +3724,16 @@ export function evaluateSmokeGate(
      * with every unit test still green, and nothing else here would notice.
      */
     riskCritic: RiskCriticEvidence;
+    /**
+     * The analyst failure-cause scenario's evidence (#1114) — required, not
+     * optional, for the same "compile error, not a silent no-op" reason the
+     * mechanisms above are (coding-standards.md's `llmRateLimiterSnapshot`
+     * precedent). `production.ts`'s `new AnalystOrchestrator({ ..., logger })`
+     * has exactly one durable effect an unattended run can show for it: the
+     * `debug` lines this scenario reads back. An optional field here would
+     * let a future edit drop that one argument and leave `yarn smoke` green.
+     */
+    analystFailureCause: AnalystFailureCauseEvidence;
     /**
      * The arm-comparison surface's evidence (#971) — required, not optional,
      * for the same "compile error, not a silent no-op" reason the mechanisms
@@ -4230,6 +4353,43 @@ export function evaluateSmokeGate(
         'authority (#997 Q2b), so a breach that only gets logged is a checklist with no ' +
         'teeth (#994)',
     );
+  }
+
+  // #1114 — the analyst failure-cause logging's enforcement assertion, on its
+  // DURABLE effect through the real composition root. See
+  // `runAnalystFailureCauseScenario`'s own doc for why this proves the
+  // non-timeout half of the ticket rather than waiting out a real deadline.
+  const failureCause = options.analystFailureCause;
+  if (!failureCause.failureKinds.includes('error')) {
+    failures.push(
+      "the analyst failure-cause probe's double-failed data source did not produce a genuine " +
+        `(non-timeout) analyst rejection (kinds observed: ${JSON.stringify(failureCause.failureKinds)}) ` +
+        '— the probe itself is broken, not the mechanism it exists to gate (#1114)',
+    );
+  } else if (failureCause.debugPayloads.length === 0) {
+    failures.push(
+      'a genuine analyst rejection happened and no `stage: "analysts", level: "debug"` line was ' +
+        'recorded for it — `production.ts` is not wiring its `logger` into `new ' +
+        'AnalystOrchestrator({...})` (or the orchestrator fell back to its internal NOOP_LOGGER), ' +
+        'so the cause behind a stage failure is back to the verdict-only line #1114 was filed ' +
+        'against',
+    );
+  } else {
+    const withCause = failureCause.debugPayloads.find(
+      (payload) =>
+        payload.analyst_type === 'technical' &&
+        typeof payload.cause === 'string' &&
+        typeof payload.name === 'string' &&
+        typeof payload.message === 'string',
+    );
+    if (withCause === undefined) {
+      failures.push(
+        `debug lines were recorded (${JSON.stringify(failureCause.debugPayloads)}) but none carried ` +
+          'the rendered name/message/cause a non-timeout rejection is supposed to keep — ' +
+          '`renderErrorDetail` (pipeline/analysts/orchestrator.ts) stopped rendering the caught ' +
+          'error, or stopped being called (#1114)',
+      );
+    }
   }
 
   if (debates.length > 0 && observations.cosineSetups.length === 0) {
@@ -5374,6 +5534,11 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
     // never wired.
     const riskCritic = await runRiskCriticScenario(logger);
 
+    // #1114: the analyst failure-cause logging's enforcement assertion, on
+    // its own composition root and its own cold in-memory store, same
+    // pattern as `dataFailover`/`riskCritic` above.
+    const analystFailureCause = await runAnalystFailureCauseScenario(logger);
+
     // Safe to read the Polymarket counts here, and only here: `start()` fires
     // the first refresh as `void polymarketAgent.refresh('startup')`, so its
     // store write is in flight after `start()` resolves — but `stop()` (line
@@ -5398,6 +5563,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       thresholdClamp,
       dataFailover,
       riskCritic,
+      analystFailureCause,
       // #971. Run against the same store the observations were read from, and
       // AFTER `orchestrator.stop()` for `readSmokeObservations`' reason: the
       // tape has to be complete before the comparison is taken over it.
