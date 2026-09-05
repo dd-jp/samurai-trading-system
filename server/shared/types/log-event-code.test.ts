@@ -78,7 +78,7 @@ function sourceFiles(directory: string): string[] {
  * line. Two shapes survive that filter and are excluded by value: a union
  * type annotation broken onto its own line (`index.ts`'s
  * `event: 'uncaughtException' | 'unhandledRejection',`), and the `event:
- * LogEventCode` parameter of the three helpers that take a code and build the
+ * LogEventCode` parameter of the four helpers that take a code and build the
  * entry themselves. Every OTHER non-literal — an interpolated template, a
  * variable — is meant to fail here.
  */
@@ -88,7 +88,8 @@ const SNAKE_CASE_LITERAL = /^'[a-z][a-z0-9]*(?:_[a-z0-9]+)+'$/;
 /**
  * A floor, so a scan that matched nothing (a regex broken by a formatting
  * change, a moved source root) fails loudly instead of passing vacuously.
- * 167 `event:` assignments were in the tree when #1115 landed.
+ * 160 assignments reached the value check when #1115 landed — 165 raw
+ * matches, less the excluded shapes named above.
  *
  * Codes passed as a HELPER ARGUMENT rather than written as a property —
  * `degradationLine('log_sinks_exhausted', …)` and the four helpers that take
