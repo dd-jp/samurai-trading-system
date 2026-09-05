@@ -935,13 +935,17 @@ describe('AnalystOrchestrator', () => {
         // The late path is the one where an escaping render is worst: it
         // rejects the derived `work.then(...)` promise, which nobody holds,
         // and Node 22 exits the process on an unhandled rejection.
-        const hostile = new Error('late boom');
-        Object.defineProperty(hostile, 'message', {
-          get(): string {
+        // Not an `Error`, and defeats both of `describeThrown`'s steps: the
+        // self-reference makes `JSON.stringify` throw, and the throwing
+        // `Symbol.toPrimitive` makes its `String(value)` fallback throw too.
+        // That is the one render failure no per-field guard sits under.
+        const hostile: Record<string, unknown> = {
+          [Symbol.toPrimitive]() {
             throw new Error('render boom');
           },
-        });
-        settlers[1]?.(hostile);
+        };
+        hostile.self = hostile;
+        settlers[1]?.(hostile as unknown as Error);
         await vi.advanceTimersByTimeAsync(0);
 
         expect(unhandled).not.toHaveBeenCalled();
@@ -955,6 +959,47 @@ describe('AnalystOrchestrator', () => {
       } finally {
         process.off('unhandledRejection', unhandled);
       }
+    });
+
+    it('keeps the rest of a late cause when only its message cannot be rendered', async () => {
+      const { clock, marketData, marketIntelligence } = buildDeps('crypto');
+      const logger = recordingLogger();
+      const { analyst, settlers } = controlledAnalyst('technical');
+      const orchestrator = new AnalystOrchestrator(
+        { market_data: marketData, market_intelligence: marketIntelligence, logger },
+        [analyst],
+        { timeout_ms: 5 },
+      );
+
+      const resultPromise = orchestrator.runAnalysts(
+        'trace-late-message',
+        { asset: INSTRUMENT, asset_class: 'crypto' },
+        clock,
+        ASOF,
+      );
+      await vi.advanceTimersByTimeAsync(20);
+      await resultPromise;
+
+      // Only the late path reaches the render with a throwing `message`: the
+      // catch site reads `error.message` for `lastReason` first and throws
+      // there instead (#1199).
+      const hostile = new Error('unused');
+      hostile.name = 'LateBoomError';
+      Object.defineProperty(hostile, 'message', {
+        get(): string {
+          throw new Error('render boom');
+        },
+      });
+      settlers[1]?.(hostile);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(
+        logger.entries.find(
+          (entry) =>
+            entry.level === 'debug' &&
+            (entry.payload as { attempt?: number } | undefined)?.attempt === 2,
+        )?.payload,
+      ).toMatchObject({ name: 'LateBoomError', message: '[unrenderable]' });
     });
 
     it('never logs above debug — the existing error/warn posture is unchanged', async () => {

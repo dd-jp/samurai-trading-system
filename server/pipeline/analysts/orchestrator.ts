@@ -171,7 +171,7 @@ function renderErrorFields(error: unknown): Record<string, unknown> {
   }
   const detail: Record<string, unknown> = {
     name: renderField(() => sanitizeLogText(error.name)),
-    message: sanitizeLogText(error.message),
+    message: renderField(() => sanitizeLogText(error.message)),
   };
   const stack = renderField(() =>
     typeof error.stack === 'string' ? maskAndCap(error.stack, MAX_ERROR_BODY_CHARS) : '',
