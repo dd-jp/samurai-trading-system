@@ -417,10 +417,24 @@ describe('degraded stages on the page (#1080)', () => {
     renderApp([makeSnapshot({ pipeline: starvedLaneView() })]);
     openTab('Live');
 
-    const qqq = await screen.findByRole('button', { name: /QQQ, stocks, stopped/ });
+    // aria-label overrides inner text for assistive tech (LiveTab.tsx's
+    // button), so the lane's own accessible name has to say "degraded" too —
+    // otherwise the fix is sighted-only.
+    const qqq = await screen.findByRole('button', { name: /QQQ, stocks, stopped, .*degraded/ });
     const debateCell = qqq.querySelector('[data-stage="debate"]');
     expect(debateCell?.getAttribute('data-degraded')).toBe('true');
-    expect(debateCell?.textContent).toContain('budget_exhausted');
+
+    // The cell paints its decision WORD (dashboard-spec.md:135), not the
+    // gloss sentence — a sentence overflows the matrix column. The gloss
+    // reaches the surface as `title` and as the non-colour glyph, not as the
+    // cell's visible text.
+    const decisionSpan = debateCell?.querySelector('.lane-decision');
+    expect(decisionSpan?.textContent).toContain('budget_exhausted');
+    expect(decisionSpan?.textContent).not.toContain('before any round completed');
+    expect(decisionSpan?.getAttribute('title')).toContain('before any round completed');
+    expect(decisionSpan?.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe(
+      'degraded',
+    );
 
     expect(qqq.querySelector('[data-stage="trader"]')?.getAttribute('data-degraded')).toBeNull();
   });

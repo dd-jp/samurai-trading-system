@@ -48,7 +48,7 @@ export function Timeline({ lane }: { lane: PipelineLane }) {
           >
             <span className="timeline-stage">
               {stageName(cell.stage)}
-              <StateWord state={{ word: cell.word, tone: cell.tone }} />
+              <StateWord state={cell.state} />
             </span>
             <span className="timeline-decision">
               {cell.decisionText}

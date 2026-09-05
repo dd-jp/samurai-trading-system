@@ -733,6 +733,16 @@ main {
   max-width: 100%;
 }
 
+/* Colour is never the sole carrier here (dashboard-spec.md's accessibility
+   floor) — the amber tint pairs with the `.lane-degraded-mark` glyph. */
+.lane-cell[data-degraded] .lane-decision {
+  color: var(--amber);
+}
+
+.lane-degraded-mark {
+  margin-right: 2px;
+}
+
 /* ---------- drawer ---------- */
 
 .drawer {

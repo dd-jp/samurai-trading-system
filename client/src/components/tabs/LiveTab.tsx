@@ -7,7 +7,7 @@ import {
   formatStageDuration,
   formatUsd,
 } from '../../lib/format.ts';
-import { resolveLaneCells } from '../../lib/lane-cells.ts';
+import { type ResolvedCell, resolveLaneCells } from '../../lib/lane-cells.ts';
 import { settledOutcome } from '../../lib/ledger.ts';
 import {
   fillsFor,
@@ -39,19 +39,27 @@ export interface LiveTabProps {
   onSelect: (selection: Selection) => void;
 }
 
-function laneName(lane: PipelineLane): string {
+/**
+ * The button's own accessible name, since `aria-label` here overrides the
+ * inner text for assistive tech — a degraded cell has to be named here or it
+ * is not reachable by anything but sighted, mouse-driven inspection.
+ */
+function laneName(lane: PipelineLane, cells: readonly ResolvedCell[]): string {
   const where =
     lane.final_stage === null
       ? lane.outcome === 'idle'
         ? 'no trace in the window'
         : 'no stage recorded'
       : `at ${stageName(lane.final_stage)}`;
-  return `${lane.instrument}, ${lane.asset_class}, ${OUTCOME_WORD[lane.outcome]}, ${where}`;
+  const degradedCount = cells.filter((cell) => cell.degraded).length;
+  const degraded = degradedCount === 0 ? '' : `, ${degradedCount} stage(s) degraded`;
+  return `${lane.instrument}, ${lane.asset_class}, ${OUTCOME_WORD[lane.outcome]}, ${where}${degraded}`;
 }
 
 function LaneRow(props: { lane: PipelineLane; selected: boolean; onSelect: () => void }) {
   const { lane, selected, onSelect } = props;
   const settled = settledOutcome(lane.outcome);
+  const cells = resolveLaneCells(lane);
   return (
     <li>
       <button
@@ -59,7 +67,7 @@ function LaneRow(props: { lane: PipelineLane; selected: boolean; onSelect: () =>
         className={`lane lane-${lane.outcome}${selected ? ' lane-selected' : ''}`}
         data-instrument={lane.instrument}
         data-outcome={lane.outcome}
-        aria-label={laneName(lane)}
+        aria-label={laneName(lane, cells)}
         aria-pressed={selected}
         onClick={onSelect}
       >
@@ -67,7 +75,7 @@ function LaneRow(props: { lane: PipelineLane; selected: boolean; onSelect: () =>
           {settled !== null && <Seal outcome={settled} />}
           <b className="display lane-instrument">{lane.instrument}</b>
         </span>
-        {resolveLaneCells(lane).map((cell) => (
+        {cells.map((cell) => (
           <span
             key={cell.stage}
             className="lane-cell"
@@ -77,8 +85,23 @@ function LaneRow(props: { lane: PipelineLane; selected: boolean; onSelect: () =>
             // scans first, not only once they open the trace.
             data-degraded={cell.degraded ? 'true' : undefined}
           >
-            <StateWord state={{ word: cell.word, tone: cell.tone }} />
-            {cell.decision !== null && <span className="lane-decision">{cell.decision}</span>}
+            <StateWord state={cell.state} />
+            {cell.hasRecordedDecision && (
+              // The cell shows its decision WORD (dashboard-spec.md:135), not
+              // the full gloss — a gloss sentence overflows this column
+              // (`.lane-decision`'s ellipsis truncation clipped it, review
+              // fix-round-1 F1). The gloss is one hover away via `title`; the
+              // glyph is the non-colour carrier the dashboard's accessibility
+              // floor requires alongside the amber tint.
+              <span className="lane-decision" title={cell.decisionText}>
+                {cell.degraded && (
+                  <span className="lane-degraded-mark" role="img" aria-label="degraded">
+                    ⚠
+                  </span>
+                )}
+                {cell.decisionWord}
+              </span>
+            )}
           </span>
         ))}
       </button>

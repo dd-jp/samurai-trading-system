@@ -18,7 +18,7 @@ import {
   type PipelineLane,
   type PipelineStage,
 } from '@contracts';
-import { presentCell, type StateTone } from './state-presentation.ts';
+import { type Presented, presentCell } from './state-presentation.ts';
 
 const STAGES_WITHOUT_RECORDED_DECISION: readonly PipelineStage[] = ['trader', 'risk'];
 
@@ -30,12 +30,7 @@ function cellsByStageOf(lane: PipelineLane): ReadonlyMap<PipelineStage, Pipeline
   return new Map(lane.cells.map((cell) => [cell.stage, cell]));
 }
 
-/**
- * The prose a present cell's decision area shows when there is a real
- * decision word (glossed when degraded), and the sentence that names what
- * happened instead when there is none — moved here unchanged from the
- * drawer's former `decisionText` so both renderers agree.
- */
+/** What a present cell's decision area says when the store recorded no word. */
 function fallbackText(cell: PipelineCell): string {
   if (cell.state === 'not_reached') return 'not reached';
   if (cell.state === 'skipped') return 'skipped — the tick continued';
@@ -50,60 +45,65 @@ export interface ResolvedCell {
   stage: PipelineStage;
   /** `false` when the wire carried no cell for this stage. */
   present: boolean;
-  /** The state word, already resolved against the lane's outcome. */
-  word: string;
-  tone: StateTone;
-  /** The `audit_log` decision word, glossed when degraded. `null` when the store recorded none. */
-  decision: string | null;
+  /** The state word and its tone, paired so a caller cannot render one without the other (#1138). */
+  state: Presented;
+  /** Whether `audit_log` recorded a decision word for this cell — the matrix's render gate. */
+  hasRecordedDecision: boolean;
+  /**
+   * The bare `audit_log` word (`no_trade`, `budget_exhausted`, …), never
+   * glossed — dashboard-spec.md:135 gives a cell its decision WORD, so this
+   * is what the matrix paints. `null` iff `hasRecordedDecision` is `false`.
+   */
+  decisionWord: string | null;
+  /**
+   * The full prose: `decisionWord` glossed when degraded (#1080), or the
+   * sentence naming why there is no word (not reached, skipped, in
+   * progress, no decision word recorded). The drawer paints this; the
+   * matrix surfaces it as the decision word's `title` rather than as its
+   * visible text, which would overflow the cell (review fix-round-1 F1).
+   */
+  decisionText: string;
   degraded: boolean;
   attempts: number;
   recordedAt: string | null;
   durationMs: number | null;
-  /**
-   * The drawer's full prose for this cell: `decision` when there is one,
-   * otherwise the sentence naming why there isn't (not reached, skipped,
-   * in progress, no decision word recorded). The matrix does not use this —
-   * it paints only `decision`, unchanged from before this module existed —
-   * so this is the one field the review's proposed interface did not name;
-   * without it the drawer's non-degraded empty states could only be
-   * reconstructed by re-deriving `PipelineCellState` from `tone`, which is
-   * exhaustive today only because `state-presentation.ts`'s `CELL_TONE`
-   * happens to be injective, not because anything guarantees it stays so.
-   */
-  decisionText: string;
 }
 
 function resolveAbsentCell(stage: PipelineStage): ResolvedCell {
   return {
     stage,
     present: false,
-    word: 'no cell',
-    tone: 'wait',
-    decision: null,
+    state: { word: 'no cell', tone: 'wait' },
+    hasRecordedDecision: false,
+    decisionWord: null,
+    decisionText: '',
     degraded: false,
     attempts: 0,
     recordedAt: null,
     durationMs: null,
-    decisionText: '',
   };
 }
 
 function resolvePresentCell(cell: PipelineCell, lane: PipelineLane): ResolvedCell {
-  const rawDecision = decisionWordOf(cell);
-  const degraded = isDegradedDecision(rawDecision);
-  const decision = degraded ? `${rawDecision} — ${DEGRADED_DECISIONS[rawDecision]}` : rawDecision;
-  const { word, tone } = presentCell(cell.state, lane.outcome);
+  const decisionWord = decisionWordOf(cell);
+  const degraded = isDegradedDecision(decisionWord);
+  const decisionText =
+    decisionWord === null
+      ? fallbackText(cell)
+      : degraded
+        ? `${decisionWord} — ${DEGRADED_DECISIONS[decisionWord]}`
+        : decisionWord;
   return {
     stage: cell.stage,
     present: true,
-    word,
-    tone,
-    decision,
+    state: presentCell(cell.state, lane.outcome),
+    hasRecordedDecision: decisionWord !== null,
+    decisionWord,
+    decisionText,
     degraded,
     attempts: cell.attempts,
     recordedAt: cell.recorded_at,
     durationMs: cell.duration_ms,
-    decisionText: decision ?? fallbackText(cell),
   };
 }
 
