@@ -18,7 +18,9 @@ import type {
   PipelineCellState,
   PipelineOutcome,
   RiskCriticRow,
+  VerdictRow,
 } from '@contracts';
+import { OUTCOME_WORD } from './vocabulary.ts';
 
 /** The five visual families a state word can wear. Each is also a word. */
 export type StateTone = 'done' | 'live' | 'stop' | 'skip' | 'wait';
@@ -95,6 +97,15 @@ export function presentCriticVerdict(verdict: RiskCriticRow['critic_verdict']): 
   return { word: CRITIC_VERDICT_WORD[verdict], tone: CRITIC_TONE[verdict] };
 }
 
+const VERDICT_STATUS_TONE: Readonly<Record<VerdictRow['status'], StateTone>> = {
+  go: 'done',
+  no_go: 'stop',
+};
+
+export function presentVerdictStatus(status: VerdictRow['status']): Presented {
+  return { word: OUTCOME_WORD[status], tone: VERDICT_STATUS_TONE[status] };
+}
+
 const CLOSE_REASON_WORD: Readonly<Record<CloseReason, string>> = {
   stop: 'stop hit',
   target: 'target hit',
@@ -109,12 +120,15 @@ const CLOSE_REASON_WORD: Readonly<Record<CloseReason, string>> = {
  * the system closing a position for a reason that is neither — the
  * flat-by-close rule most often.
  */
-function closeReasonTone(reason: CloseReason): StateTone {
-  if (reason === 'stop') return 'stop';
-  if (reason === 'target') return 'done';
-  return 'skip';
-}
+const CLOSE_REASON_TONE: Readonly<Record<CloseReason, StateTone>> = {
+  stop: 'stop',
+  target: 'done',
+  exit: 'skip',
+  flatten: 'skip',
+  signal_decay: 'skip',
+  direction_flip: 'skip',
+};
 
 export function presentCloseReason(reason: CloseReason): Presented {
-  return { word: CLOSE_REASON_WORD[reason], tone: closeReasonTone(reason) };
+  return { word: CLOSE_REASON_WORD[reason], tone: CLOSE_REASON_TONE[reason] };
 }

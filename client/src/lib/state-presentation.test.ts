@@ -3,6 +3,7 @@ import type {
   InvalidationConditionStateWire,
   PipelineCellState,
   RiskCriticRow,
+  VerdictRow,
 } from '@contracts';
 import { describe, expect, it } from 'vitest';
 import {
@@ -11,6 +12,7 @@ import {
   presentCloseReason,
   presentCondition,
   presentCriticVerdict,
+  presentVerdictStatus,
 } from './state-presentation.ts';
 
 /**
@@ -90,6 +92,19 @@ describe('presentCriticVerdict', () => {
 
   it('presents a null verdict as "no verdict", waiting like an unevaluable condition', () => {
     expect(presentCriticVerdict(null)).toEqual({ word: 'no verdict', tone: 'wait' });
+  });
+});
+
+describe('presentVerdictStatus', () => {
+  const expectations: Record<VerdictRow['status'], Presented> = {
+    go: { word: 'go', tone: 'done' },
+    no_go: { word: 'no-go', tone: 'stop' },
+  };
+
+  it('pairs word and tone for every verdict status', () => {
+    for (const [status, expected] of Object.entries(expectations)) {
+      expect(presentVerdictStatus(status as VerdictRow['status'])).toEqual(expected);
+    }
   });
 });
 

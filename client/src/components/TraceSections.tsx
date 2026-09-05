@@ -26,7 +26,12 @@ import {
   formatQty,
   formatStageDuration,
 } from '../lib/format.ts';
-import { presentCell, presentCondition, presentCriticVerdict } from '../lib/state-presentation.ts';
+import {
+  presentCell,
+  presentCondition,
+  presentCriticVerdict,
+  presentVerdictStatus,
+} from '../lib/state-presentation.ts';
 import { cellsByStageOf, decisionOf } from '../lib/trace.ts';
 import { stageName } from '../lib/vocabulary.ts';
 import { StanceStrip } from './StanceStrip.tsx';
@@ -132,12 +137,7 @@ export function GatesSection({ riskCritic, verdict, keyedBy }: GatesSectionProps
     <div data-section="gates">
       {verdict !== undefined && (
         <p className="gate-line" data-verdict={verdict.status}>
-          <StateWord
-            state={{
-              word: verdict.status === 'go' ? 'go' : 'no-go',
-              tone: verdict.status === 'go' ? 'done' : 'stop',
-            }}
-          />
+          <StateWord state={presentVerdictStatus(verdict.status)} />
           <span>
             {verdict.reason} · {formatClockUtc(verdict.timestamp)}
             {verdict.hitl_override ? ' · human override' : ''}
