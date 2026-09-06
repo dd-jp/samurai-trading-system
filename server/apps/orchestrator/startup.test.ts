@@ -343,6 +343,44 @@ describe('startFromEnvironment — real construction path', () => {
     }
   });
 
+  /**
+   * #1167 — the startup log line used to read `injected.universe` a second
+   * time rather than the value the scheduler was actually built with. A
+   * universe distinct from both `SMOKE_TEST_UNIVERSE` and `DEFAULT_UNIVERSE`
+   * (neither of which this suite's other cases would distinguish from a
+   * re-derivation) is what makes the two able to disagree if this regresses.
+   */
+  it('the startup log line reports the universe the orchestrator actually holds, not a re-derived one', async () => {
+    process.env.ALPACA_API_KEY = 'test-key';
+    process.env.ALPACA_API_SECRET = 'test-secret';
+    process.env.NOUS_API_KEY = 'test-fake-nous-key';
+    process.env.NOUS_BASE_URL = 'https://nous.test/v1';
+    process.env.SAMURAI_SENTIMENT = 'off';
+
+    const entries: Parameters<Logger['log']>[0][] = [];
+    const logger: Logger = { log: (entry) => entries.push(entry) };
+    const distinctUniverse = [{ asset: 'ISF', asset_class: 'stocks' as const }];
+
+    const orchestrator = await startFromEnvironment({
+      ...STAGE_CONFIGS,
+      universe: distinctUniverse,
+      db: openSharedStore(':memory:'),
+      miArchive: new MiArchiveStore(),
+      gdeltClient: offlineGdeltClient,
+      polymarketClient: offlinePolymarketClient,
+      logger,
+    });
+
+    try {
+      expect(orchestrator.universe).toBe(distinctUniverse);
+
+      const started = entries.find((entry) => entry.message === 'orchestrator started');
+      expect(started?.payload).toMatchObject({ universe: ['ISF'] });
+    } finally {
+      await orchestrator.stop();
+    }
+  });
+
   it('refuses to start on a book holding pre-#686 idempotency keys', async () => {
     process.env.ALPACA_API_KEY = 'test-key';
     process.env.ALPACA_API_SECRET = 'test-secret';

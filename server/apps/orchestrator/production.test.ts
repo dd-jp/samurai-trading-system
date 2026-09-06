@@ -11,6 +11,9 @@
  * validated" bar is a manual E2E run, not a unit test).
  */
 
+import { readdirSync, readFileSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { INDICATOR_UNAVAILABLE_COUNTER } from '../../pipeline/analysts/index.js';
 import { buildArmComparison } from '../../pipeline/control-arm/index.js';
 import {
@@ -525,6 +528,96 @@ describe('SMOKE_TEST_UNIVERSE', () => {
   it('is a narrow, crypto-only universe (ADR-0004 §4)', () => {
     expect(SMOKE_TEST_UNIVERSE).toHaveLength(1);
     expect(SMOKE_TEST_UNIVERSE[0]).toEqual({ asset: 'BTC-USD', asset_class: 'crypto' });
+  });
+});
+
+/**
+ * #1167 — orchestrator-spec.md names the hazard: the routing pool and the
+ * scheduler each ran `config.universe ?? SMOKE_TEST_UNIVERSE` independently
+ * (a third copy lived in index.ts's startup log line), and only stayed
+ * consistent because nothing yet makes the two calls see different config.
+ * `#751` is exactly the change that would let them diverge.
+ *
+ * A value/identity assertion on today's wiring cannot, by itself, tell a
+ * shared resolution apart from two separate calls that happen to read the
+ * same immutable config — both return the identical reference. So the
+ * structural fix (a single non-exported `resolveUniverse` inside
+ * `production.ts`, threaded out through `ProductionComponents.universe` /
+ * `ProductionOrchestrator.universe`) is checked for WIRING below, and
+ * separately, this source scan is what actually satisfies "a second
+ * resolution site cannot be added without a test failing": it fails on the
+ * count, not on any value a duplicated call would produce.
+ */
+describe('universe resolution is a single site (#1167)', () => {
+  // `server/`, not just this directory: `SMOKE_TEST_UNIVERSE` is re-exported
+  // from index.ts, so a consumer outside orchestrator/ could write its own
+  // `?? SMOKE_TEST_UNIVERSE` fallback and a scan scoped to orchestrator/
+  // would never see it.
+  const SERVER_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+  function serverSourceFiles(directory: string): string[] {
+    const found: string[] = [];
+    for (const child of readdirSync(directory, { withFileTypes: true })) {
+      if (child.name === 'node_modules') continue;
+      const path = join(directory, child.name);
+      if (child.isDirectory()) {
+        found.push(...serverSourceFiles(path));
+        continue;
+      }
+      if (child.name.endsWith('.ts') && !child.name.endsWith('.test.ts')) found.push(path);
+    }
+    return found;
+  }
+
+  it('the SMOKE_TEST_UNIVERSE fallback appears exactly once, in production.ts, across all server sources', () => {
+    const matches = serverSourceFiles(SERVER_DIR)
+      .map((path) => ({ path, text: readFileSync(path, 'utf8') }))
+      .filter(({ text }) => /\?\?\s*SMOKE_TEST_UNIVERSE/.test(text));
+
+    // Named, not just counted: a reintroduced duplicate should fail with the
+    // culprit file in the diff, not just "expected 2 to be 1".
+    expect(matches.map(({ path }) => basename(path))).toEqual(['production.ts']);
+
+    const occurrences = matches.reduce(
+      (count, { text }) => count + (text.match(/\?\?\s*SMOKE_TEST_UNIVERSE/g)?.length ?? 0),
+      0,
+    );
+    expect(occurrences).toBe(1);
+  });
+});
+
+describe('universe resolution is shared, not re-derived (#1167)', () => {
+  let db: SqliteHandle;
+
+  const EXPLICIT_UNIVERSE: readonly UniverseInstrument[] = [
+    { asset: 'ISF', asset_class: 'stocks' },
+  ];
+
+  beforeEach(() => {
+    db = openSharedStore(':memory:');
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it('buildProductionComponents resolves the configured universe once and exposes THAT instance', () => {
+    const overridden = buildProductionComponents(stubConfig(db, { universe: EXPLICIT_UNIVERSE }));
+    expect(overridden.universe).toBe(EXPLICIT_UNIVERSE);
+
+    const defaulted = buildProductionComponents(stubConfig(db));
+    expect(defaulted.universe).toBe(SMOKE_TEST_UNIVERSE);
+  });
+
+  it("buildProductionOrchestrator's scheduler runs on, and exposes, the SAME resolution — not a second one", () => {
+    const orchestrator = buildProductionOrchestrator(
+      stubConfig(db, { universe: EXPLICIT_UNIVERSE, tradingCalendar: new AlwaysOpenCalendar() }),
+    );
+
+    expect(orchestrator.universe).toBe(EXPLICIT_UNIVERSE);
+    expect(orchestrator.scheduler.nextTick(new SimulatedClock(START)).instruments).toEqual(
+      EXPLICIT_UNIVERSE,
+    );
   });
 });
 

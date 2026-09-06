@@ -424,6 +424,14 @@ export interface ProductionOrchestrator {
    */
   marketIntelligence: MarketIntelligenceStore;
   /**
+   * `ProductionComponents.universe`'s value (#1167), exposed so
+   * `startFromEnvironment`'s startup log line reports the universe this
+   * orchestrator's scheduler is actually iterating, rather than re-deriving
+   * its own answer from `config.universe` — the third of the independent
+   * resolutions orchestrator-spec.md flags.
+   */
+  universe: readonly UniverseInstrument[];
+  /**
    * Runs the orphan scan once, then starts the heartbeat interval and the
    * tick loop. Resolves once startup is done — the loop keeps running after.
    */
@@ -586,6 +594,15 @@ export interface ProductionComponents {
    * write racing a closing store.
    */
   marketIntelligenceRefresh: MiRefreshQueue | undefined;
+  /**
+   * `resolveUniverse`'s output (#1167) — the same instance this function's
+   * own `AssetClassRoutingDataSource`/tick-step wiring closed over above.
+   * Exposed so `buildProductionOrchestrator`'s scheduler, and
+   * `startFromEnvironment`'s startup log line, bind to THIS resolution rather
+   * than each re-deriving `config.universe` with its own fallback — the
+   * multiple-independent-resolutions hazard orchestrator-spec.md names.
+   */
+  universe: readonly UniverseInstrument[];
 }
 
 /**
@@ -793,6 +810,19 @@ function pruneMiArchiveWithLog(
   }
 }
 
+/**
+ * The one place `ProductionConfig.universe`'s default is applied (#1167) —
+ * not exported, so nothing outside `buildProductionComponents` can read the
+ * config field and re-derive its own answer. Every other consumer in this
+ * file, and `startFromEnvironment` in index.ts, takes the value this returns
+ * off `ProductionComponents`/`ProductionOrchestrator` instead of calling this
+ * again, which is what keeps the routing pool, the scheduler and the startup
+ * log line unable to disagree about what the universe is.
+ */
+function resolveUniverse(config: ProductionConfig): readonly UniverseInstrument[] {
+  return config.universe ?? SMOKE_TEST_UNIVERSE;
+}
+
 export function buildProductionComponents(config: ProductionConfig): ProductionComponents {
   const clock = config.clock;
 
@@ -887,7 +917,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     );
   }
 
-  const universe = config.universe ?? SMOKE_TEST_UNIVERSE;
+  const universe = resolveUniverse(config);
 
   // Sixth of the same boot-time-refusal family (#989, follow-up to #987's
   // review of PR #988) — full mechanism (why a calendar mismatch, not
@@ -2236,6 +2266,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     marketIntelligence,
     marketIntelligenceCoverage: miCoverageMonitor,
     marketIntelligenceRefresh,
+    universe,
   };
 }
 
@@ -2792,7 +2823,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
   // `sessionEnd` rather than merely gated beside it.
   const equityCalendar = equityCalendarFor(config);
   const scheduler = new UniverseScheduler({
-    universe: config.universe ?? SMOKE_TEST_UNIVERSE,
+    universe: components.universe,
     calendar: equityCalendar,
     // Passed through rather than defaulted here (#706). The composition root
     // is where a run's policy is chosen; a default in this line would apply
@@ -3522,6 +3553,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     marketIntelligenceCoverage: components.marketIntelligenceCoverage,
     marketIntelligence: components.marketIntelligence,
     marketIntelligenceRefresh: components.marketIntelligenceRefresh,
+    universe: components.universe,
 
     async start(): Promise<OrphanGoVerdict[]> {
       const orphans = await persistence.orphanScanner.scan(

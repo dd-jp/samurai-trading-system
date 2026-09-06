@@ -32,6 +32,8 @@ The map's body was written 2026-08-05 and four of its factual claims no longer h
 
 3. **`config.universe` is resolved at two composition sites now, not three, and the default is `SMOKE_TEST_UNIVERSE`.** The map cites `production.ts:1126`, `:1259`, `:1453` plus a `tradingCalendar` re-resolution bug. The current shape is two independent `config.universe ?? SMOKE_TEST_UNIVERSE` resolutions — one where the market-data source and routing map are built, one where `UniverseScheduler` is constructed — each pairing with its own `config.tradingCalendar ?? new UsEquityRegularHoursCalendar()`. The duplication is milder than the map describes but the hazard is identical and is what makes the provider a single-construction requirement below.
 
+   **Amended 2026-09-06 ([#1167](https://github.com/dd-jp/samurai-trading-system/issues/1167)) — the `config.universe` half of this is now one resolution, not two** (a third, in `index.ts`'s startup log line, had also accreted since this paragraph was written). `production.ts` now resolves it once, in a single non-exported `resolveUniverse`, and threads the result out through `ProductionComponents.universe`/`ProductionOrchestrator.universe` to every consumer. The `config.tradingCalendar` fallback this paragraph pairs it with is untouched — that duplication, if it still exists, is a separate ticket.
+
 4. **`atr` is not an exported symbol.** The map and [#398](../../issues/398) both cite `indicators.ts:75` as if `atr` were importable. It is a module-private function; the public surface is `computeIndicator(bars, spec)` and `minimumBarsFor(spec)`, with `'atr'` as one indicator kind. This is a real decision for the implementation ticket, not a typo — see "Axis computation".
 
 One further map claim is stale in a way that only affects an open question: the map says "none of the three existing alert transports covers" a stale watchlist. `ALERTS_MODES` is `['telegram', 'log-only']` — **two** modes, not three transports. The gap the map names is real; its count is not.
@@ -280,7 +282,7 @@ Three consequences the implementation ticket must carry rather than discover:
 
 ### One universe, resolved once
 
-`config.universe ?? SMOKE_TEST_UNIVERSE` is currently resolved independently at two composition sites — where the market-data source and routing map are built, and where `UniverseScheduler` is constructed — each with its own `config.tradingCalendar` fallback. Introducing a provider on top of that duplication would let the routing map and the tick plan disagree about what the universe is.
+`config.universe ?? SMOKE_TEST_UNIVERSE` was, until [#1167](https://github.com/dd-jp/samurai-trading-system/issues/1167), resolved independently at two composition sites — where the market-data source and routing map are built, and where `UniverseScheduler` is constructed — each with its own `config.tradingCalendar` fallback. `production.ts` now resolves the `universe` half once and shares it; a provider built on top of that still must not reopen the duplication by resolving its own view of the pool separately from what `production.ts` hands it.
 
 **The provider is constructed once and shared**, and the calendar with it. This is the same class of defect the routing source's throw exists to catch, moved one level up.
 
