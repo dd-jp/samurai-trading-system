@@ -58,7 +58,7 @@ import {
   proxySignal,
   proxyWarmupBars,
 } from './proxy-strategy.js';
-import type { CostModel, MarketState, ReplayTimeline } from './types.js';
+import type { CostModel, CostVenue, MarketState, ReplayTimeline } from './types.js';
 import { assertSurvivorshipFree, type DateRange, type InstrumentRegistry } from './universe.js';
 
 /** The audited source of historical bars — `Stage2HistoricalStore` (#241) in production. */
@@ -71,6 +71,8 @@ export interface ReplayBarSource {
 export interface ReplayInstrument {
   symbol: string;
   asset_class: 'crypto' | 'stocks';
+  /** Layers `CostConfig.venues[venue]` over the asset-class set (#1032 item 2). */
+  venue?: CostVenue;
 }
 
 export interface ReplayDriverDeps {
@@ -741,6 +743,7 @@ export class ReplayDriver {
       // volatility was measured on.
       volatility: computeIndicator(bars.slice(-atrSpec.lookback) as Bar[], atrSpec),
       asset_class: instrument.asset_class,
+      ...(instrument.venue === undefined ? {} : { venue: instrument.venue }),
       timestamp: this.deps.clock.now(),
     };
   }

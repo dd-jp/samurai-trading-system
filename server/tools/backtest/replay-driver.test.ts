@@ -250,6 +250,29 @@ describe('ReplayDriver.run', () => {
     expect(trade.entry).not.toBe(trade.stop);
   });
 
+  // #1032 item 2: an intraday replay of the LSE-ETP universe prices at Saxo,
+  // so the instrument's venue must reach `CostModel.fill`'s `MarketState`.
+  it('stamps MarketState.venue from the replayed instrument', async () => {
+    const bars = buildWarmedBars(REVERSAL_CLOSES);
+    const { deps, costModel } = makeDeps(bars, {
+      universe: [{ symbol: INSTRUMENT, asset_class: 'stocks', venue: 'saxo' }],
+    });
+
+    await new ReplayDriver(deps).run(CONFIG, windowOf(bars));
+
+    expect(costModel.requests.length).toBeGreaterThan(0);
+    expect(costModel.requests.every((call) => call.marketState.venue === 'saxo')).toBe(true);
+  });
+
+  it('leaves MarketState.venue unset when the instrument names none', async () => {
+    const bars = buildWarmedBars(REVERSAL_CLOSES);
+    const { deps, costModel } = makeDeps(bars);
+
+    await new ReplayDriver(deps).run(CONFIG, windowOf(bars));
+
+    expect(costModel.requests.every((call) => !('venue' in call.marketState))).toBe(true);
+  });
+
   it('closes the lot with the side opposite the entry (an exit is never favorable)', async () => {
     const bars = buildWarmedBars(REVERSAL_CLOSES);
     const { deps, costModel } = makeDeps(bars);

@@ -93,13 +93,23 @@
  *    seeded from the same leaderboard inherits them identically. The six are
  *    the pool's largest, most heavily traded US underlyings on ordinary
  *    market knowledge, which is a hand-declaration and is labelled as one.
- * 5. **Liquidity is NOT verified.** The field the gate reads is
+ * 5. **Listing is verified; liquidity is NOT.** The field the gate reads is
  *    `saxo_tradeable`, not `t212_isa` — `t212_isa` names a venue Samurai is
  *    barred from (#896/#912) and answers a different, no-longer-live
- *    question. `saxo_tradeable` is `'unverified'` on all 30 rows: no Saxo
- *    instrument list has been captured (#1032 item 3), and no spread or
- *    volume measurement exists until #1035 → #1053 land. This subset is
- *    therefore declared pending both, not screened against either.
+ *    question. Every fallback row is Saxo-verified `true` (#1032 item 3);
+ *    no spread or volume measurement exists until #1035 → #1053 land, so
+ *    this subset is declared pending that, not screened against it.
+ *
+ * **Re-selected 2026-09-05 by #1032 item 3.** The Saxo capture found no line
+ * at all for 3SPY, 3AMZ and (under its own ticker) 3LME/3FB — four of the
+ * six rows the 2026-09-03 subset named — and `assertValidFallbackSubset`'s
+ * rule 5 refuses a fallback row Saxo is verified not to list. Rule 3's
+ * "prefer the GBP line" (3SPY over 3USL) therefore yields to the line Saxo
+ * actually carries: 3USL for SPY. The six are now 3USL, LQQ3, NVD3, 3LTS,
+ * 3LPA and 3LAL — SPY, QQQ, NVDA, TSLA, PLTR, GOOGL — still one line per
+ * underlying, still measured envelopes only, still the pool's largest US
+ * names on ordinary market knowledge. Alphabet replaces Amazon and Meta,
+ * neither of whose lines Saxo lists under the pool's tickers.
  *
  * ## Saxo venue change — what changed here and what did not
  *
@@ -115,20 +125,40 @@
  * ticker", not "does Saxo" — those are different, unverified claims, and
  * mechanically relabelling the field would assert a Saxo fact this pool has
  * never checked. #946's own scope excluded building a Saxo `BrokerAdapter`
- * or doing Saxo outreach, so no such check happened here. **The parallel
+ * or doing Saxo outreach, so no such check happened there. **The parallel
  * field this pool tracks for Saxo is `saxo_tradeable`** (see
- * `LseEtpPoolRow`), `'unverified'` on every row below because no Saxo
- * instrument list has been captured anywhere in this repo yet (#1032 item
- * 3). A future evidence pass fills real `true`/`false` values in row by row
- * once one is captured — that pass does not need a `BrokerAdapter` to exist
- * first, only the list itself; the adapter is a precondition for trading
- * what the pass verifies, not for verifying it. **A partial pass that fills
- * only `true` values, with no `false` anywhere, will not load**:
- * `gateAdmits` then admits every row (verified `true` and still-`'unverified'`
- * alike), which `liquidityGateStatus` reports as `'vacuous'` and
- * `assertValidPool` refuses — so the evidence pass has to land at least one
- * verified `false`, or fill every row, in the same change that adds any
- * `true`.
+ * `LseEtpPoolRow`), filled on every row by #1032 item 3 from Saxo's own
+ * `GET /ref/v1/instruments` on 2026-09-05 — see `SaxoInstrumentEvidence`
+ * and each row's `provenance.saxo`.
+ *
+ * ## Saxo evidence pass (2026-09-05, #1032 item 3)
+ *
+ * Every row was searched twice on the SIM gateway
+ * (`gateway.saxobank.com/sim/openapi/ref/v1/instruments`,
+ * `AssetTypes=Etf,Etc,Etn`): once by its `<lse_ticker>:xlon` symbol and
+ * once by its ISIN. The result is three honest buckets, recorded per row:
+ *
+ * - **13 rows: own line listed** — `saxo_tradeable: true`, `line` carries
+ *   Saxo's Uic/AssetType/ExchangeId/Currency. Every one is `AssetType: Etn`
+ *   on `ExchangeId: LSE_ETF`. Four also have a sibling currency line
+ *   (3USL/3LUS, LQQ3/QQQ3, NVD3/3NVD, LCO3/3LCO).
+ * - **7 rows: ISIN resolves only to a SIBLING ticker** — `false`, with the
+ *   sibling recorded (3LME→3LMS, LAM3→3LAM, LPP3→3LPP, 3LNP→3LNF,
+ *   LAA3→3LAA, 3LIP→3LNI, 3FB→FB3). The product exists on Saxo; the line
+ *   this pool names does not. A future ticket may re-key those rows to the
+ *   sibling deliberately; this pass records rather than swaps.
+ * - **10 rows: nothing under ticker or ISIN** — `false`, no sibling. A
+ *   broader keyword sweep found only other issuers' lines for the same
+ *   underlyings (e.g. GraniteShares 3LAP for Apple, 3LZN for Amazon), which
+ *   are different products and are not adopted here.
+ *
+ * What the pass does NOT establish: that any `true` line is tradeable in a
+ * live GIA (the capture is SIM, with market data not entitled — see
+ * `SaxoInstrumentEvidence.gateway`), or anything about spread, volume, or
+ * tick size beyond `IsTradable: true` observed on one details call (3USL).
+ * `MarketDataViaOpenApiTermsAccepted` was `false` on the probing account,
+ * and `/trade/v1/infoprices` returned `NoAccess` for every instrument, so no
+ * quote evidence was collectable.
  *
  * ## Provenance
  *
@@ -308,13 +338,55 @@ export type EtpDirection = 'long' | 'short';
 /**
  * Tri-state Saxo tradeability. `true`/`false` are a verified claim, sourced
  * from Saxo's own instrument list — nothing in this repo may set either
- * without that source (#1032 item 3). `'unverified'` is not a placeholder
+ * without that source (#1032 item 3), and every checked-in row now carries
+ * that source in `RowProvenance.saxo`. `'unverified'` is not a placeholder
  * default; it is the explicit, recorded statement that no such list has been
- * captured yet, so there is nothing to source a boolean from. See
+ * captured for the row, so there is nothing to source a boolean from. See
  * `LseEtpPoolRow.saxo_tradeable` and `liquidityGateStatus` for how a caller
  * must read this.
  */
 export type SaxoTradeability = true | false | 'unverified';
+
+/**
+ * One LSE line as Saxo's `GET /ref/v1/instruments` returns it. `symbol` is
+ * Saxo's `TICKER:xlon` form; `uic` is what an order is placed against
+ * (`SaxoBrokerAdapter` resolves `lse_ticker -> {uic, asset_type}` through
+ * this). `exchange_id` is `LSE_ETF` on every LSE ETP line — filtering the
+ * endpoint on `ExchangeId=LSE` returns NOTHING for these, which is why the
+ * capture keyed on symbol/ISIN and recorded the exchange it found instead.
+ */
+export interface SaxoInstrumentLine {
+  readonly symbol: string;
+  readonly uic: number;
+  readonly asset_type: 'Etn' | 'Etf' | 'Etc';
+  readonly exchange_id: 'LSE_ETF';
+  /** Saxo reports GBX-quoted lines as `GBP`. */
+  readonly currency: string;
+}
+
+/**
+ * The row's Saxo evidence (#1032 item 3): what `GET /ref/v1/instruments`
+ * (`Keywords=<ticker|ISIN>&AssetTypes=Etf,Etc,Etn`) returned on the SIM
+ * gateway on `verified_on`, searched by the row's own ticker AND its ISIN.
+ *
+ * `line` is the row's OWN ticker line — `saxo_tradeable` is `true` iff it is
+ * non-null. `sibling_line` is a DIFFERENT LSE ticker Saxo lists under the
+ * same ISIN (the other currency line of the same product); it is recorded so
+ * a future row can adopt it deliberately, and is never what the row trades —
+ * `lse_ticker` is the identity every route binds on, and silently swapping
+ * it for a sibling would trade a line nothing else in this pool describes.
+ *
+ * `gateway: 'sim'` is a real caveat: the live instrument universe was not
+ * queried (no live token is provisioned), and Saxo does not promise the two
+ * are identical. Re-verify against `gateway.saxobank.com/openapi` before the
+ * live ramp.
+ */
+export interface SaxoInstrumentEvidence {
+  readonly verified_on: string;
+  readonly gateway: 'sim';
+  readonly line: SaxoInstrumentLine | null;
+  readonly sibling_line?: SaxoInstrumentLine;
+}
 
 /**
  * Per-row citation. Not decoration: #749's acceptance criteria require
@@ -334,6 +406,8 @@ export interface RowProvenance {
   readonly t212_source_url: string;
   /** ISO date this row was compiled/verified. */
   readonly verified_on: string;
+  /** What Saxo's own instrument list says about this row — the source of `saxo_tradeable`. */
+  readonly saxo: SaxoInstrumentEvidence;
   /** Anything uncertain about this specific row that a reader must not silently trust. */
   readonly notes?: string;
 }
@@ -390,20 +464,20 @@ export interface LseEtpPoolRow {
    * no-longer-live question (does Trading 212 list it) and must never be
    * read as this one.
    *
-   * `'unverified'` on every row as of #1054 Part 1: no Saxo instrument list
-   * has been captured anywhere in this repo (#1032 item 3), so there is
-   * nothing to source a `true`/`false` value from, and inventing one would
-   * assert a Saxo fact nobody checked — the same mistake `t212_isa` was
-   * built to avoid making about T212. `'unverified'` is not a quiet
-   * placeholder for `true`; it is the explicit, recorded statement that the
-   * liquidity gate is UNARMED. A caller must read it through
-   * `liquidityGateStatus`, which treats a pool-wide constant `'unverified'`
-   * as pass-through (armed: false) rather than as an exclusion — and
-   * `assertValidPool` refuses a pool where this field is instead constant
-   * `true` or `false`, because a gate that excludes nothing (or everything)
-   * on every row is a bug, not a legitimate configuration. A future
-   * evidence pass fills real values in row by row once a Saxo instrument
-   * list exists.
+   * Sourced on every row from `provenance.saxo` (#1032 item 3, 2026-09-05,
+   * SIM gateway): `true` iff Saxo lists the row's OWN `<lse_ticker>:xlon`
+   * line on `LSE_ETF`. `false` covers two honest cases the evidence block
+   * distinguishes — Saxo lists a sibling line under the same ISIN but not
+   * this ticker (7 rows), or lists nothing for the ISIN at all (10 rows).
+   * Neither is a tradeability claim about the underlying product; both are a
+   * claim about THIS line, which is the one every route binds on.
+   *
+   * `'unverified'` was every row's value before that pass and remains the
+   * only value a new row may carry until its own capture lands — it is not
+   * a quiet placeholder for `true`. Read through `liquidityGateStatus`:
+   * `assertValidPool` refuses a pool where `gateAdmits` is constant across
+   * verified rows, because a gate that excludes nothing (or everything) on
+   * every row is a bug, not a legitimate configuration.
    */
   readonly saxo_tradeable: SaxoTradeability;
   /**
@@ -519,14 +593,32 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'USD',
     t212_isa: true,
-    saxo_tradeable: 'unverified',
-    fallback_default: false,
+    saxo_tradeable: true,
+    fallback_default: true,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'IE00B7Y34M31',
       issuer: 'WisdomTree',
       source_url: 'https://www.justetf.com/en/etf-profile.html?isin=IE00B7Y34M31',
       t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3USL.GB',
+      saxo: {
+        verified_on: '2026-09-05',
+        gateway: 'sim',
+        line: {
+          symbol: '3USL:xlon',
+          uic: 3347273,
+          asset_type: 'Etn',
+          exchange_id: 'LSE_ETF',
+          currency: 'USD',
+        },
+        sibling_line: {
+          symbol: '3LUS:xlon',
+          uic: 29049628,
+          asset_type: 'Etn',
+          exchange_id: 'LSE_ETF',
+          currency: 'GBP',
+        },
+      },
       verified_on: '2026-08-17',
       notes:
         "WisdomTree S&P 500 3x Daily Leveraged. Same product family ADR-0016's 0.18% round-trip " +
@@ -544,7 +636,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'GBX',
     t212_isa: true,
-    saxo_tradeable: 'unverified',
+    saxo_tradeable: true,
     fallback_default: true,
     subclass_envelope_measured: true,
     provenance: {
@@ -552,6 +644,24 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
       issuer: 'WisdomTree',
       source_url: 'https://www.justetf.com/en/etf-profile.html?isin=IE00BLRPRL42',
       t212_source_url: 'https://www.trading212.com/trading-instruments/invest/LQQ3.GB',
+      saxo: {
+        verified_on: '2026-09-05',
+        gateway: 'sim',
+        line: {
+          symbol: 'LQQ3:xlon',
+          uic: 29391797,
+          asset_type: 'Etn',
+          exchange_id: 'LSE_ETF',
+          currency: 'GBP',
+        },
+        sibling_line: {
+          symbol: 'QQQ3:xlon',
+          uic: 19640660,
+          asset_type: 'Etn',
+          exchange_id: 'LSE_ETF',
+          currency: 'USD',
+        },
+      },
       verified_on: '2026-08-17',
       notes:
         'WisdomTree NASDAQ 100 3x Daily Leveraged, GBX (pence sterling) line. justETF also lists a ' +
@@ -568,14 +678,19 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'GBX',
     t212_isa: true,
-    saxo_tradeable: 'unverified',
-    fallback_default: true,
+    saxo_tradeable: false,
+    fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2472197149',
       issuer: 'Leverage Shares',
       source_url: 'https://www.cnbc.com/quotes/3SPY-GB',
       t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3SPY.GB',
+      saxo: {
+        verified_on: '2026-09-05',
+        gateway: 'sim',
+        line: null,
+      },
       verified_on: '2026-08-17',
       notes:
         'Leverage Shares 3x Long US 500 ETP Securities, quoted in GBX (pence) on the LSE per ' +
@@ -592,14 +707,25 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
-    saxo_tradeable: 'unverified',
-    fallback_default: false,
+    saxo_tradeable: true,
+    fallback_default: true,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2656472193',
       issuer: 'GraniteShares',
       source_url: 'https://www.justetf.com/en/etf-profile.html?isin=XS2656472193',
       t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3LTS.GB',
+      saxo: {
+        verified_on: '2026-09-05',
+        gateway: 'sim',
+        line: {
+          symbol: '3LTS:xlon',
+          uic: 31110397,
+          asset_type: 'Etn',
+          exchange_id: 'LSE_ETF',
+          currency: 'USD',
+        },
+      },
       verified_on: '2026-08-17',
       notes:
         'GraniteShares 3x Long Tesla Daily ETP. justETF lists this ISIN under three LSE lines ' +
@@ -616,7 +742,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
-    saxo_tradeable: 'unverified',
+    saxo_tradeable: true,
     fallback_default: true,
     subclass_envelope_measured: true,
     provenance: {
@@ -624,6 +750,24 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
       issuer: 'Leverage Shares',
       source_url: 'https://www.cnbc.com/quotes/NVD3-GB',
       t212_source_url: 'https://www.trading212.com/trading-instruments/invest/NVD3.GB',
+      saxo: {
+        verified_on: '2026-09-05',
+        gateway: 'sim',
+        line: {
+          symbol: 'NVD3:xlon',
+          uic: 36215230,
+          asset_type: 'Etn',
+          exchange_id: 'LSE_ETF',
+          currency: 'USD',
+        },
+        sibling_line: {
+          symbol: '3NVD:xlon',
+          uic: 48409301,
+          asset_type: 'Etn',
+          exchange_id: 'LSE_ETF',
+          currency: 'GBP',
+        },
+      },
       verified_on: '2026-08-17',
       notes:
         'Leverage Shares 3x NVIDIA ETP Securities. The LSE also carries a 3NVD line for the same ' +
@@ -642,7 +786,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBP',
     t212_isa: true,
-    saxo_tradeable: 'unverified',
+    saxo_tradeable: false,
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -650,6 +794,11 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
       issuer: 'Leverage Shares',
       source_url: 'https://www.justetf.com/en/etf-profile.html?isin=IE00BK5BZS07',
       t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3AAP.GB',
+      saxo: {
+        verified_on: '2026-09-05',
+        gateway: 'sim',
+        line: null,
+      },
       verified_on: '2026-08-17',
       notes:
         'Leverage Shares 3x Apple ETP Securities, GBP line (distinct from the AAP3 USD line on the ' +
@@ -665,7 +814,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
-    saxo_tradeable: 'unverified',
+    saxo_tradeable: true,
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -673,6 +822,17 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
       issuer: 'GraniteShares',
       source_url: 'https://www.justetf.com/en/etf-profile.html?isin=XS2734938835',
       t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3LNV.GB',
+      saxo: {
+        verified_on: '2026-09-05',
+        gateway: 'sim',
+        line: {
+          symbol: '3LNV:xlon',
+          uic: 32903440,
+          asset_type: 'Etn',
+          exchange_id: 'LSE_ETF',
+          currency: 'USD',
+        },
+      },
       verified_on: '2026-08-17',
       notes:
         'GraniteShares 3x Long NVIDIA Daily ETP. A second, separately-issued NVIDIA 3x product from ' +
@@ -690,7 +850,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'USD',
     t212_isa: true,
-    saxo_tradeable: 'unverified',
+    saxo_tradeable: false,
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -698,6 +858,11 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
       issuer: 'Leverage Shares',
       source_url: 'https://www.marketscreener.com/quote/etf/LEVERAGE-SHARES-3X-LONG-U-143798640/',
       t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3QQQ.GB',
+      saxo: {
+        verified_on: '2026-09-05',
+        gateway: 'sim',
+        line: null,
+      },
       verified_on: '2026-08-17',
       notes:
         'Leverage Shares 3x Long US Tech 100 ETP Securities, USD line — a second Nasdaq 100 3x ' +
@@ -713,7 +878,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
-    saxo_tradeable: 'unverified',
+    saxo_tradeable: true,
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -721,6 +886,17 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
       issuer: 'Leverage Shares',
       source_url: 'https://www.justetf.com/en/etf-profile.html?isin=XS2901882618',
       t212_source_url: 'https://www.trading212.com/trading-instruments/invest/MST3.GB',
+      saxo: {
+        verified_on: '2026-09-05',
+        gateway: 'sim',
+        line: {
+          symbol: 'MST3:xlon',
+          uic: 45829218,
+          asset_type: 'Etn',
+          exchange_id: 'LSE_ETF',
+          currency: 'USD',
+        },
+      },
       verified_on: '2026-08-17',
       notes:
         'Leverage Shares 3x Long MicroStrategy (MSTR) ETP, USD line. justETF also lists a GBX line ' +
@@ -739,14 +915,25 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
-    saxo_tradeable: 'unverified',
-    fallback_default: false,
+    saxo_tradeable: true,
+    fallback_default: true,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2856105833',
       issuer: 'GraniteShares',
       source_url: 'https://www.marketscreener.com/quote/etf/GRANITESHARES-3X-LONG-PAL-130089189/',
       t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3LPA.GB',
+      saxo: {
+        verified_on: '2026-09-05',
+        gateway: 'sim',
+        line: {
+          symbol: '3LPA:xlon',
+          uic: 41867775,
+          asset_type: 'Etn',
+          exchange_id: 'LSE_ETF',
+          currency: 'USD',
+        },
+      },
       verified_on: '2026-08-17',
       notes:
         'GraniteShares 3x Long Palantir Daily ETP Securities, USD base currency per MarketScreener. ' +
@@ -763,7 +950,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
-    saxo_tradeable: 'unverified',
+    saxo_tradeable: true,
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -771,6 +958,17 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
       issuer: 'Leverage Shares',
       source_url: 'https://www.justetf.com/en/etf-profile.html?isin=XS2663694680',
       t212_source_url: 'https://www.trading212.com/trading-instruments/invest/PLT3.GB',
+      saxo: {
+        verified_on: '2026-09-05',
+        gateway: 'sim',
+        line: {
+          symbol: 'PLT3:xlon',
+          uic: 36655087,
+          asset_type: 'Etn',
+          exchange_id: 'LSE_ETF',
+          currency: 'USD',
+        },
+      },
       verified_on: '2026-08-17',
       notes:
         "Leverage Shares 3x Palantir ETP Securities, USD line. justETF's LSE table lists three lines " +
@@ -797,14 +995,26 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'EUR',
     t212_isa: true,
-    saxo_tradeable: 'unverified',
-    fallback_default: true,
+    saxo_tradeable: false,
+    fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2662640627',
       issuer: 'GraniteShares',
       source_url: 'https://www.ajbell.co.uk/market-research/LSE:3LME',
       t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3LME.GB',
+      saxo: {
+        verified_on: '2026-09-05',
+        gateway: 'sim',
+        line: null,
+        sibling_line: {
+          symbol: '3LMS:xlon',
+          uic: 41867361,
+          asset_type: 'Etn',
+          exchange_id: 'LSE_ETF',
+          currency: 'USD',
+        },
+      },
       verified_on: '2026-08-19',
       notes:
         'GraniteShares 3x Long Microsoft Daily ETP. **This row is the EUR line**, not a sterling one: ' +
@@ -823,7 +1033,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
-    saxo_tradeable: 'unverified',
+    saxo_tradeable: false,
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -831,6 +1041,18 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
       issuer: 'GraniteShares',
       source_url: 'https://www.ajbell.co.uk/market-research/LSE:LAM3',
       t212_source_url: 'https://www.trading212.com/trading-instruments/invest/LAM3.GB',
+      saxo: {
+        verified_on: '2026-09-05',
+        gateway: 'sim',
+        line: null,
+        sibling_line: {
+          symbol: '3LAM:xlon',
+          uic: 41867782,
+          asset_type: 'Etn',
+          exchange_id: 'LSE_ETF',
+          currency: 'USD',
+        },
+      },
       verified_on: '2026-08-19',
       notes:
         'GraniteShares 3x Long AMD Daily ETP, sterling line. AJ Bell quotes LSE:LAM3 in pence, so the ' +
@@ -848,14 +1070,25 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
-    saxo_tradeable: 'unverified',
-    fallback_default: false,
+    saxo_tradeable: true,
+    fallback_default: true,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2675292309',
       issuer: 'GraniteShares',
       source_url: 'https://www.ajbell.co.uk/market-research/LSE:3LAL',
       t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3LAL.GB',
+      saxo: {
+        verified_on: '2026-09-05',
+        gateway: 'sim',
+        line: {
+          symbol: '3LAL:xlon',
+          uic: 41829246,
+          asset_type: 'Etn',
+          exchange_id: 'LSE_ETF',
+          currency: 'USD',
+        },
+      },
       verified_on: '2026-08-19',
       notes:
         'GraniteShares 3x Long Alphabet Daily ETP, USD line (issuer fact summary: "3LAL (USD) / 3LGE ' +
@@ -875,7 +1108,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
-    saxo_tradeable: 'unverified',
+    saxo_tradeable: false,
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -883,6 +1116,18 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
       issuer: 'GraniteShares',
       source_url: 'https://www.ajbell.co.uk/market-research/LSE:LPP3',
       t212_source_url: 'https://www.trading212.com/trading-instruments/invest/LPP3.GB',
+      saxo: {
+        verified_on: '2026-09-05',
+        gateway: 'sim',
+        line: null,
+        sibling_line: {
+          symbol: '3LPP:xlon',
+          uic: 41867864,
+          asset_type: 'Etn',
+          exchange_id: 'LSE_ETF',
+          currency: 'USD',
+        },
+      },
       verified_on: '2026-08-19',
       notes:
         'GraniteShares 3x Long PayPal Daily ETP, sterling line, quoted in pence per AJ Bell. T212 lists ' +
@@ -899,7 +1144,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
-    saxo_tradeable: 'unverified',
+    saxo_tradeable: false,
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -907,6 +1152,18 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
       issuer: 'GraniteShares',
       source_url: 'https://www.ajbell.co.uk/market-research/LSE:3LNP',
       t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3LNP.GB',
+      saxo: {
+        verified_on: '2026-09-05',
+        gateway: 'sim',
+        line: null,
+        sibling_line: {
+          symbol: '3LNF:xlon',
+          uic: 31123656,
+          asset_type: 'Etn',
+          exchange_id: 'LSE_ETF',
+          currency: 'USD',
+        },
+      },
       verified_on: '2026-08-19',
       notes:
         'GraniteShares 3x Long Netflix Daily ETP, GBX line (issuer fact summary: "3LNE (EUR) / 3LNF ' +
@@ -924,7 +1181,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
-    saxo_tradeable: 'unverified',
+    saxo_tradeable: true,
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -932,6 +1189,24 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
       issuer: 'GraniteShares',
       source_url: 'https://www.ajbell.co.uk/market-research/LSE:LCO3',
       t212_source_url: 'https://www.trading212.com/trading-instruments/invest/LCO3.GB',
+      saxo: {
+        verified_on: '2026-09-05',
+        gateway: 'sim',
+        line: {
+          symbol: 'LCO3:xlon',
+          uic: 42347700,
+          asset_type: 'Etn',
+          exchange_id: 'LSE_ETF',
+          currency: 'GBP',
+        },
+        sibling_line: {
+          symbol: '3LCO:xlon',
+          uic: 40906631,
+          asset_type: 'Etn',
+          exchange_id: 'LSE_ETF',
+          currency: 'USD',
+        },
+      },
       verified_on: '2026-08-19',
       notes:
         'GraniteShares 3x Long Coinbase Daily ETP, sterling line quoted in pence. Two independently ' +
@@ -950,7 +1225,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
-    saxo_tradeable: 'unverified',
+    saxo_tradeable: false,
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -958,6 +1233,18 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
       issuer: 'GraniteShares',
       source_url: 'https://www.justetf.com/en/etf-profile.html?isin=XS2842095320',
       t212_source_url: 'https://www.trading212.com/trading-instruments/invest/LAA3.GB',
+      saxo: {
+        verified_on: '2026-09-05',
+        gateway: 'sim',
+        line: null,
+        sibling_line: {
+          symbol: '3LAA:xlon',
+          uic: 41829249,
+          asset_type: 'Etn',
+          exchange_id: 'LSE_ETF',
+          currency: 'USD',
+        },
+      },
       verified_on: '2026-08-19',
       notes:
         'GraniteShares 3x Long Alibaba Daily ETP. The fetched justETF profile for this ISIN lists ' +
@@ -976,7 +1263,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
-    saxo_tradeable: 'unverified',
+    saxo_tradeable: false,
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -984,6 +1271,11 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
       issuer: 'GraniteShares',
       source_url: 'https://www.ajbell.co.uk/market-research/LSE:3LMO',
       t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3LMO.GB',
+      saxo: {
+        verified_on: '2026-09-05',
+        gateway: 'sim',
+        line: null,
+      },
       verified_on: '2026-08-19',
       notes:
         'GraniteShares 3x Long Moderna Daily ETP, USD line (AJ Bell quotes LSE:3LMO in dollars). The ' +
@@ -1001,7 +1293,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
-    saxo_tradeable: 'unverified',
+    saxo_tradeable: false,
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -1009,6 +1301,18 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
       issuer: 'GraniteShares',
       source_url: 'https://www.ajbell.co.uk/market-research/LSE:3LIP',
       t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3LIP.GB',
+      saxo: {
+        verified_on: '2026-09-05',
+        gateway: 'sim',
+        line: null,
+        sibling_line: {
+          symbol: '3LNI:xlon',
+          uic: 41828820,
+          asset_type: 'Etn',
+          exchange_id: 'LSE_ETF',
+          currency: 'USD',
+        },
+      },
       verified_on: '2026-08-19',
       notes:
         'GraniteShares 3x Long NIO Daily ETP, GBX line (issuer fact summary: "3LIE (EUR) / 3LIP (GBX) / ' +
@@ -1026,7 +1330,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'USD',
     t212_isa: true,
-    saxo_tradeable: 'unverified',
+    saxo_tradeable: true,
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -1034,6 +1338,17 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
       issuer: 'GraniteShares',
       source_url: 'https://www.ajbell.co.uk/market-research/LSE:3LSQ',
       t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3LSQ.GB',
+      saxo: {
+        verified_on: '2026-09-05',
+        gateway: 'sim',
+        line: {
+          symbol: '3LSQ:xlon',
+          uic: 41846290,
+          asset_type: 'Etn',
+          exchange_id: 'LSE_ETF',
+          currency: 'USD',
+        },
+      },
       verified_on: '2026-08-19',
       notes:
         'GraniteShares 3x Long Square Daily ETP, USD line per AJ Bell. **The screening instrument is ' +
@@ -1053,14 +1368,19 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
-    saxo_tradeable: 'unverified',
-    fallback_default: true,
+    saxo_tradeable: false,
+    fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'IE00BK5BZQ82',
       issuer: 'Leverage Shares',
       source_url: 'https://www.ajbell.co.uk/market-research/LSE:3AMZ',
       t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3AMZ.GB',
+      saxo: {
+        verified_on: '2026-09-05',
+        gateway: 'sim',
+        line: null,
+      },
       verified_on: '2026-08-19',
       notes:
         'Leverage Shares 3x Amazon ETP Securities, tracking the iSTOXX Leveraged 3X AMZN Index. AJ Bell ' +
@@ -1078,14 +1398,26 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
-    saxo_tradeable: 'unverified',
-    fallback_default: true,
+    saxo_tradeable: false,
+    fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'IE00BK5C1B80',
       issuer: 'Leverage Shares',
       source_url: 'https://www.ajbell.co.uk/market-research/LSE:3FB',
       t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3FB.GB',
+      saxo: {
+        verified_on: '2026-09-05',
+        gateway: 'sim',
+        line: null,
+        sibling_line: {
+          symbol: 'FB3:xlon',
+          uic: 35479426,
+          asset_type: 'Etn',
+          exchange_id: 'LSE_ETF',
+          currency: 'USD',
+        },
+      },
       verified_on: '2026-08-19',
       notes:
         'Leverage Shares 3x Facebook ETP Securities, sterling line quoted in pence. Both the issuer ' +
@@ -1104,7 +1436,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
-    saxo_tradeable: 'unverified',
+    saxo_tradeable: false,
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -1112,6 +1444,11 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
       issuer: 'Leverage Shares',
       source_url: 'https://www.ajbell.co.uk/market-research/LSE:3UBR',
       t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3UBR.GB',
+      saxo: {
+        verified_on: '2026-09-05',
+        gateway: 'sim',
+        line: null,
+      },
       verified_on: '2026-08-19',
       notes:
         'Leverage Shares 3x Uber ETP Securities, sterling line quoted in pence per AJ Bell. The T212 ' +
@@ -1129,7 +1466,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
-    saxo_tradeable: 'unverified',
+    saxo_tradeable: false,
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -1137,6 +1474,11 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
       issuer: 'Leverage Shares',
       source_url: 'https://www.ajbell.co.uk/market-research/LSE:3RAC',
       t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3RAC.GB',
+      saxo: {
+        verified_on: '2026-09-05',
+        gateway: 'sim',
+        line: null,
+      },
       verified_on: '2026-08-19',
       notes:
         'Leverage Shares 3x Long Ferrari ETP, sterling line quoted in pence. The issuer names the ' +
@@ -1156,7 +1498,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'single_stock_etp_3x',
     currency: 'GBX',
     t212_isa: true,
-    saxo_tradeable: 'unverified',
+    saxo_tradeable: false,
     fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
@@ -1164,6 +1506,11 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
       issuer: 'Leverage Shares',
       source_url: 'https://www.ajbell.co.uk/market-research/LSE:3ARM',
       t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3ARM.GB',
+      saxo: {
+        verified_on: '2026-09-05',
+        gateway: 'sim',
+        line: null,
+      },
       verified_on: '2026-08-19',
       notes:
         'Leverage Shares 3x Long ARM ETP, sterling line quoted in pence. Underlying is the Arm Holdings ' +
@@ -1181,7 +1528,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'GBX',
     t212_isa: true,
-    saxo_tradeable: 'unverified',
+    saxo_tradeable: false,
     fallback_default: false,
     subclass_envelope_measured: false,
     provenance: {
@@ -1189,6 +1536,11 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
       issuer: 'Leverage Shares',
       source_url: 'https://www.ajbell.co.uk/market-research/LSE:3VT',
       t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3VT.GB',
+      saxo: {
+        verified_on: '2026-09-05',
+        gateway: 'sim',
+        line: null,
+      },
       verified_on: '2026-08-19',
       notes:
         'Leverage Shares 3x Long Total World ETP. AJ Bell states the product delivers 3x the daily ' +
@@ -1210,7 +1562,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'GBX',
     t212_isa: true,
-    saxo_tradeable: 'unverified',
+    saxo_tradeable: true,
     fallback_default: false,
     subclass_envelope_measured: false,
     provenance: {
@@ -1218,6 +1570,17 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
       issuer: 'Leverage Shares',
       source_url: 'https://www.ajbell.co.uk/market-research/LSE:3KOR',
       t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3KOR.GB',
+      saxo: {
+        verified_on: '2026-09-05',
+        gateway: 'sim',
+        line: {
+          symbol: '3KOR:xlon',
+          uic: 55762873,
+          asset_type: 'Etn',
+          exchange_id: 'LSE_ETF',
+          currency: 'GBP',
+        },
+      },
       verified_on: '2026-08-19',
       notes:
         'Leverage Shares 3x Long South Korea ETP, sterling line quoted in pence. AJ Bell names the ' +
@@ -1239,7 +1602,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'GBX',
     t212_isa: true,
-    saxo_tradeable: 'unverified',
+    saxo_tradeable: true,
     fallback_default: false,
     subclass_envelope_measured: false,
     provenance: {
@@ -1247,6 +1610,17 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
       issuer: 'Leverage Shares',
       source_url: 'https://www.ajbell.co.uk/market-research/LSE:3KWE',
       t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3KWE.GB',
+      saxo: {
+        verified_on: '2026-09-05',
+        gateway: 'sim',
+        line: {
+          symbol: '3KWE:xlon',
+          uic: 31532726,
+          asset_type: 'Etn',
+          exchange_id: 'LSE_ETF',
+          currency: 'GBP',
+        },
+      },
       verified_on: '2026-08-19',
       notes:
         'Leverage Shares 3x Long China Tech ETP, sterling line quoted in pence. AJ Bell names the ' +
@@ -1266,7 +1640,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'GBX',
     t212_isa: true,
-    saxo_tradeable: 'unverified',
+    saxo_tradeable: false,
     fallback_default: false,
     subclass_envelope_measured: false,
     provenance: {
@@ -1274,6 +1648,11 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
       issuer: 'Leverage Shares',
       source_url: 'https://www.ajbell.co.uk/market-research/LSE:3XLE',
       t212_source_url: 'https://www.trading212.com/trading-instruments/invest/3XLE.GB',
+      saxo: {
+        verified_on: '2026-09-05',
+        gateway: 'sim',
+        line: null,
+      },
       verified_on: '2026-08-19',
       notes:
         'Leverage Shares 3x Long Oil & Gas ETP, sterling line quoted in pence. AJ Bell names the Energy ' +
@@ -1431,9 +1810,9 @@ export function gateAdmits(row: LseEtpPoolRow): boolean {
  *
  * - `'unarmed'` — no row (or an empty pool) carries a Saxo-verified value;
  *   every row is `'unverified'`. The gate has nothing to exclude on yet and
- *   MUST be read as pass-through, not as "nothing is tradeable". This is the
- *   checked-in pool's state today (#1054 Part 1): no Saxo instrument list
- *   has been captured (#1032 item 3).
+ *   MUST be read as pass-through, not as "nothing is tradeable". This was
+ *   the checked-in pool's state from #1054 Part 1 until #1032 item 3's
+ *   evidence pass (2026-09-05) armed it.
  * - `'vacuous'` — at least one row carries a Saxo-verified value, but
  *   `gateAdmits` returns the SAME answer for every row — all admitted, or
  *   all excluded. This is not a legitimate configuration: a gate that
@@ -1465,9 +1844,10 @@ export function liquidityGateStatus(
       reason:
         pool.length === 0
           ? 'Empty pool — there is nothing for the gate to exclude on.'
-          : 'No Saxo instrument list has been captured anywhere in this repo (#1032 item 3), so ' +
-            "every row's saxo_tradeable is 'unverified'. The gate is explicitly UNARMED: it passes " +
-            'every row through rather than excluding on a tradeability claim nothing has verified.',
+          : "Every row's saxo_tradeable is 'unverified' — no Saxo instrument evidence has been " +
+            'captured for this pool (#1032 item 3 did so for the checked-in pool). The gate is ' +
+            'explicitly UNARMED: it passes every row through rather than excluding on a ' +
+            'tradeability claim nothing has verified.',
     };
   }
   let admitsAll = true;
@@ -1636,9 +2016,10 @@ export const FALLBACK_DEFAULT_MAX_ROWS = 10;
  * `saxo_tradeable: false`. A fallback watchlist that can hand back a name
  * Saxo has been verified NOT to list is the silent halt wearing the
  * fallback's name. This is deliberately "not verified ineligible", not
- * "verified eligible": `saxo_tradeable` is `'unverified'` on every row
- * today, so an eligibility check would either be vacuously true or reject
- * the whole pool (#1054 Part 1).
+ * "verified eligible", so a future pool whose rows are still `'unverified'`
+ * loads (#1054 Part 1); the checked-in pool's six fallback rows are all
+ * verified `true` regardless (#1032 item 3), which `lse-etp-pool.test.ts`
+ * pins on the artifact rather than here.
  */
 export function assertValidFallbackSubset(pool: readonly LseEtpPoolRow[]): void {
   const fallback = pool.filter((row) => row.fallback_default);

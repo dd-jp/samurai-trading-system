@@ -479,6 +479,7 @@ describe('the composition root paces the broker from ops config (#299)', () => {
           alpaca: { capacity: 1, refillPerSecond: 0.001 },
           ccxt: { capacity: 1, refillPerSecond: 1 },
           ibkr: { capacity: 5, refillPerSecond: 5 },
+          saxo: { capacity: 2, refillPerSecond: 1 },
         },
       }),
     );
@@ -543,6 +544,7 @@ describe('the composition root wires wait telemetry onto the shared Alpaca bucke
           alpaca: { capacity: 1, refillPerSecond: 0.001 },
           ccxt: { capacity: 1, refillPerSecond: 1 },
           ibkr: { capacity: 5, refillPerSecond: 5 },
+          saxo: { capacity: 2, refillPerSecond: 1 },
         },
       }),
     );

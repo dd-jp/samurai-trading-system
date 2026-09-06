@@ -489,6 +489,7 @@ async function readSubmitSnapshot(
         adv,
         volatility: volatility.value,
         asset_class: mark.asset_class,
+        ...(config.simulated.venue === undefined ? {} : { venue: config.simulated.venue }),
         timestamp: mark.observed_at,
       };
       const fillRequest: FillRequest = {

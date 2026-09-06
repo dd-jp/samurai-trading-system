@@ -2843,6 +2843,24 @@ describe('#1001: submit-time quote and decision price', () => {
       const position = await store.getPosition('key-aapl-1355');
       expect(position?.modelled_cost_breakdown).toEqual(modelledCostBreakdown);
     });
+
+    // #1032 item 2: the snapshot is the second builder of `MarketState` on
+    // the real path (the Simulated adapter is the first); a venue configured
+    // on `executionConfig.simulated` must reach the model from here too.
+    it('stamps MarketState.venue from executionConfig.simulated on the snapshot pricing', async () => {
+      const { store } = openTestExecutionStore();
+      const costModel = makeSnapshotCostModel();
+      const marketData = makeSnapshotMarketData();
+      const base = makeInput({ store, broker: makeBroker(), costModel, marketData });
+
+      await new ExecutionImpl({
+        ...base,
+        config: { simulated: { ...base.config.simulated, venue: 'saxo' } },
+      }).execute(makeGo());
+
+      const marketState = vi.mocked(costModel.fill).mock.calls[0]?.[1];
+      expect(marketState?.venue).toBe('saxo');
+    });
   });
 
   describe('bracket (entry) path — open_positions', () => {

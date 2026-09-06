@@ -330,10 +330,35 @@ describe('SqliteBrokerStateStore', () => {
 
     store.saveBracket({ ...base, venue: 'ccxt' });
     store.saveBracket({ ...base, venue: 'ibkr', entry_order_id: 'e-ibkr' });
+    store.saveBracket({ ...base, venue: 'saxo', entry_order_id: 'e-saxo' });
 
     expect(store.loadBrackets('ccxt')).toHaveLength(1);
     expect(store.loadBrackets('ibkr')[0]?.entry_order_id).toBe('e-ibkr');
+    expect(store.loadBrackets('saxo')[0]?.entry_order_id).toBe('e-saxo');
     expect(store.loadBrackets('alpaca')).toEqual([]);
+  });
+
+  it("accepts 'saxo' on every venue-checked table (migration 0048)", () => {
+    const { db } = openFileStore();
+    const store = new SqliteBrokerStateStore(db);
+
+    store.saveObservedFill('saxo', {
+      client_order_id: 'k',
+      broker_fill_id: 'bf',
+      leg: 'entry',
+      price: 10,
+      qty: 1,
+      fee: 0.008,
+      timestamp: new Date('2026-09-05T09:00:00Z'),
+    });
+    store.recordUnpricedFill(
+      'saxo',
+      { client_order_id: 'k', broker_fill_id: 'bf', leg: 'entry', instrument: '3USL', qty: 1 },
+      new Date('2026-09-05T09:00:00Z'),
+    );
+
+    expect(store.loadObservedFills('saxo')).toHaveLength(1);
+    expect(store.loadUnpricedFills('saxo')).toHaveLength(1);
   });
 
   it('never blanks a request a submit recorded when a venue lookup follows', () => {

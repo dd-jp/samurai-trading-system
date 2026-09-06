@@ -106,7 +106,7 @@ import type { VerdictConfig } from '../../pipeline/verdict/index.js';
 import { londonEntryWindow } from '../../providers/market-data-service/index.js';
 import type { CiiConsumerConfig } from '../../providers/market-intelligence/index.js';
 import type { InstrumentSubclass } from '../../shared/index.js';
-import type { CostConfig } from '../../tools/backtest/index.js';
+import { type CostConfig, SAXO_COMMISSION_RATE } from '../../tools/backtest/index.js';
 import { LIVE_MONEY_GATE_SUMMARY } from './live-money-gates.js';
 import { SqliteDailyEquityMetricsSource } from './production/daily-equity-metrics-source.js';
 import { WORST_CASE_LLM_CALLS_PER_DEBATE } from './production/debate-adapter.js';
@@ -247,6 +247,7 @@ export const PAPER_PROFILE_PROVENANCE = {
   'executionConfig.simulated.volatility_indicator.lookback': 'SPEC',
   'executionConfig.simulated.adv_window.timeframe': 'UNSOURCED',
   'executionConfig.simulated.adv_window.lookback': 'UNSOURCED',
+  'executionConfig.simulated.venue': 'SPEC',
   'correlationConfig.window.timeframe': 'UNSOURCED',
   'correlationConfig.window.lookback': 'UNSOURCED',
   'correlationConfig.min_bars': 'UNSOURCED',
@@ -268,6 +269,7 @@ export const PAPER_PROFILE_PROVENANCE = {
   'costConfig.stocks.commissionRate': 'SPEC',
   'costConfig.stocks.slippageCoefficient': 'UNSOURCED',
   'costConfig.stocks.impactK': 'UNSOURCED',
+  'costConfig.venues.saxo.commissionRate': 'SPEC',
   'ciiConsumerConfig.pollIntervalMs': 'SPEC',
   'rateLimiterConfig.default.windowMs': 'DERIVED',
   'rateLimiterConfig.default.maxDebates': 'DERIVED',
@@ -1648,6 +1650,13 @@ export function buildStartingProfileConfigs(
        * window. 20 daily bars is the conventional one-trading-month ADV.
        */
       adv_window: { timeframe: '1d', lookback: 20 },
+      /**
+       * SPEC — ADR-0015's 2026-08-30 amendment: the live equity venue is
+       * Saxo, so every modelled fill (the control arm's Simulated adapter
+       * and the submit-time snapshot, #1001) prices at Saxo's economics via
+       * `costConfig.venues.saxo` rather than at Alpaca's paper book.
+       */
+      venue: 'saxo',
     },
   };
 
@@ -1874,6 +1883,13 @@ export function buildStartingProfileConfigs(
       /** UNSOURCED — as crypto's `impactK`, scaled down for a deeper book. */
       impactK: 0.3,
     },
+    /**
+     * SPEC — ADR-0015:201, Saxo Classic tier: 8bps per side, no minimum.
+     * Binds only on a `MarketState` stamped `venue: 'saxo'`, which
+     * `executionConfig.simulated.venue` below does (#1032 item 2); the
+     * `stocks.commissionRate` above stays the un-keyed anchor.
+     */
+    venues: { saxo: { commissionRate: SAXO_COMMISSION_RATE } },
   };
 
   const ciiConsumerConfig: CiiConsumerConfig = {

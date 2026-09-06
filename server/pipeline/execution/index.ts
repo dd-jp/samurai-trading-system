@@ -34,6 +34,40 @@ export {
   AlpacaHttpBrokerClient,
   classifyAlpacaTradingHost,
 } from './adapters/alpaca-http-client.js';
+export type {
+  SaxoBrokerAdapterInput,
+  SaxoInstrumentRef,
+  SaxoInstrumentResolver,
+  SaxoResolvablePoolRow,
+} from './adapters/saxo-adapter.js';
+export {
+  SAXO_DUPLICATE_WINDOW_MS,
+  SaxoBrokerAdapter,
+  saxoInstrumentResolverFromPool,
+} from './adapters/saxo-adapter.js';
+export {
+  isRetryableSaxoBrokerError,
+  SaxoBrokerProviderError,
+  SaxoBrokerRateLimitError,
+  SaxoBrokerTimeoutError,
+} from './adapters/saxo-broker-errors.js';
+export type {
+  SaxoNetPosition,
+  SaxoOpenApiClient,
+  SaxoOpenOrder,
+  SaxoOrderActivity,
+  SaxoOrderPlacement,
+  SaxoOrderRequest,
+} from './adapters/saxo-client.js';
+export type {
+  SaxoHttpBrokerClientOptions,
+  SaxoTradingEnvironment,
+} from './adapters/saxo-http-client.js';
+export {
+  SAXO_CREDENTIAL_ENV_VARS,
+  SAXO_GATEWAY_URLS,
+  SaxoHttpBrokerClient,
+} from './adapters/saxo-http-client.js';
 export { BrokerError, sanitizeBrokerError } from './broker-error.js';
 export type {
   BrokerBracketOrderIds,
