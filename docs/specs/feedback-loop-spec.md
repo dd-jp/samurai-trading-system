@@ -20,14 +20,14 @@ The Feedback Loop (Stage 6) closes the loop. After execution, it attributes real
 
 ## Solution
 
-The Feedback Loop is a **scheduled, bounded, deterministic** learner (not online, not a black box). Daily, it recomputes analyst weights via influence-weighted performance attribution over the day's closed trades, moving each weight a capped step toward its performance-implied level. It tunes all three dials CONTEXT.md names — weights, strategy params, risk thresholds — but under **asymmetric guardrails**: it may auto-*tighten* risk freely, while auto-*loosening* requires human approval, and every dial has human-set hard bounds. On each trade close it labels the setup store with the realized R-multiple. It reports the full metrics suite daily and runs walk-forward/PBO/DSR revalidation periodically; on a kill-threshold breach it alerts a human and defensively auto-tightens, but the kill/rework call is human. In backtest it evolves weights walk-forward, point-in-time, so out-of-sample distributions stay honest.
+The Feedback Loop is a **scheduled, bounded, deterministic** learner (not online, not a black box). Daily, it recomputes analyst weights via influence-weighted performance attribution over the day's closed trades, moving each weight a capped step toward its performance-implied level. It tunes all three dials CONTEXT.md names — weights, strategy params, risk thresholds — but under **asymmetric guardrails**: it may auto-*tighten* risk freely, ~~while auto-*loosening* requires human approval~~, and every dial has human-set hard bounds. *(Amended 2026-09-06 — ADR-0013 Decision 2 removed the loosen-approval gate: loosening now applies automatically too, bounded by the same hard floors/ceilings. Implemented by [#736](https://github.com/dd-jp/samurai-trading-system/issues/736).)* On each trade close it labels the setup store with the realized R-multiple. It reports the full metrics suite daily and runs walk-forward/PBO/DSR revalidation periodically; on a kill-threshold breach it alerts a human and defensively auto-tightens, ~~but the kill/rework call is human~~. *(Amended 2026-09-06 — ADR-0013 Decision 3: nobody owns the kill/rework call under full automation; a breach must produce a mechanical response instead — defensive auto-tighten, and a halt if it persists. Auto-tighten is implemented on FL's breach path (`server/pipeline/feedback-loop/metrics.ts`); no halt-on-persistence exists there — the tighten dial's floor is a nonzero fraction of the shipped cap by design (`server/apps/orchestrator/paper-profile.ts`'s `capDial`), whose own comment still says "killing the run is the operator's call on the breach alert.")* In backtest it evolves weights walk-forward, point-in-time, so out-of-sample distributions stay honest.
 
 Key architectural decisions:
 - **Daily batch, bounded step changes** — not online per-trade.
-- **Adjusts all three dials, asymmetric guardrails** — auto-tighten free; loosen gated; hard human-set bounds; logged + reversible.
+- **Adjusts all three dials, asymmetric guardrails** — auto-tighten free; ~~loosen gated~~; hard human-set bounds; logged + reversible. *(Amended 2026-09-06 — ADR-0013 Decision 2: loosening applies automatically, bounded by the hard floors/ceilings rather than gated on approval. Implemented by [#736](https://github.com/dd-jp/samurai-trading-system/issues/736).)*
 - **Influence-weighted attribution + shadow credit** — reward analysts by realized contribution; let quietly-correct ones recover.
 - **Owns the setup store; event-driven R-labelling on trade close.**
-- **Full metrics suite daily + periodic walk-forward/PBO/DSR; human owns kill.**
+- **Full metrics suite daily + periodic walk-forward/PBO/DSR; ~~human owns kill~~.** *(Amended 2026-09-06 — ADR-0013 Decision 3: nobody owns kill under full automation. A breach must produce a mechanical response — defensive auto-tighten (implemented on FL's breach path, `server/pipeline/feedback-loop/metrics.ts`) and a halt if it persists (no such halt exists on that path; the tighten dial floors at a nonzero fraction of the shipped cap by design, per `server/apps/orchestrator/paper-profile.ts`).)*
 - **Walk-forward, point-in-time in backtest** — no lookahead-in-weights.
 - **Never changes the market model** (CONTEXT.md invariant).
 
@@ -44,7 +44,7 @@ Key architectural decisions:
 ### Parameter & Threshold Tuning (guardrailed)
 
 6. As the Feedback Loop, I want to tune ~~strategy parameters and~~ risk thresholds within human-set hard floors/ceilings, so that the system adapts without escaping its guardrails. *(Amended 2026-08-17 — the `strategy_params` half of this story is **not live and is not scheduled**: it is dead at both ends by decision, no proposer writes one and the Trader reads a frozen `deps.config`. See "Phasing of the three dials" below. The story is kept rather than deleted so the asymmetry with weights and risk thresholds stays visible, but it must not be read as describing a mechanism that exists.)*
-7. As the Feedback Loop, I want to auto-tighten risk thresholds freely but require human approval to loosen any of them, so that the loop can never relax its own safety limits unsupervised.
+7. As the Feedback Loop, I want to auto-tighten risk thresholds freely ~~but require human approval to loosen any of them, so that the loop can never relax its own safety limits unsupervised~~. *(Amended 2026-09-06 — ADR-0013 Decision 2 removed the loosen-approval gate: loosening now applies automatically too, capped by the same `max_step` and clamped to the dial's hard floor/ceiling, refused in code if it would cross one (`server/shared/threshold-bounds.ts`; `server/pipeline/feedback-loop/guardrails.ts`). Implemented by [#736](https://github.com/dd-jp/samurai-trading-system/issues/736). The story is kept rather than deleted so the asymmetry that survives — loosening bounded, tightening free — stays visible.)*
 8. As the operator, I want every adjustment logged and reversible, so that I can audit and roll back a bad tuning cycle.
 
 ### Outcome Labelling & Setup Store
@@ -56,7 +56,7 @@ Key architectural decisions:
 
 11. As the operator, I want the full metrics suite (Sharpe, Sortino, Calmar, max drawdown, profit factor, expectancy, skew/kurtosis, turnover, exposure) reported together daily, so that no single number misleads me.
 12. As the Feedback Loop, I want to run walk-forward / CPCV, Deflated Sharpe, and PBO periodically, so that I catch overfitting and edge decay as data accumulates.
-13. As the Feedback Loop, I want to alert the human and defensively auto-tighten on a kill-threshold breach (PBO > 0.05, OOS/paper Sharpe < 0.5, DSR insignificant, live-vs-backtest divergence), so that a failing edge is flagged fast — while leaving the kill/rework decision to the human.
+13. As the Feedback Loop, I want to alert the human and defensively auto-tighten on a kill-threshold breach (PBO > 0.05, OOS/paper Sharpe < 0.5, DSR insignificant, live-vs-backtest divergence), so that a failing edge is flagged fast ~~— while leaving the kill/rework decision to the human~~. *(Amended 2026-09-06 — ADR-0013 Decision 3: nobody owns the kill/rework call under full automation. A breach must produce a mechanical response — defensive auto-tighten (implemented on FL's breach path, `server/pipeline/feedback-loop/metrics.ts`'s `autoTighten`) — and a halt if the breach persists; no such halt exists on that path as of this amendment.)*
 
 ### Determinism & Backtest
 
@@ -185,7 +185,7 @@ Added 2026-08-05 ([#359](https://github.com/dd-jp/samurai-trading-system/issues/
 
 - **Daily:** full metrics suite together.
 - **Weekly/monthly:** walk-forward / CPCV, Deflated Sharpe, PBO.
-- **On breach:** alert the human (trade channel) + defensively auto-tighten (drop automation toward manual, shrink sizing). Kill/rework is human.
+- **On breach:** alert the human (trade channel) + defensively auto-tighten (drop automation toward manual, shrink sizing). ~~Kill/rework is human.~~ *(Amended 2026-09-06 — ADR-0013 Decision 3: the kill/rework call is no longer human. ADR-0013 also rules that a persisting breach must produce a mechanical halt; that halt is not implemented on FL's breach path as of this amendment — FL's actual breach response today is alert + defensive auto-tighten only. The "drop automation toward manual" clause earlier in this line is unamended: it describes what `autoTighten` moves (risk thresholds), not a human gate.)*
 - **`config_trials` semantics (cross-spec — freeze §5):** FL revalidation monitors one frozen, already-selected config. It **reads** the frozen distinct-config N (keyed by config hash, owned by the cost-model/backtest validation library) that DSR/PBO/MinBTL deflate by — it **never appends** a trial. FL's in-bounds auto-tuning (weights/params/thresholds within guardrails) is NOT a new selection trial and must not increment N. (Treating N as run-count would make DSR/PBO/MinBTL kill healthy strategies by construction.)
 - **This is read-only at the API level, not just semantically.** `config_trials.config_hash` is the table's `PRIMARY KEY` and `recordTrial` upserts on conflict (per [#179](https://github.com/dd-jp/samurai-trading-system/issues/179) and `shared-sqlite-store-spec.md`) — a call to `recordTrial` during revalidation would silently overwrite `recorded_at` and look indistinguishable from a fresh trial recording, not a read. FL's revalidation path must query `config_trials` directly (`SELECT ... WHERE config_hash = ?`) and must **never** call `recordTrial`. This is caller discipline, not something the schema enforces — get this wrong and DSR/PBO/MinBTL silently corrupt without any error.
 - Depends on the backtest harness / cost model (separate uncharted component) for the honest historical inputs.
@@ -206,7 +206,7 @@ Added 2026-08-05 ([#359](https://github.com/dd-jp/samurai-trading-system/issues/
 
 **The floor is on the wire, per row ([#982](https://github.com/dd-jp/samurai-trading-system/issues/982)).** `evaluateArmDivergence`'s verdict carries `min_trades_per_arm` — the floor it was actually evaluated against — on every branch, not just the below-floor one. `arm_comparison_samples` persists it per row (migration `0035_arm_comparison_min_trades_per_arm.sql`, `DEFAULT 5` since that has been the constant's only value since the table was created in `0034`) rather than the dashboard reading `MIN_TRADES_PER_ARM_FOR_DIVERGENCE` live at query time — the same choice already made for `basis` on this row, and for the same reason: a row is a record of what FL tested at `computed_at`, and a later change to the constant must not silently reinterpret every older row in the trend against a floor it was never evaluated with. The dashboard panel (`dashboard-spec.md`, "Arm comparison panel") uses it to state which of the two `diverged: false` states a given row is in, rather than softening its copy to cover both.
 
-**A divergence alert tightens nothing.** It is a measurement, not a kill-line breach: the "auto-tighten" reflex above would shrink the **live** arm's sizing only, changing one arm mid-comparison and corrupting the match it was reacting to. Kill/rework stays human, and so does any response to divergence.
+**A divergence alert tightens nothing.** It is a measurement, not a kill-line breach: the "auto-tighten" reflex above would shrink the **live** arm's sizing only, changing one arm mid-comparison and corrupting the match it was reacting to. ~~Kill/rework stays human, and so does any response to divergence.~~ *(Amended 2026-09-06 — ADR-0013 Decision 3 removed the human kill/rework call generally; this paragraph's substantive point is unaffected — a divergence alert is not a kill-line breach and triggers no automatic dial move, mechanical or otherwise, here or anywhere else in this module.)*
 
 **One known asymmetry, carried in the alert text.** The control always trades — it converges by construction — while the live arm can decline to trade when the debate does not converge. A stretch in which the live arm simply traded less can therefore read as divergence. The alert says so, so the operator reads a trade-count gap as a trade-count gap.
 
@@ -272,7 +272,7 @@ Added 2026-08-05 ([#359](https://github.com/dd-jp/samurai-trading-system/issues/
 
 **The backtest harness / cost model** — a separate uncharted component FL consumes for honest historical inputs; FL owns the *validation metrics*, not the harness itself.
 
-**Auto-kill** — killing/reworking the strategy is a human decision; FL only detects, alerts, and defensively tightens.
+**Auto-kill** — ~~killing/reworking the strategy is a human decision~~; FL only detects, alerts, and defensively tightens. *(Amended 2026-09-06 — ADR-0013 Decision 3: kill/rework is no longer a human decision; nobody owns it under full automation. ADR-0013 also rules that a persisting breach must produce a mechanical halt, which is not implemented on FL's breach path as of this amendment — FL's breach response today is limited to alert + defensive auto-tighten, as the rest of this line already says.)*
 
 **Exact values** — step caps, floors/ceilings, kill thresholds, and cadences are config.
 
@@ -299,16 +299,16 @@ Per CONTEXT.md:
 
 - Full metrics suite reported together; credible fingerprint (Sharpe ~1.5, maxDD ~20%, PF ~1.8) as reference, Sharpe > 3 as red flag.
 - Periodic re-run of overfitting validation as data accumulates (edges decay).
-- Bounded adaptation, not self-learning; never relaxes its own guardrails unsupervised.
+- Bounded adaptation, not self-learning; ~~never relaxes its own guardrails unsupervised~~. *(Amended 2026-09-06 — ADR-0013 Decision 2: read as "never widens the human-set hard floor/ceiling itself," this survives — the loop still cannot cross those bounds. Read as "never loosens a risk threshold without approval" — the sense story 7 used the identical phrase for — it does not survive: loosening now applies automatically, bounded by those hard limits. Implemented by [#736](https://github.com/dd-jp/samurai-trading-system/issues/736).)*
 
 ### Future Extensions
 
-- Auto-tuning of the loosen-gated thresholds once trust is established (with its own validation).
+- ~~Auto-tuning of the loosen-gated thresholds once trust is established (with its own validation).~~ *(Amended 2026-09-06 — ADR-0013 Decision 2 removed the loosen gate entirely, implemented by [#736](https://github.com/dd-jp/samurai-trading-system/issues/736): auto-tuned loosening within the hard bounds already happens on every cycle, so there is no longer a loosen-gated set of thresholds for this future extension to apply to.)*
 - Regime detection to condition weights on market regime.
 - Per-strategy feedback once multiple strategies run.
 
 ## Resolved Decisions (Sources)
 
-Wayfinder decisions for this stage live in [docs/wayfinder/feedback-loop-map.md](../wayfinder/feedback-loop-map.md) (charted locally). Decisions synthesized here: cadence (daily batch, bounded), scope (all three, asymmetric guardrails), credit assignment (influence-weighted + shadow credit), metrics & revalidation (daily suite + periodic walk-forward/PBO/DSR, human-owned kill), setup-store labelling (event-driven on close), determinism (walk-forward point-in-time).
+Wayfinder decisions for this stage live in [docs/wayfinder/feedback-loop-map.md](../wayfinder/feedback-loop-map.md) (charted locally). Decisions synthesized here: cadence (daily batch, bounded), scope (all three, asymmetric guardrails), credit assignment (influence-weighted + shadow credit), metrics & revalidation (daily suite + periodic walk-forward/PBO/DSR, ~~human-owned kill~~ *(Amended 2026-09-06 — ADR-0013 Decision 3: kill is no longer human-owned; see the amendment banner at the top of this file.)*), setup-store labelling (event-driven on close), determinism (walk-forward point-in-time).
 
 **Dependencies:** the shared store + portfolio-accounting view; the trade channel (approvals/alerts); the Debate Engine (reads weights), Trader (reads params + setup store), Risk (reads thresholds); and the backtest harness / cost model (uncharted) for honest validation inputs.
