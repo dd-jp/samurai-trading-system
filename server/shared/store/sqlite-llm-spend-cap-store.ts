@@ -61,6 +61,14 @@ export class SqliteLlmSpendCapStore {
    * the field that carries the difference: present with `budgetUsd: null`
    * means "armed, deliberately uncapped"; `null` means no row was ever
    * written, i.e. nothing may be enforcing anything.
+   *
+   * Honest limit (review round 2, MINOR 2): a corrupt REAL column nullified
+   * below alongside an INTACT `armed_at` is indistinguishable on the wire
+   * from a genuine "armed, deliberately uncapped" row — `budgetUsd: null` +
+   * a real `armedAt` means both. `arm()` is the only writer and is typed
+   * `number | null` (never a non-finite value), and both `production.ts`
+   * call sites pass a finite literal or `null`, so this is a DB-corruption
+   * tail with no live write path — not defended against beyond this note.
    */
   read(): LlmSpendCapState {
     const row = this.db

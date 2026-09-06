@@ -169,16 +169,15 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  * block of em dashes that looks like a real, empty spend summary rather than a
  * failed read. A wrong shape admitted is worse than a null rejected.
  *
- * `cap_usd` and `cap_armed_at` ARE validated here, unlike the other scalars,
- * because the rail does not run them through a formatter that degrades a
- * malformed value honestly — it branches on them directly (`capReasonOf`,
- * #1196). A `cap_usd` that is neither a number nor `null` would otherwise
- * read as `null` and get reported as "deliberately uncapped": a claim about
- * operator intent manufactured from a malformed wire value. A `cap_armed_at`
- * that is present but not a valid non-empty timestamp string would read as
- * "armed" by a bare `!== null` check. Absent (`undefined`) is allowed for
- * both — that is the mixed-version case (an old server), not a malformed one
- * — and is treated downstream the same as `null`.
+ * `cap_usd` and `cap_armed_at` are DELIBERATELY NOT checked here (review round
+ * 2, MINOR 3) — the three windows above are structural (a missing `all_time`
+ * or `per_debate` throws on dereference), but the cap fields are two scalars
+ * neither consumer dereferences into. Rejecting the whole summary over one bad
+ * scalar would be exactly the `mode` mistake this function's sibling below
+ * exists to avoid: three valid spend windows thrown away over one malformed
+ * cap field would blank the 24h/7d/all-time footnote over a fault in an
+ * unrelated field. `normalizeCapUsd` / `normalizeCapArmedAt` degrade those two
+ * scalars per-field instead, the same way `mode` degrades below.
  */
 function isSpendSummary(value: unknown): boolean {
   if (!isPlainObject(value)) return false;
@@ -187,15 +186,54 @@ function isSpendSummary(value: unknown): boolean {
     if (!isPlainObject(window)) return false;
     if (!isPlainObject(window.per_debate)) return false;
   }
-  const cap = value.cap_usd;
-  if (cap !== undefined && cap !== null && typeof cap !== 'number') return false;
-  const armedAt = value.cap_armed_at;
-  if (armedAt !== undefined && armedAt !== null) {
-    if (typeof armedAt !== 'string' || armedAt === '' || Number.isNaN(Date.parse(armedAt))) {
-      return false;
-    }
-  }
   return true;
+}
+
+/**
+ * A `cap_usd` that is neither a number nor absent/`null` would otherwise read
+ * as `null` at the rail (`capOf`, `Rail.tsx`) and get reported as
+ * "deliberately uncapped" — a claim about operator intent manufactured from a
+ * malformed wire value (review round 1, MINOR 2). Normalizing it to `null`
+ * here removes the malformed TYPE, but cannot by itself rule out the
+ * "deliberately uncapped" misreading if `cap_armed_at` also happens to carry
+ * a real timestamp on the same malformed payload — see the limit noted on
+ * `contracts/snapshot.ts`'s `cap_armed_at` doc comment. That combination is
+ * not reachable from any wire-encoding failure this function can see (a
+ * malformed `cap_usd` alongside an intact `cap_armed_at` is not a shape a
+ * real JSON parse failure or a stale client produces); the corresponding
+ * server-side case (`SqliteLlmSpendCapStore.read()` nullifying a corrupt
+ * `budget_usd` while keeping `armed_at`) is a DB-corruption tail with no live
+ * write path, documented where it lives rather than defended against twice.
+ */
+function normalizeCapUsd(value: unknown): number | null | undefined {
+  if (value === undefined) return undefined;
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * `undefined` (the field absent — a pre-#1196 server) and `null` (the field
+ * present, explicitly saying "no row was ever written") are DIFFERENT claims
+ * and must not collapse into each other (review round 2's MAJOR — that
+ * collapse, done with `??` in `Rail.tsx`, was this ticket's own defect one
+ * level up). A malformed present value — wrong type, empty, or not even
+ * `Date.parse`-able — is treated the SAME as absent: this client was told
+ * nothing trustworthy about arming, not that arming is `null`, so guessing
+ * "never armed" from noise would be as false as guessing "armed".
+ *
+ * `Date.parse` is a loose gate, not a `toStoredTimestamp`-shape check — it
+ * admits strings the store's own format (`server/shared/store/sqlite-
+ * utils.ts`) would never write (`"2026"`, `"March 1 2026"`). That is
+ * deliberate: this client does not duplicate the server's exact timestamp
+ * grammar (the two run in separate processes and neither imports the
+ * other), and the loose gate still rejects everything actually reachable
+ * here — a non-string, an empty string, or text that is not a date at all.
+ */
+function normalizeCapArmedAt(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  return typeof value === 'string' && value !== '' && !Number.isNaN(Date.parse(value))
+    ? value
+    : undefined;
 }
 
 /**
@@ -219,7 +257,10 @@ function isSpendSummary(value: unknown): boolean {
  * the value the rail's LLM cap block is already written to handle.
  * Degrading is NOT the same as trusting: see `isSpendSummary` for why the check
  * has to reject an array and a summary missing its windows rather than casting
- * whatever object arrived.
+ * whatever object arrived. Once the windows are known good, `cap_usd` and
+ * `cap_armed_at` degrade PER FIELD (`normalizeCapUsd` / `normalizeCapArmedAt`)
+ * rather than voiding the whole summary — the same `mode` reasoning, applied
+ * one level deeper (review round 2, MINOR 3).
  */
 export function toWireSnapshot(body: unknown): WireSnapshot | null {
   if (!hasWireShape(body)) return null;
@@ -228,7 +269,13 @@ export function toWireSnapshot(body: unknown): WireSnapshot | null {
     ? (candidate.mode as ServerMode)
     : null;
   const spend = candidate.llm_spend;
-  const llm_spend = isSpendSummary(spend) ? (spend as LlmSpendSummary) : null;
+  const llm_spend = isSpendSummary(spend)
+    ? ({
+        ...(spend as Record<string, unknown>),
+        cap_usd: normalizeCapUsd((spend as Record<string, unknown>).cap_usd),
+        cap_armed_at: normalizeCapArmedAt((spend as Record<string, unknown>).cap_armed_at),
+      } as unknown as LlmSpendSummary)
+    : null;
   return {
     ...(candidate as unknown as Omit<WireSnapshot, 'mode' | 'llm_spend'>),
     mode,

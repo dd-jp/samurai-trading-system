@@ -539,9 +539,17 @@ export interface LlmSpendSummary {
    * `null` here means "never armed": treat `cap_usd` as unknown, not as
    * "uncapped" — the client must not claim the operator chose "no ceiling"
    * when nobody has said anything at all. Non-null (a `toStoredTimestamp`
-   * string) means a row exists and `cap_usd` is that arming's real value,
-   * `null` (uncapped) or a number (possibly `0`, the most restrictive cap
-   * there is — a `0` must render as a stated cap, never as "unconfigured").
+   * string) means a row exists — usually with `cap_usd` at that arming's
+   * real value, `null` (uncapped) or a number (possibly `0`, the most
+   * restrictive cap there is — a `0` must render as a stated cap, never as
+   * "unconfigured"). The one exception: `SqliteLlmSpendCapStore.read()`
+   * nullifies a non-finite stored `budget_usd` (a `REAL` column can hold a
+   * value `arm()` never wrote) WHILE KEEPING `armed_at` — so a non-null
+   * `cap_armed_at` alongside `cap_usd: null` can also mean "armed, but the
+   * stored ceiling is corrupt", not only "armed, deliberately uncapped".
+   * That corruption is reachable only by writing the row outside `arm()`
+   * (both `production.ts` call sites pass a finite number or `null`), not by
+   * any live path (#1196 review).
    */
   cap_armed_at: string | null;
 }

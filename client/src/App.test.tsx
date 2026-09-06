@@ -193,8 +193,8 @@ describe('rail', () => {
   });
 
   // #1196: an armed-uncapped run (the wire's `cap_usd: null` PLUS a non-null
-  // `cap_armed_at`) is a deliberate operator choice, not an absent one — the
-  // rail must say so, never "no LLM budget configured".
+  // `cap_armed_at`) is a deliberate operator choice, not an absent or unarmed
+  // one — the rail must say so, never "never armed" or "ambiguous".
   it('names the reason instead of drawing a meter when the run is armed uncapped', async () => {
     renderApp([makeSnapshot({ llm_spend: makeSpend({ cap_usd: null }) })]);
     const rail = screen.getByRole('complementary', { name: 'Rail' });
@@ -217,6 +217,29 @@ describe('rail', () => {
     expect(
       await within(rail).findByText('LLM spend cap was never armed — meter not drawable'),
     ).toBeTruthy();
+    expect(within(rail).queryByText(/deliberately uncapped/)).toBeNull();
+    expect(within(rail).queryByRole('img', { name: /LLM budget used/ })).toBeNull();
+    expect(within(rail).queryByText(/over cap/)).toBeNull();
+  });
+
+  // Round 2's MAJOR: `cap_usd: null` with `cap_armed_at` ABSENT (not
+  // explicitly `null`) is a pre-#1196 server — it did boot and did arm, it
+  // simply predates this field. Reading that absence as "never armed" is an
+  // affirmative false claim about enforcement, the same shape of defect
+  // #1196 itself fixed one field up. The rail must assert neither "armed"
+  // nor "unarmed" for this cell — the one combination nothing tested before
+  // this round.
+  it('claims neither armed nor unarmed when cap_usd is null and cap_armed_at is absent entirely', async () => {
+    const spend = { ...makeSpend({ cap_usd: null }) };
+    // @ts-expect-error simulating a pre-#1196 server's wire shape
+    delete spend.cap_armed_at;
+    renderApp([makeSnapshot({ llm_spend: spend })]);
+    const rail = screen.getByRole('complementary', { name: 'Rail' });
+
+    expect(
+      await within(rail).findByText('no arming record on this snapshot — meter not drawable'),
+    ).toBeTruthy();
+    expect(within(rail).queryByText(/never armed/)).toBeNull();
     expect(within(rail).queryByText(/deliberately uncapped/)).toBeNull();
     expect(within(rail).queryByRole('img', { name: /LLM budget used/ })).toBeNull();
     expect(within(rail).queryByText(/over cap/)).toBeNull();

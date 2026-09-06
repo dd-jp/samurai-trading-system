@@ -204,16 +204,23 @@ function capOf(snapshot: WireSnapshot | null): number | null {
  * `cap_usd` is itself affirmative evidence that something armed and must be
  * honoured regardless of `cap_armed_at` (`capReasonOf` below, and
  * `contracts/snapshot.ts`'s `cap_usd` doc comment — the ambiguity is `null`
- * vs `null`, not numeric vs `null`). `undefined` (an old server on this
- * field, or a malformed value already rejected upstream by `isSpendSummary`)
- * is treated the same as `null`: this client asserts "armed" only when the
- * wire says so affirmatively.
+ * vs `null`, not numeric vs `null`).
+ *
+ * Returns three distinct states, NOT collapsed: a real string (armed,
+ * verbatim); `null` (the field is present and explicitly says "no row has
+ * ever been written" — genuinely never armed); and `undefined` (the field is
+ * ABSENT from this wire object — a pre-#1196 server, or a value so malformed
+ * `toWireSnapshot` normalized it away). `undefined` must NOT be treated as
+ * `null`: a pre-#1196 server that armed a null cap did boot and did arm, it
+ * simply predates this field, and reading its absence as "never armed" is an
+ * affirmative false claim about enforcement — collapsing those two with `??`
+ * was exactly this ticket's own defect, one level up (review round 2).
  */
-function capArmedAtOf(snapshot: WireSnapshot | null): string | null {
-  return snapshot?.llm_spend?.cap_armed_at ?? null;
+function capArmedAtOf(snapshot: WireSnapshot | null): string | null | undefined {
+  return snapshot?.llm_spend?.cap_armed_at;
 }
 
-type CapReason = 'unknown' | 'never-armed' | 'uncapped' | 'zero' | 'capped';
+type CapReason = 'unknown' | 'never-armed' | 'uncapped' | 'ambiguous' | 'zero' | 'capped';
 
 /**
  * Names why the meter is or is not drawable, in priority order:
@@ -230,16 +237,24 @@ type CapReason = 'unknown' | 'never-armed' | 'uncapped' | 'zero' | 'capped';
  *    regression against `origin/main`, which drew a correct meter for that
  *    same payload. `cap_armed_at` is `#1196`'s discriminator for a NULL cap
  *    only, never a gate on a numeric one.
- * 3. Only once `capUsd` is `null` does `armedAt` decide never-armed vs
- *    uncapped — the one case the wire actually needs it for.
+ * 3. Only once `capUsd` is `null` does `armedAt` decide the reason, and it
+ *    has THREE answers, not two: a real string is `uncapped`; an explicit
+ *    `null` is `never-armed`; and `undefined` (the field is simply absent —
+ *    a pre-#1196 server) is `ambiguous` — this client was not told the
+ *    arming state at all, and must not guess either "armed" or "unarmed" for
+ *    it (review round 2 — the cell round 1's own numeric-cap fix invoked as
+ *    its motivating example but never actually tested).
  */
 function capReasonOf(
   spendKnown: boolean,
   capUsd: number | null,
-  armedAt: string | null,
+  armedAt: string | null | undefined,
 ): CapReason {
   if (!spendKnown) return 'unknown';
-  if (capUsd === null) return armedAt === null ? 'never-armed' : 'uncapped';
+  if (capUsd === null) {
+    if (armedAt === undefined) return 'ambiguous';
+    return armedAt === null ? 'never-armed' : 'uncapped';
+  }
   // `<= 0`, not `=== 0`: `CapMeter` declines to draw for any non-positive
   // cap, and `'capped'` must imply a drawn meter — a negative `cap_usd` (a
   // malformed wire value no code path in this repo *arms*, but the type is a
@@ -256,6 +271,11 @@ const CAP_EMPTY_STATE: Readonly<Record<Exclude<CapReason, 'capped' | 'zero'>, st
   // is the opposite of an operator's deliberate choice (#1196).
   'never-armed': 'LLM spend cap was never armed — meter not drawable',
   uncapped: 'LLM spend is deliberately uncapped — meter not drawable',
+  // Asserts NEITHER "armed" nor "unarmed" — a pre-#1196 server (or a
+  // malformed cap_armed_at this client could not trust) leaves this wire
+  // silent on arming state, and the honest reading is that silence, not a
+  // guess in either direction (review round 2).
+  ambiguous: 'no arming record on this snapshot — meter not drawable',
 };
 
 // Never "no LLM budget configured": $0 (or a malformed negative) is a
@@ -309,7 +329,7 @@ function SpendBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
             {over || zeroCapBreached ? 'over cap · ' : ''}
             {unpriced > 0 ? `floor — ${unpriced} unpriced calls` : 'all time, metered locally'}
             {unattributed > 0 ? ` · ${unattributed} calls carry no debate id` : ''}
-            {(reason === 'uncapped' || reason === 'zero') && armedAt !== null
+            {(reason === 'uncapped' || reason === 'zero') && typeof armedAt === 'string'
               ? ` · armed ${formatClockUtc(armedAt)}`
               : ''}
           </span>

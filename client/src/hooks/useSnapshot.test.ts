@@ -112,24 +112,47 @@ describe('toWireSnapshot', () => {
     }
   });
 
-  // #1196 review: `cap_usd` and `cap_armed_at` are branched on directly by
-  // `capReasonOf` (never run through a formatter that degrades a malformed
-  // value honestly), so unlike the other scalars a wrong type here must
-  // reject the whole summary rather than manufacture a claim about operator
-  // intent from noise — a `cap_usd` malformed to `null` reads as
-  // "deliberately uncapped", and a `cap_armed_at` malformed to anything
-  // truthy reads as "armed", both false positives.
-  it('rejects a spend summary whose cap fields are the wrong type or unparseable', () => {
+  // Review round 2, MINOR 3: rejecting the WHOLE summary over one malformed
+  // scalar neither consumer dereferences into would throw away three valid
+  // spend windows (the 24h/7d/all-time footnote) over a fault in an unrelated
+  // field — the exact `mode` mistake `toWireSnapshot`'s doc comment says this
+  // file exists to avoid, one level deeper. Each malformed cap field
+  // degrades to `null`/`undefined` on its own; the windows always survive.
+  it('normalizes a malformed cap_usd or cap_armed_at instead of rejecting the whole summary', () => {
     const summary = makeSnapshot().llm_spend as unknown as Record<string, unknown>;
 
-    for (const spend of [
-      { ...summary, cap_usd: '50' },
-      { ...summary, cap_usd: false },
-      { ...summary, cap_armed_at: '' },
-      { ...summary, cap_armed_at: 12_345 },
-      { ...summary, cap_armed_at: 'not-a-timestamp' },
+    for (const { spend, wantCapUsd, wantCapArmedAt } of [
+      {
+        spend: { ...summary, cap_usd: '50' },
+        wantCapUsd: null,
+        wantCapArmedAt: summary.cap_armed_at,
+      },
+      {
+        spend: { ...summary, cap_usd: false },
+        wantCapUsd: null,
+        wantCapArmedAt: summary.cap_armed_at,
+      },
+      {
+        spend: { ...summary, cap_armed_at: '' },
+        wantCapUsd: summary.cap_usd,
+        wantCapArmedAt: undefined,
+      },
+      {
+        spend: { ...summary, cap_armed_at: 12_345 },
+        wantCapUsd: summary.cap_usd,
+        wantCapArmedAt: undefined,
+      },
+      {
+        spend: { ...summary, cap_armed_at: 'not-a-timestamp' },
+        wantCapUsd: summary.cap_usd,
+        wantCapArmedAt: undefined,
+      },
     ]) {
-      expect(toWireSnapshot(raw({ llm_spend: spend }))?.llm_spend).toBeNull();
+      const result = toWireSnapshot(raw({ llm_spend: spend }))?.llm_spend;
+      expect(result).not.toBeNull();
+      expect(result?.cap_usd).toEqual(wantCapUsd);
+      expect(result?.cap_armed_at).toEqual(wantCapArmedAt);
+      expect(result?.all_time).toEqual(summary.all_time);
     }
   });
 
