@@ -411,10 +411,14 @@ CREATE INDEX idx_audit_log_trace_id ON audit_log(trace_id);
 -- Disposable, best-effort progress state -- NOT a system-of-record. Upserted per-instrument
 -- before each stage call, deleted on tick completion. Losing it on crash costs nothing but a
 -- stale progress indicator.
+--
+-- Migration 0029_current_tick_position_check.sql (#743, the tick/decision split) rebuilt this
+-- table to add 'position_check' to the CHECK below -- SQLite cannot alter a CHECK in place, so
+-- the table is dropped and recreated rather than migrated column-by-column.
 CREATE TABLE current_tick (
   instrument    TEXT PRIMARY KEY,
   asset_class   TEXT NOT NULL CHECK(asset_class IN ('crypto', 'stocks')),
-  stage         TEXT NOT NULL CHECK(stage IN ('analysts', 'debate', 'trader', 'risk', 'verdict', 'execution')),
+  stage         TEXT NOT NULL CHECK(stage IN ('position_check', 'analysts', 'debate', 'trader', 'risk', 'verdict', 'execution')),
   trace_id      TEXT NOT NULL,
   updated_at    TEXT NOT NULL
 );
@@ -681,7 +685,7 @@ CREATE INDEX idx_outside_benchmark_samples_computed_at
 
 **(restated 2026-09-03 after #994's fold.)** The three paragraphs this replaces — retrieval by `(instrument, bar_timestamp)`, a `floorToBar` write-path requirement, and "raw emission over validated list" as the reason for that table's `conditions_json` shape — were design rationale for `invalidation_log`, the table declined along with the standalone stage (see "`invalidation_log` — does not exist, and never will" above). None of it applies to what replaced it: `risk_critic_log`'s `conditions_json`/`dropped_conditions_json` (migration 0040) are retrieved by the same `debate_id` every other column on that row already uses — no separate coordinate, and so no floor-to-bar-boundary write discipline to get right or wrong. The raw-vs-validated distinction is unchanged in substance (`conditions_json` still means the raw, tagged emission per `EvaluatedCondition`/`DroppedCondition`, not a post-validator-only list), it simply now lives on an existing row rather than a bespoke table.
 
-**`current_tick.stage`'s `CHECK` stays at the six original stage names.** The standalone `invalidation` stage was declined 2026-09-02 (its mechanism folds into the Risk Critic instead, [#994](https://github.com/dd-jp/samurai-trading-system/issues/994)), so the table-rebuild migration this entry previously anticipated for a seventh name is never needed — SQLite cannot alter a `CHECK` in place, but there is no new name to add it for. `audit_log.stage` is unconstrained `TEXT` and needs no migration either way.
+**`current_tick.stage`'s `CHECK` carries seven names live, not six.** Migration `0029_current_tick_position_check.sql` (#743, the tick/decision split) rebuilt the table to add `'position_check'` — `CHECK(stage IN ('position_check', 'analysts', 'debate', 'trader', 'risk', 'verdict', 'execution'))` — for a reason unrelated to `invalidation`. The standalone `invalidation` stage was declined 2026-09-02 (its mechanism folds into the Risk Critic instead, [#994](https://github.com/dd-jp/samurai-trading-system/issues/994)), so the *separate* table-rebuild migration this entry previously anticipated — an eighth name, for `invalidation` — is never needed: SQLite cannot alter a `CHECK` in place, but there is no `invalidation` name to add it for. `audit_log.stage` is unconstrained `TEXT` and needs no migration either way. *(Corrected 2026-09-06, [#1168](https://github.com/dd-jp/samurai-trading-system/issues/1168): this entry previously said the CHECK "stays at the six original stage names," missing that migration 0029 landed 2026-08-17 — roughly two weeks before the 2026-09-02/03 restatements that got this wrong — and had already rebuilt it to seven for `position_check`, a change unrelated to `invalidation`. `cross-spec-contracts.md` CV-28 has this right.)*
 
 ### Non-Collision Verification
 
