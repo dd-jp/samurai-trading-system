@@ -48,7 +48,8 @@ Every datum v1 rendered must survive each rewrite ([map #533](https://github.com
 | Datum | Wire source | v3 home |
 | --- | --- | --- |
 | Run mode (paper/live) | `mode` (see "Wire Shape") | Rail — mode pill |
-| Snapshot clock, staleness | `generated_at` / `as_of` | Rail — ALIVE/STALE word, poll clock, snapshot clock |
+| Snapshot clock, staleness | `generated_at` / `as_of` | Rail — ALIVE/STALE word, snapshot clock (`as_of`), STALE's "last update" (`generated_at`) |
+| Poll clock | **No wire field** — the client's own `lastSuccessAt` (`useSnapshot`), stamped when a poll succeeds ([#1166](https://github.com/dd-jp/samurai-trading-system/issues/1166)) | Rail — ALIVE's "polled" note, and the visually-hidden last-successful-poll line |
 | Tick in progress (instrument, stage, trace) | `tick_status` | Rail — live tick block |
 | Alpaca cash / equity / buying power | `providers.alpaca.balance` (null unless `state === 'ok'`) | Rail — providers block (equity, cash and buying power as label/figure rows, "not sent" when Alpaca omits buying power); Glance uses equity as the denominator for "% of equity" and "deployed of" |
 | Polygon reachability + detail | `providers.polygon.state` / `.detail` | Rail — providers block, as a coloured word |

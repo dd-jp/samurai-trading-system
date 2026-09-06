@@ -12,10 +12,16 @@ import { makeSnapshot } from '../test-fixtures.ts';
 import { Rail } from './Rail.tsx';
 
 const GENERATED_AT = '2026-08-07T12:00:00.000Z';
+/**
+ * Distinct from `GENERATED_AT` on purpose: `test-fixtures.ts` defaults both
+ * `generated_at` and `as_of` to the same constant, so a foot assertion made
+ * against that default passes whichever of the two fields the foot reads.
+ */
+const SNAPSHOT_AS_OF = '2026-08-07T11:59:40.000Z';
 
 function makeFeed(overrides: Partial<SnapshotFeed> = {}): SnapshotFeed {
   return {
-    snapshot: makeSnapshot({ generated_at: GENERATED_AT }),
+    snapshot: makeSnapshot({ generated_at: GENERATED_AT, as_of: SNAPSHOT_AS_OF }),
     stale: false,
     lastSuccessAt: '2026-08-07T12:00:05.000Z',
     error: null,
@@ -53,8 +59,15 @@ describe('Rail — poll clock', () => {
 
     expect(screen.getByText('polled 12:00:35Z')).toBeTruthy();
     expect(screen.queryByText('polled 12:00:05Z')).toBeNull();
-    // The snapshot-side clock is unmoved by the client's own poll clock —
-    // proof the two are reading distinct sources, not the same value twice.
-    expect(screen.getByText('snapshot 12:00:00Z')).toBeTruthy();
+    expect(screen.getByText('snapshot 11:59:40Z')).toBeTruthy();
+    expect(screen.queryByText('snapshot 12:00:05Z')).toBeNull();
+    expect(screen.queryByText('snapshot 12:00:35Z')).toBeNull();
+  });
+
+  it('dates a STALE rail by the server generated_at, not by the client poll clock', () => {
+    renderRail(makeFeed({ stale: true, lastSuccessAt: '2026-08-07T12:00:35.000Z' }));
+
+    expect(screen.getByText(/stale — last update 12:00:00Z/)).toBeTruthy();
+    expect(screen.queryByText(/last update 12:00:35Z/)).toBeNull();
   });
 });
