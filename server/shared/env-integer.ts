@@ -7,9 +7,10 @@
  * env vars in one system come to disagree about whether `"abc"` means "abc",
  * "the default", or `0`.
  *
- * The rule both callers rely on: a malformed value is a startup error, not a
- * silent fallback. These variables are retention policy, and a retention
- * window nobody chose is worse than a refusal that names the variable.
+ * The rule every caller relies on: a malformed value is a startup error, not
+ * a silent fallback. These variables are operational policy — a retention
+ * window, a byte ceiling, a row cap, a search-result cap — and one nobody
+ * chose is worse than a refusal that names the variable.
  */
 
 /**
@@ -22,6 +23,40 @@
 export function nonEmpty(raw: string | undefined): string | undefined {
   const trimmed = raw?.trim();
   return trimmed !== undefined && trimmed.length > 0 ? trimmed : undefined;
+}
+
+/** The one bound definition both entry points below hold a value to. */
+function isIntegerAtLeast(value: number, min: number): boolean {
+  return Number.isSafeInteger(value) && value >= min;
+}
+
+/**
+ * Holds an already-parsed integer to the same `>= min` bound
+ * `positiveIntegerFromEnv` applies to a raw string, throwing the same shape
+ * of startup error.
+ *
+ * Extracted so a value that reaches a setting by a path OTHER than
+ * environment-string parsing — a `ProductionConfig` field a programmatic
+ * caller set directly (#1161) — is held to the identical rule rather than
+ * skipping it and reaching whatever a downstream consumer does with an
+ * out-of-range number (for `SAMURAI_X_MAX_RESULTS`, `XSearchClient` clamps
+ * instead of refusing, which is the right behaviour for an operator's
+ * excessive value and the wrong one for a nonsensical injected value).
+ */
+export function requireIntegerAtLeast(
+  value: number,
+  name: string,
+  min: number,
+  purpose: string,
+): number {
+  if (!isIntegerAtLeast(value, min)) {
+    throw new Error(
+      `Orchestrator cannot start: ${name} must be an integer >= ${min}, not ` +
+        `${JSON.stringify(value)}. It is ${purpose}; refused rather than defaulted, the same rule ` +
+        'a malformed environment value is held to.',
+    );
+  }
+  return value;
 }
 
 /**
@@ -49,11 +84,11 @@ export function positiveIntegerFromEnv(
   if (value === undefined) return fallback;
 
   const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < min) {
+  if (!isIntegerAtLeast(parsed, min)) {
     throw new Error(
       `Orchestrator cannot start: ${name} must be an integer >= ${min}, not ` +
-        `${JSON.stringify(value)}. It is ${purpose}; a value nobody meant is a retention ` +
-        'window nobody chose, so it is refused rather than defaulted. Unset it to accept the ' +
+        `${JSON.stringify(value)}. It is ${purpose}; a value nobody meant is a setting nobody ` +
+        'chose, so it is refused rather than defaulted. Unset it to accept the ' +
         `default (${fallback}).`,
     );
   }

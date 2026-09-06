@@ -206,7 +206,7 @@ import {
   X_SEARCH_MODEL,
   XSearchClient,
 } from '../../providers/market-intelligence/index.js';
-import { positiveIntegerFromEnv } from '../../shared/env-integer.js';
+import { positiveIntegerFromEnv, requireIntegerAtLeast } from '../../shared/env-integer.js';
 import type { AssetClass, Clock, TuningStore } from '../../shared/index.js';
 import { isThresholdBoundViolation, resolveVenuePacing, TokenBucket } from '../../shared/index.js';
 import { tryNousCredentials } from '../../shared/llm/index.js';
@@ -1637,34 +1637,51 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    *    invoice (the plan's V3). Until it has, turning this on is a deliberate,
    *    dated act by an operator, not a default.
    *
-   * `SAMURAI_X_MAX_RESULTS` is the dial, and it is read through the SHARED
-   * `positiveIntegerFromEnv` (#1045) rather than a validator of its own. That
-   * helper's header makes the argument — "two env vars in one system come to
-   * disagree about whether `\"abc\"` means abc, the default, or 0" — and a
-   * spend dial is the last place to disagree about it. Concretely it means a
-   * malformed value **throws at startup naming the variable** instead of
-   * silently falling back, which is the right failure for a setting whose
-   * whole job is bounding cost: an operator who typed `SAMURAI_X_MAX_RESULTS=ten`
-   * meant to change the spend and should not discover days later that nothing
-   * changed.
+   * `SAMURAI_X_MAX_RESULTS` is the dial, and the env path is read through the
+   * SHARED `positiveIntegerFromEnv` (#1045) rather than a validator of its
+   * own. That helper's header makes the argument — "two env vars in one
+   * system come to disagree about whether `\"abc\"` means abc, the default,
+   * or 0" — and a spend dial is the last place to disagree about it.
+   * Concretely it means a malformed value **throws at startup naming the
+   * variable** instead of silently falling back, which is the right failure
+   * for a setting whose whole job is bounding cost: an operator who typed
+   * `SAMURAI_X_MAX_RESULTS=ten` meant to change the spend and should not
+   * discover days later that nothing changed.
    *
-   * The ceiling is enforced separately and does NOT throw. `XSearchClient`
-   * clamps to `[1, MAX_SEARCH_RESULTS_CEILING]` and warns, because 100 is a
-   * well-formed integer that an operator plausibly meant as "as many as you
-   * can" — refusing to boot over it would be worse than capping it and saying
-   * so. So: unusable input refuses, excessive input clamps.
+   * `config.xMaxSearchResults` (#1161) is held to the same bound via
+   * `requireIntegerAtLeast` rather than passed through unchecked: without it,
+   * a programmatic caller's `0` or `-1` would skip the throw entirely and
+   * reach `XSearchClient`'s ceiling clamp below, which is built to forgive an
+   * operator's excessive value, not to catch a nonsensical one.
+   *
+   * The ceiling is enforced separately and does NOT throw, on either path.
+   * `XSearchClient` clamps to `[1, MAX_SEARCH_RESULTS_CEILING]` and warns,
+   * because 100 is a well-formed integer that an operator plausibly meant as
+   * "as many as you can" — refusing to boot over it would be worse than
+   * capping it and saying so. So: unusable input refuses, excessive input
+   * clamps.
    */
   const sentimentRetrieval =
     config.sentimentRetrieval ??
     process.env.SAMURAI_SENTIMENT_RETRIEVAL?.trim().toLowerCase() === 'on';
-  const xMaxSearchResults = positiveIntegerFromEnv(
-    process.env[ENV_X_MAX_SEARCH_RESULTS],
-    ENV_X_MAX_SEARCH_RESULTS,
-    DEFAULT_MAX_SEARCH_RESULTS,
-    1,
+  const xMaxSearchResultsPurpose =
     "the number of X posts each sentiment call retrieves, the soak's main LLM cost lever after " +
-      'the debate itself (#969)',
-  );
+    'the debate itself (#969)';
+  const xMaxSearchResults =
+    config.xMaxSearchResults === undefined
+      ? positiveIntegerFromEnv(
+          process.env[ENV_X_MAX_SEARCH_RESULTS],
+          ENV_X_MAX_SEARCH_RESULTS,
+          DEFAULT_MAX_SEARCH_RESULTS,
+          1,
+          xMaxSearchResultsPurpose,
+        )
+      : requireIntegerAtLeast(
+          config.xMaxSearchResults,
+          'ProductionConfig.xMaxSearchResults',
+          1,
+          xMaxSearchResultsPurpose,
+        );
 
   const grokAgent =
     sentimentCredentials === undefined

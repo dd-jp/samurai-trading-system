@@ -795,6 +795,49 @@ describe('buildProductionComponents', () => {
     },
   );
 
+  describe('xMaxSearchResults (#1161)', () => {
+    const savedEnv = process.env.SAMURAI_X_MAX_RESULTS;
+
+    afterEach(() => {
+      if (savedEnv === undefined) delete process.env.SAMURAI_X_MAX_RESULTS;
+      else process.env.SAMURAI_X_MAX_RESULTS = savedEnv;
+    });
+
+    it(
+      'refuses a non-positive-integer config value, naming ProductionConfig.xMaxSearchResults ' +
+        'rather than the env var — WITHOUT SAMURAI_X_MAX_RESULTS ever being set, so a ' +
+        "programmatic caller is refused on the same bound an operator's env var is held to, " +
+        "rather than reaching `XSearchClient`'s ceiling clamp, which forgives an excessive " +
+        'value but was never built to catch a nonsensical one',
+      () => {
+        delete process.env.SAMURAI_X_MAX_RESULTS;
+        const config = stubConfig(db, { xMaxSearchResults: 0 });
+
+        expect(() => buildProductionComponents(config)).toThrow(
+          /ProductionConfig\.xMaxSearchResults/,
+        );
+      },
+    );
+
+    it('accepts a positive-integer config value with no env var set at all', () => {
+      delete process.env.SAMURAI_X_MAX_RESULTS;
+      const config = stubConfig(db, { xMaxSearchResults: 7 });
+
+      expect(() => buildProductionComponents(config)).not.toThrow();
+    });
+
+    it(
+      'the config value wins over a malformed SAMURAI_X_MAX_RESULTS — proof the composition ' +
+        'root reads `config.xMaxSearchResults` rather than always parsing the environment',
+      () => {
+        process.env.SAMURAI_X_MAX_RESULTS = 'ten';
+        const config = stubConfig(db, { xMaxSearchResults: 7 });
+
+        expect(() => buildProductionComponents(config)).not.toThrow();
+      },
+    );
+  });
+
   // `[...BENCHMARK_INSTRUMENTS]`, not a hardcoded `['SPY', 'AGG']` literal
   // (#989 review) — a second, independent enumeration of the same set the
   // guard itself derives from `BENCHMARK_COMPOSITION` would silently stop
