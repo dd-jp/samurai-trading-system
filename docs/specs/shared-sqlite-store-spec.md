@@ -65,7 +65,11 @@ Runs pending migrations, returns a typed handle. Components receive it via const
 
 ### Module: Consolidated Schema
 
-Every `CREATE TABLE` the store needs, collected from the eleven specs that implicitly define them plus the three that had no schema anywhere until this map resolved them (`verdict_log` and `breaker_state` were added later, per #206 and #203 respectively). `cii_snapshots` was added later still, per #182 (`0003_cii_snapshots.sql`). `account_state` was added later still, per the transport-layer-spec.md cross-verify pass (2026-07-31), closing a gap where `AccountStateProvider`'s `peak_equity` had no durable home. `session_equity` was added per [#332](https://github.com/dd-jp/samurai-trading-system/issues/332) (`0009_session_equity.sql`), resolving GAP-8 by giving the session-scoped daily-PnL denominator a durable per-class home instead of reading Alpaca's blended `last_equity`. `broker_brackets` and `broker_observed_fills` were added last, per [#287](https://github.com/dd-jp/samurai-trading-system/issues/287) (`0007_broker_adapter_state.sql`), closing the gap where every live `BrokerAdapter` held money-critical venue state in process-local memory. `broker_unpriced_fills` was added last of all, per [#298](https://github.com/dd-jp/samurai-trading-system/issues/298) (`0008_broker_unpriced_fills.sql`), giving a permanently-unpriced fill a durable age-out clock so it escalates to an operator instead of leaving a lot stuck in silence. Field-level non-collision was re-verified across all twenty-two tables (see **Non-Collision Verification** below).
+Every `CREATE TABLE` the store needs, collected from the eleven specs that implicitly define them plus the three that had no schema anywhere until this map resolved them (`verdict_log` and `breaker_state` were added later, per #206 and #203 respectively). `cii_snapshots` was added later still, per #182 (`0003_cii_snapshots.sql`). `account_state` was added later still, per the transport-layer-spec.md cross-verify pass (2026-07-31), closing a gap where `AccountStateProvider`'s `peak_equity` had no durable home. `session_equity` was added per [#332](https://github.com/dd-jp/samurai-trading-system/issues/332) (`0009_session_equity.sql`), resolving GAP-8 by giving the session-scoped daily-PnL denominator a durable per-class home instead of reading Alpaca's blended `last_equity`. `broker_brackets` and `broker_observed_fills` were added last, per [#287](https://github.com/dd-jp/samurai-trading-system/issues/287) (`0007_broker_adapter_state.sql`), closing the gap where every live `BrokerAdapter` held money-critical venue state in process-local memory. `broker_unpriced_fills` was added last of all, per [#298](https://github.com/dd-jp/samurai-trading-system/issues/298) (`0008_broker_unpriced_fills.sql`), giving a permanently-unpriced fill a durable age-out clock so it escalates to an operator instead of leaving a lot stuck in silence. Field-level non-collision was re-verified across the original twenty-two tables (see **Non-Collision Verification** below) — a manual recount against today's schema actually gives twenty-three for that same original batch (`daily_equity` joined the AccountStateProvider block without this figure being bumped for it); not corrected further here since it predates and is outside this paragraph's own scope, but named so it is not silently repeated as fact.
+
+Four more tables were added after that pass, each checked for collision at the point it joined (`llm_spend`, `risk_critic_log`, `arm_comparison_samples`, `outside_benchmark_samples` — see each one's own subsection below). [#1174](https://github.com/dd-jp/samurai-trading-system/issues/1174) closed a further gap: eight real, migrated tables (`stage2_selected_config`, `trader_log`, `risk_log`, `flatten_submissions`, `llm_call_log`, `alert_delivery_failures`, `feedback_cycle_schedule`, `llm_spend_cap`) were named as owned in the "Integration with Pipeline" map (two of them — `alert_delivery_failures` and `feedback_cycle_schedule` — were not even named there) but carried no DDL anywhere in this document; their `CREATE TABLE` statements and per-table collision notes are appended after `outside_benchmark_samples`, each folded to its CURRENT effective shape (every later `ALTER TABLE` migration read and applied), not just its creating migration.
+
+The store now has **thirty-five** real tables in total — `CONSOLIDATED_SCHEMA_TABLE_COUNT` in `server/shared/store/open-shared-store.test.ts` pins this figure precisely so this paragraph cannot drift again the way it already has twice. All thirty-five now carry DDL somewhere in this document, closing #1174's acceptance criterion that the "full consolidated DDL" claim be true or narrowed. **It is narrowed, not fully true, in one respect stated plainly:** table-level completeness is not the same claim as column-level currency. Six tables that were *already* declared here before this pass have DDL blocks that predate later `ALTER TABLE` migrations and are missing the columns those migrations added — `audit_log` is missing `instrument`/`asset_class` (`0013`); `open_positions` is missing `conviction`/`converged` (`0004`), `residual_unprotected_since`/`residual_rearm_alerted_at` (`0024`), `key_scheme` (`0027`), `arm` (`0033`), `decision_price`/`quote_bid`/`quote_ask`/`quote_mid`/`quote_observed_at`/`modelled_cost_breakdown_json` (`0037`), and `sizing_capital_ceiling` (`0045`); `closed_trades` is missing `arm` (`0033`) and `sizing_capital_ceiling` (`0045`); `debate_log` is missing `trace_id` (`0015`), `confidence`/`synthesis`/`position`/`disagreement_summary`/`open_items_json`/`converged` (`0026`), and `termination` (`0041`); `llm_spend` is missing `server_tool_calls` (`0018`) and `ttfb_ms` (`0038`); `verdict_log` is missing `no_go_detail_measured_ms`/`no_go_detail_bound_ms` (`0046`). #1174's mandate was that every table named as owned gets a DDL entry, not a re-verification of every already-declared table's column currency — folding those six back to their current effective shape is real, separate work this pass did not do, flagged here rather than left silently implied as done. The eight tables this pass actually added ARE folded to current effective shape, each verified column-by-column against a freshly migrated `:memory:` database (`PRAGMA table_info`), not merely transcribed from their creating migration.
 
 **Market Data Service** — owner: `docs/specs/market-data-service-spec.md`
 
@@ -687,6 +691,211 @@ CREATE INDEX idx_outside_benchmark_samples_computed_at
 
 **`current_tick.stage`'s `CHECK` carries seven names live, not six.** Migration `0029_current_tick_position_check.sql` (#743, the tick/decision split) rebuilt the table to add `'position_check'` — `CHECK(stage IN ('position_check', 'analysts', 'debate', 'trader', 'risk', 'verdict', 'execution'))` — for a reason unrelated to `invalidation`. The standalone `invalidation` stage was declined 2026-09-02 (its mechanism folds into the Risk Critic instead, [#994](https://github.com/dd-jp/samurai-trading-system/issues/994)), so the *separate* table-rebuild migration this entry previously anticipated — an eighth name, for `invalidation` — is never needed: SQLite cannot alter a `CHECK` in place, but there is no `invalidation` name to add it for. `audit_log.stage` is unconstrained `TEXT` and needs no migration either way. *(Corrected 2026-09-06, [#1168](https://github.com/dd-jp/samurai-trading-system/issues/1168): this entry previously said the CHECK "stays at the six original stage names," missing that migration 0029 landed 2026-08-17 — roughly two weeks before the 2026-09-02/03 restatements that got this wrong — and had already rebuilt it to seven for `position_check`, a change unrelated to `invalidation`. `cross-spec-contracts.md` CV-28 has this right.)*
 
+#### `stage2_selected_config` (migration `0014`, [#375](https://github.com/dd-jp/samurai-trading-system/issues/375) / [#384](https://github.com/dd-jp/samurai-trading-system/issues/384)) — DDL added by [#1174](https://github.com/dd-jp/samurai-trading-system/issues/1174)
+
+Owned by the Cost-Model/Backtest Harness (`backtest` in `write-guard.ts`'s `STAGE_OWNED_TABLES`), and already named there and in the "Integration with Pipeline" map above — this document simply never carried its `CREATE TABLE`, until now. The frozen Stage 2 selection: `live_backtest_divergence_over_max` compares the live Sharpe against the selected config's OWN backtest Sharpe, and the other three kill-lines (`pbo_over_max`, `oos_sharpe_under_min`, `dsr_insignificant`) all read `DailyMetricsSample.revalidation`, which nothing populated without a persisted Stage 2 run. One table closed both #375 and #384.
+
+One row per (config, asset class, run) — never the latest selection as a mutable row. A Stage 2 re-run is evidence about a different sample; overwriting the previous verdict would destroy the audit trail the live-graduation decision rests on, so readers take the newest row by `selected_at` and history stays. `pbo`/`dsr` are nullable, and that is load-bearing — `renderStage2Verdict` returns typed refusals ("no CSCV pass was requested"), and a refusal is not a zero. No later migration touches this table.
+
+```sql
+CREATE TABLE stage2_selected_config (
+  config_hash       TEXT    NOT NULL,   -- joins config_trials.config_hash
+  asset_class       TEXT    NOT NULL CHECK (asset_class IN ('crypto', 'stocks')),
+  selected_at       TEXT    NOT NULL,   -- ISO-8601 UTC; readers take the newest row for an asset class
+  window_start      TEXT    NOT NULL,   -- the backtest sample's bounds; staleness is checked against this
+  window_end        TEXT    NOT NULL,
+  backtest_sharpe   REAL    NOT NULL,   -- the selected config's whole-sample annualized Sharpe
+  oos_sharpe        REAL    NOT NULL,   -- mean of the walk-forward test-fold Sharpes
+  fold_sharpes_json TEXT    NOT NULL,   -- JSON number[]: RevalidationSnapshot.walk_forward_sharpe_distribution
+  pbo               REAL,               -- NULL = refused (see prose above), never a stored zero
+  dsr               REAL,               -- NULL = refused, same reason
+  n_trials          INTEGER NOT NULL,   -- distinct trials DSR was deflated by
+  overall_pass      INTEGER NOT NULL CHECK (overall_pass IN (0, 1)),
+  PRIMARY KEY (config_hash, asset_class, selected_at)
+);
+
+-- The only read pattern: newest selection for an asset class.
+CREATE INDEX idx_stage2_selected_config_lookup
+  ON stage2_selected_config (asset_class, selected_at DESC);
+```
+
+**Not part of the twenty-two/twenty-three-table non-collision pass; checked here.** `config_hash` deliberately shares its name AND value space with `config_trials.config_hash` — a join is the point, this row names one of the trials. `asset_class` matches the schema-wide `CHECK(... IN ('crypto', 'stocks'))` convention exactly. `window_start`/`window_end` name the same concept `arm_comparison_samples`/`outside_benchmark_samples` name `window_from`/`window_to` — a genuine, pre-existing naming inconsistency between three measurement tables, not introduced by this pass and not fixed here: renaming a live column is a code change, and this is a docs-only pass. Every other column here is new. No unintentional collision found.
+
+#### `trader_log` and `risk_log` (migration `0016`, [#328](https://github.com/dd-jp/samurai-trading-system/issues/328)) — DDL added by [#1174](https://github.com/dd-jp/samurai-trading-system/issues/1174)
+
+Owned by the Trader (`trader_log`) and Risk (`risk_log`) respectively, per `write-guard.ts`. `audit_log` is digest-only — it proves a stage ran and its I/O hashed to X, and cannot reconstruct a single value. These are the two stages' real-field companions, answering what `audit_log` alone cannot: which precedents moved conviction, what portfolio state Risk sized against, why a size came out at N rather than 2N, and why a tick stopped at `risk` instead of reaching Verdict. `trader_log` holds one row per Trader decision INCLUDING a decision not to trade — `TickOutcome.final_stage` records where a tick stopped and never why, and a skip is itself a decision. `risk_log` holds one row per Risk evaluation, including a rejection. Both keyed `(trace_id, instrument)`; both indexed on `created_at` for the dashboard's 15-minute pipeline window.
+
+`trader_log` was amended twice after `0016`. Migration `0030` (#748) added `exit_reason`, distinguishing the flat-by-close flatten from an indicator-driven early release and from a debate-reversal exit — before it, all three landed identically as `intent_type = 'exit'`. Migration `0042` (#1109) added `decision_class` plus `reason_detail_compared_value`/`reason_detail_threshold`, classifying WHY a skip fired at the granularity an operator's next action needs (starvation vs. the system working as intended) and, on the four skip reasons that compare a value against a configured threshold, the compared value and the threshold itself.
+
+`risk_log` was amended once. Migration `0028` (#726) widened `status`'s `CHECK` from `('approved', 'rejected')` to add `'error'` — the gate pipeline threw before a decision could be reached (a subclass with no deployment cap declared, for instance), distinguished from a decision that reached `'rejected'` cleanly by running the gates and declining. SQLite cannot alter a `CHECK` constraint in place, so `0028` rebuilds the table column-for-column; the DDL below is that rebuilt shape.
+
+```sql
+CREATE TABLE trader_log (
+  trace_id               TEXT    NOT NULL,
+  instrument              TEXT   NOT NULL,
+  debate_id               TEXT   NOT NULL,   -- joins debate_log; the debate's own content is not duplicated here
+  intent_type             TEXT,              -- 'entry' | 'scale_in' | 'exit', or NULL when decide() returned null
+  skip_reason             TEXT,              -- populated only on a skip
+  base_risk_fraction      REAL,
+  conviction_multiplier   REAL,
+  vol_floor_factor        REAL,
+  non_converged_haircut   REAL,
+  cosine_multiplier       REAL,
+  neighbor_count          INTEGER,
+  weighted_mean_r         REAL,
+  no_precedent            INTEGER CHECK(no_precedent IN (0, 1)),
+  atr                     REAL,
+  entry                   REAL,
+  stop                    REAL,
+  size                    REAL,
+  created_at              TEXT    NOT NULL,
+  exit_reason             TEXT,   -- 0030 (#748): 'flatten' | 'signal_decay' | 'direction_flip'; NULL pre-migration and on non-exit rows
+  decision_class          TEXT,   -- 0042 (#1109): TraderDecisionClass's string value; no CHECK (see migration doc)
+  reason_detail_compared_value REAL,  -- 0042: populated with reason_detail_threshold on the four threshold-comparison skip reasons only
+  reason_detail_threshold      REAL,
+  PRIMARY KEY (trace_id, instrument)
+);
+
+CREATE TABLE risk_log (
+  trace_id            TEXT    NOT NULL,
+  instrument          TEXT    NOT NULL,
+  status              TEXT    NOT NULL CHECK(status IN ('approved', 'rejected', 'error')),  -- 'error' added by 0028 (#726)
+  binding_constraint  TEXT,
+  reasons_json        TEXT    NOT NULL,
+  original_size       REAL,
+  final_size          REAL,
+  stop_tightened      INTEGER NOT NULL CHECK(stop_tightened IN (0, 1)),
+  portfolio_tripped   INTEGER NOT NULL CHECK(portfolio_tripped IN (0, 1)),
+  crypto_tripped      INTEGER NOT NULL CHECK(crypto_tripped IN (0, 1)),
+  stocks_tripped      INTEGER NOT NULL CHECK(stocks_tripped IN (0, 1)),
+  armed_breakers_json TEXT    NOT NULL,
+  equity              REAL    NOT NULL,
+  drawdown_pct        REAL    NOT NULL,
+  gross_exposure      REAL    NOT NULL,
+  consecutive_losses  INTEGER NOT NULL,
+  daily_pnl_portfolio_pct  REAL,
+  daily_pnl_crypto_pct     REAL,
+  daily_pnl_stocks_pct     REAL,
+  daily_pnl_unknown_reason TEXT,
+  created_at          TEXT    NOT NULL,
+  PRIMARY KEY (trace_id, instrument)
+);
+
+CREATE INDEX idx_trader_log_created_at ON trader_log(created_at);
+CREATE INDEX idx_risk_log_created_at ON risk_log(created_at);
+```
+
+**Not part of the twenty-two/twenty-three-table non-collision pass; checked here.** `trace_id`/`instrument`/`debate_id` reuse the schema-wide conventions already established elsewhere (consistent `TEXT` correlation keys, no divergence). Three real near-misses, all deliberate rather than accidental:
+- **`intent_type`** — `open_positions.intent_type` is `CHECK(... IN ('entry', 'scale_in'))`; `trader_log.intent_type` is a superset (adds `'exit'`, and is nullable for a skip) with no `CHECK` enforcing it in SQL. Same name, deliberately wider domain: `trader_log` records the stage's decision including its refusals, `open_positions` only ever holds a lot that actually opened.
+- **`entry`/`stop`/`size`** — bare names reused across `trader_log` (the priced inputs the Trader computed at decision time), `open_positions`/`closed_trades` (`stop`, the live/frozen protective level; `entry`, the realized average), `broker_brackets` (`size`, the requested venue quantity) and `flatten_submissions` (`size`, the flatten's own order size). Each is the same *kind* of value at a different point in one lot's lifecycle; none of these tables is ever joined by `entry`/`stop`/`size` alone — every real join in this schema goes through `trace_id`/`debate_id`/`idempotency_key`.
+- **`status`** — `risk_log.status` (`'approved'|'rejected'|'error'`), `flatten_submissions.status` (`'submitting'|'submitted'|'error'`) and `verdict_log.status` (`'go'|'no_go'`) share the literal `'error'` between the first two by coincidence, not by shared meaning: `risk_log`'s means a gate pipeline threw before evaluating; `flatten_submissions`'s means the flatten provably never reached the broker. Consistent with this spec's own "every table's own consumer dictates its key" principle, extended here to status vocabularies.
+
+No other field-level collisions found for either table.
+
+#### `flatten_submissions` (migration `0019`, [#508](https://github.com/dd-jp/samurai-trading-system/issues/508) review / PR #516) — DDL added by [#1174](https://github.com/dd-jp/samurai-trading-system/issues/1174)
+
+Owned by Execution — the durable write-ahead journal for `execute()`'s exit path. An exit intent never wrote a row to `open_positions` (`OpenPosition.intent_type` deliberately excludes `'exit'` — "exits close a lot; they never create one"), so a replayed flatten had nothing to dedupe against and a lost `submitFlatten` response left no durable trace for reconcile to resolve. `'submitting' -> 'submitted' | 'error'`, mirroring `broker_brackets.phase` and `open_positions.order_state`'s own pending-to-submitted transition. No bracket-shaped columns: a flatten is a plain market order.
+
+Amended five times after `0019`. Migration `0020` (#517) added `lot_idempotency_keys`, the originating lot(s)' identity, written at submit time so `ingestFills()` can attribute a fill back to the lot it closed instead of inferring it after the fact. Migration `0021` (#571) added `lot_held_quantities`, positionally parallel to the keys, so a partial flatten's fill splits by what each lot actually held rather than by what its entry once filled. Migration `0023` (#519/#526) added `fills_swept_at`, the durable "done" signal that bounds `reconcile()`'s sweep to genuinely in-flight rows instead of every flatten this database has ever recorded. Migration `0031` (#793) added `exit_reason`, threading the same three named reasons (`ExitReason`: `'flatten' | 'signal_decay' | 'direction_flip'`) that `trader_log.exit_reason` and `fills.exit_reason` also carry. Migration `0037` (#1001) added `decision_price`/`quote_bid`/`quote_ask`/`quote_mid`/`quote_observed_at`/`modelled_cost_breakdown_json` — the SAME six columns added to `open_positions` by the same migration, so a real-broker fill's realised half-spread and slippage can be computed on the exit leg exactly as on the entry leg.
+
+```sql
+CREATE TABLE flatten_submissions (
+  idempotency_key   TEXT PRIMARY KEY,
+  instrument        TEXT NOT NULL,
+  asset_class       TEXT NOT NULL CHECK(asset_class IN ('crypto', 'stocks')),
+  side              TEXT NOT NULL CHECK(side IN ('buy', 'sell')),
+  size              REAL NOT NULL,
+  status            TEXT NOT NULL CHECK(status IN ('submitting', 'submitted', 'error')),
+  order_state       TEXT,     -- set once the broker acks; NULL while 'submitting'
+  broker_order_ids  TEXT,     -- JSON string[]; NULL while 'submitting'
+  reason            TEXT,     -- set on 'error'
+  submitted_at      TEXT NOT NULL,   -- write-ahead time
+  resolved_at       TEXT,            -- set on transition to 'submitted' or 'error'
+  lot_idempotency_keys         TEXT,  -- 0020 (#517): JSON string[] of open_positions.idempotency_key, in opened_at order
+  lot_held_quantities          TEXT,  -- 0021 (#571): JSON number[], positionally parallel to lot_idempotency_keys
+  fills_swept_at               TEXT,  -- 0023 (#519/#526): set once every named lot's fill share has durably applied
+  exit_reason                  TEXT,  -- 0031 (#793): 'flatten' | 'signal_decay' | 'direction_flip'
+  decision_price                REAL, -- 0037 (#1001): the Trader's decision-time price -- see open_positions' own column
+  quote_bid                     REAL, -- 0037: NULL together with quote_ask on any source without fetchQuote
+  quote_ask                     REAL, -- 0037
+  quote_mid                     REAL, -- 0037: (quote_bid + quote_ask) / 2, NULL iff the pair is
+  quote_observed_at             TEXT, -- 0037: the quote's own timestamp
+  modelled_cost_breakdown_json  TEXT  -- 0037: JSON {spread_cost, commission, slippage, market_impact}
+);
+CREATE INDEX idx_flatten_submissions_instrument ON flatten_submissions(instrument);
+```
+
+**Not part of the twenty-two/twenty-three-table non-collision pass; checked here.** `instrument`/`asset_class`/`side` match this schema's established conventions exactly. `idempotency_key` as this table's own `PRIMARY KEY` uses the same type (`TEXT`) as every other appearance of that name, but is a fresh key space — a flatten submission's own idempotency key, never `open_positions.idempotency_key` (that identity is instead carried inside `lot_idempotency_keys`). `order_state`/`broker_order_ids` share their names and value spaces with `open_positions`' columns of the same name by design (`0019`'s own doc: "mirroring... `execute()`'s own pending -> submitted transition"); nullable here only because this row is written before the broker ack, where `open_positions`' equivalent is not. `decision_price`/`quote_bid`/`quote_ask`/`quote_mid`/`quote_observed_at`/`modelled_cost_breakdown_json` are the identical six columns `open_positions` carries, added by the same migration on purpose (`0037`'s own doc: "six columns, added to BOTH ... the parallel write-aheads"). `exit_reason` is the same three-value domain `trader_log.exit_reason` and `fills.exit_reason` carry, threaded deliberately (`0031`'s own doc). No unintentional divergence found.
+
+#### `llm_call_log` (migration `0039`, [#1035](https://github.com/dd-jp/samurai-trading-system/issues/1035)) — DDL added by [#1174](https://github.com/dd-jp/samurai-trading-system/issues/1174)
+
+Owned by the Debate Engine. What was actually asked of an LLM, and what actually came back — `llm_spend` carries every fact ABOUT a call (model, tokens, cost, latency) but not its content, and `debate_log` carries the synthesized outcome, not any single call's text. A separate table because two hot readers (`SqliteSpendCap`'s all-time trading-path sum over `llm_spend`, the dashboard's range-scan of it) read that table for numbers and never for text, and multi-KB TEXT columns inline into the row and would balloon that b-tree for reads that select none of it. Pruned by a row ceiling (`DEFAULT_MAX_LLM_CALL_ROWS`, `prune-llm-call-log.ts`, #1045) rather than a time window, since disk is the resource actually at risk and the call rate is cadence-bound while a row ceiling is not. `spend_id` carries no `FOREIGN KEY` on purpose — `llm_spend`'s own write already swallows its failures by design, and a real FK would turn one swallowed metering failure into a cascading one that also loses the text. No later migration touches this table.
+
+```sql
+CREATE TABLE llm_call_log (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  spend_id   INTEGER,          -- llm_spend.id; never NULL from today's writer, nullable for a future text-only writer
+  trace_id   TEXT    NOT NULL, -- joins to the tick, and to every log line for it
+  stage      TEXT    NOT NULL, -- 'debate' | 'risk_critic' | 'sentiment'
+  debate_id  TEXT,             -- joins debate_log; NULL outside a debate
+  model      TEXT    NOT NULL, -- the SERVED model, matching llm_spend.model
+  prompt     TEXT,
+  response   TEXT,
+  timestamp  TEXT    NOT NULL
+);
+
+CREATE INDEX idx_llm_call_log_timestamp ON llm_call_log(timestamp);
+CREATE INDEX idx_llm_call_log_trace ON llm_call_log(trace_id);
+```
+
+**Not part of the twenty-two/twenty-three-table non-collision pass; checked here.** One genuine divergence, and it is a design choice rather than a bug: **`stage`** here is `'debate' | 'risk_critic' | 'sentiment'` — an LLM-calling context — while `audit_log.stage`/`current_tick.stage` use the disjoint `PIPELINE_STAGES` vocabulary (`'position_check' | 'analysts' | ... | 'execution'`). Same column name, two unrelated enumerations, each dictated by its own table's consumer; `audit_log.stage` is unconstrained `TEXT` so nothing in SQL enforces either vocabulary against the other. `llm_spend.stage` carries the SAME LLM-context vocabulary as this table's `stage`, consistently. `model`/`debate_id`/`trace_id`/`timestamp` all match `llm_spend`'s own columns of the same name by design (the migration's own doc: "matching `llm_spend.model`"). No unintentional divergence found.
+
+#### `alert_delivery_failures` (migration `0043`, [#1108](https://github.com/dd-jp/samurai-trading-system/issues/1108)) — DDL added by [#1174](https://github.com/dd-jp/samurai-trading-system/issues/1174)
+
+Owned by the Orchestrator. This table appeared nowhere in this document before now — not even in the "Integration with Pipeline" map, which the four-table version of this gap (F-9's own class) had at least done. One row per Telegram send that exhausted `TelegramBotApiClient`'s retry policy (`DEFAULT_RETRY`, 3 attempts) — not one row per attempt, and not a send that eventually succeeded on retry. `body`/`error` are masked for credential syntaxes and truncated the same way an HTTP error message already is (`truncateForError`, 500 chars) so the identifying content survives without the table holding an unbounded or credential-carrying blob. No PK, like `audit_log`: nothing here is looked up by row identity, only counted. No later migration touches this table.
+
+```sql
+CREATE TABLE alert_delivery_failures (
+  chat_id   TEXT NOT NULL,
+  method    TEXT NOT NULL,
+  body      TEXT NOT NULL,
+  error     TEXT NOT NULL,
+  timestamp TEXT NOT NULL
+);
+
+CREATE INDEX idx_alert_delivery_failures_timestamp ON alert_delivery_failures(timestamp);
+```
+
+**Not part of the twenty-two/twenty-three-table non-collision pass; checked here.** `timestamp` matches the generic ISO-8601 UTC event-time convention already used by `fills`/`broker_observed_fills`/`llm_spend`/`llm_call_log` (and, under the name `captured_at`, `cii_snapshots`) — never a join key, no divergence. `chat_id`/`method`/`body`/`error` are new names found nowhere else. No collision found.
+
+#### `feedback_cycle_schedule` (migration `0044`, [#1110](https://github.com/dd-jp/samurai-trading-system/issues/1110)) — DDL added by [#1174](https://github.com/dd-jp/samurai-trading-system/issues/1174)
+
+Owned by the Feedback Loop (`feedback-loop` in `write-guard.ts`) even though the table exists to serve `production.ts`'s `scheduleFeedbackCycle`. Like `alert_delivery_failures`, this table appeared nowhere in this document before now, including the "Integration with Pipeline" map. The daily feedback cycle's restart-durable schedule: one column, `last_boundary`, holds the most recently completed WALL-CLOCK boundary rather than a raw "last ran at" timestamp, so "did today's cycle already happen" is a single inequality across any number of restarts, and catch-up after a gap is capped at exactly one cycle regardless of how many boundaries were missed. Two durable rows (`key = 'default'` / `'attempt'`) use the same free-form-TEXT-PK, upsert-forever shape `account_state` (migration `0006`) already uses for the same reason — a schedule that never has more than a handful of instances does not need an invented identity. `key = 'attempt'` was added within the same migration's "pass-2 fix", stamping the boundary about to run BEFORE `runFeedbackCycle` executes, so a restart before a cycle starts is distinguishable from one landing after the attempt was stamped. No later migration touches this table.
+
+```sql
+CREATE TABLE feedback_cycle_schedule (
+  key           TEXT PRIMARY KEY,
+  last_boundary TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
+);
+```
+
+**Not part of the twenty-two/twenty-three-table non-collision pass; checked here.** `key` as a single/few-row literal-valued `PRIMARY KEY` is the same pattern `account_state.key` already uses, explicitly modelled on it per the migration's own doc — a deliberate shared idiom, not a collision. `last_boundary` is a new name found nowhere else. `updated_at` matches the generic last-modified-timestamp convention already shared by `account_state`/`analyst_weights`/`strategy_params`/`risk_thresholds`/`broker_brackets`. No divergence found.
+
+#### `llm_spend_cap` (migration `0047`, [#1140](https://github.com/dd-jp/samurai-trading-system/issues/1140)) — DDL added by [#1174](https://github.com/dd-jp/samurai-trading-system/issues/1174)
+
+Owned by the Orchestrator — the composition root arms it at boot with the LLM spend ceiling actually enforced, and the dashboard reads this row so its meter measures against that cap rather than a copy of the number. One row, rewritten at every boot; `budget_usd` NULL records an uncapped run. No later migration touches this table.
+
+```sql
+CREATE TABLE llm_spend_cap (
+  id          INTEGER PRIMARY KEY CHECK (id = 1),
+  budget_usd  REAL,
+  armed_at    TEXT NOT NULL
+);
+```
+
+**Not part of the twenty-two/twenty-three-table non-collision pass; checked here.** `id INTEGER PRIMARY KEY CHECK (id = 1)` is a single-row idiom distinct from `account_state`/`feedback_cycle_schedule`'s literal-TEXT-key idiom for the same "a handful of rows, forever" problem — a real but harmless stylistic divergence between two tables solving the same problem two different ways; neither is ever joined to the other, so it costs nothing. `budget_usd`/`armed_at` are new names found nowhere else. No divergence found.
+
 ### Non-Collision Verification
 
 `cross-spec-contracts.md`'s "shared-store table non-collision" spot-check was clean at the table-name level; re-verified here at the field level across all twenty-two tables above:
@@ -753,12 +962,13 @@ Execution           → open_positions, fills, closed_trades  (sole writer)
 Cost-Model/Backtest → config_trials, stage2_selected_config
 Feedback Loop       → analyst_weights, strategy_params, risk_thresholds, dial_adjustments,
                       arm_comparison_samples, outside_benchmark_samples,
+                      feedback_cycle_schedule,
                       cosine_setups (labels only; Trader writes)
 Trader              → cosine_setups (writes; FL labels), trader_log
 Risk                → breaker_state, risk_log, risk_critic_log
 Debate Engine       → debate_log, llm_spend, llm_call_log
 Verdict             → verdict_log
-Orchestrator        → audit_log, current_tick, daily_equity, llm_spend_cap
+Orchestrator        → audit_log, current_tick, daily_equity, llm_spend_cap, alert_delivery_failures
 Transport Layer     → account_state (AccountStateProvider, peak_equity)
 Transport Layer     → session_equity (AccountStateProvider, per-class daily PnL basis)
 service-api         → (nothing — reader only)
