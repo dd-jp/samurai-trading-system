@@ -195,11 +195,10 @@ describe('resolveTrace', () => {
     expect(detail.lane).toBeUndefined();
     expect(detail.cells).toBeNull();
     expect(detail.verdict).toBeUndefined();
-    // Not asserted: detail.absence.lane currently reads 'aged_out' here, which
-    // is the wrong label (the trace hasn't aged out — it's in the window
-    // under another instrument) and detail.traceId still leaks the mismatched
-    // selection's traceId unvalidated. Both are tracked by #1267 ('wrong_instrument'
-    // absence state); pinning either value here would make this test fight that fix.
+    // The trace is live in the window under SPY, not aged out — and its id
+    // must not leak into AAPL's TraceDetail unvalidated (#1267).
+    expect(detail.absence.lane).toBe('wrong_instrument');
+    expect(detail.traceId).toBeNull();
   });
 
   it('says an idle lane is idle rather than absent, and joins it to no critic row', () => {

@@ -25,6 +25,21 @@ export function laneFor(
     : view.lanes.find((lane) => lane.trace_id === traceId && lane.instrument === instrument);
 }
 
+/**
+ * True when `traceId` names a lane that is live in the pipeline window under
+ * some OTHER instrument — distinguishes a mismatched `Selection` (#1267,
+ * recoverable by reselecting) from a trace that has genuinely aged out of the
+ * window (not recoverable at all). Only meaningful once `laneFor` has already
+ * failed to find `traceId` under `instrument`.
+ */
+export function laneBelongsToAnotherInstrument(
+  view: PipelineView,
+  instrument: string,
+  traceId: string,
+): boolean {
+  return view.lanes.some((lane) => lane.trace_id === traceId && lane.instrument !== instrument);
+}
+
 /** Matches `trace_id` AND `instrument`; a `trace_id`-only match renders another instrument's verdict under this one's header (#1205). */
 export function verdictFor(
   verdicts: readonly VerdictRow[],

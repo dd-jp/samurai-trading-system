@@ -33,6 +33,7 @@ import {
   closedTradeByKey,
   debateById,
   fillsFor,
+  laneBelongsToAnotherInstrument,
   laneFor,
   latestDebateFor,
   openPositionFor,
@@ -85,7 +86,8 @@ export interface TraceDetail {
   fills: readonly FillRow[];
   settled: SettledOutcome | null;
   inFlight: boolean;
-  absence: { lane: 'aged_out' | 'idle' | 'none' | null };
+  /** `wrong_instrument`: the selection's trace id names a lane live under a DIFFERENT instrument (#1267) — recoverable by reselecting, unlike `aged_out`. */
+  absence: { lane: 'aged_out' | 'idle' | 'none' | 'wrong_instrument' | null };
 }
 
 export interface TradeDetail {
@@ -111,7 +113,14 @@ function cellsOf(lane: PipelineLane | undefined): readonly ResolvedCell[] | null
 export function resolveTrace(snapshot: WireSnapshot, selection: Selection): TraceDetail {
   const { instrument } = selection;
   const lane = laneFor(snapshot.pipeline, instrument, selection.traceId);
-  const traceId = selection.traceId ?? lane?.trace_id ?? null;
+  // A trace_id that fails the instrument-conjoined join above but resolves
+  // under some other instrument's lane is a mismatched Selection, not an
+  // aged-out trace (#1267) — the id must not leak into TraceDetail either.
+  const wrongInstrument =
+    lane === undefined &&
+    selection.traceId !== null &&
+    laneBelongsToAnotherInstrument(snapshot.pipeline, instrument, selection.traceId);
+  const traceId = wrongInstrument ? null : (selection.traceId ?? lane?.trace_id ?? null);
   const position = openPositionFor(snapshot.positions, instrument);
   return {
     instrument,
@@ -130,9 +139,11 @@ export function resolveTrace(snapshot: WireSnapshot, selection: Selection): Trac
     absence: {
       lane:
         lane === undefined
-          ? traceId === null
-            ? 'none'
-            : 'aged_out'
+          ? wrongInstrument
+            ? 'wrong_instrument'
+            : traceId === null
+              ? 'none'
+              : 'aged_out'
           : lane.trace_id === null
             ? 'idle'
             : null,
