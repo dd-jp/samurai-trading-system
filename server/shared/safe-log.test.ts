@@ -76,11 +76,17 @@ describe('describeThrown', () => {
   // The same gap on the plainer, non-`Error` trigger: a bare `throw
   // undefined` / `Promise.reject()` with no argument reaches this function's
   // non-`Error` branch with `value` already `undefined`, no getter involved.
-  // Before this fix, every one of `describeThrown`'s ~78 call sites handed
-  // that back as `undefined` in their own `: string`-typed slot — not a
-  // throw, so `logCaughtFailure`'s guard never engaged for it — rather than
-  // stringifying it. This is a real, repo-wide behavior change (undefined →
-  // the string `"undefined"`), not just the getter case above.
+  // Before this fix, every one of this shared helper's 18 production call
+  // sites (portfolio-view.ts, decide.ts, orchestrator.ts x3,
+  // service-api/fault-guard.ts x2, tick-loop.ts x2, direct-bind.ts x7,
+  // supervisor/fault-guard.ts x2) handed that back as `undefined` in their
+  // own `: string`-typed slot — not a throw, so `logCaughtFailure`'s guard
+  // never engaged for it — rather than stringifying it. This is a real
+  // behavior change (undefined → the string `"undefined"`), not just the
+  // getter case above, but it is NOT repo-wide: `risk-manager/critic.ts`
+  // declares its own private `describeThrown` (same name, no
+  // `JSON.stringify` fallback) used at 5 call sites in that file (lines 308,
+  // 460, 462, 507, 618), and this fix does not reach it.
   it('renders a bare undefined throw as the string "undefined", not the value undefined', () => {
     expect(describeThrown(undefined)).toBe('undefined');
   });

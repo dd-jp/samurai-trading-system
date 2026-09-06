@@ -372,13 +372,16 @@ export class AnalystOrchestrator {
               // rather than returning it verbatim, but that ladder can still
               // throw for a value hostile enough to defeat BOTH steps — its
               // own doc comment says so — and a plain `message` getter that
-              // throws outright never reaches the ladder at all. Either one
-              // throwing here would escape this catch — which exists to
-              // HANDLE the persona's failure — and reject the `Promise.all`
-              // below, turning a handled analyst failure into a failed tick
-              // before any of this loop's own logging runs. This is the same
-              // try/catch/placeholder shape `logCaughtFailure` (safe-log.ts)
-              // uses for that residual case.
+              // throws outright never reaches the ladder at all. Nor does a
+              // `Proxy` with a throwing `getPrototypeOf` trap: `describeThrown`'s
+              // own `error instanceof Error` check runs before either surface
+              // and throws there instead. Any of these throwing here would
+              // escape this catch — which exists to HANDLE the persona's
+              // failure — and reject the `Promise.all` below, turning a
+              // handled analyst failure into a failed tick before any of this
+              // loop's own logging runs. This is the same try/catch/placeholder
+              // shape `logCaughtFailure` (safe-log.ts) uses for that residual
+              // case.
               lastReason = '[unrenderable error]';
             }
             lastKind = error instanceof AnalystTimeoutError ? 'timeout' : 'error';
