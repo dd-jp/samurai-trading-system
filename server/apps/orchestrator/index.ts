@@ -673,11 +673,7 @@ export async function startFromEnvironment(
     payload: {
       env,
       mode,
-      // Read off the orchestrator's own resolution (#1167), not re-derived
-      // from `injected.universe` — a second reading of the same config field
-      // is exactly the multiple-independent-resolutions hazard
-      // orchestrator-spec.md flags, and this one could drift from the
-      // scheduler's if a future edit changed either fallback alone.
+      // Read off the orchestrator's own resolution (#1167), not re-derived from `injected.universe`.
       universe: orchestrator.universe.map((i) => i.asset),
       orphaned_go_verdicts: orphans.length,
     },

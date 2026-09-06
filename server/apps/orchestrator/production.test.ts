@@ -541,12 +541,26 @@ describe('SMOKE_TEST_UNIVERSE', () => {
  * A value/identity assertion on today's wiring cannot, by itself, tell a
  * shared resolution apart from two separate calls that happen to read the
  * same immutable config — both return the identical reference. So the
- * structural fix (a single non-exported `resolveUniverse` inside
- * `production.ts`, threaded out through `ProductionComponents.universe` /
- * `ProductionOrchestrator.universe`) is checked for WIRING below, and
- * separately, this source scan is what actually satisfies "a second
- * resolution site cannot be added without a test failing": it fails on the
- * count, not on any value a duplicated call would produce.
+ * wiring is checked separately below, and this source scan is what actually
+ * satisfies "a second resolution site cannot be added without a test
+ * failing": it fails on the count, not on any value a duplicated call would
+ * produce. It counts the fallback expression itself rather than calls to a
+ * named helper — a review of an earlier version of this fix found that a
+ * helper function sitting in this file is exactly as easy to call twice as
+ * the expression is to write twice, so the fallback is inlined into
+ * `buildProductionComponents` rather than wrapped.
+ *
+ * Residual gap, stated rather than discovered: this is a text scan, not a
+ * data-flow analysis, so it cannot see through a *newly written* helper that
+ * wraps the same expression and is called from two places — it can only
+ * catch the fallback expression itself being duplicated (directly, or via
+ * a helper it already appears inside). Nor does it catch `||`, `??=`, a
+ * destructuring default, a ternary, or an aliased `SMOKE_TEST_UNIVERSE`
+ * import used as an equivalent fallback. Closing any of these categorically
+ * needs real static analysis of this file, which is out of proportion to a
+ * currently-latent hazard; code review is the remaining backstop for this
+ * class of evasion, the same as it is for any other refactor that keeps a
+ * test green while reintroducing the bug the test exists to catch.
  */
 describe('universe resolution is a single site (#1167)', () => {
   // `server/`, not just this directory: `SMOKE_TEST_UNIVERSE` is re-exported
@@ -569,17 +583,94 @@ describe('universe resolution is a single site (#1167)', () => {
     return found;
   }
 
+  /**
+   * `typescript` is on v7's native-compiler API, which no longer exports a
+   * scanner/tokenizer (`Object.keys(require('typescript'))` is just
+   * `['version', 'versionMajorMinor']`) — there is no real parser available
+   * to lean on here. This is a small hand-rolled one instead of a single
+   * regex, specifically so `//` and `/*` inside a string (a URL is the
+   * realistic case) don't get misread as a comment start and swallow real
+   * code after them — that direction of error would hide a genuine
+   * duplicate, which is worse than the false positive it would be fixing.
+   * Comment stripping only; it does not track template-literal `${}`
+   * interpolation, so an occurrence written inside one would not be
+   * counted — not a realistic shape for this specific fallback expression.
+   */
+  function stripCommentsAndStrings(source: string): string {
+    let out = '';
+    let i = 0;
+    const n = source.length;
+    while (i < n) {
+      const c = source[i];
+      const c2 = source[i + 1];
+      if (c === '/' && c2 === '/') {
+        i += 2;
+        while (i < n && source[i] !== '\n') i++;
+        continue;
+      }
+      if (c === '/' && c2 === '*') {
+        i += 2;
+        while (i < n && !(source[i] === '*' && source[i + 1] === '/')) i++;
+        i += 2;
+        continue;
+      }
+      if (c === "'" || c === '"' || c === '`') {
+        const quote = c;
+        out += ' ';
+        i++;
+        while (i < n && source[i] !== quote) {
+          if (source[i] === '\\') i++;
+          i++;
+        }
+        i++;
+        continue;
+      }
+      out += c;
+      i++;
+    }
+    return out;
+  }
+
+  // Self-check on the stripper above, not on production code — if this goes
+  // red, the guard test below is no longer trustworthy either way.
+  it.each([
+    ['real code', 'const universe = config.universe ?? SMOKE_TEST_UNIVERSE;', 1],
+    ['a // line comment quoting it', '// config.universe ?? SMOKE_TEST_UNIVERSE\nconst x = 1;', 0],
+    [
+      'a /** */ doc comment quoting it',
+      '/**\n * config.universe ?? SMOKE_TEST_UNIVERSE\n */\nconst x = 1;',
+      0,
+    ],
+    ['a string literal quoting it', "const x = 'literally ?? SMOKE_TEST_UNIVERSE';", 0],
+    [
+      "a // inside an unrelated string doesn't swallow real code after it",
+      "const u = 'https://x'; const universe = config.universe ?? SMOKE_TEST_UNIVERSE;",
+      1,
+    ],
+    [
+      'two real occurrences',
+      'const a = c.u ?? SMOKE_TEST_UNIVERSE;\nconst b = c.u ?? SMOKE_TEST_UNIVERSE;',
+      2,
+    ],
+  ])('stripCommentsAndStrings: %s', (_name, input, expected) => {
+    const occurrences = (stripCommentsAndStrings(input).match(/\?\?\s*SMOKE_TEST_UNIVERSE/g) ?? [])
+      .length;
+    expect(occurrences).toBe(expected);
+  });
+
   it('the SMOKE_TEST_UNIVERSE fallback appears exactly once, in production.ts, across all server sources', () => {
     const matches = serverSourceFiles(SERVER_DIR)
-      .map((path) => ({ path, text: readFileSync(path, 'utf8') }))
-      .filter(({ text }) => /\?\?\s*SMOKE_TEST_UNIVERSE/.test(text));
+      .map((path) => ({ path, code: stripCommentsAndStrings(readFileSync(path, 'utf8')) }))
+      .filter(({ code }) => /\?\?\s*SMOKE_TEST_UNIVERSE/.test(code));
 
-    // Named, not just counted: a reintroduced duplicate should fail with the
-    // culprit file in the diff, not just "expected 2 to be 1".
+    // A duplicate landing in a second file names that file in the failure;
+    // a duplicate landing inside production.ts alongside the real one does
+    // not (this assertion still passes with two occurrences in one file) —
+    // the occurrence count below is what catches that case, on its own.
     expect(matches.map(({ path }) => basename(path))).toEqual(['production.ts']);
 
     const occurrences = matches.reduce(
-      (count, { text }) => count + (text.match(/\?\?\s*SMOKE_TEST_UNIVERSE/g)?.length ?? 0),
+      (count, { code }) => count + (code.match(/\?\?\s*SMOKE_TEST_UNIVERSE/g)?.length ?? 0),
       0,
     );
     expect(occurrences).toBe(1);

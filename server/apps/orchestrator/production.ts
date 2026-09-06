@@ -423,13 +423,7 @@ export interface ProductionOrchestrator {
    * `fundamental` queries.
    */
   marketIntelligence: MarketIntelligenceStore;
-  /**
-   * `ProductionComponents.universe`'s value (#1167), exposed so
-   * `startFromEnvironment`'s startup log line reports the universe this
-   * orchestrator's scheduler is actually iterating, rather than re-deriving
-   * its own answer from `config.universe` — the third of the independent
-   * resolutions orchestrator-spec.md flags.
-   */
+  /** `ProductionComponents.universe`'s value (#1167) — read this, don't re-derive from config. */
   universe: readonly UniverseInstrument[];
   /**
    * Runs the orphan scan once, then starts the heartbeat interval and the
@@ -594,14 +588,7 @@ export interface ProductionComponents {
    * write racing a closing store.
    */
   marketIntelligenceRefresh: MiRefreshQueue | undefined;
-  /**
-   * `resolveUniverse`'s output (#1167) — the same instance this function's
-   * own `AssetClassRoutingDataSource`/tick-step wiring closed over above.
-   * Exposed so `buildProductionOrchestrator`'s scheduler, and
-   * `startFromEnvironment`'s startup log line, bind to THIS resolution rather
-   * than each re-deriving `config.universe` with its own fallback — the
-   * multiple-independent-resolutions hazard orchestrator-spec.md names.
-   */
+  /** The same instance this function's own routing/tick-step wiring closed over above (#1167) — read this, don't re-derive from config. */
   universe: readonly UniverseInstrument[];
 }
 
@@ -810,19 +797,6 @@ function pruneMiArchiveWithLog(
   }
 }
 
-/**
- * The one place `ProductionConfig.universe`'s default is applied (#1167) —
- * not exported, so nothing outside `buildProductionComponents` can read the
- * config field and re-derive its own answer. Every other consumer in this
- * file, and `startFromEnvironment` in index.ts, takes the value this returns
- * off `ProductionComponents`/`ProductionOrchestrator` instead of calling this
- * again, which is what keeps the routing pool, the scheduler and the startup
- * log line unable to disagree about what the universe is.
- */
-function resolveUniverse(config: ProductionConfig): readonly UniverseInstrument[] {
-  return config.universe ?? SMOKE_TEST_UNIVERSE;
-}
-
 export function buildProductionComponents(config: ProductionConfig): ProductionComponents {
   const clock = config.clock;
 
@@ -917,7 +891,12 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     );
   }
 
-  const universe = resolveUniverse(config);
+  // The one place ProductionConfig.universe's default is applied (#1167).
+  // Every other consumer — buildProductionOrchestrator's scheduler, and
+  // startFromEnvironment's startup log line — reads it off
+  // ProductionComponents.universe/ProductionOrchestrator.universe below
+  // instead of re-deriving it, which is what keeps them from disagreeing.
+  const universe = config.universe ?? SMOKE_TEST_UNIVERSE;
 
   // Sixth of the same boot-time-refusal family (#989, follow-up to #987's
   // review of PR #988) — full mechanism (why a calendar mismatch, not
