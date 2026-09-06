@@ -343,6 +343,55 @@ describe('startFromEnvironment — real construction path', () => {
     }
   });
 
+  /**
+   * #1167 follow-up — a prior version of this test (deleted) claimed no
+   * fixture could make `injected.universe` and the orchestrator's resolved
+   * universe actually diverge without #751. That was wrong: a getter that
+   * returns a fresh value on every read does it in-process, no dynamic
+   * resolution needed. `startFromEnvironment` reads `injected.universe` more
+   * than once before the orchestrator is built (`REQUIRED_INJECTED_CONFIG`'s
+   * presence check touches it first), so this doesn't rely on knowing which
+   * call number production code captures — only that a re-read at the log
+   * line happens strictly later than the orchestrator's own, and therefore
+   * sees a different call if code regresses to re-reading `injected.universe`
+   * there instead of `orchestrator.universe`.
+   */
+  it('the startup log line reports the universe the orchestrator actually holds, not a fresh read of injected.universe', async () => {
+    process.env.ALPACA_API_KEY = 'test-key';
+    process.env.ALPACA_API_SECRET = 'test-secret';
+    process.env.NOUS_API_KEY = 'test-fake-nous-key';
+    process.env.NOUS_BASE_URL = 'https://nous.test/v1';
+    process.env.SAMURAI_SENTIMENT = 'off';
+
+    const entries: Parameters<Logger['log']>[0][] = [];
+    const logger: Logger = { log: (entry) => entries.push(entry) };
+
+    let reads = 0;
+    const injected = {
+      ...STAGE_CONFIGS,
+      db: openSharedStore(':memory:'),
+      miArchive: new MiArchiveStore(),
+      gdeltClient: offlineGdeltClient,
+      polymarketClient: offlinePolymarketClient,
+      logger,
+      get universe() {
+        reads += 1;
+        return [{ asset: `U${reads}`, asset_class: 'stocks' as const }];
+      },
+    };
+
+    const orchestrator = await startFromEnvironment(injected);
+
+    try {
+      const started = entries.find((entry) => entry.message === 'orchestrator started');
+      expect(started?.payload).toMatchObject({
+        universe: orchestrator.universe.map((i) => i.asset),
+      });
+    } finally {
+      await orchestrator.stop();
+    }
+  });
+
   it('refuses to start on a book holding pre-#686 idempotency keys', async () => {
     process.env.ALPACA_API_KEY = 'test-key';
     process.env.ALPACA_API_SECRET = 'test-secret';

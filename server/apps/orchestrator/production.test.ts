@@ -11,6 +11,9 @@
  * validated" bar is a manual E2E run, not a unit test).
  */
 
+import { readdirSync, readFileSync } from 'node:fs';
+import { basename, dirname, join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { INDICATOR_UNAVAILABLE_COUNTER } from '../../pipeline/analysts/index.js';
 import { buildArmComparison } from '../../pipeline/control-arm/index.js';
 import {
@@ -525,6 +528,265 @@ describe('SMOKE_TEST_UNIVERSE', () => {
   it('is a narrow, crypto-only universe (ADR-0004 §4)', () => {
     expect(SMOKE_TEST_UNIVERSE).toHaveLength(1);
     expect(SMOKE_TEST_UNIVERSE[0]).toEqual({ asset: 'BTC-USD', asset_class: 'crypto' });
+  });
+});
+
+/**
+ * #1167 — orchestrator-spec.md names the hazard: the routing pool and the
+ * scheduler each ran `config.universe ?? SMOKE_TEST_UNIVERSE` independently
+ * (a third copy lived in index.ts's startup log line), and only stayed
+ * consistent because nothing yet makes the two calls see different config —
+ * a config that answers differently on a later read (dynamic resolution via
+ * #751, or, cheaper, a stateful accessor) is exactly what would expose it.
+ *
+ * A value/identity assertion on today's wiring cannot, by itself, tell a
+ * shared resolution apart from two separate calls that happen to read the
+ * same immutable config — both return the identical reference. So the
+ * wiring is checked separately below, and this source scan is what actually
+ * satisfies "a second resolution site cannot be added without a test
+ * failing": it fails on the count, not on any value a duplicated call would
+ * produce. It counts the fallback expression itself rather than calls to a
+ * named helper — a review of an earlier version of this fix found that a
+ * helper function sitting in this file is exactly as easy to call twice as
+ * the expression is to write twice, so the fallback is inlined into
+ * `buildProductionComponents` rather than wrapped.
+ *
+ * Residual gaps, stated rather than discovered:
+ * - Text scan, not data-flow analysis: it cannot see through a *newly
+ *   written* helper that wraps the expression and is called from two
+ *   places, nor `||`, `??=`, a destructuring default, a ternary, or an
+ *   aliased `SMOKE_TEST_UNIVERSE` import used as an equivalent fallback.
+ * - The comment/string stripper below cannot tell a regex literal from
+ *   division, so a regex literal containing a quote desyncs it for the
+ *   rest of that file. The two known instances are scanned raw instead
+ *   (see `KNOWN_STRIPPER_DESYNCS`); a THIRD, new one is caught only when
+ *   it also unbalances braces — measured, NOT the common case: a regex
+ *   with an odd apostrophe count desyncs to EOF, and an appended
+ *   statement after it is brace-balanced by construction, so the usual
+ *   shape of this defect (add the regex, add a call site below it) will
+ *   not trip the balance check. Code review is the backstop for that
+ *   shape; no mechanism closes it here.
+ * Closing either categorically needs real static analysis of this file,
+ * which is out of proportion to a currently-latent hazard; code review is
+ * the remaining backstop, the same as it is for any other refactor that
+ * keeps a test green while reintroducing the bug the test exists to catch.
+ */
+describe('universe resolution is a single site (#1167)', () => {
+  // `server/`, not just this directory: `SMOKE_TEST_UNIVERSE` is re-exported
+  // from index.ts, so a consumer outside orchestrator/ could write its own
+  // `?? SMOKE_TEST_UNIVERSE` fallback and a scan scoped to orchestrator/
+  // would never see it.
+  const SERVER_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+  function serverSourceFiles(directory: string): string[] {
+    const found: string[] = [];
+    for (const child of readdirSync(directory, { withFileTypes: true })) {
+      if (child.name === 'node_modules') continue;
+      const path = join(directory, child.name);
+      if (child.isDirectory()) {
+        found.push(...serverSourceFiles(path));
+        continue;
+      }
+      if (child.name.endsWith('.ts') && !child.name.endsWith('.test.ts')) found.push(path);
+    }
+    return found;
+  }
+
+  /**
+   * Files whose regex literals contain a `'`/`"`/backtick character, which
+   * `stripCommentsAndStrings` below (no real lexer to tell a regex literal
+   * from division) misreads as a string opener — corrupting everything
+   * after it in that file, silently, which is far worse than the false
+   * positive the stripper exists to fix. Found by running the brace-balance
+   * check below over every file in `server/` on a known-clean tree; scanned
+   * as RAW text instead — no false negative on these two, at the cost of
+   * false-positive exposure to a comment or string quoting the fallback
+   * pattern in either of them. If the brace-balance check below ever flags
+   * a THIRD file, investigate before adding it here — that check is a
+   * lower bound, not a general detector: measured, it does NOT catch the
+   * likely shape of a new instance (a regex whose odd apostrophe count
+   * desyncs to EOF, followed by an ordinary, brace-neutral statement), so
+   * this list is not proven exhaustive, only the two instances found here.
+   */
+  const KNOWN_STRIPPER_DESYNCS = new Set([
+    'shared/store/write-guard.ts',
+    'tools/check-path-citations.ts',
+  ]);
+
+  /**
+   * `typescript` is on v7's native-compiler API, which no longer exports a
+   * scanner/tokenizer (`Object.keys(require('typescript'))` is just
+   * `['version', 'versionMajorMinor']`) — there is no real parser available
+   * to lean on here. This is a small hand-rolled one instead of a single
+   * regex, specifically so `//` and `/*` inside a string (a URL is the
+   * realistic case) don't get misread as a comment start and swallow real
+   * code after them — that direction of error would hide a genuine
+   * duplicate, which is worse than the false positive it would be fixing.
+   * Comment stripping only; it does not track template-literal `${}`
+   * interpolation, so an occurrence written inside one would not be
+   * counted — not a realistic shape for this specific fallback expression.
+   *
+   * Does NOT distinguish a regex literal from division — an unavoidable gap
+   * without real parsing (regex-vs-division is themselves context-
+   * sensitive), so a regex literal containing a quote character reads as a
+   * string opener and desyncs everything after it. `KNOWN_STRIPPER_DESYNCS`
+   * above routes the two files this is known to affect around the stripper
+   * entirely; the brace-balance check below only catches a new instance
+   * when it also unbalances braces, which the likely shape of this defect
+   * (see `KNOWN_STRIPPER_DESYNCS`'s doc comment) typically will not do.
+   */
+  function stripCommentsAndStrings(source: string): string {
+    let out = '';
+    let i = 0;
+    const n = source.length;
+    while (i < n) {
+      const c = source[i];
+      const c2 = source[i + 1];
+      if (c === '/' && c2 === '/') {
+        i += 2;
+        while (i < n && source[i] !== '\n') i++;
+        continue;
+      }
+      if (c === '/' && c2 === '*') {
+        i += 2;
+        while (i < n && !(source[i] === '*' && source[i + 1] === '/')) i++;
+        i += 2;
+        continue;
+      }
+      if (c === "'" || c === '"' || c === '`') {
+        const quote = c;
+        out += ' ';
+        i++;
+        while (i < n && source[i] !== quote) {
+          if (source[i] === '\\') i++;
+          i++;
+        }
+        i++;
+        continue;
+      }
+      out += c;
+      i++;
+    }
+    return out;
+  }
+
+  // Self-check on the stripper above, not on production code — if this goes
+  // red, the guard test below is no longer trustworthy either way.
+  it.each([
+    ['real code', 'const universe = config.universe ?? SMOKE_TEST_UNIVERSE;', 1],
+    ['a // line comment quoting it', '// config.universe ?? SMOKE_TEST_UNIVERSE\nconst x = 1;', 0],
+    [
+      'a /** */ doc comment quoting it',
+      '/**\n * config.universe ?? SMOKE_TEST_UNIVERSE\n */\nconst x = 1;',
+      0,
+    ],
+    ['a string literal quoting it', "const x = 'literally ?? SMOKE_TEST_UNIVERSE';", 0],
+    [
+      "a // inside an unrelated string doesn't swallow real code after it",
+      "const u = 'https://x'; const universe = config.universe ?? SMOKE_TEST_UNIVERSE;",
+      1,
+    ],
+    [
+      'two real occurrences',
+      'const a = c.u ?? SMOKE_TEST_UNIVERSE;\nconst b = c.u ?? SMOKE_TEST_UNIVERSE;',
+      2,
+    ],
+  ])('stripCommentsAndStrings: %s', (_name, input, expected) => {
+    const occurrences = (stripCommentsAndStrings(input).match(/\?\?\s*SMOKE_TEST_UNIVERSE/g) ?? [])
+      .length;
+    expect(occurrences).toBe(expected);
+  });
+
+  // A KNOWN_STRIPPER_DESYNCS entry that stops matching any file the walk
+  // actually finds — a rename or move landing in the same commit as its
+  // import updates, say — would silently rejoin the stripped set instead
+  // of failing to compile, and per the balance check's own doc comment
+  // that set's net does not reliably catch a new desync. So the set's
+  // membership is asserted directly, not left to be caught downstream.
+  it('every KNOWN_STRIPPER_DESYNCS entry resolves to a server source file the walk finds', () => {
+    const found = new Set(serverSourceFiles(SERVER_DIR).map((path) => relative(SERVER_DIR, path)));
+    const stale = [...KNOWN_STRIPPER_DESYNCS].filter((entry) => !found.has(entry));
+    expect(stale).toEqual([]);
+  });
+
+  // `{`/`}` must balance in valid, comment/string-stripped TypeScript; a
+  // nonzero delta is a lower bound on stripper desync, not a proof of its
+  // absence — see `stripCommentsAndStrings`'s doc comment for why the
+  // likely shape of a new desync typically will not unbalance braces.
+  function braceDelta(code: string): number {
+    return (code.match(/\{/g)?.length ?? 0) - (code.match(/\}/g)?.length ?? 0);
+  }
+
+  it('stripCommentsAndStrings leaves braces balanced on every server source file it strips', () => {
+    const desynced = serverSourceFiles(SERVER_DIR)
+      .filter((path) => !KNOWN_STRIPPER_DESYNCS.has(relative(SERVER_DIR, path)))
+      .map((path) => ({ path, code: readFileSync(path, 'utf8') }))
+      .filter(({ code }) => braceDelta(stripCommentsAndStrings(code)) !== 0)
+      .map(({ path }) => relative(SERVER_DIR, path));
+
+    expect(desynced).toEqual([]);
+  });
+
+  it('the SMOKE_TEST_UNIVERSE fallback appears exactly once, in production.ts, across all server sources', () => {
+    // KNOWN_STRIPPER_DESYNCS files are scanned raw (no false negative, at
+    // the cost of false-positive exposure to a comment/string quoting the
+    // pattern); every other file goes through the stripper.
+    const scanned = serverSourceFiles(SERVER_DIR).map((path) => {
+      const raw = readFileSync(path, 'utf8');
+      const code = KNOWN_STRIPPER_DESYNCS.has(relative(SERVER_DIR, path))
+        ? raw
+        : stripCommentsAndStrings(raw);
+      return { path, code };
+    });
+
+    const matches = scanned.filter(({ code }) => /\?\?\s*SMOKE_TEST_UNIVERSE/.test(code));
+
+    // A duplicate landing in a second file names that file in the failure;
+    // a duplicate landing inside production.ts alongside the real one does
+    // not (this assertion still passes with two occurrences in one file) —
+    // the occurrence count below is what catches that case, on its own.
+    expect(matches.map(({ path }) => basename(path))).toEqual(['production.ts']);
+
+    const occurrences = matches.reduce(
+      (count, { code }) => count + (code.match(/\?\?\s*SMOKE_TEST_UNIVERSE/g)?.length ?? 0),
+      0,
+    );
+    expect(occurrences).toBe(1);
+  });
+});
+
+describe('universe resolution is shared, not re-derived (#1167)', () => {
+  let db: SqliteHandle;
+
+  const EXPLICIT_UNIVERSE: readonly UniverseInstrument[] = [
+    { asset: 'ISF', asset_class: 'stocks' },
+  ];
+
+  beforeEach(() => {
+    db = openSharedStore(':memory:');
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it('buildProductionComponents resolves the configured universe once and exposes THAT instance', () => {
+    const overridden = buildProductionComponents(stubConfig(db, { universe: EXPLICIT_UNIVERSE }));
+    expect(overridden.universe).toBe(EXPLICIT_UNIVERSE);
+
+    const defaulted = buildProductionComponents(stubConfig(db));
+    expect(defaulted.universe).toBe(SMOKE_TEST_UNIVERSE);
+  });
+
+  it("buildProductionOrchestrator's scheduler runs on, and exposes, the SAME resolution — not a second one", () => {
+    const orchestrator = buildProductionOrchestrator(
+      stubConfig(db, { universe: EXPLICIT_UNIVERSE, tradingCalendar: new AlwaysOpenCalendar() }),
+    );
+
+    expect(orchestrator.universe).toBe(EXPLICIT_UNIVERSE);
+    expect(orchestrator.scheduler.nextTick(new SimulatedClock(START)).instruments).toEqual(
+      EXPLICIT_UNIVERSE,
+    );
   });
 });
 

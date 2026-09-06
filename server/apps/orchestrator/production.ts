@@ -423,6 +423,8 @@ export interface ProductionOrchestrator {
    * `fundamental` queries.
    */
   marketIntelligence: MarketIntelligenceStore;
+  /** `ProductionComponents.universe`'s value (#1167) — read this, don't re-derive from config. */
+  universe: readonly UniverseInstrument[];
   /**
    * Runs the orphan scan once, then starts the heartbeat interval and the
    * tick loop. Resolves once startup is done — the loop keeps running after.
@@ -586,6 +588,8 @@ export interface ProductionComponents {
    * write racing a closing store.
    */
   marketIntelligenceRefresh: MiRefreshQueue | undefined;
+  /** The same instance this function's own routing/tick-step wiring closed over above (#1167) — read this, don't re-derive from config. */
+  universe: readonly UniverseInstrument[];
 }
 
 /**
@@ -887,6 +891,8 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     );
   }
 
+  // The one place ProductionConfig.universe's default is applied (#1167).
+  // Every other consumer reads it off the fields below instead of re-deriving it.
   const universe = config.universe ?? SMOKE_TEST_UNIVERSE;
 
   // Sixth of the same boot-time-refusal family (#989, follow-up to #987's
@@ -2236,6 +2242,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     marketIntelligence,
     marketIntelligenceCoverage: miCoverageMonitor,
     marketIntelligenceRefresh,
+    universe,
   };
 }
 
@@ -2792,7 +2799,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
   // `sessionEnd` rather than merely gated beside it.
   const equityCalendar = equityCalendarFor(config);
   const scheduler = new UniverseScheduler({
-    universe: config.universe ?? SMOKE_TEST_UNIVERSE,
+    universe: components.universe,
     calendar: equityCalendar,
     // Passed through rather than defaulted here (#706). The composition root
     // is where a run's policy is chosen; a default in this line would apply
@@ -3522,6 +3529,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     marketIntelligenceCoverage: components.marketIntelligenceCoverage,
     marketIntelligence: components.marketIntelligence,
     marketIntelligenceRefresh: components.marketIntelligenceRefresh,
+    universe: components.universe,
 
     async start(): Promise<OrphanGoVerdict[]> {
       const orphans = await persistence.orphanScanner.scan(

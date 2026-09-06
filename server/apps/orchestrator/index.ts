@@ -77,7 +77,6 @@ import {
   buildProductionOrchestrator,
   type ProductionConfig,
   type ProductionOrchestrator,
-  SMOKE_TEST_UNIVERSE,
 } from './production.js';
 import { type FileSinkConfig, fileSinkConfigFromEnvironment } from './rotating-file-sink.js';
 import type { Logger } from './types.js';
@@ -674,16 +673,8 @@ export async function startFromEnvironment(
     payload: {
       env,
       mode,
-      // `injected.universe` is guaranteed defined here — REQUIRED_INJECTED_CONFIG
-      // already refused to start without it (#738). `injected` is still typed
-      // `Partial<ProductionConfig>`, hence the same cast `buildProductionOrchestrator`
-      // above already relies on; the `?? SMOKE_TEST_UNIVERSE` fallback is
-      // defence in depth for the lint rule against non-null assertions, not a
-      // live path — it can only fire if the guard above this function is ever
-      // weakened.
-      universe: ((injected as ProductionConfig).universe ?? SMOKE_TEST_UNIVERSE).map(
-        (i) => i.asset,
-      ),
+      // Read off the orchestrator's own resolution (#1167), not re-derived from `injected.universe`.
+      universe: orchestrator.universe.map((i) => i.asset),
       orphaned_go_verdicts: orphans.length,
     },
   });
