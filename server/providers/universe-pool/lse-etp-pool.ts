@@ -105,7 +105,13 @@
  * six rows the 2026-09-03 subset named — and `assertValidFallbackSubset`'s
  * rule 5 refuses a fallback row Saxo is verified not to list. Rule 3's
  * "prefer the GBP line" (3SPY over 3USL) therefore yields to the line Saxo
- * actually carries: 3USL for SPY. The six are now 3USL, LQQ3, NVD3, 3LTS,
+ * actually carries: 3USL for SPY — **a USD line, taking residual risk 2 at
+ * the settlement boundary for the one fallback slot that had a GBP option**.
+ * Called out rather than buried: the GBP line of the same ISIN that Saxo
+ * DOES carry is 3LUS:xlon (recorded as 3USL's `sibling_line`), which is not
+ * a pool row and is not promoted here because no row is added by a
+ * verification pass; whether the fallback should move to it is a follow-up
+ * filed from PR #1212. The six are now 3USL, LQQ3, NVD3, 3LTS,
  * 3LPA and 3LAL — SPY, QQQ, NVDA, TSLA, PLTR, GOOGL — still one line per
  * underlying, still measured envelopes only, still the pool's largest US
  * names on ordinary market knowledge. Alphabet replaces Amazon and Meta,

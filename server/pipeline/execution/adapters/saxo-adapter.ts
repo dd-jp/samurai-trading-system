@@ -19,7 +19,7 @@
  */
 import type { Clock, Logger } from '../../../shared/index.js';
 import { DEFAULT_VENUE_PACING, TokenBucket } from '../../../shared/index.js';
-import { SAXO_COMMISSION_RATE } from '../../../tools/backtest/cost-model.js';
+import { SAXO_COMMISSION_RATE } from '../../../tools/backtest/index.js';
 import { sanitizeBrokerError } from '../broker-error.js';
 import {
   type BrokerStateStore,
@@ -46,7 +46,16 @@ import type {
 } from './saxo-client.js';
 
 /** Measured on SIM 2026-09-05: identical placements 17 s apart both landed; inside the window the second earned 409 (doc 43). */
-export const SAXO_DUPLICATE_WINDOW_MS = 15_000;
+const SAXO_DUPLICATE_WINDOW_MS = 15_000;
+
+/**
+ * How far back a PLACEMENT looks on the audit trail before posting. Nothing
+ * older than the venue's duplicate window can be a lost reply to this same
+ * attempt, and the caller's own write-ahead (`open_positions`) is the durable
+ * dedup across restarts — so the placement path pays for a few windows of
+ * activity, not the 30-day sweep `getOrder`/`resumeFlatten` need.
+ */
+const PLACEMENT_LOOKBACK_MS = 4 * SAXO_DUPLICATE_WINDOW_MS;
 
 /** Saxo's `ExternalReference` limit; the `:target` suffix is the longest this adapter appends. */
 const EXTERNAL_REFERENCE_MAX_CHARS = 50;
@@ -204,7 +213,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
       Orders: [leg('StopIfTraded', order.stop, 'stop'), leg('Limit', order.target, 'target')],
     };
 
-    const ids = await this.call('submitBracket', () =>
+    const { ids, order_state } = await this.call('submitBracket', () =>
       this.placeIdempotently(order.client_order_id, request),
     );
     this.brackets.set(order.client_order_id, order.instrument);
@@ -223,12 +232,14 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     return {
       client_order_id: order.client_order_id,
       broker_order_ids: orderIdList(ids),
-      order_state: 'submitted',
+      order_state,
     };
   }
 
   async getOrder(clientOrderId: string, instrument: string): Promise<NormalizedOrder | null> {
-    const order = await this.call('getOrder', () => this.lookup(clientOrderId));
+    const order = await this.call('getOrder', () =>
+      this.lookup(clientOrderId, this.activityLookbackMs),
+    );
     if (order === null) return null;
     this.brackets.set(clientOrderId, instrument);
     this.state.recordBracketOrderIds('saxo', clientOrderId, {
@@ -240,7 +251,9 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
   }
 
   async resumeFlatten(clientOrderId: string, instrument: string): Promise<NormalizedOrder | null> {
-    const order = await this.call('resumeFlatten', () => this.lookup(clientOrderId));
+    const order = await this.call('resumeFlatten', () =>
+      this.lookup(clientOrderId, this.activityLookbackMs),
+    );
     if (order === null) return null;
     this.flattens.set(clientOrderId, {
       instrument,
@@ -258,14 +271,33 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     for (const activity of activities) {
       const owner = this.attribute(activity.ExternalReference);
       if (owner === undefined) continue;
-      const fill = toFill(activity, owner.clientOrderId, owner.leg, since);
+      const fill = toFill(
+        activity,
+        owner.clientOrderId,
+        owner.leg,
+        since,
+        this.feeCurrencyFor(activity),
+      );
       if (fill !== undefined) fills.push(fill);
     }
     return fills;
   }
 
-  /** The IfDone legs are the venue's; how Saxo sizes them after a partial fill is UNVERIFIED (never observed on SIM). */
-  async resizeProtectiveLegs(_clientOrderId: string, _filledQty: number): Promise<void> {}
+  /**
+   * Whether Saxo shrinks an IfDone master's related orders to the filled
+   * amount on a PARTIAL entry fill is UNVERIFIED (no fill was observable on
+   * SIM). If it does not, a fixed-`Amount` GTC stop over-closes into a
+   * reversed position — so until a real fill settles it, this fails loud
+   * (the same posture as `rearmProtectiveLegs`) rather than trusting the
+   * venue silently.
+   */
+  async resizeProtectiveLegs(clientOrderId: string, filledQty: number): Promise<void> {
+    throw new Error(
+      `Saxo: refusing to treat the IfDone legs of '${clientOrderId}' as resized to ${filledQty} — ` +
+        "whether Saxo shrinks related orders on a partial entry fill is unverified (doc 43 'Not " +
+        "verified'); confirm on a real fill before making this a no-op.",
+    );
+  }
 
   async rearmProtectiveLegs(
     clientOrderId: string,
@@ -302,15 +334,11 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
       ManualOrder: false,
       ExternalReference: clientOrderId,
     };
-    const ids = await this.call('submitFlatten', () =>
+    const { ids, order_state } = await this.call('submitFlatten', () =>
       this.placeIdempotently(clientOrderId, request),
     );
     this.flattens.set(clientOrderId, { instrument, side, size });
-    return {
-      client_order_id: clientOrderId,
-      broker_order_ids: orderIdList(ids),
-      order_state: 'submitted',
-    };
+    return { client_order_id: clientOrderId, broker_order_ids: orderIdList(ids), order_state };
   }
 
   async cancel(clientOrderId: string, _instrument: string): Promise<void> {
@@ -352,24 +380,52 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
 
   /**
    * Adopt-or-place (doc 43). The open list is authoritative for a resting
-   * order; the audit trail catches one that already filled or died before
-   * this retry. A 409 means the venue's window still remembers a POST whose
-   * reply this process never saw — its order is on the open list by now.
+   * order; the recent audit trail catches one that already filled or died
+   * before this retry. A 409 means the venue's window still remembers a POST
+   * whose reply this process never saw — its order is on the open list by now.
+   *
+   * An adopted order is acked in ITS state, never as `submitted`: a filled
+   * one is `filled`. A dead one (rejected/cancelled/expired) is refused
+   * outright — re-placing under the same reference would hide the venue's
+   * verdict on the first attempt, and adopting it would journal an armed
+   * bracket over nothing.
    */
   private async placeIdempotently(
     externalReference: string,
     request: SaxoOrderRequest,
-  ): Promise<OrderIds> {
-    const existing = await this.lookup(externalReference);
-    if (existing !== null) return existing.ids;
+  ): Promise<Placed> {
+    const existing = await this.lookup(externalReference, PLACEMENT_LOOKBACK_MS);
+    if (existing !== null) return adopt(existing, externalReference);
     try {
-      return placementIds(await this.client.placeOrder(request, externalReference));
+      return {
+        ids: placementIds(await this.client.placeOrder(request, externalReference)),
+        order_state: 'submitted',
+      };
     } catch (cause) {
       if (!isDuplicateRequestRefusal(cause)) throw cause;
       const adopted = await this.findOpen(externalReference);
       if (adopted === null) throw cause;
-      return adopted.ids;
+      return adopt(adopted, externalReference);
     }
+  }
+
+  /**
+   * The activity feed carries no charge field, so the fee is the published
+   * GBP-ETP tariff (ADR-0015 §"Saxo", 0.08 %, no minimum) applied to the fill
+   * — and it is denominated in the LINE's quote currency (USD on most pool
+   * lines), which `NormalizedFill.fee_currency` makes explicit rather than
+   * letting a USD figure be summed as GBP. No FX rate is invented here.
+   */
+  private feeCurrencyFor(activity: SaxoOrderActivity): string {
+    const ticker = this.instruments.lseTickerFor(activity.Uic);
+    const ref = ticker === undefined ? undefined : this.instruments.resolve(ticker);
+    if (ref === undefined) {
+      throw new Error(
+        `Saxo activity ${activity.LogId} fills Uic ${activity.Uic}, which no pool line resolves — ` +
+          'its fee currency cannot be attributed.',
+      );
+    }
+    return ref.currency;
   }
 
   private async findOpen(externalReference: string): Promise<LookedUpOrder | null> {
@@ -421,10 +477,13 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     };
   }
 
-  private async lookup(externalReference: string): Promise<LookedUpOrder | null> {
+  private async lookup(
+    externalReference: string,
+    lookbackMs: number,
+  ): Promise<LookedUpOrder | null> {
     const open = await this.findOpen(externalReference);
     if (open !== null) return open;
-    const from = new Date(this.clock.now().getTime() - this.activityLookbackMs);
+    const from = new Date(this.clock.now().getTime() - lookbackMs);
     const activities = await this.client.listOrderActivities(from);
     let latest: SaxoOrderActivity | undefined;
     for (const activity of activities) {
@@ -489,6 +548,29 @@ interface LookedUpOrder {
   side: 'buy' | 'sell';
   amount: number;
   normalized: NormalizedOrder;
+}
+
+interface Placed {
+  ids: OrderIds;
+  order_state: BrokerAck['order_state'];
+}
+
+const DEAD_STATES: ReadonlySet<NormalizedOrder['order_state']> = new Set([
+  'rejected',
+  'cancelled',
+  'expired',
+]);
+
+function adopt(existing: LookedUpOrder, externalReference: string): Placed {
+  const state = existing.normalized.order_state;
+  if (DEAD_STATES.has(state)) {
+    throw new Error(
+      `Saxo already holds '${externalReference}' in state '${state}' (order ` +
+        `${existing.normalized.broker_order_ids.join(',') || 'unknown'}); refusing to adopt a dead ` +
+        'order or re-place under the same reference — the caller must issue a fresh id.',
+    );
+  }
+  return { ids: existing.ids, order_state: state };
 }
 
 function orderIdList(ids: OrderIds): string[] {
@@ -568,16 +650,14 @@ function activityState(activity: SaxoOrderActivity): NormalizedOrder['order_stat
  * AND a finite `AveragePrice` — the two UNVERIFIED fields (saxo-client.ts).
  * A `Filled` row missing either is thrown so the sweep fails loudly and is
  * retried, rather than a filled position going unbooked and unprotected.
- *
- * `fee` is the published GBP-ETP tariff (ADR-0015 §"Saxo", 0.08 %, no
- * minimum) applied to the fill, because the activity feed carries no charge
- * field; the venue's own statement is the reconciliation source.
+ * `fee`: see `feeCurrencyFor`.
  */
 function toFill(
   activity: SaxoOrderActivity,
   clientOrderId: string,
   leg: Leg,
   since: Date,
+  feeCurrency: string,
 ): NormalizedFill | undefined {
   const qty = activity.FillAmount;
   const price = activity.AveragePrice;
@@ -607,6 +687,7 @@ function toFill(
     price,
     qty,
     fee: price * qty * SAXO_COMMISSION_RATE,
+    fee_currency: feeCurrency,
     timestamp,
   };
 }

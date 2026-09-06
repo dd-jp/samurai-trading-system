@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SaxoBrokerProviderError, SaxoBrokerRateLimitError } from './saxo-broker-errors.js';
 import type { SaxoOrderRequest } from './saxo-client.js';
 import { SAXO_CREDENTIAL_ENV_VARS, SaxoHttpBrokerClient } from './saxo-http-client.js';
@@ -19,7 +18,7 @@ function jsonResponse(body: unknown, status = 200, headers: Record<string, strin
 }
 
 const ORDER: SaxoOrderRequest = {
-  Uic: 16268043,
+  Uic: 3347273,
   AssetType: 'Etn',
   BuySell: 'Buy',
   Amount: 1,
@@ -85,7 +84,7 @@ describe('SaxoHttpBrokerClient', () => {
     expect(calledPath(fetchMock, 1)).toBe('https://gateway.example/sim/openapi/trade/v2/orders');
     const init = calledInit(fetchMock, 1);
     expect(init.method).toBe('POST');
-    expect(JSON.parse(String(init.body))).toMatchObject({ AccountKey: 'acct-key', Uic: 16268043 });
+    expect(JSON.parse(String(init.body))).toMatchObject({ AccountKey: 'acct-key', Uic: 3347273 });
     expect(init.headers).toMatchObject({
       authorization: `Bearer ${FAKE_TOKEN}`,
       'x-request-id': 'key-1',
@@ -186,7 +185,7 @@ describe('SaxoHttpBrokerClient', () => {
       Price: 10,
       Amount: 1,
       BuySell: 'Buy',
-      Uic: 16268043,
+      Uic: 3347273,
       AssetType: 'Etn',
       RelatedOpenOrders: [
         {
@@ -243,7 +242,7 @@ describe('SaxoHttpBrokerClient', () => {
               Amount: 1,
               Price: 10,
               BuySell: 'Buy',
-              Uic: 16268043,
+              Uic: 3347273,
               AssetType: 'Etn',
             },
           ],
@@ -266,8 +265,8 @@ describe('SaxoHttpBrokerClient', () => {
       jsonResponse({
         Data: [
           {
-            NetPositionId: '16268043__Etn',
-            NetPositionBase: { Amount: 2, Uic: 16268043, AssetType: 'Etn' },
+            NetPositionId: '3347273__Etn',
+            NetPositionBase: { Amount: 2, Uic: 3347273, AssetType: 'Etn' },
             NetPositionView: { AverageOpenPrice: 10.5 },
             DisplayAndFormat: { Symbol: '3USL:xlon' },
           },
@@ -278,8 +277,8 @@ describe('SaxoHttpBrokerClient', () => {
 
     expect(await client.listNetPositions()).toEqual([
       {
-        NetPositionId: '16268043__Etn',
-        NetPositionBase: { Amount: 2, Uic: 16268043, AssetType: 'Etn' },
+        NetPositionId: '3347273__Etn',
+        NetPositionBase: { Amount: 2, Uic: 3347273, AssetType: 'Etn' },
         NetPositionView: { AverageOpenPrice: 10.5 },
         DisplayAndFormat: { Symbol: '3USL:xlon' },
       },

@@ -56,6 +56,15 @@ export interface NormalizedFill {
   price: number;
   qty: number;
   fee: number;
+  /**
+   * ISO code the fee is denominated in. Absent means the book currency (GBP,
+   * ADR-0015). Set by an adapter whose venue charges in the traded line's own
+   * quote currency — Saxo on a USD-quoted LSE line (#1032). NOT persisted and
+   * NOT converted by any consumer yet: `ingestFills`/PnL still sum `fee` as
+   * book currency, so a non-GBP value here is a flagged, unconverted figure,
+   * not a booked one.
+   */
+  fee_currency?: string;
   timestamp: Date;
   /**
    * Populated only by the Simulated adapter, mapped from `CostModel.fill`'s

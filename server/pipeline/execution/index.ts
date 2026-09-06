@@ -41,7 +41,6 @@ export type {
   SaxoResolvablePoolRow,
 } from './adapters/saxo-adapter.js';
 export {
-  SAXO_DUPLICATE_WINDOW_MS,
   SaxoBrokerAdapter,
   saxoInstrumentResolverFromPool,
 } from './adapters/saxo-adapter.js';

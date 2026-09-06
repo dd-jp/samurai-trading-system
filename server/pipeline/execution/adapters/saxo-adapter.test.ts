@@ -4,14 +4,12 @@
  * Every wire shape below is a recorded SIM-gateway response from 2026-09-05
  * (doc 43) with the account/client keys stripped — no credential appears here.
  */
-import { describe, expect, it, vi } from 'vitest';
 import { LSE_ETP_POOL } from '../../../providers/universe-pool/index.js';
 import { TokenBucket } from '../../../shared/index.js';
 import { recordingLogger } from '../../../shared/recording-logger.js';
 import { InMemoryBrokerStateStore } from '../broker-state-store.js';
 import type { NativeBracketRequest } from '../types.js';
 import {
-  SAXO_DUPLICATE_WINDOW_MS,
   SaxoBrokerAdapter,
   type SaxoInstrumentResolver,
   saxoInstrumentResolverFromPool,
@@ -31,8 +29,8 @@ function permissiveLimiter(): TokenBucket {
 
 const RESOLVER: SaxoInstrumentResolver = {
   resolve: (lseTicker) =>
-    lseTicker === '3USL' ? { uic: 16268043, asset_type: 'Etn', currency: 'GBP' } : undefined,
-  lseTickerFor: (uic) => (uic === 16268043 ? '3USL' : undefined),
+    lseTicker === '3USL' ? { uic: 3347273, asset_type: 'Etn', currency: 'USD' } : undefined,
+  lseTickerFor: (uic) => (uic === 3347273 ? '3USL' : undefined),
 };
 
 function makeBracket(overrides: Partial<NativeBracketRequest> = {}): NativeBracketRequest {
@@ -72,7 +70,7 @@ function workingMaster(overrides: Partial<SaxoOpenOrder> = {}): SaxoOpenOrder {
     Price: 10,
     Amount: 3,
     BuySell: 'Buy',
-    Uic: 16268043,
+    Uic: 3347273,
     AssetType: 'Etn',
     RelatedOpenOrders: [
       {
@@ -103,7 +101,7 @@ function activity(overrides: Partial<SaxoOrderActivity> = {}): SaxoOrderActivity
     Status: 'Placed',
     Amount: 3,
     BuySell: 'Buy',
-    Uic: 16268043,
+    Uic: 3347273,
     AssetType: 'Etn',
     Price: 10,
     ...overrides,
@@ -145,7 +143,7 @@ describe('SaxoBrokerAdapter.submitBracket', () => {
     const [request, requestId] = vi.mocked(client.placeOrder).mock.calls[0] ?? [];
     expect(requestId).toBe('key-3usl-0930');
     expect(request).toMatchObject({
-      Uic: 16268043,
+      Uic: 3347273,
       AssetType: 'Etn',
       BuySell: 'Buy',
       Amount: 3,
@@ -215,6 +213,47 @@ describe('SaxoBrokerAdapter.submitBracket', () => {
 
     expect(ack.broker_order_ids[0]).toBe('5040047177');
     expect(listOpenOrders).toHaveBeenCalledTimes(2);
+  });
+
+  it('looks back only a few duplicate windows on the audit trail before placing', async () => {
+    const client = makeClient();
+    const { adapter } = makeAdapter(client);
+
+    await adapter.submitBracket(makeBracket());
+
+    // clock is 09:00:00Z; 4 x 15 s window = 60 s.
+    expect(client.listOrderActivities).toHaveBeenCalledTimes(1);
+    expect(client.listOrderActivities).toHaveBeenCalledWith(new Date('2026-09-05T08:59:00Z'));
+  });
+
+  it('acks an adopted order in its own state, not as submitted', async () => {
+    const client = makeClient({
+      listOrderActivities: vi
+        .fn()
+        .mockResolvedValue([activity({ Status: 'Filled', FillAmount: 3, AveragePrice: 10 })]),
+    });
+    const { adapter } = makeAdapter(client);
+
+    const ack = await adapter.submitBracket(makeBracket());
+
+    expect(client.placeOrder).not.toHaveBeenCalled();
+    expect(ack.order_state).toBe('filled');
+  });
+
+  it.each([
+    ['rejected', activity({ SubStatus: 'Rejected' })],
+    ['cancelled', activity({ Status: 'Cancelled' })],
+    ['expired', activity({ Status: 'Expired' })],
+  ])('refuses to adopt or re-place over a %s prior order', async (_state, prior) => {
+    const client = makeClient({ listOrderActivities: vi.fn().mockResolvedValue([prior]) });
+    const { adapter, state: journal } = makeAdapter(client);
+
+    await expect(adapter.submitBracket(makeBracket())).rejects.toMatchObject({
+      name: 'BrokerError',
+      operation: 'submitBracket',
+    });
+    expect(client.placeOrder).not.toHaveBeenCalled();
+    expect(journal.loadBrackets('saxo')).toEqual([]);
   });
 
   it('refuses a fractional size — every pool line reports MinimumLotSize 1 with odd lots disallowed', async () => {
@@ -317,6 +356,15 @@ describe('SaxoBrokerAdapter.getOrder', () => {
     const { adapter } = makeAdapter(client);
 
     expect((await adapter.getOrder('key-3usl-0930', '3USL'))?.order_state).toBe('rejected');
+  });
+
+  it('reads the audit trail 30 days back — a restart may be long after the order', async () => {
+    const client = makeClient();
+    const { adapter } = makeAdapter(client);
+
+    await adapter.getOrder('key-3usl-0930', '3USL');
+
+    expect(client.listOrderActivities).toHaveBeenCalledWith(new Date('2026-08-06T09:00:00Z'));
   });
 
   it('returns null only when both the open list and the audit trail answered without the id', async () => {
@@ -431,12 +479,11 @@ describe('SaxoBrokerAdapter protective legs', () => {
     expect(client.placeOrder).not.toHaveBeenCalled();
   });
 
-  it('resizeProtectiveLegs is a no-op on the native IfDone bracket', async () => {
+  it('resizeProtectiveLegs fails loud: IfDone leg resizing on a partial fill is unverified', async () => {
     const client = makeClient();
     const { adapter } = makeAdapter(client);
 
-    await adapter.resizeProtectiveLegs('key-3usl-0930', 2);
-
+    await expect(adapter.resizeProtectiveLegs('key-3usl-0930', 2)).rejects.toThrow(/unverified/);
     expect(client.placeOrder).not.toHaveBeenCalled();
     expect(client.cancelOrder).not.toHaveBeenCalled();
   });
@@ -488,6 +535,7 @@ describe('SaxoBrokerAdapter.fetchNewFills', () => {
         price: 10.02,
         qty: 3,
         fee: expect.closeTo(0.024048, 6),
+        fee_currency: 'USD',
         timestamp: new Date('2026-09-05T08:31:00Z'),
       },
       {
@@ -497,6 +545,7 @@ describe('SaxoBrokerAdapter.fetchNewFills', () => {
         price: 8.98,
         qty: 3,
         fee: expect.closeTo(0.021552, 6),
+        fee_currency: 'USD',
         timestamp: new Date('2026-09-05T10:00:00Z'),
       },
     ]);
@@ -597,8 +646,8 @@ describe('SaxoBrokerAdapter.getOpenPositions', () => {
   it('maps net positions back to LSE tickers with a signed quantity', async () => {
     const positions: SaxoNetPosition[] = [
       {
-        NetPositionId: '16268043__Etn',
-        NetPositionBase: { Amount: -3, Uic: 16268043, AssetType: 'Etn' },
+        NetPositionId: '3347273__Etn',
+        NetPositionBase: { Amount: -3, Uic: 3347273, AssetType: 'Etn' },
         NetPositionView: { AverageOpenPrice: 10.02 },
       },
       {
@@ -622,7 +671,7 @@ describe('SaxoBrokerAdapter.getOpenPositions', () => {
       listNetPositions: vi.fn().mockResolvedValue([
         {
           NetPositionId: 'x',
-          NetPositionBase: { Amount: 0, Uic: 16268043, AssetType: 'Etn' },
+          NetPositionBase: { Amount: 0, Uic: 3347273, AssetType: 'Etn' },
           NetPositionView: {},
         },
       ]),
@@ -659,11 +708,5 @@ describe('saxoInstrumentResolverFromPool', () => {
       const sibling = row.provenance.saxo.sibling_line;
       if (sibling !== undefined) expect(resolver.lseTickerFor(sibling.uic)).toBeUndefined();
     }
-  });
-});
-
-describe('SAXO_DUPLICATE_WINDOW_MS', () => {
-  it('is the 15 s rolling window measured on SIM (doc 43)', () => {
-    expect(SAXO_DUPLICATE_WINDOW_MS).toBe(15_000);
   });
 });
