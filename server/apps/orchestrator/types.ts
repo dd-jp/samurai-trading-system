@@ -264,7 +264,7 @@ export interface TickOutcome {
   trace_id: string;
   /**
    * Absent only when `error` is set (#507). `SequentialTickRunner.runInstrument`
-   * always resolves to one of the six stage names below — but a pass that
+   * always resolves to one of the seven `TickStage` names above — but a pass that
    * THREW never reached a `return`, so tick-loop.ts's per-worker catch has no
    * stage to report. Fabricating one (e.g. defaulting to the first stage)
    * would misrepresent where the pipeline actually died; an absent field is
