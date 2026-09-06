@@ -6,7 +6,7 @@
  * `TradeChannelHeartbeat` (heartbeat-channel.ts) and
  * `TradeChannelUnpricedFillAlert` (unpriced-fill-channel.ts) already made this
  * exact move for their own alert types: reuse Verdict's already-provisioned
- * Telegram/Discord transports rather than introduce a second integration, and
+ * Telegram transport rather than introduce a second integration, and
  * wrap the raw clients rather than route through `TradeChannelNotifier.notify`,
  * which is shaped for a `VerdictDecision` and not for an operational anomaly.
  * This file exists because the composition root needed all three to wire a

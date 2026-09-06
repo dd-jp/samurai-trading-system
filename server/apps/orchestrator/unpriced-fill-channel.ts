@@ -1,7 +1,7 @@
 /**
  * Trade-channel adapter for the unpriced-fill age-out alert (#298) — the same
  * move `TradeChannelHeartbeat` makes for the heartbeat (heartbeat-channel.ts):
- * reuse Verdict's already-provisioned Telegram/Discord transports rather than
+ * reuse Verdict's already-provisioned Telegram transport rather than
  * introduce a second integration, and wrap the raw clients rather than route
  * through `TradeChannelNotifier.notify`, which is shaped for a
  * `VerdictDecision` and not for an operational anomaly.

@@ -1,12 +1,12 @@
 /**
  * Trade-channel adapter for the heartbeat (#96) — see
  * docs/specs/orchestrator-spec.md (Module: Heartbeat): "reuses Verdict's
- * already-provisioned Telegram/Discord transport (verdict-spec story 14) — a
+ * already-provisioned Telegram transport (verdict-spec story 14) — a
  * different message type over the same client, not a new integration." Wraps
- * the same `TelegramClient`/`DiscordClient` transports verdict/notifications'
- * `TelegramChannel`/`DiscordChannel` use, rather than routing through
- * `TradeChannelNotifier.notify` (which is shaped for a `VerdictDecision`, not
- * a liveness ping).
+ * a `TelegramClient`/`DiscordClient` transport directly — the same
+ * `TelegramClient` verdict/notifications' `TelegramChannel` wraps — rather
+ * than routing through `TradeChannelNotifier.notify` (which is shaped for a
+ * `VerdictDecision`, not a liveness ping).
  *
  * The same client, but **not the same chat** (#342): the composition root
  * hands this adapter `TELEGRAM_HEARTBEAT_CHAT_ID`, never the escalation chat

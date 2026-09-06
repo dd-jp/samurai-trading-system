@@ -2,7 +2,7 @@
  * Trade-channel adapter for the Feedback Loop's kill-threshold breach alert
  * (#93, wired by #327) — the same move `TradeChannelUnpricedFillAlert` and
  * `TradeChannelHeartbeat` make: reuse Verdict's already-provisioned
- * Telegram/Discord transports rather than introduce a second integration, and
+ * Telegram transport rather than introduce a second integration, and
  * wrap the raw clients rather than route through `TradeChannelNotifier.notify`,
  * which is shaped for a `VerdictDecision` and not for a validation breach.
  *

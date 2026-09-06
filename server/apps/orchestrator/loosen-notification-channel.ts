@@ -3,7 +3,7 @@
  * loosening notice (#91, wired by #366, retargeted by #736) — the same move
  * `TradeChannelBreachAlert`, `TradeChannelUnpricedFillAlert` and
  * `TradeChannelHeartbeat` make: reuse Verdict's already-provisioned
- * Telegram/Discord transports rather than introduce a second integration, and
+ * Telegram transport rather than introduce a second integration, and
  * wrap the raw clients rather than route through `TradeChannelNotifier.notify`,
  * which is shaped for a `VerdictDecision` and not for a threshold move.
  *

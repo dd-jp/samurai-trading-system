@@ -1,8 +1,8 @@
 /**
  * Trade-channel adapter for the emulated-OCO double-fill alert (#586) — the
  * same move `TradeChannelResidualExposureAlert` makes (residual-exposure-
- * alert-channel.ts): reuse Verdict's already-provisioned Telegram/Discord
- * transports rather than introduce a second integration.
+ * alert-channel.ts): reuse Verdict's already-provisioned Telegram
+ * transport rather than introduce a second integration.
  *
  * This is what makes the accepted-risk window's materialisation reachable
  * during an UNATTENDED soak (#238): a double fill means the lot over-closed
