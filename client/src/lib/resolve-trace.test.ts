@@ -186,13 +186,18 @@ describe('resolveTrace', () => {
         doneThrough('SPY', 'trace-1', 'execution', { outcome: 'go' }),
         doneThrough('QQQ', 'trace-1-qqq', 'execution', { outcome: 'go' }),
       ]),
+      // A trace_id-only match on verdictFor would find this row too — it
+      // exists so the verdict conjunction is exercised the same way the lane
+      // conjunction is, not just the lane.
+      verdicts: [makeVerdict({ trace_id: 'trace-1', instrument: 'SPY' })],
     });
     // A Selection naming AAPL but pinning SPY's trace_id must not resolve
-    // SPY's lane under an AAPL header — the mismatch must surface as
-    // "no trace", not as someone else's trace.
+    // SPY's lane, or SPY's verdict, under an AAPL header — the mismatch must
+    // surface as "no trace", not as someone else's trace.
     const detail = resolveTrace(snapshot, { instrument: 'AAPL', traceId: 'trace-1' });
     expect(detail.lane).toBeUndefined();
     expect(detail.cells).toBeNull();
+    expect(detail.verdict).toBeUndefined();
     // Not asserted: detail.absence.lane currently reads 'aged_out' here, which
     // is the wrong label (the trace hasn't aged out — it's in the window
     // under another instrument) and detail.traceId still leaks the mismatched
