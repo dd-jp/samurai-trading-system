@@ -1,8 +1,8 @@
 /**
  * Trade-channel adapter for the residual-exposure re-arm-failure alert (#525)
  * — the same move `TradeChannelUnpricedFillAlert` makes (unpriced-fill-
- * channel.ts): reuse Verdict's already-provisioned Telegram/Discord
- * transports rather than introduce a second integration, and wrap the raw
+ * channel.ts): reuse Verdict's already-provisioned Telegram
+ * transport rather than introduce a second integration, and wrap the raw
  * clients rather than route through `TradeChannelNotifier.notify`, which is
  * shaped for a `VerdictDecision` and not for an operational anomaly.
  *
