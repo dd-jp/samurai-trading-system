@@ -685,15 +685,9 @@ describe('universe resolution is a single site (#1167)', () => {
     expect(occurrences).toBe(expected);
   });
 
-  // `{`/`}` must balance in syntactically valid TypeScript with comments
-  // and strings correctly removed — every block/object/interface that opens
-  // one closes it. A nonzero delta after stripping means the stripper
-  // desynced somewhere in that file (see its doc comment), which can hide a
-  // real duplicate downstream of the desync point. This is a lower bound,
-  // not a proof of correctness: a desync that happens to leave braces
-  // balanced (unlikely, but not impossible) would not be caught by it. It
-  // is skipped for the two files in `KNOWN_STRIPPER_DESYNCS`, which the
-  // main test below scans raw instead of stripped for exactly this reason.
+  // `{`/`}` must balance in valid, comment/string-stripped TypeScript; a
+  // nonzero delta is a lower bound on stripper desync, not a proof of its
+  // absence (a desync that stays balanced would not show).
   function braceDelta(code: string): number {
     return (code.match(/\{/g)?.length ?? 0) - (code.match(/\}/g)?.length ?? 0);
   }
@@ -709,10 +703,9 @@ describe('universe resolution is a single site (#1167)', () => {
   });
 
   it('the SMOKE_TEST_UNIVERSE fallback appears exactly once, in production.ts, across all server sources', () => {
-    // The two files above are known to desync the stripper (a regex literal
-    // containing a quote character), so they're scanned raw here instead —
-    // proven exact on them, unlike the stripped text. Every other file goes
-    // through the stripper, backstopped by the brace-balance test above.
+    // KNOWN_STRIPPER_DESYNCS files are scanned raw (no false negative, at
+    // the cost of false-positive exposure to a comment/string quoting the
+    // pattern); every other file goes through the stripper.
     const scanned = serverSourceFiles(SERVER_DIR).map((path) => {
       const raw = readFileSync(path, 'utf8');
       const code = KNOWN_STRIPPER_DESYNCS.has(relative(SERVER_DIR, path))
