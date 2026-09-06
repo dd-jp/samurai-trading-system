@@ -193,7 +193,12 @@ describe('resolveTrace', () => {
     const detail = resolveTrace(snapshot, { instrument: 'AAPL', traceId: 'trace-1' });
     expect(detail.lane).toBeUndefined();
     expect(detail.cells).toBeNull();
-    expect(detail.absence.lane).toBe('aged_out');
+    // Not asserted: detail.absence.lane currently reads 'aged_out' here, which
+    // is the wrong label (the trace hasn't aged out — it's in the window
+    // under another instrument) and detail.traceId still leaks the mismatched
+    // selection's traceId unvalidated. Both are open residue for #1205's
+    // successor ('wrong_instrument' absence state); pinning either value here
+    // would make this test fight that fix.
   });
 
   it('says an idle lane is idle rather than absent, and joins it to no critic row', () => {

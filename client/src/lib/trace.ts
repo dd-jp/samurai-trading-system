@@ -25,11 +25,15 @@ export function laneFor(
     : view.lanes.find((lane) => lane.trace_id === traceId && lane.instrument === instrument);
 }
 
+/** Matches `trace_id` AND `instrument`; a `trace_id`-only match renders another instrument's verdict under this one's header (#1205). */
 export function verdictFor(
   verdicts: readonly VerdictRow[],
   traceId: string | null,
+  instrument: string,
 ): VerdictRow | undefined {
-  return traceId === null ? undefined : verdicts.find((row) => row.trace_id === traceId);
+  return traceId === null
+    ? undefined
+    : verdicts.find((row) => row.trace_id === traceId && row.instrument === instrument);
 }
 
 /** Matches `trace_id` AND `instrument`; a looser match mis-attributes a row (#1066). */
