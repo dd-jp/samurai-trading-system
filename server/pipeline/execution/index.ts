@@ -93,6 +93,10 @@ export type {
   FlattenReconcileAlert,
   FlattenReconcileAlertChannel,
 } from './flatten-reconcile-alert.js';
+export type {
+  LegResizeUnverifiedAlert,
+  LegResizeUnverifiedAlertChannel,
+} from './leg-resize-unverified-alert.js';
 export type { OcoDoubleFillAlert, OcoDoubleFillAlertChannel } from './oco-double-fill-alert.js';
 export { TERMINAL_SWEEP_AGE_MS } from './reconcile.js';
 export type {

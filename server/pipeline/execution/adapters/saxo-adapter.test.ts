@@ -4,11 +4,21 @@
  * Every wire shape below is a recorded SIM-gateway response from 2026-09-05
  * (doc 43) with the account/client keys stripped — no credential appears here.
  */
+import type { MarketDataService } from '../../../providers/market-data-service/index.js';
 import { LSE_ETP_POOL } from '../../../providers/universe-pool/index.js';
+import type { OpenPosition } from '../../../shared/index.js';
 import { TokenBucket } from '../../../shared/index.js';
 import { recordingLogger } from '../../../shared/recording-logger.js';
+import type { CostModel } from '../../../tools/backtest/index.js';
 import { InMemoryBrokerStateStore } from '../broker-state-store.js';
-import type { NativeBracketRequest } from '../types.js';
+import { ExecutionImpl } from '../execute.js';
+import { FilledZeroSizeThrottle } from '../filled-zero-size-throttle.js';
+import type {
+  LegResizeUnverifiedAlert,
+  LegResizeUnverifiedAlertChannel,
+} from '../leg-resize-unverified-alert.js';
+import { openTestExecutionStore, type TestExecutionStore } from '../sqlite-store-harness.js';
+import type { ExecutionInput, NativeBracketRequest } from '../types.js';
 import {
   SaxoBrokerAdapter,
   type SaxoInstrumentResolver,
@@ -119,17 +129,31 @@ function makeClient(overrides: Partial<SaxoOpenApiClient> = {}): SaxoOpenApiClie
   };
 }
 
+function makeLegResizeAlerts(): LegResizeUnverifiedAlertChannel & {
+  alerts: LegResizeUnverifiedAlert[];
+} {
+  const alerts: LegResizeUnverifiedAlert[] = [];
+  return {
+    alerts,
+    async postLegResizeUnverifiedAlert(alert) {
+      alerts.push(alert);
+    },
+  };
+}
+
 function makeAdapter(client: SaxoOpenApiClient, state = new InMemoryBrokerStateStore()) {
   const logger = recordingLogger();
+  const legResizeAlerts = makeLegResizeAlerts();
   const adapter = new SaxoBrokerAdapter({
     client,
     instruments: RESOLVER,
     rateLimiter: permissiveLimiter(),
     state,
     clock: { now: () => new Date('2026-09-05T09:00:00Z') },
+    legResizeAlerts,
     logger,
   });
-  return { adapter, logger, state };
+  return { adapter, logger, state, legResizeAlerts };
 }
 
 describe('SaxoBrokerAdapter.submitBracket', () => {
@@ -251,6 +275,8 @@ describe('SaxoBrokerAdapter.submitBracket', () => {
     await expect(adapter.submitBracket(makeBracket())).rejects.toMatchObject({
       name: 'BrokerError',
       operation: 'submitBracket',
+      venueCode: 'DeadOrderUnderReference',
+      venueMessage: expect.stringContaining(`state '${_state}'`),
     });
     expect(client.placeOrder).not.toHaveBeenCalled();
     expect(journal.loadBrackets('saxo')).toEqual([]);
@@ -479,13 +505,148 @@ describe('SaxoBrokerAdapter protective legs', () => {
     expect(client.placeOrder).not.toHaveBeenCalled();
   });
 
-  it('resizeProtectiveLegs fails loud: IfDone leg resizing on a partial fill is unverified', async () => {
+  it('resizeProtectiveLegs is a silent no-op when the whole bracket filled', async () => {
     const client = makeClient();
-    const { adapter } = makeAdapter(client);
+    const { adapter, legResizeAlerts } = makeAdapter(client);
+    await adapter.submitBracket(makeBracket({ size: 3 }));
 
-    await expect(adapter.resizeProtectiveLegs('key-3usl-0930', 2)).rejects.toThrow(/unverified/);
-    expect(client.placeOrder).not.toHaveBeenCalled();
+    await adapter.resizeProtectiveLegs('key-3usl-0930', 3);
+
+    expect(legResizeAlerts.alerts).toEqual([]);
+    expect(client.placeOrder).toHaveBeenCalledTimes(1);
     expect(client.cancelOrder).not.toHaveBeenCalled();
+  });
+
+  it('resizeProtectiveLegs alerts, and does not throw, on a partial fill', async () => {
+    const client = makeClient();
+    const { adapter, legResizeAlerts } = makeAdapter(client);
+    await adapter.submitBracket(makeBracket({ size: 3 }));
+
+    await adapter.resizeProtectiveLegs('key-3usl-0930', 2);
+
+    expect(legResizeAlerts.alerts).toEqual([
+      {
+        client_order_id: 'key-3usl-0930',
+        instrument: '3USL',
+        requested_qty: 3,
+        filled_qty: 2,
+        observed_at: new Date('2026-09-05T09:00:00Z'),
+      },
+    ]);
+    expect(client.cancelOrder).not.toHaveBeenCalled();
+  });
+
+  it('resizeProtectiveLegs alerts with an unknown size when the journal holds only order ids', async () => {
+    const state = new InMemoryBrokerStateStore();
+    state.recordBracketOrderIds('saxo', 'key-3usl-0930', {
+      entry_order_id: '5040047177',
+      stop_order_id: null,
+      target_order_id: null,
+    });
+    const { adapter, legResizeAlerts } = makeAdapter(makeClient(), state);
+
+    await adapter.resizeProtectiveLegs('key-3usl-0930', 3);
+
+    expect(legResizeAlerts.alerts).toMatchObject([{ requested_qty: null, filled_qty: 3 }]);
+  });
+});
+
+/**
+ * The regression the round-2 review named: `ingestFills` calls
+ * `resizeProtectiveLegs` on EVERY new entry fill, above `applyLotAdvance`, so
+ * an adapter that throws there wedges the fill un-persisted forever. Driven
+ * through the real `ExecutionImpl` against the Saxo adapter, not a stub.
+ */
+describe('ExecutionImpl.ingestFills through SaxoBrokerAdapter', () => {
+  const NOW = new Date('2026-09-05T09:00:00Z');
+  const OPENED_AT = new Date('2026-09-05T08:00:00Z');
+
+  async function seedPosition(store: TestExecutionStore, size: number): Promise<OpenPosition> {
+    const position: OpenPosition = {
+      idempotency_key: 'key-3usl-0930',
+      debate_id: 'debate-1',
+      instrument: '3USL',
+      asset_class: 'stocks',
+      side: 'buy',
+      intent_type: 'entry',
+      requested_size: size,
+      filled_size: 0,
+      avg_entry_price: 0,
+      stop: 9,
+      target: 12,
+      order_state: 'submitted',
+      broker_order_ids: ['5040047177', '5040047178', '5040047179'],
+      opened_at: OPENED_AT,
+      decision_timestamp: OPENED_AT,
+      conviction: 0.7,
+      converged: true,
+    };
+    await store.writeAheadPosition(position);
+    return position;
+  }
+
+  function entryFill(fillAmount: number): SaxoOrderActivity {
+    return activity({
+      LogId: 'log-fill',
+      Status: 'Filled',
+      FillAmount: fillAmount,
+      AveragePrice: 10.02,
+      ActivityTime: '2026-09-05T08:31:00Z',
+    });
+  }
+
+  async function ingest(fillAmount: number, size: number) {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, size);
+    const client = makeClient({
+      listOrderActivities: vi.fn().mockResolvedValue([entryFill(fillAmount)]),
+    });
+    const { adapter, legResizeAlerts } = makeAdapter(client);
+    await adapter.submitBracket(makeBracket({ size }));
+
+    const input: ExecutionInput = {
+      trace_id: 'trace-1',
+      clock: { now: () => NOW },
+      broker: adapter,
+      store,
+      costModel: {} as CostModel,
+      marketData: {} as MarketDataService,
+      config: {
+        simulated: {
+          volatility_indicator: {
+            indicator: 'atr',
+            params: { period: 14 },
+            timeframe: '1h',
+            lookback: 15,
+          },
+          adv_window: { timeframe: '1d', lookback: 20 },
+        },
+      },
+      mode: 'paper',
+      residualExposureAlerts: { postResidualExposureAlert: async () => {} },
+      flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
+      flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
+      logger: recordingLogger(),
+      filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
+    };
+    await new ExecutionImpl(input).ingestFills();
+    return { position: await store.getPosition('key-3usl-0930'), legResizeAlerts };
+  }
+
+  it('books a full entry fill: filled_size persists and no alert is posted', async () => {
+    const { position, legResizeAlerts } = await ingest(3, 3);
+
+    expect(position?.filled_size).toBe(3);
+    expect(position?.order_state).toBe('filled');
+    expect(legResizeAlerts.alerts).toEqual([]);
+  });
+
+  it('books a partial entry fill and posts the leg-resize alert instead of wedging the lot', async () => {
+    const { position, legResizeAlerts } = await ingest(2, 3);
+
+    expect(position?.filled_size).toBe(2);
+    expect(position?.order_state).toBe('partially_filled');
+    expect(legResizeAlerts.alerts).toMatchObject([{ requested_qty: 3, filled_qty: 2 }]);
   });
 });
 
@@ -594,6 +755,47 @@ describe('SaxoBrokerAdapter.fetchNewFills', () => {
     const [fill] = await adapter.fetchNewFills(since);
 
     expect(fill?.timestamp).toEqual(since);
+  });
+
+  it('leaves fee_currency unset for one fill whose Uic resolves to no pool line, and logs it', async () => {
+    const client = makeClient({
+      listOrderActivities: vi.fn().mockResolvedValue([
+        activity({
+          LogId: 'log-fill',
+          Status: 'Filled',
+          FillAmount: 3,
+          AveragePrice: 10.02,
+          Uic: 999999,
+          ActivityTime: '2026-09-05T08:31:00Z',
+        }),
+        activity({
+          LogId: 'log-stop',
+          OrderId: '5040047178',
+          ExternalReference: 'key-3usl-0930:stop',
+          Status: 'Filled',
+          FillAmount: 3,
+          AveragePrice: 8.98,
+          ActivityTime: '2026-09-05T10:00:00Z',
+        }),
+      ]),
+    });
+    const { adapter, logger } = makeAdapter(client);
+    await adapter.submitBracket(makeBracket());
+
+    const fills = await adapter.fetchNewFills(since);
+
+    expect(fills.map((fill) => [fill.broker_fill_id, fill.fee_currency])).toEqual([
+      ['log-fill', undefined],
+      ['log-stop', 'USD'],
+    ]);
+    expect(fills[0]).not.toHaveProperty('fee_currency');
+    expect(logger.entries).toContainEqual(
+      expect.objectContaining({
+        level: 'error',
+        message: expect.stringContaining('fee_currency left unset'),
+        payload: expect.objectContaining({ uic: 999999, log_id: 'log-fill' }),
+      }),
+    );
   });
 
   it('throws on a Filled activity that carries no fill amount or price rather than dropping it', async () => {

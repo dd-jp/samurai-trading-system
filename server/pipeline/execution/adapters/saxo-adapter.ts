@@ -18,7 +18,7 @@
  *   prices carry `OrderDecimals` 2 on every pool line.
  */
 import type { Clock, Logger } from '../../../shared/index.js';
-import { DEFAULT_VENUE_PACING, TokenBucket } from '../../../shared/index.js';
+import { DEFAULT_VENUE_PACING, safeLog, TokenBucket } from '../../../shared/index.js';
 import { SAXO_COMMISSION_RATE } from '../../../tools/backtest/index.js';
 import { sanitizeBrokerError } from '../broker-error.js';
 import {
@@ -26,6 +26,7 @@ import {
   InMemoryBrokerStateStore,
   toRequestFields,
 } from '../broker-state-store.js';
+import type { LegResizeUnverifiedAlertChannel } from '../leg-resize-unverified-alert.js';
 import type {
   BrokerAck,
   BrokerAdapter,
@@ -34,7 +35,11 @@ import type {
   NormalizedOrder,
   NormalizedPosition,
 } from '../types.js';
-import { isDuplicateRequestRefusal, isOrderNotFound } from './saxo-broker-errors.js';
+import {
+  isDuplicateRequestRefusal,
+  isOrderNotFound,
+  SaxoBrokerProviderError,
+} from './saxo-broker-errors.js';
 import type {
   SaxoAssetType,
   SaxoBuySell,
@@ -130,7 +135,20 @@ export interface SaxoBrokerAdapterInput {
   state?: BrokerStateStore;
   clock?: Clock;
   activityLookbackMs?: number;
+  /**
+   * REQUIRED, no logging default: the only signal a partial entry fill
+   * leaves (see `resizeProtectiveLegs`), so a silent stand-in here would be
+   * the "tested mechanism nothing calls" defect class this repo keeps
+   * refiling — same reason Alpaca's `unpricedFillAlerts` refuses one.
+   */
+  legResizeAlerts: LegResizeUnverifiedAlertChannel;
   logger: Logger;
+}
+
+interface BracketRecord {
+  instrument: string;
+  /** `undefined` for a bracket journalled without its request (ids only). */
+  size: number | undefined;
 }
 
 interface FlattenRecord {
@@ -149,8 +167,9 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
   private readonly clock: Clock;
   private readonly activityLookbackMs: number;
   private readonly logger: Logger;
-  /** client_order_id -> instrument, warmed from the journal so a restart keeps sweeping fills. */
-  private readonly brackets = new Map<string, string>();
+  private readonly legResizeAlerts: LegResizeUnverifiedAlertChannel;
+  /** Warmed from the journal so a restart keeps sweeping fills. */
+  private readonly brackets = new Map<string, BracketRecord>();
   private readonly flattens = new Map<string, FlattenRecord>();
 
   constructor(input: SaxoBrokerAdapterInput) {
@@ -166,8 +185,12 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     this.clock = input.clock ?? { now: () => new Date() };
     this.activityLookbackMs = input.activityLookbackMs ?? DEFAULT_ACTIVITY_LOOKBACK_MS;
     this.logger = input.logger;
+    this.legResizeAlerts = input.legResizeAlerts;
     for (const record of this.state.loadBrackets('saxo')) {
-      this.brackets.set(record.client_order_id, record.request?.instrument ?? '');
+      this.brackets.set(record.client_order_id, {
+        instrument: record.request?.instrument ?? '',
+        size: record.request?.size,
+      });
     }
   }
 
@@ -216,7 +239,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     const { ids, order_state } = await this.call('submitBracket', () =>
       this.placeIdempotently(order.client_order_id, request),
     );
-    this.brackets.set(order.client_order_id, order.instrument);
+    this.brackets.set(order.client_order_id, { instrument: order.instrument, size: order.size });
     this.state.saveBracket({
       venue: 'saxo',
       client_order_id: order.client_order_id,
@@ -241,7 +264,10 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
       this.lookup(clientOrderId, this.activityLookbackMs),
     );
     if (order === null) return null;
-    this.brackets.set(clientOrderId, instrument);
+    this.brackets.set(clientOrderId, {
+      instrument,
+      size: this.brackets.get(clientOrderId)?.size ?? order.amount,
+    });
     this.state.recordBracketOrderIds('saxo', clientOrderId, {
       entry_order_id: order.ids.entry ?? null,
       stop_order_id: order.ids.stop ?? null,
@@ -271,14 +297,10 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     for (const activity of activities) {
       const owner = this.attribute(activity.ExternalReference);
       if (owner === undefined) continue;
-      const fill = toFill(
-        activity,
-        owner.clientOrderId,
-        owner.leg,
-        since,
-        this.feeCurrencyFor(activity),
-      );
-      if (fill !== undefined) fills.push(fill);
+      const fill = toFill(activity, owner.clientOrderId, owner.leg, since);
+      if (fill === undefined) continue;
+      const feeCurrency = this.feeCurrencyFor(activity);
+      fills.push(feeCurrency === undefined ? fill : { ...fill, fee_currency: feeCurrency });
     }
     return fills;
   }
@@ -286,17 +308,24 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
   /**
    * Whether Saxo shrinks an IfDone master's related orders to the filled
    * amount on a PARTIAL entry fill is UNVERIFIED (no fill was observable on
-   * SIM). If it does not, a fixed-`Amount` GTC stop over-closes into a
-   * reversed position — so until a real fill settles it, this fails loud
-   * (the same posture as `rearmProtectiveLegs`) rather than trusting the
-   * venue silently.
+   * SIM). The legs are placed at the bracket's size, so a fill of that size
+   * needs nothing. A smaller fill leaves the doubt: if the venue did not
+   * shrink the legs, a fixed-`Amount` GTC stop over-closes into a reversed
+   * position. That is alerted, not thrown — `ingestFills` calls this before
+   * `applyLotAdvance`, so a throw here would leave the fill un-persisted
+   * (zero exposure to Risk, nothing for flat-by-close to send), which is
+   * worse than the leg-size doubt.
    */
   async resizeProtectiveLegs(clientOrderId: string, filledQty: number): Promise<void> {
-    throw new Error(
-      `Saxo: refusing to treat the IfDone legs of '${clientOrderId}' as resized to ${filledQty} — ` +
-        "whether Saxo shrinks related orders on a partial entry fill is unverified (doc 43 'Not " +
-        "verified'); confirm on a real fill before making this a no-op.",
-    );
+    const size = this.brackets.get(clientOrderId)?.size;
+    if (size !== undefined && filledQty >= size) return;
+    await this.legResizeAlerts.postLegResizeUnverifiedAlert({
+      client_order_id: clientOrderId,
+      instrument: this.brackets.get(clientOrderId)?.instrument ?? '',
+      requested_qty: size ?? null,
+      filled_qty: filledQty,
+      observed_at: this.clock.now(),
+    });
   }
 
   async rearmProtectiveLegs(
@@ -415,17 +444,27 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
    * — and it is denominated in the LINE's quote currency (USD on most pool
    * lines), which `NormalizedFill.fee_currency` makes explicit rather than
    * letting a USD figure be summed as GBP. No FX rate is invented here.
+   *
+   * A Uic no pool line resolves leaves that ONE fill's currency unset and is
+   * logged at `error`; it does not fail the sweep, which would hold every
+   * other fill in the same batch hostage to one attribution gap.
    */
-  private feeCurrencyFor(activity: SaxoOrderActivity): string {
+  private feeCurrencyFor(activity: SaxoOrderActivity): string | undefined {
     const ticker = this.instruments.lseTickerFor(activity.Uic);
     const ref = ticker === undefined ? undefined : this.instruments.resolve(ticker);
-    if (ref === undefined) {
-      throw new Error(
-        `Saxo activity ${activity.LogId} fills Uic ${activity.Uic}, which no pool line resolves — ` +
-          'its fee currency cannot be attributed.',
-      );
-    }
-    return ref.currency;
+    if (ref !== undefined) return ref.currency;
+    safeLog(this.logger, {
+      trace_id: 'saxo-fill-sweep',
+      stage: 'execution',
+      level: 'error',
+      message: 'Saxo fetchNewFills: fill Uic resolves to no pool line; fee_currency left unset',
+      payload: {
+        log_id: activity.LogId,
+        uic: activity.Uic,
+        external_reference: activity.ExternalReference,
+      },
+    });
+    return undefined;
   }
 
   private async findOpen(externalReference: string): Promise<LookedUpOrder | null> {
@@ -564,11 +603,14 @@ const DEAD_STATES: ReadonlySet<NormalizedOrder['order_state']> = new Set([
 function adopt(existing: LookedUpOrder, externalReference: string): Placed {
   const state = existing.normalized.order_state;
   if (DEAD_STATES.has(state)) {
-    throw new Error(
+    // Carried as `venueMessage` so `sanitizeBrokerError` keeps it: the text
+    // is composed here from our own reference and the venue's order id, not
+    // copied from a response body, so the H1 boundary has nothing to strip.
+    const reason =
       `Saxo already holds '${externalReference}' in state '${state}' (order ` +
-        `${existing.normalized.broker_order_ids.join(',') || 'unknown'}); refusing to adopt a dead ` +
-        'order or re-place under the same reference — the caller must issue a fresh id.',
-    );
+      `${existing.normalized.broker_order_ids.join(',') || 'unknown'}); refusing to adopt a dead ` +
+      'order or re-place under the same reference — the caller must issue a fresh id.';
+    throw new SaxoBrokerProviderError(reason, undefined, 'DeadOrderUnderReference', reason);
   }
   return { ids: existing.ids, order_state: state };
 }
@@ -657,7 +699,6 @@ function toFill(
   clientOrderId: string,
   leg: Leg,
   since: Date,
-  feeCurrency: string,
 ): NormalizedFill | undefined {
   const qty = activity.FillAmount;
   const price = activity.AveragePrice;
@@ -687,7 +728,6 @@ function toFill(
     price,
     qty,
     fee: price * qty * SAXO_COMMISSION_RATE,
-    fee_currency: feeCurrency,
     timestamp,
   };
 }
