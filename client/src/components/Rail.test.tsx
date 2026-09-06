@@ -75,10 +75,10 @@ describe('Rail — poll clock', () => {
 /**
  * #1201: crossing the drawdown's index tolerance had no *dedicated*
  * indication beyond the track's colour turning `bad` — the head's
- * "value / cap" text and the track's accessible label are words, but both
- * render the same fraction whether or not it is over, so neither one states
- * the threshold itself. Of the rail's two `CapMeter`s, the LLM-cap one's
- * footnote does state it (`over cap · `); `DrawdownBlock`'s footnote
+ * "value / cap" text and the track's accessible label are words, and both
+ * name the tolerance — but neither is conditioned on the over state, so
+ * neither says it has been crossed. Of the rail's two `CapMeter`s, the
+ * LLM-cap one's footnote does state it (`over cap · `); `DrawdownBlock`'s footnote
  * discarded `CapMeter`'s `over` argument and never spoke the over state at
  * all.
  */
