@@ -8,7 +8,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import type { SnapshotFeed } from '../hooks/useSnapshot.ts';
-import { makeSnapshot } from '../test-fixtures.ts';
+import { makeMetrics, makeSnapshot } from '../test-fixtures.ts';
 import { Rail } from './Rail.tsx';
 
 const GENERATED_AT = '2026-08-07T12:00:00.000Z';
@@ -69,5 +69,36 @@ describe('Rail — poll clock', () => {
 
     expect(screen.getByText(/stale — last update 12:00:00Z/)).toBeTruthy();
     expect(screen.queryByText(/last update 12:00:35Z/)).toBeNull();
+  });
+});
+
+/**
+ * #1201: the drawdown meter's over-tolerance state turned only the track's
+ * colour `bad`, with no word — the LLM-cap meter's `over cap · ` prefix was
+ * the only carrier the rail had that also spoke. `DrawdownBlock` discarded
+ * `CapMeter`'s `over` argument entirely.
+ */
+describe('Rail — drawdown meter', () => {
+  it('says the drawdown is over tolerance when max drawdown reaches the index tolerance', () => {
+    renderRail(
+      makeFeed({ snapshot: makeSnapshot({ metrics: makeMetrics({ max_drawdown: 0.262 }) }) }),
+    );
+
+    expect(screen.getByText(/over tolerance ·/)).toBeTruthy();
+  });
+
+  it('says nothing about being over tolerance while inside it', () => {
+    renderRail(
+      makeFeed({ snapshot: makeSnapshot({ metrics: makeMetrics({ max_drawdown: 0.018 }) }) }),
+    );
+
+    expect(screen.queryByText(/over tolerance/)).toBeNull();
+  });
+
+  it('pins the empty state shown before any daily suite has run', () => {
+    renderRail(makeFeed({ snapshot: null }));
+
+    expect(screen.getByText('no daily suite yet — meter not drawable')).toBeTruthy();
+    expect(screen.queryByText(/over tolerance/)).toBeNull();
   });
 });
