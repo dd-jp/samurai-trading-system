@@ -361,9 +361,7 @@ function TradeRow(props: {
       >
         <span className="mono muted">{formatWhen(trade.closed_at, asOf)}</span>
         <b className="display">{trade.instrument}</b>
-        <span className="mono">
-          {formatPrice(trade.entry_price)} → {formatPrice(trade.exit_price)}
-        </span>
+        <span className="mono">{sideWord(trade.side)}</span>
         <span className="mono muted">{formatHeld(trade.opened_at, trade.closed_at)}</span>
         <StateWord state={closeReason} />
         <span className="muted trade-why">{whyTaken(debate)}</span>
@@ -389,7 +387,7 @@ function TradesTable(props: ReviewTabProps) {
       <div className="trade-row trade-header" aria-hidden="true">
         <span className="label">Closed</span>
         <span className="label">Instrument</span>
-        <span className="label">In / out</span>
+        <span className="label">Side</span>
         <span className="label">Held</span>
         <span className="label">Reason</span>
         <span className="label">Why it was taken</span>
