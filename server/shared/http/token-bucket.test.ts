@@ -315,8 +315,8 @@ describe('TokenBucket wait telemetry (#1083)', () => {
     // Grep-distinguishable: neither an LLM token-count field (`input_tokens`)
     // nor a bare digit run (`429`) can match this event name.
     expect(entry.message).toContain('token_bucket_wait');
+    expect(entry.event).toBe('token_bucket_wait');
     expect(entry.payload).toMatchObject({
-      event: 'token_bucket_wait',
       bucket: 'alpaca',
       lane: 'priority',
       wait_ms: expect.any(Number),

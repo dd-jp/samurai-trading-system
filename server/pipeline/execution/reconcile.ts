@@ -309,6 +309,7 @@ async function postFlattenReconcileAlert(
     safeLog(input.logger, {
       trace_id: input.trace_id,
       stage: 'execution',
+      event: 'flatten_reconcile_alert_send_failed',
       level: 'error',
       message:
         'postFlattenReconcileAlert delivery failed — an unresolved flatten stays genuinely ' +

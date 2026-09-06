@@ -147,6 +147,7 @@ export async function runStartupReconcile(deps: {
     deps.logger.log({
       trace_id: RECONCILE_TRACE_ID,
       stage: 'execution',
+      event: 'reconcile_divergence',
       // `undetermined` means the adapter could not answer and a human must
       // look; an adopted/rejected lot was settled automatically.
       level: divergence.action === 'undetermined' ? 'warn' : 'info',
@@ -256,6 +257,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
         deps.logger.log({
           trace_id: RECONCILE_TRACE_ID,
           stage: 'execution',
+          event: 'reconcile_divergence',
           // `undetermined` means the adapter could not answer and a human
           // must look; an adopted/rejected row was settled automatically —
           // the same split `runStartupReconcile` uses for this same report
@@ -284,6 +286,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
       deps.logger.log({
         trace_id: FILL_SYNC_TRACE_ID,
         stage: 'execution',
+        event: 'fill_sync_reconcile_failed',
         level: 'error',
         message: FILL_SYNC_RECONCILE_FAILED,
         payload: {
@@ -306,6 +309,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
           deps.logger.log({
             trace_id: FILL_SYNC_TRACE_ID,
             stage: 'execution',
+            event: 'residual_sweep_divergence',
             // Mirrors `runStartupReconcile`'s split: `undetermined` means the
             // marker stays and a human may need to look; `adopted` means
             // protection was confirmed and the marker cleared.
@@ -321,6 +325,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
         deps.logger.log({
           trace_id: FILL_SYNC_TRACE_ID,
           stage: 'execution',
+          event: 'fill_sync_sweep_failed',
           level: 'error',
           message: FILL_SYNC_SWEEP_FAILED,
           payload: {
@@ -339,6 +344,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
       deps.logger.log({
         trace_id: FILL_SYNC_TRACE_ID,
         stage: 'execution',
+        event: 'fill_poll_skipped',
         level: 'warn',
         message: 'fill poll skipped: previous poll still running',
       });
@@ -356,6 +362,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
       deps.logger.log({
         trace_id: FILL_SYNC_TRACE_ID,
         stage: 'execution',
+        event: 'fill_poll_failed',
         level: 'error',
         message: FILL_SYNC_POLL_FAILED,
         payload: { error: error instanceof Error ? error.message : String(error) },

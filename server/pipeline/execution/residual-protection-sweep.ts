@@ -101,6 +101,7 @@ export async function sweepResidualProtection(
         {
           trace_id: input.trace_id,
           stage: 'execution',
+          event: 'residual_sweep_lot_unsettled',
           level: 'error',
           message:
             'sweepResidualProtection: one marked lot could not be settled this pass — the ' +
@@ -158,6 +159,7 @@ async function sweepOne(
       {
         trace_id: input.trace_id,
         stage: 'execution',
+        event: 'residual_size_read_failed',
         level: 'error',
         message:
           'sweepResidualProtection: store read failed while recomputing a marked residual — ' +
@@ -241,6 +243,7 @@ async function sweepOne(
       {
         trace_id: input.trace_id,
         stage: 'execution',
+        event: 'residual_rearm_failed',
         level: 'error',
         message:
           'sweepResidualProtection: broker.rearmProtectiveLegs retry failed — the marker stays ' +
@@ -347,6 +350,7 @@ async function alertResidualExposureOnce(
       {
         trace_id: input.trace_id,
         stage: 'execution',
+        event: 'residual_alert_mark_failed',
         level: 'warn',
         message:
           'markResidualAlerted failed — the next sweep pass may page a second time for an ' +

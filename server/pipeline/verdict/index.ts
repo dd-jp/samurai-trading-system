@@ -404,7 +404,6 @@ export {
   signApprovalCallback,
   verifyApprovalCallback,
 } from './notifications/approval-callback-verifier.js';
-export { DiscordChannel } from './notifications/discord-channel.js';
 export { formatApprovalRequest, formatDecisionMessage } from './notifications/format.js';
 export { isNotableVerdict } from './notifications/notable-verdict.js';
 export { parseAllowedUserIds } from './notifications/telegram/allowlist.js';

@@ -2,7 +2,7 @@
  * Trade-channel adapter for the Feedback Loop's kill-threshold breach alert
  * (#93, wired by #327) — the same move `TradeChannelUnpricedFillAlert` and
  * `TradeChannelHeartbeat` make: reuse Verdict's already-provisioned
- * Telegram/Discord transports rather than introduce a second integration, and
+ * Telegram transport rather than introduce a second integration, and
  * wrap the raw clients rather than route through `TradeChannelNotifier.notify`,
  * which is shaped for a `VerdictDecision` and not for a validation breach.
  *
@@ -91,6 +91,7 @@ export class TradeChannelBreachAlert implements BreachAlertChannel {
       this.#logger.log({
         trace_id: 'feedback-cycle',
         stage: 'feedback-loop',
+        event: 'breach_alert_send_failed',
         level: 'error',
         message: 'kill-threshold breach alert failed to send — the breach still stands',
         payload: {

@@ -1120,8 +1120,8 @@ describe('outbound message cap (Telegram 4096)', () => {
     const logged = entries.filter((entry) => entry.message.startsWith('telegram_body_truncated'));
     expect(logged).toHaveLength(1);
     expect(logged[0]?.level).toBe('warn');
+    expect(logged[0]?.event).toBe('telegram_body_truncated');
     expect(logged[0]?.payload).toEqual({
-      event: 'telegram_body_truncated',
       chars: `head ${tail}`.length,
       body: `head ${tail}`,
     });

@@ -238,6 +238,7 @@ export async function ingestFills(input: ExecutionInput): Promise<void> {
         {
           trace_id: input.trace_id,
           stage: 'execution',
+          event: 'flatten_sweep_mark_failed',
           level: 'warn',
           message:
             'markFlattenFillsSwept failed — the row stays unswept and will be found again by ' +
@@ -838,6 +839,7 @@ async function redistributeOneFlatten(
           safeLog(input.logger, {
             trace_id: input.trace_id,
             stage: 'execution',
+            event: 'flatten_overfill_alert_send_failed',
             level: 'warn',
             message:
               'flatten-overfill alert delivery failed — the overfill itself was still dropped ' +
@@ -880,6 +882,7 @@ async function redistributeOneFlatten(
         {
           trace_id: input.trace_id,
           stage: 'execution',
+          event: 'residual_mark_failed',
           level: 'warn',
           message:
             'markResidualUnprotected failed during flatten redistribution — a crash before the ' +
@@ -1059,6 +1062,7 @@ async function advanceLot(
         safeLog(input.logger, {
           trace_id: input.trace_id,
           stage: 'execution',
+          event: 'fill_priced_at_zero_size',
           level: 'warn',
           message: FILLED_WITH_ZERO_SIZE,
           payload: {
@@ -1197,6 +1201,7 @@ async function maybeRearmResidual(
         {
           trace_id: input.trace_id,
           stage: 'execution',
+          event: 'residual_size_read_failed',
           level: 'error',
           message:
             'maybeRearmResidual: store read failed while computing the exact residual after a ' +
@@ -1317,6 +1322,7 @@ async function maybeRearmResidual(
       {
         trace_id: input.trace_id,
         stage: 'execution',
+        event: 'residual_rearm_failed',
         level: 'error',
         message: 'maybeRearmResidual: broker.rearmProtectiveLegs failed — alerting instead',
       },
@@ -1383,6 +1389,7 @@ async function bestEffortMarkerWrite(
       {
         trace_id: input.trace_id,
         stage: 'execution',
+        event: 'residual_alert_mark_failed',
         level: 'warn',
         message: failureMessage,
       },
@@ -1448,6 +1455,7 @@ export async function alertResidualExposure(
     safeLog(input.logger, {
       trace_id: input.trace_id,
       stage: 'execution',
+      event: 'residual_exposure_alert_send_failed',
       level: 'error',
       message:
         'postResidualExposureAlert delivery failed — a residual position is unprotected and ' +
@@ -1651,6 +1659,7 @@ function cumulativeTopUp(
     safeLog(input.logger, {
       trace_id: input.trace_id,
       stage: 'execution',
+      event: 'fill_topup_price_unusable',
       level: 'warn',
       message:
         '#842: cumulative fill top-up produced an unusable increment price — booking the ' +

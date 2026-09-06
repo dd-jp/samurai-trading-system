@@ -205,6 +205,7 @@ export class MarketDataVolatilityReadingProvider implements VolatilityReadingPro
         logger.log({
           trace_id: 'volatility-reading-provider',
           stage: 'volatility-reading-provider',
+          event: 'volatility_indicator_rejected',
           level: 'error',
           message:
             'getIndicator rejected; treating instrument as fail-closed (max reading) rather than excluding it',
@@ -224,6 +225,7 @@ export class MarketDataVolatilityReadingProvider implements VolatilityReadingPro
         logger.log({
           trace_id: 'volatility-reading-provider',
           stage: 'volatility-reading-provider',
+          event: 'volatility_indicator_non_finite',
           level: 'error',
           message:
             'getIndicator returned a non-finite value; treating instrument as fail-closed (max reading) rather than excluding it',
@@ -302,6 +304,7 @@ function warnIfClassEmpty(
   logger.log({
     trace_id: 'volatility-reading-provider',
     stage: 'volatility-reading-provider',
+    event: 'volatility_universe_empty',
     level: 'warn',
     message:
       'no instruments configured for asset class; volatility breaker reads 0 (inert) for this class',

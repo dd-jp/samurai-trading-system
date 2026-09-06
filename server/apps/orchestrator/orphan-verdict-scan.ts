@@ -113,6 +113,7 @@ export class OrphanVerdictScanner {
         logger.log({
           trace_id: orphan.trace_id,
           stage: 'orphan-verdict-scan',
+          event: 'orphan_verdict_alert_failed',
           level: 'error',
           message: 'orphan go-verdict alert failed',
           payload: { error: error instanceof Error ? error.message : String(error) },

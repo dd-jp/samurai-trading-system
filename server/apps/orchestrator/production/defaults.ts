@@ -249,6 +249,7 @@ export function buildDefaultLlmClient(logger: Logger, spendSink?: LlmSpendSink):
   logger.log({
     trace_id: 'startup',
     stage: 'orchestrator',
+    event: 'llm_client_default_built',
     level: 'warn',
     message: 'ProductionConfig.llmClient not supplied — building live NousMessagesClient default',
     payload: { model },
@@ -274,6 +275,7 @@ export function buildDefaultLlmClient(logger: Logger, spendSink?: LlmSpendSink):
         {
           trace_id: report.trace_id ?? 'llm',
           stage: 'debate',
+          event: 'llm_attempt_retried',
           level: 'warn',
           message:
             `llm retry: ${report.model} attempt ${report.attempt} of ${report.maxAttempts} ` +
@@ -425,6 +427,7 @@ export function buildDefaultAlpacaBrokerClient(
   logger.log({
     trace_id: 'startup',
     stage: 'orchestrator',
+    event: 'broker_client_built',
     level: environment === 'live' ? 'warn' : 'info',
     message:
       environment === 'live'

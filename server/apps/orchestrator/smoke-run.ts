@@ -1109,11 +1109,11 @@ export interface MarketDataFetchEvidence {
  * was constructed with a `telemetry` argument (#430's dominant defect class:
  * built, unit-tested, never wired, every test green).
  *
- * Matched by `payload.event`, unlike `FillSyncFailureRecorder` above (which
+ * Matched by `LogEntry.event`, unlike `FillSyncFailureRecorder` above (which
  * matches a closed, enumerated `message` set): this line's message is
- * instrument/timeframe-specific prose, so the grep-unique event name —
- * `market_data_fetch`, same convention as `token_bucket_wait` (#1083) — is
- * the one fixed field every line carries.
+ * instrument/timeframe-specific prose, so the grep-unique event code —
+ * `market_data_fetch`, the convention #1115 made compulsory for every
+ * `warn`/`error` line — is the one fixed field every line carries.
  *
  * Unlike #1083's `token_bucket_wait` (deliberately given NO evidence field —
  * see the comment on `evaluateSmokeGate`'s options), a cache-miss line here
@@ -1129,7 +1129,7 @@ export class MarketDataFetchRecorder implements Logger {
   constructor(private readonly inner: Logger) {}
 
   log(entry: LogEntry): void {
-    if ((entry.payload as { event?: string } | undefined)?.event === 'market_data_fetch') {
+    if (entry.event === 'market_data_fetch') {
       this.fetchCount += 1;
       this.traceIds.add(entry.trace_id);
     }

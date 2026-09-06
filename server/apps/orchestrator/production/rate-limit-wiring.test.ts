@@ -562,9 +562,7 @@ describe('the composition root wires wait telemetry onto the shared Alpaca bucke
     await vi.advanceTimersByTimeAsync(1_000_000);
     await second;
 
-    const waits = entries.filter(
-      (entry) => (entry.payload as { event?: string } | undefined)?.event === 'token_bucket_wait',
-    );
+    const waits = entries.filter((entry) => entry.event === 'token_bucket_wait');
     expect(waits).toHaveLength(1);
     const [wait] = waits;
     if (wait === undefined) throw new Error('unreachable — length asserted above');
@@ -635,12 +633,9 @@ describe('the composition root wires market-data fetch telemetry (#1082)', () =>
 
     await components.marketData.getBars('AAPL', { timeframe: '1h', lookback: 2 }, NOW);
 
-    const events = entries.filter(
-      (entry) => (entry.payload as { event?: string } | undefined)?.event === 'market_data_fetch',
-    );
+    const events = entries.filter((entry) => entry.event === 'market_data_fetch');
     expect(events).toHaveLength(1);
     expect(events[0]?.payload).toMatchObject({
-      event: 'market_data_fetch',
       instrument: 'AAPL',
       timeframe: '1h',
       lookback: 2,

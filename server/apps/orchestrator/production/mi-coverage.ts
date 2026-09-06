@@ -322,6 +322,7 @@ export async function checkMiCoverage(
     deps.logger?.log({
       trace_id: params.trace_id,
       stage: 'analysts',
+      event: 'mi_coverage_alert_send_failed',
       level: 'error',
       message:
         `market-intelligence coverage alert could not be delivered for ${params.instrument} — ` +

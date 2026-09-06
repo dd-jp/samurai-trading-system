@@ -544,6 +544,7 @@ function escalateTraderDiagnostics(
     deps.logger?.log({
       trace_id,
       stage: 'trader',
+      event: 'trader_diagnostic_persistent',
       level: 'error',
       message:
         `trader: ${instrument} reported ${diagnostic.kind} on ` +
@@ -619,6 +620,7 @@ async function postTraderDiagnosticAlert(
     deps.logger?.log({
       trace_id: traceId,
       stage: 'trader',
+      event: 'trader_diagnostic_alert_send_failed',
       level: 'error',
       message:
         'trader diagnostic alert could not be delivered — the condition is still present and ' +
@@ -891,6 +893,7 @@ function reportExitValuationDegraded(
     safeLog(logger, {
       trace_id,
       stage: seam,
+      event: 'exit_valuation_degraded',
       level: 'error',
       message:
         seam === 'trader'
@@ -922,6 +925,7 @@ function reportExitValuationDegraded(
       safeLog(logger, {
         trace_id,
         stage: seam,
+        event: 'exit_valuation_alert_send_failed',
         level: 'error',
         message:
           'exit-valuation-degraded alert could not be delivered — the exit still went out on a ' +
@@ -1019,6 +1023,7 @@ async function criticVerdictFor(
       safeLog(deps.logger, {
         trace_id,
         stage: 'risk',
+        event: 'risk_critic_producer_threw',
         level: 'warn',
         message:
           'risk critic producer threw; the decision proceeds on the mechanical steps with ' +
@@ -1222,6 +1227,7 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
           safeLog(deps.logger, {
             trace_id,
             stage: 'risk',
+            event: 'risk_log_write_failed',
             level: 'error',
             message: `risk_log write failed for a gate throw on ${intent.instrument}`,
             payload: {

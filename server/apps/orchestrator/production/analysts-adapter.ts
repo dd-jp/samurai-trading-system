@@ -288,6 +288,7 @@ export function buildAnalystsStep(
       logger.log({
         trace_id,
         stage: 'analysts',
+        event: 'analyst_panel_degraded',
         level: mandatoryFailed ? 'error' : 'warn',
         message: mandatoryFailed
           ? `analysts: ${signal.asset} quorum NOT met — mandatory analyst failed, no trade is ` +
@@ -362,6 +363,7 @@ async function postSkipAlert(
     logger?.log({
       trace_id: 'analyst-skip',
       stage: 'analysts',
+      event: 'analyst_skip_alert_send_failed',
       level: 'error',
       message:
         'analyst consecutive-skip alert could not be delivered — the analyst stage is still ' +

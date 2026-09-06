@@ -176,6 +176,7 @@ export class SqliteSpendCap implements SpendCap {
       this.logger?.log({
         trace_id: 'spend-cap',
         stage: 'debate',
+        event: 'llm_spend_cap_read_failed',
         level: 'error',
         message:
           'LLM spend cap could not read llm_spend and is REFUSING new debates (fail-closed). ' +
@@ -243,6 +244,7 @@ export class SqliteSpendCap implements SpendCap {
       this.logger?.log({
         trace_id: 'spend-cap',
         stage: 'debate',
+        event: 'llm_spend_cap_alert_send_failed',
         level: 'warn',
         message:
           'LLM spend cap breached, and the breach alert channel threw — the refusal stands, ' +

@@ -3,7 +3,7 @@
  * loosening notice (#91, wired by #366, retargeted by #736) — the same move
  * `TradeChannelBreachAlert`, `TradeChannelUnpricedFillAlert` and
  * `TradeChannelHeartbeat` make: reuse Verdict's already-provisioned
- * Telegram/Discord transports rather than introduce a second integration, and
+ * Telegram transport rather than introduce a second integration, and
  * wrap the raw clients rather than route through `TradeChannelNotifier.notify`,
  * which is shaped for a `VerdictDecision` and not for a threshold move.
  *
@@ -112,6 +112,7 @@ export class TradeChannelLoosenNotice implements LoosenNotificationChannel {
       this.#logger.log({
         trace_id: 'feedback-cycle',
         stage: 'feedback-loop',
+        event: 'loosen_notice_send_failed',
         // `error`, and more clearly so than before #736: the move is already
         // in force, so a lost notice means the operator's picture of the risk
         // limits is wrong until they read the adjustment log.

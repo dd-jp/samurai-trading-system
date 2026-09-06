@@ -38,6 +38,7 @@ export class Heartbeat {
       this.logger.log({
         trace_id: 'heartbeat',
         stage: 'heartbeat',
+        event: 'heartbeat_post_failed',
         level: 'error',
         message: 'heartbeat post failed',
         payload: { error: error instanceof Error ? error.message : String(error) },

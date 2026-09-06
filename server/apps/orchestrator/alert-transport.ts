@@ -362,6 +362,7 @@ export function buildAlertChannels(deps: {
     deps.logger.log({
       trace_id: 'startup',
       stage: 'orchestrator',
+      event: 'alerts_log_only',
       level: 'warn',
       message:
         `${ENV_VAR}=log-only — every operator alert (heartbeat, orphaned go verdict, stuck ` +

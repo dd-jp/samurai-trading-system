@@ -154,6 +154,7 @@ export function withOnTradeClose(
         logger.log({
           trace_id: trade.idempotency_key,
           stage: 'feedback-loop',
+          event: 'on_trade_close_failed',
           level: 'error',
           message: 'onTradeClose failed',
           payload: { error: error instanceof Error ? error.message : String(error) },

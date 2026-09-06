@@ -263,6 +263,7 @@ export function liveStartingProfile(
   logger?.log({
     trace_id: 'startup',
     stage: 'orchestrator',
+    event: 'live_profile_built',
     level: 'warn',
     message:
       'building the LIVE STARTING PROFILE — real money, no human gate (ADR-0007). Its dials ' +

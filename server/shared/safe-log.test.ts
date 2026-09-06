@@ -7,7 +7,12 @@ import { recordingLogger } from './recording-logger.js';
 import { describeThrown, logCaughtFailure, safeLog } from './safe-log.js';
 import type { Logger } from './types.js';
 
-const TEMPLATE = { trace_id: 'trace-1', stage: 'execution', level: 'error' as const };
+const TEMPLATE = {
+  trace_id: 'trace-1',
+  stage: 'execution',
+  event: 'store_read_failed',
+  level: 'error' as const,
+};
 
 describe('describeThrown', () => {
   it('renders an Error by its message', () => {

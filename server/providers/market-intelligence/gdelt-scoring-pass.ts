@@ -62,7 +62,7 @@ import {
   DEBATE_BAR_TIMEFRAME_MS,
   floorToBar,
 } from '../../pipeline/debate-engine/debate-log-store.js';
-import type { AssetClass, Clock, LogEntry, Logger } from '../../shared/index.js';
+import type { AssetClass, Clock, LogEntry, LogEntryTemplate, Logger } from '../../shared/index.js';
 import { logCaughtFailure, safeLog } from '../../shared/safe-log.js';
 import type { MiArchiveStore, RawArchiveRow } from './archive/mi-archive-store.js';
 import { MI_SOURCES } from './archive/mi-sources.js';
@@ -165,7 +165,7 @@ export class GdeltScoringPass {
   }
 
   private logFailure(
-    template: Omit<LogEntry, 'payload'>,
+    template: LogEntryTemplate,
     error: unknown,
     payload: Record<string, unknown>,
   ): void {
@@ -196,6 +196,7 @@ export class GdeltScoringPass {
           {
             trace_id,
             stage: 'market_intelligence',
+            event: 'gdelt_scoring_failed',
             level: 'warn',
             message:
               'market intelligence: GDELT scoring pass failed; no macro aggregate this poll. ' +
@@ -255,6 +256,7 @@ export class GdeltScoringPass {
         this.log({
           trace_id,
           stage: 'market_intelligence',
+          event: 'gdelt_scoring_refused',
           level: REFUSAL_LEVEL[derivation.reason],
           message: REFUSAL_MESSAGE[derivation.reason],
           payload: {

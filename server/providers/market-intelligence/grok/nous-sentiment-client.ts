@@ -257,6 +257,7 @@ export class NousSentimentClient implements GrokSentimentClient {
     this.#logger?.log({
       trace_id: 'grok',
       stage: 'market_intelligence',
+      event: 'sentiment_response_unparseable',
       level: 'warn',
       message:
         `sentiment: could not parse the response for ${instrument}; reporting zero items. ` +

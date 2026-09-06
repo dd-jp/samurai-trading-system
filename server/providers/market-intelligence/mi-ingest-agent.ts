@@ -153,6 +153,7 @@ export class MiIngestAgent {
       this.deps.logger?.log({
         trace_id: trace_id ?? 'mi-ingest',
         stage: 'market_intelligence',
+        event: 'mi_news_fetch_failed',
         level: 'warn',
         message:
           'market intelligence: news fetch failed; this refresh adds nothing and the ' +

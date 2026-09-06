@@ -241,6 +241,18 @@ describe('formatLogLine payload serialization (#1061)', () => {
     );
   });
 
+  it('puts the event code on the wire, between stage and level (#1115)', () => {
+    // The field-by-field build means a field nobody adds here is silently
+    // dropped: `event` would type-check at every call site and reach no
+    // reader, which is the whole mechanism defeated.
+    const line = formatLogLine({ ...BASE, event: 'tick_failed', level: 'error' });
+
+    expect(line).toBe(
+      '{"timestamp":"2026-01-01T00:00:00.000Z","trace_id":"t1","stage":"s",' +
+        '"event":"tick_failed","level":"error","message":"m"}\n',
+    );
+  });
+
   it('is byte-identical to the pre-fix output for a payload the depth bound flattens', () => {
     // An ordinary self-referential object never reaches `JSON.stringify` as an
     // actual cycle: `redactPayload`'s walk rebuilds a fresh plain object at

@@ -52,6 +52,8 @@ If Claude Code returns a rate-limit / usage-exceeded error:
 
 This rule is NON-NEGOTIABLE. Never fill the gap with your own code.
 
+**`autoContinueAtUsageLimit` is on** (`~/.claude/settings.json`, set 2026-09-05). A live session now waits out the reset and continues the same task by itself, so "resume when user says go" is satisfied automatically for the in-flight case — the session picks up its own context, it does not hand work to another model, and the two DO-NOTs above still bind. Auto-continue holds only while the CLI keeps running: if Claude Code exits, relaunches, or the session moves to the cloud or Claude Desktop, resumption is manual again (`claude --resume`, or a scheduled wakeup).
+
 ## Research Artifacts to Preserve
 
 Existing research (DON'T overwrite, reference) — all live under `docs/research/`. **Navigation starts at `docs/research/README.md`**, which holds the live frontier, the supersession map, and the old→new rename table.

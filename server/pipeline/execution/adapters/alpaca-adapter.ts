@@ -1226,6 +1226,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         {
           trace_id: ALPACA_FILL_SWEEP_TRACE_ID,
           stage: 'execution',
+          event: 'alpaca_fill_sweep_source_failed',
           level: 'error',
           message: 'Alpaca fetchNewFills: per-source failure',
         },

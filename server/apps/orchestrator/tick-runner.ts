@@ -220,6 +220,7 @@ export class SequentialTickRunner implements TickRunner {
       logger.log({
         trace_id,
         stage,
+        event: 'stage_decision',
         level: recordLevel(stage, decision),
         message: `${stage}: ${decision}`,
         payload: output,
@@ -471,6 +472,7 @@ export class SequentialTickRunner implements TickRunner {
       logger.log({
         trace_id,
         stage: 'debate',
+        event: 'decision_bar_divergence',
         level: 'warn',
         message:
           `debate: ${instrument} — decision bar divergence: the gate opened bar ` +
@@ -571,6 +573,7 @@ export class SequentialTickRunner implements TickRunner {
     ctx.logger.log({
       trace_id: ctx.trace_id,
       stage: 'risk',
+      event: 'risk_advisory_warnings',
       level: warnings.length > 0 ? 'warn' : 'info',
       message:
         warnings.length > 0

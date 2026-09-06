@@ -81,6 +81,7 @@ export class TradeChannelArmDivergenceAlert implements ArmDivergenceAlertChannel
       this.#logger.log({
         trace_id: 'arm-divergence',
         stage: 'feedback-loop',
+        event: 'arm_divergence_alert_send_failed',
         level: 'error',
         message: 'arm-divergence alert failed to send — the divergence still stands',
         payload: {

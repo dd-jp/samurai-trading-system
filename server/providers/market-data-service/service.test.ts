@@ -11,12 +11,12 @@ function recordingLogger(): { logger: Logger; entries: LogEntry[] } {
   return { logger: { log: (entry) => entries.push(entry) }, entries };
 }
 
+function fetchLines(entries: LogEntry[]): LogEntry[] {
+  return entries.filter((entry) => entry.event === 'market_data_fetch');
+}
+
 function fetchEvents(entries: LogEntry[]): Array<Record<string, unknown>> {
-  return entries
-    .map((entry) => entry.payload as Record<string, unknown> | undefined)
-    .filter(
-      (payload): payload is Record<string, unknown> => payload?.event === 'market_data_fetch',
-    );
+  return fetchLines(entries).map((entry) => entry.payload as Record<string, unknown>);
 }
 
 class ManualClock implements Clock {
@@ -633,7 +633,6 @@ describe('MarketDataServiceImpl — market_data_fetch telemetry (#1082)', () => 
     const events = fetchEvents(entries);
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
-      event: 'market_data_fetch',
       instrument: INSTRUMENT,
       timeframe: TIMEFRAME,
       lookback: 2,
@@ -705,11 +704,9 @@ describe('MarketDataServiceImpl — market_data_fetch telemetry (#1082)', () => 
       await service.getBars(INSTRUMENT, window, ASOF);
     }
 
-    const fetchLines = entries.filter(
-      (entry) => (entry.payload as { event?: string } | undefined)?.event === 'market_data_fetch',
-    );
-    expect(fetchLines[0]?.level).toBe('info');
-    expect(fetchLines.at(-1)?.level).toBe('warn');
+    const lines = fetchLines(entries);
+    expect(lines[0]?.level).toBe('info');
+    expect(lines.at(-1)?.level).toBe('warn');
   });
 
   it('resets consecutive_misses after an intervening cache hit', async () => {
@@ -741,7 +738,6 @@ describe('MarketDataServiceImpl — market_data_fetch telemetry (#1082)', () => 
     const events = fetchEvents(entries);
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
-      event: 'market_data_fetch',
       instrument: INSTRUMENT,
       timeframe: TIMEFRAME,
       lookback: 2,
@@ -752,16 +748,14 @@ describe('MarketDataServiceImpl — market_data_fetch telemetry (#1082)', () => 
     expect(typeof events[0].duration_ms).toBe('number');
     expect(typeof events[0].error).toBe('string');
 
-    const fetchLines = entries.filter(
-      (entry) => (entry.payload as { event?: string } | undefined)?.event === 'market_data_fetch',
-    );
+    const lines = fetchLines(entries);
     // A single throw on a key with NO prior misses (consecutive_misses: 1,
     // below the escalation threshold) must still log at `warn` — the
     // consecutive-miss escalation applies to the `ok` branch only. A fetch
     // that throws is itself the anomaly this issue exists to surface;
     // gating its visibility on an unrelated counter would hide the very
     // "fetch that never returned" case #1082 was filed for.
-    expect(fetchLines[0]?.level).toBe('warn');
+    expect(lines[0]?.level).toBe('warn');
   });
 
   it('logs nothing in backtest mode, even on a miss — every replay step is a miss by design and carries no information', async () => {

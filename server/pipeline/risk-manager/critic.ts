@@ -91,7 +91,7 @@
 
 import type { MarketDataService } from '../../providers/market-data-service/index.js';
 import { INDICATOR_KINDS } from '../../providers/market-data-service/index.js';
-import type { Logger, OrderIntent } from '../../shared/index.js';
+import type { LogEventCode, Logger, OrderIntent } from '../../shared/index.js';
 import type { LlmClient, SpendCap } from '../debate-engine/index.js';
 import { BARE_JSON_INSTRUCTION, unwrapFencedJson, wrapUntrusted } from '../debate-engine/index.js';
 import {
@@ -452,6 +452,7 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
       this.#logger?.log({
         trace_id: request.trace_id,
         stage: 'risk',
+        event: 'risk_critic_verdict_unavailable',
         level: 'warn',
         message:
           'risk critic could not produce a verdict; the decision proceeds on the mechanical ' +
@@ -500,6 +501,7 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
     } catch (error) {
       this.#warn(
         request,
+        'risk_critic_conditions_unevaluated',
         'risk critic invalidation conditions could not be evaluated; the PROSE verdict ' +
           'stands with full authority and the conditions report no_conditions',
         { instrument: request.intent.instrument, error: describeThrown(error) },
@@ -526,6 +528,7 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
     if (dropped.length === 0 && conditions.length > 0) return;
     this.#warn(
       request,
+      conditions.length === 0 ? 'risk_critic_conditions_absent' : 'risk_critic_conditions_dropped',
       conditions.length === 0
         ? 'risk critic emitted NO checkable invalidation condition; the prose verdict stands ' +
             'alone and conditions enforce nothing (no_conditions)'
@@ -539,11 +542,17 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
   }
 
   /** Logging must never be the thing that voids a verdict — see `#produceWithin`. */
-  #warn(request: RiskCriticRequest, message: string, payload: Record<string, unknown>): void {
+  #warn(
+    request: RiskCriticRequest,
+    event: LogEventCode,
+    message: string,
+    payload: Record<string, unknown>,
+  ): void {
     try {
       this.#logger?.log({
         trace_id: request.trace_id,
         stage: 'risk',
+        event,
         level: 'warn',
         message,
         payload,
@@ -596,6 +605,7 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
       this.#logger?.log({
         trace_id: request.trace_id,
         stage: 'risk',
+        event: 'risk_critic_verdict_discarded',
         level: 'warn',
         message:
           'risk critic verdict could not be persisted; it is DISCARDED and the decision ' +
