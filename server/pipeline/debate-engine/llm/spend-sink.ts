@@ -160,9 +160,24 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
      * across a run that later injects a channel, but nothing is posted.
      */
     private readonly promptTierAlerts?: PromptTierAlertChannel,
+    /**
+     * Defaults to a fresh instance rather than being required, so every
+     * existing construction (tests, the backtest path) keeps working
+     * unchanged — the same shape `captureText`/`promptTierAlerts` take.
+     *
+     * MUST be the SAME instance across every store that can meter the same
+     * model, or the throttle's one-then-every-8 contract silently becomes
+     * two independent counters: `production.ts` constructs this class twice
+     * (the debate stage and the sentiment `GrokAgent`), and both can be
+     * pointed at a tiered model by `NOUS_MODEL` alone with no code change
+     * (nous-config.ts's `nousCredentials('debate'|'sentiment')` both fall
+     * back through it, and the startup guard only rejects a model missing
+     * from `MODEL_RATES` — a tiered model passes). `production.ts` hoists
+     * one instance and passes it to both constructions for exactly this
+     * reason.
+     */
+    private readonly promptTierThrottle = new PromptTierCrossingThrottle(),
   ) {}
-
-  private readonly promptTierThrottle = new PromptTierCrossingThrottle();
 
   record(entry: LlmSpendRecord): void {
     try {
@@ -292,8 +307,11 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
   /**
    * The wiring `crossesPromptTier` (pricing.ts) existed without (#1155):
    * called on every metered call, whether or not it crosses, so
-   * `promptTierThrottle` sees the full run and a call back under the tier
-   * correctly clears it.
+   * `promptTierThrottle` sees every call THIS INSTANCE meters and a call back
+   * under the tier correctly clears it. "This instance", not "the run" — the
+   * throttle only sees the whole run's crossings for a model when every
+   * store that can meter that model shares the one throttle instance
+   * (`production.ts` arranges this; see the constructor param's doc).
    *
    * `crossesPromptTier` already REFUSES a model with no tier row, so
    * `rateFor(entry.model)?.tier` is guaranteed defined once `crossed` is

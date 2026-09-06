@@ -11,6 +11,7 @@
 import { openSharedStore, type SharedStore } from '../../../shared/store/index.js';
 import type { LogEntry } from '../../../shared/types.js';
 import type { PromptTierAlert, PromptTierAlertChannel } from './prompt-tier-alert.js';
+import { PromptTierCrossingThrottle } from './prompt-tier-alert.js';
 import { SqliteLlmSpendStore } from './spend-sink.js';
 
 const NOW = new Date('2026-08-05T12:00:00Z');
@@ -519,5 +520,41 @@ describe('SqliteLlmSpendStore — prompt-tier crossing warning (#1155)', () => {
         timestamp: NOW,
       }),
     ).not.toThrow();
+  });
+
+  it('shares one throttle across two stores the way production.ts wires the debate and sentiment sinks', () => {
+    // production.ts constructs SqliteLlmSpendStore twice against the same
+    // db (the debate stage's default llmClient, and the sentiment
+    // GrokAgent's spendSink) and hoists ONE PromptTierCrossingThrottle,
+    // passed to both — because NOUS_MODEL alone can route both roles
+    // through the same tiered model (nous-config.ts), with no code change.
+    // Two independent throttles would then count that model's consecutive
+    // crossings twice: up to two "first crossing" alerts and roughly double
+    // the repeat cadence against the one-then-every-8 contract.
+    const db = openSharedStore(':memory:');
+    const channel = recordingChannel();
+    const sharedThrottle = new PromptTierCrossingThrottle();
+    const debateStore = new SqliteLlmSpendStore(db, undefined, false, channel, sharedThrottle);
+    const sentimentStore = new SqliteLlmSpendStore(db, undefined, false, channel, sharedThrottle);
+
+    debateStore.record({
+      trace_id: 'trace-debate',
+      stage: 'debate',
+      model: 'x-ai/grok-4.5',
+      usage: CROSSING_USAGE,
+      latency_ms: 10,
+      timestamp: NOW,
+    });
+    sentimentStore.record({
+      trace_id: 'trace-sentiment',
+      stage: 'sentiment',
+      model: 'x-ai/grok-4.5',
+      usage: CROSSING_USAGE,
+      latency_ms: 10,
+      timestamp: NOW,
+    });
+
+    expect(channel.alerts).toHaveLength(1);
+    expect(channel.alerts[0]?.consecutive_crossings).toBe(1);
   });
 });
