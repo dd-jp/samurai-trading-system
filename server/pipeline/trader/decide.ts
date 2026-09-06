@@ -1099,19 +1099,6 @@ async function buildFlattenExit(
 }
 
 /**
- * Routes on current position state (trader-spec.md Module: Position
- * Awareness, tickets #73/#74):
- * - No lot for `instrument` → directional entry, or skip if neutral/below
- *   the conviction floor.
- * - Holding, debate neutral or non-converged → hold (`null`). Too little
- *   trust in the signal to act, regardless of which way it points.
- *   Stop-tightening on this path is out of scope for #74.
- * - Holding, same direction as debate → hold, unless conviction rose
- *   materially since the most recently opened lot, then bounded `scale_in`.
- * - Holding, opposite direction → `exit` (flatten). A same-cycle reversal
- *   fires as a fresh `entry` once flat, next cycle.
- */
-/**
  * Every distinct way the Trader can decline to trade (#475).
  *
  * A CLOSED UNION rather than free text, so the set is greppable, countable
@@ -1493,8 +1480,8 @@ export interface TraderOutcome {
 }
 
 /**
- * A declined decision. Narrow helper so the twenty skip sites stay one line
- * each — and so adding a twenty-first cannot forget a field.
+ * A declined decision. Narrow helper so every skip site stays one line each —
+ * and so a newly added one cannot forget a field.
  *
  * Diagnostics are deliberately NOT a parameter here (#698): they are collected
  * in `decideWithReason`'s accumulator and merged onto whatever this returns, so
@@ -1565,8 +1552,8 @@ export async function decideWithReason(input: TraderInput): Promise<TraderOutcom
   const diagnostics: TraderDiagnostic[] = [];
   const outcome = await routeDecision(input, diagnostics);
 
-  // #1109: classified once here, not at each of the twenty `skip()` call
-  // sites — see `TraderOutcome.decision_class`.
+  // #1109: classified once here, not at each `skip()` call site — see
+  // `TraderOutcome.decision_class`.
   const decision_class =
     outcome.skip_reason === null ? null : classifyDecision(outcome.skip_reason, input.debate);
 
@@ -1579,7 +1566,11 @@ export async function decideWithReason(input: TraderInput): Promise<TraderOutcom
   };
 }
 
-/** `decideWithReason`'s routing, with #698's diagnostic accumulator threaded through. */
+/**
+ * `decideWithReason`'s routing on current position state (trader-spec.md
+ * Module: Position Awareness, tickets #73/#74), with #698's diagnostic
+ * accumulator threaded through.
+ */
 async function routeDecision(
   input: TraderInput,
   diagnostics: TraderDiagnostic[],

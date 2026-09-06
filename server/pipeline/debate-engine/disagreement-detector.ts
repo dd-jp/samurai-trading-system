@@ -4,10 +4,8 @@
  * in analyst rationale... not just directional divergence"). Runs once per
  * debate, not per round (spec's "Cost Justification").
  *
- * Blocked-by #24 (types) and #31 (LLM Integration Layer) — both implemented.
- * Feeds `DebateResult.disagreement_summary`/`open_items` once the round
- * orchestrator (#34, unimplemented) wires it in; this is a pure function
- * over `AnalystView[]`, same "builder ahead of orchestration" posture as
+ * Feeds `DebateResult.disagreement_summary`/`open_items`, wired in by
+ * `debate-adapter.ts`; a pure function over `AnalystView[]`, same posture as
  * `analyst-contribution.ts`.
  */
 import { BARE_JSON_INSTRUCTION, unwrapFencedJson } from './llm/json-response.js';

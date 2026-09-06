@@ -222,9 +222,9 @@ export interface AnalystFailure {
 
 /**
  * What `AnalystOrchestrator.runAnalysts` returns (analysts-spec.md "Key
- * Interfaces"). No `weights` field here — the shared SQLite weight store is
- * owned by the Feedback Loop and not built yet; adding it is a follow-up,
- * not invented here.
+ * Interfaces"). No `weights` field here — `debate-adapter.ts` reads
+ * `TuningStore.getAnalystWeights()` directly and applies them at the Debate
+ * seam (#435), so this result type never needs to carry them.
  */
 export interface AnalystRunResult {
   /** One per successful applicable analyst; empty if the tick was skipped. */

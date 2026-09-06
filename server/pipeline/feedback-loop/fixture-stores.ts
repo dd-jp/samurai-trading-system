@@ -6,8 +6,7 @@
  *
  * These are no longer the only implementations: `SqliteTuningStore`,
  * `SqliteClosedTradeStore` and `SqliteAdjustmentLog` sit beside this file and
- * are what production wires. These survive as the in-memory pair for tests and
- * for the offline backtest, where a database file would be pure overhead.
+ * are what production wires. These survive as the in-memory pair for tests.
  */
 import type { ClosedTrade, ClosedTradeStore, TuningStore } from '../../shared/index.js';
 import { assertThresholdWithinBounds } from '../../shared/index.js';

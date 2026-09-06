@@ -14,12 +14,12 @@
  * inherits exactly the environment behaviour of its own script, including
  * refusing to start when `.env.local` is absent — and `yarn serve` passes the
  * same flag to *this* process, which is load-bearing rather than cosmetic:
- * `sharedStorePath()` derives the database filename from `NODE_ENV`, so a
- * supervisor that skipped the env file could migrate a different file than the
- * one its children then open. A consequence worth knowing when reading a
- * failure: with the flag on the supervisor, a missing `.env.local` is now
- * refused *here*, before either child is spawned, so the error names this
- * process rather than one of the two below it.
+ * `sharedStorePath()` derives the database filename from `SAMURAI_MODE`
+ * (#330), so a supervisor that skipped the env file could migrate a different
+ * file than the one its children then open. A consequence worth knowing when
+ * reading a failure: with the flag on the supervisor, a missing `.env.local`
+ * is now refused *here*, before either child is spawned, so the error names
+ * this process rather than one of the two below it.
  *
  * **A signal is forwarded, and then the supervisor waits for both children to
  * exit.** It must not `process.exit()` on the signal itself. The orchestrator's
