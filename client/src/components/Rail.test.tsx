@@ -8,7 +8,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import type { SnapshotFeed } from '../hooks/useSnapshot.ts';
-import { makeSnapshot } from '../test-fixtures.ts';
+import { makeMetrics, makeSnapshot } from '../test-fixtures.ts';
 import { Rail } from './Rail.tsx';
 
 const GENERATED_AT = '2026-08-07T12:00:00.000Z';
@@ -69,5 +69,40 @@ describe('Rail — poll clock', () => {
 
     expect(screen.getByText(/stale — last update 12:00:00Z/)).toBeTruthy();
     expect(screen.queryByText(/last update 12:00:35Z/)).toBeNull();
+  });
+});
+
+/**
+ * #1201: crossing the drawdown's index tolerance had no *dedicated*
+ * indication beyond the track's colour turning `bad` — the head's
+ * "value / cap" text and the track's accessible label are words, and both
+ * name the tolerance — but neither is conditioned on the over state, so
+ * neither says it has been crossed. Of the rail's two `CapMeter`s, the
+ * LLM-cap one's footnote does state it (`over cap · `); `DrawdownBlock`'s footnote
+ * discarded `CapMeter`'s `over` argument and never spoke the over state at
+ * all.
+ */
+describe('Rail — drawdown meter', () => {
+  it('says the drawdown is over tolerance when max drawdown reaches the index tolerance', () => {
+    renderRail(
+      makeFeed({ snapshot: makeSnapshot({ metrics: makeMetrics({ max_drawdown: 0.262 }) }) }),
+    );
+
+    expect(screen.getByText(/over tolerance ·/)).toBeTruthy();
+  });
+
+  it('says nothing about being over tolerance while inside it', () => {
+    renderRail(
+      makeFeed({ snapshot: makeSnapshot({ metrics: makeMetrics({ max_drawdown: 0.018 }) }) }),
+    );
+
+    expect(screen.queryByText(/over tolerance/)).toBeNull();
+  });
+
+  it('pins the empty state shown before any daily suite has run', () => {
+    renderRail(makeFeed({ snapshot: null }));
+
+    expect(screen.getByText('no daily suite yet — meter not drawable')).toBeTruthy();
+    expect(screen.queryByText(/over tolerance/)).toBeNull();
   });
 });

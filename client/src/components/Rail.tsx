@@ -389,7 +389,11 @@ function DrawdownBlock({ metrics }: { metrics: MetricsSuiteWire | null }) {
           DRAWDOWN_TOLERANCE,
         )} index tolerance`
       }
-      footnote={() => <span className="rail-note">daily suite max · index tolerance (#798)</span>}
+      footnote={(over) => (
+        <span className="rail-note">
+          {over ? 'over tolerance · ' : ''}daily suite max · index tolerance (#798)
+        </span>
+      )}
     />
   );
 }
