@@ -1970,10 +1970,10 @@ function assertLiquidityGateNotVacuous(pool: readonly LseEtpPoolRow[]): void {
  * The most rows `assertValidPool` will accept as the fallback subset.
  *
  * The spec does not put a number on the loader; it puts one on the subset
- * ("sized to the watchlist range (5–10 names)") and gives the reason at the
- * top of the range: falling back to every row "would deploy into 30 names
- * at once, which the subclass envelope refuses anyway — so the fallback would
- * produce a refusal storm instead of trading". The same 10 is also the tick
+ * ("sized to the watchlist range (5–10 names)") and gives the reason:
+ * falling back to every row "would deploy into 30 names at once, which the
+ * subclass envelope refuses anyway — so the fallback would produce a
+ * refusal storm instead of trading". The same 10 is also the tick
  * budget (τ = 2 min against the instrument-pass cost), which "binds whatever
  * produced the list" — the fallback included. So the ceiling is enforced.
  *
