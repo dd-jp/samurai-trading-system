@@ -20,6 +20,7 @@
 
 import {
   classifyStatus,
+  isServerErrorStatus,
   isTimeoutAbort,
   parseRetryAfterMs,
   readErrorBody,
@@ -96,7 +97,7 @@ export function isRetryableAlpacaBrokerError(error: unknown): boolean {
     return true;
   }
   if (error instanceof AlpacaBrokerProviderError) {
-    return error.status !== undefined && error.status >= 500;
+    return isServerErrorStatus(error.status);
   }
   return false;
 }

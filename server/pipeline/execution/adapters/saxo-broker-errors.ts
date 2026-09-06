@@ -8,6 +8,7 @@
 
 import {
   classifyStatus,
+  isServerErrorStatus,
   isTimeoutAbort,
   parseRetryAfterMs,
   truncateForError,
@@ -75,7 +76,7 @@ export function isRetryableSaxoBrokerError(error: unknown): boolean {
     return true;
   }
   if (error instanceof SaxoBrokerProviderError) {
-    return error.status !== undefined && error.status >= 500;
+    return isServerErrorStatus(error.status);
   }
   return false;
 }

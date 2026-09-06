@@ -12,6 +12,7 @@
 
 import {
   classifyStatus,
+  isServerErrorStatus,
   isTimeoutAbort,
   parseRetryAfterMs,
   readErrorDetail,
@@ -132,7 +133,7 @@ export function isRetryableAlpacaDataError(error: unknown): boolean {
     return true;
   }
   if (error instanceof AlpacaDataProviderError) {
-    return error.status !== undefined && error.status >= 500;
+    return isServerErrorStatus(error.status);
   }
   return false;
 }

@@ -29,7 +29,12 @@
  */
 
 import type { RetryConfig } from '../../shared/index.js';
-import { fetchWithTimeout, truncateForError, withRetry } from '../../shared/index.js';
+import {
+  fetchWithTimeout,
+  isServerErrorStatus,
+  truncateForError,
+  withRetry,
+} from '../../shared/index.js';
 import type { TradingCalendar } from './trading-calendar.js';
 import {
   civilDateKey,
@@ -210,7 +215,7 @@ export class AlpacaHttpCalendarClient implements AlpacaCalendarClient {
             `Alpaca calendar request failed (${context}): ${response.status} ` +
               `${response.statusText} ${bodyText}`,
             // 429/5xx are transient; a 4xx (bad key, bad params) will not fix itself on retry.
-            response.status === 429 || response.status >= 500,
+            response.status === 429 || isServerErrorStatus(response.status),
           );
         }
 

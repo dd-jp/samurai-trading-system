@@ -25,6 +25,7 @@ export { fetchWithTimeout } from './http/fetch-with-timeout.js';
 export {
   classifyStatus,
   type HttpErrorKind,
+  isServerErrorStatus,
   isTimeoutAbort,
   MAX_ERROR_BODY_CHARS,
   parseRetryAfterMs,

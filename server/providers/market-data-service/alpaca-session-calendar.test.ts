@@ -110,6 +110,40 @@ describe('AlpacaHttpCalendarClient', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('does not retry a status above the valid HTTP range (#1172)', async () => {
+    // 600 cannot be a real HTTP status — a hostile/broken upstream, not a
+    // transient server error to retry against.
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ message: 'weird' }, 600, 'Weird'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpCalendarClient({
+      apiKey: FAKE_KEY,
+      apiSecret: FAKE_SECRET,
+      retry: { maxAttempts: 3, baseDelayMs: 1, maxDelayMs: 2 },
+    });
+
+    await expect(client.fetchCalendar({ start: '2026-11-01', end: '2026-11-30' })).rejects.toThrow(
+      /Alpaca calendar request failed/,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries 599, the top of the valid 5xx range', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ message: 'boom' }, 599, 'Error'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpCalendarClient({
+      apiKey: FAKE_KEY,
+      apiSecret: FAKE_SECRET,
+      retry: { maxAttempts: 2, baseDelayMs: 1, maxDelayMs: 2 },
+    });
+
+    await expect(client.fetchCalendar({ start: '2026-11-01', end: '2026-11-30' })).rejects.toThrow(
+      /Alpaca calendar request failed/,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('throws when ALPACA_API_KEY/SECRET are not set and none is passed explicitly', () => {
     const savedKey = process.env.ALPACA_API_KEY;
     const savedSecret = process.env.ALPACA_API_SECRET;
