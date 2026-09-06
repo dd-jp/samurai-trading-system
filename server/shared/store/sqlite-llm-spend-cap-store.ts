@@ -25,6 +25,19 @@ import { toStoredTimestamp } from './sqlite-utils.js';
 
 interface LlmSpendCapRow {
   budget_usd: number | null;
+  armed_at: string;
+}
+
+/**
+ * What `read()` hands back: the ceiling (or `null` for uncapped) alongside
+ * `armed_at`, which is the only thing that tells a caller "armed uncapped"
+ * apart from "never armed" — both have `budgetUsd: null`, but only the first
+ * has a non-null `armedAt` (#1196).
+ */
+export interface LlmSpendCapState {
+  budgetUsd: number | null;
+  /** `armed_at`, verbatim off the row — already a `toStoredTimestamp` string. `null` iff no row exists. */
+  armedAt: string | null;
 }
 
 export class SqliteLlmSpendCapStore {
@@ -43,15 +56,28 @@ export class SqliteLlmSpendCapStore {
   }
 
   /**
-   * The armed ceiling, or `null` when nothing bounds the spend — armed
-   * uncapped and never armed at all differ in cause, not in consequence.
+   * The armed ceiling plus `armed_at` — armed uncapped and never armed at all
+   * DO differ in consequence (that is this ticket, #1196), and `armed_at` is
+   * the field that carries the difference: present with `budgetUsd: null`
+   * means "armed, deliberately uncapped"; `null` means no row was ever
+   * written, i.e. nothing may be enforcing anything.
+   *
+   * Honest limit (review round 2, MINOR 2): a corrupt REAL column nullified
+   * below alongside an INTACT `armed_at` is indistinguishable on the wire
+   * from a genuine "armed, deliberately uncapped" row — `budgetUsd: null` +
+   * a real `armedAt` means both. `arm()` is the only writer and is typed
+   * `number | null` (never a non-finite value), and both `production.ts`
+   * call sites pass a finite literal or `null`, so this is a DB-corruption
+   * tail with no live write path — not defended against beyond this note.
    */
-  read(): number | null {
-    const row = this.db.prepare('SELECT budget_usd FROM llm_spend_cap WHERE id = 1').get() as
-      | LlmSpendCapRow
-      | undefined;
-    const budget = row?.budget_usd ?? null;
+  read(): LlmSpendCapState {
+    const row = this.db
+      .prepare('SELECT budget_usd, armed_at FROM llm_spend_cap WHERE id = 1')
+      .get() as LlmSpendCapRow | undefined;
+    if (row === undefined) return { budgetUsd: null, armedAt: null };
     // A non-finite REAL divides into a meter that renders as `Infinity%`.
-    return budget !== null && Number.isFinite(budget) ? budget : null;
+    const budgetUsd =
+      row.budget_usd !== null && Number.isFinite(row.budget_usd) ? row.budget_usd : null;
+    return { budgetUsd, armedAt: row.armed_at };
   }
 }

@@ -3330,9 +3330,18 @@ function readSizingCeilingStamps(
  * reads — falsifies it. Dropping `publishedSpendCap.arm(...)` from
  * `production.ts`, or defaulting the field in the query layer, makes this
  * disagree with the run's own profile while every other check stays green.
+ *
+ * `capArmedAt` rides along for #1196: a real booted run always arms (either
+ * branch of `production.ts`'s `if/else`), so a real smoke run reading `null`
+ * here means the wire's "never armed" case leaked into a process that DID
+ * boot — `armed_at` stopped being read on the path that fills the wire.
  */
-function readPublishedLlmCap(db: SqliteHandle): number | null {
-  return new SqliteQueryStore(db).getLlmSpend(SMOKE_RUN_INSTANT).cap_usd;
+function readPublishedLlmCap(db: SqliteHandle): {
+  capUsd: number | null;
+  capArmedAt: string | null;
+} {
+  const spend = new SqliteQueryStore(db).getLlmSpend(SMOKE_RUN_INSTANT);
+  return { capUsd: spend.cap_usd, capArmedAt: spend.cap_armed_at };
 }
 
 /** Drives the shipped arm-comparison cycle over the smoke run's own store. */
@@ -4114,6 +4123,13 @@ export function evaluateSmokeGate(
     /** The budget THIS run's profile armed the enforcer with — the expected value above. */
     configuredLlmBudgetUsd: number | undefined;
     /**
+     * #1196 — a real booted run always arms (`production.ts`'s `if/else` has
+     * no third branch), so `null` here on an actual smoke run means the wire
+     * is reporting "never armed" for a process that manifestly did boot —
+     * `armed_at` stopped being read on the path that fills `DashboardSnapshot`.
+     */
+    publishedLlmCapArmedAt: string | null;
+    /**
      * The fill-sync loop's rejections (#1049) — required, not optional, for the
      * same "compile error, not a silent no-op" reason every mechanism above is.
      * This is the only check in the gate that reads the poll loop's own
@@ -4368,6 +4384,19 @@ export function evaluateSmokeGate(
         `armed its spend cap at ${options.configuredLlmBudgetUsd ?? 'null'} — ` +
         '`publishedSpendCap.arm(...)` is no longer beside the `SqliteSpendCap` construction in ' +
         'production.ts, so the rail measures spend against a cap nobody is enforcing (#1140)',
+    );
+  }
+
+  // #1196 — this process manifestly booted, so a null `cap_armed_at` here
+  // means `SqliteQueryStore.getLlmSpend` stopped reading `armed_at` off the
+  // row `SqliteLlmSpendCapStore.arm(...)` wrote, and the wire is telling the
+  // rail "never armed" while an enforcer is, in fact, live.
+  if (options.publishedLlmCapArmedAt === null) {
+    failures.push(
+      "the dashboard's LLM cap reports `cap_armed_at: null` on a run that booted and armed its " +
+        'spend cap — `SqliteQueryStore.getLlmSpend` (or `SqliteLlmSpendCapStore.read`) stopped ' +
+        'reading `armed_at`, so the rail cannot tell this run apart from one where nothing ever ' +
+        'armed (#1196)',
     );
   }
 
@@ -5959,6 +5988,8 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
     // control's, never one of its own.
     const armComparison = runArmComparisonProbe(db);
     const outsideBenchmarks = await runOutsideBenchmarkProbe(db, armComparison.comparison);
+    // #1140 / #1196: one read, both halves of the LLM-cap evidence below.
+    const publishedLlmCap = readPublishedLlmCap(db);
     const gate = evaluateSmokeGate(observations, {
       minTicks: targetTicks,
       alpacaWireClientReached: alpacaBrokerClient.reached,
@@ -5987,8 +6018,10 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // dashboard's own read, the expected one off the profile the
       // orchestrator booted on — never a literal 50, which would pass on a
       // wire that had stopped carrying anything from the config at all.
-      publishedLlmCapUsd: readPublishedLlmCap(db),
+      // `capArmedAt` (#1196) rides the same read — see `readPublishedLlmCap`.
+      publishedLlmCapUsd: publishedLlmCap.capUsd,
       configuredLlmBudgetUsd: profile.llmBudgetUsd,
+      publishedLlmCapArmedAt: publishedLlmCap.capArmedAt,
       fillSync: fillSyncFailures.evidence(),
       marketDataFetch: marketDataFetch.evidence(),
       exitPath: {

@@ -181,34 +181,173 @@ function AlertDeliveryBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
   );
 }
 
-/** The enforced ceiling, or `null` when nothing bounds this run's spend (#1140). */
-function capOf(snapshot: WireSnapshot | null): number | null {
+/**
+ * The enforced ceiling to draw a meter against — `null` when a meter would
+ * be unjustified but the wire is trustworthy (uncapped, never armed, or an
+ * armed `$0`); `undefined` when `cap_usd` itself could not be trusted at all
+ * (review round 3's MAJOR). The two are NOT the same claim: `null` says the
+ * field answered and the answer was "no cap"; `undefined` says this client
+ * does not know what the cap is, which must not be allowed to fall through
+ * to `capReasonOf`'s `null` branch and get read as an answer — that
+ * collapse is exactly what let a malformed `cap_usd` render as `'uncapped'`
+ * (#1196, `normalizeCapUsd`'s doc comment in `useSnapshot.ts`).
+ *
+ * `$0` is deliberately NOT collapsed here: it is the most restrictive cap
+ * there is, and treating it the same as "no cap configured" would invert it
+ * into the least restrictive reading. `CapMeter` itself already declines to
+ * divide by a `cap <= 0`, so passing `0` through still draws no meter — it
+ * just keeps the real number in the head (`$spent / $0.00`) instead of an
+ * em dash, and `capReasonOf` below names $0 specifically in the empty state.
+ */
+function capOf(snapshot: WireSnapshot | null): number | null | undefined {
   const cap = snapshot?.llm_spend?.cap_usd;
-  return typeof cap === 'number' && Number.isFinite(cap) && cap > 0 ? cap : null;
+  if (cap === null) return null;
+  return typeof cap === 'number' && Number.isFinite(cap) ? cap : undefined;
+}
+
+/**
+ * The wire's discriminator between "armed uncapped" and "never armed" — both
+ * carry `cap_usd: null`, and only the first carries a non-null
+ * `cap_armed_at` (#1196). It is consulted ONLY to split a null cap; a numeric
+ * `cap_usd` is itself affirmative evidence that something armed and must be
+ * honoured regardless of `cap_armed_at` (`capReasonOf` below, and
+ * `contracts/snapshot.ts`'s `cap_usd` doc comment — the ambiguity is `null`
+ * vs `null`, not numeric vs `null`).
+ *
+ * Returns three distinct states, NOT collapsed: a real string (armed,
+ * verbatim); `null` (the field is present and explicitly says "no row has
+ * ever been written" — genuinely never armed); and `undefined` (the field is
+ * ABSENT from this wire object — a pre-#1196 server, or a value so malformed
+ * `toWireSnapshot` normalized it away). `undefined` must NOT be treated as
+ * `null`: a pre-#1196 server that armed a null cap did boot and did arm, it
+ * simply predates this field, and reading its absence as "never armed" is an
+ * affirmative false claim about enforcement — collapsing those two with `??`
+ * was exactly this ticket's own defect, one level up (review round 2).
+ */
+function capArmedAtOf(snapshot: WireSnapshot | null): string | null | undefined {
+  return snapshot?.llm_spend?.cap_armed_at;
+}
+
+type CapReason =
+  | 'unknown'
+  | 'unreadable'
+  | 'never-armed'
+  | 'uncapped'
+  | 'ambiguous'
+  | 'zero'
+  | 'capped';
+
+/**
+ * Names why the meter is or is not drawable, in priority order:
+ *
+ * 1. Missing spend outranks everything else (#1140's review) — with no
+ *    snapshot this client knows nothing about the operator's budget at all
+ *    and must not claim otherwise, not "unconfigured", not "uncapped".
+ * 2. `capUsd === undefined` — `cap_usd` itself could not be trusted (wrong
+ *    type, non-finite, or a corrupt stored value `SqliteLlmSpendCapStore`
+ *    nullified) — outranks `armedAt` entirely (review round 3's MAJOR).
+ *    Consulting `armedAt` here would still answer `'uncapped'` for a
+ *    payload this client just admitted it cannot read, which is the same
+ *    "guess dressed as an answer" mistake `'ambiguous'` exists to refuse
+ *    one field over.
+ * 3. A present, finite `cap_usd` outranks `cap_armed_at` — a numeric cap IS
+ *    the enforced ceiling regardless of whether this wire happens to carry
+ *    the arming instant too. Gating on `armedAt` before `capUsd` would throw
+ *    away a live denominator on any payload missing `cap_armed_at` (a mixed
+ *    client/server version, or simply an older snapshot shape) and render
+ *    "never armed" against a run that plainly has an enforced cap — a
+ *    regression against `origin/main`, which drew a correct meter for that
+ *    same payload. `cap_armed_at` is `#1196`'s discriminator for a NULL cap
+ *    only, never a gate on a numeric one.
+ * 4. Only once `capUsd` is `null` (the wire EXPLICITLY said so, not merely
+ *    unreadable) does `armedAt` decide the reason, and it has THREE
+ *    answers, not two: a real string is `uncapped`; an explicit `null` is
+ *    `never-armed`; and `undefined` (the field is simply absent — a
+ *    pre-#1196 server) is `ambiguous` — this client was not told the
+ *    arming state at all, and must not guess either "armed" or "unarmed" for
+ *    it (review round 2 — the cell round 1's own numeric-cap fix invoked as
+ *    its motivating example but never actually tested).
+ */
+function capReasonOf(
+  spendKnown: boolean,
+  capUsd: number | null | undefined,
+  armedAt: string | null | undefined,
+): CapReason {
+  if (!spendKnown) return 'unknown';
+  if (capUsd === undefined) return 'unreadable';
+  if (capUsd === null) {
+    if (armedAt === undefined) return 'ambiguous';
+    return armedAt === null ? 'never-armed' : 'uncapped';
+  }
+  // `<= 0`, not `=== 0`: `CapMeter` declines to draw for any non-positive
+  // cap, and `'capped'` must imply a drawn meter — a negative `cap_usd` (a
+  // malformed wire value no code path in this repo *arms*, but the type is a
+  // bare `number`) falling through to `'capped'` would hand `CapMeter` a `''`
+  // empty state for a cap it still refuses to draw against (advisor review,
+  // #1196).
+  if (capUsd <= 0) return 'zero';
+  return 'capped';
+}
+
+const CAP_EMPTY_STATE: Readonly<Record<Exclude<CapReason, 'capped' | 'zero'>, string>> = {
+  unknown: 'no spend figure on this snapshot — meter not drawable',
+  // Distinct from `ambiguous`: this is a malformed/untrustworthy `cap_usd`
+  // itself, not a missing discriminator for an otherwise-explicit `null`
+  // (review round 3's MAJOR) — asserts nothing about arming or intent.
+  unreadable: 'LLM spend cap on this snapshot could not be read — meter not drawable',
+  // Distinct from `uncapped`: nothing may be enforcing anything here, which
+  // is the opposite of an operator's deliberate choice (#1196).
+  'never-armed': 'LLM spend cap was never armed — meter not drawable',
+  uncapped: 'LLM spend is deliberately uncapped — meter not drawable',
+  // Asserts NEITHER "armed" nor "unarmed" — a pre-#1196 server (or a
+  // malformed cap_armed_at this client could not trust) leaves this wire
+  // silent on arming state, and the honest reading is that silence, not a
+  // guess in either direction (review round 2).
+  ambiguous: 'no arming record on this snapshot — meter not drawable',
+};
+
+// Never "no LLM budget configured": $0 (or a malformed negative) is a
+// configured, maximally restrictive budget, not an absent one — and the
+// actual figure is named rather than a hardcoded "$0" (#1196).
+function zeroCapEmptyState(capUsd: number): string {
+  return `LLM spend cap is ${formatUsd(capUsd)} — meter not drawable`;
 }
 
 function SpendBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
   const allTime = snapshot?.llm_spend?.all_time;
   const spent = allTime?.cost_usd;
   const cap = capOf(snapshot);
+  // `CapMeter`'s `cap` prop is `number | null` — it has no concept of
+  // "unreadable" of its own, and does not need one: passing `undefined`
+  // through as `null` still draws no meter and shows the same em-dash
+  // denominator CapMeter already renders for `null` (`CapMeter.tsx`). Only
+  // `capReasonOf` below needs the raw three-valued `cap` to tell
+  // "unreadable" apart from "the wire explicitly said no cap".
+  const capForMeter = cap ?? null;
+  const armedAt = capArmedAtOf(snapshot);
   const spendKnown = spent !== undefined && Number.isFinite(spent);
+  const reason = capReasonOf(spendKnown, cap, armedAt);
   const unpriced = allTime?.unpriced_calls ?? 0;
   const unattributed = allTime?.per_debate.unattributed_calls ?? 0;
   const windows = snapshot?.llm_spend;
+  // A $0 cap with any recorded spend is already breached, but `CapMeter`
+  // never divides by a cap `<= 0` (0/0 and x/0 are both unjustifiable), so
+  // this is stated directly rather than left for a fabricated `over` flag.
+  const zeroCapBreached = reason === 'zero' && spendKnown && (spent ?? 0) > 0;
   return (
     <CapMeter
       dataField="llm-cap"
       heading="LLM cap"
       value={spent}
-      cap={cap}
+      cap={capForMeter}
       format={formatUsd}
       tone="cyan"
-      // Missing spend is reported first: with no snapshot this client knows
-      // nothing about the operator's budget and must not assert one.
       emptyState={
-        spendKnown
-          ? 'no LLM budget configured — meter not drawable'
-          : 'no spend figure on this snapshot — meter not drawable'
+        reason === 'capped'
+          ? '' // 'capped' means capUsd > 0, which CapMeter always draws
+          : reason === 'zero'
+            ? `${zeroCapEmptyState(cap ?? 0)}${zeroCapBreached ? ' · already over' : ''}`
+            : CAP_EMPTY_STATE[reason]
       }
       trackLabel={(fraction, _value, cap) =>
         `LLM budget used: ${formatPercent(fraction)} of the ${formatUsd(cap)} cap`
@@ -222,9 +361,12 @@ function SpendBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
             </span>
           )}
           <span className="rail-note">
-            {over ? 'over cap · ' : ''}
+            {over || zeroCapBreached ? 'over cap · ' : ''}
             {unpriced > 0 ? `floor — ${unpriced} unpriced calls` : 'all time, metered locally'}
             {unattributed > 0 ? ` · ${unattributed} calls carry no debate id` : ''}
+            {(reason === 'uncapped' || reason === 'zero') && typeof armedAt === 'string'
+              ? ` · armed ${formatClockUtc(armedAt)}`
+              : ''}
           </span>
         </>
       )}

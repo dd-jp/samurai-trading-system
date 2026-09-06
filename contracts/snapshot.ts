@@ -518,11 +518,40 @@ export interface LlmSpendSummary {
   all_time: LlmSpendWindow;
   /**
    * The ceiling the enforcer is actually applying (ADR-0008), armed at boot by
-   * the orchestrator's composition root; `null` means no budget is configured
-   * and a reader may NOT substitute a denominator. See
-   * `server/shared/store/sqlite-llm-spend-cap-store.ts` (#1140).
+   * the orchestrator's composition root.
+   *
+   * `null` here is AMBIGUOUS on its own (#1196) — it means either "armed
+   * uncapped" (the operator deliberately left `llmBudgetUsd` unset) or "never
+   * armed" (no row was ever written: the orchestrator never booted against
+   * this database, or a wiring regression). Those are opposite situations on
+   * a live-money surface: the first is a choice, the second means nothing may
+   * be enforcing anything. Disambiguate with `cap_armed_at` — see there — and
+   * never substitute a denominator for a `null` cap regardless of which case
+   * it is. See `server/shared/store/sqlite-llm-spend-cap-store.ts` (#1140,
+   * #1196).
    */
   cap_usd: number | null;
+  /**
+   * When the current cap (whatever `cap_usd` reads) was armed, or `null` if
+   * no row has ever been written — the discriminator `cap_usd` alone cannot
+   * carry (#1196).
+   *
+   * `null` here means "never armed": treat `cap_usd` as unknown, not as
+   * "uncapped" — the client must not claim the operator chose "no ceiling"
+   * when nobody has said anything at all. Non-null (a `toStoredTimestamp`
+   * string) means a row exists — usually with `cap_usd` at that arming's
+   * real value, `null` (uncapped) or a number (possibly `0`, the most
+   * restrictive cap there is — a `0` must render as a stated cap, never as
+   * "unconfigured"). The one exception: `SqliteLlmSpendCapStore.read()`
+   * nullifies a non-finite stored `budget_usd` (a `REAL` column can hold a
+   * value `arm()` never wrote) WHILE KEEPING `armed_at` — so a non-null
+   * `cap_armed_at` alongside `cap_usd: null` can also mean "armed, but the
+   * stored ceiling is corrupt", not only "armed, deliberately uncapped".
+   * That corruption is reachable only by writing the row outside `arm()`
+   * (both `production.ts` call sites pass a finite number or `null`), not by
+   * any live path (#1196 review).
+   */
+  cap_armed_at: string | null;
 }
 
 /**

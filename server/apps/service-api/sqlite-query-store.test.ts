@@ -445,16 +445,39 @@ describe('SqliteQueryStore.getLlmSpend', () => {
     expect(new SqliteQueryStore(db).getLlmSpend(NOW).cap_usd).toBe(275);
   });
 
-  it('reports a null cap for an uncapped run, and never a default', () => {
+  // #1196: an armed-uncapped run still carries a non-null `cap_armed_at` —
+  // that is the field that keeps it from reading the same as never-armed.
+  it('reports a null cap for an uncapped run, and never a default, but still records that it armed', () => {
     const db = makeDb();
     new SqliteLlmSpendCapStore(db).arm(null, NOW);
-    expect(new SqliteQueryStore(db).getLlmSpend(NOW).cap_usd).toBeNull();
+    const spend = new SqliteQueryStore(db).getLlmSpend(NOW);
+    expect(spend.cap_usd).toBeNull();
+    expect(spend.cap_armed_at).not.toBeNull();
   });
 
   // A store no orchestrator has ever booted against bounds nothing either —
-  // the one thing it must not do is invent a denominator.
-  it('reports a null cap when nothing has armed one', () => {
-    expect(new SqliteQueryStore(makeDb()).getLlmSpend(NOW).cap_usd).toBeNull();
+  // the one thing it must not do is invent a denominator, and it must say
+  // it was never armed rather than claiming uncapped (#1196).
+  it('reports a null cap and a null cap_armed_at when nothing has armed one', () => {
+    const spend = new SqliteQueryStore(makeDb()).getLlmSpend(NOW);
+    expect(spend.cap_usd).toBeNull();
+    expect(spend.cap_armed_at).toBeNull();
+  });
+
+  // The additional defect this ticket closes: a $0 cap is the MOST
+  // restrictive state possible and must not collapse into "uncapped".
+  it('reports an armed $0 cap as 0, distinct from uncapped or never-armed', () => {
+    const db = makeDb();
+    new SqliteLlmSpendCapStore(db).arm(0, NOW);
+    const spend = new SqliteQueryStore(db).getLlmSpend(NOW);
+    expect(spend.cap_usd).toBe(0);
+    expect(spend.cap_armed_at).not.toBeNull();
+  });
+
+  it('reports cap_armed_at as the exact instant the orchestrator armed', () => {
+    const db = makeDb();
+    new SqliteLlmSpendCapStore(db).arm(275, NOW);
+    expect(new SqliteQueryStore(db).getLlmSpend(NOW).cap_armed_at).toBe(NOW.toISOString());
   });
 
   it('returns zeroed windows on an empty table rather than throwing or returning null', () => {

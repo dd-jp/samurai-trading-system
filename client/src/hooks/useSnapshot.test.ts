@@ -112,6 +112,84 @@ describe('toWireSnapshot', () => {
     }
   });
 
+  // Review round 2, MINOR 3: rejecting the WHOLE summary over one malformed
+  // scalar neither consumer dereferences into would throw away three valid
+  // spend windows (the 24h/7d/all-time footnote) over a fault in an unrelated
+  // field — the exact `mode` mistake `toWireSnapshot`'s doc comment says this
+  // file exists to avoid, one level deeper. Each malformed cap field
+  // degrades to `null`/`undefined` on its own; the windows always survive.
+  //
+  // A malformed `cap_usd` degrades to `undefined`, NOT `null` (review round
+  // 3's MAJOR): `null` is reserved for the wire EXPLICITLY saying so, and
+  // collapsing a malformed value into it let an intact `cap_armed_at` on the
+  // same payload render "deliberately uncapped" — an affirmative claim
+  // manufactured from noise.
+  it('normalizes a malformed cap_usd or cap_armed_at instead of rejecting the whole summary', () => {
+    const summary = makeSnapshot().llm_spend as unknown as Record<string, unknown>;
+
+    for (const { spend, wantCapUsd, wantCapArmedAt } of [
+      {
+        spend: { ...summary, cap_usd: '50' },
+        wantCapUsd: undefined,
+        wantCapArmedAt: summary.cap_armed_at,
+      },
+      {
+        spend: { ...summary, cap_usd: false },
+        wantCapUsd: undefined,
+        wantCapArmedAt: summary.cap_armed_at,
+      },
+      {
+        spend: { ...summary, cap_armed_at: '' },
+        wantCapUsd: summary.cap_usd,
+        wantCapArmedAt: undefined,
+      },
+      {
+        spend: { ...summary, cap_armed_at: 12_345 },
+        wantCapUsd: summary.cap_usd,
+        wantCapArmedAt: undefined,
+      },
+      {
+        spend: { ...summary, cap_armed_at: 'not-a-timestamp' },
+        wantCapUsd: summary.cap_usd,
+        wantCapArmedAt: undefined,
+      },
+    ]) {
+      const result = toWireSnapshot(raw({ llm_spend: spend }))?.llm_spend;
+      expect(result).not.toBeNull();
+      expect(result?.cap_usd).toEqual(wantCapUsd);
+      expect(result?.cap_armed_at).toEqual(wantCapArmedAt);
+      expect(result?.all_time).toEqual(summary.all_time);
+    }
+  });
+
+  // `undefined` (the field entirely absent) is the mixed-version case — an
+  // older server that predates #1196 — not a malformed one, and at THIS
+  // boundary must not be rejected: the rest of the summary is still real and
+  // rendered, unlike a structurally bad window (`per_debate` missing etc.),
+  // which voids the whole summary.
+  //
+  // That does not mean an absent field renders any differently from a
+  // malformed one, though: `normalizeCapUsd(undefined)` and
+  // `normalizeCapUsd('50')` both return `undefined`, and so do
+  // `normalizeCapArmedAt`'s absent- and malformed-input cases — "no version
+  // info" and "corrupt version info" are different facts about WHY the
+  // client cannot read a field, but the same fact about whether it can be
+  // trusted, so `Rail.tsx` renders both the same way per field (`'unreadable'`
+  // for `cap_usd`, folded into `'ambiguous'` for `cap_armed_at` — review
+  // round 3's MAJOR).
+  it('admits a spend summary missing cap_usd or cap_armed_at entirely', () => {
+    const summary = makeSnapshot().llm_spend as unknown as Record<string, unknown>;
+    const withoutCapArmedAt = { ...summary };
+    delete withoutCapArmedAt.cap_armed_at;
+    const withoutCapUsd = { ...summary };
+    delete withoutCapUsd.cap_usd;
+
+    expect(toWireSnapshot(raw({ llm_spend: withoutCapArmedAt }))?.llm_spend).toEqual(
+      withoutCapArmedAt,
+    );
+    expect(toWireSnapshot(raw({ llm_spend: withoutCapUsd }))?.llm_spend).toEqual(withoutCapUsd);
+  });
+
   it('passes a real spend summary through untouched', () => {
     const body = raw();
     expect(toWireSnapshot(body)?.llm_spend).toEqual(body.llm_spend);

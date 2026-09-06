@@ -711,6 +711,13 @@ const ARM_COMPARISONS: ArmComparisonSample[] = [
  */
 const FIXTURE_LLM_CAP_USD = 50;
 
+/**
+ * #1196: a fixed, arbitrary past instant standing in for the real
+ * orchestrator's arm-at-boot timestamp — armed, not absent, for the same
+ * "demo exercises the real state" reason `FIXTURE_LLM_CAP_USD` exists.
+ */
+const FIXTURE_LLM_CAP_ARMED_AT = '2026-08-01T00:00:00.000Z';
+
 const LLM_SPEND_ALL = {
   cost_usd: 6.7742,
   input_tokens: 3_488_900,
@@ -886,6 +893,7 @@ export class InMemoryQueryStore implements DashboardQueryStore {
       last_7d: { ...LLM_SPEND_7D },
       all_time: { ...LLM_SPEND_ALL },
       cap_usd: FIXTURE_LLM_CAP_USD,
+      cap_armed_at: FIXTURE_LLM_CAP_ARMED_AT,
     };
   }
 

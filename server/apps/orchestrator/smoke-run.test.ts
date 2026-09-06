@@ -304,6 +304,7 @@ function healthyGateOptions(
     marketDataFetch?: MarketDataFetchEvidence;
     publishedLlmCapUsd?: number | null;
     configuredLlmBudgetUsd?: number | undefined;
+    publishedLlmCapArmedAt?: string | null;
   } = {},
 ) {
   return {
@@ -335,6 +336,11 @@ function healthyGateOptions(
       'publishedLlmCapUsd' in overrides ? (overrides.publishedLlmCapUsd ?? null) : 50,
     configuredLlmBudgetUsd:
       'configuredLlmBudgetUsd' in overrides ? overrides.configuredLlmBudgetUsd : 50,
+    // #1196: healthy means a real run armed, so `armed_at` is non-null.
+    publishedLlmCapArmedAt:
+      'publishedLlmCapArmedAt' in overrides
+        ? (overrides.publishedLlmCapArmedAt ?? null)
+        : '2026-08-05T14:00:00.000Z',
   };
 }
 
@@ -2704,6 +2710,27 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
       expect(gate.failures.filter((failure) => failure.includes("dashboard's LLM cap"))).toEqual(
         [],
       );
+    });
+  });
+
+  describe("the dashboard's LLM cap_armed_at (#1196)", () => {
+    it('fails when a booted run reports cap_armed_at: null', () => {
+      // The mutation this catches: `SqliteQueryStore.getLlmSpend` (or
+      // `SqliteLlmSpendCapStore.read`) stops reading `armed_at`, so a run that
+      // manifestly booted and armed reports the wire's "never armed" shape.
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({ publishedLlmCapArmedAt: null }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('cap_armed_at: null');
+    });
+
+    it('passes when the wire carries the arming instant', () => {
+      const gate = evaluateSmokeGate(transactedObservations(), healthyGateOptions());
+
+      expect(gate.failures.filter((failure) => failure.includes('cap_armed_at'))).toEqual([]);
     });
   });
 

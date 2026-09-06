@@ -875,13 +875,17 @@ describe('the LLM spend cap is in the production path (ADR-0008)', () => {
       stubConfig(db, { llmClient: countingLlmClient(), llmBudgetUsd: 275 }),
     );
 
-    expect(new SqliteLlmSpendCapStore(db).read()).toBe(275);
+    expect(new SqliteLlmSpendCapStore(db).read().budgetUsd).toBe(275);
   });
 
-  it('publishes a null cap for the uncapped run it warned about', () => {
+  it('publishes a null cap for the uncapped run it warned about, but still records that it armed', () => {
     buildProductionComponents(stubConfig(db, { llmClient: countingLlmClient() }));
 
-    expect(new SqliteLlmSpendCapStore(db).read()).toBeNull();
+    // #1196: `armed uncapped` must be distinguishable from `never armed` —
+    // both carry a null budget, but only the armed one carries `armedAt`.
+    const state = new SqliteLlmSpendCapStore(db).read();
+    expect(state.budgetUsd).toBeNull();
+    expect(state.armedAt).not.toBeNull();
   });
 
   it('is what the checked-in paper profile actually carries', () => {
