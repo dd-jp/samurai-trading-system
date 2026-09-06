@@ -25,6 +25,35 @@ export function nonEmpty(raw: string | undefined): string | undefined {
 }
 
 /**
+ * Holds an already-parsed integer to the same `>= min` bound
+ * `positiveIntegerFromEnv` applies to a raw string, throwing the same shape
+ * of startup error.
+ *
+ * Extracted so a value that reaches a setting by a path OTHER than
+ * environment-string parsing — a `ProductionConfig` field a programmatic
+ * caller set directly (#1161) — is held to the identical rule rather than
+ * skipping it and reaching whatever a downstream consumer does with an
+ * out-of-range number (for `SAMURAI_X_MAX_RESULTS`, `XSearchClient` clamps
+ * instead of refusing, which is the right behaviour for an operator's
+ * excessive value and the wrong one for a nonsensical injected value).
+ */
+export function requireIntegerAtLeast(
+  value: number,
+  name: string,
+  min: number,
+  purpose: string,
+): number {
+  if (!Number.isSafeInteger(value) || value < min) {
+    throw new Error(
+      `Orchestrator cannot start: ${name} must be an integer >= ${min}, not ` +
+        `${JSON.stringify(value)}. It is ${purpose}; refused rather than defaulted, the same rule ` +
+        'a malformed environment value is held to.',
+    );
+  }
+  return value;
+}
+
+/**
  * Parses `raw` as an integer >= `min`, or throws naming the variable.
  *
  * `purpose` is the clause explaining WHAT the caller's setting governs; it is

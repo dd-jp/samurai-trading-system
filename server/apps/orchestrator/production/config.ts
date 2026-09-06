@@ -776,6 +776,21 @@ export interface ProductionConfig extends AlertChannelSlots {
    */
   sentimentRetrieval?: boolean;
   /**
+   * How many X posts each sentiment call retrieves (#969). Defaults from
+   * `SAMURAI_X_MAX_RESULTS` via the shared `positiveIntegerFromEnv` — same
+   * option-with-env-default idiom as `sentimentEnabled`/`sentimentRetrieval`
+   * above; this field exists so tests and programmatic callers can set the
+   * dial without touching the process environment (#1161).
+   *
+   * Held to the same integer `>= 1` bound the env path enforces
+   * (`requireIntegerAtLeast`, `shared/env-integer.ts`): an injected value that
+   * skipped that check would reach `XSearchClient`'s ceiling clamp instead, which
+   * clamps excessive input rather than refusing it — the right call for an
+   * operator's `SAMURAI_X_MAX_RESULTS=100`, the wrong one for a caller that
+   * passed `0` or `-1` by mistake.
+   */
+  xMaxSearchResults?: number;
+  /**
    * The Market Intelligence archive (#554, map #552) — its own database, NOT
    * `db`.
    *
