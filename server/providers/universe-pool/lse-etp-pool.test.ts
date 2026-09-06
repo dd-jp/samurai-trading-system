@@ -43,6 +43,7 @@ function makeRow(overrides: Partial<LseEtpPoolRow> = {}): LseEtpPoolRow {
       source_url: 'https://example.invalid/source',
       t212_source_url: 'https://www.trading212.com/trading-instruments/invest/TEST.GB',
       verified_on: '2026-08-17',
+      saxo: { verified_on: '2026-09-05', gateway: 'sim', line: null },
     },
     ...overrides,
   };
@@ -191,9 +192,8 @@ describe('the declared fallback subset (F4, docs/reviews/universe-path-gap-sweep
 
   // Rule 5 (#1100 review): docs/specs/universe-selector-spec.md "Fallback
   // behaviour" requires no fallback row be one gateAdmits excludes — a
-  // Saxo-VERIFIED saxo_tradeable: false. The checked-in pool cannot exercise
-  // this today (every row is 'unverified', which gateAdmits always admits),
-  // so it is proven on a synthetic fixture.
+  // Saxo-VERIFIED saxo_tradeable: false. Proven on a synthetic fixture so the
+  // rule is pinned independently of which checked-in rows happen to be false.
   it('assertValidPool rejects a fallback row that is Saxo-verified false — a fallback naming an instrument Saxo does not list', () => {
     // A second, non-fallback row carries saxo_tradeable: true so gateAdmits
     // genuinely disagrees across the pool (armed) — proving rule 5 fires on
@@ -328,21 +328,85 @@ describe('t212_isa is populated for every row', () => {
 // #1054 Part 1: `saxo_tradeable` is the field docs/specs/universe-selector-spec.md
 // story 16 / #750 AC7 name as the liquidity gate — `t212_isa` above answers a
 // different, no-longer-live question (does Trading 212 list it) and must
-// never be read as the gate. No Saxo instrument list has been captured
-// anywhere in this repo (#1032 item 3), so every row is 'unverified' today;
-// that is a recorded, explicit statement that the gate is UNARMED, not a
-// placeholder silently standing in for `true`.
-describe('saxo_tradeable — the field the liquidity gate actually reads (#1054 Part 1)', () => {
-  it('is unverified on every checked-in row — no Saxo instrument list has been captured (#1032 item 3)', () => {
+// never be read as the gate. #1032 item 3 captured Saxo's own instrument
+// list (`GET /ref/v1/instruments`, SIM gateway, 2026-09-05) row by row, so
+// every value below is sourced, and the gate is ARMED.
+describe('saxo_tradeable — the field the liquidity gate actually reads (#1054 Part 1, #1032 item 3)', () => {
+  it('carries Saxo-sourced evidence on every checked-in row, and no row is left unverified', () => {
     for (const row of LSE_ETP_POOL) {
-      expect(row.saxo_tradeable).toBe('unverified');
+      expect(row.saxo_tradeable).not.toBe('unverified');
+      expect(row.provenance.saxo.verified_on).toBe('2026-09-05');
+      expect(row.provenance.saxo.gateway).toBe('sim');
     }
   });
 
-  it('liquidityGateStatus reports the checked-in pool as unarmed', () => {
+  it("is true exactly when Saxo lists the row's OWN ticker line on LSE_ETF", () => {
+    for (const row of LSE_ETP_POOL) {
+      const { line } = row.provenance.saxo;
+      expect(row.saxo_tradeable).toBe(line !== null);
+      if (line !== null) {
+        expect(line.symbol).toBe(`${row.lse_ticker}:xlon`);
+        expect(line.exchange_id).toBe('LSE_ETF');
+        expect(Number.isInteger(line.uic) && line.uic > 0).toBe(true);
+        // Saxo quotes the GBX lines as GBP; the row's own currency field is
+        // the listing-line currency, which is the same claim in that case.
+        expect(line.currency).toBe(row.currency === 'GBX' ? 'GBP' : row.currency);
+      }
+    }
+  });
+
+  it('records a sibling line only under a different ticker on the same ISIN', () => {
+    for (const row of LSE_ETP_POOL) {
+      const { line, sibling_line } = row.provenance.saxo;
+      if (sibling_line === undefined) continue;
+      expect(sibling_line.symbol).not.toBe(`${row.lse_ticker}:xlon`);
+      expect(sibling_line.exchange_id).toBe('LSE_ETF');
+      if (line !== null) expect(sibling_line.uic).not.toBe(line.uic);
+    }
+  });
+
+  it('pins the 2026-09-05 SIM capture: 13 own-line hits, 7 sibling-only ISINs, 10 absent', () => {
+    const own = LSE_ETP_POOL.filter((row) => row.provenance.saxo.line !== null);
+    const siblingOnly = LSE_ETP_POOL.filter(
+      (row) => row.provenance.saxo.line === null && row.provenance.saxo.sibling_line !== undefined,
+    );
+    const absent = LSE_ETP_POOL.filter(
+      (row) => row.provenance.saxo.line === null && row.provenance.saxo.sibling_line === undefined,
+    );
+    expect(own.map((row) => row.lse_ticker).sort()).toEqual(
+      [
+        '3USL',
+        'LQQ3',
+        '3LTS',
+        'NVD3',
+        '3LNV',
+        'MST3',
+        '3LPA',
+        'PLT3',
+        '3LAL',
+        'LCO3',
+        '3LSQ',
+        '3KOR',
+        '3KWE',
+      ].sort(),
+    );
+    expect(siblingOnly.map((row) => row.lse_ticker).sort()).toEqual(
+      ['3LME', 'LAM3', 'LPP3', '3LNP', 'LAA3', '3LIP', '3FB'].sort(),
+    );
+    expect(absent.map((row) => row.lse_ticker).sort()).toEqual(
+      ['3SPY', '3AAP', '3QQQ', '3LMO', '3AMZ', '3UBR', '3RAC', '3ARM', '3VT', '3XLE'].sort(),
+    );
+  });
+
+  it('liquidityGateStatus reports the checked-in pool as armed', () => {
     const status = liquidityGateStatus(LSE_ETP_POOL);
-    expect(status.state).toBe('unarmed');
-    expect(status.reason).toMatch(/unverified/i);
+    expect(status.state).toBe('armed');
+  });
+
+  it('every fallback row is Saxo-verified true, not merely not-verified-false', () => {
+    for (const row of LSE_ETP_POOL.filter((r) => r.fallback_default)) {
+      expect(row.saxo_tradeable).toBe(true);
+    }
   });
 
   it('liquidityGateStatus reports armed when a verified true row and a verified false row both admit differently', () => {
@@ -358,7 +422,7 @@ describe('saxo_tradeable — the field the liquidity gate actually reads (#1054 
   });
 
   it('defaults to the checked-in pool when called with no argument', () => {
-    expect(liquidityGateStatus().state).toBe('unarmed');
+    expect(liquidityGateStatus().state).toBe('armed');
   });
 
   describe('gateAdmits — the row-level predicate the pool-level status is built from', () => {

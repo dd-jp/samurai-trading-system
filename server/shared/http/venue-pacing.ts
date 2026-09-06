@@ -58,11 +58,11 @@ import type { TokenBucketConfig } from './token-bucket.js';
  * of the coupling exists — this module's own `resolveVenuePacing()` never
  * touches Polygon, and Polygon's resolution never touches Alpaca/ccxt/IBKR.
  */
-export type VenueKey = 'alpaca' | 'ccxt' | 'ibkr';
+export type VenueKey = 'alpaca' | 'ccxt' | 'ibkr' | 'saxo';
 
 export type VenuePacingConfig = Record<VenueKey, TokenBucketConfig>;
 
-export const VENUE_KEYS: readonly VenueKey[] = ['alpaca', 'ccxt', 'ibkr'];
+export const VENUE_KEYS: readonly VenueKey[] = ['alpaca', 'ccxt', 'ibkr', 'saxo'];
 
 /**
  * The venue's own published hard limit, in requests per second, where one
@@ -100,6 +100,11 @@ export const VENUE_DOCUMENTED_CEILING_PER_SECOND: Partial<Record<VenueKey, numbe
    * taking calls while a lot is live.
    */
   ibkr: 50,
+  // Saxo OpenAPI rate-limit reference (read 2026-09-05, #1032): 120 requests
+  // per minute per service group is the tightest published per-app figure;
+  // order placement is additionally throttled to one request per second per
+  // session, which is where DEFAULT_VENUE_PACING.saxo's refill sits.
+  saxo: 120 / 60,
   // ccxt: deliberately absent. See DEFAULT_VENUE_PACING.ccxt.
 };
 
@@ -293,6 +298,9 @@ export const DEFAULT_VENUE_PACING: VenuePacingConfig = {
    * disconnects happen while the venue holds live bracket legs.
    */
   ibkr: { capacity: 5, refillPerSecond: 5, reserveForPriority: 0 },
+  // Capacity 2 lets an adopt-or-place pair (open-orders lookup, then the POST)
+  // go out back to back; the 1/s refill is the order-placement session limit.
+  saxo: { capacity: 2, refillPerSecond: 1, reserveForPriority: 0 },
 };
 
 /**

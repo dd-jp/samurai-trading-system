@@ -12,6 +12,7 @@ import {
 import { SimulatedClock } from '../shared/index.js';
 import type {
   CostModelImpl,
+  CostVenue,
   DateRange,
   Stage2HistoricalStore,
   TrialGridAssetClass,
@@ -48,6 +49,7 @@ export function makeAssetClass(
   asset_class: 'stocks' | 'crypto',
   symbols: readonly string[],
   periodsPerYear: number,
+  venue?: CostVenue,
 ): TrialGridAssetClass {
   return {
     asset_class,
@@ -65,7 +67,11 @@ export function makeAssetClass(
         registry: ctx.store,
         costModel: ctx.costModel,
         clock: new SimulatedClock(ctx.window.start),
-        universe: symbols.map((symbol) => ({ symbol, asset_class })),
+        universe: symbols.map((symbol) => ({
+          symbol,
+          asset_class,
+          ...(venue === undefined ? {} : { venue }),
+        })),
         capitalPerTrade: ctx.capitalPerTrade,
         // The store's own timeframe, not a literal (#664): the driver and the
         // bars it replays cannot disagree if only one of them decides.

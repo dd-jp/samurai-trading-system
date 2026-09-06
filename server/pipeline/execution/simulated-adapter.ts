@@ -355,6 +355,7 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
       adv,
       volatility: volatility.value,
       asset_class: mark.asset_class,
+      ...(config.venue === undefined ? {} : { venue: config.venue }),
       // When the price was OBSERVED, not when it was requested — already
       // <= now by MDS's point-in-time contract.
       timestamp: mark.observed_at,

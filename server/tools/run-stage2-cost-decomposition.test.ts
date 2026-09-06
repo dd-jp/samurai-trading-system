@@ -1,4 +1,5 @@
-import type { CostConfig } from './backtest/index.js';
+import type { CostConfig, MarketState } from './backtest/index.js';
+import { CostModelImpl } from './backtest/index.js';
 import { scaleCostConfig } from './run-stage2-cost-decomposition.js';
 
 const BASE: CostConfig = {
@@ -101,5 +102,44 @@ describe('scaleCostConfig', () => {
 
     expect(scaled.venues).not.toBe(withVenues.venues);
     expect(scaled.venues?.saxo).not.toBe(withVenues.venues?.saxo);
+  });
+
+  // #1032 item 2: the #1017 tests above check the scaled CONFIG object. None
+  // of them would have caught `venues` being inert end to end, because no
+  // `MarketState` in the codebase carried `venue`. This one prices a fill
+  // through `CostModelImpl` against a venue-stamped state, so the scaled
+  // Saxo rate must show up in the charged commission — not just in the
+  // config it was copied into.
+  it('charges the SCALED Saxo rate on a venue-stamped fill (end to end)', () => {
+    const withVenues: CostConfig = {
+      ...BASE,
+      venues: { saxo: { commissionRate: 0.0008 } },
+    };
+    const state: MarketState = {
+      mid: 100,
+      spread: 0.02,
+      adv: 1_000_000,
+      volatility: 1,
+      asset_class: 'stocks',
+      venue: 'saxo',
+      timestamp: new Date('2026-09-05T10:00:00Z'),
+    };
+    const request = {
+      instrument: '3USL',
+      side: 'buy' as const,
+      size: 10,
+      order_type: 'market' as const,
+      idempotency_key: 'k',
+    };
+
+    const full = new CostModelImpl(withVenues).fill(request, state);
+    const half = new CostModelImpl(scaleCostConfig(withVenues, 0.5)).fill(request, state);
+    const { venue: _venue, ...unstamped } = state;
+    const unkeyed = new CostModelImpl(withVenues).fill(request, unstamped);
+
+    // Notional 1,000: 8bps -> 0.8, halved -> 0.4, base stocks 5bps -> 0.5.
+    expect(full.cost_breakdown.commission).toBeCloseTo(0.8, 10);
+    expect(half.cost_breakdown.commission).toBeCloseTo(0.4, 10);
+    expect(unkeyed.cost_breakdown.commission).toBeCloseTo(0.5, 10);
   });
 });

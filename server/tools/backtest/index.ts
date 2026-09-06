@@ -129,7 +129,7 @@ export {
   attributeTradeCost,
   GrossOfCostsTradeSource,
 } from './cost-attribution.js';
-export { CostModelImpl, DEFAULT_COST_FLOORS } from './cost-model.js';
+export { CostModelImpl, DEFAULT_COST_FLOORS, SAXO_COMMISSION_RATE } from './cost-model.js';
 export type { EvalExecutorDeps } from './eval-executor.js';
 export { EvalExecutorImpl } from './eval-executor.js';
 export type {

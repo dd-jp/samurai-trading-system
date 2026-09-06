@@ -9,7 +9,7 @@ import type {
   MarketDataService,
 } from '../../../providers/market-data-service/index.js';
 import type { Clock, Logger, OrderState } from '../../../shared/index.js';
-import type { CostModel } from '../../../tools/backtest/index.js';
+import type { CostModel, CostVenue } from '../../../tools/backtest/index.js';
 import type { VerdictDecision } from '../../verdict/index.js';
 import type { FilledZeroSizeThrottle } from '../filled-zero-size-throttle.js';
 import type { FlattenOverfillAlertChannel } from '../flatten-overfill-alert.js';
@@ -39,6 +39,13 @@ export interface SimulatedAdapterConfig {
   volatility_indicator: IndicatorSpec;
   /** Bars window aggregated into `MarketState.adv` (the liquidity proxy). */
   adv_window: BarWindow;
+  /**
+   * Stamped onto every `MarketState` built from this config so
+   * `CostConfig.venues[venue]` binds (#1032 item 2). Omitted = plain
+   * asset-class pricing. Set to `'saxo'` where the modelled leg is the live
+   * Saxo book (ADR-0015's 2026-08-30 amendment).
+   */
+  venue?: CostVenue;
 }
 
 /** Injected dependencies (constructor / DI). */

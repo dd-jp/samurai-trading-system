@@ -54,10 +54,10 @@ export interface MarketState {
    * Venue identity for the leg being priced, when it differs materially from
    * the plain asset-class default — e.g. LSE ETPs traded through Saxo vs a
    * US equity through Alpaca, both `asset_class: 'stocks'` (#1000,
-   * ADR-0015:201/:207). `undefined` (every caller today — no `SaxoAdapter`
-   * exists yet, ADR-0015's 2026-08-30 amendment) means "use the plain
-   * asset-class config"; `CostConfig.venues` supplies the override when a
-   * caller does set this.
+   * ADR-0015:201/:207). `undefined` means "use the plain asset-class
+   * config"; `CostConfig.venues` supplies the override when set. Stamped by
+   * `SimulatedAdapterConfig.venue` (the Simulated adapter and the submit-time
+   * snapshot) and `ReplayInstrument.venue` (the Stage 2 replay) — #1032 item 2.
    */
   venue?: CostVenue;
   /** = clock.now(); must be <= now (point-in-time). */
@@ -117,9 +117,9 @@ export interface AssetClassCostConfig {
  * venue economics — e.g. Saxo's LSE ETPs vs Alpaca's US equities, both
  * `'stocks'` (ADR-0015:201/:207). Deliberately NOT `BrokerVenue`
  * (`pipeline/execution/broker-state-store.ts`): that type enumerates the
- * adapters that actually exist today (`ccxt`/`ibkr`/`alpaca`), and no
- * `SaxoAdapter` exists yet — this is a narrower identity scoped to the cost
- * seam alone (#1000).
+ * adapters that journal brackets, and only the venues whose cost economics
+ * diverge from their asset-class default belong here — a narrower identity
+ * scoped to the cost seam alone (#1000).
  */
 export type CostVenue = 'saxo';
 
@@ -157,8 +157,7 @@ export interface CostConfig {
    * asset-class base when `MarketState.venue` matches a key here — e.g.
    * `{ saxo: { commissionRate: 0.0008 } }` for ADR-0015:201's 8bps-per-side
    * Saxo Classic tier. A key with no `MarketState` anywhere in a run setting
-   * that `venue` is inert, not an error — see `run-stage2.ts`'s
-   * `CALIBRATED_INTRADAY_COST_CONFIG`.
+   * that `venue` is inert, not an error.
    */
   venues?: Partial<Record<CostVenue, Partial<AssetClassCostConfig>>>;
 }

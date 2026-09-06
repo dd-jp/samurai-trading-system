@@ -34,6 +34,7 @@ import {
   periodsPerYearFor,
   renderStage2Verdict,
   runTrialGrid,
+  SAXO_COMMISSION_RATE,
   SqliteStage2SelectionStore,
   Stage2HistoricalStore,
   type Stage2Selection,
@@ -133,26 +134,6 @@ export const CALIBRATED_COST_CONFIG: CostConfig = {
 };
 
 /**
- * Saxo's Classic-tier commission (ADR-0015:201, #1000), layered onto
- * `CALIBRATED_INTRADAY_COST_CONFIG.stocks` below via `CostConfig.venues`
- * rather than a change to `stocks.commissionRate` itself — that field is `0`
- * because it models Alpaca (see the `commissionRate — PUBLISHED` note on
- * `CALIBRATED_COST_CONFIG` above for why that's correct there, not a
- * defect), and it must stay correct for the Alpaca-priced legs this same
- * config is used for elsewhere.
- *
- * This universe's actual live venue is Saxo, per ADR-0016's LSE-ETP universe
- * and ADR-0015's 2026-08-30 amendment, and Saxo's Classic tier is
- * 8bps-per-side with no per-order minimum (ADR-0015:201) — 16bps round trip
- * against the ~4bps the un-keyed model charges.
- *
- * Currently inert: nothing sets `MarketState.venue = 'saxo'` yet, because no
- * `SaxoAdapter` exists (ADR-0015's 2026-08-30 amendment) — this only makes
- * the rate calibration-addressable ahead of that wiring landing.
- */
-export const SAXO_COMMISSION_RATE = 0.0008;
-
-/**
  * The same calibration, fitted at the INTRADAY replay resolution (#875).
  *
  * `CALIBRATED_COST_CONFIG` above fits `spreadVolatilityCoefficient` as a ratio
@@ -201,6 +182,10 @@ export const CALIBRATED_INTRADAY_COST_CONFIG: CostConfig = {
     slippageCoefficient: 0.017425,
     impactK: 0.05,
   },
+  // Layered via `venues` rather than `stocks.commissionRate` (kept 0 for the
+  // Alpaca-priced legs this config also serves): the intraday stocks replay
+  // stamps `MarketState.venue = 'saxo'` (`runStage2` below, #1032 item 2), so
+  // 8bps a side (ADR-0015:201) is what an intraday run now charges.
   venues: { saxo: { commissionRate: SAXO_COMMISSION_RATE } },
 };
 
@@ -511,11 +496,17 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
   // `periodsPerYearFor`, not the daily constants (#664): `periodsPerYear` is
   // the annualization base for every Sharpe in the suite, so a 1-minute replay
   // annualized off 252 understates it by ~sqrt(390).
+  // An intraday run is the LSE-ETP universe replayed on its US proxy
+  // (ADR-0016) and its live venue is Saxo, so its stocks legs price at
+  // `CALIBRATED_INTRADAY_COST_CONFIG.venues.saxo` (#1032 item 2). Daily
+  // runs stay Alpaca-priced: `CALIBRATED_COST_CONFIG` carries no `venues`
+  // and the pinned daily results must not move.
   const stocks = makeAssetClass(
     ctx,
     'stocks',
     STOCK_SYMBOLS,
     periodsPerYearFor('stocks', timeframe),
+    isDailyTimeframe(timeframe) ? undefined : 'saxo',
   );
   const assetClasses = isDailyTimeframe(timeframe)
     ? [

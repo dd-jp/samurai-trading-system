@@ -29,7 +29,7 @@ import {
 import type { Clock } from '../../shared/index.js';
 import { SimulatedClock, SystemClock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
-import { SqliteStage2SelectionStore } from '../../tools/backtest/index.js';
+import { SAXO_COMMISSION_RATE, SqliteStage2SelectionStore } from '../../tools/backtest/index.js';
 import { REQUIRED_INJECTED_CONFIG } from './index.js';
 import { liveStartingProfile } from './live-profile.js';
 import { LIVE_BOOK_GBP, paperStartingProfile, subclassOfUniverse } from './paper-profile.js';
@@ -815,6 +815,18 @@ describe('paperStartingProfile', () => {
     // Crypto taker fees are materially worse than a US equity commission
     // (cost-model-backtest-spec.md story 4).
     expect(costConfig.crypto.commissionRate).toBeGreaterThan(costConfig.stocks.commissionRate);
+  });
+
+  // #1032 item 2: the live equity venue is Saxo (ADR-0015, 2026-08-30), and
+  // its Classic-tier commission (ADR-0015:201) only reaches `CostModelImpl`
+  // when BOTH halves are wired — the venue override in `costConfig.venues`
+  // AND the venue stamp on every `MarketState` the Simulated adapter and the
+  // submit-time snapshot build. Either half alone is inert.
+  it('wires the Saxo venue into both the cost config and the simulated adapter config', () => {
+    const { costConfig, executionConfig } = paperStartingProfile('paper');
+
+    expect(costConfig.venues?.saxo?.commissionRate).toBe(SAXO_COMMISSION_RATE);
+    expect(executionConfig.simulated.venue).toBe('saxo');
   });
 
   it('returns a fresh object each call, so a caller cannot mutate the profile', () => {

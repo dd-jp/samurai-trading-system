@@ -113,6 +113,55 @@ describe('SimulatedBrokerAdapter.submitBracket', () => {
     });
   });
 
+  // #1032 item 2: `MarketState.venue` was declared by #1000 and set by no
+  // caller, so `CostConfig.venues.saxo` never reached `CostModelImpl`. The
+  // adapter's config is where the venue identity enters the real path.
+  it('stamps MarketState.venue from config so a venue-keyed cost override binds', async () => {
+    const costModel: CostModel = {
+      fill: vi.fn().mockReturnValue({
+        fill_price: 100.5,
+        filled_size: 100,
+        cost_breakdown: { spread_cost: 0.02, commission: 5, slippage: 0.04, market_impact: 0.01 },
+      }),
+    };
+    const adapter = new SimulatedBrokerAdapter({
+      clock: fixedClock,
+      costModel,
+      marketData: makeMarketData(),
+      config: { ...CONFIG, venue: 'saxo' },
+    });
+
+    await adapter.submitBracket(makeBracket());
+
+    const marketState = vi.mocked(costModel.fill).mock.calls[0]?.[1] as MarketState;
+    expect(marketState.venue).toBe('saxo');
+  });
+
+  it('charges the Saxo commission override on a fill once the venue is configured', async () => {
+    const withSaxo: CostConfig = { ...COST_CONFIG, venues: { saxo: { commissionRate: 0.0008 } } };
+    const plain = new SimulatedBrokerAdapter({
+      clock: fixedClock,
+      costModel: new CostModelImpl(withSaxo),
+      marketData: makeMarketData(),
+      config: CONFIG,
+    });
+    const saxo = new SimulatedBrokerAdapter({
+      clock: fixedClock,
+      costModel: new CostModelImpl(withSaxo),
+      marketData: makeMarketData(),
+      config: { ...CONFIG, venue: 'saxo' },
+    });
+
+    await plain.submitBracket(makeBracket());
+    await saxo.submitBracket(makeBracket());
+    const [plainFill] = await plain.fetchNewFills(NOW);
+    const [saxoFill] = await saxo.fetchNewFills(NOW);
+
+    // 100 shares at mid 100: 5bps -> 5, 8bps -> 8.
+    expect(plainFill?.cost_breakdown?.commission).toBeCloseTo(5, 10);
+    expect(saxoFill?.cost_breakdown?.commission).toBeCloseTo(8, 10);
+  });
+
   it('prices the entry leg against the bracket entry as a limit', async () => {
     const costModel: CostModel = {
       fill: vi.fn().mockReturnValue({

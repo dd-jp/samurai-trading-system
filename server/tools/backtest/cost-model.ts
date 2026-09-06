@@ -81,6 +81,14 @@ function assertValidVenueOverrides(venues: CostConfig['venues']): void {
   }
 }
 
+/**
+ * Saxo Capital Markets UK Classic-tier commission on LSE ETPs: 8bps per
+ * side, no per-order minimum (ADR-0015:201). The `CostConfig.venues.saxo`
+ * override every Saxo-priced leg carries — `run-stage2.ts`'s intraday config
+ * and `paper-profile.ts`'s cost config both read this one constant.
+ */
+export const SAXO_COMMISSION_RATE = 0.0008;
+
 export class CostModelImpl implements CostModel {
   private readonly floors: CostFloors;
 
@@ -135,9 +143,9 @@ export class CostModelImpl implements CostModel {
    * override layered on top (#1000) — e.g. Saxo's 8bps commission rate
    * (ADR-0015:201) vs Alpaca's commission-free US equities, both
    * `asset_class: 'stocks'` and otherwise indistinguishable at this seam.
-   * `marketState.venue` is not populated by any caller today (no
-   * `SaxoAdapter` exists — ADR-0015's 2026-08-30 amendment), so this is
-   * currently always the plain asset-class lookup.
+   * `marketState.venue` is stamped by `SimulatedAdapterConfig.venue` and
+   * `ReplayInstrument.venue` (#1032 item 2); absent, this is the plain
+   * asset-class lookup.
    *
    * Merges field-by-field rather than `{ ...base, ...override }`: a
    * `Partial<AssetClassCostConfig>` that explicitly sets a field to

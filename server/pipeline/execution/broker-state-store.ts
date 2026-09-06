@@ -25,7 +25,7 @@ import type { NativeBracketRequest, NormalizedFill } from './types.js';
  * wired over one database can never read each other's brackets even if a
  * client order id were reused across venues.
  */
-export type BrokerVenue = 'ccxt' | 'ibkr' | 'alpaca';
+export type BrokerVenue = 'ccxt' | 'ibkr' | 'alpaca' | 'saxo';
 
 /**
  * The emulated lifecycle (originally ccxt's; now Alpaca's crypto emulation,
