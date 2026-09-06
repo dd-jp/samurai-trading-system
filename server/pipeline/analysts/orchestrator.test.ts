@@ -980,9 +980,11 @@ describe('AnalystOrchestrator', () => {
       await vi.advanceTimersByTimeAsync(20);
       await resultPromise;
 
-      // Only the late path reaches the render with a throwing `message`: the
-      // catch site reads `error.message` for `lastReason` first and throws
-      // there instead (#1199).
+      // The late path is the one where an escaping render is worst: it
+      // rejects the derived `work.then(...)` promise that nobody holds
+      // (see the hostile-`toString` test above) — the direct path below is
+      // now guarded the same way `lastReason` is (#1199), so both reach this
+      // render rather than one of them throwing first.
       const hostile = new Error('unused');
       hostile.name = 'LateBoomError';
       Object.defineProperty(hostile, 'message', {
@@ -1060,6 +1062,91 @@ describe('AnalystOrchestrator', () => {
           ASOF,
         ),
       ).resolves.toMatchObject({ skipped: true });
+    });
+
+    it('a throwing message getter on a direct rejection does not turn the tick itself into a failure (#1199)', async () => {
+      const { clock, marketData, marketIntelligence } = buildDeps('crypto');
+      const logger = recordingLogger();
+      const failing: Analyst = {
+        analyst_type: 'technical',
+        role: 'mandatory',
+        applies_to: () => true,
+        run: async () => {
+          const error = new Error('unused');
+          // Same construction as the late-settlement `message`-getter test
+          // above, but thrown on the DIRECT (non-timeout) path: the catch
+          // site this closes reads `error.message` for `lastReason` before
+          // any of `renderErrorDetail`'s guards are reached.
+          Object.defineProperty(error, 'message', {
+            get(): string {
+              throw new Error('render boom');
+            },
+          });
+          throw error;
+        },
+      };
+      const orchestrator = new AnalystOrchestrator(
+        { market_data: marketData, market_intelligence: marketIntelligence, logger },
+        [failing],
+      );
+
+      // Before the fix, `error.message` throws inside the catch handling
+      // the analyst failure, which escapes the `Promise.all` in `runAnalysts`
+      // and rejects this promise instead of resolving with a recorded
+      // failure.
+      const result = await orchestrator.runAnalysts(
+        'trace-hostile-message-direct',
+        { asset: INSTRUMENT, asset_class: 'crypto' },
+        clock,
+        ASOF,
+      );
+
+      expect(result.skipped).toBe(true);
+      expect(result.failures[0]?.reason).toContain('[unrenderable error]');
+      // The direct path now reaches `renderErrorDetail`'s own per-field guard
+      // too (renderField, line ~160) — same hostile `message` getter, guarded
+      // independently for the debug payload it builds.
+      expect(
+        logger.entries.find((entry) => entry.level === 'debug')?.payload,
+      ).toMatchObject({ name: 'Error', message: '[unrenderable]' });
+    });
+
+    it('a hostile thrown value with no usable String() form does not turn the tick itself into a failure (#1199)', async () => {
+      const { clock, marketData, marketIntelligence } = buildDeps('crypto');
+      const logger = recordingLogger();
+      // Not an `Error`, so the catch site's other branch — `String(error)` —
+      // is the one under test. Circular (defeats `JSON.stringify`) AND a
+      // throwing `Symbol.toPrimitive` (defeats the `String()` fallback too):
+      // the same combination the late-settlement test above uses to defeat
+      // `describeThrown` itself, applied here to the direct-rejection catch.
+      const hostile: Record<string, unknown> = {
+        [Symbol.toPrimitive]() {
+          throw new Error('render boom');
+        },
+      };
+      hostile.self = hostile;
+      const failing: Analyst = {
+        analyst_type: 'technical',
+        role: 'mandatory',
+        applies_to: () => true,
+        run: async () => {
+          throw hostile;
+        },
+      };
+      const orchestrator = new AnalystOrchestrator(
+        { market_data: marketData, market_intelligence: marketIntelligence, logger },
+        [failing],
+      );
+
+      const result = await orchestrator.runAnalysts(
+        'trace-hostile-tostring-direct',
+        { asset: INSTRUMENT, asset_class: 'crypto' },
+        clock,
+        ASOF,
+      );
+
+      expect(result.skipped).toBe(true);
+      expect(result.failures[0]?.reason).toContain('[unrenderable error]');
     });
 
     it('omitting the logger dependency entirely does not crash — the safe default is silence', async () => {

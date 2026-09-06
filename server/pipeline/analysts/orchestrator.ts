@@ -364,7 +364,21 @@ export class AnalystOrchestrator {
             );
             return { persona, status: 'fulfilled' as const, view };
           } catch (error) {
-            lastReason = error instanceof Error ? error.message : String(error);
+            try {
+              lastReason = describeThrown(error);
+            } catch {
+              // `describeThrown` alone cannot close this (its own doc
+              // comment says so): a thrown value's `message` getter, or its
+              // `JSON.stringify` AND `String()` fallback, can each still
+              // throw while this line is being built (#1199) — the exact
+              // hole `logCaughtFailure` (safe-log.ts) guards with the same
+              // try/catch/placeholder shape. Left unguarded, that throw would
+              // escape this catch — which exists to HANDLE the persona's
+              // failure — and reject the `Promise.all` below, turning a
+              // handled analyst failure into a failed tick before any of
+              // this loop's own logging runs.
+              lastReason = '[unrenderable error]';
+            }
             lastKind = error instanceof AnalystTimeoutError ? 'timeout' : 'error';
             // #1114's cheap half: a genuine (non-timeout) rejection already
             // carries a full `Error` right here, and the line above collapses
