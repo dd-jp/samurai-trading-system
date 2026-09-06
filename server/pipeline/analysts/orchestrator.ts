@@ -1,11 +1,11 @@
 /**
  * Analyst Orchestrator (ticket #71) — see docs/specs/analysts-spec.md
  * "Module: Analyst Orchestrator". Fans a Signal out across every applicable
- * persona (Technical + Sentiment for crypto; Technical + Fundamental +
- * Sentiment for stocks, per `Analyst.applies_to`) and enforces the
- * role-dependent quorum: a mandatory persona failing blocks the whole tick
- * (analysts-spec.md story 21, "no stale fallback"), an optional persona
- * failing just shrinks the set (story 22).
+ * persona (Technical + Fundamental + Sentiment for the equities Samurai runs
+ * — crypto left scope entirely on 2026-08-16, ADR-0015's amendment — per
+ * `Analyst.applies_to`) and enforces the role-dependent quorum: a mandatory
+ * persona failing blocks the whole tick (analysts-spec.md story 21, "no stale
+ * fallback"), an optional persona failing just shrinks the set (story 22).
  *
  * Retry-on-failure is built here as of #431 (analysts-spec.md "Module:
  * Failure Handling", story 19): one bounded retry with a short timeout for

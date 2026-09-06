@@ -4,15 +4,16 @@
  * score (hybrid of disagreement inverse + evidence strength), so that the
  * Trader has a scalar measure of consensus strength").
  *
- * Blocked-by #34 (Round Structure & Termination Orchestrator) does not yet
- * exist, so this is a pure builder over an explicit local input shape rather
- * than something wired into round-orchestration internals — same pattern
- * `analyst-contribution.ts` used ahead of full pipeline wiring. Once #34
- * lands, it calls this with the real per-round stances it produces.
+ * A pure builder over an explicit local input shape rather than something
+ * wired into round-orchestration internals — `#34`'s round orchestrator
+ * (`debate-adapter.ts`) calls this with the real per-round stances it
+ * accumulates.
  *
- * Exact formula and weighting are explicitly called out in the spec as TBD,
- * to be refined empirically — the weights below are named constants so
- * they're easy to retune without touching the combination logic.
+ * Formula and combination logic were resolved by #625 (2026-08-14) — see
+ * debate-engine-spec.md's "Module: Conviction Score Algorithm" for the three
+ * defects it fixed. The 0.6/0.4 weighting itself is still empirical and
+ * carried over unchanged (#625 fixed the combination, not the weights), so
+ * it stays a named constant below to retune without touching that logic.
  */
 
 import { NO_DATA_MARKER } from '../analysts/types.js';

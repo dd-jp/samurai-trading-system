@@ -1099,19 +1099,6 @@ async function buildFlattenExit(
 }
 
 /**
- * Routes on current position state (trader-spec.md Module: Position
- * Awareness, tickets #73/#74):
- * - No lot for `instrument` → directional entry, or skip if neutral/below
- *   the conviction floor.
- * - Holding, debate neutral or non-converged → hold (`null`). Too little
- *   trust in the signal to act, regardless of which way it points.
- *   Stop-tightening on this path is out of scope for #74.
- * - Holding, same direction as debate → hold, unless conviction rose
- *   materially since the most recently opened lot, then bounded `scale_in`.
- * - Holding, opposite direction → `exit` (flatten). A same-cycle reversal
- *   fires as a fresh `entry` once flat, next cycle.
- */
-/**
  * Every distinct way the Trader can decline to trade (#475).
  *
  * A CLOSED UNION rather than free text, so the set is greppable, countable
@@ -1579,7 +1566,11 @@ export async function decideWithReason(input: TraderInput): Promise<TraderOutcom
   };
 }
 
-/** `decideWithReason`'s routing, with #698's diagnostic accumulator threaded through. */
+/**
+ * `decideWithReason`'s routing on current position state (trader-spec.md
+ * Module: Position Awareness, tickets #73/#74), with #698's diagnostic
+ * accumulator threaded through.
+ */
 async function routeDecision(
   input: TraderInput,
   diagnostics: TraderDiagnostic[],
