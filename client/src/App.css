@@ -1049,7 +1049,7 @@ main {
 
 .trade-row {
   display: grid;
-  grid-template-columns: 90px 80px 130px 70px 110px 1fr 90px;
+  grid-template-columns: 90px 80px 60px 70px 110px 1fr 90px;
   gap: var(--space-3);
   align-items: center;
   padding: 10px var(--space-3);

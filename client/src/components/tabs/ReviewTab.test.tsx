@@ -120,6 +120,30 @@ describe('closed trades', () => {
       within(row).getByText(/bullish · 2 rounds · momentum led \(influence 0\.50\)/),
     ).toBeTruthy();
     expect(within(row).getByText('1h 30m')).toBeTruthy();
+    expect(within(row).getByText('long')).toBeTruthy();
+    expect(within(row).queryByText(/552\.10/)).toBeNull();
+    expect(within(row).queryByText(/559\.80/)).toBeNull();
+  });
+
+  it('heads every column, naming the side rather than the entry price', () => {
+    const { container } = renderReview(
+      makeSnapshot({
+        closed_trades: [makeClosedTrade({ idempotency_key: 'k1', debate_id: 'd1' })],
+        debates: [makeDebate({ debate_id: 'd1' })],
+      }),
+    );
+    const labels = Array.from(container.querySelectorAll('.trade-header .label')).map(
+      (node) => node.textContent,
+    );
+    expect(labels).toEqual([
+      'Closed',
+      'Instrument',
+      'Side',
+      'Held',
+      'Reason',
+      'Why it was taken',
+      'P&L',
+    ]);
   });
 
   it('opens a trade’s drawer with its debate, Risk row, P&L breakdown and fills', () => {
@@ -171,6 +195,9 @@ describe('closed trades', () => {
     expect(within(drawer).getByText('+$11.20')).toBeTruthy();
     expect(within(drawer).getByText('−$2.41')).toBeTruthy();
     expect(within(drawer).getAllByText('+$8.79').length).toBeGreaterThan(0);
+    expect(
+      within(drawer).getByText(/Entry 552\.10 · exit 559\.80 · \$11,042\.00 notional at entry/),
+    ).toBeTruthy();
     const fills = within(drawer).getByRole('list', { name: 'Fills' });
     expect(within(fills).getByText(/f-entry/)).toBeTruthy();
     expect(within(fills).getByText(/f-target/)).toBeTruthy();
