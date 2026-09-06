@@ -1480,8 +1480,8 @@ export interface TraderOutcome {
 }
 
 /**
- * A declined decision. Narrow helper so the twenty skip sites stay one line
- * each — and so adding a twenty-first cannot forget a field.
+ * A declined decision. Narrow helper so every skip site stays one line each —
+ * and so a newly added one cannot forget a field.
  *
  * Diagnostics are deliberately NOT a parameter here (#698): they are collected
  * in `decideWithReason`'s accumulator and merged onto whatever this returns, so
@@ -1552,8 +1552,8 @@ export async function decideWithReason(input: TraderInput): Promise<TraderOutcom
   const diagnostics: TraderDiagnostic[] = [];
   const outcome = await routeDecision(input, diagnostics);
 
-  // #1109: classified once here, not at each of the twenty `skip()` call
-  // sites — see `TraderOutcome.decision_class`.
+  // #1109: classified once here, not at each `skip()` call site — see
+  // `TraderOutcome.decision_class`.
   const decision_class =
     outcome.skip_reason === null ? null : classifyDecision(outcome.skip_reason, input.debate);
 
