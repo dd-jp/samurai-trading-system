@@ -457,6 +457,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
       trace_id: 'saxo-fill-sweep',
       stage: 'execution',
       level: 'error',
+      event: 'saxo_fill_fee_currency_unresolved',
       message: 'Saxo fetchNewFills: fill Uic resolves to no pool line; fee_currency left unset',
       payload: {
         log_id: activity.LogId,
