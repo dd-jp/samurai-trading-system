@@ -182,10 +182,7 @@ describe('resolveTrace', () => {
 
   it('never resolves another instrument’s lane for a mismatched selection (#1205)', () => {
     const snapshot = makeSnapshot({
-      pipeline: makeView([
-        doneThrough('SPY', 'trace-1', 'execution', { outcome: 'go' }),
-        doneThrough('QQQ', 'trace-1-qqq', 'execution', { outcome: 'go' }),
-      ]),
+      pipeline: makeView([doneThrough('SPY', 'trace-1', 'execution', { outcome: 'go' })]),
       // A trace_id-only match on verdictFor would find this row too — it
       // exists so the verdict conjunction is exercised the same way the lane
       // conjunction is, not just the lane.
@@ -201,9 +198,8 @@ describe('resolveTrace', () => {
     // Not asserted: detail.absence.lane currently reads 'aged_out' here, which
     // is the wrong label (the trace hasn't aged out — it's in the window
     // under another instrument) and detail.traceId still leaks the mismatched
-    // selection's traceId unvalidated. Both are open residue for #1205's
-    // successor ('wrong_instrument' absence state); pinning either value here
-    // would make this test fight that fix.
+    // selection's traceId unvalidated. Both are tracked by #1267 ('wrong_instrument'
+    // absence state); pinning either value here would make this test fight that fix.
   });
 
   it('says an idle lane is idle rather than absent, and joins it to no critic row', () => {
