@@ -118,7 +118,7 @@ export function resolveTrace(snapshot: WireSnapshot, selection: Selection): Trac
     traceId,
     lane,
     cells: cellsOf(lane),
-    verdict: verdictFor(snapshot.verdicts, traceId),
+    verdict: verdictFor(snapshot.verdicts, traceId, instrument),
     riskCritic: riskCriticFor(snapshot.risk_critics ?? [], traceId, instrument),
     riskCriticJoin: BY_TRACE_ID,
     debate: latestDebateFor(snapshot.debates, instrument),
@@ -168,7 +168,7 @@ export function resolveTrade(snapshot: WireSnapshot, idempotencyKey: string): Tr
     traceId,
     lane,
     cells,
-    verdict: verdictFor(snapshot.verdicts, traceId),
+    verdict: verdictFor(snapshot.verdicts, traceId, trade.instrument),
     fills: fillsFor(snapshot.fills, trade.idempotency_key),
     absence: { trace: traceId === null ? 'unreachable' : cells === null ? 'aged_out' : null },
   };
