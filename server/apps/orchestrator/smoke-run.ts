@@ -1513,7 +1513,7 @@ export interface ExitPathEvidence {
 }
 
 /**
- * Drives the three scenarios documented above against `db`, using `clock`
+ * Drives the exit-path scenarios documented above against `db`, using `clock`
  * (advanced deterministically between phases — see `SimulatedClock.advanceTo`)
  * and the given cost/execution config. Returns everything `evaluateSmokeGate`
  * needs that is not itself a store row.
@@ -1606,110 +1606,231 @@ async function runExitPathScenarios(input: {
     assertSubmitted(await execution.execute(verdict), step);
   };
 
-  // --- Scenario 1 (#508/#516/#517): open, exit in full. ------------------
-  // `evaluateSmokeGate` reads the cancel-before-flatten ORDERING off
-  // `broker.callSequence` and the `ClosedTrade` off `closed_trades` —
-  // nothing scenario-specific has to be returned for this one.
+  const ctx: ExitPathScenarioContext = {
+    db,
+    clock,
+    costModel,
+    marketData,
+    executionConfig,
+    logger,
+    broker,
+    execution,
+    positionStore,
+    residualAlerts,
+    flattenReconcileAlerts,
+    tick,
+    submit,
+  };
+
+  const fullExit = await runFullExitScenario(ctx);
+  const partialFlatten = await runPartialFlattenScenario(ctx);
+  const twoLotFlatten = await runTwoLotFlattenScenario(ctx);
+  const crashRestartLot = await enterCrashRestartLotAheadOfResidualSweep(ctx);
+  const residualSweep = await runResidualSweepScenario(ctx);
+  // #549: nothing between here and `restartExecutionAndReconcile` may call
+  // `ingestFills()` — the Simulated feed re-offers a flatten's fill every
+  // poll, so an extra ingest would retry (and heal) `residualSweep`'s failed
+  // re-arm in-process, and the restart would find nothing left to sweep.
+  await exitCrashRestartLotWithoutSweep(ctx, crashRestartLot.exitKey);
+  const terminalSweepKey = await seedTerminalSweepRow(ctx);
+  const { restarted, restartReconcile } = await restartExecutionAndReconcile(ctx);
+  await restarted.ingestFills();
+
+  // Scenario 5's evidence, read AFTER the restarted reconcile+ingest: the
+  // sweep's own divergence keys on the LOT (a flatten's divergence keys on
+  // the flatten's own id, so the lookup cannot collide), the venue-side
+  // protection off the delegate adapter, and the marker column raw off the
+  // store — the durable effect the gate exists to enforce (#430).
+  const lot5MarkerRow = db
+    .prepare('SELECT residual_unprotected_since FROM open_positions WHERE idempotency_key = ?')
+    .get(residualSweep.lotKey) as { residual_unprotected_since: string | null } | undefined;
+
+  // #1088: the seeded row's fate, read the same way — raw SQL rather than
+  // `getOpenPositions()`, which would never have shown a terminal row either
+  // way and so cannot distinguish "swept" from "was never open".
+  const terminalSweepRow = db
+    .prepare('SELECT 1 FROM open_positions WHERE idempotency_key = ?')
+    .get(terminalSweepKey);
+
+  return {
+    brokerCallSequence: broker.callSequence,
+    residualAlerts: residualAlerts.alerts,
+    fullExit,
+    partialFlatten: {
+      idempotencyKey: partialFlatten.idempotencyKey,
+      expectedResidual: partialFlatten.expectedResidual,
+      protectedQty: broker.getProtectedQty(partialFlatten.idempotencyKey),
+    },
+    twoLotFlatten,
+    crashRestart: {
+      lotKey: crashRestartLot.lotKey,
+      flattenKey: crashRestartLot.exitKey,
+      reconcileReport: restartReconcile,
+    },
+    flattenReconcileAlerts: flattenReconcileAlerts.alerts,
+    residualSweep: {
+      lotKey: residualSweep.lotKey,
+      expectedResidual: residualSweep.expectedResidual,
+      protectedQty: broker.getProtectedQty(residualSweep.lotKey),
+      markerCleared:
+        lot5MarkerRow !== undefined && lot5MarkerRow.residual_unprotected_since === null,
+      sweepDivergenceAction: restartReconcile.divergences.find(
+        (divergence) => divergence.idempotency_key === residualSweep.lotKey,
+      )?.action,
+    },
+    terminalSweep: {
+      seededKey: terminalSweepKey,
+      rowPresentAfterSweep: terminalSweepRow !== undefined,
+      swept: restartReconcile.swept,
+    },
+  };
+}
+
+/** Everything the extracted exit-path scenarios below share and mutate in sequence. */
+interface ExitPathScenarioContext {
+  readonly db: SqliteHandle;
+  readonly clock: SimulatedClock;
+  readonly costModel: CostModelImpl;
+  readonly marketData: MarketDataService;
+  readonly executionConfig: ExecutionConfig;
+  readonly logger: Logger;
+  readonly broker: ExitPathBrokerAdapter;
+  readonly execution: ReturnType<typeof buildExecutionSurface>;
+  readonly positionStore: SqliteExecutionStore;
+  readonly residualAlerts: RecordingResidualExposureAlertChannel;
+  readonly flattenReconcileAlerts: RecordingFlattenReconcileAlertChannel;
+  readonly tick: () => Date;
+  readonly submit: (order: OrderIntent, step: string) => Promise<void>;
+}
+
+/**
+ * Scenario 1 (#508/#516/#517): open, exit in full. `evaluateSmokeGate` reads
+ * the cancel-before-flatten ORDERING off `broker.callSequence` and the
+ * `ClosedTrade` off `closed_trades` — nothing scenario-specific has to be
+ * returned for this one beyond the lot key.
+ */
+async function runFullExitScenario(ctx: ExitPathScenarioContext): Promise<{ lotKey: string }> {
   const lot1 = 'smoke-exit-full-lot';
-  await submit(
-    exitPathOrder(EXIT_PATH_INSTRUMENTS.fullExit, lot1, 'buy', 'entry', EXIT_PATH_LOT_SIZE, tick()),
+  await ctx.submit(
+    exitPathOrder(
+      EXIT_PATH_INSTRUMENTS.fullExit,
+      lot1,
+      'buy',
+      'entry',
+      EXIT_PATH_LOT_SIZE,
+      ctx.tick(),
+    ),
     'scenario 1 entry',
   );
-  await execution.ingestFills();
-  await submit(
+  await ctx.execution.ingestFills();
+  await ctx.submit(
     exitPathOrder(
       EXIT_PATH_INSTRUMENTS.fullExit,
       'smoke-exit-full-exit',
       'sell',
       'exit',
       EXIT_PATH_LOT_SIZE,
-      tick(),
+      ctx.tick(),
     ),
     'scenario 1 exit',
   );
-  await execution.ingestFills();
+  await ctx.execution.ingestFills();
 
-  // --- Scenario 2 (#525): a flatten that fills only partially. -----------
+  return { lotKey: lot1 };
+}
+
+/** Scenario 2 (#525): a flatten that fills only partially. */
+async function runPartialFlattenScenario(
+  ctx: ExitPathScenarioContext,
+): Promise<{ idempotencyKey: string; expectedResidual: number }> {
   const lot2 = 'smoke-exit-partial-lot';
   const lot2ExitKey = 'smoke-exit-partial-exit';
-  await submit(
+  await ctx.submit(
     exitPathOrder(
       EXIT_PATH_INSTRUMENTS.partialFlatten,
       lot2,
       'buy',
       'entry',
       EXIT_PATH_LOT_SIZE,
-      tick(),
+      ctx.tick(),
     ),
     'scenario 2 entry',
   );
-  await execution.ingestFills();
-  broker.truncateFlattenFill(lot2ExitKey, PARTIAL_FLATTEN_FRACTION);
-  await submit(
+  await ctx.execution.ingestFills();
+  ctx.broker.truncateFlattenFill(lot2ExitKey, PARTIAL_FLATTEN_FRACTION);
+  await ctx.submit(
     exitPathOrder(
       EXIT_PATH_INSTRUMENTS.partialFlatten,
       lot2ExitKey,
       'sell',
       'exit',
       EXIT_PATH_LOT_SIZE,
-      tick(),
+      ctx.tick(),
     ),
     'scenario 2 exit',
   );
-  await execution.ingestFills();
+  await ctx.execution.ingestFills();
   // Matches ingest-fills.ts's own `filledSize - exitQty`, not an algebraic
   // rearrangement of it — the two are not guaranteed to be the same float64
   // bit pattern (ADR-0005), only the SAME expression is.
-  const scenario2ExitFillQty = EXIT_PATH_LOT_SIZE * PARTIAL_FLATTEN_FRACTION;
-  const scenario2ExpectedResidual = EXIT_PATH_LOT_SIZE - scenario2ExitFillQty;
+  const exitFillQty = EXIT_PATH_LOT_SIZE * PARTIAL_FLATTEN_FRACTION;
+  const expectedResidual = EXIT_PATH_LOT_SIZE - exitFillQty;
 
-  // --- Scenario 3 (#571): an older lot with a prior partial exit, plus a --
-  // fresh sibling, flattened TOGETHER. The older lot's "prior exit" is built
-  // with the same partial-fill technique as scenario 2 (a full-size exit
-  // that only partially fills) — that is the only way to leave it holding
-  // less than its entry size, since `executeExit` refuses any exit whose
-  // size does not exactly equal what is currently held (execute.ts).
+  return { idempotencyKey: lot2, expectedResidual };
+}
+
+/**
+ * Scenario 3 (#571): an older lot with a prior partial exit, plus a fresh
+ * sibling, flattened TOGETHER. The older lot's "prior exit" is built with the
+ * same partial-fill technique as scenario 2 (a full-size exit that only
+ * partially fills) — that is the only way to leave it holding less than its
+ * entry size, since `executeExit` refuses any exit whose size does not
+ * exactly equal what is currently held (execute.ts).
+ */
+async function runTwoLotFlattenScenario(
+  ctx: ExitPathScenarioContext,
+): Promise<{ lotKeys: readonly string[] }> {
   const lot3Older = 'smoke-exit-twolot-older';
   const lot3PriorExitKey = 'smoke-exit-twolot-older-prior-exit';
-  await submit(
+  await ctx.submit(
     exitPathOrder(
       EXIT_PATH_INSTRUMENTS.twoLot,
       lot3Older,
       'buy',
       'entry',
       EXIT_PATH_LOT_SIZE,
-      tick(),
+      ctx.tick(),
     ),
     'scenario 3 older-lot entry',
   );
-  await execution.ingestFills();
-  broker.truncateFlattenFill(lot3PriorExitKey, PRIOR_EXIT_FRACTION);
-  await submit(
+  await ctx.execution.ingestFills();
+  ctx.broker.truncateFlattenFill(lot3PriorExitKey, PRIOR_EXIT_FRACTION);
+  await ctx.submit(
     exitPathOrder(
       EXIT_PATH_INSTRUMENTS.twoLot,
       lot3PriorExitKey,
       'sell',
       'exit',
       EXIT_PATH_LOT_SIZE,
-      tick(),
+      ctx.tick(),
     ),
     'scenario 3 older-lot prior exit',
   );
-  await execution.ingestFills();
+  await ctx.execution.ingestFills();
 
   const lot3Newer = 'smoke-exit-twolot-newer';
-  await submit(
+  await ctx.submit(
     exitPathOrder(
       EXIT_PATH_INSTRUMENTS.twoLot,
       lot3Newer,
       'buy',
       'entry',
       EXIT_PATH_LOT_SIZE,
-      tick(),
+      ctx.tick(),
     ),
     'scenario 3 newer-lot entry',
   );
-  await execution.ingestFills();
+  await ctx.execution.ingestFills();
 
   // Both lots' held quantity, summed: the older one already gave up
   // `PRIOR_EXIT_FRACTION` of its size (same `filledSize - exitQty` form as
@@ -1717,95 +1838,120 @@ async function runExitPathScenarios(input: {
   const olderPriorExitFillQty = EXIT_PATH_LOT_SIZE * PRIOR_EXIT_FRACTION;
   const olderHeld = EXIT_PATH_LOT_SIZE - olderPriorExitFillQty;
   const twoLotFlattenSize = olderHeld + EXIT_PATH_LOT_SIZE;
-  await submit(
+  await ctx.submit(
     exitPathOrder(
       EXIT_PATH_INSTRUMENTS.twoLot,
       'smoke-exit-twolot-flatten',
       'sell',
       'exit',
       twoLotFlattenSize,
-      tick(),
+      ctx.tick(),
     ),
     'scenario 3 two-lot flatten',
   );
-  await execution.ingestFills();
+  await ctx.execution.ingestFills();
 
-  // --- Scenario 4's ENTRY, hoisted ahead of scenario 5 -------------------
-  // (#549): scenario 5's failed re-arm must be the LAST thing any
-  // `ingestFills()` does before the restart — the Simulated feed re-offers a
-  // flatten's fill every poll, so any later poll would retry (and heal) the
-  // re-arm IN-PROCESS and the restart would find nothing to sweep. Scenario
-  // 4's own constraint is only that no ingest runs between its EXIT and the
-  // restart, so its entry fill is ingested here and its exit submitted after
-  // scenario 5's observing poll, below.
+  return { lotKeys: [lot3Older, lot3Newer] };
+}
+
+/**
+ * Scenario 4's entry (#519/#526), hoisted ahead of scenario 5: scenario 5's
+ * failed re-arm must be the LAST thing any `ingestFills()` does before the
+ * restart — the Simulated feed re-offers a flatten's fill every poll, so any
+ * later poll would retry (and heal) the re-arm IN-PROCESS and the restart
+ * would find nothing to sweep. Scenario 4's own constraint is only that no
+ * ingest runs between its EXIT and the restart, so its entry fill is
+ * ingested here and its exit submitted by
+ * `exitCrashRestartLotWithoutSweep`, after scenario 5's observing poll.
+ */
+async function enterCrashRestartLotAheadOfResidualSweep(
+  ctx: ExitPathScenarioContext,
+): Promise<{ lotKey: string; exitKey: string }> {
   const lot4 = 'smoke-exit-restart-lot';
   const lot4ExitKey = 'smoke-exit-restart-exit';
-  await submit(
+  await ctx.submit(
     exitPathOrder(
       EXIT_PATH_INSTRUMENTS.crashRestart,
       lot4,
       'buy',
       'entry',
       EXIT_PATH_LOT_SIZE,
-      tick(),
+      ctx.tick(),
     ),
     'scenario 4 entry',
   );
-  await execution.ingestFills();
+  await ctx.execution.ingestFills();
 
-  // --- Scenario 5 (#549): a partial flatten whose observing-poll re-arm ----
-  // FAILS (scripted, one-shot). The inline #525 alert fires once and the
-  // durable marker (migration 0024) is written; nothing in the poll path
-  // ever retries. The restarted `reconcile()`'s residual-protection sweep is
-  // what re-arms the residual and clears the marker — evidence read after
-  // the restart below.
+  return { lotKey: lot4, exitKey: lot4ExitKey };
+}
+
+/**
+ * Scenario 5 (#549): a partial flatten whose observing-poll re-arm FAILS
+ * (scripted, one-shot). The inline #525 alert fires once and the durable
+ * marker (migration 0024) is written; nothing in the poll path ever retries.
+ * The restarted `reconcile()`'s residual-protection sweep is what re-arms
+ * the residual and clears the marker — evidence read after the restart, by
+ * the caller.
+ */
+async function runResidualSweepScenario(
+  ctx: ExitPathScenarioContext,
+): Promise<{ lotKey: string; expectedResidual: number }> {
   const lot5 = 'smoke-exit-sweep-lot';
   const lot5ExitKey = 'smoke-exit-sweep-exit';
-  await submit(
+  await ctx.submit(
     exitPathOrder(
       EXIT_PATH_INSTRUMENTS.residualSweep,
       lot5,
       'buy',
       'entry',
       EXIT_PATH_LOT_SIZE,
-      tick(),
+      ctx.tick(),
     ),
     'scenario 5 entry',
   );
-  await execution.ingestFills();
-  broker.truncateFlattenFill(lot5ExitKey, PARTIAL_FLATTEN_FRACTION);
-  broker.failRearmOnce(lot5);
-  await submit(
+  await ctx.execution.ingestFills();
+  ctx.broker.truncateFlattenFill(lot5ExitKey, PARTIAL_FLATTEN_FRACTION);
+  ctx.broker.failRearmOnce(lot5);
+  await ctx.submit(
     exitPathOrder(
       EXIT_PATH_INSTRUMENTS.residualSweep,
       lot5ExitKey,
       'sell',
       'exit',
       EXIT_PATH_LOT_SIZE,
-      tick(),
+      ctx.tick(),
     ),
     'scenario 5 exit',
   );
   // The observing poll: the partial fill lands, the re-arm throws once, the
   // lot's residual is left naked with only the marker pointing at it.
-  await execution.ingestFills();
-  const scenario5ExitFillQty = EXIT_PATH_LOT_SIZE * PARTIAL_FLATTEN_FRACTION;
+  await ctx.execution.ingestFills();
+  const exitFillQty = EXIT_PATH_LOT_SIZE * PARTIAL_FLATTEN_FRACTION;
   // Same `filledSize - exitQty` expression as ingest-fills.ts — scenario 2's
   // own float-identity reasoning, unchanged.
-  const scenario5ExpectedResidual = EXIT_PATH_LOT_SIZE - scenario5ExitFillQty;
+  const expectedResidual = EXIT_PATH_LOT_SIZE - exitFillQty;
 
-  // --- Scenario 4 (#519/#526): a flatten that acks but is never swept for --
-  // fills before a "restart" — reconcile()'s flatten-journal sweep, not
-  // ingestFills() alone, is what recovers it. Its entry was opened and
-  // ingested ABOVE, before scenario 5 (see the hoist comment there).
-  await submit(
+  return { lotKey: lot5, expectedResidual };
+}
+
+/**
+ * Scenario 4's exit (#519/#526): a flatten that acks but is never swept for
+ * fills before a "restart" — `reconcile()`'s flatten-journal sweep, not
+ * `ingestFills()` alone, is what recovers it. Its entry was opened and
+ * ingested by `enterCrashRestartLotAheadOfResidualSweep`, before scenario 5.
+ */
+async function exitCrashRestartLotWithoutSweep(
+  ctx: ExitPathScenarioContext,
+  lot4ExitKey: string,
+): Promise<void> {
+  await ctx.submit(
     exitPathOrder(
       EXIT_PATH_INSTRUMENTS.crashRestart,
       lot4ExitKey,
       'sell',
       'exit',
       EXIT_PATH_LOT_SIZE,
-      tick(),
+      ctx.tick(),
     ),
     'scenario 4 exit',
   );
@@ -1815,20 +1961,24 @@ async function runExitPathScenarios(input: {
   // `SharedStore.getUnresolvedFlattens()` exists to find, and exactly what a
   // restart would otherwise strand if a live adapter's process-local
   // `flattens` map (`AlpacaBrokerAdapter`) were the only record of it.
+}
 
-  // --- Scenario 6 (#1088): the terminal-row sweep. Seeded directly via the
-  // store port, never through `submit()` — the point is a row that already
-  // IS terminal and old enough for `sweepTerminalPositions` to act on, not
-  // one this harness drives there through a live broker round-trip. The
-  // clock has only advanced by a handful of `tick()` seconds since
-  // `SMOKE_RUN_INSTANT`, so `decision_timestamp` is set the full
-  // `TERMINAL_SWEEP_AGE_MS` (+ margin) behind `clock.now()` directly, rather
-  // than relying on the smoke clock ever running that far forward.
+/**
+ * Scenario 6 (#1088): the terminal-row sweep. Seeded directly via the store
+ * port, never through `submit()` — the point is a row that already IS
+ * terminal and old enough for `sweepTerminalPositions` to act on, not one
+ * this harness drives there through a live broker round-trip. The clock has
+ * only advanced by a handful of `tick()` seconds since `SMOKE_RUN_INSTANT`,
+ * so `decision_timestamp` is set the full `TERMINAL_SWEEP_AGE_MS` (+ margin)
+ * behind `clock.now()` directly, rather than relying on the smoke clock ever
+ * running that far forward.
+ */
+async function seedTerminalSweepRow(ctx: ExitPathScenarioContext): Promise<string> {
   const terminalSweepKey = 'smoke-terminal-sweep-target';
   const terminalSweepDecisionTimestamp = new Date(
-    clock.now().getTime() - TERMINAL_SWEEP_AGE_MS - 60 * 60 * 1_000,
+    ctx.clock.now().getTime() - TERMINAL_SWEEP_AGE_MS - 60 * 60 * 1_000,
   );
-  await positionStore.writeAheadPosition({
+  await ctx.positionStore.writeAheadPosition({
     idempotency_key: terminalSweepKey,
     debate_id: 'debate-smoke-terminal-sweep',
     instrument: EXIT_PATH_INSTRUMENTS.crashRestart,
@@ -1848,22 +1998,31 @@ async function runExitPathScenarios(input: {
     converged: true,
   });
 
-  // --- restart: a SECOND `Execution` over the SAME store + SAME broker,
-  // `buildExecutionSurface` (the real composition-root binding function)
-  // called again — `reconcile.test.ts`'s own definition of "a restart".
+  return terminalSweepKey;
+}
+
+/**
+ * The restart: a SECOND `Execution` over the SAME store + SAME broker,
+ * `buildExecutionSurface` (the real composition-root binding function)
+ * called again — `reconcile.test.ts`'s own definition of "a restart".
+ */
+async function restartExecutionAndReconcile(ctx: ExitPathScenarioContext): Promise<{
+  restarted: ReturnType<typeof buildExecutionSurface>;
+  restartReconcile: ReconcileReport;
+}> {
   const restarted = buildExecutionSurface(
     {
-      clock,
-      broker,
-      store: new SqliteExecutionStore(db),
-      costModel,
-      marketData,
-      config: executionConfig,
+      clock: ctx.clock,
+      broker: ctx.broker,
+      store: new SqliteExecutionStore(ctx.db),
+      costModel: ctx.costModel,
+      marketData: ctx.marketData,
+      config: ctx.executionConfig,
       mode: 'paper',
-      residualExposureAlerts: residualAlerts,
+      residualExposureAlerts: ctx.residualAlerts,
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
-      flattenReconcileAlerts,
-      logger,
+      flattenReconcileAlerts: ctx.flattenReconcileAlerts,
+      logger: ctx.logger,
       // Fresh, not the pre-restart `execution`'s instance — a real restart's
       // process is gone too, and `FilledZeroSizeThrottle` is documented
       // restart-clean by design (filled-zero-size-throttle.ts).
@@ -1872,52 +2031,8 @@ async function runExitPathScenarios(input: {
     'smoke-exit-path-restart',
   );
   const restartReconcile = await restarted.reconcile();
-  await restarted.ingestFills();
 
-  // Scenario 5's evidence, read AFTER the restarted reconcile+ingest: the
-  // sweep's own divergence keys on the LOT (a flatten's divergence keys on
-  // the flatten's own id, so the lookup cannot collide), the venue-side
-  // protection off the delegate adapter, and the marker column raw off the
-  // store — the durable effect the gate exists to enforce (#430).
-  const lot5MarkerRow = db
-    .prepare('SELECT residual_unprotected_since FROM open_positions WHERE idempotency_key = ?')
-    .get(lot5) as { residual_unprotected_since: string | null } | undefined;
-
-  // #1088: the seeded row's fate, read the same way — raw SQL rather than
-  // `getOpenPositions()`, which would never have shown a terminal row either
-  // way and so cannot distinguish "swept" from "was never open".
-  const terminalSweepRow = db
-    .prepare('SELECT 1 FROM open_positions WHERE idempotency_key = ?')
-    .get(terminalSweepKey);
-
-  return {
-    brokerCallSequence: broker.callSequence,
-    residualAlerts: residualAlerts.alerts,
-    fullExit: { lotKey: lot1 },
-    partialFlatten: {
-      idempotencyKey: lot2,
-      expectedResidual: scenario2ExpectedResidual,
-      protectedQty: broker.getProtectedQty(lot2),
-    },
-    twoLotFlatten: { lotKeys: [lot3Older, lot3Newer] },
-    crashRestart: { lotKey: lot4, flattenKey: lot4ExitKey, reconcileReport: restartReconcile },
-    flattenReconcileAlerts: flattenReconcileAlerts.alerts,
-    residualSweep: {
-      lotKey: lot5,
-      expectedResidual: scenario5ExpectedResidual,
-      protectedQty: broker.getProtectedQty(lot5),
-      markerCleared:
-        lot5MarkerRow !== undefined && lot5MarkerRow.residual_unprotected_since === null,
-      sweepDivergenceAction: restartReconcile.divergences.find(
-        (divergence) => divergence.idempotency_key === lot5,
-      )?.action,
-    },
-    terminalSweep: {
-      seededKey: terminalSweepKey,
-      rowPresentAfterSweep: terminalSweepRow !== undefined,
-      swept: restartReconcile.swept,
-    },
-  };
+  return { restarted, restartReconcile };
 }
 
 /**
