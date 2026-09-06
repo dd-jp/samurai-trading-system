@@ -558,7 +558,14 @@ describe('SMOKE_TEST_UNIVERSE', () => {
  *   aliased `SMOKE_TEST_UNIVERSE` import used as an equivalent fallback.
  * - The comment/string stripper below cannot tell a regex literal from
  *   division, so a regex literal containing a quote desyncs it for the
- *   rest of that file — see its own doc comment for how that's bounded.
+ *   rest of that file. The two known instances are scanned raw instead
+ *   (see `KNOWN_STRIPPER_DESYNCS`); a THIRD, new one is caught only when
+ *   it also unbalances braces — measured, NOT the common case: a regex
+ *   with an odd apostrophe count desyncs to EOF, and an appended
+ *   statement after it is brace-balanced by construction, so the usual
+ *   shape of this defect (add the regex, add a call site below it) will
+ *   not trip the balance check. Code review is the backstop for that
+ *   shape; no mechanism closes it here.
  * Closing either categorically needs real static analysis of this file,
  * which is out of proportion to a currently-latent hazard; code review is
  * the remaining backstop, the same as it is for any other refactor that
@@ -592,11 +599,14 @@ describe('universe resolution is a single site (#1167)', () => {
    * after it in that file, silently, which is far worse than the false
    * positive the stripper exists to fix. Found by running the brace-balance
    * check below over every file in `server/` on a known-clean tree; scanned
-   * as RAW text instead, a narrower but currently-exact substitute for
-   * these two files. If the brace-balance check below ever flags a THIRD
-   * file, investigate before adding it here — the check is a lower bound
-   * (a desync that happens to leave braces balanced would not show), so
-   * this list is not proven exhaustive, only the two instances found.
+   * as RAW text instead — no false negative on these two, at the cost of
+   * false-positive exposure to a comment or string quoting the fallback
+   * pattern in either of them. If the brace-balance check below ever flags
+   * a THIRD file, investigate before adding it here — that check is a
+   * lower bound, not a general detector: measured, it does NOT catch the
+   * likely shape of a new instance (a regex whose odd apostrophe count
+   * desyncs to EOF, followed by an ordinary, brace-neutral statement), so
+   * this list is not proven exhaustive, only the two instances found here.
    */
   const KNOWN_STRIPPER_DESYNCS = new Set([
     'shared/store/write-guard.ts',
@@ -621,7 +631,9 @@ describe('universe resolution is a single site (#1167)', () => {
    * sensitive), so a regex literal containing a quote character reads as a
    * string opener and desyncs everything after it. `KNOWN_STRIPPER_DESYNCS`
    * above routes the two files this is known to affect around the stripper
-   * entirely; the brace-balance check below is the net for a new one.
+   * entirely; the brace-balance check below only catches a new instance
+   * when it also unbalances braces, which the likely shape of this defect
+   * (see `KNOWN_STRIPPER_DESYNCS`'s doc comment) typically will not do.
    */
   function stripCommentsAndStrings(source: string): string {
     let out = '';
@@ -683,6 +695,18 @@ describe('universe resolution is a single site (#1167)', () => {
     const occurrences = (stripCommentsAndStrings(input).match(/\?\?\s*SMOKE_TEST_UNIVERSE/g) ?? [])
       .length;
     expect(occurrences).toBe(expected);
+  });
+
+  // A KNOWN_STRIPPER_DESYNCS entry that stops matching any file the walk
+  // actually finds — a rename or move landing in the same commit as its
+  // import updates, say — would silently rejoin the stripped set instead
+  // of failing to compile, and per the balance check's own doc comment
+  // that set's net does not reliably catch a new desync. So the set's
+  // membership is asserted directly, not left to be caught downstream.
+  it('every KNOWN_STRIPPER_DESYNCS entry resolves to a server source file the walk finds', () => {
+    const found = new Set(serverSourceFiles(SERVER_DIR).map((path) => relative(SERVER_DIR, path)));
+    const stale = [...KNOWN_STRIPPER_DESYNCS].filter((entry) => !found.has(entry));
+    expect(stale).toEqual([]);
   });
 
   // `{`/`}` must balance in valid, comment/string-stripped TypeScript; a
