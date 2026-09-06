@@ -32,6 +32,64 @@ describe('describeThrown', () => {
     circular.self = circular;
     expect(describeThrown(circular)).toBe(String(circular));
   });
+
+  // The declared return type is `: string`, but a hostile `Error` subclass or
+  // a `message` getter can hand back anything — nothing in the language
+  // enforces `message: string` on `Error`. Before this test's fix, the
+  // `error instanceof Error` branch returned that value verbatim, breaking
+  // the declared contract; a caller building a template literal from the
+  // result (`${lastReason} …`) would then hit whatever `toString`/
+  // `Symbol.toPrimitive` the non-string value carries, outside any guard
+  // this function's own callers install around IT.
+  it('coerces a non-string `message` through the same JSON.stringify/String ladder instead of returning it verbatim', () => {
+    const error = new Error('unused');
+    Object.defineProperty(error, 'message', {
+      get: () => ({ code: 'weird' }),
+    });
+
+    const result = describeThrown(error);
+
+    expect(typeof result).toBe('string');
+    expect(result).toBe('{"code":"weird"}');
+  });
+
+  // `JSON.stringify` does not throw for every non-string input — for
+  // `undefined`, a function, or a top-level `Symbol` it returns `undefined`
+  // itself (TypeScript's `lib.es5` types this as `: string`, which is
+  // unsound for exactly these inputs). The ladder's `catch` never fires for
+  // these, so a naive `return JSON.stringify(value)` would hand back
+  // `undefined` — the same declared-return-type violation the previous test
+  // closed for a plain-object `message`, reopened for this narrower set of
+  // values that `JSON.stringify` silently declines instead of rejecting.
+  it('falls back to String() when JSON.stringify itself returns undefined (a message getter returning undefined)', () => {
+    const error = new Error('unused');
+    Object.defineProperty(error, 'message', {
+      get: () => undefined,
+    });
+
+    const result = describeThrown(error);
+
+    expect(typeof result).toBe('string');
+    expect(result).toBe('undefined');
+  });
+
+  // The same gap on the plainer, non-`Error` trigger: a bare `throw
+  // undefined` / `Promise.reject()` with no argument reaches this function's
+  // non-`Error` branch with `value` already `undefined`, no getter involved.
+  // Before this fix, every one of this shared helper's 18 production call
+  // sites (portfolio-view.ts, decide.ts, orchestrator.ts x3,
+  // service-api/fault-guard.ts x2, tick-loop.ts x2, direct-bind.ts x7,
+  // supervisor/fault-guard.ts x2) handed that back as `undefined` in their
+  // own `: string`-typed slot — not a throw, so `logCaughtFailure`'s guard
+  // never engaged for it — rather than stringifying it. This is a real
+  // behavior change (undefined → the string `"undefined"`), not just the
+  // getter case above, but it is NOT repo-wide: `risk-manager/critic.ts`
+  // declares its own private `describeThrown` (same name, no
+  // `JSON.stringify` fallback) used at 5 call sites in that file (lines 308,
+  // 460, 462, 507, 618), and this fix does not reach it.
+  it('renders a bare undefined throw as the string "undefined", not the value undefined', () => {
+    expect(describeThrown(undefined)).toBe('undefined');
+  });
 });
 
 describe('safeLog', () => {
