@@ -125,6 +125,27 @@ describe('closed trades', () => {
     expect(within(row).queryByText(/559\.80/)).toBeNull();
   });
 
+  it('heads every column, naming the side rather than the entry price', () => {
+    const { container } = renderReview(
+      makeSnapshot({
+        closed_trades: [makeClosedTrade({ idempotency_key: 'k1', debate_id: 'd1' })],
+        debates: [makeDebate({ debate_id: 'd1' })],
+      }),
+    );
+    const labels = Array.from(container.querySelectorAll('.trade-header .label')).map(
+      (node) => node.textContent,
+    );
+    expect(labels).toEqual([
+      'Closed',
+      'Instrument',
+      'Side',
+      'Held',
+      'Reason',
+      'Why it was taken',
+      'P&L',
+    ]);
+  });
+
   it('opens a trade’s drawer with its debate, Risk row, P&L breakdown and fills', () => {
     renderReview(
       makeSnapshot({
