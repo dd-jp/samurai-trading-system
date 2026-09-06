@@ -201,6 +201,37 @@ describe('resolveTrace', () => {
     expect(detail.traceId).toBeNull();
   });
 
+  it('names a mismatch by its verdict alone, when the lane has already left the window (#1267)', () => {
+    const snapshot = makeSnapshot({
+      // No lane at all carries trace-1 — only a verdict attests it, under SPY.
+      pipeline: makeView([doneThrough('SPY', 'trace-2', 'execution', { outcome: 'go' })]),
+      verdicts: [makeVerdict({ trace_id: 'trace-1', instrument: 'SPY' })],
+    });
+    const detail = resolveTrace(snapshot, { instrument: 'AAPL', traceId: 'trace-1' });
+    expect(detail.absence.lane).toBe('wrong_instrument');
+    expect(detail.traceId).toBeNull();
+  });
+
+  it('names a mismatch by its risk-critic row alone, with no lane or verdict attesting it', () => {
+    const snapshot = makeSnapshot({
+      pipeline: makeView([]),
+      risk_critics: [makeRiskCritic({ trace_id: 'trace-1', instrument: 'SPY' })],
+    });
+    const detail = resolveTrace(snapshot, { instrument: 'AAPL', traceId: 'trace-1' });
+    expect(detail.absence.lane).toBe('wrong_instrument');
+    expect(detail.traceId).toBeNull();
+  });
+
+  it('keeps a same-instrument verdict as aged-out, not a wrong-instrument mismatch', () => {
+    const snapshot = makeSnapshot({
+      pipeline: makeView([]),
+      verdicts: [makeVerdict({ trace_id: 'trace-gone', instrument: 'SPY' })],
+    });
+    const detail = resolveTrace(snapshot, { instrument: 'SPY', traceId: 'trace-gone' });
+    expect(detail.absence.lane).toBe('aged_out');
+    expect(detail.traceId).toBe('trace-gone');
+  });
+
   it('says an idle lane is idle rather than absent, and joins it to no critic row', () => {
     const detail = resolveTrace(
       makeSnapshot({

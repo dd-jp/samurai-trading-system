@@ -149,7 +149,7 @@ const NO_LANE_LINE: Readonly<Record<NonNullable<TraceDetail['absence']['lane']>,
     'this trace has aged out of the 15-minute pipeline window — the verdict row is what remains',
   idle: 'idle — no trace in the last 15 minutes',
   wrong_instrument:
-    'this trace belongs to another instrument — reselect it from that instrument’s lane',
+    "this trace belongs to another instrument — reselect it from that instrument's lane",
 };
 
 function whereLine({ lane, absence }: TraceDetail): string {

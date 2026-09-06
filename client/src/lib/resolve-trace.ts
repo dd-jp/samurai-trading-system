@@ -33,12 +33,12 @@ import {
   closedTradeByKey,
   debateById,
   fillsFor,
-  laneBelongsToAnotherInstrument,
   laneFor,
   latestDebateFor,
   openPositionFor,
   riskCriticFor,
   riskCriticForDebate,
+  traceBelongsToAnotherInstrument,
   verdictFor,
 } from './trace.ts';
 
@@ -113,13 +113,20 @@ function cellsOf(lane: PipelineLane | undefined): readonly ResolvedCell[] | null
 export function resolveTrace(snapshot: WireSnapshot, selection: Selection): TraceDetail {
   const { instrument } = selection;
   const lane = laneFor(snapshot.pipeline, instrument, selection.traceId);
-  // A trace_id that fails the instrument-conjoined join above but resolves
-  // under some other instrument's lane is a mismatched Selection, not an
-  // aged-out trace (#1267) — the id must not leak into TraceDetail either.
+  // A trace_id that fails the instrument-conjoined join above but is
+  // attested — on a lane, a verdict, or a risk-critic row — under some other
+  // instrument is a mismatched Selection, not an aged-out trace (#1267): the
+  // id must not leak into TraceDetail either.
   const wrongInstrument =
     lane === undefined &&
     selection.traceId !== null &&
-    laneBelongsToAnotherInstrument(snapshot.pipeline, instrument, selection.traceId);
+    traceBelongsToAnotherInstrument(
+      snapshot.pipeline,
+      snapshot.verdicts,
+      snapshot.risk_critics ?? [],
+      instrument,
+      selection.traceId,
+    );
   const traceId = wrongInstrument ? null : (selection.traceId ?? lane?.trace_id ?? null);
   const position = openPositionFor(snapshot.positions, instrument);
   return {
