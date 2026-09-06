@@ -12,7 +12,7 @@
  */
 
 import { readdirSync, readFileSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { INDICATOR_UNAVAILABLE_COUNTER } from '../../pipeline/analysts/index.js';
 import { buildArmComparison } from '../../pipeline/control-arm/index.js';
@@ -535,8 +535,9 @@ describe('SMOKE_TEST_UNIVERSE', () => {
  * #1167 — orchestrator-spec.md names the hazard: the routing pool and the
  * scheduler each ran `config.universe ?? SMOKE_TEST_UNIVERSE` independently
  * (a third copy lived in index.ts's startup log line), and only stayed
- * consistent because nothing yet makes the two calls see different config.
- * `#751` is exactly the change that would let them diverge.
+ * consistent because nothing yet makes the two calls see different config —
+ * a config that answers differently on a later read (dynamic resolution via
+ * #751, or, cheaper, a stateful accessor) is exactly what would expose it.
  *
  * A value/identity assertion on today's wiring cannot, by itself, tell a
  * shared resolution apart from two separate calls that happen to read the
@@ -550,17 +551,18 @@ describe('SMOKE_TEST_UNIVERSE', () => {
  * the expression is to write twice, so the fallback is inlined into
  * `buildProductionComponents` rather than wrapped.
  *
- * Residual gap, stated rather than discovered: this is a text scan, not a
- * data-flow analysis, so it cannot see through a *newly written* helper that
- * wraps the same expression and is called from two places — it can only
- * catch the fallback expression itself being duplicated (directly, or via
- * a helper it already appears inside). Nor does it catch `||`, `??=`, a
- * destructuring default, a ternary, or an aliased `SMOKE_TEST_UNIVERSE`
- * import used as an equivalent fallback. Closing any of these categorically
- * needs real static analysis of this file, which is out of proportion to a
- * currently-latent hazard; code review is the remaining backstop for this
- * class of evasion, the same as it is for any other refactor that keeps a
- * test green while reintroducing the bug the test exists to catch.
+ * Residual gaps, stated rather than discovered:
+ * - Text scan, not data-flow analysis: it cannot see through a *newly
+ *   written* helper that wraps the expression and is called from two
+ *   places, nor `||`, `??=`, a destructuring default, a ternary, or an
+ *   aliased `SMOKE_TEST_UNIVERSE` import used as an equivalent fallback.
+ * - The comment/string stripper below cannot tell a regex literal from
+ *   division, so a regex literal containing a quote desyncs it for the
+ *   rest of that file — see its own doc comment for how that's bounded.
+ * Closing either categorically needs real static analysis of this file,
+ * which is out of proportion to a currently-latent hazard; code review is
+ * the remaining backstop, the same as it is for any other refactor that
+ * keeps a test green while reintroducing the bug the test exists to catch.
  */
 describe('universe resolution is a single site (#1167)', () => {
   // `server/`, not just this directory: `SMOKE_TEST_UNIVERSE` is re-exported
@@ -584,6 +586,24 @@ describe('universe resolution is a single site (#1167)', () => {
   }
 
   /**
+   * Files whose regex literals contain a `'`/`"`/backtick character, which
+   * `stripCommentsAndStrings` below (no real lexer to tell a regex literal
+   * from division) misreads as a string opener — corrupting everything
+   * after it in that file, silently, which is far worse than the false
+   * positive the stripper exists to fix. Found by running the brace-balance
+   * check below over every file in `server/` on a known-clean tree; scanned
+   * as RAW text instead, a narrower but currently-exact substitute for
+   * these two files. If the brace-balance check below ever flags a THIRD
+   * file, investigate before adding it here — the check is a lower bound
+   * (a desync that happens to leave braces balanced would not show), so
+   * this list is not proven exhaustive, only the two instances found.
+   */
+  const KNOWN_STRIPPER_DESYNCS = new Set([
+    'shared/store/write-guard.ts',
+    'tools/check-path-citations.ts',
+  ]);
+
+  /**
    * `typescript` is on v7's native-compiler API, which no longer exports a
    * scanner/tokenizer (`Object.keys(require('typescript'))` is just
    * `['version', 'versionMajorMinor']`) — there is no real parser available
@@ -595,6 +615,13 @@ describe('universe resolution is a single site (#1167)', () => {
    * Comment stripping only; it does not track template-literal `${}`
    * interpolation, so an occurrence written inside one would not be
    * counted — not a realistic shape for this specific fallback expression.
+   *
+   * Does NOT distinguish a regex literal from division — an unavoidable gap
+   * without real parsing (regex-vs-division is themselves context-
+   * sensitive), so a regex literal containing a quote character reads as a
+   * string opener and desyncs everything after it. `KNOWN_STRIPPER_DESYNCS`
+   * above routes the two files this is known to affect around the stripper
+   * entirely; the brace-balance check below is the net for a new one.
    */
   function stripCommentsAndStrings(source: string): string {
     let out = '';
@@ -658,10 +685,43 @@ describe('universe resolution is a single site (#1167)', () => {
     expect(occurrences).toBe(expected);
   });
 
+  // `{`/`}` must balance in syntactically valid TypeScript with comments
+  // and strings correctly removed — every block/object/interface that opens
+  // one closes it. A nonzero delta after stripping means the stripper
+  // desynced somewhere in that file (see its doc comment), which can hide a
+  // real duplicate downstream of the desync point. This is a lower bound,
+  // not a proof of correctness: a desync that happens to leave braces
+  // balanced (unlikely, but not impossible) would not be caught by it. It
+  // is skipped for the two files in `KNOWN_STRIPPER_DESYNCS`, which the
+  // main test below scans raw instead of stripped for exactly this reason.
+  function braceDelta(code: string): number {
+    return (code.match(/\{/g)?.length ?? 0) - (code.match(/\}/g)?.length ?? 0);
+  }
+
+  it('stripCommentsAndStrings leaves braces balanced on every server source file it strips', () => {
+    const desynced = serverSourceFiles(SERVER_DIR)
+      .filter((path) => !KNOWN_STRIPPER_DESYNCS.has(relative(SERVER_DIR, path)))
+      .map((path) => ({ path, code: readFileSync(path, 'utf8') }))
+      .filter(({ code }) => braceDelta(stripCommentsAndStrings(code)) !== 0)
+      .map(({ path }) => relative(SERVER_DIR, path));
+
+    expect(desynced).toEqual([]);
+  });
+
   it('the SMOKE_TEST_UNIVERSE fallback appears exactly once, in production.ts, across all server sources', () => {
-    const matches = serverSourceFiles(SERVER_DIR)
-      .map((path) => ({ path, code: stripCommentsAndStrings(readFileSync(path, 'utf8')) }))
-      .filter(({ code }) => /\?\?\s*SMOKE_TEST_UNIVERSE/.test(code));
+    // The two files above are known to desync the stripper (a regex literal
+    // containing a quote character), so they're scanned raw here instead —
+    // proven exact on them, unlike the stripped text. Every other file goes
+    // through the stripper, backstopped by the brace-balance test above.
+    const scanned = serverSourceFiles(SERVER_DIR).map((path) => {
+      const raw = readFileSync(path, 'utf8');
+      const code = KNOWN_STRIPPER_DESYNCS.has(relative(SERVER_DIR, path))
+        ? raw
+        : stripCommentsAndStrings(raw);
+      return { path, code };
+    });
+
+    const matches = scanned.filter(({ code }) => /\?\?\s*SMOKE_TEST_UNIVERSE/.test(code));
 
     // A duplicate landing in a second file names that file in the failure;
     // a duplicate landing inside production.ts alongside the real one does

@@ -892,10 +892,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   }
 
   // The one place ProductionConfig.universe's default is applied (#1167).
-  // Every other consumer — buildProductionOrchestrator's scheduler, and
-  // startFromEnvironment's startup log line — reads it off
-  // ProductionComponents.universe/ProductionOrchestrator.universe below
-  // instead of re-deriving it, which is what keeps them from disagreeing.
+  // Every other consumer reads it off the fields below instead of re-deriving it.
   const universe = config.universe ?? SMOKE_TEST_UNIVERSE;
 
   // Sixth of the same boot-time-refusal family (#989, follow-up to #987's
