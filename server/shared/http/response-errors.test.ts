@@ -1,4 +1,27 @@
-import { parseRetryAfterMs, readErrorBody, truncateForError } from './response-errors.js';
+import {
+  isServerErrorStatus,
+  parseRetryAfterMs,
+  readErrorBody,
+  truncateForError,
+} from './response-errors.js';
+
+describe('isServerErrorStatus', () => {
+  it('is true across the whole 500-599 range', () => {
+    expect(isServerErrorStatus(500)).toBe(true);
+    expect(isServerErrorStatus(503)).toBe(true);
+    expect(isServerErrorStatus(599)).toBe(true);
+  });
+
+  it('is false at the boundary above 599 (#1172) — not a valid HTTP status', () => {
+    expect(isServerErrorStatus(600)).toBe(false);
+  });
+
+  it('is false below 500 and for undefined', () => {
+    expect(isServerErrorStatus(499)).toBe(false);
+    expect(isServerErrorStatus(404)).toBe(false);
+    expect(isServerErrorStatus(undefined)).toBe(false);
+  });
+});
 
 describe('parseRetryAfterMs', () => {
   it('parses a numeric Retry-After header (seconds) into milliseconds', () => {

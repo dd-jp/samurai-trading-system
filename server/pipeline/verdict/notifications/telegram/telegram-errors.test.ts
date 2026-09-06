@@ -80,6 +80,13 @@ describe('isRetryableTelegramError', () => {
     expect(isRetryableTelegramError(new TelegramProviderError('p'))).toBe(false);
   });
 
+  it('does not retry a status above the valid HTTP range (#1172)', () => {
+    // 599 is the top of the valid 5xx range; 600 cannot be a real HTTP status —
+    // a hostile/broken upstream, not a transient server error to retry against.
+    expect(isRetryableTelegramError(new TelegramProviderError('p', 599))).toBe(true);
+    expect(isRetryableTelegramError(new TelegramProviderError('p', 600))).toBe(false);
+  });
+
   it('never retries an unrelated error', () => {
     expect(isRetryableTelegramError(new Error('boom'))).toBe(false);
     expect(isRetryableTelegramError(undefined)).toBe(false);

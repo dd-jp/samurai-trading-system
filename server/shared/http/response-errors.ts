@@ -167,6 +167,20 @@ export function classifyStatus(status: number): HttpErrorKind {
 }
 
 /**
+ * Whether `status` is a genuine 5xx server error worth retrying — bounded at
+ * 599, HTTP's own ceiling (RFC 9110 §15: status codes are 3-digit, first
+ * digit 1-5). `Response.status` on a real network response is not validated
+ * against that range by `fetch` (VERIFIED: a raw socket can write `HTTP/1.1
+ * 612 ...` and Node's fetch hands back `status: 612` unchanged) — so a value
+ * above 599 reaching this predicate means a broken or hostile upstream, not
+ * a transient server fault, and retrying it only re-triggers a failure mode
+ * that will never resolve.
+ */
+export function isServerErrorStatus(status: number | undefined): boolean {
+  return status !== undefined && status >= 500 && status <= 599;
+}
+
+/**
  * Whether a thrown value is `fetchWithTimeout`'s deadline abort.
  *
  * That helper aborts with `new DOMException(…, 'TimeoutError')`; a

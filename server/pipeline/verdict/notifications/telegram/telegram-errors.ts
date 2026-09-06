@@ -16,7 +16,12 @@
  * classification reads both and prefers the body's value.
  */
 
-import { classifyStatus, parseRetryAfterMs, truncateForError } from '../../../../shared/index.js';
+import {
+  classifyStatus,
+  isServerErrorStatus,
+  parseRetryAfterMs,
+  truncateForError,
+} from '../../../../shared/index.js';
 
 export class TelegramTimeoutError extends Error {
   constructor(message: string) {
@@ -89,7 +94,7 @@ export function isRetryableTelegramError(error: unknown): boolean {
     return true;
   }
   if (error instanceof TelegramProviderError) {
-    return error.status !== undefined && error.status >= 500;
+    return isServerErrorStatus(error.status);
   }
   return false;
 }
