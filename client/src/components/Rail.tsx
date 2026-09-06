@@ -181,20 +181,88 @@ function AlertDeliveryBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
   );
 }
 
-/** The enforced ceiling, or `null` when nothing bounds this run's spend (#1140). */
+/**
+ * The enforced ceiling to draw a meter against, or `null` when a meter would
+ * be unjustified — uncapped, never armed, or an armed `$0` (#1140, #1196).
+ *
+ * `$0` is deliberately NOT collapsed here: it is the most restrictive cap
+ * there is, and treating it the same as "no cap configured" would invert it
+ * into the least restrictive reading. `CapMeter` itself already declines to
+ * divide by a `cap <= 0`, so passing `0` through still draws no meter — it
+ * just keeps the real number in the head (`$spent / $0.00`) instead of an
+ * em dash, and `capReasonOf` below names $0 specifically in the empty state.
+ */
 function capOf(snapshot: WireSnapshot | null): number | null {
   const cap = snapshot?.llm_spend?.cap_usd;
-  return typeof cap === 'number' && Number.isFinite(cap) && cap > 0 ? cap : null;
+  return typeof cap === 'number' && Number.isFinite(cap) ? cap : null;
+}
+
+/**
+ * The wire's ONLY discriminator between "armed uncapped" and "never armed" —
+ * both carry `cap_usd: null`, and only the first carries a non-null
+ * `cap_armed_at` (#1196). `undefined` (an old server, or a malformed summary
+ * already caught upstream by `isSpendSummary`) is treated the same as `null`:
+ * this client asserts "armed" only when the wire says so affirmatively.
+ */
+function capArmedAtOf(snapshot: WireSnapshot | null): string | null {
+  return snapshot?.llm_spend?.cap_armed_at ?? null;
+}
+
+type CapReason = 'unknown' | 'never-armed' | 'uncapped' | 'zero' | 'capped';
+
+/**
+ * Names why the meter is or is not drawable, in the priority order #1140's
+ * review fixed: missing spend outranks everything else, because with no
+ * snapshot this client knows nothing about the operator's budget at all and
+ * must not claim otherwise — not "unconfigured", not "uncapped".
+ */
+function capReasonOf(
+  spendKnown: boolean,
+  capUsd: number | null,
+  armedAt: string | null,
+): CapReason {
+  if (!spendKnown) return 'unknown';
+  if (armedAt === null) return 'never-armed';
+  if (capUsd === null) return 'uncapped';
+  // `<= 0`, not `=== 0`: `CapMeter` declines to draw for any non-positive
+  // cap, and `'capped'` must imply a drawn meter — a negative `cap_usd` (a
+  // malformed wire value no store in this repo emits, but the type is a bare
+  // `number`) falling through to `'capped'` would hand `CapMeter` a `''`
+  // empty state for a cap it still refuses to draw against (advisor review,
+  // #1196).
+  if (capUsd <= 0) return 'zero';
+  return 'capped';
+}
+
+const CAP_EMPTY_STATE: Readonly<Record<Exclude<CapReason, 'capped' | 'zero'>, string>> = {
+  unknown: 'no spend figure on this snapshot — meter not drawable',
+  // Distinct from `uncapped`: nothing may be enforcing anything here, which
+  // is the opposite of an operator's deliberate choice (#1196).
+  'never-armed': 'LLM spend cap was never armed — meter not drawable',
+  uncapped: 'LLM spend is deliberately uncapped — meter not drawable',
+};
+
+// Never "no LLM budget configured": $0 (or a malformed negative) is a
+// configured, maximally restrictive budget, not an absent one — and the
+// actual figure is named rather than a hardcoded "$0" (#1196).
+function zeroCapEmptyState(capUsd: number): string {
+  return `LLM spend cap is ${formatUsd(capUsd)} — meter not drawable`;
 }
 
 function SpendBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
   const allTime = snapshot?.llm_spend?.all_time;
   const spent = allTime?.cost_usd;
   const cap = capOf(snapshot);
+  const armedAt = capArmedAtOf(snapshot);
   const spendKnown = spent !== undefined && Number.isFinite(spent);
+  const reason = capReasonOf(spendKnown, cap, armedAt);
   const unpriced = allTime?.unpriced_calls ?? 0;
   const unattributed = allTime?.per_debate.unattributed_calls ?? 0;
   const windows = snapshot?.llm_spend;
+  // A $0 cap with any recorded spend is already breached, but `CapMeter`
+  // never divides by a cap `<= 0` (0/0 and x/0 are both unjustifiable), so
+  // this is stated directly rather than left for a fabricated `over` flag.
+  const zeroCapBreached = reason === 'zero' && spendKnown && (spent ?? 0) > 0;
   return (
     <CapMeter
       dataField="llm-cap"
@@ -203,12 +271,12 @@ function SpendBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
       cap={cap}
       format={formatUsd}
       tone="cyan"
-      // Missing spend is reported first: with no snapshot this client knows
-      // nothing about the operator's budget and must not assert one.
       emptyState={
-        spendKnown
-          ? 'no LLM budget configured — meter not drawable'
-          : 'no spend figure on this snapshot — meter not drawable'
+        reason === 'capped'
+          ? '' // 'capped' means capUsd > 0, which CapMeter always draws
+          : reason === 'zero'
+            ? `${zeroCapEmptyState(cap ?? 0)}${zeroCapBreached ? ' · already over' : ''}`
+            : CAP_EMPTY_STATE[reason]
       }
       trackLabel={(fraction, _value, cap) =>
         `LLM budget used: ${formatPercent(fraction)} of the ${formatUsd(cap)} cap`
@@ -222,9 +290,12 @@ function SpendBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
             </span>
           )}
           <span className="rail-note">
-            {over ? 'over cap · ' : ''}
+            {over || zeroCapBreached ? 'over cap · ' : ''}
             {unpriced > 0 ? `floor — ${unpriced} unpriced calls` : 'all time, metered locally'}
             {unattributed > 0 ? ` · ${unattributed} calls carry no debate id` : ''}
+            {(reason === 'uncapped' || reason === 'zero') && armedAt !== null
+              ? ` · armed ${formatClockUtc(armedAt)}`
+              : ''}
           </span>
         </>
       )}

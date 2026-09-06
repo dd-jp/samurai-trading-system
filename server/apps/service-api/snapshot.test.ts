@@ -161,6 +161,7 @@ function fakeStore(overrides: Partial<DashboardQueryStore> = {}): DashboardQuery
       last_7d: { ...EMPTY_SPEND_WINDOW },
       all_time: { ...EMPTY_SPEND_WINDOW },
       cap_usd: 50,
+      cap_armed_at: '2026-08-05T14:00:00.000Z',
     }),
     getPipelineActivity: () => ({ universe: [], events: [], live: [] }),
     getAlertDeliveryFailureCount: () => 0,
@@ -475,6 +476,24 @@ describe('buildSnapshot', () => {
     expect(
       buildSnapshot(fakeStore({ getLlmSpend: () => ({ ...spend, cap_usd: null }) }), AS_OF, 'paper')
         .llm_spend.cap_usd,
+    ).toBeNull();
+  });
+
+  // #1196: `cap_armed_at` is the only thing that tells "armed uncapped" apart
+  // from "never armed" once `cap_usd` is null, so it has to ride the wire
+  // untouched too, not just `cap_usd`.
+  it("carries the store's cap_armed_at onto the wire, null included", () => {
+    const spend = fakeStore().getLlmSpend(AS_OF);
+
+    expect(buildSnapshot(fakeStore(), AS_OF, 'paper').llm_spend.cap_armed_at).toBe(
+      spend.cap_armed_at,
+    );
+    expect(
+      buildSnapshot(
+        fakeStore({ getLlmSpend: () => ({ ...spend, cap_usd: null, cap_armed_at: null }) }),
+        AS_OF,
+        'paper',
+      ).llm_spend.cap_armed_at,
     ).toBeNull();
   });
 

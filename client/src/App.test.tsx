@@ -153,14 +153,18 @@ describe('rail', () => {
   });
 
   // A snapshotless client knows nothing about the operator's budget: claiming
-  // none is configured is as false as drawing a meter against an invented one.
-  it('does not claim the budget is unconfigured before the first poll lands', () => {
+  // it was never armed, or that it's deliberately uncapped, is as false as
+  // drawing a meter against an invented one — "unknown" must outrank both
+  // (#1140's priority order, sharpened by #1196's two new claims it could
+  // make from zero information).
+  it('does not claim the budget is armed, unarmed, or uncapped before the first poll lands', () => {
     renderApp([makeSnapshot()]);
     const rail = screen.getByRole('complementary', { name: 'Rail' });
     expect(
       within(rail).getByText('no spend figure on this snapshot — meter not drawable'),
     ).toBeTruthy();
-    expect(within(rail).queryByText(/no LLM budget configured/)).toBeNull();
+    expect(within(rail).queryByText(/never armed/)).toBeNull();
+    expect(within(rail).queryByText(/deliberately uncapped/)).toBeNull();
   });
 
   // #1140: the denominator is the enforcer's, so a raised budget must move the
@@ -188,17 +192,60 @@ describe('rail', () => {
     expect(await within(rail).findByText(/over cap/)).toBeTruthy();
   });
 
-  // An uncapped run has no denominator, and inventing one would report a
-  // breach of a budget nobody is enforcing.
-  it('names the reason instead of drawing a meter when no budget is configured', async () => {
+  // #1196: an armed-uncapped run (the wire's `cap_usd: null` PLUS a non-null
+  // `cap_armed_at`) is a deliberate operator choice, not an absent one — the
+  // rail must say so, never "no LLM budget configured".
+  it('names the reason instead of drawing a meter when the run is armed uncapped', async () => {
     renderApp([makeSnapshot({ llm_spend: makeSpend({ cap_usd: null }) })]);
     const rail = screen.getByRole('complementary', { name: 'Rail' });
 
     expect(
-      await within(rail).findByText('no LLM budget configured — meter not drawable'),
+      await within(rail).findByText('LLM spend is deliberately uncapped — meter not drawable'),
     ).toBeTruthy();
+    expect(within(rail).queryByText(/no LLM budget configured/)).toBeNull();
     expect(within(rail).queryByRole('img', { name: /LLM budget used/ })).toBeNull();
     expect(within(rail).queryByText(/over cap/)).toBeNull();
+  });
+
+  // #1196's core acceptance criterion: "never armed" (no row was ever
+  // written) must read differently from "armed uncapped" (a deliberate
+  // operator choice) — collapsing both into the same sentence is the defect.
+  it('names "never armed" distinctly from "armed uncapped", and never claims a budget is merely unconfigured', async () => {
+    renderApp([makeSnapshot({ llm_spend: makeSpend({ cap_usd: null, cap_armed_at: null }) })]);
+    const rail = screen.getByRole('complementary', { name: 'Rail' });
+
+    expect(
+      await within(rail).findByText('LLM spend cap was never armed — meter not drawable'),
+    ).toBeTruthy();
+    expect(within(rail).queryByText(/deliberately uncapped/)).toBeNull();
+    expect(within(rail).queryByText(/no LLM budget configured/)).toBeNull();
+    expect(within(rail).queryByRole('img', { name: /LLM budget used/ })).toBeNull();
+    expect(within(rail).queryByText(/over cap/)).toBeNull();
+  });
+
+  // The additional defect found in review: a $0 cap is the MOST restrictive
+  // budget possible and must not render as "no budget configured" (the least
+  // restrictive reading) — nor as a silently-healthy meter.
+  it('states an armed $0 cap explicitly, never as an unconfigured budget', async () => {
+    const spend = makeSpend({ cap_usd: 0 });
+    spend.all_time = { ...spend.all_time, cost_usd: 0 };
+    renderApp([makeSnapshot({ llm_spend: spend })]);
+    const rail = screen.getByRole('complementary', { name: 'Rail' });
+
+    expect(await within(rail).findByText(/LLM spend cap is \$0/)).toBeTruthy();
+    expect(within(rail).queryByText(/no LLM budget configured/)).toBeNull();
+    expect(within(rail).queryByText(/deliberately uncapped/)).toBeNull();
+    expect(within(rail).queryByRole('img', { name: /LLM budget used/ })).toBeNull();
+  });
+
+  it('flags an armed $0 cap as already over when any spend at all is recorded', async () => {
+    const spend = makeSpend({ cap_usd: 0 });
+    spend.all_time = { ...spend.all_time, cost_usd: 0.01 };
+    renderApp([makeSnapshot({ llm_spend: spend })]);
+    const rail = screen.getByRole('complementary', { name: 'Rail' });
+
+    expect(await within(rail).findByText(/LLM spend cap is \$0.*already over/)).toBeTruthy();
+    expect(within(rail).getByText(/^over cap/)).toBeTruthy();
   });
 
   it('says the Alpaca equity is unavailable, with the probe detail, when the probe is not ok', async () => {

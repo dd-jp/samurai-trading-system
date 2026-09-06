@@ -56,6 +56,9 @@ export function makeSpend(overrides: Partial<LlmSpendSummary> = {}): LlmSpendSum
     last_7d: spendWindow({ cost_usd: 11.2, calls: 402 }),
     all_time: spendWindow({ cost_usd: 23.71, calls: 866 }),
     cap_usd: 50,
+    // Armed by default: most tests want a normally-booted run. Override to
+    // `null` to exercise the never-armed case (#1196).
+    cap_armed_at: '2026-08-05T14:00:00.000Z',
     ...overrides,
   };
 }
