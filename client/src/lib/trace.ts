@@ -14,6 +14,7 @@ import type {
   VerdictRow,
 } from '@contracts';
 
+/** Matches `trace_id` AND `instrument`; a `trace_id`-only match renders another instrument's lane, cells, outcome and timeline under this one's header (#1205). */
 export function laneFor(
   view: PipelineView,
   instrument: string,
@@ -21,7 +22,7 @@ export function laneFor(
 ): PipelineLane | undefined {
   return traceId === null
     ? view.lanes.find((lane) => lane.instrument === instrument)
-    : view.lanes.find((lane) => lane.trace_id === traceId);
+    : view.lanes.find((lane) => lane.trace_id === traceId && lane.instrument === instrument);
 }
 
 export function verdictFor(

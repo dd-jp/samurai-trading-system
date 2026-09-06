@@ -180,6 +180,22 @@ describe('resolveTrace', () => {
     ).toBeUndefined();
   });
 
+  it('never resolves another instrument’s lane for a mismatched selection (#1205)', () => {
+    const snapshot = makeSnapshot({
+      pipeline: makeView([
+        doneThrough('SPY', 'trace-1', 'execution', { outcome: 'go' }),
+        doneThrough('QQQ', 'trace-1-qqq', 'execution', { outcome: 'go' }),
+      ]),
+    });
+    // A Selection naming AAPL but pinning SPY's trace_id must not resolve
+    // SPY's lane under an AAPL header — the mismatch must surface as
+    // "no trace", not as someone else's trace.
+    const detail = resolveTrace(snapshot, { instrument: 'AAPL', traceId: 'trace-1' });
+    expect(detail.lane).toBeUndefined();
+    expect(detail.cells).toBeNull();
+    expect(detail.absence.lane).toBe('aged_out');
+  });
+
   it('says an idle lane is idle rather than absent, and joins it to no critic row', () => {
     const detail = resolveTrace(
       makeSnapshot({
