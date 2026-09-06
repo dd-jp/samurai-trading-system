@@ -86,7 +86,7 @@ export interface TraceDetail {
   fills: readonly FillRow[];
   settled: SettledOutcome | null;
   inFlight: boolean;
-  /** `wrong_instrument`: the selection's trace id names a lane live under a DIFFERENT instrument (#1267) — recoverable by reselecting, unlike `aged_out`. */
+  /** `wrong_instrument`: the selection's trace id is attested — on a lane, a verdict, a risk-critic row, or `tick_status` — under a DIFFERENT instrument (#1267), even once that attestation has itself left the lane window. Distinct from `aged_out`: this trace was never this instrument's to begin with, not merely no-longer-live. */
   absence: { lane: 'aged_out' | 'idle' | 'none' | 'wrong_instrument' | null };
 }
 
@@ -114,9 +114,9 @@ export function resolveTrace(snapshot: WireSnapshot, selection: Selection): Trac
   const { instrument } = selection;
   const lane = laneFor(snapshot.pipeline, instrument, selection.traceId);
   // A trace_id that fails the instrument-conjoined join above but is
-  // attested — on a lane, a verdict, or a risk-critic row — under some other
-  // instrument is a mismatched Selection, not an aged-out trace (#1267): the
-  // id must not leak into TraceDetail either.
+  // attested — on a lane, a verdict, a risk-critic row, or the in-flight
+  // tick_status — under some other instrument is a mismatched Selection, not
+  // an aged-out trace (#1267): the id must not leak into TraceDetail either.
   const wrongInstrument =
     lane === undefined &&
     selection.traceId !== null &&
@@ -124,6 +124,7 @@ export function resolveTrace(snapshot: WireSnapshot, selection: Selection): Trac
       snapshot.pipeline,
       snapshot.verdicts,
       snapshot.risk_critics ?? [],
+      snapshot.tick_status,
       instrument,
       selection.traceId,
     );
