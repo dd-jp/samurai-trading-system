@@ -367,16 +367,18 @@ export class AnalystOrchestrator {
             try {
               lastReason = describeThrown(error);
             } catch {
-              // `describeThrown` alone cannot close this (its own doc
-              // comment says so): a thrown value's `message` getter, or its
-              // `JSON.stringify` AND `String()` fallback, can each still
-              // throw while this line is being built (#1199) — the exact
-              // hole `logCaughtFailure` (safe-log.ts) guards with the same
-              // try/catch/placeholder shape. Left unguarded, that throw would
-              // escape this catch — which exists to HANDLE the persona's
-              // failure — and reject the `Promise.all` below, turning a
-              // handled analyst failure into a failed tick before any of
-              // this loop's own logging runs.
+              // `describeThrown` (safe-log.ts) now coerces a non-string
+              // `message` through its own JSON.stringify/String ladder
+              // rather than returning it verbatim, but that ladder can still
+              // throw for a value hostile enough to defeat BOTH steps — its
+              // own doc comment says so — and a plain `message` getter that
+              // throws outright never reaches the ladder at all. Either one
+              // throwing here would escape this catch — which exists to
+              // HANDLE the persona's failure — and reject the `Promise.all`
+              // below, turning a handled analyst failure into a failed tick
+              // before any of this loop's own logging runs. This is the same
+              // try/catch/placeholder shape `logCaughtFailure` (safe-log.ts)
+              // uses for that residual case.
               lastReason = '[unrenderable error]';
             }
             lastKind = error instanceof AnalystTimeoutError ? 'timeout' : 'error';

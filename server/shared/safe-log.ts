@@ -31,15 +31,34 @@ import type { LogEntry, LogEntryTemplate, Logger } from './types.js';
  * failure. `String(error)` itself can still throw for a hostile value with a
  * throwing `toString`/`Symbol.toPrimitive` — `logCaughtFailure` below is what
  * guards THAT, since this function alone cannot.
+ *
+ * `error.message` is read into `value` rather than returned directly: a
+ * spec-conforming `Error` always has a string `message`, but nothing stops a
+ * hostile subclass or a `message` getter from returning something else, and
+ * this function's declared `: string` return type must hold for whatever
+ * comes back. Folding that case into the same `value`/ladder the non-`Error`
+ * branch already uses — rather than a second copy — is what makes a
+ * non-string `message` degrade through `JSON.stringify`/`String` instead of
+ * silently violating the return type.
+ *
+ * The ladder checks `typeof rendered === 'string'` rather than trusting
+ * `JSON.stringify`'s declared `: string` return type: for `undefined`, a
+ * function, or a top-level `Symbol`, `JSON.stringify` does not throw — it
+ * returns `undefined` itself (`lib.es5`'s signature is unsound for exactly
+ * these inputs). A `message` getter returning any of those would otherwise
+ * hand this function's own caller `undefined` in a `: string` slot without
+ * ever reaching the `catch`.
  */
 export function describeThrown(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === 'string') return error;
+  const value = error instanceof Error ? error.message : error;
+  if (typeof value === 'string') return value;
   try {
-    return JSON.stringify(error);
+    const rendered = JSON.stringify(value);
+    if (typeof rendered === 'string') return rendered;
   } catch {
-    return String(error);
+    // Falls through to String() below.
   }
+  return String(value);
 }
 
 /**

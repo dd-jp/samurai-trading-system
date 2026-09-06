@@ -1105,9 +1105,15 @@ describe('AnalystOrchestrator', () => {
       expect(result.failures[0]?.reason).toContain('[unrenderable error]');
       // The direct path now reaches `renderErrorDetail`'s own per-field guard
       // too (renderField, line ~160) — same hostile `message` getter, guarded
-      // independently for the debug payload it builds.
+      // independently for the debug payload it builds. Qualified by
+      // `attempt === 1`, matching the late-settlement tests' `attempt === 2`
+      // qualifier above, rather than taking whichever debug line comes first.
       expect(
-        logger.entries.find((entry) => entry.level === 'debug')?.payload,
+        logger.entries.find(
+          (entry) =>
+            entry.level === 'debug' &&
+            (entry.payload as { attempt?: number } | undefined)?.attempt === 1,
+        )?.payload,
       ).toMatchObject({ name: 'Error', message: '[unrenderable]' });
     });
 
@@ -1147,6 +1153,86 @@ describe('AnalystOrchestrator', () => {
 
       expect(result.skipped).toBe(true);
       expect(result.failures[0]?.reason).toContain('[unrenderable error]');
+    });
+
+    it('an Error whose message getter returns a value describeThrown cannot render either still resolves with the placeholder', async () => {
+      const { clock, marketData, marketIntelligence } = buildDeps('crypto');
+      const logger = recordingLogger();
+      // `describeThrown` (safe-log.ts) now runs a non-string `message`
+      // through its own JSON.stringify/String ladder rather than returning
+      // it verbatim, but that ladder is not total: this value is circular
+      // (defeats `JSON.stringify`) AND has a throwing `Symbol.toPrimitive`
+      // (defeats the `String()` fallback too) — the same double-failure
+      // shape as the hostile-thrown-value test above, here as the VALUE of
+      // `message` on a genuine `Error` rather than as the thrown value
+      // itself. Before `describeThrown` was hardened to coerce a non-string
+      // `message`, this escaped even further downstream — building
+      // `AnalystFailure.reason`'s template literal outside any guard.
+      const hostileMessage: Record<string, unknown> = {
+        [Symbol.toPrimitive]() {
+          throw new Error('render boom');
+        },
+      };
+      hostileMessage.self = hostileMessage;
+      const failing: Analyst = {
+        analyst_type: 'technical',
+        role: 'mandatory',
+        applies_to: () => true,
+        run: async () => {
+          const error = new Error('unused');
+          Object.defineProperty(error, 'message', { get: () => hostileMessage });
+          throw error;
+        },
+      };
+      const orchestrator = new AnalystOrchestrator(
+        { market_data: marketData, market_intelligence: marketIntelligence, logger },
+        [failing],
+      );
+
+      const result = await orchestrator.runAnalysts(
+        'trace-hostile-message-value',
+        { asset: INSTRUMENT, asset_class: 'crypto' },
+        clock,
+        ASOF,
+      );
+
+      expect(result.skipped).toBe(true);
+      expect(result.failures[0]?.reason).toContain('[unrenderable error]');
+    });
+
+    // Pins a real, deliberate behavior change from routing `lastReason`
+    // through `describeThrown` (#1199 review): a non-`Error` throw used to
+    // record `String(error)` (`"[object Object]"` for a plain object) and
+    // now records `describeThrown`'s `JSON.stringify` result instead — an
+    // improvement (the actual fields survive), not a guard side effect.
+    // Nothing parses `AnalystFailure.reason` programmatically downstream
+    // (`analysts-adapter.ts` only logs/masks it), so this is safe to pin as
+    // the new, intended text rather than an incidental one.
+    it('records JSON.stringify of a plain non-Error throw, not "[object Object]"', async () => {
+      const { clock, marketData, marketIntelligence } = buildDeps('crypto');
+      const logger = recordingLogger();
+      const failing: Analyst = {
+        analyst_type: 'technical',
+        role: 'mandatory',
+        applies_to: () => true,
+        run: async () => {
+          throw { code: 'ECONNRESET' };
+        },
+      };
+      const orchestrator = new AnalystOrchestrator(
+        { market_data: marketData, market_intelligence: marketIntelligence, logger },
+        [failing],
+      );
+
+      const result = await orchestrator.runAnalysts(
+        'trace-plain-object-reason',
+        { asset: INSTRUMENT, asset_class: 'crypto' },
+        clock,
+        ASOF,
+      );
+
+      expect(result.failures[0]?.reason).toContain('{"code":"ECONNRESET"}');
+      expect(result.failures[0]?.reason).not.toContain('[object Object]');
     });
 
     it('omitting the logger dependency entirely does not crash — the safe default is silence', async () => {
