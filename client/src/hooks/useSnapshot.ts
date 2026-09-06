@@ -100,7 +100,11 @@ export interface SnapshotFeed {
   snapshot: WireSnapshot | null;
   /** Two poll intervals have passed with no successful poll. */
   stale: boolean;
-  /** `generated_at` of the last successful poll — what the stale label reports. */
+  /**
+   * Client wall-clock time of the last successful poll — distinct from
+   * `snapshot.generated_at`, which the server stamps. The rail's poll clock
+   * reads this one; its snapshot clock reads `generated_at`/`as_of` (#1166).
+   */
   lastSuccessAt: string | null;
   /** Why the last poll failed, for the rail to name. `null` when the last poll worked. */
   error: string | null;
@@ -216,12 +220,14 @@ export function toWireSnapshot(body: unknown): WireSnapshot | null {
 interface FeedState {
   snapshot: WireSnapshot | null;
   stale: boolean;
+  lastSuccessAt: string | null;
   error: string | null;
 }
 
 const INITIAL: FeedState = {
   snapshot: null,
   stale: false,
+  lastSuccessAt: null,
   error: null,
 };
 
@@ -314,6 +320,7 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
         setState(() => ({
           snapshot,
           stale: false,
+          lastSuccessAt: new Date(lastSuccessMs).toISOString(),
           error: null,
         }));
       } catch (cause) {
@@ -352,7 +359,7 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
     () => ({
       snapshot: state.snapshot,
       stale: state.stale,
-      lastSuccessAt: state.snapshot?.generated_at ?? null,
+      lastSuccessAt: state.lastSuccessAt,
       error: state.error,
     }),
     [state],

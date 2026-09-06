@@ -47,7 +47,7 @@ const HEALTH: Readonly<
   },
   alive: {
     word: 'ALIVE',
-    note: ({ snapshot }) => `polled ${formatClockUtc(snapshot?.generated_at ?? '')}`,
+    note: ({ lastSuccessAt }) => `polled ${formatClockUtc(lastSuccessAt ?? '')}`,
   },
 };
 
@@ -311,6 +311,9 @@ export function Rail(props: RailProps) {
       </div>
       <div className="rail-foot mono muted" data-field="snapshot-clock">
         <span>snapshot {snapshot === null ? UNKNOWN : formatClockUtc(snapshot.as_of)}</span>
+        {/* Not a duplicate of HealthBlock's visible "polled" note: this one
+            renders in every health state, so it still reaches a screen reader
+            once the visible note has switched to STALE's "last update" line. */}
         {lastSuccessAt !== null && (
           <span className="visually-hidden">
             Last successful poll {formatClockUtc(lastSuccessAt)}
