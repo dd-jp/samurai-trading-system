@@ -182,8 +182,15 @@ function AlertDeliveryBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
 }
 
 /**
- * The enforced ceiling to draw a meter against, or `null` when a meter would
- * be unjustified — uncapped, never armed, or an armed `$0` (#1140, #1196).
+ * The enforced ceiling to draw a meter against — `null` when a meter would
+ * be unjustified but the wire is trustworthy (uncapped, never armed, or an
+ * armed `$0`); `undefined` when `cap_usd` itself could not be trusted at all
+ * (review round 3's MAJOR). The two are NOT the same claim: `null` says the
+ * field answered and the answer was "no cap"; `undefined` says this client
+ * does not know what the cap is, which must not be allowed to fall through
+ * to `capReasonOf`'s `null` branch and get read as an answer — that
+ * collapse is exactly what let a malformed `cap_usd` render as `'uncapped'`
+ * (#1196, `normalizeCapUsd`'s doc comment in `useSnapshot.ts`).
  *
  * `$0` is deliberately NOT collapsed here: it is the most restrictive cap
  * there is, and treating it the same as "no cap configured" would invert it
@@ -192,9 +199,10 @@ function AlertDeliveryBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
  * just keeps the real number in the head (`$spent / $0.00`) instead of an
  * em dash, and `capReasonOf` below names $0 specifically in the empty state.
  */
-function capOf(snapshot: WireSnapshot | null): number | null {
+function capOf(snapshot: WireSnapshot | null): number | null | undefined {
   const cap = snapshot?.llm_spend?.cap_usd;
-  return typeof cap === 'number' && Number.isFinite(cap) ? cap : null;
+  if (cap === null) return null;
+  return typeof cap === 'number' && Number.isFinite(cap) ? cap : undefined;
 }
 
 /**
@@ -220,7 +228,14 @@ function capArmedAtOf(snapshot: WireSnapshot | null): string | null | undefined 
   return snapshot?.llm_spend?.cap_armed_at;
 }
 
-type CapReason = 'unknown' | 'never-armed' | 'uncapped' | 'ambiguous' | 'zero' | 'capped';
+type CapReason =
+  | 'unknown'
+  | 'unreadable'
+  | 'never-armed'
+  | 'uncapped'
+  | 'ambiguous'
+  | 'zero'
+  | 'capped';
 
 /**
  * Names why the meter is or is not drawable, in priority order:
@@ -228,7 +243,14 @@ type CapReason = 'unknown' | 'never-armed' | 'uncapped' | 'ambiguous' | 'zero' |
  * 1. Missing spend outranks everything else (#1140's review) — with no
  *    snapshot this client knows nothing about the operator's budget at all
  *    and must not claim otherwise, not "unconfigured", not "uncapped".
- * 2. A present, finite `cap_usd` outranks `cap_armed_at` — a numeric cap IS
+ * 2. `capUsd === undefined` — `cap_usd` itself could not be trusted (wrong
+ *    type, non-finite, or a corrupt stored value `SqliteLlmSpendCapStore`
+ *    nullified) — outranks `armedAt` entirely (review round 3's MAJOR).
+ *    Consulting `armedAt` here would still answer `'uncapped'` for a
+ *    payload this client just admitted it cannot read, which is the same
+ *    "guess dressed as an answer" mistake `'ambiguous'` exists to refuse
+ *    one field over.
+ * 3. A present, finite `cap_usd` outranks `cap_armed_at` — a numeric cap IS
  *    the enforced ceiling regardless of whether this wire happens to carry
  *    the arming instant too. Gating on `armedAt` before `capUsd` would throw
  *    away a live denominator on any payload missing `cap_armed_at` (a mixed
@@ -237,20 +259,22 @@ type CapReason = 'unknown' | 'never-armed' | 'uncapped' | 'ambiguous' | 'zero' |
  *    regression against `origin/main`, which drew a correct meter for that
  *    same payload. `cap_armed_at` is `#1196`'s discriminator for a NULL cap
  *    only, never a gate on a numeric one.
- * 3. Only once `capUsd` is `null` does `armedAt` decide the reason, and it
- *    has THREE answers, not two: a real string is `uncapped`; an explicit
- *    `null` is `never-armed`; and `undefined` (the field is simply absent —
- *    a pre-#1196 server) is `ambiguous` — this client was not told the
+ * 4. Only once `capUsd` is `null` (the wire EXPLICITLY said so, not merely
+ *    unreadable) does `armedAt` decide the reason, and it has THREE
+ *    answers, not two: a real string is `uncapped`; an explicit `null` is
+ *    `never-armed`; and `undefined` (the field is simply absent — a
+ *    pre-#1196 server) is `ambiguous` — this client was not told the
  *    arming state at all, and must not guess either "armed" or "unarmed" for
  *    it (review round 2 — the cell round 1's own numeric-cap fix invoked as
  *    its motivating example but never actually tested).
  */
 function capReasonOf(
   spendKnown: boolean,
-  capUsd: number | null,
+  capUsd: number | null | undefined,
   armedAt: string | null | undefined,
 ): CapReason {
   if (!spendKnown) return 'unknown';
+  if (capUsd === undefined) return 'unreadable';
   if (capUsd === null) {
     if (armedAt === undefined) return 'ambiguous';
     return armedAt === null ? 'never-armed' : 'uncapped';
@@ -267,6 +291,10 @@ function capReasonOf(
 
 const CAP_EMPTY_STATE: Readonly<Record<Exclude<CapReason, 'capped' | 'zero'>, string>> = {
   unknown: 'no spend figure on this snapshot — meter not drawable',
+  // Distinct from `ambiguous`: this is a malformed/untrustworthy `cap_usd`
+  // itself, not a missing discriminator for an otherwise-explicit `null`
+  // (review round 3's MAJOR) — asserts nothing about arming or intent.
+  unreadable: 'LLM spend cap on this snapshot could not be read — meter not drawable',
   // Distinct from `uncapped`: nothing may be enforcing anything here, which
   // is the opposite of an operator's deliberate choice (#1196).
   'never-armed': 'LLM spend cap was never armed — meter not drawable',
@@ -289,6 +317,13 @@ function SpendBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
   const allTime = snapshot?.llm_spend?.all_time;
   const spent = allTime?.cost_usd;
   const cap = capOf(snapshot);
+  // `CapMeter`'s `cap` prop is `number | null` — it has no concept of
+  // "unreadable" of its own, and does not need one: passing `undefined`
+  // through as `null` still draws no meter and shows the same em-dash
+  // denominator CapMeter already renders for `null` (`CapMeter.tsx`). Only
+  // `capReasonOf` below needs the raw three-valued `cap` to tell
+  // "unreadable" apart from "the wire explicitly said no cap".
+  const capForMeter = cap ?? null;
   const armedAt = capArmedAtOf(snapshot);
   const spendKnown = spent !== undefined && Number.isFinite(spent);
   const reason = capReasonOf(spendKnown, cap, armedAt);
@@ -304,7 +339,7 @@ function SpendBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
       dataField="llm-cap"
       heading="LLM cap"
       value={spent}
-      cap={cap}
+      cap={capForMeter}
       format={formatUsd}
       tone="cyan"
       emptyState={

@@ -58,11 +58,11 @@ export type WireSnapshot = Omit<DashboardSnapshot, 'mode' | 'llm_spend'> & {
   mode: ServerMode | null;
   /**
    * Widened to `| null` for the same reason `mode` is, and settled the same
-   * way (#606 item 2). The rail's LLM cap bar takes `LlmSpendSummary | null`
-   * and renders "meter not drawable" naming the reason — so the consumer of
-   * this field already degrades honestly, and the boundary rejecting the
-   * payload was the only thing standing between a missing spend read and
-   * that rendering.
+   * way (#606 item 2). The rail's LLM cap bar takes `WireLlmSpendSummary |
+   * null` and renders "meter not drawable" naming the reason — so the
+   * consumer of this field already degrades honestly, and the boundary
+   * rejecting the payload was the only thing standing between a missing
+   * spend read and that rendering.
    *
    * The server cannot send `null` today: `DashboardSnapshot.llm_spend` is
    * non-nullable and a failed `getLlmSpend` throws out of `buildSnapshot`,
@@ -73,7 +73,30 @@ export type WireSnapshot = Omit<DashboardSnapshot, 'mode' | 'llm_spend'> & {
    * summary would blank a live-money screen exactly as the `mode` docblock
    * below forbids.
    */
-  llm_spend: LlmSpendSummary | null;
+  llm_spend: WireLlmSpendSummary | null;
+};
+
+/**
+ * `LlmSpendSummary` with its two cap fields widened to admit `undefined`,
+ * meaning "this client could not read the wire value" — a third state
+ * distinct from `null`'s "the field is present and says so"
+ * (`contracts/snapshot.ts`'s `cap_usd` / `cap_armed_at` doc comments).
+ * `normalizeCapUsd` / `normalizeCapArmedAt` below are what produce
+ * `undefined`; `Rail.tsx`'s `capReasonOf` is what reads it back out as
+ * `'unreadable'` / `'ambiguous'`.
+ *
+ * Without this widening, the cast at the end of `toWireSnapshot` was the
+ * only thing keeping these fields' real, three-valued range out of the
+ * compiler's sight (review round 3, MINOR): `contracts/snapshot.ts` declares
+ * both as non-optional `string | null` / `number | null`, so a reader typed
+ * against that declaration would see the `undefined` branch as unreachable
+ * dead code, not as a case the compiler requires it to handle — exactly the
+ * "type that lies" failure mode `mode`'s docblock above describes, reached
+ * one field deeper.
+ */
+export type WireLlmSpendSummary = Omit<LlmSpendSummary, 'cap_usd' | 'cap_armed_at'> & {
+  cap_usd: number | null | undefined;
+  cap_armed_at: string | null | undefined;
 };
 
 export const SNAPSHOT_URL = '/api/snapshot';
@@ -190,24 +213,30 @@ function isSpendSummary(value: unknown): boolean {
 }
 
 /**
- * A `cap_usd` that is neither a number nor absent/`null` would otherwise read
- * as `null` at the rail (`capOf`, `Rail.tsx`) and get reported as
- * "deliberately uncapped" — a claim about operator intent manufactured from a
- * malformed wire value (review round 1, MINOR 2). Normalizing it to `null`
- * here removes the malformed TYPE, but cannot by itself rule out the
- * "deliberately uncapped" misreading if `cap_armed_at` also happens to carry
- * a real timestamp on the same malformed payload — see the limit noted on
- * `contracts/snapshot.ts`'s `cap_armed_at` doc comment. That combination is
- * not reachable from any wire-encoding failure this function can see (a
- * malformed `cap_usd` alongside an intact `cap_armed_at` is not a shape a
- * real JSON parse failure or a stale client produces); the corresponding
- * server-side case (`SqliteLlmSpendCapStore.read()` nullifying a corrupt
- * `budget_usd` while keeping `armed_at`) is a DB-corruption tail with no live
- * write path, documented where it lives rather than defended against twice.
+ * `null` and "anything else that is not a finite number" are DIFFERENT
+ * claims and must not collapse into each other (review round 3's MAJOR —
+ * the previous version mapped both to `null`, which this state machine
+ * reads as "the field said so", so a malformed `cap_usd` alongside an
+ * intact `cap_armed_at` rendered `'uncapped'`: an affirmative claim that the
+ * operator chose to remove the ceiling, manufactured from a value this
+ * client just rejected as unreadable).
+ *
+ * That pair — a corrupt `cap_usd` with a real `cap_armed_at` — is reachable
+ * with no version skew and no client bug required:
+ * `SqliteLlmSpendCapStore.read()` (`server/shared/store/sqlite-llm-spend-
+ * cap-store.ts`) nullifies a non-finite stored `budget_usd` while KEEPING
+ * `armed_at`, so a corrupted `REAL` column alone produces exactly this wire
+ * shape (`contracts/snapshot.ts`'s `cap_armed_at` doc comment names the same
+ * case). The fix once this was understood as a state-machine gap rather than
+ * a scalar-typing gap: `null` here means ONLY "the wire said `null`" — the
+ * legitimate discriminator input `cap_armed_at` gets to split into
+ * never-armed/uncapped — and every other non-finite shape, absent included,
+ * degrades to `undefined`, which `Rail.tsx`'s `capReasonOf` reports as its
+ * own `'unreadable'` reason, asserting nothing about intent either way.
  */
 function normalizeCapUsd(value: unknown): number | null | undefined {
-  if (value === undefined) return undefined;
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+  if (value === null) return null;
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 /**
@@ -220,18 +249,37 @@ function normalizeCapUsd(value: unknown): number | null | undefined {
  * nothing trustworthy about arming, not that arming is `null`, so guessing
  * "never armed" from noise would be as false as guessing "armed".
  *
- * `Date.parse` is a loose gate, not a `toStoredTimestamp`-shape check — it
- * admits strings the store's own format (`server/shared/store/sqlite-
- * utils.ts`) would never write (`"2026"`, `"March 1 2026"`). That is
- * deliberate: this client does not duplicate the server's exact timestamp
- * grammar (the two run in separate processes and neither imports the
- * other), and the loose gate still rejects everything actually reachable
- * here — a non-string, an empty string, or text that is not a date at all.
+ * Checked against the store's own shape AND parsed (review round 3, NIT 1 —
+ * revised after the shape-only version was itself found loose). A bare
+ * `Date.parse` gate admitted strings the store never writes (`"2026"`,
+ * `"March 1 2026"`), and `formatClockUtc` (`client/src/lib/format.ts`) then
+ * rendered them with a fabricated-looking `00:00:00Z` second precision — a
+ * footnote that looked like a real arming instant for input this client
+ * could not actually have received from `toStoredTimestamp`. Swapping to a
+ * shape-only regex traded that looseness for the opposite one: the regex
+ * alone admits `"2026-13-45T99:99:99.999Z"`, which matches the digit grammar
+ * but is not a real instant, and `Date.parse` was the only check that caught
+ * it — dropping it would let a nonsense string through as a trustworthy
+ * arming record on a live-money surface. Both checks run: the shape rules
+ * out formats the store never writes (loose ISO variants `Date.parse` alone
+ * accepts), and `Date.parse` rules out digit strings the shape alone accepts
+ * but no calendar produces. The regex is a literal duplicate of
+ * `STORED_TIMESTAMP` (`server/shared/store/sqlite-utils.ts`), not an import
+ * — `client/` and `server/` do not import each other (CLAUDE.md) — kept in
+ * sync by inspection, the same way the two processes' timestamp grammar
+ * always has been. `toStoredTimestamp` calls `Date#toISOString()` unguarded,
+ * which always emits millisecond precision, so every value this store's
+ * `arm()` ever writes satisfies both checks — the tightening has no false
+ * negative against a real write.
  */
+const STORED_TIMESTAMP_SHAPE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
 function normalizeCapArmedAt(value: unknown): string | null | undefined {
   if (value === undefined) return undefined;
   if (value === null) return null;
-  return typeof value === 'string' && value !== '' && !Number.isNaN(Date.parse(value))
+  return typeof value === 'string' &&
+    STORED_TIMESTAMP_SHAPE.test(value) &&
+    !Number.isNaN(Date.parse(value))
     ? value
     : undefined;
 }
@@ -274,7 +322,7 @@ export function toWireSnapshot(body: unknown): WireSnapshot | null {
         ...(spend as Record<string, unknown>),
         cap_usd: normalizeCapUsd((spend as Record<string, unknown>).cap_usd),
         cap_armed_at: normalizeCapArmedAt((spend as Record<string, unknown>).cap_armed_at),
-      } as unknown as LlmSpendSummary)
+      } as unknown as WireLlmSpendSummary)
     : null;
   return {
     ...(candidate as unknown as Omit<WireSnapshot, 'mode' | 'llm_spend'>),

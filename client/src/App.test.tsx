@@ -207,6 +207,30 @@ describe('rail', () => {
     expect(within(rail).queryByText(/over cap/)).toBeNull();
   });
 
+  // Review round 3's MAJOR, reproduced exactly: a real, enforced cap
+  // serialized as a string (e.g. by a corrupted `budget_usd` column,
+  // `SqliteLlmSpendCapStore.read()`) alongside an intact `cap_armed_at` must
+  // not render as "deliberately uncapped" — that claim comes from `cap_usd`
+  // being EXPLICITLY `null`, and a malformed `cap_usd` is a different fact
+  // entirely: this client could not read it, not that the wire said so.
+  it('names the cap unreadable, never "deliberately uncapped", when cap_usd is malformed', async () => {
+    const spend = { ...makeSpend({ cap_usd: 50 }) };
+    // @ts-expect-error simulating a malformed wire value (e.g. corrupted storage)
+    spend.cap_usd = '50';
+    renderApp([makeSnapshot({ llm_spend: spend })]);
+    const rail = screen.getByRole('complementary', { name: 'Rail' });
+
+    expect(
+      await within(rail).findByText(
+        'LLM spend cap on this snapshot could not be read — meter not drawable',
+      ),
+    ).toBeTruthy();
+    expect(within(rail).queryByText(/deliberately uncapped/)).toBeNull();
+    expect(within(rail).queryByText(/never armed/)).toBeNull();
+    expect(within(rail).queryByRole('img', { name: /LLM budget used/ })).toBeNull();
+    expect(within(rail).queryByText(/over cap/)).toBeNull();
+  });
+
   // #1196's core acceptance criterion: "never armed" (no row was ever
   // written) must read differently from "armed uncapped" (a deliberate
   // operator choice) — collapsing both into the same sentence is the defect.
