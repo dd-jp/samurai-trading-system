@@ -112,6 +112,43 @@ describe('toWireSnapshot', () => {
     }
   });
 
+  // #1196 review: `cap_usd` and `cap_armed_at` are branched on directly by
+  // `capReasonOf` (never run through a formatter that degrades a malformed
+  // value honestly), so unlike the other scalars a wrong type here must
+  // reject the whole summary rather than manufacture a claim about operator
+  // intent from noise — a `cap_usd` malformed to `null` reads as
+  // "deliberately uncapped", and a `cap_armed_at` malformed to anything
+  // truthy reads as "armed", both false positives.
+  it('rejects a spend summary whose cap fields are the wrong type or unparseable', () => {
+    const summary = makeSnapshot().llm_spend as unknown as Record<string, unknown>;
+
+    for (const spend of [
+      { ...summary, cap_usd: '50' },
+      { ...summary, cap_usd: false },
+      { ...summary, cap_armed_at: '' },
+      { ...summary, cap_armed_at: 12_345 },
+      { ...summary, cap_armed_at: 'not-a-timestamp' },
+    ]) {
+      expect(toWireSnapshot(raw({ llm_spend: spend }))?.llm_spend).toBeNull();
+    }
+  });
+
+  // `undefined` (the field entirely absent) is the mixed-version case — an
+  // older server that predates #1196 — not a malformed one, and must not be
+  // rejected: the rest of the summary is still real and rendered.
+  it('admits a spend summary missing cap_usd or cap_armed_at entirely', () => {
+    const summary = makeSnapshot().llm_spend as unknown as Record<string, unknown>;
+    const withoutCapArmedAt = { ...summary };
+    delete withoutCapArmedAt.cap_armed_at;
+    const withoutCapUsd = { ...summary };
+    delete withoutCapUsd.cap_usd;
+
+    expect(toWireSnapshot(raw({ llm_spend: withoutCapArmedAt }))?.llm_spend).toEqual(
+      withoutCapArmedAt,
+    );
+    expect(toWireSnapshot(raw({ llm_spend: withoutCapUsd }))?.llm_spend).toEqual(withoutCapUsd);
+  });
+
   it('passes a real spend summary through untouched', () => {
     const body = raw();
     expect(toWireSnapshot(body)?.llm_spend).toEqual(body.llm_spend);

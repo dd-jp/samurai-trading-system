@@ -198,11 +198,16 @@ function capOf(snapshot: WireSnapshot | null): number | null {
 }
 
 /**
- * The wire's ONLY discriminator between "armed uncapped" and "never armed" —
- * both carry `cap_usd: null`, and only the first carries a non-null
- * `cap_armed_at` (#1196). `undefined` (an old server, or a malformed summary
- * already caught upstream by `isSpendSummary`) is treated the same as `null`:
- * this client asserts "armed" only when the wire says so affirmatively.
+ * The wire's discriminator between "armed uncapped" and "never armed" — both
+ * carry `cap_usd: null`, and only the first carries a non-null
+ * `cap_armed_at` (#1196). It is consulted ONLY to split a null cap; a numeric
+ * `cap_usd` is itself affirmative evidence that something armed and must be
+ * honoured regardless of `cap_armed_at` (`capReasonOf` below, and
+ * `contracts/snapshot.ts`'s `cap_usd` doc comment — the ambiguity is `null`
+ * vs `null`, not numeric vs `null`). `undefined` (an old server on this
+ * field, or a malformed value already rejected upstream by `isSpendSummary`)
+ * is treated the same as `null`: this client asserts "armed" only when the
+ * wire says so affirmatively.
  */
 function capArmedAtOf(snapshot: WireSnapshot | null): string | null {
   return snapshot?.llm_spend?.cap_armed_at ?? null;
@@ -211,10 +216,22 @@ function capArmedAtOf(snapshot: WireSnapshot | null): string | null {
 type CapReason = 'unknown' | 'never-armed' | 'uncapped' | 'zero' | 'capped';
 
 /**
- * Names why the meter is or is not drawable, in the priority order #1140's
- * review fixed: missing spend outranks everything else, because with no
- * snapshot this client knows nothing about the operator's budget at all and
- * must not claim otherwise — not "unconfigured", not "uncapped".
+ * Names why the meter is or is not drawable, in priority order:
+ *
+ * 1. Missing spend outranks everything else (#1140's review) — with no
+ *    snapshot this client knows nothing about the operator's budget at all
+ *    and must not claim otherwise, not "unconfigured", not "uncapped".
+ * 2. A present, finite `cap_usd` outranks `cap_armed_at` — a numeric cap IS
+ *    the enforced ceiling regardless of whether this wire happens to carry
+ *    the arming instant too. Gating on `armedAt` before `capUsd` would throw
+ *    away a live denominator on any payload missing `cap_armed_at` (a mixed
+ *    client/server version, or simply an older snapshot shape) and render
+ *    "never armed" against a run that plainly has an enforced cap — a
+ *    regression against `origin/main`, which drew a correct meter for that
+ *    same payload. `cap_armed_at` is `#1196`'s discriminator for a NULL cap
+ *    only, never a gate on a numeric one.
+ * 3. Only once `capUsd` is `null` does `armedAt` decide never-armed vs
+ *    uncapped — the one case the wire actually needs it for.
  */
 function capReasonOf(
   spendKnown: boolean,
@@ -222,12 +239,11 @@ function capReasonOf(
   armedAt: string | null,
 ): CapReason {
   if (!spendKnown) return 'unknown';
-  if (armedAt === null) return 'never-armed';
-  if (capUsd === null) return 'uncapped';
+  if (capUsd === null) return armedAt === null ? 'never-armed' : 'uncapped';
   // `<= 0`, not `=== 0`: `CapMeter` declines to draw for any non-positive
   // cap, and `'capped'` must imply a drawn meter — a negative `cap_usd` (a
-  // malformed wire value no store in this repo emits, but the type is a bare
-  // `number`) falling through to `'capped'` would hand `CapMeter` a `''`
+  // malformed wire value no code path in this repo *arms*, but the type is a
+  // bare `number`) falling through to `'capped'` would hand `CapMeter` a `''`
   // empty state for a cap it still refuses to draw against (advisor review,
   // #1196).
   if (capUsd <= 0) return 'zero';

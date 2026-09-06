@@ -168,6 +168,17 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  * `typeof x === 'object'`, so an array cast to `LlmSpendSummary` would render a
  * block of em dashes that looks like a real, empty spend summary rather than a
  * failed read. A wrong shape admitted is worse than a null rejected.
+ *
+ * `cap_usd` and `cap_armed_at` ARE validated here, unlike the other scalars,
+ * because the rail does not run them through a formatter that degrades a
+ * malformed value honestly — it branches on them directly (`capReasonOf`,
+ * #1196). A `cap_usd` that is neither a number nor `null` would otherwise
+ * read as `null` and get reported as "deliberately uncapped": a claim about
+ * operator intent manufactured from a malformed wire value. A `cap_armed_at`
+ * that is present but not a valid non-empty timestamp string would read as
+ * "armed" by a bare `!== null` check. Absent (`undefined`) is allowed for
+ * both — that is the mixed-version case (an old server), not a malformed one
+ * — and is treated downstream the same as `null`.
  */
 function isSpendSummary(value: unknown): boolean {
   if (!isPlainObject(value)) return false;
@@ -175,6 +186,14 @@ function isSpendSummary(value: unknown): boolean {
     const window = value[key];
     if (!isPlainObject(window)) return false;
     if (!isPlainObject(window.per_debate)) return false;
+  }
+  const cap = value.cap_usd;
+  if (cap !== undefined && cap !== null && typeof cap !== 'number') return false;
+  const armedAt = value.cap_armed_at;
+  if (armedAt !== undefined && armedAt !== null) {
+    if (typeof armedAt !== 'string' || armedAt === '' || Number.isNaN(Date.parse(armedAt))) {
+      return false;
+    }
   }
   return true;
 }

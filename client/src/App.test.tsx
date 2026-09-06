@@ -202,7 +202,7 @@ describe('rail', () => {
     expect(
       await within(rail).findByText('LLM spend is deliberately uncapped — meter not drawable'),
     ).toBeTruthy();
-    expect(within(rail).queryByText(/no LLM budget configured/)).toBeNull();
+    expect(within(rail).queryByText(/never armed/)).toBeNull();
     expect(within(rail).queryByRole('img', { name: /LLM budget used/ })).toBeNull();
     expect(within(rail).queryByText(/over cap/)).toBeNull();
   });
@@ -218,9 +218,29 @@ describe('rail', () => {
       await within(rail).findByText('LLM spend cap was never armed — meter not drawable'),
     ).toBeTruthy();
     expect(within(rail).queryByText(/deliberately uncapped/)).toBeNull();
-    expect(within(rail).queryByText(/no LLM budget configured/)).toBeNull();
     expect(within(rail).queryByRole('img', { name: /LLM budget used/ })).toBeNull();
     expect(within(rail).queryByText(/over cap/)).toBeNull();
+  });
+
+  // A numeric `cap_usd` is itself affirmative evidence something armed —
+  // `cap_armed_at` is #1196's discriminator for a NULL cap only, never a
+  // gate on a numeric one. A payload carrying a real cap but missing (not
+  // explicitly null) `cap_armed_at` — the shape an older server or a
+  // version-skewed deployment would send — must still draw the meter, not
+  // regress to "never armed" and throw the denominator away (review finding).
+  it('draws the meter from a numeric cap even when cap_armed_at is absent from the wire', async () => {
+    const spend = { ...makeSpend({ cap_usd: 50 }) };
+    // @ts-expect-error simulating an older/mixed-version wire payload
+    delete spend.cap_armed_at;
+    spend.all_time = { ...spend.all_time, cost_usd: 12.5 };
+    renderApp([makeSnapshot({ llm_spend: spend })]);
+    const rail = screen.getByRole('complementary', { name: 'Rail' });
+
+    expect(await within(rail).findByText('$12.50 / $50.00')).toBeTruthy();
+    expect(
+      within(rail).getByRole('img', { name: 'LLM budget used: 25.0% of the $50.00 cap' }),
+    ).toBeTruthy();
+    expect(within(rail).queryByText(/never armed/)).toBeNull();
   });
 
   // The additional defect found in review: a $0 cap is the MOST restrictive
@@ -233,7 +253,6 @@ describe('rail', () => {
     const rail = screen.getByRole('complementary', { name: 'Rail' });
 
     expect(await within(rail).findByText(/LLM spend cap is \$0/)).toBeTruthy();
-    expect(within(rail).queryByText(/no LLM budget configured/)).toBeNull();
     expect(within(rail).queryByText(/deliberately uncapped/)).toBeNull();
     expect(within(rail).queryByRole('img', { name: /LLM budget used/ })).toBeNull();
   });
