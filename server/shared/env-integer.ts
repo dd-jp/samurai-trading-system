@@ -7,9 +7,10 @@
  * env vars in one system come to disagree about whether `"abc"` means "abc",
  * "the default", or `0`.
  *
- * The rule both callers rely on: a malformed value is a startup error, not a
- * silent fallback. These variables are retention policy, and a retention
- * window nobody chose is worse than a refusal that names the variable.
+ * The rule every caller relies on: a malformed value is a startup error, not
+ * a silent fallback. These variables are operational policy — a retention
+ * window, a byte ceiling, a row cap, a search-result cap — and one nobody
+ * chose is worse than a refusal that names the variable.
  */
 
 /**
@@ -22,6 +23,11 @@
 export function nonEmpty(raw: string | undefined): string | undefined {
   const trimmed = raw?.trim();
   return trimmed !== undefined && trimmed.length > 0 ? trimmed : undefined;
+}
+
+/** The one bound definition both entry points below hold a value to. */
+function isIntegerAtLeast(value: number, min: number): boolean {
+  return Number.isSafeInteger(value) && value >= min;
 }
 
 /**
@@ -43,7 +49,7 @@ export function requireIntegerAtLeast(
   min: number,
   purpose: string,
 ): number {
-  if (!Number.isSafeInteger(value) || value < min) {
+  if (!isIntegerAtLeast(value, min)) {
     throw new Error(
       `Orchestrator cannot start: ${name} must be an integer >= ${min}, not ` +
         `${JSON.stringify(value)}. It is ${purpose}; refused rather than defaulted, the same rule ` +
@@ -78,11 +84,11 @@ export function positiveIntegerFromEnv(
   if (value === undefined) return fallback;
 
   const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < min) {
+  if (!isIntegerAtLeast(parsed, min)) {
     throw new Error(
       `Orchestrator cannot start: ${name} must be an integer >= ${min}, not ` +
-        `${JSON.stringify(value)}. It is ${purpose}; a value nobody meant is a retention ` +
-        'window nobody chose, so it is refused rather than defaulted. Unset it to accept the ' +
+        `${JSON.stringify(value)}. It is ${purpose}; a value nobody meant is a setting nobody ` +
+        'chose, so it is refused rather than defaulted. Unset it to accept the ' +
         `default (${fallback}).`,
     );
   }
