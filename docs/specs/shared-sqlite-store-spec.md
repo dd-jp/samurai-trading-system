@@ -69,7 +69,7 @@ Every `CREATE TABLE` the store needs, collected from the eleven specs that impli
 
 Four more tables were added after that pass, each checked for collision at the point it joined (`llm_spend`, `risk_critic_log`, `arm_comparison_samples`, `outside_benchmark_samples` — see each one's own subsection below). [#1174](https://github.com/dd-jp/samurai-trading-system/issues/1174) closed a further gap: eight real, migrated tables (`stage2_selected_config`, `trader_log`, `risk_log`, `flatten_submissions`, `llm_call_log`, `alert_delivery_failures`, `feedback_cycle_schedule`, `llm_spend_cap`) were named as owned in the "Integration with Pipeline" map (two of them — `alert_delivery_failures` and `feedback_cycle_schedule` — were not even named there) but carried no DDL anywhere in this document; their `CREATE TABLE` statements and per-table collision notes are appended after `outside_benchmark_samples`, each folded to its CURRENT effective shape (every later `ALTER TABLE` migration read and applied), not just its creating migration.
 
-The store now has **thirty-five** real tables in total — `CONSOLIDATED_SCHEMA_TABLE_COUNT` in `server/shared/store/open-shared-store.test.ts` pins this figure precisely so this paragraph cannot drift again the way it already has twice. All thirty-five now carry DDL somewhere in this document, closing #1174's acceptance criterion that the "full consolidated DDL" claim be true or narrowed. **It is narrowed, not fully true, in one respect stated plainly:** table-level completeness is not the same claim as column-level currency. Six tables that were *already* declared here before this pass have DDL blocks that predate later `ALTER TABLE` migrations and are missing the columns those migrations added — `audit_log` is missing `instrument`/`asset_class` (`0013`); `open_positions` is missing `conviction`/`converged` (`0004`), `residual_unprotected_since`/`residual_rearm_alerted_at` (`0024`), `key_scheme` (`0027`), `arm` (`0033`), `decision_price`/`quote_bid`/`quote_ask`/`quote_mid`/`quote_observed_at`/`modelled_cost_breakdown_json` (`0037`), and `sizing_capital_ceiling` (`0045`); `closed_trades` is missing `arm` (`0033`) and `sizing_capital_ceiling` (`0045`); `debate_log` is missing `trace_id` (`0015`), `confidence`/`synthesis`/`position`/`disagreement_summary`/`open_items_json`/`converged` (`0026`), and `termination` (`0041`); `llm_spend` is missing `server_tool_calls` (`0018`) and `ttfb_ms` (`0038`); `verdict_log` is missing `no_go_detail_measured_ms`/`no_go_detail_bound_ms` (`0046`). #1174's mandate was that every table named as owned gets a DDL entry, not a re-verification of every already-declared table's column currency — folding those six back to their current effective shape is real, separate work this pass did not do, flagged here rather than left silently implied as done. The eight tables this pass actually added ARE folded to current effective shape, each verified column-by-column against a freshly migrated `:memory:` database (`PRAGMA table_info`), not merely transcribed from their creating migration.
+The store now has **thirty-five** real tables in total — `CONSOLIDATED_SCHEMA_TABLE_COUNT` in `server/shared/store/open-shared-store.test.ts` pins this figure precisely so this paragraph cannot drift again the way it already has twice. All thirty-five now carry DDL somewhere in this document, closing #1174's acceptance criterion that the "full consolidated DDL" claim be true or narrowed. **It is narrowed, not fully true, in one respect stated plainly:** table-level completeness is not the same claim as column-level currency. Seven tables that were *already* declared here before this pass have DDL blocks that predate later `ALTER TABLE` migrations and are missing the columns those migrations added — `audit_log` is missing `instrument`/`asset_class` (`0013`); `open_positions` is missing `conviction`/`converged` (`0004`), `residual_unprotected_since`/`residual_rearm_alerted_at` (`0024`), `key_scheme` (`0027`), `arm` (`0033`), `decision_price`/`quote_bid`/`quote_ask`/`quote_mid`/`quote_observed_at`/`modelled_cost_breakdown_json` (`0037`), and `sizing_capital_ceiling` (`0045`); `closed_trades` is missing `arm` (`0033`) and `sizing_capital_ceiling` (`0045`); `debate_log` is missing `trace_id` (`0015`), `confidence`/`synthesis`/`position`/`disagreement_summary`/`open_items_json`/`converged` (`0026`), and `termination` (`0041`); `fills` is missing `exit_reason` (`0031`) and `flatten_idempotency_key` (`0037`); `llm_spend` is missing `server_tool_calls` (`0018`) and `ttfb_ms` (`0038`); `verdict_log` is missing `no_go_detail_measured_ms`/`no_go_detail_bound_ms` (`0046`). #1174's mandate was that every table named as owned gets a DDL entry, not a re-verification of every already-declared table's column currency — folding those seven back to their current effective shape is real, separate work this pass did not do, flagged here rather than left silently implied as done. The eight tables this pass actually added ARE folded to current effective shape, each verified column-by-column against a freshly migrated `:memory:` database (`PRAGMA table_info`), and each `CHECK` constraint and `CREATE INDEX` cross-checked directly against that database's `sqlite_master.sql` — not merely transcribed from their creating migration. Say this plainly: a folded `CREATE TABLE` below is a record of a table's current shape, not something you can hand to `sqlite3` and replay in migration order to reach that shape — it collapses N migrations into one statement, and the prose above each block is what carries which migration contributed which column.
 
 **Market Data Service** — owner: `docs/specs/market-data-service-spec.md`
 
@@ -581,7 +581,7 @@ could not answer (provider failure, spend-cap refusal, unreadable response). `ev
 handed NOTHING in that case, so the decision keeps its explicit `risk_critic: skipped` reason —
 the row is for the operator, and so a replay sees the same "no verdict" input the live run had.
 
-**Migration `0040` (added 2026-09-03 as part of #994's invalidation fold) adds two further nullable columns, not shown in the original `0032` DDL below.** See "`invalidation_log` — does not exist, and never will" above for the full account of what they hold and why there is no separate table.
+**Migration `0040` (added 2026-09-03 as part of #994's invalidation fold) adds two further nullable columns, disclosed in a comment on the DDL below rather than inlined as columns** — this predates #1174 and #1174's mandate was whole-table absence, not re-folding an already-declared table, so it is left as-is here rather than folded in this pass. See "`invalidation_log` — does not exist, and never will" above for the full account of what they hold and why there is no separate table.
 
 ```sql
 CREATE TABLE risk_critic_log (
@@ -731,28 +731,28 @@ Owned by the Trader (`trader_log`) and Risk (`risk_log`) respectively, per `writ
 
 ```sql
 CREATE TABLE trader_log (
-  trace_id               TEXT    NOT NULL,
-  instrument              TEXT   NOT NULL,
-  debate_id               TEXT   NOT NULL,   -- joins debate_log; the debate's own content is not duplicated here
-  intent_type             TEXT,              -- 'entry' | 'scale_in' | 'exit', or NULL when decide() returned null
-  skip_reason             TEXT,              -- populated only on a skip
-  base_risk_fraction      REAL,
-  conviction_multiplier   REAL,
-  vol_floor_factor        REAL,
-  non_converged_haircut   REAL,
-  cosine_multiplier       REAL,
-  neighbor_count          INTEGER,
-  weighted_mean_r         REAL,
-  no_precedent            INTEGER CHECK(no_precedent IN (0, 1)),
-  atr                     REAL,
-  entry                   REAL,
-  stop                    REAL,
-  size                    REAL,
-  created_at              TEXT    NOT NULL,
-  exit_reason             TEXT,   -- 0030 (#748): 'flatten' | 'signal_decay' | 'direction_flip'; NULL pre-migration and on non-exit rows
-  decision_class          TEXT,   -- 0042 (#1109): TraderDecisionClass's string value; no CHECK (see migration doc)
-  reason_detail_compared_value REAL,  -- 0042: populated with reason_detail_threshold on the four threshold-comparison skip reasons only
-  reason_detail_threshold      REAL,
+  trace_id                      TEXT    NOT NULL,
+  instrument                    TEXT    NOT NULL,
+  debate_id                     TEXT    NOT NULL,  -- joins debate_log; the debate's own content is not duplicated here
+  intent_type                   TEXT,              -- 'entry' | 'scale_in' | 'exit', or NULL when decide() returned null
+  skip_reason                   TEXT,              -- populated only on a skip
+  base_risk_fraction            REAL,
+  conviction_multiplier         REAL,
+  vol_floor_factor              REAL,
+  non_converged_haircut         REAL,
+  cosine_multiplier             REAL,
+  neighbor_count                INTEGER,
+  weighted_mean_r               REAL,
+  no_precedent                  INTEGER CHECK(no_precedent IN (0, 1)),
+  atr                           REAL,
+  entry                         REAL,
+  stop                          REAL,
+  size                          REAL,
+  created_at                    TEXT    NOT NULL,
+  exit_reason                   TEXT,   -- 0030 (#748): 'flatten' | 'signal_decay' | 'direction_flip'; NULL pre-migration and on non-exit rows
+  decision_class                TEXT,   -- 0042 (#1109): TraderDecisionClass's string value; no CHECK (see migration doc)
+  reason_detail_compared_value  REAL,   -- 0042: populated with reason_detail_threshold on the four threshold-comparison skip reasons only
+  reason_detail_threshold       REAL,
   PRIMARY KEY (trace_id, instrument)
 );
 
@@ -800,21 +800,21 @@ Amended five times after `0019`. Migration `0020` (#517) added `lot_idempotency_
 
 ```sql
 CREATE TABLE flatten_submissions (
-  idempotency_key   TEXT PRIMARY KEY,
-  instrument        TEXT NOT NULL,
-  asset_class       TEXT NOT NULL CHECK(asset_class IN ('crypto', 'stocks')),
-  side              TEXT NOT NULL CHECK(side IN ('buy', 'sell')),
-  size              REAL NOT NULL,
-  status            TEXT NOT NULL CHECK(status IN ('submitting', 'submitted', 'error')),
-  order_state       TEXT,     -- set once the broker acks; NULL while 'submitting'
-  broker_order_ids  TEXT,     -- JSON string[]; NULL while 'submitting'
-  reason            TEXT,     -- set on 'error'
-  submitted_at      TEXT NOT NULL,   -- write-ahead time
-  resolved_at       TEXT,            -- set on transition to 'submitted' or 'error'
-  lot_idempotency_keys         TEXT,  -- 0020 (#517): JSON string[] of open_positions.idempotency_key, in opened_at order
-  lot_held_quantities          TEXT,  -- 0021 (#571): JSON number[], positionally parallel to lot_idempotency_keys
-  fills_swept_at               TEXT,  -- 0023 (#519/#526): set once every named lot's fill share has durably applied
-  exit_reason                  TEXT,  -- 0031 (#793): 'flatten' | 'signal_decay' | 'direction_flip'
+  idempotency_key               TEXT PRIMARY KEY,
+  instrument                    TEXT NOT NULL,
+  asset_class                   TEXT NOT NULL CHECK(asset_class IN ('crypto', 'stocks')),
+  side                          TEXT NOT NULL CHECK(side IN ('buy', 'sell')),
+  size                          REAL NOT NULL,
+  status                        TEXT NOT NULL CHECK(status IN ('submitting', 'submitted', 'error')),
+  order_state                   TEXT,     -- set once the broker acks; NULL while 'submitting'
+  broker_order_ids              TEXT,     -- JSON string[]; NULL while 'submitting'
+  reason                        TEXT,     -- set on 'error'
+  submitted_at                  TEXT NOT NULL,   -- write-ahead time
+  resolved_at                   TEXT,            -- set on transition to 'submitted' or 'error'
+  lot_idempotency_keys          TEXT,  -- 0020 (#517): JSON string[] of open_positions.idempotency_key, in opened_at order
+  lot_held_quantities           TEXT,  -- 0021 (#571): JSON number[], positionally parallel to lot_idempotency_keys
+  fills_swept_at                TEXT,  -- 0023 (#519/#526): set once every named lot's fill share has durably applied
+  exit_reason                   TEXT,  -- 0031 (#793): 'flatten' | 'signal_decay' | 'direction_flip'
   decision_price                REAL, -- 0037 (#1001): the Trader's decision-time price -- see open_positions' own column
   quote_bid                     REAL, -- 0037: NULL together with quote_ask on any source without fetchQuote
   quote_ask                     REAL, -- 0037
@@ -898,7 +898,7 @@ CREATE TABLE llm_spend_cap (
 
 ### Non-Collision Verification
 
-`cross-spec-contracts.md`'s "shared-store table non-collision" spot-check was clean at the table-name level; re-verified here at the field level across all twenty-two tables above:
+`cross-spec-contracts.md`'s "shared-store table non-collision" spot-check was clean at the table-name level; re-verified here at the field level across the original twenty-two tables above (a recount against today's schema gives twenty-three for that same batch — see the count discussion above; the field-level pass below was not re-run against the recount, only against the batch as it stood at the time):
 
 - **`latest_mark` was missing `asset_class`** (#183) — the `Mark` interface (market-data-service-spec.md) declares it, the original persistence bullet dropped it. **Fixed above**, not silently — this DDL is the first place the full column list was ever written out, so there was no prior "wrong" schema to correct, only an incomplete prose description.
 - **`Fill` vs. the cost model's result type** — already resolved pre-existing (GAP-F renamed the cost model's return type to `CostModelResult` specifically to avoid colliding with the persisted `fills` table; `cross-spec-contracts.md` confirms this explicitly).
