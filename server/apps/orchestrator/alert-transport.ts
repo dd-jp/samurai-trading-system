@@ -118,6 +118,7 @@ import { TradeChannelMiCoverageAlert } from './mi-coverage-alert-channel.js';
 import { TradeChannelOcoDoubleFillAlert } from './oco-double-fill-channel.js';
 import { TradeChannelOrphanAlert } from './orphan-alert-channel.js';
 import type { AlertChannelSlots, ProductionConfig } from './production.js';
+import { TradeChannelPromptTierAlert } from './prompt-tier-alert-channel.js';
 import { TradeChannelResidualExposureAlert } from './residual-exposure-alert-channel.js';
 import { SqliteAuditLog } from './sqlite-audit-log.js';
 import { TradeChannelThresholdClampAlert } from './threshold-clamp-alert-channel.js';
@@ -262,6 +263,15 @@ export const ALERT_CHANNEL_FIELDS = [
   // real-world measurement behind the threshold lives in
   // `tick-skip-alert.ts`'s file doc, not repeated here.
   'tickSkipAlerts',
+  // #1155 — the nineteenth. Channel type and transport in the SAME change,
+  // like `tickSkipAlerts`/`armDivergenceAlerts` before it.
+  // `crossesPromptTier` (shared/llm/pricing.ts) had existed since #969 with
+  // no caller at all — not even a log line — so a large-prompt-tier
+  // crossing's 2.5x unit-cost step happened silently inside the meter. The
+  // condition is invisible from outside by construction: `llm_spend` keeps
+  // writing rows and ADR-0008's cap keeps enforcing against them, and the
+  // only symptom is that the burn rate quietly changed.
+  'promptTierAlerts',
 ] as const satisfies readonly (keyof AlertChannelSlots)[];
 
 /**
@@ -557,6 +567,13 @@ export function buildAlertChannels(deps: {
     // need revisiting), not a beat — same reasoning as `calendarFallbackAlerts`.
     ...(deps.injected.tickSkipAlerts === undefined
       ? { tickSkipAlerts: new TradeChannelTickSkipAlert(telegram, chatId) }
+      : {}),
+    // #1155. The escalation chat, never the heartbeat chat: a prompt-tier
+    // crossing is a cost-rate event against ADR-0008's cap — a decision
+    // waiting on the operator (is this call's retrieval size expected?) —
+    // not a beat, same reasoning as `thresholdClampAlerts`.
+    ...(deps.injected.promptTierAlerts === undefined
+      ? { promptTierAlerts: new TradeChannelPromptTierAlert(telegram, chatId, deps.logger) }
       : {}),
   };
 }

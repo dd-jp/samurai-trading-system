@@ -24,6 +24,10 @@
 import type { AnalystTelemetry, IndicatorUnavailableEvent } from '../../pipeline/analysts/index.js';
 import { INDICATOR_UNAVAILABLE_COUNTER } from '../../pipeline/analysts/index.js';
 import type {
+  PromptTierAlert,
+  PromptTierAlertChannel,
+} from '../../pipeline/debate-engine/index.js';
+import type {
   FlattenOverfillAlertChannel,
   FlattenOverfillWarning,
   FlattenReconcileAlert,
@@ -813,5 +817,40 @@ export class UnwiredApprovalChannel implements ApprovalChannel {
 export class ParkedCiiScoreProvider implements CiiScoreProvider {
   async getCii(): Promise<number | null> {
     return null;
+  }
+}
+
+/**
+ * A prompt-tier crossing (#1155), written to the log at `warn`.
+ *
+ * Same caveat as the other log-only stand-ins: a line nobody tails cannot
+ * page anyone about a 2.5x unit-cost step against ADR-0008's $50/14d cap.
+ * `TradeChannelPromptTierAlert` (prompt-tier-alert-channel.ts) is the
+ * reachable-from-a-phone implementation, selected by `SAMURAI_ALERTS=telegram`
+ * (#322).
+ */
+export class LoggingPromptTierAlertChannel implements PromptTierAlertChannel {
+  constructor(private readonly logger: Logger) {}
+
+  postPromptTierAlert(alert: PromptTierAlert): void {
+    this.logger.log({
+      trace_id: alert.trace_id,
+      stage: alert.stage,
+      event: 'prompt_tier_crossed',
+      level: 'warn',
+      message:
+        `prompt-tier crossing: ${alert.model} priced ${alert.prompt_tokens} prompt tokens, ` +
+        `above its ${alert.above_prompt_tokens}-token large-prompt tier (#${alert.consecutive_crossings} ` +
+        'consecutive call). This call priced at the tier rate, a 2.5x unit-cost step against the ' +
+        'base rate — see pricing.ts.',
+      payload: {
+        model: alert.model,
+        debate_id: alert.debate_id,
+        prompt_tokens: alert.prompt_tokens,
+        above_prompt_tokens: alert.above_prompt_tokens,
+        consecutive_crossings: alert.consecutive_crossings,
+        reported_at: alert.reported_at.toISOString(),
+      },
+    });
   }
 }

@@ -120,6 +120,7 @@ import type { ArmComparison } from '../../pipeline/control-arm/index.js';
 import { SqliteArmComparisonSource } from '../../pipeline/control-arm/index.js';
 import type { LlmClient, SpendCap } from '../../pipeline/debate-engine/index.js';
 import {
+  PromptTierCrossingThrottle,
   RateLimiter,
   SqliteDebateLogStore,
   SqliteLlmSpendStore,
@@ -235,6 +236,7 @@ import {
   LoggingMiCoverageTelemetry,
   LoggingOcoDoubleFillAlertChannel,
   LoggingOrphanAlertChannel,
+  LoggingPromptTierAlertChannel,
   LoggingResidualExposureAlertChannel,
   LoggingTickSkipAlertChannel,
   LoggingUnpricedFillAlertChannel,
@@ -1590,11 +1592,30 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * pass both bill through it, so there is one spend meter and one config
    * rather than two clients disagreeing about either.
    */
+  const promptTierAlerts = config.promptTierAlerts ?? new LoggingPromptTierAlertChannel(logger);
+  /**
+   * ONE throttle for the whole root, for the same reason as `promptTierAlerts`
+   * above: `NOUS_MODEL` alone can route BOTH the debate stage's default
+   * client and the sentiment `GrokAgent` below through the same tiered model
+   * (nous-config.ts's `nousCredentials` falls back through `NOUS_MODEL` for
+   * either role, and the startup guard only rejects a model missing from
+   * `MODEL_RATES`), and a throttle instance per `SqliteLlmSpendStore` would
+   * then count that model's consecutive crossings twice — up to two "first
+   * crossing" alerts and roughly double the repeat cadence against a
+   * one-then-every-8 contract (#1155).
+   */
+  const promptTierThrottle = new PromptTierCrossingThrottle();
   const llmClient =
     config.llmClient ??
     buildDefaultLlmClient(
       logger,
-      new SqliteLlmSpendStore(guardedStore(config.db, 'debate-engine'), logger, captureLlmText),
+      new SqliteLlmSpendStore(
+        guardedStore(config.db, 'debate-engine'),
+        logger,
+        captureLlmText,
+        promptTierAlerts,
+        promptTierThrottle,
+      ),
     );
 
   /**
@@ -1673,6 +1694,8 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
             guardedStore(config.db, 'debate-engine'),
             logger,
             captureLlmText,
+            promptTierAlerts,
+            promptTierThrottle,
           ),
           clock,
           logger,

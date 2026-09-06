@@ -10,6 +10,8 @@
 
 import { openSharedStore, type SharedStore } from '../../../shared/store/index.js';
 import type { LogEntry } from '../../../shared/types.js';
+import type { PromptTierAlert, PromptTierAlertChannel } from './prompt-tier-alert.js';
+import { PromptTierCrossingThrottle } from './prompt-tier-alert.js';
 import { SqliteLlmSpendStore } from './spend-sink.js';
 
 const NOW = new Date('2026-08-05T12:00:00Z');
@@ -335,5 +337,224 @@ describe('SqliteLlmSpendStore', () => {
         timestamp: NOW,
       }),
     ).not.toThrow();
+  });
+});
+
+describe('SqliteLlmSpendStore — prompt-tier crossing warning (#1155)', () => {
+  function recordingChannel(): PromptTierAlertChannel & { alerts: PromptTierAlert[] } {
+    const alerts: PromptTierAlert[] = [];
+    return {
+      alerts,
+      postPromptTierAlert: (alert) => {
+        alerts.push(alert);
+      },
+    };
+  }
+
+  // Crosses x-ai/grok-4.5's published 200,000-token large-prompt tier
+  // (pricing.ts) by one token — the same fixture pricing.test.ts uses to pin
+  // `crossesPromptTier`'s own answer.
+  const CROSSING_USAGE = { input_tokens: 200_001, output_tokens: 1_000 };
+  const UNDER_TIER_USAGE = { input_tokens: 200_000, output_tokens: 1_000 };
+
+  it('warns on the FIRST call that crosses a model tier', () => {
+    const db = openSharedStore(':memory:');
+    const channel = recordingChannel();
+    new SqliteLlmSpendStore(db, undefined, false, channel).record({
+      trace_id: 'trace-1',
+      stage: 'debate',
+      debate_id: 'debate-abc',
+      model: 'x-ai/grok-4.5',
+      usage: CROSSING_USAGE,
+      latency_ms: 10,
+      timestamp: NOW,
+    });
+
+    expect(channel.alerts).toHaveLength(1);
+    expect(channel.alerts[0]).toMatchObject({
+      model: 'x-ai/grok-4.5',
+      trace_id: 'trace-1',
+      stage: 'debate',
+      debate_id: 'debate-abc',
+      prompt_tokens: 200_001,
+      above_prompt_tokens: 200_000,
+      consecutive_crossings: 1,
+    });
+  });
+
+  it('does not warn for a call that stays at or under the tier', () => {
+    const db = openSharedStore(':memory:');
+    const channel = recordingChannel();
+    new SqliteLlmSpendStore(db, undefined, false, channel).record({
+      trace_id: 'trace-1',
+      stage: 'debate',
+      model: 'x-ai/grok-4.5',
+      usage: UNDER_TIER_USAGE,
+      latency_ms: 10,
+      timestamp: NOW,
+    });
+
+    expect(channel.alerts).toHaveLength(0);
+  });
+
+  it('does not warn for a model with no published tier, however large the prompt', () => {
+    const db = openSharedStore(':memory:');
+    const channel = recordingChannel();
+    new SqliteLlmSpendStore(db, undefined, false, channel).record({
+      trace_id: 'trace-1',
+      stage: 'debate',
+      model: 'anthropic/claude-haiku-4.5',
+      usage: { input_tokens: 5_000_000, output_tokens: 1 },
+      latency_ms: 10,
+      timestamp: NOW,
+    });
+
+    expect(channel.alerts).toHaveLength(0);
+  });
+
+  it('suppresses a repeat crossing on the very next call for the same model', () => {
+    // Otherwise a run of retrieval-heavy calls on the same model — the
+    // realistic case a tiered call recurs — pages on every single one.
+    const db = openSharedStore(':memory:');
+    const channel = recordingChannel();
+    const store = new SqliteLlmSpendStore(db, undefined, false, channel);
+    const call = () =>
+      store.record({
+        trace_id: 'trace-1',
+        stage: 'debate',
+        model: 'x-ai/grok-4.5',
+        usage: CROSSING_USAGE,
+        latency_ms: 10,
+        timestamp: NOW,
+      });
+
+    call();
+    call();
+
+    expect(channel.alerts).toHaveLength(1);
+  });
+
+  it('fires again once the model drops back under the tier and crosses it a second time', () => {
+    const db = openSharedStore(':memory:');
+    const channel = recordingChannel();
+    const store = new SqliteLlmSpendStore(db, undefined, false, channel);
+    const record = (usage: { input_tokens: number; output_tokens: number }) =>
+      store.record({
+        trace_id: 'trace-1',
+        stage: 'debate',
+        model: 'x-ai/grok-4.5',
+        usage,
+        latency_ms: 10,
+        timestamp: NOW,
+      });
+
+    record(CROSSING_USAGE);
+    record(UNDER_TIER_USAGE);
+    record(CROSSING_USAGE);
+
+    expect(channel.alerts).toHaveLength(2);
+    expect(channel.alerts.map((alert) => alert.consecutive_crossings)).toEqual([1, 1]);
+  });
+
+  it('tracks crossings per model independently', () => {
+    const db = openSharedStore(':memory:');
+    const channel = recordingChannel();
+    const store = new SqliteLlmSpendStore(db, undefined, false, channel);
+    const record = (model: string) =>
+      store.record({
+        trace_id: 'trace-1',
+        stage: 'debate',
+        model,
+        usage: CROSSING_USAGE,
+        latency_ms: 10,
+        timestamp: NOW,
+      });
+
+    record('x-ai/grok-4.5');
+    record('~x-ai/grok-latest');
+
+    expect(channel.alerts).toHaveLength(2);
+  });
+
+  it('still writes the spend row and never throws when the alert channel itself throws', () => {
+    const db = openSharedStore(':memory:');
+    const logged: LogEntry[] = [];
+    const throwingChannel: PromptTierAlertChannel = {
+      postPromptTierAlert: () => {
+        throw new Error('telegram unreachable');
+      },
+    };
+    const store = new SqliteLlmSpendStore(
+      db,
+      { log: (entry) => logged.push(entry) },
+      false,
+      throwingChannel,
+    );
+
+    expect(() =>
+      store.record({
+        trace_id: 'trace-1',
+        stage: 'debate',
+        model: 'x-ai/grok-4.5',
+        usage: CROSSING_USAGE,
+        latency_ms: 10,
+        timestamp: NOW,
+      }),
+    ).not.toThrow();
+
+    const [row] = rows(db);
+    expect(row?.cost_usd).toBeCloseTo(0.812_004, 6);
+    expect(logged.some((entry) => entry.level === 'error' || entry.level === 'warn')).toBe(true);
+  });
+
+  it('does not require a promptTierAlerts channel to stay non-throwing', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteLlmSpendStore(db);
+    expect(() =>
+      store.record({
+        trace_id: 'trace-1',
+        stage: 'debate',
+        model: 'x-ai/grok-4.5',
+        usage: CROSSING_USAGE,
+        latency_ms: 10,
+        timestamp: NOW,
+      }),
+    ).not.toThrow();
+  });
+
+  it('shares one throttle across two stores the way production.ts wires the debate and sentiment sinks', () => {
+    // production.ts constructs SqliteLlmSpendStore twice against the same
+    // db (the debate stage's default llmClient, and the sentiment
+    // GrokAgent's spendSink) and hoists ONE PromptTierCrossingThrottle,
+    // passed to both — because NOUS_MODEL alone can route both roles
+    // through the same tiered model (nous-config.ts), with no code change.
+    // Two independent throttles would then count that model's consecutive
+    // crossings twice: up to two "first crossing" alerts and roughly double
+    // the repeat cadence against the one-then-every-8 contract.
+    const db = openSharedStore(':memory:');
+    const channel = recordingChannel();
+    const sharedThrottle = new PromptTierCrossingThrottle();
+    const debateStore = new SqliteLlmSpendStore(db, undefined, false, channel, sharedThrottle);
+    const sentimentStore = new SqliteLlmSpendStore(db, undefined, false, channel, sharedThrottle);
+
+    debateStore.record({
+      trace_id: 'trace-debate',
+      stage: 'debate',
+      model: 'x-ai/grok-4.5',
+      usage: CROSSING_USAGE,
+      latency_ms: 10,
+      timestamp: NOW,
+    });
+    sentimentStore.record({
+      trace_id: 'trace-sentiment',
+      stage: 'sentiment',
+      model: 'x-ai/grok-4.5',
+      usage: CROSSING_USAGE,
+      latency_ms: 10,
+      timestamp: NOW,
+    });
+
+    expect(channel.alerts).toHaveLength(1);
+    expect(channel.alerts[0]?.consecutive_crossings).toBe(1);
   });
 });

@@ -132,6 +132,7 @@ import type {
   LlmClient,
   LlmRequest,
   LlmResponse,
+  PromptTierAlert,
   RateLimiterSnapshot,
 } from '../../pipeline/debate-engine/index.js';
 import {
@@ -139,6 +140,7 @@ import {
   floorToBar,
   MAX_ROUNDS_BY_ASSET_CLASS,
   RateLimiter,
+  SqliteLlmSpendStore,
 } from '../../pipeline/debate-engine/index.js';
 import type {
   AlpacaBrokerClient,
@@ -255,6 +257,7 @@ import {
   LoggingMiCoverageAlertChannel,
   LoggingOcoDoubleFillAlertChannel,
   LoggingOrphanAlertChannel,
+  LoggingPromptTierAlertChannel,
   LoggingResidualExposureAlertChannel,
   LoggingUnpricedFillAlertChannel,
 } from './console-channels.js';
@@ -3717,6 +3720,88 @@ async function runRiskCriticScenario(logger: Logger): Promise<RiskCriticEvidence
   }
 }
 
+/** What `evaluateSmokeGate` needs from the prompt-tier-crossing scenario (#1155). */
+export interface PromptTierWarningEvidence {
+  /** `postPromptTierAlert` calls the real channel observed — should be exactly 1 (see the scenario's own doc). */
+  alertsFired: number;
+  /** `llm_spend` rows the crossing call itself wrote, over the SAME store the alert channel is wired into. */
+  spendRows: number;
+  /** The crossing call's persisted `cost_usd` — the tier RATE actually applied, not just the warning. */
+  costUsd: number | null;
+}
+
+/**
+ * #1155's producer, asserted on its DURABLE effect through the real
+ * `SqliteLlmSpendStore` — the same "own composition root, own cold
+ * `:memory:` store" pattern `runRiskCriticScenario` and
+ * `runDataFailoverScenario` use for a mechanism the six-stage tick loop above
+ * cannot exercise for real: `ConstantResponseLlmClient`/`SmokeLlmClient`
+ * (this file) implement `LlmClient` directly and carry no `usage` field at
+ * all, so no metered call — let alone a tiered one — happens anywhere else in
+ * this process.
+ *
+ * `record()` is called directly rather than through a fabricated
+ * `AnthropicMessagesClient` wrapped in `AnthropicLlmClient`: the gap #1155
+ * closes is entirely inside `SqliteLlmSpendStore.record` (whether it calls
+ * `crossesPromptTier` and dispatches), and `AnthropicLlmClient`'s own usage
+ * extraction is unchanged and already covered by anthropic-client.test.ts.
+ * Only the INPUT — "the provider reported this many prompt tokens" — is
+ * fabricated here, the same relationship `FixtureDataSource` has to the
+ * indicators computed over its bars: the mechanism under test runs for real,
+ * for a real tiered model (`x-ai/grok-4.5`, pricing.ts), against a real
+ * `:memory:` `llm_spend` table, through the real `crossesPromptTier` and the
+ * real throttle, into a channel double that only counts calls — the same
+ * "hand-rolled alert channel" shape `runArmComparisonProbe` above uses for
+ * `postArmDivergenceAlert`.
+ *
+ * Two crossing calls, not one: the FIRST call alone cannot distinguish a
+ * throttle that fires once from one deleted outright (both would show
+ * `alertsFired: 1` after a single call), which is exactly the "vacuous either
+ * way" shape #1155's own instructions warn against. The second call, on the
+ * SAME model, must be suppressed — `alertsFired` staying at 1 proves the
+ * throttle ran, not just that a crossing was dispatched once.
+ */
+function runPromptTierWarningScenario(): PromptTierWarningEvidence {
+  const db = openSharedStore(':memory:');
+  try {
+    const alerts: PromptTierAlert[] = [];
+    const store = new SqliteLlmSpendStore(db, undefined, false, {
+      postPromptTierAlert: (alert) => {
+        alerts.push(alert);
+      },
+    });
+
+    // 200,001 prompt tokens against x-ai/grok-4.5's published 200,000-token
+    // large-prompt tier (pricing.ts) — one token over, the same fixture
+    // pricing.test.ts pins `crossesPromptTier`'s own answer against.
+    const crossingUsage = { input_tokens: 200_001, output_tokens: 1_000 };
+    const record = () =>
+      store.record({
+        trace_id: 'smoke-prompt-tier',
+        stage: 'debate',
+        model: 'x-ai/grok-4.5',
+        usage: crossingUsage,
+        latency_ms: 10,
+        timestamp: SMOKE_RUN_INSTANT,
+      });
+
+    record();
+    record();
+
+    const rows = db.prepare('SELECT cost_usd FROM llm_spend ORDER BY id').all() as {
+      cost_usd: number | null;
+    }[];
+
+    return {
+      alertsFired: alerts.length,
+      spendRows: rows.length,
+      costUsd: rows[0]?.cost_usd ?? null,
+    };
+  } finally {
+    db.close();
+  }
+}
+
 /** Reads persisted condition states for the gate, tolerating a NULL or unreadable column exactly as the replay path does. */
 function readSmokeConditionStates(stored: string | null): string[] {
   if (stored === null) return [];
@@ -3830,6 +3915,16 @@ export function evaluateSmokeGate(
      * with every unit test still green, and nothing else here would notice.
      */
     riskCritic: RiskCriticEvidence;
+    /**
+     * The prompt-tier-crossing warning's evidence (#1155) — required, not
+     * optional, for the same "compile error, not a silent no-op" reason the
+     * mechanisms above are. `crossesPromptTier` (pricing.ts) had a test but no
+     * production caller at all; deleting the `crossesPromptTier(...)` call or
+     * the `postPromptTierAlert(...)` dispatch inside `SqliteLlmSpendStore.record`
+     * (spend-sink.ts) would return it to that never-called state with every
+     * other unit test still green, and nothing else here would notice.
+     */
+    promptTierWarning: PromptTierWarningEvidence;
     /**
      * The analyst failure-cause scenario's evidence (#1114) — required, not
      * optional, for the same "compile error, not a silent no-op" reason the
@@ -4504,6 +4599,31 @@ export function evaluateSmokeGate(
         `constraint: ${critic.bindingConstraint ?? 'none'}) — \`evaluate()\` holds that ` +
         'authority (#997 Q2b), so a breach that only gets logged is a checklist with no ' +
         'teeth (#994)',
+    );
+  }
+
+  // #1155 — the prompt-tier crossing warning, asserted on its DURABLE effect
+  // through the real `SqliteLlmSpendStore`. See `runPromptTierWarningScenario`.
+  const promptTierWarning = options.promptTierWarning;
+  if (promptTierWarning.spendRows !== 2) {
+    failures.push(
+      `the prompt-tier scenario's two metered calls wrote ${promptTierWarning.spendRows} ` +
+        '`llm_spend` row(s), not 2 — the scenario itself is broken, not the mechanism it exists ' +
+        'to gate (#1155)',
+    );
+  } else if (promptTierWarning.costUsd === null || promptTierWarning.costUsd < 0.8) {
+    failures.push(
+      `the crossing call priced at $${String(promptTierWarning.costUsd)}, not at x-ai/grok-4.5's ` +
+        "large-prompt TIER rate (~$0.812) — the scenario's own fixture usage does not actually " +
+        'cross the tier, so its alert count proves nothing about #1155',
+    );
+  } else if (promptTierWarning.alertsFired !== 1) {
+    failures.push(
+      `two consecutive calls that cross the SAME model's prompt tier produced ` +
+        `${promptTierWarning.alertsFired} alert(s), not exactly 1 — either \`crossesPromptTier\` ` +
+        '(pricing.ts) is not being consulted inside `SqliteLlmSpendStore.record` at all (0 ' +
+        'alerts: the exact silent-2.5x-step #1155 was filed against), or the crossing is not ' +
+        'throttled (2 alerts: a retrieval-heavy model would page on every single call)',
     );
   }
 
@@ -5472,6 +5592,14 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // rather than only a directly-called `startTickLoop` — the one thing a
       // seconds-long smoke run cannot.
       tickSkipAlerts: { postTickSkipAlert: async () => {} },
+      // #1155 — the nineteenth `ALERT_CHANNEL_FIELDS` member. Log-only like
+      // the rest of this attended, offline run: `runPromptTierWarningScenario`
+      // below drives the real wiring — `SqliteLlmSpendStore.record`,
+      // `crossesPromptTier`, the throttle, and this port — end to end on its
+      // own composition root and its own cold `:memory:` store, the same
+      // pattern `runRiskCriticScenario`/`runDataFailoverScenario` use for a
+      // mechanism the six-stage tick loop above cannot exercise for real.
+      promptTierAlerts: new LoggingPromptTierAlertChannel(logger),
     } satisfies Required<AlertChannels>;
 
     const orchestrator = await startFromEnvironment({
@@ -5691,6 +5819,12 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
     // never wired.
     const riskCritic = await runRiskCriticScenario(logger);
 
+    // #1155: the prompt-tier-crossing warning, on its own real
+    // `SqliteLlmSpendStore` and its own cold in-memory store — no metered call
+    // this run's own `ConstantResponseLlmClient`/`SmokeLlmClient` make carries
+    // a `usage` field at all, so nothing else here could ever exercise it.
+    const promptTierWarning = runPromptTierWarningScenario();
+
     // #1114: the analyst failure-cause logging's enforcement assertion, on
     // its own composition root and its own cold in-memory store, same
     // pattern as `dataFailover`/`riskCritic` above.
@@ -5721,6 +5855,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       thresholdClamp,
       dataFailover,
       riskCritic,
+      promptTierWarning,
       analystFailureCause,
       // #971. Run against the same store the observations were read from, and
       // AFTER `orchestrator.stop()` for `readSmokeObservations`' reason: the

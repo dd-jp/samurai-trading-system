@@ -5,6 +5,7 @@ import {
   LoggingMiCoverageAlertChannel,
   LoggingMiCoverageTelemetry,
   LoggingOrphanAlertChannel,
+  LoggingPromptTierAlertChannel,
   LoggingTickSkipAlertChannel,
   LoggingUnpricedFillAlertChannel,
   ParkedCiiScoreProvider,
@@ -114,6 +115,35 @@ describe('LoggingTickSkipAlertChannel (#1084)', () => {
       skipped: 15,
       planned: 20,
       skipped_instruments: ['3USL', '2LQQ', 'BTC-USD'],
+    });
+  });
+});
+
+describe('LoggingPromptTierAlertChannel (#1155)', () => {
+  it('names the model, the crossed threshold and the consecutive count', () => {
+    const logger = makeLogger();
+
+    new LoggingPromptTierAlertChannel(logger).postPromptTierAlert({
+      model: 'x-ai/grok-4.5',
+      trace_id: 'trace-1',
+      stage: 'debate',
+      debate_id: 'debate-abc',
+      prompt_tokens: 200_001,
+      above_prompt_tokens: 200_000,
+      consecutive_crossings: 1,
+      reported_at: new Date('2026-09-04T09:00:00Z'),
+    });
+
+    expect(logger.entries[0]?.level).toBe('warn');
+    expect(logger.entries[0]?.message).toContain('x-ai/grok-4.5');
+    expect(logger.entries[0]?.message).toContain('200001');
+    expect(logger.entries[0]?.message).toContain('200000');
+    expect(logger.entries[0]?.payload).toMatchObject({
+      model: 'x-ai/grok-4.5',
+      debate_id: 'debate-abc',
+      prompt_tokens: 200_001,
+      above_prompt_tokens: 200_000,
+      consecutive_crossings: 1,
     });
   });
 });
