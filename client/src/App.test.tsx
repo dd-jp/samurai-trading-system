@@ -21,8 +21,10 @@ import {
 
 const POLL_MS = 20;
 
-function renderApp(payloads: Parameters<typeof fakeFetch>[0]) {
-  return render(<App snapshotOptions={{ fetchImpl: fakeFetch(payloads), intervalMs: POLL_MS }} />);
+function renderApp(payloads: Parameters<typeof fakeFetch>[0], now?: () => number) {
+  return render(
+    <App snapshotOptions={{ fetchImpl: fakeFetch(payloads), intervalMs: POLL_MS, now }} />,
+  );
 }
 
 function laneView() {
@@ -74,20 +76,29 @@ afterEach(() => {
 
 describe('rail', () => {
   it('reads ALIVE with the poll clock, PAPER, the live tick and both providers', async () => {
-    renderApp([
-      makeSnapshot({
-        pipeline: laneView(),
-        tick_status: {
-          instrument: 'BTC-USD',
-          asset_class: 'crypto',
-          stage: 'debate',
-          trace_id: 'trace-btc',
-        },
-      }),
-    ]);
+    // The snapshot's own `generated_at` stays at the fixture default
+    // (12:00:00Z, via `makeSnapshot`) while the injected client clock reads a
+    // different instant — the poll clock and the snapshot clock must read
+    // their own sources rather than coincide because a test happened not to
+    // vary them (#1166).
+    renderApp(
+      [
+        makeSnapshot({
+          pipeline: laneView(),
+          tick_status: {
+            instrument: 'BTC-USD',
+            asset_class: 'crypto',
+            stage: 'debate',
+            trace_id: 'trace-btc',
+          },
+        }),
+      ],
+      () => Date.parse('2026-08-07T12:00:05.000Z'),
+    );
     const rail = screen.getByRole('complementary', { name: 'Rail' });
     expect(await within(rail).findByText('ALIVE')).toBeTruthy();
-    expect(within(rail).getByText('polled 12:00:00Z')).toBeTruthy();
+    expect(within(rail).getByText('polled 12:00:05Z')).toBeTruthy();
+    expect(within(rail).queryByText('polled 12:00:00Z')).toBeNull();
     expect(within(rail).getByText('PAPER')).toBeTruthy();
     expect(within(rail).getByText(/BTC-USD · debate · since 11:59:50Z/)).toBeTruthy();
     expect(within(rail).getByText('trace-btc')).toBeTruthy();

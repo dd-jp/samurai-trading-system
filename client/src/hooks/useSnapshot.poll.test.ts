@@ -104,6 +104,29 @@ describe('useSnapshot polling', () => {
     expect(result.current.error).toBeNull();
   });
 
+  it('exposes lastSuccessAt as the client clock, decoupled from a frozen generated_at (#1166)', async () => {
+    // A single payload, reused by reference on every poll (`fakeFetch` clamps
+    // to its last entry): `generated_at` never changes, modelling a stall in
+    // the underlying data while the HTTP round trip keeps succeeding.
+    const generatedAt = '2026-08-07T12:00:00.000Z';
+    const payload = makeSnapshot({ generated_at: generatedAt });
+    let clockMs = 1_000_000;
+    const now = () => clockMs;
+
+    const { result } = renderHook(() =>
+      useSnapshot({ fetchImpl: fakeFetch([payload]), now, intervalMs: INTERVAL_MS }),
+    );
+
+    await waitFor(() => expect(result.current.lastSuccessAt).toBe(new Date(clockMs).toISOString()));
+    const firstPoll = result.current.lastSuccessAt;
+
+    clockMs += 60_000;
+    await waitFor(() => expect(result.current.lastSuccessAt).toBe(new Date(clockMs).toISOString()));
+
+    expect(result.current.lastSuccessAt).not.toBe(firstPoll);
+    expect(result.current.snapshot?.generated_at).toBe(generatedAt);
+  });
+
   it('names the timeout, and the budget it gave the request, while every poll hangs', async () => {
     const { result } = renderHook(() =>
       useSnapshot({ fetchImpl: fakeFetch([HANGS]), intervalMs: INTERVAL_MS }),
