@@ -20,8 +20,8 @@ describe('resolveTrade', () => {
         closed_trades: [makeClosedTrade({ idempotency_key: 'k1', debate_id: 'd1' })],
         debates: [makeDebate({ debate_id: 'd1', instrument: 'SPY' })],
         risk_critics: [
-          makeRiskCritic({ debate_id: 'd1', trace_id: 'trace-spy', instrument: 'SPY' }),
           makeRiskCritic({ debate_id: 'other', trace_id: 'trace-other', instrument: 'SPY' }),
+          makeRiskCritic({ debate_id: 'd1', trace_id: 'trace-spy', instrument: 'SPY' }),
         ],
         verdicts: [makeVerdict({ trace_id: 'trace-spy', instrument: 'SPY', status: 'go' })],
         fills: [
@@ -114,6 +114,11 @@ describe('resolveTrace', () => {
           makeDebate({ debate_id: 'qqq-newest', instrument: 'QQQ' }),
           makeDebate({ debate_id: 'spy-newest', instrument: 'SPY' }),
           makeDebate({ debate_id: 'spy-older', instrument: 'SPY' }),
+        ],
+        // debate_id differs from 'spy-newest' so an exact join would resolve
+        // to a different row than today's instrument-only fallback does.
+        risk_critics: [
+          makeRiskCritic({ trace_id: 'trace-spy', instrument: 'SPY', debate_id: 'spy-older' }),
         ],
       }),
       { instrument: 'SPY', traceId: null },
