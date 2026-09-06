@@ -235,6 +235,7 @@ import {
   LoggingMiCoverageTelemetry,
   LoggingOcoDoubleFillAlertChannel,
   LoggingOrphanAlertChannel,
+  LoggingPromptTierAlertChannel,
   LoggingResidualExposureAlertChannel,
   LoggingTickSkipAlertChannel,
   LoggingUnpricedFillAlertChannel,
@@ -1590,11 +1591,17 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * pass both bill through it, so there is one spend meter and one config
    * rather than two clients disagreeing about either.
    */
+  const promptTierAlerts = config.promptTierAlerts ?? new LoggingPromptTierAlertChannel(logger);
   const llmClient =
     config.llmClient ??
     buildDefaultLlmClient(
       logger,
-      new SqliteLlmSpendStore(guardedStore(config.db, 'debate-engine'), logger, captureLlmText),
+      new SqliteLlmSpendStore(
+        guardedStore(config.db, 'debate-engine'),
+        logger,
+        captureLlmText,
+        promptTierAlerts,
+      ),
     );
 
   /**
@@ -1673,6 +1680,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
             guardedStore(config.db, 'debate-engine'),
             logger,
             captureLlmText,
+            promptTierAlerts,
           ),
           clock,
           logger,

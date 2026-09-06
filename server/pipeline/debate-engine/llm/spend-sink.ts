@@ -23,12 +23,16 @@
 import { maskAndCap } from '../../../shared/index.js';
 import {
   type AnthropicUsage,
+  crossesPromptTier,
   priceServerToolCalls,
   priceUsage,
+  promptTokensOf,
+  rateFor,
 } from '../../../shared/llm/pricing.js';
 import type { SharedStore } from '../../../shared/store/index.js';
 import { toStoredTimestamp } from '../../../shared/store/sqlite-utils.js';
 import type { Logger } from '../../../shared/types.js';
+import { type PromptTierAlertChannel, PromptTierCrossingThrottle } from './prompt-tier-alert.js';
 
 /** One metered API call, as handed to the sink. */
 export interface LlmSpendRecord {
@@ -149,7 +153,16 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
      * ambient variable happened to be set.
      */
     private readonly captureText = false,
+    /**
+     * Where a prompt-tier crossing is escalated (#1155). Absent = no
+     * alerting: `crossesPromptTier` is still consulted (see
+     * `maybeAlertPromptTierCrossing`) so the throttle's state stays correct
+     * across a run that later injects a channel, but nothing is posted.
+     */
+    private readonly promptTierAlerts?: PromptTierAlertChannel,
   ) {}
+
+  private readonly promptTierThrottle = new PromptTierCrossingThrottle();
 
   record(entry: LlmSpendRecord): void {
     try {
@@ -240,6 +253,25 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
           payload: { error: error instanceof Error ? error.message : String(error) },
         });
       }
+
+      // Its OWN catch, for the same reason `recordText`'s is separate: the
+      // spend row is already written and safe by this point, so a channel
+      // that throws must not turn into an `llm_spend_write_failed` line that
+      // falsely claims the row is missing.
+      try {
+        this.maybeAlertPromptTierCrossing(entry);
+      } catch (error) {
+        this.logger?.log({
+          trace_id: entry.trace_id,
+          stage: 'orchestrator',
+          event: 'llm_prompt_tier_alert_failed',
+          level: 'error',
+          message:
+            'prompt-tier crossing alert failed — the API call and its spend row are ' +
+            'unaffected, but a large-prompt-tier cost step is unreported',
+          payload: { error: error instanceof Error ? error.message : String(error) },
+        });
+      }
     } catch (error) {
       // See the module doc comment: a metering failure must not surface as a
       // failed LLM call. Logged rather than silent so a persistently broken
@@ -255,6 +287,37 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
         payload: { error: error instanceof Error ? error.message : String(error) },
       });
     }
+  }
+
+  /**
+   * The wiring `crossesPromptTier` (pricing.ts) existed without (#1155):
+   * called on every metered call, whether or not it crosses, so
+   * `promptTierThrottle` sees the full run and a call back under the tier
+   * correctly clears it.
+   *
+   * `crossesPromptTier` already REFUSES a model with no tier row, so
+   * `rateFor(entry.model)?.tier` is guaranteed defined once `crossed` is
+   * true — the `undefined` branch below is unreachable in practice and
+   * guards only against the two functions disagreeing in a future edit.
+   */
+  private maybeAlertPromptTierCrossing(entry: LlmSpendRecord): void {
+    const crossed = crossesPromptTier(entry.model, entry.usage);
+    const { alert, consecutive } = this.promptTierThrottle.observe(entry.model, crossed);
+    if (!alert) return;
+
+    const aboveTokens = rateFor(entry.model)?.tier?.above_prompt_tokens;
+    if (aboveTokens === undefined) return;
+
+    this.promptTierAlerts?.postPromptTierAlert({
+      model: entry.model,
+      trace_id: entry.trace_id,
+      stage: entry.stage,
+      debate_id: entry.debate_id,
+      prompt_tokens: promptTokensOf(entry.usage),
+      above_prompt_tokens: aboveTokens,
+      consecutive_crossings: consecutive,
+      reported_at: entry.timestamp,
+    });
   }
 
   /**

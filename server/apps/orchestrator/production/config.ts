@@ -1,5 +1,6 @@
 import type {
   LlmClient,
+  PromptTierAlertChannel,
   RateLimiter,
   RateLimiterConfig,
 } from '../../../pipeline/debate-engine/index.js';
@@ -375,6 +376,25 @@ export interface AlertChannelSlots {
    * operator sized it for.
    */
   tickSkipAlerts?: TickSkipAlertChannel;
+  /**
+   * Where a prompt-tier crossing is escalated (#1155) — the nineteenth
+   * `ALERT_CHANNEL_FIELDS` member, channel type and transport landing in the
+   * SAME change like `tickSkipAlerts`/`armDivergenceAlerts` before it.
+   * Defaults to `LoggingPromptTierAlertChannel`, with the same caveat as
+   * `calendarFallbackAlerts`: log-only cannot page anyone, and a run whose
+   * cost rate silently jumped 2.5x mid-run needs more than a log line an
+   * unattended soak (#238) never reads. `TradeChannelPromptTierAlert`
+   * (prompt-tier-alert-channel.ts) is what `SAMURAI_ALERTS=telegram` (#322)
+   * supplies.
+   *
+   * The condition it reports is invisible from outside by construction: the
+   * meter keeps writing rows, the cap keeps enforcing, and the only symptom
+   * is that `llm_spend` starts burning faster than the same call volume did
+   * a moment before — precisely `crossesPromptTier`'s own doc comment's "a
+   * 2.5x unit-cost change happening silently inside the meter", the defect
+   * this channel exists to end.
+   */
+  promptTierAlerts?: PromptTierAlertChannel;
 }
 
 /**

@@ -73,6 +73,12 @@ export { MockLlmClient } from './llm/mock-client.js';
 export type { NousMessagesClientOptions } from './llm/nous-messages-client.js';
 export { NousMessagesClient } from './llm/nous-messages-client.js';
 export { wrapUntrusted } from './llm/prompt-safety.js';
+export type { PromptTierAlert, PromptTierAlertChannel } from './llm/prompt-tier-alert.js';
+export {
+  ALERT_AFTER_CONSECUTIVE_PROMPT_TIER_CROSSINGS,
+  ALERT_REPEAT_EVERY_PROMPT_TIER_CROSSINGS,
+  PromptTierCrossingThrottle,
+} from './llm/prompt-tier-alert.js';
 export type { SpendCap, SpendCapVerdict } from './llm/spend-cap.js';
 export { SqliteSpendCap, UNCAPPED_SPEND } from './llm/spend-cap.js';
 export type { LlmSpendRecord, LlmSpendSink } from './llm/spend-sink.js';

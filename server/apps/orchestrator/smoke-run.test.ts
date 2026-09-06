@@ -42,6 +42,7 @@ import {
   type MarketDataFetchEvidence,
   MarketDataFetchRecorder,
   type OutsideBenchmarkEvidence,
+  type PromptTierWarningEvidence,
   type RiskCriticEvidence,
   runSmoke,
   type SizingCeilingEvidence,
@@ -293,6 +294,7 @@ function healthyGateOptions(
     thresholdClamp?: ThresholdClampEvidence;
     dataFailover?: DataFailoverEvidence;
     riskCritic?: RiskCriticEvidence;
+    promptTierWarning?: PromptTierWarningEvidence;
     analystFailureCause?: AnalystFailureCauseEvidence;
     armComparison?: ArmComparisonEvidence;
     outsideBenchmarks?: OutsideBenchmarkEvidence;
@@ -326,6 +328,7 @@ function healthyGateOptions(
     thresholdClamp: overrides.thresholdClamp ?? healthyThresholdClamp(),
     dataFailover: overrides.dataFailover ?? healthyDataFailover(),
     riskCritic: overrides.riskCritic ?? healthyRiskCritic(),
+    promptTierWarning: overrides.promptTierWarning ?? healthyPromptTierWarning(),
     analystFailureCause: overrides.analystFailureCause ?? healthyAnalystFailureCause(),
     // #1140: healthy means the published cap IS the run's configured budget.
     publishedLlmCapUsd:
@@ -430,6 +433,24 @@ function healthyRiskCritic(overrides: Partial<RiskCriticEvidence> = {}): RiskCri
     stepError: null,
     conditionStates: ['breached'],
     bindingConstraint: 'risk_critic:invalidated',
+    ...overrides,
+  };
+}
+
+/**
+ * What `runPromptTierWarningScenario` (#1155) reports when
+ * `SqliteLlmSpendStore.record` is wiring `crossesPromptTier` into a real
+ * throttle and a real alert channel: two consecutive crossing calls on the
+ * same model wrote both spend rows, priced at the tier rate, and produced
+ * exactly one alert.
+ */
+function healthyPromptTierWarning(
+  overrides: Partial<PromptTierWarningEvidence> = {},
+): PromptTierWarningEvidence {
+  return {
+    alertsFired: 1,
+    spendRows: 2,
+    costUsd: 0.812_004,
     ...overrides,
   };
 }
@@ -2783,6 +2804,60 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
       const gate = evaluateSmokeGate(transactedObservations(), healthyGateOptions());
 
       expect(gate.failures.filter((failure) => failure.includes('#957'))).toEqual([]);
+    });
+  });
+
+  describe('the prompt-tier crossing warning (#1155)', () => {
+    it('fails when no alert fired for two consecutive crossings on the same model', () => {
+      // THE MUTATION THIS CATCHES: delete the `crossesPromptTier(...)` call
+      // (or its dispatch) from `SqliteLlmSpendStore.record` — the exact
+      // silent-2.5x-step state #1155 was filed against.
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({ promptTierWarning: healthyPromptTierWarning({ alertsFired: 0 }) }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('not exactly 1');
+    });
+
+    it('fails when both consecutive crossings alert — the throttle is not suppressing a repeat', () => {
+      // THE MUTATION THIS CATCHES: remove the `PromptTierCrossingThrottle`
+      // consultation and dispatch on every crossing unconditionally — a
+      // retrieval-heavy model would then page on every single call.
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({ promptTierWarning: healthyPromptTierWarning({ alertsFired: 2 }) }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('not exactly 1');
+    });
+
+    it('fails when the scenario itself did not record both metered calls', () => {
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({ promptTierWarning: healthyPromptTierWarning({ spendRows: 1 }) }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('the scenario itself is broken');
+    });
+
+    it('fails when the fixture usage does not actually price at the tier rate', () => {
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({ promptTierWarning: healthyPromptTierWarning({ costUsd: 0.3248 }) }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('does not actually cross the tier');
+    });
+
+    it('passes when two consecutive crossings on the same model produce exactly one alert', () => {
+      const gate = evaluateSmokeGate(transactedObservations(), healthyGateOptions());
+
+      expect(gate.failures.filter((failure) => failure.includes('#1155'))).toEqual([]);
     });
   });
 
