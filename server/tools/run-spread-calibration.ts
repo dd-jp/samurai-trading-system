@@ -374,10 +374,6 @@ export async function runSpreadCalibration(
   return calibration;
 }
 
-// ---------------------------------------------------------------------------
-// Intraday calibration (#875)
-// ---------------------------------------------------------------------------
-
 /**
  * The INTRADAY resolution this calibration fits, and the one an intraday
  * Stage 2 run replays (`STAGE2_TIMEFRAME=1m STAGE2_SOURCE=free-stack`).
