@@ -4,12 +4,10 @@
  * analyst's contribution... so the Feedback Loop can later adjust analyst
  * weights").
  *
- * Blocked-by #34 (Round Structure & Termination Orchestrator) does not yet
- * exist, so this is a pure builder over an explicit local input shape rather
- * than something wired into round-orchestration internals. Once #34 lands,
- * it calls this with the real per-round stances it produces — same pattern
- * `debate-log-store.ts`'s `buildDebateLog` used ahead of full pipeline
- * wiring (#63).
+ * A pure builder over an explicit local input shape rather than something
+ * wired into round-orchestration internals: #34's round orchestrator
+ * (`round-orchestrator.ts`) calls it with the real per-round stances it
+ * produces.
  */
 import type { AnalystContribution, AnalystView, Direction } from './types.js';
 

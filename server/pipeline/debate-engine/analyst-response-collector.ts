@@ -2,10 +2,10 @@
  * Analyst response collection: timeout + majority quorum — see
  * docs/specs/debate-engine-spec.md "Module: Analyst Failure Handling"
  * (ticket #37, blocked by #25 "AnalystView Validation & Quorum
- * Enforcement"). #25 is unimplemented and its acceptance criteria are a
- * strict subset of #37's (same validation + quorum check, minus the
- * timeout), so both are built here rather than leaving #37 with nothing to
- * depend on.
+ * Enforcement"). #25 has no separate implementation: its acceptance criteria
+ * are a strict subset of #37's (same validation + quorum check, minus the
+ * timeout), so both are satisfied here rather than leaving #37 with nothing
+ * to depend on.
  *
  * Failure modes handled (spec's three): no response (timeout), malformed
  * output (validation failure), and an outright error from the analyst.

@@ -5,9 +5,9 @@
  * Trader has a scalar measure of consensus strength").
  *
  * A pure builder over an explicit local input shape rather than something
- * wired into round-orchestration internals — `#34`'s round orchestrator
- * (`debate-adapter.ts`) calls this with the real per-round stances it
- * accumulates.
+ * wired into round-orchestration internals — `debate-adapter.ts` calls it
+ * from the mediator persona it hands to #34's round orchestrator
+ * (`round-orchestrator.ts`), with the real per-round stances it accumulates.
  *
  * Formula and combination logic were resolved by #625 (2026-08-14) — see
  * debate-engine-spec.md's "Module: Conviction Score Algorithm" for the three
