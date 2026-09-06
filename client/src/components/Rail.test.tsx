@@ -75,8 +75,9 @@ describe('Rail — poll clock', () => {
 /**
  * #1201: the drawdown meter's over-tolerance state turned only the track's
  * colour `bad`, with no word — the LLM-cap meter's `over cap · ` prefix was
- * the only carrier the rail had that also spoke. `DrawdownBlock` discarded
- * `CapMeter`'s `over` argument entirely.
+ * the only *capped meter* on the rail whose footnote also spoke (the rail
+ * speaks in words elsewhere too: staleness, the mode pill, provider states).
+ * `DrawdownBlock` discarded `CapMeter`'s `over` argument entirely.
  */
 describe('Rail — drawdown meter', () => {
   it('says the drawdown is over tolerance when max drawdown reaches the index tolerance', () => {
