@@ -711,7 +711,8 @@ describe('universe resolution is a single site (#1167)', () => {
 
   // `{`/`}` must balance in valid, comment/string-stripped TypeScript; a
   // nonzero delta is a lower bound on stripper desync, not a proof of its
-  // absence (a desync that stays balanced would not show).
+  // absence — see `stripCommentsAndStrings`'s doc comment for why the
+  // likely shape of a new desync typically will not unbalance braces.
   function braceDelta(code: string): number {
     return (code.match(/\{/g)?.length ?? 0) - (code.match(/\}/g)?.length ?? 0);
   }
