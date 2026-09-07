@@ -44,12 +44,36 @@
  * told apart from an Alpaca-sourced bar and re-derived from the primary
  * later.
  */
-import { fetchWithTimeout, type TokenBucket, truncateForError } from '../../../shared/index.js';
+import {
+  fetchWithTimeout,
+  type RetryConfig,
+  type TokenBucket,
+  truncateForError,
+  withRetry,
+} from '../../../shared/index.js';
 import type { Bar } from '../index.js';
 import { closeTimeOf, isDailyTimeframe, timeframeToMs } from '../index.js';
+import {
+  classifyPolygonBarsNetworkError,
+  classifyPolygonBarsResponse,
+  isRetryablePolygonBarsError,
+} from './polygon-bars-errors.js';
 
 const DEFAULT_BASE_URL = 'https://api.polygon.io';
 const DEFAULT_TIMEOUT_MS = 10_000;
+/**
+ * One retry, not the other three transport clients' three attempts (#1238).
+ * Each attempt re-acquires from the shared account-wide `TokenBucket`
+ * (`capacity: 1, refillPerSecond: 1/13` — `venue-pacing.ts`'s
+ * `DEFAULT_POLYGON_PACING`), so the bucket's own ~13s refill wait already
+ * dominates the gap between attempts; a second retry would roughly double
+ * the worst-case fallback latency for a shrinking chance of a third bad
+ * response resolving. Sized against the 5-10 name watchlist
+ * (`universe-selector-spec.md`) all failing over at once: 2 attempts x 10
+ * names is 20 bucket acquisitions, ~4 minutes worst case, comfortably inside
+ * the 15-minute tick cadence.
+ */
+const DEFAULT_RETRY_CONFIG: RetryConfig = { maxAttempts: 2, baseDelayMs: 500, maxDelayMs: 2_000 };
 /** Comfortably above anything this client's small `limit`s (20/30) could return in one page. */
 const PAGE_LIMIT = 50_000;
 /** Headroom over the requested `limit`, same posture as `CoinbaseCandlesClient` — a short read is returned as-is, not retried. */
@@ -125,6 +149,8 @@ export interface PolygonBarsClientOptions {
   timeoutMs?: number;
   /** Paced via `resolvePolygonPacing()` at the call site — never a bespoke sleep, same as `HttpPolygonClient`. */
   rateLimiter?: TokenBucket | undefined;
+  /** Defaults to `DEFAULT_RETRY_CONFIG` — see its doc comment for why this client retries less than the other transport clients. */
+  retry?: RetryConfig;
 }
 
 /**
@@ -139,6 +165,7 @@ export class PolygonBarsClient {
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
   private readonly rateLimiter: TokenBucket | undefined;
+  private readonly retry: RetryConfig;
 
   constructor(options: PolygonBarsClientOptions = {}) {
     const apiKey = options.apiKey ?? process.env.POLYGON_API_KEY;
@@ -152,6 +179,7 @@ export class PolygonBarsClient {
     this.baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.rateLimiter = options.rateLimiter;
+    this.retry = options.retry ?? DEFAULT_RETRY_CONFIG;
   }
 
   async getBars(symbol: string, timeframe: string, asOf: Date, limit: number): Promise<Bar[]> {
@@ -172,26 +200,34 @@ export class PolygonBarsClient {
       `${this.baseUrl}/v2/aggs/ticker/${encodeURIComponent(symbol)}/range/${multiplier}/${timespan}/` +
       `${toPolygonDate(from)}/${toPolygonDate(asOf)}?${params.toString()}`;
 
-    await this.rateLimiter?.acquireBackground();
+    const context = `${symbol} ${timeframe} bars`;
 
-    let response: Response;
-    try {
-      response = await fetchWithTimeout(
-        url,
-        { headers: { Authorization: `Bearer ${this.apiKey}` } },
-        this.timeoutMs,
-      );
-    } catch (cause) {
-      throw new Error(`PolygonBarsClient: network error fetching ${symbol} ${timeframe} bars.`, {
-        cause,
-      });
-    }
-
-    if (!response.ok) {
-      throw new Error(
-        `PolygonBarsClient: ${symbol} ${timeframe} bars request failed with HTTP ${response.status}.`,
-      );
-    }
+    // The rate limiter is acquired INSIDE the retried closure, not once
+    // before it (#391 precedent, `AlpacaHttpDataClient.requestJson`): a
+    // retried attempt is a second request against the same account-wide
+    // budget, and pacing only the first attempt would let a retry burst
+    // through the bucket.
+    const response = await withRetry(
+      async () => {
+        await this.rateLimiter?.acquireBackground();
+        let attempt: Response;
+        try {
+          attempt = await fetchWithTimeout(
+            url,
+            { headers: { Authorization: `Bearer ${this.apiKey}` } },
+            this.timeoutMs,
+          );
+        } catch (cause) {
+          throw classifyPolygonBarsNetworkError(cause, context);
+        }
+        if (!attempt.ok) {
+          throw classifyPolygonBarsResponse(attempt, context);
+        }
+        return attempt;
+      },
+      this.retry,
+      isRetryablePolygonBarsError,
+    );
 
     let parsed: unknown;
     try {

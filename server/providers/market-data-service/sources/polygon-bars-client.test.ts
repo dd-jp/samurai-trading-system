@@ -1,5 +1,11 @@
 import { TokenBucket } from '../../../shared/index.js';
 import { PolygonBarsClient, toPolygonRange } from './polygon-bars-client.js';
+import {
+  isRetryablePolygonBarsError,
+  PolygonBarsProviderError,
+  PolygonBarsRateLimitError,
+  PolygonBarsTimeoutError,
+} from './polygon-bars-errors.js';
 
 const SYMBOL = 'SPY';
 const ASOF = new Date('2026-08-07T12:00:00Z');
@@ -69,7 +75,12 @@ describe('PolygonBarsClient.getBars', () => {
 
     let thrown: unknown;
     try {
-      await new PolygonBarsClient().getBars(SYMBOL, '1h', ASOF, 1);
+      // maxAttempts: 1 — a 500 is retryable by default; this test is about
+      // the auth header and secret-masking, not the retry path (covered
+      // separately below), so it stays single-attempt and fast.
+      await new PolygonBarsClient({
+        retry: { maxAttempts: 1, baseDelayMs: 0, maxDelayMs: 0 },
+      }).getBars(SYMBOL, '1h', ASOF, 1);
     } catch (error) {
       thrown = error;
     }
@@ -199,5 +210,69 @@ describe('PolygonBarsClient.getBars', () => {
     await new PolygonBarsClient({ rateLimiter }).getBars(SYMBOL, '1h', ASOF, 1);
 
     expect(acquireSpy).toHaveBeenCalledTimes(1);
+  });
+
+  describe('retry (#1238)', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('retries a 503 once and succeeds, re-acquiring the rate limiter per attempt', async () => {
+      vi.useFakeTimers();
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(new Response('unavailable', { status: 503 }))
+        .mockResolvedValueOnce(
+          jsonResponse({ results: [aggregate('2026-08-07T11:00:00Z', 100, 105, 99, 104)] }),
+        );
+      vi.stubGlobal('fetch', fetchMock);
+      const rateLimiter = new TokenBucket({ capacity: 5, refillPerSecond: 5 });
+      const acquireSpy = vi.spyOn(rateLimiter, 'acquireBackground');
+
+      const promise = new PolygonBarsClient({ rateLimiter }).getBars(SYMBOL, '1h', ASOF, 1);
+      await vi.advanceTimersByTimeAsync(2_000);
+      const bars = await promise;
+
+      expect(bars).toHaveLength(1);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(acquireSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not retry a 429 — retrying would fight the free tier ceiling that produced it', async () => {
+      const fetchMock = vi.fn().mockResolvedValue(new Response('rate limited', { status: 429 }));
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(new PolygonBarsClient().getBars(SYMBOL, '1h', ASOF, 1)).rejects.toBeInstanceOf(
+        PolygonBarsRateLimitError,
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('exhausts retries and throws the classified error on a persistent 503', async () => {
+      vi.useFakeTimers();
+      const fetchMock = vi.fn().mockResolvedValue(new Response('unavailable', { status: 503 }));
+      vi.stubGlobal('fetch', fetchMock);
+
+      const promise = new PolygonBarsClient().getBars(SYMBOL, '1h', ASOF, 1);
+      const assertion = expect(promise).rejects.toBeInstanceOf(PolygonBarsProviderError);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await assertion;
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('isRetryablePolygonBarsError', () => {
+    // Mutation evidence in both directions: widening this predicate to match
+    // the other three transport clients' shape (RateLimit always retryable)
+    // must fail here, and so must narrowing it to drop the 5xx branch.
+    it('retries Timeout and 5xx ProviderError, never RateLimit or non-5xx ProviderError', () => {
+      expect(isRetryablePolygonBarsError(new PolygonBarsTimeoutError('x'))).toBe(true);
+      expect(isRetryablePolygonBarsError(new PolygonBarsProviderError('x', 503))).toBe(true);
+      expect(isRetryablePolygonBarsError(new PolygonBarsProviderError('x', 599))).toBe(true);
+      expect(isRetryablePolygonBarsError(new PolygonBarsProviderError('x', 400))).toBe(false);
+      expect(isRetryablePolygonBarsError(new PolygonBarsProviderError('x', undefined))).toBe(false);
+      expect(isRetryablePolygonBarsError(new PolygonBarsRateLimitError('x'))).toBe(false);
+    });
   });
 });
