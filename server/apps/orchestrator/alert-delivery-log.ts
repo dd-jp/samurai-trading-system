@@ -137,8 +137,8 @@ export class SqliteAlertDeliveryLog {
    *
    * `cutoff` should be chosen so `pruneOlderThan` does not remove a row
    * still inside `countFailures`'s window. Nothing here can enforce that:
-   * this method sees only the cutoff it is handed, and the two boundaries
-   * are computed in different processes.
+   * this method sees only the cutoff it is handed, and never the window the
+   * cutoff has to clear.
    * `alertDeliveryFailureRetentionDaysFromEnvironment` in `production.ts`
    * refuses a retention below 2 days for that reason — its doc carries the
    * full argument, including which readings of the ambiguity actually hold

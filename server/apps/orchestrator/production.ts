@@ -825,19 +825,26 @@ function pruneMiArchiveWithLog(
  * clears it, so the raw table no longer outlives the tile and there is
  * nothing left to reconstruct from.
  *
- * SECOND, the two boundaries are computed in different processes with
- * nothing ordering them: the prune's cutoff from the orchestrator's
- * `clock.now()` (`pruneAlertDeliveryFailuresWithLog` below), the count's
- * `asOf` from the service-api snapshot build
- * (`sqlite-query-store.ts`'s `getAlertDeliveryFailureCount`). At equal
- * clocks the two predicates are complementary — `timestamp < T_prune - 1d`
- * and `timestamp > asOf - 1d` cannot both hold — so it is NOT true that a
- * sweep would delete a row the tile still counts; that reading is wrong.
- * The failure is directional instead: when `asOf` trails `T_prune`, rows in
- * `(asOf - 24h, T_prune - 24h)` are deleted while still inside the window
- * the tile counts over, and an operator watching the tile go to zero cannot
- * tell "the failure aged out of the window" from "the failure was deleted
- * by the retention sweep" — the ambiguity #1131 was opened to remove.
+ * SECOND is a NON-reason, recorded because it is the intuitive one and it
+ * does not survive: "a 1-day retention lets the daily sweep delete a row
+ * the tile is still supposed to count". The prune deletes
+ * `timestamp < T_prune - retention`; the count includes
+ * `timestamp > asOf - window`. At `retention == window` those are
+ * complementary whenever `asOf >= T_prune`, and they cannot both hold, so
+ * no row is ever both deleted and countable. `asOf >= T_prune` is what this
+ * deployment does: the two boundaries are computed in different processes,
+ * but against one host clock, and `service-api`'s `server.ts` passes a
+ * fresh `new Date()` into `buildSnapshot` per request, so any prune whose
+ * rows a query could have missed committed before that query's `asOf`. The
+ * interval in which a row is deleted yet still inside the counted window is
+ * empty. It would stop being empty only if `asOf` became a cached or
+ * backdated label rather than the request's own `now()` — a property of
+ * that one call site, not something enforced here. FIRST is the whole
+ * reason for the floor.
+ *
+ * Given FIRST, 2 is simply the smallest day count strictly above the
+ * 24-hour window; nothing is special about 2 beyond the window's size and
+ * this variable's unit.
  *
  * The floor by ITSELF orders nothing. `min = 2` is 48h against today's 24h
  * window; widen `ALERT_DELIVERY_FAILURE_WINDOW_MS` to 48h and the two become

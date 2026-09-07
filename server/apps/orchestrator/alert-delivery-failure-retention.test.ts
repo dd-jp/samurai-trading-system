@@ -65,8 +65,10 @@ describe('alertDeliveryFailureRetentionDaysFromEnvironment', () => {
   // `contracts/snapshot.ts` dropped as "reconstructable ... by reading
   // `alert_delivery_failures` directly" would be reconstructable from
   // nothing. `alertDeliveryFailureRetentionDaysFromEnvironment`'s doc
-  // carries the full argument, including the second (cross-process clock
-  // ordering) reason and which reading of the ambiguity does NOT hold.
+  // carries the full argument, including why the INTUITIVE reason for this
+  // floor — that a 1-day sweep would delete a row the tile still counts —
+  // is not one: the two predicates are complementary and that interval is
+  // empty.
   //
   // This case is also the LOWERED-MINIMUM half of the guard on "retention
   // outlives the window"; the last case in this block is the widened-window

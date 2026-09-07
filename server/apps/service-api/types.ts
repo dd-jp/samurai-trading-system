@@ -302,7 +302,11 @@ export interface DashboardQueryStore {
    * only evidence would age out during a quiet stretch. The lifetime total
    * this used to also expose is dropped from the wire (nothing consumed it),
    * recoverable by reading the table directly for as long as its
-   * (env-configurable, default 30-day, always > 24h) retention holds.
+   * (env-configurable, default 30-day) retention holds — which is why that
+   * retention is floored at 2 days rather than 1, and why the floor's
+   * standing above this window is pinned by
+   * `alert-delivery-failure-retention.test.ts` rather than implied by the
+   * floor's value.
    *
    * Scoped to the chat `alert-transport.ts` reads `TELEGRAM_CHAT_ID` into
    * (#1108 third review pass): the table also durably records heartbeat-chat

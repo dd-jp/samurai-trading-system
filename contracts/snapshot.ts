@@ -666,9 +666,16 @@ export interface DashboardSnapshot {
    * claim-stronger-than-mechanism failure #1299's review rounds were hunting
    * for. It remains reconstructable for as long as retention holds by reading
    * `alert_delivery_failures` directly (`alert-delivery-log.ts`'s
-   * `pruneOlderThan`, default 30-day retention — always longer than this
-   * 24-hour window, so a zero here is never ambiguous between "aged out of
-   * the window" and "pruned").
+   * `pruneOlderThan`, default 30-day retention). That reconstruction is
+   * WHY the retention floor is 2 days and not 1: at `retention == window`
+   * the table would stop outliving this field, and dropping the lifetime
+   * total here would be dropping it outright. The ordering is not a
+   * property of the floor on its own — 2 days is 48h against a 24h window,
+   * and a later widening of `ALERT_DELIVERY_FAILURE_WINDOW_MS` past 48h
+   * would make them equal. `alert-delivery-failure-retention.test.ts` holds
+   * it, one assertion per direction; see
+   * `alertDeliveryFailureRetentionDaysFromEnvironment` in `production.ts`
+   * for the whole argument.
    *
    * Scoped to the escalation chat (`TELEGRAM_CHAT_ID`), not every row in the
    * table (#1108 third review pass): the same table durably records
