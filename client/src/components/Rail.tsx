@@ -262,11 +262,12 @@ type CapReason =
  * 4. Only once `capUsd` is `null` (the wire EXPLICITLY said so, not merely
  *    unreadable) does `armedAt` decide the reason, and it has THREE
  *    answers, not two: a real string is `uncapped`; an explicit `null` is
- *    `never-armed`; and `undefined` (the field is simply absent — a
- *    pre-#1196 server) is `ambiguous` — this client was not told the
- *    arming state at all, and must not guess either "armed" or "unarmed" for
- *    it (review round 2 — the cell round 1's own numeric-cap fix invoked as
- *    its motivating example but never actually tested).
+ *    `never-armed`; and `undefined` (the field is absent — a pre-#1196
+ *    server — or present but too malformed to trust, `normalizeCapArmedAt`
+ *    in `useSnapshot.ts`) is `ambiguous` — this client was not told a
+ *    trustworthy arming state, and must not guess either "armed" or
+ *    "unarmed" for it (review round 2 — the cell round 1's own numeric-cap
+ *    fix invoked as its motivating example but never actually tested).
  */
 function capReasonOf(
   spendKnown: boolean,
@@ -303,7 +304,7 @@ const CAP_EMPTY_STATE: Readonly<Record<Exclude<CapReason, 'capped' | 'zero'>, st
   // malformed cap_armed_at this client could not trust) leaves this wire
   // silent on arming state, and the honest reading is that silence, not a
   // guess in either direction (review round 2).
-  ambiguous: 'no arming record on this snapshot — meter not drawable',
+  ambiguous: 'no trustworthy arming record on this snapshot — meter not drawable',
 };
 
 // Never "no LLM budget configured": $0 (or a malformed negative) is a
