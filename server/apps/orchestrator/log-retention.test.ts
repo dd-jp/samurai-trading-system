@@ -15,7 +15,6 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  DEFAULT_BARE_TRUNCATE_BYTES,
   DEFAULT_LOG_RETENTION_DAYS,
   isArchivedLogName,
   isBareLogName,
@@ -202,6 +201,9 @@ describe('sweepStaleLogsWithLog', () => {
 
   it('logs an info line when only a bare file was truncated, no file removed', () => {
     const big = write(join(dir, 'soak-boot.out'), 'x'.repeat(200));
+    // See the "byte threshold" test above: bytes_reclaimed reports disk
+    // allocation, not apparent size, so it is computed rather than hardcoded.
+    const allocatedBytes = statSync(big).blocks * 512;
     const logger = makeLogger();
 
     const result = sweepStaleLogsWithLog(
@@ -217,7 +219,7 @@ describe('sweepStaleLogsWithLog', () => {
     expect(logger.entries[0]?.payload).toEqual({
       files_removed: 0,
       files_truncated: 1,
-      bytes_reclaimed: 200,
+      bytes_reclaimed: allocatedBytes,
     });
   });
 
@@ -342,6 +344,12 @@ describe('isBareLogName (#1206)', () => {
 describe('sweepStaleLogs — bare-name truncation (#1206)', () => {
   it('truncates a bare log-shaped file once it crosses the byte threshold', () => {
     const big = write(join(dir, 'soak-boot.out'), 'x'.repeat(200));
+    // Eligibility and `bytesReclaimed` are computed from DISK ALLOCATION
+    // (`stat.blocks * 512`), never `stat.size` — see MAJOR 2 in #1281's
+    // review, and the module doc's "Bare live names" section for why.
+    // Computed from the real filesystem rather than hardcoded so this test
+    // does not assume a particular block size.
+    const allocatedBytes = statSync(big).blocks * 512;
 
     const result = sweepStaleLogs({
       directory: dir,
@@ -351,17 +359,22 @@ describe('sweepStaleLogs — bare-name truncation (#1206)', () => {
     });
 
     expect(result.filesTruncated).toBe(1);
-    expect(result.bytesReclaimed).toBe(200);
+    expect(result.bytesReclaimed).toBe(allocatedBytes);
     expect(statSync(big).size).toBe(0);
   });
 
   it('leaves a bare file under the threshold alone', () => {
+    // The threshold here (8 KiB) is deliberately above one filesystem block
+    // (4 KiB on both target filesystems): a 50-byte file still allocates a
+    // full block, so a threshold near that granularity would not
+    // discriminate "under" from "over" now that eligibility is
+    // allocation-based rather than size-based (see the test above).
     const small = write(join(dir, 'soak-boot.out'), 'x'.repeat(50));
 
     const result = sweepStaleLogs({
       directory: dir,
       maxAgeMs: 7 * ONE_DAY_MS,
-      bareTruncateBytes: 100,
+      bareTruncateBytes: 8192,
       now: () => NOW,
     });
 
@@ -473,11 +486,12 @@ describe('sweepStaleLogs — bare-name truncation (#1206)', () => {
   // A non-append fd (exactly what `> logs/soak-boot.out 2>&1` opens — no
   // `O_APPEND`, unlike `>>`) keeps writing at its OWN offset, which truncate
   // does not move. So the next write lands where the 200 bytes used to be,
-  // not at the new (zero) end of file: a 187-byte hole precedes it, and
-  // `stat.size` reports 213 again, not 13. Liveness still holds (the prior
-  // test's `still-writing` is readable), but this is why `bytesReclaimed`
-  // reports the size truncated AT THAT INSTANT, not a lasting reduction —
-  // see the field's own doc comment.
+  // not at the new (zero) end of file: a 200-byte hole precedes it (bytes
+  // 0..199), and `stat.size` reports 213 (200 + the 13-byte write) again,
+  // not 13. Liveness still holds (the prior test's `still-writing` is
+  // readable), but this is why eligibility and `bytesReclaimed` are gated on
+  // DISK ALLOCATION (`stat.blocks`), never `stat.size` — see the field's own
+  // doc comment and the MAJOR-2-regression test below.
   it('reports apparent size that grows back through the hole a non-appending writer leaves', () => {
     const path = join(dir, 'soak-boot.out');
     const fd = openSync(path, 'w');
@@ -505,14 +519,64 @@ describe('sweepStaleLogs — bare-name truncation (#1206)', () => {
     expect(content.subarray(0, 200).every((byte) => byte === 0)).toBe(true);
     expect(content.subarray(200).toString('utf8')).toBe('still-writing');
   });
+
+  // MAJOR 2, #1281 review: gating on `stat.size` instead of `stat.blocks`
+  // would see the SAME recovered apparent size the previous test measures,
+  // conclude the file is still oversized, and truncate again on every
+  // subsequent boot — destroying whatever the live writer had appended since
+  // the last one, forever, for as long as it stays open. Sizes here are
+  // deliberately much larger than one filesystem block (4 KiB in this repo's
+  // two target filesystems, macOS APFS and Linux ext4) so the "recovered"
+  // footprint after a hole-punch (a handful of KiB) is unambiguously smaller
+  // than the threshold, the way `DEFAULT_BARE_TRUNCATE_BYTES` (16 MiB) is in
+  // production — a threshold near one block's own size would not
+  // discriminate the fix from the bug either way.
+  it('does not re-truncate, and does not destroy new output, once disk usage is already reclaimed', () => {
+    const path = join(dir, 'soak-boot.out');
+    const threshold = 1 * 1024 * 1024; // 1 MiB: comfortably above one block, below the initial write
+    const fd = openSync(path, 'w');
+    writeSync(fd, Buffer.from('x'.repeat(2 * 1024 * 1024))); // 2 MiB, no hole yet — genuinely oversized
+
+    const boot1 = sweepStaleLogs({
+      directory: dir,
+      maxAgeMs: 7 * ONE_DAY_MS,
+      bareTruncateBytes: threshold,
+      now: () => NOW,
+    });
+    expect(boot1.filesTruncated).toBe(1);
+
+    // Same fd, still open: its next write lands at the stale ~2 MiB offset,
+    // not at the new end of file, so `stat.size` balloons back past the
+    // threshold even though almost nothing is actually allocated on disk —
+    // exactly the state that would fool a size-based gate into re-truncating.
+    writeSync(fd, Buffer.from('still-alive-after-boot-1'));
+    expect(statSync(path).size).toBeGreaterThan(threshold);
+
+    const boot2 = sweepStaleLogs({
+      directory: dir,
+      maxAgeMs: 7 * ONE_DAY_MS,
+      bareTruncateBytes: threshold,
+      now: () => NOW,
+    });
+    expect(boot2.filesTruncated).toBe(0);
+
+    writeSync(fd, Buffer.from('-still-here'));
+    closeSync(fd);
+    expect(readFileSync(path, 'utf8')).toContain('still-alive-after-boot-1-still-here');
+  });
 });
 
+// #1281 review: unlike every other setting in this module, unset here means
+// DISABLED, not defaulted — this path has no name-rule narrowing on WHICH
+// bare file it can touch, so a default-on threshold would silently reach
+// files this process never wrote, in whatever directory SAMURAI_LOG_FILE
+// happens to be pointed at. See the module doc's "Bare live names" section.
 describe('logBareTruncateBytesFromEnvironment', () => {
-  it('defaults when unset', () => {
-    expect(logBareTruncateBytesFromEnvironment({})).toBe(DEFAULT_BARE_TRUNCATE_BYTES);
+  it('is disabled (undefined) when unset, not defaulted', () => {
+    expect(logBareTruncateBytesFromEnvironment({})).toBeUndefined();
   });
 
-  it('parses a configured value', () => {
+  it('parses a configured value, opting in', () => {
     expect(logBareTruncateBytesFromEnvironment({ SAMURAI_LOG_BARE_TRUNCATE_BYTES: '512' })).toBe(
       512,
     );
@@ -524,10 +588,10 @@ describe('logBareTruncateBytesFromEnvironment', () => {
     ).toThrow(/SAMURAI_LOG_BARE_TRUNCATE_BYTES/);
   });
 
-  it('treats an empty value as unset rather than as zero', () => {
-    expect(logBareTruncateBytesFromEnvironment({ SAMURAI_LOG_BARE_TRUNCATE_BYTES: ' ' })).toBe(
-      DEFAULT_BARE_TRUNCATE_BYTES,
-    );
+  it('treats an empty value as unset (disabled) rather than as zero', () => {
+    expect(
+      logBareTruncateBytesFromEnvironment({ SAMURAI_LOG_BARE_TRUNCATE_BYTES: ' ' }),
+    ).toBeUndefined();
   });
 });
 

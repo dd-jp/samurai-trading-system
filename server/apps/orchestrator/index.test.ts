@@ -732,6 +732,31 @@ describe('runEntrypointLogRetention (#1116)', () => {
     expect(statSync(config.filePath).size).toBe(200);
   });
 
+  // #1281 review, MAJOR 1: unlike every other setting this entrypoint wires
+  // up, `SAMURAI_LOG_BARE_TRUNCATE_BYTES` is opt-in — a default-on threshold
+  // here would truncate ANY bare `.log`/`.out` file in whatever directory
+  // `SAMURAI_LOG_FILE` names, not just Samurai's own, since this path (unlike
+  // the unlink path beside it) carries no name-rule narrowing. Driven through
+  // the real entrypoint helper, with no `SAMURAI_LOG_BARE_TRUNCATE_BYTES` at
+  // all, to prove the composition root — not just the pure function — leaves
+  // this disabled by default.
+  //
+  // The fixture is deliberately larger than `DEFAULT_BARE_TRUNCATE_BYTES`
+  // (16 MiB, `log-retention.ts`): a small fixture would pass this assertion
+  // whether the mechanism were genuinely disabled OR merely under a
+  // default-on 16 MiB threshold, so it would not actually distinguish the
+  // fix from the bug it fixes.
+  it('leaves a large bare file untouched by default, with no SAMURAI_LOG_BARE_TRUNCATE_BYTES set', () => {
+    const soakBoot = join(dir, 'soak-boot.out');
+    const oversized = 17 * 1024 * 1024; // > 16 MiB DEFAULT_BARE_TRUNCATE_BYTES
+    writeFileSync(soakBoot, 'x'.repeat(oversized));
+
+    const result = runEntrypointLogRetention(sinkConfig(), { log: () => {} }, {});
+
+    expect(result.filesTruncated).toBe(0);
+    expect(statSync(soakBoot).size).toBe(oversized);
+  });
+
   /**
    * The enforcement, not the construction: the helper above only runs on a
    * real boot if the entrypoint guard calls it, and that guard executes only

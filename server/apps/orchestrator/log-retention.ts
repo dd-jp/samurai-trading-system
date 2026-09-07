@@ -31,7 +31,12 @@
  *   the name rule below — not the path — is what makes a non-log file
  *   ineligible no matter where the sweep is aimed, including an absolute
  *   `SAMURAI_LOG_FILE` naming the repo root from some other cwd, which no
- *   cwd comparison can catch.
+ *   cwd comparison can catch. That path-independent guarantee covers only
+ *   the unlink path below: "Bare live names" (#1206) adds a SECOND
+ *   destructive action with no equivalent narrowing — any undated
+ *   `.log`/`.out` file at whatever directory the sweep is aimed at is a
+ *   candidate for it, Samurai's or not — which is why that path is opt-in
+ *   rather than defaulted on, unlike everything else here.
  * - **The name must be archival-shaped**: either a `RotatingFileSink`
  *   generation (`orchestrator.log.1`) or a datestamped artefact
  *   (`orchestrator-20260902-1842.log`, `supervisor-20260904-1020-v3.log`,
@@ -45,14 +50,19 @@
  *   (`supervisor-20260904-1020-v3.log` is datestamped and was live at
  *   #1116's audit), and a finished file is not always archival-shaped
  *   (`soak-boot.out` is bare — never unlinked, but see "Bare live names"
- *   below for the size-based path #1206 gives it instead).
+ *   below for the disk-allocation-based path #1206 gives it instead).
  *
  * ## Liveness rule
  *
  * A wrong sweep deletes evidence of a run that is still producing it, so
- * "old" is deliberately not the only test. Two independent signals decide
- * whether a candidate file is currently being written, because no single one
- * covers every process that writes into `logs/`:
+ * "old" is deliberately not the only test — for the UNLINK path below. Two
+ * independent signals decide whether a candidate file is currently being
+ * written, because no single one covers every process that writes into
+ * `logs/`. ("Bare live names" (#1206) below is the exception: it avoids the
+ * INVISIBLE-GROWTH failure mode this section exists to prevent, by never
+ * unlinking, but it still carries the EVIDENCE-LOSS half of the same
+ * sentence — truncation has no age or descriptor gate of its own, on
+ * purpose; see that section for why.)
  *
  * - **Descriptor identity.** This process's own stdout/stderr (fd 1 and 2)
  *   may BE one of these files: directly, under a shell redirect
@@ -130,15 +140,40 @@
  * the gap this section closes.
  *
  * `bareTruncateBytes` gives every `isBareLogName` file (`.log`/`.out`,
- * undated, not archival-shaped) a size-based path instead: past the
- * threshold, `truncateSync(path, 0)` rather than `remove(path)`. This is safe
- * on a file a writer still holds open in a way unlink is not — `truncate`
- * changes only the file's length, never the writer's file descriptor or its
- * position in it, so the descriptor a live writer holds keeps working and its
- * next write is reachable again by path, never stranded on a now-unlinked
- * inode. That is also why this path carries none of the age or
- * `activeDescriptors` liveness checks above: size is the only thing that
- * decides eligibility, live or not.
+ * undated, not archival-shaped) a disk-allocation-based path instead: past
+ * the threshold, `truncateSync(path, 0)` rather than `remove(path)`. This is
+ * safe on a file a writer still holds open in a way unlink is not —
+ * `truncate` changes only the file's length, never the writer's file
+ * descriptor or its position in it, so the descriptor a live writer holds
+ * keeps working and its next write is reachable again by path, never
+ * stranded on a now-unlinked inode. That is also why this path carries none
+ * of the age or `activeDescriptors` liveness checks above that guard the
+ * INVISIBLE-GROWTH hazard: allocation alone decides eligibility, live or
+ * not. It does NOT avoid the EVIDENCE-LOSS half of "a wrong sweep deletes
+ * evidence of a run that is still producing it" (see the liveness rule's
+ * opening above) — there is no age or descriptor gate here at all, by
+ * design; `SAMURAI_LOG_RETENTION_KEEP` is how an operator exempts a
+ * specific bare file from it.
+ *
+ * Unlike the unlink path, this one carries no equivalent to the name rule's
+ * narrowing: `isBareLogName` accepts any undated `.log`/`.out` file at
+ * whatever directory the sweep is aimed at, Samurai's or not — the unlink
+ * path's blast radius stays narrow because an archival SHAPE
+ * (`orchestrator-20260902-1842.log`) is unlikely to collide with an
+ * unrelated tool's own files, but a bare `.log`/`.out` name collides
+ * routinely (`install.log`, `wifi.log`, `system.log`). Pointed at a shared
+ * directory — the module doc above blesses `/var/log/samurai` as "a
+ * legitimate place to point a log directory" — this path would truncate any
+ * co-located bare file the process can write to once it crosses the
+ * threshold, root-owned ones aside (`truncateSync` throws `EPERM`,
+ * tolerated by the per-file catch below like any other failure, but a
+ * directory the running user owns offers no such protection). That is why
+ * `SAMURAI_LOG_BARE_TRUNCATE_BYTES` carries NO default value the way every
+ * other setting in this module does — see
+ * `logBareTruncateBytesFromEnvironment`: unset, this path stays fully
+ * disabled, matching every version of this sweep before #1206. An operator
+ * opts in deliberately, for a directory they know holds only their own
+ * bare log-shaped files.
  *
  * `protectedPaths` and `keepNames` both still apply — a bare name is exactly
  * what `SAMURAI_LOG_FILE` itself usually is (`orchestrator.log`), so without
@@ -153,27 +188,47 @@
  * is not capped mid-run. #1206 is that the sweep can reach the file at all
  * (before this it never could, at any boot); it is not a continuous cap.
  *
- * `truncateSync` is also not a durable size reduction on its own. It changes
- * the file's length at that instant, but a writer's `O_APPEND`-less fd — the
- * shape a plain shell redirect (`> logs/soak-boot.out 2>&1`, not `>>`)
- * opens, which is how `soak-boot.out` itself is produced — keeps its own,
- * unmoved write offset: its next write lands where the truncated bytes used
- * to be, not at the new end of file, leaving a sparse hole in between. The
- * file's apparent size (`stat.size`) climbs back toward what it was even
- * though that hole's blocks are unallocated on disk — see `bytesReclaimed`'s
- * doc comment and the test named for this. That does not reopen the
- * liveness hazard (the writer's descriptor and its content stay valid and
- * reachable by path — the crux this section exists to guarantee), but it
- * does mean a size-based reader of this directory (`du` without `--apparent-
- * size`, or a next sweep's own `stat.size` check) sees the disk usage drop
- * and the nominal file length recover independently of each other.
+ * Eligibility and `bytesReclaimed` are measured in DISK ALLOCATION
+ * (`stat.blocks * 512`), never `stat.size` — deliberately, and gating on
+ * size instead was tried and rejected during review (#1281). The premise:
+ * `soak-boot.out` is, as best this repo can establish, produced by a plain
+ * shell redirect — `> logs/soak-boot.out 2>&1` — whose fd has no
+ * `O_APPEND` and so keeps its own, unmoved write offset (this is an
+ * ASSUMPTION about a command this repo has never itself written — no launch
+ * script, no supervisor code, no commit — inferred from the ticket's own
+ * example; if an operator instead runs it under `>>`, `O_APPEND` moves the
+ * offset to the CURRENT end of file before every write, which truncate has
+ * just set to zero, so none of what follows in this paragraph applies —
+ * there is no hole, and `stat.size` reads the same as `stat.blocks * 512`).
+ * Under the `>` premise, `truncateSync` changes the file's length at that
+ * instant, but that writer's next write still lands at its stale offset —
+ * past the new, zero end of file — leaving a sparse hole in between.
+ * `stat.size` climbs back toward its pre-truncation figure on that very
+ * next write even though the hole's blocks stay unallocated on disk
+ * (measured directly on this repo's two target filesystems — macOS APFS,
+ * the deployment target, and Linux ext4, CI — `stat.blocks` returns to a
+ * few KiB and STAYS there across repeated truncate/write cycles). Gating on
+ * `stat.size` instead would see that recovered apparent length, truncate
+ * again on the very next boot, and destroy whatever the writer had appended
+ * since the previous one — every boot after the first, for as long as the
+ * writer stays open (this was caught in review, not designed in from the
+ * start; `log-retention.test.ts`'s hole test pins the exact mechanism).
+ * `stat.blocks` does not have that failure mode, so both eligibility and
+ * `bytesReclaimed` are computed from it for a TRUNCATED file; a REMOVED
+ * (unlinked) file still contributes its `stat.size`, because there the
+ * whole file is gone and apparent length and disk freed agree.
  *
- * `SAMURAI_LOG_BARE_TRUNCATE_BYTES` (`DEFAULT_BARE_TRUNCATE_BYTES`, 16 MiB —
- * the same figure `rotating-file-sink.ts` already treats as "big enough to
- * rotate" for the one file it manages) has a default rather than requiring
- * opt-in, matching `SAMURAI_LOG_RETENTION_DAYS` beside it: the dangerous
- * state here is an unbounded file nobody is watching, not a bounded one at a
- * size nobody picked.
+ * A truncated-then-appended file is no longer `grep`-able the ordinary way:
+ * the sparse hole reads back as `\0` bytes, so `file` reports it as `data`
+ * and a plain `grep pattern file` prints "binary file … matches" instead of
+ * the matching lines. `grep -a`, and `tail -c`, still work.
+ *
+ * `SAMURAI_LOG_BARE_TRUNCATE_BYTES`, once set, is validated the same as
+ * every other setting here; `DEFAULT_BARE_TRUNCATE_BYTES` (16 MiB — the
+ * same figure `rotating-file-sink.ts` already treats as "big enough to
+ * rotate" for the one file it manages) is what an unset-but-then-configured
+ * value would otherwise fall back to, though in practice unset means fully
+ * disabled (see above) rather than reaching that fallback at all.
  *
  * Two failure postures, deliberately different: a malformed
  * `SAMURAI_LOG_RETENTION_DAYS`/`SAMURAI_LOG_RETENTION_KEEP`/
@@ -204,6 +259,14 @@ export const DEFAULT_LOG_RETENTION_DAYS = 30;
  * nothing manages at all (#1206).
  */
 export const DEFAULT_BARE_TRUNCATE_BYTES = 16 * 1024 * 1024;
+
+/**
+ * `stat.blocks` counts fixed 512-byte units — this is POSIX (`stat(2)`), not
+ * `stat.blksize` (the filesystem's own preferred I/O size, 4096 on both APFS
+ * and ext4 here), and not `stat.size`. Multiplying by anything else silently
+ * misreads allocation.
+ */
+const STAT_BLOCK_BYTES = 512;
 
 const ENV_LOG_RETENTION_DAYS = 'SAMURAI_LOG_RETENTION_DAYS';
 const ENV_LOG_RETENTION_KEEP = 'SAMURAI_LOG_RETENTION_KEEP';
@@ -243,9 +306,9 @@ const LOG_SHAPED_NAME = /\.(?:log|out)$/;
  * (`soak-boot.out`, `orchestrator.log`) that `isArchivedLogName` refuses to
  * unlink on age because a live writer may still hold it open. Truncation
  * (see `sweepStaleLogs`'s `bareTruncateBytes`) does not carry that hazard, so
- * this name shape gets a size-based path instead of no path at all — but
- * only for `.log`/`.out`: a non-log file (`.env.local`) must never be
- * eligible for either mechanism.
+ * this name shape gets a disk-allocation-based path instead of no path at
+ * all — but only for `.log`/`.out`: a non-log file (`.env.local`) must never
+ * be eligible for either mechanism.
  */
 export function isBareLogName(name: string): boolean {
   return LOG_SHAPED_NAME.test(name) && !isArchivedLogName(name);
@@ -268,17 +331,27 @@ export function logRetentionDaysFromEnvironment(env: NodeJS.ProcessEnv = process
 }
 
 /**
- * Same refuse-rather-than-default posture as `logRetentionDaysFromEnvironment`
- * beside it, for the threshold that decides when a bare log-shaped name
- * (#1206) gets truncated.
+ * Unlike every other setting in this module, unset means DISABLED, not a
+ * default value applied — see the module doc's "Bare live names" section for
+ * why truncation is opt-in rather than on by default: it is not scoped to
+ * `logs/`, so a directory an operator points `SAMURAI_LOG_FILE` at that
+ * happens to hold someone else's large bare `.log`/`.out` file would lose it
+ * silently under a default. A configured value still refuses rather than
+ * defaults if malformed, same posture as `logRetentionDaysFromEnvironment`
+ * beside it.
  */
-export function logBareTruncateBytesFromEnvironment(env: NodeJS.ProcessEnv = process.env): number {
+export function logBareTruncateBytesFromEnvironment(
+  env: NodeJS.ProcessEnv = process.env,
+): number | undefined {
+  const raw = nonEmpty(env[ENV_LOG_BARE_TRUNCATE_BYTES]);
+  if (raw === undefined) return undefined;
   return positiveIntegerFromEnv(
-    env[ENV_LOG_BARE_TRUNCATE_BYTES],
+    raw,
     ENV_LOG_BARE_TRUNCATE_BYTES,
     DEFAULT_BARE_TRUNCATE_BYTES,
     1,
-    'the size threshold past which an undated bare log file is truncated (#1206)',
+    'the size threshold past which an undated bare log file is truncated (#1206); leave it ' +
+      'unset to keep bare-name truncation disabled',
   );
 }
 
@@ -339,13 +412,18 @@ export interface LogRetentionOptions {
   /** Basenames in `directory` the operator has taken out of the sweep. */
   keepNames?: readonly string[];
   /**
-   * Size in bytes past which an undated bare log-shaped name (`soak-boot.out`,
+   * Disk bytes (`stat.blocks * 512`, NOT `stat.size` — see the module doc)
+   * past which an undated bare log-shaped name (`soak-boot.out`,
    * `isBareLogName`) is truncated to empty rather than left alone (#1206).
    * Undefined disables this path entirely — no bare name is ever touched,
-   * matching the behaviour before #1206. Age, `activeDescriptors` and this
-   * option are independent of each other: truncation has none of unlink's
-   * liveness hazard (the writer keeps its descriptor; see the module doc), so
-   * a bare name is eligible by size alone, at any age, live or not.
+   * matching the behaviour before #1206; unlike every other option here this
+   * has no non-`undefined` default (see
+   * `logBareTruncateBytesFromEnvironment`), because this path is not scoped
+   * to `logs/` the way the name rule scopes the unlink path above it. Age,
+   * `activeDescriptors` and this option are independent of each other:
+   * truncation has none of unlink's liveness hazard (the writer keeps its
+   * descriptor; see the module doc), so a bare name is eligible by
+   * allocation alone, at any age, live or not.
    */
   bareTruncateBytes?: number;
   now?: () => number;
@@ -366,15 +444,15 @@ export interface LogRetentionOptions {
 export interface LogRetentionResult {
   filesRemoved: number;
   /**
-   * Sum of each file's `stat.size` at the moment it was removed or
-   * truncated — what disappeared from `ls`/`du` right then, not a durable
-   * total. For a truncated bare name specifically, this can overstate what
-   * stays reclaimed: a writer whose fd was opened without `O_APPEND` (a
-   * shell `> file` redirect, exactly how `soak-boot.out` is opened — see
-   * "Bare live names" above) keeps writing at its OLD offset after
-   * `truncate`, so the freed region becomes a sparse hole and the file's
-   * apparent size climbs back toward its pre-truncation figure even though
-   * the hole's blocks stay unallocated on disk.
+   * A REMOVED file contributes its `stat.size` (the whole thing is gone, so
+   * apparent length and disk freed agree). A TRUNCATED bare name contributes
+   * its `stat.blocks * 512` — disk actually freed at that instant, not
+   * `stat.size` — because a live, non-`O_APPEND` writer's apparent size
+   * recovers through a sparse hole on its very next write while the disk
+   * stays freed (see "Bare live names" in the module doc); reporting
+   * `stat.size` there would overstate what stays reclaimed, sometimes by
+   * orders of magnitude. Either way this is a snapshot at the moment of the
+   * operation, not a durable total.
    */
   bytesReclaimed: number;
   /** Bare log-shaped names truncated rather than removed (#1206). */
@@ -487,9 +565,10 @@ export function sweepStaleLogs(options: LogRetentionOptions): LogRetentionResult
     }
 
     // Bare log-shaped name (#1206): no age or liveness gate — unlike the
-    // branch above, `truncate` never orphans a writer's descriptor, so size
-    // alone decides eligibility. `bareTruncateBytes === undefined` disables
-    // this path outright, matching every version of this sweep before #1206.
+    // branch above, `truncate` never orphans a writer's descriptor, so disk
+    // allocation alone decides eligibility (below). `bareTruncateBytes ===
+    // undefined` disables this path outright, matching every version of this
+    // sweep before #1206.
     if (bareTruncateBytes === undefined || !isBareLogName(entry.name)) continue;
 
     let stat: ReturnType<typeof statSync>;
@@ -499,7 +578,20 @@ export function sweepStaleLogs(options: LogRetentionOptions): LogRetentionResult
       continue; // Vanished between listing and stat — not this sweep's problem.
     }
 
-    if (stat.size <= bareTruncateBytes) continue;
+    // Gated on DISK ALLOCATION (`stat.blocks`), not apparent length
+    // (`stat.size`): a live, non-`O_APPEND` writer leaves a sparse hole
+    // behind a previous truncate (see the module doc), so `stat.size` climbs
+    // back toward its pre-truncation figure on its very next write while the
+    // disk usage that motivated the truncation stays freed. Gating on size
+    // would see that recovered apparent length, truncate again, and destroy
+    // whatever the writer had appended since the last boot — every boot
+    // after the first, for as long as the writer stays open. `stat.blocks`
+    // is fixed at 512-byte units by POSIX regardless of `stat.blksize`, and
+    // is what actually goes back to (near) zero after a truncate, cycle over
+    // cycle, on both target filesystems (macOS APFS deployment, Linux ext4
+    // CI) — measured directly, not assumed.
+    const allocatedBytes = stat.blocks * STAT_BLOCK_BYTES;
+    if (allocatedBytes <= bareTruncateBytes) continue;
 
     try {
       truncate(path);
@@ -508,7 +600,7 @@ export function sweepStaleLogs(options: LogRetentionOptions): LogRetentionResult
     }
 
     result.filesTruncated += 1;
-    result.bytesReclaimed += stat.size;
+    result.bytesReclaimed += allocatedBytes;
   }
 
   return result;

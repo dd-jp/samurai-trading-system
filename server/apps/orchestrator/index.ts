@@ -882,19 +882,26 @@ export function installFaultHandlers(
  * `bareTruncateBytes` reaches the same directory: `soak-boot.out` — the
  * supervisor's own shell-redirected stdout — is a bare name in this same
  * `logs/` directory, so it needs no separate wiring beyond the threshold
- * itself (#1206).
+ * itself (#1206). Unlike every other setting sourced below, this one is
+ * opt-in — `logBareTruncateBytesFromEnvironment` returns `undefined` when
+ * `SAMURAI_LOG_BARE_TRUNCATE_BYTES` is unset (see `log-retention.ts`'s
+ * "Bare live names" section for why), so the property is only spread in
+ * when an operator actually configured it; passing an explicit `undefined`
+ * would violate `exactOptionalPropertyTypes` and, more to the point, would
+ * misstate "opted out" as "opted in with no threshold".
  */
 export function runEntrypointLogRetention(
   fileSinkConfig: FileSinkConfig,
   logger: Logger,
   env: NodeJS.ProcessEnv = process.env,
 ): LogRetentionResult {
+  const bareTruncateBytes = logBareTruncateBytesFromEnvironment(env);
   return sweepStaleLogsWithLog(
     {
       directory: dirname(fileSinkConfig.filePath),
       maxAgeMs: logRetentionDaysFromEnvironment(env) * 24 * 60 * 60 * 1000,
       keepNames: logRetentionKeepNamesFromEnvironment(env),
-      bareTruncateBytes: logBareTruncateBytesFromEnvironment(env),
+      ...(bareTruncateBytes !== undefined ? { bareTruncateBytes } : {}),
       protectedPaths: [
         fileSinkConfig.filePath,
         ...Array.from(

@@ -2443,9 +2443,10 @@ export interface LogRetentionEvidence {
   /**
    * An undated bare name survived despite being old — the shape a still-open
    * writer holds (`service-api.log`), which unlinking would turn into
-   * invisible growth rather than reclaimed space. It also survives because
-   * the fixture is 5 bytes, far under the truncate threshold (#1206) that
-   * would otherwise apply to this same bare shape.
+   * invisible growth rather than reclaimed space. It also survives the
+   * newer truncate path (#1206) because this run's env sets no
+   * `SAMURAI_LOG_BARE_TRUNCATE_BYTES` — that path is opt-in, not defaulted
+   * on, so it is fully disabled here regardless of the fixture's size.
    */
   liveShapedFileKeptDespiteAge: boolean;
   /** A non-log file in the swept directory survived despite being old. */
