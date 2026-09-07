@@ -7,12 +7,15 @@
  * `latest_mark`, `current_tick`).
  */
 import { CONTROL_TRACE_SUFFIX } from '../../apps/orchestrator/control-arm.js';
+import { SqliteAlertDeliveryLog } from '../../apps/orchestrator/index.js';
 import { CONTROL_DEBATE_ID_PREFIX } from '../../pipeline/control-arm/index.js';
 import type { AnalystContribution } from '../../pipeline/debate-engine/index.js';
 import { SqliteDebateLogStore } from '../../pipeline/debate-engine/index.js';
 import { SqliteExecutionStore } from '../../pipeline/execution/index.js';
 import type { EvaluatedCondition, RiskCriticVerdict } from '../../pipeline/risk-manager/index.js';
 import { SqliteRiskCriticStore } from '../../pipeline/risk-manager/index.js';
+import type { CallbackAuditLog } from '../../pipeline/verdict/index.js';
+import { TelegramBotApiClient } from '../../pipeline/verdict/index.js';
 import type { ClosedTrade, DebateLog, Fill, OpenPosition } from '../../shared/index.js';
 import {
   openSharedStore,
@@ -739,6 +742,16 @@ describe('SqliteQueryStore.getAlertDeliveryFailureCount (#1108)', () => {
   const ALERT_CHAT_ID = 'chat-1';
   const HEARTBEAT_CHAT_ID = 'chat-heartbeat';
 
+  // In an `afterEach`, not at the end of the one test body that stubs
+  // `fetch`: a failing `expect` aborts the body, and an always-rejecting
+  // global `fetch` would then leak into every later test in this file. The
+  // hook runs whether the test passed, failed or threw. Deliberately local
+  // rather than `unstubGlobals: true` in vitest.config.ts, which would
+  // change teardown for every file in the suite.
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   function seedFailure(db: SharedStore, at: Date, chatId: string = ALERT_CHAT_ID): void {
     db.prepare(
       `INSERT INTO alert_delivery_failures (chat_id, method, body, error, timestamp)
@@ -792,6 +805,57 @@ describe('SqliteQueryStore.getAlertDeliveryFailureCount (#1108)', () => {
     seedFailure(db, NOW, ALERT_CHAT_ID);
 
     expect(new SqliteQueryStore(db).getAlertDeliveryFailureCount(NOW)).toBe(0);
+  });
+
+  // #1130: the tile's whole reason to exist is answering "is the alert
+  // channel down" for the one case the in-band Telegram notice (#1108)
+  // cannot — a dead transport. This drives a REAL `TelegramBotApiClient`
+  // against a `fetch` that never succeeds, including the client's own
+  // fire-and-forget "channel degraded" escalation attempt at the 3rd
+  // failure, and reads the count back through this store — the same two
+  // hops (client -> SqliteAlertDeliveryLog -> SqliteQueryStore) a live
+  // dashboard poll makes. If the escalation attempt's own failure were ever
+  // mistakenly recorded as a second delivery failure (the thing
+  // telegram-bot-api-client.test.ts's "swallowed, not recorded as a second
+  // failure" pins from the writer side), this count would overshoot 5.
+  it('reads every permanently-failed send through the durable log even when the channel is totally dead, escalation attempts included', async () => {
+    const db = makeDb();
+    const alertDeliveryLog = new SqliteAlertDeliveryLog(db);
+    const auditLog: CallbackAuditLog = { record: () => {} };
+    const fetchMock = vi.fn(async () => {
+      throw new TypeError('fetch failed', { cause: new Error('connect ECONNREFUSED 127.0.0.1:9') });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new TelegramBotApiClient({
+      botToken: '1234567:test-fake-bot-token',
+      allowedUserIds: '4242',
+      auditLog,
+      alertChatId: ALERT_CHAT_ID,
+      alertDeliveryLog,
+      retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
+      logger: { log: () => {} },
+    });
+
+    for (let i = 0; i < 5; i++) {
+      await expect(client.sendMessage(ALERT_CHAT_ID, `alert ${i}`)).rejects.toThrow();
+    }
+    // Waits on the thing the test is about rather than on the clock: six
+    // fetches is five awaited sends (`maxAttempts: 1`) plus the one
+    // fire-and-forget escalation the 3rd failure fires
+    // (`DELIVERY_FAILURE_ALERT_EVERY` is 3, and 5 % 3 !== 0, so exactly one).
+    // A bare `setTimeout(5)` here was load-flaky and proved nothing; this
+    // asserts the escalation was actually attempted, which is the whole
+    // point of expecting 5 rows and not 6 below.
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(6));
+
+    // `recordFailure` stamps the REAL wall clock (`new Date()`), not the
+    // fixture `NOW` above — read forward of it, not at it, or every row
+    // this test just wrote would be filtered out as "in the future".
+    const readAsOf = new Date(Date.now() + 60_000);
+    expect(new SqliteQueryStore(db, 30, ALERT_CHAT_ID).getAlertDeliveryFailureCount(readAsOf)).toBe(
+      5,
+    );
   });
 });
 

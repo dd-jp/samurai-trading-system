@@ -207,6 +207,45 @@ const providers = new ProviderStatusPoller({ alpaca: buildAlpacaClient() });
  * boot below rather than reached silently, so an operator who expected
  * `telegram` mode and sees this warning knows the tile cannot tell them
  * anything, rather than reading a healthy 0.
+ *
+ * A set-but-WRONG value is NOT warned on, and #1130 turns that from a
+ * hypothetical into a live gap: the tile is now the sole channel-down
+ * surface, so filtering on a chat nothing ever wrote to returns 0, renders
+ * no tile, and reads exactly like a healthy channel. It is not warned on
+ * because this process never sees the orchestrator's value (separate
+ * process, no shared handshake) — but "no local signal exists" would be
+ * false, and #1130 review round 3 was right to say so. `chat_id` is stored
+ * per row (migration 0043), and in production only two ids can ever appear
+ * in this table: `sendMessage` and `sendApprovalButtons` are the only callers
+ * of `#recordDeliveryFailure`, each with a composition-fixed chat, and
+ * `alert-transport.ts` refuses to start when `TELEGRAM_CHAT_ID` and
+ * `TELEGRAM_HEARTBEAT_CHAT_ID` are equal (#342). So "rows exist whose
+ * `chat_id` is neither of those two" would fire on a chat mismatch and NOT
+ * on a heartbeat hiccup — the beat's rows are excluded by name, not by the
+ * alert-chat filter. It is declined anyway, on three grounds and not on the
+ * false one:
+ *
+ *  - It is post-hoc. It can only fire once a send has already failed, i.e.
+ *    after the tile has already failed to warn, while the boot warning it
+ *    would sit beside runs when the table is typically empty. It annotates
+ *    the gap late rather than closing it.
+ *  - It is not free of false fires. A caller-supplied
+ *    `ProductionConfig.heartbeatChannel` (`production/config.ts`) opts out of
+ *    `TELEGRAM_HEARTBEAT_CHAT_ID` entirely, so a beat routed to some third
+ *    chat over a client sharing this store would look like a mismatch; no
+ *    in-tree caller does that today (smoke injects `LoggingHeartbeatChannel`),
+ *    which is why this is a hedge, not a measurement. A service-api env wrong
+ *    on BOTH vars is not a false fire — the tile is genuinely misconfigured
+ *    then, and firing is correct.
+ *  - It is a mechanism change regardless: a new store query, a second env var
+ *    read here, and a check on the poll path — outside #1130's docs-only
+ *    remit, and it would not remove the need for the real fix.
+ *
+ * The real fix is that handshake (the orchestrator publishing the chat it
+ * alerts on, this process comparing against it). Documented instead at both
+ * read sites:
+ * `types.ts`'s `getAlertDeliveryFailureCount` and
+ * `client/src/components/Rail.tsx`'s `AlertDeliveryBlock`.
  */
 const alertChatId = ((): string | undefined => {
   const raw = (process.env.TELEGRAM_CHAT_ID ?? '').trim();

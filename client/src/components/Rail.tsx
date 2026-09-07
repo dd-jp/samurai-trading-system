@@ -167,6 +167,31 @@ function ProvidersBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
  * down, but a healthy channel needs no permanent tile saying so, matching
  * `LiveTickBlock`'s "idle" posture rather than `ProvidersBlock`'s
  * always-shown tiles.
+ *
+ * This tile is the channel-down surface (#1130) — not a backup to the
+ * in-band Telegram "channel degraded" notice the server also posts. That
+ * notice shares the escalation chat's own transport, so it arrives only if
+ * that chat is reachable at some point within that send's own retry window
+ * — it retries like every other send, so that window can run to tens of
+ * seconds rather than being the instant it fires — which says nothing about
+ * whether the failures it reports were a channel problem, and its silence
+ * says nothing at all. This tile never crosses that transport — it reads
+ * `alert_delivery_failures` off the wire, itself a plain SQL count — so it
+ * is the one place an operator can actually tell.
+ *
+ * **Absence of this tile is three states, not one**, and only two are named
+ * at boot (`server/apps/service-api/index.ts`): a healthy channel;
+ * `log-only`, where nothing is ever sent to mark and 0 is by design (warned
+ * at boot); and a service-api `TELEGRAM_CHAT_ID` that is set but does not
+ * match the orchestrator's, which is accepted silently, counts a chat
+ * nothing wrote to, and so renders as no tile — a false all-clear
+ * indistinguishable from health. `types.ts`'s `getAlertDeliveryFailureCount`
+ * doc carries the full trace; #1130 documents this rather than fixing it.
+ *
+ * The count shown here is all-time across every run, while the Telegram
+ * notice quotes an in-process count for the current run — two numbers for
+ * one incident, so a nonzero tile may be an old transient failure rather
+ * than a live outage.
  */
 function AlertDeliveryBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
   const count = snapshot?.alert_delivery_failures ?? 0;

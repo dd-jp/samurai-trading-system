@@ -161,7 +161,17 @@ const REJECTION_ALERT_EVERY = 3;
  * after (#1108) — the same "don't sit silently" posture `REJECTION_ALERT_EVERY`
  * takes: a failed send is individually swallowed by the caller's own
  * `.catch`, so nothing else surfaces that a pattern is forming until an
- * operator goes looking.
+ * operator goes looking. It posts over the transport it is reporting on, so
+ * it arrives only if `#alertChatId` is reachable at some point inside this
+ * send's OWN retry window — not at one instant: the escalation goes through
+ * `#call`, so `DEFAULT_RETRY.maxAttempts` attempts of `DEFAULT_TIMEOUT_MS`
+ * each, plus backoff, span up to tens of seconds — a bound, not an elapsed
+ * time: a refused connection fast-fails and leaves only the backoffs. A
+ * necessary condition about that
+ * window, not a partition of failure classes, and NOT sufficient (this send
+ * has its own `#call`, which can fail on its own). See `#recordDeliveryFailure`'s doc
+ * (#1130), and `alert_delivery_failures` for the surface that answers
+ * regardless.
  */
 const DELIVERY_FAILURE_ALERT_EVERY = 3;
 
@@ -658,6 +668,81 @@ export class TelegramBotApiClient implements TelegramClient {
    * toward — or itself trigger — a "the escalation channel is degraded"
    * alert posted to the very channel #342 protects.
    *
+   * **What the "channel degraded" notice below is (and is not) for (#1130).**
+   * It posts to `#alertChatId` over this same `#call`/`sendMessage` path —
+   * the exact transport that just exhausted its retries. The guarantee that
+   * buys is exactly one thing, and it is narrower than a statement about
+   * failure classes: **the notice arrives only if this chat is reachable at
+   * some point within the escalation send's own retry window.** Not at one
+   * instant, and that distinction is this method's, not a quibble: the
+   * escalation goes through `#call`, i.e. `withRetry(..., this.#retry,
+   * isRetryableTelegramError)`, and `isRetryableTelegramError` accepts
+   * exactly the errors a live outage throws (`TelegramNetworkError`,
+   * `TelegramTimeoutError`, `TelegramRateLimitError`). So the escalation can
+   * fire mid-outage, lose its first attempt, and land on a later one. With
+   * this file's defaults — `DEFAULT_RETRY` (3 attempts, 500ms base, 5s cap)
+   * over `DEFAULT_TIMEOUT_MS` (10s per attempt) — that window is up to
+   * roughly 30 seconds, and longer if Telegram's own `retry_after` hints set
+   * the backoffs; both are injectable (`options.retry`, `options.timeoutMs`),
+   * so the window is a property of the configured client, not a constant.
+   * It is a CEILING, not an elapsed time: a refused connection fails in
+   * milliseconds, so the same three attempts can span under two seconds.
+   * Necessary, not sufficient — the converse does not hold, because this
+   * escalation's own `#call` can fail for reasons independent of the chat
+   * (the misconfigured `baseUrl` this module's header names as the live
+   * threat is exactly one), and its failure is swallowed into
+   * `telegram_delivery_escalation_failed` below. So a chat that is up does
+   * not guarantee the notice was sent, and a notice that arrived proves only
+   * that the chat was up somewhere in that window.
+   *
+   * That partition does NOT line up with "content problem vs channel
+   * problem", and earlier wording here claimed it did. Two corrections, both
+   * measured against this file:
+   *
+   *  - Intermittent transport failure lands on BOTH sides. Three sends can
+   *    exhaust `DEFAULT_RETRY` against a real outage that then lifts before
+   *    the third failure's escalation fires, and the notice gets through —
+   *    so an arriving notice is not evidence the channel was healthy. It is
+   *    evidence about the escalation's own retry window only, and the outage
+   *    need not even have lifted before that window opened: the escalation
+   *    retries across it.
+   *  - The oversized-body example this doc used to lead with cannot occur.
+   *    `#capForWire` runs `capOutboundText` on every `sendMessage` and
+   *    `sendApprovalButtons` body, and that function computes its cut as
+   *    `TELEGRAM_MAX_MESSAGE_CHARS - suffix.length` *before* appending, so
+   *    the wire body is always <= 4,096 — #1108's own fix. A rate limit is
+   *    likewise not "content-specific": it is a property of the sender's
+   *    traffic, and it was listed inside a set labelled content-specific.
+   *
+   * The other direction matters just as much for the operator: the notice's
+   * ABSENCE is not diagnostic. Nobody can observe a message they never
+   * received, so silence is indistinguishable from a healthy channel. That
+   * is why the durable count, not this notice, is the surface. There is no
+   * alternative transport to fail over to: `DiscordClient` exists as a type
+   * in this repo (notifications/types.ts) but no implementation of it is
+   * ever constructed, and `alert-transport.ts`'s composition root wires
+   * every `TradeChannel*` with `telegram` alone — a seam nobody calls, not a
+   * live channel. Routing this notice to the heartbeat chat instead would
+   * not help either: that chat is a different `chat_id` over the identical
+   * bot/`#call` stack, so it fails identically when Telegram itself is down,
+   * and posting an escalation there would violate #342's isolation invariant
+   * in the other direction (an escalation sharing the beat's destination is
+   * exactly what #342 forbids). The durable count this method writes below
+   * — `alert_delivery_failures`, rendered on the dashboard Rail whenever
+   * nonzero — is what actually answers "is the channel down": it is a
+   * straight read of this table, so it survives regardless of whether any
+   * Telegram send, including this escalation's own attempt, could get
+   * through — subject to its own precondition, which `types.ts`'s
+   * `getAlertDeliveryFailureCount` doc states in full: a service-api process
+   * holding a *wrong* `TELEGRAM_CHAT_ID` counts zero and renders nothing.
+   *
+   * The two numbers have different denominators, and the sent text below
+   * says so rather than leaving an operator to reconcile them. This
+   * method's `#deliveryFailureCount` is in-process and resets with the
+   * process; the tile counts rows all-time (`alert-delivery-log.ts`'s
+   * `countFailures` bounds `timestamp` above by `asOf` and not at all
+   * below), so a nonzero tile can be a transient failure from weeks ago.
+   *
    * `error: detail` in the `#log` payload below is masked centrally by
    * `formatLogLine`'s `redactPayload` walk — but `message` is a plain string
    * the logger never touches, so `detail` must be masked with
@@ -710,8 +795,14 @@ export class TelegramBotApiClient implements TelegramClient {
         chat_id: this.#alertChatId,
         text:
           `Samurai alert channel degraded: ${this.#deliveryFailureCount} Telegram sends have ` +
-          'failed permanently after retries so far this run. Recent escalations may not have ' +
-          'reached you — check alert_delivery_failures for the record.',
+          'failed permanently after retries so far this run, so recent escalations may not ' +
+          'have reached you. That you are reading this proves only that this chat was ' +
+          'reachable at some point while this notice was itself retrying — a window that can ' +
+          'run to tens of seconds, not a single instant, and it does not mean the failures were ' +
+          'something other than a channel problem, and a notice you never receive tells you ' +
+          'nothing either way. The dashboard alert-channel tile is the durable record: it ' +
+          'counts alert_delivery_failures rows for this chat all-time, across every run, so ' +
+          'its number is a different denominator from the one above.',
       }).catch((escalationError: unknown) => {
         // Same reason `detail` above is wrapped: this escalation send itself
         // reaches `#call`/`#request` and can fail against the very

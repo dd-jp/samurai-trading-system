@@ -604,6 +604,75 @@ describe('TelegramBotApiClient — transient network failures and undeliverable 
     expect(String(escalations[0]?.body.text)).toContain('3 Telegram sends');
   });
 
+  // #1130: this notice posts to `#alertChatId` over the SAME transport that
+  // just exhausted its retries, so it arrives only if that chat is reachable
+  // at some point within the escalation send's OWN retry window (necessary,
+  // not sufficient — the escalation's own `#call` can fail independently).
+  // That window is not an instant: `#call` is `withRetry` over
+  // `isRetryableTelegramError`, which accepts exactly the network/timeout/
+  // rate-limit errors a live outage throws, so the notice can fire mid-outage
+  // and land on a later attempt — tens of seconds wide on `DEFAULT_RETRY` +
+  // `DEFAULT_TIMEOUT_MS`. So arrival is a fact about that window, not about
+  // what class of failure produced the count, and its ABSENCE is not
+  // observable by anyone. The text must therefore make no forward-looking delivery
+  // claim in EITHER direction, and must point at `alert_delivery_failures`
+  // (the Rail tile, #1108/#1129) with its different denominator named.
+  //
+  // Round 1's finding was that the previous version of this test pinned two
+  // substrings: prepending 'This notice will reach you even during a total
+  // outage. ' left both intact and 62/62 still passed — a message asserting
+  // the exact opposite of the thesis survived the test meant to pin it. So
+  // the guard below is on the CLAIM: a modal or auxiliary verb bound to a
+  // delivery verb is an assertion about future delivery, and this mechanism
+  // supports none. Honest limit: this catches auxiliary-marked assertions
+  // ('will reach', 'cannot arrive', 'is guaranteed to be delivered'),
+  // wherever in the message they sit, including inside a sentence that
+  // already carries a qualifier. It does not catch every possible paraphrase
+  // ('you always get this one'); it is a claim-shape guard, not a semantic
+  // one.
+  const FORWARD_DELIVERY_CLAIM =
+    /\b(?:will|would|can|could|shall|does|is guaranteed to)\s+(?:not\s+|never\s+|still\s+|always\s+)*(?:reach|arrive|get through|be delivered)\b/gi;
+
+  it('the degraded-channel notice asserts nothing about its own future delivery, and names both denominators', async () => {
+    const h = makeClient({
+      alertChatId: CHAT_ID,
+      retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
+    });
+    h.fetchMock.mockRejectedValue(
+      new TypeError('fetch failed', { cause: new Error('connect ECONNREFUSED 127.0.0.1:9') }),
+    );
+
+    for (let i = 0; i < 3; i++) {
+      await expect(h.client.sendMessage(CHAT_ID, `alert ${i}`)).rejects.toThrow();
+    }
+
+    const [escalation] = h
+      .calls()
+      .filter((c) => c.url.includes('/sendMessage') && String(c.body.text).includes('degraded'));
+    const text = String(escalation?.body.text);
+
+    expect(text.match(FORWARD_DELIVERY_CLAIM) ?? []).toEqual([]);
+    // What it may say instead, at exactly the strength the mechanism supports:
+    // reachability somewhere inside this send's own retry window. Both halves
+    // are pinned because either alone is passable by wording that is wrong —
+    // a bare 'reachable' by an instant claim, a bare 'retrying' by a sentence
+    // that mentions retries and still asserts an instant. Like
+    // FORWARD_DELIVERY_CLAIM above, this is a claim-shape guard, not a
+    // semantic one: it pins the strength this wording carries, and a
+    // paraphrase that dropped the window without using the point-in-time
+    // phrasings below would slip past it. Deliberately blunt in the other
+    // direction too: it rejects that phrasing family wherever it sits, so a
+    // legitimate future sentence ('not at the moment the failures were
+    // counted') has to be reworded rather than exempted — reword, and do not
+    // read the rejection as a finding about the message.
+    expect(text).toMatch(/reachable at some point[^.]*retrying/i);
+    expect(text).not.toMatch(/\bat (?:the|that|one|a single) (?:moment|instant)\b/i);
+    // And the two denominators, so the operator is not left reconciling them.
+    expect(text).toMatch(/so far this run/i);
+    expect(text).toMatch(/all-time, across every run/i);
+    expect(text).toContain('alert_delivery_failures');
+  });
+
   it('an escalation attempt that itself fails is swallowed, not recorded as a second failure', async () => {
     const h = makeClient({
       alertChatId: CHAT_ID,
