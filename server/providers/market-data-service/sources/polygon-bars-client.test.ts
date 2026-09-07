@@ -229,13 +229,17 @@ describe('PolygonBarsClient.getBars', () => {
       const rateLimiter = new TokenBucket({ capacity: 5, refillPerSecond: 5 });
       const acquireSpy = vi.spyOn(rateLimiter, 'acquireBackground');
 
-      // Assertion attached to `promise` before advancing timers (same
-      // pattern as "exhausts retries" below) so a rejection surfaces here
-      // instead of as an unhandled rejection mid-advance.
-      const promise = new PolygonBarsClient({ rateLimiter }).getBars(SYMBOL, '1h', ASOF, 1);
-      const assertion = expect(promise).resolves.toHaveLength(1);
+      // `settled` absorbs a rejection into a resolution, so no promise is
+      // left unhandled while control sits inside advanceTimersByTimeAsync.
+      // The sibling "exhausts retries" test can assert on the raw promise
+      // because `.rejects` settles the same way whenever the rejection
+      // lands; `.resolves` cannot — under a mutation that removes the
+      // retry, getBars rejects before any timer is even scheduled.
+      const settled = new PolygonBarsClient({ rateLimiter })
+        .getBars(SYMBOL, '1h', ASOF, 1)
+        .catch((error: unknown) => error);
       await vi.advanceTimersByTimeAsync(2_000);
-      await assertion;
+      await expect(settled).resolves.toHaveLength(1);
 
       expect(fetchMock).toHaveBeenCalledTimes(2);
       expect(acquireSpy).toHaveBeenCalledTimes(2);
