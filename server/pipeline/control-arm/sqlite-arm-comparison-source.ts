@@ -80,18 +80,34 @@ export class SqliteArmComparisonSource {
  * (that guard's #949/#1180 currency case), so there is nothing to escalate —
  * dropping them is the whole remedy.
  *
- * This can gut the live arm's `trade_count` to 0 for a window that is pure
- * pre-#1121 history. That is safe, not merely tolerated, for the same reason
- * `oneSizingRegime`'s doc gives: `evaluateArmDivergence`
+ * This can gut the live arm's `trade_count` to 0, and for TWO reasons that
+ * read identically from here. The historic one is migration 0049's backfill:
+ * every live row closed before #1121 stamps 0. The ONGOING one is that the
+ * writer derives the column per lot (`closedTrade()`, ingest-fills.ts) from
+ * whether that lot's covered legs actually carry a `cost_breakdown` — the
+ * submit-time snapshot is nullable, so a lot whose `captureSubmitSnapshot`
+ * failed closes with 0 under the fixed code too. A window of entirely
+ * post-fix live closes can therefore be gutted; this filter is not "one-armed
+ * historic cleanup".
+ *
+ * `oneSizingRegime`'s doc claims its filter "cannot preferentially gut one
+ * arm" because both arms' stores share one `capitalCeilingUsd` cutover
+ * instant. That property does NOT hold here, in either regime: the backfill
+ * stamps 0 by `arm`, and only the live arm reaches the nullable-snapshot path
+ * at all (a Simulated fill always carries its own breakdown). The filter is
+ * one-armed by construction on the historic rows and one-armed in practice on
+ * the ongoing ones.
+ *
+ * What makes that safe is the floor, not luck: `evaluateArmDivergence`
  * (arm-comparison-cycle.ts) floors each arm's trade count at
  * `min_trades_per_arm` before calling a divergence, so a gutted arm reads as
- * NO VERDICT, not as a skewed one. (`oneSizingRegime`'s own doc additionally
- * claims its filter "cannot preferentially gut one arm" because both arms'
- * stores share one `capitalCeilingUsd` cutover instant — that property does
- * NOT hold here: `modelled_cost_charged` backfills live rows to 0 and control
- * rows to 1, precisely because only the live arm ever had the defect, so
- * this filter is one-armed by construction. The min-trades floor is what
- * makes that safe, not an accident it happens not to trigger.)
+ * NO VERDICT, not as a skewed one. The floor is doing more work than a
+ * one-off cleanup would need, because the ongoing exclusion never ends. That
+ * is still acceptable, and for a reason worth stating: a failed submit-time
+ * capture is a quote-read failure at ORDER SUBMISSION, uncorrelated with how
+ * the trade later turned out. Excluding those rows loses sample size without
+ * selecting on outcome — unlike vetoing on a protective-leg exit, which
+ * `closedTrade()` deliberately refuses to do because stops are the losers.
  *
  * The floor covers the AUTOMATED reader only. `tools/report-arm-comparison.ts`
  * has no floor — it prints `trade_count` per arm to an operator, who would
