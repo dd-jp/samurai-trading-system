@@ -80,9 +80,9 @@ gh project item-edit --project-id <PROJECT_ID> --id <ITEM_ID> --field-id <STATUS
 
 **Code review loop** (after the implementer pushes):
 
-1. Dispatch a **fresh, separate** `Agent` — never the implementer reviewing its own diff — that fetches the pushed branch and runs the `/code-review` skill against `origin/main` as the fixed point. Read-only: findings only, no pushes, no edits.
+1. Dispatch a **fresh, separate** `Agent` — never the implementer reviewing its own diff — with `model: "opus"` regardless of the issue's `model:` label, that fetches the pushed branch and runs the `/code-review` skill against `origin/main` as the fixed point. Read-only: findings only, no pushes, no edits.
 2. Zero findings → go to §4.
-3. Findings → hand them to the implementer if it is still addressable (`ListAgents`, then `SendMessage`), otherwise spawn a fresh `Agent` (`isolation: "worktree"`, same model tier) that checks out the existing branch — no new branch — and fixes there.
+3. Findings → hand them to the implementer if it is still addressable (`ListAgents`, then `SendMessage`), otherwise spawn a fresh `Agent` (`isolation: "worktree"`, same model tier as the implementer — not the reviewer's opus) that checks out the existing branch — no new branch — and fixes there.
    - Relay findings, **not prescriptions**. A reviewer's suggested wording is a guess; passing it on as an instruction has caused regressions. Give the implementer the finding and let it verify the fix.
    - Tell the implementer explicitly that pushing back is allowed. If a finding is wrong, the right output is a reasoned rebuttal, not compliance.
    - Every fix is verified against the gates before it is pushed.
