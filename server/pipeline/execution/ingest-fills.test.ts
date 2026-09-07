@@ -902,10 +902,14 @@ describe('ExecutionImpl.ingestFills', () => {
   // #1126 (#1096 follow-up): the tests above assert `.rejects.toThrow` with a
   // bare substring (e.g. 'key-flaky'), which still passes if the
   // `(instrument) [ReasonClass]` suffix `throwContainedFailures` appends is
-  // dropped, reordered, or reshaped — none of them can see a suffix-format
-  // regression. This test pins the exact shape instead.
+  // dropped, reordered, reshaped, or grown (`.toThrow(string)` is a substring
+  // match, so it cannot see anything ADDED after the pinned text either) —
+  // none of them can see a suffix-format regression. These tests pin the
+  // exact shape instead: end-anchored, so nothing can be appended, and both
+  // branches of `instrument` (present, and the `null`-for-a-flatten-key case
+  // that renders as no parens at all).
   describe('throwContainedFailures suffix format (#1126)', () => {
-    it('names the failed lot as scope, key, "(instrument)", then "[ReasonClass]" in that order', async () => {
+    it('names a lot-advance failure as scope, key, "(instrument)", then "[ReasonClass]" — instrument present', async () => {
       class FlakyAdvanceStore extends TestExecutionStore {
         override async applyLotAdvance(advance: LotAdvance): Promise<void> {
           if (advance.idempotency_key === 'key-flaky') {
@@ -928,9 +932,69 @@ describe('ExecutionImpl.ingestFills', () => {
 
       // `TypeError`, not the `Error` the other containment tests throw, so a
       // passing match proves `reason` reads the failure's actual
-      // `constructor.name` rather than a hardcoded literal.
+      // `constructor.name` rather than a hardcoded literal. `$`-anchored so
+      // nothing can be appended after the suffix without failing this.
       await expect(new ExecutionImpl(makeInput(broker, store)).ingestFills()).rejects.toThrow(
-        "unresolved: lot-advance 'key-flaky' (MSFT) [TypeError]",
+        /unresolved: lot-advance 'key-flaky' \(MSFT\) \[TypeError\]$/,
+      );
+    });
+
+    it('names a flatten-attribution failure with no parens at all — instrument is null for a flatten-keyed scope', async () => {
+      /** Same repro as "does not re-arm a lot named by a flatten…" above, isolated to the message shape alone. */
+      class FlakyEntrySizesStore extends TestExecutionStore {
+        override async getEntryFillSizes(): Promise<Map<string, number>> {
+          throw new Error('simulated store outage on getEntryFillSizes');
+        }
+      }
+
+      const { db } = openTestExecutionStore();
+      const store = new FlakyEntrySizesStore(db);
+      await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10, stop: 95 });
+
+      const entryOnly = new ScriptedBroker([
+        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+      ]);
+      await new ExecutionImpl(makeInput(entryOnly, store)).ingestFills();
+
+      await store.writeAheadFlatten({
+        idempotency_key: 'flatten-1',
+        instrument: 'AAPL',
+        asset_class: 'stocks',
+        side: 'sell',
+        size: 10,
+        submitted_at: OPENED_AT,
+        lot_held_quantities: [{ idempotency_key: 'key-1', held: 10 }],
+        exit_reason: 'flatten',
+        decision_price: null,
+        quote_bid: null,
+        quote_ask: null,
+        quote_mid: null,
+        quote_observed_at: null,
+        modelled_cost_breakdown: null,
+      });
+      // NULLed to a pre-migration-0021 row — the one shape that routes the
+      // split through `getEntryFillSizes`, the only `await` between reading
+      // the lot keys and the (pure, unthrowable) split.
+      db.prepare(
+        'UPDATE flatten_submissions SET lot_held_quantities = NULL WHERE idempotency_key = ?',
+      ).run('flatten-1');
+
+      const withFlatten = new ScriptedBroker([
+        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'flatten-1',
+          broker_fill_id: 'f1',
+          leg: 'exit',
+          qty: 4,
+          timestamp: new Date('2026-07-20T15:30:00Z'),
+        }),
+      ]);
+
+      // No `(instrument)` segment at all — not `()`, not a stray space —
+      // between the quoted key and `[Error]`. `$`-anchored for the same
+      // reason as the lot-advance case above.
+      await expect(new ExecutionImpl(makeInput(withFlatten, store)).ingestFills()).rejects.toThrow(
+        /unresolved: flatten-attribution 'flatten-1' \[Error\]$/,
       );
     });
   });
