@@ -74,7 +74,9 @@ export class SaxoBrokerRateLimitError extends Error {
  * the same conservative way it always has been. GET is the only verb that
  * sets it `true` (#1223's own allowlist); this ticket does not widen it —
  * see `classifySaxoBrokerNetworkError`'s doc comment for why DELETE stays
- * out of it even though DELETE now retries on timeout below.
+ * out of it even though DELETE's timeout retry (pre-existing on `origin/main`,
+ * unconditional on every verb, and merely preserved rather than added by
+ * #1273 — see `isRetrySafeSaxoMethod` below) is allowed to differ.
  *
  * `method` (#1273) is separate from `retryableTransportFailure`: it is set
  * only when `status` is also set (a real 5xx response, from
@@ -132,23 +134,35 @@ export function isOrderNotFound(error: unknown): boolean {
  * deadline was hit, or a real response with a status came back), where a
  * status-less failure means nothing did.
  *
- * GET: repeating a read cannot mutate venue state.
- * DELETE: doc 43:33 measured a repeat order-cancel as venue-idempotent —
- *   `DELETE .../orders/{OrderId}` on an already-cancelled or unknown id
- *   answers `404 {"ErrorInfo":{"ErrorCode":"OrderNotFound"}}`, not a second
- *   cancel or an error that hides one.
+ * The check is keyed on the VERB alone, not on the operation behind it —
+ * `cancelOrder` is what earned DELETE's place on this list (doc 43:33
+ * measured a repeat order-cancel as venue-idempotent: `DELETE
+ * .../orders/{OrderId}` on an already-cancelled or unknown id answers `404
+ * {"ErrorInfo":{"ErrorCode":"OrderNotFound"}}`, not a second cancel or an
+ * error that hides one), but the admission itself is "this verb is safe",
+ * not "this specific call site was proven safe". A second, future DELETE
+ * operation would inherit retry from being a DELETE, with no independent
+ * proof of its own idempotence — the same verb-declaration-not-safety-audit
+ * posture #1223 took for GET (see that ticket's `SaxoHttpMethod` history).
+ * `cancelOrder` (`saxo-http-client.ts`) is the only DELETE call site today,
+ * so nothing is live; a reviewer adding a second one is the point where this
+ * allowlist's verb-only admission actually gets tested.
  *
- * PUT and PATCH are excluded not because they are unsafe — PUT is idempotent
- * by HTTP semantics too — but because no Saxo call site uses either today and
- * nothing has verified one venue-idempotent the way doc 43:33 did for
- * cancel; excluding them is "unverified, so unlisted", not a judgment that
- * they would fail. POST is excluded on principle regardless of status or
- * verification: `placeOrder` is the one operation an accidental duplicate is
- * expensive for (a second live order, doc 43), so this allowlist admits
- * verbs, not verb-plus-status-code carve-outs — a POST 429 (doc 43:13 shows
- * it firing before any semantic check, so probably no order exists yet) is
- * excluded for the same reason a POST 5xx is: uniformity, not a claim that
- * every excluded case is independently dangerous.
+ * GET is on the list for a narrower reason that needs no per-operation
+ * evidence at all: repeating a read cannot mutate venue state, by HTTP
+ * semantics, regardless of which read it is.
+ *
+ * PUT and PATCH are left off — not because they are unsafe (PUT is
+ * idempotent by HTTP semantics too), but because no Saxo call site uses
+ * either today and nothing has verified one venue-idempotent the way doc
+ * 43:33 did for DELETE; excluding them is "unverified, so unlisted", not a
+ * claim that they would fail. POST is excluded on principle regardless of
+ * status or verification: `placeOrder` is the one operation an accidental
+ * duplicate is expensive for (a second live order, doc 43), so this
+ * allowlist admits verbs, not verb-plus-status-code carve-outs — a POST 429
+ * (doc 43:13 shows it firing before any semantic check, so probably no order
+ * exists yet) is excluded for the same reason a POST 5xx is: uniformity, not
+ * a claim that every excluded case is independently dangerous.
  */
 function isRetrySafeSaxoMethod(method: SaxoHttpMethod | undefined): boolean {
   return method === 'GET' || method === 'DELETE';
@@ -270,8 +284,10 @@ export async function classifySaxoBrokerResponse(
  * `retryableTransportFailure`; every other verb, including DELETE, does not.
  *
  * DELETE stays out of `retryableTransportFailure` deliberately, even though
- * DELETE (cancel) now retries a timeout below (#1273): #1273 was asked to
- * *preserve* cancel's existing timeout retry, not to *add* a new retry cancel
+ * cancel's DELETE timeout retry is allowed below (#1273's `isRetrySafeSaxoMethod`)
+ * — that retry already existed on `origin/main` (every verb's timeout was
+ * unconditionally retryable pre-#1273) and is *preserved*, not newly added,
+ * by this ticket; #1273 was not asked to *add* a status-less retry cancel
  * does not have today. A status-less network failure and a timeout carry the
  * identical ambiguity — neither says whether the venue ever saw the
  * request — so there is no safety distinction between them here, only a

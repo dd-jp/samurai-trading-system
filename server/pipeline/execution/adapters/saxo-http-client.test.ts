@@ -407,10 +407,15 @@ describe('SaxoHttpBrokerClient', () => {
   // #1273: a timeout abort was retried unconditionally regardless of verb —
   // the sole guard against retrying a lost placement response was
   // `placeOrder`'s `maxAttempts: 1` below. This end-to-end pair pins the
-  // fix; `saxo-broker-errors.test.ts`'s "timeout/rate-limit/5xx retryability
-  // is verb-aware" suite isolates the classification-level guarantee in the
-  // same way the transport-failure tests above do (see the comment on "does
-  // NOT retry a transport failure on placeOrder").
+  // fix, but — same caveat as "does NOT retry a transport failure on
+  // placeOrder" above — the placeOrder test below does NOT by itself catch a
+  // classifier regression: `maxAttempts: 1` pins it to one attempt
+  // regardless of what `isRetryableSaxoBrokerError` answers (confirmed by
+  // mutation — reverting `isRetrySafeSaxoMethod` to always `true` leaves
+  // this file's 21 tests green). The classification-level guarantee is
+  // proven in isolation by `saxo-broker-errors.test.ts`'s
+  // "timeout/rate-limit/5xx retryability is verb-aware" suite, four cases of
+  // which DO fail under that same mutation.
   describe('timeout retryability is verb-aware (#1273)', () => {
     it('does NOT retry a timeout on placeOrder (a POST), even with attempts to spare', async () => {
       const fetchMock = vi
