@@ -1,5 +1,15 @@
 # Intraday data availability — what the event study can actually be run on
 
+> **Superseded in part, 2026-09-08 — the LSE 1-minute row is wrong.**
+> [`44-saxo-data-surface.md`](44-saxo-data-surface.md) measured Saxo's `chart/v3`
+> against the actual tradeable LSE line: 1-minute OHLCV with volume is available back to
+> each instrument's inception (~4.3y for the pool's oldest member), free with the
+> brokerage account. **"NOT AVAILABLE" is falsified; "sufficient for Stage 2" is not
+> established** — the 10-year bar this table was written against is still unmet, and
+> whether the bars may be *retained* under Saxo's data terms is an open decision. Every
+> other row stands.
+
+
 **Date:** 2026-08-09 · **Ticket:** [#656](https://github.com/dd-jp/samurai-trading-system/issues/656) · **Map:** [#631](https://github.com/dd-jp/samurai-trading-system/issues/631)
 
 Written after [#632](https://github.com/dd-jp/samurai-trading-system/issues/632) moved the product to an **intraday** horizon and [#653](https://github.com/dd-jp/samurai-trading-system/issues/653) proposed deriving trading levels from a ~10-year event study. Neither is runnable without data the project may not have. **Every claim below marked VERIFIED was tested against a live API call with this project's own keys, not read from documentation** — the documentation was wrong on the single most important point.

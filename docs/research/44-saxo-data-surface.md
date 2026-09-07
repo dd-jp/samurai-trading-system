@@ -1,0 +1,327 @@
+# 44 — Saxo's data surface, measured
+
+**Date:** 2026-09-08
+**Question:** What data does Saxo actually give us — across the Trader/Investor platforms and
+the OpenAPI — and which prior spec decisions does it reopen?
+**Status:** Live. Supersedes the "LSE intraday bars unavailable" row of
+[`33-intraday-data-availability.md`](33-intraday-data-availability.md); see §2.2.
+
+Prompted by two questions from David while provisioning the live account: *"there is a lot of
+market data in the app, have we considered this as a source?"* and *"can we not use saxo for
+market sentiment or intelligence"*.
+
+---
+
+## 1. Method, and what the evidence is worth
+
+Every figure below was pulled from the **SIM gateway** (`gateway.saxobank.com/sim/openapi`)
+on 2026-09-07/08 with a 24-hour developer token, against `ClientId 22690838`. Three
+qualifications bind the whole document:
+
+- **The SIM account is a trial account, not the UK GIA.** `port/v1/clients/me` reports
+  `IsTrialAccount: true` and `DefaultCurrency: "EUR"`. Anything account-shaped — tariffs,
+  entitlements, permissions — is **not** evidence about the live Saxo UK GIA. Anything
+  reference- or market-shaped (instrument metadata, exchange calendars, bar history, field
+  availability) is the same data the live gateway serves.
+- **The market was closed** (`MarketState: "Closed"`, `PriceTypeAsk/Bid: "OldIndicative"`,
+  `DelayedByMinutes: 15`). Quote *magnitudes* — spreads especially — are stale and indicative.
+  The *mechanisms* are proven; the numbers must be re-measured in session.
+- **The Trader/Investor front-ends were not surveyed** — the platform session had expired and
+  logging in is David's to do. See §4; it bounds exactly one conclusion.
+
+Reproduction scripts are throwaway (`$CLAUDE_JOB_DIR/tmp/saxo_*.py`); every call in them is a
+plain GET against the paths quoted inline below.
+
+---
+
+## 2. Findings that change something
+
+Ranked by what they cost us if we keep believing the current thing.
+
+### 2.1 The pence bug has a first-class fix in the API — `PriceToContractFactor`
+
+[#1302](https://github.com/dd-jp/samurai-trading-system/issues/1302) records that Saxo reports
+GBX-quoted LSE lines as `GBP`, a 100× scale collision that reaches 17 of the pool's rows. That
+is true of `/ref/v1/instruments` (the *search* endpoint the pool was built from) and of
+`DisplayAndFormat.Currency` on `infoprices`. It is **not** true of instrument details.
+
+`GET /ref/v1/instruments/details/{Uic}/{AssetType}` carries two fields the search endpoint omits:
+
+| Uic | Symbol | `CurrencyCode` | `PriceCurrency` | `PriceToContractFactor` |
+| --- | --- | --- | --- | --- |
+| 29391797 | `LQQ3:xlon` | `GBP` | **`GBX`** | **`0.01`** |
+| 3347273 | `3USL:xlon` | `USD` | `USD` | `1.0` |
+
+So the quote unit is knowable, per instrument, from the venue itself. The invariant is:
+
+> **cash per share = quoted price × `PriceToContractFactor`**, in `CurrencyCode`.
+
+LQQ3's quote of 31151 is 31151 GBX = **£311.51**, not £31,151.00 and not £311.51-by-guesswork.
+This turns #1302 from "we must hand-maintain a GBX flag on 17 pool rows" into "read one field at
+resolve time, and never trust `CurrencyCode` or `DisplayAndFormat.Currency` alone." Hand-
+maintained flags would have gone stale the moment a row was added; this does not.
+
+### 2.2 Intraday LSE bars on the tradeable line **do** exist — but not at Stage 2's depth
+
+Doc 33's verdict table says, for the row it calls *"the actual live tradeable universe"*:
+
+> **LSE 1-minute bars — NOT AVAILABLE FREE at 10y** | best free option ~1y
+
+The first half is falsified. `GET /chart/v3/charts` serves LQQ3 at **every horizon from
+1 minute to monthly** (1, 5, 10, 15, 30, 60, 120, 240, 360, 480, 1440, 10080, 43200), 1200
+samples per request, paged by `Mode=From&Time=…`. Each sample is a real OHLCV bar:
+
+```json
+{"Time":"2026-07-30T08:00:00Z","Open":25449.0,"High":25449.0,"Low":25425.0,
+ "Close":25425.0,"Volume":270.0,"Interest":0.0,"MarketTradingState":"Automated"}
+```
+
+`MarketTradingState` is worth noting on its own — it lets auction and halt bars be excluded
+rather than silently averaged into an intraday signal.
+
+**Depth is per-instrument inception, not a rolling window.** `Mode=From&Time=2016-01-04`
+returns 2022-05-30, and the daily series starts 2022-05-27 and returns 1080 rows whether
+`Count` is 1200 or 5000 — i.e. that *is* all of it. LQQ3 listed in May 2022. Corroborating:
+LQQ3's `HistoricalChanges` has no `PercentChange5Years` while 3USL's does.
+
+**This does not clear Stage 2, and should not be reported as clearing it.** Doc 33's bar was
+10 years; this is ~4.3 for the pool's *oldest* member, and any basket's usable window is set by
+its shortest-lived member. Stage 2's PBO/DSR rejection
+(doc 13's Stage 2 chain) gets *worse* on a shorter sample, not better. The
+honest statement is: **"not available" was wrong; "sufficient" is unestablished.**
+
+**And retention is an open legal question, not a settled one.** The Data Notification terms
+accepted to enable OpenAPI access permit own non-commercial use and bar copying, reproduction,
+duplication and distribution. Persisting 4.3 years of 1-minute bars into a local backtest store
+is the same class of act that disqualified Yahoo in
+[`34-lse-mark-source-options.md`](34-lse-mark-source-options.md) (*"ToS bars automated
+collection"*) and the LSE free endpoint under its §8. Quote-time use and bulk retention are
+different questions and only the first is clearly permitted. **Saxo is not yet the LSE backtest
+source; whether it may be is a decision, and it is charted as one.**
+
+### 2.3 A complete movers screen exists, in one call, at zero marginal cost
+
+ADR-0016 D1 states *"the universe objective is **movers**"*. The universe-path gap sweep
+(`docs/reviews/universe-path-gap-sweep-2026-09-03.md`) recorded F2 — #750's ranked axis has no
+sort key — and F8 — that both halves of #1002's evidence rest on sources this repo has ruled it
+cannot collect from. Saxo answers both.
+
+`GET /trade/v1/infoprices/list` accepts the **entire 146-instrument LSE ETN universe in a
+single request** (`Uics=` comma-joined, `AssetType=Etn`), returning all 146 rows in **0.23 s**.
+Batches of 25/50/100/146 all returned in full; no cap was hit. Per row it carries:
+
+| Field group | What it gives |
+| --- | --- |
+| `InstrumentPriceDetails` | `AverageVolume`, `AverageVolume30Days`, **`RelativeVolume`**, `IsMarketOpen`, `ShortTradeDisabled` |
+| `HistoricalChanges` | `PercentChangeDaily`/`Weekly`/`1Month`/`2Months`/`3Months`/`6Months`/`1Year`/`2Years`/`3Years`/`5Years`, `FiftyTwoWeekHigh`/`Low` |
+| `PriceInfo` / `PriceInfoDetails` | `Open`, `High`, `Low`, `LastClose`, `LastTraded`, `Volume`, `NetChange`, `PercentChange` |
+| `Quote` | `Bid`, `Ask`, `Mid`, `PriceTypeAsk`/`Bid`, `DelayedByMinutes`, `MarketState` |
+| `Commissions` | `CostBuy`, `CostSell` for a given `Amount` |
+
+**`RelativeVolume`: the formula is proven, the baseline is not.** The field is undocumented and
+reconciles with none of its neighbours at face value, so it was checked against all 146 rows:
+
+> `RelativeVolume == 100 × Volume / AverageVolume` — exact on **128 of 128** rows carrying all
+> three inputs, worst relative error 0.0000%.
+
+That settles the arithmetic, **not the semantics: what `AverageVolume` averages is undocumented,
+and it is demonstrably not `AverageVolume30Days`.** Across the 145 rows carrying both, the ratio
+`AverageVolume / AverageVolume30Days` runs **0.29 (`ETHP:xlon`) to 96.4 (`1ARK:xlon`)**, median
+1.17, and equals 1.0 on **no row at all** (`LQQ3:xlon` 6.72, `3USL:xlon` 1.07). The spread is
+consistent with a uniform but longer window — illiquid names like `1ARK` have a near-zero 30-day
+figure, which inflates the ratio — and equally consistent with a per-instrument window; **the
+data cannot separate the two.** So the safe reading is *today's volume over a Saxo-defined
+baseline, ×100*: the ×100 scaling is established (`609.86` on `BTC3:xlon` is 6.1×, not 610×),
+the denominator is not.
+
+**Two limits on how it may be used, both from the same probe.** `Volume` is session-cumulative,
+so mid-session `RelativeVolume` climbs monotonically through the day — any *absolute* threshold
+fires late and is not comparable across sample times. And a cross-instrument ranking divides each
+name by its own baseline, which is only apples-to-apples if that baseline follows a uniform rule;
+that is the open question above. What is unambiguously safe is the **cross-sectional ranking at a
+single sampled moment, read as a candidate generator rather than a calibrated statistic** — which
+is what a movers screen needs.
+
+`PercentChangeDaily` is present on **146 of 146**, needs no reconstruction, and carries neither
+caveat: it should be the primary axis, with `RelativeVolume` secondary until its baseline is
+pinned down. Even so this is a lawful, entitled, vendor-free sort key over the whole tradeable
+universe, refreshed as often as we care to poll — which is the thing #750/#1002/#1035 lacked.
+
+### 2.4 Saxo's LSE coverage was never the binding constraint — spread is
+
+The pool file curates 54 rows, of which **13** resolve to their own Saxo line. Saxo lists, on
+`ExchangeId=LSE_ETF`:
+
+| AssetType | Instruments | Currencies (`CurrencyCode`) | Leveraged by description |
+| --- | --- | --- | --- |
+| `Etn` | **146** | 77 USD / 64 GBP / 5 EUR | 110 |
+| `Etc` | **127** | 95 USD / 30 GBP / 2 EUR | 37 |
+| `Etf` | **1521** | 785 GBP / 684 USD / 52 EUR | 6 |
+
+~153 leveraged ETPs against a pool of 13. These are **candidates, not tradeables** — the same
+screen shows why. Ranking the 146 ETNs by relative volume and reading the spread off `Quote`:
+
+| RelVol | %day | spread | symbol |
+| ---: | ---: | ---: | :--- |
+| 609.9 | −0.68% | 12.9 bp | `BTC3:xlon` |
+| 457.5 | +1.04% | **446.5 bp** | `MSTS:xlon` |
+| 320.7 | −1.80% | **219.8 bp** | `2BRK:xlon` |
+| 314.2 | +0.91% | 4.9 bp | `AETH:xlon` |
+| 311.9 | −0.66% | 7.2 bp | `CBTC:xlon` |
+| 279.3 | −0.68% | 3.6 bp | `BITP:xlon` |
+| 269.0 | +3.08% | **459.3 bp** | `3SMI:xlon` |
+| 249.7 | +3.76% | **644.4 bp** | `NIO3:xlon` |
+
+(Stale, closed-market marks — magnitudes indicative, per §1.)
+
+Spread ranges over **two orders of magnitude, 3.6 bp to 644 bp**, inside one asset type on one
+exchange. At ADR-0018's brackets a 200 bp spread is most of the move. Widening the universe is
+therefore not a matter of adding rows: it needs a **spread gate**, which the system does not
+currently have and which this data now makes possible. Note also `SOXL:xlon` — *"Leverage
+Shares 4X Long Semiconduct ETN"* — a **4×** product, outside ADR-0016's 3× framing.
+
+### 2.5 Spread is measurable at all, for the first time
+
+Worth separating from §2.4 because of what it replaces. The repo has had **no lawful spread
+source**: #1036's retraction, Yahoo disqualified in doc 34, the LSE free endpoint barred by its
+§8 (doc 34), and
+`cost-floors-undersized-for-live-venue` recording that 1 bp floors charge ~4 bps round trip
+where Saxo alone is 16 bps. `Quote.Bid`/`Ask`/`Mid` on `infoprices` is that source, per
+instrument, at poll cadence, under the data terms we have already accepted. Doc 53's
+`CostModelImpl` currently floors commission at a 1 bp-of-notional *rate* with no per-instrument
+spread input; it now has one available.
+
+### 2.6 The commission floor — a scare that resolved, and a cheap gate that did not
+
+The SIM tariff prices `LQQ3` as **min £8, then 0.10%** of notional:
+
+| `Amount` | notional | `CostBuy` | implied |
+| ---: | ---: | ---: | :--- |
+| 1 | £311.51 | £8.00 | floor |
+| 10 | £3,115 | £8.00 | floor |
+| 100 | £31,163 | £31.16 | 0.100% |
+| 1000 | £311,630 | £311.63 | 0.100% |
+
+Taken at face value that would be fatal: £16 round trip on a £350 ADR-0018 D5 ticket is **4.6%**.
+It would also **invert the venue decision** — ADR-0015's 2026-08-30 amendment disqualified IBKR
+precisely on its £3/order minimum (*"1.71%/2.40% round trip at D5's £350/£250 tickets"*) and
+chose Saxo on the strength of a claim it states three times: *"Saxo's 8bps-per-side Classic tier
+with **no per-order minimum**"*, *"**Saxo has no per-order minimum**: 8bps is a flat rate on
+notional, proportional at both D5 ticket sizes, so this risk does not materialise."* An £8 floor
+is worse than the £3 floor IBKR was rejected for.
+
+**It is not evidence.** Per §1 the SIM account is an EUR trial account, and its tariff is that
+account's, not Saxo UK's. Saxo's published UK stock commissions page states *"No minimums on UK
+stocks"* (the asterisk there attaches to SETSqx minimum *trade sizes*, a different thing),
+consistent with ADR-0015. The scare is defused.
+
+**What survives is better than the scare.** ADR-0015's load-bearing fact was sourced from a
+marketing page and a sales conversation, and `Commissions` is a **live gateway field group**. One
+`infoprices` call on the live token, at `Amount=1`, settles it against the venue's own pricing
+engine before a single pound is at risk. Also unresolved and now sharper: the adapter's own
+comment (`server/pipeline/execution/adapters/saxo-adapter.ts`, `feeCurrencyFor`) hard-codes
+*"the published GBP-ETP tariff (ADR-0015 §"Saxo", 0.08 %, no minimum)"* — a modelled constant,
+never verified against a fill, and structurally unable to represent a floor if one exists.
+
+### 2.7 Flat-by-close has a venue-native mechanism, and the ADR-0015 clause has a referent
+
+Two things ADR-0014's flat-by-close currently does by client-side timing are available from the
+venue:
+
+- `GET /ref/v1/exchanges/LSE_ETF` returns **`ExchangeSessions`** — explicit
+  `Closed` / `OpeningAuction` / `AutomatedTrading` / `ClosingAuction` windows with exact UTC
+  boundaries, plus `TimeZoneAbbreviation: "BST"` and `TimeZoneOffset`. A session calendar read
+  from the exchange beats a hardcoded 15:30Z, and BST/GMT is exactly the class of bug
+  has bitten this project before.
+- `GET /ref/v1/algostrategies` lists 20 strategies. **`Market on Close (MOC)`,
+  `Limit on Close (LOC)` and `Target Close` all carry `MinAmountUSD: 0.0`** — no size floor
+  (only `Iceberg` has one, at $11,000) — and instrument details list all three under
+  `SupportedStrategies` for both pool lines checked. A flat-by-close exit could be routed into
+  the LSE closing auction natively.
+
+**Caveat, and it is a real one.** ADR-0015 records as unresolved what the Commissions Schedule's
+*"specific algorithmic orders… must be executed with the help of the trading desk"* clause
+scopes — Saxo sidestepped the question twice and David ruled it non-blocking by judgment. That
+clause now has a concrete candidate referent: this very `AlgoStrategies` list. Using MOC is
+therefore a *different* risk posture from using plain `Market`/`Limit`, and the ruling that the
+clause is non-blocking was made about the latter. Do not adopt MOC without re-asking.
+
+### 2.8 Confirmations (no action, but they close open guesses)
+
+- `FractionalOrderEnabled: false`, `FractionalOrderEnabledAssetTypes: []`,
+  `LotSizeType: "OddLotsNotAllowed"`, `MinimumLotSize: 1.0`, `AmountDecimals: 0` — **whole
+  shares only**, corroborating the whole-share sizing constraint
+  from the venue rather than by inference.
+- `IsComplex: true` on both pool lines — the appropriateness gate, visible in data.
+- `IsExtendedTradingHoursEnabled: false`, `AllowedTradingSessions: "Regular"` — no extended hours.
+- `PositionNettingMode: "Intraday"`, `PositionNettingProfile: "FifoRealTime"`.
+- `TradingSignals: "NotAllowed"` on both lines — see §3.
+- `IsOcoOrderSupported: false` is **already recorded** in
+  [`43-saxo-openapi-order-idempotency.md`](43-saxo-openapi-order-idempotency.md) along with the
+  IfDone-master + `:stop`/`:target` bracket model. Not a new finding; noted so it is not re-filed.
+
+---
+
+## 3. What Saxo does **not** give us
+
+Answering David's sentiment/intelligence question directly, from the API surface rather than
+from impression. The OpenAPI has **17 service groups**: Account History, Asset Transfers, Chart,
+Client Management, Client Reporting, Client Services, Corporate Actions, Disclaimer Management,
+ENS, Market Overview, Partner Integration, Portfolio, Reference Data, Regulatory Services, Root
+Services, Trading, Value Add.
+
+- **No news, research, analyst ratings, sentiment, or client-positioning endpoint anywhere.**
+  **Value Add is price alerts only** (`vas/v1/pricealerts/definitions` — verified, returns an
+  empty definition list, not a 404).
+- **No screener or movers endpoint was found — but this is a weaker negative than the rest of
+  this section, and is flagged as such.** `mkt/v1/marketoverview`, `mkt/v1/moversandshakers` and
+  `mkt/v1/prices/subscriptions` all return **404**; those three paths were *guessed*, and Market
+  Overview is one of the 17 groups above, so a real path may exist under a name not tried.
+  Service discovery was attempted and yielded nothing: `mkt`, `mkt/v1`, `mkt/$metadata` and
+  `mkt/v1/$metadata` all 404 — **but so do `ref/v1`, `port/v1`, `trade/v1` and `chart/v1`**, so
+  the gateway 404s every group root and those results carry no information. The public reference
+  page for `mkt/v1` is itself a 404. **The accurate claim is: the group is enumerated, no path
+  under it was reachable or documented, and §2.3's screen is one we build from `infoprices`
+  rather than one Saxo was found to ship.** Read as a failure to find, not as measured absence.
+  Nothing downstream turns on the difference — §2.3 works either way.
+- `TradingSignals: "NotAllowed"` on the pool instruments — the trade-signals product does not
+  reach them.
+
+**So: Saxo replaces no part of the MI stack.** It is a market-data and execution venue. #1305
+stands as filed on the sentiment question; what it gains is §2.3 and §2.5, which are worth more
+than the thing it was asked for.
+
+---
+
+## 4. The gap in this survey
+
+The **SaxoTraderGO / SaxoInvestor front-ends were not inspected** — the platform session had
+expired, and logging in is David's to do, not something to automate with his credentials.
+
+This bounds exactly one claim. §3's "no sentiment/news/research" is a statement about the
+**OpenAPI**. Saxo's retail platforms are widely understood to bundle news and research, and if
+they do, the accurate finding is *"exists in the platform, not exposed over OpenAPI"* — which is
+a different statement with a different implication (it would be licensable or scrapeable-in-
+principle rather than absent). Nothing else in this document depends on it, and it does not
+block the conclusions. Worth ten minutes at the next login.
+
+---
+
+## 5. What this reopens
+
+| # | Decision as it stands | What changes it | Where it goes |
+| --- | --- | --- | --- |
+| 1 | #1302: GBX handled by a hand-maintained pool flag | `PriceToContractFactor` is authoritative and per-instrument (§2.1) | comment on #1302 |
+| 2 | Doc 33: LSE intraday bars unavailable | ~4.3y of 1-min OHLCV on the tradeable line (§2.2) | comment on #1304 |
+| 3 | Bars may not be retained under the data terms | Unresolved; same class as the Yahoo/LSE §8 disqualifications (§2.2) | **wayfinder child** |
+| 4 | #750/#1002/#1035: movers axis has no lawful sort key | Whole universe, one call, two axes — one proven, one caveated (§2.3) | comment on #1305 |
+| 5 | ADR-0016: pool of 13, 3× framing | 146 ETN + 127 ETC listed; 4× exists; spread gate needed (§2.4) | **wayfinder child** |
+| 6 | ADR-0015: "Saxo has no per-order minimum" — the fact that disqualified IBKR | Unverified against the venue; one live call settles it (§2.6) | **wayfinder child**, pre-ramp gate |
+| 7 | ADR-0014: flat-by-close by client-side timing | Exchange session calendar + native MOC/LOC (§2.7) | **wayfinder child**, gated on the ADR-0015 clause |
+| 8 | Doc 53 `CostModelImpl`: 1 bp rate floor, no spread input | Per-instrument spread now available (§2.5) | folds into 6 |
+
+Items 1, 2 and 4 are evidence for tickets that already exist and should not be re-filed. Items 3, 5, 6 and 7 are genuine
+reopenable spec decisions and want a wayfinder map.
+
+**The one that gates the live ramp is 6.** It is cheap, it is decidable with a single call, and
+it is the only item on this list where being wrong costs money rather than time.
