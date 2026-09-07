@@ -899,6 +899,42 @@ describe('ExecutionImpl.ingestFills', () => {
     });
   });
 
+  // #1126 (#1096 follow-up): the tests above assert `.rejects.toThrow` with a
+  // bare substring (e.g. 'key-flaky'), which still passes if the
+  // `(instrument) [ReasonClass]` suffix `throwContainedFailures` appends is
+  // dropped, reordered, or reshaped — none of them can see a suffix-format
+  // regression. This test pins the exact shape instead.
+  describe('throwContainedFailures suffix format (#1126)', () => {
+    it('names the failed lot as scope, key, "(instrument)", then "[ReasonClass]" in that order', async () => {
+      class FlakyAdvanceStore extends TestExecutionStore {
+        override async applyLotAdvance(advance: LotAdvance): Promise<void> {
+          if (advance.idempotency_key === 'key-flaky') {
+            throw new TypeError('simulated store outage on applyLotAdvance');
+          }
+          return super.applyLotAdvance(advance);
+        }
+      }
+
+      const { db } = openTestExecutionStore();
+      const store = new FlakyAdvanceStore(db);
+      await seedPosition(store, {
+        idempotency_key: 'key-flaky',
+        instrument: 'MSFT',
+        requested_size: 10,
+      });
+      const broker = new ScriptedBroker([
+        fill({ client_order_id: 'key-flaky', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+      ]);
+
+      // `TypeError`, not the `Error` the other containment tests throw, so a
+      // passing match proves `reason` reads the failure's actual
+      // `constructor.name` rather than a hardcoded literal.
+      await expect(new ExecutionImpl(makeInput(broker, store)).ingestFills()).rejects.toThrow(
+        "unresolved: lot-advance 'key-flaky' (MSFT) [TypeError]",
+      );
+    });
+  });
+
   // #519/#526: bounds `reconcile()`'s flatten-journal rescan (migration 0023) —
   // see `SharedStore.markFlattenFillsSwept`'s doc for why the mark may only
   // fire once every named lot has durably advanced, never merely once a raw
