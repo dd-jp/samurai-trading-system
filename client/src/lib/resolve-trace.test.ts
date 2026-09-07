@@ -222,6 +222,23 @@ describe('resolveTrace', () => {
     expect(detail.traceId).toBeNull();
   });
 
+  // Unlike the arms above, the lanes arm has no test where a lane is its ONLY
+  // attestation: #1205's test above pairs its lane with a verdict decoy, so
+  // removing the lanes arm outright still passes there via the verdict arm.
+  // This isolates it — no verdict, no risk-critic, no tick_status — so the
+  // lanes arm itself (not its dead `!== instrument` conjunct, see trace.ts's
+  // docstring) is not left at zero coverage.
+  it('names a mismatch by its lane alone, with no verdict, risk-critic or tick_status attesting it', () => {
+    const snapshot = makeSnapshot({
+      pipeline: makeView([doneThrough('SPY', 'trace-1', 'trader')]),
+      verdicts: [],
+      risk_critics: [],
+    });
+    const detail = resolveTrace(snapshot, { instrument: 'AAPL', traceId: 'trace-1' });
+    expect(detail.absence.lane).toBe('wrong_instrument');
+    expect(detail.traceId).toBeNull();
+  });
+
   it('keeps a same-instrument verdict as aged-out, not a wrong-instrument mismatch', () => {
     const snapshot = makeSnapshot({
       pipeline: makeView([]),
