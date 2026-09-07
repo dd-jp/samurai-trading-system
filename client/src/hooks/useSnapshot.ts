@@ -387,6 +387,9 @@ export function toWireSnapshot(body: unknown): WireSnapshot | null {
     ? (candidate.mode as ServerMode)
     : null;
   const spend = candidate.llm_spend;
+  // `spend` is `unknown`, so the spread source still needs a cast; narrowed
+  // to `Omit<..., 'cap_usd' | 'cap_armed_at'>` so the two fields actually
+  // being normalized below stay compiler-checked against `WireLlmSpendSummary`.
   const llm_spend: WireLlmSpendSummary | null = isSpendSummary(spend)
     ? {
         ...(spend as unknown as Omit<LlmSpendSummary, 'cap_usd' | 'cap_armed_at'>),
