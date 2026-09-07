@@ -156,7 +156,12 @@ const CLOSED_TRADES: ClosedTrade[] = [
     opened_at: hoursAgo(8),
     closed_at: hoursAgo(6.5),
     close_reason: 'target',
-    // #1121: a fixture row is a normally-charged trade — both legs modelled.
+    // #1121: a fixture row is a normally-charged trade — every leg the
+    // modelled-cost mechanism COVERS was charged. Not "both legs": these two
+    // rows close on `'target'` and `'stop'`, and a protective leg is outside
+    // coverage (`modelledCostCharged`, ingest-fills.ts), so the flag is true
+    // on the entry leg alone. Round-2 review, finding 7 — wording only, the
+    // value is right either way.
     modelled_cost_charged: true,
   },
   {

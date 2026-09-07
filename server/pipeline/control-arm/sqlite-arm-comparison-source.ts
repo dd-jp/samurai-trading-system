@@ -103,11 +103,41 @@ export class SqliteArmComparisonSource {
  * `min_trades_per_arm` before calling a divergence, so a gutted arm reads as
  * NO VERDICT, not as a skewed one. The floor is doing more work than a
  * one-off cleanup would need, because the ongoing exclusion never ends. That
- * is still acceptable, and for a reason worth stating: a failed submit-time
- * capture is a quote-read failure at ORDER SUBMISSION, uncorrelated with how
- * the trade later turned out. Excluding those rows loses sample size without
- * selecting on outcome — unlike vetoing on a protective-leg exit, which
- * `closedTrade()` deliberately refuses to do because stops are the losers.
+ * is still acceptable, but NOT because the exclusion is outcome-blind. It is
+ * not, and the earlier version of this comment claiming so was wrong (#1121
+ * review round 2, finding 1).
+ *
+ * THE EXCLUSION SELECTS ON EXIT TYPE, through the coverage rule rather than
+ * through a veto. `closedTrade()`'s `modelledCostCharged` covers the entry
+ * legs plus flatten (`'exit'`) legs and excludes `'stop'`/`'target'` legs
+ * (ingest-fills.ts). Each covered leg needs its own successful, best-effort
+ * `captureSubmitSnapshot`. So a lot that exits on a protective leg needs ONE
+ * capture to stamp 1 (the entry's), while a lot that exits on a flatten needs
+ * TWO independent ones. The requirement is strictly weaker for protective-leg
+ * exits, so their drop rate is WEAKLY lower — equal only if capture never
+ * fails — and the surviving live population is enriched in stop/target exits.
+ * Those are the losers, and they are the same rows #1301 leaves under-charged
+ * by one exit commission. The veto `closedTrade()` refuses is genuinely
+ * refused; the selection arrives anyway, by the back door.
+ *
+ * No failure RATE is claimed here, only the shape. The round-2 soak read
+ * (live rows, `fills.cost_breakdown_json IS NOT NULL`) found both flatten-exit
+ * lots stamping 0 and the single `stop` lot stamping 1, but could not separate
+ * pre-migration-0037 lots from failed captures, so it measures the asymmetry's
+ * existence and not its size.
+ *
+ * DIRECTION, with both terms. The selection term biases live `return_pct`
+ * DOWN (losers over-represented); the #1301 under-charge on those same
+ * surviving rows biases it UP. They oppose, and the selection term is the
+ * larger by orders of magnitude — a stop-exit round trip's whole PnL versus
+ * one leg's commission at `SAXO_COMMISSION_RATE`. Net conservative, so this
+ * understates the live edge rather than flattering it, which is why it is
+ * tracked rather than blocking.
+ *
+ * Tracked on #1301, and it is the same defect that ticket already owns rather
+ * than a rider on it: charge protective legs, and they enter coverage, both
+ * exit types then need the same number of captures, and the differential drop
+ * disappears with no change to this filter or to the coverage rule.
  *
  * The floor covers the AUTOMATED reader only. `tools/report-arm-comparison.ts`
  * has no floor — it prints `trade_count` per arm to an operator, who would

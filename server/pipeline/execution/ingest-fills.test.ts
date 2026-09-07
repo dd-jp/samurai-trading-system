@@ -2963,6 +2963,77 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
   });
 
   /**
+   * ROUND-2 REVIEW, finding 3. The predicate is `.every(…)` over the covered
+   * legs, and only the ALL-uncharged case was pinned: mutating it to `.some(…)`
+   * left the whole execution and control-arm suites green. The distinguishing
+   * case is a MIXED lot — entry charged, flatten not — which is not a corner
+   * case but the live regime `modelledCostCharged`'s doc in
+   * `sqlite-arm-comparison-source.ts` describes as ongoing, and which the soak
+   * DB already holds rows for (one live lot carries an exit breakdown and no
+   * entry one).
+   *
+   * `false` is the answer that matters: the flag certifies the whole round
+   * trip's cost basis, so a lot charged on one covered leg and not the other
+   * is NOT on the control arm's basis and must not be admitted to the
+   * comparison. `.some(…)` would admit it.
+   */
+  it('records modelled_cost_charged = false when only some covered legs were charged', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, {
+      requested_size: 10,
+      side: 'buy',
+      modelled_cost_breakdown: modelledCostBreakdown,
+    });
+    const entryFill = fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100, fee: 0 });
+    await new ExecutionImpl(makeInput(new ScriptedBroker([entryFill]), store)).ingestFills();
+
+    // The flatten carries NO snapshot, so its exit leg closes uncharged while
+    // the entry leg above was charged the modelled commission.
+    await store.writeAheadFlatten({
+      idempotency_key: 'flatten-1',
+      instrument: 'AAPL',
+      asset_class: 'stocks',
+      side: 'sell',
+      size: 10,
+      submitted_at: OPENED_AT,
+      lot_held_quantities: [{ idempotency_key: 'key-1', held: 10 }],
+      exit_reason: 'flatten',
+      decision_price: 110,
+      quote_bid: null,
+      quote_ask: null,
+      quote_mid: null,
+      quote_observed_at: null,
+      modelled_cost_breakdown: null,
+    });
+    await new ExecutionImpl(
+      makeInput(
+        new ScriptedBroker([
+          entryFill,
+          fill({
+            client_order_id: 'flatten-1',
+            broker_fill_id: 'f1',
+            leg: 'exit',
+            qty: 10,
+            price: 110,
+            fee: 0,
+            timestamp: new Date('2026-07-20T15:30:00Z'),
+          }),
+        ]),
+        store,
+      ),
+    ).ingestFills();
+
+    const fills = await store.getFills('key-1');
+    // Mixed by construction: the assertion above is only meaningful if the two
+    // covered legs really disagree.
+    expect(fills.find((row) => row.leg === 'entry')?.cost_breakdown).toBeDefined();
+    expect(fills.find((row) => row.leg === 'exit')?.cost_breakdown).toBeUndefined();
+
+    const closed = (await store.getClosedTrades())[0];
+    expect(closed.modelled_cost_charged).toBe(false);
+  });
+
+  /**
    * ROUND-1 REVIEW, finding 3 — the residual, PINNED rather than fixed
    * (#1301). A live lot that exits on a protective leg pays no exit
    * commission, because no modelled estimate exists for that leg on either

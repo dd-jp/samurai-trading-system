@@ -2082,9 +2082,20 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       // pins `MarketState.venue` ('saxo') to the same value on both arms'
       // `CostModel.fill` calls, so a live-arm entry and a control-arm entry
       // at the same instrument/size/mid resolve the SAME `CostConfig.venues`
-      // override and charge the same commission — the fact the AC1 test
-      // checks, made structural here rather than left to two configs that
-      // happen to agree today.
+      // override and price commission off the SAME RATE — the fact the AC1
+      // test checks, made structural here rather than left to two configs
+      // that happen to agree today.
+      //
+      // The same rate is not the same CHARGE (#1121 review round 2, finding
+      // 6). Once Saxo is the adapter the two arms price that rate against
+      // different quantities: the control pays `model(marketState.mid)`
+      // captured at submit, the live arm pays
+      // `max(venue(fill_price), model(mid))` — `saxo-adapter.ts` computes its
+      // reported fee off the EXECUTED price. Since `E[max(X, Y)] >=
+      // max(E[X], E[Y])`, the live arm is systematically over-charged by that
+      // spread. Measured at ~0.004bps and conservative in direction (it
+      // understates the live edge), which is why it is stated here rather
+      // than corrected.
       config: config.executionConfig.simulated,
     }),
     circuitBreakers: new CircuitBreakers(config.breakerConfig, controlBreakerState.load()),

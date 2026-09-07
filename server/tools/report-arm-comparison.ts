@@ -123,10 +123,18 @@ export function formatArmComparison(comparison: ArmComparison): string {
   // floors both arms at `min_trades_per_arm`, so a gutted arm reads as NO
   // VERDICT there. This report has no floor — it prints the count straight to
   // an operator, and the most likely reason the live count is 0 today is the
-  // exclusion, not an idle arm: every live row closed before #1121 backfills to
-  // `modelled_cost_charged = 0` and is dropped by `SqliteArmComparisonSource`.
-  // Without this note that reads as "the live arm closed nothing", which is
-  // false.
+  // exclusion, not an idle arm: a live row with `modelled_cost_charged = 0` is
+  // dropped by `SqliteArmComparisonSource`. Without this note that reads as
+  // "the live arm closed nothing", which is false.
+  //
+  // BOTH regimes, and staying in step with `modelledCostCharged`'s doc there
+  // (#1121 review round 2, finding 4). The historic one is migration 0049's
+  // backfill: every live row closed before #1121 stamps 0. The ONGOING one is
+  // the derived writer — `captureSubmitSnapshot` is best-effort, so a lot that
+  // closes today with a covered leg missing its `cost_breakdown` stamps 0 too.
+  // Naming only the historic regime let an operator running a post-fix window
+  // conclude the note did not apply to them, which is the exact misreading it
+  // exists to prevent.
   if (comparison.live.trade_count === 0) {
     lines.push(
       '',
@@ -134,9 +142,12 @@ export function formatArmComparison(comparison: ArmComparison): string {
       '  "the live arm closed nothing", check whether its rows were EXCLUDED: a',
       '  closed trade with `modelled_cost_charged = 0` is dropped from this',
       '  comparison unconditionally (#1121) because its fees were never brought onto',
-      "  the control arm's cost basis. Every live row closed before #1121 shipped",
-      '  backfills to 0, so a window over that history is expected to read 0 here',
-      '  while `closed_trades` holds live rows for it:',
+      "  the control arm's cost basis. Two ways a row lands on 0, and BOTH are worth",
+      '  checking: every live row closed before #1121 shipped was backfilled to 0, and',
+      '  a row closed since then stamps 0 whenever a covered leg is missing its',
+      '  submit-time cost snapshot (that capture is best-effort). So a window over',
+      '  pre-#1121 history is EXPECTED to read 0 here — but so can a window of purely',
+      '  recent closes. Either way `closed_trades` still holds the live rows:',
       "    SELECT modelled_cost_charged, COUNT(*) FROM closed_trades WHERE arm = 'live'",
       '     AND closed_at > ? AND closed_at <= ? GROUP BY 1;',
     );

@@ -120,6 +120,11 @@ describe('formatArmComparison (#753 AC4/AC5)', () => {
    * automated reader survives that on its min-trades floor; this report has no
    * floor, so an operator reads `live 0` as "the live arm closed nothing" —
    * false — unless the exclusion is named on the page.
+   *
+   * Round 2, finding 4: the note must name the ONGOING regime too. A
+   * best-effort submit-time capture that fails stamps 0 on a lot closed today,
+   * so an operator whose window holds only post-fix closes cannot conclude the
+   * note is about someone else's history.
    */
   it('warns that a zero live count may be the #1121 exclusion, not an idle arm', () => {
     const text = formatArmComparison(
@@ -132,6 +137,8 @@ describe('formatArmComparison (#753 AC4/AC5)', () => {
     );
 
     expect(text).toContain('modelled_cost_charged = 0');
+    expect(text).toContain('best-effort');
+    expect(text).toContain('so can a window of purely');
     expect(text).toMatch(/live\s+0\s+0\.00\s+0\.00%\s+0\.00%/);
   });
 

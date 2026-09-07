@@ -704,11 +704,22 @@ async function redistributeOneFlatten(
         qty: take,
         // #1121: the venue-reported share (`rawFill.fee * share`) TOPPED UP
         // to the modelled commission share, when the flatten carries one —
-        // the same "the modelled cost is charged exactly once, whatever the
-        // venue reports" rule `toFill` applies to an entry fill, and for the
-        // same reason: Saxo reports a fee computed from the SAME constant
-        // this fallback's estimate came from, so adding rather than topping
-        // up would charge that flatten twice over.
+        // the same per-fill "top up, never stack" rule `toFill` applies to an
+        // entry fill, and for the same reason: Saxo reports a fee computed
+        // from the SAME constant this fallback's estimate came from, so adding
+        // rather than topping up would charge that flatten twice over.
+        //
+        // Per fill, not per lot (#1121 review round 2, finding 2). A flatten
+        // the venue splits into several raw fills applies `max` to each slice,
+        // and `Σ max ≥ max(Σ, Σ)`, so the lot's total lands in
+        // `[max(Σvenue, Σmodelled), Σvenue + Σmodelled]` rather than on the
+        // modelled figure exactly — see `chargeTopUpTo`'s doc for the bound
+        // and why the overshoot is bps of bps here. It is bounded on both
+        // sides because the two per-slice inputs each sum to the lot's own
+        // share: `share` is `take / rawFill.qty` (sums to 1 per raw fill) and
+        // `flattenCostBreakdown` is prorated by `take / attribution.size`
+        // (sums to the lot's fraction of the submission), so neither side is
+        // re-counted across slices.
         fee: chargeTopUpTo(rawFill.fee * share, flattenCostBreakdown?.commission),
         // #1001: FALLBACK only — `rawFill.cost_breakdown` is already set (and
         // left untouched by this spread) on the Simulated adapter's own
@@ -1750,9 +1761,17 @@ function cumulativeTopUp(
       // of the venue's running total, and subtracting less than it would
       // charge the same venue money twice across increments. Worked through:
       // priors charged 0.5 against a venue cumulative of 0.8 leaves a 0.3
-      // increment, topped up to the modelled 0.5 — one modelled commission in
-      // total, not 1.3. Where the venue out-charges the model the same
+      // increment, topped up to the modelled 0.5 — 1.0 in total for that
+      // example, not 1.3. Where the venue out-charges the model the same
       // subtraction returns its real delta untouched.
+      //
+      // "One modelled commission in total" is a property of THAT example, not
+      // of the mechanism (#1121 review round 2, finding 2): `max` runs per
+      // increment, so a venue whose per-increment fee crosses the modelled
+      // share charges more than the model once — 0.7 then 0.3 against a
+      // modelled 1.0 split 0.5/0.5 charges 1.2. `chargeTopUpTo`'s doc carries
+      // the per-lot bound. Unreachable on this path today: cumulative feeds
+      // are Alpaca-only and Alpaca reports `fee: 0`.
       fee: Math.max(0, fill.fee - priors.reduce((sum, row) => sum + row.fee, 0)),
     },
     position.idempotency_key,
@@ -1791,8 +1810,39 @@ function cumulativeTopUp(
  * that reports a small NON-commission fee (a regulatory or exchange charge)
  * would otherwise suppress the whole modelled commission and put the arms back
  * on different cost bases, which is the defect this ticket exists to close.
- * `max` says instead: the modelled cost is charged exactly once, and a venue
- * that out-charges the model is charged what it actually took.
+ *
+ * WHAT `max` COSTS, stated rather than left to be discovered (#1121 review
+ * round 2, finding 5). `max` treats the venue's report and the model's estimate
+ * as two measurements of ONE commission. Where a venue charge is genuinely
+ * ADDITIONAL to commission, `max` absorbs it instead of adding it: a levy
+ * smaller than the modelled commission is charged nothing extra, and a levy
+ * LARGER than it displaces the modelled commission entirely. The alternative
+ * (`venueFee + modelled`) has the mirror failure and a worse one — it
+ * double-charges the commission itself on every Saxo fill, which is this
+ * ticket's whole defect. `max` is chosen on the venues actually in play, not
+ * as a general truth: Alpaca paper reports `fee: 0`; `saxo-adapter.ts`'s
+ * reported `fee` is commission-only; ADR-0015 records no per-order minimum;
+ * SDRT is structurally exempt on the ETFs/ETCs this book trades; and the PTM
+ * levy's £10,000 order threshold is unreachable at a £1,000 book. Add a venue
+ * with an additive levy and this function is the place that has to change.
+ *
+ * SCOPE OF "CHARGED ONCE". This is a PER-FILL rule, and it does not aggregate
+ * to a per-lot equality, because `max` is applied to each slice separately and
+ * `Σ max(aᵢ, bᵢ) ≥ max(Σa, Σb)`. Over a lot's fills the total charge is
+ * bounded by `[max(Σvenue, Σmodelled), Σvenue + Σmodelled]`, hitting the lower
+ * bound only when one side dominates slice by slice. Both bounds follow from
+ * `max(a, b) ≥ a, b` and `max(a, b) ≤ a + b` on non-negative inputs, which the
+ * two call sites guarantee (`Math.max(0, …)` on the cumulative top-up;
+ * `rawFill.fee * share` with a non-negative venue fee on the flatten split).
+ * The gap is real, not hypothetical, wherever the venue's per-increment fee
+ * crosses the modelled share: 100 shares filled 50/50 against a modelled 1.0
+ * with venue increments 0.7 then 0.3 charges `0.7 + 0.5 = 1.2`, not 1.0. On
+ * the cumulative path that is synthetic today (it is Alpaca-only and Alpaca
+ * reports 0); on `redistributeOneFlatten`'s multi-raw-fill split it is
+ * reachable under Saxo, whose fee tracks each execution's fill price while the
+ * modelled share tracks quantity alone. The magnitude there is bps of bps, so
+ * the money is negligible — it is the invariant that has to be stated
+ * honestly, not the arithmetic that has to change.
  */
 function chargeTopUpTo(venueFee: number, modelledCommission: number | undefined): number {
   return modelledCommission === undefined ? venueFee : Math.max(venueFee, modelledCommission);
