@@ -75,6 +75,7 @@ import {
 import { PolymarketClient } from '../../providers/market-intelligence/index.js';
 import type { ClosedTrade, OrderIntent, TradingArm } from '../../shared/index.js';
 import { SimulatedClock, TokenBucket } from '../../shared/index.js';
+import type { NousCredentials } from '../../shared/llm/index.js';
 import { DEFAULT_NOUS_MODELS } from '../../shared/llm/index.js';
 import { openSharedStore, type SharedStore as SqliteHandle } from '../../shared/store/index.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
@@ -120,6 +121,45 @@ import type {
   TickRunner,
   UniverseInstrument,
 } from './types.js';
+
+/**
+ * #1226 — the only seam that lets a test reach `new XSearchClient(...)`
+ * without setting `process.env`: `tryNousCredentials('sentiment')` (the ONE
+ * call site in `production.ts`) reads `NOUS_BASE_URL`/`NOUS_*_API_KEY`
+ * straight from the environment with no `ProductionConfig` field to carry a
+ * fake credential in, so it is mocked here rather than routed through config.
+ *
+ * Defaults to the REAL implementation (`importOriginal`), so every other test
+ * in this file that never touches `tryNousCredentialsMock` sees identical
+ * behaviour to the unmocked function — same as today, undefined absent real
+ * env vars. Only the #1226 describe block below overrides it, once per case,
+ * via `mockImplementationOnce`.
+ */
+const { tryNousCredentialsMock } = vi.hoisted(() => ({ tryNousCredentialsMock: vi.fn() }));
+
+vi.mock('../../shared/llm/nous-config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../shared/llm/nous-config.js')>();
+  tryNousCredentialsMock.mockImplementation(actual.tryNousCredentials);
+  return { ...actual, tryNousCredentials: tryNousCredentialsMock };
+});
+
+/**
+ * #1226 — a spy standing in for the constructor itself, so the #1226 test
+ * observes the exact options object `buildProductionComponents` hands
+ * `XSearchClient`, `maxSearchResults` included, rather than inferring it from
+ * the client's behaviour. `GrokAgent` only stores its `client` at
+ * construction (never calls a method on it), so a bare mock never needs to
+ * behave like a real `XSearchClient`.
+ */
+const { XSearchClientMock } = vi.hoisted(() => ({ XSearchClientMock: vi.fn() }));
+
+vi.mock('../../providers/market-intelligence/grok/x-search-client.js', async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import('../../providers/market-intelligence/grok/x-search-client.js')
+    >();
+  return { ...actual, XSearchClient: XSearchClientMock };
+});
 
 const START = new Date('2026-07-29T12:00:00.000Z');
 
@@ -1096,6 +1136,72 @@ describe('buildProductionComponents', () => {
         const config = stubConfig(db, { xMaxSearchResults: 7 });
 
         expect(() => buildProductionComponents(config)).not.toThrow();
+      },
+    );
+  });
+
+  /**
+   * #1226 — #1161 (above) mutation-proved that `config.xMaxSearchResults`
+   * WINS the read, but never observed the value actually reaching
+   * `XSearchClient`: every case above runs with `sentimentCredentials`
+   * undefined (no Nous env vars), so `sentimentCredentials === undefined ?
+   * undefined : new XSearchClient(...)` never takes its `new XSearchClient`
+   * branch at all — confirmed by hand: those cases log `mi_agent_absent`,
+   * not silence. This block is the one case in the file that gets
+   * `tryNousCredentials('sentiment')` to return something, via
+   * `tryNousCredentialsMock` (module-mocked above), so the constructor call
+   * actually happens and `XSearchClientMock` has something to observe.
+   */
+  describe('XSearchClient delivery of xMaxSearchResults (#1226)', () => {
+    const FAKE_SENTIMENT_CREDENTIALS: NousCredentials = {
+      apiKey: 'fake-sentiment-key',
+      baseUrl: 'https://nous.test/v1',
+      model: 'x-ai/grok-4.5',
+    };
+
+    afterEach(() => {
+      XSearchClientMock.mockClear();
+      tryNousCredentialsMock.mockClear();
+    });
+
+    it(
+      'passes the resolved xMaxSearchResults cap through to `new XSearchClient(...)` — ' +
+        'without ever setting `process.env`, and with `sentimentCredentials` genuinely ' +
+        'defined rather than falling into the `mi_agent_absent` path #1161 tested against',
+      () => {
+        // `tryNousCredentialsMock` is shared file-wide, and many earlier tests'
+        // `buildProductionComponents` calls DO invoke it (delegating to the real
+        // implementation) — the call is gated on `sentimentEnabled`
+        // (`production.ts:1595`), so only cases that leave sentiment on reach it;
+        // e.g. the `SAMURAI_SENTIMENT = 'off'` describe block above never does.
+        // Clear its call count regardless, so the assertion below measures only
+        // this test's call, not whatever the file accumulated before it.
+        tryNousCredentialsMock.mockClear();
+        tryNousCredentialsMock.mockImplementationOnce(() => FAKE_SENTIMENT_CREDENTIALS);
+        const logger = recordingLogger();
+        const config = stubConfig(db, {
+          sentimentEnabled: true,
+          sentimentRetrieval: true,
+          xMaxSearchResults: 4,
+          logger,
+        });
+
+        buildProductionComponents(config);
+
+        // `mockImplementationOnce` above is a one-shot queue: if this assertion
+        // is ever 0, the fake credential was never consumed (e.g. a future edit
+        // makes `buildProductionComponents` throw before it's read) and would
+        // otherwise silently leak onto whichever later test in this file next
+        // calls `tryNousCredentials('sentiment')`.
+        expect(tryNousCredentialsMock).toHaveBeenCalledTimes(1);
+
+        // Proof this run took the real branch, not the absent-agent one #1161's
+        // tests all take — the constructor call below is otherwise vacuous.
+        expect(logger.entries.some((entry) => entry.event === 'mi_agent_absent')).toBe(false);
+        expect(XSearchClientMock).toHaveBeenCalledTimes(1);
+        expect(XSearchClientMock).toHaveBeenCalledWith(
+          expect.objectContaining({ maxSearchResults: 4 }),
+        );
       },
     );
   });
