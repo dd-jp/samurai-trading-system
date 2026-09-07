@@ -409,11 +409,15 @@ function drawdownValueOf(metrics: MetricsSuiteWire | null): number | undefined {
 
 /**
  * `metrics === null` and `drawdownValueOf(metrics) === undefined` are BOTH
- * "no value to draw", but they are different facts: the first means no daily
- * suite has produced a report at all; the second means one did, and this one
- * field in it could not be read. Collapsing them told the operator "nothing
- * to show yet" for a run that in fact happened and returned a broken figure
- * (#1264).
+ * "no value to draw", but they are different facts: the first means no
+ * snapshot has ever polled successfully — through this server, `metrics` is
+ * required and non-nullable on the wire type, and `useSnapshot.ts`'s
+ * `hasWireShape` rejects any payload where it is not a non-null object, so a
+ * live snapshot's `metrics` is never itself `null`; the second means a
+ * snapshot exists and `max_drawdown` in it could not be read. Collapsing them
+ * told the operator "nothing to show yet" for a state that, were
+ * `max_drawdown` ever to actually go non-finite, would mean a run happened
+ * and returned a broken figure (#1264).
  */
 function drawdownReasonOf(
   metrics: MetricsSuiteWire | null,

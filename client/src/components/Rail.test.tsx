@@ -119,10 +119,9 @@ describe('Rail — drawdown meter', () => {
    * the same mechanism, none of the three is a finite double — and the
    * overflow case, a finite `max_drawdown` whose quotient against the
    * tolerance is itself non-finite). They're asserted as six separate tests
-   * because each is a distinct way a real value goes bad on the wire (a 0/0,
-   * a `JSON.stringify` cast of a non-finite number to literal `null`, a
-   * wrong-typed string, an overflow on division), not because either guard
-   * treats them differently from its siblings on the same gate.
+   * because each is a distinct way a real value goes bad on the wire, not
+   * because either guard treats them differently from its siblings on the
+   * same gate.
    */
   it('says the drawdown figure could not be read when max_drawdown is NaN, not that no suite ran', () => {
     renderRail(
