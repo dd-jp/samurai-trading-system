@@ -68,14 +68,18 @@ const DEFAULT_TIMEOUT_MS = 10_000;
  * `DEFAULT_POLYGON_PACING`), so the bucket's own ~13s refill wait already
  * dominates the gap between attempts; a second retry would roughly double
  * the worst-case fallback latency for a shrinking chance of a third bad
- * response resolving. Sized against the 5-10 name watchlist
- * (`universe-selector-spec.md`) all failing over at once: 2 attempts x 10
- * names is 20 bucket acquisitions, ~4 minutes worst case, comfortably inside
- * the 15-minute tick cadence — but that arithmetic assumes each failed
- * attempt is dominated by the bucket's refill wait, not by `timeoutMs`
- * itself; it holds only while `DEFAULT_TIMEOUT_MS` stays under the bucket's
- * ~13s refill, so a future timeout increase past that point should re-check
- * this budget.
+ * response resolving. Sized against `DEFAULT_UNIVERSE` (`scheduler.ts`) — the
+ * 20-instrument universe actually shipped via `paperStartingProfile`, not the
+ * 5-10 name watchlist `universe-selector-spec.md` describes, which is
+ * specced but not built — all failing over at once: 2 attempts x 20 names is
+ * 40 bucket acquisitions, ~8.6 minutes worst case, still under the 15-minute
+ * tick cadence but roughly double this comment's original (wrong) estimate
+ * against the unbuilt watchlist. That arithmetic assumes each failed attempt
+ * is dominated by the bucket's refill wait, not by `timeoutMs` itself; it
+ * holds only while `DEFAULT_TIMEOUT_MS` stays under the bucket's ~13s
+ * refill, so a future timeout increase past that point should re-check this
+ * budget — and re-check it again if the universe grows past 20 or the
+ * watchlist ships and replaces it.
  */
 const DEFAULT_RETRY_CONFIG: RetryConfig = { maxAttempts: 2, baseDelayMs: 500, maxDelayMs: 2_000 };
 /** Comfortably above anything this client's small `limit`s (20/30) could return in one page. */

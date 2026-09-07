@@ -229,11 +229,14 @@ describe('PolygonBarsClient.getBars', () => {
       const rateLimiter = new TokenBucket({ capacity: 5, refillPerSecond: 5 });
       const acquireSpy = vi.spyOn(rateLimiter, 'acquireBackground');
 
+      // Assertion attached to `promise` before advancing timers (same
+      // pattern as "exhausts retries" below) so a rejection surfaces here
+      // instead of as an unhandled rejection mid-advance.
       const promise = new PolygonBarsClient({ rateLimiter }).getBars(SYMBOL, '1h', ASOF, 1);
+      const assertion = expect(promise).resolves.toHaveLength(1);
       await vi.advanceTimersByTimeAsync(2_000);
-      const bars = await promise;
+      await assertion;
 
-      expect(bars).toHaveLength(1);
       expect(fetchMock).toHaveBeenCalledTimes(2);
       expect(acquireSpy).toHaveBeenCalledTimes(2);
     });
