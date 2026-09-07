@@ -301,8 +301,10 @@ export interface DashboardQueryStore {
    * This IS the channel-down surface (#1130), not a supplement to one: the
    * in-band Telegram "channel degraded" notice
    * (`telegram-bot-api-client.ts`'s `#recordDeliveryFailure`) posts over the
-   * exact chat/transport it is reporting on, so it cannot arrive during a
-   * real outage — only this tile can, because it is a plain SQL read of a
+   * exact chat/transport it is reporting on, so it gets through only while
+   * that chat is reachable — its own retries widen that to a window of tens
+   * of seconds, not an instant, but an outage outlasting them silences it.
+   * Only this tile answers regardless, because it is a plain SQL read of a
    * durable table, crossing no live transport at read time.
    *
    * **The precondition, and what violating it looks like (#1130 review
@@ -320,7 +322,8 @@ export interface DashboardQueryStore {
    * sent to mark), and chat-mismatch (silent). Since #1130 makes this tile
    * the sole channel-down surface, that third state is a silent false
    * all-clear. It is documented here, not mitigated — index.ts's
-   * boot-warning block carries why detecting it is not cheap.
+   * boot-warning block carries the local signal that could detect it, and
+   * the three reasons #1130 still declines to build the detector.
    */
   getAlertDeliveryFailureCount(asOf: Date): number;
 }

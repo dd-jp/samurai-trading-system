@@ -606,10 +606,15 @@ describe('TelegramBotApiClient — transient network failures and undeliverable 
 
   // #1130: this notice posts to `#alertChatId` over the SAME transport that
   // just exhausted its retries, so it arrives only if that chat is reachable
-  // at the instant it fires (necessary, not sufficient — the escalation's own
-  // `#call` can fail independently) — a fact about one instant, not about what
-  // class of failure produced the count, and its ABSENCE is not observable
-  // by anyone. The text must therefore make no forward-looking delivery
+  // at some point within the escalation send's OWN retry window (necessary,
+  // not sufficient — the escalation's own `#call` can fail independently).
+  // That window is not an instant: `#call` is `withRetry` over
+  // `isRetryableTelegramError`, which accepts exactly the network/timeout/
+  // rate-limit errors a live outage throws, so the notice can fire mid-outage
+  // and land on a later attempt — tens of seconds wide on `DEFAULT_RETRY` +
+  // `DEFAULT_TIMEOUT_MS`. So arrival is a fact about that window, not about
+  // what class of failure produced the count, and its ABSENCE is not
+  // observable by anyone. The text must therefore make no forward-looking delivery
   // claim in EITHER direction, and must point at `alert_delivery_failures`
   // (the Rail tile, #1108/#1129) with its different denominator named.
   //
@@ -619,7 +624,7 @@ describe('TelegramBotApiClient — transient network failures and undeliverable 
   // the exact opposite of the thesis survived the test meant to pin it. So
   // the guard below is on the CLAIM: a modal or auxiliary verb bound to a
   // delivery verb is an assertion about future delivery, and this mechanism
-  // supports none. Honest limit: this catches tense-marked assertions
+  // supports none. Honest limit: this catches auxiliary-marked assertions
   // ('will reach', 'cannot arrive', 'is guaranteed to be delivered'),
   // wherever in the message they sit, including inside a sentence that
   // already carries a qualifier. It does not catch every possible paraphrase
@@ -647,8 +652,17 @@ describe('TelegramBotApiClient — transient network failures and undeliverable 
     const text = String(escalation?.body.text);
 
     expect(text.match(FORWARD_DELIVERY_CLAIM) ?? []).toEqual([]);
-    // What it may say instead: arrival is evidence about one instant only.
-    expect(text).toMatch(/reachable at the moment/i);
+    // What it may say instead, at exactly the strength the mechanism supports:
+    // reachability somewhere inside this send's own retry window. Both halves
+    // are pinned because either alone is passable by wording that is wrong —
+    // a bare 'reachable' by an instant claim, a bare 'retrying' by a sentence
+    // that mentions retries and still asserts an instant. Like
+    // FORWARD_DELIVERY_CLAIM above, this is a claim-shape guard, not a
+    // semantic one: it pins the strength this wording carries, and a
+    // paraphrase that dropped the window without using the point-in-time
+    // phrasings below would slip past it.
+    expect(text).toMatch(/reachable at some point[^.]*retrying/i);
+    expect(text).not.toMatch(/\bat (?:the|that|one|a single) (?:moment|instant)\b/i);
     // And the two denominators, so the operator is not left reconciling them.
     expect(text).toMatch(/so far this run/i);
     expect(text).toMatch(/all-time, across every run/i);
