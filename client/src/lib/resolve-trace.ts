@@ -38,6 +38,7 @@ import {
   openPositionFor,
   riskCriticFor,
   riskCriticForDebate,
+  traceBelongsToAnotherInstrument,
   verdictFor,
 } from './trace.ts';
 
@@ -85,7 +86,8 @@ export interface TraceDetail {
   fills: readonly FillRow[];
   settled: SettledOutcome | null;
   inFlight: boolean;
-  absence: { lane: 'aged_out' | 'idle' | 'none' | null };
+  /** `wrong_instrument`: the selection's trace id is attested — on a lane, a verdict, a risk-critic row, or `tick_status` — under a DIFFERENT instrument (#1267), even once that attestation has itself left the lane window. Distinct from `aged_out`: this trace was never this instrument's to begin with, not merely no-longer-live. */
+  absence: { lane: 'aged_out' | 'idle' | 'none' | 'wrong_instrument' | null };
 }
 
 export interface TradeDetail {
@@ -111,7 +113,22 @@ function cellsOf(lane: PipelineLane | undefined): readonly ResolvedCell[] | null
 export function resolveTrace(snapshot: WireSnapshot, selection: Selection): TraceDetail {
   const { instrument } = selection;
   const lane = laneFor(snapshot.pipeline, instrument, selection.traceId);
-  const traceId = selection.traceId ?? lane?.trace_id ?? null;
+  // A trace_id that fails the instrument-conjoined join above but is
+  // attested — on a lane, a verdict, a risk-critic row, or the in-flight
+  // tick_status — under some other instrument is a mismatched Selection, not
+  // an aged-out trace (#1267): the id must not leak into TraceDetail either.
+  const wrongInstrument =
+    lane === undefined &&
+    selection.traceId !== null &&
+    traceBelongsToAnotherInstrument(
+      snapshot.pipeline,
+      snapshot.verdicts,
+      snapshot.risk_critics ?? [],
+      snapshot.tick_status,
+      instrument,
+      selection.traceId,
+    );
+  const traceId = wrongInstrument ? null : (selection.traceId ?? lane?.trace_id ?? null);
   const position = openPositionFor(snapshot.positions, instrument);
   return {
     instrument,
@@ -130,9 +147,11 @@ export function resolveTrace(snapshot: WireSnapshot, selection: Selection): Trac
     absence: {
       lane:
         lane === undefined
-          ? traceId === null
-            ? 'none'
-            : 'aged_out'
+          ? wrongInstrument
+            ? 'wrong_instrument'
+            : traceId === null
+              ? 'none'
+              : 'aged_out'
           : lane.trace_id === null
             ? 'idle'
             : null,
