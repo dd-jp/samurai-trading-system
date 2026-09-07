@@ -189,11 +189,16 @@ describe('Rail — drawdown meter', () => {
    * it (`ZERO_METRICS.max_drawdown = 0`, `DAILY_METRICS.max_drawdown =
    * 0.118`), so this test is defensive against a future real computation,
    * not a route this field is observed to take now. The cast mechanism
-   * itself is not hypothetical, though: it is already live on a sibling
-   * field of this same `MetricsSuite` — `profitFactor` returns
+   * itself is not hypothetical, though — it WAS live on a sibling field of
+   * this same `MetricsSuite`: `profitFactor` returns
    * `Number.POSITIVE_INFINITY` for any window with wins and no losses (a
-   * routine day), and `server.ts`'s `JSON.stringify` turns that into
-   * `profit_factor: null` on the wire today. `typeof null === 'object'`, so
+   * routine day), and `server.ts`'s `JSON.stringify` used to turn that into
+   * `profit_factor: null` on the wire. #1270 closed that specific route —
+   * `buildSnapshot` now converts `profit_factor` through
+   * `contracts/metrics.ts`'s `toProfitFactorWire` before it ever reaches
+   * `JSON.stringify`, so the wire carries `{ kind: 'no_losses' }`, not
+   * `null` — but the mechanism it demonstrated is still real and is still
+   * why this gate exists for `max_drawdown`. `typeof null === 'object'`, so
    * `max_drawdown: null` takes the same `typeof` gate as the string case
    * above, before `CapMeter`'s own `value === undefined` check ever sees
    * it — without that gate, `null / DRAWDOWN_TOLERANCE === 0`, a finite

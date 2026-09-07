@@ -6,6 +6,7 @@ import {
   makeClosedTrade,
   makeDebate,
   makeFill,
+  makeMetrics,
   makeOutsideBenchmark,
   makeRiskCritic,
   makeSnapshot,
@@ -94,6 +95,58 @@ describe('summary cards', () => {
   it('names the missing suite before the first snapshot', () => {
     renderReview(null);
     expect(screen.getByText(/No metrics on this snapshot/)).toBeTruthy();
+  });
+});
+
+/**
+ * The three `profit_factor` states this ticket exists to keep distinct
+ * (#1270): a flawless window (wins, no losses) must read as the good state
+ * it is, never as the same em dash `formatFixed` renders for genuinely
+ * missing data; a window with no closed trades at all keeps its current
+ * finite-zero reading and must not be confused with either.
+ */
+describe('profit factor tile', () => {
+  it('reads "no losing trades" for a flawless window, not an em dash', () => {
+    renderReview(makeSnapshot({ metrics: makeMetrics({ profit_factor: { kind: 'no_losses' } }) }));
+    const metrics = screen.getByRole('region', { name: 'Metrics suite' });
+    expect(within(metrics).getByText('no losing trades')).toBeTruthy();
+    expect(within(metrics).queryByText('—')).toBeNull();
+  });
+
+  it('formats an ordinary ratio with formatFixed', () => {
+    renderReview(
+      makeSnapshot({ metrics: makeMetrics({ profit_factor: { kind: 'ratio', value: 2.5 } }) }),
+    );
+    const metrics = screen.getByRole('region', { name: 'Metrics suite' });
+    expect(within(metrics).getByText('2.50')).toBeTruthy();
+  });
+
+  it('reads a real, finite 0 for a window with no closed trades at all, distinct from "no losing trades"', () => {
+    renderReview(
+      makeSnapshot({ metrics: makeMetrics({ profit_factor: { kind: 'ratio', value: 0 } }) }),
+    );
+    const metrics = screen.getByRole('region', { name: 'Metrics suite' });
+    expect(within(metrics).getByText('0.00')).toBeTruthy();
+    expect(within(metrics).queryByText('no losing trades')).toBeNull();
+  });
+
+  it('names an unreadable profit factor rather than silently formatting a broken value', () => {
+    renderReview(makeSnapshot({ metrics: makeMetrics({ profit_factor: { kind: 'unreadable' } }) }));
+    const metrics = screen.getByRole('region', { name: 'Metrics suite' });
+    expect(within(metrics).getByText('could not be read')).toBeTruthy();
+  });
+
+  it('renders "no losing trades" differently from a wholly absent metrics suite', () => {
+    const { unmount } = renderReview(
+      makeSnapshot({ metrics: makeMetrics({ profit_factor: { kind: 'no_losses' } }) }),
+    );
+    expect(screen.queryByText(/No metrics on this snapshot/)).toBeNull();
+    expect(screen.getByText('no losing trades')).toBeTruthy();
+    unmount();
+
+    renderReview(null);
+    expect(screen.getByText(/No metrics on this snapshot/)).toBeTruthy();
+    expect(screen.queryByText('no losing trades')).toBeNull();
   });
 });
 

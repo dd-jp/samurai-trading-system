@@ -45,13 +45,44 @@ interface Tile {
   note?: string;
 }
 
+/**
+ * `profit_factor`'s tile text (#1270). An exhaustive switch, not a lookup
+ * table, because one variant (`ratio`) carries a payload the other two
+ * don't — the `never` in `default` is what makes adding a fourth
+ * `ProfitFactorWire` variant without a case here a compile error rather
+ * than a silent fallthrough to `UNKNOWN`.
+ *
+ * `no_losses` reads as the plain fact it is — a window with wins and no
+ * losses, the best possible outcome, not an absence — so it gets its own
+ * words rather than `formatFixed`'s em dash, which this dashboard reserves
+ * for "we don't know" (dashboard-spec.md: never a bare dash for a real
+ * state). `unreadable` is the residual: `toProfitFactorWire` never emits it
+ * for today's `profitFactor()` (wins/losses are non-negative sums, so the
+ * only non-finite output is `+Infinity`), but the type admits it and this
+ * switch must too.
+ */
+function profitFactorText(pf: MetricsSuiteWire['profit_factor']): string {
+  switch (pf.kind) {
+    case 'ratio':
+      return formatFixed(pf.value);
+    case 'no_losses':
+      return 'no losing trades';
+    case 'unreadable':
+      return 'could not be read';
+    default: {
+      const unreachable: never = pf;
+      throw new Error(`profitFactorText: unknown kind ${JSON.stringify(unreachable)}.`);
+    }
+  }
+}
+
 function headlineTiles(metrics: MetricsSuiteWire): Tile[] {
   return [
     { label: 'Sharpe', value: formatFixed(metrics.sharpe), note: 'annualized, Lo-adjusted' },
     { label: 'Sortino', value: formatFixed(metrics.sortino) },
     { label: 'Max drawdown', value: formatPercent(metrics.max_drawdown, 2), tone: 'warn' },
     { label: 'Expectancy', value: formatFixed(metrics.expectancy), note: 'per trade, net' },
-    { label: 'Profit factor', value: formatFixed(metrics.profit_factor) },
+    { label: 'Profit factor', value: profitFactorText(metrics.profit_factor) },
     { label: 'Calmar', value: formatFixed(metrics.calmar) },
   ];
 }

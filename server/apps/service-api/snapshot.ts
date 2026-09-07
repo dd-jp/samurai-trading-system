@@ -11,6 +11,7 @@
  * what actually filled. Recent-history window is fixed
  * (`RECENT_DEBATES_LIMIT` / `RECENT_VERDICTS_LIMIT`), no config surface yet.
  */
+import { toProfitFactorWire } from '../../../contracts/metrics.js';
 import type { AnalystContribution, Direction } from '../../pipeline/debate-engine/index.js';
 import { OUTSIDE_BENCHMARKS } from '../../pipeline/outside-benchmark/index.js';
 import type {
@@ -29,6 +30,7 @@ import type {
   DashboardSnapshot,
   EvaluatedConditionWire,
   FillRow,
+  MetricsSuiteWire,
   OutsideBenchmarkRow,
   PositionRow,
   RiskCriticRecord,
@@ -359,7 +361,15 @@ export function buildSnapshot(
       observation_count: sample.performance.observation_count,
     }));
 
-  const metrics = store.getDailyMetrics(asOf);
+  // `getDailyMetrics` returns the domain `MetricsSuite`, where `profit_factor`
+  // is a plain `number` and legitimately `Infinity` on a window with wins and
+  // no losses. `toProfitFactorWire` is the one conversion into the wire's
+  // `ProfitFactorWire` (#1270) — every other field crosses unchanged.
+  const dailyMetrics = store.getDailyMetrics(asOf);
+  const metrics: MetricsSuiteWire = {
+    ...dailyMetrics,
+    profit_factor: toProfitFactorWire(dailyMetrics.profit_factor),
+  };
   const tickStatus = store.getTickStatus(asOf);
 
   // #940: closed trades and their fills. Fills are fetched FOR the trades
