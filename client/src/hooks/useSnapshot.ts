@@ -22,7 +22,13 @@
  *     like it is trying (#606 item 3).
  */
 
-import type { DashboardSnapshot, LlmSpendSummary } from '@contracts';
+import {
+  type DashboardSnapshot,
+  type LlmSpendSummary,
+  type MetricsSuiteWire,
+  type ProfitFactorWire,
+  toProfitFactorWire,
+} from '@contracts';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 /** The modes the server may send (`DashboardSnapshot['mode']`, #539). */
@@ -285,6 +291,49 @@ function normalizeCapArmedAt(value: unknown): string | null | undefined {
 }
 
 /**
+ * `MetricsSuiteWire['profit_factor']`'s boundary normalizer (review round 1,
+ * MAJOR). `hasWireShape` only checks that `metrics` is a non-null object —
+ * it does not look inside at `profit_factor` — so a pre-#1270 server's
+ * payload (a bare `number`, or the `null` `JSON.stringify` collapsed
+ * `Infinity`/`NaN` into) passed through unchanged and reached
+ * `ReviewTab.tsx`'s `switch (pf.kind)` as something with no `.kind` at all.
+ * That threw — `TypeError` on `null`, the exhaustive switch's own guard on a
+ * bare number — and `main.tsx` mounts with no error boundary, so it was a
+ * white screen on every reload, not a degraded tile. Same class of bug
+ * `normalizeCapUsd` / `normalizeCapArmedAt` above exist to close, one field
+ * over.
+ *
+ * A `null` here is NOT read as `no_losses`: `JSON.stringify` collapses
+ * `Infinity`, `NaN`, and `-Infinity` alike, so a `null` from an old server
+ * could have been any of the three, and guessing the affirmative one from
+ * ambiguous input would be exactly the wrong guess `normalizeCapArmedAt`'s
+ * doc above warns against. It degrades to `unreadable` — which, until this
+ * fix, `toProfitFactorWire` could produce but no real payload ever
+ * triggered; an old server's `null` is now that state's actual production
+ * route, not a type-only residual.
+ *
+ * A bare finite `number` (an old server's un-wrapped `profit_factor`) is
+ * routed through `toProfitFactorWire` itself rather than re-implementing its
+ * branches here — the domain-to-wire mapping only has one correct
+ * definition. An already-shaped `{ kind }` object (today's server) is
+ * trusted as-is, except a `ratio` whose `value` is not a finite number,
+ * which degrades the same way for the same reason.
+ */
+function profitFactorOf(value: unknown): ProfitFactorWire {
+  if (isPlainObject(value)) {
+    if (value.kind === 'no_losses' || value.kind === 'unreadable') {
+      return { kind: value.kind };
+    }
+    if (value.kind === 'ratio' && typeof value.value === 'number' && Number.isFinite(value.value)) {
+      return { kind: 'ratio', value: value.value };
+    }
+    return { kind: 'unreadable' };
+  }
+  if (typeof value === 'number') return toProfitFactorWire(value);
+  return { kind: 'unreadable' };
+}
+
+/**
  * Validates a parsed body ONCE, at the fetch boundary, and returns it with
  * `mode` narrowed — or `null` if it is not a snapshot at all.
  *
@@ -309,6 +358,12 @@ function normalizeCapArmedAt(value: unknown): string | null | undefined {
  * `cap_armed_at` degrade PER FIELD (`normalizeCapUsd` / `normalizeCapArmedAt`)
  * rather than voiding the whole summary — the same `mode` reasoning, applied
  * one level deeper (review round 2, MINOR 3).
+ *
+ * `metrics.profit_factor` degrades PER FIELD the same way (review round 1,
+ * MAJOR): `hasWireShape` only requires `metrics` to be a non-null object, so
+ * an old server's un-wrapped `profit_factor` reaches here structurally
+ * valid but semantically pre-#1270 — `profitFactorOf` is what a whole
+ * `metrics` object being "known good" does NOT excuse this one field from.
  */
 export function toWireSnapshot(body: unknown): WireSnapshot | null {
   if (!hasWireShape(body)) return null;
@@ -324,10 +379,16 @@ export function toWireSnapshot(body: unknown): WireSnapshot | null {
         cap_armed_at: normalizeCapArmedAt((spend as Record<string, unknown>).cap_armed_at),
       } as unknown as WireLlmSpendSummary)
     : null;
+  const metricsField = candidate.metrics as Record<string, unknown>;
+  const metrics: MetricsSuiteWire = {
+    ...(metricsField as unknown as MetricsSuiteWire),
+    profit_factor: profitFactorOf(metricsField.profit_factor),
+  };
   return {
-    ...(candidate as unknown as Omit<WireSnapshot, 'mode' | 'llm_spend'>),
+    ...(candidate as unknown as Omit<WireSnapshot, 'mode' | 'llm_spend' | 'metrics'>),
     mode,
     llm_spend,
+    metrics,
   };
 }
 

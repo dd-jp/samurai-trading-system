@@ -20,7 +20,7 @@
  * They are the store's shapes, not the wire's, and the two only look alike.
  */
 
-import type { MetricsSuite } from './metrics.js';
+import type { MetricsSuite, ProfitFactorWire } from './metrics.js';
 import type { PipelineStage, PipelineView } from './pipeline.js';
 import type { AssetClass, Direction, OrderState, StoreMode } from './primitives.js';
 import type { ProviderStatusPanel } from './providers.js';
@@ -437,8 +437,17 @@ export interface AnalystPerformanceRow {
   window_days: number;
 }
 
-/** The Feedback Loop's daily MetricsSuite (story 7) — reported together, never one number. */
-export type MetricsSuiteWire = MetricsSuite;
+/**
+ * The Feedback Loop's daily MetricsSuite (story 7) — reported together,
+ * never one number. NOT `MetricsSuite` verbatim (#1270): `profit_factor` is
+ * replaced with `ProfitFactorWire`, since the domain field's `Infinity` (a
+ * window with wins and no losses) has no `JSON.stringify` representation —
+ * see `contracts/metrics.ts`'s `ProfitFactorWire` doc for the full boundary
+ * argument. Every other field is unaffected and still a plain `number`.
+ */
+export type MetricsSuiteWire = Omit<MetricsSuite, 'profit_factor'> & {
+  profit_factor: ProfitFactorWire;
+};
 
 /**
  * Locally-metered Anthropic spend over one time window, from `llm_spend`

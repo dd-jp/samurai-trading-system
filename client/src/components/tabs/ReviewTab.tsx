@@ -45,13 +45,59 @@ interface Tile {
   note?: string;
 }
 
+/**
+ * `profit_factor`'s tile text (#1270). An exhaustive switch, not a lookup
+ * table, because one variant (`ratio`) carries a payload the other two
+ * don't — the `never` in `default` is what makes adding a fourth
+ * `ProfitFactorWire` variant without a case here a compile error, catching
+ * it at build time rather than here at render.
+ *
+ * `no_losses` reads as the plain fact it is — a window with wins and no
+ * losses, the best possible outcome, not an absence — so it gets its own
+ * words rather than `formatFixed`'s em dash, which this dashboard reserves
+ * for "we don't know" (dashboard-spec.md: never a bare dash for a real
+ * state). `unreadable` has a real production route: `useSnapshot.ts`'s
+ * `profitFactorOf` maps a pre-#1270 server's bare number or
+ * `JSON.stringify`-collapsed `null` here, since this client cannot tell
+ * which non-finite value a `null` on that wire used to be.
+ *
+ * `default` returns rather than throws (review round 1, MAJOR) even though
+ * `profitFactorOf` should make it unreachable: `main.tsx` mounts with no
+ * error boundary, so a throw here is a white screen on a live-money
+ * surface, not a bad tile — the same reasoning `Rail.tsx`'s
+ * `drawdownReasonOf` already applies to its sibling field.
+ */
+function profitFactorText(pf: MetricsSuiteWire['profit_factor']): string {
+  switch (pf.kind) {
+    case 'ratio':
+      return formatFixed(pf.value);
+    case 'no_losses':
+      return 'no losing trades';
+    case 'unreadable':
+      return 'could not be read';
+    default: {
+      // `never` still catches a missed case at compile time (delete a case
+      // above and this line fails to build) even though the runtime arm
+      // below degrades rather than throws (review round 1, MAJOR) — the
+      // compile-time guarantee and the choice to never crash the tab are
+      // independent, and this keeps both. The returned words match
+      // `'unreadable'` above exactly (review round 2, NIT): raw JSON on an
+      // operator's tile would be a second unreadable-looking failure mode
+      // layered on top of the first.
+      const unreachable: never = pf;
+      void unreachable;
+      return 'could not be read';
+    }
+  }
+}
+
 function headlineTiles(metrics: MetricsSuiteWire): Tile[] {
   return [
     { label: 'Sharpe', value: formatFixed(metrics.sharpe), note: 'annualized, Lo-adjusted' },
     { label: 'Sortino', value: formatFixed(metrics.sortino) },
     { label: 'Max drawdown', value: formatPercent(metrics.max_drawdown, 2), tone: 'warn' },
     { label: 'Expectancy', value: formatFixed(metrics.expectancy), note: 'per trade, net' },
-    { label: 'Profit factor', value: formatFixed(metrics.profit_factor) },
+    { label: 'Profit factor', value: profitFactorText(metrics.profit_factor) },
     { label: 'Calmar', value: formatFixed(metrics.calmar) },
   ];
 }

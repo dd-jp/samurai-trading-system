@@ -22,7 +22,7 @@
  * an import that escapes compiles green and reintroduces the defect silently.
  */
 
-export type { MetricsSuite } from './metrics.js';
+export { type MetricsSuite, type ProfitFactorWire, toProfitFactorWire } from './metrics.js';
 export {
   DEGRADED_DECISIONS,
   type DegradedDecision,

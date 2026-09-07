@@ -69,7 +69,7 @@ export function makeMetrics(overrides: Partial<MetricsSuiteWire> = {}): MetricsS
     sortino: 1.12,
     calmar: 0.61,
     max_drawdown: 0.018,
-    profit_factor: 1.24,
+    profit_factor: { kind: 'ratio', value: 1.24 },
     expectancy: 0.31,
     skew: -0.4,
     kurtosis: 2.1,

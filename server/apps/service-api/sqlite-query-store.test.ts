@@ -290,6 +290,45 @@ describe('SqliteQueryStore', () => {
     expect(metrics.max_drawdown).toBe(0);
   });
 
+  /**
+   * Pins the exact value `buildSnapshot`'s `toProfitFactorWire` (#1270)
+   * depends on: a window with wins and no losses must go on producing
+   * `Number.POSITIVE_INFINITY`, not `0`, `-1`, or anything else that
+   * happens to also read as "not a normal ratio". Nothing upstream of
+   * `toProfitFactorWire` checks this value's identity — a future edit to
+   * `profitFactor()` that changed its sentinel would silently stop
+   * `no_losses` from ever being reached, and only this test would notice.
+   */
+  it('returns +Infinity for profit_factor on a window with wins and no losses', async () => {
+    const db = makeDb();
+    const execStore = new SqliteExecutionStore(db);
+    await seedClosedTrade(execStore, makeClosedTrade({ realized_pnl_net: 50 }));
+    await seedClosedTrade(
+      execStore,
+      makeClosedTrade({ idempotency_key: 'key-closed-2', realized_pnl_net: 30 }),
+    );
+
+    const store = new SqliteQueryStore(db);
+    const metrics = store.getDailyMetrics(NOW);
+
+    expect(metrics.profit_factor).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  /**
+   * `wins === 0 && losses === 0` (no closed trades in the trailing window at
+   * all) is a DIFFERENT fact from wins-and-no-losses above, and
+   * `profitFactor()` must keep answering it with a real, finite `0` — the
+   * value `toProfitFactorWire` wraps as `{ kind: 'ratio', value: 0 }`, not
+   * `{ kind: 'no_losses' }`.
+   */
+  it('returns a finite 0 for profit_factor on a window with no closed trades at all', () => {
+    const db = makeDb();
+    const store = new SqliteQueryStore(db);
+    const metrics = store.getDailyMetrics(NOW);
+
+    expect(metrics.profit_factor).toBe(0);
+  });
+
   it('accumulates attribution credit per analyst from closed trades joined to their debate log', async () => {
     const db = makeDb();
     const execStore = new SqliteExecutionStore(db);

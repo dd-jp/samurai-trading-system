@@ -361,7 +361,50 @@ describe('buildSnapshot', () => {
     expect(snap.verdicts).toEqual([]);
     expect(snap.analysts).toEqual([]);
     expect(snap.tick_status).toBeNull();
-    expect(snap.metrics).toEqual(METRICS);
+    // Every field but `profit_factor` crosses `buildSnapshot` unchanged
+    // (#1270); `profit_factor` is wrapped into `ProfitFactorWire`.
+    expect(snap.metrics).toEqual({
+      ...METRICS,
+      profit_factor: { kind: 'ratio', value: METRICS.profit_factor },
+    });
+  });
+
+  /**
+   * The bug this ticket fixes, proven at the serialization boundary — a test
+   * that only inspected `snap.metrics.profit_factor` as an in-process object
+   * would not catch it, because `Number.POSITIVE_INFINITY` survives in
+   * memory and only dies in `JSON.stringify` (AC4).
+   */
+  it('carries a window with wins and no losses through JSON.stringify as no_losses, never as null (#1270)', () => {
+    const snap = buildSnapshot(
+      fakeStore({
+        getDailyMetrics: () => ({ ...METRICS, profit_factor: Number.POSITIVE_INFINITY }),
+      }),
+      AS_OF,
+      'paper',
+    );
+
+    expect(snap.metrics.profit_factor).toEqual({ kind: 'no_losses' });
+
+    const roundTripped = JSON.parse(JSON.stringify(snap)) as {
+      metrics: { profit_factor: unknown };
+    };
+    expect(roundTripped.metrics.profit_factor).toEqual({ kind: 'no_losses' });
+    expect(roundTripped.metrics.profit_factor).not.toBeNull();
+  });
+
+  it('carries a window with no closed trades at all through JSON.stringify as a real, finite 0, distinguishable from no_losses (#1270)', () => {
+    const snap = buildSnapshot(
+      fakeStore({ getDailyMetrics: () => ({ ...METRICS, profit_factor: 0 }) }),
+      AS_OF,
+      'paper',
+    );
+
+    const roundTripped = JSON.parse(JSON.stringify(snap)) as {
+      metrics: { profit_factor: unknown };
+    };
+    expect(roundTripped.metrics.profit_factor).toEqual({ kind: 'ratio', value: 0 });
+    expect(roundTripped.metrics.profit_factor).not.toEqual({ kind: 'no_losses' });
   });
 
   it('projects verdict history with the gate reason and HITL override flag', () => {

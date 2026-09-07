@@ -7,7 +7,7 @@
  * covered by the component tests in `App.test.tsx`.
  */
 import { describe, expect, it } from 'vitest';
-import { makeSnapshot } from '../test-fixtures.ts';
+import { makeMetrics, makeSnapshot } from '../test-fixtures.ts';
 import { RECOGNISED_MODES, toWireSnapshot } from './useSnapshot.ts';
 
 /** A payload as it comes off `response.json()`: untyped, possibly wrong. */
@@ -204,5 +204,58 @@ describe('toWireSnapshot', () => {
     const body = raw();
     delete body.pipeline;
     expect(toWireSnapshot(body)).toBeNull();
+  });
+
+  describe('profit_factor normalization (#1270 review round 1, MAJOR)', () => {
+    // `hasWireShape` only checks that `metrics` is a non-null object — it
+    // never looks inside at `profit_factor` — so a pre-#1270 server's
+    // payload reaches this boundary structurally valid. Without
+    // normalization, ReviewTab's `switch (pf.kind)` throws on these, and
+    // `main.tsx` mounts with no error boundary: a white screen, not a
+    // degraded tile.
+
+    it('degrades a pre-#1270 null (the value JSON.stringify collapsed Infinity/NaN/-Infinity into) to unreadable, never guessing no_losses', () => {
+      const body = raw({ metrics: { ...makeMetrics(), profit_factor: null } });
+      expect(toWireSnapshot(body)?.metrics.profit_factor).toEqual({ kind: 'unreadable' });
+    });
+
+    it('routes a pre-#1270 bare finite number through toProfitFactorWire, matching what a current server would have sent', () => {
+      const body = raw({ metrics: { ...makeMetrics(), profit_factor: 1.24 } });
+      expect(toWireSnapshot(body)?.metrics.profit_factor).toEqual({ kind: 'ratio', value: 1.24 });
+    });
+
+    it('routes a pre-#1270 bare zero (no closed trades at all) to a real ratio of 0, not unreadable', () => {
+      const body = raw({ metrics: { ...makeMetrics(), profit_factor: 0 } });
+      expect(toWireSnapshot(body)?.metrics.profit_factor).toEqual({ kind: 'ratio', value: 0 });
+    });
+
+    it.each([
+      { kind: 'ratio', value: 2.5 },
+      { kind: 'no_losses' },
+      { kind: 'unreadable' },
+    ])("passes today's server shape %o through untouched", (shape) => {
+      const body = raw({ metrics: { ...makeMetrics(), profit_factor: shape } });
+      expect(toWireSnapshot(body)?.metrics.profit_factor).toEqual(shape);
+    });
+
+    // Each row is wrapped in its own 1-tuple: `it.each` spreads a row that is
+    // itself an array as a MULTI-argument call rather than a single `%o`
+    // argument, so the bare `[]` case below would otherwise vanish as a
+    // zero-argument invocation (silently duplicating the `undefined` case
+    // instead of ever exercising an array input) — caught by re-running this
+    // block with `--reporter=verbose` and finding two identically-named
+    // "undefined" cases instead of one "[]" and one "undefined".
+    it.each([
+      [{ kind: 'ratio', value: Number.NaN }],
+      [{ kind: 'ratio', value: 'not a number' }],
+      [{ kind: 'ratio' }],
+      [{ kind: 'something-unknown' }],
+      [[]],
+      ['a string'],
+      [undefined],
+    ])('degrades a malformed profit_factor %o to unreadable rather than throwing', (malformed) => {
+      const body = raw({ metrics: { ...makeMetrics(), profit_factor: malformed } });
+      expect(toWireSnapshot(body)?.metrics.profit_factor).toEqual({ kind: 'unreadable' });
+    });
   });
 });
