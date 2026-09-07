@@ -1997,20 +1997,30 @@ function modelledEntryCostFor(position: OpenPosition): ModelledEntryCost | null 
  *
  * ## What this still does not cover
  *
- * A live `'stop'`/`'target'` fill is charged nothing: the fallback below is
- * gated on `fill.leg === 'entry'`, and `captureSubmitSnapshot` prices only the
- * entry and the flatten, so there is no modelled estimate for a protective leg
- * to spend (inventing one would be a SECOND derivation, which is what AC6
+ * A live `'stop'`/`'target'` fill gets no MODELLED charge: the fallback below
+ * is gated on `fill.leg === 'entry'`, and `captureSubmitSnapshot` prices only
+ * the entry and the flatten, so there is no modelled estimate for a protective
+ * leg to spend (inventing one would be a SECOND derivation, which is what AC6
  * forbids). The control arm has no bracket-exit path at all
  * (`simulated-adapter.ts` emits `leg: 'entry'` only), so every control close is
- * a flatten and pays a modelled commission on both legs. The live arm pays on
- * both legs only when it closes by flatten. So the round trips are matched on
- * cost EXCEPT for a live lot that exits on a protective leg, which is still
- * under-charged by one exit commission — a residual bias in the live arm's
- * favour, in the same direction as the defect this ticket closes, and observed
- * on 1 of the 3 live closes in the soak DB the #1121 round-1 review read (not
- * re-read here; the soak store is not in the repo). Charging it needs a modelled
- * exit cost for bracket legs; that is #1301's, not this ticket's.
+ * a flatten and pays a modelled commission on both legs.
+ *
+ * What the live arm pays on that leg is therefore whatever its ADAPTER
+ * reports, and `chargeTopUpTo` passes it straight through with nothing to top
+ * up to. That is ADAPTER-DEPENDENT, and the size of the residual with it:
+ * `alpaca-order-normalization.ts` reports `fee: 0`, so the leg is charged
+ * NOTHING and the lot is under-charged by a whole exit commission — the case
+ * that holds for the soak, and observed on 1 of the 3 live closes in the soak
+ * DB the #1121 round-1 review read (not re-read here; the soak store is not in
+ * the repo). `saxo-adapter.ts` reports `price * qty * SAXO_COMMISSION_RATE` on
+ * EVERY leg, so under Saxo the leg does pay a commission and the residual is
+ * no longer a commission at all — it collapses to a PRICE-BASIS difference,
+ * venue at the fill price against the control's modelled cost at submit-time
+ * mid, which is the same quantity `production.ts` names on the flatten leg
+ * and has no fixed sign. Only the Alpaca reading is the live-arm-favouring
+ * whole commission; do not carry that magnitude across the venue switch.
+ * Removing the residual outright needs a modelled exit cost for bracket legs;
+ * that is #1301's, not this ticket's.
  */
 function toFill(
   fill: NormalizedFill,

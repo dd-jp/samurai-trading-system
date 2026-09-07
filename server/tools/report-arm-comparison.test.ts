@@ -137,8 +137,21 @@ describe('formatArmComparison (#753 AC4/AC5)', () => {
     );
 
     expect(text).toContain('modelled_cost_charged = 0');
-    expect(text).toContain('best-effort');
-    expect(text).toContain('so can a window of purely');
+    // Round 5, finding 2: the three substrings this used to pin all survived
+    // reversing the sentence they came from. Flatten the wrapping and pin the
+    // contiguous claim instead — both regimes, in order, with the ONGOING one
+    // named as such rather than merely as the word "best-effort" somewhere on
+    // the page.
+    const flattened = text.replace(/\s+/g, ' ');
+    expect(flattened).toContain(
+      'every live row closed before #1121 shipped was backfilled to 0, ' +
+        'and a row closed since then stamps 0 whenever a covered leg is missing ' +
+        'its submit-time cost snapshot (that capture is best-effort)',
+    );
+    expect(flattened).toContain(
+      'a window over pre-#1121 history is EXPECTED to read 0 here — but so can a ' +
+        'window of purely recent closes',
+    );
     expect(text).toMatch(/live\s+0\s+0\.00\s+0\.00%\s+0\.00%/);
   });
 
