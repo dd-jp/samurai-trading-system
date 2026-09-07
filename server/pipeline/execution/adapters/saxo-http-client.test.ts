@@ -363,10 +363,17 @@ describe('SaxoHttpBrokerClient', () => {
     });
 
     // The money-safety guarantee: a blind retry of a placement whose response
-    // was lost can produce a second live order (doc 43, PR #1212). This must
-    // hold even with a generous retry budget — it must not depend on
-    // `placeOrder`'s separate maxAttempts:1 override being the only thing
-    // stopping a retry.
+    // was lost can produce a second live order (doc 43, PR #1212). This test
+    // pins the end-to-end behavior with a generous retry budget, but the
+    // budget alone does not isolate which guard is holding the line: PR
+    // #1212's pre-existing `maxAttempts: 1` override on `placeOrder` already
+    // forces exactly one attempt regardless of what `isRetryableSaxoBrokerError`
+    // answers (confirmed by mutation — flipping the POST classification to
+    // retryable does not fail this test). The classification-level guarantee
+    // this ticket adds — that a status-less POST error is itself classified
+    // non-retryable — is proven in isolation by `saxo-broker-errors.test.ts`'s
+    // "is NOT retryable when the failing request was a POST" unit test, which
+    // DOES fail under that same mutation.
     it('does NOT retry a transport failure on placeOrder (a POST), even with attempts to spare', async () => {
       const fetchMock = vi
         .fn()
