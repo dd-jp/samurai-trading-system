@@ -86,9 +86,9 @@ describe('SqliteVerdictLogStore', () => {
   });
 
   it('a repeated trace_id does not throw, but the ORIGINAL row wins (first-write-wins, not last)', () => {
-    // Append-only per the port's doc comment (shared/types.ts): a second
-    // write for a trace_id that already has a row must not overwrite it —
-    // that would let a later call erase the very `go` row
+    // Append-only per the port's doc comment (server/shared/types/ports.ts):
+    // a second write for a trace_id that already has a row must not
+    // overwrite it — that would let a later call erase the very `go` row
     // OrphanVerdictScanner depends on. See this file's own doc comment for
     // the full reasoning; this test is what would catch a regression to
     // `DO UPDATE`.
