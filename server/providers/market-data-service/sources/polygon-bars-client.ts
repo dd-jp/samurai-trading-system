@@ -71,7 +71,11 @@ const DEFAULT_TIMEOUT_MS = 10_000;
  * response resolving. Sized against the 5-10 name watchlist
  * (`universe-selector-spec.md`) all failing over at once: 2 attempts x 10
  * names is 20 bucket acquisitions, ~4 minutes worst case, comfortably inside
- * the 15-minute tick cadence.
+ * the 15-minute tick cadence — but that arithmetic assumes each failed
+ * attempt is dominated by the bucket's refill wait, not by `timeoutMs`
+ * itself; it holds only while `DEFAULT_TIMEOUT_MS` stays under the bucket's
+ * ~13s refill, so a future timeout increase past that point should re-check
+ * this budget.
  */
 const DEFAULT_RETRY_CONFIG: RetryConfig = { maxAttempts: 2, baseDelayMs: 500, maxDelayMs: 2_000 };
 /** Comfortably above anything this client's small `limit`s (20/30) could return in one page. */

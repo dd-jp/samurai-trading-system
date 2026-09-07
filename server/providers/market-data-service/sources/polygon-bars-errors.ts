@@ -6,12 +6,7 @@
  * module's default `isRetryable` shape: see `isRetryablePolygonBarsError`.
  */
 
-import {
-  classifyStatus,
-  isServerErrorStatus,
-  isTimeoutAbort,
-  parseRetryAfterMs,
-} from '../../../shared/index.js';
+import { classifyStatus, isServerErrorStatus, isTimeoutAbort } from '../../../shared/index.js';
 
 export class PolygonBarsTimeoutError extends Error {
   constructor(message: string) {
@@ -20,14 +15,13 @@ export class PolygonBarsTimeoutError extends Error {
   }
 }
 
+// No retryAfterMs field: isRetryablePolygonBarsError never treats this class
+// as retryable, so nothing would ever read a stored Retry-After hint — see
+// that predicate's doc comment for why 429 is excluded.
 export class PolygonBarsRateLimitError extends Error {
-  /** Provider-supplied hint (from a `Retry-After` header), if one was given. */
-  readonly retryAfterMs: number | undefined;
-
-  constructor(message: string, retryAfterMs?: number) {
+  constructor(message: string) {
     super(message);
     this.name = 'PolygonBarsRateLimitError';
-    this.retryAfterMs = retryAfterMs;
   }
 }
 
@@ -83,7 +77,7 @@ export function classifyPolygonBarsResponse(response: Response, context: string)
 
   switch (classifyStatus(response.status)) {
     case 'rate-limit':
-      return new PolygonBarsRateLimitError(message, parseRetryAfterMs(response));
+      return new PolygonBarsRateLimitError(message);
     case 'timeout':
       return new PolygonBarsTimeoutError(message);
     default:
