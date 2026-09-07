@@ -72,7 +72,11 @@ import {
   SqliteMarketDataStore,
   UsEquityRegularHoursCalendar,
 } from '../../providers/market-data-service/index.js';
-import { PolymarketClient } from '../../providers/market-intelligence/index.js';
+import {
+  GROK_REFRESH_MS,
+  PolymarketClient,
+  X_SEARCH_MODEL,
+} from '../../providers/market-intelligence/index.js';
 import type { ClosedTrade, OrderIntent, TradingArm } from '../../shared/index.js';
 import { SimulatedClock, TokenBucket } from '../../shared/index.js';
 import type { NousCredentials } from '../../shared/llm/index.js';
@@ -1201,6 +1205,53 @@ describe('buildProductionComponents', () => {
         expect(XSearchClientMock).toHaveBeenCalledTimes(1);
         expect(XSearchClientMock).toHaveBeenCalledWith(
           expect.objectContaining({ maxSearchResults: 4 }),
+        );
+      },
+    );
+
+    /**
+     * #1283 — #1226 (above) pinned only `maxSearchResults`; the review that
+     * closed it flagged the rest of the same `new XSearchClient(...)` call as
+     * still unobserved. `model` is the one that matters: `production.ts`
+     * overrides `sentimentCredentials.model` (the pinned credential, which
+     * 400s on `x_search`) with the routed alias `X_SEARCH_MODEL`. Asserting
+     * against the imported constant, rather than a copied `'~x-ai/grok-latest'`
+     * literal, is what makes this catch the actual regression named above —
+     * `model: sentimentCredentials.model` silently reintroducing the pinned
+     * credential — without also depending on `X_SEARCH_MODEL`'s current value.
+     * `apiKey`/`baseUrl` have no such constant (they are
+     * `FAKE_SENTIMENT_CREDENTIALS`' own fields, asserted against that fixture
+     * instead), `windowMs` has one (`GROK_REFRESH_MS`), and `logger` is
+     * asserted by reference against the same `recordingLogger()` instance
+     * `stubConfig` was given.
+     */
+    it(
+      'passes apiKey, baseUrl, the routed model alias, windowMs, and logger through to ' +
+        '`new XSearchClient(...)` unchanged from their sources — same harness as the ' +
+        'maxSearchResults case above, extended to the constructor arguments #1226 left ' +
+        'unobserved',
+      () => {
+        tryNousCredentialsMock.mockClear();
+        tryNousCredentialsMock.mockImplementationOnce(() => FAKE_SENTIMENT_CREDENTIALS);
+        const logger = recordingLogger();
+        const config = stubConfig(db, {
+          sentimentEnabled: true,
+          sentimentRetrieval: true,
+          xMaxSearchResults: 4,
+          logger,
+        });
+
+        buildProductionComponents(config);
+
+        expect(XSearchClientMock).toHaveBeenCalledTimes(1);
+        expect(XSearchClientMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            apiKey: FAKE_SENTIMENT_CREDENTIALS.apiKey,
+            baseUrl: FAKE_SENTIMENT_CREDENTIALS.baseUrl,
+            model: X_SEARCH_MODEL,
+            windowMs: GROK_REFRESH_MS,
+            logger,
+          }),
         );
       },
     );
