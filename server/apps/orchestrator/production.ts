@@ -825,22 +825,36 @@ function pruneMiArchiveWithLog(
  * clears it, so the raw table no longer outlives the tile and there is
  * nothing left to reconstruct from.
  *
- * SECOND is a NON-reason, recorded because it is the intuitive one and it
- * does not survive: "a 1-day retention lets the daily sweep delete a row
- * the tile is still supposed to count". The prune deletes
- * `timestamp < T_prune - retention`; the count includes
- * `timestamp > asOf - window`. At `retention == window` those are
- * complementary whenever `asOf >= T_prune`, and they cannot both hold, so
- * no row is ever both deleted and countable. `asOf >= T_prune` is what this
- * deployment does: the two boundaries are computed in different processes,
+ * SECOND is the intuitive reason, and it survives only in a form far
+ * narrower than it is usually stated: "a 1-day retention lets the daily
+ * sweep delete a row the tile is still supposed to count". The prune
+ * deletes `timestamp < T_prune - retention`; the count includes
+ * `timestamp > asOf - window`. At `retention == window` both predicates
+ * hold only for rows in `(asOf - window, T_prune - window)`, an interval
+ * that is non-empty exactly when `T_prune > asOf` — so the claim reduces
+ * to whether a prune can commit after a live request's `asOf`.
+ *
+ * Mostly it cannot. The two boundaries are computed in different processes
  * but against one host clock, and `service-api`'s `server.ts` passes a
- * fresh `new Date()` into `buildSnapshot` per request, so any prune whose
- * rows a query could have missed committed before that query's `asOf`. The
- * interval in which a row is deleted yet still inside the counted window is
- * empty. It would stop being empty only if `asOf` became a cached or
- * backdated label rather than the request's own `now()` — a property of
- * that one call site, not something enforced here. FIRST is the whole
- * reason for the floor.
+ * fresh `new Date()` into `buildSnapshot` per request, so a prune that
+ * committed before the request began is already behind that request's
+ * `asOf`. What that call site gives, though, is sample-then-read rather
+ * than read-then-sample: `asOf` is materialised in `server.ts`,
+ * `getAlertDeliveryFailureCount` runs partway down `snapshot.ts`'s
+ * `buildSnapshot` after a dozen intervening store reads, and nothing spans
+ * them — `SqliteDashboardQueryStore` runs each read as its own prepared
+ * statement, with no transaction and therefore no snapshot isolation. A
+ * prune committing inside THAT gap does have `T_prune > asOf`, and the
+ * rows it removes from the counted window are real.
+ *
+ * So the exposure is the sub-second width of one snapshot build, and it
+ * costs a count only if a failure row happens to be timestamped inside a
+ * band of exactly `window` ago at the moment the once-a-day sweep lands
+ * there. A floor measured in DAYS is not sized against that; FIRST is what
+ * it is sized against, and FIRST is the reason for it. That the floor also
+ * closes the race is a consequence rather than the argument — above
+ * `retention == window` the overlap would need `T_prune > asOf` by the
+ * whole `retention - window` difference, a full day at `min = 2`.
  *
  * Given FIRST, 2 is simply the smallest day count strictly above the
  * 24-hour window; nothing is special about 2 beyond the window's size and
@@ -865,7 +879,7 @@ export function alertDeliveryFailureRetentionDaysFromEnvironment(
     DEFAULT_ALERT_DELIVERY_FAILURE_RETENTION_DAYS,
     2,
     "alert_delivery_failures's retention window (#1131), which must stay longer than the " +
-      '24-hour Rail count window or a prune and a window rollover become indistinguishable',
+      '24-hour Rail count window or the table stops outliving the tile that reads it',
   );
 }
 

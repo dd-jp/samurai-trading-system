@@ -664,9 +664,11 @@ export interface DashboardSnapshot {
    * elsewhere on the wire: nothing consumed it, and keeping a second,
    * un-windowed number beside this one would risk exactly the
    * claim-stronger-than-mechanism failure #1299's review rounds were hunting
-   * for. It remains reconstructable for as long as retention holds by reading
-   * `alert_delivery_failures` directly (`alert-delivery-log.ts`'s
-   * `pruneOlderThan`, default 30-day retention). That reconstruction is
+   * for. The same question is still answerable over the retention window by
+   * reading `alert_delivery_failures` directly (`alert-delivery-log.ts`'s
+   * `pruneOlderThan`, default 30-day retention) — bounded by that retention,
+   * never a lifetime, and at the 2-day floor exactly 24 hours more than this
+   * field. That reconstruction is
    * WHY the retention floor is 2 days and not 1: at `retention == window`
    * the table would stop outliving this field, and dropping the lifetime
    * total here would be dropping it outright. The ordering is not a

@@ -141,8 +141,8 @@ export class SqliteAlertDeliveryLog {
    * cutoff has to clear.
    * `alertDeliveryFailureRetentionDaysFromEnvironment` in `production.ts`
    * refuses a retention below 2 days for that reason — its doc carries the
-   * full argument, including which readings of the ambiguity actually hold
-   * and which do not.
+   * full argument, including which reading of that risk the floor is
+   * actually sized against and which one is not.
    */
   pruneOlderThan(cutoff: Date): number {
     return this.db

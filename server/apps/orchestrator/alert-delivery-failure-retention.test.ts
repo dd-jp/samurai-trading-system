@@ -67,8 +67,9 @@ describe('alertDeliveryFailureRetentionDaysFromEnvironment', () => {
   // nothing. `alertDeliveryFailureRetentionDaysFromEnvironment`'s doc
   // carries the full argument, including why the INTUITIVE reason for this
   // floor — that a 1-day sweep would delete a row the tile still counts —
-  // is not one: the two predicates are complementary and that interval is
-  // empty.
+  // is far too narrow to be the one: the two predicates overlap only for a
+  // prune committing after a live request's `asOf`, which is reachable only
+  // inside the sub-second gap between sampling `asOf` and reading the count.
   //
   // This case is also the LOWERED-MINIMUM half of the guard on "retention
   // outlives the window"; the last case in this block is the widened-window

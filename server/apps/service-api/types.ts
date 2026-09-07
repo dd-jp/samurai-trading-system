@@ -301,9 +301,10 @@ export interface DashboardQueryStore {
    * has to outlast the expected gap between escalations or a live outage's
    * only evidence would age out during a quiet stretch. The lifetime total
    * this used to also expose is dropped from the wire (nothing consumed it),
-   * recoverable by reading the table directly for as long as its
-   * (env-configurable, default 30-day) retention holds — which is why that
-   * retention is floored at 2 days rather than 1, and why the floor's
+   * recoverable over the table's (env-configurable, default 30-day)
+   * retention window by reading it directly — bounded by that retention,
+   * never a lifetime — which is why that retention is floored at 2 days
+   * rather than 1, and why the floor's
    * standing above this window is pinned by
    * `alert-delivery-failure-retention.test.ts` rather than implied by the
    * floor's value.
