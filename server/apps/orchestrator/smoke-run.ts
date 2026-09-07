@@ -2443,7 +2443,9 @@ export interface LogRetentionEvidence {
   /**
    * An undated bare name survived despite being old — the shape a still-open
    * writer holds (`service-api.log`), which unlinking would turn into
-   * invisible growth rather than reclaimed space.
+   * invisible growth rather than reclaimed space. It also survives because
+   * the fixture is 5 bytes, far under the truncate threshold (#1206) that
+   * would otherwise apply to this same bare shape.
    */
   liveShapedFileKeptDespiteAge: boolean;
   /** A non-log file in the swept directory survived despite being old. */

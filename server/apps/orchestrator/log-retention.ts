@@ -35,15 +35,17 @@
  * - **The name must be archival-shaped**: either a `RotatingFileSink`
  *   generation (`orchestrator.log.1`) or a datestamped artefact
  *   (`orchestrator-20260902-1842.log`, `supervisor-20260904-1020-v3.log`,
- *   `soak-boot-20260903-1007.out`). The rule is one-directional and only
- *   one-directional: an undated bare name is never swept, which is what
- *   closes the descriptor gap below structurally rather than
+ *   `soak-boot-20260903-1007.out`, or — widened by #1206 — a bare date with
+ *   no time component, `soak-20260825.log`). The rule is one-directional and
+ *   only one-directional: an undated bare name is never UNLINKED on age,
+ *   which is what closes the descriptor gap below structurally rather than
  *   probabilistically, and makes `.env.local`, `LICENSE` and every other
- *   non-log file ineligible as a side effect. The converse does NOT hold —
- *   an archival-shaped name is not evidence the file is finished
+ *   non-log file ineligible for unlinking as a side effect. The converse does
+ *   NOT hold — an archival-shaped name is not evidence the file is finished
  *   (`supervisor-20260904-1020-v3.log` is datestamped and was live at
  *   #1116's audit), and a finished file is not always archival-shaped
- *   (`soak-boot.out` is bare, so it stays unbounded; see #1116's gap 1).
+ *   (`soak-boot.out` is bare — never unlinked, but see "Bare live names"
+ *   below for the size-based path #1206 gives it instead).
  *
  * ## Liveness rule
  *
@@ -80,9 +82,11 @@
  *   unlinked inode, so the space stays allocated but invisible to `ls`/`du`
  *   and the content is unrecoverable when the writer exits — the fix for
  *   unbounded growth would become invisible unbounded growth. For a BARE
- *   name the archival-name rule above removes that reachability entirely —
- *   `service-api.log` can never be a candidate, whatever its mtime. For a
- *   datestamped name it does not: the name rule contributes nothing, so a
+ *   name the archival-name rule above removes that reachability entirely from
+ *   THIS (unlink) path — `service-api.log` can never be a candidate for
+ *   `remove`, whatever its mtime; "Bare live names" below is the separate,
+ *   unlink-hazard-free path that reaches it instead. For a datestamped name
+ *   the archival-name rule does not: the name rule contributes nothing, so a
  *   live datestamped file rests on the descriptor check, which covers the
  *   supervisor-spawned path (inherited fd 1/2) and nothing else. A sibling
  *   process writing one slowly enough to age past the window is the residual
@@ -116,15 +120,71 @@
  * never paths — a path would imply the sweep reaches outside the directory,
  * which nothing here does.
  *
+ * ## Bare live names: truncated, not deleted (#1206)
+ *
+ * #1116's own audit named two things unbounded: the supervisor's own stdout
+ * (`supervisor-*.log`, datestamped, reached by the unlink path above) and
+ * `soak-boot.out` — a bare name, permanently ineligible for unlink by the
+ * name rule above. That rule is correct (it is what makes the descriptor gap
+ * closeable at all), but it left `soak-boot.out` itself unbounded, which is
+ * the gap this section closes.
+ *
+ * `bareTruncateBytes` gives every `isBareLogName` file (`.log`/`.out`,
+ * undated, not archival-shaped) a size-based path instead: past the
+ * threshold, `truncateSync(path, 0)` rather than `remove(path)`. This is safe
+ * on a file a writer still holds open in a way unlink is not — `truncate`
+ * changes only the file's length, never the writer's file descriptor or its
+ * position in it, so the descriptor a live writer holds keeps working and its
+ * next write is reachable again by path, never stranded on a now-unlinked
+ * inode. That is also why this path carries none of the age or
+ * `activeDescriptors` liveness checks above: size is the only thing that
+ * decides eligibility, live or not.
+ *
+ * `protectedPaths` and `keepNames` both still apply — a bare name is exactly
+ * what `SAMURAI_LOG_FILE` itself usually is (`orchestrator.log`), so without
+ * that exclusion this path would fight `RotatingFileSink`'s own size-based
+ * rotation over the file it owns.
+ *
+ * Truncation is boot-time, like the rest of this sweep — it runs once, when
+ * the orchestrator starts, not on a timer while it keeps running. A
+ * `soak-boot.out` growing at a couple of MB/day only gets truncated on a
+ * boot that happens to land after it has crossed the threshold; an
+ * unattended run with no restart across the whole window it is measured over
+ * is not capped mid-run. #1206 is that the sweep can reach the file at all
+ * (before this it never could, at any boot); it is not a continuous cap.
+ *
+ * `truncateSync` is also not a durable size reduction on its own. It changes
+ * the file's length at that instant, but a writer's `O_APPEND`-less fd — the
+ * shape a plain shell redirect (`> logs/soak-boot.out 2>&1`, not `>>`)
+ * opens, which is how `soak-boot.out` itself is produced — keeps its own,
+ * unmoved write offset: its next write lands where the truncated bytes used
+ * to be, not at the new end of file, leaving a sparse hole in between. The
+ * file's apparent size (`stat.size`) climbs back toward what it was even
+ * though that hole's blocks are unallocated on disk — see `bytesReclaimed`'s
+ * doc comment and the test named for this. That does not reopen the
+ * liveness hazard (the writer's descriptor and its content stay valid and
+ * reachable by path — the crux this section exists to guarantee), but it
+ * does mean a size-based reader of this directory (`du` without `--apparent-
+ * size`, or a next sweep's own `stat.size` check) sees the disk usage drop
+ * and the nominal file length recover independently of each other.
+ *
+ * `SAMURAI_LOG_BARE_TRUNCATE_BYTES` (`DEFAULT_BARE_TRUNCATE_BYTES`, 16 MiB —
+ * the same figure `rotating-file-sink.ts` already treats as "big enough to
+ * rotate" for the one file it manages) has a default rather than requiring
+ * opt-in, matching `SAMURAI_LOG_RETENTION_DAYS` beside it: the dangerous
+ * state here is an unbounded file nobody is watching, not a bounded one at a
+ * size nobody picked.
+ *
  * Two failure postures, deliberately different: a malformed
- * `SAMURAI_LOG_RETENTION_DAYS`/`SAMURAI_LOG_RETENTION_KEEP` throws at boot
- * (retention policy nobody chose, same rule as `env-integer.ts`), while a
+ * `SAMURAI_LOG_RETENTION_DAYS`/`SAMURAI_LOG_RETENTION_KEEP`/
+ * `SAMURAI_LOG_BARE_TRUNCATE_BYTES` throws at boot (retention policy nobody
+ * chose, same rule as `env-integer.ts`), while a
  * refused directory warns and sweeps nothing. The first is an operator typo
  * that must be seen before the run starts; the second is housekeeping
  * declining to act, and aborting a trading process over housekeeping is the
  * one outcome this module must never cause.
  */
-import { type Dirent, fstatSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { type Dirent, fstatSync, readdirSync, rmSync, statSync, truncateSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { nonEmpty, positiveIntegerFromEnv } from '../../shared/env-integer.js';
 import type { Logger } from './types.js';
@@ -137,19 +197,32 @@ import type { Logger } from './types.js';
  */
 export const DEFAULT_LOG_RETENTION_DAYS = 30;
 
+/**
+ * Matches `DEFAULT_MAX_BYTES` in `rotating-file-sink.ts`: the size already
+ * treated as "big enough to rotate" for the one file this module's sibling
+ * manages is a defensible size for "big enough to reclaim" on the bare names
+ * nothing manages at all (#1206).
+ */
+export const DEFAULT_BARE_TRUNCATE_BYTES = 16 * 1024 * 1024;
+
 const ENV_LOG_RETENTION_DAYS = 'SAMURAI_LOG_RETENTION_DAYS';
 const ENV_LOG_RETENTION_KEEP = 'SAMURAI_LOG_RETENTION_KEEP';
+const ENV_LOG_BARE_TRUNCATE_BYTES = 'SAMURAI_LOG_BARE_TRUNCATE_BYTES';
 
 /** A `RotatingFileSink` generation: `orchestrator.log.1`. */
 const ROTATED_GENERATION = /^.+\.log\.\d+$/;
 
 /**
  * A finished, datestamped artefact: `orchestrator-20260902-1842.log`,
- * `supervisor-20260904-1020-v3.log`, `soak-boot-20260903-1007.out`. The
- * eight digits must be followed by `-` or `.` so a bare name that merely
- * contains a long number cannot pass as a datestamp.
+ * `supervisor-20260904-1020-v3.log`, `soak-boot-20260903-1007.out`, or a bare
+ * date with no time component (`soak-20260825.log`, #1206 — widened from a
+ * form that required a `-`/`.` and at least one more character after the
+ * eight digits, which made a plain `name-YYYYMMDD.log` ineligible). The eight
+ * digits must be followed by `-`, `.`, or the extension's own dot — never by
+ * another digit — so a bare name that merely contains a long number
+ * (`orchestrator-202608251842.log`) cannot pass as a datestamp.
  */
-const DATESTAMPED_ARTEFACT = /^.*-\d{8}[-.].*\.(?:log|out)$/;
+const DATESTAMPED_ARTEFACT = /^.*-\d{8}(?:[-.].*)?\.(?:log|out)$/;
 
 /**
  * Whether `name` is a finished log artefact and therefore eligible for
@@ -160,6 +233,22 @@ const DATESTAMPED_ARTEFACT = /^.*-\d{8}[-.].*\.(?:log|out)$/;
  */
 export function isArchivedLogName(name: string): boolean {
   return ROTATED_GENERATION.test(name) || DATESTAMPED_ARTEFACT.test(name);
+}
+
+/** A `.log`/`.out` name, whatever else it is — the only extensions this module ever touches. */
+const LOG_SHAPED_NAME = /\.(?:log|out)$/;
+
+/**
+ * Whether `name` is the shape #1206 closes: an undated bare log file
+ * (`soak-boot.out`, `orchestrator.log`) that `isArchivedLogName` refuses to
+ * unlink on age because a live writer may still hold it open. Truncation
+ * (see `sweepStaleLogs`'s `bareTruncateBytes`) does not carry that hazard, so
+ * this name shape gets a size-based path instead of no path at all — but
+ * only for `.log`/`.out`: a non-log file (`.env.local`) must never be
+ * eligible for either mechanism.
+ */
+export function isBareLogName(name: string): boolean {
+  return LOG_SHAPED_NAME.test(name) && !isArchivedLogName(name);
 }
 
 /**
@@ -175,6 +264,21 @@ export function logRetentionDaysFromEnvironment(env: NodeJS.ProcessEnv = process
     DEFAULT_LOG_RETENTION_DAYS,
     1,
     "the logs/ retention sweep's window (#1116)",
+  );
+}
+
+/**
+ * Same refuse-rather-than-default posture as `logRetentionDaysFromEnvironment`
+ * beside it, for the threshold that decides when a bare log-shaped name
+ * (#1206) gets truncated.
+ */
+export function logBareTruncateBytesFromEnvironment(env: NodeJS.ProcessEnv = process.env): number {
+  return positiveIntegerFromEnv(
+    env[ENV_LOG_BARE_TRUNCATE_BYTES],
+    ENV_LOG_BARE_TRUNCATE_BYTES,
+    DEFAULT_BARE_TRUNCATE_BYTES,
+    1,
+    'the size threshold past which an undated bare log file is truncated (#1206)',
   );
 }
 
@@ -234,6 +338,16 @@ export interface LogRetentionOptions {
   protectedPaths?: readonly string[];
   /** Basenames in `directory` the operator has taken out of the sweep. */
   keepNames?: readonly string[];
+  /**
+   * Size in bytes past which an undated bare log-shaped name (`soak-boot.out`,
+   * `isBareLogName`) is truncated to empty rather than left alone (#1206).
+   * Undefined disables this path entirely — no bare name is ever touched,
+   * matching the behaviour before #1206. Age, `activeDescriptors` and this
+   * option are independent of each other: truncation has none of unlink's
+   * liveness hazard (the writer keeps its descriptor; see the module doc), so
+   * a bare name is eligible by size alone, at any age, live or not.
+   */
+  bareTruncateBytes?: number;
   now?: () => number;
   /**
    * Seam for tests: stands in for `process.cwd()`. Injected rather than read
@@ -245,11 +359,26 @@ export interface LogRetentionOptions {
   activeDescriptors?: () => readonly FileIdentity[];
   /** Seam for tests: stands in for `rmSync`. */
   remove?: (path: string) => void;
+  /** Seam for tests: stands in for `truncateSync(path, 0)`. */
+  truncate?: (path: string) => void;
 }
 
 export interface LogRetentionResult {
   filesRemoved: number;
+  /**
+   * Sum of each file's `stat.size` at the moment it was removed or
+   * truncated — what disappeared from `ls`/`du` right then, not a durable
+   * total. For a truncated bare name specifically, this can overstate what
+   * stays reclaimed: a writer whose fd was opened without `O_APPEND` (a
+   * shell `> file` redirect, exactly how `soak-boot.out` is opened — see
+   * "Bare live names" above) keeps writing at its OLD offset after
+   * `truncate`, so the freed region becomes a sparse hole and the file's
+   * apparent size climbs back toward its pre-truncation figure even though
+   * the hole's blocks stay unallocated on disk.
+   */
   bytesReclaimed: number;
+  /** Bare log-shaped names truncated rather than removed (#1206). */
+  filesTruncated: number;
   /**
    * Set when the sweep declined to look at `directory` at all. Present only
    * on a refusal, so a caller comparing against `{filesRemoved, bytes}` still
@@ -292,13 +421,15 @@ export function sweepStaleLogs(options: LogRetentionOptions): LogRetentionResult
     maxAgeMs,
     protectedPaths = [],
     keepNames = [],
+    bareTruncateBytes,
     now = Date.now,
     cwd = process.cwd,
     activeDescriptors = defaultActiveDescriptors,
     remove = (path: string) => rmSync(path),
+    truncate = (path: string) => truncateSync(path, 0),
   } = options;
 
-  const result: LogRetentionResult = { filesRemoved: 0, bytesReclaimed: 0 };
+  const result: LogRetentionResult = { filesRemoved: 0, bytesReclaimed: 0, filesTruncated: 0 };
   const root = resolve(directory);
   if (root === resolve(cwd())) {
     return {
@@ -328,11 +459,38 @@ export function sweepStaleLogs(options: LogRetentionOptions): LogRetentionResult
     // resolved and followed. This is what keeps the sweep inside `directory`
     // with no path ever leaving it, structurally rather than by convention.
     if (!entry.isFile()) continue;
-    if (!isArchivedLogName(entry.name)) continue;
     if (keepSet.has(entry.name)) continue;
 
     const path = join(root, entry.name);
     if (protectedSet.has(resolve(path))) continue;
+
+    if (isArchivedLogName(entry.name)) {
+      let stat: ReturnType<typeof statSync>;
+      try {
+        stat = statSync(path);
+      } catch {
+        continue; // Vanished between listing and stat — not this sweep's problem.
+      }
+
+      if (liveIdentities.some((id) => id.dev === stat.dev && id.ino === stat.ino)) continue;
+      if (stat.mtimeMs >= cutoff) continue;
+
+      try {
+        remove(path);
+      } catch {
+        continue; // Permission error, already gone, or a platform quirk — tolerated by design.
+      }
+
+      result.filesRemoved += 1;
+      result.bytesReclaimed += stat.size;
+      continue;
+    }
+
+    // Bare log-shaped name (#1206): no age or liveness gate — unlike the
+    // branch above, `truncate` never orphans a writer's descriptor, so size
+    // alone decides eligibility. `bareTruncateBytes === undefined` disables
+    // this path outright, matching every version of this sweep before #1206.
+    if (bareTruncateBytes === undefined || !isBareLogName(entry.name)) continue;
 
     let stat: ReturnType<typeof statSync>;
     try {
@@ -341,16 +499,15 @@ export function sweepStaleLogs(options: LogRetentionOptions): LogRetentionResult
       continue; // Vanished between listing and stat — not this sweep's problem.
     }
 
-    if (liveIdentities.some((id) => id.dev === stat.dev && id.ino === stat.ino)) continue;
-    if (stat.mtimeMs >= cutoff) continue;
+    if (stat.size <= bareTruncateBytes) continue;
 
     try {
-      remove(path);
+      truncate(path);
     } catch {
       continue; // Permission error, already gone, or a platform quirk — tolerated by design.
     }
 
-    result.filesRemoved += 1;
+    result.filesTruncated += 1;
     result.bytesReclaimed += stat.size;
   }
 
@@ -383,13 +540,17 @@ export function sweepStaleLogsWithLog(
       });
       return result;
     }
-    if (result.filesRemoved > 0) {
+    if (result.filesRemoved > 0 || result.filesTruncated > 0) {
       logger.log({
         trace_id: 'startup',
         stage: 'orchestrator',
         level: 'info',
-        message: `logs/ retention sweep removed ${result.filesRemoved} stale file(s)`,
-        payload: { files_removed: result.filesRemoved, bytes_reclaimed: result.bytesReclaimed },
+        message: `logs/ retention sweep removed ${result.filesRemoved} stale file(s) and truncated ${result.filesTruncated} bare file(s)`,
+        payload: {
+          files_removed: result.filesRemoved,
+          files_truncated: result.filesTruncated,
+          bytes_reclaimed: result.bytesReclaimed,
+        },
       });
     }
     return result;
@@ -404,6 +565,6 @@ export function sweepStaleLogsWithLog(
         'until this succeeds',
       payload: { error: error instanceof Error ? error.message : String(error) },
     });
-    return { filesRemoved: 0, bytesReclaimed: 0 };
+    return { filesRemoved: 0, bytesReclaimed: 0, filesTruncated: 0 };
   }
 }

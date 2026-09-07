@@ -1,18 +1,25 @@
 import {
+  closeSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
+  readFileSync,
   rmSync,
   statSync,
   symlinkSync,
   utimesSync,
   writeFileSync,
+  writeSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  DEFAULT_BARE_TRUNCATE_BYTES,
   DEFAULT_LOG_RETENTION_DAYS,
   isArchivedLogName,
+  isBareLogName,
+  logBareTruncateBytesFromEnvironment,
   logRetentionDaysFromEnvironment,
   logRetentionKeepNamesFromEnvironment,
   sweepStaleLogs,
@@ -163,7 +170,7 @@ describe('sweepStaleLogs — tolerance', () => {
       now: () => NOW,
     });
 
-    expect(result).toEqual({ filesRemoved: 0, bytesReclaimed: 0 });
+    expect(result).toEqual({ filesRemoved: 0, bytesReclaimed: 0, filesTruncated: 0 });
   });
 });
 
@@ -186,7 +193,32 @@ describe('sweepStaleLogsWithLog', () => {
     expect(result.filesRemoved).toBe(1);
     expect(logger.entries).toHaveLength(1);
     expect(logger.entries[0]?.level).toBe('info');
-    expect(logger.entries[0]?.payload).toEqual({ files_removed: 1, bytes_reclaimed: 10 });
+    expect(logger.entries[0]?.payload).toEqual({
+      files_removed: 1,
+      files_truncated: 0,
+      bytes_reclaimed: 10,
+    });
+  });
+
+  it('logs an info line when only a bare file was truncated, no file removed', () => {
+    const big = write(join(dir, 'soak-boot.out'), 'x'.repeat(200));
+    const logger = makeLogger();
+
+    const result = sweepStaleLogsWithLog(
+      { directory: dir, maxAgeMs: 7 * ONE_DAY_MS, bareTruncateBytes: 100, now: () => NOW },
+      logger,
+    );
+
+    expect(result.filesRemoved).toBe(0);
+    expect(result.filesTruncated).toBe(1);
+    expect(statSync(big).size).toBe(0);
+    expect(logger.entries).toHaveLength(1);
+    expect(logger.entries[0]?.level).toBe('info');
+    expect(logger.entries[0]?.payload).toEqual({
+      files_removed: 0,
+      files_truncated: 1,
+      bytes_reclaimed: 200,
+    });
   });
 
   it('logs nothing when nothing was stale', () => {
@@ -213,7 +245,7 @@ describe('sweepStaleLogsWithLog', () => {
       logger,
     );
 
-    expect(result).toEqual({ filesRemoved: 0, bytesReclaimed: 0 });
+    expect(result).toEqual({ filesRemoved: 0, bytesReclaimed: 0, filesTruncated: 0 });
     expect(logger.entries).toHaveLength(1);
     expect(logger.entries[0]?.level).toBe('warn');
   });
@@ -226,6 +258,11 @@ describe('sweepStaleLogs — eligible names', () => {
     'orchestrator-20260902-1842.log',
     'supervisor-20260904-1020-v3.log',
     'soak-boot-20260903-1007.out',
+    // #1206: a bare date with no time component — the date's 8 digits run
+    // straight into the extension's own dot, rather than into a `-`/`.`
+    // separator followed by more characters.
+    'soak-20260825.log',
+    'orchestrator-20260825.log',
   ])('treats %s as a finished artefact', (name) => {
     expect(isArchivedLogName(name)).toBe(true);
   });
@@ -238,6 +275,9 @@ describe('sweepStaleLogs — eligible names', () => {
     'LICENSE',
     'tsconfig.json',
     'orchestrator-2026.log',
+    // #1206: a long digit run with no `-`/`.` boundary after the first 8
+    // digits must still fail to pass as a datestamp.
+    'orchestrator-202608251842.log',
   ])('treats %s as ineligible', (name) => {
     expect(isArchivedLogName(name)).toBe(false);
   });
@@ -275,6 +315,219 @@ describe('sweepStaleLogs — eligible names', () => {
 
     expect(result.filesRemoved).toBe(0);
     expect(statSync(kept).isFile()).toBe(true);
+  });
+});
+
+describe('isBareLogName (#1206)', () => {
+  it.each(['orchestrator.log', 'service-api.log', 'soak-boot.out'])('treats %s as bare', (name) => {
+    expect(isBareLogName(name)).toBe(true);
+  });
+
+  it.each([
+    'orchestrator.log.1',
+    'orchestrator-20260902-1842.log',
+    'soak-20260825.log',
+    '.env.local',
+    'LICENSE',
+    'tsconfig.json',
+  ])('treats %s as not bare', (name) => {
+    expect(isBareLogName(name)).toBe(false);
+  });
+});
+
+// #1206: the retention sweep's OTHER path for an undated bare name
+// (`soak-boot.out`) — truncation, never unlink, so the safety property in
+// the module doc ("liveness rule") holds under a different mechanism rather
+// than being bypassed.
+describe('sweepStaleLogs — bare-name truncation (#1206)', () => {
+  it('truncates a bare log-shaped file once it crosses the byte threshold', () => {
+    const big = write(join(dir, 'soak-boot.out'), 'x'.repeat(200));
+
+    const result = sweepStaleLogs({
+      directory: dir,
+      maxAgeMs: 7 * ONE_DAY_MS,
+      bareTruncateBytes: 100,
+      now: () => NOW,
+    });
+
+    expect(result.filesTruncated).toBe(1);
+    expect(result.bytesReclaimed).toBe(200);
+    expect(statSync(big).size).toBe(0);
+  });
+
+  it('leaves a bare file under the threshold alone', () => {
+    const small = write(join(dir, 'soak-boot.out'), 'x'.repeat(50));
+
+    const result = sweepStaleLogs({
+      directory: dir,
+      maxAgeMs: 7 * ONE_DAY_MS,
+      bareTruncateBytes: 100,
+      now: () => NOW,
+    });
+
+    expect(result.filesTruncated).toBe(0);
+    expect(statSync(small).size).toBe(50);
+  });
+
+  it('never truncates a bare file when no threshold is configured', () => {
+    const big = write(join(dir, 'soak-boot.out'), 'x'.repeat(200));
+
+    const result = sweepStaleLogs({ directory: dir, maxAgeMs: 7 * ONE_DAY_MS, now: () => NOW });
+
+    expect(result.filesTruncated).toBe(0);
+    expect(statSync(big).size).toBe(200);
+  });
+
+  it('never truncates a non-log file, however large, because it is not log-shaped', () => {
+    const secret = write(join(dir, '.env.local'), 'x'.repeat(200));
+
+    const result = sweepStaleLogs({
+      directory: dir,
+      maxAgeMs: 7 * ONE_DAY_MS,
+      bareTruncateBytes: 100,
+      now: () => NOW,
+    });
+
+    expect(result.filesTruncated).toBe(0);
+    expect(statSync(secret).size).toBe(200);
+  });
+
+  it("respects protectedPaths for a bare name too — the active sink's own file", () => {
+    const active = write(join(dir, 'orchestrator.log'), 'x'.repeat(200));
+
+    const result = sweepStaleLogs({
+      directory: dir,
+      maxAgeMs: 7 * ONE_DAY_MS,
+      bareTruncateBytes: 100,
+      protectedPaths: [active],
+      now: () => NOW,
+    });
+
+    expect(result.filesTruncated).toBe(0);
+    expect(statSync(active).size).toBe(200);
+  });
+
+  it('respects keepNames for a bare name too', () => {
+    const kept = write(join(dir, 'soak-boot.out'), 'x'.repeat(200));
+
+    const result = sweepStaleLogs({
+      directory: dir,
+      maxAgeMs: 7 * ONE_DAY_MS,
+      bareTruncateBytes: 100,
+      keepNames: ['soak-boot.out'],
+      now: () => NOW,
+    });
+
+    expect(result.filesTruncated).toBe(0);
+    expect(statSync(kept).size).toBe(200);
+  });
+
+  it('truncates a bare name even when its identity matches an active descriptor', () => {
+    // Contrast with the unlink path's liveness rule: unlink on the process's
+    // own open file is exactly the hazard that rule exists to prevent, but
+    // truncate has no such hazard, so a live descriptor match is not a
+    // reason to skip it here.
+    const live = write(join(dir, 'soak-boot.out'), 'x'.repeat(200));
+    const identity = statSync(live);
+
+    const result = sweepStaleLogs({
+      directory: dir,
+      maxAgeMs: 7 * ONE_DAY_MS,
+      bareTruncateBytes: 100,
+      now: () => NOW,
+      activeDescriptors: () => [{ dev: identity.dev, ino: identity.ino }],
+    });
+
+    expect(result.filesTruncated).toBe(1);
+    expect(statSync(live).size).toBe(0);
+  });
+
+  // The crux of #1206: unlinking a file a writer still holds open makes
+  // growth invisible (the inode survives, detached from any path, until the
+  // writer exits). This proves truncation cannot do that — the SAME open
+  // descriptor a live writer would hold keeps working, and its next write is
+  // reachable again by path, not stranded on an unlinked inode.
+  it("keeps a live writer's descriptor usable, and its next write reachable by path", () => {
+    const path = join(dir, 'soak-boot.out');
+    const fd = openSync(path, 'w');
+    writeSync(fd, Buffer.from('x'.repeat(200)));
+
+    const result = sweepStaleLogs({
+      directory: dir,
+      maxAgeMs: 7 * ONE_DAY_MS,
+      bareTruncateBytes: 100,
+      now: () => NOW,
+    });
+    expect(result.filesTruncated).toBe(1);
+
+    // The same fd the "writer" opened before the sweep ran is still valid —
+    // an unlinked file's fd would still accept this write too, but the
+    // content would then be unreachable by `path` once the fd closes, which
+    // is exactly what the next assertion rules out.
+    writeSync(fd, Buffer.from('still-writing'));
+    closeSync(fd);
+
+    expect(readFileSync(path, 'utf8')).toContain('still-writing');
+  });
+
+  // A non-append fd (exactly what `> logs/soak-boot.out 2>&1` opens — no
+  // `O_APPEND`, unlike `>>`) keeps writing at its OWN offset, which truncate
+  // does not move. So the next write lands where the 200 bytes used to be,
+  // not at the new (zero) end of file: a 187-byte hole precedes it, and
+  // `stat.size` reports 213 again, not 13. Liveness still holds (the prior
+  // test's `still-writing` is readable), but this is why `bytesReclaimed`
+  // reports the size truncated AT THAT INSTANT, not a lasting reduction —
+  // see the field's own doc comment.
+  it('reports apparent size that grows back through the hole a non-appending writer leaves', () => {
+    const path = join(dir, 'soak-boot.out');
+    const fd = openSync(path, 'w');
+    writeSync(fd, Buffer.from('x'.repeat(200)));
+
+    const result = sweepStaleLogs({
+      directory: dir,
+      maxAgeMs: 7 * ONE_DAY_MS,
+      bareTruncateBytes: 100,
+      now: () => NOW,
+    });
+    expect(result.filesTruncated).toBe(1);
+    // Confirms truncation actually ran, distinct from the final size below:
+    // without this, a no-op `truncate` would reach the same 213 by simply
+    // never shrinking the file, since the fd's offset was already 200.
+    expect(statSync(path).size).toBe(0);
+
+    writeSync(fd, Buffer.from('still-writing')); // 13 bytes, at the stale offset 200
+    closeSync(fd);
+
+    expect(statSync(path).size).toBe(213);
+    // The hole, not a coincidence of size: bytes 0..199 are NUL (the hole),
+    // and only the region the second write actually touched holds new data.
+    const content = readFileSync(path);
+    expect(content.subarray(0, 200).every((byte) => byte === 0)).toBe(true);
+    expect(content.subarray(200).toString('utf8')).toBe('still-writing');
+  });
+});
+
+describe('logBareTruncateBytesFromEnvironment', () => {
+  it('defaults when unset', () => {
+    expect(logBareTruncateBytesFromEnvironment({})).toBe(DEFAULT_BARE_TRUNCATE_BYTES);
+  });
+
+  it('parses a configured value', () => {
+    expect(logBareTruncateBytesFromEnvironment({ SAMURAI_LOG_BARE_TRUNCATE_BYTES: '512' })).toBe(
+      512,
+    );
+  });
+
+  it.each(['abc', '0', '-1', '1.5', '1e400'])('refuses %s rather than defaulting', (raw) => {
+    expect(() =>
+      logBareTruncateBytesFromEnvironment({ SAMURAI_LOG_BARE_TRUNCATE_BYTES: raw }),
+    ).toThrow(/SAMURAI_LOG_BARE_TRUNCATE_BYTES/);
+  });
+
+  it('treats an empty value as unset rather than as zero', () => {
+    expect(logBareTruncateBytesFromEnvironment({ SAMURAI_LOG_BARE_TRUNCATE_BYTES: ' ' })).toBe(
+      DEFAULT_BARE_TRUNCATE_BYTES,
+    );
   });
 });
 

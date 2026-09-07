@@ -66,6 +66,7 @@ import {
 import { type LiveStartingProfile, liveStartingProfile } from './live-profile.js';
 import {
   type LogRetentionResult,
+  logBareTruncateBytesFromEnvironment,
   logRetentionDaysFromEnvironment,
   logRetentionKeepNamesFromEnvironment,
   sweepStaleLogsWithLog,
@@ -877,6 +878,11 @@ export function installFaultHandlers(
  * The active sink file and its rotation set are named explicitly so this
  * sweep never fights `RotatingFileSink`'s own count-based retention over the
  * same files; see `log-retention.ts` for the rest of the liveness rule.
+ *
+ * `bareTruncateBytes` reaches the same directory: `soak-boot.out` — the
+ * supervisor's own shell-redirected stdout — is a bare name in this same
+ * `logs/` directory, so it needs no separate wiring beyond the threshold
+ * itself (#1206).
  */
 export function runEntrypointLogRetention(
   fileSinkConfig: FileSinkConfig,
@@ -888,6 +894,7 @@ export function runEntrypointLogRetention(
       directory: dirname(fileSinkConfig.filePath),
       maxAgeMs: logRetentionDaysFromEnvironment(env) * 24 * 60 * 60 * 1000,
       keepNames: logRetentionKeepNamesFromEnvironment(env),
+      bareTruncateBytes: logBareTruncateBytesFromEnvironment(env),
       protectedPaths: [
         fileSinkConfig.filePath,
         ...Array.from(

@@ -694,6 +694,44 @@ describe('runEntrypointLogRetention (#1116)', () => {
     expect(() => statSync(swept)).toThrow();
   });
 
+  // #1206: the shape #1116's own audit named as still unbounded — a bare,
+  // undated name a shell redirect writes (`soak-boot.out`), which
+  // `isArchivedLogName` refuses to unlink at any age. This is the sweep's
+  // OTHER path for it, driven end to end through the real entrypoint helper
+  // rather than `sweepStaleLogs` directly, so the env-var derivation
+  // (`SAMURAI_LOG_BARE_TRUNCATE_BYTES`) is covered too.
+  it('truncates a bare live-shaped name once it crosses the configured byte threshold', () => {
+    const soakBoot = join(dir, 'soak-boot.out');
+    writeFileSync(soakBoot, 'x'.repeat(200));
+
+    const result = runEntrypointLogRetention(
+      sinkConfig(),
+      { log: () => {} },
+      {
+        SAMURAI_LOG_BARE_TRUNCATE_BYTES: '100',
+      },
+    );
+
+    expect(result.filesTruncated).toBe(1);
+    expect(statSync(soakBoot).size).toBe(0);
+  });
+
+  it("never truncates the sink's own active file even though it is a bare name", () => {
+    const config = sinkConfig();
+    writeFileSync(config.filePath, 'x'.repeat(200));
+
+    const result = runEntrypointLogRetention(
+      config,
+      { log: () => {} },
+      {
+        SAMURAI_LOG_BARE_TRUNCATE_BYTES: '100',
+      },
+    );
+
+    expect(result.filesTruncated).toBe(0);
+    expect(statSync(config.filePath).size).toBe(200);
+  });
+
   /**
    * The enforcement, not the construction: the helper above only runs on a
    * real boot if the entrypoint guard calls it, and that guard executes only
