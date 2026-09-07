@@ -53,6 +53,7 @@ import type {
   ApprovalRequest,
 } from '../../pipeline/verdict/index.js';
 import type { CiiScoreProvider } from '../../providers/market-intelligence/index.js';
+import { currentTraceId } from '../../shared/index.js';
 import type { HeartbeatChannel } from './heartbeat.js';
 import type { OrphanAlertChannel, OrphanGoVerdict } from './orphan-verdict-scan.js';
 import type { AnalystSkipAlert, AnalystSkipAlertChannel } from './production/analysts-adapter.js';
@@ -508,7 +509,13 @@ export class LoggingDataFailoverAlertChannel implements DataFailoverAlertChannel
 
   async postDataFailoverAlert(alert: DataFailoverAlert): Promise<void> {
     this.logger.log({
-      trace_id: 'data-failover',
+      // Unlike `unpriced-fill`/`residual-exposure` above (fill-poll events)
+      // or `feedback-cycle` below (a daily batch), a single failover on a
+      // single fetch belongs to the tick that caused it — so this joins the
+      // enclosing tick when there is one, matching
+      // `production/data-failover.ts`'s catch-line (#1118/#1181), and keeps
+      // the constant only outside a tick (#1183).
+      trace_id: currentTraceId() ?? 'data-failover',
       stage: 'orchestrator',
       event: 'ohlcv_failover_engaged',
       level: 'warn',

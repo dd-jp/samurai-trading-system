@@ -1,5 +1,7 @@
+import { runWithTraceId } from '../../shared/index.js';
 import {
   ConsoleApprovalChannel,
+  LoggingDataFailoverAlertChannel,
   LoggingFlattenOverfillAlertChannel,
   LoggingHeartbeatChannel,
   LoggingMiCoverageAlertChannel,
@@ -198,6 +200,45 @@ describe('LoggingFlattenOverfillAlertChannel', () => {
       unattributed_qty: 4,
       observed_at: observedAt.toISOString(),
     });
+  });
+});
+
+describe('LoggingDataFailoverAlertChannel (#1183)', () => {
+  function alert() {
+    return {
+      leg: 'equities' as const,
+      symbol: 'SPY',
+      timeframe: '1h',
+      primaryName: 'alpaca',
+      fallbackName: 'polygon',
+      primaryError: 'stalled',
+      reported_at: new Date('2026-08-17T09:00:00Z'),
+      suppressed_since_last: 0,
+    };
+  }
+
+  // #1181 fixed the identical split one component over
+  // (production/data-failover.ts's catch-line): the transport's own log for
+  // a failover already carries the tick's id, while this channel — a
+  // separate DataFailoverAlertChannel implementation, selected by
+  // SAMURAI_ALERTS=log-only — logged the same event under a hardcoded
+  // constant. One event, two taxonomies, nothing linking them.
+  it('falls back to the data-failover constant outside a tick (#1183)', async () => {
+    const logger = makeLogger();
+
+    await new LoggingDataFailoverAlertChannel(logger).postDataFailoverAlert(alert());
+
+    expect(logger.entries[0]?.trace_id).toBe('data-failover');
+  });
+
+  it('joins the failover alert to the enclosing tick instead (#1183)', async () => {
+    const logger = makeLogger();
+
+    await runWithTraceId('tick-x', () =>
+      new LoggingDataFailoverAlertChannel(logger).postDataFailoverAlert(alert()),
+    );
+
+    expect(logger.entries[0]?.trace_id).toBe('tick-x');
   });
 });
 
