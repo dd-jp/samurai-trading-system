@@ -112,13 +112,62 @@ describe('classifyTelegramThrown', () => {
     expect(isRetryableTelegramError(error)).toBe(false);
   });
 
+  // Pins the `name === 'AbortError'` branch's ORDERING — it runs before the
+  // `TypeError`/`.cause` check below it — rather than an observed runtime
+  // shape: a real caller-initiated abort was probed on Node v26.5.0 (both
+  // pre-connect and mid-request) and always surfaces as a `DOMException`
+  // with no `.cause`, which can never be `instanceof TypeError` and so would
+  // fall through to the same `TelegramProviderError` result even without
+  // this branch — meaning the test above alone does not prove this branch
+  // does anything (deleting it causes 0 failures; see the PR's mutation
+  // notes). This test constructs a synthetic worst case the branch's own
+  // comment two lines above it exists to cover — a non-`DOMException` object
+  // that is ALSO `instanceof TypeError` with an `Error`-typed `.cause`, i.e.
+  // shaped exactly like the network signal this classifier retries. Without
+  // the `name === 'AbortError'` check running first, this shape would be
+  // misclassified as a retryable `TelegramNetworkError`. No runtime has been
+  // observed producing this composite; it is constructed, not transcribed.
+  it('never retries an abort-named error even in an otherwise network-shaped form (pins branch ordering, not an observed shape)', () => {
+    const composite = Object.assign(new TypeError('The operation was aborted.'), {
+      name: 'AbortError',
+      cause: new Error('would otherwise look like a network failure'),
+    });
+    const error = classifyTelegramThrown(composite, 'getUpdates');
+    expect(error).toBeInstanceOf(TelegramProviderError);
+    expect(error).not.toBeInstanceOf(TelegramNetworkError);
+    expect(isRetryableTelegramError(error)).toBe(false);
+  });
+
   it('maps a bare network failure to a retryable network error, not a provider error (#1108)', () => {
     // Shaped like real Node fetch()/undici: the exact message `fetch failed`
     // with the DNS/connection/refusal detail on `.cause` — confirmed against
-    // Node v26.5.0's built-in fetch for ECONNREFUSED, ENOTFOUND, an unknown
-    // scheme, and a rejected privileged port; every one throws this way.
+    // Node v26.5.0's built-in fetch: a closed ephemeral loopback port throws
+    // this shape with a real `connect ECONNREFUSED` cause message; ENOTFOUND,
+    // an unknown scheme, and a fetch-spec-blocked port (whose cause message
+    // is `bad port`, not ECONNREFUSED) all throw the same outer shape too.
     const error = classifyTelegramThrown(
-      new TypeError('fetch failed', { cause: new Error('connect ECONNREFUSED 127.0.0.1:9') }),
+      new TypeError('fetch failed', { cause: new Error('connect ECONNREFUSED 127.0.0.1:54321') }),
+      'sendMessage',
+    );
+    expect(error).toBeInstanceOf(TelegramNetworkError);
+    expect(error).not.toBeInstanceOf(TelegramProviderError);
+    expect(isRetryableTelegramError(error)).toBe(true);
+  });
+
+  // #1278 review: a redirect response whose `Location` header fails to parse
+  // is a REMOTE failure — the server sent it — not a local config fault, yet
+  // it surfaces identically to the local malformed-`baseUrl` case: a
+  // `TypeError` whose `.cause` is itself a `TypeError [ERR_INVALID_URL]`.
+  // Confirmed by a standalone probe on Node v26.5.0 (loopback HTTP server
+  // returning `302` with `Location: http://[bad`, `http://exa mple.com/`, and
+  // `http://host:99999/`): every one throws outer `TypeError: fetch failed`
+  // with that cause shape — the same outer message a plain ECONNREFUSED
+  // produces. Losing this alert to a non-retryable classification is exactly
+  // the silent-drop failure mode #1108/#1132 exist to prevent, so it must
+  // retry even though its cause is `TypeError`-shaped.
+  it('classifies a broken-redirect Location header as retryable, not as the local malformed-baseUrl case', () => {
+    const error = classifyTelegramThrown(
+      new TypeError('fetch failed', { cause: new TypeError('Invalid URL') }),
       'sendMessage',
     );
     expect(error).toBeInstanceOf(TelegramNetworkError);
@@ -143,6 +192,18 @@ describe('classifyTelegramThrown', () => {
     expect(isRetryableTelegramError(error)).toBe(true);
   });
 
+  // Deliberate choice, reversing `main`'s pre-#1132 behavior (which matched
+  // on message text alone and would have retried this). A future runtime
+  // dropping `.cause` entirely is exactly as plausible as one rewording the
+  // message — but with no `.cause` at all, the ONLY evidence left that this
+  // is a network failure specifically (as opposed to some other TypeError
+  // that happens to say "fetch failed") is the message text, which is
+  // precisely the signal #1132 says not to trust. This classifier requires
+  // the structural cause chain as its evidence; absent it, the failure falls
+  // to `TelegramProviderError` rather than being trusted on text alone. That
+  // is not a silent drop: `#recordDeliveryFailure` durably records and can
+  // escalate a `ProviderError` the same as an exhausted `NetworkError`
+  // retry — this decides an attempt count, not whether the failure is seen.
   it('does not treat a network-shaped message with no cause as the bare network signal', () => {
     const error = classifyTelegramThrown(new TypeError('fetch failed'), 'sendMessage');
     expect(error).toBeInstanceOf(TelegramProviderError);
@@ -166,11 +227,12 @@ describe('classifyTelegramThrown', () => {
 
   // Pins the discriminator's `cause instanceof Error` clause as distinct
   // from a looser `cause !== undefined` check: in every network-failure
-  // shape probed (ECONNREFUSED, ECONNRESET, ENOTFOUND, an unknown scheme,
-  // a rejected privileged port — see the probe note above), `.cause` was
-  // an `Error` carrying the OS/DNS detail, never a bare string or other
-  // value. A `.cause` of some other shape is not a signal this classifier
-  // has been shown to see, so it should not widen what's retried.
+  // shape probed (a closed ephemeral port's ECONNREFUSED, ENOTFOUND, an
+  // unknown scheme, a fetch-spec-blocked port's `bad port` — see the probe
+  // note above), `.cause` was an `Error` carrying the OS/DNS detail, never a
+  // bare string or other value. A `.cause` of some other shape is not a
+  // signal this classifier has been shown to see, so it should not widen
+  // what's retried.
   it('does not treat a TypeError with a non-Error cause as the bare network signal', () => {
     const error = classifyTelegramThrown(
       new TypeError('fetch failed', { cause: 'not an Error instance' }),
@@ -189,22 +251,28 @@ describe('classifyTelegramThrown', () => {
   // standalone `node` probe run outside the suite against Node v26.5.0 (this
   // project's floor is Node >=24, so only that one version was checked):
   // `fetch('not a valid url')` throws `TypeError: Failed to parse URL from …`
-  // whose `.cause` is itself `TypeError: Invalid URL` — the WHATWG URL spec
-  // mandates a `TypeError` on parse failure, a documented, engine-independent
-  // contract, unlike undici's own error prose. A cause-presence-only check
-  // would misclassify this as the retryable network case, since it does
-  // carry a `.cause`; excluding a `TypeError`-shaped cause is what keeps a
-  // config fault like this one non-retryable.
-  it('maps a real malformed-baseUrl failure shape (TypeError caused by a TypeError) to a non-retryable provider error', () => {
+  // whose `.cause` is itself `TypeError: Invalid URL`.
+  //
+  // This is DELIBERATELY retryable, reversing this classifier's earlier
+  // (#1132 PR #1278) behavior, which excluded a `TypeError`-shaped cause on
+  // the theory that it meant "local config fault". That theory is false: the
+  // identical shape also occurs for a broken redirect `Location` header the
+  // remote server sent (see the test above), a genuine transient failure.
+  // There is no `.cause`-shape-only way to tell these apart; the choice is
+  // between misclassifying one of them, and this classifier accepts a
+  // misconfigured `baseUrl` retrying 3x (still durably recorded and
+  // escalated afterward, just a few seconds slower) over silently dropping
+  // the redirect case's alert.
+  it('retries a malformed-baseUrl failure shape too, since it is indistinguishable from a broken-redirect Location', () => {
     const error = classifyTelegramThrown(
       new TypeError('Failed to parse URL from not a valid url/botXXXX/sendMessage', {
         cause: new TypeError('Invalid URL'),
       }),
       'sendMessage',
     );
-    expect(error).toBeInstanceOf(TelegramProviderError);
-    expect(error).not.toBeInstanceOf(TelegramNetworkError);
-    expect(isRetryableTelegramError(error)).toBe(false);
+    expect(error).toBeInstanceOf(TelegramNetworkError);
+    expect(error).not.toBeInstanceOf(TelegramProviderError);
+    expect(isRetryableTelegramError(error)).toBe(true);
   });
 
   it('maps a circular-JSON TypeError to a non-retryable provider error, not a network error (finding 3)', () => {
