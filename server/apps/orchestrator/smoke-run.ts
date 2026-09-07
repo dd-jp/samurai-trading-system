@@ -1643,10 +1643,13 @@ async function runExitPathScenarios(input: {
   const twoLotFlatten = await runTwoLotFlattenScenario(ctx);
   const crashRestartLot = await enterCrashRestartLotAheadOfResidualSweep(ctx);
   const residualSweep = await runResidualSweepScenario(ctx);
-  // #549: nothing between here and `restartExecutionAndReconcile` may call
-  // `ingestFills()` — the Simulated feed re-offers a flatten's fill every
-  // poll, so an extra ingest would retry (and heal) `residualSweep`'s failed
-  // re-arm in-process, and the restart would find nothing left to sweep.
+  // #549/#1228: the Simulated feed re-offers a flatten's fill on every poll,
+  // so an extra `ingestFills()` before the restart would retry (and heal)
+  // this failed re-arm in-process — `PostSweepScenarioContext` makes that
+  // call unreachable inside the three functions below, but `ctx` here is
+  // still the wide `ExitPathScenarioContext` (needed for the calls above),
+  // so a statement added directly in THIS function between here and the
+  // restart is not caught by the type system — only review catches that one.
   await exitCrashRestartLotWithoutSweep(ctx, crashRestartLot.exitKey);
   const terminalSweepKey = await seedTerminalSweepRow(ctx);
   const { restarted, restartReconcile } = await restartExecutionAndReconcile(ctx);
@@ -1718,6 +1721,20 @@ interface ExitPathScenarioContext {
   readonly tick: () => Date;
   readonly submit: (order: OrderIntent, step: string) => Promise<void>;
 }
+
+/**
+ * `ExitPathScenarioContext` minus `execution` (#1228). Scenario 5's
+ * (#549) failed re-arm depends on no further `ingestFills()` reaching the
+ * pre-restart `Execution` before `restartExecutionAndReconcile` runs — the
+ * Simulated feed re-offers a flatten's fill on every poll, so one more
+ * ingest would retry (and heal) the re-arm in-process and the restart would
+ * find nothing left to sweep. Functions that run in that window take this
+ * type instead of `ExitPathScenarioContext`, so `ctx.execution` does not
+ * type-check inside them — an edit that adds an `ingestFills()` call to one
+ * of them, or a new scenario function slotted in beside them, fails to
+ * compile rather than passing the gate silently.
+ */
+type PostSweepScenarioContext = Omit<ExitPathScenarioContext, 'execution'>;
 
 /**
  * Scenario 1 (#508/#516/#517): open, exit in full. `evaluateSmokeGate` reads
@@ -1957,7 +1974,7 @@ async function runResidualSweepScenario(
  * ingested by `enterCrashRestartLotAheadOfResidualSweep`, before scenario 5.
  */
 async function exitCrashRestartLotWithoutSweep(
-  ctx: ExitPathScenarioContext,
+  ctx: PostSweepScenarioContext,
   lot4ExitKey: string,
 ): Promise<void> {
   await ctx.submit(
@@ -1989,7 +2006,7 @@ async function exitCrashRestartLotWithoutSweep(
  * behind `clock.now()` directly, rather than relying on the smoke clock ever
  * running that far forward.
  */
-async function seedTerminalSweepRow(ctx: ExitPathScenarioContext): Promise<string> {
+async function seedTerminalSweepRow(ctx: PostSweepScenarioContext): Promise<string> {
   const terminalSweepKey = 'smoke-terminal-sweep-target';
   const terminalSweepDecisionTimestamp = new Date(
     ctx.clock.now().getTime() - TERMINAL_SWEEP_AGE_MS - 60 * 60 * 1_000,
@@ -2022,7 +2039,7 @@ async function seedTerminalSweepRow(ctx: ExitPathScenarioContext): Promise<strin
  * `buildExecutionSurface` (the real composition-root binding function)
  * called again — `reconcile.test.ts`'s own definition of "a restart".
  */
-async function restartExecutionAndReconcile(ctx: ExitPathScenarioContext): Promise<{
+async function restartExecutionAndReconcile(ctx: PostSweepScenarioContext): Promise<{
   restarted: ReturnType<typeof buildExecutionSurface>;
   restartReconcile: ReconcileReport;
 }> {
