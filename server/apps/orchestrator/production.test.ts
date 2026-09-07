@@ -1169,10 +1169,13 @@ describe('buildProductionComponents', () => {
         'without ever setting `process.env`, and with `sentimentCredentials` genuinely ' +
         'defined rather than falling into the `mi_agent_absent` path #1161 tested against',
       () => {
-        // `tryNousCredentialsMock` is shared file-wide (every other test's
-        // `buildProductionComponents` call also invokes it, delegating to the
-        // real implementation) — clear its call count so the assertion below
-        // measures only this test's call, not the whole file's.
+        // `tryNousCredentialsMock` is shared file-wide, and many earlier tests'
+        // `buildProductionComponents` calls DO invoke it (delegating to the real
+        // implementation) — the call is gated on `sentimentEnabled`
+        // (`production.ts:1595`), so only cases that leave sentiment on reach it;
+        // e.g. the `SAMURAI_SENTIMENT = 'off'` describe block above never does.
+        // Clear its call count regardless, so the assertion below measures only
+        // this test's call, not whatever the file accumulated before it.
         tryNousCredentialsMock.mockClear();
         tryNousCredentialsMock.mockImplementationOnce(() => FAKE_SENTIMENT_CREDENTIALS);
         const logger = recordingLogger();
