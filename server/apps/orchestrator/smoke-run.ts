@@ -3740,10 +3740,13 @@ class FilledZeroSizeWarningRecorder implements Logger {
 
 /**
  * The second broker/harness surface #1125 asked for: a `BrokerAdapter` that
- * reports a lot `filled` while its `getOrder` order and `fetchNewFills` fill
- * disagree on timing — the fill IS returned by `fetchNewFills` (see below),
- * but dated before the lot's own `opened_at`, so `ingest-fills.ts`'s `since`
- * floor drops it on every poll. One way to wedge a lot at zero `filled_size`
+ * reports a lot `filled` while never surfacing its own fill. `fetchNewFills`
+ * below applies its own `since` filter, matching a real broker's contract —
+ * it is handed the SAME `since` `ingest-fills.ts`'s floor computed (this
+ * lot's own `opened_at`, since it is the store's sole open position), and
+ * the scripted fill is dated 1ms BEFORE that, so the filter excludes it on
+ * every poll: `fetchNewFills` returns `[]` forever, never returning the
+ * fill to the caller at all. One way to wedge a lot at zero `filled_size`
  * forever, not the only one — a non-entry-leg fill or a zero-qty entry fill
  * would wedge it identically; this one reproduces #1087's own incident
  * shape. Same shape as `filled-zero-size-wiring.test.ts`'s `WedgingBroker`,
@@ -5082,14 +5085,27 @@ export function evaluateSmokeGate(
     if (
       warning === undefined ||
       warning.idempotency_key !== FILLED_ZERO_SIZE_WEDGE_LOT_KEY ||
+      warning.instrument !== FILLED_ZERO_SIZE_WEDGE_INSTRUMENT ||
+      warning.order_state !== 'filled' ||
       warning.consecutive !== ALERT_AFTER_CONSECUTIVE_ZERO_SIZE ||
-      !(warning.stuck_ms > 0)
+      // Exact, not `> 0` (#1125 review round 2, finding 1): under
+      // `SimulatedClock`, `stuck_ms` is `now - position.opened_at` computed
+      // at a FIXED clock reading (no poll advances it), so it is
+      // deterministic — `FILLED_ZERO_SIZE_WEDGE_OPENED_BEFORE_MS` exactly.
+      // A `> 0` check cannot catch `ingest-fills.ts` reading
+      // `decision_timestamp` instead of `opened_at`: the two are only 5s
+      // apart against a 1h `stuck_ms`, so the wrong field still passes
+      // `> 0`. Measured: swapping that field yields `stuck_ms: 3605000`
+      // and this exact equality check catches it (`3605000 !==
+      // 3600000`), where `> 0` did not.
+      warning.stuck_ms !== FILLED_ZERO_SIZE_WEDGE_OPENED_BEFORE_MS
     ) {
       failures.push(
         `the FILLED_WITH_ZERO_SIZE warning fired with an unexpected shape ` +
           `(${JSON.stringify(warning)}) — expected idempotency_key ` +
-          `'${FILLED_ZERO_SIZE_WEDGE_LOT_KEY}', consecutive ${ALERT_AFTER_CONSECUTIVE_ZERO_SIZE} ` +
-          'and a positive stuck_ms (#1125)',
+          `'${FILLED_ZERO_SIZE_WEDGE_LOT_KEY}', instrument '${FILLED_ZERO_SIZE_WEDGE_INSTRUMENT}', ` +
+          `order_state 'filled', consecutive ${ALERT_AFTER_CONSECUTIVE_ZERO_SIZE} and stuck_ms ` +
+          `${FILLED_ZERO_SIZE_WEDGE_OPENED_BEFORE_MS} (#1125)`,
       );
     }
   }

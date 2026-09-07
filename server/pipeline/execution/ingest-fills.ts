@@ -123,13 +123,19 @@ export async function ingestFills(input: ExecutionInput): Promise<void> {
   //    genuinely holds. Re-verify it for any adapter before trusting this
   //    comment again.
   //  * Widening this floor to re-verify it is not itself diagnosable through
-  //    `yarn smoke`'s gate (#1125 review): `runFilledZeroSizeWedgeScenario`
-  //    (smoke-run.ts) then lets its scripted fill through, and
-  //    `SmokeWedgedLotBroker`'s throw-on-unexpected-call posture (deliberate,
-  //    or the gate would fail QUIETLY on a stub returning a silently-wrong
-  //    value) turns that into an uncaught exception — `yarn smoke` exits
-  //    non-zero with a stack trace and no `GATE:` line at all, not a
-  //    diagnosable gate failure naming what broke. Confirmed, not changed.
+  //    `yarn smoke`'s gate (#1125 review, verified by running it): once
+  //    widened, `runFilledZeroSizeWedgeScenario`'s (smoke-run.ts) previously
+  //    excluded scripted fill is let through, `resizeProtectiveLegs` is
+  //    called on it, and `SmokeWedgedLotBroker`'s throw-on-unexpected-call
+  //    posture (deliberate, or the gate would fail QUIETLY on a stub
+  //    returning a silently-wrong value) turns that into a caught,
+  //    per-lot-aggregated failure: `offline smoke run failed to complete:
+  //    ingestFills: 1 contained failure(s) — every other lot in this poll
+  //    was advanced; unresolved: lot-advance 'smoke-filled-zero-size-wedge'
+  //    (AAPL) [Error]`. No stack trace, no `GATE:` line, and no failure
+  //    naming what broke about THIS floor — over-detection rather than a
+  //    hole, and the throw posture is unchanged. Confirmed by running it,
+  //    not assumed.
   //  * `BrokerAdapter.fetchNewFills` deliberately does NOT promise per-lot
   //    timestamp monotonicity, and cannot — see its doc in types/broker.ts.
   //  * The win would have been small anyway: `since` does not bound the venue
@@ -1105,7 +1111,7 @@ async function advanceLot(
   // already-wedged lot), so the streak the throttle above was counting for
   // it hasn't actually ended — clearing here would restart it at
   // `consecutive: 1` on the very next poll instead of continuing the
-  // 1-then-every-8th cadence (#1087 review, pass 2).
+  // 3-then-every-8th cadence (#1087 review, pass 2).
   if (filledSize === 0) {
     await store.applyLotAdvance({ idempotency_key: position.idempotency_key, fills: newFills });
     return;
