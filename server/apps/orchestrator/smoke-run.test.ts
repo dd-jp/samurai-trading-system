@@ -32,6 +32,7 @@ import {
   type ExitPathEvidence,
   evaluateSmokeGate,
   FAILOVER_IN_SESSION_OPEN_TIMES,
+  type FilledZeroSizeWedgeEvidence,
   type FillSyncFailure,
   type FillSyncFailureEvidence,
   FillSyncFailureRecorder,
@@ -296,6 +297,7 @@ function healthyGateOptions(
     riskCritic?: RiskCriticEvidence;
     promptTierWarning?: PromptTierWarningEvidence;
     analystFailureCause?: AnalystFailureCauseEvidence;
+    filledZeroSizeWedge?: FilledZeroSizeWedgeEvidence;
     armComparison?: ArmComparisonEvidence;
     outsideBenchmarks?: OutsideBenchmarkEvidence;
     feedbackCycleScheduleWritten?: boolean;
@@ -331,6 +333,7 @@ function healthyGateOptions(
     riskCritic: overrides.riskCritic ?? healthyRiskCritic(),
     promptTierWarning: overrides.promptTierWarning ?? healthyPromptTierWarning(),
     analystFailureCause: overrides.analystFailureCause ?? healthyAnalystFailureCause(),
+    filledZeroSizeWedge: overrides.filledZeroSizeWedge ?? healthyFilledZeroSizeWedge(),
     // #1140: healthy means the published cap IS the run's configured budget.
     publishedLlmCapUsd:
       'publishedLlmCapUsd' in overrides ? (overrides.publishedLlmCapUsd ?? null) : 50,
@@ -457,6 +460,36 @@ function healthyPromptTierWarning(
     alertsFired: 1,
     spendRows: 2,
     costUsd: 0.812_004,
+    ...overrides,
+  };
+}
+
+/**
+ * What `runFilledZeroSizeWedgeScenario` (#1125) reports when its own
+ * dedicated broker/harness surface wedges a lot through the real
+ * `ingestFills()`/throttle path: exactly one warning, at the throttle's
+ * first threshold (`ALERT_AFTER_CONSECUTIVE_ZERO_SIZE` consecutive polls),
+ * naming the scenario's own lot with a positive `stuck_ms`.
+ */
+function healthyFilledZeroSizeWedge(
+  overrides: Partial<FilledZeroSizeWedgeEvidence> = {},
+): FilledZeroSizeWedgeEvidence {
+  return {
+    warnings: [
+      {
+        idempotency_key: 'smoke-filled-zero-size-wedge',
+        instrument: 'AAPL',
+        order_state: 'filled',
+        // Hardcoded, not `ALERT_AFTER_CONSECUTIVE_ZERO_SIZE`, on purpose
+        // (#1125 review) — importing the constant here would make a mutation
+        // that changes it (e.g. 3 -> 4) pass this unit suite silently,
+        // leaving `yarn test`'s only coverage of that mutation the 19 tests
+        // across `filled-zero-size-throttle.test.ts` and friends that already
+        // catch it. Do not "tidy" this into a reference to the constant.
+        consecutive: 3,
+        stuck_ms: 3_600_000,
+      },
+    ],
     ...overrides,
   };
 }
@@ -2943,6 +2976,48 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
       const gate = evaluateSmokeGate(transactedObservations(), healthyGateOptions());
 
       expect(gate.failures.filter((failure) => failure.includes('#1114'))).toEqual([]);
+    });
+  });
+
+  describe('the FILLED_WITH_ZERO_SIZE smoke wedge (#1125)', () => {
+    it('fails when the wedge scenario produced no warning', () => {
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({
+          filledZeroSizeWedge: healthyFilledZeroSizeWedge({ warnings: [] }),
+        }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('expected exactly 1');
+    });
+
+    it('fails when the warning fired with the wrong shape', () => {
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({
+          filledZeroSizeWedge: healthyFilledZeroSizeWedge({
+            warnings: [
+              {
+                idempotency_key: 'smoke-filled-zero-size-wedge',
+                instrument: 'AAPL',
+                order_state: 'filled',
+                consecutive: 1,
+                stuck_ms: 1,
+              },
+            ],
+          }),
+        }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('unexpected shape');
+    });
+
+    it('passes when the wedge scenario produced exactly one throttled warning', () => {
+      const gate = evaluateSmokeGate(transactedObservations(), healthyGateOptions());
+
+      expect(gate.failures.filter((failure) => failure.includes('#1125'))).toEqual([]);
     });
   });
 });

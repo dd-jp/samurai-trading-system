@@ -156,12 +156,14 @@ import type {
   NativeBracketRequest,
   NormalizedFill,
   NormalizedOrder,
+  NormalizedPosition,
   ReconcileDivergence,
   ReconcileReport,
   ResidualExposureAlert,
   ResidualExposureAlertChannel,
 } from '../../pipeline/execution/index.js';
 import {
+  ALERT_AFTER_CONSECUTIVE_ZERO_SIZE,
   AlpacaBrokerAdapter,
   FilledZeroSizeThrottle,
   SimulatedBrokerAdapter,
@@ -169,6 +171,10 @@ import {
   SqliteExecutionStore,
   TERMINAL_SWEEP_AGE_MS,
 } from '../../pipeline/execution/index.js';
+// #1125: not re-exported through the barrel above (see ingest-fills.ts's own
+// exports) — imported directly, the same way `filled-zero-size-wiring.test.ts`
+// already does.
+import { FILLED_WITH_ZERO_SIZE } from '../../pipeline/execution/ingest-fills.js';
 import {
   assertKillThresholdsWithinBounds,
   DEFAULT_ARM_COMPARISON_WINDOW_MS,
@@ -218,7 +224,7 @@ import {
   SOURCE_GDELT,
   SOURCE_POLYMARKET,
 } from '../../providers/market-intelligence/index.js';
-import type { OrderIntent, TradingArm } from '../../shared/index.js';
+import type { OpenPosition, OrderIntent, TradingArm } from '../../shared/index.js';
 import {
   boundFor,
   delay,
@@ -233,7 +239,7 @@ import type {
   StdoutStream as FaultGuardStdoutStream,
 } from '../../shared/stdout-fault-guard.js';
 import { openSharedStore, type SharedStore as SqliteHandle } from '../../shared/store/index.js';
-import type { CostConfig } from '../../tools/backtest/index.js';
+import type { CostConfig, CostModel } from '../../tools/backtest/index.js';
 import { CostModelImpl } from '../../tools/backtest/index.js';
 import {
   installDashboardContinueOnFault,
@@ -1570,20 +1576,22 @@ async function runExitPathScenarios(input: {
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
       flattenReconcileAlerts,
       logger,
-      // #1087: NOT recorded/gated, unlike `residualAlerts`/`flattenReconcileAlerts`
-      // above. `FILLED_WITH_ZERO_SIZE` fires only when a broker violates the
-      // "no fill predates its own lot's `opened_at`" invariant — the exact
-      // defect #1087 fixed at the source. Not unconstructible post-fix (a
-      // scripted broker can still hand back a pre-`opened_at` fill without
-      // touching `SimulatedBrokerAdapter`), just not reachable through THIS
-      // harness: this exit-path smoke scenario wires a single `innerBroker`
-      // (`SimulatedBrokerAdapter`) through one composition root, and driving
-      // a wedged lot needs a second broker/harness surface this gate doesn't
-      // have today — deferred as fixture work, not done here. Targeted
-      // regression coverage lives in simulated-adapter.test.ts and
-      // ingest-fills.test.ts instead. See `filled-zero-size-wiring.test.ts`
-      // for proof this mechanism reaches the real production logger through
-      // this same `buildExecutionSurface` binding.
+      // #1087: NOT recorded/gated on THIS harness's own evidence, unlike
+      // `residualAlerts`/`flattenReconcileAlerts` above. `FILLED_WITH_ZERO_SIZE`
+      // fires only when a broker violates the "no fill predates its own
+      // lot's `opened_at`" invariant — the exact defect #1087 fixed at the
+      // source — and none of the exit-path scenarios above scripts that
+      // violation: they all share one `innerBroker` (`SimulatedBrokerAdapter`)
+      // through this one composition root, so wedging a lot here would mean
+      // reintroducing the fixed defect rather than exercising it honestly.
+      // #1125 gates the mechanism instead, through its OWN dedicated broker
+      // and composition root — see `runFilledZeroSizeWedgeScenario` and
+      // `SmokeWedgedLotBroker` below, and `evaluateSmokeGate`'s
+      // `filledZeroSizeWedge` check. Targeted regression coverage also lives
+      // in simulated-adapter.test.ts and ingest-fills.test.ts, and
+      // `filled-zero-size-wiring.test.ts` separately proves the throttle
+      // instance is SHARED across every surface this same
+      // `buildExecutionSurface` binding builds.
       filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
     },
     'smoke-exit-path',
@@ -3682,6 +3690,244 @@ async function runAnalystFailureCauseScenario(
   }
 }
 
+/** What `evaluateSmokeGate` needs from the FILLED_WITH_ZERO_SIZE wedge scenario (#1125). */
+export interface FilledZeroSizeWedgeEvidence {
+  /** Every FILLED_WITH_ZERO_SIZE payload the scenario's own recorder captured, in poll order. */
+  warnings: readonly {
+    idempotency_key: string;
+    instrument: string;
+    order_state: string;
+    consecutive: number;
+    stuck_ms: number;
+  }[];
+}
+
+/** The lot `runFilledZeroSizeWedgeScenario` seeds — named here so the gate check below can pin it. */
+const FILLED_ZERO_SIZE_WEDGE_LOT_KEY = 'smoke-filled-zero-size-wedge';
+const FILLED_ZERO_SIZE_WEDGE_INSTRUMENT = 'AAPL';
+/** How far before the scenario's fixed clock the lot opened — arbitrary but deterministic, giving a nonzero `stuck_ms`. */
+const FILLED_ZERO_SIZE_WEDGE_OPENED_BEFORE_MS = 60 * 60_000;
+/**
+ * How far before `opened_at` the decision was made — kept DISTINCT from it
+ * (never the same Date) so a swap of the two fields at the call site is
+ * something the gate could in principle catch, rather than invisible because
+ * both carried an identical value.
+ */
+const FILLED_ZERO_SIZE_WEDGE_DECISION_BEFORE_OPENED_MS = 5_000;
+
+/**
+ * Records every FILLED_WITH_ZERO_SIZE line on the way to the real logger —
+ * the one channel #1087's throttled wedge-detector reaches. Mirrors
+ * `AnalystDebugRecorder`'s shape (#1114): scoped to the one message this
+ * scenario exists to prove, never throws itself, passes everything through.
+ */
+class FilledZeroSizeWarningRecorder implements Logger {
+  private readonly warnings: FilledZeroSizeWedgeEvidence['warnings'][number][] = [];
+
+  constructor(private readonly inner: Logger) {}
+
+  log(entry: LogEntry): void {
+    if (entry.message === FILLED_WITH_ZERO_SIZE) {
+      this.warnings.push(entry.payload as FilledZeroSizeWedgeEvidence['warnings'][number]);
+    }
+    this.inner.log(entry);
+  }
+
+  evidence(): FilledZeroSizeWedgeEvidence {
+    return { warnings: [...this.warnings] };
+  }
+}
+
+/**
+ * The second broker/harness surface #1125 asked for: a `BrokerAdapter` that
+ * reports a lot `filled` while never surfacing its own fill. `fetchNewFills`
+ * below applies its own `since` filter, matching a real broker's contract —
+ * it is handed the SAME `since` `ingest-fills.ts`'s floor computed (this
+ * lot's own `opened_at`, since it is the store's sole open position), and
+ * the scripted fill is dated 1ms BEFORE that, so the filter excludes it on
+ * every poll: `fetchNewFills` returns `[]` forever, never returning the
+ * fill to the caller at all. One way to wedge a lot at zero `filled_size`
+ * forever, not the only one — a non-entry-leg fill or a zero-qty entry fill
+ * would wedge it identically; this one reproduces #1087's own incident
+ * shape. Same shape as `filled-zero-size-wiring.test.ts`'s `WedgingBroker`,
+ * which proves a DIFFERENT property (the throttle is SHARED across two
+ * surfaces built from one `executionDeps`) against the composition root
+ * directly; this class exists to drive the same wedge through `yarn
+ * smoke`'s own gate instead.
+ *
+ * `SimulatedBrokerAdapter` cannot produce this post-#1087 — it now stamps
+ * every fill at submit time, which is the fix — so no scripting of the
+ * exit-path harness's own `innerBroker` could ever reach this branch. The
+ * wedge is a broker-side invariant violation, not a missing feature of
+ * `SimulatedBrokerAdapter`'s cost/market-data machinery, so this broker needs
+ * none of it: every method beyond `getOrder`/`fetchNewFills` throws, so an
+ * unexpected call fails loudly rather than returning a silently-wrong stub.
+ */
+class SmokeWedgedLotBroker implements BrokerAdapter {
+  constructor(
+    private readonly order: NormalizedOrder,
+    private readonly scriptedFills: NormalizedFill[],
+  ) {}
+
+  async submitBracket(): Promise<BrokerAck> {
+    throw new Error(
+      'SmokeWedgedLotBroker.submitBracket: this scenario seeds its position directly',
+    );
+  }
+  async getOrder(): Promise<NormalizedOrder | null> {
+    return this.order;
+  }
+  async fetchNewFills(since: Date): Promise<NormalizedFill[]> {
+    return this.scriptedFills.filter((fill) => fill.timestamp.getTime() >= since.getTime());
+  }
+  async resizeProtectiveLegs(): Promise<void> {
+    throw new Error('SmokeWedgedLotBroker.resizeProtectiveLegs: no new fill is ever ingested here');
+  }
+  async rearmProtectiveLegs(): Promise<void> {
+    throw new Error(
+      'SmokeWedgedLotBroker.rearmProtectiveLegs: no partial flatten in this scenario',
+    );
+  }
+  async resumeFlatten(): Promise<NormalizedOrder | null> {
+    throw new Error(
+      'SmokeWedgedLotBroker.resumeFlatten: reconcile() has nothing unresolved to sweep',
+    );
+  }
+  async submitFlatten(): Promise<BrokerAck> {
+    throw new Error('SmokeWedgedLotBroker.submitFlatten: this scenario never flattens');
+  }
+  async cancel(): Promise<void> {
+    throw new Error('SmokeWedgedLotBroker.cancel: this scenario never cancels');
+  }
+  async getOpenPositions(): Promise<NormalizedPosition[]> {
+    return [];
+  }
+}
+
+/**
+ * #1125 — the second broker/harness surface the #1096 review deferred:
+ * drives a genuinely wedged lot through the REAL `ingestFills()`/throttle
+ * path (`buildExecutionSurface`, the same binding `production.ts` uses), on
+ * its own composition root and its own cold `:memory:` store, so the
+ * exit-path harness's single shared `innerBroker` is never in the way.
+ *
+ * `reconcile()` adopts the broker's `filled` state first (matching #1087's
+ * own incident shape: the venue reported the fill before the feed surfaced
+ * it), then `ALERT_AFTER_CONSECUTIVE_ZERO_SIZE` consecutive `ingestFills()`
+ * polls — each seeing the same excluded-forever fill — reach the throttle's
+ * first warning. `costModel`/`marketData` are never consulted on this path
+ * (verified by reading ingest-fills.ts/reconcile.ts before building this —
+ * neither file references `input.config`, `costModel` or `marketData`): the
+ * empty cast below rests on that reading, not on itself as proof — a cast to
+ * `unknown` only guarantees an unexpected METHOD call throws, not that a
+ * stray property read would be caught (it would return `undefined` and
+ * likely fail elsewhere, less legibly). Same convention
+ * `filled-zero-size-wiring.test.ts`'s `stubConfig` uses for the fields its
+ * own scenario never reaches.
+ */
+async function runFilledZeroSizeWedgeScenario(
+  logger: Logger,
+): Promise<FilledZeroSizeWedgeEvidence> {
+  const db = openSharedStore(':memory:');
+  try {
+    const recorder = new FilledZeroSizeWarningRecorder(logger);
+    const clock = new SimulatedClock(SMOKE_RUN_INSTANT);
+    const openedAt = new Date(
+      SMOKE_RUN_INSTANT.getTime() - FILLED_ZERO_SIZE_WEDGE_OPENED_BEFORE_MS,
+    );
+    const brokerOrderIds = [
+      `${FILLED_ZERO_SIZE_WEDGE_LOT_KEY}:entry`,
+      `${FILLED_ZERO_SIZE_WEDGE_LOT_KEY}:stop`,
+      `${FILLED_ZERO_SIZE_WEDGE_LOT_KEY}:target`,
+    ];
+    const broker = new SmokeWedgedLotBroker(
+      {
+        client_order_id: FILLED_ZERO_SIZE_WEDGE_LOT_KEY,
+        broker_order_ids: brokerOrderIds,
+        order_state: 'filled',
+        filled_qty: 10,
+      },
+      [
+        {
+          client_order_id: FILLED_ZERO_SIZE_WEDGE_LOT_KEY,
+          broker_fill_id: 'smoke-wedge-fill',
+          leg: 'entry',
+          qty: 10,
+          price: 100,
+          fee: 1,
+          // Dated before this lot's OWN `opened_at` — with this the store's
+          // sole open position, `opened_at` IS the poll's `since` floor
+          // (ingest-fills.ts), so this fill is excluded FOREVER, exactly
+          // #1087's incident shape.
+          timestamp: new Date(openedAt.getTime() - 1),
+        },
+      ],
+    );
+    const store = new SqliteExecutionStore(db);
+    const position: OpenPosition = {
+      idempotency_key: FILLED_ZERO_SIZE_WEDGE_LOT_KEY,
+      debate_id: 'smoke-filled-zero-size-wedge-debate',
+      instrument: FILLED_ZERO_SIZE_WEDGE_INSTRUMENT,
+      asset_class: 'stocks',
+      side: 'buy',
+      intent_type: 'entry',
+      requested_size: 10,
+      filled_size: 0,
+      avg_entry_price: 0,
+      stop: 95,
+      target: 110,
+      order_state: 'submitted',
+      broker_order_ids: brokerOrderIds,
+      opened_at: openedAt,
+      decision_timestamp: new Date(
+        openedAt.getTime() - FILLED_ZERO_SIZE_WEDGE_DECISION_BEFORE_OPENED_MS,
+      ),
+      conviction: 0.7,
+      converged: true,
+    };
+    await store.writeAheadPosition(position);
+
+    const execution = buildExecutionSurface(
+      {
+        clock,
+        broker,
+        store,
+        costModel: {} as unknown as CostModel,
+        marketData: {} as unknown as MarketDataService,
+        config: paperStartingProfile('paper').executionConfig,
+        mode: 'paper',
+        residualExposureAlerts: {
+          postResidualExposureAlert: async () => {
+            throw new Error('SmokeWedgedLotBroker: this scenario never partially flattens');
+          },
+        },
+        flattenOverfillAlerts: {
+          postFlattenOverfillWarning: async () => {
+            throw new Error('SmokeWedgedLotBroker: this scenario never flattens');
+          },
+        },
+        flattenReconcileAlerts: {
+          postFlattenReconcileAlert: async () => {
+            throw new Error('SmokeWedgedLotBroker: this scenario never flattens');
+          },
+        },
+        logger: recorder,
+        filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
+      },
+      'smoke-filled-zero-size-wedge',
+    );
+
+    await execution.reconcile();
+    for (let poll = 0; poll < ALERT_AFTER_CONSECUTIVE_ZERO_SIZE; poll += 1) {
+      await execution.ingestFills();
+    }
+
+    return recorder.evidence();
+  } finally {
+    db.close();
+  }
+}
+
 /** What `evaluateSmokeGate` needs from the risk-critic scenario (#957, extended by the invalidation fold #994). */
 export interface RiskCriticEvidence {
   /** `risk_critic_log.verdict` values the run's own composition root wrote, in insertion order. */
@@ -4059,6 +4305,16 @@ export function evaluateSmokeGate(
      * let a future edit drop that one argument and leave `yarn smoke` green.
      */
     analystFailureCause: AnalystFailureCauseEvidence;
+    /**
+     * The FILLED_WITH_ZERO_SIZE wedge scenario's evidence (#1125) — required,
+     * not optional, for the same "compile error, not a silent no-op" reason
+     * the mechanisms above are. #1096's review deferred smoke coverage of
+     * this warning for want of a second broker/harness surface;
+     * `runFilledZeroSizeWedgeScenario` is that surface, and an optional field
+     * here would let a future edit drop the call that wires it in and leave
+     * `yarn smoke` green regardless.
+     */
+    filledZeroSizeWedge: FilledZeroSizeWedgeEvidence;
     /**
      * The arm-comparison surface's evidence (#971) — required, not optional,
      * for the same "compile error, not a silent no-op" reason the mechanisms
@@ -4804,6 +5060,52 @@ export function evaluateSmokeGate(
           'the rendered name/message/cause a non-timeout rejection is supposed to keep — ' +
           '`renderErrorDetail` (pipeline/analysts/orchestrator.ts) stopped rendering the caught ' +
           'error, or stopped being called (#1114)',
+      );
+    }
+  }
+
+  // #1125 — the FILLED_WITH_ZERO_SIZE wedge scenario's enforcement assertion,
+  // on its DURABLE effect (the warning payload) through the real
+  // `buildExecutionSurface` binding. See `runFilledZeroSizeWedgeScenario`.
+  const wedge = options.filledZeroSizeWedge;
+  if (wedge.warnings.length !== 1) {
+    failures.push(
+      `the FILLED_WITH_ZERO_SIZE wedge scenario produced ${wedge.warnings.length} warning(s), ` +
+        "expected exactly 1 — either the scenario's wedged lot never reached the throttle's " +
+        'first-warning threshold (ALERT_AFTER_CONSECUTIVE_ZERO_SIZE consecutive zero-filled-size ' +
+        "polls), ingest-fills.ts's own no-new-fills zero-filled-size warning branch has been " +
+        "removed or stopped firing, or execution.reconcile() no longer adopts the broker's " +
+        "'filled' order_state onto this lot (that branch is guarded on " +
+        "order_state === 'filled' || 'partially_filled' — if reconcile's adopt semantics change " +
+        "so the lot stays 'submitted', this branch is never reached and zero warnings fire even " +
+        'though it is fully intact) (#1125)',
+    );
+  } else {
+    const [warning] = wedge.warnings;
+    if (
+      warning === undefined ||
+      warning.idempotency_key !== FILLED_ZERO_SIZE_WEDGE_LOT_KEY ||
+      warning.instrument !== FILLED_ZERO_SIZE_WEDGE_INSTRUMENT ||
+      warning.order_state !== 'filled' ||
+      warning.consecutive !== ALERT_AFTER_CONSECUTIVE_ZERO_SIZE ||
+      // Exact, not `> 0` (#1125 review round 2, finding 1): under
+      // `SimulatedClock`, `stuck_ms` is `now - position.opened_at` computed
+      // at a FIXED clock reading (no poll advances it), so it is
+      // deterministic — `FILLED_ZERO_SIZE_WEDGE_OPENED_BEFORE_MS` exactly.
+      // A `> 0` check cannot catch `ingest-fills.ts` reading
+      // `decision_timestamp` instead of `opened_at`: the two are only 5s
+      // apart against a 1h `stuck_ms`, so the wrong field still passes
+      // `> 0`. Measured: swapping that field yields `stuck_ms: 3605000`
+      // and this exact equality check catches it (`3605000 !==
+      // 3600000`), where `> 0` did not.
+      warning.stuck_ms !== FILLED_ZERO_SIZE_WEDGE_OPENED_BEFORE_MS
+    ) {
+      failures.push(
+        `the FILLED_WITH_ZERO_SIZE warning fired with an unexpected shape ` +
+          `(${JSON.stringify(warning)}) — expected idempotency_key ` +
+          `'${FILLED_ZERO_SIZE_WEDGE_LOT_KEY}', instrument '${FILLED_ZERO_SIZE_WEDGE_INSTRUMENT}', ` +
+          `order_state 'filled', consecutive ${ALERT_AFTER_CONSECUTIVE_ZERO_SIZE} and stuck_ms ` +
+          `${FILLED_ZERO_SIZE_WEDGE_OPENED_BEFORE_MS} (#1125)`,
       );
     }
   }
@@ -5974,6 +6276,12 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
     // pattern as `dataFailover`/`riskCritic` above.
     const analystFailureCause = await runAnalystFailureCauseScenario(logger);
 
+    // #1125: the FILLED_WITH_ZERO_SIZE wedge, on its own composition root and
+    // its own cold in-memory store — the second broker/harness surface
+    // #1096's review deferred, so a genuinely wedged lot can drive the real
+    // gate instead of only `filled-zero-size-wiring.test.ts`'s unit proof.
+    const filledZeroSizeWedge = await runFilledZeroSizeWedgeScenario(logger);
+
     // Safe to read the Polymarket counts here, and only here: `start()` fires
     // the first refresh as `void polymarketAgent.refresh('startup')`, so its
     // store write is in flight after `start()` resolves — but `stop()` (line
@@ -6003,6 +6311,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       riskCritic,
       promptTierWarning,
       analystFailureCause,
+      filledZeroSizeWedge,
       // #971. Run against the same store the observations were read from, and
       // AFTER `orchestrator.stop()` for `readSmokeObservations`' reason: the
       // tape has to be complete before the comparison is taken over it.

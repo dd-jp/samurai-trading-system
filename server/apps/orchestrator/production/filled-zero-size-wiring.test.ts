@@ -15,19 +15,25 @@
  * constructs a fresh throttle per surface, because it never constructs a
  * surface at all.
  *
- * `smoke-run.ts` deliberately does NOT cover this (see its own comment at
- * the `filledZeroSizeThrottle:` line). Not because the wedge is
- * unconstructible post-fix — this file's own `WedgingBroker` constructs it
- * store-side, without touching `SimulatedBrokerAdapter` at all, proving the
- * opposite. The reason is structural: smoke's exit-path harness wires a
- * single `innerBroker` (`SimulatedBrokerAdapter`) through the one composition
- * root it drives; putting a wedged lot through that gate needs a second
- * broker/harness surface smoke doesn't have today, not a fixture that
- * reintroduces the fixed defect. That's deferred fixture work, tracked as a
- * PR follow-up; this file is the documented substitute the review asked
- * for now — option (b): a mutation-verified composition-root wiring test,
- * run through `buildProductionComponents`/`buildExecutionSurface`
- * (production.ts, direct-bind.ts) rather than through the smoke gate.
+ * `smoke-run.ts`'s own exit-path harness deliberately does NOT cover this
+ * (see its comment at the `filledZeroSizeThrottle:` line). Not because the
+ * wedge is unconstructible post-fix — this file's own `WedgingBroker`
+ * constructs it store-side, without touching `SimulatedBrokerAdapter` at
+ * all, proving the opposite. The reason was structural: that harness wires a
+ * single `innerBroker` (`SimulatedBrokerAdapter`) through one composition
+ * root, and putting a wedged lot through THAT gate would mean reintroducing
+ * the fixed defect rather than exercising it honestly.
+ *
+ * **#1125 closed that gap with a second, dedicated broker/harness surface**
+ * (`SmokeWedgedLotBroker`/`runFilledZeroSizeWedgeScenario`, smoke-run.ts),
+ * so `yarn smoke` itself now fails if the warning path regresses — this file
+ * is no longer the only thing standing between a deleted mechanism and an
+ * all-green suite. It stays, proving a DIFFERENT property #1125's scenario
+ * does not: that `production.ts`'s `executionDeps.filledZeroSizeThrottle` is
+ * the SAME instance every surface built from it shares — option (b) from
+ * the #1096 review, a mutation-verified composition-root wiring test run
+ * through `buildProductionComponents`/`buildExecutionSurface`
+ * (production.ts, direct-bind.ts).
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { LlmClient } from '../../../pipeline/debate-engine/index.js';
