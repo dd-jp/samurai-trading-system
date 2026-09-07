@@ -118,19 +118,34 @@ Batches of 25/50/100/146 all returned in full; no cap was hit. Per row it carrie
 | `Quote` | `Bid`, `Ask`, `Mid`, `PriceTypeAsk`/`Bid`, `DelayedByMinutes`, `MarketState` |
 | `Commissions` | `CostBuy`, `CostSell` for a given `Amount` |
 
-**`RelativeVolume` semantics, established rather than assumed.** The field is undocumented and
+**`RelativeVolume`: the formula is proven, the baseline is not.** The field is undocumented and
 reconciles with none of its neighbours at face value, so it was checked against all 146 rows:
 
 > `RelativeVolume == 100 × Volume / AverageVolume` — exact on **128 of 128** rows carrying all
 > three inputs, worst relative error 0.0000%.
 
-It is today's volume as a **percentage** of the instrument's average. So `609.86` on `BTC3:xlon`
-means 6.1× normal volume, not 610×. `PercentChangeDaily` is present on **146 of 146** and needs
-no such reconstruction.
+That settles the arithmetic, **not the semantics: what `AverageVolume` averages is undocumented,
+and it is demonstrably not `AverageVolume30Days`.** Across the 145 rows carrying both, the ratio
+`AverageVolume / AverageVolume30Days` runs **0.29 (`ETHP:xlon`) to 96.4 (`1ARK:xlon`)**, median
+1.17, and equals 1.0 on **no row at all** (`LQQ3:xlon` 6.72, `3USL:xlon` 1.07). The spread is
+consistent with a uniform but longer window — illiquid names like `1ARK` have a near-zero 30-day
+figure, which inflates the ratio — and equally consistent with a per-instrument window; **the
+data cannot separate the two.** So the safe reading is *today's volume over a Saxo-defined
+baseline, ×100*: the ×100 scaling is established (`609.86` on `BTC3:xlon` is 6.1×, not 610×),
+the denominator is not.
 
-That is a lawful, entitled, vendor-free sort key on both axes a movers screen needs — unusual
-volume and size of move — over the whole tradeable universe, refreshed as often as we care to
-poll. It is the thing #750/#1002/#1035 were looking for.
+**Two limits on how it may be used, both from the same probe.** `Volume` is session-cumulative,
+so mid-session `RelativeVolume` climbs monotonically through the day — any *absolute* threshold
+fires late and is not comparable across sample times. And a cross-instrument ranking divides each
+name by its own baseline, which is only apples-to-apples if that baseline follows a uniform rule;
+that is the open question above. What is unambiguously safe is the **cross-sectional ranking at a
+single sampled moment, read as a candidate generator rather than a calibrated statistic** — which
+is what a movers screen needs.
+
+`PercentChangeDaily` is present on **146 of 146**, needs no reconstruction, and carries neither
+caveat: it should be the primary axis, with `RelativeVolume` secondary until its baseline is
+pinned down. Even so this is a lawful, entitled, vendor-free sort key over the whole tradeable
+universe, refreshed as often as we care to poll — which is the thing #750/#1002/#1035 lacked.
 
 ### 2.4 Saxo's LSE coverage was never the binding constraint — spread is
 
@@ -258,10 +273,17 @@ Services, Trading, Value Add.
 - **No news, research, analyst ratings, sentiment, or client-positioning endpoint anywhere.**
   **Value Add is price alerts only** (`vas/v1/pricealerts/definitions` — verified, returns an
   empty definition list, not a 404).
-- **No screener endpoint**, and **no movers endpoint**: `mkt/v1/marketoverview`,
-  `mkt/v1/moversandshakers` and `mkt/v1/prices/subscriptions` all return **404**, and the public
-  reference page for `mkt/v1` is itself a 404. §2.3's screen is one we build from `infoprices`,
-  not one Saxo ships.
+- **No screener or movers endpoint was found — but this is a weaker negative than the rest of
+  this section, and is flagged as such.** `mkt/v1/marketoverview`, `mkt/v1/moversandshakers` and
+  `mkt/v1/prices/subscriptions` all return **404**; those three paths were *guessed*, and Market
+  Overview is one of the 17 groups above, so a real path may exist under a name not tried.
+  Service discovery was attempted and yielded nothing: `mkt`, `mkt/v1`, `mkt/$metadata` and
+  `mkt/v1/$metadata` all 404 — **but so do `ref/v1`, `port/v1`, `trade/v1` and `chart/v1`**, so
+  the gateway 404s every group root and those results carry no information. The public reference
+  page for `mkt/v1` is itself a 404. **The accurate claim is: the group is enumerated, no path
+  under it was reachable or documented, and §2.3's screen is one we build from `infoprices`
+  rather than one Saxo was found to ship.** Read as a failure to find, not as measured absence.
+  Nothing downstream turns on the difference — §2.3 works either way.
 - `TradingSignals: "NotAllowed"` on the pool instruments — the trade-signals product does not
   reach them.
 
@@ -292,7 +314,7 @@ block the conclusions. Worth ten minutes at the next login.
 | 1 | #1302: GBX handled by a hand-maintained pool flag | `PriceToContractFactor` is authoritative and per-instrument (§2.1) | comment on #1302 |
 | 2 | Doc 33: LSE intraday bars unavailable | ~4.3y of 1-min OHLCV on the tradeable line (§2.2) | comment on #1304 |
 | 3 | Bars may not be retained under the data terms | Unresolved; same class as the Yahoo/LSE §8 disqualifications (§2.2) | **wayfinder child** |
-| 4 | #750/#1002/#1035: movers axis has no lawful sort key | Whole universe, one call, two proven axes (§2.3) | comment on #1305 |
+| 4 | #750/#1002/#1035: movers axis has no lawful sort key | Whole universe, one call, two axes — one proven, one caveated (§2.3) | comment on #1305 |
 | 5 | ADR-0016: pool of 13, 3× framing | 146 ETN + 127 ETC listed; 4× exists; spread gate needed (§2.4) | **wayfinder child** |
 | 6 | ADR-0015: "Saxo has no per-order minimum" — the fact that disqualified IBKR | Unverified against the venue; one live call settles it (§2.6) | **wayfinder child**, pre-ramp gate |
 | 7 | ADR-0014: flat-by-close by client-side timing | Exchange session calendar + native MOC/LOC (§2.7) | **wayfinder child**, gated on the ADR-0015 clause |
