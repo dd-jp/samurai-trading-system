@@ -105,4 +105,90 @@ describe('Rail — drawdown meter', () => {
     expect(screen.getByText('no daily suite yet — meter not drawable')).toBeTruthy();
     expect(screen.queryByText(/over tolerance/)).toBeNull();
   });
+
+  /**
+   * #1264: `metrics` present (a suite DID run) but `max_drawdown` unreadable
+   * must not read as "no daily suite yet" — that sentence is reserved for
+   * `metrics === null`, asserted by the pinned test above. `Number.isFinite`
+   * rejects `NaN`, `Infinity` and `-Infinity` by the same mechanism (none of
+   * the three is a finite double) — the routes below are asserted separately
+   * anyway because each is a distinct way a real upstream computation goes
+   * wrong (a 0/0, an overflow, a sign error), not because the guard treats
+   * them differently. A wrong-typed value and a same-value overflow (a
+   * finite `max_drawdown` whose quotient against the tolerance is itself
+   * non-finite) are asserted too, matching the spec's four-route list.
+   */
+  it('says the drawdown figure could not be read when max_drawdown is NaN, not that no suite ran', () => {
+    renderRail(
+      makeFeed({ snapshot: makeSnapshot({ metrics: makeMetrics({ max_drawdown: Number.NaN }) }) }),
+    );
+
+    expect(
+      screen.getByText('daily suite drawdown figure could not be read — meter not drawable'),
+    ).toBeTruthy();
+    expect(screen.queryByText('no daily suite yet — meter not drawable')).toBeNull();
+  });
+
+  it('says the drawdown figure could not be read when max_drawdown is +Infinity', () => {
+    renderRail(
+      makeFeed({
+        snapshot: makeSnapshot({
+          metrics: makeMetrics({ max_drawdown: Number.POSITIVE_INFINITY }),
+        }),
+      }),
+    );
+
+    expect(
+      screen.getByText('daily suite drawdown figure could not be read — meter not drawable'),
+    ).toBeTruthy();
+    expect(screen.queryByText('no daily suite yet — meter not drawable')).toBeNull();
+  });
+
+  it('says the drawdown figure could not be read when max_drawdown is -Infinity', () => {
+    renderRail(
+      makeFeed({
+        snapshot: makeSnapshot({
+          metrics: makeMetrics({ max_drawdown: Number.NEGATIVE_INFINITY }),
+        }),
+      }),
+    );
+
+    expect(
+      screen.getByText('daily suite drawdown figure could not be read — meter not drawable'),
+    ).toBeTruthy();
+    expect(screen.queryByText('no daily suite yet — meter not drawable')).toBeNull();
+  });
+
+  it('says the drawdown figure could not be read when max_drawdown is wrong-typed on the wire', () => {
+    renderRail(
+      makeFeed({
+        snapshot: makeSnapshot({
+          metrics: makeMetrics({ max_drawdown: '0.2' as unknown as number }),
+        }),
+      }),
+    );
+
+    expect(
+      screen.getByText('daily suite drawdown figure could not be read — meter not drawable'),
+    ).toBeTruthy();
+    expect(screen.queryByText('no daily suite yet — meter not drawable')).toBeNull();
+  });
+
+  /**
+   * A finite `max_drawdown` is not sufficient for `'drawn'`: `CapMeter`
+   * itself divides by `DRAWDOWN_TOLERANCE` and refuses to draw a non-finite
+   * quotient. `1e308 / 0.262` overflows `Infinity`, so a value large enough
+   * to overflow must land in `'unreadable'` too, or `drawdownReasonOf` would
+   * hand `CapMeter` an empty `emptyState` for a meter it still won't draw —
+   * rendering no sentence at all.
+   */
+  it('says the drawdown figure could not be read when a finite max_drawdown overflows against the tolerance', () => {
+    renderRail(
+      makeFeed({ snapshot: makeSnapshot({ metrics: makeMetrics({ max_drawdown: 1e308 }) }) }),
+    );
+
+    expect(
+      screen.getByText('daily suite drawdown figure could not be read — meter not drawable'),
+    ).toBeTruthy();
+  });
 });

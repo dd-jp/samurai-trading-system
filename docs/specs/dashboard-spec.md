@@ -186,6 +186,11 @@ Top to bottom: the brand mark (侍 SAMURAI), the three vertical tabs, then the a
 
   None of states 1–6 substitutes a denominator. States 5 and 6 additionally footnote "· armed HH:MM:SSZ" from `cap_armed_at` when it is a real timestamp; state 7 (a drawn meter) does not repeat the arming instant in its footnote.
 - **Drawdown bar**: `metrics.max_drawdown` against `CONTEXT.md`'s 26.2% index-bracket tolerance ([#798](https://github.com/dd-jp/samurai-trading-system/issues/798)), labelled as that tolerance. The single-stock bracket's 41.8% is not drawn: one bar, one stated reference. **Reaching the tolerance is stated in words, not left to the track's colour alone** ([#1201](https://github.com/dd-jp/samurai-trading-system/issues/1201)): the footnote's "over tolerance · " prefix — the LLM cap bar's own "over cap · " word, restated for a tolerance rather than a cap — carries the state the tone change also carries.
+
+  `max_drawdown` is a required, finite fraction on the wire type (`contracts/metrics.ts`), so an absent report and a present-but-unreadable figure are different facts and must not share a sentence ([#1264](https://github.com/dd-jp/samurai-trading-system/issues/1264)):
+  1. "no daily suite yet — meter not drawable" — `metrics` itself is `null`: no daily suite has produced a report at all.
+  2. "daily suite drawdown figure could not be read — meter not drawable" — `metrics` is non-`null` (a suite DID run) but `max_drawdown` is not a finite number (`NaN`, `Infinity`, `-Infinity`, or a wrong-typed value), or is finite but overflows against the tolerance on division (e.g. `1e308`) — an upstream defect, described as one, not as "nothing to show yet".
+  3. A drawn meter — `max_drawdown` is a finite number whose quotient against the tolerance is itself finite. The only state that draws.
 - **Snapshot clock** at the foot.
 
 **Nothing else is drawn on the rail.** The canvas's daily-loss stop, position cap and flat-by-close clock are not on the wire and are not rendered.
