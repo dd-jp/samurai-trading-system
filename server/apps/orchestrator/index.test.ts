@@ -732,29 +732,68 @@ describe('runEntrypointLogRetention (#1116)', () => {
     expect(statSync(config.filePath).size).toBe(200);
   });
 
-  // #1281 review, MAJOR 1: unlike every other setting this entrypoint wires
-  // up, `SAMURAI_LOG_BARE_TRUNCATE_BYTES` is opt-in — a default-on threshold
-  // here would truncate ANY bare `.log`/`.out` file in whatever directory
-  // `SAMURAI_LOG_FILE` names, not just Samurai's own, since this path (unlike
-  // the unlink path beside it) carries no name-rule narrowing. Driven through
-  // the real entrypoint helper, with no `SAMURAI_LOG_BARE_TRUNCATE_BYTES` at
-  // all, to prove the composition root — not just the pure function — leaves
-  // this disabled by default.
+  // #1281 review, round 2: the earlier revision of this fix (round 1) made
+  // the threshold opt-in specifically so a default-on setting could never
+  // reach a file this process does not recognise — sound against the
+  // blast-radius hazard, but it also meant #1206's own file stayed exactly
+  // as unbounded as before #1206 in every deployment that never set the
+  // variable, which — grepped across this repo — is every deployment. This
+  // proves the reversal: driven through the real entrypoint helper, with NO
+  // env var of any kind set, `soak-boot.out` itself — the one file the
+  // ticket names — is bounded automatically, because `bareTruncateNames`
+  // defaults to it and `bareTruncateBytes` defaults on again.
   //
   // The fixture is deliberately larger than `DEFAULT_BARE_TRUNCATE_BYTES`
   // (16 MiB, `log-retention.ts`): a small fixture would pass this assertion
-  // whether the mechanism were genuinely disabled OR merely under a
-  // default-on 16 MiB threshold, so it would not actually distinguish the
-  // fix from the bug it fixes.
-  it('leaves a large bare file untouched by default, with no SAMURAI_LOG_BARE_TRUNCATE_BYTES set', () => {
+  // whether the mechanism ran or not, so it would not actually distinguish
+  // the fix from a regression that silently disables it again.
+  it('truncates an oversized soak-boot.out with no configuration at all', () => {
     const soakBoot = join(dir, 'soak-boot.out');
     const oversized = 17 * 1024 * 1024; // > 16 MiB DEFAULT_BARE_TRUNCATE_BYTES
     writeFileSync(soakBoot, 'x'.repeat(oversized));
 
     const result = runEntrypointLogRetention(sinkConfig(), { log: () => {} }, {});
 
+    expect(result.filesTruncated).toBe(1);
+    expect(statSync(soakBoot).size).toBe(0);
+  });
+
+  // The other half of the same reversal: a default-on threshold is only safe
+  // because `bareTruncateNames` still narrows WHICH bare file it can reach.
+  // `install.log` is a real macOS system log the round-1 review found
+  // matching the old, unscoped predicate — this proves it stays untouched
+  // even with the threshold back to default-on and no config set at all.
+  it('leaves a large bare file that is not soak-boot.out untouched by default', () => {
+    const other = join(dir, 'install.log');
+    const oversized = 17 * 1024 * 1024;
+    writeFileSync(other, 'x'.repeat(oversized));
+
+    const result = runEntrypointLogRetention(sinkConfig(), { log: () => {} }, {});
+
     expect(result.filesTruncated).toBe(0);
-    expect(statSync(soakBoot).size).toBe(oversized);
+    expect(statSync(other).size).toBe(oversized);
+  });
+
+  // The allowlist is additive, not a replacement — an operator's own extra
+  // bare name is reachable ALONGSIDE soak-boot.out, not instead of it.
+  it('also truncates an operator-added name from SAMURAI_LOG_BARE_TRUNCATE_NAMES', () => {
+    const soakBoot = join(dir, 'soak-boot.out');
+    const custom = join(dir, 'custom.out');
+    writeFileSync(soakBoot, 'x'.repeat(200));
+    writeFileSync(custom, 'x'.repeat(200));
+
+    const result = runEntrypointLogRetention(
+      sinkConfig(),
+      { log: () => {} },
+      {
+        SAMURAI_LOG_BARE_TRUNCATE_BYTES: '100',
+        SAMURAI_LOG_BARE_TRUNCATE_NAMES: 'custom.out',
+      },
+    );
+
+    expect(result.filesTruncated).toBe(2);
+    expect(statSync(soakBoot).size).toBe(0);
+    expect(statSync(custom).size).toBe(0);
   });
 
   /**

@@ -117,7 +117,15 @@
  * forever — the run would submit orders and never ingest a fill. One frozen
  * instant for both collapses that gap to zero.
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -2444,13 +2452,22 @@ export interface LogRetentionEvidence {
    * An undated bare name survived despite being old — the shape a still-open
    * writer holds (`service-api.log`), which unlinking would turn into
    * invisible growth rather than reclaimed space. It also survives the
-   * newer truncate path (#1206) because this run's env sets no
-   * `SAMURAI_LOG_BARE_TRUNCATE_BYTES` — that path is opt-in, not defaulted
-   * on, so it is fully disabled here regardless of the fixture's size.
+   * truncate path (#1206), which is default-on again as of the #1281 review
+   * round-2 reversal, because `service-api.log` is not in
+   * `bareTruncateNames`'s default (`soak-boot.out` alone) — the name
+   * allowlist, not this fixture's small size, is what protects it now.
    */
   liveShapedFileKeptDespiteAge: boolean;
   /** A non-log file in the swept directory survived despite being old. */
   nonLogFileKeptDespiteAge: boolean;
+  /**
+   * #1206, exercised end to end with NO configuration at all (#1281 review
+   * round 2): an oversized `soak-boot.out` — the one file the ticket names —
+   * was actually truncated by the real entrypoint helper, proving the
+   * default-on threshold and the default name allowlist both reach it
+   * without an operator setting anything.
+   */
+  oversizedSoakBootTruncatedByDefault: boolean;
   /** `bytesReclaimed` actually accounted for the file that was removed. */
   bytesReclaimed: number;
 }
@@ -2488,6 +2505,11 @@ function runLogRetentionScenario(): LogRetentionEvidence {
     // sibling process for weeks at a time.
     const liveShapedPath = join(directory, 'service-api.log');
     const nonLogPath = join(directory, '.env.local');
+    // #1206, round 2: the one file the ticket names, oversized so it crosses
+    // `DEFAULT_BARE_TRUNCATE_BYTES` (16 MiB) — this is what proves the
+    // default-on threshold plus the default name allowlist actually reach it
+    // in a real process, with no env var set for either.
+    const soakBootPath = join(directory, 'soak-boot.out');
     for (const path of [
       stalePath,
       freshPath,
@@ -2498,6 +2520,7 @@ function runLogRetentionScenario(): LogRetentionEvidence {
     ]) {
       writeFileSync(path, 'line\n');
     }
+    writeFileSync(soakBootPath, 'x'.repeat(17 * 1024 * 1024)); // > 16 MiB
 
     const oldSeconds = (Date.now() - 40 * oneDayMs) / 1000;
     const recentSeconds = (Date.now() - oneDayMs) / 1000;
@@ -2522,6 +2545,7 @@ function runLogRetentionScenario(): LogRetentionEvidence {
       protectedFileKeptDespiteAge: existsSync(rotatedPath),
       liveShapedFileKeptDespiteAge: existsSync(liveShapedPath),
       nonLogFileKeptDespiteAge: existsSync(nonLogPath),
+      oversizedSoakBootTruncatedByDefault: statSync(soakBootPath).size === 0,
       bytesReclaimed: result.bytesReclaimed,
     };
   } finally {
@@ -4830,6 +4854,14 @@ export function evaluateSmokeGate(
       'the logs/ retention sweep removed a non-log file — pointed at a directory that is not ' +
         'logs/ this is how it reaches .env.local, and no age window can make that recoverable ' +
         '(#1116)',
+    );
+  }
+  if (!retention.oversizedSoakBootTruncatedByDefault) {
+    failures.push(
+      'the logs/ retention sweep left an oversized soak-boot.out untouched with no ' +
+        'configuration at all — #1206 is supposed to bound it by default (bareTruncateBytes and ' +
+        'bareTruncateNames both default on, #1281 review round 2), so an operator who sets ' +
+        'nothing is left with the exact unbounded growth this ticket exists to close',
     );
   }
   if (retention.staleFileRemoved && retention.bytesReclaimed <= 0) {

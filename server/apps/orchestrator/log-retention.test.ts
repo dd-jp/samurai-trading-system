@@ -15,10 +15,13 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  DEFAULT_BARE_TRUNCATE_BYTES,
+  DEFAULT_BARE_TRUNCATE_NAMES,
   DEFAULT_LOG_RETENTION_DAYS,
   isArchivedLogName,
   isBareLogName,
   logBareTruncateBytesFromEnvironment,
+  logBareTruncateNamesFromEnvironment,
   logRetentionDaysFromEnvironment,
   logRetentionKeepNamesFromEnvironment,
   sweepStaleLogs,
@@ -207,7 +210,13 @@ describe('sweepStaleLogsWithLog', () => {
     const logger = makeLogger();
 
     const result = sweepStaleLogsWithLog(
-      { directory: dir, maxAgeMs: 7 * ONE_DAY_MS, bareTruncateBytes: 100, now: () => NOW },
+      {
+        directory: dir,
+        maxAgeMs: 7 * ONE_DAY_MS,
+        bareTruncateBytes: 100,
+        bareTruncateNames: ['soak-boot.out'],
+        now: () => NOW,
+      },
       logger,
     );
 
@@ -340,9 +349,12 @@ describe('isBareLogName (#1206)', () => {
 // #1206: the retention sweep's OTHER path for an undated bare name
 // (`soak-boot.out`) — truncation, never unlink, so the safety property in
 // the module doc ("liveness rule") holds under a different mechanism rather
-// than being bypassed.
+// than being bypassed. `bareTruncateNames` is passed explicitly throughout —
+// unlike `bareTruncateBytes`, it has no default at this pure-function level
+// (see the module doc) — matching how the real entrypoint always wires it
+// via `logBareTruncateNamesFromEnvironment`.
 describe('sweepStaleLogs — bare-name truncation (#1206)', () => {
-  it('truncates a bare log-shaped file once it crosses the byte threshold', () => {
+  it('truncates an allowlisted bare log-shaped file once it crosses the byte threshold', () => {
     const big = write(join(dir, 'soak-boot.out'), 'x'.repeat(200));
     // Eligibility and `bytesReclaimed` are computed from DISK ALLOCATION
     // (`stat.blocks * 512`), never `stat.size` — see MAJOR 2 in #1281's
@@ -355,6 +367,7 @@ describe('sweepStaleLogs — bare-name truncation (#1206)', () => {
       directory: dir,
       maxAgeMs: 7 * ONE_DAY_MS,
       bareTruncateBytes: 100,
+      bareTruncateNames: ['soak-boot.out'],
       now: () => NOW,
     });
 
@@ -363,18 +376,60 @@ describe('sweepStaleLogs — bare-name truncation (#1206)', () => {
     expect(statSync(big).size).toBe(0);
   });
 
-  it('leaves a bare file under the threshold alone', () => {
-    // The threshold here (8 KiB) is deliberately above one filesystem block
-    // (4 KiB on both target filesystems): a 50-byte file still allocates a
-    // full block, so a threshold near that granularity would not
-    // discriminate "under" from "over" now that eligibility is
-    // allocation-based rather than size-based (see the test above).
-    const small = write(join(dir, 'soak-boot.out'), 'x'.repeat(50));
+  // #1281 review round 2: the allowlist, not the threshold, is what scopes
+  // this path's blast radius now. `install.log` is a real macOS system log
+  // the round-1 review found matching the old, unscoped predicate — this
+  // proves the shape check (`isBareLogName`) alone is no longer sufficient
+  // for eligibility, whatever the threshold or the file's actual size.
+  it('never truncates a bare .log/.out file outside the allowlist, however large', () => {
+    const other = write(join(dir, 'install.log'), 'x'.repeat(2 * 1024 * 1024));
 
     const result = sweepStaleLogs({
       directory: dir,
       maxAgeMs: 7 * ONE_DAY_MS,
-      bareTruncateBytes: 8192,
+      bareTruncateBytes: 100,
+      bareTruncateNames: ['soak-boot.out'],
+      now: () => NOW,
+    });
+
+    expect(result.filesTruncated).toBe(0);
+    expect(statSync(other).size).toBe(2 * 1024 * 1024);
+  });
+
+  // Defense in depth: an allowlisted name that is not log-shaped (an
+  // operator's own `SAMURAI_LOG_BARE_TRUNCATE_NAMES` entry could name
+  // anything) still never reaches truncation — `isBareLogName` and the
+  // allowlist are independent gates, both required.
+  it('never truncates an allowlisted name that is not log-shaped', () => {
+    const secret = write(join(dir, '.env.local'), 'x'.repeat(200));
+
+    const result = sweepStaleLogs({
+      directory: dir,
+      maxAgeMs: 7 * ONE_DAY_MS,
+      bareTruncateBytes: 100,
+      bareTruncateNames: ['.env.local'],
+      now: () => NOW,
+    });
+
+    expect(result.filesTruncated).toBe(0);
+    expect(statSync(secret).size).toBe(200);
+  });
+
+  it('leaves an allowlisted bare file under the threshold alone', () => {
+    // The fixture is written first and the threshold derived FROM its actual
+    // allocation, rather than hardcoding a byte count: eligibility is
+    // allocation-based (`stat.blocks * 512`, see the test above), and a
+    // filesystem's block size is its own to pick, so a hardcoded threshold
+    // risks landing on the wrong side of "under" on a filesystem with a
+    // larger block than this repo's two target filesystems (4 KiB on both).
+    const small = write(join(dir, 'soak-boot.out'), 'x'.repeat(50));
+    const threshold = statSync(small).blocks * 512 + 1;
+
+    const result = sweepStaleLogs({
+      directory: dir,
+      maxAgeMs: 7 * ONE_DAY_MS,
+      bareTruncateBytes: threshold,
+      bareTruncateNames: ['soak-boot.out'],
       now: () => NOW,
     });
 
@@ -385,7 +440,26 @@ describe('sweepStaleLogs — bare-name truncation (#1206)', () => {
   it('never truncates a bare file when no threshold is configured', () => {
     const big = write(join(dir, 'soak-boot.out'), 'x'.repeat(200));
 
-    const result = sweepStaleLogs({ directory: dir, maxAgeMs: 7 * ONE_DAY_MS, now: () => NOW });
+    const result = sweepStaleLogs({
+      directory: dir,
+      maxAgeMs: 7 * ONE_DAY_MS,
+      bareTruncateNames: ['soak-boot.out'],
+      now: () => NOW,
+    });
+
+    expect(result.filesTruncated).toBe(0);
+    expect(statSync(big).size).toBe(200);
+  });
+
+  it('never truncates a bare file when no allowlist is configured', () => {
+    const big = write(join(dir, 'soak-boot.out'), 'x'.repeat(200));
+
+    const result = sweepStaleLogs({
+      directory: dir,
+      maxAgeMs: 7 * ONE_DAY_MS,
+      bareTruncateBytes: 100,
+      now: () => NOW,
+    });
 
     expect(result.filesTruncated).toBe(0);
     expect(statSync(big).size).toBe(200);
@@ -398,6 +472,7 @@ describe('sweepStaleLogs — bare-name truncation (#1206)', () => {
       directory: dir,
       maxAgeMs: 7 * ONE_DAY_MS,
       bareTruncateBytes: 100,
+      bareTruncateNames: ['.env.local'],
       now: () => NOW,
     });
 
@@ -412,6 +487,7 @@ describe('sweepStaleLogs — bare-name truncation (#1206)', () => {
       directory: dir,
       maxAgeMs: 7 * ONE_DAY_MS,
       bareTruncateBytes: 100,
+      bareTruncateNames: ['orchestrator.log'],
       protectedPaths: [active],
       now: () => NOW,
     });
@@ -427,6 +503,7 @@ describe('sweepStaleLogs — bare-name truncation (#1206)', () => {
       directory: dir,
       maxAgeMs: 7 * ONE_DAY_MS,
       bareTruncateBytes: 100,
+      bareTruncateNames: ['soak-boot.out'],
       keepNames: ['soak-boot.out'],
       now: () => NOW,
     });
@@ -447,6 +524,7 @@ describe('sweepStaleLogs — bare-name truncation (#1206)', () => {
       directory: dir,
       maxAgeMs: 7 * ONE_DAY_MS,
       bareTruncateBytes: 100,
+      bareTruncateNames: ['soak-boot.out'],
       now: () => NOW,
       activeDescriptors: () => [{ dev: identity.dev, ino: identity.ino }],
     });
@@ -469,6 +547,7 @@ describe('sweepStaleLogs — bare-name truncation (#1206)', () => {
       directory: dir,
       maxAgeMs: 7 * ONE_DAY_MS,
       bareTruncateBytes: 100,
+      bareTruncateNames: ['soak-boot.out'],
       now: () => NOW,
     });
     expect(result.filesTruncated).toBe(1);
@@ -501,6 +580,7 @@ describe('sweepStaleLogs — bare-name truncation (#1206)', () => {
       directory: dir,
       maxAgeMs: 7 * ONE_DAY_MS,
       bareTruncateBytes: 100,
+      bareTruncateNames: ['soak-boot.out'],
       now: () => NOW,
     });
     expect(result.filesTruncated).toBe(1);
@@ -541,6 +621,7 @@ describe('sweepStaleLogs — bare-name truncation (#1206)', () => {
       directory: dir,
       maxAgeMs: 7 * ONE_DAY_MS,
       bareTruncateBytes: threshold,
+      bareTruncateNames: ['soak-boot.out'],
       now: () => NOW,
     });
     expect(boot1.filesTruncated).toBe(1);
@@ -556,6 +637,7 @@ describe('sweepStaleLogs — bare-name truncation (#1206)', () => {
       directory: dir,
       maxAgeMs: 7 * ONE_DAY_MS,
       bareTruncateBytes: threshold,
+      bareTruncateNames: ['soak-boot.out'],
       now: () => NOW,
     });
     expect(boot2.filesTruncated).toBe(0);
@@ -566,17 +648,20 @@ describe('sweepStaleLogs — bare-name truncation (#1206)', () => {
   });
 });
 
-// #1281 review: unlike every other setting in this module, unset here means
-// DISABLED, not defaulted — this path has no name-rule narrowing on WHICH
-// bare file it can touch, so a default-on threshold would silently reach
-// files this process never wrote, in whatever directory SAMURAI_LOG_FILE
-// happens to be pointed at. See the module doc's "Bare live names" section.
+// #1281 review, round 2: this setting has the same default posture as every
+// other setting in this module now — `bareTruncateNames`
+// (`logBareTruncateNamesFromEnvironment` below), not this threshold, is what
+// scopes the truncate path's blast radius. An earlier revision made this
+// opt-in instead (unset meant disabled); that closed the blast-radius hazard
+// but left `soak-boot.out` unbounded in every deployment that never set the
+// variable, which — grepped across this repo — was all of them. See the
+// module doc's "Bare live names" section.
 describe('logBareTruncateBytesFromEnvironment', () => {
-  it('is disabled (undefined) when unset, not defaulted', () => {
-    expect(logBareTruncateBytesFromEnvironment({})).toBeUndefined();
+  it('defaults to DEFAULT_BARE_TRUNCATE_BYTES when unset', () => {
+    expect(logBareTruncateBytesFromEnvironment({})).toBe(DEFAULT_BARE_TRUNCATE_BYTES);
   });
 
-  it('parses a configured value, opting in', () => {
+  it('parses a configured value', () => {
     expect(logBareTruncateBytesFromEnvironment({ SAMURAI_LOG_BARE_TRUNCATE_BYTES: '512' })).toBe(
       512,
     );
@@ -588,10 +673,57 @@ describe('logBareTruncateBytesFromEnvironment', () => {
     ).toThrow(/SAMURAI_LOG_BARE_TRUNCATE_BYTES/);
   });
 
-  it('treats an empty value as unset (disabled) rather than as zero', () => {
+  it('treats an empty value as unset (default) rather than as zero', () => {
+    expect(logBareTruncateBytesFromEnvironment({ SAMURAI_LOG_BARE_TRUNCATE_BYTES: ' ' })).toBe(
+      DEFAULT_BARE_TRUNCATE_BYTES,
+    );
+  });
+});
+
+// #1281 review, round 2: the truncate path's name-based narrowing.
+// `DEFAULT_BARE_TRUNCATE_NAMES` (`soak-boot.out` alone) is what makes the
+// default-on threshold above safe — `install.log`/`wifi.log`/`system.log`
+// are unreachable by construction, not by an operator remembering to opt
+// out. This variable only ever ADDS to that default, never replaces it —
+// `SAMURAI_LOG_RETENTION_KEEP` already exempts any specific file, truncation
+// included, so there is no separate way to shrink this list.
+describe('logBareTruncateNamesFromEnvironment (#1206 review, round 2)', () => {
+  it('defaults to soak-boot.out alone when unset', () => {
+    expect(logBareTruncateNamesFromEnvironment({})).toEqual(DEFAULT_BARE_TRUNCATE_NAMES);
+  });
+
+  it('extends the default with a single operator-provided name', () => {
     expect(
-      logBareTruncateBytesFromEnvironment({ SAMURAI_LOG_BARE_TRUNCATE_BYTES: ' ' }),
-    ).toBeUndefined();
+      logBareTruncateNamesFromEnvironment({ SAMURAI_LOG_BARE_TRUNCATE_NAMES: 'custom.out' }),
+    ).toEqual(['soak-boot.out', 'custom.out']);
+  });
+
+  it('extends the default with multiple comma-separated names', () => {
+    expect(
+      logBareTruncateNamesFromEnvironment({
+        SAMURAI_LOG_BARE_TRUNCATE_NAMES: 'custom.out, other.log',
+      }),
+    ).toEqual(['soak-boot.out', 'custom.out', 'other.log']);
+  });
+
+  it('refuses an empty entry (a stray or trailing comma)', () => {
+    expect(() =>
+      logBareTruncateNamesFromEnvironment({ SAMURAI_LOG_BARE_TRUNCATE_NAMES: 'custom.out,' }),
+    ).toThrow(/SAMURAI_LOG_BARE_TRUNCATE_NAMES/);
+  });
+
+  it('refuses an entry that is a path rather than a basename', () => {
+    expect(() =>
+      logBareTruncateNamesFromEnvironment({
+        SAMURAI_LOG_BARE_TRUNCATE_NAMES: 'sub/custom.out',
+      }),
+    ).toThrow(/SAMURAI_LOG_BARE_TRUNCATE_NAMES/);
+  });
+
+  it('treats an empty value as unset (default) rather than an empty list', () => {
+    expect(logBareTruncateNamesFromEnvironment({ SAMURAI_LOG_BARE_TRUNCATE_NAMES: ' ' })).toEqual(
+      DEFAULT_BARE_TRUNCATE_NAMES,
+    );
   });
 });
 

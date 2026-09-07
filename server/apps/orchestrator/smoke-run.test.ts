@@ -597,6 +597,7 @@ function healthyLogRetention(overrides: Partial<LogRetentionEvidence> = {}): Log
     protectedFileKeptDespiteAge: true,
     liveShapedFileKeptDespiteAge: true,
     nonLogFileKeptDespiteAge: true,
+    oversizedSoakBootTruncatedByDefault: true,
     bytesReclaimed: 11,
     ...overrides,
   };
@@ -1147,6 +1148,20 @@ describe('evaluateSmokeGate', () => {
 
     expect(gate.passed).toBe(false);
     expect(gate.failures.some((failure) => failure.includes('removed a non-log file'))).toBe(true);
+  });
+
+  it('fails when the retention sweep leaves an oversized soak-boot.out untouched by default', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        logRetention: healthyLogRetention({ oversizedSoakBootTruncatedByDefault: false }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(
+      gate.failures.some((failure) => failure.includes('oversized soak-boot.out untouched')),
+    ).toBe(true);
   });
 
   it('fails when the retention sweep removed a file but reclaimed no bytes', () => {
