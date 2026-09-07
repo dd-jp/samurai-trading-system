@@ -3035,12 +3035,23 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
 
   /**
    * ROUND-1 REVIEW, finding 3 — the residual, PINNED rather than fixed
-   * (#1301). A live lot that exits on a protective leg pays no exit
-   * commission, because no modelled estimate exists for that leg on either
-   * arm. The flag stays `true`: vetoing on it would drop live trades BECAUSE
-   * they exited on a stop, which selects on outcome (stops are the losers).
-   * This test exists so the residual cannot be quietly forgotten — it fails
-   * the moment bracket legs start being charged, which is where #1301 has to
+   * (#1301). No MODELLED estimate exists for a protective leg on either arm,
+   * so the live lot is charged whatever its adapter reports on that leg and
+   * `chargeTopUpTo` has nothing to top it up to.
+   *
+   * Round 5, finding 1: what that costs is ADAPTER-DEPENDENT, and this
+   * fixture pins one adapter, not the mechanism. The `fee: 0` below is the
+   * Alpaca shape (`alpaca-order-normalization.ts`), where the exit commission
+   * goes unpaid entirely. `saxo-adapter.ts` reports
+   * `price * qty * SAXO_COMMISSION_RATE` on EVERY leg, so under Saxo the leg
+   * does pay and the residual is a price-basis difference instead — see
+   * `toFill`'s "What this still does not cover" for both readings. Do not
+   * read "uncharged" in this test's name as a venue-independent property.
+   *
+   * The flag stays `true`: vetoing on it would drop live trades BECAUSE they
+   * exited on a stop, which selects on outcome (stops are the losers). This
+   * test exists so the residual cannot be quietly forgotten — it fails the
+   * moment bracket legs start being charged, which is where #1301 has to
    * update it.
    */
   it('leaves a live protective-leg (stop) exit uncharged — the known residual, #1301', async () => {

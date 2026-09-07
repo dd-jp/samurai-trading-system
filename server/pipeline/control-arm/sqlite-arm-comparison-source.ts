@@ -128,10 +128,11 @@ export class SqliteArmComparisonSource {
  * pre-migration-0037 lots from failed captures, so it measures the asymmetry's
  * existence and not its size.
  *
- * DIRECTION IS NOT ESTABLISHED. Two terms act on the surviving live rows and
- * they oppose, but neither their net sign nor their ordering by size follows
- * from anything here (#1121 review round 5, finding 1 — the earlier version
- * of this paragraph claimed both).
+ * DIRECTION IS NOT ESTABLISHED. Two terms act on the surviving live rows, and
+ * neither their net sign nor their ordering by size follows from anything
+ * here — not even that they oppose, which needs both signs (#1121 review
+ * round 5, finding 1; the earlier version of this paragraph claimed all
+ * three).
  *
  * - The SELECTION term has no established sign. Coverage excludes `'stop'`
  *   AND `'target'`, so what survives is enriched in bracket exits of both
@@ -172,8 +173,11 @@ export class SqliteArmComparisonSource {
  *   tracked there rather than hidden here.
  * - The floor stops a GUTTED live arm from producing a verdict at all, and
  *   the drop rate that would make the selection term large is the same drop
- *   rate that empties the live arm toward `min_trades_per_arm` (default 5,
- *   migration 0035). At high trade volume those come apart — an arm can clear
+ *   rate that empties the live arm toward `min_trades_per_arm`
+ *   (`MIN_TRADES_PER_ARM_FOR_DIVERGENCE = 5`, arm-comparison-cycle.ts — the
+ *   value the cycle actually passes; migration 0035 is where the recorded
+ *   COLUMN came from, not where the operative number lives). At high trade
+ *   volume those come apart — an arm can clear
  *   the floor on a heavily selected population. So this is a coupling, not a
  *   bound, and no bound is claimed.
  *
