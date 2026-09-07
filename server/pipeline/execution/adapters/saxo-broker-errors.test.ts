@@ -24,15 +24,21 @@ describe('isRetryableSaxoBrokerError', () => {
   });
 
   it('retries 5xx provider errors only, and only on a retry-safe verb', () => {
-    expect(isRetryableSaxoBrokerError(new SaxoBrokerProviderError('p', 503, undefined, undefined, false, 'GET'))).toBe(
-      true,
-    );
     expect(
-      isRetryableSaxoBrokerError(new SaxoBrokerProviderError('p', 401, undefined, undefined, false, 'GET')),
+      isRetryableSaxoBrokerError(
+        new SaxoBrokerProviderError('p', 503, undefined, undefined, false, 'GET'),
+      ),
+    ).toBe(true);
+    expect(
+      isRetryableSaxoBrokerError(
+        new SaxoBrokerProviderError('p', 401, undefined, undefined, false, 'GET'),
+      ),
     ).toBe(false);
     // 409 = the duplicate-request guard; retrying inside the window re-earns it.
     expect(
-      isRetryableSaxoBrokerError(new SaxoBrokerProviderError('p', 409, undefined, undefined, false, 'GET')),
+      isRetryableSaxoBrokerError(
+        new SaxoBrokerProviderError('p', 409, undefined, undefined, false, 'GET'),
+      ),
     ).toBe(false);
     expect(isRetryableSaxoBrokerError(new SaxoBrokerProviderError('p'))).toBe(false);
   });
@@ -40,12 +46,16 @@ describe('isRetryableSaxoBrokerError', () => {
   it('does not retry a status above the valid HTTP range (#1172)', () => {
     // 599 is the top of the valid 5xx range; 600 cannot be a real HTTP status —
     // a hostile/broken upstream, not a transient server error to retry against.
-    expect(isRetryableSaxoBrokerError(new SaxoBrokerProviderError('p', 599, undefined, undefined, false, 'GET'))).toBe(
-      true,
-    );
-    expect(isRetryableSaxoBrokerError(new SaxoBrokerProviderError('p', 600, undefined, undefined, false, 'GET'))).toBe(
-      false,
-    );
+    expect(
+      isRetryableSaxoBrokerError(
+        new SaxoBrokerProviderError('p', 599, undefined, undefined, false, 'GET'),
+      ),
+    ).toBe(true);
+    expect(
+      isRetryableSaxoBrokerError(
+        new SaxoBrokerProviderError('p', 600, undefined, undefined, false, 'GET'),
+      ),
+    ).toBe(false);
   });
 
   it('never retries an unrelated error', () => {

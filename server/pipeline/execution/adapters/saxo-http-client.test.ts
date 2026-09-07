@@ -419,7 +419,9 @@ describe('SaxoHttpBrokerClient', () => {
         .mockRejectedValue(new DOMException('The operation timed out.', 'TimeoutError'));
       const client = makeClient(fetchMock, { maxAttempts: 5, baseDelayMs: 10, maxDelayMs: 100 });
 
-      await expect(client.placeOrder(ORDER, 'key-1')).rejects.toBeInstanceOf(SaxoBrokerTimeoutError);
+      await expect(client.placeOrder(ORDER, 'key-1')).rejects.toBeInstanceOf(
+        SaxoBrokerTimeoutError,
+      );
       // 1 for resolveIdentity + exactly 1 placement attempt — no retry.
       expect(fetchMock).toHaveBeenCalledTimes(2);
     });

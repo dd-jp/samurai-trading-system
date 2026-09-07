@@ -250,7 +250,14 @@ export async function classifySaxoBrokerResponse(
       return new SaxoBrokerTimeoutError(message, method);
     default: {
       const { code, message: venueMessage } = parseSaxoErrorInfo(bodyText);
-      return new SaxoBrokerProviderError(message, response.status, code, venueMessage, false, method);
+      return new SaxoBrokerProviderError(
+        message,
+        response.status,
+        code,
+        venueMessage,
+        false,
+        method,
+      );
     }
   }
 }
