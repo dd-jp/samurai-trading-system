@@ -374,16 +374,78 @@ function SpendBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
   );
 }
 
+type DrawdownReason = 'absent' | 'unreadable' | 'drawn';
+
+/**
+ * The finite number to hand `CapMeter`, or `undefined` when the field cannot
+ * be trusted as one — mirrors `capOf`'s posture above (never hand a consumer
+ * a raw wire scalar it has to re-validate).
+ *
+ * `max_drawdown` is typed as a required, finite fraction
+ * (contracts/metrics.ts:38), so a wrong type, `NaN`, or a non-finite value at
+ * runtime is an upstream defect, not a documented alternative. The type is
+ * checked with `typeof` *before* any arithmetic, rather than folding it into
+ * the finiteness check below: dividing first and asking `Number.isFinite` of
+ * the quotient — needed anyway, for the overflow case below — would let JS's
+ * own numeric coercion (`'0.2' / cap` divides cleanly, `null / cap === 0`)
+ * turn a wrong-typed value into a finite-looking quotient before finiteness
+ * is ever tested, the same silent-fallthrough class this ticket exists to
+ * close. `typeof` sees the value before that coercion has a chance to run.
+ *
+ * The quotient itself is also checked, not just the raw value: `cap`
+ * (`DRAWDOWN_TOLERANCE`) is a fixed, positive, finite constant, so the only
+ * way a finite `max_drawdown` can still fail to draw is a value large enough
+ * that dividing by it overflows (`1e308 / 0.262` is `Infinity`). Returning
+ * that value as "readable" would hand `CapMeter` a value it goes on to
+ * refuse to draw (`meter === null` on a non-finite fraction), rendering no
+ * sentence at all once the caller assumes "readable" means "drawn".
+ */
+function drawdownValueOf(metrics: MetricsSuiteWire | null): number | undefined {
+  if (metrics === null) return undefined;
+  const value = metrics.max_drawdown;
+  if (typeof value !== 'number') return undefined;
+  return Number.isFinite(value / DRAWDOWN_TOLERANCE) ? value : undefined;
+}
+
+/**
+ * `metrics === null` and `drawdownValueOf(metrics) === undefined` are BOTH
+ * "no value to draw", but they are different facts: the first means no
+ * snapshot has ever polled successfully — through this server, `metrics` is
+ * required and non-nullable on the wire type, and `useSnapshot.ts`'s
+ * `hasWireShape` rejects any payload where it is not a non-null object, so a
+ * live snapshot's `metrics` is never itself `null`; the second means a
+ * snapshot exists and `max_drawdown` in it could not be read. Collapsing them
+ * told the operator "nothing to show yet" for a state that, were
+ * `max_drawdown` ever to actually go non-finite, would mean a run happened
+ * and returned a broken figure (#1264).
+ */
+function drawdownReasonOf(
+  metrics: MetricsSuiteWire | null,
+  value: number | undefined,
+): DrawdownReason {
+  if (metrics === null) return 'absent';
+  return value === undefined ? 'unreadable' : 'drawn';
+}
+
+const DRAWDOWN_EMPTY_STATE: Readonly<Record<Exclude<DrawdownReason, 'drawn'>, string>> = {
+  absent: 'no daily suite yet — meter not drawable',
+  // Says the figure could not be read, not that no suite ran — the opposite
+  // claim `absent` above makes for the genuinely-no-report case (#1264).
+  unreadable: 'daily suite drawdown figure could not be read — meter not drawable',
+};
+
 function DrawdownBlock({ metrics }: { metrics: MetricsSuiteWire | null }) {
+  const value = drawdownValueOf(metrics);
+  const reason = drawdownReasonOf(metrics, value);
   return (
     <CapMeter
       dataField="drawdown"
       heading="Drawdown"
-      value={metrics?.max_drawdown}
+      value={value}
       cap={DRAWDOWN_TOLERANCE}
       format={formatPercent}
       tone="amber"
-      emptyState="no daily suite yet — meter not drawable"
+      emptyState={reason === 'drawn' ? '' : DRAWDOWN_EMPTY_STATE[reason]}
       trackLabel={(_fraction, value) =>
         `max drawdown ${formatPercent(value)} of the ${formatPercent(
           DRAWDOWN_TOLERANCE,
