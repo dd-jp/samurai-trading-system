@@ -357,9 +357,15 @@ describe('TelegramBotApiClient.sendApprovalButtons', () => {
 
 describe('TelegramBotApiClient — transient network failures and undeliverable alerts (#1108)', () => {
   it('retries a bare fetch rejection and delivers on a later attempt', async () => {
+    // Every `new TypeError('fetch failed')` mock in this file now carries a
+    // `.cause` (#1132): classifyTelegramThrown keys on that shape, not the
+    // message text, so a cause-less TypeError no longer models a real fetch
+    // failure and would misclassify as non-retryable.
     const h = makeClient({ retry: { maxAttempts: 3, baseDelayMs: 1, maxDelayMs: 1 } });
     h.fetchMock
-      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockRejectedValueOnce(
+        new TypeError('fetch failed', { cause: new Error('connect ECONNREFUSED 127.0.0.1:9') }),
+      )
       .mockResolvedValueOnce(okResponse());
 
     await expect(h.client.sendMessage(CHAT_ID, 'hi')).resolves.toBeUndefined();
@@ -379,7 +385,9 @@ describe('TelegramBotApiClient — transient network failures and undeliverable 
 
   it('durably records a send that exhausts retries on a bare network failure', async () => {
     const h = makeClient({ retry: { maxAttempts: 2, baseDelayMs: 1, maxDelayMs: 1 } });
-    h.fetchMock.mockRejectedValue(new TypeError('fetch failed'));
+    h.fetchMock.mockRejectedValue(
+      new TypeError('fetch failed', { cause: new Error('connect ECONNREFUSED 127.0.0.1:9') }),
+    );
 
     await expect(h.client.sendMessage(CHAT_ID, 'Samurai VERDICT: TSLA bullish')).rejects.toThrow();
 
@@ -395,7 +403,9 @@ describe('TelegramBotApiClient — transient network failures and undeliverable 
 
   it('durably records a permanently-undeliverable approval-button send too', async () => {
     const h = makeClient();
-    h.fetchMock.mockRejectedValue(new TypeError('fetch failed'));
+    h.fetchMock.mockRejectedValue(
+      new TypeError('fetch failed', { cause: new Error('connect ECONNREFUSED 127.0.0.1:9') }),
+    );
 
     await expect(
       h.client.sendApprovalButtons(CHAT_ID, 'Approve TSLA entry?', {
@@ -536,7 +546,9 @@ describe('TelegramBotApiClient — transient network failures and undeliverable 
 
   it('a broken durable write never replaces the original send failure', async () => {
     const h = makeClient();
-    h.fetchMock.mockRejectedValue(new TypeError('fetch failed'));
+    h.fetchMock.mockRejectedValue(
+      new TypeError('fetch failed', { cause: new Error('connect ECONNREFUSED 127.0.0.1:9') }),
+    );
     h.alertDeliveryLog.recordFailure = () => {
       throw new Error('db locked');
     };
@@ -554,7 +566,9 @@ describe('TelegramBotApiClient — transient network failures and undeliverable 
   it('masks a bot-token-shaped recordError message in the "failed to durably record" log line', async () => {
     const entries: LogEntry[] = [];
     const h = makeClient({ logger: { log: (entry) => entries.push(entry) } });
-    h.fetchMock.mockRejectedValue(new TypeError('fetch failed'));
+    h.fetchMock.mockRejectedValue(
+      new TypeError('fetch failed', { cause: new Error('connect ECONNREFUSED 127.0.0.1:9') }),
+    );
     const tokenLike = 'bot123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
     h.alertDeliveryLog.recordFailure = () => {
       throw new Error(`db write failed against ${tokenLike}`);
@@ -575,7 +589,9 @@ describe('TelegramBotApiClient — transient network failures and undeliverable 
       alertChatId: CHAT_ID,
       retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
     });
-    h.fetchMock.mockRejectedValue(new TypeError('fetch failed'));
+    h.fetchMock.mockRejectedValue(
+      new TypeError('fetch failed', { cause: new Error('connect ECONNREFUSED 127.0.0.1:9') }),
+    );
 
     for (let i = 0; i < 3; i++) {
       await expect(h.client.sendMessage(CHAT_ID, `alert ${i}`)).rejects.toThrow();
@@ -593,7 +609,9 @@ describe('TelegramBotApiClient — transient network failures and undeliverable 
       alertChatId: CHAT_ID,
       retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
     });
-    h.fetchMock.mockRejectedValue(new TypeError('fetch failed'));
+    h.fetchMock.mockRejectedValue(
+      new TypeError('fetch failed', { cause: new Error('connect ECONNREFUSED 127.0.0.1:9') }),
+    );
 
     for (let i = 0; i < 3; i++) {
       await expect(h.client.sendMessage(CHAT_ID, `alert ${i}`)).rejects.toThrow();
@@ -647,7 +665,9 @@ describe('TelegramBotApiClient — transient network failures and undeliverable 
       alertChatId: CHAT_ID,
       retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
     });
-    h.fetchMock.mockRejectedValue(new TypeError('fetch failed'));
+    h.fetchMock.mockRejectedValue(
+      new TypeError('fetch failed', { cause: new Error('connect ECONNREFUSED 127.0.0.1:9') }),
+    );
 
     for (let i = 0; i < 5; i++) {
       await expect(h.client.sendMessage('heartbeat-chat', `beat ${i}`)).rejects.toThrow();

@@ -60,6 +60,11 @@ export class TelegramProviderError extends Error {
  * differently: this is a transient local/transport blip, not Telegram
  * rejecting the request, so it belongs in the retryable set the same way a
  * timeout does.
+ *
+ * Classified structurally, not by matching `fetch failed` as text (#1132):
+ * undici's error text carries no stability contract, so a future runtime's
+ * wording change must not silently turn this back into a dropped alert. See
+ * `classifyTelegramThrown`'s doc for the discriminator and its evidence.
  */
 export class TelegramNetworkError extends Error {
   constructor(message: string) {
@@ -163,16 +168,52 @@ export async function classifyTelegramResponse(
  * `AbortError` — the poll loop's own `stop()` — is deliberately mapped to
  * `TelegramProviderError` with no status: not a timeout, and not retryable.
  *
- * Only a genuine bare network failure is a `TelegramNetworkError` (#1108):
- * Node/undici's `fetch` throws a `TypeError` with the exact message `fetch
- * failed` (cause carries the DNS/connection detail) when the request never
- * reached a server, and that is the sole signal accepted here. Everything
- * else thrown by `#request`'s try block — `JSON.stringify` on a circular
- * body, `new URL()` on a malformed `baseUrl`, or any other deterministic
- * programming/config fault — falls to `TelegramProviderError` (non-retryable)
- * instead: those are not transient, and retrying one 3x with backoff on
- * every alert send would fail the same way every time while masking the
- * actual defect.
+ * A genuine bare network failure becomes a `TelegramNetworkError` (#1108),
+ * decided structurally rather than by matching `fetch failed` as literal
+ * text (#1132: undici's error text carries no stability contract — a future
+ * runtime rewording it, even by a suffix, would silently reproduce #1108's
+ * dropped-alert bug in the exact channel that exists to report it). The
+ * signal accepted here is: a `TypeError` whose `.cause` is itself an `Error`.
+ * Verified against Node v26.5.0's built-in fetch (this project's floor is
+ * Node >=24; only that one version was probed directly here, via standalone
+ * scripts outside this suite's network-guarded test runner — the redirect
+ * finding below was independently reproduced by a reviewer on v24.15.0 too):
+ *
+ * - A request that never reached a server (ECONNREFUSED against a closed
+ *   ephemeral loopback port, ENOTFOUND, an unroutable/unknown scheme, a
+ *   fetch-spec-blocked port) throws `TypeError: fetch failed` whose `.cause`
+ *   is a plain `Error` (a Node `SystemError` or, for a blocked port, an
+ *   `Error` with message `bad port`) carrying the OS/DNS detail.
+ * - A malformed URL string handed directly to `fetch()` — whether it is the
+ *   client's own `baseUrl` or a redirect target read from a `Location`
+ *   header the *remote* server sent — throws a `TypeError` whose `.cause` is
+ *   itself `TypeError [ERR_INVALID_URL]` (the WHATWG URL spec mandates
+ *   `TypeError` on parse failure). An earlier version of this discriminator
+ *   excluded a `TypeError`-shaped cause on the theory that it meant "local
+ *   config fault, not transient" — that inference is false: a probe against
+ *   a loopback server issuing `302` redirects with a malformed `Location`
+ *   (`http://[bad`, `http://exa mple.com/`, `http://host:99999/`) throws the
+ *   identical shape for a failure the *server* caused, and excluding it
+ *   turned a genuine transient-network case into a silently dropped alert —
+ *   the exact #1108 failure mode, reintroduced by the fix meant to prevent
+ *   it. There is no cost-free way to keep a misconfigured `baseUrl`
+ *   non-retryable without either matching on undici's own wrapper-message
+ *   text (`'Failed to parse URL from '` vs `'fetch failed'` — the same
+ *   fragility #1132 exists to remove) or misclassifying the redirect case.
+ *   This discriminator accepts both as retryable: a misconfigured `baseUrl`
+ *   now retries 3x before permanently failing rather than failing on the
+ *   first attempt, but `#recordDeliveryFailure` runs the same durable-record
+ *   + escalation path either way (see telegram-bot-api-client.ts), so
+ *   nothing is silently lost — it is merely a few seconds slower to
+ *   escalate. That is a strictly smaller cost than the redirect case's
+ *   silent drop, so it is the direction this classifier now favors.
+ * - `JSON.stringify` on a circular body, a bare `new URL()` call, and a
+ *   `RangeError` carry no `.cause` at all, so they fall through regardless.
+ *
+ * Everything that doesn't match — a circular-JSON `TypeError`, a `TypeError`
+ * with no `.cause` or a non-`Error` `.cause`, a `RangeError`, or any other
+ * shape not carrying this evidence — falls to `TelegramProviderError`
+ * (non-retryable) instead.
  */
 export function classifyTelegramThrown(error: unknown, context: string): TelegramError {
   if (
@@ -198,7 +239,7 @@ export function classifyTelegramThrown(error: unknown, context: string): Telegra
   if (name === 'AbortError') {
     return new TelegramProviderError(`Telegram Bot API transport failure: ${detail} (${context})`);
   }
-  if (error instanceof TypeError && error.message === 'fetch failed') {
+  if (error instanceof TypeError && error.cause instanceof Error) {
     return new TelegramNetworkError(`Telegram Bot API transport failure: ${detail} (${context})`);
   }
   return new TelegramProviderError(`Telegram Bot API transport failure: ${detail} (${context})`);
