@@ -480,6 +480,12 @@ function healthyFilledZeroSizeWedge(
         idempotency_key: 'smoke-filled-zero-size-wedge',
         instrument: 'AAPL',
         order_state: 'filled',
+        // Hardcoded, not `ALERT_AFTER_CONSECUTIVE_ZERO_SIZE`, on purpose
+        // (#1125 review) — importing the constant here would make a mutation
+        // that changes it (e.g. 3 -> 4) pass this unit suite silently,
+        // leaving `yarn test`'s only coverage of that mutation the 19 tests
+        // across `filled-zero-size-throttle.test.ts` and friends that already
+        // catch it. Do not "tidy" this into a reference to the constant.
         consecutive: 3,
         stuck_ms: 3_600_000,
       },

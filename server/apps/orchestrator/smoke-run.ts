@@ -3707,6 +3707,13 @@ const FILLED_ZERO_SIZE_WEDGE_LOT_KEY = 'smoke-filled-zero-size-wedge';
 const FILLED_ZERO_SIZE_WEDGE_INSTRUMENT = 'AAPL';
 /** How far before the scenario's fixed clock the lot opened — arbitrary but deterministic, giving a nonzero `stuck_ms`. */
 const FILLED_ZERO_SIZE_WEDGE_OPENED_BEFORE_MS = 60 * 60_000;
+/**
+ * How far before `opened_at` the decision was made — kept DISTINCT from it
+ * (never the same Date) so a swap of the two fields at the call site is
+ * something the gate could in principle catch, rather than invisible because
+ * both carried an identical value.
+ */
+const FILLED_ZERO_SIZE_WEDGE_DECISION_BEFORE_OPENED_MS = 5_000;
 
 /**
  * Records every FILLED_WITH_ZERO_SIZE line on the way to the real logger —
@@ -3733,12 +3740,17 @@ class FilledZeroSizeWarningRecorder implements Logger {
 
 /**
  * The second broker/harness surface #1125 asked for: a `BrokerAdapter` that
- * reports a lot `filled` while never surfacing its own fill — the ONLY way
- * to genuinely wedge a lot at zero `filled_size` forever. Same shape as
- * `filled-zero-size-wiring.test.ts`'s `WedgingBroker`, which proves a
- * DIFFERENT property (the throttle is SHARED across two surfaces built from
- * one `executionDeps`) against the composition root directly; this class
- * exists to drive the same wedge through `yarn smoke`'s own gate instead.
+ * reports a lot `filled` while its `getOrder` order and `fetchNewFills` fill
+ * disagree on timing — the fill IS returned by `fetchNewFills` (see below),
+ * but dated before the lot's own `opened_at`, so `ingest-fills.ts`'s `since`
+ * floor drops it on every poll. One way to wedge a lot at zero `filled_size`
+ * forever, not the only one — a non-entry-leg fill or a zero-qty entry fill
+ * would wedge it identically; this one reproduces #1087's own incident
+ * shape. Same shape as `filled-zero-size-wiring.test.ts`'s `WedgingBroker`,
+ * which proves a DIFFERENT property (the throttle is SHARED across two
+ * surfaces built from one `executionDeps`) against the composition root
+ * directly; this class exists to drive the same wedge through `yarn
+ * smoke`'s own gate instead.
  *
  * `SimulatedBrokerAdapter` cannot produce this post-#1087 — it now stamps
  * every fill at submit time, which is the fix — so no scripting of the
@@ -3801,8 +3813,12 @@ class SmokeWedgedLotBroker implements BrokerAdapter {
  * it), then `ALERT_AFTER_CONSECUTIVE_ZERO_SIZE` consecutive `ingestFills()`
  * polls — each seeing the same excluded-forever fill — reach the throttle's
  * first warning. `costModel`/`marketData` are never consulted on this path
- * (verified by reading ingest-fills.ts/reconcile.ts before building this): an
- * empty cast proves that rather than assuming it, the same convention
+ * (verified by reading ingest-fills.ts/reconcile.ts before building this —
+ * neither file references `input.config`, `costModel` or `marketData`): the
+ * empty cast below rests on that reading, not on itself as proof — a cast to
+ * `unknown` only guarantees an unexpected METHOD call throws, not that a
+ * stray property read would be caught (it would return `undefined` and
+ * likely fail elsewhere, less legibly). Same convention
  * `filled-zero-size-wiring.test.ts`'s `stubConfig` uses for the fields its
  * own scenario never reaches.
  */
@@ -3860,7 +3876,9 @@ async function runFilledZeroSizeWedgeScenario(
       order_state: 'submitted',
       broker_order_ids: brokerOrderIds,
       opened_at: openedAt,
-      decision_timestamp: openedAt,
+      decision_timestamp: new Date(
+        openedAt.getTime() - FILLED_ZERO_SIZE_WEDGE_DECISION_BEFORE_OPENED_MS,
+      ),
       conviction: 0.7,
       converged: true,
     };
@@ -5052,8 +5070,12 @@ export function evaluateSmokeGate(
       `the FILLED_WITH_ZERO_SIZE wedge scenario produced ${wedge.warnings.length} warning(s), ` +
         "expected exactly 1 — either the scenario's wedged lot never reached the throttle's " +
         'first-warning threshold (ALERT_AFTER_CONSECUTIVE_ZERO_SIZE consecutive zero-filled-size ' +
-        "polls) or ingest-fills.ts's own no-new-fills zero-filled-size warning branch has been " +
-        'removed or stopped firing (#1125)',
+        "polls), ingest-fills.ts's own no-new-fills zero-filled-size warning branch has been " +
+        "removed or stopped firing, or execution.reconcile() no longer adopts the broker's " +
+        "'filled' order_state onto this lot (that branch is guarded on " +
+        "order_state === 'filled' || 'partially_filled' — if reconcile's adopt semantics change " +
+        "so the lot stays 'submitted', this branch is never reached and zero warnings fire even " +
+        'though it is fully intact) (#1125)',
     );
   } else {
     const [warning] = wedge.warnings;

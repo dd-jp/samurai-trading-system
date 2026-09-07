@@ -122,6 +122,14 @@ export async function ingestFills(input: ExecutionInput): Promise<void> {
   //    not here — this floor is still correct, PROVIDED that invariant
   //    genuinely holds. Re-verify it for any adapter before trusting this
   //    comment again.
+  //  * Widening this floor to re-verify it is not itself diagnosable through
+  //    `yarn smoke`'s gate (#1125 review): `runFilledZeroSizeWedgeScenario`
+  //    (smoke-run.ts) then lets its scripted fill through, and
+  //    `SmokeWedgedLotBroker`'s throw-on-unexpected-call posture (deliberate,
+  //    or the gate would fail QUIETLY on a stub returning a silently-wrong
+  //    value) turns that into an uncaught exception — `yarn smoke` exits
+  //    non-zero with a stack trace and no `GATE:` line at all, not a
+  //    diagnosable gate failure naming what broke. Confirmed, not changed.
   //  * `BrokerAdapter.fetchNewFills` deliberately does NOT promise per-lot
   //    timestamp monotonicity, and cannot — see its doc in types/broker.ts.
   //  * The win would have been small anyway: `since` does not bound the venue
