@@ -268,15 +268,30 @@ function normalizeCapUsd(value: unknown): number | null | undefined {
  * it — dropping it would let a nonsense string through as a trustworthy
  * arming record on a live-money surface. Both checks run: the shape rules
  * out formats the store never writes (loose ISO variants `Date.parse` alone
- * accepts), and `Date.parse` rules out digit strings the shape alone accepts
- * but no calendar produces. The regex is a literal duplicate of
+ * accepts), and `Date.parse` rejects the shape-valid strings whose
+ * components overflow badly enough to leave no instant at all (`NaN`) — NOT
+ * every shape-valid string a real calendar instant. `"2026-02-30T00:00:00.000Z"`
+ * names a date no calendar has, and `"2026-09-06T24:00:00.000Z"` uses ISO
+ * 8601's legitimate end-of-day `24:00:00` form for an instant a calendar
+ * does have — but `Date.parse` treats both the same way: it rolls each
+ * forward to a different, still shape-valid instant instead of returning
+ * `NaN`, so either would pass both checks and later footnote a rolled
+ * instant (`03-02`, `09-07`) as though it were the real arming time; only
+ * the footnote's time-of-day component is visibly wrong here, since the
+ * dashboard's cap-armed footnote renders `HH:MM:SSZ` only, no date, and
+ * `00:00:00Z` is what both rolled instants happen to render. Not reachable
+ * through this store, though: a `Date` cannot itself represent Feb 30 or
+ * hour 24 (the rollover happens on construction, before any string exists),
+ * and `toStoredTimestamp` calls `Date#toISOString()` on an already-valid
+ * `Date`, unguarded, which also always emits millisecond precision — so
+ * every value this store's `arm()` ever writes satisfies both checks with
+ * no rollover artifact and no false negative against a real write. A
+ * rollover string can only reach this function via a row written to
+ * the column outside `arm()`. The regex is a literal duplicate of
  * `STORED_TIMESTAMP` (`server/shared/store/sqlite-utils.ts`), not an import
  * — `client/` and `server/` do not import each other (CLAUDE.md) — kept in
  * sync by inspection, the same way the two processes' timestamp grammar
- * always has been. `toStoredTimestamp` calls `Date#toISOString()` unguarded,
- * which always emits millisecond precision, so every value this store's
- * `arm()` ever writes satisfies both checks — the tightening has no false
- * negative against a real write.
+ * always has been.
  */
 const STORED_TIMESTAMP_SHAPE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
@@ -372,12 +387,12 @@ export function toWireSnapshot(body: unknown): WireSnapshot | null {
     ? (candidate.mode as ServerMode)
     : null;
   const spend = candidate.llm_spend;
-  const llm_spend = isSpendSummary(spend)
-    ? ({
-        ...(spend as Record<string, unknown>),
+  const llm_spend: WireLlmSpendSummary | null = isSpendSummary(spend)
+    ? {
+        ...(spend as unknown as Omit<LlmSpendSummary, 'cap_usd' | 'cap_armed_at'>),
         cap_usd: normalizeCapUsd((spend as Record<string, unknown>).cap_usd),
         cap_armed_at: normalizeCapArmedAt((spend as Record<string, unknown>).cap_armed_at),
-      } as unknown as WireLlmSpendSummary)
+      }
     : null;
   const metricsField = candidate.metrics as Record<string, unknown>;
   const metrics: MetricsSuiteWire = {

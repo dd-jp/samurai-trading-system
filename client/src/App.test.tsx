@@ -261,7 +261,9 @@ describe('rail', () => {
     const rail = screen.getByRole('complementary', { name: 'Rail' });
 
     expect(
-      await within(rail).findByText('no arming record on this snapshot — meter not drawable'),
+      await within(rail).findByText(
+        'no trustworthy arming record on this snapshot — meter not drawable',
+      ),
     ).toBeTruthy();
     expect(within(rail).queryByText(/never armed/)).toBeNull();
     expect(within(rail).queryByText(/deliberately uncapped/)).toBeNull();
