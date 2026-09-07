@@ -60,11 +60,18 @@ describe('alertDeliveryFailureRetentionDaysFromEnvironment', () => {
 
   // #1131's load-bearing bound: unlike the MI archive and llm_call_log
   // resolvers (both `min = 1`), this one refuses 1 as well as 0. A 1-day
-  // retention is exactly the 24h Rail window, so the daily prune sweep could
-  // delete a row the SAME sweep the count is still supposed to see it in —
-  // an operator watching the tile clear would then be unable to tell whether
-  // the failure aged out of the window or was deleted by retention.
-  it('refuses a 1-day retention — indistinguishable from the count window clearing it', () => {
+  // retention is exactly the 24h Rail window, and at that equality the raw
+  // table stops outliving the tile — so the lifetime total
+  // `contracts/snapshot.ts` dropped as "reconstructable ... by reading
+  // `alert_delivery_failures` directly" would be reconstructable from
+  // nothing. `alertDeliveryFailureRetentionDaysFromEnvironment`'s doc
+  // carries the full argument, including the second (cross-process clock
+  // ordering) reason and which reading of the ambiguity does NOT hold.
+  //
+  // This case is also the LOWERED-MINIMUM half of the guard on "retention
+  // outlives the window"; the last case in this block is the widened-window
+  // half.
+  it('refuses a 1-day retention — retention must outlive the window it backstops', () => {
     expect(() => alertDeliveryFailureRetentionDaysFromEnvironment('1')).toThrow(
       /must be an integer >= 2/,
     );
@@ -85,10 +92,13 @@ describe('alertDeliveryFailureRetentionDaysFromEnvironment', () => {
     );
   });
 
-  // Pins the invariant the comments above assert, independent of either
-  // constant's current value — a future edit to the window or the default
-  // retention that silently breaks the "retention outlives the window" rule
-  // fails here rather than only in a comment nobody re-reads.
+  // The WIDENED-WINDOW half of that guard. `minRetentionMs` restates the
+  // resolver's `2` as its own literal rather than reading it from
+  // `production.ts`, so this does not derive the bound from the resolver —
+  // it is the assertion that goes red if `ALERT_DELIVERY_FAILURE_WINDOW_MS`
+  // is later widened past 48h (or past the 30-day default). The `min = 2`
+  // floor alone would not catch that: at a 48h window retention and window
+  // are equal, not ordered.
   it('keeps the minimum retention strictly longer than the count window', () => {
     const minRetentionMs = 2 * 24 * 60 * 60 * 1000;
     expect(minRetentionMs).toBeGreaterThan(ALERT_DELIVERY_FAILURE_WINDOW_MS);

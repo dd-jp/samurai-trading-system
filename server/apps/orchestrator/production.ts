@@ -814,15 +814,40 @@ function pruneMiArchiveWithLog(
  * guards against with a row ceiling instead.
  *
  * `min = 2`, NOT `1` like the two resolvers above. This table also feeds
- * `countFailures`'s 24-hour (`ALERT_DELIVERY_FAILURE_WINDOW_MS`) Rail window,
- * and a 1-day retention would let the daily prune sweep delete a row while it
- * is still inside that window — an operator watching the tile go to zero
- * would then be unable to tell "the failure aged out of the window" from
- * "the failure was deleted by the retention sweep", which is exactly the
- * ambiguity #1131 was opened to remove. `min = 2` keeps retention strictly
- * longer than the count window regardless of what either constant is later
- * tuned to, and `alert-delivery-failure-retention.test.ts` pins the
- * inequality directly rather than trusting this comment to stay true.
+ * `countFailures`'s Rail window, and 1 day is exactly that window's 24-hour
+ * `ALERT_DELIVERY_FAILURE_WINDOW_MS`. Two things break at that equality.
+ *
+ * FIRST, with no clock premise at all: `contracts/snapshot.ts`'s
+ * `alert_delivery_failures_24h` doc drops the tile's old lifetime total on
+ * the stated grounds that it "remains reconstructable for as long as
+ * retention holds by reading `alert_delivery_failures` directly". At
+ * `retention == window` a row is pruned at about the boundary the tile
+ * clears it, so the raw table no longer outlives the tile and there is
+ * nothing left to reconstruct from.
+ *
+ * SECOND, the two boundaries are computed in different processes with
+ * nothing ordering them: the prune's cutoff from the orchestrator's
+ * `clock.now()` (`pruneAlertDeliveryFailuresWithLog` below), the count's
+ * `asOf` from the service-api snapshot build
+ * (`sqlite-query-store.ts`'s `getAlertDeliveryFailureCount`). At equal
+ * clocks the two predicates are complementary — `timestamp < T_prune - 1d`
+ * and `timestamp > asOf - 1d` cannot both hold — so it is NOT true that a
+ * sweep would delete a row the tile still counts; that reading is wrong.
+ * The failure is directional instead: when `asOf` trails `T_prune`, rows in
+ * `(asOf - 24h, T_prune - 24h)` are deleted while still inside the window
+ * the tile counts over, and an operator watching the tile go to zero cannot
+ * tell "the failure aged out of the window" from "the failure was deleted
+ * by the retention sweep" — the ambiguity #1131 was opened to remove.
+ *
+ * The floor by ITSELF orders nothing. `min = 2` is 48h against today's 24h
+ * window; widen `ALERT_DELIVERY_FAILURE_WINDOW_MS` to 48h and the two become
+ * EQUAL, not ordered. What holds the inequality is a pair of assertions in
+ * `alert-delivery-failure-retention.test.ts`, one per direction: a widened
+ * window fails its `2 days > ALERT_DELIVERY_FAILURE_WINDOW_MS` check (and
+ * the matching one for the 30-day default), a lowered minimum fails its
+ * `'1'`-throws case. Both restate the `2` as their own literal rather than
+ * reading it from this resolver, so they are guards on the two directions,
+ * not a derivation of the bound from this argument.
  */
 export function alertDeliveryFailureRetentionDaysFromEnvironment(
   value: string | undefined = process.env[ENV_ALERT_DELIVERY_FAILURE_RETENTION_DAYS],

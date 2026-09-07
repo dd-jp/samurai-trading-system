@@ -135,11 +135,14 @@ export class SqliteAlertDeliveryLog {
    * debate/tick cadence, so a day window bounds it correctly rather than
    * under- or over-shooting the way it would for a cadence-bound table.
    *
-   * `cutoff` must be chosen so `pruneOlderThan` never removes a row still
-   * inside `countFailures`'s window — see
-   * `alertDeliveryFailureRetentionDaysFromEnvironment`'s minimum in
-   * `production.ts`, which enforces exactly that so the tile's zero is never
-   * ambiguous between "aged out of the window" and "pruned".
+   * `cutoff` should be chosen so `pruneOlderThan` does not remove a row
+   * still inside `countFailures`'s window. Nothing here can enforce that:
+   * this method sees only the cutoff it is handed, and the two boundaries
+   * are computed in different processes.
+   * `alertDeliveryFailureRetentionDaysFromEnvironment` in `production.ts`
+   * refuses a retention below 2 days for that reason — its doc carries the
+   * full argument, including which readings of the ambiguity actually hold
+   * and which do not.
    */
   pruneOlderThan(cutoff: Date): number {
     return this.db
