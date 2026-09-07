@@ -53,13 +53,42 @@ function shouldWarnAt(consecutive: number): boolean {
  * restarted has no evidence about the previous process's polls, and a crash
  * is already alarmed by the heartbeat's silence.
  *
- * One instance per running `Execution` surface (constructed once at the
- * composition root — `ExecutionInput.filledZeroSizeThrottle` — and reused
- * across every poll `ingestFills()` runs on that surface, the same lifetime
- * `ExecutionImpl` itself has), NOT a module-level singleton: the live and
- * control arms poll independently and must not share, or leak into, each
- * other's throttle state, and two `ExecutionImpl` instances built in the
- * same test process must not either.
+ * One instance per composition root, constructed wherever that root wires
+ * an `Execution` caller's dependencies — `ExecutionInput.filledZeroSizeThrottle`
+ * — and threaded through every `Execution` surface built from that same
+ * object: the tick-driven `execute()` step (`buildExecutionStep`,
+ * production/direct-bind.ts, which rebuilds a fresh `ExecutionImpl` per
+ * verdict) and the fill-sync loop's `reconcile()`/`ingestFills()` surfaces
+ * (`buildExecutionSurface`, built once and held for that root's lifetime).
+ * Today: `production.ts`'s live root, `control-arm-wiring.ts`'s control
+ * arm, each of `smoke-run.ts`'s scenario harnesses, and
+ * `place-soak-position.ts`'s probe — not a list this doc has to track,
+ * since wiring the dependencies at all means constructing this too. As
+ * `production.ts`'s own `filledZeroSizeThrottle:` comment puts it: one
+ * throttle for that root's whole process lifetime — process-scoped, not
+ * surface-scoped — so it is not scoped to any single `ExecutionImpl`,
+ * including the per-verdict ones `buildExecutionStep` keeps rebuilding.
+ * NOT a module-level singleton. The live and control arms are NOT the
+ * collision case: `computeIdempotencyKey` (#753, idempotency-key.ts) hashes
+ * `arm` into the payload for every non-live arm (`TradingArm` is only
+ * `'live' | 'control'`), so the two arms' keys never collide even if one
+ * instance were shared — `control-arm-wiring.ts`'s own comment gives its
+ * separate throttle a different reason, process-scoped state matching each
+ * root's own instance lifetime, the same symmetry `broker`/`store`/
+ * `costModel` get there, not cross-arm leakage. The real collision risk is
+ * a root that bypasses `computeIdempotencyKey` and hand-assigns a literal
+ * `idempotency_key` instead, the way every scenario in `smoke-run.ts` and
+ * every `seedPosition`/fixture helper in this directory's own test files
+ * do: `smoke-run.ts`'s own restart scenario builds a SECOND throttle
+ * (`restartExecutionAndReconcile`) and calls `ingestFills()` again over the
+ * SAME store the first throttle already polled, using the same literal lot
+ * keys — sharing one instance there would carry a pre-"restart" consecutive
+ * count across the simulated restart, which the restart-clean posture above
+ * exists to prevent. Every test file constructing its own throttle per test
+ * guards the same thing: a handful of literal keys ('key-1', 'key-flaky',
+ * …) recur across many independently-built instances in the one test
+ * process, and a shared instance would leak one test's count into
+ * another's.
  */
 export class FilledZeroSizeThrottle {
   readonly #consecutive = new Map<string, number>();
