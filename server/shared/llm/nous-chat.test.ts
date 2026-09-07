@@ -160,8 +160,8 @@ describe('nousChat', () => {
     });
 
     it('throws even when the truncated body carries no content at all', async () => {
-      // The kimi-k3 shape recorded in ai-review.yml: the whole budget spent on
-      // hidden reasoning tokens, zero answer text, every time.
+      // The kimi-k3 shape: the whole budget spent on hidden reasoning tokens,
+      // zero answer text, every time.
       stubFetch(
         completion({
           choices: [{ message: {}, finish_reason: 'length' }],

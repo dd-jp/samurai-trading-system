@@ -69,9 +69,8 @@ export class NousApiError extends Error {
  * it would reach `parseResponse`, fail, become `LlmMalformedResponseError`,
  * and be RETRIED, which re-bills a deterministic failure at the same
  * `max_tokens` that just failed. The repo has already paid for this lesson
- * once: `.github/workflows/ai-review.yml` records kimi-k3 spending its entire
- * budget on hidden chain-of-thought and returning `finish_reason=length` with
- * zero content, every time.
+ * once: kimi-k3 spent its entire budget on hidden chain-of-thought and returned
+ * `finish_reason=length` with zero content, every time.
  *
  * The tokens it burned are NOT metered — every throw at this wire boundary
  * skips `AnthropicLlmClient.recordSpend`, which runs only on a returned

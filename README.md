@@ -303,13 +303,12 @@ console output. If a gate run fails and the terminal scrollback that showed
 the failing test's name is gone, read that file instead of re-running —
 it survives after the process exits ([#809](https://github.com/dd-jp/samurai-trading-system/issues/809)).
 
-CI (`.github/workflows/ci.yml`) runs on every PR and has three jobs:
+CI (`.github/workflows/ci.yml`) runs on every PR and has two jobs:
 
 - **checks** — `yarn lint`, `yarn typecheck`, `yarn build`, `yarn build:web`, `yarn test`, `yarn check:citations`, and a guard that the indicator golden fixture was generated rather than hand-edited. Each runs even if an earlier one fails, so a lint break can't hide a test break.
 - **e2e** — the Playwright suite against the built bundle, on its own runner with Chromium installed; failures upload traces.
-- **review-harness** — `pytest .github/scripts` for the Python AI-review harness, which `yarn test` cannot see.
 
-All three must pass before merge.
+Both must pass before merge.
 
 ## Project Structure
 

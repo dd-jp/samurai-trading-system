@@ -206,8 +206,8 @@ export class NousSentimentClient implements GrokSentimentClient {
     try {
       parsed = JSON.parse(content) as { items?: unknown };
     } catch {
-      // Recover a fenced or prose-wrapped object before giving up — the same
-      // salvage `review_lib.py` does, and for the same reason.
+      // Recover a fenced or prose-wrapped object before giving up: a model asked
+      // for JSON often returns it fenced or with a sentence around it.
       const match = content.match(/\{[\s\S]*\}/);
       if (match === null) return this.#unreadable(instrument);
       try {
