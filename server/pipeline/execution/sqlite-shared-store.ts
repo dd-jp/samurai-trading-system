@@ -568,8 +568,9 @@ export class SqliteExecutionStore implements SharedStore {
           `INSERT INTO closed_trades (
              idempotency_key, debate_id, instrument, asset_class, side,
              entry, stop, filled_size, realized_pnl_net, fees_total,
-             opened_at, closed_at, close_reason, arm, sizing_capital_ceiling
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             opened_at, closed_at, close_reason, arm, sizing_capital_ceiling,
+             modelled_cost_charged
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           trade.idempotency_key,
@@ -595,6 +596,14 @@ export class SqliteExecutionStore implements SharedStore {
           // A window that mixes NULL and non-NULL (or two different non-NULL)
           // values here mixes two sizing regimes into one `return_pct`.
           this.sizingCapitalCeiling ?? null,
+          // #1121 AC5, migration 0049 — what actually happened to THIS lot's
+          // fills, computed at close time by `closedTrade()` in
+          // `ingest-fills.ts`, never a literal. Going through `toFill`'s #1121
+          // path is not the same as being charged by it: the modelled snapshot
+          // it spends is nullable (pre-migration-0037 lot, or a failed
+          // `captureSubmitSnapshot`), and a `1` stamped on such a row would
+          // certify a cost basis the row is not on.
+          trade.modelled_cost_charged ? 1 : 0,
         );
     } catch (cause) {
       if (isUniqueConstraintError(cause)) {

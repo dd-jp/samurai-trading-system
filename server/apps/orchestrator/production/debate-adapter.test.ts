@@ -758,6 +758,7 @@ describe('buildDebateStep', () => {
       opened_at: NOW,
       closed_at: new Date('2026-07-29T14:00:00Z'),
       close_reason: 'target',
+      modelled_cost_charged: true,
     };
 
     // Two arguments, not three: #370 removed the shadow-credit config

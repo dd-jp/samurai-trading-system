@@ -76,6 +76,7 @@ function makeClosedTrade(overrides: Partial<ClosedTrade> = {}): ClosedTrade {
     opened_at: AS_OF,
     closed_at: AS_OF,
     close_reason: 'target',
+    modelled_cost_charged: true,
     ...overrides,
   };
 }

@@ -671,6 +671,11 @@ export class ReplayDriver {
         opened_at: lot.opened_at,
         closed_at: bar.close_time,
         close_reason: exit.reason,
+        // #1121: always true here — the replay prices EVERY leg through
+        // `CostModel.fill` itself (`result.cost_breakdown.commission` is what
+        // `fees_total` above is built from), so there is no venue report to
+        // fall back from and no uncharged leg to record.
+        modelled_cost_charged: true,
       },
       fills,
     );

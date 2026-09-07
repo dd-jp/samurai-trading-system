@@ -35,6 +35,7 @@ function trade(arm: TradingArm, pnl: number, closedAt: string): ClosedTrade & { 
     opened_at: FROM,
     closed_at: new Date(closedAt),
     close_reason: 'target',
+    modelled_cost_charged: true,
   };
 }
 
@@ -110,6 +111,52 @@ describe('formatArmComparison (#753 AC4/AC5)', () => {
     // Still a full row — the warning supplements the numbers, it does not
     // replace them.
     expect(text).toMatch(/control\s+0\s+0\.00\s+0\.00%\s+0\.00%/);
+  });
+
+  /**
+   * #1121 review, finding 5. `SqliteArmComparisonSource` drops every live row
+   * closed before #1121 (they backfill to `modelled_cost_charged = 0`), which
+   * for the soak's history to date takes the live arm to zero rows. The
+   * automated reader survives that on its min-trades floor; this report has no
+   * floor, so an operator reads `live 0` as "the live arm closed nothing" —
+   * false — unless the exclusion is named on the page.
+   *
+   * Round 2, finding 4: the note must name the ONGOING regime too. A
+   * best-effort submit-time capture that fails stamps 0 on a lot closed today,
+   * so an operator whose window holds only post-fix closes cannot conclude the
+   * note is about someone else's history.
+   */
+  it('warns that a zero live count may be the #1121 exclusion, not an idle arm', () => {
+    const text = formatArmComparison(
+      buildArmComparison({
+        basis: 1_000,
+        from: FROM,
+        to: TO,
+        trades: [trade('control', 40, '2026-09-02T00:00:00.000Z')],
+      }),
+    );
+
+    expect(text).toContain('modelled_cost_charged = 0');
+    // Round 5, finding 2: the three substrings this used to pin all survived
+    // reversing the sentence they came from. Flatten the wrapping and pin the
+    // contiguous claim instead — both regimes, in order, with the ONGOING one
+    // named as such rather than merely as the word "best-effort" somewhere on
+    // the page.
+    const flattened = text.replace(/\s+/g, ' ');
+    expect(flattened).toContain(
+      'every live row closed before #1121 shipped was backfilled to 0, ' +
+        'and a row closed since then stamps 0 whenever a covered leg is missing ' +
+        'its submit-time cost snapshot (that capture is best-effort)',
+    );
+    expect(flattened).toContain(
+      'a window over pre-#1121 history is EXPECTED to read 0 here — but so can a ' +
+        'window of purely recent closes',
+    );
+    expect(text).toMatch(/live\s+0\s+0\.00\s+0\.00%\s+0\.00%/);
+  });
+
+  it('says nothing about the exclusion when the live arm has trades', () => {
+    expect(report()).not.toContain('modelled_cost_charged = 0');
   });
 });
 

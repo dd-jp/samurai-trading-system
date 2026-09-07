@@ -32,6 +32,7 @@ function trade(
     fees_total: 0.5,
     opened_at: WINDOW_FROM,
     close_reason: 'target',
+    modelled_cost_charged: true,
     ...overrides,
   };
 }

@@ -29,6 +29,7 @@ function closedTrade(overrides: Partial<ClosedTrade> = {}): ClosedTrade {
     opened_at: day(0),
     closed_at: day(1),
     close_reason: 'target',
+    modelled_cost_charged: true,
     ...overrides,
   };
 }

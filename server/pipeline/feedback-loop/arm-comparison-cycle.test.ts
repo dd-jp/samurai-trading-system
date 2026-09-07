@@ -37,6 +37,7 @@ function trade(overrides: {
     opened_at: new Date(overrides.closed_at.getTime() - 60_000),
     closed_at: overrides.closed_at,
     close_reason: 'target',
+    modelled_cost_charged: true,
     arm: overrides.arm,
   };
 }

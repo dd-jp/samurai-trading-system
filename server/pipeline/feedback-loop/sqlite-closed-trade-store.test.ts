@@ -16,6 +16,7 @@ function makeTrade(overrides: Partial<ClosedTrade> = {}): ClosedTrade {
     opened_at: new Date('2026-07-18T10:00:00Z'),
     closed_at: new Date('2026-07-18T20:00:00Z'),
     close_reason: 'target',
+    modelled_cost_charged: true,
     ...overrides,
   };
 }

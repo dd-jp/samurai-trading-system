@@ -85,6 +85,7 @@ function makeTrade(pnl: number, closedAt: string): ClosedTrade {
     opened_at: new Date(closedAt),
     closed_at: new Date(closedAt),
     close_reason: 'stop',
+    modelled_cost_charged: true,
   };
 }
 

@@ -142,6 +142,7 @@ function makeClosedTrade(overrides: Partial<ClosedTrade> = {}): ClosedTrade {
     opened_at: OPENED_AT,
     closed_at: new Date('2026-07-20T16:00:00Z'),
     close_reason: 'target',
+    modelled_cost_charged: true,
     ...overrides,
   };
 }
@@ -1224,6 +1225,64 @@ describe('SqliteExecutionStore', () => {
       // More than one distinct value in the window: exactly the condition a
       // report must refuse to average over.
       expect(distinctCeilings).toHaveLength(2);
+    });
+  });
+
+  describe('modelled cost charged stamp (#1121, migration 0049)', () => {
+    function chargedFlagOf(db: Db, idempotency_key: string): number {
+      return (
+        db
+          .prepare('SELECT modelled_cost_charged FROM closed_trades WHERE idempotency_key = ?')
+          .get(idempotency_key) as { modelled_cost_charged: number }
+      ).modelled_cost_charged;
+    }
+
+    it('stamps a live-arm closed trade as 1 when the trade says it was charged', async () => {
+      const { db, store } = makeStore();
+      await store.writeAheadPosition(makePosition({ idempotency_key: 'live-key' }));
+      await store.applyLotAdvance({
+        idempotency_key: 'live-key',
+        fills: [],
+        closed_trade: makeClosedTrade({ idempotency_key: 'live-key' }),
+      });
+
+      expect(chargedFlagOf(db, 'live-key')).toBe(1);
+    });
+
+    it('stamps a control-arm closed trade as 1 too — the control was never the defect', async () => {
+      const db = openSharedStore(':memory:');
+      const store = new SqliteExecutionStore(db, 'control');
+      await store.writeAheadPosition(makePosition({ idempotency_key: 'control-key' }));
+      await store.applyLotAdvance({
+        idempotency_key: 'control-key',
+        fills: [],
+        closed_trade: makeClosedTrade({ idempotency_key: 'control-key' }),
+      });
+
+      expect(chargedFlagOf(db, 'control-key')).toBe(1);
+    });
+
+    /**
+     * ROUND-1 REVIEW, finding 2: the column was written as the literal `1` on
+     * every row, on the argument that every row this build writes went through
+     * the #1121 code path. Going through it is not being charged by it — a live
+     * lot whose submit-time snapshot is missing is charged nothing — and a `1`
+     * there certifies a cost basis the row is not on, which is worse than the
+     * pre-fix state because `SqliteArmComparisonSource` then admits it.
+     */
+    it('stamps 0 when the closed trade reports it was NOT charged', async () => {
+      const { db, store } = makeStore();
+      await store.writeAheadPosition(makePosition({ idempotency_key: 'uncharged' }));
+      await store.applyLotAdvance({
+        idempotency_key: 'uncharged',
+        fills: [],
+        closed_trade: makeClosedTrade({
+          idempotency_key: 'uncharged',
+          modelled_cost_charged: false,
+        }),
+      });
+
+      expect(chargedFlagOf(db, 'uncharged')).toBe(0);
     });
   });
 });
