@@ -92,6 +92,12 @@ export class SqliteArmComparisonSource {
  * rows to 1, precisely because only the live arm ever had the defect, so
  * this filter is one-armed by construction. The min-trades floor is what
  * makes that safe, not an accident it happens not to trigger.)
+ *
+ * The floor covers the AUTOMATED reader only. `tools/report-arm-comparison.ts`
+ * has no floor — it prints `trade_count` per arm to an operator, who would
+ * otherwise read a gutted `live 0` as "the live arm closed nothing". That
+ * report carries a live-side note naming this filter as a cause; the two must
+ * stay in step.
  */
 function modelledCostCharged<Row extends { modelled_cost_charged: 0 | 1 }>(
   rows: readonly Row[],

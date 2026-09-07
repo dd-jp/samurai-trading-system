@@ -142,6 +142,7 @@ function makeClosedTrade(overrides: Partial<ClosedTrade> = {}): ClosedTrade {
     opened_at: OPENED_AT,
     closed_at: new Date('2026-07-20T16:00:00Z'),
     close_reason: 'target',
+    modelled_cost_charged: true,
     ...overrides,
   };
 }
@@ -1236,7 +1237,7 @@ describe('SqliteExecutionStore', () => {
       ).modelled_cost_charged;
     }
 
-    it('stamps a live-arm closed trade as 1 — this build always charges the fix', async () => {
+    it('stamps a live-arm closed trade as 1 when the trade says it was charged', async () => {
       const { db, store } = makeStore();
       await store.writeAheadPosition(makePosition({ idempotency_key: 'live-key' }));
       await store.applyLotAdvance({
@@ -1259,6 +1260,29 @@ describe('SqliteExecutionStore', () => {
       });
 
       expect(chargedFlagOf(db, 'control-key')).toBe(1);
+    });
+
+    /**
+     * ROUND-1 REVIEW, finding 2: the column was written as the literal `1` on
+     * every row, on the argument that every row this build writes went through
+     * the #1121 code path. Going through it is not being charged by it — a live
+     * lot whose submit-time snapshot is missing is charged nothing — and a `1`
+     * there certifies a cost basis the row is not on, which is worse than the
+     * pre-fix state because `SqliteArmComparisonSource` then admits it.
+     */
+    it('stamps 0 when the closed trade reports it was NOT charged', async () => {
+      const { db, store } = makeStore();
+      await store.writeAheadPosition(makePosition({ idempotency_key: 'uncharged' }));
+      await store.applyLotAdvance({
+        idempotency_key: 'uncharged',
+        fills: [],
+        closed_trade: makeClosedTrade({
+          idempotency_key: 'uncharged',
+          modelled_cost_charged: false,
+        }),
+      });
+
+      expect(chargedFlagOf(db, 'uncharged')).toBe(0);
     });
   });
 });

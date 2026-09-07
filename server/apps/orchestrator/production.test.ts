@@ -1471,6 +1471,7 @@ describe('buildProductionComponents', () => {
           opened_at: new Date('2026-07-29T09:30:00Z'),
           closed_at: new Date('2026-07-29T10:00:00Z'),
           close_reason: 'target',
+          modelled_cost_charged: true,
         },
       });
 
@@ -4912,6 +4913,7 @@ describe('buildProductionOrchestrator', () => {
             // Inside the profile's 48h attribution window, at or before `now`.
             closed_at: new Date(START.getTime() - 1 * 60 * 60 * 1_000),
             close_reason: 'target',
+            modelled_cost_charged: true,
           },
         });
       }
@@ -5485,6 +5487,7 @@ describe('buildProductionOrchestrator', () => {
           opened_at: new Date(SERIES_START + 10 * MS_PER_DAY),
           closed_at: new Date(SERIES_START + 11 * MS_PER_DAY),
           close_reason: 'target',
+          modelled_cost_charged: true,
         },
       });
       const { config, logger, tuning, postBreachAlert } = armedConfig();
@@ -7282,6 +7285,7 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
       opened_at: new Date(CLOSED_AT.getTime() - 60_000),
       closed_at: CLOSED_AT,
       close_reason: 'target',
+      modelled_cost_charged: true,
       arm: 'control',
     });
 

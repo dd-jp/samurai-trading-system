@@ -596,13 +596,14 @@ export class SqliteExecutionStore implements SharedStore {
           // A window that mixes NULL and non-NULL (or two different non-NULL)
           // values here mixes two sizing regimes into one `return_pct`.
           this.sizingCapitalCeiling ?? null,
-          // #1121 AC5, migration 0049 — literally 1, not `this.arm`-conditional.
-          // Every row THIS BUILD writes, either arm, went through `toFill`'s
-          // #1121 fix (the control arm already charged correctly before this
-          // ticket; the live arm now does too), so every new row states the
-          // same fact. Only rows the migration backfilled from before the fix
-          // — never one this method writes — carry 0.
-          1,
+          // #1121 AC5, migration 0049 — what actually happened to THIS lot's
+          // fills, computed at close time by `closedTrade()` in
+          // `ingest-fills.ts`, never a literal. Going through `toFill`'s #1121
+          // path is not the same as being charged by it: the modelled snapshot
+          // it spends is nullable (pre-migration-0037 lot, or a failed
+          // `captureSubmitSnapshot`), and a `1` stamped on such a row would
+          // certify a cost basis the row is not on.
+          trade.modelled_cost_charged ? 1 : 0,
         );
     } catch (cause) {
       if (isUniqueConstraintError(cause)) {

@@ -42,6 +42,14 @@ export interface ClosedTradeRow {
   closed_at: string;
   /** #793, migration 0031 — see `ClosedTrade.close_reason`. */
   close_reason: 'stop' | 'target' | 'exit' | ExitReason;
+  /**
+   * #1121, migration 0049 — see `ClosedTrade.modelled_cost_charged`. Stored as
+   * SQLite's 0/1 INTEGER; widened to `boolean` by `fromClosedTradeRow`. Every
+   * SELECT that feeds this mapper must list the column: it is `NOT NULL` in the
+   * table, so a query that omits it hands the mapper `undefined` and silently
+   * reports a charged row as uncharged.
+   */
+  modelled_cost_charged: 0 | 1;
 }
 
 /** Widens the stored ISO-8601 timestamps back into `Date`s. */
@@ -60,5 +68,6 @@ export function fromClosedTradeRow(row: ClosedTradeRow): ClosedTrade {
     opened_at: fromStoredTimestamp(row.opened_at),
     closed_at: fromStoredTimestamp(row.closed_at),
     close_reason: row.close_reason,
+    modelled_cost_charged: row.modelled_cost_charged === 1,
   };
 }

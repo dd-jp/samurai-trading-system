@@ -7,6 +7,13 @@
 -- so it backfills to 1 same as a post-fix row of either arm. Only a live
 -- row written before this fix backfills to 0.
 --
+-- A POST-fix row can be 0 too, and that is the column doing its job rather
+-- than an inconsistency: the modelled snapshot `toFill` spends is nullable
+-- (a lot from before migration 0037, or a submit-time capture that failed),
+-- so a live lot can close having been charged nothing by the fixed code.
+-- The writer derives the value from that lot's own fills (`closedTrade()`,
+-- ingest-fills.ts); it never asserts the fix fired.
+--
 -- ## Why a value, not "everything before migration 0049 is wrong"
 --
 -- A timestamp cutover can't distinguish the two arms sharing one table
@@ -38,7 +45,9 @@
 -- comparison whether or not the window also contains post-fix rows. See
 -- that function's doc for why dropping is safe even when it empties the
 -- live arm for a window: `evaluateArmDivergence`'s per-arm trade floor turns
--- a gutted arm into no verdict, not a skewed one.
+-- a gutted arm into no verdict, not a skewed one. The floor is the AUTOMATED
+-- reader's; `tools/report-arm-comparison.ts` has none, so it prints a note
+-- naming this column whenever the live count comes out 0.
 
 ALTER TABLE closed_trades ADD COLUMN modelled_cost_charged INTEGER NOT NULL DEFAULT 1
   CHECK (modelled_cost_charged IN (0, 1));

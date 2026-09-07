@@ -52,7 +52,7 @@ export class SqliteClosedTradeStore implements ClosedTradeStore {
       .prepare(
         `SELECT idempotency_key, debate_id, instrument, asset_class, side,
                 entry, stop, filled_size, realized_pnl_net, fees_total,
-                opened_at, closed_at, close_reason
+                opened_at, closed_at, close_reason, modelled_cost_charged
            FROM closed_trades
           WHERE arm = ? AND closed_at > ? AND closed_at <= ?
           ORDER BY closed_at`,

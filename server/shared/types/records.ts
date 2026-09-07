@@ -580,4 +580,19 @@ export interface ClosedTrade {
    * tables from migration 0031 forward.
    */
   close_reason: 'stop' | 'target' | 'exit' | ExitReason;
+  /**
+   * #1121, migration 0049: did every leg of this round trip the modelled-cost
+   * mechanism covers actually get charged its modelled commission? Computed
+   * from the lot's persisted fills at close time (`closedTrade()` in
+   * `ingest-fills.ts`), never asserted as a constant — a live lot whose
+   * submit-time snapshot is missing (pre-migration-0037 row, or a failed
+   * `captureSubmitSnapshot`) goes through the same code path and is NOT
+   * charged by it, so "went through the fix" and "was charged by the fix" are
+   * different facts and only the second one belongs in this column.
+   *
+   * `false` excludes the row from `SqliteArmComparisonSource` unconditionally:
+   * an uncharged live row mixed into a window is exactly the asymmetry #1121
+   * closes.
+   */
+  modelled_cost_charged: boolean;
 }

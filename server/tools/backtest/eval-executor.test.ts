@@ -57,6 +57,7 @@ function tradeAt(idempotency_key: string, openDay: number, pnl: number): ClosedT
     opened_at: day(openDay),
     closed_at: day(openDay + 1),
     close_reason: pnl > 0 ? 'target' : 'stop',
+    modelled_cost_charged: true,
   };
 }
 

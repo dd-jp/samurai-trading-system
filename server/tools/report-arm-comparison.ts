@@ -119,6 +119,29 @@ export function formatArmComparison(comparison: ArmComparison): string {
     );
   }
 
+  // #1121 review, finding 5: the automated reader (`evaluateArmDivergence`)
+  // floors both arms at `min_trades_per_arm`, so a gutted arm reads as NO
+  // VERDICT there. This report has no floor — it prints the count straight to
+  // an operator, and the most likely reason the live count is 0 today is the
+  // exclusion, not an idle arm: every live row closed before #1121 backfills to
+  // `modelled_cost_charged = 0` and is dropped by `SqliteArmComparisonSource`.
+  // Without this note that reads as "the live arm closed nothing", which is
+  // false.
+  if (comparison.live.trade_count === 0) {
+    lines.push(
+      '',
+      '  NOTE: the live arm shows no trades in this window. Before reading that as',
+      '  "the live arm closed nothing", check whether its rows were EXCLUDED: a',
+      '  closed trade with `modelled_cost_charged = 0` is dropped from this',
+      '  comparison unconditionally (#1121) because its fees were never brought onto',
+      "  the control arm's cost basis. Every live row closed before #1121 shipped",
+      '  backfills to 0, so a window over that history is expected to read 0 here',
+      '  while `closed_trades` holds live rows for it:',
+      "    SELECT modelled_cost_charged, COUNT(*) FROM closed_trades WHERE arm = 'live'",
+      '     AND closed_at > ? AND closed_at <= ? GROUP BY 1;',
+    );
+  }
+
   return lines.join('\n');
 }
 

@@ -648,8 +648,8 @@ async function redistributeOneFlatten(
       const share = take / rawFill.qty;
       // #1121: computed ahead of the object literal below because it feeds
       // BOTH `fee` (the charge) and `cost_breakdown` (the record of it) —
-      // see `toFill`'s doc for why the commission is charged on top of the
-      // venue-reported fee rather than left as an unspent estimate.
+      // see `toFill`'s doc for why the modelled commission is charged rather
+      // than left as an unspent estimate.
       const flattenCostBreakdown =
         rawFill.cost_breakdown === undefined &&
         attribution.modelled_cost_breakdown !== null &&
@@ -702,13 +702,14 @@ async function redistributeOneFlatten(
         // of colliding with a differently-sized earlier attempt.
         broker_fill_id: `${rawFill.broker_fill_id}:${lotKey}`,
         qty: take,
-        // #1121: the venue-reported share (`rawFill.fee * share`) PLUS the
-        // modelled commission share, when the flatten carries one — the same
-        // "charge what `cost_breakdown` already estimates" rule `toFill`
-        // applies to an entry fill. `cost_breakdown` below records the
-        // estimate unchanged, so `fee - (cost_breakdown?.commission ?? 0)`
-        // still reconstructs the venue's own share exactly (AC2).
-        fee: rawFill.fee * share + (flattenCostBreakdown?.commission ?? 0),
+        // #1121: the venue-reported share (`rawFill.fee * share`) TOPPED UP
+        // to the modelled commission share, when the flatten carries one —
+        // the same "the modelled cost is charged exactly once, whatever the
+        // venue reports" rule `toFill` applies to an entry fill, and for the
+        // same reason: Saxo reports a fee computed from the SAME constant
+        // this fallback's estimate came from, so adding rather than topping
+        // up would charge that flatten twice over.
+        fee: chargeTopUpTo(rawFill.fee * share, flattenCostBreakdown?.commission),
         // #1001: FALLBACK only — `rawFill.cost_breakdown` is already set (and
         // left untouched by this spread) on the Simulated adapter's own
         // flatten fill, which is priced by `CostModel.fill` directly and
@@ -721,7 +722,7 @@ async function redistributeOneFlatten(
         // NOT against `share`. The two denominators differ and the difference
         // is a double-count. `share` is `take / rawFill.qty` — this lot's
         // slice of THIS RAW FILL, which sums to 1.0 per raw fill, and that is
-        // exactly right for the venue-reported half of `fee` above (a
+        // exactly right for the venue-reported input to `fee` above (a
         // per-raw-fill actual the venue reported) and wrong here:
         // `modelled_cost_breakdown` was priced ONCE against the whole
         // submitted `size` (`captureSubmitSnapshot` passes `order.size`). A
@@ -1598,7 +1599,39 @@ function closedTrade(
     // only for a row this system genuinely never recorded a reason for — the
     // pre-0031 legacy case (see the migration's own doc; not invented here).
     close_reason: closing.exit_reason ?? closing.leg,
+    modelled_cost_charged: modelledCostCharged(entryFills, exitFills),
   };
+}
+
+/**
+ * #1121 AC5: whether every leg of this round trip that the modelled-cost
+ * mechanism COVERS carries the `cost_breakdown` the charge is taken from —
+ * which, since `chargeTopUpTo` only ever fires alongside setting it, is the
+ * same question as "was this lot charged the modelled cost on every leg it
+ * could be".
+ *
+ * Derived from the fills, not stamped as a literal, because going through
+ * `toFill` is not the same as being charged by it: `modelledEntryCostFor` is
+ * nullable (no submit-time snapshot) and `redistributeOneFlatten`'s is too, so
+ * a live lot can close having paid nothing. Stamping `1` on those said the
+ * opposite of what happened — worse than the pre-fix state, since the row then
+ * certifies a cost basis it is not on.
+ *
+ * COVERAGE, and why `'stop'`/`'target'` legs do not veto: no modelled estimate
+ * exists for a protective leg on either arm (see `toFill`'s "What this still
+ * does not cover", #1301). Vetoing on them would drop live trades BECAUSE they
+ * exited on a stop — selection on outcome, since stops are the losers, which is
+ * a worse and far less visible bias than the exit-leg under-charge it would be
+ * papering over. So coverage is the entry legs plus flatten (`'exit'`) legs,
+ * which is exactly the set both arms price.
+ *
+ * The control arm always answers `true`: `SimulatedBrokerAdapter` prices its
+ * own fills and stamps `cost_breakdown` on every one of them.
+ */
+function modelledCostCharged(entryFills: readonly Fill[], exitFills: readonly ExitFill[]): boolean {
+  return [...entryFills, ...exitFills.filter((fill) => fill.leg === 'exit')].every(
+    (fill) => fill.cost_breakdown !== undefined,
+  );
 }
 
 /**
@@ -1708,17 +1741,19 @@ function cumulativeTopUp(
       // SHRINKING fee total must not credit this lot a negative fee, which
       // would read as income in realized PnL.
       //
-      // #1121: subtracted against `priors`' VENUE-reported share only
-      // (`venueReportedFee`), not their persisted `fee` — a prior row's
-      // `fee` already carries this same fallback's modelled commission share
-      // (see `toFill`), and `fill.fee` here is the venue's raw cumulative
-      // total, which never included that commission to begin with. Diffing
-      // the charged total against the raw cumulative would consume the
-      // modelled share too, under-crediting (today, clamped to 0 every time
-      // past the first increment, because Alpaca's raw cumulative is always
-      // 0) or, on a venue that DOES report a nonzero running fee, silently
-      // dropping part of a later increment's real venue charge.
-      fee: Math.max(0, fill.fee - priors.reduce((sum, row) => sum + venueReportedFee(row), 0)),
+      // #1121: subtracted against `priors`' full persisted `fee` — the CHARGED
+      // total, which is what makes this right under `chargeTopUpTo`'s top-up
+      // (not addition) rule. An earlier pass of this ticket subtracted a
+      // venue-only component instead, which was correct for the additive
+      // charge it shipped with and is WRONG for a top-up: a prior row's `fee`
+      // is `max(venue, modelled)`, so it has already absorbed that row's share
+      // of the venue's running total, and subtracting less than it would
+      // charge the same venue money twice across increments. Worked through:
+      // priors charged 0.5 against a venue cumulative of 0.8 leaves a 0.3
+      // increment, topped up to the modelled 0.5 — one modelled commission in
+      // total, not 1.3. Where the venue out-charges the model the same
+      // subtraction returns its real delta untouched.
+      fee: Math.max(0, fill.fee - priors.reduce((sum, row) => sum + row.fee, 0)),
     },
     position.idempotency_key,
     // #1001: same fallback `advanceLot`'s own `toFill` call uses — a
@@ -1739,35 +1774,28 @@ function cumulativeTopUp(
  * `filled_size` would have to re-litigate.
  */
 /**
- * #1121, AC2: recovers the venue's OWN reported fee from a persisted `Fill`
- * whose `fee` may carry a modelled commission charged on top of it
- * (`toFill`/`redistributeOneFlatten`'s `flattenCostBreakdown`). The modelled
- * component is always exactly `cost_breakdown.commission` when one was
- * applied — `fee` is never adjusted without `cost_breakdown` being set to the
- * SAME breakdown the adjustment came from — so subtracting it back out is
- * exact, not an approximation: this is the one place that "distinguishable"
- * (the acceptance criterion's word) is cashed out as code rather than left as
- * a claim in a comment.
+ * #1121: the charge a real-broker fill carries — the venue's own reported fee
+ * TOPPED UP to the modelled commission, never stacked on top of it.
  *
- * On a Simulated-adapter fill this returns 0: `fee` there already equals
- * `cost_breakdown.commission` in full (the adapter prices its own fills), so
- * there is no separate venue report to recover — 0 is the honest answer for
- * a venue that only ever existed inside the model.
+ * `venueFee + max(0, modelled − venueFee)`, i.e. `max(venueFee, modelled)`.
+ * The addition this started as (`venueFee + modelled`) was correct only for a
+ * commission-free venue, which is an Alpaca-paper accident, not a property of
+ * the mechanism: `saxo-adapter.ts` already reports
+ * `price * qty * SAXO_COMMISSION_RATE` and `paper-profile.ts` prices the
+ * modelled estimate from the SAME `SAXO_COMMISSION_RATE` constant, so the two
+ * numbers are the same commission and adding them charged the live arm 2x the
+ * day Saxo became the adapter — with no venue check, no `fee === 0`
+ * precondition, and no test that could see it.
  *
- * Exactness has one known pre-existing exception, unrelated to and not
- * introduced by #1121: `redistributeOneFlatten` splits a single Simulated
- * fill's OWN `cost_breakdown` across multiple lots by re-spreading `rawFill`
- * unprorated (see its comment), while proration DOES apply to `fee` there
- * (`rawFill.fee * share`) — so on a multi-lot control-arm flatten, this
- * subtraction returns a small negative number on every split row but the
- * first rather than exactly 0. No caller reads `venueReportedFee` on a
- * Simulated-adapter row today (`cumulativeTopUp`, its only caller, is
- * Alpaca-only), so nothing is corrupted by it now — flagged here rather than
- * fixed, since fixing it means re-prorating #1001's own snapshot handling,
- * which is that ticket's mechanism, not this one's.
+ * `max` rather than "defer to the venue whenever it reports anything": a venue
+ * that reports a small NON-commission fee (a regulatory or exchange charge)
+ * would otherwise suppress the whole modelled commission and put the arms back
+ * on different cost bases, which is the defect this ticket exists to close.
+ * `max` says instead: the modelled cost is charged exactly once, and a venue
+ * that out-charges the model is charged what it actually took.
  */
-function venueReportedFee(row: Fill): number {
-  return row.fee - (row.cost_breakdown?.commission ?? 0);
+function chargeTopUpTo(venueFee: number, modelledCommission: number | undefined): number {
+  return modelledCommission === undefined ? venueFee : Math.max(venueFee, modelledCommission);
 }
 
 /**
@@ -1838,8 +1866,10 @@ function modelledEntryCostFor(position: OpenPosition): ModelledEntryCost | null 
  * read only by FL's live-vs-modelled divergence check (GAP-F). The control
  * arm's `SimulatedBrokerAdapter` has never worked that way: it prices its
  * own fills through the same `CostModel` and stamps the result straight
- * onto `fee` (`simulated-adapter.ts`). So the two arms' `realized_pnl_net`
- * were never on the same cost basis, which is exactly the comparison
+ * onto `fee` (`simulated-adapter.ts`). So on a live ENTRY leg, and on a live
+ * FLATTEN exit, the two arms' `realized_pnl_net` were never on the same cost
+ * basis — see "What this still does not cover" below for the leg where they
+ * still are not — which is exactly the comparison
  * `docs/research/12-edge-hypothesis-critique.md` D4 and #636 rule out — a
  * matched control has to be matched on cost too, not only on window.
  *
@@ -1849,12 +1879,19 @@ function modelledEntryCostFor(position: OpenPosition): ModelledEntryCost | null 
  * it would discard exactly the cost sensitivity ADR-0018's accuracy bar and
  * doc 54's break-even thresholds are written against, and it would still
  * diverge from what the live venue will actually charge once Saxo settles
- * real trades (ADR-0015's 2026-08-30 amendment) at the SAME commission rate
- * this fallback already reads (`config.simulated.venue: 'saxo'`,
- * `costConfig.venues.saxo.commissionRate`, #1000). `#1000` still owns that
- * rate's calibration; this only spends the number it already produces.
+ * real trades (ADR-0015's 2026-08-30 amendment). `#1000` still owns the
+ * commission rate's calibration; this only spends the number it already
+ * produces.
  *
- * Only `commission` is added — never `spread_cost`, `slippage` or
+ * That Saxo will charge the SAME rate this fallback reads
+ * (`config.simulated.venue: 'saxo'`, `costConfig.venues.saxo.commissionRate`,
+ * both off `SAXO_COMMISSION_RATE`, as does `saxo-adapter.ts`'s own reported
+ * `fee`) is the reason the charge is a TOP-UP and not an addition: the venue's
+ * number and the model's are the same commission, so adding them would double-
+ * charge the moment Saxo is the adapter. `chargeTopUpTo` is where that is
+ * enforced; read its doc for why `max` and not "defer to the venue".
+ *
+ * Only `commission` is charged — never `spread_cost`, `slippage` or
  * `market_impact`, the breakdown's other three components. Those three are
  * adverse-PRICE effects: on a real-broker fill they are already paid, baked
  * into `fill.price` by whatever the venue actually filled at (the same
@@ -1868,19 +1905,62 @@ function modelledEntryCostFor(position: OpenPosition): ModelledEntryCost | null 
  * price — so it is the one component a real venue's `fee: 0` can be honestly
  * missing, and the one this fallback restores.
  *
- * `fee` is therefore `fill.fee + fallbackCostBreakdown.commission` exactly
+ * `fee` is therefore `max(fill.fee, fallbackCostBreakdown.commission)` exactly
  * when the fallback fires, and `fill.fee` unchanged otherwise (no modelled
  * snapshot, or a fill that already carries its OWN `cost_breakdown` —
  * `SimulatedBrokerAdapter`'s path, where `fee` already IS the commission and
- * adding it again would double-charge). `cost_breakdown` itself is left
+ * charging it again would double-charge). `cost_breakdown` itself is left
  * exactly as it always was: the modelled ESTIMATE, unmodified by the charge
- * applied on top of it. That is deliberate, not an oversight — it is what
- * keeps the venue's own report recoverable and distinguishable (AC2): for
- * any persisted fill, `fee - (cost_breakdown?.commission ?? 0)` reconstructs
- * exactly what the venue reported, 0 on today's Alpaca paper book. On a
- * Simulated-adapter fill that subtraction is also exactly 0 — the honest
- * answer for a venue that never reported anything, because it does not
- * exist outside the model.
+ * taken from it.
+ *
+ * ## AC2, "distinguishable", as narrowly as it actually holds
+ *
+ * `fee - (cost_breakdown?.commission ?? 0)` is a BOUND on the venue's own
+ * report, not a reconstruction of it. Under the top-up rule `fee` is
+ * `max(venue, modelled)`, so the subtraction returns the venue's number
+ * exactly when the venue out-charged the model, and 0 otherwise — where the
+ * only claim the row supports is "the venue reported at most `commission`".
+ * That is a deliberate downgrade of what this doc claimed when the charge was
+ * additive: under `max` the two components are not separable from one number,
+ * and separating them exactly needs a `fills` column, whose backfill for
+ * pre-fix live rows is genuinely ambiguous (`fee = 0` with `commission = c`
+ * subtracts to `−c`, which was never anybody's report).
+ *
+ * On today's venues the bound is tight: Alpaca paper reports 0, so 0 is the
+ * exact answer, and a Simulated-adapter fill has no venue behind it at all.
+ * One pre-existing wrinkle, not introduced by #1121:
+ * `redistributeOneFlatten` re-spreads a Simulated fill's OWN `cost_breakdown`
+ * unprorated while `fee` IS prorated, so on a multi-lot control-arm flatten
+ * the subtraction is negative wherever the lot's `share < 1` — which includes
+ * the FIRST row of a split, not only the later ones (6/4 off one raw fill of
+ * 10 gives `0.6C − C = −0.4C`). Fixing it means re-prorating #1001's own
+ * snapshot handling, which is that ticket's mechanism.
+ *
+ * `closed_trades.fees_total`
+ * is an undecomposed sum on top of that, so an operator reconciling the arm
+ * comparison against a broker statement has to join back to `fills` — and even
+ * there gets the bound, not the venue's number. THE CALL, stated rather than
+ * left implicit: that satisfies "distinguishable" for the arm comparison, whose
+ * question is whether both arms paid the same modelled cost, and does NOT
+ * satisfy it for venue reconciliation. Separating the two components exactly
+ * needs a `fills` column of its own; #1121 does not add one.
+ *
+ * ## What this still does not cover
+ *
+ * A live `'stop'`/`'target'` fill is charged nothing: the fallback below is
+ * gated on `fill.leg === 'entry'`, and `captureSubmitSnapshot` prices only the
+ * entry and the flatten, so there is no modelled estimate for a protective leg
+ * to spend (inventing one would be a SECOND derivation, which is what AC6
+ * forbids). The control arm has no bracket-exit path at all
+ * (`simulated-adapter.ts` emits `leg: 'entry'` only), so every control close is
+ * a flatten and pays a modelled commission on both legs. The live arm pays on
+ * both legs only when it closes by flatten. So the round trips are matched on
+ * cost EXCEPT for a live lot that exits on a protective leg, which is still
+ * under-charged by one exit commission — a residual bias in the live arm's
+ * favour, in the same direction as the defect this ticket closes, and observed
+ * on 1 of the 3 live closes in the soak DB the #1121 round-1 review read (not
+ * re-read here; the soak store is not in the repo). Charging it needs a modelled
+ * exit cost for bracket legs; that is #1301's, not this ticket's.
  */
 function toFill(
   fill: NormalizedFill,
@@ -1894,8 +1974,7 @@ function toFill(
           fill.qty / modelledEntryCost.requestedSize,
         )
       : undefined;
-  const chargedFee =
-    fallbackCostBreakdown === undefined ? fill.fee : fill.fee + fallbackCostBreakdown.commission;
+  const chargedFee = chargeTopUpTo(fill.fee, fallbackCostBreakdown?.commission);
 
   return {
     idempotency_key: idempotencyKey,

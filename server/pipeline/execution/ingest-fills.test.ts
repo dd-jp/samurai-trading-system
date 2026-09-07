@@ -2184,8 +2184,14 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
  * #1001's submit-time snapshot already prices every real-broker entry/exit
  * through the identical `CostModel` + venue config the control arm uses
  * (`execute.ts`'s `readSubmitSnapshot`, keyed on `config.simulated.venue`),
- * so the number these tests need already existed; it just was never added to
+ * so the number these tests need already existed; it just was never spent on
  * `fee`.
+ *
+ * Read the fixtures' `fee` field first. An Alpaca-shaped `fee: 0` cannot tell
+ * "add the modelled commission" apart from "top up to it", which is how the
+ * round-1 review's double-charge (finding 1) hid behind a green suite —
+ * `SAXO_COST_CONFIG` below exists so at least one fixture reports a venue fee
+ * that is nonzero AND the same commission the model estimates.
  *
  * `docs/research/12-edge-hypothesis-critique.md` D4 and #636 require the two
  * arms to be a MATCHED control — comparable on the SAME cost basis, not just
@@ -2203,7 +2209,39 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
     market_impact: 0.1,
   };
 
-  it('charges a real-broker entry fill the modelled commission on top of the venue-reported (zero) fee', async () => {
+  /**
+   * The live venue's own config, not a stand-in: `paper-profile.ts` builds the
+   * same `venues.saxo.commissionRate` off the same constant `saxo-adapter.ts`
+   * computes its reported `fee` from. A fixture that did not share that
+   * constant could not show the double-charge the round-1 review found.
+   */
+  const SAXO_COST_CONFIG: CostConfig = {
+    stocks: {
+      spreadVolatilityCoefficient: 0.5,
+      commissionRate: 0,
+      slippageCoefficient: 0.1,
+      impactK: 0.1,
+    },
+    crypto: {
+      spreadVolatilityCoefficient: 0.5,
+      commissionRate: 0,
+      slippageCoefficient: 0.1,
+      impactK: 0.1,
+    },
+    venues: { saxo: { commissionRate: SAXO_COMMISSION_RATE } },
+  };
+
+  const saxoMarketState = (mid: number): MarketState => ({
+    mid,
+    spread: 0.1,
+    adv: 1_000_000,
+    volatility: 0.02,
+    asset_class: 'stocks',
+    venue: 'saxo',
+    timestamp: NOW,
+  });
+
+  it('charges a real-broker entry fill the modelled commission, topping up the venue-reported (zero) fee', async () => {
     const { store } = openTestExecutionStore();
     await seedPosition(store, {
       requested_size: 10,
@@ -2217,7 +2255,8 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
     await new ExecutionImpl(makeInput(broker, store)).ingestFills();
 
     const fills = await store.getFills('key-1');
-    // Charged fee = venue-reported (0) + modelled commission (1) — the same
+    // Charged fee = the venue-reported 0 topped up to the modelled commission
+    // (1) — the same
     // figure `SimulatedBrokerAdapter` would have stamped as `fee` directly
     // for an identical order (see the `SAXO_COMMISSION_RATE`-driven test
     // below for the literal two-adapter comparison).
@@ -2269,7 +2308,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
     expect(fills[0]?.fee).toBe(9);
   });
 
-  it('charges the flatten exit fill the modelled commission on top of the venue-reported (zero) fee', async () => {
+  it('charges the flatten exit fill the modelled commission, topping up the venue-reported (zero) fee', async () => {
     const { store } = openTestExecutionStore();
     await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10 });
     const entryOnly = new ScriptedBroker([
@@ -2408,31 +2447,8 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
   });
 
   it('charges the live arm exactly what SimulatedBrokerAdapter charges the control arm for an identical order (AC1)', async () => {
-    const costConfig: CostConfig = {
-      stocks: {
-        spreadVolatilityCoefficient: 0.5,
-        commissionRate: 0,
-        slippageCoefficient: 0.1,
-        impactK: 0.1,
-      },
-      crypto: {
-        spreadVolatilityCoefficient: 0.5,
-        commissionRate: 0,
-        slippageCoefficient: 0.1,
-        impactK: 0.1,
-      },
-      venues: { saxo: { commissionRate: SAXO_COMMISSION_RATE } },
-    };
-    const costModel = new CostModelImpl(costConfig);
-    const marketState: MarketState = {
-      mid: 100,
-      spread: 0.1,
-      adv: 1_000_000,
-      volatility: 0.02,
-      asset_class: 'stocks',
-      venue: 'saxo',
-      timestamp: NOW,
-    };
+    const costModel = new CostModelImpl(SAXO_COST_CONFIG);
+    const marketState = saxoMarketState(100);
     const fillRequest = {
       instrument: 'AAPL',
       side: 'buy' as const,
@@ -2478,31 +2494,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
    * `return_pct`, not merely on a `fee` field nobody downstream reads.
    */
   it('produces equal ArmComparison.return_pct for both arms on an identical round trip (AC3)', async () => {
-    const costConfig: CostConfig = {
-      stocks: {
-        spreadVolatilityCoefficient: 0.5,
-        commissionRate: 0,
-        slippageCoefficient: 0.1,
-        impactK: 0.1,
-      },
-      crypto: {
-        spreadVolatilityCoefficient: 0.5,
-        commissionRate: 0,
-        slippageCoefficient: 0.1,
-        impactK: 0.1,
-      },
-      venues: { saxo: { commissionRate: SAXO_COMMISSION_RATE } },
-    };
-    const costModel = new CostModelImpl(costConfig);
-    const marketStateFor = (mid: number): MarketState => ({
-      mid,
-      spread: 0.1,
-      adv: 1_000_000,
-      volatility: 0.02,
-      asset_class: 'stocks',
-      venue: 'saxo',
-      timestamp: NOW,
-    });
+    const costModel = new CostModelImpl(SAXO_COST_CONFIG);
     const entryCost = costModel.fill(
       {
         instrument: 'AAPL',
@@ -2512,7 +2504,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
         limit_price: 100,
         idempotency_key: 'entry',
       },
-      marketStateFor(100),
+      saxoMarketState(100),
     );
     const exitCost = costModel.fill(
       {
@@ -2523,7 +2515,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
         limit_price: 110,
         idempotency_key: 'exit',
       },
-      marketStateFor(110),
+      saxoMarketState(110),
     );
 
     const db = openSharedStore(':memory:');
@@ -2674,6 +2666,344 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
     expect(comparison.live.return_pct).toBeCloseTo(comparison.control.return_pct, 9);
     expect(comparison.live.trade_count).toBe(1);
     expect(comparison.control.trade_count).toBe(1);
+  });
+
+  /**
+   * ROUND-1 REVIEW, finding 1. Every other test in this describe feeds an
+   * Alpaca-shaped `fee: 0`, where "add the modelled commission" and "top up to
+   * it" are the same number — so the whole of the Saxo cutover was invisible.
+   * `saxo-adapter.ts` reports `price * qty * SAXO_COMMISSION_RATE` and
+   * `paper-profile.ts` prices the modelled snapshot off the SAME constant, so
+   * on the day Saxo becomes the adapter the venue's fee and the model's
+   * estimate are the same commission. Under the shipped addition that charged
+   * exactly 2x (reviewer's repro: `venueFee 0.8 chargedFee 1.6`); under
+   * `chargeTopUpTo` it is charged once.
+   */
+  it('charges a Saxo-shaped entry fill ONE commission, not the venue fee plus the modelled one', async () => {
+    const costModel = new CostModelImpl(SAXO_COST_CONFIG);
+    const snapshot = costModel.fill(
+      {
+        instrument: 'AAPL',
+        side: 'buy',
+        size: 10,
+        order_type: 'limit',
+        limit_price: 100,
+        idempotency_key: 'key-1',
+      },
+      saxoMarketState(100),
+    );
+    // Exactly what `saxo-adapter.ts` puts on the wire for this fill.
+    const venueFee = 100 * 10 * SAXO_COMMISSION_RATE;
+
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, {
+      requested_size: 10,
+      modelled_cost_breakdown: snapshot.cost_breakdown,
+    });
+    await new ExecutionImpl(
+      makeInput(
+        new ScriptedBroker([
+          fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100, fee: venueFee }),
+        ]),
+        store,
+      ),
+    ).ingestFills();
+
+    const charged = (await store.getFills('key-1'))[0]?.fee ?? 0;
+    const modelled = snapshot.cost_breakdown.commission;
+    // Not a vacuous fixture: the venue really did report a fee, and it really
+    // is the same 8bps the model charges.
+    expect(venueFee).toBeGreaterThan(0);
+    expect(venueFee).toBeCloseTo(modelled, 9);
+    expect(charged).toBeCloseTo(Math.max(venueFee, modelled), 9);
+    expect(charged).toBeLessThan(venueFee + modelled);
+  });
+
+  it('charges the venue-reported fee when it EXCEEDS the modelled estimate, still exactly once', async () => {
+    const costModel = new CostModelImpl(SAXO_COST_CONFIG);
+    // Snapshot priced at submit-time mid 100; the venue fills at 110, so its
+    // own 8bps is larger than the estimate. The charge is the venue's actual,
+    // never the estimate stacked on top of it.
+    const snapshot = costModel.fill(
+      {
+        instrument: 'AAPL',
+        side: 'buy',
+        size: 10,
+        order_type: 'limit',
+        limit_price: 100,
+        idempotency_key: 'key-1',
+      },
+      saxoMarketState(100),
+    );
+    const venueFee = 110 * 10 * SAXO_COMMISSION_RATE;
+
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, {
+      requested_size: 10,
+      modelled_cost_breakdown: snapshot.cost_breakdown,
+    });
+    await new ExecutionImpl(
+      makeInput(
+        new ScriptedBroker([
+          fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 110, fee: venueFee }),
+        ]),
+        store,
+      ),
+    ).ingestFills();
+
+    const charged = (await store.getFills('key-1'))[0]?.fee ?? 0;
+    expect(venueFee).toBeGreaterThan(snapshot.cost_breakdown.commission);
+    expect(charged).toBeCloseTo(venueFee, 9);
+  });
+
+  it('charges a Saxo-shaped FLATTEN exit fill one commission, not two (redistributeOneFlatten)', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10 });
+    const entryFill = fill({
+      client_order_id: 'key-1',
+      broker_fill_id: 'e1',
+      leg: 'entry',
+      qty: 10,
+      fee: 0,
+    });
+    await new ExecutionImpl(makeInput(new ScriptedBroker([entryFill]), store)).ingestFills();
+
+    await store.writeAheadFlatten({
+      idempotency_key: 'flatten-1',
+      instrument: 'AAPL',
+      asset_class: 'stocks',
+      side: 'sell',
+      size: 10,
+      submitted_at: OPENED_AT,
+      lot_held_quantities: [{ idempotency_key: 'key-1', held: 10 }],
+      exit_reason: 'flatten',
+      decision_price: 100,
+      quote_bid: null,
+      quote_ask: null,
+      quote_mid: null,
+      quote_observed_at: null,
+      modelled_cost_breakdown: modelledCostBreakdown,
+    });
+
+    // The venue reports the same commission the snapshot models — the Saxo
+    // shape, at this fixture's scale.
+    const venueFee = modelledCostBreakdown.commission;
+    await new ExecutionImpl(
+      makeInput(
+        new ScriptedBroker([
+          entryFill,
+          fill({
+            client_order_id: 'flatten-1',
+            broker_fill_id: 'f1',
+            leg: 'exit',
+            qty: 10,
+            fee: venueFee,
+            timestamp: new Date('2026-07-20T15:30:00Z'),
+          }),
+        ]),
+        store,
+      ),
+    ).ingestFills();
+
+    const exit = (await store.getFills('key-1')).find((row) => row.leg === 'exit');
+    expect(exit?.fee).toBeCloseTo(venueFee, 9);
+    expect(exit?.fee ?? 0).toBeLessThan(venueFee + modelledCostBreakdown.commission);
+  });
+
+  /**
+   * ROUND-1 REVIEW, finding 4. SYNTHETIC by construction, and said so rather
+   * than dressed up as a live path: `qty_is_cumulative` is set only by
+   * `alpaca-order-normalization.ts`, and Alpaca always reports `fee: 0`, so no
+   * venue in the system today is both cumulative AND fee-reporting. It pins the
+   * function's contract, which is otherwise unreachable — and it is the test
+   * that showed the shipped `venueReportedFee(row)` subtraction to be wrong
+   * under a top-up charge (that subtraction leaves 1.3 total here, against a
+   * venue that reported 0.8 and a model that estimates 1.0).
+   */
+  it('charges one modelled commission total across a cumulative entry whose venue fee is also cumulative', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, {
+      requested_size: 100,
+      filled_size: 0,
+      modelled_cost_breakdown: modelledCostBreakdown,
+    });
+    const broker = new ScriptedBroker([
+      fill({
+        broker_fill_id: 'cumulative-1',
+        leg: 'entry',
+        qty: 50,
+        price: 100,
+        fee: 0.4,
+        timestamp: new Date('2026-07-20T15:00:00Z'),
+        qty_is_cumulative: true,
+      }),
+    ]);
+    const execution = new ExecutionImpl(makeInput(broker, store));
+    await execution.ingestFills();
+
+    broker.replaceFills([
+      fill({
+        broker_fill_id: 'cumulative-1',
+        leg: 'entry',
+        qty: 100,
+        price: 100,
+        fee: 0.8,
+        timestamp: new Date('2026-07-20T15:30:00Z'),
+        qty_is_cumulative: true,
+      }),
+    ]);
+    await execution.ingestFills();
+
+    const fills = await store.getFills('key-1');
+    const totalFee = fills.reduce((sum, row) => sum + row.fee, 0);
+    // One modelled commission (1) — the model out-charges the venue's 0.8, so
+    // the model's figure is what the lot pays, once.
+    expect(totalFee).toBeCloseTo(modelledCostBreakdown.commission, 9);
+  });
+
+  /**
+   * ROUND-1 REVIEW, finding 2. `modelled_cost_charged` must state what
+   * HAPPENED, not that the code path was entered. A live lot with no
+   * submit-time snapshot (`captureSubmitSnapshot` is best-effort, and two of
+   * the three live lots in the soak DB carried none, per the #1121 round-1
+   * review) goes through exactly the same `toFill` call and is charged
+   * nothing by it.
+   */
+  it('records modelled_cost_charged = false on a live round trip whose lot carries no modelled snapshot', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 10, side: 'buy' });
+    const entryFill = fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100, fee: 0 });
+    await new ExecutionImpl(makeInput(new ScriptedBroker([entryFill]), store)).ingestFills();
+
+    await store.writeAheadFlatten({
+      idempotency_key: 'flatten-1',
+      instrument: 'AAPL',
+      asset_class: 'stocks',
+      side: 'sell',
+      size: 10,
+      submitted_at: OPENED_AT,
+      lot_held_quantities: [{ idempotency_key: 'key-1', held: 10 }],
+      exit_reason: 'flatten',
+      decision_price: 110,
+      quote_bid: null,
+      quote_ask: null,
+      quote_mid: null,
+      quote_observed_at: null,
+      modelled_cost_breakdown: null,
+    });
+    await new ExecutionImpl(
+      makeInput(
+        new ScriptedBroker([
+          entryFill,
+          fill({
+            client_order_id: 'flatten-1',
+            broker_fill_id: 'f1',
+            leg: 'exit',
+            qty: 10,
+            price: 110,
+            fee: 0,
+            timestamp: new Date('2026-07-20T15:30:00Z'),
+          }),
+        ]),
+        store,
+      ),
+    ).ingestFills();
+
+    const closed = (await store.getClosedTrades())[0];
+    expect(closed.fees_total).toBe(0);
+    expect(closed.modelled_cost_charged).toBe(false);
+  });
+
+  it('records modelled_cost_charged = true when every covered leg was charged', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, {
+      requested_size: 10,
+      side: 'buy',
+      modelled_cost_breakdown: modelledCostBreakdown,
+    });
+    const entryFill = fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100, fee: 0 });
+    await new ExecutionImpl(makeInput(new ScriptedBroker([entryFill]), store)).ingestFills();
+
+    await store.writeAheadFlatten({
+      idempotency_key: 'flatten-1',
+      instrument: 'AAPL',
+      asset_class: 'stocks',
+      side: 'sell',
+      size: 10,
+      submitted_at: OPENED_AT,
+      lot_held_quantities: [{ idempotency_key: 'key-1', held: 10 }],
+      exit_reason: 'flatten',
+      decision_price: 110,
+      quote_bid: null,
+      quote_ask: null,
+      quote_mid: null,
+      quote_observed_at: null,
+      modelled_cost_breakdown: modelledCostBreakdown,
+    });
+    await new ExecutionImpl(
+      makeInput(
+        new ScriptedBroker([
+          entryFill,
+          fill({
+            client_order_id: 'flatten-1',
+            broker_fill_id: 'f1',
+            leg: 'exit',
+            qty: 10,
+            price: 110,
+            fee: 0,
+            timestamp: new Date('2026-07-20T15:30:00Z'),
+          }),
+        ]),
+        store,
+      ),
+    ).ingestFills();
+
+    const closed = (await store.getClosedTrades())[0];
+    expect(closed.modelled_cost_charged).toBe(true);
+  });
+
+  /**
+   * ROUND-1 REVIEW, finding 3 — the residual, PINNED rather than fixed
+   * (#1301). A live lot that exits on a protective leg pays no exit
+   * commission, because no modelled estimate exists for that leg on either
+   * arm. The flag stays `true`: vetoing on it would drop live trades BECAUSE
+   * they exited on a stop, which selects on outcome (stops are the losers).
+   * This test exists so the residual cannot be quietly forgotten — it fails
+   * the moment bracket legs start being charged, which is where #1301 has to
+   * update it.
+   */
+  it('leaves a live protective-leg (stop) exit uncharged — the known residual, #1301', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, {
+      requested_size: 10,
+      side: 'buy',
+      modelled_cost_breakdown: modelledCostBreakdown,
+    });
+    await new ExecutionImpl(
+      makeInput(
+        new ScriptedBroker([
+          fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100, fee: 0 }),
+          fill({
+            broker_fill_id: 's1',
+            leg: 'stop',
+            qty: 10,
+            price: 95,
+            fee: 0,
+            timestamp: new Date('2026-07-20T15:30:00Z'),
+          }),
+        ]),
+        store,
+      ),
+    ).ingestFills();
+
+    const stop = (await store.getFills('key-1')).find((row) => row.leg === 'stop');
+    expect(stop?.fee).toBe(0);
+    expect(stop?.cost_breakdown).toBeUndefined();
+    const closed = (await store.getClosedTrades())[0];
+    // Entry commission only: the round trip is charged one leg where the
+    // control arm's equivalent flatten close is charged two.
+    expect(closed.fees_total).toBeCloseTo(modelledCostBreakdown.commission, 9);
+    expect(closed.modelled_cost_charged).toBe(true);
   });
 });
 
