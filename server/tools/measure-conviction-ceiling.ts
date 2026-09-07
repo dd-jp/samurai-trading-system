@@ -12,10 +12,10 @@
  * evidence) and the pre-#745 technical analyst (scalar `|RSI-50|/50`
  * confidence). BOTH have since been rewritten:
  *
- * - `conviction-score.ts` now uses `|mean|` directional consensus (see that
- *   file for the mediator's two carve-outs — the `analystMean === 0` one is
- *   #683) and EXCLUDES `NO_DATA_MARKER` analysts from the evidence average
- *   (that exclusion is #625 defect 1's stated fix).
+ * - `conviction-score.ts` now uses `|mean|` directional consensus (see
+ *   `computeDirectionalConsensus` there for the mediator's carve-outs — the
+ *   `analystMean === 0` one is #683) and EXCLUDES `NO_DATA_MARKER` analysts
+ *   from the evidence average (that exclusion is #625 defect 1's stated fix).
  * - `technical-analyst.ts` now emits `confidence = |net| / availableAxes` over
  *   four voting axes, capped at `LOW_CONVICTION_CAP` on a gated tape (#745).
  *
@@ -134,6 +134,15 @@ const TECHNICAL_FIXED_KEY_POINTS = 5;
 
 /** Sentiment and fundamental each emit exactly two key points. */
 const MI_ANALYST_KEY_POINTS = 2;
+
+/**
+ * `conviction-score.ts`'s private `EVIDENCE_WEIGHT`, duplicated here because
+ * it isn't exported. The #683 carve-out caps conviction at this value when it
+ * fires (the consensus term goes to 0), so a sample at or above this can only
+ * be the carve-out NOT firing — that inference is only valid while this stays
+ * in sync with the real constant.
+ */
+const EVIDENCE_WEIGHT = 0.4;
 
 /** One enumerated point of the technical analyst's reachable output. */
 export interface LatticePoint {
@@ -411,11 +420,17 @@ export function report(floor: number): string {
   for (const shape of tieShapes) lines.push(`- ${shape}`);
   lines.push(
     'These trade only because the gate is `debate.confidence < conviction_floor` (strict, ' +
-      '`decide.ts`, predates #683). Under `<=` they would all skip. None of these are the ' +
-      '#683 carve-out firing: that carve-out forces the consensus term to 0, capping conviction ' +
-      'at `EVIDENCE_WEIGHT` (0.4) — below the floor, so a sample landing ON the floor necessarily ' +
-      'has a non-zero analyst mean. Whether the boundary itself should count as clearing is a ' +
-      'separate, still-open question (#756 item 1), not one #683 decided.',
+      '`decide.ts`, predates #683). Under `<=` they would all skip.' +
+      (floor > EVIDENCE_WEIGHT
+        ? ' None of these are the #683 carve-out firing: that carve-out forces the consensus ' +
+          `term to 0, capping conviction at \`EVIDENCE_WEIGHT\` (${format(EVIDENCE_WEIGHT)}) — ` +
+          `below this floor (${format(floor)}), so a sample landing ON the floor necessarily has ` +
+          'a non-zero analyst mean.'
+        : ` This floor (${format(floor)}) is at or below \`EVIDENCE_WEIGHT\` ` +
+          `(${format(EVIDENCE_WEIGHT)}), so a tie here CAN be the #683 carve-out firing — check ` +
+          'each sample above before assuming otherwise.') +
+      ' Whether the boundary itself should count as clearing is a separate, still-open question ' +
+      '(#756 item 1), not one #683 decided.',
   );
   lines.push('');
 

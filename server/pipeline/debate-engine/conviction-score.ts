@@ -51,11 +51,12 @@ const KEY_POINTS_SATURATION = 3;
  * — an analyst with no recorded round stances falls back to its original
  * `AnalystView.direction` when determining final position.
  *
- * `debateVerdict` is the mediator's final stance, counted as one more
- * participant. It is **required but nullable**, deliberately: a caller that
- * simply omits it gets a materially different, mediator-free score on a path
- * that gates trades, so the omission has to fail at compile time rather than
- * degrade silently. Passing `undefined` is the explicit way to ask for the
+ * `debateVerdict` is the mediator's final stance, folded into the consensus
+ * term subject to `computeDirectionalConsensus`'s carve-outs below. It is
+ * **required but nullable**, deliberately: a caller that simply omits it
+ * gets a materially different, mediator-free score on a path that gates
+ * trades, so the omission has to fail at compile time rather than degrade
+ * silently. Passing `undefined` is the explicit way to ask for the
  * mediator-free score (the pure unit tests, and any caller with no mediator);
  * the production adapter always supplies a real stance. See
  * `computeDirectionalConsensus` for why bull/bear stances are NOT included.
@@ -117,10 +118,11 @@ function directionValue(direction: Direction): number {
  * counts participants, so silence and disagreement both score 0 and only a
  * genuine directional lean scores high.
  *
- * The mediator's verdict is counted as one more participant, which is what
- * makes the debate able to move the score at all (#625 defect 2: the adapter
- * echoed analyst input directions back as "round stances", so rounds
- * contributed exactly zero to a score we were paying an LLM to produce).
+ * When the carve-outs below don't exclude it, the mediator's verdict is
+ * counted as one more participant — which is what makes the debate able to
+ * move the score at all (#625 defect 2: the adapter echoed analyst input
+ * directions back as "round stances", so rounds contributed exactly zero to
+ * a score we were paying an LLM to produce).
  *
  * **Bull and bear stances are deliberately excluded.** Their direction is an
  * ASSIGNED ROLE, not an opinion — the bear argues bearish because it was told
