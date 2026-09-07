@@ -118,10 +118,10 @@ describe('Rail — drawdown meter', () => {
    * DRAWDOWN_TOLERANCE)` (catches `NaN`, `Infinity`, `-Infinity` — rejected by
    * the same mechanism, none of the three is a finite double — and the
    * overflow case, a finite `max_drawdown` whose quotient against the
-   * tolerance is itself non-finite). They're asserted as five separate tests
+   * tolerance is itself non-finite). They're asserted as six separate tests
    * because each is a distinct way a real value goes bad on the wire (a 0/0,
-   * a sign error, a `JSON.stringify` cast of a non-finite number to literal
-   * `null`, a string, an overflow on division), not because either guard
+   * a `JSON.stringify` cast of a non-finite number to literal `null`, a
+   * wrong-typed string, an overflow on division), not because either guard
    * treats them differently from its siblings on the same gate.
    */
   it('says the drawdown figure could not be read when max_drawdown is NaN, not that no suite ran', () => {
@@ -181,16 +181,25 @@ describe('Rail — drawdown meter', () => {
   });
 
   /**
-   * `null` is not a hypothetical wrong type here: `JSON.stringify` casts
-   * `NaN`/`Infinity`/`-Infinity` to literal `null`, so an upstream computation
-   * that goes non-finite and is then serialized onto the wire arrives at this
-   * component as `null`, not as the original non-finite number. This is the
-   * route a real broken suite actually produces, not just an in-memory
-   * fixture value. `typeof null === 'object'`, so it takes the same `typeof`
-   * gate as the string case above, before `CapMeter`'s own `value ===
-   * undefined` check ever sees it — without that gate, `null /
-   * DRAWDOWN_TOLERANCE === 0`, a finite quotient, and `CapMeter` would draw a
-   * meter at 0% regardless of what reason this component computed.
+   * `null` is not a hypothetical wrong type: `JSON.stringify` casts
+   * `NaN`/`Infinity`/`-Infinity` to literal `null`, so an upstream
+   * computation that goes non-finite and is then serialized onto the wire
+   * would arrive at this component as `null`, not as the original
+   * non-finite number. `max_drawdown` itself takes no such route today —
+   * both `SqliteQueryStore.getDailyMetrics` and the fixture store hardcode
+   * it (`ZERO_METRICS.max_drawdown = 0`, `DAILY_METRICS.max_drawdown =
+   * 0.118`), so this test is defensive against a future real computation,
+   * not a route this field is observed to take now. The cast mechanism
+   * itself is not hypothetical, though: it is already live on a sibling
+   * field of this same `MetricsSuite` — `profitFactor` returns
+   * `Number.POSITIVE_INFINITY` for any window with wins and no losses (a
+   * routine day), and `server.ts`'s `JSON.stringify` turns that into
+   * `profit_factor: null` on the wire today. `typeof null === 'object'`, so
+   * `max_drawdown: null` takes the same `typeof` gate as the string case
+   * above, before `CapMeter`'s own `value === undefined` check ever sees
+   * it — without that gate, `null / DRAWDOWN_TOLERANCE === 0`, a finite
+   * quotient, and `CapMeter` would draw a meter at 0% regardless of what
+   * reason this component computed.
    */
   it('says the drawdown figure could not be read when max_drawdown is null on the wire', () => {
     renderRail(
@@ -223,5 +232,6 @@ describe('Rail — drawdown meter', () => {
     expect(
       screen.getByText('daily suite drawdown figure could not be read — meter not drawable'),
     ).toBeTruthy();
+    expect(screen.queryByText('no daily suite yet — meter not drawable')).toBeNull();
   });
 });

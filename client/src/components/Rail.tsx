@@ -382,13 +382,15 @@ type DrawdownReason = 'absent' | 'unreadable' | 'drawn';
  * a raw wire scalar it has to re-validate).
  *
  * `max_drawdown` is typed as a required, finite fraction
- * (contracts/metrics.ts:37), so a wrong type, `NaN`, or a non-finite value at
- * runtime is an upstream defect, not a documented alternative. It is checked
- * with `typeof`, not merely `Number.isFinite`, because `Number.isFinite`
- * alone would still pass a wrong-typed value through to the `/` below and
- * let JS's own numeric coercion (`'0.2' / cap`, `null / cap === 0`) produce a
- * finite-looking quotient for a value this client never actually read as a
- * number — the same silent-fallthrough class this ticket exists to close.
+ * (contracts/metrics.ts:38), so a wrong type, `NaN`, or a non-finite value at
+ * runtime is an upstream defect, not a documented alternative. The type is
+ * checked with `typeof` *before* any arithmetic, rather than folding it into
+ * the finiteness check below: dividing first and asking `Number.isFinite` of
+ * the quotient — needed anyway, for the overflow case below — would let JS's
+ * own numeric coercion (`'0.2' / cap` divides cleanly, `null / cap === 0`)
+ * turn a wrong-typed value into a finite-looking quotient before finiteness
+ * is ever tested, the same silent-fallthrough class this ticket exists to
+ * close. `typeof` sees the value before that coercion has a chance to run.
  *
  * The quotient itself is also checked, not just the raw value: `cap`
  * (`DRAWDOWN_TOLERANCE`) is a fixed, positive, finite constant, so the only
