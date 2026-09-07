@@ -1,4 +1,8 @@
-import { SaxoBrokerProviderError, SaxoBrokerRateLimitError } from './saxo-broker-errors.js';
+import {
+  SaxoBrokerProviderError,
+  SaxoBrokerRateLimitError,
+  SaxoBrokerTimeoutError,
+} from './saxo-broker-errors.js';
 import type { SaxoOrderRequest } from './saxo-client.js';
 import { SAXO_CREDENTIAL_ENV_VARS, SaxoHttpBrokerClient } from './saxo-http-client.js';
 
@@ -397,6 +401,51 @@ describe('SaxoHttpBrokerClient', () => {
 
       await expect(client.cancelOrder('order-1')).rejects.toBeInstanceOf(SaxoBrokerProviderError);
       expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  // #1273: a timeout abort was retried unconditionally regardless of verb —
+  // the sole guard against retrying a lost placement response was
+  // `placeOrder`'s `maxAttempts: 1` below. This end-to-end pair pins the
+  // fix, but — same caveat as "does NOT retry a transport failure on
+  // placeOrder" above — the placeOrder test below does NOT by itself catch a
+  // classifier regression: `maxAttempts: 1` pins it to one attempt
+  // regardless of what `isRetryableSaxoBrokerError` answers (confirmed by
+  // mutation — reverting `isRetrySafeSaxoMethod` to always `true` leaves
+  // this file's 21 tests green). The classification-level guarantee is
+  // proven in isolation by `saxo-broker-errors.test.ts`'s
+  // "timeout/rate-limit/5xx retryability is verb-aware" suite, four cases of
+  // which DO fail under that same mutation.
+  describe('timeout retryability is verb-aware (#1273)', () => {
+    it('does NOT retry a timeout on placeOrder (a POST), even with attempts to spare', async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse(ACCOUNTS))
+        .mockRejectedValue(new DOMException('The operation timed out.', 'TimeoutError'));
+      const client = makeClient(fetchMock, { maxAttempts: 5, baseDelayMs: 10, maxDelayMs: 100 });
+
+      await expect(client.placeOrder(ORDER, 'key-1')).rejects.toBeInstanceOf(
+        SaxoBrokerTimeoutError,
+      );
+      // 1 for resolveIdentity + exactly 1 placement attempt — no retry.
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    // The preserved behavior: doc 43:33 measured a repeat order-cancel as
+    // venue-idempotent (`404 OrderNotFound`).
+    it('DOES retry a timeout on cancelOrder (a DELETE)', async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse(ACCOUNTS))
+        .mockRejectedValueOnce(new DOMException('The operation timed out.', 'TimeoutError'))
+        .mockResolvedValueOnce(jsonResponse(undefined));
+      const client = makeClient(fetchMock, { maxAttempts: 3, baseDelayMs: 10, maxDelayMs: 100 });
+
+      const pending = client.cancelOrder('order-1');
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      await expect(pending).resolves.toBeUndefined();
+      expect(fetchMock).toHaveBeenCalledTimes(3);
     });
   });
 });
