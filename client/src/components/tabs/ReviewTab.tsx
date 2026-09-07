@@ -49,17 +49,23 @@ interface Tile {
  * `profit_factor`'s tile text (#1270). An exhaustive switch, not a lookup
  * table, because one variant (`ratio`) carries a payload the other two
  * don't — the `never` in `default` is what makes adding a fourth
- * `ProfitFactorWire` variant without a case here a compile error rather
- * than a silent fallthrough to `UNKNOWN`.
+ * `ProfitFactorWire` variant without a case here a compile error, catching
+ * it at build time rather than here at render.
  *
  * `no_losses` reads as the plain fact it is — a window with wins and no
  * losses, the best possible outcome, not an absence — so it gets its own
  * words rather than `formatFixed`'s em dash, which this dashboard reserves
  * for "we don't know" (dashboard-spec.md: never a bare dash for a real
- * state). `unreadable` is the residual: `toProfitFactorWire` never emits it
- * for today's `profitFactor()` (wins/losses are non-negative sums, so the
- * only non-finite output is `+Infinity`), but the type admits it and this
- * switch must too.
+ * state). `unreadable` has a real production route: `useSnapshot.ts`'s
+ * `profitFactorOf` maps a pre-#1270 server's bare number or
+ * `JSON.stringify`-collapsed `null` here, since this client cannot tell
+ * which non-finite value a `null` on that wire used to be.
+ *
+ * `default` returns rather than throws (review round 1, MAJOR) even though
+ * `profitFactorOf` should make it unreachable: `main.tsx` mounts with no
+ * error boundary, so a throw here is a white screen on a live-money
+ * surface, not a bad tile — the same reasoning `Rail.tsx`'s
+ * `drawdownReasonOf` already applies to its sibling field.
  */
 function profitFactorText(pf: MetricsSuiteWire['profit_factor']): string {
   switch (pf.kind) {
@@ -71,7 +77,7 @@ function profitFactorText(pf: MetricsSuiteWire['profit_factor']): string {
       return 'could not be read';
     default: {
       const unreachable: never = pf;
-      throw new Error(`profitFactorText: unknown kind ${JSON.stringify(unreachable)}.`);
+      return `could not be read (unknown kind ${JSON.stringify(unreachable)})`;
     }
   }
 }

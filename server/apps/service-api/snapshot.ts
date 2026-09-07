@@ -361,10 +361,7 @@ export function buildSnapshot(
       observation_count: sample.performance.observation_count,
     }));
 
-  // `getDailyMetrics` returns the domain `MetricsSuite`, where `profit_factor`
-  // is a plain `number` and legitimately `Infinity` on a window with wins and
-  // no losses. `toProfitFactorWire` is the one conversion into the wire's
-  // `ProfitFactorWire` (#1270) — every other field crosses unchanged.
+  // `toProfitFactorWire` doc (contracts/metrics.ts) has the full rationale (#1270).
   const dailyMetrics = store.getDailyMetrics(asOf);
   const metrics: MetricsSuiteWire = {
     ...dailyMetrics,

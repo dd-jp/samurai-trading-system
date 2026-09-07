@@ -8,16 +8,9 @@
  * folder named for an offline research harness owned a type on the operator's
  * live surface. The harness now imports it from here like everyone else.
  *
- * Every field is plain `number` in-process (`MetricsSuite`, below) — true for
- * the backtest tools and the Feedback Loop's own report, which never leave
- * the process and can carry `Number.POSITIVE_INFINITY` (a window with wins
- * and no losses) without incident. It does NOT hold for the wire:
- * `profit_factor` is the one field a routine day drives non-finite, and
- * `JSON.stringify` has no representation for `Infinity`/`NaN` — it emits
- * literal `null`, indistinguishable from "unknown" (#1270). `MetricsSuiteWire`
- * (`contracts/snapshot.ts`) is therefore NOT this interface verbatim: it
- * replaces `profit_factor` with `ProfitFactorWire`, the one field this file's
- * "plain number, JSON by construction" claim does not cover.
+ * Every field is plain `number` in-process (`MetricsSuite`, below); the wire
+ * shape (`MetricsSuiteWire`, `contracts/snapshot.ts`) differs on one field —
+ * see `ProfitFactorWire` below for why (#1270).
  */
 
 /**
@@ -108,10 +101,7 @@ export interface MetricsSuite {
  * `-Infinity` would still be wrapped as `{ kind: 'ratio', value: NaN }`, and
  * THAT number dies in `JSON.stringify` the same way the bare field used to —
  * the fix would only have moved the bug one field deeper. `toProfitFactorWire`
- * below is what keeps this invariant true; it is the only production
- * construction site (test fixtures build the literal shape directly, which
- * is fine — they are asserting against it, not deriving it from a domain
- * number).
+ * below is what keeps this invariant true.
  *
  * `wins === 0 && losses === 0` (no closed trades at all) is `profitFactor()`
  * returning `0` — an ordinary finite ratio, `{ kind: 'ratio', value: 0 }`.

@@ -148,6 +148,20 @@ describe('profit factor tile', () => {
     expect(screen.getByText(/No metrics on this snapshot/)).toBeTruthy();
     expect(screen.queryByText('no losing trades')).toBeNull();
   });
+
+  it('renders rather than throws on a kind the type system does not admit (review round 1, MINOR)', () => {
+    // Not reachable through `toWireSnapshot` — `profitFactorOf` maps every
+    // input to one of the three known kinds — but `profitFactorText`'s
+    // `default` arm must not crash the whole tab if a future caller ever
+    // hands it something it doesn't recognise. `main.tsx` mounts with no
+    // error boundary, so a throw here is a white screen, not a bad tile.
+    const bogus = { kind: 'bogus' } as unknown as ReturnType<typeof makeMetrics>['profit_factor'];
+    expect(() =>
+      renderReview(makeSnapshot({ metrics: makeMetrics({ profit_factor: bogus }) })),
+    ).not.toThrow();
+    const metrics = screen.getByRole('region', { name: 'Metrics suite' });
+    expect(within(metrics).getByText(/could not be read/)).toBeTruthy();
+  });
 });
 
 describe('closed trades', () => {
