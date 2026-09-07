@@ -186,7 +186,7 @@ describe("report()'s tie section", () => {
 
     expect(section).toContain('samples landing EXACTLY on the floor: 0');
     expect(section).not.toContain(CHECK_SAMPLES);
-    expect(section).toContain('No sample lands exactly on this floor');
+    expect(section).toContain('No enumerated sample lands exactly on this floor');
   });
 
   it('excludes the carve-out outright when the floor is above EVIDENCE_WEIGHT', () => {

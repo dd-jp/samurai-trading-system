@@ -400,7 +400,7 @@ export function report(floor: number): string {
   }
   lines.push('');
 
-  lines.push('## Exact ties at the floor — the strict `<` gate is load-bearing');
+  lines.push('## Exact ties at the floor — what the strict `<` gate admits');
   lines.push('');
   const ties = samples.filter(
     (sample) => sample.direction !== 'neutral' && sample.conviction === floor,
@@ -414,10 +414,9 @@ export function report(floor: number): string {
   for (const shape of tieShapes) lines.push(`- ${shape}`);
   if (ties.length === 0) {
     lines.push(
-      `No sample lands exactly on this floor (${format(floor)}), so the strict \`<\` gate and ` +
-        '`<=` would admit the same set here — the gate is load-bearing only at floors the ' +
-        'lattice can hit exactly. Whether the boundary itself should count as clearing is a ' +
-        'separate, still-open question (#756 item 1), not one #683 decided.',
+      `No enumerated sample lands exactly on this floor (${format(floor)}), so across THIS ` +
+        'enumeration `<` and `<=` admit the same set. Whether the boundary itself should count ' +
+        'as clearing is a separate, still-open question (#756 item 1), not one #683 decided.',
     );
   } else {
     lines.push(
