@@ -53,22 +53,30 @@ function shouldWarnAt(consecutive: number): boolean {
  * restarted has no evidence about the previous process's polls, and a crash
  * is already alarmed by the heartbeat's silence.
  *
- * One instance per arm (live or control), constructed once where that
- * arm's `Execution` dependencies are wired — `ExecutionInput.filledZeroSizeThrottle`
+ * One instance per composition root, constructed wherever that root wires
+ * an `Execution` caller's dependencies — `ExecutionInput.filledZeroSizeThrottle`
  * — and threaded through every `Execution` surface built from that same
  * object: the tick-driven `execute()` step (`buildExecutionStep`,
  * production/direct-bind.ts, which rebuilds a fresh `ExecutionImpl` per
  * verdict) and the fill-sync loop's `reconcile()`/`ingestFills()` surfaces
- * (`buildExecutionSurface`, built once and held for the arm's whole
- * process lifetime). As `production.ts`'s own `filledZeroSizeThrottle:`
- * comment puts it: one throttle for the arm's whole process lifetime —
- * process-scoped, not surface-scoped — so it is not scoped to any single
- * `ExecutionImpl`, including the per-verdict ones `buildExecutionStep`
- * keeps rebuilding. NOT a module-level singleton: the live and control
- * arms poll independently and must not share, or leak into, each other's
- * throttle state (`control-arm-wiring.ts`'s own throttle field gives the
- * control arm an entirely separate instance for this reason), and two arms
- * built in the same test process must not either.
+ * (`buildExecutionSurface`, built once and held for that root's lifetime).
+ * Today: `production.ts`'s live root, `control-arm-wiring.ts`'s control
+ * arm, each of `smoke-run.ts`'s scenario harnesses, and
+ * `place-soak-position.ts`'s probe — not a list this doc has to track,
+ * since wiring the dependencies at all means constructing this too. As
+ * `production.ts`'s own `filledZeroSizeThrottle:` comment puts it: one
+ * throttle for that root's whole process lifetime — process-scoped, not
+ * surface-scoped — so it is not scoped to any single `ExecutionImpl`,
+ * including the per-verdict ones `buildExecutionStep` keeps rebuilding.
+ * NOT a module-level singleton: two roots built in the same process — the
+ * live and control arms included — must not share, or leak into, each
+ * other's throttle state, and two instances built in the same test process
+ * must not either. (`control-arm-wiring.ts`'s own comment gives its
+ * separate instance a different reason — process-scoped state matching
+ * each root's own instance lifetime, the same symmetry `broker`/`store`/
+ * `costModel` get there — not cross-arm leakage: `arm` already rides in
+ * `idempotency_key`, #753, so keys can't collide even if one instance were
+ * shared.)
  */
 export class FilledZeroSizeThrottle {
   readonly #consecutive = new Map<string, number>();
