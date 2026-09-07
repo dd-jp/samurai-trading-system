@@ -109,14 +109,20 @@ describe('Rail — drawdown meter', () => {
   /**
    * #1264: `metrics` present (a suite DID run) but `max_drawdown` unreadable
    * must not read as "no daily suite yet" — that sentence is reserved for
-   * `metrics === null`, asserted by the pinned test above. `Number.isFinite`
-   * rejects `NaN`, `Infinity` and `-Infinity` by the same mechanism (none of
-   * the three is a finite double) — the routes below are asserted separately
-   * anyway because each is a distinct way a real upstream computation goes
-   * wrong (a 0/0, an overflow, a sign error), not because the guard treats
-   * them differently. A wrong-typed value and a same-value overflow (a
-   * finite `max_drawdown` whose quotient against the tolerance is itself
-   * non-finite) are asserted too, matching the spec's four-route list.
+   * `metrics === null`, asserted by the pinned test above.
+   *
+   * `drawdownValueOf` has two independent gates, and the routes below split
+   * across both: a `typeof value !== 'number'` check (catches the wrong-typed
+   * and `null` cases below — neither is ever seen by `Number.isFinite`, since
+   * the `typeof` gate returns first) and `Number.isFinite(value /
+   * DRAWDOWN_TOLERANCE)` (catches `NaN`, `Infinity`, `-Infinity` — rejected by
+   * the same mechanism, none of the three is a finite double — and the
+   * overflow case, a finite `max_drawdown` whose quotient against the
+   * tolerance is itself non-finite). They're asserted as five separate tests
+   * because each is a distinct way a real value goes bad on the wire (a 0/0,
+   * a sign error, a `JSON.stringify` cast of a non-finite number to literal
+   * `null`, a string, an overflow on division), not because either guard
+   * treats them differently from its siblings on the same gate.
    */
   it('says the drawdown figure could not be read when max_drawdown is NaN, not that no suite ran', () => {
     renderRail(
@@ -164,6 +170,33 @@ describe('Rail — drawdown meter', () => {
       makeFeed({
         snapshot: makeSnapshot({
           metrics: makeMetrics({ max_drawdown: '0.2' as unknown as number }),
+        }),
+      }),
+    );
+
+    expect(
+      screen.getByText('daily suite drawdown figure could not be read — meter not drawable'),
+    ).toBeTruthy();
+    expect(screen.queryByText('no daily suite yet — meter not drawable')).toBeNull();
+  });
+
+  /**
+   * `null` is not a hypothetical wrong type here: `JSON.stringify` casts
+   * `NaN`/`Infinity`/`-Infinity` to literal `null`, so an upstream computation
+   * that goes non-finite and is then serialized onto the wire arrives at this
+   * component as `null`, not as the original non-finite number. This is the
+   * route a real broken suite actually produces, not just an in-memory
+   * fixture value. `typeof null === 'object'`, so it takes the same `typeof`
+   * gate as the string case above, before `CapMeter`'s own `value ===
+   * undefined` check ever sees it — without that gate, `null /
+   * DRAWDOWN_TOLERANCE === 0`, a finite quotient, and `CapMeter` would draw a
+   * meter at 0% regardless of what reason this component computed.
+   */
+  it('says the drawdown figure could not be read when max_drawdown is null on the wire', () => {
+    renderRail(
+      makeFeed({
+        snapshot: makeSnapshot({
+          metrics: makeMetrics({ max_drawdown: null as unknown as number }),
         }),
       }),
     );
