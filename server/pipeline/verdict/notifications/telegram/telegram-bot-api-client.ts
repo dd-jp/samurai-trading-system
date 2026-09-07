@@ -161,7 +161,9 @@ const REJECTION_ALERT_EVERY = 3;
  * after (#1108) — the same "don't sit silently" posture `REJECTION_ALERT_EVERY`
  * takes: a failed send is individually swallowed by the caller's own
  * `.catch`, so nothing else surfaces that a pattern is forming until an
- * operator goes looking.
+ * operator goes looking. Only ever reaches the operator for a content-class
+ * failure, not a channel outage — see `#recordDeliveryFailure`'s doc (#1130)
+ * for why, and `alert_delivery_failures` for the surface that covers both.
  */
 const DELIVERY_FAILURE_ALERT_EVERY = 3;
 
@@ -658,6 +660,30 @@ export class TelegramBotApiClient implements TelegramClient {
    * toward — or itself trigger — a "the escalation channel is degraded"
    * alert posted to the very channel #342 protects.
    *
+   * **What the "channel degraded" notice below is (and is not) for (#1130).**
+   * It posts to `#alertChatId` over this same `#call`/`sendMessage` path —
+   * the exact transport that just exhausted its retries. That means it can
+   * only ever arrive when this chat is still reachable: a content-specific
+   * failure (an oversized or malformed body, a transient rate limit these
+   * particular retries didn't cover), never a genuine channel outage — the
+   * one condition #1108 opened with, where ten alerts and all three of that
+   * incident's escalation attempts alike went nowhere. There is no
+   * alternative transport to fail over to: `DiscordClient` exists as a type
+   * in this repo (notifications/types.ts) but no implementation of it is
+   * ever constructed, and `alert-transport.ts`'s composition root wires
+   * every `TradeChannel*` with `telegram` alone — a seam nobody calls, not a
+   * live channel. Routing this notice to the heartbeat chat instead would
+   * not help either: that chat is a different `chat_id` over the identical
+   * bot/`#call` stack, so it fails identically when Telegram itself is down,
+   * and posting an escalation there would violate #342's isolation invariant
+   * in the other direction (an escalation sharing the beat's destination is
+   * exactly what #342 forbids). The durable count this method writes below
+   * — `alert_delivery_failures`, rendered on the dashboard Rail whenever
+   * nonzero — is what actually answers "is the channel down": it is a
+   * straight read of this table, so it survives regardless of whether any
+   * Telegram send, including this escalation's own attempt, could get
+   * through.
+   *
    * `error: detail` in the `#log` payload below is masked centrally by
    * `formatLogLine`'s `redactPayload` walk — but `message` is a plain string
    * the logger never touches, so `detail` must be masked with
@@ -710,8 +736,11 @@ export class TelegramBotApiClient implements TelegramClient {
         chat_id: this.#alertChatId,
         text:
           `Samurai alert channel degraded: ${this.#deliveryFailureCount} Telegram sends have ` +
-          'failed permanently after retries so far this run. Recent escalations may not have ' +
-          'reached you — check alert_delivery_failures for the record.',
+          'failed permanently after retries so far this run, so recent escalations may not ' +
+          'have reached you. This notice can only reach you if this chat itself is still ' +
+          'reachable, so it will not arrive during a genuine channel outage — the dashboard ' +
+          'alert-channel tile (alert_delivery_failures) is the record of that, not this ' +
+          'message.',
       }).catch((escalationError: unknown) => {
         // Same reason `detail` above is wrapped: this escalation send itself
         // reaches `#call`/`#request` and can fail against the very

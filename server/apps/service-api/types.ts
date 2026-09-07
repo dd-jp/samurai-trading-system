@@ -297,6 +297,16 @@ export interface DashboardQueryStore {
    * sends (#342's isolation only stops those from advancing the escalation
    * counter, not from being written), and this tile answers "is the alert
    * channel down" — a heartbeat hiccup on its own chat must not degrade it.
+   *
+   * This IS the channel-down surface (#1130), not a supplement to one: the
+   * in-band Telegram "channel degraded" notice
+   * (`telegram-bot-api-client.ts`'s `#recordDeliveryFailure`) posts over the
+   * exact chat/transport it is reporting on, so it cannot arrive during a
+   * real outage — only this tile can, because it is a plain SQL read of a
+   * durable table, crossing no live transport at read time. That holds when
+   * this process's own `TELEGRAM_CHAT_ID` (index.ts) agrees with the
+   * orchestrator's — the same config-agreement caveat noted above — and
+   * reads 0 by design under `log-only`, where nothing is ever sent to mark.
    */
   getAlertDeliveryFailureCount(asOf: Date): number;
 }

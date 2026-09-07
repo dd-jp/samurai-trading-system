@@ -167,6 +167,17 @@ function ProvidersBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
  * down, but a healthy channel needs no permanent tile saying so, matching
  * `LiveTickBlock`'s "idle" posture rather than `ProvidersBlock`'s
  * always-shown tiles.
+ *
+ * This tile is the channel-down surface (#1130) — not a backup to the
+ * in-band Telegram "channel degraded" notice the server also posts. That
+ * notice shares the escalation chat's own transport, so it cannot arrive in
+ * the one case it would matter (the channel actually being down); it only
+ * ever reaches a reachable chat. This tile never crosses that transport —
+ * it reads `alert_delivery_failures` off the wire, itself a plain SQL count
+ * — so it is the one place an operator can actually tell, provided the
+ * service-api process's own `TELEGRAM_CHAT_ID` agrees with the
+ * orchestrator's; it reads 0 by design under `log-only`, where nothing is
+ * ever sent to mark.
  */
 function AlertDeliveryBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
   const count = snapshot?.alert_delivery_failures ?? 0;

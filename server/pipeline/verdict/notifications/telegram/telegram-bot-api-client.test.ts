@@ -604,6 +604,34 @@ describe('TelegramBotApiClient — transient network failures and undeliverable 
     expect(String(escalations[0]?.body.text)).toContain('3 Telegram sends');
   });
 
+  // #1130: this notice is posted to `#alertChatId` over the SAME transport
+  // that just exhausted its retries — the one condition it exists for (a
+  // genuinely dead channel, not just one bad send) is exactly the one it
+  // cannot reach the operator through. The text must say so, and must point
+  // at `alert_delivery_failures` (the dashboard's Rail tile, #1108/#1129) as
+  // the surface that answers "is the channel down" instead — that tile reads
+  // the durable table directly and does not cross this failing transport.
+  it('the degraded-channel notice names its own reachability limit and points at the dashboard tile', async () => {
+    const h = makeClient({
+      alertChatId: CHAT_ID,
+      retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
+    });
+    h.fetchMock.mockRejectedValue(
+      new TypeError('fetch failed', { cause: new Error('connect ECONNREFUSED 127.0.0.1:9') }),
+    );
+
+    for (let i = 0; i < 3; i++) {
+      await expect(h.client.sendMessage(CHAT_ID, `alert ${i}`)).rejects.toThrow();
+    }
+
+    const [escalation] = h
+      .calls()
+      .filter((c) => c.url.includes('/sendMessage') && String(c.body.text).includes('degraded'));
+    const text = String(escalation?.body.text);
+    expect(text).toContain('only reach you if this chat itself is still reachable');
+    expect(text).toContain('alert_delivery_failures');
+  });
+
   it('an escalation attempt that itself fails is swallowed, not recorded as a second failure', async () => {
     const h = makeClient({
       alertChatId: CHAT_ID,
