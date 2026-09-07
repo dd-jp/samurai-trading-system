@@ -69,11 +69,13 @@ interface AccountIdentity {
 /**
  * `RequestInit` with `method` narrowed from optional `string` to a required
  * `SaxoHttpMethod` (#1223) — every call into `request()` must state its verb
- * explicitly, and that verb is the ONLY thing that decides whether a
- * status-less transport failure gets retried (`classifySaxoBrokerNetworkError`
- * reads it back out). This is what stops a new operation from silently
- * inheriting `fetch`'s implicit "no method means GET" default and picking up
- * transport retries it never asked for.
+ * explicitly. That verb is what decides retryability for every classified
+ * failure shape this client can throw: a status-less transport failure
+ * (`classifySaxoBrokerNetworkError`, #1223) and, since #1273, a timeout,
+ * rate-limit or 5xx response (`classifySaxoBrokerResponse`) too — both read
+ * it back out of `init.method`. This is what stops a new operation from
+ * silently inheriting `fetch`'s implicit "no method means GET" default and
+ * picking up retries it never asked for.
  */
 type SaxoRequestInit = Omit<RequestInit, 'method'> & { method: SaxoHttpMethod };
 
@@ -324,7 +326,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
           throw classifySaxoBrokerNetworkError(cause, context, init.method);
         }
         if (!response.ok) {
-          throw await classifySaxoBrokerResponse(response, context);
+          throw await classifySaxoBrokerResponse(response, context, init.method);
         }
         let text: string;
         try {
@@ -396,6 +398,19 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
    * Single attempt, no transport retry: Saxo's duplicate guard only covers a
    * 15 s window (doc 43), so a retried POST after a slow reply can place a
    * second order. Recovery is the adapter's adopt-or-place lookup instead.
+   *
+   * Since #1273, `isRetryableSaxoBrokerError` (via `isRetrySafeSaxoMethod`)
+   * already refuses retry for every error shape `request()` can throw on a
+   * POST: a status-less transport failure (`retryableTransportFailure` is
+   * `method === 'GET'`), a timeout, a rate-limit, and a 5xx response (all
+   * three gated by the same POST-excluding allowlist), plus the unclassified
+   * body-read/parse failures below, which were never retryable regardless of
+   * verb. So `maxAttempts: 1` here no longer carries the guarantee — the
+   * classifier does, on its own, verb by verb. It stays as defense in depth:
+   * a future error shape that skips classification, or a classifier edit
+   * that stops consulting `method`, would silently re-open retry on
+   * placement without it. Do not remove it on the strength of the
+   * classifier alone.
    */
   async placeOrder(request: SaxoOrderRequest, requestId: string): Promise<SaxoOrderPlacement> {
     const { accountKey } = await this.resolveIdentity();
