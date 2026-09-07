@@ -238,14 +238,21 @@ describe('toWireSnapshot', () => {
       expect(toWireSnapshot(body)?.metrics.profit_factor).toEqual(shape);
     });
 
+    // Each row is wrapped in its own 1-tuple: `it.each` spreads a row that is
+    // itself an array as a MULTI-argument call rather than a single `%o`
+    // argument, so the bare `[]` case below would otherwise vanish as a
+    // zero-argument invocation (silently duplicating the `undefined` case
+    // instead of ever exercising an array input) — caught by re-running this
+    // block with `--reporter=verbose` and finding two identically-named
+    // "undefined" cases instead of one "[]" and one "undefined".
     it.each([
-      { kind: 'ratio', value: Number.NaN },
-      { kind: 'ratio', value: 'not a number' },
-      { kind: 'ratio' },
-      { kind: 'something-unknown' },
-      [],
-      'a string',
-      undefined,
+      [{ kind: 'ratio', value: Number.NaN }],
+      [{ kind: 'ratio', value: 'not a number' }],
+      [{ kind: 'ratio' }],
+      [{ kind: 'something-unknown' }],
+      [[]],
+      ['a string'],
+      [undefined],
     ])('degrades a malformed profit_factor %o to unreadable rather than throwing', (malformed) => {
       const body = raw({ metrics: { ...makeMetrics(), profit_factor: malformed } });
       expect(toWireSnapshot(body)?.metrics.profit_factor).toEqual({ kind: 'unreadable' });
