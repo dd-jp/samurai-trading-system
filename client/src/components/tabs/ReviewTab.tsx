@@ -76,8 +76,17 @@ function profitFactorText(pf: MetricsSuiteWire['profit_factor']): string {
     case 'unreadable':
       return 'could not be read';
     default: {
+      // `never` still catches a missed case at compile time (delete a case
+      // above and this line fails to build) even though the runtime arm
+      // below degrades rather than throws (review round 1, MAJOR) — the
+      // compile-time guarantee and the choice to never crash the tab are
+      // independent, and this keeps both. The returned words match
+      // `'unreadable'` above exactly (review round 2, NIT): raw JSON on an
+      // operator's tile would be a second unreadable-looking failure mode
+      // layered on top of the first.
       const unreachable: never = pf;
-      return `could not be read (unknown kind ${JSON.stringify(unreachable)})`;
+      void unreachable;
+      return 'could not be read';
     }
   }
 }

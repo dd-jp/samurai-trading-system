@@ -93,8 +93,10 @@ export interface MetricsSuite {
  * for "we have no idea" (`format.ts`'s `UNKNOWN`). A nullable field would
  * reproduce exactly that collapse one type-check later. A discriminated
  * union survives the boundary intact and forces every reader to handle
- * `no_losses` by name — `switch (pf.kind)` without a `default` is a compile
- * error on a new variant, not a silent fallthrough.
+ * `no_losses` by name — a `switch (pf.kind)` with a `const unreachable:
+ * never = pf` in its `default` still fails to COMPILE on a new variant,
+ * even where that `default` chooses to degrade at runtime instead of
+ * throwing (`ReviewTab.tsx`'s `profitFactorText`).
  *
  * `unreadable` exists so `ratio.value` is NEVER itself a non-finite number:
  * without it, an upstream defect that drove `profit_factor` to `NaN` or
@@ -116,13 +118,15 @@ export type ProfitFactorWire =
   | { kind: 'unreadable' };
 
 /**
- * The only production construction site for a `ProfitFactorWire`. Every
- * producer of a `MetricsSuiteWire` (today just `buildSnapshot`) must route
- * the domain `profit_factor` number through this function rather than
- * re-deriving the three-way split, so a future second wire-builder cannot
- * drift from this one on which non-finite values mean what. (Test fixtures
- * construct the literal shape directly to assert against it — that is not a
- * second production path.)
+ * The only site that derives a `ProfitFactorWire` from a domain `number`.
+ * `buildSnapshot` (`server/apps/service-api/snapshot.ts`) routes
+ * `MetricsSuite.profit_factor` through here rather than re-deriving the
+ * three-way split. `useSnapshot.ts`'s `profitFactorOf` constructs the three
+ * shapes directly at the client fetch boundary — a payload off the network
+ * is `unknown`, not a domain `number`, so it is a different kind of input
+ * this function does not accept — and routes its own bare-number case
+ * (an older server's un-wrapped `profit_factor`) through this same
+ * function rather than re-deriving that one branch either.
  */
 export function toProfitFactorWire(value: number): ProfitFactorWire {
   if (Number.isFinite(value)) return { kind: 'ratio', value };
