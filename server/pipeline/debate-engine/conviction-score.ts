@@ -139,24 +139,25 @@ function directionValue(direction: Direction): number {
  * ran at all" fallback, not a directional-lean question, and is unaffected
  * by #683.)
  *
- * **#683 — the mediator amplifies a lean but cannot create one.** Before this,
- * with every analyst neutral, the mediator's single vote supplied a lean of
- * `1/(n+1)` out of nothing, whose size depended on how many analysts sat on
- * the desk: at maximum evidence that scored **exactly 0.55** on a
- * three-analyst desk (tying `conviction_floor`) and **0.60** on a
- * two-analyst desk (clearing it outright), and the Trader gates on
- * `confidence < conviction_floor` (`decide.ts`), so the tie *authorised* the
- * trade — the pre-#625 branch this module set out to close, surviving at the
- * boundary. Fixed by computing the analysts' own directional mean first: when
- * it is exactly 0 (every analyst neutral, or a desk that cancels out exactly,
- * e.g. one bullish and one bearish), the mediator's verdict is excluded
- * entirely and the consensus term is 0 regardless of what the mediator says.
- * When the analysts' own mean is non-zero, the mediator is still counted as
- * one more equal participant, exactly as before — it can move an existing
- * lean up or down, it just cannot manufacture one from nothing. This closes
- * the hole for every desk size, not just the three- and two-analyst cases
- * measured above, because the fix depends on the analyst mean rather than on
- * `n`.
+ * **#683 — the mediator amplifies a lean but cannot create one.** Without this
+ * carve-out, with every analyst neutral, the mediator's single vote alone
+ * would supply a lean of `1/(n+1)` out of nothing, whose size depends on how
+ * many analysts sit on the desk: at maximum evidence that computes to
+ * **exactly 0.55** on a three-analyst desk (tying `conviction_floor`) and
+ * **0.60** on a two-analyst desk (clearing it outright), and the Trader gates
+ * on `confidence < conviction_floor` (`decide.ts`, strict `<`, predates
+ * #683), so the tied score would authorise a trade no analyst had actually
+ * taken a side on — the pre-#625 branch this module set out to close,
+ * surviving at the boundary. Fixed by computing the analysts' own directional
+ * mean first: when it is exactly 0 (every analyst neutral, or a desk that
+ * cancels out exactly, e.g. one bullish and one bearish), the mediator's
+ * verdict is excluded entirely and the consensus term is 0 regardless of what
+ * the mediator says. When the analysts' own mean is non-zero, the mediator is
+ * still counted as one more equal participant, exactly as before — it can
+ * move an existing lean up or down, it just cannot manufacture one from
+ * nothing. This closes the hole for every desk size, not just the three- and
+ * two-analyst cases measured above, because the fix depends on the analyst
+ * mean rather than on `n`.
  */
 function computeDirectionalConsensus(
   views: AnalystView[],
