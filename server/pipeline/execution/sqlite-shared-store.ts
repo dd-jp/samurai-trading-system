@@ -568,8 +568,9 @@ export class SqliteExecutionStore implements SharedStore {
           `INSERT INTO closed_trades (
              idempotency_key, debate_id, instrument, asset_class, side,
              entry, stop, filled_size, realized_pnl_net, fees_total,
-             opened_at, closed_at, close_reason, arm, sizing_capital_ceiling
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             opened_at, closed_at, close_reason, arm, sizing_capital_ceiling,
+             modelled_cost_charged
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           trade.idempotency_key,
@@ -595,6 +596,13 @@ export class SqliteExecutionStore implements SharedStore {
           // A window that mixes NULL and non-NULL (or two different non-NULL)
           // values here mixes two sizing regimes into one `return_pct`.
           this.sizingCapitalCeiling ?? null,
+          // #1121 AC5, migration 0049 — literally 1, not `this.arm`-conditional.
+          // Every row THIS BUILD writes, either arm, went through `toFill`'s
+          // #1121 fix (the control arm already charged correctly before this
+          // ticket; the live arm now does too), so every new row states the
+          // same fact. Only rows the migration backfilled from before the fix
+          // — never one this method writes — carry 0.
+          1,
         );
     } catch (cause) {
       if (isUniqueConstraintError(cause)) {

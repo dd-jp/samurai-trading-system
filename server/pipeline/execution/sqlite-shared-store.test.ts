@@ -1226,4 +1226,39 @@ describe('SqliteExecutionStore', () => {
       expect(distinctCeilings).toHaveLength(2);
     });
   });
+
+  describe('modelled cost charged stamp (#1121, migration 0049)', () => {
+    function chargedFlagOf(db: Db, idempotency_key: string): number {
+      return (
+        db
+          .prepare('SELECT modelled_cost_charged FROM closed_trades WHERE idempotency_key = ?')
+          .get(idempotency_key) as { modelled_cost_charged: number }
+      ).modelled_cost_charged;
+    }
+
+    it('stamps a live-arm closed trade as 1 — this build always charges the fix', async () => {
+      const { db, store } = makeStore();
+      await store.writeAheadPosition(makePosition({ idempotency_key: 'live-key' }));
+      await store.applyLotAdvance({
+        idempotency_key: 'live-key',
+        fills: [],
+        closed_trade: makeClosedTrade({ idempotency_key: 'live-key' }),
+      });
+
+      expect(chargedFlagOf(db, 'live-key')).toBe(1);
+    });
+
+    it('stamps a control-arm closed trade as 1 too — the control was never the defect', async () => {
+      const db = openSharedStore(':memory:');
+      const store = new SqliteExecutionStore(db, 'control');
+      await store.writeAheadPosition(makePosition({ idempotency_key: 'control-key' }));
+      await store.applyLotAdvance({
+        idempotency_key: 'control-key',
+        fills: [],
+        closed_trade: makeClosedTrade({ idempotency_key: 'control-key' }),
+      });
+
+      expect(chargedFlagOf(db, 'control-key')).toBe(1);
+    });
+  });
 });

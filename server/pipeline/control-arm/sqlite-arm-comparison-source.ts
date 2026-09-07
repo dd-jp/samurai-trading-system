@@ -40,7 +40,8 @@ export class SqliteArmComparisonSource {
       .prepare(
         `SELECT idempotency_key, debate_id, instrument, asset_class, side,
                 entry, stop, filled_size, realized_pnl_net, fees_total,
-                opened_at, closed_at, close_reason, arm, sizing_capital_ceiling
+                opened_at, closed_at, close_reason, arm, sizing_capital_ceiling,
+                modelled_cost_charged
            FROM closed_trades
           WHERE closed_at > ? AND closed_at <= ?
           ORDER BY closed_at`,
@@ -48,13 +49,54 @@ export class SqliteArmComparisonSource {
       .all(toStoredTimestamp(from), toStoredTimestamp(to)) as (ClosedTradeRow & {
       arm: TradingArm;
       sizing_capital_ceiling: number | null;
+      modelled_cost_charged: 0 | 1;
     })[];
 
-    return oneSizingRegime(rows, from, to).map((row) => ({
+    return modelledCostCharged(oneSizingRegime(rows, from, to)).map((row) => ({
       ...fromClosedTradeRow(row),
       arm: row.arm,
     }));
   }
+}
+
+/**
+ * #1121 AC5, migration 0049: drops any row whose fee was never brought onto
+ * the two arms' shared cost basis — unconditionally, not only when a window
+ * mixes 0 and 1 rows, unlike `oneSizingRegime` just below.
+ *
+ * That is a deliberate divergence from the sizing-regime precedent, not an
+ * oversight. `oneSizingRegime` tolerates a PURE pre-cutover window because
+ * every row in it shared the same wrong scale — the ratios inside that
+ * window still meant something, just not against a post-cutover window.
+ * This column has no such case: a live row with `modelled_cost_charged = 0`
+ * is missing a cost the matched control paid on every trade it ever wrote,
+ * so a window built entirely from such rows is not "consistently scaled
+ * wrong" the way an all-NULL sizing window was — it is a return_pct with the
+ * exact bias #1121 exists to remove, whether or not anything newer sits next
+ * to it. There is no reading of an all-0 window that is safe to keep.
+ *
+ * Also unlike `oneSizingRegime`, this never throws on a mix: the historic
+ * rows are KNOWN wrong, not two legitimate regimes an operator chose between
+ * (that guard's #949/#1180 currency case), so there is nothing to escalate —
+ * dropping them is the whole remedy.
+ *
+ * This can gut the live arm's `trade_count` to 0 for a window that is pure
+ * pre-#1121 history. That is safe, not merely tolerated, for the same reason
+ * `oneSizingRegime`'s doc gives: `evaluateArmDivergence`
+ * (arm-comparison-cycle.ts) floors each arm's trade count at
+ * `min_trades_per_arm` before calling a divergence, so a gutted arm reads as
+ * NO VERDICT, not as a skewed one. (`oneSizingRegime`'s own doc additionally
+ * claims its filter "cannot preferentially gut one arm" because both arms'
+ * stores share one `capitalCeilingUsd` cutover instant — that property does
+ * NOT hold here: `modelled_cost_charged` backfills live rows to 0 and control
+ * rows to 1, precisely because only the live arm ever had the defect, so
+ * this filter is one-armed by construction. The min-trades floor is what
+ * makes that safe, not an accident it happens not to trigger.)
+ */
+function modelledCostCharged<Row extends { modelled_cost_charged: 0 | 1 }>(
+  rows: readonly Row[],
+): readonly Row[] {
+  return rows.filter((row) => row.modelled_cost_charged === 1);
 }
 
 /**

@@ -1,0 +1,46 @@
+-- Whether THIS row's fee treatment matches what #1121 fixed: the row's own
+-- arm was charged its modelled commission the same way `SimulatedBrokerAdapter`
+-- has always charged the control arm (`toFill`/`redistributeOneFlatten`,
+-- ingest-fills.ts). A per-row property of the row, not a property of the
+-- pair it might later be compared against — a control row from BEFORE this
+-- fix was already charged correctly (the control arm never had the defect),
+-- so it backfills to 1 same as a post-fix row of either arm. Only a live
+-- row written before this fix backfills to 0.
+--
+-- ## Why a value, not "everything before migration 0049 is wrong"
+--
+-- A timestamp cutover can't distinguish the two arms sharing one table
+-- (`closed_trades.arm`), and the control arm was never wrong — see above.
+-- Stamping by `arm` at backfill time, once, is exact; a boundary-timestamp
+-- read would have to re-derive the same fact every query.
+--
+-- ## Why NOT NULL DEFAULT 1, then a targeted UPDATE
+--
+-- SQLite's `ADD COLUMN ... DEFAULT` can only take one constant applied to
+-- every existing row, and most of what needs backfilling (every existing
+-- control row, correctly) already has the right value — 1. The one
+-- correction this migration owes is the opposite case: existing LIVE rows,
+-- which were never charged, get set to 0 explicitly below. Every row
+-- written from here on states its own value at write time
+-- (`SqliteExecutionStore.insertClosedTrade`) rather than relying on the
+-- column default, the same way `arm` (migration 0033) is written explicitly
+-- rather than left to its own default.
+--
+-- ## Consumer
+--
+-- `SqliteArmComparisonSource.getClosedTradesBetween` (#1121 AC5) excludes
+-- any row with `modelled_cost_charged = 0` unconditionally — not only when
+-- a window mixes 0 and 1, unlike `oneSizingRegime` (migration 0045). A
+-- historic live row's fee is not a KNOWN-WRONG-BUT-CONSISTENT scale the way
+-- a pre-#1112 sizing row was (every row in a pure-old window shared the same
+-- wrong scale, so the ratios inside that window still meant something); it
+-- is missing a cost the matched control always paid, which corrupts the
+-- comparison whether or not the window also contains post-fix rows. See
+-- that function's doc for why dropping is safe even when it empties the
+-- live arm for a window: `evaluateArmDivergence`'s per-arm trade floor turns
+-- a gutted arm into no verdict, not a skewed one.
+
+ALTER TABLE closed_trades ADD COLUMN modelled_cost_charged INTEGER NOT NULL DEFAULT 1
+  CHECK (modelled_cost_charged IN (0, 1));
+
+UPDATE closed_trades SET modelled_cost_charged = 0 WHERE arm = 'live';

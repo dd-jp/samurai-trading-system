@@ -2062,11 +2062,29 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // invalidate the comparison this whole ticket exists to produce.
     broker: new SimulatedBrokerAdapter({
       clock,
+      // #1121 AC1: the SAME `CostModelImpl` instance the live arm's
+      // `execute.ts`/`captureSubmitSnapshot` prices its own modelled-cost
+      // fallback through (`executionDeps.costModel`, constructed once above)
+      // — not a second instance built from an equal-looking `CostConfig`.
+      // Two instances of an identical config would still be two objects to
+      // keep in sync by hand; one shared instance makes the two arms'
+      // commission arithmetic structurally identical rather than
+      // coincidentally so.
       costModel: executionDeps.costModel,
       marketData,
-      // The SAME simulated-adapter config the live arm's own execution config
-      // declares, not a second one: fill modelling that differed between the
-      // arms would show up as an edge that is really a fixture difference.
+      // #1121 AC1 (see also the `costModel` note just above): the SAME
+      // simulated-adapter config the live arm's own execution config
+      // declares (`config.executionConfig.simulated` — identical object,
+      // `execute.ts` reads `input.config.simulated`, and `input.config` is
+      // this same `config.executionConfig`), not a second one: fill
+      // modelling that differed between the arms would show up as an edge
+      // that is really a fixture difference. In particular this is what
+      // pins `MarketState.venue` ('saxo') to the same value on both arms'
+      // `CostModel.fill` calls, so a live-arm entry and a control-arm entry
+      // at the same instrument/size/mid resolve the SAME `CostConfig.venues`
+      // override and charge the same commission — the fact the AC1 test
+      // checks, made structural here rather than left to two configs that
+      // happen to agree today.
       config: config.executionConfig.simulated,
     }),
     circuitBreakers: new CircuitBreakers(config.breakerConfig, controlBreakerState.load()),

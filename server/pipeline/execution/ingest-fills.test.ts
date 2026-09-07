@@ -8,7 +8,11 @@
 import type { MarketDataService } from '../../providers/market-data-service/index.js';
 import type { Clock, Logger, OpenPosition } from '../../shared/index.js';
 import { recordingLogger } from '../../shared/recording-logger.js';
-import type { CostModel } from '../../tools/backtest/index.js';
+import { openSharedStore } from '../../shared/store/index.js';
+import type { CostConfig, CostModel, MarketState } from '../../tools/backtest/index.js';
+import { CostModelImpl, SAXO_COMMISSION_RATE } from '../../tools/backtest/index.js';
+import { buildArmComparison } from '../control-arm/arm-comparison.js';
+import { SqliteArmComparisonSource } from '../control-arm/sqlite-arm-comparison-source.js';
 import { ExecutionImpl } from './execute.js';
 import { FilledZeroSizeThrottle } from './filled-zero-size-throttle.js';
 import { FILLED_WITH_ZERO_SIZE } from './ingest-fills.js';
@@ -2167,6 +2171,509 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
     for (const row of fills) {
       expect(row.flatten_idempotency_key).toBeUndefined();
     }
+  });
+});
+
+/**
+ * #1121: the control arm (`SimulatedBrokerAdapter`) has always charged
+ * `cost_breakdown.commission` as `fee` — it prices its own fills through the
+ * injected `CostModel` and stamps the result straight on
+ * (`simulated-adapter.ts`'s `submitBracket`/`submitFlatten`). A real-broker
+ * fill (Alpaca paper, commission-free) instead arrived with `fee: 0` and the
+ * SAME modelled `cost_breakdown` sitting beside it, UNUSED for accounting —
+ * #1001's submit-time snapshot already prices every real-broker entry/exit
+ * through the identical `CostModel` + venue config the control arm uses
+ * (`execute.ts`'s `readSubmitSnapshot`, keyed on `config.simulated.venue`),
+ * so the number these tests need already existed; it just was never added to
+ * `fee`.
+ *
+ * `docs/research/12-edge-hypothesis-critique.md` D4 and #636 require the two
+ * arms to be a MATCHED control — comparable on the SAME cost basis, not just
+ * on the same window. A live arm charged nothing while the control paid a
+ * modelled commission is not matched: it manufactures a return gap that
+ * measures fee asymmetry, not the debate layer. #1000 owns the cost model's
+ * calibration; this ticket does not introduce a second one — it charges the
+ * live arm exactly the commission #1000's model already computes for it.
+ */
+describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
+  const modelledCostBreakdown = {
+    spread_cost: 0.5,
+    commission: 1,
+    slippage: 0.25,
+    market_impact: 0.1,
+  };
+
+  it('charges a real-broker entry fill the modelled commission on top of the venue-reported (zero) fee', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, {
+      requested_size: 10,
+      modelled_cost_breakdown: modelledCostBreakdown,
+    });
+    // Alpaca-shaped: commission-free, fee always 0 on the wire.
+    const broker = new ScriptedBroker([
+      fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100, fee: 0 }),
+    ]);
+
+    await new ExecutionImpl(makeInput(broker, store)).ingestFills();
+
+    const fills = await store.getFills('key-1');
+    // Charged fee = venue-reported (0) + modelled commission (1) — the same
+    // figure `SimulatedBrokerAdapter` would have stamped as `fee` directly
+    // for an identical order (see the `SAXO_COMMISSION_RATE`-driven test
+    // below for the literal two-adapter comparison).
+    expect(fills[0]?.fee).toBeCloseTo(1, 9);
+    // AC2: the venue's OWN report stays recoverable — `cost_breakdown` is
+    // untouched (still the modelled estimate GAP-F's divergence check reads),
+    // so `fee - cost_breakdown.commission` reconstructs exactly what the
+    // venue reported, here 0.
+    expect((fills[0]?.fee ?? 0) - (fills[0]?.cost_breakdown?.commission ?? 0)).toBeCloseTo(0, 9);
+  });
+
+  it('leaves a real-broker fee untouched when the lot carries no modelled snapshot (unchanged pre-#1121 behaviour)', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 10 });
+    const broker = new ScriptedBroker([
+      fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100, fee: 0 }),
+    ]);
+
+    await new ExecutionImpl(makeInput(broker, store)).ingestFills();
+
+    const fills = await store.getFills('key-1');
+    expect(fills[0]?.fee).toBe(0);
+  });
+
+  it('does NOT double-charge a Simulated-adapter fill that already carries its own cost_breakdown', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, {
+      requested_size: 10,
+      // Even if a lot somehow carried a modelled snapshot too, the fill's
+      // OWN cost_breakdown must win — this is the control arm's own path,
+      // which self-prices and must never have a second commission added.
+      modelled_cost_breakdown: modelledCostBreakdown,
+    });
+    const ownBreakdown = { spread_cost: 9, commission: 9, slippage: 9, market_impact: 9 };
+    const broker = new ScriptedBroker([
+      fill({
+        broker_fill_id: 'e1',
+        leg: 'entry',
+        qty: 10,
+        price: 100,
+        fee: 9,
+        cost_breakdown: ownBreakdown,
+      }),
+    ]);
+
+    await new ExecutionImpl(makeInput(broker, store)).ingestFills();
+
+    const fills = await store.getFills('key-1');
+    expect(fills[0]?.fee).toBe(9);
+  });
+
+  it('charges the flatten exit fill the modelled commission on top of the venue-reported (zero) fee', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10 });
+    const entryOnly = new ScriptedBroker([
+      fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10, fee: 0 }),
+    ]);
+    await new ExecutionImpl(makeInput(entryOnly, store)).ingestFills();
+
+    await store.writeAheadFlatten({
+      idempotency_key: 'flatten-1',
+      instrument: 'AAPL',
+      asset_class: 'stocks',
+      side: 'sell',
+      size: 10,
+      submitted_at: OPENED_AT,
+      lot_held_quantities: [{ idempotency_key: 'key-1', held: 10 }],
+      exit_reason: 'flatten',
+      decision_price: 100,
+      quote_bid: null,
+      quote_ask: null,
+      quote_mid: null,
+      quote_observed_at: null,
+      modelled_cost_breakdown: modelledCostBreakdown,
+    });
+
+    const withFlatten = new ScriptedBroker([
+      fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10, fee: 0 }),
+      fill({
+        client_order_id: 'flatten-1',
+        broker_fill_id: 'f1',
+        leg: 'exit',
+        qty: 10,
+        fee: 0,
+        timestamp: new Date('2026-07-20T15:30:00Z'),
+      }),
+    ]);
+
+    await new ExecutionImpl(makeInput(withFlatten, store)).ingestFills();
+
+    const exit = (await store.getFills('key-1')).find((row) => row.leg === 'exit');
+    expect(exit?.fee).toBeCloseTo(modelledCostBreakdown.commission, 9);
+    expect((exit?.fee ?? 0) - (exit?.cost_breakdown?.commission ?? 0)).toBeCloseTo(0, 9);
+  });
+
+  it('carries the modelled commission through to closedTrade().fees_total / realized_pnl_net for a full round trip', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, {
+      requested_size: 10,
+      side: 'buy',
+      modelled_cost_breakdown: modelledCostBreakdown,
+    });
+    const entryOnly = new ScriptedBroker([
+      fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100, fee: 0 }),
+    ]);
+    await new ExecutionImpl(makeInput(entryOnly, store)).ingestFills();
+
+    await store.writeAheadFlatten({
+      idempotency_key: 'flatten-1',
+      instrument: 'AAPL',
+      asset_class: 'stocks',
+      side: 'sell',
+      size: 10,
+      submitted_at: OPENED_AT,
+      lot_held_quantities: [{ idempotency_key: 'key-1', held: 10 }],
+      exit_reason: 'flatten',
+      decision_price: 110,
+      quote_bid: null,
+      quote_ask: null,
+      quote_mid: null,
+      quote_observed_at: null,
+      modelled_cost_breakdown: modelledCostBreakdown,
+    });
+    const withFlatten = new ScriptedBroker([
+      fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100, fee: 0 }),
+      fill({
+        client_order_id: 'flatten-1',
+        broker_fill_id: 'f1',
+        leg: 'exit',
+        qty: 10,
+        price: 110,
+        fee: 0,
+        timestamp: new Date('2026-07-20T15:30:00Z'),
+      }),
+    ]);
+
+    await new ExecutionImpl(makeInput(withFlatten, store)).ingestFills();
+
+    const closed = (await store.getClosedTrades())[0];
+    // gross = (110 - 100) * 10 = 100; fees = 1 (entry commission) + 1 (exit
+    // commission) = 2 → net 98. Before #1121 this was 100/0 — the exact
+    // "live arm pays nothing" shape #1121 exists to close.
+    expect(closed.fees_total).toBeCloseTo(2, 9);
+    expect(closed.realized_pnl_net).toBeCloseTo(98, 9);
+  });
+
+  it('does not double- or under-charge the modelled commission across a cumulative (#842) two-part entry fill', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, {
+      requested_size: 100,
+      filled_size: 0,
+      modelled_cost_breakdown: modelledCostBreakdown,
+    });
+    const broker = new ScriptedBroker([
+      fill({
+        broker_fill_id: 'alpaca-entry-1',
+        leg: 'entry',
+        qty: 50,
+        price: 100,
+        fee: 0,
+        timestamp: new Date('2026-07-20T15:00:00Z'),
+        qty_is_cumulative: true,
+      }),
+    ]);
+    const execution = new ExecutionImpl(makeInput(broker, store));
+    await execution.ingestFills();
+
+    broker.replaceFills([
+      fill({
+        broker_fill_id: 'alpaca-entry-1',
+        leg: 'entry',
+        qty: 100,
+        price: 101,
+        fee: 0,
+        timestamp: new Date('2026-07-20T15:30:00Z'),
+        qty_is_cumulative: true,
+      }),
+    ]);
+    await execution.ingestFills();
+
+    const fills = await store.getFills('key-1');
+    const totalFee = fills.reduce((sum, row) => sum + row.fee, 0);
+    // Summed across both increments, the charged fee equals exactly ONE
+    // modelled commission (1) — not two (double-counted against the
+    // cumulative venue total) and not zero (swallowed by the `Math.max(0, …)`
+    // clamp `cumulativeTopUp` applies to the RAW venue delta).
+    expect(totalFee).toBeCloseTo(modelledCostBreakdown.commission, 9);
+  });
+
+  it('charges the live arm exactly what SimulatedBrokerAdapter charges the control arm for an identical order (AC1)', async () => {
+    const costConfig: CostConfig = {
+      stocks: {
+        spreadVolatilityCoefficient: 0.5,
+        commissionRate: 0,
+        slippageCoefficient: 0.1,
+        impactK: 0.1,
+      },
+      crypto: {
+        spreadVolatilityCoefficient: 0.5,
+        commissionRate: 0,
+        slippageCoefficient: 0.1,
+        impactK: 0.1,
+      },
+      venues: { saxo: { commissionRate: SAXO_COMMISSION_RATE } },
+    };
+    const costModel = new CostModelImpl(costConfig);
+    const marketState: MarketState = {
+      mid: 100,
+      spread: 0.1,
+      adv: 1_000_000,
+      volatility: 0.02,
+      asset_class: 'stocks',
+      venue: 'saxo',
+      timestamp: NOW,
+    };
+    const fillRequest = {
+      instrument: 'AAPL',
+      side: 'buy' as const,
+      size: 10,
+      order_type: 'limit' as const,
+      limit_price: 100,
+      idempotency_key: 'shared',
+    };
+
+    // What the control arm's `SimulatedBrokerAdapter.submitBracket` stamps as
+    // `fee` for this exact order, verbatim — the same `costModel.fill()` call
+    // `readSubmitSnapshot` (execute.ts) makes for the live arm's submit-time
+    // snapshot.
+    const controlResult = costModel.fill(fillRequest, marketState);
+
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, {
+      requested_size: 10,
+      modelled_cost_breakdown: controlResult.cost_breakdown,
+    });
+    // Live arm: same instrument/size/price, Alpaca-shaped zero fee.
+    const broker = new ScriptedBroker([
+      fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100, fee: 0 }),
+    ]);
+    await new ExecutionImpl(makeInput(broker, store)).ingestFills();
+
+    const liveFee = (await store.getFills('key-1'))[0]?.fee;
+    expect(liveFee).toBeCloseTo(controlResult.cost_breakdown.commission, 9);
+    // Not a vacuous check — Saxo's 8bps is not zero.
+    expect(controlResult.cost_breakdown.commission).toBeGreaterThan(0);
+  });
+
+  /**
+   * AC3, at the layer the acceptance criterion actually names: not "two fills
+   * agree" (the test above) but "`ArmComparison`'s `return_pct` for both arms
+   * computed on the same cost basis". Runs a REAL round trip through
+   * `ingestFills()` for BOTH arms, on ONE shared `closed_trades` table (same
+   * `db`, a 'live' `TestExecutionStore` and a 'control' one — #1121's harness
+   * addition), reads them back through the actual `SqliteArmComparisonSource`
+   * (so this also re-proves migration 0049's column does not gut a correctly-
+   * charged row), and feeds the result into `buildArmComparison`. If either
+   * arm's fee treatment ever regresses back to asymmetric, this fails on
+   * `return_pct`, not merely on a `fee` field nobody downstream reads.
+   */
+  it('produces equal ArmComparison.return_pct for both arms on an identical round trip (AC3)', async () => {
+    const costConfig: CostConfig = {
+      stocks: {
+        spreadVolatilityCoefficient: 0.5,
+        commissionRate: 0,
+        slippageCoefficient: 0.1,
+        impactK: 0.1,
+      },
+      crypto: {
+        spreadVolatilityCoefficient: 0.5,
+        commissionRate: 0,
+        slippageCoefficient: 0.1,
+        impactK: 0.1,
+      },
+      venues: { saxo: { commissionRate: SAXO_COMMISSION_RATE } },
+    };
+    const costModel = new CostModelImpl(costConfig);
+    const marketStateFor = (mid: number): MarketState => ({
+      mid,
+      spread: 0.1,
+      adv: 1_000_000,
+      volatility: 0.02,
+      asset_class: 'stocks',
+      venue: 'saxo',
+      timestamp: NOW,
+    });
+    const entryCost = costModel.fill(
+      {
+        instrument: 'AAPL',
+        side: 'buy',
+        size: 10,
+        order_type: 'limit',
+        limit_price: 100,
+        idempotency_key: 'entry',
+      },
+      marketStateFor(100),
+    );
+    const exitCost = costModel.fill(
+      {
+        instrument: 'AAPL',
+        side: 'sell',
+        size: 10,
+        order_type: 'limit',
+        limit_price: 110,
+        idempotency_key: 'exit',
+      },
+      marketStateFor(110),
+    );
+
+    const db = openSharedStore(':memory:');
+    const liveStore = new TestExecutionStore(db);
+    const controlStore = new TestExecutionStore(db, 'control');
+
+    // Live arm: Alpaca-shaped (fee 0 on the wire), the modelled snapshot
+    // (#1001) fed in as `modelled_cost_breakdown` — exactly what
+    // `readSubmitSnapshot` would have captured at submit time.
+    await seedPosition(liveStore, {
+      idempotency_key: 'live-key',
+      requested_size: 10,
+      modelled_cost_breakdown: entryCost.cost_breakdown,
+    });
+    await new ExecutionImpl(
+      makeInput(
+        new ScriptedBroker([
+          fill({
+            client_order_id: 'live-key',
+            broker_fill_id: 'live-e1',
+            leg: 'entry',
+            qty: 10,
+            price: 100,
+            fee: 0,
+          }),
+        ]),
+        liveStore,
+      ),
+    ).ingestFills();
+    await liveStore.writeAheadFlatten({
+      idempotency_key: 'live-flatten-1',
+      instrument: 'AAPL',
+      asset_class: 'stocks',
+      side: 'sell',
+      size: 10,
+      submitted_at: OPENED_AT,
+      lot_held_quantities: [{ idempotency_key: 'live-key', held: 10 }],
+      exit_reason: 'flatten',
+      decision_price: 110,
+      quote_bid: null,
+      quote_ask: null,
+      quote_mid: null,
+      quote_observed_at: null,
+      modelled_cost_breakdown: exitCost.cost_breakdown,
+    });
+    await new ExecutionImpl(
+      makeInput(
+        new ScriptedBroker([
+          fill({
+            client_order_id: 'live-key',
+            broker_fill_id: 'live-e1',
+            leg: 'entry',
+            qty: 10,
+            price: 100,
+            fee: 0,
+          }),
+          fill({
+            client_order_id: 'live-flatten-1',
+            broker_fill_id: 'live-f1',
+            leg: 'exit',
+            qty: 10,
+            price: 110,
+            fee: 0,
+            timestamp: new Date('2026-07-20T15:30:00Z'),
+          }),
+        ]),
+        liveStore,
+      ),
+    ).ingestFills();
+
+    // Control arm: `SimulatedBrokerAdapter`-shaped — self-prices, `fee` and
+    // `cost_breakdown` come straight off the SAME `costModel.fill()` calls
+    // above, exactly as `submitBracket`/`submitFlatten` do.
+    await seedPosition(controlStore, { idempotency_key: 'control-key', requested_size: 10 });
+    await new ExecutionImpl(
+      makeInput(
+        new ScriptedBroker([
+          fill({
+            client_order_id: 'control-key',
+            broker_fill_id: 'control-e1',
+            leg: 'entry',
+            qty: 10,
+            price: 100,
+            fee: entryCost.cost_breakdown.commission,
+            cost_breakdown: entryCost.cost_breakdown,
+          }),
+        ]),
+        controlStore,
+      ),
+    ).ingestFills();
+    await controlStore.writeAheadFlatten({
+      idempotency_key: 'control-flatten-1',
+      instrument: 'AAPL',
+      asset_class: 'stocks',
+      side: 'sell',
+      size: 10,
+      submitted_at: OPENED_AT,
+      lot_held_quantities: [{ idempotency_key: 'control-key', held: 10 }],
+      exit_reason: 'flatten',
+      decision_price: 110,
+      quote_bid: null,
+      quote_ask: null,
+      quote_mid: null,
+      quote_observed_at: null,
+      modelled_cost_breakdown: null,
+    });
+    await new ExecutionImpl(
+      makeInput(
+        new ScriptedBroker([
+          fill({
+            client_order_id: 'control-key',
+            broker_fill_id: 'control-e1',
+            leg: 'entry',
+            qty: 10,
+            price: 100,
+            fee: entryCost.cost_breakdown.commission,
+            cost_breakdown: entryCost.cost_breakdown,
+          }),
+          fill({
+            client_order_id: 'control-flatten-1',
+            broker_fill_id: 'control-f1',
+            leg: 'exit',
+            qty: 10,
+            price: 110,
+            fee: exitCost.cost_breakdown.commission,
+            cost_breakdown: exitCost.cost_breakdown,
+            timestamp: new Date('2026-07-20T15:30:00Z'),
+          }),
+        ]),
+        controlStore,
+      ),
+    ).ingestFills();
+
+    const from = new Date('2026-07-20T00:00:00Z');
+    const to = new Date('2026-07-21T00:00:00Z');
+    const trades = new SqliteArmComparisonSource(db).getClosedTradesBetween(from, to);
+    expect(trades.map((t) => t.idempotency_key).sort()).toEqual(['control-key', 'live-key']);
+
+    const comparison = buildArmComparison({ trades, from, to, basis: 1000 });
+
+    // Same gross (100 → 110, size 10) and — the property #1121 exists to
+    // establish — the same modelled commission on both legs, so the two
+    // arms' realized_pnl_net, and therefore return_pct, must match exactly.
+    // Before #1121 the live arm's fees_total would have been 0 here instead
+    // of `entryCost.commission + exitCost.commission`, and this assertion
+    // would fail.
+    expect(comparison.live.realized_pnl_net).toBeCloseTo(comparison.control.realized_pnl_net, 9);
+    expect(comparison.live.return_pct).toBeCloseTo(comparison.control.return_pct, 9);
+    expect(comparison.live.trade_count).toBe(1);
+    expect(comparison.control.trade_count).toBe(1);
   });
 });
 

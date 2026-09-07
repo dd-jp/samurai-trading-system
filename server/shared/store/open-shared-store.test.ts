@@ -1,7 +1,16 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runMigrations } from './migrate.js';
+import BetterSqlite3 from 'better-sqlite3';
+import { MIGRATIONS_DIR, runMigrations } from './migrate.js';
 import { openSharedStore, STORE_MODES, sharedStorePath } from './open-shared-store.js';
 
 const TABLES = [
@@ -195,6 +204,7 @@ describe('openSharedStore', () => {
       { version: 46 },
       { version: 47 },
       { version: 48 },
+      { version: 49 },
     ]);
     expect(runMigrations(db)).toEqual([]);
     expect(db.prepare('SELECT version FROM schema_migrations').all()).toEqual([
@@ -246,6 +256,7 @@ describe('openSharedStore', () => {
       { version: 46 },
       { version: 47 },
       { version: 48 },
+      { version: 49 },
     ]);
   });
 
@@ -274,6 +285,84 @@ describe('openSharedStore', () => {
       // exactly that.
       expect(column?.notnull).toBe(0);
       expect(column?.dflt_value).toBeNull();
+    }
+  });
+
+  it('migration 0049 adds modelled_cost_charged to closed_trades, NOT NULL DEFAULT 1, backfilling live rows to 0 (#1121)', () => {
+    const db = openSharedStore(':memory:');
+
+    const column = (
+      db.prepare('PRAGMA table_info(closed_trades)').all() as {
+        name: string;
+        type: string;
+        notnull: number;
+        dflt_value: unknown;
+      }[]
+    ).find((candidate) => candidate.name === 'modelled_cost_charged');
+
+    expect(column, 'closed_trades is missing column modelled_cost_charged').toBeDefined();
+    expect(column?.type).toBe('INTEGER');
+    // NOT NULL DEFAULT 1: every row this build writes states its own value
+    // explicitly (`SqliteExecutionStore.insertClosedTrade`), so the default
+    // only ever fires for a row this migration itself backfills — and it is
+    // right for the control arm (always correctly charged) and wrong for the
+    // live arm, which the migration's own UPDATE corrects to 0 below.
+    expect(column?.notnull).toBe(1);
+    expect(column?.dflt_value).toBe('1');
+  });
+
+  // A schema-only check (above) cannot exercise the migration's own backfill
+  // UPDATE — a fresh `:memory:` DB runs every migration, including 0049,
+  // before any row exists to backfill, so an INSERT made afterwards only
+  // ever proves the DEFAULT fires, not that pre-existing live rows were
+  // corrected. This test instead reproduces the real cutover: migrate to
+  // 0048 (a checkout mid-#1121), write one row per arm the way they looked
+  // before this ticket, THEN apply 0049 from the real migrations directory
+  // and check the UPDATE it runs.
+  it('migration 0049 backfills pre-existing live rows to 0 and control rows to 1 (#1121)', () => {
+    const raw = new BetterSqlite3(':memory:');
+    const preCutoverDir = mkdtempSync(join(tmpdir(), 'samurai-migrations-pre-0049-'));
+    try {
+      for (const filename of readdirSync(MIGRATIONS_DIR)) {
+        const match = /^(\d{4})_[\w-]+\.sql$/.exec(filename);
+        if (match && Number(match[1]) <= 48) {
+          copyFileSync(join(MIGRATIONS_DIR, filename), join(preCutoverDir, filename));
+        }
+      }
+      runMigrations(raw, preCutoverDir);
+
+      for (const [key, arm] of [
+        ['live-pre-fix', 'live'],
+        ['control-pre-fix', 'control'],
+      ] as const) {
+        raw
+          .prepare(
+            `INSERT INTO closed_trades (
+               idempotency_key, debate_id, instrument, asset_class, side,
+               entry, stop, filled_size, realized_pnl_net, fees_total,
+               opened_at, closed_at, close_reason, arm
+             ) VALUES (?, 'd1', 'AAPL', 'stocks', 'buy', 100, 90, 10, 5, 0,
+               '2026-08-01T00:00:00.000Z', '2026-08-01T01:00:00.000Z', 'target', ?)`,
+          )
+          .run(key, arm);
+      }
+
+      // Apply 0049 (and only 0049 — 0001..0048 are already recorded).
+      expect(runMigrations(raw, MIGRATIONS_DIR)).toEqual([49]);
+
+      expect(
+        raw
+          .prepare('SELECT modelled_cost_charged FROM closed_trades WHERE idempotency_key = ?')
+          .get('live-pre-fix'),
+      ).toEqual({ modelled_cost_charged: 0 });
+      expect(
+        raw
+          .prepare('SELECT modelled_cost_charged FROM closed_trades WHERE idempotency_key = ?')
+          .get('control-pre-fix'),
+      ).toEqual({ modelled_cost_charged: 1 });
+    } finally {
+      raw.close();
+      rmSync(preCutoverDir, { recursive: true, force: true });
     }
   });
 

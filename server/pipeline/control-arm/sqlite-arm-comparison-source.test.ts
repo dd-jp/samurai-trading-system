@@ -27,13 +27,18 @@ function seed(
   trade: ClosedTrade,
   arm: TradingArm,
   sizingCapitalCeiling: number | null,
+  // #1121 AC5: defaults to 1 (the post-fix / control-arm-always-correct
+  // state) so every pre-existing call site — none of which is about this
+  // ticket — keeps exercising the row shape it already did.
+  modelledCostCharged: 0 | 1 = 1,
 ): void {
   db.prepare(
     `INSERT INTO closed_trades (
        idempotency_key, debate_id, instrument, asset_class, side,
        entry, stop, filled_size, realized_pnl_net, fees_total,
-       opened_at, closed_at, close_reason, arm, sizing_capital_ceiling
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       opened_at, closed_at, close_reason, arm, sizing_capital_ceiling,
+       modelled_cost_charged
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     trade.idempotency_key,
     trade.debate_id,
@@ -50,6 +55,7 @@ function seed(
     trade.close_reason,
     arm,
     sizingCapitalCeiling,
+    modelledCostCharged,
   );
 }
 
@@ -115,5 +121,78 @@ describe('SqliteArmComparisonSource.getClosedTradesBetween — #1112 AC5 regime 
     const source = new SqliteArmComparisonSource(db);
 
     expect(source.getClosedTradesBetween(from, to)).toHaveLength(2);
+  });
+});
+
+describe('SqliteArmComparisonSource.getClosedTradesBetween — #1121 AC5 cost-charged guard', () => {
+  it('drops an uncharged live row even when the window also has a correctly-charged control row', () => {
+    const db = openSharedStore(':memory:');
+    seed(db, makeTrade({ idempotency_key: 'live-uncharged' }), 'live', null, 0);
+    seed(
+      db,
+      makeTrade({
+        idempotency_key: 'control-charged',
+        closed_at: new Date('2026-07-18T21:00:00Z'),
+      }),
+      'control',
+      null,
+      1,
+    );
+    const source = new SqliteArmComparisonSource(db);
+
+    const trades = source.getClosedTradesBetween(from, to);
+
+    expect(trades.map((trade) => trade.idempotency_key)).toEqual(['control-charged']);
+  });
+
+  it('drops an uncharged live row from a window with NO correctly-charged rows at all (unconditional, unlike oneSizingRegime)', () => {
+    const db = openSharedStore(':memory:');
+    seed(db, makeTrade({ idempotency_key: 'live-uncharged-1' }), 'live', null, 0);
+    seed(
+      db,
+      makeTrade({
+        idempotency_key: 'live-uncharged-2',
+        closed_at: new Date('2026-07-18T21:00:00Z'),
+      }),
+      'live',
+      null,
+      0,
+    );
+    const source = new SqliteArmComparisonSource(db);
+
+    // A PURE pre-#1121 window: every row shares the same defect, the way a
+    // pure pre-#1112 window shares one wrong sizing scale — but unlike that
+    // case, this one is not a benign consistent view. It must still empty,
+    // not merely "not throw and pass through" the way `oneSizingRegime`
+    // would for an all-null sizing window.
+    expect(source.getClosedTradesBetween(from, to)).toEqual([]);
+  });
+
+  it('never throws on a mixed charged/uncharged window — the old rows are known-wrong, not ambiguous', () => {
+    const db = openSharedStore(':memory:');
+    seed(db, makeTrade({ idempotency_key: 'live-uncharged' }), 'live', null, 0);
+    seed(
+      db,
+      makeTrade({ idempotency_key: 'live-charged', closed_at: new Date('2026-07-18T21:00:00Z') }),
+      'live',
+      null,
+      1,
+    );
+    const source = new SqliteArmComparisonSource(db);
+
+    expect(() => source.getClosedTradesBetween(from, to)).not.toThrow();
+    expect(source.getClosedTradesBetween(from, to).map((trade) => trade.idempotency_key)).toEqual([
+      'live-charged',
+    ]);
+  });
+
+  it('keeps a correctly-charged live row', () => {
+    const db = openSharedStore(':memory:');
+    seed(db, makeTrade({ idempotency_key: 'live-charged' }), 'live', null, 1);
+    const source = new SqliteArmComparisonSource(db);
+
+    expect(source.getClosedTradesBetween(from, to).map((trade) => trade.idempotency_key)).toEqual([
+      'live-charged',
+    ]);
   });
 });

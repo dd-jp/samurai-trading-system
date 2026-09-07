@@ -19,7 +19,7 @@
  * production class.
  */
 
-import type { ClosedTrade, OpenPosition, OrderState } from '../../shared/index.js';
+import type { ClosedTrade, OpenPosition, OrderState, TradingArm } from '../../shared/index.js';
 import {
   type ClosedTradeRow,
   type SharedStore as Db,
@@ -64,8 +64,16 @@ export interface FlattenSubmissionRow {
 export class TestExecutionStore extends SqliteExecutionStore {
   readonly writeLog: string[] = [];
 
-  constructor(private readonly testDb: Db) {
-    super(testDb);
+  // #1121: optional so every existing call site (implicitly 'live', matching
+  // `SqliteExecutionStore`'s own default) keeps compiling unchanged — added
+  // only so a test can put a 'control'-arm store on the SAME `testDb` a
+  // 'live' one already writes to, to compare the two arms' closed_trades
+  // rows from one shared table the way `SqliteArmComparisonSource` does.
+  constructor(
+    private readonly testDb: Db,
+    arm: TradingArm = 'live',
+  ) {
+    super(testDb, arm);
   }
 
   override async writeAheadPosition(position: OpenPosition): Promise<void> {
