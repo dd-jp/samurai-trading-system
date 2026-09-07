@@ -39,20 +39,59 @@ export class SaxoBrokerRateLimitError extends Error {
  * A 409 carries no body at all (VERIFIED): it is the duplicate-request guard
  * refusing an identical body + `x-request-id` inside the rolling window
  * (doc 43), and the adapter treats it as "look the order up, do not retry".
+ *
+ * `retryableTransportFailure` (#1223) is set only by
+ * `classifySaxoBrokerNetworkError` for a status-less failure (`fetch`
+ * rejecting rather than resolving — ECONNRESET, DNS failure, socket hangup)
+ * and is meaningless once `status` is set (a response was received). It
+ * defaults to `false`: a status-less error with no method context is treated
+ * the same conservative way it always has been.
  */
 export class SaxoBrokerProviderError extends Error {
   readonly status: number | undefined;
   readonly code: string | undefined;
   readonly venueMessage: string | undefined;
+  readonly retryableTransportFailure: boolean;
 
-  constructor(message: string, status?: number, code?: string, venueMessage?: string) {
+  constructor(
+    message: string,
+    status?: number,
+    code?: string,
+    venueMessage?: string,
+    retryableTransportFailure = false,
+  ) {
     super(message);
     this.name = 'SaxoBrokerProviderError';
     this.status = status;
     this.code = code;
     this.venueMessage = venueMessage;
+    this.retryableTransportFailure = retryableTransportFailure;
   }
 }
+
+/**
+ * The HTTP verb of the request that failed, as literally passed to
+ * `fetch`/`fetchWithTimeout` — `SaxoHttpBrokerClient.request`'s `init.method`
+ * is typed to require one of these, so a new operation cannot omit it and
+ * fall through to a default. This value scopes ONLY the status-less,
+ * non-timeout `SaxoBrokerProviderError` branch (#1223, `fetch` rejecting
+ * with something other than a timeout abort — ECONNRESET, DNS failure,
+ * socket hangup): GET is assumed side-effect-free by HTTP semantics, and
+ * only GET marks that specific error shape retryable. It does NOT scope
+ * timeout retryability — `isTimeoutAbort` classifies to
+ * `SaxoBrokerTimeoutError` before this value is ever consulted, and
+ * `isRetryableSaxoBrokerError` retries every `SaxoBrokerTimeoutError`
+ * unconditionally, on every verb including POST (#1273 tracks making that
+ * verb-aware too). This is verb-declaration enforcement, not a safety audit
+ * — the compiler forces every call site to state its verb, it does not
+ * verify a given GET is genuinely a safe read. Every other verb, including
+ * DELETE (cancel), stays non-retryable by default for the status-less
+ * non-timeout branch: doc 43 records that a repeat cancel is idempotent at
+ * the venue (`404 OrderNotFound`), but this ticket declines to widen
+ * cancel's status-less-transport-failure behavior on that basis — it stays
+ * exactly as conservative as it was before #1223 (no retry).
+ */
+export type SaxoHttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 export type SaxoBrokerError =
   | SaxoBrokerTimeoutError
@@ -70,13 +109,21 @@ export function isOrderNotFound(error: unknown): boolean {
   );
 }
 
-/** Timeout | RateLimit | 5xx. A 409 is deliberately NOT retryable: retrying inside the window re-earns the 409. */
+/**
+ * Timeout | RateLimit | 5xx | (status-less transport failure on a GET).
+ * A 409 is deliberately NOT retryable: retrying inside the window re-earns
+ * the 409. A status-less `SaxoBrokerProviderError` (no response was ever
+ * received — #1223) defers entirely to `retryableTransportFailure`, which is
+ * `true` only when the failing request was a GET; `isServerErrorStatus`
+ * never fires for it since `status` is `undefined`.
+ */
 export function isRetryableSaxoBrokerError(error: unknown): boolean {
   if (error instanceof SaxoBrokerTimeoutError || error instanceof SaxoBrokerRateLimitError) {
     return true;
   }
   if (error instanceof SaxoBrokerProviderError) {
-    return isServerErrorStatus(error.status);
+    if (error.status !== undefined) return isServerErrorStatus(error.status);
+    return error.retryableTransportFailure;
   }
   return false;
 }
@@ -145,10 +192,27 @@ export async function classifySaxoBrokerResponse(
   }
 }
 
-export function classifySaxoBrokerNetworkError(error: unknown, context: string): SaxoBrokerError {
+/**
+ * `method` is the verb of the request that failed to get a response at all —
+ * required, not defaulted, so a new call site must say what it did rather
+ * than silently inheriting a safe-looking default (#1223). Only GET marks
+ * the resulting `SaxoBrokerProviderError` retryable; every other verb,
+ * including DELETE, does not (see `SaxoHttpMethod`'s doc comment).
+ */
+export function classifySaxoBrokerNetworkError(
+  error: unknown,
+  context: string,
+  method: SaxoHttpMethod,
+): SaxoBrokerError {
   const message = error instanceof Error ? error.message : String(error);
   if (isTimeoutAbort(error)) {
     return new SaxoBrokerTimeoutError(`Saxo request timed out (${context}): ${message}`);
   }
-  return new SaxoBrokerProviderError(`Saxo network error (${context}): ${message}`);
+  return new SaxoBrokerProviderError(
+    `Saxo network error (${context}): ${message}`,
+    undefined,
+    undefined,
+    undefined,
+    method === 'GET',
+  );
 }

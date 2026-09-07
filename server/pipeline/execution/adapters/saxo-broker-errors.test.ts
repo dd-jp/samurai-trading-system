@@ -1,4 +1,5 @@
 import {
+  classifySaxoBrokerNetworkError,
   isRetryableSaxoBrokerError,
   SaxoBrokerProviderError,
   SaxoBrokerRateLimitError,
@@ -29,5 +30,48 @@ describe('isRetryableSaxoBrokerError', () => {
   it('never retries an unrelated error', () => {
     expect(isRetryableSaxoBrokerError(new Error('boom'))).toBe(false);
     expect(isRetryableSaxoBrokerError(undefined)).toBe(false);
+  });
+
+  // #1223: a transport failure (ECONNRESET, DNS failure, socket hangup) never
+  // reaches classifyStatus — it has no `status` at all. Retryability for that
+  // shape must follow from the request's HTTP method, not default to either
+  // extreme.
+  describe('status-less transport failures (#1223)', () => {
+    it('IS retryable when the failing request was a GET (a safe read)', () => {
+      const error = classifySaxoBrokerNetworkError(
+        new Error('read ECONNRESET'),
+        'listOpenOrders',
+        'GET',
+      );
+      expect(error).toBeInstanceOf(SaxoBrokerProviderError);
+      expect((error as SaxoBrokerProviderError).status).toBeUndefined();
+      expect(isRetryableSaxoBrokerError(error)).toBe(true);
+    });
+
+    // This is the money-safety guarantee: a blind retry of a placement whose
+    // response was lost can produce a second live order (doc 43). This must
+    // stay false independent of `placeOrder`'s own maxAttempts:1 override.
+    it('is NOT retryable when the failing request was a POST (order placement)', () => {
+      const error = classifySaxoBrokerNetworkError(
+        new Error('socket hang up'),
+        'placeOrder',
+        'POST',
+      );
+      expect(error).toBeInstanceOf(SaxoBrokerProviderError);
+      expect((error as SaxoBrokerProviderError).status).toBeUndefined();
+      expect(isRetryableSaxoBrokerError(error)).toBe(false);
+    });
+
+    it('is NOT retryable when the failing request was a DELETE (cancel is not a safe read)', () => {
+      const error = classifySaxoBrokerNetworkError(new Error('ETIMEDOUT'), 'cancelOrder', 'DELETE');
+      expect(isRetryableSaxoBrokerError(error)).toBe(false);
+    });
+
+    it('a timeout abort classifies as SaxoBrokerTimeoutError regardless of method (already retryable)', () => {
+      const abortError = new DOMException('The operation was aborted', 'TimeoutError');
+      const error = classifySaxoBrokerNetworkError(abortError, 'placeOrder', 'POST');
+      expect(error).toBeInstanceOf(SaxoBrokerTimeoutError);
+      expect(isRetryableSaxoBrokerError(error)).toBe(true);
+    });
   });
 });

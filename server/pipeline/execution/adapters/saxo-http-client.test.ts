@@ -328,4 +328,75 @@ describe('SaxoHttpBrokerClient', () => {
       (error: unknown) => error instanceof Error && !error.message.includes(FAKE_TOKEN),
     );
   });
+
+  // #1223: a status-less transport failure (ECONNRESET/DNS failure/socket
+  // hangup — `fetch` rejecting rather than resolving) was never retried,
+  // including on safe, side-effect-free reads.
+  describe('status-less transport failures (#1223)', () => {
+    it('retries a transport failure on a safe read (listOpenOrders is a GET)', async () => {
+      const fetchMock = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('read ECONNRESET'))
+        .mockResolvedValueOnce(jsonResponse({ Data: [] }));
+      const client = makeClient(fetchMock);
+
+      const pending = client.listOpenOrders();
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(await pending).toEqual([]);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('retries a transport failure on listOrderActivities (also a GET)', async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse(ACCOUNTS))
+        .mockRejectedValueOnce(new Error('getaddrinfo ENOTFOUND gateway.saxobank.com'))
+        .mockResolvedValueOnce(jsonResponse({ Data: [] }));
+      const client = makeClient(fetchMock);
+
+      const pending = client.listOrderActivities(new Date('2026-09-01T00:00:00Z'));
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(await pending).toEqual([]);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    });
+
+    // The money-safety guarantee: a blind retry of a placement whose response
+    // was lost can produce a second live order (doc 43, PR #1212). This test
+    // pins the end-to-end behavior with a generous retry budget, but the
+    // budget alone does not isolate which guard is holding the line: PR
+    // #1212's pre-existing `maxAttempts: 1` override on `placeOrder` already
+    // forces exactly one attempt regardless of what `isRetryableSaxoBrokerError`
+    // answers (confirmed by mutation — flipping the POST classification to
+    // retryable does not fail this test). The classification-level guarantee
+    // this ticket adds — that a status-less POST error is itself classified
+    // non-retryable — is proven in isolation by `saxo-broker-errors.test.ts`'s
+    // "is NOT retryable when the failing request was a POST" unit test, which
+    // DOES fail under that same mutation.
+    it('does NOT retry a transport failure on placeOrder (a POST), even with attempts to spare', async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse(ACCOUNTS))
+        .mockRejectedValue(new Error('socket hang up'));
+      const client = makeClient(fetchMock, { maxAttempts: 5, baseDelayMs: 10, maxDelayMs: 100 });
+
+      await expect(client.placeOrder(ORDER, 'key-1')).rejects.toBeInstanceOf(
+        SaxoBrokerProviderError,
+      );
+      // 1 for resolveIdentity + exactly 1 placement attempt — no retry.
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('does NOT retry a transport failure on cancelOrder (a DELETE — not a safe read)', async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse(ACCOUNTS))
+        .mockRejectedValue(new Error('socket hang up'));
+      const client = makeClient(fetchMock, { maxAttempts: 5, baseDelayMs: 10, maxDelayMs: 100 });
+
+      await expect(client.cancelOrder('order-1')).rejects.toBeInstanceOf(SaxoBrokerProviderError);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+  });
 });
