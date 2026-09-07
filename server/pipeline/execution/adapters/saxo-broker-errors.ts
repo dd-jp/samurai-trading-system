@@ -73,14 +73,21 @@ export class SaxoBrokerProviderError extends Error {
  * The HTTP verb of the request that failed, as literally passed to
  * `fetch`/`fetchWithTimeout` — `SaxoHttpBrokerClient.request`'s `init.method`
  * is typed to require one of these, so a new operation cannot omit it and
- * fall through to a default. Transport-failure retryability is scoped off
- * this value alone (#1223): GET is assumed side-effect-free by HTTP
- * semantics, and only GET retries a status-less transport failure. This is
- * verb-declaration enforcement, not a safety audit — the compiler forces
- * every call site to state its verb, it does not verify a given GET is
- * genuinely a safe read. Every other verb, including DELETE (cancel), stays
- * non-retryable by default: doc 43 records that a repeat cancel is idempotent
- * at the venue (`404 OrderNotFound`), but this ticket declines to widen
+ * fall through to a default. This value scopes ONLY the status-less,
+ * non-timeout `SaxoBrokerProviderError` branch (#1223, `fetch` rejecting
+ * with something other than a timeout abort — ECONNRESET, DNS failure,
+ * socket hangup): GET is assumed side-effect-free by HTTP semantics, and
+ * only GET marks that specific error shape retryable. It does NOT scope
+ * timeout retryability — `isTimeoutAbort` classifies to
+ * `SaxoBrokerTimeoutError` before this value is ever consulted, and
+ * `isRetryableSaxoBrokerError` retries every `SaxoBrokerTimeoutError`
+ * unconditionally, on every verb including POST (#1273 tracks making that
+ * verb-aware too). This is verb-declaration enforcement, not a safety audit
+ * — the compiler forces every call site to state its verb, it does not
+ * verify a given GET is genuinely a safe read. Every other verb, including
+ * DELETE (cancel), stays non-retryable by default for the status-less
+ * non-timeout branch: doc 43 records that a repeat cancel is idempotent at
+ * the venue (`404 OrderNotFound`), but this ticket declines to widen
  * cancel's status-less-transport-failure behavior on that basis — it stays
  * exactly as conservative as it was before #1223 (no retry).
  */
