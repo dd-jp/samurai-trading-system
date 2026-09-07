@@ -3,9 +3,8 @@
  *
  * Two roles call an LLM: the debate engine and the market-intelligence
  * sentiment agent. Each resolves its own model and its own key, falling back
- * to a shared default — the per-model-key shape David asked for, and the shape
- * the repo already runs in CI (`.github/workflows/ai-review.yml` gives DeepSeek
- * `NOUS_API_KEY` and Kimi `KIMI_NOUS_API_KEY` against one `NOUS_BASE_URL`).
+ * to a shared default — the per-model-key shape David asked for: a per-surface
+ * key where one is set, one shared `NOUS_BASE_URL` for all of them.
  *
  * ## Why a model can be refused at startup
  *
