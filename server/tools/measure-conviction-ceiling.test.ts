@@ -11,6 +11,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { LOW_CONVICTION_CAP } from '../pipeline/analysts/technical-analyst.js';
+import { EVIDENCE_WEIGHT } from '../pipeline/debate-engine/conviction-score.js';
 import { DEFAULT_TRADER_CONFIG } from '../pipeline/trader/types.js';
 import {
   type ConvictionSample,
@@ -18,6 +19,7 @@ import {
   enumerateTechnicalLattice,
   type MediatorStance,
   measureConvictionSamples,
+  report,
 } from './measure-conviction-ceiling.js';
 
 const FLOOR = DEFAULT_TRADER_CONFIG.conviction_floor;
@@ -154,5 +156,46 @@ describe('LOW_CONVICTION_CAP interaction (#756 item 3)', () => {
     expect(LOW_CONVICTION_CAP).toBeLessThan(FLOOR);
     expect(cappedCeiling).toBeCloseTo(0.58, 10);
     expect(cappedCeiling).toBeGreaterThan(FLOOR);
+  });
+});
+
+describe("report()'s tie section", () => {
+  const CARVE_OUT_POSSIBLE = 'CAN be the #683 carve-out firing';
+  const CHECK_SAMPLES = 'check each sample above';
+  const CARVE_OUT_EXCLUDED = 'None of these are the #683 carve-out firing';
+
+  function tieCount(floor: number): number {
+    return measureConvictionSamples(floor).filter(
+      (sample) => sample.direction !== 'neutral' && sample.conviction === floor,
+    ).length;
+  }
+
+  it('hedges on the carve-out and points at the samples when ties exist below EVIDENCE_WEIGHT', () => {
+    expect(tieCount(0.25)).toBeGreaterThan(0);
+
+    const section = report(0.25);
+
+    expect(section).toContain(CARVE_OUT_POSSIBLE);
+    expect(section).toContain(CHECK_SAMPLES);
+  });
+
+  it('does not point at samples that do not exist when no tie lands on the floor', () => {
+    expect(tieCount(0.3)).toBe(0);
+
+    const section = report(0.3);
+
+    expect(section).toContain('samples landing EXACTLY on the floor: 0');
+    expect(section).not.toContain(CHECK_SAMPLES);
+    expect(section).toContain('No enumerated sample lands exactly on this floor');
+  });
+
+  it('excludes the carve-out outright when the floor is above EVIDENCE_WEIGHT', () => {
+    expect(tieCount(FLOOR)).toBeGreaterThan(0);
+    expect(FLOOR).toBeGreaterThan(EVIDENCE_WEIGHT);
+
+    const section = report(FLOOR);
+
+    expect(section).toContain(CARVE_OUT_EXCLUDED);
+    expect(section).not.toContain(CARVE_OUT_POSSIBLE);
   });
 });

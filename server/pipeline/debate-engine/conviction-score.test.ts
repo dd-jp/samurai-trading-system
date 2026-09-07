@@ -291,9 +291,9 @@ describe('computeConvictionScore', () => {
         makeView({ analyst_id: 'a2', direction: 'bearish', confidence: 1, key_points: [] }),
       ];
 
-      // EVIDENCE_WEIGHT = 0.4, not re-exported by the module — this is the
-      // module's own INVARIANT restated as a literal, matching the other
-      // "cannot exceed 0.4" assertion below.
+      // 0.4 is `EVIDENCE_WEIGHT`, deliberately restated as a literal rather
+      // than imported: this is the module's own INVARIANT, and importing the
+      // constant would make the assertion move with any retune of it.
       expect(computeConvictionScore(cancelledDesk, [], 'bullish')).toBeLessThanOrEqual(0.4);
       expect(computeConvictionScore(cancelledDesk, [], 'bearish')).toBeLessThanOrEqual(0.4);
     });

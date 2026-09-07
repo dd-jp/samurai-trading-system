@@ -30,7 +30,7 @@ import type { AnalystView, Direction } from './types.js';
  */
 const CONSENSUS_WEIGHT = 0.6;
 /** Weight given to the evidence-strength metric in the hybrid combination. */
-const EVIDENCE_WEIGHT = 0.4;
+export const EVIDENCE_WEIGHT = 0.4;
 
 /** Score returned when there is no debate state to evaluate (no views). */
 const NO_DATA_SCORE = 0.5;
@@ -51,11 +51,12 @@ const KEY_POINTS_SATURATION = 3;
  * — an analyst with no recorded round stances falls back to its original
  * `AnalystView.direction` when determining final position.
  *
- * `debateVerdict` is the mediator's final stance, counted as one more
- * participant. It is **required but nullable**, deliberately: a caller that
- * simply omits it gets a materially different, mediator-free score on a path
- * that gates trades, so the omission has to fail at compile time rather than
- * degrade silently. Passing `undefined` is the explicit way to ask for the
+ * `debateVerdict` is the mediator's final stance, folded into the consensus
+ * term subject to `computeDirectionalConsensus`'s carve-outs below. It is
+ * **required but nullable**, deliberately: a caller that simply omits it
+ * gets a materially different, mediator-free score on a path that gates
+ * trades, so the omission has to fail at compile time rather than degrade
+ * silently. Passing `undefined` is the explicit way to ask for the
  * mediator-free score (the pure unit tests, and any caller with no mediator);
  * the production adapter always supplies a real stance. See
  * `computeDirectionalConsensus` for why bull/bear stances are NOT included.
@@ -117,10 +118,11 @@ function directionValue(direction: Direction): number {
  * counts participants, so silence and disagreement both score 0 and only a
  * genuine directional lean scores high.
  *
- * The mediator's verdict is counted as one more participant, which is what
- * makes the debate able to move the score at all (#625 defect 2: the adapter
- * echoed analyst input directions back as "round stances", so rounds
- * contributed exactly zero to a score we were paying an LLM to produce).
+ * When the carve-outs below don't exclude it, the mediator's verdict is
+ * counted as one more participant — which is what makes the debate able to
+ * move the score at all (#625 defect 2: the adapter echoed analyst input
+ * directions back as "round stances", so rounds contributed exactly zero to
+ * a score we were paying an LLM to produce).
  *
  * **Bull and bear stances are deliberately excluded.** Their direction is an
  * ASSIGNED ROLE, not an opinion — the bear argues bearish because it was told
@@ -139,24 +141,25 @@ function directionValue(direction: Direction): number {
  * ran at all" fallback, not a directional-lean question, and is unaffected
  * by #683.)
  *
- * **#683 — the mediator amplifies a lean but cannot create one.** Before this,
- * with every analyst neutral, the mediator's single vote supplied a lean of
- * `1/(n+1)` out of nothing, whose size depended on how many analysts sat on
- * the desk: at maximum evidence that scored **exactly 0.55** on a
- * three-analyst desk (tying `conviction_floor`) and **0.60** on a
- * two-analyst desk (clearing it outright), and the Trader gates on
- * `confidence < conviction_floor` (`decide.ts`), so the tie *authorised* the
- * trade — the pre-#625 branch this module set out to close, surviving at the
- * boundary. Fixed by computing the analysts' own directional mean first: when
- * it is exactly 0 (every analyst neutral, or a desk that cancels out exactly,
- * e.g. one bullish and one bearish), the mediator's verdict is excluded
- * entirely and the consensus term is 0 regardless of what the mediator says.
- * When the analysts' own mean is non-zero, the mediator is still counted as
- * one more equal participant, exactly as before — it can move an existing
- * lean up or down, it just cannot manufacture one from nothing. This closes
- * the hole for every desk size, not just the three- and two-analyst cases
- * measured above, because the fix depends on the analyst mean rather than on
- * `n`.
+ * **#683 — the mediator amplifies a lean but cannot create one.** Without this
+ * carve-out, with every analyst neutral, the mediator's single vote alone
+ * would supply a lean of `1/(n+1)` out of nothing, whose size depends on how
+ * many analysts sit on the desk: at maximum evidence that computes to
+ * **exactly 0.55** on a three-analyst desk (tying `conviction_floor`) and
+ * **0.60** on a two-analyst desk (clearing it outright), and the Trader gates
+ * on `confidence < conviction_floor` (`decide.ts`, strict `<`, predates
+ * #683), so the tied score would authorise a trade no analyst had actually
+ * taken a side on — the pre-#625 branch this module set out to close,
+ * surviving at the boundary. Fixed by computing the analysts' own directional
+ * mean first: when it is exactly 0 (every analyst neutral, or a desk that
+ * cancels out exactly, e.g. one bullish and one bearish), the mediator's
+ * verdict is excluded entirely and the consensus term is 0 regardless of what
+ * the mediator says. When the analysts' own mean is non-zero, the mediator is
+ * still counted as one more equal participant, exactly as before — it can
+ * move an existing lean up or down, it just cannot manufacture one from
+ * nothing. This closes the hole for every desk size, not just the three- and
+ * two-analyst cases measured above, because the fix depends on the analyst
+ * mean rather than on `n`.
  */
 function computeDirectionalConsensus(
   views: AnalystView[],

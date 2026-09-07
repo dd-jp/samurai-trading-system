@@ -12,8 +12,9 @@
  * evidence) and the pre-#745 technical analyst (scalar `|RSI-50|/50`
  * confidence). BOTH have since been rewritten:
  *
- * - `conviction-score.ts` now uses `|mean|` directional consensus with the
- *   mediator counted as a participant, and EXCLUDES `NO_DATA_MARKER` analysts
+ * - `conviction-score.ts` now uses `|mean|` directional consensus (see
+ *   `computeDirectionalConsensus` there for the mediator's carve-outs — the
+ *   `analystMean === 0` one is #683) and EXCLUDES `NO_DATA_MARKER` analysts
  *   from the evidence average (that exclusion is #625 defect 1's stated fix).
  * - `technical-analyst.ts` now emits `confidence = |net| / availableAxes` over
  *   four voting axes, capped at `LOW_CONVICTION_CAP` on a gated tape (#745).
@@ -83,9 +84,10 @@
  *   here are the numbers the gate sees today — but they are not invariant to a
  *   feedback loop that has started moving weights.
  *
- * The mediator's verdict is a participant in the consensus term, and it is LLM
- * output that cannot be enumerated offline, so every desk shape is reported
- * against all three mediator stances (agrees / neutral / opposes).
+ * The mediator's verdict feeds the consensus term — subject to the carve-outs
+ * `conviction-score.ts` documents, not unconditionally — and it is LLM output
+ * that cannot be enumerated offline, so every desk shape is reported against
+ * all three mediator stances (agrees / neutral / opposes).
  *
  * Usage: `yarn build && node dist/server/tools/measure-conviction-ceiling.js`
  * (or `yarn tsx server/tools/measure-conviction-ceiling.ts`). No network, no
@@ -98,7 +100,10 @@ import {
   LOW_CONVICTION_CAP,
 } from '../pipeline/analysts/technical-analyst.js';
 import { NO_DATA_MARKER } from '../pipeline/analysts/types.js';
-import { computeConvictionScore } from '../pipeline/debate-engine/conviction-score.js';
+import {
+  computeConvictionScore,
+  EVIDENCE_WEIGHT,
+} from '../pipeline/debate-engine/conviction-score.js';
 import type { AnalystView, Direction } from '../pipeline/debate-engine/types.js';
 import { DEFAULT_TRADER_CONFIG } from '../pipeline/trader/types.js';
 
@@ -309,7 +314,7 @@ export function measureConvictionSamples(floor: number): ConvictionSample[] {
           conviction,
           // The Trader gates on `debate.confidence < conviction_floor`
           // (`decide.ts`), so an exact tie at the floor is NOT skipped — it
-          // trades. That strict comparison is #683 and is deliberately
+          // trades. That strict comparison predates #683 and is deliberately
           // reproduced rather than corrected here.
           clears: !(conviction < floor),
         });
@@ -395,7 +400,7 @@ export function report(floor: number): string {
   }
   lines.push('');
 
-  lines.push('## Exact ties at the floor — #683 is load-bearing');
+  lines.push('## Exact ties at the floor — what the strict `<` gate admits');
   lines.push('');
   const ties = samples.filter(
     (sample) => sample.direction !== 'neutral' && sample.conviction === floor,
@@ -407,11 +412,28 @@ export function report(floor: number): string {
   ].sort();
   lines.push(`samples landing EXACTLY on the floor: ${ties.length}`);
   for (const shape of tieShapes) lines.push(`- ${shape}`);
-  lines.push(
-    'These trade only because the gate is `debate.confidence < conviction_floor` (strict). ' +
-      'Under `<=` they would all skip — so #683 is not a curiosity here, it decides whether ' +
-      'the weakest directional read on the production desk shape trades at all.',
-  );
+  if (ties.length === 0) {
+    lines.push(
+      `No enumerated sample lands exactly on this floor (${format(floor)}), so across THIS ` +
+        'enumeration `<` and `<=` admit the same set. Whether the boundary itself should count ' +
+        'as clearing is a separate, still-open question (#756 item 1), not one #683 decided.',
+    );
+  } else {
+    lines.push(
+      'These trade only because the gate is `debate.confidence < conviction_floor` (strict, ' +
+        '`decide.ts`, predates #683). Under `<=` they would all skip.' +
+        (floor > EVIDENCE_WEIGHT
+          ? ' None of these are the #683 carve-out firing: that carve-out forces the consensus ' +
+            `term to 0, capping conviction at \`EVIDENCE_WEIGHT\` (${format(EVIDENCE_WEIGHT)}) — ` +
+            `below this floor (${format(floor)}), so a sample landing ON the floor necessarily has ` +
+            'a non-zero analyst mean.'
+          : ` This floor (${format(floor)}) is at or below \`EVIDENCE_WEIGHT\` ` +
+            `(${format(EVIDENCE_WEIGHT)}), so a tie here CAN be the #683 carve-out firing — check ` +
+            'each sample above before assuming otherwise.') +
+        ' Whether the boundary itself should count as clearing is a separate, still-open question ' +
+        '(#756 item 1), not one #683 decided.',
+    );
+  }
   lines.push('');
 
   const belowOne = samples.filter(
