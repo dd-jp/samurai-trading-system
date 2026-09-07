@@ -841,9 +841,10 @@ function pruneMiArchiveWithLog(
  * `asOf`. What that call site gives, though, is sample-then-read rather
  * than read-then-sample: `asOf` is materialised in `server.ts`,
  * `getAlertDeliveryFailureCount` runs partway down `snapshot.ts`'s
- * `buildSnapshot` after a dozen intervening store reads, and nothing spans
- * them — `SqliteDashboardQueryStore` runs each read as its own prepared
- * statement, with no transaction and therefore no snapshot isolation. A
+ * `buildSnapshot`, after other store reads on the same connection, and
+ * nothing spans them — `SqliteDashboardQueryStore` runs each read as its
+ * own prepared statement, with no transaction and therefore no snapshot
+ * isolation. A
  * prune committing inside THAT gap does have `T_prune > asOf`, and the
  * rows it removes from the counted window are real.
  *
