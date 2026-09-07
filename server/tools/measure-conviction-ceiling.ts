@@ -100,7 +100,10 @@ import {
   LOW_CONVICTION_CAP,
 } from '../pipeline/analysts/technical-analyst.js';
 import { NO_DATA_MARKER } from '../pipeline/analysts/types.js';
-import { computeConvictionScore } from '../pipeline/debate-engine/conviction-score.js';
+import {
+  computeConvictionScore,
+  EVIDENCE_WEIGHT,
+} from '../pipeline/debate-engine/conviction-score.js';
 import type { AnalystView, Direction } from '../pipeline/debate-engine/types.js';
 import { DEFAULT_TRADER_CONFIG } from '../pipeline/trader/types.js';
 
@@ -134,15 +137,6 @@ const TECHNICAL_FIXED_KEY_POINTS = 5;
 
 /** Sentiment and fundamental each emit exactly two key points. */
 const MI_ANALYST_KEY_POINTS = 2;
-
-/**
- * `conviction-score.ts`'s private `EVIDENCE_WEIGHT`, duplicated here because
- * it isn't exported. The #683 carve-out caps conviction at this value when it
- * fires (the consensus term goes to 0), so a sample at or above this can only
- * be the carve-out NOT firing — that inference is only valid while this stays
- * in sync with the real constant.
- */
-const EVIDENCE_WEIGHT = 0.4;
 
 /** One enumerated point of the technical analyst's reachable output. */
 export interface LatticePoint {
@@ -418,20 +412,29 @@ export function report(floor: number): string {
   ].sort();
   lines.push(`samples landing EXACTLY on the floor: ${ties.length}`);
   for (const shape of tieShapes) lines.push(`- ${shape}`);
-  lines.push(
-    'These trade only because the gate is `debate.confidence < conviction_floor` (strict, ' +
-      '`decide.ts`, predates #683). Under `<=` they would all skip.' +
-      (floor > EVIDENCE_WEIGHT
-        ? ' None of these are the #683 carve-out firing: that carve-out forces the consensus ' +
-          `term to 0, capping conviction at \`EVIDENCE_WEIGHT\` (${format(EVIDENCE_WEIGHT)}) — ` +
-          `below this floor (${format(floor)}), so a sample landing ON the floor necessarily has ` +
-          'a non-zero analyst mean.'
-        : ` This floor (${format(floor)}) is at or below \`EVIDENCE_WEIGHT\` ` +
-          `(${format(EVIDENCE_WEIGHT)}), so a tie here CAN be the #683 carve-out firing — check ` +
-          'each sample above before assuming otherwise.') +
-      ' Whether the boundary itself should count as clearing is a separate, still-open question ' +
-      '(#756 item 1), not one #683 decided.',
-  );
+  if (ties.length === 0) {
+    lines.push(
+      `No sample lands exactly on this floor (${format(floor)}), so the strict \`<\` gate and ` +
+        '`<=` would admit the same set here — the gate is load-bearing only at floors the ' +
+        'lattice can hit exactly. Whether the boundary itself should count as clearing is a ' +
+        'separate, still-open question (#756 item 1), not one #683 decided.',
+    );
+  } else {
+    lines.push(
+      'These trade only because the gate is `debate.confidence < conviction_floor` (strict, ' +
+        '`decide.ts`, predates #683). Under `<=` they would all skip.' +
+        (floor > EVIDENCE_WEIGHT
+          ? ' None of these are the #683 carve-out firing: that carve-out forces the consensus ' +
+            `term to 0, capping conviction at \`EVIDENCE_WEIGHT\` (${format(EVIDENCE_WEIGHT)}) — ` +
+            `below this floor (${format(floor)}), so a sample landing ON the floor necessarily has ` +
+            'a non-zero analyst mean.'
+          : ` This floor (${format(floor)}) is at or below \`EVIDENCE_WEIGHT\` ` +
+            `(${format(EVIDENCE_WEIGHT)}), so a tie here CAN be the #683 carve-out firing — check ` +
+            'each sample above before assuming otherwise.') +
+        ' Whether the boundary itself should count as clearing is a separate, still-open question ' +
+        '(#756 item 1), not one #683 decided.',
+    );
+  }
   lines.push('');
 
   const belowOne = samples.filter(

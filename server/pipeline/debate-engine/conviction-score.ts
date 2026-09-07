@@ -30,7 +30,7 @@ import type { AnalystView, Direction } from './types.js';
  */
 const CONSENSUS_WEIGHT = 0.6;
 /** Weight given to the evidence-strength metric in the hybrid combination. */
-const EVIDENCE_WEIGHT = 0.4;
+export const EVIDENCE_WEIGHT = 0.4;
 
 /** Score returned when there is no debate state to evaluate (no views). */
 const NO_DATA_SCORE = 0.5;
