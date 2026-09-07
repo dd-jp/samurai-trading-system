@@ -41,7 +41,7 @@ export function laneFor(
  * precondition — `laneFor` already ruled out a same-instrument match — kept
  * as executable documentation of why this reads "another instrument" rather
  * than "any instrument" (confirmed dead by mutation: removing it fails 0 of
- * 621 client tests). The other three arms carry no such precondition (their
+ * the 192 tests in `client/src`). The other three arms carry no such precondition (their
  * joins run separately, after `traceId` is decided) and their conjuncts are
  * load-bearing: without one, a verdict/critic/tick-status row for the SAME
  * instrument as a lane that has genuinely aged out would be misread as a
