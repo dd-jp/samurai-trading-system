@@ -302,8 +302,9 @@ export interface DashboardQueryStore {
    * in-band Telegram "channel degraded" notice
    * (`telegram-bot-api-client.ts`'s `#recordDeliveryFailure`) posts over the
    * exact chat/transport it is reporting on, so it gets through only while
-   * that chat is reachable — its own retries widen that to a window of tens
-   * of seconds, not an instant, but an outage outlasting them silences it.
+   * that chat is reachable — its own retries widen that from an instant to a
+   * window that can run to tens of seconds, but an outage outlasting them
+   * silences it.
    * Only this tile answers regardless, because it is a plain SQL read of a
    * durable table, crossing no live transport at read time.
    *

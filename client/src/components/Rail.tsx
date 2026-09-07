@@ -172,9 +172,10 @@ function ProvidersBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
  * in-band Telegram "channel degraded" notice the server also posts. That
  * notice shares the escalation chat's own transport, so it arrives only if
  * that chat is reachable at some point within that send's own retry window
- * — tens of seconds, since it retries like every other send, not the instant
- * it fires — which says nothing about whether the failures it reports were a
- * channel problem, and its silence says nothing at all. This tile never crosses that transport — it reads
+ * — it retries like every other send, so that window can run to tens of
+ * seconds rather than being the instant it fires — which says nothing about
+ * whether the failures it reports were a channel problem, and its silence
+ * says nothing at all. This tile never crosses that transport — it reads
  * `alert_delivery_failures` off the wire, itself a plain SQL count — so it
  * is the one place an operator can actually tell.
  *

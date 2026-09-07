@@ -165,7 +165,9 @@ const REJECTION_ALERT_EVERY = 3;
  * it arrives only if `#alertChatId` is reachable at some point inside this
  * send's OWN retry window — not at one instant: the escalation goes through
  * `#call`, so `DEFAULT_RETRY.maxAttempts` attempts of `DEFAULT_TIMEOUT_MS`
- * each, plus backoff, span tens of seconds. A necessary condition about that
+ * each, plus backoff, span up to tens of seconds — a bound, not an elapsed
+ * time: a refused connection fast-fails and leaves only the backoffs. A
+ * necessary condition about that
  * window, not a partition of failure classes, and NOT sufficient (this send
  * has its own `#call`, which can fail on its own). See `#recordDeliveryFailure`'s doc
  * (#1130), and `alert_delivery_failures` for the surface that answers
@@ -683,6 +685,8 @@ export class TelegramBotApiClient implements TelegramClient {
    * roughly 30 seconds, and longer if Telegram's own `retry_after` hints set
    * the backoffs; both are injectable (`options.retry`, `options.timeoutMs`),
    * so the window is a property of the configured client, not a constant.
+   * It is a CEILING, not an elapsed time: a refused connection fails in
+   * milliseconds, so the same three attempts can span under two seconds.
    * Necessary, not sufficient — the converse does not hold, because this
    * escalation's own `#call` can fail for reasons independent of the chat
    * (the misconfigured `baseUrl` this module's header names as the live
@@ -793,8 +797,8 @@ export class TelegramBotApiClient implements TelegramClient {
           `Samurai alert channel degraded: ${this.#deliveryFailureCount} Telegram sends have ` +
           'failed permanently after retries so far this run, so recent escalations may not ' +
           'have reached you. That you are reading this proves only that this chat was ' +
-          'reachable at some point during the tens of seconds this notice itself spent ' +
-          'retrying — not a single instant, and it does not mean the failures were ' +
+          'reachable at some point while this notice was itself retrying — a window that can ' +
+          'run to tens of seconds, not a single instant, and it does not mean the failures were ' +
           'something other than a channel problem, and a notice you never receive tells you ' +
           'nothing either way. The dashboard alert-channel tile is the durable record: it ' +
           'counts alert_delivery_failures rows for this chat all-time, across every run, so ' +

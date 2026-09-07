@@ -660,7 +660,11 @@ describe('TelegramBotApiClient — transient network failures and undeliverable 
     // FORWARD_DELIVERY_CLAIM above, this is a claim-shape guard, not a
     // semantic one: it pins the strength this wording carries, and a
     // paraphrase that dropped the window without using the point-in-time
-    // phrasings below would slip past it.
+    // phrasings below would slip past it. Deliberately blunt in the other
+    // direction too: it rejects that phrasing family wherever it sits, so a
+    // legitimate future sentence ('not at the moment the failures were
+    // counted') has to be reworded rather than exempted — reword, and do not
+    // read the rejection as a finding about the message.
     expect(text).toMatch(/reachable at some point[^.]*retrying/i);
     expect(text).not.toMatch(/\bat (?:the|that|one|a single) (?:moment|instant)\b/i);
     // And the two denominators, so the operator is not left reconciling them.
