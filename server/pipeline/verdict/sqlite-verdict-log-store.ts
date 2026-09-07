@@ -23,10 +23,10 @@
  * with `ON CONFLICT(trace_id) DO NOTHING` — first-write-wins, NOT
  * `DO UPDATE`/last-write-wins. `VerdictLogStore`'s port doc
  * (server/shared/types/ports.ts) promises "Append-only: no update/delete,
- * one row per trace_id"; unlike `SqliteAccountStateStore`'s `peak_equity`
- * (a running high-water mark, correctly upserted with `MAX()`) or
- * `SqliteBrokerStateStore`'s bracket state (live venue state, correctly
- * upserted with `COALESCE()`),
+ * one row per trace_id"; unlike `SqliteAccountStateStore`'s
+ * `peak_equity` (a running high-water mark, correctly upserted
+ * with `MAX()`) or `SqliteBrokerStateStore`'s bracket state
+ * (live venue state, correctly upserted with `COALESCE()`),
  * `verdict_log` is an audit record of what Verdict actually decided — the
  * row `OrphanVerdictScanner` depends on to know a `go` was ever produced for
  * this `trace_id`. A `DO UPDATE` that let a later call (e.g. gate 5's
