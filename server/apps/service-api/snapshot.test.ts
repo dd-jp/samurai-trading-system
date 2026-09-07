@@ -494,8 +494,12 @@ describe('buildSnapshot', () => {
 
   // #1108: the count of permanently-undeliverable alert sends rides this same
   // payload, so an operator reading the dashboard can tell the alert channel
-  // is down instead of reading silence as calm.
-  it('projects the alert delivery failure count, bounded by the same asOf', () => {
+  // is down instead of reading silence as calm. `asOf` is the upper bound of
+  // the store's trailing window (#1131), not the only bound — the window's
+  // lower edge lives inside `getAlertDeliveryFailureCount` itself and is
+  // covered by sqlite-query-store.test.ts and alert-delivery-log.test.ts, not
+  // here, since this fake's return value is a plain injected number.
+  it('projects the alert delivery failure count, bounded above by the same asOf', () => {
     let asked: Date | null = null;
     const store = fakeStore({
       getAlertDeliveryFailureCount: (asOf) => {
@@ -506,7 +510,7 @@ describe('buildSnapshot', () => {
 
     const snap = buildSnapshot(store, AS_OF, 'paper');
 
-    expect(snap.alert_delivery_failures).toBe(4);
+    expect(snap.alert_delivery_failures_24h).toBe(4);
     expect(asked).toEqual(AS_OF);
   });
 

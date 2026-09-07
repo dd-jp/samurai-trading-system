@@ -668,8 +668,10 @@ describe('TelegramBotApiClient — transient network failures and undeliverable 
     expect(text).toMatch(/reachable at some point[^.]*retrying/i);
     expect(text).not.toMatch(/\bat (?:the|that|one|a single) (?:moment|instant)\b/i);
     // And the two denominators, so the operator is not left reconciling them.
+    // #1131: the tile is windowed (trailing 24h), not all-time, so the text
+    // must name that window rather than the dropped "all-time" claim.
     expect(text).toMatch(/so far this run/i);
-    expect(text).toMatch(/all-time, across every run/i);
+    expect(text).toMatch(/trailing 24 hours/i);
     expect(text).toContain('alert_delivery_failures');
   });
 

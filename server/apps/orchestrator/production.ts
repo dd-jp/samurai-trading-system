@@ -221,6 +221,10 @@ import {
   SqliteTraderLogStore,
 } from '../../shared/store/index.js';
 import { CostModelImpl, SqliteStage2SelectionStore } from '../../tools/backtest/index.js';
+import {
+  DEFAULT_ALERT_DELIVERY_FAILURE_RETENTION_DAYS,
+  SqliteAlertDeliveryLog,
+} from './alert-delivery-log.js';
 import { AnalystSkipKindRelay } from './analysts-decision.js';
 import {
   LoggingAnalystSkipAlertChannel,
@@ -633,6 +637,10 @@ export const ENV_LLM_CALL_LOG_MAX_ROWS = 'SAMURAI_LLM_CALL_LOG_MAX_ROWS';
 /** The variable that overrides the MI archive's retention window (#1060). */
 export const ENV_MI_ARCHIVE_RETENTION_DAYS = 'SAMURAI_MI_ARCHIVE_RETENTION_DAYS';
 
+/** The variable that overrides `alert_delivery_failures`'s retention window (#1131). */
+export const ENV_ALERT_DELIVERY_FAILURE_RETENTION_DAYS =
+  'SAMURAI_ALERT_DELIVERY_FAILURE_RETENTION_DAYS';
+
 /** The variable that overrides how many X posts a sentiment call fetches (#969). */
 export const ENV_X_MAX_SEARCH_RESULTS = 'SAMURAI_X_MAX_RESULTS';
 
@@ -792,6 +800,85 @@ function pruneMiArchiveWithLog(
       message:
         'MI archive purge failed — archived rows are unaffected, but the archive is not bounded ' +
         'until this succeeds',
+      payload: { error: error instanceof Error ? error.message : String(error), trigger },
+    });
+  }
+}
+
+/**
+ * How many days of `alert_delivery_failures` rows to keep on disk (#1131).
+ *
+ * Day window, matching `miArchiveRetentionDaysFromEnvironment`'s reasoning:
+ * this table's growth tracks outage/event frequency, which is genuinely
+ * time-bound, not the cadence-bound growth `llmCallLogMaxRowsFromEnvironment`
+ * guards against with a row ceiling instead.
+ *
+ * `min = 2`, NOT `1` like the two resolvers above. This table also feeds
+ * `countFailures`'s 24-hour (`ALERT_DELIVERY_FAILURE_WINDOW_MS`) Rail window,
+ * and a 1-day retention would let the daily prune sweep delete a row while it
+ * is still inside that window — an operator watching the tile go to zero
+ * would then be unable to tell "the failure aged out of the window" from
+ * "the failure was deleted by the retention sweep", which is exactly the
+ * ambiguity #1131 was opened to remove. `min = 2` keeps retention strictly
+ * longer than the count window regardless of what either constant is later
+ * tuned to, and `alert-delivery-failure-retention.test.ts` pins the
+ * inequality directly rather than trusting this comment to stay true.
+ */
+export function alertDeliveryFailureRetentionDaysFromEnvironment(
+  value: string | undefined = process.env[ENV_ALERT_DELIVERY_FAILURE_RETENTION_DAYS],
+): number {
+  return positiveIntegerFromEnv(
+    value,
+    ENV_ALERT_DELIVERY_FAILURE_RETENTION_DAYS,
+    DEFAULT_ALERT_DELIVERY_FAILURE_RETENTION_DAYS,
+    2,
+    "alert_delivery_failures's retention window (#1131), which must stay longer than the " +
+      '24-hour Rail count window or a prune and a window rollover become indistinguishable',
+  );
+}
+
+/**
+ * Prunes `alert_delivery_failures`, reports what it removed, and never
+ * throws — same posture as `pruneLlmCallLogWithLog`/`pruneMiArchiveWithLog`
+ * and for the same reason: a throw at boot would abort a trading process
+ * over housekeeping, and a throw on the timer would take down the daily
+ * feedback cycle.
+ *
+ * Builds its own `SqliteAlertDeliveryLog` over a freshly-guarded handle
+ * rather than taking one as a parameter: unlike the MI archive (an optional
+ * `ProductionConfig` field, because the deterministic news path can be
+ * omitted), `alert_delivery_failures` is a base table in every shared store,
+ * so there is no "not configured" case to thread through.
+ */
+function pruneAlertDeliveryFailuresWithLog(
+  db: SqliteHandle,
+  retentionDays: number,
+  clock: Clock,
+  logger: Logger,
+  trigger: 'startup' | 'daily',
+): void {
+  try {
+    const cutoff = new Date(clock.now().getTime() - retentionDays * 24 * 60 * 60 * 1000);
+    const deleted = new SqliteAlertDeliveryLog(guardedStore(db, 'orchestrator')).pruneOlderThan(
+      cutoff,
+    );
+    if (deleted === 0) return;
+    logger.log({
+      trace_id: trigger === 'startup' ? 'startup' : 'feedback-cycle',
+      stage: 'orchestrator',
+      level: 'info',
+      message: `pruned alert_delivery_failures rows older than the ${retentionDays}-day retention window`,
+      payload: { deleted, retention_days: retentionDays, trigger },
+    });
+  } catch (error) {
+    logger.log({
+      trace_id: trigger === 'startup' ? 'startup' : 'feedback-cycle',
+      stage: 'orchestrator',
+      event: 'alert_delivery_failure_prune_failed',
+      level: 'warn',
+      message:
+        'alert_delivery_failures prune failed — recorded failures are unaffected, but the table ' +
+        'is not bounded until this succeeds',
       payload: { error: error instanceof Error ? error.message : String(error), trigger },
     });
   }
@@ -1586,6 +1673,21 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    */
   const miArchiveRetentionDays = miArchiveRetentionDaysFromEnvironment();
   pruneMiArchiveWithLog(config.miArchive, miArchiveRetentionDays, clock, logger, 'startup');
+  /**
+   * #1131. Same two-call-site shape as the MI archive purge immediately
+   * above and for the same reason — see `pruneAlertDeliveryFailuresWithLog`
+   * for why this table needs its own retention sweep at all (the Rail tile's
+   * count was previously all-time with no lower bound, and the table itself
+   * had no pruning).
+   */
+  const alertDeliveryFailureRetentionDays = alertDeliveryFailureRetentionDaysFromEnvironment();
+  pruneAlertDeliveryFailuresWithLog(
+    config.db,
+    alertDeliveryFailureRetentionDays,
+    clock,
+    logger,
+    'startup',
+  );
   // `tryNousCredentials` rather than `nousCredentials`: an unconfigured Nous
   // environment degrades this optional stage to no-agent instead of failing
   // the boot, which is how the absent `XAI_API_KEY` behaved before ADR-0009
@@ -3170,6 +3272,8 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
   const llmCallLogMaxRows = llmCallLogMaxRowsFromEnvironment();
   // #1060. Same reasoning, same shape, for the MI archive's 90-day window.
   const miArchiveRetentionDays = miArchiveRetentionDaysFromEnvironment();
+  // #1131. Same reasoning, same shape, for alert_delivery_failures's retention window.
+  const alertDeliveryFailureRetentionDays = alertDeliveryFailureRetentionDaysFromEnvironment();
 
   const runFeedbackCycle = (feedback: FeedbackCycleConfig): void => {
     // #1045, and FIRST — outside the try below, before any of the tuning work.
@@ -3196,6 +3300,15 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     // #1060. Same placement rule applies: outside the try, so a persistently
     // failing feedback cycle cannot silently disable the MI archive's purge.
     pruneMiArchiveWithLog(config.miArchive, miArchiveRetentionDays, clock, logger, 'daily');
+    // #1131. Same placement rule applies: outside the try, so a persistently
+    // failing feedback cycle cannot silently disable alert_delivery_failures's purge.
+    pruneAlertDeliveryFailuresWithLog(
+      config.db,
+      alertDeliveryFailureRetentionDays,
+      clock,
+      logger,
+      'daily',
+    );
 
     try {
       const result = runDailyCycle({

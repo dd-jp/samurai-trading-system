@@ -764,13 +764,28 @@ describe('SqliteQueryStore.getAlertDeliveryFailureCount (#1108)', () => {
     expect(store.getAlertDeliveryFailureCount(NOW)).toBe(0);
   });
 
-  it('counts every recorded ALERT-chat failure up to and including asOf', () => {
+  // "up to and including asOf" — not "every", since #1131 added a trailing
+  // lower bound alongside the pre-existing upper one; the window tests below
+  // pin that lower bound specifically.
+  it('counts recorded ALERT-chat failures within the trailing window, up to and including asOf', () => {
     const db = makeDb();
     seedFailure(db, new Date(NOW.getTime() - 1_000));
     seedFailure(db, NOW);
     seedFailure(db, new Date(NOW.getTime() + 1_000));
 
     expect(new SqliteQueryStore(db, 30, ALERT_CHAT_ID).getAlertDeliveryFailureCount(NOW)).toBe(2);
+  });
+
+  // #1131: the count used to have no lower bound, so a failure from months
+  // before `asOf` still counted toward "is the alert channel down" forever.
+  // Pinned at this layer too (the query-store, not just
+  // alert-delivery-log.test.ts's direct unit coverage) because this is the
+  // layer the dashboard wire actually reads through.
+  it('excludes an ALERT-chat failure older than the trailing 24h window', () => {
+    const db = makeDb();
+    seedFailure(db, new Date(NOW.getTime() - 25 * 60 * 60 * 1000));
+
+    expect(new SqliteQueryStore(db, 30, ALERT_CHAT_ID).getAlertDeliveryFailureCount(NOW)).toBe(0);
   });
 
   // #1108 third review pass: the CI-bot finding this closes. COUNT(*) with no
