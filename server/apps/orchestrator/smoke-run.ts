@@ -1650,8 +1650,10 @@ async function runExitPathScenarios(input: {
   // statement added directly in THIS function between here and the restart
   // — the bare `execution` local above (not just `ctx`) is still in scope,
   // so no context type could close this route — but that route is caught by
-  // the runtime #549 gate assertion below (`sweepDivergenceAction`/
-  // `markerCleared`/`protectedQty`), not the compiler.
+  // the runtime #549 gate assertion below: a healed-in-process residual
+  // still clears the marker and protects the right quantity on its own, so
+  // only `residualSweep.sweepDivergenceAction` (undefined when the restart's
+  // own sweep found nothing to do) discriminates, not the compiler.
   await exitCrashRestartLotWithoutSweep(ctx, crashRestartLot.exitKey);
   const terminalSweepKey = await seedTerminalSweepRow(ctx);
   const { restarted, restartReconcile } = await restartExecutionAndReconcile(ctx);
@@ -1735,10 +1737,12 @@ interface ExitPathScenarioContext {
  * type-check inside them — an edit that adds an `ingestFills()` call to one
  * of them, or a new scenario function slotted in beside them, fails to
  * compile rather than failing the gate later. The runtime #549 gate
- * assertion already catches the call from anywhere else in this window
- * (it demands positive evidence — a sweep divergence, a cleared marker —
- * that a healed-in-process residual cannot produce); this type only moves
- * that failure from `yarn smoke` to `yarn typecheck` for these three
+ * assertion already catches the call from anywhere else in this window —
+ * a healed-in-process residual still clears the marker and protects the
+ * right quantity on its own, so of its four checks only
+ * `residualSweep.sweepDivergenceAction` (undefined when the restart's own
+ * sweep found nothing left to do) actually discriminates — this type only
+ * moves that failure from `yarn smoke` to `yarn typecheck` for these three
  * functions specifically.
  */
 type PostSweepScenarioContext = Omit<ExitPathScenarioContext, 'execution'>;
