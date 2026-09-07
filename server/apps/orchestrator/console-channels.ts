@@ -53,6 +53,7 @@ import type {
   ApprovalRequest,
 } from '../../pipeline/verdict/index.js';
 import type { CiiScoreProvider } from '../../providers/market-intelligence/index.js';
+import { currentTraceId } from '../../shared/index.js';
 import type { HeartbeatChannel } from './heartbeat.js';
 import type { OrphanAlertChannel, OrphanGoVerdict } from './orphan-verdict-scan.js';
 import type { AnalystSkipAlert, AnalystSkipAlertChannel } from './production/analysts-adapter.js';
@@ -502,13 +503,19 @@ export class LoggingTickSkipAlertChannel implements TickSkipAlertChannel {
  * `TradeChannelDataFailoverAlert` (data-failover-alert-channel.ts) is the
  * reachable-from-a-phone implementation `SAMURAI_ALERTS=telegram` (#322)
  * selects.
+ *
+ * Unlike the fill-poll and daily-batch alerts elsewhere in this file, a
+ * single failover on a single fetch belongs to the tick that caused it — so
+ * `trace_id` joins the enclosing tick when there is one (#1183) and keeps
+ * this constant only outside a tick, matching `production/data-failover.ts`'s
+ * own catch-line (#1118/#1181).
  */
 export class LoggingDataFailoverAlertChannel implements DataFailoverAlertChannel {
   constructor(private readonly logger: Logger) {}
 
   async postDataFailoverAlert(alert: DataFailoverAlert): Promise<void> {
     this.logger.log({
-      trace_id: 'data-failover',
+      trace_id: currentTraceId() ?? 'data-failover',
       stage: 'orchestrator',
       event: 'ohlcv_failover_engaged',
       level: 'warn',
