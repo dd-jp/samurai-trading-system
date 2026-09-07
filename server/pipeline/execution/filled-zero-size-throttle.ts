@@ -68,15 +68,27 @@ function shouldWarnAt(consecutive: number): boolean {
  * throttle for that root's whole process lifetime — process-scoped, not
  * surface-scoped — so it is not scoped to any single `ExecutionImpl`,
  * including the per-verdict ones `buildExecutionStep` keeps rebuilding.
- * NOT a module-level singleton: two roots built in the same process — the
- * live and control arms included — must not share, or leak into, each
- * other's throttle state, and two instances built in the same test process
- * must not either. (`control-arm-wiring.ts`'s own comment gives its
- * separate instance a different reason — process-scoped state matching
- * each root's own instance lifetime, the same symmetry `broker`/`store`/
- * `costModel` get there — not cross-arm leakage: `arm` already rides in
- * `idempotency_key`, #753, so keys can't collide even if one instance were
- * shared.)
+ * NOT a module-level singleton. The live and control arms are NOT the
+ * collision case: `computeIdempotencyKey` (#753, idempotency-key.ts) hashes
+ * `arm` into the payload for every non-live arm (`TradingArm` is only
+ * `'live' | 'control'`), so the two arms' keys never collide even if one
+ * instance were shared — `control-arm-wiring.ts`'s own comment gives its
+ * separate throttle a different reason, process-scoped state matching each
+ * root's own instance lifetime, the same symmetry `broker`/`store`/
+ * `costModel` get there, not cross-arm leakage. The real collision risk is
+ * a root that bypasses `computeIdempotencyKey` and hand-assigns a literal
+ * `idempotency_key` instead, the way every scenario in `smoke-run.ts` and
+ * every `seedPosition`/fixture helper in this directory's own test files
+ * do: `smoke-run.ts`'s own restart scenario builds a SECOND throttle
+ * (`restartExecutionAndReconcile`) and calls `ingestFills()` again over the
+ * SAME store the first throttle already polled, using the same literal lot
+ * keys — sharing one instance there would carry a pre-"restart" consecutive
+ * count across the simulated restart, which the restart-clean posture above
+ * exists to prevent. Every test file constructing its own throttle per test
+ * guards the same thing: a handful of literal keys ('key-1', 'key-flaky',
+ * …) recur across many independently-built instances in the one test
+ * process, and a shared instance would leak one test's count into
+ * another's.
  */
 export class FilledZeroSizeThrottle {
   readonly #consecutive = new Map<string, number>();
