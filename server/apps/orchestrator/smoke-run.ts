@@ -1645,11 +1645,13 @@ async function runExitPathScenarios(input: {
   const residualSweep = await runResidualSweepScenario(ctx);
   // #549/#1228: the Simulated feed re-offers a flatten's fill on every poll,
   // so an extra `ingestFills()` before the restart would retry (and heal)
-  // this failed re-arm in-process — `PostSweepScenarioContext` makes that
-  // call unreachable inside the three functions below, but `ctx` here is
-  // still the wide `ExitPathScenarioContext` (needed for the calls above),
-  // so a statement added directly in THIS function between here and the
-  // restart is not caught by the type system — only review catches that one.
+  // this failed re-arm in-process. `PostSweepScenarioContext` makes that
+  // call unreachable inside the three functions below. It does not close a
+  // statement added directly in THIS function between here and the restart
+  // — the bare `execution` local above (not just `ctx`) is still in scope,
+  // so no context type could close this route — but that route is caught by
+  // the runtime #549 gate assertion below (`sweepDivergenceAction`/
+  // `markerCleared`/`protectedQty`), not the compiler.
   await exitCrashRestartLotWithoutSweep(ctx, crashRestartLot.exitKey);
   const terminalSweepKey = await seedTerminalSweepRow(ctx);
   const { restarted, restartReconcile } = await restartExecutionAndReconcile(ctx);
@@ -1732,7 +1734,12 @@ interface ExitPathScenarioContext {
  * type instead of `ExitPathScenarioContext`, so `ctx.execution` does not
  * type-check inside them — an edit that adds an `ingestFills()` call to one
  * of them, or a new scenario function slotted in beside them, fails to
- * compile rather than passing the gate silently.
+ * compile rather than failing the gate later. The runtime #549 gate
+ * assertion already catches the call from anywhere else in this window
+ * (it demands positive evidence — a sweep divergence, a cleared marker —
+ * that a healed-in-process residual cannot produce); this type only moves
+ * that failure from `yarn smoke` to `yarn typecheck` for these three
+ * functions specifically.
  */
 type PostSweepScenarioContext = Omit<ExitPathScenarioContext, 'execution'>;
 
