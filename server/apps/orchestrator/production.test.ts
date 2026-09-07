@@ -1222,8 +1222,8 @@ describe('buildProductionComponents', () => {
      * `apiKey`/`baseUrl` have no such constant (they are
      * `FAKE_SENTIMENT_CREDENTIALS`' own fields, asserted against that fixture
      * instead), `windowMs` has one (`GROK_REFRESH_MS`), and `logger` is
-     * asserted by reference against the same `recordingLogger()` instance
-     * `stubConfig` was given.
+     * asserted against the same `recordingLogger()` instance `stubConfig` was
+     * given.
      */
     it(
       'passes apiKey, baseUrl, the routed model alias, windowMs, and logger through to ' +
@@ -1243,6 +1243,7 @@ describe('buildProductionComponents', () => {
 
         buildProductionComponents(config);
 
+        expect(tryNousCredentialsMock).toHaveBeenCalledTimes(1);
         expect(XSearchClientMock).toHaveBeenCalledTimes(1);
         expect(XSearchClientMock).toHaveBeenCalledWith(
           expect.objectContaining({
