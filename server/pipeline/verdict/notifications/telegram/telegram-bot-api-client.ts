@@ -162,10 +162,12 @@ const REJECTION_ALERT_EVERY = 3;
  * takes: a failed send is individually swallowed by the caller's own
  * `.catch`, so nothing else surfaces that a pattern is forming until an
  * operator goes looking. It posts over the transport it is reporting on, so
- * it arrives if and only if `#alertChatId` is reachable at the instant the
- * escalation fires — a property of that instant, not of what class of
- * failure produced the count; see `#recordDeliveryFailure`'s doc (#1130),
- * and `alert_delivery_failures` for the surface that answers regardless.
+ * it arrives only if `#alertChatId` is reachable at the instant the
+ * escalation fires — a necessary condition about that instant, not a
+ * partition of failure classes, and NOT sufficient (this send has its own
+ * `#call`, which can fail on its own). See `#recordDeliveryFailure`'s doc
+ * (#1130), and `alert_delivery_failures` for the surface that answers
+ * regardless.
  */
 const DELIVERY_FAILURE_ALERT_EVERY = 3;
 
@@ -666,8 +668,14 @@ export class TelegramBotApiClient implements TelegramClient {
    * It posts to `#alertChatId` over this same `#call`/`sendMessage` path —
    * the exact transport that just exhausted its retries. The guarantee that
    * buys is exactly one thing, and it is narrower than a statement about
-   * failure classes: **the notice arrives if and only if this chat is
-   * reachable at the instant the escalation fires.**
+   * failure classes: **the notice arrives only if this chat is reachable at
+   * the instant the escalation fires.** Necessary, not sufficient — the
+   * converse does not hold, because this escalation's own `#call` can fail
+   * for reasons independent of the chat (the misconfigured `baseUrl` this
+   * module's header names as the live threat is exactly one), and its
+   * failure is swallowed into `telegram_delivery_escalation_failed` below.
+   * So a chat that is up does not guarantee the notice was sent, and a
+   * notice that arrived proves only that the chat was up when it did.
    *
    * That partition does NOT line up with "content problem vs channel
    * problem", and earlier wording here claimed it did. Two corrections, both

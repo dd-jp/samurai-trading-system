@@ -605,8 +605,9 @@ describe('TelegramBotApiClient — transient network failures and undeliverable 
   });
 
   // #1130: this notice posts to `#alertChatId` over the SAME transport that
-  // just exhausted its retries, so it arrives iff that chat is reachable at
-  // the instant it fires — which is a fact about one instant, not about what
+  // just exhausted its retries, so it arrives only if that chat is reachable
+  // at the instant it fires (necessary, not sufficient — the escalation's own
+  // `#call` can fail independently) — a fact about one instant, not about what
   // class of failure produced the count, and its ABSENCE is not observable
   // by anyone. The text must therefore make no forward-looking delivery
   // claim in EITHER direction, and must point at `alert_delivery_failures`
