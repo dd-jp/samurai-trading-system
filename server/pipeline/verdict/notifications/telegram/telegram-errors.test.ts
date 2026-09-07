@@ -113,23 +113,93 @@ describe('classifyTelegramThrown', () => {
   });
 
   it('maps a bare network failure to a retryable network error, not a provider error (#1108)', () => {
-    const error = classifyTelegramThrown(new TypeError('fetch failed'), 'sendMessage');
+    // Shaped like real Node fetch()/undici: the exact message `fetch failed`
+    // with the DNS/connection/refusal detail on `.cause` — confirmed against
+    // Node v26.5.0's built-in fetch for ECONNREFUSED, ENOTFOUND, an unknown
+    // scheme, and a rejected privileged port; every one throws this way.
+    const error = classifyTelegramThrown(
+      new TypeError('fetch failed', { cause: new Error('connect ECONNREFUSED 127.0.0.1:9') }),
+      'sendMessage',
+    );
     expect(error).toBeInstanceOf(TelegramNetworkError);
     expect(error).not.toBeInstanceOf(TelegramProviderError);
     expect(isRetryableTelegramError(error)).toBe(true);
   });
 
-  // The classifier's own doc says undici's `TypeError` carries the exact
-  // message `fetch failed` with the DNS/connection detail on `.cause`, not
-  // appended to `.message` — verified empirically against Node's built-in
-  // fetch (both ECONNREFUSED and ENOTFOUND) when this was tightened from
-  // `startsWith` to `===`. A message that merely starts with the phrase is
-  // therefore not a signal this classifier has ever actually seen in the
-  // wild; treating it as a non-retryable provider error (rather than
-  // silently widening what's retryable) is the conservative default.
-  it('does not treat a merely-prefixed message as the bare network signal', () => {
+  // #1132: undici's error text carries no stability contract, so the
+  // classifier must not depend on the exact wording — only on `fetch()`'s
+  // structural signature for a request that never reached a server: a
+  // `TypeError` whose `.cause` is a plain `Error` (the transport detail),
+  // not a `TypeError` itself (see the next test for why that second clause
+  // matters). A differently-worded message with that shape must still
+  // retry, or a future runtime wording change silently reproduces #1108.
+  it('classifies a differently-worded network TypeError by its cause shape, not exact message text (#1132)', () => {
     const error = classifyTelegramThrown(
-      new TypeError('fetch failed: connect ECONNREFUSED 127.0.0.1:443'),
+      new TypeError('network request failed', { cause: new Error('ECONNRESET') }),
+      'sendMessage',
+    );
+    expect(error).toBeInstanceOf(TelegramNetworkError);
+    expect(error).not.toBeInstanceOf(TelegramProviderError);
+    expect(isRetryableTelegramError(error)).toBe(true);
+  });
+
+  it('does not treat a network-shaped message with no cause as the bare network signal', () => {
+    const error = classifyTelegramThrown(new TypeError('fetch failed'), 'sendMessage');
+    expect(error).toBeInstanceOf(TelegramProviderError);
+    expect(error).not.toBeInstanceOf(TelegramNetworkError);
+    expect(isRetryableTelegramError(error)).toBe(false);
+  });
+
+  // Pins the discriminator's `instanceof TypeError` clause: only `fetch()`
+  // itself throws the network `TypeError`, so a differently-typed `Error`
+  // that merely happens to carry a `.cause` (an `Error`, not a `TypeError`)
+  // must not be treated as the network signal.
+  it('does not treat a non-TypeError Error with a cause as the bare network signal', () => {
+    const error = classifyTelegramThrown(
+      new Error('some other failure', { cause: new Error('detail') }),
+      'sendMessage',
+    );
+    expect(error).toBeInstanceOf(TelegramProviderError);
+    expect(error).not.toBeInstanceOf(TelegramNetworkError);
+    expect(isRetryableTelegramError(error)).toBe(false);
+  });
+
+  // Pins the discriminator's `cause instanceof Error` clause as distinct
+  // from a looser `cause !== undefined` check: in every network-failure
+  // shape probed (ECONNREFUSED, ECONNRESET, ENOTFOUND, an unknown scheme,
+  // a rejected privileged port — see the probe note above), `.cause` was
+  // an `Error` carrying the OS/DNS detail, never a bare string or other
+  // value. A `.cause` of some other shape is not a signal this classifier
+  // has been shown to see, so it should not widen what's retried.
+  it('does not treat a TypeError with a non-Error cause as the bare network signal', () => {
+    const error = classifyTelegramThrown(
+      new TypeError('fetch failed', { cause: 'not an Error instance' }),
+      'sendMessage',
+    );
+    expect(error).toBeInstanceOf(TelegramProviderError);
+    expect(error).not.toBeInstanceOf(TelegramNetworkError);
+    expect(isRetryableTelegramError(error)).toBe(false);
+  });
+
+  // A misconfigured `baseUrl` never reaches this classifier via a bare
+  // `new URL()` call — `#request` interpolates `#baseUrl` into a string and
+  // hands it straight to `fetch()`, which parses the URL itself. This suite
+  // fences `globalThis.fetch` against the network (vitest.setup.ts), so the
+  // shape below is not exercised live here; it is transcribed from a
+  // standalone `node` probe run outside the suite against Node v26.5.0 (this
+  // project's floor is Node >=24, so only that one version was checked):
+  // `fetch('not a valid url')` throws `TypeError: Failed to parse URL from …`
+  // whose `.cause` is itself `TypeError: Invalid URL` — the WHATWG URL spec
+  // mandates a `TypeError` on parse failure, a documented, engine-independent
+  // contract, unlike undici's own error prose. A cause-presence-only check
+  // would misclassify this as the retryable network case, since it does
+  // carry a `.cause`; excluding a `TypeError`-shaped cause is what keeps a
+  // config fault like this one non-retryable.
+  it('maps a real malformed-baseUrl failure shape (TypeError caused by a TypeError) to a non-retryable provider error', () => {
+    const error = classifyTelegramThrown(
+      new TypeError('Failed to parse URL from not a valid url/botXXXX/sendMessage', {
+        cause: new TypeError('Invalid URL'),
+      }),
       'sendMessage',
     );
     expect(error).toBeInstanceOf(TelegramProviderError);

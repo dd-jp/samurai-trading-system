@@ -60,6 +60,11 @@ export class TelegramProviderError extends Error {
  * differently: this is a transient local/transport blip, not Telegram
  * rejecting the request, so it belongs in the retryable set the same way a
  * timeout does.
+ *
+ * Classified structurally, not by matching `fetch failed` as text (#1132):
+ * undici's error text carries no stability contract, so a future runtime's
+ * wording change must not silently turn this back into a dropped alert. See
+ * `classifyTelegramThrown`'s doc for the discriminator and its evidence.
  */
 export class TelegramNetworkError extends Error {
   constructor(message: string) {
@@ -163,16 +168,39 @@ export async function classifyTelegramResponse(
  * `AbortError` — the poll loop's own `stop()` — is deliberately mapped to
  * `TelegramProviderError` with no status: not a timeout, and not retryable.
  *
- * Only a genuine bare network failure is a `TelegramNetworkError` (#1108):
- * Node/undici's `fetch` throws a `TypeError` with the exact message `fetch
- * failed` (cause carries the DNS/connection detail) when the request never
- * reached a server, and that is the sole signal accepted here. Everything
- * else thrown by `#request`'s try block — `JSON.stringify` on a circular
- * body, `new URL()` on a malformed `baseUrl`, or any other deterministic
- * programming/config fault — falls to `TelegramProviderError` (non-retryable)
- * instead: those are not transient, and retrying one 3x with backoff on
- * every alert send would fail the same way every time while masking the
- * actual defect.
+ * A genuine bare network failure becomes a `TelegramNetworkError` (#1108),
+ * decided structurally rather than by matching `fetch failed` as literal
+ * text (#1132: undici's error text carries no stability contract — a future
+ * runtime rewording it, even by a suffix, would silently reproduce #1108's
+ * dropped-alert bug in the exact channel that exists to report it). The
+ * signal accepted here is: a `TypeError` whose `.cause` is itself an `Error`
+ * but not a `TypeError`. Verified against Node v26.5.0's built-in fetch
+ * (this project's floor is Node >=24; only that one version was probed, via
+ * a standalone script outside this suite's network-guarded test runner):
+ *
+ * - A request that never reached a server (ECONNREFUSED, ECONNRESET,
+ *   ENOTFOUND, an unroutable/unknown scheme, a rejected privileged port) —
+ *   every case tried — throws `TypeError: fetch failed` whose `.cause` is a
+ *   plain `Error` (a Node `SystemError` or similar) carrying the OS/DNS
+ *   detail. `.cause instanceof TypeError` is false in every case observed.
+ * - A malformed URL, whether from `fetch()` parsing a bad `baseUrl` string
+ *   directly or from a bare `new URL()` call, throws a `TypeError` whose
+ *   `.cause` (when `fetch()` itself did the parsing) is *also* a `TypeError`
+ *   — the WHATWG URL spec mandates `TypeError` on parse failure, a
+ *   documented cross-engine contract, unlike undici's own prose. That is
+ *   why the discriminator excludes a `TypeError`-shaped cause rather than
+ *   just checking `cause !== undefined`: cause-presence alone cannot tell a
+ *   misconfigured `baseUrl` (a config fault, not transient) from a real
+ *   network failure, since `fetch()`'s own URL-parse failure also carries a
+ *   `.cause`.
+ * - `JSON.stringify` on a circular body and a `RangeError` carry no `.cause`
+ *   at all, so they fall through regardless of the cause-shape clause.
+ *
+ * Everything that doesn't match — a circular-JSON `TypeError`, a malformed
+ * `baseUrl`, a `RangeError`, or any other deterministic programming/config
+ * fault — falls to `TelegramProviderError` (non-retryable) instead: those
+ * are not transient, and retrying one 3x with backoff on every alert send
+ * would fail the same way every time while masking the actual defect.
  */
 export function classifyTelegramThrown(error: unknown, context: string): TelegramError {
   if (
@@ -198,7 +226,11 @@ export function classifyTelegramThrown(error: unknown, context: string): Telegra
   if (name === 'AbortError') {
     return new TelegramProviderError(`Telegram Bot API transport failure: ${detail} (${context})`);
   }
-  if (error instanceof TypeError && error.message === 'fetch failed') {
+  if (
+    error instanceof TypeError &&
+    error.cause instanceof Error &&
+    !(error.cause instanceof TypeError)
+  ) {
     return new TelegramNetworkError(`Telegram Bot API transport failure: ${detail} (${context})`);
   }
   return new TelegramProviderError(`Telegram Bot API transport failure: ${detail} (${context})`);
