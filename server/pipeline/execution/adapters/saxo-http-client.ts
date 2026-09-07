@@ -14,6 +14,7 @@
  */
 import type { RetryConfig } from '../../../shared/index.js';
 import { fetchWithTimeout, truncateForError, withRetry } from '../../../shared/index.js';
+import type { SaxoHttpMethod } from './saxo-broker-errors.js';
 import {
   classifySaxoBrokerNetworkError,
   classifySaxoBrokerResponse,
@@ -64,6 +65,17 @@ interface AccountIdentity {
   accountKey: string;
   clientKey: string;
 }
+
+/**
+ * `RequestInit` with `method` narrowed from optional `string` to a required
+ * `SaxoHttpMethod` (#1223) — every call into `request()` must state its verb
+ * explicitly, and that verb is the ONLY thing that decides whether a
+ * status-less transport failure gets retried (`classifySaxoBrokerNetworkError`
+ * reads it back out). This is what stops a new operation from silently
+ * inheriting `fetch`'s implicit "no method means GET" default and picking up
+ * transport retries it never asked for.
+ */
+type SaxoRequestInit = Omit<RequestInit, 'method'> & { method: SaxoHttpMethod };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -293,7 +305,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
 
   private async request<T>(
     path: string,
-    init: RequestInit,
+    init: SaxoRequestInit,
     context: string,
     validate: (body: unknown, context: string) => T,
     retry: RetryConfig = this.retry,
@@ -309,7 +321,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
             this.timeoutMs,
           );
         } catch (cause) {
-          throw classifySaxoBrokerNetworkError(cause, context);
+          throw classifySaxoBrokerNetworkError(cause, context, init.method);
         }
         if (!response.ok) {
           throw await classifySaxoBrokerResponse(response, context);
