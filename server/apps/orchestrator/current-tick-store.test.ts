@@ -41,6 +41,14 @@ describe('SqliteCurrentTickStore', () => {
     expect(store.get('AAPL')).toEqual(row());
   });
 
+  it("rests holding position_check, the tick path's own stage (#1233)", () => {
+    const store = makeStore();
+
+    store.upsert(row({ stage: 'position_check' }));
+
+    expect(store.get('AAPL')).toEqual(row({ stage: 'position_check' }));
+  });
+
   it('overwrites the row per stage on subsequent upserts (update)', () => {
     const store = makeStore();
 
