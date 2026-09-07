@@ -742,6 +742,16 @@ describe('SqliteQueryStore.getAlertDeliveryFailureCount (#1108)', () => {
   const ALERT_CHAT_ID = 'chat-1';
   const HEARTBEAT_CHAT_ID = 'chat-heartbeat';
 
+  // In an `afterEach`, not at the end of the one test body that stubs
+  // `fetch`: a failing `expect` aborts the body, and an always-rejecting
+  // global `fetch` would then leak into every later test in this file. The
+  // hook runs whether the test passed, failed or threw. Deliberately local
+  // rather than `unstubGlobals: true` in vitest.config.ts, which would
+  // change teardown for every file in the suite.
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   function seedFailure(db: SharedStore, at: Date, chatId: string = ALERT_CHAT_ID): void {
     db.prepare(
       `INSERT INTO alert_delivery_failures (chat_id, method, body, error, timestamp)
@@ -830,9 +840,14 @@ describe('SqliteQueryStore.getAlertDeliveryFailureCount (#1108)', () => {
     for (let i = 0; i < 5; i++) {
       await expect(client.sendMessage(ALERT_CHAT_ID, `alert ${i}`)).rejects.toThrow();
     }
-    // Lets the fire-and-forget escalation attempts (themselves rejected,
-    // since fetchMock always rejects) settle before reading the count.
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    // Waits on the thing the test is about rather than on the clock: six
+    // fetches is five awaited sends (`maxAttempts: 1`) plus the one
+    // fire-and-forget escalation the 3rd failure fires
+    // (`DELIVERY_FAILURE_ALERT_EVERY` is 3, and 5 % 3 !== 0, so exactly one).
+    // A bare `setTimeout(5)` here was load-flaky and proved nothing; this
+    // asserts the escalation was actually attempted, which is the whole
+    // point of expecting 5 rows and not 6 below.
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(6));
 
     // `recordFailure` stamps the REAL wall clock (`new Date()`), not the
     // fixture `NOW` above — read forward of it, not at it, or every row
@@ -841,8 +856,6 @@ describe('SqliteQueryStore.getAlertDeliveryFailureCount (#1108)', () => {
     expect(new SqliteQueryStore(db, 30, ALERT_CHAT_ID).getAlertDeliveryFailureCount(readAsOf)).toBe(
       5,
     );
-
-    vi.unstubAllGlobals();
   });
 });
 

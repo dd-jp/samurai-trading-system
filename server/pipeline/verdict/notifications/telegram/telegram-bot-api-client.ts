@@ -161,9 +161,11 @@ const REJECTION_ALERT_EVERY = 3;
  * after (#1108) — the same "don't sit silently" posture `REJECTION_ALERT_EVERY`
  * takes: a failed send is individually swallowed by the caller's own
  * `.catch`, so nothing else surfaces that a pattern is forming until an
- * operator goes looking. Only ever reaches the operator for a content-class
- * failure, not a channel outage — see `#recordDeliveryFailure`'s doc (#1130)
- * for why, and `alert_delivery_failures` for the surface that covers both.
+ * operator goes looking. It posts over the transport it is reporting on, so
+ * it arrives if and only if `#alertChatId` is reachable at the instant the
+ * escalation fires — a property of that instant, not of what class of
+ * failure produced the count; see `#recordDeliveryFailure`'s doc (#1130),
+ * and `alert_delivery_failures` for the surface that answers regardless.
  */
 const DELIVERY_FAILURE_ALERT_EVERY = 3;
 
@@ -662,12 +664,32 @@ export class TelegramBotApiClient implements TelegramClient {
    *
    * **What the "channel degraded" notice below is (and is not) for (#1130).**
    * It posts to `#alertChatId` over this same `#call`/`sendMessage` path —
-   * the exact transport that just exhausted its retries. That means it can
-   * only ever arrive when this chat is still reachable: a content-specific
-   * failure (an oversized or malformed body, a transient rate limit these
-   * particular retries didn't cover), never a genuine channel outage — the
-   * one condition #1108 opened with, where ten alerts and all three of that
-   * incident's escalation attempts alike went nowhere. There is no
+   * the exact transport that just exhausted its retries. The guarantee that
+   * buys is exactly one thing, and it is narrower than a statement about
+   * failure classes: **the notice arrives if and only if this chat is
+   * reachable at the instant the escalation fires.**
+   *
+   * That partition does NOT line up with "content problem vs channel
+   * problem", and earlier wording here claimed it did. Two corrections, both
+   * measured against this file:
+   *
+   *  - Intermittent transport failure lands on BOTH sides. Three sends can
+   *    exhaust `DEFAULT_RETRY` against a real outage that then lifts before
+   *    the third failure's escalation fires, and the notice gets through —
+   *    so an arriving notice is not evidence the channel was healthy. It is
+   *    evidence about one instant only.
+   *  - The oversized-body example this doc used to lead with cannot occur.
+   *    `#capForWire` runs `capOutboundText` on every `sendMessage` and
+   *    `sendApprovalButtons` body, and that function computes its cut as
+   *    `TELEGRAM_MAX_MESSAGE_CHARS - suffix.length` *before* appending, so
+   *    the wire body is always <= 4,096 — #1108's own fix. A rate limit is
+   *    likewise not "content-specific": it is a property of the sender's
+   *    traffic, and it was listed inside a set labelled content-specific.
+   *
+   * The other direction matters just as much for the operator: the notice's
+   * ABSENCE is not diagnostic. Nobody can observe a message they never
+   * received, so silence is indistinguishable from a healthy channel. That
+   * is why the durable count, not this notice, is the surface. There is no
    * alternative transport to fail over to: `DiscordClient` exists as a type
    * in this repo (notifications/types.ts) but no implementation of it is
    * ever constructed, and `alert-transport.ts`'s composition root wires
@@ -682,7 +704,16 @@ export class TelegramBotApiClient implements TelegramClient {
    * nonzero — is what actually answers "is the channel down": it is a
    * straight read of this table, so it survives regardless of whether any
    * Telegram send, including this escalation's own attempt, could get
-   * through.
+   * through — subject to its own precondition, which `types.ts`'s
+   * `getAlertDeliveryFailureCount` doc states in full: a service-api process
+   * holding a *wrong* `TELEGRAM_CHAT_ID` counts zero and renders nothing.
+   *
+   * The two numbers have different denominators, and the sent text below
+   * says so rather than leaving an operator to reconcile them. This
+   * method's `#deliveryFailureCount` is in-process and resets with the
+   * process; the tile counts rows all-time (`alert-delivery-log.ts`'s
+   * `countFailures` bounds `timestamp` above by `asOf` and not at all
+   * below), so a nonzero tile can be a transient failure from weeks ago.
    *
    * `error: detail` in the `#log` payload below is masked centrally by
    * `formatLogLine`'s `redactPayload` walk — but `message` is a plain string
@@ -737,10 +768,12 @@ export class TelegramBotApiClient implements TelegramClient {
         text:
           `Samurai alert channel degraded: ${this.#deliveryFailureCount} Telegram sends have ` +
           'failed permanently after retries so far this run, so recent escalations may not ' +
-          'have reached you. This notice can only reach you if this chat itself is still ' +
-          'reachable, so it will not arrive during a genuine channel outage — the dashboard ' +
-          'alert-channel tile (alert_delivery_failures) is the record of that, not this ' +
-          'message.',
+          'have reached you. That you are reading this proves only that this chat was ' +
+          'reachable at the moment the notice fired — it does not mean the failures were ' +
+          'something other than a channel problem, and a notice you never receive tells you ' +
+          'nothing either way. The dashboard alert-channel tile is the durable record: it ' +
+          'counts alert_delivery_failures rows for this chat all-time, across every run, so ' +
+          'its number is a different denominator from the one above.',
       }).catch((escalationError: unknown) => {
         // Same reason `detail` above is wrapped: this escalation send itself
         // reaches `#call`/`#request` and can fail against the very

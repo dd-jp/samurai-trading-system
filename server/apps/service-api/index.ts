@@ -207,6 +207,22 @@ const providers = new ProviderStatusPoller({ alpaca: buildAlpacaClient() });
  * boot below rather than reached silently, so an operator who expected
  * `telegram` mode and sees this warning knows the tile cannot tell them
  * anything, rather than reading a healthy 0.
+ *
+ * A set-but-WRONG value is NOT warned on, and #1130 turns that from a
+ * hypothetical into a live gap: the tile is now the sole channel-down
+ * surface, so filtering on a chat nothing ever wrote to returns 0, renders
+ * no tile, and reads exactly like a healthy channel. It is not warned on
+ * because this process cannot cheaply tell "wrong" from "right" — it never
+ * sees the orchestrator's value (separate process, no shared handshake), and
+ * the one local signal, `alert_delivery_failures` holding rows but none for
+ * `alertChatId`, is precisely the heartbeat-chat row class `countFailures`
+ * exists to filter out (#342), so it would fire on a single heartbeat hiccup
+ * on a correctly configured host. A real fix is a handshake (the
+ * orchestrator publishing the chat it alerts on, this process comparing
+ * against it), which is a mechanism change and deliberately out of scope for
+ * #1130's docs-only remit. Documented instead at both read sites:
+ * `types.ts`'s `getAlertDeliveryFailureCount` and
+ * `client/src/components/Rail.tsx`'s `AlertDeliveryBlock`.
  */
 const alertChatId = ((): string | undefined => {
   const raw = (process.env.TELEGRAM_CHAT_ID ?? '').trim();

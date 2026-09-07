@@ -303,10 +303,24 @@ export interface DashboardQueryStore {
    * (`telegram-bot-api-client.ts`'s `#recordDeliveryFailure`) posts over the
    * exact chat/transport it is reporting on, so it cannot arrive during a
    * real outage — only this tile can, because it is a plain SQL read of a
-   * durable table, crossing no live transport at read time. That holds when
-   * this process's own `TELEGRAM_CHAT_ID` (index.ts) agrees with the
-   * orchestrator's — the same config-agreement caveat noted above — and
-   * reads 0 by design under `log-only`, where nothing is ever sent to mark.
+   * durable table, crossing no live transport at read time.
+   *
+   * **The precondition, and what violating it looks like (#1130 review
+   * round 1).** This count is only as good as this process's own
+   * `TELEGRAM_CHAT_ID` (`server/apps/service-api/index.ts`, which reads and
+   * normalizes it the way `alert-transport.ts` does for the orchestrator).
+   * That process warns at boot when the var is UNSET; a set-but-WRONG value
+   * is accepted silently, this method then filters on a chat nothing ever
+   * wrote to, and returns 0. `Rail.tsx`'s `AlertDeliveryBlock` renders
+   * nothing at 0, so the tile is ABSENT — byte-identical to a healthy
+   * channel.
+   *
+   * Tile absence is therefore three states, and only two are named at boot:
+   * healthy, `log-only` (warned, and 0 by design there — nothing is ever
+   * sent to mark), and chat-mismatch (silent). Since #1130 makes this tile
+   * the sole channel-down surface, that third state is a silent false
+   * all-clear. It is documented here, not mitigated — index.ts's
+   * boot-warning block carries why detecting it is not cheap.
    */
   getAlertDeliveryFailureCount(asOf: Date): number;
 }
