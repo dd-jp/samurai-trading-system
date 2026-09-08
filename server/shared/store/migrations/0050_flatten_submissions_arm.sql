@@ -24,8 +24,8 @@
 --   RIGHT adapter and adopts correctly — which is why the two lines carry
 --   the SAME `idempotency_key` and both self-resolve within one poll
 --   interval, and why `fill-sync.ts`'s shared `RECONCILE_TRACE_ID` on both
---   loops (a separate, non-load-bearing confusion, left as `runPoll`'s own
---   follow-up) made the two independent passes look like one.
+--   loops (a separate, non-load-bearing confusion, filed as #1321) made the
+--   two independent passes look like one.
 -- - The narrower, unobserved-but-real direction: if the live arm's pass reads
 --   a control row still at `'submitting'` (the control's own `submitFlatten`
 --   has not yet returned), the SAME wrong-broker null looks like "the
