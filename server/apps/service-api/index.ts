@@ -218,7 +218,7 @@ const providers = new ProviderStatusPoller({ alpaca: buildAlpacaClient() });
  * per row (migration 0043), and the only path that writes rows is
  * `alert-transport.ts`'s telegram branch — the one place in the tree that
  * supplies a `TelegramBotApiClient` with an `alertDeliveryLog` at all — so
- * at most two ids appear in this table: `sendMessage` and
+ * at most two ids appear in this table per configuration: `sendMessage` and
  * `sendApprovalButtons` are the only callers of `#recordDeliveryFailure`,
  * each posting to a chat that branch fixes from env (`TELEGRAM_CHAT_ID`, or
  * `TELEGRAM_HEARTBEAT_CHAT_ID` for the beat when it builds the heartbeat

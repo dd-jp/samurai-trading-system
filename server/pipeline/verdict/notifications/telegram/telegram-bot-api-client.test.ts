@@ -638,10 +638,9 @@ describe('TelegramBotApiClient — transient network failures and undeliverable 
   // through the explicit `can(?:not)?` branch — a prior version of this
   // alternation used a bare `can` and silently missed `'cannot arrive'`,
   // one of the very examples the guard's own comment above lists as caught.
-  // Pinned
-  // per-string so a future edit to the alternation that reopens this gap
-  // fails here directly. This table is one-directional (every case here is a
-  // claim the guard MUST catch); it cannot by itself catch the alternation
+  // Pinned per-string so a future edit to the alternation that reopens this
+  // gap fails here directly. This table is one-directional (every case here
+  // is a claim the guard MUST catch); it cannot by itself catch the alternation
   // going too wide — that direction is pinned by the aggregate
   // `.toEqual([])` assertion below, run against the real wire text.
   it.each([
