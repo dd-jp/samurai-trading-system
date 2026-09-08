@@ -398,7 +398,10 @@ of them the direct test:
 1. **`DelayedByMinutes` is exchange-specific and matches each exchange's published standard
    delay** — `15` for `LSE_ETF`, `20` for `ASX`, read on the same token minutes apart. A staleness
    marker caused by market closure would not be keyed to the exchange in exactly the pattern the
-   exchanges publish their own delay conventions in.
+   exchanges publish their own delay conventions in. *The ASX `20` here is the same reading the
+   contaminated control below rests on, and it survives: whether ASX was mid-session or between
+   sessions changes nothing about the field being keyed to the exchange. The control failed as a
+   test of session-dependence, not as an observation of the value.*
 2. **It lives in static series metadata.** In `chart/v3`, `DelayedByMinutes` sits inside
    `ChartInfo` alongside `ExchangeId` and `FirstSampleTime` — descriptors of the series, not of
    the current session.
