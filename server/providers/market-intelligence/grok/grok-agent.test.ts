@@ -5,6 +5,7 @@
 import type { SpendCap } from '../../../pipeline/debate-engine/index.js';
 import { SimulatedClock } from '../../../shared/index.js';
 import type { LogEntry, Logger } from '../../../shared/types.js';
+import { MiArchiveStore } from '../archive/mi-archive-store.js';
 import { MarketIntelligenceStore } from '../index.js';
 import type { IntelligenceItem } from '../types.js';
 import {
@@ -67,6 +68,7 @@ function build(
     /** Defaults to one item per call; pass `() => []` for the empty-answer shape. */
     items?: (fetchIndex: number) => IntelligenceItem[];
     logger?: Logger;
+    archive?: MiArchiveStore;
   } = {},
 ) {
   const clock = new SimulatedClock(START);
@@ -93,9 +95,15 @@ function build(
     spendSink: sink,
     clock,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
+    ...(options.archive === undefined ? {} : { archive: options.archive }),
   });
 
   return { agent, clock, store, sink, fetches: () => fetches };
+}
+
+/** An item with an X permalink `toArchiveProjection` accepts, so `#archive` writes. */
+function archivableItem(statusId: string): IntelligenceItem {
+  return { ...item(`i-${statusId}`), url: `https://x.com/someone/status/${statusId}` };
 }
 
 describe('floorToRefreshBucket', () => {
@@ -280,6 +288,29 @@ describe('GrokAgent', () => {
       await agent.refresh('t1', 'BTC-USD', 'crypto');
 
       expect(store.getContext('crypto', WINDOW_24H, 't1').social).toHaveLength(1);
+    });
+  });
+
+  describe('#archive (#1342)', () => {
+    class ThrowingArchive extends MiArchiveStore {
+      override write(): never {
+        throw new Error('disk full');
+      }
+    }
+
+    it("logs the archive-write failure under the refresh call's own trace_id", async () => {
+      const logger = recordingLogger();
+      const { agent } = build({
+        logger,
+        archive: new ThrowingArchive(),
+        items: () => [archivableItem('12345')],
+      });
+
+      await agent.refresh('caller-trace-9', 'BTC-USD', 'crypto');
+
+      const entry = logger.entries.find((e) => e.event === 'grok_archive_write_failed');
+      expect(entry).toBeDefined();
+      expect(entry?.trace_id).toBe('caller-trace-9');
     });
   });
 });
