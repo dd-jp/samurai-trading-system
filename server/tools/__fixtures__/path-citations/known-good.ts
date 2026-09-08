@@ -31,3 +31,5 @@ export const inertString =
 export const inertTemplate = `server/pipeline/also-does-not-exist.ts`;
 
 /** A block comment carries a resolving citation too: `server/tools/check-path-citations.ts`. */
+
+/** A marker works the same way inside a block comment: `src/api/` was removed. <!-- cite-exempt: historical — statement about a removed tree --> */

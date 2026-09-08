@@ -96,10 +96,10 @@ describe('the known-good code fixture (#1345)', () => {
     expect(kinds(report.violations)).toEqual([]);
   });
 
-  it('counts one exemption of each reason', () => {
+  it('counts one exemption of each reason, plus one extra historical (marker inside a block comment)', () => {
     expect(report.exemptByMarker).toEqual({
       foreign: 1,
-      historical: 1,
+      historical: 2,
       planned: 1,
       untracked: 1,
     });
@@ -107,9 +107,11 @@ describe('the known-good code fixture (#1345)', () => {
 
   it('scans citations out of // and /* */ comments, never out of a string or template literal', () => {
     // 4 unmarked resolving citations (a `//` directory, a `//` file, a `//` file:line, and
-    // one from a `/** */` block comment) + 4 marked ones. The string and template-literal
-    // lines each carry a path-shaped token too, and neither counts.
-    expect(report.citationsScanned).toBe(8);
+    // one from a `/** */` block comment) + 5 marked ones (one of each of the 4 exempt
+    // reasons via `//`, plus a `historical` marker inside a `/** */` block comment,
+    // proving the marker binds the same way there — round-2 review item 4). The string
+    // and template-literal lines each carry a path-shaped token too, and neither counts.
+    expect(report.citationsScanned).toBe(9);
   });
 });
 
@@ -168,12 +170,14 @@ describe('mutation: a deliberately bad in-code citation (#1345)', () => {
   });
 });
 
-describe('stringDelim resets per line, not carried across the file (#1375 review F1)', () => {
-  // An unmatched `'`/`"` on one line (a regex literal, JSX text — neither is a real
-  // multi-line string in valid TS) used to leave `stringDelim` set entering the next
-  // line, blanking every comment after it for the rest of the file. `'`/`"` cannot
-  // legitimately span a line, so the fix resets them at end-of-line; a backtick
-  // template literal is untouched by this test since it legitimately can span lines.
+describe('stringDelim resets per line, not carried across the file (#1375 review)', () => {
+  // An unmatched `'`, `"`, or backtick on one line (a regex literal, JSX text — none of
+  // these is a real multi-line string in valid TS, and a regex literal is not a template
+  // literal even when it contains a backtick) used to leave `stringDelim` set entering
+  // the next line, blanking every comment after it for the rest of the file. Every
+  // delimiter now resets unconditionally at end-of-line — a real template literal's
+  // continuation lines carry no `//` or `/*` of their own, so resetting and re-scanning
+  // them from a clean state blanks them harmlessly rather than losing protection.
 
   it('an apostrophe inside a regex literal does not swallow the next line’s citation', () => {
     const source =
@@ -205,6 +209,22 @@ describe('stringDelim resets per line, not carried across the file (#1375 review
 
   it('control: no apostrophe on the first line, the next line’s citation is still seen', () => {
     const source = 'const x = 1;\n// see `server/pipeline/verdict/gone-for-good.ts` for it\n';
+    const report = runCitationCheck({
+      root: REPO_ROOT,
+      files: ['server/synthetic-mutation.ts'],
+      knownRoots,
+      readMarkdown: () => source,
+    });
+    expect(kinds(report.violations)).toEqual([
+      'missing-path@2:server/pipeline/verdict/gone-for-good.ts',
+    ]);
+  });
+
+  it('a single backtick inside a regex literal does not swallow the next line’s citation', () => {
+    // The regex is not a template literal — it just contains a backtick character — but
+    // the naive delimiter tracker cannot tell the difference; this is round-2 review
+    // item 1, the same class as the apostrophe cases above, for the third quote type.
+    const source = 'const re = /`/;\n// see `server/pipeline/verdict/gone-for-good.ts` for it\n';
     const report = runCitationCheck({
       root: REPO_ROOT,
       files: ['server/synthetic-mutation.ts'],

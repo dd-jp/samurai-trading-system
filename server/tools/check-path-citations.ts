@@ -331,13 +331,17 @@ function stripFencedBlocks(lines: readonly string[]): string[] {
  * tracked as "opened by this quote char, closed by the same one, backslash escapes",
  * which cannot see a `${...}` interpolation re-entering code inside a template literal.
  * That is a false-negative risk (a citation inside an interpolated expression goes
- * unseen), the direction this file is allowed to err in — never a false positive, since
- * nothing outside an actual comment span is ever handed to the scanner. A `'`/`"` string
- * cannot legitimately span a line in valid TS, so an unterminated one (an apostrophe
- * inside a regex literal, JSX text, etc.) is reset at end-of-line rather than carried
- * forward — carrying it forward blanked every later comment in the file on one real
- * unterminated `'` upstream of a genuine citation. A backtick template literal legitimately
- * spans lines, so it is the one delimiter still carried across the loop.
+ * unseen), the direction this file is allowed to err in — no false positive short of a
+ * regex literal containing `//`, of which this tree has none.
+ *
+ * Every open delimiter — `'`, `"`, and a template's backtick alike — resets at
+ * end-of-line, unconditionally: none of the three can legitimately leave a real string
+ * open past a line's end in valid TS (a template literal's continuation lines are real
+ * source, but they carry no `//` or `/*` of their own, so resetting and re-scanning them
+ * from a clean state blanks them harmlessly rather than protecting anything). Carrying a
+ * delimiter across the loop was tried and measured worse: one dangling quote or backtick
+ * upstream blanked every later comment in the file, including this function's own doc
+ * comment.
  */
 function stripToComments(lines: readonly string[]): string[] {
   const out: string[] = [];
@@ -389,7 +393,7 @@ function stripToComments(lines: readonly string[]): string[] {
       i++;
     }
     out.push(buf);
-    if (stringDelim === "'" || stringDelim === '"') stringDelim = null;
+    stringDelim = null;
   }
   return out;
 }
@@ -597,9 +601,9 @@ export function markdownFilesIn(indexedPaths: readonly string[]): string[] {
 }
 
 /**
- * `.ts`/`.tsx` only — `.mts`/`.cts` are unused in this tree today (0 hits) and are out of
- * scope until one is added; `runCitationCheck`'s dispatch uses this same pattern so a file
- * neither `.md` nor matching it is skipped explicitly, not swept in by an else branch.
+ * `.ts`/`.tsx` only — `.mts`/`.cts` are unused in this tree and are out of scope until one
+ * is added; `runCitationCheck`'s dispatch uses this same pattern so a file neither `.md`
+ * nor matching it is skipped explicitly, not swept in by an else branch.
  */
 const CODE_EXTENSION_RE = /\.tsx?$/;
 
@@ -667,13 +671,16 @@ export function runCitationCheck(options: CheckOptions): Report {
       // actually read, not files attempted.
       continue;
     }
-    filesScanned++;
     const extract = file.endsWith('.md')
       ? extractCitations
       : CODE_EXTENSION_RE.test(file)
         ? extractCodeCitations
         : null;
+    // Reachable only via the `files` option (the default file set is always `.md` or
+    // `CODE_EXTENSION_RE`): a file matching neither is skipped, not counted scanned —
+    // `filesScanned` stays a fact about files this run actually extracted citations from.
     if (!extract) continue;
+    filesScanned++;
     const citations = extract(text, { file, knownRoots });
     citationsScanned += citations.length;
     for (const citation of citations) {
