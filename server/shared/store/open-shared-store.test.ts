@@ -1,12 +1,4 @@
-import {
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
@@ -108,16 +100,34 @@ const CONSOLIDATED_SCHEMA_TABLE_COUNT = 35;
 
 /**
  * The migration list, derived from disk so a new `NNNN_*.sql` file changes no
- * expectation below except `HIGHEST_KNOWN_MIGRATION_VERSION`. Every expectation
- * built from `MIGRATIONS`/`MIGRATION_VERSIONS` uses `listMigrations` as its own
- * oracle, so none of them can catch a migration deleted from disk — that
- * requires a literal `MIGRATION_VERSIONS` currently holds every integer
- * 1..`HIGHEST_KNOWN_MIGRATION_VERSION` contiguously (checked below), so a gap
- * from a deleted middle file reds too, not just a shortened tail.
+ * expectation below except `HIGHEST_KNOWN_MIGRATION_VERSION` (and, if the
+ * migration adds a table, `TABLES`/`CONSOLIDATED_SCHEMA_TABLE_COUNT` above —
+ * that list is independently maintained and out of scope here). Every
+ * expectation built from `MIGRATIONS`/`MIGRATION_VERSIONS` uses `listMigrations`
+ * as its own oracle, so none of them can catch a migration deleted from disk.
+ * Only a literal can: `HIGHEST_KNOWN_MIGRATION_VERSION` is checked below
+ * against a full 1..N contiguity assertion, not just the tail, so a deleted
+ * middle file reds too.
  */
 const MIGRATIONS = listMigrations(MIGRATIONS_DIR);
 const MIGRATION_VERSIONS = MIGRATIONS.map((migration) => migration.version);
 const HIGHEST_KNOWN_MIGRATION_VERSION = 51;
+
+/**
+ * A temp copy of `MIGRATIONS_DIR` containing only versions up to and including
+ * `cutoverVersion` — a checkout mid a cutover migration's own ticket, before
+ * the pre-existing rows its backfill targets are re-created against the real
+ * directory in the test.
+ */
+function copyMigrationsUpTo(cutoverVersion: number): string {
+  const dir = mkdtempSync(join(tmpdir(), `samurai-migrations-pre-${cutoverVersion}-`));
+  for (const migration of MIGRATIONS) {
+    if (migration.version <= cutoverVersion) {
+      copyFileSync(join(MIGRATIONS_DIR, migration.filename), join(dir, migration.filename));
+    }
+  }
+  return dir;
+}
 
 const tempDirs: string[] = [];
 
@@ -173,7 +183,15 @@ describe('openSharedStore', () => {
     expect(versions).toEqual(expectedVersions);
     expect(runMigrations(db)).toEqual([]);
     expect(db.prepare('SELECT version FROM schema_migrations').all()).toEqual(expectedVersions);
+  });
 
+  // Stands alone rather than living inside the no-op test above: it asserts on
+  // the migrations directory itself, not on `openSharedStore`, and every other
+  // expectation in this file is derived FROM `MIGRATION_VERSIONS` — so this is
+  // the one check that can catch a migration file deleted from disk. Folded
+  // into an unrelated test, deleting or skipping that test would silently drop
+  // this guarantee with the suite still green.
+  it('pins the migrations directory to a known, contiguous 1..N version list (#1397)', () => {
     expect(MIGRATION_VERSIONS).toEqual(
       Array.from({ length: HIGHEST_KNOWN_MIGRATION_VERSION }, (_, i) => i + 1),
     );
@@ -240,14 +258,9 @@ describe('openSharedStore', () => {
   // and check the UPDATE it runs.
   it('migration 0049 backfills pre-existing live rows to 0 and control rows to 1 (#1121)', () => {
     const raw = new BetterSqlite3(':memory:');
-    const preCutoverDir = mkdtempSync(join(tmpdir(), 'samurai-migrations-pre-0049-'));
+    const preCutoverVersion = 48;
+    const preCutoverDir = copyMigrationsUpTo(preCutoverVersion);
     try {
-      for (const filename of readdirSync(MIGRATIONS_DIR)) {
-        const match = /^(\d{4})_[\w-]+\.sql$/.exec(filename);
-        if (match && Number(match[1]) <= 48) {
-          copyFileSync(join(MIGRATIONS_DIR, filename), join(preCutoverDir, filename));
-        }
-      }
       runMigrations(raw, preCutoverDir);
 
       for (const [key, arm] of [
@@ -266,9 +279,9 @@ describe('openSharedStore', () => {
           .run(key, arm);
       }
 
-      // 0001..0048 are already recorded, so this applies every migration above 48.
+      // 0001..0048 are already recorded, so this applies every migration above the cutover.
       expect(runMigrations(raw, MIGRATIONS_DIR)).toEqual(
-        MIGRATION_VERSIONS.filter((version) => version > 48),
+        MIGRATION_VERSIONS.filter((version) => version > preCutoverVersion),
       );
 
       expect(
@@ -311,14 +324,9 @@ describe('openSharedStore', () => {
   // yields zero rows; only a malformed value raises.
   it('migration 0050 backfills each flatten row to its lots’ arm, falling back to live (#1124)', () => {
     const raw = new BetterSqlite3(':memory:');
-    const preCutoverDir = mkdtempSync(join(tmpdir(), 'samurai-migrations-pre-0050-'));
+    const preCutoverVersion = 49;
+    const preCutoverDir = copyMigrationsUpTo(preCutoverVersion);
     try {
-      for (const filename of readdirSync(MIGRATIONS_DIR)) {
-        const match = /^(\d{4})_[\w-]+\.sql$/.exec(filename);
-        if (match && Number(match[1]) <= 49) {
-          copyFileSync(join(MIGRATIONS_DIR, filename), join(preCutoverDir, filename));
-        }
-      }
       runMigrations(raw, preCutoverDir);
 
       raw
@@ -355,7 +363,7 @@ describe('openSharedStore', () => {
       insertFlatten.run('flatten-of-nothing', 'MU', null);
 
       expect(runMigrations(raw, MIGRATIONS_DIR)).toEqual(
-        MIGRATION_VERSIONS.filter((version) => version > 49),
+        MIGRATION_VERSIONS.filter((version) => version > preCutoverVersion),
       );
 
       expect(
