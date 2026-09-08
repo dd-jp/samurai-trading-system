@@ -1198,13 +1198,15 @@ describe('VerdictImpl.decide — stale AND unpriced mandatory flatten (#826, #89
   });
 
   /**
-   * A stale mark trips `stale_feed` first inside `#priceGates`, so it can
-   * never reach the `drift` branch — that made the third name in the
-   * original single-case version of this test unfalsifiable. This fixture
-   * uses a fresh mark instead, with the entry an unpriced flatten always
-   * carries (0), which is exactly what would trip `drift`'s
-   * `!(entry > 0)` guard (`#priceGates`, below the `stale_feed` check) if
-   * #826 did not skip `#priceGates` for this intent outright.
+   * A stale mark would trip `stale_feed` first inside `#priceGates`, were
+   * the gates to run at all, so it can never reach the `drift` branch —
+   * that made the third name in the original single-case version of this
+   * test unfalsifiable. This fixture uses a fresh mark instead, with the
+   * entry an unpriced flatten always carries (0), which is exactly what
+   * would trip `drift`'s `!(entry > 0)` guard (`#priceGates`, below the
+   * `stale_feed` check) if #826 did not skip `#priceGates` for this intent
+   * outright — under production code, `#priceGates` never runs for this
+   * intent, so neither the stale nor the fresh mark is ever consulted.
    */
   it('is not refused for drift when the mark is fresh but the intent carries no entry price', async () => {
     const verdict = new VerdictImpl();
