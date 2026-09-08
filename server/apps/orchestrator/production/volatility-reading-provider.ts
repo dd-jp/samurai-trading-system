@@ -55,7 +55,7 @@ import type {
   MarketDataService,
   TradingCalendar,
 } from '../../../providers/market-data-service/index.js';
-import { currentTraceId } from '../../../shared/index.js';
+import { currentTraceId, describeThrownSafely } from '../../../shared/index.js';
 import type { AssetClass, Logger, UniverseInstrument } from '../types.js';
 import type { VolatilityReadingProvider } from './direct-bind.js';
 
@@ -223,9 +223,7 @@ export class MarketDataVolatilityReadingProvider implements VolatilityReadingPro
           payload: {
             instrument: instrument.asset,
             asset_class: instrument.asset_class,
-            error: sanitizeErrorMessage(
-              result.reason instanceof Error ? result.reason.message : String(result.reason),
-            ),
+            error: sanitizeErrorMessage(describeThrownSafely(result.reason)),
           },
         });
         return { asset_class: instrument.asset_class, value: FAILURE_READING };

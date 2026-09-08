@@ -317,7 +317,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
         level: 'error',
         message: FILL_SYNC_RECONCILE_FAILED,
         payload: {
-          error: reconcileError instanceof Error ? reconcileError.message : String(reconcileError),
+          error: describeThrownSafely(reconcileError),
         },
       });
     }

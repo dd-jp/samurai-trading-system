@@ -144,6 +144,35 @@ describe('AlpacaHttpCalendarClient', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it('still spends the retry budget when a transport failure renders unsafely (#1351)', async () => {
+    class HostileTransportError extends Error {
+      override get message(): string {
+        throw new Error('render boom');
+      }
+    }
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new HostileTransportError())
+      .mockResolvedValueOnce(
+        jsonResponse([
+          { date: '2026-11-02', open: '09:30', close: '16:00' },
+          { date: '2026-11-03', open: '09:30', close: '16:00' },
+        ]),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpCalendarClient({
+      apiKey: FAKE_KEY,
+      apiSecret: FAKE_SECRET,
+      retry: { maxAttempts: 3, baseDelayMs: 1, maxDelayMs: 2 },
+    });
+
+    const days = await client.fetchCalendar({ start: '2026-11-01', end: '2026-11-30' });
+
+    expect(days.map((day) => day.date)).toEqual(['2026-11-02', '2026-11-03']);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('throws when ALPACA_API_KEY/SECRET are not set and none is passed explicitly', () => {
     const savedKey = process.env.ALPACA_API_KEY;
     const savedSecret = process.env.ALPACA_API_SECRET;

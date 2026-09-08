@@ -102,6 +102,7 @@ import {
   type Clock,
   type DebateLog,
   type DebateLogStore,
+  describeThrownSafely,
   type Logger,
   sanitizeLogText,
 } from '../../../shared/index.js';
@@ -1067,7 +1068,7 @@ function logDebateFailure(params: {
     message:
       `debate: ${instrument} failed before resolving — no debate_log row is written for a ` +
       'debate that produced no result (the write-once debate_id stays free for the re-run): ' +
-      sanitizeLogText(cause instanceof Error ? cause.message : String(cause)),
+      sanitizeLogText(describeThrownSafely(cause)),
     payload: { instrument, debate_id: computeDebateId(instrument, bar, views) },
   });
 }

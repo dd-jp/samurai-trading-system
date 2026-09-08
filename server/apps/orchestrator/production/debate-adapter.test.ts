@@ -80,11 +80,13 @@ interface FakeLlmOptions {
   converged?: boolean;
   /** Throws from the mediator call, standing in for a debate that fails partway. */
   failOnMediator?: boolean;
+  /** When set alongside `failOnMediator`, thrown instead of the default Error — #1351's hostile-value case. */
+  mediatorFailureValue?: unknown;
 }
 
 /** Routes by prompt content — mirrors what personas.ts's four prompt shapes actually say. */
 function fakeLlmClient(options: FakeLlmOptions = {}): LlmClient {
-  const { converged = true, failOnMediator = false } = options;
+  const { converged = true, failOnMediator = false, mediatorFailureValue } = options;
   return {
     async complete<T>(request: LlmRequest<T>) {
       let raw: string;
@@ -94,7 +96,7 @@ function fakeLlmClient(options: FakeLlmOptions = {}): LlmClient {
         raw = JSON.stringify({ stance: 'bearish', rationale: 'overbought risk' });
       } else if (request.prompt.includes('Mediator persona')) {
         if (failOnMediator) {
-          throw new Error('llm transport blew up mid-debate');
+          throw mediatorFailureValue ?? new Error('llm transport blew up mid-debate');
         }
         raw = JSON.stringify({ stance: 'bullish', rationale: 'bull case wins', converged });
       } else {
@@ -356,6 +358,58 @@ describe('buildDebateStep', () => {
     const missed = entries.find((entry) => entry.stage === 'debate' && entry.level === 'error');
     expect(missed).toBeDefined();
     expect(missed?.message).toContain('no debate_log row');
+  });
+
+  // #1351: `logDebateFailure` has no internal try/catch — an unguarded render
+  // of `cause` throws BEFORE `logger.log(...)` runs at all, so the
+  // `debate_unresolved` diagnostic line (the one thing this function exists
+  // to produce, per its own doc comment) never lands, and the render failure
+  // — not the original `cause` — becomes what the caller's `throw cause;`
+  // actually throws.
+  it('an unrenderable debate failure still logs debate_unresolved and still throws the ORIGINAL cause', async () => {
+    const store = new InMemoryDebateLogStore();
+    const { logger, entries } = recordingLogger();
+    // Circular (defeats `JSON.stringify`) with a throwing `Symbol.toPrimitive`
+    // (defeats the `String()` fallback too) — same shape as the #1262
+    // tick-loop hostile value.
+    const hostile: Record<string, unknown> = {
+      [Symbol.toPrimitive]: () => {
+        throw new Error('render boom');
+      },
+    };
+    hostile.self = hostile;
+    const step = buildDebateStep(
+      fakeLlmClient({ failOnMediator: true, mediatorFailureValue: hostile }),
+      store,
+      unlimited(),
+      UNCAPPED_SPEND,
+      logger,
+    );
+    const views = [makeView()];
+
+    let thrown: unknown;
+    try {
+      await step({
+        trace_id: 'trace-1',
+        instrument: 'AAPL',
+        views,
+        asset_class: ASSET_CLASS,
+        clock: CLOCK,
+        bar: NOW,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    // The durable artifact: the ORIGINAL cause's identity survives, not a
+    // substitute render-failure error.
+    expect(thrown).toBe(hostile);
+
+    const missed = entries.find(
+      (entry) => entry.stage === 'debate' && entry.event === 'debate_unresolved',
+    );
+    expect(missed).toBeDefined();
+    expect(missed?.message).toContain('[unrenderable error]');
   });
 
   it('replays the persisted debate when the same bar ticks again, spending nothing (#617)', async () => {

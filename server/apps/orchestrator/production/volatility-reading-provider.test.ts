@@ -77,12 +77,24 @@ function fakeLogger(): { logger: Logger; log: ReturnType<typeof vi.fn> } {
  */
 function buildProvider(
   universe: readonly UniverseInstrument[] = UNIVERSE,
-  behaviorByInstrument: Record<string, 'reject' | 'nan'> = {},
+  behaviorByInstrument: Record<string, 'reject' | 'nan' | 'hostile'> = {},
 ) {
   const getIndicator = vi.fn(async (instrument: string, _spec: IndicatorSpec, _asOf: Date) => {
     const behavior = behaviorByInstrument[instrument];
     if (behavior === 'reject') {
       throw new Error(`getIndicator failed for ${instrument}`);
+    }
+    if (behavior === 'hostile') {
+      // Circular (defeats `JSON.stringify`) with a throwing `Symbol.toPrimitive`
+      // (defeats the `String()` fallback too) — same shape as the #1262
+      // tick-loop hostile value.
+      const hostile: Record<string, unknown> = {
+        [Symbol.toPrimitive]: () => {
+          throw new Error('render boom');
+        },
+      };
+      hostile.self = hostile;
+      throw hostile;
     }
     if (behavior === 'nan') {
       return { ...fixtureIndicatorValue(instrument), value: Number.NaN };
@@ -156,6 +168,32 @@ describe('MarketDataVolatilityReadingProvider', () => {
       expect.objectContaining({
         level: 'error',
         payload: expect.objectContaining({ instrument: 'ETH-USD', asset_class: 'crypto' }),
+      }),
+    );
+  });
+
+  // #1351: `result.reason` is rendered inside a synchronous `open.map(...)`
+  // callback — an unguarded throw there aborts the WHOLE map, so
+  // `getVolatilityReading` rejects and EVERY instrument's reading is lost,
+  // not just the one that failed.
+  it('an unrenderable rejection reason still fails closed for its own instrument and leaves every other reading intact', async () => {
+    const { provider, log } = buildProvider(UNIVERSE, { 'ETH-USD': 'hostile' });
+
+    const reading = await provider.getVolatilityReading(NOW);
+
+    // The durable artifact: a full reading for BOTH classes, not a rejected
+    // promise. `stocks` in particular has nothing to do with the hostile
+    // instrument and must be unaffected by it.
+    expect(reading.crypto).toBe(Number.POSITIVE_INFINITY);
+    expect(reading.stocks).toBe(15);
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'error',
+        payload: expect.objectContaining({
+          instrument: 'ETH-USD',
+          asset_class: 'crypto',
+          error: '[unrenderable error]',
+        }),
       }),
     );
   });

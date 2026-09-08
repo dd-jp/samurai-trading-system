@@ -778,7 +778,7 @@ export class TelegramBotApiClient implements TelegramClient {
           'error',
           'telegram_delivery_record_failed',
           `failed to durably record an undelivered alert (chat_id=${chatId}): ${sanitizeLogText(
-            recordError instanceof Error ? recordError.message : String(recordError),
+            describeThrownSafely(recordError),
           )}`,
         );
       }
@@ -819,7 +819,7 @@ export class TelegramBotApiClient implements TelegramClient {
           'error',
           'telegram_delivery_escalation_failed',
           `failed to post the repeated-delivery-failure escalation: ${sanitizeLogText(
-            escalationError instanceof Error ? escalationError.message : String(escalationError),
+            describeThrownSafely(escalationError),
           )}`,
         );
       });

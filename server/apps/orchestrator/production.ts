@@ -3661,8 +3661,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
                   'could not record the feedback-cycle attempt marker — running the cycle ' +
                   'anyway; a restart before completion will not be recognised as a retry (#1110)',
                 payload: {
-                  error:
-                    attemptError instanceof Error ? attemptError.message : String(attemptError),
+                  error: describeThrownSafely(attemptError),
                 },
               });
             }
