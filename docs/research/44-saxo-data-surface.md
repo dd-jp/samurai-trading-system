@@ -227,7 +227,7 @@ the quantity being estimated is a distribution, not a instant. For a **live exec
 pre-trade spread check** it is not fine at ADR-0014's intraday horizon. The first use needs no
 subscription; the second does.
 
-### 2.5a The spread is **not stable across the session** — six samples, one full LSE day
+### 2.5a One large intraday excursion, a stable tight core, and a noise floor that bounds the rest
 
 §2.5 established that spread is measurable. This is what it measures to. The full 146-line ETN
 listing, sampled every 90 minutes through 2026-09-08's session (all spreads in bp of mid):
@@ -275,9 +275,11 @@ Anything future work does here needs **repeat samples per time point**, not one 
 **Three findings, in decreasing order of how much weight they can carry.**
 
 **1. p25 is stable at 13.6–22.5 bp all day, and — per the noise floor above — this is the only
-column that survives it.** The tight core of the universe stays tight; it is the tail that moves. A **fixed 30 bp spread gate is defensible**, but it
-admits a *variable-size* set (25 to 61 names) rather than a fixed shortlist — anything downstream
-must handle a shortlist whose cardinality changes intraday.
+column that survives it.** The tight core of the universe stays tight; it is the tail that moves, so
+a **fixed 30 bp spread gate is defensible** — it cuts against a stable boundary rather than a drifting
+one. How *many* names sit inside that gate at a given moment is a separate question this table cannot
+answer: the `movers ≤ 30 bp` column is contaminated by the counter artifact below. Downstream must
+handle a shortlist of unknown, varying cardinality either way.
 
 **2. The universe median swings 2.4× within one session** (35.2 to 84.1 bp) — but only the 13:42Z
 end of that range is above the noise floor, so read it as *one excursion happened*, not as *the median
@@ -297,23 +299,27 @@ construction — the one leg it does not get to time. So what liquidity looks li
 real question for ADR-0018. The 15:12Z sample invites an encouraging answer (27.0 bp movers median,
 against 81.1 at 13:42Z), **but it does not replicate**: three minutes later the same universe read
 39.9 bp, inside the noise band above. **No conclusion is drawn here.** Answering it needs repeat
-samples through the closing half-hour, which the profiler supports and nobody has run.
+samples through the closing half-hour, which `docs/research/44-spread-session-profile.py` supports
+and nobody has run.
 
 #### Two caveats that bound all of the above
 
-- **The mover *count* rises monotonically, 44 → 116, and is probably an artifact.** If Saxo's
-  `RelativeVolume` compares *cumulative session volume* to an average, more names cross `≥ 1.5`
-  simply as the session accumulates. The field's definition is not documented and was not verified,
-  so the count column — and hence `movers ≤ 30 bp` — is **suspect**. The median columns do not
-  depend on it and are unaffected.
+- **The mover *count* is a session-progress counter, not a mover count.** It rises monotonically
+  44 → 116 across the day — and the noise burst discriminates why: across all six reads in three
+  minutes the count sat at **exactly 116, unmoved, while the median swung 1.68×**. An instantaneous
+  measure would flicker with the spreads; a cumulative one would not. So Saxo's `RelativeVolume`
+  almost certainly compares *cumulative session volume* to an average, and names cross `≥ 1.5`
+  simply as the session accumulates. **`movers ≤ 30 bp` must therefore not be used to size a
+  shortlist** — it counts how far into the session you are as much as what is moving. The median
+  columns do not depend on the count and are unaffected.
 - **These are SIM delayed-feed numbers, and §2.9-LIVE measured the delayed feed understating spread
   by 27%** on the one instrument checked against live. Treat the *shape* here as informative and the
   *levels* as optimistic.
 
 **One day, six samples, 90-minute spacing** — wide enough to miss a spike entirely, which given
 13:42Z reversed within 90 minutes is a live possibility rather than a formality. Repeat sessions and
-tighter spacing around 13:30Z and the close would settle it; the profiler is ~40 lines and one call
-per sample.
+tighter spacing around 13:30Z and the close would settle it, at one call per sample — the profiler is
+committed as `docs/research/44-spread-session-profile.py` with `SAMPLES` and `INTERVAL_S` env-set.
 
 ### 2.6 The commission floor — a scare that resolved, and a cheap gate that did not
 
@@ -848,7 +854,7 @@ editorial, not machine-consumable feeds.
 | 5 | ADR-0016: pool of 13, 3× framing | 146 ETN + 127 ETC listed; 4× exists; spread gate needed (§2.4) | **wayfinder child** |
 | 6 | ADR-0015: "Saxo has no per-order minimum" — the fact that disqualified IBKR | Unverified against the venue; one live call settles it (§2.6) | **wayfinder child**, pre-ramp gate |
 | 7 | ADR-0014: flat-by-close is *already* calendar-driven (`sessionEnd`, #668) — the original "client-side timing" framing was wrong | Session feed as an **overlay validating** the hand table (2 days forward, not a replacement) + native MOC/LOC (§2.7) | **wayfinder child** [#1312](https://github.com/dd-jp/samurai-trading-system/issues/1312); MOC still gated on the ADR-0015 clause |
-| 8 | Doc 53 `CostModelImpl`: 1 bp rate floor, no spread input | Per-instrument spread now available (§2.5), and measured to swing 2.4x intraday (§2.5a) | folds into 6 |
+| 8 | Doc 53 `CostModelImpl`: 1 bp rate floor, no spread input | Per-instrument spread now available (§2.5); its tight core is stable but it spiked 2.4x on one measured intraday excursion (§2.5a) | folds into 6 |
 | 9 | #895 + doc 53: market data assumed free and real-time | Opt-in, **delayed** by default (quotes *and* chart bars), **£7/mo** for LSE Level 1 real time, refunded at 4 trades/month (§2.9). The delay is read as an entitlement tier on four circumstantial strands, and the confirming in-session read is now **RUN and CONFIRMED** — 15-min lag measured against a demonstrably trading market, 2026-09-08 (§2.9a). **And the delayed feed is outside LSE's Non-Display Usage regime, which real time is inside (§2.9b)** | comment on #895 |
 
 Items 1, 2 and 4 are evidence for tickets that already exist and should not be re-filed. Items 3, 5, 6 and 7 are genuine
