@@ -1634,16 +1634,21 @@ describe('buildProductionComponents', () => {
     );
 
     it('refuses to boot on an unmodelled half-day past coverage (AC5)', () => {
-      // 2029-12-24 is a Monday, half-day-shaped (Christmas Eve) but two
-      // years past LSE_TABLE_COVERAGE_END — LSE_HALF_DAYS was never
-      // extended to cover it. The guard must refuse before a live leg can
-      // ever reach LseRegularHoursCalendar's un-verified 16:30 guess for
-      // this date (trading-calendar.test.ts pins the calendar-level half of
-      // this: coversCloseFor is false and the resolver stays total).
+      // Christmas Eve, two years past LSE_TABLE_COVERAGE_END — half-day-shaped
+      // but never checked against the source, so LSE_HALF_DAYS was never
+      // extended to cover it. Derived from the constant rather than a bare
+      // literal so extending the table doesn't strand this inside coverage.
+      // The guard must refuse before a live leg can ever reach
+      // LseRegularHoursCalendar's un-verified 16:30 guess for this date
+      // (trading-calendar.test.ts pins the calendar-level half of this:
+      // coversCloseFor is false and the resolver stays total).
+      const unmodelledHalfDay = new Date(
+        `${Number(LSE_TABLE_COVERAGE_END.slice(0, 4)) + 2}-12-24T12:00:00Z`,
+      );
       const config = stubConfig(db, {
         mode: 'live',
         capitalCeilingUsd: 1_000,
-        clock: new SimulatedClock(new Date('2029-12-24T12:00:00Z')),
+        clock: new SimulatedClock(unmodelledHalfDay),
       });
 
       expect(() => buildProductionComponents(config)).toThrow(/LSE_TABLE_COVERAGE_END/);

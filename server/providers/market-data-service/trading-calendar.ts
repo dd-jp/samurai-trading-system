@@ -664,7 +664,10 @@ const LSE_HALF_DAY_CLOSE_MINUTES = 12 * 60 + 30;
  * and late May holidays move, Easter is lunar, and one-off royal holidays are
  * announced by proclamation. Written out so a wrong date is a visible diff
  * rather than an arithmetic bug, and so a soak's logs can be reconciled
- * against it by eye.
+ * against it by eye. Dates are sourced from the UK government's published
+ * bank holiday list for England and Wales
+ * (https://www.gov.uk/bank-holidays.json, `england-and-wales` division), not
+ * derived.
  *
  * Checked through `LSE_HOLIDAYS_CHECKED_THROUGH`. Beyond that this table
  * reports a normal trading day, which IS the safe direction for
@@ -700,6 +703,15 @@ export const LSE_HOLIDAYS = new Set([
   '2027-08-30',
   '2027-12-27', // Christmas Day substitute (25th is a Saturday)
   '2027-12-28', // Boxing Day substitute
+  // 2028
+  '2028-01-03', // New Year's Day substitute (1 January 2028 is a Saturday)
+  '2028-04-14', // Good Friday
+  '2028-04-17', // Easter Monday
+  '2028-05-01', // Early May bank holiday
+  '2028-05-29', // Spring bank holiday
+  '2028-08-28', // Summer bank holiday
+  '2028-12-25', // Christmas Day
+  '2028-12-26', // Boxing Day
 ]);
 
 /**
@@ -708,15 +720,23 @@ export const LSE_HOLIDAYS = new Set([
  * `civilDateKey`'s `YYYY-MM-DD` is intentional, matching
  * `US_TABLE_COVERAGE_END`.
  *
- * This is `2027-12-31`, matching `LSE_HALF_DAYS_CHECKED_THROUGH`, not
- * `2027-12-28` (the table's own last entry) — the two tables were populated
- * from the same hand-entry pass over the same 2026-2027 window, so their
+ * This is `2028-12-31`, matching `LSE_HALF_DAYS_CHECKED_THROUGH`, not
+ * `2028-12-26` (the table's own last entry) — the two tables were populated
+ * from the same hand-entry pass over the same 2026-2028 window, so their
  * checked boundary is the same. The table's last entry stops short of that
- * boundary because there is no further UK bank holiday between the Boxing
- * Day substitute (28 Dec 2027) and year end: New Year's Eve (31 Dec) is not
- * itself a bank holiday, it is a half-day, tracked in `LSE_HALF_DAYS`
- * instead. An entry ending before the checked-through date is expected; an
- * entry AFTER it is what this constant guards against.
+ * boundary because there is no further UK bank holiday between Boxing Day
+ * (26 Dec 2028) and year end: New Year's Eve (31 Dec 2028) is not itself a
+ * bank holiday, and that year it is not a half-day either — 31 December 2028
+ * falls on a Sunday, so `LSE_HALF_DAYS` gains no 2028 entries (see its doc).
+ * An entry ending before the checked-through date is expected; an entry
+ * AFTER it is what this constant guards against.
+ *
+ * `2028-12-31`, not `2029-12-31`, because the source this table is checked
+ * against — https://www.gov.uk/bank-holidays.json's `england-and-wales`
+ * division — publishes nothing past 2028-12-26 as of this check. That is a
+ * property of the source, not a choice: extending past what it publishes
+ * would mean inventing dates rather than sourcing them. Move this forward
+ * once the source publishes 2029.
  *
  * A hand-checked literal, not derived from the table's own contents — see
  * `LSE_TABLE_COVERAGE_END`'s doc for why deriving it from the max key would
@@ -724,7 +744,7 @@ export const LSE_HOLIDAYS = new Set([
  * `LSE_HOLIDAYS` exceeds this constant, so an entry added past it fails
  * that test until this constant is deliberately moved too.
  */
-export const LSE_HOLIDAYS_CHECKED_THROUGH = '2027-12-31';
+export const LSE_HOLIDAYS_CHECKED_THROUGH = '2028-12-31';
 
 /**
  * Half-day closes: the session ends at 12:30 rather than 16:30.
@@ -751,14 +771,19 @@ export const LSE_HALF_DAYS = new Set([
   '2026-12-31', // New Year's Eve
   '2027-12-24',
   '2027-12-31',
+  // 2028: no entries — 24 and 31 December 2028 both fall on a Sunday, so
+  // neither qualifies (half-days apply only when the date is a weekday).
 ]);
 
 /**
  * The last civil date `LSE_HALF_DAYS` was checked against the published UK
  * bank holiday calendar for. Same convention as `LSE_HOLIDAYS_CHECKED_THROUGH`;
  * `trading-calendar.test.ts` asserts no key in `LSE_HALF_DAYS` exceeds this one.
+ *
+ * `2028-12-31`, not `2029-12-31` — see `LSE_HOLIDAYS_CHECKED_THROUGH`'s doc:
+ * the source both tables are checked against does not yet publish 2029.
  */
-export const LSE_HALF_DAYS_CHECKED_THROUGH = '2027-12-31';
+export const LSE_HALF_DAYS_CHECKED_THROUGH = '2028-12-31';
 
 /**
  * The lexicographically earlier of two `YYYY-MM-DD` civil-date keys. Exported
@@ -775,7 +800,7 @@ export function earlierOf(a: string, b: string): string {
  * `LSE_HOLIDAYS_CHECKED_THROUGH` and `LSE_HALF_DAYS_CHECKED_THROUGH`, not the
  * later. Whichever table's checked-through date comes first is unverified
  * first, regardless of how far the OTHER table happens to reach. Both are
- * `2027-12-31` today (one hand-entry pass checked both tables through the
+ * `2028-12-31` today (one hand-entry pass checked both tables through the
  * same boundary), so this is currently their common value — but the two
  * are extended independently, and the day one moves ahead of the other
  * without the other following, `min()` is what keeps this constant pinned
