@@ -17,6 +17,11 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+// The one contracts/ -> server/ import in this directory. Safe only because
+// it's in a `.test.ts` file: `sourceFiles()` below excludes test files from
+// the scan this suite runs, and `tsconfig.build.json` excludes `**/*.test.ts`
+// from what ships — neither mechanism polices what a test file itself
+// imports, so this line relies on staying a test file, not on being checked.
 import { stripComments } from '../server/shared/strip-comments.js';
 
 const CONTRACTS_DIR = fileURLToPath(new URL('.', import.meta.url));
@@ -54,8 +59,11 @@ function sourceFiles(): string[] {
 }
 
 // Run through `stripComments` first — a doc comment describing an import
-// (PR #1385's round-1 fix reworded one in this file to dodge a false
-// positive) must not read as one. #1398.
+// (`contracts/pipeline.ts`'s module doc names `AssetClass`'s import in
+// prose, exactly the shape this must not misread) must not read as one.
+// #1398 traces this to PR #1385's round-1 review; the specific wording that
+// review reacted to isn't recoverable from git history (checked — see this
+// PR's body), so treat that origin as unverified, not as fact.
 function specifiersOf(file: string, dir: string = CONTRACTS_DIR): string[] {
   const text = stripComments(readFileSync(join(dir, file), 'utf8'));
   return SPECIFIER_PATTERNS.flatMap((pattern) =>
@@ -144,12 +152,20 @@ describe('specifiersOf strips comments before matching (#1398)', () => {
         '',
       ].join('\n'),
     );
-    expect(specifiersOf(file, fixturesDir)).toEqual([]);
+    const specifiers = specifiersOf(file, fixturesDir);
+    expect(specifiers).toEqual([]);
+    // Mirrors the predicate `it.each(sourceFiles())('%s imports nothing
+    // outside contracts/'` above asserts on: no specifier here would fail it.
+    expect(specifiers.some((s) => s.startsWith('../'))).toBe(false);
   });
 
   it('a real import escaping contracts/ is still detected', () => {
     const file = 'real-import.ts';
     writeFileSync(join(fixturesDir, file), "import type { X } from '../server/shared/index.js';\n");
-    expect(specifiersOf(file, fixturesDir)).toEqual(['../server/shared/index.js']);
+    const specifiers = specifiersOf(file, fixturesDir);
+    expect(specifiers).toEqual(['../server/shared/index.js']);
+    // Same predicate as above, the other way: this specifier DOES fail it —
+    // proving stripComments doesn't also swallow real escaping imports.
+    expect(specifiers.some((s) => s.startsWith('../'))).toBe(true);
   });
 });

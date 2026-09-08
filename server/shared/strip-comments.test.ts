@@ -41,7 +41,16 @@ describe('stripComments', () => {
     expect(stripComments(src)).toBe(src);
   });
 
-  it('an unterminated block comment strips to end of input', () => {
-    expect(stripComments('const a = 1; /* never closed')).toBe('const a = 1; ');
+  it('replaces a single-line block comment with a space so surrounding tokens do not fuse', () => {
+    expect(stripComments('import/* c */type { X }')).toBe('import type { X }');
+  });
+
+  it('resets quote state at a newline, so an unterminated string does not swallow a later line', () => {
+    const src = "const s = 'unterminated\n// real comment\nconst t = 2;";
+    expect(stripComments(src)).toBe("const s = 'unterminated\n\nconst t = 2;");
+  });
+
+  it('throws on an unterminated block comment — real source can never have one', () => {
+    expect(() => stripComments('const a = 1; /* never closed')).toThrow(/unterminated/i);
   });
 });
