@@ -220,8 +220,11 @@ describe('SqliteQueryStore', () => {
    * Falsifier arm 2 writes its own `verdict_log` rows under a `trace_id`
    * carrying `CONTROL_TRACE_SUFFIX` (#753) — `verdict_log` has no `debate_id`
    * column, so unlike `getRiskCritics` there is only one discriminator here.
-   * Excluded like every other read on this store (#1318): the operator panel
-   * shows the live book's verdicts, not the matched control's.
+   * Excluded the same way `getOpenPositions`, `getRecentClosedTrades`,
+   * `getAttribution` and `getRiskCritics` are (#1318): the operator panel
+   * shows the live book's verdicts, not the matched control's. Not every read
+   * on this store is scoped this way — `getPipelineActivity`'s two
+   * `audit_log` queries both still return control rows (#1319, #1326).
    *
    * The `LIMIT` must be applied AFTER the arm is decided: with `limit: 2` and
    * the two most recent rows both control-arm, a filter bolted on after

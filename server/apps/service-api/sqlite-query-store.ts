@@ -377,8 +377,8 @@ export class SqliteQueryStore implements DashboardQueryStore {
   }
 
   /**
-   * **LIVE arm only (#1318)**, like `getOpenPositions`, `getRecentClosedTrades`,
-   * `getAttribution` and `getRiskCritics` above. Falsifier arm 2 writes its own
+   * **LIVE arm only (#1318)**, like `getOpenPositions` and `getRecentClosedTrades`
+   * above, and `getAttribution` and `getRiskCritics` below. Falsifier arm 2 writes its own
    * `verdict_log` rows under a `trace_id` carrying `CONTROL_TRACE_SUFFIX`
    * (#753) — `verdict_log` has no `debate_id` column, so unlike
    * `getRiskCritics` there is only the one discriminator to apply. The filter
