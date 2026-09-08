@@ -448,10 +448,11 @@ change from this one.
     instrument's rejection reason is hostile; reverting the guard makes
     `provider.getVolatilityReading(NOW)` reject outright (`Error: render boom`), losing the `stocks`
     class's reading along with the crypto one.
-  - `server/providers/market-data-service/sources/ohlcv-failover.ts:80` (`primaryError`) —
-    criterion (b), and the most self-defeating of the eight. It renders at the *top* of the catch,
-    before `safeAlert` and before the fallback source is attempted, so a throw defeats the failover
-    the function exists to perform — no alert, no fallback bars. Nothing in `withOhlcvFailover`
+  - `server/providers/market-data-service/sources/ohlcv-failover.ts:81` (`:80` before #1351's
+    PR) (`primaryError`) — criterion (b), and the most self-defeating of the eight. It renders at
+    the *top* of the catch, before `safeAlert` and before the fallback source is attempted, so a
+    throw defeats the failover the function exists to perform — no alert, no fallback bars.
+    Nothing in `withOhlcvFailover`
     catches it either: the throw rejects the `BarFetcher` promise the wrapper returned, so no
     substitute record fires anywhere in the frame. Mutation-proved: the test asserts the fallback's
     bars are still returned AND `alert` still fires with `primaryError: '[unrenderable error]'`;
@@ -489,7 +490,7 @@ change from this one.
     `logDebateFailure` has no internal try/catch, so a throw here happens **before**
     `logger.log(...)` runs at all — the `debate_unresolved` diagnostic line, which the function's own
     doc comment says exists to "make the no-row case visible rather than silent", never lands. Worse
-    than the other six: the caller (`buildDebateStep`'s catch, `:990-992`; `:989-991` before #1351's PR) does
+    than the other seven: the caller (`buildDebateStep`'s catch, `:990-992`; `:989-991` before #1351's PR) does
     `logDebateFailure({...}); throw cause;` — a throw from inside `logDebateFailure` REPLACES the
     caller's intended `throw cause;` with the render failure, losing the original `cause`'s identity
     (and type) for anything upstream that branches on it. This document's own precedent for

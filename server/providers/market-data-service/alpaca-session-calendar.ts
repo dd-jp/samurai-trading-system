@@ -200,8 +200,9 @@ export class AlpacaHttpCalendarClient implements AlpacaCalendarClient {
           // Network failure, DNS, timeout — always retryable within budget.
           // Guarded render: a throw from it escapes before the retryable
           // AlpacaCalendarFetchError is constructed, so the predicate below
-          // sees a plain Error, refuses it, and a transient blip spends zero
-          // of the retry budget instead of three attempts.
+          // sees a plain Error and refuses it. withRetry still runs this
+          // first of 3 budgeted attempts, then rethrows immediately instead
+          // of spending the other 2 — a transient blip becomes terminal.
           throw new AlpacaCalendarFetchError(
             `network error fetching Alpaca calendar (${context}): ` +
               `${describeThrownSafely(cause)}`,
