@@ -1560,11 +1560,14 @@ export interface ExitPathEvidence {
  * takes a DIFFERENT path — `sweepOne` (residual-protection-sweep.ts): the
  * marker is already set (no mark-unprotected write), and a confirmed re-arm
  * clears it via `store.confirmResidualProtected` directly, never
- * `bestEffortMarkerWrite`. What the two paths share is not the code, but
- * `sweepOne`'s own doc'd choice to recompute off the persisted fill record
- * with the SAME `recordedExposure`/`coversQty` expressions
- * `maybeRearmResidual` uses, "so the two surfaces cannot disagree about
- * flatness" — which is exactly why they leave the same `markerCleared`,
+ * `bestEffortMarkerWrite`. The two paths share no MARKER-WRITING path (#1285
+ * N5, round-2 review corrects the earlier "share no code" framing here,
+ * which was false: `residual-protection-sweep.ts` imports
+ * `recordedExposure`/`coversQty` from `ingest-fills.ts`, so that arithmetic
+ * IS shared code) — what they share is only those two exported helpers,
+ * which `sweepOne` deliberately calls fresh off the persisted fill record
+ * rather than trusting any cached figure, "so the two surfaces cannot
+ * disagree about flatness" — which is exactly why they leave the same `markerCleared`,
  * `protectedQty`, and alert-count footprint and only THIS lookup, keyed on
  * which code path's divergence list entry it is, tells them apart. `.action`
  * returning `undefined` because the restarted reconcile() found nothing left
@@ -1582,6 +1585,18 @@ export interface ExitPathEvidence {
  * `"protective legs re-armed for residual … by the #549 sweep — ..."`, which
  * no flatten-reconcile divergence text can produce. `evaluateSmokeGate`'s
  * #549 section checks `.reason` for exactly that.
+ *
+ * `.find` (first match), never `.findLast`, deliberately (#1285 N2, round-2
+ * review): `reconcile()` (reconcile.ts) pushes this lot's real #549-sweep
+ * divergence, if any, well before it appends `findUnrecordedVenuePositions`'s
+ * results — which carry `idempotency_key: ''` — LAST in the same list. An
+ * empty string is a substring and a suffix of every key, so under a
+ * containment-family predicate (the very mutants the `===` unit tests below
+ * pin against) `.findLast` would land on that trailing `''`-keyed sentinel
+ * instead of this lot's own entry. `.find` forecloses that structurally, not
+ * just because today's fixture happens to produce one match: it stays the
+ * first (and normally only) match even if a future scenario adds a second
+ * divergence for this same key ahead of it in the list.
  */
 export function findSweepDivergence(
   divergences: readonly ReconcileDivergence[],
@@ -5528,8 +5543,22 @@ export function evaluateSmokeGate(
   // `sweepDivergenceReason` is the same lookup's `reason` text, so it cannot
   // silently disagree with `sweepDivergenceAction` about which divergence was
   // found — and only `sweepOne`'s own re-arm reason
-  // (`'... by the #549 sweep'`, residual-protection-sweep.ts) can produce the
-  // text this check requires; no flatten-reconcile divergence can.
+  // (`'... for residual N by the #549 sweep …'`, residual-protection-sweep.ts)
+  // can produce the text this check requires. That excludes more than
+  // flatten-reconcile divergences: `sweepOne` itself has a SECOND
+  // `action: 'adopted'` return — the `coversQty` flat-path no-op, taken when
+  // the persisted fill record already reads flat, whose reason ("marked lot
+  // reads flat on the persisted fill record…") never names the #549 sweep
+  // either. So this check discriminates WITHIN `sweepOne`, not only against
+  // other mechanisms: only its own re-arm branch — the one that actually
+  // retried `broker.rearmProtectiveLegs` — satisfies it. Since #1285 N3
+  // (round-2 review), the matched text is also bound to THIS lot's own
+  // `expectedResidual`, not just the literal `'by the #549 sweep'` suffix —
+  // narrowing the aperture the B2 fix left open: a future scenario adding a
+  // second lot through `sweepOne`'s real re-arm branch would otherwise also
+  // produce `'adopted'` text naming the #549 sweep, and a wrong-key lookup
+  // landing on THAT lot's divergence would pass B2's check without also
+  // matching this lot's own residual quantity.
   const scenario5Alerts = residualAlerts.filter(
     (alert) => alert.idempotency_key === residualSweep.lotKey,
   );
@@ -5555,13 +5584,20 @@ export function evaluateSmokeGate(
         'deterministic broker should have re-armed and confirmed; anything else means the sweep ' +
         'could not settle a marker it should have (#549)',
     );
-  } else if (!residualSweep.sweepDivergenceReason?.includes('by the #549 sweep')) {
+  } else if (
+    !residualSweep.sweepDivergenceReason?.includes(
+      `for residual ${residualSweep.expectedResidual} by the #549 sweep`,
+    )
+  ) {
     failures.push(
-      `scenario 5's lot '${residualSweep.lotKey}' matched an 'adopted' divergence whose reason ` +
-        `was '${residualSweep.sweepDivergenceReason}', which does not name the #549 sweep — this ` +
-        "is the #1285 B2 case: a divergence for the WRONG key (e.g. another scenario's flatten, " +
-        "which also reports 'adopted') would pass the action check above without this one; only " +
-        "sweepOne's own re-arm reason (residual-protection-sweep.ts) can satisfy this text",
+      `the divergence found for scenario 5's lot '${residualSweep.lotKey}' reads 'adopted', but ` +
+        `its reason ('${residualSweep.sweepDivergenceReason}') does not name the #549 sweep re-` +
+        `arming this lot's OWN residual (${residualSweep.expectedResidual}) — this is the #1285 ` +
+        'B2/N3 case: a lookup keyed on the WRONG lot could still land on a divergence reading ' +
+        "'adopted' (another scenario's flatten-reconcile, or sweepOne's own coversQty flat-path " +
+        "no-op), and binding the match to this lot's own residual quantity closes that even for a " +
+        "future scenario adding a second lot through sweepOne's real re-arm branch; only " +
+        "sweepOne's re-arm of THIS residual (residual-protection-sweep.ts) can satisfy this text",
     );
   }
   if (!residualSweep.markerCleared) {

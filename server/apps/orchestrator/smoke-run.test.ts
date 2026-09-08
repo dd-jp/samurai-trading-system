@@ -2338,6 +2338,33 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
       ).toBe(true);
     });
 
+    // #1285 N3 (round-2 review): B2's fix binds the match to the literal
+    // `'by the #549 sweep'` suffix, which any lot's real re-arm produces —
+    // so a wrong-key lookup landing on a DIFFERENT lot's genuine re-arm
+    // (not just another mechanism's divergence) would still pass. Narrowing
+    // the match to include this lot's own `expectedResidual` closes that:
+    // this fixture's reason names the #549 sweep but for residual 99, not
+    // this lot's 6, so it must still fail.
+    it("fails when an 'adopted' divergence names the #549 sweep but for a DIFFERENT residual — a wrong-key lookup landing on another lot's real re-arm (#1285 N3)", () => {
+      const gate = gateFor({
+        residualSweep: {
+          lotKey: 'lot-sweep',
+          expectedResidual: 6,
+          protectedQty: 6,
+          markerCleared: true,
+          sweepDivergenceAction: 'adopted',
+          sweepDivergenceReason:
+            'protective legs re-armed for residual 99 by the #549 sweep — ' +
+            'residual-protection marker cleared',
+        },
+      });
+
+      expect(gate.passed).toBe(false);
+      expect(
+        gate.failures.some((failure) => failure.includes('does not name the #549 sweep')),
+      ).toBe(true);
+    });
+
     it('fails when the episode paged more than once — the once-per-episode dedup regressed (#342)', () => {
       const [healthyAlert] = healthyExitPath().residualAlerts;
       if (healthyAlert === undefined) throw new Error('fixture invariant: one healthy alert');
@@ -3123,7 +3150,17 @@ describe('findSweepDivergence (#1285)', () => {
     expect(findSweepDivergence(divergences, 'smoke-exit-sweep-lot')).toBeUndefined();
   });
 
-  it('matches the key exactly — a decoy key that CONTAINS the lot key does not match', () => {
+  // #1285 N1 (round-1, then round-2 review): naming this suite "matches the
+  // key exactly" over-claimed — none of the four cases below actually pin
+  // exact equality against every containment-family mutant of `===`; each
+  // pins exactly one direction. Round-1 covered the CONTAINS/prefix family
+  // (`.includes`/`.startsWith`, both directions); round-2's mutation battery
+  // found the SUFFIX/`.endsWith` family (both directions) still survived
+  // undetected — none of the three original decoys, nor round-1's added
+  // substring case, is a suffix of the lot key or has the lot key as a
+  // suffix. Each `it` below is named for the one direction it actually
+  // pins; only `===` survives all four together.
+  it('does not match a decoy key that starts with the lot key (lot key is its prefix)', () => {
     const divergences = [
       divergence({ idempotency_key: 'smoke-exit-sweep-lot-2', action: 'adopted' }),
     ];
@@ -3131,18 +3168,50 @@ describe('findSweepDivergence (#1285)', () => {
     expect(findSweepDivergence(divergences, 'smoke-exit-sweep-lot')).toBeUndefined();
   });
 
-  // #1285 N1 (round-1 review): the case above pins one containment direction
-  // — a decoy `idempotency_key` that CONTAINS the lot key, which kills a
-  // `divergence.idempotency_key.includes(lotKey)` mutant of `===`. It does
-  // nothing against the reverse mutant, `lotKey.includes(divergence.idempotency_key)`
-  // (equivalently `lotKey.startsWith(...)`): with a decoy key LONGER than the
-  // lot key, that mutant also returns `undefined`, so the case above cannot
-  // tell it apart from `===`. This case supplies the missing decoy — a key
-  // that is a SUBSTRING of the lot key — which the reverse mutant matches
-  // and `===` does not. Only `===` survives both cases.
-  it('matches the key exactly — a decoy key that IS a substring of the lot key does not match', () => {
+  it('does not match a decoy key that is a prefix of the lot key', () => {
     const divergences = [divergence({ idempotency_key: 'smoke-exit-sweep-lo', action: 'adopted' })];
 
     expect(findSweepDivergence(divergences, 'smoke-exit-sweep-lot')).toBeUndefined();
+  });
+
+  // #1285 N1 (round-2 review): the two suffix-direction mutants —
+  // `divergence.idempotency_key.endsWith(lotKey)` and
+  // `lotKey.endsWith(divergence.idempotency_key)` — need TWO separate decoys
+  // to kill, not one: a decoy with the lot key as a trailing substring only
+  // makes the FIRST mutant a false positive (the decoy is longer, so the lot
+  // key can never end with it), and a decoy that is itself a trailing
+  // substring of the lot key only makes the SECOND a false positive (the
+  // decoy is shorter, so it can never end with the longer lot key). Verified
+  // by mutation (see the PR/commit for the transcript): a single decoy of
+  // either shape leaves the other `.endsWith` mutant undetected.
+  it('does not match a decoy key that ends with the lot key', () => {
+    const divergences = [
+      divergence({ idempotency_key: 'x-smoke-exit-sweep-lot', action: 'adopted' }),
+    ];
+
+    expect(findSweepDivergence(divergences, 'smoke-exit-sweep-lot')).toBeUndefined();
+  });
+
+  it('does not match a decoy key that is a suffix of the lot key', () => {
+    const divergences = [divergence({ idempotency_key: 'sweep-lot', action: 'adopted' })];
+
+    expect(findSweepDivergence(divergences, 'smoke-exit-sweep-lot')).toBeUndefined();
+  });
+
+  // #1285 N2 (round-2 review): `.find` (first match), never `.findLast`, is
+  // load-bearing, not an arbitrary choice — see `findSweepDivergence`'s own
+  // doc (smoke-run.ts) for the structural reason: `reconcile()` appends
+  // `findUnrecordedVenuePositions`'s `idempotency_key: ''` entries LAST, and
+  // an empty string is a substring/suffix of every key, so `.findLast` paired
+  // with any containment-family predicate would land on that trailing
+  // sentinel instead of this lot's own divergence. This fixture pins `.find`
+  // directly: with two divergences sharing one key, the FIRST must win.
+  it('returns the first divergence when the key appears more than once, not the last', () => {
+    const divergences = [
+      divergence({ idempotency_key: 'smoke-exit-sweep-lot', action: 'adopted', reason: 'first' }),
+      divergence({ idempotency_key: 'smoke-exit-sweep-lot', action: 'rejected', reason: 'last' }),
+    ];
+
+    expect(findSweepDivergence(divergences, 'smoke-exit-sweep-lot')?.reason).toBe('first');
   });
 });
