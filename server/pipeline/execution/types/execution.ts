@@ -223,6 +223,16 @@ export interface ReconcileDivergence {
   action: 'adopted' | 'rejected' | 'undetermined' | 'unrecorded';
   /** Operator-facing detail — the adapter's error on `undetermined`. */
   reason: string;
+  /**
+   * `'bracket'` for a `reconcileLot` row, `'flatten'` for a `reconcileFlatten`
+   * row; `undefined` for `findUnrecordedVenuePositions`'s rows, which are
+   * neither. Needed by #1122's noise reduction: only a bracket lot's adopt
+   * lands on the `OpenPosition` that `FilledZeroSizeThrottle`
+   * (filled-zero-size-throttle.ts, #1087) watches, so only that case has an
+   * independent backstop a consumer can safely quiet against — a flatten
+   * adopt writes no such row, so there is nothing else watching it.
+   */
+  kind?: 'bracket' | 'flatten';
 }
 
 /**

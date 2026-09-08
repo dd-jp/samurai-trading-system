@@ -473,7 +473,13 @@ describe('startFillSync', () => {
         action: 'undetermined' as const,
         reason: 'venue unreachable',
       };
-      const adopted = { ...undetermined, action: 'adopted' as const, reason: 'adopted on retry' };
+      const adopted = {
+        ...undetermined,
+        broker_state: 'filled' as const,
+        action: 'adopted' as const,
+        kind: 'bracket' as const,
+        reason: 'adopted on retry',
+      };
       const execution = makeExecution({
         reconcile: vi
           .fn()
@@ -497,10 +503,59 @@ describe('startFillSync', () => {
         (entry) => entry.message === 'reconcile divergence',
       );
       // Pass 1 logs the warn; pass 2 (same key, same state) is deduped; pass
-      // 3's transition to adopted logs the info; pass 4 reports nothing.
-      expect(divergenceLines.map((entry) => entry.level)).toEqual(['warn', 'info']);
+      // 3's transition to a bracket adopt reaching `filled` logs at debug
+      // (#1122 — FilledZeroSizeThrottle already watches this exact condition
+      // independently); pass 4 reports nothing.
+      expect(divergenceLines.map((entry) => entry.level)).toEqual(['warn', 'debug']);
       expect(divergenceLines[0]?.payload).toMatchObject({ action: 'undetermined' });
       expect(divergenceLines[1]?.payload).toMatchObject({ action: 'adopted' });
+
+      await sync.stop();
+    });
+
+    it('does not demote an adopted divergence the zero-size throttle cannot back — a flatten row, or a bracket adopt not yet filled (#1122)', async () => {
+      const logger = makeLogger();
+      const flattenAdopted = {
+        idempotency_key: 'key-nvda-flatten',
+        instrument: 'NVDA',
+        store_state: 'submitted' as const,
+        broker_state: 'filled' as const,
+        action: 'adopted' as const,
+        kind: 'flatten' as const,
+        reason: "flatten journal said 'submitted'; broker reports 'filled'",
+      };
+      const bracketSubmittedOnly = {
+        idempotency_key: 'key-msft-1200',
+        instrument: 'MSFT',
+        store_state: 'pending' as const,
+        broker_state: 'submitted' as const,
+        action: 'adopted' as const,
+        kind: 'bracket' as const,
+        reason: "store said 'pending', broker says 'submitted'",
+      };
+      const execution = makeExecution({
+        reconcile: vi
+          .fn()
+          .mockResolvedValueOnce(
+            makeReport({ divergences: [flattenAdopted, bracketSubmittedOnly] }),
+          )
+          .mockResolvedValue(makeReport()),
+      });
+      const sync = startFillSync({
+        execution,
+        clock: { now: () => new Date() },
+        logger,
+        fillPollIntervalMs: 1_000,
+        reconcileTraceId: 'test-reconcile',
+        fillSyncTraceId: 'test-fill-sync',
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      const divergenceLines = logger.entries.filter(
+        (entry) => entry.message === 'reconcile divergence',
+      );
+      expect(divergenceLines.map((entry) => entry.level)).toEqual(['info', 'info']);
 
       await sync.stop();
     });

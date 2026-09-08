@@ -81,12 +81,50 @@
  * adapters restart-safe.
  */
 import type {
+  ReconcileDivergence,
   ReconcileReport,
   ResidualProtectionSweepResult,
 } from '../../pipeline/execution/index.js';
-import type { Clock } from '../../shared/index.js';
+import type { Clock, LogLevel } from '../../shared/index.js';
 import { describeThrownSafely } from '../../shared/index.js';
 import type { Logger } from './types.js';
+
+/**
+ * Log level for one `reconcile()` divergence (#1122, follow-up to #1096's
+ * `submitted -> filled` benign-race noise).
+ *
+ * `undetermined` still warns — the adapter could not answer and a human must
+ * look. A bracket lot's `adopted` transition to `filled`/`partially_filled`
+ * demotes to `debug`: `reconcile.ts`'s own doc on `reconcileLot` states the
+ * adopted lot "stays in `getOpenPositions()` and the very next `ingestFills()`
+ * supplies the quantity" — and that same call, in the SAME poll (this file's
+ * "Ordering" doc: reconcile before ingest, every pass), is exactly what
+ * `FilledZeroSizeThrottle` (filled-zero-size-throttle.ts, #1087) watches,
+ * warning with `stuck_ms`/`consecutive` at `ALERT_AFTER_CONSECUTIVE_ZERO_SIZE`
+ * (3) polls if the lot never actually fills. So nothing is lost by quieting
+ * this one-shot breadcrumb: a genuine wedge is still reported, by the
+ * purpose-built detector rather than this line.
+ *
+ * Every other case stays at `info`, deliberately: a flatten's `adopted` (
+ * `kind: 'flatten'`) writes no `OpenPosition`, so the throttle above cannot
+ * see it and there is no backstop to quiet against; `rejected`/`unrecorded`
+ * carry no such backstop either. `debug` is dropped unless
+ * `SAMURAI_LOG_LEVEL=debug` (logger.ts) — using it anywhere the throttle
+ * doesn't independently cover would be silent deletion, which #1096
+ * explicitly refused ("suppressing it wholesale would have hidden the one
+ * real anomaly among the benign ones").
+ */
+function reconcileDivergenceLevel(divergence: ReconcileDivergence): LogLevel {
+  if (divergence.action === 'undetermined') return 'warn';
+  if (
+    divergence.action === 'adopted' &&
+    divergence.kind === 'bracket' &&
+    (divergence.broker_state === 'filled' || divergence.broker_state === 'partially_filled')
+  ) {
+    return 'debug';
+  }
+  return 'info';
+}
 
 /**
  * The `error`-level messages this loop writes when a pass rejects — one per
@@ -175,9 +213,7 @@ export async function runStartupReconcile(deps: {
       trace_id: deps.traceId,
       stage: 'execution',
       event: 'reconcile_divergence',
-      // `undetermined` means the adapter could not answer and a human must
-      // look; an adopted/rejected lot was settled automatically.
-      level: divergence.action === 'undetermined' ? 'warn' : 'info',
+      level: reconcileDivergenceLevel(divergence),
       message: 'reconcile divergence',
       payload: { ...divergence },
     });
@@ -285,11 +321,9 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
           trace_id: deps.reconcileTraceId,
           stage: 'execution',
           event: 'reconcile_divergence',
-          // `undetermined` means the adapter could not answer and a human
-          // must look; an adopted/rejected row was settled automatically —
-          // the same split `runStartupReconcile` uses for this same report
-          // shape.
-          level: divergence.action === 'undetermined' ? 'warn' : 'info',
+          // Same `reconcileDivergenceLevel` `runStartupReconcile` uses for
+          // this same report shape.
+          level: reconcileDivergenceLevel(divergence),
           message: 'reconcile divergence',
           payload: { ...divergence },
         });
