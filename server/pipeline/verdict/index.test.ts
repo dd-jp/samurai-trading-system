@@ -1149,6 +1149,81 @@ describe('VerdictImpl.decide — mandatory flatten and staleness (#894)', () => 
   });
 });
 
+/**
+ * #1357 — the two exemptions stacked, on one intent, driven through Verdict.
+ *
+ * `unpricedFlatten()` above never carries `mandatory_flatten` and inherits
+ * `makeIntent()`'s fresh `decision_timestamp`, so #826's suite exercises
+ * skipping the two price gates but not the three-gate stack `buildFlattenExit`
+ * actually produces (`exit_reason: 'flatten'` sets both markers together —
+ * see the file header's "THE TWO STACK, ONE WAY"). This drives that shape.
+ */
+describe('VerdictImpl.decide — stale AND unpriced mandatory flatten (#826, #894 stacked)', () => {
+  const STALE_AT = new Date(NOW.getTime() - 56 * 60_000);
+
+  function staleUnpricedFlatten(overrides: Partial<OrderIntent> = {}): OrderIntent {
+    const base = makeIntent();
+    return {
+      ...base,
+      intent_type: 'exit',
+      side: 'sell',
+      decision_timestamp: STALE_AT,
+      entry: 0,
+      stop: 0,
+      target: 0,
+      metadata: {
+        ...base.metadata,
+        exit_reason: 'flatten',
+        unpriced_exit: true,
+        mandatory_flatten: true,
+      },
+      ...overrides,
+    };
+  }
+
+  it('is not refused for staleness or stale_feed when the mark itself is stale', async () => {
+    const verdict = new VerdictImpl();
+    const stale = makeMarketData(makeMark({ observed_at: new Date(NOW.getTime() - 60 * 60_000) }));
+    const input = makeInput({
+      risk_decision: makeRiskDecision({ order_intent: staleUnpricedFlatten() }),
+      config: makeConfig({ automation_level: { crypto: 'auto', stocks: 'auto' } }),
+      marketData: stale,
+    });
+
+    const decision = await verdict.decide(input);
+
+    expect(decision.no_go_reason).not.toBe('staleness');
+    expect(decision.no_go_reason).not.toBe('stale_feed');
+    expect(decision.status).toBe('go');
+  });
+
+  /**
+   * A stale mark would trip `stale_feed` first inside `#priceGates`, were
+   * the gates to run at all, so it can never reach the `drift` branch —
+   * that made the third name in the original single-case version of this
+   * test unfalsifiable. This fixture uses a fresh mark instead, with the
+   * entry an unpriced flatten always carries (0), which is exactly what
+   * would trip `drift`'s `!(entry > 0)` guard (`#priceGates`, below the
+   * `stale_feed` check) if #826 did not skip `#priceGates` for this intent
+   * outright — under production code, `#priceGates` never runs for this
+   * intent, so neither the stale nor the fresh mark is ever consulted.
+   */
+  it('is not refused for drift when the mark is fresh but the intent carries no entry price', async () => {
+    const verdict = new VerdictImpl();
+    const fresh = makeMarketData(makeMark({ observed_at: NOW }));
+    const input = makeInput({
+      risk_decision: makeRiskDecision({ order_intent: staleUnpricedFlatten() }),
+      config: makeConfig({ automation_level: { crypto: 'auto', stocks: 'auto' } }),
+      marketData: fresh,
+    });
+
+    const decision = await verdict.decide(input);
+
+    expect(decision.no_go_reason).not.toBe('drift');
+    expect(decision.status).toBe('go');
+  });
+});
+
 describe('VerdictImpl.decide — precondition', () => {
   it('throws if handed a RiskDecision without an approved order_intent', async () => {
     const verdict = new VerdictImpl();

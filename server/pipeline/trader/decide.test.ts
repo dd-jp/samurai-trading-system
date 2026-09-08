@@ -2844,6 +2844,19 @@ describe('decide/checkExits — the mark read fails (#826)', () => {
     expect(outcome.intent?.metadata.unpriced_exit).toBe(true);
   });
 
+  /**
+   * #1357 — `unpriced_exit` and `mandatory_flatten` are asserted separately
+   * everywhere else in this suite; nothing pins that a single mark-read
+   * failure produces an intent carrying both, which is what Verdict's
+   * three-gate skip (`verdict/index.ts`'s #826/#894 exemptions) depends on.
+   */
+  it('carries both `unpriced_exit` and `mandatory_flatten` on the same intent', async () => {
+    const outcome = await checkExitsWithReason(exitInput());
+
+    expect(outcome.intent?.metadata.unpriced_exit).toBe(true);
+    expect(outcome.intent?.metadata.mandatory_flatten).toBe(true);
+  });
+
   it('reports the unpriced flatten, so the degradation is never silent', async () => {
     const reports: { instrument: string; reason: string }[] = [];
 
