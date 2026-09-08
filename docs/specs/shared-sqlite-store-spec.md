@@ -69,7 +69,7 @@ Every `CREATE TABLE` the store needs, collected from the eleven specs that impli
 
 Four more tables were added after that pass, each checked for collision at the point it joined (`llm_spend`, `risk_critic_log`, `arm_comparison_samples`, `outside_benchmark_samples` — see each one's own subsection below). [#1174](https://github.com/dd-jp/samurai-trading-system/issues/1174) closed a further gap: eight real, migrated tables (`stage2_selected_config`, `trader_log`, `risk_log`, `flatten_submissions`, `llm_call_log`, `alert_delivery_failures`, `feedback_cycle_schedule`, `llm_spend_cap`) were named as owned in the "Integration with Pipeline" map (two of them — `alert_delivery_failures` and `feedback_cycle_schedule` — were not even named there) but carried no DDL anywhere in this document; their `CREATE TABLE` statements and per-table collision notes are appended after `outside_benchmark_samples`, each folded to its CURRENT effective shape (every later `ALTER TABLE` migration read and applied), not just its creating migration.
 
-The store now has **thirty-five** real tables in total — `CONSOLIDATED_SCHEMA_TABLE_COUNT` in `server/shared/store/open-shared-store.test.ts` holds the same figure and fails if a migration adds a table without updating it; nothing compares this paragraph to that constant, so drift here is still possible and must be caught by hand. All thirty-five now carry DDL somewhere in this document, closing #1174's acceptance criterion that the "full consolidated DDL" claim be true or narrowed. **It is narrowed, not fully true, in one respect stated plainly:** table-level completeness is not the same claim as column-level currency. Six tables that were *already* declared here before this pass have DDL blocks that predate later `ALTER TABLE` migrations and are missing the columns those migrations added — `audit_log` is missing `instrument`/`asset_class` (`0013`); `open_positions` is missing `conviction`/`converged` (`0004`), `residual_unprotected_since`/`residual_rearm_alerted_at` (`0024`), `key_scheme` (`0027`), `arm` (`0033`), `decision_price`/`quote_bid`/`quote_ask`/`quote_mid`/`quote_observed_at`/`modelled_cost_breakdown_json` (`0037`), and `sizing_capital_ceiling` (`0045`); `closed_trades` is missing `arm` (`0033`) and `sizing_capital_ceiling` (`0045`); `debate_log` is missing `trace_id` (`0015`), `confidence`/`synthesis`/`position`/`disagreement_summary`/`open_items_json`/`converged` (`0026`), and `termination` (`0041`); `fills` is missing `exit_reason` (`0031`) and `flatten_idempotency_key` (`0037`); `llm_spend` is missing `server_tool_calls` (`0018`) and `ttfb_ms` (`0038`). #1174's mandate was that every table named as owned gets a DDL entry, not a re-verification of every already-declared table's column currency — folding those six back to their current effective shape is real, separate work this pass did not do, tracked as [#1251](https://github.com/dd-jp/samurai-trading-system/issues/1251) (open) rather than left as a prose-only flag. `verdict_log` was a seventh table in this state (missing `no_go_detail_measured_ms`/`no_go_detail_bound_ms`, `0046`); it is fixed by this same edit, [#1234](https://github.com/dd-jp/samurai-trading-system/issues/1234), which folded its `CREATE TABLE` block to current effective shape rather than adding to #1251's list. (An eighth, `risk_critic_log`, is likewise missing 0040's two columns; those are disclosed in a comment on its DDL below rather than inlined — see that table's own subsection.) The eight tables this pass actually added ARE folded to current effective shape, each verified column-by-column against a freshly migrated `:memory:` database (`PRAGMA table_info`), and each `CHECK` constraint and `CREATE INDEX` cross-checked directly against that database's `sqlite_master.sql` — not merely transcribed from their creating migration. Say this plainly: a folded `CREATE TABLE` below is a record of a table's current shape, not something you can hand to `sqlite3` and replay in migration order to reach that shape — it collapses N migrations into one statement, and the prose above each block is what carries which migration contributed which column.
+The store now has **thirty-five** real tables in total — `CONSOLIDATED_SCHEMA_TABLE_COUNT` in `server/shared/store/open-shared-store.test.ts` holds the same figure and fails if a migration adds a table without updating it; nothing compares this paragraph to that constant, so drift here is still possible and must be caught by hand. All thirty-five now carry DDL somewhere in this document, closing #1174's acceptance criterion that the "full consolidated DDL" claim be true or narrowed. **#1174 left it narrowed rather than fully true, in one respect: table-level completeness is not the same claim as column-level currency.** Six tables that were already declared here before that pass had DDL blocks predating later `ALTER TABLE` migrations, missing the columns/indexes/CHECK values those migrations added — `audit_log`, `open_positions`, `closed_trades`, `debate_log`, `fills`, `llm_spend`, and (verified rather than assumed correct) `verdict_log`'s index and `risk_critic_log`'s two comment-disclosed columns. **[#1251](https://github.com/dd-jp/samurai-trading-system/issues/1251) closed that gap**: every already-declared table below is now folded to its current effective shape, `risk_critic_log`'s two 0040 columns are inlined rather than commented (see that table's own subsection for why the earlier comment-only choice no longer applies), and #1251's verification pass — building a real migrated `:memory:` DB and diffing it against the spec's own fenced DDL, in both directions, column-by-column and CHECK-by-CHECK — found further drift #1174 did not name: `closed_trades.close_reason`'s widened CHECK (0031) and `modelled_cost_charged` (0049), `verdict_log`'s missing index (0005, not re-checked when #1234 fixed its columns), `flatten_submissions.arm` + its index (0050), the three `broker_*` tables' `venue` CHECK missing `'saxo'` (0048) and `broker_brackets.phase`'s CHECK missing `'submitting'`/`'cancelling_sibling'` (0017/0022), `arm_comparison_samples`' missing table-level CHECK, and `dial_adjustments.reason`'s missing `DEFAULT ''` (0002) — all fixed in the same pass. **[`server/shared/store/spec-schema-drift.test.ts`](../../server/shared/store/spec-schema-drift.test.ts) now enforces this claim mechanically** — it builds both a `:memory:` DB from this document's own fenced `CREATE TABLE`/`CREATE INDEX` blocks and a second `:memory:` DB from the real migration chain, and fails on any column, index, or CHECK-constraint difference between them, in either direction. Every table below is folded to its current effective shape, each verified column-by-column against a freshly migrated `:memory:` database (`PRAGMA table_info`), and each `CHECK` constraint and `CREATE INDEX` cross-checked directly against that database's `sqlite_master.sql` — not merely transcribed from its creating migration. Say this plainly: a folded `CREATE TABLE` below is a record of a table's current shape, not something you can hand to `sqlite3` and replay in migration order to reach that shape — it collapses N migrations into one statement, and the prose above each block is what carries which migration contributed which column.
 
 **Market Data Service** — owner: `docs/specs/market-data-service-spec.md`
 
@@ -119,54 +119,102 @@ CREATE INDEX idx_cii_snapshots_captured_at ON cii_snapshots(captured_at);
 
 ```sql
 -- Live open state — Trader position-awareness + Risk exposure. Mutable.
+-- Folded in by #1251: conviction/converged (0004), residual_unprotected_since/
+-- residual_rearm_alerted_at (0024), key_scheme (0027), arm + idx_open_positions_arm
+-- (0033), decision_price/quote_bid/quote_ask/quote_mid/quote_observed_at/
+-- modelled_cost_breakdown_json (0037), sizing_capital_ceiling (0045).
 CREATE TABLE open_positions (
-  idempotency_key     TEXT PRIMARY KEY,
-  debate_id           TEXT NOT NULL,
-  instrument          TEXT NOT NULL,
-  asset_class         TEXT NOT NULL CHECK(asset_class IN ('crypto', 'stocks')),
-  side                TEXT NOT NULL CHECK(side IN ('buy', 'sell')),
-  intent_type         TEXT NOT NULL CHECK(intent_type IN ('entry', 'scale_in')),
-  requested_size      REAL NOT NULL,
-  filled_size         REAL NOT NULL,   -- cumulative; downstream reads THIS, never requested_size
-  avg_entry_price     REAL NOT NULL,
-  stop                REAL NOT NULL,   -- live protective leg (resized on partial fill)
-  target              REAL NOT NULL,
-  order_state         TEXT NOT NULL,
-  broker_order_ids    TEXT NOT NULL,   -- JSON string[]
-  opened_at           TEXT NOT NULL,
-  decision_timestamp  TEXT NOT NULL    -- the bar/decision time (from OrderIntent)
+  idempotency_key              TEXT PRIMARY KEY,
+  debate_id                    TEXT NOT NULL,
+  instrument                   TEXT NOT NULL,
+  asset_class                  TEXT NOT NULL CHECK(asset_class IN ('crypto', 'stocks')),
+  side                         TEXT NOT NULL CHECK(side IN ('buy', 'sell')),
+  intent_type                  TEXT NOT NULL CHECK(intent_type IN ('entry', 'scale_in')),
+  requested_size               REAL NOT NULL,
+  filled_size                  REAL NOT NULL,   -- cumulative; downstream reads THIS, never requested_size
+  avg_entry_price              REAL NOT NULL,
+  stop                         REAL NOT NULL,   -- live protective leg (resized on partial fill)
+  target                       REAL NOT NULL,
+  order_state                  TEXT NOT NULL,
+  broker_order_ids             TEXT NOT NULL,   -- JSON string[]
+  opened_at                    TEXT NOT NULL,
+  decision_timestamp           TEXT NOT NULL,   -- the bar/decision time (from OrderIntent)
+  conviction                   REAL NOT NULL DEFAULT 1,
+  converged                    INTEGER NOT NULL DEFAULT 0,
+  residual_unprotected_since   TEXT,
+  residual_rearm_alerted_at    TEXT,
+  key_scheme                   INTEGER NOT NULL DEFAULT 2,
+  arm                          TEXT NOT NULL DEFAULT 'live' CHECK(arm IN ('live', 'control')),
+  decision_price               REAL,
+  quote_bid                    REAL,
+  quote_ask                    REAL,
+  quote_mid                    REAL,
+  quote_observed_at            TEXT,
+  modelled_cost_breakdown_json TEXT,
+  sizing_capital_ceiling       REAL
 );
+
 CREATE INDEX idx_open_positions_instrument ON open_positions(instrument, asset_class);
+CREATE INDEX idx_open_positions_arm ON open_positions(arm, opened_at);
 
 -- One row per (partial) fill — every fill logged (CONTEXT.md invariant #4). Append-only.
+-- exit_reason (0031, threaded from flatten_submissions.exit_reason — see 0031's
+-- doc comment) and flatten_idempotency_key (0037, the flatten write-ahead row's
+-- own idempotency_key, so a split flatten fill can be traced back to its
+-- submission) folded in by #1251, alongside idx_fills_broker_fill_id (0005) —
+-- present since one of this table's earliest migrations (the table itself is
+-- 0001) but never folded into this block until now.
 CREATE TABLE fills (
-  idempotency_key      TEXT NOT NULL,
-  broker_fill_id       TEXT NOT NULL,
-  leg                  TEXT NOT NULL CHECK(leg IN ('entry', 'stop', 'target', 'exit')),
-  price                REAL NOT NULL,
-  qty                  REAL NOT NULL,
-  fee                  REAL NOT NULL,
-  timestamp            TEXT NOT NULL,
-  cost_breakdown_json  TEXT NULL,      -- JSON {spread_cost, commission, slippage, market_impact}; Simulated-adapter fills only (undefined/null on real broker fills)
+  idempotency_key          TEXT NOT NULL,
+  broker_fill_id           TEXT NOT NULL,
+  leg                      TEXT NOT NULL CHECK(leg IN ('entry', 'stop', 'target', 'exit')),
+  price                    REAL NOT NULL,
+  qty                      REAL NOT NULL,
+  fee                      REAL NOT NULL,
+  timestamp                TEXT NOT NULL,
+  cost_breakdown_json      TEXT NULL,      -- JSON {spread_cost, commission, slippage, market_impact}; Simulated-adapter fills only (undefined/null on real broker fills)
+  exit_reason              TEXT,
+  flatten_idempotency_key  TEXT,
   PRIMARY KEY (idempotency_key, broker_fill_id)
 );
+CREATE INDEX idx_fills_broker_fill_id ON fills(broker_fill_id);
 
 -- Emitted on round-trip-to-flat — the Feedback Loop / Risk realized record. Append-only.
+-- Folded in by #1251: arm + idx_closed_trades_arm (0033), sizing_capital_ceiling
+-- (0045), modelled_cost_charged (0049 — whether the modelled cost model was
+-- actually charged against this trade's realized_pnl_net; see 0049's doc comment
+-- for the per-arm backfill). close_reason's CHECK also widened by 0031 (#793)
+-- to the three ExitReason values named below, alongside the original
+-- bracket-hit/legacy set -- 'exit' stays legal for pre-0031 rows whose
+-- specific reason was never recorded (0031's doc comment).
+-- idx_closed_trades_closed_at predates all of that -- 0005_hot_path_indexes.sql
+-- (the table itself is 0001; 0005 is one of its earliest migrations, not the
+-- first) -- and had never been folded into this block; 0031's table rebuild
+-- (for the CHECK widening above) recreates the same index as a byproduct but
+-- does not originate it.
 CREATE TABLE closed_trades (
-  idempotency_key    TEXT PRIMARY KEY,   -- per-lot
-  debate_id          TEXT NOT NULL,      -- attribution + setup-store join key
-  instrument         TEXT NOT NULL,
-  asset_class        TEXT NOT NULL CHECK(asset_class IN ('crypto', 'stocks')),
-  side               TEXT NOT NULL CHECK(side IN ('buy', 'sell')),
-  entry              REAL NOT NULL,      -- avg entry, from fills
-  stop               REAL NOT NULL,      -- initial protective stop → initial risk
-  filled_size        REAL NOT NULL,      -- initial risk = |entry - stop| x filled_size
-  realized_pnl_net   REAL NOT NULL,      -- net of fees
-  fees_total         REAL NOT NULL,
-  opened_at          TEXT NOT NULL,
-  closed_at          TEXT NOT NULL,
-  close_reason       TEXT NOT NULL CHECK(close_reason IN ('stop', 'target', 'exit'))
+  idempotency_key        TEXT PRIMARY KEY,   -- per-lot
+  debate_id              TEXT NOT NULL,      -- attribution + setup-store join key
+  instrument             TEXT NOT NULL,
+  asset_class            TEXT NOT NULL CHECK(asset_class IN ('crypto', 'stocks')),
+  side                   TEXT NOT NULL CHECK(side IN ('buy', 'sell')),
+  entry                  REAL NOT NULL,      -- avg entry, from fills
+  stop                   REAL NOT NULL,      -- initial protective stop → initial risk
+  filled_size            REAL NOT NULL,      -- initial risk = |entry - stop| x filled_size
+  realized_pnl_net       REAL NOT NULL,      -- net of fees
+  fees_total             REAL NOT NULL,
+  opened_at              TEXT NOT NULL,
+  closed_at              TEXT NOT NULL,
+  close_reason           TEXT NOT NULL CHECK(close_reason IN (
+                            'stop', 'target', 'exit',
+                            'flatten', 'signal_decay', 'direction_flip'
+                          )),
+  arm                    TEXT NOT NULL DEFAULT 'live' CHECK(arm IN ('live', 'control')),
+  sizing_capital_ceiling REAL,
+  modelled_cost_charged  INTEGER NOT NULL DEFAULT 1 CHECK (modelled_cost_charged IN (0, 1))
 );
+CREATE INDEX idx_closed_trades_closed_at ON closed_trades(closed_at);
+CREATE INDEX idx_closed_trades_arm ON closed_trades(arm, closed_at);
 ```
 
 **Broker Adapters** — owner: `docs/specs/execution-spec.md` ("Module: Broker Abstraction"), written from BELOW the `SharedStore` seam
@@ -179,7 +227,7 @@ CREATE TABLE closed_trades (
 -- may read it; folding it into open_positions would leak the emulation through the seam
 -- and give the lot record a second writer.
 --
--- One table for all three venues because no consumer reads across them: each adapter
+-- One table for all four venues because no consumer reads across them: each adapter
 -- loads only `WHERE venue = ?`, and `venue` is in the PK so two adapters can never
 -- collide on a shared client order id. Per-venue column applicability:
 --   ccxt   -- all columns; this IS the emulation's state machine.
@@ -189,14 +237,19 @@ CREATE TABLE closed_trades (
 --             back (the adapter indexes client-order-id -> bracket parent and reaches the
 --             children through the parent's legs); both children are written anyway
 --             because the submit response carries them.
+--   saxo   -- identity + the three order ids, same shape as Alpaca/IBKR. 'saxo' joined
+--             the venue set via 0048 (#1032 item 1) -- the live equity leg (ADR-0015,
+--             2026-08-30 amendment).
 -- The request columns are nullable because the two REHYDRATION paths (Alpaca/IBKR
 -- getOrder, which learn of a bracket by asking the venue) legitimately know the order
 -- ids and not the request that produced them; inventing values there would be worse
 -- than none. A ccxt row always carries them, being the only venue that re-places legs.
+-- phase's CHECK also carries 'submitting' (0017, #312) and 'cancelling_sibling' (0022,
+-- #586), both added before saxo joined and folded in here by #1251.
 CREATE TABLE broker_brackets (
-  venue            TEXT NOT NULL CHECK(venue IN ('ccxt', 'ibkr', 'alpaca')),
+  venue            TEXT NOT NULL CHECK(venue IN ('ccxt', 'ibkr', 'alpaca', 'saxo')),
   client_order_id  TEXT NOT NULL,    -- same value as open_positions.idempotency_key
-  phase            TEXT NOT NULL CHECK(phase IN ('pending_entry', 'arming', 'armed', 'resolved')),
+  phase            TEXT NOT NULL CHECK(phase IN ('submitting', 'pending_entry', 'arming', 'armed', 'cancelling_sibling', 'resolved')),
   entry_order_id   TEXT NULL,        -- ccxt entry / IBKR parent / Alpaca bracket parent
   stop_order_id    TEXT NULL,
   target_order_id  TEXT NULL,
@@ -227,8 +280,9 @@ CREATE TABLE broker_brackets (
 -- fill is certain to be in `fills`, and that certainty lives above the broker seam in
 -- ingestFills(), which this table's writer cannot see. ingestFills() dedups on
 -- broker_fill_id, so a re-offered row costs nothing.
+-- venue's CHECK widened to 'saxo' by 0048, same as broker_brackets above.
 CREATE TABLE broker_observed_fills (
-  venue            TEXT NOT NULL CHECK(venue IN ('ccxt', 'ibkr', 'alpaca')),
+  venue            TEXT NOT NULL CHECK(venue IN ('ccxt', 'ibkr', 'alpaca', 'saxo')),
   client_order_id  TEXT NOT NULL,
   broker_fill_id   TEXT NOT NULL,
   leg              TEXT NOT NULL CHECK(leg IN ('entry', 'stop', 'target', 'exit')),
@@ -250,8 +304,9 @@ CREATE TABLE broker_observed_fills (
 -- soak (#238) contains restarts, and an in-process clock would age nothing out. Deleted when
 -- the venue finally prices the fill. NOT `broker_observed_fills`: `price` is NOT NULL there,
 -- and an unpriced row on that path is exactly what is being refused.
+-- venue's CHECK widened to 'saxo' by 0048, same as broker_brackets above.
 CREATE TABLE broker_unpriced_fills (
-  venue            TEXT NOT NULL CHECK(venue IN ('ccxt', 'ibkr', 'alpaca')),
+  venue            TEXT NOT NULL CHECK(venue IN ('ccxt', 'ibkr', 'alpaca', 'saxo')),
   client_order_id  TEXT NOT NULL,
   broker_fill_id   TEXT NOT NULL,
   leg              TEXT NOT NULL CHECK(leg IN ('entry', 'stop', 'target', 'exit')),
@@ -314,7 +369,7 @@ CREATE TABLE dial_adjustments (
   status      TEXT NOT NULL CHECK(status IN ('applied', 'pending_approval', 'rejected', 'reverted')),
   cycle_date  TEXT NOT NULL,
   created_at  TEXT NOT NULL,
-  reason      TEXT NOT NULL  -- machine-readable cause, e.g. 'attribution', 'proposal', 'proposal:backtest_auto_approved' (#197)
+  reason      TEXT NOT NULL DEFAULT ''  -- machine-readable cause, e.g. 'attribution', 'proposal', 'proposal:backtest_auto_approved' (#197). DEFAULT '' is 0002's ALTER default, not a spec choice -- SqliteAdjustmentLog always supplies a real reason on write, so it exists purely to backfill the rows written before this column existed.
 );
 CREATE INDEX idx_dial_adjustments_dial ON dial_adjustments(dial_type, dial_name, created_at);
 CREATE INDEX idx_dial_adjustments_status ON dial_adjustments(status);
@@ -345,15 +400,29 @@ Resolved: [Decide: Feedback Loop dial tables + adjustment-history schema (#180)]
 
 ```sql
 -- Append-only. FL's system-of-record for per-analyst attribution, joined by debate_id.
+-- Folded in by #1251: trace_id + idx_debate_log_trace (0015, correlation to the
+-- Orchestrator's tick); confidence/synthesis/position/disagreement_summary/
+-- open_items_json/converged (0026, the Debate Engine's structured verdict);
+-- termination (0041). idx_debate_log_created_at (0005 — dashboard time-windowed reads).
 CREATE TABLE debate_log (
-  debate_id           TEXT PRIMARY KEY,
-  instrument          TEXT NOT NULL,
-  bar_timestamp       TEXT NOT NULL,
-  contributions_json  TEXT NOT NULL,   -- JSON AnalystContribution[] (influence_score, stance, per analyst)
-  direction           TEXT NOT NULL CHECK(direction IN ('bullish', 'bearish', 'neutral')),  -- tracks the registry's `Direction` (cross-spec-contracts.md); the CHECK's literal set must move in lockstep with that type
-  rounds              INTEGER NOT NULL,
-  created_at          TEXT NOT NULL
+  debate_id            TEXT PRIMARY KEY,
+  instrument           TEXT NOT NULL,
+  bar_timestamp        TEXT NOT NULL,
+  contributions_json   TEXT NOT NULL,   -- JSON AnalystContribution[] (influence_score, stance, per analyst)
+  direction            TEXT NOT NULL CHECK(direction IN ('bullish', 'bearish', 'neutral')),  -- tracks the registry's `Direction` (cross-spec-contracts.md); the CHECK's literal set must move in lockstep with that type
+  rounds               INTEGER NOT NULL,
+  created_at           TEXT NOT NULL,
+  trace_id             TEXT,
+  confidence           REAL,
+  synthesis            TEXT,
+  position             TEXT,
+  disagreement_summary TEXT,
+  open_items_json      TEXT,
+  converged            INTEGER,
+  termination          TEXT
 );
+CREATE INDEX idx_debate_log_created_at ON debate_log(created_at);
+CREATE INDEX idx_debate_log_trace ON debate_log (trace_id);
 ```
 
 **Risk Manager** — owner: `docs/specs/risk-manager-spec.md`
@@ -387,6 +456,10 @@ Resolved: [Risk Manager: fix BreakerState persistence (crash-restart safety) (#2
 -- what a no-go gate measured and the bound it broke, both nullable (NULL for `go`
 -- and for gates that don't compare a number to a bound). Appended at the end,
 -- matching ALTER TABLE ADD COLUMN's live physical order (PRAGMA table_info).
+-- idx_verdict_log_timestamp predates all of that -- 0005_hot_path_indexes.sql,
+-- one of this table's earliest migrations -- and had never been folded into
+-- this block; #1251's verification pass found it (#1234 fixed this table's
+-- columns but did not re-check its indexes).
 CREATE TABLE verdict_log (
   trace_id                  TEXT PRIMARY KEY,
   idempotency_key           TEXT NOT NULL,
@@ -398,6 +471,7 @@ CREATE TABLE verdict_log (
   no_go_detail_measured_ms  REAL,
   no_go_detail_bound_ms     REAL
 );
+CREATE INDEX idx_verdict_log_timestamp ON verdict_log(timestamp);
 ```
 
 Resolved: [Verdict: implement VerdictLogStore against the shared SQLite store (#206)](https://github.com/dd-jp/samurai-trading-system/issues/206), closing GAP-4 from the 2026-07-26 cross-verify pass ([docs/reviews/cross-verify-2026-07-26.md](../reviews/cross-verify-2026-07-26.md)) — `audit_log.output_digest` is a hash, not a queryable payload, so it cannot answer `VerdictAuditEntry.reason`/`.hitl_override`; `verdict_log` is Verdict's own real-field record, keyed by `trace_id` (the correlation ID threaded from the Orchestrator's tick) with `idempotency_key` retained as a non-PK column for cross-reference to `open_positions`/`fills`. `no_go_reason` is nullable (`null` on `go`); `hitl_override` is the dashboard-facing derived flag — true whenever `VerdictDecision.approval_path !== 'automated'` (a human path was actually taken, live or backtest-bypassed-but-recorded), not `would_require_approval` (which is also true on an automated-bypass backtest run where no override occurred).
@@ -408,15 +482,21 @@ Resolved: [Verdict: implement VerdictLogStore against the shared SQLite store (#
 
 ```sql
 -- One row per stage-decision per trace_id. Append-only. Powers the dashboard read-only.
+-- instrument/asset_class added by 0013 (dashboard filtering, matching debate_log's
+-- own instrument column); idx_audit_log_timestamp added by 0025, for the dashboard's
+-- time-windowed reads. Both folded in by #1251.
 CREATE TABLE audit_log (
   trace_id       TEXT NOT NULL,
   stage          TEXT NOT NULL,
   decision       TEXT NOT NULL,
   input_digest   TEXT NOT NULL,
   output_digest  TEXT NOT NULL,
-  timestamp      TEXT NOT NULL
+  timestamp      TEXT NOT NULL,
+  instrument     TEXT,
+  asset_class    TEXT
 );
 CREATE INDEX idx_audit_log_trace_id ON audit_log(trace_id);
+CREATE INDEX idx_audit_log_timestamp ON audit_log(timestamp);
 
 -- Disposable, best-effort progress state -- NOT a system-of-record. Upserted per-instrument
 -- before each stage call, deleted on tick completion. Losing it on crash costs nothing but a
@@ -560,7 +640,11 @@ CREATE TABLE llm_spend (
   timestamp                    TEXT    NOT NULL,
   -- Added by 0012 (#326): per-call latency and per-debate attribution.
   latency_ms                   INTEGER,
-  debate_id                    TEXT
+  debate_id                    TEXT,
+  -- Added by 0018 (#476): server-side tool calls, billed but token-invisible.
+  server_tool_calls            INTEGER NOT NULL DEFAULT 0,
+  -- Added by 0038: time-to-first-byte, a strict lower bound inside latency_ms's span.
+  ttfb_ms                      INTEGER
 );
 
 -- The operator surface's only access pattern is "sum the last N hours/days" —
@@ -587,18 +671,19 @@ could not answer (provider failure, spend-cap refusal, unreadable response). `ev
 handed NOTHING in that case, so the decision keeps its explicit `risk_critic: skipped` reason —
 the row is for the operator, and so a replay sees the same "no verdict" input the live run had.
 
-**Migration `0040` (added 2026-09-03 as part of #994's invalidation fold) adds two further nullable columns, disclosed in a comment on the DDL below rather than inlined as columns** — this predates #1174 and #1174's mandate was whole-table absence, not re-folding an already-declared table, so it is left as-is here rather than folded in this pass. See "`invalidation_log` — does not exist, and never will" above for the full account of what they hold and why there is no separate table.
+**Migration `0040` (added 2026-09-03 as part of #994's invalidation fold) adds two further nullable columns, inlined below.** They were originally disclosed only in a comment, on the reasoning that #1174's mandate was whole-table absence, not re-folding an already-declared table — but #1251, which re-folds exactly that class of already-declared-table drift, makes that reasoning expire: a comment-disclosed column here would be a standing, permanently-exempted hole in the class of drift `spec-schema-drift.test.ts` exists to close, and `verdict_log`'s own two 0046 columns were inlined by #1234 rather than commented, so this brings `risk_critic_log` to the same standard. See "`invalidation_log` — does not exist, and never will" above for the full account of what they hold and why there is no separate table.
 
 ```sql
 CREATE TABLE risk_critic_log (
-  debate_id    TEXT NOT NULL PRIMARY KEY,
-  verdict      TEXT NOT NULL CHECK(verdict IN ('pass', 'trim', 'reject', 'unavailable')),
+  debate_id                 TEXT NOT NULL PRIMARY KEY,
+  verdict                   TEXT NOT NULL CHECK(verdict IN ('pass', 'trim', 'reject', 'unavailable')),
   -- Meaningful only for 'trim': the notional the critic argues this intent
   -- should be capped at. The pipeline can only ever use it to REDUCE size.
-  max_notional REAL NULL,
-  reasoning    TEXT NOT NULL,
-  created_at   TEXT NOT NULL
-  -- 0040 adds: conditions_json TEXT NULL, dropped_conditions_json TEXT NULL
+  max_notional              REAL NULL,
+  reasoning                 TEXT NOT NULL,
+  created_at                TEXT NOT NULL,
+  conditions_json           TEXT NULL,
+  dropped_conditions_json   TEXT NULL
 );
 
 CREATE INDEX idx_risk_critic_log_created_at ON risk_critic_log(created_at);
@@ -644,7 +729,17 @@ CREATE TABLE arm_comparison_samples (
 
   diverged                 INTEGER NOT NULL CHECK(diverged IN (0, 1)),
   divergence_reason        TEXT,
-  min_trades_per_arm       INTEGER NOT NULL DEFAULT 5
+  min_trades_per_arm       INTEGER NOT NULL DEFAULT 5,
+
+  -- `divergence_reason` is non-NULL if and only if `diverged = 1` -- the same
+  -- invariant `ArmDivergenceVerdict` documents and `evaluateArmDivergence`
+  -- constructs, enforced at the schema layer since this table's creation (0034)
+  -- rather than only asserted by readers. #1251 found this table-level CHECK
+  -- had never made it into this block despite being part of `0034` from day one.
+  CHECK (
+    (diverged = 0 AND divergence_reason IS NULL) OR
+    (diverged = 1 AND divergence_reason IS NOT NULL)
+  )
 );
 
 CREATE INDEX idx_arm_comparison_samples_computed_at ON arm_comparison_samples(computed_at DESC);
@@ -802,7 +897,7 @@ No other field-level collisions found for either table.
 
 Owned by Execution — the durable write-ahead journal for `execute()`'s exit path. An exit intent never wrote a row to `open_positions` (`OpenPosition.intent_type` deliberately excludes `'exit'` — "exits close a lot; they never create one"), so a replayed flatten had nothing to dedupe against and a lost `submitFlatten` response left no durable trace for reconcile to resolve. `'submitting' -> 'submitted' | 'error'`, mirroring `broker_brackets.phase` and `open_positions.order_state`'s own pending-to-submitted transition. No bracket-shaped columns: a flatten is a plain market order.
 
-Amended five times after `0019`. Migration `0020` (#517) added `lot_idempotency_keys`, the originating lot(s)' identity, written at submit time so `ingestFills()` can attribute a fill back to the lot it closed instead of inferring it after the fact. Migration `0021` (#571) added `lot_held_quantities`, positionally parallel to the keys, so a partial flatten's fill splits by what each lot actually held rather than by what its entry once filled. Migration `0023` (#519/#526) added `fills_swept_at`, the durable "done" signal that bounds `reconcile()`'s sweep to genuinely in-flight rows instead of every flatten this database has ever recorded. Migration `0031` (#793) added `exit_reason`, threading the same three named reasons (`ExitReason`: `'flatten' | 'signal_decay' | 'direction_flip'`) that `trader_log.exit_reason` and `fills.exit_reason` also carry. Migration `0037` (#1001) added `decision_price`/`quote_bid`/`quote_ask`/`quote_mid`/`quote_observed_at`/`modelled_cost_breakdown_json` — the SAME six columns added to `open_positions` by the same migration, so a real-broker fill's realised half-spread and slippage can be computed on the exit leg exactly as on the entry leg.
+Amended six times after `0019`. Migration `0020` (#517) added `lot_idempotency_keys`, the originating lot(s)' identity, written at submit time so `ingestFills()` can attribute a fill back to the lot it closed instead of inferring it after the fact. Migration `0021` (#571) added `lot_held_quantities`, positionally parallel to the keys, so a partial flatten's fill splits by what each lot actually held rather than by what its entry once filled. Migration `0023` (#519/#526) added `fills_swept_at`, the durable "done" signal that bounds `reconcile()`'s sweep to genuinely in-flight rows instead of every flatten this database has ever recorded. Migration `0031` (#793) added `exit_reason`, threading the same three named reasons (`ExitReason`: `'flatten' | 'signal_decay' | 'direction_flip'`) that `trader_log.exit_reason` and `fills.exit_reason` also carry. Migration `0037` (#1001) added `decision_price`/`quote_bid`/`quote_ask`/`quote_mid`/`quote_observed_at`/`modelled_cost_breakdown_json` — the SAME six columns added to `open_positions` by the same migration, so a real-broker fill's realised half-spread and slippage can be computed on the exit leg exactly as on the entry leg. Migration `0050` (#1124) added `arm` (same domain and default as `open_positions.arm`/`closed_trades.arm`) plus `idx_flatten_submissions_arm`, closing a cross-arm leak where a flatten's own arm had to be inferred rather than read.
 
 ```sql
 CREATE TABLE flatten_submissions (
@@ -826,9 +921,11 @@ CREATE TABLE flatten_submissions (
   quote_ask                     REAL, -- 0037
   quote_mid                     REAL, -- 0037: (quote_bid + quote_ask) / 2, NULL iff the pair is
   quote_observed_at             TEXT, -- 0037: the quote's own timestamp
-  modelled_cost_breakdown_json  TEXT  -- 0037: JSON {spread_cost, commission, slippage, market_impact}
+  modelled_cost_breakdown_json  TEXT, -- 0037: JSON {spread_cost, commission, slippage, market_impact}
+  arm                           TEXT NOT NULL DEFAULT 'live' CHECK(arm IN ('live', 'control'))  -- 0050 (#1124)
 );
 CREATE INDEX idx_flatten_submissions_instrument ON flatten_submissions(instrument);
+CREATE INDEX idx_flatten_submissions_arm ON flatten_submissions(arm, status);
 ```
 
 **Not part of the twenty-two/twenty-three-table non-collision pass; checked here.** `instrument`/`asset_class`/`side` match this schema's established conventions exactly. `idempotency_key` as this table's own `PRIMARY KEY` uses the same type (`TEXT`) as every other appearance of that name, but is a fresh key space — a flatten submission's own idempotency key, never `open_positions.idempotency_key` (that identity is instead carried inside `lot_idempotency_keys`). `order_state`/`broker_order_ids` share their names and value spaces with `open_positions`' columns of the same name by design (`0019`'s own doc: "mirroring... `execute()`'s own pending -> submitted transition"); nullable here only because this row is written before the broker ack, where `open_positions`' equivalent is not. `decision_price`/`quote_bid`/`quote_ask`/`quote_mid`/`quote_observed_at`/`modelled_cost_breakdown_json` are the identical six columns `open_positions` carries, added by the same migration on purpose (`0037`'s own doc: "six columns, added to BOTH ... the parallel write-aheads"). `exit_reason` is the same three-value domain `trader_log.exit_reason` and `fills.exit_reason` carry, threaded deliberately (`0031`'s own doc). No unintentional divergence found.
@@ -934,6 +1031,7 @@ CREATE TABLE llm_spend_cap (
 - Test the migration runner: applying migrations to an empty `:memory:` DB produces the exact schema above; re-applying is a no-op; `schema_migrations` reflects applied versions.
 - Test `openSharedStore`: returns a handle backed by the given path; runs pending migrations; WAL mode and `synchronous=FULL` are set on the connection.
 - Test each table's constraints directly (e.g. `open_positions.asset_class` CHECK rejects an invalid value; `config_trials` upsert-on-conflict overwrites `result_json`; `dial_adjustments.status` transitions correctly; `cosine_setups.debate_id` PK rejects a duplicate write for the same debate).
+- Test that this document's own DDL matches the real schema, mechanically (#1251) — `server/shared/store/spec-schema-drift.test.ts` builds a `:memory:` DB from this document's fenced `CREATE TABLE`/`CREATE INDEX` blocks and a second from the real migration chain, then diffs every table's columns, indexes, and normalized `CREATE TABLE` text (which catches CHECK-constraint drift the other two can't see) in both directions — every table except SQLite's own implicit `sqlite_sequence` AUTOINCREMENT bookkeeping, which neither DB build declares and so is excluded rather than diffed. `CONSOLIDATED_SCHEMA_TABLE_COUNT` in `open-shared-store.test.ts` (above) only ever checked that every table is *named*; this checks that its DDL is *current*.
 - No LLM to mock — this is pure schema/migration/connection-config testing.
 
 ### Modules to Test
