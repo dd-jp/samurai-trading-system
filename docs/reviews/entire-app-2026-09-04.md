@@ -280,8 +280,9 @@ dedup-fixture line — `inputFor(unpricedFlatten(), { positionStore: makePositio
 `'still dedupes — a repeated flatten must not double-submit while the feed is down'` — a clean match
 for "dedup-fixture". `:911` landed on `const decision = await verdict.decide(input);`, inside the
 unrelated `describe('VerdictImpl.decide — gate ordering', ...)` block (opened at `:898`) — not itself a
-dedup-fixture line; a dedup-flavored comment sits two lines above that block's own `positionStore` setup
-(`:906`, `// would also dedup-fail`), the likely source of the earlier copy-adjacency error. Rot, from
+dedup-fixture line; a dedup-flavored comment trails that block's own `positionStore` setup at `:906`
+(`// would also dedup-fail`), five lines above the `:911` pin — the likely source of the earlier
+copy-adjacency error. Rot, from
 later edits to the same file shifting line numbers, is still the accurate story for both — they rotted
 onto different neighborhoods, and only one of the two happens to have landed on a dedup fixture. The two
 `verdict-spec.md` pins were not rot at all: at `0997606`, `:145` was already "**Timeout → no-go.**"

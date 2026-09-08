@@ -50,10 +50,15 @@
  * `exitPathOrder` (`server/apps/orchestrator/smoke-run.ts`) is a second producer of
  * an exit intent this stage sees: it builds one with `exit_reason: 'flatten'`
  * and neither marker, and drives it through this same `VerdictImpl` via
- * `exitPathVerdict`. Benign — that intent carries a real, non-zero bracket
- * and a fresh `decision_timestamp`, so every gate runs on it and it clears
- * them on its own merits, exempted by none of them; the claim above is about
- * production code, not about every caller of `decide`.
+ * `exitPathVerdict`. Benign — the intent carries neither marker, so no gate
+ * is skipped by exemption; it reaches `go` in the harness because its
+ * bracket is non-zero, its `decision_timestamp` is fresh, its asset class is
+ * crypto so gate 4 (market-open) does not apply, and the harness config
+ * widens `max_mark_age` to 24h for the fixture's one frozen mark
+ * (`EXIT_PATH_VERDICT_CONFIG`, `smoke-run.ts`) rather than `stale_feed`
+ * clearing on the mark's own merits. The claim above is about production
+ * code's exemption markers, not about every caller of `decide` reaching
+ * `go` by the same route.
  *
  * THE TWO STACK, ONE WAY. `unpriced_exit` is reachable only on that site's
  * `exit_reason: 'flatten'` branch, and `exit_reason: 'flatten'` alone is what
