@@ -21,6 +21,7 @@ import {
 } from '../../providers/market-data-service/index.js';
 import {
   describeThrown,
+  describeThrownSafely,
   type ExitReason,
   heldQuantitiesFor,
   type OpenPosition,
@@ -962,7 +963,7 @@ async function readExitPrice(
     // propagate exactly as they did before #826.
     if (exitReason !== 'flatten' || lotAssetClass === undefined) throw error;
 
-    const reason = error instanceof Error ? error.message : String(error);
+    const reason = describeThrownSafely(error);
     try {
       input.onUnpricedFlatten?.({ instrument, reason });
     } catch {

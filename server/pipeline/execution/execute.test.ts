@@ -3,6 +3,22 @@ import type { Clock, Fill, OpenPosition, OrderIntent } from '../../shared/index.
 import type { CostModel } from '../../tools/backtest/index.js';
 import type { VerdictDecision } from '../verdict/index.js';
 import { sanitizeBrokerError } from './broker-error.js';
+
+/**
+ * A value `describeThrown` cannot render on its own: circular (defeats
+ * `JSON.stringify`) with a throwing `Symbol.toPrimitive` (defeats the
+ * `String()` fallback too) — #1262's hostile-throw fixture.
+ */
+function hostileThrownValue(): Record<string, unknown> {
+  const hostile: Record<string, unknown> = {
+    [Symbol.toPrimitive]: () => {
+      throw new Error('render boom');
+    },
+  };
+  hostile.self = hostile;
+  return hostile;
+}
+
 import { ExecutionImpl } from './execute.js';
 import { FilledZeroSizeThrottle } from './filled-zero-size-throttle.js';
 import { SimulatedBrokerAdapter } from './simulated-adapter.js';
@@ -577,6 +593,36 @@ describe('ExecutionImpl.execute', () => {
     expect((await store.getPosition('key-aapl-1355'))?.order_state).toBe('pending');
   });
 
+  it('still reports the pending record when the broker rejects with an unrenderable value (#1262)', async () => {
+    const { store } = openTestExecutionStore();
+    const broker: BrokerAdapter = {
+      submitBracket: vi.fn().mockRejectedValue(hostileThrownValue()),
+      fetchNewFills: vi.fn().mockResolvedValue([]),
+      resizeProtectiveLegs: vi.fn().mockResolvedValue(undefined),
+      rearmProtectiveLegs: vi
+        .fn()
+        .mockRejectedValue(new Error('rearmProtectiveLegs: not part of execute()')),
+      getOrder: vi.fn().mockRejectedValue(new Error('getOrder: not part of execute()')),
+      submitFlatten: vi.fn().mockRejectedValue(new Error('submitFlatten: not part of execute()')),
+      cancel: vi.fn().mockRejectedValue(new Error('cancel: not part of execute()')),
+      getOpenPositions: vi
+        .fn()
+        .mockRejectedValue(new Error('getOpenPositions: not part of execute()')),
+      resumeFlatten: vi.fn().mockRejectedValue(new Error('resumeFlatten: not part of execute()')),
+    };
+
+    const result = await new ExecutionImpl(makeInput({ store, broker })).execute(makeGo());
+
+    // The `pending` row is the whole point: it is what #86's reconcile adopts
+    // broker truth against. Rendering the rejection unguarded threw out of
+    // `execute()` before this result existed, so the caller saw a raw throw
+    // and the ambiguity was never reported as one.
+    expect(result.status).toBe('error');
+    expect(result.reason).toBe('[unrenderable error]');
+    expect(result.order_state).toBe('pending');
+    expect((await store.getPosition('key-aapl-1355'))?.order_state).toBe('pending');
+  });
+
   // #1003: a rejected order used to leave only the generic
   // "alpaca submitBracket failed (status 422)" behind — sanitizeBrokerError
   // discarded the venue's own diagnostic text on the credential-safety
@@ -841,6 +887,27 @@ describe('ExecutionImpl.execute', () => {
       expect(row?.reason).toBeNull();
     });
 
+    it('leaves the journal row at submitting when submitFlatten rejects with an unrenderable value (#1262)', async () => {
+      const { store } = openTestExecutionStore();
+      const broker = makeBroker(undefined, () => {
+        throw hostileThrownValue();
+      });
+      await seedHeldLot(store);
+
+      const result = await new ExecutionImpl(makeInput({ store, broker })).execute(makeExitGo());
+
+      // 'submitting' is the ambiguous-order-state record #86's reconcile
+      // resolves against. Rendering the rejection unguarded threw out of
+      // `execute()` before this result existed, so the caller got a raw throw
+      // instead of the row's genuine ambiguity.
+      expect(result.status).toBe('error');
+      expect(result.reason).toBe('[unrenderable error]');
+      expect(result.order_state).toBeNull();
+      const row = await store.getFlattenSubmission('key-aapl-1355');
+      expect(row?.status).toBe('submitting');
+      expect(row?.reason).toBeNull();
+    });
+
     // Review comment 1's cancel-failure path — distinct from the case
     // above: this is NOT ambiguous (the flatten provably never reached the
     // broker), so the journal resolves to 'error' immediately, and
@@ -897,6 +964,33 @@ describe('ExecutionImpl.execute', () => {
       // unknown and it is deliberately left alone (see the test above).
       const marked = await store.getUnprotectedResidualLots();
       expect(marked.map((lot) => lot.position.idempotency_key)).toEqual(['key-aapl-entry-1']);
+    });
+
+    it('still marks the already-cancelled lots and resolves the journal row when a cancel rejects with an unrenderable value (#1262)', async () => {
+      const { store } = openTestExecutionStore();
+      const broker = makeBroker(undefined, undefined, ({ clientOrderId }) => {
+        if (clientOrderId === 'key-aapl-entry-2') throw hostileThrownValue();
+      });
+      await seedHeldLot(store);
+      await seedHeldLot(store, { idempotency_key: 'key-aapl-entry-2' });
+
+      const result = await new ExecutionImpl(makeInput({ store, broker })).execute(
+        makeExitGo({ size: 80 }),
+      );
+
+      // THE DAMAGE THIS PINS: the reason string is built BEFORE
+      // `markLotsUnprotected` and `resolveFlattenError`, so rendering the
+      // rejection unguarded skipped both — lot 1 was left cancelled (stop and
+      // target provably gone) with no #549 marker for the sweep to find, and
+      // the journal row was left unresolved.
+      const marked = await store.getUnprotectedResidualLots();
+      expect(marked.map((lot) => lot.position.idempotency_key)).toEqual(['key-aapl-entry-1']);
+      const row = await store.getFlattenSubmission('key-aapl-1355');
+      expect(row?.status).toBe('error');
+      expect(row?.reason).toContain('[unrenderable error]');
+      expect(result.status).toBe('error');
+      expect(result.reason).toContain('[unrenderable error]');
+      expect(broker.flattenCalls).toHaveLength(0);
     });
 
     // The marker above is only worth writing if something CONSUMES it — this

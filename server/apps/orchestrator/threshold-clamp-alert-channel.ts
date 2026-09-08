@@ -10,6 +10,7 @@
  * page must not be able to block the catch it was raised from.
  */
 import type { TelegramClient } from '../../pipeline/verdict/index.js';
+import { describeThrownSafely } from '../../shared/index.js';
 import type {
   ThresholdClampAlert,
   ThresholdClampAlertChannel,
@@ -76,7 +77,7 @@ export class TradeChannelThresholdClampAlert implements ThresholdClampAlertChann
         payload: {
           where: alert.where,
           reported_at: alert.reported_at.toISOString(),
-          error: error instanceof Error ? error.message : String(error),
+          error: describeThrownSafely(error),
         },
       });
     });

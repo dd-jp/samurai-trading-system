@@ -4,7 +4,7 @@
  * throw, no matter how hostile the logger or the caught value is.
  */
 import { recordingLogger } from './recording-logger.js';
-import { describeThrown, logCaughtFailure, safeLog } from './safe-log.js';
+import { describeThrown, describeThrownSafely, logCaughtFailure, safeLog } from './safe-log.js';
 import type { Logger } from './types.js';
 
 const TEMPLATE = {
@@ -83,12 +83,59 @@ describe('describeThrown', () => {
   // own `: string`-typed slot — not a throw, so `logCaughtFailure`'s guard
   // never engaged for it — rather than stringifying it. This is a real
   // behavior change (undefined → the string `"undefined"`), not just the
-  // getter case above, but it is NOT repo-wide: `risk-manager/critic.ts`
-  // declares its own private `describeThrown` (same name, no
-  // `JSON.stringify` fallback) used at 5 call sites in that file (lines 308,
-  // 460, 462, 507, 618), and this fix does not reach it.
+  // getter case above. It is now repo-wide: `risk-manager/critic.ts` used to
+  // declare its own private `describeThrown` (same name, no `JSON.stringify`
+  // fallback) that this fix did not reach; #1262 deleted it in favour of
+  // `describeThrownSafely` below.
   it('renders a bare undefined throw as the string "undefined", not the value undefined', () => {
     expect(describeThrown(undefined)).toBe('undefined');
+  });
+});
+
+describe('describeThrownSafely', () => {
+  it('renders an Error by its message, exactly as describeThrown does', () => {
+    expect(describeThrownSafely(new Error('boom'))).toBe('boom');
+  });
+
+  it('returns the placeholder for a value describeThrown itself cannot render', () => {
+    // Circular (defeats `JSON.stringify`) with a throwing `Symbol.toPrimitive`
+    // (defeats the `String()` fallback too) — the residual hole
+    // `describeThrown`'s own doc says it cannot close.
+    const hostile: Record<string, unknown> = {
+      [Symbol.toPrimitive]: () => {
+        throw new Error('render boom');
+      },
+    };
+    hostile.self = hostile;
+
+    expect(() => describeThrown(hostile)).toThrow('render boom');
+    expect(describeThrownSafely(hostile)).toBe('[unrenderable error]');
+  });
+
+  it('returns the placeholder for a message getter that throws', () => {
+    const error = new Error('unused');
+    Object.defineProperty(error, 'message', {
+      get: () => {
+        throw new Error('render boom');
+      },
+    });
+
+    expect(describeThrownSafely(error)).toBe('[unrenderable error]');
+  });
+
+  it('returns the placeholder when `instanceof` itself throws', () => {
+    // A `Proxy` with a throwing `getPrototypeOf` trap fails at
+    // `describeThrown`'s very first line, before either render branch.
+    const hostile = new Proxy(
+      {},
+      {
+        getPrototypeOf: () => {
+          throw new Error('trap boom');
+        },
+      },
+    );
+
+    expect(describeThrownSafely(hostile)).toBe('[unrenderable error]');
   });
 });
 

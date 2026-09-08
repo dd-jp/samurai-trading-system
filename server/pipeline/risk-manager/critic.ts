@@ -92,6 +92,7 @@
 import type { MarketDataService } from '../../providers/market-data-service/index.js';
 import { INDICATOR_KINDS } from '../../providers/market-data-service/index.js';
 import type { LogEventCode, Logger, OrderIntent } from '../../shared/index.js';
+import { describeThrownSafely } from '../../shared/index.js';
 import type { LlmClient, SpendCap } from '../debate-engine/index.js';
 import { BARE_JSON_INSTRUCTION, unwrapFencedJson, wrapUntrusted } from '../debate-engine/index.js';
 import {
@@ -172,10 +173,6 @@ function toDecisionInput(verdict: RiskCriticVerdict): RiskCriticVerdict | undefi
 
 function unavailable(reason: string): RiskCriticVerdict {
   return { verdict: 'unavailable', max_notional: null, reasoning: reason };
-}
-
-function describeThrown(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /**
@@ -305,7 +302,7 @@ export function parseCriticVerdict(
   try {
     parsed = JSON.parse(unwrapFencedJson(rawText)) as RawCriticVerdict;
   } catch (error) {
-    return { valid: false, reason: `critic response is not JSON: ${describeThrown(error)}` };
+    return { valid: false, reason: `critic response is not JSON: ${describeThrownSafely(error)}` };
   }
 
   const verdict = parsed.verdict;
@@ -457,9 +454,13 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
         message:
           'risk critic could not produce a verdict; the decision proceeds on the mechanical ' +
           'steps and records risk_critic: skipped',
-        payload: { instrument: request.intent.instrument, debate_id, error: describeThrown(error) },
+        payload: {
+          instrument: request.intent.instrument,
+          debate_id,
+          error: describeThrownSafely(error),
+        },
       });
-      return this.#record(request, unavailable(describeThrown(error)));
+      return this.#record(request, unavailable(describeThrownSafely(error)));
     }
 
     return this.#record(request, await this.#withConditions(request, parsed, controller.signal));
@@ -504,7 +505,7 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
         'risk_critic_conditions_unevaluated',
         'risk critic invalidation conditions could not be evaluated; the PROSE verdict ' +
           'stands with full authority and the conditions report no_conditions',
-        { instrument: request.intent.instrument, error: describeThrown(error) },
+        { instrument: request.intent.instrument, error: describeThrownSafely(error) },
       );
       return { ...parsed.verdict, conditions: [], dropped_conditions: [] };
     }
@@ -615,7 +616,7 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
           instrument: request.intent.instrument,
           debate_id: request.intent.metadata.debate_id,
           verdict: verdict.verdict,
-          error: describeThrown(error),
+          error: describeThrownSafely(error),
         },
       });
       return undefined;

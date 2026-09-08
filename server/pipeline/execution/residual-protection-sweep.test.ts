@@ -483,6 +483,103 @@ describe('residual-protection sweep (#549)', () => {
   // directly — not through the smoke run's happy path and not through
   // fill-sync's mocked surface.
   describe('sweep containment branches', () => {
+    it('a hostile thrown value on one lot does not abort the pass — the remaining marked lots are still swept (#1262)', async () => {
+      const FIRST = 'key-hostile';
+      const SECOND = 'key-second';
+      const { db, store } = openTestExecutionStore();
+      // `getUnprotectedResidualLots()` orders by `opened_at`, so the hostile
+      // lot is swept FIRST and everything after it is what a throw would cost.
+      await seedPosition(store, {
+        idempotency_key: FIRST,
+        opened_at: new Date('2026-08-07T13:00:00Z'),
+        broker_order_ids: [`${FIRST}:entry`],
+      });
+      await seedPosition(store, {
+        idempotency_key: SECOND,
+        instrument: 'MSFT',
+        opened_at: new Date('2026-08-07T14:00:00Z'),
+        broker_order_ids: [`${SECOND}:entry`],
+      });
+      for (const key of [FIRST, SECOND]) {
+        await store.applyLotAdvance({
+          idempotency_key: key,
+          fills: [
+            {
+              idempotency_key: key,
+              broker_fill_id: `${key}-e1`,
+              leg: 'entry',
+              price: 100,
+              qty: 10,
+              fee: 1,
+              timestamp: new Date('2026-08-07T15:00:00Z'),
+            },
+            {
+              idempotency_key: key,
+              broker_fill_id: `${key}-x1`,
+              leg: 'exit',
+              price: 104,
+              qty: 4,
+              fee: 0.4,
+              timestamp: new Date('2026-08-07T15:30:00Z'),
+            },
+          ],
+          position_update: {
+            filled_size: 10,
+            avg_entry_price: 100,
+            order_state: 'partially_filled',
+          },
+        });
+        await store.markResidualUnprotected(key, NOW);
+      }
+
+      // Circular (defeats `JSON.stringify`) with a throwing `Symbol.toPrimitive`
+      // (defeats the `String()` fallback too) — the same construction
+      // orchestrator.test.ts uses to defeat `describeThrown` itself. Thrown
+      // from `confirmResidualProtected`, which `sweepOne` calls OUTSIDE its own
+      // try blocks, so it lands in the per-lot catch inside the `for` loop.
+      const hostile: Record<string, unknown> = {
+        [Symbol.toPrimitive]: () => {
+          throw new Error('render boom');
+        },
+      };
+      hostile.self = hostile;
+
+      const hostileStore = new (class extends TestExecutionStore {
+        override async confirmResidualProtected(key: string): Promise<void> {
+          if (key === FIRST) throw hostile;
+          await super.confirmResidualProtected(key);
+        }
+      })(db);
+      const broker = new SweepBroker();
+      const result = await new ExecutionImpl(
+        makeInput(broker, hostileStore),
+      ).sweepResidualProtection();
+
+      // THE DAMAGE THIS PINS: the loop reached the second lot at all. Before
+      // the guard, rendering the hostile value threw out of the per-lot catch
+      // and out of `sweepResidualProtection` itself, so the second lot was
+      // never re-armed and its residual stayed naked until some later pass.
+      expect(broker.rearmCalls).toEqual([
+        { clientOrderId: FIRST, qty: 6 },
+        { clientOrderId: SECOND, qty: 6 },
+      ]);
+      expect(await hostileStore.getResidualProtectionMarker(SECOND)).toEqual({
+        unprotected_since: null,
+        alerted_at: null,
+      });
+      expect(result.checked).toBe(2);
+
+      // And the first lot's failure is RECORDED, not swallowed: its marker
+      // survives for the next pass and the divergence names the render
+      // failure with the shared placeholder.
+      expect(
+        (await hostileStore.getResidualProtectionMarker(FIRST))?.unprotected_since,
+      ).not.toBeNull();
+      const failed = result.divergences.find((entry) => entry.idempotency_key === FIRST);
+      expect(failed?.action).toBe('undetermined');
+      expect(failed?.reason).toContain('[unrenderable error]');
+    });
+
     it('pages the upper-bound requested_size and keeps the marker when the fill read fails', async () => {
       const { db, store } = openTestExecutionStore();
       await seedPosition(store);

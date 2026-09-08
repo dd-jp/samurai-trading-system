@@ -19,6 +19,8 @@
  * — they are different measurements that happen to run on the same cadence, and
  * a shared try/catch would make the weakest series the ceiling for all of them.
  */
+
+import { describeThrownSafely } from '../../shared/index.js';
 import {
   BENCHMARK_COMPOSITION,
   type BenchmarkLeg,
@@ -75,7 +77,7 @@ export async function runOutsideBenchmarkCycle(
     } catch (error) {
       result.unmeasured.push({
         benchmark,
-        reason: error instanceof Error ? error.message : String(error),
+        reason: describeThrownSafely(error),
       });
     }
   }

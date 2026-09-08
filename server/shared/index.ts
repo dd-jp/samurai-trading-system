@@ -72,6 +72,7 @@ export {
 // not itself throw" guarantee — see safe-log.ts's file doc.
 export {
   describeThrown,
+  describeThrownSafely,
   logCaughtFailure,
   safeLog,
 } from './safe-log.js';

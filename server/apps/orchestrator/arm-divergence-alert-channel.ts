@@ -22,6 +22,7 @@ import type {
   ArmDivergenceAlertChannel,
 } from '../../pipeline/feedback-loop/index.js';
 import type { TelegramClient } from '../../pipeline/verdict/index.js';
+import { describeThrownSafely } from '../../shared/index.js';
 import type { Logger } from './types.js';
 
 function pct(value: number): string {
@@ -87,7 +88,7 @@ export class TradeChannelArmDivergenceAlert implements ArmDivergenceAlertChannel
         payload: {
           reported_at: alert.reported_at.toISOString(),
           reason: alert.reason,
-          error: error instanceof Error ? error.message : String(error),
+          error: describeThrownSafely(error),
         },
       });
     });

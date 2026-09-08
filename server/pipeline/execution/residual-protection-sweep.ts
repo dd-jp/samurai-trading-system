@@ -61,7 +61,7 @@
  * returns, which both callers log per entry.
  */
 
-import { logCaughtFailure, safeLog } from '../../shared/index.js';
+import { describeThrownSafely, logCaughtFailure, safeLog } from '../../shared/index.js';
 import { alertResidualExposure, coversQty, recordedExposure } from './ingest-fills.js';
 import type {
   ExecutionInput,
@@ -116,13 +116,16 @@ export async function sweepResidualProtection(
         store_state: row.position.order_state,
         broker_state: null,
         action: 'undetermined',
-        // An IDENTIFIER-only message plus the error's own text — safe here
-        // for `reconcileLot`'s reason: #297's H1 sanitizes every broker
-        // error before it is visible, and store errors are this codebase's
-        // own curated messages.
-        reason: `residual-protection sweep failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        // An IDENTIFIER-only message plus the error's own text. On CREDENTIALS
+        // that is `reconcileLot`'s reason: #297's H1 has every adapter convert
+        // what its client threw into a curated `BrokerError` before it is
+        // visible, and store errors are this codebase's own curated messages.
+        // On RENDERING it is not — see `describeThrownSafely`'s doc and #1262:
+        // this render sits inside a per-lot catch inside the `for` loop above,
+        // so a value whose `message`/`toString` throws would abort the WHOLE
+        // pass here and leave every later marked lot naked, which is the one
+        // thing this loop's containment exists to prevent.
+        reason: `residual-protection sweep failed: ${describeThrownSafely(error)}`,
       });
     }
   }
@@ -175,9 +178,9 @@ async function sweepOne(
       store_state: position.order_state,
       broker_state: null,
       action: 'undetermined',
-      reason: `marked residual could not be recomputed (fill read failed): ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      reason: `marked residual could not be recomputed (fill read failed): ${describeThrownSafely(
+        error,
+      )}`,
     };
   }
 
@@ -259,9 +262,7 @@ async function sweepOne(
       store_state: position.order_state,
       broker_state: null,
       action: 'undetermined',
-      reason: `re-arm retry failed for residual ${residual}: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      reason: `re-arm retry failed for residual ${residual}: ${describeThrownSafely(error)}`,
     };
   }
 

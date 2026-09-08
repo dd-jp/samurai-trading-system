@@ -7,6 +7,7 @@
  * the heartbeat chat, #342), fire-and-forget since the port is synchronous.
  */
 import type { TelegramClient } from '../../pipeline/verdict/index.js';
+import { describeThrownSafely } from '../../shared/index.js';
 import type {
   CalendarFallbackAlert,
   CalendarFallbackAlertChannel,
@@ -49,7 +50,7 @@ export class TradeChannelCalendarFallbackAlert implements CalendarFallbackAlertC
         message: 'calendar-fallback alert failed to send — the fallback still stands',
         payload: {
           reported_at: alert.reported_at.toISOString(),
-          error: error instanceof Error ? error.message : String(error),
+          error: describeThrownSafely(error),
         },
       });
     });

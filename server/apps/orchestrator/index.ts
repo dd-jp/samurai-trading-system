@@ -196,6 +196,9 @@ export type {
   TickSteps,
   UniverseInstrument,
 } from './types.js';
+
+import { describeThrownSafely } from '../../shared/index.js';
+
 export { TradeChannelUnpricedFillAlert } from './unpriced-fill-channel.js';
 
 /**
@@ -756,9 +759,7 @@ export function buildShutdownHandler(
     void orchestrator.stop().then(
       () => effects.exit(0),
       (error: unknown) => {
-        effects.stderr(
-          `orchestrator shutdown failed: ${error instanceof Error ? error.message : String(error)}\n`,
-        );
+        effects.stderr(`orchestrator shutdown failed: ${describeThrownSafely(error)}\n`);
         effects.exit(1);
       },
     );
@@ -827,7 +828,7 @@ export function installFaultHandlers(
   },
 ): void {
   const fatal = (fault: 'uncaughtException' | 'unhandledRejection') => (error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = describeThrownSafely(error);
     // `logCaughtFailure` and not `logger.log`: the logger is allowed to throw
     // when it has no sink left, and a fault handler that throws is a fault
     // handler that hides the fault it was called about.

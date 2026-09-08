@@ -109,6 +109,7 @@ import {
 import {
   currentTraceId,
   DEFAULT_POLYGON_PACING,
+  describeThrownSafely,
   type Logger,
   resolvePolygonPacing,
   TokenBucket,
@@ -404,7 +405,7 @@ export function buildFailoverDataSource(deps: LiveDataFailoverDeps): DataSource 
             level: 'error',
             message:
               `OHLCV failover alert for ${event.symbol} ${event.timeframe} could not be ` +
-              `delivered: ${error instanceof Error ? error.message : String(error)}. The ` +
+              `delivered: ${describeThrownSafely(error)}. The ` +
               `failover itself proceeded — ${event.fallbackName} is serving these bars.`,
             payload: { instrument: event.symbol, timeframe: event.timeframe },
           });

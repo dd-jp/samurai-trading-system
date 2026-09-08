@@ -383,6 +383,7 @@ export {
   universeAssetClasses,
 } from './production/defaults.js';
 
+import { describeThrownSafely } from '../../shared/index.js';
 import {
   buildAlpacaDataSource,
   buildBenchmarkDataSource,
@@ -2872,7 +2873,7 @@ export function startTickLoop(deps: {
         event: 'tick_failed',
         level: 'error',
         message: 'tick failed',
-        payload: { error: error instanceof Error ? error.message : String(error) },
+        payload: { error: describeThrownSafely(error) },
       });
     }
   };
@@ -3296,7 +3297,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
           event: 'outside_benchmark_cycle_failed',
           level: 'error',
           message: 'outside benchmark cycle failed',
-          payload: { error: error instanceof Error ? error.message : String(error) },
+          payload: { error: describeThrownSafely(error) },
         });
       });
   };
@@ -3436,7 +3437,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         event: 'feedback_cycle_failed',
         level: 'error',
         message: 'daily feedback cycle failed',
-        payload: { error: error instanceof Error ? error.message : String(error) },
+        payload: { error: describeThrownSafely(error) },
       });
 
       // #766: the daily kill-line check's half of #638's clamp — a throw here
@@ -3693,7 +3694,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
             'feedback cycle pass failed — re-arming for the next boundary; a restart retries ' +
             'the cycle, or only its completion stamp if this boundary is already recorded as ' +
             'attempted (#1110)',
-          payload: { error: error instanceof Error ? error.message : String(error) },
+          payload: { error: describeThrownSafely(error) },
         });
       } finally {
         if (!feedbackScheduleStopped) {

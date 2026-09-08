@@ -22,7 +22,7 @@
  * (#752) and `trader-diagnostic-alert.ts` (#698): alert at a threshold, then
  * every 8th tick while the condition persists — never a new pattern.
  */
-import { type Logger, sanitizeLogText } from '../../../shared/index.js';
+import { describeThrownSafely, type Logger, sanitizeLogText } from '../../../shared/index.js';
 
 /** One materially-degraded tick pass, reported once the throttle clears it to fire. */
 export interface TickSkipAlert {
@@ -236,7 +236,7 @@ export async function reportTickSkip(
         skipped: tickSkipAlert.skipped,
         planned: tickSkipAlert.planned,
         consecutive_ticks: consecutive,
-        error: sanitizeLogText(error instanceof Error ? error.message : String(error)),
+        error: sanitizeLogText(describeThrownSafely(error)),
       },
     });
   }

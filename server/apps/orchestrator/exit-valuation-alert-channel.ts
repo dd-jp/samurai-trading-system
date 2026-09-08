@@ -10,7 +10,7 @@
  * degrading rather than refusing.
  */
 import type { TelegramClient } from '../../pipeline/verdict/index.js';
-import { currentTraceId } from '../../shared/index.js';
+import { currentTraceId, describeThrownSafely } from '../../shared/index.js';
 import type {
   ExitValuationDegradedAlert,
   ExitValuationDegradedAlertChannel,
@@ -115,7 +115,7 @@ export class TradeChannelExitValuationDegradedAlert implements ExitValuationDegr
           seam: alert.seam,
           unvalued_instruments: alert.unvalued_instruments,
           reported_at: alert.reported_at.toISOString(),
-          error: error instanceof Error ? error.message : String(error),
+          error: describeThrownSafely(error),
         },
       });
     });

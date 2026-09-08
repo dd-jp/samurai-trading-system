@@ -14,6 +14,7 @@
  * (this module runs before that hash can be computed, so it does not log
  * itself).
  */
+import { describeThrownSafely } from '../../shared/index.js';
 import type { DebateAnalystFailure } from './debate-logger.js';
 import type { AnalystView, Direction } from './types.js';
 
@@ -114,7 +115,13 @@ function raceWithTimeout(expected: ExpectedAnalyst, timeoutMs: number): Promise<
       analyst_id,
       analyst_type,
       status: 'error',
-      reason: error instanceof Error ? error.message : String(error),
+      // Guarded (#1262): this handler's job is to CONVERT a rejection into a
+      // recorded `RaceOutcome`, and it runs inside `Promise.all` in
+      // `collectAnalystViews` below. A value whose `message` or `toString`
+      // throws would replace the recorded outcome with a fresh rejection and
+      // take every other analyst's settled view down with it — the structural
+      // twin of the hole #1199 fixed in the analysts orchestrator.
+      reason: describeThrownSafely(error),
     }),
   );
 

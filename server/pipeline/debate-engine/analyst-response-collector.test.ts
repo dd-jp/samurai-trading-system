@@ -253,6 +253,51 @@ describe('collectAnalystViews', () => {
     ]);
   });
 
+  it('records a hostile rejection as an error outcome instead of rejecting the whole collection (#1262)', async () => {
+    // Circular (defeats `JSON.stringify`) with a throwing `Symbol.toPrimitive`
+    // (defeats the `String()` fallback too) — the value `describeThrown`'s own
+    // doc says it cannot render on its own.
+    const hostile: Record<string, unknown> = {
+      [Symbol.toPrimitive]: () => {
+        throw new Error('render boom');
+      },
+    };
+    hostile.self = hostile;
+
+    const expected: ExpectedAnalyst[] = [
+      {
+        analyst_id: 'analyst-technical-1',
+        analyst_type: 'technical',
+        response: Promise.reject(hostile),
+      },
+      {
+        analyst_id: 'analyst-sentiment-1',
+        analyst_type: 'sentiment',
+        response: Promise.resolve(makeView({ analyst_id: 'analyst-sentiment-1' })),
+      },
+    ];
+
+    const resultPromise = collectAnalystViews(expected, TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(0);
+    const result = await resultPromise;
+
+    // Before the guard, rendering the hostile value threw INSIDE the
+    // `onRejected` handler, replacing the recorded `RaceOutcome` with a fresh
+    // rejection that `Promise.all` propagated — so the healthy analyst's view
+    // was lost with it and `collectAnalystViews` rejected rather than
+    // resolving. Both halves are asserted: the collection completed with the
+    // good view, AND the failure is on the record.
+    expect(result.views.map((view) => view.analyst_id)).toEqual(['analyst-sentiment-1']);
+    expect(result.quorum_met).toBe(true);
+    expect(result.failures).toEqual([
+      {
+        analyst_id: 'analyst-technical-1',
+        analyst_type: 'technical',
+        reason: '[unrenderable error]',
+      },
+    ]);
+  });
+
   it('resolves at the exact 50% quorum boundary (2 of 4)', async () => {
     const expected: ExpectedAnalyst[] = [
       {

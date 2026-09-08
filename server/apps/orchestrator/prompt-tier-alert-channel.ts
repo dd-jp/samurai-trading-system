@@ -15,6 +15,7 @@ import type {
   PromptTierAlertChannel,
 } from '../../pipeline/debate-engine/index.js';
 import type { TelegramClient } from '../../pipeline/verdict/index.js';
+import { describeThrownSafely } from '../../shared/index.js';
 import type { Logger } from './types.js';
 
 export function formatPromptTierAlert(alert: PromptTierAlert): string {
@@ -54,7 +55,7 @@ export class TradeChannelPromptTierAlert implements PromptTierAlertChannel {
           model: alert.model,
           consecutive_crossings: alert.consecutive_crossings,
           reported_at: alert.reported_at.toISOString(),
-          error: error instanceof Error ? error.message : String(error),
+          error: describeThrownSafely(error),
         },
       });
     });

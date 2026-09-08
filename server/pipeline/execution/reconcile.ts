@@ -79,7 +79,7 @@
  */
 
 import type { OpenPosition, OrderState } from '../../shared/index.js';
-import { safeLog } from '../../shared/index.js';
+import { describeThrownSafely, safeLog } from '../../shared/index.js';
 import { sweepResidualProtection } from './residual-protection-sweep.js';
 import type {
   ExecutionInput,
@@ -194,7 +194,7 @@ async function reconcileFlatten(
     // in genuine ambiguity about whether it is still held, which is
     // paging-worthy on its own (#519) — see `FlattenReconcileAlertChannel`'s
     // doc for why this is not treated as a background diagnostic.
-    const reason = error instanceof Error ? error.message : String(error);
+    const reason = describeThrownSafely(error);
     await postFlattenReconcileAlert(input, row, reason, now);
     return {
       idempotency_key: row.idempotency_key,
@@ -368,9 +368,7 @@ async function findUnrecordedVenuePositions(
         action: 'undetermined',
         reason:
           'broker.getOpenPositions failed, so a position the venue holds and the store does ' +
-          `not would not have been seen this pass: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          `not would not have been seen this pass: ${describeThrownSafely(error)}`,
       },
     ];
   }
@@ -421,11 +419,22 @@ async function reconcileLot(
       store_state: position.order_state,
       broker_state: null,
       action: 'undetermined',
-      // Safe to surface verbatim: #297's H1 makes every adapter convert what
-      // its client threw into a `BrokerError` built only from curated fields,
-      // so the credentialed original never reaches this catch. Same posture
-      // and same expression as `execute()`'s submit-failure branch.
-      reason: error instanceof Error ? error.message : String(error),
+      // Safe to surface verbatim ON CREDENTIALS: #297's H1 makes every adapter
+      // convert what its client threw into a `BrokerError` built only from
+      // curated fields. Same posture and same expression as `execute()`'s
+      // submit-failure branch.
+      //
+      // That is NOT the same as "only a `BrokerError` reaches this catch", and
+      // #1262 checked: `AlpacaBrokerAdapter.getOrder` does real work OUTSIDE
+      // the `call()` wrapper H1 lives in — `state.recordBracketOrderIds`,
+      // `normalizeOrder`, the emulation lookups — whose throws never pass
+      // through `sanitizeBrokerError` at all; and `sanitizeBrokerError` itself
+      // reads `status`/`code`/`venueMessage` off the raw thrown value, so a
+      // hostile getter throws from inside `call`'s own catch and delivers
+      // whatever IT threw onward. So the render is guarded rather than trusted
+      // — a throw here would escape the catch that exists to report the
+      // adapter's silence and would leave the lot with no divergence at all.
+      reason: describeThrownSafely(error),
     };
   }
 

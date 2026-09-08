@@ -30,7 +30,7 @@
  * unbounded bill is not.
  */
 
-import { currentTraceId } from '../../../shared/index.js';
+import { currentTraceId, describeThrownSafely } from '../../../shared/index.js';
 import type { SharedStore } from '../../../shared/store/index.js';
 import type { Logger } from '../../../shared/types.js';
 
@@ -173,7 +173,7 @@ export class SqliteSpendCap implements SpendCap {
       // Fail closed — see the module header. Named as a refusal rather than a
       // thrown error so the tick short-circuits the same way a budget breach
       // does, instead of surfacing as an unrelated-looking transport fault.
-      const message = error instanceof Error ? error.message : String(error);
+      const message = describeThrownSafely(error);
       this.logger?.log({
         // Every `check()` caller runs under an ambient trace id except one:
         // the in-tick stages (`RiskCritic.produce`, the debate step) inherit
@@ -256,7 +256,7 @@ export class SqliteSpendCap implements SpendCap {
         level: 'warn',
         message:
           'LLM spend cap breached, and the breach alert channel threw — the refusal stands, ' +
-          `but nothing reached an operator: ${error instanceof Error ? error.message : String(error)}`,
+          `but nothing reached an operator: ${describeThrownSafely(error)}`,
         payload: { budget_usd: verdict.budget_usd, spent_usd: verdict.spent_usd },
       });
     }
