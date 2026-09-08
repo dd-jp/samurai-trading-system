@@ -50,11 +50,11 @@
  * `exitPathOrder` (`apps/orchestrator/smoke-run.ts`) is a second producer of
  * an exit intent this stage sees: it builds one with `exit_reason: 'flatten'`
  * and neither marker, and drives it through this same `VerdictImpl` via
- * `exitPathVerdict`. Benign — that intent carries a real bracket
- * (`SMOKE_MARK_PRICE`-derived entry/stop/target, not zeros) and a fresh
- * `decision_timestamp`, so every gate runs on it and it clears them on its
- * own merits, exempted by none of them; the claim above is about production
- * code, not about every caller of `decide`.
+ * `exitPathVerdict`. Benign — that intent carries a real bracket (a live
+ * fixture mark, not zeros) and a fresh `decision_timestamp`, so every gate
+ * runs on it and it clears them on its own merits, exempted by none of them;
+ * the claim above is about production code, not about every caller of
+ * `decide`.
  *
  * THE TWO STACK, ONE WAY. `unpriced_exit` is reachable only on that site's
  * `exit_reason: 'flatten'` branch, and `exit_reason: 'flatten'` alone is what
