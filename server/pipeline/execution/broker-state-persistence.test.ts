@@ -21,6 +21,7 @@ import { recordingLogger } from '../../shared/recording-logger.js';
 import { type SharedStore as Db, openSharedStore } from '../../shared/store/index.js';
 import { AlpacaBrokerAdapter } from './adapters/alpaca-adapter.js';
 import type { AlpacaBrokerClient, AlpacaOrder } from './adapters/alpaca-client.js';
+import type { BrokerVenue } from './broker-state-store.js';
 import { InMemoryBrokerStateStore } from './broker-state-store.js';
 import type { OcoDoubleFillAlertChannel } from './oco-double-fill-alert.js';
 import { SqliteBrokerStateStore } from './sqlite-broker-state-store.js';
@@ -697,9 +698,6 @@ describe('InMemoryBrokerStateStore.loadUnpricedFills ordering (#1340)', () => {
       new Date('2026-09-05T09:00:00Z'),
     );
 
-    // Reverting the `.sort(...)` in loadUnpricedFills to plain Map insertion
-    // order makes this fail: it returns ['lot-late', 'lot-early'], the
-    // insertion order, not the clock order asserted here.
     expect(store.loadUnpricedFills('alpaca').map((row) => row.client_order_id)).toEqual([
       'lot-early',
       'lot-late',
@@ -718,10 +716,6 @@ describe('InMemoryBrokerStateStore.loadUnpricedFills ordering (#1340)', () => {
     store.recordUnpricedFill('alpaca', unpriced('lot-second', 'bf-2'), tie);
     store.recordUnpricedFill('alpaca', unpriced('lot-third', 'bf-3'), tie);
 
-    // A test asserting the REVERSED order ('lot-third', 'lot-second',
-    // 'lot-first') fails against the real implementation — Array.sort's
-    // guaranteed stability keeps ties in their pre-sort (insertion) order,
-    // it does not reverse them.
     expect(store.loadUnpricedFills('alpaca').map((row) => row.client_order_id)).toEqual([
       'lot-first',
       'lot-second',
@@ -744,5 +738,167 @@ describe('InMemoryBrokerStateStore.loadUnpricedFills ordering (#1340)', () => {
       'lot-a',
       'lot-b',
     ]);
+  });
+});
+
+describe('loadUnpricedFills ordering parity: InMemory vs Sqlite (#1358)', () => {
+  interface SeedOp {
+    venue: BrokerVenue;
+    clientOrderId: string;
+    brokerFillId: string;
+    seenAt: Date;
+  }
+
+  const observation = (clientOrderId: string, brokerFillId: string) => ({
+    client_order_id: clientOrderId,
+    broker_fill_id: brokerFillId,
+    leg: 'entry' as const,
+    instrument: '3USL',
+    qty: 1,
+  });
+
+  /**
+   * Seeds a fresh in-memory double and a fresh SQLite store — a real
+   * `better-sqlite3` handle, migrated same as production — with the same
+   * ops in the same order, so any order divergence between the two
+   * implementations is the ONLY thing that can move the assertion.
+   */
+  function seedBoth(ops: readonly SeedOp[]): {
+    inMemory: InMemoryBrokerStateStore;
+    sqlite: SqliteBrokerStateStore;
+  } {
+    const inMemory = new InMemoryBrokerStateStore();
+    const db = openSharedStore(':memory:');
+    openDbs.push(db);
+    const sqlite = new SqliteBrokerStateStore(db);
+    for (const op of ops) {
+      const row = observation(op.clientOrderId, op.brokerFillId);
+      inMemory.recordUnpricedFill(op.venue, row, op.seenAt);
+      sqlite.recordUnpricedFill(op.venue, row, op.seenAt);
+    }
+    return { inMemory, sqlite };
+  }
+
+  function assertBothOrder(
+    stores: { inMemory: InMemoryBrokerStateStore; sqlite: SqliteBrokerStateStore },
+    venue: BrokerVenue,
+    expected: readonly string[],
+  ): void {
+    expect(stores.inMemory.loadUnpricedFills(venue).map((row) => row.client_order_id)).toEqual([
+      ...expected,
+    ]);
+    expect(stores.sqlite.loadUnpricedFills(venue).map((row) => row.client_order_id)).toEqual([
+      ...expected,
+    ]);
+  }
+
+  it('orders distinct rows by monotonic seenAt, identically on both stores', () => {
+    const stores = seedBoth([
+      {
+        venue: 'alpaca',
+        clientOrderId: 'lot-1',
+        brokerFillId: 'bf-1',
+        seenAt: new Date('2026-09-05T09:00:00Z'),
+      },
+      {
+        venue: 'alpaca',
+        clientOrderId: 'lot-2',
+        brokerFillId: 'bf-2',
+        seenAt: new Date('2026-09-05T09:01:00Z'),
+      },
+      {
+        venue: 'alpaca',
+        clientOrderId: 'lot-3',
+        brokerFillId: 'bf-3',
+        seenAt: new Date('2026-09-05T09:02:00Z'),
+      },
+    ]);
+
+    assertBothOrder(stores, 'alpaca', ['lot-1', 'lot-2', 'lot-3']);
+  });
+
+  it('orders by first_seen_at, not insertion order, when seenAt is non-monotonic, identically on both stores', () => {
+    const stores = seedBoth([
+      {
+        venue: 'alpaca',
+        clientOrderId: 'lot-late',
+        brokerFillId: 'bf-late',
+        seenAt: new Date('2026-09-05T12:00:00Z'),
+      },
+      {
+        venue: 'alpaca',
+        clientOrderId: 'lot-early',
+        brokerFillId: 'bf-early',
+        seenAt: new Date('2026-09-05T09:00:00Z'),
+      },
+    ]);
+
+    assertBothOrder(stores, 'alpaca', ['lot-early', 'lot-late']);
+  });
+
+  it('breaks a first_seen_at tie by physical insertion order, identically on both stores', () => {
+    // Ids run in DESCENDING alphabetical order (zebra, mango, apple) —
+    // client_order_id is part of the table's primary key, so a planner that
+    // seeks that index would sort ties ASCENDING alphabetically instead of
+    // by insertion, giving ['lot-apple', 'lot-mango', 'lot-zebra']. Ascending
+    // ids would let that divergence hide behind agreement with insertion order.
+    const tie = new Date('2026-09-05T09:00:00Z');
+    const stores = seedBoth([
+      { venue: 'alpaca', clientOrderId: 'lot-zebra', brokerFillId: 'bf-1', seenAt: tie },
+      { venue: 'alpaca', clientOrderId: 'lot-mango', brokerFillId: 'bf-2', seenAt: tie },
+      { venue: 'alpaca', clientOrderId: 'lot-apple', brokerFillId: 'bf-3', seenAt: tie },
+    ]);
+
+    assertBothOrder(stores, 'alpaca', ['lot-zebra', 'lot-mango', 'lot-apple']);
+  });
+
+  it('leaves a re-observed row at its original tiebreak position, identically on both stores', () => {
+    // `lot-zebra` is re-observed (upserted) AFTER `lot-apple` is first
+    // recorded, at the same first_seen_at — the upsert must not move it to
+    // the end. `zebra`/`apple` (not `a`/`b`) so an alphabetical tiebreak
+    // would visibly disagree with the asserted insertion order.
+    const tie = new Date('2026-09-05T09:00:00Z');
+    const stores = seedBoth([
+      { venue: 'alpaca', clientOrderId: 'lot-zebra', brokerFillId: 'bf-z', seenAt: tie },
+      { venue: 'alpaca', clientOrderId: 'lot-apple', brokerFillId: 'bf-a', seenAt: tie },
+      { venue: 'alpaca', clientOrderId: 'lot-zebra', brokerFillId: 'bf-z', seenAt: tie },
+    ]);
+
+    assertBothOrder(stores, 'alpaca', ['lot-zebra', 'lot-apple']);
+  });
+
+  it('keeps each venue in its own order when two venues are interleaved, identically on both stores', () => {
+    // The `WHERE venue = ?` predicate must not disturb the surviving rows'
+    // relative order for the venue actually loaded. `alpaca-zebra` and
+    // `alpaca-apple` additionally tie on `first_seen_at` and run reverse-
+    // alphabetical, so the predicate is exercised alongside the tiebreak too
+    // — not just against distinct-seenAt rows the predicate could pass
+    // through unchanged either way.
+    const tie = new Date('2026-09-05T09:02:00Z');
+    const stores = seedBoth([
+      {
+        venue: 'alpaca',
+        clientOrderId: 'alpaca-1',
+        brokerFillId: 'bf-1',
+        seenAt: new Date('2026-09-05T09:00:00Z'),
+      },
+      {
+        venue: 'ccxt',
+        clientOrderId: 'ccxt-1',
+        brokerFillId: 'bf-1',
+        seenAt: new Date('2026-09-05T09:01:00Z'),
+      },
+      { venue: 'alpaca', clientOrderId: 'alpaca-zebra', brokerFillId: 'bf-2', seenAt: tie },
+      { venue: 'alpaca', clientOrderId: 'alpaca-apple', brokerFillId: 'bf-3', seenAt: tie },
+      {
+        venue: 'ccxt',
+        clientOrderId: 'ccxt-2',
+        brokerFillId: 'bf-2',
+        seenAt: new Date('2026-09-05T09:03:00Z'),
+      },
+    ]);
+
+    assertBothOrder(stores, 'alpaca', ['alpaca-1', 'alpaca-zebra', 'alpaca-apple']);
+    assertBothOrder(stores, 'ccxt', ['ccxt-1', 'ccxt-2']);
   });
 });
