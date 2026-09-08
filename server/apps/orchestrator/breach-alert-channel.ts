@@ -122,8 +122,11 @@ export class TradeChannelBreachAlert implements BreachAlertChannel {
         // alert must join whichever raised it rather than always naming the
         // daily cycle. The same third provenance `LoggingBreachAlertChannel`
         // records applies: a boot-time refusal from `startingTotal()` has no
-        // ambient id and is mislabelled `feedback-cycle` until `BreachAlert`
-        // carries provenance of its own.
+        // ambient id and is mislabelled `feedback-cycle`. That case is
+        // distinguishable (no ambient id plus an all-`llm_spend_cap` list) and
+        // deliberately left underived for the reason that channel's comment
+        // gives — a provenance field on `BreachAlert` (#1343) is the fix, not
+        // a second inference here.
         trace_id: currentTraceId() ?? 'feedback-cycle',
         stage: breachStage(alert),
         event: 'breach_alert_send_failed',

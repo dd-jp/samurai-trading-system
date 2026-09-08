@@ -175,9 +175,12 @@ export class SqliteSpendCap implements SpendCap {
       // does, instead of surfacing as an unrelated-looking transport fault.
       const message = error instanceof Error ? error.message : String(error);
       this.logger?.log({
-        // `check()` runs both in-tick (RiskCritic.produce) and at boot
-        // (startingTotal()); the ambient id names the tick when there is one
-        // and keeps the constant for boot (#1280).
+        // Every `check()` caller runs under an ambient trace id except one:
+        // the in-tick stages (`RiskCritic.produce`, the debate step) inherit
+        // the tick's, and `MiRefreshQueue`'s drain relabels under its own. The
+        // exception is `startingTotal()`, which the composition root calls at
+        // boot. So the ambient read names whichever caller raised this, and
+        // the constant below is reached from boot alone (#1280).
         trace_id: currentTraceId() ?? 'spend-cap',
         stage: 'debate',
         event: 'llm_spend_cap_read_failed',
@@ -246,7 +249,7 @@ export class SqliteSpendCap implements SpendCap {
       this.onBreach?.(verdict);
     } catch (error) {
       this.logger?.log({
-        // Same mixed in-tick/boot shape as `check()`'s fail-closed line above.
+        // Same ambient-or-boot shape as `check()`'s fail-closed line above.
         trace_id: currentTraceId() ?? 'spend-cap',
         stage: 'debate',
         event: 'llm_spend_cap_alert_send_failed',

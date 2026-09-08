@@ -653,9 +653,14 @@ export class LoggingBreachAlertChannel implements BreachAlertChannel {
       // There is a third provenance the fallback names wrongly: `check()` also
       // runs at boot via `startingTotal()`, which refuses — and so breaches —
       // on an already-spent or unreadable budget with no ambient id, landing on
-      // `feedback-cycle`. Not fixable by choosing a different constant, since
-      // the boot and daily cases are indistinguishable here: `BreachAlert`
-      // carries no provenance field, so the port has to widen first.
+      // `feedback-cycle`. Boot IS distinguishable from the daily cycle here —
+      // no ambient id AND an all-`llm_spend_cap` list can only be boot, since
+      // every other `check()` caller runs under an ambient id (spend-cap.ts's
+      // `check()` states that property). Deliberately not acted on: deriving a
+      // second discriminant at a log site nothing pins is exactly the defect
+      // class this ticket closes. The fix is a provenance field on
+      // `BreachAlert` (#1343), which makes the port say it rather than this
+      // line infer it.
       trace_id: currentTraceId() ?? 'feedback-cycle',
       // Derived for the same reason the trace is (#1280) — see `breachStage`.
       stage: breachStage(alert),

@@ -103,33 +103,20 @@ describe('LoggingMiCoverageAlertChannel (#752)', () => {
   // subsystem. This is a value check, not a fallback check: there is no
   // constant to fall back to any more, so the mutation that matters is the
   // trace_id going missing or getting hardcoded again.
-  it("carries the caller's trace_id verbatim, not a hardcoded constant", async () => {
+  it("carries the caller's trace_id verbatim, and changes when the caller does", async () => {
     const logger = makeLogger();
-
-    await new LoggingMiCoverageAlertChannel(logger).postCoverageAlert({
-      trace_id: 'tick-x',
+    const channel = new LoggingMiCoverageAlertChannel(logger);
+    const alert = {
       instrument: 'BTC-USD',
       asset_class: 'crypto',
       subclass: 'unclassified',
       reported_at: new Date('2026-08-17T09:00:00Z'),
-    });
+    } as const;
 
-    expect(logger.entries[0]?.trace_id).toBe('tick-x');
-  });
+    await channel.postCoverageAlert({ ...alert, trace_id: 'tick-x' });
+    await channel.postCoverageAlert({ ...alert, trace_id: 'tick-y' });
 
-  it('changes when the caller changes it — proving it is threaded, not fixed', async () => {
-    const logger = makeLogger();
-
-    await new LoggingMiCoverageAlertChannel(logger).postCoverageAlert({
-      trace_id: 'tick-y',
-      instrument: 'BTC-USD',
-      asset_class: 'crypto',
-      subclass: 'unclassified',
-      reported_at: new Date('2026-08-17T09:00:00Z'),
-    });
-
-    expect(logger.entries[0]?.trace_id).toBe('tick-y');
-    expect(logger.entries[0]?.trace_id).not.toBe('mi-coverage');
+    expect(logger.entries.map((entry) => entry.trace_id)).toEqual(['tick-x', 'tick-y']);
   });
 });
 

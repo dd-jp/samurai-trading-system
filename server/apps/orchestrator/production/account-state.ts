@@ -282,10 +282,15 @@ export class AlpacaAccountStateProvider implements AccountStateProvider {
     if (this.input.mode === 'live') {
       if (firstTime) {
         this.input.logger.log({
-          // `getAccountState` is called only from the per-instrument Risk
-          // stage (direct-bind.ts's `computeCurrentPortfolioAndBreakers`/
-          // `degradedPortfolioForExit`), so this joins that tick when there
-          // is one (#1280) — there is no boot-time caller to fall back for.
+          // Every `getAccountState` caller sits on a per-instrument decision
+          // path inside `TickRunner.runInstrument`'s `runWithTraceId` — the
+          // live arm's Risk stage (direct-bind.ts's
+          // `computeCurrentPortfolioAndBreakers`/`degradedPortfolioForExit`)
+          // and the control arm's book-anchor resolver, which reaches this
+          // through `ControlAccountStateProvider` (control-account-state.ts),
+          // alike. So this joins that tick (#1280); none of them runs at boot,
+          // which is why the constant is a fallback rather than a case
+          // anything reaches.
           trace_id: currentTraceId() ?? 'account-state',
           stage: 'orchestrator',
           event: 'daily_pnl_unknown',
