@@ -256,14 +256,28 @@ never verified against a fill, and structurally unable to represent a floor if o
 
 ### 2.7 Flat-by-close has a venue-native mechanism, and the ADR-0015 clause has a referent
 
-Two things ADR-0014's flat-by-close currently does by client-side timing are available from the
-venue:
+One thing ADR-0014's flat-by-close does is available from the venue, and one thing this section
+originally claimed for it is **wrong** — corrected 2026-09-08 while working [#1312](https://github.com/dd-jp/samurai-trading-system/issues/1312):
 
 - `GET /ref/v1/exchanges/LSE_ETF` returns **`ExchangeSessions`** — explicit
-  `Closed` / `OpeningAuction` / `AutomatedTrading` / `ClosingAuction` windows with exact UTC
-  boundaries, plus `TimeZoneAbbreviation: "BST"` and `TimeZoneOffset`. A session calendar read
-  from the exchange beats a hardcoded 15:30Z, and BST/GMT is exactly the class of bug
-  has bitten this project before.
+  `Closed` / `OpeningAuction` / `AutomatedTrading` / `CallAuctionTrading` windows with exact UTC
+  boundaries, plus `TimeZoneAbbreviation: "BST"` and `TimeZoneOffset`.
+
+  **But it is not a replacement for what we have, and flat-by-close was never "a hardcoded
+  15:30Z".** Since #668 the Trader flattens at `close − N` resolved through
+  `TradingCalendar.sessionEnd`, and `LseRegularHoursCalendar`
+  (`server/providers/market-data-service/trading-calendar.ts`) already models LSE hours, UK bank
+  holidays and 12:30 half-days through `Intl.DateTimeFormat` on `Europe/London`. DST is therefore
+  already handled against the IANA zone, which is *more* robust than a session feed — and
+  `TimeZoneOffset: "01:00:00"` is the offset **right now**, a snapshot rather than a rule, so a
+  consumer trusting it in December would be an hour out.
+
+  Measured, the feed also cannot serve as the table: `ExchangeSessions` publishes **9 entries ≈ 2
+  days forward**, systematically across `LSE_ETF` / `LSE_SETS` / `NASDAQ` / `NYSE`, against
+  `MAX_SESSION_SEARCH_DAYS = 10` and a `LSE_HOLIDAYS` table whose own comment says coverage ends
+  **2027-12-28**. (Whether the window widens over a weekend is untested — it was sampled on a
+  Tuesday.) The live proposal in #1312 is therefore an **overlay**: use the two-day window to
+  *validate* the hand table before each session, not to replace it.
 - `GET /ref/v1/algostrategies` lists 20 strategies. **`Market on Close (MOC)`,
   `Limit on Close (LOC)` and `Target Close` all carry `MinAmountUSD: 0.0`** — no size floor
   (only `Iceberg` has one, at $11,000) — and instrument details list all three under
@@ -487,7 +501,7 @@ block the conclusions. Worth ten minutes at the next login.
 | 4 | #750/#1002/#1035: movers axis has no lawful sort key | Whole universe, one call, two axes — one proven, one caveated (§2.3) | comment on #1305 |
 | 5 | ADR-0016: pool of 13, 3× framing | 146 ETN + 127 ETC listed; 4× exists; spread gate needed (§2.4) | **wayfinder child** |
 | 6 | ADR-0015: "Saxo has no per-order minimum" — the fact that disqualified IBKR | Unverified against the venue; one live call settles it (§2.6) | **wayfinder child**, pre-ramp gate |
-| 7 | ADR-0014: flat-by-close by client-side timing | Exchange session calendar + native MOC/LOC (§2.7) | **wayfinder child**, gated on the ADR-0015 clause |
+| 7 | ADR-0014: flat-by-close is *already* calendar-driven (`sessionEnd`, #668) — the original "client-side timing" framing was wrong | Session feed as an **overlay validating** the hand table (2 days forward, not a replacement) + native MOC/LOC (§2.7) | **wayfinder child** [#1312](https://github.com/dd-jp/samurai-trading-system/issues/1312); MOC still gated on the ADR-0015 clause |
 | 8 | Doc 53 `CostModelImpl`: 1 bp rate floor, no spread input | Per-instrument spread now available (§2.5) | folds into 6 |
 | 9 | #895 + doc 53: market data assumed free and real-time | Opt-in, **delayed** by default (quotes *and* chart bars), **£7/mo** for LSE Level 1 real time, refunded at 4 trades/month (§2.9). The delay is read as an entitlement tier on four circumstantial strands; the confirming in-session read is outstanding (§2.9a) | comment on #895 |
 
