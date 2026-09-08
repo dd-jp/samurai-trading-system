@@ -164,9 +164,16 @@ export interface BrokerStateStore {
    * adapter's crash-durable QUEUE — its whole job is that a fill observed by a
    * process which died before ingesting it survives the restart.
    *
-   * So a row's purpose is discharged the moment its `broker_fill_id` appears
-   * in `fills`, and after that a re-offer is caught by `hasFill` whether or not
-   * the queue row still exists. No `since` window, no lot terminal state.
+   * So a row's purpose is discharged the moment its `(idempotency_key,
+   * broker_fill_id)` pair appears in `fills`, and after that a re-offer is
+   * caught by `hasFill` whether or not the queue row still exists. No `since`
+   * window, no lot terminal state.
+   *
+   * The FULL pair, not `broker_fill_id` alone (#313 / PR #459's review, which
+   * is where the SQL prune got the pair and has matched it ever since): the id
+   * is venue-assigned, so two lots can carry the same id string, and an id-only
+   * match would let one lot's ingested fill drop another lot's still-queued
+   * row — the loss this queue exists to prevent.
    */
   pruneIngestedObservedFills(venue: BrokerVenue): number;
   /**
@@ -208,6 +215,16 @@ export class InMemoryBrokerStateStore implements BrokerStateStore {
   private readonly brackets = new Map<string, BrokerBracketRecord>();
   private readonly fills = new Map<string, NormalizedFill & { venue: BrokerVenue }>();
   private readonly unpriced = new Map<string, UnpricedFillRecord & { venue: BrokerVenue }>();
+  /**
+   * Stands in for the `fills` ledger the SQLite store's prune joins against —
+   * this double has no `SharedStore` behind it. A caller marks a fill here to
+   * say "`ingestFills()` has consumed this one".
+   *
+   * A modelled set rather than a no-op prune: a port implementation that
+   * silently keeps everything would let a caller pass its own tests while the
+   * real store behaved differently.
+   */
+  private readonly ingested = new Set<string>();
 
   loadBrackets(venue: BrokerVenue): BrokerBracketRecord[] {
     return [...this.brackets.values()].filter((record) => record.venue === venue);
@@ -256,22 +273,33 @@ export class InMemoryBrokerStateStore implements BrokerStateStore {
   }
 
   /**
-   * Stands in for the `fills` ledger the SQLite store joins against — this
-   * double has no `SharedStore` behind it. Tests add an id here to say "this
-   * one has been ingested"; `pruneIngestedObservedFills` then drops exactly
-   * those, which is what the SQL subquery does against a real `fills` table.
+   * Keyed on the pair, and takes an object so the two id strings cannot be
+   * transposed at a call site (#1328's reason on `hasFill`).
    *
-   * A modelled set rather than a no-op prune: a port implementation that
-   * silently keeps everything would let a caller pass its own tests while the
-   * real store behaved differently.
+   * VENUE-BLIND on purpose, because `fills` is: the real ledger has no venue
+   * column, and the SQL prune gets its venue scoping from
+   * `broker_observed_fills.venue = ?` alone. Adding venue here would make the
+   * double STRICTER than the store — one venue's ledger row would stop
+   * discharging another venue's queue row for the same lot, which SQL does
+   * discharge.
    */
-  readonly ingestedFillIds = new Set<string>();
+  markIngested(fill: Pick<NormalizedFill, 'client_order_id' | 'broker_fill_id'>): void {
+    this.ingested.add(ledgerKey(fill.client_order_id, fill.broker_fill_id));
+  }
 
   pruneIngestedObservedFills(venue: BrokerVenue): number {
     let pruned = 0;
-    for (const [key, fill] of this.fills) {
-      if (fill.venue === venue && this.ingestedFillIds.has(fill.broker_fill_id)) {
-        this.fills.delete(key);
+    for (const [rowKey, fill] of this.fills) {
+      // The full `(idempotency_key, broker_fill_id)` pair, matching the SQL
+      // store's `EXISTS` join against `fills`, which has matched the pair since
+      // #313 / PR #459's review. On `broker_fill_id` alone this double dropped
+      // a different lot's un-ingested row whenever the venue reused an id
+      // string (#1335).
+      if (
+        fill.venue === venue &&
+        this.ingested.has(ledgerKey(fill.client_order_id, fill.broker_fill_id))
+      ) {
+        this.fills.delete(rowKey);
         pruned++;
       }
     }
@@ -279,7 +307,7 @@ export class InMemoryBrokerStateStore implements BrokerStateStore {
   }
 
   saveObservedFill(venue: BrokerVenue, fill: NormalizedFill): void {
-    this.fills.set(`${venue}|${fill.client_order_id}|${fill.broker_fill_id}`, {
+    this.fills.set(fillKey(venue, fill.client_order_id, fill.broker_fill_id), {
       ...fill,
       venue,
     });
@@ -329,4 +357,9 @@ function key(venue: BrokerVenue, clientOrderId: string): string {
 
 function fillKey(venue: BrokerVenue, clientOrderId: string, brokerFillId: string): string {
   return `${venue}|${clientOrderId}|${brokerFillId}`;
+}
+
+/** The `fills` primary key `(idempotency_key, broker_fill_id)`, which has no venue. */
+function ledgerKey(clientOrderId: string, brokerFillId: string): string {
+  return `${clientOrderId}|${brokerFillId}`;
 }
