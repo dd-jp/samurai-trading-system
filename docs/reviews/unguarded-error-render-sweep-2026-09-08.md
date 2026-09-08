@@ -366,9 +366,10 @@ change from this one.
   safe, and because a site dropped from the list without a verdict is a site the next reader has to
   re-derive.
 
-  All eight lose their own log line, so "a log line dies" does not discriminate. The question that
-  does, given each site's outer guard: **does something durable that would otherwise have landed
-  fail to land?** That is why (b) is dispositive at two sites below and not at the two safe ones:
+  All eight lose their own diagnostic record, so losing a diagnostic record does not discriminate.
+  The question that does, given each site's outer guard: **does something durable that would
+  otherwise have landed fail to land?** That is why (b) is dispositive at two sites below and not
+  at the two safe ones:
   the (b) sites have no outer frame that renders a substitute — the throw leaves the function with
   nothing written — whereas `fill-sync.ts:359` and `production.ts:3473` escape into a guarded catch
   that logs the failure and re-arms.
@@ -422,7 +423,7 @@ change from this one.
     `void postTraderDiagnosticAlert(...).catch(() => {})` that produces no substitute line at all.
   - `server/apps/orchestrator/production.ts:3665` (`attemptError`) — criterion (a). A throw here
     escapes the `recordAttempt` catch and skips `runFeedbackCycle(feedback)` at `:3669` and
-    `feedbackScheduleStore.recordBoundary` at `:3671`, so the whole daily tuning cycle — analyst
+    `feedbackScheduleStore.recordBoundary` at `:3672`, so the whole daily tuning cycle — analyst
     weight updates, the `arm_comparison_samples` row, the outside benchmarks — never runs for that
     boundary. The interval is 24h (`DEFAULT_FEEDBACK_INTERVAL_MS`,
     `server/apps/orchestrator/production/defaults.ts:139`), so the `finally` re-arms for *tomorrow*:
