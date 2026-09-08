@@ -256,9 +256,18 @@ rules on it directly**, and ADR-0014 outranks every spec file on the trading pat
 
 The ADR then rejects the wider exemption by name — candidate **(4) "Make the flatten bypass Verdict
 entirely"** — as *"largest blast radius, and it discards the two protections that are still doing real
-work for this intent — dedup and the fire-time breaker re-check."* `verdict-spec.md:190` (gate 6) and
-its #826 amendment at `:145` ("Gates 1, 4, 5, 6 and 7 all still run") agree, as do the two in-file
-comments and the tests at `verdict/index.test.ts:911`, `:1007`.
+work for this intent — dedup and the fire-time breaker re-check."* `verdict-spec.md`'s "Module: Gate
+Sequence" — the HITL-gate entry and the #826 amendment under the `drift` gate — agrees, as do the two
+in-file comments and the tests over `staleExit()` and `unpricedFlatten()` in `verdict/index.test.ts`.
+
+*Correction to this paragraph (2026-09-08, [#1254](https://github.com/dd-jp/samurai-trading-system/issues/1254)):*
+it originally cited that #826 amendment approvingly as *"Gates 1, 4, 5, 6 and 7 all still run"*. That
+sentence was **false**, and #1254 removed it from the spec: `unpriced_exit` is only ever set alongside
+`mandatory_flatten`, so gate 1 (`staleness`) does **not** still run for an unpriced flatten — such an
+intent skips three gates, not two. The paragraph's conclusion is unaffected (the exemptions are scoped,
+argued and recorded, and the breaker gate still applies to a flatten), and its numbers were in the
+spec's superseded scheme besides. The four `verdict-spec.md` / test line pins it carried have been
+replaced with section and symbol names above, since line pins are what rotted.
 
 So the exemption's scoping to gate 1 (and, at #826, the price gates) is a decision that was made,
 argued and recorded — not a hole. What is defective is `risk-manager-spec.md:24`'s unqualified
