@@ -213,8 +213,8 @@ describe('VerdictImpl.decide — stale_feed gate (#641)', () => {
 
   it('is a DIFFERENT gate from staleness — a fresh decision on a dead feed', async () => {
     // The whole reason this gate exists. `max_signal_age.stocks` is 30 minutes
-    // here and the decision is seconds old, so gate 1 passes cleanly; only the
-    // FEED is stale. Before #641 this trade was placed.
+    // here and the decision is seconds old, so `staleness` (gate 1) passes
+    // cleanly; only the FEED is stale. Before #641 this trade was placed.
     const verdict = new VerdictImpl();
     const decision = await verdict.decide(
       makeInput({
@@ -402,9 +402,9 @@ describe('VerdictImpl.decide — drift gate', () => {
    *
    * These cases are written so that the old shape and the new one give
    * OPPOSITE answers, rather than merely re-asserting the new one. Revert
-   * `verdict/index.ts` gate 2 to `drift > config.drift_tolerance` with 500 and
-   * the first case goes green-to-red: a $200 equity 25% away from its entry
-   * would have been executed on.
+   * `verdict/index.ts`'s `drift` gate (2) to `drift > config.drift_tolerance`
+   * with 500 and the first case goes green-to-red: a $200 equity 25% away
+   * from its entry would have been executed on.
    */
   describe('per-asset-class fractional tolerance (#381)', () => {
     /** The paper profile's own value, so this tests the shipped calibration. */
@@ -522,9 +522,9 @@ describe('VerdictImpl.decide — staleness vs market-open, for equities (#381)',
   it('rejects a stale overnight equity signal on STALENESS, not market_closed', async () => {
     const verdict = new VerdictImpl();
     // Decided in yesterday's session, evaluated against a shut market: both
-    // gates would fire, and gate 1 runs first, so this is the reason an
-    // operator reads in the soak log. Pinned so the ordering is a decision
-    // rather than a surprise.
+    // gates would fire, and `staleness` (gate 1) runs first, so this is the
+    // reason an operator reads in the soak log. Pinned so the ordering is a
+    // decision rather than a surprise.
     const input = makeInput({
       risk_decision: makeRiskDecision({
         order_intent: makeIntent({
@@ -940,10 +940,10 @@ describe('VerdictImpl.decide — gate ordering', () => {
  * `buildFlattenExit` (trader/decide.ts) emits a flat-by-close exit with a zero
  * entry/stop/target, flagged `metadata.unpriced_exit`, when the instrument's
  * own mark could not be read during an Alpaca stall. Verdict is the choke
- * point for that decision: gate 2 refuses any intent whose entry is not
- * positive, so without this the Trader's degradation would be undone one stage
- * later and the flatten would still be missed — this repo's dominant defect
- * class (a mechanism nothing reaches) wearing a new hat.
+ * point for that decision: the `drift` gate (2) refuses any intent whose
+ * entry is not positive, so without this the Trader's degradation would be
+ * undone one stage later and the flatten would still be missed — this repo's
+ * dominant defect class (a mechanism nothing reaches) wearing a new hat.
  */
 describe('VerdictImpl.decide — unpriced mandatory flatten (#826)', () => {
   function unpricedFlatten(overrides: Partial<OrderIntent> = {}): OrderIntent {
@@ -1059,7 +1059,7 @@ describe('VerdictImpl.decide — unpriced mandatory flatten (#826)', () => {
 });
 
 /**
- * #894 — the mandatory flatten and gate 1.
+ * #894 — the mandatory flatten and the `staleness` gate (1).
  *
  * The end-to-end proof lives in
  * `apps/orchestrator/production/flat-by-close-to-execution.test.ts`, which is

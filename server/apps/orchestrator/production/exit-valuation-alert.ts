@@ -75,7 +75,7 @@ export interface ExitValuationDegradedAlert {
   /**
    * Which seam degraded. `risk` and `verdict` both re-derive the portfolio for
    * the same tick: `risk` sizes/records the exit, `verdict` re-checks breakers
-   * at fire time (verdict-spec.md gate 5). A tick can report both.
+   * at fire time (verdict-spec.md's `breaker` gate, 5). A tick can report both.
    *
    * `trader` (#826) is a different condition on the same subject — see the
    * block above: the EXIT ITSELF has no mark, not merely the rest of the book.
