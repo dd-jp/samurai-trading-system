@@ -64,6 +64,25 @@ function nonFiniteSum(): SharedStore {
   } as unknown as SharedStore;
 }
 
+/**
+ * A store whose FIRST read throws `SQLITE_BUSY` (a `'read_fault'`) and whose
+ * every later read answers with a non-finite total (a `'corrupt_ledger'`) —
+ * two DIFFERENT fault kinds from the same store, to pin that `#faultAnnounced`
+ * is one latch across both, not one per kind.
+ */
+function readFaultThenCorruptLedger(): SharedStore {
+  let threw = false;
+  return {
+    prepare() {
+      if (!threw) {
+        threw = true;
+        throw new Error('SQLITE_BUSY: database is locked');
+      }
+      return { get: () => ({ total: Number.NaN }) };
+    },
+  } as unknown as SharedStore;
+}
+
 describe('SqliteSpendCap', () => {
   let db: SharedStore;
 
@@ -211,6 +230,27 @@ describe('SqliteSpendCap', () => {
       assertRefused(second);
       expect(second.kind).toBe('corrupt_ledger');
     });
+
+    it('fires the fault alert once across two DIFFERENT fault kinds — one latch, not one per kind (#1372 review round 2, LOW-1)', () => {
+      // The M1 trio above each reuses the same kind on both calls, so it
+      // cannot tell a per-latch-group implementation from a per-kind one.
+      // This store answers read_fault first, then corrupt_ledger — a real
+      // per-kind latch would fire onBreach twice; the shared fault latch
+      // documented above `#faultAnnounced` must fire once.
+      const breaches: Extract<SpendCapVerdict, { admitted: false }>[] = [];
+      const cap = new SqliteSpendCap(readFaultThenCorruptLedger(), 50, undefined, (v) =>
+        breaches.push(v),
+      );
+
+      const first = cap.check();
+      const second = cap.check();
+
+      assertRefused(first);
+      assertRefused(second);
+      expect(first.kind).toBe('read_fault');
+      expect(second.kind).toBe('corrupt_ledger');
+      expect(breaches).toHaveLength(1);
+    });
   });
 
   it('still refuses when the alert channel throws', () => {
@@ -260,8 +300,9 @@ describe('SqliteSpendCap', () => {
     // it, so a store that is already over the ceiling raises the alert at boot
     // rather than one tick later — the operator is most likely still watching,
     // and the run is about to spend a fortnight taking no trade. Safe to spend
-    // the budget latch here precisely because the latches are per-kind: the
-    // only thing it suppresses is the identical breach it just reported.
+    // the budget latch here precisely because the latches are per latch
+    // group: the only thing it suppresses is the identical breach it just
+    // reported.
     spend(db, 60, 'over-budget');
     const breaches: string[] = [];
     const cap = new SqliteSpendCap(db, 50, undefined, (v) => breaches.push(v.reason ?? ''));

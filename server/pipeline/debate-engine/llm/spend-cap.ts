@@ -167,8 +167,10 @@ export class SqliteSpendCap implements SpendCap {
    * to it, for the same alert-fatigue reason.
    *
    * **Why two latches and not one boolean.** The two latch groups are
-   * unrelated conditions that happen to share an exit path, and one is
-   * transient while the other is permanent. A single `SQLITE_BUSY` — at boot,
+   * unrelated conditions that happen to share an exit path: the budget latch
+   * is permanent, while the fault latch covers a transient kind
+   * (`'read_fault'`) and a permanent one (`'corrupt_ledger'`) under one
+   * latch. A single `SQLITE_BUSY` — at boot,
    * or for one tick mid-run — would fire the fault alert, set a shared latch,
    * and then recover. Ten days later spend crosses the ceiling, the refusal
    * short-circuits on the already-set latch, and the operator hears nothing:
@@ -224,9 +226,9 @@ export class SqliteSpendCap implements SpendCap {
    * that is already over the ceiling raises the breach alert at boot rather
    * than one tick later. Boot is the better moment — the operator is most
    * likely still watching, and the run is about to spend a fortnight taking no
-   * trade. Since the latches are per-kind, spending the budget alert here
-   * cannot mask anything: the only condition it suppresses is the identical
-   * budget breach it just reported.
+   * trade. Since the latches are per latch group, spending the budget alert
+   * here cannot mask anything: the only condition it suppresses is the
+   * identical budget breach it just reported.
    */
   startingTotal(): SpendCapVerdict {
     return this.check();
