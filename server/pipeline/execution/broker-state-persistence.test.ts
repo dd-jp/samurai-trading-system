@@ -21,6 +21,7 @@ import { recordingLogger } from '../../shared/recording-logger.js';
 import { type SharedStore as Db, openSharedStore } from '../../shared/store/index.js';
 import { AlpacaBrokerAdapter } from './adapters/alpaca-adapter.js';
 import type { AlpacaBrokerClient, AlpacaOrder } from './adapters/alpaca-client.js';
+import { InMemoryBrokerStateStore } from './broker-state-store.js';
 import type { OcoDoubleFillAlertChannel } from './oco-double-fill-alert.js';
 import { SqliteBrokerStateStore } from './sqlite-broker-state-store.js';
 import type { NativeBracketRequest } from './types.js';
@@ -585,5 +586,71 @@ describe('pruneIngestedObservedFills (#313)', () => {
     // ...and ibkr's must still go, so the fix did not simply stop pruning.
     expect(store.pruneIngestedObservedFills('ibkr')).toBe(1);
     expect(store.loadObservedFills('ibkr')).toEqual([]);
+  });
+});
+
+describe('InMemoryBrokerStateStore.pruneIngestedObservedFills matches the fills key (#1335)', () => {
+  const OBSERVED = {
+    leg: 'entry' as const,
+    price: 100,
+    qty: 1,
+    fee: 0.1,
+    timestamp: new Date(FILL_TS),
+  };
+
+  it('prunes on the whole (lot, fill id) pair, not on either half', () => {
+    // Three rows in one venue, pinning the rule from BOTH sides. `A` shares a
+    // venue-assigned `broker_fill_id` with `B` and a lot with `C`, and only
+    // `A` has been ingested:
+    //   - dropping `B` would be the id-only match this ticket exists to kill;
+    //   - dropping `C` would be a lot-only match, equally wrong;
+    //   - keeping `A` would mean the double had simply stopped pruning.
+    const store = new InMemoryBrokerStateStore();
+    const a = { ...OBSERVED, client_order_id: 'lot-1', broker_fill_id: 'bf-shared' };
+    const b = { ...OBSERVED, client_order_id: 'lot-2', broker_fill_id: 'bf-shared' };
+    const c = { ...OBSERVED, client_order_id: 'lot-1', broker_fill_id: 'bf-other' };
+    store.saveObservedFill('ccxt', a);
+    store.saveObservedFill('ccxt', b);
+    store.saveObservedFill('ccxt', c);
+
+    store.markIngested(a);
+
+    // Surviving rows FIRST: a wrong-row prune and a stopped prune both move
+    // the count, and only this assertion names which row went.
+    const pruned = store.pruneIngestedObservedFills('ccxt');
+    expect(
+      store
+        .loadObservedFills('ccxt')
+        .map((fill) => `${fill.client_order_id}|${fill.broker_fill_id}`),
+    ).toEqual(['lot-2|bf-shared', 'lot-1|bf-other']);
+    expect(pruned).toBe(1);
+  });
+
+  it("lets one venue's ingested pair discharge another venue's row for the same lot", () => {
+    // `fills` has no venue column, so the SQL prune's EXISTS join is
+    // venue-blind and `prune(venue)` scopes on the QUEUE row alone. Marking
+    // the pair ingested therefore discharges it in every venue that queued it
+    // — a double keyed on venue too would be stricter than the real store.
+    const store = new InMemoryBrokerStateStore();
+    const fill = { ...OBSERVED, client_order_id: 'lot-1', broker_fill_id: 'bf-1' };
+    store.saveObservedFill('ccxt', fill);
+    store.saveObservedFill('ibkr', fill);
+
+    store.markIngested(fill);
+
+    expect(store.pruneIngestedObservedFills('ccxt')).toBe(1);
+    expect(store.pruneIngestedObservedFills('ibkr')).toBe(1);
+  });
+
+  it('leaves an un-ingested queue row alone', () => {
+    const store = new InMemoryBrokerStateStore();
+    store.saveObservedFill('ccxt', {
+      ...OBSERVED,
+      client_order_id: 'lot-1',
+      broker_fill_id: 'bf-1',
+    });
+
+    expect(store.pruneIngestedObservedFills('ccxt')).toBe(0);
+    expect(store.loadObservedFills('ccxt')).toHaveLength(1);
   });
 });
