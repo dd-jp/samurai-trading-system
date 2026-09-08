@@ -212,9 +212,14 @@ profile from LSEG Delayed Market Data; until it reports, every place below that 
 F2c's recommendation, or an F6 figure is marked retracted in place rather than silently removed, so the
 reasoning that once rested on them stays visible as what it was.
 
-This does not reopen the #881/#882 rulings below — David ruled on 2026-09-02, and #1035 is the follow-up those
-rulings themselves called for (#881's ruling point 1: "the first ship is the sampler"). It removes the specific
-numbers those rulings cited as evidence, noted at each citation.
+This does not reopen the #881/#882 rulings below on their bottom line — David ruled on 2026-09-02 that a
+per-instrument term is justified. It does replace what those rulings called for **next**: the original #881
+ruling point 1 called for building the sampler against `58-lse-quote-snapshot.py`'s endpoint; that call is
+retracted along with the script, not merely superseded, because the endpoint itself may not be used this way.
+[#1035](https://github.com/dd-jp/samurai-trading-system/issues/1035) is **not** the follow-up originally called
+for — it is the licensed replacement path now required in its place. Every place below that cited F2b's endpoint
+claim, F2c's recommendation, or an F6 figure is marked retracted in place rather than silently removed, so the
+reasoning that once rested on them stays visible as what it was.
 
 **Why this retraction does not reach F2/F3's estimator arm.** #999 read LSE Terms §8 as barring programmatic
 collection from *LSE's own site* and incorporation of *its* Information into a work — that is what F2b/F2c/F6
@@ -474,24 +479,32 @@ relied on. The script is deleted from the tree (git history retains it); the raw
 replaces these numbers until [#1035](https://github.com/dd-jp/samurai-trading-system/issues/1035) reports. The
 table is kept below only as the audit record of what was collected and why it doesn't count.
 
-**PROVISIONAL, and the caveat is load-bearing.** Captured 2026-09-02 05:34 Europe/London, i.e. **before the
-08:00 open**. Out of continuous trading the endpoint returns the *previous session's closing* quotes
-(`tradingstatuscode: "N c"`, prior-session volume; re-running minutes later returns byte-identical values). LSE's
-market-maker obligations bind quotes to "at least 90% of continuous trading during the mandatory period" and
-explicitly **not** during the opening auction, so **these are not the spreads a fill would cross.**
+**Below is historical: what the document argued before the 2026-09-08 retraction above, kept as audit record —
+not current guidance, and none of it reopens the retraction.**
 
-**Direction of error, stated: this capture is most likely PESSIMISTIC — the opposite of this repo's usual
-hazard.** The obligations that cap a market maker's quoted spread bind *during* continuous trading and not
-outside it, so an out-of-session quote is unconstrained and plausibly wider than the same line in session, with
-the wide names widening most. That is the direction that would inflate the 12.61x max/median this document rules
-on. It is asserted, not measured — which is exactly why the ruling's first ship is the sampler rather than a
-coefficient, and why the reversal condition is in-session data. The counter-consideration is that F3's flat-day
-evidence and doc 34 §3.3's print-frequency measurements are independent of session state and point the same way.
+**PROVISIONAL, and the caveat was load-bearing, as originally written.** Captured 2026-09-02 05:34 Europe/London,
+i.e. **before the 08:00 open**. Out of continuous trading the endpoint returned the *previous session's closing*
+quotes (`tradingstatuscode: "N c"`, prior-session volume; re-running minutes later returned byte-identical
+values). LSE's market-maker obligations bind quotes to "at least 90% of continuous trading during the mandatory
+period" and explicitly **not** during the opening auction, so these were said not to be the spreads a fill would
+cross.
 
-The script
-prints `IN CONTINUOUS SESSION: False` on such a run and refuses to imply otherwise. **This must be re-sampled in
-session before any number here is used to size anything**, and re-sampled repeatedly, because doc 53 G3 measured
-a real intraday profile on the US names (TSLA's open median 2.7x its close median).
+**Direction of error, as originally argued: this capture was said to be most likely PESSIMISTIC — the opposite
+of this repo's usual hazard.** The obligations that cap a market maker's quoted spread bind *during* continuous
+trading and not outside it, so an out-of-session quote was argued to be unconstrained and plausibly wider than
+the same line in session, with the wide names widening most — the direction that would have inflated the 12.61x
+max/median, if that figure still had standing. It was asserted, not measured. (The original text used this
+argument to justify an in-session re-sample as the next step; the ruling below has since been rewritten to say
+the next step is #1035's licensed path instead, **not** a re-run of this script.) The counter-consideration
+offered at the time: F3's flat-day evidence and doc 34 §3.3's print-frequency measurements are independent of
+session state and point the same way.
+
+The script printed `IN CONTINUOUS SESSION: False` on this run and refused to imply otherwise — it no longer
+exists to print anything; it is deleted (see the retraction above). The original text said this had to be
+re-sampled in session before any number here was used to size anything. **The retraction above supersedes that
+instruction: no number here may be used at all, in session or out, until** [#1035](https://github.com/dd-jp/samurai-trading-system/issues/1035)
+**reports** — doc 53 G3's measured intraday profile on the US names (TSLA's open median 2.7x its close median) is
+why session timing matters at all, not a license to re-run the deleted collection method at a better hour.
 
 30/30 coverage. Round-trip spread in bps of mid, tightest first:
 
@@ -649,8 +662,12 @@ longer evidenced; whether cost varies *enormously* within the tradeable universe
 
 *An earlier draft of this document ruled the opposite way, on the estimator arm's 1.81x. That ruling was wrong
 and is retracted here rather than quietly edited: the estimator compresses dispersion 3x by construction and its
-screen removes exactly the wide names (F3). It is left in the document as a lower bound and a lesson —
-**a screened proxy statistic disagreed with a direct measurement, and the direct measurement was right.***
+screen removes exactly the wide names (F3). It is left in the document as a lower bound and a lesson — a screened
+proxy statistic disagreed with a direct measurement. Whether that direct measurement was right no longer has
+standing to say: F6 is retracted along with it, and the estimator's own 1.81x/1.92x is, for now, the only
+quantification this document has (see "What #881's own statistic says" above). The construction argument against
+the estimator's low-ball reading stands independent of F6's retraction; the claim that F6 specifically was
+correct does not.*
 
 The ruling, in order of what should actually be built:
 
@@ -664,9 +681,13 @@ The ruling, in order of what should actually be built:
    open 2.7x its close).
 2. **The per-instrument term is justified and the seam is ready** — F5 records that `fill()` already holds
    `request.instrument`. Build it *against sampled data*, not against this snapshot.
-3. **The functional form has to change, not just the coefficient.** LCO3 at 8.5p/9.5p is **tick-bound**: a
-   one-penny tick on a 9p line is 11%, and no `volatility × coefficient` term can represent that. A
-   minimum-tick-over-price floor is a different shape from anything in `CostConfig`.
+3. **The functional form may have to change, not just the coefficient — but the evidence for it is retracted.**
+   LCO3's quoted 8.5p/9.5p came from F6 and is retracted with it (the same figure retracted in the "three things
+   fall out" list above), so "a one-penny tick on a 9p line is 11%" is not currently evidenced. The tick-over-price
+   *mechanism* is general and independent of F6 — a low-priced line's spread can be dominated by the exchange's
+   minimum tick rather than by liquidity — so a minimum-tick-over-price floor, a different shape from anything in
+   `CostConfig`, remains worth building once #1035 supplies a permissible per-instrument price; it just cannot be
+   sized from this snapshot.
 4. **Narrow the universe, and treat that as the larger finding.** Twenty of thirty lines cannot be priced from
    free daily bars; three return **one bar in two years**; 3LSQ and 3RAC are flat on 43% and 38% of sessions.
    ADR-0016's commodity-ETC leg was never encoded, and its whole leverage case rests on one 3USL quote that F6

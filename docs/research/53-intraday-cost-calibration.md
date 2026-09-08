@@ -310,5 +310,8 @@ than a US mega-cap's — so the proxy errs optimistic, which is the direction th
   the schema.
 - **Whether the structural floors are correctly sized** — the floors dominate the charged cost, but validating
   them needs realised fills, and they are explicitly out of this ticket's scope. **ANSWERED 2026-09-02 by doc 58
-  §F4: they are under-sized and flattering for the live universe.** Saxo charges 8 bps per side (ADR-0015:201)
-  against a 1 bp commission floor, and all 30 of 30 pool lines show a half-spread above the 1 bp spread floor.
+  §F4: they are under-sized and flattering for the live universe, in sign if not in every cited magnitude.**
+  Saxo charges 8 bps per side (ADR-0015:201) against a 1 bp commission floor — F4's argument is sign-only and
+  needs no per-instrument spread measurement to hold. The "all 30 of 30 pool lines show a half-spread above the
+  1 bp spread floor" count is doc 58 §F6's, **RETRACTED 2026-09-08 by [#1036](https://github.com/dd-jp/samurai-trading-system/issues/1036)**
+  (LSE Terms §8, #999) — it is not currently evidenced.
