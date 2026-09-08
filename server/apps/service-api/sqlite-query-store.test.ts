@@ -1572,12 +1572,16 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
    * runs its own full decision-pass chain, under a `trace_id` carrying
    * `CONTROL_TRACE_SUFFIX`, into this SAME table (`control-arm.ts`'s
    * `buildControlArmStep`, awaited before the live pass writes anything
-   * further). On a quorum-skipped decision pass the live pass's only further
-   * row is the filtered `position_check` stage, but the control's own nested
-   * pass still records its own `analysts` row — chronologically newer than the
-   * live pass's `analysts` row above it. Unfiltered, that newer control row
-   * wins the newest-trace `chosenTrace` fold, and the lane renders the control
-   * arm's stage sequence as the live lane's.
+   * further). This test's scenario is a quorum-skipped decision pass whose
+   * OWN exit check produces no intent (the common case): the live pass's only
+   * further row is the filtered `position_check` stage, while the control's
+   * own nested pass still records its own `analysts` row — chronologically
+   * newer than the live pass's `analysts` row above it. (A quorum-skipped pass
+   * whose exit check DOES fire an intent instead writes its own
+   * `risk`/`verdict`/`execution` rows after the control's, and the live arm
+   * wins the fold correctly — that is not this scenario.) Unfiltered, that
+   * newer control row wins the newest-trace `chosenTrace` fold, and the lane
+   * renders the control arm's stage sequence as the live lane's.
    *
    * This also pins filter-before-fold, the same property #1318/#1319 pin for
    * their own cuts: `pipelineEvents`' cut is not a `LIMIT` but the

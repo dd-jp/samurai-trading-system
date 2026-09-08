@@ -841,23 +841,38 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * SAME table. Every stage transition in `tick-runner.ts` writes its own
    * `record()` row immediately after `markStage()`, before any branch that
    * could return early — so the only way the live pass leaves no further
-   * PIPELINE_STAGES row after the control arm completes is (a) a
-   * quorum-skipped decision pass, where the live pass falls through to
-   * `runExitCheckPass` and writes only the filtered `position_check` stage
-   * while the control's own nested pass still records its own `analysts` row,
-   * chronologically later, or (b) a live pass that crashes mid-await after
-   * the control arm has already completed, where `tick-loop.ts`'s catch
-   * writes only `stage: 'tick-loop'`, also filtered — verified by reading
-   * every `markStage`/`record` pair from `analysts` through `execution`
-   * (tick-runner.ts lines 399–515 head, 264–297 tail): none has a branch
-   * between marking a stage and recording it, so no third source of an
-   * unattributed newest row exists beyond these two. Unfiltered, either lets
-   * the control's newer row win `chosenTrace`; in the crash case the control
-   * arm may have already recorded a `verdict`/`execution` "go" of its own,
-   * which would then render as the live pass's. A plain tick pass cannot
-   * trigger this at all: both arms write only the filtered `position_check`
-   * stage there, so neither writes a PIPELINE_STAGES row for the fold to pick
-   * between.
+   * PIPELINE_STAGES row after the control arm completes is: (a) a
+   * quorum-skipped decision pass whose OWN exit check produces no intent (the
+   * common case), where the live pass falls through to `runExitCheckPass` and
+   * writes only the filtered `position_check` stage while the control's own
+   * nested pass still records its own `analysts` row, chronologically later —
+   * a quorum-skipped pass whose exit check DOES fire an intent instead writes
+   * its own `risk`/`verdict`/`execution` rows after the control's, and the
+   * live arm wins the fold correctly, so this trigger is conditioned on the
+   * no-intent branch, not on the quorum-skip alone; (b) a live pass that
+   * crashes mid-await after the control arm has already completed, where
+   * `tick-loop.ts`'s catch writes only `stage: 'tick-loop'`, also filtered;
+   * or (c) the ordinary TICK path itself — `#runInstrument` awaits
+   * `this.steps.controlArm` before `runExitCheckPass`, and the control's own
+   * nested `runInstrument` takes that same tick path into its own
+   * `runExitCheckPass`, which on a non-null exit intent falls into
+   * `runIntentTail` and records `risk`, `verdict`, and `execution` under the
+   * control's suffixed trace. The two arms hold separate books
+   * (`control-arm-wiring.ts` overrides `store`, `broker`, `getOpenPositions`,
+   * and `accountState`), so a tick where the control arm has an exit-due lot
+   * and the live arm does not is the ORDINARY case, not an edge one — and per
+   * the #743 comment above, roughly 29 of 30 passes are tick passes, so (c)
+   * is plausibly the DOMINANT trigger here, not an excluded one. Verified by
+   * reading every `markStage`/`record` pair in `tick-runner.ts`, both the
+   * head chain from `markStage('analysts')` through the dispatch into
+   * `runIntentTail`, and `runIntentTail` itself (`risk` through `execution`):
+   * none has a branch between marking a stage and recording it, so (a), (b),
+   * and (c) above are exhaustive. Unfiltered, any of the three lets the
+   * control's newer row win `chosenTrace`; in the crash or tick-path case the
+   * control arm may have already recorded a `verdict`/`execution` "go" of its
+   * own, which would then render as the live pass's. Do not read (c) as
+   * saying the leak fires on every tick: it fires only when the two arms'
+   * exit-due state has actually diverged for that instrument on that tick.
    *
    * The filter removes control ROWS, not control-touched INSTRUMENTS: an
    * instrument the live arm also attributed still renders its own live stage
