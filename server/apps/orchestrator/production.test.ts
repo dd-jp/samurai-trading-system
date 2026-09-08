@@ -3224,6 +3224,17 @@ describe('buildProductionOrchestrator', () => {
    * `startFillSync` call site itself via `startFillSyncSpy` (defined at the
    * top of this file) — the exact deps object each arm's LOOP is armed with,
    * which is what the recurring `runPoll` lines actually read.
+   *
+   * Asserts positionally, not as a sorted set: production.ts calls
+   * `startFillSync` for the control arm first, then the live arm,
+   * unconditionally and with nothing branching between the two calls (see the
+   * call site) — a property of the composition root this test is pinning, not
+   * an incidental detail. A sorted-set comparison would pass if the two
+   * calls' trace-id arguments were swapped (live arm gets the control pair
+   * and vice versa) — exactly the copy-paste shape a regression here would
+   * take, and worse than the bug #1321 fixes: the live arm's loop would then
+   * log as `control-arm-*` and get silently filtered out by anything modelled
+   * on #1319's `NOT LIKE '%:control'` pattern.
    */
   it("start() gives each arm's recurring fill-sync loop its own trace_id (#1321)", async () => {
     const config = stubConfig(db, {
@@ -3235,15 +3246,13 @@ describe('buildProductionOrchestrator', () => {
     await orchestrator.start();
 
     expect(startFillSyncSpy).toHaveBeenCalledTimes(2);
-    const tracePairs = startFillSyncSpy.mock.calls
-      .map(([deps]) => `${deps.reconcileTraceId}|${deps.fillSyncTraceId}`)
-      .sort();
-    expect(tracePairs).toEqual(
-      [
-        `${RECONCILE_TRACE_ID}|${FILL_SYNC_TRACE_ID}`,
-        `${CONTROL_RECONCILE_TRACE_ID}|${CONTROL_FILL_SYNC_TRACE_ID}`,
-      ].sort(),
-    );
+    const [controlDeps] = startFillSyncSpy.mock.calls[0];
+    const [liveDeps] = startFillSyncSpy.mock.calls[1];
+
+    expect(controlDeps.reconcileTraceId).toBe(CONTROL_RECONCILE_TRACE_ID);
+    expect(controlDeps.fillSyncTraceId).toBe(CONTROL_FILL_SYNC_TRACE_ID);
+    expect(liveDeps.reconcileTraceId).toBe(RECONCILE_TRACE_ID);
+    expect(liveDeps.fillSyncTraceId).toBe(FILL_SYNC_TRACE_ID);
 
     await orchestrator.stop();
   });
