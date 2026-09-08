@@ -1,10 +1,19 @@
 import type { TelegramClient } from '../../pipeline/verdict/index.js';
 import { runWithTraceId } from '../../shared/index.js';
-import { TradeChannelBreachAlert } from './breach-alert-channel.js';
+import {
+  breachStage,
+  LLM_SPEND_CAP_BREACH,
+  TradeChannelBreachAlert,
+} from './breach-alert-channel.js';
 import type { LogEntry, Logger } from './types.js';
 
 const ALERT = {
-  breaches: ['llm_spend_cap'],
+  breaches: [LLM_SPEND_CAP_BREACH],
+  reported_at: new Date('2026-09-08T09:00:00Z'),
+};
+
+const KILL_LINE_ALERT = {
+  breaches: ['pbo_over_max'],
   reported_at: new Date('2026-09-08T09:00:00Z'),
 };
 
@@ -48,5 +57,33 @@ describe('TradeChannelBreachAlert (#1280)', () => {
       'feedback-cycle',
       'tick-spend-cap',
     ]);
+  });
+
+  // The `stage` half. Threading the trace made a hardcoded `'feedback-loop'`
+  // wrong on the spend-cap caller, whose sibling line in `SqliteSpendCap#refuse`
+  // logs under `debate` — an operator grepping that stage for the tick would
+  // otherwise miss the breach entirely.
+  it('files a breach under the stage of the caller that raised it', () => {
+    expect(breachStage(ALERT)).toBe('debate');
+    expect(breachStage(KILL_LINE_ALERT)).toBe('feedback-loop');
+    // Conservative on a list the two current producers never build.
+    expect(
+      breachStage({ breaches: [LLM_SPEND_CAP_BREACH, 'pbo_over_max'], reported_at: new Date() }),
+    ).toBe('feedback-loop');
+  });
+
+  it('logs an undelivered breach under that same stage', async () => {
+    const logger = makeLogger();
+    const post = (alert: typeof ALERT): void => {
+      new TradeChannelBreachAlert(failingTelegram(), 'chat-escalation', logger).postBreachAlert(
+        alert,
+      );
+    };
+
+    post(ALERT);
+    post(KILL_LINE_ALERT);
+    await flush();
+
+    expect(logger.entries.map((entry) => entry.stage)).toEqual(['debate', 'feedback-loop']);
   });
 });

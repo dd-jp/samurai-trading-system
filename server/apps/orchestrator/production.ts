@@ -226,6 +226,7 @@ import {
   SqliteAlertDeliveryLog,
 } from './alert-delivery-log.js';
 import { AnalystSkipKindRelay } from './analysts-decision.js';
+import { LLM_SPEND_CAP_BREACH } from './breach-alert-channel.js';
 import {
   LoggingAnalystSkipAlertChannel,
   LoggingAnalystTelemetry,
@@ -1410,7 +1411,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       logger,
       () =>
         breachAlerts.postBreachAlert({
-          breaches: ['llm_spend_cap'],
+          breaches: [LLM_SPEND_CAP_BREACH],
           reported_at: clock.now(),
         }),
     );

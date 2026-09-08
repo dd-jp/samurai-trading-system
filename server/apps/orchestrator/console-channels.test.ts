@@ -381,4 +381,18 @@ describe('LoggingBreachAlertChannel', () => {
       'tick-spend-cap',
     ]);
   });
+
+  // Same two callers, same reason, on `stage`: the spend cap's own lines are
+  // `debate`, the daily batch's are `feedback-loop`.
+  it("files the breach under the raising caller's stage", () => {
+    const logger = makeLogger();
+
+    new LoggingBreachAlertChannel(logger).postBreachAlert(alert);
+    new LoggingBreachAlertChannel(logger).postBreachAlert({
+      breaches: ['pbo_over_max'],
+      reported_at: alert.reported_at,
+    });
+
+    expect(logger.entries.map((entry) => entry.stage)).toEqual(['debate', 'feedback-loop']);
+  });
 });

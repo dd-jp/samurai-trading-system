@@ -54,6 +54,7 @@ import type {
 } from '../../pipeline/verdict/index.js';
 import type { CiiScoreProvider } from '../../providers/market-intelligence/index.js';
 import { currentTraceId } from '../../shared/index.js';
+import { breachStage } from './breach-alert-channel.js';
 import type { HeartbeatChannel } from './heartbeat.js';
 import type { OrphanAlertChannel, OrphanGoVerdict } from './orphan-verdict-scan.js';
 import type { AnalystSkipAlert, AnalystSkipAlertChannel } from './production/analysts-adapter.js';
@@ -649,7 +650,8 @@ export class LoggingBreachAlertChannel implements BreachAlertChannel {
       // budget. This comment previously claimed the daily batch was the only
       // caller, which the spend-cap wiring (production.ts) falsifies.
       trace_id: currentTraceId() ?? 'feedback-cycle',
-      stage: 'feedback-loop',
+      // Derived for the same reason the trace is (#1280) — see `breachStage`.
+      stage: breachStage(alert),
       event: 'kill_threshold_breach',
       level: 'error',
       message:
