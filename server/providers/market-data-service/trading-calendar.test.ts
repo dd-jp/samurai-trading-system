@@ -416,16 +416,21 @@ describe('the hand-entered table coverage cliff (#684)', () => {
 
 describe('the LSE table coverage cliff (#1378)', () => {
   const calendar = new LseRegularHoursCalendar();
-  // A Tuesday, ordinary-looking, comfortably past LSE_TABLE_COVERAGE_END.
-  const beyondCoverage = new Date('2028-03-14T15:00:00Z');
+  // Ordinary-looking (mid-March, no holiday shape) and comfortably past
+  // LSE_TABLE_COVERAGE_END, wherever that constant currently lands — derived
+  // rather than a bare literal so extending the table doesn't strand this at
+  // a date that is no longer past coverage.
+  const beyondCoverage = new Date(
+    `${Number(LSE_TABLE_COVERAGE_END.slice(0, 4)) + 1}-03-14T15:00:00Z`,
+  );
 
   it('LSE_TABLE_COVERAGE_END currently equals both checked-through dates', () => {
-    // Both tables were hand-checked through the same 2026-2027 window, so
+    // Both tables were hand-checked through the same 2026-2028 window, so
     // today LSE_HOLIDAYS_CHECKED_THROUGH === LSE_HALF_DAYS_CHECKED_THROUGH
     // === LSE_TABLE_COVERAGE_END. The min()-of-the-two property (below) is
     // what keeps this correct once the two are extended independently and
     // stop matching.
-    expect(LSE_TABLE_COVERAGE_END).toBe('2027-12-31');
+    expect(LSE_TABLE_COVERAGE_END).toBe('2028-12-31');
     expect(LSE_HOLIDAYS_CHECKED_THROUGH).toBe(LSE_TABLE_COVERAGE_END);
     expect(LSE_HALF_DAYS_CHECKED_THROUGH).toBe(LSE_TABLE_COVERAGE_END);
   });
@@ -492,16 +497,24 @@ describe('the LSE table coverage cliff (#1378)', () => {
   });
 
   it('an unmodelled half-day past coverage does not silently report a verified close', () => {
-    // 2029-12-24 is a Monday — half-day-shaped (Christmas Eve) but two years
-    // past LSE_TABLE_COVERAGE_END, so LSE_HALF_DAYS was never extended to
-    // cover it. What matters is that coversCloseFor says this date is
-    // UNVERIFIED, and that a live boot for this date is refused elsewhere
-    // (production.test.ts's "refuses to build ... for an unmodelled
-    // half-day" case) — not what #closeMinutesFor's specific numeric guess
-    // for this date happens to be. Pinning that guess as "correct" would
-    // tie this test to an implementation detail the coverage guard exists
-    // precisely so nothing downstream has to trust.
-    const unmodelledHalfDay = new Date('2029-12-24T15:00:00Z');
+    // Christmas Eve, two years past LSE_TABLE_COVERAGE_END — half-day-shaped
+    // but never checked against the source, so LSE_HALF_DAYS was never
+    // extended to cover it. What matters is that coversCloseFor says this
+    // date is UNVERIFIED, and that a live boot for this date is refused
+    // elsewhere (production.test.ts's "refuses to boot on an unmodelled
+    // half-day past coverage (AC5)" case) — not what #closeMinutesFor's
+    // specific numeric guess for this date happens to be. Pinning that
+    // guess as "correct" would tie this test to an implementation detail
+    // the coverage guard exists precisely so nothing downstream has to
+    // trust.
+    const unmodelledHalfDay = new Date(
+      `${Number(LSE_TABLE_COVERAGE_END.slice(0, 4)) + 2}-12-24T15:00:00Z`,
+    );
+    // The half-day-shaped premise only holds if this lands on a weekday;
+    // asserted explicitly so a future coverage-end shift that puts it on a
+    // weekend reds this test instead of silently testing something else.
+    expect(unmodelledHalfDay.getUTCDay()).toBeGreaterThanOrEqual(1);
+    expect(unmodelledHalfDay.getUTCDay()).toBeLessThanOrEqual(5);
 
     expect(calendar.coversCloseFor(unmodelledHalfDay)).toBe(false);
     // #closeMinutesFor stays total (see the class doc) — still answers,
@@ -511,5 +524,34 @@ describe('the LSE table coverage cliff (#1378)', () => {
 
   it('does not throw for the last covered date', () => {
     expect(() => calendar.isOpen(new Date(`${LSE_TABLE_COVERAGE_END}T15:00:00Z`))).not.toThrow();
+  });
+
+  it('resolves a substitute day in the extended range as a non-trading day (#1379)', () => {
+    // 1 January 2028 is a Saturday, so New Year's Day is observed on the
+    // following Monday, 3 January 2028 — a substitute day, not a bank
+    // holiday in its own right, and it must still resolve as non-trading.
+    const substituteDay = new Date('2028-01-03T12:00:00Z');
+    const followingWeekday = new Date('2028-01-04T12:00:00Z');
+
+    expect(calendar.isTradingDay(substituteDay)).toBe(false);
+    expect(calendar.isOpen(substituteDay)).toBe(false);
+    // The adjacent Tuesday is an ordinary trading day — proves the false
+    // above comes from the holiday table, not from a weekend check.
+    expect(calendar.isTradingDay(followingWeekday)).toBe(true);
+  });
+
+  it('does not add a 2028 half-day — 24 and 31 December 2028 both fall on a Sunday', () => {
+    // The weekday rule, not an oversight: LSE_HALF_DAYS applies only when
+    // Christmas Eve / New Year's Eve fall on a weekday, and in 2028 both are
+    // already non-trading (weekend) days, so no entry was added for them.
+    // The 12:30 half-day close itself is already pinned on a weekday case —
+    // session-end.test.ts's "closes a half-day at 12:30, not 16:30" (Christmas
+    // Eve 2026).
+    // Asserted rather than only claimed in the comment above, so a wrong
+    // premise here fails this test instead of staying silently green.
+    expect(new Date('2028-12-24T12:00:00Z').getUTCDay()).toBe(0);
+    expect(new Date('2028-12-31T12:00:00Z').getUTCDay()).toBe(0);
+    expect(LSE_HALF_DAYS.has('2028-12-24')).toBe(false);
+    expect(LSE_HALF_DAYS.has('2028-12-31')).toBe(false);
   });
 });

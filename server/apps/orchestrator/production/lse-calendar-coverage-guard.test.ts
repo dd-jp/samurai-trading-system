@@ -53,7 +53,11 @@ describe('assertLseCalendarCoverage delegates the boundary decision to coversClo
   it('posts the horizon alert with the real coverage_end and a non-negative days_remaining', () => {
     const calendar = new LseRegularHoursCalendar();
     const posted: LseCalendarCoverageAlert[] = [];
-    const now = new Date('2027-12-01T12:00:00Z'); // 30 civil days before LSE_TABLE_COVERAGE_END.
+    // 30 civil days before LSE_TABLE_COVERAGE_END, derived rather than a bare
+    // literal so extending the table doesn't strand this test at a stale gap.
+    const now = new Date(
+      new Date(`${LSE_TABLE_COVERAGE_END}T12:00:00Z`).getTime() - 30 * 86_400_000,
+    );
 
     assertLseCalendarCoverage({
       now,

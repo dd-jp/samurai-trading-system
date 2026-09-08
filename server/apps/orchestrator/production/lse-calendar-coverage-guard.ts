@@ -129,7 +129,7 @@ export function assertLseCalendarCoverage(options: AssertLseCalendarCoverageOpti
         'flatten would fire four hours late, the exact overnight carry ADR-0014 forbids. Extend ' +
         'LSE_HOLIDAYS/LSE_HALF_DAYS (and their LSE_HOLIDAYS_CHECKED_THROUGH/' +
         'LSE_HALF_DAYS_CHECKED_THROUGH dates) against the published UK bank holiday calendar ' +
-        'before restarting the live leg — see #1379.',
+        'before restarting the live leg — see #1387.',
     );
   }
 
