@@ -54,7 +54,7 @@ import type {
 } from '../../pipeline/verdict/index.js';
 import type { CiiScoreProvider } from '../../providers/market-intelligence/index.js';
 import { currentTraceId } from '../../shared/index.js';
-import { breachStage } from './breach-alert-channel.js';
+import { breachLogMessage, breachStage } from './breach-alert-channel.js';
 import type { HeartbeatChannel } from './heartbeat.js';
 import type { OrphanAlertChannel, OrphanGoVerdict } from './orphan-verdict-scan.js';
 import type { AnalystSkipAlert, AnalystSkipAlertChannel } from './production/analysts-adapter.js';
@@ -638,15 +638,22 @@ export class LoggingCalendarFallbackAlertChannel implements CalendarFallbackAler
 }
 
 /**
- * A kill-threshold breach (#93), written to the log at `error`.
+ * The kill-line batch's breach (#93) AND the LLM spend cap's refusal both
+ * post through this port, written to the log at `error`.
  *
- * `error`, for `LoggingOrphanAlertChannel`'s reason and more so: a breach
- * means the strategy's own validation says its edge may be gone — PBO over
- * its line, out-of-sample Sharpe under it, a statistically insignificant
- * Deflated Sharpe, or live performance diverging from the backtest that
- * justified the config. The Feedback Loop has already defensively tightened
- * every risk threshold by the time this fires; the kill/rework call is the
- * human's, and this is how the human hears about it.
+ * `error` for both, for `LoggingOrphanAlertChannel`'s reason and more so: a
+ * kill-line breach means the strategy's own validation says its edge may be
+ * gone — PBO over its line, out-of-sample Sharpe under it, a statistically
+ * insignificant Deflated Sharpe, or live performance diverging from the
+ * backtest that justified the config — and the kill/rework call is the
+ * human's. A spend-cap breach means the run has stopped admitting new LLM
+ * debates until an operator acts. Neither should wait for someone to notice a
+ * quiet heartbeat.
+ *
+ * `message` discriminates on which happened (`breachLogMessage`,
+ * breach-alert-channel.ts) — it no longer claims every risk threshold was
+ * "auto-tightened" on the spend-cap path, where nothing is (#1343):
+ * `SqliteSpendCap#refuse` touches no risk threshold at all.
  *
  * Same caveat as the other log-only stand-ins: a log line nobody tails is not
  * an alert. `TradeChannelBreachAlert` (breach-alert-channel.ts) is the
@@ -674,17 +681,17 @@ export class LoggingBreachAlertChannel implements BreachAlertChannel {
       // every other `check()` caller runs under an ambient id (spend-cap.ts's
       // `check()` states that property). Deliberately not acted on: deriving a
       // second discriminant at a log site nothing pins is exactly the defect
-      // class this ticket closes. The fix is a provenance field on
-      // `BreachAlert` (#1343), which makes the port say it rather than this
-      // line infer it.
+      // class this ticket closes. A provenance field on `BreachAlert` would
+      // resolve it, not a second inference here — #1343 fixed the WORDING
+      // drift on this path (`message` below) with `classifyBreach`, which
+      // needs no such field because `breaches` alone answers it; this
+      // trace_id ambiguity is a different question and stands unresolved.
       trace_id: currentTraceId() ?? 'feedback-cycle',
       // Derived for the same reason the trace is (#1280) — see `breachStage`.
       stage: breachStage(alert),
       event: 'kill_threshold_breach',
       level: 'error',
-      message:
-        'kill-threshold breach — risk thresholds auto-tightened; review the strategy and ' +
-        'decide kill or rework (no automatic kill is ever applied)',
+      message: breachLogMessage(alert.breaches),
       payload: {
         breaches: alert.breaches,
         reported_at: alert.reported_at.toISOString(),
