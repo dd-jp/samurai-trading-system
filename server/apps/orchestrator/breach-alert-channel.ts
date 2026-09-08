@@ -27,9 +27,7 @@
  * real limitation worth naming: if Telegram is down, the breach reaches
  * nobody. On the kill-line caller the mitigation is the log-line copy the
  * orchestrator writes for every daily cycle regardless (`daily metrics
- * computed`, production.ts); the spend-cap caller has no equivalent per-cycle
- * backstop line, so a failed send there can go unnoticed until an operator
- * investigates independently — this adapter has no retry queue either way.
+ * computed`, production.ts); this adapter has no retry queue either way.
  */
 import type { BreachAlert, BreachAlertChannel } from '../../pipeline/feedback-loop/index.js';
 import type { DiscordClient, TelegramClient } from '../../pipeline/verdict/index.js';
@@ -63,7 +61,7 @@ export function breachStage(alert: BreachAlert): string {
     : 'feedback-loop';
 }
 
-export type BreachKind = 'kill-line' | 'spend-cap' | 'both' | 'none';
+type BreachKind = 'kill-line' | 'spend-cap' | 'both' | 'none';
 
 /**
  * Total classification of what an alert actually reports (#1343) — the four
@@ -141,8 +139,8 @@ const SPEND_CAP_LOG_MESSAGE =
  * that does NOT clear on its own, and the budget itself being spent (which
  * stays spent until an operator raises it). So the text promises neither a
  * specific cause nor that anything will clear unassisted — and "further LLM
- * calls" names all three call sites the cap actually gates (the debate step,
- * `MiRefreshQueue#dispatch`, and `RiskCritic#produce`), not only debates.
+ * calls" is deliberately broader than "debates": the same cap also gates
+ * market-intelligence refreshes and risk-critic checks.
  */
 const BREACH_TEXT: Record<BreachKind, BreachText> = {
   'kill-line': {
@@ -208,8 +206,9 @@ function breachLabel(breaches: readonly string[]): string {
  * (console-channels.ts) — exported so that surface shares this discrimination
  * rather than keeping a second, driftable copy of "what happened" in prose.
  * The `event` name itself stays `kill_threshold_breach` for both callers,
- * deliberately: nothing reads it programmatically, and renaming it is a
- * different, out-of-scope change from the wording this ticket fixes.
+ * deliberately: no production code reads it (only a test filters on it),
+ * and renaming it is a different, out-of-scope change from the wording this
+ * ticket fixes.
  */
 export function breachLogMessage(breaches: readonly string[]): string {
   return BREACH_TEXT[classifyBreach(breaches)].logMessage;

@@ -652,8 +652,9 @@ export class LoggingCalendarFallbackAlertChannel implements CalendarFallbackAler
  *
  * `message` discriminates on which happened (`breachLogMessage`,
  * breach-alert-channel.ts — see its doc for what each case actually claims).
- * `event` stays `kill_threshold_breach` for both callers: nothing reads it
- * programmatically, so renaming it is a separate, out-of-scope change.
+ * `event` stays `kill_threshold_breach` for both callers: no production code
+ * reads it (only a test filters on it), so renaming it is a separate,
+ * out-of-scope change.
  *
  * Same caveat as the other log-only stand-ins: a log line nobody tails is not
  * an alert. `TradeChannelBreachAlert` (breach-alert-channel.ts) is the

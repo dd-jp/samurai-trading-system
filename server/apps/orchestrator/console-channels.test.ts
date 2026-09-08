@@ -460,7 +460,6 @@ describe('LoggingBreachAlertChannel', () => {
     expect(spendCapMessage).toMatch(/spend[- ]cap/i);
     expect(killLineMessage).toContain('auto-tightened');
     expect(killLineMessage).not.toMatch(/spend[- ]cap/i);
-    // Unchanged from before #1343.
     expect(killLineMessage).toBe(
       'kill-threshold breach — risk thresholds auto-tightened; review the strategy and ' +
         'decide kill or rework (no automatic kill is ever applied)',
