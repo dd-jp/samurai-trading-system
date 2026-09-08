@@ -862,17 +862,21 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * and `accountState`), so a tick where the control arm has an exit-due lot
    * and the live arm does not is the ORDINARY case, not an edge one — and per
    * the #743 comment above, roughly 29 of 30 passes are tick passes, so (c)
-   * is plausibly the DOMINANT trigger here, not an excluded one. Verified by
-   * reading every `markStage`/`record` pair in `tick-runner.ts`, both the
-   * head chain from `markStage('analysts')` through the dispatch into
-   * `runIntentTail`, and `runIntentTail` itself (`risk` through `execution`):
-   * none has a branch between marking a stage and recording it, so (a), (b),
-   * and (c) above are exhaustive. Unfiltered, any of the three lets the
-   * control's newer row win `chosenTrace`; in the crash or tick-path case the
-   * control arm may have already recorded a `verdict`/`execution` "go" of its
-   * own, which would then render as the live pass's. Do not read (c) as
+   * is plausibly the DOMINANT trigger here, not an excluded one. (a)/(b)/(c)
+   * are the shapes this reading of `tick-runner.ts` finds — every
+   * `markStage`/`record` pair, both the head chain from `markStage('analysts')`
+   * through the dispatch into `runIntentTail`, and `runIntentTail` itself
+   * (`risk` through `execution`), records immediately after marking, with no
+   * branch between the two — but the filter does not depend on this list
+   * being complete: `chosenTrace` folds over every row in the WINDOW, not
+   * per-pass, so a control row need not be the newest thing THIS pass wrote
+   * to win — an earlier pass's control row stays newest until some later row
+   * displaces it, live or control. Unfiltered, any control row newer than
+   * live's own newest displaces `chosenTrace`; in the crash or tick-path case
+   * the control arm may have already recorded a `verdict`/`execution` "go" of
+   * its own, which would then render as the live pass's. Do not read (c) as
    * saying the leak fires on every tick: it fires only when the two arms'
-   * exit-due state has actually diverged for that instrument on that tick.
+   * exit-due state has diverged for that instrument somewhere in the window.
    *
    * The filter removes control ROWS, not control-touched INSTRUMENTS: an
    * instrument the live arm also attributed still renders its own live stage
