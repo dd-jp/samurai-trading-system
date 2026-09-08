@@ -28,6 +28,7 @@
  */
 import type { BreachAlert, BreachAlertChannel } from '../../pipeline/feedback-loop/index.js';
 import type { DiscordClient, TelegramClient } from '../../pipeline/verdict/index.js';
+import { currentTraceId } from '../../shared/index.js';
 import type { Logger } from './types.js';
 
 /**
@@ -89,7 +90,12 @@ export class TradeChannelBreachAlert implements BreachAlertChannel {
       // A breach that could not be delivered is itself an operator-visible
       // event — otherwise the one alert that matters most fails silently.
       this.#logger.log({
-        trace_id: 'feedback-cycle',
+        // Same mixed shape as `LoggingBreachAlertChannel` (#1280): the daily
+        // kill-line batch runs outside any tick, but an `llm_spend_cap` breach
+        // is raised inside one by `SqliteSpendCap#refuse`, so the undelivered
+        // alert must join whichever raised it rather than always naming the
+        // daily cycle.
+        trace_id: currentTraceId() ?? 'feedback-cycle',
         stage: 'feedback-loop',
         event: 'breach_alert_send_failed',
         level: 'error',

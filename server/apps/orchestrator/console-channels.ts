@@ -641,9 +641,14 @@ export class LoggingBreachAlertChannel implements BreachAlertChannel {
 
   postBreachAlert(alert: BreachAlert): void {
     this.logger.log({
-      // The daily batch belongs to no single tick, so it uses the same
-      // synthetic trace the feedback cycle already logs under.
-      trace_id: 'feedback-cycle',
+      // Mixed, so it is answered at runtime (#1280). The daily kill-line batch
+      // belongs to no single tick and keeps the synthetic trace the feedback
+      // cycle already logs under — but `llm_spend_cap` is raised from
+      // `SqliteSpendCap#refuse`, whose own doc says it runs "inside the tick",
+      // and that breach must join the debate that spent the last of the
+      // budget. This comment previously claimed the daily batch was the only
+      // caller, which the spend-cap wiring (production.ts) falsifies.
+      trace_id: currentTraceId() ?? 'feedback-cycle',
       stage: 'feedback-loop',
       event: 'kill_threshold_breach',
       level: 'error',

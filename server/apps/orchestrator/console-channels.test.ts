@@ -1,6 +1,7 @@
 import { runWithTraceId } from '../../shared/index.js';
 import {
   ConsoleApprovalChannel,
+  LoggingBreachAlertChannel,
   LoggingDataFailoverAlertChannel,
   LoggingFlattenOverfillAlertChannel,
   LoggingHeartbeatChannel,
@@ -357,5 +358,27 @@ describe('UnwiredApprovalChannel', () => {
 describe('ParkedCiiScoreProvider', () => {
   it('answers "no score", the documented null the consumer already handles', async () => {
     expect(await new ParkedCiiScoreProvider().getCii()).toBeNull();
+  });
+});
+
+describe('LoggingBreachAlertChannel', () => {
+  const alert = { breaches: ['llm_spend_cap'], reported_at: new Date('2026-09-08T09:00:00Z') };
+
+  // Two callers, two answers, resolved at runtime (#1280): the daily kill-line
+  // batch (`computeMetrics`) runs outside any tick, while `llm_spend_cap` is
+  // raised by `SqliteSpendCap#refuse` inside one. Differential, so neither a
+  // hardcoded `'feedback-cycle'` nor a hardcoded tick id survives.
+  it('joins the enclosing tick when there is one, and the daily cycle when there is not', () => {
+    const logger = makeLogger();
+
+    new LoggingBreachAlertChannel(logger).postBreachAlert(alert);
+    runWithTraceId('tick-spend-cap', () =>
+      new LoggingBreachAlertChannel(logger).postBreachAlert(alert),
+    );
+
+    expect(logger.entries.map((entry) => entry.trace_id)).toEqual([
+      'feedback-cycle',
+      'tick-spend-cap',
+    ]);
   });
 });
