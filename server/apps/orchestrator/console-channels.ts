@@ -705,10 +705,12 @@ export class LoggingLseCalendarCoverageAlertChannel implements LseCalendarCovera
  * gone — PBO over its line, out-of-sample Sharpe under it, a statistically
  * insignificant Deflated Sharpe, or live performance diverging from the
  * backtest that justified the config — and nobody owns the kill/rework call
- * under full automation; the response here is mechanical (alert +
- * auto-tighten), not a decision. A spend-cap breach means the run has
- * stopped admitting new LLM calls until whatever triggered the refusal is
- * resolved. Neither should wait for someone to notice a quiet heartbeat.
+ * under full automation; the mechanical response is alert-then-auto-tighten,
+ * already run in the Feedback Loop's `computeMetrics` before this port is
+ * ever reached, not a decision made here. A spend-cap breach means the run
+ * has stopped admitting new LLM calls until whatever triggered the refusal
+ * is resolved — this same port, with nothing analogous to auto-tighten.
+ * Neither should wait for someone to notice a quiet heartbeat.
  *
  * `message` discriminates on which happened (`breachLogMessage`,
  * breach-alert-channel.ts — see its doc for what each case actually claims).

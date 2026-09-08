@@ -289,7 +289,7 @@ Feedback Loop → trade channel (metrics reports, breach alerts, arm-divergence 
 Feedback Loop → arm_comparison_samples (→ dashboard arm-comparison panel, read-only)
 ```
 
-*(Amended 2026-09-06 — ADR-0013 Decision 2 removed the loosen-approval gate (#736): "loosening gated" is corrected to "loosening bounded not gated" (clamped to the dial's `[floor, ceiling]`, not gated on approval — see "Module: Guardrailed Tuning" above), and "loosen-approval requests" to "loosen notices" (`LoosenNotificationChannel.notifyLoosenApplied` announces an applied loosening; nothing waits on a reply — see "Module: Guardrailed Tuning" above).)*
+*(Amended 2026-09-08 — ADR-0013 Decision 2 removed the loosen-approval gate (#736): "loosening gated" is corrected to "loosening bounded not gated" (clamped to the dial's `[floor, ceiling]`, not gated on approval — see "Module: Guardrailed Tuning" above), and "loosen-approval requests" to "loosen notices" (`LoosenNotificationChannel.notifyLoosenApplied` announces an applied loosening; nothing waits on a reply — see "Module: Guardrailed Tuning" above).)*
 
 ### Domain Glossary Alignment
 

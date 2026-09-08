@@ -826,10 +826,13 @@ function buildFeedbackConfig(caps: typeof RISK_CAP_EQUITY_FRACTIONS): FeedbackCo
    *
    * `ceiling` is the shipped value itself, and that asymmetry is the safety
    * posture, not an oversight: a kill-line breach may tighten a cap far below
-   * what the profile chose, and auto-loosening (bounded by `max_step`,
-   * clamped to `[floor, ceiling]`) may walk it back up to — never past — the
-   * value a human already reviewed here. Loosening beyond the checked-in
-   * profile is a config change, not a tuning step.
+   * what the profile chose, and a loosening `TuningProposal` — bounded by
+   * `max_step`, clamped to `[floor, ceiling]` — could walk it back up to —
+   * never past — the value a human already reviewed here. That path has no
+   * producer today (see the empty `strategy_params` declaration below for
+   * why), so the walk-back is a capability the dial reserves, not a
+   * mechanism running now. Loosening beyond the checked-in profile is a
+   * config change, not a tuning step.
    *
    * `floor` at a quarter keeps the dial from tightening to zero: a cap of 0
    * rejects every intent, which is indistinguishable from a broken pipeline
