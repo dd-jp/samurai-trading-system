@@ -217,9 +217,7 @@ per-instrument term is justified. It does replace what those rulings called for 
 ruling point 1 called for building the sampler against `58-lse-quote-snapshot.py`'s endpoint; that call is
 retracted along with the script, not merely superseded, because the endpoint itself may not be used this way.
 [#1035](https://github.com/dd-jp/samurai-trading-system/issues/1035) is **not** the follow-up originally called
-for — it is the licensed replacement path now required in its place. Every place below that cited F2b's endpoint
-claim, F2c's recommendation, or an F6 figure is marked retracted in place rather than silently removed, so the
-reasoning that once rested on them stays visible as what it was.
+for — it is the licensed replacement path now required in its place.
 
 **Why this retraction does not reach F2/F3's estimator arm.** #999 read LSE Terms §8 as barring programmatic
 collection from *LSE's own site* and incorporation of *its* Information into a work — that is what F2b/F2c/F6
@@ -321,24 +319,25 @@ there are no shorts and **no commodity ETCs at all**, though ADR-0016's universe
 ETPs **plus commodity ETCs**" — the ETC leg was never encoded. ADR-0016 itself names exactly one ticker, 3USL.
 The run below covers all 30.
 
-**Correction 2 — #881's stated blocker is FALSE. Free per-line LSE quotes exist.** The ticket says its answer
-"needs LSE quote data that does not currently exist for free". The London Stock Exchange's own website is a
-JavaScript app backed by an **unauthenticated** endpoint that returns bid and offer per TIDM:
+**Correction 2 — RETRACTED IN SUBSTANCE, 2026-09-08 ([#1036](https://github.com/dd-jp/samurai-trading-system/issues/1036)).**
+The ticket says its answer "needs LSE quote data that does not currently exist for free". The London Stock
+Exchange's own website is a JavaScript app backed by an **unauthenticated** endpoint that returns bid and offer
+per TIDM — that narrow technical claim ("a free endpoint exists") stands. But [#999](https://github.com/dd-jp/samurai-trading-system/issues/999)
+found this exact endpoint barred by LSE Terms §8 (no programmatic access, personal use only, no incorporation
+into a work), so **#881's blocker is not resolved by it**: this repo cannot permissibly use the endpoint to
+collect research data, and functionally the blocker stands. The endpoint is documented below for the audit
+record, not as something to query — do not run this or an equivalent request against it:
 
 ```
 https://api.londonstockexchange.com/api/gw/lse/instruments/alldata/<TIDM>
 ```
 
-**30/30 coverage of the pool**, plus `marketsize` (Exchange Market Size — the size the quote is good for),
-`segment`, `currency` and `sedol`. This does not touch open
-[#895](https://github.com/dd-jp/samurai-trading-system/issues/895) — doc 34 §5's licence and freshness analysis
-still governs what may price the *live book*.
+At the time of the now-retracted capture, this endpoint was found to cover all 30 pool lines, plus `marketsize`
+(Exchange Market Size — the size the quote is good for), `segment`, `currency` and `sedol`. This does not touch
+open [#895](https://github.com/dd-jp/samurai-trading-system/issues/895) — doc 34 §5's licence and freshness
+analysis still governs what may price the *live book*.
 
-**RETRACTED 2026-09-08 ([#1036](https://github.com/dd-jp/samurai-trading-system/issues/1036)).** The endpoint's
-existence stands; the claim that it "changes what research can measure, for £0" does not — [#999](https://github.com/dd-jp/samurai-trading-system/issues/999)
-found this exact endpoint barred by LSE Terms §8 (no programmatic access, personal use only, no incorporation
-into a work). The producer script, `58-lse-quote-snapshot.py`, is deleted from the tree. See the RETRACTION
-notice above.
+The producer script, `58-lse-quote-snapshot.py`, is deleted from the tree. See the RETRACTION notice above.
 
 ### F2c — what a free published *static* spread source turns out not to be
 
@@ -479,8 +478,9 @@ relied on. The script is deleted from the tree (git history retains it); the raw
 replaces these numbers until [#1035](https://github.com/dd-jp/samurai-trading-system/issues/1035) reports. The
 table is kept below only as the audit record of what was collected and why it doesn't count.
 
-**Below is historical: what the document argued before the 2026-09-08 retraction above, kept as audit record —
-not current guidance, and none of it reopens the retraction.**
+**The three paragraphs that follow are historical: what the document argued before the 2026-09-08 retraction
+above, kept as audit record — not current guidance, and none of it reopens the retraction.** (The table and the
+"three things fall out" list further below carry their own, still-current, retraction annotations.)
 
 **PROVISIONAL, and the caveat was load-bearing, as originally written.** Captured 2026-09-02 05:34 Europe/London,
 i.e. **before the 08:00 open**. Out of continuous trading the endpoint returned the *previous session's closing*
@@ -652,8 +652,9 @@ claims. F6 is retracted in full (impermissible collection, [#999](https://github
 F2b's premise correction that a free endpoint *exists* stands, but the endpoint may not be used to collect
 research data. **Nothing quantifies the live-universe dispersion until [#1035](https://github.com/dd-jp/samurai-trading-system/issues/1035)
 reports** — until then this ruling's magnitude claim is unsupported, though the ruling itself (a per-instrument
-term is justified, ship the sampler first) is not re-opened here; see #1035's own acceptance criteria, which
-already treat the #881 ruling as "provisional indefinitely" if no permissible source is found.
+term is justified, ship #1035's licensed sampler first — **not** the retracted free-endpoint one) is not
+re-opened here; see #1035's own acceptance criteria, which already treat the #881 ruling as "provisional
+indefinitely" if no permissible source is found.
 
 **Both halves of that framing were said to be wrong, and in opposite directions.** The data exists and is free
 (F2b). And once measured, the dispersion was said not to be marginal — it was **12.61x max/median and 480x
