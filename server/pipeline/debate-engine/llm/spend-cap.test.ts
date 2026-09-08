@@ -1,7 +1,7 @@
 import { runWithTraceId } from '../../../shared/index.js';
 import { openSharedStore, type SharedStore } from '../../../shared/store/index.js';
 import type { LogEntry, Logger } from '../../../shared/types.js';
-import { SqliteSpendCap, UNCAPPED_SPEND } from './spend-cap.js';
+import { SqliteSpendCap, spendCapRefusalRemedy, UNCAPPED_SPEND } from './spend-cap.js';
 
 function recordingLogger(): { logger: Logger; entries: LogEntry[] } {
   const entries: LogEntry[] = [];
@@ -35,6 +35,17 @@ function lockedOnce(db: SharedStore): SharedStore {
       }
       return db.prepare(sql);
     },
+  } as unknown as SharedStore;
+}
+
+/**
+ * A store whose SUM read answers with a non-finite total — the corrupt
+ * `cost_usd` row case `check()`'s second guard exists for, which no ordinary
+ * INSERT can reach through the real `llm_spend` schema.
+ */
+function nonFiniteSum(): SharedStore {
+  return {
+    prepare: () => ({ get: () => ({ total: Number.NaN }) }),
   } as unknown as SharedStore;
 }
 
@@ -76,6 +87,7 @@ describe('SqliteSpendCap', () => {
 
     expect(verdict.admitted).toBe(false);
     expect(verdict.reason).toContain('$50.00 of $50.00');
+    expect(verdict.kind).toBe('budget');
   });
 
   it('sums across many rows, which is the only way the real breach arrives', () => {
@@ -100,7 +112,20 @@ describe('SqliteSpendCap', () => {
 
     expect(verdict.admitted).toBe(false);
     expect(verdict.reason).toContain('fail-closed');
+    expect(verdict.kind).toBe('fault');
     expect(entries.at(-1)?.level).toBe('error');
+  });
+
+  it('tags the non-finite-sum refusal (a corrupt cost_usd row) as fault too, not budget', () => {
+    // The second `#refuse('fault', ...)` call site — distinct from the read
+    // failure above, but `SpendCapVerdict.kind` deliberately collapses both to
+    // the same 'fault' value (see the field doc: nothing on the verdict
+    // distinguishes which of the two fired).
+    const verdict = new SqliteSpendCap(nonFiniteSum(), 50).check();
+
+    expect(verdict.admitted).toBe(false);
+    expect(verdict.reason).toContain('not a finite number');
+    expect(verdict.kind).toBe('fault');
   });
 
   it('escalates the breach ONCE, not on every subsequent refusal', () => {
@@ -243,6 +268,30 @@ describe('SqliteSpendCap', () => {
 
       expect(entries.at(-1)?.trace_id).toBe('tick-x');
     });
+  });
+});
+
+describe('spendCapRefusalRemedy (#1372)', () => {
+  // The regression this pins: every refusal log line asserted "the budget
+  // does not refill" even on the fault paths, where it is false — a
+  // transient `llm_spend` read failure clears on its own. Swapping which
+  // branch below returns which string must redden both assertions.
+  it('claims permanence only for a budget refusal', () => {
+    expect(spendCapRefusalRemedy('budget')).toContain('does not refill');
+    expect(spendCapRefusalRemedy('budget')).not.toContain('SPEND-LEDGER FAULT');
+  });
+
+  it('never claims the fault refusal is permanent, and names it a ledger fault', () => {
+    expect(spendCapRefusalRemedy('fault')).not.toContain('does not refill');
+    expect(spendCapRefusalRemedy('fault')).toContain('SPEND-LEDGER FAULT');
+  });
+
+  it('claims neither permanence nor a ledger fault for a refusal with no reported kind', () => {
+    const remedy = spendCapRefusalRemedy(undefined);
+
+    expect(remedy).not.toContain('does not refill');
+    expect(remedy).not.toContain('SPEND-LEDGER FAULT');
+    expect(remedy).toContain('NAMES NO KIND');
   });
 });
 

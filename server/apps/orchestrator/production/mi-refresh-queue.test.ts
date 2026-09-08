@@ -48,6 +48,7 @@ function meteredCap(budgetUsd: number): SpendCap & { spentUsd: number } {
             spent_usd: cap.spentUsd,
             budget_usd: budgetUsd,
             reason: 'LLM spend cap reached',
+            kind: 'budget',
           }
         : { admitted: true, spent_usd: cap.spentUsd, budget_usd: budgetUsd };
     },
@@ -579,5 +580,94 @@ describe('MiRefreshQueue (#1085)', () => {
     // read a spent total of 0 and bill on top of each other.
     expect(cap.spentUsd).toBe(1);
     expect(calls).toEqual(['TSLA']);
+  });
+
+  describe('spend-cap refusal wording (#1372)', () => {
+    // `mi_refresh_refused_spend_cap` used to assert "the budget does not
+    // refill" unconditionally, which is false on a fault refusal — a
+    // transient `llm_spend` read failure clears on its own. These two pin the
+    // per-kind wording so a swap of `spendCapRefusalRemedy`'s two branches
+    // reddens both.
+    it('states the budget remedy — permanent, raise the cap — on a budget refusal', async () => {
+      const cap = meteredCap(1);
+      cap.spentUsd = 1;
+      const calls: string[] = [];
+      const logger = recordingLogger();
+      const queue = new MiRefreshQueue({
+        spendCap: cap,
+        refresher: billingRefresher(cap, 1, calls),
+        logger,
+      });
+
+      await queue.refresh('tick-1', 'TSLA', 'stocks');
+      await settle();
+
+      const refusal = logger.entries.find(
+        (entry) => entry.event === 'mi_refresh_refused_spend_cap',
+      );
+      expect(refusal).toBeDefined();
+      expect(refusal?.message).toContain('does not refill with time');
+      expect(refusal?.message).not.toContain('SPEND-LEDGER FAULT');
+    });
+
+    it('states the fault remedy — a ledger fault, not a spent budget — on a fault refusal', async () => {
+      const calls: string[] = [];
+      const logger = recordingLogger();
+      const faultCap: SpendCap = {
+        check: () => ({
+          admitted: false,
+          spent_usd: Number.NaN,
+          budget_usd: 1,
+          reason: 'spend cap unreadable (fail-closed)',
+          kind: 'fault',
+        }),
+      };
+      const queue = new MiRefreshQueue({
+        spendCap: faultCap,
+        refresher: billingRefresher({ spentUsd: 0 }, 1, calls),
+        logger,
+      });
+
+      await queue.refresh('tick-1', 'TSLA', 'stocks');
+      await settle();
+
+      const refusal = logger.entries.find(
+        (entry) => entry.event === 'mi_refresh_refused_spend_cap',
+      );
+      expect(refusal).toBeDefined();
+      expect(refusal?.message).toContain('SPEND-LEDGER FAULT');
+      expect(refusal?.message).not.toContain('does not refill with time');
+      expect(calls).toEqual([]);
+    });
+
+    it('claims neither permanence nor a ledger fault on a refusal with no reported kind', async () => {
+      const calls: string[] = [];
+      const logger = recordingLogger();
+      const unknownKindCap: SpendCap = {
+        check: () => ({
+          admitted: false,
+          spent_usd: 1,
+          budget_usd: 1,
+          reason: 'spend cap reached',
+        }),
+      };
+      const queue = new MiRefreshQueue({
+        spendCap: unknownKindCap,
+        refresher: billingRefresher({ spentUsd: 0 }, 1, calls),
+        logger,
+      });
+
+      await queue.refresh('tick-1', 'TSLA', 'stocks');
+      await settle();
+
+      const refusal = logger.entries.find(
+        (entry) => entry.event === 'mi_refresh_refused_spend_cap',
+      );
+      expect(refusal).toBeDefined();
+      expect(refusal?.message).toContain('NAMES NO KIND');
+      expect(refusal?.message).not.toContain('SPEND-LEDGER FAULT');
+      expect(refusal?.message).not.toContain('does not refill with time');
+      expect(calls).toEqual([]);
+    });
   });
 });

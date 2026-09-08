@@ -6,6 +6,8 @@ import type {
   AnthropicMessagesClient,
   LlmClient,
   LlmRequest,
+  SpendCap,
+  SpendCapVerdict,
 } from '../../../pipeline/debate-engine/index.js';
 import {
   AnthropicLlmClient,
@@ -1222,5 +1224,113 @@ describe('buildDebateStep LLM spend attribution (#326)', () => {
     const rows = spendRows(db);
     expect(rows).toHaveLength(2); // bull + bear; the mediator call threw
     expect(rows.every((row) => row.debate_id === computeDebateId('AAPL', NOW, views))).toBe(true);
+  });
+});
+
+/**
+ * #1372: `debate_refused_spend_cap` used to assert "the budget does not
+ * refill" unconditionally, which is false on the two fault refusal kinds — a
+ * transient `llm_spend` read failure clears on its own. The message now reads
+ * its remedy text from `spendCapRefusalRemedy(spend.kind)`; these two tests
+ * pin the per-kind wording so a swap of that helper's two branches reddens
+ * both.
+ */
+describe('buildDebateStep spend-cap refusal wording (#1372)', () => {
+  function refusingSpendCap(verdict: Omit<SpendCapVerdict, 'admitted'>): SpendCap {
+    return { check: () => ({ admitted: false, ...verdict }) };
+  }
+
+  it('states the budget remedy — permanent, raise the cap or start fresh — on a budget refusal', async () => {
+    const { logger, entries } = recordingLogger();
+    const spendCap = refusingSpendCap({
+      spent_usd: 50,
+      budget_usd: 50,
+      reason: 'LLM spend cap reached: $50.00 of $50.00 spent',
+      kind: 'budget',
+    });
+    const step = buildDebateStep(
+      fakeLlmClient(),
+      new InMemoryDebateLogStore(),
+      unlimited(),
+      spendCap,
+      logger,
+    );
+
+    const result = await step({
+      trace_id: 'trace-1',
+      instrument: 'AAPL',
+      views: [makeView()],
+      asset_class: ASSET_CLASS,
+      clock: CLOCK,
+      bar: NOW,
+    });
+
+    expect(result.confidence).toBe(0);
+    const refusal = entries.find((entry) => entry.event === 'debate_refused_spend_cap');
+    expect(refusal).toBeDefined();
+    expect(refusal?.message).toContain('does not refill with time');
+    expect(refusal?.message).not.toContain('SPEND-LEDGER FAULT');
+  });
+
+  it('states the fault remedy — a ledger fault, not a spent budget — on a fault refusal', async () => {
+    const { logger, entries } = recordingLogger();
+    const spendCap = refusingSpendCap({
+      spent_usd: Number.NaN,
+      budget_usd: 50,
+      reason: 'spend cap unreadable (fail-closed)',
+      kind: 'fault',
+    });
+    const step = buildDebateStep(
+      fakeLlmClient(),
+      new InMemoryDebateLogStore(),
+      unlimited(),
+      spendCap,
+      logger,
+    );
+
+    await step({
+      trace_id: 'trace-1',
+      instrument: 'AAPL',
+      views: [makeView()],
+      asset_class: ASSET_CLASS,
+      clock: CLOCK,
+      bar: NOW,
+    });
+
+    const refusal = entries.find((entry) => entry.event === 'debate_refused_spend_cap');
+    expect(refusal).toBeDefined();
+    expect(refusal?.message).toContain('SPEND-LEDGER FAULT');
+    expect(refusal?.message).not.toContain('does not refill with time');
+  });
+
+  it('claims neither permanence nor a ledger fault on a refusal with no reported kind', async () => {
+    const { logger, entries } = recordingLogger();
+    const spendCap = refusingSpendCap({
+      spent_usd: 50,
+      budget_usd: 50,
+      reason: 'spend cap reached',
+    });
+    const step = buildDebateStep(
+      fakeLlmClient(),
+      new InMemoryDebateLogStore(),
+      unlimited(),
+      spendCap,
+      logger,
+    );
+
+    await step({
+      trace_id: 'trace-1',
+      instrument: 'AAPL',
+      views: [makeView()],
+      asset_class: ASSET_CLASS,
+      clock: CLOCK,
+      bar: NOW,
+    });
+
+    const refusal = entries.find((entry) => entry.event === 'debate_refused_spend_cap');
+    expect(refusal).toBeDefined();
+    expect(refusal?.message).toContain('NAMES NO KIND');
+    expect(refusal?.message).not.toContain('SPEND-LEDGER FAULT');
+    expect(refusal?.message).not.toContain('does not refill with time');
   });
 });

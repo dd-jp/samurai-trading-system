@@ -34,6 +34,9 @@ import { currentTraceId, describeThrownSafely } from '../../../shared/index.js';
 import type { SharedStore } from '../../../shared/store/index.js';
 import type { Logger } from '../../../shared/types.js';
 
+/** The two refusal kinds `#refuse` escalates independently (see its doc). */
+export type SpendCapRefusalKind = 'budget' | 'fault';
+
 /** The answer, with the figures behind it so a refusal can explain itself. */
 export interface SpendCapVerdict {
   /** Whether a new debate may be admitted. */
@@ -44,6 +47,68 @@ export interface SpendCapVerdict {
   budget_usd: number;
   /** Present only on a refusal — operator-readable, safe to log. */
   reason?: string;
+  /**
+   * Present only on a refusal. `'budget'` is the ceiling actually spent, which
+   * stays spent until an operator raises it or starts a fresh run. `'fault'`
+   * covers BOTH of `#refuse`'s fault call sites — an unreadable `llm_spend`
+   * (transient, clears on its own next read) and a non-finite `cost_usd` SUM
+   * (a corrupt row, does not clear on its own) — collapsed to one kind
+   * because nothing on `SpendCapVerdict` distinguishes those two sites from
+   * each other; only their (prose, not-for-matching) `reason` strings differ.
+   * A caller that needs the fault site should read `llm_spend_cap_read_failed`
+   * in the log, not this field.
+   */
+  kind?: SpendCapRefusalKind;
+}
+
+/**
+ * Remedy text per refusal kind (#1372) — one copy every refusal log line
+ * reads from (`debate-adapter.ts`, `mi-refresh-queue.ts`) instead of each
+ * hand-copying its own permanence claim, which is how #1372 found them
+ * stating it unconditionally on the fault path too. Total over
+ * `SpendCapRefusalKind | undefined`: the `default` branch below is
+ * unreachable while the union has two members plus `undefined` and turns
+ * into a compile error the moment a member is added and this switch is not
+ * updated for it.
+ *
+ * `undefined` is real, not defensive padding: `kind` is optional on
+ * `SpendCapVerdict`, so a caller reading a refusal from a `SpendCap`
+ * implementation other than `SqliteSpendCap` (which always stamps it) sees
+ * `undefined`, and must not be told it's a budget breach or a ledger fault —
+ * neither claim is supported. It is unreachable through `SqliteSpendCap`
+ * itself and through `UNCAPPED_SPEND` (which never refuses).
+ *
+ * The `'fault'` text cannot name WHICH of the two fault call sites fired —
+ * see the `kind` field doc for why — so it states both possible causes and
+ * both possible outcomes rather than picking one it cannot support.
+ */
+export function spendCapRefusalRemedy(kind: SpendCapRefusalKind | undefined): string {
+  switch (kind) {
+    case 'budget':
+      return (
+        'THIS DOES NOT RESOLVE ITSELF: the budget does not refill with time, so every ' +
+        'subsequent check will refuse identically until an operator raises the cap or starts ' +
+        'a fresh run.'
+      );
+    case 'fault':
+      return (
+        'THIS IS A SPEND-LEDGER FAULT, NOT A SPENT BUDGET: llm_spend could not be read (see ' +
+        'llm_spend_cap_read_failed if that is why) or its cost_usd sum is not a finite number. ' +
+        'A transient read fault clears on its own once the ledger is reachable again; a ' +
+        'corrupt row does not, and needs an operator to fix it. Unlike a budget refusal, do ' +
+        'not assume every subsequent check will refuse identically.'
+      );
+    case undefined:
+      return (
+        'THIS REFUSAL NAMES NO KIND: the SpendCap implementation that refused did not report ' +
+        'whether this is a spent budget or a ledger fault, so neither can be claimed here. If ' +
+        'this is SqliteSpendCap, check llm_spend_cap_read_failed and the budget config directly.'
+      );
+    default: {
+      const exhaustive: never = kind;
+      return exhaustive;
+    }
+  }
 }
 
 /** The seam the debate step admits against. */
@@ -91,10 +156,13 @@ export const UNCAPPED_SPEND: SpendCap = {
  */
 export class SqliteSpendCap implements SpendCap {
   /**
-   * Fired ONCE per refusal KIND. Not per refusal: the cap does not refill, so
-   * every subsequent tick refuses identically — at a 15-minute cadence that
-   * would be ~1,000 identical alerts over the rest of a 14-day run, which is
-   * how an operator learns to mute the channel.
+   * Fired ONCE per refusal KIND, not per refusal. On a budget refusal the
+   * cap does not refill, so every subsequent tick refuses identically — at a
+   * 15-minute cadence that would be ~1,000 identical alerts over the rest of
+   * a 14-day run, which is how an operator learns to mute the channel. A
+   * fault refusal has no such guarantee — see below — but the same
+   * once-per-kind latch still applies to it, for the same alert-fatigue
+   * reason.
    *
    * **Why two latches and not one boolean.** The two refusal kinds are
    * unrelated conditions that happen to share an exit path, and one is
@@ -236,17 +304,22 @@ export class SqliteSpendCap implements SpendCap {
    * inside the tick — the refusal itself is the load-bearing part, and it has
    * already been decided by the time this runs.
    */
-  #refuse(kind: 'budget' | 'fault', verdict: SpendCapVerdict): SpendCapVerdict {
+  #refuse(kind: SpendCapRefusalKind, verdict: SpendCapVerdict): SpendCapVerdict {
+    // Stamped on every returned verdict, including the already-announced
+    // short-circuit below — a caller reading `kind` off a later, unescalated
+    // refusal must see it too, not only the first one that reached `onBreach`.
+    const refused: SpendCapVerdict = { ...verdict, kind };
+
     if (kind === 'budget') {
-      if (this.#budgetAnnounced) return verdict;
+      if (this.#budgetAnnounced) return refused;
       this.#budgetAnnounced = true;
     } else {
-      if (this.#faultAnnounced) return verdict;
+      if (this.#faultAnnounced) return refused;
       this.#faultAnnounced = true;
     }
 
     try {
-      this.onBreach?.(verdict);
+      this.onBreach?.(refused);
     } catch (error) {
       this.logger?.log({
         // Same ambient-or-boot shape as `check()`'s fail-closed line above.
@@ -257,10 +330,10 @@ export class SqliteSpendCap implements SpendCap {
         message:
           'LLM spend cap breached, and the breach alert channel threw — the refusal stands, ' +
           `but nothing reached an operator: ${describeThrownSafely(error)}`,
-        payload: { budget_usd: verdict.budget_usd, spent_usd: verdict.spent_usd },
+        payload: { budget_usd: refused.budget_usd, spent_usd: refused.spent_usd },
       });
     }
 
-    return verdict;
+    return refused;
   }
 }
