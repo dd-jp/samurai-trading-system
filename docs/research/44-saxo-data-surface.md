@@ -467,6 +467,9 @@ ETF/ETP — our universe — at 1–5 entitlements:
 | --- | ---: | ---: |
 | ETF/ETP, Trading as Principal, 1–5 entitlements | **£6,500 / yr** | £13,000 / yr |
 
+*(Year seam: the definitions and policy are the **2026** Schedule B; the charge figures are the
+**2025** Price List, the latest found. Magnitudes, not the current tariff.)*
+
 **There is no Private Investor exemption in §6.** Schedule B's Private Investor carve-outs sit in
 redistribution (3.2), derived data (4.4) and per-price-request (3.5.3); none reach the Non-Display
 policy.
