@@ -48,7 +48,7 @@ One `Agent` per ticket: `subagent_type: general-purpose`, `isolation: "worktree"
 
 `AGENT-INSTRUCTIONS.md` must say:
 
-- Invoke the `implement` skill first (it directs `/tdd`); skip its own `/code-review` + `/refactor` step, review is a separate handoff.
+- Follow the `implement` skill's discipline inline (its SKILL.md is `disable-model-invocation: true`, so a subagent cannot call it): implement the ticket, `/tdd` at pre-agreed seams, typecheck and single test files often, full suite once at the end. Skip its `/code-review` + `/refactor` step, review is a separate handoff.
 - Branch from the given `origin/main` SHA, never local HEAD.
 - Verify the ticket premise against the tree before coding; a disproved premise is reported, not patched over.
 - Mutation evidence both directions in the PR body, pasted verbatim.
