@@ -125,6 +125,7 @@ const BREACH = {
   reported_at: new Date('2026-08-04T09:00:00Z'),
 };
 const RESIDUAL_EXPOSURE = {
+  trace_id: 'fill-sync',
   idempotency_key: 'ioc-1',
   instrument: 'AAPL',
   side: 'buy' as const,

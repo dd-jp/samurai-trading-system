@@ -2419,6 +2419,7 @@ describe('ExecutionImpl.execute', () => {
             expect(broker.getProtectedQty('key-lot-2')).toBeNull();
             expect(residualExposureAlerts.alerts).toEqual([
               {
+                trace_id: 'trace-1',
                 idempotency_key: 'key-lot-2',
                 instrument: 'AAPL',
                 side: 'buy',

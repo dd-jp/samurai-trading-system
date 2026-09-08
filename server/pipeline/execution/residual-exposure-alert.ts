@@ -1,8 +1,11 @@
 /**
- * The operator-escalation port for a residual position `ingestFills()` could
- * not re-arm (#525) — the same shape `UnpricedFillAlertChannel` takes
- * (unpriced-fill-alert.ts): declared beside its caller, implemented by
+ * The operator-escalation port for a residual position that could not be
+ * re-armed (#525) — the same shape `UnpricedFillAlertChannel` takes
+ * (unpriced-fill-alert.ts): declared beside its callers, implemented by
  * `LoggingResidualExposureAlertChannel` and wired at the composition root.
+ * Two producer paths reach it — `maybeRearmResidual` inside `ingestFills()`
+ * itself, and `sweepResidualProtection`'s own re-arm attempt — see
+ * `trace_id`'s doc below for which ids each can carry.
  *
  * ## Why this exists
  *
@@ -37,6 +40,31 @@
 
 /** One residual position left without protective legs after a partial flatten. */
 export interface ResidualExposureAlert {
+  /**
+   * The `ExecutionInput.trace_id` of the Execution SURFACE this alert was
+   * raised on, and with it the ARM that raised it (#1348, following #1331's
+   * `FlattenReconcileAlert.trace_id`) — both channels are `SAMURAI_ALERTS`-
+   * selected once at the root and shared between arms (see
+   * `control-arm-wiring.ts`), so a constant here would log a control-arm
+   * (simulated-broker) residual identically to a live one.
+   *
+   * Reaches `postResidualExposureAlert` from two producer paths, both
+   * stamped with the raising surface's own fixed `ExecutionInput.trace_id`:
+   * `maybeRearmResidual` (ingest-fills.ts), reached through `advanceLot`
+   * inside `ingestFills()` itself when a partial flatten leaves a residual
+   * mid-poll; and `sweepResidualProtection` (residual-protection-sweep.ts),
+   * reached both unconditionally inside `reconcile()` (reconcile.ts) and,
+   * standalone, again after the poll's own `ingestFills()` (fill-sync.ts).
+   * In production this field is one of four ids: `reconcile` /
+   * `control-arm-reconcile` from the one-shot startup reconcile, and
+   * `fill-sync` / `control-arm-fill-sync` from the poll — every path that
+   * runs during the poll (its `ingestFills()` call, its own `reconcile()`
+   * call, and its standalone sweep) stamps the same fill-sync surface id, so
+   * none of those three is distinguishable from this field alone. The smoke
+   * harness (smoke-run.ts) also drives real `Execution` surfaces through a
+   * recording channel and can add `smoke-exit-path` / `smoke-exit-path-restart`.
+   */
+  trace_id: string;
   /** The lot's own `idempotency_key` — what `getOpenPositions()`/the store key on. */
   idempotency_key: string;
   instrument: string;

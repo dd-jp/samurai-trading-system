@@ -177,6 +177,11 @@ export function buildControlArmWiring(deps: ControlArmWiringDeps): ControlArmWir
 
   const executionDeps: ExecutionStepDeps = {
     ...deps.execution,
+    // `clock` and `mode` are NOT overridden below (#1348) — deliberately: one
+    // wall clock and one process mode for both arms, not per-arm state. The
+    // alert channels are inherited too; each alert carries its own
+    // `trace_id` to name the arm that raised it — see those alerts' docs.
+    //
     // The two things a shadow arm may not share. See `control-arm.ts`: a second
     // arm placing real orders at ADR-0018 D5's 35%/25% envelope doubles
     // deployment against a £1,000 book, which no ADR authorises.

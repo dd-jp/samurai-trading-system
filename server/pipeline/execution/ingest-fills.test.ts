@@ -206,6 +206,9 @@ function makeInput(
   // `advanceLot` itself calls — to read a consecutive count that never
   // crosses a warn boundary and so never appears in `logger.entries`.
   throttle: FilledZeroSizeThrottle = new FilledZeroSizeThrottle(),
+  // #1348: overridable so a test can prove the two alert producers thread
+  // THIS value rather than a literal they picked themselves.
+  traceId = 'trace-1',
 ): ExecutionInput {
   const config: ExecutionConfig = {
     simulated: {
@@ -220,7 +223,7 @@ function makeInput(
   };
   const clock: Clock = { now: () => NOW };
   return {
-    trace_id: 'trace-1',
+    trace_id: traceId,
     clock,
     broker,
     store,
@@ -509,6 +512,7 @@ describe('ExecutionImpl.ingestFills', () => {
 
       expect(residualExposureAlerts.alerts).toEqual([
         {
+          trace_id: 'trace-1',
           idempotency_key: 'key-1',
           instrument: 'AAPL',
           side: 'buy',
@@ -1417,7 +1421,12 @@ describe('ExecutionImpl.ingestFills', () => {
       ).ingestFills();
 
       expect(flattenOverfillAlerts.warnings).toEqual([
-        { idempotency_key: 'flatten-1', unattributed_qty: 4, observed_at: NOW },
+        {
+          trace_id: 'trace-1',
+          idempotency_key: 'flatten-1',
+          unattributed_qty: 4,
+          observed_at: NOW,
+        },
       ]);
 
       // The excess (4) was dropped, not guessed onto the lot: only the
@@ -1482,7 +1491,12 @@ describe('ExecutionImpl.ingestFills', () => {
       // again on the re-poll that re-offers the identical already-ingested
       // fill.
       expect(flattenOverfillAlerts.warnings).toEqual([
-        { idempotency_key: 'flatten-1', unattributed_qty: 4, observed_at: NOW },
+        {
+          trace_id: 'trace-1',
+          idempotency_key: 'flatten-1',
+          unattributed_qty: 4,
+          observed_at: NOW,
+        },
       ]);
     });
 
@@ -3279,5 +3293,95 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
     // `{ warn: false, consecutive: 1 }` instead — silently missing the
     // alert a genuinely wedged lot is due, not merely mis-numbering it.
     expect(throttle.observe('key-1')).toEqual({ warn: true, consecutive: 3 });
+  });
+});
+
+// #1348: `ResidualExposureAlert.trace_id`/`FlattenOverfillWarning.trace_id`
+// must carry the EXECUTION SURFACE's own id, not a literal either producer
+// picked itself — the property that lets a shared, arm-agnostic channel
+// instance (console-channels.ts) tell a control-arm alert from a live one.
+// These two tests vary only `trace_id` between two otherwise-identical runs
+// and assert the alert follows it — a mutation that hardcodes either
+// producer's `trace_id:` field stays green under every OTHER test in this
+// file (they all use the same default `'trace-1'`) but fails here.
+describe('trace_id threading onto alerts (#1348)', () => {
+  it("alertResidualExposure carries the pass's own trace_id, not a fixed one", async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 10, stop: 95, target: 110 });
+    const broker = new ScriptedBroker([
+      fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+      fill({
+        broker_fill_id: 'x1',
+        leg: 'exit',
+        qty: 4,
+        timestamp: new Date('2026-07-20T15:30:00Z'),
+      }),
+    ]);
+    broker.rearmFailure = new Error('venue rejected the OCO order');
+    const residualExposureAlerts = makeResidualExposureAlerts();
+
+    await new ExecutionImpl(
+      makeInput(
+        broker,
+        store,
+        residualExposureAlerts,
+        undefined,
+        undefined,
+        undefined,
+        'control-arm-fill-sync',
+      ),
+    ).ingestFills();
+
+    expect(residualExposureAlerts.alerts.map((alert) => alert.trace_id)).toEqual([
+      'control-arm-fill-sync',
+    ]);
+  });
+
+  it("redistributeOneFlatten carries the pass's own trace_id, not a fixed one", async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10, stop: 95 });
+    await store.writeAheadFlatten({
+      idempotency_key: 'flatten-1',
+      instrument: 'AAPL',
+      asset_class: 'stocks',
+      side: 'sell',
+      size: 6,
+      submitted_at: OPENED_AT,
+      lot_held_quantities: [{ idempotency_key: 'key-1', held: 6 }],
+      exit_reason: 'flatten',
+      decision_price: null,
+      quote_bid: null,
+      quote_ask: null,
+      quote_mid: null,
+      quote_observed_at: null,
+      modelled_cost_breakdown: null,
+    });
+    const withFlatten = new ScriptedBroker([
+      fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+      fill({
+        client_order_id: 'flatten-1',
+        broker_fill_id: 'f1',
+        leg: 'exit',
+        qty: 10,
+        timestamp: new Date('2026-07-20T15:30:00Z'),
+      }),
+    ]);
+    const flattenOverfillAlerts = makeFlattenOverfillAlerts();
+
+    await new ExecutionImpl(
+      makeInput(
+        withFlatten,
+        store,
+        undefined,
+        flattenOverfillAlerts,
+        undefined,
+        undefined,
+        'control-arm-fill-sync',
+      ),
+    ).ingestFills();
+
+    expect(flattenOverfillAlerts.warnings.map((warning) => warning.trace_id)).toEqual([
+      'control-arm-fill-sync',
+    ]);
   });
 });

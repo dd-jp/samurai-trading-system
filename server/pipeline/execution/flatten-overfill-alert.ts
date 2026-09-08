@@ -38,6 +38,23 @@
 
 /** One flatten fill whose quantity exceeded its named lots' journalled share. */
 export interface FlattenOverfillWarning {
+  /**
+   * The `ExecutionInput.trace_id` of the Execution SURFACE this warning was
+   * raised on, and with it the ARM that raised it (#1348, following #1331's
+   * `FlattenReconcileAlert.trace_id`) — this channel is `SAMURAI_ALERTS`-
+   * selected once at the root and shared between arms (see
+   * `control-arm-wiring.ts`), so a constant here would log a control-arm
+   * warning identically to a live one.
+   *
+   * `redistributeOneFlatten`, this warning's only producer, runs solely
+   * inside `ingestFills()` — never inside `reconcile()`. Measured: unlike
+   * `ResidualExposureAlert.trace_id`, the startup reconcile ids (`reconcile`,
+   * `control-arm-reconcile`) cannot appear here at all, because
+   * `runStartupReconcile` (fill-sync.ts) calls only `execution.reconcile()`,
+   * never `ingestFills()`. In production this field is always `fill-sync` or
+   * `control-arm-fill-sync` (the fill-sync poll's own surface).
+   */
+  trace_id: string;
   /** The flatten's own `flatten_submissions.idempotency_key` (its `client_order_id`). */
   idempotency_key: string;
   /** The quantity this poll could not attribute to any named lot. */

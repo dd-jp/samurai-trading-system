@@ -82,6 +82,7 @@ function healthyExitPath(overrides: Partial<ExitPathEvidence> = {}): ExitPathEvi
     // check to every OTHER lot and requires exactly one for this one.
     residualAlerts: [
       {
+        trace_id: 'fill-sync',
         idempotency_key: 'lot-sweep',
         instrument: 'LINK-USD',
         side: 'buy',
@@ -2227,6 +2228,7 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
     const gate = gateFor({
       residualAlerts: [
         {
+          trace_id: 'fill-sync',
           idempotency_key: 'lot-2',
           instrument: 'SOL-USD',
           side: 'buy',
