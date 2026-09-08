@@ -1644,10 +1644,12 @@ describe('ExecutionImpl.execute', () => {
         expect(await store.getOpenPositions()).toHaveLength(0);
       });
 
-      // The split must be identical on every poll: `hasFill` dedupes on
-      // `broker_fill_id` alone, so a SECOND, differently-sized attempt under
-      // the same derived id does not correct the first — it silently vanishes
-      // behind it, stranding the lot's true remainder forever. A share seeded
+      // The split must be identical on every poll: `hasFill` dedupes on the
+      // full `(idempotency_key, broker_fill_id)` pair (#1320), and this
+      // lot's key is fixed across polls, so a SECOND, differently-sized
+      // attempt under the same derived id does not correct the first — it
+      // silently vanishes behind it, stranding the lot's true remainder
+      // forever. A share seeded
       // from anything that moves as fills persist (each lot's prior EXIT
       // fills, or a filter to lots still open in the CURRENT poll's
       // `positions`) drifts exactly that way. The journalled held quantity

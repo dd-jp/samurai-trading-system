@@ -580,7 +580,9 @@ async function redistributeOneFlatten(
   //
   // Two properties are needed at once. STABLE: a DIFFERENT split under the
   // SAME `broker_fill_id`-derived id is exactly what breaks `hasFill`'s
-  // dedup below (it matches on id alone, so a shrunk second attempt does not
+  // dedup below (it matches on the full `(idempotency_key, broker_fill_id)`
+  // pair, #1320, but this lot's `idempotency_key` half is fixed across
+  // polls, so a shrunk second attempt under the SAME derived id does not
   // "correct" the first — it just vanishes behind it, silently stranding
   // the difference), so the share must recompute identically on every poll,
   // for every named lot, regardless of whether it has since closed. And
@@ -638,7 +640,7 @@ async function redistributeOneFlatten(
     // ran to completion in an earlier poll and its leftover was warned about
     // then — a re-offered fill (this module's own `hasFill` dedup contract)
     // must not re-fire the same warning forever.
-    const attributedIdsThisRawFill: string[] = [];
+    const attributedIdsThisRawFill: { idempotency_key: string; broker_fill_id: string }[] = [];
     for (const lotKey of lotKeys) {
       if (leftover <= 0) break;
       const need = remaining.get(lotKey) ?? 0;
@@ -690,16 +692,15 @@ async function redistributeOneFlatten(
         // lot B's rightful share as a duplicate of lot A's the moment lot
         // A's is persisted.
         //
-        // `hasFill` itself takes no idempotency_key argument, though — like
-        // `totalShare` above, it compares the id VALUE alone — so the only
-        // way to land it in the right per-lot scope is to put the lot INSIDE
-        // the id, which is what the suffix below does. Omit it, and
-        // splitting one raw fill across two lots under the SAME id would
-        // make the second lot's split silently vanish behind the first
-        // lot's dedup the moment either is persisted. Stable across polls
-        // for the reason `totalShare` above is: the SAME (id, qty) pair
-        // recomputes every time, so a repeat poll dedupes cleanly instead
-        // of colliding with a differently-sized earlier attempt.
+        // `hasFill` itself now takes `idempotency_key` and scopes on the
+        // full PK (#1320), so this suffix is no longer the ONLY thing
+        // keeping one lot's split from shadowing another's dedup — but the
+        // id shape stays as-is anyway: changing it would re-key rows this
+        // system has already persisted under the suffixed form. Stable
+        // across polls for the reason `totalShare` above is: the SAME
+        // (id, qty) pair recomputes every time, so a repeat poll dedupes
+        // cleanly instead of colliding with a differently-sized earlier
+        // attempt.
         broker_fill_id: `${rawFill.broker_fill_id}:${lotKey}`,
         qty: take,
         // #1121: the venue-reported share (`rawFill.fee * share`) TOPPED UP
@@ -769,7 +770,10 @@ async function redistributeOneFlatten(
       if (bucket === undefined) byLot.set(lotKey, [splitFill]);
       else bucket.push(splitFill);
 
-      attributedIdsThisRawFill.push(splitFill.broker_fill_id);
+      attributedIdsThisRawFill.push({
+        idempotency_key: lotKey,
+        broker_fill_id: splitFill.broker_fill_id,
+      });
       remaining.set(lotKey, need - take);
       leftover -= take;
     }
@@ -825,8 +829,8 @@ async function redistributeOneFlatten(
       // narrow case still warns every poll; named, not solved, here.
       let alreadyWarned = false;
       try {
-        for (const id of attributedIdsThisRawFill) {
-          if (await store.hasFill(id)) {
+        for (const { idempotency_key, broker_fill_id } of attributedIdsThisRawFill) {
+          if (await store.hasFill(idempotency_key, broker_fill_id)) {
             alreadyWarned = true;
             break;
           }
@@ -1005,7 +1009,7 @@ async function advanceLot(
   let ingestedEntry = false;
   let ingestedExit = false;
   for (const fill of lotFills) {
-    if (await store.hasFill(fill.broker_fill_id)) {
+    if (await store.hasFill(position.idempotency_key, fill.broker_fill_id)) {
       if (fill.qty_is_cumulative === true) cumulativeReoffers.push(fill);
       continue;
     }
@@ -1686,8 +1690,10 @@ function cumulativeTopUp(
   const priors = booked.filter(
     (row) => row.broker_fill_id === base || row.broker_fill_id.startsWith(prefix),
   );
-  // `hasFill` compares the id VALUE alone, across every lot — so an id it
-  // knows need not be an id THIS lot holds. With no prior row here there is
+  // `booked` is THIS lot's own fills (`getFills(position.idempotency_key)`,
+  // already lot-scoped) plus this poll's own new rows — not a `hasFill`
+  // existence check, which even scoped to the full PK (#1320) only answers
+  // "ingested or not", never "by how much". With no prior row here there is
   // nothing to take a difference against, and inventing the whole cumulative
   // quantity as this lot's would double-book whichever lot actually holds it.
   if (priors.length === 0) return null;

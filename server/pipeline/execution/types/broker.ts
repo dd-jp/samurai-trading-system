@@ -86,8 +86,9 @@ export interface NormalizedFill {
    * way: it reports one order with a running `filled_qty`, never one event per
    * partial fill (see `fetchNewFills`' file doc in alpaca-adapter.ts). A
    * second observation of the same order at a LARGER `filled_qty` therefore
-   * carries the same `broker_fill_id` (the order id) as the first, and
-   * `ingestFills()`' `hasFill` gate — which compares the id VALUE alone —
+   * carries the same `broker_fill_id` (the order id) — under the SAME lot's
+   * `idempotency_key`, since one order belongs to one lot — as the first,
+   * and `ingestFills()`' `hasFill` gate, keyed on that full pair (#1320),
    * would skip it as a duplicate, permanently losing the increment. The lot's
    * `filled_size` would then stay at the first observation forever and
    * `resizeProtectiveLegs` (which sets an ABSOLUTE quantity) would arm

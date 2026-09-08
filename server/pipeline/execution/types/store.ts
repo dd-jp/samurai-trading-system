@@ -49,12 +49,16 @@ export interface SharedStore {
    */
   getOpenPositions(): Promise<OpenPosition[]>;
   /**
-   * True if this `broker_fill_id` was already ingested. The fill feed is
-   * inclusive of `since`, so every poll re-offers the fills it already
-   * delivered; without this the same fill is counted twice and the lot's
-   * `filled_size` runs away from the broker's.
+   * True if this `(idempotency_key, broker_fill_id)` pair was already
+   * ingested — the full `fills` primary key, not `broker_fill_id` alone
+   * (#1320): `fills` has no venue column, and `broker_fill_id` is
+   * venue-assigned, so an id-only match would let one lot's ingested fill
+   * be misread as covering a different lot under the same id string. The
+   * fill feed is inclusive of `since`, so every poll re-offers the fills it
+   * already delivered; without this the same fill is counted twice and the
+   * lot's `filled_size` runs away from the broker's.
    */
-  hasFill(broker_fill_id: string): Promise<boolean>;
+  hasFill(idempotency_key: string, broker_fill_id: string): Promise<boolean>;
   /**
    * Every `Fill` recorded against a lot, in ingestion order. Realized size,
    * avg price and PnL are reconstructed from these rather than a running
