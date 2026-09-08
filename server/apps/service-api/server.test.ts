@@ -295,6 +295,155 @@ describe('dashboard server — api', () => {
   });
 });
 
+/**
+ * #1355: the `/api/snapshot` catch renders the caught value with
+ * `err instanceof Error ? err.message : '…'` inside the very `catch` whose
+ * job is to WRITE the error response. `res.writeHead(500, …).end(JSON.stringify(…))`
+ * evaluates `writeHead` first — so a hostile `err.message` that throws during
+ * the `.end()` argument's evaluation leaves the 500 headers sent and the
+ * body never written: the request hangs rather than failing cleanly, since
+ * `.end()` is never reached to close it out.
+ */
+describe('dashboard server — /api/snapshot error responder guard (#1355)', () => {
+  /**
+   * An instance-level `message` getter, not a class-level one: `Error`'s own
+   * constructor assigns `this.message = …` as an OWN data property, which
+   * would shadow a getter declared on the subclass prototype (confirmed —
+   * the class-getter version of this test passed the constructor argument
+   * straight through, never reaching the getter at all). Matches
+   * `telegram-bot-api-client.test.ts`'s `escalationError` hostile fixture
+   * (#1351) for the identical reason.
+   */
+  function makeHostileError(): Error {
+    const err = new Error('placeholder');
+    Object.defineProperty(err, 'message', {
+      get(): string {
+        throw new Error('render boom');
+      },
+      configurable: true,
+    });
+    return err;
+  }
+
+  class ThrowingStore extends InMemoryQueryStore {
+    override getOpenPositions(): never {
+      throw makeHostileError();
+    }
+  }
+
+  let hostileServer: DashboardServer;
+
+  beforeAll(async () => {
+    hostileServer = createDashboardServer({
+      port: 0,
+      host: '127.0.0.1',
+      store: new ThrowingStore(),
+      bundleRoot,
+      mode: 'paper',
+    });
+    await hostileServer.start();
+  });
+
+  afterAll(async () => {
+    await hostileServer.stop();
+  });
+
+  it('completes the 500 response (body written, connection closed) instead of hanging', async () => {
+    // A short abort, not the test's own timeout: before the fix this
+    // request never completes at all (headers sent, `.end()` never
+    // reached), so the fetch itself must settle on its own bound and hand
+    // control to a real assertion below — an unbounded fetch racing the
+    // harness's own default timeout would fail as a bare "Test timed out"
+    // with no assertion diff.
+    const result = await fetch(`${hostileServer.url}/api/snapshot`, {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(2_000),
+    }).then(
+      async (r) => ({
+        completed: true as const,
+        status: r.status,
+        body: (await r.json()) as { error: string },
+      }),
+      (error: unknown) => ({ completed: false as const, error }),
+    );
+    expect(result.completed).toBe(true);
+    if (result.completed) {
+      expect(result.status).toBe(500);
+      // The literal fallback is dropped in favor of `describeThrownSafely`'s
+      // placeholder for a value that could not be rendered at all — see
+      // `renderResponderError`'s doc comment in server.ts.
+      expect(result.body.error).toBe('[unrenderable error]');
+    }
+  }, 10_000);
+});
+
+/**
+ * #1355 round-1 review — the render is guarded, but the `/api/snapshot`
+ * catch still OPENS by calling `res.writeHead(500, ...)` itself. The
+ * success path's own `res.writeHead(200, ...)` runs first and sets
+ * `res.headersSent` BEFORE `JSON.stringify(snapshot)` is evaluated as
+ * `.end`'s argument — so a snapshot value `JSON.stringify` refuses (a
+ * BigInt survives `buildSnapshot`'s field types, which are compile-time
+ * only) reaches the catch with headers already sent. Without a guard there
+ * too, the catch's own `writeHead(500, ...)` throws `ERR_HTTP_HEADERS_SENT`,
+ * uncaught — one `writeHead` earlier than the failure `renderResponderError`
+ * guards against. The catch now checks `res.headersSent` first, mirroring
+ * the guard `serveStatic`'s rejection handler already carried.
+ */
+describe('dashboard server — /api/snapshot headersSent guard (#1355 round 1)', () => {
+  class BigIntPoisonedStore extends InMemoryQueryStore {
+    override getOpenPositions(asOf: Date) {
+      const [first, ...rest] = super.getOpenPositions(asOf);
+      if (first === undefined) {
+        throw new Error('fixture store returned no positions to poison');
+      }
+      // `stop` flows straight into `PositionRow.stop` with no arithmetic in
+      // buildSnapshot — unlike `filled_size`, which `unrealizedPnl`
+      // multiplies against a `number`: poisoning THAT throws inside
+      // `buildSnapshot` itself, before `writeHead(200)` ever runs, and never
+      // reaches this bug at all.
+      return [{ ...first, stop: 1n as unknown as number }, ...rest];
+    }
+  }
+
+  let poisonedServer: DashboardServer;
+
+  beforeAll(async () => {
+    poisonedServer = createDashboardServer({
+      port: 0,
+      host: '127.0.0.1',
+      store: new BigIntPoisonedStore(),
+      bundleRoot,
+      mode: 'paper',
+    });
+    await poisonedServer.start();
+  });
+
+  afterAll(async () => {
+    await poisonedServer.stop();
+  });
+
+  it('completes the response instead of throwing ERR_HTTP_HEADERS_SENT out of the catch', async () => {
+    // Status/body are whatever the already-committed `writeHead(200, ...)`
+    // left behind — the guard's job is only to stop the catch's own
+    // `writeHead(500)` from throwing, not to make the response say 500.
+    // That is the same contract the sibling `serveStatic` guard already
+    // has (`server.ts`'s `if (res.headersSent) { res.end(); return; }`).
+    const result = await fetch(`${poisonedServer.url}/api/snapshot`, {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(2_000),
+    }).then(
+      async (r) => ({ completed: true as const, status: r.status, body: await r.text() }),
+      (error: unknown) => ({ completed: false as const, error }),
+    );
+    expect(result.completed).toBe(true);
+    if (result.completed) {
+      expect(result.status).toBe(200);
+      expect(result.body).toBe('');
+    }
+  }, 10_000);
+});
+
 describe('dashboard server — bundle not built', () => {
   let unbuilt: DashboardServer;
   let unbuiltBase: string;

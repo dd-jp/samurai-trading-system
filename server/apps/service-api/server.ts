@@ -25,11 +25,62 @@ import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createServer, type Server, type ServerResponse } from 'node:http';
 import { extname, isAbsolute, join, relative, resolve as resolvePath, sep } from 'node:path';
+import { describeThrownSafely, sanitizeLogText } from '../../shared/index.js';
 import type { StoreMode } from '../../shared/store/index.js';
 import { assertBindAllowed } from './bind-guard.js';
 import { NULL_PROVIDER_STATUS, type ProviderStatusReader } from './provider-status.js';
 import { buildSnapshot } from './snapshot.js';
 import type { DashboardQueryStore } from './types.js';
+
+/**
+ * Renders a caught value into an HTTP error-body string, for the two
+ * responders (`/api/snapshot`'s catch, `serveStatic`'s rejection handler)
+ * whose own job is to report a failure — a throw from inside either would
+ * leave the response it was building incomplete (#1355).
+ *
+ * `describeThrownSafely` (safe-log.ts, #1262) is what guards the render
+ * itself: an `Error` instance whose own `message` is a throwing getter, or
+ * any other value whose rendering path throws, degrades to
+ * `'[unrenderable error]'` rather than propagating.
+ *
+ * `sanitizeLogText` is load-bearing here, not belt-and-suspenders: dropping
+ * the two literals these sites used to fall back to on a non-`Error` throw
+ * (`'snapshot failed'` / `'static read failed'`) means such a throw now
+ * renders the thrown *value* into a client-visible body where before it
+ * always rendered a fixed string, so masking known credential syntaxes is what
+ * makes that widening safe. Its `MAX_ERROR_BODY_CHARS` cap (~500 chars,
+ * `http/response-errors.ts`) matters too: an operator reading a long real
+ * error message would notice truncation before they'd notice masking. Same
+ * posture `logCaughtFailure` already takes for a log line (safe-log.ts's own
+ * doc comment: "belt and suspenders costs nothing here"), applied here to a
+ * body a client can read instead.
+ *
+ * Scope: both call sites guard `res.headersSent` before `writeHead(500,
+ * ...)` runs and this function's render is evaluated as its `.end`
+ * argument — same order `/api/snapshot`'s own success path already has,
+ * where `writeHead` runs before the value that can throw is evaluated:
+ * `res.writeHead(200, ...).end(JSON.stringify(snapshot))`
+ * — `writeHead` runs first, then `JSON.stringify` is evaluated for `.end`;
+ * a value it refuses (a BigInt, a circular reference) reaches this catch
+ * with `res.headersSent` already true. Without the guard, the catch's own
+ * `writeHead(500, ...)` would itself throw `ERR_HTTP_HEADERS_SENT`,
+ * uncaught — one `writeHead` earlier than the failure this function guards
+ * against.
+ *
+ * `serveStatic`'s rejection handler carries the same `res.headersSent`
+ * guard for its own reason, not this one: its success path is
+ * `res.writeHead(200, ...).end(body)` with `body` an already-resolved
+ * `Buffer` — a bare variable, not an expression that can throw — so
+ * nothing in the paths that reach this handler today throws mid-render the
+ * way `/api/snapshot`'s does. The guard is defensive there — protecting
+ * against any future path where a rejection reaches this handler after
+ * `serveStatic` already committed a `writeHead` internally (its success
+ * path is the same `writeHead(200, ...).end(body)` shape) — not proof that
+ * the two sites share a trigger.
+ */
+function renderResponderError(err: unknown): string {
+  return sanitizeLogText(describeThrownSafely(err));
+}
 
 export interface DashboardServerOptions {
   port: number;
@@ -298,9 +349,11 @@ export function createDashboardServer(opts: DashboardServerOptions): DashboardSe
         const snapshot = buildSnapshot(store, new Date(), mode, providers);
         res.writeHead(200, JSON_HEADERS).end(JSON.stringify(snapshot));
       } catch (err) {
-        res
-          .writeHead(500, JSON_HEADERS)
-          .end(JSON.stringify({ error: err instanceof Error ? err.message : 'snapshot failed' }));
+        if (res.headersSent) {
+          res.end();
+          return;
+        }
+        res.writeHead(500, JSON_HEADERS).end(JSON.stringify({ error: renderResponderError(err) }));
       }
       return;
     }
@@ -310,9 +363,7 @@ export function createDashboardServer(opts: DashboardServerOptions): DashboardSe
         res.end();
         return;
       }
-      res
-        .writeHead(500, JSON_HEADERS)
-        .end(JSON.stringify({ error: err instanceof Error ? err.message : 'static read failed' }));
+      res.writeHead(500, JSON_HEADERS).end(JSON.stringify({ error: renderResponderError(err) }));
     });
   });
 
