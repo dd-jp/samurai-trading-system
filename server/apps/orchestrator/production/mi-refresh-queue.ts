@@ -65,6 +65,7 @@
  */
 import {
   type SpendCap,
+  type SpendCapRefusalKind,
   type SpendCapVerdict,
   spendCapRefusalRemedy,
 } from '../../../pipeline/debate-engine/index.js';
@@ -85,14 +86,6 @@ import type { MarketIntelligenceRefresh } from './analysts-adapter.js';
 export const MI_REFRESH_TRACE_ID = 'mi-refresh';
 
 /**
- * `SpendCapRefusalKind` without importing it directly — `spend-cap.ts` does
- * not export the type name from the barrel, and every refusal this class
- * ever sees already arrives narrowed on `SpendCapVerdict`'s `admitted: false`
- * arm, so deriving it off that arm needs nothing new from the barrel.
- */
-type RefusalKind = Extract<SpendCapVerdict, { admitted: false }>['kind'];
-
-/**
  * How often a spend-cap refusal is logged: the first, then every 20th —
  * PER `SpendCapVerdict.kind` (#1376).
  *
@@ -109,7 +102,7 @@ type RefusalKind = Extract<SpendCapVerdict, { admitted: false }>['kind'];
  * kind (if any) was logged before it. A `read_fault` refusal cannot consume
  * the budget kind's un-throttled first slot — each kind's remedy text is
  * guaranteed to reach the log the first time that kind is seen, independent
- * of what the other two kinds have done.
+ * of every other kind.
  */
 export const REFUSAL_LOG_EVERY = 20;
 
@@ -148,9 +141,9 @@ export class MiRefreshQueue implements MarketIntelligenceRefresh {
 
   /**
    * Refusal count per `SpendCapVerdict.kind`, so each kind's log throttle is
-   * independent of the other two — see `REFUSAL_LOG_EVERY`.
+   * independent of every other kind — see `REFUSAL_LOG_EVERY`.
    */
-  readonly #refusalsByKind = new Map<RefusalKind, number>();
+  readonly #refusalsByKind = new Map<SpendCapRefusalKind, number>();
 
   /**
    * Instruments whose refresh has been ATTEMPTED to completion at least once
@@ -359,7 +352,6 @@ export class MiRefreshQueue implements MarketIntelligenceRefresh {
         spent_usd: spend.spent_usd,
         budget_usd: spend.budget_usd,
         kind: spend.kind,
-        /** Count of THIS `kind` only, not every refusal — see `#refusalsByKind`. */
         refusals_of_kind: refusalsOfKind,
       },
     });

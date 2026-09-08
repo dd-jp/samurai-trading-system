@@ -685,7 +685,7 @@ describe('MiRefreshQueue (#1085)', () => {
   });
 
   describe('refusal-log throttle is per spend-cap refusal kind (#1376)', () => {
-    /** Returns a different verdict on each successive `check()` call. */
+    /** Returns each scripted verdict in turn, then repeats the last. */
     function scriptedCap(verdicts: Extract<SpendCapVerdict, { admitted: false }>[]): SpendCap {
       let call = 0;
       return {
@@ -747,10 +747,8 @@ describe('MiRefreshQueue (#1085)', () => {
     });
 
     it('leaves a single-kind stream throttled exactly as before (AC3)', async () => {
-      // 1000 same-kind refusals: logged at refusal 1, then every 20th
-      // (20, 40, ..., 1000) — 1 + 50 = 51 lines. Per-kind counting is
-      // observationally identical to the old shared counter when only one
-      // kind is ever seen, which is the number this pins.
+      // Per-kind counting is observationally identical to the old shared
+      // counter when only one kind is ever seen, which is the count this pins.
       const cap = meteredCap(1);
       cap.spentUsd = 1;
       const calls: string[] = [];
@@ -769,7 +767,62 @@ describe('MiRefreshQueue (#1085)', () => {
       const refusals = logger.entries.filter(
         (entry) => entry.event === 'mi_refresh_refused_spend_cap',
       );
-      expect(refusals).toHaveLength(51);
+      expect(refusals).toHaveLength(1 + 1000 / REFUSAL_LOG_EVERY);
+    });
+
+    it("carries a kind's count across another kind interleaving, rather than resetting it", async () => {
+      // 20 budget refusals, then 1 read_fault, then 20 more budget: if the
+      // budget counter survives the read_fault refusal untouched, budget logs
+      // at 1 and REFUSAL_LOG_EVERY, read_fault logs once at 1, and budget
+      // resumes counting through the interleaving to log again at
+      // 2 * REFUSAL_LOG_EVERY — 4 lines. A counter that resets on kind change
+      // would instead restart the second budget run at 1, adding a 5th line.
+      const budgetVerdict: Extract<SpendCapVerdict, { admitted: false }> = {
+        admitted: false,
+        spent_usd: 1,
+        budget_usd: 1,
+        reason: 'LLM spend cap reached',
+        kind: 'budget',
+      };
+      const readFaultVerdict: Extract<SpendCapVerdict, { admitted: false }> = {
+        admitted: false,
+        spent_usd: Number.NaN,
+        budget_usd: 1,
+        reason: 'spend cap unreadable (fail-closed)',
+        kind: 'read_fault',
+      };
+      const cap = scriptedCap([
+        ...Array.from({ length: REFUSAL_LOG_EVERY }, () => budgetVerdict),
+        readFaultVerdict,
+        ...Array.from({ length: REFUSAL_LOG_EVERY }, () => budgetVerdict),
+      ]);
+      const calls: string[] = [];
+      const logger = recordingLogger();
+      const queue = new MiRefreshQueue({
+        spendCap: cap,
+        refresher: billingRefresher({ spentUsd: 0 }, 1, calls),
+        logger,
+      });
+
+      for (let i = 0; i < 2 * REFUSAL_LOG_EVERY + 1; i += 1) {
+        void queue.refresh('tick-1', `NAME${i}`, 'stocks');
+      }
+      await settle();
+
+      const refusals = logger.entries.filter(
+        (entry) => entry.event === 'mi_refresh_refused_spend_cap',
+      );
+      expect(refusals).toHaveLength(4);
+      expect(refusals[0]?.payload).toMatchObject({ kind: 'budget', refusals_of_kind: 1 });
+      expect(refusals[1]?.payload).toMatchObject({
+        kind: 'budget',
+        refusals_of_kind: REFUSAL_LOG_EVERY,
+      });
+      expect(refusals[2]?.payload).toMatchObject({ kind: 'read_fault', refusals_of_kind: 1 });
+      expect(refusals[3]?.payload).toMatchObject({
+        kind: 'budget',
+        refusals_of_kind: 2 * REFUSAL_LOG_EVERY,
+      });
     });
   });
 });
