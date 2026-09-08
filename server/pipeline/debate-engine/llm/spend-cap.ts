@@ -30,6 +30,7 @@
  * unbounded bill is not.
  */
 
+import { currentTraceId } from '../../../shared/index.js';
 import type { SharedStore } from '../../../shared/store/index.js';
 import type { Logger } from '../../../shared/types.js';
 
@@ -174,7 +175,10 @@ export class SqliteSpendCap implements SpendCap {
       // does, instead of surfacing as an unrelated-looking transport fault.
       const message = error instanceof Error ? error.message : String(error);
       this.logger?.log({
-        trace_id: 'spend-cap',
+        // `check()` runs both in-tick (RiskCritic.produce) and at boot
+        // (startingTotal()); the ambient id names the tick when there is one
+        // and keeps the constant for boot (#1280).
+        trace_id: currentTraceId() ?? 'spend-cap',
         stage: 'debate',
         event: 'llm_spend_cap_read_failed',
         level: 'error',
@@ -242,7 +246,8 @@ export class SqliteSpendCap implements SpendCap {
       this.onBreach?.(verdict);
     } catch (error) {
       this.logger?.log({
-        trace_id: 'spend-cap',
+        // Same mixed in-tick/boot shape as `check()`'s fail-closed line above.
+        trace_id: currentTraceId() ?? 'spend-cap',
         stage: 'debate',
         event: 'llm_spend_cap_alert_send_failed',
         level: 'warn',

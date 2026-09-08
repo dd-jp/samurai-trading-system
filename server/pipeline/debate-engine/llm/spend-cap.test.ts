@@ -1,3 +1,4 @@
+import { runWithTraceId } from '../../../shared/index.js';
 import { openSharedStore, type SharedStore } from '../../../shared/store/index.js';
 import type { LogEntry, Logger } from '../../../shared/types.js';
 import { SqliteSpendCap, UNCAPPED_SPEND } from './spend-cap.js';
@@ -198,6 +199,50 @@ describe('SqliteSpendCap', () => {
     expect(() => new SqliteSpendCap(db, 0)).toThrow('positive, finite');
     expect(() => new SqliteSpendCap(db, -1)).toThrow('positive, finite');
     expect(() => new SqliteSpendCap(db, Number.NaN)).toThrow('positive, finite');
+  });
+
+  describe('trace_id (#1280)', () => {
+    it('falls back to the spend-cap constant outside a tick — read failure', () => {
+      const { logger, entries } = recordingLogger();
+      db.prepare('DROP TABLE llm_spend').run();
+
+      new SqliteSpendCap(db, 50, logger).check();
+
+      expect(entries.at(-1)?.trace_id).toBe('spend-cap');
+    });
+
+    it('joins the read-failure line to the enclosing tick instead', () => {
+      const { logger, entries } = recordingLogger();
+      db.prepare('DROP TABLE llm_spend').run();
+
+      runWithTraceId('tick-x', () => new SqliteSpendCap(db, 50, logger).check());
+
+      expect(entries.at(-1)?.trace_id).toBe('tick-x');
+    });
+
+    it('falls back to the spend-cap constant outside a tick — breach-alert send failure', () => {
+      spend(db, 60, 'over-budget');
+      const { logger, entries } = recordingLogger();
+      const cap = new SqliteSpendCap(db, 50, logger, () => {
+        throw new Error('telegram is down');
+      });
+
+      cap.check();
+
+      expect(entries.at(-1)?.trace_id).toBe('spend-cap');
+    });
+
+    it('joins the breach-alert-send-failure line to the enclosing tick instead', () => {
+      spend(db, 60, 'over-budget');
+      const { logger, entries } = recordingLogger();
+      const cap = new SqliteSpendCap(db, 50, logger, () => {
+        throw new Error('telegram is down');
+      });
+
+      runWithTraceId('tick-x', () => cap.check());
+
+      expect(entries.at(-1)?.trace_id).toBe('tick-x');
+    });
   });
 });
 

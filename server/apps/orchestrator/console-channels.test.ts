@@ -83,6 +83,7 @@ describe('LoggingMiCoverageAlertChannel (#752)', () => {
     const logger = makeLogger();
 
     await new LoggingMiCoverageAlertChannel(logger).postCoverageAlert({
+      trace_id: 'trace-1',
       instrument: 'BTC-USD',
       asset_class: 'crypto',
       subclass: 'unclassified',
@@ -92,6 +93,42 @@ describe('LoggingMiCoverageAlertChannel (#752)', () => {
     expect(logger.entries[0]?.level).toBe('warn');
     expect(logger.entries[0]?.message).toContain('SAMURAI_ALERTS=log-only cannot page anyone');
     expect(logger.entries[0]?.message).toContain('BTC-USD');
+  });
+
+  // #1280: `MiCoverageAlert.trace_id` is threaded explicitly from
+  // `checkMiCoverage`'s `params.trace_id` (the preferred form, trace-context.ts)
+  // rather than joined ambient — `LoggingMiCoverageTelemetry.noDataObserved`
+  // above already does the identical explicit pass-through for the same
+  // subsystem. This is a value check, not a fallback check: there is no
+  // constant to fall back to any more, so the mutation that matters is the
+  // trace_id going missing or getting hardcoded again.
+  it("carries the caller's trace_id verbatim, not a hardcoded constant", async () => {
+    const logger = makeLogger();
+
+    await new LoggingMiCoverageAlertChannel(logger).postCoverageAlert({
+      trace_id: 'tick-x',
+      instrument: 'BTC-USD',
+      asset_class: 'crypto',
+      subclass: 'unclassified',
+      reported_at: new Date('2026-08-17T09:00:00Z'),
+    });
+
+    expect(logger.entries[0]?.trace_id).toBe('tick-x');
+  });
+
+  it('changes when the caller changes it — proving it is threaded, not fixed', async () => {
+    const logger = makeLogger();
+
+    await new LoggingMiCoverageAlertChannel(logger).postCoverageAlert({
+      trace_id: 'tick-y',
+      instrument: 'BTC-USD',
+      asset_class: 'crypto',
+      subclass: 'unclassified',
+      reported_at: new Date('2026-08-17T09:00:00Z'),
+    });
+
+    expect(logger.entries[0]?.trace_id).toBe('tick-y');
+    expect(logger.entries[0]?.trace_id).not.toBe('mi-coverage');
   });
 });
 

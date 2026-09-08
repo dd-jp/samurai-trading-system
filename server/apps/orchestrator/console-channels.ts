@@ -435,7 +435,7 @@ export class LoggingMiCoverageAlertChannel implements MiCoverageAlertChannel {
 
   async postCoverageAlert(alert: MiCoverageAlert): Promise<void> {
     this.logger.log({
-      trace_id: 'mi-coverage',
+      trace_id: alert.trace_id,
       stage: 'analysts',
       event: 'mi_coverage_degraded',
       level: 'warn',

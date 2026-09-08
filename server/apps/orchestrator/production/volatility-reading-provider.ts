@@ -50,6 +50,7 @@ import type {
   MarketDataService,
   TradingCalendar,
 } from '../../../providers/market-data-service/index.js';
+import { currentTraceId } from '../../../shared/index.js';
 import type { AssetClass, Logger, UniverseInstrument } from '../types.js';
 import type { VolatilityReadingProvider } from './direct-bind.js';
 
@@ -203,7 +204,12 @@ export class MarketDataVolatilityReadingProvider implements VolatilityReadingPro
 
       if (result.status === 'rejected') {
         logger.log({
-          trace_id: 'volatility-reading-provider',
+          // `getVolatilityReading` is called only from the per-instrument
+          // Risk stage (direct-bind.ts's `computeCurrentPortfolioAndBreakers`),
+          // so this joins that tick when there is one (#1280) — unlike
+          // `warnIfClassEmpty` below, which fires at construction, never
+          // in-tick, and keeps its bare constant.
+          trace_id: currentTraceId() ?? 'volatility-reading-provider',
           stage: 'volatility-reading-provider',
           event: 'volatility_indicator_rejected',
           level: 'error',
@@ -223,7 +229,8 @@ export class MarketDataVolatilityReadingProvider implements VolatilityReadingPro
       const { value } = result.value;
       if (!Number.isFinite(value)) {
         logger.log({
-          trace_id: 'volatility-reading-provider',
+          // Same reasoning as the rejected-result branch above.
+          trace_id: currentTraceId() ?? 'volatility-reading-provider',
           stage: 'volatility-reading-provider',
           event: 'volatility_indicator_non_finite',
           level: 'error',
