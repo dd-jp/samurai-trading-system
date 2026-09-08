@@ -838,19 +838,20 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * runs its own full decision-pass chain (`control-arm.ts`'s
    * `buildControlArmStep`, awaited before the live pass writes anything
    * further) under a `trace_id` carrying `CONTROL_TRACE_SUFFIX`, into this
-   * SAME table. Every stage transition in `tick-runner.ts` writes its own
-   * `record()` row immediately after `markStage()`, before any branch that
-   * could return early — so the only way the live pass leaves no further
-   * PIPELINE_STAGES row after the control arm completes is: (a) a
-   * quorum-skipped decision pass whose OWN exit check produces no intent (the
-   * common case), where the live pass falls through to `runExitCheckPass` and
-   * writes only the filtered `position_check` stage while the control's own
-   * nested pass still records its own `analysts` row, chronologically later —
-   * a quorum-skipped pass whose exit check DOES fire an intent instead writes
-   * its own `risk`/`verdict`/`execution` rows after the control's, and the
-   * live arm wins the fold correctly, so this trigger is conditioned on the
-   * no-intent branch, not on the quorum-skip alone; (b) a live pass that
-   * crashes mid-await after the control arm has already completed, where
+   * SAME table.
+   *
+   * The shapes a careful reading of `tick-runner.ts` finds for a live pass
+   * that leaves no further PIPELINE_STAGES row after the control arm
+   * completes: (a) a quorum-skipped decision pass whose OWN exit check
+   * produces no intent (the common case), where the live pass falls through
+   * to `runExitCheckPass` and writes only the filtered `position_check`
+   * stage while the control's own nested pass still records its own
+   * `analysts` row, chronologically later — a quorum-skipped pass whose exit
+   * check DOES fire an intent instead writes its own
+   * `risk`/`verdict`/`execution` rows after the control's, and the live arm
+   * wins the fold correctly, so this trigger is conditioned on the no-intent
+   * branch, not on the quorum-skip alone; (b) a live pass that crashes
+   * mid-await after the control arm has already completed, where
    * `tick-loop.ts`'s catch writes only `stage: 'tick-loop'`, also filtered;
    * or (c) the ordinary TICK path itself — `#runInstrument` awaits
    * `this.steps.controlArm` before `runExitCheckPass`, and the control's own
@@ -862,16 +863,17 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * and `accountState`), so a tick where the control arm has an exit-due lot
    * and the live arm does not is the ORDINARY case, not an edge one — and per
    * the #743 comment above, roughly 29 of 30 passes are tick passes, so (c)
-   * is plausibly the DOMINANT trigger here, not an excluded one. (a)/(b)/(c)
-   * are the shapes this reading of `tick-runner.ts` finds — every
-   * `markStage`/`record` pair, both the head chain from `markStage('analysts')`
-   * through the dispatch into `runIntentTail`, and `runIntentTail` itself
-   * (`risk` through `execution`), records immediately after marking, with no
-   * branch between the two — but the filter does not depend on this list
-   * being complete: `chosenTrace` folds over every row in the WINDOW, not
-   * per-pass, so a control row need not be the newest thing THIS pass wrote
-   * to win — an earlier pass's control row stays newest until some later row
-   * displaces it, live or control. Unfiltered, any control row newer than
+   * is plausibly the DOMINANT trigger here, not an excluded one.
+   *
+   * That reading covers every `markStage`/`record` pair in `tick-runner.ts`
+   * — both the head chain from `markStage('analysts')` through the dispatch
+   * into `runIntentTail`, and `runIntentTail` itself (`risk` through
+   * `execution`) — and finds none with a branch between marking a stage and
+   * recording it. But the filter does not depend on (a)/(b)/(c) above being
+   * a complete list: `chosenTrace` folds over every row in the WINDOW, not
+   * per pass, so a control row need not be the newest thing THIS pass wrote
+   * to win — an earlier pass's control row stays newest until some later row,
+   * live or control, displaces it. Unfiltered, any control row newer than
    * live's own newest displaces `chosenTrace`; in the crash or tick-path case
    * the control arm may have already recorded a `verdict`/`execution` "go" of
    * its own, which would then render as the live pass's. Do not read (c) as
