@@ -215,9 +215,15 @@ export class LoggingFlattenReconcileAlertChannel implements FlattenReconcileAler
       // at once rather than belonging to one pipeline pass. Threaded from the
       // alert rather than fixed here (#1331) — the explicit form
       // `LoggingMiCoverageAlertChannel` above takes: the live and control arms
-      // post through this SAME instance, so the reconcile pass's own id
-      // (`reconcile` vs `control-arm-reconcile`) is the only thing in the line
-      // that tells a real venue ambiguity from a simulated broker's.
+      // post through this SAME instance, so the id of the surface the pass ran
+      // on is the only thing in the line that tells a real venue's ambiguity
+      // from a simulated broker's. It is the `control-arm-` prefix that names
+      // the arm, not one id per arm: the startup pass logs
+      // `reconcile`/`control-arm-reconcile` and the poll logs
+      // `fill-sync`/`control-arm-fill-sync` (it calls `reconcile()` on the
+      // fill-sync surface), so on the poll this error line and the loop's own
+      // `warn` divergence line for the same flatten carry different ids. See
+      // `FlattenReconcileAlert.trace_id`.
       trace_id: alert.trace_id,
       stage: 'execution',
       event: 'flatten_reconcile_unresolved',

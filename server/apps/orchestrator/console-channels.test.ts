@@ -262,6 +262,11 @@ describe('LoggingFlattenReconcileAlertChannel (#519, #1331)', () => {
       reason: 'venue unreachable',
       observed_at: observedAt.toISOString(),
     });
+    // #1331 narrowed the payload from `...alert` to field-by-field so the
+    // threaded id is not repeated inside the payload it already labels the
+    // entry with. `toMatchObject` above passes either way, so without this
+    // the stated reason had no test behind it.
+    expect(logger.entries[0]?.payload).not.toHaveProperty('trace_id');
   });
 
   // #1331: both arms post through the one channel instance `production.ts`

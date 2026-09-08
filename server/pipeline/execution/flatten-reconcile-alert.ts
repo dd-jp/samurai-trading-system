@@ -31,9 +31,9 @@
  * something an operator has to go check on the venue.
  *
  * CREDENTIALS: composed only of fields this module chose — the flatten's own
- * idempotency key, its instrument, a sanitized reason, and (#1331) the
- * reconcile pass's own trace id, a fixed synthetic constant chosen at the
- * composition root. `reconcile()`'s
+ * idempotency key, its instrument, a sanitized reason, and (#1331) the trace
+ * id of the Execution surface the pass ran on, which every caller fixes to a
+ * literal it wrote itself (see `trace_id` below). `reconcile()`'s
  * `undetermined` divergence already carries the adapter's error message
  * verbatim (reconcile.ts's own comment: `sanitizeBrokerError`, #297's H1,
  * makes that safe), the same text this alert forwards — never a raw response
@@ -47,18 +47,48 @@
 /** One `flatten_submissions` row `reconcile()` could not settle this pass. */
 export interface FlattenReconcileAlert {
   /**
-   * The reconcile pass's own `ExecutionInput.trace_id`, and with it the ARM
-   * that raised this alert (#1331).
+   * The `ExecutionInput.trace_id` of the Execution SURFACE this pass ran on,
+   * and with it the ARM that raised the alert (#1331).
    *
-   * Every surface `reconcile()` can be called on is built by
-   * `buildExecutionSurface` with a fixed per-arm id — `reconcile`/`fill-sync`
-   * for the live arm, `control-arm-reconcile`/`control-arm-fill-sync` for the
-   * control's (#1321) — and the tick-step Execution, whose id is a verdict's
-   * idempotency key, never reaches this alert: `reconcile()` is the only
-   * caller. So this field names the arm as long as that stays true.
+   * ## What actually makes this an arm label
    *
-   * Carried on the alert rather than stamped at the log site because both
-   * arms post through the SAME channel instance: `buildControlArmWiring`
+   * Every Execution that reaches this alert is built by
+   * `buildExecutionSurface` with a fixed synthetic id its caller wrote as a
+   * literal. At the composition root that is four ids, not two — the live
+   * arm's `reconcile`/`fill-sync` and the control arm's
+   * `control-arm-reconcile`/`control-arm-fill-sync` (#1321) — plus smoke's
+   * own scenario surfaces (`smoke-exit-path`, `smoke-exit-path-restart`,
+   * `smoke-filled-zero-size-wedge`), which are fixed literals too — seven in
+   * all, and every one of them written at a call site. The ARM is
+   * readable on all of them by the `control-arm-` prefix, which is the
+   * property this field exists for; the exact id is not one value per arm.
+   *
+   * The tick-step Execution is the one whose id is a verdict's idempotency
+   * key, and it cannot reach here — but NOT because `reconcile()` is this
+   * alert's only caller. `ExecutionImpl.reconcile()` is public, and
+   * `buildExecutionStep` (direct-bind.ts) constructs an `ExecutionImpl` with
+   * `trace_id: verdict.idempotency_key` like any other. What holds is that
+   * that instance NEVER ESCAPES its closure: it is constructed and
+   * `execute(verdict)` returned in the same expression, so no caller ever
+   * holds a reference to call `reconcile()` on. Exposing that instance, or
+   * calling `.reconcile()` on it inside the closure, would put a verdict key
+   * in this field and silently end the guarantee.
+   *
+   * ## Correlating two lines on the poll
+   *
+   * On the forever-running poll the value is `fill-sync` /
+   * `control-arm-fill-sync`, not `reconcile` — the poll calls `reconcile()`
+   * on the FILL-SYNC surface (production.ts, `startFillSync`). So one
+   * unresolved flatten emits the loop's own `warn` divergence line under
+   * `reconcile` and this `error` line under `fill-sync` in the same pass.
+   * That is `fill-sync.ts`'s deliberate split of the loop's labelling from
+   * the surface's (see `FILL_SYNC_TRACE_ID`'s doc there), not a drift — but a
+   * reader correlating the two lines has to know they differ. Only the
+   * startup reconcile logs this alert under `reconcile`.
+   *
+   * ## Why on the alert, not at the log site
+   *
+   * Both arms post through the SAME channel instance: `buildControlArmWiring`
    * spreads the live arm's execution deps and overrides the broker, the store
    * and five siblings, but the alert channels are `SAMURAI_ALERTS`-selected
    * once at the root and shared. A constant at the channel therefore logs a

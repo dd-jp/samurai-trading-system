@@ -291,10 +291,11 @@ async function postFlattenReconcileAlert(
 ): Promise<void> {
   try {
     await input.flattenReconcileAlerts.postFlattenReconcileAlert({
-      // #1331: this pass's own id, which is the arm's — see
-      // `FlattenReconcileAlert.trace_id`. The same id the send-failure log
-      // below uses, so a failed alert and the alert it failed to deliver
-      // land under one trace.
+      // #1331: this surface's own id, which carries the `control-arm-` prefix
+      // when the control arm is the one sweeping — see
+      // `FlattenReconcileAlert.trace_id` for what makes that hold. The same id
+      // the send-failure log below uses, so a failed alert and the alert it
+      // failed to deliver land under one trace.
       trace_id: input.trace_id,
       idempotency_key: row.idempotency_key,
       instrument: row.instrument,

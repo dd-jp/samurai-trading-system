@@ -5,8 +5,9 @@
  * `console-channels.test.ts` proves the channel writes whatever `trace_id`
  * the alert carries, and `reconcile.test.ts` proves the alert fires on both
  * unresolved branches. Neither can prove the property this file exists for:
- * that the two arms' reconcile passes actually reach that one shared channel
- * instance under DIFFERENT ids. `buildControlArmWiring` builds the control
+ * that the ids the ROOT picks for its two arms' reconcile passes are
+ * different, and that both passes reach that one shared channel instance
+ * carrying them. `buildControlArmWiring` builds the control
  * arm's `executionDeps` by spreading the live arm's and overriding seven
  * fields; `flattenReconcileAlerts` is not one of them, and it is not going to
  * be — the channel is `SAMURAI_ALERTS`-selected at the root, so both arms
@@ -15,11 +16,15 @@
  * broker's ambiguity, worth nothing operationally) from a live one (real
  * money at a real venue).
  *
- * Driven through `buildProductionComponents` rather than a hand-built deps
- * object, for `filled-zero-size-wiring.test.ts`'s reason: a unit test
- * constructs one `ExecutionInput` and drives it directly, so it cannot see a
- * root that stopped threading the id — which is exactly the defect #1124 and
- * #1321 kept re-finding in this seam.
+ * Driven through `buildProductionOrchestrator(...).start()`, not through a
+ * surface this file builds, and not through `buildProductionComponents`
+ * either. `filled-zero-size-wiring.test.ts`'s reason applies and then some: a
+ * test that calls `buildExecutionSurface(deps, RECONCILE_TRACE_ID)` itself is
+ * asserting an id it supplied, so it is blind to the root choosing a
+ * different one — which is exactly what the first round of #1331 shipped.
+ * `start()` is also the only caller of the live arm's startup reconcile, and
+ * the startup reconcile is the pass whose alert an operator reads after a
+ * crash, so nothing short of booting it pins what that line actually says.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { LlmClient } from '../../../pipeline/debate-engine/index.js';
@@ -33,14 +38,13 @@ import type {
 } from '../../../pipeline/execution/index.js';
 import { SqliteExecutionStore } from '../../../pipeline/execution/index.js';
 import { DEFAULT_TRADER_CONFIG } from '../../../pipeline/trader/index.js';
+import { AlwaysOpenCalendar } from '../../../providers/market-data-service/index.js';
+import { PolymarketClient } from '../../../providers/market-intelligence/index.js';
 import type { Logger } from '../../../shared/index.js';
-import { SimulatedClock } from '../../../shared/index.js';
+import { SimulatedClock, TokenBucket } from '../../../shared/index.js';
 import { recordingLogger } from '../../../shared/recording-logger.js';
 import { guardedStore, openSharedStore, type SharedStore } from '../../../shared/store/index.js';
-import { RECONCILE_TRACE_ID } from '../fill-sync.js';
-import { buildProductionComponents, type ProductionConfig } from '../production.js';
-import { CONTROL_RECONCILE_TRACE_ID } from './control-arm-wiring.js';
-import { buildExecutionSurface } from './direct-bind.js';
+import { buildProductionOrchestrator, type ProductionConfig } from '../production.js';
 
 const NOW = new Date('2026-07-20T16:00:00Z');
 
@@ -115,6 +119,12 @@ async function seedAckedThenDeniedFlatten(store: ExecutionSharedStore, key: stri
 /** `filled-zero-size-wiring.test.ts`'s `StubConfig`, verbatim reasoning. */
 type StubConfig = ProductionConfig & Required<Pick<ProductionConfig, 'alpacaBrokerClient'>>;
 
+/**
+ * `filled-zero-size-wiring.test.ts`'s stub config for the fields it also sets,
+ * plus three this file needs because it boots the orchestrator rather than
+ * driving one surface: `tradingCalendar`, `polymarketClient` and
+ * `polymarketPollIntervalMs` (each commented at its site).
+ */
 function stubConfig(db: SharedStore, logger: Logger): StubConfig {
   return {
     db,
@@ -178,6 +188,22 @@ function stubConfig(db: SharedStore, logger: Logger): StubConfig {
     } as ProductionConfig['breakerConfig'],
     costConfig: {} as ProductionConfig['costConfig'],
     ciiConsumerConfig: {} as ProductionConfig['ciiConsumerConfig'],
+    // Always open, so `start()` reaches its startup reconcile the same way a
+    // boot inside the session does.
+    tradingCalendar: new AlwaysOpenCalendar(),
+    // `production.test.ts`'s `offlinePolymarketClient`, for its reason: the
+    // root builds the Polymarket agent unconditionally (its read APIs are
+    // keyless) and `start()` fires `void refresh('startup')` at once, whose
+    // rejection is swallowed into a `warn`. Without this the boot reaches
+    // `gamma-api.polymarket.com` from a unit suite. The poll interval is
+    // pushed past this test's life so the timer never fires a second one.
+    polymarketClient: new PolymarketClient({
+      rateLimiter: new TokenBucket({ capacity: 1_000, refillPerSecond: 1_000 }),
+      fetchImpl: (async () => {
+        throw new Error('offline: this wiring proof must not reach Polymarket');
+      }) as unknown as typeof fetch,
+    }),
+    polymarketPollIntervalMs: 20 * 24 * 60 * 60 * 1_000,
   } as StubConfig;
 }
 
@@ -193,36 +219,56 @@ describe("an unresolved flatten's alert names the arm that raised it (#1331)", (
   });
 
   /**
-   * THE MUTATION THIS KILLS: put the constant back — `trace_id: 'reconcile'`
-   * in `LoggingFlattenReconcileAlertChannel` (console-channels.ts), or thread
-   * a fixed string instead of `input.trace_id` in `postFlattenReconcileAlert`
-   * (reconcile.ts). Either leaves `console-channels.test.ts`'s value check
-   * green in the second case and both arms' lines identical here.
+   * THE MUTATIONS THIS KILLS:
+   *
+   * 1. Put the constant back — `trace_id: 'reconcile'` in
+   *    `LoggingFlattenReconcileAlertChannel` (console-channels.ts), or thread
+   *    a fixed string instead of `input.trace_id` in
+   *    `postFlattenReconcileAlert` (reconcile.ts). Either leaves both arms'
+   *    lines identical here, and the second leaves `console-channels.test.ts`
+   *    green as well.
+   * 2. Mislabel the LIVE arm at the composition root — give the surface
+   *    `start()` reconciles on `CONTROL_RECONCILE_TRACE_ID`, or let `start()`
+   *    build a fresh surface under some other id. Before #1331's review round
+   *    that mutation left the whole 5762-test suite green: a real venue's
+   *    unresolved flatten reading `control-arm-reconcile`, which is precisely
+   *    the misreading this ticket exists to prevent.
+   *
+   * Mutation 2 is why this boots the orchestrator instead of calling
+   * `reconcile()` on a surface built here or read off `ProductionComponents`.
+   * Either shortcut asserts against an object this file chose; only `start()`
+   * exercises the id the live arm's startup reconcile really runs under.
    *
    * The literals are asserted directly, NOT via `RECONCILE_TRACE_ID` /
    * `CONTROL_RECONCILE_TRACE_ID`: asserting the constants against themselves
    * would stay green under a mutation of either constant's value while the
-   * log line moved. The constants are imported only to build the live surface
-   * and to pin that the control arm's surface still carries the id its own
-   * module declares.
+   * log line moved. Neither is imported here — the two observed lines are the
+   * whole proof.
    */
-  it('logs the control arm and the live arm under different trace ids through the one shared channel', async () => {
+  it("start() logs each arm's unresolved flatten under its own trace id", async () => {
     const logger = recordingLogger();
-    const components = buildProductionComponents({
+
+    // Seeded before the boot: the startup reconcile runs inside `start()`,
+    // before the tick loop, so a row written afterwards would never be swept.
+    // Each arm gets its own row — same handle, different `arm` column, which
+    // is what `getUnresolvedFlattens()` filters on (migration 0050, #1124).
+    // A row seeded on the live arm alone would never reach the control arm's
+    // sweep at all, and the two arms' lines are the whole point here.
+    await seedAckedThenDeniedFlatten(
+      new SqliteExecutionStore(guardedStore(db, 'execution')),
+      'flatten-live',
+    );
+    await seedAckedThenDeniedFlatten(
+      new SqliteExecutionStore(guardedStore(db, 'execution'), 'control'),
+      'flatten-control',
+    );
+
+    const orchestrator = buildProductionOrchestrator({
       ...stubConfig(db, logger),
       broker: new AmnesiacFlattenBroker(),
     });
-
-    // The control arm's own book — same handle, `arm: 'control'`, which is
-    // what `getUnresolvedFlattens()` filters on (migration 0050, #1124). A
-    // row seeded through the live store would never reach the control arm's
-    // sweep at all.
-    const controlStore = new SqliteExecutionStore(guardedStore(db, 'execution'), 'control');
-    await seedAckedThenDeniedFlatten(components.executionStore, 'flatten-live');
-    await seedAckedThenDeniedFlatten(controlStore, 'flatten-control');
-
-    await buildExecutionSurface(components.executionDeps, RECONCILE_TRACE_ID).reconcile();
-    await components.controlArmWiring.reconcileExecution.reconcile();
+    await orchestrator.start();
+    await orchestrator.stop();
 
     const alerts = logger.entries.filter((entry) => entry.event === 'flatten_reconcile_unresolved');
     expect(alerts).toHaveLength(2);
@@ -236,6 +282,5 @@ describe("an unresolved flatten's alert names the arm that raised it (#1331)", (
       { trace_id: 'reconcile', idempotency_key: 'flatten-live' },
       { trace_id: 'control-arm-reconcile', idempotency_key: 'flatten-control' },
     ]);
-    expect(CONTROL_RECONCILE_TRACE_ID).toBe('control-arm-reconcile');
   });
 });
