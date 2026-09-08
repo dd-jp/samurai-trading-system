@@ -45,7 +45,8 @@
  *   structural rather than occasional.
  *
  * Neither marker is derivable from the clock or from `intent_type`; both are
- * set at the single site that constructs an exit (`buildFlattenExit`).
+ * set at the single Trader site that constructs an exit (`buildFlattenExit`)
+ * — the only producer of an exit intent the pipeline delivers to this stage.
  *
  * THE TWO STACK, ONE WAY. `unpriced_exit` is reachable only on that site's
  * `exit_reason: 'flatten'` branch, and `exit_reason: 'flatten'` alone is what
@@ -244,9 +245,14 @@ export class VerdictImpl implements Verdict {
     // Scoped by the flag alone, so the healthy path is byte-identical: an exit
     // that HAS a mark still drifts and still ages, and a normally-priced
     // flatten is gated exactly as before. Gates 3 (dedup), 4 (market-open),
-    // 5 (breaker re-check) and 6 (HITL) still run — none of them reads a
-    // price, and the dedup gate in particular is what keeps a repeated
-    // flatten from double-submitting while the feed is down.
+    // 5 (breaker re-check) and 6 (HITL) still run, and none of them GATES on
+    // a price: the first three evaluate no price at all, and HITL's verdict
+    // turns on the automation dial and the flag set, not on the bracket. That
+    // is a claim about what decides, not about what is carried — the HITL
+    // round trip hands a human the whole `order_intent` (`ApprovalRequest`,
+    // `types.ts`), so on this branch the bracket a reviewer sees is three
+    // zeros. The dedup gate in particular is what keeps a repeated flatten
+    // from double-submitting while the feed is down.
     //
     // `staleness` (gate 1) does NOT still run for such an intent, and this is
     // the one place that is easy to get wrong: `unpriced_exit` is only ever
