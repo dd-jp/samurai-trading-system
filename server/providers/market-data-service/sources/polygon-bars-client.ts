@@ -84,7 +84,7 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_RETRY_CONFIG: RetryConfig = { maxAttempts: 2, baseDelayMs: 500, maxDelayMs: 2_000 };
 /** Comfortably above anything this client's small `limit`s (20/30) could return in one page. */
 const PAGE_LIMIT = 50_000;
-/** Headroom over the requested `limit`, same posture as `CoinbaseCandlesClient` — a short read is returned as-is, not retried. */
+/** Headroom over the requested `limit` — a short read is returned as-is, not retried. */
 const REQUEST_BUFFER_MULTIPLIER = 2;
 /**
  * Small-`limit` DAILY requests still need a few calendar days of headroom to
@@ -163,10 +163,10 @@ export interface PolygonBarsClientOptions {
 
 /**
  * Fetches the most recent `limit` COMPLETE bars at or before `asOf`,
- * ascending by `close_time` — the same contract `CoinbaseCandlesClient`/
- * `AlpacaHttpDataClient.getBars` share. A short read (fewer than `limit`
- * rows after filtering) is returned as-is rather than retried; the
- * backfill script's own coverage report is what surfaces that.
+ * ascending by `close_time` — the same contract `AlpacaHttpDataClient.getBars`
+ * shares. A short read (fewer than `limit` rows after filtering) is returned
+ * as-is rather than retried; the backfill script's own coverage report is
+ * what surfaces that.
  */
 export class PolygonBarsClient {
   private readonly apiKey: string;

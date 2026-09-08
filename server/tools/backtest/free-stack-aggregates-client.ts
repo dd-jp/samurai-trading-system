@@ -17,17 +17,15 @@
  * the source ADR-0001 demoted to fallback-only". This closes that gap for the
  * Stage 2 path specifically.
  *
- * **Why not reuse
- * `providers/market-data-service/sources/coinbase-candles-client.ts` or
- * `AlpacaHttpDataClient`.** Both are `(symbol, timeframe, asOf, limit)`-shaped
- * — they answer "the last N bars as of a moment", which is what the live and
- * backfill paths need. The `PolygonClient` seam is window-shaped
- * (`fetchAggregates(symbol, window)`), which is what a replay needs. Adapting
- * either would mean converting a window to a limit and back, and
- * `CoinbaseCandlesClient` additionally has no pagination at all (a single
- * 300-candle request), so a ten-year window could not be expressed through it.
- * The duplication here is the HTTP call shape only; the pacing, validation and
- * error conventions follow `HttpPolygonClient`.
+ * **Why not reuse `AlpacaHttpDataClient`.** It is `(symbol, timeframe, asOf,
+ * limit)`-shaped — it answers "the last N bars as of a moment", which is
+ * what the live and backfill paths need. The `PolygonClient` seam is
+ * window-shaped (`fetchAggregates(symbol, window)`), which is what a replay
+ * needs. Adapting it would mean converting a window to a limit and back. The
+ * duplication here is the HTTP call shape only; the pacing, validation and
+ * error conventions follow `HttpPolygonClient`. (This file's own
+ * `fetchCoinbase` below is a separate, Stage 2-only window-shaped aggregates
+ * fetch — not a reuse of any shared client.)
  */
 
 import { timeframeToMs, toAlpacaTimeframe } from '../../providers/market-data-service/index.js';

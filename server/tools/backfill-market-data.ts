@@ -63,41 +63,37 @@
  * (see `docs/coding-standards.md` "Comments state invariants, not
  * changelogs").
  *
- * ## Equities / crypto sources, and failover (#496)
+ * ## Equities source, and failover (#496)
  *
- * Equities (SPY/QQQ/AAPL/TSLA) source from `AlpacaHttpDataClient` — the
+ * Equities (`DEFAULT_UNIVERSE`) source from `AlpacaHttpDataClient` — the
  * same real client the production composition root constructs — paced
  * through `resolveVenuePacing().alpaca` / `TokenBucket.acquireBackground()`,
- * exactly as the live path already does. Crypto (BTC-USD/ETH-USD) sources
- * from `CoinbaseCandlesClient` (`./coinbase-candles-client.ts`), the
- * ADR-0001 crypto PRIMARY, paced through `resolveCoinbasePacing()`.
+ * exactly as the live path already does.
  *
- * Both legs are wrapped in `withOhlcvFailover` (`./ohlcv-failover.ts`):
+ * The equities leg is wrapped in `withOhlcvFailover` (`./ohlcv-failover.ts`):
  * Alpaca -> `PolygonBarsClient` (`./polygon-bars-client.ts`, `adjusted=false`
- * to match Alpaca's raw convention) for equities, Coinbase ->
- * `BitstampCandlesClient` (`./bitstamp-candles-client.ts`) for crypto. Both
- * fallbacks are named in ADR-0001 / #487 as fallbacks that must never become
- * the backfill SOURCE OF FIRST RESORT — satisfied here by trying the primary
- * first on every call and only invoking the fallback when the primary
- * THROWS (see `./ohlcv-failover.ts`'s doc for exactly what counts as a
- * "failure"). This is the increment-only role #487/#496's research
- * describes: `WARM_START_WINDOWS` asks for days of history, not years, which
- * is what keeps Polygon's free-tier 2-year window from ever being the
- * binding constraint here.
+ * to match Alpaca's raw convention), named in ADR-0001 / #487 as a fallback
+ * that must never become the backfill SOURCE OF FIRST RESORT — satisfied
+ * here by trying the primary first on every call and only invoking the
+ * fallback when the primary THROWS (see `./ohlcv-failover.ts`'s doc for
+ * exactly what counts as a "failure"). This is the increment-only role
+ * #487/#496's research describes: `WARM_START_WINDOWS` asks for days of
+ * history, not years, which is what keeps Polygon's free-tier 2-year window
+ * from ever being the binding constraint here.
  *
- * A fallback bar is stamped `source: 'polygon'`/`'bitstamp'` (both clients'
- * own `Bar.source`) and persisted into `bars.source` by
+ * A fallback bar is stamped `source: 'polygon'` (`PolygonBarsClient`'s own
+ * `Bar.source`) and persisted into `bars.source` by
  * `SqliteMarketDataStore.appendBars` exactly like every other bar — the
  * column has existed since `0001_init.sql`, so no migration was needed to
  * add provenance. `backfillMarketData`'s `CoverageRow.source` (below)
  * surfaces which source served each pair in the printed table itself, and
  * `CoverageRow.quarantined` (#791 AC2) flags a pair whose window contains a
  * `QUARANTINED_BAR_SOURCES` bar (`'polygon'` — see that constant's doc for
- * why equities-only); a failover additionally posts to the SAME
- * `dataFailoverAlerts` transport the live orchestrator uses, via
- * `buildBackfillFailoverAlerter` (#791 AC1) passed to `withOhlcvFailover` in
- * `runFromEnvironment` below — this used to be a bare `console.error`
- * `FAILOVER:` line, which reached a stream nobody watches unattended.
+ * why); a failover additionally posts to the SAME `dataFailoverAlerts`
+ * transport the live orchestrator uses, via `buildBackfillFailoverAlerter`
+ * (#791 AC1) passed to `withOhlcvFailover` in `runFromEnvironment` below —
+ * this used to be a bare `console.error` `FAILOVER:` line, which reached a
+ * stream nobody watches unattended.
  *
  * **The residual gap this doc used to record is CLOSED for equities
  * (#562).** It read: this failover covers only this script's fetch path,
@@ -108,9 +104,16 @@
  * `production.ts`'s `config.dataSource` seam, alerting on the live
  * `SAMURAI_ALERTS` transport — the same one this script now uses instead of
  * its own stdout (#791). What remains true: the live path fails over BARS
- * only (never marks or quotes), and the live CRYPTO leg has no fallback —
- * crypto left Samurai's scope on 2026-08-16 (ADR-0015's amendment), so the
- * Coinbase -> Bitstamp pairing stays this script's alone.
+ * only (never marks or quotes).
+ *
+ * **Crypto backfill removed (#1157).** This script backfilled a Coinbase
+ * (primary) -> Bitstamp (fallback) crypto leg until #1157: crypto left
+ * Samurai's scope 2026-08-16 (ADR-0015's amendment) and `DEFAULT_UNIVERSE`
+ * has carried no crypto instrument since #738, so that leg had no caller
+ * left — its only reachers were its own two clients' tests, the repo's named
+ * dominant defect class. `backfillMarketData` below now refuses any
+ * `asset_class: 'crypto'` row outright (a SHORT coverage row, not a silent
+ * misroute onto equities data) instead of keeping the fetch path alive.
  *
  * ## Resumable and idempotent
  *
@@ -145,15 +148,11 @@ import {
   type MarketDataStore,
   SqliteMarketDataStore,
 } from '../providers/market-data-service/index.js';
-import { BitstampCandlesClient } from '../providers/market-data-service/sources/bitstamp-candles-client.js';
-import { CoinbaseCandlesClient } from '../providers/market-data-service/sources/coinbase-candles-client.js';
 import type { FailoverAlerter } from '../providers/market-data-service/sources/ohlcv-failover.js';
 import { withOhlcvFailover } from '../providers/market-data-service/sources/ohlcv-failover.js';
 import { PolygonBarsClient } from '../providers/market-data-service/sources/polygon-bars-client.js';
 import {
   describeThrownSafely,
-  resolveBitstampPacing,
-  resolveCoinbasePacing,
   resolvePolygonPacing,
   resolveVenuePacing,
   TokenBucket,
@@ -179,13 +178,13 @@ export interface CoverageRow {
   error: string | undefined;
   /**
    * `Bar.source` of the most recently stored bar for this pair (#496) —
-   * `'alpaca'`/`'polygon'` for equities, `'coinbase'`/`'bitstamp'` for
-   * crypto, or a fixture/test source. Read off the store's own rows rather
-   * than tracked separately, so it can never disagree with what
-   * `bars.source` actually holds. `undefined` only when the pair has no
-   * bars at all — never fabricated. This is what lets an operator see a
-   * failover in the printed coverage table itself, not only in a stderr
-   * alert line that scrolled past.
+   * `'alpaca'`/`'polygon'` (equities-only — crypto left Samurai's scope,
+   * ADR-0015's amendment), or a fixture/test source. Read
+   * off the store's own rows rather than tracked separately, so it can never
+   * disagree with what `bars.source` actually holds. `undefined` only when
+   * the pair has no bars at all — never fabricated. This is what lets an
+   * operator see a failover in the printed coverage table itself, not only
+   * in a stderr alert line that scrolled past.
    */
   source: string | undefined;
   /**
@@ -208,10 +207,11 @@ export interface CoverageRow {
 
 /**
  * `Bar.source` values that must never be treated as a clean source of
- * record (#791/#612). Equities-only and Polygon-only, deliberately: the
- * crypto leg's Bitstamp fallback carries no Massive licensing exposure, and
- * `stage2-source.ts`'s own direct `HttpPolygonClient` use is a separate,
- * already-settled decision (#612 (2)) this constant does not touch.
+ * record (#791/#612). Polygon-only, deliberately: `stage2-source.ts`'s own
+ * direct `HttpPolygonClient` use is a separate, already-settled decision
+ * (#612 (2)) this constant does not touch, and the crypto leg this backfill
+ * once ran (Coinbase primary / Bitstamp fallback) was removed entirely by
+ * #1157 rather than quarantined.
  */
 export const QUARANTINED_BAR_SOURCES: ReadonlySet<string> = new Set(['polygon']);
 
@@ -223,7 +223,6 @@ export interface BackfillMarketDataDeps {
   windows?: readonly BarWindow[];
   asOf: Date;
   fetchEquityBars: (symbol: string, window: BarWindow, asOf: Date) => Promise<Bar[]>;
-  fetchCryptoBars: (symbol: string, window: BarWindow, asOf: Date) => Promise<Bar[]>;
   print?: (line: string) => void;
 }
 
@@ -251,8 +250,6 @@ export async function backfillMarketData(deps: BackfillMarketDataDeps): Promise<
       let rows = existing;
       let fetchError: string | undefined;
       if (existing.length < window.lookback) {
-        const fetch =
-          instrument.asset_class === 'crypto' ? deps.fetchCryptoBars : deps.fetchEquityBars;
         // A thrown fetch (a rate-limit hiccup, a genuinely sparse window)
         // must not abort the whole run — every OTHER pair, and every pair
         // already fetched this run, has already durably persisted its bars
@@ -260,9 +257,20 @@ export async function backfillMarketData(deps: BackfillMarketDataDeps): Promise<
         // away from the OPERATOR's view even though the store itself kept
         // it. Caught here, turned into a SHORT row instead (AC: "so a short
         // backfill is visible rather than silent") — never rethrown, so this
-        // catch cannot itself throw out of the loop.
+        // catch cannot itself throw out of the loop. A crypto instrument
+        // hits the same path: #1157 removed the crypto fetch leg entirely,
+        // so refusing here (a SHORT row) is deliberate — the alternative,
+        // falling through to `fetchEquityBars`, would silently price a
+        // crypto symbol off an equities venue.
         try {
-          const fetched = await fetch(instrument.asset, window, deps.asOf);
+          if (instrument.asset_class === 'crypto') {
+            throw new Error(
+              "backfillMarketData: crypto backfill is not supported — crypto left Samurai's " +
+                "scope 2026-08-16 (ADR-0015's amendment) and #1157 removed this script's " +
+                'Coinbase/Bitstamp fetch leg',
+            );
+          }
+          const fetched = await deps.fetchEquityBars(instrument.asset, window, deps.asOf);
           deps.store.appendBars(fetched);
           rows = deps.store.readBars(
             instrument.asset,
@@ -348,8 +356,8 @@ function alpacaBarToBar(
 }
 
 /**
- * Builds the `FailoverAlerter` `withOhlcvFailover` calls on both legs (#791
- * AC1). Reaches the SAME `dataFailoverAlerts` transport the live orchestrator
+ * Builds the `FailoverAlerter` `withOhlcvFailover` calls on the equities leg
+ * (#791 AC1). Reaches the SAME `dataFailoverAlerts` transport the live orchestrator
  * uses (#818/`alert-transport.ts`) instead of `console.error` — a backfill
  * run unattended or from cron used to report a failover to a stream nobody
  * reads.
@@ -373,7 +381,7 @@ function alpacaBarToBar(
  *
  * No throttle, unlike the live path's `DataFailoverAlertThrottle`: this is a
  * one-shot CLI run over `WARM_START_WINDOWS` (three windows) x
- * `DEFAULT_UNIVERSE` (six instruments as of #504), not a 14-day tick loop —
+ * `DEFAULT_UNIVERSE` (20 instruments today), not a 14-day tick loop —
  * the alert volume a sustained live stall would produce never arises here,
  * so `suppressed_since_last` is always `0`.
  */
@@ -442,17 +450,14 @@ export async function runFromEnvironment(): Promise<void> {
 
   const venuePacing = resolveVenuePacing();
   const alpacaBucket = new TokenBucket(venuePacing.alpaca);
-  const coinbaseBucket = new TokenBucket(resolveCoinbasePacing());
   const polygonBucket = new TokenBucket(resolvePolygonPacing());
-  const bitstampBucket = new TokenBucket(resolveBitstampPacing());
 
   const equityClient = new AlpacaHttpDataClient({
     assetClass: 'stocks',
     rateLimiter: alpacaBucket,
   });
-  const cryptoClient = new CoinbaseCandlesClient({ rateLimiter: coinbaseBucket });
 
-  // #496 fallbacks, constructed LAZILY (on first actual use, memoized) rather
+  // #496 fallback, constructed LAZILY (on first actual use, memoized) rather
   // than up front. `PolygonBarsClient`'s constructor throws when
   // `POLYGON_API_KEY` is unset (same fail-fast posture `HttpPolygonClient`
   // already has) — constructing it eagerly here would make an UNSET Polygon
@@ -462,18 +467,11 @@ export async function runFromEnvironment(): Promise<void> {
   // moment it is actually needed, and a missing key then surfaces as the
   // fallback's own failure inside `withOhlcvFailover`'s combined error
   // (still loud, just scoped to the pair that actually failed over) rather
-  // than as a startup crash. `BitstampCandlesClient` needs no key and could
-  // be built eagerly, but is built the same lazy way for symmetry — there is
-  // no cost to it either way.
+  // than as a startup crash.
   let polygonClient: PolygonBarsClient | undefined;
   const getPolygonClient = (): PolygonBarsClient => {
     polygonClient ??= new PolygonBarsClient({ rateLimiter: polygonBucket });
     return polygonClient;
-  };
-  let bitstampClient: BitstampCandlesClient | undefined;
-  const getBitstampClient = (): BitstampCandlesClient => {
-    bitstampClient ??= new BitstampCandlesClient({ rateLimiter: bitstampBucket });
-    return bitstampClient;
   };
 
   console.log(`Warm-start backfill (#512, failover #496) -> ${dbPath}`);
@@ -503,22 +501,10 @@ export async function runFromEnvironment(): Promise<void> {
       getPolygonClient().getBars(symbol, window.timeframe, at, window.lookback),
   });
 
-  const fetchCryptoBars = withOhlcvFailover({
-    leg: 'crypto',
-    primaryName: 'coinbase',
-    fallbackName: 'bitstamp',
-    alert: alertFailover,
-    primary: (symbol, window, at) =>
-      cryptoClient.getBars(symbol, window.timeframe, at, window.lookback),
-    fallback: (symbol, window, at) =>
-      getBitstampClient().getBars(symbol, window.timeframe, at, window.lookback),
-  });
-
   const coverage = await backfillMarketData({
     store,
     asOf,
     fetchEquityBars,
-    fetchCryptoBars,
   });
 
   const short = coverage.filter((row) => !row.satisfied);

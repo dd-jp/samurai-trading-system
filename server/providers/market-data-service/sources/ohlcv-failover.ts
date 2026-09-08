@@ -1,9 +1,11 @@
 /**
  * Primary -> fallback failover for the #512 warm-start backfill script's
- * per-leg bar fetchers (#496). Generic over `BarFetcher` so the same
- * wrapper composes both legs — Alpaca -> Polygon (equities) and Coinbase ->
- * Bitstamp (crypto) — see `backfill-market-data.ts`'s `runFromEnvironment`
- * for the real wiring, which is the composition root for this fetch path.
+ * equities bar fetcher (#496): Alpaca -> Polygon — see
+ * `backfill-market-data.ts`'s `runFromEnvironment` for the real wiring,
+ * which is the composition root for this fetch path. Generic over
+ * `BarFetcher` rather than hardcoded to that pair: until #1157 the same
+ * wrapper also composed a Coinbase -> Bitstamp crypto leg, and that
+ * genericity is kept rather than collapsed onto the one leg that remains.
  * **The LIVE orchestrator reaches this module too, as of #562** — not
  * directly, but through `FailoverDataSource`
  * (`./failover-data-source.ts`), which adapts this same wrapper to the
@@ -12,15 +14,15 @@
  * Until then the live path had no failover at all, which is the residual
  * gap `backfill-market-data.ts`'s module doc used to record. Live scope is
  * the EQUITIES leg only (Alpaca -> Polygon): crypto left Samurai's scope on
- * 2026-08-16 (ADR-0015's amendment), so the Coinbase -> Bitstamp pairing
- * below stays backfill-only.
+ * 2026-08-16 (ADR-0015's amendment), and #1157 removed the backfill
+ * script's Coinbase -> Bitstamp leg entirely rather than leaving it
+ * backfill-only.
  *
  * **"Failure" here means a THROW from `primary`, not a short-but-successful
- * read.** `CoinbaseCandlesClient` and `AlpacaHttpDataClient` each already
- * have their own documented posture on a short read — the former returns it
- * as-is, the latter widens-and-retries and only then throws
- * `AlpacaDataUnderfetchError` — and this wrapper does not second-guess
- * either: a thrown error is the trigger, a short-but-returned array is not.
+ * read.** `AlpacaHttpDataClient` widens-and-retries and only then throws
+ * `AlpacaDataUnderfetchError` on a genuinely short read, and this wrapper
+ * does not second-guess that: a thrown error is the trigger, a
+ * short-but-returned array is not.
  */
 
 import { describeThrownSafely } from '../../../shared/index.js';
@@ -68,7 +70,7 @@ export interface OhlcvFailoverConfig {
  * Wraps `primary`/`fallback` into a single `BarFetcher`: try `primary`,
  * alert-then-fall-back on a throw, and surface which source actually served
  * via the `Bar.source` every real client here already stamps
- * (`'alpaca'`/`'polygon'`, `'coinbase'`/`'bitstamp'`) — persisted per bar by
+ * (`'alpaca'`/`'polygon'`) — persisted per bar by
  * `SqliteMarketDataStore.appendBars` into the `bars.source` column
  * (`0001_init.sql`), so a caller never has to trust this wrapper's own
  * bookkeeping to know which vendor a bar came from.
