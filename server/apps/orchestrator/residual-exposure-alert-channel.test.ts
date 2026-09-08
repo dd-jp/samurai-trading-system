@@ -92,6 +92,7 @@ describe('TradeChannelResidualExposureAlert.postResidualExposureAlert', () => {
       trace_id: 'control-arm-fill-sync',
     });
 
+    expect(telegram.sendMessage).toHaveBeenCalledTimes(2);
     const calls = (telegram.sendMessage as ReturnType<typeof vi.fn>).mock.calls as [
       string,
       string,

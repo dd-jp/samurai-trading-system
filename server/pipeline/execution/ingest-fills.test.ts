@@ -3328,11 +3328,13 @@ describe('trace_id threading onto alerts (#1348)', () => {
         undefined,
         undefined,
         undefined,
-        'reconcile',
+        'control-arm-fill-sync',
       ),
     ).ingestFills();
 
-    expect(residualExposureAlerts.alerts.map((alert) => alert.trace_id)).toEqual(['reconcile']);
+    expect(residualExposureAlerts.alerts.map((alert) => alert.trace_id)).toEqual([
+      'control-arm-fill-sync',
+    ]);
   });
 
   it("redistributeOneFlatten carries the pass's own trace_id, not a fixed one", async () => {

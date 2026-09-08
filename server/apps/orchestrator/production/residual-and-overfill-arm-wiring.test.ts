@@ -55,7 +55,6 @@
  * file CAN drive fills through, while the first test's surface-identity proof
  * carries the control arm's half.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LlmClient } from '../../../pipeline/debate-engine/index.js';
 import type {
   BrokerAck,

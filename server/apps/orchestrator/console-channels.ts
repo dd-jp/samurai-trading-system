@@ -154,14 +154,13 @@ export class LoggingUnpricedFillAlertChannel implements UnpricedFillAlertChannel
 }
 
 /**
- * A residual position `sweepResidualProtection` could not re-arm after a
- * partial flatten (#525), written to the log at `error`. Posted only on a
- * FAILED re-arm — a successful one is silent by design (see
- * `ResidualExposureAlert`'s doc), so every line this channel writes is one
- * an operator needs to act on: an unprotected position sitting at the venue
- * with no stop and no target. Raised from both the startup/poll `reconcile()`
- * sweep and the fill-sync poll's own standalone sweep — see
- * `ResidualExposureAlert.trace_id` for which ids that spans.
+ * A residual position that could not be re-armed after a partial flatten
+ * (#525), written to the log at `error`. Posted only on a FAILED re-arm — a
+ * successful one is silent by design (see `ResidualExposureAlert`'s doc), so
+ * every line this channel writes is one an operator needs to act on: an
+ * unprotected position sitting at the venue with no stop and no target. See
+ * `ResidualExposureAlert.trace_id` for its producer paths and which ids each
+ * can carry.
  *
  * Same caveat as `LoggingUnpricedFillAlertChannel`'s: a log line nobody
  * tails during an unattended soak (#238) is not an alert.
