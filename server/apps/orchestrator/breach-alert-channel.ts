@@ -1,10 +1,11 @@
 /**
  * Trade-channel adapter for the Feedback Loop's kill-threshold breach alert
- * (#93, wired by #327) — the same move `TradeChannelUnpricedFillAlert` and
- * `TradeChannelHeartbeat` make: reuse Verdict's already-provisioned
- * Telegram transport rather than introduce a second integration, and
- * wrap the raw clients rather than route through `TradeChannelNotifier.notify`,
- * which is shaped for a `VerdictDecision` and not for a validation breach.
+ * and the LLM spend cap's refusal alert (#93, wired by #327) — the same move
+ * `TradeChannelUnpricedFillAlert` and `TradeChannelHeartbeat` make: reuse
+ * Verdict's already-provisioned Telegram transport rather than introduce a
+ * second integration, and wrap the raw clients rather than route through
+ * `TradeChannelNotifier.notify`, which is shaped for a `VerdictDecision` and
+ * not for a validation breach.
  *
  * This is what makes story 13's "alert the human" reachable during an
  * UNATTENDED soak (#238). `LoggingBreachAlertChannel` writes a line nobody is
@@ -18,13 +19,17 @@
  * made later, out of band). So the send is started and not awaited, and its
  * rejection is caught here rather than left to surface as an unhandled
  * rejection that would take the process down mid-soak. A transport failure
- * must not undo the auto-tighten that already happened.
+ * must not undo the auto-tighten `computeMetrics` already applied on the
+ * kill-line caller; the spend-cap caller has nothing analogous to undo, since
+ * `SqliteSpendCap#refuse` (spend-cap.ts) never touches a risk threshold.
  *
  * The catch is deliberately best-effort and silent-to-the-caller, which is a
  * real limitation worth naming: if Telegram is down, the breach reaches
- * nobody. The mitigation is the log-line copy the orchestrator writes for
- * every cycle regardless (`daily metrics computed`), not a retry queue this
- * adapter does not have.
+ * nobody. On the kill-line caller the mitigation is the log-line copy the
+ * orchestrator writes for every daily cycle regardless (`daily metrics
+ * computed`, production.ts); the spend-cap caller has no equivalent per-cycle
+ * backstop line, so a failed send there can go unnoticed until an operator
+ * investigates independently — this adapter has no retry queue either way.
  */
 import type { BreachAlert, BreachAlertChannel } from '../../pipeline/feedback-loop/index.js';
 import type { DiscordClient, TelegramClient } from '../../pipeline/verdict/index.js';
@@ -67,12 +72,12 @@ export type BreachKind = 'kill-line' | 'spend-cap' | 'both' | 'none';
  * auto-tightened" leaked onto the spend cap's.
  *
  * `'kill-line'`/`'spend-cap'` are the two production shapes: `detectBreaches`
- * (metrics.ts) pushes only kill-line ids, `SqliteSpendCap#refuse`
- * (production.ts) posts `LLM_SPEND_CAP_BREACH` alone. `'both'` and `'none'`
- * are unreachable from those two callers today but are real values of
- * `breaches` this function must still answer for — an empty array, or a
- * future caller that merges both kinds into one alert — rather than falling
- * through to either side's wording by omission.
+ * (metrics.ts) pushes only kill-line ids; `SqliteSpendCap#refuse`
+ * (spend-cap.ts, wired in production.ts) posts `LLM_SPEND_CAP_BREACH` alone.
+ * `'both'` and `'none'` are unreachable from those two callers today but are
+ * real values of `breaches` this function must still answer for — an empty
+ * array, or a future caller that merges both kinds into one alert — rather
+ * than falling through to either side's wording by omission.
  */
 export function classifyBreach(breaches: readonly string[]): BreachKind {
   const killLine = breaches.some((breach) => breach !== LLM_SPEND_CAP_BREACH);
@@ -83,79 +88,110 @@ export function classifyBreach(breaches: readonly string[]): BreachKind {
   return 'none';
 }
 
-const KILL_LINE_HEADLINE = 'KILL-THRESHOLD BREACH';
-const SPEND_CAP_HEADLINE = 'LLM SPEND-CAP BREACH';
+interface BreachText {
+  headline: string;
+  outcome: string;
+  label: string;
+  logMessage: string;
+}
+
+const KILL_LINE_OUTCOME =
+  'Every risk threshold has been defensively auto-tightened. No kill has been applied ' +
+  'and none will be — kill or rework is your decision. Review the strategy before the ' +
+  'next session.';
+
+const SPEND_CAP_OUTCOME =
+  'The LLM spend cap has refused further LLM calls — debates, market-intelligence ' +
+  'refreshes and risk-critic checks alike. No risk threshold has changed — a spend-cap ' +
+  'refusal is not a kill-line breach and no kill decision applies. The refusal stands ' +
+  'until whatever triggered it is resolved; the refusal log line, where one was ' +
+  'written, names which.';
+
+const KILL_LINE_LOG_MESSAGE =
+  'kill-threshold breach — risk thresholds auto-tightened; review the strategy and ' +
+  'decide kill or rework (no automatic kill is ever applied)';
+
+const SPEND_CAP_LOG_MESSAGE =
+  'LLM spend-cap breach — further LLM calls refused (debates, market-intelligence ' +
+  'refreshes, risk-critic checks); no risk threshold changed. The refusal stands until ' +
+  'whatever triggered it is resolved; the refusal log line, where one was written, ' +
+  'names which';
 
 /**
- * `formatBreachAlert`'s Telegram body — what actually happened, per breach
- * kind. `breachLogMessage` below states the same four facts in its own
- * shorter prose for the log line; kept as two functions rather than one
- * shared string because the audiences differ (a push notification vs. a log
- * line read back after the fact), not because the underlying facts do.
+ * One entry per `BreachKind` (#1343) — the four cases every alert-text
+ * surface must decide, rather than one caller's wording leaking onto the
+ * other's alert the way "risk thresholds auto-tightened" leaked onto the
+ * spend cap's before this table existed. `formatBreachAlert` (Telegram body),
+ * `breachLogMessage` (the `kill_threshold_breach` log line), and
+ * `breachLabel` (the failed-send label) all read from this one place, so the
+ * four cases cannot drift apart between surfaces.
  *
- * The kill-line sentence's TEXT is unchanged from before #1343. Its claim is
- * true whenever `autoTighten` has room to move at least one dial; on a repeat
- * breach with every risk threshold already at its bound, `applyGuardrail`
- * makes every step a no-op (see `autoTighten`'s doc in metrics.ts) and
- * "every risk threshold has been ... auto-tightened" overclaims. That gap
- * predates #1343, which is scoped to the caller-discrimination defect (one
- * sentence claimed for both callers, true on only one) — not to this
- * per-dial edge case, left as a known, recorded limitation rather than
- * silently inherited.
+ * `'kill-line'`'s prose is BYTE-IDENTICAL to the pre-#1343 original (tested
+ * with an exact `toBe`). Its "every ... auto-tightened" claim is true
+ * whenever `autoTighten` (metrics.ts) has room to move at least one dial; on
+ * a repeat breach with every threshold already at its bound, `applyGuardrail`
+ * makes every step a no-op and the claim overclaims. That gap predates #1343
+ * and is a different, already-recorded limitation (a per-dial edge case, not
+ * caller-discrimination) — left as-is here rather than silently inherited.
  *
- * The spend-cap sentence is new: `SqliteSpendCap#refuse` touches no risk
- * threshold, whichever refusal kind fired it. The wiring in production.ts
- * discards `SpendCapVerdict`, so this text cannot say which kind fired —
- * only that a budget refusal stays refused until an operator raises it,
- * while a ledger-read refusal (`kind: 'fault'`) can clear on its own on a
- * later tick (see the `#budgetAnnounced`/`#faultAnnounced` doc in
- * spend-cap.ts). Promising a fix an operator does not need to make is the
- * same class of defect #1343 exists to remove.
+ * `'spend-cap'`'s prose cannot say WHICH refusal kind fired: the wiring in
+ * production.ts discards `SpendCapVerdict`, and `SqliteSpendCap#refuse`
+ * (spend-cap.ts) covers three distinct sites behind that one boolean — a
+ * transient `llm_spend` read failure, a corrupt (non-finite) `cost_usd` sum
+ * that does NOT clear on its own, and the budget itself being spent (which
+ * stays spent until an operator raises it). So the text promises neither a
+ * specific cause nor that anything will clear unassisted — and "further LLM
+ * calls" names all three call sites the cap actually gates (the debate step,
+ * `MiRefreshQueue#dispatch`, and `RiskCritic#produce`), not only debates.
  */
+const BREACH_TEXT: Record<BreachKind, BreachText> = {
+  'kill-line': {
+    headline: 'KILL-THRESHOLD BREACH',
+    outcome: KILL_LINE_OUTCOME,
+    label: 'kill-threshold breach',
+    logMessage: KILL_LINE_LOG_MESSAGE,
+  },
+  'spend-cap': {
+    headline: 'LLM SPEND-CAP BREACH',
+    outcome: SPEND_CAP_OUTCOME,
+    label: 'LLM spend-cap breach',
+    logMessage: SPEND_CAP_LOG_MESSAGE,
+  },
+  both: {
+    headline: 'KILL-THRESHOLD BREACH + LLM SPEND-CAP BREACH',
+    outcome:
+      'Every risk threshold has been defensively auto-tightened for the kill-line breach. ' +
+      'No kill has been applied and none will be — kill or rework is your decision. ' +
+      'Separately, the LLM spend cap has also refused further LLM calls — debates, ' +
+      'market-intelligence refreshes and risk-critic checks alike. The refusal stands ' +
+      'until whatever triggered it is resolved; the refusal log line, where one was ' +
+      'written, names which.',
+    label: 'kill-threshold and LLM spend-cap breach',
+    logMessage:
+      'kill-threshold and LLM spend-cap breach — risk thresholds auto-tightened for the ' +
+      'kill-line breach and no automatic kill is ever applied; separately, LLM calls ' +
+      '(debates, market-intelligence refreshes, risk-critic checks) are refused until ' +
+      'whatever triggered the refusal is resolved; the refusal log line, where one was ' +
+      'written, names which',
+  },
+  none: {
+    headline: 'BREACH',
+    outcome:
+      'No recognized breach id was reported. No risk threshold has changed and no LLM ' +
+      'calls have been refused as a result of this alert.',
+    label: 'breach',
+    logMessage:
+      'breach alert with no recognized breach id — no risk threshold changed and no LLM ' +
+      'calls were refused',
+  },
+};
+
 function breachOutcome(breaches: readonly string[]): string {
-  switch (classifyBreach(breaches)) {
-    case 'kill-line':
-      return (
-        'Every risk threshold has been defensively auto-tightened. No kill has been applied ' +
-        'and none will be — kill or rework is your decision. Review the strategy before the ' +
-        'next session.'
-      );
-    case 'spend-cap':
-      return (
-        'The LLM spend cap has refused further LLM debates. No risk threshold has changed — ' +
-        'a spend-cap refusal is not a kill-line breach and no kill decision applies. This is ' +
-        'either the budget being reached (stays refused until an operator raises it) or the ' +
-        'spend ledger being unreadable (can clear on its own on a later tick) — the ' +
-        'surrounding log names which.'
-      );
-    case 'both':
-      return (
-        'Every risk threshold has been defensively auto-tightened for the kill-line breach. ' +
-        'No kill has been applied and none will be — kill or rework is your decision. ' +
-        'Separately, the LLM spend cap has also refused further LLM debates — either the ' +
-        'budget has been reached (stays refused until an operator raises it) or the spend ' +
-        'ledger is unreadable (can clear on its own on a later tick); the surrounding log ' +
-        'names which.'
-      );
-    case 'none':
-      return (
-        'No recognized breach id was reported. No risk threshold has changed and no LLM ' +
-        'debates have been refused as a result of this alert.'
-      );
-  }
+  return BREACH_TEXT[classifyBreach(breaches)].outcome;
 }
 
 function breachHeadline(breaches: readonly string[]): string {
-  switch (classifyBreach(breaches)) {
-    case 'kill-line':
-      return KILL_LINE_HEADLINE;
-    case 'spend-cap':
-      return SPEND_CAP_HEADLINE;
-    case 'both':
-      return `${KILL_LINE_HEADLINE} + ${SPEND_CAP_HEADLINE}`;
-    case 'none':
-      return 'BREACH';
-  }
+  return BREACH_TEXT[classifyBreach(breaches)].headline;
 }
 
 /**
@@ -164,56 +200,19 @@ function breachHeadline(breaches: readonly string[]): string {
  * than restating the full outcome text.
  */
 function breachLabel(breaches: readonly string[]): string {
-  switch (classifyBreach(breaches)) {
-    case 'kill-line':
-      return 'kill-threshold breach';
-    case 'spend-cap':
-      return 'LLM spend-cap breach';
-    case 'both':
-      return 'kill-threshold and LLM spend-cap breach';
-    case 'none':
-      return 'breach';
-  }
+  return BREACH_TEXT[classifyBreach(breaches)].label;
 }
 
 /**
  * `LoggingBreachAlertChannel`'s `kill_threshold_breach` log message
  * (console-channels.ts) — exported so that surface shares this discrimination
  * rather than keeping a second, driftable copy of "what happened" in prose.
- * Shorter than `breachOutcome` (no Telegram-audience framing) but decides the
- * same four cases, on the same evidence: `#refuse` touches no risk threshold
- * on either refusal kind, and — since the wiring discards `SpendCapVerdict`
- * (production.ts) — this text cannot say which kind fired, only that a
- * budget refusal stays refused until raised while a ledger-read refusal can
- * clear on its own (see `breachOutcome`'s doc above for the full reasoning).
+ * The `event` name itself stays `kill_threshold_breach` for both callers,
+ * deliberately: nothing reads it programmatically, and renaming it is a
+ * different, out-of-scope change from the wording this ticket fixes.
  */
 export function breachLogMessage(breaches: readonly string[]): string {
-  switch (classifyBreach(breaches)) {
-    case 'kill-line':
-      return (
-        'kill-threshold breach — risk thresholds auto-tightened; review the strategy and ' +
-        'decide kill or rework (no automatic kill is ever applied)'
-      );
-    case 'spend-cap':
-      return (
-        'LLM spend-cap breach — further LLM debates refused; no risk threshold changed. ' +
-        'Either the budget has been reached (stays refused until an operator raises it) or ' +
-        'the spend ledger is unreadable (may clear on its own) — see the surrounding log for ' +
-        'which'
-      );
-    case 'both':
-      return (
-        'kill-threshold and LLM spend-cap breach — risk thresholds auto-tightened for the ' +
-        'kill-line breach and no automatic kill is ever applied; separately, LLM debates are ' +
-        'refused either because the budget is reached (stays refused until raised) or the ' +
-        'spend ledger is unreadable (may clear on its own) — see the surrounding log for which'
-      );
-    case 'none':
-      return (
-        'breach alert with no recognized breach id — no risk threshold changed and no LLM ' +
-        'debates were refused'
-      );
-  }
+  return BREACH_TEXT[classifyBreach(breaches)].logMessage;
 }
 
 /**
@@ -274,21 +273,13 @@ export class TradeChannelBreachAlert implements BreachAlertChannel {
       // A breach that could not be delivered is itself an operator-visible
       // event — otherwise the one alert that matters most fails silently.
       this.#logger.log({
-        // Same mixed shape as `LoggingBreachAlertChannel` (#1280): the daily
-        // kill-line batch runs outside any tick, but an `llm_spend_cap` breach
-        // is raised inside one by `SqliteSpendCap#refuse`, so the undelivered
-        // alert must join whichever raised it rather than always naming the
-        // daily cycle. The same third provenance `LoggingBreachAlertChannel`
-        // records applies: a boot-time refusal from `startingTotal()` has no
-        // ambient id and is mislabelled `feedback-cycle`. That case is
-        // distinguishable (no ambient id plus an all-`llm_spend_cap` list) and
-        // deliberately left underived for the reason that channel's comment
-        // gives — a provenance field on `BreachAlert` would resolve it, not a
-        // second inference here. #1343 fixed the WORDING drift on this path
-        // (this message no longer claims "kill-threshold" for a spend-cap
-        // send failure) with `classifyBreach`, which needs no such field
-        // because `breaches` alone answers it; the trace_id ambiguity above
-        // is a different question and is unresolved by that fix.
+        // Same mixed-caller shape as `LoggingBreachAlertChannel` (#1280), via
+        // `breachStage`. A third provenance — a boot-time refusal from
+        // `startingTotal()`, which has no ambient trace id — lands on the
+        // `feedback-cycle` fallback below and is indistinguishable from the
+        // daily cycle at this site; `BreachAlert` carries no field to resolve
+        // it, and adding one is out of this ticket's scope (see
+        // `classifyBreach`'s doc above for what #1343 does fix: the wording).
         trace_id: currentTraceId() ?? 'feedback-cycle',
         stage: breachStage(alert),
         event: 'breach_alert_send_failed',

@@ -647,13 +647,13 @@ export class LoggingCalendarFallbackAlertChannel implements CalendarFallbackAler
  * insignificant Deflated Sharpe, or live performance diverging from the
  * backtest that justified the config — and the kill/rework call is the
  * human's. A spend-cap breach means the run has stopped admitting new LLM
- * debates until an operator acts. Neither should wait for someone to notice a
- * quiet heartbeat.
+ * calls until whatever triggered the refusal is resolved. Neither should
+ * wait for someone to notice a quiet heartbeat.
  *
  * `message` discriminates on which happened (`breachLogMessage`,
- * breach-alert-channel.ts) — it no longer claims every risk threshold was
- * "auto-tightened" on the spend-cap path, where nothing is (#1343):
- * `SqliteSpendCap#refuse` touches no risk threshold at all.
+ * breach-alert-channel.ts — see its doc for what each case actually claims).
+ * `event` stays `kill_threshold_breach` for both callers: nothing reads it
+ * programmatically, so renaming it is a separate, out-of-scope change.
  *
  * Same caveat as the other log-only stand-ins: a log line nobody tails is not
  * an alert. `TradeChannelBreachAlert` (breach-alert-channel.ts) is the
@@ -665,27 +665,16 @@ export class LoggingBreachAlertChannel implements BreachAlertChannel {
 
   postBreachAlert(alert: BreachAlert): void {
     this.logger.log({
-      // Mixed, so it is answered at runtime (#1280). The daily kill-line batch
-      // belongs to no single tick and keeps the synthetic trace the feedback
-      // cycle already logs under — but `llm_spend_cap` is raised from
-      // `SqliteSpendCap#refuse`, whose own doc says it runs "inside the tick",
-      // and that breach must join the debate that spent the last of the
-      // budget. This comment previously claimed the daily batch was the only
-      // caller, which the spend-cap wiring (production.ts) falsifies.
-      //
-      // There is a third provenance the fallback names wrongly: `check()` also
-      // runs at boot via `startingTotal()`, which refuses — and so breaches —
-      // on an already-spent or unreadable budget with no ambient id, landing on
-      // `feedback-cycle`. Boot IS distinguishable from the daily cycle here —
-      // no ambient id AND an all-`llm_spend_cap` list can only be boot, since
-      // every other `check()` caller runs under an ambient id (spend-cap.ts's
-      // `check()` states that property). Deliberately not acted on: deriving a
-      // second discriminant at a log site nothing pins is exactly the defect
-      // class this ticket closes. A provenance field on `BreachAlert` would
-      // resolve it, not a second inference here — #1343 fixed the WORDING
-      // drift on this path (`message` below) with `classifyBreach`, which
-      // needs no such field because `breaches` alone answers it; this
-      // trace_id ambiguity is a different question and stands unresolved.
+      // Mixed, so it is answered at runtime (#1280): the daily kill-line
+      // batch keeps the synthetic `feedback-cycle` trace it already logs
+      // under; an `llm_spend_cap` breach is raised inside a tick by
+      // `SqliteSpendCap#refuse` (spend-cap.ts) and joins that trace via
+      // `breachStage`. A third provenance — boot's `startingTotal()`, which
+      // has no ambient trace id — lands on the `feedback-cycle` fallback
+      // below and is indistinguishable from the daily batch at this site;
+      // `BreachAlert` carries no field to resolve it, and adding one is out
+      // of this ticket's scope (see `classifyBreach`'s doc,
+      // breach-alert-channel.ts, for what #1343 fixes instead: the wording).
       trace_id: currentTraceId() ?? 'feedback-cycle',
       // Derived for the same reason the trace is (#1280) — see `breachStage`.
       stage: breachStage(alert),

@@ -165,7 +165,6 @@ describe('formatBreachAlert (#1343)', () => {
     expect(text).toContain('Samurai KILL-THRESHOLD BREACH');
     expect(text).toContain(KILL_LINE_MARKER);
     expect(hasSpendCapMarker(text)).toBe(false);
-    // Unchanged from before #1343 — this caller's text was already true.
     expect(text).toBe(
       'Samurai KILL-THRESHOLD BREACH (1): pbo_over_max.\n' +
         'Detected 2026-09-08T09:00:00.000Z.\n' +
@@ -181,15 +180,13 @@ describe('formatBreachAlert (#1343)', () => {
     expect(text).toContain('Samurai LLM SPEND-CAP BREACH');
     expect(hasSpendCapMarker(text)).toBe(true);
     expect(text).not.toContain(KILL_LINE_MARKER);
-    // The wiring in production.ts discards SpendCapVerdict, so the alert
-    // cannot say which refusal kind fired — a budget refusal stays refused
-    // until raised, but a ledger-read fault can clear on its own on a later
-    // tick (SqliteSpendCap's #budgetAnnounced/#faultAnnounced doc). The text
-    // must not promise a fix an operator may not need to make.
-    expect(text).not.toContain('window');
-    expect(text).toContain('either the budget being reached');
-    expect(text).toContain('spend ledger being unreadable');
-    expect(text).toContain('can clear on its own');
+    // SqliteSpendCap#refuse covers three sites behind one boolean, one of
+    // which (a non-finite cost_usd sum) does NOT clear on its own — so the
+    // text must not promise a fix, or a specific cause, it cannot back up.
+    expect(text).toContain('debates, market-intelligence refreshes and risk-critic checks');
+    expect(text).not.toContain('clear on its own');
+    expect(text).not.toContain('unreadable');
+    expect(text).toContain('the refusal log line, where one was written, names which');
   });
 
   it('describes both when both breach kinds are present', () => {
@@ -214,7 +211,6 @@ describe('breachLogMessage (#1343)', () => {
   it("matches formatBreachAlert's discrimination for the log line", () => {
     expect(breachLogMessage(KILL_LINE_ALERT.breaches)).toContain(KILL_LINE_MARKER);
     expect(hasSpendCapMarker(breachLogMessage(KILL_LINE_ALERT.breaches))).toBe(false);
-    // Unchanged from before #1343.
     expect(breachLogMessage(KILL_LINE_ALERT.breaches)).toBe(
       'kill-threshold breach — risk thresholds auto-tightened; review the strategy and ' +
         'decide kill or rework (no automatic kill is ever applied)',
@@ -222,11 +218,13 @@ describe('breachLogMessage (#1343)', () => {
 
     expect(hasSpendCapMarker(breachLogMessage(ALERT.breaches))).toBe(true);
     expect(breachLogMessage(ALERT.breaches)).not.toContain(KILL_LINE_MARKER);
-    expect(breachLogMessage(ALERT.breaches)).not.toContain('window');
-    // Same hedge as formatBreachAlert: the wiring discards SpendCapVerdict,
-    // so the message must not promise permanence a fault refusal may not need.
-    expect(breachLogMessage(ALERT.breaches)).toContain('Either the budget has been reached');
-    expect(breachLogMessage(ALERT.breaches)).toContain('may clear on its own');
+    // Same hedge as formatBreachAlert: three refusal sites behind one
+    // boolean, one of which does not clear on its own, so the message must
+    // not promise a specific cause or that anything resolves unassisted.
+    expect(breachLogMessage(ALERT.breaches)).not.toContain('clear on its own');
+    expect(breachLogMessage(ALERT.breaches)).toContain(
+      'debates, market-intelligence refreshes, risk-critic checks',
+    );
 
     expect(breachLogMessage(BOTH_ALERT.breaches)).toContain(KILL_LINE_MARKER);
     expect(hasSpendCapMarker(breachLogMessage(BOTH_ALERT.breaches))).toBe(true);
