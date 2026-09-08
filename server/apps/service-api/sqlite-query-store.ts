@@ -740,7 +740,8 @@ export class SqliteQueryStore implements DashboardQueryStore {
     // arm-agnostic pricing that already enters at `active = 0` above — neither
     // leg can smuggle a control-only instrument into the tie-break this ticket
     // closes. This ticket owns only the `audit_log` leg; the sibling
-    // `audit_log` query in `pipelineEvents` below is #1326's.
+    // `audit_log` query in `pipelineEvents` below carries the same predicate
+    // for its own newest-trace pick (#1326).
     const universe = this.db
       .prepare(
         `SELECT instrument, asset_class FROM (
@@ -817,13 +818,51 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * fixtures.
    *
    * BOTH 0013 columns are required, matching `getPipelineActivity`'s universe
-   * arm's own NULL check (they no longer match word for word: #1319 added a
-   * `trace_id` arm predicate to the universe arm that this query does not
-   * carry — see that method's comment and #1326, which owns this query's own
-   * cross-arm gap). The two must still agree on what "attributed" means: a row
+   * arm's own NULL check. The two must agree on what "attributed" means: a row
    * naming an instrument with no asset class is not renderable, and letting it
    * win `chosenTrace` would blank a lane whose real trace sits in the same
    * window — the identical symptom, one path over.
+   *
+   * LIVE arm only (#1326), same discriminator as the universe arm above and as
+   * `getVerdictHistory`/`getRiskCritics` (#1318): `0001_init.sql` declares
+   * `audit_log.trace_id TEXT NOT NULL` and no migration ever adds a
+   * `debate_id` column to this table (unlike `trader_log`/`debate_log`/
+   * `risk_critic_log`, which do), so `trace_id NOT LIKE` is both sufficient —
+   * there is no second discriminator to also filter on — and safe against a
+   * NULL `trace_id` silently dropping a row the old query kept, since no such
+   * row can exist.
+   *
+   * This query's cut is not a `LIMIT` but the newest-wins `chosenTrace` fold
+   * below, so the filter has to sit in `WHERE`, ahead of that fold, for the
+   * same reason #1318/#1319 put theirs ahead of `LIMIT`: the control arm often
+   * runs its own full decision-pass chain (`control-arm.ts`'s
+   * `buildControlArmStep`, awaited before the live pass writes anything
+   * further) under a `trace_id` carrying `CONTROL_TRACE_SUFFIX`, into this
+   * SAME table. Every stage transition in `tick-runner.ts` writes its own
+   * `record()` row immediately after `markStage()`, before any branch that
+   * could return early — so the only way the live pass leaves no further
+   * PIPELINE_STAGES row after the control arm completes is (a) a
+   * quorum-skipped decision pass, where the live pass falls through to
+   * `runExitCheckPass` and writes only the filtered `position_check` stage
+   * while the control's own nested pass still records its own `analysts` row,
+   * chronologically later, or (b) a live pass that crashes mid-await after
+   * the control arm has already completed, where `tick-loop.ts`'s catch
+   * writes only `stage: 'tick-loop'`, also filtered — verified by reading
+   * every `markStage`/`record` pair from `analysts` through `execution`
+   * (tick-runner.ts lines 399–515 head, 264–297 tail): none has a branch
+   * between marking a stage and recording it, so no third source of an
+   * unattributed newest row exists beyond these two. Unfiltered, either lets
+   * the control's newer row win `chosenTrace`; in the crash case the control
+   * arm may have already recorded a `verdict`/`execution` "go" of its own,
+   * which would then render as the live pass's. A plain tick pass cannot
+   * trigger this at all: both arms write only the filtered `position_check`
+   * stage there, so neither writes a PIPELINE_STAGES row for the fold to pick
+   * between.
+   *
+   * The filter removes control ROWS, not control-touched INSTRUMENTS: an
+   * instrument the live arm also attributed still renders its own live stage
+   * sequence, from its own live rows, once the control's are gone from the
+   * result set the fold sees.
    *
    * The `stage IN (…)` filter is not defensive tidiness: `audit_log.stage` is
    * unconstrained TEXT and the HITL Telegram callback writes
@@ -852,10 +891,11 @@ export class SqliteQueryStore implements DashboardQueryStore {
           WHERE timestamp > ? AND timestamp <= ?
             AND instrument IS NOT NULL
             AND asset_class IS NOT NULL
+            AND trace_id NOT LIKE ?
             AND stage IN (${stagePlaceholders})
           ORDER BY timestamp, rowid`,
       )
-      .all(fromIso, untilIso, ...PIPELINE_STAGES) as AuditStageRow[];
+      .all(fromIso, untilIso, `%${CONTROL_TRACE_SUFFIX}`, ...PIPELINE_STAGES) as AuditStageRow[];
 
     // One trace per instrument — a lane renders exactly one — and the newest
     // wins. Rows arrive oldest-first, because that ordering is load-bearing

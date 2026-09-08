@@ -1564,6 +1564,105 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
     expect(activity.events.map((e) => e.trace_id)).toEqual(['real', 'real']);
     expect(activity.events.map((e) => e.stage)).toEqual(['analysts', 'trader']);
   });
+
+  /**
+   * #1326: same displacement class as #1318 (`getVerdictHistory`) and #1319
+   * (this method's OTHER `audit_log` query, the lane-universe scan), on the
+   * sibling `audit_log` query here — `pipelineEvents`. The falsifier arm often
+   * runs its own full decision-pass chain, under a `trace_id` carrying
+   * `CONTROL_TRACE_SUFFIX`, into this SAME table (`control-arm.ts`'s
+   * `buildControlArmStep`, awaited before the live pass writes anything
+   * further). On a quorum-skipped decision pass the live pass's only further
+   * row is the filtered `position_check` stage, but the control's own nested
+   * pass still records its own `analysts` row — chronologically newer than the
+   * live pass's `analysts` row above it. Unfiltered, that newer control row
+   * wins the newest-trace `chosenTrace` fold, and the lane renders the control
+   * arm's stage sequence as the live lane's.
+   *
+   * This also pins filter-before-fold, the same property #1318/#1319 pin for
+   * their own cuts: `pipelineEvents`' cut is not a `LIMIT` but the
+   * newest-wins fold below, so a filter bolted on AFTER that fold — by
+   * filtering the already-folded `events` array rather than the raw rows the
+   * fold reads — would filter out exactly the control rows the (uncorrected)
+   * fold already chose as the winning trace, leaving an EMPTY events array
+   * for this instrument rather than the correct live-only sequence. Both
+   * wrong answers are distinct from this test's expectation, so either
+   * mutation reddens it.
+   */
+  it('does not let a newer control-arm row win the newest-trace pick for an instrument the live arm also touched', () => {
+    const db = makeDb();
+    seedMark(db, 'AAPL', 'stocks');
+    seedAudit(db, {
+      trace_id: 'trace-live',
+      stage: 'analysts',
+      decision: 'quorum_skip_analyst_split',
+      at: minutesBefore(5),
+    });
+    seedAudit(db, {
+      trace_id: `trace-live${CONTROL_TRACE_SUFFIX}`,
+      stage: 'analysts',
+      decision: 'quorum_skip_analyst_split',
+      at: minutesBefore(1),
+    });
+
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+
+    expect(activity.events.map((e) => e.trace_id)).toEqual(['trace-live']);
+    expect(activity.events.map((e) => e.stage)).toEqual(['analysts']);
+  });
+
+  /**
+   * The filter removes control ROWS, not control-touched INSTRUMENTS — the
+   * opposite error from the one above, and the one #1319's own third test
+   * pins for the universe leg. The control arm shadows every live decision
+   * pass, so an instrument both arms touched is the ORDINARY case, not an
+   * edge one: it must still render its live stage sequence, from its own live
+   * rows, once the control's rows are excluded from the fold. This asserts
+   * TWO surviving live rows across two stages, which an instrument-level drop
+   * cannot satisfy (it empties the result instead) — measured empirically:
+   * an instrument-dropping mutation reddens this test AND the one above (that
+   * test's own instrument is also touched by both arms), so the pair does not
+   * cleanly separate "drop the instrument" from "filter after the fold" by
+   * which test fails; both mutations empty both tests. What the pair does pin
+   * unambiguously is the CORRECT implementation against both wrong ones: no
+   * predicate produces wrong CONTENT (the control trace's rows), while either
+   * post-fold filtering or instrument-level dropping produces an EMPTY
+   * result — three distinct wrong answers, all different from what these
+   * tests expect.
+   */
+  it("keeps an instrument's live stage sequence when the control arm touched it too", () => {
+    const db = makeDb();
+    seedMark(db, 'AAPL', 'stocks');
+    seedAudit(db, {
+      trace_id: 'trace-live',
+      stage: 'analysts',
+      decision: 'quorum_met',
+      at: minutesBefore(5),
+    });
+    seedAudit(db, {
+      trace_id: 'trace-live',
+      stage: 'trader',
+      decision: 'no_trade',
+      at: minutesBefore(4),
+    });
+    seedAudit(db, {
+      trace_id: `trace-live${CONTROL_TRACE_SUFFIX}`,
+      stage: 'analysts',
+      decision: 'quorum_met',
+      at: minutesBefore(5),
+    });
+    seedAudit(db, {
+      trace_id: `trace-live${CONTROL_TRACE_SUFFIX}`,
+      stage: 'verdict',
+      decision: 'go',
+      at: minutesBefore(3),
+    });
+
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+
+    expect(activity.events.map((e) => e.trace_id)).toEqual(['trace-live', 'trace-live']);
+    expect(activity.events.map((e) => e.stage)).toEqual(['analysts', 'trader']);
+  });
 });
 
 /**
