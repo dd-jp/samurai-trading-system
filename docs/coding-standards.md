@@ -14,9 +14,11 @@ Read on every session before writing/editing code. Supplements CLAUDE.md; does n
 - **`.js` extensions in relative imports are mandatory, not stylistic.** `tsconfig.build.json` sets `"module"`/`"moduleResolution": "NodeNext"`, and `package.json` has `"type": "module"` — Node's native ESM resolver is in play, and it needs the extension exactly as it will exist in the emitted output (`.js`, even though the source is `.ts`). Dropping it breaks the build.
 - **A barrel import still needs the explicit `/index.js`.** NodeNext does not auto-resolve a bare directory specifier the way CommonJS did — `from '../market-data-service/'` does not resolve; it must be `from '../market-data-service/index.js'`.
 
-## Vitest: test utilities are global — don't import them
+## Vitest: test utilities are global in `server/` and `contracts/` — don't import them there
 
-`globals: true` is set in `vitest.config.ts`, so `describe`, `it`, `expect`, `vi`, `beforeEach`/`afterEach`/`beforeAll`/`afterAll`, and `expectTypeOf` are ambient in every `*.test.ts` file. Don't add `import { describe, it, expect, ... } from 'vitest'` for these — they're already in scope.
+`globals: true` is set in `vitest.config.ts`, and `tsconfig.test.json`'s `types` includes `vitest/globals`, so `describe`, `it`, `expect`, `vi`, `beforeEach`/`afterEach`/`beforeAll`/`afterAll`, and `expectTypeOf` are ambient — under `tsc` as well as at runtime — in every `server/**/*.test.ts` and `contracts/**/*.test.ts` file. Don't add `import { describe, it, expect, ... } from 'vitest'` for these — they're already in scope.
+
+**`client/` is the exception**: `client/tsconfig.json`'s `types` lists only `vite/client`, and `client/tsconfig.test.json` extends it without adding `vitest/globals`, so those names are never declared ambient for `tsc -p client/tsconfig.test.json` — `globals: true` still makes them work at runtime, but any `client/**/*.test.ts(x)` file that uses them must import them explicitly to type-check. All seventeen client test files do, and that import is required there, not a violation.
 
 ## Async test assertions: gate concurrency, don't race wall-clock timers
 
