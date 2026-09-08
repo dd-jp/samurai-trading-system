@@ -35,7 +35,7 @@
  * losing the fill, the lot's round-trip to `closed`, and its `ClosedTrade`
  * with it (#526's own finding).
  *
- * The flatten sweep below closes both: `reconcile()` reads
+ * The flatten sweep in `reconcile()` below closes both: it reads
  * `SharedStore.getUnresolvedFlattens()` — bounded so the sweep does not
  * re-poll the venue for a flatten that finished closing its lot(s) long ago,
  * see migration 0023 — and calls `reconcileFlatten` for each row, which asks

@@ -85,34 +85,23 @@
  * the surrounding prose would be a false-positive generator, which is the direction this
  * file is explicitly not allowed to err in.
  *
- * ## Code comments are scanned too, paths only, measured before shipping (#1345)
+ * ## Code comments are scanned too, paths only (#1345)
  *
- * A `.ts`/`.tsx` comment cites a path the same way a markdown sentence does, and #1345
- * found seven doc comments naming `resolveUnresolvedFlattens`, a function that does not
- * exist. That specific citation is a SYMBOL, not a path — no `/`, so `parseCandidate`
- * rejects it before path-checking begins, same as it always has for markdown — and stays
- * out of scope for the reason directly above: verifying a symbol needs the line-content
- * check this file deliberately does not do. Extending to path citations inside code
- * comments was measured first: a prototype scan of every tracked `.ts`/`.tsx` file's
- * comments (707 files, `parseCandidate`'s same rules — the prototype had no marker
- * handling, so every hit it found was unmediated) found 210 candidate citations and 11
- * violations, sorted by hand into four groups: 1 genuinely stale path
- * (`vitest.global-setup.ts` citing a test that moved under #627); 5 this file is RIGHT to
- * flag (this codebase's narrative comment style writes "moved from X" and cites pybroker's
- * Python sources in code exactly as it does in markdown, where the identical pattern is
- * already marked `historical`/`foreign` — `contracts/pipeline.ts`, `server/shared/http/
- * retry.ts`, `server/tools/backtest/eval-types.ts` ×2, `server/tools/backtest/metrics.ts`);
- * 4 self-reference, illustrative paths inside this file's own doc comments and its test
- * that read as citations only because they are examples — the self-reference problem
- * `__fixtures__` already solves for markdown, fixed here by rewording rather than a new
- * suppression; and 1 distinct case, `server/apps/supervisor/fault-guard.ts` citing
- * an "ADR deployment notes" ellipsis inside backticked prose that was never a real
- * citation and had no path to mark exempt, fixed by dropping the backticks. Ten of eleven
- * needed one line each and none needed new machinery — the marker syntax already matches
- * verbatim inside a line or block comment — which is the number that decided shipping this
- * over leaving code comments unchecked. (This file's own dogfood run reports 778 files
- * scanned because it counts markdown and code together; 707 above is the code-only count
- * the prototype measured, before either file's fixes landed.)
+ * A `.ts`/`.tsx` comment cites a path the same way a markdown sentence does, so this
+ * checker scans both. The invariant: `parseCandidate` and the `cite-exempt` marker apply
+ * identically in a line or block code comment as in markdown — same path-shape rules,
+ * same four exempt reasons, no separate machinery. A symbol citation (a bare name with no
+ * `/`, e.g. a function name) is rejected before path-checking begins and stays out of
+ * scope for the reason directly above: verifying a symbol needs the line-content check
+ * this file deliberately does not do. A fenced ``` code block inside a doc comment is
+ * NOT stripped the way markdown fencing is (see `stripFencedBlocks`) — a path-shaped
+ * backtick inside a comment's own code example reads as a real citation, so mark it
+ * `cite-exempt` or avoid the shape.
+ *
+ * Decision: extending to code comments was measured before shipping, not assumed — the
+ * backlog it surfaced across the tree was small enough to fix in the same change. The
+ * measurement and the PR that shipped it are recorded in #1345, not here — a doc comment
+ * states the invariant a future edit must not break, not a rerunnable count.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -343,7 +332,12 @@ function stripFencedBlocks(lines: readonly string[]): string[] {
  * which cannot see a `${...}` interpolation re-entering code inside a template literal.
  * That is a false-negative risk (a citation inside an interpolated expression goes
  * unseen), the direction this file is allowed to err in — never a false positive, since
- * nothing outside an actual comment span is ever handed to the scanner.
+ * nothing outside an actual comment span is ever handed to the scanner. A `'`/`"` string
+ * cannot legitimately span a line in valid TS, so an unterminated one (an apostrophe
+ * inside a regex literal, JSX text, etc.) is reset at end-of-line rather than carried
+ * forward — carrying it forward blanked every later comment in the file on one real
+ * unterminated `'` upstream of a genuine citation. A backtick template literal legitimately
+ * spans lines, so it is the one delimiter still carried across the loop.
  */
 function stripToComments(lines: readonly string[]): string[] {
   const out: string[] = [];
@@ -395,6 +389,7 @@ function stripToComments(lines: readonly string[]): string[] {
       i++;
     }
     out.push(buf);
+    if (stringDelim === "'" || stringDelim === '"') stringDelim = null;
   }
   return out;
 }
@@ -602,13 +597,20 @@ export function markdownFilesIn(indexedPaths: readonly string[]): string[] {
 }
 
 /**
+ * `.ts`/`.tsx` only — `.mts`/`.cts` are unused in this tree today (0 hits) and are out of
+ * scope until one is added; `runCitationCheck`'s dispatch uses this same pattern so a file
+ * neither `.md` nor matching it is skipped explicitly, not swept in by an else branch.
+ */
+const CODE_EXTENSION_RE = /\.tsx?$/;
+
+/**
  * The `.ts`/`.tsx` source to scan for comment citations, tracked minus a skipped
  * directory — same rule `markdownFilesIn` applies, so `__fixtures__` (this file's own
  * `known-good.ts`/`known-bad.ts` included) is never scanned by the repo-wide run.
  */
 export function codeFilesIn(indexedPaths: readonly string[]): string[] {
   return indexedPaths
-    .filter((path) => /\.tsx?$/.test(path))
+    .filter((path) => CODE_EXTENSION_RE.test(path))
     .filter((path) => !path.split('/').some((segment) => SKIPPED_DIRS.has(segment)));
 }
 
@@ -652,7 +654,6 @@ export function runCitationCheck(options: CheckOptions): Report {
       filesSkippedByRule++;
       continue;
     }
-    filesScanned++;
     let text: string;
     try {
       text = read(file);
@@ -661,10 +662,18 @@ export function runCitationCheck(options: CheckOptions): Report {
       // `createIndexResolver.lineCount` already tolerates, now reachable for the file
       // BEING scanned too, not only for a file a citation points at. No citations found
       // is the false negative this file is allowed to err toward; crashing the whole run
-      // over one locally-deleted file is not.
+      // over one locally-deleted file is not. Not counted as scanned either — an ENOENT
+      // never contributed a citation and `filesScanned` should stay a fact about files
+      // actually read, not files attempted.
       continue;
     }
-    const extract = file.endsWith('.md') ? extractCitations : extractCodeCitations;
+    filesScanned++;
+    const extract = file.endsWith('.md')
+      ? extractCitations
+      : CODE_EXTENSION_RE.test(file)
+        ? extractCodeCitations
+        : null;
+    if (!extract) continue;
     const citations = extract(text, { file, knownRoots });
     citationsScanned += citations.length;
     for (const citation of citations) {

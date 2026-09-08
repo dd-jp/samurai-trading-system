@@ -168,6 +168,55 @@ describe('mutation: a deliberately bad in-code citation (#1345)', () => {
   });
 });
 
+describe('stringDelim resets per line, not carried across the file (#1375 review F1)', () => {
+  // An unmatched `'`/`"` on one line (a regex literal, JSX text — neither is a real
+  // multi-line string in valid TS) used to leave `stringDelim` set entering the next
+  // line, blanking every comment after it for the rest of the file. `'`/`"` cannot
+  // legitimately span a line, so the fix resets them at end-of-line; a backtick
+  // template literal is untouched by this test since it legitimately can span lines.
+
+  it('an apostrophe inside a regex literal does not swallow the next line’s citation', () => {
+    const source =
+      "const re = /it's a test/;\n// see `server/pipeline/verdict/gone-for-good.ts` for it\n";
+    const report = runCitationCheck({
+      root: REPO_ROOT,
+      files: ['server/synthetic-mutation.ts'],
+      knownRoots,
+      readMarkdown: () => source,
+    });
+    expect(kinds(report.violations)).toEqual([
+      'missing-path@2:server/pipeline/verdict/gone-for-good.ts',
+    ]);
+  });
+
+  it('an apostrophe in JSX text does not swallow the next line’s citation', () => {
+    const source =
+      "const el = <p>It's data</p>;\n// see `server/pipeline/verdict/gone-for-good.ts` for it\n";
+    const report = runCitationCheck({
+      root: REPO_ROOT,
+      files: ['server/synthetic-mutation.tsx'],
+      knownRoots,
+      readMarkdown: () => source,
+    });
+    expect(kinds(report.violations)).toEqual([
+      'missing-path@2:server/pipeline/verdict/gone-for-good.ts',
+    ]);
+  });
+
+  it('control: no apostrophe on the first line, the next line’s citation is still seen', () => {
+    const source = 'const x = 1;\n// see `server/pipeline/verdict/gone-for-good.ts` for it\n';
+    const report = runCitationCheck({
+      root: REPO_ROOT,
+      files: ['server/synthetic-mutation.ts'],
+      knownRoots,
+      readMarkdown: () => source,
+    });
+    expect(kinds(report.violations)).toEqual([
+      'missing-path@2:server/pipeline/verdict/gone-for-good.ts',
+    ]);
+  });
+});
+
 describe('code-comment extraction', () => {
   const extractCode = (source: string) =>
     extractCodeCitations(source, { file: 'server/x.ts', knownRoots }).map((c) => c.raw);

@@ -1,13 +1,12 @@
 /**
- * Provider-agnostic exponential-backoff retry wrapper (issue #271,
- * generalized from the LLM-specific `withRetry` that shipped in
+ * Provider-agnostic exponential-backoff retry wrapper (issue #271, generalized from the
+ * LLM-specific `withRetry` that shipped in
  * `server/pipeline/debate-engine/llm/retry.ts` for ticket #31). <!-- cite-exempt: historical — records where the retry algorithm lived when this module was carved out; the generalization has since landed and the cited path is gone -->
- * Every real HTTP client
- * the transport-layer-spec.md "Shared Transport Conventions" module
- * introduces (Alpaca, Polygon, Telegram) — plus the pre-existing
+ * Every real HTTP client the transport-layer-spec.md "Shared Transport Conventions"
+ * module introduces (Alpaca, Polygon, Telegram) — plus the pre-existing
  * `AnthropicLlmClient` — shares this loop; each call site supplies its own
- * `RetryConfig` sizing and its own `isRetryable` predicate over its own
- * error hierarchy, since what counts as transient differs per provider.
+ * `RetryConfig` sizing and its own `isRetryable` predicate over its own error
+ * hierarchy, since what counts as transient differs per provider.
  */
 
 import { delay } from './delay.js';

@@ -12,9 +12,9 @@
  * string by the time it reaches this model, because `buildSnapshot` is the
  * single place that crosses the HTTP/JSON boundary.
  *
- * Moved here from `server/apps/service-api/pipeline-types.ts` unchanged apart from the <!-- cite-exempt: historical — statement about the pre-move location; true because it no longer resolves -->
- * `AssetClass` import — see `primitives.ts` for why that import had to stop
- * pointing at a server module.
+ * Moved here from `server/apps/service-api/pipeline-types.ts`, <!-- cite-exempt: historical — statement about the pre-move location; true because it no longer resolves -->
+ * unchanged apart from the `AssetClass` import — see `primitives.ts` for why that
+ * import had to stop pointing at a server module.
  */
 
 import type { AssetClass } from './primitives.js';
