@@ -369,7 +369,7 @@ export class GrokAgent {
         });
       }
 
-      this.#archive(items, asOf, assetClass);
+      this.#archive(trace_id, items, asOf, assetClass);
 
       this.#deps.store.ingest({
         agent_id: 'grok',
@@ -436,7 +436,12 @@ export class GrokAgent {
    * that archiving items and controlling boot behaviour through
    * `MI_SOURCE_HYDRATION` is the better trade, and this source takes it.
    */
-  #archive(items: readonly IntelligenceItem[], asOf: Date, assetClass: AssetClass): void {
+  #archive(
+    trace_id: string,
+    items: readonly IntelligenceItem[],
+    asOf: Date,
+    assetClass: AssetClass,
+  ): void {
     const archive = this.#deps.archive;
     if (archive === undefined || items.length === 0) return;
 
@@ -481,7 +486,7 @@ export class GrokAgent {
       archive.write(raws, rows);
     } catch (error) {
       this.#deps.logger?.log({
-        trace_id: 'grok',
+        trace_id,
         stage: 'market_intelligence',
         event: 'grok_archive_write_failed',
         level: 'warn',
