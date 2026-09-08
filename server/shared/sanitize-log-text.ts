@@ -25,31 +25,13 @@ import { truncateForError } from './http/response-errors.js';
  * a bare high-entropy string is NOT matched, because legitimate failure reasons
  * are full of ids, hashes and ISO timestamps.
  *
- * Quote and `}` chars in every pattern below are hex escapes (`\x22`, `\x27`,
- * `\x7d`), never literal. Reason, measured rather than assumed — production.
- * test.ts's `stripCommentsAndStrings` (no real lexer available post
- * TypeScript v7) can't tell a regex literal from a string, so a literal quote
- * inside a regex literal misreads as a string opener and the stripper scans
- * for its close across everything that follows, comments included; its
- * sibling test, `stripCommentsAndStrings leaves braces balanced on every
- * server source file it strips`, then runs `braceDelta` — a raw `{`/`}` count
- * — over that STRIPPED output, not the source file, to catch the desync.
- * Measured in order while fixing this file:
- *   1. `main`, literal quotes, literal `}`s: the Bearer pattern's one literal
- *      quote (pre-#1367) put the stripper into a misread string that ran to
- *      EOF, so every subsequent `}` in this array — Bearer's own and the
- *      bareword pattern's — was scanned away with it. Net delta 0: not
- *      balanced, invisible.
- *   2. Quotes hex-escaped, `}`s still literal (this PR's first attempt): the
- *      misread string was gone, so the brace count could now see every
- *      pattern's `}` for the first time — each one is a character-class
- *      EXCLUSION, not a delimiter, so it has no matching `{`. Delta -5, and
- *      the test failed for real.
- *   3. Both hex-escaped (this file, final): no misread string, no literal
- *      `}` for the counter to see. Delta 0, and this time it means it.
- * `KNOWN_STRIPPER_DESYNCS` (in `production.test.ts`) routes two known files
- * around failure mode 1 instead; not used here because the array can be made
- * genuinely balanced rather than routed around.
+ * Every quote and `}` below is a hex escape (`\x22`, `\x27`, `\x7d`), never
+ * literal: `server/apps/orchestrator/production.test.ts`'s
+ * `stripCommentsAndStrings leaves braces balanced on every server source
+ * file it strips` fails on a literal one — its hand-rolled stripper can't
+ * tell a regex literal from a string, so a literal quote misreads as a
+ * string opener and swallows everything up to its accidental "close",
+ * `}` characters included.
  */
 const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // Telegram bot token in a URL path: `/bot123456:AA...`
@@ -62,33 +44,52 @@ const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // Alpaca's own header names.
   /\b(?:APCA-API-KEY-ID|APCA-API-SECRET-KEY|api[_-]?key|api[_-]?secret|secret|token|password|passwd|pwd|auth)\b[\x22\x27]?\s*[:=]\s*[\x22\x27]?[^\s,;\x22\x27\x7d\]]+/gi,
   // `clientSecret`/`client_secret`, `accessToken`/`access_token`,
-  // `refreshToken`/`refresh_token`: the bareword pattern above requires a
-  // `\b` before the credential word, which a camelCase or underscore join
-  // never produces (`accessToken`'s "Token" sits mid-word, not at a
-  // boundary). Named explicitly rather than as a `*Token`/`*Key` suffix
-  // rule: this codebase logs `pageToken`/`next_page_token` (pagination
-  // cursors, `alpaca-http-client.ts`) and `maxTokens`/`max_tokens` (an LLM
-  // request budget — `max_tokens` in `orchestrator/production/defaults.ts`,
-  // `maxTokens` in `market-intelligence/grok/x-search-client.ts`) — a suffix
-  // rule would mask both.
-  /\b(?:client[_-]?secret|access[_-]?token|refresh[_-]?token)[\x22\x27]?\s*[:=]\s*[\x22\x27]?[^\s,;\x22\x27\x7d\]]+/gi,
-  // `*_SECRET_KEY` / `*_API_KEY` env-var names (`APCA_API_SECRET_KEY`):
-  // underscore-joined uppercase is the one shape the bareword pattern above
-  // can't reach even with `api[_-]?key` in it, because the credential word
-  // isn't the LAST segment.
-  /\b[A-Za-z][A-Za-z0-9_]{0,60}_(?:SECRET_KEY|API_KEY)\b[\x22\x27]?\s*[:=]\s*[\x22\x27]?[^\s,;\x22\x27\x7d\]]+/gi,
-  // `Authorization: Basic <base64>`. Anchored to a preceding `Authorization:`
-  // (via lookbehind, so it's not consumed and stays in the output) rather
-  // than matching bare `Basic <word>` the way the Bearer pattern matches
-  // bare `Bearer <word>` — "Basic" alone is ordinary English in this repo's
-  // own comments (Alpaca's Basic free-tier subscription), so an unanchored
-  // version would mask prose, not credentials.
-  /(?<=\bAuthorization:\s*)Basic\s+[^\s,;\x22\x27\x7d\]]+/gi,
+  // `refreshToken`/`refresh_token`, and an underscore-PREFIXED compound
+  // (`X_CLIENT_SECRET`): the bareword pattern above requires a `\b` before
+  // the credential word, which a camelCase or underscore join never
+  // produces (`accessToken`'s "Token" sits mid-word; `_` is a word char, so
+  // `X_CLIENT_SECRET` has no boundary before "CLIENT" either) — the
+  // lookbehind here excludes only alnum, not `\b`, so a leading `_`
+  // doesn't block the match the way it would with `\b`. Named explicitly
+  // rather than as a `*Token`/`*Key` suffix rule: this codebase logs
+  // `pageToken`/`next_page_token` (pagination cursors,
+  // `alpaca-http-client.ts`) and `maxTokens`/`max_tokens` (an LLM request
+  // budget — `max_tokens` in `orchestrator/production/defaults.ts`,
+  // `maxTokens` in `market-intelligence/grok/x-search-client.ts`) — a
+  // suffix rule would mask both.
+  /(?<![A-Za-z0-9])(?:client[_-]?secret|access[_-]?token|refresh[_-]?token)[\x22\x27]?\s*[:=]\s*[\x22\x27]?[^\s,;\x22\x27\x7d\]]+/gi,
+  // Underscore-joined ALL-CAPS env-var names (`ALPACA_API_SECRET`,
+  // `SAXO_OPENAPI_TOKEN`, `TELEGRAM_BOT_TOKEN` — grepped from this repo's
+  // real `process.env.*` reads, not just the one Alpaca name): the shape
+  // the bareword pattern above can't reach even with `api[_-]?key`/
+  // `secret`/`token` in it, because the credential word isn't the LAST
+  // segment. Case-SENSITIVE (no `i` flag) and requires an all-caps prefix —
+  // a case-insensitive version would also mask `next_page_token`
+  // (lowercase, a pagination cursor, not a credential) since it too ends
+  // in `_token`.
+  /\b[A-Z][A-Z0-9_]{0,60}_(?:SECRET_KEY|API_KEY|SECRET|TOKEN)\b[\x22\x27]?\s*[:=]\s*[\x22\x27]?[^\s,;\x22\x27\x7d\]]+/g,
+  // `Authorization: Basic <base64>` / `Authorization: Token <key>`
+  // (`tools/backtest/http-tiingo-client.ts` sends the latter). Anchored to
+  // a preceding `Authorization` key — lookbehind, so it's not consumed and
+  // stays in the output — rather than matching either scheme word bare the
+  // way the Bearer pattern matches bare `Bearer <word>`: "Basic" alone is
+  // ordinary English in this repo's own comments (Alpaca's Basic free-tier
+  // subscription), so an unanchored version would mask prose, not
+  // credentials. The lookbehind allows an optional quote and `:`/`=` (with
+  // optional surrounding space and a trailing quote) between the key and
+  // the scheme word, so it reaches the JSON-quoted and single-quoted forms
+  // a bare `Authorization:\s*` lookbehind cannot.
+  /(?<=\bAuthorization[\x22\x27]?\s*[:=]\s*[\x22\x27]?)(?:Basic|Token)\s+[^\s,;\x22\x27\x7d\]]+/gi,
   // `scheme://user:PASSWORD@host` DSNs: matches only the password segment
   // (via look-around), so the scheme, username and host — the parts an
   // operator actually needs to identify which DB a connection error came
-  // from — survive in the output.
-  /(?<=:\/\/[^\s:@/]{1,100}:)[^\s@/]{1,200}(?=@)/g,
+  // from — survive in the output. Username is `{0,100}` (not `{1,100}`) so
+  // a password-only DSN (`redis://:pw@host`) still matches. The value class
+  // excludes quotes, `,` and `;` on top of `@`/`/` — without that, a DSN
+  // sitting next to other JSON fields (`{"dsn":"redis://h:6379","email":
+  // "a@b.com"}`) over-matches through the closing quote and the next key,
+  // deleting the port and merging into the following field's `@`.
+  /(?<=:\/\/[^\s:@/]{0,100}:)[^\s@/\x22\x27,;]{1,200}(?=@)/g,
 ];
 
 /**

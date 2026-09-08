@@ -59,6 +59,18 @@ describe('redactPayload', () => {
     }
   });
 
+  it('covers vendor-prefixed camelCase names sanitizeLogText cannot reach as prose', () => {
+    // alpacaSecretKey/polygonApiKey have no client/access/refresh prefix, so
+    // none of sanitize-log-text.ts's named-compound patterns match them as
+    // free text — this structural check is what actually closes that gap.
+    expect(redactPayload({ alpacaSecretKey: 'skFAKE0000' })).toEqual({
+      alpacaSecretKey: '[REDACTED]',
+    });
+    expect(redactPayload({ polygonApiKey: 'skFAKE0000' })).toEqual({
+      polygonApiKey: '[REDACTED]',
+    });
+  });
+
   it('leaves pagination cursors readable', () => {
     // Why the key list enumerates compounds instead of suffix-matching
     // `token`: these are cursors, not secrets, and they are exactly what a

@@ -68,11 +68,17 @@ import { maskCredentials } from '../../shared/index.js';
  * the key with separators stripped (`api_key`, `api-key`, `apiKey` all
  * normalize to `apikey`).
  *
- * Kept in step with `sanitize-log-text.ts`'s pattern list — the same names,
- * read structurally rather than as assignment syntax. `authorization` and
- * `cookie` are here and not there for the reason the split exists: as a bare
- * header name in prose they are not evidence of a secret, but as an object KEY
- * the value beside them is one.
+ * Mostly kept in step with `sanitize-log-text.ts`'s pattern list — the same
+ * names, read structurally rather than as assignment syntax. `authorization`
+ * and `cookie` are here and not there for the reason the split exists: as a
+ * bare header name in prose they are not evidence of a secret, but as an
+ * object KEY the value beside them is one. `alpacasecretkey` and
+ * `polygonapikey` are here and NOT there, the other direction: vendor-
+ * prefixed camelCase credential names (`alpacaSecretKey`,
+ * `free-stack-aggregates-client.ts`; `polygonApiKey`, `provider-status.ts`)
+ * that `sanitize-log-text.ts`'s named-compound patterns don't reach as
+ * prose (no `client`/`access`/`refresh` prefix to match), but that this
+ * structural, key-based check has no camelCase-boundary problem with at all.
  *
  * EXACT NAMES, NOT A SUFFIX RULE. Matching anything ending in `token` would be
  * shorter and would mask more, but this codebase logs `next_page_token`,
@@ -86,6 +92,7 @@ const CREDENTIAL_KEYS: ReadonlySet<string> = new Set([
   'accesskey',
   'accesskeyid',
   'accesstoken',
+  'alpacasecretkey',
   'apikey',
   'apikeyid',
   'apisecret',
@@ -104,6 +111,7 @@ const CREDENTIAL_KEYS: ReadonlySet<string> = new Set([
   'idtoken',
   'passwd',
   'password',
+  'polygonapikey',
   'privatekey',
   'pwd',
   'refreshtoken',

@@ -49,12 +49,12 @@ describe('maskCredentials', () => {
   });
 });
 
-describe('camelCase/underscore keys, Basic auth and DSN passwords (#1367)', () => {
-  // Measured against `b0cc1f3` (PR #1359's review) and re-confirmed against
-  // this file's `main` before the fix: every row here masked nothing —
-  // `\b`-anchored patterns don't see a credential word joined by camelCase
-  // or an underscore, and neither `Authorization: Basic` nor a DSN password
-  // had a pattern at all.
+describe('camelCase/underscore keys, Basic/Token auth and DSN passwords (#1367)', () => {
+  // Every row below was unmasked on `origin/main` before this fix (measured
+  // directly; see the PR body for the traced before/after pairs): `\b`-
+  // anchored patterns don't see a credential word joined by camelCase or
+  // underscore, and neither `Authorization: Basic`/`Token` nor a DSN
+  // password had a pattern at all.
   // `survives`: a substring the mask must leave untouched, distinct from
   // `secret` — proves each pattern replaces only the credential, not the
   // whole line, and (via a sibling field on the camelCase rows) that only the
@@ -86,9 +86,65 @@ describe('camelCase/underscore keys, Basic auth and DSN passwords (#1367)', () =
         survives: '"region":"us-east-1"',
       },
       {
+        // Real env names, grepped from this repo's `process.env.*` reads —
+        // not just the one Alpaca `_SECRET_KEY` name above. `_SECRET` and
+        // `_TOKEN` are real suffixes here (`ALPACA_API_SECRET`,
+        // `SAXO_OPENAPI_TOKEN`), not just `_SECRET_KEY`/`_API_KEY`.
+        name: 'real env-var key: ALPACA_API_SECRET (_SECRET suffix)',
+        input: '{"region":"eu-west-2","ALPACA_API_SECRET":"skFAKE0000"}',
+        secret: 'skFAKE0000',
+        survives: '"region":"eu-west-2"',
+      },
+      {
+        name: 'real env-var key: SAXO_OPENAPI_TOKEN (_TOKEN suffix)',
+        input: '{"venue":"saxo","SAXO_OPENAPI_TOKEN":"skFAKE0000"}',
+        secret: 'skFAKE0000',
+        survives: '"venue":"saxo"',
+      },
+      {
+        // `_` is a word character, so a trailing `\b` (as the bareword and
+        // env-var patterns use) does not block a match starting right after
+        // one — this pins that the lookbehind used here (excludes only
+        // alnum) reaches an underscore-PREFIXED compound too, not just the
+        // plain and underscore-joined forms above. Lowercase-prefixed
+        // (`oauth_`, not `X_`) deliberately: an all-caps prefix would also
+        // be caught by the env-var pattern below (its suffix list now
+        // includes bare `SECRET`/`TOKEN`), which would leave this row
+        // green under either pattern and prove nothing about this one.
+        name: 'underscore-prefixed compound: oauth_clientSecret',
+        input: '{"scope":"oauth","oauth_clientSecret":"skFAKE0000"}',
+        secret: 'skFAKE0000',
+        survives: '"scope":"oauth"',
+      },
+      {
         name: 'Authorization: Basic',
         input: 'Authorization: Basic dXNlcjpwYXNzd29yZA==',
         secret: 'dXNlcjpwYXNzd29yZA==',
+        survives: 'Authorization: ',
+      },
+      {
+        // The issue's stated reachable path (`service-api/server.ts` →
+        // `sanitizeLogText(describeThrownSafely(err))` → `describeThrown`,
+        // a JSON.stringify ladder) delivers exactly this quoted shape — a
+        // bare `Authorization:\s*` lookbehind (no quote handling) misses it.
+        name: 'Authorization: Basic, JSON-quoted',
+        input: '{"Authorization":"Basic ZkFLRTAwMDA="}',
+        secret: 'ZkFLRTAwMDA=',
+        survives: '"Authorization"',
+      },
+      {
+        name: 'Authorization: Basic, single-quoted object literal',
+        input: "headers: { Authorization: 'Basic ZkFLRTAwMDA=' }",
+        secret: 'ZkFLRTAwMDA=',
+        survives: 'headers: { Authorization: ',
+      },
+      {
+        // `tools/backtest/http-tiingo-client.ts:156` sends this exact header
+        // shape (`Authorization: \`Token ${this.apiKey}\``) — a real caller,
+        // not a hypothetical scheme.
+        name: 'Authorization: Token (Tiingo)',
+        input: 'Authorization: Token skFAKE0000tiingo',
+        secret: 'skFAKE0000tiingo',
         survives: 'Authorization: ',
       },
       {
@@ -98,6 +154,14 @@ describe('camelCase/underscore keys, Basic auth and DSN passwords (#1367)', () =
         // The scheme, username, host, port and database — what an operator
         // needs to tell which connection failed — must all survive.
         survives: 'postgres://user:',
+      },
+      {
+        // Username is optional in a DSN (`redis://:pw@host`); the value
+        // class's username quantifier must accept zero characters too.
+        name: 'DSN password, no username',
+        input: 'redis://:skFAKE0000@host:6379',
+        secret: 'skFAKE0000',
+        survives: 'redis://:',
       },
     ];
 
@@ -113,6 +177,23 @@ describe('camelCase/underscore keys, Basic auth and DSN passwords (#1367)', () =
     expect(maskCredentials('postgres://user:supersecretpw@db.internal:5432/samurai')).toBe(
       'postgres://user:[REDACTED]@db.internal:5432/samurai',
     );
+  });
+
+  it('the DSN pattern does not over-match through a quote into a sibling JSON field (#358)', () => {
+    // A value class that admits `"`, `,` or `;` reaches past the DSN's own
+    // closing quote — deleting the port and merging into the next field's
+    // `@`. This is the header's own stated failure mode: an over-masked
+    // line whose surviving text is actively misleading, not just short.
+    const out = maskCredentials('{"dsn":"redis://h:6379","email":"a@b.com"}');
+    expect(out).toBe('{"dsn":"redis://h:6379","email":"a@b.com"}');
+  });
+
+  it('the env-var pattern is case-sensitive, so a lowercase name is not a false positive', () => {
+    // Same shape as `APCA_API_SECRET_KEY` but lowercase — this codebase's
+    // JSON field names are never SCREAMING_SNAKE, so a case-insensitive
+    // version would gain nothing and would mask `next_page_token` (see the
+    // negative row below) as a side effect of its own `_token` suffix.
+    expect(maskCredentials('my_secret_key=abc123')).toBe('my_secret_key=abc123');
   });
 
   it('existing bareword keys still mask, independently, with no regression', () => {
@@ -146,8 +227,7 @@ describe('camelCase/underscore keys, Basic auth and DSN passwords (#1367)', () =
     },
     {
       // `anthropic-client.ts` uses only the snake_case `max_tokens` field
-      // above; the camelCase form is a distinct provider's client — grepped,
-      // not assumed, after an earlier draft of this row named the wrong file.
+      // above; the camelCase form lives in a different provider's client.
       name: 'LLM request budget: maxTokens',
       input: '{"maxTokens":1024}',
       where: 'providers/market-intelligence/grok/x-search-client.ts',
@@ -168,15 +248,19 @@ describe('camelCase/underscore keys, Basic auth and DSN passwords (#1367)', () =
       where: 'tools/backtest/free-stack-aggregates-client.ts',
     },
     {
-      // Not a real logged field — grepped repo-wide and found none; the
-      // only hit for "keyword" anywhere in server/ is this file's own prose
-      // ("broader keyword sweep", line 157), not a JSON key. Kept anyway
-      // because #1367's own brief named "keyword" as an example substring
-      // risk (the bareword pattern's `api[_-]?key` alternative sits inside
-      // it) — this pins that no pattern here is a bare `key` match.
+      // Not a real logged field. `grep -rn -i keyword server/` (repo-wide,
+      // case-insensitive) finds five hits, none a JSON key: this describe
+      // block's own comments, `lse-etp-pool.ts:157` ("broader keyword
+      // sweep", prose) and `:375` (a real Saxo query param, `Keywords=
+      // <ticker|ISIN>` — capitalized, plural, a different shape),
+      // `write-guard.ts:233`, and `spec-schema-drift.test.ts:100`. Kept
+      // anyway because #1367's own brief named "keyword" as an example
+      // substring risk (the bareword pattern's `api[_-]?key` alternative
+      // sits inside it) — this pins that no pattern here is a bare `key`
+      // match.
       name: 'the substring "key" inside ordinary English: "keyword"',
       input: '{"keyword":"leveraged etf"}',
-      where: 'providers/universe-pool/lse-etp-pool.ts:157 (comment prose only)',
+      where: "not a real field — see this row's comment for the actual grep hits",
     },
     {
       // The bareword pattern's trailing `\b` requires the credential word to
@@ -191,21 +275,20 @@ describe('camelCase/underscore keys, Basic auth and DSN passwords (#1367)', () =
       where: 'not found as a real field anywhere in server/ — synthetic, from the #1367 brief',
     },
     {
-      // A real credential, and NOT caught: `alpacaSecretKey` has no
-      // `client`/`access`/`refresh` prefix and no underscore before
-      // `SECRET_KEY`, so none of the four new patterns reach it — same
-      // camelCase-boundary gap the issue reported, one layer further out.
-      // Accepted scope boundary (named compounds, not a suffix rule) rather
-      // than a miss: `free-stack-aggregates-client.ts` never logs this
-      // option object, and any caller that does log a payload containing it
-      // goes through `redactPayload`, whose structural `CREDENTIAL_KEYS`
-      // check has no camelCase-boundary problem to begin with.
-      name: 'residual gap: alpacaSecretKey (vendor-prefixed, no named-compound match)',
+      // `alpacaSecretKey` has no `client`/`access`/`refresh` prefix and no
+      // underscore before `SECRET_KEY`, so this text-based mechanism does
+      // not reach it — not a gap left open: `redactPayload`'s structural
+      // `CREDENTIAL_KEYS` set now covers it by exact key (added alongside
+      // this row; see `redact-payload.ts` and its test), which has no
+      // camelCase-boundary problem to begin with. This row pins what
+      // `maskCredentials` specifically does and does not do, not the
+      // combined coverage of both mechanisms.
+      name: 'maskCredentials does not reach alpacaSecretKey (redactPayload does, structurally)',
       input: '{"alpacaSecretKey":"would-be-a-real-secret"}',
       where: 'tools/backtest/free-stack-aggregates-client.ts, tools/stage2-source.ts',
     },
     {
-      name: 'residual gap: polygonApiKey (vendor-prefixed, no named-compound match)',
+      name: 'maskCredentials does not reach polygonApiKey (redactPayload does, structurally)',
       input: '{"polygonApiKey":"would-be-a-real-secret"}',
       where: 'apps/service-api/provider-status.ts',
     },
