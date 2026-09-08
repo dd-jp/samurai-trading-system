@@ -65,6 +65,7 @@
  */
 import {
   type SpendCap,
+  type SpendCapRefusalKind,
   type SpendCapVerdict,
   spendCapRefusalRemedy,
 } from '../../../pipeline/debate-engine/index.js';
@@ -85,7 +86,8 @@ import type { MarketIntelligenceRefresh } from './analysts-adapter.js';
 export const MI_REFRESH_TRACE_ID = 'mi-refresh';
 
 /**
- * How often a spend-cap refusal is logged: the first, then every 20th.
+ * How often a spend-cap refusal is logged: the first, then every 20th —
+ * PER `SpendCapVerdict.kind` (#1376).
  *
  * Same first-then-every-Nth convention as `ALERT_REPEAT_EVERY_SKIPS`. On a
  * budget refusal the cap does not refill, so once it is reached every queued
@@ -95,10 +97,12 @@ export const MI_REFRESH_TRACE_ID = 'mi-refresh';
  * escalated once by `SqliteSpendCap`'s own `onBreach`, so nothing depends on
  * this line to be seen.
  *
- * `#refusals` below counts every kind together, so an early fault refusal
- * can consume the un-throttled "first" slot and push a later, unrelated
- * budget refusal's first appearance out to refusal 20 — the two now read
- * different text, so which one lands first is not cosmetic.
+ * `#refusalsByKind` counts each kind separately, which is the invariant this
+ * throttle holds: the first refusal of EACH kind logs un-throttled, whatever
+ * kind (if any) was logged before it. A `read_fault` refusal cannot consume
+ * the budget kind's un-throttled first slot — each kind's remedy text is
+ * guaranteed to reach the log the first time that kind is seen, independent
+ * of every other kind.
  */
 export const REFUSAL_LOG_EVERY = 20;
 
@@ -135,7 +139,11 @@ export class MiRefreshQueue implements MarketIntelligenceRefresh {
 
   #stopped = false;
 
-  #refusals = 0;
+  /**
+   * Refusal count per `SpendCapVerdict.kind`, so each kind's log throttle is
+   * independent of every other kind — see `REFUSAL_LOG_EVERY`.
+   */
+  readonly #refusalsByKind = new Map<SpendCapRefusalKind, number>();
 
   /**
    * Instruments whose refresh has been ATTEMPTED to completion at least once
@@ -323,8 +331,9 @@ export class MiRefreshQueue implements MarketIntelligenceRefresh {
   }
 
   #logRefusal(request: QueuedRefresh, spend: Extract<SpendCapVerdict, { admitted: false }>): void {
-    const refusals = ++this.#refusals;
-    if (refusals !== 1 && refusals % REFUSAL_LOG_EVERY !== 0) return;
+    const refusalsOfKind = (this.#refusalsByKind.get(spend.kind) ?? 0) + 1;
+    this.#refusalsByKind.set(spend.kind, refusalsOfKind);
+    if (refusalsOfKind !== 1 && refusalsOfKind % REFUSAL_LOG_EVERY !== 0) return;
     if (this.deps.logger === undefined) return;
     safeLog(this.deps.logger, {
       trace_id: MI_REFRESH_TRACE_ID,
@@ -343,7 +352,7 @@ export class MiRefreshQueue implements MarketIntelligenceRefresh {
         spent_usd: spend.spent_usd,
         budget_usd: spend.budget_usd,
         kind: spend.kind,
-        refusals,
+        refusals_of_kind: refusalsOfKind,
       },
     });
   }
