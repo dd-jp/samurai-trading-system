@@ -92,7 +92,8 @@
  * never defaulted here: an omitted `metrics` block leaves the detector off and
  * says so at startup.
  * A breach alerts through `ProductionConfig.breachAlerts` and never kills:
- * kill/rework stays a human decision, and there is no kill primitive here.
+ * nobody owns the kill/rework call under full automation, and there is no
+ * kill primitive here.
  * `onTradeClose` IS wired (#237, superseding this file's earlier note that it
  * was not): a `ClosedTrade` is never reachable from `TickOutcome.execution_result`
  * (`ExecutionImpl.execute()` returns a submission ack only, and

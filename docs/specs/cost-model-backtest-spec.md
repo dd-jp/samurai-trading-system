@@ -30,7 +30,7 @@ The two seams:
 - **`CostModel.fill(request, marketState) -> CostModelResult`** — deterministic, pessimistic fill with a transparent cost breakdown (spread + commission + slippage + √-law impact). Injected into Execution's simulated broker adapter, which maps the result onto Execution's persisted `Fill` record (`price`/`qty`/`cost_breakdown` — see execution-spec.md).
 - **`Backtest.run(config, clock) -> BacktestReport`** — drives the *same orchestrator the live system runs* over the window (pipeline unchanged; only clock/data/broker swap), enforcing point-in-time / survivorship-free / no-lookahead, and returns the full metrics suite + walk-forward/CPCV distribution + DSR + PBO + MinBTL verdict + capacity ceiling.
 
-A **validation library** underneath both seams owns the computational primitives (metrics suite, split generator, DSR, PBO, MinBTL guard, capacity ceiling, config-trial log). **The Feedback Loop and offline research are callers of this library — FL owns the live *cadence* and the kill/rework *decision*; this component owns the *computation*.**
+A **validation library** underneath both seams owns the computational primitives (metrics suite, split generator, DSR, PBO, MinBTL guard, capacity ceiling, config-trial log). **The Feedback Loop and offline research are callers of this library — FL owns the live *cadence* and ~~the kill/rework *decision*~~; this component owns the *computation*.** *(Amended 2026-09-06 — [ADR-0013](../adr/0013-no-human-gate-anywhere.md) Decision 3: nobody owns a kill/rework decision under full automation. A kill-threshold breach must produce a mechanical response instead; FL's breach path (`server/pipeline/feedback-loop/metrics.ts`) alerts and defensively auto-tightens, with no halt-on-persistence implemented there yet. This component's boundary is unchanged — it owns the computation FL calls, not the response.)*
 
 Key architectural decisions:
 - **Three-mode matrix; cost model shared by backtest + paper** — live fills calibrate it.
@@ -337,10 +337,12 @@ Backtest.run(config, clock)
                           + capacity ceiling → BacktestReport
 
 Feedback Loop (live)  → calls this component's computeMetrics + DSR/PBO/walk-forward primitives
-                        (FL owns cadence + kill decision; this component owns the computation)
+                        (FL owns cadence + breach response; this component owns the computation)
 Execution (paper/backtest) → SimulatedBrokerAdapter → CostModel.fill (cost model shared)
 Execution (live) → real Kraken/IBKR adapter (no cost model; real fills calibrate the model)
 ```
+
+*(Amended 2026-09-06 — "kill decision" reworded to "breach response": [ADR-0013](../adr/0013-no-human-gate-anywhere.md) Decision 3 means nobody owns a kill/rework decision under full automation. FL's breach response today is alert + defensive auto-tighten (`server/pipeline/feedback-loop/metrics.ts`); no halt-on-persistence is implemented yet.)*
 
 ### Backtest/Eval Executor — pybroker (ADR-0001) — SUPERSEDED
 
@@ -355,7 +357,7 @@ Execution (live) → real Kraken/IBKR adapter (no cost model; real fills calibra
 - **Mined, not depended-on.** Fork/adapt pybroker's eval-metrics (`src/eval.py`) and walkforward-split (`src/strategy.py`) patterns; no build-time dependency on the base repo (ADR-0001 reuse posture). <!-- cite-exempt: foreign — pybroker's tree, mined not depended on; these paths are in the base repo, never in ours -->
 - **Executor of the eval/validation layer only.** pybroker executes the walkforward/CPCV splits and eval-metric computation over the trades the orchestrator produces. It is **not** the tick-loop host — its synchronous per-bar `exec_fn` cannot host the LLM debate, so the harness + live orchestrator retain the simulated `Clock` and drive the pipeline; the point-in-time / survivorship-free / no-lookahead discipline is unchanged.
 - **Our cost model is injected into pybroker's eval path.** pybroker's own fill model is bypassed — it is not pessimistic enough for the √-law market-impact requirement (Principle 2). `CostModel.fill` stays the single fill authority (Execution's `SimulatedBrokerAdapter` calls it; pybroker consumes those fills), preserving live == backtest metrics (cross-spec §5).
-- **Cadence stays with FL.** pybroker/this component owns the walkforward/CPCV + metric *computation*; the Feedback Loop owns the live metric *cadence* and the kill/rework decision.
+- **Cadence stays with FL.** pybroker/this component owns the walkforward/CPCV + metric *computation*; the Feedback Loop owns the live metric *cadence* ~~and the kill/rework decision~~. *(Amended 2026-09-06 — [ADR-0013](../adr/0013-no-human-gate-anywhere.md) Decision 3: nobody owns the kill/rework decision under full automation. FL's breach path alerts and defensively auto-tightens on a kill-threshold breach (`server/pipeline/feedback-loop/metrics.ts`), with no halt-on-persistence implemented yet. This component's boundary is unchanged.)*
 
 ### Domain Glossary Alignment
 
@@ -385,7 +387,7 @@ Per CONTEXT.md:
 Wayfinder decisions for this component live in [docs/wayfinder/cost-model-backtest-map.md](../wayfinder/cost-model-backtest-map.md) (charted locally). Decisions synthesized here: three-mode matrix; two seams (`CostModel.fill`, `Backtest.run`); cost model (four components, √-law impact, no zero-cost floor, funding as holding cost, determinism); harness (pipeline-unchanged, owns simulated Clock, point-in-time / survivorship-free / no-lookahead audited as a vuln, FL walk-forward replay); validation library (full suite together, walk-forward/CPCV split generator, DSR/PBO/MinBTL, config-trial log with distinct-config N, capacity ceiling); determinism (seed + clock, given analyst cache).
 
 **NEW cross-spec contracts other specs must adopt:**
-1. **feedback-loop-spec** — metric/validation computation re-homes here. This component owns a flat `MetricsSuite` + DSR/PBO/walk-forward primitives; FL **recomposes** them into its existing nested `MetricsReport` (`.daily` = `MetricsSuite`; `.revalidation` = DSR/PBO/walk-forward output; `.breaches` stays FL-only). FL keeps cadence + breach-response + human-owned kill; it delegates the computation. (Avoids a same-name/different-shape collision with FL's inline `MetricsReport`.)
+1. **feedback-loop-spec** — metric/validation computation re-homes here. This component owns a flat `MetricsSuite` + DSR/PBO/walk-forward primitives; FL **recomposes** them into its existing nested `MetricsReport` (`.daily` = `MetricsSuite`; `.revalidation` = DSR/PBO/walk-forward output; `.breaches` stays FL-only). FL keeps cadence + breach-response + ~~human-owned kill~~; it delegates the computation. *(Amended 2026-09-06 — [ADR-0013](../adr/0013-no-human-gate-anywhere.md) Decision 3: kill is no longer human-owned; nobody owns it under full automation, and a breach must produce a mechanical response — FL's breach path alerts and defensively auto-tightens (`server/pipeline/feedback-loop/metrics.ts`), with no halt-on-persistence implemented yet.)* (Avoids a same-name/different-shape collision with FL's inline `MetricsReport`.)
 2. **config-trial log** (`config_trials`, keyed by config hash; N = distinct configs for selection) is shared-SQLite infrastructure; FL revalidation reads frozen selection-N and does not append; in-bounds FL auto-tuning is not a new trial.
 3. **Execution (uncharted)** — must expose a broker-adapter interface with a `SimulatedBrokerAdapter` that calls `CostModel.fill()` (backtest + paper).
 4. **Fill record** — Execution's persisted `Fill` gains an optional `cost_breakdown?: {spread_cost, commission, slippage, market_impact}` field, populated on Simulated-adapter fills (mapped from `CostModel.fill`'s `CostModelResult`) and left undefined on real broker fills — for FL's live-vs-backtest cost divergence check (see GAP-F, execution-spec.md).

@@ -249,8 +249,9 @@ export function minbtl(
  *
  * Flags rather than throws. The spec is explicit that "the report flags
  * `exceeded`" — unlike the no-lookahead audit, which fails the run, this is a
- * judgement the caller (FL's kill/rework decision, or a researcher) owns, and
- * an exception here would deny them the report they need in order to make it.
+ * judgement the caller owns — today that's `stage2-verdict.ts`'s researcher
+ * assembling the Stage 2 verdict — and an exception here would deny them the
+ * report they need in order to act on it.
  */
 export function minbtlGuard(
   window: DateRange,

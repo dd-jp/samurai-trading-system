@@ -20,7 +20,7 @@ The Feedback Loop (Stage 6) closes the loop. After execution, it attributes real
 
 ## Solution
 
-The Feedback Loop is a **scheduled, bounded, deterministic** learner (not online, not a black box). Daily, it recomputes analyst weights via influence-weighted performance attribution over the day's closed trades, moving each weight a capped step toward its performance-implied level. It tunes all three dials CONTEXT.md names — weights, strategy params, risk thresholds — but under **asymmetric guardrails**: it may auto-*tighten* risk freely, ~~while auto-*loosening* requires human approval~~, and every dial has human-set hard bounds. *(Amended 2026-09-06 — ADR-0013 Decision 2 removed the loosen-approval gate: loosening now applies automatically too, bounded by the same hard floors/ceilings. Implemented by [#736](https://github.com/dd-jp/samurai-trading-system/issues/736).)* On each trade close it labels the setup store with the realized R-multiple. It reports the full metrics suite daily and runs walk-forward/PBO/DSR revalidation periodically; on a kill-threshold breach it alerts a human and defensively auto-tightens, ~~but the kill/rework call is human~~. *(Amended 2026-09-06 — ADR-0013 Decision 3: nobody owns the kill/rework call under full automation; a breach must produce a mechanical response instead — defensive auto-tighten, and a halt if it persists. Auto-tighten is implemented on FL's breach path (`server/pipeline/feedback-loop/metrics.ts`); no halt-on-persistence exists there, and the codebase still assumes a human: `server/apps/orchestrator/paper-profile.ts`'s `capDial` comment states "Killing the run is the operator's call on the breach alert.")* In backtest it evolves weights walk-forward, point-in-time, so out-of-sample distributions stay honest.
+The Feedback Loop is a **scheduled, bounded, deterministic** learner (not online, not a black box). Daily, it recomputes analyst weights via influence-weighted performance attribution over the day's closed trades, moving each weight a capped step toward its performance-implied level. It tunes all three dials CONTEXT.md names — weights, strategy params, risk thresholds — but under **asymmetric guardrails**: it may auto-*tighten* risk freely, ~~while auto-*loosening* requires human approval~~, and every dial has human-set hard bounds. *(Amended 2026-09-06 — ADR-0013 Decision 2 removed the loosen-approval gate: loosening now applies automatically too, bounded by the same hard floors/ceilings. Implemented by [#736](https://github.com/dd-jp/samurai-trading-system/issues/736).)* On each trade close it labels the setup store with the realized R-multiple. It reports the full metrics suite daily and runs walk-forward/PBO/DSR revalidation periodically; on a kill-threshold breach it alerts a human and defensively auto-tightens, ~~but the kill/rework call is human~~. *(Amended 2026-09-06 — ADR-0013 Decision 3: nobody owns the kill/rework call under full automation; a breach must produce a mechanical response instead — defensive auto-tighten, and a halt if it persists. Auto-tighten is implemented on FL's breach path (`server/pipeline/feedback-loop/metrics.ts`); no halt-on-persistence exists there yet. [#1257](https://github.com/dd-jp/samurai-trading-system/issues/1257) corrected the remaining code comments (including `server/apps/orchestrator/paper-profile.ts`'s `capDial` comment) that still asserted a human owned this call.)* In backtest it evolves weights walk-forward, point-in-time, so out-of-sample distributions stay honest.
 
 Key architectural decisions:
 - **Daily batch, bounded step changes** — not online per-trade.
@@ -283,11 +283,13 @@ Added 2026-08-05 ([#359](https://github.com/dd-jp/samurai-trading-system/issues/
 ```
 Execution → shared store (fills/outcomes) → Feedback Loop
 Feedback Loop → analyst weights (→ Debate Engine), strategy params (→ Trader),
-                risk thresholds (→ Risk, loosening gated), setup-store R-labels (→ Trader cosine)
+                risk thresholds (→ Risk, loosening bounded not gated), setup-store R-labels (→ Trader cosine)
 Feedback Loop → trade channel (metrics reports, breach alerts, arm-divergence alerts,
-                loosen-approval requests)
+                loosen notices)
 Feedback Loop → arm_comparison_samples (→ dashboard arm-comparison panel, read-only)
 ```
+
+*(Amended 2026-09-06 — ADR-0013 Decision 2 removed the loosen-approval gate (#736): "loosening gated" is corrected to "loosening bounded not gated" (clamped to the dial's `[floor, ceiling]`, not gated on approval — see "Module: Guardrailed Tuning" above), and "loosen-approval requests" to "loosen notices" (`LoosenNotificationChannel.notifyLoosenApplied` announces an applied loosening; nothing waits on a reply — see "Module: Guardrailed Tuning" above).)*
 
 ### Domain Glossary Alignment
 
