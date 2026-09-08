@@ -85,7 +85,9 @@ import { openSharedStore, type SharedStore as SqliteHandle } from '../../shared/
 import type { MetricsSuite } from '../../tools/backtest/index.js';
 import { CostModelImpl, SqliteStage2SelectionStore } from '../../tools/backtest/index.js';
 import { DebateBarDecisionGate } from './decision-bar-gate.js';
+import { RECONCILE_TRACE_ID } from './fill-sync.js';
 import { LIVE_BOOK_GBP, paperStartingProfile } from './paper-profile.js';
+import { CONTROL_RECONCILE_TRACE_ID } from './production/control-arm-wiring.js';
 import { MIN_RETURN_OBSERVATIONS } from './production/daily-equity-metrics-source.js';
 import type { DataFailoverAlert } from './production/data-failover.js';
 import { buildPersistence } from './production/direct-bind.js';
@@ -3144,6 +3146,37 @@ describe('buildProductionOrchestrator', () => {
     await vi.advanceTimersByTimeAsync(5_000);
     expect(scanSpy).toHaveBeenCalledTimes(1);
     expect(runSpy).toHaveBeenCalled();
+
+    await orchestrator.stop();
+  });
+
+  /**
+   * #1321, through the REAL composition root rather than `fill-sync.test.ts`'s
+   * direct calls. The control arm is built unconditionally (no env flag,
+   * `buildControlArmWiring` above), so `start()` always runs both arms'
+   * startup reconcile — the exact call pair whose trace ids collapsed onto one
+   * literal before this fix. A wiring regression that passed `RECONCILE_TRACE_ID`
+   * (the live constant) to the control arm's call in `production.ts` would
+   * leave `fill-sync.test.ts` green — that file never touches `production.ts`'s
+   * wiring — so this is the test that actually pins the composition root, not
+   * just the module.
+   */
+  it("start() gives each arm's startup reconcile its own trace_id (#1321)", async () => {
+    const logger = recordingLogger();
+    const config = stubConfig(db, {
+      logger,
+      tradingCalendar: new AlwaysOpenCalendar(),
+    });
+    const orchestrator = buildProductionOrchestrator(config);
+
+    await orchestrator.start();
+
+    const completions = logger.entries.filter((e) => e.message === 'startup reconcile complete');
+    expect(completions).toHaveLength(2);
+    expect(completions.map((e) => e.trace_id).sort()).toEqual(
+      [RECONCILE_TRACE_ID, CONTROL_RECONCILE_TRACE_ID].sort(),
+    );
+    expect(RECONCILE_TRACE_ID).not.toEqual(CONTROL_RECONCILE_TRACE_ID);
 
     await orchestrator.stop();
   });
