@@ -97,6 +97,7 @@ import {
   runBullPersona,
   runDebate,
   runMediatorPersona,
+  spendCapRefusalRemedy,
 } from '../../../pipeline/debate-engine/index.js';
 import {
   type Clock,
@@ -891,17 +892,16 @@ export function buildDebateStep(
         message:
           `debate: ${instrument} not started — ${sanitizeLogText(spend.reason ?? 'spend cap')}. ` +
           'No LLM call was made and no debate_log row is written; the tick will short-circuit ' +
-          'at Trader with no_trade. THIS DOES NOT RESOLVE ITSELF: unlike a rate-limit refusal, ' +
-          'the budget does not refill with time, so every subsequent tick will refuse ' +
-          'identically until an operator raises the cap or starts a fresh run. Open positions ' +
-          'are unaffected — their bracket legs remain live venue-side, and Execution, ' +
-          'reconcile and fill ingestion all keep running.',
+          `at Trader with no_trade. ${spendCapRefusalRemedy(spend.kind)} Open ` +
+          'positions are unaffected — their bracket legs remain live venue-side, and ' +
+          'Execution, reconcile and fill ingestion all keep running.',
         payload: {
           instrument,
           asset_class,
           debate_id,
           spent_usd: spend.spent_usd,
           budget_usd: spend.budget_usd,
+          kind: spend.kind,
         },
       });
       return spendCappedDebateResult(debate_id, bar, spend.reason ?? 'spend cap reached');

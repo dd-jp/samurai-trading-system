@@ -63,7 +63,11 @@
  * outage degrades the debate to `NO_DATA_MARKER`, it does not fail a tick that
  * would otherwise have traded.
  */
-import type { SpendCap, SpendCapVerdict } from '../../../pipeline/debate-engine/index.js';
+import {
+  type SpendCap,
+  type SpendCapVerdict,
+  spendCapRefusalRemedy,
+} from '../../../pipeline/debate-engine/index.js';
 import type { AssetClass, Logger } from '../../../shared/index.js';
 import { logCaughtFailure, runWithTraceId, safeLog } from '../../../shared/index.js';
 import type { MarketIntelligenceRefresh } from './analysts-adapter.js';
@@ -83,11 +87,18 @@ export const MI_REFRESH_TRACE_ID = 'mi-refresh';
 /**
  * How often a spend-cap refusal is logged: the first, then every 20th.
  *
- * Same first-then-every-Nth convention as `ALERT_REPEAT_EVERY_SKIPS`. The cap
- * does not refill, so once it is reached every queued instrument refuses on
- * every sweep — an unthrottled line would be one per name per sweep for the
- * rest of the run. The breach itself is escalated once by `SqliteSpendCap`'s
- * own `onBreach`, so nothing depends on this line to be seen.
+ * Same first-then-every-Nth convention as `ALERT_REPEAT_EVERY_SKIPS`. On a
+ * budget refusal the cap does not refill, so once it is reached every queued
+ * instrument refuses on every sweep — an unthrottled line would be one per
+ * name per sweep for the rest of the run. A fault refusal carries no such
+ * guarantee: it can clear before the next sweep. The breach itself is
+ * escalated once by `SqliteSpendCap`'s own `onBreach`, so nothing depends on
+ * this line to be seen.
+ *
+ * `#refusals` below counts every kind together, so an early fault refusal
+ * can consume the un-throttled "first" slot and push a later, unrelated
+ * budget refusal's first appearance out to refusal 20 — the two now read
+ * different text, so which one lands first is not cosmetic.
  */
 export const REFUSAL_LOG_EVERY = 20;
 
@@ -311,7 +322,7 @@ export class MiRefreshQueue implements MarketIntelligenceRefresh {
     }
   }
 
-  #logRefusal(request: QueuedRefresh, spend: SpendCapVerdict): void {
+  #logRefusal(request: QueuedRefresh, spend: Extract<SpendCapVerdict, { admitted: false }>): void {
     const refusals = ++this.#refusals;
     if (refusals !== 1 && refusals % REFUSAL_LOG_EVERY !== 0) return;
     if (this.deps.logger === undefined) return;
@@ -322,16 +333,16 @@ export class MiRefreshQueue implements MarketIntelligenceRefresh {
       level: 'warn',
       message:
         `market intelligence: refresh for ${request.instrument} not started — ` +
-        `${spend.reason ?? 'spend cap reached'}. No LLM call was made. THIS DOES NOT RESOLVE ` +
-        'ITSELF: the budget does not refill, so every later refresh refuses identically until ' +
-        'an operator raises the cap or starts a fresh run, and the news-fed analysts report NO ' +
-        'DATA on whatever the archive already holds.',
+        `${spend.reason ?? 'spend cap reached'}. No LLM call was made. ` +
+        `${spendCapRefusalRemedy(spend.kind)} The news-fed analysts report NO DATA ` +
+        'on whatever the archive already holds.',
       payload: {
         instrument: request.instrument,
         asset_class: request.assetClass,
         requested_by: request.requestedBy,
         spent_usd: spend.spent_usd,
         budget_usd: spend.budget_usd,
+        kind: spend.kind,
         refusals,
       },
     });

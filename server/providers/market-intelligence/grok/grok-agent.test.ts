@@ -41,6 +41,7 @@ const REFUSES: SpendCap = {
     spent_usd: 50,
     budget_usd: 50,
     reason: 'budget exhausted',
+    kind: 'budget',
   }),
 };
 

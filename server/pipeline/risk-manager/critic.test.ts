@@ -378,6 +378,7 @@ describe('LlmRiskCriticProducer (live/paper)', () => {
           spent_usd: 60,
           budget_usd: 50,
           reason: 'budget exhausted',
+          kind: 'budget',
         }),
       },
       marketData: stubMarketData(),

@@ -6,12 +6,17 @@ import type {
   AnthropicMessagesClient,
   LlmClient,
   LlmRequest,
+  SpendCap,
+  SpendCapVerdict,
 } from '../../../pipeline/debate-engine/index.js';
 import {
   AnthropicLlmClient,
+  BUDGET_REMEDY,
+  CORRUPT_LEDGER_REMEDY,
   computeDebateId,
   InMemoryDebateLogStore,
   RateLimiter,
+  READ_FAULT_REMEDY,
   SqliteDebateLogStore,
   SqliteLlmSpendStore,
   UNCAPPED_SPEND,
@@ -1222,5 +1227,123 @@ describe('buildDebateStep LLM spend attribution (#326)', () => {
     const rows = spendRows(db);
     expect(rows).toHaveLength(2); // bull + bear; the mediator call threw
     expect(rows.every((row) => row.debate_id === computeDebateId('AAPL', NOW, views))).toBe(true);
+  });
+});
+
+/**
+ * #1372: `debate_refused_spend_cap` used to assert "the budget does not
+ * refill" unconditionally, which is false on the two fault refusal kinds — a
+ * transient `llm_spend` read failure clears on its own. The message now reads
+ * its remedy text from `spendCapRefusalRemedy(spend.kind)`. Assertions below
+ * compare against the exported remedy constants, not literal substrings, so
+ * a swap of which constant a kind maps to still reddens here (the constants
+ * themselves don't move) while a wording-only edit does not touch this file.
+ */
+describe('buildDebateStep spend-cap refusal wording (#1372)', () => {
+  function refusingSpendCap(verdict: Extract<SpendCapVerdict, { admitted: false }>): SpendCap {
+    return { check: () => verdict };
+  }
+
+  it('states the budget remedy on a budget refusal, and its kind in the payload', async () => {
+    const { logger, entries } = recordingLogger();
+    const spendCap = refusingSpendCap({
+      admitted: false,
+      spent_usd: 50,
+      budget_usd: 50,
+      reason: 'LLM spend cap reached: $50.00 of $50.00 spent',
+      kind: 'budget',
+    });
+    const step = buildDebateStep(
+      fakeLlmClient(),
+      new InMemoryDebateLogStore(),
+      unlimited(),
+      spendCap,
+      logger,
+    );
+
+    const result = await step({
+      trace_id: 'trace-1',
+      instrument: 'AAPL',
+      views: [makeView()],
+      asset_class: ASSET_CLASS,
+      clock: CLOCK,
+      bar: NOW,
+    });
+
+    expect(result.confidence).toBe(0);
+    const refusal = entries.find((entry) => entry.event === 'debate_refused_spend_cap');
+    expect(refusal).toBeDefined();
+    expect(refusal?.message).toContain(BUDGET_REMEDY);
+    expect(refusal?.message).not.toContain(READ_FAULT_REMEDY);
+    expect(refusal?.message).not.toContain(CORRUPT_LEDGER_REMEDY);
+    expect(refusal?.payload).toMatchObject({ kind: 'budget' });
+  });
+
+  it('states the read-fault remedy on a read-fault refusal, and its kind in the payload', async () => {
+    const { logger, entries } = recordingLogger();
+    const spendCap = refusingSpendCap({
+      admitted: false,
+      spent_usd: Number.NaN,
+      budget_usd: 50,
+      reason: 'spend cap unreadable (fail-closed)',
+      kind: 'read_fault',
+    });
+    const step = buildDebateStep(
+      fakeLlmClient(),
+      new InMemoryDebateLogStore(),
+      unlimited(),
+      spendCap,
+      logger,
+    );
+
+    await step({
+      trace_id: 'trace-1',
+      instrument: 'AAPL',
+      views: [makeView()],
+      asset_class: ASSET_CLASS,
+      clock: CLOCK,
+      bar: NOW,
+    });
+
+    const refusal = entries.find((entry) => entry.event === 'debate_refused_spend_cap');
+    expect(refusal).toBeDefined();
+    expect(refusal?.message).toContain(READ_FAULT_REMEDY);
+    expect(refusal?.message).not.toContain(BUDGET_REMEDY);
+    expect(refusal?.message).not.toContain(CORRUPT_LEDGER_REMEDY);
+    expect(refusal?.payload).toMatchObject({ kind: 'read_fault' });
+  });
+
+  it('states the corrupt-ledger remedy on a corrupt-ledger refusal, and its kind in the payload', async () => {
+    const { logger, entries } = recordingLogger();
+    const spendCap = refusingSpendCap({
+      admitted: false,
+      spent_usd: Number.NaN,
+      budget_usd: 50,
+      reason: 'llm_spend total is not a finite number (fail-closed)',
+      kind: 'corrupt_ledger',
+    });
+    const step = buildDebateStep(
+      fakeLlmClient(),
+      new InMemoryDebateLogStore(),
+      unlimited(),
+      spendCap,
+      logger,
+    );
+
+    await step({
+      trace_id: 'trace-1',
+      instrument: 'AAPL',
+      views: [makeView()],
+      asset_class: ASSET_CLASS,
+      clock: CLOCK,
+      bar: NOW,
+    });
+
+    const refusal = entries.find((entry) => entry.event === 'debate_refused_spend_cap');
+    expect(refusal).toBeDefined();
+    expect(refusal?.message).toContain(CORRUPT_LEDGER_REMEDY);
+    expect(refusal?.message).not.toContain(BUDGET_REMEDY);
+    expect(refusal?.message).not.toContain(READ_FAULT_REMEDY);
+    expect(refusal?.payload).toMatchObject({ kind: 'corrupt_ledger' });
   });
 });
