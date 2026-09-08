@@ -422,6 +422,21 @@ the live check is one more call rather than an investigation.
 > show a bar seconds old, not a quarter of an hour. The delay is therefore **demonstrated**, not
 > inferred from `DelayedByMinutes`.
 >
+> **Confirmed as a *rolling* delay, not a one-off**, by sampling the two most active lines every 150 s
+> for 8 minutes:
+>
+> | sampled at | `NVD3` newest bar / lag | `3OIL` newest bar / lag |
+> | --- | --- | --- |
+> | 07:32:52 | 07:17 — 15.9 m | 07:13 — 19.9 m |
+> | 07:35:23 | 07:19 — 16.4 m | 07:13 — 22.4 m |
+> | 07:37:53 | 07:19 — 18.9 m | 07:13 — 24.9 m |
+> | 07:40:23 | 07:25 — **15.4 m** | 07:23 — 17.4 m |
+>
+> The signature is a **sawtooth with a hard floor at ~15.4 minutes**: lag grows while no new bar
+> arrives, then drops back to ~15–17 m when one lands, and **never once falls below 15 minutes** in
+> eight observations. The sawtooth above the floor is bar sparsity — bars print only when trades
+> occur — while the floor itself is the entitlement. A real-time feed has no such floor.
+>
 > Two further results from the same read:
 >
 > - **`PriceTypeBid`/`PriceTypeAsk: "OldIndicative"` persists mid-session**, with `MarketState: "Open"`
