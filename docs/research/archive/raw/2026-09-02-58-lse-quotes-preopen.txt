@@ -1,3 +1,11 @@
+*** RETRACTED 2026-09-08 (#1036). Collected by a since-deleted scraper (58-lse-quote-snapshot.py) against    ***
+*** an LSE endpoint whose Terms §8 bar programmatic access, personal-use-only retrieval, networked storage,  ***
+*** and incorporation into a work (#999). NOT the pre-open-timing caveat below (which says the numbers are   ***
+*** pessimistic) -- this note says the collection method itself disqualifies them regardless of timing. Kept ***
+*** verbatim per this repo's never-delete rule as the audit record; DO NOT CITE any figure below, and do not ***
+*** re-run the same collection method against this or any equivalent endpoint. Nothing replaces these       ***
+*** numbers until #1035 reports. See docs/research/58-cost-floor-sizing-and-per-instrument-spread.md F6.     ***
+
 #881 — LSE free quote snapshot (api.londonstockexchange.com, unauthenticated)
 Captured: 2026-09-02 05:34 Europe/London
 IN CONTINUOUS SESSION (08:00-16:30 weekdays): False
