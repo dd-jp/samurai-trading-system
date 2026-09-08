@@ -297,11 +297,13 @@ than a US mega-cap's — so the proxy errs optimistic, which is the direction th
 
 ## What could not be measured
 
-- **LSE leveraged-ETP spreads** — no free quote source (G4 above). **CORRECTED 2026-09-02 by
-  [`58-cost-floor-sizing-and-per-instrument-spread.md`](58-cost-floor-sizing-and-per-instrument-spread.md) §F2b:
-  a free unauthenticated LSE endpoint returns bid/offer for all thirty pool lines.** G4's conclusion that this
-  document's figures are a US proxy is unaffected; what changes is that closing the gap no longer needs a paid
-  feed. Doc 58 F6 measures the pool at a median 88.1 bps round trip against 3USL's 15.6 bps.
+- **LSE leveraged-ETP spreads** — no free quote source (G4 above). Doc 58 §F2b found a free unauthenticated LSE
+  endpoint returning bid/offer for all thirty pool lines, but **that endpoint's use, and doc 58's §F6 measurement
+  of it (median 88.1 bps round trip against 3USL's 15.6 bps), are RETRACTED 2026-09-08 by
+  [#1036](https://github.com/dd-jp/samurai-trading-system/issues/1036)** — LSE Terms §8 bars the programmatic
+  access that collected it (#999). G4's conclusion that this document's figures are a US proxy stands unrevised;
+  closing the gap now needs [#1035](https://github.com/dd-jp/samurai-trading-system/issues/1035)'s licensed path,
+  not the deleted free-endpoint scrape.
 - **Realised slippage** — needs live fills. Left as the daily config's declared `coefficient / 4` assumption,
   labelled as such, unchanged in kind. **Doc 58 F1 finds there are none: pipeline-generated fills are ZERO, and
   the paper soak can never supply them** — Alpaca paper books `fee = 0.0` and no bid/ask is persisted anywhere in
