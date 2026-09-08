@@ -232,8 +232,8 @@ export interface BrokerAdapter {
   /**
    * The venue's fill feed. Inclusive of `since` and never dated before it,
    * so a backtest cannot see a fill ahead of simulated T. Re-offering an
-   * already-returned fill is expected — `ingestFills()` dedups on
-   * `broker_fill_id`.
+   * already-returned fill is expected — `ingestFills()`'s `hasFill` gate
+   * dedups on the full `(idempotency_key, broker_fill_id)` pair (#1320).
    *
    * NOT PROMISED, deliberately (#838): that a given lot's fills are dated
    * MONOTONICALLY across successive calls. This port makes an OUTPUT-side
