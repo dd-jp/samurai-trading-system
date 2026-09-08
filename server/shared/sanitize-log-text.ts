@@ -25,8 +25,8 @@ import { truncateForError } from './http/response-errors.js';
  * a bare high-entropy string is NOT matched, because legitimate failure reasons
  * are full of ids, hashes and ISO timestamps.
  *
- * Every quote, and every `}` inside a character class, below is a hex escape
- * (`\x22`, `\x27`, `\x7d`), never literal:
+ * Every quote, every backslash, and every `}` inside a character class,
+ * below is a hex escape (`\x22`, `\x27`, `\x5c`, `\x7d`), never literal:
  * `server/apps/orchestrator/production.test.ts`'s `stripCommentsAndStrings
  * leaves braces balanced on every server source file it strips` fails on a
  * literal one — its hand-rolled stripper can't tell a regex literal from a
@@ -34,14 +34,38 @@ import { truncateForError } from './http/response-errors.js';
  * everything up to its accidental "close", `}` characters included. The `}`
  * in a quantifier (`{0,60}`, `{20,}`, …) is exempt: it pairs with its own
  * `{` and never desyncs the stripper's brace count.
+ *
+ * (#1377) Every key-to-value separator below optionally admits ONE literal
+ * backslash immediately before each quote — `(?:\x5c?[\x22\x27])?`, never a
+ * bare `\x5c?` ahead of an independently-optional quote — because a
+ * credential inside a JSON string that itself contains serialized JSON
+ * arrives with its quotes backslash-escaped
+ * (`\"api_key\":\"skFAKE0000\"`), and a bare `[\x22\x27]?` never matches
+ * past that backslash. Every value class below also excludes `\x5c`, so a
+ * value stops cleanly BEFORE an escaped closing quote rather than consuming
+ * the backslash into the "credential". Two things this does NOT reach,
+ * deliberately: a backslash with no quote following it is never treated as
+ * separator noise (so a Windows path fragment straight after `token:` is
+ * not read as a quote and stays unmasked, same over-masking posture as
+ * every other gap this module accepts); and a TWICE-escaped credential
+ * (`\\\"api_key\\\"` — a JSON string containing a JSON string containing a
+ * JSON string) is not reached either, since only one optional backslash is
+ * admitted per quote. Measured, not inferred: `maskCredentials` on
+ * `{"outer":"{\\\"api_key\\\":\\\"skFAKE0000\\\"}"}` returns it unchanged.
  */
 const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // Telegram bot token in a URL path: `/bot123456:AA...`
   /\bbot\d{4,}:[A-Za-z0-9_-]+/gi,
   // A bare Telegram-shaped token: long digit run, colon, long opaque suffix.
   /\b\d{6,}:[A-Za-z0-9_-]{20,}\b/g,
-  // `Bearer <token>`
-  /\bBearer\s+[^\s,;\x22\x27\x7d\]]+/gi,
+  // `Bearer <token>`. Value class excludes `\x5c` (backslash) as well as the
+  // quotes: an escaped-JSON carrier (#1377) puts the credential's closing
+  // quote as `\x22` PRECEDED by a literal backslash — `"Bearer sk-x"` inside
+  // an already-JSON-stringified string reads as `\"Bearer sk-x\"` — and
+  // without the exclusion the value class (backslash is not otherwise a stop
+  // character) swallows that backslash into the "token", leaving a bare
+  // trailing quote in the output instead of stopping cleanly before it.
+  /\bBearer\s+[^\s,;\x5c\x22\x27\x7d\]]+/gi,
   // `apiKey=x`, `api_secret: x`, `token: x`, `password=x`, `auth: x`, and
   // Alpaca's own header names. `[ \t]*` (not `\s*`) around the operator:
   // `\s` admits a newline, so `token:\n<stack trace line>` would consume the
@@ -58,7 +82,17 @@ const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // query string is the far more common shape this module sees in
   // practice, and a partially-masked credential is still a shorter,
   // less-recoverable leak than the un-truncated version.
-  /\b(?:APCA-API-KEY-ID|APCA-API-SECRET-KEY|api[_-]?key|api[_-]?secret|secret|token|password|passwd|pwd|auth)\b[\x22\x27]?[ \t]*[:=][ \t]*[\x22\x27]?[^\s,;&\x22\x27\x7d\]]+/gi,
+  // (#1377) `(?:\x5c?[\x22\x27])?` replaces the old bare `[\x22\x27]?` on
+  // both sides of the operator: an escaped-JSON carrier puts a literal
+  // backslash directly before each quote (`\"api_key\":\"skFAKE0000\"`), and
+  // the old pattern required a bare quote right after the key, so it never
+  // matched past the backslash at all. The backslash is inside the SAME
+  // optional group as its quote (`\x5c?[\x22\x27]`), not a separate
+  // `\x5c?` ahead of it — a lone backslash with no quote following (a
+  // Windows path fragment after `token:`) must not be treated as separator
+  // noise. Value class also gains `\x5c`: see the Bearer pattern's comment
+  // above for why the value must stop before a backslash, not swallow it.
+  /\b(?:APCA-API-KEY-ID|APCA-API-SECRET-KEY|api[_-]?key|api[_-]?secret|secret|token|password|passwd|pwd|auth)\b(?:\x5c?[\x22\x27])?[ \t]*[:=][ \t]*(?:\x5c?[\x22\x27])?[^\s,;&\x5c\x22\x27\x7d\]]+/gi,
   // `clientSecret`/`client_secret`, `accessToken`/`access_token`,
   // `refreshToken`/`refresh_token`, and an underscore-PREFIXED compound
   // (`X_CLIENT_SECRET`): the bareword pattern above requires a `\b` before
@@ -74,7 +108,9 @@ const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // `maxTokens` in `market-intelligence/grok/x-search-client.ts`) — a
   // suffix rule would mask both. `[ \t]*`/`&` reasoning: see the bareword
   // pattern above.
-  /(?<![A-Za-z0-9])(?:client[_-]?secret|access[_-]?token|refresh[_-]?token)[\x22\x27]?[ \t]*[:=][ \t]*[\x22\x27]?[^\s,;&\x22\x27\x7d\]]+/gi,
+  // (#1377) same `(?:\x5c?[\x22\x27])?`/`\x5c` treatment as the bareword
+  // pattern above, for the identical escaped-JSON reason.
+  /(?<![A-Za-z0-9])(?:client[_-]?secret|access[_-]?token|refresh[_-]?token)(?:\x5c?[\x22\x27])?[ \t]*[:=][ \t]*(?:\x5c?[\x22\x27])?[^\s,;&\x5c\x22\x27\x7d\]]+/gi,
   // Underscore-joined ALL-CAPS env-var names (`ALPACA_API_SECRET`,
   // `SAXO_OPENAPI_TOKEN`, `TELEGRAM_BOT_TOKEN` — grepped from this repo's
   // real `process.env.*` reads, not just the one Alpaca name; `DB_PASSWORD`
@@ -90,7 +126,9 @@ const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // field name whose case this codebase controls. The lowercase-anchored
   // pattern below closes part of that gap for real credential shapes,
   // deliberately without reintroducing the `next_page_token` regression.
-  /\b[A-Z][A-Z0-9_]{0,60}_(?:SECRET_KEY|API_KEY|SECRET|TOKEN|PASSWORD|PASSWD)\b[\x22\x27]?[ \t]*[:=][ \t]*[\x22\x27]?[^\s,;&\x22\x27\x7d\]]+/g,
+  // (#1377) same `(?:\x5c?[\x22\x27])?`/`\x5c` treatment as the bareword
+  // pattern above, for the identical escaped-JSON reason.
+  /\b[A-Z][A-Z0-9_]{0,60}_(?:SECRET_KEY|API_KEY|SECRET|TOKEN|PASSWORD|PASSWD)\b(?:\x5c?[\x22\x27])?[ \t]*[:=][ \t]*(?:\x5c?[\x22\x27])?[^\s,;&\x5c\x22\x27\x7d\]]+/g,
   // The lowercase/mixed-case counterpart to the all-caps pattern above, for
   // exactly three suffixes: `_secret_key`, `_api_key`, `_api_secret`
   // (`polygon_api_key`, `alpaca_api_secret_key`, `apca_api_secret_key`,
@@ -110,7 +148,9 @@ const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // `Polygon_Api_Secret` — all measured unmasked) — only all-lowercase and
   // all-caps are covered, the two shapes this codebase's own env-var
   // reads and pagination cursors actually use.
-  /\b[a-z][a-z0-9_]{0,60}_(?:secret_key|api_key|api_secret)\b[\x22\x27]?[ \t]*[:=][ \t]*[\x22\x27]?[^\s,;&\x22\x27\x7d\]]+/g,
+  // (#1377) same `(?:\x5c?[\x22\x27])?`/`\x5c` treatment as the bareword
+  // pattern above, for the identical escaped-JSON reason.
+  /\b[a-z][a-z0-9_]{0,60}_(?:secret_key|api_key|api_secret)\b(?:\x5c?[\x22\x27])?[ \t]*[:=][ \t]*(?:\x5c?[\x22\x27])?[^\s,;&\x5c\x22\x27\x7d\]]+/g,
   // `Authorization: Basic <base64>` / `Authorization: Token <key>`
   // (`tools/backtest/http-tiingo-client.ts` sends the latter). Anchored to
   // a preceding `Authorization` key — lookbehind, so it's not consumed and
@@ -134,7 +174,11 @@ const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // key-to-value separator to begin with — the word itself is the anchor
   // — so neither F7 nor F8 named it, and it shares this pattern's newline
   // and `&` gaps unchanged.
-  /(?<=\bAuthorization[\x22\x27]?[ \t]*[:=][ \t]*[\x22\x27]?)(?:Basic|Token)\s+[^\s,;&\x22\x27\x7d\]]+/gi,
+  // (#1377) same `(?:\x5c?[\x22\x27])?` treatment on the lookbehind's own
+  // key-to-value separator (an escaped-JSON `Authorization` header reads
+  // `\"Authorization\":\"Basic ...`), and the same `\x5c` value-class
+  // addition, for the identical escaped-JSON reason.
+  /(?<=\bAuthorization(?:\x5c?[\x22\x27])?[ \t]*[:=][ \t]*(?:\x5c?[\x22\x27])?)(?:Basic|Token)\s+[^\s,;&\x5c\x22\x27\x7d\]]+/gi,
   // `scheme://user:PASSWORD@host` DSNs: matches only the password segment
   // (via look-around), so the scheme, username and host — the parts an
   // operator actually needs to identify which DB a connection error came
@@ -144,7 +188,12 @@ const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // sitting next to other JSON fields (`{"dsn":"redis://h:6379","email":
   // "a@b.com"}`) over-matches through the closing quote and the next key,
   // deleting the port and merging into the following field's `@`.
-  /(?<=:\/\/[^\s:@/]{0,100}:)[^\s@/\x22\x27,;]{1,200}(?=@)/g,
+  // (#1377) `\x5c` added to the value class for the same escaped-JSON reason
+  // as the patterns above: an escaped DSN (`"dsn":"...://u:\"pw\"@host..."`
+  // is not a shape this codebase produces, but a value class that admits a
+  // backslash would still swallow one from any adjacent escaped structure
+  // rather than stopping before it, same as every other pattern here.
+  /(?<=:\/\/[^\s:@/]{0,100}:)[^\s@/\x22\x27,;\x5c]{1,200}(?=@)/g,
 ];
 
 /**
