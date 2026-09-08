@@ -92,15 +92,27 @@ ALTER TABLE flatten_submissions
 -- `closed_trades` first: a flattened lot ends there, and `open_positions`
 -- still holds the row only until `sweepTerminalPositions` removes it, so the
 -- closed record is the longer-lived witness. `LIMIT 1` because a multi-lot
--- flatten's lots are all one arm by construction (one arm's `flattenAll`
--- builds the list) — the limit keeps the answer independent of scan order
--- rather than picking between disagreeing arms.
+-- flatten's lots are all one arm by construction: the sole writer of
+-- `lot_idempotency_keys` is `writeAheadFlatten`, called from exactly one
+-- place (`execute.ts`'s `executeExit`), and its list is `heldLots` — the
+-- arm-scoped `getOpenPositions()` filtered by instrument. The two arms' key
+-- spaces are disjoint on top of that: `computeIdempotencyKey` (#753) hashes
+-- a three-field payload for `'live'` and a four-field one carrying `arm` for
+-- `'control'`, so no key can be read as belonging to both. A cross-arm lot
+-- list is unconstructible. The limit therefore picks an arbitrary row, and
+-- that is sound because there is nothing to pick BETWEEN — not because it
+-- fixes scan order, which it does not: `["lot-L","lot-c"]` and its reverse
+-- resolve to different arms.
 --
 -- Guarded by `json_valid`, not merely `IS NOT NULL`: `lot_idempotency_keys`
 -- is nullable AND untrusted enough that `getFlattenAttribution` validates it
--- on every read (#524/#571). `json_each` over a malformed value raises, and a
--- raising migration bricks the DB it runs on; a row that cannot be parsed
--- simply keeps the `'live'` default, the same as one whose lots have aged out.
+-- on every read (#524/#571). `json_each` over a malformed value raises.
+-- `runMigrations` runs each migration file inside `db.transaction()`, so a
+-- raise rolls back and leaves no half-applied version — the damage is not a
+-- bricked DB but a refusal to open one: nothing catches the throw between
+-- there and `openSharedStore`, so the orchestrator would not boot on the host
+-- holding that row, on this pass or any later one. Guarded, such a row simply
+-- keeps the `'live'` default, the same as one whose lots have aged out.
 UPDATE flatten_submissions
    SET arm = COALESCE(
          (SELECT ct.arm

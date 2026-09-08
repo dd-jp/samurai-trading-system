@@ -384,7 +384,13 @@ describe('openSharedStore', () => {
   // masked by it), a lot present in
   // NEITHER table — `sweepTerminalPositions` deletes from `open_positions`,
   // so an aged-out lot is underivable and must fall back rather than throw —
-  // and a NULL `lot_idempotency_keys`, which `json_each` would raise over.
+  // and a NULL `lot_idempotency_keys`. The last two reach `'live'` by
+  // DIFFERENT routes, which is why both are seeded: the aged-out row passes
+  // the `UPDATE`'s `WHERE` and lands on COALESCE's third branch, while the
+  // NULL row is excluded by that `WHERE` twice over (`IS NOT NULL`, and
+  // `json_valid(NULL)` is itself NULL) and so never runs the UPDATE at all,
+  // keeping the column's DEFAULT. `json_each(NULL)` does not raise — it
+  // yields zero rows; only a malformed value raises.
   it('migration 0050 backfills each flatten row to its lots’ arm, falling back to live (#1124)', () => {
     const raw = new BetterSqlite3(':memory:');
     const preCutoverDir = mkdtempSync(join(tmpdir(), 'samurai-migrations-pre-0050-'));
