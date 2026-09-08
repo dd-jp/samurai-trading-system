@@ -108,8 +108,14 @@ const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // credentials. The lookbehind allows an optional quote and `:`/`=` (with
   // optional surrounding space and a trailing quote) between the key and
   // the scheme word, so it reaches the JSON-quoted and single-quoted forms
-  // a bare `Authorization:\s*` lookbehind cannot. `[ \t]*`/`&` reasoning:
-  // see the bareword pattern above.
+  // a bare `Authorization:\s*` lookbehind cannot. The lookbehind's own
+  // key-to-value separator got the same `[ \t]*`/`&` treatment as the
+  // bareword pattern above, for the same reason. The `\s+` AFTER the scheme
+  // word (`Basic`/`Token`) is untouched by that fix and still spans a
+  // newline — out of scope for round-2's F7, which named the four
+  // key-to-value separators, not this scheme-to-value one; a stack trace
+  // straight after `Authorization: Basic` (no value on that line) would
+  // still lose its first word to this pattern.
   /(?<=\bAuthorization[\x22\x27]?[ \t]*[:=][ \t]*[\x22\x27]?)(?:Basic|Token)\s+[^\s,;&\x22\x27\x7d\]]+/gi,
   // `scheme://user:PASSWORD@host` DSNs: matches only the password segment
   // (via look-around), so the scheme, username and host — the parts an

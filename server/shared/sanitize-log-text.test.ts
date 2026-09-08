@@ -98,16 +98,20 @@ describe('camelCase/underscore keys, Basic/Token auth and DSN passwords (#1367)'
       },
       {
         // Round-2 review (F3): the suffix list was extended to close this
-        // real gap — `password`/`passwd` env names — not widened to a bare
+        // gap — `password`/`passwd` env names — not widened to a bare
         // `_KEY`, which would over-mask `SORT_KEY`/`ACCOUNT_KEY`-shaped
         // names (see the negative rows for what stayed deliberately out).
-        name: 'real env-var key: DB_PASSWORD (_PASSWORD suffix)',
+        // Synthetic name, unlike the two rows above: grepping this repo's
+        // `process.env.*` reads for a `_PASSWORD`/`_PASSWD` name today
+        // returns nothing, so this pins the pattern shape, not a name in
+        // the tree.
+        name: 'synthetic env-var key: DB_PASSWORD (_PASSWORD suffix)',
         input: '{"engine":"postgres","DB_PASSWORD":"skFAKE0000"}',
         secret: 'skFAKE0000',
         survives: '"engine":"postgres"',
       },
       {
-        name: 'real env-var key: APP_PASSWD (_PASSWD suffix)',
+        name: 'synthetic env-var key: APP_PASSWD (_PASSWD suffix)',
         input: '{"service":"redis","APP_PASSWD":"skFAKE0000"}',
         secret: 'skFAKE0000',
         survives: '"service":"redis"',
