@@ -205,6 +205,7 @@ describe('openSharedStore', () => {
       { version: 47 },
       { version: 48 },
       { version: 49 },
+      { version: 50 },
     ]);
     expect(runMigrations(db)).toEqual([]);
     expect(db.prepare('SELECT version FROM schema_migrations').all()).toEqual([
@@ -257,6 +258,7 @@ describe('openSharedStore', () => {
       { version: 47 },
       { version: 48 },
       { version: 49 },
+      { version: 50 },
     ]);
   });
 
@@ -347,8 +349,9 @@ describe('openSharedStore', () => {
           .run(key, arm);
       }
 
-      // Apply 0049 (and only 0049 — 0001..0048 are already recorded).
-      expect(runMigrations(raw, MIGRATIONS_DIR)).toEqual([49]);
+      // Apply everything after 0048 — 0001..0048 are already recorded, so this
+      // runs 0049 and whatever has shipped since (0050, #1124's arm column).
+      expect(runMigrations(raw, MIGRATIONS_DIR)).toEqual([49, 50]);
 
       expect(
         raw

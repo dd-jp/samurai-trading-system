@@ -172,6 +172,15 @@ export interface SharedStore {
    * `'error'` rows are excluded outright: that status means the flatten
    * PROVABLY never reached the broker (`resolveFlattenError`'s own doc), so
    * there is nothing left for the venue to answer about it.
+   *
+   * Scoped to the calling instance's own arm (migration 0050, #1124) — this
+   * is a SCAN over `flatten_submissions`, not a key-based lookup, so it needs
+   * the same `arm` filter `getOpenPositions()`/`getUnprotectedResidualLots()`
+   * already carry (`SqliteExecutionStore`'s own class doc). Before this, the
+   * live arm's periodic `reconcile()` could read a still-unresolved
+   * CONTROL-arm row and ask ITS OWN broker about a `client_order_id` that
+   * broker never received — a genuine "no such order" from the wrong venue,
+   * not a defect in whichever adapter actually held the order.
    */
   getUnresolvedFlattens(): Promise<UnresolvedFlattenSubmission[]>;
   /**

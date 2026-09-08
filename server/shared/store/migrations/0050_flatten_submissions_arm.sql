@@ -1,0 +1,68 @@
+-- Closes the cross-arm leak #1124 found: `flatten_submissions` had no `arm`
+-- column, and `getUnresolvedFlattens()` — unlike `getOpenPositions()` and
+-- `getUnprotectedResidualLots()` (migration 0033's own doc names both as the
+-- arm-scoped SCANS) — read the whole table with no `arm` predicate at all.
+--
+-- ## The mechanism this closes
+--
+-- The live arm's periodic `reconcile()` (fill-sync.ts's `fillSync`, over
+-- `AlpacaBrokerAdapter`) and the control arm's own periodic `reconcile()`
+-- (`controlFillSync`, over `SimulatedBrokerAdapter`) both read
+-- `getUnresolvedFlattens()` against the ONE shared `config.db` connection
+-- (`production.ts` stamps `guardedStore(config.db, 'execution')` into both
+-- `SqliteExecutionStore`s). Unfiltered, EITHER arm's pass would pick up the
+-- OTHER arm's still-unresolved row and ask its OWN broker about a
+-- `client_order_id` that broker never received:
+--
+-- - A control-arm flatten's row, read by the live arm's pass, gets asked of
+--   the REAL Alpaca venue — which genuinely has no such order (it was placed
+--   against the SIMULATED book), so it genuinely answers "no such order".
+--   That is #1124's observed `action: "undetermined"` line: not a race in
+--   `SimulatedBrokerAdapter`'s `accepted` map (that map is never asked in
+--   this branch at all), but the WRONG adapter being asked about a key it
+--   was never going to hold. The control arm's OWN later pass then asks the
+--   RIGHT adapter and adopts correctly — which is why the two lines carry
+--   the SAME `idempotency_key` and both self-resolve within one poll
+--   interval, and why `fill-sync.ts`'s shared `RECONCILE_TRACE_ID` on both
+--   loops (a separate, non-load-bearing confusion, left as `runPoll`'s own
+--   follow-up) made the two independent passes look like one.
+-- - The narrower, unobserved-but-real direction: if the live arm's pass reads
+--   a control row still at `'submitting'` (the control's own `submitFlatten`
+--   has not yet returned), the SAME wrong-broker null looks like "the
+--   write-ahead never landed" and the live pass calls
+--   `resolveFlattenError`, durably terminating a row the control's own
+--   in-flight submission was about to resolve to `'submitted'` moments
+--   later — an unfiltered scan does not merely mislabel a divergence, it can
+--   race a live write.
+--
+-- `open_positions`/`closed_trades` never had this hole (migration 0033
+-- already scopes both SCANS the arms' books read from) — `flatten_submissions`
+-- is the one table #753 missed, because it predates #753 (migration 0019,
+-- months before falsifier arm 2) and is read only by SCANS, not by an
+-- OpenPosition-shaped per-instrument comparison that would have surfaced the
+-- gap the way `getOpenPositions()`'s own arm scoping did.
+--
+-- ## Why DEFAULT 'live', not nullable — same reasoning as migration 0033
+--
+-- Every row already in this table was written before the control arm's own
+-- flatten path existed to write one under `'control'` at the time this
+-- migration runs in a fresh soak, so `'live'` is the true backfilled value,
+-- not a placeholder.
+--
+-- ## Key-based reads/writes stay unfiltered
+--
+-- `resolveFlattenSubmitted`, `resolveFlattenError`, `isRetryableFlattenError`,
+-- `recordFlattenOrderStateObserved`, `markFlattenFillsSwept` and
+-- `getFlattenAttribution` all take an `idempotency_key` naming exactly one
+-- row — `arm` is a hash input to that key (#753, `computeIdempotencyKey`), so
+-- a key-based call cannot cross arms even unfiltered, the same invariant
+-- migration 0033 already relies on for `findByKey`/`updatePositionState`.
+-- Only `getUnresolvedFlattens()`, the one SCAN over this table, needed the
+-- predicate.
+ALTER TABLE flatten_submissions
+  ADD COLUMN arm TEXT NOT NULL DEFAULT 'live' CHECK(arm IN ('live', 'control'));
+
+-- `getUnresolvedFlattens()`'s own WHERE shape is `arm = ? AND (status = ... OR
+-- (status = ... AND fills_swept_at IS NULL))` — `arm` leads for the same
+-- two-value-discriminator reason migration 0033's indexes lead with it.
+CREATE INDEX idx_flatten_submissions_arm ON flatten_submissions(arm, status);

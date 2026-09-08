@@ -1154,6 +1154,39 @@ describe('SqliteExecutionStore', () => {
       ]);
     });
 
+    /**
+     * #1124: `getUnresolvedFlattens()` is a SCAN over `flatten_submissions`,
+     * the same shape as `getOpenPositions()` above — and, unlike
+     * `getOpenPositions()`, it was NOT arm-scoped before migration 0050. Left
+     * unfiltered, the live arm's periodic `reconcile()` read the control
+     * arm's still-unresolved flatten row and asked ITS OWN (real) broker
+     * about a `client_order_id` that broker never received — a genuine
+     * "no such order" from the WRONG venue, not a race in whichever
+     * adapter actually held the order. This is the mechanism named on the
+     * issue: two arms' reconcile passes sharing one unfiltered scan over one
+     * `flatten_submissions` table, not a lost/re-found entry in a single
+     * `SimulatedBrokerAdapter.accepted` map.
+     */
+    it('keeps each arm’s unresolved flattens invisible to the other reconcile pass', async () => {
+      const { live, control } = makeArmedStores();
+
+      await live.writeAheadFlatten(makeFlattenWriteAhead({ idempotency_key: 'live-flatten' }));
+      await control.writeAheadFlatten(
+        makeFlattenWriteAhead({ idempotency_key: 'control-flatten' }),
+      );
+
+      // Before the fix, EACH scan below returned BOTH rows — the live arm's
+      // reconcile() would have asked its own (real) broker about
+      // 'control-flatten', and the control arm's would have asked its own
+      // (simulated) broker about 'live-flatten'.
+      expect((await live.getUnresolvedFlattens()).map((r) => r.idempotency_key)).toEqual([
+        'live-flatten',
+      ]);
+      expect((await control.getUnresolvedFlattens()).map((r) => r.idempotency_key)).toEqual([
+        'control-flatten',
+      ]);
+    });
+
     it('defaults to the live arm, so every pre-#753 row and caller is unchanged', async () => {
       const { db, store } = makeStore();
       await store.writeAheadPosition(makePosition());
