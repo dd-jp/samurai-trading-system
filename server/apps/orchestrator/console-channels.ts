@@ -54,7 +54,7 @@ import type {
 } from '../../pipeline/verdict/index.js';
 import type { CiiScoreProvider } from '../../providers/market-intelligence/index.js';
 import { currentTraceId } from '../../shared/index.js';
-import { breachStage } from './breach-alert-channel.js';
+import { breachLogMessage, breachStage } from './breach-alert-channel.js';
 import type { HeartbeatChannel } from './heartbeat.js';
 import type { OrphanAlertChannel, OrphanGoVerdict } from './orphan-verdict-scan.js';
 import type { AnalystSkipAlert, AnalystSkipAlertChannel } from './production/analysts-adapter.js';
@@ -638,15 +638,23 @@ export class LoggingCalendarFallbackAlertChannel implements CalendarFallbackAler
 }
 
 /**
- * A kill-threshold breach (#93), written to the log at `error`.
+ * The kill-line batch's breach (#93) AND the LLM spend cap's refusal both
+ * post through this port, written to the log at `error`.
  *
- * `error`, for `LoggingOrphanAlertChannel`'s reason and more so: a breach
- * means the strategy's own validation says its edge may be gone — PBO over
- * its line, out-of-sample Sharpe under it, a statistically insignificant
- * Deflated Sharpe, or live performance diverging from the backtest that
- * justified the config. The Feedback Loop has already defensively tightened
- * every risk threshold by the time this fires; the kill/rework call is the
- * human's, and this is how the human hears about it.
+ * `error` for both, for `LoggingOrphanAlertChannel`'s reason and more so: a
+ * kill-line breach means the strategy's own validation says its edge may be
+ * gone — PBO over its line, out-of-sample Sharpe under it, a statistically
+ * insignificant Deflated Sharpe, or live performance diverging from the
+ * backtest that justified the config — and the kill/rework call is the
+ * human's. A spend-cap breach means the run has stopped admitting new LLM
+ * calls until whatever triggered the refusal is resolved. Neither should
+ * wait for someone to notice a quiet heartbeat.
+ *
+ * `message` discriminates on which happened (`breachLogMessage`,
+ * breach-alert-channel.ts — see its doc for what each case actually claims).
+ * `event` stays `kill_threshold_breach` for both callers: no production code
+ * reads it (only a test filters on it), so renaming it is a separate,
+ * out-of-scope change.
  *
  * Same caveat as the other log-only stand-ins: a log line nobody tails is not
  * an alert. `TradeChannelBreachAlert` (breach-alert-channel.ts) is the
@@ -658,33 +666,22 @@ export class LoggingBreachAlertChannel implements BreachAlertChannel {
 
   postBreachAlert(alert: BreachAlert): void {
     this.logger.log({
-      // Mixed, so it is answered at runtime (#1280). The daily kill-line batch
-      // belongs to no single tick and keeps the synthetic trace the feedback
-      // cycle already logs under — but `llm_spend_cap` is raised from
-      // `SqliteSpendCap#refuse`, whose own doc says it runs "inside the tick",
-      // and that breach must join the debate that spent the last of the
-      // budget. This comment previously claimed the daily batch was the only
-      // caller, which the spend-cap wiring (production.ts) falsifies.
-      //
-      // There is a third provenance the fallback names wrongly: `check()` also
-      // runs at boot via `startingTotal()`, which refuses — and so breaches —
-      // on an already-spent or unreadable budget with no ambient id, landing on
-      // `feedback-cycle`. Boot IS distinguishable from the daily cycle here —
-      // no ambient id AND an all-`llm_spend_cap` list can only be boot, since
-      // every other `check()` caller runs under an ambient id (spend-cap.ts's
-      // `check()` states that property). Deliberately not acted on: deriving a
-      // second discriminant at a log site nothing pins is exactly the defect
-      // class this ticket closes. The fix is a provenance field on
-      // `BreachAlert` (#1343), which makes the port say it rather than this
-      // line infer it.
+      // Mixed, so it is answered at runtime (#1280): the daily kill-line
+      // batch keeps the synthetic `feedback-cycle` trace it already logs
+      // under; an `llm_spend_cap` breach is raised inside a tick by
+      // `SqliteSpendCap#refuse` (spend-cap.ts) and joins that trace via
+      // `breachStage`. A third provenance — boot's `startingTotal()`, which
+      // has no ambient trace id — lands on the `feedback-cycle` fallback
+      // below and is indistinguishable from the daily batch at this site;
+      // `BreachAlert` carries no field to resolve it, and adding one is out
+      // of this ticket's scope (see `classifyBreach`'s doc,
+      // breach-alert-channel.ts, for what #1343 fixes instead: the wording).
       trace_id: currentTraceId() ?? 'feedback-cycle',
       // Derived for the same reason the trace is (#1280) — see `breachStage`.
       stage: breachStage(alert),
       event: 'kill_threshold_breach',
       level: 'error',
-      message:
-        'kill-threshold breach — risk thresholds auto-tightened; review the strategy and ' +
-        'decide kill or rework (no automatic kill is ever applied)',
+      message: breachLogMessage(alert.breaches),
       payload: {
         breaches: alert.breaches,
         reported_at: alert.reported_at.toISOString(),

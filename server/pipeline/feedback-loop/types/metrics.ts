@@ -43,11 +43,14 @@ export interface RevalidationSnapshot {
 
 /**
  * Fire-and-forget human alert on a kill-threshold breach (spec story 13, "the
- * trade channel"). Still a separate port from `LoosenNotificationChannel`
- * even though both are now outbound-only: they carry different events to
- * different urgencies — a kill-line breach is the edge dying, a loosening
- * notice is a dial that moved — and #639 split them precisely so that
- * removing the loosen gate could not take breach alerting with it.
+ * trade channel") — also posted to by `SqliteSpendCap`'s LLM spend-cap
+ * refusal (#1343; see `classifyBreach`, breach-alert-channel.ts, for how the
+ * two are told apart at the alert-text surfaces). Still a separate port from
+ * `LoosenNotificationChannel` even though both are now outbound-only: they
+ * carry different events to different urgencies — a kill-line breach is the
+ * edge dying, a loosening notice is a dial that moved — and #639 split them
+ * precisely so that removing the loosen gate could not take breach alerting
+ * with it.
  */
 export interface BreachAlertChannel {
   postBreachAlert(alert: BreachAlert): void;

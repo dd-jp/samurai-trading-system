@@ -443,4 +443,26 @@ describe('LoggingBreachAlertChannel', () => {
 
     expect(logger.entries.map((entry) => entry.stage)).toEqual(['debate', 'feedback-loop']);
   });
+
+  // #1343: this line told the operator "risk thresholds auto-tightened" on
+  // the spend-cap caller, where `SqliteSpendCap#refuse` tightens none.
+  it('does not claim auto-tighten on the spend-cap caller, and does claim it on the kill-line caller', () => {
+    const logger = makeLogger();
+
+    new LoggingBreachAlertChannel(logger).postBreachAlert(alert);
+    new LoggingBreachAlertChannel(logger).postBreachAlert({
+      breaches: ['pbo_over_max'],
+      reported_at: alert.reported_at,
+    });
+
+    const [spendCapMessage, killLineMessage] = logger.entries.map((entry) => entry.message);
+    expect(spendCapMessage).not.toContain('auto-tightened');
+    expect(spendCapMessage).toMatch(/spend[- ]cap/i);
+    expect(killLineMessage).toContain('auto-tightened');
+    expect(killLineMessage).not.toMatch(/spend[- ]cap/i);
+    expect(killLineMessage).toBe(
+      'kill-threshold breach — risk thresholds auto-tightened; review the strategy and ' +
+        'decide kill or rework (no automatic kill is ever applied)',
+    );
+  });
 });
