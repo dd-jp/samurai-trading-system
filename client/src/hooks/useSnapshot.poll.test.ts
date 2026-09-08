@@ -64,20 +64,52 @@ function pollDrivenClock(payloads: Parameters<typeof fakeFetch>[0]): {
  * holds, flushing microtasks (`act`) after every step so a poll's own
  * promise chain settles before the next tick is considered.
  *
- * One tick can never straddle both a poll's start and its own
- * `INTERVAL_MS * STALE_AFTER_MISSED_POLLS` timeout budget, so stopping the
- * instant `predicate` is satisfied always leaves any timer that just fired
- * with its full budget ahead of it — the caller can act on that state
- * (resolve a gated fetch, read `error`) without a later, test-uncontrolled
- * tick racing in first. `step < 20` is a generous bound (400ms of virtual
- * time) against a `predicate` that never becomes true, not a tuned value.
+ * `poll()` only ever starts on an interval-tick boundary — a multiple of
+ * `INTERVAL_MS` — so a poll that starts on the step where `predicate` first
+ * becomes true always has its full `INTERVAL_MS * STALE_AFTER_MISSED_POLLS`
+ * timeout still ahead of it: that timeout is a LATER multiple of
+ * `INTERVAL_MS`, and a single `INTERVAL_MS` step cannot reach it in the same
+ * step it started in. Stopping the instant `predicate` holds therefore
+ * always leaves that poll's timeout un-fired, whatever order the fake-timer
+ * engine processes same-instant timers in.
+ *
+ * Throws instead of returning silently on exhaustion, so a `predicate` that
+ * never becomes true fails here — naming the loop — rather than surfacing
+ * later as an assertion on state the loop never reached.
  */
 async function stepFakeTimersUntil(predicate: () => boolean): Promise<void> {
-  for (let step = 0; !predicate() && step < 20; step += 1) {
+  const MAX_STEPS = 20; // 400ms of virtual time; generous, not tuned.
+  for (let step = 0; step < MAX_STEPS; step += 1) {
+    if (predicate()) return;
     await act(async () => {
       await vi.advanceTimersByTimeAsync(INTERVAL_MS);
     });
   }
+  if (predicate()) return;
+  throw new Error(`stepFakeTimersUntil: predicate still false after ${MAX_STEPS} steps`);
+}
+
+/**
+ * Repeatedly flushes microtasks via a zero-length fake-timer advance —
+ * crossing no virtual-time boundary, so no timer already scheduled can fire
+ * here — until `predicate` holds.
+ *
+ * A gated fetch's resolution reaches `result.current` through several
+ * chained awaits inside the hook (the gate, `response.json()`, the
+ * `timedOut` check, `setState`). A fixed flush count would tie this to that
+ * chain's exact length and silently under-flush if it ever grew by one hop;
+ * looping on the actual observable removes that coupling.
+ */
+async function flushMicrotasksUntil(predicate: () => boolean): Promise<void> {
+  const MAX_FLUSHES = 10;
+  for (let flush = 0; flush < MAX_FLUSHES; flush += 1) {
+    if (predicate()) return;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+  }
+  if (predicate()) return;
+  throw new Error(`flushMicrotasksUntil: predicate still false after ${MAX_FLUSHES} flushes`);
 }
 
 /**
@@ -145,12 +177,15 @@ describe('useSnapshot polling', () => {
     // is the behaviour that says so: TWO consecutive hangs, then a payload
     // that must be applied rather than swallowed by a previous poll's verdict.
     //
-    // #1362: this used to run on real timers with `fakeFetch`'s instantly-
-    // resolving third payload, racing the real 40ms budget against however
-    // long the box took to actually run that resolution — flaking under
-    // full-suite load, not on a hook defect. Fake timers plus a fetch the
-    // test gates itself remove the race: the third payload lands only when
-    // this test resolves it, never on wall-clock luck.
+    // #1362: this used to run on real timers, and `waitFor(snapshot !== null)`
+    // followed by `expect(error).toBeNull()` are two SEPARATE reads of
+    // `result.current`, a tick apart. Under full-suite load, a poll AFTER the
+    // one `waitFor` had already observed succeeding could have its own
+    // resolution delayed past its 40ms budget; its timeout handler spreads
+    // `prev`, so `snapshot` stayed set while `error` was overwritten by that
+    // later poll's timeout — a race between two assertions, not a hook
+    // defect. Fake timers plus a fetch the test gates itself mean no poll
+    // this test does not explicitly drive can ever fire between them.
     vi.useFakeTimers();
     try {
       const timeoutMs = INTERVAL_MS * STALE_AFTER_MISSED_POLLS;
@@ -168,13 +203,10 @@ describe('useSnapshot polling', () => {
       expect(result.current.snapshot).toBeNull();
       expect(result.current.error).toBe(`snapshot request timed out after ${timeoutMs}ms`);
 
-      await act(async () => {
-        land();
-        await vi.advanceTimersByTimeAsync(0);
-        await vi.advanceTimersByTimeAsync(0);
-      });
+      land();
+      await flushMicrotasksUntil(() => result.current.snapshot !== null);
 
-      expect(result.current.snapshot).not.toBeNull();
+      expect(result.current.snapshot?.as_of).toBe(landing.as_of);
       expect(result.current.error).toBeNull();
     } finally {
       vi.useRealTimers();
