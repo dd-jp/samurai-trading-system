@@ -122,8 +122,27 @@ export interface FillSyncDeps {
   logger: Logger;
   /** Gap between the END of one poll and the start of the next. */
   fillPollIntervalMs: number;
+  /**
+   * `trace_id` for this loop's periodic `reconcile()` log lines (divergence,
+   * completion, sweep). Required rather than defaulted, matching
+   * `buildExecutionSurface`'s own `traceId` parameter (#1321) — this loop is
+   * shared by both arms (production.ts), and a default here is exactly what
+   * let both arms log under one literal (`RECONCILE_TRACE_ID`) despite the
+   * control arm's execution surface already carrying its own
+   * `CONTROL_RECONCILE_TRACE_ID`.
+   */
+  reconcileTraceId: string;
+  /** `trace_id` for this loop's own fill-poll log lines. Same reasoning as `reconcileTraceId`. */
+  fillSyncTraceId: string;
 }
 
+/**
+ * The live arm's canonical trace ids, passed explicitly by production.ts —
+ * see `FillSyncDeps.reconcileTraceId`/`fillSyncTraceId` above for why these
+ * are no longer read directly by this module. Also the `traceId` production.ts
+ * passes to `buildExecutionSurface` for the live arm's own execution-surface
+ * writes, which is a separate labelling and unaffected by #1321.
+ */
 export const FILL_SYNC_TRACE_ID = 'fill-sync';
 export const RECONCILE_TRACE_ID = 'reconcile';
 
@@ -140,12 +159,19 @@ export const RECONCILE_TRACE_ID = 'reconcile';
 export async function runStartupReconcile(deps: {
   execution: FillSyncSurface;
   logger: Logger;
+  /**
+   * `trace_id` for this call's own log lines — see `FillSyncDeps.reconcileTraceId`
+   * (#1321). The caller supplies its arm's constant (`RECONCILE_TRACE_ID` for
+   * the live arm, `CONTROL_RECONCILE_TRACE_ID` for the control arm) rather
+   * than this module defaulting to one value for both.
+   */
+  traceId: string;
 }): Promise<ReconcileReport> {
   const report = await deps.execution.reconcile();
 
   for (const divergence of report.divergences) {
     deps.logger.log({
-      trace_id: RECONCILE_TRACE_ID,
+      trace_id: deps.traceId,
       stage: 'execution',
       event: 'reconcile_divergence',
       // `undetermined` means the adapter could not answer and a human must
@@ -157,7 +183,7 @@ export async function runStartupReconcile(deps: {
   }
 
   deps.logger.log({
-    trace_id: RECONCILE_TRACE_ID,
+    trace_id: deps.traceId,
     stage: 'execution',
     level: 'info',
     message: 'startup reconcile complete',
@@ -172,7 +198,7 @@ export async function runStartupReconcile(deps: {
   // dedup/no-spam convention in this file.
   if (report.swept > 0) {
     deps.logger.log({
-      trace_id: RECONCILE_TRACE_ID,
+      trace_id: deps.traceId,
       stage: 'execution',
       level: 'info',
       message: 'reconcile: terminal-row sweep',
@@ -255,7 +281,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
         if (lastReconcileAction.get(dedupKey) === divergence.action) continue;
         lastReconcileAction.set(dedupKey, divergence.action);
         deps.logger.log({
-          trace_id: RECONCILE_TRACE_ID,
+          trace_id: deps.reconcileTraceId,
           stage: 'execution',
           event: 'reconcile_divergence',
           // `undetermined` means the adapter could not answer and a human
@@ -275,7 +301,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
       // operator-visible line, logged only when it deleted something.
       if (report.swept > 0) {
         deps.logger.log({
-          trace_id: RECONCILE_TRACE_ID,
+          trace_id: deps.reconcileTraceId,
           stage: 'execution',
           level: 'info',
           message: 'reconcile: terminal-row sweep',
@@ -284,7 +310,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
       }
     } catch (reconcileError) {
       deps.logger.log({
-        trace_id: FILL_SYNC_TRACE_ID,
+        trace_id: deps.fillSyncTraceId,
         stage: 'execution',
         event: 'fill_sync_reconcile_failed',
         level: 'error',
@@ -307,7 +333,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
           if (lastSweepAction.get(divergence.idempotency_key) === divergence.action) continue;
           lastSweepAction.set(divergence.idempotency_key, divergence.action);
           deps.logger.log({
-            trace_id: FILL_SYNC_TRACE_ID,
+            trace_id: deps.fillSyncTraceId,
             stage: 'execution',
             event: 'residual_sweep_divergence',
             // Mirrors `runStartupReconcile`'s split: `undetermined` means the
@@ -323,7 +349,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
         }
       } catch (sweepError) {
         deps.logger.log({
-          trace_id: FILL_SYNC_TRACE_ID,
+          trace_id: deps.fillSyncTraceId,
           stage: 'execution',
           event: 'fill_sync_sweep_failed',
           level: 'error',
@@ -342,7 +368,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
     // local to the thing it protects rather than resting on the caller.
     if (inFlight !== undefined) {
       deps.logger.log({
-        trace_id: FILL_SYNC_TRACE_ID,
+        trace_id: deps.fillSyncTraceId,
         stage: 'execution',
         event: 'fill_poll_skipped',
         level: 'warn',
@@ -360,7 +386,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
       // loop: log, survive, let the heartbeat's silence be the external
       // failure signal.
       deps.logger.log({
-        trace_id: FILL_SYNC_TRACE_ID,
+        trace_id: deps.fillSyncTraceId,
         stage: 'execution',
         event: 'fill_poll_failed',
         level: 'error',

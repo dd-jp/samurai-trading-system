@@ -268,6 +268,8 @@ import {
 // #753: falsifier arm 2's composition — see `control-arm-wiring.ts`.
 import {
   buildControlArmWiring,
+  CONTROL_FILL_SYNC_TRACE_ID,
+  CONTROL_RECONCILE_TRACE_ID,
   type ControlArmWiring,
   InMemoryBreakerStatePersistence,
 } from './production/control-arm-wiring.js';
@@ -3734,7 +3736,11 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
       // still disagrees with the venue is what reconcile exists to prevent —
       // so a failure here propagates out of `start()` instead of being
       // logged and stepped over.
-      await runStartupReconcile({ execution: reconcileExecution, logger });
+      await runStartupReconcile({
+        execution: reconcileExecution,
+        logger,
+        traceId: RECONCILE_TRACE_ID,
+      });
 
       // #753: the control arm's own startup reconcile, for the reason the live
       // arm's runs before the tick loop — a crash leaves control lots stranded
@@ -3744,9 +3750,17 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
       // reason: it writes through the SAME database handle the live arm trades
       // against, so a store that will not take this write is a store the process
       // must not go on to place orders against.
+      //
+      // #1321: `traceId: CONTROL_RECONCILE_TRACE_ID`, not the live arm's — the
+      // control arm's execution surface (`reconcileExecution` above,
+      // `control-arm-wiring.ts`) already carries its own trace id; this call's
+      // own log lines (divergence/complete/sweep) must match it, or the two
+      // arms' reconcile passes are indistinguishable in `logs/orchestrator.log`
+      // (#1321's finding — this is what disguised #1124 as one arm racing itself).
       await runStartupReconcile({
         execution: components.controlArmWiring.reconcileExecution,
         logger,
+        traceId: CONTROL_RECONCILE_TRACE_ID,
       });
 
       // #371, and deliberately HERE — beside reconcile, before the tick loop,
@@ -3919,11 +3933,18 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         void polymarketAgent.refresh('polymarket-poll');
       }, config.polymarketPollIntervalMs ?? DEFAULT_POLYMARKET_POLL_INTERVAL_MS);
 
+      // #1321: the control arm's own trace ids, matching its execution
+      // surface's (`components.controlArmWiring.fillSyncExecution`,
+      // built with these same constants in `control-arm-wiring.ts`) — see
+      // the startup-reconcile call above for why this loop can no longer
+      // default to the live arm's constants for both arms.
       controlFillSync = startFillSync({
         execution: components.controlArmWiring.fillSyncExecution,
         clock,
         logger,
         fillPollIntervalMs: config.fillPollIntervalMs ?? DEFAULT_FILL_POLL_INTERVAL_MS,
+        reconcileTraceId: CONTROL_RECONCILE_TRACE_ID,
+        fillSyncTraceId: CONTROL_FILL_SYNC_TRACE_ID,
       });
 
       fillSync = startFillSync({
@@ -3931,6 +3952,8 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         clock,
         logger,
         fillPollIntervalMs: config.fillPollIntervalMs ?? DEFAULT_FILL_POLL_INTERVAL_MS,
+        reconcileTraceId: RECONCILE_TRACE_ID,
+        fillSyncTraceId: FILL_SYNC_TRACE_ID,
       });
 
       loop = startTickLoop({

@@ -161,6 +161,14 @@ export interface ControlArmWiring {
   reconcileExecution: ReturnType<typeof buildExecutionSurface>;
 }
 
+/**
+ * `control-arm-` prefix, not the `:control` suffix `CONTROL_TRACE_SUFFIX`
+ * (axis-vote-decision.ts) uses for tick traces. Harmless today — these two
+ * IDs never reach `audit_log` (only tick-runner.ts's traces do), so #1319's
+ * `trace_id NOT LIKE '%:control'` filter has nothing here to miss — but if
+ * fill-sync/reconcile traces are ever routed into `audit_log`, that filter
+ * will silently fail to exclude these. See #1331.
+ */
 export const CONTROL_FILL_SYNC_TRACE_ID = 'control-arm-fill-sync';
 export const CONTROL_RECONCILE_TRACE_ID = 'control-arm-reconcile';
 

@@ -57,7 +57,7 @@ describe('runStartupReconcile', () => {
       ),
     });
 
-    await runStartupReconcile({ execution, logger });
+    await runStartupReconcile({ execution, logger, traceId: 'test-reconcile' });
 
     const divergences = logger.entries.filter((e) => e.message === 'reconcile divergence');
     expect(divergences.map((e) => e.level)).toEqual(['info', 'warn']);
@@ -73,9 +73,9 @@ describe('runStartupReconcile', () => {
       reconcile: vi.fn().mockRejectedValue(new Error('store unreadable')),
     });
 
-    await expect(runStartupReconcile({ execution, logger: makeLogger() })).rejects.toThrow(
-      'store unreadable',
-    );
+    await expect(
+      runStartupReconcile({ execution, logger: makeLogger(), traceId: 'test-reconcile' }),
+    ).rejects.toThrow('store unreadable');
   });
 
   // #1088: the sweep runs unconditionally on every reconcile() pass but is
@@ -87,7 +87,7 @@ describe('runStartupReconcile', () => {
       reconcile: vi.fn().mockResolvedValue(makeReport({ swept: 3 })),
     });
 
-    await runStartupReconcile({ execution, logger });
+    await runStartupReconcile({ execution, logger, traceId: 'test-reconcile' });
 
     expect(logger.entries).toContainEqual(
       expect.objectContaining({
@@ -104,7 +104,7 @@ describe('runStartupReconcile', () => {
       reconcile: vi.fn().mockResolvedValue(makeReport({ swept: 0 })),
     });
 
-    await runStartupReconcile({ execution, logger });
+    await runStartupReconcile({ execution, logger, traceId: 'test-reconcile' });
 
     expect(logger.entries).not.toContainEqual(
       expect.objectContaining({ message: 'reconcile: terminal-row sweep' }),
@@ -128,6 +128,8 @@ describe('startFillSync', () => {
       clock: { now: () => new Date() },
       logger: makeLogger(),
       fillPollIntervalMs: 1_000,
+      reconcileTraceId: 'test-reconcile',
+      fillSyncTraceId: 'test-fill-sync',
     });
 
     expect(execution.ingestFills).not.toHaveBeenCalled();
@@ -158,6 +160,8 @@ describe('startFillSync', () => {
       clock: { now: () => new Date() },
       logger: makeLogger(),
       fillPollIntervalMs: 1_000,
+      reconcileTraceId: 'test-reconcile',
+      fillSyncTraceId: 'test-fill-sync',
     });
 
     await vi.advanceTimersByTimeAsync(20_000);
@@ -188,6 +192,8 @@ describe('startFillSync', () => {
       clock: { now: () => new Date() },
       logger,
       fillPollIntervalMs: 1_000,
+      reconcileTraceId: 'test-reconcile',
+      fillSyncTraceId: 'test-fill-sync',
     });
 
     await vi.advanceTimersByTimeAsync(2_000);
@@ -214,6 +220,8 @@ describe('startFillSync', () => {
       clock: { now: () => new Date() },
       logger: makeLogger(),
       fillPollIntervalMs: 1_000,
+      reconcileTraceId: 'test-reconcile',
+      fillSyncTraceId: 'test-fill-sync',
     });
 
     // Enter a poll, then stop mid-flight.
@@ -243,6 +251,8 @@ describe('startFillSync', () => {
         clock: { now: () => new Date() },
         logger,
         fillPollIntervalMs: 1_000,
+        reconcileTraceId: 'test-reconcile',
+        fillSyncTraceId: 'test-fill-sync',
       });
 
       await vi.advanceTimersByTimeAsync(1_000);
@@ -270,6 +280,8 @@ describe('startFillSync', () => {
         clock: { now: () => new Date() },
         logger,
         fillPollIntervalMs: 1_000,
+        reconcileTraceId: 'test-reconcile',
+        fillSyncTraceId: 'test-fill-sync',
       });
 
       await vi.advanceTimersByTimeAsync(2_000);
@@ -320,6 +332,8 @@ describe('startFillSync', () => {
         clock: { now: () => new Date() },
         logger,
         fillPollIntervalMs: 1_000,
+        reconcileTraceId: 'test-reconcile',
+        fillSyncTraceId: 'test-fill-sync',
       });
 
       await vi.advanceTimersByTimeAsync(4_000);
@@ -359,6 +373,8 @@ describe('startFillSync', () => {
         clock: { now: () => new Date() },
         logger: makeLogger(),
         fillPollIntervalMs: 1_000,
+        reconcileTraceId: 'test-reconcile',
+        fillSyncTraceId: 'test-fill-sync',
       });
 
       await vi.advanceTimersByTimeAsync(2_000);
@@ -379,6 +395,8 @@ describe('startFillSync', () => {
         clock: { now: () => new Date() },
         logger,
         fillPollIntervalMs: 1_000,
+        reconcileTraceId: 'test-reconcile',
+        fillSyncTraceId: 'test-fill-sync',
       });
 
       await vi.advanceTimersByTimeAsync(1_000);
@@ -424,6 +442,8 @@ describe('startFillSync', () => {
         clock: { now: () => new Date() },
         logger,
         fillPollIntervalMs: 1_000,
+        reconcileTraceId: 'test-reconcile',
+        fillSyncTraceId: 'test-fill-sync',
       });
 
       await vi.advanceTimersByTimeAsync(4_000);
@@ -467,6 +487,8 @@ describe('startFillSync', () => {
         clock: { now: () => new Date() },
         logger,
         fillPollIntervalMs: 1_000,
+        reconcileTraceId: 'test-reconcile',
+        fillSyncTraceId: 'test-fill-sync',
       });
 
       await vi.advanceTimersByTimeAsync(2_000);
@@ -502,6 +524,8 @@ describe('startFillSync', () => {
         clock: { now: () => new Date() },
         logger,
         fillPollIntervalMs: 1_000,
+        reconcileTraceId: 'test-reconcile',
+        fillSyncTraceId: 'test-fill-sync',
       });
 
       await vi.advanceTimersByTimeAsync(2_000);
@@ -523,6 +547,8 @@ describe('startFillSync', () => {
       clock: { now: () => new Date() },
       logger: makeLogger(),
       fillPollIntervalMs: 1_000,
+      reconcileTraceId: 'test-reconcile',
+      fillSyncTraceId: 'test-fill-sync',
     });
 
     await vi.advanceTimersByTimeAsync(1_000);
@@ -530,5 +556,140 @@ describe('startFillSync', () => {
     await vi.advanceTimersByTimeAsync(10_000);
 
     expect(execution.ingestFills).toHaveBeenCalledTimes(1);
+  });
+});
+
+// #1321: both arms drove this SAME loop's log lines under one hardcoded
+// `trace_id`, so a control-arm reconcile divergence and a live-arm one were
+// indistinguishable in `logs/orchestrator.log` — the exact confusion that
+// made #1124 read as one arm racing itself. These tests drive two loops
+// side by side (one per arm) against a SHARED logger and assert their lines
+// carry different `trace_id`s — a test asserting only the constant's value
+// would stay green even with both arms wired to the same literal.
+describe('per-arm trace ids (#1321)', () => {
+  it('runStartupReconcile stamps the caller-supplied traceId, not a shared default', async () => {
+    const logger = makeLogger();
+    const divergingExecution = (): FillSyncSurface =>
+      makeExecution({
+        reconcile: vi.fn().mockResolvedValue(
+          makeReport({
+            divergences: [
+              {
+                idempotency_key: 'key-1',
+                instrument: 'AAPL',
+                store_state: 'submitted',
+                broker_state: null,
+                action: 'undetermined',
+                reason: 'venue unreachable',
+              },
+            ],
+          }),
+        ),
+      });
+
+    await runStartupReconcile({
+      execution: divergingExecution(),
+      logger,
+      traceId: 'live-arm-reconcile',
+    });
+    await runStartupReconcile({
+      execution: divergingExecution(),
+      logger,
+      traceId: 'control-arm-reconcile',
+    });
+
+    const divergenceTraceIds = logger.entries
+      .filter((e) => e.message === 'reconcile divergence')
+      .map((e) => e.trace_id);
+    expect(divergenceTraceIds).toEqual(['live-arm-reconcile', 'control-arm-reconcile']);
+    // The point of the ticket: the two calls must not collapse onto one id.
+    expect(divergenceTraceIds[0]).not.toEqual(divergenceTraceIds[1]);
+  });
+
+  it('two startFillSync loops sharing one logger stamp their own reconcile and fill-sync trace ids', async () => {
+    vi.useFakeTimers();
+    try {
+      const logger = makeLogger();
+      const undetermined = {
+        idempotency_key: 'key-live',
+        instrument: 'AAPL',
+        store_state: 'submitted' as const,
+        broker_state: null,
+        action: 'undetermined' as const,
+        reason: 'venue unreachable',
+      };
+      const liveExecution = makeExecution({
+        reconcile: vi.fn().mockResolvedValue(makeReport({ divergences: [undetermined] })),
+        ingestFills: vi.fn().mockRejectedValue(new Error('live poll broke')),
+      });
+      const controlExecution = makeExecution({
+        reconcile: vi
+          .fn()
+          .mockResolvedValue(
+            makeReport({ divergences: [{ ...undetermined, idempotency_key: 'key-control' }] }),
+          ),
+        ingestFills: vi.fn().mockRejectedValue(new Error('control poll broke')),
+      });
+
+      const live = startFillSync({
+        execution: liveExecution,
+        clock: { now: () => new Date() },
+        logger,
+        fillPollIntervalMs: 1_000,
+        reconcileTraceId: 'live-arm-reconcile',
+        fillSyncTraceId: 'live-arm-fill-sync',
+      });
+      const control = startFillSync({
+        execution: controlExecution,
+        clock: { now: () => new Date() },
+        logger,
+        fillPollIntervalMs: 1_000,
+        reconcileTraceId: 'control-arm-reconcile',
+        fillSyncTraceId: 'control-arm-fill-sync',
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await live.stop();
+      await control.stop();
+
+      const divergenceEntries = logger.entries.filter((e) => e.message === 'reconcile divergence');
+      const failedPollEntries = logger.entries.filter((e) => e.message === 'fill poll failed');
+
+      // One divergence per loop, and each one carries THAT loop's own
+      // reconcile trace id — not the other loop's, and not a shared default.
+      expect(divergenceEntries).toHaveLength(2);
+      expect(divergenceEntries.map((e) => e.trace_id).sort()).toEqual([
+        'control-arm-reconcile',
+        'live-arm-reconcile',
+      ]);
+
+      // Same for the fill-poll failure lines, under the fill-sync trace id.
+      expect(failedPollEntries).toHaveLength(2);
+      expect(failedPollEntries.map((e) => e.trace_id).sort()).toEqual([
+        'control-arm-fill-sync',
+        'live-arm-fill-sync',
+      ]);
+
+      // Nothing from either loop lands on the OTHER loop's trace id.
+      const liveEntries = logger.entries.filter(
+        (e) => e.trace_id === 'live-arm-reconcile' || e.trace_id === 'live-arm-fill-sync',
+      );
+      const controlEntries = logger.entries.filter(
+        (e) => e.trace_id === 'control-arm-reconcile' || e.trace_id === 'control-arm-fill-sync',
+      );
+      expect(liveEntries.length).toBeGreaterThan(0);
+      expect(controlEntries.length).toBeGreaterThan(0);
+      expect(
+        logger.entries.every(
+          (e) =>
+            e.trace_id === 'live-arm-reconcile' ||
+            e.trace_id === 'live-arm-fill-sync' ||
+            e.trace_id === 'control-arm-reconcile' ||
+            e.trace_id === 'control-arm-fill-sync',
+        ),
+      ).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -85,7 +85,12 @@ import { openSharedStore, type SharedStore as SqliteHandle } from '../../shared/
 import type { MetricsSuite } from '../../tools/backtest/index.js';
 import { CostModelImpl, SqliteStage2SelectionStore } from '../../tools/backtest/index.js';
 import { DebateBarDecisionGate } from './decision-bar-gate.js';
+import { FILL_SYNC_TRACE_ID, RECONCILE_TRACE_ID } from './fill-sync.js';
 import { LIVE_BOOK_GBP, paperStartingProfile } from './paper-profile.js';
+import {
+  CONTROL_FILL_SYNC_TRACE_ID,
+  CONTROL_RECONCILE_TRACE_ID,
+} from './production/control-arm-wiring.js';
 import { MIN_RETURN_OBSERVATIONS } from './production/daily-equity-metrics-source.js';
 import type { DataFailoverAlert } from './production/data-failover.js';
 import { buildPersistence } from './production/direct-bind.js';
@@ -163,6 +168,24 @@ vi.mock('../../providers/market-intelligence/grok/x-search-client.js', async (im
       typeof import('../../providers/market-intelligence/grok/x-search-client.js')
     >();
   return { ...actual, XSearchClient: XSearchClientMock };
+});
+
+/**
+ * #1321 round 2 — a spy standing in for `startFillSync` itself, so a test can
+ * assert on the exact `reconcileTraceId`/`fillSyncTraceId` pair
+ * `production.ts` hands each arm's RECURRING poll, not just the one-shot
+ * `runStartupReconcile` call the existing #1321 case below pins. Defaults to
+ * the real implementation (`importOriginal`), same posture as
+ * `tryNousCredentialsMock` above, so every other test in this file that never
+ * inspects `startFillSyncSpy` sees identical behaviour to the unmocked
+ * function.
+ */
+const { startFillSyncSpy } = vi.hoisted(() => ({ startFillSyncSpy: vi.fn() }));
+
+vi.mock('./fill-sync.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./fill-sync.js')>();
+  startFillSyncSpy.mockImplementation(actual.startFillSync);
+  return { ...actual, startFillSync: startFillSyncSpy };
 });
 
 const START = new Date('2026-07-29T12:00:00.000Z');
@@ -3144,6 +3167,92 @@ describe('buildProductionOrchestrator', () => {
     await vi.advanceTimersByTimeAsync(5_000);
     expect(scanSpy).toHaveBeenCalledTimes(1);
     expect(runSpy).toHaveBeenCalled();
+
+    await orchestrator.stop();
+  });
+
+  /**
+   * #1321, through the REAL composition root rather than `fill-sync.test.ts`'s
+   * direct calls. The control arm is built unconditionally (no env flag,
+   * `buildControlArmWiring` above), so `start()` always runs both arms'
+   * startup reconcile — the exact call pair whose trace ids collapsed onto one
+   * literal before this fix. A wiring regression that passed `RECONCILE_TRACE_ID`
+   * (the live constant) to the control arm's call in `production.ts` would
+   * leave `fill-sync.test.ts` green — that file never touches `production.ts`'s
+   * wiring — so this is the test that actually pins the composition root, not
+   * just the module.
+   */
+  it("start() gives each arm's startup reconcile its own trace_id (#1321)", async () => {
+    const logger = recordingLogger();
+    const config = stubConfig(db, {
+      logger,
+      tradingCalendar: new AlwaysOpenCalendar(),
+    });
+    const orchestrator = buildProductionOrchestrator(config);
+
+    await orchestrator.start();
+
+    const completions = logger.entries.filter((e) => e.message === 'startup reconcile complete');
+    expect(completions).toHaveLength(2);
+    expect(completions.map((e) => e.trace_id).sort()).toEqual(
+      [RECONCILE_TRACE_ID, CONTROL_RECONCILE_TRACE_ID].sort(),
+    );
+    expect(RECONCILE_TRACE_ID).not.toEqual(CONTROL_RECONCILE_TRACE_ID);
+
+    await orchestrator.stop();
+  });
+
+  /**
+   * #1321 round 2. The case above pins `runStartupReconcile`'s one-shot call,
+   * but 7 of the 10 lines #1321 relabelled are in `runPoll` — the RECURRING
+   * fill-sync loop, not the startup call — and nothing exercised that path:
+   * `start()`/`stop()` never drives a poll (the loop only fires on its own
+   * `setTimeout`, which this file's default `fillPollIntervalMs` and the
+   * absence of any `vi.advanceTimersByTimeAsync` here both leave unfired), so
+   * a regression that passed the LIVE constants to the control arm's
+   * `startFillSync` call (production.ts) — as opposed to its
+   * `runStartupReconcile` call, a different call site — left the case above
+   * green. Confirmed by reverting that call to `reconcileTraceId:
+   * RECONCILE_TRACE_ID, fillSyncTraceId: FILL_SYNC_TRACE_ID` locally: all
+   * other tests in this file (170) still passed.
+   *
+   * Rather than drive an actual poll (which would need both arms' real
+   * `ingestFills()` to reject in a controlled way, through two independently
+   * constructed broker/store stacks — the control arm's `SimulatedBrokerAdapter`
+   * is a different instance from the live arm's `broker`, so there is no
+   * single seam to fail both from), this asserts directly on the
+   * `startFillSync` call site itself via `startFillSyncSpy` (defined at the
+   * top of this file) — the exact deps object each arm's LOOP is armed with,
+   * which is what the recurring `runPoll` lines actually read.
+   *
+   * Asserts positionally, not as a sorted set: production.ts calls
+   * `startFillSync` for the control arm first, then the live arm,
+   * unconditionally and with nothing branching between the two calls (see the
+   * call site) — a property of the composition root this test is pinning, not
+   * an incidental detail. A sorted-set comparison would pass if the two
+   * calls' trace-id arguments were swapped (live arm gets the control pair
+   * and vice versa) — exactly the copy-paste shape a regression here would
+   * take, and worse than the bug #1321 fixes: the live arm's loop would then
+   * log as `control-arm-*` and get silently filtered out by anything modelled
+   * on #1319's `NOT LIKE '%:control'` pattern.
+   */
+  it("start() gives each arm's recurring fill-sync loop its own trace_id (#1321)", async () => {
+    const config = stubConfig(db, {
+      tradingCalendar: new AlwaysOpenCalendar(),
+    });
+    const orchestrator = buildProductionOrchestrator(config);
+
+    startFillSyncSpy.mockClear();
+    await orchestrator.start();
+
+    expect(startFillSyncSpy).toHaveBeenCalledTimes(2);
+    const [controlDeps] = startFillSyncSpy.mock.calls[0];
+    const [liveDeps] = startFillSyncSpy.mock.calls[1];
+
+    expect(controlDeps.reconcileTraceId).toBe(CONTROL_RECONCILE_TRACE_ID);
+    expect(controlDeps.fillSyncTraceId).toBe(CONTROL_FILL_SYNC_TRACE_ID);
+    expect(liveDeps.reconcileTraceId).toBe(RECONCILE_TRACE_ID);
+    expect(liveDeps.fillSyncTraceId).toBe(FILL_SYNC_TRACE_ID);
 
     await orchestrator.stop();
   });
