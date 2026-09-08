@@ -506,10 +506,18 @@ describe('escaped (nested) JSON credentials (#1377)', () => {
         survives: String.raw`\"symbol\":\"SPY\"`,
       },
       {
+        // Round-1 review of #1382 (MED): the earlier version of this row
+        // had no backslash in its input at all, so it already masked on
+        // main and pinned nothing about escaped-JSON reachability. This
+        // shape nests the `Authorization` header a second level down (a
+        // real one — the "Bearer, escaped" positive rows above and below
+        // this describe block all model this same `renderMessageContent`/
+        // `describeThrown` nesting), so the credential's own closing quote
+        // arrives backslash-escaped.
         name: 'Bearer, escaped',
-        input: '{"body":"Authorization: Bearer sk-ant-abc123"}',
+        input: String.raw`{"headers":"{\"Authorization\":\"Bearer sk-ant-abc123\"}"}`,
         secret: 'sk-ant-abc123',
-        survives: '"body":"Authorization: ',
+        survives: String.raw`{"headers":"{\"Authorization\":\"`,
       },
       {
         name: 'camelCase clientSecret, escaped',
@@ -536,10 +544,13 @@ describe('escaped (nested) JSON credentials (#1377)', () => {
         survives: String.raw`\"Authorization\"`,
       },
       {
+        // Round-1 review of #1382 (MED): same fix as the Bearer row above —
+        // the original input had no backslash, so it masked on main
+        // already and pinned nothing about this issue.
         name: 'Authorization: Token, escaped',
-        input: '{"body":"Authorization: Token skFAKE0000tiingo"}',
+        input: String.raw`{"body":"{\"Authorization\":\"Token skFAKE0000tiingo\"}"}`,
         secret: 'skFAKE0000tiingo',
-        survives: '"body":"Authorization: ',
+        survives: String.raw`{"body":"{\"Authorization\":\"`,
       },
       {
         // A real `JSON.stringify(promptContextOf(...))` nesting shape
@@ -561,15 +572,16 @@ describe('escaped (nested) JSON credentials (#1377)', () => {
 
   // Exact-equality pins, one per pattern family, on top of the `survives`
   // containment checks above. A `survives` check alone does not pin the
-  // value class's `\x5c` exclusion: dropping just the escaped credential's
-  // OWN trailing backslash (swallowing it into the value instead of
-  // stopping before it) still leaves every SIBLING field's escaped quotes
-  // untouched, so a containment check on the sibling survives either way —
-  // measured directly: reverting only the `\x5c` exclusion from the
-  // bareword pattern's value class left the "sibling field survives"
-  // `it.each` row above green. These `.toBe()` checks catch that class of
-  // mutation because the malformed output (a bare `"` where `\"` belongs)
-  // differs byte-for-byte from the correct one.
+  // value class's negative-lookahead terminator: dropping just the escaped
+  // credential's OWN trailing backslash-quote stop (swallowing it into the
+  // value instead of stopping before it) still leaves every SIBLING field's
+  // escaped quotes untouched, so a containment check on the sibling
+  // survives either way — measured directly: reverting only the value
+  // class's negative-lookahead guard on the bareword pattern left the
+  // "sibling field survives" `it.each` row above green. These `.toBe()`
+  // checks catch that class of mutation because the malformed output (a
+  // bare `"` where `\"` belongs) differs byte-for-byte from the correct
+  // one.
   it('bareword: the value stops before its own escaped closing quote, sibling field byte-exact', () => {
     expect(
       maskCredentials(String.raw`{"body":"{\"api_key\":\"skFAKE0000\",\"symbol\":\"SPY\"}"}`),
@@ -616,6 +628,54 @@ describe('escaped (nested) JSON credentials (#1377)', () => {
     );
   });
 
+  // Round-1 review of #1382 (HIGH): a differential probe against
+  // `origin/main` caught that an earlier version of this fix — a blanket
+  // `\x5c` exclusion on every value class — narrowed masking versus main
+  // for any credential VALUE containing a literal backslash that is not
+  // itself acting as a JSON-escape marker. The first five rows below are
+  // the reviewer's own regression cases, now pinning that the
+  // negative-lookahead replacement masks them identically to main
+  // (measured: none of these inputs is escaped-JSON — no surrounding JSON
+  // string at all — this is main's own unescaped behavior, unaffected by
+  // #1377's separator changes and only at risk from the value-class
+  // change). The last two rows (compound, lowercase env) are not from the
+  // reviewer's list: re-running the mutation matrix per pattern family
+  // after the fix showed those two patterns' value-class mutant survived
+  // — i.e. reverting just their lookahead terminator to a blanket `\x5c`
+  // exclusion left all 85 tests green — because nothing exercised a
+  // literal mid-value backslash for those two specific patterns. Added to
+  // close that gap the same way the byte-exact block above closed the
+  // sibling-corruption gap.
+  it('ALPACA_API_SECRET: a literal backslash with no following quote is consumed as part of the value, matching main', () => {
+    expect(maskCredentials('ALPACA_API_SECRET:\\Users\\me\\file.txt')).toBe('[REDACTED]');
+  });
+
+  it('DSN: a password containing a literal backslash not followed by a quote still matches in full, matching main', () => {
+    expect(maskCredentials('redis://user:pa\\ss@host:6379')).toBe(
+      'redis://user:[REDACTED]@host:6379',
+    );
+  });
+
+  it('Bearer: a token containing a literal backslash not followed by a quote still matches in full, matching main', () => {
+    expect(maskCredentials('Bearer skFAKE\\0000END')).toBe('[REDACTED]');
+  });
+
+  it('Authorization Basic: a value containing a literal backslash not followed by a quote still matches in full, matching main', () => {
+    expect(maskCredentials('Authorization: Basic YWJj\\ZGVm')).toBe('Authorization: [REDACTED]');
+  });
+
+  it('bareword: a value containing a literal backslash not followed by a quote still matches in full, matching main', () => {
+    expect(maskCredentials('api_secret=abc\\def')).toBe('[REDACTED]');
+  });
+
+  it('compound clientSecret: a value containing a literal backslash not followed by a quote still matches in full, matching main', () => {
+    expect(maskCredentials('clientSecret=abc\\def')).toBe('[REDACTED]');
+  });
+
+  it('lowercase env polygon_api_key: a value containing a literal backslash not followed by a quote still matches in full, matching main', () => {
+    expect(maskCredentials('polygon_api_key=abc\\def')).toBe('[REDACTED]');
+  });
+
   const negative: ReadonlyArray<{ name: string; input: string }> = [
     {
       // Required by the issue's acceptance criteria directly.
@@ -640,27 +700,6 @@ describe('escaped (nested) JSON credentials (#1377)', () => {
       // field must both survive.
       name: 'DSN does not over-match through a quote into a sibling field, escaped',
       input: String.raw`{"body":"{\"dsn\":\"redis://h:6379\",\"email\":\"a@b.com\"}"}`,
-    },
-    {
-      // Documented residual gap: the DSN value class's `\x5c` exclusion
-      // (added for the same escaped-JSON reason as every pattern above)
-      // means a password containing a LITERAL backslash — not an escape
-      // marker, the character itself — can never satisfy the pattern's own
-      // `(?=@)` lookahead, since the class cannot cross the backslash to
-      // reach the `@`. Not an escaped-JSON shape (no surrounding JSON
-      // string at all) — pins the `\x5c` exclusion's own cost, the DSN
-      // family's equivalent of the bareword pattern's documented `&`
-      // exclusion cost (line ~56 above).
-      name: 'residual gap: a DSN password containing a literal backslash is not matched at all',
-      input: 'redis://user:pa\\ss@host:6379',
-    },
-    {
-      // Documented residual gap (see this module's doc comment): a
-      // backslash with no quote following it is never treated as a
-      // separator, so a Windows path fragment straight after a credential
-      // key stays unmasked rather than being read as an escaped quote.
-      name: 'residual gap: a literal backslash with no following quote is not a separator',
-      input: String.raw`ALPACA_API_SECRET:\Users\me\file.txt`,
     },
     {
       // Documented residual gap: only ONE level of escaping is admitted
