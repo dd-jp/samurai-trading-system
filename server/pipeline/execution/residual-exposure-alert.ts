@@ -37,6 +37,27 @@
 
 /** One residual position left without protective legs after a partial flatten. */
 export interface ResidualExposureAlert {
+  /**
+   * The `ExecutionInput.trace_id` of the Execution SURFACE this alert was
+   * raised on, and with it the ARM that raised it (#1348, following #1331's
+   * `FlattenReconcileAlert.trace_id`) — both channels are `SAMURAI_ALERTS`-
+   * selected once at the root and shared between arms (see
+   * `control-arm-wiring.ts`), so a constant here would log a control-arm
+   * (simulated-broker) residual identically to a live one.
+   *
+   * `sweepResidualProtection` (residual-protection-sweep.ts), this alert's
+   * only path to `postResidualExposureAlert`, runs from TWO call sites, both
+   * inside `ExecutionImpl` and so both stamped with the surface's own fixed
+   * id: unconditionally inside `reconcile()` (reconcile.ts), and again,
+   * directly, after every `ingestFills()` on the fill-sync poll
+   * (fill-sync.ts). Measured reachable set, four ids: `reconcile` /
+   * `control-arm-reconcile` from the one-shot startup reconcile, and
+   * `fill-sync` / `control-arm-fill-sync` from the poll — whether the poll's
+   * own `reconcile()` call or its standalone sweep raised this particular
+   * one, both stamp the same fill-sync surface id, so the two are not
+   * distinguishable from this field alone.
+   */
+  trace_id: string;
   /** The lot's own `idempotency_key` — what `getOpenPositions()`/the store key on. */
   idempotency_key: string;
   instrument: string;

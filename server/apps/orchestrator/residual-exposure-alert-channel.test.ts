@@ -3,6 +3,7 @@ import type { DiscordClient, TelegramClient } from '../../pipeline/verdict/index
 import { TradeChannelResidualExposureAlert } from './residual-exposure-alert-channel.js';
 
 const ALERT: ResidualExposureAlert = {
+  trace_id: 'fill-sync',
   idempotency_key: 'key-aapl-1355',
   instrument: 'AAPL',
   side: 'buy',
@@ -73,6 +74,29 @@ describe('TradeChannelResidualExposureAlert.postResidualExposureAlert', () => {
 
     expect(telegram.sendMessage).toHaveBeenCalledTimes(1);
     expect(discord.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  // #1348: `trace_id` was added to `ResidualExposureAlert` purely to
+  // distinguish the two arms at the LOG line (console-channels.ts) — the
+  // Telegram body must not change with it, or the arm label would leak into
+  // an operator's phone through a formatter no one intended to touch.
+  it('does not vary the Telegram body with trace_id', async () => {
+    const telegram = makeTelegram();
+
+    await new TradeChannelResidualExposureAlert(telegram, 'chat-1').postResidualExposureAlert({
+      ...ALERT,
+      trace_id: 'fill-sync',
+    });
+    await new TradeChannelResidualExposureAlert(telegram, 'chat-1').postResidualExposureAlert({
+      ...ALERT,
+      trace_id: 'control-arm-fill-sync',
+    });
+
+    const calls = (telegram.sendMessage as ReturnType<typeof vi.fn>).mock.calls as [
+      string,
+      string,
+    ][];
+    expect(calls[0]?.[1]).toBe(calls[1]?.[1]);
   });
 
   it('rejects when the transport fails, so the caller does not record it as delivered', async () => {

@@ -154,12 +154,14 @@ export class LoggingUnpricedFillAlertChannel implements UnpricedFillAlertChannel
 }
 
 /**
- * A residual position `ingestFills()` could not re-arm after a partial
- * flatten (#525), written to the log at `error`. Posted only on a FAILED
- * re-arm — a successful one is silent by design (see
+ * A residual position `sweepResidualProtection` could not re-arm after a
+ * partial flatten (#525), written to the log at `error`. Posted only on a
+ * FAILED re-arm — a successful one is silent by design (see
  * `ResidualExposureAlert`'s doc), so every line this channel writes is one
  * an operator needs to act on: an unprotected position sitting at the venue
- * with no stop and no target.
+ * with no stop and no target. Raised from both the startup/poll `reconcile()`
+ * sweep and the fill-sync poll's own standalone sweep — see
+ * `ResidualExposureAlert.trace_id` for which ids that spans.
  *
  * Same caveat as `LoggingUnpricedFillAlertChannel`'s: a log line nobody
  * tails during an unattended soak (#238) is not an alert.
@@ -172,18 +174,29 @@ export class LoggingResidualExposureAlertChannel implements ResidualExposureAler
 
   async postResidualExposureAlert(alert: ResidualExposureAlert): Promise<void> {
     this.logger.log({
-      // Not a tick trace, for the same reason `LoggingUnpricedFillAlertChannel`
-      // isn't: this is observed by the fill poll, which spans every open lot
-      // at once rather than belonging to one pipeline pass.
-      trace_id: 'residual-exposure',
+      // Threaded from the alert, not fixed here (#1348, following #1331's
+      // `LoggingFlattenReconcileAlertChannel` above) — the live and control
+      // arms post through this SAME instance, so the id of the surface the
+      // sweep ran on is the only thing in the line that tells a real venue's
+      // unprotected residual from a simulated broker's. See
+      // `ResidualExposureAlert.trace_id`.
+      trace_id: alert.trace_id,
       stage: 'execution',
       event: 'residual_exposure_unprotected',
       level: 'error',
       message:
         'a partially-filled flatten left a residual position and re-arming its protective ' +
         'legs failed — the position is unprotected; check the order on the venue by hand',
+      // Field by field, so `trace_id` is not repeated inside the payload it
+      // already labels the entry with.
       payload: {
-        ...alert,
+        idempotency_key: alert.idempotency_key,
+        instrument: alert.instrument,
+        side: alert.side,
+        residual_qty: alert.residual_qty,
+        residual_qty_is_upper_bound: alert.residual_qty_is_upper_bound,
+        stop: alert.stop,
+        target: alert.target,
         observed_at: alert.observed_at.toISOString(),
       },
     });
@@ -265,9 +278,13 @@ export class LoggingFlattenOverfillAlertChannel implements FlattenOverfillAlertC
 
   async postFlattenOverfillWarning(warning: FlattenOverfillWarning): Promise<void> {
     this.logger.log({
-      // Same synthetic-trace convention as `residual-exposure`/`unpriced-fill`
-      // above: this is observed by the fill poll, not any one tick.
-      trace_id: 'flatten-overfill',
+      // Threaded from the warning, not fixed here (#1348, following #1331's
+      // `LoggingFlattenReconcileAlertChannel` above) — the live and control
+      // arms post through this SAME instance, so the id of the surface
+      // `ingestFills()` ran on is the only thing in the line that tells a
+      // real venue's drop from a simulated broker's. See
+      // `FlattenOverfillWarning.trace_id`.
+      trace_id: warning.trace_id,
       stage: 'execution',
       event: 'flatten_overfill_dropped',
       level: 'warn',

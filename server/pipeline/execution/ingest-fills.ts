@@ -862,6 +862,7 @@ async function redistributeOneFlatten(
         // row (#524's own test) cannot leak through it either.
         try {
           await input.flattenOverfillAlerts.postFlattenOverfillWarning({
+            trace_id: input.trace_id,
             idempotency_key: clientOrderId,
             unattributed_qty: leftover,
             observed_at: input.clock.now(),
@@ -1476,6 +1477,7 @@ export async function alertResidualExposure(
 ): Promise<boolean> {
   try {
     await input.residualExposureAlerts.postResidualExposureAlert({
+      trace_id: input.trace_id,
       idempotency_key: position.idempotency_key,
       instrument: position.instrument,
       side: position.side,

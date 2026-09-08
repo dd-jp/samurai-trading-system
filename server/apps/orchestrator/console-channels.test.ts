@@ -10,6 +10,7 @@ import {
   LoggingMiCoverageTelemetry,
   LoggingOrphanAlertChannel,
   LoggingPromptTierAlertChannel,
+  LoggingResidualExposureAlertChannel,
   LoggingTickSkipAlertChannel,
   LoggingUnpricedFillAlertChannel,
   ParkedCiiScoreProvider,
@@ -205,12 +206,13 @@ describe('LoggingUnpricedFillAlertChannel', () => {
   });
 });
 
-describe('LoggingFlattenOverfillAlertChannel', () => {
+describe('LoggingFlattenOverfillAlertChannel (#527, #1348)', () => {
   it('reports an over-filled flatten at warn level, naming the flatten and the unattributed qty', async () => {
     const logger = makeLogger();
     const observedAt = new Date('2026-08-03T12:00:00Z');
 
     await new LoggingFlattenOverfillAlertChannel(logger).postFlattenOverfillWarning({
+      trace_id: 'fill-sync',
       idempotency_key: 'flatten-1',
       unattributed_qty: 4,
       observed_at: observedAt,
@@ -220,12 +222,96 @@ describe('LoggingFlattenOverfillAlertChannel', () => {
     // succeeded — this is a diagnostic trail for an invariant violation
     // elsewhere, not itself a failure of `ingestFills()`.
     expect(logger.entries[0]?.level).toBe('warn');
-    expect(logger.entries[0]?.trace_id).toBe('flatten-overfill');
+    expect(logger.entries[0]?.trace_id).toBe('fill-sync');
     expect(logger.entries[0]?.payload).toMatchObject({
       idempotency_key: 'flatten-1',
       unattributed_qty: 4,
       observed_at: observedAt.toISOString(),
     });
+    expect(logger.entries[0]?.payload).not.toHaveProperty('trace_id');
+  });
+
+  // #1348: both arms post through the one channel instance `production.ts`
+  // builds, so a constant here labels a control-arm drop exactly like a live
+  // one. The fill-sync surface's own id is the discriminant, threaded on the
+  // warning — the same explicit form #1331 established for
+  // `LoggingFlattenReconcileAlertChannel` above.
+  it("carries the fill-sync pass's trace_id verbatim, and changes when the pass does", async () => {
+    const logger = makeLogger();
+    const channel = new LoggingFlattenOverfillAlertChannel(logger);
+    const warning = {
+      idempotency_key: 'flatten-1',
+      unattributed_qty: 4,
+      observed_at: new Date('2026-08-03T12:00:00Z'),
+    } as const;
+
+    await channel.postFlattenOverfillWarning({ ...warning, trace_id: 'fill-sync' });
+    await channel.postFlattenOverfillWarning({ ...warning, trace_id: 'control-arm-fill-sync' });
+
+    expect(logger.entries.map((entry) => entry.trace_id)).toEqual([
+      'fill-sync',
+      'control-arm-fill-sync',
+    ]);
+  });
+});
+
+describe('LoggingResidualExposureAlertChannel (#525, #551, #1348)', () => {
+  const observedAt = new Date('2026-08-03T12:00:00Z');
+  const alert = {
+    idempotency_key: 'key-aapl-1355',
+    instrument: 'AAPL',
+    side: 'buy',
+    residual_qty: 3,
+    residual_qty_is_upper_bound: false,
+    stop: 100,
+    target: 110,
+    observed_at: observedAt,
+  } as const;
+
+  it('reports an unprotected residual at error level, naming the position', async () => {
+    const logger = makeLogger();
+
+    await new LoggingResidualExposureAlertChannel(logger).postResidualExposureAlert({
+      ...alert,
+      trace_id: 'fill-sync',
+    });
+
+    // `error`: a re-arm failure leaves a position sitting at the venue with
+    // no stop and no target.
+    expect(logger.entries[0]?.level).toBe('error');
+    expect(logger.entries[0]?.stage).toBe('execution');
+    expect(logger.entries[0]?.event).toBe('residual_exposure_unprotected');
+    expect(logger.entries[0]?.payload).toMatchObject({
+      idempotency_key: 'key-aapl-1355',
+      instrument: 'AAPL',
+      side: 'buy',
+      residual_qty: 3,
+      residual_qty_is_upper_bound: false,
+      stop: 100,
+      target: 110,
+      observed_at: observedAt.toISOString(),
+    });
+    // Field-by-field payload (#1348, the same #1331 M4 gap closed for
+    // `LoggingFlattenReconcileAlertChannel`) so the threaded id is not
+    // repeated inside the payload it already labels the entry with.
+    expect(logger.entries[0]?.payload).not.toHaveProperty('trace_id');
+  });
+
+  // #1348: both arms post through the one channel instance `production.ts`
+  // builds, so a constant here labels a control-arm residual exactly like a
+  // live one. The sweep's own surface id is the discriminant, threaded on
+  // the alert — see `ResidualExposureAlert.trace_id` for which ids reach it.
+  it("carries the sweep's trace_id verbatim, and changes when the pass does", async () => {
+    const logger = makeLogger();
+    const channel = new LoggingResidualExposureAlertChannel(logger);
+
+    await channel.postResidualExposureAlert({ ...alert, trace_id: 'reconcile' });
+    await channel.postResidualExposureAlert({ ...alert, trace_id: 'control-arm-fill-sync' });
+
+    expect(logger.entries.map((entry) => entry.trace_id)).toEqual([
+      'reconcile',
+      'control-arm-fill-sync',
+    ]);
   });
 });
 
