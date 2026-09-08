@@ -134,8 +134,10 @@ Not "is it inside a `catch`" — the question is **what dies if this expression 
   itself), or (c) becomes an unhandled rejection in a process where `installFaultHandlers`
   (`server/apps/orchestrator/index.ts:811`) exits non-zero — turning a handled failure into a dead
   trading process.
-- **SAFE** — genuinely contained: a top-level CLI/boot catch that exits non-zero either way, or a
-  frame that was rethrowing anyway, and nothing batched or durable is lost.
+- **SAFE** — genuinely contained: a top-level CLI/boot catch that exits non-zero either way, a
+  frame that was rethrowing anyway, or a frame where the throw *does* change the outcome but only
+  in the fail-safe direction (the smoke harness's mid-scenario catches below) — and nothing batched
+  or durable is lost.
 
 Reachability (can a hostile value actually get here?) is recorded but is **not** the criterion on
 its own. Where a site is safe *only* because of reachability, the row says so.
@@ -252,17 +254,26 @@ these paths, which is why the row says which producer it rests on.
   for the reason first written down.
 
 **Documented as belt-and-braces, and classified SAFE on reachability anyway (2).** Called out
-separately because the tension is real and a future edit should see it. Both of these sit in
-wrappers whose own comments say they exist to catch the *unanticipated* — `sweepStaleLogsWithLog`
-(`server/apps/orchestrator/log-retention.ts:710-763`): "never throwing past this point… this
-wrapper's own try/catch covers anything unanticipated"; and the `us-equity-session-source.ts:130-137`
-comment: "treat it exactly like a fetch failure rather than letting it escape uncaught". A throw at
-either aborts boot: `runEntrypointLogRetention` (`server/apps/orchestrator/index.ts:895-917`) runs
-inside the entrypoint try (`:923-990`) that ends in `process.exit(1)`. They are left SAFE because
-the producers on each path are enumerable and all throw spec-conforming `Error`s — Node `fs`/stream
-for the first, `new AlpacaHttpCalendarClient()`'s own missing-credentials throw for the second —
-but that is precisely the anticipation the sites decline to assume, so this classification is the
-weakest in the document and is the first thing to revisit if either path gains a producer.
+separately because the tension is real and a future edit should see it, though the two sites make
+different claims and only one of them is an argument against enumerating producers.
+
+`sweepStaleLogsWithLog` (`server/apps/orchestrator/log-retention.ts:710-763`) does decline the
+enumeration outright: "never throwing past this point… this wrapper's own try/catch covers anything
+unanticipated". Classifying its `:759` render SAFE on the enumerable set of Node `fs`/stream
+producers is exactly the anticipation that comment refuses to assume, so this is the weakest
+classification in the document and the first to revisit if that path gains a producer.
+
+`us-equity-session-source.ts:130-137` makes the narrower claim, and the earlier draft of this
+paragraph overstated it. Its comment *names* the case it handles — "reaching this catch means the
+pair passed that gate but this client's own construction still failed (e.g. a caller-injected empty
+override) — treat it exactly like a fetch failure rather than letting it escape uncaught" — so it
+is deliberate handling of an enumerated cause, not a blanket claim to cover the unanticipated.
+`new AlpacaHttpCalendarClient()`'s own missing-credentials throw is the only producer, and it is a
+spec-conforming `Error`; SAFE here rests on the same enumeration the comment itself performs.
+
+The boot-abort cost holds for both: a throw at either escapes to kill startup —
+`runEntrypointLogRetention` (`server/apps/orchestrator/index.ts:895-917`) runs inside the entrypoint
+try (`:923-990`) that ends in `process.exit(1)`.
 
 - `server/apps/orchestrator/log-retention.ts:759`
 - `server/apps/orchestrator/production/us-equity-session-source.ts:137`
@@ -331,10 +342,11 @@ change from this one.
 ## Left alone
 
 - **The 20 renamed variants** enumerated under "Verified count" above. Same defect, same fix; out of
-  this ticket's stated exact-string boundary, which is why they are not swept here. **Eight of them
-  are dangerous by this document's own criterion**, and they are named individually rather than as
-  "several", because a sentence that names four and says "several" reads as though the rest are
-  safe:
+  this ticket's stated exact-string boundary, which is why they are not swept here. **At least eight
+  are dangerous by this document's own criterion** — eight of the eight audited; the count is a
+  floor, not a total, because the remaining twelve were not examined. They are named individually
+  rather than as "several", because a sentence that names four and says "several" reads as though
+  the rest are safe:
 
   - `server/pipeline/verdict/notifications/telegram/telegram-bot-api-client.ts:822`
     (`escalationError`) — criterion (c). Inside a detached `.catch()` on
