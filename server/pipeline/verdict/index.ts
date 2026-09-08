@@ -246,13 +246,15 @@ export class VerdictImpl implements Verdict {
     // that HAS a mark still drifts and still ages, and a normally-priced
     // flatten is gated exactly as before. Gates 3 (dedup), 4 (market-open),
     // 5 (breaker re-check) and 6 (HITL) still run, and none of them GATES on
-    // a price: the first three evaluate no price at all, and HITL's verdict
-    // turns on the automation dial and the flag set, not on the bracket. That
-    // is a claim about what decides, not about what is carried — the HITL
+    // a price: the first three evaluate no price at all, and whether HITL
+    // ENGAGES turns on the automation dial and the flag set, not on the
+    // bracket. That is a claim about what routes the intent, not about what
+    // the route carries, and not about what a human then decides — the HITL
     // round trip hands a human the whole `order_intent` (`ApprovalRequest`,
-    // `types.ts`), so on this branch the bracket a reviewer sees is three
-    // zeros. The dedup gate in particular is what keeps a repeated flatten
-    // from double-submitting while the feed is down.
+    // `types.ts`), so once engaged the bracket a reviewer sees is three
+    // zeros, and their verdict is their own. The dedup gate in particular is
+    // what keeps a repeated flatten from double-submitting while the feed is
+    // down.
     //
     // `staleness` (gate 1) does NOT still run for such an intent, and this is
     // the one place that is easy to get wrong: `unpriced_exit` is only ever

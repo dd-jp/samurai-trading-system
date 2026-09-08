@@ -258,7 +258,7 @@ The ADR then rejects the wider exemption by name — candidate **(4) "Make the f
 entirely"** — as *"largest blast radius, and it discards the two protections that are still doing real
 work for this intent — dedup and the fire-time breaker re-check."* `verdict-spec.md`'s "Module: Gate
 Sequence" — the HITL-gate entry and the #826 amendment under the `drift` gate — agrees, as do the two
-in-file comments and the tests over `unpricedFlatten()` in `verdict/index.test.ts`.
+in-file comments and the tests over `staleExit()` and `unpricedFlatten()` in `verdict/index.test.ts`.
 
 *Correction to this paragraph (2026-09-08, [#1254](https://github.com/dd-jp/samurai-trading-system/issues/1254)):*
 it originally cited that #826 amendment approvingly as *"Gates 1, 4, 5, 6 and 7 all still run"*. That
