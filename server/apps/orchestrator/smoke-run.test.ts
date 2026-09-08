@@ -17,6 +17,7 @@
  */
 import { RSI_SPEC, SMA_SPEC } from '../../pipeline/analysts/technical-analyst.js';
 import type { ArmPerformance } from '../../pipeline/control-arm/index.js';
+import type { ReconcileDivergence } from '../../pipeline/execution/index.js';
 import { computeIndicator } from '../../providers/market-data-service/index.js';
 import { GUARDED_THRESHOLD_NAMES } from '../../shared/index.js';
 import { STAGE_OWNED_TABLES } from '../../shared/store/index.js';
@@ -37,6 +38,7 @@ import {
   type FillSyncFailureEvidence,
   FillSyncFailureRecorder,
   FixedAccountStateProvider,
+  findSweepDivergenceAction,
   formatSmokeReport,
   type LoggerResilienceEvidence,
   type LogRetentionEvidence,
@@ -3034,5 +3036,63 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
 
       expect(gate.failures.filter((failure) => failure.includes('#1125'))).toEqual([]);
     });
+  });
+});
+
+// #1285: measurement (inserting `await ctx.execution.ingestFills()` between
+// `runResidualSweepScenario` and the restart, per #1228's own claim) found
+// that of the four `residualSweep` checks in `evaluateSmokeGate` (#549
+// section above), only `sweepDivergenceAction === undefined` actually fires
+// when the residual heals in-process instead of via the restarted sweep —
+// the other three read a healed-in-process residual as indistinguishable
+// from a genuinely swept one. `findSweepDivergenceAction` (smoke-run.ts,
+// just above `runExitPathScenarios`) is that entire discriminator. Pinned
+// here, top-level and never through `gateFor`/`evaluateSmokeGate`, against a
+// hand-built divergence list, so that weakening it fails a standalone unit
+// test of the lookup itself — visibly outside the "evaluateSmokeGate — exit
+// path" suite — rather than only scenario 5's own gate checks. (What is NOT
+// covered here: the actual call site,
+// `findSweepDivergenceAction(restartReconcile.divergences,
+// residualSweep.lotKey)` inside `runExitPathScenarios`, is exercised only by
+// `yarn smoke`'s real exit-path harness — these tests pin the function's
+// semantics, not that wiring.)
+describe('findSweepDivergenceAction (#1285)', () => {
+  function divergence(overrides: Partial<ReconcileDivergence>): ReconcileDivergence {
+    return {
+      idempotency_key: 'decoy-lot',
+      instrument: 'BTC-USD',
+      store_state: 'submitted',
+      broker_state: 'filled',
+      action: 'rejected',
+      reason: '',
+      ...overrides,
+    };
+  }
+
+  it("returns the matching lot's own action, not a decoy divergence for another lot", () => {
+    const divergences = [
+      divergence({ idempotency_key: 'other-lot', action: 'rejected' }),
+      divergence({ idempotency_key: 'smoke-exit-sweep-lot', action: 'adopted' }),
+      divergence({ idempotency_key: 'another-other-lot', action: 'undetermined' }),
+    ];
+
+    expect(findSweepDivergenceAction(divergences, 'smoke-exit-sweep-lot')).toBe('adopted');
+  });
+
+  it('returns undefined when no divergence names the lot, even with other lots present', () => {
+    const divergences = [
+      divergence({ idempotency_key: 'other-lot', action: 'adopted' }),
+      divergence({ idempotency_key: 'another-other-lot', action: 'adopted' }),
+    ];
+
+    expect(findSweepDivergenceAction(divergences, 'smoke-exit-sweep-lot')).toBeUndefined();
+  });
+
+  it('matches the key exactly — a decoy key sharing a substring does not match', () => {
+    const divergences = [
+      divergence({ idempotency_key: 'smoke-exit-sweep-lot-2', action: 'adopted' }),
+    ];
+
+    expect(findSweepDivergenceAction(divergences, 'smoke-exit-sweep-lot')).toBeUndefined();
   });
 });

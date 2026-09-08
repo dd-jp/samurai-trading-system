@@ -1527,6 +1527,36 @@ export interface ExitPathEvidence {
 }
 
 /**
+ * The #549 sweep's own divergence for ONE lot, picked out of a restarted
+ * reconcile()'s full `divergences` list — every scenario's flatten/lot
+ * shares that one list, so this is a lookup by key, not "the first entry" or
+ * "any entry at all".
+ *
+ * Pulled out of `runExitPathScenarios` (#1285) so it has a unit test that
+ * does not also have to stand up the rest of the exit-path harness.
+ * Measurement (#1228/#1285) found this expression is the ENTIRE runtime
+ * discriminator for scenario 5 (#549): of `ExitPathEvidence.residualSweep`'s
+ * four fields, an in-process heal of the deliberately-failed re-arm (an
+ * extra `ingestFills()` ahead of the restart — see `PostSweepScenarioContext`
+ * above) takes `maybeRearmResidual`'s identical
+ * mark-unprotected -> rearmProtectiveLegs -> confirm-protected path
+ * (ingest-fills.ts) that a genuine restart-sweep heal takes, so it clears the
+ * marker, protects the exact residual, and pages exactly once — passing
+ * `markerCleared`, `protectedQty`, and the alert-count check in
+ * `evaluateSmokeGate` on a residual the restarted sweep never touched. Only
+ * this lookup, returning `undefined` because the restarted reconcile() found
+ * nothing left to sweep, tells the two apart. See `evaluateSmokeGate`'s #549
+ * section for how that finding changes what the other three checks are
+ * defending.
+ */
+export function findSweepDivergenceAction(
+  divergences: readonly ReconcileDivergence[],
+  lotKey: string,
+): ReconcileDivergence['action'] | undefined {
+  return divergences.find((divergence) => divergence.idempotency_key === lotKey)?.action;
+}
+
+/**
  * Drives the exit-path scenarios documented above against `db`, using `clock`
  * (advanced deterministically between phases — see `SimulatedClock.advanceTo`)
  * and the given cost/execution config. Returns everything `evaluateSmokeGate`
@@ -1697,9 +1727,10 @@ async function runExitPathScenarios(input: {
       protectedQty: broker.getProtectedQty(residualSweep.lotKey),
       markerCleared:
         lot5MarkerRow !== undefined && lot5MarkerRow.residual_unprotected_since === null,
-      sweepDivergenceAction: restartReconcile.divergences.find(
-        (divergence) => divergence.idempotency_key === residualSweep.lotKey,
-      )?.action,
+      sweepDivergenceAction: findSweepDivergenceAction(
+        restartReconcile.divergences,
+        residualSweep.lotKey,
+      ),
     },
     terminalSweep: {
       seededKey: terminalSweepKey,
@@ -1741,9 +1772,10 @@ interface ExitPathScenarioContext {
  * a healed-in-process residual still clears the marker and protects the
  * right quantity on its own, so of its four checks only
  * `residualSweep.sweepDivergenceAction` (undefined when the restart's own
- * sweep found nothing left to do) actually discriminates — this type only
- * moves that failure from `yarn smoke` to `yarn typecheck` for these three
- * functions specifically.
+ * sweep found nothing left to do — see `findSweepDivergenceAction`, above
+ * `runExitPathScenarios`, and its own test coverage, #1285) actually
+ * discriminates — this type only moves that failure from `yarn smoke` to
+ * `yarn typecheck` for these three functions specifically.
  */
 type PostSweepScenarioContext = Omit<ExitPathScenarioContext, 'execution'>;
 
@@ -5428,8 +5460,22 @@ export function evaluateSmokeGate(
   // #549 — the residual-protection sweep's ENFORCEMENT assertions (#430's
   // convention, mirroring #519/#526's above): scenario 5's observing-poll
   // re-arm was scripted to fail, so ONLY the durable marker + the restarted
-  // reconcile()'s sweep can have re-established protection. Each check names
-  // a different way the mechanism can silently stop being wired.
+  // reconcile()'s sweep can have re-established protection. Each check below
+  // catches a real way the #549 mechanism can regress on its OWN terms — the
+  // dedup breaking, the sweep settling on the wrong action, the marker
+  // surviving, the qty coming out wrong — but they are not four independent
+  // witnesses to the SAME failure. Measured (#1228/#1285): an extra
+  // `ingestFills()` ahead of the restart heals the deliberately-failed re-arm
+  // in-process, through `maybeRearmResidual`'s identical
+  // mark-unprotected -> rearmProtectiveLegs -> confirm-protected path
+  // (ingest-fills.ts) a genuine restart-sweep heal takes — so it clears the
+  // marker, protects the exact residual, and pages exactly once. The
+  // `scenario5Alerts` count check below, and the `markerCleared`/
+  // `protectedQty` checks further below, all read that as healthy. Only
+  // `sweepDivergenceAction === undefined` (`findSweepDivergenceAction`, above
+  // `runExitPathScenarios`) sees that the restarted sweep itself found
+  // nothing left to do — it is the one check that provides positive evidence
+  // the RESTARTED sweep, not an earlier poll, did the healing.
   const scenario5Alerts = residualAlerts.filter(
     (alert) => alert.idempotency_key === residualSweep.lotKey,
   );
