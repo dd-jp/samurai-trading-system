@@ -369,6 +369,99 @@ describe('openSharedStore', () => {
     }
   });
 
+  // Same cutover shape as the 0049 test above, for the same reason: 0050's
+  // `arm` backfill is an UPDATE over rows that must ALREADY exist when the
+  // migration runs, and on a fresh `:memory:` DB none do. It is not a
+  // hypothetical — the paper soak DB was at `schema_migrations` max 48 when
+  // #1124 was fixed, holding 13 `flatten_submissions` rows of which 11 were
+  // the control arm's; `DEFAULT 'live'` alone would have mislabelled all 11
+  // into the live arm's newly-filtered `getUnresolvedFlattens()` scan.
+  //
+  // The four seeded rows are the four answers the backfill can give: the
+  // closed-trade arm, the open-position arm (the second COALESCE branch —
+  // both seeded lots are the CONTROL arm precisely so a branch that silently
+  // returned nothing would be caught by the `'live'` DEFAULT rather than
+  // masked by it), a lot present in
+  // NEITHER table — `sweepTerminalPositions` deletes from `open_positions`,
+  // so an aged-out lot is underivable and must fall back rather than throw —
+  // and a NULL `lot_idempotency_keys`, which `json_each` would raise over.
+  it('migration 0050 backfills each flatten row to its lots’ arm, falling back to live (#1124)', () => {
+    const raw = new BetterSqlite3(':memory:');
+    const preCutoverDir = mkdtempSync(join(tmpdir(), 'samurai-migrations-pre-0050-'));
+    try {
+      for (const filename of readdirSync(MIGRATIONS_DIR)) {
+        const match = /^(\d{4})_[\w-]+\.sql$/.exec(filename);
+        if (match && Number(match[1]) <= 49) {
+          copyFileSync(join(MIGRATIONS_DIR, filename), join(preCutoverDir, filename));
+        }
+      }
+      runMigrations(raw, preCutoverDir);
+
+      raw
+        .prepare(
+          `INSERT INTO closed_trades (
+             idempotency_key, debate_id, instrument, asset_class, side,
+             entry, stop, filled_size, realized_pnl_net, fees_total,
+             opened_at, closed_at, close_reason, arm
+           ) VALUES ('lot-closed', 'd1', 'QQQ', 'stocks', 'buy', 100, 90, 10, 5, 0,
+             '2026-09-04T00:00:00.000Z', '2026-09-04T01:00:00.000Z', 'flatten', 'control')`,
+        )
+        .run();
+      raw
+        .prepare(
+          `INSERT INTO open_positions (
+             idempotency_key, debate_id, instrument, asset_class, side, intent_type,
+             requested_size, filled_size, avg_entry_price, stop, target,
+             order_state, broker_order_ids, opened_at, decision_timestamp, arm
+           ) VALUES ('lot-open', 'd2', 'SPY', 'stocks', 'buy', 'entry',
+             10, 10, 100, 90, 110, 'filled', '["o1"]',
+             '2026-09-04T00:00:00.000Z', '2026-09-04T00:00:00.000Z', 'control')`,
+        )
+        .run();
+
+      const insertFlatten = raw.prepare(
+        `INSERT INTO flatten_submissions (
+           idempotency_key, instrument, asset_class, side, size, status,
+           submitted_at, lot_idempotency_keys
+         ) VALUES (?, ?, 'stocks', 'sell', 10, 'submitted', '2026-09-04T02:00:00.000Z', ?)`,
+      );
+      insertFlatten.run('flatten-of-closed', 'QQQ', JSON.stringify(['lot-closed']));
+      insertFlatten.run('flatten-of-open', 'SPY', JSON.stringify(['lot-open']));
+      insertFlatten.run('flatten-of-aged-out', 'MARA', JSON.stringify(['lot-gone']));
+      insertFlatten.run('flatten-of-nothing', 'MU', null);
+
+      expect(runMigrations(raw, MIGRATIONS_DIR)).toEqual([50]);
+
+      expect(
+        raw
+          .prepare('SELECT idempotency_key, arm FROM flatten_submissions ORDER BY idempotency_key')
+          .all(),
+      ).toEqual([
+        { idempotency_key: 'flatten-of-aged-out', arm: 'live' },
+        { idempotency_key: 'flatten-of-closed', arm: 'control' },
+        { idempotency_key: 'flatten-of-nothing', arm: 'live' },
+        { idempotency_key: 'flatten-of-open', arm: 'control' },
+      ]);
+
+      // The index is what keeps the newly-filtered scan from degrading into a
+      // full-table read as the journal grows, and nothing else in the suite
+      // asserts it exists — the store test covers the COLUMN end to end, but a
+      // dropped `CREATE INDEX` line would stay green everywhere.
+      expect(
+        raw
+          .prepare(
+            `SELECT name FROM sqlite_master
+              WHERE type = 'index' AND tbl_name = 'flatten_submissions'
+                AND name = 'idx_flatten_submissions_arm'`,
+          )
+          .get(),
+      ).toEqual({ name: 'idx_flatten_submissions_arm' });
+    } finally {
+      raw.close();
+      rmSync(preCutoverDir, { recursive: true, force: true });
+    }
+  });
+
   it('migration 0046 adds the nullable no-go detail columns to verdict_log (#1111)', () => {
     const db = openSharedStore(':memory:');
 

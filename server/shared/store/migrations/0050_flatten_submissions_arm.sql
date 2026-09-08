@@ -42,12 +42,32 @@
 -- OpenPosition-shaped per-instrument comparison that would have surfaced the
 -- gap the way `getOpenPositions()`'s own arm scoping did.
 --
--- ## Why DEFAULT 'live', not nullable — same reasoning as migration 0033
+-- ## The backfill: derived per row, with `'live'` only as the fallback
 --
--- Every row already in this table was written before the control arm's own
--- flatten path existed to write one under `'control'` at the time this
--- migration runs in a fresh soak, so `'live'` is the true backfilled value,
--- not a placeholder.
+-- This migration runs IN PLACE on a DB that already holds pre-#1124 rows —
+-- the paper soak DB was at `schema_migrations` max 48 when this was written,
+-- with 13 `flatten_submissions` rows, and `DEFAULT 'live'` alone would have
+-- mislabelled 11 of them. Those rows are NOT all live: the control arm's
+-- flatten path has been writing here since it shipped, it just could not
+-- SAY so without this column. A blanket `'live'` is therefore a wrong
+-- value, not a conservative one, and once `getUnresolvedFlattens()` starts
+-- filtering on `arm` a mislabelled row is worse than an unlabelled one: it
+-- becomes visible only to the WRONG arm's reconcile pass, which is the very
+-- failure this migration exists to close, minus the pre-fix unfiltered scan
+-- that used to self-heal it.
+--
+-- The true arm IS derivable. Each row's `lot_idempotency_keys` names the
+-- lots it flattened, and those lots carry `arm` in `closed_trades` /
+-- `open_positions` (migration 0033). The `UPDATE` below resolves it from
+-- there; on the soak DB it resolved all 13 rows with no NULLs — 2 live
+-- (SPY, TSLA) and 11 control.
+--
+-- `'live'` survives as the COALESCE fallback for the case the join cannot
+-- answer: `sweepTerminalPositions` deletes from `open_positions`, so a lot
+-- aged out of both tables leaves its flatten row underivable. That is the
+-- same posture migration 0033 took, and it is the column's DEFAULT for the
+-- same reason — a value for the rows nothing else can speak for, not a
+-- claim about the rows that can.
 --
 -- ## Key-based reads/writes stay unfiltered
 --
@@ -61,6 +81,32 @@
 -- predicate.
 ALTER TABLE flatten_submissions
   ADD COLUMN arm TEXT NOT NULL DEFAULT 'live' CHECK(arm IN ('live', 'control'));
+
+-- `closed_trades` first: a flattened lot ends there, and `open_positions`
+-- still holds the row only until `sweepTerminalPositions` removes it, so the
+-- closed record is the longer-lived witness. `LIMIT 1` because a multi-lot
+-- flatten's lots are all one arm by construction (one arm's `flattenAll`
+-- builds the list) — the limit keeps the answer independent of scan order
+-- rather than picking between disagreeing arms.
+--
+-- Guarded by `json_valid`, not merely `IS NOT NULL`: `lot_idempotency_keys`
+-- is nullable AND untrusted enough that `getFlattenAttribution` validates it
+-- on every read (#524/#571). `json_each` over a malformed value raises, and a
+-- raising migration bricks the DB it runs on; a row that cannot be parsed
+-- simply keeps the `'live'` default, the same as one whose lots have aged out.
+UPDATE flatten_submissions
+   SET arm = COALESCE(
+         (SELECT ct.arm
+            FROM json_each(flatten_submissions.lot_idempotency_keys) AS lot
+            JOIN closed_trades ct ON ct.idempotency_key = lot.value
+           LIMIT 1),
+         (SELECT op.arm
+            FROM json_each(flatten_submissions.lot_idempotency_keys) AS lot
+            JOIN open_positions op ON op.idempotency_key = lot.value
+           LIMIT 1),
+         'live')
+ WHERE lot_idempotency_keys IS NOT NULL
+   AND json_valid(lot_idempotency_keys);
 
 -- `getUnresolvedFlattens()`'s own WHERE shape is `arm = ? AND (status = ... OR
 -- (status = ... AND fills_swept_at IS NULL))` — `arm` leads for the same

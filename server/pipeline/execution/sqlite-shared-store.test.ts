@@ -1170,20 +1170,40 @@ describe('SqliteExecutionStore', () => {
     it('keeps each arm’s unresolved flattens invisible to the other reconcile pass', async () => {
       const { live, control } = makeArmedStores();
 
-      await live.writeAheadFlatten(makeFlattenWriteAhead({ idempotency_key: 'live-flatten' }));
-      await control.writeAheadFlatten(
-        makeFlattenWriteAhead({ idempotency_key: 'control-flatten' }),
-      );
+      // BOTH unresolved shapes, per arm. The `'submitted'`-and-unswept pair is
+      // the state the three logged #1124 divergences were actually in, and it
+      // is the half a predicate written `arm = ? AND status = 'submitting' OR
+      // (status = 'submitted' AND fills_swept_at IS NULL)` — the same clauses,
+      // one pair of parens short — leaks across arms while still passing an
+      // all-`'submitting'` test.
+      for (const [store, prefix] of [
+        [live, 'live'],
+        [control, 'control'],
+      ] as const) {
+        await store.writeAheadFlatten(
+          makeFlattenWriteAhead({ idempotency_key: `${prefix}-submitting` }),
+        );
+        await store.writeAheadFlatten(
+          makeFlattenWriteAhead({ idempotency_key: `${prefix}-submitted-unswept` }),
+        );
+        await store.resolveFlattenSubmitted(
+          `${prefix}-submitted-unswept`,
+          { order_state: 'submitted', broker_order_ids: [`${prefix}-order-1`] },
+          OPENED_AT,
+        );
+      }
 
-      // Before the fix, EACH scan below returned BOTH rows — the live arm's
-      // reconcile() would have asked its own (real) broker about
-      // 'control-flatten', and the control arm's would have asked its own
-      // (simulated) broker about 'live-flatten'.
-      expect((await live.getUnresolvedFlattens()).map((r) => r.idempotency_key)).toEqual([
-        'live-flatten',
+      // Before the fix, EACH scan below returned ALL FOUR rows — the live arm's
+      // reconcile() would have asked its own (real) broker about the control
+      // arm's keys, and the control arm's would have asked its own (simulated)
+      // broker about the live arm's.
+      expect((await live.getUnresolvedFlattens()).map((r) => r.idempotency_key).sort()).toEqual([
+        'live-submitted-unswept',
+        'live-submitting',
       ]);
-      expect((await control.getUnresolvedFlattens()).map((r) => r.idempotency_key)).toEqual([
-        'control-flatten',
+      expect((await control.getUnresolvedFlattens()).map((r) => r.idempotency_key).sort()).toEqual([
+        'control-submitted-unswept',
+        'control-submitting',
       ]);
     });
 
