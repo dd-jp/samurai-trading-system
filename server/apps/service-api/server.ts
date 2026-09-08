@@ -57,9 +57,9 @@ import type { DashboardQueryStore } from './types.js';
  *
  * Scope: both call sites guard `res.headersSent` before `writeHead(500,
  * ...)` runs and this function's render is evaluated as its `.end`
- * argument — same order as each site's own success path, where `writeHead`
- * always runs before the value that can throw is evaluated.
- * `/api/snapshot`: `res.writeHead(200, ...).end(JSON.stringify(snapshot))`
+ * argument — same order `/api/snapshot`'s own success path already has,
+ * where `writeHead` runs before the value that can throw is evaluated:
+ * `res.writeHead(200, ...).end(JSON.stringify(snapshot))`
  * — `writeHead` runs first, then `JSON.stringify` is evaluated for `.end`;
  * a value it refuses (a BigInt, a circular reference) reaches this catch
  * with `res.headersSent` already true. Without the guard, the catch's own
@@ -68,9 +68,11 @@ import type { DashboardQueryStore } from './types.js';
  * against.
  *
  * `serveStatic`'s rejection handler carries the same `res.headersSent`
- * guard for its own reason, not this one: nothing in the paths that reach
- * it today (see that handler's own doc comment) throws mid-render the way
- * `/api/snapshot`'s does. The guard is defensive there — protecting
+ * guard for its own reason, not this one: its success path is
+ * `res.writeHead(200, ...).end(body)` with `body` an already-resolved
+ * `Buffer` — a bare variable, not an expression that can throw — so
+ * nothing in the paths that reach this handler today throws mid-render the
+ * way `/api/snapshot`'s does. The guard is defensive there — protecting
  * against any future path where a rejection reaches this handler after
  * `serveStatic` already committed a `writeHead` internally (its success
  * path is the same `writeHead(200, ...).end(body)` shape) — not proof that
