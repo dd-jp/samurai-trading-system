@@ -69,7 +69,7 @@ class FakeSharedStore implements SharedStore {
   async getOpenPositions(): Promise<OpenPosition[]> {
     return [];
   }
-  async hasFill(_broker_fill_id: string): Promise<boolean> {
+  async hasFill(_idempotency_key: string, _broker_fill_id: string): Promise<boolean> {
     return false;
   }
   async getFills(_idempotency_key: string): Promise<Fill[]> {
@@ -202,7 +202,7 @@ describe('withOnTradeClose', () => {
 
     await expect(decorated.findByKey('k')).resolves.toBe(false);
     await expect(decorated.getOpenPositions()).resolves.toEqual([]);
-    await expect(decorated.hasFill('f')).resolves.toBe(false);
+    await expect(decorated.hasFill('k', 'f')).resolves.toBe(false);
     await expect(decorated.getFills('k')).resolves.toEqual([]);
     expect(onTradeCloseMock).not.toHaveBeenCalled();
   });

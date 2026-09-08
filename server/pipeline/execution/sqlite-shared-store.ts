@@ -426,9 +426,21 @@ export class SqliteExecutionStore implements SharedStore {
     return result.changes;
   }
 
-  /** Dedup gate for the fill feed's re-offered fills. */
-  async hasFill(broker_fill_id: string): Promise<boolean> {
-    const row = this.db.prepare('SELECT 1 FROM fills WHERE broker_fill_id = ?').get(broker_fill_id);
+  /**
+   * Dedup gate for the fill feed's re-offered fills. Matched on the FULL
+   * `fills` primary key — `(idempotency_key, broker_fill_id)` — not on
+   * `broker_fill_id` alone (#1320), for the same reason
+   * `pruneIngestedObservedFills` (sqlite-broker-state-store.ts) already
+   * matches the full key on this same table: `fills` has no venue column
+   * and `broker_fill_id` is venue-assigned, so two venues (or, short of a
+   * second live venue, two lots sharing one id string — see the flatten
+   * split's `:${lotKey}` suffix in `ingest-fills.ts`) could otherwise let
+   * one lot's ingested fill be misread as covering another's.
+   */
+  async hasFill(idempotency_key: string, broker_fill_id: string): Promise<boolean> {
+    const row = this.db
+      .prepare('SELECT 1 FROM fills WHERE idempotency_key = ? AND broker_fill_id = ?')
+      .get(idempotency_key, broker_fill_id);
     return row !== undefined;
   }
 
