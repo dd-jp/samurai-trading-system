@@ -199,9 +199,9 @@ describe('GrokAgent', () => {
   });
 
   it('does not throw when the call fails, and does not burn the bucket', async () => {
-    // Called from the tick path: an xAI outage must degrade the debate, not
-    // fail a tick that would otherwise have traded. And one transient failure
-    // must not buy four hours of silence.
+    // An xAI outage must degrade the debate to NO_DATA_MARKER, and one
+    // transient failure must not buy a whole extra refresh bucket of silence
+    // — the bucket is not marked on failure, so the next pass retries.
     const { agent, store, fetches } = build({ fail: true });
 
     expect(await agent.refresh('t1', 'BTC-USD', 'crypto')).toBe(false);
