@@ -35,11 +35,11 @@
  * losing the fill, the lot's round-trip to `closed`, and its `ClosedTrade`
  * with it (#526's own finding).
  *
- * `resolveUnresolvedFlattens` below closes both: it reads
+ * The flatten sweep below closes both: `reconcile()` reads
  * `SharedStore.getUnresolvedFlattens()` — bounded so the sweep does not
  * re-poll the venue for a flatten that finished closing its lot(s) long ago,
- * see migration 0023 — and asks the venue about each via
- * `BrokerAdapter.resumeFlatten`, whose side effect (re-populating a live
+ * see migration 0023 — and calls `reconcileFlatten` for each row, which asks
+ * the venue via `BrokerAdapter.resumeFlatten`, whose side effect (re-populating a live
  * adapter's `flattens` map) is what makes the NEXT `fetchNewFills` sweep find
  * the order again after a restart. Symmetric to `reconcileLot` below in
  * every way that matters: the venue is the tie-break authority, ignorance is

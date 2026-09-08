@@ -13,8 +13,7 @@
  * in `package.json`, no `.plist`/`.service` file anywhere in the repo, no
  * `launchctl`/`systemctl`/`crontab` reference in the docs. README documents
  * exactly one way to run this: `yarn start` / `yarn serve` in a foreground
- * terminal (or a detached tmux session, per `docs/adr/...` deployment notes),
- * stopped by Ctrl-C. If this process exits on an arbitrary fault, the system
+ * terminal, stopped by Ctrl-C. If this process exits on an arbitrary fault, the system
  * stays down until a human notices and restarts it by hand — for a live-money
  * system that is a worse outcome than the fault itself. That is the
  * discriminating fact, not "a supervisor that exits defeats its purpose" by

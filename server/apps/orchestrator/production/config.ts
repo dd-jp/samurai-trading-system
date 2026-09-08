@@ -155,7 +155,7 @@ export interface AlertChannelSlots {
   /**
    * Where a `flatten_submissions` row `reconcile()`'s sweep could not settle
    * is escalated (#519) — genuine ignorance, or a venue contradiction on an
-   * already-acked row (`resolveUnresolvedFlattens`, execution/reconcile.ts).
+   * already-acked row (`reconcileFlatten`, execution/reconcile.ts).
    * Defaults to `LoggingFlattenReconcileAlertChannel`, with the same caveat
    * as `residualExposureAlerts`: reachable only by an operator reading the
    * log stream. `TradeChannelFlattenReconcileAlert`
