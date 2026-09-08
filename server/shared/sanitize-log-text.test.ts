@@ -50,11 +50,6 @@ describe('maskCredentials', () => {
 });
 
 describe('camelCase/underscore keys, Basic/Token auth and DSN passwords (#1367)', () => {
-  // Every row below was unmasked on `origin/main` before this fix (measured
-  // directly; see the PR body for the traced before/after pairs): `\b`-
-  // anchored patterns don't see a credential word joined by camelCase or
-  // underscore, and neither `Authorization: Basic`/`Token` nor a DSN
-  // password had a pattern at all.
   // `survives`: a substring the mask must leave untouched, distinct from
   // `secret` — proves each pattern replaces only the credential, not the
   // whole line, and (via a sibling field on the camelCase rows) that only the
@@ -100,6 +95,65 @@ describe('camelCase/underscore keys, Basic/Token auth and DSN passwords (#1367)'
         input: '{"venue":"saxo","SAXO_OPENAPI_TOKEN":"skFAKE0000"}',
         secret: 'skFAKE0000',
         survives: '"venue":"saxo"',
+      },
+      {
+        // Round-2 review (F3): the suffix list was extended to close this
+        // real gap — `password`/`passwd` env names — not widened to a bare
+        // `_KEY`, which would over-mask `SORT_KEY`/`ACCOUNT_KEY`-shaped
+        // names (see the negative rows for what stayed deliberately out).
+        name: 'real env-var key: DB_PASSWORD (_PASSWORD suffix)',
+        input: '{"engine":"postgres","DB_PASSWORD":"skFAKE0000"}',
+        secret: 'skFAKE0000',
+        survives: '"engine":"postgres"',
+      },
+      {
+        name: 'real env-var key: APP_PASSWD (_PASSWD suffix)',
+        input: '{"service":"redis","APP_PASSWD":"skFAKE0000"}',
+        secret: 'skFAKE0000',
+        survives: '"service":"redis"',
+      },
+      {
+        // Round-2 review (F2): the case-sensitive all-caps branch above
+        // only reaches SCREAMING_SNAKE names, but this masking runs over
+        // upstream-controlled text (this module's doc comment, line 2), not
+        // a JSON field name whose case this codebase controls — so a real
+        // lowercase credential shape must still be caught. Measured
+        // unmasked before the lowercase-anchored pattern existed.
+        name: 'lowercase env-var-shaped key: polygon_api_key (_api_key suffix)',
+        input: 'GET failed: polygon_api_key=skFAKE0000',
+        secret: 'skFAKE0000',
+        survives: 'GET failed: ',
+      },
+      {
+        name: 'lowercase env-var-shaped key: alpaca_api_secret_key (_secret_key suffix)',
+        input: 'alpaca_api_secret_key=skFAKE0000 rejected',
+        secret: 'skFAKE0000',
+        survives: ' rejected',
+      },
+      {
+        name: 'lowercase env-var-shaped key: apca_api_secret_key (_secret_key suffix)',
+        input: 'apca_api_secret_key=skFAKE0000 rejected',
+        secret: 'skFAKE0000',
+        survives: ' rejected',
+      },
+      {
+        name: 'lowercase env-var-shaped key: alpaca_api_secret (_api_secret suffix)',
+        input: 'alpaca_api_secret=skFAKE0000 rejected',
+        secret: 'skFAKE0000',
+        survives: ' rejected',
+      },
+      {
+        name: 'lowercase env-var-shaped key: api_secret_key, JSON-quoted',
+        input: '{"provider":"generic","api_secret_key":"skFAKE0000"}',
+        secret: 'skFAKE0000',
+        survives: '"provider":"generic"',
+      },
+      {
+        name: 'F8 (#358): apiKey in a URL query string keeps its trailing params',
+        input:
+          'GET https://api.polygon.io/v2/aggs?apiKey=skFAKE0000&adjusted=true&limit=5000 failed 429',
+        secret: 'skFAKE0000',
+        survives: '&adjusted=true&limit=5000 failed 429',
       },
       {
         // `_` is a word character, so a trailing `\b` (as the bareword and
@@ -188,12 +242,29 @@ describe('camelCase/underscore keys, Basic/Token auth and DSN passwords (#1367)'
     expect(out).toBe('{"dsn":"redis://h:6379","email":"a@b.com"}');
   });
 
-  it('the env-var pattern is case-sensitive, so a lowercase name is not a false positive', () => {
-    // Same shape as `APCA_API_SECRET_KEY` but lowercase — this codebase's
-    // JSON field names are never SCREAMING_SNAKE, so a case-insensitive
-    // version would gain nothing and would mask `next_page_token` (see the
-    // negative row below) as a side effect of its own `_token` suffix.
-    expect(maskCredentials('my_secret_key=abc123')).toBe('my_secret_key=abc123');
+  it('the env-var pattern is case-sensitive, so a lowercase pagination cursor is not a false positive', () => {
+    // What case-sensitivity actually buys (round-2 review, F2/F5): NOT that
+    // lowercase credential shapes leak in general — `my_secret_key=abc123`
+    // is exactly the `_secret_key` shape the lowercase-anchored pattern
+    // above now masks, so pinning THAT as correct-to-leak would be pinning
+    // a bug. What it buys is that `next_page_token` (a real pagination
+    // cursor this codebase logs, lowercase) doesn't fall to the all-caps
+    // branch, and isn't a `_secret_key`/`_api_key`/`_api_secret` shape
+    // either, so the lowercase-anchored branch doesn't reach it either.
+    expect(maskCredentials('next_page_token=abc123continuation')).toBe(
+      'next_page_token=abc123continuation',
+    );
+  });
+
+  it('newline after the key does not swallow the following line as the value (#1367 round 2, F7)', () => {
+    // `\s*` around the key-to-value operator admits a newline; a caught
+    // error's `message` embedding a stack trace (`token:\n    at ...`) is
+    // not a credential assignment, but the old pattern read the stack
+    // trace's first word as the "value" and destroyed it.
+    expect(maskCredentials('token:\nStack trace at foo()')).toBe('token:\nStack trace at foo()');
+    expect(maskCredentials('accessToken:\n    at Client.request (/app/x.ts:1:1)')).toBe(
+      'accessToken:\n    at Client.request (/app/x.ts:1:1)',
+    );
   });
 
   it('existing bareword keys still mask, independently, with no regression', () => {
@@ -246,6 +317,45 @@ describe('camelCase/underscore keys, Basic/Token auth and DSN passwords (#1367)'
       name: '"Basic" as ordinary English, no Authorization: prefix',
       input: "Alpaca's Basic (free) subscription allows 200 req/min",
       where: 'tools/backtest/free-stack-aggregates-client.ts',
+    },
+    {
+      // Round-2 review, F2: the lowercase-anchored pattern only covers
+      // `_secret_key`/`_api_key`/`_api_secret` — deliberately NOT a bare
+      // `_token` suffix, because that would re-catch `next_page_token`. A
+      // lowercase or mixed-case name ending only in `_token` is an
+      // intentional, documented residual gap, not an oversight.
+      name: 'residual gap: lowercase _token-suffixed name (saxo_openapi_token)',
+      input: 'saxo_openapi_token=skFAKE0000',
+      where:
+        "not found as a real lowercase field in server/ — the residual gap this row pins is deliberate, see this row's comment",
+    },
+    {
+      name: 'residual gap: mixed-case _token-suffixed name (Saxo_Openapi_Token)',
+      input: 'Saxo_Openapi_Token=skFAKE0000',
+      where:
+        'same residual gap as the row above — neither the all-caps branch (mixed case) nor the lowercase branch (bare _token) reaches it',
+    },
+    {
+      // Round-2 review, F3: the all-caps suffix list was extended to close
+      // a real gap (`PASSWORD`/`PASSWD`), not widened to `_KEY` generally —
+      // a bare `_KEY` suffix would mask `SORT_KEY`/`ACCOUNT_KEY`/
+      // `IDEMPOTENCY_KEY`-shaped names, none of which are credentials. No
+      // real `_PRIVATE_KEY`/`_APP_KEY`/`_CREDENTIALS` env name exists in
+      // this repo today (grepped); these three pin that the suffix list
+      // stayed narrow rather than growing to match every plausible name.
+      name: 'residual gap: SSH_PRIVATE_KEY (no bare _KEY suffix)',
+      input: 'SSH_PRIVATE_KEY=skFAKE0000',
+      where: 'not a real env name in server/ — synthetic, pins the suffix list stayed narrow',
+    },
+    {
+      name: 'residual gap: SAXO_APP_KEY (no bare _KEY suffix)',
+      input: 'SAXO_APP_KEY=skFAKE0000',
+      where: 'not a real env name in server/ — synthetic, pins the suffix list stayed narrow',
+    },
+    {
+      name: 'residual gap: A_CREDENTIALS (no _CREDENTIALS suffix)',
+      input: 'A_CREDENTIALS=skFAKE0000',
+      where: 'not a real env name in server/ — synthetic, pins the suffix list stayed narrow',
     },
     {
       // Not a real logged field. `grep -rn -i keyword server/` (repo-wide,

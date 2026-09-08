@@ -25,13 +25,15 @@ import { truncateForError } from './http/response-errors.js';
  * a bare high-entropy string is NOT matched, because legitimate failure reasons
  * are full of ids, hashes and ISO timestamps.
  *
- * Every quote and `}` below is a hex escape (`\x22`, `\x27`, `\x7d`), never
- * literal: `server/apps/orchestrator/production.test.ts`'s
- * `stripCommentsAndStrings leaves braces balanced on every server source
- * file it strips` fails on a literal one — its hand-rolled stripper can't
- * tell a regex literal from a string, so a literal quote misreads as a
- * string opener and swallows everything up to its accidental "close",
- * `}` characters included.
+ * Every quote, and every `}` inside a character class, below is a hex escape
+ * (`\x22`, `\x27`, `\x7d`), never literal:
+ * `server/apps/orchestrator/production.test.ts`'s `stripCommentsAndStrings
+ * leaves braces balanced on every server source file it strips` fails on a
+ * literal one — its hand-rolled stripper can't tell a regex literal from a
+ * string, so a literal quote misreads as a string opener and swallows
+ * everything up to its accidental "close", `}` characters included. The `}`
+ * in a quantifier (`{0,60}`, `{20,}`, …) is exempt: it pairs with its own
+ * `{` and never desyncs the stripper's brace count.
  */
 const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // Telegram bot token in a URL path: `/bot123456:AA...`
@@ -41,8 +43,16 @@ const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // `Bearer <token>`
   /\bBearer\s+[^\s,;\x22\x27\x7d\]]+/gi,
   // `apiKey=x`, `api_secret: x`, `token: x`, `password=x`, `auth: x`, and
-  // Alpaca's own header names.
-  /\b(?:APCA-API-KEY-ID|APCA-API-SECRET-KEY|api[_-]?key|api[_-]?secret|secret|token|password|passwd|pwd|auth)\b[\x22\x27]?\s*[:=]\s*[\x22\x27]?[^\s,;\x22\x27\x7d\]]+/gi,
+  // Alpaca's own header names. `[ \t]*` (not `\s*`) around the operator:
+  // `\s` admits a newline, so `token:\n<stack trace line>` would consume the
+  // newline and then greedily eat the first word of the following line as
+  // the "value" — a real shape (a caught error's `message` embeds a stack
+  // trace) that has nothing to do with credentials. The value class already
+  // excludes `\s`, so this only tightens the key-to-value separator, not
+  // what counts as a value. `&` is excluded from the value class for the
+  // same reason a query-string credential shouldn't swallow its own
+  // trailing params (`?apiKey=x&adjusted=true` must keep `&adjusted=true`).
+  /\b(?:APCA-API-KEY-ID|APCA-API-SECRET-KEY|api[_-]?key|api[_-]?secret|secret|token|password|passwd|pwd|auth)\b[\x22\x27]?[ \t]*[:=][ \t]*[\x22\x27]?[^\s,;&\x22\x27\x7d\]]+/gi,
   // `clientSecret`/`client_secret`, `accessToken`/`access_token`,
   // `refreshToken`/`refresh_token`, and an underscore-PREFIXED compound
   // (`X_CLIENT_SECRET`): the bareword pattern above requires a `\b` before
@@ -56,18 +66,38 @@ const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // `alpaca-http-client.ts`) and `maxTokens`/`max_tokens` (an LLM request
   // budget — `max_tokens` in `orchestrator/production/defaults.ts`,
   // `maxTokens` in `market-intelligence/grok/x-search-client.ts`) — a
-  // suffix rule would mask both.
-  /(?<![A-Za-z0-9])(?:client[_-]?secret|access[_-]?token|refresh[_-]?token)[\x22\x27]?\s*[:=]\s*[\x22\x27]?[^\s,;\x22\x27\x7d\]]+/gi,
+  // suffix rule would mask both. `[ \t]*`/`&` reasoning: see the bareword
+  // pattern above.
+  /(?<![A-Za-z0-9])(?:client[_-]?secret|access[_-]?token|refresh[_-]?token)[\x22\x27]?[ \t]*[:=][ \t]*[\x22\x27]?[^\s,;&\x22\x27\x7d\]]+/gi,
   // Underscore-joined ALL-CAPS env-var names (`ALPACA_API_SECRET`,
-  // `SAXO_OPENAPI_TOKEN`, `TELEGRAM_BOT_TOKEN` — grepped from this repo's
-  // real `process.env.*` reads, not just the one Alpaca name): the shape
-  // the bareword pattern above can't reach even with `api[_-]?key`/
-  // `secret`/`token` in it, because the credential word isn't the LAST
-  // segment. Case-SENSITIVE (no `i` flag) and requires an all-caps prefix —
-  // a case-insensitive version would also mask `next_page_token`
-  // (lowercase, a pagination cursor, not a credential) since it too ends
-  // in `_token`.
-  /\b[A-Z][A-Z0-9_]{0,60}_(?:SECRET_KEY|API_KEY|SECRET|TOKEN)\b[\x22\x27]?\s*[:=]\s*[\x22\x27]?[^\s,;\x22\x27\x7d\]]+/g,
+  // `SAXO_OPENAPI_TOKEN`, `TELEGRAM_BOT_TOKEN`, `DB_PASSWORD` — grepped from
+  // this repo's real `process.env.*` reads, not just the one Alpaca name):
+  // the shape the bareword pattern above can't reach even with
+  // `api[_-]?key`/`secret`/`token`/`password` in it, because the credential
+  // word isn't the LAST segment. Case-SENSITIVE (no `i` flag) and requires
+  // an all-caps prefix — this buys avoiding a mask on the LOWERCASE spelling
+  // of a real field this codebase logs, `next_page_token` (a pagination
+  // cursor); it does NOT avoid masking `NEXT_PAGE_TOKEN` — an all-caps
+  // spelling of that same field would still match, because this input is
+  // upstream-controlled text (see this module's doc comment), not a JSON
+  // field name whose case this codebase controls. The lowercase-anchored
+  // pattern below closes part of that gap for real credential shapes,
+  // deliberately without reintroducing the `next_page_token` regression.
+  /\b[A-Z][A-Z0-9_]{0,60}_(?:SECRET_KEY|API_KEY|SECRET|TOKEN|PASSWORD|PASSWD)\b[\x22\x27]?[ \t]*[:=][ \t]*[\x22\x27]?[^\s,;&\x22\x27\x7d\]]+/g,
+  // The lowercase/mixed-case counterpart to the all-caps pattern above, for
+  // exactly three suffixes: `_secret_key`, `_api_key`, `_api_secret`
+  // (`polygon_api_key`, `alpaca_api_secret_key`, `apca_api_secret_key`,
+  // `api_secret_key`, `alpaca_api_secret` — all real shapes measured
+  // unmasked before this pattern existed). Deliberately NOT a bare
+  // `_secret` or `_token` suffix here: that would re-catch
+  // `next_page_token`/`page_token`, the exact regression the all-caps-only
+  // design above exists to avoid. The result is an intentional residual
+  // gap: a lowercase or mixed-case name ending only in `_token` (e.g.
+  // `saxo_openapi_token`, `Saxo_Openapi_Token`) is still not masked by
+  // either pattern — narrower coverage than the all-caps branch, on
+  // purpose, because `_token` alone can't tell a credential from a cursor
+  // without the case signal.
+  /\b[a-z][a-z0-9_]{0,60}_(?:secret_key|api_key|api_secret)\b[\x22\x27]?[ \t]*[:=][ \t]*[\x22\x27]?[^\s,;&\x22\x27\x7d\]]+/g,
   // `Authorization: Basic <base64>` / `Authorization: Token <key>`
   // (`tools/backtest/http-tiingo-client.ts` sends the latter). Anchored to
   // a preceding `Authorization` key — lookbehind, so it's not consumed and
@@ -78,8 +108,9 @@ const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // credentials. The lookbehind allows an optional quote and `:`/`=` (with
   // optional surrounding space and a trailing quote) between the key and
   // the scheme word, so it reaches the JSON-quoted and single-quoted forms
-  // a bare `Authorization:\s*` lookbehind cannot.
-  /(?<=\bAuthorization[\x22\x27]?\s*[:=]\s*[\x22\x27]?)(?:Basic|Token)\s+[^\s,;\x22\x27\x7d\]]+/gi,
+  // a bare `Authorization:\s*` lookbehind cannot. `[ \t]*`/`&` reasoning:
+  // see the bareword pattern above.
+  /(?<=\bAuthorization[\x22\x27]?[ \t]*[:=][ \t]*[\x22\x27]?)(?:Basic|Token)\s+[^\s,;&\x22\x27\x7d\]]+/gi,
   // `scheme://user:PASSWORD@host` DSNs: matches only the password segment
   // (via look-around), so the scheme, username and host — the parts an
   // operator actually needs to identify which DB a connection error came
