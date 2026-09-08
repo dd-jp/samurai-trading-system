@@ -830,7 +830,7 @@ async function redistributeOneFlatten(
       let alreadyWarned = false;
       try {
         for (const { idempotency_key, broker_fill_id } of attributedIdsThisRawFill) {
-          if (await store.hasFill(idempotency_key, broker_fill_id)) {
+          if (await store.hasFill({ idempotency_key, broker_fill_id })) {
             alreadyWarned = true;
             break;
           }
@@ -1009,7 +1009,12 @@ async function advanceLot(
   let ingestedEntry = false;
   let ingestedExit = false;
   for (const fill of lotFills) {
-    if (await store.hasFill(position.idempotency_key, fill.broker_fill_id)) {
+    if (
+      await store.hasFill({
+        idempotency_key: position.idempotency_key,
+        broker_fill_id: fill.broker_fill_id,
+      })
+    ) {
       if (fill.qty_is_cumulative === true) cumulativeReoffers.push(fill);
       continue;
     }

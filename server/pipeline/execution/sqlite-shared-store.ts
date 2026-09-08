@@ -436,8 +436,20 @@ export class SqliteExecutionStore implements SharedStore {
    * second live venue, two lots sharing one id string — see the flatten
    * split's `:${lotKey}` suffix in `ingest-fills.ts`) could otherwise let
    * one lot's ingested fill be misread as covering another's.
+   *
+   * Takes one object rather than two positional strings (#1328): the old
+   * two-argument form no longer compiles, closing a POSITIONAL swap. A
+   * mislabeled object (both fields swapped under the correct key names)
+   * still typechecks — both are plain `string` — and stays a test-caught
+   * mistake, not a compile-caught one.
    */
-  async hasFill(idempotency_key: string, broker_fill_id: string): Promise<boolean> {
+  async hasFill({
+    idempotency_key,
+    broker_fill_id,
+  }: {
+    idempotency_key: string;
+    broker_fill_id: string;
+  }): Promise<boolean> {
     const row = this.db
       .prepare('SELECT 1 FROM fills WHERE idempotency_key = ? AND broker_fill_id = ?')
       .get(idempotency_key, broker_fill_id);
