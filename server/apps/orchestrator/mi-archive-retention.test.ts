@@ -9,10 +9,20 @@
  * composition root; this does the same for the MI archive, which — unlike
  * #1059's dead code — IS written on the live path, so it grows for real.
  *
+ * WHAT THE SOURCE-TEXT BLOCK BELOW PINS, AND WHAT IT DOES NOT (#1313).
  * A unit test of `MiArchiveStore.purgeOlderThan` cannot catch a missing
- * caller, because the defect is the ABSENCE of a call, not a fault in the
- * method. So the call sites are asserted directly against the composition
- * root's source, mirroring `llm-call-log-retention.test.ts` exactly.
+ * caller, because the defect is the ABSENCE of a call. Asserting the call
+ * sites against the composition root's SOURCE, as this file does (mirroring
+ * `llm-call-log-retention.test.ts` exactly), does not catch it either:
+ * wrapping the daily `pruneMiArchiveWithLog` call site in a `/* ... *\/`
+ * block comment leaves all 8 tests here green (run on this branch), because
+ * the call text is still in the source the regex reads — the same gap #1306's
+ * review found in `alert-delivery-failure-retention.test.ts`. So the block
+ * below pins the ARGUMENT SEQUENCE and the textual placement of each call —
+ * worth keeping, and all it claims.
+ * That the calls RUN is pinned by execution in
+ * `production/retention-wiring.test.ts`, which seeds an over-age archive row
+ * and observes it purged.
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -64,7 +74,7 @@ describe('miArchiveRetentionDaysFromEnvironment', () => {
   });
 });
 
-describe('the MI archive purge is actually wired into the composition root', () => {
+describe('the MI archive purge is spelled at the composition root, in full', () => {
   const source = readFileSync(fileURLToPath(new URL('./production.ts', import.meta.url)), 'utf8');
 
   // Matched by regex, not exact string: the formatter is free to wrap a call
@@ -88,7 +98,7 @@ describe('the MI archive purge is actually wired into the composition root', () 
       `pruneMiArchiveWithLog\\(\\s*config\\.miArchive,\\s*miArchiveRetentionDays,\\s*clock,\\s*logger,\\s*'${trigger}',?\\s*\\)`,
     );
 
-  it('runs at startup and on the daily timer, not in one place only', () => {
+  it('names both triggers, startup and daily, not one place only', () => {
     // Startup alone fires once when the table is smallest and never again
     // during the unattended run the window exists to bound; the daily sweep
     // alone leaves a restart-heavy loop pruning nothing.
@@ -96,7 +106,7 @@ describe('the MI archive purge is actually wired into the composition root', () 
     expect(source).toMatch(callSite('daily'));
   });
 
-  it('keeps the daily prune OUTSIDE the feedback cycle try block', () => {
+  it('spells the daily prune ABOVE the feedback cycle try block', () => {
     // Inside it, a persistently throwing `runDailyCycle` would silently
     // disable retention as well: the catch would fire every day while the
     // archive grew forever and the log showed only a feedback failure.

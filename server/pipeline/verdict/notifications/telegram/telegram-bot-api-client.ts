@@ -806,9 +806,10 @@ export class TelegramBotApiClient implements TelegramClient {
           'reachable at some point while this notice was itself retrying — a window that can ' +
           'run to tens of seconds, not a single instant, and it does not mean the failures were ' +
           'something other than a channel problem, and a notice you never receive tells you ' +
-          'nothing either way. The dashboard alert-channel tile is the durable record: it ' +
-          'counts alert_delivery_failures rows for this chat in the trailing 24 hours, so ' +
-          'its number is a different denominator from the one above.',
+          'nothing either way. The alert_delivery_failures table is the durable record, and ' +
+          'the dashboard alert-channel tile is a 24-hour view of it: the tile counts rows ' +
+          'for this chat in the trailing 24 hours, so its number is a different denominator ' +
+          'from the one above.',
       }).catch((escalationError: unknown) => {
         // Same reason `detail` above is wrapped: this escalation send itself
         // reaches `#call`/`#request` and can fail against the very
