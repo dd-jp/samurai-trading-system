@@ -104,7 +104,7 @@ its own. Where a site is safe *only* because of reachability, the row says so.
 
 Grouped by *why*. Line numbers are current and unchanged by this sweep.
 
-**Frames that were rethrowing anyway (5).** The expression builds the message of an error the
+**Frames that were rethrowing anyway (6).** The expression builds the message of an error the
 enclosing `catch { throw classify…(…) }` is about to throw. A render failure substitutes one throw
 for another on the same path; nothing handled becomes unhandled, and no record is lost. The real
 cost is a *lost retry classification*, which is a different (unfiled) defect, not this one.
