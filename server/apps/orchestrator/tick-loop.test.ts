@@ -694,10 +694,7 @@ describe('runTickPlan', () => {
     // stage's step function runs, and a crash mid-stage never reaches the
     // matching `delete` — so the row left behind names exactly the stage the
     // pass was in when it threw. Before this, the crash record always read
-    // `stage: 'tick-loop'` regardless of where the throw happened (11 of 51
-    // live-arm passes in the 2026-09-08 soak, every one an escaped
-    // `LlmTimeoutError` from the debate stage, all attributed the same
-    // way — nowhere).
+    // `stage: 'tick-loop'` regardless of where the throw happened.
     it('names the pipeline stage the crashed pass was in, read off current_tick', async () => {
       const auditLog: AuditLog & { records: Parameters<AuditLog['record']>[0][] } = {
         records: [],
@@ -742,6 +739,47 @@ describe('runTickPlan', () => {
       expect(auditLog.records[0]?.decision).toBe('crashed');
     });
 
+    it('ignores a stale current_tick row left by a different trace_id', async () => {
+      const auditLog: AuditLog & { records: Parameters<AuditLog['record']>[0][] } = {
+        records: [],
+        record(entry) {
+          this.records.push(entry);
+        },
+      };
+      const currentTickStore = makeCurrentTickStore();
+      // A row a PRIOR crashed pass on the same instrument left behind —
+      // never cleared, since current_tick is deleted only on success. This
+      // pass gets a fresh trace_id and crashes before writing its own row,
+      // so the only row present at read time belongs to someone else's pass.
+      currentTickStore.upsert({
+        instrument: 'QQQ',
+        asset_class: 'stocks',
+        stage: 'debate',
+        trace_id: 'stale-trace-from-earlier-crash',
+        updated_at: NOW,
+      });
+      const runner: TickRunner = {
+        async runInstrument(signal, ctx): Promise<TickOutcome> {
+          if (signal.asset === 'QQQ') throw new Error('exploded before this pass marked a stage');
+          return { trace_id: ctx.trace_id, final_stage: 'execution' };
+        },
+      };
+
+      await runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
+        max_concurrent_instruments: 2,
+        newTraceId: countingTraceIds(),
+        logger: LOGGER,
+        auditLog,
+        currentTickStore,
+        decisionGate: new DebateBarDecisionGate(),
+      });
+
+      // Must fall back to the bare pre-#1380 stage, not the stale row's
+      // `'debate'` — a mismatched trace_id means the row cannot be trusted
+      // as this pass's own attribution.
+      expect(auditLog.records[0]?.stage).toBe('tick-loop');
+    });
+
     it('never writes a bare PIPELINE_STAGES value as the crash stage', async () => {
       const auditLog: AuditLog & { records: Parameters<AuditLog['record']>[0][] } = {
         records: [],
@@ -774,9 +812,12 @@ describe('runTickPlan', () => {
         decisionGate: new DebateBarDecisionGate(),
       });
 
-      const crashStage = auditLog.records[0]?.stage;
-      expect(crashStage).toBeDefined();
-      expect(PIPELINE_STAGES).not.toContain(crashStage);
+      // Named to the exact prefixed value, not just "absent from
+      // PIPELINE_STAGES" — the bare pre-#1380 sentinel `'tick-loop'` also
+      // satisfies that weaker check, so it alone cannot tell this fix apart
+      // from its absence.
+      expect(auditLog.records[0]?.stage).toBe('tick-loop:trader');
+      expect(PIPELINE_STAGES).not.toContain(auditLog.records[0]?.stage);
     });
 
     it('includes the crashed stage on the structured log line, not only the audit row', async () => {

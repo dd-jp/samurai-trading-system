@@ -22,7 +22,7 @@
  */
 import { describeThrownSafely } from '../../shared/index.js';
 import type { DebateLogger } from './debate-logger.js';
-import { LlmTimeoutError } from './llm/errors.js';
+import { LlmMalformedResponseError, LlmRateLimitError, LlmTimeoutError } from './llm/errors.js';
 import type { AssetClass } from './rate-limiter.js';
 import { MAX_ROUNDS } from './round-orchestrator.js';
 import type { DebateResult, Direction } from './types.js';
@@ -109,15 +109,50 @@ export class DebateBudgetExceededError extends Error {
 }
 
 /**
+ * `LlmClient` failures this module degrades rather than lets crash the pass
+ * (#1380) — exactly `AnthropicLlmClient`'s own `isRetryable` set
+ * (`LlmTimeoutError`, `LlmRateLimitError`, `LlmMalformedResponseError`), the
+ * classes the spec calls transient because a fresh attempt might succeed.
+ * Deliberately NOT the full `LlmError` union:
+ *
+ *  - `LlmProviderError` is `isRetryable`'s own "assumed non-transient"
+ *    catch-all (auth errors, bad requests, 5xx, network) — `classifyProviderError`
+ *    (anthropic-client.ts) wraps EVERY unclassified transport throw into one,
+ *    including a dead API key or a malformed request this codebase itself
+ *    sent. Degrading that into a routine `budget_exhausted`/`timed_out_partial`
+ *    `warn` line would let a persistently broken deployment run forever
+ *    looking like fan-out pressure instead of the config/code fault it is —
+ *    strictly worse than the crash it would otherwise cause, since a crash at
+ *    least surfaces the fault immediately. It keeps crashing the pass,
+ *    unchanged.
+ *  - `LlmCancelledError` names a cancellation this same function issued (via
+ *    `controller.abort()` below), not a provider fault — never retried, and
+ *    per its own doc in `llm/errors.ts`, folding it in here would make a
+ *    deliberate act indistinguishable from a real outage. It cannot reach the
+ *    `.then` rejection handler below before this function's own abort call in
+ *    any case, since `controller` is owned exclusively by this invocation.
+ */
+type LlmFailure = LlmTimeoutError | LlmRateLimitError | LlmMalformedResponseError;
+
+function isLlmFailure(error: unknown): error is LlmFailure {
+  return (
+    error instanceof LlmTimeoutError ||
+    error instanceof LlmRateLimitError ||
+    error instanceof LlmMalformedResponseError
+  );
+}
+
+/**
  * The three ways the race below can settle. `llm_failed` is #1380's addition
  * — a rejection `produceResult` handed back before the budget timer fired,
- * narrowed to `LlmTimeoutError` at the `.then` rejection handler so only that
- * class is absorbed here (see the comment there for why).
+ * narrowed to `LlmFailure` at the `.then` rejection handler so a genuine bug
+ * elsewhere (a real error in the round orchestrator or a persona) is excluded
+ * and still crashes the pass (see the comment there for why).
  */
 type RaceOutcome =
   | { status: 'completed'; result: DebateResult }
   | { status: 'timed_out' }
-  | { status: 'llm_failed'; error: LlmTimeoutError };
+  | { status: 'llm_failed'; error: LlmFailure };
 
 /**
  * Races `produceResult` against the asset class's hard budget. On timeout,
@@ -141,7 +176,6 @@ type RaceOutcome =
  * arise. That keeps the caller-visible contract identical to before: partial
  * synthesis when one exists, low-confidence fallback when none does.
  */
-
 export async function enforceLatencyBudget(params: {
   assetClass: AssetClass;
   trace_id: string;
@@ -174,20 +208,18 @@ export async function enforceLatencyBudget(params: {
 
   const debate = produceResult(controller.signal).then(
     (result): RaceOutcome => ({ status: 'completed', result }),
-    // #1380: `withRetry`'s two attempts each spend the client's FULL
-    // per-attempt timeout before the second one is exhausted (~56s of a 60s
-    // stocks budget), so this rejection can land BEFORE the timer below —
-    // and, unhandled, used to escape `Promise.race` and crash the whole
-    // instrument pass (11 of 51 live-arm passes, 2026-09-08 soak; the tick
-    // loop's only recourse was `decision: 'crashed'`, with no debate row at
-    // all). Narrowly `LlmTimeoutError` — the one class `AnthropicLlmClient`
-    // raises after exhausting retries — so this degrades the debate the same
-    // way a genuine budget expiry does; anything else (a real bug in the
-    // round orchestrator or a persona) still rejects `Promise.race` and
-    // still crashes the pass, unchanged — see "still propagates a debate
-    // failure that arrives before the budget fires" below.
+    // #1380: a retried call's two attempts each spend the client's FULL
+    // per-attempt timeout, so this rejection can land BEFORE the timer below
+    // fires. Left unhandled, it would escape `Promise.race` entirely, since a
+    // race only resolves or rejects on what its promises do — it does not
+    // degrade a rejection into an outcome on its own. Narrowed to
+    // `LlmFailure` (see that type's own doc) so this degrades the debate the
+    // same way a genuine budget expiry does; anything else (a real bug in the
+    // round orchestrator or a persona) still rejects `Promise.race` and still
+    // crashes the pass, unchanged — see "still propagates a debate failure
+    // that arrives before the budget fires" below.
     (error: unknown): RaceOutcome => {
-      if (error instanceof LlmTimeoutError) {
+      if (isLlmFailure(error)) {
         return { status: 'llm_failed', error };
       }
       throw error;
@@ -220,10 +252,10 @@ export async function enforceLatencyBudget(params: {
   // Aborted BEFORE `getCurrentState()` and before any logging: the first
   // thing that must happen once the budget is blown — or the debate's LLM
   // call fails outright (#1380) — is that the spending stops. On the
-  // `llm_failed` path the abort reason IS the `LlmTimeoutError` itself
-  // (rather than a synthetic `DebateBudgetExceededError` that never actually
-  // fired), so a sibling call still in flight within the same round — bull
-  // and bear can run concurrently — sees why it was cut off.
+  // `llm_failed` path the abort reason IS the `LlmFailure` itself (rather
+  // than a synthetic `DebateBudgetExceededError` that never actually fired),
+  // so a sibling call still in flight within the same round — bull and bear
+  // can run concurrently — sees why it was cut off.
   controller.abort(
     result.status === 'llm_failed'
       ? result.error
@@ -240,7 +272,17 @@ export async function enforceLatencyBudget(params: {
     reason: timeoutReason(result, partial !== undefined),
   });
 
-  const timed_out = { budget_ms, elapsed_ms };
+  // `cause` (#1380) is the PERSISTED discriminator: `debateDecisionWord` and
+  // `buildDebateLog` read only `budget_ms`/`elapsed_ms` off this object today
+  // and stay unchanged, so a genuine budget expiry and an outright LLM
+  // failure keep writing the identical `DEGRADED_DECISIONS` word and
+  // `termination` value — `cause` is additive, carried into
+  // `debate_log.termination_cause` by `buildDebateLog`, which is what lets a
+  // query exclude LLM-failure rows from a budget-tuning measurement (like
+  // #1080's) with one predicate instead of relying on `logTimeout`'s
+  // free-text `reason`, which nothing but a log reader parses.
+  const cause: 'budget' | 'llm_failure' = result.status === 'llm_failed' ? 'llm_failure' : 'budget';
+  const timed_out = { budget_ms, elapsed_ms, cause };
 
   if (partial) {
     return {
@@ -281,14 +323,10 @@ export async function enforceLatencyBudget(params: {
 }
 
 /**
- * The one difference between a genuine budget expiry and a debate whose LLM
- * call failed outright (#1380): what stopped it. Both degrade through the
- * identical `timed_out` shape above — same `DEGRADED_DECISIONS` word
- * (`budget_exhausted`/`timed_out_partial`), same dashboard gloss — so the
- * free-text `reason` a human reads off `logger.logTimeout` is the only place
- * the two are told apart, per this ticket's acceptance criterion that the
- * distinction show up "in logs and audit_log" without adding a fourth wire
- * word.
+ * A human-readable elaboration of `timed_out.cause` for whoever reads the raw
+ * `logger.logTimeout` line — the persisted discriminator a QUERY reads is
+ * `debate_log.termination_cause` (`timed_out.cause`, set above), not this
+ * string.
  */
 function timeoutReason(
   result: Exclude<RaceOutcome, { status: 'completed' }>,
@@ -297,8 +335,8 @@ function timeoutReason(
   if (result.status === 'llm_failed') {
     const cause = describeThrownSafely(result.error);
     return hasPartial
-      ? `the debate's LLM call failed after retries (${cause}) — using mediator synthesis in progress`
-      : `the debate's LLM call failed after retries (${cause}) — no partial synthesis available, ` +
+      ? `the debate's LLM call failed (${cause}) — using mediator synthesis in progress`
+      : `the debate's LLM call failed (${cause}) — no partial synthesis available, ` +
           'using low-confidence fallback';
   }
   return hasPartial

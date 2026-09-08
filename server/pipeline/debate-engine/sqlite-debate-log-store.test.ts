@@ -62,6 +62,8 @@ describe('SqliteDebateLogStore.writeLog', () => {
         // supplies none, and NULL is the honest "indeterminate" rather than a
         // guessed classification.
         termination: null,
+        // #1380 (migration 0051). Same reason again.
+        termination_cause: null,
       },
     ]);
   });
@@ -109,6 +111,8 @@ describe('SqliteDebateLogStore.writeLog', () => {
     // #1081: absent, not a guessed classification — this row predates
     // migration 0041 by construction (the writer supplied no `termination`).
     expect(read).not.toHaveProperty('termination');
+    // #1380: same reasoning, one migration later.
+    expect(read).not.toHaveProperty('termination_cause');
   });
 
   it('preserves converged: false rather than dropping it as falsy', () => {
@@ -137,6 +141,33 @@ describe('SqliteDebateLogStore.writeLog', () => {
       termination: 'latency_truncated',
     });
     expect(store.getByDebateId('debate-truncated')?.termination).toBe('latency_truncated');
+  });
+
+  /**
+   * #1380 (migration 0051) — the column that lets a query exclude an outright
+   * LLM failure from a `latency_truncated` count meant to measure genuine
+   * budget pressure, without parsing a log line.
+   */
+  it('round-trips termination_cause', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+
+    store.writeLog(
+      makeLog({
+        debate_id: 'debate-llm-failed',
+        termination: 'latency_truncated',
+        termination_cause: 'llm_failure',
+      }),
+    );
+
+    expect(
+      db
+        .prepare('SELECT termination_cause FROM debate_log WHERE debate_id = ?')
+        .get('debate-llm-failed'),
+    ).toEqual({
+      termination_cause: 'llm_failure',
+    });
+    expect(store.getByDebateId('debate-llm-failed')?.termination_cause).toBe('llm_failure');
   });
 
   it('distinguishes latency_truncated from non_converged in the persisted row', () => {

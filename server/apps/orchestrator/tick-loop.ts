@@ -310,14 +310,21 @@ export async function runTickPlan(
         // begins and only ever deleted on a pass's SUCCESSFUL terminal path
         // (tick-runner.ts) — a pass that throws mid-stage leaves its own row
         // in place, so the row this same failed pass just wrote names the
-        // stage it was in when the throw hit (#1380). Guarded the same way
-        // the two writes below are (#507 review, kimi cycle 2): a store read
-        // failure here must not turn "attribute the crash" into a second,
-        // unguarded crash of its own — the crash itself is still recorded
-        // regardless, just without a stage name.
+        // stage it was in when the throw hit (#1380). Keyed on `instrument`
+        // alone, the store has one row per instrument (see `CurrentTickStore`)
+        // — the `trace_id` check below is what confirms the row belongs to
+        // THIS pass rather than a stale row a prior crashed pass on the same
+        // instrument left behind (the store is never cleared on a throw, only
+        // on success), which would otherwise attribute this crash to a stage
+        // it never reached. Guarded the same way the two writes below are
+        // (#507 review, kimi cycle 2): a store read failure here must not
+        // turn "attribute the crash" into a second, unguarded crash of its
+        // own — the crash itself is still recorded regardless, just without a
+        // stage name.
         let crashedStage: TickStage | undefined;
         try {
-          crashedStage = config.currentTickStore.get(instrument.asset)?.stage;
+          const currentTick = config.currentTickStore.get(instrument.asset);
+          crashedStage = currentTick?.trace_id === trace_id ? currentTick.stage : undefined;
         } catch {
           // Falls through with `crashedStage` left `undefined` — the
           // pre-#1380 attribution.

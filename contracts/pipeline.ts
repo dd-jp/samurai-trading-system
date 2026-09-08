@@ -119,12 +119,23 @@ export interface PipelineCell {
  * closed union whose members drive lane-level rendering.
  */
 export const DEGRADED_DECISIONS = {
+  // #1380 widened what can produce this word: an `LlmClient` call that fails
+  // outright (its retries exhausted, or a non-retryable fault) and arrives
+  // before the debate's own latency budget timer degrades through the
+  // IDENTICAL word, deliberately — both really are "no market answer, a
+  // control fired", and the operator action (accept the quiet market vs.
+  // investigate) is the same either way this word alone can tell. Which of
+  // the two actually happened is `debate_log.termination_cause`
+  // ('budget' | 'llm_failure'), not this string — read that column to tell
+  // "the budget is too tight" and "the LLM provider is unreliable" apart
+  // before acting on either.
   budget_exhausted:
-    'the debate hit its latency budget before any round completed — no synthesis exists, so the ' +
-    'neutral direction and zero confidence are the absence of an answer, not an answer',
+    'the debate hit its latency budget, or an LLM call it depended on failed outright, before ' +
+    'any round completed — no synthesis exists, so the neutral direction and zero confidence ' +
+    'are the absence of an answer, not an answer',
   timed_out_partial:
-    'the debate hit its latency budget mid-debate — the direction is a real but truncated ' +
-    'synthesis from the last round that finished',
+    'the debate hit its latency budget, or an LLM call it depended on failed outright, mid-debate ' +
+    '— the direction is a real but truncated synthesis from the last round that finished',
   not_admitted:
     'the debate never started — the LLM rate limiter or the spend cap refused it, so no model ' +
     'was asked anything',

@@ -162,6 +162,70 @@ describe('buildDebateLog — termination (#1081)', () => {
   });
 });
 
+/**
+ * `termination_cause` (#1380, migration 0051) splits `latency_truncated`
+ * further: a genuine budget expiry from an LLM call that failed outright.
+ * Both reuse the SAME `termination` value above — this column is the one a
+ * query reads to tell them apart, not a new `termination` member.
+ */
+describe('buildDebateLog — termination_cause (#1380)', () => {
+  it('carries "budget" onto a genuine latency-budget truncation', () => {
+    const log = buildDebateLog(
+      makeResult({
+        converged: false,
+        rounds_completed: 1,
+        timed_out: { budget_ms: 60_000, elapsed_ms: 60_003, cause: 'budget' },
+      }),
+      'AAPL',
+      new Date('2026-07-14T09:00:08Z'),
+    );
+
+    expect(log.termination).toBe('latency_truncated');
+    expect(log.termination_cause).toBe('budget');
+  });
+
+  it('carries "llm_failure" onto a truncation caused by an outright LLM failure', () => {
+    const log = buildDebateLog(
+      makeResult({
+        converged: false,
+        rounds_completed: 1,
+        timed_out: { budget_ms: 60_000, elapsed_ms: 42_000, cause: 'llm_failure' },
+      }),
+      'AAPL',
+      new Date('2026-07-14T09:00:08Z'),
+    );
+
+    expect(log.termination).toBe('latency_truncated');
+    expect(log.termination_cause).toBe('llm_failure');
+  });
+
+  it('is absent (not null, not a default) on a row with no timed_out at all', () => {
+    const log = buildDebateLog(
+      makeResult({ converged: false, rounds_completed: 3 }),
+      'AAPL',
+      new Date('2026-07-14T09:00:08Z'),
+    );
+
+    expect(log.termination).toBe('non_converged');
+    expect(log.termination_cause).toBeUndefined();
+  });
+
+  it('is absent on a pre-#1380 timed_out fixture that carries no cause', () => {
+    const log = buildDebateLog(
+      makeResult({
+        converged: false,
+        rounds_completed: 1,
+        timed_out: { budget_ms: 60_000, elapsed_ms: 60_003 },
+      }),
+      'AAPL',
+      new Date('2026-07-14T09:00:08Z'),
+    );
+
+    expect(log.termination).toBe('latency_truncated');
+    expect(log.termination_cause).toBeUndefined();
+  });
+});
+
 describe('InMemoryDebateLogStore', () => {
   it('a completed debate: row exists and is joinable by debate_id', () => {
     const store = new InMemoryDebateLogStore();
