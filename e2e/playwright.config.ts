@@ -23,10 +23,22 @@
  */
 import { fileURLToPath } from 'node:url';
 import { defineConfig, devices } from '@playwright/test';
+import { resolveE2ePort } from './support/port.ts';
 
-/** Not 8787 — that is the port a developer's own `yarn dashboard` holds. */
-const PORT = 8788;
 const HOST = '127.0.0.1';
+/**
+ * Drawn fresh per `yarn e2e` invocation via `resolveE2ePort` (#1298) — never a
+ * fixed number like the old `8788`, which made two checkouts running
+ * `yarn e2e` at once collide outright. This is the suite's single port
+ * source: `BASE_URL` below and `webServer.env.PORT` both derive from this one
+ * value, and nothing else in the e2e suite holds a copy of it.
+ *
+ * `resolveE2ePort`, not the lower-level `acquireFreePort`, because this
+ * config module is loaded more than once per run — once by Playwright's root
+ * process and again by each forked worker — and only the first load may pick
+ * a new port; every later load must read back the same one.
+ */
+const PORT = await resolveE2ePort(HOST);
 const BASE_URL = `http://${HOST}:${PORT}`;
 
 /**
