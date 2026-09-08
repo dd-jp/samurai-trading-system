@@ -669,3 +669,80 @@ describe('InMemoryBrokerStateStore.pruneIngestedObservedFills matches the fills 
     expect(store.loadObservedFills('ccxt')).toHaveLength(1);
   });
 });
+
+describe('InMemoryBrokerStateStore.loadUnpricedFills ordering (#1340)', () => {
+  const unpriced = (clientOrderId: string, brokerFillId: string) => ({
+    client_order_id: clientOrderId,
+    broker_fill_id: brokerFillId,
+    leg: 'entry' as const,
+    instrument: '3USL',
+    qty: 1,
+  });
+
+  it('returns rows oldest-first even when seenAt is non-monotonic across inserts', () => {
+    // Recorded out of clock order: `late` is inserted first (earlier Map
+    // position) but its `first_seen_at` is LATER than `early`'s. Insertion
+    // order and clock order disagree here, which is exactly the case the
+    // interface doc's "oldest first" promise, and Map iteration order alone,
+    // do not agree on.
+    const store = new InMemoryBrokerStateStore();
+    store.recordUnpricedFill(
+      'alpaca',
+      unpriced('lot-late', 'bf-late'),
+      new Date('2026-09-05T12:00:00Z'),
+    );
+    store.recordUnpricedFill(
+      'alpaca',
+      unpriced('lot-early', 'bf-early'),
+      new Date('2026-09-05T09:00:00Z'),
+    );
+
+    // Reverting the `.sort(...)` in loadUnpricedFills to plain Map insertion
+    // order makes this fail: it returns ['lot-late', 'lot-early'], the
+    // insertion order, not the clock order asserted here.
+    expect(store.loadUnpricedFills('alpaca').map((row) => row.client_order_id)).toEqual([
+      'lot-early',
+      'lot-late',
+    ]);
+  });
+
+  it('breaks a first_seen_at tie by insertion order, mirroring SQL rowid', () => {
+    // Three rows share one `first_seen_at`. The SQL implementation's tiebreak
+    // is `rowid`, i.e. the order rows were physically inserted; the double's
+    // faithful analogue is Map insertion order, since `recordUnpricedFill`'s
+    // upsert (`Map.set` on an existing key) leaves a row's position exactly
+    // where SQLite's `ON CONFLICT DO UPDATE` leaves its rowid — untouched.
+    const store = new InMemoryBrokerStateStore();
+    const tie = new Date('2026-09-05T09:00:00Z');
+    store.recordUnpricedFill('alpaca', unpriced('lot-first', 'bf-1'), tie);
+    store.recordUnpricedFill('alpaca', unpriced('lot-second', 'bf-2'), tie);
+    store.recordUnpricedFill('alpaca', unpriced('lot-third', 'bf-3'), tie);
+
+    // A test asserting the REVERSED order ('lot-third', 'lot-second',
+    // 'lot-first') fails against the real implementation — Array.sort's
+    // guaranteed stability keeps ties in their pre-sort (insertion) order,
+    // it does not reverse them.
+    expect(store.loadUnpricedFills('alpaca').map((row) => row.client_order_id)).toEqual([
+      'lot-first',
+      'lot-second',
+      'lot-third',
+    ]);
+  });
+
+  it('keeps a re-observed row at its original insertion position for the tiebreak', () => {
+    // `lot-a` is re-observed (upserted) AFTER `lot-b` is first recorded, at the
+    // same first_seen_at. If the upsert moved `lot-a` to the end of Map
+    // iteration order, the tiebreak would silently stop mirroring rowid, and
+    // this would return ['lot-b', 'lot-a'] instead.
+    const store = new InMemoryBrokerStateStore();
+    const tie = new Date('2026-09-05T09:00:00Z');
+    store.recordUnpricedFill('alpaca', unpriced('lot-a', 'bf-a'), tie);
+    store.recordUnpricedFill('alpaca', unpriced('lot-b', 'bf-b'), tie);
+    store.recordUnpricedFill('alpaca', unpriced('lot-a', 'bf-a'), tie); // re-observed, same seenAt
+
+    expect(store.loadUnpricedFills('alpaca').map((row) => row.client_order_id)).toEqual([
+      'lot-a',
+      'lot-b',
+    ]);
+  });
+});
