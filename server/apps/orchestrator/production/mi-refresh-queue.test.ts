@@ -683,4 +683,93 @@ describe('MiRefreshQueue (#1085)', () => {
       expect(calls).toEqual([]);
     });
   });
+
+  describe('refusal-log throttle is per spend-cap refusal kind (#1376)', () => {
+    /** Returns a different verdict on each successive `check()` call. */
+    function scriptedCap(verdicts: Extract<SpendCapVerdict, { admitted: false }>[]): SpendCap {
+      let call = 0;
+      return {
+        check: () => {
+          const verdict = verdicts[Math.min(call, verdicts.length - 1)];
+          call += 1;
+          if (verdict === undefined) throw new Error('scriptedCap: no verdict scripted');
+          return verdict;
+        },
+      };
+    }
+
+    it('logs both remedy texts when a read-fault refusal is followed by a budget refusal', async () => {
+      // AC2: the shared counter this replaces would have consumed the
+      // un-throttled "first" slot on the read-fault refusal and pushed the
+      // budget refusal's first appearance out to refusal 20 — so this reds
+      // against the old behaviour and greens against the per-kind counter.
+      const calls: string[] = [];
+      const logger = recordingLogger();
+      const cap = scriptedCap([
+        {
+          admitted: false,
+          spent_usd: Number.NaN,
+          budget_usd: 1,
+          reason: 'spend cap unreadable (fail-closed)',
+          kind: 'read_fault',
+        },
+        {
+          admitted: false,
+          spent_usd: 1,
+          budget_usd: 1,
+          reason: 'LLM spend cap reached',
+          kind: 'budget',
+        },
+      ]);
+      const queue = new MiRefreshQueue({
+        spendCap: cap,
+        refresher: billingRefresher({ spentUsd: 0 }, 1, calls),
+        logger,
+      });
+
+      await queue.refresh('tick-1', 'TSLA', 'stocks');
+      await settle();
+      await queue.refresh('tick-1', 'AAPL', 'stocks');
+      await settle();
+
+      const refusals = logger.entries.filter(
+        (entry) => entry.event === 'mi_refresh_refused_spend_cap',
+      );
+      expect(refusals).toHaveLength(2);
+      // Against the exported remedy constants, never `spendCapRefusalRemedy(kind)`
+      // — comparing against the function under test would pass even if the
+      // function itself regressed to the wrong text for a kind.
+      expect(refusals[0]?.message).toContain(READ_FAULT_REMEDY);
+      expect(refusals[0]?.message).not.toContain(BUDGET_REMEDY);
+      expect(refusals[1]?.message).toContain(BUDGET_REMEDY);
+      expect(refusals[1]?.message).not.toContain(READ_FAULT_REMEDY);
+      expect(calls).toEqual([]);
+    });
+
+    it('leaves a single-kind stream throttled exactly as before (AC3)', async () => {
+      // 1000 same-kind refusals: logged at refusal 1, then every 20th
+      // (20, 40, ..., 1000) — 1 + 50 = 51 lines. Per-kind counting is
+      // observationally identical to the old shared counter when only one
+      // kind is ever seen, which is the number this pins.
+      const cap = meteredCap(1);
+      cap.spentUsd = 1;
+      const calls: string[] = [];
+      const logger = recordingLogger();
+      const queue = new MiRefreshQueue({
+        spendCap: cap,
+        refresher: billingRefresher(cap, 1, calls),
+        logger,
+      });
+
+      for (let i = 0; i < 1000; i += 1) {
+        void queue.refresh('tick-1', `NAME${i}`, 'stocks');
+      }
+      await settle();
+
+      const refusals = logger.entries.filter(
+        (entry) => entry.event === 'mi_refresh_refused_spend_cap',
+      );
+      expect(refusals).toHaveLength(51);
+    });
+  });
 });
