@@ -100,6 +100,7 @@ export type {
   DebateLog,
   DebateLogStore,
   DebateTermination,
+  DebateTerminationCause,
   ExitReason,
   Fill,
   InstrumentSubclass,

@@ -902,7 +902,7 @@ describe('buildDebateStep latency budget (#374)', () => {
     await vi.advanceTimersByTimeAsync(60_000);
     const result = await pending;
 
-    expect(result.timed_out).toEqual({ budget_ms: 60_000, elapsed_ms: 60_000 });
+    expect(result.timed_out).toEqual({ budget_ms: 60_000, elapsed_ms: 60_000, cause: 'budget' });
     expect(result.converged).toBe(false);
     expect(result.rounds_completed).toBe(0);
     expect(result.confidence).toBe(0);
@@ -931,7 +931,7 @@ describe('buildDebateStep latency budget (#374)', () => {
     await vi.advanceTimersByTimeAsync(60_000);
     const result = await pending;
 
-    expect(result.timed_out).toEqual({ budget_ms: 60_000, elapsed_ms: 60_000 });
+    expect(result.timed_out).toEqual({ budget_ms: 60_000, elapsed_ms: 60_000, cause: 'budget' });
     expect(result.converged).toBe(false);
     expect(result.rounds_completed).toBe(1);
     expect(result.synthesis).toBe('bull case wins');
@@ -971,7 +971,7 @@ describe('buildDebateStep latency budget (#374)', () => {
     await vi.advanceTimersByTimeAsync(30_000);
     const result = await pending;
 
-    expect(result.timed_out).toEqual({ budget_ms: 30_000, elapsed_ms: 30_000 });
+    expect(result.timed_out).toEqual({ budget_ms: 30_000, elapsed_ms: 30_000, cause: 'budget' });
   });
 
   it('logs the timeout on the debate stage so an operator can see the budget fire', async () => {

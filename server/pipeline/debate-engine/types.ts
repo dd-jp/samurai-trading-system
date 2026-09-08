@@ -19,6 +19,7 @@ export type { Direction } from '../../../contracts/primitives.js';
 // Also imported, not just re-exported: `export … from` publishes the name
 // without binding it locally, and the interfaces below annotate with it.
 import type { Direction } from '../../../contracts/primitives.js';
+import type { DebateTerminationCause } from '../../shared/index.js';
 
 /**
  * Upstream contract: what every Analyst must provide. This IS the Debate
@@ -141,6 +142,23 @@ export interface DebateResult {
     budget_ms: number;
     /** Actual elapsed wall-clock time when termination fired, in milliseconds. */
     elapsed_ms: number;
+    /**
+     * What actually stopped the debate (#1380) — optional because the only
+     * real producer, `enforceLatencyBudget`, always sets it and every other
+     * `timed_out` object in this codebase is a test fixture predating the
+     * distinction. `'budget'`: the asset-class timer fired with the debate
+     * still in flight. `'llm_failure'`: an `LlmClient` call failed outright
+     * (its retries exhausted or its failure non-retryable) and arrived before
+     * the timer did — a provider/client fault, not evidence the budget itself
+     * is too tight. `debateDecisionWord` and `buildDebateLog` read only
+     * `budget_ms`/`elapsed_ms` and are unchanged by this field's presence, so
+     * both causes keep writing the identical `DEGRADED_DECISIONS` word and
+     * `termination` value; `cause` is carried separately into
+     * `debate_log.termination_cause`, which is what lets a budget-tuning
+     * measurement exclude LLM-failure rows with one predicate instead of
+     * folding them into "the budget is too tight".
+     */
+    cause?: DebateTerminationCause;
   };
   /**
    * Present only when `RateLimiter` refused to admit the debate at all (#388)

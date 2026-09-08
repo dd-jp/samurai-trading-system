@@ -5,6 +5,13 @@ import {
   LATENCY_BUDGET_MS,
   type PartialDebateState,
 } from './latency-budget.js';
+import {
+  LlmCancelledError,
+  LlmMalformedResponseError,
+  LlmProviderError,
+  LlmRateLimitError,
+  LlmTimeoutError,
+} from './llm/errors.js';
 import type { DebateResult } from './types.js';
 
 /**
@@ -209,7 +216,7 @@ describe('enforceLatencyBudget', () => {
     expect(result.rounds_completed).toBe(partial.rounds_completed);
     expect(result.open_items).toEqual(partial.open_items);
     expect(result.converged).toBe(false);
-    expect(result.timed_out).toEqual({ budget_ms: 30_000, elapsed_ms: 30_000 });
+    expect(result.timed_out).toEqual({ budget_ms: 30_000, elapsed_ms: 30_000, cause: 'budget' });
   });
 
   it('falls back to a default low-confidence result when no partial state exists', async () => {
@@ -233,7 +240,7 @@ describe('enforceLatencyBudget', () => {
     expect(result.direction).toBe('neutral');
     expect(result.rounds_completed).toBe(0);
     expect(result.debate_id).toBe('debate-1');
-    expect(result.timed_out).toEqual({ budget_ms: 30_000, elapsed_ms: 30_000 });
+    expect(result.timed_out).toEqual({ budget_ms: 30_000, elapsed_ms: 30_000, cause: 'budget' });
   });
 
   it('logs the timeout event via DebateLogger.logTimeout', async () => {
@@ -422,6 +429,305 @@ describe('enforceLatencyBudget', () => {
     const rejects = expect(promise).rejects.toThrow('mediator exploded');
     await vi.advanceTimersByTimeAsync(1_000);
     await rejects;
+  });
+
+  // #1380: `withRetry`'s two attempts each burn the client's full per-call
+  // timeout before either one is retryable-exhausted, so the rejection can
+  // land WELL BEFORE the debate's own budget timer — an unhandled rejection
+  // on that leg would reject `Promise.race` and crash the instrument pass
+  // instead of degrading. Exactly `isRetryable`'s set (`LlmTimeoutError`,
+  // `LlmRateLimitError`, `LlmMalformedResponseError`) is absorbed here — see
+  // `LlmFailure`'s doc in latency-budget.ts for why `LlmProviderError` and
+  // `LlmCancelledError` are deliberately excluded and still crash the pass,
+  // same as an unrelated bug (asserted above in the pre-existing "still
+  // propagates" test).
+  describe('an LlmError from produceResult, before the budget fires (#1380)', () => {
+    it('degrades to the low-confidence fallback when no round had completed', async () => {
+      const logger = makeLogger();
+
+      const promise = enforceLatencyBudget({
+        assetClass: 'stocks',
+        trace_id: 'trace-1',
+        debate_id: 'debate-1',
+        bar: BAR,
+        produceResult: () =>
+          new Promise((_resolve, reject) => {
+            setTimeout(() => reject(new LlmTimeoutError('LLM call exceeded 28000ms')), 56_000);
+          }),
+        getCurrentState: () => undefined,
+        logger,
+      });
+
+      const settled = expect(promise).resolves.toEqual(
+        expect.objectContaining({
+          converged: false,
+          confidence: 0,
+          direction: 'neutral',
+          rounds_completed: 0,
+          debate_id: 'debate-1',
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(56_000);
+      await settled;
+    });
+
+    it('uses the mediator synthesis in progress, when a round had already completed', async () => {
+      const logger = makeLogger();
+      const partial = makePartialState();
+
+      const promise = enforceLatencyBudget({
+        assetClass: 'stocks',
+        trace_id: 'trace-1',
+        debate_id: 'debate-1',
+        bar: BAR,
+        produceResult: () =>
+          new Promise((_resolve, reject) => {
+            setTimeout(() => reject(new LlmTimeoutError('LLM call exceeded 28000ms')), 56_000);
+          }),
+        getCurrentState: () => partial,
+        logger,
+      });
+
+      const settled = expect(promise).resolves.toEqual(
+        expect.objectContaining({
+          synthesis: partial.synthesis,
+          position: partial.position,
+          confidence: partial.confidence,
+          rounds_completed: partial.rounds_completed,
+          converged: false,
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(56_000);
+      await settled;
+    });
+
+    it('is recorded through the SAME degraded convention as a genuine budget timeout', async () => {
+      const logger = makeLogger();
+
+      const promise = enforceLatencyBudget({
+        assetClass: 'stocks',
+        trace_id: 'trace-1',
+        debate_id: 'debate-1',
+        bar: BAR,
+        produceResult: () =>
+          new Promise((_resolve, reject) => {
+            setTimeout(() => reject(new LlmTimeoutError('LLM call exceeded 28000ms')), 56_000);
+          }),
+        getCurrentState: () => undefined,
+        logger,
+      });
+
+      const settlePromise = promise;
+      await vi.advanceTimersByTimeAsync(56_000);
+      const result = await settlePromise;
+
+      // Same `timed_out` shape a genuine budget expiry produces (#1080's
+      // `debateDecisionWord` reads only `budget_ms`/`elapsed_ms`, not
+      // `cause`) — so this failure reaches `audit_log`/the dashboard as
+      // `budget_exhausted`, one of `DEGRADED_DECISIONS`, rather than as a
+      // bare `neutral` direction indistinguishable from a converged
+      // no-signal debate.
+      expect(result.timed_out).toBeDefined();
+      expect(result.timed_out?.budget_ms).toBe(LATENCY_BUDGET_MS.stocks);
+    });
+
+    it('pins the discriminator: cause is "llm_failure" here, "budget" on a genuine timeout', async () => {
+      const logger = makeLogger();
+
+      const llmFailurePromise = enforceLatencyBudget({
+        assetClass: 'stocks',
+        trace_id: 'trace-1',
+        debate_id: 'debate-1',
+        bar: BAR,
+        produceResult: () =>
+          new Promise((_resolve, reject) => {
+            setTimeout(() => reject(new LlmTimeoutError('LLM call exceeded 28000ms')), 56_000);
+          }),
+        getCurrentState: () => undefined,
+        logger,
+      });
+      await vi.advanceTimersByTimeAsync(56_000);
+      const llmFailureResult = await llmFailurePromise;
+
+      const budgetPromise = enforceLatencyBudget({
+        assetClass: 'crypto',
+        trace_id: 'trace-2',
+        debate_id: 'debate-2',
+        bar: BAR,
+        produceResult: () => new Promise(() => {}),
+        getCurrentState: () => undefined,
+        logger,
+      });
+      await vi.advanceTimersByTimeAsync(LATENCY_BUDGET_MS.crypto);
+      const budgetResult = await budgetPromise;
+
+      // Both write the SAME `DEGRADED_DECISIONS` word (`budget_exhausted`,
+      // since neither had a round complete) — `cause` is what a query needs
+      // to tell them apart, not the word itself.
+      expect(llmFailureResult.timed_out?.cause).toBe('llm_failure');
+      expect(budgetResult.timed_out?.cause).toBe('budget');
+    });
+
+    it('logs a reason naming the LLM failure, distinct from a genuine budget expiry', async () => {
+      const logger = makeLogger();
+
+      const promise = enforceLatencyBudget({
+        assetClass: 'stocks',
+        trace_id: 'trace-1',
+        debate_id: 'debate-1',
+        bar: BAR,
+        produceResult: () =>
+          new Promise((_resolve, reject) => {
+            setTimeout(() => reject(new LlmTimeoutError('LLM call exceeded 28000ms')), 56_000);
+          }),
+        getCurrentState: () => undefined,
+        logger,
+      });
+
+      await vi.advanceTimersByTimeAsync(56_000);
+      await promise;
+
+      expect(logger.logTimeout).toHaveBeenCalledTimes(1);
+      expect(logger.logTimeout).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reason: expect.stringContaining('LLM call exceeded 28000ms'),
+        }),
+      );
+      expect(logger.logTimeout).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          reason:
+            'latency budget exceeded: no partial synthesis available, using low-confidence fallback',
+        }),
+      );
+    });
+
+    it('aborts the debate signal with the LlmTimeoutError, so a concurrent sibling call is cancelled too', async () => {
+      const logger = makeLogger();
+      let seen: AbortSignal | undefined;
+
+      const promise = enforceLatencyBudget({
+        assetClass: 'stocks',
+        trace_id: 'trace-1',
+        debate_id: 'debate-1',
+        bar: BAR,
+        produceResult: (signal) => {
+          seen = signal;
+          return new Promise((_resolve, reject) => {
+            setTimeout(() => reject(new LlmTimeoutError('LLM call exceeded 28000ms')), 56_000);
+          });
+        },
+        getCurrentState: () => undefined,
+        logger,
+      });
+
+      await vi.advanceTimersByTimeAsync(56_000);
+      await promise;
+
+      expect(seen?.aborted).toBe(true);
+      expect(seen?.reason).toBeInstanceOf(LlmTimeoutError);
+    });
+
+    it('clears the budget timer rather than leaving it pending', async () => {
+      const logger = makeLogger();
+
+      const promise = enforceLatencyBudget({
+        assetClass: 'stocks',
+        trace_id: 'trace-1',
+        debate_id: 'debate-1',
+        bar: BAR,
+        produceResult: () =>
+          new Promise((_resolve, reject) => {
+            setTimeout(() => reject(new LlmTimeoutError('LLM call exceeded 28000ms')), 56_000);
+          }),
+        getCurrentState: () => undefined,
+        logger,
+      });
+
+      await vi.advanceTimersByTimeAsync(56_000);
+      await promise;
+
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('degrades on an LlmRateLimitError too, not only LlmTimeoutError', async () => {
+      const logger = makeLogger();
+
+      const promise = enforceLatencyBudget({
+        assetClass: 'stocks',
+        trace_id: 'trace-1',
+        debate_id: 'debate-1',
+        bar: BAR,
+        produceResult: () =>
+          new Promise((_resolve, reject) => {
+            setTimeout(() => reject(new LlmRateLimitError('rate limited by provider')), 56_000);
+          }),
+        getCurrentState: () => undefined,
+        logger,
+      });
+
+      await vi.advanceTimersByTimeAsync(56_000);
+      const result = await promise;
+
+      expect(result.timed_out?.cause).toBe('llm_failure');
+    });
+
+    it('degrades on an LlmMalformedResponseError too, not only LlmTimeoutError', async () => {
+      const logger = makeLogger();
+
+      const promise = enforceLatencyBudget({
+        assetClass: 'stocks',
+        trace_id: 'trace-1',
+        debate_id: 'debate-1',
+        bar: BAR,
+        produceResult: () =>
+          new Promise((_resolve, reject) => {
+            setTimeout(
+              () => reject(new LlmMalformedResponseError('missing position field')),
+              56_000,
+            );
+          }),
+        getCurrentState: () => undefined,
+        logger,
+      });
+
+      await vi.advanceTimersByTimeAsync(56_000);
+      const result = await promise;
+
+      expect(result.timed_out?.cause).toBe('llm_failure');
+    });
+
+    it.each([
+      [
+        'LlmProviderError',
+        () => new LlmProviderError('502 from provider'),
+        '502 from provider',
+      ] as const,
+      [
+        'LlmCancelledError',
+        () => new LlmCancelledError('cancelled by an unrelated caller'),
+        'cancelled by an unrelated caller',
+      ] as const,
+      ['a generic bug', () => new Error('mediator exploded'), 'mediator exploded'] as const,
+    ])('still crashes the pass on %s, deliberately NOT absorbed here', async (_name, makeError, expectedMessage) => {
+      const logger = makeLogger();
+
+      const promise = enforceLatencyBudget({
+        assetClass: 'stocks',
+        trace_id: 'trace-1',
+        debate_id: 'debate-1',
+        bar: BAR,
+        produceResult: () =>
+          new Promise((_resolve, reject) => {
+            setTimeout(() => reject(makeError()), 1_000);
+          }),
+        getCurrentState: () => undefined,
+        logger,
+      });
+
+      const rejects = expect(promise).rejects.toThrow(expectedMessage);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await rejects;
+    });
   });
 
   it('does not log a timeout event when the debate completes in time', async () => {

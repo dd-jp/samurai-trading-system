@@ -60,6 +60,13 @@ export function buildDebateLog(
         : result.converged
           ? 'converged'
           : 'non_converged',
+    // #1380 (migration 0051). Only ever set alongside 'latency_truncated'
+    // above — both are read off the SAME `result.timed_out`, so a row cannot
+    // carry a cause without also carrying the termination it explains. Absent
+    // rather than null on the domain object, matching every other optional
+    // field here: a pre-migration `timed_out` (a test fixture, a replay of an
+    // old row) genuinely has no cause to report.
+    ...(result.timed_out?.cause === undefined ? {} : { termination_cause: result.timed_out.cause }),
   };
 }
 

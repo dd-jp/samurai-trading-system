@@ -175,7 +175,7 @@ describe('debate cancellation (#347)', () => {
     await vi.advanceTimersByTimeAsync(LATENCY_BUDGET_MS.crypto);
     const result = await promise;
 
-    expect(result.timed_out).toEqual({ budget_ms: 30_000, elapsed_ms: 30_000 });
+    expect(result.timed_out).toEqual({ budget_ms: 30_000, elapsed_ms: 30_000, cause: 'budget' });
     expect(fetches.calls()).toBe(2);
 
     // The decisive assertion: no call is issued AFTER the budget fires. Without

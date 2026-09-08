@@ -852,7 +852,10 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * wins the fold correctly, so this trigger is conditioned on the no-intent
    * branch, not on the quorum-skip alone; (b) a live pass that crashes
    * mid-await after the control arm has already completed, where
-   * `tick-loop.ts`'s catch writes only `stage: 'tick-loop'`, also filtered;
+   * `tick-loop.ts`'s catch writes `stage: 'tick-loop'` or, since #1380,
+   * `stage: 'tick-loop:<TickStage>'` — either way `stage IN (${stagePlaceholders})`
+   * below still excludes it, since neither shape is a bare `PIPELINE_STAGES`
+   * value;
    * or (c) the ordinary TICK path itself — `#runInstrument` awaits
    * `this.steps.controlArm` before `runExitCheckPass`, and the control's own
    * nested `runInstrument` takes that same tick path into its own

@@ -58,6 +58,7 @@ import type {
   TickOutcome,
   TickPlan,
   TickRunner,
+  TickStage,
 } from './types.js';
 
 export interface TickLoopConfig {
@@ -305,6 +306,28 @@ export async function runTickPlan(
         // closes. `logger.log` gets the same treatment for the same reason
         // (see `safeLog`'s doc comment).
         const message = describeThrown(error);
+        // `current_tick` (#96) is upserted by `markStage` before each stage
+        // begins and only ever deleted on a pass's SUCCESSFUL terminal path
+        // (tick-runner.ts) — a pass that throws mid-stage leaves its own row
+        // in place, so the row this same failed pass just wrote names the
+        // stage it was in when the throw hit (#1380). Keyed on `instrument`
+        // alone, the store has one row per instrument (see `CurrentTickStore`)
+        // — the `trace_id` check below is what confirms the row belongs to
+        // THIS pass rather than a stale row a prior crashed pass on the same
+        // instrument left behind (the store is never cleared on a throw, only
+        // on success), which would otherwise attribute this crash to a stage
+        // it never reached. Guarded the same way the two writes below are:
+        // a store read failure here must not turn "attribute the crash" into
+        // a second, unguarded crash of its own — the crash itself is still
+        // recorded regardless, just without a stage name.
+        let crashedStage: TickStage | undefined;
+        try {
+          const currentTick = config.currentTickStore.get(instrument.asset);
+          crashedStage = currentTick?.trace_id === trace_id ? currentTick.stage : undefined;
+        } catch {
+          // Falls through with `crashedStage` left `undefined` — the
+          // pre-#1380 attribution.
+        }
         safeLog(config.logger, {
           trace_id,
           stage: 'tick-loop',
@@ -315,6 +338,7 @@ export async function runTickPlan(
             instrument: instrument.asset,
             asset_class: instrument.asset_class,
             error: message,
+            stage: crashedStage,
           },
         });
         try {
@@ -323,13 +347,26 @@ export async function runTickPlan(
           // `rejected`, …) on purpose — those all describe a stage that
           // COMPLETED and chose something; this describes a stage that never
           // got the chance to. `input_digest` covers the `Signal` (the one
-          // thing known for certain going in, since the runner never told
-          // this layer which stage it had reached) rather than nothing, so a
+          // thing known for certain going in) rather than nothing, so a
           // crashed pass digests to something other than every other crash
           // on this instrument.
+          //
+          // `stage` carries the crashed `TickStage` when `crashedStage` above
+          // found one, PREFIXED with the existing `tick-loop` sentinel rather
+          // than written bare (#1380). Bare would make this row pass
+          // `sqlite-query-store.ts`'s `stage IN (…PIPELINE_STAGES)` dashboard
+          // filter — built to keep control-arm and HITL-callback rows out of
+          // the live lane fold, never audited against a crash row wearing a
+          // real stage name — and start folding a `decision: 'crashed'` row
+          // into the six-stage lane matrix, a rendering change this ticket
+          // does not make. The prefix guarantees no PIPELINE_STAGES string
+          // can ever equal this value, so that filter's row set is provably
+          // unchanged, while `audit_log.stage` still names the real stage —
+          // `TickStage`'s own vocabulary, not a second one — for anything
+          // querying the table directly.
           config.auditLog.record({
             trace_id,
-            stage: 'tick-loop',
+            stage: crashedStage === undefined ? 'tick-loop' : `tick-loop:${crashedStage}`,
             decision: 'crashed',
             input_digest: digest(signal),
             output_digest: digest({ error: message }),

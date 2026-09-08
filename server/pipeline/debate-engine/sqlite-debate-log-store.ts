@@ -14,7 +14,12 @@
  * the same debate resolved twice — a bug, not a legitimate re-run.
  */
 
-import type { DebateLog, DebateLogStore, DebateTermination } from '../../shared/index.js';
+import type {
+  DebateLog,
+  DebateLogStore,
+  DebateTermination,
+  DebateTerminationCause,
+} from '../../shared/index.js';
 import { isUniqueConstraintError, type SharedStore } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 import type { AnalystContribution, Direction } from './types.js';
@@ -39,6 +44,11 @@ interface DebateLogRow {
   converged: number | null;
   /** #1081 (migration 0041). Null on a pre-migration row — genuinely indeterminate. */
   termination: DebateTermination | null;
+  /**
+   * #1380 (migration 0051). Null unless `termination === 'latency_truncated'`
+   * — see `DebateTerminationCause`'s own doc.
+   */
+  termination_cause: DebateTerminationCause | null;
 }
 
 export class SqliteDebateLogStore implements DebateLogStore {
@@ -51,8 +61,8 @@ export class SqliteDebateLogStore implements DebateLogStore {
           `INSERT INTO debate_log (
              debate_id, instrument, bar_timestamp, contributions_json, direction, rounds,
              created_at, trace_id, confidence, synthesis, position, disagreement_summary,
-             open_items_json, converged, termination
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             open_items_json, converged, termination, termination_cause
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           entry.debate_id,
@@ -83,6 +93,11 @@ export class SqliteDebateLogStore implements DebateLogStore {
           // fixture) still writes a valid row, and the column's own NULL is
           // the honest "not recorded" rather than a guessed classification.
           entry.termination ?? null,
+          // #1380. Same convention as `termination` immediately above — a
+          // caller that supplies no cause (every pre-0051 caller, and a
+          // 'converged'/'non_converged' row that has none to give) writes
+          // NULL.
+          entry.termination_cause ?? null,
         );
     } catch (cause) {
       if (isUniqueConstraintError(cause)) {
@@ -130,6 +145,7 @@ export class SqliteDebateLogStore implements DebateLogStore {
         ? {}
         : { converged: row.converged === 1 }),
       ...nullableField('termination', row.termination),
+      ...nullableField('termination_cause', row.termination_cause),
     };
   }
 }

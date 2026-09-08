@@ -206,6 +206,7 @@ describe('openSharedStore', () => {
       { version: 48 },
       { version: 49 },
       { version: 50 },
+      { version: 51 },
     ]);
     expect(runMigrations(db)).toEqual([]);
     expect(db.prepare('SELECT version FROM schema_migrations').all()).toEqual([
@@ -259,6 +260,7 @@ describe('openSharedStore', () => {
       { version: 48 },
       { version: 49 },
       { version: 50 },
+      { version: 51 },
     ]);
   });
 
@@ -351,7 +353,7 @@ describe('openSharedStore', () => {
 
       // Apply everything after 0048 — 0001..0048 are already recorded, so this
       // runs 0049 and whatever has shipped since (0050, #1124's arm column).
-      expect(runMigrations(raw, MIGRATIONS_DIR)).toEqual([49, 50]);
+      expect(runMigrations(raw, MIGRATIONS_DIR)).toEqual([49, 50, 51]);
 
       expect(
         raw
@@ -436,7 +438,7 @@ describe('openSharedStore', () => {
       insertFlatten.run('flatten-of-aged-out', 'MARA', JSON.stringify(['lot-gone']));
       insertFlatten.run('flatten-of-nothing', 'MU', null);
 
-      expect(runMigrations(raw, MIGRATIONS_DIR)).toEqual([50]);
+      expect(runMigrations(raw, MIGRATIONS_DIR)).toEqual([50, 51]);
 
       expect(
         raw

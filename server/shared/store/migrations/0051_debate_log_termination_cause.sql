@@ -1,0 +1,30 @@
+-- Distinguishes a debate the latency budget genuinely exhausted from one an
+-- LLM call failed outright, within the SAME `termination = 'latency_truncated'`
+-- rows migration 0041 introduced (#1380).
+--
+-- WHY. #1380 closed a crash: a `LlmClient` call whose retries were exhausted
+-- (or whose failure was non-retryable) could reject before the debate's own
+-- asset-class budget timer fired, and — unhandled — that rejection escaped
+-- `Promise.race` and crashed the whole instrument pass. The fix degrades it
+-- through the IDENTICAL path a genuine budget expiry already takes:
+-- `debateDecisionWord` still writes `budget_exhausted`/`timed_out_partial`,
+-- `buildDebateLog` still writes `termination = 'latency_truncated'`. That
+-- reuse is correct — both really are "no market answer, a control fired" —
+-- but it also means an LLM outage and a too-tight budget become the same row
+-- everywhere except a free-text `reason` string on a `debate.timeout` log
+-- line, which no query reads. #1080 (open) measures exactly these
+-- `'latency_truncated'` rows to choose between widening the debate's budget
+-- and narrowing the tick loop's fan-out width; without this column, an LLM
+-- outage inflates that count and points the fix at the wrong lever.
+--
+-- `termination_cause` is nullable and set only alongside `termination =
+-- 'latency_truncated'` — `buildDebateLog` derives both from the same
+-- `DebateResult.timed_out`, so a row can never carry a cause without the
+-- termination it explains. NULL means "not `latency_truncated`" for a
+-- converged/non-converged row, or "written before this migration" for a
+-- pre-0051 truncated row — genuinely indeterminate, same convention 0041 set
+-- for `termination` itself: this migration does not and cannot know which
+-- cause a historical row had.
+--
+-- A plain ADD COLUMN, not a table rebuild — same posture as 0041 and 0030.
+ALTER TABLE debate_log ADD COLUMN termination_cause TEXT;

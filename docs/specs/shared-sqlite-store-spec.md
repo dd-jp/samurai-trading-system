@@ -403,7 +403,10 @@ Resolved: [Decide: Feedback Loop dial tables + adjustment-history schema (#180)]
 -- Folded in by #1251: trace_id + idx_debate_log_trace (0015, correlation to the
 -- Orchestrator's tick); confidence/synthesis/position/disagreement_summary/
 -- open_items_json/converged (0026, the Debate Engine's structured verdict);
--- termination (0041). idx_debate_log_created_at (0005 — dashboard time-windowed reads).
+-- termination (0041); termination_cause (0051, #1380 — 'budget' vs
+-- 'llm_failure', so a budget-tuning query can exclude LLM-outage rows without
+-- reading `termination` itself, which stays 'latency_truncated' either way).
+-- idx_debate_log_created_at (0005 — dashboard time-windowed reads).
 CREATE TABLE debate_log (
   debate_id            TEXT PRIMARY KEY,
   instrument           TEXT NOT NULL,
@@ -419,7 +422,8 @@ CREATE TABLE debate_log (
   disagreement_summary TEXT,
   open_items_json      TEXT,
   converged            INTEGER,
-  termination          TEXT
+  termination          TEXT,
+  termination_cause    TEXT
 );
 CREATE INDEX idx_debate_log_created_at ON debate_log(created_at);
 CREATE INDEX idx_debate_log_trace ON debate_log (trace_id);

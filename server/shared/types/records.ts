@@ -278,6 +278,17 @@ export interface SetupNeighbor {
 export type DebateTermination = 'converged' | 'non_converged' | 'latency_truncated';
 
 /**
+ * What actually stopped a `'latency_truncated'` debate (#1380, migration
+ * 0051) — `'budget'` when the asset-class timer genuinely fired,
+ * `'llm_failure'` when an `LlmClient` call failed outright and arrived before
+ * it. NULL for every row where `termination !== 'latency_truncated'`
+ * (nothing stopped it early to have a cause) and for every row written before
+ * this column existed, same "genuinely indeterminate, never guessed"
+ * convention as `termination` itself (#1081).
+ */
+export type DebateTerminationCause = 'budget' | 'llm_failure';
+
+/**
  * Persisted analytics/audit record (debate-engine-spec.md story 20). Written
  * ONCE per completed debate to the shared store (append-only), AFTER the
  * debate resolves — distinct from the ephemeral round-by-round operational
@@ -336,6 +347,14 @@ export interface DebateLog {
    * guesses a value for a row it cannot derive one for.
    */
   termination?: DebateTermination;
+  /**
+   * Present only when `termination === 'latency_truncated'` (#1380). Derived
+   * from `DebateResult.timed_out.cause` the same way `termination` is derived
+   * from `timed_out` being set at all — see `DebateTerminationCause`'s own
+   * doc for what the two values mean and why a query needs this column
+   * rather than parsing `logger.logTimeout`'s free-text reason.
+   */
+  termination_cause?: DebateTerminationCause;
 }
 
 /**
