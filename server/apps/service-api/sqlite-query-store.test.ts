@@ -216,6 +216,52 @@ describe('SqliteQueryStore', () => {
     });
   });
 
+  /**
+   * Falsifier arm 2 writes its own `verdict_log` rows under a `trace_id`
+   * carrying `CONTROL_TRACE_SUFFIX` (#753) — `verdict_log` has no `debate_id`
+   * column, so unlike `getRiskCritics` there is only one discriminator here.
+   * Excluded the same way `getOpenPositions`, `getRecentClosedTrades`,
+   * `getAttribution` and `getRiskCritics` are (#1318): the operator panel
+   * shows the live book's verdicts, not the matched control's. Not every read
+   * on this store is scoped this way — `getPipelineActivity`'s two
+   * `audit_log` queries both still return control rows (#1319, #1326).
+   *
+   * The `LIMIT` must be applied AFTER the arm is decided: with `limit: 2` and
+   * the two most recent rows both control-arm, a filter bolted on after
+   * `ORDER BY ... LIMIT` would still return zero live rows even though two
+   * exist further back — this is the regression the fix must not reintroduce.
+   */
+  it('excludes control-arm verdicts, applying the limit after the arm filter', () => {
+    const db = makeDb();
+    const insertVerdict = (trace_id: string, timestamp: string) =>
+      db
+        .prepare(
+          `INSERT INTO verdict_log (trace_id, idempotency_key, instrument, status, no_go_reason, hitl_override, timestamp)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(trace_id, `key-${trace_id}`, 'AAPL', 'go', null, 0, timestamp);
+
+    insertVerdict('trace-live-1', '2026-07-27T09:00:00Z');
+    insertVerdict('trace-live-2', '2026-07-27T08:00:00Z');
+    insertVerdict(`trace-control-1${CONTROL_TRACE_SUFFIX}`, '2026-07-27T10:00:00Z');
+    insertVerdict(`trace-control-2${CONTROL_TRACE_SUFFIX}`, '2026-07-27T11:00:00Z');
+
+    const store = new SqliteQueryStore(db);
+
+    // Unbounded: only the two live rows come back, newest first.
+    expect(store.getVerdictHistory(10, NOW).map((v) => v.trace_id)).toEqual([
+      'trace-live-1',
+      'trace-live-2',
+    ]);
+
+    // Bounded to 2, with the two most recent rows both control-arm: a
+    // pre-filter LIMIT would return an empty page here.
+    expect(store.getVerdictHistory(2, NOW).map((v) => v.trace_id)).toEqual([
+      'trace-live-1',
+      'trace-live-2',
+    ]);
+  });
+
   it('reads analyst weights', () => {
     const db = makeDb();
     db.prepare(`INSERT INTO analyst_weights (analyst_id, weight, updated_at) VALUES (?, ?, ?)`).run(

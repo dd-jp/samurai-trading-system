@@ -376,10 +376,25 @@ export class SqliteQueryStore implements DashboardQueryStore {
     };
   }
 
+  /**
+   * **LIVE arm only (#1318)**, like `getOpenPositions` and `getRecentClosedTrades`
+   * above, and `getAttribution` and `getRiskCritics` below. Falsifier arm 2 writes its own
+   * `verdict_log` rows under a `trace_id` carrying `CONTROL_TRACE_SUFFIX`
+   * (#753) — `verdict_log` has no `debate_id` column, so unlike
+   * `getRiskCritics` there is only the one discriminator to apply. The filter
+   * is in the `WHERE` clause, ahead of `ORDER BY ... LIMIT`: a `LIMIT` applied
+   * before the arm is decided would let control rows displace live ones out of
+   * the page instead of merely appearing beside them, which is the bug this
+   * fixes.
+   */
   getVerdictHistory(limit: number, asOf: Date): VerdictAuditEntry[] {
     const rows = this.db
-      .prepare(`SELECT * FROM verdict_log WHERE timestamp <= ? ORDER BY timestamp DESC LIMIT ?`)
-      .all(toStoredTimestamp(asOf), limit) as VerdictLogRow[];
+      .prepare(
+        `SELECT * FROM verdict_log
+          WHERE timestamp <= ? AND trace_id NOT LIKE ?
+          ORDER BY timestamp DESC LIMIT ?`,
+      )
+      .all(toStoredTimestamp(asOf), `%${CONTROL_TRACE_SUFFIX}`, limit) as VerdictLogRow[];
     return rows.map(fromVerdictLogRow);
   }
 
