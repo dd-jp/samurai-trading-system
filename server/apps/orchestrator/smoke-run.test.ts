@@ -38,7 +38,7 @@ import {
   type FillSyncFailureEvidence,
   FillSyncFailureRecorder,
   FixedAccountStateProvider,
-  findSweepDivergenceAction,
+  findSweepDivergence,
   formatSmokeReport,
   type LoggerResilienceEvidence,
   type LogRetentionEvidence,
@@ -132,6 +132,9 @@ function healthyExitPath(overrides: Partial<ExitPathEvidence> = {}): ExitPathEvi
       protectedQty: 6,
       markerCleared: true,
       sweepDivergenceAction: 'adopted',
+      sweepDivergenceReason:
+        'protective legs re-armed for residual 6 by the #549 sweep — ' +
+        'residual-protection marker cleared',
     },
     // #1088: scenario 6's healthy outcome — the seeded terminal row is gone
     // after the restarted reconcile()'s sweep.
@@ -2251,6 +2254,7 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
           protectedQty: 6,
           markerCleared: true,
           sweepDivergenceAction: undefined,
+          sweepDivergenceReason: undefined,
         },
       });
 
@@ -2268,6 +2272,7 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
           protectedQty: null,
           markerCleared: false,
           sweepDivergenceAction: 'undetermined',
+          sweepDivergenceReason: 're-arm retry failed for residual 6: connection reset',
         },
       });
 
@@ -2283,6 +2288,9 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
           protectedQty: 6,
           markerCleared: false,
           sweepDivergenceAction: 'adopted',
+          sweepDivergenceReason:
+            'protective legs re-armed for residual 6 by the #549 sweep — ' +
+            'residual-protection marker cleared',
         },
       });
 
@@ -2298,6 +2306,9 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
           protectedQty: null,
           markerCleared: true,
           sweepDivergenceAction: 'adopted',
+          sweepDivergenceReason:
+            'protective legs re-armed for residual 6 by the #549 sweep — ' +
+            'residual-protection marker cleared',
         },
       });
 
@@ -2306,6 +2317,24 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
         gate.failures.some((failure) =>
           failure.includes('either never re-armed (the lot is naked) or sized the wrong quantity'),
         ),
+      ).toBe(true);
+    });
+
+    it("fails when an 'adopted' divergence's reason does not name the #549 sweep — a wrong-key lookup found a different scenario's divergence (#1285 B2)", () => {
+      const gate = gateFor({
+        residualSweep: {
+          lotKey: 'lot-sweep',
+          expectedResidual: 6,
+          protectedQty: 6,
+          markerCleared: true,
+          sweepDivergenceAction: 'adopted',
+          sweepDivergenceReason: "flatten journal said 'submitted'; broker reports 'filled'",
+        },
+      });
+
+      expect(gate.passed).toBe(false);
+      expect(
+        gate.failures.some((failure) => failure.includes('does not name the #549 sweep')),
       ).toBe(true);
     });
 
@@ -3041,22 +3070,27 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
 
 // #1285: measurement (inserting `await ctx.execution.ingestFills()` between
 // `runResidualSweepScenario` and the restart, per #1228's own claim) found
-// that of the four `residualSweep` checks in `evaluateSmokeGate` (#549
-// section above), only `sweepDivergenceAction === undefined` actually fires
-// when the residual heals in-process instead of via the restarted sweep —
-// the other three read a healed-in-process residual as indistinguishable
-// from a genuinely swept one. `findSweepDivergenceAction` (smoke-run.ts,
-// just above `runExitPathScenarios`) is that entire discriminator. Pinned
-// here, top-level and never through `gateFor`/`evaluateSmokeGate`, against a
-// hand-built divergence list, so that weakening it fails a standalone unit
-// test of the lookup itself — visibly outside the "evaluateSmokeGate — exit
-// path" suite — rather than only scenario 5's own gate checks. (What is NOT
-// covered here: the actual call site,
-// `findSweepDivergenceAction(restartReconcile.divergences,
-// residualSweep.lotKey)` inside `runExitPathScenarios`, is exercised only by
-// `yarn smoke`'s real exit-path harness — these tests pin the function's
-// semantics, not that wiring.)
-describe('findSweepDivergenceAction (#1285)', () => {
+// that of the `residualSweep` checks in `evaluateSmokeGate` (#549 section
+// above), only `sweepDivergenceAction === undefined` actually fires when the
+// residual heals in-process instead of via the restarted sweep — the other
+// checks read a healed-in-process residual as indistinguishable from a
+// genuinely swept one. `findSweepDivergence` (smoke-run.ts, just above
+// `runExitPathScenarios`) is that discriminator: it returns the whole
+// divergence, not just `.action`, because `.action` alone has its own gap
+// (#1285 B2, round-1 review) — a wrong-key substitution at this function's
+// ONE call site can read a different scenario's divergence whose `.action`
+// also happens to be `'adopted'` (e.g. a flatten-reconcile divergence). The
+// gate closes that gap by also checking `.reason` off the SAME lookup
+// result, so — unlike the extraction's original claim — the wrong-key call
+// site IS now covered: substituting the wrong key at `findSweepDivergence`'s
+// call site fails `yarn smoke`'s gate (`sweepDivergenceReason` does not name
+// the #549 sweep), because both fields the gate checks come off the one
+// lookup this function performs. Pinned here, top-level and never through
+// `gateFor`/`evaluateSmokeGate`, against a hand-built divergence list, so
+// that weakening the lookup itself fails a standalone unit test — visibly
+// outside the "evaluateSmokeGate — exit path" suite — rather than only
+// scenario 5's own gate checks.
+describe('findSweepDivergence (#1285)', () => {
   function divergence(overrides: Partial<ReconcileDivergence>): ReconcileDivergence {
     return {
       idempotency_key: 'decoy-lot',
@@ -3069,14 +3103,15 @@ describe('findSweepDivergenceAction (#1285)', () => {
     };
   }
 
-  it("returns the matching lot's own action, not a decoy divergence for another lot", () => {
+  it("returns the matching lot's own divergence, not a decoy for another lot", () => {
     const divergences = [
       divergence({ idempotency_key: 'other-lot', action: 'rejected' }),
-      divergence({ idempotency_key: 'smoke-exit-sweep-lot', action: 'adopted' }),
+      divergence({ idempotency_key: 'smoke-exit-sweep-lot', action: 'adopted', reason: 'ok' }),
       divergence({ idempotency_key: 'another-other-lot', action: 'undetermined' }),
     ];
 
-    expect(findSweepDivergenceAction(divergences, 'smoke-exit-sweep-lot')).toBe('adopted');
+    expect(findSweepDivergence(divergences, 'smoke-exit-sweep-lot')?.action).toBe('adopted');
+    expect(findSweepDivergence(divergences, 'smoke-exit-sweep-lot')?.reason).toBe('ok');
   });
 
   it('returns undefined when no divergence names the lot, even with other lots present', () => {
@@ -3085,14 +3120,29 @@ describe('findSweepDivergenceAction (#1285)', () => {
       divergence({ idempotency_key: 'another-other-lot', action: 'adopted' }),
     ];
 
-    expect(findSweepDivergenceAction(divergences, 'smoke-exit-sweep-lot')).toBeUndefined();
+    expect(findSweepDivergence(divergences, 'smoke-exit-sweep-lot')).toBeUndefined();
   });
 
-  it('matches the key exactly — a decoy key sharing a substring does not match', () => {
+  it('matches the key exactly — a decoy key that CONTAINS the lot key does not match', () => {
     const divergences = [
       divergence({ idempotency_key: 'smoke-exit-sweep-lot-2', action: 'adopted' }),
     ];
 
-    expect(findSweepDivergenceAction(divergences, 'smoke-exit-sweep-lot')).toBeUndefined();
+    expect(findSweepDivergence(divergences, 'smoke-exit-sweep-lot')).toBeUndefined();
+  });
+
+  // #1285 N1 (round-1 review): the case above pins one containment direction
+  // — a decoy `idempotency_key` that CONTAINS the lot key, which kills a
+  // `divergence.idempotency_key.includes(lotKey)` mutant of `===`. It does
+  // nothing against the reverse mutant, `lotKey.includes(divergence.idempotency_key)`
+  // (equivalently `lotKey.startsWith(...)`): with a decoy key LONGER than the
+  // lot key, that mutant also returns `undefined`, so the case above cannot
+  // tell it apart from `===`. This case supplies the missing decoy — a key
+  // that is a SUBSTRING of the lot key — which the reverse mutant matches
+  // and `===` does not. Only `===` survives both cases.
+  it('matches the key exactly — a decoy key that IS a substring of the lot key does not match', () => {
+    const divergences = [divergence({ idempotency_key: 'smoke-exit-sweep-lo', action: 'adopted' })];
+
+    expect(findSweepDivergence(divergences, 'smoke-exit-sweep-lot')).toBeUndefined();
   });
 });
