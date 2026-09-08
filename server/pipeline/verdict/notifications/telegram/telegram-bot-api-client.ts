@@ -69,6 +69,7 @@
 import type { LogEventCode, Logger, RetryConfig } from '../../../../shared/index.js';
 import {
   currentTraceId,
+  describeThrownSafely,
   fetchWithTimeout,
   sanitizeLogText,
   withRetry,
@@ -476,7 +477,7 @@ export class TelegramBotApiClient implements TelegramClient {
           conflict
             ? 'getUpdates returned 409 Conflict — another process is polling this bot token. ' +
                 'Exactly one process may poll; inbound approvals are NOT being observed here.'
-            : `getUpdates failed: ${error instanceof Error ? error.message : String(error)}`,
+            : `getUpdates failed: ${describeThrownSafely(error)}`,
         );
         await this.#sleep(conflict ? POLL_CONFLICT_BACKOFF_MS : POLL_ERROR_BACKOFF_MS);
       }
@@ -539,7 +540,7 @@ export class TelegramBotApiClient implements TelegramClient {
           this.#log(
             'error',
             'telegram_approval_handler_threw',
-            `approval callback handler threw: ${error instanceof Error ? error.message : String(error)}`,
+            `approval callback handler threw: ${describeThrownSafely(error)}`,
           );
         }
       }
@@ -555,7 +556,7 @@ export class TelegramBotApiClient implements TelegramClient {
           this.#log(
             'error',
             'telegram_answer_callback_failed',
-            `answerCallbackQuery failed: ${error instanceof Error ? error.message : String(error)}`,
+            `answerCallbackQuery failed: ${describeThrownSafely(error)}`,
           );
         }
       }
@@ -602,9 +603,9 @@ export class TelegramBotApiClient implements TelegramClient {
       this.#log(
         'error',
         'telegram_allowlist_audit_write_failed',
-        `failed to audit-log an allowlist rejection (from_id=${fromId ?? 'absent'}): ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `failed to audit-log an allowlist rejection (from_id=${fromId ?? 'absent'}): ${describeThrownSafely(
+          error,
+        )}`,
       );
     }
 
@@ -628,9 +629,7 @@ export class TelegramBotApiClient implements TelegramClient {
         this.#log(
           'error',
           'telegram_rejection_alert_send_failed',
-          `failed to post the repeated-rejection alert: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          `failed to post the repeated-rejection alert: ${describeThrownSafely(error)}`,
         );
       }
     }
@@ -757,7 +756,7 @@ export class TelegramBotApiClient implements TelegramClient {
    * unmasked in `message` while its `payload` twin was protected.
    */
   #recordDeliveryFailure(chatId: string, method: string, text: string, error: unknown): void {
-    const detail = error instanceof Error ? error.message : String(error);
+    const detail = describeThrownSafely(error);
 
     if (this.#alertDeliveryLog !== undefined) {
       try {
@@ -867,9 +866,9 @@ export class TelegramBotApiClient implements TelegramClient {
       parsed = await response.json();
     } catch (error) {
       throw new TelegramProviderError(
-        `Telegram Bot API error: 2xx response body could not be parsed as JSON (${
-          error instanceof Error ? error.message : String(error)
-        }) (${method})`,
+        `Telegram Bot API error: 2xx response body could not be parsed as JSON (${describeThrownSafely(
+          error,
+        )}) (${method})`,
         response.status,
       );
     }

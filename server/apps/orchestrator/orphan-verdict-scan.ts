@@ -44,6 +44,8 @@
  * `Heartbeat` uses for `'heartbeat'`, since the failure happened in this
  * scan, not in the Verdict pipeline stage.
  */
+
+import { describeThrownSafely } from '../../shared/index.js';
 import type { SharedStore } from '../../shared/store/index.js';
 import { fromStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 import type { Logger } from './types.js';
@@ -116,7 +118,7 @@ export class OrphanVerdictScanner {
           event: 'orphan_verdict_alert_failed',
           level: 'error',
           message: 'orphan go-verdict alert failed',
-          payload: { error: error instanceof Error ? error.message : String(error) },
+          payload: { error: describeThrownSafely(error) },
         });
       }
     }

@@ -85,6 +85,7 @@ import {
 } from '../../pipeline/control-arm/index.js';
 import type { AnalystView, DebateResult } from '../../pipeline/debate-engine/index.js';
 import type { Logger } from '../../shared/index.js';
+import { describeThrownSafely } from '../../shared/index.js';
 import type { CurrentTick, CurrentTickStore, TickContext, TickRunner, TickSteps } from './types.js';
 
 // Re-exported from its definition in `pipeline/control-arm`, where it sits
@@ -302,7 +303,7 @@ export function buildControlArmStep(deps: ControlArmDeps): ControlArmStep {
           'the end of the soak (#753).',
         payload: {
           instrument: signal.asset,
-          error: error instanceof Error ? error.message : String(error),
+          error: describeThrownSafely(error),
         },
       });
     } finally {

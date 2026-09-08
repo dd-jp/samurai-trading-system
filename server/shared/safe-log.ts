@@ -64,6 +64,46 @@ export function describeThrown(error: unknown): string {
 }
 
 /**
+ * `describeThrown` with the guard its own doc comment says it cannot provide.
+ *
+ * The residual hole `describeThrown` names above: `String(value)` can throw
+ * for a value with a hostile `toString`/`Symbol.toPrimitive`, a `message`
+ * getter can throw before the ladder is reached at all, and a `Proxy` whose
+ * `getPrototypeOf` trap throws fails at the `error instanceof Error` check on
+ * the very first line. Any of those throwing inside a `catch` whose job is to
+ * HANDLE a failure turns a handled failure into an unhandled one, usually
+ * before the handler has recorded anything about the original.
+ *
+ * Extracted for #1262 rather than left as the hand-written try/catch #1199
+ * put at one call site: the hand-rolled
+ * `instanceof Error ? .message : String(...)` conditional appears 79 times
+ * in this repo's non-test code, and the ones that matter are inside
+ * `catch` blocks in execution, the tick loop and the spend cap. Repeating a
+ * five-line guard at each of those churns the files where a reviewable diff
+ * matters most; one named call says the same thing.
+ *
+ * What this does NOT do, so no caller mistakes its scope:
+ *
+ * - It does not sanitize. `logCaughtFailure` runs `sanitizeLogText` over the
+ *   rendered text; this function does not, because its callers put the result
+ *   in places (an `ExecutionResult.reason`, a divergence row, an alert body)
+ *   whose existing sanitization posture is the call site's own decision, not
+ *   this helper's to change.
+ * - It does not make the surrounding handler safe. Only the render is
+ *   guarded; every other statement in the `catch` can still throw on its own.
+ */
+export function describeThrownSafely(error: unknown): string {
+  try {
+    return describeThrown(error);
+  } catch {
+    // Same placeholder `logCaughtFailure` below uses for the identical case —
+    // one spelling for "the value could not be rendered at all", so a log
+    // line, a divergence reason and an alert body all read the same.
+    return '[unrenderable error]';
+  }
+}
+
+/**
  * Calls `logger.log`, swallowing any throw from the logger itself.
  *
  * Only ever meant to be called from inside a failure path whose entire job

@@ -9,6 +9,7 @@
  * `ingestFills()`, which lives in its own module.
  */
 import {
+  describeThrownSafely,
   heldQuantitiesFor,
   logCaughtFailure,
   type OpenPosition,
@@ -215,7 +216,7 @@ export class ExecutionImpl implements Execution {
       // out would be a guess, and the losing guess double-submits.
       return result('error', idempotencyKey, now, {
         order_state: 'pending',
-        reason: error instanceof Error ? error.message : String(error),
+        reason: describeThrownSafely(error),
       });
     }
 
@@ -801,7 +802,7 @@ async function executeExit(
       // double protection, i.e. #516 from the other direction.
       const reason =
         `cancelling held lot '${lot.idempotency_key}' before the flatten failed, so the ` +
-        `flatten was not sent: ${error instanceof Error ? error.message : String(error)}`;
+        `flatten was not sent: ${describeThrownSafely(error)}`;
       await markLotsUnprotected(input, cancelledLots, lot.idempotency_key, error, now);
       await store.resolveFlattenError(idempotencyKey, reason, now);
       return result('error', idempotencyKey, now, { reason });
@@ -820,7 +821,7 @@ async function executeExit(
     // journalled. Automatic resolution is filed as follow-up, not built
     // here — this PR's job was making the row exist to resolve against.
     return result('error', idempotencyKey, now, {
-      reason: error instanceof Error ? error.message : String(error),
+      reason: describeThrownSafely(error),
     });
   }
 

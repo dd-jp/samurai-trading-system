@@ -85,6 +85,7 @@ import type {
   ResidualProtectionSweepResult,
 } from '../../pipeline/execution/index.js';
 import type { Clock } from '../../shared/index.js';
+import { describeThrownSafely } from '../../shared/index.js';
 import type { Logger } from './types.js';
 
 /**
@@ -391,7 +392,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
         event: 'fill_poll_failed',
         level: 'error',
         message: FILL_SYNC_POLL_FAILED,
-        payload: { error: error instanceof Error ? error.message : String(error) },
+        payload: { error: describeThrownSafely(error) },
       });
     } finally {
       inFlight = undefined;

@@ -151,6 +151,7 @@ import type { FailoverAlerter } from '../providers/market-data-service/sources/o
 import { withOhlcvFailover } from '../providers/market-data-service/sources/ohlcv-failover.js';
 import { PolygonBarsClient } from '../providers/market-data-service/sources/polygon-bars-client.js';
 import {
+  describeThrownSafely,
   resolveBitstampPacing,
   resolveCoinbasePacing,
   resolvePolygonPacing,
@@ -270,7 +271,7 @@ export async function backfillMarketData(deps: BackfillMarketDataDeps): Promise<
             window.lookback,
           );
         } catch (error) {
-          fetchError = error instanceof Error ? error.message : String(error);
+          fetchError = describeThrownSafely(error);
           // Re-read rather than falling back to `existing`. `appendBars` is
           // `INSERT OR IGNORE` per bar, so a throw partway through leaves the
           // bars it already wrote durably in the store — reporting the
@@ -395,7 +396,7 @@ export function buildBackfillFailoverAlerter(deps: {
         level: 'error',
         message:
           `OHLCV failover alert for ${event.symbol} ${event.timeframe} could not be delivered: ` +
-          `${error instanceof Error ? error.message : String(error)}. The failover itself ` +
+          `${describeThrownSafely(error)}. The failover itself ` +
           `proceeded — ${event.fallbackName} is serving these bars.`,
         payload: { instrument: event.symbol, timeframe: event.timeframe },
       });

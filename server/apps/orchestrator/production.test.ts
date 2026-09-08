@@ -2605,6 +2605,57 @@ describe('startTickLoop', () => {
     await loop.stop();
   });
 
+  it('records the failure and keeps ticking when the tick throws an unrenderable value (#1262)', async () => {
+    const logger = recordingLogger();
+    // Circular (defeats `JSON.stringify`) with a throwing `Symbol.toPrimitive`
+    // (defeats the `String()` fallback too) — the value `describeThrown`'s own
+    // doc says it cannot render alone.
+    const hostile: Record<string, unknown> = {
+      [Symbol.toPrimitive]: () => {
+        throw new Error('render boom');
+      },
+    };
+    hostile.self = hostile;
+
+    let ticks = 0;
+    const scheduler: Scheduler = {
+      nextTick: () => {
+        ticks += 1;
+        if (ticks === 1) throw hostile;
+        return plan;
+      },
+    };
+    const runInstrument = vi.fn(
+      async (): Promise<TickOutcome> => ({ trace_id: 't', final_stage: 'analysts' }),
+    );
+
+    const loop = startTickLoop({
+      scheduler,
+      runner: { runInstrument } as TickRunner,
+      clock: new SimulatedClock(START),
+      logger,
+      persistence: persistence() as never,
+      decisionGate: new DebateBarDecisionGate(),
+      tickIntervalMs: 1_000,
+      maxConcurrentInstruments: 1,
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    // The catch's own comment promises 'an error should cost one tick, not the
+    // run'. Rendering the thrown value unguarded inverted that: the throw
+    // escaped `runOnce` into `void runOnce()`, becoming an unhandled rejection
+    // that `installFaultHandlers` treats as fatal — and it ran BEFORE the log
+    // call, so nothing recorded why.
+    const failure = logger.entries.find((entry) => entry.message === 'tick failed');
+    expect(failure?.payload).toEqual({ error: '[unrenderable error]' });
+
+    // One tick, not the run: the next interval still ticks.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(runInstrument).toHaveBeenCalledTimes(1);
+
+    await loop.stop();
+  });
+
   it('logs and survives an instrument that throws inside a tick (#507)', async () => {
     const logger = recordingLogger();
     const runInstrument = vi

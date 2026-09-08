@@ -45,6 +45,7 @@
 import type { MarketContext } from '../../../providers/market-intelligence/index.js';
 import { resolveMiSubject } from '../../../providers/universe-pool/index.js';
 import type { AssetClass, InstrumentSubclass, Logger } from '../../../shared/index.js';
+import { describeThrownSafely } from '../../../shared/index.js';
 
 /** The bucket a per-subclass counter uses when the universe declares no subclass for a name. */
 export const UNCLASSIFIED_SUBCLASS = 'unclassified' as const;
@@ -339,7 +340,7 @@ export async function checkMiCoverage(
       payload: {
         instrument: params.instrument,
         subclass,
-        error: error instanceof Error ? error.message : String(error),
+        error: describeThrownSafely(error),
       },
     });
   }

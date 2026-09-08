@@ -62,7 +62,7 @@ import type {
   AnalystOrchestrator,
   AssetClass,
 } from '../../../pipeline/analysts/index.js';
-import { type Logger, sanitizeLogText } from '../../../shared/index.js';
+import { describeThrownSafely, type Logger, sanitizeLogText } from '../../../shared/index.js';
 import { type AnalystSkipKindRelay, skipKindOf } from '../analysts-decision.js';
 import type { TickSteps } from '../types.js';
 import { type CheckMiCoverageDeps, checkMiCoverage } from './mi-coverage.js';
@@ -382,7 +382,7 @@ async function postSkipAlert(
       payload: {
         instrument: alert.instrument,
         consecutive_skips: alert.consecutive_skips,
-        error: sanitizeLogText(error instanceof Error ? error.message : String(error)),
+        error: sanitizeLogText(describeThrownSafely(error)),
       },
     });
   }
