@@ -691,10 +691,13 @@ export class SqliteQueryStore implements DashboardQueryStore {
     // while PRICING only extends it (#619):
     //
     //  - `audit_log` in the window — every instrument the LIVE arm actually
-    //    ran (#1319: the control arm's own attributed rows are excluded below,
-    //    the same as every other live-arm-only read on this store). This is
-    //    the source the lanes are built from, so a lane can no longer be
-    //    missing for an instrument whose trace is right there.
+    //    ran and attributed (#1319: the control arm's own attributed rows are
+    //    excluded below — like `getOpenPositions` and `getRecentClosedTrades`,
+    //    which filter on the `arm = 'live'` column, and like
+    //    `getVerdictHistory` and `getRiskCritics` (#1318), which filter on
+    //    `trace_id NOT LIKE`, since `audit_log` has no `arm` column of its
+    //    own). This is the source the lanes are built from, so a lane can no
+    //    longer be missing for an instrument whose trace is right there.
     //  - `current_tick` in the window — a tick that has entered a stage but
     //    not yet recorded one, so it has no audit row for a few seconds.
     //  - `latest_mark` — one upserted row per instrument the Market Data
@@ -730,9 +733,14 @@ export class SqliteQueryStore implements DashboardQueryStore {
     // without this filter those rows counted toward `active` exactly like a
     // live row, so a control-only instrument could win the tie-break and evict
     // a genuinely live one at the cap instead of merely appearing beside it.
-    // `current_tick` and `latest_mark` are untouched here — this ticket owns
-    // only the `audit_log` leg; the sibling `audit_log` query in
-    // `pipelineEvents` below is #1326's.
+    // `current_tick` and `latest_mark` need no such filter, not merely
+    // untouched: the control arm is wired with its own
+    // `InMemoryCurrentTickStore` (control-arm-wiring.ts), so it can never
+    // write the `current_tick` table this query reads, and `latest_mark` is
+    // arm-agnostic pricing that already enters at `active = 0` above — neither
+    // leg can smuggle a control-only instrument into the tie-break this ticket
+    // closes. This ticket owns only the `audit_log` leg; the sibling
+    // `audit_log` query in `pipelineEvents` below is #1326's.
     const universe = this.db
       .prepare(
         `SELECT instrument, asset_class FROM (
