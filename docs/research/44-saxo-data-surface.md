@@ -241,31 +241,63 @@ listing, sampled every 90 minutes through 2026-09-08's session (all spreads in b
 | 13:42 | **84.1** | 22.5 | 156.2 | 100 | **81.1** | 32 |
 | 15:12 | **35.2** | **13.6** | 114.3 | 116 | **27.0** | **61** |
 
+#### First, the noise floor — measured, and it disqualifies most of the table above
+
+A single `infoprices/list` snapshot is far noisier than 90-minute spacing implies. Six reads of the
+same 146 lines inside three minutes, immediately after the 15:12Z sample:
+
+| read (UTC) | median | p25 | movers median |
+| --- | ---: | ---: | ---: |
+| 15:15:15 | 49.8 | 16.2 | 39.9 |
+| 15:15:29 | 45.2 | 16.4 | 41.3 |
+| 15:16:14 | 30.3 | 15.3 | 27.6 |
+| 15:16:59 | 32.9 | 15.7 | 29.7 |
+| 15:17:45 | 30.1 | 15.3 | 29.2 |
+| 15:18:30 | 29.7 | 14.8 | 27.6 |
+
+**The universe median ranges 29.7–49.8 bp — a 1.68× swing with no time-of-day content at all.** The
+movers' median ranges 1.50×. Whatever this is — a handful of wide lines flickering in and out of a
+two-sided quote, a delayed-feed batching artifact — it sets a floor on what single spaced samples can
+resolve.
+
+**Consequence: most of the session table's variation is not interpretable.** Its non-spike samples
+span 35.2–58.6 bp, a 1.66× range — *at* the noise floor, not above it. Only the **13:42Z excursion**
+(84.1 bp, 2.4× the 15:12Z reading, with the movers' median at 81.1 against a 27.6–41.3 noise band)
+clearly exceeds it.
+
+**p25 is the exception, and this is why it carries the gate.** Across the noise burst it ranges
+14.8–16.4 bp — a 1.11× swing, far tighter than the median's 1.68×. So its 13.6–22.5 bp range across
+the session is **larger than its own noise** and is plausibly a real, small, time-of-day effect. The
+tight core is both genuinely tight and genuinely stable; the median is dominated by a flickering tail.
+
+Anything future work does here needs **repeat samples per time point**, not one snapshot per slot.
+
 **Three findings, in decreasing order of how much weight they can carry.**
 
-**1. p25 is stable at 13.6–22.5 bp all day, and this is what carries a gate.** The tight core of the
-universe stays tight; it is the tail that moves. A **fixed 30 bp spread gate is defensible**, but it
+**1. p25 is stable at 13.6–22.5 bp all day, and — per the noise floor above — this is the only
+column that survives it.** The tight core of the universe stays tight; it is the tail that moves. A **fixed 30 bp spread gate is defensible**, but it
 admits a *variable-size* set (25 to 61 names) rather than a fixed shortlist — anything downstream
 must handle a shortlist whose cardinality changes intraday.
 
-**2. The universe median swings 2.4× within one session** (35.2 to 84.1 bp). A gate calibrated at one
-time of day is not the same gate at another.
+**2. The universe median swings 2.4× within one session** (35.2 to 84.1 bp) — but only the 13:42Z
+end of that range is above the noise floor, so read it as *one excursion happened*, not as *the median
+varies smoothly through the day*.
 
 **3. The 13:42Z blow-out is transient, not a regime.** It sits twelve minutes after the US open
 (13:30Z), and these are leveraged ETPs on US underlyings, so market makers widening as their hedge
 goes live is a plausible mechanism — the movers' median **quadruples**, 31.2 → 81.1 bp, far more
-sharply than the universe median moves. But by 15:12Z it has fully reversed, to the tightest reading
-of the day. **So there is no "afternoon is expensive" rule**, and an earlier draft of this section
-which claimed one, along with a "cheap window is 09:00–12:30Z", was wrong on both counts.
+sharply than the universe median moves. But by 15:12Z it has fully reversed, back inside the noise
+band. **So there is no "afternoon is expensive" rule**, and an earlier draft of this section which
+claimed one, along with a "cheap window is 09:00–12:30Z", was wrong on both counts.
 
-#### The consequence for flat-by-close is favourable
+#### The flat-by-close exit cost is **open**, not favourable
 
-A flat-by-close strategy pays spread twice, and **the exit leg is fixed at end-of-session by
-construction** — it is the one leg the strategy does not get to time. On this day that forced exit
-lands in the cheapest liquidity of the session (27.0 bp movers median at 15:12Z, against 81.1 at
-13:42Z and 20.5–32.3 through the morning). The round trip is therefore **asymmetric in our favour on
-the leg we cannot choose**, which inverts the usual concern about forced exits. Not yet worth
-changing an ADR-0018 number over — but worth knowing before anyone books a penalty for it.
+A flat-by-close strategy pays spread twice, and the exit leg is fixed at end-of-session by
+construction — the one leg it does not get to time. So what liquidity looks like near the close is a
+real question for ADR-0018. The 15:12Z sample invites an encouraging answer (27.0 bp movers median,
+against 81.1 at 13:42Z), **but it does not replicate**: three minutes later the same universe read
+39.9 bp, inside the noise band above. **No conclusion is drawn here.** Answering it needs repeat
+samples through the closing half-hour, which the profiler supports and nobody has run.
 
 #### Two caveats that bound all of the above
 
