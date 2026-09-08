@@ -1,0 +1,47 @@
+import { stripComments, stripLineComments } from './strip-comments.js';
+
+describe('stripLineComments', () => {
+  it('drops from -- to end of line', () => {
+    expect(stripLineComments('SELECT 1; -- a comment\nSELECT 2;')).toBe('SELECT 1; \nSELECT 2;');
+  });
+
+  it('leaves a line with no -- untouched', () => {
+    expect(stripLineComments('CREATE TABLE t (id INTEGER)')).toBe('CREATE TABLE t (id INTEGER)');
+  });
+});
+
+describe('stripComments', () => {
+  it('drops a // line comment', () => {
+    expect(stripComments('const x = 1; // not real\n')).toBe('const x = 1; \n');
+  });
+
+  it('drops a /* */ block comment, keeping its newlines', () => {
+    expect(stripComments('const a = 1; /* start\nof comment */ const b = 2;')).toBe(
+      'const a = 1; \n const b = 2;',
+    );
+  });
+
+  it('does not treat // inside a string as a comment', () => {
+    const src = "const url = 'https://example.com';";
+    expect(stripComments(src)).toBe(src);
+  });
+
+  it('does not treat /* inside a string as a comment', () => {
+    const src = "const s = '/* not a comment */';";
+    expect(stripComments(src)).toBe(src);
+  });
+
+  it('does not treat // inside a template literal as a comment', () => {
+    const src = 'const s = `//not a comment`;';
+    expect(stripComments(src)).toBe(src);
+  });
+
+  it('an escaped quote inside a string does not end it early', () => {
+    const src = "const s = 'it\\'s fine // still a string';";
+    expect(stripComments(src)).toBe(src);
+  });
+
+  it('an unterminated block comment strips to end of input', () => {
+    expect(stripComments('const a = 1; /* never closed')).toBe('const a = 1; ');
+  });
+});

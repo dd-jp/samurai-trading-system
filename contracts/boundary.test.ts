@@ -13,8 +13,11 @@
  * review.
  */
 
-import { readdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { stripComments } from '../server/shared/strip-comments.js';
 
 const CONTRACTS_DIR = fileURLToPath(new URL('.', import.meta.url));
 
@@ -50,8 +53,11 @@ function sourceFiles(): string[] {
     .sort();
 }
 
-function specifiersOf(file: string): string[] {
-  const text = readFileSync(`${CONTRACTS_DIR}${file}`, 'utf8');
+// Run through `stripComments` first — a doc comment describing an import
+// (PR #1385's round-1 fix reworded one in this file to dodge a false
+// positive) must not read as one. #1398.
+function specifiersOf(file: string, dir: string = CONTRACTS_DIR): string[] {
+  const text = stripComments(readFileSync(join(dir, file), 'utf8'));
   return SPECIFIER_PATTERNS.flatMap((pattern) =>
     [...text.matchAll(pattern)].map((match) => match[1] as string),
   );
@@ -110,5 +116,40 @@ describe('contracts boundary', () => {
           'boundary and keep the Date-carrying shape server-side.',
       ).toEqual([]);
     }
+  });
+});
+
+describe('specifiersOf strips comments before matching (#1398)', () => {
+  const fixturesDir = `${mkdtempSync(join(tmpdir(), 'boundary-fixtures-'))}/`;
+
+  afterAll(() => {
+    rmSync(fixturesDir, { recursive: true, force: true });
+  });
+
+  it('a specifier that only appears inside a comment is not treated as an import', () => {
+    const file = 'comment-only-import.ts';
+    writeFileSync(
+      join(fixturesDir, file),
+      [
+        '/**',
+        " * Mirrors the shape `import type { X } from '../server/shared/index.js'`",
+        ' * pulls in server-side.',
+        ' */',
+        'export interface Placeholder {',
+        "  // import { X } from '../server/shared/index.js';",
+        "  // import '../server/shared/index.js';",
+        "  // await import('../server/shared/index.js');",
+        '  kind: string;',
+        '}',
+        '',
+      ].join('\n'),
+    );
+    expect(specifiersOf(file, fixturesDir)).toEqual([]);
+  });
+
+  it('a real import escaping contracts/ is still detected', () => {
+    const file = 'real-import.ts';
+    writeFileSync(join(fixturesDir, file), "import type { X } from '../server/shared/index.js';\n");
+    expect(specifiersOf(file, fixturesDir)).toEqual(['../server/shared/index.js']);
   });
 });
