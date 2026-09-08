@@ -10,13 +10,17 @@
  * `go`.
  *
  * THIS FILE IS THE NUMBERING AUTHORITY (#1254): staleness=1, stale_feed=2a,
- * drift=2, dedup=3, market-open=4, breaker=5, HITL=6 — the comments below,
- * in that order. Cite a gate by its `no_go_reason` name first, the number
- * only as a parenthetical, and take the number from here: `verdict-spec.md`
- * used to run a second, incompatible numbering (2/3 swapped, everything
- * from there up one), which made "gate 3" mean opposite things — a price
- * check vs. dedup — depending on which document a reader carried across a
- * boundary. Resolved by naming first everywhere outside this file.
+ * drift=2, dedup=3, market-open=4, breaker=5, HITL=6, in execution order.
+ * The two price gates (`stale_feed`, `drift`) are commented inside
+ * `#priceGates` near the bottom of this file, not inline with the rest —
+ * read the numbers above, not file order. Cite a gate by its `no_go_reason`
+ * name first, the number only as a parenthetical, and take the number from
+ * here: `verdict-spec.md` used to number every gate as its own full integer
+ * with no `2a`, so #641's feed-staleness gate took "2" and pushed drift,
+ * dedup, market-open, breaker and HITL each up by one — which made "gate 3"
+ * mean opposite things, drift there vs. dedup here, depending on which
+ * document a reader carried the number in from. Resolved by naming first
+ * everywhere outside this file.
  *
  * The first two gates read as one word and are two different questions:
  * `staleness` bounds how old our DECISION is, `stale_feed` (#641) bounds how

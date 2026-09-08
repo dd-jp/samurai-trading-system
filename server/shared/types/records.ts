@@ -128,7 +128,7 @@ export interface OrderIntentMetadata {
    * `exitReason` is `'flatten'`, which both call paths reach only from inside
    * the flatten window (`withinFlattenWindow`), and never for
    * `signal_decay`/`direction_flip`. Read by `VerdictImpl.decide`, which skips
-   * gate 1 (`staleness`) for such an intent: a flat-by-close exit is not
+   * the `staleness` gate (1) for such an intent: a flat-by-close exit is not
    * acting on a stale OPINION, it is acting on the clock, so the age of the
    * signal that opened the lot is not a reason to refuse it. Every other
    * intent — including the two discretionary exits, which ARE acting on an

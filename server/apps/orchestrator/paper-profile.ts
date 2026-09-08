@@ -1418,13 +1418,13 @@ export function buildStartingProfileConfigs(
      * though the specific "blocks every other instrument" arithmetic no
      * longer does.
      *
-     * **What this removes, stated plainly.** The `hitl` gate (6) is now unreachable: the
-     * dial short-circuits `shouldEngageHitl` to `false` before `isFlagged` is
-     * consulted, so no trade is ever routed to a human, and
-     * `ProductionConfig.approvals` is never called. `flag_thresholds` and
-     * `human_timeout` below are inert by construction — kept, with the flag
-     * plumbing, so that turning the dial back is a config edit rather than a
-     * re-implementation.
+     * **What this removes, stated plainly.** The `hitl` gate (6) is now
+     * unreachable: the dial short-circuits `shouldEngageHitl` to `false`
+     * before `isFlagged` is consulted, so no trade is ever routed to a
+     * human, and `ProductionConfig.approvals` is never called.
+     * `flag_thresholds` and `human_timeout` below are inert by
+     * construction — kept, with the flag plumbing, so that turning the dial
+     * back is a config edit rather than a re-implementation.
      *
      * **What must therefore hold before LIVE capital, and does not yet.** With
      * no human gate the circuit breakers and the notional caps are the *only*
@@ -1457,8 +1457,9 @@ export function buildStartingProfileConfigs(
      * the DECISION BAR — floored onto `DEBATE_BAR_TIMEFRAME_MS` (1h), which is
      * what made the idempotency key stable within a bar — and since #687 it is
      * the debate's bar, inherited rather than re-floored. So the sentence above
-     * describes the hazard correctly and then denies it applies: gate 1 now
-     * measures how far into the BAR the tick is, not how old the quote is. At a
+     * describes the hazard correctly and then denies it applies: the
+     * `staleness` gate (1) now measures how far into the BAR the tick is, not
+     * how old the quote is. At a
      * 15-minute cadence a crypto tick at bar+15/30/45 already reads 15/30/45
      * minutes of "signal age" against a 5-minute bound.
      *
@@ -1483,20 +1484,21 @@ export function buildStartingProfileConfigs(
      * interaction rather than assume it". Done, and the assumption was WRONG
      * in its ordering while right in its safety:
      *
-     * - **Nothing is waved through.** The `staleness` gate (1) runs *before* the `market_closed` gate (4)
-     *   (market-open), so when both would fire — an equity signal decided in
-     *   yesterday's session, evaluated against a shut market — the staleness
-     *   bound is what rejects it, at ~17 hours against a 15-minute bound. The
-     *   market-open gate never gets the chance to be the one that catches it.
-     *   Both answers are `no_go`; only the recorded `no_go_reason` differs.
+     * - **Nothing is waved through.** The `staleness` gate (1) runs *before*
+     *   the `market_closed` gate (4) (market-open), so when both would fire —
+     *   an equity signal decided in yesterday's session, evaluated against a
+     *   shut market — the staleness bound is what rejects it, at ~17 hours
+     *   against a 15-minute bound. The market-open gate never gets the
+     *   chance to be the one that catches it. Both answers are `no_go`; only
+     *   the recorded `no_go_reason` differs.
      * - **So the reason code is the thing to read carefully in a soak log,**
      *   and it is pinned by test rather than left to be rediscovered:
      *   `market_closed` appears only for the narrow case where the mark is
      *   FRESH but the session shut between the decision and the gate — a tick
      *   that started at 15:59 ET and reached Verdict after the close. That is
-     *   the case the `market_closed` gate (4) uniquely catches, and it is the case that matters,
-     *   because a fresh mark is exactly the input a staleness bound cannot
-     *   reject.
+     *   the case the `market_closed` gate (4) uniquely catches, and it is
+     *   the case that matters, because a fresh mark is exactly the input a
+     *   staleness bound cannot reject.
      * - **15 minutes is not tight against the pipeline that produces the
      *   signal.** `LATENCY_BUDGET_MS.stocks` bounds one debate at 60s, and
      *   `decision_timestamp` is the quote's `observed_at`, not the tick start
@@ -1591,9 +1593,10 @@ export function buildStartingProfileConfigs(
     /**
      * DERIVED — `false` is the conservative side of a gate that only applies
      * to stocks. It stops being hypothetical with `DEFAULT_UNIVERSE` (#381):
-     * four equities now reach the `market_closed` gate (4), and `false` is what makes
-     * `tradingCalendar.isOpen(now)` authoritative for them. Extended-hours
-     * liquidity is exactly the regime the cost model is least calibrated for.
+     * four equities now reach the `market_closed` gate (4), and `false` is
+     * what makes `tradingCalendar.isOpen(now)` authoritative for them.
+     * Extended-hours liquidity is exactly the regime the cost model is
+     * least calibrated for.
      */
     allow_extended_hours: false,
     flag_thresholds: {

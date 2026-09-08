@@ -809,11 +809,11 @@ export class ConsoleApprovalChannel implements ApprovalChannel {
  * The composition root's default `ApprovalChannel` since ADR-0007 made
  * `automation_level` fully `auto` — and it exists to be **unreachable**.
  *
- * Under `auto`, `shouldEngageHitl` short-circuits to `false` before the `hitl` gate (6), so
- * `requestApproval` is never called and no approval transport is needed in any
- * mode. That is why this class, unlike `ConsoleApprovalChannel`, does not
- * refuse to be constructed in `live`: refusing there would block a live start
- * over a gate that never fires.
+ * Under `auto`, `shouldEngageHitl` short-circuits to `false` before the
+ * `hitl` gate (6), so `requestApproval` is never called and no approval
+ * transport is needed in any mode. That is why this class, unlike
+ * `ConsoleApprovalChannel`, does not refuse to be constructed in `live`:
+ * refusing there would block a live start over a gate that never fires.
  *
  * What it will not do is silently stand in for a human if the dial is ever
  * turned back. `ConsoleApprovalChannel` auto-approves, which is safe only

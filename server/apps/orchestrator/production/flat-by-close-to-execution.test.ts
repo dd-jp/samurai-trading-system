@@ -4,7 +4,7 @@
  * The coverage gap that hid the defect: `verdict/index.test.ts` hands every
  * intent a freshly-minted `decision_timestamp`, `smoke-run.ts` fabricated its
  * own `go` for the exit scenarios, and NOTHING drove a tick-decided flatten
- * through Verdict into Execution. So gate 1 (staleness) `no_go`'d every
+ * through Verdict into Execution. So the `staleness` gate (1) `no_go`'d every
  * flat-by-close flatten in production while ~2900 tests stayed green.
  *
  * The arithmetic these cases pin: the tick path stamps `decision_timestamp` to
@@ -19,8 +19,9 @@
  * Deliberately built on a HEALTHY mark. #891's `unpriced_exit` bypass skips the
  * two PRICE gates, so running these against a stalled feed would exercise two
  * exemptions at once and stop isolating which gate refused. A normally-priced
- * flatten is refused by gate 1 alone, which is both the cleaner proof and the
- * larger blast radius: the defect never needed a degraded feed.
+ * flatten is refused by the `staleness` gate (1) alone, which is both the
+ * cleaner proof and the larger blast radius: the defect never needed a
+ * degraded feed.
  *
  * The configs are the SHIPPED ones (`buildStartingProfileConfigs`), not local
  * fixtures — a test that invented its own `max_signal_age` would pass against a
@@ -275,7 +276,8 @@ describe('#894: a mandatory flat-by-close flatten reaches the broker', () => {
         const { intent, now, bar } = await driveFlatten(venue);
 
         // The premise, asserted rather than assumed: if this stops being true
-        // the cases below stop testing gate 1 and nothing would say so.
+        // the cases below stop testing the `staleness` gate (1) and nothing
+        // would say so.
         expect(intent.metadata.exit_reason).toBe('flatten');
         expect(intent.decision_timestamp).toEqual(bar);
         const signalAgeMs = now.getTime() - intent.decision_timestamp.getTime();
