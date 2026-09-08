@@ -49,6 +49,123 @@ describe('maskCredentials', () => {
   });
 });
 
+describe('camelCase/underscore keys, Basic auth and DSN passwords (#1367)', () => {
+  // Measured against `b0cc1f3` (PR #1359's review) and re-confirmed against
+  // this file's `main` before the fix: every row here masked nothing —
+  // `\b`-anchored patterns don't see a credential word joined by camelCase
+  // or an underscore, and neither `Authorization: Basic` nor a DSN password
+  // had a pattern at all.
+  const positive: ReadonlyArray<{ name: string; input: string; secret: string }> = [
+    {
+      name: 'camelCase nested key: clientSecret',
+      input: '{"credentials":{"clientSecret":"sk-live-abcdef123456"}}',
+      secret: 'sk-live-abcdef123456',
+    },
+    {
+      name: 'camelCase key: accessToken',
+      input: '{"accessToken":"ya29.a0AfH6SMB-verysecret"}',
+      secret: 'ya29.a0AfH6SMB-verysecret',
+    },
+    {
+      name: 'camelCase key: refreshToken',
+      input: '{"refreshToken":"rt_9f8e7d6c5b4a"}',
+      secret: 'rt_9f8e7d6c5b4a',
+    },
+    {
+      name: 'underscore-joined env-var key: APCA_API_SECRET_KEY',
+      input: '{"APCA_API_SECRET_KEY":"zzzz"}',
+      secret: 'zzzz',
+    },
+    {
+      name: 'Authorization: Basic',
+      input: 'Authorization: Basic dXNlcjpwYXNzd29yZA==',
+      secret: 'dXNlcjpwYXNzd29yZA==',
+    },
+    {
+      name: 'DSN password',
+      input: 'postgres://user:supersecretpw@db.internal:5432/samurai',
+      secret: 'supersecretpw',
+    },
+    {
+      name: 'existing bareword keys still mask (no regression)',
+      input: '{"token":"plainmatch123"} / {"password":"hunter2"}',
+      secret: 'plainmatch123',
+    },
+  ];
+
+  it.each(positive)('masks the secret in: $name', ({ input, secret }) => {
+    expect(maskCredentials(input)).not.toContain(secret);
+    expect(maskCredentials(input)).toContain('[REDACTED]');
+  });
+
+  it('leaves the non-secret context readable around each new pattern', () => {
+    expect(maskCredentials('{"credentials":{"clientSecret":"sk-live-abcdef123456"}}')).toContain(
+      '"credentials"',
+    );
+    expect(maskCredentials('Authorization: Basic dXNlcjpwYXNzd29yZA==')).toContain(
+      'Authorization: ',
+    );
+    // The DSN pattern masks only the password segment (look-around, not a
+    // whole-match replace like the other patterns), so the scheme, username,
+    // host, port and database — what an operator needs to tell which
+    // connection failed — all survive.
+    expect(maskCredentials('postgres://user:supersecretpw@db.internal:5432/samurai')).toBe(
+      'postgres://user:[REDACTED]@db.internal:5432/samurai',
+    );
+  });
+
+  // Every name below is a real, non-secret field this codebase logs today.
+  // A suffix rule (mask anything ending in `Token`/`Key`/`Secret`) would
+  // have caught all of them; the patterns above are named compounds
+  // specifically so it doesn't.
+  const negative: ReadonlyArray<{ name: string; input: string; where: string }> = [
+    {
+      name: 'pagination cursor: next_page_token',
+      input: '{"next_page_token":"abc123continuation"}',
+      where: 'market-data-service/sources/alpaca-http-client.ts',
+    },
+    {
+      name: 'pagination cursor: pageToken',
+      input: '{"pageToken":"abc123continuation"}',
+      where: 'tools/backtest/free-stack-aggregates-client.ts',
+    },
+    {
+      name: 'LLM request budget: max_tokens',
+      input: '{"max_tokens":1024}',
+      where: 'orchestrator/production/defaults.ts',
+    },
+    {
+      name: 'LLM request budget: maxTokens',
+      input: '{"maxTokens":1024}',
+      where: 'debate-engine/llm/anthropic-client.ts',
+    },
+    {
+      name: 'order idempotency key (not a credential, an id)',
+      input: '{"idempotencyKey":"debate-42"}',
+      where: 'pipeline/verdict/index.ts',
+    },
+    {
+      name: "Saxo's opaque per-account resource id, not a credential",
+      input: "{ AccountKey: accountKey, side: 'buy' }",
+      where: 'pipeline/execution/adapters/saxo-http-client.ts',
+    },
+    {
+      name: '"Basic" as ordinary English, no Authorization: prefix',
+      input: "Alpaca's Basic (free) subscription allows 200 req/min",
+      where: 'tools/backtest/free-stack-aggregates-client.ts',
+    },
+    {
+      name: 'a domain field named "keyword", not a credential',
+      input: '{"keyword":"leveraged etf"}',
+      where: 'providers/universe-pool/lse-etp-pool.ts',
+    },
+  ];
+
+  it.each(negative)('does NOT mask: $name', ({ input }) => {
+    expect(maskCredentials(input)).toBe(input);
+  });
+});
+
 describe('sanitizeLogText', () => {
   it('still caps at MAX_ERROR_BODY_CHARS after the split', () => {
     const long = 'a'.repeat(MAX_ERROR_BODY_CHARS + 100);
