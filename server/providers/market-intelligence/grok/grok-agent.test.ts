@@ -298,7 +298,7 @@ describe('GrokAgent', () => {
       }
     }
 
-    it('logs the archive-write failure under the refresh call\'s own trace_id', async () => {
+    it("logs the archive-write failure under the refresh call's own trace_id", async () => {
       const logger = recordingLogger();
       const { agent } = build({
         logger,
