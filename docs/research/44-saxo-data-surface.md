@@ -446,6 +446,65 @@ is two clicks at developer.saxo → *Get 24 Hour Token*.
 
 ---
 
+### 2.9b The delayed feed is not just cheaper — it is outside a licensing regime that real time is inside
+
+Found 2026-09-08 while working [#1309](https://github.com/dd-jp/samurai-trading-system/issues/1309),
+from the **London Stock Exchange's own** published policy rather than from Saxo. It reframes §2.9's
+£7/month question, which until now looked like a straightforward purchase of better data.
+
+**The definitions do the work.** LSE Schedule B (2026) defines *Non-Display Usage* as the access,
+processing or use of **Real Time Data** which is not *Display Data*, and defines *Display Data* as data
+used via a screen and human readable. A program reading prices to generate orders is therefore
+Non-Display **by definition**. §6.1 requires a licence for it; §6.5 states it includes automated
+trading; and the Policy Guidelines enumerate the qualifying use cases — **6.4.15 "algorithmic
+trading"**, 6.4.1 automated order/quote generation, 6.4.5 price referencing for trading purposes.
+Samurai is squarely described.
+
+The applicable category is **Trading as Principal** (own account). From the 2025 Price List, for
+ETF/ETP — our universe — at 1–5 entitlements:
+
+| | Level 1 | Level 2 |
+| --- | ---: | ---: |
+| ETF/ETP, Trading as Principal, 1–5 entitlements | **£6,500 / yr** | £13,000 / yr |
+
+**There is no Private Investor exemption in §6.** Schedule B's Private Investor carve-outs sit in
+redistribution (3.2), derived data (4.4) and per-price-request (3.5.3); none reach the Non-Display
+policy.
+
+**This is a question to ask, not a cost to book.** Every obligation in Schedule B runs to *"the
+Customer"* — the party holding an LSE Order Form. **That is Saxo, not us.** The single place the
+Guidelines put a Non-Display licence on the End Customer is §6.2, and that clause is about **hosted
+environments** (colocation), not a machine running against a broker API. Retail algorithmic trading
+through broker APIs is also an ordinary, widely sold product; were the regime to bind every retail end
+client at £6,500/yr, that market could not exist. Saxo itself holds a Private Investor redistribution
+licence (Level 1 UK market data, £7,976/yr on the same price list), which the £7/month plausibly
+amortises. **Record £6,500 as what is at stake if the answer is bad — not as a live cost against a
+£1,000 book.**
+
+**The load-bearing consequence, and it is cheerful.** Non-Display Usage is scoped to **Real Time Data
+only**. The free 15-minute delayed feed is **outside the regime entirely**. Put that beside what the
+code actually reads — the analysts and the Trader consume **`getBars`**, while `getQuote` has only two
+non-test callers, both in execution (§2.5) — and:
+
+- Samurai's **signal path already runs on delayed data**, since `chart/v3` bars carry
+  `ChartInfo.DelayedByMinutes: 15` exactly as quotes do (measured across five LSE ETP/ETC lines).
+- Staying on the delayed feed is therefore **both free and licence-clean for automated trading**.
+- The £7/month would sharpen quotes for **two execution-path callers** while opening a licensing
+  question the delayed feed does not raise.
+
+**What to ask Saxo**, alongside #1309's retention question and in one letter: *does the LSE Level 1
+Private Investor subscription cover automated/algorithmic order generation by the client via OpenAPI,
+or does that constitute Non-Display Usage requiring a separate licence?*
+
+**One cell deliberately not cited.** Price List 3.5.1 shows "Fee waived" for Private Investor UK market
+Data per-device charges, but the **ETF/ETP row's Private Investor cells are blank**. A blank in a table
+extracted from a PDF may mean "not offered", "waived", or a mis-aligned column. It is read in neither
+direction here.
+
+Sources: [Schedule B — Market Data Policy 2026](https://docs.londonstockexchange.com/sites/default/files/documents/schedule-b-market-data-policy-2026.pdf),
+[Market Data Policy Guidelines 2025](https://docs.londonstockexchange.com/sites/default/files/documents/market-data-policy-guidelines-2025_0.pdf),
+[Price List and Data Product Schedule 2025](https://docs.londonstockexchange.com/sites/default/files/documents/price-list-and-product-schedule-2025_1.pdf).
+
 ## 3. What Saxo does **not** give us
 
 Answering David's sentiment/intelligence question directly, from the API surface rather than
@@ -503,7 +562,7 @@ block the conclusions. Worth ten minutes at the next login.
 | 6 | ADR-0015: "Saxo has no per-order minimum" — the fact that disqualified IBKR | Unverified against the venue; one live call settles it (§2.6) | **wayfinder child**, pre-ramp gate |
 | 7 | ADR-0014: flat-by-close is *already* calendar-driven (`sessionEnd`, #668) — the original "client-side timing" framing was wrong | Session feed as an **overlay validating** the hand table (2 days forward, not a replacement) + native MOC/LOC (§2.7) | **wayfinder child** [#1312](https://github.com/dd-jp/samurai-trading-system/issues/1312); MOC still gated on the ADR-0015 clause |
 | 8 | Doc 53 `CostModelImpl`: 1 bp rate floor, no spread input | Per-instrument spread now available (§2.5) | folds into 6 |
-| 9 | #895 + doc 53: market data assumed free and real-time | Opt-in, **delayed** by default (quotes *and* chart bars), **£7/mo** for LSE Level 1 real time, refunded at 4 trades/month (§2.9). The delay is read as an entitlement tier on four circumstantial strands; the confirming in-session read is outstanding (§2.9a) | comment on #895 |
+| 9 | #895 + doc 53: market data assumed free and real-time | Opt-in, **delayed** by default (quotes *and* chart bars), **£7/mo** for LSE Level 1 real time, refunded at 4 trades/month (§2.9). The delay is read as an entitlement tier on four circumstantial strands; the confirming in-session read is outstanding (§2.9a). **And the delayed feed is outside LSE's Non-Display Usage regime, which real time is inside (§2.9b)** | comment on #895 |
 
 Items 1, 2 and 4 are evidence for tickets that already exist and should not be re-filed. Items 3, 5, 6 and 7 are genuine
 reopenable spec decisions and want a wayfinder map.
