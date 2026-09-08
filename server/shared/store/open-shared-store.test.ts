@@ -102,27 +102,18 @@ const CONSOLIDATED_SCHEMA_TABLE_COUNT = 35;
  * The migration list, derived from disk so a new `NNNN_*.sql` file changes no
  * expectation below except `HIGHEST_KNOWN_MIGRATION_VERSION` (and, if the
  * migration adds a table, `TABLES`/`CONSOLIDATED_SCHEMA_TABLE_COUNT` above —
- * that list is independently maintained and out of scope here). Every
- * expectation built from `MIGRATIONS`/`MIGRATION_VERSIONS` uses `listMigrations`
- * as its own oracle, so none of them can catch a migration deleted from disk.
- * Only a literal can: `HIGHEST_KNOWN_MIGRATION_VERSION` is checked below
- * against a full 1..N contiguity assertion, not just the tail, so a deleted
- * middle file reds too.
+ * that list is independently maintained and out of scope here). See the
+ * `migrations directory` describe block below for why one literal survives.
  */
 const MIGRATIONS = listMigrations(MIGRATIONS_DIR);
 const MIGRATION_VERSIONS = MIGRATIONS.map((migration) => migration.version);
 const HIGHEST_KNOWN_MIGRATION_VERSION = 51;
 
-/**
- * A temp copy of `MIGRATIONS_DIR` containing only versions up to and including
- * `cutoverVersion` — a checkout mid a cutover migration's own ticket, before
- * the pre-existing rows its backfill targets are re-created against the real
- * directory in the test.
- */
-function copyMigrationsUpTo(cutoverVersion: number): string {
-  const dir = mkdtempSync(join(tmpdir(), `samurai-migrations-pre-${cutoverVersion}-`));
+/** A temp copy of `MIGRATIONS_DIR` holding every migration through `throughVersion`, inclusive. */
+function copyMigrationsUpTo(throughVersion: number): string {
+  const dir = mkdtempSync(join(tmpdir(), `samurai-migrations-through-${throughVersion}-`));
   for (const migration of MIGRATIONS) {
-    if (migration.version <= cutoverVersion) {
+    if (migration.version <= throughVersion) {
       copyFileSync(join(MIGRATIONS_DIR, migration.filename), join(dir, migration.filename));
     }
   }
@@ -183,18 +174,6 @@ describe('openSharedStore', () => {
     expect(versions).toEqual(expectedVersions);
     expect(runMigrations(db)).toEqual([]);
     expect(db.prepare('SELECT version FROM schema_migrations').all()).toEqual(expectedVersions);
-  });
-
-  // Stands alone rather than living inside the no-op test above: it asserts on
-  // the migrations directory itself, not on `openSharedStore`, and every other
-  // expectation in this file is derived FROM `MIGRATION_VERSIONS` — so this is
-  // the one check that can catch a migration file deleted from disk. Folded
-  // into an unrelated test, deleting or skipping that test would silently drop
-  // this guarantee with the suite still green.
-  it('pins the migrations directory to a known, contiguous 1..N version list (#1397)', () => {
-    expect(MIGRATION_VERSIONS).toEqual(
-      Array.from({ length: HIGHEST_KNOWN_MIGRATION_VERSION }, (_, i) => i + 1),
-    );
   });
 
   // #1112 review: version 45 in `schema_migrations` proves only that
@@ -279,7 +258,6 @@ describe('openSharedStore', () => {
           .run(key, arm);
       }
 
-      // 0001..0048 are already recorded, so this applies every migration above the cutover.
       expect(runMigrations(raw, MIGRATIONS_DIR)).toEqual(
         MIGRATION_VERSIONS.filter((version) => version > preCutoverVersion),
       );
@@ -648,6 +626,24 @@ describe('openSharedStore', () => {
     expect(() =>
       insert.run('debate-1', 'key-2', 'AAPL', 'stocks', '[1]', '[1]', '2026-07-26T00:00:00.000Z'),
     ).toThrow();
+  });
+});
+
+// Separate from `describe('openSharedStore', ...)` above: this asserts on the
+// migrations directory itself, not on `openSharedStore`, so it does not
+// belong under that name. It also stands as its own test rather than folding
+// into another one, because every other migration-version expectation in this
+// file is derived FROM `MIGRATION_VERSIONS` via `listMigrations` as its own
+// oracle — none of them can catch a migration deleted from disk. Only a
+// literal can, so `HIGHEST_KNOWN_MIGRATION_VERSION` is checked here against a
+// full 1..N contiguity assertion (not just the tail, so a deleted middle file
+// reds too) — and folded into an unrelated test, deleting or skipping that
+// test would have silently dropped this guarantee with the suite still green.
+describe('migrations directory (#1397)', () => {
+  it('is a known, contiguous 1..N version list', () => {
+    expect(MIGRATION_VERSIONS).toEqual(
+      Array.from({ length: HIGHEST_KNOWN_MIGRATION_VERSION }, (_, i) => i + 1),
+    );
   });
 });
 
