@@ -7,8 +7,8 @@
  * The obvious one-line fix — `sanitizeLogText(JSON.stringify(payload))` —
  * **corrupts the log format**, and was rejected on a worked example rather
  * than on taste. `sanitize-log-text.ts`'s bareword pattern's value class
- * excludes whitespace, `,`, `;`, both quote characters and `}`/`]` — but NOT
- * `{`. So the serialized `{"auth":{"scheme":"basic"}}` matches `auth":{` in
+ * excludes whitespace, `,`, `;`, `&`, both quote characters and `}`/`]` — but
+ * NOT `{`. So the serialized `{"auth":{"scheme":"basic"}}` matches `auth":{` in
  * full — `auth` is the bareword key, `":` the operator, and the trailing
  * bare `{` is what the VALUE portion of the pattern actually captures,
  * stopping there because the `"` opening `"scheme"` is excluded — and

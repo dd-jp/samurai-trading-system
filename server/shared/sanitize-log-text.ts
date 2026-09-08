@@ -52,6 +52,12 @@ const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // what counts as a value. `&` is excluded from the value class for the
   // same reason a query-string credential shouldn't swallow its own
   // trailing params (`?apiKey=x&adjusted=true` must keep `&adjusted=true`).
+  // The cost of that exclusion: a credential value that itself legitimately
+  // contains `&` (`{"password":"p&ssw0rd"}`) is only masked up to the `&`,
+  // leaking its tail (`{"[REDACTED]&ssw0rd"...}`) — accepted because a
+  // query string is the far more common shape this module sees in
+  // practice, and a partially-masked credential is still a shorter,
+  // less-recoverable leak than the un-truncated version.
   /\b(?:APCA-API-KEY-ID|APCA-API-SECRET-KEY|api[_-]?key|api[_-]?secret|secret|token|password|passwd|pwd|auth)\b[\x22\x27]?[ \t]*[:=][ \t]*[\x22\x27]?[^\s,;&\x22\x27\x7d\]]+/gi,
   // `clientSecret`/`client_secret`, `accessToken`/`access_token`,
   // `refreshToken`/`refresh_token`, and an underscore-PREFIXED compound
@@ -70,9 +76,11 @@ const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // pattern above.
   /(?<![A-Za-z0-9])(?:client[_-]?secret|access[_-]?token|refresh[_-]?token)[\x22\x27]?[ \t]*[:=][ \t]*[\x22\x27]?[^\s,;&\x22\x27\x7d\]]+/gi,
   // Underscore-joined ALL-CAPS env-var names (`ALPACA_API_SECRET`,
-  // `SAXO_OPENAPI_TOKEN`, `TELEGRAM_BOT_TOKEN`, `DB_PASSWORD` — grepped from
-  // this repo's real `process.env.*` reads, not just the one Alpaca name):
-  // the shape the bareword pattern above can't reach even with
+  // `SAXO_OPENAPI_TOKEN`, `TELEGRAM_BOT_TOKEN` — grepped from this repo's
+  // real `process.env.*` reads, not just the one Alpaca name; `DB_PASSWORD`
+  // is illustrative of the `_PASSWORD` suffix, not a name in this repo's
+  // own `process.env.*` reads): the shape the bareword pattern above can't
+  // reach even with
   // `api[_-]?key`/`secret`/`token`/`password` in it, because the credential
   // word isn't the LAST segment. Case-SENSITIVE (no `i` flag) and requires
   // an all-caps prefix — this buys avoiding a mask on the LOWERCASE spelling
@@ -96,7 +104,13 @@ const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // `saxo_openapi_token`, `Saxo_Openapi_Token`) is still not masked by
   // either pattern — narrower coverage than the all-caps branch, on
   // purpose, because `_token` alone can't tell a credential from a cursor
-  // without the case signal.
+  // without the case signal. The gap is wider than just `_token`, though:
+  // this pattern is anchored `[a-z][a-z0-9_]{0,60}` with no `i` flag, so
+  // ANY mixed-case spelling of the three covered suffixes also falls
+  // through both patterns (`Alpaca_Api_Key`, `my_API_KEY`,
+  // `Polygon_Api_Secret` — all measured unmasked) — only all-lowercase and
+  // all-caps are covered, the two shapes this codebase's own env-var
+  // reads and pagination cursors actually use.
   /\b[a-z][a-z0-9_]{0,60}_(?:secret_key|api_key|api_secret)\b[\x22\x27]?[ \t]*[:=][ \t]*[\x22\x27]?[^\s,;&\x22\x27\x7d\]]+/g,
   // `Authorization: Basic <base64>` / `Authorization: Token <key>`
   // (`tools/backtest/http-tiingo-client.ts` sends the latter). Anchored to
@@ -115,7 +129,12 @@ const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // newline — out of scope for round-2's F7, which named the four
   // key-to-value separators, not this scheme-to-value one; a stack trace
   // straight after `Authorization: Basic` (no value on that line) would
-  // still lose its first word to this pattern.
+  // still lose its first word to this pattern. The `Bearer <token>`
+  // pattern above (line 44) has the identical scheme-to-value `\s+` and is
+  // equally untouched, for the same out-of-scope reason: `Bearer` has no
+  // key-to-value separator to begin with — the word itself is the anchor
+  // — so neither F7 nor F8 named it, and it shares this pattern's newline
+  // and `&` gaps unchanged.
   /(?<=\bAuthorization[\x22\x27]?[ \t]*[:=][ \t]*[\x22\x27]?)(?:Basic|Token)\s+[^\s,;&\x22\x27\x7d\]]+/gi,
   // `scheme://user:PASSWORD@host` DSNs: matches only the password segment
   // (via look-around), so the scheme, username and host — the parts an

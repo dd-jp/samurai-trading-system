@@ -221,6 +221,36 @@ describe('camelCase/underscore keys, Basic/Token auth and DSN passwords (#1367)'
         secret: 'skFAKE0000',
         survives: 'redis://:',
       },
+      // Round-4 review (F1): the `&`-exclusion row above (F8) only exercises
+      // the bareword pattern (:55). The camelCase/underscore, all-caps
+      // env-var and Authorization patterns each got the identical `&`
+      // exclusion, but nothing pinned it there — reverting `&` from any of
+      // their value classes left every existing test green. These four
+      // close that gap, one per pattern.
+      {
+        name: 'F1 (#1367 round 4): access_token in a query string keeps its trailing params',
+        input: 'access_token=skFAKE0000&adjusted=true',
+        secret: 'skFAKE0000',
+        survives: '&adjusted=true',
+      },
+      {
+        name: 'F1 (#1367 round 4): ALPACA_API_SECRET in a query string keeps its trailing params',
+        input: 'ALPACA_API_SECRET=skFAKE0000&adjusted=true',
+        secret: 'skFAKE0000',
+        survives: '&adjusted=true',
+      },
+      {
+        name: 'F1 (#1367 round 4): polygon_api_key in a query string keeps its trailing params',
+        input: 'polygon_api_key=skFAKE0000&adjusted=true',
+        secret: 'skFAKE0000',
+        survives: '&adjusted=true',
+      },
+      {
+        name: 'F1 (#1367 round 4): Authorization Basic in a query string keeps its trailing params',
+        input: 'Authorization: Basic ZkFLRTAwMDA=&adjusted=true',
+        secret: 'ZkFLRTAwMDA=',
+        survives: '&adjusted=true',
+      },
     ];
 
   it.each(positive)('masks the secret in: $name', ({ input, secret, survives }) => {
@@ -405,6 +435,31 @@ describe('camelCase/underscore keys, Basic/Token auth and DSN passwords (#1367)'
       name: 'maskCredentials does not reach polygonApiKey (redactPayload does, structurally)',
       input: '{"polygonApiKey":"would-be-a-real-secret"}',
       where: 'apps/service-api/provider-status.ts',
+    },
+    // Round-4 review (F1): F7's `[ \t]*` fix on the bareword pattern (:55)
+    // was pinned by the dedicated newline test above, but nothing pinned it
+    // on the all-caps env-var, lowercase env-var or Authorization patterns
+    // — reverting `[ \t]*` back to `\s*` on any of them left every existing
+    // test green. These three close that gap: a newline right after the
+    // key must NOT be treated as the key-to-value separator, so a stack
+    // trace embedded in an error message survives untouched.
+    {
+      name: 'F1 (#1367 round 4): newline after ALPACA_API_SECRET does not swallow the following line',
+      input: 'ALPACA_API_SECRET:\n    at foo()',
+      where:
+        'all-caps env-var pattern (:86) — same newline hazard F7 fixed on the bareword pattern',
+    },
+    {
+      name: 'F1 (#1367 round 4): newline after polygon_api_key does not swallow the following line',
+      input: 'polygon_api_key:\n    at foo()',
+      where:
+        'lowercase env-var pattern (:100) — same newline hazard F7 fixed on the bareword pattern',
+    },
+    {
+      name: 'F1 (#1367 round 4): newline between Authorization: and Basic does not mask anything',
+      input: 'Authorization:\nBasic ZkFLRTAwMDA=',
+      where:
+        'Authorization pattern\'s lookbehind separator (:119) — a newline there means the lookbehind never matches before "Basic", so nothing is masked at all (not the scheme-to-value \\s+ gap F4 describes, a different mechanism with the same observable result)',
     },
   ];
 
