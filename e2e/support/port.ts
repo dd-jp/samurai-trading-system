@@ -51,14 +51,21 @@ export function acquireFreePort(host: string): Promise<number> {
  * idempotent across process boundaries.
  *
  * `playwright.config.ts` is not loaded once: Playwright's root process loads
- * it to plan the run and start `webServer`, then forks a worker process per
- * test file, and each fork loads the config again from scratch. A bare
+ * it to plan the run and start `webServer`, and it is evaluated again,
+ * repeatedly, elsewhere before test bodies run — the exact trigger for each
+ * reload was not identified, only that there are many of them. A bare
  * `await acquireFreePort(host)` at module scope therefore drew a fresh port
- * on every load — the webServer bound one port, and each worker's `baseURL`
- * pointed at a different one it had picked for itself, so every test saw
- * `ECONNREFUSED`. Observed empirically before this constant existed: the
- * running server logged one port while test failures cited several others,
- * each a few numbers apart (#1298).
+ * on nearly every load — the webServer bound one port, and most tests' own
+ * `baseURL` pointed at a different one each had picked for itself, so those
+ * tests saw `ECONNREFUSED`.
+ *
+ * Observed empirically before this constant existed, on a 9-test run with
+ * `workers: 1`: the running server logged one port while 9 of the 9 test
+ * failures cited 9 distinct other ports, each a few numbers apart from the
+ * last (#1298) — too many distinct values for "once per worker process" or
+ * "once per spec file" to explain, and consistent with (though not proof of)
+ * a reload per test. Whatever the exact trigger, the config module runs
+ * across more than one process and far more than once per invocation.
  */
 const PORT_ENV_VAR = 'SAMURAI_E2E_PORT';
 

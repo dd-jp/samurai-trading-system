@@ -34,9 +34,10 @@ const HOST = '127.0.0.1';
  * value, and nothing else in the e2e suite holds a copy of it.
  *
  * `resolveE2ePort`, not the lower-level `acquireFreePort`, because this
- * config module is loaded more than once per run — once by Playwright's root
- * process and again by each forked worker — and only the first load may pick
- * a new port; every later load must read back the same one.
+ * config module is evaluated more than once per run and in more than one
+ * process — Playwright's root process loads it to plan the run, and it is
+ * loaded again elsewhere before workers connect — and only the first load
+ * may pick a new port; every later load must read back the same one.
  */
 const PORT = await resolveE2ePort(HOST);
 const BASE_URL = `http://${HOST}:${PORT}`;
