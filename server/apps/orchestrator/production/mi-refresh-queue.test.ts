@@ -186,49 +186,52 @@ describe('MiRefreshQueue (#1085)', () => {
     expect(cap.spentUsd).toBe(2);
   });
 
-  it('holds the pair inside the budget only while the agent that reads no cap runs FIRST', async () => {
-    // The queue's ONE check covers a WHOLE composed pass, so within a pass the
-    // agents' order is load-bearing and the root's `[miIngestAgent, grokAgent]`
-    // is the safe one. `MiIngestAgent` bills through the shared `LlmClient` and
-    // reads no cap; `GrokAgent` re-reads the cap itself before it calls. Ingest
-    // first means Grok's own read sees the POST-ingest total and refuses. This
-    // is `A` (bills, reads nothing) then `B` (reads, refuses, bills).
+  it('holds the pair inside the budget however the two are composed, now that both self-gate (#1106)', async () => {
+    // Before #1106, `MiIngestAgent` billed through the shared `LlmClient` and
+    // read no cap of its own, so this ordering — the no-cap agent first —
+    // was the only safe one at the composition root. Now both agents read
+    // the cap before they call (the `capReadingRefresher` shape on both
+    // sides), so the SAME pair spends the same whichever one runs first: the
+    // first call is admitted and bills, the second reads the post-bill total
+    // and refuses.
     const cap = meteredCap(1);
     const calls: string[] = [];
     const queue = new MiRefreshQueue({
       spendCap: cap,
-      refresher: composePair(billingRefresher(cap, 1, calls), capReadingRefresher(cap, 1, calls)),
+      refresher: composePair(
+        capReadingRefresher(cap, 1, calls),
+        capReadingRefresher(cap, 1, calls),
+      ),
     });
 
     await queue.refresh('tick-1', 'TSLA', 'stocks');
     await settle();
 
-    // On SPEND, not on which names ran: the invariant is the budget, and an
-    // index assertion would still pass for a pair that both called and both
-    // billed. EXACTLY the budget, not "at most" — `<= 1` would also pass for a
-    // pass that spent nothing at all, which is what a queue refusing
-    // everything looks like.
+    // EXACTLY the budget, not "at most" — `<= 1` would also pass for a pass
+    // that spent nothing at all, which is what a queue refusing everything
+    // looks like.
     expect(cap.spentUsd).toBe(1);
   });
 
-  it('and overshoots when that order is reversed, which is why the order is an invariant', async () => {
-    // Same queue, same single check, same budget — only the composition order
-    // changes. `B` reads a total no one has moved yet and admits itself, then
-    // `A` bills under a check made before either ran. Exactly what AC2 forbids,
-    // reachable today by editing one array at the composition root.
+  it('spends the same amount when the composition order is reversed', async () => {
+    // Same queue, same single check, same budget — only the composition
+    // order changes. Because both sides now self-gate, reversing which one
+    // runs first no longer changes the total: whichever agent goes first
+    // bills once, and the other reads the post-bill total and refuses.
     const cap = meteredCap(1);
     const calls: string[] = [];
     const queue = new MiRefreshQueue({
       spendCap: cap,
-      refresher: composePair(capReadingRefresher(cap, 1, calls), billingRefresher(cap, 1, calls)),
+      refresher: composePair(
+        capReadingRefresher(cap, 1, calls),
+        capReadingRefresher(cap, 1, calls),
+      ),
     });
 
-    await queue.refresh('tick-1', 'TSLA', 'stocks');
+    await queue.refresh('tick-1', 'AAPL', 'stocks');
     await settle();
 
-    // Exactly double the budget: both agents called, neither stopped by a check
-    // the pair fails. `> 1` would leave the size of the breach unpinned.
-    expect(cap.spentUsd).toBe(2);
+    expect(cap.spentUsd).toBe(1);
   });
 
   it('refuses a queued refresh once the cap is reached, logging the first then every Nth', async () => {
