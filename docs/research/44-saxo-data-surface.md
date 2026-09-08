@@ -404,10 +404,39 @@ than a funded retail GIA. So the open question stays open in the form it was ori
 list. What SIM did establish is the weaker, useful thing: the field exists and is readable, so
 the live check is one more call rather than an investigation.
 
-### 2.9a How strong is the "entitlement, not session artifact" reading?
+### 2.9a "Entitlement, not session artifact" — **CONFIRMED by direct measurement, 2026-09-08**
 
-Stated plainly because five other artifacts now cite it. The claim rests on four strands, none
-of them the direct test:
+> **RESOLVED.** The outstanding test described at the end of this section was run at **07:32Z on
+> 2026-09-08**, 32 minutes into the LSE session. The result confirms the reading, and it was confirmed
+> by measuring the delay directly rather than by reading the metadata field. **The four circumstantial
+> strands below are superseded by one observation** and are kept only as a record of how the claim was
+> held before it was tested.
+>
+> **Control — the market was genuinely trading.** `LSE_ETF` was inside its `AutomatedTrading` window
+> (07:00–15:30Z), `MarketState` read `Open` on all five instruments, and fresh volume was printing
+> (one line traded 376 units at 07:17Z). This is the control the ASX attempt below failed to be.
+>
+> **Measurement — the data was 15 minutes behind a demonstrably live market.** Across five LSE
+> ETP/ETC lines, **no instrument had a bar newer than 15 minutes**, and the most active line's newest
+> bar sat at **15.3 minutes** old. On a real-time feed a line printing volume every few minutes would
+> show a bar seconds old, not a quarter of an hour. The delay is therefore **demonstrated**, not
+> inferred from `DelayedByMinutes`.
+>
+> Two further results from the same read:
+>
+> - **`PriceTypeBid`/`PriceTypeAsk: "OldIndicative"` persists mid-session**, with `MarketState: "Open"`
+>   and live volume. It is confirmed as a **non-discriminator**: it says nothing about session state.
+>   The parenthetical negative recorded below is now positively established.
+> - **`Amount: 0` mid-session** — the quote carries no size. These are indicative prices, not firm
+>   two-sided quotes with depth. That matters for anything that wants to treat the spread as tradeable.
+>
+> **What this does and does not settle.** It settles the *semantics* — `DelayedByMinutes: 15` is an
+> entitlement tier, not a market-closed artifact — and semantics carry from SIM to live. It does **not**
+> settle what tier the **live** GIA is on: `port/v1/accounts/me` reports `IsTrialAccount: True`, so this
+> is a trial account's entitlement, and per this project's standing split, account-shaped facts do not
+> carry. **The £7/month question is still open and still needs the live token** (#1311, #895).
+
+The claim originally rested on four strands, none of them the direct test:
 
 1. **`DelayedByMinutes` is exchange-specific and matches each exchange's published standard
    delay** — `15` for `LSE_ETF`, `20` for `ASX`, read on the same token minutes apart. A staleness
@@ -432,10 +461,11 @@ the imminent session, not a trading one. The reading is recorded here so it is n
 evidence later. (It does establish one negative: `PriceTypeAsk: "OldIndicative"` is not a
 market-closed marker specifically, since it appears identically on both.)
 
-**The outstanding test, in one line — and it is cheap:** `GET
+**The test, in one line — and it was cheap:** `GET
 /trade/v1/infoprices?Uic=29391797&AssetType=Etn&FieldGroups=Quote` between 07:00Z and 15:30Z on
-an LSE trading day. `DelayedByMinutes: 15` with `MarketState: "Open"` confirms this section as
-written; `0` falsifies it and the £7/month question dissolves.
+an LSE trading day. **Run 2026-09-08T07:32Z: `DelayedByMinutes: 15` with `MarketState: "Open"`** —
+this section is confirmed as written. The stronger form actually used was to measure the newest
+`chart/v3` bar's age against wall clock, which does not depend on trusting the metadata field at all.
 
 This needs a **SIM** token during LSE hours — a timing constraint, not an account one. An earlier
 draft said it needed the live token and was therefore blocked behind #1311; that was wrong, and
@@ -581,7 +611,7 @@ block the conclusions. Worth ten minutes at the next login.
 | 6 | ADR-0015: "Saxo has no per-order minimum" — the fact that disqualified IBKR | Unverified against the venue; one live call settles it (§2.6) | **wayfinder child**, pre-ramp gate |
 | 7 | ADR-0014: flat-by-close is *already* calendar-driven (`sessionEnd`, #668) — the original "client-side timing" framing was wrong | Session feed as an **overlay validating** the hand table (2 days forward, not a replacement) + native MOC/LOC (§2.7) | **wayfinder child** [#1312](https://github.com/dd-jp/samurai-trading-system/issues/1312); MOC still gated on the ADR-0015 clause |
 | 8 | Doc 53 `CostModelImpl`: 1 bp rate floor, no spread input | Per-instrument spread now available (§2.5) | folds into 6 |
-| 9 | #895 + doc 53: market data assumed free and real-time | Opt-in, **delayed** by default (quotes *and* chart bars), **£7/mo** for LSE Level 1 real time, refunded at 4 trades/month (§2.9). The delay is read as an entitlement tier on four circumstantial strands; the confirming in-session read is outstanding (§2.9a). **And the delayed feed is outside LSE's Non-Display Usage regime, which real time is inside (§2.9b)** | comment on #895 |
+| 9 | #895 + doc 53: market data assumed free and real-time | Opt-in, **delayed** by default (quotes *and* chart bars), **£7/mo** for LSE Level 1 real time, refunded at 4 trades/month (§2.9). The delay is read as an entitlement tier on four circumstantial strands, and the confirming in-session read is now **RUN and CONFIRMED** — 15-min lag measured against a demonstrably trading market, 2026-09-08 (§2.9a). **And the delayed feed is outside LSE's Non-Display Usage regime, which real time is inside (§2.9b)** | comment on #895 |
 
 Items 1, 2 and 4 are evidence for tickets that already exist and should not be re-filed. Items 3, 5, 6 and 7 are genuine
 reopenable spec decisions and want a wayfinder map.
