@@ -9,7 +9,7 @@ import {
   TELEGRAM_MAX_MESSAGE_CHARS,
   TelegramBotApiClient,
 } from './telegram-bot-api-client.js';
-import { classifyTelegramThrown } from './telegram-errors.js';
+import { classifyTelegramThrown, TelegramProviderError } from './telegram-errors.js';
 
 const FAKE_TOKEN = '1234567:test-fake-bot-token';
 const ALLOWED_ID = 4242;
@@ -584,6 +584,45 @@ describe('TelegramBotApiClient — transient network failures and undeliverable 
     expect(failureEntry?.message).toContain('[REDACTED]');
   });
 
+  // #1351: `recordError`'s render sits BEFORE the unconditional
+  // `telegram_delivery_failed` log call that follows the `if` block — a
+  // throw here (unguarded) would destroy that line too, not just its own.
+  it('an unrenderable recordError still logs telegram_delivery_failed and its own line with the placeholder', async () => {
+    const entries: LogEntry[] = [];
+    const h = makeClient({ logger: { log: (entry) => entries.push(entry) } });
+    h.fetchMock.mockRejectedValue(
+      new TypeError('fetch failed', { cause: new Error('connect ECONNREFUSED 127.0.0.1:9') }),
+    );
+    // Same hostile shape as the #1262 tick-loop test: circular (defeats
+    // `JSON.stringify`) with a throwing `Symbol.toPrimitive` (defeats the
+    // `String()` fallback too).
+    const hostile: Record<string, unknown> = {
+      [Symbol.toPrimitive]: () => {
+        throw new Error('render boom');
+      },
+    };
+    hostile.self = hostile;
+    h.alertDeliveryLog.recordFailure = () => {
+      throw hostile;
+    };
+
+    // The ORIGINAL fetch failure, not a render failure, must still be what
+    // rejects the call — proof `#recordDeliveryFailure` did not itself throw
+    // and replace it.
+    await expect(h.client.sendMessage(CHAT_ID, 'hi')).rejects.toThrow(/fetch failed/);
+
+    const recordFailedEntry = entries.find((entry) =>
+      entry.message.startsWith('failed to durably record an undelivered alert'),
+    );
+    expect(recordFailedEntry?.message).toContain('[unrenderable error]');
+
+    // The durable artifact this guard exists to preserve: the method's own
+    // unconditional summary line, reached only if the render above did not
+    // escape the surrounding catch.
+    const deliveryFailedEntry = entries.find((entry) => entry.event === 'telegram_delivery_failed');
+    expect(deliveryFailedEntry).toBeDefined();
+  });
+
   it('escalates on the Nth permanently-undeliverable send and every Nth after', async () => {
     const h = makeClient({
       alertChatId: CHAT_ID,
@@ -745,6 +784,53 @@ describe('TelegramBotApiClient — transient network failures and undeliverable 
     expect(escalationLogEntry).toBeDefined();
     expect(escalationLogEntry?.message).not.toContain(tokenLike);
     expect(escalationLogEntry?.message).toContain('[REDACTED]');
+  });
+
+  // #1351: `escalationError` is inside a detached `.catch()` on the
+  // escalation's own `#call('sendMessage', …)` — nothing awaits or re-catches
+  // it, so an unguarded throw here is an unhandled rejection.
+  // `classifyTelegramThrown` passes a `TelegramProviderError` through
+  // unchanged (telegram-errors.ts), so a hostile instance of it survives the
+  // classification layer intact and reaches this catch as-is.
+  it('an unrenderable escalationError does not become an unhandled rejection, and logs the placeholder', async () => {
+    const entries: LogEntry[] = [];
+    const h = makeClient({
+      alertChatId: CHAT_ID,
+      retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
+      logger: { log: (entry) => entries.push(entry) },
+    });
+    const hostile = new TelegramProviderError('placeholder', 502);
+    Object.defineProperty(hostile, 'message', {
+      get(): string {
+        throw new Error('render boom');
+      },
+      configurable: true,
+    });
+    h.fetchMock.mockRejectedValue(hostile);
+
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      for (let i = 0; i < 3; i++) {
+        await expect(h.client.sendMessage(CHAT_ID, `alert ${i}`)).rejects.toBeDefined();
+      }
+      // Let the fire-and-forget escalation attempt settle before asserting.
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+
+    // The durable artifact: no unhandled rejection reached the process —
+    // before the fix, rendering `hostile` here threw INSIDE the `.catch()`
+    // handler itself, which is exactly what turns a handled rejection into
+    // an unhandled one.
+    expect(unhandled).toEqual([]);
+
+    const escalationLogEntry = entries.find((entry) =>
+      entry.message.startsWith('failed to post the repeated-delivery-failure escalation'),
+    );
+    expect(escalationLogEntry?.message).toContain('[unrenderable error]');
   });
 
   it('a failure on a DIFFERENT chat than the escalation chat never triggers escalation (#342 isolation)', async () => {

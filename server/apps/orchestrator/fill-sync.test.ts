@@ -418,6 +418,51 @@ describe('startFillSync', () => {
       await sync.stop();
     });
 
+    // #1351: an unguarded render of `reconcileError` sits ahead of BOTH
+    // `ingestFills()` and the `finally`-wrapped #549 sweep in `runPoll`'s
+    // first block — a throw there skips them entirely, defeating the sweep's
+    // own comment that it must run "even when the poll itself failed, and
+    // ESPECIALLY then."
+    it('an unrenderable reconcile() failure still runs ingestFills and the residual-protection sweep', async () => {
+      const logger = makeLogger();
+      // Circular (defeats `JSON.stringify`) with a throwing `Symbol.toPrimitive`
+      // (defeats the `String()` fallback too) — same shape as the #1262
+      // tick-loop hostile value.
+      const hostile: Record<string, unknown> = {
+        [Symbol.toPrimitive]: () => {
+          throw new Error('render boom');
+        },
+      };
+      hostile.self = hostile;
+      const execution = makeExecution({
+        reconcile: vi.fn().mockRejectedValue(hostile),
+      });
+      const sync = startFillSync({
+        execution,
+        clock: { now: () => new Date() },
+        logger,
+        fillPollIntervalMs: 1_000,
+        reconcileTraceId: 'test-reconcile',
+        fillSyncTraceId: 'test-fill-sync',
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      // The durable artifacts: both the pass's ingest and the #549 sweep ran,
+      // not just "nothing threw".
+      expect(execution.ingestFills).toHaveBeenCalledTimes(1);
+      expect(execution.sweepResidualProtection).toHaveBeenCalledTimes(1);
+      expect(logger.entries).toContainEqual(
+        expect.objectContaining({
+          message: 'periodic reconcile failed',
+          level: 'error',
+          payload: { error: '[unrenderable error]' },
+        }),
+      );
+
+      await sync.stop();
+    });
+
     it('logs a reconcile divergence on first observation and on state transitions, not on every pass, mirroring the #549 sweep dedup', async () => {
       const logger = makeLogger();
       const undetermined = {

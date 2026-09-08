@@ -71,6 +71,42 @@ describe('withOhlcvFailover', () => {
     });
   });
 
+  // #1351: `primaryMessage` is rendered at the TOP of the catch, before both
+  // `safeAlert` and the fallback attempt — an unguarded throw here defeats
+  // the failover this function exists to perform (no alert, no fallback
+  // bars) and nothing downstream catches it.
+  it('an unrenderable primary error still alerts and still falls back', async () => {
+    // Circular (defeats `JSON.stringify`) with a throwing `Symbol.toPrimitive`
+    // (defeats the `String()` fallback too) — same shape as the #1262
+    // tick-loop hostile value.
+    const hostile: Record<string, unknown> = {
+      [Symbol.toPrimitive]: () => {
+        throw new Error('render boom');
+      },
+    };
+    hostile.self = hostile;
+    const primary = vi.fn().mockRejectedValue(hostile);
+    const fallback = vi.fn().mockResolvedValue([bar('polygon')]);
+    const alert = vi.fn();
+
+    const fetcher = withOhlcvFailover({
+      leg: 'equities',
+      primary,
+      primaryName: 'alpaca',
+      fallback,
+      fallbackName: 'polygon',
+      alert,
+    });
+
+    // The durable artifact: the fallback's bars, not a rejected promise.
+    const bars = await fetcher('SPY', WINDOW, ASOF);
+
+    expect(bars).toEqual([bar('polygon')]);
+    expect(alert).toHaveBeenCalledTimes(1);
+    const event = alert.mock.calls[0]?.[0] as FailoverEvent;
+    expect(event.primaryError).toBe('[unrenderable error]');
+  });
+
   it('alerts BEFORE attempting the fallback, not after', async () => {
     const order: string[] = [];
     const primary = vi.fn().mockImplementation(async () => {

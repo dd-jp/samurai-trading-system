@@ -22,6 +22,8 @@
  * `AlpacaDataUnderfetchError` — and this wrapper does not second-guess
  * either: a thrown error is the trigger, a short-but-returned array is not.
  */
+
+import { describeThrownSafely } from '../../../shared/index.js';
 import type { Bar, BarWindow } from '../index.js';
 
 export type BarFetcher = (symbol: string, window: BarWindow, asOf: Date) => Promise<Bar[]>;
@@ -76,8 +78,7 @@ export function withOhlcvFailover(config: OhlcvFailoverConfig): BarFetcher {
     try {
       return await config.primary(symbol, window, asOf);
     } catch (primaryError) {
-      const primaryMessage =
-        primaryError instanceof Error ? primaryError.message : String(primaryError);
+      const primaryMessage = describeThrownSafely(primaryError);
       safeAlert(config.alert, {
         leg: config.leg,
         symbol,

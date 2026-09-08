@@ -28,6 +28,7 @@ import {
   ARM_DIVERGENCE_RETURN_GAP_PCT,
   DEFAULT_ARM_COMPARISON_WINDOW_MS,
   nextBoundary,
+  SqliteFeedbackCycleScheduleStore,
   SqliteTuningStore,
 } from '../../pipeline/feedback-loop/index.js';
 import type {
@@ -4490,6 +4491,58 @@ describe('buildProductionOrchestrator', () => {
       expect(sampleRows()).toHaveLength(1);
       expect(feedbackScheduleLastBoundary()).not.toBeNull();
 
+      await orchestrator.stop();
+    });
+
+    it('an unrenderable attempt-marker failure still runs the cycle and re-arms — #1351', async () => {
+      const clock = new SimulatedClock(START);
+      const intervalMs = 1_000;
+      const logger = recordingLogger();
+
+      // Same hostile shape as the #1262 tick-loop test above: circular
+      // (defeats `JSON.stringify`) with a throwing `Symbol.toPrimitive`
+      // (defeats the `String()` fallback too).
+      const hostile: Record<string, unknown> = {
+        [Symbol.toPrimitive]: () => {
+          throw new Error('render boom');
+        },
+      };
+      hostile.self = hostile;
+
+      // Sabotages ONLY `recordAttempt` (production.ts:3648, the "BEFORE
+      // `runFeedbackCycle`" write), not `recordBoundary` or `lastBoundary` —
+      // isolates the `attemptError` catch (production.ts:3665) from the
+      // schedule-store failures the two tests above already cover.
+      const recordAttemptSpy = vi
+        .spyOn(SqliteFeedbackCycleScheduleStore.prototype, 'recordAttempt')
+        .mockImplementationOnce(() => {
+          throw hostile;
+        });
+
+      const orchestrator = buildProductionOrchestrator(
+        restartDurableConfig(clock, intervalMs, { logger }),
+      );
+      await orchestrator.start();
+
+      // Before the fix, rendering `hostile` inside the `attemptError` catch's
+      // own log-payload construction threw and escaped the catch — skipping
+      // `runFeedbackCycle(feedback)` (production.ts:3669) and
+      // `recordBoundary` (production.ts:3672) below it, so the boot
+      // catch-up's cycle would be silently lost rather than merely
+      // unmarked-as-attempted.
+      expect(sampleRows()).toHaveLength(1);
+      expect(feedbackScheduleLastBoundary()).not.toBeNull();
+
+      // The catch's own diagnostic line must land, and with the guard's
+      // fixed placeholder — proof the render itself did not throw, not just
+      // proof that something downstream recovered.
+      const attemptFailure = logger.entries.find(
+        (entry) =>
+          entry.trace_id === 'feedback-cycle' && entry.event === 'feedback_attempt_marker_failed',
+      );
+      expect(attemptFailure?.payload).toEqual({ error: '[unrenderable error]' });
+
+      recordAttemptSpy.mockRestore();
       await orchestrator.stop();
     });
 
