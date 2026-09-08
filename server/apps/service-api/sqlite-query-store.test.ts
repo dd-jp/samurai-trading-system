@@ -1139,6 +1139,99 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
     expect(activity.universe).toEqual([{ instrument: 'ZETA', asset_class: 'stocks' }]);
   });
 
+  /**
+   * #1319: the universe's `audit_log` arm carried both arms' rows, so a
+   * window in which only the falsifier arm (control) touched an instrument
+   * still rendered `active = 1` for it — same failure mode as "outrank a
+   * merely priced one" above, arriving through the control arm's audit rows
+   * instead of `latest_mark`. AAPL sorts ahead of ZETA on both the (pre-fix,
+   * wrongly tied) `active DESC` and the alphabetical tie-break, so only the
+   * arm filter can save ZETA from the cap.
+   *
+   * This also pins filter-before-cut, the same property #1318 pins for
+   * `getVerdictHistory`: a filter bolted on after `ORDER BY ... LIMIT` would
+   * still let AAPL's control row win the single lane slot, then filter it
+   * away afterward, leaving an EMPTY universe rather than ZETA's lane — a
+   * different wrong answer than this test's expectation, so the mutation is
+   * caught either way.
+   */
+  it('does not let a control-only instrument displace a live one at the maxLanes cap', () => {
+    const db = makeDb();
+    seedAudit(db, {
+      trace_id: `trace-control${CONTROL_TRACE_SUFFIX}`,
+      stage: 'analysts',
+      decision: 'quorum_met',
+      at: minutesBefore(1),
+      instrument: 'AAPL',
+      asset_class: 'stocks',
+    });
+    seedAudit(db, {
+      trace_id: 'trace-zeta',
+      stage: 'analysts',
+      decision: 'quorum_met',
+      at: minutesBefore(1),
+      instrument: 'ZETA',
+      asset_class: 'stocks',
+    });
+
+    const activity = new SqliteQueryStore(db).getPipelineActivity(1, LOOKBACK_MS, NOW);
+
+    expect(activity.universe).toEqual([{ instrument: 'ZETA', asset_class: 'stocks' }]);
+  });
+
+  /**
+   * The same exclusion with no other source to fall back on: a control-only
+   * instrument must not get a lane at all, not merely lose ties to a live one.
+   */
+  it('gives no lane to an instrument only the control arm touched', () => {
+    const db = makeDb();
+    seedAudit(db, {
+      trace_id: `trace-control${CONTROL_TRACE_SUFFIX}`,
+      stage: 'analysts',
+      decision: 'quorum_met',
+      at: minutesBefore(1),
+      instrument: 'BTC-USD',
+      asset_class: 'crypto',
+    });
+
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+
+    expect(activity.universe).toEqual([]);
+  });
+
+  /**
+   * The filter removes control ROWS, not control-touched INSTRUMENTS. An
+   * instrument both arms ran (the ordinary case — the control arm shadows
+   * every live decision pass) must still get a lane from its own live row: an
+   * over-filtering implementation that excludes any instrument with a control
+   * row present anywhere in the window — rather than excluding just those
+   * rows from the `active` aggregate — passes the two tests above but fails
+   * this one, dropping AAPL to an empty universe.
+   */
+  it('keeps an instrument both arms touched, from its live row alone', () => {
+    const db = makeDb();
+    seedAudit(db, {
+      trace_id: 'trace-live',
+      stage: 'analysts',
+      decision: 'quorum_met',
+      at: minutesBefore(1),
+      instrument: 'AAPL',
+      asset_class: 'stocks',
+    });
+    seedAudit(db, {
+      trace_id: `trace-live${CONTROL_TRACE_SUFFIX}`,
+      stage: 'analysts',
+      decision: 'quorum_met',
+      at: minutesBefore(1),
+      instrument: 'AAPL',
+      asset_class: 'stocks',
+    });
+
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+
+    expect(activity.universe).toEqual([{ instrument: 'AAPL', asset_class: 'stocks' }]);
+  });
+
   it('resolves an instrument whose sources disagree on asset class to one stable lane', () => {
     const db = makeDb();
     // An instrument has exactly one asset class, so this is corrupt data by

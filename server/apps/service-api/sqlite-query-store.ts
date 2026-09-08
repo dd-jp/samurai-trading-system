@@ -690,9 +690,11 @@ export class SqliteQueryStore implements DashboardQueryStore {
     // Three sources, and the invariant is that ACTIVITY defines the universe
     // while PRICING only extends it (#619):
     //
-    //  - `audit_log` in the window — every instrument the pipeline actually
-    //    ran. This is the source the lanes are built from, so a lane can no
-    //    longer be missing for an instrument whose trace is right there.
+    //  - `audit_log` in the window — every instrument the LIVE arm actually
+    //    ran (#1319: the control arm's own attributed rows are excluded below,
+    //    the same as every other live-arm-only read on this store). This is
+    //    the source the lanes are built from, so a lane can no longer be
+    //    missing for an instrument whose trace is right there.
     //  - `current_tick` in the window — a tick that has entered a stage but
     //    not yet recorded one, so it has no audit row for a few seconds.
     //  - `latest_mark` — one upserted row per instrument the Market Data
@@ -701,9 +703,9 @@ export class SqliteQueryStore implements DashboardQueryStore {
     //    no recent activity reads as an IDLE lane rather than vanishing (a
     //    closed market is the common, correct reason to be quiet).
     //
-    // No stage filter on the audit arm: any attributed audit row means the bot
-    // touched that instrument, so it belongs in the universe. Whether it gets
-    // a TRACE is `pipelineEvents`' stage filter's job.
+    // No stage filter on the audit arm: any attributed LIVE-arm audit row
+    // means the bot touched that instrument, so it belongs in the universe.
+    // Whether it gets a TRACE is `pipelineEvents`' stage filter's job.
     //
     // `active` decides who survives `maxLanes`, not who renders first: a
     // stale priced instrument must never evict a live one at the cap, which is
@@ -717,6 +719,20 @@ export class SqliteQueryStore implements DashboardQueryStore {
     // SQLite happens to pick. `MIN` because it also sorts the conflicted lane
     // earliest below, so bad data cannot additionally cost it its lane at the
     // cap.
+    //
+    // LIVE arm only on the `audit_log` leg (#1319): `audit_log` carries no
+    // `debate_id` column (0001_init.sql, plus 0013's two attribution
+    // columns), so unlike `getRiskCritics` there is only the one discriminator
+    // to apply, the same as `getVerdictHistory` (#1318). Excluded in the
+    // `WHERE` clause, ahead of the `GROUP BY`/`ORDER BY ... LIMIT` cut: the
+    // falsifier arm's tick-runner pass writes its own attributed rows under a
+    // `trace_id` carrying `CONTROL_TRACE_SUFFIX` (`control-arm.ts`), and
+    // without this filter those rows counted toward `active` exactly like a
+    // live row, so a control-only instrument could win the tie-break and evict
+    // a genuinely live one at the cap instead of merely appearing beside it.
+    // `current_tick` and `latest_mark` are untouched here — this ticket owns
+    // only the `audit_log` leg; the sibling `audit_log` query in
+    // `pipelineEvents` below is #1326's.
     const universe = this.db
       .prepare(
         `SELECT instrument, asset_class FROM (
@@ -724,6 +740,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
              SELECT DISTINCT instrument, asset_class, 1 AS active FROM audit_log
                WHERE timestamp > ? AND timestamp <= ?
                  AND instrument IS NOT NULL AND asset_class IS NOT NULL
+                 AND trace_id NOT LIKE ?
              UNION ALL
              SELECT instrument, asset_class, 1 FROM current_tick
                WHERE updated_at > ? AND updated_at <= ?
@@ -736,7 +753,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
          )
          ORDER BY asset_class, instrument`,
       )
-      .all(from, until, from, until, maxLanes) as UniverseRow[];
+      .all(from, until, `%${CONTROL_TRACE_SUFFIX}`, from, until, maxLanes) as UniverseRow[];
     const laneInstruments = new Set(universe.map((row) => row.instrument));
 
     // The window applies to `current_tick` too, unlike `getTickStatus`, which
@@ -792,7 +809,10 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * fixtures.
    *
    * BOTH 0013 columns are required, matching `getPipelineActivity`'s universe
-   * arm word for word. The two must agree on what "attributed" means: a row
+   * arm's own NULL check (they no longer match word for word: #1319 added a
+   * `trace_id` arm predicate to the universe arm that this query does not
+   * carry — see that method's comment and #1326, which owns this query's own
+   * cross-arm gap). The two must still agree on what "attributed" means: a row
    * naming an instrument with no asset class is not renderable, and letting it
    * win `chosenTrace` would blank a lane whose real trace sits in the same
    * window — the identical symptom, one path over.
