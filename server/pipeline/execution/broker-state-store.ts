@@ -330,9 +330,14 @@ export class InMemoryBrokerStateStore implements BrokerStateStore {
   }
 
   loadUnpricedFills(venue: BrokerVenue): UnpricedFillRecord[] {
+    // Mirrors the SQL `ORDER BY first_seen_at, rowid`: sort ascending on the
+    // clock, and let Array.prototype.sort's guaranteed stability do the
+    // tiebreak — the pre-sort order here is Map iteration order, i.e.
+    // insertion order, the double's analogue of rowid (#1340).
     return [...this.unpriced.values()]
       .filter((row) => row.venue === venue)
-      .map(({ venue: _venue, ...row }) => row);
+      .map(({ venue: _venue, ...row }) => row)
+      .sort((a, b) => a.first_seen_at.getTime() - b.first_seen_at.getTime());
   }
 
   markUnpricedFillAlerted(
