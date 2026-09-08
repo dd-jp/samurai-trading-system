@@ -49,8 +49,9 @@ grep -rnE "[A-Za-z_$][A-Za-z0-9_$.]* instanceof Error \? [A-Za-z_$][A-Za-z0-9_$.
   | grep -v '\.test\.' | grep -v "error instanceof Error ? error.message : String(error)"
 ```
 
-returns **20**. **19** of those rename a plain identifier (`cause`, `recordError`, `attemptError`,
-`primaryError`, `readError`, `reconcileError`, `sweepError`, `escalationError`); the 20th renders a
+returns **20**. **19** of those rename a plain identifier — nine distinct names, all of them:
+`cause` (11 sites), `recordError`, `attemptError`, `alertError`, `primaryError`, `readError`,
+`reconcileError`, `sweepError`, `escalationError`; the 20th renders a
 **member expression** (`result.reason`) and so is missed by an identifier-only pattern — which is
 how it went unlisted here in the first place. Enumerated in full, so no reader has to trust a
 total:
@@ -89,9 +90,13 @@ whatever `sanitizeLogText` posture they already had — every swap here is insid
 wrapper, never replacing it), and it does not make the surrounding handler safe.
 
 `describeThrown` itself is untouched: #1199 hardened that one function, and re-opening its ladder
-here would re-open that review. It has **18** non-test callers of its own on `542537e` — not ~79.
-(A `describeThrown(` grep returns 23 non-test call sites, five of which call `critic.ts:177`'s
-local reimplementation, a different function this PR deletes.) The ~79 counted above are the
+here would re-open that review. It has **19** non-test callers of its own on `542537e` — not ~79.
+The arithmetic, because an earlier draft of this paragraph said 18 and 23 and neither reproduced:
+`git grep -n 'describeThrown(' 542537e -- server | grep -v '\.test\.ts' | wc -l` returns **26**;
+minus the two declarations (`server/shared/safe-log.ts:54` and `critic.ts:177`) that is **24** call
+sites; minus `critic.ts`'s five calls to its own local reimplementation (`:308`, `:460`, `:462`,
+`:507`, `:618`), a different function this PR deletes, that is **19**. The 18 came from also
+excluding `safe-log.ts:121` — `logCaughtFailure`'s own use — which is a caller like any other. The ~79 counted above are the
 hand-rolled inline conditionals, which is the reason #1262 exists; #1199 never reached them.
 
 **The swap is not a pure guard — it changes the rendered string for a non-`Error` throw at all 43
@@ -116,8 +121,11 @@ how a credential surface opens:
   `DebateBudgetExceededError`, `anthropic-client.ts:474` with an `LlmTimeoutError`,
   `fetch-with-timeout.ts:27` with a `DOMException` (which *is* `instanceof Error` on Node 22), and
   `critic.ts:402` / `telegram-bot-api-client.ts:439` / `gdelt-ingest-agent.ts:222` pass no argument
-  at all, giving the default `AbortError` `DOMException`. So `token-bucket.ts:236`'s
-  `Promise.reject(signal.reason)` cannot deliver a bare object here.
+  at all, giving the default `AbortError` `DOMException`. So neither of
+  `server/shared/http/token-bucket.ts`'s two `signal.reason` hand-offs — `:236`'s
+  already-aborted `Promise.reject(signal.reason)` and `:240`'s `reject(signal.reason)` inside
+  `onAbort` — can deliver a bare object here. They read the same `signal.reason`, so the
+  enumeration above covers both; an earlier draft cited only `:236`.
 
 The residual, stated rather than hidden: the day a third-party client that rejects with a plain
 structured object is wired into one of these paths, its fields will be stringified into those slots
@@ -271,9 +279,13 @@ is deliberate handling of an enumerated cause, not a blanket claim to cover the 
 `new AlpacaHttpCalendarClient()`'s own missing-credentials throw is the only producer, and it is a
 spec-conforming `Error`; SAFE here rests on the same enumeration the comment itself performs.
 
-The boot-abort cost holds for both: a throw at either escapes to kill startup —
-`runEntrypointLogRetention` (`server/apps/orchestrator/index.ts:895-917`) runs inside the entrypoint
-try (`:923-990`) that ends in `process.exit(1)`.
+The boot-abort cost holds for both, and the citation is per site rather than the single one an
+earlier draft offered. Both call sites sit inside the same entrypoint try (`:923-990`) whose catch
+ends in `process.exit(1)`, so a throw at either render escapes to kill startup:
+`runEntrypointLogRetention` is *called* at `server/apps/orchestrator/index.ts:947` (`:895-917` is
+only its definition, which proves nothing about the frame), and
+`resolveUsEquitySessionCalendar` — the function holding `us-equity-session-source.ts:137` — at
+`:976`, behind a `mode === 'paper'` gate, so that half of the cost is paper-only.
 
 - `server/apps/orchestrator/log-retention.ts:759`
 - `server/apps/orchestrator/production/us-equity-session-source.ts:137`
@@ -342,11 +354,21 @@ change from this one.
 ## Left alone
 
 - **The 20 renamed variants** enumerated under "Verified count" above. Same defect, same fix; out of
-  this ticket's stated exact-string boundary, which is why they are not swept here. **At least eight
-  are dangerous by this document's own criterion** — eight of the eight audited; the count is a
-  floor, not a total, because the remaining twelve were not examined. They are named individually
-  rather than as "several", because a sentence that names four and says "several" reads as though
-  the rest are safe:
+  this ticket's stated exact-string boundary, which is why they are not swept here. **At least six
+  are dangerous by this document's own criterion** — six of the eight audited; the count is a
+  floor, not a total, because the remaining twelve were not examined. An earlier draft of this
+  block said eight of eight, which over-claimed by two: `fill-sync.ts:359` and `production.ts:3473`
+  are contained, and the mechanism the draft attached to the two `fill-sync.ts` sites was copied
+  from the `:395` row where it is correct and is wrong for them.
+
+  The eight are named individually — including the two that come out safe — rather than as
+  "several", because a sentence that names some and says "several" reads as though the rest are
+  safe, and because a site dropped from the list without a verdict is a site the next reader has to
+  re-derive.
+
+  All eight lose their own log line, so "a log line dies" does not discriminate. The question that
+  does, given each site's outer guard: **does something durable that would otherwise have landed
+  fail to land?**
 
   - `server/pipeline/verdict/notifications/telegram/telegram-bot-api-client.ts:822`
     (`escalationError`) — criterion (c). Inside a detached `.catch()` on
@@ -359,8 +381,10 @@ change from this one.
     (`recordError`) — criterion (b), same method again. It renders inside the catch around
     `#alertDeliveryLog.recordFailure` and **before** the `telegram_delivery_failed` `#log` below
     it, so a throw destroys the log line that is the only remaining trace once the durable row has
-    already failed to write. `#recordDeliveryFailure` is called from `:358` and `:416`, both inside
-    `#send`'s own frame, so the throw does not become an unhandled rejection here — it aborts the
+    already failed to write. `#recordDeliveryFailure` is called from `:358` (inside `sendMessage`)
+    and `:416` (inside `sendApprovalButtons`) — there is no `#send` in this file, and an earlier
+    draft named one. Every non-test caller of those two methods either `await`s or attaches
+    `.catch()`, so the throw does not become an unhandled rejection here — it aborts the
     delivery-failure reporting instead.
   - `server/apps/orchestrator/production/volatility-reading-provider.ts:227` — criterion (a). Inside
     the `open.map(...)` over `settleWithConcurrency` results, so a throw aborts the whole map and
@@ -371,16 +395,53 @@ change from this one.
     criterion (b), and the most self-defeating of the eight. It renders at the *top* of the catch,
     before `safeAlert` and before the fallback source is attempted, so a throw defeats the failover
     the function exists to perform — no alert, no fallback bars.
-  - `server/apps/orchestrator/fill-sync.ts:320` and `:359` — the sibling catches of the site this
-    PR guards at `:395`, in the same `runOnce` reached via `void runOnce().then(schedule)`:
-    criterion (c), with fill polling never re-armed.
-  - `server/apps/orchestrator/production.ts:3473` and `:3665` — inner alert-failure handlers on the
-    same chain as the `:3440`/`:3697` pair this PR guards.
+  - `server/apps/orchestrator/fill-sync.ts:320` (`reconcileError`) — criterion (a). **Not (c).**
+    Both this site and `:359` are in `runPoll` (`:274-365`), not in `runOnce` (`:366-400`) as an
+    earlier draft said. `runOnce` does `inFlight = runPoll(); await inFlight;` inside its own `try`,
+    catches at `:383`, renders through the now-guarded `describeThrownSafely` at `:395`, and
+    `.then(schedule)` at `:405` re-arms — so there is no unhandled rejection, no
+    `installFaultHandlers` exit, and fill polling **is** re-armed. That (c) mechanism belongs to the
+    `:395` row in the dangerous table, where it is correct, and was copied here in error. What
+    makes `:320` dangerous is narrower and structural: it is in the *first* of `runPoll`'s two
+    blocks, so a throw skips `deps.execution.ingestFills()` and the residual-protection sweep in
+    that block's `finally` — the sweep whose own comment (`:268-272`) says it runs "even when the
+    poll itself failed, and ESPECIALLY then". The pass's ingest and #549 sweep are lost, not just a
+    log line.
+  - `server/apps/orchestrator/fill-sync.ts:359` (`sweepError`) — **safe**, by this document's
+    "contained by an outer guard that does not share the defect" group. Nothing in `runPoll`
+    follows it, and the throw lands in `runOnce`'s catch, which renders with
+    `describeThrownSafely`, logs `fill_poll_failed`, and re-arms. What is lost is the
+    `fill_sync_sweep_failed` line's own detail (and, if `ingestFills` was already failing, that
+    error's identity, since this render is inside the `finally`) — strictly less than
+    `direct-bind.ts:631`, which this document files SAFE though its containment is a silent
+    `void postTraderDiagnosticAlert(...).catch(() => {})` that produces no substitute line at all.
+  - `server/apps/orchestrator/production.ts:3665` (`attemptError`) — criterion (a). A throw here
+    escapes the `recordAttempt` catch and skips `runFeedbackCycle(feedback)` at `:3669` and
+    `feedbackScheduleStore.recordBoundary` at `:3671`, so the whole daily tuning cycle — analyst
+    weight updates, the `arm_comparison_samples` row, the outside benchmarks — never runs for that
+    boundary. The interval is 24h (`DEFAULT_FEEDBACK_INTERVAL_MS`,
+    `server/apps/orchestrator/production/defaults.ts:139`), so the `finally` re-arms for *tomorrow*:
+    absent a restart the day's cycle is gone, not delayed. It also falsifies the catch's own
+    comment, which promises "a failure here must not block the cycle from running (that guarantee
+    predates this attempt marker)".
+  - `server/apps/orchestrator/production.ts:3473` (`alertError`) — **safe**, same containment group
+    as `fill-sync.ts:359`. It is the inner catch around `postThresholdClampAlert`, itself inside
+    `runFeedbackCycle`'s outer catch; a throw escapes to the scheduler catch at `:3674`, whose
+    render at `:3697` this PR guards, and whose `finally` at `:3699-3707` re-arms the timer
+    unconditionally. The failure that matters was already recorded before this point — `:3440`'s
+    `feedback_cycle_failed` line landed with the threshold-bound violation in it — so what dies is
+    the `threshold_clamp_alert_failed` line plus that boundary's completion stamp, and the stamp
+    self-heals because `recordAttempt` did land, sending a restart down the "already attempted"
+    branch that retries only the stamp.
 
   The other twelve are **not audited** by this document. That is not a claim that they are safe: it
   means the criterion was not applied to them, and a reader must not read their absence from the
   list above as a classification. Follow-up:
   [#1351](https://github.com/dd-jp/samurai-trading-system/issues/1351).
+
+  The two safe verdicts above stay in this block and do **not** join the 36-site SAFE section: that
+  section is the exact-string population, and 43 + 36 = 79 is a census of that population alone.
+  These 20 are a different population and are counted separately throughout.
 - **A hole in `sanitizeBrokerError` itself** (point 2 above): it dereferences properties of an
   untrusted thrown value inside a `catch` whose job is to convert it. A throwing getter defeats the
   adapter's whole error boundary. Not this ticket's pattern, and fixing it means touching the
