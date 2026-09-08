@@ -631,7 +631,28 @@ describe('TelegramBotApiClient — transient network failures and undeliverable 
   // ('you always get this one'); it is a claim-shape guard, not a semantic
   // one.
   const FORWARD_DELIVERY_CLAIM =
-    /\b(?:will|would|can|could|shall|does|is guaranteed to)\s+(?:not\s+|never\s+|still\s+|always\s+)*(?:reach|arrive|get through|be delivered)\b/gi;
+    /\b(?:will|would|can(?:not)?|could|shall|does|is guaranteed to)\s+(?:not\s+|never\s+|still\s+|always\s+)*(?:reach|arrive|get through|be delivered)\b/gi;
+
+  // #1303: `FORWARD_DELIVERY_CLAIM` is a `can|could|...` alternation, not a
+  // `\bcan\b`-then-`not` sequence, so `cannot` (one token) only matches
+  // through the explicit `can(?:not)?` branch — a prior version of this
+  // alternation used a bare `can` and silently missed `'cannot arrive'`, the
+  // exact negative-direction claim #1299 deleted from `types.ts`. Pinned
+  // per-string so a future edit to the alternation that reopens this gap
+  // fails here directly. This table is one-directional (every case here is a
+  // claim the guard MUST catch); it cannot by itself catch the alternation
+  // going too wide — that direction is pinned by the aggregate
+  // `.toEqual([])` assertion below, run against the real wire text.
+  it.each([
+    ['it cannot arrive during a real outage', true],
+    ['it can not arrive', true],
+    ['it can never arrive', true],
+    ['this does reach you', true],
+    ['is guaranteed to be delivered', true],
+  ])('FORWARD_DELIVERY_CLAIM.test(%s) === %s', (text, expected) => {
+    FORWARD_DELIVERY_CLAIM.lastIndex = 0;
+    expect(FORWARD_DELIVERY_CLAIM.test(text)).toBe(expected);
+  });
 
   it('the degraded-channel notice asserts nothing about its own future delivery, and names both denominators', async () => {
     const h = makeClient({
@@ -653,19 +674,21 @@ describe('TelegramBotApiClient — transient network failures and undeliverable 
 
     expect(text.match(FORWARD_DELIVERY_CLAIM) ?? []).toEqual([]);
     // What it may say instead, at exactly the strength the mechanism supports:
-    // reachability somewhere inside this send's own retry window. Both halves
-    // are pinned because either alone is passable by wording that is wrong —
-    // a bare 'reachable' by an instant claim, a bare 'retrying' by a sentence
-    // that mentions retries and still asserts an instant. Like
-    // FORWARD_DELIVERY_CLAIM above, this is a claim-shape guard, not a
-    // semantic one: it pins the strength this wording carries, and a
-    // paraphrase that dropped the window without using the point-in-time
-    // phrasings below would slip past it. Deliberately blunt in the other
-    // direction too: it rejects that phrasing family wherever it sits, so a
-    // legitimate future sentence ('not at the moment the failures were
-    // counted') has to be reworded rather than exempted — reword, and do not
-    // read the rejection as a finding about the message.
-    expect(text).toMatch(/reachable at some point[^.]*retrying/i);
+    // reachability somewhere inside this send's own send-and-retry window —
+    // not that a retry itself happened, since a first-attempt success never
+    // retries and the window bound holds either way. Both halves are pinned
+    // because either alone is passable by wording that is wrong — a bare
+    // 'reachable' by an instant claim, a bare 'window' by a sentence that
+    // names a window and still asserts an instant. Like FORWARD_DELIVERY_CLAIM
+    // above, this is a claim-shape guard, not a semantic one: it pins the
+    // strength this wording carries, and a paraphrase that dropped the window
+    // without using the point-in-time phrasings below would slip past it.
+    // Deliberately blunt in the other direction too: it rejects that phrasing
+    // family wherever it sits, so a legitimate future sentence ('not at the
+    // moment the failures were counted') has to be reworded rather than
+    // exempted — reword, and do not read the rejection as a finding about the
+    // message.
+    expect(text).toMatch(/reachable at some point[^.]*send-and-retry window/i);
     expect(text).not.toMatch(/\bat (?:the|that|one|a single) (?:moment|instant)\b/i);
     // And the two denominators, so the operator is not left reconciling them.
     // #1131: the tile is windowed (trailing 24h), not all-time, so the text

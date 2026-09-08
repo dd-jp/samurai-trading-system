@@ -215,15 +215,21 @@ const providers = new ProviderStatusPoller({ alpaca: buildAlpacaClient() });
  * because this process never sees the orchestrator's value (separate
  * process, no shared handshake) — but "no local signal exists" would be
  * false, and #1130 review round 3 was right to say so. `chat_id` is stored
- * per row (migration 0043), and in production only two ids can ever appear
- * in this table: `sendMessage` and `sendApprovalButtons` are the only callers
- * of `#recordDeliveryFailure`, each with a composition-fixed chat, and
- * `alert-transport.ts` refuses to start when `TELEGRAM_CHAT_ID` and
- * `TELEGRAM_HEARTBEAT_CHAT_ID` are equal (#342). So "rows exist whose
- * `chat_id` is neither of those two" would fire on a chat mismatch and NOT
- * on a heartbeat hiccup — the beat's rows are excluded by name, not by the
- * alert-chat filter. It is declined anyway, on three grounds and not on the
- * false one:
+ * per row (migration 0043), and as this repo composes it today — both
+ * chats read from env, and no in-tree caller supplies a
+ * `ProductionConfig.heartbeatChannel` (see the second bullet below) — only
+ * two ids appear in this table: `sendMessage` and `sendApprovalButtons` are
+ * the only callers of `#recordDeliveryFailure`, each with a
+ * composition-fixed chat, and `alert-transport.ts` refuses to start when
+ * `TELEGRAM_CHAT_ID` and `TELEGRAM_HEARTBEAT_CHAT_ID` are equal (#342). The
+ * table is also durable across runs, so rotating `TELEGRAM_CHAT_ID` leaves a
+ * third, historical id behind rather than clearing it — so the two-id
+ * scoping above understates the signal's false-fire surface, which
+ * strengthens the decline below rather than undermining it. So "rows exist
+ * whose `chat_id` is neither of those two" would fire on a chat mismatch or
+ * a stale id from a prior configuration, and NOT on an ordinary heartbeat
+ * hiccup — the beat's rows are excluded by name, not by the alert-chat
+ * filter. It is declined anyway, on three grounds and not on the false one:
  *
  *  - It is post-hoc. It can only fire once a send has already failed, i.e.
  *    after the tile has already failed to warn, while the boot warning it

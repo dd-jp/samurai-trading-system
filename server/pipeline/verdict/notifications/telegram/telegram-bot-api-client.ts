@@ -803,8 +803,8 @@ export class TelegramBotApiClient implements TelegramClient {
           `Samurai alert channel degraded: ${this.#deliveryFailureCount} Telegram sends have ` +
           'failed permanently after retries so far this run, so recent escalations may not ' +
           'have reached you. That you are reading this proves only that this chat was ' +
-          'reachable at some point while this notice was itself retrying — a window that can ' +
-          'run to tens of seconds, not a single instant, and it does not mean the failures were ' +
+          "reachable at some point inside this notice's own send-and-retry window — a window " +
+          'that can run to tens of seconds, not a single instant, and it does not mean the failures were ' +
           'something other than a channel problem, and a notice you never receive tells you ' +
           'nothing either way. The alert_delivery_failures table is the durable record, and ' +
           'the dashboard alert-channel tile is a 24-hour view of it: the tile counts rows ' +
