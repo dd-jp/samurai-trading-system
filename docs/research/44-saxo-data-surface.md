@@ -16,27 +16,32 @@ market sentiment or intelligence"*.
 
 Every figure below was pulled from the **SIM gateway** (`gateway.saxobank.com/sim/openapi`)
 on 2026-09-07/08 with a 24-hour developer token, against `ClientId 22690838`. Three
-qualifications bind the whole document:
+qualifications bound this survey; a fourth is now resolved:
 
-- **The SIM account is a trial account, not the UK GIA.** `port/v1/clients/me` reports
-  `IsTrialAccount: true` and `DefaultCurrency: "EUR"`. Anything account-shaped — tariffs,
-  entitlements, permissions — is **not** evidence about the live Saxo UK GIA. Anything
+- **The SIM account is a trial account, not the UK GIA.** `port/v1/accounts/me` reports
+  `IsTrialAccount: true`; `port/v1/clients/me` reports `DefaultCurrency: "EUR"`. (The flag is on
+  **accounts**, not clients — `clients/me` does not carry it, and `users/me` carries neither.)
+  Anything account-shaped — tariffs, entitlements, permissions — is **not** evidence about the live
+  Saxo UK GIA. Anything
   reference- or market-shaped (instrument metadata, exchange calendars, bar history, field
   availability) is the same data the live gateway serves.
 - **The market was closed** (`MarketState: "Closed"`, `PriceTypeAsk/Bid: "OldIndicative"`).
   Quote *magnitudes* — spreads especially — are stale and indicative. The *mechanisms* are
   proven; the numbers must be re-measured in session.
-- **The price feed is 15 minutes delayed, and the weight of evidence says that is an
-  entitlement tier rather than a session artifact — with one confirming test still outstanding.**
+- **The price feed is 15 minutes delayed, and this is an entitlement tier rather than a session
+  artifact — CONFIRMED by direct measurement 2026-09-08, no longer inferred.**
   `Quote.DelayedByMinutes: 15` on both LSE lines. An earlier version of this document listed that
   field alongside the market-closed evidence, which read as though it were caused by the close.
-  Four independent strands say otherwise (§2.9a), but all four are circumstantial: the direct
-  test — read the field on an LSE line *during* 07:00–15:30Z — has not been run, because the
-  survey window fell outside LSE hours. **Everything price-shaped below — §2.3's movers screen
-  and §2.5's spreads — is 15 minutes stale unless the LSE Level 1 subscription is bought**,
-  subject to that test. See §2.9.
-- **The Trader/Investor front-ends were not surveyed** — the platform session had expired and
-  logging in is David's to do. See §4; it bounds exactly one conclusion.
+  Four circumstantial strands pointed that way (§2.9a); the direct test — reading the field on an
+  LSE line *during* 07:00–15:30Z — has now been **run in session and confirms a hard ~15-minute
+  floor** against a demonstrably trading market. **Everything price-shaped below — §2.3's movers
+  screen and §2.5's spreads — is 15 minutes stale unless the LSE Level 1 subscription is bought.**
+  That subscription is now known to **cover `LSE_ETF`** (§2.9-LIVE). See §2.9.
+- **The Trader/Investor front-ends have since been surveyed** (2026-09-08). §3's
+  "no news/research/sentiment" is a statement about the **OpenAPI**: those features exist in the
+  platform but ride a separate cookie-authenticated `/oapi/` namespace that **404s on the developer
+  gateway**, so they are unreachable by any token rather than gated behind a purchasable
+  entitlement. See §4. SaxoInvestor remains unsurveyed and is immaterial.
 
 Reproduction scripts are throwaway (`$CLAUDE_JOB_DIR/tmp/saxo_*.py`); every call in them is a
 plain GET against the paths quoted inline below.
@@ -222,6 +227,100 @@ the quantity being estimated is a distribution, not a instant. For a **live exec
 pre-trade spread check** it is not fine at ADR-0014's intraday horizon. The first use needs no
 subscription; the second does.
 
+### 2.5a One large intraday excursion, a stable tight core, and a noise floor that bounds the rest
+
+§2.5 established that spread is measurable. This is what it measures to. The full 146-line ETN
+listing, sampled every 90 minutes through 2026-09-08's session (all spreads in bp of mid):
+
+| sample (UTC) | median | p25 | p75 | movers (`relvol ≥ 1.5`) | movers median | movers ≤ 30 bp |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 07:42 | 58.6 | 18.6 | 147.3 | 44 | 20.5 | 25 |
+| 09:12 | 38.1 | 17.3 | 118.3 | 77 | 28.8 | 44 |
+| 10:42 | 43.2 | 17.6 | 118.3 | 88 | 32.3 | 41 |
+| 12:12 | 45.3 | 17.3 | 114.2 | 97 | 31.2 | 48 |
+| 13:42 | **84.1** | 22.5 | 156.2 | 100 | **81.1** | 32 |
+| 15:12 | **35.2** | **13.6** | 114.3 | 116 | **27.0** | **61** |
+
+#### First, the noise floor — measured, and it disqualifies most of the table above
+
+A single `infoprices/list` snapshot is far noisier than 90-minute spacing implies. Six reads of the
+same 146 lines inside three minutes, immediately after the 15:12Z sample:
+
+| read (UTC) | median | p25 | movers median |
+| --- | ---: | ---: | ---: |
+| 15:15:15 | 49.8 | 16.2 | 39.9 |
+| 15:15:29 | 45.2 | 16.4 | 41.3 |
+| 15:16:14 | 30.3 | 15.3 | 27.6 |
+| 15:16:59 | 32.9 | 15.7 | 29.7 |
+| 15:17:45 | 30.1 | 15.3 | 29.2 |
+| 15:18:30 | 29.7 | 14.8 | 27.6 |
+
+**The universe median ranges 29.7–49.8 bp — a 1.68× swing with no time-of-day content at all.** The
+movers' median ranges 1.50×. Whatever this is — a handful of wide lines flickering in and out of a
+two-sided quote, a delayed-feed batching artifact — it sets a floor on what single spaced samples can
+resolve.
+
+**Consequence: most of the session table's variation is not interpretable.** Its non-spike samples
+span 35.2–58.6 bp, a 1.66× range — *at* the noise floor, not above it. Only the **13:42Z excursion**
+(84.1 bp, 2.4× the 15:12Z reading, with the movers' median at 81.1 against a 27.6–41.3 noise band)
+clearly exceeds it.
+
+**p25 is the exception, and this is why it carries the gate.** Across the noise burst it ranges
+14.8–16.4 bp — a 1.11× swing, far tighter than the median's 1.68×. So its 13.6–22.5 bp range across
+the session is **larger than its own noise** and is plausibly a real, small, time-of-day effect. The
+tight core is both genuinely tight and genuinely stable; the median is dominated by a flickering tail.
+
+Anything future work does here needs **repeat samples per time point**, not one snapshot per slot.
+
+**Three findings, in decreasing order of how much weight they can carry.**
+
+**1. p25 is stable at 13.6–22.5 bp all day, and — per the noise floor above — this is the only
+column that survives it.** The tight core of the universe stays tight; it is the tail that moves, so
+a **fixed 30 bp spread gate is defensible** — it cuts against a stable boundary rather than a drifting
+one. How *many* names sit inside that gate at a given moment is a separate question this table cannot
+answer: the `movers ≤ 30 bp` column is contaminated by the counter artifact below. Downstream must
+handle a shortlist of unknown, varying cardinality either way.
+
+**2. The universe median swings 2.4× within one session** (35.2 to 84.1 bp) — but only the 13:42Z
+end of that range is above the noise floor, so read it as *one excursion happened*, not as *the median
+varies smoothly through the day*.
+
+**3. The 13:42Z blow-out is transient, not a regime.** It sits twelve minutes after the US open
+(13:30Z), and these are leveraged ETPs on US underlyings, so market makers widening as their hedge
+goes live is a plausible mechanism — the movers' median **quadruples**, 31.2 → 81.1 bp, far more
+sharply than the universe median moves. But by 15:12Z it has fully reversed, back inside the noise
+band. **So there is no "afternoon is expensive" rule**, and an earlier draft of this section which
+claimed one, along with a "cheap window is 09:00–12:30Z", was wrong on both counts.
+
+#### The flat-by-close exit cost is **open**, not favourable
+
+A flat-by-close strategy pays spread twice, and the exit leg is fixed at end-of-session by
+construction — the one leg it does not get to time. So what liquidity looks like near the close is a
+real question for ADR-0018. The 15:12Z sample invites an encouraging answer (27.0 bp movers median,
+against 81.1 at 13:42Z), **but it does not replicate**: three minutes later the same universe read
+39.9 bp, inside the noise band above. **No conclusion is drawn here.** Answering it needs repeat
+samples through the closing half-hour, which `docs/research/44-spread-session-profile.py` supports
+and nobody has run.
+
+#### Two caveats that bound all of the above
+
+- **The mover *count* is a session-progress counter, not a mover count.** It rises monotonically
+  44 → 116 across the day — and the noise burst discriminates why: across all six reads in three
+  minutes the count sat at **exactly 116, unmoved, while the median swung 1.68×**. An instantaneous
+  measure would flicker with the spreads; a cumulative one would not. So Saxo's `RelativeVolume`
+  almost certainly compares *cumulative session volume* to an average, and names cross `≥ 1.5`
+  simply as the session accumulates. **`movers ≤ 30 bp` must therefore not be used to size a
+  shortlist** — it counts how far into the session you are as much as what is moving. The median
+  columns do not depend on the count and are unaffected.
+- **These are SIM delayed-feed numbers, and §2.9-LIVE measured the delayed feed understating spread
+  by 27%** on the one instrument checked against live. Treat the *shape* here as informative and the
+  *levels* as optimistic.
+
+**One day, six samples, 90-minute spacing** — wide enough to miss a spike entirely, which given
+13:42Z reversed within 90 minutes is a live possibility rather than a formality. Repeat sessions and
+tighter spacing around 13:30Z and the close would settle it, at one call per sample — the profiler is
+committed as `docs/research/44-spread-session-profile.py` with `SAMPLES` and `INTERVAL_S` env-set.
+
 ### 2.6 The commission floor — a scare that resolved, and a cheap gate that did not
 
 The SIM tariff prices `LQQ3` as **min £8, then 0.10%** of notional:
@@ -256,14 +355,28 @@ never verified against a fill, and structurally unable to represent a floor if o
 
 ### 2.7 Flat-by-close has a venue-native mechanism, and the ADR-0015 clause has a referent
 
-Two things ADR-0014's flat-by-close currently does by client-side timing are available from the
-venue:
+One thing ADR-0014's flat-by-close does is available from the venue, and one thing this section
+originally claimed for it is **wrong** — corrected 2026-09-08 while working [#1312](https://github.com/dd-jp/samurai-trading-system/issues/1312):
 
 - `GET /ref/v1/exchanges/LSE_ETF` returns **`ExchangeSessions`** — explicit
-  `Closed` / `OpeningAuction` / `AutomatedTrading` / `ClosingAuction` windows with exact UTC
-  boundaries, plus `TimeZoneAbbreviation: "BST"` and `TimeZoneOffset`. A session calendar read
-  from the exchange beats a hardcoded 15:30Z, and BST/GMT is exactly the class of bug
-  has bitten this project before.
+  `Closed` / `OpeningAuction` / `AutomatedTrading` / `CallAuctionTrading` windows with exact UTC
+  boundaries, plus `TimeZoneAbbreviation: "BST"` and `TimeZoneOffset`.
+
+  **But it is not a replacement for what we have, and flat-by-close was never "a hardcoded
+  15:30Z".** Since #668 the Trader flattens at `close − N` resolved through
+  `TradingCalendar.sessionEnd`, and `LseRegularHoursCalendar`
+  (`server/providers/market-data-service/trading-calendar.ts`) already models LSE hours, UK bank
+  holidays and 12:30 half-days through `Intl.DateTimeFormat` on `Europe/London`. DST is therefore
+  already handled against the IANA zone, which is *more* robust than a session feed — and
+  `TimeZoneOffset: "01:00:00"` is the offset **right now**, a snapshot rather than a rule, so a
+  consumer trusting it in December would be an hour out.
+
+  Measured, the feed also cannot serve as the table: `ExchangeSessions` publishes **9 entries ≈ 2
+  days forward**, systematically across `LSE_ETF` / `LSE_SETS` / `NASDAQ` / `NYSE`, against
+  `MAX_SESSION_SEARCH_DAYS = 10` and a `LSE_HOLIDAYS` table whose own comment says coverage ends
+  **2027-12-28**. (Whether the window widens over a weekend is untested — it was sampled on a
+  Tuesday.) The live proposal in #1312 is therefore an **overlay**: use the two-day window to
+  *validate* the hand table before each session, not to replace it.
 - `GET /ref/v1/algostrategies` lists 20 strategies. **`Market on Close (MOC)`,
   `Limit on Close (LOC)` and `Target Close` all carry `MinAmountUSD: 0.0`** — no size floor
   (only `Iceberg` has one, at $11,000) — and instrument details list all three under
@@ -390,10 +503,122 @@ than a funded retail GIA. So the open question stays open in the form it was ori
 list. What SIM did establish is the weaker, useful thing: the field exists and is readable, so
 the live check is one more call rather than an investigation.
 
-### 2.9a How strong is the "entitlement, not session artifact" reading?
+### 2.9-LIVE The £7/month entitlement **does** cover our universe — observed on the live platform
 
-Stated plainly because five other artifacts now cite it. The claim rests on four strands, none
-of them the direct test:
+**2026-09-08, 14:39Z, LSE in session.** David subscribed to LSE Level 1 Private on 2026-09-07, and the
+live platform was read directly. This closes the item
+[`34-lse-mark-source-options.md`](34-lse-mark-source-options.md) lists as its **sole unresolved
+question**, and which Saxo *declined to answer in writing* on ticket 20084 (2026-09-03).
+
+Observed on SaxoTraderGO (live), for **`3UKL:xlon` — WisdomTree FTSE 100 3x Daily Leveraged ETN**, a
+3× leveraged ETN of exactly the class ADR-0016 trades:
+
+| field | value |
+| --- | --- |
+| exchange | **London Stock Exchange (ETFs)** — i.e. `LSE_ETF`, not SETS |
+| state | `Open` |
+| data | **`Realtime prices`** |
+
+Confirmed as genuinely live rather than a label: the quote moved between two reads seconds apart
+(bid `2,430.00` → `2,433.50`), and an LSE cash line in the same watchlist (`BP Plc`) carried a
+timestamp **21 seconds old**. The `15:20:17` stamp on the ETN is its last *trade*, not its quote.
+
+**So the entitlement covers the leveraged-ETP universe.** #895's coverage question is answered
+affirmatively, by observation rather than by correspondence.
+
+#### What the same-instrument, same-moment comparison shows — and it is not comfortable
+
+`3UKL` read simultaneously on both feeds:
+
+| | bid | ask | spread | mid |
+| --- | ---: | ---: | ---: | ---: |
+| **SIM, 15-min delayed** | 2428.50 | 2432.50 | **16.5 bp** | 2430.50 |
+| **Live, real time** | 2433.50 | 2439.00 | **22.6 bp** | 2436.25 |
+
+Two consequences, both of which cut against calibrating from the delayed feed:
+
+1. **The delayed feed *understates* the spread by 27%** (16.5 vs 22.6 bp). Any cost model calibrated
+   from SIM is therefore **optimistic**, compounding the direction doc 53's 1 bp floors already err in.
+2. **The delayed mid is 23.6 bp away from the live mid** — larger than the spread itself. At
+   ADR-0014's intraday horizon a decision priced off a delayed mark is, on this sample, further from
+   the tradeable price than the entire cost of crossing it.
+
+**Caveat, stated plainly:** one instrument, one moment, and SIM-vs-live differ in more than latency
+(different environment, different account). This is an observation that motivates a measurement, not
+the measurement itself. But it points the same way as the whole-session profile in §2.5.
+
+#### A trap in the screen path worth naming
+
+`DisplayAndFormat.Currency` on the **price** response returns **`GBP`** for LSE lines whose prices are
+actually in **pence** — 43 of the 64 "GBP"-labelled ETN lines have prices above 100, i.e. pence. The
+authoritative pair is on the **instrument-details** endpoint, and §2.1 already records it:
+
+```
+GET /ref/v1/instruments/details/{uic}/{AssetType}
+  CurrencyCode          = "GBP"   <- settlement currency
+  PriceCurrency         = "GBX"   <- the unit prices are quoted in
+  PriceToContractFactor = 0.01    <- the conversion
+```
+
+So the fix exists and §2.1 is right — but it is **not reachable from `infoprices` alone**. Anything
+screening off `infoprices/list` (§2.3, and #1310's gate) must join to instrument details for the unit,
+or it will be out by 100×.
+
+---
+
+### 2.9a "Entitlement, not session artifact" — **CONFIRMED by direct measurement, 2026-09-08**
+
+> **RESOLVED.** The outstanding test described at the end of this section was run at **07:32Z on
+> 2026-09-08**, 32 minutes into the LSE session. The result confirms the reading, and it was confirmed
+> by measuring the delay directly rather than by reading the metadata field. **The four circumstantial
+> strands below are superseded by one observation** and are kept only as a record of how the claim was
+> held before it was tested.
+>
+> **Control — the market was genuinely trading.** `LSE_ETF` was inside its `AutomatedTrading` window
+> (07:00–15:30Z), `MarketState` read `Open` on all five instruments, and fresh volume was printing
+> (one line traded 376 units at 07:17Z). This is the control the ASX attempt below failed to be.
+>
+> **Measurement — the data was 15 minutes behind a demonstrably live market.** Across five LSE
+> ETP/ETC lines, **no instrument had a bar newer than 15 minutes**, and the most active line's newest
+> bar sat at **15.3 minutes** old. On a real-time feed a line printing volume every few minutes would
+> show a bar seconds old, not a quarter of an hour. The delay is therefore **demonstrated**, not
+> inferred from `DelayedByMinutes`.
+>
+> **Confirmed as a *rolling* delay, not a one-off**, by sampling the two most active lines every 150 s
+> for 8 minutes:
+>
+> | sampled at | `NVD3` newest bar / lag | `3OIL` newest bar / lag |
+> | --- | --- | --- |
+> | 07:32:52 | 07:17 — 15.9 m | 07:13 — 19.9 m |
+> | 07:35:23 | 07:19 — 16.4 m | 07:13 — 22.4 m |
+> | 07:37:53 | 07:19 — 18.9 m | 07:13 — 24.9 m |
+> | 07:40:23 | 07:25 — **15.4 m** | 07:23 — 17.4 m |
+>
+> The signature is a **sawtooth with a hard floor at ~15.4 minutes**: lag grows while no new bar
+> arrives, then drops back to ~15–17 m when one lands, and **never once falls below 15 minutes** in
+> eight observations. The sawtooth above the floor is bar sparsity — bars print only when trades
+> occur — while the floor itself is the entitlement. A real-time feed has no such floor.
+>
+> Two further results from the same read:
+>
+> - **`PriceTypeBid`/`PriceTypeAsk: "OldIndicative"` persists mid-session**, with `MarketState: "Open"`
+>   and live volume. It is confirmed as a **non-discriminator**: it says nothing about session state.
+>   The parenthetical negative recorded below is now positively established.
+> - **`Quote.Amount: 0` mid-session, but that does *not* mean "no depth"** — an earlier version of this
+>   line said it did and was wrong. `PriceInfoDetails` carries **`BidSize` and `AskSize`, populated on
+>   145 of 146** LSE ETN lines in session (e.g. `QQQS:xlon` 124,119 / 68,000). `Quote.Amount` is the
+>   *requested* amount echoed back on an infoprice, not the book. Depth is available; read it from
+>   `PriceInfoDetails`, not from `Quote.Amount`.
+> - **`InstrumentPriceDetails.IsMarketOpen`** is a first-class boolean and read `True` on all 146 lines.
+>   It is the session indicator to use — `MarketState` is the one this project found unreliable.
+>
+> **What this does and does not settle.** It settles the *semantics* — `DelayedByMinutes: 15` is an
+> entitlement tier, not a market-closed artifact — and semantics carry from SIM to live. It does **not**
+> settle what tier the **live** GIA is on: `port/v1/accounts/me` reports `IsTrialAccount: True`, so this
+> is a trial account's entitlement, and per this project's standing split, account-shaped facts do not
+> carry. **The £7/month question is still open and still needs the live token** (#1311, #895).
+
+The claim originally rested on four strands, none of them the direct test:
 
 1. **`DelayedByMinutes` is exchange-specific and matches each exchange's published standard
    delay** — `15` for `LSE_ETF`, `20` for `ASX`, read on the same token minutes apart. A staleness
@@ -418,10 +643,11 @@ the imminent session, not a trading one. The reading is recorded here so it is n
 evidence later. (It does establish one negative: `PriceTypeAsk: "OldIndicative"` is not a
 market-closed marker specifically, since it appears identically on both.)
 
-**The outstanding test, in one line — and it is cheap:** `GET
+**The test, in one line — and it was cheap:** `GET
 /trade/v1/infoprices?Uic=29391797&AssetType=Etn&FieldGroups=Quote` between 07:00Z and 15:30Z on
-an LSE trading day. `DelayedByMinutes: 15` with `MarketState: "Open"` confirms this section as
-written; `0` falsifies it and the £7/month question dissolves.
+an LSE trading day. **Run 2026-09-08T07:32Z: `DelayedByMinutes: 15` with `MarketState: "Open"`** —
+this section is confirmed as written. The stronger form actually used was to measure the newest
+`chart/v3` bar's age against wall clock, which does not depend on trusting the metadata field at all.
 
 This needs a **SIM** token during LSE hours — a timing constraint, not an account one. An earlier
 draft said it needed the live token and was therefore blocked behind #1311; that was wrong, and
@@ -431,6 +657,84 @@ The survey simply ran outside LSE hours. The SIM token in `.env.local` at time o
 is two clicks at developer.saxo → *Get 24 Hour Token*.
 
 ---
+
+### 2.9b The delayed feed is not just cheaper — it is outside a licensing regime that real time is inside
+
+**Prior art first: [`34-lse-mark-source-options.md`](34-lse-mark-source-options.md) §5 got here before
+this section did**, and is the authority on the licence arithmetic. It already records that
+Non-Display Usage is defined over Real Time Data, quotes §6.5, prices the LSEG direct route at
+**£6,695/yr** (Schedule A **2026**, §3.3.2 — read there as *Client Facilitation*; the 2025 figure was
+£6,500), and — the part this section originally got wrong — establishes that **delayed data is not
+self-evidently licence-free**. Read doc 34 §5 for the arithmetic; what follows adds three things it
+does not carry, and corrects one overstatement made here on 2026-09-08.
+
+**The definitions do the work.** LSE Schedule B (2026) defines *Non-Display Usage* as the access,
+processing or use of **Real Time Data** which is not *Display Data*, and defines *Display Data* as data
+used via a screen and human readable. A program reading prices to generate orders is therefore
+Non-Display **by definition**. §6.1 requires a licence for it; §6.5 states it includes automated
+trading; and the Policy Guidelines enumerate the qualifying use cases — **6.4.15 "algorithmic
+trading"**, 6.4.1 automated order/quote generation, 6.4.5 price referencing for trading purposes.
+Samurai is squarely described.
+
+**On the category, this section and doc 34 differ, and it is worth resolving.** Doc 34 cites §3.3.2
+*Client Facilitation*; but Samurai trades **its own account for its own benefit**, which is Schedule
+B's **Trading as Principal** — "trading-based activities as 'principal', on such Customer's own
+account". Client Facilitation is for facilitating a customer's *business*. Principal looks like the
+right row; the two are priced identically at this banding anyway (£6,500 in 2025 / £6,695 in 2026), so
+nothing downstream turns on it. From the 2025 Price List, for ETF/ETP — our universe — at 1–5
+entitlements:
+
+| | Level 1 | Level 2 |
+| --- | ---: | ---: |
+| ETF/ETP, Trading as Principal, 1–5 entitlements | **£6,500 / yr** | £13,000 / yr |
+
+*(Year seam: definitions and policy from the **2026** Schedule B; charge figures from the **2025**
+Price List. Doc 34 §5 carries the **2026** figure, £6,695 — prefer it.)*
+
+**There is no Private Investor exemption in §6.** Schedule B's Private Investor carve-outs sit in
+redistribution (3.2), derived data (4.4) and per-price-request (3.5.3); none reach the Non-Display
+policy.
+
+**This is a question to ask, not a cost to book.** Every obligation in Schedule B runs to *"the
+Customer"* — the party holding an LSE Order Form. **That is Saxo, not us.** The single place the
+Guidelines put a Non-Display licence on the End Customer is §6.2, and that clause is about **hosted
+environments** (colocation), not a machine running against a broker API. Retail algorithmic trading
+through broker APIs is also an ordinary, widely sold product; were the regime to bind every retail end
+client at £6,500/yr, that market could not exist. Saxo itself holds a Private Investor redistribution
+licence (Level 1 UK market data, £7,976/yr on the same price list), which the £7/month plausibly
+amortises. **Record £6,500 as what is at stake if the answer is bad — not as a live cost against a
+£1,000 book.**
+
+**The load-bearing consequence — stated more carefully than it first was here.** Non-Display Usage is
+scoped to **Real Time Data only**, so the delayed feed is outside **that** regime. It is *not* outside
+all licensing, and this section said "licence-clean" before checking doc 34: §7.2 exempts **Data
+Charges** only, and only as against the End Customer, while **Delayed Data *Licence* Charges are a
+separate line** (£5,831/yr per *Website*, Level 1). That charge is redistribution-shaped — priced per
+website — so it very likely does not reach a single self-consuming user, but doc 34 is right that this
+is a question for LSEG rather than one to assume. **The honest claim is narrower: delayed data avoids
+the non-display question, not every licensing question.** Put that beside what the code actually
+reads — the analysts and the Trader consume **`getBars`**, while `getQuote` has only two
+non-test callers, both in execution (§2.5) — and:
+
+- Samurai's **signal path already runs on delayed data**, since `chart/v3` bars carry
+  `ChartInfo.DelayedByMinutes: 15` exactly as quotes do (measured across five LSE ETP/ETC lines).
+- Staying on the delayed feed therefore **carries no non-display exposure**, and no Data Charge
+  against the End Customer — with the Delayed Data Licence question above left open.
+- The £7/month would sharpen quotes for **two execution-path callers** while opening a licensing
+  question the delayed feed does not raise.
+
+**What to ask Saxo**, alongside #1309's retention question and in one letter: *does the LSE Level 1
+Private Investor subscription cover automated/algorithmic order generation by the client via OpenAPI,
+or does that constitute Non-Display Usage requiring a separate licence?*
+
+**One cell deliberately not cited.** Price List 3.5.1 shows "Fee waived" for Private Investor UK market
+Data per-device charges, but the **ETF/ETP row's Private Investor cells are blank**. A blank in a table
+extracted from a PDF may mean "not offered", "waived", or a mis-aligned column. It is read in neither
+direction here.
+
+Sources: [Schedule B — Market Data Policy 2026](https://docs.londonstockexchange.com/sites/default/files/documents/schedule-b-market-data-policy-2026.pdf),
+[Market Data Policy Guidelines 2025](https://docs.londonstockexchange.com/sites/default/files/documents/market-data-policy-guidelines-2025_0.pdf),
+[Price List and Data Product Schedule 2025](https://docs.londonstockexchange.com/sites/default/files/documents/price-list-and-product-schedule-2025_1.pdf).
 
 ## 3. What Saxo does **not** give us
 
@@ -442,7 +746,11 @@ Services, Trading, Value Add.
 
 - **No news, research, analyst ratings, sentiment, or client-positioning endpoint anywhere.**
   **Value Add is price alerts only** (`vas/v1/pricealerts/definitions` — verified, returns an
-  empty definition list, not a 404).
+  empty definition list, not a 404). Price alerts are nonetheless **not** a usable lever: they
+  would fire off the same 15-minute delayed feed (§2.9a), the delivery route
+  `vas/v2/notifications/targets` returns **403** on our token, and the pipeline polls bars on a
+  schedule rather than reacting to events. **§4 now names the mechanism behind this bullet** —
+  these features exist in the platform but ride a separate internal namespace.
 - **No screener or movers endpoint was found — but this is a weaker negative than the rest of
   this section, and is flagged as such.** `mkt/v1/marketoverview`, `mkt/v1/moversandshakers` and
   `mkt/v1/prices/subscriptions` all return **404**; those three paths were *guessed*, and Market
@@ -455,7 +763,8 @@ Services, Trading, Value Add.
   rather than one Saxo was found to ship.** Read as a failure to find, not as measured absence.
   Nothing downstream turns on the difference — §2.3 works either way.
 - `TradingSignals: "NotAllowed"` on the pool instruments — the trade-signals product does not
-  reach them.
+  reach them. That product is **Autochartist**, and §4 shows it is unreachable by any token
+  regardless of the flag.
 
 **So: Saxo replaces no part of the MI stack.** It is a market-data and execution venue. #1305
 stands as filed on the sentiment question; what it gains is §2.3 and §2.5, which are worth more
@@ -463,17 +772,74 @@ than the thing it was asked for.
 
 ---
 
-## 4. The gap in this survey
+## 4. The gap, now closed: a **separate namespace**, not a missing subscription
 
-The **SaxoTraderGO / SaxoInvestor front-ends were not inspected** — the platform session had
-expired, and logging in is David's to do, not something to automate with his credentials.
+*Written 2026-09-08 from a live platform session. This section previously recorded the
+front-ends as un-surveyed; that gap is closed, and the answer it anticipated —* "exists in the
+platform, not exposed over OpenAPI" *— is confirmed, with the mechanism proved.*
 
-This bounds exactly one claim. §3's "no sentiment/news/research" is a statement about the
-**OpenAPI**. Saxo's retail platforms are widely understood to bundle news and research, and if
-they do, the accurate finding is *"exists in the platform, not exposed over OpenAPI"* — which is
-a different statement with a different implication (it would be licensable or scrapeable-in-
-principle rather than absent). Nothing else in this document depends on it, and it does not
-block the conclusions. Worth ten minutes at the next login.
+### What the platform bundles
+
+SaxoTraderGO's RESEARCH sub-nav carries **Inspiration | Markets | Themes | Webinars | Education |
+News | Trade signals | Calendar**. News is a live instrument-tagged wire; "Trade signals" is
+**Autochartist**, whose pattern table filters down to 15- and 30-minute intervals — intraday-native,
+and superficially a good match for ADR-0014's horizon. So §3's *"no sentiment/news/research"* is
+correct **only as a statement about the OpenAPI**, and must be read that way.
+
+### Why it is unreachable
+
+These features are served from an `/oapi/` namespace on `www.saxotrader.com`, authenticated by the
+**platform session cookie** (`api/login/refresh_token?appId=desktop`) rather than by a developer app
+token. Observed in the browser: `oapi/news/v1/sources` (200), `oapi/news/v1/topstories/collections`
+(200), `oapi/ts/v1/subscriptions` (200), `oapi/microratings/v1/subscriptions` (200).
+
+That is a different host **and** a different path root from `gateway.saxobank.com/openapi/…`. Both
+spellings probed against the developer gateway, 2026-09-08 14:49:37Z:
+
+| path | result |
+| --- | --- |
+| `oapi/news/v1/sources` | **404** |
+| `oapi/news/v1/topstories/collections` | **404** |
+| `oapi/ts/v1/subscriptions` | **404** |
+| `oapi/microratings/v1/subscriptions` | **404** |
+| `openapi/news/v1/sources` | **404** |
+| `openapi/ts/v1/signals` | **404** |
+| `openapi/microratings/v1/instruments` | **404** |
+| `openapi/vas/v2/notifications/targets` | 403 |
+| `openapi/reg/v2/mifid/appropriateness` | 403 |
+
+**The 403s are the control.** The gateway distinguishes *no permission* from *no such route*, and
+every news/signals/ratings path returns the latter. So this is **not** an entitlement that could be
+purchased, and **not** something the pending live app would unlock: the routes do not exist on the
+public API. The platform BFF is a separate API surface, not a subset of the documented one.
+
+This matters beyond the immediate answer. §2.3's "no screener endpoint" is explicitly hedged above as
+a failure to find; **this negative is not of that kind** — it is measured against a gateway that
+demonstrably signals permission failures differently.
+
+### Autochartist, judged on reachability alone
+
+It is served from `/oapi/ts/v1/`, which 404s on the gateway, so it **cannot feed Samurai** whatever
+its coverage. The pattern table was viewed but only as the freshest batch under an unaccepted
+disclaimer, so nothing about that sample's content is recorded here as a property of the feed.
+
+### The news question is moot regardless
+
+Samurai already has a **free** news feed on keys it holds — Alpaca's Benzinga wire: stocks and
+crypto, history to 2015, WebSocket streaming, £0. A cookie-authenticated Saxo wire would be a
+downgrade even if it were reachable. Inspiration, Education, Webinars and Calendar are human-facing
+editorial, not machine-consumable feeds.
+
+### Scope, stated honestly
+
+- The **gateway probe** closes this, and it is front-end-independent: the 404s settle "not exposed
+  over OpenAPI" whatever any UI bundles.
+- The **SaxoTraderGO survey** is illustrative of what sits behind the cookie.
+- **SaxoInvestor was not surveyed** — immaterial, being a simplified skin over the same back-end.
+- Probed against the **SIM** gateway. Route existence is reference-shaped rather than account-shaped,
+  so it carries to live under the same split this document applies throughout (§2.9).
+
+**Nothing in §5 changes.** #1305 stands as filed on the sentiment question.
 
 ---
 
@@ -487,9 +853,9 @@ block the conclusions. Worth ten minutes at the next login.
 | 4 | #750/#1002/#1035: movers axis has no lawful sort key | Whole universe, one call, two axes — one proven, one caveated (§2.3) | comment on #1305 |
 | 5 | ADR-0016: pool of 13, 3× framing | 146 ETN + 127 ETC listed; 4× exists; spread gate needed (§2.4) | **wayfinder child** |
 | 6 | ADR-0015: "Saxo has no per-order minimum" — the fact that disqualified IBKR | Unverified against the venue; one live call settles it (§2.6) | **wayfinder child**, pre-ramp gate |
-| 7 | ADR-0014: flat-by-close by client-side timing | Exchange session calendar + native MOC/LOC (§2.7) | **wayfinder child**, gated on the ADR-0015 clause |
-| 8 | Doc 53 `CostModelImpl`: 1 bp rate floor, no spread input | Per-instrument spread now available (§2.5) | folds into 6 |
-| 9 | #895 + doc 53: market data assumed free and real-time | Opt-in, **delayed** by default (quotes *and* chart bars), **£7/mo** for LSE Level 1 real time, refunded at 4 trades/month (§2.9). The delay is read as an entitlement tier on four circumstantial strands; the confirming in-session read is outstanding (§2.9a) | comment on #895 |
+| 7 | ADR-0014: flat-by-close is *already* calendar-driven (`sessionEnd`, #668) — the original "client-side timing" framing was wrong | Session feed as an **overlay validating** the hand table (2 days forward, not a replacement) + native MOC/LOC (§2.7) | **wayfinder child** [#1312](https://github.com/dd-jp/samurai-trading-system/issues/1312); MOC still gated on the ADR-0015 clause |
+| 8 | Doc 53 `CostModelImpl`: 1 bp rate floor, no spread input | Per-instrument spread now available (§2.5); its tight core is stable but it spiked 2.4x on one measured intraday excursion (§2.5a) | folds into 6 |
+| 9 | #895 + doc 53: market data assumed free and real-time | Opt-in, **delayed** by default (quotes *and* chart bars), **£7/mo** for LSE Level 1 real time, refunded at 4 trades/month (§2.9). The delay is read as an entitlement tier on four circumstantial strands, and the confirming in-session read is now **RUN and CONFIRMED** — 15-min lag measured against a demonstrably trading market, 2026-09-08 (§2.9a). **And the delayed feed is outside LSE's Non-Display Usage regime, which real time is inside (§2.9b)** | comment on #895 |
 
 Items 1, 2 and 4 are evidence for tickets that already exist and should not be re-filed. Items 3, 5, 6 and 7 are genuine
 reopenable spec decisions and want a wayfinder map.
