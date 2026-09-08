@@ -5590,9 +5590,10 @@ export function evaluateSmokeGate(
     )
   ) {
     failures.push(
-      `the divergence found for scenario 5's lot '${residualSweep.lotKey}' reads 'adopted', but ` +
-        `its reason ('${residualSweep.sweepDivergenceReason}') does not name the #549 sweep re-` +
-        `arming this lot's OWN residual (${residualSweep.expectedResidual}) — this is the #1285 ` +
+      `the lookup keyed on scenario 5's lot '${residualSweep.lotKey}' returned a divergence ` +
+        `reading 'adopted', but its reason ('${residualSweep.sweepDivergenceReason}') does not ` +
+        `name the #549 sweep re-arming this lot's OWN residual ` +
+        `(${residualSweep.expectedResidual}) — this is the #1285 ` +
         'B2/N3 case: a lookup keyed on the WRONG lot could still land on a divergence reading ' +
         "'adopted' (another scenario's flatten-reconcile, or sweepOne's own coversQty flat-path " +
         "no-op), and binding the match to this lot's own residual quantity closes that even for a " +

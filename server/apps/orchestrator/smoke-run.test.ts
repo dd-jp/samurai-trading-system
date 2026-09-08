@@ -3151,15 +3151,19 @@ describe('findSweepDivergence (#1285)', () => {
   });
 
   // #1285 N1 (round-1, then round-2 review): naming this suite "matches the
-  // key exactly" over-claimed — none of the four cases below actually pin
-  // exact equality against every containment-family mutant of `===`; each
-  // pins exactly one direction. Round-1 covered the CONTAINS/prefix family
+  // key exactly" over-claimed — none of the cases below actually pin exact
+  // equality against every containment-family mutant of `===`; each pins
+  // exactly one direction. Round-1 covered the CONTAINS/prefix family
   // (`.includes`/`.startsWith`, both directions); round-2's mutation battery
   // found the SUFFIX/`.endsWith` family (both directions) still survived
   // undetected — none of the three original decoys, nor round-1's added
   // substring case, is a suffix of the lot key or has the lot key as a
-  // suffix. Each `it` below is named for the one direction it actually
-  // pins; only `===` survives all four together.
+  // suffix. A second round-2 pass then found a fifth gap: none of these five
+  // decoys shares the lot key's exact LENGTH, so a `.length === .length`
+  // mutant (dropping the content comparison entirely) survives all of them
+  // too — the decoy below closes that. Each `it` in this block is named for
+  // the one direction/property it actually pins; only `===` survives all
+  // five together.
   it('does not match a decoy key that starts with the lot key (lot key is its prefix)', () => {
     const divergences = [
       divergence({ idempotency_key: 'smoke-exit-sweep-lot-2', action: 'adopted' }),
@@ -3194,6 +3198,14 @@ describe('findSweepDivergence (#1285)', () => {
 
   it('does not match a decoy key that is a suffix of the lot key', () => {
     const divergences = [divergence({ idempotency_key: 'sweep-lot', action: 'adopted' })];
+
+    expect(findSweepDivergence(divergences, 'smoke-exit-sweep-lot')).toBeUndefined();
+  });
+
+  it('does not match a decoy key of the same length as the lot key', () => {
+    const divergences = [
+      divergence({ idempotency_key: 'zzzzz-exit-sweep-lot', action: 'adopted' }),
+    ];
 
     expect(findSweepDivergence(divergences, 'smoke-exit-sweep-lot')).toBeUndefined();
   });
