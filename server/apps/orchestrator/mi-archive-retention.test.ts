@@ -14,10 +14,12 @@
  * caller, because the defect is the ABSENCE of a call. Asserting the call
  * sites against the composition root's SOURCE, as this file does (mirroring
  * `llm-call-log-retention.test.ts` exactly), does not catch it either:
- * #1306's review wrapped a sibling sweep's daily call site in a block comment
- * and its whole file stayed green, because the call text is still in the
- * source the regex reads. So the block below pins the ARGUMENT SEQUENCE and
- * the textual placement of each call — worth keeping, and all it claims.
+ * wrapping the daily `pruneMiArchiveWithLog` call site in a `/* ... *\/`
+ * block comment leaves all 8 tests here green (run on this branch), because
+ * the call text is still in the source the regex reads — the same gap #1306's
+ * review found in `alert-delivery-failure-retention.test.ts`. So the block
+ * below pins the ARGUMENT SEQUENCE and the textual placement of each call —
+ * worth keeping, and all it claims.
  * That the calls RUN is pinned by execution in
  * `production/retention-wiring.test.ts`, which seeds an over-age archive row
  * and observes it purged.
