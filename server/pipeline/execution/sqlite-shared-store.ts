@@ -227,13 +227,20 @@ export class SqliteExecutionStore implements SharedStore {
    * ARGUMENT to the one store, and every behaviour below is literally the same
    * code for both arms.
    *
-   * It does exactly two things. It is stamped onto the two tables that make up
-   * the trade record (`open_positions`, `closed_trades`), and it filters the
-   * two SCAN queries — `getOpenPositions()` and `getUnprotectedResidualLots()`.
-   * Those scans are what feed the live arm's exposure caps, its whole-book
-   * valuation and its residual-protection sweep, so filtering them is what
-   * keeps the control arm from consuming the live arm's headroom or tripping
-   * its breakers. The arms share a tape; they must not share a book.
+   * It does exactly two things. It is stamped onto the tables that make up
+   * the trade record (`open_positions`, `closed_trades`, and — migration
+   * 0050, #1124 — `flatten_submissions`), and it filters the three SCAN
+   * queries built over them — `getOpenPositions()`, `getUnprotectedResidualLots()`
+   * and `getUnresolvedFlattens()`. Those scans are what feed the live arm's
+   * exposure caps, its whole-book valuation, its residual-protection sweep
+   * and its flatten-reconcile sweep, so filtering them is what keeps the
+   * control arm from consuming the live arm's headroom, tripping its
+   * breakers, or having ITS OWN broker asked about the OTHER arm's order
+   * (#1124: unfiltered, this scan let the live arm's `reconcile()` ask the
+   * real venue about a control-arm `client_order_id` it never received —
+   * genuinely, correctly "no such order" from the WRONG adapter, not a race
+   * in `SimulatedBrokerAdapter`'s own book). The arms share a tape; they
+   * must not share a book.
    *
    * Key-based reads and writes are deliberately unfiltered — `arm` is a hash
    * input to `idempotency_key` (#753, `computeIdempotencyKey`), so the two arms
@@ -657,8 +664,8 @@ export class SqliteExecutionStore implements SharedStore {
              idempotency_key, instrument, asset_class, side, size,
              status, submitted_at, lot_idempotency_keys, lot_held_quantities, exit_reason,
              decision_price, quote_bid, quote_ask, quote_mid, quote_observed_at,
-             modelled_cost_breakdown_json
-           ) VALUES (?, ?, ?, ?, ?, 'submitting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             modelled_cost_breakdown_json, arm
+           ) VALUES (?, ?, ?, ?, ?, 'submitting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           submission.idempotency_key,
@@ -685,6 +692,11 @@ export class SqliteExecutionStore implements SharedStore {
           submission.modelled_cost_breakdown === null
             ? null
             : JSON.stringify(submission.modelled_cost_breakdown),
+          // #1124, migration 0050 — this INSTANCE's arm, the same posture
+          // `writeAheadPosition`/`insertClosedTrade` already take: the
+          // writer's identity is the fact being recorded, not a field the
+          // caller can mislabel via `FlattenSubmissionWriteAhead`.
+          this.arm,
         );
     } catch (cause) {
       if (isUniqueConstraintError(cause)) {
@@ -878,16 +890,26 @@ export class SqliteExecutionStore implements SharedStore {
    * `'error'` rows are excluded by the `status IN (...)` clause itself —
    * that status means the flatten provably never reached the broker, so
    * there is nothing left to ask the venue.
+   *
+   * `arm`-scoped since migration 0050 (#1124) — this is a SCAN, not a
+   * key-based lookup, and this class's own arm-scoping doc (above) is
+   * explicit that only key-based reads/writes may skip the filter. Left
+   * unfiltered, this call handed EACH arm's periodic `reconcile()` the
+   * OTHER arm's still-unresolved rows, so it asked its own broker about a
+   * `client_order_id` that broker never received — see the migration's own
+   * doc for the exact failure this produced (#1124's "undetermined, then
+   * adopted 7-8s later" observation).
    */
   async getUnresolvedFlattens(): Promise<UnresolvedFlattenSubmission[]> {
     const rows = this.db
       .prepare(
         `SELECT idempotency_key, instrument, status
            FROM flatten_submissions
-          WHERE status = 'submitting'
-             OR (status = 'submitted' AND fills_swept_at IS NULL)`,
+          WHERE arm = ?
+            AND (status = 'submitting'
+             OR (status = 'submitted' AND fills_swept_at IS NULL))`,
       )
-      .all() as Array<{
+      .all(this.arm) as Array<{
       idempotency_key: string;
       instrument: string;
       status: 'submitting' | 'submitted';

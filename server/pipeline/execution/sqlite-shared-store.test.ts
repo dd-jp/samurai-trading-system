@@ -1154,6 +1154,59 @@ describe('SqliteExecutionStore', () => {
       ]);
     });
 
+    /**
+     * #1124: `getUnresolvedFlattens()` is a SCAN over `flatten_submissions`,
+     * the same shape as `getOpenPositions()` above — and, unlike
+     * `getOpenPositions()`, it was NOT arm-scoped before migration 0050. Left
+     * unfiltered, the live arm's periodic `reconcile()` read the control
+     * arm's still-unresolved flatten row and asked ITS OWN (real) broker
+     * about a `client_order_id` that broker never received — a genuine
+     * "no such order" from the WRONG venue, not a race in whichever
+     * adapter actually held the order. This is the mechanism named on the
+     * issue: two arms' reconcile passes sharing one unfiltered scan over one
+     * `flatten_submissions` table, not a lost/re-found entry in a single
+     * `SimulatedBrokerAdapter.accepted` map.
+     */
+    it('keeps each arm’s unresolved flattens invisible to the other reconcile pass', async () => {
+      const { live, control } = makeArmedStores();
+
+      // BOTH unresolved shapes, per arm. The `'submitted'`-and-unswept pair is
+      // the state the three logged #1124 divergences were actually in, and it
+      // is the half a predicate written `arm = ? AND status = 'submitting' OR
+      // (status = 'submitted' AND fills_swept_at IS NULL)` — the same clauses,
+      // one pair of parens short — leaks across arms while still passing an
+      // all-`'submitting'` test.
+      for (const [store, prefix] of [
+        [live, 'live'],
+        [control, 'control'],
+      ] as const) {
+        await store.writeAheadFlatten(
+          makeFlattenWriteAhead({ idempotency_key: `${prefix}-submitting` }),
+        );
+        await store.writeAheadFlatten(
+          makeFlattenWriteAhead({ idempotency_key: `${prefix}-submitted-unswept` }),
+        );
+        await store.resolveFlattenSubmitted(
+          `${prefix}-submitted-unswept`,
+          { order_state: 'submitted', broker_order_ids: [`${prefix}-order-1`] },
+          OPENED_AT,
+        );
+      }
+
+      // Before the fix, EACH scan below returned ALL FOUR rows — the live arm's
+      // reconcile() would have asked its own (real) broker about the control
+      // arm's keys, and the control arm's would have asked its own (simulated)
+      // broker about the live arm's.
+      expect((await live.getUnresolvedFlattens()).map((r) => r.idempotency_key).sort()).toEqual([
+        'live-submitted-unswept',
+        'live-submitting',
+      ]);
+      expect((await control.getUnresolvedFlattens()).map((r) => r.idempotency_key).sort()).toEqual([
+        'control-submitted-unswept',
+        'control-submitting',
+      ]);
+    });
+
     it('defaults to the live arm, so every pre-#753 row and caller is unchanged', async () => {
       const { db, store } = makeStore();
       await store.writeAheadPosition(makePosition());

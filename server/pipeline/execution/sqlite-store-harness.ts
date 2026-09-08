@@ -59,6 +59,8 @@ export interface FlattenSubmissionRow {
   quote_mid: number | null;
   quote_observed_at: string | null;
   modelled_cost_breakdown_json: string | null;
+  /** Migration 0050, #1124 — which arm's store wrote this row. */
+  arm: 'live' | 'control';
 }
 
 export class TestExecutionStore extends SqliteExecutionStore {
