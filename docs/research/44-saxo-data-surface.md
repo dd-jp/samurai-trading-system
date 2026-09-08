@@ -16,27 +16,32 @@ market sentiment or intelligence"*.
 
 Every figure below was pulled from the **SIM gateway** (`gateway.saxobank.com/sim/openapi`)
 on 2026-09-07/08 with a 24-hour developer token, against `ClientId 22690838`. Three
-qualifications bind the whole document:
+qualifications bound this survey; a fourth is now resolved:
 
-- **The SIM account is a trial account, not the UK GIA.** `port/v1/clients/me` reports
-  `IsTrialAccount: true` and `DefaultCurrency: "EUR"`. Anything account-shaped — tariffs,
-  entitlements, permissions — is **not** evidence about the live Saxo UK GIA. Anything
+- **The SIM account is a trial account, not the UK GIA.** `port/v1/accounts/me` reports
+  `IsTrialAccount: true`; `port/v1/clients/me` reports `DefaultCurrency: "EUR"`. (The flag is on
+  **accounts**, not clients — `clients/me` does not carry it, and `users/me` carries neither.)
+  Anything account-shaped — tariffs, entitlements, permissions — is **not** evidence about the live
+  Saxo UK GIA. Anything
   reference- or market-shaped (instrument metadata, exchange calendars, bar history, field
   availability) is the same data the live gateway serves.
 - **The market was closed** (`MarketState: "Closed"`, `PriceTypeAsk/Bid: "OldIndicative"`).
   Quote *magnitudes* — spreads especially — are stale and indicative. The *mechanisms* are
   proven; the numbers must be re-measured in session.
-- **The price feed is 15 minutes delayed, and the weight of evidence says that is an
-  entitlement tier rather than a session artifact — with one confirming test still outstanding.**
+- **The price feed is 15 minutes delayed, and this is an entitlement tier rather than a session
+  artifact — CONFIRMED by direct measurement 2026-09-08, no longer inferred.**
   `Quote.DelayedByMinutes: 15` on both LSE lines. An earlier version of this document listed that
   field alongside the market-closed evidence, which read as though it were caused by the close.
-  Four independent strands say otherwise (§2.9a), but all four are circumstantial: the direct
-  test — read the field on an LSE line *during* 07:00–15:30Z — has not been run, because the
-  survey window fell outside LSE hours. **Everything price-shaped below — §2.3's movers screen
-  and §2.5's spreads — is 15 minutes stale unless the LSE Level 1 subscription is bought**,
-  subject to that test. See §2.9.
-- **The Trader/Investor front-ends were not surveyed** — the platform session had expired and
-  logging in is David's to do. See §4; it bounds exactly one conclusion.
+  Four circumstantial strands pointed that way (§2.9a); the direct test — reading the field on an
+  LSE line *during* 07:00–15:30Z — has now been **run in session and confirms a hard ~15-minute
+  floor** against a demonstrably trading market. **Everything price-shaped below — §2.3's movers
+  screen and §2.5's spreads — is 15 minutes stale unless the LSE Level 1 subscription is bought.**
+  That subscription is now known to **cover `LSE_ETF`** (§2.9-LIVE). See §2.9.
+- **The Trader/Investor front-ends have since been surveyed** (2026-09-08). §3's
+  "no news/research/sentiment" is a statement about the **OpenAPI**: those features exist in the
+  platform but ride a separate cookie-authenticated `/oapi/` namespace that **404s on the developer
+  gateway**, so they are unreachable by any token rather than gated behind a purchasable
+  entitlement. See §4. SaxoInvestor remains unsurveyed and is immaterial.
 
 Reproduction scripts are throwaway (`$CLAUDE_JOB_DIR/tmp/saxo_*.py`); every call in them is a
 plain GET against the paths quoted inline below.
@@ -647,7 +652,11 @@ Services, Trading, Value Add.
 
 - **No news, research, analyst ratings, sentiment, or client-positioning endpoint anywhere.**
   **Value Add is price alerts only** (`vas/v1/pricealerts/definitions` — verified, returns an
-  empty definition list, not a 404).
+  empty definition list, not a 404). Price alerts are nonetheless **not** a usable lever: they
+  would fire off the same 15-minute delayed feed (§2.9a), the delivery route
+  `vas/v2/notifications/targets` returns **403** on our token, and the pipeline polls bars on a
+  schedule rather than reacting to events. **§4 now names the mechanism behind this bullet** —
+  these features exist in the platform but ride a separate internal namespace.
 - **No screener or movers endpoint was found — but this is a weaker negative than the rest of
   this section, and is flagged as such.** `mkt/v1/marketoverview`, `mkt/v1/moversandshakers` and
   `mkt/v1/prices/subscriptions` all return **404**; those three paths were *guessed*, and Market
@@ -660,7 +669,8 @@ Services, Trading, Value Add.
   rather than one Saxo was found to ship.** Read as a failure to find, not as measured absence.
   Nothing downstream turns on the difference — §2.3 works either way.
 - `TradingSignals: "NotAllowed"` on the pool instruments — the trade-signals product does not
-  reach them.
+  reach them. That product is **Autochartist**, and §4 shows it is unreachable by any token
+  regardless of the flag.
 
 **So: Saxo replaces no part of the MI stack.** It is a market-data and execution venue. #1305
 stands as filed on the sentiment question; what it gains is §2.3 and §2.5, which are worth more
@@ -668,17 +678,74 @@ than the thing it was asked for.
 
 ---
 
-## 4. The gap in this survey
+## 4. The gap, now closed: a **separate namespace**, not a missing subscription
 
-The **SaxoTraderGO / SaxoInvestor front-ends were not inspected** — the platform session had
-expired, and logging in is David's to do, not something to automate with his credentials.
+*Written 2026-09-08 from a live platform session. This section previously recorded the
+front-ends as un-surveyed; that gap is closed, and the answer it anticipated —* "exists in the
+platform, not exposed over OpenAPI" *— is confirmed, with the mechanism proved.*
 
-This bounds exactly one claim. §3's "no sentiment/news/research" is a statement about the
-**OpenAPI**. Saxo's retail platforms are widely understood to bundle news and research, and if
-they do, the accurate finding is *"exists in the platform, not exposed over OpenAPI"* — which is
-a different statement with a different implication (it would be licensable or scrapeable-in-
-principle rather than absent). Nothing else in this document depends on it, and it does not
-block the conclusions. Worth ten minutes at the next login.
+### What the platform bundles
+
+SaxoTraderGO's RESEARCH sub-nav carries **Inspiration | Markets | Themes | Webinars | Education |
+News | Trade signals | Calendar**. News is a live instrument-tagged wire; "Trade signals" is
+**Autochartist**, whose pattern table filters down to 15- and 30-minute intervals — intraday-native,
+and superficially a good match for ADR-0014's horizon. So §3's *"no sentiment/news/research"* is
+correct **only as a statement about the OpenAPI**, and must be read that way.
+
+### Why it is unreachable
+
+These features are served from an `/oapi/` namespace on `www.saxotrader.com`, authenticated by the
+**platform session cookie** (`api/login/refresh_token?appId=desktop`) rather than by a developer app
+token. Observed in the browser: `oapi/news/v1/sources` (200), `oapi/news/v1/topstories/collections`
+(200), `oapi/ts/v1/subscriptions` (200), `oapi/microratings/v1/subscriptions` (200).
+
+That is a different host **and** a different path root from `gateway.saxobank.com/openapi/…`. Both
+spellings probed against the developer gateway, 2026-09-08 14:49:37Z:
+
+| path | result |
+| --- | --- |
+| `oapi/news/v1/sources` | **404** |
+| `oapi/news/v1/topstories/collections` | **404** |
+| `oapi/ts/v1/subscriptions` | **404** |
+| `oapi/microratings/v1/subscriptions` | **404** |
+| `openapi/news/v1/sources` | **404** |
+| `openapi/ts/v1/signals` | **404** |
+| `openapi/microratings/v1/instruments` | **404** |
+| `openapi/vas/v2/notifications/targets` | 403 |
+| `openapi/reg/v2/mifid/appropriateness` | 403 |
+
+**The 403s are the control.** The gateway distinguishes *no permission* from *no such route*, and
+every news/signals/ratings path returns the latter. So this is **not** an entitlement that could be
+purchased, and **not** something the pending live app would unlock: the routes do not exist on the
+public API. The platform BFF is a separate API surface, not a subset of the documented one.
+
+This matters beyond the immediate answer. §2.3's "no screener endpoint" is explicitly hedged above as
+a failure to find; **this negative is not of that kind** — it is measured against a gateway that
+demonstrably signals permission failures differently.
+
+### Autochartist, judged on reachability alone
+
+It is served from `/oapi/ts/v1/`, which 404s on the gateway, so it **cannot feed Samurai** whatever
+its coverage. The pattern table was viewed but only as the freshest batch under an unaccepted
+disclaimer, so nothing about that sample's content is recorded here as a property of the feed.
+
+### The news question is moot regardless
+
+Samurai already has a **free** news feed on keys it holds — Alpaca's Benzinga wire: stocks and
+crypto, history to 2015, WebSocket streaming, £0. A cookie-authenticated Saxo wire would be a
+downgrade even if it were reachable. Inspiration, Education, Webinars and Calendar are human-facing
+editorial, not machine-consumable feeds.
+
+### Scope, stated honestly
+
+- The **gateway probe** closes this, and it is front-end-independent: the 404s settle "not exposed
+  over OpenAPI" whatever any UI bundles.
+- The **SaxoTraderGO survey** is illustrative of what sits behind the cookie.
+- **SaxoInvestor was not surveyed** — immaterial, being a simplified skin over the same back-end.
+- Probed against the **SIM** gateway. Route existence is reference-shaped rather than account-shaped,
+  so it carries to live under the same split this document applies throughout (§2.9).
+
+**Nothing in §5 changes.** #1305 stands as filed on the sentiment question.
 
 ---
 
