@@ -13,6 +13,14 @@ commit *plus this sweep's own changes*, i.e. the tree the accompanying PR produc
 the ticket body are relative to an older tree and have drifted by up to ~180 lines
 (`production.ts`'s tick-loop catch: ticket `:2693`, here `:2876`).
 
+Those line numbers are **frozen to that tree on purpose and are not CI-checked**.
+`yarn check:citations` lists `docs/reviews/` in `IMMUTABLE_RECORD_DIRS`
+(`server/tools/check-path-citations.ts:101-106`) alongside `docs/adr/` and
+`docs/research/archive/`, because a dated report is a snapshot of the tree it was written
+against, not a living document — rewriting its citations to match a later tree would falsify the
+record. So a reader chasing a citation on a much later `main` should expect drift and read the
+commit above as the coordinate system, exactly as for an ADR.
+
 ## Why this exists as a document
 
 Acceptance criterion 1 covers all sites, most of which are **not** being changed. A classification
@@ -33,12 +41,39 @@ returns **79** on `542537e`. The ticket says 78; main has moved since it was fil
 `contracts/` contribute zero. `production.ts` has **10** sites, not the 9 the ticket implies.
 
 **The sweep's boundary is that exact string.** A relaxed grep for the same shape under a different
-variable name (`cause`, `recordError`, `attemptError`, `primaryError`, `readError`, …) finds **19
-more** sites — `saxo-http-client.ts`, `alpaca-http-client.ts` ×2, `alpaca-session-calendar.ts` ×2,
-`ohlcv-failover.ts`, `nous-chat.ts`, `nous-responses.ts`, `debate-adapter.ts`,
-`stage2-verdict.ts`, `trial-execution.ts`, `telegram-bot-api-client.ts` ×2, `backfill-market-data.ts`,
-`fill-sync.ts` ×2, `production.ts` ×2. Those are **not** swept here and the file is **not** clean of
-the pattern; see "Left alone" below.
+name finds more:
+
+```
+grep -rnE "[A-Za-z_$][A-Za-z0-9_$.]* instanceof Error \? [A-Za-z_$][A-Za-z0-9_$.]*\.message : String\([A-Za-z_$][A-Za-z0-9_$.]*\)" \
+  server client contracts --include='*.ts' --include='*.tsx' \
+  | grep -v '\.test\.' | grep -v "error instanceof Error ? error.message : String(error)"
+```
+
+returns **20**. **19** of those rename a plain identifier (`cause`, `recordError`, `attemptError`,
+`primaryError`, `readError`, `reconcileError`, `sweepError`, `escalationError`); the 20th renders a
+**member expression** (`result.reason`) and so is missed by an identifier-only pattern — which is
+how it went unlisted here in the first place. Enumerated in full, so no reader has to trust a
+total:
+
+- `server/pipeline/execution/adapters/saxo-http-client.ts:337`, `:349`
+- `server/pipeline/execution/adapters/alpaca-http-client.ts:581` and
+  `server/providers/market-data-service/sources/alpaca-http-client.ts:561` — two **different** files
+  of the same basename, one per broker/data leg
+- `server/providers/market-data-service/alpaca-session-calendar.ts:202`, `:228`
+- `server/providers/market-data-service/sources/ohlcv-failover.ts:80`
+- `server/shared/llm/nous-chat.ts:163`
+- `server/shared/llm/nous-responses.ts:350`
+- `server/apps/orchestrator/production/debate-adapter.ts:1070`
+- `server/tools/backtest/stage2-verdict.ts:247`
+- `server/tools/backtest/trial-execution.ts:441`
+- `server/pipeline/verdict/notifications/telegram/telegram-bot-api-client.ts:781`, `:822`
+- `server/tools/backfill-market-data.ts:294`
+- `server/apps/orchestrator/fill-sync.ts:320`, `:359`
+- `server/apps/orchestrator/production.ts:3473`, `:3665`
+- `server/apps/orchestrator/production/volatility-reading-provider.ts:227` — the member-expression one
+
+Those are **not** swept here and the files are **not** clean of the pattern; see "Left alone"
+below, which classifies them.
 
 ## The fix shape
 
@@ -53,8 +88,41 @@ the opposite. Its doc comment states what it does **not** do: it does not saniti
 whatever `sanitizeLogText` posture they already had — every swap here is inside the existing
 wrapper, never replacing it), and it does not make the surrounding handler safe.
 
-`describeThrown` itself is untouched: #1199 hardened it across all ~79 callers and re-opening that
-ladder here would re-open that review.
+`describeThrown` itself is untouched: #1199 hardened that one function, and re-opening its ladder
+here would re-open that review. It has **18** non-test callers of its own on `542537e` — not ~79.
+(A `describeThrown(` grep returns 23 non-test call sites, five of which call `critic.ts:177`'s
+local reimplementation, a different function this PR deletes.) The ~79 counted above are the
+hand-rolled inline conditionals, which is the reason #1262 exists; #1199 never reached them.
+
+**The swap is not a pure guard — it changes the rendered string for a non-`Error` throw at all 43
+sites.** The replaced code ended in `String(error)`; `describeThrownSafely` routes through
+`describeThrown`'s ladder (`server/shared/safe-log.ts:55-64`), which tries `JSON.stringify` first.
+A thrown `{a: 1}` now renders `'{"a":1}'` where it rendered `'[object Object]'`; a thrown `[1, 2]`
+renders `'[1,2]'` where it rendered `'1,2'`. That is *more* content, and it lands on the durable,
+deliberately-unsanitized surfaces this document enumerates elsewhere — `ExecutionResult.reason`,
+divergence rows, `risk_critic_log` reasoning, `debate_log`. `Error` values are unaffected: the
+ladder reads `.message` for those and never stringifies.
+
+Traced before accepting the widening, because "more content reaches an unsanitized durable slot" is
+how a credential surface opens:
+
+- The only runtime dependency is `better-sqlite3` (`package.json`); there is no HTTP client
+  library, so nothing rejects with a structured request/response object carrying headers. Every
+  wire call goes through `fetch`, which rejects with a `TypeError`.
+- Non-test `server/` contains **zero** `throw {…}` / `throw '…'` literals — the same grep
+  `describeThrown`'s own doc records. The hostile non-`Error` throws live only in `.test.ts` files,
+  which construct them deliberately to exercise this function.
+- Every `AbortSignal` reason on these paths is an `Error`: `latency-budget.ts:193` aborts with a
+  `DebateBudgetExceededError`, `anthropic-client.ts:474` with an `LlmTimeoutError`,
+  `fetch-with-timeout.ts:27` with a `DOMException` (which *is* `instanceof Error` on Node 22), and
+  `critic.ts:402` / `telegram-bot-api-client.ts:439` / `gdelt-ingest-agent.ts:222` pass no argument
+  at all, giving the default `AbortError` `DOMException`. So `token-bucket.ts:236`'s
+  `Promise.reject(signal.reason)` cannot deliver a bare object here.
+
+The residual, stated rather than hidden: the day a third-party client that rejects with a plain
+structured object is wired into one of these paths, its fields will be stringified into those slots
+where they previously collapsed to `'[object Object]'`. That is a reachability argument, like the
+18-site group below, and it stops holding on the same kind of change.
 
 ## Classification criterion
 
@@ -81,7 +149,7 @@ its own. Where a site is safe *only* because of reachability, the row says so.
 | `server/pipeline/execution/residual-protection-sweep.ts` | 3 | **Worst offender.** The site in the per-lot catch inside the `for` loop over marked (naked) lots aborts the whole pass, leaving every *later* marked lot unswept and unprotected. The two inside `sweepOne` are contained by that same per-lot catch rather than independently loop-aborting, but are guarded in the same edit. |
 | `server/pipeline/debate-engine/analyst-response-collector.ts` | 1 | Inside a `.then(_, onRejected)` handler: converts a recorded `RaceOutcome` into a fresh rejection that `Promise.all` propagates, losing every *other* analyst's settled view. Structural twin of #1199. |
 | `server/pipeline/execution/execute.ts` | 3 | `:219` and `:824` run before the ambiguous-order-state result (`pending` / journal row left `submitting`) that `reconcile()` resolves against. `:805` is the strongest and the ticket did not name it: the reason is built **before** `markLotsUnprotected` and `resolveFlattenError`, so a throw leaves cancelled-but-naked lots with no #549 marker for the sweep to find. |
-| `server/pipeline/execution/reconcile.ts` | 3 | See "#297 H1" below — the sites' own safety claim does not carry renderability, and a throw leaves the lot with no divergence at all. |
+| `server/pipeline/execution/reconcile.ts` | 3 | Three sites with three different costs, not one story. `:431` (`reconcileLot`'s `getOrder` catch) is the only one that ever carried the #297 H1 claim — see "#297 H1" below; a throw there leaves the lot with no divergence at all. `:197` is `reconcileFlatten`'s `resumeFlatten` catch and renders **before** `postFlattenReconcileAlert` at `:198`, so a throw also swallows #519's paging-worthy unresolved-flatten alert. `:365` is `getOpenPositions`' catch, whose whole output is the one row telling an operator that this pass could not see venue-held positions at all. |
 | `server/pipeline/risk-manager/critic.ts` | 1 (helper) + 5 call sites | A local `describeThrown` reimplementation (no `JSON.stringify` fallback) behind 5 catches that fail open to an `unavailable` verdict. **Deleted** in favour of the shared helper. |
 | `server/apps/orchestrator/production.ts` | 4 | `:2876` is the tick loop's own catch, whose comment promises "an error should cost one tick, not the run" — the throw escapes into `void runOnce()` and inverts exactly that. `:3300` is a detached `.catch()`. `:3440` and `:3697` are a chain whose containment is illusory: `:3440`'s throw is caught at `:3697`, which renders the same value the same way and throws again, out of the timer callback. |
 | `server/apps/orchestrator/index.ts` | 2 | `:831` is `installFaultHandlers`' `fatal()` — it renders **before** `logCaughtFailure`, so a hostile value loses the `orchestrator_fatal_fault` record and the fault handler itself faults. `:762` is the shutdown handler's `onRejected`: a throw skips `effects.exit(1)` and the process never exits. |
@@ -116,14 +184,23 @@ cost is a *lost retry classification*, which is a different (unfiled) defect, no
 - `server/providers/market-data-service/sources/polygon-bars-errors.ts:90`
 - `server/pipeline/debate-engine/llm/anthropic-client.ts:269`
 
-**Top-level process or CLI handlers (7).** The process exits non-zero either way; only the message
+**Top-level process or CLI handlers (5).** The process exits non-zero either way; only the message
 text is lost.
 
 - `server/apps/supervisor/index.ts:47`
 - `server/apps/orchestrator/index.ts:988`
 - `server/tools/data-cli.ts:72`
 - `server/tools/backfill-market-data.ts:562`
-- `server/apps/orchestrator/smoke-run.ts:3701`, `:4214`, `:6573`
+- `server/apps/orchestrator/smoke-run.ts:6573`
+
+**Mid-scenario in the offline smoke harness, failing safe (2).** `smoke-run.ts:3701` and `:4214` are
+**not** top-level, and an earlier draft of this document grouped them as if they were, with the
+wrong mechanism attached ("the process exits non-zero either way"). Both sit in mid-scenario
+catches assigning a local (`readError` at `:3693-3702`, `stepError` at `:4204-4215`); absent a
+throw the scenario continues and can still pass, so a throw there *does* change the outcome. It
+changes it in the safe direction: the throw aborts the scenario, `runSmoke()` rejects, and the
+top-level catch at `:6573` exits 1 — the gate fails rather than passing on an unexamined
+assertion. Safe for that reason, not for the one first written down.
 
 **Contained by an outer guard that does not share the defect (5).**
 
@@ -134,16 +211,20 @@ text is lost.
 - `server/providers/market-intelligence/mi-ingest-agent.ts:162`,
   `server/providers/market-intelligence/grok/grok-agent.ts:386`, `:490` — contained twice
   (`composeMarketIntelligence`'s swallowing catch and `MiRefreshQueue.#dispatch`'s
-  `logCaughtFailure`), and the durable archive/store writes already landed.
+  `logCaughtFailure`). The containment is the whole reason; "the durable archive/store writes
+  already landed" is **not** a second one, and an earlier draft offered it as though it were.
+  `grok-agent.ts:386`'s catch spans the entire refresh try, which begins at
+  `client.fetchSentiment` and covers `spendSink.record` (`:316`) as well as `#archive` and
+  `store.ingest` — so on the failure paths that actually reach it most often, nothing has landed.
 
-**Only repo-authored or library `Error`s can reach the catch (18).** Every producer on the path
+**Only repo-authored or library `Error`s can reach the catch (16).** Every producer on the path
 throws a spec-conforming `Error` with a string `message` — `better-sqlite3`, Node `fs`/stream, or
 this repo's own constructors. The render cannot throw for those values. This is a *reachability*
 argument, not a structural one: it stops holding the day a third-party client is wired into one of
 these paths, which is why the row says which producer it rests on.
 
-- `server/apps/orchestrator/rotating-file-sink.ts:327`, `server/apps/orchestrator/logger.ts:254`,
-  `server/apps/orchestrator/log-retention.ts:759` — Node `fs`/stream errors only.
+- `server/apps/orchestrator/rotating-file-sink.ts:327`, `server/apps/orchestrator/logger.ts:254` —
+  Node `fs`/stream errors only.
 - `server/apps/orchestrator/production.ts:735`, `:807`, `:934` — `better-sqlite3` prune failures.
 - `server/apps/orchestrator/production.ts:2488` — `AlpacaNewsClient`'s own construction throw.
 - `server/apps/orchestrator/production.ts:3462` — reached only under
@@ -152,8 +233,8 @@ these paths, which is why the row says which producer it rests on.
 - `server/apps/orchestrator/production.ts:4188` — `feedbackScheduleStore.lastBoundary()`
   (`better-sqlite3`).
 - `server/apps/service-api/index.ts:185` — `AlpacaHttpBrokerClient`'s missing-credentials `Error`.
-- `server/apps/orchestrator/production/us-equity-session-source.ts:137`, `:163` —
-  construction/`fetch` errors.
+- `server/apps/orchestrator/production/us-equity-session-source.ts:163` — `fetch` errors and this
+  function's own `zero calendar rows` throw.
 - `server/apps/orchestrator/production/daily-equity-metrics-source.ts:265` — `computeMetrics`' own
   throw.
 - `server/apps/orchestrator/production/on-trade-close-hookup.ts:161` — repo-authored
@@ -161,14 +242,38 @@ these paths, which is why the row says which producer it rests on.
 - `server/apps/orchestrator/production/data-failover.ts:165` — `resolvePolygonPacing`'s env-parse
   `Error`.
 - `server/pipeline/debate-engine/llm/spend-sink.ts:268`, `:287`, `:302` — the first two land in the
-  outer catch at `:288`; `:302` is the outermost `record()` catch, contained by
-  `anthropic-client.ts`'s deliberately empty `catch {}`.
+  outer catch at `:288`. `:302` is the outermost `record()` catch, and an earlier draft named
+  `anthropic-client.ts`'s deliberately empty `catch {}` as its containment. That is only one of two
+  callers: `server/providers/market-intelligence/grok/grok-agent.ts:316` calls
+  `spendSink.record(...)` with no such wrapper. Containment still holds there, by the same two
+  guards the `grok-agent.ts` rows above rest on — `composeMarketIntelligence`'s per-agent swallow
+  (`server/apps/orchestrator/production/analysts-adapter.ts:204-228`) and `MiRefreshQueue.#dispatch`'s
+  `logCaughtFailure` (`server/apps/orchestrator/production/mi-refresh-queue.ts:277-312`) — but not
+  for the reason first written down.
+
+**Documented as belt-and-braces, and classified SAFE on reachability anyway (2).** Called out
+separately because the tension is real and a future edit should see it. Both of these sit in
+wrappers whose own comments say they exist to catch the *unanticipated* — `sweepStaleLogsWithLog`
+(`server/apps/orchestrator/log-retention.ts:710-763`): "never throwing past this point… this
+wrapper's own try/catch covers anything unanticipated"; and the `us-equity-session-source.ts:130-137`
+comment: "treat it exactly like a fetch failure rather than letting it escape uncaught". A throw at
+either aborts boot: `runEntrypointLogRetention` (`server/apps/orchestrator/index.ts:895-917`) runs
+inside the entrypoint try (`:923-990`) that ends in `process.exit(1)`. They are left SAFE because
+the producers on each path are enumerable and all throw spec-conforming `Error`s — Node `fs`/stream
+for the first, `new AlpacaHttpCalendarClient()`'s own missing-credentials throw for the second —
+but that is precisely the anticipation the sites decline to assume, so this classification is the
+weakest in the document and is the first thing to revisit if either path gains a producer.
+
+- `server/apps/orchestrator/log-retention.ts:759`
+- `server/apps/orchestrator/production/us-equity-session-source.ts:137`
 
 ## Criterion 5 — the `reconcile.ts` #297 H1 claim
 
-`server/pipeline/execution/reconcile.ts:416` cited #297 H1 as making the site safe. Traced, and the
-claim as written is **narrower than the use it was put to**, so the three sites are dangerous and
-the comment is corrected in this PR.
+`server/pipeline/execution/reconcile.ts:431` (`:416` before this PR widened the comment) cited #297
+H1 as making the site safe. It is the only one of the file's three sites that made the claim.
+Traced, and the claim as written is **narrower than the use it was put to**, so that site is
+dangerous; `:197` and `:365` are dangerous for the separate reasons in the table above, and all
+three are guarded. The comment is corrected in this PR.
 
 What H1 actually gives: `AlpacaBrokerAdapter.call` / `SaxoBrokerAdapter.call`
 (`server/pipeline/execution/adapters/alpaca-adapter.ts:334`,
@@ -225,11 +330,45 @@ change from this one.
 
 ## Left alone
 
-- **The 19 renamed-variable variants** listed under "Verified count" above. Same defect, same fix;
-  out of this ticket's stated boundary. Several are dangerous by the criterion above
-  (`server/apps/orchestrator/fill-sync.ts:320` and `:359` are the sibling catches of the site this
-  PR guards at `:395`; `server/apps/orchestrator/production.ts:3473` and `:3665` are inner
-  alert-failure handlers). Worth a follow-up ticket.
+- **The 20 renamed variants** enumerated under "Verified count" above. Same defect, same fix; out of
+  this ticket's stated exact-string boundary, which is why they are not swept here. **Eight of them
+  are dangerous by this document's own criterion**, and they are named individually rather than as
+  "several", because a sentence that names four and says "several" reads as though the rest are
+  safe:
+
+  - `server/pipeline/verdict/notifications/telegram/telegram-bot-api-client.ts:822`
+    (`escalationError`) — criterion (c). Inside a detached `.catch()` on
+    `#call('sendMessage', …)`; nothing awaits or re-catches it, so a throw is an unhandled
+    rejection, `installFaultHandlers` fires and the trading process exits non-zero over a failed
+    escalation notice. This is the sharpest one: it is in the **same method** whose sibling render
+    at `:759` this PR does guard, and it was passed over only because the variable is spelled
+    differently.
+  - `server/pipeline/verdict/notifications/telegram/telegram-bot-api-client.ts:781`
+    (`recordError`) — criterion (b), same method again. It renders inside the catch around
+    `#alertDeliveryLog.recordFailure` and **before** the `telegram_delivery_failed` `#log` below
+    it, so a throw destroys the log line that is the only remaining trace once the durable row has
+    already failed to write. `#recordDeliveryFailure` is called from `:358` and `:416`, both inside
+    `#send`'s own frame, so the throw does not become an unhandled rejection here — it aborts the
+    delivery-failure reporting instead.
+  - `server/apps/orchestrator/production/volatility-reading-provider.ts:227` — criterion (a). Inside
+    the `open.map(...)` over `settleWithConcurrency` results, so a throw aborts the whole map and
+    rejects `getVolatilityReading`: **every** instrument's reading is lost, not the one that
+    failed, and the rejection lands in the per-instrument Risk stage
+    (`production/direct-bind.ts:726`).
+  - `server/providers/market-data-service/sources/ohlcv-failover.ts:80` (`primaryError`) —
+    criterion (b), and the most self-defeating of the eight. It renders at the *top* of the catch,
+    before `safeAlert` and before the fallback source is attempted, so a throw defeats the failover
+    the function exists to perform — no alert, no fallback bars.
+  - `server/apps/orchestrator/fill-sync.ts:320` and `:359` — the sibling catches of the site this
+    PR guards at `:395`, in the same `runOnce` reached via `void runOnce().then(schedule)`:
+    criterion (c), with fill polling never re-armed.
+  - `server/apps/orchestrator/production.ts:3473` and `:3665` — inner alert-failure handlers on the
+    same chain as the `:3440`/`:3697` pair this PR guards.
+
+  The other twelve are **not audited** by this document. That is not a claim that they are safe: it
+  means the criterion was not applied to them, and a reader must not read their absence from the
+  list above as a classification. Follow-up:
+  [#1351](https://github.com/dd-jp/samurai-trading-system/issues/1351).
 - **A hole in `sanitizeBrokerError` itself** (point 2 above): it dereferences properties of an
   untrusted thrown value inside a `catch` whose job is to convert it. A throwing getter defeats the
   adapter's whole error boundary. Not this ticket's pattern, and fixing it means touching the
