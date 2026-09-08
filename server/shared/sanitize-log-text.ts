@@ -24,6 +24,16 @@ import { truncateForError } from './http/response-errors.js';
  * still reads. Kept to shapes that are unambiguously a secret being assigned —
  * a bare high-entropy string is NOT matched, because legitimate failure reasons
  * are full of ids, hashes and ISO timestamps.
+ *
+ * Every quote, and every `}` inside a character class, below is a hex escape
+ * (`\x22`, `\x27`, `\x7d`), never literal:
+ * `server/apps/orchestrator/production.test.ts`'s `stripCommentsAndStrings
+ * leaves braces balanced on every server source file it strips` fails on a
+ * literal one — its hand-rolled stripper can't tell a regex literal from a
+ * string, so a literal quote misreads as a string opener and swallows
+ * everything up to its accidental "close", `}` characters included. The `}`
+ * in a quantifier (`{0,60}`, `{20,}`, …) is exempt: it pairs with its own
+ * `{` and never desyncs the stripper's brace count.
  */
 const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // Telegram bot token in a URL path: `/bot123456:AA...`
@@ -31,10 +41,110 @@ const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // A bare Telegram-shaped token: long digit run, colon, long opaque suffix.
   /\b\d{6,}:[A-Za-z0-9_-]{20,}\b/g,
   // `Bearer <token>`
-  /\bBearer\s+[^\s,;"'}\]]+/gi,
-  // `apiKey=x`, `"api_secret": "x"`, `token: x`, `password=x`, `auth: x`, and
-  // Alpaca's own header names.
-  /\b(?:APCA-API-KEY-ID|APCA-API-SECRET-KEY|api[_-]?key|api[_-]?secret|secret|token|password|passwd|pwd|auth)\b["']?\s*[:=]\s*["']?[^\s,;"'}\]]+/gi,
+  /\bBearer\s+[^\s,;\x22\x27\x7d\]]+/gi,
+  // `apiKey=x`, `api_secret: x`, `token: x`, `password=x`, `auth: x`, and
+  // Alpaca's own header names. `[ \t]*` (not `\s*`) around the operator:
+  // `\s` admits a newline, so `token:\n<stack trace line>` would consume the
+  // newline and then greedily eat the first word of the following line as
+  // the "value" — a real shape (a caught error's `message` embeds a stack
+  // trace) that has nothing to do with credentials. The value class already
+  // excludes `\s`, so this only tightens the key-to-value separator, not
+  // what counts as a value. `&` is excluded from the value class for the
+  // same reason a query-string credential shouldn't swallow its own
+  // trailing params (`?apiKey=x&adjusted=true` must keep `&adjusted=true`).
+  // The cost of that exclusion: a credential value that itself legitimately
+  // contains `&` (`{"password":"p&ssw0rd"}`) is only masked up to the `&`,
+  // leaking its tail (`{"[REDACTED]&ssw0rd"...}`) — accepted because a
+  // query string is the far more common shape this module sees in
+  // practice, and a partially-masked credential is still a shorter,
+  // less-recoverable leak than the un-truncated version.
+  /\b(?:APCA-API-KEY-ID|APCA-API-SECRET-KEY|api[_-]?key|api[_-]?secret|secret|token|password|passwd|pwd|auth)\b[\x22\x27]?[ \t]*[:=][ \t]*[\x22\x27]?[^\s,;&\x22\x27\x7d\]]+/gi,
+  // `clientSecret`/`client_secret`, `accessToken`/`access_token`,
+  // `refreshToken`/`refresh_token`, and an underscore-PREFIXED compound
+  // (`X_CLIENT_SECRET`): the bareword pattern above requires a `\b` before
+  // the credential word, which a camelCase or underscore join never
+  // produces (`accessToken`'s "Token" sits mid-word; `_` is a word char, so
+  // `X_CLIENT_SECRET` has no boundary before "CLIENT" either) — the
+  // lookbehind here excludes only alnum, not `\b`, so a leading `_`
+  // doesn't block the match the way it would with `\b`. Named explicitly
+  // rather than as a `*Token`/`*Key` suffix rule: this codebase logs
+  // `pageToken`/`next_page_token` (pagination cursors,
+  // `alpaca-http-client.ts`) and `maxTokens`/`max_tokens` (an LLM request
+  // budget — `max_tokens` in `orchestrator/production/defaults.ts`,
+  // `maxTokens` in `market-intelligence/grok/x-search-client.ts`) — a
+  // suffix rule would mask both. `[ \t]*`/`&` reasoning: see the bareword
+  // pattern above.
+  /(?<![A-Za-z0-9])(?:client[_-]?secret|access[_-]?token|refresh[_-]?token)[\x22\x27]?[ \t]*[:=][ \t]*[\x22\x27]?[^\s,;&\x22\x27\x7d\]]+/gi,
+  // Underscore-joined ALL-CAPS env-var names (`ALPACA_API_SECRET`,
+  // `SAXO_OPENAPI_TOKEN`, `TELEGRAM_BOT_TOKEN` — grepped from this repo's
+  // real `process.env.*` reads, not just the one Alpaca name; `DB_PASSWORD`
+  // is illustrative of the `_PASSWORD` suffix, not a name in this repo's
+  // own `process.env.*` reads): the shape the bareword pattern above can't
+  // reach even with `api[_-]?key`/`secret`/`token`/`password` in it, because
+  // the credential word isn't the LAST segment. Case-SENSITIVE (no `i` flag) and requires
+  // an all-caps prefix — this buys avoiding a mask on the LOWERCASE spelling
+  // of a real field this codebase logs, `next_page_token` (a pagination
+  // cursor); it does NOT avoid masking `NEXT_PAGE_TOKEN` — an all-caps
+  // spelling of that same field would still match, because this input is
+  // upstream-controlled text (see this module's doc comment), not a JSON
+  // field name whose case this codebase controls. The lowercase-anchored
+  // pattern below closes part of that gap for real credential shapes,
+  // deliberately without reintroducing the `next_page_token` regression.
+  /\b[A-Z][A-Z0-9_]{0,60}_(?:SECRET_KEY|API_KEY|SECRET|TOKEN|PASSWORD|PASSWD)\b[\x22\x27]?[ \t]*[:=][ \t]*[\x22\x27]?[^\s,;&\x22\x27\x7d\]]+/g,
+  // The lowercase/mixed-case counterpart to the all-caps pattern above, for
+  // exactly three suffixes: `_secret_key`, `_api_key`, `_api_secret`
+  // (`polygon_api_key`, `alpaca_api_secret_key`, `apca_api_secret_key`,
+  // `api_secret_key`, `alpaca_api_secret` — all real shapes measured
+  // unmasked before this pattern existed). Deliberately NOT a bare
+  // `_secret` or `_token` suffix here: that would re-catch
+  // `next_page_token`/`page_token`, the exact regression the all-caps-only
+  // design above exists to avoid. The result is an intentional residual
+  // gap: a lowercase or mixed-case name ending only in `_token` (e.g.
+  // `saxo_openapi_token`, `Saxo_Openapi_Token`) is still not masked by
+  // either pattern — narrower coverage than the all-caps branch, on
+  // purpose, because `_token` alone can't tell a credential from a cursor
+  // without the case signal. The gap is wider than just `_token`, though:
+  // this pattern is anchored `[a-z][a-z0-9_]{0,60}` with no `i` flag, so
+  // ANY mixed-case spelling of the three covered suffixes also falls
+  // through both patterns (`Alpaca_Api_Key`, `my_API_KEY`,
+  // `Polygon_Api_Secret` — all measured unmasked) — only all-lowercase and
+  // all-caps are covered, the two shapes this codebase's own env-var
+  // reads and pagination cursors actually use.
+  /\b[a-z][a-z0-9_]{0,60}_(?:secret_key|api_key|api_secret)\b[\x22\x27]?[ \t]*[:=][ \t]*[\x22\x27]?[^\s,;&\x22\x27\x7d\]]+/g,
+  // `Authorization: Basic <base64>` / `Authorization: Token <key>`
+  // (`tools/backtest/http-tiingo-client.ts` sends the latter). Anchored to
+  // a preceding `Authorization` key — lookbehind, so it's not consumed and
+  // stays in the output — rather than matching either scheme word bare the
+  // way the Bearer pattern matches bare `Bearer <word>`: "Basic" alone is
+  // ordinary English in this repo's own comments (Alpaca's Basic free-tier
+  // subscription), so an unanchored version would mask prose, not
+  // credentials. The lookbehind allows an optional quote and `:`/`=` (with
+  // optional surrounding space and a trailing quote) between the key and
+  // the scheme word, so it reaches the JSON-quoted and single-quoted forms
+  // a bare `Authorization:\s*` lookbehind cannot. The lookbehind's own
+  // key-to-value separator got the same `[ \t]*`/`&` treatment as the
+  // bareword pattern above, for the same reason. The `\s+` AFTER the scheme
+  // word (`Basic`/`Token`) is untouched by that fix and still spans a
+  // newline — out of scope for round-2's F7, which named the four
+  // key-to-value separators, not this scheme-to-value one; a stack trace
+  // straight after `Authorization: Basic` (no value on that line) would
+  // still lose its first word to this pattern. The `Bearer <token>`
+  // pattern above (line 44) has the identical scheme-to-value `\s+` and is
+  // equally untouched, for the same out-of-scope reason: `Bearer` has no
+  // key-to-value separator to begin with — the word itself is the anchor
+  // — so neither F7 nor F8 named it, and it shares this pattern's newline
+  // and `&` gaps unchanged.
+  /(?<=\bAuthorization[\x22\x27]?[ \t]*[:=][ \t]*[\x22\x27]?)(?:Basic|Token)\s+[^\s,;&\x22\x27\x7d\]]+/gi,
+  // `scheme://user:PASSWORD@host` DSNs: matches only the password segment
+  // (via look-around), so the scheme, username and host — the parts an
+  // operator actually needs to identify which DB a connection error came
+  // from — survive in the output. Username is `{0,100}` (not `{1,100}`) so
+  // a password-only DSN (`redis://:pw@host`) still matches. The value class
+  // excludes quotes, `,` and `;` on top of `@`/`/` — without that, a DSN
+  // sitting next to other JSON fields (`{"dsn":"redis://h:6379","email":
+  // "a@b.com"}`) over-matches through the closing quote and the next key,
+  // deleting the port and merging into the following field's `@`.
+  /(?<=:\/\/[^\s:@/]{0,100}:)[^\s@/\x22\x27,;]{1,200}(?=@)/g,
 ];
 
 /**

@@ -6,13 +6,16 @@
  *
  * The obvious one-line fix — `sanitizeLogText(JSON.stringify(payload))` —
  * **corrupts the log format**, and was rejected on a worked example rather
- * than on taste. `sanitize-log-text.ts`'s value class is
- * `[^\s,;"'}\]]+`: it excludes `"`, `}` and `]`, but NOT `{`. So the
- * serialized `{"auth":{"scheme":"basic"}}` matches `auth":{"scheme` as the
- * "value" and redacts to:
+ * than on taste. `sanitize-log-text.ts`'s bareword pattern's value class
+ * excludes whitespace, `,`, `;`, `&`, both quote characters and `}`/`]` — but
+ * NOT `{`. So the serialized `{"auth":{"scheme":"basic"}}` matches `auth":{` in
+ * full — `auth` is the bareword key, `":` the operator, and the trailing
+ * bare `{` is what the VALUE portion of the pattern actually captures,
+ * stopping there because the `"` opening `"scheme"` is excluded — and
+ * redacts to:
  *
  * ```
- * {"auth":[REDACTED]"scheme":"basic"}}
+ * {"[REDACTED]"scheme":"basic"}}
  * ```
  *
  * which is not parseable JSON. On a line-oriented log whose whole contract is
@@ -68,11 +71,18 @@ import { maskCredentials } from '../../shared/index.js';
  * the key with separators stripped (`api_key`, `api-key`, `apiKey` all
  * normalize to `apikey`).
  *
- * Kept in step with `sanitize-log-text.ts`'s pattern list — the same names,
- * read structurally rather than as assignment syntax. `authorization` and
- * `cookie` are here and not there for the reason the split exists: as a bare
- * header name in prose they are not evidence of a secret, but as an object KEY
- * the value beside them is one.
+ * Overlaps with `sanitize-log-text.ts`'s `CREDENTIAL_PATTERNS` list — the
+ * same credential concept, read structurally here instead of as assignment
+ * syntax — but the two sets are not congruent in either direction. One
+ * example each way, not an exhaustive exception list: `authorization` is
+ * here and has no counterpart pattern there, because a bare header NAME in
+ * prose is not evidence of a secret but an object KEY beside a value is;
+ * `alpacasecretkey` (`alpacaSecretKey`, `free-stack-aggregates-client.ts`)
+ * is here and has no counterpart there either, because it's a
+ * vendor-prefixed camelCase credential name with no `client`/`access`/
+ * `refresh` prefix for that file's named-compound patterns to match, but
+ * this structural, key-based check has no camelCase-boundary problem with
+ * at all.
  *
  * EXACT NAMES, NOT A SUFFIX RULE. Matching anything ending in `token` would be
  * shorter and would mask more, but this codebase logs `next_page_token`,
@@ -86,6 +96,8 @@ const CREDENTIAL_KEYS: ReadonlySet<string> = new Set([
   'accesskey',
   'accesskeyid',
   'accesstoken',
+  'alpacakeyid',
+  'alpacasecretkey',
   'apikey',
   'apikeyid',
   'apisecret',
@@ -104,6 +116,7 @@ const CREDENTIAL_KEYS: ReadonlySet<string> = new Set([
   'idtoken',
   'passwd',
   'password',
+  'polygonapikey',
   'privatekey',
   'pwd',
   'refreshtoken',
