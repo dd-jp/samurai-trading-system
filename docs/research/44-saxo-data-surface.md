@@ -361,17 +361,34 @@ not second-order. Stated the other way, and secondarily because it is not the co
    That is a measured historical state of the debate layer, not a forecast, but it is the exact
    state in which the refund does not arrive and the fee is pure drag on a £1,000 book.
 
-**Consequences.** #895's entitlement probe now has a precise target — read
-`MarketDataViaOpenApiTermsAccepted` and `DelayedByMinutes` on the live token, not just "check
-entitlements". Doc 53's cost model gains an input it can use immediately (delayed spreads are
-adequate for calibration) and a fixed annual line item it currently does not carry.
+**Consequences.** #895's entitlement probe stops being "check entitlements" and becomes four
+named reads on the live token, one round trip:
 
-**Chart data is on the same delayed tier — this one SIM did answer.** `chart/v3/charts` returns a
-`ChartInfo` block carrying `DelayedByMinutes` beside `ExchangeId` and `FirstSampleTime`:
+```
+GET /port/v1/users/me                -> MarketDataViaOpenApiTermsAccepted
+GET /root/v1/sessions/capabilities   -> DataLevel
+GET /trade/v1/infoprices?...&FieldGroups=Quote      -> Quote.DelayedByMinutes, PriceTypeAsk/Bid
+GET /chart/v3/charts?...&FieldGroups=ChartInfo      -> ChartInfo.DelayedByMinutes
+```
+
+The fourth is the one that settles whether the funded GIA gets **bars** on the free tier, which
+is what §2.2's backtest source depends on and which SIM cannot answer. Doc 53's cost model gains
+an input it can use immediately (delayed spreads are adequate for calibration) and a fixed annual
+line item it currently does not carry.
+
+**The delay is not quote-only — chart bars carry it too.** `chart/v3/charts` returns a
+`ChartInfo` block with `DelayedByMinutes` beside `ExchangeId` and `FirstSampleTime`:
 `{"DelayedByMinutes": 15, "ExchangeId": "LSE_ETF", "FirstSampleTime": "2022-05-30T12:43:00Z"}`
-for `LQQ3:xlon`. So the delay is not a quote-only property; it applies to the bar series that
-§2.2 proposes as a backtest source and that the pipeline's analysts actually consume. A prior
-version of this section said SIM could not answer this. It could.
+for `LQQ3:xlon`. It applies to the bar series §2.2 proposes as a backtest source and that the
+analysts actually consume, not just to quotes.
+
+**This does not tell us the live account gets bars free.** `ChartInfo.DelayedByMinutes` is an
+entitlement field read on an `IsTrialAccount`, and entitlements are the account-shaped class of
+fact that SIM evidence does not carry (§1). A sandbox is if anything likelier to be permissive
+than a funded retail GIA. So the open question stays open in the form it was originally posed —
+*does the live GIA serve chart data at all, and on which tier* — and belongs on the live-token
+list. What SIM did establish is the weaker, useful thing: the field exists and is readable, so
+the live check is one more call rather than an investigation.
 
 ### 2.9a How strong is the "entitlement, not session artifact" reading?
 
@@ -398,11 +415,17 @@ the imminent session, not a trading one. The reading is recorded here so it is n
 evidence later. (It does establish one negative: `PriceTypeAsk: "OldIndicative"` is not a
 market-closed marker specifically, since it appears identically on both.)
 
-**The outstanding test, in one line:** `GET /trade/v1/infoprices?Uic=29391797&AssetType=Etn&
-FieldGroups=Quote` between 07:00Z and 15:30Z on an LSE trading day. `DelayedByMinutes: 15` with
-`MarketState: "Open"` confirms this section as written; `0` falsifies it and the £7/month
-question dissolves. It needs a live 24-hour token, which is the same unblocker #1311 and #895
-are waiting on.
+**The outstanding test, in one line — and it is cheap:** `GET
+/trade/v1/infoprices?Uic=29391797&AssetType=Etn&FieldGroups=Quote` between 07:00Z and 15:30Z on
+an LSE trading day. `DelayedByMinutes: 15` with `MarketState: "Open"` confirms this section as
+written; `0` falsifies it and the £7/month question dissolves.
+
+This needs a **SIM** token during LSE hours — a timing constraint, not an account one. An earlier
+draft said it needed the live token and was therefore blocked behind #1311; that was wrong, and
+it made a five-minute check look like it was queued behind the scarcest resource in the project.
+The survey simply ran outside LSE hours. The SIM token in `.env.local` at time of writing expires
+**2026-09-08T22:57Z**, so it covers the whole of that day's session; if it has lapsed, a fresh one
+is two clicks at developer.saxo → *Get 24 Hour Token*.
 
 ---
 
