@@ -1500,9 +1500,8 @@ describe('buildProductionComponents', () => {
         // Never cites #1378 (this ticket) as the place to extend the
         // tables — citing it would be circular the moment it closes.
         expect(() => buildProductionComponents(config)).not.toThrow(/#1378/);
-        // Nor #1379 — that ticket extended the tables through 2028 and is
-        // itself now closed; #1387 (open, blocked on gov.uk publishing 2029)
-        // is the follow-up an operator should be pointed at instead.
+        // Nor #1379 — an operator-facing refusal must never cite a closed
+        // ticket as where to extend the tables.
         expect(() => buildProductionComponents(config)).not.toThrow(/#1379/);
       },
     );
@@ -1649,6 +1648,11 @@ describe('buildProductionComponents', () => {
       const unmodelledHalfDay = new Date(
         `${Number(LSE_TABLE_COVERAGE_END.slice(0, 4)) + 2}-12-24T12:00:00Z`,
       );
+      // The half-day-shaped premise only holds if this lands on a weekday;
+      // asserted explicitly so a future coverage-end shift that puts it on
+      // a weekend reds this test instead of silently testing something else.
+      expect(unmodelledHalfDay.getUTCDay()).toBeGreaterThanOrEqual(1);
+      expect(unmodelledHalfDay.getUTCDay()).toBeLessThanOrEqual(5);
       const config = stubConfig(db, {
         mode: 'live',
         capitalCeilingUsd: 1_000,
