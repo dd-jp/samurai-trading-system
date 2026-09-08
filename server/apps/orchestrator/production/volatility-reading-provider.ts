@@ -181,7 +181,7 @@ export class MarketDataVolatilityReadingProvider implements VolatilityReadingPro
    * `asset_class_tripped`, and that field has exactly two consumers:
    * `RiskManagerImpl.evaluate`'s Step-1 gate, which an `intent_type: 'exit'`
    * returns before ever reaching ("bypasses all entry gates"), and
-   * `verdict`'s Gate 5, which for stocks sits behind Gate 4's market-open
+   * `verdict`'s `breaker` gate (5), which for stocks sits behind the `market_closed` gate (4)'s market-open
    * check anyway. No exit, stop-widen, or kill-line path reads it, and the
    * raw reading is never persisted — only the boolean trip result is.
    *

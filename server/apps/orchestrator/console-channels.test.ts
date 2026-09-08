@@ -378,7 +378,7 @@ describe('UnwiredApprovalChannel', () => {
     timeout_ms: 1_000,
   } as never;
 
-  it('throws rather than fabricating consent when gate 6 is reached', async () => {
+  it('throws rather than fabricating consent when the hitl gate (6) is reached', async () => {
     // The whole point of this class over `ConsoleApprovalChannel`. Under
     // ADR-0007's `auto` dial it is unreachable; reaching it means the dial was
     // changed without wiring a transport, and auto-approving there would read

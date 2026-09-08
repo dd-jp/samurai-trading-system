@@ -9,6 +9,15 @@
  * to `no_go` with its reason; a full pass (auto or human-approved) produces
  * `go`.
  *
+ * THIS FILE IS THE NUMBERING AUTHORITY (#1254): staleness=1, stale_feed=2a,
+ * drift=2, dedup=3, market-open=4, breaker=5, HITL=6 — the comments below,
+ * in that order. Cite a gate by its `no_go_reason` name first, the number
+ * only as a parenthetical, and take the number from here: `verdict-spec.md`
+ * used to run a second, incompatible numbering (2/3 swapped, everything
+ * from there up one), which made "gate 3" mean opposite things — a price
+ * check vs. dedup — depending on which document a reader carried across a
+ * boundary. Resolved by naming first everywhere outside this file.
+ *
  * The first two gates read as one word and are two different questions:
  * `staleness` bounds how old our DECISION is, `stale_feed` (#641) bounds how
  * old the PRICE is. Neither implies the other.

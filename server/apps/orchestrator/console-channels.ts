@@ -762,7 +762,7 @@ export class LoggingLoosenNotificationChannel implements LoosenNotificationChann
  *
  * There is no human on this channel, so it cannot obtain consent; it can only
  * fabricate it. Auto-approving is therefore a deliberate bypass of Verdict's
- * gate 6, acceptable exactly where the gate is protecting nothing real:
+ * the `hitl` gate (6), acceptable exactly where the gate is protecting nothing real:
  * `paper` and `backtest` spend no money. In `live` it is never acceptable, so
  * the constructor refuses to build one at all rather than resolving
  * `'rejected'` — a channel that rejects everything looks like a working
@@ -809,7 +809,7 @@ export class ConsoleApprovalChannel implements ApprovalChannel {
  * The composition root's default `ApprovalChannel` since ADR-0007 made
  * `automation_level` fully `auto` — and it exists to be **unreachable**.
  *
- * Under `auto`, `shouldEngageHitl` short-circuits to `false` before gate 6, so
+ * Under `auto`, `shouldEngageHitl` short-circuits to `false` before the `hitl` gate (6), so
  * `requestApproval` is never called and no approval transport is needed in any
  * mode. That is why this class, unlike `ConsoleApprovalChannel`, does not
  * refuse to be constructed in `live`: refusing there would block a live start
@@ -827,7 +827,7 @@ export class ConsoleApprovalChannel implements ApprovalChannel {
 export class UnwiredApprovalChannel implements ApprovalChannel {
   async requestApproval(request: ApprovalRequest): Promise<ApprovalOutcome> {
     throw new Error(
-      'Verdict gate 6 was reached, but no ApprovalChannel is wired. Since ADR-0007 the ' +
+      "Verdict's `hitl` gate (6) was reached, but no ApprovalChannel is wired. Since ADR-0007 the " +
         'automation dial is `auto` for both asset classes, under which this gate is ' +
         'unreachable — so reaching it means `verdictConfig.automation_level` was set to ' +
         '`manual` or `semi_auto` without also supplying `ProductionConfig.approvals`. Either ' +

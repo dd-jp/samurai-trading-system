@@ -19,7 +19,7 @@ import type { Logger } from './types.js';
 
 const SEAM_LABEL: Record<ExitValuationDegradedAlert['seam'], string> = {
   risk: 'the Risk stage (sizing and recording the exit)',
-  verdict: "the Verdict stage (gate 5's fire-time breaker re-check)",
+  verdict: 'the Verdict stage (the `breaker` gate, 5, fire-time re-check)',
   // #826 — the exit's OWN mark, one stage earlier than the other two.
   trader: 'the Trader stage (the exited instrument had no mark at all)',
 };

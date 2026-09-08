@@ -662,7 +662,7 @@ interface BreakerStateDeps {
    * Per-tick memo (review 2026-08-06 B4): the Trader computes the portfolio
    * snapshot, Risk reuses it, so both stages size and gate against ONE
    * observation of account state instead of two that can disagree mid-tick.
-   * Verdict never reads this — gate 5's fire-time re-check is specced to see
+   * Verdict never reads this — the `breaker` gate (5)'s fire-time re-check is specced to see
    * current breaker state, not the tick's earlier snapshot (verdict-spec.md).
    * Shared across the trader/risk binds via the composition root's single
    * `breakerStateDeps` object; keyed by `trace_id`, consumed by Risk.
@@ -672,7 +672,7 @@ interface BreakerStateDeps {
    * #841: where an EXIT priced against a partly-valued book is escalated.
    * On `BreakerStateDeps` rather than on `RiskStepDeps` because BOTH tick
    * stages that re-derive the portfolio can hit the condition on the same
-   * tick — Risk when it sizes and records the exit, Verdict when gate 5
+   * tick — Risk when it sizes and records the exit, Verdict when the `breaker` gate (5)
    * re-checks breakers — and a channel on only one of them would leave the
    * other seam silent, which is the hole this alert exists to close.
    *
@@ -852,7 +852,7 @@ async function degradedPortfolioForExit(
  * `computeStrict` is passed in rather than chosen here because the two seams
  * derive the strict view differently BY SPEC: Risk consumes the per-trace
  * memo (B4 — one observation shared with the Trader), Verdict re-derives
- * fresh (gate 5 must see current breaker state). Picking one here would
+ * fresh (the `breaker` gate, 5, must see current breaker state). Picking one here would
  * silently change the other seam's semantics.
  */
 async function snapshotForExit(
@@ -1303,10 +1303,10 @@ export function buildVerdictStep(deps: VerdictStepDeps): TickSteps['verdict'] {
     deps.verdictAlerts === undefined ? logging : new NotifyingVerdict(logging, deps.verdictAlerts);
 
   return async ({ trace_id, risk_decision, clock }) => {
-    // Gate 5's fire-time re-check needs current breaker state, not the
+    // The `breaker` gate (5)'s fire-time re-check needs current breaker state, not the
     // snapshot risk_decision.risk_snapshot carries from Risk's earlier call
     // in this same tick — Verdict may fire enough later for a breaker to
-    // have tripped or cleared in between (verdict-spec.md gate 5).
+    // have tripped or cleared in between (verdict-spec.md's `breaker` gate, 5).
     //
     // #841: the SECOND seam that refused an exit over a book it could not
     // fully value. Fixing only `buildRiskStep` would have left the flatten

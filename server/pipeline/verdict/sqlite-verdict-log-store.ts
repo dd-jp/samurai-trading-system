@@ -29,7 +29,7 @@
  * (live venue state, correctly upserted with `COALESCE()`),
  * `verdict_log` is an audit record of what Verdict actually decided — the
  * row `OrphanVerdictScanner` depends on to know a `go` was ever produced for
- * this `trace_id`. A `DO UPDATE` that let a later call (e.g. gate 5's
+ * this `trace_id`. A `DO UPDATE` that let a later call (e.g. the `breaker` gate, 5,
  * fire-time breaker re-check landing differently the second time) silently
  * replace an original `go` row with a `no_go` one would erase exactly the
  * evidence #302 exists to make visible — reintroducing the hole this ticket
