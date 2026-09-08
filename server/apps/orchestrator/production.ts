@@ -221,6 +221,10 @@ import {
   SqliteTraderLogStore,
 } from '../../shared/store/index.js';
 import { CostModelImpl, SqliteStage2SelectionStore } from '../../tools/backtest/index.js';
+import {
+  DEFAULT_ALERT_DELIVERY_FAILURE_RETENTION_DAYS,
+  SqliteAlertDeliveryLog,
+} from './alert-delivery-log.js';
 import { AnalystSkipKindRelay } from './analysts-decision.js';
 import {
   LoggingAnalystSkipAlertChannel,
@@ -633,6 +637,10 @@ export const ENV_LLM_CALL_LOG_MAX_ROWS = 'SAMURAI_LLM_CALL_LOG_MAX_ROWS';
 /** The variable that overrides the MI archive's retention window (#1060). */
 export const ENV_MI_ARCHIVE_RETENTION_DAYS = 'SAMURAI_MI_ARCHIVE_RETENTION_DAYS';
 
+/** The variable that overrides `alert_delivery_failures`'s retention window (#1131). */
+export const ENV_ALERT_DELIVERY_FAILURE_RETENTION_DAYS =
+  'SAMURAI_ALERT_DELIVERY_FAILURE_RETENTION_DAYS';
+
 /** The variable that overrides how many X posts a sentiment call fetches (#969). */
 export const ENV_X_MAX_SEARCH_RESULTS = 'SAMURAI_X_MAX_RESULTS';
 
@@ -792,6 +800,133 @@ function pruneMiArchiveWithLog(
       message:
         'MI archive purge failed — archived rows are unaffected, but the archive is not bounded ' +
         'until this succeeds',
+      payload: { error: error instanceof Error ? error.message : String(error), trigger },
+    });
+  }
+}
+
+/**
+ * How many days of `alert_delivery_failures` rows to keep on disk (#1131).
+ *
+ * Day window, matching `miArchiveRetentionDaysFromEnvironment`'s reasoning:
+ * this table's growth tracks outage/event frequency, which is genuinely
+ * time-bound, not the cadence-bound growth `llmCallLogMaxRowsFromEnvironment`
+ * guards against with a row ceiling instead.
+ *
+ * `min = 2`, NOT `1` like the two resolvers above. This table also feeds
+ * `countFailures`'s Rail window, and 1 day is exactly that window's 24-hour
+ * `ALERT_DELIVERY_FAILURE_WINDOW_MS`. Two things break at that equality.
+ *
+ * FIRST, with no clock premise at all: `contracts/snapshot.ts`'s
+ * `alert_delivery_failures_24h` doc drops the tile's old lifetime total,
+ * and what makes that defensible is that the same question stays
+ * "answerable over the retention window by reading
+ * `alert_delivery_failures` directly" — bounded by that retention, never a
+ * lifetime. At `retention == window` a row is pruned at about the boundary
+ * the tile clears it, so the raw table no longer outlives the tile and
+ * answers nothing the tile does not already show.
+ *
+ * SECOND is the intuitive reason, and it survives only in a form far
+ * narrower than it is usually stated: "a 1-day retention lets the daily
+ * sweep delete a row the tile is still supposed to count". The prune
+ * deletes `timestamp < T_prune - retention`; the count includes
+ * `timestamp > asOf - window`. At `retention == window` both predicates
+ * hold only for rows in `(asOf - window, T_prune - window)`, an interval
+ * that is non-empty exactly when `T_prune > asOf` — so the claim reduces
+ * to whether a prune can commit after a live request's `asOf`.
+ *
+ * Mostly it cannot. The two boundaries are computed in different processes
+ * but against one host clock, and `service-api`'s `server.ts` passes a
+ * fresh `new Date()` into `buildSnapshot` per request, so a prune that
+ * committed before the request began is already behind that request's
+ * `asOf`. What that call site gives, though, is sample-then-read rather
+ * than read-then-sample: `asOf` is materialised in `server.ts`,
+ * `getAlertDeliveryFailureCount` runs partway down `snapshot.ts`'s
+ * `buildSnapshot`, after other store reads on the same connection, and
+ * nothing spans them — `SqliteDashboardQueryStore` runs each read as its
+ * own prepared statement, with no transaction and therefore no snapshot
+ * isolation. A
+ * prune committing inside THAT gap does have `T_prune > asOf`, and the
+ * rows it removes from the counted window are real.
+ *
+ * So the exposure is the sub-second width of one snapshot build, and it
+ * costs a count only if a failure row happens to be timestamped inside a
+ * band of exactly `window` ago at the moment the once-a-day sweep lands
+ * there. A floor measured in DAYS is not sized against that; FIRST is what
+ * it is sized against, and FIRST is the reason for it. That the floor also
+ * closes the race is a consequence rather than the argument — above
+ * `retention == window` the overlap would need `T_prune > asOf` by the
+ * whole `retention - window` difference, a full day at `min = 2`.
+ *
+ * Given FIRST, 2 is simply the smallest day count strictly above the
+ * 24-hour window; nothing is special about 2 beyond the window's size and
+ * this variable's unit.
+ *
+ * The floor by ITSELF orders nothing. `min = 2` is 48h against today's 24h
+ * window; widen `ALERT_DELIVERY_FAILURE_WINDOW_MS` to 48h and the two become
+ * EQUAL, not ordered. What holds the inequality is a pair of assertions in
+ * `alert-delivery-failure-retention.test.ts`, one per direction: a widened
+ * window fails its `2 days > ALERT_DELIVERY_FAILURE_WINDOW_MS` check (and
+ * the matching one for the 30-day default), a lowered minimum fails its
+ * `'1'`-throws case. Both restate the `2` as their own literal rather than
+ * reading it from this resolver, so they are guards on the two directions,
+ * not a derivation of the bound from this argument.
+ */
+export function alertDeliveryFailureRetentionDaysFromEnvironment(
+  value: string | undefined = process.env[ENV_ALERT_DELIVERY_FAILURE_RETENTION_DAYS],
+): number {
+  return positiveIntegerFromEnv(
+    value,
+    ENV_ALERT_DELIVERY_FAILURE_RETENTION_DAYS,
+    DEFAULT_ALERT_DELIVERY_FAILURE_RETENTION_DAYS,
+    2,
+    "alert_delivery_failures's retention window (#1131), which must stay longer than the " +
+      '24-hour Rail count window or the table stops outliving the tile that reads it',
+  );
+}
+
+/**
+ * Prunes `alert_delivery_failures`, reports what it removed, and never
+ * throws — same posture as `pruneLlmCallLogWithLog`/`pruneMiArchiveWithLog`
+ * and for the same reason: a throw at boot would abort a trading process
+ * over housekeeping, and a throw on the timer would take down the daily
+ * feedback cycle.
+ *
+ * Builds its own `SqliteAlertDeliveryLog` over a freshly-guarded handle
+ * rather than taking one as a parameter: unlike the MI archive (an optional
+ * `ProductionConfig` field, because the deterministic news path can be
+ * omitted), `alert_delivery_failures` is a base table in every shared store,
+ * so there is no "not configured" case to thread through.
+ */
+function pruneAlertDeliveryFailuresWithLog(
+  db: SqliteHandle,
+  retentionDays: number,
+  clock: Clock,
+  logger: Logger,
+  trigger: 'startup' | 'daily',
+): void {
+  try {
+    const cutoff = new Date(clock.now().getTime() - retentionDays * 24 * 60 * 60 * 1000);
+    const deleted = new SqliteAlertDeliveryLog(guardedStore(db, 'orchestrator')).pruneOlderThan(
+      cutoff,
+    );
+    if (deleted === 0) return;
+    logger.log({
+      trace_id: trigger === 'startup' ? 'startup' : 'feedback-cycle',
+      stage: 'orchestrator',
+      level: 'info',
+      message: `pruned alert_delivery_failures rows older than the ${retentionDays}-day retention window`,
+      payload: { deleted, retention_days: retentionDays, trigger },
+    });
+  } catch (error) {
+    logger.log({
+      trace_id: trigger === 'startup' ? 'startup' : 'feedback-cycle',
+      stage: 'orchestrator',
+      event: 'alert_delivery_failure_prune_failed',
+      level: 'warn',
+      message:
+        'alert_delivery_failures prune failed — recorded failures are unaffected, but the table ' +
+        'is not bounded until this succeeds',
       payload: { error: error instanceof Error ? error.message : String(error), trigger },
     });
   }
@@ -1586,6 +1721,21 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    */
   const miArchiveRetentionDays = miArchiveRetentionDaysFromEnvironment();
   pruneMiArchiveWithLog(config.miArchive, miArchiveRetentionDays, clock, logger, 'startup');
+  /**
+   * #1131. Same two-call-site shape as the MI archive purge immediately
+   * above and for the same reason — see `pruneAlertDeliveryFailuresWithLog`
+   * for why this table needs its own retention sweep at all (the Rail tile's
+   * count was previously all-time with no lower bound, and the table itself
+   * had no pruning).
+   */
+  const alertDeliveryFailureRetentionDays = alertDeliveryFailureRetentionDaysFromEnvironment();
+  pruneAlertDeliveryFailuresWithLog(
+    config.db,
+    alertDeliveryFailureRetentionDays,
+    clock,
+    logger,
+    'startup',
+  );
   // `tryNousCredentials` rather than `nousCredentials`: an unconfigured Nous
   // environment degrades this optional stage to no-agent instead of failing
   // the boot, which is how the absent `XAI_API_KEY` behaved before ADR-0009
@@ -3199,6 +3349,8 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
   const llmCallLogMaxRows = llmCallLogMaxRowsFromEnvironment();
   // #1060. Same reasoning, same shape, for the MI archive's 90-day window.
   const miArchiveRetentionDays = miArchiveRetentionDaysFromEnvironment();
+  // #1131. Same reasoning, same shape, for alert_delivery_failures's retention window.
+  const alertDeliveryFailureRetentionDays = alertDeliveryFailureRetentionDaysFromEnvironment();
 
   const runFeedbackCycle = (feedback: FeedbackCycleConfig): void => {
     // #1045, and FIRST — outside the try below, before any of the tuning work.
@@ -3225,6 +3377,15 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     // #1060. Same placement rule applies: outside the try, so a persistently
     // failing feedback cycle cannot silently disable the MI archive's purge.
     pruneMiArchiveWithLog(config.miArchive, miArchiveRetentionDays, clock, logger, 'daily');
+    // #1131. Same placement rule applies: outside the try, so a persistently
+    // failing feedback cycle cannot silently disable alert_delivery_failures's purge.
+    pruneAlertDeliveryFailuresWithLog(
+      config.db,
+      alertDeliveryFailureRetentionDays,
+      clock,
+      logger,
+      'daily',
+    );
 
     try {
       const result = runDailyCycle({

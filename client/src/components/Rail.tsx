@@ -162,7 +162,7 @@ function ProvidersBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
 }
 
 /**
- * #1108: renders only when `alert_delivery_failures` is nonzero — an
+ * #1108: renders only when `alert_delivery_failures_24h` is nonzero — an
  * operator reading the dashboard must be able to tell the alert channel is
  * down, but a healthy channel needs no permanent tile saying so, matching
  * `LiveTickBlock`'s "idle" posture rather than `ProvidersBlock`'s
@@ -176,31 +176,44 @@ function ProvidersBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
  * seconds rather than being the instant it fires — which says nothing about
  * whether the failures it reports were a channel problem, and its silence
  * says nothing at all. This tile never crosses that transport — it reads
- * `alert_delivery_failures` off the wire, itself a plain SQL count — so it
- * is the one place an operator can actually tell.
+ * `alert_delivery_failures_24h` off the wire, itself a plain SQL count — so
+ * it is the one place an operator can actually tell.
  *
- * **Absence of this tile is three states, not one**, and only two are named
- * at boot (`server/apps/service-api/index.ts`): a healthy channel;
- * `log-only`, where nothing is ever sent to mark and 0 is by design (warned
- * at boot); and a service-api `TELEGRAM_CHAT_ID` that is set but does not
- * match the orchestrator's, which is accepted silently, counts a chat
- * nothing wrote to, and so renders as no tile — a false all-clear
- * indistinguishable from health. `types.ts`'s `getAlertDeliveryFailureCount`
- * doc carries the full trace; #1130 documents this rather than fixing it.
+ * **Absence of this tile is three CONFIGURATION states, not one**, and only
+ * two are named at boot (`server/apps/service-api/index.ts`): a
+ * healthy-or-quiet channel; `log-only`, where nothing is ever sent to mark
+ * and 0 is by design (warned at boot); and a service-api `TELEGRAM_CHAT_ID`
+ * that is set but does not match the orchestrator's, which is accepted
+ * silently, counts a chat nothing wrote to, and so renders as no tile — a
+ * false all-clear indistinguishable from health. `types.ts`'s
+ * `getAlertDeliveryFailureCount` doc carries the full trace; #1130 documents
+ * this rather than fixing it.
  *
- * The count shown here is all-time across every run, while the Telegram
- * notice quotes an in-process count for the current run — two numbers for
- * one incident, so a nonzero tile may be an old transient failure rather
- * than a live outage.
+ * WINDOWED, NOT ALL-TIME (#1131). This used to count every row ever recorded,
+ * so a single transient failure left the tile reading "degraded" forever —
+ * no way to tell a live outage from a resolved blip from weeks ago. The wire
+ * field now trails 24 hours and self-clears once the channel has been quiet
+ * that long (see `alert-delivery-log.ts`'s `ALERT_DELIVERY_FAILURE_WINDOW_MS`
+ * for why 24h specifically). The Telegram "channel degraded" notice above
+ * still quotes a SEPARATE in-process count that resets with the server
+ * process — the two remain different denominators for the same incident, not
+ * duplicates, and the notice's own text says so.
+ *
+ * A windowed nonzero reading still does not prove the channel is down RIGHT
+ * NOW, only that a send failed within the last day — and the "healthy" state
+ * above does not prove the opposite either: a row is written only when a
+ * send is attempted, so a quiet system with nothing to escalate reads 0 even
+ * against a channel that has been dead the whole time. This tile answers "a
+ * failure was observed recently", never "the channel is currently reachable".
  */
 function AlertDeliveryBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
-  const count = snapshot?.alert_delivery_failures ?? 0;
+  const count = snapshot?.alert_delivery_failures_24h ?? 0;
   if (count === 0) return null;
   return (
     <div className="rail-block rail-alert-degraded" data-field="alert-delivery-failures">
       <span className="label">Alert channel</span>
       <span className="rail-value" data-alert-degraded="true">
-        {count} alert{count === 1 ? '' : 's'} failed to deliver
+        {count} alert{count === 1 ? '' : 's'} failed to deliver in the last 24h
       </span>
     </div>
   );

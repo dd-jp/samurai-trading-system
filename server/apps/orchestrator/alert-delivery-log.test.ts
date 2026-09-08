@@ -5,7 +5,11 @@
 import type { SharedStore } from '../../shared/store/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { fromStoredTimestamp } from '../../shared/store/sqlite-utils.js';
-import { type AlertDeliveryFailure, SqliteAlertDeliveryLog } from './alert-delivery-log.js';
+import {
+  ALERT_DELIVERY_FAILURE_WINDOW_MS,
+  type AlertDeliveryFailure,
+  SqliteAlertDeliveryLog,
+} from './alert-delivery-log.js';
 
 const ASOF = new Date('2026-09-04T15:00:00Z');
 const ALERT_CHAT_ID = '-100200300';
@@ -60,6 +64,9 @@ describe('SqliteAlertDeliveryLog', () => {
     expect(log.countFailures(ASOF, HEARTBEAT_CHAT_ID)).toBe(1);
   });
 
+  // Pins the UPPER bound specifically — #1131 adds a lower bound alongside
+  // this one, so this test alone no longer proves `countFailures` is
+  // bounded at all; the window tests below pin the lower bound.
   it('excludes rows recorded after asOf', () => {
     const { log } = makeStore();
 
@@ -67,6 +74,42 @@ describe('SqliteAlertDeliveryLog', () => {
     log.recordFailure(failure({ timestamp: new Date('2026-09-04T16:00:00Z') }));
 
     expect(log.countFailures(ASOF, ALERT_CHAT_ID)).toBe(1);
+  });
+
+  // #1131: the count used to have no lower bound at all, so a failure from
+  // months ago counted toward "is the alert channel down" forever. These pin
+  // the trailing-window lower bound that fixes that — mutate the bound away
+  // (drop the `timestamp > ?` clause) and the first assertion here goes red.
+  describe('windowing (#1131)', () => {
+    it('excludes a row older than the trailing window', () => {
+      const { log } = makeStore();
+      const justOutside = new Date(ASOF.getTime() - ALERT_DELIVERY_FAILURE_WINDOW_MS - 1);
+
+      log.recordFailure(failure({ timestamp: justOutside }));
+
+      expect(log.countFailures(ASOF, ALERT_CHAT_ID)).toBe(0);
+    });
+
+    it('includes a row just inside the trailing window', () => {
+      const { log } = makeStore();
+      const justInside = new Date(ASOF.getTime() - ALERT_DELIVERY_FAILURE_WINDOW_MS + 1);
+
+      log.recordFailure(failure({ timestamp: justInside }));
+
+      expect(log.countFailures(ASOF, ALERT_CHAT_ID)).toBe(1);
+    });
+
+    it('self-clears: a failure ages out of the count as `asOf` advances past the window, with no delete', () => {
+      const { log } = makeStore();
+      const failedAt = new Date('2026-09-04T14:00:00Z');
+      log.recordFailure(failure({ timestamp: failedAt }));
+
+      const stillWithinWindow = new Date(failedAt.getTime() + ALERT_DELIVERY_FAILURE_WINDOW_MS - 1);
+      const pastWindow = new Date(failedAt.getTime() + ALERT_DELIVERY_FAILURE_WINDOW_MS + 1);
+
+      expect(log.countFailures(stillWithinWindow, ALERT_CHAT_ID)).toBe(1);
+      expect(log.countFailures(pastWindow, ALERT_CHAT_ID)).toBe(0);
+    });
   });
 
   it('answers the count of the 2026-09-04 session-style burst — ten failed sends', () => {
@@ -141,5 +184,43 @@ describe('SqliteAlertDeliveryLog', () => {
     expect(row?.body).toBe(entry.body);
     expect(row?.error).toBe(entry.error);
     expect(fromStoredTimestamp(row?.timestamp ?? '')).toEqual(entry.timestamp);
+  });
+
+  // #1131: mirrors mi-archive-store.test.ts's coverage of
+  // `MiArchiveStore.purgeOlderThan`, the pattern this method copies.
+  describe('pruneOlderThan (#1131)', () => {
+    it('deletes rows strictly older than cutoff and returns the count removed', () => {
+      const { log, db } = makeStore();
+      log.recordFailure(failure({ timestamp: new Date('2026-08-01T00:00:00.000Z') }));
+      log.recordFailure(failure({ timestamp: new Date('2026-08-02T00:00:00.000Z') }));
+      log.recordFailure(failure({ timestamp: new Date('2026-09-04T00:00:00.000Z') }));
+
+      const removed = log.pruneOlderThan(new Date('2026-08-15T00:00:00.000Z'));
+
+      expect(removed).toBe(2);
+      const remaining = db.prepare('SELECT COUNT(*) AS n FROM alert_delivery_failures').get() as {
+        n: number;
+      };
+      expect(remaining.n).toBe(1);
+    });
+
+    it('keeps a row exactly at cutoff (strictly-older, not older-or-equal)', () => {
+      const { log, db } = makeStore();
+      const cutoff = new Date('2026-08-15T00:00:00.000Z');
+      log.recordFailure(failure({ timestamp: cutoff }));
+
+      const removed = log.pruneOlderThan(cutoff);
+
+      expect(removed).toBe(0);
+      const remaining = db.prepare('SELECT COUNT(*) AS n FROM alert_delivery_failures').get() as {
+        n: number;
+      };
+      expect(remaining.n).toBe(1);
+    });
+
+    it('is a no-op returning 0 on an empty table', () => {
+      const { log } = makeStore();
+      expect(log.pruneOlderThan(new Date('2026-09-04T00:00:00.000Z'))).toBe(0);
+    });
   });
 });

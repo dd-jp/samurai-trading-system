@@ -285,12 +285,29 @@ export interface DashboardQueryStore {
   getPipelineActivity(maxLanes: number, lookbackMs: number, asOf: Date): PipelineActivity;
   /**
    * Count of alert sends to the ESCALATION chat recorded in
-   * `alert_delivery_failures` up to `asOf` (#1108) — same relationship to
-   * that table `getLlmSpend` has to `llm_spend`: written by another
-   * component (the Telegram client), read here. All-time from the lower
-   * bound (the table carries no retention window), `asOf`-bounded above like
-   * every other reader here, so a replay against an older snapshot cannot
-   * see a failure that hadn't happened yet.
+   * `alert_delivery_failures` in the TRAILING 24 HOURS as of `asOf` (#1108,
+   * windowed by #1131) — same relationship to that table `getLlmSpend` has to
+   * `llm_spend`: written by another component (the Telegram client), read
+   * here. `asOf`-bounded above like every other reader here, so a replay
+   * against an older snapshot cannot see a failure that hadn't happened yet.
+   *
+   * WINDOWED, NOT ALL-TIME (#1131). This used to be an unbounded-below count,
+   * so one transient failure made the tile read "degraded" forever with no
+   * way to tell it from a live outage. The 24-hour window
+   * (`alert-delivery-log.ts`'s `ALERT_DELIVERY_FAILURE_WINDOW_MS`) is sized
+   * against the mechanism: a row here is written only when an
+   * escalation-chat send exhausts retries, escalations fire across roughly
+   * twenty pipeline channels with no rate floor between them, and the window
+   * has to outlast the expected gap between escalations or a live outage's
+   * only evidence would age out during a quiet stretch. The lifetime total
+   * this used to also expose is dropped from the wire (nothing consumed it),
+   * recoverable over the table's (env-configurable, default 30-day)
+   * retention window by reading it directly — bounded by that retention,
+   * never a lifetime — which is why that retention is floored at 2 days
+   * rather than 1, and why the floor's
+   * standing above this window is pinned by
+   * `alert-delivery-failure-retention.test.ts` rather than implied by the
+   * floor's value.
    *
    * Scoped to the chat `alert-transport.ts` reads `TELEGRAM_CHAT_ID` into
    * (#1108 third review pass): the table also durably records heartbeat-chat
@@ -308,6 +325,15 @@ export interface DashboardQueryStore {
    * Only this tile answers regardless, because it is a plain SQL read of a
    * durable table, crossing no live transport at read time.
    *
+   * **What a 0 does NOT prove, even now that the count is windowed.** A row
+   * is written only when a send is ATTEMPTED and exhausts retries — no
+   * attempt means no row, windowed or not. A quiet system with nothing worth
+   * escalating in the last 24 hours reports 0 even if the channel is
+   * completely dead, because nothing has tried to use it recently. So a 0
+   * here means "no failed attempt observed in the trailing window", not "the
+   * channel is confirmed reachable" — narrower than it may read at a glance,
+   * and the windowing does not close this gap, only the "forever" one.
+   *
    * **The precondition, and what violating it looks like (#1130 review
    * round 1).** This count is only as good as this process's own
    * `TELEGRAM_CHAT_ID` (`server/apps/service-api/index.ts`, which reads and
@@ -315,13 +341,15 @@ export interface DashboardQueryStore {
    * That process warns at boot when the var is UNSET; a set-but-WRONG value
    * is accepted silently, this method then filters on a chat nothing ever
    * wrote to, and returns 0. `Rail.tsx`'s `AlertDeliveryBlock` renders
-   * nothing at 0, so the tile is ABSENT — byte-identical to a healthy
-   * channel.
+   * nothing at 0, so the tile is ABSENT — byte-identical to a healthy or
+   * merely-quiet channel.
    *
-   * Tile absence is therefore three states, and only two are named at boot:
-   * healthy, `log-only` (warned, and 0 by design there — nothing is ever
-   * sent to mark), and chat-mismatch (silent). Since #1130 makes this tile
-   * the sole channel-down surface, that third state is a silent false
+   * Tile absence is therefore three CONFIGURATION states, and only two are
+   * named at boot: healthy-or-quiet (see the "what a 0 does NOT prove"
+   * paragraph above — this state itself does not distinguish healthy from
+   * dead-but-unused), `log-only` (warned, and 0 by design there — nothing is
+   * ever sent to mark), and chat-mismatch (silent). Since #1130 makes this
+   * tile the sole channel-down surface, that third state is a silent false
    * all-clear. It is documented here, not mitigated — index.ts's
    * boot-warning block carries the local signal that could detect it, and
    * the three reasons #1130 still declines to build the detector.

@@ -739,9 +739,15 @@ export class TelegramBotApiClient implements TelegramClient {
    * The two numbers have different denominators, and the sent text below
    * says so rather than leaving an operator to reconcile them. This
    * method's `#deliveryFailureCount` is in-process and resets with the
-   * process; the tile counts rows all-time (`alert-delivery-log.ts`'s
-   * `countFailures` bounds `timestamp` above by `asOf` and not at all
-   * below), so a nonzero tile can be a transient failure from weeks ago.
+   * process; the tile counts rows in the TRAILING 24 HOURS
+   * (`alert-delivery-log.ts`'s `countFailures`, windowed by #1131 — it used
+   * to bound `timestamp` only above by `asOf`, so a nonzero tile could be a
+   * transient failure from weeks ago that never cleared). The window means
+   * the tile now self-clears once the channel has been quiet for a day, but
+   * it still is not the same count as the one above: this run's total can
+   * exceed the windowed tile (an earlier failure in this same run already
+   * aged out), or fall short of it (a previous run's failures are still
+   * inside the window).
    *
    * `error: detail` in the `#log` payload below is masked centrally by
    * `formatLogLine`'s `redactPayload` walk — but `message` is a plain string
@@ -801,7 +807,7 @@ export class TelegramBotApiClient implements TelegramClient {
           'run to tens of seconds, not a single instant, and it does not mean the failures were ' +
           'something other than a channel problem, and a notice you never receive tells you ' +
           'nothing either way. The dashboard alert-channel tile is the durable record: it ' +
-          'counts alert_delivery_failures rows for this chat all-time, across every run, so ' +
+          'counts alert_delivery_failures rows for this chat in the trailing 24 hours, so ' +
           'its number is a different denominator from the one above.',
       }).catch((escalationError: unknown) => {
         // Same reason `detail` above is wrapped: this escalation send itself

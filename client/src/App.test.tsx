@@ -345,10 +345,14 @@ describe('rail', () => {
   });
 
   // #1108: silence must not read as calm — the rail names the count instead.
-  it('surfaces a nonzero alert_delivery_failures count as a degraded channel', async () => {
-    renderApp([makeSnapshot({ alert_delivery_failures: 4 })]);
+  // #1131: the field and its rendered text both name the 24h window now, so
+  // the tile itself does not overclaim a lifetime total.
+  it('surfaces a nonzero alert_delivery_failures_24h count as a degraded channel', async () => {
+    renderApp([makeSnapshot({ alert_delivery_failures_24h: 4 })]);
     const rail = screen.getByRole('complementary', { name: 'Rail' });
-    expect(await within(rail).findByText('4 alerts failed to deliver')).toBeTruthy();
+    expect(
+      await within(rail).findByText('4 alerts failed to deliver in the last 24h'),
+    ).toBeTruthy();
   });
 });
 

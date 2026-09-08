@@ -644,20 +644,54 @@ export interface DashboardSnapshot {
   outside_benchmarks: OutsideBenchmarkRow[];
   /**
    * Count of alert sends TO THE ESCALATION CHAT that exhausted retry and
-   * were durably recorded in `alert_delivery_failures` (#1108) — the answer
-   * to "is the alert channel down", so an operator reads a number instead of
-   * reading silence as calm. All-time, not windowed: the table has no
-   * retention policy yet, and a nonzero count is meant to stay visible until
-   * someone looks.
+   * were durably recorded in `alert_delivery_failures` in the TRAILING 24
+   * HOURS (#1108, windowed by #1131) — the answer to "is the alert channel
+   * down", so an operator reads a number instead of reading silence as calm.
+   *
+   * WINDOWED, NOT ALL-TIME (#1131). An earlier version of this field was an
+   * unbounded-below count, so a single transient failure made the tile read
+   * "degraded" forever with no way to tell it apart from a live outage. 24
+   * hours is chosen against the mechanism, not copied from another field's
+   * window: a row is written only when an escalation-chat send exhausts
+   * retries, escalations fire across roughly twenty pipeline channels with no
+   * rate floor between them, and the window has to outlast the expected gap
+   * between escalations or a live outage's evidence would age out during a
+   * quiet stretch. The trade is that one resolved blip can stay visible for
+   * up to a day — see `alert-delivery-log.ts`'s `ALERT_DELIVERY_FAILURE_WINDOW_MS`
+   * for the full reasoning.
+   *
+   * The lifetime total this field previously exposed is DROPPED, not moved
+   * elsewhere on the wire: nothing consumed it, and keeping a second,
+   * un-windowed number beside this one would risk exactly the
+   * claim-stronger-than-mechanism failure #1299's review rounds were hunting
+   * for. The same question is still answerable over the retention window by
+   * reading `alert_delivery_failures` directly (`alert-delivery-log.ts`'s
+   * `pruneOlderThan`, default 30-day retention) — bounded by that retention,
+   * never a lifetime, and at the 2-day floor exactly 24 hours more than this
+   * field. That reconstruction is
+   * WHY the retention floor is 2 days and not 1: at `retention == window`
+   * the table would stop outliving this field, and dropping the lifetime
+   * total here would be dropping it outright. The ordering is not a
+   * property of the floor on its own — 2 days is 48h against a 24h window,
+   * and a later widening of `ALERT_DELIVERY_FAILURE_WINDOW_MS` past 48h
+   * would make them equal. `alert-delivery-failure-retention.test.ts` holds
+   * it, one assertion per direction; see
+   * `alertDeliveryFailureRetentionDaysFromEnvironment` in `production.ts`
+   * for the whole argument.
    *
    * Scoped to the escalation chat (`TELEGRAM_CHAT_ID`), not every row in the
    * table (#1108 third review pass): the same table durably records
    * heartbeat-chat delivery failures too (#342's isolation), and those would
    * otherwise falsely degrade a tile that is specifically about the
    * escalation channel. 0 when the escalation chat is not configured (no
-   * known channel to answer the question about), not the unfiltered total.
+   * known channel to answer the question about), not the unfiltered total —
+   * and see `types.ts`'s `getAlertDeliveryFailureCount` doc for the full
+   * trace of what a 0 or an absent tile can and cannot mean, including the
+   * case this window adds: a quiet system with nothing worth escalating
+   * reports 0 even if the channel is completely dead, because no send was
+   * attempted against it recently.
    */
-  alert_delivery_failures: number;
+  alert_delivery_failures_24h: number;
   /**
    * Third-party provider tiles. Three providers, three different realities,
    * and the shapes differ because the underlying facts do rather than for
