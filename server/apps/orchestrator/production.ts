@@ -818,12 +818,13 @@ function pruneMiArchiveWithLog(
  * `ALERT_DELIVERY_FAILURE_WINDOW_MS`. Two things break at that equality.
  *
  * FIRST, with no clock premise at all: `contracts/snapshot.ts`'s
- * `alert_delivery_failures_24h` doc drops the tile's old lifetime total on
- * the stated grounds that it "remains reconstructable for as long as
- * retention holds by reading `alert_delivery_failures` directly". At
- * `retention == window` a row is pruned at about the boundary the tile
- * clears it, so the raw table no longer outlives the tile and there is
- * nothing left to reconstruct from.
+ * `alert_delivery_failures_24h` doc drops the tile's old lifetime total,
+ * and what makes that defensible is that the same question stays
+ * "answerable over the retention window by reading
+ * `alert_delivery_failures` directly" — bounded by that retention, never a
+ * lifetime. At `retention == window` a row is pruned at about the boundary
+ * the tile clears it, so the raw table no longer outlives the tile and
+ * answers nothing the tile does not already show.
  *
  * SECOND is the intuitive reason, and it survives only in a form far
  * narrower than it is usually stated: "a 1-day retention lets the daily

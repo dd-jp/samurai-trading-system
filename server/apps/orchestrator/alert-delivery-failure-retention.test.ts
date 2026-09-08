@@ -61,10 +61,11 @@ describe('alertDeliveryFailureRetentionDaysFromEnvironment', () => {
   // #1131's load-bearing bound: unlike the MI archive and llm_call_log
   // resolvers (both `min = 1`), this one refuses 1 as well as 0. A 1-day
   // retention is exactly the 24h Rail window, and at that equality the raw
-  // table stops outliving the tile — so the lifetime total
-  // `contracts/snapshot.ts` dropped as "reconstructable ... by reading
-  // `alert_delivery_failures` directly" would be reconstructable from
-  // nothing. `alertDeliveryFailureRetentionDaysFromEnvironment`'s doc
+  // table stops outliving the tile — so the raw-table read
+  // `contracts/snapshot.ts` leaves in place of the lifetime total it
+  // dropped, "answerable over the retention window by reading
+  // `alert_delivery_failures` directly", would answer nothing the tile does
+  // not already show. `alertDeliveryFailureRetentionDaysFromEnvironment`'s doc
   // carries the full argument, including why the INTUITIVE reason for this
   // floor — that a 1-day sweep would delete a row the tile still counts —
   // is far too narrow to be the one: the two predicates overlap only for a
