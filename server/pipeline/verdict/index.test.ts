@@ -1181,7 +1181,7 @@ describe('VerdictImpl.decide — stale AND unpriced mandatory flatten (#826, #89
     };
   }
 
-  it('is not refused for staleness, stale_feed, or drift', async () => {
+  it('is not refused for staleness or stale_feed when the mark itself is stale', async () => {
     const verdict = new VerdictImpl();
     const stale = makeMarketData(makeMark({ observed_at: new Date(NOW.getTime() - 60 * 60_000) }));
     const input = makeInput({
@@ -1194,6 +1194,29 @@ describe('VerdictImpl.decide — stale AND unpriced mandatory flatten (#826, #89
 
     expect(decision.no_go_reason).not.toBe('staleness');
     expect(decision.no_go_reason).not.toBe('stale_feed');
+    expect(decision.status).toBe('go');
+  });
+
+  /**
+   * A stale mark trips `stale_feed` first inside `#priceGates`, so it can
+   * never reach the `drift` branch — that made the third name in the
+   * original single-case version of this test unfalsifiable. This fixture
+   * uses a fresh mark instead, with the entry an unpriced flatten always
+   * carries (0), which is exactly what would trip `drift`'s
+   * `!(entry > 0)` guard (`#priceGates`, below the `stale_feed` check) if
+   * #826 did not skip `#priceGates` for this intent outright.
+   */
+  it('is not refused for drift when the mark is fresh but the intent carries no entry price', async () => {
+    const verdict = new VerdictImpl();
+    const fresh = makeMarketData(makeMark({ observed_at: NOW }));
+    const input = makeInput({
+      risk_decision: makeRiskDecision({ order_intent: staleUnpricedFlatten() }),
+      config: makeConfig({ automation_level: { crypto: 'auto', stocks: 'auto' } }),
+      marketData: fresh,
+    });
+
+    const decision = await verdict.decide(input);
+
     expect(decision.no_go_reason).not.toBe('drift');
     expect(decision.status).toBe('go');
   });

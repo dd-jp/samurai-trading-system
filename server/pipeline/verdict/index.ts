@@ -47,14 +47,13 @@
  * Neither marker is derivable from the clock or from `intent_type`; both are
  * set at the single Trader site that constructs an exit (`buildFlattenExit`)
  * — the only PRODUCTION-code site that constructs one. The smoke harness's
- * `exitPathOrder` (`apps/orchestrator/smoke-run.ts`) is a second producer of
+ * `exitPathOrder` (`server/apps/orchestrator/smoke-run.ts`) is a second producer of
  * an exit intent this stage sees: it builds one with `exit_reason: 'flatten'`
  * and neither marker, and drives it through this same `VerdictImpl` via
- * `exitPathVerdict`. Benign — that intent carries a real bracket (a live
- * fixture mark, not zeros) and a fresh `decision_timestamp`, so every gate
- * runs on it and it clears them on its own merits, exempted by none of them;
- * the claim above is about production code, not about every caller of
- * `decide`.
+ * `exitPathVerdict`. Benign — that intent carries a real, non-zero bracket
+ * and a fresh `decision_timestamp`, so every gate runs on it and it clears
+ * them on its own merits, exempted by none of them; the claim above is about
+ * production code, not about every caller of `decide`.
  *
  * THE TWO STACK, ONE WAY. `unpriced_exit` is reachable only on that site's
  * `exit_reason: 'flatten'` branch, and `exit_reason: 'flatten'` alone is what
