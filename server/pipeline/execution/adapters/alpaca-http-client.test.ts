@@ -625,6 +625,62 @@ describe('AlpacaHttpBrokerClient', () => {
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  // #1275: a timeout abort was retried unconditionally regardless of verb —
+  // the sole guard against retrying a lost placement response was
+  // `submitOrder`'s own `maxAttempts: 1` override. This end-to-end pair pins
+  // the fix, but — same caveat `saxo-http-client.test.ts` documents for
+  // `placeOrder` — the submitOrder test below does NOT by itself catch a
+  // classifier regression: `maxAttempts: 1` pins it to one attempt regardless
+  // of what `isRetryableAlpacaBrokerError` answers (confirmed by mutation —
+  // reverting `isRetrySafeAlpacaMethod` to always `true` leaves this test
+  // green). The classification-level guarantee is proven in isolation by
+  // `alpaca-broker-errors.test.ts`'s "timeout/rate-limit/5xx retryability is
+  // verb-aware" suite, which DOES fail under that same mutation.
+  describe('timeout retryability is verb-aware (#1275)', () => {
+    it('does NOT retry a timeout on submitOrder (a POST), even with attempts to spare', async () => {
+      const fetchMock = vi
+        .fn()
+        .mockRejectedValue(new DOMException('The operation was aborted', 'TimeoutError'));
+      vi.stubGlobal('fetch', fetchMock);
+
+      const client = new AlpacaHttpBrokerClient({
+        apiKey: FAKE_KEY,
+        apiSecret: FAKE_SECRET,
+        retry: { maxAttempts: 5, baseDelayMs: 10, maxDelayMs: 100 },
+      });
+
+      await expect(client.submitOrder(ORDER_REQUEST)).rejects.toMatchObject({
+        name: 'AlpacaBrokerTimeoutError',
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    // The mirror case: cancelOrder has no `maxAttempts: 1` override, so this
+    // one DOES exercise the classifier end to end — `cancelOrder` already
+    // normalizes every terminal outcome to "nothing working under this id
+    // any more" (204/404/422), so repeating it lands on that same
+    // normalization rather than mutating anything a first cancel did not.
+    it('DOES retry a timeout on cancelOrder (a DELETE)', async () => {
+      const fetchMock = vi
+        .fn()
+        .mockRejectedValueOnce(new DOMException('The operation was aborted', 'TimeoutError'))
+        .mockResolvedValueOnce({ ok: true, status: 204 } as Response);
+      vi.stubGlobal('fetch', fetchMock);
+
+      const client = new AlpacaHttpBrokerClient({
+        apiKey: FAKE_KEY,
+        apiSecret: FAKE_SECRET,
+        timeoutMs: 500,
+        retry: { maxAttempts: 3, baseDelayMs: 10, maxDelayMs: 100 },
+      });
+
+      const promise = client.cancelOrder('alpaca-order-1');
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(promise).resolves.toBeUndefined();
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+  });
 });
 
 /**
