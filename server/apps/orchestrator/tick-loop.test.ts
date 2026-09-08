@@ -1,3 +1,4 @@
+import { PIPELINE_STAGES } from '../../../contracts/pipeline.js';
 import type { Signal } from '../../pipeline/analysts/index.js';
 import type { Clock, OrderIntent } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
@@ -687,6 +688,192 @@ describe('runTickPlan', () => {
       expect(auditLog.records[0]?.input_digest.length).toBeGreaterThan(0);
       expect(typeof auditLog.records[0]?.output_digest).toBe('string');
       expect(auditLog.records[0]?.output_digest.length).toBeGreaterThan(0);
+    });
+
+    // #1380: `tick-runner.ts`'s `markStage` upserts `current_tick` BEFORE each
+    // stage's step function runs, and a crash mid-stage never reaches the
+    // matching `delete` — so the row left behind names exactly the stage the
+    // pass was in when it threw. Before this, the crash record always read
+    // `stage: 'tick-loop'` regardless of where the throw happened (11 of 51
+    // live-arm passes in the 2026-09-08 soak, every one an escaped
+    // `LlmTimeoutError` from the debate stage, all attributed the same
+    // way — nowhere).
+    it('names the pipeline stage the crashed pass was in, read off current_tick', async () => {
+      const auditLog: AuditLog & { records: Parameters<AuditLog['record']>[0][] } = {
+        records: [],
+        record(entry) {
+          this.records.push(entry);
+        },
+      };
+      const currentTickStore = makeCurrentTickStore();
+      const runner: TickRunner = {
+        async runInstrument(signal, ctx): Promise<TickOutcome> {
+          if (signal.asset === 'QQQ') {
+            ctx.currentTickStore.upsert({
+              instrument: signal.asset,
+              asset_class: signal.asset_class,
+              stage: 'debate',
+              trace_id: ctx.trace_id,
+              updated_at: ctx.clock.now(),
+            });
+            throw new Error('debate exploded');
+          }
+          return { trace_id: ctx.trace_id, final_stage: 'execution' };
+        },
+      };
+
+      await runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
+        max_concurrent_instruments: 2,
+        newTraceId: countingTraceIds(),
+        logger: LOGGER,
+        auditLog,
+        currentTickStore,
+        decisionGate: new DebateBarDecisionGate(),
+      });
+
+      expect(auditLog.records).toHaveLength(1);
+      // Prefixed rather than bare `'debate'`: the dashboard's live-lane query
+      // (`sqlite-query-store.ts`) filters `stage IN (…PIPELINE_STAGES)`, and a
+      // crash row is not a completed stage — folding it into that six-stage
+      // set is a rendering change this ticket does not make. Prefixing with
+      // the pre-existing `tick-loop` sentinel keeps this row provably outside
+      // that filter's match set while still naming the real `TickStage`.
+      expect(auditLog.records[0]?.stage).toBe('tick-loop:debate');
+      expect(auditLog.records[0]?.decision).toBe('crashed');
+    });
+
+    it('never writes a bare PIPELINE_STAGES value as the crash stage', async () => {
+      const auditLog: AuditLog & { records: Parameters<AuditLog['record']>[0][] } = {
+        records: [],
+        record(entry) {
+          this.records.push(entry);
+        },
+      };
+      const runner: TickRunner = {
+        async runInstrument(signal, ctx): Promise<TickOutcome> {
+          if (signal.asset === 'QQQ') {
+            ctx.currentTickStore.upsert({
+              instrument: signal.asset,
+              asset_class: signal.asset_class,
+              stage: 'trader',
+              trace_id: ctx.trace_id,
+              updated_at: ctx.clock.now(),
+            });
+            throw new Error('trader exploded');
+          }
+          return { trace_id: ctx.trace_id, final_stage: 'execution' };
+        },
+      };
+
+      await runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
+        max_concurrent_instruments: 2,
+        newTraceId: countingTraceIds(),
+        logger: LOGGER,
+        auditLog,
+        currentTickStore: makeCurrentTickStore(),
+        decisionGate: new DebateBarDecisionGate(),
+      });
+
+      const crashStage = auditLog.records[0]?.stage;
+      expect(crashStage).toBeDefined();
+      expect(PIPELINE_STAGES).not.toContain(crashStage);
+    });
+
+    it('includes the crashed stage on the structured log line, not only the audit row', async () => {
+      const logger: Logger & { entries: Parameters<Logger['log']>[0][] } = {
+        entries: [],
+        log(entry) {
+          this.entries.push(entry);
+        },
+      };
+      const runner: TickRunner = {
+        async runInstrument(signal, ctx): Promise<TickOutcome> {
+          if (signal.asset === 'QQQ') {
+            ctx.currentTickStore.upsert({
+              instrument: signal.asset,
+              asset_class: signal.asset_class,
+              stage: 'debate',
+              trace_id: ctx.trace_id,
+              updated_at: ctx.clock.now(),
+            });
+            throw new Error('debate exploded');
+          }
+          return { trace_id: ctx.trace_id, final_stage: 'execution' };
+        },
+      };
+
+      await runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
+        max_concurrent_instruments: 2,
+        newTraceId: countingTraceIds(),
+        logger,
+        auditLog: makeAuditLog(),
+        currentTickStore: makeCurrentTickStore(),
+        decisionGate: new DebateBarDecisionGate(),
+      });
+
+      const failureEntry = logger.entries.find((entry) => entry.event === 'instrument_pass_failed');
+      expect(failureEntry?.payload).toMatchObject({ stage: 'debate' });
+    });
+
+    it('falls back to the pre-#1380 bare stage when current_tick has no row for the instrument', async () => {
+      const auditLog: AuditLog & { records: Parameters<AuditLog['record']>[0][] } = {
+        records: [],
+        record(entry) {
+          this.records.push(entry);
+        },
+      };
+      const runner: TickRunner = {
+        async runInstrument(signal): Promise<TickOutcome> {
+          if (signal.asset === 'QQQ') throw new Error('exploded before any markStage');
+          return { trace_id: 'trace-1', final_stage: 'execution' };
+        },
+      };
+
+      await runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
+        max_concurrent_instruments: 2,
+        newTraceId: countingTraceIds(),
+        logger: LOGGER,
+        auditLog,
+        currentTickStore: makeCurrentTickStore(),
+        decisionGate: new DebateBarDecisionGate(),
+      });
+
+      expect(auditLog.records[0]?.stage).toBe('tick-loop');
+    });
+
+    it('does not let a current_tick read failure crash the worker — falls back to the bare stage', async () => {
+      const auditLog: AuditLog & { records: Parameters<AuditLog['record']>[0][] } = {
+        records: [],
+        record(entry) {
+          this.records.push(entry);
+        },
+      };
+      const throwingStore: CurrentTickStore = {
+        upsert: () => {},
+        delete: () => {},
+        get: () => {
+          throw new Error('SQLITE_BUSY: database is locked');
+        },
+      };
+      const runner: TickRunner = {
+        async runInstrument(signal, ctx): Promise<TickOutcome> {
+          if (signal.asset === 'QQQ') throw new Error('debate exploded');
+          return { trace_id: ctx.trace_id, final_stage: 'execution' };
+        },
+      };
+
+      const outcomes = await runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
+        max_concurrent_instruments: 2,
+        newTraceId: countingTraceIds(),
+        logger: LOGGER,
+        auditLog,
+        currentTickStore: throwingStore,
+        decisionGate: new DebateBarDecisionGate(),
+      });
+
+      expect(outcomes[1]).toEqual({ trace_id: 'trace-2', error: 'debate exploded' });
+      expect(outcomes[0]).toEqual({ trace_id: 'trace-1', final_stage: 'execution' });
+      expect(auditLog.records[0]?.stage).toBe('tick-loop');
     });
 
     it('does not write an audit_log record for an instrument that succeeds', async () => {

@@ -20,7 +20,9 @@
  * manually by the backtest harness and never fires on its own, so it cannot
  * drive a race against real elapsed time. Tests use `vi.useFakeTimers()`.
  */
+import { describeThrownSafely } from '../../shared/index.js';
 import type { DebateLogger } from './debate-logger.js';
+import { LlmTimeoutError } from './llm/errors.js';
 import type { AssetClass } from './rate-limiter.js';
 import { MAX_ROUNDS } from './round-orchestrator.js';
 import type { DebateResult, Direction } from './types.js';
@@ -107,6 +109,17 @@ export class DebateBudgetExceededError extends Error {
 }
 
 /**
+ * The three ways the race below can settle. `llm_failed` is #1380's addition
+ * — a rejection `produceResult` handed back before the budget timer fired,
+ * narrowed to `LlmTimeoutError` at the `.then` rejection handler so only that
+ * class is absorbed here (see the comment there for why).
+ */
+type RaceOutcome =
+  | { status: 'completed'; result: DebateResult }
+  | { status: 'timed_out' }
+  | { status: 'llm_failed'; error: LlmTimeoutError };
+
+/**
  * Races `produceResult` against the asset class's hard budget. On timeout,
  * builds a `DebateResult` from `getCurrentState()` (or the low-confidence
  * fallback if no partial state exists), flags `converged: false`, attaches
@@ -128,6 +141,7 @@ export class DebateBudgetExceededError extends Error {
  * arise. That keeps the caller-visible contract identical to before: partial
  * synthesis when one exists, low-confidence fallback when none does.
  */
+
 export async function enforceLatencyBudget(params: {
   assetClass: AssetClass;
   trace_id: string;
@@ -159,10 +173,25 @@ export async function enforceLatencyBudget(params: {
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   const debate = produceResult(controller.signal).then(
-    (result): { status: 'completed'; result: DebateResult } => ({
-      status: 'completed',
-      result,
-    }),
+    (result): RaceOutcome => ({ status: 'completed', result }),
+    // #1380: `withRetry`'s two attempts each spend the client's FULL
+    // per-attempt timeout before the second one is exhausted (~56s of a 60s
+    // stocks budget), so this rejection can land BEFORE the timer below —
+    // and, unhandled, used to escape `Promise.race` and crash the whole
+    // instrument pass (11 of 51 live-arm passes, 2026-09-08 soak; the tick
+    // loop's only recourse was `decision: 'crashed'`, with no debate row at
+    // all). Narrowly `LlmTimeoutError` — the one class `AnthropicLlmClient`
+    // raises after exhausting retries — so this degrades the debate the same
+    // way a genuine budget expiry does; anything else (a real bug in the
+    // round orchestrator or a persona) still rejects `Promise.race` and
+    // still crashes the pass, unchanged — see "still propagates a debate
+    // failure that arrives before the budget fires" below.
+    (error: unknown): RaceOutcome => {
+      if (error instanceof LlmTimeoutError) {
+        return { status: 'llm_failed', error };
+      }
+      throw error;
+    },
   );
 
   // A cancelled debate rejects AFTER this function has returned its fallback,
@@ -188,9 +217,18 @@ export async function enforceLatencyBudget(params: {
 
   const elapsed_ms = Date.now() - started_at;
 
-  // Aborted BEFORE `getCurrentState()` and before any logging: the first thing
-  // that must happen once the budget is blown is that the spending stops.
-  controller.abort(new DebateBudgetExceededError(budget_ms, elapsed_ms));
+  // Aborted BEFORE `getCurrentState()` and before any logging: the first
+  // thing that must happen once the budget is blown — or the debate's LLM
+  // call fails outright (#1380) — is that the spending stops. On the
+  // `llm_failed` path the abort reason IS the `LlmTimeoutError` itself
+  // (rather than a synthetic `DebateBudgetExceededError` that never actually
+  // fired), so a sibling call still in flight within the same round — bull
+  // and bear can run concurrently — sees why it was cut off.
+  controller.abort(
+    result.status === 'llm_failed'
+      ? result.error
+      : new DebateBudgetExceededError(budget_ms, elapsed_ms),
+  );
 
   const partial = getCurrentState();
 
@@ -199,9 +237,7 @@ export async function enforceLatencyBudget(params: {
     debate_id,
     elapsed_ms,
     budget_ms,
-    reason: partial
-      ? 'latency budget exceeded: using mediator synthesis in progress'
-      : 'latency budget exceeded: no partial synthesis available, using low-confidence fallback',
+    reason: timeoutReason(result, partial !== undefined),
   });
 
   const timed_out = { budget_ms, elapsed_ms };
@@ -242,4 +278,30 @@ export async function enforceLatencyBudget(params: {
     bar_timestamp: bar,
     timed_out,
   };
+}
+
+/**
+ * The one difference between a genuine budget expiry and a debate whose LLM
+ * call failed outright (#1380): what stopped it. Both degrade through the
+ * identical `timed_out` shape above — same `DEGRADED_DECISIONS` word
+ * (`budget_exhausted`/`timed_out_partial`), same dashboard gloss — so the
+ * free-text `reason` a human reads off `logger.logTimeout` is the only place
+ * the two are told apart, per this ticket's acceptance criterion that the
+ * distinction show up "in logs and audit_log" without adding a fourth wire
+ * word.
+ */
+function timeoutReason(
+  result: Exclude<RaceOutcome, { status: 'completed' }>,
+  hasPartial: boolean,
+): string {
+  if (result.status === 'llm_failed') {
+    const cause = describeThrownSafely(result.error);
+    return hasPartial
+      ? `the debate's LLM call failed after retries (${cause}) — using mediator synthesis in progress`
+      : `the debate's LLM call failed after retries (${cause}) — no partial synthesis available, ` +
+          'using low-confidence fallback';
+  }
+  return hasPartial
+    ? 'latency budget exceeded: using mediator synthesis in progress'
+    : 'latency budget exceeded: no partial synthesis available, using low-confidence fallback';
 }
