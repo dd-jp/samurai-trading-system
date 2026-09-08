@@ -13,6 +13,16 @@
  * asserted directly against the composition root's source, which is crude but
  * fails loudly the day someone deletes the line during a refactor — the exact
  * event that produced #313's dead code.
+ *
+ * WHAT THAT BLOCK PINS, AND WHAT IT DOES NOT (#1313). Matching `production.ts`
+ * as text does not catch a missing caller either: #1306's review wrapped a
+ * daily prune call site in a `/* ... *\/` block comment and the source-text
+ * guards stayed green, because the call text is still in the source the regex
+ * reads. So the block below pins the ARGUMENT SEQUENCE and the textual
+ * placement of each call, and claims nothing about whether they run.
+ * `production/retention-wiring.test.ts` pins that by execution for
+ * `alert_delivery_failures` (#1131) and the MI archive (#1060); #1313 scoped
+ * `llm_call_log` out, so no test observes THIS sweep's side effect.
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -64,7 +74,7 @@ describe('llmCallLogMaxRowsFromEnvironment', () => {
   });
 });
 
-describe('the prune is actually wired into the composition root', () => {
+describe('the llm_call_log prune is spelled at the composition root, in full', () => {
   const source = readFileSync(fileURLToPath(new URL('./production.ts', import.meta.url)), 'utf8');
 
   // Matched by regex, not exact string: the formatter is free to wrap a call
@@ -87,7 +97,7 @@ describe('the prune is actually wired into the composition root', () => {
       `pruneLlmCallLogWithLog\\(\\s*config\\.db,\\s*llmCallLogMaxRows,\\s*logger,\\s*'${trigger}',?\\s*\\)`,
     );
 
-  it('runs at startup and on the daily timer, not in one place only', () => {
+  it('names both triggers, startup and daily, not one place only', () => {
     // Startup alone fires once when the table is smallest and never again
     // during the unattended run the ceiling exists to bound; the daily sweep
     // alone leaves a restart-heavy loop pruning nothing. Both call sites are
@@ -96,7 +106,7 @@ describe('the prune is actually wired into the composition root', () => {
     expect(source).toMatch(callSite('daily'));
   });
 
-  it('routes the sweep through the owning stage rather than a raw handle', () => {
+  it('spells the sweep through the owning stage rather than a raw handle', () => {
     // The guard is default-permissive (#1048), so dropping the wrap would make
     // the prune bypass the sole-writer check silently and every other test here
     // would still pass — the exact shape this file exists to catch, one level
@@ -105,7 +115,7 @@ describe('the prune is actually wired into the composition root', () => {
     expect(source).toMatch(/pruneLlmCallLog\(\s*guardedStore\(db, 'debate-engine'\)/);
   });
 
-  it('keeps the daily prune OUTSIDE the feedback cycle try block', () => {
+  it('spells the daily prune ABOVE the feedback cycle try block', () => {
     // Inside it, a persistently throwing `runDailyCycle` would silently
     // disable retention as well: the catch would fire every day while the
     // table grew forever and the log showed only a feedback failure.

@@ -151,7 +151,7 @@ describe('the alert_delivery_failures purge is spelled at the composition root, 
     expect(dailyPrune).toBeLessThan(firstTry);
   });
 
-  it('writes through the orchestrator stage guard, not a raw handle', () => {
+  it('spells the prune through the orchestrator stage guard, not a raw handle', () => {
     // `alert_delivery_failures` is in `STAGE_OWNED_TABLES.orchestrator`
     // (write-guard.ts) — the prune must go through `guardedStore(db,
     // 'orchestrator')` like every other orchestrator-owned table's

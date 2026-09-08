@@ -21,10 +21,15 @@
  * ## What each case observes, and why it is the only honest observable
  *
  * A seeded, over-age row DISAPPEARS. Not a log line: both
- * `pruneAlertDeliveryFailuresWithLog` and `pruneMiArchiveWithLog` return
- * silently when they delete nothing, so a log assertion is satisfied by a
- * prune that ran and did nothing — and no log at all is the ordinary case.
- * The row count going 1 -> 0 is entailed by the delete having executed.
+ * `pruneAlertDeliveryFailuresWithLog` and `pruneMiArchiveWithLog` log only a
+ * NONZERO delete — `if (deleted === 0) return;` sits above the `logger.log` in
+ * each — so the ordinary case, a sweep that runs and finds nothing over-age,
+ * emits nothing at all, and an absent log does not separate "never ran" from
+ * "ran and deleted nothing". Under these two cases specifically a log
+ * assertion would in fact have passed, because the seeded row makes each
+ * delete nonzero; the row count is preferred anyway, since 1 -> 0 is entailed
+ * by the delete having executed whatever the helpers' logging policy later
+ * becomes.
  *
  * The startup and daily cases are separated by WHEN the row is seeded, which
  * is the load-bearing trick here:
@@ -293,14 +298,22 @@ describe('the composition root RUNS its retention sweeps (#1313)', () => {
     expect(alertFailureRows()).toBe(0);
     expect(archiveRows()).toBe(0);
 
-    // The placement half, by execution rather than by text. `runDailyCycle`
-    // throws on this deliberately minimal `feedback.config`, and the throw is
-    // caught and logged inside `runFeedbackCycle`'s try — so this entry is
-    // proof the cycle really did reach a throwing `runDailyCycle`, which is
-    // what makes the deletes above evidence of placement and not just of
-    // execution. Moving the alert prune inside the try, below
-    // `runDailyCycle`, was mutated on this branch: the row survives and the
-    // first assertion above goes red.
+    // `runDailyCycle` throws on this deliberately minimal `feedback.config`,
+    // and the throw is caught and logged inside `runFeedbackCycle`'s try, so
+    // this entry is proof the cycle really did reach a throwing
+    // `runDailyCycle`. With the deletes above, that pins ONE half of the
+    // placement rule — the prunes run BEFORE a throwing `runDailyCycle`, which
+    // is the hazard the rule exists for. Mutated on this branch: moving the
+    // alert prune below `runDailyCycle` inside the try leaves the row alive
+    // and the first assertion above red.
+    //
+    // It does NOT pin "outside the try". Moving the same prune inside the try
+    // but ABOVE `runDailyCycle` was mutated too: this case stays fully green
+    // and only the source-text case in
+    // `alert-delivery-failure-retention.test.ts` reddens. The two placements
+    // are behaviourally identical — the prune swallows its own errors — so the
+    // try boundary is pinned by text there and the ordering by execution here,
+    // and neither file holds both halves alone.
     expect(
       entries.some((entry) => entry.trace_id === 'feedback-cycle' && entry.level === 'error'),
     ).toBe(true);
