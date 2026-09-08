@@ -211,17 +211,33 @@ export class LoggingFlattenReconcileAlertChannel implements FlattenReconcileAler
   async postFlattenReconcileAlert(alert: FlattenReconcileAlert): Promise<void> {
     this.logger.log({
       // Not a tick trace, for `LoggingResidualExposureAlertChannel`'s reason:
-      // this is observed by reconcile(), which spans every unresolved
-      // flatten at once rather than belonging to one pipeline pass.
-      trace_id: 'reconcile',
+      // this is observed by reconcile(), which spans every unresolved flatten
+      // at once rather than belonging to one pipeline pass. Threaded from the
+      // alert rather than fixed here (#1331) — the explicit form
+      // `LoggingMiCoverageAlertChannel` above takes: the live and control arms
+      // post through this SAME instance, so the id of the surface the pass ran
+      // on is the only thing in the line that tells a real venue's ambiguity
+      // from a simulated broker's. It is the `control-arm-` prefix that names
+      // the arm, not one id per arm: the startup pass logs
+      // `reconcile`/`control-arm-reconcile` and the poll logs
+      // `fill-sync`/`control-arm-fill-sync` (it calls `reconcile()` on the
+      // fill-sync surface), so on the poll this error line and the loop's own
+      // `warn` divergence line for the same flatten carry different ids. See
+      // `FlattenReconcileAlert.trace_id`.
+      trace_id: alert.trace_id,
       stage: 'execution',
       event: 'flatten_reconcile_unresolved',
       level: 'error',
       message:
         "reconcile() could not settle a flatten_submissions row — the flatten's outcome is " +
         'genuinely unknown; check the order on the venue by hand',
+      // Field by field, so `trace_id` is not repeated inside the payload it
+      // already labels the entry with — `LoggingMiCoverageAlertChannel`'s own
+      // handling of the same threaded field.
       payload: {
-        ...alert,
+        idempotency_key: alert.idempotency_key,
+        instrument: alert.instrument,
+        reason: alert.reason,
         observed_at: alert.observed_at.toISOString(),
       },
     });
