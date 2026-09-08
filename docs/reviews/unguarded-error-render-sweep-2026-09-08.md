@@ -167,7 +167,7 @@ its own. Where a site is safe *only* because of reachability, the row says so.
 | `server/apps/orchestrator/*-alert-channel.ts` (exit-valuation, calendar-fallback, threshold-clamp, arm-divergence, prompt-tier) | 5 | Each sits in a `void`ed `.catch()`: no caller can observe the throw, so it becomes an unhandled rejection and `installFaultHandlers` kills the live trading process over a failed alert. |
 | `server/apps/orchestrator/heartbeat.ts` | 1 | Value comes from the injected `HeartbeatChannel` (Telegram HTTP); `start()` does `void this.emit(...)`, so the throw is fatal — i.e. it *causes* the crash the heartbeat exists to signal. Falsifies the method's own "Never throws". |
 | `server/apps/orchestrator/control-arm.ts` | 1 | A measurement-arm failure escapes into `SequentialTickRunner` (deliberately un-caught), killing the **live** arm's pass. Falsifies "must never take down the arm that trades the book". |
-| `server/apps/orchestrator/fill-sync.ts` | 1 | Broker-sourced values; the throw escapes `runOnce` into `void runOnce().then(schedule)` — fatal, with fill polling never re-armed. |
+| `server/apps/orchestrator/fill-sync.ts` | 1 | `:395`. Broker-sourced values; the throw escapes `runOnce` into `void runOnce().then(schedule)` — fatal, with fill polling never re-armed. |
 | `server/apps/orchestrator/orphan-verdict-scan.ts` | 1 | Inside the per-orphan loop: drops every remaining orphan alert and the restart-reconciliation report. |
 | `server/apps/orchestrator/production/mi-coverage.ts` | 1 | Alert-transport value escapes into the analysts step and aborts that instrument's whole tick pass. |
 | `server/apps/orchestrator/production/analysts-adapter.ts` | 1 | `postSkipAlert` is awaited inside the analysts step: does precisely what the function's doc forbids — turns "the analysts skipped" into "the orchestrator threw". |
@@ -368,7 +368,10 @@ change from this one.
 
   All eight lose their own log line, so "a log line dies" does not discriminate. The question that
   does, given each site's outer guard: **does something durable that would otherwise have landed
-  fail to land?**
+  fail to land?** That is why (b) is dispositive at two sites below and not at the two safe ones:
+  the (b) sites have no outer frame that renders a substitute — the throw leaves the function with
+  nothing written — whereas `fill-sync.ts:359` and `production.ts:3473` escape into a guarded catch
+  that logs the failure and re-arms.
 
   - `server/pipeline/verdict/notifications/telegram/telegram-bot-api-client.ts:822`
     (`escalationError`) — criterion (c). Inside a detached `.catch()` on
@@ -394,7 +397,9 @@ change from this one.
   - `server/providers/market-data-service/sources/ohlcv-failover.ts:80` (`primaryError`) —
     criterion (b), and the most self-defeating of the eight. It renders at the *top* of the catch,
     before `safeAlert` and before the fallback source is attempted, so a throw defeats the failover
-    the function exists to perform — no alert, no fallback bars.
+    the function exists to perform — no alert, no fallback bars. Nothing in `withOhlcvFailover`
+    catches it either: the throw rejects the `BarFetcher` promise the wrapper returned, so no
+    substitute record fires anywhere in the frame.
   - `server/apps/orchestrator/fill-sync.ts:320` (`reconcileError`) — criterion (a). **Not (c).**
     Both this site and `:359` are in `runPoll` (`:274-365`), not in `runOnce` (`:366-400`) as an
     earlier draft said. `runOnce` does `inFlight = runPoll(); await inFlight;` inside its own `try`,
