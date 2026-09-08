@@ -279,18 +279,25 @@ export class GrokAgent {
    * exercise will be the soak itself. See the note in
    * `docs/specs/market-intelligence-spec.md`.
    *
-   * NEVER THROWS. Reached off the tick's critical path (#1085), from
-   * `MiRefreshQueue`'s microtask worker (`#dispatch`) — directly when
+   * NEVER THROWS from the fetch/spend/archive/ingest sequence below, which is
+   * ONE try/catch. The pre-call cap check and the refusal-branch log above it
+   * sit outside that guard — a throwing `SpendCap` or `Logger` there would
+   * reject, which is what `MiRefreshQueue#dispatch`'s own catch exists to
+   * cover; see its doc comment.
+   *
+   * Run inside `#dispatch`, invoked by `MiRefreshQueue`'s microtask worker
+   * (`#pump`), off the tick's critical path (#1085) — directly when
    * `GrokAgent` is the only MI agent, or through `composeMarketIntelligence`'s
    * per-agent try/catch when `MiIngestAgent` also runs (the current
-   * production wiring). Nothing upstream needs the resolve to keep a tick
-   * alive — both wrappers catch — but in the single-agent wiring `refresher`
-   * IS this agent, so a rejection would ALSO trip `#dispatch`'s own
-   * `mi_refresh_threw` line: a second, less specific report of a failure this
-   * method already logged (that line carries only the raw error text; the
-   * unrouted-model call-out below is this method's own interpretation of it).
-   * Market intelligence is an optional input either way: a provider outage
-   * degrades the debate to `NO_DATA_MARKER`.
+   * production wiring). Nothing upstream needs the guarded sequence's resolve
+   * to keep a tick alive — both wrappers catch — but in the single-agent
+   * wiring `refresher` IS this agent, so a rejection from it would ALSO trip
+   * `#dispatch`'s own `mi_refresh_threw` line: a second report of a failure
+   * this method already logged, whose message is a fixed template naming the
+   * instrument and whose payload carries the rendered error text, but not
+   * this method's own interpretation of it (the unrouted-model call-out
+   * below). Market intelligence is an optional input either way: a provider
+   * outage degrades the debate to `NO_DATA_MARKER`.
    */
   async refresh(trace_id: string, instrument: string, assetClass: AssetClass): Promise<boolean> {
     const asOf = this.#deps.clock.now();
