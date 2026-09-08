@@ -1495,9 +1495,9 @@ export interface ExitPathEvidence {
    * restarted `reconcile()`'s residual-protection sweep are the ONLY path
    * back to protection. The gate checks the sweep re-armed the residual
    * (`protectedQty`), settled the marker (`markerCleared`), reported it
-   * (`sweepDivergenceAction: 'adopted'`), and paged exactly once for the
-   * whole episode — the observing poll's inline alert, never a second from
-   * the sweep (#342).
+   * (`sweepDivergenceAction: 'adopted'`, `sweepDivergenceReason` naming the
+   * #549 sweep specifically), and paged exactly once for the whole episode —
+   * the observing poll's inline alert, never a second from the sweep (#342).
    */
   residualSweep: {
     lotKey: string;
@@ -1507,6 +1507,19 @@ export interface ExitPathEvidence {
     markerCleared: boolean;
     /** The restarted reconcile()'s divergence for the LOT's own key, if any. */
     sweepDivergenceAction: ReconcileDivergence['action'] | undefined;
+    /**
+     * The SAME divergence's own `reason` text (#1285 B2) — read off the SAME
+     * lookup as `sweepDivergenceAction` (`findSweepDivergence`, below), never
+     * a second `.find()` over `lotKey`. A second, independent lookup would
+     * let a wrong-key mutation at one call site alone still satisfy this
+     * check with the OTHER call site's correct key — see `findSweepDivergence`'s
+     * doc for the measured case (scenario 4's flatten divergence is also
+     * `action: 'adopted'`, so `sweepDivergenceAction` alone cannot tell a
+     * wrong-key substitution from the real thing; only `sweepOne`'s own
+     * re-arm reason text — `'... by the #549 sweep'`, residual-protection-
+     * sweep.ts — can).
+     */
+    sweepDivergenceReason: string | undefined;
   };
   /**
    * #1088: a `rejected`, `filled_size = 0` row seeded with a `decision_timestamp`
@@ -1524,6 +1537,72 @@ export interface ExitPathEvidence {
     /** The restarted reconcile()'s own `swept` count, read the same pass. */
     swept: number;
   };
+}
+
+/**
+ * The #549 sweep's own divergence for ONE lot, picked out of a restarted
+ * reconcile()'s full `divergences` list — every scenario's flatten/lot
+ * shares that one list, so this is a lookup by key, not "the first entry" or
+ * "any entry at all". Returns the whole divergence, not just its `action`
+ * (#1285 B2, see below), so both fields callers need come off ONE lookup —
+ * a wrong-key mutation at one call site cannot leave a second, correctly-
+ * keyed lookup elsewhere still satisfying whatever check reads the field the
+ * mutated call site did not touch.
+ *
+ * Pulled out of `runExitPathScenarios` (#1285) so it has a unit test that
+ * does not also have to stand up the rest of the exit-path harness.
+ * Measurement (#1228/#1285) found `.action` alone is the ENTIRE runtime
+ * discriminator for scenario 5 (#549): of `ExitPathEvidence.residualSweep`'s
+ * fields, an in-process heal of the deliberately-failed re-arm (an extra
+ * `ingestFills()` ahead of the restart — see `PostSweepScenarioContext`
+ * above) takes `maybeRearmResidual`'s mark-unprotected -> rearmProtectiveLegs
+ * -> confirm-protected path (ingest-fills.ts). A genuine restart-sweep heal
+ * takes a DIFFERENT path — `sweepOne` (residual-protection-sweep.ts): the
+ * marker is already set (no mark-unprotected write), and a confirmed re-arm
+ * clears it via `store.confirmResidualProtected` directly, never
+ * `bestEffortMarkerWrite`. The two paths share no MARKER-WRITING path (#1285
+ * N5, round-2 review corrects the earlier "share no code" framing here,
+ * which was false: `residual-protection-sweep.ts` imports
+ * `recordedExposure`/`coversQty` from `ingest-fills.ts`, so that arithmetic
+ * IS shared code) — what they share is only those two exported helpers,
+ * which `sweepOne` deliberately calls fresh off the persisted fill record
+ * rather than trusting any cached figure, "so the two surfaces cannot
+ * disagree about flatness" — which is exactly why they leave the same `markerCleared`,
+ * `protectedQty`, and alert-count footprint and only THIS lookup, keyed on
+ * which code path's divergence list entry it is, tells them apart. `.action`
+ * returning `undefined` because the restarted reconcile() found nothing left
+ * to sweep is the discriminator #1285 measured.
+ *
+ * `.action` alone is not sufficient, though (#1285 B2, round 1 review): a
+ * wrong-key mutation at this lookup's call site can read a DIFFERENT
+ * scenario's divergence whose `action` also happens to be `'adopted'` —
+ * measured concretely by substituting scenario 4's `crashRestartLot.exitKey`
+ * for scenario 5's `residualSweep.lotKey`: `resolveUnresolvedFlattens`
+ * (reconcile.ts) reports that lot's flatten as `action: 'adopted'` too, with
+ * `reason: "flatten journal said '...'; broker reports '...'"`. `.action`
+ * cannot tell that apart from `sweepOne`'s own `'adopted'`, but `.reason`
+ * can: `sweepOne`'s re-arm branch (residual-protection-sweep.ts) reports
+ * `"protective legs re-armed for residual … by the #549 sweep — ..."`, which
+ * no flatten-reconcile divergence text can produce. `evaluateSmokeGate`'s
+ * #549 section checks `.reason` for exactly that.
+ *
+ * `.find` (first match), never `.findLast`, deliberately (#1285 N2, round-2
+ * review): `reconcile()` (reconcile.ts) pushes this lot's real #549-sweep
+ * divergence, if any, well before it appends `findUnrecordedVenuePositions`'s
+ * results — which carry `idempotency_key: ''` — LAST in the same list. An
+ * empty string is a substring and a suffix of every key, so under a
+ * containment-family predicate (the very mutants the `===` unit tests below
+ * pin against) `.findLast` would land on that trailing `''`-keyed sentinel
+ * instead of this lot's own entry. `.find` forecloses that structurally, not
+ * just because today's fixture happens to produce one match: it stays the
+ * first (and normally only) match even if a future scenario adds a second
+ * divergence for this same key ahead of it in the list.
+ */
+export function findSweepDivergence(
+  divergences: readonly ReconcileDivergence[],
+  lotKey: string,
+): ReconcileDivergence | undefined {
+  return divergences.find((divergence) => divergence.idempotency_key === lotKey);
 }
 
 /**
@@ -1652,8 +1731,8 @@ async function runExitPathScenarios(input: {
   // so no context type could close this route — but that route is caught by
   // the runtime #549 gate assertion below: a healed-in-process residual
   // still clears the marker and protects the right quantity on its own, so
-  // only `residualSweep.sweepDivergenceAction` (undefined when the restart's
-  // own sweep found nothing to do) discriminates, not the compiler.
+  // only `residualSweep.sweepDivergenceAction`/`sweepDivergenceReason`
+  // (`findSweepDivergence`, above) discriminate, not the compiler.
   await exitCrashRestartLotWithoutSweep(ctx, crashRestartLot.exitKey);
   const terminalSweepKey = await seedTerminalSweepRow(ctx);
   const { restarted, restartReconcile } = await restartExecutionAndReconcile(ctx);
@@ -1667,6 +1746,7 @@ async function runExitPathScenarios(input: {
   const lot5MarkerRow = db
     .prepare('SELECT residual_unprotected_since FROM open_positions WHERE idempotency_key = ?')
     .get(residualSweep.lotKey) as { residual_unprotected_since: string | null } | undefined;
+  const sweepDivergence = findSweepDivergence(restartReconcile.divergences, residualSweep.lotKey);
 
   // #1088: the seeded row's fate, read the same way — raw SQL rather than
   // `getOpenPositions()`, which would never have shown a terminal row either
@@ -1697,9 +1777,11 @@ async function runExitPathScenarios(input: {
       protectedQty: broker.getProtectedQty(residualSweep.lotKey),
       markerCleared:
         lot5MarkerRow !== undefined && lot5MarkerRow.residual_unprotected_since === null,
-      sweepDivergenceAction: restartReconcile.divergences.find(
-        (divergence) => divergence.idempotency_key === residualSweep.lotKey,
-      )?.action,
+      // ONE lookup, both fields below read off its result (#1285 B2) — see
+      // `findSweepDivergence`'s doc for why a second, independently-keyed
+      // lookup would not close the wrong-key hole this guards against.
+      sweepDivergenceAction: sweepDivergence?.action,
+      sweepDivergenceReason: sweepDivergence?.reason,
     },
     terminalSweep: {
       seededKey: terminalSweepKey,
@@ -1739,11 +1821,13 @@ interface ExitPathScenarioContext {
  * compile rather than failing the gate later. The runtime #549 gate
  * assertion already catches the call from anywhere else in this window —
  * a healed-in-process residual still clears the marker and protects the
- * right quantity on its own, so of its four checks only
- * `residualSweep.sweepDivergenceAction` (undefined when the restart's own
- * sweep found nothing left to do) actually discriminates — this type only
- * moves that failure from `yarn smoke` to `yarn typecheck` for these three
- * functions specifically.
+ * right quantity on its own, so of its checks only
+ * `residualSweep.sweepDivergenceAction`/`sweepDivergenceReason` (undefined
+ * when the restart's own sweep found nothing left to do — see
+ * `findSweepDivergence`, above `runExitPathScenarios`, and its own test
+ * coverage, #1285) actually discriminate — this type only moves that failure
+ * from `yarn smoke` to `yarn typecheck` for these three functions
+ * specifically.
  */
 type PostSweepScenarioContext = Omit<ExitPathScenarioContext, 'execution'>;
 
@@ -5428,8 +5512,53 @@ export function evaluateSmokeGate(
   // #549 — the residual-protection sweep's ENFORCEMENT assertions (#430's
   // convention, mirroring #519/#526's above): scenario 5's observing-poll
   // re-arm was scripted to fail, so ONLY the durable marker + the restarted
-  // reconcile()'s sweep can have re-established protection. Each check names
-  // a different way the mechanism can silently stop being wired.
+  // reconcile()'s sweep can have re-established protection. Each check below
+  // catches a real way the #549 mechanism can regress on its OWN terms — the
+  // dedup breaking, the sweep settling on the wrong action, the marker
+  // surviving, the qty coming out wrong — but they are not four independent
+  // witnesses to the SAME failure. Measured (#1228/#1285): an extra
+  // `ingestFills()` ahead of the restart heals the deliberately-failed re-arm
+  // in-process, through `maybeRearmResidual`'s mark-unprotected ->
+  // rearmProtectiveLegs -> confirm-protected path (ingest-fills.ts). A
+  // GENUINE restart-sweep heal takes a different path — `sweepOne`
+  // (residual-protection-sweep.ts), which never writes mark-unprotected (the
+  // marker is already set) and clears via `store.confirmResidualProtected`
+  // directly. What makes the two indistinguishable to the other three checks
+  // is not a shared code path but `sweepOne`'s own doc'd choice to recompute
+  // off the SAME `recordedExposure`/`coversQty` expressions
+  // `maybeRearmResidual` uses, so both leave an identical marker/qty/alert
+  // footprint. The `scenario5Alerts` count check below, and the
+  // `markerCleared`/`protectedQty` checks further below, all read a healed-
+  // in-process residual as indistinguishable from a genuinely swept one.
+  // `sweepDivergenceAction === undefined` (`findSweepDivergence`, above
+  // `runExitPathScenarios`) sees that the restarted sweep itself found
+  // nothing left to do — positive evidence the RESTARTED sweep, not an
+  // earlier poll, did the healing. `.action` alone is not sufficient,
+  // though (#1285 B2, round-1 review): a wrong-key mutation at the
+  // `findSweepDivergence` call site can read a DIFFERENT scenario's
+  // divergence whose `.action` also happens to be `'adopted'` — measured
+  // concretely by substituting scenario 4's `crashRestartLot.exitKey` for
+  // this lot's key, which reads scenario 4's flatten-reconcile divergence
+  // (`resolveUnresolvedFlattens`, reconcile.ts) instead, itself `'adopted'`.
+  // `sweepDivergenceReason` is the same lookup's `reason` text, so it cannot
+  // silently disagree with `sweepDivergenceAction` about which divergence was
+  // found — and only `sweepOne`'s own re-arm reason
+  // (`'... for residual N by the #549 sweep …'`, residual-protection-sweep.ts)
+  // can produce the text this check requires. That excludes more than
+  // flatten-reconcile divergences: `sweepOne` itself has a SECOND
+  // `action: 'adopted'` return — the `coversQty` flat-path no-op, taken when
+  // the persisted fill record already reads flat, whose reason ("marked lot
+  // reads flat on the persisted fill record…") never names the #549 sweep
+  // either. So this check discriminates WITHIN `sweepOne`, not only against
+  // other mechanisms: only its own re-arm branch — the one that actually
+  // retried `broker.rearmProtectiveLegs` — satisfies it. Since #1285 N3
+  // (round-2 review), the matched text is also bound to THIS lot's own
+  // `expectedResidual`, not just the literal `'by the #549 sweep'` suffix —
+  // narrowing the aperture the B2 fix left open: a future scenario adding a
+  // second lot through `sweepOne`'s real re-arm branch would otherwise also
+  // produce `'adopted'` text naming the #549 sweep, and a wrong-key lookup
+  // landing on THAT lot's divergence would pass B2's check without also
+  // matching this lot's own residual quantity.
   const scenario5Alerts = residualAlerts.filter(
     (alert) => alert.idempotency_key === residualSweep.lotKey,
   );
@@ -5454,6 +5583,22 @@ export function evaluateSmokeGate(
         `'${residualSweep.sweepDivergenceAction}', not 'adopted' — the retry against a healthy ` +
         'deterministic broker should have re-armed and confirmed; anything else means the sweep ' +
         'could not settle a marker it should have (#549)',
+    );
+  } else if (
+    !residualSweep.sweepDivergenceReason?.includes(
+      `for residual ${residualSweep.expectedResidual} by the #549 sweep`,
+    )
+  ) {
+    failures.push(
+      `the lookup keyed on scenario 5's lot '${residualSweep.lotKey}' returned a divergence ` +
+        `reading 'adopted', but its reason ('${residualSweep.sweepDivergenceReason}') does not ` +
+        `name the #549 sweep re-arming this lot's OWN residual ` +
+        `(${residualSweep.expectedResidual}) — this is the #1285 ` +
+        'B2/N3 case: a lookup keyed on the WRONG lot could still land on a divergence reading ' +
+        "'adopted' (another scenario's flatten-reconcile, or sweepOne's own coversQty flat-path " +
+        "no-op), and binding the match to this lot's own residual quantity closes that even for a " +
+        "future scenario adding a second lot through sweepOne's real re-arm branch; only " +
+        "sweepOne's re-arm of THIS residual (residual-protection-sweep.ts) can satisfy this text",
     );
   }
   if (!residualSweep.markerCleared) {
