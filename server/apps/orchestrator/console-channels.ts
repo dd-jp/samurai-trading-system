@@ -704,10 +704,15 @@ export class LoggingLseCalendarCoverageAlertChannel implements LseCalendarCovera
  * kill-line breach means the strategy's own validation says its edge may be
  * gone — PBO over its line, out-of-sample Sharpe under it, a statistically
  * insignificant Deflated Sharpe, or live performance diverging from the
- * backtest that justified the config — and the kill/rework call is the
- * human's. A spend-cap breach means the run has stopped admitting new LLM
- * calls until whatever triggered the refusal is resolved. Neither should
- * wait for someone to notice a quiet heartbeat.
+ * backtest that justified the config — and nobody owns the kill/rework call
+ * under full automation; the mechanical response is alert-then-auto-tighten,
+ * not a decision made here. This port call **is** the alert half for the
+ * kill-line caller; the Feedback Loop's `computeMetrics` runs auto-tighten
+ * immediately after this call returns, on the same synchronous path
+ * (`server/pipeline/feedback-loop/metrics.ts`). A spend-cap breach means the
+ * run has stopped admitting new LLM calls until whatever triggered the
+ * refusal is resolved — this same port, with nothing analogous to
+ * auto-tighten. Neither should wait for someone to notice a quiet heartbeat.
  *
  * `message` discriminates on which happened (`breachLogMessage`,
  * breach-alert-channel.ts — see its doc for what each case actually claims).

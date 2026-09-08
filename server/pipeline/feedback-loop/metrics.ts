@@ -8,8 +8,9 @@
  * none of that math (acceptance criterion #1). Its own job is narrow: decide
  * whether any of the four kill-line conditions breached, and if so, alert the
  * human via the trade channel and defensively auto-tighten every risk
- * threshold. Kill/rework is a human decision this module never takes — there
- * is no kill primitive here by design.
+ * threshold. Nobody owns the kill/rework call under full automation — a
+ * persisting breach should produce a mechanical halt, but this module has no
+ * halt primitive; it only alerts and auto-tightens.
  */
 import { assertThresholdsWithinBounds } from '../../shared/index.js';
 import { applyGuardrail } from './guardrails.js';

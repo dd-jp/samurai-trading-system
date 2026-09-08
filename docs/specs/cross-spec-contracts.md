@@ -54,7 +54,7 @@ Reconciles the accumulated additions from all 10 specs + the 3 newly-charted com
   - `MetricsReport.daily` **= `MetricsSuite`** (Sharpe, Sortino, Calmar, max_drawdown, profit_factor, expectancy, skew, kurtosis, turnover, exposure).
   - `MetricsReport.revalidation` = the library's DSR/PBO/walk-forward output.
   - `MetricsReport.breaches` stays FL-only.
-- **FL owns cadence + breach-response + the kill decision; the library owns the math.** No duplication. *(Amended 2026-08-09 by [ADR-0013](../adr/0013-no-human-gate-anywhere.md): the kill is no longer "human-owned" — under full automation nobody owns it, so a breach must produce a mechanical response rather than an alert awaiting a decision.)*
+- **FL owns cadence + breach-response + ~~the kill decision~~; the library owns the math.** No duplication. *(Amended 2026-08-09 by [ADR-0013](../adr/0013-no-human-gate-anywhere.md): the kill is no longer "human-owned" — under full automation nobody owns it, so a breach must produce a mechanical response rather than an alert awaiting a decision.)* *(Amended 2026-09-08 — "kill decision" reworded to "breach response": ADR-0013 Decision 3 means nobody owns a kill/rework decision under full automation. FL's breach response today is alert + defensive auto-tighten (`server/pipeline/feedback-loop/metrics.ts`); no halt-on-persistence is implemented yet.)*
 - **`config_trials` log** (shared SQLite): N = **distinct configs evaluated for selection**, keyed by config hash. Re-runs and in-bounds FL auto-tuning do NOT increment N. FL revalidation reads frozen N, never appends. Getting this wrong makes DSR/PBO/MinBTL kill healthy strategies by construction.
 
 ## 6. `CostModel.fill` ↔ `SimulatedBrokerAdapter` ↔ `MarketState`

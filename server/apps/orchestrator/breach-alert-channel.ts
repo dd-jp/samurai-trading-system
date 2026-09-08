@@ -15,8 +15,11 @@
  *
  * `BreachAlertChannel.postBreachAlert` returns `void`, not a promise — the
  * port is synchronous because `computeMetrics` is, and its own doc calls the
- * alert "fire-and-forget" (a breach expects no answer; the kill/rework call is
- * made later, out of band). So the send is started and not awaited, and its
+ * alert "fire-and-forget" (a breach expects no answer, and there is no
+ * kill/rework call to wait for — nobody owns one under full automation; the
+ * mechanical response, auto-tighten, runs synchronously on this same call
+ * path immediately after this port call returns). So the send is started
+ * and not awaited, and its
  * rejection is caught here rather than left to surface as an unhandled
  * rejection that would take the process down mid-soak. A transport failure
  * must not undo the auto-tighten `computeMetrics` already applied on the
