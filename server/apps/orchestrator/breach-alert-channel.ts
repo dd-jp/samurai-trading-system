@@ -120,7 +120,10 @@ export class TradeChannelBreachAlert implements BreachAlertChannel {
         // kill-line batch runs outside any tick, but an `llm_spend_cap` breach
         // is raised inside one by `SqliteSpendCap#refuse`, so the undelivered
         // alert must join whichever raised it rather than always naming the
-        // daily cycle.
+        // daily cycle. The same third provenance `LoggingBreachAlertChannel`
+        // records applies: a boot-time refusal from `startingTotal()` has no
+        // ambient id and is mislabelled `feedback-cycle` until `BreachAlert`
+        // carries provenance of its own.
         trace_id: currentTraceId() ?? 'feedback-cycle',
         stage: breachStage(alert),
         event: 'breach_alert_send_failed',

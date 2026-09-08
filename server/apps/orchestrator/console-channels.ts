@@ -649,6 +649,13 @@ export class LoggingBreachAlertChannel implements BreachAlertChannel {
       // and that breach must join the debate that spent the last of the
       // budget. This comment previously claimed the daily batch was the only
       // caller, which the spend-cap wiring (production.ts) falsifies.
+      //
+      // There is a third provenance the fallback names wrongly: `check()` also
+      // runs at boot via `startingTotal()`, which refuses — and so breaches —
+      // on an already-spent or unreadable budget with no ambient id, landing on
+      // `feedback-cycle`. Not fixable by choosing a different constant, since
+      // the boot and daily cases are indistinguishable here: `BreachAlert`
+      // carries no provenance field, so the port has to widen first.
       trace_id: currentTraceId() ?? 'feedback-cycle',
       // Derived for the same reason the trace is (#1280) — see `breachStage`.
       stage: breachStage(alert),
