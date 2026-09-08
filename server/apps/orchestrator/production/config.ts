@@ -66,6 +66,7 @@ import { DEFAULT_STAGE2_MAX_AGE_DAYS } from './daily-equity-metrics-source.js';
 import type { DataFailoverAlertChannel } from './data-failover.js';
 import type { AccountStateProvider, VolatilityReadingProvider } from './direct-bind.js';
 import type { ExitValuationDegradedAlertChannel } from './exit-valuation-alert.js';
+import type { LseCalendarCoverageAlertChannel } from './lse-calendar-coverage-alert.js';
 import type { MiCoverageAlertChannel } from './mi-coverage.js';
 import type { ThresholdClampAlertChannel } from './threshold-clamp-alert.js';
 import type { TickSkipAlertChannel } from './tick-skip-alert.js';
@@ -395,6 +396,31 @@ export interface AlertChannelSlots {
    * this channel exists to end.
    */
   promptTierAlerts?: PromptTierAlertChannel;
+  /**
+   * Where the LIVE equity leg's own table-coverage horizon is escalated
+   * (#1378) — the twentieth `ALERT_CHANNEL_FIELDS` member, channel type and
+   * transport landing in the SAME change like `promptTierAlerts`/
+   * `tickSkipAlerts` before it. `LseRegularHoursCalendar`'s hand-entered
+   * tables (`LSE_HOLIDAYS`/`LSE_HALF_DAYS`, trading-calendar.ts) are checked
+   * only through `LSE_TABLE_COVERAGE_END`; `assertLseCalendarCoverage`
+   * (`lse-calendar-coverage-guard.ts`) posts this once that date is within
+   * `LSE_COVERAGE_ALERT_HORIZON_DAYS`. Defaults to
+   * `LoggingLseCalendarCoverageAlertChannel`, with the same caveat as
+   * `calendarFallbackAlerts`: log-only cannot page anyone, and the live leg
+   * running past this date is the exact overnight-carry risk ADR-0014
+   * forbids (an unmodelled half-day reads as an ordinary 16:30 close — see
+   * `LSE_HALF_DAYS`'s doc). `TradeChannelLseCalendarCoverageAlert`
+   * (lse-calendar-coverage-alert-channel.ts) is what
+   * `SAMURAI_ALERTS=telegram` (#322) supplies.
+   *
+   * Distinct from `calendarFallbackAlerts` (#684): that one is the PAPER
+   * leg's fetch-failure fallback, this one is the LIVE leg's own static
+   * table running out. Also distinct from the hard boot refusal itself —
+   * this alert fires ONLY ahead of the cliff, while there is still time to
+   * extend the tables; once the date is past, boot refuses outright instead
+   * of reaching this channel (`assertLseCalendarCoverage`'s doc).
+   */
+  lseCalendarCoverageAlerts?: LseCalendarCoverageAlertChannel;
 }
 
 /**

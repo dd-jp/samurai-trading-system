@@ -66,6 +66,7 @@ import {
   FAILOVER_CIRCUIT_COOLDOWN_MS,
   FAILOVER_CIRCUIT_FAILURE_THRESHOLD,
   FixtureDataSource,
+  LSE_TABLE_COVERAGE_END,
   LseMarkDataSource,
   LseRegularHoursCalendar,
   londonEntryWindow,
@@ -98,6 +99,8 @@ import { MIN_RETURN_OBSERVATIONS } from './production/daily-equity-metrics-sourc
 import type { DataFailoverAlert } from './production/data-failover.js';
 import { buildPersistence } from './production/direct-bind.js';
 import { MIN_TICKS_INSIDE_FLATTEN_WINDOW } from './production/flatten-tick-coupling.js';
+import type { LseCalendarCoverageAlert } from './production/lse-calendar-coverage-alert.js';
+import { LSE_COVERAGE_ALERT_HORIZON_DAYS } from './production/lse-calendar-coverage-guard.js';
 import {
   MI_NO_DATA_BY_NAME_COUNTER,
   MI_NO_DATA_BY_SUBCLASS_COUNTER,
@@ -1465,6 +1468,156 @@ describe('buildProductionComponents', () => {
       expect(() => buildProductionComponents(config)).not.toThrow();
     },
   );
+
+  describe('the LSE table coverage guard at boot (#1378)', () => {
+    // One civil day past LSE_TABLE_COVERAGE_END — deliberately not a
+    // half-day-shaped date, so this exercises the coverage cliff itself
+    // rather than any half-day-specific behaviour.
+    const oneDayPastCoverage = new Date(`${LSE_TABLE_COVERAGE_END}T12:00:00Z`);
+    oneDayPastCoverage.setUTCDate(oneDayPastCoverage.getUTCDate() + 1);
+
+    it(
+      'refuses to build with mode "live" once today is past LSE_TABLE_COVERAGE_END — ' +
+        'naming the date and what to extend, without citing any ticket number for the ' +
+        'extension itself (the tracker is mid-reconciliation on this exact boundary, #1312)',
+      () => {
+        const config = stubConfig(db, {
+          mode: 'live',
+          capitalCeilingUsd: 1_000,
+          clock: new SimulatedClock(oneDayPastCoverage),
+        });
+
+        expect(() => buildProductionComponents(config)).toThrow(
+          new RegExp(`past LSE_TABLE_COVERAGE_END \\(${LSE_TABLE_COVERAGE_END}\\).*Extend`, 's'),
+        );
+        // The dangerous read this guard exists to prevent, named explicitly
+        // rather than left implicit — matches LSE_HALF_DAYS's own doc.
+        expect(() => buildProductionComponents(config)).toThrow(/16:30/);
+        // Never cites #1378 as the place to extend the tables — that issue
+        // is THIS one, and citing it in an operator-facing throw would be
+        // circular the moment this ticket closes.
+        expect(() => buildProductionComponents(config)).not.toThrow(/#1378/);
+        // Never cites #1379 either — it was closed as superseded 2026-09-08
+        // (#1312's decision), and an operator-facing safety message must
+        // never point at a closed ticket (see the "Closing An Issue Breaks
+        // Live Gates" precedent).
+        expect(() => buildProductionComponents(config)).not.toThrow(/#1379/);
+      },
+    );
+
+    it('does NOT refuse at exactly LSE_TABLE_COVERAGE_END — the last covered date', () => {
+      const config = stubConfig(db, {
+        mode: 'live',
+        capitalCeilingUsd: 1_000,
+        clock: new SimulatedClock(new Date(`${LSE_TABLE_COVERAGE_END}T12:00:00Z`)),
+      });
+
+      expect(() => buildProductionComponents(config)).not.toThrow();
+    });
+
+    it(
+      'does NOT run this guard for mode "paper" — plain mode: "paper" resolves ' +
+        'equityCalendarFor to UsEquityRegularHoursCalendar, not LseRegularHoursCalendar, so ' +
+        "there is no LSE cliff to guard against (LSE_TABLE_COVERAGE_END's own date, " +
+        "one day after it, is still inside UsEquityRegularHoursCalendar's own coverage)",
+      () => {
+        const config = stubConfig(db, {
+          mode: 'paper',
+          clock: new SimulatedClock(oneDayPastCoverage),
+        });
+
+        expect(() => buildProductionComponents(config)).not.toThrow();
+      },
+    );
+
+    it(
+      'does NOT run this guard for mode "live" with an explicit non-LSE tradingCalendar ' +
+        'override — the guard keys on the RESOLVED calendar (instanceof LseRegularHoursCalendar), ' +
+        'same convention as the #989 benchmark-collision guard immediately above it',
+      () => {
+        const config = stubConfig(db, {
+          mode: 'live',
+          capitalCeilingUsd: 1_000,
+          tradingCalendar: new UsEquityRegularHoursCalendar(),
+          clock: new SimulatedClock(oneDayPastCoverage),
+        });
+
+        expect(() => buildProductionComponents(config)).not.toThrow();
+      },
+    );
+
+    it(
+      'posts a routed lseCalendarCoverageAlerts warning when the coverage end is within ' +
+        'LSE_COVERAGE_ALERT_HORIZON_DAYS — ahead of the hard refusal, so the cliff is visible ' +
+        'before it bites',
+      () => {
+        const posted: LseCalendarCoverageAlert[] = [];
+        const withinHorizon = new Date(`${LSE_TABLE_COVERAGE_END}T12:00:00Z`);
+        withinHorizon.setUTCDate(
+          withinHorizon.getUTCDate() - Math.floor(LSE_COVERAGE_ALERT_HORIZON_DAYS / 2),
+        );
+        const config = stubConfig(db, {
+          mode: 'live',
+          capitalCeilingUsd: 1_000,
+          clock: new SimulatedClock(withinHorizon),
+          lseCalendarCoverageAlerts: {
+            postLseCalendarCoverageAlert: (alert) => {
+              posted.push(alert);
+            },
+          },
+        });
+
+        expect(() => buildProductionComponents(config)).not.toThrow();
+        expect(posted).toHaveLength(1);
+        expect(posted[0]?.coverage_end).toBe(LSE_TABLE_COVERAGE_END);
+        expect(posted[0]?.days_remaining).toBeGreaterThanOrEqual(0);
+        expect(posted[0]?.days_remaining).toBeLessThanOrEqual(LSE_COVERAGE_ALERT_HORIZON_DAYS);
+      },
+    );
+
+    it(
+      'does NOT post lseCalendarCoverageAlerts well outside the horizon — the default ' +
+        '`START` (2026-07-29) every other test in this file boots against, which is why none ' +
+        'of them see this alert as a side effect',
+      () => {
+        const posted: LseCalendarCoverageAlert[] = [];
+        const config = stubConfig(db, {
+          mode: 'live',
+          capitalCeilingUsd: 1_000,
+          lseCalendarCoverageAlerts: {
+            postLseCalendarCoverageAlert: (alert) => {
+              posted.push(alert);
+            },
+          },
+        });
+
+        buildProductionComponents(config);
+
+        expect(posted).toHaveLength(0);
+      },
+    );
+
+    it(
+      'the backstop cannot strand an open position: LseRegularHoursCalendar itself stays ' +
+        'non-throwing past the coverage cliff, so a position already open when a long-running ' +
+        "process crosses LSE_TABLE_COVERAGE_END mid-run (this guard's own documented residual " +
+        'gap — it is boot-only) is still flattenable through the calendar the risk/execution ' +
+        'path actually calls — proven directly against isOpen/sessionStart/sessionEnd in ' +
+        'trading-calendar.test.ts\'s "the LSE table coverage cliff (#1378)" suite. The ' +
+        'PRIMARY guarantee is the boot refusal above: for a process that starts AFTER the ' +
+        'cliff, that state (a live position under an uncovered calendar) is never reached at ' +
+        'all, because buildProductionComponents throws before anything — including the risk ' +
+        'and execution stores — is constructed.',
+      () => {
+        const calendar = new LseRegularHoursCalendar();
+
+        expect(() => calendar.isOpen(oneDayPastCoverage)).not.toThrow();
+        expect(() => calendar.sessionEnd(oneDayPastCoverage)).not.toThrow();
+        expect(() => calendar.sessionStart(oneDayPastCoverage)).not.toThrow();
+        expect(calendar.coversCloseFor(oneDayPastCoverage)).toBe(false);
+      },
+    );
+  });
 
   it(
     "hooks Feedback Loop's onTradeClose off the returned executionStore's " +

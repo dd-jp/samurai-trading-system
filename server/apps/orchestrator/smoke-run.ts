@@ -268,6 +268,7 @@ import {
   LoggingFlattenReconcileAlertChannel,
   LoggingHeartbeatChannel,
   LoggingLoosenNotificationChannel,
+  LoggingLseCalendarCoverageAlertChannel,
   LoggingMiCoverageAlertChannel,
   LoggingOcoDoubleFillAlertChannel,
   LoggingOrphanAlertChannel,
@@ -6255,6 +6256,12 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // pattern `runRiskCriticScenario`/`runDataFailoverScenario` use for a
       // mechanism the six-stage tick loop above cannot exercise for real.
       promptTierAlerts: new LoggingPromptTierAlertChannel(logger),
+      // #1378 — the twentieth `ALERT_CHANNEL_FIELDS` member. This run injects
+      // `tradingCalendar: new UsEquityRegularHoursCalendar()` directly
+      // (below), so `assertLseCalendarCoverage`'s `LseRegularHoursCalendar`
+      // gate never fires and this slot is never exercised — a log-only
+      // stand-in is enough, same posture as `calendarFallbackAlerts` above.
+      lseCalendarCoverageAlerts: new LoggingLseCalendarCoverageAlertChannel(logger),
     } satisfies Required<AlertChannels>;
 
     const orchestrator = await startFromEnvironment({

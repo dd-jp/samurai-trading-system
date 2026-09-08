@@ -114,6 +114,7 @@ import { TradeChannelExitValuationDegradedAlert } from './exit-valuation-alert-c
 import { TradeChannelFlattenReconcileAlert } from './flatten-reconcile-alert-channel.js';
 import { TradeChannelHeartbeat } from './heartbeat-channel.js';
 import { TradeChannelLoosenNotice } from './loosen-notification-channel.js';
+import { TradeChannelLseCalendarCoverageAlert } from './lse-calendar-coverage-alert-channel.js';
 import { TradeChannelMiCoverageAlert } from './mi-coverage-alert-channel.js';
 import { TradeChannelOcoDoubleFillAlert } from './oco-double-fill-channel.js';
 import { TradeChannelOrphanAlert } from './orphan-alert-channel.js';
@@ -272,6 +273,13 @@ export const ALERT_CHANNEL_FIELDS = [
   // writing rows and ADR-0008's cap keeps enforcing against them, and the
   // only symptom is that the burn rate quietly changed.
   'promptTierAlerts',
+  // #1378 — the twentieth. Channel type and transport in the SAME change,
+  // like `promptTierAlerts`/`tickSkipAlerts` before it. The condition it
+  // reports (the LIVE equity leg's hand-entered LSE session tables running
+  // out) is invisible from outside by construction until the day it bites:
+  // the calendar keeps answering — a normal 16:30 close, unmodelled
+  // half-days included — right up to the boot that finally refuses.
+  'lseCalendarCoverageAlerts',
 ] as const satisfies readonly (keyof AlertChannelSlots)[];
 
 /**
@@ -574,6 +582,19 @@ export function buildAlertChannels(deps: {
     // not a beat, same reasoning as `thresholdClampAlerts`.
     ...(deps.injected.promptTierAlerts === undefined
       ? { promptTierAlerts: new TradeChannelPromptTierAlert(telegram, chatId, deps.logger) }
+      : {}),
+    // #1378. The escalation chat, never the heartbeat chat: the live leg's
+    // own table-coverage cliff approaching is a decision waiting on the
+    // operator (extend LSE_HOLIDAYS/LSE_HALF_DAYS), not a beat — same
+    // reasoning as `calendarFallbackAlerts`.
+    ...(deps.injected.lseCalendarCoverageAlerts === undefined
+      ? {
+          lseCalendarCoverageAlerts: new TradeChannelLseCalendarCoverageAlert(
+            telegram,
+            chatId,
+            deps.logger,
+          ),
+        }
       : {}),
   };
 }
