@@ -408,7 +408,7 @@ Every script in `package.json`, all 27 of them. There are no others.
 | quality | `yarn test:coverage` | Same suite under v8 coverage. What `precommit` runs |
 | quality | `yarn test:local` | `vitest --changed origin/main` — only what the branch touched. Inner loop, not a gate |
 | quality | `yarn test:watch` | Vitest in watch mode |
-| quality | `yarn e2e` | Playwright suite against the built bundle on `:8788`. CI job of its own |
+| quality | `yarn e2e` | Playwright suite against the built bundle, on a port picked fresh per run (#1298) so two checkouts can run it at once. CI job of its own |
 | quality | `yarn lint` | `biome check .` — lint **and** formatting, both gated in CI |
 | quality | `yarn lint:fix` | `biome check --write .` — fixes both |
 | quality | `yarn precommit` | `lint:fix` → `typecheck` → `test:coverage` |
