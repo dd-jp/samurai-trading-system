@@ -1,11 +1,26 @@
 import { runWithTraceId } from '../../../shared/index.js';
 import { openSharedStore, type SharedStore } from '../../../shared/store/index.js';
 import type { LogEntry, Logger } from '../../../shared/types.js';
-import { SqliteSpendCap, spendCapRefusalRemedy, UNCAPPED_SPEND } from './spend-cap.js';
+import {
+  BUDGET_REMEDY,
+  CORRUPT_LEDGER_REMEDY,
+  READ_FAULT_REMEDY,
+  type SpendCapVerdict,
+  SqliteSpendCap,
+  spendCapRefusalRemedy,
+  UNCAPPED_SPEND,
+} from './spend-cap.js';
 
 function recordingLogger(): { logger: Logger; entries: LogEntry[] } {
   const entries: LogEntry[] = [];
   return { logger: { log: (entry) => entries.push(entry) }, entries };
+}
+
+/** Narrows a verdict to its refusing arm — `kind` and `reason` only exist there. */
+function assertRefused(
+  verdict: SpendCapVerdict,
+): asserts verdict is Extract<SpendCapVerdict, { admitted: false }> {
+  if (verdict.admitted) throw new Error('expected a refusal, got an admitted verdict');
 }
 
 /** One priced call, straight into the table `SqliteLlmSpendStore` writes. */
@@ -85,7 +100,7 @@ describe('SqliteSpendCap', () => {
 
     const verdict = new SqliteSpendCap(db, 50).check();
 
-    expect(verdict.admitted).toBe(false);
+    assertRefused(verdict);
     expect(verdict.reason).toContain('$50.00 of $50.00');
     expect(verdict.kind).toBe('budget');
   });
@@ -110,22 +125,21 @@ describe('SqliteSpendCap', () => {
 
     const verdict = new SqliteSpendCap(db, 50, logger).check();
 
-    expect(verdict.admitted).toBe(false);
+    assertRefused(verdict);
     expect(verdict.reason).toContain('fail-closed');
-    expect(verdict.kind).toBe('fault');
+    expect(verdict.kind).toBe('read_fault');
     expect(entries.at(-1)?.level).toBe('error');
   });
 
-  it('tags the non-finite-sum refusal (a corrupt cost_usd row) as fault too, not budget', () => {
-    // The second `#refuse('fault', ...)` call site — distinct from the read
-    // failure above, but `SpendCapVerdict.kind` deliberately collapses both to
-    // the same 'fault' value (see the field doc: nothing on the verdict
-    // distinguishes which of the two fired).
+  it('tags the non-finite-sum refusal (a corrupt cost_usd row) as corrupt_ledger, not budget', () => {
+    // The `#refuse('corrupt_ledger', ...)` call site — distinct from the read
+    // failure above, which is `#refuse('read_fault', ...)`: unlike a read
+    // fault, a corrupt row does not clear on its own.
     const verdict = new SqliteSpendCap(nonFiniteSum(), 50).check();
 
-    expect(verdict.admitted).toBe(false);
+    assertRefused(verdict);
     expect(verdict.reason).toContain('not a finite number');
-    expect(verdict.kind).toBe('fault');
+    expect(verdict.kind).toBe('corrupt_ledger');
   });
 
   it('escalates the breach ONCE, not on every subsequent refusal', () => {
@@ -156,6 +170,47 @@ describe('SqliteSpendCap', () => {
     cap.check();
 
     expect(breaches).toEqual(['spend cap unreadable (fail-closed)']);
+  });
+
+  describe('kind on the latched (post-escalation) return (#1372 review round 1, M1)', () => {
+    // THE REGRESSION THIS PINS: `#refuse` stamps `kind` before checking the
+    // latch, but only the FIRST refusal of a latch group reaches `onBreach` —
+    // every later one takes the short-circuit `return refused;`. A prior
+    // round of this ticket tested `kind` only on the escalating (first) call,
+    // so a mutation that stamped the SHORT-CIRCUIT return with the raw,
+    // kind-less `verdict` instead of `refused` passed every test — yet almost
+    // every refusal `debate-adapter.ts` logs across a soak takes this path.
+    it('keeps kind: budget on the second refusal, after the budget latch is set', () => {
+      spend(db, 60, 'over-budget');
+      const cap = new SqliteSpendCap(db, 50);
+
+      cap.check();
+      const second = cap.check();
+
+      assertRefused(second);
+      expect(second.kind).toBe('budget');
+    });
+
+    it('keeps kind: read_fault on the second refusal, after the fault latch is set', () => {
+      db.prepare('DROP TABLE llm_spend').run();
+      const cap = new SqliteSpendCap(db, 50);
+
+      cap.check();
+      const second = cap.check();
+
+      assertRefused(second);
+      expect(second.kind).toBe('read_fault');
+    });
+
+    it('keeps kind: corrupt_ledger on the second refusal, after the fault latch is set', () => {
+      const cap = new SqliteSpendCap(nonFiniteSum(), 50);
+
+      cap.check();
+      const second = cap.check();
+
+      assertRefused(second);
+      expect(second.kind).toBe('corrupt_ledger');
+    });
   });
 
   it('still refuses when the alert channel throws', () => {
@@ -273,25 +328,34 @@ describe('SqliteSpendCap', () => {
 
 describe('spendCapRefusalRemedy (#1372)', () => {
   // The regression this pins: every refusal log line asserted "the budget
-  // does not refill" even on the fault paths, where it is false — a
-  // transient `llm_spend` read failure clears on its own. Swapping which
-  // branch below returns which string must redden both assertions.
-  it('claims permanence only for a budget refusal', () => {
-    expect(spendCapRefusalRemedy('budget')).toContain('does not refill');
-    expect(spendCapRefusalRemedy('budget')).not.toContain('SPEND-LEDGER FAULT');
+  // does not refill" even on the fault paths, where it is false. Asserting
+  // against the exported constants, not literal substrings, means a swap of
+  // which case returns which constant still reddens every one of these — the
+  // constants themselves do not move — while a wording-only edit to a
+  // constant's text does not touch this file at all.
+  it('maps each kind to its own constant', () => {
+    expect(spendCapRefusalRemedy('budget')).toBe(BUDGET_REMEDY);
+    expect(spendCapRefusalRemedy('read_fault')).toBe(READ_FAULT_REMEDY);
+    expect(spendCapRefusalRemedy('corrupt_ledger')).toBe(CORRUPT_LEDGER_REMEDY);
   });
 
-  it('never claims the fault refusal is permanent, and names it a ledger fault', () => {
-    expect(spendCapRefusalRemedy('fault')).not.toContain('does not refill');
-    expect(spendCapRefusalRemedy('fault')).toContain('SPEND-LEDGER FAULT');
+  it('claims permanence only for the budget remedy', () => {
+    expect(BUDGET_REMEDY).toContain('does not refill');
+    expect(READ_FAULT_REMEDY).not.toContain('does not refill');
+    expect(CORRUPT_LEDGER_REMEDY).not.toContain('does not refill');
   });
 
-  it('claims neither permanence nor a ledger fault for a refusal with no reported kind', () => {
-    const remedy = spendCapRefusalRemedy(undefined);
+  it('never claims a fault remedy is a spent budget, and each names its own fault', () => {
+    expect(READ_FAULT_REMEDY).toContain('READ FAULT');
+    expect(READ_FAULT_REMEDY).not.toContain('CORRUPT SPEND LEDGER');
+    expect(CORRUPT_LEDGER_REMEDY).toContain('CORRUPT SPEND LEDGER');
+    expect(CORRUPT_LEDGER_REMEDY).not.toContain('READ FAULT');
+  });
 
-    expect(remedy).not.toContain('does not refill');
-    expect(remedy).not.toContain('SPEND-LEDGER FAULT');
-    expect(remedy).toContain('NAMES NO KIND');
+  it('only the read-fault remedy promises a self-clearing outcome', () => {
+    expect(READ_FAULT_REMEDY).toContain('recovers on its own');
+    expect(BUDGET_REMEDY).not.toContain('recovers on its own');
+    expect(CORRUPT_LEDGER_REMEDY).not.toContain('recovers on its own');
   });
 });
 

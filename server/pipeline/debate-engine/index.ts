@@ -79,8 +79,15 @@ export {
   ALERT_REPEAT_EVERY_PROMPT_TIER_CROSSINGS,
   PromptTierCrossingThrottle,
 } from './llm/prompt-tier-alert.js';
-export type { SpendCap, SpendCapRefusalKind, SpendCapVerdict } from './llm/spend-cap.js';
-export { SqliteSpendCap, spendCapRefusalRemedy, UNCAPPED_SPEND } from './llm/spend-cap.js';
+export type { SpendCap, SpendCapVerdict } from './llm/spend-cap.js';
+export {
+  BUDGET_REMEDY,
+  CORRUPT_LEDGER_REMEDY,
+  READ_FAULT_REMEDY,
+  SqliteSpendCap,
+  spendCapRefusalRemedy,
+  UNCAPPED_SPEND,
+} from './llm/spend-cap.js';
 export type { LlmSpendRecord, LlmSpendSink } from './llm/spend-sink.js';
 export { NULL_SPEND_SINK, SqliteLlmSpendStore } from './llm/spend-sink.js';
 export type {

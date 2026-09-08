@@ -7,7 +7,13 @@
  *    covered, because #1013 admits several instrument passes concurrently.
  * 3. An MI failure still degrades to "no new intelligence" and never escapes.
  */
-import type { SpendCap, SpendCapVerdict } from '../../../pipeline/debate-engine/index.js';
+import {
+  BUDGET_REMEDY,
+  CORRUPT_LEDGER_REMEDY,
+  READ_FAULT_REMEDY,
+  type SpendCap,
+  type SpendCapVerdict,
+} from '../../../pipeline/debate-engine/index.js';
 import type { LogEntry, Logger } from '../../../shared/index.js';
 import { currentTraceId, runWithTraceId } from '../../../shared/index.js';
 import { composeMarketIntelligence, type MarketIntelligenceRefresh } from './analysts-adapter.js';
@@ -584,11 +590,16 @@ describe('MiRefreshQueue (#1085)', () => {
 
   describe('spend-cap refusal wording (#1372)', () => {
     // `mi_refresh_refused_spend_cap` used to assert "the budget does not
-    // refill" unconditionally, which is false on a fault refusal — a
-    // transient `llm_spend` read failure clears on its own. These two pin the
-    // per-kind wording so a swap of `spendCapRefusalRemedy`'s two branches
-    // reddens both.
-    it('states the budget remedy — permanent, raise the cap — on a budget refusal', async () => {
+    // refill" unconditionally, which is false on the two fault refusal kinds
+    // — a transient `llm_spend` read failure clears on its own. Assertions
+    // below compare against the exported remedy constants, not literal
+    // substrings, so a swap of which constant a kind maps to still reddens
+    // here while a wording-only edit does not touch this file.
+    function refusingCap(verdict: Extract<SpendCapVerdict, { admitted: false }>): SpendCap {
+      return { check: () => verdict };
+    }
+
+    it('states the budget remedy on a budget refusal, and its kind in the payload', async () => {
       const cap = meteredCap(1);
       cap.spentUsd = 1;
       const calls: string[] = [];
@@ -606,22 +617,22 @@ describe('MiRefreshQueue (#1085)', () => {
         (entry) => entry.event === 'mi_refresh_refused_spend_cap',
       );
       expect(refusal).toBeDefined();
-      expect(refusal?.message).toContain('does not refill with time');
-      expect(refusal?.message).not.toContain('SPEND-LEDGER FAULT');
+      expect(refusal?.message).toContain(BUDGET_REMEDY);
+      expect(refusal?.message).not.toContain(READ_FAULT_REMEDY);
+      expect(refusal?.message).not.toContain(CORRUPT_LEDGER_REMEDY);
+      expect(refusal?.payload).toMatchObject({ kind: 'budget' });
     });
 
-    it('states the fault remedy — a ledger fault, not a spent budget — on a fault refusal', async () => {
+    it('states the read-fault remedy on a read-fault refusal, and its kind in the payload', async () => {
       const calls: string[] = [];
       const logger = recordingLogger();
-      const faultCap: SpendCap = {
-        check: () => ({
-          admitted: false,
-          spent_usd: Number.NaN,
-          budget_usd: 1,
-          reason: 'spend cap unreadable (fail-closed)',
-          kind: 'fault',
-        }),
-      };
+      const faultCap = refusingCap({
+        admitted: false,
+        spent_usd: Number.NaN,
+        budget_usd: 1,
+        reason: 'spend cap unreadable (fail-closed)',
+        kind: 'read_fault',
+      });
       const queue = new MiRefreshQueue({
         spendCap: faultCap,
         refresher: billingRefresher({ spentUsd: 0 }, 1, calls),
@@ -635,24 +646,25 @@ describe('MiRefreshQueue (#1085)', () => {
         (entry) => entry.event === 'mi_refresh_refused_spend_cap',
       );
       expect(refusal).toBeDefined();
-      expect(refusal?.message).toContain('SPEND-LEDGER FAULT');
-      expect(refusal?.message).not.toContain('does not refill with time');
+      expect(refusal?.message).toContain(READ_FAULT_REMEDY);
+      expect(refusal?.message).not.toContain(BUDGET_REMEDY);
+      expect(refusal?.message).not.toContain(CORRUPT_LEDGER_REMEDY);
+      expect(refusal?.payload).toMatchObject({ kind: 'read_fault' });
       expect(calls).toEqual([]);
     });
 
-    it('claims neither permanence nor a ledger fault on a refusal with no reported kind', async () => {
+    it('states the corrupt-ledger remedy on a corrupt-ledger refusal, and its kind in the payload', async () => {
       const calls: string[] = [];
       const logger = recordingLogger();
-      const unknownKindCap: SpendCap = {
-        check: () => ({
-          admitted: false,
-          spent_usd: 1,
-          budget_usd: 1,
-          reason: 'spend cap reached',
-        }),
-      };
+      const corruptCap = refusingCap({
+        admitted: false,
+        spent_usd: Number.NaN,
+        budget_usd: 1,
+        reason: 'llm_spend total is not a finite number (fail-closed)',
+        kind: 'corrupt_ledger',
+      });
       const queue = new MiRefreshQueue({
-        spendCap: unknownKindCap,
+        spendCap: corruptCap,
         refresher: billingRefresher({ spentUsd: 0 }, 1, calls),
         logger,
       });
@@ -664,9 +676,10 @@ describe('MiRefreshQueue (#1085)', () => {
         (entry) => entry.event === 'mi_refresh_refused_spend_cap',
       );
       expect(refusal).toBeDefined();
-      expect(refusal?.message).toContain('NAMES NO KIND');
-      expect(refusal?.message).not.toContain('SPEND-LEDGER FAULT');
-      expect(refusal?.message).not.toContain('does not refill with time');
+      expect(refusal?.message).toContain(CORRUPT_LEDGER_REMEDY);
+      expect(refusal?.message).not.toContain(BUDGET_REMEDY);
+      expect(refusal?.message).not.toContain(READ_FAULT_REMEDY);
+      expect(refusal?.payload).toMatchObject({ kind: 'corrupt_ledger' });
       expect(calls).toEqual([]);
     });
   });

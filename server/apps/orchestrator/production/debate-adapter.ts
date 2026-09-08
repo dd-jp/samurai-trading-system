@@ -901,6 +901,7 @@ export function buildDebateStep(
           debate_id,
           spent_usd: spend.spent_usd,
           budget_usd: spend.budget_usd,
+          kind: spend.kind,
         },
       });
       return spendCappedDebateResult(debate_id, bar, spend.reason ?? 'spend cap reached');
