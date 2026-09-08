@@ -19,7 +19,8 @@ interface Migration {
   filename: string;
 }
 
-function listMigrations(dir: string): Migration[] {
+/** Migration files under `dir`, sorted ascending by version. */
+export function listMigrations(dir: string): Migration[] {
   return readdirSync(dir)
     .map((filename) => ({ filename, match: MIGRATION_FILE.exec(filename) }))
     .filter((entry): entry is { filename: string; match: RegExpExecArray } => entry.match !== null)
