@@ -6207,9 +6207,9 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // cases, not this slot.
       exitValuationAlerts: { postExitValuationDegradedAlert: () => {} },
       // #684 — the sixteenth `ALERT_CHANNEL_FIELDS` member. This run injects
-      // `tradingCalendar: new UsEquityRegularHoursCalendar()` directly
-      // (below), so `resolveUsEquitySessionCalendar` never runs and this slot
-      // is never exercised — a log-only stand-in is enough, same posture as
+      // `tradingCalendar: new AlwaysOpenCalendar()` directly (below), so
+      // `resolveUsEquitySessionCalendar` never runs and this slot is never
+      // exercised — a log-only stand-in is enough, same posture as
       // `dataFailoverAlerts` above.
       calendarFallbackAlerts: new LoggingCalendarFallbackAlertChannel(logger),
       // #971 — the seventeenth `ALERT_CHANNEL_FIELDS` member. Log-only like the
@@ -6256,11 +6256,11 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // pattern `runRiskCriticScenario`/`runDataFailoverScenario` use for a
       // mechanism the six-stage tick loop above cannot exercise for real.
       promptTierAlerts: new LoggingPromptTierAlertChannel(logger),
-      // #1378. This run injects
-      // `tradingCalendar: new UsEquityRegularHoursCalendar()` directly
-      // (below), so `assertLseCalendarCoverage`'s `LseRegularHoursCalendar`
-      // gate never fires and this slot is never exercised — a log-only
-      // stand-in is enough, same posture as `calendarFallbackAlerts` above.
+      // #1378. This run injects `tradingCalendar: new AlwaysOpenCalendar()`
+      // directly (below), so `assertLseCalendarCoverage`'s
+      // `LseRegularHoursCalendar` gate never fires and this slot is never
+      // exercised — a log-only stand-in is enough, same posture as
+      // `calendarFallbackAlerts` above.
       lseCalendarCoverageAlerts: new LoggingLseCalendarCoverageAlertChannel(logger),
     } satisfies Required<AlertChannels>;
 

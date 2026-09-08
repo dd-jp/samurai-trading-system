@@ -709,7 +709,7 @@ export const LSE_HOLIDAYS = new Set([
  * `US_TABLE_COVERAGE_END`.
  *
  * This is `2027-12-31`, matching `LSE_HALF_DAYS_CHECKED_THROUGH`, not
- * `2026-12-28` (the table's own last entry) — the two tables were populated
+ * `2027-12-28` (the table's own last entry) — the two tables were populated
  * from the same hand-entry pass over the same 2026-2027 window, so their
  * checked boundary is the same. The table's last entry stops short of that
  * boundary because there is no further UK bank holiday between the Boxing
@@ -761,6 +761,16 @@ export const LSE_HALF_DAYS = new Set([
 export const LSE_HALF_DAYS_CHECKED_THROUGH = '2027-12-31';
 
 /**
+ * The lexicographically earlier of two `YYYY-MM-DD` civil-date keys. Exported
+ * so `trading-calendar.test.ts` can pin the min-not-max property against
+ * unequal literal inputs, independent of whatever `LSE_HOLIDAYS_CHECKED_THROUGH`
+ * and `LSE_HALF_DAYS_CHECKED_THROUGH` currently happen to equal.
+ */
+export function earlierOf(a: string, b: string): string {
+  return a < b ? a : b;
+}
+
+/**
  * The binding LSE table-coverage cliff: the EARLIER of
  * `LSE_HOLIDAYS_CHECKED_THROUGH` and `LSE_HALF_DAYS_CHECKED_THROUGH`, not the
  * later. Whichever table's checked-through date comes first is unverified
@@ -772,11 +782,12 @@ export const LSE_HALF_DAYS_CHECKED_THROUGH = '2027-12-31';
  * to the LESS-covered table rather than silently trusting the more-covered
  * one.
  *
- * Computed as `min(...)`, not a third hand-typed literal: the two inputs are
- * themselves hand-checked (see their own docs for why THEY are not derived
- * from table contents), so taking the min of two verified dates carries no
- * drift risk — unlike deriving straight from `LSE_HOLIDAYS`/`LSE_HALF_DAYS`,
- * which would let a stray table entry silently move this forward.
+ * Computed via `earlierOf`, not a third hand-typed literal: the two inputs
+ * are themselves hand-checked (see their own docs for why THEY are not
+ * derived from table contents), so taking the earlier of two verified dates
+ * carries no drift risk — unlike deriving straight from
+ * `LSE_HOLIDAYS`/`LSE_HALF_DAYS`, which would let a stray table entry
+ * silently move this forward.
  *
  * Unlike `US_TABLE_COVERAGE_END`, nothing throws on this from inside the
  * calendar — `#closeMinutesFor` below stays total. See its doc for why an
@@ -786,10 +797,10 @@ export const LSE_HALF_DAYS_CHECKED_THROUGH = '2027-12-31';
  * is where this constant is actually enforced, at boot, before a live
  * position can exist to be stranded.
  */
-export const LSE_TABLE_COVERAGE_END =
-  LSE_HOLIDAYS_CHECKED_THROUGH < LSE_HALF_DAYS_CHECKED_THROUGH
-    ? LSE_HOLIDAYS_CHECKED_THROUGH
-    : LSE_HALF_DAYS_CHECKED_THROUGH;
+export const LSE_TABLE_COVERAGE_END = earlierOf(
+  LSE_HOLIDAYS_CHECKED_THROUGH,
+  LSE_HALF_DAYS_CHECKED_THROUGH,
+);
 
 /**
  * London Stock Exchange regular trading hours: Mon-Fri, 08:00-16:30 London,

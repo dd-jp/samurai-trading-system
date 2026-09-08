@@ -24,22 +24,29 @@
  * does not flood the escalation chat, the same posture
  * `calendarFallbackAlerts` takes).
  *
- * Fires only for the LIVE leg: the paper leg's own coverage cliff already has
- * its own alert (`calendarFallbackAlerts`, #684) and a live network fetch
- * that sidesteps the hand table entirely on the happy path.
+ * Fires only when the RESOLVED calendar is `LseRegularHoursCalendar`
+ * (`assertLseCalendarCoverage`'s only caller gates on `instanceof`, not on
+ * `mode` — see that guard's module doc): the paper leg normally resolves a
+ * different calendar and has its own coverage cliff already covered by its
+ * own alert (`calendarFallbackAlerts`, #684) plus a live network fetch that
+ * sidesteps the hand table entirely on the happy path, but a `mode: 'live'`
+ * config with an explicitly injected non-LSE calendar skips this alert too,
+ * on the same reasoning.
  */
 
 /**
  * One coverage-horizon warning, at boot. Only raised AHEAD of the cliff —
- * once `days_remaining` goes negative, `assertLseCalendarCoverage` throws
- * instead of posting this (a boot refusal names the date directly in the
- * thrown error; there is no live process left to receive an async alert
- * about it).
+ * `assertLseCalendarCoverage` throws instead of posting this once the
+ * calendar itself reports the close as unverified (a boot refusal names the
+ * date directly in the thrown error; there is no live process left to
+ * receive an async alert about it), and additionally refuses to post a
+ * negative `days_remaining` even if a calendar's boundary check ever
+ * disagreed with the raw coverage-end date it computes from.
  */
 export interface LseCalendarCoverageAlert {
   /** `LSE_TABLE_COVERAGE_END` at the time this alert was raised. */
   coverage_end: string;
-  /** Civil days from `reported_at` to `coverage_end`. Always >= 0 — see above. */
+  /** Civil days from `reported_at` to `coverage_end`. Always >= 0 — enforced by the guard, see above. */
   days_remaining: number;
   reported_at: Date;
 }

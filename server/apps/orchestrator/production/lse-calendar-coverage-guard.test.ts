@@ -1,4 +1,7 @@
-import { LseRegularHoursCalendar } from '../../../providers/market-data-service/index.js';
+import {
+  LSE_TABLE_COVERAGE_END,
+  LseRegularHoursCalendar,
+} from '../../../providers/market-data-service/index.js';
 import type { LogEntry, Logger } from '../types.js';
 import type { LseCalendarCoverageAlert } from './lse-calendar-coverage-alert.js';
 import { assertLseCalendarCoverage } from './lse-calendar-coverage-guard.js';
@@ -47,16 +50,13 @@ describe('assertLseCalendarCoverage delegates the boundary decision to coversClo
     ).not.toThrow();
   });
 
-  it('posts the horizon alert using LSE_TABLE_COVERAGE_END regardless of coversCloseFor', () => {
-    // The horizon alert's days-remaining count is independent of
-    // coversCloseFor — it is always measured against the real
-    // LSE_TABLE_COVERAGE_END, so a caller sees a consistent coverage_end
-    // even if coversCloseFor were ever overridden for testing elsewhere.
+  it('posts the horizon alert with the real coverage_end and a non-negative days_remaining', () => {
     const calendar = new LseRegularHoursCalendar();
     const posted: LseCalendarCoverageAlert[] = [];
+    const now = new Date('2027-12-01T12:00:00Z'); // 30 civil days before LSE_TABLE_COVERAGE_END.
 
     assertLseCalendarCoverage({
-      now: new Date('2020-01-06T12:00:00Z'),
+      now,
       calendar,
       logger: makeLogger(),
       alertChannel: {
@@ -66,6 +66,36 @@ describe('assertLseCalendarCoverage delegates the boundary decision to coversClo
       },
     });
 
-    expect(posted).toHaveLength(0); // 2020-01-06 is nowhere near the horizon.
+    expect(posted).toHaveLength(1);
+    expect(posted[0]).toEqual({
+      coverage_end: LSE_TABLE_COVERAGE_END,
+      days_remaining: 30,
+      reported_at: now,
+    });
+  });
+
+  it('does not post when coversCloseFor disagrees with LSE_TABLE_COVERAGE_END and the raw comparison would be negative', () => {
+    // A calendar whose coversCloseFor says "covered" past the real
+    // LSE_TABLE_COVERAGE_END (never true for the real calendar today, but
+    // exactly the shape a future subclass or a test double could produce)
+    // must not be able to post a negative days_remaining — that would
+    // violate LseCalendarCoverageAlert's documented invariant. Removing the
+    // `daysRemaining >= 0` check in assertLseCalendarCoverage turns this red.
+    const calendar = new LseRegularHoursCalendar();
+    calendar.coversCloseFor = () => true;
+    const posted: LseCalendarCoverageAlert[] = [];
+
+    assertLseCalendarCoverage({
+      now: new Date('2099-01-01T12:00:00Z'),
+      calendar,
+      logger: makeLogger(),
+      alertChannel: {
+        postLseCalendarCoverageAlert: (alert) => {
+          posted.push(alert);
+        },
+      },
+    });
+
+    expect(posted).toHaveLength(0);
   });
 });

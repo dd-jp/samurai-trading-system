@@ -1,5 +1,6 @@
 import {
   AlwaysOpenCalendar,
+  earlierOf,
   LSE_HALF_DAYS,
   LSE_HALF_DAYS_CHECKED_THROUGH,
   LSE_HOLIDAYS,
@@ -444,12 +445,25 @@ describe('the LSE table coverage cliff (#1378)', () => {
     }
   });
 
-  it('LSE_TABLE_COVERAGE_END is the min of the two checked-through dates', () => {
+  it('LSE_TABLE_COVERAGE_END is computed via earlierOf', () => {
     expect(LSE_TABLE_COVERAGE_END).toBe(
-      LSE_HOLIDAYS_CHECKED_THROUGH < LSE_HALF_DAYS_CHECKED_THROUGH
-        ? LSE_HOLIDAYS_CHECKED_THROUGH
-        : LSE_HALF_DAYS_CHECKED_THROUGH,
+      earlierOf(LSE_HOLIDAYS_CHECKED_THROUGH, LSE_HALF_DAYS_CHECKED_THROUGH),
     );
+  });
+
+  describe('earlierOf', () => {
+    // Unequal literals, independent of whatever LSE_HOLIDAYS_CHECKED_THROUGH
+    // and LSE_HALF_DAYS_CHECKED_THROUGH currently equal — a `max()` mutation
+    // of the ternary above would still pass the two tests above (both
+    // constants are currently equal) but fails here.
+    it('returns the earlier date regardless of argument order', () => {
+      expect(earlierOf('2027-01-01', '2027-06-30')).toBe('2027-01-01');
+      expect(earlierOf('2027-06-30', '2027-01-01')).toBe('2027-01-01');
+    });
+
+    it('returns the shared value when both dates are equal', () => {
+      expect(earlierOf('2027-03-15', '2027-03-15')).toBe('2027-03-15');
+    });
   });
 
   it('does NOT throw on isOpen past the coverage end — the resolver stays total', () => {

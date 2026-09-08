@@ -38,6 +38,13 @@
  * latch): boot is rare enough that this does not flood the escalation chat,
  * the same posture `calendarFallbackAlerts` takes.
  *
+ * The two thresholds are checked against different sources — THROW defers to
+ * `calendar.coversCloseFor`, ALERT computes its own `daysRemaining` from
+ * `LSE_TABLE_COVERAGE_END` — so a calendar whose `coversCloseFor` disagrees
+ * with that constant (a mock in tests today; conceivably a future subclass)
+ * must not be able to post a negative `daysRemaining`. The ALERT branch
+ * requires `daysRemaining >= 0` for exactly this reason.
+ *
  * ## Residual gap — this has exactly one call site, at boot
  *
  * There is no periodic re-check. A process started more than
@@ -127,7 +134,13 @@ export function assertLseCalendarCoverage(options: AssertLseCalendarCoverageOpti
   }
 
   const daysRemaining = civilDaysBetween(todayKey, LSE_TABLE_COVERAGE_END);
-  if (daysRemaining <= LSE_COVERAGE_ALERT_HORIZON_DAYS) {
+  // >= 0 is not redundant with the throw above: `coversCloseFor` is the
+  // boundary a calendar actually enforces, and a subclass could disagree
+  // with the raw LSE_TABLE_COVERAGE_END comparison — without this, a
+  // calendar that says "covered" past the constant would post a negative
+  // `days_remaining`, violating the documented invariant on
+  // `LseCalendarCoverageAlert` (lse-calendar-coverage-alert.ts).
+  if (daysRemaining >= 0 && daysRemaining <= LSE_COVERAGE_ALERT_HORIZON_DAYS) {
     const alertChannel = options.alertChannel ?? new LoggingLseCalendarCoverageAlertChannel(logger);
     alertChannel.postLseCalendarCoverageAlert({
       coverage_end: LSE_TABLE_COVERAGE_END,
