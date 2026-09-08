@@ -19,6 +19,7 @@ export type { Direction } from '../../../contracts/primitives.js';
 // Also imported, not just re-exported: `export … from` publishes the name
 // without binding it locally, and the interfaces below annotate with it.
 import type { Direction } from '../../../contracts/primitives.js';
+import type { DebateTerminationCause } from '../../shared/index.js';
 
 /**
  * Upstream contract: what every Analyst must provide. This IS the Debate
@@ -157,7 +158,7 @@ export interface DebateResult {
      * measurement exclude LLM-failure rows with one predicate instead of
      * folding them into "the budget is too tight".
      */
-    cause?: 'budget' | 'llm_failure';
+    cause?: DebateTerminationCause;
   };
   /**
    * Present only when `RateLimiter` refused to admit the debate at all (#388)

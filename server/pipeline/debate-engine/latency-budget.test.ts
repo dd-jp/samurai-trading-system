@@ -7,6 +7,7 @@ import {
 } from './latency-budget.js';
 import {
   LlmCancelledError,
+  LlmMalformedResponseError,
   LlmProviderError,
   LlmRateLimitError,
   LlmTimeoutError,
@@ -659,6 +660,31 @@ describe('enforceLatencyBudget', () => {
         produceResult: () =>
           new Promise((_resolve, reject) => {
             setTimeout(() => reject(new LlmRateLimitError('rate limited by provider')), 56_000);
+          }),
+        getCurrentState: () => undefined,
+        logger,
+      });
+
+      await vi.advanceTimersByTimeAsync(56_000);
+      const result = await promise;
+
+      expect(result.timed_out?.cause).toBe('llm_failure');
+    });
+
+    it('degrades on an LlmMalformedResponseError too, not only LlmTimeoutError', async () => {
+      const logger = makeLogger();
+
+      const promise = enforceLatencyBudget({
+        assetClass: 'stocks',
+        trace_id: 'trace-1',
+        debate_id: 'debate-1',
+        bar: BAR,
+        produceResult: () =>
+          new Promise((_resolve, reject) => {
+            setTimeout(
+              () => reject(new LlmMalformedResponseError('missing position field')),
+              56_000,
+            );
           }),
         getCurrentState: () => undefined,
         logger,

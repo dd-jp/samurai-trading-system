@@ -170,6 +170,28 @@ describe('SqliteDebateLogStore.writeLog', () => {
     expect(store.getByDebateId('debate-llm-failed')?.termination_cause).toBe('llm_failure');
   });
 
+  it('round-trips termination_cause of budget', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+
+    store.writeLog(
+      makeLog({
+        debate_id: 'debate-budget-exceeded',
+        termination: 'latency_truncated',
+        termination_cause: 'budget',
+      }),
+    );
+
+    expect(
+      db
+        .prepare('SELECT termination_cause FROM debate_log WHERE debate_id = ?')
+        .get('debate-budget-exceeded'),
+    ).toEqual({
+      termination_cause: 'budget',
+    });
+    expect(store.getByDebateId('debate-budget-exceeded')?.termination_cause).toBe('budget');
+  });
+
   it('distinguishes latency_truncated from non_converged in the persisted row', () => {
     const db = openSharedStore(':memory:');
     const store = new SqliteDebateLogStore(db);

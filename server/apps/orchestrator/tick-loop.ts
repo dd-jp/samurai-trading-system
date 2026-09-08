@@ -316,11 +316,10 @@ export async function runTickPlan(
         // THIS pass rather than a stale row a prior crashed pass on the same
         // instrument left behind (the store is never cleared on a throw, only
         // on success), which would otherwise attribute this crash to a stage
-        // it never reached. Guarded the same way the two writes below are
-        // (#507 review, kimi cycle 2): a store read failure here must not
-        // turn "attribute the crash" into a second, unguarded crash of its
-        // own — the crash itself is still recorded regardless, just without a
-        // stage name.
+        // it never reached. Guarded the same way the two writes below are:
+        // a store read failure here must not turn "attribute the crash" into
+        // a second, unguarded crash of its own — the crash itself is still
+        // recorded regardless, just without a stage name.
         let crashedStage: TickStage | undefined;
         try {
           const currentTick = config.currentTickStore.get(instrument.asset);

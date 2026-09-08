@@ -20,7 +20,7 @@
  * manually by the backtest harness and never fires on its own, so it cannot
  * drive a race against real elapsed time. Tests use `vi.useFakeTimers()`.
  */
-import { describeThrownSafely } from '../../shared/index.js';
+import { type DebateTerminationCause, describeThrownSafely } from '../../shared/index.js';
 import type { DebateLogger } from './debate-logger.js';
 import { LlmMalformedResponseError, LlmRateLimitError, LlmTimeoutError } from './llm/errors.js';
 import type { AssetClass } from './rate-limiter.js';
@@ -281,7 +281,7 @@ export async function enforceLatencyBudget(params: {
   // query exclude LLM-failure rows from a budget-tuning measurement (like
   // #1080's) with one predicate instead of relying on `logTimeout`'s
   // free-text `reason`, which nothing but a log reader parses.
-  const cause: 'budget' | 'llm_failure' = result.status === 'llm_failed' ? 'llm_failure' : 'budget';
+  const cause: DebateTerminationCause = result.status === 'llm_failed' ? 'llm_failure' : 'budget';
   const timed_out = { budget_ms, elapsed_ms, cause };
 
   if (partial) {
