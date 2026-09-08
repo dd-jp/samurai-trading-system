@@ -448,9 +448,13 @@ is two clicks at developer.saxo → *Get 24 Hour Token*.
 
 ### 2.9b The delayed feed is not just cheaper — it is outside a licensing regime that real time is inside
 
-Found 2026-09-08 while working [#1309](https://github.com/dd-jp/samurai-trading-system/issues/1309),
-from the **London Stock Exchange's own** published policy rather than from Saxo. It reframes §2.9's
-£7/month question, which until now looked like a straightforward purchase of better data.
+**Prior art first: [`34-lse-mark-source-options.md`](34-lse-mark-source-options.md) §5 got here before
+this section did**, and is the authority on the licence arithmetic. It already records that
+Non-Display Usage is defined over Real Time Data, quotes §6.5, prices the LSEG direct route at
+**£6,695/yr** (Schedule A **2026**, §3.3.2 — read there as *Client Facilitation*; the 2025 figure was
+£6,500), and — the part this section originally got wrong — establishes that **delayed data is not
+self-evidently licence-free**. Read doc 34 §5 for the arithmetic; what follows adds three things it
+does not carry, and corrects one overstatement made here on 2026-09-08.
 
 **The definitions do the work.** LSE Schedule B (2026) defines *Non-Display Usage* as the access,
 processing or use of **Real Time Data** which is not *Display Data*, and defines *Display Data* as data
@@ -460,15 +464,20 @@ trading; and the Policy Guidelines enumerate the qualifying use cases — **6.4.
 trading"**, 6.4.1 automated order/quote generation, 6.4.5 price referencing for trading purposes.
 Samurai is squarely described.
 
-The applicable category is **Trading as Principal** (own account). From the 2025 Price List, for
-ETF/ETP — our universe — at 1–5 entitlements:
+**On the category, this section and doc 34 differ, and it is worth resolving.** Doc 34 cites §3.3.2
+*Client Facilitation*; but Samurai trades **its own account for its own benefit**, which is Schedule
+B's **Trading as Principal** — "trading-based activities as 'principal', on such Customer's own
+account". Client Facilitation is for facilitating a customer's *business*. Principal looks like the
+right row; the two are priced identically at this banding anyway (£6,500 in 2025 / £6,695 in 2026), so
+nothing downstream turns on it. From the 2025 Price List, for ETF/ETP — our universe — at 1–5
+entitlements:
 
 | | Level 1 | Level 2 |
 | --- | ---: | ---: |
 | ETF/ETP, Trading as Principal, 1–5 entitlements | **£6,500 / yr** | £13,000 / yr |
 
-*(Year seam: the definitions and policy are the **2026** Schedule B; the charge figures are the
-**2025** Price List, the latest found. Magnitudes, not the current tariff.)*
+*(Year seam: definitions and policy from the **2026** Schedule B; charge figures from the **2025**
+Price List. Doc 34 §5 carries the **2026** figure, £6,695 — prefer it.)*
 
 **There is no Private Investor exemption in §6.** Schedule B's Private Investor carve-outs sit in
 redistribution (3.2), derived data (4.4) and per-price-request (3.5.3); none reach the Non-Display
@@ -484,14 +493,21 @@ licence (Level 1 UK market data, £7,976/yr on the same price list), which the �
 amortises. **Record £6,500 as what is at stake if the answer is bad — not as a live cost against a
 £1,000 book.**
 
-**The load-bearing consequence, and it is cheerful.** Non-Display Usage is scoped to **Real Time Data
-only**. The free 15-minute delayed feed is **outside the regime entirely**. Put that beside what the
-code actually reads — the analysts and the Trader consume **`getBars`**, while `getQuote` has only two
+**The load-bearing consequence — stated more carefully than it first was here.** Non-Display Usage is
+scoped to **Real Time Data only**, so the delayed feed is outside **that** regime. It is *not* outside
+all licensing, and this section said "licence-clean" before checking doc 34: §7.2 exempts **Data
+Charges** only, and only as against the End Customer, while **Delayed Data *Licence* Charges are a
+separate line** (£5,831/yr per *Website*, Level 1). That charge is redistribution-shaped — priced per
+website — so it very likely does not reach a single self-consuming user, but doc 34 is right that this
+is a question for LSEG rather than one to assume. **The honest claim is narrower: delayed data avoids
+the non-display question, not every licensing question.** Put that beside what the code actually
+reads — the analysts and the Trader consume **`getBars`**, while `getQuote` has only two
 non-test callers, both in execution (§2.5) — and:
 
 - Samurai's **signal path already runs on delayed data**, since `chart/v3` bars carry
   `ChartInfo.DelayedByMinutes: 15` exactly as quotes do (measured across five LSE ETP/ETC lines).
-- Staying on the delayed feed is therefore **both free and licence-clean for automated trading**.
+- Staying on the delayed feed therefore **carries no non-display exposure**, and no Data Charge
+  against the End Customer — with the Delayed Data Licence question above left open.
 - The £7/month would sharpen quotes for **two execution-path callers** while opening a licensing
   question the delayed feed does not raise.
 
