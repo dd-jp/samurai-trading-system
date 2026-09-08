@@ -295,6 +295,76 @@ describe('dashboard server — api', () => {
   });
 });
 
+/**
+ * #1355: the `/api/snapshot` catch renders the caught value with
+ * `err instanceof Error ? err.message : '…'` inside the very `catch` whose
+ * job is to WRITE the error response. `res.writeHead(500, …).end(JSON.stringify(…))`
+ * evaluates `writeHead` first — so a hostile `err.message` that throws during
+ * the `.end()` argument's evaluation leaves the 500 headers sent and the
+ * body never written: the request hangs rather than failing cleanly, since
+ * `.end()` is never reached to close it out.
+ */
+describe('dashboard server — /api/snapshot error responder guard (#1355)', () => {
+  /**
+   * An instance-level `message` getter, not a class-level one: `Error`'s own
+   * constructor assigns `this.message = …` as an OWN data property, which
+   * would shadow a getter declared on the subclass prototype (confirmed —
+   * the class-getter version of this test passed the constructor argument
+   * straight through, never reaching the getter at all). Matches
+   * `telegram-bot-api-client.test.ts`'s `escalationError` hostile fixture
+   * (#1351) for the identical reason.
+   */
+  function makeHostileError(): Error {
+    const err = new Error('placeholder');
+    Object.defineProperty(err, 'message', {
+      get(): string {
+        throw new Error('render boom');
+      },
+      configurable: true,
+    });
+    return err;
+  }
+
+  class ThrowingStore extends InMemoryQueryStore {
+    override getOpenPositions(): never {
+      throw makeHostileError();
+    }
+  }
+
+  let hostileServer: DashboardServer;
+
+  beforeAll(async () => {
+    hostileServer = createDashboardServer({
+      port: 0,
+      host: '127.0.0.1',
+      store: new ThrowingStore(),
+      bundleRoot,
+      mode: 'paper',
+    });
+    await hostileServer.start();
+  });
+
+  afterAll(async () => {
+    await hostileServer.stop();
+  });
+
+  it('completes the 500 response (body written, connection closed) instead of hanging', async () => {
+    // A generous but bounded timeout: before the fix this request never
+    // completes at all (headers sent, `.end()` never reached), so without a
+    // bound the test itself would hang rather than fail.
+    const r = await fetch(`${hostileServer.url}/api/snapshot`, {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(5_000),
+    });
+    expect(r.status).toBe(500);
+    const body = (await r.json()) as { error: string };
+    // The literal fallback is dropped in favor of `describeThrownSafely`'s
+    // placeholder for a value that could not be rendered at all — see
+    // `renderResponderError`'s doc comment in server.ts.
+    expect(body.error).toBe('[unrenderable error]');
+  });
+});
+
 describe('dashboard server — bundle not built', () => {
   let unbuilt: DashboardServer;
   let unbuiltBase: string;
