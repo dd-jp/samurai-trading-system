@@ -63,6 +63,10 @@ import type {
   CalendarFallbackAlertChannel,
 } from './production/calendar-fallback-alert.js';
 import type { DataFailoverAlert, DataFailoverAlertChannel } from './production/data-failover.js';
+import type {
+  LseCalendarCoverageAlert,
+  LseCalendarCoverageAlertChannel,
+} from './production/lse-calendar-coverage-alert.js';
 import {
   MI_NO_DATA_BY_NAME_COUNTER,
   MI_NO_DATA_BY_SUBCLASS_COUNTER,
@@ -647,6 +651,45 @@ export class LoggingCalendarFallbackAlertChannel implements CalendarFallbackAler
       payload: {
         reason: alert.reason,
         fallback_coverage_end: alert.fallback_coverage_end,
+        reported_at: alert.reported_at.toISOString(),
+      },
+    });
+  }
+}
+
+/**
+ * The LIVE equity leg's own table-coverage horizon warning (#1378) — the
+ * hand-entered `LSE_HOLIDAYS`/`LSE_HALF_DAYS` (trading-calendar.ts) checked
+ * only through `LSE_TABLE_COVERAGE_END`. Written to the log at `warn`, not
+ * `error`: unlike the paper leg's fallback above, nothing has degraded yet —
+ * `assertLseCalendarCoverage` (production/lse-calendar-coverage-guard.ts)
+ * posts this only while the cliff is still ahead
+ * (`LSE_COVERAGE_ALERT_HORIZON_DAYS`); once it is behind, boot REFUSES
+ * outright instead of reaching this channel at all.
+ *
+ * Same caveat as every other log-only stand-in: `SAMURAI_ALERTS=log-only`
+ * cannot page anyone. `TradeChannelLseCalendarCoverageAlert`
+ * (lse-calendar-coverage-alert-channel.ts) is the reachable-from-a-phone
+ * implementation `SAMURAI_ALERTS=telegram` (#322) selects.
+ */
+export class LoggingLseCalendarCoverageAlertChannel implements LseCalendarCoverageAlertChannel {
+  constructor(private readonly logger: Logger) {}
+
+  postLseCalendarCoverageAlert(alert: LseCalendarCoverageAlert): void {
+    this.logger.log({
+      trace_id: 'startup',
+      stage: 'orchestrator',
+      event: 'lse_calendar_coverage_horizon',
+      level: 'warn',
+      message:
+        `the LIVE equity leg's hand-entered LSE session tables are checked only through ` +
+        `${alert.coverage_end} — ${alert.days_remaining} day(s) remaining. Extend ` +
+        'LSE_HOLIDAYS/LSE_HALF_DAYS before that date; boot will refuse the live leg once it ' +
+        'passes. SAMURAI_ALERTS=log-only cannot page anyone about this; use ' +
+        'SAMURAI_ALERTS=telegram for an unattended run.',
+      payload: {
+        coverage_end: alert.coverage_end,
+        days_remaining: alert.days_remaining,
         reported_at: alert.reported_at.toISOString(),
       },
     });

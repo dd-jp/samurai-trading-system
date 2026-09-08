@@ -1,4 +1,14 @@
-import { AlwaysOpenCalendar, UsEquityRegularHoursCalendar } from './trading-calendar.js';
+import {
+  AlwaysOpenCalendar,
+  earlierOf,
+  LSE_HALF_DAYS,
+  LSE_HALF_DAYS_CHECKED_THROUGH,
+  LSE_HOLIDAYS,
+  LSE_HOLIDAYS_CHECKED_THROUGH,
+  LSE_TABLE_COVERAGE_END,
+  LseRegularHoursCalendar,
+  UsEquityRegularHoursCalendar,
+} from './trading-calendar.js';
 
 describe('AlwaysOpenCalendar', () => {
   it('is open at every instant — crypto trades 24/7', () => {
@@ -401,5 +411,105 @@ describe('the hand-entered table coverage cliff (#684)', () => {
 
   it('does not throw for the last covered date', () => {
     expect(() => calendar.isOpen(new Date('2027-12-31T15:00:00Z'))).not.toThrow();
+  });
+});
+
+describe('the LSE table coverage cliff (#1378)', () => {
+  const calendar = new LseRegularHoursCalendar();
+  // A Tuesday, ordinary-looking, comfortably past LSE_TABLE_COVERAGE_END.
+  const beyondCoverage = new Date('2028-03-14T15:00:00Z');
+
+  it('LSE_TABLE_COVERAGE_END currently equals both checked-through dates', () => {
+    // Both tables were hand-checked through the same 2026-2027 window, so
+    // today LSE_HOLIDAYS_CHECKED_THROUGH === LSE_HALF_DAYS_CHECKED_THROUGH
+    // === LSE_TABLE_COVERAGE_END. The min()-of-the-two property (below) is
+    // what keeps this correct once the two are extended independently and
+    // stop matching.
+    expect(LSE_TABLE_COVERAGE_END).toBe('2027-12-31');
+    expect(LSE_HOLIDAYS_CHECKED_THROUGH).toBe(LSE_TABLE_COVERAGE_END);
+    expect(LSE_HALF_DAYS_CHECKED_THROUGH).toBe(LSE_TABLE_COVERAGE_END);
+  });
+
+  it('no LSE_HOLIDAYS entry exceeds LSE_HOLIDAYS_CHECKED_THROUGH', () => {
+    // Drift protection: extending the table without moving its own
+    // checked-through constant fails here, rather than silently widening
+    // what the boot guard trusts.
+    for (const key of LSE_HOLIDAYS) {
+      expect(key <= LSE_HOLIDAYS_CHECKED_THROUGH).toBe(true);
+    }
+  });
+
+  it('no LSE_HALF_DAYS entry exceeds LSE_HALF_DAYS_CHECKED_THROUGH', () => {
+    for (const key of LSE_HALF_DAYS) {
+      expect(key <= LSE_HALF_DAYS_CHECKED_THROUGH).toBe(true);
+    }
+  });
+
+  it('LSE_TABLE_COVERAGE_END is computed via earlierOf', () => {
+    expect(LSE_TABLE_COVERAGE_END).toBe(
+      earlierOf(LSE_HOLIDAYS_CHECKED_THROUGH, LSE_HALF_DAYS_CHECKED_THROUGH),
+    );
+  });
+
+  describe('earlierOf', () => {
+    // Unequal literals, independent of whatever LSE_HOLIDAYS_CHECKED_THROUGH
+    // and LSE_HALF_DAYS_CHECKED_THROUGH currently equal — a `max()` mutation
+    // of the ternary above would still pass the two tests above (both
+    // constants are currently equal) but fails here.
+    it('returns the earlier date regardless of argument order', () => {
+      expect(earlierOf('2027-01-01', '2027-06-30')).toBe('2027-01-01');
+      expect(earlierOf('2027-06-30', '2027-01-01')).toBe('2027-01-01');
+    });
+
+    it('returns the shared value when both dates are equal', () => {
+      expect(earlierOf('2027-03-15', '2027-03-15')).toBe('2027-03-15');
+    });
+  });
+
+  it('does NOT throw on isOpen past the coverage end — the resolver stays total', () => {
+    // Unlike UsEquityRegularHoursCalendar: a throw here sits on the flatten
+    // path (isOpen/sessionStart/sessionEnd all route through
+    // #closeMinutesFor), so a position open past this date must still be
+    // flattenable. The boot guard, not this method, is what refuses the run.
+    expect(() => calendar.isOpen(beyondCoverage)).not.toThrow();
+  });
+
+  it('does NOT throw on sessionEnd past the coverage end', () => {
+    expect(() => calendar.sessionEnd(beyondCoverage)).not.toThrow();
+  });
+
+  it('does NOT throw on sessionStart past the coverage end', () => {
+    expect(() => calendar.sessionStart(beyondCoverage)).not.toThrow();
+  });
+
+  it('coversCloseFor is true at and before the coverage end', () => {
+    expect(calendar.coversCloseFor(new Date(`${LSE_TABLE_COVERAGE_END}T15:00:00Z`))).toBe(true);
+    expect(calendar.coversCloseFor(new Date('2020-01-06T15:00:00Z'))).toBe(true);
+  });
+
+  it('coversCloseFor is false past the coverage end', () => {
+    expect(calendar.coversCloseFor(beyondCoverage)).toBe(false);
+  });
+
+  it('an unmodelled half-day past coverage does not silently report a verified close', () => {
+    // 2029-12-24 is a Monday — half-day-shaped (Christmas Eve) but two years
+    // past LSE_TABLE_COVERAGE_END, so LSE_HALF_DAYS was never extended to
+    // cover it. What matters is that coversCloseFor says this date is
+    // UNVERIFIED, and that a live boot for this date is refused elsewhere
+    // (production.test.ts's "refuses to build ... for an unmodelled
+    // half-day" case) — not what #closeMinutesFor's specific numeric guess
+    // for this date happens to be. Pinning that guess as "correct" would
+    // tie this test to an implementation detail the coverage guard exists
+    // precisely so nothing downstream has to trust.
+    const unmodelledHalfDay = new Date('2029-12-24T15:00:00Z');
+
+    expect(calendar.coversCloseFor(unmodelledHalfDay)).toBe(false);
+    // #closeMinutesFor stays total (see the class doc) — still answers,
+    // still doesn't throw, past coverage.
+    expect(() => calendar.sessionEnd(unmodelledHalfDay)).not.toThrow();
+  });
+
+  it('does not throw for the last covered date', () => {
+    expect(() => calendar.isOpen(new Date(`${LSE_TABLE_COVERAGE_END}T15:00:00Z`))).not.toThrow();
   });
 });

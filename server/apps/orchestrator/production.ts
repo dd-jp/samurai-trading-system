@@ -291,6 +291,7 @@ import {
   type VerdictStepDeps,
 } from './production/direct-bind.js';
 import { assertFlattenWindowCoversTickInterval } from './production/flatten-tick-coupling.js';
+import { assertLseCalendarCoverage } from './production/lse-calendar-coverage-guard.js';
 import { MiCoverageMonitor } from './production/mi-coverage.js';
 // #1085: the MI refresh, off the analyst stage's critical path and serialised
 // behind one spend check.
@@ -1074,6 +1075,22 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
           'config.tradingCalendar resolves to UsEquityRegularHoursCalendar.',
       );
     }
+  }
+
+  // #1378 — the live equity leg's own table-coverage cliff. `instanceof`,
+  // not `.constructor !==` like the check above (#989's exact-identity
+  // reasoning does not apply here): `LseRegularHoursCalendar`'s hand-entered
+  // tables and their coverage cliff are inherited by any subclass, so a
+  // future variant of this calendar should be caught by this guard too, not
+  // silently exempted from it the way the benchmark-collision check above
+  // deliberately exempts only an exact `UsEquityRegularHoursCalendar` match.
+  if (tradingCalendar instanceof LseRegularHoursCalendar) {
+    assertLseCalendarCoverage({
+      now: clock.now(),
+      calendar: tradingCalendar,
+      logger: config.logger ?? new JsonLogger(),
+      alertChannel: config.lseCalendarCoverageAlerts,
+    });
   }
 
   // FIRST, ahead of every store, socket and wire client below (PR #390

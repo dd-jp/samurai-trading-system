@@ -135,6 +135,10 @@ export { closeTimeOf, isDailyTimeframe, timeframeToMs } from './timeframe.js';
 export type { TradingCalendar } from './trading-calendar.js';
 export {
   AlwaysOpenCalendar,
+  // #1378 — the hand-entered LSE tables' checked coverage cliff (the earlier
+  // of the two tables' own checked-through dates); the boot guard in
+  // production/lse-calendar-coverage-guard.ts enforces it.
+  LSE_TABLE_COVERAGE_END,
   // #668 — the live equity leg's venue (#659: GBP LSE-listed ETFs, restriction
   // re-confirmed against the venue change, #946; venue itself is Saxo GIA per
   // ADR-0015's 2026-08-30 amendment, map #905 — not #659, which never named
