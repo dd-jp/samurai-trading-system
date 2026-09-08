@@ -64,10 +64,17 @@
 --
 -- `'live'` survives as the COALESCE fallback for the case the join cannot
 -- answer: `sweepTerminalPositions` deletes from `open_positions`, so a lot
--- aged out of both tables leaves its flatten row underivable. That is the
--- same posture migration 0033 took, and it is the column's DEFAULT for the
--- same reason — a value for the rows nothing else can speak for, not a
--- claim about the rows that can.
+-- aged out of both tables leaves its flatten row underivable. It is the
+-- column's DEFAULT for that reason and no other — a value for the rows
+-- nothing else can speak for, not a claim about the rows that can.
+--
+-- Note this is NOT migration 0033's posture, despite the identical column
+-- declaration. 0033 introduced `arm` in the first place, so at the moment it
+-- ran there was no control arm to have written anything and its blanket
+-- `'live'` was, in its own words, "the true value for every backfilled row,
+-- not a placeholder". That reasoning does not transfer here: the control
+-- arm has been writing to THIS table since it shipped, which is what the
+-- 11-of-13 measurement above says.
 --
 -- ## Key-based reads/writes stay unfiltered
 --
