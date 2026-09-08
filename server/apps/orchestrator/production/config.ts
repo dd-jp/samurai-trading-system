@@ -425,7 +425,7 @@ export interface ProductionConfig extends AlertChannelSlots {
    */
   alpacaDataClient?: AlpacaMarketDataClient;
   /**
-   * HITL approval round-trip (Verdict's `hitl` gate, 6). Same shape as
+   * HITL approval round-trip (Verdict's HITL gate, 6). Same shape as
    * `heartbeatChannel`: pass `SignedApprovalChannel`
    * (verdict/notifications/verified-approval-channel.ts) so #207's HMAC
    * verification is in the path — the composition root cannot construct it

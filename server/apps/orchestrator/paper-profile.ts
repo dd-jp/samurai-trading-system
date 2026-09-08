@@ -1418,7 +1418,7 @@ export function buildStartingProfileConfigs(
      * though the specific "blocks every other instrument" arithmetic no
      * longer does.
      *
-     * **What this removes, stated plainly.** The `hitl` gate (6) is now
+     * **What this removes, stated plainly.** The HITL gate (6) is now
      * unreachable: the dial short-circuits `shouldEngageHitl` to `false`
      * before `isFlagged` is consulted, so no trade is ever routed to a
      * human, and `ProductionConfig.approvals` is never called.

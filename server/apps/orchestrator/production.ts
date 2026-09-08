@@ -2155,7 +2155,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     positionStore: executionStore,
     config: config.verdictConfig,
     // Unreachable by design since ADR-0007: `automation_level` is `auto` for
-    // both classes, so the `hitl` gate (6) short-circuits and this is never called. It
+    // both classes, so the HITL gate (6) short-circuits and this is never called. It
     // THROWS rather than auto-approving, so that turning the dial back
     // without wiring a transport fails loudly instead of fabricating
     // consent — and, unlike `ConsoleApprovalChannel`, it constructs in

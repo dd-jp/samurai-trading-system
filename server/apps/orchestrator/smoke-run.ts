@@ -6262,14 +6262,14 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // same `mode: 'paper'` — so the HITL gate resolves through
       // `automation_level: 'auto'` exactly as it will during the soak.
       // `mode: 'backtest'` was the alternative and was rejected deliberately:
-      // it bypasses Verdict's `hitl` gate (6) outright (verdict/index.ts),
+      // it bypasses Verdict's HITL gate (6) outright (verdict/index.ts),
       // which would leave the pre-soak gate validating a path the soak
       // never takes.
       //
       // **This is now the enforcement check for ADR-0007, and it works by
       // omission.** No `approvals` is injected here, so the composition root
       // installs its `UnwiredApprovalChannel` default — which THROWS if the
-      // `hitl` gate (6) is ever reached. A smoke run that transacts is
+      // HITL gate (6) is ever reached. A smoke run that transacts is
       // therefore positive evidence that the `auto` dial short-circuits
       // before any approval is requested, on the real composition root
       // rather than in a unit test.

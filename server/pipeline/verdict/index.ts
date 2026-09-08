@@ -22,8 +22,11 @@
  * drift, dedup, market-open, breaker and HITL each up by one — which made
  * "gate 3" mean opposite things, drift there vs. dedup here, depending on
  * which document a reader carried the number in from. Resolved by naming
- * first
- * everywhere outside this file.
+ * first everywhere outside this file, `index.test.ts` included. The
+ * one gate with no `no_go_reason` to name is HITL (6), which refuses with
+ * `timeout` or `human_rejected` and is therefore cited by role, unbackticked,
+ * as "the HITL gate (6)"; `hitl` is not a member of the union and must not be
+ * written as though it were.
  *
  * The first two gates read as one word and are two different questions:
  * `staleness` bounds how old our DECISION is, `stale_feed` (#641) bounds how
@@ -42,8 +45,16 @@
  *   structural rather than occasional.
  *
  * Neither marker is derivable from the clock or from `intent_type`; both are
- * set at the single site that constructs an exit (`buildFlattenExit`). Every
- * other gate still runs, for the flatten as for everything else.
+ * set at the single site that constructs an exit (`buildFlattenExit`).
+ *
+ * THE TWO STACK, ONE WAY. `unpriced_exit` is reachable only on that site's
+ * `exit_reason: 'flatten'` branch, and `exit_reason: 'flatten'` alone is what
+ * sets `mandatory_flatten`, so every `unpriced_exit` intent is by construction
+ * also a `mandatory_flatten` and skips all THREE of `staleness`, `stale_feed`
+ * and `drift`. The reverse does not hold: a flatten whose mark read succeeded
+ * carries `mandatory_flatten` without `unpriced_exit` and skips `staleness`
+ * alone. Under either marker, every gate not named above still runs — dedup
+ * (3), market-open (4), breaker (5) and HITL (6).
  *
  * HITL only engages per the per-asset-class automation dial: `manual`
  * always engages it, `auto` never does, `semi_auto` engages it only when a
@@ -196,8 +207,10 @@ export class VerdictImpl implements Verdict {
     // accident. An entry never carries the marker, and neither do the two
     // discretionary exits (`signal_decay`, `direction_flip`), which ARE acting
     // on an opinion and stay bounded here exactly as before. Every later gate
-    // still runs for the flatten: dedup (3) is what stops a repeated flatten
-    // double-submitting, and the breaker re-check (5) still applies.
+    // still runs for a PRICED flatten: dedup (3) is what stops a repeated
+    // flatten double-submitting, and the breaker re-check (5) still applies.
+    // An UNPRICED one additionally skips the two price gates at the branch
+    // below, since `unpriced_exit` implies this marker — see the file header.
     const signalAgeMs = now.getTime() - orderIntent.decision_timestamp.getTime();
     const maxAgeMs = config.max_signal_age[orderIntent.asset_class];
     if (orderIntent.metadata.mandatory_flatten !== true && signalAgeMs > maxAgeMs) {
@@ -230,10 +243,17 @@ export class VerdictImpl implements Verdict {
     //
     // Scoped by the flag alone, so the healthy path is byte-identical: an exit
     // that HAS a mark still drifts and still ages, and a normally-priced
-    // flatten is gated exactly as before. Gates 3 (dedup), 4 (market-open) and
-    // 5 (breaker re-check) still run — none of them reads a price, and the
-    // dedup gate in particular is what keeps a repeated flatten from
-    // double-submitting while the feed is down.
+    // flatten is gated exactly as before. Gates 3 (dedup), 4 (market-open),
+    // 5 (breaker re-check) and 6 (HITL) still run — none of them reads a
+    // price, and the dedup gate in particular is what keeps a repeated
+    // flatten from double-submitting while the feed is down.
+    //
+    // `staleness` (gate 1) does NOT still run for such an intent, and this is
+    // the one place that is easy to get wrong: `unpriced_exit` is only ever
+    // set alongside `mandatory_flatten` (both come off `exit_reason:
+    // 'flatten'` at `buildFlattenExit`), so #894's staleness exemption above
+    // has already fired by the time control reaches here. Three gates are
+    // skipped for an unpriced flatten, not the two this branch skips.
     if (orderIntent.metadata.unpriced_exit !== true) {
       const noGoOnPrice = await this.#priceGates(orderIntent, marketData, config, clock, now);
       if (noGoOnPrice !== null) return noGoOnPrice;
