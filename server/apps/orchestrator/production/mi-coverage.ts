@@ -95,8 +95,16 @@ export interface MiCoverageTelemetry {
   noDataObserved(event: MiCoverageEvent): void;
 }
 
-/** A coverage alert for one instrument, naming it and its subclass. */
+/**
+ * A coverage alert for one instrument, naming it and its subclass.
+ *
+ * Carries `trace_id` explicitly, the same way `MiCoverageEvent` above does —
+ * `checkMiCoverage` already holds `params.trace_id` at both call sites, so
+ * this is the "remains the preferred form" case `trace-context.ts` describes,
+ * not the ambient-fallback one (#1280).
+ */
 export interface MiCoverageAlert {
+  trace_id: string;
   instrument: string;
   asset_class: AssetClass;
   subclass: CoverageSubclass;
@@ -313,6 +321,7 @@ export async function checkMiCoverage(
 
   try {
     await deps.alertChannel?.postCoverageAlert({
+      trace_id: params.trace_id,
       instrument: params.instrument,
       asset_class: params.assetClass,
       subclass,

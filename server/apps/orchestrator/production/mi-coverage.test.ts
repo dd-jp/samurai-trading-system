@@ -317,10 +317,41 @@ describe('checkMiCoverage', () => {
 
     expect(alertsPosted).toHaveLength(1);
     expect(alertsPosted[0]).toMatchObject({
+      trace_id: 'trace-1',
       instrument: '3USL',
       subclass: 'index_etp_3x',
       asset_class: 'stocks',
     });
+  });
+
+  // #1280: `MiCoverageAlert.trace_id` is threaded from `params.trace_id`, the
+  // same value the adjacent `noDataObserved`/catch-line telemetry already
+  // uses — not a hardcoded constant on the alert-channel side. Two different
+  // trace ids proves it is threaded rather than fixed.
+  it("threads the caller's trace_id onto the posted alert, not a fixed constant (#1280)", async () => {
+    const { deps: deps1, alertsPosted: alertsPosted1 } = buildDeps({
+      covered: false,
+      subclassOf: { '3USL': 'index_etp_3x' },
+    });
+    await checkMiCoverage(deps1, {
+      trace_id: 'tick-a',
+      instrument: '3USL',
+      assetClass: 'stocks',
+      reportedAt: NOW,
+    });
+    expect(alertsPosted1[0]?.trace_id).toBe('tick-a');
+
+    const { deps: deps2, alertsPosted: alertsPosted2 } = buildDeps({
+      covered: false,
+      subclassOf: { '3USL': 'index_etp_3x' },
+    });
+    await checkMiCoverage(deps2, {
+      trace_id: 'tick-b',
+      instrument: '3USL',
+      assetClass: 'stocks',
+      reportedAt: NOW,
+    });
+    expect(alertsPosted2[0]?.trace_id).toBe('tick-b');
   });
 
   it('counts the miss but holds the alert for a name MI has not finished looking at yet (#1085)', async () => {

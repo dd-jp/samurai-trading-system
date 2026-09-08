@@ -10,6 +10,7 @@
  * degrading rather than refusing.
  */
 import type { TelegramClient } from '../../pipeline/verdict/index.js';
+import { currentTraceId } from '../../shared/index.js';
 import type {
   ExitValuationDegradedAlert,
   ExitValuationDegradedAlertChannel,
@@ -95,7 +96,10 @@ export class TradeChannelExitValuationDegradedAlert implements ExitValuationDegr
       // A failed send must itself stay visible — see `TradeChannelBreachAlert`
       // and `TradeChannelThresholdClampAlert` for the identical reasoning.
       this.#logger.log({
-        trace_id: 'exit-valuation-degraded',
+        // `reportExitValuationDegraded` (direct-bind.ts) already logs this
+        // same failed exit under `context.trace_id`; this joins it instead of
+        // a second, unjoinable taxonomy (#1183, #1280).
+        trace_id: currentTraceId() ?? 'exit-valuation-degraded',
         // The seam that raised it, not a hardcoded `'risk'` — #826 added a
         // `trader` seam, and a line naming the wrong stage is worse than a
         // generic one when the operator is grepping for the feed fault.

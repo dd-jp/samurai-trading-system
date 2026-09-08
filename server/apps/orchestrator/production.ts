@@ -226,6 +226,7 @@ import {
   SqliteAlertDeliveryLog,
 } from './alert-delivery-log.js';
 import { AnalystSkipKindRelay } from './analysts-decision.js';
+import { LLM_SPEND_CAP_BREACH } from './breach-alert-channel.js';
 import {
   LoggingAnalystSkipAlertChannel,
   LoggingAnalystTelemetry,
@@ -1410,7 +1411,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       logger,
       () =>
         breachAlerts.postBreachAlert({
-          breaches: ['llm_spend_cap'],
+          breaches: [LLM_SPEND_CAP_BREACH],
           reported_at: clock.now(),
         }),
     );
@@ -3455,6 +3456,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         // rather than merely true until an alert transport misbehaves.
         try {
           config.thresholdClampAlerts?.postThresholdClampAlert({
+            trace_id: 'feedback-cycle',
             where: 'daily-kill-line-check',
             message: error instanceof Error ? error.message : String(error),
             reported_at: clock.now(),

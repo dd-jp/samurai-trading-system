@@ -28,6 +28,7 @@
  */
 import type { BreachAlert, BreachAlertChannel } from '../../pipeline/feedback-loop/index.js';
 import type { DiscordClient, TelegramClient } from '../../pipeline/verdict/index.js';
+import { currentTraceId } from '../../shared/index.js';
 import type { Logger } from './types.js';
 
 /**
@@ -43,6 +44,32 @@ function formatBreachAlert(alert: BreachAlert): string {
     'none will be — kill or rework is your decision. Review the strategy before the next ' +
     'session.'
   );
+}
+
+/**
+ * The breach id `SqliteSpendCap` posts through this port. Named rather than
+ * repeated as a literal because `breachStage` discriminates on it.
+ */
+export const LLM_SPEND_CAP_BREACH = 'llm_spend_cap';
+
+/**
+ * The stage whichever caller raised the breach already logs under (#1280),
+ * for the same reason `ThresholdClampAlert` gets a `WHERE_STAGE`: threading
+ * the trace id made a single hardcoded stage wrong, because the two callers
+ * sit in different stages. `SqliteSpendCap#refuse` (spend-cap.ts) logs its
+ * sibling `llm_spend_cap_alert_send_failed` under `debate`; the daily
+ * kill-line batch (`computeMetrics`) logs under `feedback-loop`.
+ *
+ * `breaches` discriminates soundly because the two producers are disjoint:
+ * `detectBreaches` (metrics.ts) only ever pushes the four kill-line ids, and
+ * the spend cap posts `[LLM_SPEND_CAP_BREACH]` alone (production.ts). `every`
+ * rather than `includes` is the conservative read of a future mixed alert —
+ * one kill-line breach in the list makes it the feedback cycle's.
+ */
+export function breachStage(alert: BreachAlert): string {
+  return alert.breaches.every((breach) => breach === LLM_SPEND_CAP_BREACH)
+    ? 'debate'
+    : 'feedback-loop';
 }
 
 export class TradeChannelBreachAlert implements BreachAlertChannel {
@@ -89,8 +116,19 @@ export class TradeChannelBreachAlert implements BreachAlertChannel {
       // A breach that could not be delivered is itself an operator-visible
       // event — otherwise the one alert that matters most fails silently.
       this.#logger.log({
-        trace_id: 'feedback-cycle',
-        stage: 'feedback-loop',
+        // Same mixed shape as `LoggingBreachAlertChannel` (#1280): the daily
+        // kill-line batch runs outside any tick, but an `llm_spend_cap` breach
+        // is raised inside one by `SqliteSpendCap#refuse`, so the undelivered
+        // alert must join whichever raised it rather than always naming the
+        // daily cycle. The same third provenance `LoggingBreachAlertChannel`
+        // records applies: a boot-time refusal from `startingTotal()` has no
+        // ambient id and is mislabelled `feedback-cycle`. That case is
+        // distinguishable (no ambient id plus an all-`llm_spend_cap` list) and
+        // deliberately left underived for the reason that channel's comment
+        // gives — a provenance field on `BreachAlert` (#1343) is the fix, not
+        // a second inference here.
+        trace_id: currentTraceId() ?? 'feedback-cycle',
+        stage: breachStage(alert),
         event: 'breach_alert_send_failed',
         level: 'error',
         message: 'kill-threshold breach alert failed to send — the breach still stands',

@@ -54,6 +54,7 @@ import type {
 } from '../../pipeline/verdict/index.js';
 import type { CiiScoreProvider } from '../../providers/market-intelligence/index.js';
 import { currentTraceId } from '../../shared/index.js';
+import { breachStage } from './breach-alert-channel.js';
 import type { HeartbeatChannel } from './heartbeat.js';
 import type { OrphanAlertChannel, OrphanGoVerdict } from './orphan-verdict-scan.js';
 import type { AnalystSkipAlert, AnalystSkipAlertChannel } from './production/analysts-adapter.js';
@@ -435,7 +436,7 @@ export class LoggingMiCoverageAlertChannel implements MiCoverageAlertChannel {
 
   async postCoverageAlert(alert: MiCoverageAlert): Promise<void> {
     this.logger.log({
-      trace_id: 'mi-coverage',
+      trace_id: alert.trace_id,
       stage: 'analysts',
       event: 'mi_coverage_degraded',
       level: 'warn',
@@ -641,10 +642,28 @@ export class LoggingBreachAlertChannel implements BreachAlertChannel {
 
   postBreachAlert(alert: BreachAlert): void {
     this.logger.log({
-      // The daily batch belongs to no single tick, so it uses the same
-      // synthetic trace the feedback cycle already logs under.
-      trace_id: 'feedback-cycle',
-      stage: 'feedback-loop',
+      // Mixed, so it is answered at runtime (#1280). The daily kill-line batch
+      // belongs to no single tick and keeps the synthetic trace the feedback
+      // cycle already logs under — but `llm_spend_cap` is raised from
+      // `SqliteSpendCap#refuse`, whose own doc says it runs "inside the tick",
+      // and that breach must join the debate that spent the last of the
+      // budget. This comment previously claimed the daily batch was the only
+      // caller, which the spend-cap wiring (production.ts) falsifies.
+      //
+      // There is a third provenance the fallback names wrongly: `check()` also
+      // runs at boot via `startingTotal()`, which refuses — and so breaches —
+      // on an already-spent or unreadable budget with no ambient id, landing on
+      // `feedback-cycle`. Boot IS distinguishable from the daily cycle here —
+      // no ambient id AND an all-`llm_spend_cap` list can only be boot, since
+      // every other `check()` caller runs under an ambient id (spend-cap.ts's
+      // `check()` states that property). Deliberately not acted on: deriving a
+      // second discriminant at a log site nothing pins is exactly the defect
+      // class this ticket closes. The fix is a provenance field on
+      // `BreachAlert` (#1343), which makes the port say it rather than this
+      // line infer it.
+      trace_id: currentTraceId() ?? 'feedback-cycle',
+      // Derived for the same reason the trace is (#1280) — see `breachStage`.
+      stage: breachStage(alert),
       event: 'kill_threshold_breach',
       level: 'error',
       message:

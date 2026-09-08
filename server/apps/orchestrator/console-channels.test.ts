@@ -1,6 +1,7 @@
 import { runWithTraceId } from '../../shared/index.js';
 import {
   ConsoleApprovalChannel,
+  LoggingBreachAlertChannel,
   LoggingDataFailoverAlertChannel,
   LoggingFlattenOverfillAlertChannel,
   LoggingHeartbeatChannel,
@@ -83,6 +84,7 @@ describe('LoggingMiCoverageAlertChannel (#752)', () => {
     const logger = makeLogger();
 
     await new LoggingMiCoverageAlertChannel(logger).postCoverageAlert({
+      trace_id: 'trace-1',
       instrument: 'BTC-USD',
       asset_class: 'crypto',
       subclass: 'unclassified',
@@ -92,6 +94,29 @@ describe('LoggingMiCoverageAlertChannel (#752)', () => {
     expect(logger.entries[0]?.level).toBe('warn');
     expect(logger.entries[0]?.message).toContain('SAMURAI_ALERTS=log-only cannot page anyone');
     expect(logger.entries[0]?.message).toContain('BTC-USD');
+  });
+
+  // #1280: `MiCoverageAlert.trace_id` is threaded explicitly from
+  // `checkMiCoverage`'s `params.trace_id` (the preferred form, trace-context.ts)
+  // rather than joined ambient — `LoggingMiCoverageTelemetry.noDataObserved`
+  // above already does the identical explicit pass-through for the same
+  // subsystem. This is a value check, not a fallback check: there is no
+  // constant to fall back to any more, so the mutation that matters is the
+  // trace_id going missing or getting hardcoded again.
+  it("carries the caller's trace_id verbatim, and changes when the caller does", async () => {
+    const logger = makeLogger();
+    const channel = new LoggingMiCoverageAlertChannel(logger);
+    const alert = {
+      instrument: 'BTC-USD',
+      asset_class: 'crypto',
+      subclass: 'unclassified',
+      reported_at: new Date('2026-08-17T09:00:00Z'),
+    } as const;
+
+    await channel.postCoverageAlert({ ...alert, trace_id: 'tick-x' });
+    await channel.postCoverageAlert({ ...alert, trace_id: 'tick-y' });
+
+    expect(logger.entries.map((entry) => entry.trace_id)).toEqual(['tick-x', 'tick-y']);
   });
 });
 
@@ -320,5 +345,41 @@ describe('UnwiredApprovalChannel', () => {
 describe('ParkedCiiScoreProvider', () => {
   it('answers "no score", the documented null the consumer already handles', async () => {
     expect(await new ParkedCiiScoreProvider().getCii()).toBeNull();
+  });
+});
+
+describe('LoggingBreachAlertChannel', () => {
+  const alert = { breaches: ['llm_spend_cap'], reported_at: new Date('2026-09-08T09:00:00Z') };
+
+  // Two callers, two answers, resolved at runtime (#1280): the daily kill-line
+  // batch (`computeMetrics`) runs outside any tick, while `llm_spend_cap` is
+  // raised by `SqliteSpendCap#refuse` inside one. Differential, so neither a
+  // hardcoded `'feedback-cycle'` nor a hardcoded tick id survives.
+  it('joins the enclosing tick when there is one, and the daily cycle when there is not', () => {
+    const logger = makeLogger();
+
+    new LoggingBreachAlertChannel(logger).postBreachAlert(alert);
+    runWithTraceId('tick-spend-cap', () =>
+      new LoggingBreachAlertChannel(logger).postBreachAlert(alert),
+    );
+
+    expect(logger.entries.map((entry) => entry.trace_id)).toEqual([
+      'feedback-cycle',
+      'tick-spend-cap',
+    ]);
+  });
+
+  // Same two callers, same reason, on `stage`: the spend cap's own lines are
+  // `debate`, the daily batch's are `feedback-loop`.
+  it("files the breach under the raising caller's stage", () => {
+    const logger = makeLogger();
+
+    new LoggingBreachAlertChannel(logger).postBreachAlert(alert);
+    new LoggingBreachAlertChannel(logger).postBreachAlert({
+      breaches: ['pbo_over_max'],
+      reported_at: alert.reported_at,
+    });
+
+    expect(logger.entries.map((entry) => entry.stage)).toEqual(['debate', 'feedback-loop']);
   });
 });

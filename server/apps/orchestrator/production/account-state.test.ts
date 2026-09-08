@@ -7,7 +7,7 @@ import {
   type TradingCalendar,
   UsEquityRegularHoursCalendar,
 } from '../../../providers/market-data-service/index.js';
-import type { ClosedTrade, TradingArm } from '../../../shared/index.js';
+import { type ClosedTrade, runWithTraceId, type TradingArm } from '../../../shared/index.js';
 import { openSharedStore, type SharedStore } from '../../../shared/store/index.js';
 import { SqliteAccountStateStore } from '../sqlite-account-state-store.js';
 import { SqliteDailyEquityStore } from '../sqlite-daily-equity-store.js';
@@ -756,6 +756,84 @@ describe('AlpacaAccountStateProvider — cold start (#332)', () => {
       expect(daily_basis.crypto.known).toBe(false);
       if (daily_basis.crypto.known) return;
       expect(daily_basis.crypto.reason).toContain('non-positive');
+    } finally {
+      harness.cleanup();
+    }
+  });
+});
+
+describe('AlpacaAccountStateProvider — trace_id (#1280)', () => {
+  it('falls back to the account-state constant outside a tick — live mode', async () => {
+    const harness = openStore();
+    try {
+      const logger = makeLogger();
+      const provider = makeProvider(harness, {
+        mode: 'live',
+        logger,
+        startedAt: SATURDAY_NOON_UTC,
+      });
+
+      await provider.getAccountState(SATURDAY_NOON_UTC);
+
+      const warning = logger.entries.find((entry) => entry.message.includes('UNKNOWN'));
+      expect(warning?.trace_id).toBe('account-state');
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('joins the live-mode mid-session line to the enclosing tick instead', async () => {
+    const harness = openStore();
+    try {
+      const logger = makeLogger();
+      const provider = makeProvider(harness, {
+        mode: 'live',
+        logger,
+        startedAt: SATURDAY_NOON_UTC,
+      });
+
+      await runWithTraceId('tick-x', () => provider.getAccountState(SATURDAY_NOON_UTC));
+
+      const warning = logger.entries.find((entry) => entry.message.includes('UNKNOWN'));
+      expect(warning?.trace_id).toBe('tick-x');
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('falls back to the account-state constant outside a tick — paper mode', async () => {
+    const harness = openStore();
+    try {
+      const logger = makeLogger();
+      const provider = makeProvider(harness, {
+        mode: 'paper',
+        logger,
+        startedAt: SATURDAY_NOON_UTC,
+      });
+
+      await provider.getAccountState(SATURDAY_NOON_UTC);
+
+      const warning = logger.entries.find((entry) => entry.message.includes('mid-session base'));
+      expect(warning?.trace_id).toBe('account-state');
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('joins the paper-mode mid-session line to the enclosing tick instead', async () => {
+    const harness = openStore();
+    try {
+      const logger = makeLogger();
+      const provider = makeProvider(harness, {
+        mode: 'paper',
+        logger,
+        startedAt: SATURDAY_NOON_UTC,
+      });
+
+      await runWithTraceId('tick-x', () => provider.getAccountState(SATURDAY_NOON_UTC));
+
+      const warning = logger.entries.find((entry) => entry.message.includes('mid-session base'));
+      expect(warning?.trace_id).toBe('tick-x');
     } finally {
       harness.cleanup();
     }

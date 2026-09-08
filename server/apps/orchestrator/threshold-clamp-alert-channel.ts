@@ -25,6 +25,18 @@ const WHERE_LABEL: Record<ThresholdClampAlert['where'], string> = {
     'completing; the four kill-lines are unevaluated until the offending row is fixed',
 };
 
+/**
+ * The stage each seam's own lines already carry, so the failed-send line files
+ * beside them (#1280). Mirrors `WHERE_LABEL` rather than hardcoding `'risk'`:
+ * the daily seam runs in `runFeedbackCycle`, whose `feedback_cycle_failed`
+ * catch — the very catch that raises this alert — logs `stage: 'feedback-loop'`.
+ * Same reasoning `TradeChannelExitValuationAlert` records for its `alert.seam`.
+ */
+const WHERE_STAGE: Record<ThresholdClampAlert['where'], string> = {
+  'live-read': 'risk',
+  'daily-kill-line-check': 'feedback-loop',
+};
+
 function formatThresholdClampAlert(alert: ThresholdClampAlert): string {
   return (
     `Samurai THRESHOLD CLAMP TRIPPED: ${WHERE_LABEL[alert.where]}.\n` +
@@ -52,8 +64,12 @@ export class TradeChannelThresholdClampAlert implements ThresholdClampAlertChann
       // The one alert whose failure to send must itself stay visible — see
       // `TradeChannelBreachAlert`'s identical reasoning.
       this.#logger.log({
-        trace_id: 'threshold-clamp',
-        stage: 'risk',
+        // The seam's own id, threaded on the alert (#1280), so this line joins
+        // whichever catch raised it — the tick's `risk_log` row on the
+        // live-read seam, the `feedback-cycle` lines on the daily one — rather
+        // than a third taxonomy joining neither.
+        trace_id: alert.trace_id,
+        stage: WHERE_STAGE[alert.where],
         event: 'threshold_clamp_alert_send_failed',
         level: 'error',
         message: 'threshold-clamp alert failed to send — the clamp trip still stands',

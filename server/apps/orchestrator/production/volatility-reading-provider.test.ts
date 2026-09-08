@@ -12,7 +12,7 @@ import {
   SqliteMarketDataStore,
   UsEquityRegularHoursCalendar,
 } from '../../../providers/market-data-service/index.js';
-import type { Clock } from '../../../shared/index.js';
+import { type Clock, runWithTraceId } from '../../../shared/index.js';
 import { openSharedStore } from '../../../shared/store/index.js';
 import type { AssetClass, Logger, UniverseInstrument } from '../types.js';
 import { MarketDataVolatilityReadingProvider } from './volatility-reading-provider.js';
@@ -175,6 +175,74 @@ describe('MarketDataVolatilityReadingProvider', () => {
         payload: expect.objectContaining({ instrument: 'TSLA', asset_class: 'stocks' }),
       }),
     );
+  });
+
+  describe('trace_id (#1280)', () => {
+    it('falls back to the volatility-reading-provider constant outside a tick — rejected getIndicator', async () => {
+      const { provider, log } = buildProvider(UNIVERSE, { 'ETH-USD': 'reject' });
+
+      await provider.getVolatilityReading(NOW);
+
+      expect(log).toHaveBeenCalledWith(
+        expect.objectContaining({ trace_id: 'volatility-reading-provider' }),
+      );
+    });
+
+    it('joins the rejected-getIndicator line to the enclosing tick instead', async () => {
+      const { provider, log } = buildProvider(UNIVERSE, { 'ETH-USD': 'reject' });
+
+      await runWithTraceId('tick-x', () => provider.getVolatilityReading(NOW));
+
+      expect(log).toHaveBeenCalledWith(expect.objectContaining({ trace_id: 'tick-x' }));
+    });
+
+    it('falls back to the volatility-reading-provider constant outside a tick — non-finite value', async () => {
+      const { provider, log } = buildProvider(UNIVERSE, { TSLA: 'nan' });
+
+      await provider.getVolatilityReading(NOW);
+
+      expect(log).toHaveBeenCalledWith(
+        expect.objectContaining({ trace_id: 'volatility-reading-provider' }),
+      );
+    });
+
+    it('joins the non-finite-value line to the enclosing tick instead', async () => {
+      const { provider, log } = buildProvider(UNIVERSE, { TSLA: 'nan' });
+
+      await runWithTraceId('tick-x', () => provider.getVolatilityReading(NOW));
+
+      expect(log).toHaveBeenCalledWith(expect.objectContaining({ trace_id: 'tick-x' }));
+    });
+
+    // Why `warnIfClassEmpty` keeps its constant, pinned as the mechanism that
+    // earns it: the warn is emitted by the CONSTRUCTOR, once, and a tick never
+    // emits another. Construction is boot-time (`production.ts` builds this
+    // provider in `buildProductionComponents`), so there is no tick to join.
+    //
+    // What this deliberately does NOT assert is that an ambient read would be
+    // wrong here — at construction there is no enclosing tick, so
+    // `currentTraceId() ?? 'volatility-reading-provider'` would log the same
+    // string and no assertion at this seam can tell the two apart. The call
+    // site is what rules the ambient form out. Wrapping construction in
+    // `runWithTraceId` would pin a state that never occurs, so it is not done.
+    it('warns about an empty asset class once, at construction, and never again per tick', async () => {
+      const cryptoOnly: readonly UniverseInstrument[] = [
+        { asset: 'BTC-USD', asset_class: 'crypto' },
+      ];
+      const { provider, log } = buildProvider(cryptoOnly);
+
+      const emptyClassWarns = (): { trace_id: string; event: string }[] =>
+        log.mock.calls
+          .map((call) => call[0] as { trace_id: string; event: string })
+          .filter((entry) => entry.event === 'volatility_universe_empty');
+
+      expect(emptyClassWarns()).toHaveLength(1);
+      expect(emptyClassWarns()[0]).toMatchObject({ trace_id: 'volatility-reading-provider' });
+
+      await runWithTraceId('tick-x', () => provider.getVolatilityReading(NOW));
+
+      expect(emptyClassWarns()).toHaveLength(1);
+    });
   });
 
   it('fails closed against the REAL MarketDataService when an instrument is short of bars (#319)', async () => {

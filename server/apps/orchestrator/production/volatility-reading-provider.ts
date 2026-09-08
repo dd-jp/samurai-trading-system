@@ -37,11 +37,16 @@
  * guard the boundary; a failure is aggregated in as `FAILURE_READING`
  * (`Infinity`), tripping the breaker conservatively instead of going inert.
  *
- * Not yet wired into `production.ts`: `ProductionConfig.volatility` stays a
- * required injected field for now (composition-root wiring is a separate
- * concern from closing this interface, and `AccountStateProvider` — the
- * other required field `computeCurrentPortfolioAndBreakers` needs alongside
- * it — has no in-repo implementation yet either).
+ * Wired by default in `production.ts` (`volatility: config.volatility ?? new
+ * MarketDataVolatilityReadingProvider({…})`), alongside the
+ * `AccountStateProvider` the same call site needs — `ProductionConfig
+ * .volatility` is an OPTIONAL override, not the required injected field this
+ * comment described before the composition root caught up (#1280).
+ *
+ * That is what puts `getVolatilityReading` inside the tick: it runs from the
+ * per-instrument Risk stage, under `TickRunner`'s `runWithTraceId`, which is
+ * why its two failure logs join the tick's trace and `warnIfClassEmpty` —
+ * construction-time, before any tick — does not.
  */
 import type { VolatilityReading } from '../../../pipeline/risk-manager/index.js';
 import type {
@@ -50,6 +55,7 @@ import type {
   MarketDataService,
   TradingCalendar,
 } from '../../../providers/market-data-service/index.js';
+import { currentTraceId } from '../../../shared/index.js';
 import type { AssetClass, Logger, UniverseInstrument } from '../types.js';
 import type { VolatilityReadingProvider } from './direct-bind.js';
 
@@ -203,7 +209,12 @@ export class MarketDataVolatilityReadingProvider implements VolatilityReadingPro
 
       if (result.status === 'rejected') {
         logger.log({
-          trace_id: 'volatility-reading-provider',
+          // `getVolatilityReading` is called only from the per-instrument
+          // Risk stage (direct-bind.ts's `computeCurrentPortfolioAndBreakers`),
+          // so this joins that tick when there is one (#1280) — unlike
+          // `warnIfClassEmpty` below, which fires at construction, never
+          // in-tick, and keeps its bare constant.
+          trace_id: currentTraceId() ?? 'volatility-reading-provider',
           stage: 'volatility-reading-provider',
           event: 'volatility_indicator_rejected',
           level: 'error',
@@ -223,7 +234,8 @@ export class MarketDataVolatilityReadingProvider implements VolatilityReadingPro
       const { value } = result.value;
       if (!Number.isFinite(value)) {
         logger.log({
-          trace_id: 'volatility-reading-provider',
+          // Same reasoning as the rejected-result branch above.
+          trace_id: currentTraceId() ?? 'volatility-reading-provider',
           stage: 'volatility-reading-provider',
           event: 'volatility_indicator_non_finite',
           level: 'error',

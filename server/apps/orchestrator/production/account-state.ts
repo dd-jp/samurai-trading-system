@@ -40,6 +40,7 @@ import type { AlpacaBrokerClient } from '../../../pipeline/execution/index.js';
 import type { SessionBasis, SessionBasisByClass } from '../../../pipeline/risk-manager/index.js';
 import type { TradingCalendar } from '../../../providers/market-data-service/index.js';
 import type { ClosedTrade } from '../../../shared/index.js';
+import { currentTraceId } from '../../../shared/index.js';
 import type { SqliteAccountStateStore } from '../sqlite-account-state-store.js';
 import type { SqliteDailyEquityStore } from '../sqlite-daily-equity-store.js';
 import type { SessionEquityKey, SqliteSessionEquityStore } from '../sqlite-session-equity-store.js';
@@ -281,7 +282,16 @@ export class AlpacaAccountStateProvider implements AccountStateProvider {
     if (this.input.mode === 'live') {
       if (firstTime) {
         this.input.logger.log({
-          trace_id: 'account-state',
+          // Every `getAccountState` caller sits on a per-instrument decision
+          // path inside `TickRunner.runInstrument`'s `runWithTraceId` — the
+          // live arm's Risk stage (direct-bind.ts's
+          // `computeCurrentPortfolioAndBreakers`/`degradedPortfolioForExit`)
+          // and the control arm's book-anchor resolver, which reaches this
+          // through `ControlAccountStateProvider` (control-account-state.ts),
+          // alike. So this joins that tick (#1280); none of them runs at boot,
+          // which is why the constant is a fallback rather than a case
+          // anything reaches.
+          trace_id: currentTraceId() ?? 'account-state',
           stage: 'orchestrator',
           event: 'daily_pnl_unknown',
           level: 'warn',
@@ -302,7 +312,8 @@ export class AlpacaAccountStateProvider implements AccountStateProvider {
 
     if (firstTime) {
       this.input.logger.log({
-        trace_id: 'account-state',
+        // Same reasoning as the `live`-mode branch above.
+        trace_id: currentTraceId() ?? 'account-state',
         stage: 'orchestrator',
         event: 'session_open_equity_midsession',
         level: 'warn',

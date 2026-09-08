@@ -84,6 +84,8 @@ import { DEFAULT_NOUS_MODELS } from '../../shared/llm/index.js';
 import { openSharedStore, type SharedStore as SqliteHandle } from '../../shared/store/index.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
 import { CostModelImpl, SqliteStage2SelectionStore } from '../../tools/backtest/index.js';
+import { LLM_SPEND_CAP_BREACH } from './breach-alert-channel.js';
+import { LoggingBreachAlertChannel } from './console-channels.js';
 import { DebateBarDecisionGate } from './decision-bar-gate.js';
 import { FILL_SYNC_TRACE_ID, RECONCILE_TRACE_ID } from './fill-sync.js';
 import { LIVE_BOOK_GBP, paperStartingProfile } from './paper-profile.js';
@@ -2022,6 +2024,70 @@ describe('tickSkipAlerts is wired by the composition root (#1084)', () => {
     releaseAll();
     await vi.advanceTimersByTimeAsync(0);
     await orchestrator.stop();
+  });
+});
+
+/**
+ * #1280 — the spend cap's `onBreach` payload, as the composition root actually
+ * builds it, driven through the REAL `LoggingBreachAlertChannel`.
+ *
+ * `breach-alert-channel.test.ts` and `console-channels.test.ts` pin
+ * `breachStage`'s two arms against alerts they construct themselves, which
+ * says nothing about what `production.ts` posts. Replacing the root's
+ * `breaches: [LLM_SPEND_CAP_BREACH]` with any other string leaves both of
+ * those suites green while silently reverting the spend-cap breach line to
+ * `stage: 'feedback-loop'` — the tested-mechanism-nobody-calls shape this
+ * ticket exists to close, landing on the wiring this ticket added. This joins
+ * the two halves so the substitution is red.
+ *
+ * The trigger is the BOOT refusal (`startingTotal()` on an already-spent
+ * database), which is the cheapest reachable path to that closure — it needs
+ * no tick, no timer and no LLM. That makes this a test about the payload, not
+ * about provenance: at boot there is no ambient id, so `trace_id` reads
+ * `'feedback-cycle'` (the mislabel `LoggingBreachAlertChannel`'s own comment
+ * records and #1343 fixes by widening the port). It is deliberately not
+ * asserted here.
+ */
+describe("the spend cap's breach payload is wired by the composition root (#1280)", () => {
+  let db: SqliteHandle;
+
+  beforeEach(() => {
+    db = openSharedStore(':memory:');
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it("files the breach it posts under the spend cap's own stage, not the daily cycle's", () => {
+    // One priced call, straight into the table the cap sums — $2.00 against a
+    // $1.00 ceiling, so `startingTotal()` refuses on the budget arm during
+    // `buildProductionComponents` itself.
+    db.prepare(
+      `INSERT INTO llm_spend (
+         trace_id, stage, debate_id, model,
+         input_tokens, output_tokens,
+         cache_creation_input_tokens, cache_read_input_tokens,
+         cost_usd, latency_ms, timestamp
+       ) VALUES ('trace-boot', 'debate', 'debate-boot', 'openai/gpt-5.6-luna',
+                 100, 100, 0, 0, 2.0, 10, ?)`,
+    ).run(START.toISOString());
+
+    const logger = recordingLogger();
+    // The REAL channel, not a `vi.fn()`: a stub would capture the payload but
+    // not the derivation, and the defect is only visible where the two meet.
+    const config = stubConfig(db, {
+      logger,
+      llmBudgetUsd: 1,
+      breachAlerts: new LoggingBreachAlertChannel(logger),
+    });
+
+    buildProductionComponents(config);
+
+    const breaches = logger.entries.filter((entry) => entry.event === 'kill_threshold_breach');
+    expect(breaches).toHaveLength(1);
+    expect(breaches[0]?.payload).toMatchObject({ breaches: [LLM_SPEND_CAP_BREACH] });
+    expect(breaches[0]?.stage).toBe('debate');
   });
 });
 
@@ -5421,6 +5487,10 @@ describe('buildProductionOrchestrator', () => {
       expect(postThresholdClampAlert).toHaveBeenCalled();
       expect(postThresholdClampAlert.mock.calls[0]?.[0]).toMatchObject({
         where: 'daily-kill-line-check',
+        // #1280: this seam runs outside any tick, so it threads the same
+        // `'feedback-cycle'` its surrounding lines log under — the in-tick
+        // half of the pair is direct-bind.test.ts's `TRACE_ID` assertion.
+        trace_id: 'feedback-cycle',
       });
 
       await orchestrator.stop();
