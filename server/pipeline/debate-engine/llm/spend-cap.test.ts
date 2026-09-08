@@ -231,12 +231,9 @@ describe('SqliteSpendCap', () => {
       expect(second.kind).toBe('corrupt_ledger');
     });
 
-    it('fires the fault alert once across two DIFFERENT fault kinds — one latch, not one per kind (#1372 review round 2, LOW-1)', () => {
-      // The M1 trio above each reuses the same kind on both calls, so it
-      // cannot tell a per-latch-group implementation from a per-kind one.
-      // This store answers read_fault first, then corrupt_ledger — a real
-      // per-kind latch would fire onBreach twice; the shared fault latch
-      // documented above `#faultAnnounced` must fire once.
+    it('fires the fault alert once across two different fault kinds — one latch for the group', () => {
+      // A per-kind latch would fire onBreach twice; the shared fault latch
+      // fires once.
       const breaches: Extract<SpendCapVerdict, { admitted: false }>[] = [];
       const cap = new SqliteSpendCap(readFaultThenCorruptLedger(), 50, undefined, (v) =>
         breaches.push(v),
