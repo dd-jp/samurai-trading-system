@@ -227,6 +227,62 @@ the quantity being estimated is a distribution, not a instant. For a **live exec
 pre-trade spread check** it is not fine at ADR-0014's intraday horizon. The first use needs no
 subscription; the second does.
 
+### 2.5a The spread is **not stable across the session** — six samples, one full LSE day
+
+§2.5 established that spread is measurable. This is what it measures to. The full 146-line ETN
+listing, sampled every 90 minutes through 2026-09-08's session (all spreads in bp of mid):
+
+| sample (UTC) | median | p25 | p75 | movers (`relvol ≥ 1.5`) | movers median | movers ≤ 30 bp |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 07:42 | 58.6 | 18.6 | 147.3 | 44 | 20.5 | 25 |
+| 09:12 | 38.1 | 17.3 | 118.3 | 77 | 28.8 | 44 |
+| 10:42 | 43.2 | 17.6 | 118.3 | 88 | 32.3 | 41 |
+| 12:12 | 45.3 | 17.3 | 114.2 | 97 | 31.2 | 48 |
+| 13:42 | **84.1** | 22.5 | 156.2 | 100 | **81.1** | 32 |
+| 15:12 | **35.2** | **13.6** | 114.3 | 116 | **27.0** | **61** |
+
+**Three findings, in decreasing order of how much weight they can carry.**
+
+**1. p25 is stable at 13.6–22.5 bp all day, and this is what carries a gate.** The tight core of the
+universe stays tight; it is the tail that moves. A **fixed 30 bp spread gate is defensible**, but it
+admits a *variable-size* set (25 to 61 names) rather than a fixed shortlist — anything downstream
+must handle a shortlist whose cardinality changes intraday.
+
+**2. The universe median swings 2.4× within one session** (35.2 to 84.1 bp). A gate calibrated at one
+time of day is not the same gate at another.
+
+**3. The 13:42Z blow-out is transient, not a regime.** It sits twelve minutes after the US open
+(13:30Z), and these are leveraged ETPs on US underlyings, so market makers widening as their hedge
+goes live is a plausible mechanism — the movers' median **quadruples**, 31.2 → 81.1 bp, far more
+sharply than the universe median moves. But by 15:12Z it has fully reversed, to the tightest reading
+of the day. **So there is no "afternoon is expensive" rule**, and an earlier draft of this section
+which claimed one, along with a "cheap window is 09:00–12:30Z", was wrong on both counts.
+
+#### The consequence for flat-by-close is favourable
+
+A flat-by-close strategy pays spread twice, and **the exit leg is fixed at end-of-session by
+construction** — it is the one leg the strategy does not get to time. On this day that forced exit
+lands in the cheapest liquidity of the session (27.0 bp movers median at 15:12Z, against 81.1 at
+13:42Z and 20.5–32.3 through the morning). The round trip is therefore **asymmetric in our favour on
+the leg we cannot choose**, which inverts the usual concern about forced exits. Not yet worth
+changing an ADR-0018 number over — but worth knowing before anyone books a penalty for it.
+
+#### Two caveats that bound all of the above
+
+- **The mover *count* rises monotonically, 44 → 116, and is probably an artifact.** If Saxo's
+  `RelativeVolume` compares *cumulative session volume* to an average, more names cross `≥ 1.5`
+  simply as the session accumulates. The field's definition is not documented and was not verified,
+  so the count column — and hence `movers ≤ 30 bp` — is **suspect**. The median columns do not
+  depend on it and are unaffected.
+- **These are SIM delayed-feed numbers, and §2.9-LIVE measured the delayed feed understating spread
+  by 27%** on the one instrument checked against live. Treat the *shape* here as informative and the
+  *levels* as optimistic.
+
+**One day, six samples, 90-minute spacing** — wide enough to miss a spike entirely, which given
+13:42Z reversed within 90 minutes is a live possibility rather than a formality. Repeat sessions and
+tighter spacing around 13:30Z and the close would settle it; the profiler is ~40 lines and one call
+per sample.
+
 ### 2.6 The commission floor — a scare that resolved, and a cheap gate that did not
 
 The SIM tariff prices `LQQ3` as **min £8, then 0.10%** of notional:
@@ -760,7 +816,7 @@ editorial, not machine-consumable feeds.
 | 5 | ADR-0016: pool of 13, 3× framing | 146 ETN + 127 ETC listed; 4× exists; spread gate needed (§2.4) | **wayfinder child** |
 | 6 | ADR-0015: "Saxo has no per-order minimum" — the fact that disqualified IBKR | Unverified against the venue; one live call settles it (§2.6) | **wayfinder child**, pre-ramp gate |
 | 7 | ADR-0014: flat-by-close is *already* calendar-driven (`sessionEnd`, #668) — the original "client-side timing" framing was wrong | Session feed as an **overlay validating** the hand table (2 days forward, not a replacement) + native MOC/LOC (§2.7) | **wayfinder child** [#1312](https://github.com/dd-jp/samurai-trading-system/issues/1312); MOC still gated on the ADR-0015 clause |
-| 8 | Doc 53 `CostModelImpl`: 1 bp rate floor, no spread input | Per-instrument spread now available (§2.5) | folds into 6 |
+| 8 | Doc 53 `CostModelImpl`: 1 bp rate floor, no spread input | Per-instrument spread now available (§2.5), and measured to swing 2.4x intraday (§2.5a) | folds into 6 |
 | 9 | #895 + doc 53: market data assumed free and real-time | Opt-in, **delayed** by default (quotes *and* chart bars), **£7/mo** for LSE Level 1 real time, refunded at 4 trades/month (§2.9). The delay is read as an entitlement tier on four circumstantial strands, and the confirming in-session read is now **RUN and CONFIRMED** — 15-min lag measured against a demonstrably trading market, 2026-09-08 (§2.9a). **And the delayed feed is outside LSE's Non-Display Usage regime, which real time is inside (§2.9b)** | comment on #895 |
 
 Items 1, 2 and 4 are evidence for tickets that already exist and should not be re-filed. Items 3, 5, 6 and 7 are genuine
