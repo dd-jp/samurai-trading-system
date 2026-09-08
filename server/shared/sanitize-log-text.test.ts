@@ -480,6 +480,227 @@ describe('camelCase/underscore keys, Basic/Token auth and DSN passwords (#1367)'
   });
 });
 
+describe('escaped (nested) JSON credentials (#1377)', () => {
+  // The issue's own reproduction: a credential inside a JSON string that
+  // itself contains serialized JSON (`describeThrown`'s `JSON.stringify` of
+  // a thrown value carrying a raw provider response body, or
+  // `renderMessageContent`'s `JSON.stringify` of the prompt context —
+  // anthropic-client.ts:235 — reaching `maskAndCap` via spend-sink.ts). One
+  // row per pattern family that has a `[:=]` (or lookbehind) separator to
+  // widen. `Bearer` has none — the literal word is its own anchor, so it
+  // already reaches an escaped credential on main with no separator
+  // change — so its escaped-JSON coverage lives only in the byte-exact
+  // block below, which is what actually discriminates its value-class fix.
+  const positive: ReadonlyArray<{ name: string; input: string; secret: string; survives: string }> =
+    [
+      {
+        name: 'the issue reproduction: bareword api_key, escaped',
+        input: String.raw`{"error":"401","body":"{\"api_key\":\"skFAKE0000\"}"}`,
+        secret: 'skFAKE0000',
+        survives: '"error":"401"',
+      },
+      {
+        // Pins the value terminator stopping at the credential's OWN closing
+        // `\"`, not swallowing the rest of the escaped object — the failure
+        // mode a bare `[^\s,;&\x22\x27\x7d\]]+` value class (no `\x5c`
+        // exclusion) would produce.
+        name: 'a sibling field after the escaped credential survives',
+        input: String.raw`{"body":"{\"api_key\":\"skFAKE0000\",\"symbol\":\"SPY\"}"}`,
+        secret: 'skFAKE0000',
+        survives: String.raw`\"symbol\":\"SPY\"`,
+      },
+      {
+        name: 'camelCase clientSecret, escaped',
+        input: String.raw`{"body":"{\"clientSecret\":\"sk-live-abcdef123456\"}"}`,
+        secret: 'sk-live-abcdef123456',
+        survives: '{"body":"{\\"',
+      },
+      {
+        name: 'all-caps env-var ALPACA_API_SECRET, escaped',
+        input: String.raw`{"region":"eu-west-2","body":"{\"ALPACA_API_SECRET\":\"skFAKE0000\"}"}`,
+        secret: 'skFAKE0000',
+        survives: '"region":"eu-west-2"',
+      },
+      {
+        name: 'lowercase env-var polygon_api_key, escaped',
+        input: String.raw`{"body":"{\"polygon_api_key\":\"skFAKE0000\"}"}`,
+        secret: 'skFAKE0000',
+        survives: '{"body":"{\\"',
+      },
+      {
+        name: 'Authorization: Basic, escaped',
+        input: String.raw`{"body":"{\"Authorization\":\"Basic ZkFLRTAwMDA=\"}"}`,
+        secret: 'ZkFLRTAwMDA=',
+        survives: String.raw`\"Authorization\"`,
+      },
+      {
+        // Unlike `Bearer`, `Authorization` has a `[:=]` key-to-value
+        // separator, so this row's escaped-JSON reachability actually
+        // depends on the separator's backslash-admitting fix (see the
+        // module doc comment) rather than already working on main.
+        name: 'Authorization: Token, escaped',
+        input: String.raw`{"body":"{\"Authorization\":\"Token skFAKE0000tiingo\"}"}`,
+        secret: 'skFAKE0000tiingo',
+        survives: String.raw`{"body":"{\"Authorization\":\"`,
+      },
+      {
+        // A real `JSON.stringify(promptContextOf(...))` nesting shape
+        // (anthropic-client.ts:235): the DSN's own `://` survives unescaped
+        // (`JSON.stringify` does not escape `/`), only the surrounding
+        // quotes are backslash-escaped.
+        name: 'DSN password, escaped',
+        input: String.raw`{"body":"{\"dsn\":\"postgres://user:supersecretpw@db.internal:5432/samurai\"}"}`,
+        secret: 'supersecretpw',
+        survives: 'postgres://user:',
+      },
+    ];
+
+  it.each(positive)('masks the secret in: $name', ({ input, secret, survives }) => {
+    expect(maskCredentials(input)).not.toContain(secret);
+    expect(maskCredentials(input)).toContain('[REDACTED]');
+    expect(maskCredentials(input)).toContain(survives);
+  });
+
+  // Exact-equality pins, one per pattern family (all seven). A `survives`
+  // containment check alone does not pin the value class's
+  // negative-lookahead terminator: dropping the escaped credential's OWN
+  // trailing backslash-quote stop (swallowing it into the value instead of
+  // stopping before it) still leaves every SIBLING field's escaped quotes
+  // untouched, so a containment check on the sibling survives either way.
+  // These `.toBe()` checks catch that class of mutation because the
+  // malformed output (a bare `"` where `\"` belongs) differs byte-for-byte
+  // from the correct one. The DSN family's own pin has no lookahead to
+  // catch (see the module doc comment) — it exists only to confirm
+  // escaped-JSON reachability.
+  it('bareword: the value stops before its own escaped closing quote, sibling field byte-exact', () => {
+    expect(
+      maskCredentials(String.raw`{"body":"{\"api_key\":\"skFAKE0000\",\"symbol\":\"SPY\"}"}`),
+    ).toBe(String.raw`{"body":"{\"[REDACTED]\",\"symbol\":\"SPY\"}"}`);
+  });
+
+  it('Bearer: the value stops before its own escaped closing quote, sibling field byte-exact', () => {
+    expect(
+      maskCredentials(
+        String.raw`{"body":"{\"Authorization\":\"Bearer sk-ant-abc123\",\"ok\":true}"}`,
+      ),
+    ).toBe(String.raw`{"body":"{\"Authorization\":\"[REDACTED]\",\"ok\":true}"}`);
+  });
+
+  it('compound clientSecret: the value stops before its own escaped closing quote, sibling field byte-exact', () => {
+    expect(
+      maskCredentials(
+        String.raw`{"body":"{\"clientSecret\":\"sk-live-abcdef123456\",\"ok\":true}"}`,
+      ),
+    ).toBe(String.raw`{"body":"{\"[REDACTED]\",\"ok\":true}"}`);
+  });
+
+  it('all-caps env-var ALPACA_API_SECRET: the value stops before its own escaped closing quote, sibling field byte-exact', () => {
+    expect(
+      maskCredentials(String.raw`{"body":"{\"ALPACA_API_SECRET\":\"skFAKE0000\",\"ok\":true}"}`),
+    ).toBe(String.raw`{"body":"{\"[REDACTED]\",\"ok\":true}"}`);
+  });
+
+  it('lowercase env-var polygon_api_key: the value stops before its own escaped closing quote, sibling field byte-exact', () => {
+    expect(
+      maskCredentials(String.raw`{"body":"{\"polygon_api_key\":\"skFAKE0000\",\"ok\":true}"}`),
+    ).toBe(String.raw`{"body":"{\"[REDACTED]\",\"ok\":true}"}`);
+  });
+
+  it('Authorization Basic: the value stops before its own escaped closing quote, sibling field byte-exact', () => {
+    expect(
+      maskCredentials(
+        String.raw`{"body":"{\"Authorization\":\"Basic ZkFLRTAwMDA=\",\"ok\":true}"}`,
+      ),
+    ).toBe(String.raw`{"body":"{\"Authorization\":\"[REDACTED]\",\"ok\":true}"}`);
+  });
+
+  it('DSN: escaped-JSON reachability, byte-exact (value class unmodified from main — see the module doc comment)', () => {
+    expect(
+      maskCredentials(
+        String.raw`{"body":"{\"dsn\":\"postgres://user:supersecretpw@db.internal:5432/samurai\",\"ok\":true}"}`,
+      ),
+    ).toBe(
+      String.raw`{"body":"{\"dsn\":\"postgres://user:[REDACTED]@db.internal:5432/samurai\",\"ok\":true}"}`,
+    );
+  });
+
+  // Every value class stops at a `\` immediately followed by a quote and
+  // never at a bare `\` — so a value containing a literal backslash NOT
+  // immediately followed by a quote is masked in full, matching main. One
+  // row per pattern family below (the DSN family's value class carries no
+  // lookahead at all — see the module doc comment — so its row here just
+  // confirms an ordinary literal backslash still matches, unmodified from
+  // main).
+  it('ALPACA_API_SECRET: a literal backslash with no following quote is consumed as part of the value, matching main', () => {
+    expect(maskCredentials('ALPACA_API_SECRET:\\Users\\me\\file.txt')).toBe('[REDACTED]');
+  });
+
+  it('DSN: a password containing a literal backslash still matches in full, unmodified from main', () => {
+    expect(maskCredentials('redis://user:pa\\ss@host:6379')).toBe(
+      'redis://user:[REDACTED]@host:6379',
+    );
+  });
+
+  it('Bearer: a token containing a literal backslash not followed by a quote still matches in full, matching main', () => {
+    expect(maskCredentials('Bearer skFAKE\\0000END')).toBe('[REDACTED]');
+  });
+
+  it('Authorization Basic: a value containing a literal backslash not followed by a quote still matches in full, matching main', () => {
+    expect(maskCredentials('Authorization: Basic YWJj\\ZGVm')).toBe('Authorization: [REDACTED]');
+  });
+
+  it('bareword: a value containing a literal backslash not followed by a quote still matches in full, matching main', () => {
+    expect(maskCredentials('api_secret=abc\\def')).toBe('[REDACTED]');
+  });
+
+  it('compound clientSecret: a value containing a literal backslash not followed by a quote still matches in full, matching main', () => {
+    expect(maskCredentials('clientSecret=abc\\def')).toBe('[REDACTED]');
+  });
+
+  it('lowercase env polygon_api_key: a value containing a literal backslash not followed by a quote still matches in full, matching main', () => {
+    expect(maskCredentials('polygon_api_key=abc\\def')).toBe('[REDACTED]');
+  });
+
+  const negative: ReadonlyArray<{ name: string; input: string }> = [
+    {
+      // Required by the issue's acceptance criteria directly.
+      name: 'pagination cursor next_page_token, escaped, survives',
+      input: String.raw`{"body":"{\"next_page_token\":\"abc\"}"}`,
+    },
+    {
+      name: 'LLM request budget maxTokens, escaped, survives',
+      input: String.raw`{"body":"{\"maxTokens\":1024}"}`,
+    },
+    {
+      name: 'residual gap SSH_PRIVATE_KEY (no bare _KEY suffix), escaped, survives',
+      input: String.raw`{"body":"{\"SSH_PRIVATE_KEY\":\"skFAKE0000\"}"}`,
+    },
+    {
+      name: 'maskCredentials does not reach alpacaSecretKey, escaped, survives (redactPayload does, structurally)',
+      input: String.raw`{"body":"{\"alpacaSecretKey\":\"would-be-a-real-secret\"}"}`,
+    },
+    {
+      // The DSN pattern's own #358 over-match guard (see the unescaped
+      // version above), re-run in escaped form: the port and the sibling
+      // field must both survive.
+      name: 'DSN does not over-match through a quote into a sibling field, escaped',
+      input: String.raw`{"body":"{\"dsn\":\"redis://h:6379\",\"email\":\"a@b.com\"}"}`,
+    },
+    {
+      // Documented residual gap: only ONE level of escaping is admitted
+      // (`\x5c?` before each quote, not `\x5c*`). A twice-escaped credential
+      // — a JSON string containing a JSON string containing a JSON string —
+      // is not reached.
+      name: 'residual gap: double-escaped credential is not reached',
+      input: String.raw`{"outer":"{\\\"api_key\\\":\\\"skFAKE0000\\\"}"}`,
+    },
+  ];
+
+  it.each(negative)('does NOT mask: $name', ({ input }) => {
+    expect(maskCredentials(input)).toBe(input);
+  });
+});
+
 describe('sanitizeLogText', () => {
   it('still caps at MAX_ERROR_BODY_CHARS after the split', () => {
     const long = 'a'.repeat(MAX_ERROR_BODY_CHARS + 100);
