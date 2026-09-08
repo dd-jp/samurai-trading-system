@@ -279,9 +279,18 @@ export class GrokAgent {
    * exercise will be the soak itself. See the note in
    * `docs/specs/market-intelligence-spec.md`.
    *
-   * NEVER THROWS. This is called from the tick path, and market intelligence
-   * is an optional input: a provider outage must degrade the debate to
-   * `NO_DATA_MARKER`, not fail the tick that would otherwise have traded.
+   * NEVER THROWS. Reached off the tick's critical path (#1085), from
+   * `MiRefreshQueue`'s microtask worker (`#dispatch`) — directly when
+   * `GrokAgent` is the only MI agent, or through `composeMarketIntelligence`'s
+   * per-agent try/catch when `MiIngestAgent` also runs (the current
+   * production wiring). Nothing upstream needs the resolve to keep a tick
+   * alive — both wrappers catch — but in the single-agent wiring `refresher`
+   * IS this agent, so a rejection would ALSO trip `#dispatch`'s own
+   * `mi_refresh_threw` line: a second, less specific report of a failure this
+   * method already logged (that line carries only the raw error text; the
+   * unrouted-model call-out below is this method's own interpretation of it).
+   * Market intelligence is an optional input either way: a provider outage
+   * degrades the debate to `NO_DATA_MARKER`.
    */
   async refresh(trace_id: string, instrument: string, assetClass: AssetClass): Promise<boolean> {
     const asOf = this.#deps.clock.now();
