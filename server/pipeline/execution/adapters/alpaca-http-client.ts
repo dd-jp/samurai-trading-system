@@ -598,25 +598,40 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
 
   /**
    * Single attempt, no transport retry (#1275, mirrors `saxo-http-client.ts`'s
-   * `placeOrder`): `isRetryableAlpacaBrokerError` (via `isRetrySafeAlpacaMethod`)
-   * already refuses retry for every error shape `request()` can throw on a
-   * POST, so `maxAttempts: 1` no longer carries the guarantee on its own —
-   * the classifier does, verb by verb. It stays as defense in depth: a future
-   * error shape that skips classification, or a classifier edit that stops
-   * consulting `method`, would silently re-open retry on placement without
-   * it. Do not remove it on the strength of the classifier alone.
+   * `placeOrder`) — the single call site every order-placement method below
+   * routes through (#1275 review item 2), instead of each repeating its own
+   * `{ ...this.retry, maxAttempts: 1 }` literal. `isRetryableAlpacaBrokerError`
+   * (via `isRetrySafeAlpacaMethod`) already refuses retry for every error
+   * shape `request()` can throw on a POST, so this override no longer carries
+   * the guarantee alone — it stays as defense in depth: a future error shape
+   * that skips classification, or a classifier edit that stops consulting
+   * `method`, would silently re-open retry on placement without it. Do not
+   * remove it on the strength of the classifier alone — and because it now
+   * lives in exactly one place, there is no fifth-of-the-group copy for a
+   * future edit to drop unnoticed: removing it here removes it from every
+   * placement at once, which is what
+   * `alpaca-http-client.test.ts`'s "maxAttempts: 1 is a single choke point"
+   * suite pins.
    */
+  private async submitPlacement<T>(
+    path: string,
+    init: AlpacaRequestInit,
+    context: string,
+    validate: (body: unknown, context: string) => T,
+  ): Promise<T> {
+    return this.request<T>(path, init, context, validate, { ...this.retry, maxAttempts: 1 });
+  }
+
   async submitOrder(request: AlpacaBracketOrderRequest): Promise<AlpacaOrder> {
     // `type: 'limit'` is a wire-only field, not part of `AlpacaBracketOrderRequest` — the
     // interface's `limit_price` already implies a limit entry, but Alpaca's `POST /v2/orders`
     // still requires the `type` field on the request body itself (#260 research). Adding it
     // here, not to the interface, keeps the "no interface change" constraint intact.
-    return this.request<AlpacaOrder>(
+    return this.submitPlacement<AlpacaOrder>(
       '/v2/orders',
       { method: 'POST', body: JSON.stringify({ ...request, type: 'limit' }) },
       'submitOrder',
       validateAlpacaOrder,
-      { ...this.retry, maxAttempts: 1 },
     );
   }
 
@@ -627,12 +642,11 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
    * the field.
    */
   async submitMarketOrder(request: AlpacaMarketOrderRequest): Promise<AlpacaOrder> {
-    return this.request<AlpacaOrder>(
+    return this.submitPlacement<AlpacaOrder>(
       '/v2/orders',
       { method: 'POST', body: JSON.stringify({ ...request, type: 'market' }) },
       'submitMarketOrder',
       validateAlpacaOrder,
-      { ...this.retry, maxAttempts: 1 },
     );
   }
 
@@ -650,12 +664,11 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
    * residuals through the emulated path instead.
    */
   async submitOcoOrder(request: AlpacaOcoOrderRequest): Promise<AlpacaOrder> {
-    return this.request<AlpacaOrder>(
+    return this.submitPlacement<AlpacaOrder>(
       '/v2/orders',
       { method: 'POST', body: JSON.stringify({ ...request, type: 'limit' }) },
       'submitOcoOrder',
       validateAlpacaOrder,
-      { ...this.retry, maxAttempts: 1 },
     );
   }
 
@@ -666,12 +679,11 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
    * crypto rejects every advanced order class (#550).
    */
   async submitLimitOrder(request: AlpacaLimitOrderRequest): Promise<AlpacaOrder> {
-    return this.request<AlpacaOrder>(
+    return this.submitPlacement<AlpacaOrder>(
       '/v2/orders',
       { method: 'POST', body: JSON.stringify({ ...request, type: 'limit' }) },
       'submitLimitOrder',
       validateAlpacaOrder,
-      { ...this.retry, maxAttempts: 1 },
     );
   }
 
@@ -682,12 +694,11 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
    * Alpaca requires together for this type.
    */
   async submitStopLimitOrder(request: AlpacaStopLimitOrderRequest): Promise<AlpacaOrder> {
-    return this.request<AlpacaOrder>(
+    return this.submitPlacement<AlpacaOrder>(
       '/v2/orders',
       { method: 'POST', body: JSON.stringify({ ...request, type: 'stop_limit' }) },
       'submitStopLimitOrder',
       validateAlpacaOrder,
-      { ...this.retry, maxAttempts: 1 },
     );
   }
 

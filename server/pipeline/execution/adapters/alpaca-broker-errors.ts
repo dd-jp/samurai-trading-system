@@ -141,12 +141,15 @@ export type AlpacaBrokerError =
  * Saxo's equivalent (`saxo-broker-errors.ts`), where DELETE was measured
  * (doc 43:33), nothing here has been measured against the real venue.
  *
- * POST is excluded on principle, unconditionally: `submitOrder` and its
- * siblings are the operations an accidental duplicate is expensive for (a
- * second live order), and this repo has never probed Alpaca's response to a
- * duplicate `client_order_id` (see `alpaca-adapter.ts`'s `rearmProtectiveLegs`
- * comments) — so POST is refused here independent of whether that unverified
- * 422 guarantee turns out to be true.
+ * POST is excluded on principle, unconditionally — not verb-plus-status-code
+ * carve-outs. The "an accidental duplicate is expensive" argument is the
+ * TIMEOUT case specifically: a lost response leaves the caller unable to
+ * tell whether Alpaca placed the order, and this repo has never probed its
+ * response to a duplicate `client_order_id` (see `alpaca-adapter.ts`'s
+ * `rearmProtectiveLegs` comments). It does not fit POST's 429: an
+ * unambiguous non-acceptance cannot have duplicated anything. POST stays
+ * excluded there too, for uniformity — one allowlist gate per verb, not a
+ * claim that every excluded case is independently dangerous.
  *
  * PUT/PATCH are in `AlpacaHttpMethod` (no Alpaca client call currently uses
  * either) but are likewise left off this allowlist — not because either is

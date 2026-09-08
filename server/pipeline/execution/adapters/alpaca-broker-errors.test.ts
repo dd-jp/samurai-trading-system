@@ -59,6 +59,34 @@ describe('isRetryableAlpacaBrokerError', () => {
     expect(isRetryableAlpacaBrokerError(undefined)).toBe(false);
   });
 
+  // #1275 review item 1: `isRetrySafeAlpacaMethod` reducing to
+  // `method !== 'POST'` passed all 165 tests across the three Alpaca files
+  // (confirmed by mutation) — every verb this suite exercised (GET/DELETE
+  // retry-safe, POST not) reads the same under both forms. What that mutant
+  // actually admits is `undefined`, `PUT` and `PATCH`, which nothing here
+  // pinned. These two close it.
+  describe('the allowlist fails closed on verbs it does not name (#1275 review item 1)', () => {
+    it('a 5xx ProviderError with no verb recorded is NOT retryable (fail-closed on absent verb)', () => {
+      // `method` is optional only on ProviderError — this is the shape a
+      // status-less network error, a JSON-parse failure, or `failValidation`
+      // construct, but WITH a `status` attached so the method gate is
+      // isolated: `isServerErrorStatus` alone would say true here.
+      expect(isRetryableAlpacaBrokerError(new AlpacaBrokerProviderError('p', 503))).toBe(false);
+    });
+
+    it('PUT and PATCH are excluded exactly like POST — the deliberate exclusion documented above', () => {
+      expect(isRetryableAlpacaBrokerError(new AlpacaBrokerTimeoutError('t', 'PUT'))).toBe(false);
+      expect(isRetryableAlpacaBrokerError(new AlpacaBrokerRateLimitError('r', 'PATCH'))).toBe(
+        false,
+      );
+      expect(
+        isRetryableAlpacaBrokerError(
+          new AlpacaBrokerProviderError('p', 503, undefined, undefined, 'PUT'),
+        ),
+      ).toBe(false);
+    });
+  });
+
   // #1275: timeout, rate-limit and 5xx retryability now carries the request's
   // verb instead of firing unconditionally — this is the gap #1273 closed for
   // Saxo and deliberately left open here, until now.
