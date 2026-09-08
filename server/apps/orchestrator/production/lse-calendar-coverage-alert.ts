@@ -1,6 +1,6 @@
 /**
  * The operator-escalation port for the LSE table coverage cliff (#1378) —
- * the twentieth outbound operator escalation (`ALERT_CHANNEL_FIELDS`).
+ * one member of `ALERT_CHANNEL_FIELDS`.
  *
  * ## The decision this alert exists to make audible
  *

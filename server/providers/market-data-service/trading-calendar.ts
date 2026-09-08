@@ -708,13 +708,23 @@ export const LSE_HOLIDAYS = new Set([
  * `civilDateKey`'s `YYYY-MM-DD` is intentional, matching
  * `US_TABLE_COVERAGE_END`.
  *
+ * This is `2027-12-31`, matching `LSE_HALF_DAYS_CHECKED_THROUGH`, not
+ * `2026-12-28` (the table's own last entry) — the two tables were populated
+ * from the same hand-entry pass over the same 2026-2027 window, so their
+ * checked boundary is the same. The table's last entry stops short of that
+ * boundary because there is no further UK bank holiday between the Boxing
+ * Day substitute (28 Dec 2027) and year end: New Year's Eve (31 Dec) is not
+ * itself a bank holiday, it is a half-day, tracked in `LSE_HALF_DAYS`
+ * instead. An entry ending before the checked-through date is expected; an
+ * entry AFTER it is what this constant guards against.
+ *
  * A hand-checked literal, not derived from the table's own contents — see
  * `LSE_TABLE_COVERAGE_END`'s doc for why deriving it from the max key would
  * be the wrong direction. `trading-calendar.test.ts` asserts no key in
- * `LSE_HOLIDAYS` exceeds this constant, so extending the table without
- * moving this one fails that test.
+ * `LSE_HOLIDAYS` exceeds this constant, so an entry added past it fails
+ * that test until this constant is deliberately moved too.
  */
-export const LSE_HOLIDAYS_CHECKED_THROUGH = '2027-12-28';
+export const LSE_HOLIDAYS_CHECKED_THROUGH = '2027-12-31';
 
 /**
  * Half-day closes: the session ends at 12:30 rather than 16:30.
@@ -754,9 +764,13 @@ export const LSE_HALF_DAYS_CHECKED_THROUGH = '2027-12-31';
  * The binding LSE table-coverage cliff: the EARLIER of
  * `LSE_HOLIDAYS_CHECKED_THROUGH` and `LSE_HALF_DAYS_CHECKED_THROUGH`, not the
  * later. Whichever table's checked-through date comes first is unverified
- * first, regardless of how far the OTHER table happens to reach — today that
- * is `LSE_HOLIDAYS_CHECKED_THROUGH` (2027-12-28), one day ahead of
- * `LSE_HALF_DAYS_CHECKED_THROUGH` (2027-12-31).
+ * first, regardless of how far the OTHER table happens to reach. Both are
+ * `2027-12-31` today (one hand-entry pass checked both tables through the
+ * same boundary), so this is currently their common value — but the two
+ * are extended independently, and the day one moves ahead of the other
+ * without the other following, `min()` is what keeps this constant pinned
+ * to the LESS-covered table rather than silently trusting the more-covered
+ * one.
  *
  * Computed as `min(...)`, not a third hand-typed literal: the two inputs are
  * themselves hand-checked (see their own docs for why THEY are not derived
@@ -797,12 +811,9 @@ export const LSE_TABLE_COVERAGE_END =
  * silently invalidated. Both are hand-entered tables ending at their own
  * `*_TABLE_COVERAGE_END` — #684 was scoped to the US table only (its own
  * body: "The LSE side has no equivalent free endpoint and stays a table").
- * #1312 (D4) resolved 2026-09-08 to adopt Saxo's own `ExchangeSessions`
- * reference data going forward, but the resolving research measured it at
- * only ~2 days of forward coverage — the decision comment characterizes
- * that as a validator over the hand table, not (yet) a replacement for it.
- * No such client is implemented as of this comment; until one lands, this
- * table and its cliff are still what a live session is checked against.
+ * These hand-entered tables are the source of truth for the LSE session; a
+ * venue session feed, where one exists, is a cross-check run against them,
+ * not a replacement for them.
  *
  * `#closeMinutesFor` stays TOTAL past `LSE_TABLE_COVERAGE_END` — it does not
  * throw, unlike `UsEquityRegularHoursCalendar`'s. That is deliberate, not a

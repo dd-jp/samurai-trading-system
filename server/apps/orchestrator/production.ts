@@ -1087,6 +1087,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   if (tradingCalendar instanceof LseRegularHoursCalendar) {
     assertLseCalendarCoverage({
       now: clock.now(),
+      calendar: tradingCalendar,
       logger: config.logger ?? new JsonLogger(),
       alertChannel: config.lseCalendarCoverageAlerts,
     });

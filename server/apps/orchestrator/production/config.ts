@@ -398,9 +398,7 @@ export interface AlertChannelSlots {
   promptTierAlerts?: PromptTierAlertChannel;
   /**
    * Where the LIVE equity leg's own table-coverage horizon is escalated
-   * (#1378) — the twentieth `ALERT_CHANNEL_FIELDS` member, channel type and
-   * transport landing in the SAME change like `promptTierAlerts`/
-   * `tickSkipAlerts` before it. `LseRegularHoursCalendar`'s hand-entered
+   * (#1378). `LseRegularHoursCalendar`'s hand-entered
    * tables (`LSE_HOLIDAYS`/`LSE_HALF_DAYS`, trading-calendar.ts) are checked
    * only through `LSE_TABLE_COVERAGE_END`; `assertLseCalendarCoverage`
    * (`lse-calendar-coverage-guard.ts`) posts this once that date is within

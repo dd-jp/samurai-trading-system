@@ -418,10 +418,15 @@ describe('the LSE table coverage cliff (#1378)', () => {
   // A Tuesday, ordinary-looking, comfortably past LSE_TABLE_COVERAGE_END.
   const beyondCoverage = new Date('2028-03-14T15:00:00Z');
 
-  it('LSE_TABLE_COVERAGE_END is the EARLIER of the two tables checked ends', () => {
-    // LSE_HOLIDAYS runs through 2027-12-28, LSE_HALF_DAYS through
-    // 2027-12-31 — the holiday table is the binding one.
-    expect(LSE_TABLE_COVERAGE_END).toBe('2027-12-28');
+  it('LSE_TABLE_COVERAGE_END currently equals both checked-through dates', () => {
+    // Both tables were hand-checked through the same 2026-2027 window, so
+    // today LSE_HOLIDAYS_CHECKED_THROUGH === LSE_HALF_DAYS_CHECKED_THROUGH
+    // === LSE_TABLE_COVERAGE_END. The min()-of-the-two property (below) is
+    // what keeps this correct once the two are extended independently and
+    // stop matching.
+    expect(LSE_TABLE_COVERAGE_END).toBe('2027-12-31');
+    expect(LSE_HOLIDAYS_CHECKED_THROUGH).toBe(LSE_TABLE_COVERAGE_END);
+    expect(LSE_HALF_DAYS_CHECKED_THROUGH).toBe(LSE_TABLE_COVERAGE_END);
   });
 
   it('no LSE_HOLIDAYS entry exceeds LSE_HOLIDAYS_CHECKED_THROUGH', () => {
@@ -464,7 +469,7 @@ describe('the LSE table coverage cliff (#1378)', () => {
   });
 
   it('coversCloseFor is true at and before the coverage end', () => {
-    expect(calendar.coversCloseFor(new Date('2027-12-28T15:00:00Z'))).toBe(true);
+    expect(calendar.coversCloseFor(new Date(`${LSE_TABLE_COVERAGE_END}T15:00:00Z`))).toBe(true);
     expect(calendar.coversCloseFor(new Date('2020-01-06T15:00:00Z'))).toBe(true);
   });
 
@@ -472,25 +477,25 @@ describe('the LSE table coverage cliff (#1378)', () => {
     expect(calendar.coversCloseFor(beyondCoverage)).toBe(false);
   });
 
-  it('an unmodelled half-day past coverage does not silently report 16:30 as verified', () => {
+  it('an unmodelled half-day past coverage does not silently report a verified close', () => {
     // 2029-12-24 is a Monday — half-day-shaped (Christmas Eve) but two years
     // past LSE_TABLE_COVERAGE_END, so LSE_HALF_DAYS was never extended to
-    // cover it. `#closeMinutesFor` stays total and answers with the ordinary
-    // 16:30 close — but `coversCloseFor` is the channel that says this
-    // particular 16:30 is a GUESS, not a verified close, which is what a
-    // caller must check before trusting it.
+    // cover it. What matters is that coversCloseFor says this date is
+    // UNVERIFIED, and that a live boot for this date is refused elsewhere
+    // (production.test.ts's "refuses to build ... for an unmodelled
+    // half-day" case) — not what #closeMinutesFor's specific numeric guess
+    // for this date happens to be. Pinning that guess as "correct" would
+    // tie this test to an implementation detail the coverage guard exists
+    // precisely so nothing downstream has to trust.
     const unmodelledHalfDay = new Date('2029-12-24T15:00:00Z');
 
     expect(calendar.coversCloseFor(unmodelledHalfDay)).toBe(false);
-
-    const close = calendar.sessionEnd(unmodelledHalfDay);
-    expect(close).not.toBeNull();
-    // 16:30 London (GMT in December), not the real 12:30 half-day close —
-    // this IS the unverified guess `coversCloseFor` flags as untrustworthy.
-    expect(close?.toISOString()).toBe('2029-12-24T16:30:00.000Z');
+    // #closeMinutesFor stays total (see the class doc) — still answers,
+    // still doesn't throw, past coverage.
+    expect(() => calendar.sessionEnd(unmodelledHalfDay)).not.toThrow();
   });
 
   it('does not throw for the last covered date', () => {
-    expect(() => calendar.isOpen(new Date('2027-12-28T15:00:00Z'))).not.toThrow();
+    expect(() => calendar.isOpen(new Date(`${LSE_TABLE_COVERAGE_END}T15:00:00Z`))).not.toThrow();
   });
 });

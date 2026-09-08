@@ -6256,7 +6256,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // pattern `runRiskCriticScenario`/`runDataFailoverScenario` use for a
       // mechanism the six-stage tick loop above cannot exercise for real.
       promptTierAlerts: new LoggingPromptTierAlertChannel(logger),
-      // #1378 — the twentieth `ALERT_CHANNEL_FIELDS` member. This run injects
+      // #1378. This run injects
       // `tradingCalendar: new UsEquityRegularHoursCalendar()` directly
       // (below), so `assertLseCalendarCoverage`'s `LseRegularHoursCalendar`
       // gate never fires and this slot is never exercised — a log-only

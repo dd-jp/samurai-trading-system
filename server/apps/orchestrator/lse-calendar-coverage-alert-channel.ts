@@ -1,6 +1,5 @@
 /**
- * Trade-channel adapter for the LSE table coverage-horizon alert (#1378) —
- * the twentieth outbound operator escalation.
+ * Trade-channel adapter for the LSE table coverage-horizon alert (#1378).
  *
  * Same shape as `TradeChannelCalendarFallbackAlert`: wrap the
  * already-provisioned Telegram client, post to the ESCALATION chat (never

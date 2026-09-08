@@ -16,10 +16,13 @@
  *
  * So the boundary is enforced exactly once, here, at boot — while no live
  * position exists yet to strand. `buildProductionComponents` (production.ts)
- * calls this immediately after resolving `tradingCalendar`, before anything
- * else is constructed, for `mode === 'live'` only: the paper leg runs
- * `UsEquityRegularHoursCalendar`/`AlpacaEquitySessionCalendar` and has its
- * own coverage story (`calendarFallbackAlerts`, #684).
+ * calls this immediately after resolving `tradingCalendar`, gated on the
+ * RESOLVED calendar being `LseRegularHoursCalendar` (not on `mode`,
+ * mirroring the #989 benchmark-collision guard beside it): the paper leg
+ * normally runs `UsEquityRegularHoursCalendar`/`AlpacaEquitySessionCalendar`
+ * and has its own coverage story (`calendarFallbackAlerts`, #684), but a
+ * `mode: 'live'` config with an explicitly injected non-LSE calendar skips
+ * this guard too, on the same reasoning.
  *
  * ## Two thresholds, not one
  *
@@ -35,17 +38,22 @@
  * latch): boot is rare enough that this does not flood the escalation chat,
  * the same posture `calendarFallbackAlerts` takes.
  *
- * ## Residual gap — a running process is not covered
+ * ## Residual gap — this has exactly one call site, at boot
  *
- * This guard runs at boot only. A process already running when
- * `LSE_TABLE_COVERAGE_END` passes mid-session neither refuses nor alerts —
- * it keeps flattening on `LseRegularHoursCalendar`'s permissive 16:30 until
- * the next restart. That is the honest scope of a boot-only guard: closing
- * it fully would mean the resolver throwing on the money path, which is the
- * failure mode this file exists to avoid. An unattended run crossing the
- * cliff mid-soak is exactly what the horizon alert, well ahead of the date,
- * exists to make unlikely.
+ * There is no periodic re-check. A process started more than
+ * `LSE_COVERAGE_ALERT_HORIZON_DAYS` before `LSE_TABLE_COVERAGE_END` and left
+ * running gets neither the horizon alert nor the refusal for as long as it
+ * stays up — both are evaluated once, at the `now` boot passed in, and never
+ * again. A process already running when the cliff passes mid-session
+ * likewise neither refuses nor alerts; it keeps flattening on
+ * `LseRegularHoursCalendar`'s permissive 16:30 until its next restart. Both
+ * are the honest scope of a boot-only guard: closing either gap fully would
+ * mean the resolver throwing on the money path, which is the failure mode
+ * this file exists to avoid. The mitigation is operational, not
+ * mechanical — restart cadence (a deploy, a scheduled bounce) is what turns
+ * the boot-time check into a periodic one in practice.
  */
+import type { LseRegularHoursCalendar } from '../../../providers/market-data-service/index.js';
 import { LSE_TABLE_COVERAGE_END } from '../../../providers/market-data-service/index.js';
 // Reached directly rather than through the barrel: these are the internal
 // London-civil-date helpers `trading-calendar.ts` exports for exactly this
@@ -88,22 +96,24 @@ function civilDaysBetween(fromKey: string, toKey: string): number {
 export interface AssertLseCalendarCoverageOptions {
   /** Boot time, read through the injected clock — never `Date.now()` directly. */
   now: Date;
+  /** The resolved live calendar — the guard defers the boundary decision to its `coversCloseFor`, rather than re-deriving it from `LSE_TABLE_COVERAGE_END` itself. */
+  calendar: LseRegularHoursCalendar;
   logger: Logger;
   /** Defaults to `LoggingLseCalendarCoverageAlertChannel(logger)`, same posture as `calendarFallbackAlerts`. */
   alertChannel?: LseCalendarCoverageAlertChannel | undefined;
 }
 
 /**
- * Throws when `now` is past `LSE_TABLE_COVERAGE_END`; posts a horizon alert
+ * Throws when `calendar.coversCloseFor(now)` is false; posts a horizon alert
  * (never throws) when `now` is within `LSE_COVERAGE_ALERT_HORIZON_DAYS` of
- * it. Otherwise a no-op. See the module doc for why the two are separate
- * thresholds and why this is boot-only.
+ * `LSE_TABLE_COVERAGE_END`. Otherwise a no-op. See the module doc for why the
+ * two are separate thresholds and why this is boot-only.
  */
 export function assertLseCalendarCoverage(options: AssertLseCalendarCoverageOptions): void {
-  const { now, logger } = options;
+  const { now, calendar, logger } = options;
   const todayKey = civilDateKey(toCivilDate(now, LONDON_ZONE));
 
-  if (todayKey > LSE_TABLE_COVERAGE_END) {
+  if (!calendar.coversCloseFor(now)) {
     throw new Error(
       `Orchestrator cannot start the live equity leg: today (${todayKey}, London) is past ` +
         `LSE_TABLE_COVERAGE_END (${LSE_TABLE_COVERAGE_END}). LseRegularHoursCalendar's ` +
@@ -112,7 +122,7 @@ export function assertLseCalendarCoverage(options: AssertLseCalendarCoverageOpti
         'flatten would fire four hours late, the exact overnight carry ADR-0014 forbids. Extend ' +
         'LSE_HOLIDAYS/LSE_HALF_DAYS (and their LSE_HOLIDAYS_CHECKED_THROUGH/' +
         'LSE_HALF_DAYS_CHECKED_THROUGH dates) against the published UK bank holiday calendar ' +
-        'before restarting the live leg — see #1308 for the wider Saxo-data map this sits under.',
+        'before restarting the live leg — see #1379.',
     );
   }
 
