@@ -222,7 +222,7 @@ describe('camelCase/underscore keys, Basic/Token auth and DSN passwords (#1367)'
         survives: 'redis://:',
       },
       // Round-4 review (F1): the `&`-exclusion row above (F8) only exercises
-      // the bareword pattern (:55). The camelCase/underscore, all-caps
+      // the bareword pattern (:61). The camelCase/underscore, all-caps
       // env-var and Authorization patterns each got the identical `&`
       // exclusion, but nothing pinned it there — reverting `&` from any of
       // their value classes left every existing test green. These four
@@ -436,7 +436,7 @@ describe('camelCase/underscore keys, Basic/Token auth and DSN passwords (#1367)'
       input: '{"polygonApiKey":"would-be-a-real-secret"}',
       where: 'apps/service-api/provider-status.ts',
     },
-    // Round-4 review (F1): F7's `[ \t]*` fix on the bareword pattern (:55)
+    // Round-4 review (F1): F7's `[ \t]*` fix on the bareword pattern (:61)
     // was pinned by the dedicated newline test above, but nothing pinned it
     // on the all-caps env-var, lowercase env-var or Authorization patterns
     // — reverting `[ \t]*` back to `\s*` on any of them left every existing
@@ -447,19 +447,31 @@ describe('camelCase/underscore keys, Basic/Token auth and DSN passwords (#1367)'
       name: 'F1 (#1367 round 4): newline after ALPACA_API_SECRET does not swallow the following line',
       input: 'ALPACA_API_SECRET:\n    at foo()',
       where:
-        'all-caps env-var pattern (:86) — same newline hazard F7 fixed on the bareword pattern',
+        'all-caps env-var pattern (:93) — same newline hazard F7 fixed on the bareword pattern',
     },
     {
       name: 'F1 (#1367 round 4): newline after polygon_api_key does not swallow the following line',
       input: 'polygon_api_key:\n    at foo()',
       where:
-        'lowercase env-var pattern (:100) — same newline hazard F7 fixed on the bareword pattern',
+        'lowercase env-var pattern (:113) — same newline hazard F7 fixed on the bareword pattern',
     },
     {
       name: 'F1 (#1367 round 4): newline between Authorization: and Basic does not mask anything',
       input: 'Authorization:\nBasic ZkFLRTAwMDA=',
       where:
-        'Authorization pattern\'s lookbehind separator (:119) — a newline there means the lookbehind never matches before "Basic", so nothing is masked at all (not the scheme-to-value \\s+ gap F4 describes, a different mechanism with the same observable result)',
+        'Authorization pattern\'s lookbehind separator (:137) — a newline there means the lookbehind never matches before "Basic", so nothing is masked at all (not the scheme-to-value \\s+ gap F4 describes, a different mechanism with the same observable result)',
+    },
+    // Round-4 review (F2): the lowercase env-var pattern's residual-gap
+    // comment (:107) now names mixed-case spellings of all three covered
+    // suffixes as unmasked too, since the pattern is anchored `[a-z]` with
+    // no `i` flag — but nothing pinned that claim. This row does: reverting
+    // the missing `i` flag back onto the pattern is exactly what would turn
+    // this row from a pass into the sole failure.
+    {
+      name: 'F2 (#1367 round 4): Alpaca_Api_Key (mixed case) is not masked',
+      input: 'Alpaca_Api_Key=skFAKE0000',
+      where:
+        "lowercase env-var pattern (:113) — anchored `[a-z][a-z0-9_]` with no `i` flag, so a mixed-case spelling doesn't match it, and the all-caps pattern (:93) doesn't match it either because the prefix isn't all-caps",
     },
   ];
 

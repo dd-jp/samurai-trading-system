@@ -80,9 +80,8 @@ const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // real `process.env.*` reads, not just the one Alpaca name; `DB_PASSWORD`
   // is illustrative of the `_PASSWORD` suffix, not a name in this repo's
   // own `process.env.*` reads): the shape the bareword pattern above can't
-  // reach even with
-  // `api[_-]?key`/`secret`/`token`/`password` in it, because the credential
-  // word isn't the LAST segment. Case-SENSITIVE (no `i` flag) and requires
+  // reach even with `api[_-]?key`/`secret`/`token`/`password` in it, because
+  // the credential word isn't the LAST segment. Case-SENSITIVE (no `i` flag) and requires
   // an all-caps prefix — this buys avoiding a mask on the LOWERCASE spelling
   // of a real field this codebase logs, `next_page_token` (a pagination
   // cursor); it does NOT avoid masking `NEXT_PAGE_TOKEN` — an all-caps
