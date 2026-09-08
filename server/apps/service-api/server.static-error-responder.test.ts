@@ -1,24 +1,16 @@
 /**
- * #1355 — the `serveStatic` rejection handler in `server.ts` (`void
- * serveStatic(urlPath, res).catch((err) => { … })`) renders the caught value
- * with `err instanceof Error ? err.message : '…'` inside the `.catch()`
- * itself. A hostile `err.message` throwing there has no further handler:
- * the `.catch()` callback is on a `void`-ed promise, so a throw out of it is
- * an unhandled rejection.
+ * #1355 — `serveStatic`'s rejection handler (`void serveStatic(urlPath,
+ * res).catch((err) => { … })`) renders the caught value inside its own
+ * `.catch()` on a void-ed promise; a throw there is unhandled.
  *
- * Getting a hostile value to that specific `.catch()` needs a real
- * `serveStatic` rejection to originate BEFORE any response header is
- * written — the handler's own `if (res.headersSent) { res.end(); return; }`
- * guard already covers every rejection that happens after a successful
- * `writeHead` (see server.ts's `respondNotFound`/inner-`readFile`-catch,
- * which funnel ordinary "no file to serve" failures through `respondNotFound`
- * without ever reaching this `.catch()` at all). Two calls in that path are
- * NOT wrapped in a try/catch of their own and are both reached BEFORE
- * `respondNotFound`'s `writeHead`: `bundleDiagnostic`'s own `resolvePath(root)`
- * and its `join(resolvedRoot, 'index.html')`. This test drives the second —
- * it mocks `node:path`'s `join` to throw a hostile error for exactly that
- * call, leaving every other `join` call (this file's own temp-path setup
- * included) untouched.
+ * Reaching that render needs a rejection that occurs before any header is
+ * sent — the handler's own `if (res.headersSent) { … }` guard covers every
+ * rejection after. Two calls on that path are unwrapped and reached before
+ * `respondNotFound`'s own `writeHead`: `bundleDiagnostic`'s
+ * `resolvePath(root)` and its `join(resolvedRoot, 'index.html')`. This test
+ * drives the second, mocking `node:path`'s `join` to throw only for that
+ * call — every other `join` (this file's own temp-path setup included)
+ * passes through.
  */
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -77,12 +69,13 @@ describe('dashboard server — serveStatic rejection handler guard (#1355)', () 
     const onUnhandled = (reason: unknown) => unhandled.push(reason);
     process.on('unhandledRejection', onUnhandled);
     try {
-      // A short abort, not the test's own timeout: before the fix the
-      // request never completes at all (the render throws before the
-      // vulnerable `writeHead` call ever runs, so no response — not even a
-      // hang-until-proxy-timeout like `:303` — is ever written), and the
-      // primary assertion below must still run instead of the whole test
-      // failing on the fetch alone.
+      // A short abort, not the test's own timeout: before the fix,
+      // `res.writeHead(500, ...)` still runs first (setting `res.headersSent`
+      // and buffering the header block, same order as `:303`) — it's
+      // evaluating `.end`'s argument that throws, so `.end()` is never
+      // reached and nothing flushes to the socket. The request hangs the
+      // same way `:303` does, and the primary assertion below must still run
+      // instead of the whole test failing on the fetch alone.
       const result = await fetch(`${server.url}/`, {
         cache: 'no-store',
         signal: AbortSignal.timeout(2_000),
@@ -94,10 +87,20 @@ describe('dashboard server — serveStatic rejection handler guard (#1355)', () 
         }),
         (error: unknown) => ({ completed: false as const, error }),
       );
-      // An unhandled rejection surfaces on a later turn than the response
-      // (or the abort) itself — give the event loop room to raise it
-      // before asserting.
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      // No promise-gate exists for this: the property is an absence (no
+      // `unhandledRejection` fired), not the completion of any event this
+      // test's own code produces, so there's nothing to `await` that the
+      // fast side resolves (docs/coding-standards.md's gate-don't-race
+      // rule). It isn't a wall-clock bet either: Node's own unhandled-
+      // rejection check runs within a tick of the render throwing — orders
+      // of magnitude faster than either branch of `result` above, which
+      // already settles no sooner than that (green: after the guarded
+      // render + a real response round-trip; red: only after the fetch's
+      // own 2s abort). By the time `result` exists, the rejection (if any)
+      // has already fired. This flushes exactly one deferred macrotask —
+      // not a magnitude-tuned duration — so any check still queued behind
+      // it runs before the assertion.
+      await new Promise((resolve) => setImmediate(resolve));
 
       // Asserted first, and unconditionally: this is the property #1355
       // is actually about. A red run without the guard fails right here

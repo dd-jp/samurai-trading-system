@@ -44,9 +44,10 @@ import type { DashboardQueryStore } from './types.js';
  * `'[unrenderable error]'` rather than propagating.
  *
  * `sanitizeLogText` is load-bearing here, not belt-and-suspenders: dropping
- * the two site-specific literals below means a non-`Error` throw now renders
- * the thrown *value* into a client-visible body where before it always
- * rendered a fixed string, so masking known credential syntaxes is what
+ * the two literals these sites used to fall back to on a non-`Error` throw
+ * (`'snapshot failed'` / `'static read failed'`) means such a throw now
+ * renders the thrown *value* into a client-visible body where before it
+ * always rendered a fixed string, so masking known credential syntaxes is what
  * makes that widening safe. Its `MAX_ERROR_BODY_CHARS` cap (~500 chars,
  * `http/response-errors.ts`) matters too: an operator reading a long real
  * error message would notice truncation before they'd notice masking. Same
@@ -54,26 +55,18 @@ import type { DashboardQueryStore } from './types.js';
  * doc comment: "belt and suspenders costs nothing here"), applied here to a
  * body a client can read instead.
  *
- * This replaces the two literals these sites previously fell back to on a
- * non-`Error` throw (`'snapshot failed'` / `'static read failed'`) with
- * `describeThrownSafely`'s rendering of the actual value. That is a
- * deliberate behavior change, not an oversight: the literal only ever fired
- * for a non-`Error` throw, and losing the thrown value behind a generic
- * string is strictly less informative than showing what was actually thrown
- * (or, for a value that cannot be rendered at all, the same
- * `'[unrenderable error]'` placeholder every other guarded render in this
- * codebase already uses) — one spelling for "something failed" is easier to
- * grep for than two site-specific ones.
- *
- * Scope: this guards the render only. `/api/snapshot`'s catch still calls
- * `res.writeHead(500, ...)` after this render succeeds — if the *success*
- * path's own `res.writeHead(200, ...).end(JSON.stringify(snapshot))` already
- * sent headers before throwing (e.g. `JSON.stringify` refusing a value —
- * a BigInt, a circular reference), that second `writeHead(500)` throws
- * `ERR_HTTP_HEADERS_SENT` uncaught, out of this render's reach — a
- * pre-existing, narrower gap this change does not touch. `serveStatic`'s
- * rejection handler doesn't share it: it has its own `res.headersSent`
- * guard before ever reaching this render.
+ * Scope: both call sites guard `res.headersSent` before calling this
+ * function and `writeHead(500, ...)` — necessary because each site's own
+ * success path already calls `writeHead(200, ...)` (setting the flag)
+ * BEFORE the value that can throw is evaluated as `.end`'s argument.
+ * `/api/snapshot`: `res.writeHead(200, ...).end(JSON.stringify(snapshot))`
+ * — `writeHead` runs first, then `JSON.stringify` is evaluated for `.end`;
+ * a value it refuses (a BigInt, a circular reference) reaches this catch
+ * with `res.headersSent` already true. Without the guard, the catch's own
+ * `writeHead(500, ...)` would itself throw `ERR_HTTP_HEADERS_SENT`,
+ * uncaught — one `writeHead` earlier than the failure this function guards
+ * against. `serveStatic`'s rejection handler carries the same guard for the
+ * same reason.
  */
 function renderResponderError(err: unknown): string {
   return sanitizeLogText(describeThrownSafely(err));
@@ -346,6 +339,10 @@ export function createDashboardServer(opts: DashboardServerOptions): DashboardSe
         const snapshot = buildSnapshot(store, new Date(), mode, providers);
         res.writeHead(200, JSON_HEADERS).end(JSON.stringify(snapshot));
       } catch (err) {
+        if (res.headersSent) {
+          res.end();
+          return;
+        }
         res.writeHead(500, JSON_HEADERS).end(JSON.stringify({ error: renderResponderError(err) }));
       }
       return;
