@@ -4,6 +4,7 @@ import {
   LoggingBreachAlertChannel,
   LoggingDataFailoverAlertChannel,
   LoggingFlattenOverfillAlertChannel,
+  LoggingFlattenReconcileAlertChannel,
   LoggingHeartbeatChannel,
   LoggingMiCoverageAlertChannel,
   LoggingMiCoverageTelemetry,
@@ -225,6 +226,61 @@ describe('LoggingFlattenOverfillAlertChannel', () => {
       unattributed_qty: 4,
       observed_at: observedAt.toISOString(),
     });
+  });
+});
+
+describe('LoggingFlattenReconcileAlertChannel (#519, #1331)', () => {
+  const observedAt = new Date('2026-08-03T12:00:00Z');
+  const alert = {
+    idempotency_key: 'flatten-1',
+    instrument: 'AAPL',
+    reason: 'venue unreachable',
+    observed_at: observedAt,
+  } as const;
+
+  it('reports an unresolved flatten at error level, naming the flatten and the reason', async () => {
+    const logger = makeLogger();
+
+    await new LoggingFlattenReconcileAlertChannel(logger).postFlattenReconcileAlert({
+      ...alert,
+      trace_id: 'reconcile',
+    });
+
+    // `error`, not `warn`: a flatten whose outcome is unknown is a lot that
+    // may or may not still be held — `LoggingFlattenOverfillAlertChannel`'s
+    // diagnostic posture above does not apply.
+    expect(logger.entries[0]?.level).toBe('error');
+    // `stage`/`event` pinned because #1331 rewrote the object they sit in:
+    // unpinned, a stage that no longer says `execution` would leave a
+    // correctly-labelled arm on a line filed under the wrong seam, which the
+    // trace_id assertions cannot see.
+    expect(logger.entries[0]?.stage).toBe('execution');
+    expect(logger.entries[0]?.event).toBe('flatten_reconcile_unresolved');
+    expect(logger.entries[0]?.payload).toMatchObject({
+      idempotency_key: 'flatten-1',
+      instrument: 'AAPL',
+      reason: 'venue unreachable',
+      observed_at: observedAt.toISOString(),
+    });
+  });
+
+  // #1331: both arms post through the one channel instance `production.ts`
+  // builds, so a constant here labels a control-arm flatten exactly like a
+  // live one. The reconcile pass's own id is the discriminant, threaded on
+  // the alert — the same explicit form `LoggingMiCoverageAlertChannel` above
+  // takes. `flatten-reconcile-arm-wiring.test.ts` pins the other half: that
+  // the ids reaching this channel really are the two arms'.
+  it("carries the reconcile pass's trace_id verbatim, and changes when the pass does", async () => {
+    const logger = makeLogger();
+    const channel = new LoggingFlattenReconcileAlertChannel(logger);
+
+    await channel.postFlattenReconcileAlert({ ...alert, trace_id: 'reconcile' });
+    await channel.postFlattenReconcileAlert({ ...alert, trace_id: 'control-arm-reconcile' });
+
+    expect(logger.entries.map((entry) => entry.trace_id)).toEqual([
+      'reconcile',
+      'control-arm-reconcile',
+    ]);
   });
 });
 

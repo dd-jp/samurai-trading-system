@@ -31,7 +31,9 @@
  * something an operator has to go check on the venue.
  *
  * CREDENTIALS: composed only of fields this module chose — the flatten's own
- * idempotency key, its instrument, and a sanitized reason. `reconcile()`'s
+ * idempotency key, its instrument, a sanitized reason, and (#1331) the
+ * reconcile pass's own trace id, a fixed synthetic constant chosen at the
+ * composition root. `reconcile()`'s
  * `undetermined` divergence already carries the adapter's error message
  * verbatim (reconcile.ts's own comment: `sanitizeBrokerError`, #297's H1,
  * makes that safe), the same text this alert forwards — never a raw response
@@ -44,6 +46,26 @@
 
 /** One `flatten_submissions` row `reconcile()` could not settle this pass. */
 export interface FlattenReconcileAlert {
+  /**
+   * The reconcile pass's own `ExecutionInput.trace_id`, and with it the ARM
+   * that raised this alert (#1331).
+   *
+   * Every surface `reconcile()` can be called on is built by
+   * `buildExecutionSurface` with a fixed per-arm id — `reconcile`/`fill-sync`
+   * for the live arm, `control-arm-reconcile`/`control-arm-fill-sync` for the
+   * control's (#1321) — and the tick-step Execution, whose id is a verdict's
+   * idempotency key, never reaches this alert: `reconcile()` is the only
+   * caller. So this field names the arm as long as that stays true.
+   *
+   * Carried on the alert rather than stamped at the log site because both
+   * arms post through the SAME channel instance: `buildControlArmWiring`
+   * spreads the live arm's execution deps and overrides the broker, the store
+   * and five siblings, but the alert channels are `SAMURAI_ALERTS`-selected
+   * once at the root and shared. A constant at the channel therefore logs a
+   * control-arm flatten — a simulated broker's ambiguity — identically to a
+   * live one at a real venue.
+   */
+  trace_id: string;
   /** The flatten's own `flatten_submissions.idempotency_key` (its `client_order_id`). */
   idempotency_key: string;
   instrument: string;
