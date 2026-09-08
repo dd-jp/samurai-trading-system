@@ -26,19 +26,30 @@ import { truncateForError } from './http/response-errors.js';
  * are full of ids, hashes and ISO timestamps.
  *
  * Quote and `}` chars in every pattern below are hex escapes (`\x22`, `\x27`,
- * `\x7d`), never literal: this repo's `production.test.ts` walks every server
- * source file through a hand-rolled comment/string stripper (no real lexer
- * available post TypeScript v7) that can't tell a regex literal from a
- * string, and separately just counts raw `{`/`}` characters to catch a
- * desync — so a literal quote inside a regex literal misreads as a string
- * opener, and a literal `}` inside a character class (excluding it from a
- * matched value, not delimiting anything) reads as an unmatched brace either
- * way. `KNOWN_STRIPPER_DESYNCS` there routes two known files around the
- * first failure mode; one literal quote already in this array (on the
- * `Bearer` pattern, pre-#1367) was enough to trip it, invisibly, because it
- * also happened to swallow the `}` below into the same misread string. Fixed
- * here by keeping the whole array free of both literal quotes and literal
- * `}`, rather than adding a third routed-around file.
+ * `\x7d`), never literal. Reason, measured rather than assumed — production.
+ * test.ts's `stripCommentsAndStrings` (no real lexer available post
+ * TypeScript v7) can't tell a regex literal from a string, so a literal quote
+ * inside a regex literal misreads as a string opener and the stripper scans
+ * for its close across everything that follows, comments included; its
+ * sibling test, `stripCommentsAndStrings leaves braces balanced on every
+ * server source file it strips`, then runs `braceDelta` — a raw `{`/`}` count
+ * — over that STRIPPED output, not the source file, to catch the desync.
+ * Measured in order while fixing this file:
+ *   1. `main`, literal quotes, literal `}`s: the Bearer pattern's one literal
+ *      quote (pre-#1367) put the stripper into a misread string that ran to
+ *      EOF, so every subsequent `}` in this array — Bearer's own and the
+ *      bareword pattern's — was scanned away with it. Net delta 0: not
+ *      balanced, invisible.
+ *   2. Quotes hex-escaped, `}`s still literal (this PR's first attempt): the
+ *      misread string was gone, so the brace count could now see every
+ *      pattern's `}` for the first time — each one is a character-class
+ *      EXCLUSION, not a delimiter, so it has no matching `{`. Delta -5, and
+ *      the test failed for real.
+ *   3. Both hex-escaped (this file, final): no misread string, no literal
+ *      `}` for the counter to see. Delta 0, and this time it means it.
+ * `KNOWN_STRIPPER_DESYNCS` (in `production.test.ts`) routes two known files
+ * around failure mode 1 instead; not used here because the array can be made
+ * genuinely balanced rather than routed around.
  */
 const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // Telegram bot token in a URL path: `/bot123456:AA...`
@@ -57,13 +68,15 @@ const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // boundary). Named explicitly rather than as a `*Token`/`*Key` suffix
   // rule: this codebase logs `pageToken`/`next_page_token` (pagination
   // cursors, `alpaca-http-client.ts`) and `maxTokens`/`max_tokens` (an LLM
-  // request budget, `spend-sink.ts`) — a suffix rule would mask both.
+  // request budget — `max_tokens` in `orchestrator/production/defaults.ts`,
+  // `maxTokens` in `market-intelligence/grok/x-search-client.ts`) — a suffix
+  // rule would mask both.
   /\b(?:client[_-]?secret|access[_-]?token|refresh[_-]?token)[\x22\x27]?\s*[:=]\s*[\x22\x27]?[^\s,;\x22\x27\x7d\]]+/gi,
   // `*_SECRET_KEY` / `*_API_KEY` env-var names (`APCA_API_SECRET_KEY`):
   // underscore-joined uppercase is the one shape the bareword pattern above
   // can't reach even with `api[_-]?key` in it, because the credential word
   // isn't the LAST segment.
-  /\b[A-Za-z][A-Za-z0-9_]*_(?:SECRET_KEY|API_KEY)\b[\x22\x27]?\s*[:=]\s*[\x22\x27]?[^\s,;\x22\x27\x7d\]]+/gi,
+  /\b[A-Za-z][A-Za-z0-9_]{0,60}_(?:SECRET_KEY|API_KEY)\b[\x22\x27]?\s*[:=]\s*[\x22\x27]?[^\s,;\x22\x27\x7d\]]+/gi,
   // `Authorization: Basic <base64>`. Anchored to a preceding `Authorization:`
   // (via lookbehind, so it's not consumed and stays in the output) rather
   // than matching bare `Basic <word>` the way the Bearer pattern matches

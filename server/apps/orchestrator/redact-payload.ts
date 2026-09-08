@@ -6,13 +6,13 @@
  *
  * The obvious one-line fix — `sanitizeLogText(JSON.stringify(payload))` —
  * **corrupts the log format**, and was rejected on a worked example rather
- * than on taste. `sanitize-log-text.ts`'s value class is
- * `[^\s,;"'}\]]+`: it excludes `"`, `}` and `]`, but NOT `{`. So the
- * serialized `{"auth":{"scheme":"basic"}}` matches `auth":{"scheme` as the
- * "value" and redacts to:
+ * than on taste. `sanitize-log-text.ts`'s bareword pattern's value class
+ * excludes whitespace, `,`, `;`, both quote characters and `}`/`]` — but NOT
+ * `{`. So the serialized `{"auth":{"scheme":"basic"}}` matches `auth":{` as
+ * the "value" (stopping at the `"` opening `"scheme"`) and redacts to:
  *
  * ```
- * {"auth":[REDACTED]"scheme":"basic"}}
+ * {"[REDACTED]"scheme":"basic"}}
  * ```
  *
  * which is not parseable JSON. On a line-oriented log whose whole contract is

@@ -55,63 +55,73 @@ describe('camelCase/underscore keys, Basic auth and DSN passwords (#1367)', () =
   // `\b`-anchored patterns don't see a credential word joined by camelCase
   // or an underscore, and neither `Authorization: Basic` nor a DSN password
   // had a pattern at all.
-  const positive: ReadonlyArray<{ name: string; input: string; secret: string }> = [
-    {
-      name: 'camelCase nested key: clientSecret',
-      input: '{"credentials":{"clientSecret":"sk-live-abcdef123456"}}',
-      secret: 'sk-live-abcdef123456',
-    },
-    {
-      name: 'camelCase key: accessToken',
-      input: '{"accessToken":"ya29.a0AfH6SMB-verysecret"}',
-      secret: 'ya29.a0AfH6SMB-verysecret',
-    },
-    {
-      name: 'camelCase key: refreshToken',
-      input: '{"refreshToken":"rt_9f8e7d6c5b4a"}',
-      secret: 'rt_9f8e7d6c5b4a',
-    },
-    {
-      name: 'underscore-joined env-var key: APCA_API_SECRET_KEY',
-      input: '{"APCA_API_SECRET_KEY":"zzzz"}',
-      secret: 'zzzz',
-    },
-    {
-      name: 'Authorization: Basic',
-      input: 'Authorization: Basic dXNlcjpwYXNzd29yZA==',
-      secret: 'dXNlcjpwYXNzd29yZA==',
-    },
-    {
-      name: 'DSN password',
-      input: 'postgres://user:supersecretpw@db.internal:5432/samurai',
-      secret: 'supersecretpw',
-    },
-    {
-      name: 'existing bareword keys still mask (no regression)',
-      input: '{"token":"plainmatch123"} / {"password":"hunter2"}',
-      secret: 'plainmatch123',
-    },
-  ];
+  // `survives`: a substring the mask must leave untouched, distinct from
+  // `secret` — proves each pattern replaces only the credential, not the
+  // whole line, and (via a sibling field on the camelCase rows) that only the
+  // intended key's value is consumed, not a neighbour's.
+  const positive: ReadonlyArray<{ name: string; input: string; secret: string; survives: string }> =
+    [
+      {
+        name: 'camelCase nested key: clientSecret',
+        input: '{"credentials":{"clientSecret":"sk-live-abcdef123456"}}',
+        secret: 'sk-live-abcdef123456',
+        survives: '"credentials"',
+      },
+      {
+        name: 'camelCase key: accessToken',
+        input: '{"tokenType":"Bearer","accessToken":"ya29.a0AfH6SMB-verysecret"}',
+        secret: 'ya29.a0AfH6SMB-verysecret',
+        survives: '"tokenType":"Bearer"',
+      },
+      {
+        name: 'camelCase key: refreshToken',
+        input: '{"grantType":"refresh","refreshToken":"rt_9f8e7d6c5b4a"}',
+        secret: 'rt_9f8e7d6c5b4a',
+        survives: '"grantType":"refresh"',
+      },
+      {
+        name: 'underscore-joined env-var key: APCA_API_SECRET_KEY',
+        input: '{"region":"us-east-1","APCA_API_SECRET_KEY":"zzzz"}',
+        secret: 'zzzz',
+        survives: '"region":"us-east-1"',
+      },
+      {
+        name: 'Authorization: Basic',
+        input: 'Authorization: Basic dXNlcjpwYXNzd29yZA==',
+        secret: 'dXNlcjpwYXNzd29yZA==',
+        survives: 'Authorization: ',
+      },
+      {
+        name: 'DSN password',
+        input: 'postgres://user:supersecretpw@db.internal:5432/samurai',
+        secret: 'supersecretpw',
+        // The scheme, username, host, port and database — what an operator
+        // needs to tell which connection failed — must all survive.
+        survives: 'postgres://user:',
+      },
+    ];
 
-  it.each(positive)('masks the secret in: $name', ({ input, secret }) => {
+  it.each(positive)('masks the secret in: $name', ({ input, secret, survives }) => {
     expect(maskCredentials(input)).not.toContain(secret);
     expect(maskCredentials(input)).toContain('[REDACTED]');
+    expect(maskCredentials(input)).toContain(survives);
   });
 
-  it('leaves the non-secret context readable around each new pattern', () => {
-    expect(maskCredentials('{"credentials":{"clientSecret":"sk-live-abcdef123456"}}')).toContain(
-      '"credentials"',
-    );
-    expect(maskCredentials('Authorization: Basic dXNlcjpwYXNzd29yZA==')).toContain(
-      'Authorization: ',
-    );
-    // The DSN pattern masks only the password segment (look-around, not a
-    // whole-match replace like the other patterns), so the scheme, username,
-    // host, port and database — what an operator needs to tell which
-    // connection failed — all survive.
+  it('the DSN pattern replaces only the password segment', () => {
+    // Look-around, not a whole-match replace like the other patterns, so
+    // this is exact-equality, not just "the substring survives".
     expect(maskCredentials('postgres://user:supersecretpw@db.internal:5432/samurai')).toBe(
       'postgres://user:[REDACTED]@db.internal:5432/samurai',
     );
+  });
+
+  it('existing bareword keys still mask, independently, with no regression', () => {
+    // Two separate matches in one string, not one match spanning both —
+    // proves the `/g` flag and the loop over patterns don't merge them.
+    const out = maskCredentials('{"token":"plainmatch123"} / {"password":"hunter2"}');
+    expect(out).not.toContain('plainmatch123');
+    expect(out).not.toContain('hunter2');
+    expect(out).toBe('{"[REDACTED]"} / {"[REDACTED]"}');
   });
 
   // Every name below is a real, non-secret field this codebase logs today.
@@ -135,9 +145,12 @@ describe('camelCase/underscore keys, Basic auth and DSN passwords (#1367)', () =
       where: 'orchestrator/production/defaults.ts',
     },
     {
+      // `anthropic-client.ts` uses only the snake_case `max_tokens` field
+      // above; the camelCase form is a distinct provider's client — grepped,
+      // not assumed, after an earlier draft of this row named the wrong file.
       name: 'LLM request budget: maxTokens',
       input: '{"maxTokens":1024}',
-      where: 'debate-engine/llm/anthropic-client.ts',
+      where: 'providers/market-intelligence/grok/x-search-client.ts',
     },
     {
       name: 'order idempotency key (not a credential, an id)',
@@ -155,9 +168,46 @@ describe('camelCase/underscore keys, Basic auth and DSN passwords (#1367)', () =
       where: 'tools/backtest/free-stack-aggregates-client.ts',
     },
     {
-      name: 'a domain field named "keyword", not a credential',
+      // Not a real logged field — grepped repo-wide and found none; the
+      // only hit for "keyword" anywhere in server/ is this file's own prose
+      // ("broader keyword sweep", line 157), not a JSON key. Kept anyway
+      // because #1367's own brief named "keyword" as an example substring
+      // risk (the bareword pattern's `api[_-]?key` alternative sits inside
+      // it) — this pins that no pattern here is a bare `key` match.
+      name: 'the substring "key" inside ordinary English: "keyword"',
       input: '{"keyword":"leveraged etf"}',
-      where: 'providers/universe-pool/lse-etp-pool.ts',
+      where: 'providers/universe-pool/lse-etp-pool.ts:157 (comment prose only)',
+    },
+    {
+      // The bareword pattern's trailing `\b` requires the credential word to
+      // be the LAST segment (`api[_-]?key\b`); `_id` after it breaks that
+      // boundary, so this stays unmasked here. Deliberately asymmetric with
+      // `redact-payload.ts`'s `redactPayload`: its `CREDENTIAL_KEYS` set
+      // includes `apikeyid` and redacts a same-named object KEY wholesale,
+      // structurally — the two mechanisms cover different failure modes (see
+      // that module's doc comment) and are not expected to agree here.
+      name: 'api_key_id (structural redaction covers this, text masking does not)',
+      input: '{"api_key_id":"xyz-not-really-secret"}',
+      where: 'not found as a real field anywhere in server/ — synthetic, from the #1367 brief',
+    },
+    {
+      // A real credential, and NOT caught: `alpacaSecretKey` has no
+      // `client`/`access`/`refresh` prefix and no underscore before
+      // `SECRET_KEY`, so none of the four new patterns reach it — same
+      // camelCase-boundary gap the issue reported, one layer further out.
+      // Accepted scope boundary (named compounds, not a suffix rule) rather
+      // than a miss: `free-stack-aggregates-client.ts` never logs this
+      // option object, and any caller that does log a payload containing it
+      // goes through `redactPayload`, whose structural `CREDENTIAL_KEYS`
+      // check has no camelCase-boundary problem to begin with.
+      name: 'residual gap: alpacaSecretKey (vendor-prefixed, no named-compound match)',
+      input: '{"alpacaSecretKey":"would-be-a-real-secret"}',
+      where: 'tools/backtest/free-stack-aggregates-client.ts, tools/stage2-source.ts',
+    },
+    {
+      name: 'residual gap: polygonApiKey (vendor-prefixed, no named-compound match)',
+      input: '{"polygonApiKey":"would-be-a-real-secret"}',
+      where: 'apps/service-api/provider-status.ts',
     },
   ];
 
