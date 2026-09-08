@@ -52,7 +52,11 @@ export class TradeChannelThresholdClampAlert implements ThresholdClampAlertChann
       // The one alert whose failure to send must itself stay visible — see
       // `TradeChannelBreachAlert`'s identical reasoning.
       this.#logger.log({
-        trace_id: 'threshold-clamp',
+        // The seam's own id, threaded on the alert (#1280), so this line joins
+        // whichever catch raised it — the tick's `risk_log` row on the
+        // live-read seam, the `feedback-cycle` lines on the daily one — rather
+        // than a third taxonomy joining neither.
+        trace_id: alert.trace_id,
         stage: 'risk',
         event: 'threshold_clamp_alert_send_failed',
         level: 'error',

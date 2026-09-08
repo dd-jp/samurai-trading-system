@@ -575,6 +575,49 @@ describe('buildAnalystsStep', () => {
         expect(undelivered[0]?.level).toBe('error');
       });
 
+      // #1280. The undelivered-alert line runs inside the analysts step, which
+      // `TickRunner` wraps in `runWithTraceId` — and which holds `trace_id` as
+      // a parameter besides. Pinned against the tick's OWN `analyst_panel_
+      // degraded` line rather than a literal, so the assertion is that the two
+      // join, which is the property the field is read for. Any constant in the
+      // field breaks the equality on the first tick; a wrong-tick id breaks it
+      // on the second, whose trace differs.
+      it('logs an undelivered alert under the tick that raised it, not a category label', async () => {
+        const failing = {
+          postAnalystSkipAlert: async () => {
+            throw new Error('Telegram 502');
+          },
+        };
+
+        async function tracesOfSecondTick(traces: readonly [string, string]) {
+          const { logger, entries } = captureLogger();
+          const orchestrator = { runAnalysts: skipping() } as unknown as AnalystOrchestrator;
+          const step = buildAnalystsStep(orchestrator, logger, { skipAlerts: failing });
+          for (const trace_id of traces) {
+            await step({
+              trace_id,
+              signal: { asset: 'BTC-USD', asset_class: 'crypto' as const },
+              clock: CLOCK,
+              bar: BAR,
+            });
+          }
+          const traceOf = (event: string) =>
+            entries.filter((entry) => entry.event === event).at(-1)?.trace_id;
+          return {
+            undelivered: traceOf('analyst_skip_alert_send_failed'),
+            sibling: traceOf('analyst_panel_degraded'),
+          };
+        }
+
+        const first = await tracesOfSecondTick(['trace-a1', 'trace-a2']);
+        expect(first.undelivered).toBe(first.sibling);
+        expect(first.undelivered).toBe('trace-a2');
+
+        const second = await tracesOfSecondTick(['trace-b1', 'trace-b2']);
+        expect(second.undelivered).toBe(second.sibling);
+        expect(second.undelivered).toBe('trace-b2');
+      });
+
       it('is optional — no channel means log-only, and no throw', async () => {
         const orchestrator = { runAnalysts: skipping() } as unknown as AnalystOrchestrator;
         const step = buildAnalystsStep(orchestrator);

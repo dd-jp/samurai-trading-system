@@ -1697,6 +1697,11 @@ describe('buildRiskStep', () => {
       expect(posted).toHaveLength(1);
       expect((posted[0] as { where: string }).where).toBe('live-read');
       expect((posted[0] as { message: string }).message).toMatch(/max_pbo/);
+      // #1280: the tick's own id, threaded from this catch — the same id the
+      // step's other lines and its `risk_log` row carry. The out-of-tick half
+      // of the pair is production.test.ts's `'feedback-cycle'` assertion on
+      // the daily-kill-line-check seam.
+      expect((posted[0] as { trace_id: string }).trace_id).toBe(TRACE_ID);
     });
 
     it('proves by removal: with no channel injected, the step still refuses (fail-closed unaffected)', async () => {

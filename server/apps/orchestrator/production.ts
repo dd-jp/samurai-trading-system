@@ -3455,6 +3455,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         // rather than merely true until an alert transport misbehaves.
         try {
           config.thresholdClampAlerts?.postThresholdClampAlert({
+            trace_id: 'feedback-cycle',
             where: 'daily-kill-line-check',
             message: error instanceof Error ? error.message : String(error),
             reported_at: clock.now(),

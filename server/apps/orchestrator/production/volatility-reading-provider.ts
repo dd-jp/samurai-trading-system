@@ -37,11 +37,16 @@
  * guard the boundary; a failure is aggregated in as `FAILURE_READING`
  * (`Infinity`), tripping the breaker conservatively instead of going inert.
  *
- * Not yet wired into `production.ts`: `ProductionConfig.volatility` stays a
- * required injected field for now (composition-root wiring is a separate
- * concern from closing this interface, and `AccountStateProvider` — the
- * other required field `computeCurrentPortfolioAndBreakers` needs alongside
- * it — has no in-repo implementation yet either).
+ * Wired by default in `production.ts` (`volatility: config.volatility ?? new
+ * MarketDataVolatilityReadingProvider({…})`), alongside the
+ * `AccountStateProvider` the same call site needs — `ProductionConfig
+ * .volatility` is an OPTIONAL override, not the required injected field this
+ * comment described before the composition root caught up (#1280).
+ *
+ * That is what puts `getVolatilityReading` inside the tick: it runs from the
+ * per-instrument Risk stage, under `TickRunner`'s `runWithTraceId`, which is
+ * why its two failure logs join the tick's trace and `warnIfClassEmpty` —
+ * construction-time, before any tick — does not.
  */
 import type { VolatilityReading } from '../../../pipeline/risk-manager/index.js';
 import type {

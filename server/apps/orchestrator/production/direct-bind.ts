@@ -1199,6 +1199,7 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
       if (!clampAlertSent && isThresholdBoundViolation(error)) {
         clampAlertSent = true;
         deps.thresholdClampAlerts?.postThresholdClampAlert({
+          trace_id,
           where: 'live-read',
           message: describeThrown(error),
           reported_at: clock.now(),

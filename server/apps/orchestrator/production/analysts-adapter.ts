@@ -314,7 +314,7 @@ export function buildAnalystsStep(
       const count = (consecutiveSkips.get(signal.asset) ?? 0) + 1;
       consecutiveSkips.set(signal.asset, count);
       if (shouldAlertAt(count)) {
-        await postSkipAlert(options.skipAlerts, logger, {
+        await postSkipAlert(options.skipAlerts, logger, trace_id, {
           instrument: signal.asset,
           consecutive_skips: count,
           failures: result.failures.map((failure) => ({
@@ -354,6 +354,7 @@ function shouldAlertAt(consecutiveSkips: number): boolean {
 async function postSkipAlert(
   channel: AnalystSkipAlertChannel | undefined,
   logger: Logger | undefined,
+  trace_id: string,
   alert: AnalystSkipAlert,
 ): Promise<void> {
   if (channel === undefined) return;
@@ -361,7 +362,17 @@ async function postSkipAlert(
     await channel.postAnalystSkipAlert(alert);
   } catch (error) {
     logger?.log({
-      trace_id: 'analyst-skip',
+      // The tick's own id, not the `'analyst-skip'` category label (#1280) —
+      // the same id `analyst_panel_degraded` above logs under, so the two join.
+      //
+      // Deliberately NOT the same call as `LoggingAnalystSkipAlertChannel`
+      // (console-channels.ts), which keeps the constant on purpose: that line
+      // reports the CONDITION, a run of consecutive skips spanning many ticks,
+      // and so belongs to none of them. This line reports one delivery failing
+      // in ONE instrument's analysts step, inside the tick whose id is in
+      // scope. The two are asymmetric because they are about different events,
+      // not because one was missed.
+      trace_id,
       stage: 'analysts',
       event: 'analyst_skip_alert_send_failed',
       level: 'error',

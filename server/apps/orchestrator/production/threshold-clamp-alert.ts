@@ -58,6 +58,17 @@
 /** One clamp trip, at one of the two seams #766 makes audible. */
 export interface ThresholdClampAlert {
   /**
+   * The trace the trip was observed under, threaded from the seam rather than
+   * joined ambiently (#1280) — `trace-context.ts`'s "explicit remains the
+   * preferred form" case. Both seams already hold the id the lines around them
+   * log under: `buildRiskStep`'s catch (direct-bind.ts) holds the tick's, and
+   * `runFeedbackCycle` (production.ts) holds `'feedback-cycle'`, which its own
+   * surrounding lines use. Ambient would be wrong for the second: outside a
+   * tick `currentTraceId()` is `undefined`, so the failed-send log would carry
+   * a third label joining neither seam.
+   */
+  trace_id: string;
+  /**
    * Which seam the violation reached. Not the full four #638 guards (boot-time
    * construction and the Feedback Loop's write door both already refuse
    * loudly at the moment of the attempt, in the caller's own stack — there is

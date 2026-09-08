@@ -214,20 +214,34 @@ describe('MarketDataVolatilityReadingProvider', () => {
       expect(log).toHaveBeenCalledWith(expect.objectContaining({ trace_id: 'tick-x' }));
     });
 
-    it('keeps the empty-class constant even inside a tick — construction-time, never per-tick', async () => {
+    // Why `warnIfClassEmpty` keeps its constant, pinned as the mechanism that
+    // earns it: the warn is emitted by the CONSTRUCTOR, once, and a tick never
+    // emits another. Construction is boot-time (`production.ts` builds this
+    // provider in `buildProductionComponents`), so there is no tick to join.
+    //
+    // What this deliberately does NOT assert is that an ambient read would be
+    // wrong here — at construction there is no enclosing tick, so
+    // `currentTraceId() ?? 'volatility-reading-provider'` would log the same
+    // string and no assertion at this seam can tell the two apart. The call
+    // site is what rules the ambient form out. Wrapping construction in
+    // `runWithTraceId` would pin a state that never occurs, so it is not done.
+    it('warns about an empty asset class once, at construction, and never again per tick', async () => {
       const cryptoOnly: readonly UniverseInstrument[] = [
         { asset: 'BTC-USD', asset_class: 'crypto' },
       ];
       const { provider, log } = buildProvider(cryptoOnly);
 
+      const emptyClassWarns = (): { trace_id: string; event: string }[] =>
+        log.mock.calls
+          .map((call) => call[0] as { trace_id: string; event: string })
+          .filter((entry) => entry.event === 'volatility_universe_empty');
+
+      expect(emptyClassWarns()).toHaveLength(1);
+      expect(emptyClassWarns()[0]).toMatchObject({ trace_id: 'volatility-reading-provider' });
+
       await runWithTraceId('tick-x', () => provider.getVolatilityReading(NOW));
 
-      expect(log).toHaveBeenCalledWith(
-        expect.objectContaining({
-          trace_id: 'volatility-reading-provider',
-          event: 'volatility_universe_empty',
-        }),
-      );
+      expect(emptyClassWarns()).toHaveLength(1);
     });
   });
 

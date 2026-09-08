@@ -5421,6 +5421,10 @@ describe('buildProductionOrchestrator', () => {
       expect(postThresholdClampAlert).toHaveBeenCalled();
       expect(postThresholdClampAlert.mock.calls[0]?.[0]).toMatchObject({
         where: 'daily-kill-line-check',
+        // #1280: this seam runs outside any tick, so it threads the same
+        // `'feedback-cycle'` its surrounding lines log under — the in-tick
+        // half of the pair is direct-bind.test.ts's `TRACE_ID` assertion.
+        trace_id: 'feedback-cycle',
       });
 
       await orchestrator.stop();
