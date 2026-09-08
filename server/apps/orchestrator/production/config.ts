@@ -196,7 +196,7 @@ export interface AlertChannelSlots {
    * `FeedbackCycleConfig` keeps its own `loosenNotices` override, which wins
    * over this when both are given (see `runFeedbackCycle`).
    *
-   * There is no live-mode refusal here, unlike `ConsoleApprovalChannel`: this
+   * There is no live-mode refusal here, unlike an approval channel: this
    * port returns `void` and is asked nothing, so no implementation can
    * fabricate consent. A notice nobody reads costs visibility of a move that
    * has already been applied and logged — it does not gate the move, because

@@ -295,6 +295,7 @@ import { buildExecutionSurface } from './production/direct-bind.js';
 import {
   buildProductionComponents,
   buildProductionOrchestrator,
+  resolveApprovalsChannel,
   SMOKE_TEST_UNIVERSE,
 } from './production.js';
 import type { LogEntry, Logger } from './types.js';
@@ -3354,6 +3355,53 @@ function runThresholdClampScenario(
   }
 }
 
+/** What `evaluateSmokeGate` needs from the approvals-fallback probe (#1152). */
+export interface ApprovalFallbackEvidence {
+  /** Whether calling `requestApproval` on the uninjected fallback rejected instead of answering. */
+  refusedFabricatedConsent: boolean;
+  /** The rejection's message, or `null` if it did not reject. */
+  message: string | null;
+}
+
+/**
+ * The approvals-fallback probe (#1152) — `ConsoleApprovalChannel` auto-approved
+ * and was deleted; `resolveApprovalsChannel`'s uninjected default
+ * (`UnwiredApprovalChannel`) is the only path left, and it must refuse rather
+ * than fabricate consent if Verdict's HITL gate (6) is ever reached.
+ *
+ * No full-orchestrator run can exercise this: ADR-0007's `auto` automation
+ * dial makes the gate unreachable on every real tick (`shouldEngageHitl`
+ * short-circuits before `approvals.requestApproval` is ever called), so a
+ * class that silently went back to fabricating consent would leave every
+ * other check in this gate green — #430's defect class exactly, the same
+ * reason `runThresholdClampScenario` above reaches its seams directly rather
+ * than through a tick. This probe calls the exact expression the composition
+ * root wires (`resolveApprovalsChannel`), not a reimplementation of it, off
+ * the tick loop.
+ */
+async function runApprovalFallbackScenario(): Promise<ApprovalFallbackEvidence> {
+  const channel = resolveApprovalsChannel({});
+  try {
+    await channel.requestApproval({
+      order_intent: {
+        instrument: 'SPY',
+        side: 'buy',
+        size: 1,
+        intent_type: 'entry',
+      },
+      risk_decision: {},
+      trace_id: 'smoke-approval-fallback-probe',
+      timeout_ms: 1_000,
+    } as never);
+    return { refusedFabricatedConsent: false, message: null };
+  } catch (error) {
+    return {
+      refusedFabricatedConsent: true,
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 /**
  * What `evaluateSmokeGate` needs from the arm-comparison surface (#971).
  *
@@ -4548,6 +4596,16 @@ export function evaluateSmokeGate(
      * here green, and only this one would notice.
      */
     marketDataFetch: MarketDataFetchEvidence;
+    /**
+     * The approvals-fallback probe's evidence (#1152) — required, not
+     * optional, for the same "compile error, not a silent no-op" reason
+     * `thresholdClamp` above is: `runApprovalFallbackScenario` always runs as
+     * part of `runSmoke`, and it is the ONLY check anywhere (unit test or
+     * gate) on the composition root's actual uninjected `approvals` default,
+     * since `console-channels.test.ts` tests `UnwiredApprovalChannel` in
+     * isolation, not `resolveApprovalsChannel`'s wiring of it.
+     */
+    approvalFallback: ApprovalFallbackEvidence;
     // #1083's wait telemetry has DELIBERATELY no evidence field here, unlike
     // every mechanism above — the standard's "wiring a mechanism means
     // asserting it here" still applies, but this mechanism does not fit the
@@ -5064,6 +5122,24 @@ export function evaluateSmokeGate(
         "either the exit/flatten path is stranded behind #638's clamp (a materially worse " +
         "defect than #766 was filed for: ADR-0014's flat-by-close invariant has no session-end " +
         'job to catch a missed flatten) or the clamp stopped refusing entries at all (#766)',
+    );
+  }
+
+  // #1152 — the surviving approvals path (ConsoleApprovalChannel deleted):
+  // the composition root's uninjected fallback must refuse rather than
+  // fabricate consent if Verdict's HITL gate (6) is ever reached.
+  const approvalFallback = options.approvalFallback;
+  if (!approvalFallback.refusedFabricatedConsent) {
+    failures.push(
+      "the composition root's uninjected approvals fallback did NOT refuse Verdict's HITL gate " +
+        '(6) — it answered instead of throwing, which is exactly the auto-approving shape ' +
+        '`ConsoleApprovalChannel` was deleted for (#1152)',
+    );
+  } else if (!(approvalFallback.message ?? '').includes('no ApprovalChannel is wired')) {
+    failures.push(
+      'the approvals fallback rejected, but not with the expected refusal (got: ' +
+        `${approvalFallback.message}) — a different exception could be masking a fallback that ` +
+        'no longer refuses on purpose (#1152)',
     );
   }
 
@@ -6281,8 +6357,9 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // before any approval is requested, on the real composition root
       // rather than in a unit test.
       // Flip either class off `auto` without wiring a transport and this gate
-      // fails loudly instead of auto-approving, which is exactly the failure
-      // mode `ConsoleApprovalChannel` used to hide here.
+      // fails loudly instead of auto-approving. `runApprovalFallbackScenario`
+      // below asserts that throw directly, off this tick loop (#1152) — this
+      // comment only covers the "never even asked" half.
       ...profile,
       // #1112: `profile.traderConfig` now sizes against `LIVE_BOOK_GBP`
       // (£1,000, via `capitalCeilingUsd`) rather than this run's
@@ -6471,6 +6548,11 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
     // it writes nothing the observations below read back.
     const thresholdClamp = runThresholdClampScenario(profile.breakerConfig, profile.riskConfig);
 
+    // #1152: the surviving approvals-fallback probe, off the tick loop for the
+    // same reason `thresholdClamp` above is — the seam it checks is
+    // unreachable by design on any real tick.
+    const approvalFallback = await runApprovalFallbackScenario();
+
     // #562: the OHLCV failover, on its own composition root and its own cold
     // in-memory store — the main run above injects a fixture data source, so
     // the root's `config.dataSource ??` seam short-circuits the failover there.
@@ -6525,6 +6607,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       logRetention,
       entrypointFaultGuards,
       thresholdClamp,
+      approvalFallback,
       dataFailover,
       riskCritic,
       promptTierWarning,

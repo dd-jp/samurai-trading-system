@@ -84,11 +84,16 @@
  * (`client.start()` is never called — `getUpdates` is single-consumer per bot
  * token, and starting one here would make a *second* process' approval poll
  * impossible), no approval handler is registered, and
- * `ProductionConfig.approvals` still falls back to `ConsoleApprovalChannel`.
- * Wiring HITL approvals through Telegram is #275's remaining half. Validating
- * the allowlist now rather than then is the same fail-at-boot posture the spec
- * asks for: an unattended soak must not discover a broken allowlist on the day
- * approvals go live.
+ * `ProductionConfig.approvals` still falls back to `UnwiredApprovalChannel`
+ * (`production.ts`'s `resolveApprovalsChannel`), which THROWS rather than
+ * fabricating consent if Verdict's HITL gate (6) is ever reached — there is
+ * no auto-approving stand-in to fall back to any more, since ADR-0013
+ * Decision 2 leaves no human gate anywhere in paper or live for one to serve
+ * (`ConsoleApprovalChannel` was deleted, #1152). Wiring HITL approvals
+ * through Telegram, if the automation dial is ever turned back, is #275's
+ * remaining half. Validating the allowlist now rather than then is the same
+ * fail-at-boot posture the spec asks for: an unattended soak must not
+ * discover a broken allowlist on the day approvals go live.
  *
  * ## Why here and not in `production.ts`
  *

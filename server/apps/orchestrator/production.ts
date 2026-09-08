@@ -178,7 +178,10 @@ import {
   SqliteRiskCriticStore,
 } from '../../pipeline/risk-manager/index.js';
 import { assertTraderConfigSound, SqliteSetupStore } from '../../pipeline/trader/index.js';
-import { assertAutomationLevelSupported } from '../../pipeline/verdict/index.js';
+import {
+  type ApprovalChannel,
+  assertAutomationLevelSupported,
+} from '../../pipeline/verdict/index.js';
 import type { MarketDataService } from '../../providers/market-data-service/index.js';
 import {
   AlwaysOpenCalendar,
@@ -936,6 +939,18 @@ function pruneAlertDeliveryFailuresWithLog(
       payload: { error: error instanceof Error ? error.message : String(error), trigger },
     });
   }
+}
+
+/**
+ * The composition root's `ApprovalChannel` default when `config.approvals` is
+ * omitted. Extracted to a named function (#1152) so the smoke gate's
+ * approval-fallback probe (`smoke-run.ts`) calls the exact expression
+ * production wires, rather than a reimplementation that could drift from it.
+ */
+export function resolveApprovalsChannel(
+  config: Pick<ProductionConfig, 'approvals'>,
+): ApprovalChannel {
+  return config.approvals ?? new UnwiredApprovalChannel();
 }
 
 export function buildProductionComponents(config: ProductionConfig): ProductionComponents {
@@ -2173,13 +2188,12 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     positionStore: executionStore,
     config: config.verdictConfig,
     // Unreachable by design since ADR-0007: `automation_level` is `auto` for
-    // both classes, so the HITL gate (6) short-circuits and this is never called. It
-    // THROWS rather than auto-approving, so that turning the dial back
-    // without wiring a transport fails loudly instead of fabricating
-    // consent — and, unlike `ConsoleApprovalChannel`, it constructs in
-    // `live`, because refusing there would block a live start over a gate
-    // that never fires.
-    approvals: config.approvals ?? new UnwiredApprovalChannel(),
+    // both classes, so the HITL gate (6) short-circuits and this is never
+    // called. `UnwiredApprovalChannel` THROWS rather than auto-approving, so
+    // that turning the dial back without wiring a transport fails loudly
+    // instead of fabricating consent, and constructs in `live` — refusing
+    // there would block a live start over a gate that never fires.
+    approvals: resolveApprovalsChannel(config),
     // Backs LoggingVerdict's verdict_log write (#302) — the same handle
     // every other Sqlite* store in this function reads/writes through.
     store: config.db,

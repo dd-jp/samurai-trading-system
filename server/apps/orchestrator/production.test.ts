@@ -87,7 +87,7 @@ import { openSharedStore, type SharedStore as SqliteHandle } from '../../shared/
 import type { MetricsSuite } from '../../tools/backtest/index.js';
 import { CostModelImpl, SqliteStage2SelectionStore } from '../../tools/backtest/index.js';
 import { LLM_SPEND_CAP_BREACH } from './breach-alert-channel.js';
-import { LoggingBreachAlertChannel } from './console-channels.js';
+import { LoggingBreachAlertChannel, UnwiredApprovalChannel } from './console-channels.js';
 import { DebateBarDecisionGate } from './decision-bar-gate.js';
 import { FILL_SYNC_TRACE_ID, RECONCILE_TRACE_ID } from './fill-sync.js';
 import { LIVE_BOOK_GBP, paperStartingProfile } from './paper-profile.js';
@@ -119,6 +119,7 @@ import {
   equityCalendarFor,
   type FeedbackCycleConfig,
   type ProductionConfig,
+  resolveApprovalsChannel,
   SMOKE_TEST_UNIVERSE,
   startTickLoop,
   universeAssetClasses,
@@ -900,6 +901,18 @@ describe('equityCalendarFor', () => {
     expect(
       equityCalendarFor({ mode: 'live', tradingCalendar: injected } as unknown as ProductionConfig),
     ).toBe(injected);
+  });
+});
+
+describe('resolveApprovalsChannel (#1152)', () => {
+  it('falls back to UnwiredApprovalChannel when no approvals is injected', () => {
+    expect(resolveApprovalsChannel({})).toBeInstanceOf(UnwiredApprovalChannel);
+  });
+
+  it('returns the injected channel unchanged when one is supplied', () => {
+    const injected = { requestApproval: async () => 'approved' as const };
+
+    expect(resolveApprovalsChannel({ approvals: injected })).toBe(injected);
   });
 });
 

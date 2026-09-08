@@ -1588,11 +1588,13 @@ export function buildStartingProfileConfigs(
      */
     drift_tolerance_pct: { crypto: 0.005, stocks: 0.005 },
     /**
-     * UNSOURCED (milliseconds). Inert while `ConsoleApprovalChannel` resolves
-     * synchronously; it becomes load-bearing the moment a real approval
-     * channel is wired (#275's remaining half — #322 wired the outbound alerts
-     * only). 15 min is a coffee-break response window, and the gate is
-     * fail-safe either way — verdict-spec.md "Timeout -> no-go".
+     * UNSOURCED (milliseconds). Inert today: ADR-0007's `auto` automation dial
+     * short-circuits Verdict's HITL gate (6) before this value is ever read,
+     * for every asset class. It becomes load-bearing only if the dial is
+     * turned back to `manual`/`semi_auto` with a real approval channel wired
+     * (#275's remaining half — #322 wired the outbound alerts only). 15 min
+     * is a coffee-break response window, and the gate is fail-safe either
+     * way — verdict-spec.md "Timeout -> no-go".
      */
     human_timeout: 15 * 60_000,
     /**

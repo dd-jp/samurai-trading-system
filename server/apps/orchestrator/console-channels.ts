@@ -760,8 +760,9 @@ export class LoggingBreachAlertChannel implements BreachAlertChannel {
  *
  * ## Why this one is a stand-in and not a fabricated consent
  *
- * Read `ConsoleApprovalChannel` below before assuming this is the same shape.
- * It is not, and the difference is the whole safety argument:
+ * Contrast with `ApprovalChannel` (below, `UnwiredApprovalChannel`) before
+ * assuming this is the same shape. It is not, and the difference is the whole
+ * safety argument:
  *
  * - `ApprovalChannel.requestApproval` returns `Promise<ApprovalOutcome>`. A
  *   log-only implementation has to *answer*, and the only answers available to
@@ -818,72 +819,25 @@ export class LoggingLoosenNotificationChannel implements LoosenNotificationChann
 }
 
 /**
- * A console approval channel — and the one place a stand-in is a real
- * decision rather than a convenience.
- *
- * There is no human on this channel, so it cannot obtain consent; it can only
- * fabricate it. Auto-approving is therefore a deliberate bypass of Verdict's
- * HITL gate (6), acceptable exactly where the gate is protecting nothing
- * real: `paper` and `backtest` spend no money. In `live` it is never acceptable, so
- * the constructor refuses to build one at all rather than resolving
- * `'rejected'` — a channel that rejects everything looks like a working
- * safety gate while actually being a broken transport, and the difference
- * matters when someone is debugging why no live trade ever fires.
- *
- * Every granted approval is logged at `warn` with its trace, so the audit
- * trail records that a machine consented, not a person.
- */
-export class ConsoleApprovalChannel implements ApprovalChannel {
-  constructor(
-    private readonly logger: Logger,
-    private readonly mode: 'live' | 'paper' | 'backtest',
-  ) {
-    if (mode === 'live') {
-      throw new Error(
-        'ConsoleApprovalChannel refuses to run in live mode: it auto-approves, and there is no ' +
-          'human on it. Wire a real ApprovalChannel (#275) before trading real money.',
-      );
-    }
-  }
-
-  async requestApproval(request: ApprovalRequest): Promise<ApprovalOutcome> {
-    this.logger.log({
-      trace_id: request.trace_id,
-      stage: 'verdict',
-      event: 'hitl_gate_auto_approved',
-      level: 'warn',
-      message: 'HITL gate auto-approved by ConsoleApprovalChannel — no human reviewed this trade',
-      payload: {
-        mode: this.mode,
-        instrument: request.order_intent.instrument,
-        side: request.order_intent.side,
-        size: request.order_intent.size,
-        intent_type: request.order_intent.intent_type,
-      },
-    });
-
-    return 'approved';
-  }
-}
-
-/**
  * The composition root's default `ApprovalChannel` since ADR-0007 made
  * `automation_level` fully `auto` — and it exists to be **unreachable**.
  *
  * Under `auto`, `shouldEngageHitl` short-circuits to `false` before the
  * HITL gate (6), so `requestApproval` is never called and no approval
- * transport is needed in any mode. That is why this class, unlike
- * `ConsoleApprovalChannel`, does not refuse to be constructed in `live`:
- * refusing there would block a live start over a gate that never fires.
+ * transport is needed in any mode. That is why this class does not refuse to
+ * be constructed in `live`, unlike an auto-approving stand-in: refusing there
+ * would block a live start over a gate that never fires.
  *
  * What it will not do is silently stand in for a human if the dial is ever
- * turned back. `ConsoleApprovalChannel` auto-approves, which is safe only
- * while nothing real depends on the answer; the moment `manual` or
- * `semi_auto` is set with no transport wired, an auto-approving default means
- * the gate reads as enforced and enforces nothing — this repo's dominant
- * defect class. So this one throws instead, naming both causes and both fixes.
- * The throw propagates out of `VerdictImpl.decide` and fails that instrument's
- * pass loudly rather than fabricating consent.
+ * turned back. An auto-approving default is safe only while nothing real
+ * depends on the answer; the moment `manual` or `semi_auto` is set with no
+ * transport wired, auto-approving means the gate reads as enforced and
+ * enforces nothing — this repo's dominant defect class, and the reason the
+ * repo's own `ConsoleApprovalChannel` auto-approving stand-in was deleted
+ * (#1152) rather than wired: ADR-0013 D2 leaves no human anywhere in the
+ * live/paper path for it to stand in for. So this one throws instead, naming
+ * both causes and both fixes. The throw propagates out of `VerdictImpl.decide`
+ * and fails that instrument's pass loudly rather than fabricating consent.
  */
 export class UnwiredApprovalChannel implements ApprovalChannel {
   async requestApproval(request: ApprovalRequest): Promise<ApprovalOutcome> {
