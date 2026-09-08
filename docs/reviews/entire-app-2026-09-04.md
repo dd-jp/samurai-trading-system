@@ -269,6 +269,22 @@ argued and recorded, and the breaker gate still applies to a flatten), and its n
 spec's superseded scheme besides. The four `verdict-spec.md` / test line pins it carried have been
 replaced with section and symbol names above, since line pins are what rotted.
 
+*Further correction (2026-09-08, [#1357](https://github.com/dd-jp/samurai-trading-system/issues/1357)):*
+"line pins are what rotted" is the right diagnosis for only two of the four. The two
+`verdict/index.test.ts` pins (`:911`, `:1007`) were correct at `0997606`, the commit this report was
+written against — both lines were then "still re-checks the breaker at fire time" (the #826 and #894
+cases respectively) — and had already drifted off that test by `81bfdab` (the tree this follow-up's
+own evidence was taken against) and by `3167730^` (the commit immediately before #1254's fix), landing
+on unrelated `dedup`-fixture lines by then; rot, from later edits to the same file shifting line
+numbers, is the accurate and now-checked story for those two. The two `verdict-spec.md` pins were not:
+at `0997606`, `:145` was already "**Timeout → no-go.**" (HITL, not the #826 amendment, which sat at
+`:133`), and `:190` was already the blank line directly under the "## Out of Scope" heading at `:189`
+(not gate 6, which was `:137`) — both wrong on arrival, unchanged through `1f836ec` too, so no edit
+needs to be found for them. Both kinds are gone now regardless (line pins into `verdict-spec.md`'s
+bulleted gate list rot on any reflow, per #1254's rename to section/symbol citations), so nothing here
+reopens the fix; it corrects
+which failure mode produced which of the four.
+
 So the exemption's scoping to gate 1 (and, at #826, the price gates) is a decision that was made,
 argued and recorded — not a hole. What is defective is `risk-manager-spec.md:24`'s unqualified
 "**No** breaker … may block the flatten", which no longer describes the system and reads as licence to

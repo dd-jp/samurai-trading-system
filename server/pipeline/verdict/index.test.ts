@@ -1149,6 +1149,56 @@ describe('VerdictImpl.decide — mandatory flatten and staleness (#894)', () => 
   });
 });
 
+/**
+ * #1357 — the two exemptions stacked, on one intent, driven through Verdict.
+ *
+ * `unpricedFlatten()` above never carries `mandatory_flatten` and inherits
+ * `makeIntent()`'s fresh `decision_timestamp`, so #826's suite exercises
+ * skipping the two price gates but not the three-gate stack `buildFlattenExit`
+ * actually produces (`exit_reason: 'flatten'` sets both markers together —
+ * see the file header's "THE TWO STACK, ONE WAY"). This drives that shape.
+ */
+describe('VerdictImpl.decide — stale AND unpriced mandatory flatten (#826, #894 stacked)', () => {
+  const STALE_AT = new Date(NOW.getTime() - 56 * 60_000);
+
+  function staleUnpricedFlatten(overrides: Partial<OrderIntent> = {}): OrderIntent {
+    const base = makeIntent();
+    return {
+      ...base,
+      intent_type: 'exit',
+      side: 'sell',
+      decision_timestamp: STALE_AT,
+      entry: 0,
+      stop: 0,
+      target: 0,
+      metadata: {
+        ...base.metadata,
+        exit_reason: 'flatten',
+        unpriced_exit: true,
+        mandatory_flatten: true,
+      },
+      ...overrides,
+    };
+  }
+
+  it('is not refused for staleness, stale_feed, or drift', async () => {
+    const verdict = new VerdictImpl();
+    const stale = makeMarketData(makeMark({ observed_at: new Date(NOW.getTime() - 60 * 60_000) }));
+    const input = makeInput({
+      risk_decision: makeRiskDecision({ order_intent: staleUnpricedFlatten() }),
+      config: makeConfig({ automation_level: { crypto: 'auto', stocks: 'auto' } }),
+      marketData: stale,
+    });
+
+    const decision = await verdict.decide(input);
+
+    expect(decision.no_go_reason).not.toBe('staleness');
+    expect(decision.no_go_reason).not.toBe('stale_feed');
+    expect(decision.no_go_reason).not.toBe('drift');
+    expect(decision.status).toBe('go');
+  });
+});
+
 describe('VerdictImpl.decide — precondition', () => {
   it('throws if handed a RiskDecision without an approved order_intent', async () => {
     const verdict = new VerdictImpl();
