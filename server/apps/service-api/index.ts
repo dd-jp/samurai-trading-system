@@ -215,13 +215,20 @@ const providers = new ProviderStatusPoller({ alpaca: buildAlpacaClient() });
  * because this process never sees the orchestrator's value (separate
  * process, no shared handshake) — but "no local signal exists" would be
  * false, and #1130 review round 3 was right to say so. `chat_id` is stored
- * per row (migration 0043), and as this repo composes it today — both
- * chats read from env, and no in-tree caller supplies a
- * `ProductionConfig.heartbeatChannel` (see the second bullet below) — only
- * two ids appear in this table: `sendMessage` and `sendApprovalButtons` are
- * the only callers of `#recordDeliveryFailure`, each with a
- * composition-fixed chat, and `alert-transport.ts` refuses to start when
- * `TELEGRAM_CHAT_ID` and `TELEGRAM_HEARTBEAT_CHAT_ID` are equal (#342). The
+ * per row (migration 0043), and the only path that writes rows is
+ * `alert-transport.ts`'s telegram branch — the one place in the tree that
+ * supplies a `TelegramBotApiClient` with an `alertDeliveryLog` at all — so
+ * at most two ids appear in this table: `sendMessage` and
+ * `sendApprovalButtons` are the only callers of `#recordDeliveryFailure`,
+ * each posting to a chat that branch fixes from env (`TELEGRAM_CHAT_ID`, or
+ * `TELEGRAM_HEARTBEAT_CHAT_ID` for the beat when it builds the heartbeat
+ * itself), and `alert-transport.ts` refuses to start when those two are
+ * equal (#342). A caller-injected `ProductionConfig.heartbeatChannel`
+ * subtracts rather than adds — the beat then never crosses this client, and
+ * no heartbeat chat id is read (see the second bullet below) — and smoke,
+ * which injects every `ALERT_CHANNEL_FIELDS` member, leaves
+ * `resolveAlertsMode` returning `undefined`, so no `TelegramBotApiClient` is
+ * constructed there and its `LoggingHeartbeatChannel` writes nothing. The
  * table is also durable across runs, so rotating `TELEGRAM_CHAT_ID` leaves a
  * third, historical id behind rather than clearing it — so the two-id
  * scoping above understates the signal's false-fire surface, which

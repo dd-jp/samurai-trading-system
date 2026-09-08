@@ -636,8 +636,9 @@ describe('TelegramBotApiClient — transient network failures and undeliverable 
   // #1303: `FORWARD_DELIVERY_CLAIM` is a `can|could|...` alternation, not a
   // `\bcan\b`-then-`not` sequence, so `cannot` (one token) only matches
   // through the explicit `can(?:not)?` branch — a prior version of this
-  // alternation used a bare `can` and silently missed `'cannot arrive'`, the
-  // exact negative-direction claim #1299 deleted from `types.ts`. Pinned
+  // alternation used a bare `can` and silently missed `'cannot arrive'`,
+  // one of the very examples the guard's own comment above lists as caught.
+  // Pinned
   // per-string so a future edit to the alternation that reopens this gap
   // fails here directly. This table is one-directional (every case here is a
   // claim the guard MUST catch); it cannot by itself catch the alternation
