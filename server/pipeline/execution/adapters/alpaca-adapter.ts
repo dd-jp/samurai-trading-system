@@ -814,8 +814,9 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // reused `client_order_id` with a 422, the way doc 43's "Question"
     // section states in passing while establishing Saxo's (structurally
     // different, measured) duplicate-request behavior; this repo has never
-    // probed Alpaca's own response, see #1275 — read as a fresh failure and
-    // page the operator about a residual that is in fact protected.
+    // probed Alpaca's own response (#1275 closed the placement-retry hazard
+    // WITHOUT probing this — see its PR) — read as a fresh failure and page
+    // the operator about a residual that is in fact protected.
     //
     // Adoption is CONDITIONAL on the prior matching THIS request (#549
     // review): the wire id is per-lot and reused across attempts, so a
@@ -844,10 +845,11 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // agree by construction. A `cancelled`/`rejected`/`expired` prior
     // protects nothing, so the code falls through and places afresh — IF the
     // venue then refuses the reused client_order_id (unverified assumption,
-    // see #1275 and the comment above), that throw is the honest answer and
-    // takes the caller's existing alert path; if instead Alpaca accepted it
-    // as a fresh order, this path would silently double-place, and nothing
-    // here would detect it.
+    // see the comment above — #1275 did not settle it, only the
+    // placement-retry hazard), that throw is the honest answer and takes the
+    // caller's existing alert path; if instead Alpaca accepted it as a fresh
+    // order, this path would silently double-place, and nothing here would
+    // detect it.
     //
     // ADOPTION IS ALLOWLISTED on the RAW venue status (#549 review, round 3):
     // `mapOrderState` folds every unrecognized status — `done_for_day`,

@@ -131,14 +131,15 @@ export type AlpacaBrokerError =
   | AlpacaBrokerProviderError;
 
 /**
- * Verified-safe-to-repeat verbs for an Alpaca timeout, rate-limit or 5xx
- * (#1275) — GET by HTTP semantics alone (a read cannot mutate venue state,
- * regardless of which read it is); DELETE because `cancelOrder`
- * (`alpaca-http-client.ts`) already normalizes every terminal outcome
- * (`204`/`404`/`422`) to "nothing working under this id any more", so a
- * repeated cancel lands on that same normalization rather than mutating
- * anything a first cancel did not already settle. Neither admission rests on
- * a probed venue guarantee.
+ * Retry-safe verbs for an Alpaca timeout, rate-limit or 5xx (#1275) — GET by
+ * HTTP semantics alone (a read cannot mutate venue state, regardless of which
+ * read it is); DELETE because `cancelOrder` (`alpaca-http-client.ts`) already
+ * normalizes every terminal outcome (`204`/`404`/`422`) to "nothing working
+ * under this id any more", so a repeated cancel lands on that same
+ * normalization rather than mutating anything a first cancel did not already
+ * settle. Neither admission rests on a probed venue guarantee — unlike
+ * Saxo's equivalent (`saxo-broker-errors.ts`), where DELETE was measured
+ * (doc 43:33), nothing here has been measured against the real venue.
  *
  * POST is excluded on principle, unconditionally: `submitOrder` and its
  * siblings are the operations an accidental duplicate is expensive for (a
@@ -146,6 +147,12 @@ export type AlpacaBrokerError =
  * duplicate `client_order_id` (see `alpaca-adapter.ts`'s `rearmProtectiveLegs`
  * comments) — so POST is refused here independent of whether that unverified
  * 422 guarantee turns out to be true.
+ *
+ * PUT/PATCH are in `AlpacaHttpMethod` (no Alpaca client call currently uses
+ * either) but are likewise left off this allowlist — not because either is
+ * known to be unsafe, but because, like POST, neither has been probed either.
+ * Add a verb here only on evidence, never on the absence of a reason to
+ * exclude it.
  */
 function isRetrySafeAlpacaMethod(method: AlpacaHttpMethod | undefined): boolean {
   return method === 'GET' || method === 'DELETE';

@@ -1,3 +1,4 @@
+import { withRetry } from '../../../shared/index.js';
 import {
   AlpacaBrokerProviderError,
   AlpacaBrokerRateLimitError,
@@ -96,6 +97,33 @@ describe('isRetryableAlpacaBrokerError', () => {
         expect(error).toBeInstanceOf(AlpacaBrokerProviderError);
         expect((error as AlpacaBrokerProviderError).status).toBeUndefined();
         expect(isRetryableAlpacaBrokerError(error)).toBe(false);
+      });
+
+      // Acceptance criterion, verbatim: a placement POST timeout must produce
+      // exactly one fetch attempt through the real retry loop — not "the
+      // classifier says false" one step removed from it. Driven through the
+      // real `withRetry` (no fake timers needed: baseDelayMs 0 means a
+      // mutated, retrying run also completes immediately, so this fails on
+      // call count rather than hanging). `submitOrder`'s own `maxAttempts: 1`
+      // override is deliberately NOT part of this config — this test proves
+      // the classifier alone stops the retry, independent of that override.
+      it('a placement POST timeout produces exactly one fetch attempt through withRetry', async () => {
+        const fetchLike = vi.fn().mockImplementation(() => {
+          throw classifyAlpacaBrokerNetworkError(
+            new DOMException('The operation was aborted', 'TimeoutError'),
+            'submitOrder',
+            'POST',
+          );
+        });
+
+        await expect(
+          withRetry(
+            fetchLike,
+            { maxAttempts: 5, baseDelayMs: 0, maxDelayMs: 0 },
+            isRetryableAlpacaBrokerError,
+          ),
+        ).rejects.toBeInstanceOf(AlpacaBrokerTimeoutError);
+        expect(fetchLike).toHaveBeenCalledTimes(1);
       });
     });
 
