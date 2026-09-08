@@ -427,8 +427,13 @@ the live check is one more call rather than an investigation.
 > - **`PriceTypeBid`/`PriceTypeAsk: "OldIndicative"` persists mid-session**, with `MarketState: "Open"`
 >   and live volume. It is confirmed as a **non-discriminator**: it says nothing about session state.
 >   The parenthetical negative recorded below is now positively established.
-> - **`Amount: 0` mid-session** — the quote carries no size. These are indicative prices, not firm
->   two-sided quotes with depth. That matters for anything that wants to treat the spread as tradeable.
+> - **`Quote.Amount: 0` mid-session, but that does *not* mean "no depth"** — an earlier version of this
+>   line said it did and was wrong. `PriceInfoDetails` carries **`BidSize` and `AskSize`, populated on
+>   145 of 146** LSE ETN lines in session (e.g. `QQQS:xlon` 124,119 / 68,000). `Quote.Amount` is the
+>   *requested* amount echoed back on an infoprice, not the book. Depth is available; read it from
+>   `PriceInfoDetails`, not from `Quote.Amount`.
+> - **`InstrumentPriceDetails.IsMarketOpen`** is a first-class boolean and read `True` on all 146 lines.
+>   It is the session indicator to use — `MarketState` is the one this project found unreliable.
 >
 > **What this does and does not settle.** It settles the *semantics* — `DelayedByMinutes: 15` is an
 > entitlement tier, not a market-closed artifact — and semantics carry from SIM to live. It does **not**
