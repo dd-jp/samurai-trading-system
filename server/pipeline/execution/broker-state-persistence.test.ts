@@ -642,6 +642,21 @@ describe('InMemoryBrokerStateStore.pruneIngestedObservedFills matches the fills 
     expect(store.pruneIngestedObservedFills('ibkr')).toBe(1);
   });
 
+  it('returns the number of rows it dropped, not the size of the modelled ledger', () => {
+    // In every other case here `pruned` happens to equal the ingested set's
+    // size, so `return this.ingested.size` passes all of them. A marked pair
+    // that was never queued separates the two — and it is the ordinary state
+    // of the real store, where `fills` retains every ingested fill for the life
+    // of the deployment while the queue holds only rows not yet pruned.
+    const store = new InMemoryBrokerStateStore();
+    const queued = { ...OBSERVED, client_order_id: 'lot-1', broker_fill_id: 'bf-1' };
+    store.saveObservedFill('ccxt', queued);
+    store.markIngested(queued);
+    store.markIngested({ client_order_id: 'lot-9', broker_fill_id: 'bf-9' });
+
+    expect(store.pruneIngestedObservedFills('ccxt')).toBe(1);
+  });
+
   it('leaves an un-ingested queue row alone', () => {
     const store = new InMemoryBrokerStateStore();
     store.saveObservedFill('ccxt', {

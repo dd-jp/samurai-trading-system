@@ -169,8 +169,9 @@ export interface BrokerStateStore {
    * caught by `hasFill` whether or not the queue row still exists. No `since`
    * window, no lot terminal state.
    *
-   * The FULL pair, not `broker_fill_id` alone (#1320): the id is
-   * venue-assigned, so two lots can carry the same id string, and an id-only
+   * The FULL pair, not `broker_fill_id` alone (#313 / PR #459's review, which
+   * is where the SQL prune got the pair and has matched it ever since): the id
+   * is venue-assigned, so two lots can carry the same id string, and an id-only
    * match would let one lot's ingested fill drop another lot's still-queued
    * row — the loss this queue exists to prevent.
    */
@@ -214,6 +215,16 @@ export class InMemoryBrokerStateStore implements BrokerStateStore {
   private readonly brackets = new Map<string, BrokerBracketRecord>();
   private readonly fills = new Map<string, NormalizedFill & { venue: BrokerVenue }>();
   private readonly unpriced = new Map<string, UnpricedFillRecord & { venue: BrokerVenue }>();
+  /**
+   * Stands in for the `fills` ledger the SQLite store's prune joins against —
+   * this double has no `SharedStore` behind it. A caller marks a fill here to
+   * say "`ingestFills()` has consumed this one".
+   *
+   * A modelled set rather than a no-op prune: a port implementation that
+   * silently keeps everything would let a caller pass its own tests while the
+   * real store behaved differently.
+   */
+  private readonly ingested = new Set<string>();
 
   loadBrackets(venue: BrokerVenue): BrokerBracketRecord[] {
     return [...this.brackets.values()].filter((record) => record.venue === venue);
@@ -262,17 +273,6 @@ export class InMemoryBrokerStateStore implements BrokerStateStore {
   }
 
   /**
-   * Stands in for the `fills` ledger the SQLite store's prune joins against —
-   * this double has no `SharedStore` behind it. A caller marks a fill here to
-   * say "`ingestFills()` has consumed this one".
-   *
-   * A modelled set rather than a no-op prune: a port implementation that
-   * silently keeps everything would let a caller pass its own tests while the
-   * real store behaved differently.
-   */
-  private readonly ingested = new Set<string>();
-
-  /**
    * Keyed on the pair, and takes an object so the two id strings cannot be
    * transposed at a call site (#1328's reason on `hasFill`).
    *
@@ -291,9 +291,10 @@ export class InMemoryBrokerStateStore implements BrokerStateStore {
     let pruned = 0;
     for (const [rowKey, fill] of this.fills) {
       // The full `(idempotency_key, broker_fill_id)` pair, matching the SQL
-      // store's `EXISTS` join against `fills` (#1320/#1335). On
-      // `broker_fill_id` alone this dropped a different lot's un-ingested row
-      // whenever the venue reused an id string.
+      // store's `EXISTS` join against `fills`, which has matched the pair since
+      // #313 / PR #459's review. On `broker_fill_id` alone this double dropped
+      // a different lot's un-ingested row whenever the venue reused an id
+      // string (#1335).
       if (
         fill.venue === venue &&
         this.ingested.has(ledgerKey(fill.client_order_id, fill.broker_fill_id))
