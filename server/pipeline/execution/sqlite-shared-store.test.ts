@@ -535,9 +535,13 @@ describe('SqliteExecutionStore', () => {
       const { store } = makeStore();
       await store.writeAheadPosition(makePosition());
 
-      expect(await store.hasFill('key-1', 'fill-1')).toBe(false);
+      expect(await store.hasFill({ idempotency_key: 'key-1', broker_fill_id: 'fill-1' })).toBe(
+        false,
+      );
       await store.applyLotAdvance({ idempotency_key: 'key-1', fills: [makeFill()] });
-      expect(await store.hasFill('key-1', 'fill-1')).toBe(true);
+      expect(await store.hasFill({ idempotency_key: 'key-1', broker_fill_id: 'fill-1' })).toBe(
+        true,
+      );
 
       const fills = await store.getFills('key-1');
       expect(fills).toHaveLength(1);
@@ -558,15 +562,21 @@ describe('SqliteExecutionStore', () => {
       // written for this pair, so this is not a duplicate of key-1's row —
       // an id-only match would wrongly report it as already ingested and
       // silently drop key-2's own fill.
-      expect(await store.hasFill('key-2', 'shared-id')).toBe(false);
+      expect(await store.hasFill({ idempotency_key: 'key-2', broker_fill_id: 'shared-id' })).toBe(
+        false,
+      );
       // The exact pair that was written IS reported as ingested.
-      expect(await store.hasFill('key-1', 'shared-id')).toBe(true);
+      expect(await store.hasFill({ idempotency_key: 'key-1', broker_fill_id: 'shared-id' })).toBe(
+        true,
+      );
 
       await store.applyLotAdvance({
         idempotency_key: 'key-2',
         fills: [makeFill({ idempotency_key: 'key-2', broker_fill_id: 'shared-id' })],
       });
-      expect(await store.hasFill('key-2', 'shared-id')).toBe(true);
+      expect(await store.hasFill({ idempotency_key: 'key-2', broker_fill_id: 'shared-id' })).toBe(
+        true,
+      );
     });
 
     it('preserves cost_breakdown for Simulated-adapter fills and omits it otherwise', async () => {
@@ -675,7 +685,9 @@ describe('SqliteExecutionStore', () => {
         }),
       ).rejects.toThrow();
 
-      expect(await store.hasFill('key-1', 'fill-after-close')).toBe(false);
+      expect(
+        await store.hasFill({ idempotency_key: 'key-1', broker_fill_id: 'fill-after-close' }),
+      ).toBe(false);
       const [position] = await store.getOpenPositions();
       expect(position?.filled_size).toBe(0);
     });
