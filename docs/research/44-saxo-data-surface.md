@@ -404,6 +404,69 @@ than a funded retail GIA. So the open question stays open in the form it was ori
 list. What SIM did establish is the weaker, useful thing: the field exists and is readable, so
 the live check is one more call rather than an investigation.
 
+### 2.9-LIVE The £7/month entitlement **does** cover our universe — observed on the live platform
+
+**2026-09-08, 14:39Z, LSE in session.** David subscribed to LSE Level 1 Private on 2026-09-07, and the
+live platform was read directly. This closes the item
+[`34-lse-mark-source-options.md`](34-lse-mark-source-options.md) lists as its **sole unresolved
+question**, and which Saxo *declined to answer in writing* on ticket 20084 (2026-09-03).
+
+Observed on SaxoTraderGO (live), for **`3UKL:xlon` — WisdomTree FTSE 100 3x Daily Leveraged ETN**, a
+3× leveraged ETN of exactly the class ADR-0016 trades:
+
+| field | value |
+| --- | --- |
+| exchange | **London Stock Exchange (ETFs)** — i.e. `LSE_ETF`, not SETS |
+| state | `Open` |
+| data | **`Realtime prices`** |
+
+Confirmed as genuinely live rather than a label: the quote moved between two reads seconds apart
+(bid `2,430.00` → `2,433.50`), and an LSE cash line in the same watchlist (`BP Plc`) carried a
+timestamp **21 seconds old**. The `15:20:17` stamp on the ETN is its last *trade*, not its quote.
+
+**So the entitlement covers the leveraged-ETP universe.** #895's coverage question is answered
+affirmatively, by observation rather than by correspondence.
+
+#### What the same-instrument, same-moment comparison shows — and it is not comfortable
+
+`3UKL` read simultaneously on both feeds:
+
+| | bid | ask | spread | mid |
+| --- | ---: | ---: | ---: | ---: |
+| **SIM, 15-min delayed** | 2428.50 | 2432.50 | **16.5 bp** | 2430.50 |
+| **Live, real time** | 2433.50 | 2439.00 | **22.6 bp** | 2436.25 |
+
+Two consequences, both of which cut against calibrating from the delayed feed:
+
+1. **The delayed feed *understates* the spread by 27%** (16.5 vs 22.6 bp). Any cost model calibrated
+   from SIM is therefore **optimistic**, compounding the direction doc 53's 1 bp floors already err in.
+2. **The delayed mid is 23.6 bp away from the live mid** — larger than the spread itself. At
+   ADR-0014's intraday horizon a decision priced off a delayed mark is, on this sample, further from
+   the tradeable price than the entire cost of crossing it.
+
+**Caveat, stated plainly:** one instrument, one moment, and SIM-vs-live differ in more than latency
+(different environment, different account). This is an observation that motivates a measurement, not
+the measurement itself. But it points the same way as the whole-session profile in §2.5.
+
+#### A trap in the screen path worth naming
+
+`DisplayAndFormat.Currency` on the **price** response returns **`GBP`** for LSE lines whose prices are
+actually in **pence** — 43 of the 64 "GBP"-labelled ETN lines have prices above 100, i.e. pence. The
+authoritative pair is on the **instrument-details** endpoint, and §2.1 already records it:
+
+```
+GET /ref/v1/instruments/details/{uic}/{AssetType}
+  CurrencyCode          = "GBP"   <- settlement currency
+  PriceCurrency         = "GBX"   <- the unit prices are quoted in
+  PriceToContractFactor = 0.01    <- the conversion
+```
+
+So the fix exists and §2.1 is right — but it is **not reachable from `infoprices` alone**. Anything
+screening off `infoprices/list` (§2.3, and #1310's gate) must join to instrument details for the unit,
+or it will be out by 100×.
+
+---
+
 ### 2.9a "Entitlement, not session artifact" — **CONFIRMED by direct measurement, 2026-09-08**
 
 > **RESOLVED.** The outstanding test described at the end of this section was run at **07:32Z on
