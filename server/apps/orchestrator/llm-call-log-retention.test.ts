@@ -15,10 +15,11 @@
  * event that produced #313's dead code.
  *
  * WHAT THAT BLOCK PINS, AND WHAT IT DOES NOT (#1313). Matching `production.ts`
- * as text does not catch a missing caller either: #1306's review wrapped a
- * daily prune call site in a `/* ... *\/` block comment and the source-text
- * guards stayed green, because the call text is still in the source the regex
- * reads. So the block below pins the ARGUMENT SEQUENCE and the textual
+ * as text does not catch a missing caller either: #1306's review wrapped the
+ * daily `alert_delivery_failures` prune call in a `/* ... *\/` block comment
+ * and every case in THAT table's source-text file stayed green, because the
+ * call text is still in the source the regex reads. The block below has the
+ * identical shape, so it likewise pins the ARGUMENT SEQUENCE and the textual
  * placement of each call, and claims nothing about whether they run.
  * `production/retention-wiring.test.ts` pins that by execution for
  * `alert_delivery_failures` (#1131) and the MI archive (#1060); #1313 scoped
