@@ -27,24 +27,34 @@ import type { ProviderStatusPanel, ProviderStatusReader } from './provider-statu
 import { createDashboardServer } from './server.js';
 import type { VerdictAuditEntry } from './types.js';
 
-/** Default harness port. Deliberately not 8787 — that is a developer's dashboard. */
-const DEFAULT_PORT = 8788;
-
 /**
- * `PORT`, validated here rather than handed to `listen()` as a `NaN`: an
- * unparseable value fails inside the socket layer with a message that names
- * neither the variable nor this process, and the Playwright output would show
- * only "webServer was not able to start".
+ * `PORT` is mandatory (#1298) — `playwright.config.ts` picks it once, via
+ * `e2e/support/port.ts`, and passes it down through `webServer.env.PORT`.
+ * There is no fallback default here on purpose: a default would be a second
+ * place holding a port number that the config's value could silently drift
+ * from, and validation would never catch it because a hardcoded fallback is
+ * always "valid".
  *
- * `0` is rejected for the same reason it is legal elsewhere. It asks the OS for
- * an ephemeral port, which is exactly right for a test that reads the bound
- * port back — and useless here, because Playwright probes a URL fixed in
- * `playwright.config.ts`. The server would come up healthy on a port nothing
- * looks at and the run would die on an opaque readiness timeout.
+ * Validated rather than handed to `listen()` as a `NaN`: an unparseable value
+ * fails inside the socket layer with a message that names neither the
+ * variable nor this process, and the Playwright output would show only
+ * "webServer was not able to start".
+ *
+ * `0` is rejected for the same reason it is legal elsewhere. It asks the OS
+ * for an ephemeral port, which is exactly right for a process that reads its
+ * own bound port back — and useless here, because Playwright's config derives
+ * the URL it polls (and hands this process its `PORT`) BEFORE this process
+ * starts. A port this process chose only after that would be unreachable, and
+ * the run would die on an opaque readiness timeout instead.
  */
 function resolvePort(): number {
   const raw = process.env.PORT;
-  if (raw === undefined || raw === '') return DEFAULT_PORT;
+  if (raw === undefined || raw === '') {
+    throw new Error(
+      'fixture server refuses to start: PORT is unset. playwright.config.ts must pass the ' +
+        'port it derived via e2e/support/port.ts through webServer.env.PORT.',
+    );
+  }
   const port = Number(raw);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
     throw new Error(
