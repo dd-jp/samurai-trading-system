@@ -15,11 +15,21 @@ the ticket body are relative to an older tree and have drifted by up to ~180 lin
 
 **Addendum tree (#1351, "Left alone" section below):** `73deaa8` (`origin/main`, 2026-09-08 — the
 43-site PR above, merged) *plus #1351's own changes*. Line numbers in the "Left alone" section are
-relative to that combined tree, not to `542537e`: #1351's guards touch two files this report also
-cites for the original 79-site population (`telegram-bot-api-client.ts`, `production.ts`) and one
-line shifted as a result — `production.ts`'s `feedbackScheduleStore.lastBoundary()` render moved
-from `:4188` to `:4187`, noted inline where it is cited below. Same "frozen, not CI-checked" posture
-as the paragraph above; re-derive by hand against a later tree rather than trusting these numbers.
+relative to that combined tree, not to `542537e`. Two separate consequences, which an earlier draft
+of this paragraph conflated:
+
+- **Overlap with the 79-site population.** #1351's guards touch two files this report also cites for
+  the original census (`telegram-bot-api-client.ts`, `production.ts`), and one of *those* citations
+  shifted — `production.ts`'s `feedbackScheduleStore.lastBoundary()` render moved from `:4188` to
+  `:4187`, noted inline where it is cited below.
+- **Shifts inside the 20 sites themselves.** #1351's own edits move six of the 20 relative to
+  `73deaa8`: `production.ts:3665`→`:3664`, `debate-adapter.ts:1070`→`:1071`,
+  `volatility-reading-provider.ts:227`→`:226`, `ohlcv-failover.ts:80`→`:81`, and — from this
+  review round's guard on the calendar client — `alpaca-session-calendar.ts:202`→`:207` and
+  `:228`→`:233`. Every one is annotated `(:NNN after #1351's PR)` at each citation below.
+
+The addendum's numbers carry the same "frozen, not CI-checked" posture as the paragraph above:
+re-derive by hand against a later tree rather than trusting them.
 
 Those line numbers are **frozen to that tree on purpose and are not CI-checked**.
 `yarn check:citations` lists `docs/reviews/` in `IMMUTABLE_RECORD_DIRS`
@@ -68,8 +78,10 @@ total:
 - `server/pipeline/execution/adapters/alpaca-http-client.ts:581` and
   `server/providers/market-data-service/sources/alpaca-http-client.ts:561` — two **different** files
   of the same basename, one per broker/data leg
-- `server/providers/market-data-service/alpaca-session-calendar.ts:202`, `:228`
-- `server/providers/market-data-service/sources/ohlcv-failover.ts:80`
+- `server/providers/market-data-service/alpaca-session-calendar.ts:202` (`:207` after #1351's PR),
+  `:228` (`:233` after)
+- `server/providers/market-data-service/sources/ohlcv-failover.ts:80` (`:81` after #1351's PR,
+  which collapsed the two-line expression this render was the second line of)
 - `server/shared/llm/nous-chat.ts:163`
 - `server/shared/llm/nous-responses.ts:350`
 - `server/apps/orchestrator/production/debate-adapter.ts:1070` (`:1071` after #1351's PR adds one
@@ -85,6 +97,16 @@ total:
 
 Those were **not** swept here and the files were **not** clean of the pattern; see "Left alone"
 below, which now classifies all 20 — resolved by [#1351](https://github.com/dd-jp/samurai-trading-system/issues/1351).
+
+**Both greps end in `String(…)`, and that tail is itself a boundary.** The same defect written with a
+**string literal** as the fallback — `err instanceof Error ? err.message : 'snapshot failed'` — is
+outside #1262's exact string and outside #1351's relaxed pattern alike, so neither census counted it
+and this document should not be read as certifying the rest of the tree. Two such sites are known:
+`server/apps/service-api/server.ts:303` and `:315`, both inside HTTP error responders, filed as
+[#1355](https://github.com/dd-jp/samurai-trading-system/issues/1355). They are genuinely out of both
+tickets' stated boundaries and are not classified here; #1355 carries the mechanism (`:303` sends
+headers then never calls `.end()`, hanging the request; `:315` throws inside a `.catch()` callback,
+which `installFaultHandlers` treats as fatal).
 
 ## The fix shape
 
@@ -365,13 +387,12 @@ change from this one.
 
 - **The 20 renamed variants** enumerated under "Verified count" above. Same defect, same fix; out of
   this ticket's (#1262) stated exact-string boundary, which is why they were not swept here.
-  **[#1351](https://github.com/dd-jp/samurai-trading-system/issues/1351) resolves all 20**: **7 are
+  **[#1351](https://github.com/dd-jp/samurai-trading-system/issues/1351) resolves all 20**: **8 are
   dangerous by this document's own criterion and are now guarded** with `describeThrownSafely`, the
-  same mechanism as the 43 above — no second placeholder spelling. The other **13 are safe**, three
+  same mechanism as the 43 above — no second placeholder spelling. The other **12 are safe**, three
   different ways. Line numbers below are the addendum tree (`73deaa8` plus #1351's own changes — see
-  "Addendum tree" at the top of this report); two of the seven guarded sites moved by ±1 line because
-  #1351 also touches two files this report cites elsewhere (`telegram-bot-api-client.ts`,
-  `production.ts`), noted per-site below.
+  "Addendum tree" at the top of this report), and six of the 20 shifted under #1351's own edits,
+  noted per-site below.
 
   An earlier draft of this section audited eight of the twenty (six dangerous, two safe) and left
   the remaining twelve unexamined; that draft's mechanism for the two `fill-sync.ts`-adjacent safe
@@ -379,17 +400,19 @@ change from this one.
   wrong for them). All fixed-point corrections from that draft are preserved below; this revision
   completes the audit rather than re-litigating it.
 
-  All seven dangerous sites lose their own diagnostic record, so losing a diagnostic record does not
+  All eight dangerous sites lose their own diagnostic record, so losing a diagnostic record does not
   discriminate. The question that does, given each site's outer guard: **does something durable that
-  would otherwise have landed fail to land?** That is why (a)/(b)/(c) are dispositive at the seven
-  below and not at the thirteen safe ones — the dangerous sites have no outer frame that renders a
-  substitute, or lose more than a log line (a whole map's worth of readings, a poll's ingest-and-sweep
-  pass, a day's tuning cycle, the original `cause`'s identity); the safe ones either escape into a
-  guarded catch that logs the failure and re-arms, are structurally rethrowing regardless of whether
-  the render itself succeeds, or cannot receive a hostile value at all given their producer's closed
-  shape.
+  would otherwise have landed fail to land?** That is why (a)/(b)/(c) are dispositive at seven of the
+  eight below and not at the twelve safe ones — those seven have no outer frame that renders a
+  substitute, or lose more than a log line (a whole map's worth of readings, a poll's
+  ingest-and-sweep pass, a day's tuning cycle, the original `cause`'s identity). The eighth,
+  `alpaca-session-calendar.ts`, answers the same question through a mechanism none of (a)/(b)/(c)
+  names — what fails to land is a **retry**, because the render sits upstream of the constructor
+  whose flag the retry predicate reads. The twelve safe ones either escape into a guarded catch that
+  logs the failure and re-arms, are structurally rethrowing regardless of whether the render itself
+  succeeds, or cannot receive a hostile value at all given their producer's closed shape.
 
-  ### Dangerous — guarded (7)
+  ### Dangerous — guarded (8)
 
   - `server/pipeline/verdict/notifications/telegram/telegram-bot-api-client.ts:822`
     (`escalationError`) — criterion (c). Inside a detached `.catch()` on
@@ -426,7 +449,7 @@ change from this one.
     `provider.getVolatilityReading(NOW)` reject outright (`Error: render boom`), losing the `stocks`
     class's reading along with the crypto one.
   - `server/providers/market-data-service/sources/ohlcv-failover.ts:80` (`primaryError`) —
-    criterion (b), and the most self-defeating of the seven. It renders at the *top* of the catch,
+    criterion (b), and the most self-defeating of the eight. It renders at the *top* of the catch,
     before `safeAlert` and before the fallback source is attempted, so a throw defeats the failover
     the function exists to perform — no alert, no fallback bars. Nothing in `withOhlcvFailover`
     catches it either: the throw rejects the `BarFetcher` promise the wrapper returned, so no
@@ -466,7 +489,7 @@ change from this one.
     `logDebateFailure` has no internal try/catch, so a throw here happens **before**
     `logger.log(...)` runs at all — the `debate_unresolved` diagnostic line, which the function's own
     doc comment says exists to "make the no-row case visible rather than silent", never lands. Worse
-    than the other six: the caller (`buildDebateStep`'s catch, `:988-991`) does
+    than the other six: the caller (`buildDebateStep`'s catch, `:990-992`; `:989-991` before #1351's PR) does
     `logDebateFailure({...}); throw cause;` — a throw from inside `logDebateFailure` REPLACES the
     caller's intended `throw cause;` with the render failure, losing the original `cause`'s identity
     (and type) for anything upstream that branches on it. This document's own precedent for
@@ -480,6 +503,33 @@ change from this one.
     reference — and that `debate_unresolved` still logs with `[unrenderable error]`; reverting the
     guard makes the rejection a fresh `Error: render boom` (failing the identity check) and drops
     the `debate_unresolved` entry.
+
+  - `server/providers/market-data-service/alpaca-session-calendar.ts:207` (`:202` before #1351's
+    PR) (`cause`) — a **new** criterion, and the one site in the addendum whose danger is neither
+    (a), (b) nor (c): what fails to land is a **retry**. This is the `fetchWithTimeout` catch —
+    transport, DNS, timeout — not the JSON-parse catch 26 lines below it, and it is the only one of
+    the eight sites sharing that rethrowing shape (this one plus the seven left unguarded below)
+    that builds a **retryable** error
+    (`new AlpacaCalendarFetchError(msg, true)`). `withRetry`'s predicate (`:241`) is
+    `error instanceof AlpacaCalendarFetchError && error.retryable`. A throw from the render escapes
+    before that constructor runs, the predicate sees a plain `Error` and refuses it, and the
+    3-attempt `DEFAULT_RETRY_CONFIG` budget (`:87`) is spent as **one** — a transient blip becomes a
+    terminal calendar failure. That matters because this table is what tells the flatten when the
+    US session actually ends: this module's own header calls a missing early close "the DANGEROUS
+    direction," and a failed fetch drops the composition root
+    (`production/us-equity-session-source.ts`) back to the hand-entered `US_HOLIDAYS` table whose
+    coverage stops at 2027. Guarded on the same precedent as `debate-adapter.ts` above —
+    "regardless of today's reachability" for a client sitting at a third-party boundary — rather
+    than on reachability, which is genuinely closed here and is recorded honestly as such:
+    `fetchWithTimeout` (`shared/http/fetch-with-timeout.ts:20-38`) rejects with global `fetch`'s
+    `TypeError` or its own `DOMException`, both well-formed. The closure is thinner than it looks,
+    though: `fetchWithTimeout` will forward a **caller-supplied** `init.signal` through
+    `AbortSignal.any`, and `controller.abort(x)` takes any `x` at all — so the closure holds only
+    because *this* call site passes no `signal`, one edit away from not holding. Mutation-proved:
+    the test asserts `fetchCalendar` **resolves with both calendar days** after a first transport
+    attempt whose rejection renders hostile, and that `fetch` was called **twice** — the retry
+    actually happening, not merely the absence of a throw; reverting the guard makes
+    `fetchCalendar` reject with `Error: render boom` from inside `withRetry`'s first attempt.
 
   ### Safe — contained by an outer guard (2)
 
@@ -512,7 +562,7 @@ change from this one.
   in the exact-string SAFE section (e.g. `production.ts:4187`'s `feedbackScheduleStore.lastBoundary()`
   above).
 
-  - `server/tools/backfill-market-data.ts:294` (`readError`) — inside a nested nested catch around
+  - `server/tools/backfill-market-data.ts:294` (`readError`) — inside a nested catch around
     `deps.store.readBars(...)`, itself inside the outer `catch (error) { fetchError =
     describeThrownSafely(error); ... }` block the surrounding comment says exists so a store-read
     failure "does not... abort every remaining pair." `deps.store.readBars` resolves to
@@ -520,7 +570,17 @@ change from this one.
     `better-sqlite3`'s `.prepare().all()` and `fromStoredTimestamp`/`toStoredTimestamp`
     (`shared/store/sqlite-utils.ts`) — both throw only well-formed `Error`/`RangeError`, the same
     two producers this document's reachability-closed group already relies on elsewhere. Not guarded:
-    the render cannot receive a hostile value from this producer.
+    the render cannot receive a hostile value from this producer. One asymmetry recorded rather than
+    left for a reader to notice: the sibling render 20 lines up (`:274`) *is* in the guarded 43, for
+    exactly the criterion `:294` also meets — the outer catch's own comment (`:280-284`) says the
+    inner guard exists so a failed store read does not abort "every remaining pair." `:294` is out
+    of the guarded set only because it fell outside #1262's exact-string boundary and inside this
+    addendum's reachability-closed argument. And, as with `trial-execution.ts`'s
+    `deps.makeEvaluator` below, `deps.store` is an injectable seam typed `MarketDataStore` (`:219`),
+    so the producer closure is a statement about today's only non-test binding, not about the type.
+    It is filed SAFE and not guarded — unlike `debate-adapter.ts` above, which is guarded
+    "regardless of today's reachability" — because a backfill tool is not a third-party-adjacent
+    boundary in the sense that precedent turns on.
   - `server/tools/backtest/stage2-verdict.ts:247` (`cause`) — inside `computeDsr`'s
     `for (const asset_class of assetClassesOf(results))` loop, around a call to `deflatedSharpe()`
     (`server/tools/backtest/overfitting.ts`). Grepped: every throw in `overfitting.ts` is a
@@ -534,46 +594,84 @@ change from this one.
     is the default `EvalExecutorImpl` — a future custom evaluator plugged in through that seam would
     need re-checking against this same producer-closure argument. Not guarded.
 
-  ### Safe — rethrowing anyway (8)
+  ### Safe — rethrowing anyway (7)
 
   Same shape as this document's own established "nothing handled becomes unhandled" pattern
   (see `alpaca-http-client.ts`'s already-covered sites in the SAFE section above): each of these
   renders `cause` while building the message of a **new** error the **same** catch immediately
   throws (`throw new SomeApiError(...)`). If the render itself throws, a DIFFERENT throw (the render
   failure) replaces the intended one — but the frame still throws either way, and the caller sees a
-  rejection regardless. All eight are JSON-body-parse-failure catches on an HTTP client, one level
-  under a `withRetry`/`fetch` boundary — never a producer of a structured non-`Error` throw per this
-  document's server-wide grep (see "Traced before accepting the widening" above, re-run for #1351:
-  still zero `throw {…}`/`throw '…'`/`` throw `…` `` literals in non-test `server/`). Not guarded,
-  for either reason independently.
+  rejection regardless.
+
+  **"The frame throws either way" is only half an argument, and an earlier draft of this section
+  over-claimed it.** Substituting a plain `Error` for the intended typed one is free *only* where
+  nothing downstream branches on the type. Every one of these sits under a retry decision that reads
+  the typed error — `withRetry`'s predicate on the five HTTP clients, `isRetryable` on the two LLM
+  ones — so it has to be checked per site rather than asserted for the group, and at one site it did
+  not hold, which is why
+  `alpaca-session-calendar.ts:202` (`:207` after #1351's PR) is now in the dangerous group above
+  rather than here. Checked, one by one, for the seven that remain:
+
+  - `saxo-http-client.ts:337`, `:349` → `isRetryableSaxoBrokerError`
+    (`saxo-broker-errors.ts:186-197`). Both construct a bare `SaxoBrokerProviderError` with no
+    `status` and `retryableTransportFailure` false, so the predicate returns false; a plain `Error`
+    matches no branch and also returns false. Identical.
+  - `alpaca-http-client.ts:581` (execution leg) → `isRetryableAlpacaBrokerError`
+    (`alpaca-broker-errors.ts:176-184`): `isServerErrorStatus(undefined)` is false, and a plain
+    `Error` falls through to the same `return false`. Identical.
+  - `sources/alpaca-http-client.ts:561` (data leg) → `isRetryableAlpacaDataError`
+    (`alpaca-data-errors.ts:131-139`), same arithmetic. Identical.
+  - `alpaca-session-calendar.ts:228` (`:233` after #1351's PR) → constructs with `retryable: false`
+    explicitly, and the predicate (`:241` after) demands `AlpacaCalendarFetchError && retryable`.
+    Both a false-flagged typed error and a plain `Error` are refused. Identical.
+  - `nous-chat.ts:163`, `nous-responses.ts:350` → these are 2xx-with-unparseable-body catches (both
+    sit after an `if (!response.ok) throw await buildApiError(response)`), so the `NousApiError` they
+    build carries a 2xx `.status` — the contract `nous-wire.ts:39-58` spells out.
+    `classifyProviderError` (`debate-engine/llm/anthropic-client.ts:255-278`) duck-types that field:
+    only 429 and 408/504 become `LlmRateLimitError`/`LlmTimeoutError`, so a 200 falls through to
+    `LlmProviderError`, which `isRetryable` (`:39-45`) rejects — and a plain `Error`, carrying no
+    `.status` at all, falls through to the same `LlmProviderError`. Identical.
+
+  Two further corrections to what this section used to say about the group. It is **not** true that
+  all of them are JSON-parse catches: `saxo-http-client.ts:337` is the `response.text()` body-**read**
+  catch, one block above the `JSON.parse` catch at `:349`. And the reachability leg is a separate,
+  independently sufficient argument for the seven: each is one level under a `withRetry`/`fetch`
+  boundary — never a producer of a structured non-`Error` throw per this document's server-wide grep
+  (see "Traced before accepting the widening" above, re-run for #1351: still zero
+  `throw {…}`/`throw '…'`/`` throw `…` `` literals in non-test `server/`). For these seven, and
+  only these seven, both legs hold. Not guarded.
+
+  The seven, by full path:
 
   - `server/pipeline/execution/adapters/alpaca-http-client.ts:581`
   - `server/pipeline/execution/adapters/saxo-http-client.ts:337`, `:349`
-  - `server/providers/market-data-service/alpaca-session-calendar.ts:202`, `:228`
+  - `server/providers/market-data-service/alpaca-session-calendar.ts:228` (`:233` after #1351's PR)
   - `server/providers/market-data-service/sources/alpaca-http-client.ts:561`
   - `server/shared/llm/nous-chat.ts:163`
   - `server/shared/llm/nous-responses.ts:350`
 
-  ### Credential-widening check, re-run for these seven (not inherited from #1262)
+  ### Credential-widening check, re-run for these eight (not inherited from #1262)
 
   Same conclusion as the 43 above, re-derived rather than assumed: `describeThrown`'s
-  `JSON.stringify` ladder only changes rendered output for a non-`Error` value, and each of the seven
+  `JSON.stringify` ladder only changes rendered output for a non-`Error` value, and each of the eight
   guarded producers is either (a) an HTTP/LLM client behind `fetch` — no structured
   request/response-shaped rejection, since the only non-`fetch` transport dependency is
   `better-sqlite3` — or (b) `better-sqlite3` itself (`production.ts`'s `recordAttempt`). The
-  server-wide re-grep above (zero throw-literal sites) covers all seven. Every guarded site keeps its
+  eighth, `alpaca-session-calendar.ts`, is case (a) — global `fetch` behind `fetchWithTimeout`. The
+  server-wide re-grep above (zero throw-literal sites) covers all eight. Every guarded site keeps its
   existing sanitizer wrapper exactly where it was — `sanitizeLogText(describeThrownSafely(x))` at the
   two `telegram-bot-api-client.ts` sites and at `debate-adapter.ts`,
   `sanitizeErrorMessage(describeThrownSafely(x))` at `volatility-reading-provider.ts` — never
   `describeThrownSafely(sanitize(x))`, which would sanitize before the placeholder could apply and
-  is not what any of these three sites do. `ohlcv-failover.ts`, `fill-sync.ts` and `production.ts`'s
-  `attemptError` site carry no sanitizer before or after, matching their pre-#1351 posture exactly.
+  is not what any of these three sites do. `ohlcv-failover.ts`, `fill-sync.ts`, `production.ts`'s
+  `attemptError` site and `alpaca-session-calendar.ts` carry no sanitizer before or after, matching
+  their pre-#1351 posture exactly.
 
-  The two safe-by-containment verdicts, the three reachability-closed verdicts, and the eight
+  The two safe-by-containment verdicts, the three reachability-closed verdicts, and the seven
   rethrowing-anyway verdicts all stay in this block and do **not** join the 36-site SAFE section
   above: that section is the exact-string population, and 43 + 36 = 79 is a census of that
   population alone. These 20 are a different population and are counted separately throughout —
-  **7 guarded, 13 safe, 20 total**, closing the "floor, not a total" count this section used to
+  **8 guarded, 12 safe, 20 total**, closing the "floor, not a total" count this section used to
   carry.
 - **A hole in `sanitizeBrokerError` itself** (point 2 above): it dereferences properties of an
   untrusted thrown value inside a `catch` whose job is to convert it. A throwing getter defeats the

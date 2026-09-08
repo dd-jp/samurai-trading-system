@@ -30,6 +30,7 @@
 
 import type { RetryConfig } from '../../shared/index.js';
 import {
+  describeThrownSafely,
   fetchWithTimeout,
   isServerErrorStatus,
   truncateForError,
@@ -197,9 +198,13 @@ export class AlpacaHttpCalendarClient implements AlpacaCalendarClient {
           );
         } catch (cause) {
           // Network failure, DNS, timeout — always retryable within budget.
+          // Guarded render: a throw from it escapes before the retryable
+          // AlpacaCalendarFetchError is constructed, so the predicate below
+          // sees a plain Error, refuses it, and a transient blip spends zero
+          // of the retry budget instead of three attempts.
           throw new AlpacaCalendarFetchError(
             `network error fetching Alpaca calendar (${context}): ` +
-              `${cause instanceof Error ? cause.message : String(cause)}`,
+              `${describeThrownSafely(cause)}`,
             true,
           );
         }
