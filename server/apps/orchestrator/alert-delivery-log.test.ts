@@ -99,6 +99,27 @@ describe('SqliteAlertDeliveryLog', () => {
       expect(log.countFailures(ASOF, ALERT_CHAT_ID)).toBe(1);
     });
 
+    // #1313: the two cases above sit one millisecond either side of the edge,
+    // so neither says what happens AT it. Mutating `timestamp > ?` to
+    // `timestamp >= ?` left all of them green. These two pin both ends of the
+    // half-open window `countFailures`'s doc now states.
+    it('excludes a row at exactly the window edge — the lower bound is exclusive', () => {
+      const { log } = makeStore();
+      const onTheEdge = new Date(ASOF.getTime() - ALERT_DELIVERY_FAILURE_WINDOW_MS);
+
+      log.recordFailure(failure({ timestamp: onTheEdge }));
+
+      expect(log.countFailures(ASOF, ALERT_CHAT_ID)).toBe(0);
+    });
+
+    it('includes a row recorded at exactly asOf — the upper bound is inclusive', () => {
+      const { log } = makeStore();
+
+      log.recordFailure(failure({ timestamp: ASOF }));
+
+      expect(log.countFailures(ASOF, ALERT_CHAT_ID)).toBe(1);
+    });
+
     it('self-clears: a failure ages out of the count as `asOf` advances past the window, with no delete', () => {
       const { log } = makeStore();
       const failedAt = new Date('2026-09-04T14:00:00Z');

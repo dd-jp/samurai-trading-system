@@ -8,10 +8,18 @@
  * unlike `llm_call_log` (#1045) and the MI archive (#1060), both of which
  * shipped a retention sweep AND two asserted composition-root call sites
  * after `pruneIngestedObservedFills` (#313) shipped as a mechanism nothing
- * called. This file mirrors `mi-archive-retention.test.ts` exactly, for the
- * same reason stated there: a unit test of `pruneOlderThan` cannot catch a
- * missing caller, because the defect is the ABSENCE of a call, not a fault in
- * the method.
+ * called. This file mirrors `mi-archive-retention.test.ts` exactly.
+ *
+ * WHAT THE SOURCE-TEXT BLOCK BELOW PINS, AND WHAT IT DOES NOT (#1313).
+ * A unit test of `pruneOlderThan` cannot catch a missing caller, because the
+ * defect is the ABSENCE of a call. But matching `production.ts` as text does
+ * not catch it either: #1306's review wrapped the daily call site in a `/*
+ * ... *\/` block comment and all 11 tests here stayed green, since the call
+ * text is still in the source the regex reads. So the block below pins the
+ * ARGUMENT SEQUENCE and the textual placement of each call — worth keeping,
+ * and all it claims. That the calls RUN is pinned by execution in
+ * `production/retention-wiring.test.ts`, which seeds an over-age row and
+ * observes it deleted.
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -112,7 +120,7 @@ describe('alertDeliveryFailureRetentionDaysFromEnvironment', () => {
   });
 });
 
-describe('the alert_delivery_failures purge is actually wired into the composition root', () => {
+describe('the alert_delivery_failures purge is spelled at the composition root, in full', () => {
   const source = readFileSync(fileURLToPath(new URL('./production.ts', import.meta.url)), 'utf8');
 
   // Matched by regex, not exact string, and requiring the FULL argument
@@ -124,12 +132,12 @@ describe('the alert_delivery_failures purge is actually wired into the compositi
       `pruneAlertDeliveryFailuresWithLog\\(\\s*config\\.db,\\s*alertDeliveryFailureRetentionDays,\\s*clock,\\s*logger,\\s*'${trigger}',?\\s*\\)`,
     );
 
-  it('runs at startup and on the daily timer, not in one place only', () => {
+  it('names both triggers, startup and daily, not one place only', () => {
     expect(source).toMatch(callSite('startup'));
     expect(source).toMatch(callSite('daily'));
   });
 
-  it('keeps the daily prune OUTSIDE the feedback cycle try block', () => {
+  it('spells the daily prune ABOVE the feedback cycle try block', () => {
     // Inside it, a persistently throwing `runDailyCycle` would silently
     // disable retention as well: the catch would fire every day while the
     // table grew forever and the log showed only a feedback failure.

@@ -94,6 +94,15 @@ export class SqliteAlertDeliveryLog {
    * same way `getMarks`/`getFillsForTrades` take their scope as a parameter
    * rather than this store inventing one.
    *
+   * WHICH END IS OPEN (#1313). The window is half-open —
+   * `(asOf - ALERT_DELIVERY_FAILURE_WINDOW_MS, asOf]`. A row stamped at
+   * exactly the lower edge is NOT counted; one stamped at exactly `asOf` is.
+   * Stated because nothing else in the shape says it: the constant names a
+   * duration, not an inclusivity, and both edges are pinned by their own
+   * cases in `alert-delivery-log.test.ts` rather than only by rows a
+   * millisecond either side. `pruneOlderThan` below deletes strictly older
+   * than its cutoff, so a row at the cutoff instant survives there too.
+   *
    * WINDOWED, NOT ALL-TIME (#1131). The old unfiltered-below query made a
    * single transient failure read as "degraded" forever with no way to tell
    * it apart from a live outage. Bounding below by
