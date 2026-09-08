@@ -23,9 +23,18 @@ qualifications bind the whole document:
   entitlements, permissions — is **not** evidence about the live Saxo UK GIA. Anything
   reference- or market-shaped (instrument metadata, exchange calendars, bar history, field
   availability) is the same data the live gateway serves.
-- **The market was closed** (`MarketState: "Closed"`, `PriceTypeAsk/Bid: "OldIndicative"`,
-  `DelayedByMinutes: 15`). Quote *magnitudes* — spreads especially — are stale and indicative.
-  The *mechanisms* are proven; the numbers must be re-measured in session.
+- **The market was closed** (`MarketState: "Closed"`, `PriceTypeAsk/Bid: "OldIndicative"`).
+  Quote *magnitudes* — spreads especially — are stale and indicative. The *mechanisms* are
+  proven; the numbers must be re-measured in session.
+- **The price feed is 15 minutes delayed, and the weight of evidence says that is an
+  entitlement tier rather than a session artifact — with one confirming test still outstanding.**
+  `Quote.DelayedByMinutes: 15` on both LSE lines. An earlier version of this document listed that
+  field alongside the market-closed evidence, which read as though it were caused by the close.
+  Four independent strands say otherwise (§2.9a), but all four are circumstantial: the direct
+  test — read the field on an LSE line *during* 07:00–15:30Z — has not been run, because the
+  survey window fell outside LSE hours. **Everything price-shaped below — §2.3's movers screen
+  and §2.5's spreads — is 15 minutes stale unless the LSE Level 1 subscription is bought**,
+  subject to that test. See §2.9.
 - **The Trader/Investor front-ends were not surveyed** — the platform session had expired and
   logging in is David's to do. See §4; it bounds exactly one conclusion.
 
@@ -144,8 +153,12 @@ is what a movers screen needs.
 
 `PercentChangeDaily` is present on **146 of 146**, needs no reconstruction, and carries neither
 caveat: it should be the primary axis, with `RelativeVolume` secondary until its baseline is
-pinned down. Even so this is a lawful, entitled, vendor-free sort key over the whole tradeable
-universe, refreshed as often as we care to poll — which is the thing #750/#1002/#1035 lacked.
+pinned down. Even so this is a lawful, vendor-free sort key over the whole tradeable universe,
+refreshed as often as we care to poll — which is the thing #750/#1002/#1035 lacked.
+
+**Third caveat, from §2.9: the screen is 15 minutes delayed** unless LSE Level 1 is subscribed.
+For *candidate generation* ahead of a debate that itself takes time, a 15-minute-old ranking is
+defensible. For an entry trigger it is not.
 
 ### 2.4 Saxo's LSE coverage was never the binding constraint — spread is
 
@@ -190,6 +203,24 @@ where Saxo alone is 16 bps. `Quote.Bid`/`Ask`/`Mid` on `infoprices` is that sour
 instrument, at poll cadence, under the data terms we have already accepted. Doc 53's
 `CostModelImpl` currently floors commission at a 1 bp-of-notional *rate* with no per-instrument
 spread input; it now has one available.
+
+**Where a delayed quote would actually bite, read off the code rather than assumed.** Nothing in
+the pipeline triggers an entry from a quote. `getQuote` has exactly two non-test callers, both
+inside execution: `captureSubmitSnapshot` (`server/pipeline/execution/execute.ts:409`), which is
+best-effort instrumentation that logs and proceeds on failure, and `getSpreadEstimate`
+(`execute.ts:485`, `simulated-adapter.ts:348`), which feeds the cost model at submit time. The
+signal path — every analyst, the trader, the risk manager's correlation and invalidation checks
+— reads `getBars`. So the exposure is (a) a submit-time spread check priced off a quote 15
+minutes old, and (b) if Saxo ever becomes the LSE *bar* source, a signal computed on bars whose
+newest sample predates the decision by ≥15 minutes, at a horizon ADR-0014 defines as intraday
+flat-by-close. Both are real; neither is "the entry trigger reads a stale quote".
+
+**But it is a delayed source by default** (§2.9): `DelayedByMinutes: 15`. That is a real
+limitation and it splits by use. For **cost calibration** — what does a typical spread on this
+instrument look like, to replace doc 53's 1 bp floor — a 15-minute-delayed sample is fine, since
+the quantity being estimated is a distribution, not a instant. For a **live execution mark or a
+pre-trade spread check** it is not fine at ADR-0014's intraday horizon. The first use needs no
+subscription; the second does.
 
 ### 2.6 The commission floor — a scare that resolved, and a cheap gate that did not
 
@@ -260,6 +291,145 @@ clause is non-blocking was made about the latter. Do not adopt MOC without re-as
   [`43-saxo-openapi-order-idempotency.md`](43-saxo-openapi-order-idempotency.md) along with the
   IfDone-master + `:stop`/`:target` bracket model. Not a new finding; noted so it is not re-filed.
 
+
+### 2.9 Market data over OpenAPI is opt-in, delayed by default, and priced — and this conditions everything above
+
+Found while verifying §2.2's retention question (#1309). It is listed last because it was found
+last, not because it matters least: **it is a precondition for §2.2, §2.3 and §2.5 all three.**
+
+Two Saxo sources appear to contradict each other:
+
+> *"Market data is by default **disabled** for all non-FX instruments in applications **other**
+> than Saxo Bank's trading platforms."* — developer.saxo, *Enabling Market Data*
+
+> *"By default, clients have access to **delayed** market data on the equities and futures
+> exchanges on which they are enabled to trade."* — home.saxo/en-gb, *Market Data Subscriptions*
+
+**They reconcile, and the gateway settles it.** `GET /port/v1/users/me` returns a field whose
+existence is the answer:
+
+| field | SIM value |
+| --- | --- |
+| `MarketDataViaOpenApiTermsAccepted` | **`true`** |
+| `Quote.DelayedByMinutes` (both LSE lines) | **`15`** |
+| `root/v1/sessions/capabilities` → `DataLevel` | `Standard` |
+
+So: OpenAPI market data is gated behind an **explicit per-user acceptance** (developer.saxo's
+"disabled by default" — it is a flag, and it is readable), and what acceptance grants is the
+**delayed** tier (home.saxo's line). Real time is a separate paid subscription. Both documents
+are correct about different steps; neither alone describes the outcome.
+
+**The prices, verified on home.saxo/en-gb for a UK client:**
+
+| London Stock Exchange | Private (non-professional) | Professional |
+| --- | ---: | ---: |
+| Level 1 | **£7.00 / month** | £65.00 / month |
+| Level 2 | £8.00 / month | £229.00 / month |
+
+**And a refund scheme that decides whether the cost is £84/yr or £0:**
+
+> *"Saxo has introduced a refund scheme where fees are refunded per exchange should clients trade
+> a minimum of four (4) times across stocks, ETFs or CFDs on the exchange during each calendar
+> month."* — with *"Refunds are only applicable for non-professional clients subscribing to
+> **level 1** data"*, *"calculated on a monthly basis but paid out on a quarterly basis"*.
+
+**Level 2 is £1/month more and forfeits the refund.** Unless order-book depth is actually
+required, Level 1 is strictly the better buy — a conclusion that inverts the usual "the dearer
+tier is barely dearer" instinct.
+
+**What the fee is worth, in doc 54's units.** Doc 54 expresses a running bill as the accuracy it
+costs: `Δp = bill × 10⁴ / (N × notional × width)`. At `N = 252` sessions and ADR-0018 D5's
+tickets:
+
+| bill | index (£350, width 4.16) | single-stock (£250, width 12.25) |
+| --- | ---: | ---: |
+| LSE Level 1, unrefunded — £84/yr | **2.29 pp** | **1.09 pp** |
+| LLM bill for comparison — ~£169/yr (doc 54's revised figure; **not** the superseded £58) | 4.61 pp | 2.19 pp |
+
+So an unrefunded data fee is roughly **half the weight of the entire LLM bill** — the same order,
+not second-order. Stated the other way, and secondarily because it is not the comparable form:
+£84/yr is **8.4% of the £1,000 book per year**.
+
+**Two things must be verified before this is priced either way, and neither is settled here.**
+
+1. **Does an entry and its exit count as two trades or one?** The clause says four trades
+   "across stocks, ETFs or CFDs on the exchange". At ADR-0014's flat-by-close horizon every
+   position is an entry *and* an exit, so the reading decides whether **two** signals a month
+   clear the bar or **four** do.
+2. **Does this system trade four times a month at all?** [#625](https://github.com/dd-jp/samurai-trading-system/issues/625)
+   measured **96 debates and 0 trades** — the stocks ceiling sat below the conviction floor.
+   That is a measured historical state of the debate layer, not a forecast, but it is the exact
+   state in which the refund does not arrive and the fee is pure drag on a £1,000 book.
+
+**Consequences.** #895's entitlement probe stops being "check entitlements" and becomes four
+named reads on the live token, one round trip:
+
+```
+GET /port/v1/users/me                -> MarketDataViaOpenApiTermsAccepted
+GET /root/v1/sessions/capabilities   -> DataLevel
+GET /trade/v1/infoprices?...&FieldGroups=Quote      -> Quote.DelayedByMinutes, PriceTypeAsk/Bid
+GET /chart/v3/charts?...&FieldGroups=ChartInfo      -> ChartInfo.DelayedByMinutes
+```
+
+The fourth is the one that settles whether the funded GIA gets **bars** on the free tier, which
+is what §2.2's backtest source depends on and which SIM cannot answer. Doc 53's cost model gains
+an input it can use immediately (delayed spreads are adequate for calibration) and a fixed annual
+line item it currently does not carry.
+
+**The delay is not quote-only — chart bars carry it too.** `chart/v3/charts` returns a
+`ChartInfo` block with `DelayedByMinutes` beside `ExchangeId` and `FirstSampleTime`:
+`{"DelayedByMinutes": 15, "ExchangeId": "LSE_ETF", "FirstSampleTime": "2022-05-30T12:43:00Z"}`
+for `LQQ3:xlon`. It applies to the bar series §2.2 proposes as a backtest source and that the
+analysts actually consume, not just to quotes.
+
+**This does not tell us the live account gets bars free.** `ChartInfo.DelayedByMinutes` is an
+entitlement field read on an `IsTrialAccount`, and entitlements are the account-shaped class of
+fact that SIM evidence does not carry (§1). A sandbox is if anything likelier to be permissive
+than a funded retail GIA. So the open question stays open in the form it was originally posed —
+*does the live GIA serve chart data at all, and on which tier* — and belongs on the live-token
+list. What SIM did establish is the weaker, useful thing: the field exists and is readable, so
+the live check is one more call rather than an investigation.
+
+### 2.9a How strong is the "entitlement, not session artifact" reading?
+
+Stated plainly because five other artifacts now cite it. The claim rests on four strands, none
+of them the direct test:
+
+1. **`DelayedByMinutes` is exchange-specific and matches each exchange's published standard
+   delay** — `15` for `LSE_ETF`, `20` for `ASX`, read on the same token minutes apart. A staleness
+   marker caused by market closure would not be keyed to the exchange in exactly the pattern the
+   exchanges publish their own delay conventions in. *The ASX `20` here is the same reading the
+   contaminated control below rests on, and it survives: whether ASX was mid-session or between
+   sessions changes nothing about the field being keyed to the exchange. The control failed as a
+   test of session-dependence, not as an observation of the value.*
+2. **It lives in static series metadata.** In `chart/v3`, `DelayedByMinutes` sits inside
+   `ChartInfo` alongside `ExchangeId` and `FirstSampleTime` — descriptors of the series, not of
+   the current session.
+3. **`MarketDataViaOpenApiTermsAccepted` exists as a readable per-user flag**, and
+   `root/v1/sessions/capabilities` reports `DataLevel: "Standard"`. Both are tier-shaped.
+4. **home.saxo states the default tier is delayed** in prose, and prices the real-time upgrade.
+
+**What was attempted and did not work as a control.** Reading the field on a cash-equity market
+that was open at survey time: `ref/v1/exchanges` listed ASX in `AutomatedTrading`, and
+`infoprices` on three ASX stocks returned `MarketState: "Open"` with `DelayedByMinutes: 20`.
+That looks like the control, and it is not one — the newest `chart` bar for the same instrument
+was ~18 hours old, so ASX was in fact between sessions and `MarketState: "Open"` was reporting
+the imminent session, not a trading one. The reading is recorded here so it is not mistaken for
+evidence later. (It does establish one negative: `PriceTypeAsk: "OldIndicative"` is not a
+market-closed marker specifically, since it appears identically on both.)
+
+**The outstanding test, in one line — and it is cheap:** `GET
+/trade/v1/infoprices?Uic=29391797&AssetType=Etn&FieldGroups=Quote` between 07:00Z and 15:30Z on
+an LSE trading day. `DelayedByMinutes: 15` with `MarketState: "Open"` confirms this section as
+written; `0` falsifies it and the £7/month question dissolves.
+
+This needs a **SIM** token during LSE hours — a timing constraint, not an account one. An earlier
+draft said it needed the live token and was therefore blocked behind #1311; that was wrong, and
+it made a five-minute check look like it was queued behind the scarcest resource in the project.
+The survey simply ran outside LSE hours. The SIM token in `.env.local` at time of writing expires
+**2026-09-08T22:57Z**, so it covers the whole of that day's session; if it has lapsed, a fresh one
+is two clicks at developer.saxo → *Get 24 Hour Token*.
+
 ---
 
 ## 3. What Saxo does **not** give us
@@ -319,6 +489,7 @@ block the conclusions. Worth ten minutes at the next login.
 | 6 | ADR-0015: "Saxo has no per-order minimum" — the fact that disqualified IBKR | Unverified against the venue; one live call settles it (§2.6) | **wayfinder child**, pre-ramp gate |
 | 7 | ADR-0014: flat-by-close by client-side timing | Exchange session calendar + native MOC/LOC (§2.7) | **wayfinder child**, gated on the ADR-0015 clause |
 | 8 | Doc 53 `CostModelImpl`: 1 bp rate floor, no spread input | Per-instrument spread now available (§2.5) | folds into 6 |
+| 9 | #895 + doc 53: market data assumed free and real-time | Opt-in, **delayed** by default (quotes *and* chart bars), **£7/mo** for LSE Level 1 real time, refunded at 4 trades/month (§2.9). The delay is read as an entitlement tier on four circumstantial strands; the confirming in-session read is outstanding (§2.9a) | comment on #895 |
 
 Items 1, 2 and 4 are evidence for tickets that already exist and should not be re-filed. Items 3, 5, 6 and 7 are genuine
 reopenable spec decisions and want a wayfinder map.
