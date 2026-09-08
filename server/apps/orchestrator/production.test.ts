@@ -1478,7 +1478,7 @@ describe('buildProductionComponents', () => {
 
     it(
       'refuses to build with mode "live" past LSE_TABLE_COVERAGE_END, naming today\'s date, ' +
-        'both tables, both *_CHECKED_THROUGH constants, and #1379 (open) as where to extend',
+        'both tables, both *_CHECKED_THROUGH constants, and #1387 (open) as where to extend',
       () => {
         const config = stubConfig(db, {
           mode: 'live',
@@ -1496,10 +1496,14 @@ describe('buildProductionComponents', () => {
         // The dangerous read this guard exists to prevent, named explicitly
         // rather than left implicit — matches LSE_HALF_DAYS's own doc.
         expect(() => buildProductionComponents(config)).toThrow(/16:30/);
-        expect(() => buildProductionComponents(config)).toThrow(/#1379/);
+        expect(() => buildProductionComponents(config)).toThrow(/#1387/);
         // Never cites #1378 (this ticket) as the place to extend the
         // tables — citing it would be circular the moment it closes.
         expect(() => buildProductionComponents(config)).not.toThrow(/#1378/);
+        // Nor #1379 — that ticket extended the tables through 2028 and is
+        // itself now closed; #1387 (open, blocked on gov.uk publishing 2029)
+        // is the follow-up an operator should be pointed at instead.
+        expect(() => buildProductionComponents(config)).not.toThrow(/#1379/);
       },
     );
 
