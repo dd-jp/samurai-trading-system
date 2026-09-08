@@ -60,8 +60,8 @@
  *
  * `--cached` alone, deliberately — NOT `--others --exclude-standard`. Untracked-but-not-
  * ignored files are still runtime state as far as this checker is concerned, and letting
- * them in would re-open the same hole through the `planned` rule: scaffold
- * `server/pipeline/universe-selector/index.ts` locally without staging it and every
+ * them in would re-open the same hole through the `planned` rule: scaffold the not-yet-built
+ * `server/pipeline/universe-selector/index.ts` (docs/specs/universe-selector-spec.md) locally without staging it, and every <!-- cite-exempt: planned — illustrative; the module is specced and not built -->
  * `planned` marker on that path turns into a `stale-planned-exemption` — green on a clean
  * checkout, red on a machine where work has happened, which is exactly the bug being
  * fixed here.
@@ -84,6 +84,24 @@
  * the citation does not carry a symbol name, and any heuristic that scraped one out of
  * the surrounding prose would be a false-positive generator, which is the direction this
  * file is explicitly not allowed to err in.
+ *
+ * ## Code comments are scanned too, paths only (#1345)
+ *
+ * A `.ts`/`.tsx` comment cites a path the same way a markdown sentence does, so this
+ * checker scans both. The invariant: `parseCandidate` and the `cite-exempt` marker apply
+ * identically in a line or block code comment as in markdown — same path-shape rules,
+ * same four exempt reasons, no separate machinery. A symbol citation (a bare name with no
+ * `/`, e.g. a function name) is rejected before path-checking begins and stays out of
+ * scope for the reason directly above: verifying a symbol needs the line-content check
+ * this file deliberately does not do. A fenced ``` code block inside a doc comment is
+ * NOT stripped the way markdown fencing is (see `stripFencedBlocks`) — a path-shaped
+ * backtick inside a comment's own code example reads as a real citation, so mark it
+ * `cite-exempt` or avoid the shape.
+ *
+ * Decision: extending to code comments was measured before shipping, not assumed — the
+ * backlog it surfaced across the tree was small enough to fix in the same change. The
+ * measurement and the PR that shipped it are recorded in #1345, not here — a doc comment
+ * states the invariant a future edit must not break, not a rerunnable count.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -216,7 +234,7 @@ export function listIndexedPaths(root: string): readonly string[] {
  * disk.
  *
  * A path is a directory when the index holds something beneath it: git stores no
- * directory entries, so `docs/specs` is real exactly because `docs/specs/foo.md` is.
+ * directory entries, so `docs/specs` is real exactly because `docs/specs/<name>.md` is.
  */
 export function createIndexResolver(root: string, indexedPaths: readonly string[]): TreeResolver {
   const files = new Set(indexedPaths);
@@ -307,6 +325,80 @@ function stripFencedBlocks(lines: readonly string[]): string[] {
 }
 
 /**
+ * Blanks out everything in a `.ts`/`.tsx` source that is not line- or block-comment
+ * text, so a citation is only ever extracted from a comment — never from a string,
+ * template literal, import specifier or type. Not a parser: strings and templates are
+ * tracked as "opened by this quote char, closed by the same one, backslash escapes",
+ * which cannot see a `${...}` interpolation re-entering code inside a template literal.
+ * That is a false-negative risk (a citation inside an interpolated expression goes
+ * unseen), the direction this file is allowed to err in — no false positive short of a
+ * regex literal containing `//`, of which this tree has none.
+ *
+ * Every open delimiter — `'`, `"`, and a template's backtick alike — resets at
+ * end-of-line, unconditionally: none of the three can legitimately leave a real string
+ * open past a line's end in valid TS (a template literal's continuation lines are real
+ * source, but they carry no `//` or `/*` of their own, so resetting and re-scanning them
+ * from a clean state blanks them harmlessly rather than protecting anything). Carrying a
+ * delimiter across the loop was tried and measured worse: one dangling quote or backtick
+ * upstream blanked every later comment in the file, including this function's own doc
+ * comment.
+ */
+function stripToComments(lines: readonly string[]): string[] {
+  const out: string[] = [];
+  let inBlock = false;
+  let stringDelim: string | null = null;
+  for (const line of lines) {
+    let buf = '';
+    let i = 0;
+    while (i < line.length) {
+      if (inBlock) {
+        const end = line.indexOf('*/', i);
+        if (end === -1) {
+          buf += line.slice(i);
+          i = line.length;
+        } else {
+          buf += line.slice(i, end);
+          i = end + 2;
+          inBlock = false;
+        }
+        continue;
+      }
+      if (stringDelim) {
+        const ch = line[i];
+        if (ch === '\\') {
+          i += 2;
+          continue;
+        }
+        if (ch === stringDelim) stringDelim = null;
+        i++;
+        continue;
+      }
+      const two = line.slice(i, i + 2);
+      if (two === '//') {
+        buf += line.slice(i + 2);
+        i = line.length;
+        continue;
+      }
+      if (two === '/*') {
+        inBlock = true;
+        i += 2;
+        continue;
+      }
+      const ch = line[i];
+      if (ch === '"' || ch === "'" || ch === '`') {
+        stringDelim = ch;
+        i++;
+        continue;
+      }
+      i++;
+    }
+    out.push(buf);
+    stringDelim = null;
+  }
+  return out;
+}
+
+/**
  * Whether a backticked token is a repo path citation.
  *
  * Deliberately strict — every rejection here is a false negative accepted on purpose:
@@ -383,15 +475,23 @@ export interface ExtractOptions {
   readonly knownRoots: ReadonlySet<string>;
 }
 
-export function extractCitations(markdown: string, options: ExtractOptions): Citation[] {
-  const rawLines = markdown.split('\n');
-  const lines = stripFencedBlocks(rawLines);
+/**
+ * Shared scan: `contentLines` is what gets searched for backticked citations (fenced
+ * blocks blanked, for markdown; non-comment code blanked, for `.ts`/`.tsx`), while
+ * `rawLines` — always the real source — is what a `cite-exempt` marker is read from, so
+ * a marker written outside a fence or a comment still attaches to the citation on its
+ * line.
+ */
+function citationsFromLines(
+  rawLines: readonly string[],
+  contentLines: readonly string[],
+  options: ExtractOptions,
+): Citation[] {
   const citations: Citation[] = [];
-
-  for (let i = 0; i < lines.length; i++) {
+  for (let i = 0; i < contentLines.length; i++) {
     const lineNo = i + 1;
     const inline = /`([^`\n]+)`/g;
-    let match: RegExpExecArray | null = inline.exec(lines[i] ?? '');
+    let match: RegExpExecArray | null = inline.exec(contentLines[i] ?? '');
     while (match !== null) {
       const parsed = parseCandidate(match[1] ?? '', options.knownRoots);
       if (parsed) {
@@ -406,10 +506,21 @@ export function extractCitations(markdown: string, options: ExtractOptions): Cit
             : {}),
         });
       }
-      match = inline.exec(lines[i] ?? '');
+      match = inline.exec(contentLines[i] ?? '');
     }
   }
   return citations;
+}
+
+export function extractCitations(markdown: string, options: ExtractOptions): Citation[] {
+  const rawLines = markdown.split('\n');
+  return citationsFromLines(rawLines, stripFencedBlocks(rawLines), options);
+}
+
+/** Same rules as {@link extractCitations}, scoped to line- and block-comment text only. */
+export function extractCodeCitations(source: string, options: ExtractOptions): Citation[] {
+  const rawLines = source.split('\n');
+  return citationsFromLines(rawLines, stripToComments(rawLines), options);
 }
 
 export function checkCitation(citation: Citation, tree: TreeResolver): Violation | null {
@@ -489,9 +600,27 @@ export function markdownFilesIn(indexedPaths: readonly string[]): string[] {
     .filter((path) => !path.split('/').some((segment) => SKIPPED_DIRS.has(segment)));
 }
 
+/**
+ * `.ts`/`.tsx` only — `.mts`/`.cts` are unused in this tree and are out of scope until one
+ * is added; `runCitationCheck`'s dispatch uses this same pattern so a file neither `.md`
+ * nor matching it is skipped explicitly, not swept in by an else branch.
+ */
+const CODE_EXTENSION_RE = /\.tsx?$/;
+
+/**
+ * The `.ts`/`.tsx` source to scan for comment citations, tracked minus a skipped
+ * directory — same rule `markdownFilesIn` applies, so `__fixtures__` (this file's own
+ * `known-good.ts`/`known-bad.ts` included) is never scanned by the repo-wide run.
+ */
+export function codeFilesIn(indexedPaths: readonly string[]): string[] {
+  return indexedPaths
+    .filter((path) => CODE_EXTENSION_RE.test(path))
+    .filter((path) => !path.split('/').some((segment) => SKIPPED_DIRS.has(segment)));
+}
+
 export interface CheckOptions {
   readonly root: string;
-  /** Repo-relative markdown files to scan. Defaults to every tracked `.md` under `root`. */
+  /** Repo-relative files to scan. Defaults to every tracked `.md`/`.ts`/`.tsx` under `root`. */
   readonly files?: readonly string[];
   readonly tree?: TreeResolver;
   readonly knownRoots?: ReadonlySet<string>;
@@ -511,7 +640,7 @@ export function runCitationCheck(options: CheckOptions): Report {
   const tree = options.tree ?? createIndexResolver(root, indexed());
   const knownRoots = options.knownRoots ?? knownRootsFromPaths(indexed());
   const read = options.readMarkdown ?? ((f: string) => readFileSync(join(root, f), 'utf8'));
-  const all = options.files ?? markdownFilesIn(indexed());
+  const all = options.files ?? [...markdownFilesIn(indexed()), ...codeFilesIn(indexed())];
 
   const exemptByMarker: Record<ExemptReason, number> = {
     foreign: 0,
@@ -529,8 +658,30 @@ export function runCitationCheck(options: CheckOptions): Report {
       filesSkippedByRule++;
       continue;
     }
+    let text: string;
+    try {
+      text = read(file);
+    } catch {
+      // Indexed but not readable on disk — the same "deletion unstaged" case
+      // `createIndexResolver.lineCount` already tolerates, now reachable for the file
+      // BEING scanned too, not only for a file a citation points at. No citations found
+      // is the false negative this file is allowed to err toward; crashing the whole run
+      // over one locally-deleted file is not. Not counted as scanned either — an ENOENT
+      // never contributed a citation and `filesScanned` should stay a fact about files
+      // actually read, not files attempted.
+      continue;
+    }
+    const extract = file.endsWith('.md')
+      ? extractCitations
+      : CODE_EXTENSION_RE.test(file)
+        ? extractCodeCitations
+        : null;
+    // Reachable only via the `files` option (the default file set is always `.md` or
+    // `CODE_EXTENSION_RE`): a file matching neither is skipped, not counted scanned —
+    // `filesScanned` stays a fact about files this run actually extracted citations from.
+    if (!extract) continue;
     filesScanned++;
-    const citations = extractCitations(read(file), { file, knownRoots });
+    const citations = extract(text, { file, knownRoots });
     citationsScanned += citations.length;
     for (const citation of citations) {
       const violation = checkCitation(citation, tree);
@@ -551,7 +702,7 @@ export function formatReport(report: Report): string {
   const exemptTotal = e.foreign + e.historical + e.planned + e.untracked;
   const lines = [
     'backticked-path citation check',
-    `  markdown files scanned:      ${report.filesScanned}`,
+    `  files scanned (md/ts/tsx):   ${report.filesScanned}`,
     `  files skipped (preserved):   ${report.filesSkippedByRule}  [${IMMUTABLE_RECORD_DIRS.join(' ')}]`,
     `  citations scanned:           ${report.citationsScanned}`,
     `  exempt by marker:            ${exemptTotal}  (foreign ${e.foreign}, historical ${e.historical}, planned ${e.planned}, untracked ${e.untracked})`,
@@ -565,7 +716,8 @@ export function formatReport(report: Report): string {
       '  Paths resolve against the git index, never the working directory, so a file you',
       '  created in this change reads as unresolved until it is `git add`-ed.',
       '  Fix the citation, or — if it is correct as written — mark it inline with',
-      '  `<!-- cite-exempt: foreign|historical|planned|untracked — why -->`.',
+      '  `<!-- cite-exempt: foreign|historical|planned|untracked — why -->` (the same marker',
+      '  works verbatim inside a `//` or `/* */` code comment).',
       '  NEVER edit a file under docs/adr/, docs/wayfinder/, docs/research/archive/ or',
       '  docs/reviews/ to satisfy this check: those are never scanned, and rewriting a',
       '  decision record to fix a path falsifies the record.',

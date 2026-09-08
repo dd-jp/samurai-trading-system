@@ -84,7 +84,7 @@ export interface ExecutionInput {
   /**
    * #519: where a `flatten_submissions` row `reconcile()`'s sweep could not
    * settle is escalated — genuine ignorance (the adapter could not answer)
-   * or a venue contradiction on an already-acked row (see `resolveUnresolvedFlattens`,
+   * or a venue contradiction on an already-acked row (see `reconcileFlatten`,
    * reconcile.ts, for both paths). Required, for the same "no silent default"
    * reason `residualExposureAlerts`/`flattenOverfillAlerts` above are: an
    * unresolved flatten is a lot stuck in genuine ambiguity about whether it
@@ -204,7 +204,7 @@ export interface ReconcileDivergence {
    * - `adopted` — the venue has the order in a different state; the store now
    *   matches it. For a flatten row, this also covers a fresher (but still
    *   non-terminal) venue answer on an already-`'submitted'` row — see
-   *   `resolveUnresolvedFlattens` (reconcile.ts).
+   *   `reconcileFlatten` (reconcile.ts).
    * - `rejected` — the venue authoritatively has no such order, so the
    *   write-ahead never landed and the lot is marked `rejected` (or, for a
    *   flatten still at `'submitting'`, the journal row is resolved `'error'`
@@ -299,7 +299,7 @@ export interface Execution {
    * what makes a crash between write-ahead and broker-ack recoverable.
    *
    * Also settles every unresolved `flatten_submissions` row the same way
-   * (#519, #526) — see `resolveUnresolvedFlattens` (reconcile.ts) — which is
+   * (#519, #526) — see `reconcileFlatten` (reconcile.ts) — which is
    * what re-populates a live adapter's process-local flatten-sweep worklist
    * (`AlpacaBrokerAdapter.flattens`) across a restart, via
    * `BrokerAdapter.resumeFlatten`'s side effect.

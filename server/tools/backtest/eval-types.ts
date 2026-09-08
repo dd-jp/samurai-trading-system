@@ -16,7 +16,7 @@
  * on disk in this worktree (`~/trading-system/pybroker/` does not exist, nor
  * does the `/tmp/pybroker-analysis.md` the briefing cites), so the executor
  * shape below is reconstructed from the spec's prose, not read off
- * `src/eval.py` / `src/strategy.py`. metrics.ts records the same limitation
+ * `src/eval.py` / `src/strategy.py`. <!-- cite-exempt: foreign — pybroker's own tree, mined not depended on; these paths are never expected to exist here --> metrics.ts records the same limitation
  * for the formulas it implements.
  *
  * **Orchestration, not a second implementation.** The executor computes no

@@ -14,7 +14,7 @@
  * TypeScript as the core language. #88 set the same precedent for the harness.
  * The repos are not on disk in this worktree, so the formulas below come from
  * their primary sources (cited per-function) rather than from pybroker's
- * `src/eval.py`.
+ * `src/eval.py`. <!-- cite-exempt: foreign — pybroker's own tree, mined not depended on; never expected to exist here -->
  */
 
 import type { MetricsSuite, ReturnSeries, TradeSeries } from './validation-types.js';

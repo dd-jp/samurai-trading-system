@@ -11,8 +11,10 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import {
+  codeFilesIn,
   createIndexResolver,
   extractCitations,
+  extractCodeCitations,
   IMMUTABLE_RECORD_DIRS,
   knownRootsFromPaths,
   knownRootsOf,
@@ -84,6 +86,208 @@ describe('the known-bad fixture', () => {
       planned: 0,
       untracked: 0,
     });
+  });
+});
+
+describe('the known-good code fixture (#1345)', () => {
+  const report = check([`${FIXTURES}/known-good.ts`]);
+
+  it('produces no violations at all', () => {
+    expect(kinds(report.violations)).toEqual([]);
+  });
+
+  it('counts one exemption of each reason, plus one extra historical (marker inside a block comment)', () => {
+    expect(report.exemptByMarker).toEqual({
+      foreign: 1,
+      historical: 2,
+      planned: 1,
+      untracked: 1,
+    });
+  });
+
+  it('scans citations out of // and /* */ comments, never out of a string or template literal', () => {
+    // 4 unmarked resolving citations (a `//` directory, a `//` file, a `//` file:line, and
+    // one from a `/** */` block comment) + 5 marked ones (one of each of the 4 exempt
+    // reasons via `//`, plus a `historical` marker inside a `/** */` block comment,
+    // proving the marker binds the same way there — round-2 review item 4). The string
+    // and template-literal lines each carry a path-shaped token too, and neither counts.
+    expect(report.citationsScanned).toBe(9);
+  });
+});
+
+describe('the known-bad code fixture (#1345)', () => {
+  const report = check([`${FIXTURES}/known-bad.ts`]);
+
+  it('flags every case exactly once, and nothing else', () => {
+    expect(kinds(report.violations)).toEqual([
+      'missing-path@7:server/pipeline/verdict/no-such-file.ts',
+      'line-beyond-eof@9:server/tools/check-path-citations.ts:99999',
+      'line-on-directory@11:server/tools/:12',
+      'stale-planned-exemption@13:server/tools/check-path-citations.ts',
+      'malformed-exemption@15:server/pipeline/verdict/gone.ts',
+      'malformed-exemption@17:server/pipeline/verdict/also-gone.ts',
+    ]);
+  });
+
+  it('counts nothing as exempt — a bad marker never buys silence', () => {
+    expect(report.exemptByMarker).toEqual({
+      foreign: 0,
+      historical: 0,
+      planned: 0,
+      untracked: 0,
+    });
+  });
+});
+
+describe('mutation: a deliberately bad in-code citation (#1345)', () => {
+  // The AC this satisfies: a checker over comments must actually catch one. Neither
+  // direction is meaningful alone — a checker that always fails would pass the first
+  // test, one that never runs would pass the second.
+  const badSource = '// see `server/pipeline/verdict/gone-for-good.ts` for the mechanism\n';
+  const fixedSource = '// see `server/pipeline/execution/reconcile.ts` for the mechanism\n';
+
+  it('fails once a comment cites a path that does not resolve', () => {
+    const report = runCitationCheck({
+      root: REPO_ROOT,
+      files: ['server/synthetic-mutation.ts'],
+      knownRoots,
+      readMarkdown: () => badSource,
+    });
+    expect(kinds(report.violations)).toEqual([
+      'missing-path@1:server/pipeline/verdict/gone-for-good.ts',
+    ]);
+  });
+
+  it('passes once the same citation is corrected to a path that resolves', () => {
+    const report = runCitationCheck({
+      root: REPO_ROOT,
+      files: ['server/synthetic-mutation.ts'],
+      knownRoots,
+      readMarkdown: () => fixedSource,
+    });
+    expect(report.violations).toEqual([]);
+    expect(report.citationsScanned).toBe(1);
+  });
+});
+
+describe('stringDelim resets per line, not carried across the file (#1375 review)', () => {
+  // An unmatched `'`, `"`, or backtick on one line (a regex literal, JSX text — none of
+  // these is a real multi-line string in valid TS, and a regex literal is not a template
+  // literal even when it contains a backtick) used to leave `stringDelim` set entering
+  // the next line, blanking every comment after it for the rest of the file. Every
+  // delimiter now resets unconditionally at end-of-line — a real template literal's
+  // continuation lines carry no `//` or `/*` of their own, so resetting and re-scanning
+  // them from a clean state blanks them harmlessly rather than losing protection.
+
+  it('an apostrophe inside a regex literal does not swallow the next line’s citation', () => {
+    const source =
+      "const re = /it's a test/;\n// see `server/pipeline/verdict/gone-for-good.ts` for it\n";
+    const report = runCitationCheck({
+      root: REPO_ROOT,
+      files: ['server/synthetic-mutation.ts'],
+      knownRoots,
+      readMarkdown: () => source,
+    });
+    expect(kinds(report.violations)).toEqual([
+      'missing-path@2:server/pipeline/verdict/gone-for-good.ts',
+    ]);
+  });
+
+  it('an apostrophe in JSX text does not swallow the next line’s citation', () => {
+    const source =
+      "const el = <p>It's data</p>;\n// see `server/pipeline/verdict/gone-for-good.ts` for it\n";
+    const report = runCitationCheck({
+      root: REPO_ROOT,
+      files: ['server/synthetic-mutation.tsx'],
+      knownRoots,
+      readMarkdown: () => source,
+    });
+    expect(kinds(report.violations)).toEqual([
+      'missing-path@2:server/pipeline/verdict/gone-for-good.ts',
+    ]);
+  });
+
+  it('control: no apostrophe on the first line, the next line’s citation is still seen', () => {
+    const source = 'const x = 1;\n// see `server/pipeline/verdict/gone-for-good.ts` for it\n';
+    const report = runCitationCheck({
+      root: REPO_ROOT,
+      files: ['server/synthetic-mutation.ts'],
+      knownRoots,
+      readMarkdown: () => source,
+    });
+    expect(kinds(report.violations)).toEqual([
+      'missing-path@2:server/pipeline/verdict/gone-for-good.ts',
+    ]);
+  });
+
+  it('a single backtick inside a regex literal does not swallow the next line’s citation', () => {
+    // The regex is not a template literal — it just contains a backtick character — but
+    // the naive delimiter tracker cannot tell the difference; this is round-2 review
+    // item 1, the same class as the apostrophe cases above, for the third quote type.
+    const source = 'const re = /`/;\n// see `server/pipeline/verdict/gone-for-good.ts` for it\n';
+    const report = runCitationCheck({
+      root: REPO_ROOT,
+      files: ['server/synthetic-mutation.ts'],
+      knownRoots,
+      readMarkdown: () => source,
+    });
+    expect(kinds(report.violations)).toEqual([
+      'missing-path@2:server/pipeline/verdict/gone-for-good.ts',
+    ]);
+  });
+});
+
+describe('code-comment extraction', () => {
+  const extractCode = (source: string) =>
+    extractCodeCitations(source, { file: 'server/x.ts', knownRoots }).map((c) => c.raw);
+
+  it('extracts a citation from a `//` line comment', () => {
+    expect(extractCode('// see `server/tools/check-path-citations.ts` for the mechanism')).toEqual([
+      'server/tools/check-path-citations.ts',
+    ]);
+  });
+
+  it('extracts a citation from a `/** */` block comment, including a multi-line one', () => {
+    expect(extractCode('/**\n * See `server/tools/check-path-citations.ts` above.\n */\n')).toEqual(
+      ['server/tools/check-path-citations.ts'],
+    );
+  });
+
+  it('never extracts from a string or template literal, even one that looks like a citation', () => {
+    expect(extractCode("const x = '`server/tools/check-path-citations.ts`';")).toEqual([]);
+    expect(extractCode('const x = `server/tools/check-path-citations.ts`;')).toEqual([]);
+  });
+
+  it('does not let a `//` inside a string open a false line comment', () => {
+    // Without string-tracking, the `//` in the URL would open a line comment and the
+    // trailing backticked path would read as code, not comment, and go unseen.
+    expect(
+      extractCode("const x = 'https://example.com'; // `server/tools/check-path-citations.ts`"),
+    ).toEqual(['server/tools/check-path-citations.ts']);
+  });
+
+  it('attaches a cite-exempt marker on a code comment line the same way it does on markdown', () => {
+    const cites = extractCodeCitations(
+      '// `server/a/gone.ts` and `server/b/gone.ts` <!-- cite-exempt: historical — why -->\n// `server/c/gone.ts`',
+      { file: 'server/x.ts', knownRoots },
+    );
+    expect(cites.map((c) => c.exemption?.reason)).toEqual(['historical', 'historical', undefined]);
+  });
+});
+
+describe('codeFilesIn', () => {
+  it('keeps tracked .ts/.tsx, drops .md and anything under a skipped directory', () => {
+    // `node_modules` needs no entry here: it is untracked and never reaches this
+    // function at all in real use (`git ls-files --cached` never lists it), the same
+    // reason `SKIPPED_DIRS`'s own doc gives for dropping it from that set.
+    const paths = [
+      'server/pipeline/reconcile.ts',
+      'client/src/App.tsx',
+      'docs/notes.md',
+      'server/tools/__fixtures__/path-citations/known-good.ts',
+      '.yarn/releases/yarn-4.0.0.cjs',
+    ];
+    expect(codeFilesIn(paths)).toEqual(['server/pipeline/reconcile.ts', 'client/src/App.tsx']);
   });
 });
 
@@ -202,7 +406,10 @@ describe('the repository as it stands', () => {
     // add a directory to IMMUTABLE_RECORD_DIRS.
     const report = runCitationCheck({ root: REPO_ROOT });
     expect(report.violations.map((v) => v.message)).toEqual([]);
-    expect(report.citationsScanned).toBeGreaterThan(100);
+    // >500, not >100: code-comment scanning (#1345) roughly doubled the citation count
+    // over markdown alone. A drop back toward 100 here would mean code scanning silently
+    // stopped running, not that the repository got smaller.
+    expect(report.citationsScanned).toBeGreaterThan(500);
   });
 });
 
@@ -281,10 +488,13 @@ describe('resolution against the git index rather than the working directory (#8
   });
 
   it('holds that invariance over a non-empty report, not two empty ones', () => {
-    // Guards the test above from passing vacuously. `docs/out.log` is a violation in
-    // BOTH states — it exists on disk in the second, and existing on disk buys nothing.
+    // Guards the test above from passing vacuously. The fixture's "docs/out.log" citation
+    // is a violation in BOTH states — it exists on disk in the second, and existing on
+    // disk buys nothing.
     const report = runCitationCheck({ root: repo });
-    expect(report.filesScanned).toBe(2);
+    // 2 markdown + 1 code (the "server/thing.ts" fixture, no citations of its own — it
+    // only ever appears as a citation TARGET, in docs/notes.md).
+    expect(report.filesScanned).toBe(3);
     expect(report.citationsScanned).toBe(4);
     expect(kinds(report.violations)).toEqual(['missing-path@3:docs/out.log']);
   });
@@ -302,13 +512,15 @@ describe('resolution against the git index rather than the working directory (#8
     expect(markdownFilesIn(listIndexedPaths(repo))).toEqual(['docs/keep.md', 'docs/notes.md']);
     // And the run agrees: taking the file set from the index is what makes `filesScanned`
     // a repository fact rather than a fact about what tooling has written into the tree.
-    expect(runCitationCheck({ root: repo }).filesScanned).toBe(2);
+    // 2 markdown + 1 code (the "server/thing.ts" fixture).
+    expect(runCitationCheck({ root: repo }).filesScanned).toBe(3);
   });
 
   it('completes without throwing when an indexed file has been deleted from the working tree', () => {
     // Existence and content now come from different places, so this state exists where it
-    // could not before: the index still has `server/thing.ts`, the disk does not. Erring
-    // toward the false negative — no line violation — beats crashing the whole run.
+    // could not before: the index still has the "server/thing.ts" fixture file, the disk
+    // does not. Erring toward the false negative — no line violation — beats crashing the
+    // whole run.
     rmSync(join(repo, 'server/thing.ts'));
     const report = runCitationCheck({ root: repo });
     expect(kinds(report.violations)).toEqual(['missing-path@3:docs/out.log']);

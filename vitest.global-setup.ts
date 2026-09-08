@@ -24,7 +24,7 @@
  *
  * A test that genuinely needs the production path resolution must relocate its
  * own cwd to a temp directory, as the #330 test in
- * `src/orchestrator/startup.test.ts` now does.
+ * `server/apps/orchestrator/startup.test.ts` now does.
  */
 import { statSync } from 'node:fs';
 import { join } from 'node:path';

@@ -1578,7 +1578,7 @@ export interface ExitPathEvidence {
  * wrong-key mutation at this lookup's call site can read a DIFFERENT
  * scenario's divergence whose `action` also happens to be `'adopted'` —
  * measured concretely by substituting scenario 4's `crashRestartLot.exitKey`
- * for scenario 5's `residualSweep.lotKey`: `resolveUnresolvedFlattens`
+ * for scenario 5's `residualSweep.lotKey`: `reconcileFlatten`
  * (reconcile.ts) reports that lot's flatten as `action: 'adopted'` too, with
  * `reason: "flatten journal said '...'; broker reports '...'"`. `.action`
  * cannot tell that apart from `sweepOne`'s own `'adopted'`, but `.reason`
@@ -5540,7 +5540,7 @@ export function evaluateSmokeGate(
   // divergence whose `.action` also happens to be `'adopted'` — measured
   // concretely by substituting scenario 4's `crashRestartLot.exitKey` for
   // this lot's key, which reads scenario 4's flatten-reconcile divergence
-  // (`resolveUnresolvedFlattens`, reconcile.ts) instead, itself `'adopted'`.
+  // (`reconcileFlatten`, reconcile.ts) instead, itself `'adopted'`.
   // `sweepDivergenceReason` is the same lookup's `reason` text, so it cannot
   // silently disagree with `sweepDivergenceAction` about which divergence was
   // found — and only `sweepOne`'s own re-arm reason
