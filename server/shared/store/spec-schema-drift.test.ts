@@ -12,9 +12,11 @@ import { MIGRATIONS_DIR, runMigrations } from './migrate.js';
  * builds BOTH sides for real (the spec's own fenced `CREATE TABLE`/`CREATE
  * INDEX` statements executed against a fresh `:memory:` DB; the actual
  * migration chain run against a second `:memory:` DB) and diffs them
- * column-by-column, index-by-index, and CHECK-by-CHECK — so a future
- * migration that adds a column/index/CHECK without updating the spec fails
- * HERE instead of silently reproducing #1251.
+ * column-by-column, index-by-index, and (via a full normalized `CREATE
+ * TABLE` text comparison, not a per-CHECK diff — see the inline comment
+ * below) CHECK-by-CHECK — so a future migration that adds a column/index or
+ * changes a CHECK without updating the spec fails HERE instead of silently
+ * reproducing #1251.
  *
  * `ALTER TABLE` statements in the spec are illustrative prose (e.g. the
  * `invalidation_log` section's walk-through of migration 0040) and are
@@ -125,7 +127,8 @@ function buildDbFromSpec(specText: string): BetterSqlite3.Database {
 
   const createTableStmts = allStatements.filter((s) => /^CREATE TABLE/i.test(s));
   const createIndexStmts = allStatements.filter((s) => /^CREATE (UNIQUE )?INDEX/i.test(s));
-  const alterStmts = allStatements.filter((s) => /^ALTER TABLE/i.test(s));
+  // ALTER TABLE blocks are illustrative prose (see module doc) — recognized so
+  // they don't trip the `other` throw below, but otherwise unused.
   const other = allStatements.filter(
     (s) =>
       !/^CREATE TABLE/i.test(s) && !/^CREATE (UNIQUE )?INDEX/i.test(s) && !/^ALTER TABLE/i.test(s),
@@ -134,11 +137,9 @@ function buildDbFromSpec(specText: string): BetterSqlite3.Database {
     throw new Error(
       `spec-schema-drift: unrecognized SQL fence content (not CREATE TABLE/INDEX/ALTER TABLE): ${JSON.stringify(
         other.map((s) => s.slice(0, 80)),
-      )}. Every \`\`\`sql block in the spec must be schema DDL this test can classify.`,
+      )}. Every \`\`\`sql block in the spec must be schema DDL this test can classify — if this is a non-DDL worked example (e.g. an upsert or a SELECT), give it a \`\`\`sql-example fence instead of \`\`\`sql so this test skips it, rather than widening this classifier.`,
     );
   }
-  // ALTER TABLE blocks are illustrative prose (see module doc) — deliberately unused.
-  void alterStmts;
 
   const db = new BetterSqlite3(':memory:');
   for (const s of createTableStmts) db.exec(s);
@@ -156,12 +157,18 @@ function tablesOf(db: BetterSqlite3.Database): string[] {
   return (
     db
       .prepare(
-        // Same exclusions as `open-shared-store.test.ts`'s TABLES-completeness
+        // Same exclusion as `open-shared-store.test.ts`'s TABLES-completeness
         // check: `sqlite_sequence` is SQLite's own AUTOINCREMENT bookkeeping,
         // created implicitly and identically by both DB builds whenever either
         // side has an AUTOINCREMENT table, so it is excluded rather than
-        // required to be declared.
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT IN ('schema_migrations', 'sqlite_sequence')",
+        // required to be declared. `schema_migrations` is NOT excluded here
+        // (unlike a naive read of that other test's exclusion list might
+        // suggest) — both DB builds declare it with matching columns (the
+        // spec's own fenced CREATE TABLE at "Module: Migrations" vs.
+        // `migrate.ts`'s `CREATE TABLE IF NOT EXISTS`, which SQLite's
+        // `sqlite_master.sql` normalizes to the same text minus the `IF NOT
+        // EXISTS` clause), so it is diffed like any other table.
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT IN ('sqlite_sequence')",
       )
       .all() as { name: string }[]
   )

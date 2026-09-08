@@ -161,7 +161,9 @@ CREATE INDEX idx_open_positions_arm ON open_positions(arm, opened_at);
 -- exit_reason (0031, threaded from flatten_submissions.exit_reason — see 0031's
 -- doc comment) and flatten_idempotency_key (0037, the flatten write-ahead row's
 -- own idempotency_key, so a split flatten fill can be traced back to its
--- submission) folded in by #1251.
+-- submission) folded in by #1251, alongside idx_fills_broker_fill_id (0005) —
+-- present since one of this table's earliest migrations (the table itself is
+-- 0001) but never folded into this block until now.
 CREATE TABLE fills (
   idempotency_key          TEXT NOT NULL,
   broker_fill_id           TEXT NOT NULL,
@@ -181,10 +183,15 @@ CREATE INDEX idx_fills_broker_fill_id ON fills(broker_fill_id);
 -- Folded in by #1251: arm + idx_closed_trades_arm (0033), sizing_capital_ceiling
 -- (0045), modelled_cost_charged (0049 — whether the modelled cost model was
 -- actually charged against this trade's realized_pnl_net; see 0049's doc comment
--- for the per-arm backfill), idx_closed_trades_closed_at (0031). close_reason's
--- CHECK also widened by 0031 (#793) to the three ExitReason values named below,
--- alongside the original bracket-hit/legacy set -- 'exit' stays legal for
--- pre-0031 rows whose specific reason was never recorded (0031's doc comment).
+-- for the per-arm backfill). close_reason's CHECK also widened by 0031 (#793)
+-- to the three ExitReason values named below, alongside the original
+-- bracket-hit/legacy set -- 'exit' stays legal for pre-0031 rows whose
+-- specific reason was never recorded (0031's doc comment).
+-- idx_closed_trades_closed_at predates all of that -- 0005_hot_path_indexes.sql
+-- (the table itself is 0001; 0005 is one of its earliest migrations, not the
+-- first) -- and had never been folded into this block; 0031's table rebuild
+-- (for the CHECK widening above) recreates the same index as a byproduct but
+-- does not originate it.
 CREATE TABLE closed_trades (
   idempotency_key        TEXT PRIMARY KEY,   -- per-lot
   debate_id              TEXT NOT NULL,      -- attribution + setup-store join key
@@ -396,7 +403,7 @@ Resolved: [Decide: Feedback Loop dial tables + adjustment-history schema (#180)]
 -- Folded in by #1251: trace_id + idx_debate_log_trace (0015, correlation to the
 -- Orchestrator's tick); confidence/synthesis/position/disagreement_summary/
 -- open_items_json/converged (0026, the Debate Engine's structured verdict);
--- termination (0041). idx_debate_log_created_at (dashboard time-windowed reads).
+-- termination (0041). idx_debate_log_created_at (0005 — dashboard time-windowed reads).
 CREATE TABLE debate_log (
   debate_id            TEXT PRIMARY KEY,
   instrument           TEXT NOT NULL,
@@ -1024,7 +1031,7 @@ CREATE TABLE llm_spend_cap (
 - Test the migration runner: applying migrations to an empty `:memory:` DB produces the exact schema above; re-applying is a no-op; `schema_migrations` reflects applied versions.
 - Test `openSharedStore`: returns a handle backed by the given path; runs pending migrations; WAL mode and `synchronous=FULL` are set on the connection.
 - Test each table's constraints directly (e.g. `open_positions.asset_class` CHECK rejects an invalid value; `config_trials` upsert-on-conflict overwrites `result_json`; `dial_adjustments.status` transitions correctly; `cosine_setups.debate_id` PK rejects a duplicate write for the same debate).
-- Test that this document's own DDL matches the real schema, mechanically (#1251) — `server/shared/store/spec-schema-drift.test.ts` builds a `:memory:` DB from this document's fenced `CREATE TABLE`/`CREATE INDEX` blocks and a second from the real migration chain, then diffs every table's columns, indexes, and normalized `CREATE TABLE` text (which catches CHECK-constraint drift the other two can't see) in both directions. `CONSOLIDATED_SCHEMA_TABLE_COUNT` in `open-shared-store.test.ts` (above) only ever checked that every table is *named*; this checks that its DDL is *current*.
+- Test that this document's own DDL matches the real schema, mechanically (#1251) — `server/shared/store/spec-schema-drift.test.ts` builds a `:memory:` DB from this document's fenced `CREATE TABLE`/`CREATE INDEX` blocks and a second from the real migration chain, then diffs every table's columns, indexes, and normalized `CREATE TABLE` text (which catches CHECK-constraint drift the other two can't see) in both directions — every table except SQLite's own implicit `sqlite_sequence` AUTOINCREMENT bookkeeping, which neither DB build declares and so is excluded rather than diffed. `CONSOLIDATED_SCHEMA_TABLE_COUNT` in `open-shared-store.test.ts` (above) only ever checked that every table is *named*; this checks that its DDL is *current*.
 - No LLM to mock — this is pure schema/migration/connection-config testing.
 
 ### Modules to Test
