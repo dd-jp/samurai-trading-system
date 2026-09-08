@@ -87,8 +87,12 @@ export interface NormalizedFill {
    * partial fill (see `fetchNewFills`' file doc in alpaca-adapter.ts). A
    * second observation of the same order at a LARGER `filled_qty` therefore
    * carries the same `broker_fill_id` (the order id) — under the SAME lot's
-   * `idempotency_key`, since one order belongs to one lot — as the first,
-   * and `ingestFills()`' `hasFill` gate, keyed on that full pair (#1320),
+   * `idempotency_key`, since one order belongs to one lot WHENEVER this flag
+   * is true (a multi-lot flatten's split fill is exactly the case where one
+   * order's raw fill is deliberately spread across several lots, and
+   * `redistributeOneFlatten` takes it out of scope here by setting this flag
+   * `false` on every split, ingest-fills.ts) — as the first, and
+   * `ingestFills()`' `hasFill` gate, keyed on that full pair (#1320),
    * would skip it as a duplicate, permanently losing the increment. The lot's
    * `filled_size` would then stay at the first observation forever and
    * `resizeProtectiveLegs` (which sets an ABSOLUTE quantity) would arm

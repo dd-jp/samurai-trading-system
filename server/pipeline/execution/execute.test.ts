@@ -1853,7 +1853,8 @@ describe('ExecutionImpl.execute', () => {
           const { execution, broker } = await seedTwoLotsWithPriorExit(store, 4, 11);
           await execution.ingestFills();
           // Re-polled: the split must land identically the second time or the
-          // difference vanishes behind `hasFill`'s `broker_fill_id` dedup.
+          // difference vanishes behind `hasFill`'s dedup on the full
+          // `(idempotency_key, broker_fill_id)` pair (#1320).
           await execution.ingestFills();
 
           const closedTrades = await store.getClosedTrades();
