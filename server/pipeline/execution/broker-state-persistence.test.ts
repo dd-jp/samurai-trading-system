@@ -818,8 +818,6 @@ describe('loadUnpricedFills ordering parity: InMemory vs Sqlite (#1358)', () => 
   });
 
   it('orders by first_seen_at, not insertion order, when seenAt is non-monotonic, identically on both stores', () => {
-    // `lot-late` is inserted first but its `first_seen_at` is LATER than
-    // `lot-early`'s — insertion order and clock order disagree.
     const stores = seedBoth([
       {
         venue: 'alpaca',
@@ -839,10 +837,11 @@ describe('loadUnpricedFills ordering parity: InMemory vs Sqlite (#1358)', () => 
   });
 
   it('breaks a first_seen_at tie by physical insertion order, identically on both stores', () => {
-    // Ids deliberately run OPPOSITE to their insertion order (zebra, mango,
-    // apple) — client_order_id is part of the table's primary key, so a
-    // planner that seeks that index would sort ties alphabetically instead
-    // of by insertion. Ascending ids would let that divergence hide.
+    // Ids run in DESCENDING alphabetical order (zebra, mango, apple) —
+    // client_order_id is part of the table's primary key, so a planner that
+    // seeks that index would sort ties ASCENDING alphabetically instead of
+    // by insertion, giving ['lot-apple', 'lot-mango', 'lot-zebra']. Ascending
+    // ids would let that divergence hide behind agreement with insertion order.
     const tie = new Date('2026-09-05T09:00:00Z');
     const stores = seedBoth([
       { venue: 'alpaca', clientOrderId: 'lot-zebra', brokerFillId: 'bf-1', seenAt: tie },
@@ -870,7 +869,12 @@ describe('loadUnpricedFills ordering parity: InMemory vs Sqlite (#1358)', () => 
 
   it('keeps each venue in its own order when two venues are interleaved, identically on both stores', () => {
     // The `WHERE venue = ?` predicate must not disturb the surviving rows'
-    // relative order for the venue actually loaded.
+    // relative order for the venue actually loaded. `alpaca-zebra` and
+    // `alpaca-apple` additionally tie on `first_seen_at` and run reverse-
+    // alphabetical, so the predicate is exercised alongside the tiebreak too
+    // — not just against distinct-seenAt rows the predicate could pass
+    // through unchanged either way.
+    const tie = new Date('2026-09-05T09:02:00Z');
     const stores = seedBoth([
       {
         venue: 'alpaca',
@@ -884,12 +888,8 @@ describe('loadUnpricedFills ordering parity: InMemory vs Sqlite (#1358)', () => 
         brokerFillId: 'bf-1',
         seenAt: new Date('2026-09-05T09:01:00Z'),
       },
-      {
-        venue: 'alpaca',
-        clientOrderId: 'alpaca-2',
-        brokerFillId: 'bf-2',
-        seenAt: new Date('2026-09-05T09:02:00Z'),
-      },
+      { venue: 'alpaca', clientOrderId: 'alpaca-zebra', brokerFillId: 'bf-2', seenAt: tie },
+      { venue: 'alpaca', clientOrderId: 'alpaca-apple', brokerFillId: 'bf-3', seenAt: tie },
       {
         venue: 'ccxt',
         clientOrderId: 'ccxt-2',
@@ -898,7 +898,7 @@ describe('loadUnpricedFills ordering parity: InMemory vs Sqlite (#1358)', () => 
       },
     ]);
 
-    assertBothOrder(stores, 'alpaca', ['alpaca-1', 'alpaca-2']);
+    assertBothOrder(stores, 'alpaca', ['alpaca-1', 'alpaca-zebra', 'alpaca-apple']);
     assertBothOrder(stores, 'ccxt', ['ccxt-1', 'ccxt-2']);
   });
 });
