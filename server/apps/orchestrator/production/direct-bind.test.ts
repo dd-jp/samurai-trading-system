@@ -28,6 +28,7 @@ import {
   AlwaysOpenCalendar,
   collectMarks,
   type IndicatorSpec,
+  InsufficientBarsError,
   type TradingCalendar,
   UsEquityRegularHoursCalendar,
 } from '../../../providers/market-data-service/index.js';
@@ -869,6 +870,194 @@ describe('buildTraderSteps exit_reason persistence (#748)', () => {
     // Attributed to the debate that OPENED the lot, not to a debate this tick
     // never ran — the tick path has no `DebateResult` at all.
     expect(written[0]?.debate_id).toBe('debate-that-opened-the-lot');
+  });
+});
+
+/**
+ * #1128: `checkExitsWithReason` already computed `decision_class` via
+ * `classifyExitCheckSkip` — the composition threw it away. These pin the fix
+ * AT THE SEAM: change-only for an ordinary skip (the #743 volume argument —
+ * ~30 exit-check calls per bar per instrument at a 2-minute tick against a 1h
+ * bar, tick-runner.ts's own count is "~29 of 30 passes" idle), every
+ * occurrence for the two data-fault reasons, and no row at all for
+ * `no_open_position` — `trader_log.debate_id` is `NOT NULL` (migration 0016)
+ * and a flat instrument has no lot to attribute one to.
+ */
+describe('buildTraderSteps exit-skip decision_class (#1128)', () => {
+  const HELD: OpenPosition = {
+    idempotency_key: 'held-lot',
+    debate_id: 'debate-that-opened-the-lot',
+    instrument: 'AAPL',
+    asset_class: 'stocks',
+    side: 'buy',
+    intent_type: 'entry',
+    requested_size: 50,
+    filled_size: 50,
+    avg_entry_price: 100,
+    stop: 90,
+    target: 110,
+    order_state: 'filled',
+    broker_order_ids: ['broker-1'],
+    opened_at: new Date(NOW.getTime() - 60 * 60 * 1_000),
+    decision_timestamp: new Date(NOW.getTime() - 60 * 60 * 1_000),
+    conviction: 0.6,
+    converged: true,
+  };
+
+  const CONFIG: TraderConfig = {
+    conviction_floor: 0.5,
+    max_risk_per_trade: 0.01,
+    asset_class_risk_multiplier: { crypto: 0.5, stocks: 1 },
+    subclass_brackets: ADR_0018_SUBCLASS_BRACKETS,
+    subclass_of: {},
+    atr_timeframe: '1h',
+    atr_lookback: 14,
+    atr_k: 2,
+    vol_floor_fraction: 0.002,
+    non_converged_haircut: 0.5,
+    reward_risk_multiple: 2,
+    min_viable_notional: 10,
+    whole_share_sizing: false,
+    scale_in_conviction_delta: 0.1,
+    early_exit: DEFAULT_EARLY_EXIT_CONFIG,
+    time_in_force: { crypto: 'gtc', stocks: 'day' },
+    flatten_before_close_ms: 5 * 60 * 1_000,
+  };
+
+  // RSI 60 + a positive MACD histogram nets +1: momentum AGREES with the held
+  // long, so the decay read holds.
+  const HOLDS = async (_instrument: string, spec: IndicatorSpec) => ({
+    indicator: spec.indicator,
+    value: spec.indicator === 'rsi' ? 60 : 0.5,
+    as_of_bar_close: NOW,
+  });
+  // RSI 40 + a negative MACD histogram nets -1 against the held long, the
+  // same reading `exit_reason_persistence`'s `signal_decay` test uses.
+  const DECAYS = async (_instrument: string, spec: IndicatorSpec) => ({
+    indicator: spec.indicator,
+    value: spec.indicator === 'rsi' ? 40 : -0.5,
+    as_of_bar_close: NOW,
+  });
+
+  function build(overrides: {
+    getOpenPositions?: () => Promise<OpenPosition[]>;
+    getIndicator?: typeof HOLDS;
+    traderLog: { write: (record: TraderDecisionRecord) => void };
+  }) {
+    return buildTraderSteps({
+      marketData: { ...FAKE_MARKET_DATA, getIndicator: overrides.getIndicator ?? HOLDS },
+      circuitBreakers: new CircuitBreakers({
+        daily_loss_pct: 0.05,
+        daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
+        max_drawdown_pct: 0.2,
+        max_consecutive_losses: 5,
+        volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
+        auto_rearm: { recovery_drawdown_pct: 0.05, max_days_tripped: 5 },
+      }),
+      accountState: FAKE_ACCOUNT_STATE,
+      volatility: FAKE_VOLATILITY,
+      getOpenPositions: overrides.getOpenPositions ?? (async () => [HELD]),
+      maxMarkAge: TEST_MAX_MARK_AGE,
+      mode: 'paper',
+      breakerState: NOOP_BREAKER_STATE,
+      portfolioSnapshots: new Map(),
+      config: CONFIG,
+      setupStore: new FixtureSetupStore(),
+      getExitFillSizes: async () => new Map<string, number>(),
+      sessionCalendars: {
+        crypto: new AlwaysOpenCalendar(),
+        stocks: new UsEquityRegularHoursCalendar(),
+      },
+      traderLog: overrides.traderLog,
+    });
+  }
+
+  const TICK_BAR = new Date(NOW.getTime() - 60 * 60 * 1_000);
+
+  it('writes decision_class once across repeated ticks with the same skip reason', async () => {
+    const written: TraderDecisionRecord[] = [];
+    const { exitCheck } = build({ traderLog: { write: (record) => written.push(record) } });
+
+    for (let i = 0; i < 3; i++) {
+      const intent = await exitCheck({
+        trace_id: `trace-${i}`,
+        instrument: 'AAPL',
+        clock: CLOCK,
+        bar: TICK_BAR,
+      });
+      expect(intent).toBeNull();
+    }
+
+    expect(written).toHaveLength(1);
+    expect(written[0]?.skip_reason).toBe('signal_still_supports_position');
+    // The defect this ticket closes: `decision_class` reaching the row at
+    // all, not merely a row existing.
+    expect(written[0]?.decision_class).toBe('declined_on_signal');
+    expect(written[0]?.debate_id).toBe('debate-that-opened-the-lot');
+  });
+
+  it('writes again when the skip reason changes', async () => {
+    const written: TraderDecisionRecord[] = [];
+    let indicatorImpl = HOLDS;
+    const { exitCheck } = build({
+      traderLog: { write: (record) => written.push(record) },
+      getIndicator: (async (instrument: string, spec: IndicatorSpec) =>
+        indicatorImpl(instrument, spec)) as typeof HOLDS,
+    });
+
+    await exitCheck({ trace_id: 'trace-a', instrument: 'AAPL', clock: CLOCK, bar: TICK_BAR });
+    indicatorImpl = (async () => {
+      throw new InsufficientBarsError({
+        indicator: 'macd_histogram',
+        period: 26,
+        required: 112,
+        received: 0,
+      });
+    }) as unknown as typeof HOLDS;
+    await exitCheck({ trace_id: 'trace-b', instrument: 'AAPL', clock: CLOCK, bar: TICK_BAR });
+
+    expect(written).toHaveLength(2);
+    expect(written[0]?.skip_reason).toBe('signal_still_supports_position');
+    expect(written[0]?.decision_class).toBe('declined_on_signal');
+    expect(written[1]?.skip_reason).toBe('early_exit_signal_unavailable');
+    expect(written[1]?.decision_class).toBe('input_unusable');
+  });
+
+  it('writes exit_no_filled_size on every occurrence, not change-only', async () => {
+    const written: TraderDecisionRecord[] = [];
+    const { exitCheck } = build({
+      traderLog: { write: (record) => written.push(record) },
+      getIndicator: DECAYS,
+      getOpenPositions: async () => [{ ...HELD, filled_size: 0, requested_size: 0 }],
+    });
+
+    for (let i = 0; i < 2; i++) {
+      await exitCheck({ trace_id: `trace-${i}`, instrument: 'AAPL', clock: CLOCK, bar: TICK_BAR });
+    }
+
+    expect(written).toHaveLength(2);
+    expect(written[0]?.skip_reason).toBe('exit_no_filled_size');
+    expect(written[0]?.decision_class).toBe('input_unusable');
+    expect(written[1]?.skip_reason).toBe('exit_no_filled_size');
+    expect(written[1]?.decision_class).toBe('input_unusable');
+  });
+
+  it('never writes a row for no_open_position — no lot to attribute a debate_id to', async () => {
+    const written: TraderDecisionRecord[] = [];
+    const { exitCheck } = build({
+      traderLog: { write: (record) => written.push(record) },
+      getOpenPositions: async () => [],
+    });
+
+    const intent = await exitCheck({
+      trace_id: 'trace-flat',
+      instrument: 'AAPL',
+      clock: CLOCK,
+      bar: TICK_BAR,
+    });
+
+    expect(intent).toBeNull();
+    expect(written).toHaveLength(0);
   });
 });
 

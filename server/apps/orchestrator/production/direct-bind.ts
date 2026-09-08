@@ -59,7 +59,11 @@ import {
   RISK_CRITIC_SKIPPED_REASON,
   RiskManagerImpl,
 } from '../../../pipeline/risk-manager/index.js';
-import type { TraderConfig, TraderDiagnostic } from '../../../pipeline/trader/index.js';
+import type {
+  TraderConfig,
+  TraderDiagnostic,
+  TraderSkipReason,
+} from '../../../pipeline/trader/index.js';
 import { checkExitsWithReason, decideWithReason } from '../../../pipeline/trader/index.js';
 import type {
   ApprovalChannel,
@@ -285,6 +289,19 @@ export function buildTraderStep(deps: TraderStepDeps): TickSteps['trader'] {
 }
 
 /**
+ * Mirrors `routeExitCheck`'s own `mostRecentLot` derivation in decide.ts
+ * (attribute to the most recently OPENED lot) — not exported from there,
+ * since `TraderOutcome` carries no `debate_id` field for a skip. Recomputed
+ * here from the same `positions` snapshot `checkExitsWithReason` was given,
+ * so the two derivations cannot disagree.
+ */
+function mostRecentDebateId(positions: readonly OpenPosition[], instrument: string): string | null {
+  const held = positions.filter((lot) => lot.instrument === instrument);
+  if (held.length === 0) return null;
+  return held.reduce((latest, lot) => (lot.opened_at > latest.opened_at ? lot : latest)).debate_id;
+}
+
+/**
  * The Trader's TWO step bindings (#743) — the decision-path `trader` and the
  * tick-path `exitCheck` — built together over ONE dependency set and, more
  * importantly, ONE diagnostic throttle. The throttle's job is counting
@@ -303,6 +320,16 @@ export function buildTraderSteps(deps: TraderStepDeps): {
   // body. Held here for the same reason `buildAnalystsStep` holds
   // `consecutiveSkips` — one running orchestrator, in memory, restart-clean.
   const diagnosticThrottle = new TraderDiagnosticThrottle();
+
+  // #1128: the exit-check skip DURABLY recorded per instrument, so a repeat
+  // can be told from a change. Restart-clean and in-memory, matching
+  // `diagnosticThrottle` above. Updated on every exit-check skip, including
+  // `no_open_position` (which itself never reaches `trader_log`, see the
+  // write site below) — skipping that update would leave a stale value from
+  // the position's PREVIOUS holding episode, so a lot opened, held, closed
+  // and reopened with the same first skip reason would look unchanged and
+  // silently lose the second episode's row.
+  const lastExitSkipReason = new Map<string, TraderSkipReason>();
 
   const trader: TickSteps['trader'] = async ({ trace_id, instrument, debate, clock }) => {
     // TraderInput.equity is current portfolio equity (cash + mark-to-market
@@ -450,39 +477,44 @@ export function buildTraderSteps(deps: TraderStepDeps): {
     // No `snapshotForTick` here, deliberately: an exit sizes to the held
     // quantity, never to equity, so the tick path skips the account/portfolio
     // read entirely — the cheapness of the cheap path is the point of #743.
-    const { intent, diagnostics } = await checkExitsWithReason({
-      trace_id,
-      instrument,
-      clock,
-      bar,
-      // #753 — see the decision bind above. The exit intent's idempotency key
-      // needs the arm for the same reason the entry's does: both arms flatten
-      // the same instrument on the same bar.
-      ...(deps.arm === undefined ? {} : { arm: deps.arm }),
-      marketData: deps.marketData,
-      config: deps.config,
-      positionState: deps.getOpenPositions,
-      exitFillSizes: deps.getExitFillSizes,
-      sessionCalendars: deps.sessionCalendars,
-      // #826, and THIS is the binding that matters most: the mandatory
-      // flat-by-close flatten is decided on the tick path (`routeExitCheck`'s
-      // first branch), so an unpriced flatten during an Alpaca stall is
-      // overwhelmingly raised here rather than on the decision path above.
-      onUnpricedFlatten: (report) =>
-        reportExitValuationDegraded(
-          deps,
-          'trader',
-          { trace_id, instrument, clock },
-          { unvalued_instruments: [report.instrument], reason: report.reason },
-        ),
-    });
+    //
+    // Read once and memoized into `positionState` below (#1128) rather than
+    // passed through as `deps.getOpenPositions` directly: `mostRecentDebateId`
+    // needs the same snapshot `routeExitCheck` filters internally, and a
+    // second real call here would double the store read `checkExitsWithReason`
+    // already makes exactly once.
+    const positions = await deps.getOpenPositions();
+    const { intent, skip_reason, decision_class, reason_detail, atr, diagnostics } =
+      await checkExitsWithReason({
+        trace_id,
+        instrument,
+        clock,
+        bar,
+        // #753 — see the decision bind above. The exit intent's idempotency key
+        // needs the arm for the same reason the entry's does: both arms flatten
+        // the same instrument on the same bar.
+        ...(deps.arm === undefined ? {} : { arm: deps.arm }),
+        marketData: deps.marketData,
+        config: deps.config,
+        positionState: async () => positions,
+        exitFillSizes: deps.getExitFillSizes,
+        sessionCalendars: deps.sessionCalendars,
+        // #826, and THIS is the binding that matters most: the mandatory
+        // flat-by-close flatten is decided on the tick path (`routeExitCheck`'s
+        // first branch), so an unpriced flatten during an Alpaca stall is
+        // overwhelmingly raised here rather than on the decision path above.
+        onUnpricedFlatten: (report) =>
+          reportExitValuationDegraded(
+            deps,
+            'trader',
+            { trace_id, instrument, clock },
+            { unvalued_instruments: [report.instrument], reason: report.reason },
+          ),
+      });
 
-    // Written only when the check ACTED (#743) — unlike the decision step,
-    // which records every skip. An exit-cadence "nothing to do" fires ~30x per
-    // bar per instrument and is already durable in `audit_log` as the
-    // `position_check` row; a `trader_log` skip row for each would bury the
-    // decision records the table exists to hold. A fired flatten IS a decision
-    // and is recorded like one, attributed to the debate that opened the lot.
+    // A fired flatten IS a decision and is recorded like one, attributed to
+    // the debate that opened the lot, on every occurrence — an exit is never
+    // volume noise.
     if (intent !== null) {
       deps.traderLog?.write({
         trace_id,
@@ -501,6 +533,48 @@ export function buildTraderSteps(deps: TraderStepDeps): {
         size: intent.size,
         created_at: clock.now(),
       });
+    } else if (skip_reason !== null) {
+      // #1128: `classifyExitCheckSkip`'s `decision_class` used to be computed
+      // and thrown away here. Durable now, but CHANGE-ONLY for most reasons —
+      // #743 measured ~30 exit-check calls per bar per instrument (2-minute
+      // tick, 1h bar; tick-runner.ts's own count is "~29 of 30 passes" idle),
+      // and a row per call would bury the decision records the table exists
+      // to hold under a flat/held instrument repeating its last tick's
+      // answer. `exit_no_filled_size`/`exit_held_quantity_diverged` are
+      // exempt: each is the fill store contradicting itself (#568), rare by
+      // construction, and a data fault an operator must see on every
+      // occurrence, not only its first.
+      const previousReason = lastExitSkipReason.get(instrument);
+      lastExitSkipReason.set(instrument, skip_reason);
+      const isDataFault =
+        skip_reason === 'exit_no_filled_size' || skip_reason === 'exit_held_quantity_diverged';
+      if (isDataFault || previousReason !== skip_reason) {
+        // `no_open_position` fires with zero positions for the instrument, so
+        // there is no lot — and no debate — to attribute the row to, and
+        // `trader_log.debate_id` is `NOT NULL` (migration 0016). Every other
+        // exit-path skip fires with at least one lot open, so its debate_id is
+        // always derivable here.
+        const debate_id = mostRecentDebateId(positions, instrument);
+        if (debate_id !== null) {
+          deps.traderLog?.write({
+            trace_id,
+            instrument,
+            debate_id,
+            intent_type: null,
+            exit_reason: null,
+            skip_reason,
+            decision_class,
+            reason_detail,
+            sizing: null,
+            cosine_precedent: null,
+            atr,
+            entry: null,
+            stop: null,
+            size: null,
+            created_at: clock.now(),
+          });
+        }
+      }
     }
 
     escalateTraderDiagnostics(
