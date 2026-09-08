@@ -68,11 +68,12 @@ import type { DashboardQueryStore } from './types.js';
  * Scope: this guards the render only. `/api/snapshot`'s catch still calls
  * `res.writeHead(500, ...)` after this render succeeds — if the *success*
  * path's own `res.writeHead(200, ...).end(JSON.stringify(snapshot))` already
- * sent headers before throwing (e.g. `JSON.stringify` throwing on a circular
- * snapshot), that second `writeHead(500)` throws `ERR_HTTP_HEADERS_SENT`
- * uncaught, out of this render's reach — a pre-existing, narrower gap this
- * change does not touch. `serveStatic`'s rejection handler doesn't share it:
- * it has its own `res.headersSent` guard before ever reaching this render.
+ * sent headers before throwing (e.g. `JSON.stringify` refusing a value —
+ * a BigInt, a circular reference), that second `writeHead(500)` throws
+ * `ERR_HTTP_HEADERS_SENT` uncaught, out of this render's reach — a
+ * pre-existing, narrower gap this change does not touch. `serveStatic`'s
+ * rejection handler doesn't share it: it has its own `res.headersSent`
+ * guard before ever reaching this render.
  */
 function renderResponderError(err: unknown): string {
   return sanitizeLogText(describeThrownSafely(err));
