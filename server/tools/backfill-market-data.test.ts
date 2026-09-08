@@ -144,6 +144,33 @@ describe('backfillMarketData', () => {
     ]);
   });
 
+  it('refuses a crypto instrument even when the store already holds enough bars to satisfy it (#1157)', async () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteMarketDataStore(db);
+    // A crypto pair backfilled before #1157 removed the crypto fetch leg —
+    // the store still holds a full window of stale bars for it.
+    store.appendBars(generateBars('BTC-USD', '1h', ASOF, 20));
+
+    const coverage = await backfillMarketData({
+      store,
+      universe: [{ asset: 'BTC-USD', asset_class: 'crypto' }] satisfies UniverseInstrument[],
+      windows: [{ timeframe: '1h', lookback: 20 }],
+      asOf: ASOF,
+      fetchEquityBars: async (symbol, window, at) =>
+        generateBars(symbol, window.timeframe, at, window.lookback),
+      print: () => {},
+    });
+
+    expect(coverage).toEqual([
+      expect.objectContaining({
+        instrument: 'BTC-USD',
+        rows: 20,
+        satisfied: false,
+        error: expect.stringContaining('crypto') as string,
+      }),
+    ]);
+  });
+
   it('is idempotent — a second run against an already-warm store makes no fetch calls', async () => {
     const { deps, equityFetches } = buildDeps();
     await backfillMarketData(deps);

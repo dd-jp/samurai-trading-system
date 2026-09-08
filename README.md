@@ -142,7 +142,7 @@ They are overridable because **a rate limit is a property of the account, not of
 
 Alpaca's published limit is **200 requests per minute per account**, shared by the broker calls and the market-data calls. Since #391 both consumers sit inside one bucket, so the sustained default is a deliberate 75% of that ceiling (2.5/s = 150/min), leaving margin for retry attempts and any future consumer on the same key.
 
-**Polygon, Coinbase and Bitstamp are paced separately** (`SAMURAI_PACING_POLYGON_*` / `_COINBASE_*` / `_BITSTAMP_*`, same variable shapes; Polygon's ceiling is 5/min) and are deliberately **not** venue keys — `VENUE_KEYS` is `alpaca`/`ccxt`/`ibkr` only. The live composition root never validates or builds them, so a typo in a Stage-2-only variable cannot kill orchestrator boot mid-soak (#510/#520).
+**Polygon is paced separately** (`SAMURAI_PACING_POLYGON_*`, same variable shapes; ceiling is 5/min) and is deliberately **not** a venue key — `VENUE_KEYS` is `alpaca`/`ccxt`/`ibkr` only. The live composition root never validates or builds it, so a typo in this Stage-2-only variable cannot kill orchestrator boot mid-soak (#510/#520).
 
 #### Optional — durable log sink
 

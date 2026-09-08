@@ -14,9 +14,7 @@
  * Until then the live path had no failover at all, which is the residual
  * gap `backfill-market-data.ts`'s module doc used to record. Live scope is
  * the EQUITIES leg only (Alpaca -> Polygon): crypto left Samurai's scope on
- * 2026-08-16 (ADR-0015's amendment), and #1157 removed the backfill
- * script's Coinbase -> Bitstamp leg entirely rather than leaving it
- * backfill-only.
+ * 2026-08-16 (ADR-0015's amendment).
  *
  * **"Failure" here means a THROW from `primary`, not a short-but-successful
  * read.** `AlpacaHttpDataClient` widens-and-retries and only then throws

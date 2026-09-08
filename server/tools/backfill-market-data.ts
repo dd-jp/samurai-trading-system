@@ -106,14 +106,11 @@
  * its own stdout (#791). What remains true: the live path fails over BARS
  * only (never marks or quotes).
  *
- * **Crypto backfill removed (#1157).** This script backfilled a Coinbase
- * (primary) -> Bitstamp (fallback) crypto leg until #1157: crypto left
- * Samurai's scope 2026-08-16 (ADR-0015's amendment) and `DEFAULT_UNIVERSE`
- * has carried no crypto instrument since #738, so that leg had no caller
- * left — its only reachers were its own two clients' tests, the repo's named
- * dominant defect class. `backfillMarketData` below now refuses any
- * `asset_class: 'crypto'` row outright (a SHORT coverage row, not a silent
- * misroute onto equities data) instead of keeping the fetch path alive.
+ * **Crypto is refused, not fetched.** `backfillMarketData` below treats any
+ * `asset_class: 'crypto'` row as refused outright — always a SHORT coverage
+ * row, even when the store already holds a full window for it — because
+ * crypto left Samurai's scope 2026-08-16 (ADR-0015's amendment). This script
+ * has no crypto fetch leg.
  *
  * ## Resumable and idempotent
  *
@@ -209,9 +206,8 @@ export interface CoverageRow {
  * `Bar.source` values that must never be treated as a clean source of
  * record (#791/#612). Polygon-only, deliberately: `stage2-source.ts`'s own
  * direct `HttpPolygonClient` use is a separate, already-settled decision
- * (#612 (2)) this constant does not touch, and the crypto leg this backfill
- * once ran (Coinbase primary / Bitstamp fallback) was removed entirely by
- * #1157 rather than quarantined.
+ * (#612 (2)) this constant does not touch. Crypto is refused outright above
+ * (never fetched), so there is no crypto source to quarantine.
  */
 export const QUARANTINED_BAR_SOURCES: ReadonlySet<string> = new Set(['polygon']);
 
@@ -249,7 +245,15 @@ export async function backfillMarketData(deps: BackfillMarketDataDeps): Promise<
 
       let rows = existing;
       let fetchError: string | undefined;
-      if (existing.length < window.lookback) {
+      const isCrypto = instrument.asset_class === 'crypto';
+      // Unconditional, checked before the "is the store already warm" branch
+      // below: stale bars from before #1157 must not satisfy a crypto row.
+      if (isCrypto) {
+        fetchError =
+          "backfillMarketData: crypto backfill is not supported — crypto left Samurai's " +
+          "scope 2026-08-16 (ADR-0015's amendment) and #1157 removed this script's " +
+          'Coinbase/Bitstamp fetch leg';
+      } else if (existing.length < window.lookback) {
         // A thrown fetch (a rate-limit hiccup, a genuinely sparse window)
         // must not abort the whole run — every OTHER pair, and every pair
         // already fetched this run, has already durably persisted its bars
@@ -257,19 +261,8 @@ export async function backfillMarketData(deps: BackfillMarketDataDeps): Promise<
         // away from the OPERATOR's view even though the store itself kept
         // it. Caught here, turned into a SHORT row instead (AC: "so a short
         // backfill is visible rather than silent") — never rethrown, so this
-        // catch cannot itself throw out of the loop. A crypto instrument
-        // hits the same path: #1157 removed the crypto fetch leg entirely,
-        // so refusing here (a SHORT row) is deliberate — the alternative,
-        // falling through to `fetchEquityBars`, would silently price a
-        // crypto symbol off an equities venue.
+        // catch cannot itself throw out of the loop.
         try {
-          if (instrument.asset_class === 'crypto') {
-            throw new Error(
-              "backfillMarketData: crypto backfill is not supported — crypto left Samurai's " +
-                "scope 2026-08-16 (ADR-0015's amendment) and #1157 removed this script's " +
-                'Coinbase/Bitstamp fetch leg',
-            );
-          }
           const fetched = await deps.fetchEquityBars(instrument.asset, window, deps.asOf);
           deps.store.appendBars(fetched);
           rows = deps.store.readBars(
@@ -312,7 +305,7 @@ export async function backfillMarketData(deps: BackfillMarketDataDeps): Promise<
         required: window.lookback,
         first_bar: rows[0]?.close_time.toISOString(),
         last_bar: rows.at(-1)?.close_time.toISOString(),
-        satisfied: rows.length >= window.lookback,
+        satisfied: !isCrypto && rows.length >= window.lookback,
         error: fetchError,
         source: rows.at(-1)?.source,
         quarantined: rows.some((bar) => QUARANTINED_BAR_SOURCES.has(bar.source)),
