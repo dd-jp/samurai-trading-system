@@ -177,8 +177,12 @@ interface OrderIntent {
                                  // rejects `day`, equities take `day`, so one value
                                  // cannot serve a universe spanning both.
   decision_timestamp: Date;      // the bar/decision time (retained from the idempotency-key
-                                 // hash input). Downstream (Verdict) needs it for the
-                                 // signal-staleness gate; the hash alone doesn't expose it.
+                                 // hash input) — the idempotency key and `OpenPosition`
+                                 // persistence still read this; no freshness gate does any
+                                 // more (#1190 moved `staleness` onto `decided_at` below).
+  decided_at: Date;              // clock.now() at Trader intent-build time, never floored to
+                                 // a bar (#1190). Verdict's `staleness` gate (gate 1) reads
+                                 // this; `decision_timestamp` above doesn't expose it.
   metadata: OrderIntentMetadata;
 }
 
