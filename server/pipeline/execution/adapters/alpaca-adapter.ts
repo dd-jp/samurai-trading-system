@@ -281,17 +281,20 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * `submitFlatten`'s POST. #1415: the flatten-sweep counterpart of
    * `bracketSubmittedAt` above. The two cannot share one map the way
    * `rearmedLegs` shares `bracketSubmittedAt`'s key space (#1123) — a
-   * flatten's client_order_id is a different value from its lot's, generated
-   * fresh by `executeExit`, not derived from it. Same first-write-wins
-   * population (a retried/idempotent resubmission under the same
-   * client_order_id must not move the bound past a fill the true first
-   * submission already covers) and the same accepted gap: `resumeFlatten`
-   * (below) has no same-process clock read to offer, so a flatten resumed
-   * after a restart has no entry here and stays unaudited — the same
-   * asymmetry `bracketSubmittedAt`'s doc describes for a `getOrder`-restored
-   * bracket. Never pruned, for the same reason `bracketSubmittedAt` is not:
-   * bounded by total distinct flattens ever submitted over the process's
-   * life, not by however many `flattens` currently tracks.
+   * flatten's client_order_id is a different value from its lot's, minted by
+   * `buildExitIntent` via `computeIdempotencyKey` (trader/decide.ts);
+   * `executeExit` only ever derives a `:retry-N` suffix from it
+   * (`resolveExitRetryKey`, execute.ts), it does not mint the base key.
+   * Same first-write-wins population (a retried/idempotent resubmission
+   * under the same client_order_id must not move the bound past a fill the
+   * true first submission already covers) and the same accepted gap:
+   * `resumeFlatten` (below) has no same-process clock read to offer, so a
+   * flatten resumed after a restart has no entry here and stays unaudited —
+   * the same asymmetry `bracketSubmittedAt`'s doc describes for a
+   * `getOrder`-restored bracket. Pruned alongside `flattens` (below) — once
+   * `flattens` drops a client_order_id on a terminal fill, this bound can
+   * never be read again, so keeping it around past that point would only be
+   * a leak.
    */
   private readonly flattenSubmittedAt = new Map<string, Date>();
   /**
@@ -1083,7 +1086,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       event: 'alpaca_fill_predates_bracket_submission',
       level: 'warn',
       message:
-        '#1123: Alpaca fill dated before its own bracket was submitted — the ingest-fills since-floor invariant may be violated',
+        '#1123: Alpaca fill dated before its own order was submitted — the ingest-fills since-floor invariant may be violated',
       payload: {
         client_order_id: clientOrderId,
         broker_fill_id: order.id,
@@ -1306,6 +1309,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         collectFill(order, 'exit', clientOrderId, instrument, since, observedAt, fills);
         if (mapOrderState(order.status) !== 'submitted') {
           this.flattens.delete(clientOrderId);
+          this.flattenSubmittedAt.delete(clientOrderId);
         }
       } catch (error) {
         // Same isolation, same UnpricedFillError bookkeeping, and (#524
