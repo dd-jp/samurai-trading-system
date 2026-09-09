@@ -122,9 +122,8 @@ export class ExecutionImpl implements Execution {
     // against the store, cancelling the held lot's bracket, journalling the
     // flatten and submitting it is enough steps that inlining them here
     // would bury the bracket path below in an unrelated branch. See
-    // `executeExit` for what PR #516's review added on top of the original
-    // #508 wiring (cancel-before-flatten, the store cross-check, and the
-    // `flatten_submissions` journal) and why each exists.
+    // `executeExit`'s doc for why each of those steps — cancel-before-flatten,
+    // the store cross-check, and the `flatten_submissions` journal — exists.
     if (order.intent_type === 'exit') {
       return executeExit(this.input, order, idempotencyKey, now);
     }
@@ -165,7 +164,7 @@ export class ExecutionImpl implements Execution {
       decision_timestamp: order.decision_timestamp,
       conviction: order.metadata.conviction,
       converged: order.metadata.converged,
-      // #1014 review: omitted (not `null`) when there is none, matching every
+      // #1014: omitted (not `null`) when there is none, matching every
       // other optional snapshot field below. `decisionPriceFor` only ever
       // returns null on the unpriced-exit path, which never reaches here —
       // an exit builds no `OpenPosition` — but the type is honest about it
@@ -282,8 +281,7 @@ interface SubmitSnapshot {
  * would only be a second chance for the same feed to hang, inside the one
  * window (#826) a hang must never widen.
  *
- * NOT "never blocking" — an earlier revision of this comment claimed that, and
- * it was false. These reads are `await`ed inline before the caller's
+ * This IS blocking: these reads are `await`ed inline before the caller's
  * write-ahead, and every one of them routes through `fetchWithTimeout` (10s
  * per attempt) under `withRetry` (3 attempts), so a stalled feed costs roughly
  * 30s on the quote read and another ~30s on the `Promise.all` cost-model
@@ -359,8 +357,8 @@ async function captureSubmitSnapshot(
 
 /**
  * #1001: the price the trading INTENT was formed at — which is not the same
- * thing as `order.entry` on every path, and #1014's review was right that
- * persisting it unconditionally would put a fake number on the money path.
+ * thing as `order.entry` on every path. Persisting it unconditionally would
+ * put a fake number on the money path (#1014).
  *
  * On an entry/scale_in, `order.entry` IS the decision price: the Trader
  * computed it from the mark it decided on, and it is the limit actually
@@ -372,8 +370,7 @@ async function captureSubmitSnapshot(
  * a BRACKET it is meaningless (nothing consults it; `executeExit` submits a
  * market flatten sized to the held quantity). But the VALUE is not fake in
  * the priced case: it is the last known mark, read at the moment the exit was
- * decided, which is exactly the "last known mark" the review offers as the
- * honest substitute.
+ * decided — the honest substitute for a decision price an exit never had.
  *
  * The one genuinely fake case is the UNPRICED flatten (#826): `readExitPrice`
  * returns `price: 0` when the feed is dark, because a flatten is mandatory and
@@ -431,7 +428,7 @@ async function readSubmitSnapshot(
       );
     }
 
-    // #1014 review, finding 1: the Simulated adapter prices the SAME order
+    // #1014: the Simulated adapter prices the SAME order
     // with the SAME `CostModel.fill` moments later, and that call is the
     // authoritative one — its result becomes the fill's own price, qty, fee
     // AND `NormalizedFill.cost_breakdown`, which `toFill` /
@@ -451,7 +448,7 @@ async function readSubmitSnapshot(
     // pre-priced fill (it is the venue; it must price its own) or reaching
     // into it from here — both put a simulation detail into the code path
     // live takes. Skipping keeps the boundary intact and leaves the simulated
-    // path with exactly ONE pricing, which is what the review asked for.
+    // path with exactly ONE pricing.
     //
     // The quote read above is NOT skipped: nothing else captures a bid/ask on
     // this path, and it has no second writer to disagree with.
@@ -593,41 +590,39 @@ async function resolveExitRetryKey(store: SharedStore, baseKey: string): Promise
 }
 
 /**
- * The `exit` branch of `execute()` (#508, hardened by PR #516's review).
- * Four steps, each answering one thing the review found genuinely missing:
+ * The `exit` branch of `execute()` (#508). Four steps, in this order, each
+ * enforcing an invariant a different ordering or omission would break:
  *
- * 1. **Cross-check against the store** (review comment 3). `execute()` holds
- *    the store and is the last checkpoint before funds move, so it does not
- *    forward `order.size`/`order.side` to the venue purely on trust that
+ * 1. **Cross-check against the store.** `execute()` holds the store and is
+ *    the last checkpoint before funds move, so it does not forward
+ *    `order.size`/`order.side` to the venue purely on trust that
  *    `buildExitIntent` (trader/decide.ts) summed the held quantity and
  *    derived the closing side correctly. It refuses on any mismatch rather
  *    than clamping — a wrong-sized exit is a bug to surface, not to
  *    silently correct into something smaller/safer-looking.
- * 2. **Journal the attempt** (review comments 2+4) — write-ahead to
- *    `flatten_submissions` BEFORE any broker call, mirroring the bracket
- *    path's `writeAheadPosition`. An exit has no bracket and no
- *    `OpenPosition` to write ahead, so without this row a replay of the
- *    same decision sailed past `findByKey` every time, and a
- *    `submitFlatten` response lost to a timeout left no durable clientOrderId
- *    for #86's reconcile to resolve against.
- * 3. **Cancel the held lot's bracket before flattening** (review comment 1).
- *    `submitFlatten` is a plain, unrelated market order — it does not touch
- *    the held lot's stop/target legs (confirmed against the Alpaca adapter:
- *    `cancel()` is the only path that reaches `cancelOrder`; `submitFlatten`
- *    never does). Left alone, those legs stay live and working at the venue
- *    after the flatten fills, and the next one to fire does not "close"
- *    anything — the position is already flat, so it OPENS A REVERSE
- *    POSITION instead. Cancelling first removes that resting order
- *    entirely; the alternative order (flatten, then cancel) leaves a real
- *    window where a leg can fire into the now-flat position before the
- *    cancel lands. If a cancel fails, the flatten is refused outright: a
- *    market order sent while it is unknown whether the legs it was meant to
- *    clear are actually gone would defeat the whole point of cancelling
- *    first. #867 kept that refusal and removed its SILENCE — see the cancel
- *    loop's own comment for what a `cancel()` throw does and does not
- *    guarantee, and for the lots this path now marks unprotected so the
- *    #549 sweep re-arms them.
- * 4. **Submit, then resolve the journal row** — the original #508 shape.
+ * 2. **Journal the attempt** — write-ahead to `flatten_submissions` BEFORE
+ *    any broker call, mirroring the bracket path's `writeAheadPosition`. An
+ *    exit has no bracket and no `OpenPosition` to write ahead, so without
+ *    this row a replay of the same decision sailed past `findByKey` every
+ *    time, and a `submitFlatten` response lost to a timeout left no durable
+ *    clientOrderId for #86's reconcile to resolve against.
+ * 3. **Cancel the held lot's bracket before flattening.** `submitFlatten` is
+ *    a plain, unrelated market order — it does not touch the held lot's
+ *    stop/target legs (confirmed against the Alpaca adapter: `cancel()` is
+ *    the only path that reaches `cancelOrder`; `submitFlatten` never does).
+ *    Left alone, those legs stay live and working at the venue after the
+ *    flatten fills, and the next one to fire does not "close" anything —
+ *    the position is already flat, so it OPENS A REVERSE POSITION instead.
+ *    Cancelling first removes that resting order entirely; the alternative
+ *    order (flatten, then cancel) leaves a real window where a leg can fire
+ *    into the now-flat position before the cancel lands. If a cancel fails,
+ *    the flatten is refused outright: a market order sent while it is
+ *    unknown whether the legs it was meant to clear are actually gone would
+ *    defeat the whole point of cancelling first. That refusal is never
+ *    silent — see the cancel loop's own comment for what a `cancel()` throw
+ *    does and does not guarantee, and for the lots this path marks
+ *    unprotected so the #549 sweep re-arms them.
+ * 4. **Submit, then resolve the journal row.**
  */
 async function executeExit(
   input: ExecutionInput,
@@ -766,22 +761,21 @@ async function executeExit(
   });
 
   // Lots this loop has ALREADY cancelled successfully, in order. Load-bearing
-  // for the catch below (#867), which is the only thing that reads it.
+  // for the catch below, which is the only thing that reads it.
   const cancelledLots: OpenPosition[] = [];
   for (const lot of heldLots) {
     try {
       await broker.cancel(lot.idempotency_key, order.instrument);
       cancelledLots.push(lot);
     } catch (error) {
-      // WHAT IS GUARANTEED HERE (corrected by #867): no `submitFlatten` was
-      // issued, so — unlike the `submitFlatten` failure below — no order
-      // exists under this idempotency key for reconcile to adopt, and the
-      // row resolves to 'error' immediately rather than sitting at
-      // 'submitting' for a sweep that would find nothing.
+      // WHAT IS GUARANTEED HERE: no `submitFlatten` was issued, so — unlike
+      // the `submitFlatten` failure below — no order exists under this
+      // idempotency key for reconcile to adopt, and the row resolves to
+      // 'error' immediately rather than sitting at 'submitting' for a sweep
+      // that would find nothing.
       //
-      // WHAT IS NOT GUARANTEED, and what this comment used to claim ("provably
-      // never reached the broker at all"): that the broker was not reached, or
-      // that the lots' protective legs survived. Two ways they may not have:
+      // WHAT IS NOT GUARANTEED: that the broker was not reached, or that the
+      // lots' protective legs survived. Two ways they may not have:
       // an EARLIER lot in this loop whose cancel returned successfully has
       // provably lost its stop and target, and even the FAILING lot's cancel
       // may have landed at the venue with only its response lost. Refusing
