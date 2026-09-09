@@ -1068,12 +1068,10 @@ describe('SaxoBrokerAdapter protective legs', () => {
     const client = makeClient();
     const { adapter } = makeAdapter(client);
 
-    const error = await adapter
-      .rearmProtectiveLegs('key-3usl-0930', '3USL', 'buy', 3, 9, 12)
-      .then(
-        () => undefined,
-        (thrown: unknown) => thrown,
-      );
+    const error = await adapter.rearmProtectiveLegs('key-3usl-0930', '3USL', 'buy', 3, 9, 12).then(
+      () => undefined,
+      (thrown: unknown) => thrown,
+    );
 
     // Both halves matter. The discriminator is what stops the #549 sweep
     // retrying a gap that can never close; throwing outside `this.call` is

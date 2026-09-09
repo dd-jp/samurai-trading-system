@@ -438,7 +438,9 @@ describe('residual-protection sweep (#549)', () => {
       }),
     );
     // Still marked: nothing about the diagnosis protects the position.
-    expect((await restartedStore.getResidualProtectionMarker(LOT))?.unprotected_since).not.toBeNull();
+    expect(
+      (await restartedStore.getResidualProtectionMarker(LOT))?.unprotected_since,
+    ).not.toBeNull();
   });
 
   it('keeps an ordinary re-arm failure readable as retryable (#1214)', async () => {
