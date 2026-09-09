@@ -6,6 +6,7 @@
  * helpers are not re-exported here.
  */
 
+export { BOOK_CURRENCY, isBookCurrency, isPenceCurrency } from './book-currency.js';
 export type { Clock } from './clock.js';
 export { SimulatedClock, SystemClock } from './clock.js';
 export type {

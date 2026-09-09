@@ -11,6 +11,7 @@ import type {
   ExecutionConfig,
   FlattenReconcileAlertChannel,
   LegResizeUnverifiedAlertChannel,
+  NonSterlingFeeAlertChannel,
   OcoDoubleFillAlertChannel,
   ResidualExposureAlertChannel,
   SaxoOpenApiClient,
@@ -471,6 +472,26 @@ export interface AlertChannelSlots {
    * (#322) supplies.
    */
   llmFailureRateAlerts?: LlmFailureRateAlertChannel;
+  /**
+   * Where a fill fee reported outside book currency is escalated (#1465) —
+   * the other half of #1220, which raised `FEE_CURRENCY_NOT_BOOK_CURRENCY` at
+   * `error` with no channel behind it. `warnOnNonSterlingFee`
+   * (pipeline/execution/ingest-fills.ts) posts here. Absent = log-only, and
+   * there is deliberately NO `Logging…Channel` standing in behind it, the
+   * same reason `traderDiagnosticAlerts`/`thresholdClampAlerts` have none:
+   * `warnOnNonSterlingFee` already writes an `error`-level log line before
+   * reaching this port, so a logging implementation would emit each trip
+   * twice. `TradeChannelNonSterlingFeeAlert`
+   * (non-sterling-fee-alert-channel.ts) is what an unattended soak (#238)
+   * needs, and `SAMURAI_ALERTS=telegram` supplies it — the twenty-fifth
+   * `ALERT_CHANNEL_FIELDS` member.
+   *
+   * A foreign fee means an instrument was traded that `tradeableUniverse()`
+   * should already have excluded (#1220's sterling-only gate) — a
+   * selection-layer defect that already reached the venue with real money,
+   * not a transient data glitch.
+   */
+  nonSterlingFeeAlerts?: NonSterlingFeeAlertChannel;
 }
 
 /**

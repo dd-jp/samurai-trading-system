@@ -103,6 +103,10 @@ export type {
   LegResizeUnverifiedAlert,
   LegResizeUnverifiedAlertChannel,
 } from './leg-resize-unverified-alert.js';
+export type {
+  NonSterlingFeeAlert,
+  NonSterlingFeeAlertChannel,
+} from './non-sterling-fee-alert.js';
 export type { OcoDoubleFillAlert, OcoDoubleFillAlertChannel } from './oco-double-fill-alert.js';
 export { TERMINAL_SWEEP_AGE_MS } from './reconcile.js';
 export type {

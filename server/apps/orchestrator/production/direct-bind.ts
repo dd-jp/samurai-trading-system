@@ -31,6 +31,7 @@ import type {
   FilledZeroSizeThrottle,
   FlattenOverfillAlertChannel,
   FlattenReconcileAlertChannel,
+  NonSterlingFeeAlertChannel,
   ResidualExposureAlertChannel,
   SharedStore,
 } from '../../../pipeline/execution/index.js';
@@ -1475,6 +1476,8 @@ export interface ExecutionStepDeps {
   logger: Logger;
   /** #1087's per-lot throttle — see `ExecutionInput.filledZeroSizeThrottle`. */
   filledZeroSizeThrottle: FilledZeroSizeThrottle;
+  /** #1465's non-sterling-fee page — see `ExecutionInput.nonSterlingFeeAlerts`. Optional, same as there. */
+  nonSterlingFeeAlerts?: NonSterlingFeeAlertChannel;
 }
 
 /**
@@ -1503,6 +1506,9 @@ export function buildExecutionStep(deps: ExecutionStepDeps): TickSteps['executio
       flattenReconcileAlerts: deps.flattenReconcileAlerts,
       logger: deps.logger,
       filledZeroSizeThrottle: deps.filledZeroSizeThrottle,
+      ...(deps.nonSterlingFeeAlerts === undefined
+        ? {}
+        : { nonSterlingFeeAlerts: deps.nonSterlingFeeAlerts }),
     });
     return execution.execute(verdict);
   };
@@ -1539,6 +1545,9 @@ export function buildExecutionSurface(deps: ExecutionStepDeps, traceId: string):
     flattenReconcileAlerts: deps.flattenReconcileAlerts,
     logger: deps.logger,
     filledZeroSizeThrottle: deps.filledZeroSizeThrottle,
+    ...(deps.nonSterlingFeeAlerts === undefined
+      ? {}
+      : { nonSterlingFeeAlerts: deps.nonSterlingFeeAlerts }),
   });
 }
 

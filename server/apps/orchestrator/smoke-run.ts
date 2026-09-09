@@ -6400,6 +6400,16 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       legResizeAlerts: new LoggingLegResizeUnverifiedAlertChannel(logger),
       dormantLegsAlerts: new LoggingDormantLegsUnresolvedAlertChannel(logger),
       priceUnitAlerts: new LoggingUnresolvedPriceUnitAlertChannel(logger),
+      // #1465 — the twenty-fifth `ALERT_CHANNEL_FIELDS` member. A bare no-op,
+      // same reason as `traderDiagnosticAlerts`/`thresholdClampAlerts` above:
+      // this port has deliberately no `Logging…Channel` (its caller already
+      // writes an `error`-level line first), and the condition itself —
+      // a broker reporting a fee outside book currency — cannot be provoked
+      // by this offline run's Simulated adapter, which never sets
+      // `fee_currency` at all. Real enforcement evidence is
+      // `ingest-fills.test.ts`'s "#1465" suite, which drives the alert end to
+      // end against a scripted broker.
+      nonSterlingFeeAlerts: { postNonSterlingFeeAlert: async () => {} },
     } satisfies Required<AlertChannels>;
 
     const orchestrator = await startFromEnvironment({
