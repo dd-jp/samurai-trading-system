@@ -59,6 +59,7 @@
 
 import type { ClosedTrade, Fill, OpenPosition, OrderState } from '../../shared/index.js';
 import { logCaughtFailure, safeLog } from '../../shared/index.js';
+import { isProtectiveRearmUnsupported } from './protective-rearm-unsupported.js';
 import type { ExecutionInput, NormalizedFill } from './types.js';
 
 /** A fill on a protective/closing leg — anything that isn't opening the lot. */
@@ -1260,7 +1261,11 @@ async function maybeRearmResidual(
       // #549: the alert-dedup marker records only a delivery the
       // channel ACCEPTED — a swallowed transport failure must leave the
       // episode un-alerted so the sweep pages again on its next pass.
-      if (await alertResidualExposure(input, position, position.requested_size, now, true)) {
+      if (
+        await alertResidualExposure(input, position, position.requested_size, now, {
+          residualQtyIsUpperBound: true,
+        })
+      ) {
         await bestEffortMarkerWrite(input, position, now, 'mark-alerted');
       }
       return;
@@ -1341,15 +1346,36 @@ async function maybeRearmResidual(
     // every broker adapter convert what its client threw into a curated,
     // credential-free error before it is visible here, so the credentialed
     // original never reaches this catch either.
+    //
+    // #1214: a venue that cannot express an entry-less protective pair at
+    // all refuses this call permanently, and the #549 sweep will re-attempt
+    // it on every pass regardless — a venue's capabilities are re-read on
+    // every attempt, not cached here. What must differ is what the operator
+    // is told: "retry failed" trains them to wait for a sweep that will
+    // never succeed.
+    const unsupported = isProtectiveRearmUnsupported(error);
     logCaughtFailure(
       input.logger,
-      {
-        trace_id: input.trace_id,
-        stage: 'execution',
-        event: 'residual_rearm_failed',
-        level: 'error',
-        message: 'maybeRearmResidual: broker.rearmProtectiveLegs failed — alerting instead',
-      },
+      // Two whole entries rather than one with a conditional `event`: every
+      // logged code must be a bare snake_case literal, greppable from the
+      // source (`log-event-code.test.ts`).
+      unsupported
+        ? {
+            trace_id: input.trace_id,
+            stage: 'execution',
+            event: 'residual_rearm_unsupported',
+            level: 'error',
+            message:
+              'maybeRearmResidual: this venue cannot arm protective legs at all, so no retry ' +
+              'can protect this residual — alerting for manual action at the venue',
+          }
+        : {
+            trace_id: input.trace_id,
+            stage: 'execution',
+            event: 'residual_rearm_failed',
+            level: 'error',
+            message: 'maybeRearmResidual: broker.rearmProtectiveLegs failed — alerting instead',
+          },
       error,
       { idempotency_key: position.idempotency_key, residual_qty: residual },
     );
@@ -1358,7 +1384,11 @@ async function maybeRearmResidual(
     // delivery (#549) — so the sweep retries the re-arm on cadence
     // without paging again for a page that actually landed (#342), and DOES
     // page again for one a transport outage swallowed.
-    if (await alertResidualExposure(input, position, residual, now)) {
+    if (
+      await alertResidualExposure(input, position, residual, now, {
+        rearmUnsupported: unsupported,
+      })
+    ) {
       await bestEffortMarkerWrite(input, position, now, 'mark-alerted');
     }
   }
@@ -1424,6 +1454,30 @@ async function bestEffortMarkerWrite(
 }
 
 /**
+ * The two qualifiers a caller can put on the page. Named rather than
+ * positional (#1214): both are booleans that read identically at a call
+ * site, and every producer sets at most one of them.
+ */
+export interface ResidualExposureFlags {
+  /**
+   * `true` only on the path where the fill read failed and `residualQty` is
+   * therefore the lot's whole requested size rather than the exact residual
+   * (#569).
+   */
+  residualQtyIsUpperBound?: boolean;
+  /**
+   * `true` when the re-arm was refused as impossible on this venue rather
+   * than merely failing (#1214, `isProtectiveRearmUnsupported`) — see
+   * `ResidualExposureAlert.rearm_unsupported`. Only the two paths that
+   * actually attempted a re-arm can set it; the paths that never got that
+   * far leave it false, which reads as "not known to be impossible", the
+   * conservative direction for a flag that tells an operator whether waiting
+   * is an option.
+   */
+  rearmUnsupported?: boolean;
+}
+
+/**
  * The #525 fallback, posted when a re-arm failed or could not be safely
  * attempted. Fire-and-forget and fully swallowed on failure — the alert IS
  * the fallback, so there is nothing left to fall back to if delivering it
@@ -1447,13 +1501,9 @@ export async function alertResidualExposure(
   position: OpenPosition,
   residualQty: number,
   now: Date,
-  /**
-   * `true` only on the path where the fill read failed and `residualQty` is
-   * therefore the lot's whole requested size rather than the exact residual
-   * (#569). Defaulted so the two exact call sites read unchanged.
-   */
-  residualQtyIsUpperBound = false,
+  flags: ResidualExposureFlags = {},
 ): Promise<boolean> {
+  const residualQtyIsUpperBound = flags.residualQtyIsUpperBound ?? false;
   try {
     await input.residualExposureAlerts.postResidualExposureAlert({
       trace_id: input.trace_id,
@@ -1462,6 +1512,7 @@ export async function alertResidualExposure(
       side: position.side,
       residual_qty: residualQty,
       residual_qty_is_upper_bound: residualQtyIsUpperBound,
+      rearm_unsupported: flags.rearmUnsupported ?? false,
       stop: position.stop,
       target: position.target,
       observed_at: now,

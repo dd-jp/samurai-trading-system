@@ -59,10 +59,39 @@
  * attempt, alerted or not, still leaves a trace: failures via
  * `logCaughtFailure` (#608), outcomes via the `ReconcileDivergence`s this
  * returns, which both callers log per entry.
+ *
+ * ## When the venue can never re-arm at all (#1214)
+ *
+ * The Idempotency section above lists three adapters that CAN re-arm. Saxo
+ * cannot: every LSE pool line reports `IsOcoOrderSupported: false` (doc 43),
+ * so an entry-less stop+target pair is inexpressible and
+ * `SaxoBrokerAdapter.rearmProtectiveLegs` refuses before it reaches the
+ * venue (`ProtectiveRearmUnsupportedError`). This sweep still retries it on
+ * every pass — deliberately: a venue capability is re-read on each attempt
+ * rather than cached here, an operator who re-arms by hand is not helped by
+ * this loop giving up, and the attempt costs no venue call. What changes is
+ * the REPORT: the log line, the divergence reason and the page all say the
+ * gap is permanent, because "retry failed" trains an operator to wait for a
+ * pass that can never succeed.
+ *
+ * That leaves the alert as the only remedy on such a venue, which is a
+ * position #1214 records rather than one this file chooses — the two
+ * mechanical alternatives it lists (a hand-emulated OCO carrying #586's
+ * double-fill race, or re-flattening the residual instead of protecting it)
+ * both change what the system DOES with live money and are the owner's call.
+ * The bound on the exposure meanwhile is ADR-0014's flat-by-close: a marked
+ * lot is still an open position, so `buildExitIntent` (trader/decide.ts)
+ * targets it in the flatten window like any other.
  */
 
 import { describeThrownSafely, logCaughtFailure, safeLog } from '../../shared/index.js';
-import { alertResidualExposure, coversQty, recordedExposure } from './ingest-fills.js';
+import {
+  alertResidualExposure,
+  coversQty,
+  type ResidualExposureFlags,
+  recordedExposure,
+} from './ingest-fills.js';
+import { isProtectiveRearmUnsupported } from './protective-rearm-unsupported.js';
 import type {
   ExecutionInput,
   ReconcileDivergence,
@@ -172,7 +201,9 @@ async function sweepOne(
       error,
       { idempotency_key: key },
     );
-    await alertResidualExposureOnce(input, row, position.requested_size, now, true);
+    await alertResidualExposureOnce(input, row, position.requested_size, now, {
+      residualQtyIsUpperBound: true,
+    });
     return {
       idempotency_key: key,
       instrument: position.instrument,
@@ -219,7 +250,9 @@ async function sweepOne(
   // same shape as the fill-read-failure path above. The divergence reason
   // below still names the real recomputed value for diagnosis.
   if (!(residual > 0) || !Number.isFinite(residual)) {
-    await alertResidualExposureOnce(input, row, position.requested_size, now, true);
+    await alertResidualExposureOnce(input, row, position.requested_size, now, {
+      residualQtyIsUpperBound: true,
+    });
     return {
       idempotency_key: key,
       instrument: position.instrument,
@@ -243,23 +276,41 @@ async function sweepOne(
       position.target,
     );
   } catch (error) {
+    // #1214: separated from an ordinary failure, and ONLY in what is
+    // reported. The retry itself is unchanged — see the file doc's
+    // permanent-gap section for why this pass does not stop attempting.
+    const unsupported = isProtectiveRearmUnsupported(error);
     // Every attempt leaves a trace (#608); the PAGE is once per episode —
     // see the file doc's escalation section.
     logCaughtFailure(
       input.logger,
-      {
-        trace_id: input.trace_id,
-        stage: 'execution',
-        event: 'residual_rearm_failed',
-        level: 'error',
-        message:
-          'sweepResidualProtection: broker.rearmProtectiveLegs retry failed — the marker stays ' +
-          'and the next pass retries',
-      },
+      // Two whole entries rather than one with a conditional `event`: every
+      // logged code must be a bare snake_case literal, greppable from the
+      // source (`log-event-code.test.ts`).
+      unsupported
+        ? {
+            trace_id: input.trace_id,
+            stage: 'execution',
+            event: 'residual_rearm_unsupported',
+            level: 'error',
+            message:
+              'sweepResidualProtection: this venue cannot arm protective legs at all, so no ' +
+              'pass of this sweep can protect the lot — the marker stays and only manual ' +
+              'action at the venue clears it',
+          }
+        : {
+            trace_id: input.trace_id,
+            stage: 'execution',
+            event: 'residual_rearm_failed',
+            level: 'error',
+            message:
+              'sweepResidualProtection: broker.rearmProtectiveLegs retry failed — the marker ' +
+              'stays and the next pass retries',
+          },
       error,
       { idempotency_key: key, residual_qty: residual },
     );
-    await alertResidualExposureOnce(input, row, residual, now, false);
+    await alertResidualExposureOnce(input, row, residual, now, { rearmUnsupported: unsupported });
     return {
       idempotency_key: key,
       instrument: position.instrument,
@@ -267,7 +318,10 @@ async function sweepOne(
       broker_state: null,
       action: 'undetermined',
       kind: 'sweep',
-      reason: `re-arm retry failed for residual ${residual}: ${describeThrownSafely(error)}`,
+      reason: unsupported
+        ? `this venue cannot arm protective legs at all, so residual ${residual} stays naked ` +
+          `until an operator acts at the venue: ${describeThrownSafely(error)}`
+        : `re-arm retry failed for residual ${residual}: ${describeThrownSafely(error)}`,
     };
   }
 
@@ -324,16 +378,10 @@ async function alertResidualExposureOnce(
   row: UnprotectedResidualLot,
   residualQty: number,
   now: Date,
-  residualQtyIsUpperBound: boolean,
+  flags: ResidualExposureFlags,
 ): Promise<void> {
   if (row.alerted_at !== null) return;
-  const delivered = await alertResidualExposure(
-    input,
-    row.position,
-    residualQty,
-    now,
-    residualQtyIsUpperBound,
-  );
+  const delivered = await alertResidualExposure(input, row.position, residualQty, now, flags);
   if (!delivered) return;
   try {
     const recorded = await input.store.markResidualAlerted(row.position.idempotency_key, now);

@@ -191,9 +191,11 @@ export class LoggingResidualExposureAlertChannel implements ResidualExposureAler
       stage: 'execution',
       event: 'residual_exposure_unprotected',
       level: 'error',
-      message:
-        'a partially-filled flatten left a residual position and re-arming its protective ' +
-        'legs failed — the position is unprotected; check the order on the venue by hand',
+      message: alert.rearm_unsupported
+        ? 'a residual position is unprotected and this venue cannot arm protective legs at ' +
+          'all, so no retry will ever protect it — close or protect the order by hand'
+        : 'a partially-filled flatten left a residual position and re-arming its protective ' +
+          'legs failed — the position is unprotected; check the order on the venue by hand',
       // Field by field, so `trace_id` is not repeated inside the payload it
       // already labels the entry with.
       payload: {
@@ -202,6 +204,7 @@ export class LoggingResidualExposureAlertChannel implements ResidualExposureAler
         side: alert.side,
         residual_qty: alert.residual_qty,
         residual_qty_is_upper_bound: alert.residual_qty_is_upper_bound,
+        rearm_unsupported: alert.rearm_unsupported,
         stop: alert.stop,
         target: alert.target,
         observed_at: alert.observed_at.toISOString(),

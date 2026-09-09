@@ -84,6 +84,20 @@ export interface ResidualExposureAlert {
    * and a persistent store outage reads as a stream of confident alerts.
    */
   residual_qty_is_upper_bound: boolean;
+  /**
+   * `true` when the venue cannot express an entry-less protective pair AT
+   * ALL (#1214) — Saxo, where every pool line reports
+   * `IsOcoOrderSupported: false` (doc 43) — so the #549 sweep's retries can
+   * never clear this and the operator is the only remedy. `false` is the
+   * ordinary case: a re-arm that failed and will be retried on cadence, or a
+   * path that could not safely attempt one.
+   *
+   * The distinction is the whole point of the page. Without it both cases
+   * read "re-arming failed", and an operator who has learned that the sweep
+   * usually fixes those has no way to tell the one that never will. A flag
+   * chosen here, not the error's text — see the CREDENTIALS note below.
+   */
+  rearm_unsupported: boolean;
   /** The price levels re-arming was attempted at — the lot's own, unchanged by the resize. */
   stop: number;
   target: number;

@@ -11,6 +11,7 @@ import { recordingLogger } from '../../shared/recording-logger.js';
 import type { CostModel } from '../../tools/backtest/index.js';
 import { ExecutionImpl } from './execute.js';
 import { FilledZeroSizeThrottle } from './filled-zero-size-throttle.js';
+import { ProtectiveRearmUnsupportedError } from './protective-rearm-unsupported.js';
 import { openTestExecutionStore, TestExecutionStore } from './sqlite-store-harness.js';
 import type {
   BrokerAck,
@@ -396,6 +397,66 @@ describe('residual-protection sweep (#549)', () => {
       unprotected_since: null,
       alerted_at: null,
     });
+  });
+
+  it('reports a venue that can NEVER re-arm as a permanent gap, not as a retry that failed (#1214)', async () => {
+    // Saxo: every pool line reports `IsOcoOrderSupported: false`, so
+    // `rearmProtectiveLegs` refuses before it ever reaches the venue. The
+    // marker and the retry cadence are unchanged — the lot IS unprotected,
+    // and a venue's capabilities are re-read on every attempt — but what the
+    // operator is told must not read as "the venue had a bad minute".
+    const { db, store } = openTestExecutionStore();
+    await seedPosition(store);
+    await seedPartiallyFlattenedFills(store);
+    await store.markResidualUnprotected(LOT, NOW);
+
+    const restartedStore = new TestExecutionStore(db);
+    const broker = new SweepBroker();
+    broker.rearmFailure = new ProtectiveRearmUnsupportedError(
+      'saxo',
+      'IsOcoOrderSupported false on every pool line',
+    );
+    const alerts = makeResidualExposureAlerts();
+    const logger = recordingLogger();
+    const execution = new ExecutionImpl(makeInput(broker, restartedStore, alerts, logger));
+
+    const result = await execution.sweepResidualProtection();
+
+    expect(result.divergences).toHaveLength(1);
+    expect(result.divergences[0]?.action).toBe('undetermined');
+    expect(result.divergences[0]?.reason).toMatch(/cannot arm protective legs at all/);
+    expect(alerts.alerts[0]).toMatchObject({
+      idempotency_key: LOT,
+      residual_qty: 6,
+      rearm_unsupported: true,
+    });
+    expect(logger.entries).toContainEqual(
+      expect.objectContaining({
+        level: 'error',
+        event: 'residual_rearm_unsupported',
+        payload: expect.objectContaining({ idempotency_key: LOT, residual_qty: 6 }),
+      }),
+    );
+    // Still marked: nothing about the diagnosis protects the position.
+    expect((await restartedStore.getResidualProtectionMarker(LOT))?.unprotected_since).not.toBeNull();
+  });
+
+  it('keeps an ordinary re-arm failure readable as retryable (#1214)', async () => {
+    const { db, store } = openTestExecutionStore();
+    await seedPosition(store);
+    await seedPartiallyFlattenedFills(store);
+    await store.markResidualUnprotected(LOT, NOW);
+
+    const restartedStore = new TestExecutionStore(db);
+    const broker = new SweepBroker();
+    broker.rearmFailure = new Error('venue briefly unreachable');
+    const alerts = makeResidualExposureAlerts();
+    const execution = new ExecutionImpl(makeInput(broker, restartedStore, alerts));
+
+    const result = await execution.sweepResidualProtection();
+
+    expect(result.divergences[0]?.reason).toMatch(/re-arm retry failed/);
+    expect(alerts.alerts[0]).toMatchObject({ rearm_unsupported: false });
   });
 
   it('re-pages on the next pass when the alert channel swallowed the first delivery — dedup records only accepted pages (#549 review)', async () => {
