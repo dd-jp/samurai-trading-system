@@ -72,6 +72,15 @@ type ExitFill = Fill & { leg: 'stop' | 'target' | 'exit' };
  */
 export const FILLED_WITH_ZERO_SIZE = 'filled position has zero filled_size' as const;
 
+/**
+ * #1383: the matching clear-side transition line for `FILLED_WITH_ZERO_SIZE`
+ * — a distinct message/event, not a reuse of the warn one, so a listener
+ * (`FilledZeroSizeWarningRecorder`-style filter on the warn message) does not
+ * pick up the all-clear as another occurrence of the condition.
+ */
+export const FILLED_ZERO_SIZE_CLEARED =
+  'a lot previously warned zero-filled-size has advanced past zero' as const;
+
 export async function ingestFills(input: ExecutionInput): Promise<void> {
   const { clock, broker, store } = input;
 
@@ -1152,8 +1161,21 @@ async function advanceLot(
   // was counting for it is genuinely over now, confirmed by `filledSize > 0`
   // above (not merely by `newFills.length > 0`, which a non-entry fill on a
   // still-wedged lot would also satisfy). Clears an entry that never warned
-  // (never reached the repeat threshold) as readily as one that did.
-  input.filledZeroSizeThrottle.clear(position.idempotency_key);
+  // (never reached the alert threshold) as readily as one that did — only
+  // the former case logs below, since an episode that never paged has
+  // nothing to report as cleared (mirrors `reportAdvisoryWarnings`'s
+  // `hadWarnings` gate in tick-runner.ts).
+  const { hadWarned } = input.filledZeroSizeThrottle.clear(position.idempotency_key);
+  if (hadWarned) {
+    safeLog(input.logger, {
+      trace_id: input.trace_id,
+      stage: 'execution',
+      event: 'fill_zero_size_cleared',
+      level: 'info',
+      message: FILLED_ZERO_SIZE_CLEARED,
+      payload: { idempotency_key: position.idempotency_key, instrument: position.instrument },
+    });
+  }
 
   const avgEntryPrice = weightedAvgPrice(entryFills);
   const flat = coversQty(totalQty(exitFills), filledSize);

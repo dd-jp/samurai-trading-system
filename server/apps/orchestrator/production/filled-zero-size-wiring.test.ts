@@ -5,8 +5,9 @@
  * names, and this repo's dominant defect class: #322).
  *
  * `ingest-fills.test.ts` and `filled-zero-size-throttle.test.ts` already
- * prove the mechanism ITSELF — the warning fires, throttles at 1-then-every-
- * 8th, carries `stuck_ms`/`consecutive`. Neither can prove the thing this
+ * prove the mechanism ITSELF — the warning fires once per episode (#1383;
+ * transition-only, not the pre-#1383 1-then-every-8th repeat), carries
+ * `stuck_ms`/`consecutive`. Neither can prove the thing this
  * file exists for: that `production.ts`'s `executionDeps.filledZeroSizeThrottle`
  * is the SAME instance every surface built from it shares, for the process's
  * whole lifetime — the property finding 2's throttle depends on to actually
@@ -230,12 +231,16 @@ describe('the FILLED_WITH_ZERO_SIZE throttle is wired through the real compositi
    * builds two surfaces off the SAME `executionDeps` — exactly what
    * production does when it builds `fillSyncExecution` once at startup and
    * polls it forever — can see a throttle that quietly stopped being shared.
-   * Applying that exact mutation locally: this test goes red — the second
-   * warning's `consecutive` no longer reaches 11 (`surfaceB` restarts its
-   * own fresh count instead of continuing `surfaceA`'s streak); reverting
-   * restores green.
+   *
+   * Post-#1383 (transition-only, warn once per episode) the shared/unshared
+   * difference shows up in warning COUNT rather than in a `consecutive`
+   * value reaching 11: shared, `surfaceB`'s polls land inside `surfaceA`'s
+   * already-warned episode and stay silent (one warning total); unshared,
+   * `surfaceB` starts its own fresh episode and warns again on ITS OWN 3rd
+   * poll (two warnings total). Applying the mutation locally: this test goes
+   * red — `warnings` has length 2, not 1; reverting restores green.
    */
-  it('shares one throttle across every surface built from the same executionDeps, so the warning reaches the root logger throttled', async () => {
+  it('shares one throttle across every surface built from the same executionDeps, so a second surface does not re-warn mid-episode', async () => {
     const logger = recordingLogger();
     const { entries } = logger;
     const order: NormalizedOrder = {
@@ -269,23 +274,21 @@ describe('the FILLED_WITH_ZERO_SIZE throttle is wired through the real compositi
     // `buildExecutionSurface(components.executionDeps, ...)`, built once.
     const surfaceA = buildExecutionSurface(components.executionDeps, 'trace-wiring-a');
     await surfaceA.reconcile();
-    // Six polls: `ALERT_AFTER_CONSECUTIVE_ZERO_SIZE=3` stays quiet for the
-    // first two (consecutive 1, 2), warns on the 3rd, then
-    // `ALERT_REPEAT_EVERY_ZERO_SIZE=8` withholds the rest (consecutive 4, 5, 6).
-    for (let poll = 0; poll < 6; poll += 1) {
+    // Three polls: `ALERT_AFTER_CONSECUTIVE_ZERO_SIZE=3` stays quiet for the
+    // first two (consecutive 1, 2), warns once on the 3rd.
+    for (let poll = 0; poll < 3; poll += 1) {
       await surfaceA.ingestFills();
     }
 
     // Surface #2: a SEPARATE `buildExecutionSurface` call against the SAME
     // `components.executionDeps` — the shape a second consumer of the same
     // root's deps takes. If the root silently stopped threading one shared
-    // throttle instance, this surface would start its own count at 1 and
-    // stay quiet through its whole run below (5 polls never reaches 3 twice
-    // over); instead the streak must continue from 6.
+    // throttle instance, this surface would start its own fresh episode at
+    // consecutive 1 and warn again on ITS OWN 3rd poll (3 polls is enough to
+    // reach that); sharing correctly, these three polls land inside
+    // `surfaceA`'s already-warned episode (consecutive 4, 5, 6) and stay silent.
     const surfaceB = buildExecutionSurface(components.executionDeps, 'trace-wiring-b');
-    // Five more polls: consecutive 7, 8, 9, 10, 11 — the 11th is the next
-    // Nth-repeat boundary after the first warning at 3 (3, 11, 19, ...).
-    for (let poll = 0; poll < 5; poll += 1) {
+    for (let poll = 0; poll < 3; poll += 1) {
       await surfaceB.ingestFills();
     }
 
@@ -299,24 +302,18 @@ describe('the FILLED_WITH_ZERO_SIZE throttle is wired through the real compositi
     expect(await components.executionStore.getFills('key-1')).toHaveLength(0);
 
     const warnings = entries.filter((entry) => entry.message === FILLED_WITH_ZERO_SIZE);
-    // Exactly two: the throttle counted eleven polls as ONE continuous streak
-    // across two independently-built surfaces, not two streaks of their own.
-    expect(warnings).toHaveLength(2);
+    // Exactly one: the throttle counted all six polls as ONE continuous
+    // episode across two independently-built surfaces, not two episodes of
+    // their own (see the mutation note above the test for what breaks this).
+    expect(warnings).toHaveLength(1);
     expect(warnings[0]?.payload).toMatchObject({
       idempotency_key: 'key-1',
       instrument: 'AAPL',
       order_state: 'filled',
       consecutive: 3,
     });
-    expect(warnings[1]?.payload).toMatchObject({
-      idempotency_key: 'key-1',
-      instrument: 'AAPL',
-      order_state: 'filled',
-      consecutive: 11,
-    });
-    // Every warning carries how long the lot has been stuck, so a throttled
-    // (silent) poll still leaves the ONE line that does get through
-    // informative rather than merely "still wedged".
+    // The one warning carries how long the lot has been stuck, so the single
+    // line that does get through is informative rather than merely "wedged".
     for (const warning of warnings) {
       expect(typeof (warning.payload as { stuck_ms?: unknown })?.stuck_ms).toBe('number');
     }

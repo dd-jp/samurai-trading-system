@@ -15,7 +15,7 @@ import { buildArmComparison } from '../control-arm/arm-comparison.js';
 import { SqliteArmComparisonSource } from '../control-arm/sqlite-arm-comparison-source.js';
 import { ExecutionImpl } from './execute.js';
 import { FilledZeroSizeThrottle } from './filled-zero-size-throttle.js';
-import { FILLED_WITH_ZERO_SIZE } from './ingest-fills.js';
+import { FILLED_WITH_ZERO_SIZE, FILLED_ZERO_SIZE_CLEARED } from './ingest-fills.js';
 import { openTestExecutionStore, TestExecutionStore } from './sqlite-store-harness.js';
 import type {
   BrokerAck,
@@ -3158,7 +3158,7 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
     expect(logger.entries.some((e) => e.message === FILLED_WITH_ZERO_SIZE)).toBe(false);
   });
 
-  it('reports and re-reports the anomaly (never self-resolves) when the broker offers a fill dated before the lot it belongs to', async () => {
+  it('warns exactly once for a permanently wedged lot, never re-reporting while it stays wedged (#1383)', async () => {
     // The shape a broker that VIOLATES the invariant produces (what
     // `SimulatedBrokerAdapter` did before #1087): a fill dated earlier than
     // its own lot's `opened_at`. `ScriptedBroker.fetchNewFills` filters by
@@ -3186,14 +3186,14 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
     const execution = new ExecutionImpl(makeInput(broker, store, undefined, undefined, logger));
 
     await execution.reconcile();
-    // Throttled (#1087 review, `FilledZeroSizeThrottle`): quiet for the first
-    // two consecutive wedged polls (`ALERT_AFTER_CONSECUTIVE_ZERO_SIZE=3` —
-    // review pass 2's fix for the documented benign "once or twice" Alpaca
-    // propagation lag), warns on the 3rd, then every 8th thereafter
-    // (`ALERT_REPEAT_EVERY_ZERO_SIZE`) — 11 polls is the minimum that proves
-    // both ends, not just the first. Not a race that resolves on any of
-    // them — genuinely permanent.
-    for (let poll = 0; poll < 11; poll += 1) {
+    // Throttled (#1087 review, `FilledZeroSizeThrottle`, rebuilt #1383 to
+    // transition-only): quiet for the first two consecutive wedged polls
+    // (`ALERT_AFTER_CONSECUTIVE_ZERO_SIZE=3` — review pass 2's fix for the
+    // documented benign "once or twice" Alpaca propagation lag), warns once
+    // on the 3rd, then silent for as long as the lot stays wedged. 40 polls
+    // — many multiples of the old every-8th-repeat cadence — proves the
+    // silence holds, not just that it starts.
+    for (let poll = 0; poll < 40; poll += 1) {
       await execution.ingestFills();
     }
 
@@ -3203,19 +3203,55 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
     expect(await store.getFills('key-1')).toHaveLength(0);
 
     const warnings = logger.entries.filter((e) => e.message === FILLED_WITH_ZERO_SIZE);
-    expect(warnings).toHaveLength(2);
+    expect(warnings).toHaveLength(1);
     expect(warnings[0]?.payload).toMatchObject({
       idempotency_key: 'key-1',
       instrument: 'AAPL',
       order_state: 'filled',
       consecutive: 3,
     });
-    expect(warnings[1]?.payload).toMatchObject({
-      idempotency_key: 'key-1',
-      instrument: 'AAPL',
-      order_state: 'filled',
-      consecutive: 11,
+    // Never cleared (the lot never advances), so no cleared transition either.
+    expect(logger.entries.some((e) => e.message === FILLED_ZERO_SIZE_CLEARED)).toBe(false);
+  });
+
+  it('warns again when a wedged lot clears and later re-enters the condition (#1383)', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 10 });
+    const entryFill = fill({
+      broker_fill_id: 'e1',
+      leg: 'entry',
+      qty: 10,
+      price: 100,
+      timestamp: new Date(OPENED_AT.getTime() - 1),
     });
+    const broker = new ScriptedBroker([entryFill]);
+    broker.scriptedOrder = {
+      client_order_id: 'key-1',
+      broker_order_ids: ['key-1:entry', 'key-1:stop', 'key-1:target'],
+      order_state: 'filled',
+      filled_qty: 10,
+    };
+    const logger = recordingLogger();
+    const execution = new ExecutionImpl(makeInput(broker, store, undefined, undefined, logger));
+
+    await execution.reconcile();
+    // Wedged for 3 polls: warns once, at consecutive: 3.
+    await execution.ingestFills();
+    await execution.ingestFills();
+    await execution.ingestFills();
+    expect(logger.entries.filter((e) => e.message === FILLED_WITH_ZERO_SIZE)).toHaveLength(1);
+
+    // The entry fill finally lands within the `since` floor — the lot
+    // advances past zero, clearing the episode. The clear is announced
+    // because this episode DID warn (`FilledZeroSizeThrottle.clear()`'s
+    // `hadWarned`, unit-tested directly in filled-zero-size-throttle.test.ts;
+    // per-lot/per-episode independence — a different lot warning on its own,
+    // and a cleared-then-rewedged lot warning again — is pinned there too,
+    // where the state machine actually lives).
+    broker.replaceFills([{ ...entryFill, timestamp: new Date('2026-07-20T15:00:00Z') }]);
+    await execution.ingestFills();
+    expect(logger.entries.filter((e) => e.message === FILLED_ZERO_SIZE_CLEARED)).toHaveLength(1);
+    expect((await store.getPosition('key-1'))?.filled_size).toBe(10);
   });
 
   it('does not reset the wedge streak when a non-entry fill lands on a still-wedged lot (#1087 review, pass 2)', async () => {

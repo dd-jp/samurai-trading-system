@@ -208,7 +208,10 @@ export class TokenBucket {
       trace_id: currentTraceId() ?? 'token-bucket',
       stage: 'rate_limit',
       event: 'token_bucket_wait',
-      level: 'warn',
+      // #1383: pacing under a working bucket is expected behaviour, not a
+      // fault to page on — `TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS` above is what
+      // still keeps genuine starvation visible.
+      level: 'info',
       message:
         `token_bucket_wait: the '${this.telemetry.name}' bucket paced a ${lane} caller for ` +
         `${roundedWaitMs}ms before granting a token.`,
