@@ -1325,6 +1325,7 @@ describe('buildRiskStep', () => {
       target: 110,
       time_in_force: 'day',
       decision_timestamp: NOW,
+      decided_at: NOW,
       metadata: {
         debate_id: 'debate-1',
         conviction: 0.8,
@@ -2298,6 +2299,7 @@ describe('buildVerdictStep', () => {
         target: 110,
         time_in_force: 'day',
         decision_timestamp: NOW,
+        decided_at: NOW,
         metadata: {
           debate_id: 'debate-1',
           conviction: 0.8,
@@ -2409,6 +2411,7 @@ describe('buildVerdictStep', () => {
         target: 110,
         time_in_force: 'day',
         decision_timestamp: NOW,
+        decided_at: NOW,
         metadata: {
           debate_id: 'debate-1',
           conviction: 0.8,
@@ -2519,6 +2522,7 @@ describe('buildVerdictStep', () => {
         target: 110,
         time_in_force: 'day',
         decision_timestamp: NOW,
+        decided_at: NOW,
         metadata: {
           debate_id: 'debate-1',
           conviction: 0.8,
@@ -2586,6 +2590,7 @@ describe('buildVerdictStep', () => {
         target: 110,
         time_in_force: 'day',
         decision_timestamp: NOW,
+        decided_at: NOW,
         metadata: {
           debate_id: 'debate-2',
           conviction: 0.8,
