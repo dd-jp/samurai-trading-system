@@ -42,6 +42,11 @@ describe('TradeChannelFlattenReconcileAlert.postFlattenReconcileAlert', () => {
     });
 
     expect(telegram.sendMessage).toHaveBeenCalledTimes(1);
+    const [, text] = (telegram.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      string,
+    ];
+    expect(text).toContain('[fill-sync]');
   });
 
   // DECISION (David, 2026-09-08, #1349): the control arm's broker is

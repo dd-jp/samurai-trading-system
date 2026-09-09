@@ -164,7 +164,9 @@ export interface AlertChannelSlots {
    * (flatten-reconcile-alert-channel.ts) is what an unattended soak (#238)
    * needs, and `SAMURAI_ALERTS=telegram` supplies it, the same move #551
    * made for `residualExposureAlerts` — the tenth `ALERT_CHANNEL_FIELDS`
-   * member.
+   * member. The two channels deliberately diverge since #1349: this one
+   * pages the live arm only, with the surface `trace_id` in the text;
+   * `residualExposureAlerts` pages both arms unlabelled (#1348).
    */
   flattenReconcileAlerts?: FlattenReconcileAlertChannel;
   /**

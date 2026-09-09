@@ -20,8 +20,9 @@
  * Discord copy.
  *
  * Control-arm alerts are dropped before either transport is touched
- * (#1349, `isControlArmTraceId` below) — reconcile() itself still logs every
- * arm's divergence unconditionally, so this only removes the page.
+ * (#1349, `isControlArmTraceId` below). The log line is the caller's
+ * (fill-sync.ts: every divergence at startup, deduped per lot and action on
+ * the poll) and is untouched, so this only removes the page.
  */
 import type {
   FlattenReconcileAlert,
