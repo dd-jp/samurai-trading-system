@@ -15,6 +15,7 @@ export {
   decide,
   decideWithReason,
   type ExitCheckInput,
+  mostRecentOpenLot,
   type TraderDiagnostic,
   type TraderDiagnosticKind,
   type TraderOutcome,
