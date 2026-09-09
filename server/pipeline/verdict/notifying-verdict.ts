@@ -4,8 +4,8 @@
  * See docs/specs/verdict-spec.md story 2 ("emit a VerdictDecision... so that
  * Execution and the audit log have a complete final record") and story 14
  * ("fills and no-gos also posted to the trade channel"). In backtest mode,
- * inject a no-op `TradeChannelNotifier` (same pattern as `ApprovalChannel`'s
- * no-op auto-approve there) rather than branching on `mode` here.
+ * the composition root injects a no-op `TradeChannelNotifier` rather than
+ * this decorator branching on `mode` itself.
  */
 
 import { isNotableVerdict } from './notifications/notable-verdict.js';
