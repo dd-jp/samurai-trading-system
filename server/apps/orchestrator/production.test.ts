@@ -83,7 +83,7 @@ import {
   X_SEARCH_MODEL,
 } from '../../providers/market-intelligence/index.js';
 import type { ClosedTrade, OrderIntent, TradingArm } from '../../shared/index.js';
-import { SimulatedClock, TokenBucket } from '../../shared/index.js';
+import { currentTraceId, SimulatedClock, TokenBucket } from '../../shared/index.js';
 import type { NousCredentials } from '../../shared/llm/index.js';
 import { DEFAULT_NOUS_MODELS } from '../../shared/llm/index.js';
 import {
@@ -97,7 +97,7 @@ import { LLM_SPEND_CAP_BREACH } from './breach-alert-channel.js';
 import { LoggingBreachAlertChannel, UnwiredApprovalChannel } from './console-channels.js';
 import { DebateBarDecisionGate } from './decision-bar-gate.js';
 import { FILL_SYNC_TRACE_ID, RECONCILE_TRACE_ID } from './fill-sync.js';
-import { LIVE_BOOK_GBP, paperStartingProfile } from './paper-profile.js';
+import { LIVE_BOOK_GBP, LIVE_BOOK_SIZING_USD, paperStartingProfile } from './paper-profile.js';
 import {
   CONTROL_FILL_SYNC_TRACE_ID,
   CONTROL_RECONCILE_TRACE_ID,
@@ -7995,6 +7995,61 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
     // asserted here too so a control that silently stops sizing fails a unit
     // test first.
     expect(lotsByArm(db).map((lot) => lot.arm)).toEqual(['control', 'live']);
+  });
+
+  /**
+   * #1180 — the anchor's FALLBACK is in the account's currency too, pinned at
+   * the composition root.
+   *
+   * `control-account-state.test.ts` passes `fallbackBook` in, so it holds for
+   * whatever the caller hands it and cannot see which value `production.ts`
+   * actually wires. Reverting that argument to `LIVE_BOOK_GBP` therefore left
+   * the whole suite green: the control arm would have anchored at 1,000
+   * against a live arm clamped to the 1,270 ceiling — the scale mismatch the
+   * anchor exists to avoid — with nothing to fail.
+   *
+   * The live provider is made to throw only under the CONTROL trace: the live
+   * arm's own Risk stage reads the same provider (`direct-bind.ts`), so a stub
+   * that always threw would take the live tick down and this case would be
+   * measuring an aborted tick instead of the fallback.
+   */
+  it('falls back to the converted book, not the raw GBP one, when the live account is unreadable (#1180)', async () => {
+    await runOneDecisionPass({
+      handle: db,
+      llmClient: llmForOneDebate(),
+      configOverrides: {
+        accountState: {
+          getAccountState: async () => {
+            if (currentTraceId()?.endsWith(':control') === true) {
+              throw new Error('live account unreadable on this tick');
+            }
+            return {
+              cash: 100_000,
+              peak_equity: 100_000,
+              daily_basis: {
+                crypto: { known: true, open_equity: 100_000, realized_pnl: 0 },
+                stocks: { known: true, open_equity: 100_000, realized_pnl: 0 },
+                portfolio: { known: true, open_equity: 100_000, realized_pnl: 0 },
+              } as const,
+              consecutive_losses: 0,
+            };
+          },
+        },
+      },
+    });
+
+    const control = db
+      .prepare('SELECT equity FROM risk_log WHERE trace_id = ?')
+      .get('trace-753:control') as { equity: number } | undefined;
+    // Flat at Risk time, so the control's equity IS the resolved book.
+    expect(control?.equity).toBe(LIVE_BOOK_SIZING_USD);
+    // #972 fix 2: the fallback is this tick's answer and never the persisted
+    // anchor. Its absence also proves the read really did fail — a successful
+    // read writes this row.
+    const anchor = db
+      .prepare('SELECT peak_equity FROM account_state WHERE key = ?')
+      .get(CONTROL_BOOK_ANCHOR_KEY) as { peak_equity: number } | undefined;
+    expect(anchor).toBeUndefined();
   });
 
   /**

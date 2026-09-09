@@ -36,6 +36,11 @@
 -- trend. `basis` is stored per row rather than assumed: it is the denominator
 -- BOTH arms were divided by (`LIVE_BOOK_GBP` today), and a row read back after
 -- the book is re-based must still be interpretable against the basis it used.
+--
+-- #1180 landed and re-based it: the denominator is now `LIVE_BOOK_SIZING_USD`,
+-- the same converted figure the Trader sizes against. That is exactly the case
+-- the per-row column exists for — rows written before it stay readable at the
+-- basis they carry, and only `sizing_capital_ceiling` was backfilled (0052).
 
 CREATE TABLE arm_comparison_samples (
   -- The FL cycle instant, ISO-8601 UTC with milliseconds (`toStoredTimestamp`).

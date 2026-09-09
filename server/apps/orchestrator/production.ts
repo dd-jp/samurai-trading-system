@@ -2397,6 +2397,13 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
         // 1,270 ceiling would make the control arm size off the fallback while
         // the live arm sized off the ceiling, which is the scale mismatch the
         // "anchor stays above the ceiling" note below depends on not having.
+        //
+        // Both branches are therefore in the ACCOUNT's currency: a true
+        // `same_currency_verified` asserts the account is denominated in the
+        // book's currency, which is what makes the raw `book` the right figure
+        // there. Nothing sets that flag today and `risk-manager/types.ts` holds
+        // it refused by design, so that branch needs a live FX feed or a
+        // GBP-native adapter (#946) before it is reachable at all.
         fallbackBook:
           config.riskConfig.live_book_ceiling?.same_currency_verified === true
             ? config.riskConfig.live_book_ceiling.book
