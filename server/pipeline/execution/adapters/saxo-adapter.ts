@@ -11,7 +11,13 @@
  *   only if absent, and treat a 409 as "look again", never as failure.
  * - The bracket is an IfDone master (Limit entry) with two related orders
  *   (`StopIfTraded` stop, `Limit` target). The venue holds the state machine
- *   and cancels the related orders with the master (VERIFIED).
+ *   and cancels the related orders with the master on an explicit cancel
+ *   (VERIFIED, doc 43). What Saxo does to a `DayOrder` master's own related
+ *   orders when it EXPIRES unfilled at session end, rather than being
+ *   cancelled, is UNVERIFIED (#1215) — `findOpen`'s `Status` check defends
+ *   against that regardless of the venue's answer: a related-order pair
+ *   found still `NotWorking` (never activated) with no master present is
+ *   cancelled and reported as nothing to adopt, never as a phantom fill.
  * - `IsOcoOrderSupported` is false on every pool line, so an entry-less
  *   protective pair cannot be expressed; `rearmProtectiveLegs` throws.
  * - Amounts are whole units (`MinimumLotSize` 1, `OddLotsNotAllowed`) and
@@ -45,6 +51,7 @@ import type {
   SaxoBuySell,
   SaxoDurationType,
   SaxoOpenApiClient,
+  SaxoOpenOrder,
   SaxoOrderActivity,
   SaxoOrderPlacement,
   SaxoOrderRequest,
@@ -481,8 +488,19 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
         },
       };
     }
-    // Only the protective legs still open: they activate solely on the entry's
-    // fill, so the entry is filled for their amount.
+    // Only the protective legs still open. `Status` says why the master is
+    // gone: `Working` is a related order that ACTIVATED on the entry's fill
+    // (the master itself left the open list because it filled, not because
+    // it expired) — the case this branch originally assumed unconditionally.
+    // `NotWorking` is the value Saxo reports for a related order still
+    // parked, never activated (doc 43 fixtures). If every leg found here is
+    // still `NotWorking` with no master present, the entry expired unfilled
+    // and the legs were left dangling rather than swept with it — Saxo's own
+    // behaviour on that expiry is UNVERIFIED on SIM (#1215). Reporting
+    // 'filled' in that case would journal a position that was never opened
+    // and leave a stop/target free to fire against it later, so a dormant
+    // pair is cancelled here instead of adopted, regardless of what the
+    // venue would otherwise have done with them.
     const legs = open.filter(
       (order) =>
         order.ExternalReference === legReference(externalReference, 'stop') ||
@@ -490,6 +508,10 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     );
     const [first] = legs;
     if (first === undefined) return null;
+    if (legs.every((leg) => leg.Status === 'NotWorking')) {
+      await this.cancelDormantLegs(legs);
+      return null;
+    }
     const ids: OrderIds = {};
     for (const leg of legs) {
       if (leg.OpenOrderType === 'StopIfTraded') ids.stop = leg.OrderId;
@@ -506,6 +528,25 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
         filled_qty: first.Amount,
       },
     };
+  }
+
+  /**
+   * Cancels a related-order pair `findOpen` found still `NotWorking` with no
+   * master present (#1215) — legs from an entry that expired unfilled rather
+   * than a genuine fill. `OrderNotFound` is swallowed exactly as `cancel()`'s
+   * own loop does: the venue may have already reaped one on its own, and
+   * that is success, not failure. Any other failure propagates — this runs
+   * inside a caller already wrapped in `this.call`, so it surfaces as the
+   * caller's own sanitized `BrokerError` rather than a silently-kept doubt.
+   */
+  private async cancelDormantLegs(legs: readonly SaxoOpenOrder[]): Promise<void> {
+    for (const leg of legs) {
+      try {
+        await this.client.cancelOrder(leg.OrderId);
+      } catch (cause) {
+        if (!isOrderNotFound(cause)) throw cause;
+      }
+    }
   }
 
   private async lookup(

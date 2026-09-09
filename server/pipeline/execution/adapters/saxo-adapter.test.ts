@@ -97,6 +97,23 @@ function workingMaster(overrides: Partial<SaxoOpenOrder> = {}): SaxoOpenOrder {
   };
 }
 
+/** A related order still parked, never activated by a master's fill — VERIFIED value (doc 43 fixtures). */
+function dormantLeg(overrides: Partial<SaxoOpenOrder> = {}): SaxoOpenOrder {
+  return {
+    OrderId: '5040047178',
+    ExternalReference: 'key-3usl-0930:stop',
+    Status: 'NotWorking',
+    OpenOrderType: 'StopIfTraded',
+    OrderRelation: 'Oco',
+    Price: 9,
+    Amount: 3,
+    BuySell: 'Sell',
+    Uic: 3347273,
+    AssetType: 'Etn',
+    ...overrides,
+  };
+}
+
 function activity(overrides: Partial<SaxoOrderActivity> = {}): SaxoOrderActivity {
   return {
     ActivityTime: '2026-09-05T08:30:00.000000Z',
@@ -212,6 +229,29 @@ describe('SaxoBrokerAdapter.submitBracket', () => {
 
     expect(client.placeOrder).not.toHaveBeenCalled();
     expect(ack.broker_order_ids).toEqual(['5040047177', '5040047178', '5040047179']);
+  });
+
+  it('places fresh rather than adopting a phantom fill when only dormant legs rest under the reference (#1215)', async () => {
+    const client = makeClient({
+      listOpenOrders: vi.fn().mockResolvedValue([
+        dormantLeg(),
+        dormantLeg({
+          OrderId: '5040047179',
+          ExternalReference: 'key-3usl-0930:target',
+          OpenOrderType: 'Limit',
+          Price: 12,
+          BuySell: 'Sell',
+        }),
+      ]),
+    });
+    const { adapter } = makeAdapter(client);
+
+    const ack = await adapter.submitBracket(makeBracket());
+
+    expect(client.cancelOrder).toHaveBeenCalledWith('5040047178');
+    expect(client.cancelOrder).toHaveBeenCalledWith('5040047179');
+    expect(client.placeOrder).toHaveBeenCalledTimes(1);
+    expect(ack.order_state).toBe('submitted');
   });
 
   it('adopts through the venue 409 duplicate window (doc 43) when the first POST was accepted but its reply was lost', async () => {
@@ -351,6 +391,43 @@ describe('SaxoBrokerAdapter.getOrder', () => {
 
     expect(order?.order_state).toBe('filled');
     expect(order?.filled_qty).toBe(3);
+  });
+
+  it('cancels dormant protective legs and reports nothing to adopt when neither ever activated (#1215)', async () => {
+    const client = makeClient({
+      listOpenOrders: vi.fn().mockResolvedValue([
+        dormantLeg(),
+        dormantLeg({
+          OrderId: '5040047179',
+          ExternalReference: 'key-3usl-0930:target',
+          OpenOrderType: 'Limit',
+          Price: 12,
+          BuySell: 'Sell',
+        }),
+      ]),
+    });
+    const { adapter } = makeAdapter(client);
+
+    const order = await adapter.getOrder('key-3usl-0930', '3USL');
+
+    expect(order).toBeNull();
+    expect(client.cancelOrder).toHaveBeenCalledWith('5040047178');
+    expect(client.cancelOrder).toHaveBeenCalledWith('5040047179');
+    expect(client.cancelOrder).toHaveBeenCalledTimes(2);
+  });
+
+  it('tolerates a dormant leg the venue already reaped on its own', async () => {
+    const client = makeClient({
+      listOpenOrders: vi.fn().mockResolvedValue([dormantLeg()]),
+      cancelOrder: vi
+        .fn()
+        .mockRejectedValue(
+          new SaxoBrokerProviderError('Saxo API error: 404', 404, 'OrderNotFound', 'not found'),
+        ),
+    });
+    const { adapter } = makeAdapter(client);
+
+    expect(await adapter.getOrder('key-3usl-0930', '3USL')).toBeNull();
   });
 
   it('falls back to the audit trail for an order no longer open', async () => {
