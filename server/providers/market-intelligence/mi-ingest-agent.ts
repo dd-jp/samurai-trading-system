@@ -362,10 +362,13 @@ export class MiIngestAgent {
         // ETP row — the operator-visible evidence that the resolution step
         // ran (#914/#960).
         mi_subject: miSubject,
-        // All fetched articles, pre-symbol-filter — matches this field's
-        // pre-#1392 semantics (was `fresh.length`). `unscored.length` would
-        // always equal `items.length` here (both are 1:1 maps of `pairs`),
-        // collapsing this into a degenerate duplicate of `items` below.
+        // NEW raw rows written THIS refresh, pre-symbol-filter — matches this
+        // field's pre-#1392 semantics (was `fresh.length`, filtered the same
+        // way). `unscored.length` would always equal `items.length` here
+        // (both are 1:1 maps of `pairs`), collapsing this into a degenerate
+        // duplicate of `items` below. Can read 0 with `items` > 0: a batch
+        // that degraded on an earlier refresh already wrote its raws then, so
+        // a later refresh that finally scores it writes no NEW raw rows here.
         articles: newRaws.length,
         items: archivedItems.length,
       },
