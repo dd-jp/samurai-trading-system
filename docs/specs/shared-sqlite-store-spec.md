@@ -175,6 +175,7 @@ CREATE TABLE fills (
   cost_breakdown_json      TEXT NULL,      -- JSON {spread_cost, commission, slippage, market_impact}; Simulated-adapter fills only (undefined/null on real broker fills)
   exit_reason              TEXT,
   flatten_idempotency_key  TEXT,
+  fee_currency             TEXT,           -- 0054, #1220: the currency the VENUE denominated `fee` in, recorded verbatim and never converted; NULL means the adapter reported none, never "it was GBP"
   PRIMARY KEY (idempotency_key, broker_fill_id)
 );
 CREATE INDEX idx_fills_broker_fill_id ON fills(broker_fill_id);

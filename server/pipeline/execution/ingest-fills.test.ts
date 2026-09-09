@@ -19,7 +19,11 @@ import {
   FILLED_ZERO_SIZE_REANNOUNCE_EVERY_MS,
   FilledZeroSizeThrottle,
 } from './filled-zero-size-throttle.js';
-import { FILLED_WITH_ZERO_SIZE, FILLED_ZERO_SIZE_CLEARED } from './ingest-fills.js';
+import {
+  FEE_CURRENCY_NOT_BOOK_CURRENCY,
+  FILLED_WITH_ZERO_SIZE,
+  FILLED_ZERO_SIZE_CLEARED,
+} from './ingest-fills.js';
 import { ProtectiveRearmUnsupportedError } from './protective-rearm-unsupported.js';
 import { openTestExecutionStore, TestExecutionStore } from './sqlite-store-harness.js';
 import type {
@@ -3891,5 +3895,93 @@ describe('hasFill argument branding (#1334)', () => {
     await expect(
       store.hasFill({ idempotency_key: 'lot-1', broker_fill_id: toBrokerFillId('venue-fill-1') }),
     ).resolves.toBe(false);
+  });
+});
+
+// #1220 (David's ruling, 2026-09-08). `fee` is summed into
+// `closed_trades.fees_total` as book currency; before this the adapter's
+// `fee_currency` was dropped at `toFill`, so a USD commission was booked as
+// GBP with nothing said. Sterling-only makes a foreign fee a CONTRADICTION —
+// the tradeable universe excludes every non-sterling line, so one arriving
+// means an instrument was traded that selection should have refused.
+describe('a non-sterling fee is a loud contradiction, not a silent GBP sum (#1220)', () => {
+  it('persists the currency and raises it at error level, naming the fill and the lot', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 5 });
+    const broker = new ScriptedBroker([
+      fill({ broker_fill_id: toBrokerFillId('usd-1'), qty: 5, fee: 0.8, fee_currency: 'USD' }),
+    ]);
+    const logger = recordingLogger();
+
+    await new ExecutionImpl(makeInput(broker, store, undefined, undefined, logger)).ingestFills();
+
+    expect(logger.entries).toContainEqual(
+      expect.objectContaining({
+        level: 'error',
+        message: FEE_CURRENCY_NOT_BOOK_CURRENCY,
+        payload: expect.objectContaining({
+          idempotency_key: 'key-1',
+          instrument: 'AAPL',
+          broker_fill_id: 'usd-1',
+          fee: 0.8,
+          fee_currency: 'USD',
+        }),
+      }),
+    );
+  });
+
+  it('still persists the fill — refusing it would strand a fill that already happened at the venue', async () => {
+    // CONTEXT.md invariant 4 (every fill logged, append-only): the venue has
+    // already traded by the time this is read, so refusing the row would
+    // leave a real open position unrecorded — a silent halt with money
+    // exposed. Alert, do not refuse.
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 5 });
+    const broker = new ScriptedBroker([
+      fill({ broker_fill_id: toBrokerFillId('usd-1'), qty: 5, fee: 0.8, fee_currency: 'USD' }),
+    ]);
+
+    await new ExecutionImpl(makeInput(broker, store)).ingestFills();
+
+    const [persisted] = await store.getFills('key-1');
+    expect(persisted?.fee_currency).toBe('USD');
+    expect(persisted?.fee).toBe(0.8);
+  });
+
+  it('says nothing for GBP, for GBX pence, or for an adapter that reports no currency', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 6 });
+    const broker = new ScriptedBroker([
+      fill({ broker_fill_id: toBrokerFillId('gbp-1'), qty: 2, fee: 0.1, fee_currency: 'GBP' }),
+      fill({ broker_fill_id: toBrokerFillId('gbx-1'), qty: 2, fee: 0.1, fee_currency: 'GBX' }),
+      fill({ broker_fill_id: toBrokerFillId('none-1'), qty: 2, fee: 0.1 }),
+    ]);
+    const logger = recordingLogger();
+
+    await new ExecutionImpl(makeInput(broker, store, undefined, undefined, logger)).ingestFills();
+
+    expect(
+      logger.entries.filter((entry) => entry.message === FEE_CURRENCY_NOT_BOOK_CURRENCY),
+    ).toEqual([]);
+  });
+
+  it('raises it once per fill, not once per poll — the check sits behind the hasFill dedup gate', async () => {
+    // `fetchNewFills` is inclusive of `since`, so every adapter re-offers the
+    // same fill forever. A check above the dedup gate would announce this
+    // contradiction on every poll for the life of the lot.
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 5 });
+    const broker = new ScriptedBroker([
+      fill({ broker_fill_id: toBrokerFillId('usd-1'), qty: 5, fee: 0.8, fee_currency: 'USD' }),
+    ]);
+    const logger = recordingLogger();
+    const execution = new ExecutionImpl(makeInput(broker, store, undefined, undefined, logger));
+
+    await execution.ingestFills();
+    await execution.ingestFills();
+
+    expect(
+      logger.entries.filter((entry) => entry.message === FEE_CURRENCY_NOT_BOOK_CURRENCY),
+    ).toHaveLength(1);
   });
 });

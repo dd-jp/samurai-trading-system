@@ -107,7 +107,7 @@ const CONSOLIDATED_SCHEMA_TABLE_COUNT = 34;
  */
 const MIGRATIONS = listMigrations(MIGRATIONS_DIR);
 const MIGRATION_VERSIONS = MIGRATIONS.map((migration) => migration.version);
-const HIGHEST_KNOWN_MIGRATION_VERSION = 53;
+const HIGHEST_KNOWN_MIGRATION_VERSION = 54;
 
 /** A temp copy of `MIGRATIONS_DIR` holding every migration through `throughVersion`, inclusive. */
 function copyMigrationsUpTo(throughVersion: number): string {

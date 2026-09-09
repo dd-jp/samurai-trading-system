@@ -4,6 +4,7 @@ import {
   resolveSubclassBracket,
   SubclassBracketUnresolvableError,
 } from '../../pipeline/trader/subclass-bracket.js';
+import { isBookCurrency } from '../market-data-service/index.js';
 import {
   assertKnownSubclass,
   assertValidFallbackSubset,
@@ -12,6 +13,7 @@ import {
   countRankableUnderlyings,
   FALLBACK_DEFAULT_MAX_ROWS,
   gateAdmits,
+  isSterlingQuoted,
   KNOWN_SUBCLASSES,
   LSE_ETP_POOL,
   type LseEtpPoolRow,
@@ -19,6 +21,7 @@ import {
   liveSizingSubclassFor,
   resolveMiSubject,
   screeningInstrumentFor,
+  tradeableUniverse,
   UnknownSubclassError,
 } from './lse-etp-pool.js';
 
@@ -67,9 +70,14 @@ describe('LSE_ETP_POOL — the checked-in pool', () => {
       expect(row.provenance.isin).toBeTruthy();
       expect(row.provenance.issuer).toBeTruthy();
       expect(row.provenance.source_url).toMatch(/^https:\/\//);
-      expect(row.provenance.t212_source_url).toMatch(
-        /^https:\/\/www\.trading212\.com\/trading-instruments\/invest\//,
-      );
+      // Optional since #1220: a row added after the 2026-08-30 venue change
+      // (3LUS) has no T212 evidence to cite, and inventing a URL in a file
+      // whose whole discipline is provenance would be worse than its absence.
+      if (row.provenance.t212_source_url !== undefined) {
+        expect(row.provenance.t212_source_url).toMatch(
+          /^https:\/\/www\.trading212\.com\/trading-instruments\/invest\//,
+        );
+      }
       expect(row.provenance.verified_on).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     }
   });
@@ -365,7 +373,7 @@ describe('saxo_tradeable — the field the liquidity gate actually reads (#1054 
     }
   });
 
-  it('pins the 2026-09-05 SIM capture: 13 own-line hits, 7 sibling-only ISINs, 10 absent', () => {
+  it('pins the 2026-09-05 SIM capture: 14 own-line hits, 7 sibling-only ISINs, 10 absent', () => {
     const own = LSE_ETP_POOL.filter((row) => row.provenance.saxo.line !== null);
     const siblingOnly = LSE_ETP_POOL.filter(
       (row) => row.provenance.saxo.line === null && row.provenance.saxo.sibling_line !== undefined,
@@ -376,6 +384,7 @@ describe('saxo_tradeable — the field the liquidity gate actually reads (#1054 
     expect(own.map((row) => row.lse_ticker).sort()).toEqual(
       [
         '3USL',
+        '3LUS',
         'LQQ3',
         '3LTS',
         'NVD3',
@@ -501,7 +510,7 @@ describe('assertValidPool fails loud when the liquidity gate is constant (#1054)
 });
 
 describe('countRankableUnderlyings — the count #707 consumes, not #751', () => {
-  it('returns 26 for the checked-in pool: SPY, QQQ, PLTR, and NVDA each carry two ETP lines', () => {
+  it('returns 26 for the checked-in pool: QQQ, PLTR and NVDA each carry two ETP lines, SPY three', () => {
     expect(countRankableUnderlyings(LSE_ETP_POOL)).toBe(26);
   });
 
@@ -522,8 +531,8 @@ describe('countRankableUnderlyings — the count #707 consumes, not #751', () =>
     expect(countRankableUnderlyings(LSE_ETP_POOL)).toBeLessThan(LSE_ETP_POOL.length);
   });
 
-  it('the pool has exactly 30 tradeable ETP lines — the count #751 consumes', () => {
-    expect(LSE_ETP_POOL.length).toBe(30);
+  it('the pool has exactly 31 tradeable ETP lines — the count #751 consumes', () => {
+    expect(LSE_ETP_POOL.length).toBe(31);
   });
 
   it('defaults to the checked-in pool when called with no argument', () => {
@@ -609,7 +618,7 @@ describe('liveSizingSubclassFor — #903 excludes the four unmeasured index_etp_
   it('screening/ranking is unaffected: the full pool and its rankable-underlying count are unchanged by the sizing exclusion', () => {
     // The guard is sizing-only. #707's ranking precondition and #751's
     // tradeable-line count must not silently shrink because of it.
-    expect(LSE_ETP_POOL.length).toBe(30);
+    expect(LSE_ETP_POOL.length).toBe(31);
     expect(countRankableUnderlyings(LSE_ETP_POOL)).toBe(26);
   });
 });
@@ -632,5 +641,145 @@ describe('resolveMiSubject — the MI-wide retrieval-subject resolution (#914/#9
     expect(resolveMiSubject('QQQ')).toBe('QQQ');
     expect(resolveMiSubject('TSLA')).toBe('TSLA');
     expect(resolveMiSubject('BTC-USD')).toBe('BTC-USD');
+  });
+});
+
+// #1220 (David's ruling, 2026-09-08: sterling-only for the live ramp). The
+// pool's non-sterling rows are EXCLUDED from the tradeable universe, not
+// deprioritised — an unmodelled GBP/USD leg on a GBP book is a cost the
+// system cannot price, and #1310 owns the width consequence.
+describe('sterling-only tradeable universe (#1220)', () => {
+  it("isSterlingQuoted agrees with the mark side's isBookCurrency on every pool row and every pence code", () => {
+    // Two places answering "is this sterling" is the defect #1100 already
+    // fixed once for `gateAdmits`. The pool cannot import the market-data
+    // barrel (it would pull the whole service into every analyst that reads
+    // this file), so the agreement is pinned here instead of shared.
+    for (const row of LSE_ETP_POOL) {
+      expect(isSterlingQuoted(row)).toBe(isBookCurrency(row.currency));
+    }
+    for (const code of ['GBX', 'gbx', 'GBp', 'p', 'GBP', 'gbp']) {
+      expect(isSterlingQuoted(makeRow({ currency: code }))).toBe(true);
+      expect(isBookCurrency(code)).toBe(true);
+    }
+    for (const code of ['USD', 'EUR', 'usd', 'CHF']) {
+      expect(isSterlingQuoted(makeRow({ currency: code }))).toBe(false);
+    }
+  });
+
+  it('tradeableUniverse excludes every USD and EUR row and keeps every GBX/GBP row the gate admits', () => {
+    const tradeable = tradeableUniverse(LSE_ETP_POOL);
+    for (const row of tradeable) {
+      expect(isSterlingQuoted(row)).toBe(true);
+      expect(gateAdmits(row)).toBe(true);
+    }
+    for (const row of LSE_ETP_POOL.filter((r) => !isSterlingQuoted(r))) {
+      expect(tradeable).not.toContain(row);
+    }
+    // 3USL is the ruling's own worked example: Saxo-listed, envelope-measured,
+    // and still out, because it is a USD line.
+    expect(tradeable.map((row) => row.lse_ticker)).not.toContain('3USL');
+  });
+
+  it('applies BOTH gates: a sterling row Saxo is verified not to list is still out', () => {
+    const pool = [
+      makeRow({
+        lse_ticker: 'GBX1',
+        screening_instrument: 'AAA',
+        currency: 'GBX',
+        saxo_tradeable: true,
+      }),
+      makeRow({
+        lse_ticker: 'GBX2',
+        screening_instrument: 'BBB',
+        currency: 'GBX',
+        saxo_tradeable: false,
+      }),
+      makeRow({
+        lse_ticker: 'USD1',
+        screening_instrument: 'CCC',
+        currency: 'USD',
+        saxo_tradeable: true,
+      }),
+    ];
+    expect(tradeableUniverse(pool).map((row) => row.lse_ticker)).toEqual(['GBX1']);
+  });
+
+  it("the checked-in pool's tradeable universe is the five sterling Saxo-listed lines — the #1310 width problem, stated", () => {
+    expect(
+      tradeableUniverse()
+        .map((row) => row.lse_ticker)
+        .sort(),
+    ).toEqual(['3KOR', '3KWE', '3LUS', 'LCO3', 'LQQ3'].sort());
+  });
+
+  it('assertValidPool rejects a non-sterling fallback row, naming the row and its currency', () => {
+    // Rule 6. A fallback row the tradeable universe excludes is the silent
+    // halt wearing the fallback's name — the same argument rule 5 makes for
+    // the liquidity gate, one gate over.
+    const usdFallback = [
+      makeRow({
+        lse_ticker: '3USD',
+        screening_instrument: 'AAA',
+        currency: 'USD',
+        saxo_tradeable: true,
+        fallback_default: true,
+      }),
+      makeRow({ lse_ticker: '3OTH', screening_instrument: 'BBB', saxo_tradeable: false }),
+    ];
+    expect(() => assertValidPool(usdFallback)).toThrow(/'3USD'/);
+    expect(() => assertValidPool(usdFallback)).toThrow(/'USD'/);
+    expect(() => assertValidFallbackSubset(usdFallback)).toThrow(/sterling/);
+  });
+
+  it('accepts a GBX and a GBP fallback row — both are book currency, GBX by pence scaling (#1302)', () => {
+    expect(() =>
+      assertValidPool([
+        makeRow({
+          lse_ticker: 'GBX1',
+          screening_instrument: 'AAA',
+          currency: 'GBX',
+          fallback_default: true,
+        }),
+        makeRow({
+          lse_ticker: 'GBP1',
+          screening_instrument: 'BBB',
+          currency: 'GBP',
+          fallback_default: true,
+        }),
+      ]),
+    ).not.toThrow();
+  });
+});
+
+// #1220 (b): the SPY fallback slot moves off 3USL (USD) onto 3LUS:xlon, the
+// GBP line of the same ISIN Saxo already listed in the 2026-09-05 capture as
+// 3USL's `sibling_line`.
+describe('the 3LUS SPY fallback slot (#1220)', () => {
+  it('holds the SPY slot on 3LUS — the sterling line, at the Uic the sibling evidence recorded', () => {
+    const spyFallback = LSE_ETP_POOL.filter(
+      (row) => row.fallback_default && row.screening_instrument === 'SPY',
+    );
+    expect(spyFallback.map((row) => row.lse_ticker)).toEqual(['3LUS']);
+    // GBX per the justETF listing table 3USL's own note cites; Saxo's search
+    // endpoint reports GBP for it because it carries no quote unit.
+    expect(spyFallback[0]?.currency).toBe('GBX');
+    expect(spyFallback[0]?.provenance.saxo.line?.currency).toBe('GBP');
+    expect(spyFallback[0]?.provenance.saxo.line?.symbol).toBe('3LUS:xlon');
+    expect(spyFallback[0]?.provenance.saxo.line?.uic).toBe(29049628);
+    expect(spyFallback[0]?.provenance.isin).toBe('IE00B7Y34M31');
+  });
+
+  it('keeps 3USL as a pool row — the slot moved, the line was not deleted or re-keyed', () => {
+    const usl = LSE_ETP_POOL.find((row) => row.lse_ticker === '3USL');
+    expect(usl).toBeDefined();
+    expect(usl?.fallback_default).toBe(false);
+    expect(usl?.currency).toBe('USD');
+  });
+
+  it("leaves exactly two fallback rows, below the spec's 5-10 sizing guidance — the #1310 width problem", () => {
+    const fallback = LSE_ETP_POOL.filter((row) => row.fallback_default).map(
+      (row) => row.lse_ticker,
+    );
+    expect(fallback.sort()).toEqual(['3LUS', 'LQQ3'].sort());
   });
 });

@@ -478,6 +478,13 @@ export function universeAssetClasses(universe: readonly UniverseInstrument[]): A
  * `screening_instrument` values that must never be marked in their place
  * (#734). Both derived from `lse-etp-pool.ts` rather than restated, so a row
  * added there reaches the mark path without a second edit.
+ *
+ * "Tradeable" here means ROUTABLE — which symbols this venue's mark source
+ * owns — not #1220's sterling-only tradeable universe. Do NOT narrow this to
+ * `tradeableUniverse()`: a held USD line would then fail as
+ * `NonTradeableInstrumentError` ("not an LSE ETP"), which is a strictly less
+ * informative failure than the `MarkCurrencyError` naming the currency that
+ * `declaredCurrencies` below raises for exactly that case.
  */
 const LSE_TICKERS: ReadonlySet<string> = new Set(buildRoutingMap().keys());
 const LSE_SCREENING_INSTRUMENTS: ReadonlySet<string> = new Set(

@@ -86,6 +86,11 @@ function assertValidVenueOverrides(venues: CostConfig['venues']): void {
  * side, no per-order minimum (ADR-0015:201). The `CostConfig.venues.saxo`
  * override every Saxo-priced leg carries — `run-stage2.ts`'s intraday config
  * and `paper-profile.ts`'s cost config both read this one constant.
+ *
+ * Commission is the ONLY Saxo term modelled. The conversion margin Saxo
+ * charges on a settlement outside the account currency is a named deferral,
+ * not a missing constant — see `CostConfig.venues` in `./types.ts` for the
+ * #1220 ruling that deferred it and the condition under which it must land.
  */
 export const SAXO_COMMISSION_RATE = 0.0008;
 

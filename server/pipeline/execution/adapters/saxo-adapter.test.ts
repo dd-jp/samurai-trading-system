@@ -1743,7 +1743,9 @@ describe('saxoInstrumentResolverFromVenue', () => {
       (row) => row.provenance.saxo.line === null && row.provenance.saxo.sibling_line !== undefined,
     );
 
-    expect(own.length).toBe(13);
+    // 14 since #1220 added 3LUS, the sterling line of 3USL's ISIN, from this
+    // same 2026-09-05 capture's own sibling record.
+    expect(own.length).toBe(14);
     for (const row of own) {
       const line = row.provenance.saxo.line;
       if (line === null) throw new Error('unreachable');
