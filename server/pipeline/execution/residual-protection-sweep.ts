@@ -116,6 +116,7 @@ export async function sweepResidualProtection(
         store_state: row.position.order_state,
         broker_state: null,
         action: 'undetermined',
+        kind: 'sweep',
         // An IDENTIFIER-only message plus the error's own text. On CREDENTIALS
         // that is `reconcileLot`'s reason: #297's H1 has every adapter convert
         // what its client threw into a curated `BrokerError` before it is
@@ -178,6 +179,7 @@ async function sweepOne(
       store_state: position.order_state,
       broker_state: null,
       action: 'undetermined',
+      kind: 'sweep',
       reason: `marked residual could not be recomputed (fill read failed): ${describeThrownSafely(
         error,
       )}`,
@@ -199,6 +201,7 @@ async function sweepOne(
       store_state: position.order_state,
       broker_state: null,
       action: 'adopted',
+      kind: 'sweep',
       reason:
         'marked lot reads flat on the persisted fill record — nothing left unprotected; ' +
         'residual-protection marker cleared',
@@ -223,6 +226,7 @@ async function sweepOne(
       store_state: position.order_state,
       broker_state: null,
       action: 'undetermined',
+      kind: 'sweep',
       reason:
         `marked residual recomputes to ${residual} (non-finite or non-positive) while the fill ` +
         'record reads not-flat — refusing to re-arm a garbage quantity; check the store by hand',
@@ -262,6 +266,7 @@ async function sweepOne(
       store_state: position.order_state,
       broker_state: null,
       action: 'undetermined',
+      kind: 'sweep',
       reason: `re-arm retry failed for residual ${residual}: ${describeThrownSafely(error)}`,
     };
   }
@@ -278,6 +283,7 @@ async function sweepOne(
     store_state: position.order_state,
     broker_state: null,
     action: 'adopted',
+    kind: 'sweep',
     reason:
       `protective legs re-armed for residual ${residual} by the #549 sweep — ` +
       'residual-protection marker cleared',

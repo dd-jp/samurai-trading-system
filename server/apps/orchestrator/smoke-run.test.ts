@@ -117,6 +117,7 @@ function healthyExitPath(overrides: Partial<ExitPathEvidence> = {}): ExitPathEvi
             store_state: 'submitted',
             broker_state: 'submitted',
             action: 'adopted',
+            kind: 'flatten',
             reason: "flatten journal said 'submitted'; broker reports 'submitted'",
           },
         ],
@@ -3127,6 +3128,7 @@ describe('findSweepDivergence (#1285)', () => {
       store_state: 'submitted',
       broker_state: 'filled',
       action: 'rejected',
+      kind: 'bracket',
       reason: '',
       ...overrides,
     };

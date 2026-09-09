@@ -321,8 +321,6 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
           trace_id: deps.reconcileTraceId,
           stage: 'execution',
           event: 'reconcile_divergence',
-          // Same `reconcileDivergenceLevel` `runStartupReconcile` uses for
-          // this same report shape.
           level: reconcileDivergenceLevel(divergence),
           message: 'reconcile divergence',
           payload: { ...divergence },
@@ -371,9 +369,11 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
             trace_id: deps.fillSyncTraceId,
             stage: 'execution',
             event: 'residual_sweep_divergence',
-            // Mirrors `runStartupReconcile`'s split: `undetermined` means the
-            // marker stays and a human may need to look; `adopted` means
-            // protection was confirmed and the marker cleared.
+            // Deliberately its own plain 2-way split, not
+            // `reconcileDivergenceLevel()` — these carry `kind: 'sweep'`,
+            // never `'bracket'`, precisely so they can't be routed through
+            // that demotion logic (see `ReconcileDivergence.kind`'s doc for
+            // why that matters) (#1122 review round 1).
             level: divergence.action === 'undetermined' ? 'warn' : 'info',
             message: 'residual-protection sweep divergence',
             payload: { ...divergence },

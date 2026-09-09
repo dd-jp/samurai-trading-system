@@ -243,6 +243,7 @@ describe('reconcile — crash between write-ahead and broker ack', () => {
       store_state: 'pending',
       broker_state: null,
       action: 'rejected',
+      kind: 'bracket',
     });
     expect((await store.getPosition(KEY))?.order_state).toBe('rejected');
 
@@ -281,6 +282,7 @@ describe('reconcile — crash between write-ahead and broker ack', () => {
       store_state: 'pending',
       broker_state: 'submitted',
       action: 'adopted',
+      kind: 'bracket',
     });
 
     const settled = await store.getPosition(KEY);
@@ -356,6 +358,7 @@ describe('reconcile — store-vs-broker divergence', () => {
       store_state: 'submitted',
       broker_state: 'filled',
       action: 'adopted',
+      kind: 'bracket',
     });
     expect(report.divergences[0]?.reason).toContain('broker says');
   });
@@ -441,6 +444,7 @@ describe('reconcile — scope and safety', () => {
     expect(report.divergences[0]).toMatchObject({
       action: 'undetermined',
       broker_state: null,
+      kind: 'bracket',
       reason: 'venue unreachable',
     });
   });
@@ -749,6 +753,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
       store_state: 'pending',
       broker_state: 'submitted',
       action: 'adopted',
+      kind: 'flatten',
     });
     expect(report.corrected).toBe(1);
 
@@ -772,6 +777,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
       store_state: 'pending',
       broker_state: null,
       action: 'rejected',
+      kind: 'flatten',
     });
     expect(report.corrected).toBe(1);
 
@@ -809,6 +815,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
       store_state: 'submitted',
       broker_state: null,
       action: 'undetermined',
+      kind: 'flatten',
     });
     // Not a correction — the record was left exactly as it was.
     expect(report.corrected).toBe(0);
@@ -844,6 +851,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
       idempotency_key: FLATTEN_KEY,
       action: 'undetermined',
       broker_state: null,
+      kind: 'flatten',
       reason: 'venue unreachable',
     });
     const row = await store.getFlattenSubmission(FLATTEN_KEY);
@@ -880,6 +888,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     expect(report.divergences[0]).toMatchObject({
       idempotency_key: FLATTEN_KEY,
       action: 'undetermined',
+      kind: 'flatten',
     });
     const entry = logger.entries.find((e) =>
       e.message.includes('postFlattenReconcileAlert delivery failed'),
@@ -1006,6 +1015,7 @@ describe('reconcile — a position the venue holds and the store does not (#429)
       instrument: 'ETH-USD',
       action: 'unrecorded',
       broker_state: null,
+      kind: 'unrecorded',
     });
     expect(report.divergences[0]?.reason).toContain('invisible to the Risk Manager');
     // Not a correction: nothing was written. Adopting would mean inventing the
@@ -1041,6 +1051,7 @@ describe('reconcile — a position the venue holds and the store does not (#429)
     expect(report.corrected).toBe(1);
     const undetermined = report.divergences.filter((d) => d.action === 'undetermined');
     expect(undetermined).toHaveLength(1);
+    expect(undetermined[0]?.kind).toBe('unrecorded');
     expect(undetermined[0]?.reason).toContain('venue positions unreachable');
   });
 

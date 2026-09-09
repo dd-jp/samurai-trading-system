@@ -42,6 +42,7 @@ describe('runStartupReconcile', () => {
               store_state: 'submitted',
               broker_state: null,
               action: 'rejected',
+              kind: 'bracket',
               reason: 'broker has no order under this client_order_id',
             },
             {
@@ -50,6 +51,7 @@ describe('runStartupReconcile', () => {
               store_state: 'pending',
               broker_state: null,
               action: 'undetermined',
+              kind: 'bracket',
               reason: 'venue unreachable',
             },
           ],
@@ -471,13 +473,13 @@ describe('startFillSync', () => {
         store_state: 'submitted' as const,
         broker_state: null,
         action: 'undetermined' as const,
+        kind: 'bracket' as const,
         reason: 'venue unreachable',
       };
       const adopted = {
         ...undetermined,
         broker_state: 'filled' as const,
         action: 'adopted' as const,
-        kind: 'bracket' as const,
         reason: 'adopted on retry',
       };
       const execution = makeExecution({
@@ -560,6 +562,50 @@ describe('startFillSync', () => {
       await sync.stop();
     });
 
+    // Pins the OTHER terminal-adjacent broker_state the narrowing predicate
+    // must also demote — `'filled'` is covered by "logs a reconcile
+    // divergence on first observation..." above; a mutant
+    // that swapped `'partially_filled'` for `'cancelled'` in
+    // `reconcileDivergenceLevel` would leave that test green (it never
+    // exercises `'partially_filled'`) while silently excluding every
+    // partial-fill adopt from FilledZeroSizeThrottle's backstop, since
+    // getOpenPositions() excludes `'cancelled'` rows (#1122 review round 1).
+    it("demotes a bracket adopt whose broker_state is 'partially_filled' to debug — the throttle still watches it", async () => {
+      const logger = makeLogger();
+      const partiallyFilledAdopted = {
+        idempotency_key: 'key-amd-900',
+        instrument: 'AMD',
+        store_state: 'submitted' as const,
+        broker_state: 'partially_filled' as const,
+        action: 'adopted' as const,
+        kind: 'bracket' as const,
+        reason: "store said 'submitted', broker says 'partially_filled'",
+      };
+      const execution = makeExecution({
+        reconcile: vi
+          .fn()
+          .mockResolvedValueOnce(makeReport({ divergences: [partiallyFilledAdopted] }))
+          .mockResolvedValue(makeReport()),
+      });
+      const sync = startFillSync({
+        execution,
+        clock: { now: () => new Date() },
+        logger,
+        fillPollIntervalMs: 1_000,
+        reconcileTraceId: 'test-reconcile',
+        fillSyncTraceId: 'test-fill-sync',
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      const divergenceLines = logger.entries.filter(
+        (entry) => entry.message === 'reconcile divergence',
+      );
+      expect(divergenceLines.map((entry) => entry.level)).toEqual(['debug']);
+
+      await sync.stop();
+    });
+
     // The empty-string collision this dedup must not fall into:
     // `findUnrecordedVenuePositions` reports every unrecorded position with
     // `idempotency_key: ''`, so a naive dedup keyed on that field alone would
@@ -573,6 +619,7 @@ describe('startFillSync', () => {
         store_state: 'submitted' as const,
         broker_state: null,
         action: 'unrecorded' as const,
+        kind: 'unrecorded' as const,
         reason: 'venue holds a position the store has no open lot for',
       };
       const unrecordedTsla = { ...unrecordedAapl, instrument: 'TSLA' };
@@ -680,6 +727,7 @@ describe('per-arm trace ids (#1321)', () => {
                 store_state: 'submitted',
                 broker_state: null,
                 action: 'undetermined',
+                kind: 'bracket',
                 reason: 'venue unreachable',
               },
             ],
@@ -716,6 +764,7 @@ describe('per-arm trace ids (#1321)', () => {
         store_state: 'submitted' as const,
         broker_state: null,
         action: 'undetermined' as const,
+        kind: 'bracket' as const,
         reason: 'venue unreachable',
       };
       const liveExecution = makeExecution({

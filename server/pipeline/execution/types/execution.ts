@@ -224,15 +224,26 @@ export interface ReconcileDivergence {
   /** Operator-facing detail — the adapter's error on `undetermined`. */
   reason: string;
   /**
-   * `'bracket'` for a `reconcileLot` row, `'flatten'` for a `reconcileFlatten`
-   * row; `undefined` for `findUnrecordedVenuePositions`'s rows, which are
-   * neither. Needed by #1122's noise reduction: only a bracket lot's adopt
-   * lands on the `OpenPosition` that `FilledZeroSizeThrottle`
+   * `'bracket'` for a `reconcileLot` row, keyed to an `OpenPosition`.
+   * `'flatten'` for a `reconcileFlatten` row. `'unrecorded'` for
+   * `findUnrecordedVenuePositions`'s rows — a venue position the store never
+   * wrote. `'sweep'` for `residual-protection-sweep.ts`'s (#549) rows — a
+   * DIFFERENT reconciliation pass that happens to read the same
+   * `OpenPosition` row shape `reconcileLot` does, but is never routed
+   * through `reconcileDivergenceLevel()` (fill-sync.ts keeps its own log
+   * site for it); kept distinct from `'bracket'` so that changes if a
+   * future refactor ever merges the two log paths (#1122 review round 1).
+   * Required, not optional: every construction site must declare one, so a
+   * future site that forgets is a `tsc` error, not a silently-missing
+   * classification (#1122 review round 1).
+   *
+   * Needed by #1122's noise reduction: only a bracket lot's `adopted` lands
+   * on the `OpenPosition` that `FilledZeroSizeThrottle`
    * (filled-zero-size-throttle.ts, #1087) watches, so only that case has an
    * independent backstop a consumer can safely quiet against — a flatten
    * adopt writes no such row, so there is nothing else watching it.
    */
-  kind?: 'bracket' | 'flatten';
+  kind: 'bracket' | 'flatten' | 'unrecorded' | 'sweep';
 }
 
 /**

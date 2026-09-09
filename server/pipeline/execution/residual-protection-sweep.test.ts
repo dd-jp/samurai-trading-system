@@ -201,6 +201,9 @@ describe('residual-protection sweep (#549)', () => {
     // Reported through reconcile's own divergence surface, and counted.
     const divergence = report.divergences.find((entry) => entry.idempotency_key === LOT);
     expect(divergence?.action).toBe('adopted');
+    // Distinct from `reconcileLot`'s bracket rows — never routed through
+    // `reconcileDivergenceLevel()` (#1122 review round 1).
+    expect(divergence?.kind).toBe('sweep');
     expect(report.checked).toBeGreaterThanOrEqual(1);
     expect(report.corrected).toBeGreaterThanOrEqual(1);
     // A successful retry pages nobody.
@@ -227,6 +230,7 @@ describe('residual-protection sweep (#549)', () => {
     expect(broker.rearmCalls).toEqual([{ clientOrderId: LOT, qty: 6 }]);
     expect(result.checked).toBe(1);
     expect(result.divergences.map((entry) => entry.action)).toEqual(['adopted']);
+    expect(result.divergences.map((entry) => entry.kind)).toEqual(['sweep']);
     expect(await restartedStore.getResidualProtectionMarker(LOT)).toEqual({
       unprotected_since: null,
       alerted_at: null,
@@ -654,6 +658,7 @@ describe('residual-protection sweep (#549)', () => {
       expect(alerts.alerts[0]?.residual_qty).toBe(10);
       expect(alerts.alerts[0]?.residual_qty_is_upper_bound).toBe(true);
       expect(result.divergences.map((entry) => entry.action)).toEqual(['undetermined']);
+      expect(result.divergences.map((entry) => entry.kind)).toEqual(['sweep']);
       expect(result.divergences[0]?.reason).toContain('NaN');
       expect(
         (await garbageStore.getResidualProtectionMarker(LOT))?.unprotected_since,

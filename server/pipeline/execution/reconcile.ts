@@ -370,6 +370,7 @@ async function findUnrecordedVenuePositions(
         store_state: 'pending',
         broker_state: null,
         action: 'undetermined',
+        kind: 'unrecorded',
         reason:
           'broker.getOpenPositions failed, so a position the venue holds and the store does ' +
           `not would not have been seen this pass: ${describeThrownSafely(error)}`,
@@ -392,6 +393,7 @@ async function findUnrecordedVenuePositions(
       store_state: 'pending' as const,
       broker_state: null,
       action: 'unrecorded' as const,
+      kind: 'unrecorded' as const,
       reason:
         `venue holds ${venuePosition.qty} ${venuePosition.instrument} (${venuePosition.side}) ` +
         'with no open lot in the store — this exposure is invisible to the Risk Manager. ' +
