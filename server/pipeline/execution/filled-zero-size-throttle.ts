@@ -1,114 +1,139 @@
 /**
  * Throttle for `FILLED_WITH_ZERO_SIZE` (#1087, ingest-fills.ts) — a lot
  * `reconcile()` adopted as `filled`/`partially_filled` whose `filled_size`
- * is still zero. Unthrottled, this fires on EVERY poll for as long as the
- * lot stays wedged: at the 2026-09-03 incident's 15-second cadence that is
- * thousands of identical lines over the ~14.6h the affected lot went
- * unnoticed.
+ * is still zero.
  *
- * Same bounded-repeat shape as `MiCoverageMonitor` (mi-coverage.ts, #752) and
- * `TickSkipThrottle` (tick-skip-alert.ts, #1084): alert after a short grace
- * window (unlike those two, NOT the first occurrence here — see
- * `ALERT_AFTER_CONSECUTIVE_ZERO_SIZE`'s own doc), then every Nth poll while
- * the condition persists — never a new pattern.
- */
-
-/**
- * Consecutive wedged polls required before the FIRST warning — NOT 1
- * (#1087 review, pass 2). `ingest-fills.ts`'s own doc on this branch names a
- * genuinely benign case: on the live arm, Alpaca can report `filled_qty > 0`
- * on the order a poll or two before its separate fill feed catches up, so a
- * lot "can legitimately pass through this branch once or twice and
- * self-clear." At threshold 1 that benign lag is not an edge case — it is
- * the FIRST poll of every normally-filling live-arm entry whose venue status
- * update happens to land ahead of its own fill record in the same poll,
- * which the propagation-lag comment describes as ordinary, not rare. 3
- * covers that "once or twice" with one poll of margin (45s at the 15s
- * cadence) before the detector escalates — negligible added detection
- * latency against a genuine wedge: #1087's META lot ran undetected for
- * 14.6h, not 45s.
+ * #1383 (review round 1, coordinator ruling): a pure "warn once, then total
+ * silence" design closes the flood (a lot wedged for a 20h soak produced
+ * ~600 identical WARN lines under the pre-#1383 every-8-poll repeat —
+ * measured: `fill_priced_at_zero_size` 618/2102 structured lines, 29.4%) but
+ * makes a genuinely wedged lot invisible between its first warning and a
+ * restart, which is exactly the case #1128's `ExitSkipWriteThrottle` (see
+ * `exit-skip-write-throttle.ts`) relies on this channel to keep surfaced.
+ * The fix here has two parts on the same per-lot state machine:
+ *
+ *  - `warn`, exactly once, on the poll `consecutive` first reaches
+ *    `ALERT_AFTER_CONSECUTIVE_ZERO_SIZE` — the transition an operator must
+ *    act on, not the state.
+ *  - `info`, re-announced at most once every `FILLED_ZERO_SIZE_REANNOUNCE_EVERY_MS`
+ *    of wall-clock time while the lot stays wedged — low-cadence, so a
+ *    still-open incident does not vanish from the log between the first
+ *    warning and a restart, but a genuine wedge (hours to days, #1087's META
+ *    case ran 14.6h before detection) produces a handful of lines, not
+ *    thousands. Time-based rather than poll-count-based deliberately: this
+ *    throttle's callers run at whatever poll cadence their process chooses
+ *    (15s in the incident that motivated #1087, unspecified in general), and
+ *    a poll-count repeat (the shape every OTHER throttle in this repo uses —
+ *    `ALERT_REPEAT_EVERY_DIAGNOSTICS`/`_NO_DATA`/`_DEGRADED_TICKS`/`_SKIPS`,
+ *    all tuned as WARN cadences) would make re-announcement frequency a
+ *    silent function of that cadence instead of a stated interval.
+ *
+ * One instance per composition root (`production.ts`, `control-arm-wiring.ts`,
+ * each `smoke-run.ts` scenario, `place-soak-position.ts`), threaded through
+ * every `Execution` surface built from that root's deps — not a
+ * module-level singleton, so a second surface built from the same deps
+ * continues the first surface's episode instead of starting its own
+ * (`filled-zero-size-wiring.test.ts`). In-memory and restart-clean, same
+ * posture as `MiCoverageMonitor`/`TraderDiagnosticThrottle`: a process that
+ * just restarted has no evidence about the previous process's polls.
+ *
+ * `clear()` runs from exactly one call site (`ingest-fills.ts`'s
+ * `advanceLot`, the `filledSize > 0` branch) — the same single site the
+ * pre-#1383 design used. `reconcile.ts`'s own `rejected`/`adopted` branches
+ * cannot resolve an already-wedged lot: `reconcileLot` only runs for
+ * `IN_FLIGHT` (`pending`/`submitted`) positions, and a lot has to be
+ * `filled`/`partially_filled` to reach this throttle at all. The only way a
+ * wedged lot leaves that state without going through `advanceLot` is an
+ * out-of-band store write — e.g. #1186, the named repair for the incident's
+ * wedged META lot, done directly against `open_positions`. That path never
+ * calls `clear()` either, and its episode leaks for the rest of the
+ * process's life. Accepted, not a regression introduced here: bounded by
+ * total positions ever opened, and inert once leaked regardless of what the
+ * repair did to the lot. A repair that closes it removes the
+ * `idempotency_key` from `getOpenPositions()` for good. A repair that
+ * instead writes `filled_size > 0` directly while leaving the lot open
+ * never reaches `clear()` either — `ingest-fills.ts`'s `advanceLot` only
+ * calls it from its own `filledSize > 0` recompute, past the
+ * `newFills.length === 0` early return an out-of-band write never goes
+ * through — but it also stops `observe()` firing: that early return's call
+ * to `observe()` is gated on `position.filled_size`, and `position` comes
+ * from `ingestFills`'s own `getOpenPositions()` read, taken fresh at the
+ * start of every poll. Either shape leaves the episode unable to re-warn or
+ * falsely report `fill_zero_size_cleared`. Exercised
+ * directly in `ingest-fills.test.ts` ("a lot resolved by rejection, not by
+ * advancing, never reports cleared").
  */
 export const ALERT_AFTER_CONSECUTIVE_ZERO_SIZE = 3;
 
 /**
- * How often the warning repeats while the lot stays wedged, counted in
- * further consecutive wedged polls after the first. Every 8th poll, the same
- * repeat interval `ALERT_REPEAT_EVERY_NO_DATA`/`ALERT_REPEAT_EVERY_DEGRADED_TICKS`
- * use — frequent enough to stay visible, rare enough that the log stream
- * (this mechanism's channel — see `FILLED_WITH_ZERO_SIZE`'s own doc) is not
- * flooded with an unbroken run of identical lines.
+ * How often the `info` re-announcement may repeat while a lot stays warned
+ * and wedged, in wall-clock milliseconds. One hour: frequent enough that an
+ * operator scanning a day's log sees the incident is still open and how old
+ * it has grown, rare enough that even a multi-day wedge stays a handful of
+ * lines. Not tuned against any specific poll cadence — see the class doc.
  */
-export const ALERT_REPEAT_EVERY_ZERO_SIZE = 8;
+export const FILLED_ZERO_SIZE_REANNOUNCE_EVERY_MS = 60 * 60_000;
 
-function shouldWarnAt(consecutive: number): boolean {
-  if (consecutive < ALERT_AFTER_CONSECUTIVE_ZERO_SIZE) return false;
-  return (consecutive - ALERT_AFTER_CONSECUTIVE_ZERO_SIZE) % ALERT_REPEAT_EVERY_ZERO_SIZE === 0;
+interface ZeroSizeEpisode {
+  consecutive: number;
+  warned: boolean;
+  /** Epoch ms of the last `warn`/`info` line this episode produced; unused until `warned`. */
+  lastAnnouncedAtMs: number;
 }
 
-/**
- * Per-lot consecutive-poll counter, keyed by `idempotency_key` — one lot's
- * wedge says nothing about another's, unlike `TickSkipThrottle`'s single
- * whole-pass scalar. In memory and restart-clean, the same posture
- * `MiCoverageMonitor`/`TraderDiagnosticThrottle` take: a process that just
- * restarted has no evidence about the previous process's polls, and a crash
- * is already alarmed by the heartbeat's silence.
- *
- * One instance per composition root, constructed wherever that root wires
- * an `Execution` caller's dependencies — `ExecutionInput.filledZeroSizeThrottle`
- * — and threaded through every `Execution` surface built from that same
- * object: the tick-driven `execute()` step (`buildExecutionStep`,
- * production/direct-bind.ts, which rebuilds a fresh `ExecutionImpl` per
- * verdict) and the fill-sync loop's `reconcile()`/`ingestFills()` surfaces
- * (`buildExecutionSurface`, built once and held for that root's lifetime).
- * Today: `production.ts`'s live root, `control-arm-wiring.ts`'s control
- * arm, each of `smoke-run.ts`'s scenario harnesses, and
- * `place-soak-position.ts`'s probe — not a list this doc has to track,
- * since wiring the dependencies at all means constructing this too. As
- * `production.ts`'s own `filledZeroSizeThrottle:` comment puts it: one
- * throttle for that root's whole process lifetime — process-scoped, not
- * surface-scoped — so it is not scoped to any single `ExecutionImpl`,
- * including the per-verdict ones `buildExecutionStep` keeps rebuilding.
- * NOT a module-level singleton. The live and control arms are NOT the
- * collision case: `computeIdempotencyKey` (#753, idempotency-key.ts) hashes
- * `arm` into the payload for every non-live arm (`TradingArm` is only
- * `'live' | 'control'`), so the two arms' keys never collide even if one
- * instance were shared — `control-arm-wiring.ts`'s own comment gives its
- * separate throttle a different reason, process-scoped state matching each
- * root's own instance lifetime, the same symmetry `broker`/`store`/
- * `costModel` get there, not cross-arm leakage. The real collision risk is
- * a root that bypasses `computeIdempotencyKey` and hand-assigns a literal
- * `idempotency_key` instead, the way every scenario in `smoke-run.ts` and
- * every `seedPosition`/fixture helper in this directory's own test files
- * do: `smoke-run.ts`'s own restart scenario builds a SECOND throttle
- * (`restartExecutionAndReconcile`) and calls `ingestFills()` again over the
- * SAME store the first throttle already polled, using the same literal lot
- * keys — sharing one instance there would carry a pre-"restart" consecutive
- * count across the simulated restart, which the restart-clean posture above
- * exists to prevent. Every test file constructing its own throttle per test
- * guards the same thing: a handful of literal keys ('key-1', 'key-flaky',
- * …) recur across many independently-built instances in the one test
- * process, and a shared instance would leak one test's count into
- * another's.
- */
 export class FilledZeroSizeThrottle {
-  readonly #consecutive = new Map<string, number>();
+  readonly #episodes = new Map<string, ZeroSizeEpisode>();
 
   /**
-   * Records this poll's wedged observation for one lot and reports whether
-   * the warning is due. Callers must call `clear` once the lot is no longer
-   * wedged (advanceLot's zero-size branch), or a lot that goes on to close
-   * healthily leaves an orphaned entry here for the life of the process —
-   * bounded by total positions ever opened, not by anything that recovers on
-   * its own.
+   * Whether THIS observation should announce, and at what level: `'warn'`
+   * once, on the poll where `consecutive` first reaches
+   * `ALERT_AFTER_CONSECUTIVE_ZERO_SIZE`; `'info'` on the first later poll at
+   * least `FILLED_ZERO_SIZE_REANNOUNCE_EVERY_MS` after the previous
+   * announcement; `null` otherwise. `now` is the caller's own clock reading
+   * (`ingest-fills.ts` already reads one per poll) — never read internally,
+   * so this stays correct under the backtest clock too.
    */
-  observe(idempotencyKey: string): { warn: boolean; consecutive: number } {
-    const consecutive = (this.#consecutive.get(idempotencyKey) ?? 0) + 1;
-    this.#consecutive.set(idempotencyKey, consecutive);
-    return { warn: shouldWarnAt(consecutive), consecutive };
+  observe(
+    idempotencyKey: string,
+    now: Date,
+  ): { announce: 'warn' | 'info' | null; consecutive: number } {
+    const prior = this.#episodes.get(idempotencyKey);
+    const consecutive = (prior?.consecutive ?? 0) + 1;
+    const nowMs = now.getTime();
+
+    if (!prior?.warned) {
+      if (consecutive < ALERT_AFTER_CONSECUTIVE_ZERO_SIZE) {
+        this.#episodes.set(idempotencyKey, {
+          consecutive,
+          warned: false,
+          lastAnnouncedAtMs: prior?.lastAnnouncedAtMs ?? 0,
+        });
+        return { announce: null, consecutive };
+      }
+      this.#episodes.set(idempotencyKey, { consecutive, warned: true, lastAnnouncedAtMs: nowMs });
+      return { announce: 'warn', consecutive };
+    }
+
+    if (nowMs - prior.lastAnnouncedAtMs >= FILLED_ZERO_SIZE_REANNOUNCE_EVERY_MS) {
+      this.#episodes.set(idempotencyKey, { consecutive, warned: true, lastAnnouncedAtMs: nowMs });
+      return { announce: 'info', consecutive };
+    }
+
+    this.#episodes.set(idempotencyKey, { ...prior, consecutive });
+    return { announce: null, consecutive };
   }
 
-  /** Clears one lot's counter — call once it is no longer observed wedged. */
-  clear(idempotencyKey: string): void {
-    this.#consecutive.delete(idempotencyKey);
+  /**
+   * Ends a lot's episode (it advanced past zero). Returns whether that
+   * episode ever warned, so the caller can log the matching `info` "cleared"
+   * transition — but only for an episode that actually paged, never for one
+   * that self-resolved inside the grace window (mirrors
+   * `SequentialTickRunner.reportAdvisoryWarnings`'s `hadWarnings` gate,
+   * tick-runner.ts, #303).
+   */
+  clear(idempotencyKey: string): { hadWarned: boolean } {
+    const hadWarned = this.#episodes.get(idempotencyKey)?.warned ?? false;
+    this.#episodes.delete(idempotencyKey);
+    return { hadWarned };
   }
 }

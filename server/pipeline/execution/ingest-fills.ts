@@ -72,6 +72,15 @@ type ExitFill = Fill & { leg: 'stop' | 'target' | 'exit' };
  */
 export const FILLED_WITH_ZERO_SIZE = 'filled position has zero filled_size' as const;
 
+/**
+ * #1383: the matching clear-side transition line for `FILLED_WITH_ZERO_SIZE`
+ * — a distinct message/event, not a reuse of the warn one, so a listener
+ * (`FilledZeroSizeWarningRecorder`-style filter on the warn message) does not
+ * pick up the all-clear as another occurrence of the condition.
+ */
+export const FILLED_ZERO_SIZE_CLEARED =
+  'a lot previously warned zero-filled-size has advanced past zero' as const;
+
 export async function ingestFills(input: ExecutionInput): Promise<void> {
   const { clock, broker, store } = input;
 
@@ -1097,18 +1106,23 @@ async function advanceLot(
     // Throttled (`filledZeroSizeThrottle`, filled-zero-size-throttle.ts):
     // unthrottled, a lot wedged for hours logs an identical line on every
     // 15-second poll. `consecutive` rides in the payload alongside `stuck_ms`
-    // so a THROTTLED line still carries how long the condition has held.
+    // so an ANNOUNCED line still carries how long the condition has held —
+    // both the one-time `warn` and every later low-cadence `info`
+    // re-announcement while the lot stays wedged.
     if (
       (position.order_state === 'filled' || position.order_state === 'partially_filled') &&
       position.filled_size === 0
     ) {
-      const { warn, consecutive } = input.filledZeroSizeThrottle.observe(position.idempotency_key);
-      if (warn) {
+      const { announce, consecutive } = input.filledZeroSizeThrottle.observe(
+        position.idempotency_key,
+        now,
+      );
+      if (announce !== null) {
         safeLog(input.logger, {
           trace_id: input.trace_id,
           stage: 'execution',
           event: 'fill_priced_at_zero_size',
-          level: 'warn',
+          level: announce,
           message: FILLED_WITH_ZERO_SIZE,
           payload: {
             idempotency_key: position.idempotency_key,
@@ -1141,8 +1155,9 @@ async function advanceLot(
   // is still 0 after this recompute (e.g. a non-entry fill landed on an
   // already-wedged lot), so the streak the throttle above was counting for
   // it hasn't actually ended — clearing here would restart it at
-  // `consecutive: 1` on the very next poll instead of continuing the
-  // 3-then-every-8th cadence (#1087 review, pass 2).
+  // `consecutive: 1` on the very next poll (and re-arm a `warn` that should
+  // have stayed a quiet `info`-cadence wedge) instead of continuing the
+  // warn-once/low-cadence-info episode (#1087 review, pass 2; #1383).
   if (filledSize === 0) {
     await store.applyLotAdvance({ idempotency_key: position.idempotency_key, fills: newFills });
     return;
@@ -1152,8 +1167,21 @@ async function advanceLot(
   // was counting for it is genuinely over now, confirmed by `filledSize > 0`
   // above (not merely by `newFills.length > 0`, which a non-entry fill on a
   // still-wedged lot would also satisfy). Clears an entry that never warned
-  // (never reached the repeat threshold) as readily as one that did.
-  input.filledZeroSizeThrottle.clear(position.idempotency_key);
+  // (never reached the alert threshold) as readily as one that did — only
+  // the former case logs below, since an episode that never paged has
+  // nothing to report as cleared (mirrors `reportAdvisoryWarnings`'s
+  // `hadWarnings` gate in tick-runner.ts).
+  const { hadWarned } = input.filledZeroSizeThrottle.clear(position.idempotency_key);
+  if (hadWarned) {
+    safeLog(input.logger, {
+      trace_id: input.trace_id,
+      stage: 'execution',
+      event: 'fill_zero_size_cleared',
+      level: 'info',
+      message: FILLED_ZERO_SIZE_CLEARED,
+      payload: { idempotency_key: position.idempotency_key, instrument: position.instrument },
+    });
+  }
 
   const avgEntryPrice = weightedAvgPrice(entryFills);
   const flat = coversQty(totalQty(exitFills), filledSize);

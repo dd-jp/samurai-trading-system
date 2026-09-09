@@ -311,7 +311,10 @@ describe('TokenBucket wait telemetry (#1083)', () => {
 
     expect(entries).toHaveLength(1);
     const [entry] = entries;
-    expect(entry.level).toBe('warn');
+    // #1383: pacing under a working bucket is normal operation, not a fault —
+    // `warn` here just added to the soak's warn-share without signaling anything
+    // actionable (414/2102 lines, 19.7% of one soak, none of it starvation).
+    expect(entry.level).toBe('info');
     // Grep-distinguishable: neither an LLM token-count field (`input_tokens`)
     // nor a bare digit run (`429`) can match this event name.
     expect(entry.message).toContain('token_bucket_wait');
