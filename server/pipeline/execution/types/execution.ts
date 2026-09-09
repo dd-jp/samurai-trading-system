@@ -182,9 +182,15 @@ export interface ExecutionResult {
  * fork both of `ReconcileReport.divergences`' consumers
  * (`orchestrator/fill-sync.ts`'s per-divergence log, and `reconcile()`'s own
  * `corrected` tally) for zero new information — each already treats `action`
- * generically and neither branches on WHICH kind of record it is. A reader
- * that needs to tell them apart can: a flatten's `idempotency_key` never
- * matches an `open_positions` row (exits write no `OpenPosition` —
+ * generically. **This no longer holds for `fill-sync.ts`'s per-divergence
+ * log** (#1122 review round 3): `reconcileDivergenceLevel()` branches on
+ * `kind` to decide whether a bracket adopt demotes to `debug` (see `kind`
+ * below), so that consumer now IS kind-aware — `reconcile()`'s own
+ * `corrected` tally is the one that stays generic. The `idempotency_key`
+ * heuristic below is superseded by `kind` wherever `kind` is present; it
+ * remains true only as a fallback for code written before `kind` existed.
+ * A reader that needs to tell rows apart can: a flatten's `idempotency_key`
+ * never matches an `open_positions` row (exits write no `OpenPosition` —
  * `OrderIntent`'s own "exits close a lot; they never create one"), the same
  * distinguishing convention `unrecorded`'s `idempotency_key: ''` already
  * uses below.
@@ -223,6 +229,34 @@ export interface ReconcileDivergence {
   action: 'adopted' | 'rejected' | 'undetermined' | 'unrecorded';
   /** Operator-facing detail — the adapter's error on `undetermined`. */
   reason: string;
+  /**
+   * `'bracket'` for a `reconcileLot` row, keyed to an `OpenPosition`.
+   * `'flatten'` for a `reconcileFlatten` row. `'unrecorded'` for
+   * `findUnrecordedVenuePositions`'s rows — a venue position the store never
+   * wrote. `'sweep'` for `residual-protection-sweep.ts`'s (#549) rows — a
+   * DIFFERENT reconciliation pass that happens to read the same
+   * `OpenPosition` row shape `reconcileLot` does. Sweep rows DO reach
+   * `reconcileDivergenceLevel()`: `reconcile()` merges them into
+   * `report.divergences` (reconcile.ts), and both `runPoll` and
+   * `runStartupReconcile` (fill-sync.ts) map every entry of that array
+   * through it. What never happens is a sweep row *demoting* — the
+   * predicate requires `kind === 'bracket'` AND a non-null `broker_state`,
+   * and a sweep row is `kind: 'sweep'` with `broker_state: null`, so it
+   * always falls to the `info` branch. Kept distinct from `'bracket'` so
+   * that stays true by construction rather than by every sweep site
+   * happening to leave `broker_state` unset (#1122 review round 1, doc
+   * corrected review round 3).
+   * Required, not optional: every construction site must declare one, so a
+   * future site that forgets is a `tsc` error, not a silently-missing
+   * classification (#1122 review round 1).
+   *
+   * Needed by #1122's noise reduction: only a bracket lot's `adopted` lands
+   * on the `OpenPosition` that `FilledZeroSizeThrottle`
+   * (filled-zero-size-throttle.ts, #1087) watches, so only that case has an
+   * independent backstop a consumer can safely quiet against — a flatten
+   * adopt writes no such row, so there is nothing else watching it.
+   */
+  kind: 'bracket' | 'flatten' | 'unrecorded' | 'sweep';
 }
 
 /**

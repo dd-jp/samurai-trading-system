@@ -42,6 +42,7 @@ describe('runStartupReconcile', () => {
               store_state: 'submitted',
               broker_state: null,
               action: 'rejected',
+              kind: 'bracket',
               reason: 'broker has no order under this client_order_id',
             },
             {
@@ -50,6 +51,7 @@ describe('runStartupReconcile', () => {
               store_state: 'pending',
               broker_state: null,
               action: 'undetermined',
+              kind: 'bracket',
               reason: 'venue unreachable',
             },
           ],
@@ -471,9 +473,15 @@ describe('startFillSync', () => {
         store_state: 'submitted' as const,
         broker_state: null,
         action: 'undetermined' as const,
+        kind: 'bracket' as const,
         reason: 'venue unreachable',
       };
-      const adopted = { ...undetermined, action: 'adopted' as const, reason: 'adopted on retry' };
+      const adopted = {
+        ...undetermined,
+        broker_state: 'filled' as const,
+        action: 'adopted' as const,
+        reason: 'adopted on retry',
+      };
       const execution = makeExecution({
         reconcile: vi
           .fn()
@@ -497,10 +505,103 @@ describe('startFillSync', () => {
         (entry) => entry.message === 'reconcile divergence',
       );
       // Pass 1 logs the warn; pass 2 (same key, same state) is deduped; pass
-      // 3's transition to adopted logs the info; pass 4 reports nothing.
-      expect(divergenceLines.map((entry) => entry.level)).toEqual(['warn', 'info']);
+      // 3's transition to a bracket adopt reaching `filled` logs at debug
+      // (#1122 — FilledZeroSizeThrottle already watches this exact condition
+      // independently); pass 4 reports nothing.
+      expect(divergenceLines.map((entry) => entry.level)).toEqual(['warn', 'debug']);
       expect(divergenceLines[0]?.payload).toMatchObject({ action: 'undetermined' });
       expect(divergenceLines[1]?.payload).toMatchObject({ action: 'adopted' });
+
+      await sync.stop();
+    });
+
+    it('does not demote an adopted divergence the zero-size throttle cannot back — a flatten row, or a bracket adopt not yet filled (#1122)', async () => {
+      const logger = makeLogger();
+      const flattenAdopted = {
+        idempotency_key: 'key-nvda-flatten',
+        instrument: 'NVDA',
+        store_state: 'submitted' as const,
+        broker_state: 'filled' as const,
+        action: 'adopted' as const,
+        kind: 'flatten' as const,
+        reason: "flatten journal said 'submitted'; broker reports 'filled'",
+      };
+      const bracketSubmittedOnly = {
+        idempotency_key: 'key-msft-1200',
+        instrument: 'MSFT',
+        store_state: 'pending' as const,
+        broker_state: 'submitted' as const,
+        action: 'adopted' as const,
+        kind: 'bracket' as const,
+        reason: "store said 'pending', broker says 'submitted'",
+      };
+      const execution = makeExecution({
+        reconcile: vi
+          .fn()
+          .mockResolvedValueOnce(
+            makeReport({ divergences: [flattenAdopted, bracketSubmittedOnly] }),
+          )
+          .mockResolvedValue(makeReport()),
+      });
+      const sync = startFillSync({
+        execution,
+        clock: { now: () => new Date() },
+        logger,
+        fillPollIntervalMs: 1_000,
+        reconcileTraceId: 'test-reconcile',
+        fillSyncTraceId: 'test-fill-sync',
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      const divergenceLines = logger.entries.filter(
+        (entry) => entry.message === 'reconcile divergence',
+      );
+      expect(divergenceLines.map((entry) => entry.level)).toEqual(['info', 'info']);
+
+      await sync.stop();
+    });
+
+    // Pins the OTHER terminal-adjacent broker_state the narrowing predicate
+    // must also demote — `'filled'` is covered by "logs a reconcile
+    // divergence on first observation..." above; a mutant
+    // that swapped `'partially_filled'` for `'cancelled'` in
+    // `reconcileDivergenceLevel` would leave that test green (it never
+    // exercises `'partially_filled'`) while silently excluding every
+    // partial-fill adopt from FilledZeroSizeThrottle's backstop, since
+    // getOpenPositions() excludes `'cancelled'` rows (#1122 review round 1).
+    it("demotes a bracket adopt whose broker_state is 'partially_filled' to debug — the throttle still watches it", async () => {
+      const logger = makeLogger();
+      const partiallyFilledAdopted = {
+        idempotency_key: 'key-amd-900',
+        instrument: 'AMD',
+        store_state: 'submitted' as const,
+        broker_state: 'partially_filled' as const,
+        action: 'adopted' as const,
+        kind: 'bracket' as const,
+        reason: "store said 'submitted', broker says 'partially_filled'",
+      };
+      const execution = makeExecution({
+        reconcile: vi
+          .fn()
+          .mockResolvedValueOnce(makeReport({ divergences: [partiallyFilledAdopted] }))
+          .mockResolvedValue(makeReport()),
+      });
+      const sync = startFillSync({
+        execution,
+        clock: { now: () => new Date() },
+        logger,
+        fillPollIntervalMs: 1_000,
+        reconcileTraceId: 'test-reconcile',
+        fillSyncTraceId: 'test-fill-sync',
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      const divergenceLines = logger.entries.filter(
+        (entry) => entry.message === 'reconcile divergence',
+      );
+      expect(divergenceLines.map((entry) => entry.level)).toEqual(['debug']);
 
       await sync.stop();
     });
@@ -518,6 +619,7 @@ describe('startFillSync', () => {
         store_state: 'submitted' as const,
         broker_state: null,
         action: 'unrecorded' as const,
+        kind: 'unrecorded' as const,
         reason: 'venue holds a position the store has no open lot for',
       };
       const unrecordedTsla = { ...unrecordedAapl, instrument: 'TSLA' };
@@ -625,6 +727,7 @@ describe('per-arm trace ids (#1321)', () => {
                 store_state: 'submitted',
                 broker_state: null,
                 action: 'undetermined',
+                kind: 'bracket',
                 reason: 'venue unreachable',
               },
             ],
@@ -661,6 +764,7 @@ describe('per-arm trace ids (#1321)', () => {
         store_state: 'submitted' as const,
         broker_state: null,
         action: 'undetermined' as const,
+        kind: 'bracket' as const,
         reason: 'venue unreachable',
       };
       const liveExecution = makeExecution({

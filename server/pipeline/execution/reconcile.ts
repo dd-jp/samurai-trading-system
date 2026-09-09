@@ -202,6 +202,7 @@ async function reconcileFlatten(
       store_state: storeState,
       broker_state: null,
       action: 'undetermined',
+      kind: 'flatten',
       reason,
     };
   }
@@ -222,6 +223,7 @@ async function reconcileFlatten(
         store_state: storeState,
         broker_state: null,
         action: 'rejected',
+        kind: 'flatten',
         reason,
       };
     }
@@ -246,6 +248,7 @@ async function reconcileFlatten(
       store_state: storeState,
       broker_state: null,
       action: 'undetermined',
+      kind: 'flatten',
       reason,
     };
   }
@@ -278,6 +281,7 @@ async function reconcileFlatten(
     store_state: storeState,
     broker_state: order.order_state,
     action: 'adopted',
+    kind: 'flatten',
     reason: `flatten journal said '${row.status}'; broker reports '${order.order_state}'`,
   };
 }
@@ -366,6 +370,7 @@ async function findUnrecordedVenuePositions(
         store_state: 'pending',
         broker_state: null,
         action: 'undetermined',
+        kind: 'unrecorded',
         reason:
           'broker.getOpenPositions failed, so a position the venue holds and the store does ' +
           `not would not have been seen this pass: ${describeThrownSafely(error)}`,
@@ -388,6 +393,7 @@ async function findUnrecordedVenuePositions(
       store_state: 'pending' as const,
       broker_state: null,
       action: 'unrecorded' as const,
+      kind: 'unrecorded' as const,
       reason:
         `venue holds ${venuePosition.qty} ${venuePosition.instrument} (${venuePosition.side}) ` +
         'with no open lot in the store — this exposure is invisible to the Risk Manager. ' +
@@ -419,6 +425,7 @@ async function reconcileLot(
       store_state: position.order_state,
       broker_state: null,
       action: 'undetermined',
+      kind: 'bracket',
       // Safe to surface verbatim ON CREDENTIALS: #297's H1 makes every adapter
       // convert what its client threw into a `BrokerError` built only from
       // curated fields. Same posture and same expression as `execute()`'s
@@ -452,6 +459,7 @@ async function reconcileLot(
       store_state: position.order_state,
       broker_state: null,
       action: 'rejected',
+      kind: 'bracket',
       reason: 'broker has no order under this client_order_id — the write-ahead never landed',
     };
   }
@@ -475,6 +483,7 @@ async function reconcileLot(
     store_state: position.order_state,
     broker_state: order.order_state,
     action: 'adopted',
+    kind: 'bracket',
     reason: `store said '${position.order_state}', broker says '${order.order_state}'`,
   };
 }
