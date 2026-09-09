@@ -68,10 +68,9 @@ describe('scoreItems', () => {
 
   // Narrower than #1392's batch-wide scope, not an endorsement: this item is
   // indistinguishable from a genuine unanimous-neutral read (`degraded:
-  // false`), the same gap #1392 fixed at the batch level. Filed as a
-  // follow-up (see pr-body-1392.md / followup-1392.md) rather than fixed
-  // here — the fix is a per-item degraded marker through `ArchivedItem`,
-  // which is out of this ticket's scope.
+  // false`), the same gap #1392 fixed at the batch level. Tracked as #1420
+  // rather than fixed here — the fix is a per-item degraded marker through
+  // `ArchivedItem`, which is out of this ticket's scope.
   it('an item the model omitted falls back to UNSCORED, currently indistinguishable from a genuine neutral read (tracked follow-up, not fixed here)', async () => {
     const client = new MockLlmClient();
     client.enqueueText(JSON.stringify({ scores: [{ index: 0, sentiment: 1, confidence: 0.8 }] }));
