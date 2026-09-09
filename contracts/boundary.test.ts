@@ -282,9 +282,8 @@ describe('specifiersOf strips comments before matching (#1398)', () => {
  * than `index.ts`.
  *
  * Two more barrels get the same check rather than a general sweep of every
- * barrel in the repo: the two cases the review found,
- * `shared/store/sqlite-utils.ts` and `shared/safe-log.ts`, each already
- * exported by an existing barrel.
+ * barrel in the repo: `shared/store/sqlite-utils.ts` and
+ * `shared/safe-log.ts`, each already exported by an existing barrel.
  */
 describe('inbound routing: nothing bypasses a barrel (#1158)', () => {
   const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -309,7 +308,7 @@ describe('inbound routing: nothing bypasses a barrel (#1158)', () => {
 
   interface ImportStatement {
     readonly specifier: string;
-    /** The literal `import type { X } from '...'` form — see coding-standards.md's carve-out. */
+    /** A statement starting `import type` (named, default, or namespace) — see coding-standards.md's carve-out. */
     readonly isBareImportType: boolean;
   }
 
@@ -364,20 +363,26 @@ describe('inbound routing: nothing bypasses a barrel (#1158)', () => {
   /**
    * Must match a nested directory and a multi-dot filename, not only a flat
    * single-dot name — a charclass that admits neither fails open on exactly
-   * the specifier shape a future `contracts/` layout would use.
+   * the specifier shape a future `contracts/` layout would use. Must also
+   * match a `.ts`/`.tsx` tail, not only `.js`: `client/tsconfig.json` and
+   * `e2e/tsconfig.json` set `allowImportingTsExtensions`, so a deep import
+   * from either tree can legally spell the extension either way.
    */
-  const CONTRACTS_DEEP_IMPORT = /\/contracts\/(?!index\.js$).+\.js$/;
+  const CONTRACTS_DEEP_IMPORT = /\/contracts\/(?!index\.(?:js|ts)$).+\.(?:js|tsx?)$/;
 
   it('has source files to check', () => {
     // Guards the assertions below against silently passing on an empty glob.
     expect(REPO_SOURCE_FILES.length).toBeGreaterThan(0);
   });
 
-  it('the contracts pattern catches nested and multi-dot specifiers, and only excludes index.js', () => {
+  it('the contracts pattern catches nested and multi-dot specifiers, and only excludes index.js/index.ts', () => {
     expect(CONTRACTS_DEEP_IMPORT.test('../../../contracts/pipeline.js')).toBe(true);
     expect(CONTRACTS_DEEP_IMPORT.test('../../contracts/wire/pipeline.js')).toBe(true);
     expect(CONTRACTS_DEEP_IMPORT.test('../../contracts/pipeline.v2.js')).toBe(true);
     expect(CONTRACTS_DEEP_IMPORT.test('../../contracts/index.js')).toBe(false);
+    expect(CONTRACTS_DEEP_IMPORT.test('../../contracts/pipeline.ts')).toBe(true);
+    expect(CONTRACTS_DEEP_IMPORT.test('../../contracts/pipeline.tsx')).toBe(true);
+    expect(CONTRACTS_DEEP_IMPORT.test('../../contracts/index.ts')).toBe(false);
   });
 
   it('throws instead of silently dropping a deep import when a regex literal opens a phantom comment that a later real comment closes', () => {
