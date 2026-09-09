@@ -139,6 +139,7 @@ function makeWiredAdapter(openOrders: readonly unknown[]) {
     baseUrl: 'https://gateway.example/sim/openapi',
     retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
     rateLimiter,
+    logger: recordingLogger(),
   });
   const adapter = new SaxoBrokerAdapter({
     client,

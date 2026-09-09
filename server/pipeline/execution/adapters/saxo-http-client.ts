@@ -73,15 +73,20 @@ export interface SaxoHttpBrokerClientOptions {
    */
   rateLimiter?: TokenBucket;
   /**
-   * Wires `TokenBucketTelemetry` (#1083) onto the DEFAULT bucket only — the
-   * fallback for a caller that constructs this client standalone with no
-   * `rateLimiter` (the composition root, once Saxo is wired, builds its own
-   * shared bucket with telemetry the same way `production.ts` does for
-   * Alpaca and passes it as `rateLimiter`, so this option never reaches that
-   * path). Optional and silent-by-default, same as `TokenBucket` itself —
-   * see its class doc.
+   * REQUIRED, no default (#1222 round 2): wires `TokenBucketTelemetry`
+   * (#1083) onto the DEFAULT bucket — the fallback for a caller that
+   * constructs this client standalone with no `rateLimiter` (the
+   * composition root, once Saxo is wired, builds its own shared bucket with
+   * telemetry the same way `production.ts` does for Alpaca and passes it as
+   * `rateLimiter`, so this option never reaches that path). Made
+   * unconditional rather than optional: the pre-#1222 `SaxoBrokerAdapter`
+   * always built its default bucket with telemetry, because its own
+   * `logger` was required — an omitted seam at a composition root is this
+   * repo's dominant defect class (`AlpacaBrokerAdapterInput.logger` refuses
+   * a silent default for the identical reason), and pacing moving to this
+   * client should not weaken that guarantee.
    */
-  logger?: Logger;
+  logger: Logger;
 }
 
 interface AccountIdentity {
@@ -294,7 +299,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
   private readonly rateLimiter: TokenBucket;
   private identity: Promise<AccountIdentity> | undefined;
 
-  constructor(options: SaxoHttpBrokerClientOptions = {}) {
+  constructor(options: SaxoHttpBrokerClientOptions) {
     const environment = options.environment ?? 'sim';
     const names = SAXO_CREDENTIAL_ENV_VARS[environment];
     const fromEnv = (name: string): string | undefined => {
@@ -320,11 +325,10 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
     this.retry = options.retry ?? DEFAULT_RETRY_CONFIG;
     this.rateLimiter =
       options.rateLimiter ??
-      new TokenBucket(
-        DEFAULT_VENUE_PACING.saxo,
-        undefined,
-        options.logger === undefined ? undefined : { logger: options.logger, name: 'saxo' },
-      );
+      new TokenBucket(DEFAULT_VENUE_PACING.saxo, undefined, {
+        logger: options.logger,
+        name: 'saxo',
+      });
   }
 
   private headers(init: RequestInit, extra: Record<string, string> = {}): Record<string, string> {

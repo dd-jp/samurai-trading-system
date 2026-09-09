@@ -129,11 +129,6 @@ export function saxoInstrumentResolverFromPool(
 }
 
 export interface SaxoBrokerAdapterInput {
-  /**
-   * Pacing (#1222) lives on the concrete `SaxoHttpBrokerClient` this wraps,
-   * not here: a fan-out operation like `submitBracket`/`cancel` issues
-   * several upstream requests, and only the transport layer sees each one.
-   */
   client: SaxoOpenApiClient;
   instruments: SaxoInstrumentResolver;
   state?: BrokerStateStore;

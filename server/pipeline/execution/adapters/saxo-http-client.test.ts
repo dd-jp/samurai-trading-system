@@ -60,6 +60,7 @@ function makeClient(
     baseUrl: 'https://gateway.example/sim/openapi/',
     retry,
     rateLimiter: permissiveLimiter(),
+    logger: recordingLogger(),
   });
 }
 
@@ -83,7 +84,9 @@ describe('SaxoHttpBrokerClient', () => {
 
   it('refuses to construct without a token, naming the env var', () => {
     vi.stubEnv(SAXO_CREDENTIAL_ENV_VARS.sim.token, '   ');
-    expect(() => new SaxoHttpBrokerClient()).toThrow(/SAXO_OPENAPI_TOKEN/);
+    expect(() => new SaxoHttpBrokerClient({ logger: recordingLogger() })).toThrow(
+      /SAXO_OPENAPI_TOKEN/,
+    );
     vi.unstubAllEnvs();
   });
 
@@ -495,6 +498,7 @@ describe('SaxoHttpBrokerClient pacing (#1222)', () => {
       accessToken: FAKE_TOKEN,
       baseUrl: 'https://gateway.example/sim/openapi/',
       retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
+      logger: recordingLogger(),
     });
 
     await client.listOpenOrders();
@@ -535,11 +539,12 @@ describe('SaxoHttpBrokerClient pacing (#1222)', () => {
   // THE MUTATION THIS KILLS: hoist `await this.rateLimiter.acquire()` out of
   // `withRetry`'s closure in saxo-http-client.ts, so a retried attempt is
   // covered by the first attempt's token instead of acquiring its own. Every
-  // test above stays green under that mutation — a permissive bucket never
-  // blocks regardless of how many times `acquire()` is (or isn't) called, so
-  // a missed call is invisible to a call-count assertion against a bucket
-  // that never runs dry. Only a spy on a bucket small enough to matter,
-  // counted per attempt, catches it.
+  // test above stays green under that mutation — none of them spies on
+  // `acquire()` and counts calls per attempt, so a missed call is invisible
+  // to them regardless of bucket size. The bucket here is a generous
+  // capacity 1,000 too (it never blocks, on purpose — this test is not
+  // about parking) — it's the SPY on `acquire()`, not the bucket's size,
+  // that catches the mutation.
   it('acquires a second token for a retried request, not just the first attempt', async () => {
     const fetchMock = vi
       .fn()
@@ -553,6 +558,7 @@ describe('SaxoHttpBrokerClient pacing (#1222)', () => {
       baseUrl: 'https://gateway.example/sim/openapi/',
       retry: { maxAttempts: 3, baseDelayMs: 10, maxDelayMs: 100 },
       rateLimiter,
+      logger: recordingLogger(),
     });
 
     const pending = client.listOpenOrders();
