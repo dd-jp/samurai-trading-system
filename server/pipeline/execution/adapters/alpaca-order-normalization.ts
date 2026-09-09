@@ -35,6 +35,22 @@ export class UnpricedFillError extends Error {
 }
 
 /**
+ * The date `collectFill` books a fill at: `order.filled_at` when the venue
+ * reports one, `observedAt` (the caller's clock reading for this sweep)
+ * otherwise. Extracted for #1123 so `fetchNewFills`'s since-floor invariant
+ * check (`AlpacaBrokerAdapter`) resolves a fill's date exactly the way
+ * `collectFill` itself does, rather than a second copy of this parsing that
+ * could silently drift from it. Deliberately NOT merged with `collectFill`'s
+ * `filled_qty` guards below (Number.isFinite / `<= 0`) — those throw/return on
+ * qty, not date, and collapsing them here would silently drop that throw for
+ * any future caller that only wants a date.
+ */
+export function resolveFilledAt(order: AlpacaOrder | AlpacaOrderLeg, observedAt: Date): Date {
+  const reported = typeof order.filled_at === 'string' ? new Date(order.filled_at) : null;
+  return reported !== null && Number.isFinite(reported.getTime()) ? reported : observedAt;
+}
+
+/**
  * `instrument` comes from the BRACKET PARENT, not from `order`: `AlpacaOrderLeg`
  * carries no `symbol`, and an alert that cannot name the symbol is not
  * actionable. A bracket's legs trade the parent's symbol by construction.
@@ -111,8 +127,7 @@ export function collectFill(
   // is an Invalid Date, whose `getTime()` is NaN, and `NaN < since` is FALSE —
   // so an undeclared/missing `filled_at` would otherwise sail past the window
   // check and be booked with an unsorted, unserializable timestamp.
-  const reported = typeof order.filled_at === 'string' ? new Date(order.filled_at) : null;
-  const filledAt = reported !== null && Number.isFinite(reported.getTime()) ? reported : observedAt;
+  const filledAt = resolveFilledAt(order, observedAt);
   if (filledAt.getTime() < since.getTime()) {
     return;
   }
