@@ -10,10 +10,12 @@
  *
  * COUNTING RECIPE, for a session's log alone: group `event:
  * 'llm_call_failed'` by `payload.failure_cause`. That code is emitted once per
- * terminal failure of an `AnthropicLlmClient` call — i.e. for every production
- * LLM caller, since `production.ts` builds exactly one client and shares it
- * across debate personas, the disagreement detector, the risk critic and MI
- * scoring. Seam-specific codes (`risk_critic_verdict_unavailable`,
+ * terminal failure of an `AnthropicLlmClient` call, and `production.ts` builds
+ * exactly one client and shares it across debate personas, the disagreement
+ * detector, the risk critic and MI scoring. The one dispatch outside the
+ * total is `RateLimitedLlmClient` refusing an already-aborted call before it
+ * calls `complete` (#347) — that costs nothing and reports nothing here.
+ * Seam-specific codes (`risk_critic_verdict_unavailable`,
  * `mi_scoring_provider_failure`, `llm_attempt_retried`, `sentiment_refused`,
  * `grok_refresh_failed`, ...) carry the SAME `failure_cause` field so a count
  * can be narrowed to one stage, but `llm_call_failed` is the total and the

@@ -192,12 +192,19 @@ export interface AnthropicLlmClientConfig {
    * production composition root supplies one that logs `llm_call_failed` at
    * `warn` with the classified cause.
    *
-   * THIS IS THE ONE SEAM THAT SEES EVERY PRODUCTION LLM FAILURE.
    * `production.ts` builds a single client and shares it across the debate
    * personas, the disagreement detector, the risk critic and MI scoring — most
    * of which then swallow the error to fail open, so a per-caller line is
-   * exactly what #1394 found missing. A count of failures by cause for a whole
+   * exactly what #1394 found missing. A count of failures by cause for a
    * session is `llm_call_failed` grouped by `payload.failure_cause`.
+   *
+   * One dispatch never reaches here: `RateLimitedLlmClient` (which wraps this
+   * client for the personas and the disagreement detector) throws
+   * `LlmCancelledError` on an already-aborted signal without calling
+   * `complete`, by design (#347) — that path costs nothing and reports
+   * nothing. The disagreement detector names its own cancellation through
+   * `debate_disagreement_llm_failed`; a cancelled persona call does not
+   * produce an `llm_call_failed` line.
    */
   onCallFailed?: ((report: LlmCallFailureReport) => void) | undefined;
 }
