@@ -19,7 +19,12 @@ import {
   minLiveCapitalCeilingUsd,
   resolveLiveCapitalCeilingUsd,
 } from './live-profile.js';
-import { LIVE_BOOK_GBP, paperStartingProfile, RISK_CAP_EQUITY_FRACTIONS } from './paper-profile.js';
+import {
+  LIVE_BOOK_GBP,
+  LIVE_BOOK_SIZING_USD,
+  paperStartingProfile,
+  RISK_CAP_EQUITY_FRACTIONS,
+} from './paper-profile.js';
 import type { LogEntry, Logger } from './types.js';
 
 const CEILING = 2_000;
@@ -233,6 +238,52 @@ describe('liveStartingProfile', () => {
   });
 });
 
+describe('liveStartingProfile — unconverted-book plausibility warning (#1441)', () => {
+  // #1180 fixed paper's `capitalCeilingUsd` (LIVE_BOOK_GBP x SIZING_USD_PER_GBP
+  // = 1,270). The live env var is the operator's own USD figure and is
+  // deliberately never converted for them, so typing the £1,000 book's bare
+  // number reproduces the exact ~21% under-sizing #1180 fixed, on live money,
+  // silently — `derived_by_conversion: false` is true and therefore not a
+  // warning on its own. This is a plausibility warn, not a refusal: an
+  // operator who genuinely wants a ~$1,000 ceiling is not mistaken.
+
+  it('warns when the declared ceiling is the GBP book’s bare number, unconverted', () => {
+    const logger = makeLogger();
+
+    liveStartingProfile(LIVE_BOOK_GBP, logger);
+
+    const entry = logger.entries.find((e) => e.event === 'live_capital_ceiling_looks_unconverted');
+    expect(entry?.level).toBe('warn');
+    expect(entry?.message).toContain(String(LIVE_BOOK_GBP));
+    expect(entry?.message).toContain(LIVE_MAX_CAPITAL_ENV_VAR);
+    expect(entry?.message).toContain('1441');
+  });
+
+  it('stays silent for the correctly converted book figure (1,270)', () => {
+    const logger = makeLogger();
+
+    liveStartingProfile(LIVE_BOOK_SIZING_USD, logger);
+
+    expect(
+      logger.entries.find((e) => e.event === 'live_capital_ceiling_looks_unconverted'),
+    ).toBeUndefined();
+  });
+
+  it('stays silent for a ceiling clearly unrelated to the book', () => {
+    const logger = makeLogger();
+
+    liveStartingProfile(CEILING, logger);
+
+    expect(
+      logger.entries.find((e) => e.event === 'live_capital_ceiling_looks_unconverted'),
+    ).toBeUndefined();
+  });
+
+  it('does not throw when no logger is supplied, even on the unconverted figure', () => {
+    expect(() => liveStartingProfile(LIVE_BOOK_GBP)).not.toThrow();
+  });
+});
+
 describe('LIVE_MONEY_GATES', () => {
   it('gives every cited issue a claim, so no bare number can accumulate', () => {
     // A number with no claim attached is unverifiable by the next reader, which
@@ -350,5 +401,19 @@ describe('the live-boot warning as an operator actually receives it', () => {
 
   it('tells the operator how to re-verify the list they are being shown', () => {
     expect(liveBootWarning()).toContain(LIVE_MONEY_GATES_RECHECK_COMMAND);
+  });
+
+  it('also warns on the unconverted-book figure at the real boot path (#1441)', () => {
+    const logger = makeLogger();
+    vi.stubEnv(LIVE_MAX_CAPITAL_ENV_VAR, String(LIVE_BOOK_GBP));
+    try {
+      startingProfileForMode('live', logger);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+
+    const entry = logger.entries.find((e) => e.event === 'live_capital_ceiling_looks_unconverted');
+    expect(entry?.level).toBe('warn');
+    expect(entry?.message).toContain(String(LIVE_BOOK_SIZING_USD));
   });
 });
