@@ -1,4 +1,4 @@
-import { PIPELINE_STAGES } from '../../../contracts/pipeline.js';
+import { PIPELINE_STAGES } from '../../../contracts/index.js';
 import type { Signal } from '../../pipeline/analysts/index.js';
 import type { Clock, OrderIntent } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';

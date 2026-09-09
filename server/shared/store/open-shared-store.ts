@@ -51,12 +51,12 @@ export type StoreEnvironment = (typeof STORE_ENVIRONMENTS)[number];
  * `DashboardSnapshot.mode` carries it to the browser, which cannot see the
  * server's environment and must not import the store layer to name a mode.
  */
-export { STORE_MODES, type StoreMode } from '../../../contracts/primitives.js';
+export { STORE_MODES, type StoreMode } from '../../../contracts/index.js';
 
 // Also imported, not just re-exported: `export … from` publishes the names
 // without binding them locally, and `resolveStoreMode` below both reads the
 // array at runtime and annotates with the type.
-import { STORE_MODES, type StoreMode } from '../../../contracts/primitives.js';
+import { STORE_MODES, type StoreMode } from '../../../contracts/index.js';
 
 /**
  * Resolves the trading mode from `SAMURAI_MODE` — the ONE derivation both

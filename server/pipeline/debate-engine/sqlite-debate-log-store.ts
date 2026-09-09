@@ -20,8 +20,12 @@ import type {
   DebateTermination,
   DebateTerminationCause,
 } from '../../shared/index.js';
-import { isUniqueConstraintError, type SharedStore } from '../../shared/store/index.js';
-import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
+import {
+  fromStoredTimestamp,
+  isUniqueConstraintError,
+  type SharedStore,
+  toStoredTimestamp,
+} from '../../shared/store/index.js';
 import type { AnalystContribution, Direction } from './types.js';
 
 interface DebateLogRow {

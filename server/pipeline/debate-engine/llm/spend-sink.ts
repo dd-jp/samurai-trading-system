@@ -30,7 +30,7 @@ import {
   rateFor,
 } from '../../../shared/llm/pricing.js';
 import type { SharedStore } from '../../../shared/store/index.js';
-import { toStoredTimestamp } from '../../../shared/store/sqlite-utils.js';
+import { toStoredTimestamp } from '../../../shared/store/index.js';
 import type { Logger } from '../../../shared/types.js';
 import { type PromptTierAlertChannel, PromptTierCrossingThrottle } from './prompt-tier-alert.js';
 

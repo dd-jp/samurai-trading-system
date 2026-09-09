@@ -67,15 +67,15 @@
  * Today's behaviour for a boot-time fault is unchanged — it still stops —
  * and only a fault while *serving* continues.
  */
-import { describeThrown } from '../../shared/safe-log.js';
 import {
   type ContinueOnFaultEffects,
+  describeThrown,
   type ErrorStream,
   guardedWrite,
   installContinueOnFault,
   type StdoutStream,
   watchStdoutErrors,
-} from '../../shared/stdout-fault-guard.js';
+} from '../../shared/index.js';
 
 /**
  * Subscribes to stdout's `'error'` event so a destroyed pipe degrades rather

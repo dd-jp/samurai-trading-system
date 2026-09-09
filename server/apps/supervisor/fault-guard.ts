@@ -68,15 +68,15 @@
  * handler before that point would risk swallowing exactly the failure that
  * `try/catch` exists to surface.
  */
-import { describeThrown } from '../../shared/safe-log.js';
 import {
   type ContinueOnFaultEffects,
+  describeThrown,
   type ErrorStream,
   guardedWrite,
   installContinueOnFault,
   type StdoutStream,
   watchStdoutErrors,
-} from '../../shared/stdout-fault-guard.js';
+} from '../../shared/index.js';
 
 /**
  * Subscribes to stdout's `'error'` event so a destroyed pipe degrades rather

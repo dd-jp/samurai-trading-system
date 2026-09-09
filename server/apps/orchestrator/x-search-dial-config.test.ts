@@ -23,7 +23,7 @@ import {
   DEFAULT_MAX_SEARCH_RESULTS,
   MAX_SEARCH_RESULTS_CEILING,
 } from '../../providers/market-intelligence/index.js';
-import { positiveIntegerFromEnv } from '../../shared/env-integer.js';
+import { positiveIntegerFromEnv } from '../../shared/index.js';
 import { ENV_X_MAX_SEARCH_RESULTS } from './production.js';
 
 /** The call the composition root makes, kept in one place so it cannot drift. */

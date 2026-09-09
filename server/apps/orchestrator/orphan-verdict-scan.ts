@@ -47,7 +47,7 @@
 
 import { describeThrownSafely } from '../../shared/index.js';
 import type { SharedStore } from '../../shared/store/index.js';
-import { fromStoredTimestamp } from '../../shared/store/sqlite-utils.js';
+import { fromStoredTimestamp } from '../../shared/store/index.js';
 import type { Logger } from './types.js';
 
 /** One `verdict_log` `go` row with no corresponding `execution`-stage `audit_log` row. */

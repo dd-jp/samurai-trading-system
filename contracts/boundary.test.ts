@@ -272,3 +272,113 @@ describe('specifiersOf strips comments before matching (#1398)', () => {
     expect(() => specifiersOf(file, fixturesDir)).not.toThrow();
   });
 });
+
+/**
+ * The outbound suite above proves `contracts/` imports nothing external. It
+ * does not prove anything routes *into* it correctly — a file elsewhere that
+ * reaches past `contracts/index.ts` straight into `contracts/pipeline.ts`
+ * type-checks green and passes every test above (#1158). This is that other
+ * half: nothing outside `contracts/` may name a `contracts/*.ts` file other
+ * than `index.ts`.
+ *
+ * Two more barrels get the same check, at "if cheap" scope (#1158's decision
+ * comment) rather than a general sweep of every barrel in the repo: the two
+ * cases the review actually found, `shared/store/sqlite-utils.ts` and
+ * `shared/safe-log.ts`, each already exported by an existing barrel.
+ */
+describe('inbound routing: nothing bypasses a barrel (#1158)', () => {
+  const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
+  const SKIP_DIRS = new Set(['node_modules', 'dist', 'coverage', '.turbo']);
+
+  function walkSourceFiles(dir: string): string[] {
+    const out: string[] = [];
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (SKIP_DIRS.has(entry.name)) continue;
+        out.push(...walkSourceFiles(join(dir, entry.name)));
+      } else if (entry.isFile() && /\.tsx?$/.test(entry.name)) {
+        out.push(join(dir, entry.name));
+      }
+    }
+    return out;
+  }
+
+  const REPO_SOURCE_FILES = ['server', 'client', 'e2e']
+    .map((d) => join(REPO_ROOT, d))
+    .flatMap((root) => walkSourceFiles(root));
+
+  interface ImportStatement {
+    readonly specifier: string;
+    /** The literal `import type { X } from '...'` form — see coding-standards.md's carve-out. */
+    readonly isBareImportType: boolean;
+  }
+
+  function importStatementsOf(absPath: string): ImportStatement[] {
+    const text = stripComments(readFileSync(absPath, 'utf8'));
+    const statements: ImportStatement[] = [];
+    for (const match of text.matchAll(/(?:import|export)\s[^;]*?from\s+['"]([^'"]+)['"]/g)) {
+      statements.push({
+        specifier: match[1] as string,
+        isBareImportType: /^import\s+type\b/.test(match[0].trimStart()),
+      });
+    }
+    for (const match of text.matchAll(/(?:^|[;}])\s*import\s+['"]([^'"]+)['"]/gm)) {
+      statements.push({ specifier: match[1] as string, isBareImportType: false });
+    }
+    for (const match of text.matchAll(/\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g)) {
+      statements.push({ specifier: match[1] as string, isBareImportType: false });
+    }
+    return statements;
+  }
+
+  /**
+   * `honourImportTypeCarveOut` is false only for `contracts/`: its barrel is
+   * dependency-free by enforced construction (the outbound suite above), so
+   * the carve-out's reason — routing a type-only need would manufacture a
+   * real import path into a module graph nothing else pulls in — cannot
+   * arise there, and the carve-out does not reach it.
+   */
+  function deepImportViolations(
+    targetPattern: RegExp,
+    isInternalToTarget: (absPath: string) => boolean,
+    honourImportTypeCarveOut: boolean,
+  ): string[] {
+    const violations: string[] = [];
+    for (const file of REPO_SOURCE_FILES) {
+      if (isInternalToTarget(file)) continue;
+      for (const { specifier, isBareImportType } of importStatementsOf(file)) {
+        if (!targetPattern.test(specifier)) continue;
+        if (honourImportTypeCarveOut && isBareImportType) continue;
+        violations.push(`${file}: imports "${specifier}" directly instead of through its barrel`);
+      }
+    }
+    return violations;
+  }
+
+  it('nothing outside contracts/ imports a contracts/*.ts file other than index.ts', () => {
+    const violations = deepImportViolations(
+      /\/contracts\/(?!index\.js$)[A-Za-z0-9_-]+\.js$/,
+      () => false,
+      false,
+    );
+    expect(violations, violations.join('\n')).toEqual([]);
+  });
+
+  it('nothing outside shared/store/ imports shared/store/sqlite-utils.ts directly', () => {
+    const violations = deepImportViolations(
+      /\/shared\/store\/sqlite-utils\.js$/,
+      (file) => file.includes('/shared/store/'),
+      true,
+    );
+    expect(violations, violations.join('\n')).toEqual([]);
+  });
+
+  it('nothing outside shared/ imports shared/safe-log.ts directly', () => {
+    const violations = deepImportViolations(
+      /\/shared\/safe-log\.js$/,
+      (file) => file.includes('/shared/'),
+      true,
+    );
+    expect(violations, violations.join('\n')).toEqual([]);
+  });
+});

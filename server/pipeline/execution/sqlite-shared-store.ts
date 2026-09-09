@@ -86,14 +86,12 @@ import type {
 } from '../../shared/index.js';
 import {
   type SharedStore as Db,
-  isUniqueConstraintError,
-  TERMINAL_ORDER_STATES,
-} from '../../shared/store/index.js';
-import {
   fromStoredTimestamp,
   fromStoredTimestampOrNull,
+  isUniqueConstraintError,
+  TERMINAL_ORDER_STATES,
   toStoredTimestamp,
-} from '../../shared/store/sqlite-utils.js';
+} from '../../shared/store/index.js';
 import type {
   FlattenAttribution,
   FlattenSubmissionWriteAhead,

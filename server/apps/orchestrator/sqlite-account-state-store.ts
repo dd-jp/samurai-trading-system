@@ -11,7 +11,7 @@
  */
 
 import type { SharedStore } from '../../shared/store/index.js';
-import { toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
+import { toStoredTimestamp } from '../../shared/store/index.js';
 
 const SINGLETON_KEY = 'default';
 

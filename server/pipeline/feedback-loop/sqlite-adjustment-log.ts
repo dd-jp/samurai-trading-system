@@ -39,7 +39,7 @@
  */
 
 import type { SharedStore } from '../../shared/store/index.js';
-import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
+import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';
 import type { Adjustment, AdjustmentLog, PendingApprovalAdjustment } from './types.js';
 
 type DialType = 'analyst_weight' | 'strategy_param' | 'risk_threshold';

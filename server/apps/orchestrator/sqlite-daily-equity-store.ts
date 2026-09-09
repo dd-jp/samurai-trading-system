@@ -12,7 +12,7 @@
  */
 
 import type { SharedStore } from '../../shared/store/index.js';
-import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
+import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';
 
 /** One day's equity observation, anchored to the portfolio session it opens. */
 export interface DailyEquityObservation {

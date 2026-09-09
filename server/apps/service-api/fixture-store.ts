@@ -15,7 +15,7 @@
  * server or snapshot seam.
  */
 
-import type { PipelineStage } from '../../../contracts/pipeline.js';
+import type { PipelineStage } from '../../../contracts/index.js';
 // Imported from the concrete module, not the `debate-engine` barrel: the
 // barrel re-exports `SqliteDebateLogStore`, the Anthropic/Nous LLM clients
 // etc., and a value import of the barrel would drag every one of those

@@ -13,8 +13,8 @@ import {
   type ClosedTradeRow,
   fromClosedTradeRow,
   type SharedStore,
+  toStoredTimestamp,
 } from '../../shared/store/index.js';
-import { toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 
 export class SqliteClosedTradeStore implements ClosedTradeStore {
   /**

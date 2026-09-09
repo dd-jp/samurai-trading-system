@@ -22,7 +22,7 @@
 
 import { currentTraceId, type Logger } from '../../shared/index.js';
 import type { SharedStore as Db } from '../../shared/store/index.js';
-import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
+import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';
 import { readPersistedConditions, readPersistedDroppedConditions } from './invalidation.js';
 import type {
   EvaluatedCondition,

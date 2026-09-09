@@ -47,7 +47,7 @@
 
 import type { VerdictLog, VerdictLogStore } from '../../shared/index.js';
 import type { SharedStore } from '../../shared/store/index.js';
-import { toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
+import { toStoredTimestamp } from '../../shared/store/index.js';
 
 export class SqliteVerdictLogStore implements VerdictLogStore {
   constructor(private readonly db: SharedStore) {}

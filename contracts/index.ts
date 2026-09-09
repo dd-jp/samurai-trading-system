@@ -27,6 +27,7 @@ export {
   DEGRADED_DECISIONS,
   type DegradedDecision,
   isDegradedDecision,
+  isQuorumSkipDecision,
   PIPELINE_STAGES,
   type PipelineCell,
   type PipelineCellState,
@@ -34,6 +35,7 @@ export {
   type PipelineOutcome,
   type PipelineStage,
   type PipelineView,
+  QUORUM_SKIP_DECISIONS,
 } from './pipeline.js';
 export {
   type AssetClass,
@@ -42,6 +44,7 @@ export {
   type OrderState,
   STORE_MODES,
   type StoreMode,
+  type TradingArm,
 } from './primitives.js';
 export type {
   AlpacaBalanceWire,

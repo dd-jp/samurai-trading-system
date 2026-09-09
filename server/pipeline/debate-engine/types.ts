@@ -14,11 +14,11 @@
  * each analyst's stance on the wire, so the browser needs this union and must
  * not import the debate engine to get it.
  */
-export type { Direction } from '../../../contracts/primitives.js';
+export type { Direction } from '../../../contracts/index.js';
 
 // Also imported, not just re-exported: `export … from` publishes the name
 // without binding it locally, and the interfaces below annotate with it.
-import type { Direction } from '../../../contracts/primitives.js';
+import type { Direction } from '../../../contracts/index.js';
 import type { DebateTerminationCause } from '../../shared/index.js';
 
 /**

@@ -35,7 +35,7 @@ import {
   type PipelineOutcome,
   type PipelineStage,
   type PipelineView,
-} from '../../../contracts/pipeline.js';
+} from '../../../contracts/index.js';
 import type { TickStage } from '../orchestrator/index.js';
 import type { PipelineActivity, PipelineLiveTick, PipelineStageEvent } from './types.js';
 

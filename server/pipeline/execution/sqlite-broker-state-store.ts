@@ -16,7 +16,7 @@ import {
   fromStoredTimestamp,
   fromStoredTimestampOrNull,
   toStoredTimestamp,
-} from '../../shared/store/sqlite-utils.js';
+} from '../../shared/store/index.js';
 import type {
   BrokerBracketOrderIds,
   BrokerBracketPhase,

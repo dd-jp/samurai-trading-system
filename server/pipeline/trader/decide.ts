@@ -28,13 +28,14 @@ import {
   type OrderIntent,
   totalHeldQuantity,
 } from '../../shared/index.js';
-// TYPE-only, and from the defining module rather than the debate-engine
-// barrel: the barrel pulls the whole engine's module graph into the Trader
-// path, and a type import is erased at compile time, so this is deliberately
-// the ONLY thing this module takes from the debate engine. This module does
-// not re-derive the decision bar — it takes the bar coordinate from
-// `DebateResult`. Do not import `floorToBar` or `DEBATE_BAR_TIMEFRAME_MS`
-// here to recompute it (#687).
+// docs/coding-standards.md's type-only carve-out: a bare `import type` is
+// erased at compile time, so routing this through the debate-engine barrel
+// would manufacture a real import path — pulling the whole engine's module
+// graph into the Trader — to satisfy a need that has no runtime graph at
+// all. This is deliberately the ONLY thing this module takes from the debate
+// engine. This module does not re-derive the decision bar — it takes the bar
+// coordinate from `DebateResult`. Do not import `floorToBar` or
+// `DEBATE_BAR_TIMEFRAME_MS` here to recompute it (#687).
 import type { DebateResult } from '../debate-engine/types.js';
 // #1089: the ONE typed dependency this otherwise risk-manager-free module
 // takes, and only for `instanceof` discrimination (coding-standards.md

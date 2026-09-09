@@ -3,9 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
 import type { ClosedTrade, TradingArm } from '../../shared/index.js';
-import { openSharedStore, type SharedStore } from '../../shared/store/index.js';
+import { openSharedStore, type SharedStore, toStoredTimestamp } from '../../shared/store/index.js';
 import { listMigrations, MIGRATIONS_DIR, runMigrations } from '../../shared/store/migrate.js';
-import { toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 import { SqliteArmComparisonSource } from './sqlite-arm-comparison-source.js';
 
 function makeTrade(overrides: Partial<ClosedTrade> = {}): ClosedTrade {

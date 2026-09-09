@@ -13,7 +13,7 @@
  */
 
 import type { SharedStore } from '../../shared/store/index.js';
-import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
+import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';
 import type { AssetClass, AuditLog } from './types.js';
 
 export interface AuditLogEntry {

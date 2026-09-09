@@ -29,7 +29,7 @@
 import type { Clock } from '../../shared/index.js';
 import { SystemClock } from '../../shared/index.js';
 import type { SharedStore } from '../../shared/store/index.js';
-import { toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
+import { toStoredTimestamp } from '../../shared/store/index.js';
 import type { ConfigTrialLog } from './config-trial-log.js';
 import type { BacktestReport } from './types.js';
 

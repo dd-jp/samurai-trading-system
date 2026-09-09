@@ -29,7 +29,7 @@
  * at cutover with `key_scheme = 1`; everything written since defaults to 2.
  */
 import type { Database } from 'better-sqlite3';
-import type { OrderState } from '../../../contracts/primitives.js';
+import type { OrderState } from '../../../contracts/index.js';
 
 /**
  * `order_state`s that are finished — excluded from `getOpenPositions()`

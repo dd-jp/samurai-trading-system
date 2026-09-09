@@ -16,7 +16,7 @@
 import type { Clock, TuningStore } from '../../shared/index.js';
 import { assertThresholdWithinBounds, SystemClock } from '../../shared/index.js';
 import type { SharedStore } from '../../shared/store/index.js';
-import { toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
+import { toStoredTimestamp } from '../../shared/store/index.js';
 
 /**
  * The three dial tables share one shape — (name key, REAL value, updated_at)

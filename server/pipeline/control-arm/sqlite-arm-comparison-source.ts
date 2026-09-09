@@ -21,8 +21,8 @@ import {
   type ClosedTradeRow,
   fromClosedTradeRow,
   type SharedStore,
+  toStoredTimestamp,
 } from '../../shared/store/index.js';
-import { toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 
 /** A closed trade plus the arm that produced it (migration 0033). */
 export type ArmedClosedTrade = ClosedTrade & { arm: TradingArm };

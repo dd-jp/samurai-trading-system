@@ -30,7 +30,7 @@
  * writing its bare direction. A degraded word appearing on a `control:` trace
  * would mean the falsifier arm had acquired an LLM.
  */
-import { isDegradedDecision } from '../../../contracts/pipeline.js';
+import { isDegradedDecision } from '../../../contracts/index.js';
 import type { DebateResult } from '../../pipeline/debate-engine/index.js';
 
 export { isDegradedDecision };
