@@ -156,7 +156,8 @@ export const TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS = 45 * 60_000;
  * bucket (41 concurrent priority callers having just emptied it, the same
  * cold-start burst `venue-pacing.ts` sizes `capacity` for), each further
  * concurrent `priority` racer costs another `1 / refillPerSecond * 1000 =
- * 500ms` (mirrors the existing repeat-window test's race construction below).
+ * 500ms` (mirrors the repeat-window race construction already used in
+ * `token-bucket.test.ts`).
  * Reaching 8s from there needs ~16 further concurrent `priority` callers on
  * top of the 2 that open the repeat window — a number this module does not
  * try to pin exactly (the only real caller pattern found, `fetchNewFills` in
@@ -165,8 +166,8 @@ export const TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS = 45 * 60_000;
  * specific concurrent-caller count actually being reached in practice — only
  * on 8s being reachable in principle, which the construction above shows).
  * Chosen to equal the module header's own motivating "eight seconds" example
- * (line 18) rather than an arbitrary multiple, so a priority wait that trips
- * this IS, by the header's own framing, the failure #1083 exists to surface.
+ * rather than an arbitrary multiple, so a priority wait that trips this IS,
+ * by the header's own framing, the failure #1083 exists to surface.
  */
 export const TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_PRIORITY_MS =
   TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS * 8;
