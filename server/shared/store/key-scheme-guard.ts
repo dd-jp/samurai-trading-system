@@ -47,6 +47,7 @@ export const TERMINAL_ORDER_STATES: readonly OrderState[] = [
   'cancelled',
   'rejected',
   'expired',
+  'abandoned',
 ];
 
 /** A lot still in flight whose key predates the #686 derivation. */

@@ -302,6 +302,34 @@ export interface SharedStore {
    * here.
    */
   sweepTerminalPositions(cutoff: Date): Promise<number>;
+  /**
+   * #1186: retires ONE lot from `filled`/`partially_filled` with
+   * `filled_size = 0` to the `'abandoned'` terminal state, recording why —
+   * `wedged-zero-fill-sweep.ts`'s only write. A zero-fill lot has no venue
+   * position (nothing filled), so this is a bookkeeping close, never a venue
+   * action (#1215's rule: no order is cancelled or re-placed by this call).
+   *
+   * Guarded in the same UPDATE (`order_state IN ('filled', 'partially_filled')
+   * AND filled_size = 0`), not read-then-written: the sweep's worklist read
+   * and this write are two separate store round-trips, and a fill landing in
+   * between (however unlikely for a lot this sweep only reaches once it has
+   * been wedged for the whole bounded window) must not be overwritten by a
+   * decision made off the stale read. A no-op WHERE-guard miss (0 rows
+   * changed) is the lot having genuinely un-wedged itself, not an error —
+   * mirrors `confirmResidualProtected`'s own idempotent-no-op posture.
+   *
+   * Returns whether the write actually landed, so the sweep can tell a
+   * genuine abandonment from that race and log accordingly instead of
+   * claiming a repair that did not happen.
+   *
+   * No `abandoned_at` parameter: `open_positions` carries no separate
+   * terminal-transition timestamp for ANY state (`TERMINAL_SWEEP_AGE_MS`'s
+   * own doc, reconcile.ts, notes the same gap for the `#1088` sweep) — the
+   * WHEN this happened is the calling pass's own log line, not a persisted
+   * column, consistent with every other terminal transition this store
+   * already makes.
+   */
+  abandonWedgedZeroFillLot(idempotency_key: string, reason: string): Promise<boolean>;
 }
 
 /**

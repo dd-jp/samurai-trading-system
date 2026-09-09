@@ -118,6 +118,9 @@ class FakeSharedStore implements SharedStore {
   async sweepTerminalPositions(_cutoff: Date): Promise<number> {
     return 0;
   }
+  async abandonWedgedZeroFillLot(_idempotency_key: string, _reason: string): Promise<boolean> {
+    return false;
+  }
   async applyLotAdvance(advance: LotAdvance): Promise<void> {
     if (this.shouldThrow) {
       throw new Error('boom');

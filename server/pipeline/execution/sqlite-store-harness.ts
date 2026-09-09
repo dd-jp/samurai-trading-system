@@ -159,6 +159,15 @@ export class TestExecutionStore extends SqliteExecutionStore {
     return swept;
   }
 
+  override async abandonWedgedZeroFillLot(
+    idempotency_key: string,
+    reason: string,
+  ): Promise<boolean> {
+    const abandoned = await super.abandonWedgedZeroFillLot(idempotency_key, reason);
+    if (abandoned) this.writeLog.push(`abandon-wedged-zero-fill:${idempotency_key}`);
+    return abandoned;
+  }
+
   /** Raw read of the #549 marker columns (migration 0024) — production reads them only via `getUnprotectedResidualLots`. */
   async getResidualProtectionMarker(
     idempotency_key: string,

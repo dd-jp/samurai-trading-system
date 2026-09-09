@@ -247,8 +247,9 @@ export interface ReconcileDivergence {
    * `'bracket'` for a `reconcileLot` row, keyed to an `OpenPosition`.
    * `'flatten'` for a `reconcileFlatten` row. `'unrecorded'` for
    * `findUnrecordedVenuePositions`'s rows — a venue position the store never
-   * wrote. `'sweep'` for `residual-protection-sweep.ts`'s (#549) rows — a
-   * DIFFERENT reconciliation pass that happens to read the same
+   * wrote. `'sweep'` for `residual-protection-sweep.ts`'s (#549) and
+   * `wedged-zero-fill-sweep.ts`'s (#1186) rows — DIFFERENT reconciliation
+   * passes that happen to read (and, for #1186, also write) the same
    * `OpenPosition` row shape `reconcileLot` does. Sweep rows DO reach
    * `reconcileDivergenceLevel()`: `reconcile()` merges them into
    * `report.divergences` (reconcile.ts), and both `runPoll` and

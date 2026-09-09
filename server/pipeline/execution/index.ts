@@ -149,3 +149,8 @@ export type {
   UnresolvedPriceUnitAlert,
   UnresolvedPriceUnitAlertChannel,
 } from './unresolved-price-unit-alert.js';
+export type { WedgedZeroFillSweepResult } from './wedged-zero-fill-sweep.js';
+export {
+  sweepWedgedZeroFillLots,
+  WEDGED_ZERO_FILL_ABANDON_AFTER_MS,
+} from './wedged-zero-fill-sweep.js';

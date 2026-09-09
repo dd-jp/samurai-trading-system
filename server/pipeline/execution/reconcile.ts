@@ -76,6 +76,15 @@
  * at 24h — 24x `DEBATE_BAR_TIMEFRAME_MS` (the bar grid a replay's coordinate
  * is measured against, debate-log-store.ts), comfortably past any realistic
  * crash-recovery gap.
+ *
+ * ## The wedged-zero-fill sweep (#1186)
+ *
+ * A lot adopted `filled`/`partially_filled` whose `filled_size` never moves
+ * off zero is NOT yet terminal, so the sweep above never reaches it, and it
+ * is not `IN_FLIGHT`, so this file's own bracket pass never revisits it
+ * either — the gap `wedged-zero-fill-sweep.ts` closes. Called the same way
+ * the residual sweep is (both production call sites, live and control arm,
+ * store-evidence-only), just after it.
  */
 
 import type { OpenPosition, OrderState } from '../../shared/index.js';
@@ -87,6 +96,7 @@ import type {
   ReconcileReport,
   UnresolvedFlattenSubmission,
 } from './types.js';
+import { sweepWedgedZeroFillLots } from './wedged-zero-fill-sweep.js';
 
 /** The states a crash can strand: written ahead, or acked but not advanced. */
 const IN_FLIGHT: readonly OrderState[] = ['pending', 'submitted'];
@@ -144,6 +154,19 @@ export async function reconcile(input: ExecutionInput): Promise<ReconcileReport>
     if (divergence.action !== 'undetermined') corrected += 1;
   }
 
+  // #1186 — see wedged-zero-fill-sweep.ts. Store-evidence-only (no broker
+  // call): it reads `getOpenPositions()` fresh, its own worklist scan, the
+  // same shape `sweepResidualProtection` above already takes with its own
+  // `getUnprotectedResidualLots()` rather than reusing this function's
+  // `positions` — a lot it retires is never one `reconcileLot` above needed
+  // to act on (it is not `IN_FLIGHT`) or one `findUnrecordedVenuePositions`
+  // below should compare against a venue read (it has no venue position).
+  const wedgedZeroFillSweep = await sweepWedgedZeroFillLots(input);
+  for (const divergence of wedgedZeroFillSweep.divergences) {
+    divergences.push(divergence);
+    if (divergence.action !== 'undetermined') corrected += 1;
+  }
+
   divergences.push(...(await findUnrecordedVenuePositions(input, positions)));
 
   // #1088 — see the file doc's "terminal-row sweep" section. Unconditional:
@@ -153,7 +176,11 @@ export async function reconcile(input: ExecutionInput): Promise<ReconcileReport>
   const swept = await store.sweepTerminalPositions(cutoff);
 
   return {
-    checked: inFlight.length + unresolvedFlattens.length + residualSweep.checked,
+    checked:
+      inFlight.length +
+      unresolvedFlattens.length +
+      residualSweep.checked +
+      wedgedZeroFillSweep.checked,
     corrected,
     divergences,
     swept,

@@ -76,7 +76,16 @@ export const STORE_MODES = ['paper', 'live', 'backtest'] as const;
 
 export type StoreMode = (typeof STORE_MODES)[number];
 
-/** Lifecycle of a broker order, from intent through terminal state. */
+/**
+ * Lifecycle of a broker order, from intent through terminal state.
+ *
+ * `'abandoned'` (#1186) is, like `'closed'`, never reported by a venue — it is
+ * `wedged-zero-fill-sweep.ts`'s own bookkeeping terminal state for a lot
+ * `reconcile()` adopted as `filled`/`partially_filled` whose `filled_size`
+ * stayed zero past the bounded window: no fill ever landed, so there is no
+ * venue position to cancel or flatten, only a store row with no path back to
+ * a live state to retire honestly.
+ */
 export type OrderState =
   | 'pending'
   | 'submitted'
@@ -85,7 +94,8 @@ export type OrderState =
   | 'closed'
   | 'cancelled'
   | 'rejected'
-  | 'expired';
+  | 'expired'
+  | 'abandoned';
 
 /**
  * Which ARM of the measurement a decision, order or trade belongs to (#753).
