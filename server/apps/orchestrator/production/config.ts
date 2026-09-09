@@ -483,7 +483,7 @@ export interface AlertChannelSlots {
    * reaching this port, so a logging implementation would emit each trip
    * twice. `TradeChannelNonSterlingFeeAlert`
    * (non-sterling-fee-alert-channel.ts) is what an unattended soak (#238)
-   * needs, and `SAMURAI_ALERTS=telegram` supplies it — the twenty-first
+   * needs, and `SAMURAI_ALERTS=telegram` supplies it — the twenty-fifth
    * `ALERT_CHANNEL_FIELDS` member.
    *
    * A foreign fee means an instrument was traded that `tradeableUniverse()`

@@ -1,6 +1,6 @@
 /**
  * Trade-channel adapter for the non-sterling-fee alert (#1465) — the
- * twenty-first outbound operator escalation.
+ * twenty-fifth outbound operator escalation.
  *
  * Same shape as `TradeChannelThresholdClampAlert`: wrap the already-
  * provisioned Telegram client rather than introduce a second integration,

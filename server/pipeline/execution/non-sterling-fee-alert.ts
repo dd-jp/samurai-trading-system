@@ -52,7 +52,13 @@ export interface NonSterlingFeeAlert {
   instrument: string;
   /** The venue's own fill identifier — greppable against the booked `fills` row. */
   broker_fill_id: string;
-  /** The fee as booked (verbatim, in `fee_currency` — #1220 does not convert it). */
+  /**
+   * The venue-reported fee, verbatim in `fee_currency` (#1220 does not
+   * convert it) — the raw fill's own `fee`, not necessarily what gets
+   * booked: on the `cumulativeTopUp` call site this is the venue's
+   * cumulative total for the whole order, not the incremental delta
+   * `chargeTopUpTo` charges this lot.
+   */
   fee: number;
   fee_currency: string;
   /** `BOOK_CURRENCY` at the time of the alert — named explicitly rather than assumed by the reader. */

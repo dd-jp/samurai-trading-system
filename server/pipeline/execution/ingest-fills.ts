@@ -2108,9 +2108,10 @@ function modelledEntryCostFor(position: OpenPosition): ModelledEntryCost | null 
  * currency is not sterling — see that constant for why this alerts rather
  * than refusing, and why it is a contradiction rather than an FX term.
  *
- * `isBookCurrency` is the mark side's own predicate (pence in any of its four
- * spellings, plus GBP in any case), reused rather than re-derived so this
- * cannot disagree with what `LseMarkDataSource` refuses at boot.
+ * `isBookCurrency` (server/shared/book-currency.ts, #1465: pence in any of
+ * its four spellings, plus GBP in any case) is the same predicate
+ * `LseMarkDataSource` refuses foreign marks with at boot, reused rather than
+ * re-derived so the two cannot disagree.
  *
  * Posts to `input.nonSterlingFeeAlerts` AFTER the `safeLog` line, never
  * instead of it (#1465) — see that field's own doc for why absence is not

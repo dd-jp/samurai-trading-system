@@ -316,7 +316,7 @@ export const ALERT_CHANNEL_FIELDS = [
   'legResizeAlerts',
   'dormantLegsAlerts',
   'priceUnitAlerts',
-  // #1465 — the twenty-first. Channel type and transport in the SAME
+  // #1465 — the twenty-fifth. Channel type and transport in the SAME
   // change: #1220 raised `FEE_CURRENCY_NOT_BOOK_CURRENCY` at `error` with no
   // channel behind it, the same hole `residualExposureAlerts` closed for
   // #525. The condition it reports (a fill fee outside book currency) means

@@ -6400,7 +6400,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       legResizeAlerts: new LoggingLegResizeUnverifiedAlertChannel(logger),
       dormantLegsAlerts: new LoggingDormantLegsUnresolvedAlertChannel(logger),
       priceUnitAlerts: new LoggingUnresolvedPriceUnitAlertChannel(logger),
-      // #1465 — the twenty-first `ALERT_CHANNEL_FIELDS` member. A bare no-op,
+      // #1465 — the twenty-fifth `ALERT_CHANNEL_FIELDS` member. A bare no-op,
       // same reason as `traderDiagnosticAlerts`/`thresholdClampAlerts` above:
       // this port has deliberately no `Logging…Channel` (its caller already
       // writes an `error`-level line first), and the condition itself —
