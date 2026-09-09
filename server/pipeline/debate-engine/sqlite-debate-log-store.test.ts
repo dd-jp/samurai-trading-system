@@ -311,3 +311,161 @@ describe('SqliteDebateLogStore.getByDebateId', () => {
     expect(row?.open_items).toBeUndefined();
   });
 });
+
+describe('SqliteDebateLogStore.getTerminationCauseWindowCounts (#1396)', () => {
+  it('counts an explicit llm_failure row and excludes it from non_failure', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+    store.writeLog(
+      makeLog({
+        debate_id: 'd1',
+        created_at: new Date('2026-07-14T09:00:00Z'),
+        termination: 'latency_truncated',
+        termination_cause: 'llm_failure',
+      }),
+    );
+
+    const counts = store.getTerminationCauseWindowCounts(
+      new Date('2026-07-14T08:00:00Z'),
+      new Date('2026-07-14T10:00:00Z'),
+    );
+    expect(counts).toEqual({ llm_failure: 1, total: 1 });
+  });
+
+  it('counts a budget truncation as non-failure', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+    store.writeLog(
+      makeLog({
+        debate_id: 'd1',
+        created_at: new Date('2026-07-14T09:00:00Z'),
+        termination: 'latency_truncated',
+        termination_cause: 'budget',
+      }),
+    );
+
+    const counts = store.getTerminationCauseWindowCounts(
+      new Date('2026-07-14T08:00:00Z'),
+      new Date('2026-07-14T10:00:00Z'),
+    );
+    expect(counts).toEqual({ llm_failure: 0, total: 1 });
+  });
+
+  it('counts a truncated row with a pre-migration-0051 NULL termination_cause as non-failure (AC3)', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+    // `termination` set (post-0041) but no `termination_cause` supplied —
+    // the exact shape a truncated row written between migrations 0041 and
+    // 0051 has: a genuine truncation whose cause is indeterminate.
+    store.writeLog(
+      makeLog({
+        debate_id: 'd1',
+        created_at: new Date('2026-07-14T09:00:00Z'),
+        termination: 'latency_truncated',
+      }),
+    );
+
+    const counts = store.getTerminationCauseWindowCounts(
+      new Date('2026-07-14T08:00:00Z'),
+      new Date('2026-07-14T10:00:00Z'),
+    );
+    expect(counts).toEqual({ llm_failure: 0, total: 1 });
+  });
+
+  // review round 1 F2: the denominator is truncations (`termination =
+  // 'latency_truncated'`), matching the guard's own "one in four
+  // truncations" threshold rationale — not every debate_log row. A converged
+  // debate never had a cause to classify and must not dilute the rate.
+  it('excludes a converged (non-truncated) row from total', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+    store.writeLog(
+      makeLog({
+        debate_id: 'd1',
+        created_at: new Date('2026-07-14T09:00:00Z'),
+        termination: 'converged',
+        converged: true,
+      }),
+    );
+
+    const counts = store.getTerminationCauseWindowCounts(
+      new Date('2026-07-14T08:00:00Z'),
+      new Date('2026-07-14T10:00:00Z'),
+    );
+    expect(counts).toEqual({ llm_failure: 0, total: 0 });
+  });
+
+  it('excludes a non-converged (real disagreement, non-truncated) row from total', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+    store.writeLog(
+      makeLog({
+        debate_id: 'd1',
+        created_at: new Date('2026-07-14T09:00:00Z'),
+        termination: 'non_converged',
+        converged: false,
+      }),
+    );
+
+    const counts = store.getTerminationCauseWindowCounts(
+      new Date('2026-07-14T08:00:00Z'),
+      new Date('2026-07-14T10:00:00Z'),
+    );
+    expect(counts).toEqual({ llm_failure: 0, total: 0 });
+  });
+
+  it('excludes a pre-migration-0041 row (termination itself NULL) from total', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+    // No `termination`/`termination_cause` supplied — writes NULL on both
+    // columns, the shape a row written before migration 0041 has. Whether
+    // it was ever truncated is genuinely unknown, so it must not count as a
+    // known non-failure truncation either (migration 0041's "NULL means
+    // INDETERMINATE" invariant).
+    store.writeLog(makeLog({ debate_id: 'd1', created_at: new Date('2026-07-14T09:00:00Z') }));
+
+    const counts = store.getTerminationCauseWindowCounts(
+      new Date('2026-07-14T08:00:00Z'),
+      new Date('2026-07-14T10:00:00Z'),
+    );
+    expect(counts).toEqual({ llm_failure: 0, total: 0 });
+  });
+
+  it('excludes rows outside the (from, to] window', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+    store.writeLog(
+      makeLog({
+        debate_id: 'too-early',
+        created_at: new Date('2026-07-14T07:59:59Z'),
+        termination: 'latency_truncated',
+        termination_cause: 'llm_failure',
+      }),
+    );
+    store.writeLog(
+      makeLog({
+        debate_id: 'in-window',
+        created_at: new Date('2026-07-14T09:00:00Z'),
+        termination: 'latency_truncated',
+        termination_cause: 'llm_failure',
+      }),
+    );
+
+    const counts = store.getTerminationCauseWindowCounts(
+      new Date('2026-07-14T08:00:00Z'),
+      new Date('2026-07-14T10:00:00Z'),
+    );
+    expect(counts).toEqual({ llm_failure: 1, total: 1 });
+  });
+
+  it('returns zero counts for an empty window rather than NULL/NaN', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+
+    const counts = store.getTerminationCauseWindowCounts(
+      new Date('2026-07-14T08:00:00Z'),
+      new Date('2026-07-14T10:00:00Z'),
+    );
+    expect(counts).toEqual({ llm_failure: 0, total: 0 });
+  });
+});

@@ -71,6 +71,17 @@ export interface PositionRow {
   opened_at: string;
 }
 
+/**
+ * How a debate resolved, wire-duplicated from the server-side
+ * `DebateTermination` (`server/shared/types/records.ts`) — `contracts/` may
+ * import from neither `server/` nor `client/` (same reasoning as
+ * `TradingArmWire` below). Widen both sides together.
+ */
+export type DebateTerminationWire = 'converged' | 'non_converged' | 'latency_truncated';
+
+/** Wire-duplicated `DebateTerminationCause`, same reasoning as the type above. */
+export type DebateTerminationCauseWire = 'budget' | 'llm_failure';
+
 /** One recent completed debate with per-analyst contributions (story 3). */
 export interface DebateRow {
   debate_id: string;
@@ -78,6 +89,20 @@ export interface DebateRow {
   direction: Direction;
   rounds: number;
   created_at: string;
+  /**
+   * How this debate resolved (#1396) — absent for a row written before
+   * migration 0041, where the server's own `termination` is genuinely
+   * indeterminate rather than merely unprojected.
+   */
+  termination?: DebateTerminationWire;
+  /**
+   * Present only when `termination === 'latency_truncated'` and the row
+   * postdates migration 0051 (#1396) — see `DebateTerminationCauseWire`.
+   * Distinguishes an escaped LLM failure (#1380) from ordinary
+   * latency-budget starvation, which land identically on `termination`
+   * alone.
+   */
+  termination_cause?: DebateTerminationCauseWire;
   contributions: {
     analyst_id: string;
     analyst_type: string;

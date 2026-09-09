@@ -59,6 +59,8 @@ export type {
   CloseReason,
   DashboardSnapshot,
   DebateRow,
+  DebateTerminationCauseWire,
+  DebateTerminationWire,
   DroppedConditionWire,
   EvaluatedConditionWire,
   FillRow,

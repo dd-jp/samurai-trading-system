@@ -240,6 +240,7 @@ import {
   LoggingFlattenOverfillAlertChannel,
   LoggingFlattenReconcileAlertChannel,
   LoggingHeartbeatChannel,
+  LoggingLlmFailureRateAlertChannel,
   LoggingLoosenNotificationChannel,
   LoggingMiCoverageAlertChannel,
   LoggingMiCoverageTelemetry,
@@ -295,6 +296,7 @@ import {
   type VerdictStepDeps,
 } from './production/direct-bind.js';
 import { assertFlattenWindowCoversTickInterval } from './production/flatten-tick-coupling.js';
+import { LlmFailureRateMonitor } from './production/llm-failure-rate-guard.js';
 import { assertLseCalendarCoverage } from './production/lse-calendar-coverage-guard.js';
 import { MiCoverageMonitor } from './production/mi-coverage.js';
 // #1085: the MI refresh, off the analyst stage's critical path and serialised
@@ -617,6 +619,15 @@ export interface ProductionComponents {
   marketIntelligenceRefresh: MiRefreshQueue | undefined;
   /** The same instance this function's own routing/tick-step wiring closed over above (#1167) — read this, don't re-derive from config. */
   universe: readonly UniverseInstrument[];
+  /**
+   * The `debate_log` store the `debate` step writes through, exposed for
+   * `marketIntelligenceCoverage`'s reason (#1396): a test can write history
+   * rows through the SAME instance the llm-failure-rate guard reads, then
+   * drive a real `steps.debate` call and observe the alert reach the
+   * injected channel — the only way to catch the guard reverting to a
+   * mechanism this composition root constructs but never calls.
+   */
+  debateLog: SqliteDebateLogStore;
 }
 
 /**
@@ -1357,6 +1368,14 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // same reasoning `llmRateLimiter` documents for why it is a field here
   // rather than a local this function throws away.
   const miCoverageMonitor = new MiCoverageMonitor();
+
+  // #1396: one monitor for the whole process, same restart-clean-in-memory
+  // posture as `miCoverageMonitor` above. `debateLogStore` is hoisted out of
+  // the `debate` step below so this guard and `SqliteDebateLogStore.writeLog`
+  // share the same instance over the same `config.db` handle, rather than the
+  // guard opening a second connection to a table the step below already owns.
+  const llmFailureRateMonitor = new LlmFailureRateMonitor();
+  const debateLogStore = new SqliteDebateLogStore(guardedStore(config.db, 'debate-engine'));
 
   const analysts = new AnalystOrchestrator({
     market_intelligence: marketIntelligence,
@@ -2418,7 +2437,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // soak.
     debate: buildDebateStep(
       llmClient,
-      new SqliteDebateLogStore(guardedStore(config.db, 'debate-engine')),
+      debateLogStore,
       llmRateLimiter,
       spendCap,
       logger,
@@ -2426,6 +2445,13 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       // this the daily cycle steps a weight nothing reads — the write end
       // exists and the read end does not, which is the same shape as #433.
       tuningStore,
+      // #1396: the llm-failure-rate window read + monitor + alert channel.
+      // `windowSource` is `debateLogStore` itself — see its hoist above.
+      {
+        windowSource: debateLogStore,
+        monitor: llmFailureRateMonitor,
+        alertChannel: config.llmFailureRateAlerts ?? new LoggingLlmFailureRateAlertChannel(logger),
+      },
     ),
     // #328: `traderLog`/`riskLog` are what make the two stages that decide WHAT
     // to trade and HOW BIG reconstructible after the fact. Without them the
@@ -2465,6 +2491,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     marketIntelligenceCoverage: miCoverageMonitor,
     marketIntelligenceRefresh,
     universe,
+    debateLog: debateLogStore,
   };
 }
 

@@ -114,7 +114,27 @@ export interface AnalystWeightSource {
   getAnalystWeights(): Record<string, number>;
 }
 
+import {
+  checkLlmFailureRate,
+  type LlmFailureRateAlertChannel,
+  type LlmFailureRateMonitor,
+  type LlmFailureRateWindowSource,
+} from './llm-failure-rate-guard.js';
 import { RateLimitedLlmClient } from './rate-limited-llm-client.js';
+
+/**
+ * `buildDebateStep`'s #1396 dependency bundle — bundled rather than three
+ * more positional parameters, and optional as a whole: several hundred
+ * existing tests/backtest/smoke callers construct this step with no window
+ * source at all, and `checkLlmFailureRate` is skipped entirely when this is
+ * absent (same "optional means untested paths keep their old behaviour"
+ * reasoning `analystWeights` already documents on this function).
+ */
+export interface LlmFailureRateGuardDeps {
+  windowSource: LlmFailureRateWindowSource;
+  monitor: LlmFailureRateMonitor;
+  alertChannel: LlmFailureRateAlertChannel | undefined;
+}
 
 /**
  * The persona set plus the debate's synthesis-in-progress (#374).
@@ -667,6 +687,14 @@ export function buildDebateStep(
    * class and the exact gap #377 resolved to close.
    */
   analystWeights?: AnalystWeightSource,
+  /**
+   * #1396: the llm-failure-rate window read + edge-triggered monitor +
+   * alert channel, bundled (see `LlmFailureRateGuardDeps`'s doc). Optional
+   * for the same reason `analystWeights` is — every existing test/backtest
+   * caller of this function constructs it with no guard at all, and must
+   * keep compiling unchanged.
+   */
+  llmFailureRateGuard?: LlmFailureRateGuardDeps,
 ): TickSteps['debate'] {
   /**
    * The debate each bar RESOLVED to, per instrument (#743, closing #781's
@@ -1029,6 +1057,24 @@ export function buildDebateStep(
     // id). Recorded after the write so a debate that THREW never marks its bar
     // resolved, leaving the crash-retry path open (#743).
     resolvedBarByInstrument.set(instrument, { barMs: bar.getTime(), debate_id });
+
+    // #1396. Fire-and-forget: `checkLlmFailureRate` never throws (it catches
+    // and logs its own failures — the window read and the alert POST alike),
+    // and the bar is already resolved above. Its synchronous SQLite window
+    // read (a small, indexed range scan) still runs inline here, before its
+    // first `await`; `void` only keeps the alert POST — the part that could
+    // actually be slow — off this tick's critical path.
+    if (llmFailureRateGuard !== undefined) {
+      void checkLlmFailureRate(
+        {
+          windowSource: llmFailureRateGuard.windowSource,
+          monitor: llmFailureRateGuard.monitor,
+          alertChannel: llmFailureRateGuard.alertChannel,
+          logger,
+        },
+        clock.now(),
+      );
+    }
 
     // Lost the write race: another writer already owns this `debate_id`'s row.
     // Return THEIR row, so the Trader sizes on the same bytes the Feedback Loop

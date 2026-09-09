@@ -2187,6 +2187,122 @@ describe('market-intelligence coverage is wired by the composition root (#752)',
 });
 
 /**
+ * #1396 — the llm-failure-rate guard is wired at the composition root,
+ * mirroring the #752 market-intelligence-coverage wiring test above for the
+ * same defect class: a monitor and an alert channel nothing calls.
+ *
+ * History rows are written directly through `components.debateLog` — the
+ * SAME `SqliteDebateLogStore` instance `checkLlmFailureRate` reads — rather
+ * than forced through real LLM failures, which would need a client that
+ * fails on demand inside `enforceLatencyBudget`'s timeout race. What this
+ * test proves is narrower and is the thing #1396 actually risks: that
+ * `production.ts` threads `config.llmFailureRateAlerts` and the shared store
+ * into `buildDebateStep`, not that the rate arithmetic itself is correct —
+ * that half is `llm-failure-rate-guard.test.ts`'s job.
+ */
+describe('llm-failure-rate guard is wired by the composition root (#1396)', () => {
+  let db: SqliteHandle;
+
+  beforeEach(() => {
+    db = openSharedStore(':memory:');
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  function llmForOneDebate(): MockLlmClient {
+    const client = new MockLlmClient();
+    for (let i = 0; i < 40; i += 1) {
+      client.enqueueText(
+        JSON.stringify({ stance: 'bullish', rationale: 'fixture rationale', converged: true }),
+      );
+    }
+    return client;
+  }
+
+  it('reads real history through the store the debate step writes, and posts to the injected channel', async () => {
+    const clock = new SimulatedClock(START);
+    const bars = [
+      ...fixtureBars('BTC-USD', '5m', 30, 5 * 60_000),
+      ...fixtureBars('BTC-USD', '1h', 30, 60 * 60_000),
+    ];
+    const alertsPosted: unknown[] = [];
+    const config = stubConfig(db, {
+      ...REAL_CONFIGS,
+      clock,
+      logger: recordingLogger(),
+      dataSource: new FixtureDataSource(
+        bars,
+        { price: 160, observed_at: START, source: 'fixture' },
+        'crypto',
+      ),
+      llmClient: llmForOneDebate(),
+      llmFailureRateAlerts: {
+        postLlmFailureRateAlert: (alert) => {
+          alertsPosted.push(alert);
+        },
+      },
+    });
+
+    const components = buildProductionComponents(config);
+
+    // Two `llm_failure` rows and five `budget` rows, all inside the 24h
+    // window — seven truncations, the denominator (review round 1 F2:
+    // `total` counts `termination = 'latency_truncated'` rows, not every
+    // debate_log row). Deliberately above, not pinned at,
+    // `MIN_TRUNCATIONS_FOR_LLM_FAILURE_RATE` (5) — review round 2 F5: a count
+    // exactly at the floor made this test boundary-fragile (an off-by-one in
+    // the floor comparison would pass unnoticed). The tick below writes an
+    // EIGHTH row at `clock.now()` that CONVERGES (`llmForOneDebate` always
+    // returns `converged: true`), so it is excluded from `total` — the rate
+    // stays 2/7 (~0.286), still over `LLM_FAILURE_RATE_THRESHOLD` (0.25).
+    for (let i = 0; i < 7; i += 1) {
+      components.debateLog.writeLog({
+        debate_id: `debate-1396-history-${i}`,
+        instrument: 'BTC-USD',
+        bar_timestamp: new Date(START.getTime() - (i + 1) * 60_000),
+        contributions: [],
+        direction: 'bullish',
+        rounds: 1,
+        created_at: new Date(START.getTime() - (i + 1) * 60_000),
+        termination: 'latency_truncated',
+        termination_cause: i < 2 ? 'llm_failure' : 'budget',
+      });
+    }
+
+    const views = await components.steps.analysts({
+      trace_id: 'trace-1396-root',
+      signal: { asset: 'BTC-USD', asset_class: 'crypto' },
+      clock,
+      bar: START,
+    });
+    expect(views.length).toBeGreaterThan(0);
+
+    await components.steps.debate({
+      trace_id: 'trace-1396-root',
+      instrument: 'BTC-USD',
+      asset_class: 'crypto',
+      views,
+      clock,
+      bar: START,
+    });
+
+    // `checkLlmFailureRate` is fire-and-forget (the debate resolved above);
+    // flush the microtask queue so its one `await` (the alert POST) settles
+    // before asserting on it.
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // Proves `production.ts` actually wires `config.llmFailureRateAlerts`
+    // and `components.debateLog` into the SAME guard the debate step calls,
+    // rather than leaving the log-only default in place.
+    expect(alertsPosted).toHaveLength(1);
+    expect(alertsPosted[0]).toMatchObject({ llm_failure_count: 2, total_count: 7 });
+    expect((alertsPosted[0] as { rate: number }).rate).toBeCloseTo(2 / 7);
+  });
+});
+
+/**
  * #1084 — `tickSkipAlerts` is threaded from `ProductionConfig` through
  * `buildProductionOrchestrator`'s own `startTickLoop({...})` call, not just
  * proven against `startTickLoop` directly. The "tick-skip escalation (#1084)"

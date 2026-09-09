@@ -64,6 +64,10 @@ import type {
 } from './production/calendar-fallback-alert.js';
 import type { DataFailoverAlert, DataFailoverAlertChannel } from './production/data-failover.js';
 import type {
+  LlmFailureRateAlert,
+  LlmFailureRateAlertChannel,
+} from './production/llm-failure-rate-guard.js';
+import type {
   LseCalendarCoverageAlert,
   LseCalendarCoverageAlertChannel,
 } from './production/lse-calendar-coverage-alert.js';
@@ -908,6 +912,40 @@ export class LoggingPromptTierAlertChannel implements PromptTierAlertChannel {
         prompt_tokens: alert.prompt_tokens,
         above_prompt_tokens: alert.above_prompt_tokens,
         consecutive_crossings: alert.consecutive_crossings,
+        reported_at: alert.reported_at.toISOString(),
+      },
+    });
+  }
+}
+
+/**
+ * `debate_log.termination_cause = 'llm_failure'` rate crossing
+ * `LLM_FAILURE_RATE_THRESHOLD` (#1396), written to the log at `warn`.
+ *
+ * Same caveat as the other log-only stand-ins: `SAMURAI_ALERTS=log-only`
+ * cannot page anyone about a sustained LLM outage masquerading as ordinary
+ * latency-budget truncation. `TradeChannelLlmFailureRateAlert`
+ * (llm-failure-rate-alert-channel.ts) is the reachable-from-a-phone
+ * implementation, selected by `SAMURAI_ALERTS=telegram` (#322).
+ */
+export class LoggingLlmFailureRateAlertChannel implements LlmFailureRateAlertChannel {
+  constructor(private readonly logger: Logger) {}
+
+  postLlmFailureRateAlert(alert: LlmFailureRateAlert): void {
+    this.logger.log({
+      trace_id: 'llm-failure-rate',
+      stage: 'debate',
+      event: 'llm_failure_rate_elevated',
+      level: 'warn',
+      message:
+        `llm_failure rate ${(alert.rate * 100).toFixed(1)}% over the last ${Math.round(alert.window_ms / 3_600_000)}h ` +
+        `(${alert.llm_failure_count}/${alert.total_count} truncations) — SAMURAI_ALERTS=log-only ` +
+        'cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.',
+      payload: {
+        rate: alert.rate,
+        llm_failure_count: alert.llm_failure_count,
+        total_count: alert.total_count,
+        window_ms: alert.window_ms,
         reported_at: alert.reported_at.toISOString(),
       },
     });

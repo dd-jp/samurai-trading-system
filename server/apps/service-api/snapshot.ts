@@ -285,6 +285,13 @@ export function buildSnapshot(
     direction: debate.direction,
     rounds: debate.rounds,
     created_at: debate.created_at.toISOString(),
+    // #1396: omitted (not present as `undefined`) on a pre-migration row —
+    // `exactOptionalPropertyTypes` forces the same conditional-spread form
+    // `stanceDuringDebate` below already uses.
+    ...(debate.termination === undefined ? {} : { termination: debate.termination }),
+    ...(debate.termination_cause === undefined
+      ? {}
+      : { termination_cause: debate.termination_cause }),
     contributions: debate.contributions.map((c) => ({
       analyst_id: c.analyst_id,
       analyst_type: c.analyst_type,

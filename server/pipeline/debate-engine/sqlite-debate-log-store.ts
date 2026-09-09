@@ -148,6 +148,55 @@ export class SqliteDebateLogStore implements DebateLogStore {
       ...nullableField('termination_cause', row.termination_cause),
     };
   }
+
+  /**
+   * Aggregate `termination_cause` counts over `(from, to]` among TRUNCATED
+   * rows only (#1396, review round 1 F2) — the llm-failure-rate alert's
+   * window read, never called from `writeLog`'s hot path. NOT part of the
+   * `DebateLogStore` port: #785 already declined widening that shared port
+   * for a comparable (by-bar) accessor, on the reasoning that every other
+   * implementer (`InMemoryDebateLogStore`, feedback-loop's fixtures) would
+   * have to grow a matching method for a capability only the orchestrator's
+   * alert guard needs. The guard is handed this concrete store directly
+   * instead.
+   *
+   * `total` is truncations (`termination = 'latency_truncated'`), not every
+   * `debate_log` row — a converged or non-converged debate never had a
+   * cause to classify, and diluting the rate with them would make
+   * `LLM_FAILURE_RATE_THRESHOLD`'s "one in four truncations" rationale
+   * (llm-failure-rate-guard.ts) false: a stream that is mostly converged
+   * debates could never cross 0.25 no matter how many of its FEW
+   * truncations were outright failures. A pre-migration-0041 row (whose
+   * `termination` is itself NULL — genuinely unknown whether it was ever
+   * truncated, migration 0041's "NULL means INDETERMINATE" invariant) is
+   * excluded the same way a converged row is.
+   *
+   * Within that truncated set, NULL-safe pair matching `getAttribution`'s
+   * `termination IS NOT 'latency_truncated'` convention
+   * (`sqlite-query-store.ts`): `= 'llm_failure'` counts an explicit failure,
+   * `IS NOT 'llm_failure'` counts every other truncated row INCLUDING a
+   * pre-migration-0051 NULL cause — a truncation this build cannot classify
+   * must not skew the rate toward "failing" just because it predates the
+   * cause column.
+   */
+  getTerminationCauseWindowCounts(from: Date, to: Date): { llm_failure: number; total: number } {
+    const row = this.db
+      .prepare(
+        `SELECT
+            SUM(CASE WHEN termination_cause = 'llm_failure' THEN 1 ELSE 0 END) AS llm_failure,
+            SUM(CASE WHEN termination_cause IS NOT 'llm_failure' THEN 1 ELSE 0 END) AS non_failure
+           FROM debate_log
+          WHERE termination = 'latency_truncated' AND created_at > ? AND created_at <= ?`,
+      )
+      .get(toStoredTimestamp(from), toStoredTimestamp(to)) as {
+      llm_failure: number | null;
+      non_failure: number | null;
+    };
+    // `SUM` over zero matched rows is NULL, not 0 — an empty window.
+    const llm_failure = row.llm_failure ?? 0;
+    const non_failure = row.non_failure ?? 0;
+    return { llm_failure, total: llm_failure + non_failure };
+  }
 }
 
 /**

@@ -192,6 +192,53 @@ describe('closed trades', () => {
     expect(within(row).queryByText(/559\.80/)).toBeNull();
   });
 
+  it('glosses a degraded debate with its termination cause (#1396)', () => {
+    renderReview(
+      makeSnapshot({
+        closed_trades: [
+          makeClosedTrade({ idempotency_key: 'k1', debate_id: 'd1', close_reason: 'stop' }),
+        ],
+        debates: [
+          makeDebate({
+            debate_id: 'd1',
+            instrument: 'SPY',
+            direction: 'bullish',
+            rounds: 1,
+            termination: 'latency_truncated',
+            termination_cause: 'llm_failure',
+          }),
+        ],
+      }),
+    );
+    const row = screen.getByRole('button', { name: /SPY/ });
+    expect(within(row).getByText(/degraded — an LLM call failed outright/)).toBeTruthy();
+    // Same `data-degraded` hook `TraceSections.tsx`'s `DebateSection` sets —
+    // both renderers of the shared gloss must expose it in the DOM, not just
+    // in this row's joined text (docs/coding-standards.md's #1080 entry).
+    expect(row.querySelector('[data-degraded="true"]')).toBeTruthy();
+  });
+
+  it('does not gloss a converged debate (#1396)', () => {
+    renderReview(
+      makeSnapshot({
+        closed_trades: [
+          makeClosedTrade({ idempotency_key: 'k1', debate_id: 'd1', close_reason: 'stop' }),
+        ],
+        debates: [
+          makeDebate({
+            debate_id: 'd1',
+            instrument: 'SPY',
+            direction: 'bullish',
+            termination: 'converged',
+          }),
+        ],
+      }),
+    );
+    const row = screen.getByRole('button', { name: /SPY/ });
+    expect(within(row).queryByText(/degraded/)).toBeNull();
+    expect(row.querySelector('[data-degraded]')).toBeNull();
+  });
+
   it('heads every column, naming the side rather than the entry price', () => {
     const { container } = renderReview(
       makeSnapshot({

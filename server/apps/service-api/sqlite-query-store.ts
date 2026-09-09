@@ -44,7 +44,15 @@ import {
 import type { OutsideBenchmarkSample } from '../../pipeline/outside-benchmark/index.js';
 import { SqliteRiskCriticStore } from '../../pipeline/risk-manager/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
-import type { ClosedTrade, DebateLog, Fill, OpenPosition, OrderState } from '../../shared/index.js';
+import type {
+  ClosedTrade,
+  DebateLog,
+  DebateTermination,
+  DebateTerminationCause,
+  Fill,
+  OpenPosition,
+  OrderState,
+} from '../../shared/index.js';
 import {
   type ClosedTradeRow,
   fromClosedTradeRow,
@@ -99,6 +107,9 @@ interface DebateLogRow {
   direction: Direction;
   rounds: number;
   created_at: string;
+  /** #1396: `SELECT *` already returned these (migrations 0041/0051); this cast just named them. */
+  termination: DebateTermination | null;
+  termination_cause: DebateTerminationCause | null;
 }
 
 interface VerdictLogRow {
@@ -230,6 +241,12 @@ function fromDebateLogRow(row: DebateLogRow): DebateLog {
     direction: row.direction,
     rounds: row.rounds,
     created_at: fromStoredTimestamp(row.created_at),
+    // #1396: NULL on a pre-migration row (indeterminate, not "converged") or
+    // a non-truncated row (there is no cause to report) — omitted rather than
+    // `undefined` on the domain object (`exactOptionalPropertyTypes`), same
+    // convention as `DebateLog`'s own doc and `buildDebateLog`'s writer side.
+    ...(row.termination === null ? {} : { termination: row.termination }),
+    ...(row.termination_cause === null ? {} : { termination_cause: row.termination_cause }),
   };
 }
 

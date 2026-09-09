@@ -9,6 +9,7 @@ import type {
   OutsideBenchmarkWire,
 } from '@contracts';
 import type { WireSnapshot } from '../../hooks/useSnapshot.ts';
+import { debateDegradedGloss } from '../../lib/debate-termination.ts';
 import {
   formatClockUtc,
   formatCount,
@@ -378,9 +379,12 @@ function whyTaken(debate: DebateRow | undefined): string {
   if (debate === undefined) return 'debate not in the recent-debates window';
   const lead = [...debate.contributions].sort((a, b) => b.influence_score - a.influence_score)[0];
   const rounds = `${debate.direction} · ${debate.rounds} rounds`;
-  return lead === undefined
-    ? rounds
-    : `${rounds} · ${lead.analyst_id} led (influence ${formatFixed(lead.influence_score, 2)})`;
+  const base =
+    lead === undefined
+      ? rounds
+      : `${rounds} · ${lead.analyst_id} led (influence ${formatFixed(lead.influence_score, 2)})`;
+  const gloss = debateDegradedGloss(debate);
+  return gloss === null ? base : `${base} · ${gloss}`;
 }
 
 function TradeRow(props: {
@@ -393,6 +397,11 @@ function TradeRow(props: {
   const { trade, debate, asOf, selected, onSelect } = props;
   const tone = pnlTone(trade.realized_pnl_net);
   const closeReason = presentCloseReason(trade.close_reason);
+  // Same hook `TraceSections.tsx`'s `DebateSection` sets (#1080's
+  // "only one renderer set the data-degraded hook" gap, docs/coding-
+  // standards.md) — both renderers of the same `debateDegradedGloss` result
+  // must expose it in the DOM, not just in this row's joined text.
+  const degraded = debate !== undefined && debateDegradedGloss(debate) !== null;
   return (
     <li>
       <button
@@ -410,7 +419,9 @@ function TradeRow(props: {
         <span className="mono">{sideWord(trade.side)}</span>
         <span className="mono muted">{formatHeld(trade.opened_at, trade.closed_at)}</span>
         <StateWord state={closeReason} />
-        <span className="muted trade-why">{whyTaken(debate)}</span>
+        <span className="muted trade-why" data-degraded={degraded ? 'true' : undefined}>
+          {whyTaken(debate)}
+        </span>
         <span className={`mono trade-pnl ${tone}`}>{formatSignedUsd(trade.realized_pnl_net)}</span>
       </button>
     </li>
