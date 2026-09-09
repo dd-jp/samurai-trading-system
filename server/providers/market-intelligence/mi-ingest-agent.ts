@@ -61,7 +61,11 @@ const MAX_DEGRADED_SKIP = 8;
 interface DegradedState {
   readonly streak: number;
   readonly skipRemaining: number;
+  /** `clock.now()` (ms) of the failure that produced this `streak`. Unused while `streak` is 0. */
+  readonly lastFailureAt: number;
 }
+
+const ZERO_DEGRADED: DegradedState = { streak: 0, skipRemaining: 0, lastFailureAt: 0 };
 
 /**
  * Refreshes to skip before the next scoring attempt, given the streak a
@@ -72,6 +76,34 @@ interface DegradedState {
  */
 function degradedSkip(streak: number): number {
   return streak < 2 ? 0 : Math.min(2 ** (streak - 2), MAX_DEGRADED_SKIP);
+}
+
+/**
+ * `#degraded`'s read path: a `streak` left over from an outage that ended
+ * more than `LOOKBACK_MS` ago decays back to 0 rather than persisting
+ * forever (#1421 review round 1, finding 1). Nothing else ever clears a
+ * nonzero streak except a successful scoring attempt — a quiet refresh
+ * (nothing new to score) only clears `skipRemaining`, on purpose, so a quiet
+ * tick mid-outage can't be mistaken for recovery. But that means a streak
+ * left at, say, 7 by an outage that genuinely ended sat there indefinitely;
+ * the FIRST unrelated failure hours or days later then inherited streak 8's
+ * full skip instead of being treated as the lone blip it is, turning one
+ * transient error into an up-to-`MAX_DEGRADED_SKIP`-refresh blackout. Decay
+ * is keyed on `LOOKBACK_MS`, not an independent constant, because that is
+ * already this file's definition of "recent enough to matter" — the same
+ * window that keeps a failed article a scoring candidate.
+ */
+function readDegraded(
+  degraded: ReadonlyMap<string, DegradedState>,
+  instrument: string,
+  now: Date,
+): DegradedState {
+  const state = degraded.get(instrument);
+  if (!state) return ZERO_DEGRADED;
+  if (state.streak > 0 && now.getTime() - state.lastFailureAt >= LOOKBACK_MS) {
+    return ZERO_DEGRADED;
+  }
+  return state;
 }
 
 /**
@@ -151,10 +183,11 @@ export class MiIngestAgent {
    * refresh that actually attempts scoring and succeeds resets it to 0 — so
    * the gap keeps widening rather than collapsing back to #1392's fixed
    * skip-1 every time it fires. A single blip is unaffected: streak 1 always
-   * retries on the very next refresh, which the "retries... once scoring
-   * recovers" test below depends on. The MI spend cap remains the real
-   * backstop; this only slows how fast one instrument's outage burns toward
-   * it.
+   * retries on the very next refresh — true for the FIRST failure of a fresh
+   * outage, and for one that follows a since-decayed streak (see below), which
+   * the "retries... once scoring recovers" test below depends on. The MI
+   * spend cap remains the real backstop; this only slows how fast one
+   * instrument's outage burns toward it.
    *
    * A refresh with nothing new to score (#1392 review round 2, finding 5)
    * clears a pending `skipRemaining` cooldown — that refresh proves nothing
@@ -164,6 +197,14 @@ export class MiIngestAgent {
    * an outage can have a quiet tick with no matching articles in the middle
    * of it, and treating that as a "healthy batch" would restart backoff from
    * scratch on the very next failure, undoing the escalation this exists for.
+   *
+   * `streak` DOES decay, but only on a read, and only after `LOOKBACK_MS` has
+   * passed since the failure that set it (#1421 review round 1, finding 1;
+   * see `readDegraded`) — nothing else ever clears a nonzero streak short of
+   * a successful scoring attempt, so without this an outage that genuinely
+   * ended left its streak sitting forever, and the first unrelated failure
+   * hours or days later inherited its full skip instead of being treated as
+   * the lone blip it actually is.
    */
   readonly #degraded = new Map<string, DegradedState>();
 
@@ -303,17 +344,30 @@ export class MiIngestAgent {
       // reset (see the `degraded` branch below).
       const existing = this.#degraded.get(instrument);
       if (existing && existing.skipRemaining > 0) {
-        this.#degraded.set(instrument, { streak: existing.streak, skipRemaining: 0 });
+        this.#degraded.set(instrument, {
+          streak: existing.streak,
+          skipRemaining: 0,
+          lastFailureAt: existing.lastFailureAt,
+        });
       }
       return false;
     }
 
     // #1421: bounds a SUSTAINED outage's billed-call rate with backoff that
     // widens on each straight failure — see `#degraded`'s doc. A lone blip
-    // (streak 1) is unaffected.
-    const state = this.#degraded.get(instrument) ?? { streak: 0, skipRemaining: 0 };
+    // (streak 1) is unaffected. `readDegraded` decays a streak the last
+    // failure left stale for a full `LOOKBACK_MS` (review round 1, finding
+    // 1) — the quiet-refresh branch above needs no equivalent decay: its
+    // guard only fires while `skipRemaining > 0`, which always reaches 0
+    // (at most `MAX_DEGRADED_SKIP` refreshes, well under `LOOKBACK_MS`) long
+    // before a streak would be old enough to decay.
+    const state = readDegraded(this.#degraded, instrument, now);
     if (state.skipRemaining > 0) {
-      const next: DegradedState = { streak: state.streak, skipRemaining: state.skipRemaining - 1 };
+      const next: DegradedState = {
+        streak: state.streak,
+        skipRemaining: state.skipRemaining - 1,
+        lastFailureAt: state.lastFailureAt,
+      };
       this.#degraded.set(instrument, next);
       // #1392 review round 2, finding 4: this used to be the only `return
       // false` in `refresh` with no log line — an operator watching
@@ -392,6 +446,7 @@ export class MiIngestAgent {
       this.#degraded.set(instrument, {
         streak: nextStreak,
         skipRemaining: degradedSkip(nextStreak),
+        lastFailureAt: now.getTime(),
       });
       this.deps.logger?.log({
         trace_id,
@@ -406,7 +461,7 @@ export class MiIngestAgent {
       });
       return false;
     }
-    this.#degraded.set(instrument, { streak: 0, skipRemaining: 0 });
+    this.#degraded.set(instrument, ZERO_DEGRADED);
 
     // `scoreItems` always returns exactly one score per supplied item, so
     // `scores[index]` should never be undefined here; treated the same as an

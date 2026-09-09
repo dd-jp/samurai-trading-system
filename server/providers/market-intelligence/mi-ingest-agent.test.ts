@@ -638,6 +638,77 @@ describe('MiIngestAgent', () => {
   });
 
   /**
+   * #1421 review round 1, finding 1: `streak` had no decay — nothing but a
+   * SUCCESSFUL scoring attempt reset it, and a quiet refresh (the case
+   * above) only clears `skipRemaining`, by design. So a streak an outage
+   * left at, say, 2 sat there indefinitely once the outage ended (no more
+   * matching articles at all — the realistic "scoring recovered and life
+   * moved on" case, not just one quiet tick). The FIRST unrelated failure
+   * hours later then inherited that stale streak's widened skip instead of
+   * being treated as the lone blip it is. Once `now - lastFailureAt` has
+   * passed a full `LOOKBACK_MS`, the streak must read back as 0.
+   */
+  it('decays a streak once LOOKBACK_MS has passed since the last failure, so a later lone blip is not skipped', async () => {
+    const archive = new MiArchiveStore();
+    const store = new MarketIntelligenceStore(clock);
+    let now = NOW;
+    const movingClock: Clock = { now: () => now };
+    let attempts = 0;
+    const failingClient = {
+      complete: async () => {
+        attempts++;
+        throw new Error('llm down');
+      },
+    };
+    const agent = new MiIngestAgent({
+      archive,
+      store,
+      newsClient: newsClient([article()]),
+      llmClient: failingClient,
+      clock: movingClock,
+      assetClasses: ['stocks'],
+      spendCap: ADMITS,
+    });
+    const TICK_MS = 2 * 60_000;
+    const advance = () => {
+      now = new Date(now.getTime() + TICK_MS);
+    };
+
+    // Two straight failures: streak 2, one skip queued.
+    await agent.refresh('t', 'AAPL', 'stocks');
+    advance();
+    await agent.refresh('t', 'AAPL', 'stocks');
+    advance();
+    expect(attempts).toBe(2);
+
+    // The outage ends for good — no more matching articles for well over a
+    // full LOOKBACK_MS (30 refreshes at this 2-min cadence). Each quiet
+    // refresh clears `skipRemaining` but, absent decay, `streak` would sit
+    // at 2 forever.
+    (agent as unknown as { deps: { newsClient: unknown } }).deps.newsClient = newsClient([]);
+    for (let i = 0; i < 30; i++) {
+      await agent.refresh('t', 'AAPL', 'stocks');
+      advance();
+    }
+
+    // A single new headline arrives, well past LOOKBACK_MS since the last
+    // failure — the streak must have decayed to 0, so this is a fresh
+    // streak-1 blip, not a streak-3 continuation.
+    (agent as unknown as { deps: { newsClient: unknown } }).deps.newsClient = newsClient([
+      article(),
+    ]);
+    await agent.refresh('t', 'AAPL', 'stocks');
+    advance();
+    expect(attempts).toBe(3);
+
+    // Streak 1 always retries on the very next refresh (degradedSkip(1) ===
+    // 0). Without decay, the stale streak-2 would have carried into this
+    // blip as streak 3 (skip 2), and this refresh would be skipped.
+    await agent.refresh('t', 'AAPL', 'stocks');
+    expect(attempts).toBe(4);
+  });
+
+  /**
    * `MarketIntelligenceStore` is in-memory, so before the archive a soak
    * restart lost every item ingested up to that point and the run silently
    * measured less than it appeared to.
