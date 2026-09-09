@@ -942,6 +942,7 @@ describe('buildTraderSteps exit-skip decision_class (#1128)', () => {
   function build(overrides: {
     getOpenPositions?: () => Promise<OpenPosition[]>;
     getIndicator?: typeof HOLDS;
+    getExitFillSizes?: () => Promise<Map<string, number>>;
     traderLog: { write: (record: TraderDecisionRecord) => void };
   }) {
     return buildTraderSteps({
@@ -963,7 +964,7 @@ describe('buildTraderSteps exit-skip decision_class (#1128)', () => {
       portfolioSnapshots: new Map(),
       config: CONFIG,
       setupStore: new FixtureSetupStore(),
-      getExitFillSizes: async () => new Map<string, number>(),
+      getExitFillSizes: overrides.getExitFillSizes ?? (async () => new Map<string, number>()),
       sessionCalendars: {
         crypto: new AlwaysOpenCalendar(),
         stocks: new UsEquityRegularHoursCalendar(),
@@ -1023,7 +1024,7 @@ describe('buildTraderSteps exit-skip decision_class (#1128)', () => {
     expect(written[1]?.decision_class).toBe('input_unusable');
   });
 
-  it('writes exit_no_filled_size on every occurrence, not change-only', async () => {
+  it('writes exit_no_filled_size once, then stays silent — FilledZeroSizeThrottle already covers repeats (review round 1, finding 1)', async () => {
     const written: TraderDecisionRecord[] = [];
     const { exitCheck } = build({
       traderLog: { write: (record) => written.push(record) },
@@ -1035,11 +1036,34 @@ describe('buildTraderSteps exit-skip decision_class (#1128)', () => {
       await exitCheck({ trace_id: `trace-${i}`, instrument: 'AAPL', clock: CLOCK, bar: TICK_BAR });
     }
 
-    expect(written).toHaveLength(2);
+    expect(written).toHaveLength(1);
     expect(written[0]?.skip_reason).toBe('exit_no_filled_size');
     expect(written[0]?.decision_class).toBe('input_unusable');
-    expect(written[1]?.skip_reason).toBe('exit_no_filled_size');
-    expect(written[1]?.decision_class).toBe('input_unusable');
+  });
+
+  it('writes exit_held_quantity_diverged on a bounded repeat, not every tick, while the wedge persists (review round 1, finding 1a)', async () => {
+    const written: TraderDecisionRecord[] = [];
+    // `heldQuantitiesFor` nets `filled_size` (50, from HELD) against recorded
+    // exit fills; a recorded exit fill that exceeds it (999) is the store
+    // contradicting itself — `held.some((lot) => lot.held < 0)` in
+    // `buildFlattenExit` — which is exactly what routes to
+    // `exit_held_quantity_diverged` rather than `exit_no_filled_size`.
+    const { exitCheck } = build({
+      traderLog: { write: (record) => written.push(record) },
+      getIndicator: DECAYS,
+      getExitFillSizes: async () => new Map([[HELD.idempotency_key, 999]]),
+    });
+
+    for (let i = 0; i < 9; i++) {
+      await exitCheck({ trace_id: `trace-${i}`, instrument: 'AAPL', clock: CLOCK, bar: TICK_BAR });
+    }
+
+    // 9 identical ticks would be 9 rows under the pre-review "write every
+    // occurrence" rule; the bounded repeat (onset, then every
+    // `ALERT_REPEAT_EVERY_DIAGNOSTICS` ticks) caps it to 2: tick 1 and tick 9.
+    expect(written).toHaveLength(2);
+    expect(written[0]?.skip_reason).toBe('exit_held_quantity_diverged');
+    expect(written[1]?.skip_reason).toBe('exit_held_quantity_diverged');
   });
 
   it('never writes a row for no_open_position — no lot to attribute a debate_id to', async () => {
@@ -1058,6 +1082,117 @@ describe('buildTraderSteps exit-skip decision_class (#1128)', () => {
 
     expect(intent).toBeNull();
     expect(written).toHaveLength(0);
+  });
+
+  it('writes a fresh row after a reconciliation-driven no_open_position, even with the same first skip reason (review round 1, finding 3)', async () => {
+    const written: TraderDecisionRecord[] = [];
+    let positions: OpenPosition[] = [HELD];
+    const { exitCheck } = build({
+      traderLog: { write: (record) => written.push(record) },
+      getIndicator: HOLDS,
+      getOpenPositions: async () => positions,
+    });
+
+    // Episode 1: holds, first occurrence -> writes.
+    await exitCheck({ trace_id: 'trace-1', instrument: 'AAPL', clock: CLOCK, bar: TICK_BAR });
+    // A second identical tick would ordinarily stay suppressed, proving the
+    // episode really did open.
+    await exitCheck({ trace_id: 'trace-2', instrument: 'AAPL', clock: CLOCK, bar: TICK_BAR });
+    expect(written).toHaveLength(1);
+
+    // The store reconciles the lot flat without this exitCheck ever seeing a
+    // fired exit intent — the ONLY boundary that observes this is the
+    // no_open_position branch's own `clearEpisode` call.
+    positions = [];
+    await exitCheck({ trace_id: 'trace-flat', instrument: 'AAPL', clock: CLOCK, bar: TICK_BAR });
+    expect(written).toHaveLength(1);
+
+    // Episode 2: a new lot reopens with the SAME first skip reason episode 1
+    // wrote. If the no_open_position tick above had not cleared the episode,
+    // this would still read as an unchanged repeat and stay suppressed.
+    positions = [{ ...HELD, debate_id: 'debate-that-reopened-the-lot' }];
+    await exitCheck({ trace_id: 'trace-3', instrument: 'AAPL', clock: CLOCK, bar: TICK_BAR });
+
+    expect(written).toHaveLength(2);
+    expect(written[1]?.skip_reason).toBe('signal_still_supports_position');
+    expect(written[1]?.debate_id).toBe('debate-that-reopened-the-lot');
+  });
+
+  it('bounds writes when the skip reason flaps every tick, instead of writing on every change (review round 1, finding 1b)', async () => {
+    const written: TraderDecisionRecord[] = [];
+    let toggle = false;
+    const flapping = (async (instrument: string, spec: IndicatorSpec) => {
+      if (toggle) return HOLDS(instrument, spec);
+      throw new InsufficientBarsError({
+        indicator: 'macd_histogram',
+        period: 26,
+        required: 112,
+        received: 0,
+      });
+    }) as typeof HOLDS;
+    const { exitCheck } = build({
+      traderLog: { write: (record) => written.push(record) },
+      getIndicator: flapping,
+    });
+
+    for (let i = 0; i < 10; i++) {
+      toggle = !toggle;
+      await exitCheck({ trace_id: `trace-${i}`, instrument: 'AAPL', clock: CLOCK, bar: TICK_BAR });
+    }
+
+    // Each reason gets its own per-reason repeat budget (`ALERT_REPEAT_EVERY_DIAGNOSTICS`,
+    // currently 8): onset writes both reasons (ticks 0-1), then every switch
+    // back to a reason already written within the budget stays suppressed
+    // until that reason's own budget clears, at tick 8-9 here — exact
+    // accounting for this shape is pinned directly against
+    // `ExitSkipWriteThrottle` in exit-skip-write-throttle.test.ts, so this
+    // integration test only needs to confirm the pipeline actually wires the
+    // gate in, not re-derive its arithmetic.
+    expect(written).toHaveLength(4);
+    expect(written.map((record) => record.skip_reason)).toEqual([
+      'signal_still_supports_position',
+      'early_exit_signal_unavailable',
+      'signal_still_supports_position',
+      'early_exit_signal_unavailable',
+    ]);
+  });
+
+  it('writes a fresh row after an exit fires, even when the reopened lot hits the same first skip reason (review round 1, finding 2/3)', async () => {
+    const written: TraderDecisionRecord[] = [];
+    let indicatorImpl = HOLDS;
+    let positions: OpenPosition[] = [HELD];
+    const { exitCheck } = build({
+      traderLog: { write: (record) => written.push(record) },
+      getIndicator: (async (instrument: string, spec: IndicatorSpec) =>
+        indicatorImpl(instrument, spec)) as typeof HOLDS,
+      getOpenPositions: async () => positions,
+    });
+
+    // Episode 1: holds, first occurrence of the tracked instrument -> writes.
+    await exitCheck({ trace_id: 'trace-1', instrument: 'AAPL', clock: CLOCK, bar: TICK_BAR });
+
+    // The signal decays, the flatten actually fires (a real intent, not a
+    // skip), and the lot closes.
+    indicatorImpl = DECAYS;
+    const exitIntent = await exitCheck({
+      trace_id: 'trace-2',
+      instrument: 'AAPL',
+      clock: CLOCK,
+      bar: TICK_BAR,
+    });
+    expect(exitIntent).not.toBeNull();
+
+    // Episode 2: a NEW lot (new debate_id) is already open by the very next
+    // exitCheck — this exitCheck never observes the instrument flat in
+    // between — and the momentum read is back to holding: the SAME first
+    // skip reason episode 1 wrote.
+    positions = [{ ...HELD, debate_id: 'debate-that-reopened-the-lot' }];
+    indicatorImpl = HOLDS;
+    await exitCheck({ trace_id: 'trace-3', instrument: 'AAPL', clock: CLOCK, bar: TICK_BAR });
+
+    expect(written).toHaveLength(3);
+    expect(written[2]?.skip_reason).toBe('signal_still_supports_position');
+    expect(written[2]?.debate_id).toBe('debate-that-reopened-the-lot');
   });
 });
 

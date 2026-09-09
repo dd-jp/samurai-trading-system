@@ -62,6 +62,18 @@ function sideFor(direction: 'bullish' | 'bearish'): 'buy' | 'sell' {
 }
 
 /**
+ * The lot to attribute a position-level decision to when several are open on
+ * the same instrument — most recently OPENED wins. Exported (#1128 review
+ * round 1) so `direct-bind.ts`'s own attribution for an exit-check skip uses
+ * this exact selection rather than a second, independently-maintained copy
+ * of it that could silently drift from this one. Requires a non-empty array,
+ * same as the two call sites below did inline before this extraction.
+ */
+export function mostRecentOpenLot(positions: readonly OpenPosition[]): OpenPosition {
+  return positions.reduce((latest, lot) => (lot.opened_at > latest.opened_at ? lot : latest));
+}
+
+/**
  * The exact `IndicatorSpec` Trader asks the Market Data Service for. Exported
  * so `atr-equivalence.test.ts` can pin THIS spec rather than a hand-rebuilt
  * copy of it — a duplicate would keep passing if the real one drifted, which
@@ -1625,9 +1637,7 @@ async function routeDecision(
     return buildExitIntent(input, positions, 'direction_flip');
   }
 
-  const mostRecentLot = positions.reduce((latest, lot) =>
-    lot.opened_at > latest.opened_at ? lot : latest,
-  );
+  const mostRecentLot = mostRecentOpenLot(positions);
   if (debate.confidence - mostRecentLot.conviction < config.scale_in_conviction_delta) {
     return skip('scale_in_conviction_delta_not_met', {
       compared_value: debate.confidence - mostRecentLot.conviction,
@@ -1758,9 +1768,7 @@ async function routeExitCheck(
   // and at a 2-minute tick THIS is now the path that reports it most often.
   if (flattenWindow.diagnostic !== null) diagnostics.push(flattenWindow.diagnostic);
 
-  const mostRecentLot = positions.reduce((latest, lot) =>
-    lot.opened_at > latest.opened_at ? lot : latest,
-  );
+  const mostRecentLot = mostRecentOpenLot(positions);
   const attribution = {
     debate_id: mostRecentLot.debate_id,
     conviction: mostRecentLot.conviction,

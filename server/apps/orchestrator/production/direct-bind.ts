@@ -59,12 +59,12 @@ import {
   RISK_CRITIC_SKIPPED_REASON,
   RiskManagerImpl,
 } from '../../../pipeline/risk-manager/index.js';
-import type {
-  TraderConfig,
-  TraderDiagnostic,
-  TraderSkipReason,
+import type { TraderConfig, TraderDiagnostic } from '../../../pipeline/trader/index.js';
+import {
+  checkExitsWithReason,
+  decideWithReason,
+  mostRecentOpenLot,
 } from '../../../pipeline/trader/index.js';
-import { checkExitsWithReason, decideWithReason } from '../../../pipeline/trader/index.js';
 import type {
   ApprovalChannel,
   PositionStore,
@@ -113,6 +113,7 @@ import { OrphanVerdictScanner } from '../orphan-verdict-scan.js';
 import { SqliteAuditLog } from '../sqlite-audit-log.js';
 import { SqliteCurrentTickStore } from '../sqlite-current-tick-store.js';
 import type { TickSteps } from '../types.js';
+import { ExitSkipWriteThrottle } from './exit-skip-write-throttle.js';
 import type {
   ExitValuationDegradedAlert,
   ExitValuationDegradedAlertChannel,
@@ -289,16 +290,16 @@ export function buildTraderStep(deps: TraderStepDeps): TickSteps['trader'] {
 }
 
 /**
- * Mirrors `routeExitCheck`'s own `mostRecentLot` derivation in decide.ts
- * (attribute to the most recently OPENED lot) — not exported from there,
- * since `TraderOutcome` carries no `debate_id` field for a skip. Recomputed
- * here from the same `positions` snapshot `checkExitsWithReason` was given,
- * so the two derivations cannot disagree.
+ * `TraderOutcome` carries no `debate_id` field for a skip, so a skip row's
+ * attribution is recomputed here from the same `positions` snapshot
+ * `checkExitsWithReason` was given, via the exported `mostRecentOpenLot`
+ * (decide.ts, #1128 review round 1) rather than a second copy of its
+ * most-recently-OPENED-lot selection that could silently drift from it.
  */
 function mostRecentDebateId(positions: readonly OpenPosition[], instrument: string): string | null {
   const held = positions.filter((lot) => lot.instrument === instrument);
   if (held.length === 0) return null;
-  return held.reduce((latest, lot) => (lot.opened_at > latest.opened_at ? lot : latest)).debate_id;
+  return mostRecentOpenLot(held).debate_id;
 }
 
 /**
@@ -321,15 +322,13 @@ export function buildTraderSteps(deps: TraderStepDeps): {
   // `consecutiveSkips` — one running orchestrator, in memory, restart-clean.
   const diagnosticThrottle = new TraderDiagnosticThrottle();
 
-  // #1128: the exit-check skip DURABLY recorded per instrument, so a repeat
-  // can be told from a change. Restart-clean and in-memory, matching
-  // `diagnosticThrottle` above. Updated on every exit-check skip, including
-  // `no_open_position` (which itself never reaches `trader_log`, see the
-  // write site below) — skipping that update would leave a stale value from
-  // the position's PREVIOUS holding episode, so a lot opened, held, closed
-  // and reopened with the same first skip reason would look unchanged and
-  // silently lose the second episode's row.
-  const lastExitSkipReason = new Map<string, TraderSkipReason>();
+  // #1128 (review round 1): the exit-check skip write gate — see
+  // `exit-skip-write-throttle.ts` for why "differs from the last WRITTEN
+  // reason" alone cannot bound volume (a persistent fault, or a flapping
+  // indicator read, both look "changed" on every tick under a naive
+  // comparison). Restart-clean and in-memory, matching `diagnosticThrottle`
+  // above; cleared at this instrument's episode boundaries below.
+  const exitSkipThrottle = new ExitSkipWriteThrottle();
 
   const trader: TickSteps['trader'] = async ({ trace_id, instrument, debate, clock }) => {
     // TraderInput.equity is current portfolio equity (cash + mark-to-market
@@ -533,6 +532,21 @@ export function buildTraderSteps(deps: TraderStepDeps): {
         size: intent.size,
         created_at: clock.now(),
       });
+      // #1128 (review round 1): the exit just fired, so this instrument's
+      // skip-episode is over. Cleared HERE rather than left for the next
+      // `no_open_position` observation, because a position can close and
+      // reopen inside one tick gap with no exit-check ever observing the
+      // instrument flat in between.
+      exitSkipThrottle.clearEpisode(instrument);
+    } else if (skip_reason === 'no_open_position') {
+      // #1128: no lot is open, so there is no lot — and no debate — to
+      // attribute a row to, and `trader_log.debate_id` is `NOT NULL`
+      // (migration 0016). This never writes, but it IS an episode boundary
+      // exactly like a fired exit above: a position that goes flat by
+      // reconciliation rather than through this exitCheck's own intent still
+      // clears here, so a lot reopened with the same first skip reason as
+      // before is a new episode, not a suppressed repeat.
+      exitSkipThrottle.clearEpisode(instrument);
     } else if (skip_reason !== null) {
       // #1128: `classifyExitCheckSkip`'s `decision_class` used to be computed
       // and thrown away here. Durable now, but CHANGE-ONLY for most reasons —
@@ -540,20 +554,12 @@ export function buildTraderSteps(deps: TraderStepDeps): {
       // tick, 1h bar; tick-runner.ts's own count is "~29 of 30 passes" idle),
       // and a row per call would bury the decision records the table exists
       // to hold under a flat/held instrument repeating its last tick's
-      // answer. `exit_no_filled_size`/`exit_held_quantity_diverged` are
-      // exempt: each is the fill store contradicting itself (#568), rare by
-      // construction, and a data fault an operator must see on every
-      // occurrence, not only its first.
-      const previousReason = lastExitSkipReason.get(instrument);
-      lastExitSkipReason.set(instrument, skip_reason);
-      const isDataFault =
-        skip_reason === 'exit_no_filled_size' || skip_reason === 'exit_held_quantity_diverged';
-      if (isDataFault || previousReason !== skip_reason) {
-        // `no_open_position` fires with zero positions for the instrument, so
-        // there is no lot — and no debate — to attribute the row to, and
-        // `trader_log.debate_id` is `NOT NULL` (migration 0016). Every other
-        // exit-path skip fires with at least one lot open, so its debate_id is
-        // always derivable here.
+      // answer.
+      let wrote = false;
+      if (exitSkipThrottle.shouldWrite(instrument, skip_reason)) {
+        // Every other exit-path skip fires with at least one lot open, so its
+        // debate_id is always derivable here (see `no_open_position` above
+        // for the one reason that is not).
         const debate_id = mostRecentDebateId(positions, instrument);
         if (debate_id !== null) {
           deps.traderLog?.write({
@@ -573,8 +579,10 @@ export function buildTraderSteps(deps: TraderStepDeps): {
             size: null,
             created_at: clock.now(),
           });
+          wrote = true;
         }
       }
+      exitSkipThrottle.record(instrument, skip_reason, wrote);
     }
 
     escalateTraderDiagnostics(
