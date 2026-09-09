@@ -142,14 +142,17 @@ describe('startFromEnvironment (broker venue selection, #1400)', () => {
   const savedAlerts = process.env.SAMURAI_ALERTS;
   const savedMode = process.env.SAMURAI_MODE;
   let db: SharedStore;
+  let started: ProductionOrchestrator | undefined;
 
   beforeEach(() => {
     db = openSharedStore(':memory:');
+    started = undefined;
     process.env.SAMURAI_ALERTS = 'log-only';
     process.env.SAMURAI_MODE = 'paper';
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await started?.stop();
     db.close();
     if (savedVenue === undefined) delete process.env[BROKER_VENUE_ENV_VAR];
     else process.env[BROKER_VENUE_ENV_VAR] = savedVenue;
@@ -207,6 +210,16 @@ describe('startFromEnvironment (broker venue selection, #1400)', () => {
     // reachable from here — 31.15 leaves as 3115, not as 31.15.
     expect(order?.OrderPrice).toBeCloseTo(3115, 6);
     expect(order?.Orders?.map((leg) => leg.OrderPrice)).toEqual([2900, 3300]);
+  });
+
+  it('starts and stops the Saxo-wired orchestrator without a wiring refusal', async () => {
+    const orchestrator = await bootSaxo(fixtureSaxoGateway());
+    started = orchestrator;
+
+    // The tick loop's own startup path — orphan scan, bracket reload, scheduler
+    // admission of the LSE universe — is where a miswired venue refuses. A tick
+    // itself is not asserted: the mark and LLM sides here are fixtures.
+    await expect(orchestrator.start()).resolves.toBeDefined();
   });
 
   it('leaves the Alpaca paper path in place when the venue is not configured', async () => {
