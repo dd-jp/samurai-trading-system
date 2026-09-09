@@ -75,12 +75,15 @@
  *    arithmetic. (Not for throughput: the netted `per_subclass_deployment_cap`
  *    would give a mixed list more deployable capital than an index-only one,
  *    and in a mode where the screener has failed, more is not better.)
- * 3. **One ETP line per `screening_instrument`.** SPY, QQQ, PLTR and NVDA
- *    each carry two lines; two lines on one underlying is doubled exposure
- *    to a single name in the one mode with no screener to notice. Where an
- *    underlying has two lines, the GBP/GBX-quoted one is preferred (3SPY
- *    over 3USL, LQQ3 over 3QQQ) to avoid the spec's residual risk 2 twice
- *    over; where both are USD, the earlier-compiled line wins (NVD3).
+ * 3. **One ETP line per `screening_instrument`.** QQQ, PLTR and NVDA each
+ *    carry two lines and SPY carries three; two lines on one underlying is
+ *    doubled exposure to a single name in the one mode with no screener to
+ *    notice. Rules 5 and 6 settle most of these before this rule is reached
+ *    — SPY's three collapse to 3LUS alone once 3USL is excluded as USD
+ *    (rule 6) and 3SPY as Saxo-absent (rule 5). Where a choice survives
+ *    both, the sterling-quoted line is preferred (LQQ3 over 3QQQ) to avoid
+ *    the spec's residual risk 2 twice over. There is no both-USD tiebreak
+ *    any more: rule 6 excludes every USD line outright.
  * 4. **Two structural exclusions, from geometry rather than from a
  *    leaderboard.** MSTR is excluded because at 3x "the tape bleeds before
  *    any bracket is reached" (`docs/research/52-exit-geometry-and-subclass-odds.md`,

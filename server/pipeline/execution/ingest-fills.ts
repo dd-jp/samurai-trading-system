@@ -2160,8 +2160,11 @@ function toFill(
       ? {}
       : { flatten_idempotency_key: fill.flatten_idempotency_key }),
     // #1220, migration 0054: carried through verbatim and never converted —
-    // `Fill.fee_currency`'s doc has the reasoning, and
-    // `warnOnNonSterlingFee` above is what makes a foreign one loud.
+    // `Fill.fee_currency`'s doc has the reasoning, and `warnOnNonSterlingFee`
+    // is what makes a foreign one loud on the `advanceLot` path. The
+    // `cumulativeTopUp` path is unguarded and inert today: cumulative feeds
+    // are Alpaca-only and Alpaca reports `fee: 0` with no currency
+    // (`alpaca-order-normalization.ts`).
     ...(fill.fee_currency === undefined ? {} : { fee_currency: fill.fee_currency }),
   };
 }
