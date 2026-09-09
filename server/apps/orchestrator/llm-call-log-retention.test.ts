@@ -1,12 +1,12 @@
 /**
  * The retention setting, and the wiring that makes it real (#1045).
  *
- * The second describe block is the reason this file exists. #313 shipped
- * `pruneIngestedObservedFills` — implemented, tested, exported — and never
- * called it from anything on the shipped path, so `broker_observed_fills` has
- * grown unbounded ever since behind a green test suite. The specced 90-day
- * purge for the MI archive went the same way and has no implementation at all.
- * That is this repo's dominant defect: a mechanism nothing reaches.
+ * The second describe block is the reason this file exists. #313 shipped an
+ * observed-fill prune — implemented, tested, exported — and never called it
+ * from anything on the shipped path; it sat dead behind a green test suite
+ * until #1059 retired the whole mechanism. The specced 90-day purge for the
+ * MI archive went the same way and has no implementation at all. That is this
+ * repo's dominant defect: a mechanism nothing reaches.
  *
  * A unit test of `pruneLlmCallLog` cannot catch it, because the defect is the
  * absence of a caller rather than a fault in the callee. So the call sites are

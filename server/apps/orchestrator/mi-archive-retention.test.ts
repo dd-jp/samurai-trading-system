@@ -2,12 +2,12 @@
  * The MI archive's specced 90-day retention window, and the wiring that
  * makes it real (#1060).
  *
- * Follow-up from #1043/#1045: `pruneIngestedObservedFills` (#313) and the MI
- * archive's specced 90-day purge both shipped as implemented-tested-exported
- * mechanisms nothing on the shipped path ever called. #1045/PR #1050 fixed
- * that shape for `llm_call_log` with two asserted call sites at the
- * composition root; this does the same for the MI archive, which — unlike
- * #1059's dead code — IS written on the live path, so it grows for real.
+ * Follow-up from #1043/#1045: #313's observed-fill prune and the MI archive's
+ * specced 90-day purge both shipped as implemented-tested-exported mechanisms
+ * nothing on the shipped path ever called. #1045/PR #1050 fixed that shape for
+ * `llm_call_log` with two asserted call sites at the composition root; this
+ * does the same for the MI archive, which — unlike the dead code #1059 went on
+ * to retire — IS written on the live path, so it grows for real.
  *
  * WHAT THE SOURCE-TEXT BLOCK BELOW PINS, AND WHAT IT DOES NOT (#1313).
  * A unit test of `MiArchiveStore.purgeOlderThan` cannot catch a missing

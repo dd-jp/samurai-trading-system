@@ -27,10 +27,10 @@ const TABLES = [
   'current_tick',
   'cii_snapshots',
   // `account_state` shipped in 0006 without being listed here — the assertion
-  // is only as good as the list, so it is added with 0007's two.
+  // is only as good as the list, so it is added with `broker_brackets` (0007).
+  // 0007's other table, `broker_observed_fills`, was dropped by 0053 (#1059).
   'account_state',
   'broker_brackets',
-  'broker_observed_fills',
   'broker_unpriced_fills',
   // `session_equity` (0009) very nearly repeated `account_state`'s omission
   // above, which is why the assertion below is now an exact set rather than a
@@ -96,7 +96,7 @@ const TABLES = [
  * That prose number silently drifted twice (it read "twenty" and "twenty-one"
  * simultaneously while the schema held 22), so it is pinned here.
  */
-const CONSOLIDATED_SCHEMA_TABLE_COUNT = 35;
+const CONSOLIDATED_SCHEMA_TABLE_COUNT = 34;
 
 /**
  * The migration list, derived from disk so a new `NNNN_*.sql` file changes no
@@ -107,7 +107,7 @@ const CONSOLIDATED_SCHEMA_TABLE_COUNT = 35;
  */
 const MIGRATIONS = listMigrations(MIGRATIONS_DIR);
 const MIGRATION_VERSIONS = MIGRATIONS.map((migration) => migration.version);
-const HIGHEST_KNOWN_MIGRATION_VERSION = 52;
+const HIGHEST_KNOWN_MIGRATION_VERSION = 53;
 
 /** A temp copy of `MIGRATIONS_DIR` holding every migration through `throughVersion`, inclusive. */
 function copyMigrationsUpTo(throughVersion: number): string {

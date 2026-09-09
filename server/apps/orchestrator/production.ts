@@ -1806,8 +1806,9 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    *
    * Wired here rather than inside `SqliteLlmSpendStore` on purpose. The store
    * writes rows; deciding how many the SYSTEM keeps is a deployment policy,
-   * and burying it in the writer is how `pruneIngestedObservedFills` came to
-   * exist, be tested, and never be called from anything that ships (#313).
+   * and burying it in the writer is how #313's observed-fill prune came to
+   * exist, be tested, and never be called from anything that ships — dead
+   * code its whole life, retired by #1059.
    */
   const llmCallLogMaxRows = llmCallLogMaxRowsFromEnvironment();
   pruneLlmCallLogWithLog(config.db, llmCallLogMaxRows, logger, 'startup');
@@ -1823,8 +1824,8 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * same reason as above: the store persists rows, deciding how long the
    * SYSTEM keeps them is a deployment policy, and burying it in the writer
    * is exactly how the MI archive's purge went unimplemented in the first
-   * place (#1060's own gap) and how `pruneIngestedObservedFills` (#313)
-   * shipped uncalled.
+   * place (#1060's own gap) and how #313's observed-fill prune shipped
+   * uncalled, and was eventually retired unused (#1059).
    */
   const miArchiveRetentionDays = miArchiveRetentionDaysFromEnvironment();
   pruneMiArchiveWithLog(config.miArchive, miArchiveRetentionDays, clock, logger, 'startup');

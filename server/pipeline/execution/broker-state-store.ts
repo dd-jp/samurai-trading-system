@@ -146,36 +146,6 @@ export interface BrokerStateStore {
     clientOrderId: string,
     ids: BrokerBracketOrderIds,
   ): void;
-  /** The observed-fill journal for this venue, oldest first. */
-  loadObservedFills(venue: BrokerVenue): NormalizedFill[];
-  /** Idempotent on `(venue, client_order_id, broker_fill_id)`. */
-  saveObservedFill(venue: BrokerVenue, fill: NormalizedFill): void;
-  /**
-   * Drops observed fills that `ingestFills()` has already consumed, returning
-   * how many rows went (#313). The table is otherwise append-only and grows
-   * for the life of the deployment.
-   *
-   * **The retention rule, and why it is this simple.** #313 expected the rule
-   * to be delicate — "a row is safe to drop once the venue's fill feed can no
-   * longer re-offer that fill" — because dropping one early looked like it
-   * would reintroduce double-counted fills. It cannot. Dedup does not live in
-   * this table: `ingestFills()` gates on `SharedStore.hasFill`, which reads
-   * `fills`, a permanent ledger. `broker_observed_fills` is only the ccxt
-   * adapter's crash-durable QUEUE — its whole job is that a fill observed by a
-   * process which died before ingesting it survives the restart.
-   *
-   * So a row's purpose is discharged the moment its `(idempotency_key,
-   * broker_fill_id)` pair appears in `fills`, and after that a re-offer is
-   * caught by `hasFill` whether or not the queue row still exists. No `since`
-   * window, no lot terminal state.
-   *
-   * The FULL pair, not `broker_fill_id` alone (#313 / PR #459's review, which
-   * is where the SQL prune got the pair and has matched it ever since): the id
-   * is venue-assigned, so two lots can carry the same id string, and an id-only
-   * match would let one lot's ingested fill drop another lot's still-queued
-   * row — the loss this queue exists to prevent.
-   */
-  pruneIngestedObservedFills(venue: BrokerVenue): number;
   /**
    * Notes that this fill is still unpriced as of `seenAt` (#298).
    *
@@ -213,18 +183,7 @@ export interface BrokerStateStore {
  */
 export class InMemoryBrokerStateStore implements BrokerStateStore {
   private readonly brackets = new Map<string, BrokerBracketRecord>();
-  private readonly fills = new Map<string, NormalizedFill & { venue: BrokerVenue }>();
   private readonly unpriced = new Map<string, UnpricedFillRecord & { venue: BrokerVenue }>();
-  /**
-   * Stands in for the `fills` ledger the SQLite store's prune joins against —
-   * this double has no `SharedStore` behind it. A caller marks a fill here to
-   * say "`ingestFills()` has consumed this one".
-   *
-   * A modelled set rather than a no-op prune: a port implementation that
-   * silently keeps everything would let a caller pass its own tests while the
-   * real store behaved differently.
-   */
-  private readonly ingested = new Set<string>();
 
   loadBrackets(venue: BrokerVenue): BrokerBracketRecord[] {
     return [...this.brackets.values()].filter((record) => record.venue === venue);
@@ -263,53 +222,6 @@ export class InMemoryBrokerStateStore implements BrokerStateStore {
       entry_order_id: ids.entry_order_id ?? existing?.entry_order_id ?? null,
       stop_order_id: ids.stop_order_id ?? existing?.stop_order_id ?? null,
       target_order_id: ids.target_order_id ?? existing?.target_order_id ?? null,
-    });
-  }
-
-  loadObservedFills(venue: BrokerVenue): NormalizedFill[] {
-    return [...this.fills.values()]
-      .filter((fill) => fill.venue === venue)
-      .map(({ venue: _venue, ...fill }) => fill);
-  }
-
-  /**
-   * Keyed on the pair, and takes an object so the two id strings cannot be
-   * transposed at a call site (#1328's reason on `hasFill`).
-   *
-   * VENUE-BLIND on purpose, because `fills` is: the real ledger has no venue
-   * column, and the SQL prune gets its venue scoping from
-   * `broker_observed_fills.venue = ?` alone. Adding venue here would make the
-   * double STRICTER than the store — one venue's ledger row would stop
-   * discharging another venue's queue row for the same lot, which SQL does
-   * discharge.
-   */
-  markIngested(fill: Pick<NormalizedFill, 'client_order_id' | 'broker_fill_id'>): void {
-    this.ingested.add(ledgerKey(fill.client_order_id, fill.broker_fill_id));
-  }
-
-  pruneIngestedObservedFills(venue: BrokerVenue): number {
-    let pruned = 0;
-    for (const [rowKey, fill] of this.fills) {
-      // The full `(idempotency_key, broker_fill_id)` pair, matching the SQL
-      // store's `EXISTS` join against `fills`, which has matched the pair since
-      // #313 / PR #459's review. On `broker_fill_id` alone this double dropped
-      // a different lot's un-ingested row whenever the venue reused an id
-      // string (#1335).
-      if (
-        fill.venue === venue &&
-        this.ingested.has(ledgerKey(fill.client_order_id, fill.broker_fill_id))
-      ) {
-        this.fills.delete(rowKey);
-        pruned++;
-      }
-    }
-    return pruned;
-  }
-
-  saveObservedFill(venue: BrokerVenue, fill: NormalizedFill): void {
-    this.fills.set(fillKey(venue, fill.client_order_id, fill.broker_fill_id), {
-      ...fill,
-      venue,
     });
   }
 
@@ -362,9 +274,4 @@ function key(venue: BrokerVenue, clientOrderId: string): string {
 
 function fillKey(venue: BrokerVenue, clientOrderId: string, brokerFillId: string): string {
   return `${venue}|${clientOrderId}|${brokerFillId}`;
-}
-
-/** The `fills` primary key `(idempotency_key, broker_fill_id)`, which has no venue. */
-function ledgerKey(clientOrderId: string, brokerFillId: string): string {
-  return `${clientOrderId}|${brokerFillId}`;
 }

@@ -1,0 +1,26 @@
+-- Retires `broker_observed_fills` (#1059). David's ruling, 2026-09-08: drop
+-- the mechanism rather than re-home it to the equity path.
+--
+-- The table's only writer was `ccxt-adapter.ts`, which was deleted when crypto
+-- left Samurai's scope on 2026-08-16 (ADR-0015's amendment). The equity path
+-- never had one, so `saveObservedFill`/`loadObservedFills`/
+-- `pruneIngestedObservedFills` have had zero non-test callers since. Dedup
+-- never lived here in any case: `ingestFills()` gates on `fills`, a permanent
+-- ledger, which PR #459's own description already argued.
+--
+-- ## Why DROP rather than leave the table as an empty artefact
+--
+-- Nothing ever wrote it on this deployment and the row count is MEASURED at 0
+-- (`docs/research/58-cost-floor-sizing-and-per-instrument-spread.md`, the
+-- per-table row census), so the drop cannot lose data. The runner is
+-- forward-only — `runMigrations` has no down path — which is acceptable
+-- precisely because there is nothing to restore. Left in place, the table
+-- would keep `write-guard.ts` declaring an owner for something no code
+-- touches and keep the store spec carrying DDL for a dead mechanism, which is
+-- the rot this ticket exists to clear.
+--
+-- If a venue is later measured to re-offer fills in a way `idempotency_key`
+-- cannot absorb, the queue comes back purpose-built against that venue's
+-- observed behaviour rather than inherited from ccxt's.
+
+DROP TABLE broker_observed_fills;
