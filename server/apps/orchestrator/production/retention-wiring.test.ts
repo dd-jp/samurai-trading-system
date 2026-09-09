@@ -48,7 +48,7 @@
  * two files above.
  */
 
-import type { FeedbackConfig } from '../../../pipeline/feedback-loop/index.js';
+import type { FeedbackConfig, LoosenAppliedNotice } from '../../../pipeline/feedback-loop/index.js';
 import { DEFAULT_TRADER_CONFIG } from '../../../pipeline/trader/index.js';
 import {
   GdeltGkgClient,
@@ -70,6 +70,13 @@ import {
   ENV_MI_ARCHIVE_RETENTION_DAYS,
   type ProductionConfig,
 } from '../production.js';
+import {
+  makeWiringCiiConsumerConfig,
+  makeWiringCorrelationConfig,
+  makeWiringCostConfig,
+  makeWiringExecutionConfig,
+  makeWiringRiskConfig,
+} from './wiring-config-fixtures.js';
 
 const NOW = new Date('2026-09-06T12:00:00Z');
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -161,12 +168,12 @@ function stubConfig(
     } as unknown as ProductionConfig['accountState'],
     llmClient: { complete: vi.fn() } as unknown as ProductionConfig['llmClient'],
     traderConfig: DEFAULT_TRADER_CONFIG,
-    riskConfig: {} as ProductionConfig['riskConfig'],
+    riskConfig: makeWiringRiskConfig(),
     verdictConfig: {
       automation_level: { crypto: 'auto', stocks: 'auto' },
     } as ProductionConfig['verdictConfig'],
-    executionConfig: {} as ProductionConfig['executionConfig'],
-    correlationConfig: {} as ProductionConfig['correlationConfig'],
+    executionConfig: makeWiringExecutionConfig(),
+    correlationConfig: makeWiringCorrelationConfig(),
     breakerConfig: {
       daily_loss_pct: 0.05,
       daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
@@ -175,8 +182,8 @@ function stubConfig(
       volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
       auto_rearm: { recovery_drawdown_pct: 0.2, max_days_tripped: 5 },
     } as ProductionConfig['breakerConfig'],
-    costConfig: {} as ProductionConfig['costConfig'],
-    ciiConsumerConfig: {} as ProductionConfig['ciiConsumerConfig'],
+    costConfig: makeWiringCostConfig(),
+    ciiConsumerConfig: makeWiringCiiConsumerConfig(),
     ...overrides,
   } as ProductionConfig;
 }
@@ -192,7 +199,7 @@ const feedbackCycleConfig = {
   config: {
     weights: { max_step: 0.05, floor: 0.5, ceiling: 1.5, tighten_is: 'decrease' },
   } as unknown as FeedbackConfig,
-  loosenNotices: { notifyLoosenApplied: vi.fn() } as never,
+  loosenNotices: { notifyLoosenApplied: vi.fn<(notice: LoosenAppliedNotice) => void>() },
 } as NonNullable<ProductionConfig['feedback']>;
 
 describe('the composition root RUNS its retention sweeps (#1313)', () => {

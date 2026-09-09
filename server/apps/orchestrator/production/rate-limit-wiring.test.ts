@@ -44,6 +44,13 @@ import {
   WORST_CASE_LLM_CALLS_PER_DEBATE,
   worstCaseLlmCallsForAssetClass,
 } from './debate-adapter.js';
+import {
+  makeWiringCiiConsumerConfig,
+  makeWiringCorrelationConfig,
+  makeWiringCostConfig,
+  makeWiringExecutionConfig,
+  makeWiringRiskConfig,
+} from './wiring-config-fixtures.js';
 
 const NOW = new Date('2026-08-05T14:00:00Z');
 const CLOCK: Clock = { now: () => NOW };
@@ -1087,14 +1094,14 @@ function stubConfig(db: SharedStore, overrides: Partial<ProductionConfig>): Stub
     // Not an empty cast (#691): the composition root refuses a trader config
     // whose `flatten_before_close_ms` would silently disable flat-by-close.
     traderConfig: DEFAULT_TRADER_CONFIG,
-    riskConfig: {} as ProductionConfig['riskConfig'],
+    riskConfig: makeWiringRiskConfig(),
     // Carries the automation dial, which `buildProductionComponents` reads to
     // refuse a HITL-engaging config (#434). `auto` is ADR-0007's setting.
     verdictConfig: {
       automation_level: { crypto: 'auto', stocks: 'auto' },
     } as ProductionConfig['verdictConfig'],
-    executionConfig: {} as ProductionConfig['executionConfig'],
-    correlationConfig: {} as ProductionConfig['correlationConfig'],
+    executionConfig: makeWiringExecutionConfig(),
+    correlationConfig: makeWiringCorrelationConfig(),
     // Not an empty cast since #634: `CircuitBreakers` validates its
     // hysteresis band (`recovery_drawdown_pct < max_drawdown_pct`) at
     // construction, so `{}` no longer builds.
@@ -1106,8 +1113,8 @@ function stubConfig(db: SharedStore, overrides: Partial<ProductionConfig>): Stub
       volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
       auto_rearm: { recovery_drawdown_pct: 0.2, max_days_tripped: 5 },
     } as ProductionConfig['breakerConfig'],
-    costConfig: {} as ProductionConfig['costConfig'],
-    ciiConsumerConfig: {} as ProductionConfig['ciiConsumerConfig'],
+    costConfig: makeWiringCostConfig(),
+    ciiConsumerConfig: makeWiringCiiConsumerConfig(),
     ...overrides,
   } as StubConfig;
 }
