@@ -97,8 +97,11 @@
  *    `saxo_tradeable`, not `t212_isa` — `t212_isa` names a venue Samurai is
  *    barred from (#896/#912) and answers a different, no-longer-live
  *    question. Every fallback row is Saxo-verified `true` (#1032 item 3);
- *    no spread or volume measurement exists until #1035 → #1053 land, so
- *    this subset is declared pending that, not screened against it.
+ *    no spread or volume measurement exists yet — #750 gates on it, and the
+ *    chain that would deliver one (#1034 → #1035) carries `needs-decision`
+ *    pending whether Saxo's burst-sampled `infoprices` spread (#1310)
+ *    supersedes DMD — so this subset is declared pending that, not screened
+ *    against it.
  *
  * **Re-selected 2026-09-05 by #1032 item 3.** The Saxo capture found no line
  * at all for 3SPY, 3AMZ and (under its own ticker) 3LME/3FB — four of the
@@ -238,8 +241,10 @@
  * negative-expectancy on unconditional entry, and real spreads are still
  * unmeasured on any live venue — #666 closed 2026-08-27 out of scope,
  * following the T212-to-Saxo pivot, without delivering that measurement;
- * #750 now gates on it instead, and #1053 (open) owns delivering it, per
- * ADR-0016). Rows were dropped from this
+ * #750 now gates on it instead; the chain that would deliver it —
+ * #1034 → #1035 — carries `needs-decision` pending whether Saxo's
+ * `infoprices` spread (#1310) supersedes DMD, per ADR-0016). Rows were
+ * dropped from this
  * pass, not padded around: a
  * GraniteShares Spotify line was carried through T212 verification and then
  * left out because no fetched page confirmed its ISIN or quoting currency.
@@ -463,8 +468,10 @@ export interface LseEtpPoolRow {
    * shrank on that basis. This is also NOT a spread or liquidity
    * measurement — #666, which would have measured real T212 spreads, closed
    * the same day for the same reason; #750 now gates on a real per-instrument
-   * spread measurement instead, and #1053 (open) owns delivering it, per
-   * ADR-0016. Every `true` here means only
+   * spread measurement instead; the chain that would deliver it —
+   * #1034 → #1035 — carries `needs-decision` pending whether Saxo's
+   * `infoprices` spread (#1310) supersedes DMD, per ADR-0016. Every `true`
+   * here means only
    * "T212 lists the instrument" — not "tradeable", not "the spread is
    * tradeable", and not anything about Saxo, which this field has never
    * checked.
@@ -524,7 +531,8 @@ export interface LseEtpPoolRow {
    * logic.** The fallback exists to work *when the screener has failed*, so
    * it cannot be derived from anything the screener produces or consumes —
    * not last known ranking (the spec's own third constraint), and not the
-   * per-instrument liquidity or cost #1035 → #1053 will deliver, because a
+   * per-instrument liquidity or cost #750 gates on and the #1034 → #1035
+   * chain (`needs-decision` pending #1310) would deliver, because a
    * screener run that could not read its inputs is exactly the run that
    * triggers the fallback. It has to be statically declared in a checked-in
    * artifact, which is this one. #751 owns the fallback's *behaviour* — when
