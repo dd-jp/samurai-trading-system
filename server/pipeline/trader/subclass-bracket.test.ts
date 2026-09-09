@@ -163,6 +163,7 @@ function debateResult(overrides: Partial<DebateResult> = {}): DebateResult {
     direction: 'bullish',
     debate_id: 'debate-subclass',
     bar_timestamp: DECISION_BAR,
+    read: true,
     ...overrides,
   };
 }

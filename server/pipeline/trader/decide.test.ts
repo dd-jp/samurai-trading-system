@@ -216,6 +216,7 @@ function debateResult(overrides: Partial<DebateResult> = {}): DebateResult {
     // — but it now comes from the DEBATE, not from flooring the clock, which is
     // what the straddle cases at the end of this suite turn on.
     bar_timestamp: DECISION_BAR,
+    read: true,
     ...overrides,
   };
 }
@@ -2097,6 +2098,31 @@ describe('decideWithReason — decision class and reason detail (#1109)', () => 
     expect(outcome.decision_class).toBe('could_not_decide');
   });
 
+  it('classifies a flat-side neutral as could_not_decide when the debate result is unread (#1393)', async () => {
+    // Synthetic and, as of this ticket, unreachable from any real producer —
+    // every current path sets `read: true` (see `DebateResult.read`'s
+    // docblock). This pins the guard rail itself: a `DebateResult` carrying
+    // neither `timed_out` nor `rate_limited` but marked `read: false` must
+    // still be treated as a starved read, not a genuine decline. Before
+    // `debateWasDegraded` consulted `read`, this exact fixture classified as
+    // `declined_on_signal` — the mutation evidence for this test is that
+    // regression.
+    const outcome = await decideWithReason(
+      traderInput({
+        debate: debateResult({
+          direction: 'neutral',
+          converged: false,
+          rounds_completed: 0,
+          read: false,
+        }),
+      }),
+    );
+
+    expect(outcome.skip_reason).toBe('neutral_direction_while_flat');
+    expect(outcome.decision_class).toBe('could_not_decide');
+    expect(outcome.decision_class).not.toBe('declined_on_signal');
+  });
+
   it('classifies a holding refusal as declined_on_signal when the debate genuinely did not converge', async () => {
     const outcome = await decideWithReason(
       traderInput({
@@ -2168,6 +2194,27 @@ describe('decideWithReason — decision class and reason detail (#1109)', () => 
           converged: false,
           rounds_completed: 1,
           timed_out: { budget_ms: 8_000, elapsed_ms: 8_050 },
+        }),
+      }),
+    );
+
+    expect(outcome.skip_reason).toBe('session_closing');
+    expect(outcome.decision_class).toBe('declined_on_signal');
+  });
+
+  it('classifies session_closing as declined_on_signal even when the debate is unread (#1393)', async () => {
+    // Same carve-out as the `timed_out` case above, pinned separately for
+    // `read: false`: `session_closing` decides off the clock/calendar, never
+    // off the debate, so it must not flip to `could_not_decide` on this
+    // override either.
+    const outcome = await decideWithReason(
+      traderInput({
+        clock: new ManualClock(new Date('2026-07-15T19:56:00Z')),
+        debate: debateResult({
+          direction: 'bullish',
+          converged: false,
+          rounds_completed: 0,
+          read: false,
         }),
       }),
     );

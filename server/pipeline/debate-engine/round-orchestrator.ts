@@ -234,5 +234,6 @@ export async function runDebate(
     // The SAME `bar` that was just hashed into `debate_id`, carried forward to
     // the Trader so it never floors a second clock read of its own (#687).
     bar_timestamp: bar,
+    read: true,
   };
 }

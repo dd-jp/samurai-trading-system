@@ -1274,9 +1274,16 @@ const SKIP_REASON_CLASS: Record<TraderSkipReason, TraderDecisionClass> = {
  * `rounds_completed`: #1080's `timed_out_partial` distinction lives at the
  * Debate stage, and a partial debate is no more decided than a zero-round one
  * from the Trader's seat — both handed it a `direction` it should not trust.
+ *
+ * `!debate.read` is checked alongside them (#1393): `timed_out` and
+ * `rate_limited` name the two read failures this contract knows about today,
+ * but a future fallback that hands back a neutral result for neither reason
+ * would set both to `undefined` and, without this check, read here as a
+ * genuine decline. No producer sets `read: false` yet, so this arm is dead
+ * today and exists to keep it that way once one does.
  */
 function debateWasDegraded(debate: DebateResult): boolean {
-  return debate.timed_out !== undefined || debate.rate_limited !== undefined;
+  return !debate.read || debate.timed_out !== undefined || debate.rate_limited !== undefined;
 }
 
 /**

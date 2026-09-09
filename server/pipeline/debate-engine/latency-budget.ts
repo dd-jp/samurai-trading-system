@@ -301,6 +301,10 @@ export async function enforceLatencyBudget(params: {
       // decision for the bar the tick was taken in, and the two shapes below
       // must name the same bar whether or not a round completed (#687).
       bar_timestamp: bar,
+      // A round finished before the budget fired, so this IS a real (if
+      // truncated) read — `timed_out` already says the debate was cut
+      // short; `read` says the resulting direction is not a blank scaffold.
+      read: true,
       timed_out,
     };
   }
@@ -318,6 +322,11 @@ export async function enforceLatencyBudget(params: {
     direction: LOW_CONFIDENCE_FALLBACK.direction,
     debate_id,
     bar_timestamp: bar,
+    // `timed_out` alone already makes `debateWasDegraded` true; `read: true`
+    // here is not a claim that a synthesis exists (`LOW_CONFIDENCE_FALLBACK`
+    // is a scaffold too) — it is only saying this is not the #1393 case,
+    // which is a fallback carrying NEITHER `timed_out` nor `rate_limited`.
+    read: true,
     timed_out,
   };
 }

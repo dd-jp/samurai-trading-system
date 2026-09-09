@@ -133,6 +133,42 @@ export interface DebateResult {
    */
   bar_timestamp: Date;
   /**
+   * True when `synthesis`/`position`/`direction`/`confidence` above were
+   * actually produced by reading something — a converged debate, a
+   * round-capped one, or a `timed_out` partial that has a real (if
+   * truncated) synthesis from a round that finished. False only for a
+   * neutral scaffold a producer hands back because there was nothing to
+   * read at all (#1393).
+   *
+   * REQUIRED, not optional — the same enforcement `bar_timestamp` above
+   * uses (#687), and for the same reason: an optional flag lets a producer
+   * omit it and hand the Trader a silent default. `timed_out` and
+   * `rate_limited` already discriminate the two read failures this contract
+   * names today, but neither is universal — a future fallback that
+   * produces a neutral result for some OTHER reason (a parse failure, a
+   * malformed provider response, anything not shaped like a budget or an
+   * admission refusal) would set neither, and `debateWasDegraded`
+   * (trader/decide.ts) would then read it as a genuine decline. That
+   * result would log as `declined_on_signal` — the word that means the
+   * debate was read and passed — when nothing was read. This field is the
+   * general fact the two specific flags cannot cover, checked ahead of
+   * either of them by `debateWasDegraded` and by the orchestrator's
+   * `debateDecisionWord` (#1080) gloss, so the two stay in agreement about
+   * the same result.
+   *
+   * No production producer sets this to `false` yet. Every current path —
+   * the round orchestrator, both `enforceLatencyBudget` shapes, the
+   * rate-limit/spend-cap refusals, the control arm's axis-vote decision
+   * (including its own no-axis-vote neutral, which is a genuine falsifier
+   * decline, not an unread debate — see its own comment), and the
+   * replay-from-log shape — sets `true`, because every one of them either
+   * ran a real debate, replays one that ran, or already carries its own
+   * `timed_out`/`rate_limited` flag. This field has a reader now and no
+   * writer; behaviour is unchanged until a fallback exists to set it
+   * `false`.
+   */
+  read: boolean;
+  /**
    * Present only when the debate was force-terminated by the latency budget
    * (docs/specs/debate-engine-spec.md "Module: Latency Budget", ticket #33).
    * Absent on a normal (converged or round-cap) completion.
