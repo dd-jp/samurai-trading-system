@@ -45,6 +45,13 @@ import { SimulatedClock, TokenBucket } from '../../../shared/index.js';
 import { recordingLogger } from '../../../shared/recording-logger.js';
 import { guardedStore, openSharedStore, type SharedStore } from '../../../shared/store/index.js';
 import { buildProductionOrchestrator, type ProductionConfig } from '../production.js';
+import {
+  makeWiringCiiConsumerConfig,
+  makeWiringCorrelationConfig,
+  makeWiringCostConfig,
+  makeWiringExecutionConfig,
+  makeWiringRiskConfig,
+} from './wiring-config-fixtures.js';
 
 const NOW = new Date('2026-07-20T16:00:00Z');
 
@@ -172,12 +179,12 @@ function stubConfig(db: SharedStore, logger: Logger): StubConfig {
       }),
     } as unknown as ProductionConfig['accountState'],
     traderConfig: DEFAULT_TRADER_CONFIG,
-    riskConfig: {} as ProductionConfig['riskConfig'],
+    riskConfig: makeWiringRiskConfig(),
     verdictConfig: {
       automation_level: { crypto: 'auto', stocks: 'auto' },
     } as ProductionConfig['verdictConfig'],
-    executionConfig: {} as ProductionConfig['executionConfig'],
-    correlationConfig: {} as ProductionConfig['correlationConfig'],
+    executionConfig: makeWiringExecutionConfig(),
+    correlationConfig: makeWiringCorrelationConfig(),
     breakerConfig: {
       daily_loss_pct: 0.05,
       daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
@@ -186,8 +193,8 @@ function stubConfig(db: SharedStore, logger: Logger): StubConfig {
       volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
       auto_rearm: { recovery_drawdown_pct: 0.2, max_days_tripped: 5 },
     } as ProductionConfig['breakerConfig'],
-    costConfig: {} as ProductionConfig['costConfig'],
-    ciiConsumerConfig: {} as ProductionConfig['ciiConsumerConfig'],
+    costConfig: makeWiringCostConfig(),
+    ciiConsumerConfig: makeWiringCiiConsumerConfig(),
     // Always open, so `start()` reaches its startup reconcile the same way a
     // boot inside the session does.
     tradingCalendar: new AlwaysOpenCalendar(),

@@ -73,6 +73,13 @@ import { SimulatedClock, TokenBucket, toBrokerFillId } from '../../../shared/ind
 import { recordingLogger } from '../../../shared/recording-logger.js';
 import { guardedStore, openSharedStore, type SharedStore } from '../../../shared/store/index.js';
 import { buildProductionOrchestrator, type ProductionConfig } from '../production.js';
+import {
+  makeWiringCiiConsumerConfig,
+  makeWiringCorrelationConfig,
+  makeWiringCostConfig,
+  makeWiringExecutionConfig,
+  makeWiringRiskConfig,
+} from './wiring-config-fixtures.js';
 
 /**
  * The same spy `production.test.ts` installs at file scope (#1321 round 2) —
@@ -295,12 +302,12 @@ function stubConfig(db: SharedStore, logger: Logger, broker: BrokerAdapter): Stu
       }),
     } as unknown as ProductionConfig['accountState'],
     traderConfig: DEFAULT_TRADER_CONFIG,
-    riskConfig: {} as ProductionConfig['riskConfig'],
+    riskConfig: makeWiringRiskConfig(),
     verdictConfig: {
       automation_level: { crypto: 'auto', stocks: 'auto' },
     } as ProductionConfig['verdictConfig'],
-    executionConfig: {} as ProductionConfig['executionConfig'],
-    correlationConfig: {} as ProductionConfig['correlationConfig'],
+    executionConfig: makeWiringExecutionConfig(),
+    correlationConfig: makeWiringCorrelationConfig(),
     breakerConfig: {
       daily_loss_pct: 0.05,
       daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
@@ -309,8 +316,8 @@ function stubConfig(db: SharedStore, logger: Logger, broker: BrokerAdapter): Stu
       volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
       auto_rearm: { recovery_drawdown_pct: 0.2, max_days_tripped: 5 },
     } as ProductionConfig['breakerConfig'],
-    costConfig: {} as ProductionConfig['costConfig'],
-    ciiConsumerConfig: {} as ProductionConfig['ciiConsumerConfig'],
+    costConfig: makeWiringCostConfig(),
+    ciiConsumerConfig: makeWiringCiiConsumerConfig(),
     tradingCalendar: new AlwaysOpenCalendar(),
     polymarketClient: new PolymarketClient({
       rateLimiter: new TokenBucket({ capacity: 1_000, refillPerSecond: 1_000 }),

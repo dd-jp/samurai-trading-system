@@ -52,6 +52,13 @@ import {
   type ProductionConfig,
 } from '../production.js';
 import { MI_REFRESH_TRACE_ID } from './mi-refresh-queue.js';
+import {
+  makeWiringCiiConsumerConfig,
+  makeWiringCorrelationConfig,
+  makeWiringCostConfig,
+  makeWiringExecutionConfig,
+  makeWiringRiskConfig,
+} from './wiring-config-fixtures.js';
 
 const NOW = new Date('2026-09-03T14:00:00Z');
 
@@ -135,12 +142,12 @@ function stubConfig(db: SharedStore, overrides: Partial<ProductionConfig>): Stub
       fetchMarket: vi.fn(async () => undefined),
     } as unknown as ProductionConfig['polymarketClient'],
     traderConfig: DEFAULT_TRADER_CONFIG,
-    riskConfig: {} as ProductionConfig['riskConfig'],
+    riskConfig: makeWiringRiskConfig(),
     verdictConfig: {
       automation_level: { crypto: 'auto', stocks: 'auto' },
     } as ProductionConfig['verdictConfig'],
-    executionConfig: {} as ProductionConfig['executionConfig'],
-    correlationConfig: {} as ProductionConfig['correlationConfig'],
+    executionConfig: makeWiringExecutionConfig(),
+    correlationConfig: makeWiringCorrelationConfig(),
     breakerConfig: {
       daily_loss_pct: 0.05,
       daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
@@ -149,8 +156,8 @@ function stubConfig(db: SharedStore, overrides: Partial<ProductionConfig>): Stub
       volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
       auto_rearm: { recovery_drawdown_pct: 0.2, max_days_tripped: 5 },
     } as ProductionConfig['breakerConfig'],
-    costConfig: {} as ProductionConfig['costConfig'],
-    ciiConsumerConfig: {} as ProductionConfig['ciiConsumerConfig'],
+    costConfig: makeWiringCostConfig(),
+    ciiConsumerConfig: makeWiringCiiConsumerConfig(),
     ...overrides,
   } as StubConfig;
 }
