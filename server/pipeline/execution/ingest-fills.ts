@@ -100,12 +100,15 @@ export const FILLED_ZERO_SIZE_CLEARED =
  * shouted about. The row is written with `fee_currency` verbatim
  * (migration 0054) and this is raised at `error`.
  *
- * **Why the logger and not a new `AlertChannelSlots` channel.** Adding a
- * channel is compiler-enforced across `production.ts`, `alert-transport.ts`
- * and every composition root — the right price for a new operator
- * escalation. This is not one: David's ruling frames a foreign fee as a
- * contradiction that must not pass silently, and `ExecutionInput.logger` is
- * already the loud path every other in-band execution contradiction takes.
+ * **RECORDED, NOT PAGED — and that is a gap, not the finished posture.**
+ * This goes to `ExecutionInput.logger` only. Every other `error`-level entry
+ * in this file sits beside an `AlertChannelSlots` post (`ResidualExposureAlert`,
+ * the flatten-overfill channel) or reports one failing; the logger sink is a
+ * rotating file nobody escalates, so a foreign fee is durable and greppable
+ * but wakes no operator. Adding a channel is compiler-enforced across
+ * `production.ts`, `alert-transport.ts` and every composition root, which is
+ * out of #1220's scope — the fee currency reaching the store at all was the
+ * ruling's ask. Paging is tracked as its own follow-up.
  *
  * It is a CONTRADICTION rather than an FX conversion to model because
  * `tradeableUniverse` (universe-pool) excludes every non-sterling line: a

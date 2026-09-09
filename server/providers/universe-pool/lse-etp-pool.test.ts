@@ -510,7 +510,7 @@ describe('assertValidPool fails loud when the liquidity gate is constant (#1054)
 });
 
 describe('countRankableUnderlyings — the count #707 consumes, not #751', () => {
-  it('returns 26 for the checked-in pool: SPY, QQQ, PLTR, and NVDA each carry two ETP lines', () => {
+  it('returns 26 for the checked-in pool: QQQ, PLTR and NVDA each carry two ETP lines, SPY three', () => {
     expect(countRankableUnderlyings(LSE_ETP_POOL)).toBe(26);
   });
 
