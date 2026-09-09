@@ -310,6 +310,86 @@ describe('SaxoHttpBrokerClient', () => {
     ]);
   });
 
+  it('reads a line quote unit off instrument details, account-free (#1302)', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      jsonResponse({
+        Uic: 29391797,
+        AssetType: 'Etn',
+        Symbol: 'LQQ3:xlon',
+        CurrencyCode: 'GBP',
+        PriceCurrency: 'GBX',
+        PriceToContractFactor: 0.01,
+      }),
+    );
+    const client = makeClient(fetchMock);
+
+    expect(await client.getInstrumentDetails(29391797, 'Etn')).toEqual({
+      Uic: 29391797,
+      AssetType: 'Etn',
+      CurrencyCode: 'GBP',
+      PriceCurrency: 'GBX',
+      PriceToContractFactor: 0.01,
+    });
+    expect(calledPath(fetchMock, 0)).toBe(
+      'https://gateway.example/sim/openapi/ref/v1/instruments/details/29391797/Etn',
+    );
+  });
+
+  it('refuses instrument details with no usable PriceToContractFactor (#1302)', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ Uic: 29391797, AssetType: 'Etn', CurrencyCode: 'GBP' }));
+    const client = makeClient(fetchMock, { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 });
+
+    await expect(client.getInstrumentDetails(29391797, 'Etn')).rejects.toThrow(
+      /PriceToContractFactor must be a finite number/,
+    );
+  });
+
+  /**
+   * A non-positive factor is refused rather than clamped or defaulted: cash
+   * per share is `quoted x factor`, so zero prices every share at nothing and
+   * a negative one flips the sign of the book (#1302 round 1).
+   */
+  it('refuses instrument details whose PriceToContractFactor is zero or negative (#1302)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        Uic: 29391797,
+        AssetType: 'Etn',
+        CurrencyCode: 'GBP',
+        PriceToContractFactor: 0,
+      }),
+    );
+    const client = makeClient(fetchMock, { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 });
+
+    await expect(client.getInstrumentDetails(29391797, 'Etn')).rejects.toThrow(
+      /PriceToContractFactor must be positive/,
+    );
+  });
+
+  /**
+   * The path names the instrument, so a body describing a different one is
+   * the venue answering a question that was not asked — and it would hand the
+   * resolver another line's factor, the same 100x error from the other side
+   * (#1302 round 1).
+   */
+  it('refuses instrument details for an instrument other than the one requested (#1302)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        Uic: 3347273,
+        AssetType: 'Etn',
+        CurrencyCode: 'USD',
+        PriceCurrency: 'USD',
+        PriceToContractFactor: 1,
+      }),
+    );
+    const client = makeClient(fetchMock, { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 });
+
+    await expect(client.getInstrumentDetails(29391797, 'Etn')).rejects.toThrow(
+      /details for Uic 29391797\/Etn came back as 3347273\/Etn/,
+    );
+  });
+
   it('retries a read on 429 honouring Retry-After', async () => {
     const fetchMock = vi
       .fn()

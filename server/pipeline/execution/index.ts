@@ -42,7 +42,7 @@ export type {
 } from './adapters/saxo-adapter.js';
 export {
   SaxoBrokerAdapter,
-  saxoInstrumentResolverFromPool,
+  saxoInstrumentResolverFromVenue,
 } from './adapters/saxo-adapter.js';
 export {
   isRetryableSaxoBrokerError,
@@ -139,3 +139,7 @@ export type {
   UnresolvedFlattenSubmission,
 } from './types.js';
 export type { UnpricedFillAlert, UnpricedFillAlertChannel } from './unpriced-fill-alert.js';
+export type {
+  UnresolvedPriceUnitAlert,
+  UnresolvedPriceUnitAlertChannel,
+} from './unresolved-price-unit-alert.js';

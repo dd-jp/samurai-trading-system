@@ -59,7 +59,10 @@ export interface NormalizedFill {
   /**
    * ISO code the fee is denominated in. Absent means the book currency (GBP,
    * ADR-0015). Set by an adapter whose venue charges in the traded line's own
-   * quote currency — Saxo on a USD-quoted LSE line (#1032). NOT persisted and
+   * settlement currency — Saxo, from each line's `CurrencyCode`, which is USD
+   * on most pool lines and GBP on a pence-quoted one (#1032, #1302). Note the
+   * currency is the line's SETTLEMENT currency, never the unit the price is
+   * quoted in: a GBX line settles GBP. NOT persisted and
    * NOT converted by any consumer yet: `ingestFills`/PnL still sum `fee` as
    * book currency, so a non-GBP value here is a flagged, unconverted figure,
    * not a booked one.
