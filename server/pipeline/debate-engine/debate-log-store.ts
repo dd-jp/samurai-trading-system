@@ -83,7 +83,7 @@ export function buildDebateLog(
  * That breaks replay-from-log, the determinism posture ADR-0003 §2 states for
  * every LLM pass ("replay the logged output instead of re-calling the LLM …
  * a live LLM call inside a replayed path is disqualified outright"). Under
- * `BacktestHarness` the clock is advanced TO a bar close, so a replay looks up
+ * a deterministic replay the clock is advanced TO a bar close, so a replay looks up
  * 14:30:00 and misses every live row. `debate_id` cannot bridge the two either
  * — it hashes the same unfloored instant plus the analyst views.
  *

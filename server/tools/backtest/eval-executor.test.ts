@@ -1,15 +1,10 @@
-import type { Scheduler, TickContext, TickRunner } from '../../apps/orchestrator/index.js';
-import type { Signal } from '../../pipeline/analysts/index.js';
 import type { ClosedTrade, Fill } from '../../shared/index.js';
-import { type Clock, SimulatedClock } from '../../shared/index.js';
-import { BacktestHarness } from './backtest.js';
 import { EvalExecutorImpl } from './eval-executor.js';
 import type { EvalOptions, ReplayTradeSource } from './eval-types.js';
 import { computeMetrics } from './metrics.js';
 import { generateSplits } from './splits.js';
 import { toReturnSeries, toTradeSeries } from './trade-derivation.js';
-import type { BacktestConfig, CostConfig, ReplayTimeline } from './types.js';
-import type { InstrumentRegistry } from './universe.js';
+import type { ReplayTimeline } from './types.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const START = new Date('2024-01-01T00:00:00.000Z');
@@ -173,67 +168,16 @@ describe('EvalExecutorImpl — acceptance criterion 2: split boundaries', () => 
   });
 });
 
-describe('EvalExecutorImpl — acceptance criterion 3: matches the harness', () => {
+describe('EvalExecutorImpl — acceptance criterion 3: one metric implementation', () => {
   /**
-   * The two sides of the comparison, stated plainly so the test is not read as
-   * stronger than it is:
-   *
-   * - **Harness side.** `BacktestHarness.run` executes the replay that
-   *   produces the realized record; that record is then scored by calling
-   *   `computeMetrics` directly on series derived from it.
-   * - **Executor side.** The mined eval executor scores the *same* record
-   *   through its split-driving path.
-   *
-   * Both therefore share one metric implementation on purpose — the spec
-   * requires it ("one implementation → live metrics == backtest metrics",
-   * cross-spec §5). So the equality below guards the *plumbing* between the
-   * replay and the metrics, not the metric math. The hand-computed values in
-   * the third test are what keep the pair from being a tautology: they pin an
-   * independently-derived reference that neither side can drift from.
+   * `computeMetrics` is the single metric implementation both the executor's
+   * split path and any direct caller must agree with (cross-spec-contracts.md:52,
+   * "single implementation so live metrics == backtest metrics exactly"). The
+   * equality below guards the *plumbing* between a trade record and the
+   * metrics, not the metric math — the hand-computed values in the fourth
+   * test are what keep the pair from being a tautology: they pin an
+   * independently-derived reference neither side can drift from.
    */
-  /**
-   * Replays the window through `BacktestHarness` and returns the record the
-   * replay realized. The trades are recorded by the tick runner as the
-   * simulated clock reaches each one's close, so the record is genuinely an
-   * output of the replay rather than the fixture handed to both sides — which
-   * is the only way "a backtest run through the harness" means anything here.
-   */
-  async function runHarness(): Promise<ClosedTrade[]> {
-    const recorded: ClosedTrade[] = [];
-
-    const config: BacktestConfig = {
-      config_hash: 'cfg-eval-90',
-      window: WINDOW,
-      universe: ['BTC-USD'],
-      cost_config: COST_CONFIG,
-      seed: 42,
-    };
-
-    const tickRunner: TickRunner = {
-      runInstrument: async (_signal, ctx) => {
-        const now = ctx.clock.now().getTime();
-        for (const trade of TRADES) {
-          if (trade.closed_at.getTime() === now) {
-            recorded.push(trade);
-          }
-        }
-        return { trace_id: ctx.trace_id, final_stage: 'execution' };
-      },
-    };
-
-    const harness = new BacktestHarness({
-      scheduler: SCHEDULER,
-      tickRunner,
-      timeline: TIMELINE,
-      registry: REGISTRY,
-      newTickContext,
-    });
-
-    await harness.run(config, new SimulatedClock(WINDOW.start));
-
-    return recorded;
-  }
-
   function scoreDirectly(trades: readonly ClosedTrade[]) {
     const seriesOptions = { window: WINDOW, averageCapital: CAPITAL };
     return computeMetrics(
@@ -242,34 +186,24 @@ describe('EvalExecutorImpl — acceptance criterion 3: matches the harness', () 
     );
   }
 
-  it('replays every scripted round trip, so the two sides score one record', async () => {
-    const recorded = await runHarness();
+  it('produces the same MetricsSuite as scoring the trade record directly', async () => {
+    const report = await executorOf(sourceOf(TRADES)).evaluate(OPTIONS);
 
-    expect(recorded).toHaveLength(TRADES.length);
-  });
-
-  it('produces the same MetricsSuite as scoring the harness run directly', async () => {
-    const recorded = await runHarness();
-
-    const report = await executorOf(sourceOf(recorded)).evaluate(OPTIONS);
-
-    expect(report.window).toEqual(scoreDirectly(recorded));
+    expect(report.window).toEqual(scoreDirectly(TRADES));
   });
 
   it('matches on every field of the suite, not just the headline ratio', async () => {
-    const recorded = await runHarness();
-    const harnessMetrics = scoreDirectly(recorded);
+    const directMetrics = scoreDirectly(TRADES);
 
-    const report = await executorOf(sourceOf(recorded)).evaluate(OPTIONS);
+    const report = await executorOf(sourceOf(TRADES)).evaluate(OPTIONS);
 
-    for (const field of Object.keys(harnessMetrics) as (keyof typeof harnessMetrics)[]) {
-      expect(report.window[field]).toBeCloseTo(harnessMetrics[field], 12);
+    for (const field of Object.keys(directMetrics) as (keyof typeof directMetrics)[]) {
+      expect(report.window[field]).toBeCloseTo(directMetrics[field], 12);
     }
   });
 
   it('agrees with hand-computed values, so neither side is the sole reference', async () => {
-    const recorded = await runHarness();
-    const report = await executorOf(sourceOf(recorded)).evaluate(OPTIONS);
+    const report = await executorOf(sourceOf(TRADES)).evaluate(OPTIONS);
 
     // 6 wins x 1,000 gross wins / 6 losses x 400 gross losses = 2.5.
     expect(report.window.profit_factor).toBeCloseTo(2.5, 12);
@@ -281,41 +215,3 @@ describe('EvalExecutorImpl — acceptance criterion 3: matches the harness', () 
     expect(report.window.exposure).toBeCloseTo(0.02, 12);
   });
 });
-
-const COST_CONFIG: CostConfig = {
-  crypto: {
-    spreadVolatilityCoefficient: 0.1,
-    commissionRate: 0.001,
-    slippageCoefficient: 0.05,
-    impactK: 0.5,
-  },
-  stocks: {
-    spreadVolatilityCoefficient: 0.05,
-    commissionRate: 0.0005,
-    slippageCoefficient: 0.02,
-    impactK: 0.3,
-  },
-};
-
-const REGISTRY: InstrumentRegistry = {
-  membershipDuring: async () => [{ symbol: 'BTC-USD' }],
-};
-
-const SCHEDULER: Scheduler = {
-  nextTick: (clock) => ({
-    instruments: [{ asset: 'BTC-USD', asset_class: 'crypto' }],
-    tick_time: clock.now(),
-  }),
-};
-
-function newTickContext(signal: Signal, clock: Clock): TickContext {
-  return {
-    clock,
-    trace_id: `${signal.asset}@${clock.now().toISOString()}`,
-    logger: { log: () => {} },
-    auditLog: { record: () => {} },
-    // See backtest.test.ts: inert current-tick store, the harness has no
-    // live tick to publish.
-    currentTickStore: { upsert: () => {}, delete: () => {}, get: () => undefined },
-  };
-}

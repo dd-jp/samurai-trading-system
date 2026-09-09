@@ -30,8 +30,8 @@
  *   by hand cannot masquerade as an applied move.
  *
  * `cycle_date` has no equivalent field on `Adjustment`/`PendingApprovalAdjustment`
- * (another documented port/schema gap, `SqliteConfigTrialLog`'s `config_json`
- * pattern): derived as the UTC calendar date of `applied_at`/`requested_at`.
+ * (another documented port/schema gap — a persisted column with no domain-type
+ * counterpart): derived as the UTC calendar date of `applied_at`/`requested_at`.
  *
  * `reason` was missing from the original `dial_adjustments` schema (#193) —
  * `Adjustment.reason` has no column to round-trip through without it.

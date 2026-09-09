@@ -385,7 +385,7 @@ The reason is mechanical rather than a judgement about merit: attribution reads 
 - **Trader-side sizing adjustment.** Foreclosed on placement grounds — the Trader has already run.
 - **Persisting `RiskDecision`** so that "Risk acted on the invalidation" is recorded. [#328](https://github.com/dd-jp/samurai-trading-system/issues/328).
 - **Fixing ADR-0003's retrieval story or giving the Risk Critic a durable store.** Both are real and neither is this spec's.
-- **Wiring `BacktestHarness` to a production caller**, serving historical bars through the Market Data Service, or backing the Market Intelligence store historically. These are preconditions for the replay path being exercised at all, and belong on the implementation backlog.
+- **Wiring `BacktestHarness` to a production caller**, serving historical bars through the Market Data Service, or backing the Market Intelligence store historically. These are preconditions for the replay path being exercised at all, and belong on the implementation backlog. *(SUPERSEDED 2026-09-09 — #1156 deleted `BacktestHarness` rather than wiring it: no composition root ever constructed it and no open issue depended on it. The first precondition is moot; the other two stand.)*
 
 ## Further Notes
 

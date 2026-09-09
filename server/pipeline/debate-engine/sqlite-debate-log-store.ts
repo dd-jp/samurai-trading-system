@@ -6,9 +6,9 @@
  * docs/specs/shared-sqlite-store-spec.md ("Debate Engine" schema section)
  * and docs/specs/debate-engine-spec.md ("Debate log write").
  *
- * Append-only, write-once/read-by-key: unlike `SqliteSetupStore`/
- * `SqliteConfigTrialLog`, `DebateLog` has no later update step, so there is
- * only a write and a read here. A duplicate write for an already-logged
+ * Append-only, write-once/read-by-key: unlike `SqliteSetupStore`, `DebateLog`
+ * has no later update step, so there is only a write and a read here. A
+ * duplicate write for an already-logged
  * `debate_id` is surfaced as a named error (mirroring `SqliteSetupStore
  * .writeSetup`) rather than silently overwritten, since a repeat write means
  * the same debate resolved twice — a bug, not a legitimate re-run.
