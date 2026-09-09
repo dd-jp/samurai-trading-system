@@ -491,7 +491,7 @@ describe('MiIngestAgent', () => {
    * return) and then wrongly skipped the NEXT refresh that finally had new
    * work, even though scoring itself never failed a third time.
    */
-  it('does not carry a stale failure streak across a refresh with nothing new to score', async () => {
+  it('does not carry a stale skip cooldown across a refresh with nothing new to score', async () => {
     const archive = new MiArchiveStore();
     const store = new MarketIntelligenceStore(clock);
     const news = newsClient([article()]);
@@ -525,6 +525,187 @@ describe('MiIngestAgent', () => {
 
     await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(true);
     expect(scorer.calls).toHaveLength(1);
+  });
+
+  /**
+   * #1421: the flat "skip 1 in 3" rule (#1392) only shaves a sustained
+   * outage's scoring-attempt count by a third — ~30 refreshes/LOOKBACK_MS
+   * window (2-minute paper-profile cadence, 60-minute LOOKBACK_MS) still cost
+   * ~20 attempts. Exponential backoff on the same per-instrument streak
+   * should push that down to a handful, spread across the window rather than
+   * every third refresh.
+   */
+  it("bounds a sustained outage to a handful of scoring attempts across a full lookback window, not the flat rule's ~20-of-30", async () => {
+    const archive = new MiArchiveStore();
+    const store = new MarketIntelligenceStore(clock);
+    let now = NOW;
+    const movingClock: Clock = { now: () => now };
+    let attempts = 0;
+    const countingFailingClient = {
+      complete: async () => {
+        attempts++;
+        throw new Error('llm down');
+      },
+    };
+    const agent = new MiIngestAgent({
+      archive,
+      store,
+      newsClient: newsClient([article()]),
+      llmClient: countingFailingClient,
+      clock: movingClock,
+      assetClasses: ['stocks'],
+      spendCap: ADMITS,
+    });
+
+    // Mirrors the ticket's premise: paper-profile.ts tickIntervalMs (2 min)
+    // against this file's own LOOKBACK_MS (60 min) — a sustained outage stays
+    // inside the lookback window for this many refreshes.
+    const TICK_MS = 2 * 60_000;
+    const REFRESHES_PER_LOOKBACK_WINDOW = 30;
+
+    for (let i = 0; i < REFRESHES_PER_LOOKBACK_WINDOW; i++) {
+      await agent.refresh('t', 'AAPL', 'stocks');
+      now = new Date(now.getTime() + TICK_MS);
+    }
+
+    // Flat rule (#1392): ~20 of 30. Backoff: exactly 7 — attempts fall on
+    // refreshes 1, 2, 4, 7, 12, 21, 30 (streak 1..6, skip widening 0, 1, 2, 4,
+    // 8, 8 — the last two capped by `MAX_DEGRADED_SKIP`). An exact count, not
+    // a range: dropping the `MAX_DEGRADED_SKIP` cap from `degradedSkip` would
+    // still satisfy "under 10" (uncapped gives 6, since streak 6's uncapped
+    // gap of 16 refreshes doesn't fit before the window ends) — only a pinned
+    // count catches that the cap itself is exercised and load-bearing.
+    expect(attempts).toBe(7);
+  });
+
+  /**
+   * #1421: a refresh with nothing new to score (`unscored.length === 0`)
+   * must clear a pending skip cooldown — #1392 review round 2, finding 5,
+   * still applies — but must NOT reset `streak`. A sustained outage can have
+   * a quiet tick with no matching articles in the middle of it; resetting
+   * `streak` there would restart backoff from scratch on the very next
+   * failure, so a quiet-interleaved outage would cost close to the old flat
+   * rule's rate again instead of continuing to escalate.
+   */
+  it('keeps widening the backoff after a quiet refresh interrupts a sustained outage', async () => {
+    const archive = new MiArchiveStore();
+    const store = new MarketIntelligenceStore(clock);
+    let now = NOW;
+    const movingClock: Clock = { now: () => now };
+    let attempts = 0;
+    const countingFailingClient = {
+      complete: async () => {
+        attempts++;
+        throw new Error('llm down');
+      },
+    };
+    const agent = new MiIngestAgent({
+      archive,
+      store,
+      newsClient: newsClient([article()]),
+      llmClient: countingFailingClient,
+      clock: movingClock,
+      assetClasses: ['stocks'],
+      spendCap: ADMITS,
+    });
+    const TICK_MS = 2 * 60_000;
+    const tick = async () => {
+      await agent.refresh('t', 'AAPL', 'stocks');
+      now = new Date(now.getTime() + TICK_MS);
+    };
+
+    // Two straight failures: streak 2, one skip queued (degradedSkip(2) = 1).
+    await tick();
+    await tick();
+
+    // A quiet refresh — nothing to score this cycle, not a resolved outage.
+    (agent as unknown as { deps: { newsClient: unknown } }).deps.newsClient = newsClient([]);
+    await agent.refresh('t', 'AAPL', 'stocks');
+    now = new Date(now.getTime() + TICK_MS);
+    (agent as unknown as { deps: { newsClient: unknown } }).deps.newsClient = newsClient([
+      article(),
+    ]);
+
+    // 8 more refreshes, still failing. If the quiet tick had reset `streak`
+    // to 0, this would re-run the slow 0,0,1,2,4... climb from scratch and
+    // attempt far more than twice more here; preserving `streak` keeps the
+    // climb where the pre-quiet outage left it.
+    for (let i = 0; i < 8; i++) {
+      await tick();
+    }
+
+    expect(attempts).toBe(4);
+  });
+
+  /**
+   * #1421 review round 1, finding 1: `streak` had no decay — nothing but a
+   * SUCCESSFUL scoring attempt reset it, and a quiet refresh (the case
+   * above) only clears `skipRemaining`, by design. So a streak an outage
+   * left at, say, 2 sat there indefinitely once the outage ended (no more
+   * matching articles at all — the realistic "scoring recovered and life
+   * moved on" case, not just one quiet tick). The FIRST unrelated failure
+   * hours later then inherited that stale streak's widened skip instead of
+   * being treated as the lone blip it is. Once `now - lastFailureAt` has
+   * passed a full `LOOKBACK_MS`, the streak must read back as 0.
+   */
+  it('decays a streak once LOOKBACK_MS has passed since the last failure, so a later lone blip is not skipped', async () => {
+    const archive = new MiArchiveStore();
+    const store = new MarketIntelligenceStore(clock);
+    let now = NOW;
+    const movingClock: Clock = { now: () => now };
+    let attempts = 0;
+    const failingClient = {
+      complete: async () => {
+        attempts++;
+        throw new Error('llm down');
+      },
+    };
+    const agent = new MiIngestAgent({
+      archive,
+      store,
+      newsClient: newsClient([article()]),
+      llmClient: failingClient,
+      clock: movingClock,
+      assetClasses: ['stocks'],
+      spendCap: ADMITS,
+    });
+    const TICK_MS = 2 * 60_000;
+    const advance = () => {
+      now = new Date(now.getTime() + TICK_MS);
+    };
+
+    // Two straight failures: streak 2, one skip queued.
+    await agent.refresh('t', 'AAPL', 'stocks');
+    advance();
+    await agent.refresh('t', 'AAPL', 'stocks');
+    advance();
+    expect(attempts).toBe(2);
+
+    // The outage ends for good — no more matching articles for well over a
+    // full LOOKBACK_MS (30 refreshes at this 2-min cadence). Each quiet
+    // refresh clears `skipRemaining` but, absent decay, `streak` would sit
+    // at 2 forever.
+    (agent as unknown as { deps: { newsClient: unknown } }).deps.newsClient = newsClient([]);
+    for (let i = 0; i < 30; i++) {
+      await agent.refresh('t', 'AAPL', 'stocks');
+      advance();
+    }
+
+    // A single new headline arrives, well past LOOKBACK_MS since the last
+    // failure — the streak must have decayed to 0, so this is a fresh
+    // streak-1 blip, not a streak-3 continuation.
+    (agent as unknown as { deps: { newsClient: unknown } }).deps.newsClient = newsClient([
+      article(),
+    ]);
+    await agent.refresh('t', 'AAPL', 'stocks');
+    advance();
+    expect(attempts).toBe(3);
+
+    // Streak 1 always retries on the very next refresh (degradedSkip(1) ===
+    // 0). Without decay, the stale streak-2 would have carried into this
+    // blip as streak 3 (skip 2), and this refresh would be skipped.
+    await agent.refresh('t', 'AAPL', 'stocks');
+    expect(attempts).toBe(4);
   });
 
   /**
