@@ -486,7 +486,7 @@ export function universeAssetClasses(universe: readonly UniverseInstrument[]): A
  * informative failure than the `MarkCurrencyError` naming the currency that
  * `declaredCurrencies` below raises for exactly that case.
  */
-const LSE_TICKERS: ReadonlySet<string> = new Set(buildRoutingMap().keys());
+export const LSE_TICKERS: ReadonlySet<string> = new Set(buildRoutingMap().keys());
 const LSE_SCREENING_INSTRUMENTS: ReadonlySet<string> = new Set(
   LSE_ETP_POOL.map((row) => row.screening_instrument),
 );

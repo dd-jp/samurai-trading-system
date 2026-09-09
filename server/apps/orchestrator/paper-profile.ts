@@ -2611,6 +2611,19 @@ export function buildStartingProfileConfigs(
  */
 export function paperStartingProfile(
   mode: ProductionConfig['mode'],
+  /**
+   * The universe this profile's gates are keyed to AND the list the run ticks
+   * — `buildStartingProfileConfigs`' one argument, forwarded (#739).
+   *
+   * Omitted is `DEFAULT_UNIVERSE`, which is every shipped Alpaca run: an
+   * absent argument reproduces the profile byte for byte, so the paper path
+   * is unchanged by this parameter existing. `SAMURAI_BROKER=saxo` is the one
+   * caller that supplies it, with the LSE ETP pool's tradeable set (#1400) —
+   * and it has to arrive HERE rather than being spread over the returned
+   * profile, or `subclass_of` and D5's envelope arm against a universe the
+   * run does not trade. See `startingProfileForMode` (index.ts).
+   */
+  universe?: readonly UniverseInstrument[],
 ): Pick<ProductionConfig, 'mode'> &
   Pick<
     ProductionConfig,
@@ -2657,7 +2670,8 @@ export function paperStartingProfile(
     );
   }
 
-  const configs = buildStartingProfileConfigs();
+  const configs =
+    universe === undefined ? buildStartingProfileConfigs() : buildStartingProfileConfigs(universe);
 
   return {
     ...configs,

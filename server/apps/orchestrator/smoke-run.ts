@@ -272,8 +272,10 @@ import {
   LoggingBreachAlertChannel,
   LoggingCalendarFallbackAlertChannel,
   LoggingDataFailoverAlertChannel,
+  LoggingDormantLegsUnresolvedAlertChannel,
   LoggingFlattenReconcileAlertChannel,
   LoggingHeartbeatChannel,
+  LoggingLegResizeUnverifiedAlertChannel,
   LoggingLlmFailureRateAlertChannel,
   LoggingLoosenNotificationChannel,
   LoggingLseCalendarCoverageAlertChannel,
@@ -283,6 +285,7 @@ import {
   LoggingPromptTierAlertChannel,
   LoggingResidualExposureAlertChannel,
   LoggingUnpricedFillAlertChannel,
+  LoggingUnresolvedPriceUnitAlertChannel,
 } from './console-channels.js';
 import {
   FILL_SYNC_POLL_FAILED,
@@ -6387,6 +6390,16 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // a real rate — log-only is enough, same posture as the other channels
       // above that this run never exercises.
       llmFailureRateAlerts: new LoggingLlmFailureRateAlertChannel(logger),
+      // #1400 — the Saxo adapter's three. This run is Alpaca/simulated-broker
+      // only (`SAMURAI_BROKER` is never read here, the same posture as
+      // `SAMURAI_MODE`), so no Saxo adapter exists to post any of them and
+      // these slots are never exercised. Log-only stand-ins, same posture as
+      // `lseCalendarCoverageAlerts` above; the venue's own refusals and
+      // wiring are held by `saxo-venue.test.ts` and
+      // `saxo-composition-root.test.ts`.
+      legResizeAlerts: new LoggingLegResizeUnverifiedAlertChannel(logger),
+      dormantLegsAlerts: new LoggingDormantLegsUnresolvedAlertChannel(logger),
+      priceUnitAlerts: new LoggingUnresolvedPriceUnitAlertChannel(logger),
     } satisfies Required<AlertChannels>;
 
     const orchestrator = await startFromEnvironment({

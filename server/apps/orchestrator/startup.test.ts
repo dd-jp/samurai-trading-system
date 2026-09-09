@@ -754,7 +754,9 @@ describe('startFromEnvironment — the shipped paper profile', () => {
     process.env.ALPACA_LIVE_API_SECRET = 'not-a-key';
     process.env.SAMURAI_LIVE_MAX_CAPITAL_USD = 'nonsense';
 
-    expect(missingCredentialEnvVars({}, 'log-only', 'paper')).not.toContain('ALPACA_LIVE_API_KEY');
+    expect(missingCredentialEnvVars({}, 'log-only', 'paper', 'alpaca')).not.toContain(
+      'ALPACA_LIVE_API_KEY',
+    );
     expect(() => paperStartingProfile('paper')).not.toThrow();
     expect(startingProfileForMode('paper')).toMatchObject({ mode: 'paper' });
   });
@@ -917,7 +919,7 @@ describe('startFromEnvironment — the live profile (#511)', () => {
     // The paper pair is still set, so a fallback would have started a live
     // process authenticated against the wrong account.
     expect(error.message).toContain(name);
-    expect(missingCredentialEnvVars({}, 'log-only', 'live')).toContain(name);
+    expect(missingCredentialEnvVars({}, 'log-only', 'live', 'alpaca')).toContain(name);
   });
 
   it('keeps live state in its own store file, so a live run cannot inherit paper positions', () => {

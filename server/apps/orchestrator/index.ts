@@ -48,7 +48,10 @@
  */
 import { basename, dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { ALPACA_CREDENTIAL_ENV_VARS } from '../../pipeline/execution/index.js';
+import {
+  ALPACA_CREDENTIAL_ENV_VARS,
+  SAXO_CREDENTIAL_ENV_VARS,
+} from '../../pipeline/execution/index.js';
 import { MiArchiveStore, miArchivePath } from '../../providers/market-intelligence/index.js';
 import { logCaughtFailure, SystemClock } from '../../shared/index.js';
 import {
@@ -63,6 +66,11 @@ import {
   TELEGRAM_ALERT_ENV_VARS,
   TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR,
 } from './alert-transport.js';
+import {
+  LoggingDormantLegsUnresolvedAlertChannel,
+  LoggingLegResizeUnverifiedAlertChannel,
+  LoggingUnresolvedPriceUnitAlertChannel,
+} from './console-channels.js';
 import { type LiveStartingProfile, liveStartingProfile } from './live-profile.js';
 import {
   type LogRetentionResult,
@@ -74,6 +82,13 @@ import {
 } from './log-retention.js';
 import { buildEntrypointLogger, JsonLogger } from './logger.js';
 import { paperStartingProfile } from './paper-profile.js';
+import { LSE_TICKERS } from './production/defaults.js';
+import {
+  type BrokerVenue,
+  buildSaxoBroker,
+  resolveBrokerVenue,
+  saxoTradeableUniverse,
+} from './production/saxo-venue.js';
 import { resolveUsEquitySessionCalendar } from './production/us-equity-session-source.js';
 import {
   buildProductionOrchestrator,
@@ -286,13 +301,22 @@ function parseMode(raw: string | undefined): ProductionConfig['mode'] {
  * first one.
  *
  * The overrides are not incidental: `buildProductionComponents` builds the
- * Alpaca *broker* client unconditionally (the account-state provider needs it
- * even when `ProductionConfig.broker` is overridden), while the *data* client
+ * Alpaca *broker* client lazily (the account-state provider needs it whenever
+ * `ProductionConfig.accountState` is not supplied, even when
+ * `ProductionConfig.broker` is overridden — #1400), while the *data* client
  * is skipped when either `dataSource` or `alpacaDataClient` is supplied, and
  * the LLM client is skipped when `llmClient` is. A test injecting stubs must
  * not be asked for keys it will never use.
+ *
+ * **A function, not a module-level constant.** The entries name variables
+ * through the clients' own exported tables, and `server/tools/backtest`
+ * imports this module back (`trial-execution.ts` reads `digest`), so those
+ * tables can be mid-initialization when this module is first evaluated —
+ * `SAXO_CREDENTIAL_ENV_VARS` read as `undefined` at module scope and threw at
+ * import time. Building the list per call reads them when they are needed
+ * instead, which is also the only moment their values matter.
  */
-const CREDENTIAL_REQUIREMENTS: readonly {
+function credentialRequirements(): readonly {
   vars: readonly string[];
   /**
    * True when this run never touches these variables — because the caller
@@ -304,6 +328,8 @@ const CREDENTIAL_REQUIREMENTS: readonly {
     alertsMode: AlertsMode | undefined;
     /** The resolved trading mode — what makes the live Alpaca pair required, or a variable this run will never read (#511). */
     mode: ProductionConfig['mode'];
+    /** The resolved broker venue (#1400) — what decides whether the Alpaca ORDER path exists at all. */
+    venue: BrokerVenue;
   }) => boolean;
   /**
    * Names in `vars` that a DIFFERENT variable can satisfy instead, keyed by
@@ -319,82 +345,135 @@ const CREDENTIAL_REQUIREMENTS: readonly {
    * avoid, one level down.
    */
   alternatives?: Readonly<Record<string, readonly string[]>>;
-}[] = [
-  {
-    vars: ['ALPACA_API_KEY', 'ALPACA_API_SECRET'],
-    unusedByThisRun: ({ injected }) =>
-      injected.alpacaBrokerClient !== undefined &&
-      (injected.dataSource !== undefined || injected.alpacaDataClient !== undefined),
-  },
-  {
-    // #511. The live account's own pair — see `ALPACA_CREDENTIAL_ENV_VARS`
-    // (execution/adapters/alpaca-http-client.ts) for why the pair is keyed by
-    // environment and never falls back.
-    //
-    // **Live only, and that asymmetry is the point.** `unusedByThisRun` returns
-    // true for paper and backtest, so a paper boot never looks these variables
-    // up: an operator who has not yet been issued live keys, or who typo'd one,
-    // still gets a clean paper start. The client's constructor refuses on the
-    // same condition and is the authority; this entry exists so the operator
-    // learns about them alongside every other missing credential instead of one
-    // per attempt.
-    //
-    // The PAPER pair above stays required in live mode too, deliberately:
-    // `buildDefaultAlpacaDataClient` has no mode branch (Alpaca serves market
-    // data from one host for both account types) and still reads
-    // `ALPACA_API_KEY`. A live run therefore needs both pairs — the live one for
-    // orders, the paper one for bars.
-    //
-    // Names taken from the client's own table rather than restated: this
-    // pre-flight exists to report what the constructor would refuse on, so two
-    // lists of strings that could drift apart would defeat it.
-    vars: [ALPACA_CREDENTIAL_ENV_VARS.live.key, ALPACA_CREDENTIAL_ENV_VARS.live.secret],
-    unusedByThisRun: ({ injected, mode }) =>
-      mode !== 'live' || injected.alpacaBrokerClient !== undefined,
-  },
-  {
-    // ADR-0009: one provider, one base URL. `NOUS_BASE_URL` is unconditional —
-    // there is no default in source, so nothing can resolve without it.
-    //
-    // The key is a fallback chain, not a single variable: a per-role key
-    // satisfies the requirement on its own, because that is the "a key per
-    // model" setup ADR-0009 was asked for. `NOUS_API_KEY` is the name reported
-    // when none of them is set, since it is the one that configures every role
-    // at once. The `_MODEL` variables are not listed at all — they are
-    // optional overrides with role defaults behind them.
-    //
-    // Skipped when `llmClient` is injected, same as the Anthropic entry this
-    // replaces: a caller supplying its own client is not asked for keys it
-    // will never read. The market-intelligence agent shares these variables
-    // and degrades to no-agent when they are absent, so it does not widen the
-    // requirement.
-    vars: ['NOUS_API_KEY', 'NOUS_BASE_URL'],
-    alternatives: { NOUS_API_KEY: ['NOUS_DEBATE_API_KEY', 'NOUS_SENTIMENT_API_KEY'] },
-    unusedByThisRun: ({ injected }) => injected.llmClient !== undefined,
-  },
-  {
-    // #322. Required only under `SAMURAI_ALERTS=telegram`, which is why the
-    // alerts mode is resolved before this pre-flight runs rather than
-    // alongside it — the mode is what decides whether these are credentials
-    // this run needs or variables it will never read. `log-only` (and a caller
-    // that injected every channel, which resolves to `undefined`) needs none.
-    vars: TELEGRAM_ALERT_ENV_VARS.filter((name) => name !== TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR),
-    unusedByThisRun: ({ alertsMode }) => alertsMode !== 'telegram',
-  },
-  {
-    // #342. The heartbeat's own chat, split out from the three above for one
-    // reason: it is the only one an injected channel makes unnecessary. A
-    // caller that passed `heartbeatChannel` has already chosen where the beat
-    // goes, and nothing in `buildAlertChannels` will read this variable — so
-    // demanding it would be the same "keys it will never use" complaint the
-    // Alpaca and Anthropic entries above exist to avoid. The escalation chat
-    // stays required either way; that is the destination this exists to keep
-    // free of heartbeats.
-    vars: [TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR],
-    unusedByThisRun: ({ injected, alertsMode }) =>
-      alertsMode !== 'telegram' || injected.heartbeatChannel !== undefined,
-  },
-];
+}[] {
+  return [
+    {
+      vars: ['ALPACA_API_KEY', 'ALPACA_API_SECRET'],
+      // Both halves of what these keys serve have to be covered before the pair
+      // can be called unread, and #1400 added a second way to cover each. The
+      // ORDER half is covered by an injected wire client as before, and now
+      // also by a run whose broker is not Alpaca AND whose account state is
+      // supplied — `buildProductionComponents` builds the Alpaca wire client
+      // lazily since #1400 precisely so those two together mean it is never
+      // constructed. The DATA half is covered by an injected source or client as
+      // before, and now also by an all-LSE universe with an `lseMarkClient`:
+      // `buildAlpacaDataSource` returns `LseMarkDataSource` before it reaches
+      // any Alpaca client at all (defaults.ts).
+      //
+      // Getting this wrong in the permissive direction is the dangerous one — a
+      // run that boots and 401s on its first order — which is why each clause
+      // names a construction site rather than an intention.
+      unusedByThisRun: ({ injected, venue }) =>
+        alpacaOrderPathUnused(injected, venue) && alpacaDataPathUnused(injected),
+    },
+    {
+      // #511. The live account's own pair — see `ALPACA_CREDENTIAL_ENV_VARS`
+      // (execution/adapters/alpaca-http-client.ts) for why the pair is keyed by
+      // environment and never falls back.
+      //
+      // **Live only, and that asymmetry is the point.** `unusedByThisRun` returns
+      // true for paper and backtest, so a paper boot never looks these variables
+      // up: an operator who has not yet been issued live keys, or who typo'd one,
+      // still gets a clean paper start. The client's constructor refuses on the
+      // same condition and is the authority; this entry exists so the operator
+      // learns about them alongside every other missing credential instead of one
+      // per attempt.
+      //
+      // The PAPER pair above stays required in live mode too, deliberately:
+      // `buildDefaultAlpacaDataClient` has no mode branch (Alpaca serves market
+      // data from one host for both account types) and still reads
+      // `ALPACA_API_KEY`. A live run therefore needs both pairs — the live one for
+      // orders, the paper one for bars.
+      //
+      // Names taken from the client's own table rather than restated: this
+      // pre-flight exists to report what the constructor would refuse on, so two
+      // lists of strings that could drift apart would defeat it.
+      vars: [ALPACA_CREDENTIAL_ENV_VARS.live.key, ALPACA_CREDENTIAL_ENV_VARS.live.secret],
+      unusedByThisRun: ({ injected, mode }) =>
+        mode !== 'live' || injected.alpacaBrokerClient !== undefined,
+    },
+    {
+      // ADR-0009: one provider, one base URL. `NOUS_BASE_URL` is unconditional —
+      // there is no default in source, so nothing can resolve without it.
+      //
+      // The key is a fallback chain, not a single variable: a per-role key
+      // satisfies the requirement on its own, because that is the "a key per
+      // model" setup ADR-0009 was asked for. `NOUS_API_KEY` is the name reported
+      // when none of them is set, since it is the one that configures every role
+      // at once. The `_MODEL` variables are not listed at all — they are
+      // optional overrides with role defaults behind them.
+      //
+      // Skipped when `llmClient` is injected, same as the Anthropic entry this
+      // replaces: a caller supplying its own client is not asked for keys it
+      // will never read. The market-intelligence agent shares these variables
+      // and degrades to no-agent when they are absent, so it does not widen the
+      // requirement.
+      vars: ['NOUS_API_KEY', 'NOUS_BASE_URL'],
+      alternatives: { NOUS_API_KEY: ['NOUS_DEBATE_API_KEY', 'NOUS_SENTIMENT_API_KEY'] },
+      unusedByThisRun: ({ injected }) => injected.llmClient !== undefined,
+    },
+    {
+      // #322. Required only under `SAMURAI_ALERTS=telegram`, which is why the
+      // alerts mode is resolved before this pre-flight runs rather than
+      // alongside it — the mode is what decides whether these are credentials
+      // this run needs or variables it will never read. `log-only` (and a caller
+      // that injected every channel, which resolves to `undefined`) needs none.
+      vars: TELEGRAM_ALERT_ENV_VARS.filter((name) => name !== TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR),
+      unusedByThisRun: ({ alertsMode }) => alertsMode !== 'telegram',
+    },
+    {
+      // #342. The heartbeat's own chat, split out from the three above for one
+      // reason: it is the only one an injected channel makes unnecessary. A
+      // caller that passed `heartbeatChannel` has already chosen where the beat
+      // goes, and nothing in `buildAlertChannels` will read this variable — so
+      // demanding it would be the same "keys it will never use" complaint the
+      // Alpaca and Anthropic entries above exist to avoid. The escalation chat
+      // stays required either way; that is the destination this exists to keep
+      // free of heartbeats.
+      vars: [TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR],
+      unusedByThisRun: ({ injected, alertsMode }) =>
+        alertsMode !== 'telegram' || injected.heartbeatChannel !== undefined,
+    },
+    {
+      // #1400. The SIM gateway's 24-hour bearer, and only the SIM one: the
+      // Saxo venue refuses `SAMURAI_MODE=live` outright (saxo-venue.ts), so
+      // `SAXO_LIVE_OPENAPI_TOKEN` is a variable no run this repo can start will
+      // ever read and is deliberately absent from this list.
+      //
+      // Named from the client's own table rather than restated, for the reason
+      // the live Alpaca entry gives: this pre-flight exists to report what the
+      // constructor would refuse on, and two lists that could drift apart
+      // defeat it.
+      vars: [SAXO_CREDENTIAL_ENV_VARS.sim.token],
+      unusedByThisRun: ({ injected, venue }) =>
+        venue !== 'saxo' ||
+        injected.saxoBrokerClient !== undefined ||
+        injected.broker !== undefined,
+    },
+  ];
+}
+
+/**
+ * True when nothing in this run constructs an Alpaca ORDER client. See the
+ * `ALPACA_API_KEY` entry above; split out so both clauses are testable and so
+ * the two halves of the pair's exemption cannot be read as one condition.
+ */
+function alpacaOrderPathUnused(injected: Partial<ProductionConfig>, venue: BrokerVenue): boolean {
+  if (injected.alpacaBrokerClient !== undefined) return true;
+  const brokerIsNotAlpaca = injected.broker !== undefined || venue === 'saxo';
+  return brokerIsNotAlpaca && injected.accountState !== undefined;
+}
+
+/** True when nothing in this run constructs an Alpaca MARKET-DATA client. */
+function alpacaDataPathUnused(injected: Partial<ProductionConfig>): boolean {
+  if (injected.dataSource !== undefined || injected.alpacaDataClient !== undefined) return true;
+  if (injected.lseMarkClient === undefined) return false;
+  const universe = injected.universe ?? [];
+  // Every instrument, and at least one: a MIXED universe is refused by
+  // `buildLseMarkSourceIfNeeded` rather than routed, and an EMPTY one falls
+  // through to the Alpaca branch.
+  return universe.length > 0 && universe.every((instrument) => LSE_TICKERS.has(instrument.asset));
+}
 
 /**
  * Every credential this run will need and does not have. Empty string counts
@@ -424,16 +503,22 @@ export function missingCredentialEnvVars(
    * (docs/coding-standards.md, "Prefer a required argument to an optional one").
    */
   mode: ProductionConfig['mode'],
+  /**
+   * The resolved broker venue (#1400). Required for `mode`'s reason: a
+   * default of `alpaca` is exactly the value that makes the Saxo token
+   * requirement vacuous.
+   */
+  venue: BrokerVenue,
 ): string[] {
   const isSet = (name: string): boolean => (process.env[name] ?? '').trim().length > 0;
 
-  return CREDENTIAL_REQUIREMENTS.filter(
-    (requirement) => !requirement.unusedByThisRun({ injected, alertsMode, mode }),
-  ).flatMap((requirement) =>
-    requirement.vars.filter(
-      (name) => !isSet(name) && !(requirement.alternatives?.[name] ?? []).some(isSet),
-    ),
-  );
+  return credentialRequirements()
+    .filter((requirement) => !requirement.unusedByThisRun({ injected, alertsMode, mode, venue }))
+    .flatMap((requirement) =>
+      requirement.vars.filter(
+        (name) => !isSet(name) && !(requirement.alternatives?.[name] ?? []).some(isSet),
+      ),
+    );
 }
 
 /**
@@ -446,8 +531,9 @@ function assertCredentialsPresent(
   injected: Partial<ProductionConfig>,
   alertsMode: AlertsMode | undefined,
   mode: ProductionConfig['mode'],
+  venue: BrokerVenue,
 ): void {
-  const missing = missingCredentialEnvVars(injected, alertsMode, mode);
+  const missing = missingCredentialEnvVars(injected, alertsMode, mode, venue);
   if (missing.length === 0) return;
 
   // Named separately because the fix is different in kind: these are missing
@@ -595,12 +681,19 @@ export async function startFromEnvironment(
   // knowingly gives up its "name everything at once" property, because the
   // alternative is guessing which transport's credentials to demand.
   const alertsMode = resolveAlertsMode(injected);
+  // #1400, resolved here for `alertsMode`'s reason: the venue is what decides
+  // whether the Alpaca pair is a credential this run needs or one it will
+  // never read, so the pre-flight cannot name the right set until it does.
+  // An injected `broker` does not suppress it — that seam is how the Saxo
+  // adapter itself arrives, and a run that named a venue is entitled to a
+  // refusal about that venue rather than silence.
+  const venue = resolveBrokerVenue();
   // After the modes are resolved and before the store is opened: an
   // unrecognised `SAMURAI_MODE` is the more fundamental error (mode decides
   // which Alpaca host the credentials would even be used against), and a run
   // that cannot authenticate should not leave a freshly-created SQLite file
   // behind as a side effect of failing.
-  assertCredentialsPresent(injected, alertsMode, mode);
+  assertCredentialsPresent(injected, alertsMode, mode, venue);
 
   // One logger for the whole startup, threaded into the composition root
   // rather than left for it to default: the #330 warning below has to be
@@ -660,13 +753,59 @@ export async function startFromEnvironment(
   const alertChannels =
     alertsMode === undefined ? {} : buildAlertChannels({ alertsMode, injected, db, logger });
 
+  const clock = injected.clock ?? new SystemClock();
+
+  // #1400 — the Saxo venue, built HERE rather than inside the composition
+  // root because `saxoInstrumentResolverFromVenue` reads the venue's own
+  // instrument details per line (#1302) and is therefore async, while
+  // `buildProductionOrchestrator` is synchronous by design. It arrives
+  // through `ProductionConfig.broker`, the seam whose own doc comment says a
+  // non-Alpaca adapter binds there "without the composition root growing a
+  // broker-selection branch" — so this is the branch, at the one level that
+  // already reads the environment.
+  //
+  // `injected.broker` wins: a caller that passed its own adapter (the smoke
+  // gate's `SimulatedBrokerAdapter`, a test's) has already chosen, and
+  // overriding that from an environment variable would make the seam
+  // unfalsifiable.
+  const saxoBroker =
+    venue === 'saxo' && injected.broker === undefined
+      ? await buildSaxoBroker({
+          mode,
+          universe: injected.universe ?? [],
+          accountState: injected.accountState,
+          db,
+          logger,
+          clock,
+          // The alert channels the adapter REQUIRES and has no default for.
+          // Resolved the same way the composition root resolves its own:
+          // caller first, then `SAMURAI_ALERTS`' transport, then the log-only
+          // stand-in — so a `telegram` run pages a phone and a `log-only` one
+          // is explicitly attended, never silent by omission.
+          legResizeAlerts:
+            injected.legResizeAlerts ??
+            alertChannels.legResizeAlerts ??
+            new LoggingLegResizeUnverifiedAlertChannel(logger),
+          dormantLegsAlerts:
+            injected.dormantLegsAlerts ??
+            alertChannels.dormantLegsAlerts ??
+            new LoggingDormantLegsUnresolvedAlertChannel(logger),
+          priceUnitAlerts:
+            injected.priceUnitAlerts ??
+            alertChannels.priceUnitAlerts ??
+            new LoggingUnresolvedPriceUnitAlertChannel(logger),
+          ...(injected.saxoBrokerClient === undefined ? {} : { client: injected.saxoBrokerClient }),
+        })
+      : undefined;
+
   const orchestrator = buildProductionOrchestrator({
     ...alertChannels,
     ...(injected as ProductionConfig),
+    ...(saxoBroker === undefined ? {} : { broker: saxoBroker }),
     logger,
     db,
     miArchive,
-    clock: injected.clock ?? new SystemClock(),
+    clock,
     mode,
   });
 
@@ -708,16 +847,29 @@ export async function startFromEnvironment(
  *
  * `backtest` goes to the paper profile, which accepts it: that mode spends no
  * money and `breakerConfig.auto_rearm` exists for it.
+ *
+ * **The venue chooses the UNIVERSE, and it has to be chosen here (#1400).**
+ * `buildStartingProfileConfigs` derives `riskConfig.subclass_of` and D5's
+ * per-subclass deployment envelope FROM the universe it is given (#739), so a
+ * Saxo run whose universe was spread over an already-built profile would arm
+ * both against `DEFAULT_UNIVERSE`'s SPY/QQQ/AAPL/TSLA while ticking LSE ETPs
+ * — a per-instrument refusal at tick time, invisible at boot. The venue's
+ * universe therefore reaches the profile BUILDER, not the built profile.
+ *
+ * `live` is untouched by the venue: the Saxo path refuses `live` outright
+ * (saxo-venue.ts), so there is no live Saxo profile to choose.
  */
 export function startingProfileForMode(
   mode: ProductionConfig['mode'],
   logger?: Logger,
+  venue: BrokerVenue = resolveBrokerVenue(),
   // A union of the two profiles' own return types, not `Partial<ProductionConfig>`:
   // both are typed to carry every value `REQUIRED_INJECTED_CONFIG` demands, and
   // widening to `Partial` here would move that guarantee from the compiler to
   // the runtime guard for the shipped entrypoint alone.
 ): ReturnType<typeof paperStartingProfile> | LiveStartingProfile {
-  return mode === 'live' ? liveStartingProfile(undefined, logger) : paperStartingProfile(mode);
+  if (mode === 'live') return liveStartingProfile(undefined, logger);
+  return paperStartingProfile(mode, venue === 'saxo' ? saxoTradeableUniverse() : undefined);
 }
 
 /**

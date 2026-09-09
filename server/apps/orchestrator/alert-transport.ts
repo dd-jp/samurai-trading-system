@@ -131,6 +131,11 @@ import { TradeChannelOrphanAlert } from './orphan-alert-channel.js';
 import type { AlertChannelSlots, ProductionConfig } from './production.js';
 import { TradeChannelPromptTierAlert } from './prompt-tier-alert-channel.js';
 import { TradeChannelResidualExposureAlert } from './residual-exposure-alert-channel.js';
+import {
+  TradeChannelDormantLegsUnresolvedAlert,
+  TradeChannelLegResizeUnverifiedAlert,
+  TradeChannelUnresolvedPriceUnitAlert,
+} from './saxo-alert-channels.js';
 import { SqliteAuditLog } from './sqlite-audit-log.js';
 import { TradeChannelThresholdClampAlert } from './threshold-clamp-alert-channel.js';
 import { TradeChannelTickSkipAlert } from './tick-skip-alert-channel.js';
@@ -297,6 +302,19 @@ export const ALERT_CHANNEL_FIELDS = [
   // latency-budget expiry — write the same row shape everywhere except this
   // one column, so nothing else on this list would ever notice.
   'llmFailureRateAlerts',
+  // #1400 — the Saxo adapter's three, arriving together with the venue that
+  // constructs it. Unlike every entry above, these channel types did NOT
+  // reach only a log line before: `SaxoBrokerAdapter` has required all three
+  // since #1215/#1216/#1302 with no default at all, so the hole was one step
+  // further back — nothing constructed the adapter, so nothing had to supply
+  // them and no transport was ever selected. Each reports a state that does
+  // not clear itself and is invisible from outside: a stop possibly sized to
+  // the wrong quantity, a leg pair the venue audit trail will not adjudicate,
+  // and a fill whose quote unit is unknown (a 100x error on a pence line if
+  // guessed).
+  'legResizeAlerts',
+  'dormantLegsAlerts',
+  'priceUnitAlerts',
 ] as const satisfies readonly (keyof AlertChannelSlots)[];
 
 /**
@@ -619,6 +637,20 @@ export function buildAlertChannels(deps: {
     // reasoning as `miCoverageAlerts`.
     ...(deps.injected.llmFailureRateAlerts === undefined
       ? { llmFailureRateAlerts: new TradeChannelLlmFailureRateAlert(telegram, chatId) }
+      : {}),
+    // #1400. The escalation chat for all three, never the heartbeat chat:
+    // each is a position-level state an operator has to unwind by hand on the
+    // venue — a stop possibly sized wrong, legs the venue will not adjudicate,
+    // a fill that cannot be priced — and none of them clears itself. Same
+    // reasoning as `residualExposureAlerts`, which is the closest in kind.
+    ...(deps.injected.legResizeAlerts === undefined
+      ? { legResizeAlerts: new TradeChannelLegResizeUnverifiedAlert(telegram, chatId) }
+      : {}),
+    ...(deps.injected.dormantLegsAlerts === undefined
+      ? { dormantLegsAlerts: new TradeChannelDormantLegsUnresolvedAlert(telegram, chatId) }
+      : {}),
+    ...(deps.injected.priceUnitAlerts === undefined
+      ? { priceUnitAlerts: new TradeChannelUnresolvedPriceUnitAlert(telegram, chatId) }
       : {}),
   };
 }

@@ -7,11 +7,15 @@ import type {
 import type {
   AlpacaBrokerClient,
   BrokerAdapter,
+  DormantLegsUnresolvedAlertChannel,
   ExecutionConfig,
   FlattenReconcileAlertChannel,
+  LegResizeUnverifiedAlertChannel,
   OcoDoubleFillAlertChannel,
   ResidualExposureAlertChannel,
+  SaxoOpenApiClient,
   UnpricedFillAlertChannel,
+  UnresolvedPriceUnitAlertChannel,
 } from '../../../pipeline/execution/index.js';
 import type {
   ArmDivergenceAlertChannel,
@@ -154,6 +158,36 @@ export interface AlertChannelSlots {
    * what supplies it — the ninth `ALERT_CHANNEL_FIELDS` member.
    */
   ocoDoubleFillAlerts?: OcoDoubleFillAlertChannel;
+  /**
+   * Where a partial entry fill on a venue whose protective-leg resizing is
+   * UNVERIFIED is escalated (#1215) — the lot may be sitting under a stop
+   * sized to the ORIGINAL amount, which over-closes into a reversed position
+   * if it fires. Saxo's, and REQUIRED by `SaxoBrokerAdapter`'s constructor
+   * with no default of its own; the composition root supplies
+   * `LoggingLegResizeUnverifiedAlertChannel` when nothing else does, with the
+   * same caveat as `unpricedFillAlerts` — reachable only by an operator
+   * reading the log stream. `TradeChannelLegResizeUnverifiedAlert`
+   * (saxo-alert-channels.ts) is what `SAMURAI_ALERTS=telegram` supplies.
+   */
+  legResizeAlerts?: LegResizeUnverifiedAlertChannel;
+  /**
+   * Where a dormant Saxo related-order pair the adapter cannot resolve is
+   * escalated (#1215/#1216): no master on the open-orders list, every leg
+   * `NotWorking`, and an audit trail that never goes terminal. The adapter
+   * deliberately does NOT cancel on that evidence, so the legs stand until an
+   * operator acts — which is the whole reason this has to reach a phone.
+   * Defaults and transport as `legResizeAlerts`.
+   */
+  dormantLegsAlerts?: DormantLegsUnresolvedAlertChannel;
+  /**
+   * Where a priced Saxo fill whose `Uic` resolves to no pool line is
+   * escalated (#1302). The fill is REFUSED rather than booked — on a GBX line
+   * an unscaled venue price is 100x wrong — and the refusal is not
+   * self-limiting: a persistent cause re-drives the same row every poll, no
+   * lot goes terminal, and nothing else changes. Defaults and transport as
+   * `legResizeAlerts`.
+   */
+  priceUnitAlerts?: UnresolvedPriceUnitAlertChannel;
   /**
    * Where a `flatten_submissions` row `reconcile()`'s sweep could not settle
    * is escalated (#519) — genuine ignorance, or a venue contradiction on an
@@ -460,6 +494,17 @@ export interface ProductionConfig extends AlertChannelSlots {
    * refused, #293).
    */
   alpacaBrokerClient?: AlpacaBrokerClient;
+  /**
+   * Saxo OpenAPI surface, read ONLY when `SAMURAI_BROKER=saxo` selects the
+   * Saxo venue (#1400, production/saxo-venue.ts). Optional for
+   * `alpacaBrokerClient`'s reason: `SaxoHttpBrokerClient` refuses to be
+   * constructed without `SAXO_OPENAPI_TOKEN`, so a test — or any offline
+   * composition root — needs a way to exercise the venue without a
+   * credential. There are no Saxo credentials on the development host and the
+   * SIM token is a 24-hour bearer, so this seam is what every in-repo Saxo
+   * boot goes through today.
+   */
+  saxoBrokerClient?: SaxoOpenApiClient;
   /**
    * Alpaca market-data REST surface, for bars and latest quotes. Optional for
    * the same reason; defaults to `AlpacaHttpDataClient` on
