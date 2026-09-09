@@ -215,7 +215,11 @@ import type {
   VerdictDecision,
 } from '../../pipeline/verdict/index.js';
 import { VerdictImpl } from '../../pipeline/verdict/index.js';
-import type { Bar, MarketDataService } from '../../providers/market-data-service/index.js';
+import type {
+  Bar,
+  LseMarkClient,
+  MarketDataService,
+} from '../../providers/market-data-service/index.js';
 import {
   AlwaysOpenCalendar,
   FixtureDataSource,
@@ -308,7 +312,7 @@ import {
   buildProductionOrchestrator,
   SMOKE_TEST_UNIVERSE,
 } from './production.js';
-import type { LogEntry, Logger } from './types.js';
+import type { LogEntry, Logger, UniverseInstrument } from './types.js';
 
 /** Baseline buckets the seed below fills, and records in each. */
 const SMOKE_GDELT_SEED_BUCKETS = 24;
@@ -3801,6 +3805,142 @@ async function runDataFailoverScenario(logger: Logger): Promise<DataFailoverEvid
   }
 }
 
+/** What `evaluateSmokeGate` needs from the source-factory scenario (#1151). */
+export interface DataSourceFactoryEvidence {
+  /** `bars.source` values the store holds after a read served by the `kind: 'alpaca'` arm. */
+  alpacaStoredSources: readonly string[];
+  /** `bars.source` values the store holds after a read served by the `kind: 'lse'` arm. */
+  lseStoredSources: readonly string[];
+  /** Whichever probe refused to boot or threw on the read, as its own message. */
+  error: string | null;
+}
+
+/**
+ * The vendor name the LSE probe's client stamps.
+ *
+ * Deliberately not a real vendor's: #895 (choose and provision the real-time
+ * L1 feed) and #999 (LSEG Delayed Market Data) are both open, so no vendor in
+ * this tree can serve the `kind: 'lse'` arm. What the probe can still prove is
+ * that the arm is REACHED — the port is injected, exactly so answering #895
+ * lands as a config change.
+ */
+const SMOKE_LSE_VENDOR = 'smoke-lse-vendor';
+
+/** `1h` opens inside the venue's own regular session on the last completed trading day. */
+const FACTORY_US_OPEN_TIMES = ['2026-08-03T18:00:00.000Z', '2026-08-03T19:00:00.000Z'] as const;
+const FACTORY_LSE_OPEN_TIMES = ['2026-08-03T09:00:00.000Z', '2026-08-03T10:00:00.000Z'] as const;
+
+function factoryProbeBars(openTimes: readonly string[]) {
+  return openTimes.map((openTime) => ({
+    open_time: new Date(openTime),
+    open: 100,
+    high: 101,
+    low: 99,
+    close: 100.5,
+    volume: 1_000,
+  }));
+}
+
+/**
+ * `createDataSource`'s enforcement assertion (#1151), per the standard that
+ * wiring a mechanism means asserting it HERE (#430).
+ *
+ * The factory was the repo's named dominant defect class in its purest form:
+ * every production source was constructed BESIDE it, so its arms were reached
+ * by nothing and breaking one changed no observable behaviour. Both surviving
+ * arms are driven here through `buildProductionOrchestrator` — the real
+ * composition root — against a COLD `:memory:` store, and asserted on their
+ * DURABLE effect: a `bars` row carrying the provenance the arm the factory
+ * resolved stamps.
+ *
+ * Construction is INSIDE the try on purpose. A broken arm makes
+ * `buildAlpacaDataSource` throw at boot, and that has to reach the gate as a
+ * failing row rather than as an unhandled rejection that never reaches
+ * `formatSmokeReport`.
+ */
+async function runDataSourceFactoryScenario(logger: Logger): Promise<DataSourceFactoryEvidence> {
+  const profile = paperStartingProfile('paper');
+
+  const storedSourcesFor = async (
+    universe: readonly UniverseInstrument[],
+    instrument: string,
+    overrides: Partial<Parameters<typeof buildProductionOrchestrator>[0]>,
+  ): Promise<{ sources: string[]; error: string | null }> => {
+    const db = openSharedStore(':memory:');
+    try {
+      const orchestrator = buildProductionOrchestrator({
+        ...profile,
+        db,
+        clock: new SimulatedClock(SMOKE_RUN_INSTANT),
+        logger,
+        universe,
+        tradingCalendar: new UsEquityRegularHoursCalendar(),
+        stocksTradingWindow: () => true,
+        miArchive: new MiArchiveStore(),
+        accountState: new FixedAccountStateProvider(),
+        alpacaBrokerClient: new UnreachableAlpacaClient(),
+        llmClient: new ConstantResponseLlmClient(),
+        ...overrides,
+      });
+
+      await orchestrator.marketData.getBars(
+        instrument,
+        { timeframe: '1h', lookback: 2 },
+        SMOKE_RUN_INSTANT,
+      );
+
+      const stored = db
+        .prepare('SELECT source FROM bars WHERE instrument = ? ORDER BY open_time')
+        .all(instrument) as { source: string }[];
+      return { sources: stored.map((row) => row.source), error: null };
+    } catch (error) {
+      return { sources: [], error: error instanceof Error ? error.message : String(error) };
+    } finally {
+      db.close();
+    }
+  };
+
+  const alpaca = await storedSourcesFor([{ asset: 'SPY', asset_class: 'stocks' }], 'SPY', {
+    alpacaDataClient: {
+      getBars: async () =>
+        FACTORY_US_OPEN_TIMES.map((openTime) => ({
+          t: openTime,
+          o: 100,
+          h: 101,
+          l: 99,
+          c: 100.5,
+          v: 1_000,
+        })),
+      getLatestQuote: async () => ({ t: SMOKE_RUN_INSTANT.toISOString(), ap: 100, bp: 99 }),
+    },
+  });
+
+  // A sterling pool line (#1220): the LSE arm refuses to CONSTRUCT for a
+  // USD-declared row, so a probe on one would fail for the currency guard
+  // rather than for the reachability this asserts.
+  const lseClient: LseMarkClient = {
+    vendor: SMOKE_LSE_VENDOR,
+    getBars: async () => ({
+      currency: 'GBX',
+      candles: factoryProbeBars(FACTORY_LSE_OPEN_TIMES),
+    }),
+    getLatestQuote: async () => ({
+      price: 100,
+      currency: 'GBX',
+      observed_at: SMOKE_RUN_INSTANT,
+    }),
+  };
+  const lse = await storedSourcesFor([{ asset: 'LQQ3', asset_class: 'stocks' }], 'LQQ3', {
+    lseMarkClient: lseClient,
+  });
+
+  return {
+    alpacaStoredSources: alpaca.sources,
+    lseStoredSources: lse.sources,
+    error: alpaca.error ?? lse.error,
+  };
+}
+
 /** What `evaluateSmokeGate` needs from the analyst failure-cause scenario (#1114). */
 export interface AnalystFailureCauseEvidence {
   /** Every `stage: 'analysts', level: 'debug'` payload the run's own `AnalystOrchestrator` recorded. */
@@ -4501,6 +4641,18 @@ export function evaluateSmokeGate(
      * site would leave `yarn smoke` green — #430's defect class exactly.
      */
     dataFailover: DataFailoverEvidence;
+    /**
+     * `createDataSource`'s evidence (#1151) — required, not optional, for the
+     * same "compile error, not a silent no-op" reason the mechanisms above
+     * are. The factory had ZERO production call sites while claiming in its
+     * own header to be the single place a source name resolves to an
+     * implementation, so breaking any arm of it changed nothing observable.
+     * `production/defaults.ts` now resolves both surviving arms through it,
+     * and this is what makes that reachable-or-not visible: no unit test can
+     * tell construction-through-the-factory from construction-beside-it,
+     * because the object built is identical either way.
+     */
+    dataSourceFactory: DataSourceFactoryEvidence;
     /**
      * The risk critic's evidence (#957) — required, not optional, for the same
      * "compile error, not a silent no-op" reason the mechanisms above are.
@@ -5230,6 +5382,39 @@ export function evaluateSmokeGate(
     failures.push(
       'the failover served bars but raised nothing on the DataFailoverAlertChannel — an ' +
         'unattended soak that silently switched vendors is a stall nobody learns about (#562)',
+    );
+  }
+
+  // #1151 — `createDataSource` reached from the composition root, asserted on
+  // the DURABLE effect of each surviving arm. See `runDataSourceFactoryScenario`.
+  const factory = options.dataSourceFactory;
+  if (factory.error !== null) {
+    failures.push(
+      `a factory-resolved market-data source refused to build or read: ${factory.error} — ` +
+        '`production/defaults.ts` resolves both surviving arms through `createDataSource`, so a ' +
+        'broken arm takes the whole market-data path down at boot (#1151)',
+    );
+  }
+  if (
+    factory.alpacaStoredSources.length === 0 ||
+    !factory.alpacaStoredSources.every((source) => source === 'alpaca')
+  ) {
+    failures.push(
+      `the Alpaca arm persisted [${factory.alpacaStoredSources.join(', ')}] rather than a ` +
+        "non-empty run of 'alpaca' — `createDataSource({ kind: 'alpaca' })` is what " +
+        '`buildAlpacaDataSource` resolves every non-LSE universe through, so nothing durable ' +
+        'here means the tick loop has no bars at all (#1151)',
+    );
+  }
+  if (
+    factory.lseStoredSources.length === 0 ||
+    !factory.lseStoredSources.every((source) => source === SMOKE_LSE_VENDOR)
+  ) {
+    failures.push(
+      `the LSE arm persisted [${factory.lseStoredSources.join(', ')}] rather than a non-empty ` +
+        `run of '${SMOKE_LSE_VENDOR}' — the live equity leg's only mark path is ` +
+        "`createDataSource({ kind: 'lse' })`, and it is kept precisely so #895/#999 can land " +
+        'as a config change; unreached, it is the unwired arm this ticket deleted two of (#1151)',
     );
   }
 
@@ -6637,6 +6822,12 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
     // the root's `config.dataSource ??` seam short-circuits the failover there.
     const dataFailover = await runDataFailoverScenario(logger);
 
+    // #1151: `createDataSource` reached from the composition root, on its own
+    // roots and cold in-memory stores — same reason as `dataFailover` above,
+    // and one more: the main run's injected fixture source means no arm of
+    // the factory is resolved there at all.
+    const dataSourceFactory = await runDataSourceFactoryScenario(logger);
+
     // #957: check-pipeline step 7's producer, on its own composition root and
     // its own cold in-memory store. The six-stage run above cannot stand in
     // for it — it has produced zero approved entries historically (#625), so
@@ -6688,6 +6879,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       thresholdClamp,
       approvalFallback,
       dataFailover,
+      dataSourceFactory,
       riskCritic,
       promptTierWarning,
       analystFailureCause,

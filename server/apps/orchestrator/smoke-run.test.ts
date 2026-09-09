@@ -30,6 +30,7 @@ import {
   ConstantResponseLlmClient,
   type CryptoEmulationEvidence,
   type DataFailoverEvidence,
+  type DataSourceFactoryEvidence,
   type EntrypointFaultGuardEvidence,
   type ExitPathEvidence,
   evaluateSmokeGate,
@@ -305,6 +306,7 @@ function healthyGateOptions(
     thresholdClamp?: ThresholdClampEvidence;
     approvalFallback?: ApprovalFallbackEvidence;
     dataFailover?: DataFailoverEvidence;
+    dataSourceFactory?: DataSourceFactoryEvidence;
     riskCritic?: RiskCriticEvidence;
     promptTierWarning?: PromptTierWarningEvidence;
     analystFailureCause?: AnalystFailureCauseEvidence;
@@ -342,6 +344,7 @@ function healthyGateOptions(
     thresholdClamp: overrides.thresholdClamp ?? healthyThresholdClamp(),
     approvalFallback: overrides.approvalFallback ?? healthyApprovalFallback(),
     dataFailover: overrides.dataFailover ?? healthyDataFailover(),
+    dataSourceFactory: overrides.dataSourceFactory ?? healthyDataSourceFactory(),
     riskCritic: overrides.riskCritic ?? healthyRiskCritic(),
     promptTierWarning: overrides.promptTierWarning ?? healthyPromptTierWarning(),
     analystFailureCause: overrides.analystFailureCause ?? healthyAnalystFailureCause(),
@@ -544,6 +547,18 @@ function healthyDataFailover(overrides: Partial<DataFailoverEvidence> = {}): Dat
       },
     ],
     readError: null,
+    ...overrides,
+  };
+}
+
+/** What `runDataSourceFactoryScenario` (#1151) reports when both surviving arms are reached. */
+function healthyDataSourceFactory(
+  overrides: Partial<DataSourceFactoryEvidence> = {},
+): DataSourceFactoryEvidence {
+  return {
+    alpacaStoredSources: ['alpaca', 'alpaca'],
+    lseStoredSources: ['smoke-lse-vendor', 'smoke-lse-vendor'],
+    error: null,
     ...overrides,
   };
 }
@@ -2690,6 +2705,59 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
       const gate = evaluateSmokeGate(transactedObservations(), healthyGateOptions());
 
       expect(gate.failures.filter((failure) => failure.includes('#562'))).toEqual([]);
+    });
+  });
+
+  describe('createDataSource reached from the composition root (#1151)', () => {
+    it('fails when a factory-resolved source refused to build or read', () => {
+      // The mutation this exists to catch: break an arm of `createDataSource`
+      // and `buildAlpacaDataSource` throws at boot. Before #1151 wired the
+      // factory in, the same mutation changed nothing at all.
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({
+          dataSourceFactory: healthyDataSourceFactory({
+            alpacaStoredSources: [],
+            error: 'Unknown data source kind: {"kind":"alpaca"}',
+          }),
+        }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('refused to build or read');
+    });
+
+    it('fails when the Alpaca arm persisted nothing', () => {
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({
+          dataSourceFactory: healthyDataSourceFactory({ alpacaStoredSources: [] }),
+        }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('the Alpaca arm persisted');
+    });
+
+    it('fails when the LSE arm persisted another vendor, so the mark path is not the one kept', () => {
+      // The #734 arm is the one this ticket KEPT while deleting ccxt and ibkr.
+      // A row stamped by anything else means the live equity leg's mark came
+      // from a substitute source, which #734 refuses outright.
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({
+          dataSourceFactory: healthyDataSourceFactory({ lseStoredSources: ['alpaca'] }),
+        }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('the LSE arm persisted');
+    });
+
+    it('passes when both surviving arms served and persisted through the root', () => {
+      const gate = evaluateSmokeGate(transactedObservations(), healthyGateOptions());
+
+      expect(gate.failures.filter((failure) => failure.includes('#1151'))).toEqual([]);
     });
   });
 
