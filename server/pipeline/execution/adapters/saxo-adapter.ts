@@ -63,7 +63,6 @@ import type {
   SaxoAssetType,
   SaxoBuySell,
   SaxoDurationType,
-  SaxoInstrumentDetails,
   SaxoOpenApiClient,
   SaxoOpenOrder,
   SaxoOrderActivity,
@@ -205,14 +204,15 @@ export async function saxoInstrumentResolverFromVenue(
     const line = row.provenance.saxo.line;
     if (line === null) continue;
     const details = await client.getInstrumentDetails(line.uic, line.asset_type);
-    assertUnitIsSelfConsistent(details, row.lse_ticker);
-    byTicker.set(row.lse_ticker, {
+    const ref: SaxoInstrumentRef = {
       uic: line.uic,
       asset_type: line.asset_type,
       currency: details.CurrencyCode,
       price_currency: details.PriceCurrency,
       price_to_contract_factor: details.PriceToContractFactor,
-    });
+    };
+    assertUnitIsSelfConsistent(ref, row.lse_ticker);
+    byTicker.set(row.lse_ticker, ref);
     byUic.set(line.uic, row.lse_ticker);
   }
   return {
@@ -227,13 +227,13 @@ export async function saxoInstrumentResolverFromVenue(
  * is the venue contradicting itself, and taking either field as authoritative
  * would be a coin flip on a 100x error (#1302).
  */
-function assertUnitIsSelfConsistent(details: SaxoInstrumentDetails, lseTicker: string): void {
-  const quoteCurrency = details.PriceCurrency;
-  if (quoteCurrency === undefined || quoteCurrency === details.CurrencyCode) return;
-  if (details.PriceToContractFactor !== 1) return;
+function assertUnitIsSelfConsistent(ref: SaxoInstrumentRef, lseTicker: string): void {
+  const quoteCurrency = ref.price_currency;
+  if (quoteCurrency === undefined || quoteCurrency === ref.currency) return;
+  if (ref.price_to_contract_factor !== 1) return;
   throw new Error(
-    `Saxo instrument details for '${lseTicker}' (Uic ${details.Uic}) quote in ` +
-      `${quoteCurrency} but settle in ${details.CurrencyCode} with PriceToContractFactor 1 — ` +
+    `Saxo instrument details for '${lseTicker}' (Uic ${ref.uic}) quote in ` +
+      `${quoteCurrency} but settle in ${ref.currency} with PriceToContractFactor 1 — ` +
       'cash per share is unknowable from a self-contradictory pair, so the line is not tradeable.',
   );
 }
