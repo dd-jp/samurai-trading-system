@@ -139,6 +139,13 @@ export const DEGRADED_DECISIONS = {
   not_admitted:
     'the debate never started — the LLM rate limiter or the spend cap refused it, so no model ' +
     'was asked anything',
+  // #1393: no producer writes this yet. It exists so that a future fallback
+  // producing a neutral `DebateResult` for a reason neither `timed_out` nor
+  // `rate_limited` names still glosses as degraded rather than as a genuine
+  // `neutral` wash — see `DebateResult.read` (debate-engine/types.ts).
+  unread:
+    'the result was not read from a debate at all — neither the latency budget nor the rate ' +
+    'limiter accounts for it, so whatever produced it read nothing',
   quorum_skip_timeout:
     'a mandatory analyst missed its per-attempt deadline on every attempt — the empty view set ' +
     'is a budget firing, not the analysts finding nothing to trade',

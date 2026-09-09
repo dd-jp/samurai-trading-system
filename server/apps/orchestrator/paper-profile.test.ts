@@ -402,6 +402,7 @@ describe('paperStartingProfile', () => {
           direction: 'bullish',
           debate_id: 'debate-1112-sizing',
           bar_timestamp: DECISION_BAR,
+          read: true,
         };
       }
 

@@ -28,6 +28,7 @@ function makeResult(overrides: Partial<DebateResult> = {}): DebateResult {
     direction: 'bullish',
     debate_id: 'debate-1',
     bar_timestamp: new Date('2026-07-14T09:00:00Z'),
+    read: true,
     ...overrides,
   };
 }

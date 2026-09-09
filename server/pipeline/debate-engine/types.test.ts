@@ -83,6 +83,7 @@ describe('DebateResult', () => {
       direction: 'bullish',
       debate_id: 'debate-abc123',
       bar_timestamp: new Date('2026-07-15T10:00:00Z'),
+      read: true,
     };
 
     expectTypeOf(result).toMatchTypeOf<DebateResult>();
@@ -110,6 +111,7 @@ describe('DebateResult', () => {
       direction: 'bullish',
       debate_id: 'debate-def456',
       bar_timestamp: new Date('2026-07-15T10:00:00Z'),
+      read: true,
     };
 
     expect(result.converged).toBe(true);

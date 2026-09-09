@@ -348,6 +348,7 @@ function debateAt(confidence: number): DebateResult {
     direction: 'bullish',
     debate_id: 'debate-870',
     bar_timestamp: DECISION_BAR,
+    read: true,
   };
 }
 

@@ -189,6 +189,10 @@ export function controlArmDecision(input: {
     synthesis: NO_DEBATE_HAPPENED,
     position: NO_DEBATE_HAPPENED,
     disagreement_summary: NO_DEBATE_HAPPENED,
+    // The axis vote WAS read — deterministically, off `axisVote` above, not
+    // via an LLM debate. `read` distinguishes "nothing to read" (#1393) from
+    // "read something other than a debate", and this is the latter.
+    read: true,
   };
 }
 

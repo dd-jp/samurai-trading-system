@@ -2797,6 +2797,7 @@ describe('composed tick chain (integration)', () => {
         // #687: the Trader keys the exit on the DEBATE's bar. START is
         // bar-aligned, so this is the bar the old clock-flooring produced.
         bar_timestamp: START,
+        read: true,
       },
       clock,
     });

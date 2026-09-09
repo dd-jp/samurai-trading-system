@@ -178,6 +178,12 @@ export function buildControlDebateStep(relay: AnalystViewRelay): TickSteps['deba
         'deterministic axis vote had nothing to read. No entry.',
       position: 'No position — no axis vote available.',
       disagreement_summary: 'No debate was held; the control arm holds no debate.',
+      // Genuine falsifier decline despite the synthesis text above ("had
+      // nothing to read"): no LLM ran, but this is already the CURRENT
+      // `declined_on_signal` baseline via `neutral_direction_while_flat`.
+      // `read: false` would flip that classification to `could_not_decide`
+      // — see DebateResult.read's docblock for why this path sets `true`.
+      read: true,
     };
   };
 }

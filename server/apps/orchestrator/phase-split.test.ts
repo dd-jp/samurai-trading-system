@@ -107,6 +107,7 @@ function makeDebate(instrument: string): DebateResult {
     direction: 'bullish',
     debate_id: `debate-${instrument}`,
     bar_timestamp: NOW,
+    read: true,
   };
 }
 

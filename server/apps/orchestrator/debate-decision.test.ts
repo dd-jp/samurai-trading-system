@@ -25,6 +25,7 @@ function resolvedDebate(overrides: Partial<DebateResult> = {}): DebateResult {
     direction: 'bullish',
     debate_id: 'debate-1',
     bar_timestamp: BAR,
+    read: true,
     ...overrides,
   };
 }
@@ -77,6 +78,23 @@ describe('debateDecisionWord', () => {
     expect(debateDecisionWord(refused)).toBe('not_admitted');
   });
 
+  it('names a result marked unread ahead of its bare direction (#1393)', () => {
+    // Synthetic: no producer sets `read: false` yet (see `DebateResult.read`'s
+    // docblock). This is the orchestrator-side half of the same guard rail
+    // `debateWasDegraded` (trader/decide.ts) enforces, pinned so the two
+    // cannot silently disagree about the same result.
+    const unread = resolvedDebate({
+      direction: 'neutral',
+      confidence: 0,
+      converged: false,
+      rounds_completed: 0,
+      read: false,
+    });
+
+    expect(debateDecisionWord(unread)).toBe('unread');
+    expect(isDegradedDecision(debateDecisionWord(unread))).toBe(true);
+  });
+
   it('leaves the control arm writing its bare direction (#1080 AC6)', async () => {
     // The control arm runs a `debate` step like any other and its results reach
     // the same `record` call, so the comparability claim has to hold HERE, not
@@ -111,6 +129,7 @@ describe('debateDecisionWord', () => {
     expect(isDegradedDecision('budget_exhausted')).toBe(true);
     expect(isDegradedDecision('timed_out_partial')).toBe(true);
     expect(isDegradedDecision('not_admitted')).toBe(true);
+    expect(isDegradedDecision('unread')).toBe(true);
     expect(isDegradedDecision('bullish')).toBe(false);
     expect(isDegradedDecision('neutral')).toBe(false);
     expect(isDegradedDecision('quorum_skip')).toBe(false);

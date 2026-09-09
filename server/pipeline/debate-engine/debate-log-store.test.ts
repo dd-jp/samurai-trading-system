@@ -34,6 +34,7 @@ function makeResult(overrides: Partial<DebateResult> = {}): DebateResult {
     direction: 'bullish',
     debate_id: 'debate-1',
     bar_timestamp: BAR,
+    read: true,
     ...overrides,
   };
 }

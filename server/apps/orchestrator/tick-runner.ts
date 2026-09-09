@@ -165,12 +165,16 @@ export class SequentialTickRunner implements TickRunner {
     const startStageTimer = () => ({ wallMs: Date.now(), perfMs: performance.now() });
 
     /**
-     * A degraded decision word (#1080) — `budget_exhausted`,
-     * `timed_out_partial`, `not_admitted` — means a resource control produced
-     * this stage's output instead of the market, and a soak log where that
-     * reads at `info` alongside every healthy stage is how 22 of 26 starved
-     * debates went unnoticed for a full session. The vocabulary is shared with
-     * the dashboard (contracts/pipeline.ts) so the two cannot drift.
+     * A degraded decision word (#1080) — any key of `DEGRADED_DECISIONS`
+     * (contracts/pipeline.ts): `budget_exhausted`, `timed_out_partial`,
+     * `not_admitted`, `unread`, `quorum_skip_timeout`, `quorum_skip_fault` —
+     * means a resource control produced this stage's output instead of the
+     * market, and a soak log where that reads at `info` alongside every
+     * healthy stage is how 22 of 26 starved debates went unnoticed for a full
+     * session. The vocabulary is shared with the dashboard so the two cannot
+     * drift; naming the keys here instead of just "any of them" is a
+     * deliberate reminder to check that list is still complete, not a claim
+     * this comment is the source of truth for it.
      *
      * Deliberately NOT "any stage whose decision looks unusual": Risk vetoes
      * and Verdict `no_go` are routine, decided outcomes and stay at `info`.

@@ -301,6 +301,10 @@ export async function enforceLatencyBudget(params: {
       // decision for the bar the tick was taken in, and the two shapes below
       // must name the same bar whether or not a round completed (#687).
       bar_timestamp: bar,
+      // A round finished before the budget fired, so this IS a real (if
+      // truncated) read — `timed_out` already says the debate was cut
+      // short; `read` says the resulting direction is not a blank scaffold.
+      read: true,
       timed_out,
     };
   }
@@ -318,6 +322,10 @@ export async function enforceLatencyBudget(params: {
     direction: LOW_CONFIDENCE_FALLBACK.direction,
     debate_id,
     bar_timestamp: bar,
+    // `timed_out` already makes `debateWasDegraded` true; see
+    // DebateResult.read's docblock for why this scaffold still sets
+    // `read: true` rather than `false`.
+    read: true,
     timed_out,
   };
 }

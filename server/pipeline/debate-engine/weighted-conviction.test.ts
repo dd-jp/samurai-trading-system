@@ -35,6 +35,7 @@ function result(contributions: AnalystContribution[], confidence = 0.6): DebateR
     direction: 'bullish',
     debate_id: 'debate-1',
     bar_timestamp: new Date('2026-07-15T10:00:00Z'),
+    read: true,
   };
 }
 

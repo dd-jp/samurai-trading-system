@@ -40,6 +40,14 @@ export { isDegradedDecision };
  * a debate that was never admitted has no latency budget to have exceeded, so
  * the two conditions cannot both hold, and ordering them makes that explicit
  * rather than relying on it.
+ *
+ * `!debate.read` is checked last, after the two named failures, and covers
+ * what neither of them can (#1393): a future fallback that hands back a
+ * neutral result for a reason that is not a budget and not an admission
+ * refusal. Without this the bare `debate.direction` fallthrough below would
+ * write `neutral`, indistinguishable from a genuine wash — the exact state
+ * `debateWasDegraded` (trader/decide.ts) reads to classify the same result,
+ * so the two stay in agreement.
  */
 export function debateDecisionWord(debate: DebateResult): string {
   if (debate.rate_limited !== undefined) {
@@ -47,6 +55,9 @@ export function debateDecisionWord(debate: DebateResult): string {
   }
   if (debate.timed_out !== undefined) {
     return debate.rounds_completed === 0 ? 'budget_exhausted' : 'timed_out_partial';
+  }
+  if (!debate.read) {
+    return 'unread';
   }
   return debate.direction;
 }
