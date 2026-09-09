@@ -1133,11 +1133,13 @@ describe('SaxoBrokerAdapter.cancel', () => {
 
     // The wedge must reach the page, so the empty answer cannot clear the
     // consecutive-defer count on its way past.
-    await adapter.cancel('key-3usl-0930', '3USL');
+    for (let poll = 1; poll < DORMANT_DEFER_ALERT_AFTER; poll++) {
+      await adapter.cancel('key-3usl-0930', '3USL');
+    }
 
-    expect(client.cancelOrder).toHaveBeenCalledTimes(2);
-    expect(client.cancelOrder).not.toHaveBeenCalledWith('5040047178');
     expect(dormantLegsAlerts.alerts).toHaveLength(1);
+    expect(client.cancelOrder).not.toHaveBeenCalledWith('5040047178');
+    expect(client.cancelOrder).not.toHaveBeenCalledWith('5040047179');
   });
 
   it('refuses on a Filled audit row under dormant legs even with no master seen open (#1216)', async () => {
