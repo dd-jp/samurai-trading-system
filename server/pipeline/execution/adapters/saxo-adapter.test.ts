@@ -22,6 +22,10 @@ import type {
 } from '../leg-resize-unverified-alert.js';
 import { openTestExecutionStore, type TestExecutionStore } from '../sqlite-store-harness.js';
 import type { ExecutionInput, NativeBracketRequest } from '../types.js';
+import type {
+  UnresolvedPriceUnitAlert,
+  UnresolvedPriceUnitAlertChannel,
+} from '../unresolved-price-unit-alert.js';
 import {
   DORMANT_DEFER_ALERT_AFTER,
   DORMANT_DEFER_ALERT_REPEAT_EVERY,
@@ -220,6 +224,18 @@ function makeDormantLegsAlerts(): DormantLegsUnresolvedAlertChannel & {
   };
 }
 
+function makePriceUnitAlerts(): UnresolvedPriceUnitAlertChannel & {
+  alerts: UnresolvedPriceUnitAlert[];
+} {
+  const alerts: UnresolvedPriceUnitAlert[] = [];
+  return {
+    alerts,
+    async postUnresolvedPriceUnitAlert(alert) {
+      alerts.push(alert);
+    },
+  };
+}
+
 function makeAdapter(
   client: SaxoOpenApiClient,
   state = new InMemoryBrokerStateStore(),
@@ -228,6 +244,7 @@ function makeAdapter(
   const logger = recordingLogger();
   const legResizeAlerts = makeLegResizeAlerts();
   const dormantLegsAlerts = makeDormantLegsAlerts();
+  const priceUnitAlerts = makePriceUnitAlerts();
   const adapter = new SaxoBrokerAdapter({
     client,
     instruments,
@@ -235,9 +252,10 @@ function makeAdapter(
     clock: { now: () => new Date('2026-09-05T09:00:00Z') },
     legResizeAlerts,
     dormantLegsAlerts,
+    priceUnitAlerts,
     logger,
   });
-  return { adapter, logger, state, legResizeAlerts, dormantLegsAlerts };
+  return { adapter, logger, state, legResizeAlerts, dormantLegsAlerts, priceUnitAlerts };
 }
 
 describe('SaxoBrokerAdapter.submitBracket', () => {
@@ -1296,8 +1314,10 @@ describe('SaxoBrokerAdapter.fetchNewFills', () => {
    * Until #1302 this left that one fill's `fee_currency` unset and logged,
    * so a batch was never held hostage to one attribution gap. The price now
    * depends on the same lookup — without the line's factor a GBX quote is
-   * 100x wrong — so the whole sweep fails instead, and `ingestFills` re-drives
-   * it next poll off the open lots' `opened_at` rather than a watermark.
+   * 100x wrong — so the whole sweep fails instead. A transient cause clears
+   * next poll (`ingestFills` re-drives off the open lots' `opened_at` rather
+   * than a watermark); a persistent one wedges every poll until the pool or
+   * the Uic is fixed, which is why the refusal also pages.
    */
   it('fails the sweep on a fill whose Uic resolves to no pool line, booking neither it nor its batch', async () => {
     const client = makeClient({
@@ -1573,12 +1593,74 @@ describe('SaxoBrokerAdapter GBX price unit (#1302)', () => {
           }),
         ]),
     });
-    const { adapter } = makeAdapter(client, new InMemoryBrokerStateStore(), GBX_RESOLVER);
+    const { adapter, priceUnitAlerts } = makeAdapter(
+      client,
+      new InMemoryBrokerStateStore(),
+      GBX_RESOLVER,
+    );
     await adapter.submitBracket(GBX_BRACKET);
 
     await expect(adapter.fetchNewFills(new Date('2026-09-05T08:00:00Z'))).rejects.toThrow(
       /resolves to no pool line/,
     );
+    expect(priceUnitAlerts.alerts).toEqual([
+      {
+        client_order_id: GBX_BRACKET.client_order_id,
+        broker_fill_id: 'log-1',
+        uic: 999999,
+        observed_at: new Date('2026-09-05T09:00:00Z'),
+      },
+    ]);
+  });
+
+  /**
+   * The refusal is scoped to rows that carry a PRICE (#1302 round 1). An
+   * owned row with no price — `Placed` here — has no unit to resolve, and
+   * `ingestFills` floors its lookback at the earliest open lot's `opened_at`
+   * rather than advancing a watermark, so a Uic the pool no longer knows
+   * (pool edited under a live lot, restart mid-lot) would otherwise sit in
+   * range and refuse every OTHER lot's fills on every poll, forever.
+   */
+  it('books a fill for one lot while an owned non-fill row under an unknown Uic sits in the sweep', async () => {
+    const other: NativeBracketRequest = { ...GBX_BRACKET, client_order_id: 'key-lqq3-1000' };
+    const client = makeClient({
+      placeOrder: vi.fn().mockResolvedValue(gbxPlacement()),
+      listOrderActivities: vi
+        .fn()
+        // Empty for each placement's own adopt-or-place lookup, then the sweep.
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([])
+        .mockResolvedValue([
+          activity({
+            LogId: 'log-stale',
+            ExternalReference: GBX_BRACKET.client_order_id,
+            Uic: 999999,
+            Status: 'Placed',
+          }),
+          activity({
+            LogId: 'log-fill',
+            ExternalReference: other.client_order_id,
+            Uic: GBX_REF.uic,
+            Status: 'Filled',
+            Amount: 1,
+            FillAmount: 1,
+            AveragePrice: 31151,
+          }),
+        ]),
+    });
+    const { adapter, priceUnitAlerts } = makeAdapter(
+      client,
+      new InMemoryBrokerStateStore(),
+      GBX_RESOLVER,
+    );
+    await adapter.submitBracket(GBX_BRACKET);
+    await adapter.submitBracket(other);
+
+    const fills = await adapter.fetchNewFills(new Date('2026-09-05T08:00:00Z'));
+
+    expect(fills.map((fill) => fill.broker_fill_id)).toEqual(['log-fill']);
+    expect(fills[0]?.price).toBeCloseTo(311.51, 8);
+    expect(priceUnitAlerts.alerts).toEqual([]);
   });
 
   it('leaves a USD line (factor 1.0) at the numbers it was given, both directions', async () => {
@@ -1602,17 +1684,16 @@ describe('SaxoBrokerAdapter GBX price unit (#1302)', () => {
   /**
    * The issue's own blast-radius arithmetic, pinned against the conversion
    * rather than against the pipeline: ADR-0018 D5's £350 index allowance over
-   * 3UKL at 2,435 GBp buys 14 shares, while the same quote read as pounds
-   * buys none at all and the instrument silently leaves the tradeable set.
-   * Nothing feeds a Saxo quote into sizing today (no LSE mark source, #895),
-   * so this pins the consequence of the unit, not a wired path.
+   * 3UKL at 2,435 GBp buys 14 shares, where the unconverted quote would have
+   * put the instrument above the allowance and silently out of the tradeable
+   * set. Nothing feeds a Saxo quote into sizing today (no LSE mark source,
+   * #895), so this pins the consequence of the unit, not a wired path.
    */
   it('turns the D5 cash allowance into a non-zero quantity on a GBX line', () => {
     const D5_INDEX_CASH_GBP = 350;
     const quoted = 2435;
 
     expect(Math.floor(D5_INDEX_CASH_GBP / saxoCashPerShare(GBX_REF, quoted))).toBe(14);
-    expect(Math.floor(D5_INDEX_CASH_GBP / quoted)).toBe(0);
   });
 });
 

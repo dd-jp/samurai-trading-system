@@ -267,16 +267,36 @@ function validateNetPosition(raw: unknown, context: string): SaxoNetPosition {
  * defaulting to 1: the whole point of reading this endpoint is that the unit
  * must not be guessed (#1302), and a line whose unit the venue will not state
  * is a line this adapter must refuse to price.
+ *
+ * The returned `Uic`/`AssetType` are checked against the pair the path asked
+ * for. This endpoint is the sole authority on the unit and the response is
+ * the only place a mismatch can surface: a body describing a DIFFERENT
+ * instrument would hand the resolver a factor for the wrong line, which is
+ * the same 100x error read from a different direction.
  */
-function validateInstrumentDetails(body: unknown, context: string): SaxoInstrumentDetails {
+function validateInstrumentDetails(
+  body: unknown,
+  context: string,
+  requested: { uic: number; assetType: SaxoAssetType },
+): SaxoInstrumentDetails {
   if (!isRecord(body)) failValidation(context, 'expected an object', body);
   const factor = requireNumber(body, 'PriceToContractFactor', context);
   if (factor <= 0) {
     failValidation(context, 'PriceToContractFactor must be positive', body);
   }
+  const uic = requireNumber(body, 'Uic', context);
+  const assetType = requireString(body, 'AssetType', context);
+  if (uic !== requested.uic || assetType !== requested.assetType) {
+    failValidation(
+      context,
+      `details for Uic ${requested.uic}/${requested.assetType} came back as ` +
+        `${uic}/${assetType}`,
+      body,
+    );
+  }
   return {
-    Uic: requireNumber(body, 'Uic', context),
-    AssetType: requireString(body, 'AssetType', context),
+    Uic: uic,
+    AssetType: assetType,
     CurrencyCode: requireString(body, 'CurrencyCode', context),
     PriceCurrency: optionalString(body, 'PriceCurrency', context),
     PriceToContractFactor: factor,
@@ -467,7 +487,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
       )}`,
       { method: 'GET' },
       'getInstrumentDetails',
-      validateInstrumentDetails,
+      (body, context) => validateInstrumentDetails(body, context, { uic, assetType }),
     );
   }
 

@@ -16,6 +16,7 @@ import { InMemoryBrokerStateStore } from '../broker-state-store.js';
 import type { DormantLegsUnresolvedAlertChannel } from '../dormant-legs-unresolved-alert.js';
 import type { LegResizeUnverifiedAlertChannel } from '../leg-resize-unverified-alert.js';
 import type { NativeBracketRequest } from '../types.js';
+import type { UnresolvedPriceUnitAlertChannel } from '../unresolved-price-unit-alert.js';
 import { SaxoBrokerAdapter, type SaxoInstrumentResolver } from './saxo-adapter.js';
 import { SaxoHttpBrokerClient } from './saxo-http-client.js';
 
@@ -137,6 +138,10 @@ function noopDormantLegsAlerts(): DormantLegsUnresolvedAlertChannel {
   return { async postDormantLegsUnresolvedAlert() {} };
 }
 
+function noopPriceUnitAlerts(): UnresolvedPriceUnitAlertChannel {
+  return { async postUnresolvedPriceUnitAlert() {} };
+}
+
 /**
  * Builds an adapter over the REAL `SaxoHttpBrokerClient` (mocked `fetch`),
  * with `rateLimiter.acquire` spied so a test can count tokens issued rather
@@ -161,6 +166,7 @@ function makeWiredAdapter(openOrders: readonly unknown[]) {
     clock: { now: () => new Date('2026-09-05T09:00:00Z') },
     legResizeAlerts: noopLegResizeAlerts(),
     dormantLegsAlerts: noopDormantLegsAlerts(),
+    priceUnitAlerts: noopPriceUnitAlerts(),
     logger: recordingLogger(),
   });
   return { adapter, fetchMock, acquireSpy };

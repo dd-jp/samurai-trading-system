@@ -139,3 +139,7 @@ export type {
   UnresolvedFlattenSubmission,
 } from './types.js';
 export type { UnpricedFillAlert, UnpricedFillAlertChannel } from './unpriced-fill-alert.js';
+export type {
+  UnresolvedPriceUnitAlert,
+  UnresolvedPriceUnitAlertChannel,
+} from './unresolved-price-unit-alert.js';

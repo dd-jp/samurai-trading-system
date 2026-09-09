@@ -54,6 +54,7 @@ import type {
   NormalizedOrder,
   NormalizedPosition,
 } from '../types.js';
+import type { UnresolvedPriceUnitAlertChannel } from '../unresolved-price-unit-alert.js';
 import {
   isDuplicateRequestRefusal,
   isOrderNotFound,
@@ -87,7 +88,13 @@ const PLACEMENT_LOOKBACK_MS = 4 * SAXO_DUPLICATE_WINDOW_MS;
 const EXTERNAL_REFERENCE_MAX_CHARS = 50;
 const LEG_SUFFIX_MAX_CHARS = ':target'.length;
 
-/** `OrderDecimals` observed on every pool line's instrument details. */
+/**
+ * `OrderDecimals` observed on every pool line's instrument details. Applied
+ * AFTER `saxoQuotedPrice`, so on a GBX line it rounds two decimals of PENCE
+ * (0.0001 GBP). That this is the grid the venue accepts there is UNVERIFIED
+ * (#1302 AC3): `OrderDecimals` states precision, not the tick grid, and no
+ * order was ever placed on a GBX line — see `saxoQuotedPrice`'s own doc.
+ */
 const ORDER_DECIMALS = 2;
 
 /**
@@ -262,6 +269,15 @@ export interface SaxoBrokerAdapterInput {
    * refuses.
    */
   dormantLegsAlerts: DormantLegsUnresolvedAlertChannel;
+  /**
+   * REQUIRED, no default: a priced fill whose Uic resolves to no pool line
+   * both throws and pages (#1302 round 1) — see `refuseUnresolvedPriceUnit`. The
+   * throw keeps a possibly-100x price out of the journal, but on a
+   * PERSISTENT cause it repeats every poll with nothing else changing, so
+   * without this channel the wedge is invisible outside the log stream. Same
+   * "tested mechanism nothing calls" refusal as the two channels above.
+   */
+  priceUnitAlerts: UnresolvedPriceUnitAlertChannel;
   logger: Logger;
 }
 
@@ -288,6 +304,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
   private readonly logger: Logger;
   private readonly legResizeAlerts: LegResizeUnverifiedAlertChannel;
   private readonly dormantLegsAlerts: DormantLegsUnresolvedAlertChannel;
+  private readonly priceUnitAlerts: UnresolvedPriceUnitAlertChannel;
   /** Warmed from the journal so a restart keeps sweeping fills. */
   private readonly brackets = new Map<string, BracketRecord>();
   private readonly flattens = new Map<string, FlattenRecord>();
@@ -308,6 +325,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     this.logger = input.logger;
     this.legResizeAlerts = input.legResizeAlerts;
     this.dormantLegsAlerts = input.dormantLegsAlerts;
+    this.priceUnitAlerts = input.priceUnitAlerts;
     for (const record of this.state.loadBrackets('saxo')) {
       this.brackets.set(record.client_order_id, {
         instrument: record.request?.instrument ?? '',
@@ -410,6 +428,14 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     return order.normalized;
   }
 
+  /**
+   * The quote unit is resolved only for a row that is already a PRICED fill
+   * (#1302 round 1). An owned row that carries no price — `Placed`,
+   * `Cancelled`, a still-`Working` leg — has nothing to scale, so a Uic the
+   * resolver does not know must not fail the sweep for it: the lookback is
+   * floored at the earliest open lot's `opened_at`, so any such row inside it
+   * would refuse every lot's fills for as long as the row stays in range.
+   */
   async fetchNewFills(since: Date): Promise<NormalizedFill[]> {
     const activities = await this.call('fetchNewFills', () =>
       this.client.listOrderActivities(since),
@@ -418,15 +444,12 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     for (const activity of activities) {
       const owner = this.attribute(activity.ExternalReference);
       if (owner === undefined) continue;
-      const fill = toFill(
-        activity,
-        owner.clientOrderId,
-        owner.leg,
-        since,
-        this.unitForOwnedActivity(activity),
-      );
-      if (fill === undefined) continue;
-      fills.push(fill);
+      const quoted = toQuotedFill(activity, owner.clientOrderId, owner.leg, since);
+      if (quoted === undefined) continue;
+      const ref = this.instrumentForUic(activity.Uic);
+      if (ref === undefined)
+        throw await this.refuseUnresolvedPriceUnit(activity, owner.clientOrderId);
+      fills.push(toCashFill(quoted, ref));
     }
     return fills;
   }
@@ -613,29 +636,51 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
   }
 
   /**
-   * The quote unit for an activity row this adapter's own `ExternalReference`
-   * owns. Throws when the Uic resolves to no pool line, because without a
-   * factor the row's price cannot be turned into cash and a raw venue price
-   * on a GBX line is 100x wrong (#1302).
-   *
-   * This tightens what `feeCurrencyFor` did before it — that logged and left
-   * `fee_currency` unset rather than failing the sweep, on the grounds that
-   * one attribution gap must not hold a whole batch hostage. It cannot stand
-   * once the PRICE depends on the same lookup: booking a possibly-100x price
-   * is worse than a delayed batch, and the batch is only delayed —
-   * `ingestFills` recomputes `since` from the open lots' `opened_at` on every
-   * poll rather than advancing a watermark, so the next poll re-drives the
-   * same activity rows and `hasFill` dedups whatever already landed. The same
-   * trade-off `toFill` already makes for a `Filled` row with no
+   * Pages, then hands back the error to throw, for a PRICED fill whose Uic
+   * resolves to no pool line: without a factor the price cannot be turned
+   * into cash, and a raw venue price on a GBX line is 100x wrong (#1302).
+   * Booking that is worse than not booking, so the sweep fails — the same
+   * trade-off `toQuotedFill` makes for a `Filled` row with no
    * `FillAmount`/`AveragePrice`.
+   *
+   * The alert is not decoration. A transient cause clears on the next poll
+   * because `ingestFills` recomputes `since` from the open lots' `opened_at`
+   * rather than advancing a watermark, so the same rows are re-driven and
+   * `hasFill` dedups whatever landed. A PERSISTENT one does not: the same row
+   * stays in the lookback, every poll throws, the lot never goes terminal and
+   * `since` never advances. Nothing else changes while that runs, which is
+   * why it is paged rather than only logged.
+   *
+   * Delivery failure is swallowed to a log line — the throw below is the
+   * safety property, and it does not depend on the alert landing.
    */
-  private unitForOwnedActivity(activity: SaxoOrderActivity): SaxoInstrumentRef {
-    const ref = this.instrumentForUic(activity.Uic);
-    if (ref !== undefined) return ref;
-    throw new Error(
-      `Saxo activity ${activity.LogId} for '${String(activity.ExternalReference)}' reports Uic ` +
-        `${activity.Uic}, which resolves to no pool line — the line's PriceToContractFactor is ` +
-        'unknown, so its price cannot be expressed as cash and the fill is not booked.',
+  private async refuseUnresolvedPriceUnit(
+    activity: SaxoOrderActivity,
+    clientOrderId: string,
+  ): Promise<Error> {
+    try {
+      await this.priceUnitAlerts.postUnresolvedPriceUnitAlert({
+        client_order_id: clientOrderId,
+        broker_fill_id: activity.LogId,
+        uic: activity.Uic,
+        observed_at: this.clock.now(),
+      });
+    } catch {
+      safeLog(this.logger, {
+        trace_id: 'saxo-fills',
+        stage: 'execution',
+        level: 'error',
+        event: 'saxo_price_unit_alert_send_failed',
+        message:
+          'postUnresolvedPriceUnitAlert delivery failed — the fill is still refused and the ' +
+          'sweep still fails, but the operator was not paged; check the venue by hand',
+        payload: { client_order_id: clientOrderId, uic: activity.Uic },
+      });
+    }
+    return new Error(
+      `Saxo activity ${activity.LogId} for '${clientOrderId}' reports Uic ${activity.Uic}, which ` +
+        "resolves to no pool line — the line's PriceToContractFactor is unknown, so its price " +
+        'cannot be expressed as cash and the fill is not booked.',
     );
   }
 
@@ -1070,27 +1115,33 @@ function activityState(activity: SaxoOrderActivity): NormalizedOrder['order_stat
   }
 }
 
+/** A booked fill still in the VENUE's price unit — cash only after `toCashFill`. */
+interface QuotedFill {
+  client_order_id: string;
+  broker_fill_id: string;
+  leg: Leg;
+  qty: number;
+  quoted_price: number;
+  timestamp: Date;
+}
+
 /**
  * A fill is booked only from an activity carrying a positive `FillAmount`
  * AND a finite `AveragePrice` — the two UNVERIFIED fields (saxo-client.ts).
  * A `Filled` row missing either is thrown so the sweep fails loudly and is
  * retried, rather than a filled position going unbooked and unprotected.
  *
- * `AveragePrice` is the VENUE-QUOTED price, so it becomes cash through the
- * line's own factor (#1302) before anything above the adapter sees it. The
- * activity feed carries no charge field, so the fee is the published GBP-ETP
- * tariff (ADR-0015 §"Saxo", 0.08 %, no minimum) applied to that cash figure
- * and denominated in the line's `CurrencyCode` (USD on most pool lines) —
- * which `fee_currency` states rather than letting a USD figure be summed as
- * GBP. No FX rate is invented here.
+ * Deliberately unit-blind: whether the row can be priced at all is decided
+ * here, and the instrument's factor is looked up only for a row that clears
+ * this gate (#1302 round 1), so an unresolvable Uic on a row with no price
+ * cannot refuse the caller's whole sweep.
  */
-function toFill(
+function toQuotedFill(
   activity: SaxoOrderActivity,
   clientOrderId: string,
   leg: Leg,
   since: Date,
-  ref: SaxoInstrumentRef,
-): NormalizedFill | undefined {
+): QuotedFill | undefined {
   const qty = activity.FillAmount;
   const quoted = activity.AveragePrice;
   const hasQty = typeof qty === 'number' && Number.isFinite(qty) && qty > 0;
@@ -1112,15 +1163,35 @@ function toFill(
   }
   const reported = new Date(activity.ActivityTime);
   const timestamp = Number.isNaN(reported.getTime()) || reported < since ? since : reported;
-  const price = saxoCashPerShare(ref, quoted);
   return {
     client_order_id: clientOrderId,
     broker_fill_id: activity.LogId,
     leg,
-    price,
     qty,
-    fee: price * qty * SAXO_COMMISSION_RATE,
-    fee_currency: ref.currency,
+    quoted_price: quoted,
     timestamp,
+  };
+}
+
+/**
+ * `AveragePrice` is the VENUE-QUOTED price, so it becomes cash through the
+ * line's own factor (#1302) before anything above the adapter sees it. The
+ * activity feed carries no charge field, so the fee is the published GBP-ETP
+ * tariff (ADR-0015 §"Saxo", 0.08 %, no minimum) applied to that cash figure
+ * and denominated in the line's `CurrencyCode` (USD on most pool lines) —
+ * which `fee_currency` states rather than letting a USD figure be summed as
+ * GBP. No FX rate is invented here.
+ */
+function toCashFill(fill: QuotedFill, ref: SaxoInstrumentRef): NormalizedFill {
+  const price = saxoCashPerShare(ref, fill.quoted_price);
+  return {
+    client_order_id: fill.client_order_id,
+    broker_fill_id: fill.broker_fill_id,
+    leg: fill.leg,
+    price,
+    qty: fill.qty,
+    fee: price * fill.qty * SAXO_COMMISSION_RATE,
+    fee_currency: ref.currency,
+    timestamp: fill.timestamp,
   };
 }

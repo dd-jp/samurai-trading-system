@@ -51,10 +51,19 @@ export function saxoCashPerShare(unit: SaxoQuoteUnit, quotedPrice: number): numb
  * expressed in is the unit the venue quotes in. It is deliberately the only
  * place that assumption is encoded, so one live probe can flip it here alone.
  *
- * The probe that settles it: place a `Limit` on a GBX line far enough from the
- * market that it rests, read it back on `GET /port/v1/orders/me`, and compare
- * the returned `Price` with the number sent. Equal in pence confirms this
- * function; equal in pounds means delete the division.
+ * A SECOND assumption rides on the first and is equally unverified: that
+ * `saxo-adapter.ts`'s `ORDER_DECIMALS` (2, from the line's `OrderDecimals`)
+ * is a legal rounding for the number this returns. Applied to pence that is
+ * 0.0001 GBP granularity, and `OrderDecimals` states precision rather than
+ * the tick grid — a correctly scaled pence price can still be off-grid.
+ *
+ * The probe that settles both: place a `Limit` on a GBX line far enough from
+ * the market that it rests, read it back on `GET /port/v1/orders/me`, and
+ * compare the returned `Price` with the number sent. Equal in pence confirms
+ * this function; the number sent x 0.01 means delete the division. A
+ * rejection on price or tick grounds settles neither — it is the tick grid
+ * answering, not the unit, and the details endpoint's own tick fields are
+ * what to read then.
  */
 export function saxoQuotedPrice(unit: SaxoQuoteUnit, cashPrice: number): number {
   return cashPrice / unit.price_to_contract_factor;

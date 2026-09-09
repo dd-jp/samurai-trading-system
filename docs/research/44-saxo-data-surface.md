@@ -349,7 +349,7 @@ consistent with ADR-0015. The scare is defused.
 marketing page and a sales conversation, and `Commissions` is a **live gateway field group**. One
 `infoprices` call on the live token, at `Amount=1`, settles it against the venue's own pricing
 engine before a single pound is at risk. Also unresolved and now sharper: the adapter's own
-comment (`server/pipeline/execution/adapters/saxo-adapter.ts`, `feeCurrencyFor`) hard-codes
+comment (`server/pipeline/execution/adapters/saxo-adapter.ts`, `toCashFill`) hard-codes
 *"the published GBP-ETP tariff (ADR-0015 §"Saxo", 0.08 %, no minimum)"* — a modelled constant,
 never verified against a fill, and structurally unable to represent a floor if one exists.
 
