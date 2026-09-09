@@ -107,7 +107,7 @@ const CONSOLIDATED_SCHEMA_TABLE_COUNT = 34;
  */
 const MIGRATIONS = listMigrations(MIGRATIONS_DIR);
 const MIGRATION_VERSIONS = MIGRATIONS.map((migration) => migration.version);
-const HIGHEST_KNOWN_MIGRATION_VERSION = 54;
+const HIGHEST_KNOWN_MIGRATION_VERSION = 55;
 
 /** A temp copy of `MIGRATIONS_DIR` holding every migration through `throughVersion`, inclusive. */
 function copyMigrationsUpTo(throughVersion: number): string {
@@ -344,6 +344,72 @@ describe('openSharedStore', () => {
           `${table}: a genuinely different declared ceiling was rewritten`,
         ).toEqual({ sizing_capital_ceiling: 5000 });
       }
+    } finally {
+      raw.close();
+      rmSync(preCutoverDir, { recursive: true, force: true });
+    }
+  });
+
+  // 0055's `broker_brackets`/`broker_unpriced_fills` rebuild copies rows with a
+  // positional `INSERT ... SELECT *`, so it depends on the new table's column
+  // order matching the pre-migration table's exactly — a schema-shape check
+  // against an empty fresh `:memory:` DB (spec-schema-drift.test.ts) cannot
+  // catch a transposition because no row ever moves through it. This seeds one
+  // row before 0055 with a distinct, non-default value in every column so a
+  // shift shows up as a wrong value rather than a silent pass.
+  it('migration 0055 preserves a pre-existing bracket row across the CHECK rebuild (#1459)', () => {
+    const raw = new BetterSqlite3(':memory:');
+    const preCutoverVersion = 54;
+    const preCutoverDir = copyMigrationsUpTo(preCutoverVersion);
+    try {
+      runMigrations(raw, preCutoverDir);
+
+      raw
+        .prepare(
+          `INSERT INTO broker_brackets (
+             venue, client_order_id, phase,
+             entry_order_id, stop_order_id, target_order_id,
+             instrument, asset_class, side, size,
+             entry_price, stop_price, target_price, time_in_force,
+             armed_qty, arming_qty, arm_attempt, updated_at
+           ) VALUES (
+             'alpaca', 'pre-0055-bracket', 'armed',
+             'e-1', 's-1', 't-1',
+             'AAPL', 'stocks', 'buy', 12.5,
+             101.5, 90.5, 121.5, 'day',
+             8.5, 4.5, 3, '2026-09-01T00:00:00.000Z'
+           )`,
+        )
+        .run();
+
+      expect(runMigrations(raw, MIGRATIONS_DIR)).toEqual(
+        MIGRATION_VERSIONS.filter((version) => version > preCutoverVersion),
+      );
+
+      expect(
+        raw
+          .prepare('SELECT * FROM broker_brackets WHERE client_order_id = ?')
+          .get('pre-0055-bracket'),
+      ).toEqual({
+        venue: 'alpaca',
+        client_order_id: 'pre-0055-bracket',
+        phase: 'armed',
+        entry_order_id: 'e-1',
+        stop_order_id: 's-1',
+        target_order_id: 't-1',
+        instrument: 'AAPL',
+        asset_class: 'stocks',
+        side: 'buy',
+        size: 12.5,
+        entry_price: 101.5,
+        stop_price: 90.5,
+        target_price: 121.5,
+        time_in_force: 'day',
+        armed_qty: 8.5,
+        arming_qty: 4.5,
+        arm_attempt: 3,
+        updated_at: '2026-09-01T00:00:00.000Z',
+      });
     } finally {
       raw.close();
       rmSync(preCutoverDir, { recursive: true, force: true });

@@ -42,7 +42,7 @@
 import { MAX_ERROR_BODY_CHARS } from '../../shared/index.js';
 
 export class BrokerError extends Error {
-  /** Which adapter failed — 'ccxt' | 'alpaca' | 'ibkr'. */
+  /** Which adapter failed — 'alpaca' | 'saxo'. */
   readonly venue: string;
   /** Which adapter operation failed, e.g. 'submitBracket', 'fetchNewFills'. */
   readonly operation: string;

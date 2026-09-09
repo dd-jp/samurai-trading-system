@@ -1,18 +1,18 @@
 /**
- * The adapters' durable state seam (#287, closing #294/#295) — migration
- * `0007_broker_adapter_state.sql`.
+ * The adapters' durable state seam (#287, closing #294/#295) over
+ * `broker_brackets` (migration 0007) and `broker_unpriced_fills` (0008).
  *
- * Every live adapter keeps a working set in memory (the ccxt emulation's
- * bracket Map, IBKR's leg reverse-index, Alpaca's parent-order-id index) and
- * writes through to this store so a restart can rebuild it. The Maps are not
- * replaced by the store: the ccxt emulation's exactly-once sibling cancel
- * depends on claiming a phase transition with no `await` in between, so the
- * hot path has to stay in-process.
+ * Every live adapter keeps a working set in memory (alpaca-crypto-emulation's
+ * bracket Map, alpaca-adapter's and saxo-adapter's parent-order-id indexes)
+ * and writes through to this store so a restart can rebuild it. The Maps are
+ * not replaced by the store: alpaca-crypto-emulation's exactly-once sibling
+ * cancel depends on claiming a phase transition with no `await` in between,
+ * so the hot path has to stay in-process.
  *
  * SYNCHRONOUS ON PURPOSE, and this is the load-bearing design decision of the
  * whole ticket. Every method here is called from inside one of those
- * synchronous claims (`advanceEntry`, `advanceExits`, `resizeProtectiveLegs`
- * in ccxt-adapter.ts, each of which documents that "everything from here to
+ * synchronous claims (`advanceEntry`, `advanceExits` in
+ * alpaca-crypto-emulation.ts, which documents that "everything from here to
  * the phase write is synchronous"). An async seam would insert an await into
  * that window and reopen the double-arm / double-cancel races those claims
  * exist to close. better-sqlite3 is synchronous, so nothing is given up —
@@ -21,11 +21,16 @@
 import type { NativeBracketRequest, NormalizedFill } from './types.js';
 
 /**
- * Which adapter owns a row. In the primary key of both tables, so two adapters
- * wired over one database can never read each other's brackets even if a
- * client order id were reused across venues.
+ * Which adapter owns a row. In the primary key of every table that carries
+ * it (`broker_brackets`, `broker_unpriced_fills`), so two adapters wired over
+ * one database can never read each other's brackets even if a client order
+ * id were reused across venues.
+ *
+ * `ccxt`/`ibkr` narrowed out by migration 0055 (#1459): both venues left with
+ * crypto (2026-08-16) and the IBKR disqualification (#906), and neither ever
+ * had a built adapter to construct one.
  */
-export type BrokerVenue = 'ccxt' | 'ibkr' | 'alpaca' | 'saxo';
+export type BrokerVenue = 'alpaca' | 'saxo';
 
 /**
  * The emulated lifecycle (originally ccxt's; now Alpaca's crypto emulation,
@@ -57,8 +62,9 @@ export type BrokerBracketPhase =
 
 /**
  * One persisted bracket. See the migration for per-venue column applicability
- * — in short, ccxt uses all of it, Alpaca and IBKR use the identity plus the
- * venue order ids because their venue owns the state machine.
+ * — in short, alpaca-crypto-emulation uses all of it (it owns the phase state
+ * machine), while alpaca-adapter and saxo-adapter use the identity plus the
+ * venue order ids because the venue owns theirs.
  */
 export interface BrokerBracketRecord {
   venue: BrokerVenue;
@@ -69,7 +75,7 @@ export interface BrokerBracketRecord {
   target_order_id: string | null;
   /**
    * The originating `NativeBracketRequest`, or null on a row learned from the
-   * venue rather than from a submit (Alpaca/IBKR `getOrder`), which knows the
+   * venue rather than from a submit (Alpaca/Saxo `getOrder`), which knows the
    * order ids and not the request that produced them.
    */
   request: BrokerBracketRequestFields | null;
@@ -134,7 +140,7 @@ export interface UnpricedFillRecord extends UnpricedFillObservation {
 export interface BrokerStateStore {
   /** Every bracket this venue has ever recorded, oldest first. */
   loadBrackets(venue: BrokerVenue): BrokerBracketRecord[];
-  /** Full-row upsert — the submit path and every ccxt phase transition. */
+  /** Full-row upsert — the submit path and every alpaca-crypto-emulation phase transition. */
   saveBracket(record: BrokerBracketRecord): void;
   /**
    * Partial upsert for the REHYDRATION paths: record the venue's order ids for
@@ -217,8 +223,9 @@ export class InMemoryBrokerStateStore implements BrokerStateStore {
       arm_attempt: existing?.arm_attempt ?? 0,
       // COALESCE per id, mirroring the SQL implementation: a venue lookup that
       // reports no child (because the venue has since cancelled it) must not
-      // blank an id a submit recorded, or IBKR's `legs` index loses it on the
-      // next restart and its executions go unclaimed — #295, reinstated.
+      // blank an id a submit recorded, or the adapter's own `legs`/order-id
+      // index loses it on the next restart and its executions go unclaimed —
+      // #295, reinstated.
       entry_order_id: ids.entry_order_id ?? existing?.entry_order_id ?? null,
       stop_order_id: ids.stop_order_id ?? existing?.stop_order_id ?? null,
       target_order_id: ids.target_order_id ?? existing?.target_order_id ?? null,

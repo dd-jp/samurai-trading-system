@@ -128,10 +128,10 @@ export class SqliteBrokerStateStore implements BrokerStateStore {
   /**
    * The rehydration path: the venue's order ids for a client order id whose
    * request this process never saw. `phase` defaults to `'armed'` on insert —
-   * true for the two venues that use this path (Alpaca/IBKR native brackets,
+   * true for the two venues that use this path (Alpaca/Saxo native brackets,
    * whose legs are live from the first call) — and is left ALONE on conflict,
-   * because a ccxt row's phase is emulation state that no venue lookup is
-   * entitled to overwrite.
+   * because alpaca-crypto-emulation's phase is emulation state that no venue
+   * lookup is entitled to overwrite.
    */
   recordBracketOrderIds(
     venue: BrokerVenue,
@@ -149,9 +149,10 @@ export class SqliteBrokerStateStore implements BrokerStateStore {
            -- COALESCE, matching saveBracket's treatment of the request columns
            -- and for a sharper reason. A venue lookup reports the legs it can
            -- still see, so a child the venue has since cancelled comes back
-           -- null - and blanking a known id here would drop it from IBKR's
-           -- leg reverse index on the next restart, which is exactly #295's
-           -- "fetchExecutions' reports are silently dropped as not ours".
+           -- null - and blanking a known id here would drop it from the
+           -- adapter's own leg/order-id index on the next restart, which is
+           -- exactly #295's "fetchExecutions' reports are silently dropped as
+           -- not ours".
            -- A venue order id we once knew is never forgotten: executions
            -- already booked under it are still ours to attribute.
            entry_order_id = COALESCE(excluded.entry_order_id, broker_brackets.entry_order_id),
