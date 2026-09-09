@@ -81,9 +81,9 @@ export interface ScorableItem {
  * `ScoreItemsResult.degraded`). The PER-ITEM omission fallback (one index
  * missing from an otherwise-valid response, see the `byIndex.get` branch
  * below) logs nothing and leaves `degraded: false`, but the returned score
- * itself now carries `omitted: true` (#1420) — the downstream consumer that
- * cares (`fundamental-analyst.ts`'s evidence average) can distinguish it
- * from a genuine neutral read even without a log line.
+ * itself now carries `omitted: true` (#1420) — `MiIngestAgent.refresh` reads
+ * that to withhold the item from `mi_items` rather than archive this value
+ * as if it were a genuine neutral read.
  *
  * Either way the value is chosen so a scoring gap degrades toward "no
  * directional opinion" rather than toward a fabricated one: `sentiment: 0`
@@ -158,8 +158,10 @@ export interface ScoreItemsResult {
  * - An item the model's response simply omitted an index for, inside an
  *   otherwise-valid batch, falls back to `UNSCORED` for that one item, tagged
  *   `omitted: true` (#1420), with the batch's `degraded` left at `false` (see
- *   `UNSCORED`'s own doc) — nothing is logged for it, but the marker survives
- *   into `IntelligenceItem` so an evidence average can exclude it.
+ *   `UNSCORED`'s own doc) — nothing is logged for it, but `MiIngestAgent
+ *   .refresh` reads the marker to withhold that one item from `mi_items`
+ *   rather than archive a fabricated neutral, so the article stays a scoring
+ *   candidate for a later refresh instead of being permanently marked scored.
  *
  * Either way, a scoring gap must not take down the tick — the analysts
  * degrade to "no opinion", a state they already handle, rather than the

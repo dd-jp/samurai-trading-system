@@ -42,6 +42,7 @@ import { resolveMiSubject } from '../universe-pool/index.js';
 import type { ArchivedItem, MiArchiveStore, RawArchiveRow } from './archive/mi-archive-store.js';
 import { HYDRATING_MI_SOURCES, MI_SOURCES } from './archive/mi-sources.js';
 import type { MarketIntelligenceStore } from './index.js';
+import type { ItemScore } from './scoring/item-scorer.js';
 import { scoreItems } from './scoring/item-scorer.js';
 import type { AlpacaNewsArticle, AlpacaNewsClient } from './sources/alpaca-news-client.js';
 import type { IntelligenceItem } from './types.js';
@@ -93,7 +94,7 @@ export interface MiIngestAgentDeps {
 function toItem(
   article: AlpacaNewsArticle,
   entity: string,
-  score: { sentiment: 1 | 0 | -1; confidence: number; omitted?: boolean },
+  score: { sentiment: 1 | 0 | -1; confidence: number },
 ): IntelligenceItem {
   return {
     // Stable and content-derived, so a re-ingest cannot produce a second item.
@@ -106,7 +107,6 @@ function toItem(
     sentiment: score.sentiment,
     confidence: score.confidence,
     ...(article.summary.length > 0 ? { summary: article.summary } : {}),
-    ...(score.omitted === true ? { omitted: true as const } : {}),
   };
 }
 
@@ -353,26 +353,40 @@ export class MiIngestAgent {
     }
     this.#degradedStreak.set(instrument, 0);
 
-    const archivedItems: ArchivedItem[] = pairs.map(({ article, entity }, index) => {
-      // `scoreItems` always returns exactly one score per supplied item, so
-      // this branch should be unreachable; if it is ever hit the item is
-      // exactly as unscored as a `byIndex.get` miss, so it carries the same
-      // `omitted` marker rather than a bare neutral read.
-      const score = scores[index] ?? {
-        sentiment: 0 as const,
-        confidence: 0.05,
-        omitted: true as const,
-      };
-      return {
-        source: SOURCE_ALPACA,
-        native_id: article.id,
-        updated_at: article.updated_at,
-        entity,
-        asset_class,
-        item: toItem(article, entity, score),
-        ingested_at: now,
-      };
-    });
+    // `scoreItems` always returns exactly one score per supplied item, so
+    // `scores[index]` should never be undefined here; treated the same as an
+    // explicit `omitted: true` if it ever is — withheld below, not archived
+    // with a fabricated score.
+    //
+    // An item the model's response omitted an index for is NOT archived
+    // (#1420 review round 1): its raw bytes are already on disk (`newRaws`,
+    // above), but writing a fabricated UNSCORED item to `mi_items` would make
+    // `hasScoredItem` return true for that (source, native_id, updated_at,
+    // entity) key forever — `write`'s `INSERT OR IGNORE` on that primary key
+    // means the row could never later be upgraded to a real score, directly
+    // contradicting `unscored`'s own contract above that an article "must
+    // stay a scoring candidate for as long as it is inside the lookback
+    // window". Leaving no `mi_items` row keeps it a candidate for a later
+    // refresh, exactly like #1392's batch-wide degrade — retried until the
+    // article ages out of the window, never served as a live item this tick.
+    const scoredPairs = pairs
+      .map(({ article, entity }, index) => ({ article, entity, score: scores[index] }))
+      .filter(
+        (
+          candidate,
+        ): candidate is { article: AlpacaNewsArticle; entity: string; score: ItemScore } =>
+          candidate.score !== undefined && candidate.score.omitted !== true,
+      );
+
+    const archivedItems: ArchivedItem[] = scoredPairs.map(({ article, entity, score }) => ({
+      source: SOURCE_ALPACA,
+      native_id: article.id,
+      updated_at: article.updated_at,
+      entity,
+      asset_class,
+      item: toItem(article, entity, score),
+      ingested_at: now,
+    }));
 
     // Raws for these articles were already written above (or in an earlier
     // refresh, if this attempt is a retry after a prior batch degraded) —

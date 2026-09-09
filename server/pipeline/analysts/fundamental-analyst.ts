@@ -85,23 +85,8 @@ export const fundamentalAnalyst: Analyst = {
     // per AC4: an analyst reading the transcript must be able to tell "1
     // filing" from "1 macro aggregate" even though both moved the same vote.
     const evidence = [...marketContext.news, ...marketContext.intel];
-    // #1420: an item the scorer's model omitted from its response is
-    // UNSCORED, not a genuine neutral read — averaging it in would dilute
-    // the direction/confidence toward a fabricated "no opinion" the model
-    // never actually gave. Excluded from the average the same way a mute
-    // analyst is excluded from the debate's evidence average, but still
-    // counted in `evidence.length`/the key_points item counts below: the
-    // window was not empty, one item in it just could not be scored.
-    const scoredEvidence = evidence.filter((item) => item.omitted !== true);
-    const direction = directionFrom(scoredEvidence);
-    const confidence = confidenceFrom(scoredEvidence);
-    // `conviction-score.ts`'s `isAbsenceOfInput` keys only on the NO_DATA_MARKER
-    // prefix below, not on `evidence.length` — a window where every item was
-    // omitted by the scorer has `scoredEvidence.length === 0` exactly like an
-    // empty window, and must trip the same marker or a fully-mute fundamental
-    // gets folded into the debate's evidence average at floor confidence
-    // instead of excluded (#625's ceiling, reinstated invisibly).
-    const hasNoScoredEvidence = scoredEvidence.length === 0;
+    const direction = directionFrom(evidence);
+    const confidence = confidenceFrom(evidence);
 
     return {
       trace_id: input.trace_id,
@@ -116,8 +101,8 @@ export const fundamentalAnalyst: Analyst = {
         // human approval gate, so nobody downstream catches it either. The
         // marker at least makes the debate — and the audit trail — state that
         // the input was absent rather than unremarkable.
-        hasNoScoredEvidence
-          ? `${NO_DATA_MARKER}: ${evidence.length === 0 ? 'no news, filing or intel items available for this window — the market-intelligence store returned nothing' : 'every news, filing or intel item in this window was omitted by the scorer'}, so this is an ABSENCE OF INPUT, not a neutral read of the fundamentals. Weight it accordingly.`
+        evidence.length === 0
+          ? `${NO_DATA_MARKER}: no news, filing or intel items available for this window — the market-intelligence store returned nothing, so this is an ABSENCE OF INPUT, not a neutral read of the fundamentals. Weight it accordingly.`
           : `${marketContext.news.length} news/filing items, ${marketContext.intel.length} intel items in window, net sentiment driving ${direction}`,
         `Price reaction context: mark=${mark.price} observed ${mark.observed_at.toISOString()}`,
       ],
