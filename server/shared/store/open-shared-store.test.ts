@@ -355,9 +355,13 @@ describe('openSharedStore', () => {
   // order matching the pre-migration table's exactly — a schema-shape check
   // against an empty fresh `:memory:` DB (spec-schema-drift.test.ts) cannot
   // catch a transposition because no row ever moves through it. This seeds one
-  // row before 0055 with a distinct, non-default value in every column so a
-  // shift shows up as a wrong value rather than a silent pass.
-  it('migration 0055 preserves a pre-existing bracket row across the CHECK rebuild (#1459)', () => {
+  // row per table before 0055 with a distinct, non-default value in every
+  // column so a shift shows up as a wrong value rather than a silent pass.
+  // `broker_unpriced_fills` in particular has two adjacent TEXT NOT NULL
+  // timestamp columns (`first_seen_at`/`last_seen_at`) a transposition made
+  // consistently in both the migration and the spec fence would pass every
+  // other gate on — the row-level check here is what would actually catch it.
+  it('migration 0055 preserves pre-existing bracket and unpriced-fill rows across the CHECK rebuild (#1459)', () => {
     const raw = new BetterSqlite3(':memory:');
     const preCutoverVersion = 54;
     const preCutoverDir = copyMigrationsUpTo(preCutoverVersion);
@@ -378,6 +382,18 @@ describe('openSharedStore', () => {
              'AAPL', 'stocks', 'buy', 12.5,
              101.5, 90.5, 121.5, 'day',
              8.5, 4.5, 3, '2026-09-01T00:00:00.000Z'
+           )`,
+        )
+        .run();
+
+      raw
+        .prepare(
+          `INSERT INTO broker_unpriced_fills (
+             venue, client_order_id, broker_fill_id, leg, instrument, qty,
+             first_seen_at, last_seen_at, alerted_at
+           ) VALUES (
+             'saxo', 'pre-0055-fill', 'f-1', 'stop', 'MSFT', 6.5,
+             '2026-09-01T00:00:00.000Z', '2026-09-01T00:05:00.000Z', '2026-09-01T00:10:00.000Z'
            )`,
         )
         .run();
@@ -409,6 +425,22 @@ describe('openSharedStore', () => {
         arming_qty: 4.5,
         arm_attempt: 3,
         updated_at: '2026-09-01T00:00:00.000Z',
+      });
+
+      expect(
+        raw
+          .prepare('SELECT * FROM broker_unpriced_fills WHERE client_order_id = ?')
+          .get('pre-0055-fill'),
+      ).toEqual({
+        venue: 'saxo',
+        client_order_id: 'pre-0055-fill',
+        broker_fill_id: 'f-1',
+        leg: 'stop',
+        instrument: 'MSFT',
+        qty: 6.5,
+        first_seen_at: '2026-09-01T00:00:00.000Z',
+        last_seen_at: '2026-09-01T00:05:00.000Z',
+        alerted_at: '2026-09-01T00:10:00.000Z',
       });
     } finally {
       raw.close();

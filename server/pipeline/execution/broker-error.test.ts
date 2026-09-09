@@ -36,7 +36,7 @@ describe('sanitizeBrokerError', () => {
     // still hanging off `cause` leaks the moment anything serializes the error.
     const raw = Object.assign(new Error(`boom ${SECRET}`), { status: 500, apiKey: SECRET });
 
-    const error = sanitizeBrokerError('ccxt', 'createOrder', raw);
+    const error = sanitizeBrokerError('alpaca', 'createOrder', raw);
 
     expect('cause' in error).toBe(false);
     expect(Object.values(error)).not.toContain(raw);
@@ -48,11 +48,11 @@ describe('sanitizeBrokerError', () => {
     ['statusCode', { statusCode: 503 }],
     ['response.status', { response: { status: 503 } }],
   ])('duck-types the status code off %s', (_shape, cause) => {
-    expect(sanitizeBrokerError('ccxt', 'fetchOrder', cause).statusCode).toBe(503);
+    expect(sanitizeBrokerError('alpaca', 'fetchOrder', cause).statusCode).toBe(503);
   });
 
   it('stringifies a numeric venue code', () => {
-    expect(sanitizeBrokerError('ibkr', 'fetchNewFills', { code: 1100 }).venueCode).toBe('1100');
+    expect(sanitizeBrokerError('saxo', 'fetchNewFills', { code: 1100 }).venueCode).toBe('1100');
   });
 
   it.each([
@@ -63,12 +63,12 @@ describe('sanitizeBrokerError', () => {
     ['a non-finite status', { status: Number.NaN }],
     ['an empty code', { code: '' }],
   ])('degrades to unknown when %s is thrown', (_shape, cause) => {
-    const error = sanitizeBrokerError('ibkr', 'submitBracket', cause);
+    const error = sanitizeBrokerError('saxo', 'submitBracket', cause);
 
     expect(error.statusCode).toBeUndefined();
     expect(error.venueCode).toBeUndefined();
     expect(error.venueMessage).toBeUndefined();
-    expect(error.message).toBe('ibkr submitBracket failed (status unknown)');
+    expect(error.message).toBe('saxo submitBracket failed (status unknown)');
   });
 });
 
@@ -113,7 +113,7 @@ describe('sanitizeBrokerError venueMessage (#1003)', () => {
   it("never reads the cause's own .message as a venueMessage — that is the exact credential-leak vector this module guards against", () => {
     const raw = Object.assign(new Error(`boom ${SECRET}`), { status: 500 });
 
-    const error = sanitizeBrokerError('ccxt', 'createOrder', raw);
+    const error = sanitizeBrokerError('alpaca', 'createOrder', raw);
 
     expect(error.venueMessage).toBeUndefined();
     expect(error.message).not.toContain(SECRET);
