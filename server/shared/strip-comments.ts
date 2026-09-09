@@ -22,28 +22,21 @@ export function stripLineComments(sql: string): string {
  *
  * Not aware of regex literals: `/a\/*b/` opens a phantom block comment (its
  * `\/*` reads as the block-comment start), and an unescaped quote character
- * inside a regex opens phantom string state. Two mitigations, not a fix:
+ * inside a regex opens phantom string state. Mitigated, not fixed:
  *  - `'`/`"` quote state resets at every newline (real JS syntax: those forms
  *    cannot span a raw newline), so a phantom string bounds to the one line
  *    it started on. `` ` `` is exempt — a template literal legitimately
- *    spans lines.
- *  - An unterminated block comment throws instead of silently consuming to
- *    end of input. Real, `tsc`-valid source can never have a genuinely
- *    unterminated `/*`, so reaching one here means a phantom `/*` opened on
- *    something else — surfacing it beats the alternative of a scanner that
- *    goes quiet exactly when it should be loudest.
- * A phantom block comment that happens to reach an unrelated, real `*\/`
- * later in the same file is still a silent miss — closing that needs a real
- * tokenizer. A regex-based "does this file contain a regex literal" guard
- * was tried and dropped: on this repo's own prose it flags `metrics.ts`'s
- * "Annualized return / max drawdown." (a plain doc comment) as one, which is
- * worse than the hazard it would catch. `check-path-citations.ts`'s
- * `stripToComments` (`server/tools/check-path-citations.ts`) accepts the
- * identical residual gap for the same reason, rather than building one.
- * That scanner resets quote state on every line including backtick, unlike
- * this one — noted here, not reconciled, since neither scanner's callers
- * need the other's behavior; a future edit to either should check this note
- * before assuming the two are interchangeable.
+ *    spans lines. `stripToComments` (`server/tools/check-path-citations.ts`)
+ *    resets on every line including backtick; the two differ because neither
+ *    scanner's callers need the other's behavior.
+ *  - An unterminated block comment throws — but only when the source has no
+ *    later `*\/` at all. A phantom `/*` that reaches an unrelated, real `*\/`
+ *    further down (the next JSDoc block, say) closes "successfully" and
+ *    silently swallows everything in between, including a real import; this
+ *    throw does not catch that, only the rarer no-later-`*\/` case. Closing
+ *    that gap needs a real tokenizer. `specifiersOf` in
+ *    `contracts/boundary.test.ts` instead checks the property it actually
+ *    depends on directly, on its own output — see the comment there.
  */
 export function stripComments(source: string): string {
   let out = '';

@@ -58,14 +58,37 @@ function sourceFiles(): string[] {
     .sort();
 }
 
+/**
+ * `stripComments` can mistake a regex literal for a comment opener and, when
+ * a later real comment in the same file supplies the `*\/` it's missing,
+ * silently swallow everything between — including a real import — with no
+ * throw (see its doc comment). That failure mode is invisible to any check
+ * on `stripComments`'s output alone, so verify the one property
+ * `specifiersOf` actually depends on directly: no line that opened with
+ * `import`/`export` before stripping may stop doing so after.
+ */
+function assertNoVanishedImportLine(raw: string, stripped: string, file: string): void {
+  const importOrExport = /^\s*(?:import|export)\b/;
+  const rawLines = raw.split('\n');
+  const strippedLines = stripped.split('\n');
+  for (let i = 0; i < rawLines.length; i++) {
+    if (importOrExport.test(rawLines[i]) && !importOrExport.test(strippedLines[i] ?? '')) {
+      throw new Error(
+        `${file}:${i + 1}: looked like an import/export before stripping comments and ` +
+          `doesn't after — stripComments likely misread a regex literal as a comment opener. ` +
+          `Raw line: ${JSON.stringify(rawLines[i])}`,
+      );
+    }
+  }
+}
+
 // Run through `stripComments` first — a doc comment describing an import
 // (`contracts/pipeline.ts`'s module doc names `AssetClass`'s import in
 // prose, exactly the shape this must not misread) must not read as one.
-// #1398 traces this to PR #1385's round-1 review; the specific wording that
-// review reacted to isn't recoverable from git history (checked — see this
-// PR's body), so treat that origin as unverified, not as fact.
 function specifiersOf(file: string, dir: string = CONTRACTS_DIR): string[] {
-  const text = stripComments(readFileSync(join(dir, file), 'utf8'));
+  const raw = readFileSync(join(dir, file), 'utf8');
+  const text = stripComments(raw);
+  assertNoVanishedImportLine(raw, text, file);
   return SPECIFIER_PATTERNS.flatMap((pattern) =>
     [...text.matchAll(pattern)].map((match) => match[1] as string),
   );
@@ -128,7 +151,7 @@ describe('contracts boundary', () => {
 });
 
 describe('specifiersOf strips comments before matching (#1398)', () => {
-  const fixturesDir = `${mkdtempSync(join(tmpdir(), 'boundary-fixtures-'))}/`;
+  const fixturesDir = mkdtempSync(join(tmpdir(), 'boundary-fixtures-'));
 
   afterAll(() => {
     rmSync(fixturesDir, { recursive: true, force: true });
@@ -154,8 +177,8 @@ describe('specifiersOf strips comments before matching (#1398)', () => {
     );
     const specifiers = specifiersOf(file, fixturesDir);
     expect(specifiers).toEqual([]);
-    // Mirrors the predicate `it.each(sourceFiles())('%s imports nothing
-    // outside contracts/'` above asserts on: no specifier here would fail it.
+    // Same predicate `it.each(sourceFiles())('%s imports nothing outside
+    // contracts/'` uses above — proves a commented-out import can't trip it.
     expect(specifiers.some((s) => s.startsWith('../'))).toBe(false);
   });
 
@@ -164,8 +187,27 @@ describe('specifiersOf strips comments before matching (#1398)', () => {
     writeFileSync(join(fixturesDir, file), "import type { X } from '../server/shared/index.js';\n");
     const specifiers = specifiersOf(file, fixturesDir);
     expect(specifiers).toEqual(['../server/shared/index.js']);
-    // Same predicate as above, the other way: this specifier DOES fail it —
-    // proving stripComments doesn't also swallow real escaping imports.
+    // Same predicate, inverted — proves stripComments doesn't also swallow a
+    // real escaping import.
     expect(specifiers.some((s) => s.startsWith('../'))).toBe(true);
+  });
+
+  it('throws instead of silently dropping an import when a regex literal opens a phantom comment that a later real comment closes', () => {
+    const file = 'regex-literal-swallows-import.ts';
+    writeFileSync(
+      join(fixturesDir, file),
+      [
+        'const re = /a\\/*b/;',
+        "import type { Bad } from '../server/shared/index.js';",
+        '/**',
+        ' * a real doc comment further down the file',
+        ' */',
+        'export interface X {',
+        '  kind: string;',
+        '}',
+        '',
+      ].join('\n'),
+    );
+    expect(() => specifiersOf(file, fixturesDir)).toThrow(/vanished|import.*after/i);
   });
 });
