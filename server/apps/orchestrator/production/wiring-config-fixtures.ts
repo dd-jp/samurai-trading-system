@@ -2,14 +2,13 @@
  * Real, cast-free values for the five `ProductionConfig` fields every
  * composition-root wiring test under this directory needs to construct but
  * none of them exercises (#1456): `riskConfig`, `executionConfig`,
- * `correlationConfig`, `costConfig`, `ciiConsumerConfig`. Before this file,
- * each wiring test stubbed them as `{} as ProductionConfig['X']` — a cast
- * the coding standard bans (docs/coding-standards.md, "Test stubs must
- * type-check without casts") because it hides a wrong-shaped value from
- * `tsc` the same way `as unknown as` does. `ciiConsumerConfig: {}` was the
- * concrete case: `CiiConsumerConfig.pollIntervalMs` is required and
- * non-optional, so the cast fed `new CiiConsumer(...)` (production.ts)
- * `pollIntervalMs: undefined` in all 8 files.
+ * `correlationConfig`, `costConfig`, `ciiConsumerConfig`. A cast to the
+ * field's type here (`{} as ProductionConfig['X']` or `as unknown as`)
+ * would hide a wrong-shaped value from `tsc` — docs/coding-standards.md,
+ * "Test stubs must type-check without casts". `CiiConsumerConfig`'s
+ * `pollIntervalMs` is the concrete case: required and non-optional, so an
+ * unchecked `{}` here reaches `new CiiConsumer(...)` (production.ts) as
+ * `pollIntervalMs: undefined`.
  *
  * Values mirror `production.test.ts`'s `REAL_CONFIGS` (same shapes
  * `direct-bind.test.ts` pins), extended with `whole_share_sizing` — required
@@ -41,9 +40,11 @@ export function makeWiringExecutionConfig(
 ): ExecutionConfig {
   return {
     simulated: {
-      // Matches `DEFAULT_VOLATILITY_INDICATOR` (production.ts): ATR(14) on
-      // 1h bars, lookback 15 because `atr()` spends the first bar seeding
-      // `previousClose`.
+      // `lookback: 15` is `REAL_CONFIGS`'s value (production.test.ts), the
+      // `atr` arity floor (`minimumBars`, indicators.ts) — NOT
+      // `DEFAULT_VOLATILITY_INDICATOR`'s (production/defaults.ts), which
+      // sizes to the converged warm-up (`recommendedWarmupFor` = 4*period+1
+      // = 57), a different dial for a different purpose (#757).
       volatility_indicator: {
         indicator: 'atr',
         params: { period: 14 },
@@ -88,8 +89,10 @@ export function makeWiringCiiConsumerConfig(
   overrides: Partial<CiiConsumerConfig> = {},
 ): CiiConsumerConfig {
   return {
-    // Matches WorldMonitor's own decoupled poll cadence (ADR-0002 §2, 5-15 min).
-    pollIntervalMs: 300_000,
+    // Matches `REAL_CONFIGS.ciiConsumerConfig` (production.test.ts) and the
+    // shipped `paperStartingProfile` value (paper-profile.ts) — 10 min,
+    // within WorldMonitor's own decoupled poll cadence (ADR-0002 §2, 5-15 min).
+    pollIntervalMs: 600_000,
     ...overrides,
   };
 }
