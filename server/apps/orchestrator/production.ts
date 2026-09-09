@@ -1964,6 +1964,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     hasScoringCredentials: sentimentCredentials !== undefined,
     store: marketIntelligence,
     llmClient,
+    spendCap,
     clock,
     logger,
     assetClasses: universeAssetClasses(universe),
@@ -1977,19 +1978,11 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * fills `news`, `GrokAgent` fills `social` — so picking one leaves the other
    * empty by construction.
    *
-   * ## THE ARRAY ORDER IS AN INVARIANT, NOT A STYLE CHOICE
-   *
-   * The queue makes ONE `spendCap.check()` per composed pass, covering both
-   * agents. Only `GrokAgent` re-reads the cap before its own call;
-   * `MiIngestAgent` scores through the shared `LlmClient`, which meters into
-   * `llm_spend` and reads no cap at all. So INGEST MUST COME FIRST: Grok's own
-   * read then sees the post-ingest total and refuses. Reversed, Grok would
-   * spend under the queue's pre-pass check and ingest would spend after it
-   * under no check — two metered calls passing one check the pair fails, which
-   * is precisely what the serialisation exists to prevent. Pinned by the two
-   * paired tests in `mi-refresh-queue.test.ts` that assert on total SPEND for
-   * each ordering. The invariant disappears once `MiIngestAgent` carries its
-   * own `SpendCap` (#1106).
+   * Both agents now read `spendCap` themselves before their own metered call
+   * (#1106), so the array order below is no longer load-bearing — either agent
+   * refuses on a breach whichever one the queue's single pre-pass check admits
+   * second. That check stays as a cheap outer bound on the whole composed pass,
+   * not the only ceiling the news-scoring path has.
    *
    * `undefined` when neither agent could be built (SAMURAI_SENTIMENT=off, or
    * no Nous credentials): no queue, no calls, and the analysts keep reporting
@@ -2001,7 +1994,6 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * neither property held before, cross-instrument concurrency included.
    */
   const marketIntelligenceRefresh = ((): MiRefreshQueue | undefined => {
-    // Ingest first — see the ordering invariant above.
     const composed = composeMarketIntelligence([miIngestAgent, grokAgent]);
     return composed === undefined
       ? undefined
@@ -2511,6 +2503,7 @@ function buildMiIngestAgent(deps: {
   hasScoringCredentials: boolean;
   store: MarketIntelligenceStore;
   llmClient: LlmClient;
+  spendCap: SpendCap;
   clock: Clock;
   logger: Logger;
   assetClasses: AssetClass[];
@@ -2542,6 +2535,7 @@ function buildMiIngestAgent(deps: {
     store: deps.store,
     newsClient,
     llmClient: deps.llmClient,
+    spendCap: deps.spendCap,
     clock: deps.clock,
     logger: deps.logger,
     assetClasses: deps.assetClasses,

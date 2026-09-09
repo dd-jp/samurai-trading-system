@@ -1,6 +1,7 @@
 import { fundamentalAnalyst } from '../../pipeline/analysts/index.js';
 import { NO_DATA_MARKER, NOOP_ANALYST_TELEMETRY } from '../../pipeline/analysts/types.js';
-import type { Clock } from '../../shared/index.js';
+import type { SpendCap } from '../../pipeline/debate-engine/index.js';
+import type { Clock, LogEntry, Logger } from '../../shared/index.js';
 import { AlwaysOpenCalendar } from '../market-data-service/index.js';
 import { MiArchiveStore } from './archive/mi-archive-store.js';
 import { MI_SOURCES } from './archive/mi-sources.js';
@@ -12,6 +13,24 @@ const NOW = new Date('2026-08-15T12:00:00Z');
 const clock: Clock = { now: () => NOW };
 /** The window `fundamental-analyst.ts` itself asks for (MI_CONTEXT_WINDOW_MS). */
 const WINDOW = 24 * 60 * 60 * 1000;
+
+const ADMITS: SpendCap = {
+  check: () => ({ admitted: true, spent_usd: 1, budget_usd: 50 }),
+};
+const REFUSES: SpendCap = {
+  check: () => ({
+    admitted: false,
+    spent_usd: 50,
+    budget_usd: 50,
+    reason: 'budget exhausted',
+    kind: 'budget',
+  }),
+};
+
+function recordingLogger(): Logger & { entries: LogEntry[] } {
+  const entries: LogEntry[] = [];
+  return { entries, log: (entry) => entries.push(entry) };
+}
 
 function article(overrides: Partial<AlpacaNewsArticle> = {}): AlpacaNewsArticle {
   return {
@@ -56,7 +75,11 @@ function newsClient(articles: AlpacaNewsArticle[]) {
   } as unknown as AlpacaNewsClient;
 }
 
-function build(articles: AlpacaNewsArticle[], sentiment: 1 | 0 | -1 = 1) {
+function build(
+  articles: AlpacaNewsArticle[],
+  sentiment: 1 | 0 | -1 = 1,
+  options: { spendCap?: SpendCap; logger?: Logger } = {},
+) {
   const archive = new MiArchiveStore();
   const store = new MarketIntelligenceStore(clock);
   const scorer = scoringClient(sentiment);
@@ -69,6 +92,8 @@ function build(articles: AlpacaNewsArticle[], sentiment: 1 | 0 | -1 = 1) {
     llmClient: scorer.client as any,
     clock,
     assetClasses: ['stocks', 'crypto'],
+    spendCap: options.spendCap ?? ADMITS,
+    logger: options.logger,
   });
   return { agent, archive, store, scorer, news };
 }
@@ -215,6 +240,31 @@ describe('MiIngestAgent', () => {
     expect(archive.rawRows('alpaca-news')).toHaveLength(2);
   });
 
+  /**
+   * #1106: `MiIngestAgent` scored through the shared `LlmClient`, which meters
+   * into `llm_spend` but reads no cap of its own — the composition root's
+   * `MiRefreshQueue` check was the only ceiling this path had, and only
+   * because ingest happened to run first in one array literal. Gating here
+   * too is what makes the array order stop being load-bearing.
+   */
+  it('refuses to score BEFORE calling the LLM when the spend cap is exhausted', async () => {
+    const logger = recordingLogger();
+    const { agent, scorer, store } = build([article()], 1, { spendCap: REFUSES, logger });
+
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false);
+
+    // No scoring call, no item — the analysts fall back to NO_DATA_MARKER, so
+    // "could not afford to look" stays distinguishable from "looked and saw
+    // nothing", the same guarantee `GrokAgent` gives.
+    expect(scorer.calls).toHaveLength(0);
+    expect(store.getContext('stocks', WINDOW, 't').news).toEqual([]);
+    expect(
+      logger.entries.some(
+        (entry) => entry.level === 'warn' && entry.event === 'mi_ingest_refused_spend_cap',
+      ),
+    ).toBe(true);
+  });
+
   it('survives a vendor outage without throwing', async () => {
     const { agent, store } = build([]);
     (
@@ -249,6 +299,7 @@ describe('MiIngestAgent', () => {
       llmClient: scoringClient().client as any,
       clock,
       assetClasses: ['stocks'],
+      spendCap: ADMITS,
     });
 
     expect(restarted.getContext('stocks', WINDOW, 't').news).toEqual([]);
@@ -312,6 +363,7 @@ describe('MiIngestAgent', () => {
       llmClient: scoringClient().client as any,
       clock,
       assetClasses: ['stocks'],
+      spendCap: ADMITS,
     }).hydrate();
 
     const news = restarted.getContext('stocks', WINDOW, 't').news;

@@ -205,17 +205,21 @@ the soak from a fresh store if it is meant to have the full budget.**
 > **1. "This cap therefore DOES bind the MI leg" was only ever half true.**
 > `GrokAgent` reads the cap before it calls. `MiIngestAgent` — the news-scoring
 > half — does not, and never did: it scores through the shared `LlmClient`,
-> which METERS into `llm_spend` but is gated by nothing. So the sentiment half
-> was bound and the news half was merely counted. #1085's `MiRefreshQueue`
-> checks the cap once per composed MI pass and is the first ceiling the news
-> path has ever had. Read the pre-#1085 MI figures as a floor on what could be
-> spent, not as a bound.
+> which METERS into `llm_spend` but is gated by nothing. *(Superseded
+> 2026-09-09 — #1106 landed; see the amendment box below. `MiIngestAgent` now
+> reads the cap before it calls too.)* So the sentiment half was bound and the
+> news half was merely counted. #1085's `MiRefreshQueue` checks the cap once
+> per composed MI pass and is the first ceiling the news path has ever had.
+> Read the pre-#1085 MI figures as a floor on what could be spent, not as a
+> bound.
 >
 > That check covers both agents at once, which makes the composition ORDER at
 > the root load-bearing (ingest first, so Grok's own read sees the post-ingest
 > total). Documented at the call site, pinned by test on total spend, and
 > [#1106](https://github.com/dd-jp/samurai-trading-system/issues/1106) removes
-> the invariant by giving `MiIngestAgent` its own cap.
+> the invariant by giving `MiIngestAgent` its own cap. *(Superseded 2026-09-09
+> — #1106 landed; see the amendment box below. The order is no longer
+> load-bearing.)*
 >
 > **2. "It fails closed — a breach short-circuits the tick" no longer describes
 > the MI leg.** It still describes the debate leg exactly: `debate-adapter.ts`
@@ -264,6 +268,27 @@ the soak from a fresh store if it is meant to have the full budget.**
 > for one budget, which is the thing the latch exists to prevent, and the
 > breach is a single fact about a single ceiling. Recorded here so the next
 > reader meets it in the ADR rather than during an incident.
+
+> **Amended 2026-09-09 by [#1106](https://github.com/dd-jp/samurai-trading-system/issues/1106)
+> — the composition-order invariant point 1 above records is now resolved, not
+> merely pointed at.**
+>
+> `MiIngestAgent` reads its own `SpendCap` before `scoreItems`, the same seam
+> `GrokAgent` already read before its own call. The paragraph above ("That
+> check covers both agents at once, which makes the composition ORDER at the
+> root load-bearing...") no longer describes production:
+> `composeMarketIntelligence([miIngestAgent, grokAgent])`'s array order is not
+> load-bearing any more — either agent refuses on a breach whichever one the
+> queue's single pre-pass check admits second, and that check is now a cheap
+> outer bound on the whole composed pass rather than the only ceiling either
+> agent has.
+>
+> Point 3 above still holds and is now stronger, not weaker: with BOTH MI
+> agents self-gating, the single `#budgetAnnounced` latch is claimed by
+> whichever of the three checkers (`MiIngestAgent`, `GrokAgent`, the debate
+> step) reaches a breach first, so an MI refusal is at least as likely to
+> consume the one alert as it was before — the per-stage-latch mitigation
+> named there remains undone.
 
 `paperStartingProfile` now carries `tickIntervalMs: 15 * 60_000`, up from the
 60s `DEFAULT_TICK_INTERVAL_MS`, and `llmBudgetUsd: 50`. *(Superseded 2026-08-16

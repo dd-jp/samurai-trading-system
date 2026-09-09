@@ -36,7 +36,7 @@
  * once this lands. Recorded here rather than quietly diverging.
  */
 
-import type { LlmClient } from '../../pipeline/debate-engine/index.js';
+import type { LlmClient, SpendCap } from '../../pipeline/debate-engine/index.js';
 import type { AssetClass, Clock, Logger } from '../../shared/index.js';
 import { resolveMiSubject } from '../universe-pool/index.js';
 import type { ArchivedItem, MiArchiveStore, RawArchiveRow } from './archive/mi-archive-store.js';
@@ -64,6 +64,20 @@ export interface MiIngestAgentDeps {
   store: MarketIntelligenceStore;
   newsClient: AlpacaNewsClient;
   llmClient: LlmClient;
+  /**
+   * Read before `scoreItems`, the way `GrokAgent` reads its own (#1106).
+   * `llmClient` meters into `llm_spend` but enforces nothing by itself, so
+   * without this the only ceiling on the news-scoring path was
+   * `MiRefreshQueue`'s single pre-pass check — which covered the pair only
+   * while this agent happened to run first in the composition root's array.
+   *
+   * Relies on `SqliteSpendCap.check()` re-querying `SUM(cost_usd)` fresh on
+   * every call (no memo) against `spendSink.record`'s synchronous
+   * `better-sqlite3` insert: whichever of this agent and `GrokAgent` runs
+   * first sees its own write reflected in the OTHER's next `check()`, with no
+   * async gap either could race through.
+   */
+  spendCap: SpendCap;
   clock: Clock;
   logger?: Logger | undefined;
   /**
@@ -186,6 +200,29 @@ export class MiIngestAgent {
       .filter((article) => article.symbols.some((symbol) => symbols.includes(symbol)))
       .map((article) => ({ article, entity: miSubject }));
     if (pairs.length === 0) return false;
+
+    // Checked BEFORE the call — see `spendCap`'s doc on `MiIngestAgentDeps` for why.
+    const verdict = this.deps.spendCap.check();
+    if (!verdict.admitted) {
+      this.deps.logger?.log({
+        trace_id: trace_id ?? 'mi-ingest',
+        stage: 'market_intelligence',
+        event: 'mi_ingest_refused_spend_cap',
+        level: 'warn',
+        message:
+          `market intelligence: refusing to score ${pairs.length} item(s) for ${instrument} — ` +
+          `${verdict.reason ?? 'spend cap reached'}. The analysts will report NO DATA for this ` +
+          'window rather than an unscored or fabricated item, so the debate can tell "could not ' +
+          'afford to look" from "saw nothing".',
+        payload: {
+          asset_class,
+          instrument,
+          spent_usd: verdict.spent_usd,
+          budget_usd: verdict.budget_usd,
+        },
+      });
+      return false;
+    }
 
     const scores = await scoreItems(
       pairs.map(({ article, entity }) => ({

@@ -82,10 +82,15 @@ function billingRefresher(
 
 /**
  * Bills like `billingRefresher`, but reads the cap first and refuses on a
- * breach — the `GrokAgent` shape, which is the only MI agent that carries its
- * own `SpendCap`.
+ * breach — the shape BOTH `MiIngestAgent` and `GrokAgent` carry since #1106.
+ * Tags its own calls with `label` so a test composing two of these (one per
+ * "agent") can tell which one actually billed, not just how much was spent.
+ * Needed because the two agents are now indistinguishable in shape: composing
+ * two UNLABELLED instances would make a "reversed order" test a no-op, since
+ * swapping two identical calls changes nothing observable.
  */
-function capReadingRefresher(
+function labeledCapReadingRefresher(
+  label: string,
   cap: SpendCap & { spentUsd: number },
   costUsd: number,
   calls: string[],
@@ -93,7 +98,7 @@ function capReadingRefresher(
   return {
     async refresh(_trace_id, instrument) {
       if (!cap.check().admitted) return false;
-      calls.push(instrument);
+      calls.push(`${label}:${instrument}`);
       await Promise.resolve();
       cap.spentUsd += costUsd;
       return true;
@@ -186,55 +191,61 @@ describe('MiRefreshQueue (#1085)', () => {
     expect(cap.spentUsd).toBe(2);
   });
 
-  it('holds the pair inside the budget only while the agent that reads no cap runs FIRST', async () => {
-    // The queue's ONE check covers a WHOLE composed pass, so within a pass the
-    // agents' order is load-bearing and the root's `[miIngestAgent, grokAgent]`
-    // is the safe one. `MiIngestAgent` bills through the shared `LlmClient` and
-    // reads no cap; `GrokAgent` re-reads the cap itself before it calls. Ingest
-    // first means Grok's own read sees the POST-ingest total and refuses. This
-    // is `A` (bills, reads nothing) then `B` (reads, refuses, bills).
+  /**
+   * Table over both orderings rather than two near-duplicate `it`s (round-2
+   * review, #1106): a fixed pair of labels asserting "first bills, second
+   * refuses" would let the SAME assertion pass for either row regardless of
+   * which label the fixture put first, so each row names its own expected
+   * `calls` entry — the property under test is "the FIRST-COMPOSED side
+   * bills, whichever agent that is", not "ingest bills" or "grok bills".
+   */
+  it.each([
+    { first: 'ingest', second: 'grok', instrument: 'TSLA' },
+    { first: 'grok', second: 'ingest', instrument: 'AAPL' },
+  ] as const)('holds the pair inside the budget with $first composed first, now that both self-gate (#1106)', async ({
+    first,
+    second,
+    instrument,
+  }) => {
+    // Before #1106, `MiIngestAgent` billed through the shared `LlmClient`
+    // and read no cap of its own, so ingest-first was the only safe
+    // ordering at the composition root. Now both agents read the cap
+    // before they call (the `labeledCapReadingRefresher` shape on both
+    // sides), so the SAME pair spends the same total whichever one runs
+    // first: the first call is admitted and bills, the second reads the
+    // post-bill total and refuses — which one that is DOES flip with
+    // order, and `labeledCapReadingRefresher`'s label is what makes that
+    // flip observable rather than the two composed calls being
+    // indistinguishable.
     const cap = meteredCap(1);
     const calls: string[] = [];
     const queue = new MiRefreshQueue({
       spendCap: cap,
-      refresher: composePair(billingRefresher(cap, 1, calls), capReadingRefresher(cap, 1, calls)),
+      refresher: composePair(
+        labeledCapReadingRefresher(first, cap, 1, calls),
+        labeledCapReadingRefresher(second, cap, 1, calls),
+      ),
     });
 
-    await queue.refresh('tick-1', 'TSLA', 'stocks');
+    await queue.refresh('tick-1', instrument, 'stocks');
     await settle();
 
-    // On SPEND, not on which names ran: the invariant is the budget, and an
-    // index assertion would still pass for a pair that both called and both
-    // billed. EXACTLY the budget, not "at most" — `<= 1` would also pass for a
+    // The FIRST-composed side bills, the second reads the post-bill total
+    // and refuses — pinned by label, not just by count, so this cannot
+    // pass for a pair that billed twice or for the wrong side billing
+    // once.
+    expect(calls).toEqual([`${first}:${instrument}`]);
+    // EXACTLY the budget, not "at most" — `<= 1` would also pass for a
     // pass that spent nothing at all, which is what a queue refusing
     // everything looks like.
     expect(cap.spentUsd).toBe(1);
   });
 
-  it('and overshoots when that order is reversed, which is why the order is an invariant', async () => {
-    // Same queue, same single check, same budget — only the composition order
-    // changes. `B` reads a total no one has moved yet and admits itself, then
-    // `A` bills under a check made before either ran. Exactly what AC2 forbids,
-    // reachable today by editing one array at the composition root.
-    const cap = meteredCap(1);
-    const calls: string[] = [];
-    const queue = new MiRefreshQueue({
-      spendCap: cap,
-      refresher: composePair(capReadingRefresher(cap, 1, calls), billingRefresher(cap, 1, calls)),
-    });
-
-    await queue.refresh('tick-1', 'TSLA', 'stocks');
-    await settle();
-
-    // Exactly double the budget: both agents called, neither stopped by a check
-    // the pair fails. `> 1` would leave the size of the breach unpinned.
-    expect(cap.spentUsd).toBe(2);
-  });
-
   it('refuses a queued refresh once the cap is reached, logging the first then every Nth', async () => {
-    // The news-scoring path (`MiIngestAgent` -> `scoreItems` -> the shared
-    // `LlmClient`) meters into `llm_spend` and reads no cap at all, so this
-    // check is the first ceiling it has ever had.
+    // The queue's own `#dispatch` check, exercised directly against a
+    // generic non-gating refresher — independent of whether the composed
+    // agent behind it also self-gates, which both `MiIngestAgent` and
+    // `GrokAgent` do as of #1106.
     const cap = meteredCap(1);
     cap.spentUsd = 1;
     const calls: string[] = [];

@@ -36,18 +36,14 @@
  *
  * ## The cap check here is not a duplicate
  *
- * `GrokAgent` reads the cap itself. `MiIngestAgent` does NOT — it scores
- * through the shared `LlmClient`, which METERS into `llm_spend` but is gated
- * by nothing. So the check below is the only ceiling the news-scoring path
- * has ever had, and a run at its budget now refuses MI scoring instead of
- * spending past it. That is a behaviour change and it is the intended one;
- * ADR-0008's 2026-09-04 amendment records it.
- *
- * ONE check covers a WHOLE composed pass, which makes the agents' ORDER at the
- * composition root load-bearing — ingest (no cap of its own) must run before
- * Grok (which re-reads the cap), or both spend under a single pre-pass check.
- * See the invariant at `production.ts`'s `composeMarketIntelligence` call;
- * #1106 removes it by giving `MiIngestAgent` its own cap.
+ * `GrokAgent` reads the cap itself before its own call, and `MiIngestAgent`
+ * now does too (#1106) — before, it scored through the shared `LlmClient`,
+ * which METERS into `llm_spend` but was gated by nothing, so the check below
+ * was the only ceiling the news-scoring path had, and only while ingest
+ * happened to run first in the composition root's array. With both agents
+ * self-gating, that array order is no longer load-bearing, and the check
+ * below is a cheap outer bound on the whole composed pass rather than the
+ * only ceiling either agent has.
  *
  * ## Cost of the choice
  *
