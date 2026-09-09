@@ -116,6 +116,32 @@ describe('MiIngestAgent', () => {
     expect(context.news[0]?.sentiment).toBe(1);
   });
 
+  // #1392 review round 1 self-review: `articles` and `items` on the
+  // `ingested scored news items` log record must stay distinct — `articles`
+  // is every fetched/archived row (pre-symbol-filter, matching the old
+  // `fresh.length`), `items` is only what got scored. Regressed once this
+  // round when `articles` was briefly wired to `unscored.length`, which is
+  // always equal to `items.length` (both are 1:1 maps of the same `pairs`),
+  // collapsing the field into a duplicate.
+  it('logs a wider article count than item count when the fetch returns an article for another instrument', async () => {
+    const logger = recordingLogger();
+    const { agent } = build(
+      [
+        article({ id: '1001', symbols: ['AAPL'] }),
+        article({ id: '1002', symbols: ['TSLA'], headline: 'Tesla recalls vehicles' }),
+      ],
+      1,
+      { logger },
+    );
+
+    await agent.refresh('t', 'AAPL', 'stocks');
+
+    const entry = logger.entries.find(
+      (e) => e.message === 'market intelligence: ingested scored news items',
+    );
+    expect(entry?.payload).toMatchObject({ articles: 2, items: 1 });
+  });
+
   /**
    * The whole point of map #552, asserted end to end against the real analyst.
    *

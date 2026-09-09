@@ -302,7 +302,7 @@ export class MiIngestAgent {
         // `logger ?? { log: () => {} }` idiom `debate-adapter.ts` already
         // uses for the same reason.
         logger: this.deps.logger ?? { log: () => {} },
-        ...(trace_id === undefined ? {} : { trace_id }),
+        trace_id,
       },
     );
 
@@ -362,7 +362,11 @@ export class MiIngestAgent {
         // ETP row — the operator-visible evidence that the resolution step
         // ran (#914/#960).
         mi_subject: miSubject,
-        articles: unscored.length,
+        // All fetched articles, pre-symbol-filter — matches this field's
+        // pre-#1392 semantics (was `fresh.length`). `unscored.length` would
+        // always equal `items.length` here (both are 1:1 maps of `pairs`),
+        // collapsing this into a degenerate duplicate of `items` below.
+        articles: newRaws.length,
         items: archivedItems.length,
       },
     });
