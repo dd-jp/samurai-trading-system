@@ -1,6 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import BetterSqlite3 from 'better-sqlite3';
+// Leaf import, not `../index.js`: `stripLineComments`'s only consumers are this
+// test and `contracts/boundary.test.ts`, neither a real cross-module
+// production dependency the barrel exists to track — same reasoning as
+// `sqlite-decision-record-stores.test.ts`'s `../decision-records.js` import.
+import { stripLineComments } from '../strip-comments.js';
 import { MIGRATIONS_DIR, runMigrations } from './migrate.js';
 
 /**
@@ -54,16 +59,6 @@ interface IndexInfo {
 function extractSqlBlocks(specText: string): string[] {
   const blockRe = /```sql\n([\s\S]*?)```/g;
   return Array.from(specText.matchAll(blockRe), (m) => m[1]);
-}
-
-function stripLineComments(sql: string): string {
-  return sql
-    .split('\n')
-    .map((line) => {
-      const idx = line.indexOf('--');
-      return idx === -1 ? line : line.slice(0, idx);
-    })
-    .join('\n');
 }
 
 /**

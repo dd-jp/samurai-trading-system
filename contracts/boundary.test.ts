@@ -13,8 +13,16 @@
  * review.
  */
 
-import { readdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+// The one contracts/ -> server/ import in this directory. Safe only because
+// it's in a `.test.ts` file: `sourceFiles()` below excludes test files from
+// the scan this suite runs, and `tsconfig.build.json` excludes `**/*.test.ts`
+// from what ships — neither mechanism polices what a test file itself
+// imports, so this line relies on staying a test file, not on being checked.
+import { stripComments } from '../server/shared/strip-comments.js';
 
 const CONTRACTS_DIR = fileURLToPath(new URL('.', import.meta.url));
 
@@ -50,8 +58,74 @@ function sourceFiles(): string[] {
     .sort();
 }
 
-function specifiersOf(file: string): string[] {
-  const text = readFileSync(`${CONTRACTS_DIR}${file}`, 'utf8');
+/**
+ * Lines inside a block comment whose `/*` opened at the start of its own
+ * line (only whitespace before it) — real commented-out code (`export
+ * interface Old {}`) or unprefixed prose can legitimately start a line with
+ * `import`/`export` there, and that's not what `assertNoVanishedImportLine`
+ * exists to catch. A `/*` that follows other code on the same line (`const
+ * re = /a\/*b/;`) never gets this protection — that shape is exactly the
+ * regex-literal misparse the check exists to catch. Line-based rather than
+ * quote-aware like `stripComments` itself: cheaper, and the gap it leaves
+ * (treating a `/*`-shaped token at line start inside a multi-line string as
+ * a real comment opener) can't actually make an import vanish, since
+ * `stripComments` never touches template-literal content in the first
+ * place.
+ */
+function lineStartBlockCommentInteriors(raw: string): Set<number> {
+  const lines = raw.split('\n');
+  const interior = new Set<number>();
+  let openedAt = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (openedAt === -1) {
+      if (/^\s*\/\*/.test(lines[i]) && !lines[i].includes('*/')) openedAt = i;
+      continue;
+    }
+    interior.add(i);
+    if (lines[i].includes('*/')) openedAt = -1;
+  }
+  return interior;
+}
+
+/**
+ * `stripComments` can mistake a regex literal for a comment opener and, when
+ * a later real comment in the same file supplies the `*\/` it's missing,
+ * silently swallow everything between — including a real import — with no
+ * throw (see its doc comment). That failure mode is invisible to any check
+ * on `stripComments`'s output alone, so this checks the property
+ * `specifiersOf` actually depends on: a static `import`/`export` starting
+ * its own line before stripping must still start that line after. It does
+ * not cover `await import(...)` (never at line start — always inside an
+ * expression) or a `from` clause after other code on the same physical
+ * line; those would need `stripComments` to report which comment swallowed
+ * what, not just a stripped string. Unreachable today — no contracts/*.ts
+ * file has a regex literal, a dynamic import, or a static import/export
+ * that isn't its own line — but a real gap in this check, not a false one.
+ */
+function assertNoVanishedImportLine(raw: string, stripped: string, file: string): void {
+  const importOrExport = /^\s*(?:import|export)\b/;
+  const rawLines = raw.split('\n');
+  const strippedLines = stripped.split('\n');
+  const protectedLines = lineStartBlockCommentInteriors(raw);
+  for (let i = 0; i < rawLines.length; i++) {
+    if (protectedLines.has(i)) continue;
+    if (importOrExport.test(rawLines[i]) && !importOrExport.test(strippedLines[i] ?? '')) {
+      throw new Error(
+        `${file}:${i + 1}: looked like an import/export before stripping comments and ` +
+          `doesn't after — stripComments likely misread a regex literal as a comment opener. ` +
+          `Raw line: ${JSON.stringify(rawLines[i])}`,
+      );
+    }
+  }
+}
+
+// Run through `stripComments` first — a doc comment describing an import
+// (`contracts/pipeline.ts`'s module doc names `AssetClass`'s import in
+// prose, exactly the shape this must not misread) must not read as one.
+function specifiersOf(file: string, dir: string = CONTRACTS_DIR): string[] {
+  const raw = readFileSync(join(dir, file), 'utf8');
+  const text = stripComments(raw);
+  assertNoVanishedImportLine(raw, text, file);
   return SPECIFIER_PATTERNS.flatMap((pattern) =>
     [...text.matchAll(pattern)].map((match) => match[1] as string),
   );
@@ -110,5 +184,91 @@ describe('contracts boundary', () => {
           'boundary and keep the Date-carrying shape server-side.',
       ).toEqual([]);
     }
+  });
+});
+
+describe('specifiersOf strips comments before matching (#1398)', () => {
+  const fixturesDir = mkdtempSync(join(tmpdir(), 'boundary-fixtures-'));
+
+  afterAll(() => {
+    rmSync(fixturesDir, { recursive: true, force: true });
+  });
+
+  it('a specifier that only appears inside a comment is not treated as an import', () => {
+    const file = 'comment-only-import.ts';
+    writeFileSync(
+      join(fixturesDir, file),
+      [
+        '/**',
+        " * Mirrors the shape `import type { X } from '../server/shared/index.js'`",
+        ' * pulls in server-side.',
+        ' */',
+        'export interface Placeholder {',
+        "  // import { X } from '../server/shared/index.js';",
+        "  // import '../server/shared/index.js';",
+        "  // await import('../server/shared/index.js');",
+        '  kind: string;',
+        '}',
+        '',
+      ].join('\n'),
+    );
+    const specifiers = specifiersOf(file, fixturesDir);
+    expect(specifiers).toEqual([]);
+    // Same predicate `it.each(sourceFiles())('%s imports nothing outside
+    // contracts/'` uses above — proves a commented-out import can't trip it.
+    expect(specifiers.some((s) => s.startsWith('../'))).toBe(false);
+  });
+
+  it('a real import escaping contracts/ is still detected', () => {
+    const file = 'real-import.ts';
+    writeFileSync(join(fixturesDir, file), "import type { X } from '../server/shared/index.js';\n");
+    const specifiers = specifiersOf(file, fixturesDir);
+    expect(specifiers).toEqual(['../server/shared/index.js']);
+    // Same predicate, inverted — proves stripComments doesn't also swallow a
+    // real escaping import.
+    expect(specifiers.some((s) => s.startsWith('../'))).toBe(true);
+  });
+
+  it('throws instead of silently dropping an import when a regex literal opens a phantom comment that a later real comment closes', () => {
+    const file = 'regex-literal-swallows-import.ts';
+    writeFileSync(
+      join(fixturesDir, file),
+      [
+        'const re = /a\\/*b/;',
+        "import type { Bad } from '../server/shared/index.js';",
+        '/**',
+        ' * a real doc comment further down the file',
+        ' */',
+        'export interface X {',
+        '  kind: string;',
+        '}',
+        '',
+      ].join('\n'),
+    );
+    expect(() => specifiersOf(file, fixturesDir)).toThrow(/vanished|import.*after/i);
+  });
+
+  it('does not throw on a real commented-out import inside a line-start block comment', () => {
+    const file = 'commented-out-import.ts';
+    writeFileSync(
+      join(fixturesDir, file),
+      [
+        '/*',
+        "import { X } from '../server/shared/index.js';",
+        '*/',
+        'export const kind = 1;',
+        '',
+      ].join('\n'),
+    );
+    expect(() => specifiersOf(file, fixturesDir)).not.toThrow();
+  });
+
+  it('does not throw on real commented-out code that starts a line with export', () => {
+    const file = 'commented-out-export.ts';
+    writeFileSync(
+      join(fixturesDir, file),
+      ['/*', 'export interface Old {}', '*/', 'export const kind = 1;', ''].join('\n'),
+    );
+    expect(() => specifiersOf(file, fixturesDir)).not.toThrow();
   });
 });
