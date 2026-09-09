@@ -127,7 +127,7 @@ Added by [Wayfinder: Devil's Advocate](https://github.com/dd-jp/samurai-trading-
 18. As an operator, I want to know whether Polygon is reachable, so that a dead market-data key is visible as itself rather than as an inexplicably quiet pipeline.
 19. As an operator, I want locally-metered LLM spend over 24h/7d/all-time, so that I can see the ADR-0008 budget being consumed while there is still time to act on it.
 19a. As an operator, I want all-time spend drawn as a **burn meter against the cap the enforcer applied**, carried on the wire rather than copied into the client ([#1140](https://github.com/dd-jp/samurai-trading-system/issues/1140)), so that "how much runway is left" is readable without arithmetic.
-20. As an operator, I want per-*decision* cost and LLM latency at p50/p95, so that I can answer "what does one debate cost me, and is round 3 earning its latency?" rather than only "what did today cost".
+20. As an operator, I want per-*decision* cost and LLM latency at p50/p95, so that I can answer "what does one debate cost me, and is round 3 earning its latency?" rather than only "what did today cost". *(Amendment (#1178): dropped from the screen in v3, deliberately — see "Dropped from the screen in v3" below. Still on the wire (`llm_spend.*.per_debate`) and reachable by `curl`; this story is not implemented and re-adding it is a card on Review, not a wire change.)*
 
 ### Pipeline lanes (v3 Live tab — supersedes v2's rooms theater)
 

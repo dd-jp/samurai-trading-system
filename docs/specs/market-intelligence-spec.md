@@ -115,7 +115,7 @@ The old reasoning for leaving the stage enabled — exercise the caller in a rea
 
 ## Solution
 
-The Market Intelligence layer runs three specialized agents that operate continuously:
+The `agent_id` union (`server/providers/market-intelligence/types.ts:32`) names five sources — DeepResearch, Grok, Alpaca News, Polymarket, GDELT-GKG — but the union is a type-level allowance, not proof of a running producer (the AS-BUILT NARROWING table above is the source of truth for that). Four are wired at the orchestrator's composition root, and three of the four are conditionally constructed rather than unconditional: **Grok** is `undefined` without `sentimentCredentials` (`server/apps/orchestrator/production.ts:1913`); **Alpaca News** (built as `MiIngestAgent`, tagged `alpaca-news`) is `undefined` without both an archive and scoring credentials, or if `AlpacaNewsClient` construction throws (`server/apps/orchestrator/production.ts:2540-2544`); **GDELT-GKG** — both `gdeltIngestAgent` and `gdeltScoringPass` — is `undefined` without `config.miArchive` (`server/apps/orchestrator/production.ts:2034-2059`), though the real entrypoint always supplies one (`server/apps/orchestrator/index.ts:653`), so this gate bites callers that omit it, such as the keyless offline smoke run. **Polymarket** is the one unconditional construction (`server/apps/orchestrator/production.ts:2088`). **DeepResearch has no implementation** — the union member exists, nothing produces it. **WorldMonitor** is adopted (ADR-0002) but is not an `agent_id` member at all: its live item-producer wiring is parked on cost (table above), and its only contribution is the CII soft signal, and that is a seam, parked by default: the composition root wires `ParkedCiiScoreProvider` (`getCii()` returns `null`) unless a real provider is injected (`server/apps/orchestrator/console-channels.ts:880-884`, `server/apps/orchestrator/production.ts:1595-1596`), so WorldMonitor produces neither an `IntelligenceItem` stream nor a live CII value out of the box.
 
 **DeepResearch Agent** — Professional news aggregation (Bloomberg, Reuters, SEC filings, earnings reports). High credibility, regulatory compliance, fact-checked sources.
 
@@ -126,7 +126,7 @@ The Market Intelligence layer runs three specialized agents that operate continu
 **Conflict Resolution:** the prior 2-agent DeepResearch-vs-Grok priority rule is **replaced wholesale** by an **N-source convergence engine** (per ADR-0002 §7), generalized to detect agreement, disagreement, and absence across all three agents rather than a binary DeepResearch/Grok override. See **Module: Convergence Engine** below.
 
 **Key architectural decisions:**
-- **Three-agent specialization** — each agent has domain expertise and data sources optimized for its purpose; WorldMonitor adds geopolitical/regional coverage the other two don't provide
+- **Three-agent specialization** — ORIGINAL design prose, superseded on source count by the Solution section and the AS-BUILT NARROWING table above (four sources wired, three of them gated; WorldMonitor is not an `agent_id` producer). Kept for the specialization rationale it still states: each agent has domain expertise and data sources optimized for its purpose; WorldMonitor adds geopolitical/regional coverage the other two don't provide
 - **N-source convergence, not static priority** — confidence scales with how many independent source types agree; absence of expected corroboration (a market or prediction move with no news) is itself a signal, which a binary priority rule cannot express
 - **Real-time continuous operation** — agents run in background, not on-demand
 - **Structured data output** — all intelligence is normalized to consistent schemas before delivery to analysts
@@ -199,7 +199,7 @@ The Market Intelligence layer runs three specialized agents that operate continu
 ### Module: Market Intelligence Core
 
 **Responsibilities**
-- Orchestrate DeepResearch, Grok, and WorldMonitor agents (start, stop, monitor)
+- Orchestrate Grok, Alpaca News, Polymarket, and GDELT-GKG agents (start, stop, monitor); DeepResearch has no implementation and WorldMonitor is not yet wired to an item producer (see Solution above)
 - Deliver structured intelligence to analysts (pull/push interfaces)
 - Invoke the Convergence Engine to detect signals when agents' outputs converge, diverge, or a source is unexpectedly silent
 - Handle analyst delivery failures
@@ -210,7 +210,7 @@ The Market Intelligence layer runs three specialized agents that operate continu
 ```typescript
 // Upstream contract (what agents produce)
 interface AgentIntelligence {
-  agent_id: 'deepresearch' | 'grok' | 'worldmonitor';   // widened per ADR-0002 §5
+  agent_id: 'deepresearch' | 'grok' | 'alpaca-news' | 'polymarket' | 'gdelt-gkg';   // server/providers/market-intelligence/types.ts:32; `worldmonitor` was never a member — WorldMonitor's live wiring is parked (see WorldMonitor Agent below) and it feeds the CII soft signal separately, not this union
   timestamp: Date;
   asset_class: 'crypto' | 'stocks';
   items: IntelligenceItem[];
