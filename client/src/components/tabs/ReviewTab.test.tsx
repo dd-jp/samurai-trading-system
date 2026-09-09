@@ -62,6 +62,21 @@ describe('summary cards', () => {
     expect(within(benchmarks).getByText(/secondary context, not the control/)).toBeTruthy();
   });
 
+  /**
+   * #1180: `basis` is the declared book in the ACCOUNT's currency now, not GBP,
+   * and the sigil is the only thing on screen that says which. A `£` here would
+   * print a USD figure behind a pound sign — the same denomination mismatch the
+   * ticket fixed at the sizing inlet, re-introduced at the one place an operator
+   * reads the denominator. The absence assertion is the half that fails on a
+   * revert: `formatUsd` gives the digits either way.
+   */
+  it('renders the arm-comparison basis in the account currency, not GBP (#1180)', () => {
+    renderReview(makeSnapshot());
+    const arms = screen.getByRole('region', { name: 'Arm comparison' });
+    expect(within(arms).getByText(/basis \$1,000\.00/)).toBeTruthy();
+    expect(within(arms).queryByText(/basis £/)).toBeNull();
+  });
+
   it('states the trade floor instead of a verdict when either arm is below it', () => {
     const row = makeArmComparison();
     row.live = { ...row.live, trade_count: 2 };

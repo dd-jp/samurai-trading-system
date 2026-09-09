@@ -38,7 +38,7 @@ Key architectural decisions:
 
 The **Rail design canvas** locked by David on 2026-09-04 (design session; three directions drawn, two further variations of the Rail, one comment fixed, then locked) is the reference for layout, the rail's contents, the lane matrix, the drawers, type sizes and the restrained motif. Its decisions are recorded in [ADR-0021](../adr/0021-dashboard-v3-rail-layout.md) and on map [#1090](https://github.com/dd-jp/samurai-trading-system/issues/1090). Two caveats for whoever implements against it:
 
-- The canvas drew a **£30 daily-loss stop, a three-position cap, a flat-by-close countdown and GBP figures**. None of those are on `DashboardSnapshot`; the page renders only what the wire carries, in the wire's own denomination (USD, except the arm comparison's GBP `basis`, labelled as such). **This spec's "Layout" section wins over the canvas wherever they differ.**
+- The canvas drew a **£30 daily-loss stop, a three-position cap, a flat-by-close countdown and GBP figures**. None of those are on `DashboardSnapshot`; the page renders only what the wire carries, in the wire's own denomination — USD throughout, the arm comparison's `basis` included and labelled `$` since [#1180](https://github.com/dd-jp/samurai-trading-system/issues/1180) converted it out of GBP into the account's currency, matching the `realized_pnl_net` beside it. **This spec's "Layout" section wins over the canvas wherever they differ.**
 - `docs/prototypes/dashboard-v2-mission-control.html` is the **v2** record and is no longer a source of truth for anything on screen.
 
 ## Information Inventory

@@ -1179,6 +1179,72 @@ describe('buildProductionComponents', () => {
     },
   );
 
+  /**
+   * #1180: `sizing_capital_ceiling_resolved` is the run's ONLY record of which
+   * rate produced the ceiling every position is sized against, and it is what
+   * makes a constant defensible where an env var was refused — a soak's log is
+   * where the pairing is checked. Nothing asserted it: the whole emitting block
+   * could be deleted and every other gate stayed green.
+   *
+   * Both cases are here because either alone is satisfiable by a literal.
+   * `derived_by_conversion: config.capitalCeilingUsdPerGbp !== undefined` reads
+   * `true` under a hard-coded `true` if only the paper branch is pinned, and a
+   * live ceiling stamped with a rate it was never converted at is precisely the
+   * misattribution the field exists to prevent.
+   *
+   * The expectations come off `config` — the object actually handed to the
+   * composition root — not off a second `paperStartingProfile('paper')` call,
+   * for the reason the #1112 AC3 test below spells out: re-deriving both sides
+   * from one source makes the assertion hold for any ceiling the running config
+   * happens to carry.
+   */
+  it('logs the resolved sizing ceiling with the rate that produced it (#1180)', () => {
+    const logger = recordingLogger();
+    const profile = paperStartingProfile('paper');
+    // Spread conditionally under `exactOptionalPropertyTypes`: a profile that
+    // stopped declaring either field leaves it ABSENT here rather than
+    // explicitly `undefined`, and the assertions then fail on the real shape.
+    const config = stubConfig(db, {
+      logger,
+      ...(profile.capitalCeilingUsd === undefined
+        ? {}
+        : { capitalCeilingUsd: profile.capitalCeilingUsd }),
+      ...(profile.capitalCeilingUsdPerGbp === undefined
+        ? {}
+        : { capitalCeilingUsdPerGbp: profile.capitalCeilingUsdPerGbp }),
+    });
+
+    buildProductionComponents(config);
+
+    const entry = logger.entries.find((line) => line.event === 'sizing_capital_ceiling_resolved');
+    expect(entry).toBeDefined();
+    expect(entry?.message).toContain('USD/GBP');
+    expect(entry?.payload).toEqual({
+      capital_ceiling_usd: config.capitalCeilingUsd,
+      derived_by_conversion: true,
+      usd_per_gbp: config.capitalCeilingUsdPerGbp,
+      usd_per_gbp_provenance: expect.stringContaining('SIZING_USD_PER_GBP'),
+    });
+  });
+
+  it('logs a ceiling declared in the account currency as derived by nothing (#1180)', () => {
+    const logger = recordingLogger();
+    const config = stubConfig(db, { logger, capitalCeilingUsd: 2_000 });
+
+    buildProductionComponents(config);
+
+    const entry = logger.entries.find((line) => line.event === 'sizing_capital_ceiling_resolved');
+    expect(entry).toBeDefined();
+    expect(entry?.message).toContain('no FX conversion applied');
+    // `toEqual`, not `toMatchObject`: the absence of a rate is the assertion.
+    // A rate reported against a ceiling nobody converted would attribute a
+    // number to arithmetic that never ran.
+    expect(entry?.payload).toEqual({
+      capital_ceiling_usd: 2_000,
+      derived_by_conversion: false,
+    });
+  });
+
   describe('xMaxSearchResults (#1161)', () => {
     const savedEnv = process.env.SAMURAI_X_MAX_RESULTS;
 

@@ -90,7 +90,10 @@ describe('formatArmComparison (#753 AC4/AC5)', () => {
 
     expect(text).toContain(FROM.toISOString());
     expect(text).toContain(TO.toISOString());
-    expect(text).toContain('the same denominator for both arms');
+    // #1180: the sigil, not just the figure — `basis` is the declared book in
+    // the account's currency now, and a `£` would print a USD number behind a
+    // pound sign.
+    expect(text).toContain('basis:  $1000.00 (the same denominator for both arms)');
   });
 
   /**

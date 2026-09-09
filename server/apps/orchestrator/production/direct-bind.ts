@@ -209,10 +209,17 @@ export interface TraderStepDeps extends BreakerStateDeps {
    * Undefined on every backtest run and in most tests; defined on paper runs
    * too since #1112, at `LIVE_BOOK_SIZING_USD` (paper-profile.ts — the GBP
    * book converted, #1180) and on live runs at
-   * `SAMURAI_LIVE_MAX_CAPITAL_USD`. Either way it is denominated in the same
-   * currency as the `portfolio.equity` it is clamped against, which is the
-   * whole of #1180. Absent means "no ceiling declared", never "a ceiling of
-   * zero". See `sizingEquity`.
+   * `SAMURAI_LIVE_MAX_CAPITAL_USD`.
+   *
+   * On paper that conversion is what makes the ceiling commensurable with the
+   * `portfolio.equity` it is clamped against — the whole of #1180. On live it
+   * is NOT enforced: the value is whatever the operator typed, and nothing
+   * checks its currency. The name asserts USD and `live-profile.ts`'s docblock
+   * states the obligation the operator carries because of it; treat that as a
+   * convention this type documents, not an invariant it guarantees.
+   *
+   * Absent means "no ceiling declared", never "a ceiling of zero". See
+   * `sizingEquity`.
    */
   capitalCeilingUsd?: number;
   /**

@@ -48,11 +48,20 @@ export const DEFAULT_ARM_COMPARISON_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
  * costs ~5.8% of the book per year, which pro-rates over this module's 30-day
  * window to £58 × 30/365 = £4.77, or **0.48 pp of the £1,000 book**. The basis
  * the cycle divides by is that same book in the account's currency since #1180
- * (£1,000 × 1.27), and the bill converts at the same rate, so the ratio — and
- * therefore this threshold — is unchanged by the conversion. Rounded to
- * 0.5 pp, which is the line: a control arm that is ahead by less than what the
- * debate layer costs to run has not yet shown the layer is not worth its bill,
- * and a control ahead by more has.
+ * (£1,000 × `SIZING_USD_PER_GBP`), and the bill converts at the same rate, so
+ * the RATIO this constant expresses is rate-invariant and #1180 owed it no
+ * retune. Rounded to 0.5 pp, which is the line: a control arm that is ahead by
+ * less than what the debate layer costs to run has not yet shown the layer is
+ * not worth its bill, and a control ahead by more has.
+ *
+ * **What #1180 did move: the firing point.** `min_return_gap_pct` is absolute,
+ * and it is compared against `return_pct` — `realized_pnl_net`, USD as the
+ * broker reports it, over `basis`. Before the conversion that was a USD
+ * numerator over a GBP book, so 0.005 fired at a $5.00 pnl gap while the 30
+ * days of bill it is anchored to cost ~$6.06; after it, the same 0.005 fires at
+ * $6.35, which clears the bill. The firing point in USD-pnl terms rose by the
+ * conversion rate. That is the threshold becoming commensurable with its own
+ * derivation — the alert used to fire below its anchor — not a desensitisation.
  *
  * Note what this is NOT anchored to. CLAUDE.md's "~0.55 pp" is percentage points
  * of *signal accuracy* at £1,000 of position notional — a different quantity in
