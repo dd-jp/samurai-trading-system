@@ -321,6 +321,8 @@ any case. No finding. The residual exposure the ADR names — the flatten's bene
 latency inside the five-minute window, and `residual-protection-sweep.ts:228` only re-arms protective
 legs rather than re-submitting — is stated by ADR-0014 as accepted, not missed.
 
+> **Pointer — 2026-09-09 ([#1463](https://github.com/dd-jp/samurai-trading-system/issues/1463)):** the "pre-existing and correct" reading above is ADR-0014's 2026-08-19 "What this does NOT claim" paragraph, bannered superseded by [#1388](https://github.com/dd-jp/samurai-trading-system/issues/1388) (PR [#1462](https://github.com/dd-jp/samurai-trading-system/pull/1462)), which exempts a `mandatory_flatten` intent from gate 4 (`market_closed`). Left in place, unedited, as the record of what this report found on 2026-09-04.
+
 ### (i) Code is wrong
 
 **P3 — FIXED 2026-09-05. Every Polymarket item was invisible to both analysts that read MI content.**
