@@ -59,19 +59,56 @@ function sourceFiles(): string[] {
 }
 
 /**
+ * Lines inside a block comment whose `/*` opened at the start of its own
+ * line (only whitespace before it) — real commented-out code (`export
+ * interface Old {}`) or unprefixed prose can legitimately start a line with
+ * `import`/`export` there, and that's not what `assertNoVanishedImportLine`
+ * exists to catch. A `/*` that follows other code on the same line (`const
+ * re = /a\/*b/;`) never gets this protection — that shape is exactly the
+ * regex-literal misparse the check exists to catch. Line-based rather than
+ * quote-aware like `stripComments` itself: cheaper, and the gap it leaves
+ * (treating a `/*`-shaped token at line start inside a multi-line string as
+ * a real comment opener) can't actually make an import vanish, since
+ * `stripComments` never touches template-literal content in the first
+ * place.
+ */
+function lineStartBlockCommentInteriors(raw: string): Set<number> {
+  const lines = raw.split('\n');
+  const interior = new Set<number>();
+  let openedAt = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (openedAt === -1) {
+      if (/^\s*\/\*/.test(lines[i]) && !lines[i].includes('*/')) openedAt = i;
+      continue;
+    }
+    interior.add(i);
+    if (lines[i].includes('*/')) openedAt = -1;
+  }
+  return interior;
+}
+
+/**
  * `stripComments` can mistake a regex literal for a comment opener and, when
  * a later real comment in the same file supplies the `*\/` it's missing,
  * silently swallow everything between — including a real import — with no
  * throw (see its doc comment). That failure mode is invisible to any check
- * on `stripComments`'s output alone, so verify the one property
- * `specifiersOf` actually depends on directly: no line that opened with
- * `import`/`export` before stripping may stop doing so after.
+ * on `stripComments`'s output alone, so this checks the property
+ * `specifiersOf` actually depends on: a static `import`/`export` starting
+ * its own line before stripping must still start that line after. It does
+ * not cover `await import(...)` (never at line start — always inside an
+ * expression) or a `from` clause after other code on the same physical
+ * line; those would need `stripComments` to report which comment swallowed
+ * what, not just a stripped string. Unreachable today — no contracts/*.ts
+ * file has a regex literal, a dynamic import, or a static import/export
+ * that isn't its own line — but a real gap in this check, not a false one.
  */
 function assertNoVanishedImportLine(raw: string, stripped: string, file: string): void {
   const importOrExport = /^\s*(?:import|export)\b/;
   const rawLines = raw.split('\n');
   const strippedLines = stripped.split('\n');
+  const protectedLines = lineStartBlockCommentInteriors(raw);
   for (let i = 0; i < rawLines.length; i++) {
+    if (protectedLines.has(i)) continue;
     if (importOrExport.test(rawLines[i]) && !importOrExport.test(strippedLines[i] ?? '')) {
       throw new Error(
         `${file}:${i + 1}: looked like an import/export before stripping comments and ` +
@@ -209,5 +246,29 @@ describe('specifiersOf strips comments before matching (#1398)', () => {
       ].join('\n'),
     );
     expect(() => specifiersOf(file, fixturesDir)).toThrow(/vanished|import.*after/i);
+  });
+
+  it('does not throw on a real commented-out import inside a line-start block comment', () => {
+    const file = 'commented-out-import.ts';
+    writeFileSync(
+      join(fixturesDir, file),
+      [
+        '/*',
+        "import { X } from '../server/shared/index.js';",
+        '*/',
+        'export const kind = 1;',
+        '',
+      ].join('\n'),
+    );
+    expect(() => specifiersOf(file, fixturesDir)).not.toThrow();
+  });
+
+  it('does not throw on real commented-out code that starts a line with export', () => {
+    const file = 'commented-out-export.ts';
+    writeFileSync(
+      join(fixturesDir, file),
+      ['/*', 'export interface Old {}', '*/', 'export const kind = 1;', ''].join('\n'),
+    );
+    expect(() => specifiersOf(file, fixturesDir)).not.toThrow();
   });
 });
