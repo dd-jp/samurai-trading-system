@@ -66,6 +66,7 @@
  * without this file changing.
  */
 import type { SpendCap } from '../../../pipeline/debate-engine/index.js';
+import { classifyFailureCause } from '../../../pipeline/debate-engine/index.js';
 import type { AssetClass, Clock, Logger } from '../../../shared/index.js';
 import type { ArchivedItem, MiArchiveStore, RawArchiveRow } from '../archive/mi-archive-store.js';
 import { MI_SOURCES } from '../archive/mi-sources.js';
@@ -430,7 +431,14 @@ export class GrokAgent {
             'this is its cause. See `X_SEARCH_MODEL` in x-search-client.ts.'
           : `grok: sentiment refresh failed for ${instrument} — ${detail}. The analysts will ` +
             'report NO DATA for this window; the bucket is NOT marked, so the next pass retries.',
-        payload: { instrument, ...(unroutedModel ? { unrouted_model: true } : {}) },
+        payload: {
+          instrument,
+          // #1394. This transport does not go through `AnthropicLlmClient`, so
+          // it is outside `llm_call_failed`'s count and carries the cause on
+          // its own code instead.
+          failure_cause: classifyFailureCause(error),
+          ...(unroutedModel ? { unrouted_model: true } : {}),
+        },
       });
       return false;
     }

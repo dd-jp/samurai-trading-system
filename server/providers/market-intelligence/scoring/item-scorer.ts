@@ -40,6 +40,7 @@
 
 import {
   BARE_JSON_INSTRUCTION,
+  classifyFailureCause,
   type LlmClient,
   LlmMalformedResponseError,
   type LlmRequest,
@@ -228,7 +229,13 @@ export async function scoreItems(
       '(neutral, floor confidence) rather than a genuine neutral read';
     // Two literal branches, not a computed `event:`, so
     // `log-event-code.test.ts`'s spelling scan (a textual grep, not an
-    // evaluator) sees both codes.
+    // evaluator) sees both codes. WHICH failure it was is the payload's
+    // `failure_cause`, not the code: the `else` code says "provider failure"
+    // but reaches a refusal and a truncation too, and the field is what
+    // separates them (#1394). It replaces `error_kind`, whose only two values
+    // — `malformed_response` and `transport` — called every refusal a
+    // transport fault.
+    const failure_cause = classifyFailureCause(error);
     if (error instanceof LlmMalformedResponseError) {
       logCaughtFailure(
         deps.logger,
@@ -240,7 +247,7 @@ export async function scoreItems(
           message,
         },
         error,
-        { items: items.length, error_kind: 'malformed_response' },
+        { items: items.length, failure_cause },
       );
     } else {
       logCaughtFailure(
@@ -253,7 +260,7 @@ export async function scoreItems(
           message,
         },
         error,
-        { items: items.length, error_kind: 'transport' },
+        { items: items.length, failure_cause },
       );
     }
     return { scores: fallback, degraded: true };

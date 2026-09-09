@@ -17,7 +17,9 @@ import {
   LlmRateLimitError,
   LlmRefusalError,
   LlmTimeoutError,
+  LlmTruncatedError,
 } from './errors.js';
+import { classifyFailureCause, type FailureCause } from './failure-cause.js';
 import { wrapUntrusted } from './prompt-safety.js';
 import { type LlmSpendSink, NULL_SPEND_SINK } from './spend-sink.js';
 import {
@@ -40,18 +42,14 @@ import {
  * carve-outs where the failure is deterministic in the request rather than in
  * the draw — retrying either one re-bills an identical failure:
  *
- *  - TRUNCATION (`NousTruncatedError`). Excluded by the ABSENCE of a `.status`
- *    field: `classifyProviderError` lands it on `LlmProviderError`, which this
- *    predicate rejects. Nothing here names the class.
+ *  - TRUNCATION (`LlmTruncatedError`, #1394). Excluded by ITS OWN CLASS. It
+ *    was excluded by the ABSENCE of a `.status` field until #1394 — which
+ *    rejected it correctly but left it reading as an unclassified
+ *    `LlmProviderError` at every call site downstream.
  *  - REFUSAL (`LlmRefusalError`, #1391). Excluded by ITS OWN CLASS — the same
  *    construction `LlmCancelledError` uses — because a refusal must stay
  *    distinguishable in the log from an unclassified provider fault, and
  *    carries the `usage` of the call it burned.
- *
- * The asymmetry is deliberate rather than an oversight: the truncation
- * carve-out predates the typed class and reads as a `LlmProviderError` at
- * every call site, which is exactly why a reader looking for two named
- * exclusions below will find only one.
  */
 function isRetryable(error: unknown): boolean {
   return (
@@ -151,6 +149,21 @@ export interface LlmRetryAttemptReport extends RetryAttemptReport {
   debate_id: string | undefined;
 }
 
+/**
+ * One abandoned call, as reported to `AnthropicLlmClientConfig.onCallFailed`
+ * (#1394). `failure_cause` is classified here rather than at each seam so
+ * every caller reports the same word for the same fault.
+ */
+export interface LlmCallFailureReport {
+  failure_cause: FailureCause;
+  /** The thrown value itself, so the observer can render it as it sees fit. */
+  error: unknown;
+  model: string;
+  trace_id: string | undefined;
+  stage: string | undefined;
+  debate_id: string | undefined;
+}
+
 export interface AnthropicLlmClientConfig {
   model: string;
   max_tokens: number;
@@ -173,6 +186,20 @@ export interface AnthropicLlmClientConfig {
    * read off a line.
    */
   onRetryAttempt?: ((report: LlmRetryAttemptReport) => void) | undefined;
+  /**
+   * Observes every call this client gives up on (#1394), once, after the retry
+   * budget is spent. Optional for the same reason `onRetryAttempt` is; the
+   * production composition root supplies one that logs `llm_call_failed` at
+   * `warn` with the classified cause.
+   *
+   * THIS IS THE ONE SEAM THAT SEES EVERY PRODUCTION LLM FAILURE.
+   * `production.ts` builds a single client and shares it across the debate
+   * personas, the disagreement detector, the risk critic and MI scoring — most
+   * of which then swallow the error to fail open, so a per-caller line is
+   * exactly what #1394 found missing. A count of failures by cause for a whole
+   * session is `llm_call_failed` grouped by `payload.failure_cause`.
+   */
+  onCallFailed?: ((report: LlmCallFailureReport) => void) | undefined;
 }
 
 /**
@@ -292,8 +319,10 @@ function classifyProviderError(error: unknown): Error {
     error instanceof LlmProviderError ||
     // Passed through rather than duck-typed down to `LlmProviderError`: the
     // refusal's `signal` and `usage` are the only record of what the burned
-    // call cost, and re-wrapping would discard both (#1391).
-    error instanceof LlmRefusalError
+    // call cost, and re-wrapping would discard both (#1391). A truncation
+    // carries `max_tokens`/`usage` for the same reason (#1394).
+    error instanceof LlmRefusalError ||
+    error instanceof LlmTruncatedError
   ) {
     return error;
   }
@@ -332,7 +361,12 @@ export class AnthropicLlmClient implements LlmClient {
     // call the round loop had already begun to dispatch.
     if (request.signal?.aborted === true) {
       return Promise.reject(
-        new LlmCancelledError('LLM call cancelled before dispatch: caller signal already aborted'),
+        this.reportFailure(
+          request,
+          new LlmCancelledError(
+            'LLM call cancelled before dispatch: caller signal already aborted',
+          ),
+        ),
       );
     }
     const onRetryAttempt = this.config.onRetryAttempt;
@@ -356,7 +390,37 @@ export class AnthropicLlmClient implements LlmClient {
               debate_id: attribution?.debate_id,
             });
           },
-    );
+      // The ONE place a production LLM failure is guaranteed to be named
+      // (#1394). Every caller below this client either swallows the error to
+      // fail open or re-renders it in its own words; this fires once, after
+      // the retry budget, before either.
+    ).catch((error: unknown) => {
+      throw this.reportFailure(request, error);
+    });
+  }
+
+  /**
+   * Returns `error` unchanged — the observer is a side channel, and a throw
+   * from a logger must not turn a classified failure into a different one.
+   */
+  private reportFailure<T>(request: LlmRequest<T>, error: unknown): unknown {
+    const onCallFailed = this.config.onCallFailed;
+    if (onCallFailed === undefined) return error;
+    try {
+      const attribution = request.context.attribution;
+      onCallFailed({
+        failure_cause: classifyFailureCause(error),
+        error,
+        model: this.config.model,
+        trace_id: attribution?.trace_id,
+        stage: attribution?.stage,
+        debate_id: attribution?.debate_id,
+      });
+    } catch {
+      // Same guard `withRetry` puts around `onRetry`: an observer that throws
+      // loses its own line, never the call's real failure.
+    }
+    return error;
   }
 
   private async attempt<T>(request: LlmRequest<T>): Promise<LlmResponse<T>> {

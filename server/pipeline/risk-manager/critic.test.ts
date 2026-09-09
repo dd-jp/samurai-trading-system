@@ -25,8 +25,15 @@ import type {
   LlmClient,
   LlmRequest,
   LlmResponse,
+  SpendCap,
 } from '../debate-engine/index.js';
-import { AnthropicLlmClient, SqliteLlmSpendStore, UNCAPPED_SPEND } from '../debate-engine/index.js';
+import {
+  AnthropicLlmClient,
+  LlmProviderError,
+  LlmRefusalError,
+  SqliteLlmSpendStore,
+  UNCAPPED_SPEND,
+} from '../debate-engine/index.js';
 import type { RiskCriticRequest } from './critic.js';
 import {
   buildRiskCriticProducer,
@@ -150,11 +157,16 @@ function fakeLlm(text: string): { client: LlmClient; calls: () => number } {
   return { client, calls: () => calls };
 }
 
-function collectingLogger(): {
-  logger: Logger;
-  entries: { trace_id: string; level: string; message: string; payload?: unknown }[];
-} {
-  const entries: { trace_id: string; level: string; message: string; payload?: unknown }[] = [];
+interface CollectedEntry {
+  trace_id: string;
+  level: string;
+  message: string;
+  event?: string | undefined;
+  payload?: unknown;
+}
+
+function collectingLogger(): { logger: Logger; entries: CollectedEntry[] } {
+  const entries: CollectedEntry[] = [];
   return {
     logger: {
       log: (entry) =>
@@ -162,6 +174,7 @@ function collectingLogger(): {
           trace_id: entry.trace_id,
           level: entry.level,
           message: entry.message,
+          event: entry.event,
           payload: entry.payload,
         }),
     },
@@ -388,6 +401,84 @@ describe('LlmRiskCriticProducer (live/paper)', () => {
     expect(calls()).toBe(0);
     expect(verdict).toBeUndefined();
     expect(store.getByDebateId(DEBATE_ID)?.verdict.reasoning).toContain('budget exhausted');
+  });
+
+  /**
+   * #1394's acceptance criterion for this stage: the ONE
+   * `risk_critic_verdict_unavailable` code must separate a spend-cap refusal
+   * from a provider fault from the producer's own budget expiring. Before this
+   * the spend-cap path logged nothing at all, and the other two rendered the
+   * same prose at the same level.
+   */
+  describe('risk_critic_verdict_unavailable names the cause (#1394)', () => {
+    async function causeOf(
+      options: Partial<{ llm: LlmClient; spendCap: SpendCap; budgetMs: number }>,
+    ): Promise<{ level: string | undefined; failure_cause: unknown }> {
+      const { logger, entries } = collectingLogger();
+      await new LlmRiskCriticProducer({
+        llm: options.llm ?? fakeLlm(PASS_JSON).client,
+        store: new InMemoryRiskCriticStore(),
+        spendCap: options.spendCap ?? UNCAPPED_SPEND,
+        marketData: stubMarketData(),
+        logger,
+        ...(options.budgetMs === undefined ? {} : { budgetMs: options.budgetMs }),
+      }).produce(makeRequest());
+
+      const entry = entries.find((e) => e.event === 'risk_critic_verdict_unavailable');
+      return {
+        level: entry?.level,
+        failure_cause: (entry?.payload as { failure_cause?: unknown } | undefined)?.failure_cause,
+      };
+    }
+
+    it('calls a spend-cap refusal `spend_cap` — the call never went out', async () => {
+      expect(
+        await causeOf({
+          spendCap: {
+            check: () => ({
+              admitted: false,
+              spent_usd: 60,
+              budget_usd: 50,
+              reason: 'budget exhausted',
+              kind: 'budget',
+            }),
+          },
+        }),
+      ).toEqual({ level: 'warn', failure_cause: 'spend_cap' });
+    });
+
+    it('calls a refused prompt `refusal`, not a provider fault', async () => {
+      expect(
+        await causeOf({
+          llm: {
+            complete: () =>
+              Promise.reject(new LlmRefusalError('declined', 'stop_reason="refusal"')),
+          },
+        }),
+      ).toEqual({ level: 'warn', failure_cause: 'refusal' });
+    });
+
+    it('calls a provider fault `transport`', async () => {
+      expect(
+        await causeOf({ llm: { complete: () => Promise.reject(new LlmProviderError('502')) } }),
+      ).toEqual({ level: 'warn', failure_cause: 'transport' });
+    });
+
+    it('calls its own expired budget `timeout`, though `#expiry` throws a bare Error', async () => {
+      // The producer's controller is aborted by nothing but its own timer, so
+      // `aborted` is the evidence — whichever arm of the race rejects first.
+      expect(
+        await causeOf({
+          budgetMs: 5,
+          llm: {
+            complete: <T>(request: LlmRequest<T>) =>
+              new Promise<LlmResponse<T>>((_, reject) => {
+                request.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+              }),
+          },
+        }),
+      ).toEqual({ level: 'warn', failure_cause: 'timeout' });
+    });
   });
 
   it('returns within its own budget when the provider never answers, instead of holding the order', async () => {

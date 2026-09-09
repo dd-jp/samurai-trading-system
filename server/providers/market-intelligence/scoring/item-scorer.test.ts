@@ -1,5 +1,6 @@
 import {
   LlmProviderError,
+  LlmRefusalError,
   LlmTimeoutError,
   MockLlmClient,
 } from '../../../pipeline/debate-engine/index.js';
@@ -160,7 +161,7 @@ describe('scoreItems', () => {
       expect(entry?.level).toBe('warn');
       expect(entry?.event).toBe('mi_scoring_provider_failure');
       expect(entry?.trace_id).toBe('trace-1');
-      expect(entry?.payload).toMatchObject({ items: 2, error_kind: 'transport' });
+      expect(entry?.payload).toMatchObject({ items: 2, failure_cause: 'timeout' });
     });
 
     it('logs a DIFFERENT event for an unparseable answer than for a transport failure', async () => {
@@ -175,7 +176,21 @@ describe('scoreItems', () => {
       expect(entry?.level).toBe('warn');
       expect(entry?.event).toBe('mi_scoring_malformed_response');
       expect(entry?.event).not.toBe('mi_scoring_provider_failure');
-      expect(entry?.payload).toMatchObject({ items: 2, error_kind: 'malformed_response' });
+      expect(entry?.payload).toMatchObject({ items: 2, failure_cause: 'unparseable' });
+    });
+
+    it('names a refusal a refusal, not a transport fault (#1394)', async () => {
+      const client = new MockLlmClient();
+      client.enqueueError(
+        new LlmRefusalError('the model declined this prompt', 'stop_reason="refusal"'),
+      );
+      const logger = recordingLogger();
+
+      await scoreItems(ITEMS, { llmClient: client, logger, trace_id: 'trace-refusal' });
+
+      const [entry] = logger.entries;
+      expect(entry?.payload).toMatchObject({ items: 2, failure_cause: 'refusal' });
+      expect(entry?.payload).not.toMatchObject({ failure_cause: 'transport' });
     });
 
     it('falls back to "unattributed" as the log trace_id when none was supplied', async () => {

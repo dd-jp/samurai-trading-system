@@ -1,5 +1,6 @@
+import type { LogEntry } from '../../shared/index.js';
 import { detectDisagreements } from './disagreement-detector.js';
-import { LlmMalformedResponseError, LlmTimeoutError } from './llm/errors.js';
+import { LlmMalformedResponseError, LlmRefusalError, LlmTimeoutError } from './llm/errors.js';
 import { BARE_JSON_INSTRUCTION } from './llm/json-response.js';
 import { MockLlmClient } from './llm/mock-client.js';
 import type { AnalystView } from './types.js';
@@ -226,5 +227,61 @@ describe('detectDisagreements', () => {
     expect(result.method).toBe('directional_fallback');
     expect(result.conflicts).toEqual([]);
     expect(result.summary).toBe('No directional disagreement among analysts.');
+  });
+
+  /**
+   * #1394. `method: 'directional_fallback'` says the check was downgraded; it
+   * never said why, and this function had no logger at all — so a refusal, a
+   * timeout and an unreadable answer were one indistinguishable degradation.
+   */
+  describe('names the swallowed failure (#1394)', () => {
+    const VIEWS = [
+      makeView({ analyst_id: 'a1', direction: 'bullish' }),
+      makeView({ analyst_id: 'a2', direction: 'bearish' }),
+    ];
+
+    async function lineFor(error: Error): Promise<LogEntry | undefined> {
+      const mock = new MockLlmClient();
+      mock.enqueueError(error);
+      const entries: LogEntry[] = [];
+      await detectDisagreements(
+        VIEWS,
+        mock,
+        undefined,
+        { trace_id: 'trace-dd', debate_id: 'debate-dd' },
+        { log: (entry) => entries.push(entry) },
+      );
+      return entries.find((entry) => entry.event === 'debate_disagreement_llm_failed');
+    }
+
+    it('logs the cause at a level operators see by default, not debug', async () => {
+      const entry = await lineFor(new LlmRefusalError('declined', 'stop_reason="refusal"'));
+
+      expect(entry?.level).toBe('warn');
+      expect(entry?.trace_id).toBe('trace-dd');
+      expect(entry?.payload).toMatchObject({
+        debate_id: 'debate-dd',
+        failure_cause: 'refusal',
+        views: 2,
+      });
+    });
+
+    it('separates a timeout from an unreadable answer', async () => {
+      expect((await lineFor(new LlmTimeoutError('timed out')))?.payload).toMatchObject({
+        failure_cause: 'timeout',
+      });
+      expect((await lineFor(new LlmMalformedResponseError('not JSON')))?.payload).toMatchObject({
+        failure_cause: 'unparseable',
+      });
+    });
+
+    it('still returns the fallback, and still never throws, without a logger', async () => {
+      const mock = new MockLlmClient();
+      mock.enqueueError(new LlmTimeoutError('timed out'));
+
+      await expect(detectDisagreements(VIEWS, mock)).resolves.toMatchObject({
+        method: 'directional_fallback',
+      });
+    });
   });
 });

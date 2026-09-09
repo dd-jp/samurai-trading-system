@@ -93,8 +93,13 @@ import type { MarketDataService } from '../../providers/market-data-service/inde
 import { INDICATOR_KINDS } from '../../providers/market-data-service/index.js';
 import type { LogEventCode, Logger, OrderIntent } from '../../shared/index.js';
 import { describeThrownSafely } from '../../shared/index.js';
-import type { LlmClient, SpendCap } from '../debate-engine/index.js';
-import { BARE_JSON_INSTRUCTION, unwrapFencedJson, wrapUntrusted } from '../debate-engine/index.js';
+import type { FailureCause, LlmClient, SpendCap } from '../debate-engine/index.js';
+import {
+  BARE_JSON_INSTRUCTION,
+  classifyFailureCause,
+  unwrapFencedJson,
+  wrapUntrusted,
+} from '../debate-engine/index.js';
 import {
   evaluateConditions,
   MAX_INVALIDATION_LOOKBACK,
@@ -366,6 +371,14 @@ export interface LlmRiskCriticProducerOptions {
 }
 
 /** The `live`/`paper` producer: one metered LLM pass per viable entry intent, persisted by `debate_id`. */
+/**
+ * What `risk_critic_verdict_unavailable`'s `failure_cause` can say (#1394).
+ * `spend_cap` is not an LLM failure — the call never went out — but it is the
+ * third thing an `unavailable` verdict can mean, and the ticket requires the
+ * three to be separable from one line.
+ */
+type CriticUnavailableCause = FailureCause | 'spend_cap';
+
 export class LlmRiskCriticProducer implements RiskCriticProducer {
   readonly #llm: LlmClient;
   readonly #store: RiskCriticStore;
@@ -395,7 +408,14 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
 
     const cap = this.#spendCap.check();
     if (!cap.admitted) {
-      return this.#record(request, unavailable(cap.reason ?? 'spend cap refused a critic call'));
+      const reason = cap.reason ?? 'spend cap refused a critic call';
+      // #1394: this path returned `unavailable` and logged NOTHING, so the
+      // one condition an operator can act on — the budget is spent, top it up
+      // or widen the cap — was the only one invisible. Same event code as the
+      // catch below, because both mean "no verdict"; `failure_cause` is what
+      // separates them.
+      this.#logUnavailable(request, 'spend_cap', reason);
+      return this.#record(request, unavailable(reason));
     }
 
     const controller = new AbortController();
@@ -446,20 +466,17 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
     } catch (error) {
       // EVERY failure lands here and fails open: provider error, cancellation
       // on the budget above, or a response that could not be read.
-      this.#logger?.log({
-        trace_id: request.trace_id,
-        stage: 'risk',
-        event: 'risk_critic_verdict_unavailable',
-        level: 'warn',
-        message:
-          'risk critic could not produce a verdict; the decision proceeds on the mechanical ' +
-          'steps and records risk_critic: skipped',
-        payload: {
-          instrument: request.intent.instrument,
-          debate_id,
-          error: describeThrownSafely(error),
-        },
-      });
+      //
+      // The budget's own arm (`#expiry`) rejects with a bare `Error` that no
+      // classifier can read as a deadline, so the cause is decided from the
+      // controller instead — this controller is the producer's own and ONLY
+      // its timer aborts it, so `aborted` here means the budget fired,
+      // whichever arm of the race happened to reject first (#1394).
+      this.#logUnavailable(
+        request,
+        controller.signal.aborted ? 'timeout' : classifyFailureCause(error),
+        describeThrownSafely(error),
+      );
       return this.#record(request, unavailable(describeThrownSafely(error)));
     }
 
@@ -561,6 +578,34 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
     } catch {
       // A logger that throws is not a reason to lose a parsed verdict.
     }
+  }
+
+  /**
+   * The single `risk_critic_verdict_unavailable` line, from both paths that
+   * can produce one (#1394). `failure_cause` is the discriminator: `spend_cap`
+   * (the call never went out), `timeout` (the producer's own budget fired), or
+   * whatever the classifier reads off the thrown value.
+   */
+  #logUnavailable(
+    request: RiskCriticRequest,
+    failure_cause: CriticUnavailableCause,
+    detail: string,
+  ): void {
+    this.#logger?.log({
+      trace_id: request.trace_id,
+      stage: 'risk',
+      event: 'risk_critic_verdict_unavailable',
+      level: 'warn',
+      message:
+        'risk critic could not produce a verdict; the decision proceeds on the mechanical ' +
+        'steps and records risk_critic: skipped',
+      payload: {
+        instrument: request.intent.instrument,
+        debate_id: request.intent.metadata.debate_id,
+        failure_cause,
+        error: detail,
+      },
+    });
   }
 
   /**

@@ -28,17 +28,35 @@ describe('skipKindOf', () => {
   it('reports nothing for a run that was not skipped', () => {
     // An optional persona can fail on a run that produced views. Reading a
     // kind off that run would label a healthy tick with a failure.
-    expect(skipKindOf(false, [failure({ role: 'optional', kind: 'error' })])).toBeUndefined();
+    expect(skipKindOf(false, [failure({ role: 'optional', kind: 'other' })])).toBeUndefined();
   });
 
   it('reads the kind off the mandatory failure that caused the skip', () => {
     expect(skipKindOf(true, [failure()])).toBe('timeout');
-    expect(skipKindOf(true, [failure({ kind: 'error' })])).toBe('fault');
+    expect(skipKindOf(true, [failure({ kind: 'other' })])).toBe('fault');
+  });
+
+  it('folds every non-timeout cause to the same audit word (#1394)', () => {
+    // The taxonomy widened the KIND, not this decision: `quorum_skip_fault`
+    // and `quorum_skip_timeout` are the two words the audit log carries, and a
+    // new cause must not silently become a third.
+    for (const kind of [
+      'refusal',
+      'truncated',
+      'unparseable',
+      'rate_limited',
+      'cancelled',
+      'transport',
+      'other',
+    ] as const) {
+      expect(skipKindOf(true, [failure({ kind })])).toBe('fault');
+    }
+    expect(skipKindOf(true, [failure({ kind: 'timeout' })])).toBe('timeout');
   });
 
   it('ignores an optional persona entirely', () => {
     // The optional timeout did not skip anything — the mandatory fault did.
-    expect(skipKindOf(true, [failure({ role: 'optional' }), failure({ kind: 'error' })])).toBe(
+    expect(skipKindOf(true, [failure({ role: 'optional' }), failure({ kind: 'other' })])).toBe(
       'fault',
     );
   });
@@ -47,7 +65,7 @@ describe('skipKindOf', () => {
     // The condition #1080 is about must not be hidden by a second mandatory
     // persona failing for an unrelated reason on the same pass.
     expect(
-      skipKindOf(true, [failure({ analyst_type: 'fundamental', kind: 'error' }), failure()]),
+      skipKindOf(true, [failure({ analyst_type: 'fundamental', kind: 'other' }), failure()]),
     ).toBe('timeout');
   });
 

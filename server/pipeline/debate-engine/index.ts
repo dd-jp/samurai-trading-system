@@ -51,6 +51,7 @@ export type {
   AnthropicMessageRequest,
   AnthropicMessageResponse,
   AnthropicMessagesClient,
+  LlmCallFailureReport,
 } from './llm/anthropic-client.js';
 export { AnthropicLlmClient } from './llm/anthropic-client.js';
 export type { LlmError } from './llm/errors.js';
@@ -61,7 +62,10 @@ export {
   LlmRateLimitError,
   LlmRefusalError,
   LlmTimeoutError,
+  LlmTruncatedError,
 } from './llm/errors.js';
+export type { FailureCause } from './llm/failure-cause.js';
+export { classifyFailureCause } from './llm/failure-cause.js';
 // The prompt-plumbing three, on the barrel since #957 because the risk critic
 // (`risk-manager/critic.ts`) is the first consumer OUTSIDE this module: it
 // answers in JSON and shows a model book context, so it needs the same

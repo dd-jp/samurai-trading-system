@@ -8,6 +8,8 @@
  * `debate-adapter.ts`; a pure function over `AnalystView[]`, same posture as
  * `analyst-contribution.ts`.
  */
+import { type Logger, safeLog } from '../../shared/index.js';
+import { classifyFailureCause } from './llm/failure-cause.js';
 import { BARE_JSON_INSTRUCTION, unwrapFencedJson } from './llm/json-response.js';
 import type { LlmClient } from './llm/types.js';
 import type { AnalystView, Direction } from './types.js';
@@ -163,6 +165,16 @@ export async function detectDisagreements(
    * the suite that pass two arguments and care about neither.
    */
   attribution?: { trace_id?: string | undefined; debate_id?: string | undefined },
+  /**
+   * Where the swallowed failure below is named (#1394). This function had no
+   * logger at all: a refusal, a timeout and an unparseable answer all left one
+   * trace — `method: 'directional_fallback'` on the result — which says the
+   * check was downgraded but never why, and cannot be counted.
+   *
+   * Optional and last, like `signal` and `attribution` before it, for the same
+   * reason: the suite's callers pass neither and lose nothing.
+   */
+  logger?: Logger,
 ): Promise<DisagreementAnalysis> {
   if (views.length < 2) {
     return directionalFallback(views);
@@ -188,7 +200,28 @@ export async function detectDisagreements(
       conflicts: response.data.conflicts,
       method: 'semantic',
     };
-  } catch {
+  } catch (error) {
+    // Logged, never rethrown — the never-throws contract above is unchanged
+    // and the fallback is still returned. `warn`, not `debug`: this is a
+    // billed call the debate paid for and did not get, and the result it
+    // degrades to is the "simple directional comparison" semantic detection
+    // exists to improve on.
+    if (logger !== undefined) {
+      safeLog(logger, {
+        trace_id: attribution?.trace_id ?? 'unattributed',
+        stage: 'debate',
+        event: 'debate_disagreement_llm_failed',
+        level: 'warn',
+        message:
+          'semantic disagreement detection failed; this debate falls back to a directional ' +
+          'comparison and reports method: directional_fallback',
+        payload: {
+          debate_id: attribution?.debate_id,
+          failure_cause: classifyFailureCause(error),
+          views: views.length,
+        },
+      });
+    }
     return directionalFallback(views);
   }
 }

@@ -119,10 +119,44 @@ export class LlmRefusalError extends Error {
   }
 }
 
+/**
+ * The model ran out of `max_tokens` before it finished (#1394).
+ *
+ * Its own class for the reason `LlmRefusalError` and `LlmCancelledError` are:
+ * a truncation was previously excluded from `isRetryable` only by the ABSENCE
+ * of a `.status` field, which landed it on `LlmProviderError` and left it
+ * indistinguishable in the log from a dead API key — the exact conflation
+ * #1394 exists to remove. `NousMessagesClient` translates
+ * `NousTruncatedError` into this, the same seam that translates a refusal.
+ *
+ * Still not retried: `isRetryable` admits only timeout/rate-limit/malformed,
+ * so this class is excluded by construction rather than by an absent field.
+ */
+export class LlmTruncatedError extends Error {
+  readonly model: string;
+  readonly max_tokens: number;
+  /** Tokens the provider billed for the truncated call, when the transport could see them. */
+  readonly usage: { input_tokens: number; output_tokens: number } | undefined;
+
+  constructor(
+    message: string,
+    model: string,
+    max_tokens: number,
+    usage?: { input_tokens: number; output_tokens: number },
+  ) {
+    super(message);
+    this.name = 'LlmTruncatedError';
+    this.model = model;
+    this.max_tokens = max_tokens;
+    this.usage = usage;
+  }
+}
+
 export type LlmError =
   | LlmTimeoutError
   | LlmRateLimitError
   | LlmMalformedResponseError
   | LlmProviderError
   | LlmCancelledError
-  | LlmRefusalError;
+  | LlmRefusalError
+  | LlmTruncatedError;
