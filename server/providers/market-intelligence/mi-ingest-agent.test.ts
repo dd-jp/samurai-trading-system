@@ -683,6 +683,69 @@ describe('MiIngestAgent', () => {
   });
 
   /**
+   * Withholding a `mi_items` row only fixes the bug if the article is
+   * actually retried, not merely never permanently marked. Mirrors the
+   * #1392 batch-outage retry test above (`retries the same article on the
+   * next refresh after a scoring outage, once scoring recovers`), but for
+   * the narrower per-item omission path: same article, same instrument,
+   * second refresh with a client that actually answers for it.
+   */
+  it('rescoring an article the model previously omitted on a later refresh replaces the withheld gap with a real score', async () => {
+    const archive = new MiArchiveStore();
+    const store = new MarketIntelligenceStore(clock);
+    const omittedArticle = article({ id: '1002', headline: 'Apple faces antitrust probe' });
+    const omitsSecondIndex = {
+      async complete(request: { prompt: string; parseResponse: (raw: string) => unknown }) {
+        const raw = JSON.stringify({ scores: [{ index: 0, sentiment: 1, confidence: 0.8 }] });
+        const parsed = request.parseResponse(raw) as { valid: boolean; data: unknown };
+        return { data: parsed.data, raw_text: raw, latency_ms: 1 };
+      },
+    };
+    const agent = new MiIngestAgent({
+      archive,
+      store,
+      newsClient: newsClient([
+        article({ id: '1001', headline: 'Apple beats on revenue' }),
+        omittedArticle,
+      ]),
+      // biome-ignore lint/suspicious/noExplicitAny: minimal LlmClient stand-in.
+      llmClient: omitsSecondIndex as any,
+      clock,
+      assetClasses: ['stocks'],
+      spendCap: ADMITS,
+    });
+
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(true);
+    expect(
+      archive.hasScoredItem(
+        MI_SOURCES.alpacaNews,
+        omittedArticle.id,
+        omittedArticle.updated_at,
+        'AAPL',
+      ),
+    ).toBe(false);
+
+    (agent as unknown as { deps: { llmClient: unknown } }).deps.llmClient = scoringClient(
+      -1,
+      0.9,
+    ).client;
+
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(true);
+
+    expect(
+      archive.hasScoredItem(
+        MI_SOURCES.alpacaNews,
+        omittedArticle.id,
+        omittedArticle.updated_at,
+        'AAPL',
+      ),
+    ).toBe(true);
+    const news = store.getContext('stocks', WINDOW, 't').news;
+    const rescored = news.find((item) => item.headline === 'Apple faces antitrust probe');
+    expect(rescored).toMatchObject({ sentiment: -1, confidence: 0.9 });
+  });
+
+  /**
    * #1420 review round 1, consequence 2: `hasCoverageFor` (mi-coverage.ts)
    * counts any item matching the instrument in `MarketContext.news`/`.social`
    * — it never inspects a per-item marker. Tagging-and-archiving an omitted
