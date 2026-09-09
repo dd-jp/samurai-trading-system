@@ -1142,9 +1142,12 @@ describe('AlpacaBrokerAdapter.fetchNewFills failure logging (#609)', () => {
  * `SimulatedBrokerAdapter`). This adapter has no access to the true
  * `opened_at` — `execute.ts` reads it, not this adapter — so these assert
  * against the local proxy this ticket adds instead: `bracketSubmittedAt`, a
- * clock read taken before `submitBracket`'s POST and therefore provably
- * `<=` the true `opened_at` by construction (`execute.ts` reads `opened_at`
- * before calling `submitBracket` at all).
+ * clock read taken before `submitBracket`'s POST. `execute.ts` reads
+ * `opened_at` BEFORE calling `submitBracket` at all, so `opened_at <=
+ * bracketSubmittedAt`, not the reverse — the check built on it is a superset
+ * test (never misses a real violation on a self-submitted bracket, but a
+ * benign fill in `[opened_at, bracketSubmittedAt)` can still trip it; see
+ * `bracketSubmittedAt`'s doc in alpaca-adapter.ts).
  */
 describe('AlpacaBrokerAdapter since-floor invariant audit (#1123)', () => {
   const T0 = new Date('2026-07-20T16:00:00Z');
@@ -1184,6 +1187,100 @@ describe('AlpacaBrokerAdapter since-floor invariant audit (#1123)', () => {
         payload: expect.objectContaining({
           client_order_id: 'key-aapl-1355',
           leg: 'entry',
+          filled_at: '2026-07-20T15:59:00.000Z',
+          submitted_at: T0.toISOString(),
+        }),
+      }),
+    ]);
+  });
+
+  it('warns only on first sighting of a genuine violation, not every sweep', async () => {
+    // `brackets` is never pruned, so a genuinely violating bracket is
+    // re-polled forever — without a throttle this would warn on every one
+    // of these sweeps, not just the first.
+    const clock = new FixedClock(T0);
+    const logger = recordingLogger();
+    const client = makeClient({
+      getOrder: vi.fn().mockResolvedValue(
+        acceptedOrder({
+          status: 'filled',
+          filled_qty: '100',
+          filled_avg_price: '100.02',
+          filled_at: '2026-07-20T15:59:00Z',
+        }),
+      ),
+    });
+    const adapter = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger,
+      clock,
+    });
+    await adapter.submitBracket(makeBracket());
+
+    await adapter.fetchNewFills(new Date(0));
+    await adapter.fetchNewFills(new Date(0));
+    await adapter.fetchNewFills(new Date(0));
+
+    expect(logger.entries).toHaveLength(1);
+  });
+
+  // #1123 round-1 review: `rearmedLegs` (the re-arm sweep) is keyed by the
+  // LOT's own `idempotency_key` — the SAME key space `bracketSubmittedAt`
+  // uses — so the original bracket's submission-time bound applies here too,
+  // with no new map. The flatten sweep is NOT covered: `flattens` is keyed by
+  // the EXIT's own idempotency_key, a different value, so auditing it needs
+  // its own bound (tracked as a follow-up, out of scope here).
+  it("warns on a re-armed leg fill dated before the lot's original bracket was submitted", async () => {
+    const clock = new FixedClock(T0);
+    const logger = recordingLogger();
+    const submitOcoOrder = vi
+      .fn()
+      .mockResolvedValue({ ...acceptedOrder(), id: 'rearm-venue-id', legs: [] });
+    const getOrderByClientOrderId = vi.fn().mockResolvedValue(null); // no prior to adopt
+    // id-aware: the ORIGINAL bracket entry ('alpaca-entry-1', unfilled — this
+    // test is only about the re-armed leg) vs. the re-armed OCO itself.
+    const getOrder = vi.fn(async (id: string) => {
+      if (id === 'rearm-venue-id') {
+        return acceptedOrder({
+          id: 'rearm-venue-id',
+          status: 'filled',
+          filled_qty: '100',
+          filled_avg_price: '100.02',
+          // Earlier than T0, the clock read at the ORIGINAL bracket's
+          // submission — the re-arm itself has no submission-time proxy of
+          // its own, and shares the lot's original bound instead.
+          filled_at: '2026-07-20T15:59:00Z',
+          legs: [],
+        });
+      }
+      return acceptedOrder({ status: 'accepted', filled_qty: '0', legs: [] });
+    });
+    const adapter = new AlpacaBrokerAdapter({
+      client: makeClient({ submitOcoOrder, getOrderByClientOrderId, getOrder }),
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger,
+      clock,
+    });
+    await adapter.submitBracket(makeBracket());
+    // `side` is the lot's HELD side (matches `makeBracket`'s 'buy'), so stop
+    // below / target above, same ordering as the bracket itself.
+    await adapter.rearmProtectiveLegs('key-aapl-1355', 'AAPL', 'buy', 100, 90, 115);
+
+    const fills = await adapter.fetchNewFills(new Date(0));
+
+    expect(fills).toHaveLength(1);
+    expect(logger.entries).toEqual([
+      expect.objectContaining({
+        level: 'warn',
+        event: 'alpaca_fill_predates_bracket_submission',
+        payload: expect.objectContaining({
+          client_order_id: 'key-aapl-1355',
+          leg: 'target',
           filled_at: '2026-07-20T15:59:00.000Z',
           submitted_at: T0.toISOString(),
         }),

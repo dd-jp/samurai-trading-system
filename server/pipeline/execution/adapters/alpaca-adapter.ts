@@ -207,16 +207,23 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   /** client_order_id -> the bracket parent's Alpaca order id. */
   private readonly brackets = new Map<string, string>();
   /**
-   * client_order_id -> a local clock read taken before `submitBracket`'s POST,
-   * strictly `<=` the lot's own `opened_at` (execute.ts reads `opened_at`
-   * before calling `submitBracket` at all). #1123: this adapter has no
-   * `SharedStore` access to `opened_at` itself, so `fetchNewFills` uses this
-   * as a same-lot proxy bound to flag (never clamp) a fill dated earlier than
-   * it — a violation of the invariant `ingest-fills.ts`'s global `since` floor
-   * depends on. Reading the clock BEFORE the POST (not after, next to
-   * `brackets.set` below) keeps the bound conservative: a later read could
-   * exceed the true `opened_at` by the request round trip and flag benign
-   * fills landing inside that window, which the earlier read cannot.
+   * client_order_id -> a local clock read taken before `submitBracket`'s POST.
+   * #1123: this adapter has no `SharedStore` access to the lot's own
+   * `opened_at`, so `fetchNewFills` uses this as a same-lot proxy bound to
+   * flag (never clamp) a fill dated earlier than it. The two are NOT equal:
+   * `execute.ts` reads `opened_at` BEFORE `captureSubmitSnapshot`
+   * (deliberately unbounded) and `writeAheadPosition`, both of which run
+   * before `submitBracket` is even called — so `opened_at <= bracketSubmittedAt`,
+   * never the reverse. The check this enables is therefore a SUPERSET test:
+   * it never misses a real violation on a bracket this process itself
+   * submitted (`filledAt < opened_at` implies `filledAt < bracketSubmittedAt`),
+   * but a BENIGN fill landing in `[opened_at, bracketSubmittedAt)` — no true
+   * violation — can still trip it (see `auditSinceFloorInvariant`'s doc for
+   * the likeliest real-world cause: host/venue clock skew). Reading the clock
+   * right before the POST, rather than after (next to `brackets.set` below),
+   * is still the tightest bound this adapter can offer without `opened_at`
+   * itself: it cannot narrow the gap above, only avoid widening it further by
+   * the request's own round trip.
    * Same lifecycle as `brackets` (never pruned, empty across a restart) — no
    * new unbounded-growth axis, see `brackets`'s own doc above — but a STRICT
    * SUBSET of its keys: `brackets` also gains entries from the constructor's
@@ -225,6 +232,15 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * unaudited (see `auditSinceFloorInvariant`'s doc).
    */
   private readonly bracketSubmittedAt = new Map<string, Date>();
+  /**
+   * client_order_id (lot key) -> already logged. #1123: `brackets` is never
+   * pruned, so a genuine violation would otherwise warn every sweep for the
+   * life of the process — one bracket, unbounded log volume. This throttles
+   * to first sighting per lot, same shape as ca8f2b9 (#1376)'s per-kind
+   * throttle. Not pruned either: bounded by the same key space as `brackets`
+   * (see its doc), so it adds no new unbounded-growth axis.
+   */
+  private readonly warnedSinceFloorViolations = new Set<string>();
   /**
    * client_order_id -> the flatten's own Alpaca order id (#517), tracked
    * in-memory only — see `fetchNewFills`'s "flatten sweep" comment for the
@@ -972,8 +988,11 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    *
    * `submittedAt` is this host's own clock; `filled_at` is Alpaca's server
    * clock. The first thing to check on seeing this warning is host clock
-   * skew (NTP drift), not the venue — the pre-POST read only buys the
-   * network round trip as slack (measured minimum venue gap: 266ms).
+   * skew (NTP drift), not the venue — `bracketSubmittedAt`'s doc above names
+   * the OTHER source of a benign trip: the `[opened_at, submittedAt)` gap
+   * this bound cannot see into. Throttled to first sighting per lot via
+   * `warnedSinceFloorViolations` — `brackets` is never pruned, so a genuine
+   * violation would otherwise warn every sweep for the life of the process.
    */
   private auditSinceFloorInvariant(
     order: AlpacaOrder | AlpacaOrderLeg,
@@ -990,13 +1009,9 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
 
     const filledAt = resolveFilledAt(order, observedAt);
     if (filledAt.getTime() >= submittedAt.getTime()) return;
+    if (this.warnedSinceFloorViolations.has(clientOrderId)) return;
+    this.warnedSinceFloorViolations.add(clientOrderId);
 
-    // #1123: `ingest-fills.ts`'s global `since` floor is only correct if every
-    // adapter upholds "no fill dated earlier than its own lot's `opened_at`"
-    // (#1096 fixed a violation of this in `SimulatedBrokerAdapter`) — this is
-    // what makes the invariant OBSERVABLE on the Alpaca path, which an audit
-    // against real paper-trading responses found no violation of (see this
-    // event's introducing PR for the audit's method and result).
     safeLog(this.logger, {
       trace_id: ALPACA_FILL_SWEEP_TRACE_ID,
       stage: 'execution',
@@ -1256,8 +1271,14 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       try {
         const order = await this.call('fetchNewFills', () => this.input.client.getOrder(orderId));
         const instrument = fromAlpacaSymbol(symbolOf(order));
+        // #1123: `rearmedLegs` is keyed by the LOT's own `idempotency_key`
+        // (see its doc above) — the same key space `bracketSubmittedAt` uses,
+        // so the original bracket's submission-time bound still applies here
+        // with no new map.
+        this.auditSinceFloorInvariant(order, 'target', lotKey, instrument, observedAt);
         collectFill(order, 'target', lotKey, instrument, since, observedAt, fills);
         for (const leg of order.legs ?? []) {
+          this.auditSinceFloorInvariant(leg, legName(leg), lotKey, instrument, observedAt);
           collectFill(leg, legName(leg), lotKey, instrument, since, observedAt, fills);
         }
         if (mapOrderState(order.status) !== 'submitted') {
