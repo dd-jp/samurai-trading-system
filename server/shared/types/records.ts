@@ -511,6 +511,13 @@ export interface OpenPosition {
     slippage: number;
     market_impact: number;
   };
+  /**
+   * #1186, migration 0056 — set only when `order_state === 'abandoned'`: why
+   * `wedged-zero-fill-sweep.ts` retired this lot without ever seeing a fill.
+   * Absent on every other row, including one abandoned before this column
+   * existed (none do — the state and the column shipped together).
+   */
+  abandon_reason?: string;
 }
 
 /**

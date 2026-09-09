@@ -107,7 +107,7 @@ const CONSOLIDATED_SCHEMA_TABLE_COUNT = 34;
  */
 const MIGRATIONS = listMigrations(MIGRATIONS_DIR);
 const MIGRATION_VERSIONS = MIGRATIONS.map((migration) => migration.version);
-const HIGHEST_KNOWN_MIGRATION_VERSION = 55;
+const HIGHEST_KNOWN_MIGRATION_VERSION = 56;
 
 /** A temp copy of `MIGRATIONS_DIR` holding every migration through `throughVersion`, inclusive. */
 function copyMigrationsUpTo(throughVersion: number): string {
@@ -202,6 +202,32 @@ describe('openSharedStore', () => {
       expect(column?.notnull).toBe(0);
       expect(column?.dflt_value).toBeNull();
     }
+  });
+
+  // #1186: unlike 0045, this column belongs on `open_positions` only — an
+  // abandoned (wedged-zero-fill) lot never produces a `ClosedTrade` row, so
+  // `closed_trades` has no matching column to miss.
+  it('migration 0056 adds a nullable abandon_reason to open_positions only (#1186)', () => {
+    const db = openSharedStore(':memory:');
+
+    const column = (
+      db.prepare('PRAGMA table_info(open_positions)').all() as {
+        name: string;
+        type: string;
+        notnull: number;
+        dflt_value: unknown;
+      }[]
+    ).find((candidate) => candidate.name === 'abandon_reason');
+
+    expect(column, 'open_positions is missing column abandon_reason').toBeDefined();
+    expect(column?.type).toBe('TEXT');
+    expect(column?.notnull).toBe(0);
+    expect(column?.dflt_value).toBeNull();
+
+    const closedTradesColumn = (
+      db.prepare('PRAGMA table_info(closed_trades)').all() as { name: string }[]
+    ).find((candidate) => candidate.name === 'abandon_reason');
+    expect(closedTradesColumn).toBeUndefined();
   });
 
   it('migration 0049 adds modelled_cost_charged to closed_trades, NOT NULL DEFAULT 1, backfilling live rows to 0 (#1121)', () => {

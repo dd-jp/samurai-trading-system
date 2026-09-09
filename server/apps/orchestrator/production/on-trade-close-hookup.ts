@@ -144,6 +144,9 @@ export function withOnTradeClose(
 
     sweepTerminalPositions: (cutoff: Date): Promise<number> => store.sweepTerminalPositions(cutoff),
 
+    abandonWedgedZeroFillLot: (idempotency_key: string, reason: string): Promise<boolean> =>
+      store.abandonWedgedZeroFillLot(idempotency_key, reason),
+
     applyLotAdvance: async (advance: LotAdvance): Promise<void> => {
       await store.applyLotAdvance(advance);
       const trade = advance.closed_trade;

@@ -78,8 +78,21 @@ import type {
   VerdictAuditEntry,
 } from './types.js';
 
-/** Mirrors execution-spec.md / SqliteExecutionStore's terminal-state exclusion. */
-const TERMINAL_STATES: readonly OrderState[] = ['closed', 'cancelled', 'rejected', 'expired'];
+/**
+ * Mirrors execution-spec.md / SqliteExecutionStore's terminal-state exclusion
+ * (`TERMINAL_ORDER_STATES`, shared/store/key-scheme-guard.ts) — kept as its
+ * own copy rather than imported because this module reads `open_positions`
+ * read-only, outside Execution's own store port; the two lists must still
+ * agree, or an 'abandoned' (#1186) row would keep showing as a live position
+ * on the dashboard while every other reader already excludes it.
+ */
+const TERMINAL_STATES: readonly OrderState[] = [
+  'closed',
+  'cancelled',
+  'rejected',
+  'expired',
+  'abandoned',
+];
 
 interface OpenPositionRow {
   idempotency_key: string;

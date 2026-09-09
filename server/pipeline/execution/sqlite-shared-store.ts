@@ -49,7 +49,7 @@
  *   is therefore the one terminal state that is never reached with
  *   `filled_size = 0`.
  *
- * `getOpenPositions()` (below) excludes all four terminal states from every
+ * `getOpenPositions()` (below) excludes all five terminal states from every
  * live read — crash recovery, Risk's exposure caps, the dashboard — so a
  * terminal row sitting in the table is inert to every reader; it does not
  * corrupt anything downstream. Before #1088, though, nothing ever removed
@@ -112,12 +112,21 @@ const TERMINAL_STATES: readonly OrderState[] = TERMINAL_ORDER_STATES;
 
 /**
  * The subset of `TERMINAL_STATES` `sweepTerminalPositions` deletes —
- * `TERMINAL_ORDER_STATES` minus `closed` (#1088). See that method's doc
- * (types/store.ts) and this file's "row lifecycle" section above for why
- * `closed` is excluded.
+ * `TERMINAL_ORDER_STATES` minus `closed` and `abandoned` (#1088, amended
+ * #1186). See that method's doc (types/store.ts) and this file's "row
+ * lifecycle" section above for why `closed` is excluded.
+ *
+ * `abandoned` must stay excluded too: this sweep's own age gate
+ * (`decision_timestamp < cutoff`, `TERMINAL_SWEEP_AGE_MS` in reconcile.ts) is
+ * the SAME 24h window `wedged-zero-fill-sweep.ts` uses to decide a lot is
+ * wedged — so an abandoned row's `decision_timestamp` is already past that
+ * cutoff the moment it is written, and `filled_size = 0` already matches
+ * this sweep's other predicate. Leaving `abandoned` sweepable would delete
+ * `abandon_reason` (the record #1186 exists to keep) on the very next
+ * reconcile pass.
  */
 const SWEEPABLE_TERMINAL_STATES: readonly OrderState[] = TERMINAL_ORDER_STATES.filter(
-  (state) => state !== 'closed',
+  (state) => state !== 'closed' && state !== 'abandoned',
 );
 
 /**
@@ -164,6 +173,8 @@ export interface OpenPositionRow {
   quote_mid: number | null;
   quote_observed_at: string | null;
   modelled_cost_breakdown_json: string | null;
+  /** #1186, migration 0056 — set only when `order_state = 'abandoned'`. */
+  abandon_reason: string | null;
 }
 
 interface FillRow {
@@ -427,6 +438,25 @@ export class SqliteExecutionStore implements SharedStore {
       )
       .run(this.arm, ...SWEEPABLE_TERMINAL_STATES, toStoredTimestamp(cutoff));
     return result.changes;
+  }
+
+  /** See `SharedStore.abandonWedgedZeroFillLot` (types/store.ts) for the full contract. */
+  async abandonWedgedZeroFillLot(idempotency_key: string, reason: string): Promise<boolean> {
+    const result = this.db
+      .prepare(
+        // #753: arm-scoped like every other write in this class, though in
+        // practice a wedge can occur on either arm — the control arm runs
+        // `ingestFills()` too. WHERE-guarded on the exact wedge shape rather
+        // than trusting the caller's worklist read: see this method's own
+        // doc (types/store.ts) for why a race must not overwrite a lot that
+        // un-wedged itself between read and write.
+        `UPDATE open_positions
+            SET order_state = 'abandoned', abandon_reason = ?
+          WHERE arm = ? AND idempotency_key = ?
+            AND order_state IN ('filled', 'partially_filled') AND filled_size = 0`,
+      )
+      .run(reason, this.arm, idempotency_key);
+    return result.changes > 0;
   }
 
   /**
@@ -1217,6 +1247,7 @@ export function fromPositionRow(row: OpenPositionRow): OpenPosition {
     // residual sweep, `ingestFills`). A bad value reads as absent, which is
     // the same thing every pre-migration-0037 row already looks like.
     ...(modelledCostBreakdown === null ? {} : { modelled_cost_breakdown: modelledCostBreakdown }),
+    ...(row.abandon_reason === null ? {} : { abandon_reason: row.abandon_reason }),
   };
 }
 

@@ -122,7 +122,9 @@ CREATE INDEX idx_cii_snapshots_captured_at ON cii_snapshots(captured_at);
 -- Folded in by #1251: conviction/converged (0004), residual_unprotected_since/
 -- residual_rearm_alerted_at (0024), key_scheme (0027), arm + idx_open_positions_arm
 -- (0033), decision_price/quote_bid/quote_ask/quote_mid/quote_observed_at/
--- modelled_cost_breakdown_json (0037), sizing_capital_ceiling (0045).
+-- modelled_cost_breakdown_json (0037), sizing_capital_ceiling (0045),
+-- abandon_reason (0056, #1186 — why the wedged-zero-fill sweep in
+-- execution-spec.md retired a lot to the 'abandoned' terminal OrderState).
 CREATE TABLE open_positions (
   idempotency_key              TEXT PRIMARY KEY,
   debate_id                    TEXT NOT NULL,
@@ -151,7 +153,8 @@ CREATE TABLE open_positions (
   quote_mid                    REAL,
   quote_observed_at            TEXT,
   modelled_cost_breakdown_json TEXT,
-  sizing_capital_ceiling       REAL
+  sizing_capital_ceiling       REAL,
+  abandon_reason               TEXT
 );
 
 CREATE INDEX idx_open_positions_instrument ON open_positions(instrument, asset_class);

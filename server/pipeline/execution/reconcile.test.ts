@@ -26,6 +26,7 @@ import type {
   NormalizedOrder,
   NormalizedPosition,
 } from './types.js';
+import { WEDGED_ZERO_FILL_ABANDON_AFTER_MS } from './wedged-zero-fill-sweep.js';
 
 const NOW = new Date('2026-07-15T14:00:00Z');
 const fixedClock: Clock = { now: () => NOW };
@@ -1067,5 +1068,94 @@ describe('reconcile — a position the venue holds and the store does not (#429)
     const report = await new ExecutionImpl(makeInput(store, broker)).reconcile();
 
     expect(report.divergences.map((d) => d.instrument).sort()).toEqual(['ETH-USD', 'SOL-USD']);
+  });
+});
+
+describe('reconcile — the wedged-zero-fill sweep (#1186)', () => {
+  it('a restart finds an already-wedged lot with no adapter memory of it, and retires it to a bookkeeping terminal state', async () => {
+    // The exact position a restart leaves the system in (#1186's AC): the
+    // row is durable, but nothing in a fresh process remembers this lot —
+    // `makeBroker()`'s `book` starts empty, same as a process that never
+    // submitted anything this run.
+    const { store } = openTestExecutionStore();
+    await store.writeAheadPosition(
+      pendingPosition({
+        order_state: 'filled',
+        filled_size: 0,
+        opened_at: new Date(NOW.getTime() - WEDGED_ZERO_FILL_ABANDON_AFTER_MS - 1),
+      }),
+    );
+
+    const broker = makeBroker();
+    const report = await new ExecutionImpl(makeInput(store, broker)).reconcile();
+
+    const settled = await store.getPosition(KEY);
+    expect(settled?.order_state).toBe('abandoned');
+    expect(settled?.abandon_reason).toBeDefined();
+
+    // Terminal: gone from the live read every caller (Trader, Risk, the
+    // dashboard) trusts.
+    expect(await store.getOpenPositions()).toEqual([]);
+
+    const divergence = report.divergences.find((entry) => entry.idempotency_key === KEY);
+    expect(divergence).toMatchObject({
+      store_state: 'filled',
+      broker_state: null,
+      action: 'adopted',
+      kind: 'sweep',
+    });
+    expect(report.checked).toBeGreaterThanOrEqual(1);
+    expect(report.corrected).toBeGreaterThanOrEqual(1);
+
+    // #1215's rule: no venue order is cancelled or re-placed. This lot's
+    // bracket-pass never even reached the broker — `filled` is not
+    // `IN_FLIGHT` — so nothing was submitted or looked up for it.
+    expect(broker.submits).toHaveLength(0);
+  });
+
+  it('leaves a lot still inside the bounded window open across a restart — not yet a wedge, not a decision to make', async () => {
+    const { store } = openTestExecutionStore();
+    await store.writeAheadPosition(
+      pendingPosition({
+        order_state: 'partially_filled',
+        filled_size: 0,
+        opened_at: new Date(NOW.getTime() - WEDGED_ZERO_FILL_ABANDON_AFTER_MS + 1),
+      }),
+    );
+
+    const broker = makeBroker();
+    await new ExecutionImpl(makeInput(store, broker)).reconcile();
+
+    expect((await store.getPosition(KEY))?.order_state).toBe('partially_filled');
+    expect(await store.getOpenPositions()).toHaveLength(1);
+  });
+
+  it('does not let the #1088 terminal-row sweep delete the abandon_reason it just wrote', async () => {
+    // A real wedge's `decision_timestamp` sits near its (old) `opened_at`,
+    // not near `now` — unlike this file's `pendingPosition()` default (5
+    // minutes before NOW), which would hide this exact defect: this test's
+    // `decision_timestamp` clears `TERMINAL_SWEEP_AGE_MS`'s cutoff too, so
+    // `sweepTerminalPositions` runs against this row in the SAME reconcile()
+    // pass that just abandoned it (see reconcile.ts's call order). If
+    // `'abandoned'` were ever re-added to `SWEEPABLE_TERMINAL_STATES`
+    // (sqlite-shared-store.ts), this row — `abandon_reason` and all — would
+    // be hard-deleted here instead of surviving as the durable record #1186
+    // exists to keep.
+    const { store } = openTestExecutionStore();
+    const oldTimestamp = new Date(NOW.getTime() - WEDGED_ZERO_FILL_ABANDON_AFTER_MS - 1);
+    await store.writeAheadPosition(
+      pendingPosition({
+        order_state: 'filled',
+        filled_size: 0,
+        opened_at: oldTimestamp,
+        decision_timestamp: oldTimestamp,
+      }),
+    );
+
+    await new ExecutionImpl(makeInput(store, makeBroker())).reconcile();
+
+    const settled = await store.getPosition(KEY);
+    expect(settled?.order_state).toBe('abandoned');
+    expect(settled?.abandon_reason).toBeDefined();
   });
 });
