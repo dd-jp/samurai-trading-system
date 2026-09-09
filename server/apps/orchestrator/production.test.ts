@@ -3812,7 +3812,7 @@ describe('heldAssets covers both arms, through the composition root (#1390)', ()
     };
   }
 
-  it('unions the live arm\'s held instruments with the control arm\'s, not the live arm alone', async () => {
+  it("unions the live arm's held instruments with the control arm's, not the live arm alone", async () => {
     const components = buildProductionComponents(stubConfig(db));
 
     // A live-arm lot and a DIFFERENT control-arm lot — through the same two
@@ -3838,7 +3838,7 @@ describe('heldAssets covers both arms, through the composition root (#1390)', ()
     expect(liveOnly.has('QQQ')).toBe(false);
   });
 
-  it('returns the live arm\'s held instruments when the control arm holds nothing', async () => {
+  it("returns the live arm's held instruments when the control arm holds nothing", async () => {
     const components = buildProductionComponents(stubConfig(db));
 
     await components.executionStore.writeAheadPosition(openLot('AAPL', 'live-lot'));

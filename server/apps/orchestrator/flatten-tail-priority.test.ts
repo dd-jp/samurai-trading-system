@@ -229,7 +229,7 @@ describe('flatten-tail throughput at incident scale (#1390)', () => {
  * tail.
  */
 describe('dispatch order at incident scale, the coordinate control-arm flattens use (#1390)', () => {
-  it('held-first reordering puts every held instrument\'s runInstrument call ahead of every flat one', async () => {
+  it("held-first reordering puts every held instrument's runInstrument call ahead of every flat one", async () => {
     const HELD = new Set(['QQQ', 'AAPL', 'AMZN', 'NFLX', 'SMCI', 'PLTR', 'MSTR', 'RIOT', 'UBER']);
     const universe = [...DEFAULT_UNIVERSE];
     const dispatchOrder: string[] = [];
@@ -250,13 +250,18 @@ describe('dispatch order at incident scale, the coordinate control-arm flattens 
       tick_time: new Date('2026-09-08T19:58:00Z'),
     };
 
-    await runTickPlan(plan, runner, { now: () => plan.tick_time }, {
-      max_concurrent_instruments: plan.instruments.length,
-      logger: { log: () => {} },
-      auditLog: { record: () => {} },
-      currentTickStore: { upsert: () => {}, delete: () => {}, get: () => undefined },
-      decisionGate: new DebateBarDecisionGate(),
-    });
+    await runTickPlan(
+      plan,
+      runner,
+      { now: () => plan.tick_time },
+      {
+        max_concurrent_instruments: plan.instruments.length,
+        logger: { log: () => {} },
+        auditLog: { record: () => {} },
+        currentTickStore: { upsert: () => {}, delete: () => {}, get: () => undefined },
+        decisionGate: new DebateBarDecisionGate(),
+      },
+    );
 
     // Every held instrument's dispatch precedes every flat instrument's.
     const heldDispatchIndices = dispatchOrder
