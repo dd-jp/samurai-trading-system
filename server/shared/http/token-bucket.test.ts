@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runWithTraceId } from '../trace-context.js';
 import type { LogEntry, Logger } from '../types/primitives.js';
-import { TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS, TokenBucket } from './token-bucket.js';
+import {
+  TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS,
+  TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS,
+  TokenBucket,
+} from './token-bucket.js';
 
 function recordingLogger(): { logger: Logger; entries: LogEntry[] } {
   const entries: LogEntry[] = [];
@@ -313,7 +317,8 @@ describe('TokenBucket wait telemetry (#1083)', () => {
     const [entry] = entries;
     // #1383: pacing under a working bucket is normal operation, not a fault —
     // `warn` here just added to the soak's warn-share without signaling anything
-    // actionable (414/2102 lines, 19.7% of one soak, none of it starvation).
+    // actionable (pre-#1435 raw count: 414/2102 lines, 19.7% of one soak, none
+    // of it starvation; #1435 adds the per-lane repeat window that bounds this).
     expect(entry.level).toBe('info');
     // Grep-distinguishable: neither an LLM token-count field (`input_tokens`)
     // nor a bare digit run (`429`) can match this event name.
@@ -447,5 +452,84 @@ describe('TokenBucket wait telemetry (#1083)', () => {
     await pending;
 
     expect(entries[0]?.trace_id).toBe('token-bucket');
+  });
+});
+
+/**
+ * #1435: severity alone (#1383) does not move `token_bucket_wait`'s raw line
+ * count — a per-lane repeat window does. These pin that a burst of
+ * threshold-crossing waits on one lane collapses to one line per window, and
+ * that the suppressed occurrences ride in the next announcement rather than
+ * vanishing.
+ */
+describe('TokenBucket wait telemetry repeat window (#1435)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('suppresses a threshold-crossing wait inside the repeat window, then re-announces carrying what it suppressed', async () => {
+    const { logger, entries } = recordingLogger();
+    const bucket = new TokenBucket({ capacity: 1, refillPerSecond: 1 }, undefined, {
+      logger,
+      name: 'alpaca',
+    });
+    await bucket.acquire();
+
+    const first = bucket.acquire();
+    await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS);
+    await first;
+    expect(entries).toHaveLength(1);
+
+    // Same lane, still well inside the repeat window: suppressed, not a
+    // second line, but tracked so the next announcement can report it.
+    const second = bucket.acquire();
+    await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS);
+    await second;
+    expect(entries).toHaveLength(1);
+
+    // Let the bucket sit idle past the repeat window (tokens simply refill to
+    // capacity and cap there), then force one more threshold-crossing wait.
+    await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS);
+    await bucket.acquire(); // instant: the idle capacity-1 bucket refilled.
+    const third = bucket.acquire();
+    await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS);
+    await third;
+
+    expect(entries).toHaveLength(2);
+    expect(entries[1]?.payload).toMatchObject({
+      lane: 'priority',
+      suppressed_since_last: 1,
+      max_suppressed_wait_ms: TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS,
+    });
+  });
+
+  it("keeps each lane's repeat window independent, so a background announcement cannot mask a priority lane's first crossing", async () => {
+    const { logger, entries } = recordingLogger();
+    const bucket = new TokenBucket(
+      { capacity: 1, refillPerSecond: 1, reserveForPriority: 0 },
+      undefined,
+      { logger, name: 'alpaca' },
+    );
+    await bucket.acquireBackground();
+
+    const bgWait = bucket.acquireBackground();
+    await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS);
+    await bgWait;
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.payload).toMatchObject({ lane: 'background', suppressed_since_last: 0 });
+
+    // A priority wait immediately after, well inside the background lane's
+    // repeat window, must still announce — it is a different lane's first
+    // crossing, not a repeat of the background one.
+    const priorityWait = bucket.acquire();
+    await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS);
+    await priorityWait;
+
+    expect(entries).toHaveLength(2);
+    expect(entries[1]?.payload).toMatchObject({ lane: 'priority', suppressed_since_last: 0 });
   });
 });

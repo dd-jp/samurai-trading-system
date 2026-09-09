@@ -18,10 +18,10 @@
  * seconds and one served instantly produced the same (nonexistent) trace, so
  * a starved fetch could be neither confirmed nor ruled out as an explanation
  * for a session's timeouts. `TokenBucketTelemetry` closes that gap with an
- * OPTIONAL wait-observed log line; see `take()` and
- * `TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS` for what gets logged and when. It does
- * not change what `acquire()`/`acquireBackground()` resolve on or when —
- * observation only, never a second control on pacing.
+ * OPTIONAL wait-observed log line; see `take()`, `TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS`
+ * and `TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS` for what gets logged, when, and
+ * how often. It does not change what `acquire()`/`acquireBackground()` resolve
+ * on or when — observation only, never a second control on pacing.
  */
 
 import { safeLog } from '../safe-log.js';
@@ -86,9 +86,42 @@ export interface TokenBucketTelemetry {
  */
 export const TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS = 1_000;
 
+/**
+ * #1435: severity alone (#1383, `token_bucket_wait` moved to `info`) does not
+ * move the event's raw line count — only the threshold does, and raising it
+ * is out of scope for the reason #1383 didn't touch it either (it would hide
+ * genuine starvation, the whole point of #1083). This is the cardinality
+ * lever instead: at most one announcement per lane per window; crossings
+ * inside the window are counted and folded into the next announcement
+ * (`suppressed_since_last`/`max_suppressed_wait_ms` in `logIfMaterialWait`)
+ * rather than dropped silently.
+ *
+ * Sized off #1383's own reference 20h soak (2102 structured lines, of which
+ * `token_bucket_wait` was 414 — token-bucket.test.ts's "414/2102" comment).
+ * Held to a self-consistent 5% AC (#1383's own, unmet for this event and
+ * deferred here): with the 414 raw lines replaced by `x` announcements, the
+ * total line count becomes `1090 + x` (1504 projected post-#1383 total minus
+ * the 414 this change replaces), so clearing 5% requires `x <= 0.05*(1090+x)`,
+ * i.e. `x <= ~57`. Windowed PER LANE (not per bucket — a burst on one lane
+ * must not swallow the other's first announcement, see `logIfMaterialWait`),
+ * so the worst case is two lines per window: `2 * (20h / W) <= 57` needs
+ * `W >= ~42min`. 45 minutes clears that with margin (~53 lines worst case,
+ * fewer if only one lane is actually active in a given soak). This is a
+ * projection, not a re-measurement: no raw soak log survives to replay the
+ * real clustering of waits, only the aggregate counts above.
+ */
+export const TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS = 45 * 60_000;
+
+interface LaneWaitAnnounce {
+  lastAnnouncedAtMs: number;
+  suppressedCount: number;
+  maxSuppressedWaitMs: number;
+}
+
 export class TokenBucket {
   private tokens: number;
   private lastRefill: number;
+  private readonly waitAnnounce = new Map<TokenBucketLane, LaneWaitAnnounce>();
 
   constructor(
     private readonly config: TokenBucketConfig,
@@ -165,10 +198,14 @@ export class TokenBucket {
   }
 
   /**
-   * #1083. `undefined` telemetry (every call site that hasn't wired it) and a
-   * wait under the threshold are both silent by design — see
-   * `TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS` for why the second one is a floor
-   * and not a lower one.
+   * #1083. `undefined` telemetry (every call site that hasn't wired it), a
+   * wait under the threshold, and — #1435 — a threshold-crossing wait inside
+   * the announcing lane's repeat window are all silent by design; see
+   * `TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS` for why the second is a floor and
+   * not a lower one, and `TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS` for the
+   * third. The third case is not lost, only folded into the next
+   * announcement for that lane (`suppressed_since_last`/`max_suppressed_wait_ms`
+   * below) — cardinality reduction, not information destruction.
    *
    * The event name is `token_bucket_wait`, chosen to survive a grep that a
    * bare `token` or a bare `429` cannot: an LLM `input_tokens` field
@@ -185,7 +222,9 @@ export class TokenBucket {
    * the same as a short real wait would, so the line is silently dropped
    * rather than logged with a nonsense value. Accepted: an NTP step is rare
    * enough, and losing one line to it is a smaller cost than a `wait_ms`
-   * field a reader has to distrust on every line.
+   * field a reader has to distrust on every line. The same backward-step
+   * case can also delay the window's own re-announcement by making `nowMs`
+   * read earlier than it should — same acceptance, same rarity.
    *
    * Runs AFTER `take()` has already decremented `this.tokens` (the caller has
    * been granted its token by the time this is called) and `take()` is
@@ -201,6 +240,23 @@ export class TokenBucket {
     if (this.telemetry === undefined) return;
     if (waitedMs < TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS) return;
     const roundedWaitMs = Math.round(waitedMs);
+    const nowMs = this.now();
+    const prior = this.waitAnnounce.get(lane);
+    if (
+      prior !== undefined &&
+      nowMs - prior.lastAnnouncedAtMs < TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS
+    ) {
+      prior.suppressedCount += 1;
+      prior.maxSuppressedWaitMs = Math.max(prior.maxSuppressedWaitMs, roundedWaitMs);
+      return;
+    }
+    const suppressedSinceLast = prior?.suppressedCount ?? 0;
+    const maxSuppressedWaitMs = prior?.maxSuppressedWaitMs ?? 0;
+    this.waitAnnounce.set(lane, {
+      lastAnnouncedAtMs: nowMs,
+      suppressedCount: 0,
+      maxSuppressedWaitMs: 0,
+    });
     safeLog(this.telemetry.logger, {
       // The enclosing tick when there is one, so a pacing wait joins to the
       // stage that waited; `'token-bucket'` only outside one. Deliberately
@@ -219,6 +275,8 @@ export class TokenBucket {
         bucket: this.telemetry.name,
         lane,
         wait_ms: roundedWaitMs,
+        suppressed_since_last: suppressedSinceLast,
+        max_suppressed_wait_ms: maxSuppressedWaitMs,
       },
     });
   }
