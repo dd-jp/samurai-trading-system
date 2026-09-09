@@ -368,8 +368,8 @@ export class AlpacaCryptoLegEmulation {
   /**
    * One pass of the emulation, driven from the adapter's `fetchNewFills`:
    * poll every owned order, offer its fills (Alpaca-style — re-DERIVED from
-   * the venue each poll, so no observed-fill queue is needed; `ingestFills`
-   * dedups on `broker_fill_id`), then advance the phase machine one
+   * the venue each poll, so nothing has to be journalled between polls;
+   * `ingestFills` dedups on `broker_fill_id`), then advance the phase machine one
    * transition per bracket. Per-bracket isolation and UnpricedFillError
    * bookkeeping match the adapter's own sweeps exactly — see
    * `fetchNewFills`'s comments for the full reasoning, which applies

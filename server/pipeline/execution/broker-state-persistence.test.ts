@@ -340,7 +340,7 @@ describe('SqliteBrokerStateStore', () => {
     expect(store.loadBrackets('alpaca')).toEqual([]);
   });
 
-  it("accepts 'saxo' on every venue-checked table (migration 0048)", () => {
+  it("accepts 'saxo' on broker_unpriced_fills (migration 0048)", () => {
     const { db } = openFileStore();
     const store = new SqliteBrokerStateStore(db);
 
