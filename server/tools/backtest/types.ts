@@ -1,20 +1,18 @@
 /**
- * Domain types & contracts for the Cost Model seam (ticket #87) and the
- * Backtest Harness seam (ticket #88).
- * See docs/specs/cost-model-backtest-spec.md ("Module: Cost Model" and
- * "Module: Backtest Harness" — Key Interfaces) and cross-spec-contracts.md.
+ * Domain types & contracts for the Cost Model seam (ticket #87).
+ * See docs/specs/cost-model-backtest-spec.md ("Module: Cost Model" —
+ * Key Interfaces) and cross-spec-contracts.md.
  *
  * The Validation Library (MetricsSuite, splits, DSR/PBO/MinBTL, the
  * config-trial log) is ticket #89 and is declared in `validation-types.ts`;
  * `CostModel.capacityCeiling` is still undeclared (out of scope for #87 —
- * only `fill()` is required by that issue). `BacktestReport` therefore lands
- * here in its #88-fillable subset only: the metrics/walk-forward/
- * capacity-ceiling fields the spec lists arrive with the ticket that can
- * honestly populate them — see the note in `index.ts` on why #89 is not it.
+ * only `fill()` is required by that issue). `BacktestReport` carries the
+ * subset `trial-execution.ts` (#244) actually populates — `metrics`/
+ * `walk_forward`/`capacity_ceiling` arrive with the ticket that can honestly
+ * fill them — see the note in `index.ts` on why #89 is not it.
  */
 
 import type { TickOutcome } from '../../apps/orchestrator/index.js';
-import type { SimulatedClock } from '../../shared/index.js';
 import type { DateRange } from './universe.js';
 
 /** A request to fill an order against the cost model. */
@@ -168,51 +166,20 @@ export interface CostModel {
 }
 
 /**
- * The ordered bar timestamps the replay steps through. Sourced from the
+ * The ordered bar timestamps a replay steps through. Sourced from the
  * Market Data Service's historical store (cross-spec contract #5: strictly
- * point-in-time and survivorship-free); the harness consumes the timeline,
- * it does not build it.
+ * point-in-time and survivorship-free); the replay driver consumes the
+ * timeline, it does not build it.
  */
 export interface ReplayTimeline {
   /** Ascending, de-duplicated bar timestamps within `window` (inclusive). */
   barTimestamps(window: DateRange): Promise<readonly Date[]>;
 }
 
-/** Configuration for one replay. See spec "Module: Backtest Harness". */
-export interface BacktestConfig {
-  /**
-   * Hash of the full strategy/param/feature config — the `config_trials` key
-   * and the DSR/MinBTL trial identity. The harness records it on the report;
-   * the trial log itself is the Validation Library's ticket.
-   */
-  config_hash: string;
-  window: DateRange;
-  /**
-   * Survivorship-free: delisted names included. Asserted against the
-   * `InstrumentRegistry` before the first bar is stepped.
-   */
-  universe: string[];
-  /**
-   * Asset-class pessimistic cost params. Part of the run's config identity
-   * (covered by `config_hash`), but consumed by the caller's stage wiring —
-   * Execution's Simulated adapter builds the `CostModel` from it. The harness
-   * drives the tick loop and does not construct stages, so it carries this
-   * value rather than reading it.
-   */
-  cost_config: CostConfig;
-  /**
-   * Reproducibility seed, recorded on the report. The only stochastic
-   * consumer the spec defines is the cost model's opt-in seeded slippage
-   * mode, which #87 did not implement — so today a replay's determinism rests
-   * on the injected clock and sequential ordering, and the seed is carried
-   * for the run's identity and for that mode when it lands.
-   */
-  seed: number;
-}
-
 /**
- * #88-fillable subset of the spec's `BacktestReport`. `metrics`,
- * `walk_forward` and `capacity_ceiling` are the Validation Library's ticket.
+ * The record `trial-execution.ts` (#244) writes per config to `ConfigTrialLog`.
+ * `metrics`, `walk_forward` and `capacity_ceiling` are the Validation
+ * Library's ticket and are not populated here.
  */
 export interface BacktestReport {
   config_hash: string;
@@ -235,16 +202,4 @@ export interface BacktestReport {
    * failed-run record, which is not this ticket's scope.
    */
   lookahead_audit: 'passed';
-}
-
-/**
- * Seam 2 (partial — #88 scope). Deterministic given seed + clock (and the
- * analysts' response cache).
- *
- * Async where the spec writes it sync: the tick loop it drives is
- * `TickRunner.runInstrument`, which is `Promise`-returning per
- * orchestrator-spec, so a synchronous `run` cannot await the pipeline.
- */
-export interface Backtest {
-  run(config: BacktestConfig, clock: SimulatedClock): Promise<BacktestReport>;
 }

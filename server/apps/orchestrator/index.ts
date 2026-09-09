@@ -959,11 +959,11 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
     // an injected `AlpacaCalendarClient`, the same split `startingProfileForMode`'s
     // own doc comment explains for the mode/profile hop.
     //
-    // PAPER only, narrower than "not live" — #684's own scope. `backtest`
-    // replays historical bars through `server/tools/backtest/backtest.ts`,
-    // which drives the pipeline via its own harness (`Clock`/`DataSource`/
-    // `BrokerAdapter` injected directly) and never imports this entrypoint,
-    // so in practice `SAMURAI_MODE=backtest` never reaches this line. But
+    // PAPER only, narrower than "not live" — #684's own scope. No production
+    // entrypoint constructs a `SAMURAI_MODE=backtest` pipeline (the one
+    // candidate, `BacktestHarness`, was deleted as unwired dead code — #1156)
+    // and this entrypoint is not it either, so in practice
+    // `SAMURAI_MODE=backtest` never reaches this line. But
     // fetching here regardless would be actively wrong if it ever did:
     // `resolveUsEquitySessionCalendar`'s window is anchored to wall-clock
     // `now`, and `AlpacaEquitySessionCalendar` answers "not a trading day" for

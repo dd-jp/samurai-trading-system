@@ -1008,9 +1008,9 @@ export interface DailyMetricsConfig {
   /**
    * The frozen selected config's backtest Sharpe — the divergence check's
    * baseline. Supplied for the same reason the suite is: no selected-config
-   * record with a backtest Sharpe is persisted in-repo (`SqliteConfigTrialLog`
-   * has the documented `config_json` gap, and Stage 2's runner uses an
-   * in-memory trial log).
+   * record with a backtest Sharpe is persisted in-repo (the SQLite-backed
+   * config-trial log was deleted as unwired dead code, #1156 — Stage 2's
+   * runner uses `InMemoryConfigTrialLog`, which does not survive the process).
    *
    * A value `<= 0` cannot breach by design — `liveBacktestDivergence` refuses
    * to manufacture a breach off a broken reference — which makes

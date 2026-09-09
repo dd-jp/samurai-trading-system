@@ -2,21 +2,23 @@
  * Cost Model / Backtest Harness — see docs/specs/cost-model-backtest-spec.md, epic #58.
  * Implemented ticket-by-ticket starting with #87.
  *
- * Ticket #88 adds the replay harness — `BacktestHarness` (Seam 2), the
- * no-lookahead auditor and the survivorship-free universe check — plus the
- * stepped `SimulatedClock` (exported from server/shared/clock.ts, beside the
- * `Clock` every stage already injects).
- *
- * The harness drives the Orchestrator's `Scheduler` + `TickRunner` (#94)
- * rather than containing a pipeline of its own, so replay and live share one
- * code path by construction. Those implementations do not exist yet — nor does
- * `DebateEngine.run` (epic #40) — so the harness is unit-tested against fakes
- * and the spec's end-to-end fixed-window replay is deferred to those tickets.
+ * Ticket #88 built the replay harness — `BacktestHarness`, driving the
+ * Orchestrator's `Scheduler` + `TickRunner` bar-by-bar via a stepped
+ * `SimulatedClock` — as the spec's intended "replay and live share one code
+ * path" seam. #1156 deleted it: no composition root ever constructed it
+ * (only its own test and `eval-executor.test.ts`'s cross-check did), and
+ * wiring it for real would mean replaying the live LLM debate over history,
+ * which ADR-0001 rules out ("a backtest cannot host an LLM debate") — the
+ * reason the proxy-strategy path below (#242-#245) exists instead. The
+ * no-lookahead auditor (`lookahead.ts`) and survivorship-free check
+ * (`universe.ts`) it also introduced stayed: both are live via
+ * `replay-driver.ts`.
  *
  * `BacktestReport` is declared in its #88-fillable subset only: the `metrics`
  * / walk-forward / capacity-ceiling fields belong to the validation library
  * and arrive with the ticket that can honestly populate them, per the staged
- * style of `types.ts` (#87) and `execution/types.ts` (#82).
+ * style of `types.ts` (#87) and `execution/types.ts` (#82). `trial-execution.ts`
+ * (#244) is `BacktestReport`'s one real writer.
  *
  * Ticket #89 adds the **validation library** — the `MetricsSuite`, the
  * walk-forward/CPCV split generator, DSR/PBO/MinBTL, and the `config_trials`
@@ -53,12 +55,15 @@
  * `testRangeOf` in eval-executor.ts for why a disjoint test side cannot be
  * given an honest exposure denominator without changing `TradeSeries`.
  *
- * Ticket #196 adds the real `SqliteConfigTrialLog`, over the shared store's
- * `config_trials` table (#193). `InMemoryConfigTrialLog` stays exported
- * alongside it — a fixture double, per `SqliteSetupStore`/`FixtureSetupStore`
- * precedent — since no composition root wires either yet (`eval-executor.ts`
- * does not call `recordTrial`; see the #89/#90 notes above on why
- * `BacktestReport.metrics` isn't wired into a caller that could).
+ * Ticket #196 added a real `SqliteConfigTrialLog`, over the shared store's
+ * `config_trials` table (#193). #1156 deleted it: no composition root ever
+ * constructed it, wiring it into `run-stage2.ts` would have made
+ * `distinctTrialCount()` a cumulative `SELECT COUNT(*)` across every run
+ * ever taken against the shared store rather than the current process's
+ * grid — silently moving a number `renderStage2Verdict`'s MinBTL check
+ * deflates by — and no code ever called `getTrial` outside the deleted
+ * class's own test. `InMemoryConfigTrialLog` is `ConfigTrialLog`'s one
+ * implementation now; `trial-execution.ts` (#244) is its one real caller.
  *
  * Ticket #242 (Stage 2 Validation Execution, wayfinder map #154, see
  * docs/specs/stage2-validation-execution-spec.md) adds `proxy-strategy.ts` —
@@ -119,8 +124,6 @@
  * a follow-up manual/ops step (#245's still-open AC2/4/5).
  */
 
-export type { BacktestDeps } from './backtest.js';
-export { BacktestHarness } from './backtest.js';
 export type { ConfigTrialLog } from './config-trial-log.js';
 export { InMemoryConfigTrialLog } from './config-trial-log.js';
 export type { RunCostAttribution, TradeCostAttribution } from './cost-attribution.js';
@@ -166,7 +169,6 @@ export type {
 export { DEFAULT_FLATTEN_BEFORE_CLOSE_MS, ReplayDriver } from './replay-driver.js';
 export type { SplitOptions, SplitScheme } from './splits.js';
 export { generateSplits } from './splits.js';
-export { SqliteConfigTrialLog } from './sqlite-config-trial-log.js';
 export { SqliteStage2SelectionStore } from './sqlite-stage2-selection-store.js';
 export type {
   PolygonAggregate,
@@ -205,8 +207,6 @@ export {
 } from './trial-execution.js';
 export type {
   AssetClassCostConfig,
-  Backtest,
-  BacktestConfig,
   BacktestReport,
   CostBreakdown,
   CostConfig,

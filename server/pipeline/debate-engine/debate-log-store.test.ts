@@ -287,7 +287,7 @@ describe('floorToBar', () => {
   });
 
   it('leaves an instant already on a boundary alone', () => {
-    // The replay case: `BacktestHarness` advances the clock TO the bar close,
+    // The replay case: a deterministic replay advances the clock TO the bar close,
     // so flooring must be the identity there or live and replay would still
     // disagree.
     const onBar = new Date('2026-08-06T14:00:00.000Z');

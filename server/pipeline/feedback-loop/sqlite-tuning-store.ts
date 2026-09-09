@@ -9,8 +9,8 @@
  * Each dial's current value is a plain upsert: `runDailyCycle` treats a dial
  * write as "this is now the value", never a history (`dial_adjustments`,
  * via `AdjustmentLog`, is the audit trail for that). `updated_at` is stamped
- * from the injected `Clock`, matching `SqliteConfigTrialLog`'s convention,
- * since the `TuningStore` port itself carries no timestamp parameter.
+ * from the injected `Clock` rather than a caller-supplied parameter, since
+ * the `TuningStore` port itself carries no timestamp field.
  */
 
 import type { Clock, TuningStore } from '../../shared/index.js';
