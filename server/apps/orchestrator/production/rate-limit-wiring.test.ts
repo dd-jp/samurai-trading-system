@@ -92,19 +92,6 @@ function budget(overrides: Partial<RateLimiterConfig['default']> = {}): RateLimi
   };
 }
 
-/**
- * `RateLimiterConfig` requires `default` — there is no valid literal for "a
- * config missing it", so the two refusal tests below need an escape hatch to
- * construct their own input. This is not a stub standing in for a value the
- * test could otherwise build correctly: the missing-`default` shape IS the
- * subject `buildProductionComponents` is asserted to refuse, reachable in
- * production only through a caller that already cast past the type system
- * (a `.js` caller, an `any`-typed plugin, a deserialized config file).
- */
-const malformedRateLimiterConfig = {} as unknown as NonNullable<
-  ProductionConfig['rateLimiterConfig']
->;
-
 function recordingLogger(): { logger: Logger; entries: LogEntry[] } {
   const entries: LogEntry[] = [];
   return { logger: { log: (entry) => entries.push(entry) }, entries };
@@ -173,19 +160,20 @@ describe('the LLM rate limiter is in the production path (#388)', () => {
    * (PR #390 review). `buildDebateStep` calls `reserve` outside its try/catch
    * because `reserve` is total over `AssetClass` — but that only held while the
    * config shape was well formed, and the shape was guaranteed by TypeScript
-   * alone. A `rateLimiterConfig` injected with no `default` (reachable by any
-   * caller who casts) used to survive construction and throw on the first
-   * debate; now the root refuses to build.
+   * alone. A malformed `rateLimiterConfig` used to survive construction and
+   * throw on the first debate; now the root refuses to build. `windowMs: 0` is
+   * the type-legal malformed shape (`assertBudget` requires it positive); the
+   * missing-`default` shape is unit-pinned in rate-limiter.test.ts.
    */
-  it('refuses to build with a rateLimiterConfig that has no `default`', () => {
+  it('refuses to build with a malformed rateLimiterConfig', () => {
     expect(() =>
       buildProductionComponents(
         stubConfig(db, {
           llmClient: countingLlmClient(),
-          rateLimiterConfig: malformedRateLimiterConfig,
+          rateLimiterConfig: budget({ windowMs: 0 }),
         }),
       ),
-    ).toThrow(/config\.default is required/);
+    ).toThrow(/default\.windowMs must be a finite positive number/);
   });
 
   it('refuses before opening any store or wire client, not part-way through wiring', () => {
@@ -195,7 +183,7 @@ describe('the LLM rate limiter is in the production path (#388)', () => {
     // by the broker wire client never being touched.
     const config = stubConfig(db, {
       llmClient: countingLlmClient(),
-      rateLimiterConfig: malformedRateLimiterConfig,
+      rateLimiterConfig: budget({ windowMs: 0 }),
     });
 
     expect(() => buildProductionComponents(config)).toThrow();
