@@ -49,7 +49,7 @@
  *   is therefore the one terminal state that is never reached with
  *   `filled_size = 0`.
  *
- * `getOpenPositions()` (below) excludes all four terminal states from every
+ * `getOpenPositions()` (below) excludes all five terminal states from every
  * live read — crash recovery, Risk's exposure caps, the dashboard — so a
  * terminal row sitting in the table is inert to every reader; it does not
  * corrupt anything downstream. Before #1088, though, nothing ever removed

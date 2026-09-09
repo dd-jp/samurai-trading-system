@@ -189,13 +189,15 @@ describe('sweepWedgedZeroFillLots (#1186)', () => {
     const { store } = openTestExecutionStore();
     await seedWedgedPosition(store);
 
-    // Simulate the race: a fill lands (via the real advance path) after this
-    // sweep's `getOpenPositions()` read would have captured the lot but
-    // before its `abandonWedgedZeroFillLot` write — modelled here by
-    // advancing the lot first, then running the sweep against the
-    // now-filled store. The sweep's own worklist read still sees the STALE
-    // wedge shape only if it ran first; here it is the WHERE-guard inside
-    // `abandonWedgedZeroFillLot` itself under test, so drive it directly.
+    // Not a fill-lands race specifically — that shape isn't driven here. This
+    // calls `abandonWedgedZeroFillLot` directly, twice, to exercise the
+    // WHERE-guard's own idempotent-no-op case: whatever un-wedges a lot
+    // between the sweep's worklist read and this write (a fill landing is
+    // the motivating example, but the guard doesn't care which), the second
+    // call must not overwrite it. Only the `order_state IN ('filled',
+    // 'partially_filled')` half of the guard is exercised this way — the
+    // row here still has `filled_size = 0` on the second call too, so that
+    // half of the WHERE clause is untested by this case.
     const abandoned = await store.abandonWedgedZeroFillLot(KEY, 'test-forced');
     expect(abandoned).toBe(true);
     // A second call against the now-'abandoned' row is the guard's own

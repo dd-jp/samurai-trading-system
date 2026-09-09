@@ -15,12 +15,15 @@
  * - `sweepTerminalPositions` (#1088) only deletes ALREADY-terminal rows; this
  *   lot is not terminal yet, which is exactly the problem.
  * - `ingestFills()`'s `advanceLot` only recomputes state from a NEW fill
- *   (`newFills.length === 0` returns early) — and no fill can ever land for
- *   THIS lot: #1096 fixed the source defect that produced the incident's META
- *   row (a fill excluded forever from every subsequent poll's `since` floor,
- *   `simulated-adapter.ts`), so the venue-side cause is closed, but a lot
- *   already wedged before that fix — or wedged by any future defect of the
- *   same shape — still has nothing that ever revisits it.
+ *   (`newFills.length === 0` returns early) — and once no more `Fill` rows
+ *   will ever be recorded for THIS lot, nothing in this store revisits it
+ *   again. That "no more fills" state has more than one cause: #1096 fixed
+ *   the since-floor defect that excluded a real fill forever for the
+ *   incident's META row (`simulated-adapter.ts`); #1302's unresolved-
+ *   price-unit refusal is a still-live route where a fill is deliberately
+ *   never booked. Either way — or any future defect of the same shape —
+ *   the lot is stuck, and this store has no mechanism that ever looks at it
+ *   again without this sweep.
  *
  * `FilledZeroSizeThrottle` (filled-zero-size-throttle.ts) bounds the LOG
  * volume this condition produces, not its LIFETIME — its own doc names this
@@ -28,16 +31,26 @@
  *
  * ## Store evidence only — no venue call, ever
  *
- * A zero-fill lot has no venue position: `requested_size` was submitted, but
- * `filled_size = 0` means nothing came back. There is nothing at the venue to
- * cancel or re-place (#1215's rule — no order is cancelled or re-placed
- * without audit evidence — is satisfied trivially: this function never calls
- * `BrokerAdapter` at all). Retiring the row is a BOOKKEEPING close, decided
- * entirely from `OpenPosition.order_state`/`filled_size`/`opened_at`, which is
- * what makes this safe to run unconditionally on every `reconcile()` pass —
- * including the very first one after a restart, before any adapter has
- * rebuilt a shred of in-memory state about the lot (the exact position a
- * restart leaves the system in, per #1186's AC).
+ * This function decides entirely from the STORE's own ledger
+ * (`OpenPosition.order_state`/`filled_size`/`opened_at`) and never calls
+ * `BrokerAdapter` at all — so #1215's rule (no order is cancelled or
+ * re-placed without audit evidence) is satisfied trivially. That is NOT the
+ * same claim as "this lot has no venue position": `order_state` is
+ * `filled`/`partially_filled` because the VENUE reported it, and
+ * `filled_size = 0` means only that this store's `Fill` rows disagree with
+ * that report — not that none exist (see #1096/#1302 above). Retiring the
+ * row is a bookkeeping close of OUR record, never a claim about the venue's
+ * book. `findUnrecordedVenuePositions` (reconcile.ts, run immediately after
+ * this sweep, every pass) is the mechanism that actually reconciles the
+ * venue's positions against the store's — it is the backstop that surfaces
+ * a real position in this instrument, at `info`
+ * (`reconcileDivergenceLevel`, apps/orchestrator/fill-sync.ts), on the very
+ * next pass if the venue turns out to hold one. Being store-only, rather
+ * than store-evidence-plus-a-venue-position-claim, is what makes this safe
+ * to run unconditionally on every `reconcile()` pass — including the very
+ * first one after a restart, before any adapter has rebuilt a shred of
+ * in-memory state about the lot (the exact position a restart leaves the
+ * system in, per #1186's AC).
  *
  * ## Auto-retire, not an operator alert
  *
@@ -46,16 +59,18 @@
  * This takes the first, and deliberately adds no new `AlertChannelSlots`
  * transport:
  *
- * - The action has no live-money consequence to get wrong. Every OTHER
+ * - The ACTION ITSELF has no live-money consequence to get wrong: it only
+ *   ever rewrites `open_positions` (never touches the venue), so the worst
+ *   case is a bookkeeping row saying `abandoned` about a lot that turns out
+ *   to still have real venue exposure — and that worst case already has its
+ *   own backstop, `findUnrecordedVenuePositions` (see "Store evidence only"
+ *   above), independent of whether THIS sweep ever ran. Every OTHER
  *   escalation in this module (`ResidualExposureAlert`, `FlattenReconcileAlert`,
  *   `FlattenOverfillWarning`) exists because the system might be silently
- *   exposed at the venue, or because ambiguity needs a human to resolve. A
- *   zero-fill lot carries zero exposure by construction (`filled_size = 0`
- *   IS the invariant `getOpenPositions()`'s callers already trust for sizing),
- *   and "no fill will ever land" is not a judgment call — it follows
- *   mechanically from `advanceLot`'s own contract above. There is no decision
- *   left for an operator to make that this function does not already make
- *   correctly by construction.
+ *   exposed at the venue and no other mechanism would notice; this sweep is
+ *   not that case, because the venue-exposure question is already someone
+ *   else's job. There is no decision left for an operator to make that
+ *   retiring this row, specifically, would change.
  * - The record is not lost. `abandon_reason` (migration 0056) is written to
  *   the row itself — durable, queryable, surviving every future restart —
  *   which is a STRONGER trace than a transient alert delivery would be. The
