@@ -1157,6 +1157,68 @@ describe('SaxoBrokerAdapter.cancel', () => {
     expect(client.cancelOrder).not.toHaveBeenCalled();
   });
 
+  it('keeps the legs and pages across the live cancel/reconcile/cancel sequence (#1216 round 2)', async () => {
+    let reads = 0;
+    const client = makeClient({
+      // The master is on the list for the first read only: it left inside the
+      // first cancel and never comes back, which is the wedge itself.
+      listOpenOrders: vi.fn(async () =>
+        reads++ === 0 ? [workingMaster(), dormantLeg(), targetLeg()] : [dormantLeg(), targetLeg()],
+      ),
+      listOrderActivities: vi.fn().mockResolvedValue([]),
+      cancelOrder: vi.fn(async (orderId: string) => {
+        if (orderId === '5040047177') {
+          throw new SaxoBrokerProviderError('Saxo API error: 404', 404, 'OrderNotFound', 'gone');
+        }
+      }),
+    });
+    const { adapter, dormantLegsAlerts } = makeAdapter(client);
+
+    await expect(adapter.cancel('key-3usl-0930', '3USL')).resolves.toBeUndefined();
+
+    // Every poll runs reconcile() -> getOrder() on the same key before the
+    // next cancel. That call must inherit "the master was open moments ago",
+    // or it takes lookup's cancel-on-silence verdict and strips the legs one
+    // poll after cancel refused to — so the DELETE count is asserted before
+    // the answer, and only the master's own DELETE may have happened.
+    const reconcilePoll = await adapter.getOrder('key-3usl-0930', '3USL').then(
+      (order) => order,
+      (error: unknown) => error,
+    );
+
+    expect(client.cancelOrder).toHaveBeenCalledTimes(1);
+    expect(reconcilePoll).toMatchObject({
+      name: 'BrokerError',
+      operation: 'getOrder',
+      venueCode: 'DormantLegsUncorroborated',
+    });
+    expect(dormantLegsAlerts.alerts).toHaveLength(1);
+
+    await expect(adapter.cancel('key-3usl-0930', '3USL')).resolves.toBeUndefined();
+
+    expect(client.cancelOrder).toHaveBeenCalledTimes(1);
+    expect(client.cancelOrder).toHaveBeenCalledWith('5040047177');
+    expect(client.cancelOrder).not.toHaveBeenCalledWith('5040047178');
+    expect(client.cancelOrder).not.toHaveBeenCalledWith('5040047179');
+  });
+
+  it('pages once a Filled-row refusal repeats on the same reference (#1216 round 2)', async () => {
+    const client = makeClient({
+      listOpenOrders: vi.fn().mockResolvedValue([dormantLeg(), targetLeg()]),
+      listOrderActivities: vi.fn().mockResolvedValue([activity({ Status: 'Filled' })]),
+    });
+    const { adapter, dormantLegsAlerts } = makeAdapter(client);
+
+    for (let poll = 0; poll < DORMANT_DEFER_ALERT_AFTER; poll++) {
+      await expect(adapter.cancel('key-3usl-0930', '3USL')).rejects.toMatchObject({
+        venueCode: 'EntryFilledDuringCancel',
+      });
+    }
+
+    expect(dormantLegsAlerts.alerts).toHaveLength(1);
+    expect(client.cancelOrder).not.toHaveBeenCalled();
+  });
+
   it('resolves on OrderNotFound when the master is the only open row and the re-read finds nothing left', async () => {
     const client = makeClient({
       listOpenOrders: vi.fn().mockResolvedValue([workingMaster()]),

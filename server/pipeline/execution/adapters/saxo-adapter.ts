@@ -113,12 +113,17 @@ const DEFAULT_ACTIVITY_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
 /**
  * Consecutive observations — by `lookup()` or by `cancel()`'s re-read, which
  * share one counter per reference (`corroborateDormantLegs`) — of legs
- * dormant but the master's OWN audit-trail row not yet terminal, before the
- * FIRST `DormantLegsUnresolvedAlert` — see `escalateIfStale`. Sharing means
- * a flat-by-close `cancel` and one `reconcile` poll page between them where
- * two polls were needed before #1216: intended, since the wedge is a
- * property of the reference and each answered observation is equal evidence
- * of it, whichever path made the call. A wall-clock age was
+ * dormant that this adapter could not resolve, before the FIRST
+ * `DormantLegsUnresolvedAlert` — see `escalateIfStale`. Sharing means a
+ * flat-by-close `cancel` and the `reconcile` poll that follows it page
+ * between them where two polls were needed before #1216: intended, since the
+ * wedge is a property of the reference and each answered observation is
+ * equal evidence of it, whichever path made the call. That sequence is what
+ * the live loop actually produces (`reconcile()` runs `getOrder` on the same
+ * key every poll), so the `masterSeenOpen` fact the two share has to be
+ * per-reference for the pair to add up at all — see `DormantDeferRecord`.
+ * The refusal count is namespaced away from this one and bounded the same
+ * way; see `dormantDefer`. A wall-clock age was
  * considered and rejected: this adapter is never told the poll cadence, but
  * every call that reaches this branch already counts one observation, the
  * same shape `FilledZeroSizeThrottle.observe` counts consecutive wedged
@@ -155,6 +160,28 @@ export const DORMANT_DEFER_ALERT_AFTER = 2;
  * precedent for this one, which still wants a genuine `warn` repeat.
  */
 export const DORMANT_DEFER_ALERT_REPEAT_EVERY = 8;
+
+interface DormantDeferRecord {
+  readonly consecutive: number;
+  readonly firstObservedAt: Date;
+  /**
+   * A `cancel` on this reference read the master OPEN and its DELETE then
+   * answered `OrderNotFound`. It outlives that one call because the polls
+   * that follow re-read the same wedge through `lookup`, which has no master
+   * of its own to see and would otherwise take its cancel-on-silence verdict
+   * and strip the legs `cancel` had just refused to (#1216 round 2).
+   *
+   * Meaningful on the bare-reference key only. The `refusedKey` namespace
+   * counts a settled `Filled` answer, where nothing is corroborating and no
+   * caller reads this, so it is recorded `false` there.
+   */
+  readonly masterSeenOpen: boolean;
+}
+
+/** `dormantDefer`'s namespace for the refusal counter — see that map's doc. */
+function refusedKey(externalReference: string): string {
+  return `refused:${externalReference}`;
+}
 
 function shouldWarnDormantDefer(consecutive: number): boolean {
   if (consecutive < DORMANT_DEFER_ALERT_AFTER) return false;
@@ -355,12 +382,20 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
   private readonly brackets = new Map<string, BracketRecord>();
   private readonly flattens = new Map<string, FlattenRecord>();
   /**
-   * Per-reference consecutive defer count + first-observed time for
-   * `escalateIfStale`. In memory and restart-clean — same posture as
+   * Per-reference consecutive unresolved-observation count + first-observed
+   * time for `escalateIfStale`. In memory and restart-clean — same posture as
    * `FilledZeroSizeThrottle`'s own map (its doc): a process that just
    * restarted has no evidence about the previous process's polls.
+   *
+   * Two conditions are counted here under namespaced keys, the same shape
+   * `priceUnitDefer` uses and for the same reason — they must not shift each
+   * other's cadence. The bare reference counts "the audit trail has not
+   * answered"; `refusedKey` counts "it answered `Filled` and `cancel` refused
+   * to act on it" (#1216 round 2). A shared key would let one caller's
+   * settled verdict clear the other's wedge, which is the defect #1216 round
+   * 2 finding 1 found in the first version of this counter.
    */
-  private readonly dormantDefer = new Map<string, { consecutive: number; firstObservedAt: Date }>();
+  private readonly dormantDefer = new Map<string, DormantDeferRecord>();
   /**
    * Consecutive observations of a Uic whose quote unit is unresolvable, one
    * namespaced key per site so the two cadences do not shift each other.
@@ -667,7 +702,10 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     instrument: string,
     masterWasOpen: boolean,
   ): Promise<void> {
-    if (legs.length === 0) return;
+    if (legs.length === 0) {
+      this.clearRefusedDefer(clientOrderId);
+      return;
+    }
     if (legs.every(isNeverActivated)) {
       const verdict = await this.corroborateDormantLegs(
         clientOrderId,
@@ -693,16 +731,39 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
         return;
       }
       if (verdict.kind === 'cancel') {
+        this.clearRefusedDefer(clientOrderId);
         await this.cancelLegs(legs);
         return;
       }
-      throw entryFilledDuringCancel(
+      throw await this.refuse(
         clientOrderId,
+        instrument,
         masterWasOpen ? FILL_INSIDE_CALL : FILL_UNPLACED,
       );
     }
-    if (masterWasOpen) throw entryFilledDuringCancel(clientOrderId, FILL_INSIDE_CALL);
+    if (masterWasOpen) throw await this.refuse(clientOrderId, instrument, FILL_INSIDE_CALL);
+    this.clearRefusedDefer(clientOrderId);
     await this.cancelLegs(legs);
+  }
+
+  /**
+   * `clearLegs`' refusal, counted before it is thrown. A refusal leaves the
+   * legs where they are and reports through the caller's error path only —
+   * `execute.ts`'s `exit_cancel_failed` log, a `flatten_submissions` error
+   * row and the tick audit row, no alert channel — so a lot wedged in the
+   * shape unproven item 2 describes would refuse every exit attempt
+   * indefinitely with nothing paging (#1216 round 2 finding 2). It counts on
+   * its own `refusedKey` rather than sharing the defer count: the two
+   * conditions resolve independently, and one caller's settled verdict must
+   * not clear the other's wedge.
+   */
+  private async refuse(
+    clientOrderId: string,
+    instrument: string,
+    evidence: string,
+  ): Promise<SaxoBrokerProviderError> {
+    await this.escalateIfStale(refusedKey(clientOrderId), clientOrderId, instrument, false);
+    return entryFilledDuringCancel(clientOrderId, evidence);
   }
 
   async getOpenPositions(): Promise<NormalizedPosition[]> {
@@ -967,10 +1028,14 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
   }
 
   /**
-   * Records one more consecutive "legs dormant, master's audit row not yet
-   * terminal" observation for `externalReference` and posts
-   * `DormantLegsUnresolvedAlert` once `shouldWarnDormantDefer` says it is
-   * due — see that function's own doc for the bound and repeat cadence.
+   * Records one more consecutive observation of a bracket this adapter could
+   * not resolve — the audit trail silent or non-terminal (`deferKey` is the
+   * bare reference), or answering `Filled` where `cancel` then refused
+   * (`refusedKey`) — and posts `DormantLegsUnresolvedAlert` once
+   * `shouldWarnDormantDefer` says it is due; see that function's own doc for
+   * the bound and repeat cadence. `masterSeenOpen` is sticky per reference:
+   * once one observation reports it, every later one under the same key
+   * inherits it (see `DormantDeferRecord`).
    * Fire-and-forget, fully swallowed: same posture as
    * `postFlattenReconcileAlert` (reconcile.ts) — the poll this alert
    * reports on already completed, there is nothing here to undo on a
@@ -978,14 +1043,20 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
    * line, not the alert content repeated.
    */
   private async escalateIfStale(
+    deferKey: string,
     externalReference: string,
     instrument: string | undefined,
+    masterSeenOpen: boolean,
   ): Promise<void> {
     const now = this.clock.now();
-    const prior = this.dormantDefer.get(externalReference);
+    const prior = this.dormantDefer.get(deferKey);
     const consecutive = (prior?.consecutive ?? 0) + 1;
     const firstObservedAt = prior?.firstObservedAt ?? now;
-    this.dormantDefer.set(externalReference, { consecutive, firstObservedAt });
+    this.dormantDefer.set(deferKey, {
+      consecutive,
+      firstObservedAt,
+      masterSeenOpen: masterSeenOpen || prior?.masterSeenOpen === true,
+    });
     if (!shouldWarnDormantDefer(consecutive)) return;
     try {
       await this.dormantLegsAlerts.postDormantLegsUnresolvedAlert({
@@ -1012,10 +1083,23 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
    * Clears the consecutive-defer count once `lookup` resolves this
    * reference one way or the other, so a later, unrelated dormant episode
    * under the same key starts its own grace window fresh rather than
-   * inheriting a stale count.
+   * inheriting a stale count — and with it the `masterSeenOpen` fact, which
+   * describes the episode that just resolved, not the next one.
+   *
+   * The `refusedKey` count is deliberately NOT cleared here: a `Filled`
+   * verdict resolves the reference for `lookup` (it adopts the fill) and does
+   * not for `cancel` (it refuses), so clearing both from one verdict would
+   * reset the refusal wedge every poll and it could never page (#1216 round 2
+   * finding 2). `clearRefusedDefer` clears that one, from the paths where
+   * `cancel` itself resolves.
    */
   private clearDormantDefer(externalReference: string): void {
     this.dormantDefer.delete(externalReference);
+  }
+
+  /** Clears the refusal count once `cancel` reaches a settled answer for this reference. */
+  private clearRefusedDefer(externalReference: string): void {
+    this.dormantDefer.delete(refusedKey(externalReference));
   }
 
   /** The most recent audit-trail row for `externalReference` inside `lookbackMs`, or none. */
@@ -1045,8 +1129,14 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
    * landed", which is false for an order the venue's own audit trail shows
    * it received. No row at all inside the lookback ties the legs to any
    * known order, so they are cancelled and `null` is the honest answer —
-   * true on THIS path, where no master was seen open, and false on
-   * `cancel`'s, which is why that caller passes `masterKnownOpen`.
+   * true only while no `cancel` has recorded a `masterSeenOpen` observation
+   * for this reference, which is why that caller passes `masterKnownOpen`.
+   * Once one has, this path throws `DormantLegsUncorroborated` instead: it
+   * must not cancel legs `cancel` just refused to cancel, and it must not
+   * answer `null` either, which `reconcileLot` reads as "the write-ahead
+   * never landed" and acts on by marking the lot `rejected` — a lot with
+   * live protective legs on the venue erased from the store. A throw is the
+   * one answer `reconcileLot` treats as ignorance and leaves the record for.
    *
    * Anything else (no terminal status yet, including `partially_filled` —
    * contradictory alongside a dormant-legs read that says the entry never
@@ -1090,7 +1180,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     if (verdict.kind === 'filled')
       return legsFilled(open.dormant, verdict.latest, externalReference);
     if (verdict.kind === 'defer') return fromActivity(verdict.latest, externalReference);
-    if (verdict.kind === 'uncorroborated') return null;
+    if (verdict.kind === 'uncorroborated') throw dormantLegsUncorroborated(externalReference);
     await this.cancelLegs(open.dormant);
     return verdict.latest === undefined ? null : fromActivity(verdict.latest, externalReference);
   }
@@ -1109,13 +1199,21 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
    *
    * `masterKnownOpen` says this same call read the master on the open list
    * and its DELETE then answered `OrderNotFound`, which changes what an
-   * EMPTY audit answer means. For `lookup` (false) no row inside the lookback
-   * ties the legs to any known order, so `cancel` is the honest verdict. For
-   * that caller it is a corroboration failure about an order the venue was
+   * EMPTY audit answer means. Absent that, no row inside the lookback ties
+   * the legs to any known order, so `cancel` is the honest verdict. With it,
+   * the silence is a corroboration failure about an order the venue was
    * serving milliseconds ago, so it defers as `uncorroborated` and counts
    * towards the page — zero information must not buy more destruction than
    * a non-terminal row does (#1215's never-on-`Status`-alone ruling, and
    * #1216's own tell that the snapshot went stale).
+   *
+   * The fact is remembered per reference rather than per call (#1216 round
+   * 2): every poll runs `reconcile()` -> `getOrder` -> `lookup` on the same
+   * key, and `lookup` never sees a master of its own, so a per-call flag
+   * would have the very next poll strip the legs `cancel` had just refused
+   * to strip and clear the count on its way past — a page nothing could
+   * reach. `clearDormantDefer` forgets it again the moment any settled
+   * verdict resolves the reference.
    */
   private async corroborateDormantLegs(
     externalReference: string,
@@ -1123,10 +1221,12 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     instrument: string | undefined,
     masterKnownOpen: boolean,
   ): Promise<DormantVerdict> {
+    const seenOpen =
+      masterKnownOpen || this.dormantDefer.get(externalReference)?.masterSeenOpen === true;
     const latest = await this.latestActivityFor(externalReference, lookbackMs);
     if (latest === undefined) {
-      if (masterKnownOpen) {
-        await this.escalateIfStale(externalReference, instrument);
+      if (seenOpen) {
+        await this.escalateIfStale(externalReference, externalReference, instrument, true);
         return { kind: 'uncorroborated' };
       }
       this.clearDormantDefer(externalReference);
@@ -1141,7 +1241,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
       this.clearDormantDefer(externalReference);
       return { kind: 'cancel', latest };
     }
-    await this.escalateIfStale(externalReference, instrument);
+    await this.escalateIfStale(externalReference, externalReference, instrument, seenOpen);
     return { kind: 'defer', latest };
   }
 
@@ -1230,6 +1330,20 @@ function entryFilledDuringCancel(clientOrderId: string, evidence: string): SaxoB
     `Saxo cancel '${clientOrderId}': ${evidence}. Its protective legs are the only cover the ` +
     'position has, so nothing was cancelled — the exit must be re-derived from a fresh read.';
   return new SaxoBrokerProviderError(reason, undefined, 'EntryFilledDuringCancel', reason);
+}
+
+/**
+ * `lookup`'s answer for dormant legs whose master a `cancel` saw open and
+ * whose audit trail says nothing — see that method's doc for why neither
+ * cancelling nor `null` is available here. Carried as `venueMessage` too,
+ * same as `entryFilledDuringCancel` and for the same reason.
+ */
+function dormantLegsUncorroborated(externalReference: string): SaxoBrokerProviderError {
+  const reason =
+    `Saxo lookup '${externalReference}': its master left the open list inside a cancel and the ` +
+    'audit trail answers nothing, so the protective legs cannot be corroborated either way — ' +
+    'nothing was cancelled and no state is reported. The operator is paged while it persists.';
+  return new SaxoBrokerProviderError(reason, undefined, 'DormantLegsUncorroborated', reason);
 }
 
 /** The bracket's protective legs as their own `listOpenOrders` rows, master excluded. */

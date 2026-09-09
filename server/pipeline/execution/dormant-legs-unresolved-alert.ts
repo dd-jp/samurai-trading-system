@@ -11,6 +11,12 @@
  * `escalateIfStale`'s own doc (saxo-adapter.ts) for the consecutive-poll
  * bound this fires on.
  *
+ * #1216 widened it to every dormant pair the adapter cannot resolve, on the
+ * same bound and the same reasoning: an audit trail that answers NOTHING
+ * about a master a `cancel` just read open, and one that answers `Filled`
+ * where `cancel` then refuses to touch the legs. Both leave legs standing
+ * with no verdict, which is the state this alert exists to make visible.
+ *
  * Posted instead of thrown, deliberately, and REQUIRED with no default at
  * the constructor — the same "tested mechanism nothing calls" gap
  * `LegResizeUnverifiedAlertChannel` refuses (its own doc), which this repo
