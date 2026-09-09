@@ -14,10 +14,14 @@
  *   and cancels the related orders with the master on an explicit cancel
  *   (VERIFIED, doc 43). What Saxo does to a `DayOrder` master's own related
  *   orders when it EXPIRES unfilled at session end, rather than being
- *   cancelled, is UNVERIFIED (#1215) — `findOpen`'s `Status` check defends
- *   against that regardless of the venue's answer: a related-order pair
- *   found still `NotWorking` (never activated) with no master present is
- *   cancelled and reported as nothing to adopt, never as a phantom fill.
+ *   cancelled, is UNVERIFIED (#1215) — this adapter defends only the branch
+ *   where Saxo leaves them `NotWorking` (parked, never activated): `findOpen`
+ *   / `lookup` corroborate that read against the audit trail before
+ *   cancelling (#1215 round 1), rather than journalling a phantom fill. If
+ *   Saxo instead ACTIVATES the legs on expiry the same way it would on a
+ *   genuine fill (`Working` on the book), that read is indistinguishable
+ *   from a real fill by `Status` alone — the overnight-resting risk this
+ *   ticket names lives entirely on that branch and is UNCHANGED by this fix.
  * - `IsOcoOrderSupported` is false on every pool line, so an entry-less
  *   protective pair cannot be expressed; `rearmProtectiveLegs` throws.
  * - Amounts are whole units (`MinimumLotSize` 1, `OddLotsNotAllowed`) and
@@ -431,7 +435,13 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     } catch (cause) {
       if (!isDuplicateRequestRefusal(cause)) throw cause;
       const adopted = await this.findOpen(externalReference);
-      if (adopted === null) throw cause;
+      // A dormant-legs signal here is not acted on: this path fires only
+      // right after a duplicate-request 409, and cancelling on `Status`
+      // alone is exactly the UNVERIFIED read `lookup` exists to avoid
+      // (#1215 round 1). Declining to adopt leaves the legs for the next
+      // `reconcile()` pass (#921 runs every poll) to settle against the
+      // audit trail.
+      if (adopted === null || isDormantLegs(adopted)) throw cause;
       return adopt(adopted, externalReference);
     }
   }
@@ -466,7 +476,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     return undefined;
   }
 
-  private async findOpen(externalReference: string): Promise<LookedUpOrder | null> {
+  private async findOpen(externalReference: string): Promise<LookedUpOrder | DormantLegs | null> {
     const open = await this.client.listOpenOrders();
     const master = open.find((order) => order.ExternalReference === externalReference);
     if (master !== undefined) {
@@ -488,19 +498,14 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
         },
       };
     }
-    // Only the protective legs still open. `Status` says why the master is
-    // gone: `Working` is a related order that ACTIVATED on the entry's fill
-    // (the master itself left the open list because it filled, not because
-    // it expired) — the case this branch originally assumed unconditionally.
-    // `NotWorking` is the value Saxo reports for a related order still
-    // parked, never activated (doc 43 fixtures). If every leg found here is
-    // still `NotWorking` with no master present, the entry expired unfilled
-    // and the legs were left dangling rather than swept with it — Saxo's own
-    // behaviour on that expiry is UNVERIFIED on SIM (#1215). Reporting
-    // 'filled' in that case would journal a position that was never opened
-    // and leave a stop/target free to fire against it later, so a dormant
-    // pair is cancelled here instead of adopted, regardless of what the
-    // venue would otherwise have done with them.
+    // Only the protective legs still open, no master. `Working` on a leg
+    // means it ACTIVATED on the entry's fill — read as filled below, same as
+    // before. A pair every leg reads `NotWorking` (never activated) SIGNALS
+    // the entry expired unfilled, but that two-value contract is UNVERIFIED
+    // (#1215 round 1: doc 43 never listed a resting IfDone leg row, only
+    // standalone `DayOrder` `Limit`s always `Working` — see
+    // `SaxoOpenOrderStatus`), so it is not proof; `lookup` corroborates it
+    // against the audit trail before cancelling anything.
     const legs = open.filter(
       (order) =>
         order.ExternalReference === legReference(externalReference, 'stop') ||
@@ -508,10 +513,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     );
     const [first] = legs;
     if (first === undefined) return null;
-    if (legs.every((leg) => leg.Status === 'NotWorking')) {
-      await this.cancelDormantLegs(legs);
-      return null;
-    }
+    if (legs.every(isNeverActivated)) return { dormant: legs };
     const ids: OrderIds = {};
     for (const leg of legs) {
       if (leg.OpenOrderType === 'StopIfTraded') ids.stop = leg.OrderId;
@@ -531,13 +533,14 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
   }
 
   /**
-   * Cancels a related-order pair `findOpen` found still `NotWorking` with no
-   * master present (#1215) — legs from an entry that expired unfilled rather
-   * than a genuine fill. `OrderNotFound` is swallowed exactly as `cancel()`'s
-   * own loop does: the venue may have already reaped one on its own, and
-   * that is success, not failure. Any other failure propagates — this runs
-   * inside a caller already wrapped in `this.call`, so it surfaces as the
-   * caller's own sanitized `BrokerError` rather than a silently-kept doubt.
+   * Cancels a related-order pair `lookup` confirmed dormant against the
+   * audit trail (#1215 round 1) — legs from an entry that expired unfilled
+   * rather than a genuine fill. `OrderNotFound` is swallowed exactly as
+   * `cancel()`'s own loop does: the venue may have already reaped one on its
+   * own, and that is success, not failure. Any other failure propagates —
+   * this runs inside a caller already wrapped in `this.call`, so it
+   * surfaces as the caller's own sanitized `BrokerError` rather than a
+   * silently-kept doubt.
    */
   private async cancelDormantLegs(legs: readonly SaxoOpenOrder[]): Promise<void> {
     for (const leg of legs) {
@@ -549,12 +552,29 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     }
   }
 
+  /**
+   * `findOpen`'s dormant-legs signal is never acted on by `Status` alone
+   * (UNVERIFIED) — it is corroborated here against the master's own
+   * audit-trail row first (#1215 round 1). A `Filled` row: the entry
+   * genuinely filled, adopted using the dormant legs' real order ids (better
+   * evidence than an activity row, which carries no related-order ids). A
+   * `Cancelled`/`Expired`/`Rejected` row: the master is confirmed done and
+   * not filled, so the legs are cancelled and THAT state is reported, not
+   * `null` — `null` reads to `reconcileLot` as "the write-ahead never
+   * landed", which is false for an order the venue's own audit trail shows
+   * it received. No row at all inside the lookback ties the legs to any
+   * known order, so they are cancelled and `null` is the honest answer.
+   * Anything else (no terminal status yet) is not evidence either way, so
+   * nothing is cancelled — the next poll's `reconcile()` (#921: runs every
+   * pass, not just at startup) resolves it once the audit trail catches up.
+   */
   private async lookup(
     externalReference: string,
     lookbackMs: number,
   ): Promise<LookedUpOrder | null> {
     const open = await this.findOpen(externalReference);
-    if (open !== null) return open;
+    if (open !== null && !isDormantLegs(open)) return open;
+
     const from = new Date(this.clock.now().getTime() - lookbackMs);
     const activities = await this.client.listOrderActivities(from);
     let latest: SaxoOrderActivity | undefined;
@@ -562,19 +582,20 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
       if (activity.ExternalReference !== externalReference) continue;
       if (latest === undefined || activity.ActivityTime >= latest.ActivityTime) latest = activity;
     }
-    if (latest === undefined) return null;
-    const filled = latest.FillAmount ?? 0;
-    return {
-      ids: { entry: latest.OrderId },
-      side: latest.BuySell === 'Buy' ? 'buy' : 'sell',
-      amount: latest.Amount,
-      normalized: {
-        client_order_id: externalReference,
-        broker_order_ids: [latest.OrderId],
-        order_state: activityState(latest),
-        filled_qty: filled,
-      },
-    };
+
+    if (open === null) {
+      return latest === undefined ? null : fromActivity(latest, externalReference);
+    }
+    if (latest === undefined) {
+      await this.cancelDormantLegs(open.dormant);
+      return null;
+    }
+    const state = activityState(latest);
+    if (state === 'filled') return legsFilled(open.dormant, latest, externalReference);
+    if (DEAD_STATES.has(state)) {
+      await this.cancelDormantLegs(open.dormant);
+    }
+    return fromActivity(latest, externalReference);
   }
 
   private attribute(
@@ -622,6 +643,20 @@ interface LookedUpOrder {
   normalized: NormalizedOrder;
 }
 
+/** `findOpen`'s signal for a related-order pair found `NotWorking` with no master — see `lookup`. */
+interface DormantLegs {
+  readonly dormant: readonly SaxoOpenOrder[];
+}
+
+function isDormantLegs(result: LookedUpOrder | DormantLegs): result is DormantLegs {
+  return 'dormant' in result;
+}
+
+/** `Status === 'NotWorking'` — UNVERIFIED as "never activated" (see `SaxoOpenOrderStatus`). */
+function isNeverActivated(order: SaxoOpenOrder): boolean {
+  return order.Status === 'NotWorking';
+}
+
 interface Placed {
   ids: OrderIds;
   order_state: BrokerAck['order_state'];
@@ -646,6 +681,51 @@ function adopt(existing: LookedUpOrder, externalReference: string): Placed {
     throw new SaxoBrokerProviderError(reason, undefined, 'DeadOrderUnderReference', reason);
   }
   return { ids: existing.ids, order_state: state };
+}
+
+/** Builds a `LookedUpOrder` from the master's own audit-trail row (`lookup`'s no-open-order fallback). */
+function fromActivity(activity: SaxoOrderActivity, externalReference: string): LookedUpOrder {
+  return {
+    ids: { entry: activity.OrderId },
+    side: activity.BuySell === 'Buy' ? 'buy' : 'sell',
+    amount: activity.Amount,
+    normalized: {
+      client_order_id: externalReference,
+      broker_order_ids: [activity.OrderId],
+      order_state: activityState(activity),
+      filled_qty: activity.FillAmount ?? 0,
+    },
+  };
+}
+
+/**
+ * A dormant leg pair whose master audit row came back `Filled` (`lookup`) —
+ * uses the legs' real order ids, unlike `fromActivity`, which has no
+ * related-order ids to offer.
+ */
+function legsFilled(
+  legs: readonly SaxoOpenOrder[],
+  master: SaxoOrderActivity,
+  externalReference: string,
+): LookedUpOrder {
+  const [first] = legs;
+  if (first === undefined) return fromActivity(master, externalReference);
+  const ids: OrderIds = {};
+  for (const leg of legs) {
+    if (leg.OpenOrderType === 'StopIfTraded') ids.stop = leg.OrderId;
+    else ids.target = leg.OrderId;
+  }
+  return {
+    ids,
+    side: first.BuySell === 'Buy' ? 'sell' : 'buy',
+    amount: first.Amount,
+    normalized: {
+      client_order_id: externalReference,
+      broker_order_ids: orderIdList(ids),
+      order_state: 'filled',
+      filled_qty: master.FillAmount ?? first.Amount,
+    },
+  };
 }
 
 function orderIdList(ids: OrderIds): string[] {
