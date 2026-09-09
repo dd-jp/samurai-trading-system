@@ -9,6 +9,7 @@ import {
   LlmMalformedResponseError,
   LlmProviderError,
   LlmRateLimitError,
+  LlmRefusalError,
   LlmTimeoutError,
 } from './errors.js';
 import type { LlmSpendRecord } from './spend-sink.js';
@@ -247,6 +248,59 @@ describe('AnthropicLlmClient', () => {
     });
 
     await expect(client.complete(request())).rejects.toBeInstanceOf(LlmProviderError);
+    expect(wire.createMessage).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * #1391. A refusal is deterministic in the prompt: every retry re-asks a
+   * model that has already declined and re-bills the full call. The assertion
+   * that matters is the ATTEMPT COUNT — a refusal that still burns three
+   * full-price calls is the defect whatever class it ends as.
+   */
+  it('does not retry a refusal the provider signalled on the response (#1391)', async () => {
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi.fn().mockResolvedValue({
+        content: [],
+        stop_reason: 'refusal',
+        usage: { input_tokens: 900, output_tokens: 3 },
+      }),
+    };
+    const client = new AnthropicLlmClient(wire, {
+      model: 'anthropic/claude-sonnet-5',
+      max_tokens: 1024,
+      timeoutMs: 1_000,
+      retry: { maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 1_000 },
+    });
+
+    const error = await client.complete(request()).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(LlmRefusalError);
+    expect(wire.createMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry a refusal the transport itself raised (#1391)', async () => {
+    // `NousMessagesClient` translates the wire's `NousRefusalError` here, so
+    // `classifyProviderError` must pass the class through rather than laundering
+    // it into `LlmProviderError` and losing the refusal's `usage`.
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi.fn().mockRejectedValue(
+        new LlmRefusalError('provider refused', 'finish_reason="content_filter"', {
+          input_tokens: 900,
+          output_tokens: 3,
+        }),
+      ),
+    };
+    const client = new AnthropicLlmClient(wire, {
+      model: 'anthropic/claude-sonnet-5',
+      max_tokens: 1024,
+      timeoutMs: 1_000,
+      retry: { maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 1_000 },
+    });
+
+    const error = await client.complete(request()).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(LlmRefusalError);
+    expect((error as LlmRefusalError).usage).toEqual({ input_tokens: 900, output_tokens: 3 });
     expect(wire.createMessage).toHaveBeenCalledTimes(1);
   });
 });
@@ -536,6 +590,28 @@ describe('AnthropicLlmClient spend metering', () => {
 
     await client.complete(request());
     expect(sink.records).toHaveLength(0);
+  });
+
+  it('meters a refused response, which the provider still billed (#1391)', async () => {
+    // The refusal check sits BELOW the metering `finally`, for the reason the
+    // parse gate does: the tokens were generated and charged whether or not the
+    // answer was usable.
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi.fn().mockResolvedValue({
+        content: [],
+        stop_reason: 'refusal',
+        usage: { input_tokens: 900, output_tokens: 3 },
+      }),
+    };
+    const sink = recordingSink();
+    const client = new AnthropicLlmClient(
+      wire,
+      { model: 'openai/gpt-5.6-luna', max_tokens: 100, timeoutMs: 1000, retry: NO_RETRY },
+      sink,
+    );
+
+    await expect(client.complete(request())).rejects.toBeInstanceOf(LlmRefusalError);
+    expect(sink.records).toHaveLength(1);
   });
 
   it('records once per attempt, so a retried call is billed twice', async () => {

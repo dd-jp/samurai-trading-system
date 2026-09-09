@@ -104,6 +104,55 @@ export class NousTruncatedError extends Error {
   }
 }
 
+/**
+ * The provider DECLINED to answer and said so on the wire —
+ * `finish_reason: "content_filter"`, or a `message.refusal` string on the
+ * chosen completion.
+ *
+ * Carries no `.status` for the same reason `NousTruncatedError` does not, and
+ * `NousMessagesClient` translates it into `LlmRefusalError`, which
+ * `isRetryable` (anthropic-client.ts) excludes by construction. Without it a
+ * refusal arrives as empty or prose text, fails `parseResponse`, becomes
+ * `LlmMalformedResponseError` — and is RETRIED, re-asking a model that has
+ * already declined and paying in full each time. A refusal is a property of
+ * the PROMPT; a fresh sample cannot fix it.
+ *
+ * PROSE IS NOT A SIGNAL, and this class must never be raised from one. A
+ * text sniffer's false positive converts an ordinary transient into a hard
+ * failure, and `personas.test.ts`'s "still fails loudly on a refusal" sends
+ * "I cannot provide trading advice." with no wire marker at all — that stays a
+ * retryable `LlmMalformedResponseError`.
+ *
+ * The tokens it burned are NOT metered, exactly as for `NousTruncatedError`:
+ * every throw at this wire boundary skips `AnthropicLlmClient.recordSpend`, so
+ * `usage` rides on the error to keep the cost visible in the log.
+ */
+export class NousRefusalError extends Error {
+  readonly model: string;
+  /** The wire field that signalled the refusal, so the log names its evidence rather than a guess. */
+  readonly signal: string;
+  /** Tokens the provider billed for this refused call. Unmetered — see the class doc comment. */
+  readonly usage: { input_tokens: number; output_tokens: number };
+
+  constructor(
+    model: string,
+    signal: string,
+    usage: { input_tokens: number; output_tokens: number },
+    detail?: string,
+  ) {
+    super(
+      `Nous response refused: ${model} signalled ${signal} after ${usage.output_tokens} ` +
+        `output tokens${detail === undefined ? '' : ` (${truncateForError(detail)})`}. ` +
+        'Not retried — the model declined this prompt, and every retry re-bills the same ' +
+        'refusal. Change the prompt or the model.',
+    );
+    this.name = 'NousRefusalError';
+    this.model = model;
+    this.signal = signal;
+    this.usage = usage;
+  }
+}
+
 export function truncateForError(text: string): string {
   return text.length > MAX_ERROR_BODY_CHARS
     ? `${text.slice(0, MAX_ERROR_BODY_CHARS)}… (truncated, ${text.length} chars total)`

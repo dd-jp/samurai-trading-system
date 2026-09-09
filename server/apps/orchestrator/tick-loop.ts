@@ -41,6 +41,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { Signal } from '../../pipeline/analysts/index.js';
+import { LlmRefusalError } from '../../pipeline/debate-engine/index.js';
 import type { Clock } from '../../shared/index.js';
 // #573: `describeThrown`/`safeLog` moved to shared/safe-log.ts once
 // execution/ingest-fills.ts and execution/reconcile.ts needed the identical
@@ -269,21 +270,38 @@ export async function runTickPlan(
         // must be reported loudly here — a silent 30x-retry storm and a
         // silently-abandoned bar are both the quiet-tick-vs-broken-system
         // signature #625 exists to keep out of this codebase.
+        //
+        // A REFUSAL is the one failure that must not be handed back (#1391).
+        // It is deterministic in the request, so each retry re-runs the whole
+        // pass to buy the identical refusal — and re-bills every persona that
+        // answered before the refusing one, since a pass that threw never
+        // persisted the `debate_log` row the same-bar replay short-circuits
+        // on. That is the ticket's own carve-out argument, one layer up from
+        // `isRetryable`: the claim is KEPT, the bar is forfeit immediately,
+        // and the next bar opens with a fresh claim in case the prompt or the
+        // model has moved.
         if (decisionBar !== undefined) {
-          const rescindResult = config.decisionGate.rescind(instrument.asset, decisionBar);
+          const refused = error instanceof LlmRefusalError;
+          const rescindResult = refused
+            ? 'forfeited'
+            : config.decisionGate.rescind(instrument.asset, decisionBar);
           if (rescindResult === 'forfeited') {
             safeLog(config.logger, {
               trace_id,
               stage: 'tick-loop',
               event: 'decision_pass_bar_forfeit',
               level: 'error',
-              message:
-                `decision pass retry budget exhausted, bar forfeit: ${instrument.asset} — ` +
-                `bar ${decisionBar.id} will run the tick path only for its remainder`,
+              message: refused
+                ? `decision pass refused by the provider, bar forfeit: ${instrument.asset} — ` +
+                  `bar ${decisionBar.id} will run the tick path only for its remainder, and no ` +
+                  'retry is attempted because the refusal is deterministic in the request'
+                : `decision pass retry budget exhausted, bar forfeit: ${instrument.asset} — ` +
+                  `bar ${decisionBar.id} will run the tick path only for its remainder`,
               payload: {
                 instrument: instrument.asset,
                 asset_class: instrument.asset_class,
                 bar: decisionBar.id,
+                reason: refused ? 'refusal' : 'retry_budget_exhausted',
               },
             });
           }

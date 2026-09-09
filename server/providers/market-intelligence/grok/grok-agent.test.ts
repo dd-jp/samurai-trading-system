@@ -14,6 +14,7 @@ import {
   GrokAgent,
   type GrokSpendSink,
 } from './grok-agent.js';
+import { NousSentimentClient } from './nous-sentiment-client.js';
 
 const START = new Date('2026-08-06T00:00:00Z');
 /** `Duration` is a plain ms number — the same 24h the analysts read. */
@@ -312,6 +313,97 @@ describe('GrokAgent', () => {
       const entry = logger.entries.find((e) => e.event === 'grok_archive_write_failed');
       expect(entry).toBeDefined();
       expect(entry?.trace_id).toBe('caller-trace-9');
+    });
+  });
+
+  // Wired against the REAL client rather than the fake above, because the
+  // defect this pins lives in the seam between the two: the agent meters and
+  // marks the bucket on a RETURN, so what the client does with a refusal
+  // decides whether a refused call is counted once or re-issued every tick
+  // (#1391).
+  describe('a refused call, through the real Nous client (#1391)', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    function refusingFetch() {
+      const fetchMock = vi.fn(
+        async () =>
+          ({
+            ok: true,
+            status: 200,
+            statusText: 'OK',
+            json: async () => ({
+              choices: [{ message: { content: '' }, finish_reason: 'content_filter' }],
+              model: '~x-ai/grok-latest',
+              usage: { prompt_tokens: 40, completion_tokens: 6 },
+            }),
+          }) as Response,
+      );
+      vi.stubGlobal('fetch', fetchMock);
+      return fetchMock;
+    }
+
+    function realClientAgent() {
+      const clock = new SimulatedClock(START);
+      const sink = recordingSink();
+      const agent = new GrokAgent({
+        client: new NousSentimentClient({
+          apiKey: 'test-fake-nous-key',
+          baseUrl: 'https://nous.test/v1',
+          model: '~x-ai/grok-latest',
+        }),
+        store: new MarketIntelligenceStore(clock),
+        spendCap: ADMITS,
+        spendSink: sink,
+        clock,
+      });
+      return { agent, clock, sink };
+    }
+
+    it('meters the refusal, so the tokens it billed count against the cap', async () => {
+      const fetchMock = refusingFetch();
+      const { agent, sink } = realClientAgent();
+
+      await agent.refresh('t1', 'BTC-USD', 'crypto');
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(sink.calls).toBe(1);
+    });
+
+    it('marks the bucket, so the same refused prompt is not re-issued every tick', async () => {
+      const fetchMock = refusingFetch();
+      const { agent, clock } = realClientAgent();
+
+      await agent.refresh('t1', 'BTC-USD', 'crypto');
+      clock.advanceTo(new Date(START.getTime() + 15 * 60_000));
+      await agent.refresh('t2', 'BTC-USD', 'crypto');
+      clock.advanceTo(new Date(START.getTime() + 30 * 60_000));
+      await agent.refresh('t3', 'BTC-USD', 'crypto');
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('still leaves a transient failure retryable, bucket unmarked', async () => {
+      // The carve-out must stay narrow: a 503 is not deterministic in the
+      // prompt, and the next pass must still pay to look again.
+      const fetchMock = vi.fn(
+        async () =>
+          ({
+            ok: false,
+            status: 503,
+            statusText: 'Service Unavailable',
+            json: async () => ({}),
+          }) as Response,
+      );
+      vi.stubGlobal('fetch', fetchMock);
+      const { agent, clock } = realClientAgent();
+
+      await agent.refresh('t1', 'BTC-USD', 'crypto');
+      clock.advanceTo(new Date(START.getTime() + 15 * 60_000));
+      await agent.refresh('t2', 'BTC-USD', 'crypto');
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     });
   });
 });

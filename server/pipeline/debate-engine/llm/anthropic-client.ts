@@ -15,6 +15,7 @@ import {
   LlmMalformedResponseError,
   LlmProviderError,
   LlmRateLimitError,
+  LlmRefusalError,
   LlmTimeoutError,
 } from './errors.js';
 import { wrapUntrusted } from './prompt-safety.js';
@@ -30,11 +31,27 @@ import {
 
 /**
  * Only failure modes the spec calls out as transient are retried (timeout,
- * rate limit, malformed response — a fresh sample may parse cleanly).
- * Anything else (auth errors, bad requests, unclassified `LlmProviderError`s)
- * is assumed non-transient and rethrown immediately. Closed over the
- * generalized `withRetry` (issue #271) — this predicate, and the LLM
- * client's retry behavior, are unchanged from before that generalization.
+ * rate limit, malformed response). Anything else (auth errors, bad requests,
+ * unclassified `LlmProviderError`s) is assumed non-transient and rethrown
+ * immediately. Closed over the generalized `withRetry` (issue #271).
+ *
+ * "Malformed responses are reparseable on a fresh sample" is TRUE OF THE
+ * SAMPLE, not of every response that fails to parse, and there are two
+ * carve-outs where the failure is deterministic in the request rather than in
+ * the draw — retrying either one re-bills an identical failure:
+ *
+ *  - TRUNCATION (`NousTruncatedError`). Excluded by the ABSENCE of a `.status`
+ *    field: `classifyProviderError` lands it on `LlmProviderError`, which this
+ *    predicate rejects. Nothing here names the class.
+ *  - REFUSAL (`LlmRefusalError`, #1391). Excluded by ITS OWN CLASS — the same
+ *    construction `LlmCancelledError` uses — because a refusal must stay
+ *    distinguishable in the log from an unclassified provider fault, and
+ *    carries the `usage` of the call it burned.
+ *
+ * The asymmetry is deliberate rather than an oversight: the truncation
+ * carve-out predates the typed class and reads as a `LlmProviderError` at
+ * every call site, which is exactly why a reader looking for two named
+ * exclusions below will find only one.
  */
 function isRetryable(error: unknown): boolean {
   return (
@@ -60,10 +77,25 @@ export interface AnthropicMessageResponse {
    * alone, and requiring `usage` would break every one of them for a field
    * nothing trading-critical reads.
    *
-   * The real API always sends it; `AnthropicHttpMessagesClient` casts the
-   * whole body through, so it arrives at runtime without extra parsing.
+   * A real wire client passes the provider's block straight through, so it
+   * arrives at runtime without extra parsing.
    */
   usage?: AnthropicUsage;
+  /**
+   * Set to `'refusal'` when the provider declined to answer (#1391). Read here
+   * rather than left to `parseResponse` because `extractText` keeps only
+   * `type: 'text'` blocks, so a refusal reaches the parse gate as empty text
+   * and becomes a RETRYABLE `LlmMalformedResponseError` — three full-price
+   * calls to a model that has already declined the prompt.
+   *
+   * DORMANT in this tree, and deliberately kept: `NousMessagesClient` is the
+   * only implementation of this interface and speaks OpenAI-compatible
+   * `chat/completions`, where the refusal is signalled on the wire and thrown
+   * by `nous-chat.ts` before it ever reaches here. The field is Anthropic's own
+   * spelling of the same signal, which is what any second wire client on this
+   * structural interface would set.
+   */
+  stop_reason?: string;
   /**
    * The model that actually served the request, which is not always the model
    * requested — a server-side fallback can reroute a refused request to a
@@ -257,7 +289,11 @@ function classifyProviderError(error: unknown): Error {
     error instanceof LlmTimeoutError ||
     error instanceof LlmRateLimitError ||
     error instanceof LlmMalformedResponseError ||
-    error instanceof LlmProviderError
+    error instanceof LlmProviderError ||
+    // Passed through rather than duck-typed down to `LlmProviderError`: the
+    // refusal's `signal` and `usage` are the only record of what the burned
+    // call cost, and re-wrapping would discard both (#1391).
+    error instanceof LlmRefusalError
   ) {
     return error;
   }
@@ -357,6 +393,18 @@ export class AnthropicLlmClient implements LlmClient {
       // wants to read, so capturing it only for well-formed answers would
       // withhold the evidence precisely when it is needed.
       this.recordSpend(request, response, latency_ms, content, rawText);
+    }
+
+    // Below the metering `finally` for the reason the parse gate is: a refused
+    // response was still generated and still billed. Above the parse gate
+    // because a refusal is not a bad draw — it must not become the retryable
+    // `LlmMalformedResponseError` its empty text would otherwise produce.
+    if (response.stop_reason === 'refusal') {
+      throw new LlmRefusalError(
+        `LLM refused to answer: ${this.config.model} returned stop_reason="refusal"`,
+        'stop_reason="refusal"',
+        response.usage,
+      );
     }
 
     const parsed = request.parseResponse(rawText);

@@ -1,5 +1,6 @@
 import { PIPELINE_STAGES } from '../../../contracts/index.js';
 import type { Signal } from '../../pipeline/analysts/index.js';
+import { LlmProviderError, LlmRefusalError } from '../../pipeline/debate-engine/index.js';
 import type { Clock, OrderIntent } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { DebateBarDecisionGate, type DecisionGate } from './decision-bar-gate.js';
@@ -1412,6 +1413,77 @@ describe('runTickPlan decision gate (#743)', () => {
       const nextBar = new Date(barOpen.getTime() + 3_600_000);
       const third = await runTickPlan(planAt(nextBar, 'BTC-USD'), runner, CLOCK, config);
       expect(third[0]?.error).toContain('decision pass failure #2');
+    });
+  });
+
+  describe('a refused decision pass does not consume the retry budget (#1391)', () => {
+    /**
+     * Two personas answer before the third refuses — the shape that decides
+     * the cost. A retried pass re-bills the two that answered, because a pass
+     * that threw never persisted the `debate_log` row the same-bar replay
+     * short-circuits on.
+     */
+    function refusingRunner(billed: { calls: number }, makeError: () => Error): TickRunner {
+      return {
+        async runInstrument(_signal, ctx) {
+          if (ctx.decision_bar === undefined) {
+            return { trace_id: ctx.trace_id, final_stage: 'position_check' };
+          }
+          billed.calls += 2;
+          throw makeError();
+        },
+      };
+    }
+
+    async function runOneBar(runner: TickRunner, config: ReturnType<typeof loopConfig>) {
+      const barOpen = new Date('2026-07-15T14:00:00Z');
+      const ticksPerBar = 3_600_000 / TICK_INTERVAL_MS;
+      const outcomes = [];
+      for (let i = 0; i < ticksPerBar; i++) {
+        const at = new Date(barOpen.getTime() + i * TICK_INTERVAL_MS);
+        outcomes.push(
+          (await runTickPlan(planAt(at, 'BTC-USD'), runner, { now: () => at }, config))[0],
+        );
+      }
+      return outcomes;
+    }
+
+    it('bills the provider once for the whole bar, and forfeits it loudly', async () => {
+      const billed = { calls: 0 };
+      const runner = refusingRunner(
+        billed,
+        () => new LlmRefusalError('LLM refused to answer', 'stop_reason="refusal"'),
+      );
+      const logger: Logger & { entries: Parameters<Logger['log']>[0][] } = {
+        entries: [],
+        log(entry) {
+          this.entries.push(entry);
+        },
+      };
+      const config = { ...loopConfig(new DebateBarDecisionGate(5)), logger };
+
+      const outcomes = await runOneBar(runner, config);
+
+      expect(outcomes.filter((o) => o?.error !== undefined)).toHaveLength(1);
+      expect(billed.calls).toBe(2);
+
+      const forfeit = logger.entries.find((entry) => entry.event === 'decision_pass_bar_forfeit');
+      expect(forfeit?.level).toBe('error');
+      expect(forfeit?.payload).toMatchObject({ instrument: 'BTC-USD', reason: 'refusal' });
+    });
+
+    it('leaves an ordinary provider failure retrying, so the carve-out stays narrow', async () => {
+      // The mutation this pins: skipping the rescind for EVERY error would
+      // disable #743's retry mechanism wholesale and still pass the test above.
+      const billed = { calls: 0 };
+      const maxRetries = 5;
+      const runner = refusingRunner(billed, () => new LlmProviderError('nous responded 503'));
+      const config = loopConfig(new DebateBarDecisionGate(maxRetries));
+
+      const outcomes = await runOneBar(runner, config);
+
+      expect(outcomes.filter((o) => o?.error !== undefined)).toHaveLength(maxRetries);
+      expect(billed.calls).toBe(2 * maxRetries);
     });
   });
 });
