@@ -1360,10 +1360,7 @@ describe('buildProductionComponents', () => {
       const passedSpendCap = MiIngestAgentMock.mock.calls[0]?.[0]?.spendCap;
       expect(passedSpendCap).toBeInstanceOf(SqliteSpendCap);
       expect(passedSpendCap).not.toBe(UNCAPPED_SPEND);
-      // Not just "a real cap, some budget" — THIS config's budget, so a root
-      // that wired a second, differently-budgeted `SqliteSpendCap` (rather
-      // than the one instance also handed to `GrokAgent` and the debate step)
-      // would fail here too.
+      // Not just "a real cap, some budget" — THIS config's budget.
       expect(passedSpendCap.check().budget_usd).toBe(50);
     });
   });

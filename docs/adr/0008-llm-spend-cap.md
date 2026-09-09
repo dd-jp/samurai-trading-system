@@ -205,11 +205,13 @@ the soak from a fresh store if it is meant to have the full budget.**
 > **1. "This cap therefore DOES bind the MI leg" was only ever half true.**
 > `GrokAgent` reads the cap before it calls. `MiIngestAgent` — the news-scoring
 > half — does not, and never did: it scores through the shared `LlmClient`,
-> which METERS into `llm_spend` but is gated by nothing. So the sentiment half
-> was bound and the news half was merely counted. #1085's `MiRefreshQueue`
-> checks the cap once per composed MI pass and is the first ceiling the news
-> path has ever had. Read the pre-#1085 MI figures as a floor on what could be
-> spent, not as a bound.
+> which METERS into `llm_spend` but is gated by nothing. *(Superseded
+> 2026-09-09 — #1106 landed; see the amendment box below. `MiIngestAgent` now
+> reads the cap before it calls too.)* So the sentiment half was bound and the
+> news half was merely counted. #1085's `MiRefreshQueue` checks the cap once
+> per composed MI pass and is the first ceiling the news path has ever had.
+> Read the pre-#1085 MI figures as a floor on what could be spent, not as a
+> bound.
 >
 > That check covers both agents at once, which makes the composition ORDER at
 > the root load-bearing (ingest first, so Grok's own read sees the post-ingest

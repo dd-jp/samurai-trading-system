@@ -191,60 +191,53 @@ describe('MiRefreshQueue (#1085)', () => {
     expect(cap.spentUsd).toBe(2);
   });
 
-  it('holds the pair inside the budget with ingest composed first, now that both self-gate (#1106)', async () => {
-    // Before #1106, `MiIngestAgent` billed through the shared `LlmClient` and
-    // read no cap of its own, so this ordering — the no-cap agent first —
-    // was the only safe one at the composition root. Now both agents read
-    // the cap before they call (the `labeledCapReadingRefresher` shape on
-    // both sides), so the SAME pair spends the same whichever one runs first: the
-    // first call is admitted and bills, the second reads the post-bill total
-    // and refuses.
+  /**
+   * Table over both orderings rather than two near-duplicate `it`s (round-2
+   * review, #1106): a fixed pair of labels asserting "first bills, second
+   * refuses" would let the SAME assertion pass for either row regardless of
+   * which label the fixture put first, so each row names its own expected
+   * `calls` entry — the property under test is "the FIRST-COMPOSED side
+   * bills, whichever agent that is", not "ingest bills" or "grok bills".
+   */
+  it.each([
+    { first: 'ingest', second: 'grok', instrument: 'TSLA' },
+    { first: 'grok', second: 'ingest', instrument: 'AAPL' },
+  ] as const)('holds the pair inside the budget with $first composed first, now that both self-gate (#1106)', async ({
+    first,
+    second,
+    instrument,
+  }) => {
+    // Before #1106, `MiIngestAgent` billed through the shared `LlmClient`
+    // and read no cap of its own, so ingest-first was the only safe
+    // ordering at the composition root. Now both agents read the cap
+    // before they call (the `labeledCapReadingRefresher` shape on both
+    // sides), so the SAME pair spends the same total whichever one runs
+    // first: the first call is admitted and bills, the second reads the
+    // post-bill total and refuses — which one that is DOES flip with
+    // order, and `labeledCapReadingRefresher`'s label is what makes that
+    // flip observable rather than the two composed calls being
+    // indistinguishable.
     const cap = meteredCap(1);
     const calls: string[] = [];
     const queue = new MiRefreshQueue({
       spendCap: cap,
       refresher: composePair(
-        labeledCapReadingRefresher('ingest', cap, 1, calls),
-        labeledCapReadingRefresher('grok', cap, 1, calls),
+        labeledCapReadingRefresher(first, cap, 1, calls),
+        labeledCapReadingRefresher(second, cap, 1, calls),
       ),
     });
 
-    await queue.refresh('tick-1', 'TSLA', 'stocks');
+    await queue.refresh('tick-1', instrument, 'stocks');
     await settle();
 
-    // The FIRST-composed side bills, the second reads the post-bill total and
-    // refuses — pinned by label, not just by count, so this cannot pass for a
-    // pair that billed twice or for the wrong side billing once.
-    expect(calls).toEqual(['ingest:TSLA']);
-    // EXACTLY the budget, not "at most" — `<= 1` would also pass for a pass
-    // that spent nothing at all, which is what a queue refusing everything
-    // looks like.
-    expect(cap.spentUsd).toBe(1);
-  });
-
-  it('spends the same amount when the composition order is reversed, but the other side bills', async () => {
-    // Same queue, same single check, same budget — only the composition
-    // order changes. Because both sides now self-gate, reversing which one
-    // runs first no longer changes the TOTAL: whichever agent goes first
-    // bills once, and the other reads the post-bill total and refuses. Which
-    // one that is DOES flip with order — that flip is what `labeledCapReadingRefresher`
-    // exists to make observable, so this test cannot degenerate into composing
-    // two indistinguishable refreshers and asserting a total that would hold
-    // however they were labelled.
-    const cap = meteredCap(1);
-    const calls: string[] = [];
-    const queue = new MiRefreshQueue({
-      spendCap: cap,
-      refresher: composePair(
-        labeledCapReadingRefresher('grok', cap, 1, calls),
-        labeledCapReadingRefresher('ingest', cap, 1, calls),
-      ),
-    });
-
-    await queue.refresh('tick-1', 'AAPL', 'stocks');
-    await settle();
-
-    expect(calls).toEqual(['grok:AAPL']);
+    // The FIRST-composed side bills, the second reads the post-bill total
+    // and refuses — pinned by label, not just by count, so this cannot
+    // pass for a pair that billed twice or for the wrong side billing
+    // once.
+    expect(calls).toEqual([`${first}:${instrument}`]);
+    // EXACTLY the budget, not "at most" — `<= 1` would also pass for a
+    // pass that spent nothing at all, which is what a queue refusing
+    // everything looks like.
     expect(cap.spentUsd).toBe(1);
   });
 

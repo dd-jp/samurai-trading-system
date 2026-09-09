@@ -70,6 +70,12 @@ export interface MiIngestAgentDeps {
    * without this the only ceiling on the news-scoring path was
    * `MiRefreshQueue`'s single pre-pass check — which covered the pair only
    * while this agent happened to run first in the composition root's array.
+   *
+   * Relies on `SqliteSpendCap.check()` re-querying `SUM(cost_usd)` fresh on
+   * every call (no memo) against `spendSink.record`'s synchronous
+   * `better-sqlite3` insert: whichever of this agent and `GrokAgent` runs
+   * first sees its own write reflected in the OTHER's next `check()`, with no
+   * async gap either could race through.
    */
   spendCap: SpendCap;
   clock: Clock;
@@ -195,10 +201,7 @@ export class MiIngestAgent {
       .map((article) => ({ article, entity: miSubject }));
     if (pairs.length === 0) return false;
 
-    // Checked BEFORE the call, through the same seam the debate and `GrokAgent`
-    // admit against (#1106). `scoreItems` metered into `llm_spend` unconditionally
-    // until this landed — the only ceiling this path had was the composition
-    // root's single pre-pass check, and only while ingest ran first in its array.
+    // Checked BEFORE the call — see `spendCap`'s doc on `MiIngestAgentDeps` for why.
     const verdict = this.deps.spendCap.check();
     if (!verdict.admitted) {
       this.deps.logger?.log({
