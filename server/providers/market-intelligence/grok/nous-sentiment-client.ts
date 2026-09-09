@@ -84,7 +84,8 @@
  */
 
 import type { Logger } from '../../../shared/index.js';
-import { nousChat } from '../../../shared/llm/nous-chat.js';
+import type { NousChatResult } from '../../../shared/llm/nous-chat.js';
+import { NousRefusalError, nousChat } from '../../../shared/llm/nous-chat.js';
 import type { IntelligenceItem } from '../types.js';
 import type { GrokSentimentClient } from './grok-agent.js';
 
@@ -157,18 +158,55 @@ export class NousSentimentClient implements GrokSentimentClient {
       },
     ];
 
-    const result = await nousChat(
-      {
-        apiKey: this.#apiKey,
-        baseUrl: this.#baseUrl,
-        timeoutMs: this.#timeoutMs,
-      },
-      {
+    let result: NousChatResult;
+    try {
+      result = await nousChat(
+        {
+          apiKey: this.#apiKey,
+          baseUrl: this.#baseUrl,
+          timeoutMs: this.#timeoutMs,
+        },
+        {
+          model: this.#model,
+          max_tokens: this.#maxTokens,
+          messages,
+        },
+      );
+    } catch (error) {
+      if (!(error instanceof NousRefusalError)) throw error;
+      // A refusal is ZERO ITEMS here, not a throw (#1391). `GrokAgent.refresh`
+      // meters and marks the 4-hour bucket only on a return; a throw skips both,
+      // so the refused call's tokens would go uncounted against the cap AND the
+      // identical prompt would be re-issued on every tick until the bucket
+      // rolled — the same unbounded re-billing the debate path's carve-out
+      // exists to stop. The refusal is deterministic in the prompt: re-asking
+      // buys the same answer at the same price.
+      this.#logger?.log({
+        trace_id: 'grok',
+        stage: 'market_intelligence',
+        event: 'sentiment_refused',
+        level: 'warn',
+        message:
+          `sentiment: ${this.#model} refused the prompt for ${instrument} ` +
+          `(${error.signal}); reporting zero items for this window. The call is metered — it ` +
+          'cost money and produced nothing — and the bucket is marked, so the same prompt is ' +
+          'not re-issued until it rolls. A refusal that persists across buckets is a prompt or ' +
+          'model change, not something retrying fixes.',
+        payload: { instrument, signal: error.signal },
+      });
+
+      return {
+        items: [] as IntelligenceItem[],
+        prompt: messages.map((message) => `[${message.role}] ${message.content}`).join('\n\n'),
+        raw_text: '',
         model: this.#model,
-        max_tokens: this.#maxTokens,
-        messages,
-      },
-    );
+        // The only surface carrying what the refused call billed: a throw at
+        // the wire boundary never reached a meter.
+        usage: error.usage,
+        retrievalEvidence: false,
+        latency_ms: Date.now() - started,
+      };
+    }
 
     return {
       items: this.#parseItems(result.text, instrument, asOf),

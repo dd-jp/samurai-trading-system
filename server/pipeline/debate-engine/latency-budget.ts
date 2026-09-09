@@ -130,7 +130,10 @@ export class DebateBudgetExceededError extends Error {
  *    identically — degrading it would hide a permanently blocked persona
  *    behind a line that reads like ordinary fan-out pressure, tick after tick.
  *    Truncation already crashes the pass for that reason (it arrives as an
- *    `LlmProviderError`), and a refusal is its sibling.
+ *    `LlmProviderError`), and a refusal is its sibling. Not that every refusal
+ *    reaches here: `disagreement-detector.ts` catches bare and falls back to
+ *    the directional heuristic, so a model that refuses THAT prompt is re-billed
+ *    silently on every debate. Out of scope for #1391 and recorded there.
  *  - `LlmCancelledError` names a cancellation this same function issued (via
  *    `controller.abort()` below), not a provider fault — never retried, and
  *    per its own doc in `llm/errors.ts`, folding it in here would make a

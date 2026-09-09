@@ -59,6 +59,7 @@ export {
   LlmMalformedResponseError,
   LlmProviderError,
   LlmRateLimitError,
+  LlmRefusalError,
   LlmTimeoutError,
 } from './llm/errors.js';
 // The prompt-plumbing three, on the barrel since #957 because the risk critic

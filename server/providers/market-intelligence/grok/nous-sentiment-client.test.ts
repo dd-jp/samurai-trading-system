@@ -227,4 +227,23 @@ describe('NousSentimentClient', () => {
 
     await expect(client().fetchSentiment('BTC-USD', AS_OF)).rejects.toThrow(/503/);
   });
+
+  it('reports a refusal as zero items, carrying what the refused call billed (#1391)', async () => {
+    // The opposite of the transient above, and deliberately so. `GrokAgent`
+    // meters and marks the bucket on a RETURN; a throw skips both, so a
+    // refusal thrown from here would go unmetered and re-issue the identical
+    // prompt every tick until the bucket rolled.
+    const logger = recordingLogger();
+    stubContent('', { choices: [{ message: { content: '' }, finish_reason: 'content_filter' }] });
+
+    const result = await client(logger).fetchSentiment('BTC-USD', AS_OF);
+
+    expect(result.items).toEqual([]);
+    expect(result.usage).toEqual({
+      input_tokens: 40,
+      output_tokens: 60,
+      cache_read_input_tokens: 0,
+    });
+    expect(logger.entries.map((entry) => entry.event)).toContain('sentiment_refused');
+  });
 });
