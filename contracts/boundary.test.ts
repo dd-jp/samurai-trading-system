@@ -355,6 +355,11 @@ describe('inbound routing: nothing bypasses a barrel (#1158)', () => {
     return violations;
   }
 
+  it('has source files to check', () => {
+    // Guards the assertions below against silently passing on an empty glob.
+    expect(REPO_SOURCE_FILES.length).toBeGreaterThan(0);
+  });
+
   it('nothing outside contracts/ imports a contracts/*.ts file other than index.ts', () => {
     const violations = deepImportViolations(
       /\/contracts\/(?!index\.js$)[A-Za-z0-9_-]+\.js$/,
