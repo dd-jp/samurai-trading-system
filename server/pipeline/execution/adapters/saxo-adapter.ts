@@ -120,10 +120,15 @@ export const DORMANT_DEFER_ALERT_AFTER = 2;
 /**
  * How often the alert repeats while the master stays unresolved, counted in
  * further consecutive defer observations after the first — the same
- * cadence `ALERT_REPEAT_EVERY_ZERO_SIZE` uses, for the same reason: visible
- * enough that the channel is not a one-shot the operator can miss, rare
- * enough it is not an unbroken flood while the state persists (ruling (c),
- * #1215 round 2: recurring, not silent — but not every poll either).
+ * poll-count-8 warn cadence `ALERT_REPEAT_EVERY_DIAGNOSTICS`
+ * (trader-diagnostic-alert.ts) uses, for the same reason: visible enough
+ * that the channel is not a one-shot the operator can miss, rare enough it
+ * is not an unbroken flood while the state persists (ruling (c), #1215
+ * round 2: recurring, not silent — but not every poll either).
+ * `FilledZeroSizeThrottle`'s own repeat used to be this same shape; #1383
+ * rebuilt it into a warn-once, low-cadence-info design instead (see
+ * filled-zero-size-throttle.ts) — a different problem's answer, not a
+ * precedent for this one, which still wants a genuine `warn` repeat.
  */
 export const DORMANT_DEFER_ALERT_REPEAT_EVERY = 8;
 
