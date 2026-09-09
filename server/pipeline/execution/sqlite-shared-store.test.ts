@@ -622,6 +622,30 @@ describe('SqliteExecutionStore', () => {
       expect(real?.cost_breakdown).toBeUndefined();
     });
 
+    // #1220, migration 0054. Before this column `fills.fee` silently claimed
+    // book currency for a number the venue may have quoted in USD — the
+    // ruling's "not silently summed as GBP". The row records the currency
+    // verbatim; `ingestFills()` owns raising the contradiction.
+    it('round-trips fee_currency verbatim, and omits it for an adapter that reports none', async () => {
+      const { store } = makeStore();
+      await store.writeAheadPosition(makePosition());
+      await store.applyLotAdvance({
+        idempotency_key: 'key-1',
+        fills: [
+          makeFill({ broker_fill_id: toBrokerFillId('fill-gbp'), fee_currency: 'GBP' }),
+          makeFill({ broker_fill_id: toBrokerFillId('fill-usd'), fee_currency: 'USD' }),
+          makeFill({ broker_fill_id: toBrokerFillId('fill-none') }),
+        ],
+      });
+
+      const [gbp, usd, none] = await store.getFills('key-1');
+      expect(gbp?.fee_currency).toBe('GBP');
+      // Recorded, not coerced or dropped: a foreign currency reaching the
+      // store must stay legible to any later reconciliation.
+      expect(usd?.fee_currency).toBe('USD');
+      expect(none?.fee_currency).toBeUndefined();
+    });
+
     it('returns fills in ingestion order', async () => {
       const { store } = makeStore();
       await store.writeAheadPosition(makePosition());

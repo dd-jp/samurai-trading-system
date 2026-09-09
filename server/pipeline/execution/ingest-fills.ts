@@ -57,6 +57,7 @@
  * `throwContainedFailures`'s own doc).
  */
 
+import { BOOK_CURRENCY, isBookCurrency } from '../../providers/market-data-service/index.js';
 import type {
   BrokerFillId,
   ClosedTrade,
@@ -87,6 +88,32 @@ export const FILLED_WITH_ZERO_SIZE = 'filled position has zero filled_size' as c
  */
 export const FILLED_ZERO_SIZE_CLEARED =
   'a lot previously warned zero-filled-size has advanced past zero' as const;
+
+/**
+ * #1220. A fill fee denominated in something other than the book currency.
+ *
+ * **Alerted, not refused, and the choice is deliberate.** The venue has
+ * already traded by the time `fetchNewFills` reports this; refusing to
+ * persist the fill would strand a real open position outside the append-only
+ * fill log (CONTEXT.md invariant 4) — a silent halt with money exposed,
+ * which is strictly worse than a booked fee whose currency is recorded and
+ * shouted about. The row is written with `fee_currency` verbatim
+ * (migration 0054) and this is raised at `error`.
+ *
+ * **Why the logger and not a new `AlertChannelSlots` channel.** Adding a
+ * channel is compiler-enforced across `production.ts`, `alert-transport.ts`
+ * and every composition root — the right price for a new operator
+ * escalation. This is not one: David's ruling frames a foreign fee as a
+ * contradiction that must not pass silently, and `ExecutionInput.logger` is
+ * already the loud path every other in-band execution contradiction takes.
+ *
+ * It is a CONTRADICTION rather than an FX conversion to model because
+ * `tradeableUniverse` (universe-pool) excludes every non-sterling line: a
+ * foreign fee means an instrument was traded that selection should have
+ * refused, so converting it would paper over the real defect one layer up.
+ */
+export const FEE_CURRENCY_NOT_BOOK_CURRENCY =
+  'broker reported a fill fee in a currency that is not the book currency' as const;
 
 export async function ingestFills(input: ExecutionInput): Promise<void> {
   const { clock, broker, store } = input;
@@ -988,6 +1015,11 @@ async function advanceLot(
       continue;
     }
     newFills.push(toFill(fill, position.idempotency_key, modelledEntryCost));
+    // Inside the loop, BELOW the dedup gate on purpose: `fetchNewFills` is
+    // inclusive of `since`, so every adapter re-offers the same fill
+    // forever, and a check above the gate would re-announce this
+    // contradiction on every poll for the life of the lot.
+    warnOnNonSterlingFee(input, position, fill);
     ingestedEntry ||= fill.leg === 'entry';
     ingestedExit ||= fill.leg === 'exit';
   }
@@ -2058,6 +2090,39 @@ function modelledEntryCostFor(position: OpenPosition): ModelledEntryCost | null 
  * Removing the residual outright needs a modelled exit cost for bracket legs;
  * that is #1301's, not this ticket's.
  */
+/**
+ * Raises `FEE_CURRENCY_NOT_BOOK_CURRENCY` for a fill whose venue-reported fee
+ * currency is not sterling — see that constant for why this alerts rather
+ * than refusing, and why it is a contradiction rather than an FX term.
+ *
+ * `isBookCurrency` is the mark side's own predicate (pence in any of its four
+ * spellings, plus GBP in any case), reused rather than re-derived so this
+ * cannot disagree with what `LseMarkDataSource` refuses at boot.
+ */
+function warnOnNonSterlingFee(
+  input: ExecutionInput,
+  position: OpenPosition,
+  fill: NormalizedFill,
+): void {
+  const currency = fill.fee_currency;
+  if (currency === undefined || isBookCurrency(currency)) return;
+  safeLog(input.logger, {
+    trace_id: input.trace_id,
+    stage: 'execution',
+    event: 'fee_currency_not_book_currency',
+    level: 'error',
+    message: FEE_CURRENCY_NOT_BOOK_CURRENCY,
+    payload: {
+      idempotency_key: position.idempotency_key,
+      instrument: position.instrument,
+      broker_fill_id: fill.broker_fill_id,
+      fee: fill.fee,
+      fee_currency: currency,
+      book_currency: BOOK_CURRENCY,
+    },
+  });
+}
+
 function toFill(
   fill: NormalizedFill,
   idempotencyKey: string,
@@ -2094,6 +2159,10 @@ function toFill(
     ...(fill.flatten_idempotency_key === undefined
       ? {}
       : { flatten_idempotency_key: fill.flatten_idempotency_key }),
+    // #1220, migration 0054: carried through verbatim and never converted —
+    // `Fill.fee_currency`'s doc has the reasoning, and
+    // `warnOnNonSterlingFee` above is what makes a foreign one loud.
+    ...(fill.fee_currency === undefined ? {} : { fee_currency: fill.fee_currency }),
   };
 }
 

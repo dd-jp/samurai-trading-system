@@ -19,11 +19,13 @@ export {
   countRankableUnderlyings,
   FALLBACK_DEFAULT_MAX_ROWS,
   gateAdmits,
+  isSterlingQuoted,
   KNOWN_SUBCLASSES,
   LSE_ETP_POOL,
   liquidityGateStatus,
   liveSizingSubclassFor,
   resolveMiSubject,
   screeningInstrumentFor,
+  tradeableUniverse,
   UnknownSubclassError,
 } from './lse-etp-pool.js';

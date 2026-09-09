@@ -587,6 +587,28 @@ export interface Fill {
    * `'exit'` fill from before this migration.
    */
   flatten_idempotency_key?: string;
+  /**
+   * #1220, migration 0054: the currency the VENUE denominated `fee` in, as
+   * the adapter reported it (`NormalizedFill.fee_currency`), recorded
+   * verbatim and never converted.
+   *
+   * `fee` itself is summed into `closed_trades.fees_total` and every PnL
+   * figure as BOOK currency. Until this column existed the adapter's value
+   * was dropped at `toFill`, so a USD commission was booked as GBP with
+   * nothing said. It is persisted rather than converted because David's
+   * 2026-09-08 ruling on #1220 makes a non-sterling fee a CONTRADICTION, not
+   * an FX term to model: `tradeableUniverse` excludes every non-sterling
+   * line, so one arriving means an instrument was traded that selection
+   * should have refused. `ingestFills()` raises it (see
+   * `FEE_CURRENCY_NOT_BOOK_CURRENCY`) and still writes the row — refusing a
+   * fill the venue has already made would strand a real open position
+   * outside the append-only fill log (CONTEXT.md invariant 4).
+   *
+   * Absent where the adapter reports no currency at all (the Simulated and
+   * Alpaca adapters both do) and on every row written before this migration.
+   * Absence is "not reported", never an assertion that the fee was GBP.
+   */
+  fee_currency?: string;
 }
 
 /**

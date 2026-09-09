@@ -61,12 +61,17 @@
  *   mark. A GBP book valued partly in dollars breaches every cap at once and
  *   looks green while doing it.
  *
- * That refusal is deliberately inconvenient: EIGHT of the eleven pool rows
- * declare USD in `lse-etp-pool.ts`, so on today's pool most of the universe
- * cannot be marked. That is a
- * real finding about the pool (doc 34 §3.2), not a defect in this class — the
- * fix is an FX-rate decision or a GBP-line pool, both of which are the owner's
- * to make.
+ * That refusal is deliberately inconvenient: TWELVE of the thirty-one pool
+ * rows in `lse-etp-pool.ts` declare USD or EUR, so a universe naming one of
+ * them cannot be marked. That is a real finding about the pool (doc 34 §3.2),
+ * not a defect in this class.
+ *
+ * David's 2026-09-08 ruling on #1220 took the first of the two options this
+ * doc used to leave open — narrow the universe rather than price the FX —
+ * and `tradeableUniverse` (universe-pool) now excludes every non-sterling
+ * row at SELECTION. This refusal is the backstop, not a duplicate: it fires
+ * at `LseMarkDataSource` construction over the lines actually held, so it
+ * still catches a universe assembled without that selector.
  */
 import type { RawCandle } from '../ingestion.js';
 import { LseRegularHoursCalendar } from '../trading-calendar.js';
@@ -324,8 +329,9 @@ function assertMarkableCurrencies(
       'or a pence sub-unit of it, and this system holds no FX rate. Marking them into a GBP book ' +
       'would require an FX decision nobody has made: see docs/research/34-lse-mark-source-options.md §3.2, ' +
       'which measured that most of the checked-in pool quotes in USD despite the GBP-only restriction ' +
-      'ADR-0016/#659 asserts. Either narrow the universe to the GBP/GBX lines or resolve the FX ' +
-      `question first. (vendor: ${vendor})`,
+      'ADR-0016/#659 asserts. #1220 narrowed the universe to the sterling lines — build the ' +
+      'universe through tradeableUniverse() (universe-pool) and no such line can reach here. ' +
+      `(vendor: ${vendor})`,
   );
 }
 

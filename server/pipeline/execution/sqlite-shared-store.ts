@@ -179,6 +179,8 @@ interface FillRow {
   exit_reason: ExitReason | null;
   /** #1001, migration 0037 — see `Fill.flatten_idempotency_key`. */
   flatten_idempotency_key: string | null;
+  /** #1220, migration 0054 — see `Fill.fee_currency`. */
+  fee_currency: string | null;
 }
 
 /**
@@ -469,8 +471,8 @@ export class SqliteExecutionStore implements SharedStore {
         .prepare(
           `INSERT INTO fills (
              idempotency_key, broker_fill_id, leg, price, qty, fee, timestamp, cost_breakdown_json,
-             exit_reason, flatten_idempotency_key
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             exit_reason, flatten_idempotency_key, fee_currency
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           fill.idempotency_key,
@@ -483,6 +485,7 @@ export class SqliteExecutionStore implements SharedStore {
           fill.cost_breakdown === undefined ? null : JSON.stringify(fill.cost_breakdown),
           fill.exit_reason ?? null,
           fill.flatten_idempotency_key ?? null,
+          fill.fee_currency ?? null,
         );
     } catch (cause) {
       if (isUniqueConstraintError(cause)) {
@@ -1237,5 +1240,6 @@ function fromFillRow(row: FillRow): Fill {
     ...(row.flatten_idempotency_key === null
       ? {}
       : { flatten_idempotency_key: row.flatten_idempotency_key }),
+    ...(row.fee_currency === null ? {} : { fee_currency: row.fee_currency }),
   };
 }

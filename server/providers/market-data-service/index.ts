@@ -114,6 +114,7 @@ export type {
 } from './sources/lse-mark-source.js';
 export {
   BOOK_CURRENCY,
+  isBookCurrency,
   LseMarkDataSource,
   MarkCurrencyError,
   NonTradeableInstrumentError,

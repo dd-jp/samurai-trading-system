@@ -1,0 +1,24 @@
+-- Persist the currency a broker fee was denominated in (#1220).
+--
+-- THE GAP THIS CLOSES. `NormalizedFill.fee_currency` has existed at the
+-- adapter boundary since the Saxo adapter began reading `Commissions` off the
+-- order-activity record, but nothing persisted it: `ingest-fills.ts`'s `toFill`
+-- dropped the field, so `fills.fee` — summed into `closed_trades.fees_total`
+-- and every PnL figure downstream — silently claimed book currency (GBP) for a
+-- number the venue may have quoted in USD or EUR. The sterling-only ruling on
+-- #1220 (David, 2026-09-08) makes a non-sterling fee a contradiction rather
+-- than an FX conversion to model: the tradeable universe now excludes every
+-- non-sterling line, so a non-sterling fee means an instrument was traded that
+-- selection should have refused.
+--
+-- WHY THIS IS NOT A CHECK CONSTRAINT. The fill has already happened at the
+-- venue by the time it is read. Refusing to persist it would strand a real
+-- open position outside the append-only fill log (CONTEXT.md invariant 4) —
+-- a silent halt with money exposed. The row is written, the value is recorded
+-- verbatim, and `ingestFills` raises the contradiction on the logger instead.
+-- Plain additive nullable ADD COLUMN, following 0030/0031/0037's convention:
+-- NULL is the honest reading for every row written before this migration and
+-- for every adapter that reports no currency (the Simulated and Alpaca
+-- adapters both do), not an assertion that the fee was GBP.
+
+ALTER TABLE fills ADD COLUMN fee_currency TEXT;

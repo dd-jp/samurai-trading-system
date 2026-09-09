@@ -62,10 +62,16 @@ export interface NormalizedFill {
    * settlement currency — Saxo, from each line's `CurrencyCode`, which is USD
    * on most pool lines and GBP on a pence-quoted one (#1032, #1302). Note the
    * currency is the line's SETTLEMENT currency, never the unit the price is
-   * quoted in: a GBX line settles GBP. NOT persisted and
-   * NOT converted by any consumer yet: `ingestFills`/PnL still sum `fee` as
-   * book currency, so a non-GBP value here is a flagged, unconverted figure,
-   * not a booked one.
+   * quoted in: a GBX line settles GBP.
+   *
+   * PERSISTED since #1220 (`Fill.fee_currency`, migration 0054) and still
+   * NOT converted — deliberately. `ingestFills`/PnL sum `fee` as book
+   * currency, and a non-sterling value here is a CONTRADICTION rather than a
+   * figure awaiting an FX rate: `tradeableUniverse` (universe-pool) excludes
+   * every non-sterling line, so one arriving means an instrument was traded
+   * that selection should have refused. `ingestFills` records the value and
+   * raises `FEE_CURRENCY_NOT_BOOK_CURRENCY` at `error`; it does not refuse
+   * the fill, because the venue has already traded it.
    */
   fee_currency?: string;
   timestamp: Date;

@@ -156,6 +156,18 @@ export interface CostConfig {
    * `{ saxo: { commissionRate: 0.0008 } }` for ADR-0015:201's 8bps-per-side
    * Saxo Classic tier. A key with no `MarketState` anywhere in a run setting
    * that `venue` is inert, not an error.
+   *
+   * **There is no FX-margin term here, and its absence is a recorded
+   * deferral, not an oversight** (#1220). Saxo charges a conversion margin on
+   * every settlement outside the account currency, and #1220's issue body
+   * proposed modelling it as a `venues.saxo` field. David's 2026-09-08 ruling
+   * deferred that and excluded the non-sterling lines instead
+   * (`tradeableUniverse`, universe-pool), so nothing Samurai may trade
+   * settles outside GBP and there is no conversion to price. A future edit
+   * that readmits a non-sterling line — which is #1310's question, not this
+   * type's — must add the term here BEFORE relying on any cost figure that
+   * line produces; every number this model reports for such a line today is
+   * missing the FX leg entirely.
    */
   venues?: Partial<Record<CostVenue, Partial<AssetClassCostConfig>>>;
 }

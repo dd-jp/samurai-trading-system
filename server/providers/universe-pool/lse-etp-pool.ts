@@ -59,7 +59,7 @@
  * row is rejected at load, not at fallback time"). Recorded as finding F4 of
  * `docs/reviews/universe-path-gap-sweep-2026-09-03.md`.
  *
- * **Which six rows carry it, and on what basis.** The subset is
+ * **Which rows carry it, and on what basis.** The subset is
  * hand-declared, per the spec's third constraint, and these are the criteria
  * — stated so David can revise the membership without reverse-engineering
  * the intent:
@@ -103,22 +103,28 @@
  *    supersedes DMD — so this subset is declared pending that, not screened
  *    against it.
  *
- * **Re-selected 2026-09-05 by #1032 item 3.** The Saxo capture found no line
- * at all for 3SPY, 3AMZ and (under its own ticker) 3LME/3FB — four of the
- * six rows the 2026-09-03 subset named — and `assertValidFallbackSubset`'s
- * rule 5 refuses a fallback row Saxo is verified not to list. Rule 3's
- * "prefer the GBP line" (3SPY over 3USL) therefore yields to the line Saxo
- * actually carries: 3USL for SPY — **a USD line, taking residual risk 2 at
- * the settlement boundary for the one fallback slot that had a GBP option**.
- * Called out rather than buried: the GBP line of the same ISIN that Saxo
- * DOES carry is 3LUS:xlon (recorded as 3USL's `sibling_line`), which is not
- * a pool row and is not promoted here because no row is added by a
- * verification pass; whether the fallback should move to it is a follow-up
- * filed from PR #1212. The six are now 3USL, LQQ3, NVD3, 3LTS,
- * 3LPA and 3LAL — SPY, QQQ, NVDA, TSLA, PLTR, GOOGL — still one line per
- * underlying, still measured envelopes only, still the pool's largest US
- * names on ordinary market knowledge. Alphabet replaces Amazon and Meta,
- * neither of whose lines Saxo lists under the pool's tickers.
+ * 6. **Sterling only** (#1220, David's 2026-09-08 ruling). Rule 6 of
+ *    `assertValidFallbackSubset`, and the criterion that decided the current
+ *    membership. Non-sterling lines are excluded from the tradeable universe
+ *    outright (`tradeableUniverse`), so a fallback holding one hands
+ *    degraded mode an instrument selection has already refused.
+ *
+ * **Re-selected 2026-09-05 by #1032 item 3, then narrowed 2026-09-09 by
+ * #1220.** The Saxo capture found no line at all for 3SPY, 3AMZ and (under
+ * its own ticker) 3LME/3FB — four of the six rows the 2026-09-03 subset named
+ * — and rule 5 refuses a fallback row Saxo is verified not to list, which put
+ * 3USL (USD) in the SPY slot. #1220's sterling-only ruling then took that
+ * slot back off it: **3LUS:xlon (Uic 29049628), the GBP line of the same
+ * ISIN, is now its own pool row and holds the SPY slot** — the sibling the
+ * 2026-09-05 pass recorded, promoted deliberately rather than swapped in
+ * silently, with 3USL kept as a pool row. Rule 6 also drops NVD3, 3LTS, 3LPA
+ * and 3LAL, all USD lines with no sterling line of the same ISIN to move to.
+ * **The subset is therefore two rows — 3LUS and LQQ3, SPY and QQQ — below
+ * the spec's 5–10 sizing guidance**, which is stated here rather than
+ * quietly tolerated: the pool holds only five sterling Saxo-listed lines at
+ * all, and universe width for the live ramp is #1310's. LCO3 is the one
+ * sterling, Saxo-listed, envelope-measured row NOT promoted into the subset,
+ * because promoting it is a selection decision the #1220 ruling did not make.
  *
  * ## Saxo venue change — what changed here and what did not
  *
@@ -147,10 +153,12 @@
  * `AssetTypes=Etf,Etc,Etn`): once by its `<lse_ticker>:xlon` symbol and
  * once by its ISIN. The result is three honest buckets, recorded per row:
  *
- * - **13 rows: own line listed** — `saxo_tradeable: true`, `line` carries
+ * - **14 rows: own line listed** — `saxo_tradeable: true`, `line` carries
  *   Saxo's Uic/AssetType/ExchangeId/Currency. Every one is `AssetType: Etn`
- *   on `ExchangeId: LSE_ETF`. Four also have a sibling currency line
- *   (3USL/3LUS, LQQ3/QQQ3, NVD3/3NVD, LCO3/3LCO).
+ *   on `ExchangeId: LSE_ETF`. Five also have a sibling currency line
+ *   (3USL/3LUS, 3LUS/3USL, LQQ3/QQQ3, NVD3/3NVD, LCO3/3LCO). It was 13 until
+ *   #1220 promoted this pass's own 3LUS sibling record into a row of its
+ *   own; that row adds no new capture, only a second reading of one.
  * - **7 rows: ISIN resolves only to a SIBLING ticker** — `false`, with the
  *   sibling recorded (3LME→3LMS, LAM3→3LAM, LPP3→3LPP, 3LNP→3LNF,
  *   LAA3→3LAA, 3LIP→3LNI, 3FB→FB3). The product exists on Saxo; the line
@@ -196,14 +204,15 @@
  * sizing error and a wrong ISIN identifies a different security.
  *
  * **Expanded 2026-08-19 by [#813](https://github.com/dd-jp/samurai-trading-system/issues/813):
- * this pool is now 30 rows (tradeable ETP lines, distinct `lse_ticker`
+ * this pool is now 31 rows (tradeable ETP lines, distinct `lse_ticker`
  * values) resolving to 26 distinct `screening_instrument` values (rankable
  * underlyings)** — still not the 40-80 ADR-0016 estimates for the full
  * three-issuer catalogue, and still neither number is a ceiling on real
  * availability, only a floor. The nineteen rows #813 added each carry one
  * new underlying, so both counts moved by the same amount; the four
  * duplicated underlyings are still SPY, QQQ, PLTR, and NVDA, each carrying
- * two ETP lines from different issuers, which is why 30 rows resolve to 26
+ * two ETP lines from different issuers (and SPY a third, 3LUS, added by
+ * #1220), which is why 31 rows resolve to 26
  * distinct underlyings — see `countRankableUnderlyings()` below, and the
  * pool-count finding further down for which of these two counts each
  * downstream ticket actually consumes. An early pass of this file stopped at 6 rows and
@@ -250,11 +259,11 @@
  * left out because no fetched page confirmed its ISIN or quoting currency.
  *
  * **The pool-count finding, restated at #813's counts — and still split by
- * what each consumer actually counts.** This pool has 30 tradeable ETP lines
+ * what each consumer actually counts.** This pool has 31 tradeable ETP lines
  * (distinct `lse_ticker` rows) resolving to 26 distinct rankable underlyings
  * (unique `screening_instrument` values, see `countRankableUnderlyings()`),
- * because SPY, QQQ, PLTR, and NVDA each carry two ETP lines from different
- * issuers. These are not interchangeable counts, and each downstream ticket
+ * because QQQ, PLTR, and NVDA each carry two ETP lines from different
+ * issuers and SPY carries three. These are not interchangeable counts, and each downstream ticket
  * consumes only one of them — the expansion does not merge them, it just
  * moves both:
  *
@@ -264,7 +273,7 @@
  *   distinct-`screening_instrument` count to reach at least 25, the
  *   `docs/specs/universe-selector-spec.md` ("Candidate pool") threshold for
  *   where ranking machinery earns its keep. Row count was never the measure
- *   of that gate and still is not — 30 rows would say nothing about whether
+ *   of that gate and still is not — 31 rows would say nothing about whether
  *   #707 can run if they collapsed onto a handful of names. **What is
  *   cleared is the pool size, not #707 itself**: a monthly quintile over 26
  *   names gives ~5 instruments per bucket, which is a defined statistic
@@ -272,10 +281,12 @@
  *   pre-registered study and nothing here pre-empts its other
  *   preconditions.
  * - **#751** (ActiveUniverseProvider, tradeable-lines wiring) consumes the
- *   30-row tradeable-ETP-line count instead — the population it wires for
+ *   31-row tradeable-ETP-line count instead — the population it wires for
  *   order routing legitimately spans issuer-duplicate lines, since 3USL and
  *   3SPY are two genuinely different holdable instruments even though both
- *   screen off SPY.
+ *   screen off SPY. **#751 must consume it through `tradeableUniverse`**,
+ *   which is 5 of those 31 rows after #1220's sterling-only exclusion — see
+ *   that function, and #1310 for the width problem the number is.
  *
  * **What the expansion also widened: `index_etp_3x` is now a broader bucket
  * than ADR-0018 measured.** D3's frozen bracket and D5's deployment
@@ -300,14 +311,14 @@
  * `subclassOfUniverse` (`server/apps/orchestrator/types.ts`) treats as "arm
  * no per-subclass regime for this instrument" rather than "size it off the
  * SPY-measured bracket". Screening/ranking is unaffected: `countRankableUnderlyings`
- * and the full `LSE_ETP_POOL` (30 rows, 26 underlyings) are untouched, since
+ * and the full `LSE_ETP_POOL` (31 rows, 26 underlyings) are untouched, since
  * this exclusion is sizing-only. Recorded against ADR-0018 (see the
  * 2026-08-27 amendment) until Option 1 (split the subclass) or Option 2
  * (re-measure across the wider membership) lands.
  *
  * The `toBeLessThan` test that encoded the old under-25 (row-count)
  * conclusion has been removed from this file's test suite; both current
- * counts (30 rows, 26 distinct underlyings) are pinned by
+ * counts (31 rows, 26 distinct underlyings) are pinned by
  * `lse-etp-pool.test.ts` instead, along with the >= 25 threshold itself so
  * that a future row removal fails loudly against #707's gate rather than
  * silently re-blocking it.
@@ -326,10 +337,13 @@
  *    above; this line said "GBP ISA" until #946). A currency move between
  *    entry and exit is an
  *    uncompensated term in the realised return that the US-underlying
- *    screening bars cannot see. (Several rows below are themselves
- *    USD-denominated LSE lines rather than GBX/GBP lines — see each row's
- *    `currency` field and note — which is the same risk one layer earlier,
- *    at the settlement-vs-listing-currency boundary, not just underlying-vs-ETP.)
+ *    screening bars cannot see. **The settlement-boundary half of this risk
+ *    is closed, not merely recorded** (#1220): twelve rows below are
+ *    themselves USD- or EUR-denominated LSE lines rather than GBX/GBP ones,
+ *    and `tradeableUniverse` now excludes every one of them, so no line
+ *    Samurai may hold settles outside the book currency. What remains is the
+ *    underlying-vs-ETP leg above, which no universe filter can remove — the
+ *    underlying is USD whatever currency the wrapper is quoted in.
  * 3. **The session offset.** The screener's target session opens at 14:30
  *    London — the US cash open, and `screening_instrument`'s first bar of
  *    the day. The traded `lse_ticker` has already been trading on the LSE
@@ -422,8 +436,19 @@ export interface RowProvenance {
   readonly issuer: string;
   /** A URL actually fetched or returned by search during this compile, naming ticker/ISIN/currency. */
   readonly source_url: string;
-  /** A trading212.com instrument page confirming T212 lists this ticker. */
-  readonly t212_source_url: string;
+  /**
+   * A trading212.com instrument page confirming T212 lists this ticker.
+   *
+   * Optional since #1220, and absent means exactly one thing: no T212
+   * evidence exists for this row. Every row compiled on or before
+   * 2026-08-19 carries one; a row added after the 2026-08-30 venue change
+   * (ADR-0015's amendment — T212 is barred outright, #896/#912) cannot,
+   * because no such research pass runs any more. Citing a plausible-looking
+   * URL nobody fetched would be worse than the absence in a file whose whole
+   * discipline is provenance. Read `t212_isa` the same way on such a row —
+   * see its own doc.
+   */
+  readonly t212_source_url?: string;
   /** ISO date this row was compiled/verified. */
   readonly verified_on: string;
   /** What Saxo's own instrument list says about this row — the source of `saxo_tradeable`. */
@@ -459,7 +484,11 @@ export interface LseEtpPoolRow {
    * Best-effort determination that Trading 212 LISTS this ticker, from
    * T212's own public instrument pages (see `provenance.t212_source_url`) —
    * NOT that it is confirmed listed-and-tradeable inside a Trading 212
-   * account, and NOT a claim about Saxo (the live equity venue since
+   * account. On a row compiled AFTER the 2026-08-30 venue change (3LUS,
+   * #1220) `false` means "no T212 evidence exists" rather than "T212 does
+   * not list it" — no such research pass runs any more; those rows carry no
+   * `t212_source_url` and say so in their own `provenance.notes`. NOT a
+   * claim about Saxo (the live equity venue since
    * 2026-08-30, ADR-0015's amendment, map #905 — see "## Saxo venue change"
    * above). Listing is verified; T212-side eligibility to actually trade it
    * was pending #665 (the complex-products questionnaire), which closed
@@ -592,13 +621,13 @@ export function assertKnownSubclass(row: LseEtpPoolRow): void {
 }
 
 /**
- * The checked-in pool. Thirty rows (tradeable ETP lines): eight
+ * The checked-in pool. Thirty-one rows (tradeable ETP lines): nine
  * `index_etp_3x`, twenty-two `single_stock_etp_3x`. That resolves to 26
  * distinct `screening_instrument` values (rankable underlyings; see
- * `countRankableUnderlyings()`) — 6 among the index rows (SPY and QQQ each
- * doubled, plus VT, EWY, KWEB, XLE) and 20 among the single-stock rows
+ * `countRankableUnderlyings()`) — 6 among the index rows (SPY tripled and
+ * QQQ doubled, plus VT, EWY, KWEB, XLE) and 20 among the single-stock rows
  * (NVDA and PLTR each doubled) — since SPY, QQQ, PLTR, and NVDA are the only
- * underlyings carrying two lines from different issuers. Every row added by
+ * underlyings carrying more than one line. Every row added by
  * #813 on 2026-08-19 brought a new underlying with it, which is why the row
  * count and the distinct-underlying count moved together. See the module
  * doc's provenance section for why this is still a verified seed of the full
@@ -617,7 +646,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     currency: 'USD',
     t212_isa: true,
     saxo_tradeable: true,
-    fallback_default: true,
+    fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'IE00B7Y34M31',
@@ -646,8 +675,60 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
       notes:
         "WisdomTree S&P 500 3x Daily Leveraged. Same product family ADR-0016's 0.18% round-trip " +
         "figure is quoted for. justETF's LSE listing table also shows a GBX (pence) line under " +
-        'ticker 3LUS for the same ISIN; 3USL (this row) is the USD line and is the ticker ADR-0016 ' +
-        "and T212's public page both name, so it is used here rather than the untested 3LUS line.",
+        'ticker 3LUS for the same ISIN, which is now its own row directly below and holds the SPY ' +
+        'fallback slot (#1220). This USD line stays a pool row — the slot moved, the line was not ' +
+        'deleted — but `tradeableUniverse` excludes it, along with every other non-sterling row.',
+    },
+  },
+  {
+    lse_ticker: '3LUS',
+    screening_instrument: 'SPY',
+    underlying: 'S&P 500',
+    leverage: 3,
+    direction: 'long',
+    subclass: 'index_etp_3x',
+    currency: 'GBX',
+    // No T212 evidence exists for this row and none can be produced: it was
+    // compiled after the 2026-08-30 venue change barred T212 outright
+    // (#896/#912), so `false` here means "unevidenced", not "T212 does not
+    // list it" — see `t212_isa`'s own doc. `t212_source_url` is omitted for
+    // the same reason rather than filled with a plausible URL nobody fetched.
+    t212_isa: false,
+    saxo_tradeable: true,
+    fallback_default: true,
+    subclass_envelope_measured: true,
+    provenance: {
+      isin: 'IE00B7Y34M31',
+      issuer: 'WisdomTree',
+      source_url: 'https://www.justetf.com/en/etf-profile.html?isin=IE00B7Y34M31',
+      saxo: {
+        verified_on: '2026-09-05',
+        gateway: 'sim',
+        line: {
+          symbol: '3LUS:xlon',
+          uic: 29049628,
+          asset_type: 'Etn',
+          exchange_id: 'LSE_ETF',
+          currency: 'GBP',
+        },
+        sibling_line: {
+          symbol: '3USL:xlon',
+          uic: 3347273,
+          asset_type: 'Etn',
+          exchange_id: 'LSE_ETF',
+          currency: 'USD',
+        },
+      },
+      verified_on: '2026-09-09',
+      notes:
+        'The sterling line of the SAME ISIN as 3USL above, added by #1220 so the SPY fallback slot ' +
+        'can sit on a sterling line. Its Saxo evidence is not a new capture: it is the 2026-09-05 ' +
+        "SIM pass's own `sibling_line` for 3USL, promoted deliberately here — the Uic (29049628) " +
+        'and asset type are that record, unchanged. `currency: GBX` follows the justETF LSE ' +
+        "listing table 3USL's note already cites (a pence line under this ticker); Saxo's search " +
+        'endpoint reports GBP for it because it carries no quote unit at all — see ' +
+        '`SaxoInstrumentLine.currency`, and #1302 for the pence scaling the execution path applies. ' +
+        'No spread, volume or live-GIA tradeability claim is made here beyond that record.',
     },
   },
   {
@@ -731,7 +812,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     currency: 'USD',
     t212_isa: true,
     saxo_tradeable: true,
-    fallback_default: true,
+    fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2656472193',
@@ -766,7 +847,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     currency: 'USD',
     t212_isa: true,
     saxo_tradeable: true,
-    fallback_default: true,
+    fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2820604770',
@@ -939,7 +1020,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     currency: 'USD',
     t212_isa: true,
     saxo_tradeable: true,
-    fallback_default: true,
+    fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2856105833',
@@ -1094,7 +1175,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     currency: 'USD',
     t212_isa: true,
     saxo_tradeable: true,
-    fallback_default: true,
+    fallback_default: false,
     subclass_envelope_measured: true,
     provenance: {
       isin: 'XS2675292309',
@@ -1802,7 +1883,7 @@ export function countRankableUnderlyings(pool: readonly LseEtpPoolRow[] = LSE_ET
  *
  * Screening/ranking is untouched by this function and must stay that way —
  * `countRankableUnderlyings` and every other screening consumer keep
- * reading the full `LSE_ETP_POOL` (30 rows, 26 underlyings) unchanged, since
+ * reading the full `LSE_ETP_POOL` (31 rows, 26 underlyings) unchanged, since
  * this exclusion is sizing-only, not a pool filter.
  */
 export function liveSizingSubclassFor(row: LseEtpPoolRow): InstrumentSubclass | undefined {
@@ -1822,6 +1903,68 @@ export function liveSizingSubclassFor(row: LseEtpPoolRow): InstrumentSubclass | 
  */
 export function gateAdmits(row: LseEtpPoolRow): boolean {
   return row.saxo_tradeable !== false;
+}
+
+/**
+ * The sterling codes a pool row's `currency` may carry and still be a line
+ * Samurai may hold. Deliberately the SAME set `isBookCurrency`
+ * (`server/providers/market-data-service/sources/lse-mark-source.ts`) accepts
+ * on the mark side — pence in any of its four spellings, plus GBP in any
+ * case.
+ *
+ * Duplicated rather than imported: importing the market-data barrel here
+ * would pull the whole service into every module that reads this pool file
+ * (three analysts, the MI ingest agent, the orchestrator defaults), and
+ * `assertValidPool` runs at import. `lse-etp-pool.test.ts` pins the two
+ * predicates' agreement on every pool row and every code instead, so they
+ * cannot silently diverge — the failure mode #1100 already closed once for
+ * `gateAdmits`.
+ */
+const STERLING_QUOTE_CODES: readonly string[] = ['GBX', 'gbx', 'GBp', 'p', 'GBP'];
+
+/**
+ * Whether the row's LSE line is quoted in sterling — the second gate the
+ * tradeable universe applies, alongside `gateAdmits` (#1220).
+ *
+ * David's 2026-09-08 ruling on #1220 excludes the non-sterling lines outright
+ * for the live ramp rather than deprioritising them: the GBP/USD leg between
+ * entry and exit is an uncompensated term nothing in this system prices (the
+ * cost model has no FX margin — see `venues.saxo` in
+ * `server/tools/backtest/types.ts`), and a broker fee arriving in a foreign
+ * currency is summed into a GBP book. A ranked-last USD row is still a row
+ * the screener can surface on a thin day; an excluded one cannot.
+ *
+ * GBX is IN. Pence is an exact unit conversion, not an FX rate, and #1302
+ * already lands the scaling through Saxo's `PriceToContractFactor`.
+ */
+export function isSterlingQuoted(row: LseEtpPoolRow): boolean {
+  const code = row.currency.trim();
+  return STERLING_QUOTE_CODES.includes(code) || code.toUpperCase() === 'GBP';
+}
+
+/**
+ * The rows a live consumer may trade: Saxo-listed (`gateAdmits`) AND
+ * sterling-quoted (`isSterlingQuoted`).
+ *
+ * **This is the function #751's `ActiveUniverseProvider` must build its
+ * `UniverseInstrument[]` from**, the same way `liveSizingSubclassFor` is the
+ * function it must set `subclass` through. Reading `LSE_ETP_POOL` directly
+ * would readmit the twelve non-sterling lines the #1220 ruling excluded.
+ *
+ * The two gates stay separate predicates rather than folding currency into
+ * `gateAdmits`: that function is the Saxo LIQUIDITY gate, and
+ * `liquidityGateStatus`'s reasons speak in `saxo_tradeable`'s own terms —
+ * folding currency in would make it report "every row is Saxo-verified
+ * false" for a USD row Saxo verified true.
+ *
+ * **The result is deliberately narrow, and that is the ruling's own
+ * consequence, not a bug**: five rows of the checked-in thirty-one. Universe
+ * width for the live ramp is #1310's.
+ */
+export function tradeableUniverse(
+  pool: readonly LseEtpPoolRow[] = LSE_ETP_POOL,
+): readonly LseEtpPoolRow[] {
+  return pool.filter((row) => gateAdmits(row) && isSterlingQuoted(row));
 }
 
 /**
@@ -1958,7 +2101,7 @@ export function assertValidPool(pool: readonly LseEtpPoolRow[]): void {
  * row. Both are a no-op-or-total gate shipping silently, this repo's
  * dominant defect class (a mechanism that runs but enforces nothing) one
  * level up: the ORIGINAL version of this defect was exactly this, with
- * `t212_isa` constant `true` on all 30 rows (#1054).
+ * `t212_isa` constant `true` on all 30 rows then in the pool (#1054).
  *
  * The `'unarmed'` state (constant `'unverified'`) does NOT throw here — see
  * `liquidityGateStatus`'s own doc for why that state is the honest one, not
@@ -2003,7 +2146,7 @@ function assertLiquidityGateNotVacuous(pool: readonly LseEtpPoolRow[]): void {
 export const FALLBACK_DEFAULT_MAX_ROWS = 10;
 
 /**
- * Enforces the four rules on the pool's declared fallback subset.
+ * Enforces the six rules on the pool's declared fallback subset.
  *
  * Rule 1 is the spec's: "a pool with no `fallback_default` row is rejected at
  * load, not at fallback time".
@@ -2013,7 +2156,7 @@ export const FALLBACK_DEFAULT_MAX_ROWS = 10;
  * still pass. A strict `fallback.length < pool.length` subset rule is
  * deliberately not enforced, for the same reason the 5-row floor is not — it
  * would reject a legitimately small future pool for violating a range written
- * against this 30-row one. At any pool size the ceiling is the binding
+ * against this 31-row one. At any pool size the ceiling is the binding
  * constraint the spec gives a reason for (the refusal storm, and the tick
  * budget); "not the full pool" is a property of a pool this size, which
  * `lse-etp-pool.test.ts` pins on the checked-in artifact rather than here.
@@ -2040,9 +2183,18 @@ export const FALLBACK_DEFAULT_MAX_ROWS = 10;
  * Saxo has been verified NOT to list is the silent halt wearing the
  * fallback's name. This is deliberately "not verified ineligible", not
  * "verified eligible", so a future pool whose rows are still `'unverified'`
- * loads (#1054 Part 1); the checked-in pool's six fallback rows are all
+ * loads (#1054 Part 1); the checked-in pool's fallback rows are all
  * verified `true` regardless (#1032 item 3), which `lse-etp-pool.test.ts`
  * pins on the artifact rather than here.
+ *
+ * **Rule 6 — no fallback row may be non-sterling** (#1220, David's
+ * 2026-09-08 ruling). `tradeableUniverse` excludes USD and EUR lines
+ * outright, so a fallback row in one of those currencies would hand degraded
+ * mode an instrument selection has already refused. This is rule 5's argument
+ * one gate over, and it is what dropped the four USD fallback rows (3LTS,
+ * NVD3, 3LPA, 3LAL) the 2026-09-05 subset named: unlike 3USL, none of them
+ * has a sterling line of the same ISIN to move to, so they fall out with no
+ * replacement.
  */
 export function assertValidFallbackSubset(pool: readonly LseEtpPoolRow[]): void {
   const fallback = pool.filter((row) => row.fallback_default);
@@ -2095,6 +2247,17 @@ export function assertValidFallbackSubset(pool: readonly LseEtpPoolRow[]): void 
           'Saxo-verified false for it. A fallback watchlist that can return a name Saxo has been ' +
           "verified NOT to list is the silent halt wearing the fallback's name " +
           '(docs/specs/universe-selector-spec.md, "Fallback behaviour").',
+      );
+    }
+  }
+  for (const row of fallback) {
+    if (!isSterlingQuoted(row)) {
+      throw new Error(
+        `LSE ETP pool marks '${row.lse_ticker}' as a fallback_default row, but its line is quoted ` +
+          `in '${row.currency}', which is not sterling. #1220's ruling (David, 2026-09-08) excludes ` +
+          'non-sterling lines from the tradeable universe for the live ramp, so a fallback holding ' +
+          'one hands degraded mode an instrument selection has already refused — the same silent ' +
+          'halt rule 5 refuses one gate over.',
       );
     }
   }
