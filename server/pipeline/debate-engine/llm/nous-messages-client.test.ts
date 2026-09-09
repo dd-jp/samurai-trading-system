@@ -8,7 +8,8 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AnthropicLlmClient } from './anthropic-client.js';
-import { LlmRefusalError } from './errors.js';
+import { LlmRefusalError, LlmTruncatedError } from './errors.js';
+import { classifyFailureCause } from './failure-cause.js';
 import { NousMessagesClient } from './nous-messages-client.js';
 import type { LlmSpendRecord, LlmSpendSink } from './spend-sink.js';
 import type { LlmRequest } from './types.js';
@@ -165,7 +166,23 @@ describe('NousMessagesClient through AnthropicLlmClient', () => {
       usage: { prompt_tokens: 10, completion_tokens: 1024 },
     });
 
-    await expect(client().complete(request())).rejects.toThrow(/finish_reason="length"/);
+    const error = await client()
+      .complete(request())
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(LlmTruncatedError);
+    expect((error as LlmTruncatedError).message).toMatch(/finish_reason="length"/);
+    // #1394: the class survives the trip through `classifyProviderError`. It
+    // did not before — the truncation arrived at every seam downstream as a
+    // bare `LlmProviderError`, indistinguishable from a dead API key, so
+    // `truncated` was a taxonomy member nothing could ever produce.
+    expect((error as LlmTruncatedError).max_tokens).toBe(1024);
+    expect((error as LlmTruncatedError).usage).toEqual({
+      input_tokens: 10,
+      output_tokens: 1024,
+      cache_read_input_tokens: 0,
+    });
+    expect(classifyFailureCause(error)).toBe('truncated');
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 

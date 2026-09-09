@@ -22,14 +22,14 @@
  */
 
 import type { NousChatResult } from '../../../shared/llm/nous-chat.js';
-import { NousRefusalError, nousChat } from '../../../shared/llm/nous-chat.js';
+import { NousRefusalError, NousTruncatedError, nousChat } from '../../../shared/llm/nous-chat.js';
 import type {
   AnthropicMessageOptions,
   AnthropicMessageRequest,
   AnthropicMessageResponse,
   AnthropicMessagesClient,
 } from './anthropic-client.js';
-import { LlmRefusalError } from './errors.js';
+import { LlmRefusalError, LlmTruncatedError } from './errors.js';
 
 export interface NousMessagesClientOptions {
   apiKey: string;
@@ -96,6 +96,14 @@ export class NousMessagesClient implements AnthropicMessagesClient {
       // call's tokens discarded (#1391).
       if (error instanceof NousRefusalError) {
         throw new LlmRefusalError(error.message, error.signal, error.usage);
+      }
+      // Translated here for the same reason (#1394): left to
+      // `classifyProviderError` a truncation lands on `LlmProviderError`,
+      // where it is indistinguishable from a dead API key and its
+      // `max_tokens`/`usage` are discarded. Not retried either way — see
+      // `LlmTruncatedError`.
+      if (error instanceof NousTruncatedError) {
+        throw new LlmTruncatedError(error.message, error.model, error.max_tokens, error.usage);
       }
       throw error;
     }

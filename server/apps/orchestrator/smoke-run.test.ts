@@ -511,7 +511,7 @@ function healthyAnalystFailureCause(
   overrides: Partial<AnalystFailureCauseEvidence> = {},
 ): AnalystFailureCauseEvidence {
   return {
-    failureKinds: ['error'],
+    failureKinds: ['other'],
     debugPayloads: [
       {
         analyst_type: 'technical',

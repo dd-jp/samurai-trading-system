@@ -2082,6 +2082,28 @@ describe('buildProductionComponents (default llmClient fallback)', () => {
       debate_id: 'debate-9',
       model: DEFAULT_NOUS_MODELS.debate,
     });
+
+    // #1394: the SAME line now names what it is retrying.
+    // `RetryAttemptReport.error` is `unknown`, so a rate limit and a bad draw
+    // used to produce identical lines, and only the first is worth waiting out.
+    expect(retryLine?.payload).toMatchObject({ failure_cause: 'unparseable' });
+
+    // #1394's terminal line, and the one a session-wide count of LLM failures
+    // by cause is read off. Asserted here rather than only on
+    // `AnthropicLlmClient` because a classifier the composition root never
+    // wires is this repo's dominant defect class: delete `onCallFailed` from
+    // `buildDefaultLlmClient` and every seam below still fails open in silence.
+    const failedLine = logger.entries.find((entry) => entry.event === 'llm_call_failed');
+    expect(failedLine?.level).toBe('warn');
+    expect(failedLine?.trace_id).toBe('trace-1');
+    expect(failedLine?.payload).toMatchObject({
+      failure_cause: 'unparseable',
+      debate_id: 'debate-9',
+      llm_stage: 'debate',
+      model: DEFAULT_NOUS_MODELS.debate,
+    });
+    // Once per CALL, not once per attempt — the retry line owns those.
+    expect(logger.entries.filter((entry) => entry.event === 'llm_call_failed')).toHaveLength(1);
     vi.unstubAllGlobals();
   });
 });

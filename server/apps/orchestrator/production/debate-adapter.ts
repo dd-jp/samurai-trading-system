@@ -203,6 +203,12 @@ export function buildDebatePersonas(
    * drift between the two would silently skip disagreement detection.
    */
   maxRounds: number = MAX_ROUNDS,
+  /**
+   * Reaches only `detectDisagreements` (#1394), which had no logger and so
+   * swallowed every semantic-detection failure without naming it. Optional and
+   * last so the suite's existing persona builders are unchanged.
+   */
+  logger?: Logger,
 ): DebatePersonasWithState {
   let lastBull: PersonaResponse | undefined;
   let lastBear: PersonaResponse | undefined;
@@ -266,10 +272,13 @@ export function buildDebatePersonas(
 
       const isFinalRound = response.converged || context.round === maxRounds;
       const disagreement = isFinalRound
-        ? await detectDisagreements(context.views, llmClient, context.signal, {
-            trace_id,
-            debate_id,
-          })
+        ? await detectDisagreements(
+            context.views,
+            llmClient,
+            context.signal,
+            { trace_id, debate_id },
+            logger,
+          )
         : { summary: '', conflicts: [], method: 'directional_fallback' as const };
 
       // `response.stance` — the mediator's actual verdict — is passed as a
@@ -975,6 +984,7 @@ export function buildDebateStep(
       clock,
       debate_id,
       MAX_ROUNDS_BY_ASSET_CLASS[asset_class],
+      logger,
     );
 
     // LATENCY BUDGET (#374). `enforceLatencyBudget` was implemented, tested,

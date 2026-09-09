@@ -23,7 +23,7 @@ import type {
 } from '../../providers/market-data-service/index.js';
 import type { MarketIntelligenceStore } from '../../providers/market-intelligence/index.js';
 import type { AssetClass, Clock } from '../../shared/index.js';
-import type { AnalystView } from '../debate-engine/index.js';
+import type { AnalystView, FailureCause } from '../debate-engine/index.js';
 
 export type { AssetClass };
 
@@ -192,12 +192,13 @@ export interface Analyst {
 }
 
 /**
- * Why a persona failed, as a discriminator rather than as prose (#1080).
+ * Why a persona failed, as a discriminator rather than as prose (#1080),
+ * on the shared failure-cause taxonomy since #1394.
  *
  * The kind describes THE ATTEMPT THE STAGE GAVE UP ON, not all of them:
  * `'timeout'` means the final attempt hit `AnalystOrchestrator`'s per-attempt
- * deadline, `'error'` means it threw (a data gap, a provider fault, a malformed
- * response). A run that threw once and then timed out reports `'timeout'`.
+ * deadline; every other value is what the classifier read off the thrown
+ * value. A run that threw once and then timed out reports `'timeout'`.
  *
  * That is the terminal condition, and it is the one worth surfacing. The
  * alternative — `'timeout'` only when EVERY attempt hit the deadline — would
@@ -206,11 +207,18 @@ export interface Analyst {
  * unreachable behind a word an operator reads as someone else's outage. The
  * same preference decides a mixed set of personas one layer up (`skipKindOf`).
  *
- * The reason string already names both, but only by spelling — a reader
- * downstream had to match on the words `did not answer within` to tell them
- * apart, and the two are acted on differently.
+ * `'error'` — the single word every non-timeout failure used to collapse to —
+ * is gone: it named the fact of a throw and nothing about it, so a rate-limited
+ * data vendor and an unreadable answer were the same line. Its nearest
+ * successor is `'other'`, which #1394 defines as "unclassified", not "any
+ * fault". `skipKindOf` still folds the whole non-timeout set back to `'fault'`
+ * for the audit word, so nothing downstream of the log changed.
+ *
+ * The reason string already names the failure, but only by spelling — a reader
+ * downstream had to match on the words `did not answer within` to tell a
+ * timeout apart, and the two are acted on differently.
  */
-export type AnalystFailureKind = 'timeout' | 'error';
+export type AnalystFailureKind = FailureCause;
 
 /** One persona's failure this tick, reason-tagged (analysts-spec.md "Module: Failure Handling"). */
 export interface AnalystFailure {

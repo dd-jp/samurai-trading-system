@@ -2,6 +2,7 @@ import type {
   AnthropicMessageRequest,
   AnthropicMessageResponse,
   AnthropicMessagesClient,
+  LlmCallFailureReport,
 } from './anthropic-client.js';
 import { AnthropicLlmClient } from './anthropic-client.js';
 import {
@@ -819,6 +820,90 @@ describe('AnthropicLlmClient spend metering', () => {
 
       // One leaked 30s timer per LLM call, every call, for the whole soak.
       expect(vi.getTimerCount()).toBe(0);
+    });
+  });
+
+  describe('onCallFailed — the seam every production LLM failure crosses (#1394)', () => {
+    const RETRY_ONCE = { maxAttempts: 2, baseDelayMs: 1, maxDelayMs: 1 };
+
+    function failingClient(
+      error: unknown,
+      onCallFailed: (report: LlmCallFailureReport) => void,
+      retry = NO_RETRY,
+    ): AnthropicLlmClient {
+      const wire: AnthropicMessagesClient = {
+        createMessage: vi.fn().mockRejectedValue(error),
+      };
+      return new AnthropicLlmClient(wire, {
+        model: 'anthropic/claude-sonnet-5',
+        max_tokens: 1024,
+        timeoutMs: 1_000,
+        retry,
+        onCallFailed,
+      });
+    }
+
+    it('reports the classified cause once, with the attribution the log line needs', async () => {
+      const reports: LlmCallFailureReport[] = [];
+      const client = failingClient(new LlmRefusalError('declined', 'stop_reason="refusal"'), (r) =>
+        reports.push(r),
+      );
+
+      await expect(
+        client.complete({
+          ...request(),
+          context: {
+            analyst_views: [],
+            attribution: { trace_id: 'trace-9', stage: 'risk_critic', debate_id: 'debate-9' },
+          },
+        }),
+      ).rejects.toBeInstanceOf(LlmRefusalError);
+
+      expect(reports).toHaveLength(1);
+      expect(reports[0]).toMatchObject({
+        failure_cause: 'refusal',
+        model: 'anthropic/claude-sonnet-5',
+        trace_id: 'trace-9',
+        stage: 'risk_critic',
+        debate_id: 'debate-9',
+      });
+    });
+
+    it('fires ONCE per call, not once per retried attempt — the retry line owns those', async () => {
+      const reports: LlmCallFailureReport[] = [];
+      const client = failingClient(
+        new LlmRateLimitError('slow down'),
+        (r) => reports.push(r),
+        RETRY_ONCE,
+      );
+
+      const pending = client.complete(request());
+      const settled = expect(pending).rejects.toBeInstanceOf(LlmRateLimitError);
+      await vi.runAllTimersAsync();
+      await settled;
+
+      expect(reports.map((r) => r.failure_cause)).toEqual(['rate_limited']);
+    });
+
+    it('reports a call refused before dispatch, which never enters the retry loop', async () => {
+      const reports: LlmCallFailureReport[] = [];
+      const client = failingClient(new LlmProviderError('unused'), (r) => reports.push(r));
+      const aborted = new AbortController();
+      aborted.abort();
+
+      await expect(
+        client.complete({ ...request(), signal: aborted.signal }),
+      ).rejects.toBeInstanceOf(LlmCancelledError);
+
+      expect(reports.map((r) => r.failure_cause)).toEqual(['cancelled']);
+    });
+
+    it('never lets a throwing observer change what the caller sees', async () => {
+      const client = failingClient(new LlmProviderError('upstream 500'), () => {
+        throw new Error('the logger is gone');
+      });
+
+      await expect(client.complete(request())).rejects.toThrow('upstream 500');
     });
   });
 });

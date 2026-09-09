@@ -36,6 +36,7 @@ import {
   sanitizeLogText,
 } from '../../shared/index.js';
 import type { AnalystView } from '../debate-engine/index.js';
+import { classifyFailureCause } from '../debate-engine/index.js';
 import { fundamentalAnalyst } from './fundamental-analyst.js';
 import { sentimentAnalyst } from './sentiment-analyst.js';
 import { technicalAnalyst } from './technical-analyst.js';
@@ -323,7 +324,7 @@ export class AnalystOrchestrator {
         // The LAST attempt's kind, not a summary of both: a persona whose first
         // attempt threw and whose retry timed out is a timeout at the point the
         // stage gave up, which is the one the caller is deciding about.
-        let lastKind: AnalystFailureKind = 'error';
+        let lastKind: AnalystFailureKind = 'other';
         for (let attempt = 1; attempt <= ATTEMPTS_PER_PERSONA; attempt++) {
           try {
             const view = await withTimeout(
@@ -384,7 +385,11 @@ export class AnalystOrchestrator {
               // case.
               lastReason = '[unrenderable error]';
             }
-            lastKind = error instanceof AnalystTimeoutError ? 'timeout' : 'error';
+            // `AnalystTimeoutError` is named explicitly rather than left to
+            // the classifier: it is this class's own deadline, not a provider's
+            // (#1394).
+            lastKind =
+              error instanceof AnalystTimeoutError ? 'timeout' : classifyFailureCause(error);
             // #1114's cheap half: a genuine (non-timeout) rejection already
             // carries a full `Error` right here, and the line above collapses
             // it to `lastReason`'s bare message — the same loss the ticket
@@ -392,7 +397,7 @@ export class AnalystOrchestrator {
             // Logged in addition to, never instead of, the existing
             // `lastReason`/`lastKind` bookkeeping and the error/warn line
             // `analysts-adapter.ts` builds from it.
-            if (lastKind === 'error') {
+            if (lastKind !== 'timeout') {
               safeLog(this.logger, {
                 trace_id,
                 stage: 'analysts',

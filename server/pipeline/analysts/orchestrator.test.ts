@@ -223,8 +223,10 @@ describe('AnalystOrchestrator', () => {
       reason: 'technical unavailable (after 2 attempts)',
       // #1080: a thrown persona is a fault, not a deadline — the two are acted
       // on differently downstream, and the reason string is the only other
-      // place the difference exists.
-      kind: 'error',
+      // place the difference exists. #1394 replaced the single word `error`
+      // with the classified cause; a bare `Error` is `other`, which says
+      // "unclassified" rather than guessing a transport fault.
+      kind: 'other',
     });
 
     // The exact TickSteps.analysts shape must also report the skip as an empty array.
@@ -259,7 +261,7 @@ describe('AnalystOrchestrator', () => {
         analyst_type: 'sentiment',
         role: 'optional',
         reason: 'sentiment unavailable (after 2 attempts)',
-        kind: 'error',
+        kind: 'other',
       },
     ]);
   });
@@ -769,7 +771,7 @@ describe('AnalystOrchestrator', () => {
 
       // Unchanged existing behaviour: the reason/kind the adapter's
       // error/warn line reads are exactly what they were before #1114.
-      expect(result.failures[0]?.kind).toBe('error');
+      expect(result.failures[0]?.kind).toBe('other');
       expect(result.failures[0]?.reason).toContain('technical unavailable (after 2 attempts)');
 
       const debugEntries = logger.entries.filter((entry) => entry.level === 'debug');

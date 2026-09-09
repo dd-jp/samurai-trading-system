@@ -192,7 +192,7 @@ export class NousSentimentClient implements GrokSentimentClient {
           'cost money and produced nothing — and the bucket is marked, so the same prompt is ' +
           'not re-issued until it rolls. A refusal that persists across buckets is a prompt or ' +
           'model change, not something retrying fixes.',
-        payload: { instrument, signal: error.signal },
+        payload: { instrument, signal: error.signal, failure_cause: 'refusal' },
       });
 
       return {

@@ -6,6 +6,7 @@ import type {
 } from '../../../pipeline/debate-engine/index.js';
 import {
   AnthropicLlmClient,
+  classifyFailureCause,
   LATENCY_BUDGET_MS,
   NousMessagesClient,
 } from '../../../pipeline/debate-engine/index.js';
@@ -294,6 +295,40 @@ export function buildDefaultLlmClient(logger: Logger, spendSink?: LlmSpendSink):
           delay_ms: Math.round(report.delay_ms),
           debate_id: report.debate_id,
           llm_stage: report.stage,
+          // #1394. `RetryAttemptReport.error` is `unknown`, so this line named
+          // the attempt and its cost but never what it was retrying — a
+          // rate limit and a malformed draw produced identical lines, and only
+          // the first is worth waiting out.
+          failure_cause: classifyFailureCause(report.error),
+        },
+      );
+    },
+    // #1394. The terminal line: one per call the client gives up on, after the
+    // retry budget above is spent. `warn`, matching `llm_attempt_retried` —
+    // every caller downstream of this client either fails open (the risk
+    // critic, the disagreement detector, MI scoring) or re-renders the failure
+    // in its own words, so without this the only session-wide count of LLM
+    // failures by cause was unrecoverable from the log.
+    onCallFailed: (report) => {
+      logCaughtFailure(
+        logger,
+        {
+          trace_id: report.trace_id ?? 'llm',
+          stage: 'debate',
+          event: 'llm_call_failed',
+          level: 'warn',
+          message:
+            `llm call failed: ${report.model} gave up with cause "${report.failure_cause}". ` +
+            'Group this event by payload.failure_cause for a session count of LLM failures ' +
+            'by cause (#1394) — a refusal, a truncation, an unreadable answer and a dead ' +
+            'socket are all reported here, and the caller below may swallow it to fail open',
+        },
+        report.error,
+        {
+          model: report.model,
+          debate_id: report.debate_id,
+          llm_stage: report.stage,
+          failure_cause: report.failure_cause,
         },
       );
     },

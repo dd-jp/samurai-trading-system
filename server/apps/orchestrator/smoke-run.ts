@@ -5304,11 +5304,15 @@ export function evaluateSmokeGate(
   // `runAnalystFailureCauseScenario`'s own doc for why this proves the
   // non-timeout half of the ticket rather than waiting out a real deadline.
   const failureCause = options.analystFailureCause;
-  if (!failureCause.failureKinds.includes('error')) {
+  // `other`, not `error`, since #1394 widened `AnalystFailureKind` onto the
+  // shared cause taxonomy: the probe's two dead legs are combined by
+  // `withOhlcvFailover` into a plain `Error`, which the classifier reports as
+  // unclassified rather than guessing a transport fault.
+  if (!failureCause.failureKinds.includes('other')) {
     failures.push(
       "the analyst failure-cause probe's double-failed data source did not produce a genuine " +
         `(non-timeout) analyst rejection (kinds observed: ${JSON.stringify(failureCause.failureKinds)}) ` +
-        '— the probe itself is broken, not the mechanism it exists to gate (#1114)',
+        '— the probe itself is broken, not the mechanism it exists to gate (#1114/#1394)',
     );
   } else if (failureCause.debugPayloads.length === 0) {
     failures.push(
