@@ -41,7 +41,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEBATE_BAR_TIMEFRAME_MS, floorToBar } from '../../../pipeline/debate-engine/index.js';
 import { FilledZeroSizeThrottle, SqliteExecutionStore } from '../../../pipeline/execution/index.js';
-import { CircuitBreakers } from '../../../pipeline/risk-manager/index.js';
+import { CircuitBreakers, type RiskDecision } from '../../../pipeline/risk-manager/index.js';
 import { FixtureSetupStore } from '../../../pipeline/trader/index.js';
 import type { VerdictDecision } from '../../../pipeline/verdict/index.js';
 import {
@@ -374,4 +374,130 @@ describe('#894: a mandatory flat-by-close flatten reaches the broker', () => {
       });
     });
   }
+});
+
+/**
+ * #1388 — THE MANDATORY FLATTEN ALSO SURVIVES A VERDICT PASS AFTER THE CLOSE.
+ *
+ * #894 fixed gate 1 (`staleness`); it left gate 4 (`market_closed`)
+ * unconditional, which ADR-0014's own amendment called correct — "a shut
+ * venue cannot fill". True of a flatten that reaches Verdict hours late; not
+ * true of one that reaches it TEN SECONDS late, which is what the live paper
+ * store measured: decided at 19:59:56.454Z (inside the window), refused
+ * `market_closed` at 20:00:06.125Z. `driveFlatten`'s `verdictDelayMs` already
+ * gives Verdict/Execution a later clock than Trader/Risk decided on (#1190) —
+ * reused here to push that clock PAST `sessionEnd` too, reproducing the gap
+ * measured in production, driven through the real `VerdictImpl.decide`
+ * (`buildVerdictStep`) and the real US/LSE calendars.
+ */
+describe('#1388: a mandatory flatten verdicted after the close still reaches Execution', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  for (const venue of VENUES) {
+    describe(`${venue.name} close`, () => {
+      it('is not refused by Verdict when verdicted 10s after the bell, and submits at the venue', async () => {
+        // Decided 4 min before the close (driveFlatten's fixed offset); a
+        // 4m10s verdict delay lands Verdict/Execution 10s AFTER sessionEnd —
+        // the #1388 shape — while staying far under max_signal_age.stocks
+        // (15 min), so gate 1 is not what would refuse this if gate 4 were.
+        const { verdictNow, sessionEnd, verdict, execution, broker, intent } = await driveFlatten(
+          venue,
+          { verdictDelayMs: 4 * 60_000 + 10_000 },
+        );
+
+        expect(verdictNow.getTime()).toBeGreaterThan(sessionEnd.getTime());
+        expect(verdict.no_go_reason).toBeNull();
+        expect(verdict.status).toBe('go');
+        expect(execution.status).toBe('submitted');
+        expect(broker.submitFlatten).toHaveBeenCalledWith(
+          INSTRUMENT,
+          'sell',
+          HELD_SIZE,
+          intent.idempotency_key,
+        );
+      });
+    });
+  }
+
+  /**
+   * The other half of the edge (AC2): an ENTRY intent, evaluated after the
+   * close with the same production `VerdictImpl`/real US calendar, still
+   * produces `market_closed` — asserted in this same file so the exemption's
+   * narrowness is visible next to the case it exempts. Built directly against
+   * `buildVerdictStep` rather than through the debate-driven trader step:
+   * nothing about gate 4 depends on how an entry was decided, only on the
+   * fact that it carries no `mandatory_flatten` marker, which `buildFlattenExit`
+   * never writes for one.
+   */
+  it('still refuses an entry with market_closed after the close — the exemption does not widen to entries', async () => {
+    const venue = VENUES[0];
+    const sessionEnd = venue.calendar.sessionEnd(SESSION_DAY);
+    if (sessionEnd === null) throw new Error(`${venue.name}: calendar resolved no session close`);
+    const verdictAt = new Date(sessionEnd.getTime() + 10_000);
+    const clock: Clock = { now: () => verdictAt };
+
+    const entryIntent: OrderIntent = {
+      idempotency_key: 'entry-1388',
+      instrument: INSTRUMENT,
+      asset_class: 'stocks',
+      side: 'buy',
+      intent_type: 'entry',
+      size: 10,
+      entry: 100,
+      stop: 95,
+      target: 110,
+      time_in_force: 'day',
+      decision_timestamp: verdictAt,
+      decided_at: verdictAt,
+      metadata: {
+        debate_id: 'debate-1388-entry',
+        conviction: 0.7,
+        converged: true,
+        sizing: {
+          base_risk_fraction: 0.01,
+          conviction_multiplier: 1,
+          vol_floor_factor: 1,
+          non_converged_haircut: 1,
+          cosine_multiplier: 1,
+        },
+        cosine_precedent: { neighbor_count: 0, weighted_mean_r: null, no_precedent: true },
+      },
+    };
+    const riskDecision: RiskDecision = {
+      status: 'approved',
+      order_intent: entryIntent,
+      modifications: null,
+      binding_constraint: null,
+      reasons: [],
+      risk_snapshot: { exposure: {}, drawdown_pct: 0, armed_breakers: [] },
+      warnings: [],
+      next_breaker_state: [],
+    };
+
+    const db = openSharedStore(':memory:');
+    const store = new SqliteExecutionStore(db);
+    const marketData = makeMarketData(verdictAt);
+
+    const verdict = await buildVerdictStep({
+      marketData,
+      circuitBreakers: makeBreakers(),
+      accountState: ACCOUNT_STATE,
+      volatility: VOLATILITY,
+      getOpenPositions: () => store.getOpenPositions(),
+      maxMarkAge: MAX_MARK_AGE,
+      mode: 'paper' as const,
+      breakerState: { save: () => {} },
+      portfolioSnapshots: new Map(),
+      tradingCalendar: venue.calendar,
+      positionStore: store,
+      config: PROFILE.verdictConfig,
+      approvals: { requestApproval: vi.fn(async () => 'approved' as const) },
+      store: db,
+    })({ trace_id: TRACE_ID, risk_decision: riskDecision, clock });
+
+    expect(verdict.status).toBe('no_go');
+    expect(verdict.no_go_reason).toBe('market_closed');
+  });
 });

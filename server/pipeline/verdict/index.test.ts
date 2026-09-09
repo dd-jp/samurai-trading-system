@@ -708,6 +708,56 @@ describe('VerdictImpl.decide — market-open gate', () => {
 
     expect(decision.status).toBe('go');
   });
+
+  // #1388: a flatten decided inside ADR-0014's window and verdicted after the
+  // close was refused `market_closed` on ordinary Trader->Risk->Verdict
+  // latency alone (measured on the live paper store — 19:59:56.454Z decided,
+  // 20:00:06.125Z refused). Mirrors gate 1's #894 exemption exactly: same
+  // marker, same "acts on the clock, not an opinion" reasoning.
+  it('exempts a mandatory flat-by-close flatten from market_closed (#1388)', async () => {
+    const verdict = new VerdictImpl();
+    const flatten = makeIntent();
+    const input = makeInput({
+      risk_decision: makeRiskDecision({
+        order_intent: {
+          ...flatten,
+          intent_type: 'exit',
+          side: 'sell',
+          metadata: { ...flatten.metadata, exit_reason: 'flatten', mandatory_flatten: true },
+        },
+      }),
+      tradingCalendar: makeTradingCalendar(false),
+    });
+
+    const decision = await verdict.decide(input);
+
+    expect(decision.status).toBe('go');
+    expect(decision.no_go_reason).toBeNull();
+  });
+
+  // The exemption is scoped to the marker, not to `intent_type: 'exit'` —
+  // a discretionary exit is acting on an opinion, same as an entry, and
+  // stays refused exactly like one.
+  it('still refuses market_closed for a discretionary exit without the marker (#1388)', async () => {
+    const verdict = new VerdictImpl();
+    const flatten = makeIntent();
+    const input = makeInput({
+      risk_decision: makeRiskDecision({
+        order_intent: {
+          ...flatten,
+          intent_type: 'exit',
+          side: 'sell',
+          metadata: { ...flatten.metadata, exit_reason: 'signal_decay' },
+        },
+      }),
+      tradingCalendar: makeTradingCalendar(false),
+    });
+
+    const decision = await verdict.decide(input);
+
+    expect(decision.status).toBe('no_go');
+    expect(decision.no_go_reason).toBe('market_closed');
+  });
 });
 
 describe('VerdictImpl.decide — breaker re-check gate', () => {

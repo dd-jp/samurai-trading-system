@@ -1569,9 +1569,12 @@ export function buildStartingProfileConfigs(
      *   `market_closed` appears only for the narrow case where the mark is
      *   FRESH but the session shut between the decision and the gate — a tick
      *   that started at 15:59 ET and reached Verdict after the close. That is
-     *   the case the `market_closed` gate (4) uniquely catches, and it is
-     *   the case that matters, because a fresh mark is exactly the input a
-     *   staleness bound cannot reject.
+     *   the case the `market_closed` gate (4) catches for an entry or a
+     *   discretionary exit, because a fresh mark is exactly the input a
+     *   staleness bound cannot reject. **Not for a mandatory flat-by-close
+     *   flatten** — #1388 (`verdict/index.ts`) exempts `metadata.mandatory_flatten`
+     *   from this gate too, so that same narrow case now produces `go`, not
+     *   `market_closed`, for a flatten specifically.
      * - **15 minutes is not tight against the pipeline that produces the
      *   signal.** `LATENCY_BUDGET_MS.stocks` bounds one debate at 60s, and
      *   `decided_at` (#1190) is read once that debate has already resolved,

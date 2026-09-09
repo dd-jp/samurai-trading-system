@@ -39,10 +39,11 @@
  * - `metadata.unpriced_exit` (#826): the flatten built while the mark source
  *   was stalled carries no reference price at all, so `stale_feed` and `drift`
  *   are skipped for it — see `#priceGates` and the branch that guards it.
- * - `metadata.mandatory_flatten` (#894): EVERY flat-by-close flatten skips
- *   `staleness`, because it acts on the clock rather than on the opinion whose
- *   age that gate bounds. See gate 1 for the arithmetic that made this
- *   structural rather than occasional.
+ * - `metadata.mandatory_flatten` (#894, widened by #1388): EVERY flat-by-close
+ *   flatten skips `staleness` (gate 1) AND `market_closed` (gate 4), because
+ *   it acts on the clock rather than on the opinion whose age/session those
+ *   gates bound. See gate 1 and gate 4 for the two different arguments that
+ *   land on the same marker.
  *
  * Neither marker is derivable from the clock or from `intent_type`; both are
  * set at the single Trader site that constructs an exit (`buildFlattenExit`)
@@ -63,11 +64,11 @@
  * THE TWO STACK, ONE WAY. `unpriced_exit` is reachable only on that site's
  * `exit_reason: 'flatten'` branch, and `exit_reason: 'flatten'` alone is what
  * sets `mandatory_flatten`, so every `unpriced_exit` intent is by construction
- * also a `mandatory_flatten` and skips all THREE of `staleness`, `stale_feed`
- * and `drift`. The reverse does not hold: a flatten whose mark read succeeded
- * carries `mandatory_flatten` without `unpriced_exit` and skips `staleness`
- * alone. Under either marker, every gate not named above still runs — dedup
- * (3), market-open (4), breaker (5) and HITL (6).
+ * also a `mandatory_flatten` and skips FOUR gates: `staleness`, `stale_feed`,
+ * `drift` and `market_closed`. The reverse does not hold: a flatten whose
+ * mark read succeeded carries `mandatory_flatten` without `unpriced_exit` and
+ * skips `staleness` and `market_closed` alone. Under either marker, dedup (3)
+ * and the breaker re-check (5) and HITL (6) still run unconditionally.
  *
  * HITL only engages per the per-asset-class automation dial: `manual`
  * always engages it, `auto` never does, `semi_auto` engages it only when a
@@ -280,9 +281,9 @@ export class VerdictImpl implements Verdict {
     //
     // Scoped by the flag alone, so the healthy path is byte-identical: an exit
     // that HAS a mark still drifts and still ages, and a normally-priced
-    // flatten is gated exactly as before. Gates 3 (dedup), 4 (market-open),
-    // 5 (breaker re-check) and 6 (HITL) still run, and none of them GATES on
-    // a price: the first three evaluate no price at all, and whether HITL
+    // flatten is gated exactly as before. Dedup (3) and the breaker re-check
+    // (5) and HITL (6) still run unconditionally, and none of them GATES on a
+    // price: dedup and the breaker evaluate no price at all, and whether HITL
     // ENGAGES turns on the automation dial and the flag set, not on the
     // bracket. That is a claim about what routes the intent, not about what
     // the route carries, and not about what a human then decides — the HITL
@@ -292,12 +293,13 @@ export class VerdictImpl implements Verdict {
     // what keeps a repeated flatten from double-submitting while the feed is
     // down.
     //
-    // `staleness` (gate 1) does NOT still run for such an intent, and this is
-    // the one place that is easy to get wrong: `unpriced_exit` is only ever
-    // set alongside `mandatory_flatten` (both come off `exit_reason:
-    // 'flatten'` at `buildFlattenExit`), so #894's staleness exemption above
-    // has already fired by the time control reaches here. Three gates are
-    // skipped for an unpriced flatten, not the two this branch skips.
+    // `staleness` (gate 1) and `market_closed` (gate 4) do NOT still run for
+    // such an intent, and this is the one place that is easy to get wrong:
+    // `unpriced_exit` is only ever set alongside `mandatory_flatten` (both
+    // come off `exit_reason: 'flatten'` at `buildFlattenExit`), so gate 1's
+    // #894 exemption and gate 4's #1388 exemption have both already fired by
+    // the time control reaches here. Four gates are skipped for an unpriced
+    // flatten, not the two this branch skips.
     if (orderIntent.metadata.unpriced_exit !== true) {
       const noGoOnPrice = await this.#priceGates(orderIntent, marketData, config, clock, now);
       if (noGoOnPrice !== null) return noGoOnPrice;
@@ -310,8 +312,33 @@ export class VerdictImpl implements Verdict {
     }
 
     // Gate 4: market-open (stocks only; crypto is 24/7 and skips).
+    //
+    // #1388 — THE MANDATORY FLATTEN ALSO SKIPS THIS GATE, THE SAME WAY IT
+    // SKIPS GATE 1.
+    //
+    // #894 exempted `staleness` alone and left this gate unconditional,
+    // reasoning "a shut venue cannot fill" — but that reasoning answers the
+    // wrong question. A flat-by-close flatten does not GATE on the clock the
+    // way an entry should; it REACTS to the clock, so a few seconds of
+    // ordinary Trader->Risk->Verdict latency crossing the bell is not new
+    // information, it is the same decision arriving late. Measured on the
+    // live paper store, 2026-09-08: a flatten decided at 19:59:56.454Z —
+    // inside ADR-0014's window — was refused `market_closed` at
+    // 20:00:06.125Z, leaving the lot open through the close, the exact
+    // failure ADR-0014 exists to prevent.
+    //
+    // Whether the venue then actually fills is a separate question this gate
+    // does not need to answer: `execute.ts`'s `executeExit` already resolves
+    // whatever the broker returns — filled, rejected, cancelled, or left
+    // 'submitting' for reconcile on an ambiguous failure — without assuming
+    // acceptance. Letting the order through costs nothing beyond what a
+    // normal flatten already costs.
+    //
+    // Unconditional, exactly like gate 1's exemption and scoped by the same
+    // marker: see the file header for why `metadata.mandatory_flatten` and
+    // not `exit_reason` is the right thing to test.
     if (orderIntent.asset_class === 'stocks' && !config.allow_extended_hours) {
-      if (!tradingCalendar.isOpen(now)) {
+      if (!tradingCalendar.isOpen(now) && orderIntent.metadata.mandatory_flatten !== true) {
         return noGo('market_closed', idempotencyKey, now);
       }
     }
