@@ -6,13 +6,16 @@
  * once, and every reload after that must keep working without the link.
  *
  * **Capture-and-scrub, not a persistent URL.** A token sitting in
- * `location.search` is the single easiest way to leak it: it lands in
- * browser history, referrer headers to any third-party resource the page
- * ever loads, and screen-share/screenshot of the address bar. So the token
- * is read out of the URL once, written to `sessionStorage`, and the query
- * param is stripped from the address bar immediately — `resolveDashboardToken`
- * and `stripTokenParam` are the two pure halves of that; `App.tsx` is what
- * calls `history.replaceState` with `stripTokenParam`'s result.
+ * `location.search` after first paint is easy to leak — the visible URL and
+ * the `Referer` header on any later same-origin request. So the token is
+ * read out of the URL once, written to `sessionStorage`, and the query param
+ * is stripped from the address bar immediately — `resolveDashboardToken` and
+ * `stripTokenParam` are the two pure halves of that; `App.tsx` is what calls
+ * `history.replaceState` with `stripTokenParam`'s result. This does NOT keep
+ * the token out of browser history (the initial `GET /?token=X` commits a
+ * session-history entry `replaceState` cannot retroactively edit) or out of
+ * the `Referer` header on same-origin subresource requests the HTML shell
+ * issues before React mounts.
  *
  * `sessionStorage`, not `localStorage`: a bearer credential for the live
  * book should not silently outlive the tab that captured it just because the

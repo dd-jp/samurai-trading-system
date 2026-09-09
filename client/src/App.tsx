@@ -34,19 +34,42 @@ function tabFromHash(): Tab {
 }
 
 /**
- * `window.sessionStorage` throws `SecurityError` on the property access
- * itself where site data is blocked (Safari's Block All Cookies, some
- * Chrome privacy settings, some extensions) — not only on `getItem`/
- * `setItem`. Degrading to a store that reads nothing and writes nowhere
- * keeps the dashboard on its no-token default path instead of white-
- * screening from inside a render.
+ * Two independent throw sites, both guarded: `window.sessionStorage`'s
+ * PROPERTY ACCESS throws `SecurityError` where site data is blocked
+ * (Safari's Block All Cookies, some Chrome privacy settings, some
+ * extensions); separately, `getItem`/`setItem` THEMSELVES can throw once the
+ * property access has already succeeded (Safari private browsing,
+ * `QuotaExceededError`). This runs inside `useState`'s lazy initializer
+ * (#1038 round 2 finding A), so either throw reaching the caller unguarded
+ * would blow up render with no error boundary to catch it — a white screen,
+ * not a degraded dashboard.
  */
 function safeSessionStorage(): TokenStorage {
+  let store: TokenStorage;
   try {
-    return window.sessionStorage;
+    store = window.sessionStorage;
   } catch {
     return { getItem: () => null, setItem: () => {} };
   }
+  return {
+    getItem: (key) => {
+      try {
+        return store.getItem(key);
+      } catch {
+        return null;
+      }
+    },
+    setItem: (key, value) => {
+      try {
+        store.setItem(key, value);
+      } catch {
+        // Swallowed: `resolveDashboardToken` still returns the just-read URL
+        // token to the caller even when persisting it fails (round 2 finding
+        // B) — an unreachable store must cost the NEXT reload its token, not
+        // this one's first poll.
+      }
+    },
+  };
 }
 
 export interface AppProps {
@@ -54,19 +77,28 @@ export interface AppProps {
 }
 
 export function App({ snapshotOptions }: AppProps = {}) {
-  // Resolved (and, for a URL-borne token, persisted) in an effect rather
-  // than useState's lazy initializer: React invokes a state initializer
-  // twice under StrictMode to surface impure code, and both the storage
-  // write and the property access that can throw belong to a side effect,
-  // not to render.
-  const [authToken, setAuthToken] = useState<string | null>(null);
+  // Resolved synchronously in useState's lazy initializer, not an effect:
+  // useSnapshot's poll effect reads `optionsRef.current.authToken` — set
+  // during render — the instant it mounts, so an effect-deferred resolution
+  // loses that race and sends the FIRST poll unauthenticated whenever a
+  // token is resolvable (#1038 round 2 finding A). StrictMode double-invokes
+  // this initializer, but that is idempotent (same value, same URL) and not
+  // a reason to move it back into an effect. `safeSessionStorage()` guards
+  // every storage access this can reach, so nothing here throws out of
+  // render (finding B).
+  const [authToken] = useState<string | null>(() =>
+    resolveDashboardToken(window.location.search, safeSessionStorage()),
+  );
   useEffect(() => {
-    setAuthToken(resolveDashboardToken(window.location.search, safeSessionStorage()));
-    // Scrubs `?token=...` off the address bar (dashboard-token.ts's header:
-    // history, referrers and a shared screen are all places a URL-borne
-    // credential leaks). Preserves `pathname`/`hash` — `tabFromHash` above
-    // reads the hash directly off `location`, and rewriting it away here
-    // would silently reset whichever tab a shared link pointed at.
+    // Scrubs `?token=...` off the address bar: keeps the token out of the
+    // poll's referrer and out of the URL visible after first paint — it
+    // does not keep the token off the browser history entry the initial
+    // navigation already committed, or out of same-origin subresource
+    // `Referer` headers the HTML shell sent before this ran
+    // (dashboard-token.ts's header). Preserves `pathname`/`hash` —
+    // `tabFromHash` above reads the hash directly off `location`, and
+    // rewriting it away here would silently reset whichever tab a shared
+    // link pointed at.
     const nextSearch = stripTokenParam(window.location.search);
     if (nextSearch !== window.location.search) {
       window.history.replaceState(
