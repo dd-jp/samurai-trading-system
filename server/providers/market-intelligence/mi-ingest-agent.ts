@@ -126,6 +126,11 @@ export class MiIngestAgent {
    * once scoring recovers" test below depends on. The MI spend cap remains
    * the real backstop; this only slows how fast one instrument's outage burns
    * toward it.
+   *
+   * Also reset on a refresh with nothing new to score (#1392 review round 2,
+   * finding 5) — that refresh proves nothing about whether scoring itself is
+   * still failing, so a streak left over from a since-resolved outage must
+   * not survive to wrongly skip the next refresh that finally has work.
    */
   readonly #degradedStreak = new Map<string, number>();
 
@@ -252,13 +257,34 @@ export class MiIngestAgent {
             miSubject,
           ),
       );
-    if (unscored.length === 0) return false;
+    if (unscored.length === 0) {
+      // #1392 review round 2, finding 5: nothing here says scoring is still
+      // failing — only that this refresh had no new work — so a streak left
+      // over from a since-resolved outage must not survive to wrongly skip
+      // the next refresh that finally has something to score.
+      this.#degradedStreak.set(instrument, 0);
+      return false;
+    }
 
     // #1392 review round 1, F1: bounds a SUSTAINED outage's billed-call rate
     // — see `#degradedStreak`'s doc. A lone blip (streak 1) is unaffected.
     const streak = this.#degradedStreak.get(instrument) ?? 0;
     if (streak >= 2) {
       this.#degradedStreak.set(instrument, 0);
+      // #1392 review round 2, finding 4: this used to be the only `return
+      // false` in `refresh` with no log line — an operator watching
+      // `mi_ingest_scoring_degraded` would see an outage start, then silence,
+      // with no record of the further refreshes this bound kept suppressing.
+      this.deps.logger?.log({
+        trace_id,
+        stage: 'market_intelligence',
+        event: 'mi_ingest_scoring_skipped',
+        level: 'warn',
+        message:
+          `market intelligence: skipping the scoring attempt for ${instrument} after two ` +
+          'consecutive failures; raw bytes stay archived and the next refresh tries again.',
+        payload: { asset_class, instrument, items: unscored.length },
+      });
       return false;
     }
 

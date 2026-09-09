@@ -64,14 +64,21 @@ export interface ScorableItem {
 
 /**
  * Neutral at floor confidence — what an item scores when the model could not be
- * reached or answered unusably.
+ * reached, answered unusably, or (for one item inside an otherwise-successful
+ * batch) simply omitted an index from its response.
  *
- * NOT a silent default. `scoreItems` logs the failure itself before returning
- * it (see `ScoreItemsResult.degraded`), and the value is chosen so that a
- * scoring outage degrades toward "no directional opinion" rather than toward
- * a fabricated one: `sentiment: 0` contributes nothing to `netSentiment`, so
- * an unscored batch cannot push an analyst into a direction it has no
- * evidence for.
+ * Logged only on the BATCH path: when the whole call fails, `scoreItems` logs
+ * the cause itself before returning this for every item (see
+ * `ScoreItemsResult.degraded`). The PER-ITEM omission fallback (one index
+ * missing from an otherwise-valid response, see the `byIndex.get` branch
+ * below) logs nothing and leaves `degraded: false` — still indistinguishable
+ * from a genuine neutral read for that one item. Tracked, not fixed here:
+ * #1420.
+ *
+ * Either way the value is chosen so a scoring gap degrades toward "no
+ * directional opinion" rather than toward a fabricated one: `sentiment: 0`
+ * contributes nothing to `netSentiment`, so it cannot push an analyst into a
+ * direction it has no evidence for.
  */
 export const UNSCORED: Omit<ItemScore, 'index'> = { sentiment: 0, confidence: 0.05 };
 
@@ -131,13 +138,22 @@ export interface ScoreItemsResult {
 /**
  * Scores a batch, returning one score per supplied item **in input order**.
  *
- * Never throws: an item the model omitted, or a batch that failed outright,
- * comes back as `UNSCORED` with `degraded: true`. A scoring failure must not
- * take down the tick — the analysts degrade to "no opinion", which is a state
- * they already handle, rather than the ingestion path throwing inside the
- * refresh loop. The failure itself is logged here, before returning, so it is
- * distinguishable from a genuine unanimous-neutral news day (#1392) — the
- * `scores.[...]` shape alone cannot carry that distinction.
+ * Never throws, in either of two distinct failure shapes:
+ *
+ * - A batch that fails outright (transport error, exhausted retries, an
+ *   unparseable or empty-after-validation response) comes back as `UNSCORED`
+ *   for every item, `degraded: true`, and the cause is logged here before
+ *   returning — distinguishable from a genuine unanimous-neutral news day
+ *   (#1392), which is the whole point of this function.
+ * - An item the model's response simply omitted an index for, inside an
+ *   otherwise-valid batch, falls back to `UNSCORED` for that one item with the
+ *   batch's `degraded` left at `false` (see `UNSCORED`'s own doc) — nothing is
+ *   logged for it today. That gap is real and tracked as #1420, not fixed
+ *   here; do not read this doc as claiming it is covered.
+ *
+ * Either way, a scoring gap must not take down the tick — the analysts
+ * degrade to "no opinion", a state they already handle, rather than the
+ * ingestion path throwing inside the refresh loop.
  */
 export async function scoreItems(
   items: readonly ScorableItem[],

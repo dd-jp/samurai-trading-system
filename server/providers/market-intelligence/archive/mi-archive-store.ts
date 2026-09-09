@@ -32,11 +32,13 @@
  * (#555) is non-deterministic; re-scoring would make two runs of one backtest
  * disagree, which ADR-0003 §2 disqualifies exactly as it disqualifies a live
  * LLM call inside a replayed path. This does NOT mean every raw row has a
- * scored item behind it: #1392 made "raw archived, not yet scored" a normal
- * transient state (a batch that degrades archives its bytes but not a
- * fabricated score), so `mi_archive_raw` and `mi_items` are allowed to
- * disagree on which rows exist — `hasItem` vs. `hasScoredItem` is the two
- * questions kept separate.
+ * scored item behind it — GDELT's ingestion already wrote raws with no items
+ * (`gdelt-ingest-agent.ts`'s scoring pass runs separately); #1392 widened
+ * "raw archived, not yet scored" into a normal Alpaca-side transient too (a
+ * batch that degrades archives its bytes but not a fabricated score) — so
+ * `mi_archive_raw` and `mi_items` are allowed to disagree on which rows exist
+ * for either source — `hasItem` vs. `hasScoredItem` is the two questions kept
+ * separate.
  *
  * ## Exemption: raw `.toISOString()`/`new Date(...)` round-trips (#884)
  *

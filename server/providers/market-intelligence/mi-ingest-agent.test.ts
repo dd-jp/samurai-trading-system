@@ -205,6 +205,39 @@ describe('MiIngestAgent', () => {
     ]);
   });
 
+  /**
+   * #1392 review round 2, finding 3: eligibility moved from `hasItem`
+   * (`mi_archive_raw`, entity-agnostic) to `hasScoredItem` (`mi_items`,
+   * entity in its key). Under the old `hasItem` gate, a shared article was
+   * scored for whichever instrument's refresh saw it FIRST — a second
+   * instrument covered by the same article never got its own entity-scoped
+   * score, because the raw row already "existed" and the second refresh's
+   * `newRaws` filter (which used to double as the scoring gate) skipped it.
+   * `hasScoredItem` fixes that latent bug: each covering instrument now gets
+   * its own scoring pass over the shared article, at the cost of one more
+   * billed LLM call per additional instrument that shares an article — priced
+   * in the PR body, not built out further here.
+   */
+  it('scores a shared multi-symbol article separately for a second instrument that covers it', async () => {
+    const shared = article({ symbols: ['AAPL', 'NVDA'] });
+    const { agent, store, scorer } = build([shared]);
+
+    await agent.refresh('t', 'AAPL', 'stocks');
+    expect(scorer.calls).toHaveLength(1);
+    expect(store.getContext('stocks', WINDOW, 't').news.map((item) => item.entity)).toEqual([
+      'AAPL',
+    ]);
+
+    await agent.refresh('t', 'NVDA', 'stocks');
+    expect(scorer.calls).toHaveLength(2);
+    expect(
+      store
+        .getContext('stocks', WINDOW, 't')
+        .news.map((item) => item.entity)
+        .sort(),
+    ).toEqual(['AAPL', 'NVDA']);
+  });
+
   it('converts a dash-form crypto id to the wire symbol', async () => {
     // The repo carries crypto as `BTC-USD`; Alpaca expects `BTCUSD`. The same
     // mismatch made every crypto order reject with 'asset not found' in #585.
@@ -414,6 +447,84 @@ describe('MiIngestAgent', () => {
     await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(true); // streak reset, tries again
     expect(scorer.calls).toHaveLength(1);
     expect(store.getContext('stocks', WINDOW, 't').news).toHaveLength(1);
+  });
+
+  /**
+   * #1392 review round 2, finding 4: the streak skip was the only `return
+   * false` in `refresh` that withheld intelligence with no log line — an
+   * operator watching for `mi_ingest_scoring_degraded` would see the outage
+   * start, then silence, with no record of the two further refreshes it kept
+   * suppressing.
+   */
+  it('logs when the consecutive-failure streak skips a scoring attempt', async () => {
+    const archive = new MiArchiveStore();
+    const store = new MarketIntelligenceStore(clock);
+    const logger = recordingLogger();
+    const agent = new MiIngestAgent({
+      archive,
+      store,
+      newsClient: newsClient([article()]),
+      llmClient: failingScoringClient(),
+      clock,
+      assetClasses: ['stocks'],
+      spendCap: ADMITS,
+      logger,
+    });
+
+    await agent.refresh('t', 'AAPL', 'stocks'); // streak 1
+    await agent.refresh('t', 'AAPL', 'stocks'); // streak 2
+    logger.entries.length = 0;
+
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false); // skipped
+
+    expect(
+      logger.entries.some(
+        (entry) => entry.level === 'warn' && entry.event === 'mi_ingest_scoring_skipped',
+      ),
+    ).toBe(true);
+  });
+
+  /**
+   * #1392 review round 2, finding 5: `#degradedStreak` reset only inside the
+   * scoring path, so a streak left at 2 by a since-resolved outage survived a
+   * refresh with nothing new to score (the `unscored.length === 0` early
+   * return) and then wrongly skipped the NEXT refresh that finally had new
+   * work, even though scoring itself never failed a third time.
+   */
+  it('does not carry a stale failure streak across a refresh with nothing new to score', async () => {
+    const archive = new MiArchiveStore();
+    const store = new MarketIntelligenceStore(clock);
+    const news = newsClient([article()]);
+    const agent = new MiIngestAgent({
+      archive,
+      store,
+      newsClient: news,
+      llmClient: failingScoringClient(),
+      clock,
+      assetClasses: ['stocks'],
+      spendCap: ADMITS,
+    });
+
+    await agent.refresh('t', 'AAPL', 'stocks'); // streak 1
+    await agent.refresh('t', 'AAPL', 'stocks'); // streak 2
+
+    // A refresh with nothing new to score — the fetch returns no articles at
+    // all, so `unscored.length === 0` and `refresh` returns early, well
+    // before the streak-skip check. A fresh client, not a mutation of `news`
+    // above — mutating the shared object's `fetchNews` would still be in
+    // effect below when `news` is restored.
+    (agent as unknown as { deps: { newsClient: unknown } }).deps.newsClient = newsClient([]);
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false);
+
+    // New work arrives, and scoring itself has recovered. Without the reset,
+    // the stale streak of 2 would skip this attempt with no LLM call.
+    const scorer = scoringClient();
+    (agent as unknown as { deps: { newsClient: unknown; llmClient: unknown } }).deps.newsClient =
+      news;
+    (agent as unknown as { deps: { llmClient: unknown } }).deps.llmClient = scorer.client;
+
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(true);
+    expect(scorer.calls).toHaveLength(1);
   });
 
   /**
