@@ -63,7 +63,7 @@ describe('ExitSkipWriteThrottle', () => {
     expect(wrote).toEqual(expected);
   });
 
-  it('bounds a period-1 (every tick) flapping sequence to two writes per repeat-budget window', () => {
+  it('bounds a period-1 (every tick) flapping sequence between two reasons to two writes per repeat-budget window', () => {
     const throttle = new ExitSkipWriteThrottle();
     const reasons = ['below_conviction_floor', 'below_min_notional'] as const;
     const ticks = 2 * ALERT_REPEAT_EVERY_DIAGNOSTICS + 4;
@@ -82,12 +82,47 @@ describe('ExitSkipWriteThrottle', () => {
     // budgets clear on the same two-tick pair every
     // ALERT_REPEAT_EVERY_DIAGNOSTICS ticks: indices 0,1 (onset), then
     // ALERT_REPEAT_EVERY_DIAGNOSTICS, ALERT_REPEAT_EVERY_DIAGNOSTICS + 1,
-    // and so on.
+    // and so on. "Two writes per window" is THIS TEST'S instance of the
+    // general bound (writes-per-window scales with the number of distinct
+    // reasons cycling, not a fixed two) — see the N=4 case below.
     const expected = wrote.map((_, i) => i % ALERT_REPEAT_EVERY_DIAGNOSTICS <= 1);
     expect(wrote).toEqual(expected);
   });
 
-  it('bounds a dwell-2 (holds each reason two ticks) oscillation the same way a naive change detector would miss', () => {
+  it('bounds an N-reason period-1 cycle to N writes per repeat-budget window, not a fixed two (review round 3, finding 1)', () => {
+    // The budget is keyed on skip_reason (see `shouldWrite`), not on the
+    // instrument alone, so cycling through more distinct reasons raises the
+    // bound proportionally: N reasons cycling period-1 give N writes per
+    // ALERT_REPEAT_EVERY_DIAGNOSTICS-tick window, each reason's own budget
+    // clearing independently of the others. Four reasons is chosen because
+    // it divides ALERT_REPEAT_EVERY_DIAGNOSTICS (8) evenly, giving an exact
+    // "N ones then (budget-N) zeros" repeating pattern to pin against.
+    const throttle = new ExitSkipWriteThrottle();
+    const reasons = [
+      'neutral_direction_while_flat',
+      'below_conviction_floor',
+      'session_closing',
+      'below_min_notional',
+    ] as const;
+    const ticks = 3 * ALERT_REPEAT_EVERY_DIAGNOSTICS;
+    const wrote: boolean[] = [];
+    for (let tick = 0; tick < ticks; tick += 1) {
+      const reason = reasons[tick % reasons.length] as (typeof reasons)[number];
+      const shouldWrite = throttle.shouldWrite('AAA', reason);
+      wrote.push(shouldWrite);
+      throttle.record('AAA', reason, shouldWrite);
+    }
+    const expected = wrote.map((_, i) => i % ALERT_REPEAT_EVERY_DIAGNOSTICS < reasons.length);
+    expect(wrote).toEqual(expected);
+    // The decisive point: four reasons produce more than the "two" the
+    // two-reason tests above show — the bound is N, not a constant.
+    expect(wrote.filter(Boolean).length).toBe(
+      reasons.length * Math.ceil(ticks / ALERT_REPEAT_EVERY_DIAGNOSTICS),
+    );
+    expect(wrote.filter(Boolean).length).toBeGreaterThan(2);
+  });
+
+  it('bounds a dwell-2 (holds each reason two ticks) oscillation between two reasons the same way a naive change detector would miss', () => {
     // The gap this closes: an earlier version of this throttle counted
     // consecutive tick-over-tick CHANGES to detect flapping, which resets to
     // 0 every time a reason repeats the tick right before it — so any dwell
@@ -116,10 +151,11 @@ describe('ExitSkipWriteThrottle', () => {
       return r === 0 || r === 2;
     });
     expect(wrote).toEqual(expected);
-    // The decisive bound: at most 2 writes per repeat-budget window, not one
-    // per switch (which would be ~ticks/2 for this dwell).
+    // The decisive bound: at most `reasons.length` writes per repeat-budget
+    // window (two, here — see the N=4 case above for the general form), not
+    // one per switch (which would be ~ticks/2 for this dwell).
     expect(wrote.filter(Boolean).length).toBeLessThanOrEqual(
-      2 * Math.ceil(ticks / ALERT_REPEAT_EVERY_DIAGNOSTICS),
+      reasons.length * Math.ceil(ticks / ALERT_REPEAT_EVERY_DIAGNOSTICS),
     );
     expect(wrote.filter(Boolean).length).toBeLessThan(ticks / 2);
   });

@@ -449,6 +449,23 @@ export function buildTraderSteps(deps: TraderStepDeps): {
       created_at: clock.now(),
     });
 
+    // #1128 (review round 3, finding 3): a debate-bar decision can ALSO fire
+    // the exit — `routeDecision`'s holding branch reaches `buildExitIntent`
+    // for both the flat-by-close flatten and a debate-reversal
+    // `direction_flip` (decide.ts) — not only `exitCheck`'s own tick-path
+    // flatten/decay/`exit_held_quantity_diverged` handling below. The same
+    // "a lot can close and reopen inside one tick gap with no exitCheck ever
+    // observing it flat in between" argument `exitCheck`'s own clear (below)
+    // is built on applies identically here: whichever binding's decision
+    // actually closes the lot is the one that has to clear this instrument's
+    // tick-path episode state, or a reopened lot's first tick-path skip row
+    // can read as an unchanged repeat of the CLOSED lot's last-written
+    // reason and stay wrongly suppressed. `intent_type === 'exit'` is the one
+    // value shared by both the flatten and the direction-flip branches (see
+    // `exit_reason` above); a null intent or an entry/scale-in leaves nothing
+    // to clear.
+    if (intent?.intent_type === 'exit') exitSkipThrottle.clearEpisode(instrument);
+
     // #698: escalate anything the decision noticed but did not treat as fatal.
     // #1089's control-arm valuation refusal is one of these now (`decide.ts`
     // pushes a `TraderDiagnostic` with `asset_class: undefined` from inside

@@ -1002,19 +1002,19 @@ describe('buildTraderSteps exit-skip decision_class (#1128)', () => {
     let indicatorImpl = HOLDS;
     const { exitCheck } = build({
       traderLog: { write: (record) => written.push(record) },
-      getIndicator: (async (instrument: string, spec: IndicatorSpec) =>
-        indicatorImpl(instrument, spec)) as typeof HOLDS,
+      getIndicator: async (instrument: string, spec: IndicatorSpec) =>
+        indicatorImpl(instrument, spec),
     });
 
     await exitCheck({ trace_id: 'trace-a', instrument: 'AAPL', clock: CLOCK, bar: TICK_BAR });
-    indicatorImpl = (async () => {
+    indicatorImpl = async () => {
       throw new InsufficientBarsError({
         indicator: 'macd_histogram',
         period: 26,
         required: 112,
         received: 0,
       });
-    }) as unknown as typeof HOLDS;
+    };
     await exitCheck({ trace_id: 'trace-b', instrument: 'AAPL', clock: CLOCK, bar: TICK_BAR });
 
     expect(written).toHaveLength(2);
@@ -1121,7 +1121,7 @@ describe('buildTraderSteps exit-skip decision_class (#1128)', () => {
   it('bounds writes when the skip reason flaps every tick, instead of writing on every change (review round 1, finding 1b)', async () => {
     const written: TraderDecisionRecord[] = [];
     let toggle = false;
-    const flapping = (async (instrument: string, spec: IndicatorSpec) => {
+    const flapping = async (instrument: string, spec: IndicatorSpec) => {
       if (toggle) return HOLDS(instrument, spec);
       throw new InsufficientBarsError({
         indicator: 'macd_histogram',
@@ -1129,7 +1129,7 @@ describe('buildTraderSteps exit-skip decision_class (#1128)', () => {
         required: 112,
         received: 0,
       });
-    }) as typeof HOLDS;
+    };
     const { exitCheck } = build({
       traderLog: { write: (record) => written.push(record) },
       getIndicator: flapping,
@@ -1163,8 +1163,8 @@ describe('buildTraderSteps exit-skip decision_class (#1128)', () => {
     let positions: OpenPosition[] = [HELD];
     const { exitCheck } = build({
       traderLog: { write: (record) => written.push(record) },
-      getIndicator: (async (instrument: string, spec: IndicatorSpec) =>
-        indicatorImpl(instrument, spec)) as typeof HOLDS,
+      getIndicator: async (instrument: string, spec: IndicatorSpec) =>
+        indicatorImpl(instrument, spec),
       getOpenPositions: async () => positions,
     });
 
@@ -1188,6 +1188,52 @@ describe('buildTraderSteps exit-skip decision_class (#1128)', () => {
     // skip reason episode 1 wrote.
     positions = [{ ...HELD, debate_id: 'debate-that-reopened-the-lot' }];
     indicatorImpl = HOLDS;
+    await exitCheck({ trace_id: 'trace-3', instrument: 'AAPL', clock: CLOCK, bar: TICK_BAR });
+
+    expect(written).toHaveLength(3);
+    expect(written[2]?.skip_reason).toBe('signal_still_supports_position');
+    expect(written[2]?.debate_id).toBe('debate-that-reopened-the-lot');
+  });
+
+  it('writes a fresh row after the DECISION path fires the exit, even when the reopened lot hits the same first skip reason (review round 3, finding 3)', async () => {
+    // The sibling above proves this for `exitCheck`'s OWN fired exit. But
+    // `routeDecision`'s holding branch can ALSO reach `buildExitIntent` —
+    // for `direction_flip` here, and for the flat-by-close flatten — through
+    // the `trader` (debate-bar) binding instead, which never routes through
+    // `exitCheck` at all. `exitSkipThrottle` is one shared instance across
+    // both bindings (see `buildTraderSteps`), so if `trader`'s own
+    // fired-exit branch did not clear the instrument's tick-path episode
+    // state, a lot closed by a debate-bar decision and reopened before the
+    // next tick would still read its first tick-path skip as an unchanged
+    // repeat of the CLOSED lot's last-written reason.
+    const written: TraderDecisionRecord[] = [];
+    let positions: OpenPosition[] = [HELD];
+    const { trader, exitCheck } = build({
+      traderLog: { write: (record) => written.push(record) },
+      getIndicator: HOLDS,
+      getOpenPositions: async () => positions,
+    });
+
+    // Episode 1: holds, first tick-path occurrence -> writes.
+    await exitCheck({ trace_id: 'trace-1', instrument: 'AAPL', clock: CLOCK, bar: TICK_BAR });
+    expect(written).toHaveLength(1);
+
+    // A debate bar decides direction_flip and fires the exit through the
+    // TRADER binding, not exitCheck.
+    const exitIntent = await trader({
+      trace_id: 'trace-2',
+      instrument: 'AAPL',
+      // Opposite the held long -> direction_flip.
+      debate: makeDebate({ direction: 'bearish', confidence: 0.8, converged: true }),
+      clock: CLOCK,
+    });
+    expect(exitIntent?.intent_type).toBe('exit');
+    expect(written).toHaveLength(2);
+
+    // Episode 2: a NEW lot reopens with the SAME first skip reason episode 1
+    // wrote, observed by the very next exitCheck tick — no exitCheck ever
+    // saw the instrument flat in between.
+    positions = [{ ...HELD, debate_id: 'debate-that-reopened-the-lot' }];
     await exitCheck({ trace_id: 'trace-3', instrument: 'AAPL', clock: CLOCK, bar: TICK_BAR });
 
     expect(written).toHaveLength(3);

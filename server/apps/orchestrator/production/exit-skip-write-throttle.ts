@@ -39,14 +39,29 @@ interface ExitSkipEpisodeState {
 
 /**
  * Which exit-check skip reasons repeat on their own cadence even while
- * unchanged, rather than writing only on their onset. `exit_no_filled_size`
- * (totalHeldQuantity <= 0) already has a throttled operator channel for the
- * same "filled_size still zero" condition — `FilledZeroSizeThrottle`, fed
- * from the fill-sync side (#1087) — so it only needs its onset here, same as
- * any other declined/could-not-decide reason. `exit_held_quantity_diverged`
- * has no other channel: this IS the only place an operator learns the fill
- * store is contradicting itself. The two do not share one justification, so
- * they are not one boolean.
+ * unchanged, rather than writing only on their onset.
+ *
+ * `exit_no_filled_size` fires when `totalHeldQuantity(held) <= 0`
+ * (decide.ts, `heldQuantitiesFor`'s sum: `filled_size` net of recorded exit
+ * fills) — a BROADER condition than it looks, and NOT the same test
+ * `FilledZeroSizeThrottle` (`filled-zero-size-throttle.ts`, #1087) runs. That
+ * throttle fires when `reconcile()` adopts a lot as `filled`/`partially_filled`
+ * whose OWN `filled_size` is still zero — the wedge case, a lot that may
+ * never fill. `exit_no_filled_size` also fires on a lot that filled
+ * completely and was ALREADY exited completely, netting `held` to zero
+ * through exit fills rather than through a stuck `filled_size` — an entirely
+ * ordinary post-exit state, not a fault. Only the wedge sub-case is a
+ * problem an operator needs repeated visibility into, and that sub-case IS
+ * covered: `FilledZeroSizeThrottle` is fed independently from the fill-sync
+ * side, on its own poll cadence, not gated by whether `exitCheck` happens to
+ * observe this instrument. So `exit_no_filled_size`'s bounded-repeat
+ * candidacy would be redundant with a channel that already exists for the
+ * one sub-case that matters, and this only needs its onset here, same as any
+ * other declined/could-not-decide reason.
+ *
+ * `exit_held_quantity_diverged` has no other channel: this IS the only place
+ * an operator learns the fill store is contradicting itself. The two do not
+ * share one justification, so they are not one boolean.
  */
 function needsBoundedRepeat(skip_reason: TraderSkipReason): boolean {
   return skip_reason === 'exit_held_quantity_diverged';
