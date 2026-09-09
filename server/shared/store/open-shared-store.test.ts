@@ -1,16 +1,8 @@
-import {
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
-import { MIGRATIONS_DIR, runMigrations } from './migrate.js';
+import { listMigrations, MIGRATIONS_DIR, runMigrations } from './migrate.js';
 import { openSharedStore, STORE_MODES, sharedStorePath } from './open-shared-store.js';
 
 const TABLES = [
@@ -106,6 +98,28 @@ const TABLES = [
  */
 const CONSOLIDATED_SCHEMA_TABLE_COUNT = 35;
 
+/**
+ * The migration list, derived from disk so a new `NNNN_*.sql` file changes no
+ * expectation below except `HIGHEST_KNOWN_MIGRATION_VERSION` (and, if the
+ * migration adds a table, `TABLES`/`CONSOLIDATED_SCHEMA_TABLE_COUNT` above —
+ * that list is independently maintained and out of scope here). See the
+ * `migrations directory` describe block below for why one literal survives.
+ */
+const MIGRATIONS = listMigrations(MIGRATIONS_DIR);
+const MIGRATION_VERSIONS = MIGRATIONS.map((migration) => migration.version);
+const HIGHEST_KNOWN_MIGRATION_VERSION = 51;
+
+/** A temp copy of `MIGRATIONS_DIR` holding every migration through `throughVersion`, inclusive. */
+function copyMigrationsUpTo(throughVersion: number): string {
+  const dir = mkdtempSync(join(tmpdir(), `samurai-migrations-through-${throughVersion}-`));
+  for (const migration of MIGRATIONS) {
+    if (migration.version <= throughVersion) {
+      copyFileSync(join(MIGRATIONS_DIR, migration.filename), join(dir, migration.filename));
+    }
+  }
+  return dir;
+}
+
 const tempDirs: string[] = [];
 
 function tempDbPath(): string {
@@ -154,114 +168,12 @@ describe('openSharedStore', () => {
   it('records applied versions and re-migrating is a no-op', () => {
     const db = openSharedStore(':memory:');
 
+    const expectedVersions = MIGRATIONS.map((migration) => ({ version: migration.version }));
+
     const versions = db.prepare('SELECT version FROM schema_migrations').all();
-    expect(versions).toEqual([
-      { version: 1 },
-      { version: 2 },
-      { version: 3 },
-      { version: 4 },
-      { version: 5 },
-      { version: 6 },
-      { version: 7 },
-      { version: 8 },
-      { version: 9 },
-      { version: 10 },
-      { version: 11 },
-      { version: 12 },
-      { version: 13 },
-      { version: 14 },
-      { version: 15 },
-      { version: 16 },
-      { version: 17 },
-      { version: 18 },
-      { version: 19 },
-      { version: 20 },
-      { version: 21 },
-      { version: 22 },
-      { version: 23 },
-      { version: 24 },
-      { version: 25 },
-      { version: 26 },
-      { version: 27 },
-      { version: 28 },
-      { version: 29 },
-      { version: 30 },
-      { version: 31 },
-      { version: 32 },
-      { version: 33 },
-      { version: 34 },
-      { version: 35 },
-      { version: 36 },
-      { version: 37 },
-      { version: 38 },
-      { version: 39 },
-      { version: 40 },
-      { version: 41 },
-      { version: 42 },
-      { version: 43 },
-      { version: 44 },
-      { version: 45 },
-      { version: 46 },
-      { version: 47 },
-      { version: 48 },
-      { version: 49 },
-      { version: 50 },
-      { version: 51 },
-    ]);
+    expect(versions).toEqual(expectedVersions);
     expect(runMigrations(db)).toEqual([]);
-    expect(db.prepare('SELECT version FROM schema_migrations').all()).toEqual([
-      { version: 1 },
-      { version: 2 },
-      { version: 3 },
-      { version: 4 },
-      { version: 5 },
-      { version: 6 },
-      { version: 7 },
-      { version: 8 },
-      { version: 9 },
-      { version: 10 },
-      { version: 11 },
-      { version: 12 },
-      { version: 13 },
-      { version: 14 },
-      { version: 15 },
-      { version: 16 },
-      { version: 17 },
-      { version: 18 },
-      { version: 19 },
-      { version: 20 },
-      { version: 21 },
-      { version: 22 },
-      { version: 23 },
-      { version: 24 },
-      { version: 25 },
-      { version: 26 },
-      { version: 27 },
-      { version: 28 },
-      { version: 29 },
-      { version: 30 },
-      { version: 31 },
-      { version: 32 },
-      { version: 33 },
-      { version: 34 },
-      { version: 35 },
-      { version: 36 },
-      { version: 37 },
-      { version: 38 },
-      { version: 39 },
-      { version: 40 },
-      { version: 41 },
-      { version: 42 },
-      { version: 43 },
-      { version: 44 },
-      { version: 45 },
-      { version: 46 },
-      { version: 47 },
-      { version: 48 },
-      { version: 49 },
-      { version: 50 },
-      { version: 51 },
-    ]);
+    expect(db.prepare('SELECT version FROM schema_migrations').all()).toEqual(expectedVersions);
   });
 
   // #1112 review: version 45 in `schema_migrations` proves only that
@@ -325,14 +237,9 @@ describe('openSharedStore', () => {
   // and check the UPDATE it runs.
   it('migration 0049 backfills pre-existing live rows to 0 and control rows to 1 (#1121)', () => {
     const raw = new BetterSqlite3(':memory:');
-    const preCutoverDir = mkdtempSync(join(tmpdir(), 'samurai-migrations-pre-0049-'));
+    const preCutoverVersion = 48;
+    const preCutoverDir = copyMigrationsUpTo(preCutoverVersion);
     try {
-      for (const filename of readdirSync(MIGRATIONS_DIR)) {
-        const match = /^(\d{4})_[\w-]+\.sql$/.exec(filename);
-        if (match && Number(match[1]) <= 48) {
-          copyFileSync(join(MIGRATIONS_DIR, filename), join(preCutoverDir, filename));
-        }
-      }
       runMigrations(raw, preCutoverDir);
 
       for (const [key, arm] of [
@@ -351,9 +258,9 @@ describe('openSharedStore', () => {
           .run(key, arm);
       }
 
-      // Apply everything after 0048 — 0001..0048 are already recorded, so this
-      // runs 0049 and whatever has shipped since (0050, #1124's arm column).
-      expect(runMigrations(raw, MIGRATIONS_DIR)).toEqual([49, 50, 51]);
+      expect(runMigrations(raw, MIGRATIONS_DIR)).toEqual(
+        MIGRATION_VERSIONS.filter((version) => version > preCutoverVersion),
+      );
 
       expect(
         raw
@@ -395,14 +302,9 @@ describe('openSharedStore', () => {
   // yields zero rows; only a malformed value raises.
   it('migration 0050 backfills each flatten row to its lots’ arm, falling back to live (#1124)', () => {
     const raw = new BetterSqlite3(':memory:');
-    const preCutoverDir = mkdtempSync(join(tmpdir(), 'samurai-migrations-pre-0050-'));
+    const preCutoverVersion = 49;
+    const preCutoverDir = copyMigrationsUpTo(preCutoverVersion);
     try {
-      for (const filename of readdirSync(MIGRATIONS_DIR)) {
-        const match = /^(\d{4})_[\w-]+\.sql$/.exec(filename);
-        if (match && Number(match[1]) <= 49) {
-          copyFileSync(join(MIGRATIONS_DIR, filename), join(preCutoverDir, filename));
-        }
-      }
       runMigrations(raw, preCutoverDir);
 
       raw
@@ -438,7 +340,9 @@ describe('openSharedStore', () => {
       insertFlatten.run('flatten-of-aged-out', 'MARA', JSON.stringify(['lot-gone']));
       insertFlatten.run('flatten-of-nothing', 'MU', null);
 
-      expect(runMigrations(raw, MIGRATIONS_DIR)).toEqual([50, 51]);
+      expect(runMigrations(raw, MIGRATIONS_DIR)).toEqual(
+        MIGRATION_VERSIONS.filter((version) => version > preCutoverVersion),
+      );
 
       expect(
         raw
@@ -722,6 +626,24 @@ describe('openSharedStore', () => {
     expect(() =>
       insert.run('debate-1', 'key-2', 'AAPL', 'stocks', '[1]', '[1]', '2026-07-26T00:00:00.000Z'),
     ).toThrow();
+  });
+});
+
+// Separate from `describe('openSharedStore', ...)` above: this asserts on the
+// migrations directory itself, not on `openSharedStore`, so it does not
+// belong under that name. It also stands as its own test rather than folding
+// into another one, because every other migration-version expectation in this
+// file is derived FROM `MIGRATION_VERSIONS` via `listMigrations` as its own
+// oracle — none of them can catch a migration deleted from disk. Only a
+// literal can, so `HIGHEST_KNOWN_MIGRATION_VERSION` is checked here against a
+// full 1..N contiguity assertion (not just the tail, so a deleted middle file
+// reds too) — and folded into an unrelated test, deleting or skipping that
+// test would have silently dropped this guarantee with the suite still green.
+describe('migrations directory (#1397)', () => {
+  it('is a known, contiguous 1..N version list', () => {
+    expect(MIGRATION_VERSIONS).toEqual(
+      Array.from({ length: HIGHEST_KNOWN_MIGRATION_VERSION }, (_, i) => i + 1),
+    );
   });
 });
 
