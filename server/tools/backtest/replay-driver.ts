@@ -49,6 +49,7 @@ import {
   timeframeToMs,
 } from '../../providers/market-data-service/index.js';
 import type { ClosedTrade, Fill, SimulatedClock } from '../../shared/index.js';
+import { toBrokerFillId } from '../../shared/index.js';
 import type { ReplayTradeSource } from './eval-types.js';
 import { LookaheadAuditor } from './lookahead.js';
 import {
@@ -574,7 +575,7 @@ export class ReplayDriver {
     state.pendingFills.set(idempotency_key, [
       {
         idempotency_key,
-        broker_fill_id: `${idempotency_key}:entry`,
+        broker_fill_id: toBrokerFillId(`${idempotency_key}:entry`),
         leg: 'entry',
         price: result.fill_price,
         qty: result.filled_size,
@@ -637,7 +638,7 @@ export class ReplayDriver {
     const fills = state.pendingFills.get(lot.idempotency_key) ?? [];
     fills.push({
       idempotency_key: lot.idempotency_key,
-      broker_fill_id: `${lot.idempotency_key}:${exit.reason}`,
+      broker_fill_id: toBrokerFillId(`${lot.idempotency_key}:${exit.reason}`),
       // `Fill.leg` keeps its original four values — migration 0031 widened
       // `closed_trades.close_reason`, NOT `fills.leg` (#793). So a flatten is
       // recorded on the trade as `'flatten'` and on its fill as the generic

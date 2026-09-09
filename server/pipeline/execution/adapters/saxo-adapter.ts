@@ -38,7 +38,7 @@
  *   venue itself publishes per instrument.
  */
 import type { Clock, Logger } from '../../../shared/index.js';
-import { safeLog } from '../../../shared/index.js';
+import { safeLog, toBrokerFillId } from '../../../shared/index.js';
 import { SAXO_COMMISSION_RATE } from '../../../tools/backtest/index.js';
 import { sanitizeBrokerError } from '../broker-error.js';
 import {
@@ -1271,7 +1271,7 @@ function toCashFill(fill: QuotedFill, ref: SaxoInstrumentRef): NormalizedFill {
   const price = saxoCashPerShare(ref, fill.quoted_price);
   return {
     client_order_id: fill.client_order_id,
-    broker_fill_id: fill.broker_fill_id,
+    broker_fill_id: toBrokerFillId(fill.broker_fill_id),
     leg: fill.leg,
     price,
     qty: fill.qty,
