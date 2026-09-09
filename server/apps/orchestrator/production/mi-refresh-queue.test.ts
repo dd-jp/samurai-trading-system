@@ -82,10 +82,15 @@ function billingRefresher(
 
 /**
  * Bills like `billingRefresher`, but reads the cap first and refuses on a
- * breach — the `GrokAgent` shape, which is the only MI agent that carries its
- * own `SpendCap`.
+ * breach — the shape BOTH `MiIngestAgent` and `GrokAgent` carry since #1106.
+ * Tags its own calls with `label` so a test composing two of these (one per
+ * "agent") can tell which one actually billed, not just how much was spent.
+ * Needed because the two agents are now indistinguishable in shape: composing
+ * two UNLABELLED instances would make a "reversed order" test a no-op, since
+ * swapping two identical calls changes nothing observable.
  */
-function capReadingRefresher(
+function labeledCapReadingRefresher(
+  label: string,
   cap: SpendCap & { spentUsd: number },
   costUsd: number,
   calls: string[],
@@ -93,7 +98,7 @@ function capReadingRefresher(
   return {
     async refresh(_trace_id, instrument) {
       if (!cap.check().admitted) return false;
-      calls.push(instrument);
+      calls.push(`${label}:${instrument}`);
       await Promise.resolve();
       cap.spentUsd += costUsd;
       return true;
@@ -186,12 +191,12 @@ describe('MiRefreshQueue (#1085)', () => {
     expect(cap.spentUsd).toBe(2);
   });
 
-  it('holds the pair inside the budget however the two are composed, now that both self-gate (#1106)', async () => {
+  it('holds the pair inside the budget with ingest composed first, now that both self-gate (#1106)', async () => {
     // Before #1106, `MiIngestAgent` billed through the shared `LlmClient` and
     // read no cap of its own, so this ordering — the no-cap agent first —
     // was the only safe one at the composition root. Now both agents read
-    // the cap before they call (the `capReadingRefresher` shape on both
-    // sides), so the SAME pair spends the same whichever one runs first: the
+    // the cap before they call (the `labeledCapReadingRefresher` shape on
+    // both sides), so the SAME pair spends the same whichever one runs first: the
     // first call is admitted and bills, the second reads the post-bill total
     // and refuses.
     const cap = meteredCap(1);
@@ -199,45 +204,55 @@ describe('MiRefreshQueue (#1085)', () => {
     const queue = new MiRefreshQueue({
       spendCap: cap,
       refresher: composePair(
-        capReadingRefresher(cap, 1, calls),
-        capReadingRefresher(cap, 1, calls),
+        labeledCapReadingRefresher('ingest', cap, 1, calls),
+        labeledCapReadingRefresher('grok', cap, 1, calls),
       ),
     });
 
     await queue.refresh('tick-1', 'TSLA', 'stocks');
     await settle();
 
+    // The FIRST-composed side bills, the second reads the post-bill total and
+    // refuses — pinned by label, not just by count, so this cannot pass for a
+    // pair that billed twice or for the wrong side billing once.
+    expect(calls).toEqual(['ingest:TSLA']);
     // EXACTLY the budget, not "at most" — `<= 1` would also pass for a pass
     // that spent nothing at all, which is what a queue refusing everything
     // looks like.
     expect(cap.spentUsd).toBe(1);
   });
 
-  it('spends the same amount when the composition order is reversed', async () => {
+  it('spends the same amount when the composition order is reversed, but the other side bills', async () => {
     // Same queue, same single check, same budget — only the composition
     // order changes. Because both sides now self-gate, reversing which one
-    // runs first no longer changes the total: whichever agent goes first
-    // bills once, and the other reads the post-bill total and refuses.
+    // runs first no longer changes the TOTAL: whichever agent goes first
+    // bills once, and the other reads the post-bill total and refuses. Which
+    // one that is DOES flip with order — that flip is what `labeledCapReadingRefresher`
+    // exists to make observable, so this test cannot degenerate into composing
+    // two indistinguishable refreshers and asserting a total that would hold
+    // however they were labelled.
     const cap = meteredCap(1);
     const calls: string[] = [];
     const queue = new MiRefreshQueue({
       spendCap: cap,
       refresher: composePair(
-        capReadingRefresher(cap, 1, calls),
-        capReadingRefresher(cap, 1, calls),
+        labeledCapReadingRefresher('grok', cap, 1, calls),
+        labeledCapReadingRefresher('ingest', cap, 1, calls),
       ),
     });
 
     await queue.refresh('tick-1', 'AAPL', 'stocks');
     await settle();
 
+    expect(calls).toEqual(['grok:AAPL']);
     expect(cap.spentUsd).toBe(1);
   });
 
   it('refuses a queued refresh once the cap is reached, logging the first then every Nth', async () => {
-    // The news-scoring path (`MiIngestAgent` -> `scoreItems` -> the shared
-    // `LlmClient`) meters into `llm_spend` and reads no cap at all, so this
-    // check is the first ceiling it has ever had.
+    // The queue's own `#dispatch` check, exercised directly against a
+    // generic non-gating refresher — independent of whether the composed
+    // agent behind it also self-gates, which both `MiIngestAgent` and
+    // `GrokAgent` do as of #1106.
     const cap = meteredCap(1);
     cap.spentUsd = 1;
     const calls: string[] = [];

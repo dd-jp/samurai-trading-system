@@ -1,8 +1,7 @@
 import { fundamentalAnalyst } from '../../pipeline/analysts/index.js';
 import { NO_DATA_MARKER, NOOP_ANALYST_TELEMETRY } from '../../pipeline/analysts/types.js';
 import type { SpendCap } from '../../pipeline/debate-engine/index.js';
-import type { Clock, Logger } from '../../shared/index.js';
-import type { LogEntry } from '../../shared/types.js';
+import type { Clock, LogEntry, Logger } from '../../shared/index.js';
 import { AlwaysOpenCalendar } from '../market-data-service/index.js';
 import { MiArchiveStore } from './archive/mi-archive-store.js';
 import { MI_SOURCES } from './archive/mi-sources.js';

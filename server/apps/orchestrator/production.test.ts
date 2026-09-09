@@ -21,6 +21,8 @@ import {
   LATENCY_BUDGET_MS,
   MockLlmClient,
   SqliteDebateLogStore,
+  SqliteSpendCap,
+  UNCAPPED_SPEND,
 } from '../../pipeline/debate-engine/index.js';
 import { SimulatedBrokerAdapter, SqliteExecutionStore } from '../../pipeline/execution/index.js';
 import type { DailyMetricsSample, FeedbackConfig } from '../../pipeline/feedback-loop/index.js';
@@ -76,6 +78,7 @@ import {
 } from '../../providers/market-data-service/index.js';
 import {
   GROK_REFRESH_MS,
+  MiArchiveStore,
   PolymarketClient,
   X_SEARCH_MODEL,
 } from '../../providers/market-intelligence/index.js';
@@ -192,6 +195,33 @@ vi.mock('./fill-sync.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./fill-sync.js')>();
   startFillSyncSpy.mockImplementation(actual.startFillSync);
   return { ...actual, startFillSync: startFillSyncSpy };
+});
+
+/**
+ * #1106 — a spy standing in for the constructor itself, so a test can observe
+ * the exact `spendCap` `buildProductionComponents` hands `MiIngestAgent`
+ * rather than inferring it from behaviour. Delegates to the real class by
+ * default (`importOriginal`), same posture as `tryNousCredentialsMock` and
+ * `startFillSyncSpy` above: every other test in this file that never touches
+ * this mock still gets a real, hydrating agent (or `undefined`, when
+ * `buildMiIngestAgent`'s own guards say so) rather than a stub that silently
+ * drops `.hydrate()`.
+ */
+const { MiIngestAgentMock } = vi.hoisted(() => ({ MiIngestAgentMock: vi.fn() }));
+
+vi.mock('../../providers/market-intelligence/mi-ingest-agent.js', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../providers/market-intelligence/mi-ingest-agent.js')>();
+  // `new MiIngestAgentMock(...)` constructs its OWN implementation function
+  // (tinyspy's `new`-call semantics, so `instanceof` on the mock still works),
+  // and arrow functions cannot be constructors — a plain `function` here, not
+  // the arrow used for `startFillSyncSpy`/`tryNousCredentialsMock` above,
+  // which are both called plainly, never with `new`.
+  // biome-ignore lint/complexity/useArrowFunction: must stay a `function` — an arrow here throws "is not a constructor" the moment production.ts calls `new MiIngestAgent(...)`.
+  MiIngestAgentMock.mockImplementation(function (deps: unknown) {
+    return new actual.MiIngestAgent(deps as ConstructorParameters<typeof actual.MiIngestAgent>[0]);
+  });
+  return { ...actual, MiIngestAgent: MiIngestAgentMock };
 });
 
 const START = new Date('2026-07-29T12:00:00.000Z');
@@ -1285,6 +1315,57 @@ describe('buildProductionComponents', () => {
         );
       },
     );
+  });
+
+  /**
+   * #1106 round 1: `MiIngestAgent` now refuses on a spend-cap breach itself,
+   * the same seam `GrokAgent` already read — but no test anywhere pinned that
+   * the composition root hands it the REAL cap rather than `UNCAPPED_SPEND`,
+   * so a future edit could wire `spendCap: UNCAPPED_SPEND` unconditionally
+   * (the pre-#1106 posture) and every other test in this file would stay
+   * green: none of them build `MiIngestAgent` at all (`config.miArchive` is
+   * `undefined` everywhere else), and `yarn smoke` never reaches this
+   * constructor either, since the offline/keyless smoke run has neither Nous
+   * sentiment credentials nor `ALPACA_API_KEY`/`ALPACA_API_SECRET`.
+   */
+  describe('MiIngestAgent spend-cap wiring (#1106)', () => {
+    const FAKE_SCORING_CREDENTIALS: NousCredentials = {
+      apiKey: 'fake-scoring-key',
+      baseUrl: 'https://nous.test/v1',
+      model: 'x-ai/grok-4.5',
+    };
+
+    beforeEach(() => {
+      vi.stubEnv('ALPACA_API_KEY', 'dummy-key-not-a-credential');
+      vi.stubEnv('ALPACA_API_SECRET', 'dummy-secret-not-a-credential');
+    });
+
+    afterEach(() => {
+      MiIngestAgentMock.mockClear();
+      tryNousCredentialsMock.mockClear();
+      vi.unstubAllEnvs();
+    });
+
+    it('passes the real, budget-backed SqliteSpendCap through to `new MiIngestAgent(...)`, not UNCAPPED_SPEND', () => {
+      tryNousCredentialsMock.mockImplementationOnce(() => FAKE_SCORING_CREDENTIALS);
+      const config = stubConfig(db, {
+        sentimentEnabled: true,
+        llmBudgetUsd: 50,
+        miArchive: new MiArchiveStore(),
+      });
+
+      buildProductionComponents(config);
+
+      expect(MiIngestAgentMock).toHaveBeenCalledTimes(1);
+      const passedSpendCap = MiIngestAgentMock.mock.calls[0]?.[0]?.spendCap;
+      expect(passedSpendCap).toBeInstanceOf(SqliteSpendCap);
+      expect(passedSpendCap).not.toBe(UNCAPPED_SPEND);
+      // Not just "a real cap, some budget" — THIS config's budget, so a root
+      // that wired a second, differently-budgeted `SqliteSpendCap` (rather
+      // than the one instance also handed to `GrokAgent` and the debate step)
+      // would fail here too.
+      expect(passedSpendCap.check().budget_usd).toBe(50);
+    });
   });
 
   // `[...BENCHMARK_INSTRUMENTS]`, not a hardcoded `['SPY', 'AGG']` literal
