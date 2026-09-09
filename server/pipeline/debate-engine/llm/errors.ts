@@ -80,9 +80,49 @@ export class LlmCancelledError extends Error {
   }
 }
 
+/**
+ * The provider DECLINED to answer, and signalled it on the wire (#1391) —
+ * Anthropic's `stop_reason: "refusal"`, or the OpenAI-compatible
+ * `finish_reason: "content_filter"` / `message.refusal` that `nous-chat.ts`
+ * raises as `NousRefusalError` and `NousMessagesClient` translates to this.
+ *
+ * Its own class for the reason `LlmCancelledError` is: `isRetryable`
+ * (anthropic-client.ts) covers only timeout/rate-limit/malformed, so a
+ * distinct class is excluded by construction. Folded into
+ * `LlmMalformedResponseError` — which is where an unsignalled refusal used to
+ * land — it would be RETRIED, re-asking a model that has already declined this
+ * prompt and paying for every attempt. Truncation's carve-out
+ * (`NousTruncatedError`) settled the same argument for the same reason.
+ *
+ * A refusal still fails LOUDLY. Nothing here degrades it into a neutral or
+ * fabricated position — see `json-response.ts`'s stated design.
+ */
+export class LlmRefusalError extends Error {
+  /** The wire field that signalled the refusal, so the log names its evidence rather than a guess. */
+  readonly signal: string;
+  /**
+   * Tokens the refused call billed, when the transport could see them. Absent
+   * when it could not: a throw at the wire boundary skips `recordSpend`
+   * entirely, so this is the only surface that carries the cost.
+   */
+  readonly usage: { input_tokens: number; output_tokens: number } | undefined;
+
+  constructor(
+    message: string,
+    signal: string,
+    usage?: { input_tokens: number; output_tokens: number },
+  ) {
+    super(message);
+    this.name = 'LlmRefusalError';
+    this.signal = signal;
+    this.usage = usage;
+  }
+}
+
 export type LlmError =
   | LlmTimeoutError
   | LlmRateLimitError
   | LlmMalformedResponseError
   | LlmProviderError
-  | LlmCancelledError;
+  | LlmCancelledError
+  | LlmRefusalError;

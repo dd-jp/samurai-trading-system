@@ -7,7 +7,7 @@
  * unpriced (and an unpriced row does not count against the spend cap).
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { NousApiError, NousTruncatedError, nousChat } from './nous-chat.js';
+import { NousApiError, NousRefusalError, NousTruncatedError, nousChat } from './nous-chat.js';
 
 const OPTIONS = { apiKey: 'test-fake-nous-key', baseUrl: 'https://nous.test/v1' };
 const REQUEST = {
@@ -196,6 +196,87 @@ describe('nousChat', () => {
         output_tokens: 1024,
         cache_read_input_tokens: 0,
       });
+    });
+  });
+
+  describe('refusal', () => {
+    /**
+     * Truncation's sibling, and the same money bug: a refusal is deterministic
+     * in the PROMPT, so a retry buys the identical answer at full price. Left
+     * unsignalled it reaches `parseResponse` as empty or prose text, becomes
+     * `LlmMalformedResponseError`, and `isRetryable` retries it.
+     */
+    it('throws on finish_reason="content_filter"', async () => {
+      stubFetch(
+        completion({ choices: [{ message: { content: '' }, finish_reason: 'content_filter' }] }),
+      );
+
+      await expect(nousChat(OPTIONS, REQUEST)).rejects.toThrow(NousRefusalError);
+    });
+
+    it('throws on a message.refusal string even when finish_reason is "stop"', async () => {
+      stubFetch(
+        completion({
+          choices: [
+            {
+              message: { content: '', refusal: 'I cannot help with that.' },
+              finish_reason: 'stop',
+            },
+          ],
+        }),
+      );
+
+      const error = await nousChat(OPTIONS, REQUEST).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(NousRefusalError);
+      expect((error as NousRefusalError).signal).toBe('message.refusal');
+    });
+
+    it('does not fire on prose that merely reads like a refusal', async () => {
+      // The false positive this detection must not have: a text sniffer turns
+      // every transient malformed sample into a hard failure. `personas.test.ts`'s
+      // "still fails loudly on a refusal" sends exactly this body with no wire
+      // marker on it, and it must stay an ordinary retryable parse failure.
+      stubFetch(
+        completion({
+          choices: [
+            { message: { content: 'I cannot provide trading advice.' }, finish_reason: 'stop' },
+          ],
+        }),
+      );
+
+      const result = await nousChat(OPTIONS, REQUEST);
+
+      expect(result.text).toBe('I cannot provide trading advice.');
+    });
+
+    it('carries no status, so the error cannot be classified as retryable', async () => {
+      stubFetch(
+        completion({ choices: [{ message: { content: '' }, finish_reason: 'content_filter' }] }),
+      );
+
+      const error = await nousChat(OPTIONS, REQUEST).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(NousRefusalError);
+      expect((error as { status?: unknown }).status).toBeUndefined();
+    });
+
+    it('carries the billed token counts, which no meter will otherwise see', async () => {
+      stubFetch(
+        completion({
+          choices: [{ message: { content: '' }, finish_reason: 'content_filter' }],
+          usage: { prompt_tokens: 900, completion_tokens: 3 },
+        }),
+      );
+
+      const error = (await nousChat(OPTIONS, REQUEST).catch((e: unknown) => e)) as NousRefusalError;
+
+      expect(error.usage).toEqual({
+        input_tokens: 900,
+        output_tokens: 3,
+        cache_read_input_tokens: 0,
+      });
+      expect(error.message).toContain('3 output tokens');
     });
   });
 

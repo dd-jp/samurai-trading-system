@@ -21,13 +21,15 @@
  * `content` block array `extractText` and `recordSpend` already read.
  */
 
-import { nousChat } from '../../../shared/llm/nous-chat.js';
+import type { NousChatResult } from '../../../shared/llm/nous-chat.js';
+import { NousRefusalError, nousChat } from '../../../shared/llm/nous-chat.js';
 import type {
   AnthropicMessageOptions,
   AnthropicMessageRequest,
   AnthropicMessageResponse,
   AnthropicMessagesClient,
 } from './anthropic-client.js';
+import { LlmRefusalError } from './errors.js';
 
 export interface NousMessagesClientOptions {
   apiKey: string;
@@ -69,19 +71,34 @@ export class NousMessagesClient implements AnthropicMessagesClient {
     request: AnthropicMessageRequest,
     options: AnthropicMessageOptions = {},
   ): Promise<AnthropicMessageResponse> {
-    const result = await nousChat(
-      {
-        apiKey: this.#apiKey,
-        baseUrl: this.#baseUrl,
-        ...(this.#timeoutMs === undefined ? {} : { timeoutMs: this.#timeoutMs }),
-        signal: options.signal,
-      },
-      {
-        model: request.model,
-        messages: request.messages,
-        max_tokens: request.max_tokens,
-      },
-    );
+    let result: NousChatResult;
+    try {
+      result = await nousChat(
+        {
+          apiKey: this.#apiKey,
+          baseUrl: this.#baseUrl,
+          ...(this.#timeoutMs === undefined ? {} : { timeoutMs: this.#timeoutMs }),
+          signal: options.signal,
+        },
+        {
+          model: request.model,
+          messages: request.messages,
+          max_tokens: request.max_tokens,
+        },
+      );
+    } catch (error) {
+      // This adapter is the seam where a Nous-shaped failure becomes the typed
+      // LLM hierarchy, which is what keeps `anthropic-client.ts` free of any
+      // provider's error classes. A refusal is translated here rather than left
+      // to `classifyProviderError`, which duck-types on `.status` alone: it
+      // would land on `LlmProviderError` — non-retryable either way, but
+      // indistinguishable in the log from a dead API key, and with the burned
+      // call's tokens discarded (#1391).
+      if (error instanceof NousRefusalError) {
+        throw new LlmRefusalError(error.message, error.signal, error.usage);
+      }
+      throw error;
+    }
 
     return {
       content: [{ type: 'text', text: result.text }],

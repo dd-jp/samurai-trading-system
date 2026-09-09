@@ -8,6 +8,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AnthropicLlmClient } from './anthropic-client.js';
+import { LlmRefusalError } from './errors.js';
 import { NousMessagesClient } from './nous-messages-client.js';
 import type { LlmSpendRecord, LlmSpendSink } from './spend-sink.js';
 import type { LlmRequest } from './types.js';
@@ -165,6 +166,34 @@ describe('NousMessagesClient through AnthropicLlmClient', () => {
     });
 
     await expect(client().complete(request())).rejects.toThrow(/finish_reason="length"/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The same argument for a refusal (#1391). `retry.maxAttempts` is 3, and a
+   * refusal's empty body parses no better on the third draw than the first —
+   * the model declined the prompt, not the sample. One fetch call.
+   */
+  it('does not retry a refusal the provider signalled', async () => {
+    const fetchMock = stubFetch({
+      choices: [{ message: { content: '' }, finish_reason: 'content_filter' }],
+      model: 'openai/gpt-5.6-luna',
+      usage: { prompt_tokens: 900, completion_tokens: 3 },
+    });
+
+    const error = await client()
+      .complete(request())
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(LlmRefusalError);
+    // AC: the tokens the refused call burned are visible in the log. Nothing
+    // meters them — a throw at the wire boundary never reaches `recordSpend` —
+    // so the error is the only surface that carries them.
+    expect((error as LlmRefusalError).usage).toEqual({
+      input_tokens: 900,
+      output_tokens: 3,
+      cache_read_input_tokens: 0,
+    });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 

@@ -18,6 +18,7 @@ export type {
 export {
   DEFAULT_NOUS_TIMEOUT_MS,
   NousApiError,
+  NousRefusalError,
   NousTruncatedError,
   nousChat,
 } from './nous-chat.js';

@@ -27,6 +27,7 @@ import {
   buildApiError,
   DEFAULT_NOUS_TIMEOUT_MS,
   NousApiError,
+  NousRefusalError,
   NousTruncatedError,
   type NousWireUsage,
   normaliseUsage,
@@ -42,6 +43,7 @@ import type { AnthropicUsage } from './pricing.js';
 export {
   DEFAULT_NOUS_TIMEOUT_MS,
   NousApiError,
+  NousRefusalError,
   NousTruncatedError,
 } from './nous-wire.js';
 
@@ -79,7 +81,7 @@ export interface NousChatResult {
    * the string the provider echoed.
    */
   model: string;
-  /** As reported by the provider, for callers that want to log it. `'length'` never reaches a caller — it throws. */
+  /** As reported by the provider, for callers that want to log it. `'length'` and `'content_filter'` never reach a caller — they throw. */
   finish_reason: string | null;
   /**
    * Time-to-first-byte (#1012): milliseconds from dispatching the POST to
@@ -104,7 +106,8 @@ export interface NousChatOptions {
 }
 
 interface NousChoice {
-  message?: { content?: unknown };
+  /** `refusal` is the OpenAI-compatible sibling of `content`: set instead of it when the model declines. */
+  message?: { content?: unknown; refusal?: unknown };
   finish_reason?: unknown;
 }
 
@@ -194,6 +197,19 @@ export async function nousChat(
 
   if (finish_reason === 'length') {
     throw new NousTruncatedError(request.model, request.max_tokens, usage);
+  }
+
+  // Only these two wire fields, never the answer text: a prose sniffer would
+  // reclassify ordinary transient garbage as a permanent refusal, and that
+  // false positive costs a whole debate. See `NousRefusalError`'s doc comment.
+  const refusal = typeof choice.message?.refusal === 'string' ? choice.message.refusal : '';
+  if (finish_reason === 'content_filter' || refusal.trim() !== '') {
+    throw new NousRefusalError(
+      request.model,
+      finish_reason === 'content_filter' ? 'finish_reason="content_filter"' : 'message.refusal',
+      usage,
+      refusal === '' ? undefined : refusal,
+    );
   }
 
   return {
