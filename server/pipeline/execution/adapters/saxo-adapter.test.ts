@@ -780,6 +780,166 @@ describe('SaxoBrokerAdapter flatten', () => {
 
     expect(await adapter.resumeFlatten('flat-1', '3USL')).toBeNull();
   });
+
+  it('adopts an instantly-filled flatten off the audit trail when the 409 retry finds nothing open (#1217)', async () => {
+    const listOrderActivities = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([
+        activity({
+          OrderId: '777',
+          ExternalReference: 'flat-1',
+          Status: 'Filled',
+          BuySell: 'Sell',
+          FillAmount: 3,
+          AveragePrice: 10,
+        }),
+      ]);
+    const client = makeClient({
+      listOpenOrders: vi.fn().mockResolvedValue([]),
+      listOrderActivities,
+      placeOrder: vi
+        .fn()
+        .mockRejectedValue(new SaxoBrokerProviderError('Saxo API error: 409', 409, undefined)),
+    });
+    const { adapter } = makeAdapter(client);
+
+    const ack = await adapter.submitFlatten('3USL', 'sell', 3, 'flat-1');
+
+    expect(client.placeOrder).toHaveBeenCalledTimes(1);
+    expect(listOrderActivities).toHaveBeenCalledTimes(2);
+    expect(ack).toEqual({
+      client_order_id: 'flat-1',
+      broker_order_ids: ['777'],
+      order_state: 'filled',
+    });
+  });
+
+  it('reports a dead prior flatten as DeadOrderUnderReference rather than rethrowing the 409 (#1217)', async () => {
+    const listOrderActivities = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([
+        activity({
+          OrderId: '777',
+          ExternalReference: 'flat-1',
+          Status: 'Cancelled',
+          BuySell: 'Sell',
+        }),
+      ]);
+    const client = makeClient({
+      listOpenOrders: vi.fn().mockResolvedValue([]),
+      listOrderActivities,
+      placeOrder: vi
+        .fn()
+        .mockRejectedValue(new SaxoBrokerProviderError('Saxo API error: 409', 409, undefined)),
+    });
+    const { adapter } = makeAdapter(client);
+
+    await expect(adapter.submitFlatten('3USL', 'sell', 3, 'flat-1')).rejects.toMatchObject({
+      name: 'BrokerError',
+      operation: 'submitFlatten',
+      venueCode: 'DeadOrderUnderReference',
+    });
+  });
+
+  it('still reports the 409 as a failure when neither the open list nor the audit trail knows the flatten (#1217)', async () => {
+    const client = makeClient({
+      listOpenOrders: vi.fn().mockResolvedValue([]),
+      listOrderActivities: vi.fn().mockResolvedValue([]),
+      placeOrder: vi
+        .fn()
+        .mockRejectedValue(new SaxoBrokerProviderError('Saxo API error: 409', 409, undefined)),
+    });
+    const { adapter } = makeAdapter(client);
+
+    const err = await adapter.submitFlatten('3USL', 'sell', 3, 'flat-1').catch((e: unknown) => e);
+    expect(err).toMatchObject({ name: 'BrokerError', operation: 'submitFlatten', statusCode: 409 });
+    expect((err as { venueCode?: string }).venueCode).toBeUndefined();
+  });
+
+  it('adopts the audit-trail row matching this reference on 409 retry, not another order under a different reference (#1217)', async () => {
+    const listOrderActivities = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([
+        activity({
+          OrderId: '777',
+          ExternalReference: 'flat-1',
+          Status: 'Cancelled',
+          ActivityTime: '2026-09-05T08:59:00.000000Z',
+        }),
+        activity({
+          OrderId: '999',
+          ExternalReference: 'unrelated-flat',
+          Status: 'Filled',
+          FillAmount: 3,
+          AveragePrice: 10,
+          ActivityTime: '2026-09-05T08:59:30.000000Z',
+        }),
+      ]);
+    const client = makeClient({
+      listOpenOrders: vi.fn().mockResolvedValue([]),
+      listOrderActivities,
+      placeOrder: vi
+        .fn()
+        .mockRejectedValue(new SaxoBrokerProviderError('Saxo API error: 409', 409, undefined)),
+    });
+    const { adapter } = makeAdapter(client);
+
+    // Without the ExternalReference filter, `unrelated-flat`'s later,
+    // Filled row would win the "latest" pick and this would resolve as a
+    // fill off an unrelated order instead of pinning the dead row under
+    // 'flat-1'.
+    await expect(adapter.submitFlatten('3USL', 'sell', 3, 'flat-1')).rejects.toMatchObject({
+      name: 'BrokerError',
+      operation: 'submitFlatten',
+      venueCode: 'DeadOrderUnderReference',
+    });
+  });
+
+  it("computes the 409 retry's audit-trail read from PLACEMENT_LOOKBACK_MS (#1217)", async () => {
+    // clock is 09:00:00Z; 4 x 15s duplicate window = 60s. Unlike the other
+    // tests' fixed stubs, this one mimics a server-side `from` filter — it
+    // only serves the Filled row on the exact expected window, and stays
+    // empty (as on the pre-POST lookup() miss too) for any other `from`, so
+    // a wrong window on the retry call surfaces as the 409 being rethrown.
+    const expectedFrom = new Date('2026-09-05T08:59:00.000Z').getTime();
+    const listOrderActivities = vi
+      .fn()
+      .mockImplementationOnce(() => Promise.resolve([]))
+      .mockImplementation((from: Date) =>
+        Promise.resolve(
+          from.getTime() === expectedFrom
+            ? [
+                activity({
+                  OrderId: '777',
+                  ExternalReference: 'flat-1',
+                  Status: 'Filled',
+                  FillAmount: 3,
+                  AveragePrice: 10,
+                }),
+              ]
+            : [],
+        ),
+      );
+    const client = makeClient({
+      listOpenOrders: vi.fn().mockResolvedValue([]),
+      listOrderActivities,
+      placeOrder: vi
+        .fn()
+        .mockRejectedValue(new SaxoBrokerProviderError('Saxo API error: 409', 409, undefined)),
+    });
+    const { adapter } = makeAdapter(client);
+
+    const ack = await adapter.submitFlatten('3USL', 'sell', 3, 'flat-1');
+
+    expect(ack).toEqual({
+      client_order_id: 'flat-1',
+      broker_order_ids: ['777'],
+      order_state: 'filled',
+    });
+  });
 });
 
 describe('SaxoBrokerAdapter.cancel', () => {

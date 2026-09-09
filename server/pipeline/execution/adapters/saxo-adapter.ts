@@ -482,8 +482,10 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
   /**
    * Adopt-or-place (doc 43). The open list is authoritative for a resting
    * order; the recent audit trail catches one that already filled or died
-   * before this retry. A 409 means the venue's window still remembers a POST
-   * whose reply this process never saw — its order is on the open list by now.
+   * before this retry — including one that filled between the lost reply
+   * and this retry and so is already gone from the open list, not merely
+   * still resting on it (#1217). A 409 means the venue's window still
+   * remembers a POST whose reply this process never saw.
    *
    * An adopted order is acked in ITS state, never as `submitted`: a filled
    * one is `filled`. A dead one (rejected/cancelled/expired) is refused
@@ -506,14 +508,22 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     } catch (cause) {
       if (!isDuplicateRequestRefusal(cause)) throw cause;
       const adopted = await this.findOpen(externalReference);
+      if (adopted !== null && !isDormantLegs(adopted)) return adopt(adopted, externalReference);
       // A dormant-legs signal here is not acted on: this path fires only
       // right after a duplicate-request 409, and cancelling on `Status`
       // alone is exactly the UNVERIFIED read `lookup` exists to avoid
       // (#1215 round 1). Declining to adopt leaves the legs for the next
       // `reconcile()` pass (#921 runs every poll) to settle against the
       // audit trail.
-      if (adopted === null || isDormantLegs(adopted)) throw cause;
-      return adopt(adopted, externalReference);
+      if (adopted !== null) throw cause;
+      // The open list forgets an order the instant it stops being open —
+      // not just on cancel, also on a fill, which for a Market flatten can
+      // land inside the same duplicate window as this retry. The audit
+      // trail still carries it, so it is adopted in its own state rather
+      // than reported as a failed flatten (#1217).
+      const latest = await this.latestActivityFor(externalReference, PLACEMENT_LOOKBACK_MS);
+      if (latest === undefined) throw cause;
+      return adopt(fromActivity(latest, externalReference), externalReference);
     }
   }
 
@@ -691,6 +701,21 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     this.dormantDefer.delete(externalReference);
   }
 
+  /** The most recent audit-trail row for `externalReference` inside `lookbackMs`, or none. */
+  private async latestActivityFor(
+    externalReference: string,
+    lookbackMs: number,
+  ): Promise<SaxoOrderActivity | undefined> {
+    const from = new Date(this.clock.now().getTime() - lookbackMs);
+    const activities = await this.client.listOrderActivities(from);
+    let latest: SaxoOrderActivity | undefined;
+    for (const activity of activities) {
+      if (activity.ExternalReference !== externalReference) continue;
+      if (latest === undefined || activity.ActivityTime >= latest.ActivityTime) latest = activity;
+    }
+    return latest;
+  }
+
   /**
    * `findOpen`'s dormant-legs signal is never acted on by `Status` alone
    * (UNVERIFIED) — it is corroborated here against the master's own
@@ -730,13 +755,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
       return open;
     }
 
-    const from = new Date(this.clock.now().getTime() - lookbackMs);
-    const activities = await this.client.listOrderActivities(from);
-    let latest: SaxoOrderActivity | undefined;
-    for (const activity of activities) {
-      if (activity.ExternalReference !== externalReference) continue;
-      if (latest === undefined || activity.ActivityTime >= latest.ActivityTime) latest = activity;
-    }
+    const latest = await this.latestActivityFor(externalReference, lookbackMs);
 
     if (open === null) {
       if (latest === undefined) return null;
