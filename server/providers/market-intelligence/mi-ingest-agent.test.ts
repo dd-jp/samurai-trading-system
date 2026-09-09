@@ -568,10 +568,73 @@ describe('MiIngestAgent', () => {
       now = new Date(now.getTime() + TICK_MS);
     }
 
-    // Flat rule: ~20 of 30. Backoff: well under half that, never zero (an
-    // outage must still be checked on, not abandoned forever).
-    expect(attempts).toBeGreaterThan(0);
-    expect(attempts).toBeLessThanOrEqual(10);
+    // Flat rule (#1392): ~20 of 30. Backoff: exactly 7 — attempts fall on
+    // refreshes 1, 2, 4, 7, 12, 21, 30 (streak 1..6, skip widening 0, 1, 2, 4,
+    // 8, 8 — the last two capped by `MAX_DEGRADED_SKIP`). An exact count, not
+    // a range: dropping the `MAX_DEGRADED_SKIP` cap from `degradedSkip` would
+    // still satisfy "under 10" (uncapped gives 6, since streak 6's uncapped
+    // gap of 16 refreshes doesn't fit before the window ends) — only a pinned
+    // count catches that the cap itself is exercised and load-bearing.
+    expect(attempts).toBe(7);
+  });
+
+  /**
+   * #1421: a refresh with nothing new to score (`unscored.length === 0`)
+   * must clear a pending skip cooldown — #1392 review round 2, finding 5,
+   * still applies — but must NOT reset `streak`. A sustained outage can have
+   * a quiet tick with no matching articles in the middle of it; resetting
+   * `streak` there would restart backoff from scratch on the very next
+   * failure, so a quiet-interleaved outage would cost close to the old flat
+   * rule's rate again instead of continuing to escalate.
+   */
+  it('keeps widening the backoff after a quiet refresh interrupts a sustained outage', async () => {
+    const archive = new MiArchiveStore();
+    const store = new MarketIntelligenceStore(clock);
+    let now = NOW;
+    const movingClock: Clock = { now: () => now };
+    let attempts = 0;
+    const countingFailingClient = {
+      complete: async () => {
+        attempts++;
+        throw new Error('llm down');
+      },
+    };
+    const agent = new MiIngestAgent({
+      archive,
+      store,
+      newsClient: newsClient([article()]),
+      llmClient: countingFailingClient,
+      clock: movingClock,
+      assetClasses: ['stocks'],
+      spendCap: ADMITS,
+    });
+    const TICK_MS = 2 * 60_000;
+    const tick = async () => {
+      await agent.refresh('t', 'AAPL', 'stocks');
+      now = new Date(now.getTime() + TICK_MS);
+    };
+
+    // Two straight failures: streak 2, one skip queued (degradedSkip(2) = 1).
+    await tick();
+    await tick();
+
+    // A quiet refresh — nothing to score this cycle, not a resolved outage.
+    (agent as unknown as { deps: { newsClient: unknown } }).deps.newsClient = newsClient([]);
+    await agent.refresh('t', 'AAPL', 'stocks');
+    now = new Date(now.getTime() + TICK_MS);
+    (agent as unknown as { deps: { newsClient: unknown } }).deps.newsClient = newsClient([
+      article(),
+    ]);
+
+    // 8 more refreshes, still failing. If the quiet tick had reset `streak`
+    // to 0, this would re-run the slow 0,0,1,2,4... climb from scratch and
+    // attempt far more than twice more here; preserving `streak` keeps the
+    // climb where the pre-quiet outage left it.
+    for (let i = 0; i < 8; i++) {
+      await tick();
+    }
+
+    expect(attempts).toBe(4);
   });
 
   /**

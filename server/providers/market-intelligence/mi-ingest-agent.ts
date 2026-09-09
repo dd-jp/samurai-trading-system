@@ -156,10 +156,14 @@ export class MiIngestAgent {
    * backstop; this only slows how fast one instrument's outage burns toward
    * it.
    *
-   * Also reset on a refresh with nothing new to score (#1392 review round 2,
-   * finding 5) — that refresh proves nothing about whether scoring itself is
-   * still failing, so state left over from a since-resolved outage must not
-   * survive to wrongly skip the next refresh that finally has work.
+   * A refresh with nothing new to score (#1392 review round 2, finding 5)
+   * clears a pending `skipRemaining` cooldown — that refresh proves nothing
+   * about whether scoring itself is still failing, so a cooldown left over
+   * from a since-resolved outage must not survive to wrongly skip the next
+   * refresh that finally has work — but it does NOT reset `streak` (#1421):
+   * an outage can have a quiet tick with no matching articles in the middle
+   * of it, and treating that as a "healthy batch" would restart backoff from
+   * scratch on the very next failure, undoing the escalation this exists for.
    */
   readonly #degraded = new Map<string, DegradedState>();
 
@@ -288,10 +292,19 @@ export class MiIngestAgent {
       );
     if (unscored.length === 0) {
       // #1392 review round 2, finding 5: nothing here says scoring is still
-      // failing — only that this refresh had no new work — so state left
-      // over from a since-resolved outage must not survive to wrongly skip
-      // the next refresh that finally has something to score.
-      this.#degraded.set(instrument, { streak: 0, skipRemaining: 0 });
+      // failing — only that this refresh had no new work — so a pending skip
+      // cooldown must not survive to wrongly skip the next refresh that
+      // finally has something to score. But #1421: this is not the "healthy
+      // batch" that should reset `streak` — an outage can legitimately have a
+      // quiet refresh (no matching articles this cycle) in the middle of it,
+      // and resetting `streak` here would restart backoff from scratch on
+      // the next failure, collapsing the whole escalation back to the old
+      // flat-rule cost. Only an actual successful scoring attempt earns that
+      // reset (see the `degraded` branch below).
+      const existing = this.#degraded.get(instrument);
+      if (existing && existing.skipRemaining > 0) {
+        this.#degraded.set(instrument, { streak: existing.streak, skipRemaining: 0 });
+      }
       return false;
     }
 
