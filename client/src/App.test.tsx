@@ -756,4 +756,35 @@ describe('dashboard token from the URL (#1038)', () => {
       if (original) Object.defineProperty(window, 'sessionStorage', original);
     }
   });
+
+  // Round 2 finding B's other half: `getItem` throwing (not just `setItem`)
+  // must also degrade to the default path rather than blank the dashboard.
+  // No ?token= here, so `resolveDashboardToken` falls through to the
+  // `storage.getItem` read this store throws on.
+  it('renders the default path instead of white-screening when sessionStorage.getItem throws', async () => {
+    const original = Object.getOwnPropertyDescriptor(window, 'sessionStorage');
+    const throwingStore: Pick<Storage, 'getItem' | 'setItem'> = {
+      getItem: () => {
+        throw new DOMException('The operation is insecure.', 'SecurityError');
+      },
+      setItem: () => {},
+    };
+    Object.defineProperty(window, 'sessionStorage', {
+      configurable: true,
+      get: () => throwingStore,
+    });
+    try {
+      const { fetchImpl, inits } = recordingFetch();
+
+      render(<App snapshotOptions={{ fetchImpl, intervalMs: POLL_MS }} />);
+
+      const rail = await screen.findByRole('complementary', { name: 'Rail' });
+      expect(rail).toBeTruthy();
+      await waitFor(() => expect(inits().length).toBeGreaterThan(0));
+      const headers = inits()[0]?.headers as Record<string, string> | undefined;
+      expect(headers === undefined || headers.Authorization === undefined).toBe(true);
+    } finally {
+      if (original) Object.defineProperty(window, 'sessionStorage', original);
+    }
+  });
 });
