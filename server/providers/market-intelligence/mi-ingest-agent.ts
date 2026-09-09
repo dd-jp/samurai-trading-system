@@ -224,14 +224,40 @@ export class MiIngestAgent {
       return false;
     }
 
-    const scores = await scoreItems(
+    const { scores, degraded } = await scoreItems(
       pairs.map(({ article, entity }) => ({
         entity,
         headline: article.headline,
         summary: article.summary,
       })),
-      { llmClient: this.deps.llmClient, ...(trace_id === undefined ? {} : { trace_id }) },
+      {
+        llmClient: this.deps.llmClient,
+        logger: this.deps.logger,
+        ...(trace_id === undefined ? {} : { trace_id }),
+      },
     );
+
+    // `scoreItems` already logged the cause. Writing nothing here — same
+    // posture as the fetch-failure and spend-cap-refusal branches above — is
+    // what keeps a scoring outage from being ARCHIVED as a unanimous-neutral
+    // read: `hasItem` (the `fresh` filter above) only matches rows this
+    // method itself writes, so a degraded batch stays visible to the NEXT
+    // refresh inside the same overlap window instead of being poisoned
+    // forever at `UNSCORED` (#1392).
+    if (degraded) {
+      this.deps.logger?.log({
+        trace_id,
+        stage: 'market_intelligence',
+        event: 'mi_ingest_scoring_degraded',
+        level: 'warn',
+        message:
+          `market intelligence: item scoring failed for ${pairs.length} item(s) for ` +
+          `${instrument}; nothing archived this refresh, so the analysts will report NO DATA ` +
+          'for this window rather than a fabricated neutral read.',
+        payload: { asset_class, instrument, items: pairs.length },
+      });
+      return false;
+    }
 
     const raws: RawArchiveRow[] = fresh.map((article) => ({
       source: SOURCE_ALPACA,

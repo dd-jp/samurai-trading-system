@@ -38,7 +38,14 @@
  * the response carries; it does not need a request per item.
  */
 
-import type { LlmClient, LlmRequest } from '../../../pipeline/debate-engine/index.js';
+import {
+  BARE_JSON_INSTRUCTION,
+  type LlmClient,
+  LlmMalformedResponseError,
+  type LlmRequest,
+  unwrapFencedJson,
+} from '../../../pipeline/debate-engine/index.js';
+import { type Logger, logCaughtFailure } from '../../../shared/index.js';
 
 /** What the model returns for one item. */
 export interface ItemScore {
@@ -59,11 +66,12 @@ export interface ScorableItem {
  * Neutral at floor confidence — what an item scores when the model could not be
  * reached or answered unusably.
  *
- * NOT a silent default. The caller logs the failure, and the value is chosen so
- * that a scoring outage degrades toward "no directional opinion" rather than
- * toward a fabricated one: `sentiment: 0` contributes nothing to
- * `netSentiment`, so an unscored batch cannot push an analyst into a direction
- * it has no evidence for.
+ * NOT a silent default. `scoreItems` logs the failure itself before returning
+ * it (see `ScoreItemsResult.degraded`), and the value is chosen so that a
+ * scoring outage degrades toward "no directional opinion" rather than toward
+ * a fabricated one: `sentiment: 0` contributes nothing to `netSentiment`, so
+ * an unscored batch cannot push an analyst into a direction it has no
+ * evidence for.
  */
 export const UNSCORED: Omit<ItemScore, 'index'> = { sentiment: 0, confidence: 0.05 };
 
@@ -74,7 +82,8 @@ const SYSTEM_INSTRUCTION =
   '0 = neutral, -1 = bearish, and a confidence in [0,1] reflecting how clearly the ' +
   'supplied text supports that reading. A headline that is not about the entity, or ' +
   'carries no directional information, is 0 at low confidence. Respond as JSON: ' +
-  '{"scores":[{"index":number,"sentiment":1|0|-1,"confidence":number}]}';
+  '{"scores":[{"index":number,"sentiment":1|0|-1,"confidence":number}]}\n\n' +
+  BARE_JSON_INSTRUCTION;
 
 function isScore(value: unknown): value is ItemScore {
   if (typeof value !== 'object' || value === null) return false;
@@ -95,23 +104,40 @@ function clampConfidence(value: number): number {
 export interface ScoreItemsDeps {
   llmClient: LlmClient;
   trace_id?: string | undefined;
+  logger?: Logger | undefined;
+}
+
+/**
+ * `scores` is one entry per supplied item, in input order, exactly as before.
+ * `degraded` is the addition: true when the WHOLE batch fell back to
+ * `UNSCORED` because the model could not be reached, answered unusably, or
+ * because retries were exhausted — as opposed to a genuine unanimous-neutral
+ * read the model actually produced. The caller (`MiIngestAgent`) uses this to
+ * decide whether the batch is fit to archive at all; see its `refresh` doc.
+ */
+export interface ScoreItemsResult {
+  scores: ItemScore[];
+  degraded: boolean;
 }
 
 /**
  * Scores a batch, returning one score per supplied item **in input order**.
  *
- * Never throws and never returns a short array: an item the model omitted, or a
- * batch that failed outright, comes back as `UNSCORED`. A scoring failure must
- * not take down the tick — the analysts degrade to "no opinion", which is a
- * state they already handle, rather than the ingestion path throwing inside the
- * refresh loop.
+ * Never throws: an item the model omitted, or a batch that failed outright,
+ * comes back as `UNSCORED` with `degraded: true`. A scoring failure must not
+ * take down the tick — the analysts degrade to "no opinion", which is a state
+ * they already handle, rather than the ingestion path throwing inside the
+ * refresh loop. The failure itself is logged here, before returning, so it is
+ * distinguishable from a genuine unanimous-neutral news day (#1392) — the
+ * `scores.[...]` shape alone cannot carry that distinction.
  */
 export async function scoreItems(
   items: readonly ScorableItem[],
   deps: ScoreItemsDeps,
-): Promise<ItemScore[]> {
+): Promise<ScoreItemsResult> {
+  if (items.length === 0) return { scores: [], degraded: false };
+
   const fallback = items.map((_, index) => ({ index, ...UNSCORED }));
-  if (items.length === 0) return [];
 
   const numbered = items
     .map((item, index) => `${index}. [${item.entity}] ${item.headline} ${item.summary}`.trim())
@@ -127,15 +153,9 @@ export async function scoreItems(
       },
     },
     parseResponse: (rawText: string) => {
-      // The model may fence the JSON; take the outermost object.
-      const start = rawText.indexOf('{');
-      const end = rawText.lastIndexOf('}');
-      if (start === -1 || end <= start) {
-        return { valid: false as const, reason: 'no JSON object in response' };
-      }
       let parsed: unknown;
       try {
-        parsed = JSON.parse(rawText.slice(start, end + 1));
+        parsed = JSON.parse(unwrapFencedJson(rawText));
       } catch {
         return { valid: false as const, reason: 'response was not valid JSON' };
       }
@@ -146,7 +166,18 @@ export async function scoreItems(
       if (!Array.isArray(scores)) {
         return { valid: false as const, reason: 'response had no scores array' };
       }
-      return { valid: true as const, data: { scores: scores.filter(isScore) } };
+      const valid = scores.filter(isScore);
+      // Items were sent (the `items.length === 0` case returned above), so a
+      // response that survives validation with nothing left is a scoring
+      // failure — the model answered with the wrong shape for every item —
+      // not a legitimate "nothing to score" read.
+      if (valid.length === 0) {
+        return {
+          valid: false as const,
+          reason: 'no item in the scores array matched the expected shape',
+        };
+      }
+      return { valid: true as const, data: { scores: valid } };
     },
   };
 
@@ -154,20 +185,58 @@ export async function scoreItems(
   try {
     const response = await deps.llmClient.complete(request);
     scores = response.data.scores;
-  } catch {
-    // Caller logs; see the doc comment on why this degrades rather than throws.
-    return fallback;
+  } catch (error) {
+    if (deps.logger !== undefined) {
+      const trace_id = deps.trace_id ?? 'unattributed';
+      const message =
+        'market intelligence: item scoring failed; this batch degrades to UNSCORED ' +
+        '(neutral, floor confidence) rather than a genuine neutral read';
+      // Two literal branches, not a computed `event:`, so
+      // `log-event-code.test.ts`'s spelling scan (a textual grep, not an
+      // evaluator) sees both codes.
+      if (error instanceof LlmMalformedResponseError) {
+        logCaughtFailure(
+          deps.logger,
+          {
+            trace_id,
+            stage: 'market_intelligence',
+            level: 'warn',
+            event: 'mi_scoring_malformed_response',
+            message,
+          },
+          error,
+          { items: items.length, error_kind: 'malformed_response' },
+        );
+      } else {
+        logCaughtFailure(
+          deps.logger,
+          {
+            trace_id,
+            stage: 'market_intelligence',
+            level: 'warn',
+            event: 'mi_scoring_provider_failure',
+            message,
+          },
+          error,
+          { items: items.length, error_kind: 'transport' },
+        );
+      }
+    }
+    return { scores: fallback, degraded: true };
   }
 
   const byIndex = new Map(scores.map((score) => [score.index, score]));
 
-  return items.map((_, index) => {
-    const score = byIndex.get(index);
-    if (score === undefined) return { index, ...UNSCORED };
-    return {
-      index,
-      sentiment: score.sentiment,
-      confidence: clampConfidence(score.confidence),
-    };
-  });
+  return {
+    scores: items.map((_, index) => {
+      const score = byIndex.get(index);
+      if (score === undefined) return { index, ...UNSCORED };
+      return {
+        index,
+        sentiment: score.sentiment,
+        confidence: clampConfidence(score.confidence),
+      };
+    }),
+    degraded: false,
+  };
 }

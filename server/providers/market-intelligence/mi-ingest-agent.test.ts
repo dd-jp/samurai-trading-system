@@ -75,6 +75,11 @@ function newsClient(articles: AlpacaNewsArticle[]) {
   } as unknown as AlpacaNewsClient;
 }
 
+/** A client whose `complete` always throws — the shape a provider outage takes. */
+function failingScoringClient(message = 'llm down') {
+  return { complete: async () => Promise.reject(new Error(message)) };
+}
+
 function build(
   articles: AlpacaNewsArticle[],
   sentiment: 1 | 0 | -1 = 1,
@@ -278,6 +283,72 @@ describe('MiIngestAgent', () => {
     // have traded on the technical analyst alone.
     await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false);
     expect(store.getContext('stocks', WINDOW, 't').news).toEqual([]);
+  });
+
+  /**
+   * #1392: `scoreItems` used to fall back to `UNSCORED` (sentiment 0,
+   * confidence 0.05 — a genuine-looking neutral read) on ANY failure, and
+   * this method archived that fallback exactly like a real score. A provider
+   * outage was then indistinguishable from a neutral news day, on the store
+   * and on the dashboard, and it reinstated #625's conviction ceiling
+   * invisibly. Archiving nothing on a degraded batch — the same posture the
+   * fetch-failure and (later) spend-cap-refusal branches already took — is
+   * what keeps that distinguishable: a degraded batch produces NO_DATA_MARKER
+   * like an outage should, not a fabricated neutral opinion.
+   */
+  it('archives nothing and logs the cause when scoring fails, rather than a fabricated neutral read', async () => {
+    const logger = recordingLogger();
+    const archive = new MiArchiveStore();
+    const store = new MarketIntelligenceStore(clock);
+    const agent = new MiIngestAgent({
+      archive,
+      store,
+      newsClient: newsClient([article()]),
+      llmClient: failingScoringClient(),
+      clock,
+      assetClasses: ['stocks'],
+      spendCap: ADMITS,
+      logger,
+    });
+
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false);
+
+    expect(archive.rawRows('alpaca-news')).toEqual([]);
+    expect(store.getContext('stocks', WINDOW, 't').news).toEqual([]);
+    expect(
+      logger.entries.some(
+        (entry) => entry.level === 'warn' && entry.event === 'mi_ingest_scoring_degraded',
+      ),
+    ).toBe(true);
+  });
+
+  /**
+   * The counterpart to the archiving assertion above: nothing was written for
+   * the failed article, so `hasItem` (the `fresh` filter) does not yet know
+   * it, and the very next refresh — still inside the overlapping LOOKBACK_MS
+   * window — gets to try scoring it again rather than being poisoned at
+   * UNSCORED forever.
+   */
+  it('retries the same article on the next refresh after a scoring outage, once scoring recovers', async () => {
+    const archive = new MiArchiveStore();
+    const store = new MarketIntelligenceStore(clock);
+    const agent = new MiIngestAgent({
+      archive,
+      store,
+      newsClient: newsClient([article()]),
+      llmClient: failingScoringClient(),
+      clock,
+      assetClasses: ['stocks'],
+      spendCap: ADMITS,
+    });
+
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false);
+    expect(store.getContext('stocks', WINDOW, 't').news).toEqual([]);
+
+    (agent as unknown as { deps: { llmClient: unknown } }).deps.llmClient = scoringClient().client;
+
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(true);
+    expect(store.getContext('stocks', WINDOW, 't').news).toHaveLength(1);
   });
 
   /**
