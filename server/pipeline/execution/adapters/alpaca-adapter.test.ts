@@ -1039,12 +1039,17 @@ describe('AlpacaBrokerAdapter.fetchNewFills failure logging (#609)', () => {
         ),
     });
     const logger = recordingLogger();
+    // #1123: a clock reading before either fill's `filled_at`, so the new
+    // since-floor invariant audit stays quiet here — this test is about #609's
+    // per-source failure logging, not #1123's separate check.
+    const clock = new FixedClock(new Date('2026-07-15T14:00:00Z'));
     const adapter = new AlpacaBrokerAdapter({
       client,
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
       ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
       logger,
+      clock,
     });
     await adapter.submitBracket(makeBracket({ client_order_id: 'healthy-lot' }));
     await adapter.submitBracket(makeBracket({ client_order_id: 'broken-lot' }));
@@ -1082,12 +1087,15 @@ describe('AlpacaBrokerAdapter.fetchNewFills failure logging (#609)', () => {
         }),
       ),
     });
+    // #1123: a clock reading before `filled_at`, same reason as the test above.
+    const clock = new FixedClock(new Date('2026-07-15T14:00:00Z'));
     const adapter = new AlpacaBrokerAdapter({
       client,
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
       ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
       logger,
+      clock,
     });
     await adapter.submitBracket(makeBracket());
 
@@ -1107,18 +1115,188 @@ describe('AlpacaBrokerAdapter.fetchNewFills failure logging (#609)', () => {
   it('logs nothing for an unpriced fill with a working journal (#524, not a #609 failure)', async () => {
     const logger = recordingLogger();
     const client = makeClient({ getOrder: vi.fn().mockResolvedValue(unpricedOrder()) });
+    // #1123: a clock reading before `unpricedOrder`'s `filled_at`, same reason
+    // as the two tests above.
+    const clock = new FixedClock(new Date('2026-07-15T14:00:00Z'));
     const adapter = new AlpacaBrokerAdapter({
       client,
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
       ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
       logger,
+      clock,
     });
     await adapter.submitBracket(makeBracket());
 
     const fills = await adapter.fetchNewFills(new Date(0));
 
     expect(fills).toHaveLength(0);
+    expect(logger.entries).toEqual([]);
+  });
+});
+
+/**
+ * #1123: the Alpaca since-floor invariant audit. `ingest-fills.ts`'s global
+ * `since` floor is only correct if no fill is ever dated earlier than the
+ * `opened_at` of the lot it belongs to (#1096 fixed a violation of this in
+ * `SimulatedBrokerAdapter`). This adapter has no access to the true
+ * `opened_at` — `execute.ts` reads it, not this adapter — so these assert
+ * against the local proxy this ticket adds instead: `bracketSubmittedAt`, a
+ * clock read taken before `submitBracket`'s POST and therefore provably
+ * `<=` the true `opened_at` by construction (`execute.ts` reads `opened_at`
+ * before calling `submitBracket` at all).
+ */
+describe('AlpacaBrokerAdapter since-floor invariant audit (#1123)', () => {
+  const T0 = new Date('2026-07-20T16:00:00Z');
+
+  it('warns when a fill is dated before its own bracket was submitted', async () => {
+    const clock = new FixedClock(T0);
+    const logger = recordingLogger();
+    const client = makeClient({
+      getOrder: vi.fn().mockResolvedValue(
+        acceptedOrder({
+          status: 'filled',
+          filled_qty: '100',
+          filled_avg_price: '100.02',
+          // Earlier than T0, the clock read at submission time below.
+          filled_at: '2026-07-20T15:59:00Z',
+        }),
+      ),
+    });
+    const adapter = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger,
+      clock,
+    });
+    await adapter.submitBracket(makeBracket());
+
+    const fills = await adapter.fetchNewFills(new Date(0));
+
+    // Flagged, not clamped: the fill is still booked at its reported date.
+    expect(fills).toHaveLength(1);
+    expect(logger.entries).toEqual([
+      expect.objectContaining({
+        level: 'warn',
+        event: 'alpaca_fill_predates_bracket_submission',
+        payload: expect.objectContaining({
+          client_order_id: 'key-aapl-1355',
+          leg: 'entry',
+          filled_at: '2026-07-20T15:59:00.000Z',
+          submitted_at: T0.toISOString(),
+        }),
+      }),
+    ]);
+  });
+
+  it('stays quiet for a fill dated after its bracket was submitted', async () => {
+    const clock = new FixedClock(T0);
+    const logger = recordingLogger();
+    const client = makeClient({
+      getOrder: vi.fn().mockResolvedValue(
+        acceptedOrder({
+          status: 'filled',
+          filled_qty: '100',
+          filled_avg_price: '100.02',
+          filled_at: '2026-07-20T16:00:01Z',
+        }),
+      ),
+    });
+    const adapter = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger,
+      clock,
+    });
+    await adapter.submitBracket(makeBracket());
+
+    await adapter.fetchNewFills(new Date(0));
+
+    expect(logger.entries).toEqual([]);
+  });
+
+  // The regression this design exists to prevent: `brackets` is never pruned
+  // (see its own doc comment), so a long-closed bracket is re-polled every
+  // sweep and would trip the OLD, global `since` floor constantly once
+  // `since` has moved on to newer lots — that is noise, not a genuine
+  // per-lot violation, and must not warn.
+  it('stays quiet for a re-polled, already-closed bracket even once the global since floor has moved past its fill', async () => {
+    const clock = new FixedClock(T0);
+    const logger = recordingLogger();
+    const client = makeClient({
+      getOrder: vi.fn().mockResolvedValue(
+        acceptedOrder({
+          status: 'filled',
+          filled_qty: '100',
+          filled_avg_price: '100.02',
+          filled_at: '2026-07-20T16:00:01Z',
+        }),
+      ),
+    });
+    const adapter = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger,
+      clock,
+    });
+    await adapter.submitBracket(makeBracket());
+    await adapter.fetchNewFills(new Date(0));
+
+    // A later sweep, `since` now well past this bracket's own fill —
+    // `brackets` is never pruned, so it is polled again regardless.
+    const laterSince = new Date('2026-07-20T18:00:00Z');
+    await adapter.fetchNewFills(laterSince);
+
+    expect(logger.entries).toEqual([]);
+  });
+
+  it('does not audit a bracket restored after a restart, which has no local submission-time proxy', async () => {
+    const clock = new FixedClock(T0);
+    const state = new InMemoryBrokerStateStore();
+    const firstProcessAdapter = new AlpacaBrokerAdapter({
+      client: makeClient(),
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
+      clock,
+      state,
+    });
+    await firstProcessAdapter.submitBracket(makeBracket());
+
+    // Simulate a restart: a fresh adapter over the same durable state has no
+    // in-memory `bracketSubmittedAt` entry for this bracket, only `brackets`
+    // (restored from `state.loadBrackets`).
+    const logger = recordingLogger();
+    const client = makeClient({
+      getOrder: vi.fn().mockResolvedValue(
+        acceptedOrder({
+          status: 'filled',
+          filled_qty: '100',
+          filled_avg_price: '100.02',
+          // Earlier than T0 — would warn if this bracket had a local proxy.
+          filled_at: '2026-07-20T15:00:00Z',
+        }),
+      ),
+    });
+    const recoveredAdapter = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger,
+      clock,
+      state,
+    });
+
+    await recoveredAdapter.fetchNewFills(new Date(0));
+
     expect(logger.entries).toEqual([]);
   });
 });

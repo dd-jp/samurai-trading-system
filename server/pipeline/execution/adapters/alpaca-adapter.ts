@@ -37,6 +37,7 @@ import {
   type Logger,
   logCaughtFailure,
   SystemClock,
+  safeLog,
   TokenBucket,
 } from '../../../shared/index.js';
 import { sanitizeBrokerError } from '../broker-error.js';
@@ -65,6 +66,7 @@ import {
   collectFill,
   fromAlpacaSymbol,
   mapOrderState,
+  resolveFilledAt,
   toAlpacaSymbol,
   UnpricedFillError,
 } from './alpaca-order-normalization.js';
@@ -204,6 +206,25 @@ export interface AlpacaBrokerAdapterInput {
 export class AlpacaBrokerAdapter implements BrokerAdapter {
   /** client_order_id -> the bracket parent's Alpaca order id. */
   private readonly brackets = new Map<string, string>();
+  /**
+   * client_order_id -> a local clock read taken before `submitBracket`'s POST,
+   * strictly `<=` the lot's own `opened_at` (execute.ts reads `opened_at`
+   * before calling `submitBracket` at all). #1123: this adapter has no
+   * `SharedStore` access to `opened_at` itself, so `fetchNewFills` uses this
+   * as a same-lot proxy bound to flag (never clamp) a fill dated earlier than
+   * it — a violation of the invariant `ingest-fills.ts`'s global `since` floor
+   * depends on. Reading the clock BEFORE the POST (not after, next to
+   * `brackets.set` below) keeps the bound conservative: a later read could
+   * exceed the true `opened_at` by the request round trip and flag benign
+   * fills landing inside that window, which the earlier read cannot.
+   * Same lifecycle as `brackets` (never pruned, empty across a restart) — no
+   * new unbounded-growth axis, see `brackets`'s own doc above — but a STRICT
+   * SUBSET of its keys: `brackets` also gains entries from the constructor's
+   * `loadBrackets` restore and from `getOrder`'s recovery path, neither of
+   * which has a same-process clock read to offer, so those brackets stay
+   * unaudited (see `auditSinceFloorInvariant`'s doc).
+   */
+  private readonly bracketSubmittedAt = new Map<string, Date>();
   /**
    * client_order_id -> the flatten's own Alpaca order id (#517), tracked
    * in-memory only — see `fetchNewFills`'s "flatten sweep" comment for the
@@ -569,6 +590,8 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     );
     const submitted: NativeBracketRequest = { ...order, entry, stop, target };
 
+    // Read before the POST, not after — see `bracketSubmittedAt`'s doc comment.
+    const submittedAt = this.clock.now();
     const response = await this.call('submitBracket', () =>
       this.input.client.submitOrder({
         symbol: toAlpacaSymbol(submitted.instrument, submitted.asset_class),
@@ -584,6 +607,13 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     );
 
     this.brackets.set(order.client_order_id, response.id);
+    // First-write-wins: a retried/idempotent resubmission under the same
+    // client_order_id (`this.call`'s retry, or a venue no-op on an id it
+    // already knows) reads the clock again later, which would move this
+    // bound PAST fills the first, true submission already covers.
+    if (!this.bracketSubmittedAt.has(order.client_order_id)) {
+      this.bracketSubmittedAt.set(order.client_order_id, submittedAt);
+    }
 
     const legIds = (response.legs ?? []).map((leg) => leg.id);
 
@@ -924,6 +954,68 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   }
 
   /**
+   * #1123: observability, not enforcement — this WARNS and never clamps. A fill
+   * this flags still gets collected by `collectFill` at its venue-reported (or
+   * `observedAt`-fallback) date; nothing here rewrites it. Clamping would
+   * fabricate an event time on a live-money path with no evidence, from this
+   * audit or otherwise, that it is ever needed — the empirically correct
+   * response to a real violation is to fix the source, the way #1096 fixed
+   * `SimulatedBrokerAdapter`, not to paper over it here.
+   *
+   * Compares against `bracketSubmittedAt`, NOT the global `since` floor:
+   * `brackets` is never pruned (see its own doc), so an old, long-closed
+   * bracket is re-polled every sweep and would trip `filledAt < since`
+   * constantly and harmlessly once `since` has moved on to newer lots — noise,
+   * not signal. `bracketSubmittedAt` is a per-bracket, locally-anchored bound
+   * instead: silent for a restored (post-restart) bracket, which has no entry
+   * in the map and no local proxy for its `opened_at` to compare against.
+   *
+   * `submittedAt` is this host's own clock; `filled_at` is Alpaca's server
+   * clock. The first thing to check on seeing this warning is host clock
+   * skew (NTP drift), not the venue — the pre-POST read only buys the
+   * network round trip as slack (measured minimum venue gap: 266ms).
+   */
+  private auditSinceFloorInvariant(
+    order: AlpacaOrder | AlpacaOrderLeg,
+    leg: NormalizedFill['leg'],
+    clientOrderId: string,
+    instrument: string,
+    observedAt: Date,
+  ): void {
+    const filledQty = Number.parseFloat(order.filled_qty);
+    if (!Number.isFinite(filledQty) || filledQty <= 0) return;
+
+    const submittedAt = this.bracketSubmittedAt.get(clientOrderId);
+    if (submittedAt === undefined) return;
+
+    const filledAt = resolveFilledAt(order, observedAt);
+    if (filledAt.getTime() >= submittedAt.getTime()) return;
+
+    // #1123: `ingest-fills.ts`'s global `since` floor is only correct if every
+    // adapter upholds "no fill dated earlier than its own lot's `opened_at`"
+    // (#1096 fixed a violation of this in `SimulatedBrokerAdapter`) — this is
+    // what makes the invariant OBSERVABLE on the Alpaca path, which an audit
+    // against real paper-trading responses found no violation of (see this
+    // event's introducing PR for the audit's method and result).
+    safeLog(this.logger, {
+      trace_id: ALPACA_FILL_SWEEP_TRACE_ID,
+      stage: 'execution',
+      event: 'alpaca_fill_predates_bracket_submission',
+      level: 'warn',
+      message:
+        '#1123: Alpaca fill dated before its own bracket was submitted — the ingest-fills since-floor invariant may be violated',
+      payload: {
+        client_order_id: clientOrderId,
+        broker_fill_id: order.id,
+        leg,
+        instrument,
+        filled_at: filledAt.toISOString(),
+        submitted_at: submittedAt.toISOString(),
+      },
+    });
+  }
+
+  /**
    * The fill feed `ingestFills()` drains, in the same shape
    * `SimulatedBrokerAdapter.fetchNewFills` already produces. Point-in-time:
    * never returns a fill dated before `since`.
@@ -984,8 +1076,10 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         );
 
         const instrument = fromAlpacaSymbol(symbolOf(entry));
+        this.auditSinceFloorInvariant(entry, 'entry', clientOrderId, instrument, observedAt);
         collectFill(entry, 'entry', clientOrderId, instrument, since, observedAt, fills);
         for (const leg of entry.legs ?? []) {
+          this.auditSinceFloorInvariant(leg, legName(leg), clientOrderId, instrument, observedAt);
           collectFill(leg, legName(leg), clientOrderId, instrument, since, observedAt, fills);
         }
       } catch (error) {
