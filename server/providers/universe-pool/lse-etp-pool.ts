@@ -241,10 +241,10 @@
  * negative-expectancy on unconditional entry, and real spreads are still
  * unmeasured on any live venue — #666 closed 2026-08-27 out of scope,
  * following the T212-to-Saxo pivot, without delivering that measurement;
- * #750 now gates on it instead. #1053 closed 2026-09-03 without delivering
- * it; the chain that would deliver it — #1034 → #1035 — carries
- * `needs-decision` pending whether Saxo's `infoprices` spread (#1310)
- * supersedes DMD, per ADR-0016). Rows were dropped from this
+ * #750 now gates on it instead; the chain that would deliver it —
+ * #1034 → #1035 — carries `needs-decision` pending whether Saxo's
+ * `infoprices` spread (#1310) supersedes DMD, per ADR-0016). Rows were
+ * dropped from this
  * pass, not padded around: a
  * GraniteShares Spotify line was carried through T212 verification and then
  * left out because no fetched page confirmed its ISIN or quoting currency.
@@ -468,10 +468,10 @@ export interface LseEtpPoolRow {
    * shrank on that basis. This is also NOT a spread or liquidity
    * measurement — #666, which would have measured real T212 spreads, closed
    * the same day for the same reason; #750 now gates on a real per-instrument
-   * spread measurement instead. #1053 closed 2026-09-03 without delivering
-   * it; the chain that would deliver it — #1034 → #1035 — carries
-   * `needs-decision` pending whether Saxo's `infoprices` spread (#1310)
-   * supersedes DMD, per ADR-0016. Every `true` here means only
+   * spread measurement instead; the chain that would deliver it —
+   * #1034 → #1035 — carries `needs-decision` pending whether Saxo's
+   * `infoprices` spread (#1310) supersedes DMD, per ADR-0016. Every `true`
+   * here means only
    * "T212 lists the instrument" — not "tradeable", not "the spread is
    * tradeable", and not anything about Saxo, which this field has never
    * checked.
