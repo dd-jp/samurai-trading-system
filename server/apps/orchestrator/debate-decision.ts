@@ -45,7 +45,7 @@ export { isDegradedDecision };
  * what neither of them can (#1393): a future fallback that hands back a
  * neutral result for a reason that is not a budget and not an admission
  * refusal. Without this the bare `debate.direction` fallthrough below would
- * write `neutral`, indistinguishable from a genuine wash — the exact
+ * write `neutral`, indistinguishable from a genuine wash — the exact state
  * `debateWasDegraded` (trader/decide.ts) reads to classify the same result,
  * so the two stay in agreement.
  */

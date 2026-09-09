@@ -137,7 +137,7 @@ export interface DebateResult {
    * uses (#687): an optional flag lets a producer omit it and hand the
    * Trader a silent default.
    *
-   * The operative rule is narrower than "a debate happened": `true` covers
+   * The operative rule is BROADER than "a debate happened": `true` covers
    * every result some accountable process produced — a converged or
    * round-capped debate, a `timed_out` partial with a real synthesis from
    * a round that finished, a `rate_limited` refusal, a deterministic
@@ -147,11 +147,12 @@ export interface DebateResult {
    * future fallback that hands back a neutral scaffold for a reason NONE
    * of the above account for — `timed_out` and `rate_limited` both
    * undefined, and no other recognized producer path ran. That is the
-   * #1393 case this field exists to name; a producer that reads the
-   * narrower "was there literally an LLM debate" sense of the name below
-   * would wrongly set `false` on the axis-vote and no-axis-vote control-arm
-   * paths and flip their classification from `declined_on_signal` to
-   * `could_not_decide`.
+   * #1393 case this field exists to name; a producer that read the name
+   * narrowly, as "was there literally an LLM debate", would wrongly set
+   * `false` on the axis-vote and no-axis-vote control-arm paths and flip
+   * their classification from `declined_on_signal` to `could_not_decide`
+   * — exactly the misclassification #1393 exists to prevent, just aimed
+   * at the wrong two paths.
    *
    * Named `read` for that broad sense — "something accountable happened
    * here, not nothing" — not the narrow "an LLM debate ran" sense a literal
@@ -159,18 +160,16 @@ export interface DebateResult {
    * for no behavioural gain; stating the actual rule here does the same job
    * without the churn.
    *
-   * `timed_out` and `rate_limited` already discriminate the two read
-   * failures this contract names today, but neither is universal — a
-   * future fallback that produces a neutral result for some OTHER reason
-   * (a parse failure, a malformed provider response, anything not shaped
-   * like a budget or an admission refusal) would set neither, and
-   * `debateWasDegraded` (trader/decide.ts) would then read it as a genuine
-   * decline. That result would log as `declined_on_signal` — the word that
-   * means the debate was read and passed — when nothing was read.
-   * `debateWasDegraded` checks `!read` alongside the two flags (order
-   * doesn't matter in a boolean OR); the orchestrator's `debateDecisionWord`
-   * (#1080) checks it last, after both — so the two stay in agreement about
-   * the same result regardless of check order.
+   * `timed_out` and `rate_limited` discriminate the two read failures this
+   * contract names today, but neither is universal: a future fallback
+   * producing a neutral result for some OTHER reason would set neither,
+   * and `debateWasDegraded` (trader/decide.ts) would read it as a genuine
+   * decline — logging `declined_on_signal`, the word that means the debate
+   * was read and passed, when nothing was read. `debateWasDegraded` checks
+   * `!read` alongside the two flags (order doesn't matter in a boolean OR);
+   * the orchestrator's `debateDecisionWord` (#1080) checks it last, after
+   * both — so the two stay in agreement about the same result regardless
+   * of check order.
    *
    * No production producer sets this to `false` yet: every current path
    * sets `true`, because every one of them either ran a real debate,
