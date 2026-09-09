@@ -327,12 +327,14 @@ export class TelegramBotApiClient implements TelegramClient {
    * prevent: the ten alert channels log only in their `.catch`, and a capped
    * send SUCCEEDS, so no other line would ever carry the dropped tail.
    *
-   * The body goes in `payload`, not `message`, and that is what keeps this
-   * module's "never log the bot token" promise intact across an arbitrary
-   * blob: `redactPayload` walks every string it reaches and runs
-   * `maskCredentials` over it, so a token appearing in alert prose is masked
-   * by pattern rather than by the accident that `text` does not carry one
-   * today. Anything moving this body back into `message` loses that.
+   * The body goes in `payload`, not `message`: `redactPayload` walks every
+   * string it reaches and runs `maskCredentials` over it, so a token
+   * appearing in alert prose is masked by pattern rather than by the
+   * accident that `text` does not carry one today. `formatLogLine` masks
+   * `message` the same way now too (#1133), so this convention is no
+   * longer the only thing standing between a stray token and the log — but
+   * `message` has no length cap, so a long unmasked stretch either side of
+   * a token still costs more log volume than routing it through `payload`.
    *
    * Nothing bridges logger output into an alert channel, so this warn cannot
    * re-enter the transport that emitted it.
@@ -749,11 +751,13 @@ export class TelegramBotApiClient implements TelegramClient {
    * inside the window).
    *
    * `error: detail` in the `#log` payload below is masked centrally by
-   * `formatLogLine`'s `redactPayload` walk — but `message` is a plain string
-   * the logger never touches, so `detail` must be masked with
-   * `sanitizeLogText` before it is interpolated there, or a bot-token-shaped
-   * `TypeError` message (a misconfigured `baseUrl`, say) would reach the log
-   * unmasked in `message` while its `payload` twin was protected.
+   * `formatLogLine`'s `redactPayload` walk, and `message` is masked there
+   * too now (#1133) via `maskCredentials` directly — a bot-token-shaped
+   * `TypeError` message (a misconfigured `baseUrl`, say) no longer depends
+   * on this call site to stay out of the log. `detail` is still run through
+   * `sanitizeLogText` before interpolation below regardless: `formatLogLine`
+   * masks but does not cap `message`, and `sanitizeLogText` still owns that
+   * length bound.
    */
   #recordDeliveryFailure(chatId: string, method: string, text: string, error: unknown): void {
     const detail = describeThrownSafely(error);
@@ -768,12 +772,12 @@ export class TelegramBotApiClient implements TelegramClient {
           timestamp: new Date(),
         });
       } catch (recordError) {
-        // Same reason `detail` below is wrapped: `redactPayload` never walks
-        // this plain string `message`, so an unmasked `recordError` here is
-        // exactly the token-bearing-`TypeError` threat this module's header
-        // documents — e.g. a misconfigured storage `baseUrl`/driver whose
-        // thrown message happens to echo back the failed insert's own
-        // token-bearing text (#1108 third review pass).
+        // Same reason `detail` above is wrapped: `sanitizeLogText` still owns
+        // the length cap `formatLogLine`'s central message mask (#1133)
+        // doesn't apply, for the same token-bearing-`TypeError` threat this
+        // module's header documents — e.g. a misconfigured storage
+        // `baseUrl`/driver whose thrown message happens to echo back the
+        // failed insert's own token-bearing text (#1108 third review pass).
         this.#log(
           'error',
           'telegram_delivery_record_failed',

@@ -302,6 +302,31 @@ describe('formatLogLine payload serialization (#1061)', () => {
   });
 });
 
+describe('formatLogLine message masking (#1133)', () => {
+  const BASE = {
+    trace_id: 't1',
+    stage: 's',
+    level: 'info' as const,
+  };
+
+  it('masks a Telegram bot-token-shaped credential interpolated into message, not just payload', () => {
+    const line = formatLogLine({
+      ...BASE,
+      message:
+        'TypeError: Failed to parse URL from https://api.telegram.org/bot123456:FAKE-TOKEN-VALUE/sendMessage',
+    });
+
+    expect(line).not.toContain('FAKE-TOKEN-VALUE');
+    expect(line).toContain('[REDACTED]');
+  });
+
+  it('leaves an ordinary message with no credential syntax unchanged', () => {
+    const line = formatLogLine({ ...BASE, message: 'decided long AAPL' });
+
+    expect(line).toContain('"message":"decided long AAPL"');
+  });
+});
+
 describe('JsonLogger when stdout fails (#714)', () => {
   /** The soak case: a pipe dies asynchronously and the run must continue. */
   it('degrades to the file sink on an async stdout error and keeps logging there', () => {
