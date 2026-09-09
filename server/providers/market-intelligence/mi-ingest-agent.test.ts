@@ -618,4 +618,47 @@ describe('MiIngestAgent', () => {
     expect(news[0]?.source).toBe('benzinga');
     expect(news.some((entry) => entry.source === MI_SOURCES.polymarket)).toBe(false);
   });
+
+  /**
+   * #1420: narrower than the batch-wide outage above — the batch answers
+   * fine, but the model's response omits one item's index. Before this fix
+   * that item was archived and served exactly like a genuine neutral read
+   * (`sentiment: 0, confidence: 0.05`, no marker); `fundamental-analyst.ts`
+   * averaged it into `netSentiment` as if the model had actually read the
+   * headline and found nothing directional in it.
+   */
+  it('archives and serves an item the model omitted from its response tagged omitted: true, indistinguishable no longer', async () => {
+    const archive = new MiArchiveStore();
+    const store = new MarketIntelligenceStore(clock);
+    const omitsSecondIndex = {
+      async complete(request: { prompt: string; parseResponse: (raw: string) => unknown }) {
+        const raw = JSON.stringify({ scores: [{ index: 0, sentiment: 1, confidence: 0.8 }] });
+        const parsed = request.parseResponse(raw) as { valid: boolean; data: unknown };
+        return { data: parsed.data, raw_text: raw, latency_ms: 1 };
+      },
+    };
+    const agent = new MiIngestAgent({
+      archive,
+      store,
+      newsClient: newsClient([
+        article({ id: '1001', headline: 'Apple beats on revenue' }),
+        article({ id: '1002', headline: 'Apple faces antitrust probe' }),
+      ]),
+      // biome-ignore lint/suspicious/noExplicitAny: minimal LlmClient stand-in.
+      llmClient: omitsSecondIndex as any,
+      clock,
+      assetClasses: ['stocks'],
+      spendCap: ADMITS,
+    });
+
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(true);
+
+    const news = store.getContext('stocks', WINDOW, 't').news;
+    expect(news).toHaveLength(2);
+    const scored = news.find((item) => item.headline === 'Apple beats on revenue');
+    const omitted = news.find((item) => item.headline === 'Apple faces antitrust probe');
+    expect(scored).toMatchObject({ sentiment: 1, confidence: 0.8 });
+    expect(scored?.omitted).toBeUndefined();
+    expect(omitted).toMatchObject({ sentiment: 0, confidence: 0.05, omitted: true });
+  });
 });

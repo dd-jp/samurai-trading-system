@@ -53,6 +53,15 @@ export interface ItemScore {
   index: number;
   sentiment: 1 | 0 | -1;
   confidence: number;
+  /**
+   * True only for the synthesized fallback `scoreItems` builds when an
+   * otherwise-valid response omitted this index (#1420). Absent — not
+   * `false` — on every score the model actually produced, so a downstream
+   * consumer can tell "the model read this and found nothing directional"
+   * from "the model never answered for this one" by testing truthiness, the
+   * same way `IntelligenceItem.scope` is absent rather than defaulted.
+   */
+  omitted?: boolean;
 }
 
 /** The text handed to the model. Deliberately minimal: headline plus entity. */
@@ -71,9 +80,10 @@ export interface ScorableItem {
  * the cause itself before returning this for every item (see
  * `ScoreItemsResult.degraded`). The PER-ITEM omission fallback (one index
  * missing from an otherwise-valid response, see the `byIndex.get` branch
- * below) logs nothing and leaves `degraded: false` — still indistinguishable
- * from a genuine neutral read for that one item. Tracked, not fixed here:
- * #1420.
+ * below) logs nothing and leaves `degraded: false`, but the returned score
+ * itself now carries `omitted: true` (#1420) — the downstream consumer that
+ * cares (`fundamental-analyst.ts`'s evidence average) can distinguish it
+ * from a genuine neutral read even without a log line.
  *
  * Either way the value is chosen so a scoring gap degrades toward "no
  * directional opinion" rather than toward a fabricated one: `sentiment: 0`
@@ -146,10 +156,10 @@ export interface ScoreItemsResult {
  *   returning — distinguishable from a genuine unanimous-neutral news day
  *   (#1392), which is the whole point of this function.
  * - An item the model's response simply omitted an index for, inside an
- *   otherwise-valid batch, falls back to `UNSCORED` for that one item with the
- *   batch's `degraded` left at `false` (see `UNSCORED`'s own doc) — nothing is
- *   logged for it today. That gap is real and tracked as #1420, not fixed
- *   here; do not read this doc as claiming it is covered.
+ *   otherwise-valid batch, falls back to `UNSCORED` for that one item, tagged
+ *   `omitted: true` (#1420), with the batch's `degraded` left at `false` (see
+ *   `UNSCORED`'s own doc) — nothing is logged for it, but the marker survives
+ *   into `IntelligenceItem` so an evidence average can exclude it.
  *
  * Either way, a scoring gap must not take down the tick — the analysts
  * degrade to "no opinion", a state they already handle, rather than the
@@ -252,7 +262,7 @@ export async function scoreItems(
   return {
     scores: items.map((_, index) => {
       const score = byIndex.get(index);
-      if (score === undefined) return { index, ...UNSCORED };
+      if (score === undefined) return { index, ...UNSCORED, omitted: true };
       return {
         index,
         sentiment: score.sentiment,

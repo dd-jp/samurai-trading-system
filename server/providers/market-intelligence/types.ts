@@ -70,6 +70,17 @@ export interface IntelligenceItem {
   confidence: number;
   summary?: string;
   url?: string;
+  /**
+   * True when `sentiment`/`confidence` are the `UNSCORED` fallback for an
+   * index the model's response omitted from an otherwise-valid batch
+   * (`item-scorer.ts`'s `scoreItems`, #1420) rather than a genuine read —
+   * absent on every item the model actually scored. Consumers that average
+   * sentiment/confidence over a list of items (`fundamental-analyst.ts`)
+   * must exclude an item carrying this the same way they exclude a mute
+   * analyst, so a scoring gap degrades to "excluded" rather than diluting
+   * the average toward a fabricated neutral.
+   */
+  omitted?: boolean;
 }
 
 /**

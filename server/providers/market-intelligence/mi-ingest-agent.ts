@@ -93,7 +93,7 @@ export interface MiIngestAgentDeps {
 function toItem(
   article: AlpacaNewsArticle,
   entity: string,
-  score: { sentiment: 1 | 0 | -1; confidence: number },
+  score: { sentiment: 1 | 0 | -1; confidence: number; omitted?: boolean },
 ): IntelligenceItem {
   return {
     // Stable and content-derived, so a re-ingest cannot produce a second item.
@@ -106,6 +106,7 @@ function toItem(
     sentiment: score.sentiment,
     confidence: score.confidence,
     ...(article.summary.length > 0 ? { summary: article.summary } : {}),
+    ...(score.omitted === true ? { omitted: true as const } : {}),
   };
 }
 
@@ -353,7 +354,15 @@ export class MiIngestAgent {
     this.#degradedStreak.set(instrument, 0);
 
     const archivedItems: ArchivedItem[] = pairs.map(({ article, entity }, index) => {
-      const score = scores[index] ?? { sentiment: 0 as const, confidence: 0.05 };
+      // `scoreItems` always returns exactly one score per supplied item, so
+      // this branch should be unreachable; if it is ever hit the item is
+      // exactly as unscored as a `byIndex.get` miss, so it carries the same
+      // `omitted` marker rather than a bare neutral read.
+      const score = scores[index] ?? {
+        sentiment: 0 as const,
+        confidence: 0.05,
+        omitted: true as const,
+      };
       return {
         source: SOURCE_ALPACA,
         native_id: article.id,

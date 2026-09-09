@@ -66,12 +66,11 @@ describe('scoreItems', () => {
     expect(result.scores).toEqual([{ index: 0, sentiment: 1, confidence: 0.8 }]);
   });
 
-  // Narrower than #1392's batch-wide scope, not an endorsement: this item is
-  // indistinguishable from a genuine unanimous-neutral read (`degraded:
-  // false`), the same gap #1392 fixed at the batch level. Tracked as #1420
-  // rather than fixed here — the fix is a per-item degraded marker through
-  // `ArchivedItem`, which is out of this ticket's scope.
-  it('an item the model omitted falls back to UNSCORED, currently indistinguishable from a genuine neutral read (tracked follow-up, not fixed here)', async () => {
+  // Narrower than #1392's batch-wide scope: the whole batch answered fine,
+  // one index inside it did not. #1420 fixed this by tagging the fallback
+  // `omitted: true` — distinguishable from a genuine unanimous-neutral read
+  // even though `degraded` stays `false` for the batch.
+  it('an item the model omitted falls back to UNSCORED tagged omitted: true, distinguishable from a genuine neutral read', async () => {
     const client = new MockLlmClient();
     client.enqueueText(JSON.stringify({ scores: [{ index: 0, sentiment: 1, confidence: 0.8 }] }));
 
@@ -80,7 +79,7 @@ describe('scoreItems', () => {
     expect(result.degraded).toBe(false);
     expect(result.scores).toEqual([
       { index: 0, sentiment: 1, confidence: 0.8 },
-      { index: 1, ...UNSCORED },
+      { index: 1, ...UNSCORED, omitted: true },
     ]);
   });
 

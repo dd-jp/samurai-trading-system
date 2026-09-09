@@ -160,6 +160,116 @@ describe('fundamentalAnalyst', () => {
     expect(view.key_points.join(' ')).not.toContain(NO_DATA_MARKER);
   });
 
+  // #1420: `item-scorer.ts`'s `scoreItems` tags an item `omitted: true` when
+  // the model's response simply skipped its index inside an otherwise-valid
+  // batch — UNSCORED, not a genuine neutral read. Averaging it in would pull
+  // a real bullish read toward neutral for a reason the model never gave.
+  it('excludes an omitted item from the evidence average rather than diluting it toward its UNSCORED neutral', async () => {
+    const clock = new ManualClock(ASOF);
+    const store = new MarketIntelligenceStore(clock);
+    store.ingest({
+      agent_id: 'alpaca-news',
+      timestamp: ASOF,
+      asset_class: 'stocks',
+      items: [
+        {
+          id: 'item-scored',
+          source: 'benzinga',
+          type: 'news',
+          timestamp: ASOF,
+          entity: INSTRUMENT,
+          headline: 'Apple beats on revenue',
+          sentiment: 1,
+          confidence: 0.9,
+        },
+        {
+          id: 'item-omitted',
+          source: 'benzinga',
+          type: 'news',
+          timestamp: ASOF,
+          entity: INSTRUMENT,
+          headline: 'Apple faces antitrust probe',
+          sentiment: 0,
+          confidence: 0.05,
+          omitted: true,
+        },
+      ],
+    });
+
+    const scoredOnlyStore = new MarketIntelligenceStore(clock);
+    scoredOnlyStore.ingest({
+      agent_id: 'alpaca-news',
+      timestamp: ASOF,
+      asset_class: 'stocks',
+      items: [
+        {
+          id: 'item-scored',
+          source: 'benzinga',
+          type: 'news',
+          timestamp: ASOF,
+          entity: INSTRUMENT,
+          headline: 'Apple beats on revenue',
+          sentiment: 1,
+          confidence: 0.9,
+        },
+      ],
+    });
+
+    const withOmission = await fundamentalAnalyst.run({
+      ...buildInput(signal, 'trace-omitted'),
+      market_intelligence: store,
+    });
+    const scoredAlone = await fundamentalAnalyst.run({
+      ...buildInput(signal, 'trace-scored-alone'),
+      market_intelligence: scoredOnlyStore,
+    });
+
+    expect(withOmission.direction).toBe('bullish');
+    // Would be (0.9 + 0.05) / 2 = 0.475 if the omitted item were averaged in
+    // instead of excluded.
+    expect(withOmission.confidence).toBe(scoredAlone.confidence);
+    expect(withOmission.confidence).toBe(0.9);
+  });
+
+  // #1420 follow-up: a window that is non-empty but every item in it carries
+  // `omitted: true` must still trip NO_DATA_MARKER. `conviction-score.ts`'s
+  // `isAbsenceOfInput` keys only on that prefix in `key_points`, not on
+  // `evidence.length` — an unmarked "0 news/filing items, 0 intel items"
+  // sentence would leave a fully-mute `fundamental` folded into the debate's
+  // evidence average at floor confidence instead of excluded, reinstating
+  // #625's ceiling behind a window that looks populated.
+  it('marks a window whose every item was omitted by the scorer as absent input, not a neutral read', async () => {
+    const clock = new ManualClock(ASOF);
+    const allOmitted = new MarketIntelligenceStore(clock);
+    allOmitted.ingest({
+      agent_id: 'alpaca-news',
+      timestamp: ASOF,
+      asset_class: 'stocks',
+      items: [
+        {
+          id: 'item-omitted',
+          source: 'benzinga',
+          type: 'news',
+          timestamp: ASOF,
+          entity: INSTRUMENT,
+          headline: 'Apple faces antitrust probe',
+          sentiment: 0,
+          confidence: 0.05,
+          omitted: true,
+        },
+      ],
+    });
+
+    const view = await fundamentalAnalyst.run({
+      ...buildInput(signal, 'trace-all-omitted'),
+      market_intelligence: allOmitted,
+    });
+
+    expect(view.key_points[0]).toContain(NO_DATA_MARKER);
+    expect(view.direction).toBe('neutral');
+    expect(view.confidence).toBe(0.05);
+  });
+
   describe('entity-scoped MI read (#914)', () => {
     it('direction and confidence differ between two instruments of the same class given different per-entity items in ONE shared store', async () => {
       const clock = new ManualClock(ASOF);
