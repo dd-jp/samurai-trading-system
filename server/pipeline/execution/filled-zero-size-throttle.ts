@@ -48,12 +48,20 @@
  * wedged META lot, done directly against `open_positions`. That path never
  * calls `clear()` either, and its episode leaks for the rest of the
  * process's life. Accepted, not a regression introduced here: bounded by
- * total positions ever opened, and inert once leaked — the
- * `idempotency_key` that leaked belongs to a lot that has left
- * `getOpenPositions()` for good, so `observe()` is never called for it
- * again and it can neither re-warn nor falsely report
- * `fill_zero_size_cleared`. Exercised directly in `ingest-fills.test.ts`
- * ("a lot resolved by rejection, not by advancing, never reports cleared").
+ * total positions ever opened, and inert once leaked regardless of what the
+ * repair did to the lot. A repair that closes it removes the
+ * `idempotency_key` from `getOpenPositions()` for good. A repair that
+ * instead writes `filled_size > 0` directly while leaving the lot open
+ * never reaches `clear()` either — `ingest-fills.ts`'s `advanceLot` only
+ * calls it from its own `filledSize > 0` recompute, past the
+ * `newFills.length === 0` early return an out-of-band write never goes
+ * through — but it also stops `observe()` firing: that early return's call
+ * to `observe()` is gated on `position.filled_size`, and `position` comes
+ * from `ingestFills`'s own `getOpenPositions()` read, taken fresh at the
+ * start of every poll. Either shape leaves the episode unable to re-warn or
+ * falsely report `fill_zero_size_cleared`. Exercised
+ * directly in `ingest-fills.test.ts` ("a lot resolved by rejection, not by
+ * advancing, never reports cleared").
  */
 export const ALERT_AFTER_CONSECUTIVE_ZERO_SIZE = 3;
 

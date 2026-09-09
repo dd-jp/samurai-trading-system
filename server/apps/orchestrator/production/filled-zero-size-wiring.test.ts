@@ -235,13 +235,18 @@ describe('the FILLED_WITH_ZERO_SIZE throttle is wired through the real compositi
    * production does when it builds `fillSyncExecution` once at startup and
    * polls it forever — can see a throttle that quietly stopped being shared.
    *
-   * Post-#1383 (transition-only, warn once per episode) the shared/unshared
-   * difference shows up in warning COUNT rather than in a `consecutive`
-   * value reaching 11: shared, `surfaceB`'s polls land inside `surfaceA`'s
-   * already-warned episode and stay silent (one warning total); unshared,
-   * `surfaceB` starts its own fresh episode and warns again on ITS OWN 3rd
-   * poll (two warnings total). Applying the mutation locally: this test goes
-   * red — `warnings` has length 2, not 1; reverting restores green.
+   * Post-#1383 (round 1: warn once, then a low-cadence `info` reannounce —
+   * not the transition-only "warn once, total silence" design) the
+   * shared/unshared difference shows up in announcement LEVELS, not count:
+   * both cases produce exactly two `FILLED_WITH_ZERO_SIZE` lines here.
+   * Shared: `surfaceA` warns once on its 3rd poll (`consecutive: 3`);
+   * `surfaceB`'s first poll lands past the reannounce interval inside the
+   * SAME episode and reannounces at `info` (`consecutive: 4`) instead of a
+   * second `warn`. Unshared: `surfaceB` starts its own fresh episode and
+   * warns again on ITS OWN 3rd poll (`consecutive: 3`, not 4) — the
+   * mutation this proves. Applying the mutation locally: this test goes red
+   * — `announcements` levels become `['warn', 'warn']`, not `['warn',
+   * 'info']`; reverting restores green.
    */
   it('shares one throttle across every surface built from the same executionDeps, so a second surface does not re-warn mid-episode', async () => {
     const logger = recordingLogger();
