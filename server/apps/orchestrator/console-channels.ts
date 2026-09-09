@@ -939,7 +939,7 @@ export class LoggingLlmFailureRateAlertChannel implements LlmFailureRateAlertCha
       level: 'warn',
       message:
         `llm_failure rate ${(alert.rate * 100).toFixed(1)}% over the last ${Math.round(alert.window_ms / 3_600_000)}h ` +
-        `(${alert.llm_failure_count}/${alert.total_count} debates) — SAMURAI_ALERTS=log-only ` +
+        `(${alert.llm_failure_count}/${alert.total_count} truncations) — SAMURAI_ALERTS=log-only ` +
         'cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.',
       payload: {
         rate: alert.rate,

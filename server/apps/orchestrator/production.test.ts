@@ -2247,15 +2247,17 @@ describe('llm-failure-rate guard is wired by the composition root (#1396)', () =
 
     const components = buildProductionComponents(config);
 
-    // Two `llm_failure` rows and three `budget` rows, all inside the 24h
-    // window — five truncations, the denominator (review round 1 F2: `total`
-    // counts `termination = 'latency_truncated'` rows, not every debate_log
-    // row). The tick below writes a SIXTH row at `clock.now()` that
-    // CONVERGES (`llmForOneDebate` always returns `converged: true`), so it
-    // is excluded from `total` — the rate stays 2/5 (0.4), still over
-    // `LLM_FAILURE_RATE_THRESHOLD` (0.25) on well over
-    // `MIN_DEBATES_FOR_LLM_FAILURE_RATE` (5) samples.
-    for (let i = 0; i < 5; i += 1) {
+    // Two `llm_failure` rows and five `budget` rows, all inside the 24h
+    // window — seven truncations, the denominator (review round 1 F2:
+    // `total` counts `termination = 'latency_truncated'` rows, not every
+    // debate_log row). Deliberately above, not pinned at,
+    // `MIN_TRUNCATIONS_FOR_LLM_FAILURE_RATE` (5) — review round 2 F5: a count
+    // exactly at the floor made this test boundary-fragile (an off-by-one in
+    // the floor comparison would pass unnoticed). The tick below writes an
+    // EIGHTH row at `clock.now()` that CONVERGES (`llmForOneDebate` always
+    // returns `converged: true`), so it is excluded from `total` — the rate
+    // stays 2/7 (~0.286), still over `LLM_FAILURE_RATE_THRESHOLD` (0.25).
+    for (let i = 0; i < 7; i += 1) {
       components.debateLog.writeLog({
         debate_id: `debate-1396-history-${i}`,
         instrument: 'BTC-USD',
@@ -2295,8 +2297,8 @@ describe('llm-failure-rate guard is wired by the composition root (#1396)', () =
     // and `components.debateLog` into the SAME guard the debate step calls,
     // rather than leaving the log-only default in place.
     expect(alertsPosted).toHaveLength(1);
-    expect(alertsPosted[0]).toMatchObject({ llm_failure_count: 2, total_count: 5 });
-    expect((alertsPosted[0] as { rate: number }).rate).toBeCloseTo(2 / 5);
+    expect(alertsPosted[0]).toMatchObject({ llm_failure_count: 2, total_count: 7 });
+    expect((alertsPosted[0] as { rate: number }).rate).toBeCloseTo(2 / 7);
   });
 });
 

@@ -19,7 +19,7 @@ function formatLlmFailureRateAlert(alert: LlmFailureRateAlert): string {
   const hours = Math.round(alert.window_ms / 3_600_000);
   const pct = (alert.rate * 100).toFixed(1);
   return (
-    `Samurai LLM FAILURE RATE ELEVATED: ${pct}% of debates over the last ${hours}h ` +
+    `Samurai LLM FAILURE RATE ELEVATED: ${pct}% of truncations over the last ${hours}h ` +
     `(${alert.llm_failure_count}/${alert.total_count}) truncated on an outright LLM call ` +
     `failure, as of ${alert.reported_at.toISOString()}.\n` +
     'Check the LLM provider status and the rate-limited client for sustained 429s/5xxs — a ' +

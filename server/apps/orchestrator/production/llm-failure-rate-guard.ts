@@ -45,7 +45,7 @@
  *
  * ## The floor
  *
- * A window with fewer than `MIN_DEBATES_FOR_LLM_FAILURE_RATE` truncations
+ * A window with fewer than `MIN_TRUNCATIONS_FOR_LLM_FAILURE_RATE` truncations
  * never fires — one failed debate out of one truncation is a 100% rate on no
  * evidence. This counts truncations, not every debate in the window (review
  * round 1 F2 — see `getTerminationCauseWindowCounts`'s doc), so a quiet
@@ -54,6 +54,20 @@
  * `MIN_TRADES_PER_ARM_FOR_DIVERGENCE`'s reasoning
  * (feedback-loop/arm-comparison-cycle.ts) for the same "not enough samples
  * to mean anything" floor.
+ *
+ * ## Re-arming below the floor (review round 2 finding 1)
+ *
+ * The floor above and the rate's window are the SAME trailing window, so a
+ * storm's failing rows age out of it alongside its clean truncations rather
+ * than being replaced by fresh clean ones. A quiet stream can then pass
+ * through a stretch where the storm has mostly aged out (too few truncations
+ * left to trust a rate) before enough NEW truncations arrive to read one
+ * under threshold again — under a floor that only gates firing, that stretch
+ * never clears the latch, and the guard is then one-shot for the process
+ * lifetime: a second genuine storm posts nothing until restart. `observe`
+ * below re-arms independently of the floor whenever the window's
+ * `llm_failure` COUNT reaches zero — zero is trustworthy however few
+ * truncations the window holds, unlike a RATE computed from too few of them.
  */
 import { describeThrownSafely } from '../../../shared/index.js';
 import type { Logger } from '../types.js';
@@ -69,7 +83,10 @@ export const LLM_FAILURE_RATE_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const LLM_FAILURE_RATE_THRESHOLD = 0.25;
 
 /** Mirrors `MIN_TRADES_PER_ARM_FOR_DIVERGENCE` — below this many truncations, a rate is noise, not a measurement. */
-export const MIN_DEBATES_FOR_LLM_FAILURE_RATE = 5;
+export const MIN_TRUNCATIONS_FOR_LLM_FAILURE_RATE = 5;
+
+/** How often `llm_failure_rate_check_failed` repeats while the window read keeps failing (review round 2 finding 8). */
+export const CHECK_FAILURE_LOG_EVERY = 20;
 
 export interface LlmFailureRateWindowCounts {
   llm_failure: number;
@@ -101,16 +118,28 @@ export interface LlmFailureRateAlertChannel {
  */
 export class LlmFailureRateMonitor {
   #firing = false;
+  #checkFailureStreak = 0;
 
   /**
    * Records one rate observation and reports whether an alert is due.
-   * `hasEnoughSamples` gates BOTH firing and re-arming below the floor: a
-   * quiet window (too few debates) is not "recovered", it is "no evidence
-   * either way", so it neither fires nor counts as the good reading that
-   * clears a prior alert — the monitor stays latched until a window with
-   * enough samples reads back under threshold.
+   * `hasEnoughSamples` gates firing and re-arming VIA THE RATE: a quiet
+   * window (too few truncations) is not "recovered" by rate alone, it is "no
+   * evidence either way" for a rate specifically, so it neither fires nor
+   * clears the latch through the rate branch below.
+   *
+   * `llmFailureCount` reaching zero clears the latch independently of
+   * `hasEnoughSamples` (review round 2 finding 1): a window holding zero
+   * `llm_failure` rows is zero evidence of an ongoing failure however few
+   * truncations it holds, which is not the same claim as "the rate is
+   * trustworthy" — so it re-arms a latch the floor alone would otherwise
+   * hold forever once the storm's failing rows age out of the trailing
+   * window ahead of enough clean truncations to read a rate under threshold.
    */
-  observe(rate: number, hasEnoughSamples: boolean): { alert: boolean } {
+  observe(rate: number, hasEnoughSamples: boolean, llmFailureCount: number): { alert: boolean } {
+    if (llmFailureCount === 0) {
+      this.#firing = false;
+      return { alert: false };
+    }
     if (!hasEnoughSamples) {
       return { alert: false };
     }
@@ -123,6 +152,27 @@ export class LlmFailureRateMonitor {
     }
     this.#firing = true;
     return { alert: true };
+  }
+
+  /**
+   * Throttles `llm_failure_rate_check_failed` (review round 2 finding 8, the
+   * repo's per-kind-throttle precedent at #1376): true on the first failure
+   * of a streak and every `CHECK_FAILURE_LOG_EVERY`-th after, so a sustained
+   * `SQLITE_BUSY` does not log at debate cadence. Single-kind — there is only
+   * the one window-read failure this guard can log — so a plain streak
+   * counter suffices; #1376's per-kind map exists for `SpendCapRefusalKind`,
+   * which this call site does not have.
+   */
+  recordCheckFailure(): boolean {
+    this.#checkFailureStreak += 1;
+    return (
+      this.#checkFailureStreak === 1 || this.#checkFailureStreak % CHECK_FAILURE_LOG_EVERY === 0
+    );
+  }
+
+  /** Resets the check-failure streak so a later, unrelated outage logs its own first occurrence rather than inheriting a stale count. */
+  recordCheckSuccess(): void {
+    this.#checkFailureStreak = 0;
   }
 }
 
@@ -153,17 +203,24 @@ export async function checkLlmFailureRate(deps: CheckLlmFailureRateDeps, now: Da
   try {
     const from = new Date(now.getTime() - LLM_FAILURE_RATE_WINDOW_MS);
     ({ llm_failure, total } = deps.windowSource.getTerminationCauseWindowCounts(from, now));
+    deps.monitor.recordCheckSuccess();
     rate = total === 0 ? 0 : llm_failure / total;
-    ({ alert } = deps.monitor.observe(rate, total >= MIN_DEBATES_FOR_LLM_FAILURE_RATE));
+    ({ alert } = deps.monitor.observe(
+      rate,
+      total >= MIN_TRUNCATIONS_FOR_LLM_FAILURE_RATE,
+      llm_failure,
+    ));
   } catch (error) {
-    deps.logger?.log({
-      trace_id: 'llm-failure-rate',
-      stage: 'debate',
-      event: 'llm_failure_rate_check_failed',
-      level: 'error',
-      message: 'LLM-failure-rate window read failed — the rate for this tick is unknown',
-      payload: { error: describeThrownSafely(error) },
-    });
+    if (deps.monitor.recordCheckFailure()) {
+      deps.logger?.log({
+        trace_id: 'llm-failure-rate',
+        stage: 'debate',
+        event: 'llm_failure_rate_check_failed',
+        level: 'error',
+        message: 'LLM-failure-rate window read failed — the rate for this tick is unknown',
+        payload: { error: describeThrownSafely(error) },
+      });
+    }
     return;
   }
 
