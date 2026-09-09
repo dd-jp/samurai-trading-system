@@ -8,6 +8,7 @@
  * rather than papering over it with a dash.
  */
 import type { DebateRow, FillRow, RiskCriticRow, VerdictRow } from '@contracts';
+import { debateDegradedGloss } from '../lib/debate-termination.ts';
 import {
   formatClockUtc,
   formatFixed,
@@ -201,11 +202,13 @@ export function DebateSection({ debate, inFlight, linkedBy }: DebateSectionProps
       </p>
     );
   }
+  const gloss = debateDegradedGloss(debate);
   return (
     <div data-section="debate">
-      <p className="drawer-line">
+      <p className="drawer-line" data-degraded={gloss === null ? undefined : true}>
         <b>{debate.direction}</b> · {debate.rounds} rounds · opened{' '}
         {formatClockUtc(debate.created_at)}
+        {gloss === null ? null : <span className="muted"> · {gloss}</span>}
         {linkedBy.exact ? null : (
           <span className="muted">
             {' '}

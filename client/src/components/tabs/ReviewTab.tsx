@@ -9,6 +9,7 @@ import type {
   OutsideBenchmarkWire,
 } from '@contracts';
 import type { WireSnapshot } from '../../hooks/useSnapshot.ts';
+import { debateDegradedGloss } from '../../lib/debate-termination.ts';
 import {
   formatClockUtc,
   formatCount,
@@ -378,9 +379,12 @@ function whyTaken(debate: DebateRow | undefined): string {
   if (debate === undefined) return 'debate not in the recent-debates window';
   const lead = [...debate.contributions].sort((a, b) => b.influence_score - a.influence_score)[0];
   const rounds = `${debate.direction} · ${debate.rounds} rounds`;
-  return lead === undefined
-    ? rounds
-    : `${rounds} · ${lead.analyst_id} led (influence ${formatFixed(lead.influence_score, 2)})`;
+  const base =
+    lead === undefined
+      ? rounds
+      : `${rounds} · ${lead.analyst_id} led (influence ${formatFixed(lead.influence_score, 2)})`;
+  const gloss = debateDegradedGloss(debate);
+  return gloss === null ? base : `${base} · ${gloss}`;
 }
 
 function TradeRow(props: {

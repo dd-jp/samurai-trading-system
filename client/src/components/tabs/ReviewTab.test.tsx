@@ -192,6 +192,43 @@ describe('closed trades', () => {
     expect(within(row).queryByText(/559\.80/)).toBeNull();
   });
 
+  it('glosses a degraded debate with its termination cause (#1396)', () => {
+    renderReview(
+      makeSnapshot({
+        closed_trades: [
+          makeClosedTrade({ idempotency_key: 'k1', debate_id: 'd1', close_reason: 'stop' }),
+        ],
+        debates: [
+          makeDebate({
+            debate_id: 'd1',
+            instrument: 'SPY',
+            direction: 'bullish',
+            rounds: 1,
+            termination: 'latency_truncated',
+            termination_cause: 'llm_failure',
+          }),
+        ],
+      }),
+    );
+    const row = screen.getByRole('button', { name: /SPY/ });
+    expect(within(row).getByText(/degraded — an LLM call failed outright/)).toBeTruthy();
+  });
+
+  it('does not gloss a converged debate (#1396)', () => {
+    renderReview(
+      makeSnapshot({
+        closed_trades: [
+          makeClosedTrade({ idempotency_key: 'k1', debate_id: 'd1', close_reason: 'stop' }),
+        ],
+        debates: [
+          makeDebate({ debate_id: 'd1', instrument: 'SPY', direction: 'bullish', termination: 'converged' }),
+        ],
+      }),
+    );
+    const row = screen.getByRole('button', { name: /SPY/ });
+    expect(within(row).queryByText(/degraded/)).toBeNull();
+  });
+
   it('heads every column, naming the side rather than the entry price', () => {
     const { container } = renderReview(
       makeSnapshot({

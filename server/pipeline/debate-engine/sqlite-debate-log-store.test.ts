@@ -311,3 +311,95 @@ describe('SqliteDebateLogStore.getByDebateId', () => {
     expect(row?.open_items).toBeUndefined();
   });
 });
+
+describe('SqliteDebateLogStore.getTerminationCauseWindowCounts (#1396)', () => {
+  it('counts an explicit llm_failure row and excludes it from non_failure', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+    store.writeLog(
+      makeLog({
+        debate_id: 'd1',
+        created_at: new Date('2026-07-14T09:00:00Z'),
+        termination: 'latency_truncated',
+        termination_cause: 'llm_failure',
+      }),
+    );
+
+    const counts = store.getTerminationCauseWindowCounts(
+      new Date('2026-07-14T08:00:00Z'),
+      new Date('2026-07-14T10:00:00Z'),
+    );
+    expect(counts).toEqual({ llm_failure: 1, total: 1 });
+  });
+
+  it('counts a budget truncation as non-failure', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+    store.writeLog(
+      makeLog({
+        debate_id: 'd1',
+        created_at: new Date('2026-07-14T09:00:00Z'),
+        termination: 'latency_truncated',
+        termination_cause: 'budget',
+      }),
+    );
+
+    const counts = store.getTerminationCauseWindowCounts(
+      new Date('2026-07-14T08:00:00Z'),
+      new Date('2026-07-14T10:00:00Z'),
+    );
+    expect(counts).toEqual({ llm_failure: 0, total: 1 });
+  });
+
+  it('counts a pre-migration NULL termination_cause as non-failure (AC3)', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+    // No `termination`/`termination_cause` supplied — writes NULL on both
+    // columns, the exact shape a row written before migrations 0041/0051 has.
+    store.writeLog(makeLog({ debate_id: 'd1', created_at: new Date('2026-07-14T09:00:00Z') }));
+
+    const counts = store.getTerminationCauseWindowCounts(
+      new Date('2026-07-14T08:00:00Z'),
+      new Date('2026-07-14T10:00:00Z'),
+    );
+    expect(counts).toEqual({ llm_failure: 0, total: 1 });
+  });
+
+  it('excludes rows outside the (from, to] window', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+    store.writeLog(
+      makeLog({
+        debate_id: 'too-early',
+        created_at: new Date('2026-07-14T07:59:59Z'),
+        termination: 'latency_truncated',
+        termination_cause: 'llm_failure',
+      }),
+    );
+    store.writeLog(
+      makeLog({
+        debate_id: 'in-window',
+        created_at: new Date('2026-07-14T09:00:00Z'),
+        termination: 'latency_truncated',
+        termination_cause: 'llm_failure',
+      }),
+    );
+
+    const counts = store.getTerminationCauseWindowCounts(
+      new Date('2026-07-14T08:00:00Z'),
+      new Date('2026-07-14T10:00:00Z'),
+    );
+    expect(counts).toEqual({ llm_failure: 1, total: 1 });
+  });
+
+  it('returns zero counts for an empty window rather than NULL/NaN', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+
+    const counts = store.getTerminationCauseWindowCounts(
+      new Date('2026-07-14T08:00:00Z'),
+      new Date('2026-07-14T10:00:00Z'),
+    );
+    expect(counts).toEqual({ llm_failure: 0, total: 0 });
+  });
+});

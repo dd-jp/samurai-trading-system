@@ -122,6 +122,7 @@ import { TradeChannelDataFailoverAlert } from './data-failover-alert-channel.js'
 import { TradeChannelExitValuationDegradedAlert } from './exit-valuation-alert-channel.js';
 import { TradeChannelFlattenReconcileAlert } from './flatten-reconcile-alert-channel.js';
 import { TradeChannelHeartbeat } from './heartbeat-channel.js';
+import { TradeChannelLlmFailureRateAlert } from './llm-failure-rate-alert-channel.js';
 import { TradeChannelLoosenNotice } from './loosen-notification-channel.js';
 import { TradeChannelLseCalendarCoverageAlert } from './lse-calendar-coverage-alert-channel.js';
 import { TradeChannelMiCoverageAlert } from './mi-coverage-alert-channel.js';
@@ -290,6 +291,12 @@ export const ALERT_CHANNEL_FIELDS = [
   // close, unmodelled half-days included — right up to the boot that
   // finally refuses.
   'lseCalendarCoverageAlerts',
+  // #1396. The condition it reports (a sustained rise in outright LLM call
+  // failures) is invisible from outside by construction: both causes of
+  // `termination = 'latency_truncated'` — an LLM failure and ordinary
+  // latency-budget expiry — write the same row shape everywhere except this
+  // one column, so nothing else on this list would ever notice.
+  'llmFailureRateAlerts',
 ] as const satisfies readonly (keyof AlertChannelSlots)[];
 
 /**
@@ -605,6 +612,13 @@ export function buildAlertChannels(deps: {
             deps.logger,
           ),
         }
+      : {}),
+    // #1396. The escalation chat, never the heartbeat chat: an elevated
+    // llm_failure rate is a decision waiting on the operator (is the
+    // provider degraded, is a key rate-limited), not a beat — same
+    // reasoning as `miCoverageAlerts`.
+    ...(deps.injected.llmFailureRateAlerts === undefined
+      ? { llmFailureRateAlerts: new TradeChannelLlmFailureRateAlert(telegram, chatId) }
       : {}),
   };
 }

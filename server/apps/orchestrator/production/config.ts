@@ -66,6 +66,7 @@ import { DEFAULT_STAGE2_MAX_AGE_DAYS } from './daily-equity-metrics-source.js';
 import type { DataFailoverAlertChannel } from './data-failover.js';
 import type { AccountStateProvider, VolatilityReadingProvider } from './direct-bind.js';
 import type { ExitValuationDegradedAlertChannel } from './exit-valuation-alert.js';
+import type { LlmFailureRateAlertChannel } from './llm-failure-rate-guard.js';
 import type { LseCalendarCoverageAlertChannel } from './lse-calendar-coverage-alert.js';
 import type { MiCoverageAlertChannel } from './mi-coverage.js';
 import type { ThresholdClampAlertChannel } from './threshold-clamp-alert.js';
@@ -421,6 +422,19 @@ export interface AlertChannelSlots {
    * of reaching this channel (`assertLseCalendarCoverage`'s doc).
    */
   lseCalendarCoverageAlerts?: LseCalendarCoverageAlertChannel;
+  /**
+   * Where a sustained `debate_log.termination_cause = 'llm_failure'` rate is
+   * escalated (#1396) — `checkLlmFailureRate`'s edge-triggered alert
+   * (`llm-failure-rate-guard.ts`) posts here once the 24h rate crosses
+   * `LLM_FAILURE_RATE_THRESHOLD` on enough samples. Defaults to
+   * `LoggingLlmFailureRateAlertChannel`, with the same caveat as
+   * `miCoverageAlerts`: log-only cannot page anyone, and an LLM outage
+   * masquerading as ordinary latency-budget truncation is exactly the
+   * failure mode this alert exists to surface. `TradeChannelLlmFailureRateAlert`
+   * (llm-failure-rate-alert-channel.ts) is what `SAMURAI_ALERTS=telegram`
+   * (#322) supplies.
+   */
+  llmFailureRateAlerts?: LlmFailureRateAlertChannel;
 }
 
 /**

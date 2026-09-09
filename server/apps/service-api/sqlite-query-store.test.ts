@@ -168,6 +168,51 @@ describe('SqliteQueryStore', () => {
     expect(debates[0]?.debate_id).toBe('debate-2');
   });
 
+  it('projects termination and termination_cause onto recent debates (#1396)', () => {
+    const db = makeDb();
+    const debateStore = new SqliteDebateLogStore(db);
+    debateStore.writeLog(
+      makeDebateLog({
+        debate_id: 'debate-failed',
+        termination: 'latency_truncated',
+        termination_cause: 'llm_failure',
+      }),
+    );
+    debateStore.writeLog(
+      makeDebateLog({
+        debate_id: 'debate-converged',
+        created_at: new Date('2026-07-27T08:00:00Z'),
+        termination: 'converged',
+      }),
+    );
+
+    const store = new SqliteQueryStore(db);
+    const debates = store.getRecentDebates(10, NOW);
+
+    const failed = debates.find((d) => d.debate_id === 'debate-failed');
+    const converged = debates.find((d) => d.debate_id === 'debate-converged');
+    expect(failed).toMatchObject({
+      termination: 'latency_truncated',
+      termination_cause: 'llm_failure',
+    });
+    expect(converged?.termination).toBe('converged');
+    expect(converged?.termination_cause).toBeUndefined();
+  });
+
+  it('projects termination/termination_cause as undefined for a pre-migration row', () => {
+    const db = makeDb();
+    const debateStore = new SqliteDebateLogStore(db);
+    // No `termination`/`termination_cause` override — NULL on the row, same
+    // shape as a debate written before migrations 0041/0051.
+    debateStore.writeLog(makeDebateLog({ debate_id: 'debate-pre-migration' }));
+
+    const store = new SqliteQueryStore(db);
+    const [debate] = store.getRecentDebates(10, NOW);
+
+    expect(debate?.termination).toBeUndefined();
+    expect(debate?.termination_cause).toBeUndefined();
+  });
+
   it('reads tick status, mapping the most recently updated row', () => {
     const db = makeDb();
     db.prepare(
