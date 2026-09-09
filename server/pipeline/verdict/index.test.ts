@@ -31,6 +31,7 @@ function makeIntent(overrides: Partial<OrderIntent> = {}): OrderIntent {
     target: 110,
     time_in_force: 'day',
     decision_timestamp: new Date('2026-07-15T13:55:00Z'), // 5 min before NOW
+    decided_at: new Date('2026-07-15T13:55:00Z'), // 5 min before NOW
     metadata: {
       debate_id: 'debate-abc123',
       conviction: 0.72,
@@ -165,7 +166,7 @@ describe('VerdictImpl.decide — staleness gate', () => {
     const verdict = new VerdictImpl();
     const input = makeInput({
       risk_decision: makeRiskDecision({
-        order_intent: makeIntent({ decision_timestamp: new Date('2026-07-15T13:00:00Z') }), // 60 min old
+        order_intent: makeIntent({ decided_at: new Date('2026-07-15T13:00:00Z') }), // 60 min old
       }),
     });
 
@@ -186,12 +187,89 @@ describe('VerdictImpl.decide — staleness gate', () => {
     const decision = await verdict.decide(
       makeInput({
         risk_decision: makeRiskDecision({
-          order_intent: makeIntent({ decision_timestamp: new Date('2026-07-15T13:00:00Z') }),
+          order_intent: makeIntent({ decided_at: new Date('2026-07-15T13:00:00Z') }),
         }),
       }),
     );
 
     expect(decision.no_go_detail).toEqual({ measured_ms: 60 * 60_000, bound_ms: 30 * 60_000 });
+  });
+
+  // #1190: `decision_timestamp` is the 1h DEBATE BAR, not the instant the
+  // decision was made — a decision late in its bar used to measure as old as
+  // the bar itself, no matter how fresh it actually was. These three pin the
+  // fix at the exact numbers from the 2026-09-04 session's UBER case: a tick
+  // at bar+61min, against the shipped 15-minute `max_signal_age.stocks`.
+  describe('decided_at vs the bar-floored decision_timestamp (#1190)', () => {
+    const BAR = new Date('2026-07-15T13:00:00Z');
+    const SHIPPED_CONFIG = makeConfig({
+      automation_level: { crypto: 'auto', stocks: 'auto' },
+      max_signal_age: { crypto: 5 * 60_000, stocks: 15 * 60_000 },
+    });
+
+    it('a tick at bar+61min no longer no-goes on staleness when the decision itself is fresh', async () => {
+      const verdict = new VerdictImpl();
+      const decidedAt = new Date('2026-07-15T13:59:00Z'); // decided 1 min before the tick
+      const tickNow = new Date('2026-07-15T14:01:00Z'); // 61 min after the bar opened
+
+      const decision = await verdict.decide(
+        makeInput({
+          clock: { now: () => tickNow },
+          config: SHIPPED_CONFIG,
+          marketData: makeMarketData(makeMark({ observed_at: tickNow })),
+          risk_decision: makeRiskDecision({
+            order_intent: makeIntent({ decision_timestamp: BAR, decided_at: decidedAt }),
+          }),
+        }),
+      );
+
+      expect(decision.status).toBe('go');
+      expect(decision.no_go_reason).toBeNull();
+    });
+
+    it('a genuinely stale decision still no-goes on staleness even with a fresh bar coordinate', async () => {
+      const verdict = new VerdictImpl();
+      const tickNow = new Date('2026-07-15T13:05:00Z'); // inside the bar: decision_timestamp is fresh
+      const decidedAt = new Date('2026-07-15T12:00:00Z'); // but decided over an hour before the tick
+
+      const decision = await verdict.decide(
+        makeInput({
+          clock: { now: () => tickNow },
+          config: SHIPPED_CONFIG,
+          marketData: makeMarketData(makeMark({ observed_at: tickNow })),
+          risk_decision: makeRiskDecision({
+            order_intent: makeIntent({ decision_timestamp: BAR, decided_at: decidedAt }),
+          }),
+        }),
+      );
+
+      expect(decision.status).toBe('no_go');
+      expect(decision.no_go_reason).toBe('staleness');
+    });
+
+    it('treats a decision shortly after its bar opens the same as one 55 minutes in, when equally fresh', async () => {
+      const verdict = new VerdictImpl();
+      const runAt = (decidedAt: Date) => {
+        const tickNow = new Date(decidedAt.getTime() + 5_000); // Verdict runs 5s after the Trader decided
+        return verdict.decide(
+          makeInput({
+            clock: { now: () => tickNow },
+            config: SHIPPED_CONFIG,
+            marketData: makeMarketData(makeMark({ observed_at: tickNow })),
+            risk_decision: makeRiskDecision({
+              order_intent: makeIntent({ decision_timestamp: BAR, decided_at: decidedAt }),
+            }),
+          }),
+        );
+      };
+
+      const earlyInBar = await runAt(new Date(BAR.getTime() + 60_000)); // 1 min into the bar
+      const lateInBar = await runAt(new Date(BAR.getTime() + 55 * 60_000)); // 55 min into the SAME bar
+
+      expect(earlyInBar.status).toBe('go');
+      expect(lateInBar.status).toBe('go');
+      expect(earlyInBar.no_go_reason).toBe(lateInBar.no_go_reason);
+    });
   });
 });
 
@@ -528,7 +606,7 @@ describe('VerdictImpl.decide — staleness vs market-open, for equities (#381)',
     const input = makeInput({
       risk_decision: makeRiskDecision({
         order_intent: makeIntent({
-          decision_timestamp: new Date('2026-07-14T19:59:00Z'),
+          decided_at: new Date('2026-07-14T19:59:00Z'),
         }),
       }),
       tradingCalendar: makeTradingCalendar(false),
@@ -900,7 +978,7 @@ describe('VerdictImpl.decide — gate ordering', () => {
     const verdict = new VerdictImpl();
     const input = makeInput({
       risk_decision: makeRiskDecision({
-        order_intent: makeIntent({ decision_timestamp: new Date('2026-07-15T13:00:00Z') }), // stale
+        order_intent: makeIntent({ decided_at: new Date('2026-07-15T13:00:00Z') }), // stale
       }),
       marketData: makeMarketData(makeMark({ price: 999 })), // would also drift-fail
       positionStore: makePositionStore(true), // would also dedup-fail
@@ -917,7 +995,7 @@ describe('VerdictImpl.decide — gate ordering', () => {
     const verdict = new VerdictImpl();
     const input = makeInput({
       risk_decision: makeRiskDecision({
-        order_intent: makeIntent({ decision_timestamp: new Date('2026-07-15T13:00:00Z') }), // stale
+        order_intent: makeIntent({ decided_at: new Date('2026-07-15T13:00:00Z') }), // stale
       }),
       // Every other gate would pass cleanly.
       marketData: makeMarketData(makeMark({ price: 100 })),
@@ -1069,7 +1147,14 @@ describe('VerdictImpl.decide — unpriced mandatory flatten (#826)', () => {
  * mandatory flatten acquires it.
  */
 describe('VerdictImpl.decide — mandatory flatten and staleness (#894)', () => {
-  /** Older than `max_signal_age.stocks` (30 min here) by the bar-floor margin. */
+  /**
+   * Older than `max_signal_age.stocks` (30 min here) by the bar-floor margin.
+   * Stamped on BOTH `decision_timestamp` and `decided_at` (#1190 gave those
+   * two different meanings): the mandatory-flatten cases below need the
+   * exemption itself to be what saves them, and the discretionary/entry
+   * cases need a genuinely stale `decided_at`, since a stale
+   * `decision_timestamp` alone no longer trips gate 1.
+   */
   const STALE_AT = new Date(NOW.getTime() - 56 * 60_000);
 
   function staleExit(overrides: Partial<OrderIntent> = {}): OrderIntent {
@@ -1079,6 +1164,7 @@ describe('VerdictImpl.decide — mandatory flatten and staleness (#894)', () => 
       intent_type: 'exit',
       side: 'sell',
       decision_timestamp: STALE_AT,
+      decided_at: STALE_AT,
       metadata: { ...base.metadata, exit_reason: 'flatten', mandatory_flatten: true },
       ...overrides,
     };

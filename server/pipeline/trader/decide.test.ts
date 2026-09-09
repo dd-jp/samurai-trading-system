@@ -729,6 +729,15 @@ describe('decide — determinism & idempotency', () => {
     // And the coordinate is the bar itself, which is what makes it the same
     // value `debate_id` hashes.
     expect(sameBarLater?.decision_timestamp).toEqual(DECISION_BAR);
+
+    // #1190: `decided_at` is the opposite of `decision_timestamp` on this
+    // axis — it tracks each tick's own wall clock rather than the shared bar,
+    // which is what lets Verdict's staleness gate tell these two ticks apart
+    // even though their bar coordinate, and therefore their idempotency key,
+    // is identical.
+    expect(first?.decided_at).toEqual(new Date('2026-07-15T10:00:03.187Z'));
+    expect(sameBarLater?.decided_at).toEqual(new Date('2026-07-15T10:45:11.902Z'));
+    expect(sameBarLater?.decided_at).not.toEqual(first?.decided_at);
   });
 
   /**
@@ -777,6 +786,11 @@ describe('decide — determinism & idempotency', () => {
     expect(first?.idempotency_key).toBeDefined();
     expect(sameBarLater?.idempotency_key).toBe(first?.idempotency_key);
     expect(sameBarLater?.decision_timestamp).toEqual(DECISION_BAR);
+
+    // #1190: the exit's own `decided_at` tracks each tick's wall clock too,
+    // same as the entry path above.
+    expect(first?.decided_at).toEqual(new Date('2026-07-15T10:00:03.187Z'));
+    expect(sameBarLater?.decided_at).toEqual(new Date('2026-07-15T10:45:11.902Z'));
   });
 
   it('still separates two different bars', async () => {

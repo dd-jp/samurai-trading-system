@@ -53,6 +53,7 @@ function makeIntent(overrides: Partial<OrderIntent> = {}): OrderIntent {
     target: 110,
     time_in_force: 'day',
     decision_timestamp: new Date('2026-07-15T13:55:00Z'),
+    decided_at: new Date('2026-07-15T13:55:00Z'),
     metadata: {
       debate_id: 'debate-abc123',
       conviction: 0.72,

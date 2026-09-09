@@ -206,6 +206,7 @@ async function main(): Promise<void> {
     target,
     time_in_force: 'day',
     decision_timestamp: now,
+    decided_at: now,
     metadata: {
       debate_id: idempotencyKey,
       conviction: 0.5,

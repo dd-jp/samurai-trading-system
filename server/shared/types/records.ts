@@ -34,11 +34,29 @@ export interface OrderIntent {
   target: number;
   time_in_force: string;
   /**
-   * The bar/decision time (retained from the idempotency-key hash input).
-   * Downstream (Verdict) needs it for the signal-staleness gate; the hash
-   * alone doesn't expose it.
+   * The bar/decision COORDINATE (retained from the idempotency-key hash
+   * input) — `debate.bar_timestamp`, floored to `DEBATE_BAR_TIMEFRAME_MS`
+   * (1h). Downstream consumers that need a stable per-bar key (the
+   * idempotency hash, `OpenPosition.decision_timestamp`) read this; nothing
+   * bounds a freshness gate against it any more (#1190) — see `decided_at`.
    */
   decision_timestamp: Date;
+  /**
+   * The wall-clock instant this intent was actually decided — `clock.now()`
+   * read at the top of the Trader function that built it (`asOf` in
+   * `decide.ts`), never floored to a bar.
+   *
+   * Split from `decision_timestamp` by #1190: that field is the 1h DEBATE bar
+   * coordinate, so a decision late in its bar carried a signal age that grew
+   * structurally toward 60 minutes against a 15-minute `max_signal_age`,
+   * purely as a function of where in the bar the tick landed — 23 `staleness`
+   * no-gos with zero stale feeds behind them. #894 hit the same shape on
+   * flattens first and exempted the mandatory flatten from the gate entirely;
+   * this field fixes the gate itself for every intent that does not carry
+   * that exemption, without touching what `decision_timestamp` means to its
+   * other consumers.
+   */
+  decided_at: Date;
   metadata: OrderIntentMetadata;
 }
 

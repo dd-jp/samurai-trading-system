@@ -128,6 +128,7 @@ const intentFor = (instrument: string, notional: number): OrderIntent => ({
   target: 1.2,
   time_in_force: 'day',
   decision_timestamp: new Date('2026-08-19T14:35:00Z'),
+  decided_at: new Date('2026-08-19T14:35:00Z'),
   metadata: {
     debate_id: 'debate-1',
     conviction: 0.8,

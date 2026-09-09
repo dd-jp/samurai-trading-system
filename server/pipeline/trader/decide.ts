@@ -772,6 +772,7 @@ async function buildBracket(
       target: entry + direction * targetDistance,
       time_in_force: config.time_in_force[mark.asset_class],
       decision_timestamp: decisionBar,
+      decided_at: asOf,
       metadata: {
         debate_id: debate.debate_id,
         // #753. Recorded on every intent (never omitted for the live arm), so
@@ -1058,6 +1059,7 @@ async function buildFlattenExit(
       target: priced.price,
       time_in_force: config.time_in_force[priced.asset_class],
       decision_timestamp: decisionBar,
+      decided_at: asOf,
       metadata: {
         debate_id: attribution.debate_id,
         // #753 — see the entry intent's own `arm` note.

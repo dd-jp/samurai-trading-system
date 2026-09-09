@@ -109,7 +109,7 @@ interface VerdictDecision {
 
 interface VerdictConfig {
   automation_level: Record<'crypto' | 'stocks', 'manual' | 'semi_auto' | 'auto'>;
-  max_signal_age: Record<'crypto' | 'stocks', number>;   // SIGNAL-age bound (decision_timestamp)
+  max_signal_age: Record<'crypto' | 'stocks', number>;   // SIGNAL-age bound (decided_at — #1190)
   max_mark_age: Record<'crypto' | 'stocks', number>;     // FEED-age bound (Mark.observed_at) — #641
   drift_tolerance_pct: Record<'crypto' | 'stocks', number>; // max price drift from entry,
                                                           // as a FRACTION of entry (#381)
