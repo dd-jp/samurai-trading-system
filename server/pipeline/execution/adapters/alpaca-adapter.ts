@@ -224,21 +224,39 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * is still the tightest bound this adapter can offer without `opened_at`
    * itself: it cannot narrow the gap above, only avoid widening it further by
    * the request's own round trip.
-   * Same lifecycle as `brackets` (never pruned, empty across a restart) — no
-   * new unbounded-growth axis, see `brackets`'s own doc above — but a STRICT
-   * SUBSET of its keys: `brackets` also gains entries from the constructor's
-   * `loadBrackets` restore and from `getOrder`'s recovery path, neither of
-   * which has a same-process clock read to offer, so those brackets stay
-   * unaudited (see `auditSinceFloorInvariant`'s doc).
+   * Populated only from `submitBracket` (first-write-wins) and, UNLIKE
+   * `brackets`, never deleted — not even by `cancel()`, which prunes
+   * `brackets` on a confirmed cancel but has no reason to touch this map.
+   * So after a cancel this key set is NOT a subset of `brackets`' CURRENT
+   * keys — it can hold an entry `brackets` has already dropped. It IS a
+   * subset of every `client_order_id` this process has ever itself
+   * submitted a bracket for, cumulative across cancels (`brackets` also
+   * gains entries from the constructor's `loadBrackets` restore and from
+   * `getOrder`'s recovery path, neither of which has a same-process clock
+   * read to offer, so those stay unaudited — see `auditSinceFloorInvariant`'s
+   * doc). This is a real, if slow, growth axis distinct from `brackets`':
+   * bounded by total distinct lots ever submitted over the process's life,
+   * not by however many are open now.
    */
   private readonly bracketSubmittedAt = new Map<string, Date>();
   /**
-   * client_order_id (lot key) -> already logged. #1123: `brackets` is never
-   * pruned, so a genuine violation would otherwise warn every sweep for the
-   * life of the process — one bracket, unbounded log volume. This throttles
-   * to first sighting per lot, same shape as ca8f2b9 (#1376)'s per-kind
-   * throttle. Not pruned either: bounded by the same key space as `brackets`
-   * (see its doc), so it adds no new unbounded-growth axis.
+   * `${client_order_id}:${leg}` -> already logged. #1123: the fill sweep
+   * never prunes `brackets`, so a genuinely violating, still-tracked bracket
+   * is re-polled every sweep and would otherwise warn every time — one
+   * bracket, unbounded log volume. This throttles to first sighting per
+   * LOT+LEG, same shape as ca8f2b9 (#1376)'s per-kind throttle.
+   *
+   * Keyed by lot+leg, not lot alone (round-2 review): the bracket loop
+   * (entry + its legs) and the re-arm loop share one `client_order_id` per
+   * lot, so a lot-only key let one leg's first warn (typically the entry,
+   * polled first) permanently suppress a genuine, DIFFERENT violation on
+   * another leg of the same lot — silently masking exactly the exit-leg
+   * violations #1087's wedge failure mode is about.
+   *
+   * Same non-pruning as `bracketSubmittedAt` above, for the same reason
+   * (nothing, including `cancel()`, has cause to prune it) and the same
+   * growth bound: total distinct (lot, leg) pairs ever warned about over the
+   * process's life, not however many lots are open now.
    */
   private readonly warnedSinceFloorViolations = new Set<string>();
   /**
@@ -978,21 +996,25 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * response to a real violation is to fix the source, the way #1096 fixed
    * `SimulatedBrokerAdapter`, not to paper over it here.
    *
-   * Compares against `bracketSubmittedAt`, NOT the global `since` floor:
-   * `brackets` is never pruned (see its own doc), so an old, long-closed
-   * bracket is re-polled every sweep and would trip `filledAt < since`
-   * constantly and harmlessly once `since` has moved on to newer lots — noise,
-   * not signal. `bracketSubmittedAt` is a per-bracket, locally-anchored bound
-   * instead: silent for a restored (post-restart) bracket, which has no entry
-   * in the map and no local proxy for its `opened_at` to compare against.
+   * Compares against `bracketSubmittedAt`, NOT the global `since` floor: the
+   * FILL SWEEP never prunes `brackets` (only `cancel()` does, on a confirmed
+   * cancel), so an old, long-closed-but-not-cancelled bracket is re-polled
+   * every sweep and would trip `filledAt < since` constantly and harmlessly
+   * once `since` has moved on to newer lots — noise, not signal.
+   * `bracketSubmittedAt` is a per-bracket, locally-anchored bound instead:
+   * silent for a restored (post-restart) bracket, which has no entry in the
+   * map and no local proxy for its `opened_at` to compare against.
    *
    * `submittedAt` is this host's own clock; `filled_at` is Alpaca's server
    * clock. The first thing to check on seeing this warning is host clock
    * skew (NTP drift), not the venue — `bracketSubmittedAt`'s doc above names
    * the OTHER source of a benign trip: the `[opened_at, submittedAt)` gap
-   * this bound cannot see into. Throttled to first sighting per lot via
-   * `warnedSinceFloorViolations` — `brackets` is never pruned, so a genuine
-   * violation would otherwise warn every sweep for the life of the process.
+   * this bound cannot see into. Throttled to first sighting per lot+LEG via
+   * `warnedSinceFloorViolations` (keyed `clientOrderId:leg`, not
+   * `clientOrderId` alone — see that field's doc for why a lot-only key is
+   * unsafe here) — the fill sweep never prunes `brackets`, so a genuinely
+   * violating bracket is re-polled, and would otherwise warn every sweep,
+   * for the life of the process (or until `cancel()` removes it).
    */
   private auditSinceFloorInvariant(
     order: AlpacaOrder | AlpacaOrderLeg,
@@ -1009,8 +1031,14 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
 
     const filledAt = resolveFilledAt(order, observedAt);
     if (filledAt.getTime() >= submittedAt.getTime()) return;
-    if (this.warnedSinceFloorViolations.has(clientOrderId)) return;
-    this.warnedSinceFloorViolations.add(clientOrderId);
+    // Keyed by lot AND leg, not lot alone (round-2 review): the bracket loop
+    // and the re-arm loop share one `clientOrderId` per lot, so a lot-only
+    // key let the entry leg's first warn permanently suppress a DIFFERENT,
+    // genuine violation on the re-armed target leg of the SAME lot — masking
+    // exactly the exit-leg violations #1087's wedge failure mode is about.
+    const warnedKey = `${clientOrderId}:${leg}`;
+    if (this.warnedSinceFloorViolations.has(warnedKey)) return;
+    this.warnedSinceFloorViolations.add(warnedKey);
 
     safeLog(this.logger, {
       trace_id: ALPACA_FILL_SWEEP_TRACE_ID,

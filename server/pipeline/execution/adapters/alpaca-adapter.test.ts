@@ -1233,30 +1233,38 @@ describe('AlpacaBrokerAdapter since-floor invariant audit (#1123)', () => {
   // with no new map. The flatten sweep is NOT covered: `flattens` is keyed by
   // the EXIT's own idempotency_key, a different value, so auditing it needs
   // its own bound (tracked as a follow-up, out of scope here).
-  it("warns on a re-armed leg fill dated before the lot's original bracket was submitted", async () => {
+  //
+  // #1123 round-2 review (F1): this test ALSO makes the ORIGINAL bracket
+  // entry a violation, not just the re-armed leg — the exact scenario the
+  // reviewer proved broken with a lot-only throttle key: the entry leg is
+  // polled first and warns, and a lot-only `warnedSinceFloorViolations` key
+  // then silently swallowed the re-armed target's OWN, different violation.
+  // Both must warn — this is the regression test for the `clientOrderId:leg`
+  // composite key.
+  it('warns on BOTH the entry leg and a re-armed leg of the same lot, each once, when both violate', async () => {
     const clock = new FixedClock(T0);
     const logger = recordingLogger();
     const submitOcoOrder = vi
       .fn()
       .mockResolvedValue({ ...acceptedOrder(), id: 'rearm-venue-id', legs: [] });
     const getOrderByClientOrderId = vi.fn().mockResolvedValue(null); // no prior to adopt
-    // id-aware: the ORIGINAL bracket entry ('alpaca-entry-1', unfilled — this
-    // test is only about the re-armed leg) vs. the re-armed OCO itself.
+    const violatingFill = {
+      status: 'filled' as const,
+      filled_qty: '100',
+      filled_avg_price: '100.02',
+      // Earlier than T0, the clock read at the ORIGINAL bracket's
+      // submission — the re-arm itself has no submission-time proxy of its
+      // own, and shares the lot's original bound instead.
+      filled_at: '2026-07-20T15:59:00Z',
+      legs: [],
+    };
+    // id-aware: BOTH the original bracket entry ('alpaca-entry-1') and the
+    // re-armed OCO ('rearm-venue-id') violate here.
     const getOrder = vi.fn(async (id: string) => {
       if (id === 'rearm-venue-id') {
-        return acceptedOrder({
-          id: 'rearm-venue-id',
-          status: 'filled',
-          filled_qty: '100',
-          filled_avg_price: '100.02',
-          // Earlier than T0, the clock read at the ORIGINAL bracket's
-          // submission — the re-arm itself has no submission-time proxy of
-          // its own, and shares the lot's original bound instead.
-          filled_at: '2026-07-20T15:59:00Z',
-          legs: [],
-        });
+        return acceptedOrder({ id: 'rearm-venue-id', ...violatingFill });
       }
-      return acceptedOrder({ status: 'accepted', filled_qty: '0', legs: [] });
+      return acceptedOrder({ id: 'alpaca-entry-1', ...violatingFill });
     });
     const adapter = new AlpacaBrokerAdapter({
       client: makeClient({ submitOcoOrder, getOrderByClientOrderId, getOrder }),
@@ -1273,8 +1281,18 @@ describe('AlpacaBrokerAdapter since-floor invariant audit (#1123)', () => {
 
     const fills = await adapter.fetchNewFills(new Date(0));
 
-    expect(fills).toHaveLength(1);
+    expect(fills).toHaveLength(2);
     expect(logger.entries).toEqual([
+      expect.objectContaining({
+        level: 'warn',
+        event: 'alpaca_fill_predates_bracket_submission',
+        payload: expect.objectContaining({
+          client_order_id: 'key-aapl-1355',
+          leg: 'entry',
+          filled_at: '2026-07-20T15:59:00.000Z',
+          submitted_at: T0.toISOString(),
+        }),
+      }),
       expect.objectContaining({
         level: 'warn',
         event: 'alpaca_fill_predates_bracket_submission',
