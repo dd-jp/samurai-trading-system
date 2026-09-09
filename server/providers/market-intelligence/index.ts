@@ -26,7 +26,6 @@ import type {
 export type {
   AgentIntelligence,
   AssetClass,
-  ConflictResolution,
   Duration,
   IntelligenceItem,
   MarketContext,
@@ -110,6 +109,17 @@ function latestClassWideRestatementOnly(
   if (latest.size === 0) return items;
   const kept = new Set(latest.values());
   return items.filter((item) => item.scope !== 'asset_class' || kept.has(item));
+}
+
+/**
+ * #1164: the sole predicate routing an item to `MarketContext.intel` instead
+ * of `news`/`social` — macro, GDELT-GKG and Polymarket items all set `scope:
+ * 'asset_class'` (gdelt-scorer.ts, polymarket-agent.ts) and are evidence for
+ * the whole asset class, not for one instrument, so they must not be counted
+ * as per-ticker news/sentiment observations.
+ */
+function isClassWide(item: IntelligenceItem): boolean {
+  return item.scope === 'asset_class';
 }
 
 /**
@@ -209,14 +219,14 @@ export class MarketIntelligenceStore {
    * move within a bar:
    *
    *   1. `technical-analyst.ts` puts them verbatim in `key_points`
-   *      ("MI context: N news, M social items in window"), and `key_points` is
-   *      hashed into `debate_id` (`debate-id.ts`). A changed count is a changed
-   *      id, which misses the #617 same-bar short-circuit and pays for a second
-   *      debate on a bar that already has one.
+   *      ("MI context: N news, M social, K intel items in window"), and
+   *      `key_points` is hashed into `debate_id` (`debate-id.ts`). A changed
+   *      count is a changed id, which misses the #617 same-bar short-circuit
+   *      and pays for a second debate on a bar that already has one.
    *   2. `sentiment-analyst.ts` derives `direction` AND `confidence` from
-   *      `social`, and `fundamental-analyst.ts` does the same from `news`. This
-   *      is the part that is not merely a spend leak: a second, different
-   *      confidence sample on the same bar is what
+   *      `social`, and `fundamental-analyst.ts` does the same from `news` +
+   *      `intel` (#1164). This is the part that is not merely a spend leak: a
+   *      second, different confidence sample on the same bar is what
    *      `scale_in_conviction_delta` can turn into an extra lot.
    *   3. `mi-coverage.ts` counts coverage over the SAME 24h window on purpose
    *      ("the same window the debate itself sees"), so it must floor with the
@@ -331,9 +341,9 @@ export class MarketIntelligenceStore {
     return {
       timestamp: asOf,
       asset_class: assetClass,
-      news: visible.filter((item) => item.type === 'news'),
-      social: visible.filter((item) => item.type === 'sentiment'),
-      conflicts: [],
+      news: visible.filter((item) => !isClassWide(item) && item.type === 'news'),
+      social: visible.filter((item) => !isClassWide(item) && item.type === 'sentiment'),
+      intel: visible.filter(isClassWide),
       last_updated: lastUpdated,
       stale: this.isStale(assetClass, asOf, lastUpdated),
     };
@@ -394,9 +404,9 @@ export class MarketIntelligenceStore {
     const context: MarketContext = {
       timestamp: asOf,
       asset_class: assetClass,
-      news: inWindow.filter((item) => item.type === 'news'),
-      social: inWindow.filter((item) => item.type === 'sentiment'),
-      conflicts: [],
+      news: inWindow.filter((item) => !isClassWide(item) && item.type === 'news'),
+      social: inWindow.filter((item) => !isClassWide(item) && item.type === 'sentiment'),
+      intel: inWindow.filter(isClassWide),
       last_updated: lastUpdated,
       stale: this.isStale(assetClass, asOf, lastUpdated),
     };

@@ -24,7 +24,7 @@ function emptyContext(overrides: Partial<MarketContext> = {}): MarketContext {
     asset_class: 'stocks',
     news: [],
     social: [],
-    conflicts: [],
+    intel: [],
     stale: true,
     last_updated: null,
     ...overrides,

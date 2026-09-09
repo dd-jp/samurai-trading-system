@@ -126,9 +126,11 @@ describe('GdeltScoringPass', () => {
     // The read `fundamental-analyst.ts` performs: asset class, 24h, the
     // resolved MI subject for one instrument.
     const context = store.getContext('stocks', CONTEXT_WINDOW_MS, 'trace-1', BAR, 'SPY');
-    expect(context.news).toHaveLength(1);
-    expect(context.news[0]?.entity).toBe(GDELT_MACRO_ENTITY);
-    expect(context.news[0]?.sentiment).toBe(1);
+    // #1164: a class-wide item routes to `intel`, not `news`.
+    expect(context.news).toHaveLength(0);
+    expect(context.intel).toHaveLength(1);
+    expect(context.intel[0]?.entity).toBe(GDELT_MACRO_ENTITY);
+    expect(context.intel[0]?.sentiment).toBe(1);
   });
 
   it('does not count as per-ticker coverage, which is the scope boundary #1086 states', () => {
@@ -139,7 +141,7 @@ describe('GdeltScoringPass', () => {
     // `hasCoverageFor`'s predicate, restated rather than imported so this
     // file does not depend on the orchestrator: an item covers an instrument
     // only when its entity IS that instrument.
-    expect(context.news.some((news) => news.entity === 'SPY')).toBe(false);
+    expect(context.intel.some((news) => news.entity === 'SPY')).toBe(false);
   });
 
   it('replays an archive to identical items — the same run twice ingests once', () => {
@@ -153,7 +155,7 @@ describe('GdeltScoringPass', () => {
     passFor(archive, second).run('trace-3');
 
     const read = (store: MarketIntelligenceStore) =>
-      store.getContext('stocks', CONTEXT_WINDOW_MS, 'trace-x', BAR, 'SPY').news;
+      store.getContext('stocks', CONTEXT_WINDOW_MS, 'trace-x', BAR, 'SPY').intel;
     expect(read(first)).toHaveLength(1);
     expect(JSON.stringify(read(second))).toBe(JSON.stringify(read(first)));
   });
@@ -169,8 +171,8 @@ describe('GdeltScoringPass', () => {
       baselineWindowMs: 12 * HOUR_MS,
     }).run('trace-2');
 
-    const wideItem = wide.getContext('stocks', CONTEXT_WINDOW_MS, 't', BAR, 'SPY').news[0];
-    const narrowItem = narrow.getContext('stocks', CONTEXT_WINDOW_MS, 't', BAR, 'SPY').news[0];
+    const wideItem = wide.getContext('stocks', CONTEXT_WINDOW_MS, 't', BAR, 'SPY').intel[0];
+    const narrowItem = narrow.getContext('stocks', CONTEXT_WINDOW_MS, 't', BAR, 'SPY').intel[0];
     expect(wideItem).toBeDefined();
     expect(narrowItem).toBeDefined();
     // Same rows, different answer: the 2h signal window swallows an hour of
@@ -186,7 +188,7 @@ describe('GdeltScoringPass', () => {
 
     passFor(archive, store, logger).run('trace-1');
 
-    expect(store.getContext('stocks', CONTEXT_WINDOW_MS, 't', BAR, 'SPY').news).toHaveLength(0);
+    expect(store.getContext('stocks', CONTEXT_WINDOW_MS, 't', BAR, 'SPY').intel).toHaveLength(0);
     const refusal = entries.find((entry) => entry.level === 'warn');
     expect(refusal?.stage).toBe('market_intelligence');
     expect(refusal?.message).toContain('baseline');
@@ -265,16 +267,16 @@ describe('GdeltScoringPass', () => {
 
     const lastBar = new Date(BAR.getTime() + (bars - 1) * HOUR_MS);
     const context = store.getContext('stocks', CONTEXT_WINDOW_MS, 'trace-read', lastBar, 'SPY');
-    const news = context.news;
-    expect(news).toHaveLength(1);
+    const intel = context.intel;
+    expect(intel).toHaveLength(1);
     // `last_updated` answers "did a source speak recently", not "how many
     // items survived the read-time collapse", so it stays on the raw ingest
     // record and must keep reporting the newest emit.
     expect(context.last_updated?.toISOString()).toBe(lastBar.toISOString());
     // WHICH one survives, not merely how many: keeping the FIRST bar's item
     // would satisfy the count and serve a day-old measurement forever.
-    expect(news[0]?.timestamp.toISOString()).toBe(lastBar.toISOString());
-    expect(news[0]?.entity).toBe(GDELT_MACRO_ENTITY);
+    expect(intel[0]?.timestamp.toISOString()).toBe(lastBar.toISOString());
+    expect(intel[0]?.entity).toBe(GDELT_MACRO_ENTITY);
   });
 
   it('derives once per asset class per debate bar, not once per poll', () => {
@@ -309,8 +311,8 @@ describe('GdeltScoringPass', () => {
     expect(reads).toHaveBeenCalledTimes(1);
     // Which class a row belongs to is still decided per class, over the one
     // slice: a shared read must not collapse the two legs into one item.
-    const stocks = store.getContext('stocks', CONTEXT_WINDOW_MS, 't', BAR, 'SPY').news;
-    const crypto = store.getContext('crypto', CONTEXT_WINDOW_MS, 't', BAR, 'BTC-USD').news;
+    const stocks = store.getContext('stocks', CONTEXT_WINDOW_MS, 't', BAR, 'SPY').intel;
+    const crypto = store.getContext('crypto', CONTEXT_WINDOW_MS, 't', BAR, 'BTC-USD').intel;
     expect(stocks).toHaveLength(1);
     expect(crypto).toHaveLength(1);
 

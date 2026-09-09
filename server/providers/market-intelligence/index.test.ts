@@ -272,10 +272,10 @@ describe('MarketIntelligenceStore.getContext', () => {
    * A class-wide item survives an entity-scoped read. Aimed at the EFFECT the
    * `scope` field exists for, not at the field: a macro item is filed under a
    * series name no ticker equals, so without the carve-out #914's filter drops
-   * it from both analysts that read the content, and the only surviving
-   * consumer is `technical-analyst`'s bare `news.length`.
+   * it from both analysts that read the content. #1164: class-wide items are
+   * routed to `intel`, not `news` — `news` stays entity-scoped evidence only.
    */
-  it('admits a class-wide item past an entity-scoped read, and still keeps other entities out', () => {
+  it('admits a class-wide item past an entity-scoped read via intel, and still keeps other entities out of news', () => {
     const asOf = new Date('2026-07-14T09:00:00Z');
     const store = new MarketIntelligenceStore(new FixedClock(asOf));
 
@@ -289,7 +289,8 @@ describe('MarketIntelligenceStore.getContext', () => {
 
     const aaplContext = store.getContext('stocks', 60_000, 'trace-1', undefined, 'AAPL');
 
-    expect(aaplContext.news.map((item) => item.id).sort()).toEqual(['aapl-item', 'macro-item']);
+    expect(aaplContext.news.map((item) => item.id)).toEqual(['aapl-item']);
+    expect(aaplContext.intel.map((item) => item.id)).toEqual(['macro-item']);
   });
 
   it('omitting the entity filter still returns the full class-wide bag — additive, not a breaking change', () => {
@@ -322,7 +323,8 @@ describe('MarketIntelligenceStore.getContext', () => {
   /**
    * #1086 review: a class-wide item is a trailing statistic re-derived every
    * bar, so N of them in one read are N restatements of one measurement, not
-   * N observations — and `fundamental-analyst.ts` averages `news` unweighted.
+   * N observations — and `fundamental-analyst.ts` averages `intel` unweighted
+   * (#1164: class-wide items live in `intel`, not `news`).
    */
   it('serves only the LATEST class-wide item per source, entity and type', () => {
     const asOf = new Date('2026-07-14T09:00:00Z');
@@ -348,7 +350,8 @@ describe('MarketIntelligenceStore.getContext', () => {
 
     const context = store.getContext('stocks', 24 * 60 * 60_000, 'trace-1', undefined, 'SPY');
 
-    expect(context.news.map((item) => item.id)).toEqual(['bar-09']);
+    expect(context.intel.map((item) => item.id)).toEqual(['bar-09']);
+    expect(context.news).toEqual([]);
   });
 
   it('collapses class-wide items per macro series, not per source', () => {
@@ -364,7 +367,8 @@ describe('MarketIntelligenceStore.getContext', () => {
 
     const context = store.getContext('stocks', 60_000, 'trace-1', undefined, 'SPY');
 
-    expect(context.news.map((item) => item.id).sort()).toEqual(['cpi', 'rates']);
+    expect(context.intel.map((item) => item.id).sort()).toEqual(['cpi', 'rates']);
+    expect(context.news).toEqual([]);
   });
 
   it('leaves entity-scoped items alone — two articles about one ticker are two observations', () => {
@@ -383,13 +387,44 @@ describe('MarketIntelligenceStore.getContext', () => {
     expect(context.news.map((item) => item.id).sort()).toEqual(['first', 'second']);
   });
 
-  it('conflicts is always empty — conflict resolution is not ticketed under epic #52', () => {
+  /**
+   * #1164: `scope: 'asset_class'` is the sole routing predicate between
+   * `news`/`social` and `intel` — macro, GDELT-GKG and Polymarket items all
+   * set it (gdelt-scorer.ts, polymarket-agent.ts) and previously landed in
+   * `news` undifferentiated from per-ticker evidence.
+   */
+  it('routes a class-wide item to intel and excludes it from news, leaving an entity-scoped item in news', () => {
     const store = new MarketIntelligenceStore(new FixedClock(new Date('2026-07-14T09:00:00Z')));
-    store.ingest(envelope([newsItem()]));
+    store.ingest(
+      envelope([
+        newsItem({ id: 'entity-item', entity: 'AAPL' }),
+        newsItem({ id: 'class-wide-item', entity: 'GDELT-MACRO', scope: 'asset_class' }),
+      ]),
+    );
 
     const context = store.getContext('stocks', 60_000, 'trace-1');
 
-    expect(context.conflicts).toEqual([]);
+    expect(context.news.map((item) => item.id)).toEqual(['entity-item']);
+    expect(context.intel.map((item) => item.id)).toEqual(['class-wide-item']);
+  });
+
+  it('routes a class-wide sentiment item to intel and excludes it from social', () => {
+    const store = new MarketIntelligenceStore(new FixedClock(new Date('2026-07-14T09:00:00Z')));
+    store.ingest(
+      envelope([
+        newsItem({
+          id: 'class-wide-sentiment',
+          type: 'sentiment',
+          entity: 'GDELT-MACRO',
+          scope: 'asset_class',
+        }),
+      ]),
+    );
+
+    const context = store.getContext('stocks', 60_000, 'trace-1');
+
+    expect(context.social).toEqual([]);
+    expect(context.intel.map((item) => item.id)).toEqual(['class-wide-sentiment']);
   });
 });
 

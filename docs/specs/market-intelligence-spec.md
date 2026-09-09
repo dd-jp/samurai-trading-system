@@ -56,6 +56,8 @@ This spec describes three agents and a Convergence Engine. **One agent is built.
 
 **Consequences for anyone reading the modules below:** `ConvergenceSignal`, `StreamSnapshot`, the signal taxonomy and the confidence formulas are all **design, not code**. Analysts today read `IntelligenceItem[]` from one agent, and an empty read reaches them as `NO_DATA_MARKER` (#463) rather than as a neutral sentiment score.
 
+**`MarketContext.intel` and `.signals` — as-built shape (#1164, 2026-09-09).** The Key Interfaces block below is the ORIGINAL design: `intel` scoped to WorldMonitor geopolitical items, paired with a `signals: ConvergenceSignal[]` field replacing the prior `ConflictResolution`. As-built, neither the Convergence Engine nor a wired WorldMonitor item producer exists (table above), so that pairing never shipped. What shipped instead: `types.ts`'s `MarketContext` carries `intel: IntelligenceItem[]`, routed not by SOURCE but by `IntelligenceItem.scope` (#1086) — every item with `scope === 'asset_class'` lands in `intel` regardless of which agent wrote it, currently GDELT-GKG (#1086) and Polymarket (#504), with WorldMonitor free to join the same bucket the day its item producer ships. `news`/`social` stay entity-scoped (`scope` absent or `'entity'`), split by `type`. The dead `conflicts: ConflictResolution[]` field (always `[]` since #68, no producer) is **deleted**, not given a producer — `signals` remains this spec's documented narrowing (Convergence Engine: "No"), not a field on the as-built type. `fundamental-analyst.ts` folds `news` and `intel` together, unweighted, for its direction/confidence vote (the same arithmetic `news` alone got before), and reports the two counts distinctly in `key_points` so a transcript reader can tell a filing from a macro aggregate; `technical-analyst.ts`'s MI-context line reports all three counts.
+
 **Retrieval — THIS STAGE RETRIEVES AS OF 2026-09-03 (#969), behind a default-off switch.** The paragraphs below described a standing property that was never true of the world, only of an untested belief about it. They are kept, struck through in substance rather than deleted, because a great deal downstream was built on them.
 
 ~~**THIS STAGE DOES NOT RETRIEVE, and that is now a standing property.** "Real-time stream of market-related tweets" (Module: Grok Agent) is **not** what runs. What runs asks a model for X/Twitter sentiment and gets its answer from the training corpus; nothing searches X.~~
@@ -238,7 +240,7 @@ interface MarketContext {
 }
 ```
 
-The prior `ConflictResolution` (binary DeepResearch-vs-Grok winner) is replaced by `ConvergenceSignal` — see **Module: Convergence Engine** below for its shape and the full signal taxonomy.
+The prior `ConflictResolution` (binary DeepResearch-vs-Grok winner) is replaced by `ConvergenceSignal` in this ORIGINAL design — see **Module: Convergence Engine** below for its shape and the full signal taxonomy. **As-built (#1164), see the narrowing note just below the AS-BUILT NARROWING table**: `intel` ships routed by `scope`, not by source, and `conflicts`/`ConflictResolution` is deleted outright rather than replaced by `signals`.
 
 **Agent Orchestration**
 

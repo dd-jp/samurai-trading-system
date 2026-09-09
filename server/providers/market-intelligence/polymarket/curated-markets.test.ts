@@ -128,8 +128,8 @@ describe('CURATED_MACRO_MARKETS (#1120)', () => {
 
     await expect(agent.refresh('t1')).resolves.toBe(true);
 
-    const news = store.getContext(POLYMARKET_ASSET_CLASS, 24 * 60 * 60 * 1000, 'test').news;
-    expect(news.map((item) => item.entity).sort()).toEqual(
+    const intel = store.getContext(POLYMARKET_ASSET_CLASS, 24 * 60 * 60 * 1000, 'test').intel;
+    expect(intel.map((item) => item.entity).sort()).toEqual(
       CURATED_MACRO_MARKETS.map((entry) => entry.entity).sort(),
     );
   });
