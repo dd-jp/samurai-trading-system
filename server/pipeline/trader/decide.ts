@@ -526,6 +526,15 @@ async function buildBracket(
   // purpose: opening or adding to a position without a live price is worse
   // than deferring to the next tick, unlike the ONE exit ADR-0014 makes
   // mandatory (see `readExitPrice`'s docstring for the full posture).
+  // Stamped onto `decided_at` below (#1190) — Verdict's gate 1 measures signal
+  // age from THIS read, not from `DebateLog.created_at` (the debate's own
+  // completion instant): `DebateResult` does not expose `created_at`, so
+  // reading it here would need a contract change gate 1 does not otherwise
+  // need, and `asOf` already bounds the same latency budget
+  // (`LATENCY_BUDGET_MS.stocks`, 60s) that separates debate completion from
+  // this call. Read BEFORE `getMark`/`getBars`/the precedent lookup below, so
+  // a slow data fetch still counts toward the age Verdict measures — it is
+  // not a cheap timestamp taken after the expensive work is already done.
   const asOf = clock.now();
   const [mark, bars] = await Promise.all([
     marketData.getMark(instrument, asOf),
@@ -1039,6 +1048,11 @@ async function buildFlattenExit(
   const totalSize = totalHeldQuantity(held);
   if (totalSize <= 0) return skip('exit_no_filled_size');
 
+  // Stamped onto `decided_at` below (#1190) — same `clock.now()` read as
+  // `buildBracket`'s, see that call's comment for why this and not
+  // `DebateLog.created_at`. This exit's own gate 1 read is exempted for
+  // `exit_reason: 'flatten'` (`mandatory_flatten`, see verdict/index.ts), so
+  // this timestamp only feeds `trader_log`/observability here, not a gate.
   const asOf = clock.now();
   const priced = await readExitPrice(input, positions, exitReason, asOf);
 

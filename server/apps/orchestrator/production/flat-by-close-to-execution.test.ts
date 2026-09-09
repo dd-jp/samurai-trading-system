@@ -26,6 +26,17 @@
  * The configs are the SHIPPED ones (`buildStartingProfileConfigs`), not local
  * fixtures — a test that invented its own `max_signal_age` would pass against a
  * bound nobody runs.
+ *
+ * **#1190 moved what gate 1 reads.** The arithmetic above is `decision_timestamp`'s
+ * — still true of that field, and still what makes it useless as a staleness
+ * coordinate, but no longer what the `staleness` gate measures. Gate 1 now
+ * reads `OrderIntent.decided_at`, `clock.now()` read fresh when `buildFlattenExit`
+ * builds the intent, so an ordinary run of this harness (one clock shared by
+ * every stage) always hands Verdict a `decided_at` of age zero — the
+ * `mandatory_flatten` exemption is never actually exercised by that path. The
+ * `verdictDelayMs` case below gives the Verdict/Execution stages a later clock
+ * than the Trader stage so `decided_at` is genuinely stale by the time gate 1
+ * runs, which is the only way this file can still prove the exemption matters.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEBATE_BAR_TIMEFRAME_MS, floorToBar } from '../../../pipeline/debate-engine/index.js';
@@ -167,11 +178,28 @@ interface Venue {
   readonly expectedSignalAgeMinutes: number;
 }
 
+interface DriveFlattenOptions {
+  /**
+   * Advances the clock the Risk/Verdict/Execution stages see past the one the
+   * Trader stage decided on, so `decided_at` (stamped at Trader build time) is
+   * stale by the time gate 1 runs — production bounds this gap far under
+   * 15 min (Risk Critic <=10s), so this is a fixture-only exercise of the
+   * `mandatory_flatten` exemption, not a reachable production scenario.
+   */
+  readonly verdictDelayMs?: number;
+  /**
+   * Bypasses gate 4 (market-open) so a `verdictDelayMs` large enough to also
+   * cross `sessionEnd` is refused (if at all) by `staleness` alone — the same
+   * isolate-one-gate posture the file header uses for the healthy-mark choice.
+   */
+  readonly allowExtendedHours?: boolean;
+}
+
 /**
  * The whole chain for one venue: tick exit-check -> Risk -> Verdict ->
  * Execution, wired through the SAME `build*Step` bindings production composes.
  */
-async function driveFlatten(venue: Venue) {
+async function driveFlatten(venue: Venue, opts: DriveFlattenOptions = {}) {
   const sessionEnd = venue.calendar.sessionEnd(SESSION_DAY);
   // `null` is `AlwaysOpenCalendar`'s answer (#667's ruling in the type system);
   // both venue calendars here resolve a close, and a null would mean the case
@@ -180,7 +208,9 @@ async function driveFlatten(venue: Venue) {
   // Inside ADR-0014's window (close - 5 min), one minute clear of the edge so
   // the case cannot turn on a boundary comparison it is not about.
   const now = new Date(sessionEnd.getTime() - 4 * 60_000);
-  const clock: Clock = { now: () => now };
+  const decisionClock: Clock = { now: () => now };
+  const verdictNow = new Date(now.getTime() + (opts.verdictDelayMs ?? 0));
+  const verdictClock: Clock = { now: () => verdictNow };
   // Exactly what `tick-runner.ts` hands `runExitCheckPass`.
   const bar = floorToBar(now, DEBATE_BAR_TIMEFRAME_MS);
 
@@ -216,7 +246,7 @@ async function driveFlatten(venue: Venue) {
   const intent: OrderIntent | null = await exitCheck({
     trace_id: TRACE_ID,
     instrument: INSTRUMENT,
-    clock,
+    clock: decisionClock,
     bar,
   });
 
@@ -227,20 +257,22 @@ async function driveFlatten(venue: Venue) {
     config: PROFILE.riskConfig,
     correlationConfig: PROFILE.correlationConfig,
     ciiConsumer: { getScores: () => ({}) },
-  })({ trace_id: TRACE_ID, intent, clock });
+  })({ trace_id: TRACE_ID, intent, clock: verdictClock });
 
   const verdict: VerdictDecision = await buildVerdictStep({
     ...shared,
     tradingCalendar: venue.calendar,
     positionStore: store,
-    config: PROFILE.verdictConfig,
+    config: opts.allowExtendedHours
+      ? { ...PROFILE.verdictConfig, allow_extended_hours: true }
+      : PROFILE.verdictConfig,
     approvals: { requestApproval: vi.fn(async () => 'approved' as const) },
     store: db,
-  })({ trace_id: TRACE_ID, risk_decision: riskDecision, clock });
+  })({ trace_id: TRACE_ID, risk_decision: riskDecision, clock: verdictClock });
 
   const broker = makeBroker();
   const execution = await buildExecutionStep({
-    clock,
+    clock: verdictClock,
     broker: broker as never,
     store,
     costModel: {} as never,
@@ -254,7 +286,7 @@ async function driveFlatten(venue: Venue) {
     filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
   })(verdict);
 
-  return { now, bar, intent, riskDecision, verdict, execution, broker, sessionEnd };
+  return { now, verdictNow, bar, intent, riskDecision, verdict, execution, broker, sessionEnd };
 }
 
 const VENUES: readonly Venue[] = [
@@ -276,8 +308,11 @@ describe('#894: a mandatory flat-by-close flatten reaches the broker', () => {
         const { intent, now, bar } = await driveFlatten(venue);
 
         // The premise, asserted rather than assumed: if this stops being true
-        // the cases below stop testing the `staleness` gate (1) and nothing
-        // would say so.
+        // the cases below stop testing `decision_timestamp`'s own bar
+        // arithmetic and nothing would say so. `decision_timestamp` still
+        // drives idempotency and `OpenPosition` persistence (#1190 left it
+        // alone) — this is no longer the `staleness` gate's premise, which is
+        // `decided_at` (see the "stale decided_at" case below).
         expect(intent.metadata.exit_reason).toBe('flatten');
         expect(intent.decision_timestamp).toEqual(bar);
         const signalAgeMs = now.getTime() - intent.decision_timestamp.getTime();
@@ -288,7 +323,12 @@ describe('#894: a mandatory flat-by-close flatten reaches the broker', () => {
       it('is not refused by Verdict, and submits a flatten at the venue', async () => {
         const { intent, verdict, execution, broker } = await driveFlatten(venue);
 
-        // Fails on main with `no_go` / `staleness` — the defect, stated.
+        // Fails on main (pre-#894) with `no_go` / `staleness` — the original
+        // defect, stated. Post-#1190 this alone no longer exercises the
+        // `mandatory_flatten` exemption: `decided_at` is stamped fresh by this
+        // harness's single shared clock regardless of the exemption, so this
+        // case would pass even without it. See the "stale decided_at" case
+        // below for the one that still catches the exemption's removal.
         expect(verdict.no_go_reason).toBeNull();
         expect(verdict.status).toBe('go');
         expect(execution.status).toBe('submitted');
@@ -306,6 +346,31 @@ describe('#894: a mandatory flat-by-close flatten reaches the broker', () => {
         // The exemption's narrowing mechanism: a typed marker set by
         // `buildFlattenExit` for `exit_reason: 'flatten'` alone.
         expect(intent.metadata.mandatory_flatten).toBe(true);
+      });
+
+      it('is not refused by Verdict when decided_at goes stale mid-pipeline (#1190)', async () => {
+        // allow_extended_hours bypasses gate 4 so a delay past max_signal_age
+        // is refused (if at all) by `staleness` alone — see DriveFlattenOptions.
+        const { intent, verdictNow, verdict, execution, broker } = await driveFlatten(venue, {
+          verdictDelayMs: PROFILE.verdictConfig.max_signal_age.stocks + 60_000,
+          allowExtendedHours: true,
+        });
+
+        const signalAgeMs = verdictNow.getTime() - intent.decided_at.getTime();
+        expect(signalAgeMs).toBeGreaterThan(PROFILE.verdictConfig.max_signal_age.stocks);
+
+        // Deleting the `mandatory_flatten` exemption at verdict/index.ts's
+        // gate 1 makes this fail with `no_go` / `staleness` — the case the
+        // two above no longer catch.
+        expect(verdict.no_go_reason).toBeNull();
+        expect(verdict.status).toBe('go');
+        expect(execution.status).toBe('submitted');
+        expect(broker.submitFlatten).toHaveBeenCalledWith(
+          INSTRUMENT,
+          'sell',
+          HELD_SIZE,
+          intent.idempotency_key,
+        );
       });
     });
   }

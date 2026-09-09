@@ -1242,10 +1242,10 @@ describe('VerdictImpl.decide — mandatory flatten and staleness (#894)', () => 
  * #1357 — the two exemptions stacked, on one intent, driven through Verdict.
  *
  * `unpricedFlatten()` above never carries `mandatory_flatten` and inherits
- * `makeIntent()`'s fresh `decision_timestamp`, so #826's suite exercises
- * skipping the two price gates but not the three-gate stack `buildFlattenExit`
- * actually produces (`exit_reason: 'flatten'` sets both markers together —
- * see the file header's "THE TWO STACK, ONE WAY"). This drives that shape.
+ * `makeIntent()`'s fresh `decided_at`, so #826's suite exercises skipping the
+ * two price gates but not the three-gate stack `buildFlattenExit` actually
+ * produces (`exit_reason: 'flatten'` sets both markers together — see the
+ * file header's "THE TWO STACK, ONE WAY"). This drives that shape.
  */
 describe('VerdictImpl.decide — stale AND unpriced mandatory flatten (#826, #894 stacked)', () => {
   const STALE_AT = new Date(NOW.getTime() - 56 * 60_000);
@@ -1256,7 +1256,12 @@ describe('VerdictImpl.decide — stale AND unpriced mandatory flatten (#826, #89
       ...base,
       intent_type: 'exit',
       side: 'sell',
+      // Both fields stamped stale (#1190): gate 1 reads `decided_at`, so a
+      // stale `decision_timestamp` alone would leave the `mandatory_flatten`
+      // exemption below unexercised — the "not refused for staleness" case
+      // would pass whether or not the exemption code path ran at all.
       decision_timestamp: STALE_AT,
+      decided_at: STALE_AT,
       entry: 0,
       stop: 0,
       target: 0,

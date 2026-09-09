@@ -235,6 +235,19 @@ export class VerdictImpl implements Verdict {
     // flatten double-submitting, and the breaker re-check (5) still applies.
     // An UNPRICED one additionally skips the two price gates at the branch
     // below, since `unpriced_exit` implies this marker — see the file header.
+    //
+    // This gate has effectively no PRODUCTION trigger left. `asOf` is read at
+    // Trader intent-build time (`decide.ts`, before the mark/bars/precedent
+    // reads so a slow data fetch still counts), Verdict runs in the same tick
+    // right after Risk, and the Risk Critic is bounded at 10s (#957) — so
+    // `now - decided_at` here is bounded far under both the 5-minute crypto
+    // and 15-minute stocks bounds in every real run. The issue's "a genuinely
+    // stale decision must still no-go" requirement is proved by fixtures
+    // (`index.test.ts`'s `staleExit()`) and, for the #894 exemption
+    // specifically, by an injected clock gap in
+    // `flat-by-close-to-execution.test.ts` — not by a reachable production
+    // scenario. A real trigger would need a stalled Trader/Risk stage, which
+    // has no test coverage of its own; nothing here claims one.
     const signalAgeMs = now.getTime() - orderIntent.decided_at.getTime();
     const maxAgeMs = config.max_signal_age[orderIntent.asset_class];
     if (orderIntent.metadata.mandatory_flatten !== true && signalAgeMs > maxAgeMs) {
