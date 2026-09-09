@@ -322,10 +322,9 @@ export async function enforceLatencyBudget(params: {
     direction: LOW_CONFIDENCE_FALLBACK.direction,
     debate_id,
     bar_timestamp: bar,
-    // `timed_out` alone already makes `debateWasDegraded` true; `read: true`
-    // here is not a claim that a synthesis exists (`LOW_CONFIDENCE_FALLBACK`
-    // is a scaffold too) — it is only saying this is not the #1393 case,
-    // which is a fallback carrying NEITHER `timed_out` nor `rate_limited`.
+    // `timed_out` already makes `debateWasDegraded` true; see
+    // DebateResult.read's docblock for why this scaffold still sets
+    // `read: true` rather than `false`.
     read: true,
     timed_out,
   };

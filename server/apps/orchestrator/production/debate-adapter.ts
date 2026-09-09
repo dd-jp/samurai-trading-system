@@ -511,8 +511,8 @@ export function rateLimitedDebateResult(
     // but the field is required by the contract precisely so that no producer
     // gets to leave the coordinate unstated for a later consumer to re-derive.
     bar_timestamp: bar,
-    // `rate_limited` alone already makes `debateWasDegraded` true; `read:
-    // true` only says this is not the #1393 case (neither flag set).
+    // `rate_limited` already makes `debateWasDegraded` true; see
+    // DebateResult.read's docblock for why this still sets `read: true`.
     read: true,
     rate_limited: { reason },
   };
@@ -589,8 +589,7 @@ export function replayedDebateResult(persisted: ReplayableDebateLog): DebateResu
     // including a tick after a process restart — and the intent must be keyed
     // to the bar the row records, not to whenever the replay happened to run.
     bar_timestamp: persisted.bar_timestamp,
-    // A persisted row is a debate that actually ran; replaying it is not the
-    // #1393 fallback.
+    // A persisted row is a debate that actually ran.
     read: true,
   };
 }

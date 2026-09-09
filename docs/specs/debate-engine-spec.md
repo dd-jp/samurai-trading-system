@@ -106,6 +106,12 @@ interface DebateResult {
                                 //   instead of flooring a second, later clock read of its own
                                 //   (#687 / cross-spec-contracts.md CV-21 point 2). Required:
                                 //   every producer must say which bar it speaks for.
+  read: boolean;                // true iff some accountable process produced this result (a
+                                //   debate, a budget/rate-limit refusal, a deterministic
+                                //   axis-vote read, a replay); false is reserved for a future
+                                //   fallback that hands back a neutral scaffold none of those
+                                //   account for (#1393). Required, not optional: no producer
+                                //   sets false yet.
 }
 
 interface AnalystContribution {

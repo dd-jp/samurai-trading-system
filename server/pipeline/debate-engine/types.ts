@@ -133,39 +133,51 @@ export interface DebateResult {
    */
   bar_timestamp: Date;
   /**
-   * True when `synthesis`/`position`/`direction`/`confidence` above were
-   * actually produced by reading something — a converged debate, a
-   * round-capped one, or a `timed_out` partial that has a real (if
-   * truncated) synthesis from a round that finished. False only for a
-   * neutral scaffold a producer hands back because there was nothing to
-   * read at all (#1393).
-   *
    * REQUIRED, not optional — the same enforcement `bar_timestamp` above
-   * uses (#687), and for the same reason: an optional flag lets a producer
-   * omit it and hand the Trader a silent default. `timed_out` and
-   * `rate_limited` already discriminate the two read failures this contract
-   * names today, but neither is universal — a future fallback that
-   * produces a neutral result for some OTHER reason (a parse failure, a
-   * malformed provider response, anything not shaped like a budget or an
-   * admission refusal) would set neither, and `debateWasDegraded`
-   * (trader/decide.ts) would then read it as a genuine decline. That
-   * result would log as `declined_on_signal` — the word that means the
-   * debate was read and passed — when nothing was read. This field is the
-   * general fact the two specific flags cannot cover, checked ahead of
-   * either of them by `debateWasDegraded` and by the orchestrator's
-   * `debateDecisionWord` (#1080) gloss, so the two stay in agreement about
-   * the same result.
+   * uses (#687): an optional flag lets a producer omit it and hand the
+   * Trader a silent default.
    *
-   * No production producer sets this to `false` yet. Every current path —
-   * the round orchestrator, both `enforceLatencyBudget` shapes, the
-   * rate-limit/spend-cap refusals, the control arm's axis-vote decision
-   * (including its own no-axis-vote neutral, which is a genuine falsifier
-   * decline, not an unread debate — see its own comment), and the
-   * replay-from-log shape — sets `true`, because every one of them either
-   * ran a real debate, replays one that ran, or already carries its own
-   * `timed_out`/`rate_limited` flag. This field has a reader now and no
-   * writer; behaviour is unchanged until a fallback exists to set it
-   * `false`.
+   * The operative rule is narrower than "a debate happened": `true` covers
+   * every result some accountable process produced — a converged or
+   * round-capped debate, a `timed_out` partial with a real synthesis from
+   * a round that finished, a `rate_limited` refusal, a deterministic
+   * axis-vote read (control arm, no LLM debate involved), the control
+   * arm's own no-axis-vote decline (a genuine falsifier decision, not a
+   * blank), or a replay of a persisted debate. `false` is reserved for a
+   * future fallback that hands back a neutral scaffold for a reason NONE
+   * of the above account for — `timed_out` and `rate_limited` both
+   * undefined, and no other recognized producer path ran. That is the
+   * #1393 case this field exists to name; a producer that reads the
+   * narrower "was there literally an LLM debate" sense of the name below
+   * would wrongly set `false` on the axis-vote and no-axis-vote control-arm
+   * paths and flip their classification from `declined_on_signal` to
+   * `could_not_decide`.
+   *
+   * Named `read` for that broad sense — "something accountable happened
+   * here, not nothing" — not the narrow "an LLM debate ran" sense a literal
+   * reading suggests. Renaming would touch every producer and consumer site
+   * for no behavioural gain; stating the actual rule here does the same job
+   * without the churn.
+   *
+   * `timed_out` and `rate_limited` already discriminate the two read
+   * failures this contract names today, but neither is universal — a
+   * future fallback that produces a neutral result for some OTHER reason
+   * (a parse failure, a malformed provider response, anything not shaped
+   * like a budget or an admission refusal) would set neither, and
+   * `debateWasDegraded` (trader/decide.ts) would then read it as a genuine
+   * decline. That result would log as `declined_on_signal` — the word that
+   * means the debate was read and passed — when nothing was read.
+   * `debateWasDegraded` checks `!read` alongside the two flags (order
+   * doesn't matter in a boolean OR); the orchestrator's `debateDecisionWord`
+   * (#1080) checks it last, after both — so the two stay in agreement about
+   * the same result regardless of check order.
+   *
+   * No production producer sets this to `false` yet: every current path
+   * sets `true`, because every one of them either ran a real debate,
+   * replays one that ran, read something deterministic in place of a
+   * debate, or already carries its own `timed_out`/`rate_limited` flag.
+   * This field has a reader now and no writer; behaviour is unchanged
+   * until a fallback exists to set it `false`.
    */
   read: boolean;
   /**
