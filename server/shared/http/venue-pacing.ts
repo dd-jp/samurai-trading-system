@@ -298,8 +298,16 @@ export const DEFAULT_VENUE_PACING: VenuePacingConfig = {
    * disconnects happen while the venue holds live bracket legs.
    */
   ibkr: { capacity: 5, refillPerSecond: 5, reserveForPriority: 0 },
-  // Capacity 2 lets an adopt-or-place pair (open-orders lookup, then the POST)
-  // go out back to back; the 1/s refill is the order-placement session limit.
+  // Capacity 2 covers only the first two requests of a fan-out sequence back
+  // to back; the rest queue on the 1/s refill, which IS the order-placement
+  // session limit (VENUE_DOCUMENTED_CEILING_PER_SECOND.saxo above), so
+  // raising it would burst past a documented per-session ceiling rather than
+  // an invented one. #1222 measured the real fan-outs this paces:
+  // submitBracket's fresh-placement path is 3 requests (listOpenOrders,
+  // listOrderActivities, placeOrder) — the POST parks ~1s behind the first
+  // two — and cancelling a 3-leg bracket is 4 (listOpenOrders + one
+  // cancelOrder per leg) — ~2s of the ~1s/leg refill after the burst. No
+  // hard deadline is known to bind on either path today.
   saxo: { capacity: 2, refillPerSecond: 1, reserveForPriority: 0 },
 };
 

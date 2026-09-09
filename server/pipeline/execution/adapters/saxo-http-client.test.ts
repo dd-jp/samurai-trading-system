@@ -1,4 +1,5 @@
 import { TokenBucket } from '../../../shared/index.js';
+import { recordingLogger } from '../../../shared/recording-logger.js';
 import {
   SaxoBrokerProviderError,
   SaxoBrokerRateLimitError,
@@ -8,11 +9,15 @@ import type { SaxoOrderRequest } from './saxo-client.js';
 import { SAXO_CREDENTIAL_ENV_VARS, SaxoHttpBrokerClient } from './saxo-http-client.js';
 
 /**
- * These tests assert transport behaviour (retry, validation, error mapping),
- * not pacing (#1222 covers per-request pacing directly, in
+ * Most of these tests assert transport behaviour (retry, validation, error
+ * mapping), not pacing (#1222's fan-out-count evidence lives in
  * saxo-per-request-pacing.test.ts) — a permissive bucket keeps every case
  * off the (fake, non-advancing) pacing clock regardless of how many requests
- * it issues on one client.
+ * it issues on one client. The `SaxoHttpBrokerClient pacing (#1222)` describe
+ * block below is the exception: it deliberately does NOT inject a permissive
+ * bucket, to pin the constructor's own default (the only pacing path a real
+ * call site takes today, mirroring `http-polygon-client.test.ts`'s "free-tier
+ * pacing" split between an injected bucket and the constructor's own).
  */
 function permissiveLimiter(): TokenBucket {
   return new TokenBucket({ capacity: 1_000, refillPerSecond: 1_000 });
@@ -460,5 +465,101 @@ describe('SaxoHttpBrokerClient', () => {
       await expect(pending).resolves.toBeUndefined();
       expect(fetchMock).toHaveBeenCalledTimes(3);
     });
+  });
+});
+
+/**
+ * #1222: pacing now lives on `SaxoHttpBrokerClient` itself. These cases
+ * deliberately do NOT inject a permissive bucket like every test above —
+ * they pin the constructor's own default (the only pacing path a real call
+ * site takes today) and per-attempt acquisition on retry, mirroring
+ * `http-polygon-client.test.ts`'s "free-tier pacing" split between an
+ * injected bucket and the constructor's own default.
+ */
+describe('SaxoHttpBrokerClient pacing (#1222)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("paces a burst of 3 requests through the constructor's own default bucket, not just an injected one", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ Data: [] }));
+    vi.stubGlobal('fetch', fetchMock);
+    // No `rateLimiter` override: DEFAULT_VENUE_PACING.saxo (capacity 2,
+    // refill 1/s) is what every real call site actually gets.
+    const client = new SaxoHttpBrokerClient({
+      accessToken: FAKE_TOKEN,
+      baseUrl: 'https://gateway.example/sim/openapi/',
+      retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
+    });
+
+    await client.listOpenOrders();
+    await client.listOpenOrders();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    const third = client.listOpenOrders();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await third;
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('wires token_bucket_wait telemetry (#1083) onto the default bucket when a logger is given', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ Data: [] }));
+    vi.stubGlobal('fetch', fetchMock);
+    const logger = recordingLogger();
+    const client = new SaxoHttpBrokerClient({
+      accessToken: FAKE_TOKEN,
+      baseUrl: 'https://gateway.example/sim/openapi/',
+      retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
+      logger,
+    });
+
+    await client.listOpenOrders();
+    await client.listOpenOrders();
+    const third = client.listOpenOrders();
+    await vi.advanceTimersByTimeAsync(2_000);
+    await third;
+
+    const waits = logger.entries.filter((entry) => entry.event === 'token_bucket_wait');
+    expect(waits).toHaveLength(1);
+    expect(waits[0]?.payload).toMatchObject({ bucket: 'saxo', lane: 'priority' });
+  });
+
+  // THE MUTATION THIS KILLS: hoist `await this.rateLimiter.acquire()` out of
+  // `withRetry`'s closure in saxo-http-client.ts, so a retried attempt is
+  // covered by the first attempt's token instead of acquiring its own. Every
+  // test above stays green under that mutation — a permissive bucket never
+  // blocks regardless of how many times `acquire()` is (or isn't) called, so
+  // a missed call is invisible to a call-count assertion against a bucket
+  // that never runs dry. Only a spy on a bucket small enough to matter,
+  // counted per attempt, catches it.
+  it('acquires a second token for a retried request, not just the first attempt', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ Message: 'slow down' }, 429, { 'retry-after': '1' }))
+      .mockResolvedValueOnce(jsonResponse({ Data: [] }));
+    vi.stubGlobal('fetch', fetchMock);
+    const rateLimiter = new TokenBucket({ capacity: 1_000, refillPerSecond: 1_000 });
+    const acquireSpy = vi.spyOn(rateLimiter, 'acquire');
+    const client = new SaxoHttpBrokerClient({
+      accessToken: FAKE_TOKEN,
+      baseUrl: 'https://gateway.example/sim/openapi/',
+      retry: { maxAttempts: 3, baseDelayMs: 10, maxDelayMs: 100 },
+      rateLimiter,
+    });
+
+    const pending = client.listOpenOrders();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await pending;
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(acquireSpy).toHaveBeenCalledTimes(2);
   });
 });

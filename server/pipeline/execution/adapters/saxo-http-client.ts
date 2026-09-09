@@ -12,7 +12,7 @@
  * `AccountKey`/`ClientKey` are resolved once from `/port/v1/accounts/me` and
  * memoised, so the adapter never holds an account identifier.
  */
-import type { RetryConfig } from '../../../shared/index.js';
+import type { Logger, RetryConfig } from '../../../shared/index.js';
 import {
   DEFAULT_VENUE_PACING,
   fetchWithTimeout,
@@ -72,6 +72,16 @@ export interface SaxoHttpBrokerClientOptions {
    * boundary rather than the caller). Defaults to `DEFAULT_VENUE_PACING.saxo`.
    */
   rateLimiter?: TokenBucket;
+  /**
+   * Wires `TokenBucketTelemetry` (#1083) onto the DEFAULT bucket only — the
+   * fallback for a caller that constructs this client standalone with no
+   * `rateLimiter` (the composition root, once Saxo is wired, builds its own
+   * shared bucket with telemetry the same way `production.ts` does for
+   * Alpaca and passes it as `rateLimiter`, so this option never reaches that
+   * path). Optional and silent-by-default, same as `TokenBucket` itself —
+   * see its class doc.
+   */
+  logger?: Logger;
 }
 
 interface AccountIdentity {
@@ -308,7 +318,13 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
     this.pinnedAccountKey = options.accountKey;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.retry = options.retry ?? DEFAULT_RETRY_CONFIG;
-    this.rateLimiter = options.rateLimiter ?? new TokenBucket(DEFAULT_VENUE_PACING.saxo);
+    this.rateLimiter =
+      options.rateLimiter ??
+      new TokenBucket(
+        DEFAULT_VENUE_PACING.saxo,
+        undefined,
+        options.logger === undefined ? undefined : { logger: options.logger, name: 'saxo' },
+      );
   }
 
   private headers(init: RequestInit, extra: Record<string, string> = {}): Record<string, string> {
