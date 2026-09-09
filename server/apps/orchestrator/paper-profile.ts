@@ -75,10 +75,14 @@
  * decision here instead would have hard-coded one operator's posture into a
  * checked-in file; it is a deployment choice, not a tuning value.
  *
- * `approvals` is the exception and is still a log-only stand-in: it is an
- * inbound HITL round trip rather than an alert, and wiring it through Telegram
- * is #275's remaining half. See `verdictConfig.automation_level` below for
- * what that means for the `manual` setting in practice.
+ * `approvals` is the exception, and no default is supplied here: the
+ * composition root's own fallback (`UnwiredApprovalChannel`) THROWS rather
+ * than logging or approving if the HITL gate (6) is ever reached — it is an
+ * inbound round trip rather than an alert, so there is no answer a log-only
+ * stand-in could safely fabricate. #275 (closed) already built the inbound
+ * half through Telegram; nothing wires it into `ProductionConfig.approvals`
+ * today. See `verdictConfig.automation_level` below for what that means for the
+ * `manual` setting in practice.
  *
  * The Feedback Loop's `LoosenNotificationChannel` is emphatically NOT that
  * exception: it returns `void` and collects no answer, so #366 resolved it
@@ -1588,11 +1592,14 @@ export function buildStartingProfileConfigs(
      */
     drift_tolerance_pct: { crypto: 0.005, stocks: 0.005 },
     /**
-     * UNSOURCED (milliseconds). Inert while `ConsoleApprovalChannel` resolves
-     * synchronously; it becomes load-bearing the moment a real approval
-     * channel is wired (#275's remaining half — #322 wired the outbound alerts
-     * only). 15 min is a coffee-break response window, and the gate is
-     * fail-safe either way — verdict-spec.md "Timeout -> no-go".
+     * UNSOURCED (milliseconds). Inert today: ADR-0007's `auto` automation dial
+     * short-circuits Verdict's HITL gate (6) before this value is ever read,
+     * for every asset class. It becomes load-bearing only if the dial is
+     * turned back to `manual`/`semi_auto` with a real approval channel wired
+     * (#275, closed, already built that channel — #322 wired the outbound
+     * alerts only; nothing wires it into `ProductionConfig.approvals` today).
+     * 15 min is a coffee-break response window, and the gate is fail-safe either
+     * way — verdict-spec.md "Timeout -> no-go".
      */
     human_timeout: 15 * 60_000,
     /**

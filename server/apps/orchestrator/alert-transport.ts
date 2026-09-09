@@ -84,11 +84,20 @@
  * (`client.start()` is never called — `getUpdates` is single-consumer per bot
  * token, and starting one here would make a *second* process' approval poll
  * impossible), no approval handler is registered, and
- * `ProductionConfig.approvals` still falls back to `ConsoleApprovalChannel`.
- * Wiring HITL approvals through Telegram is #275's remaining half. Validating
- * the allowlist now rather than then is the same fail-at-boot posture the spec
- * asks for: an unattended soak must not discover a broken allowlist on the day
- * approvals go live.
+ * `ProductionConfig.approvals` still falls back to `UnwiredApprovalChannel`
+ * (`production.ts`'s `resolveApprovalsChannel`), which THROWS rather than
+ * fabricating consent if Verdict's HITL gate (6) is ever reached — ADR-0007
+ * already makes that gate unreachable at the shipped `auto` dial, and
+ * `assertAutomationLevelSupported` refuses to boot at all on `manual`/
+ * `semi_auto` (verdict-spec.md "Problem Statement"), so there is no
+ * auto-approving stand-in wired here for either guard to fall through to.
+ * Wiring HITL approvals through Telegram, if the gate is ever re-enabled,
+ * would be a code change — async-approval semantics, not a config edit
+ * (verdict-spec.md; #434, closed, reached the same conclusion) — on top of
+ * the inbound half #275 (closed) already built. Validating the allowlist now
+ * rather than then is the same fail-at-boot posture the spec asks for: an
+ * unattended soak must not discover a broken allowlist on the day approvals
+ * go live.
  *
  * ## Why here and not in `production.ts`
  *
@@ -138,8 +147,10 @@ export type AlertsMode = (typeof ALERTS_MODES)[number];
  * The `AlertChannelSlots` fields this module owns — the outbound operator
  * escalations, and nothing else. Verdict's `approvals` is deliberately absent
  * from `AlertChannelSlots` itself: it is an inbound round trip
- * (`requestApproval` returns an *answer*), not an alert, and wiring it is
- * #275's remaining half.
+ * (`requestApproval` returns an *answer*), not an alert. #275 (closed)
+ * already built the inbound half; nothing wires it into `AlertChannelSlots`
+ * today, and ADR-0007's `auto` dial makes the gate it would serve
+ * unreachable at the shipped config.
  *
  * `breachAlerts` joined the list in #327: a kill-threshold breach is the
  * fourth outbound escalation, and it had the same shape of hole as the

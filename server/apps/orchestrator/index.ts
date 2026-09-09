@@ -248,8 +248,10 @@ const MODES = ['live', 'paper', 'backtest'] as const;
 
 /**
  * `SAMURAI_MODE` is not a free-form string: it selects the HITL posture as
- * well as the broker. `backtest` auto-approves every HITL gate
- * (verdict/types.ts) and `live` spends real money, so a typo'd or unset-to-
+ * well as the broker. `backtest` overrides gate 6's outcome to `go` once the
+ * injected `ApprovalChannel` answers, rather than skipping the call — a
+ * channel that throws instead of answering still refuses (verdict/index.ts)
+ * — and `live` spends real money, so a typo'd or unset-to-
  * garbage value must not be cast through — it defaults to `paper` when
  * absent and throws when present and unrecognised.
  *

@@ -38,8 +38,10 @@ export type ApprovalOutcome = 'approved' | 'rejected' | 'timeout';
 /**
  * Telegram/Discord trade-channel gate (docs/specs/verdict-spec.md "Module:
  * Human-in-the-Loop"). The channel owns timeout mechanics itself (real
- * timers live; no-op auto-approve in backtest) so `Verdict.decide` stays a
- * plain await — deterministic and clock-injectable.
+ * timers live) so `Verdict.decide` stays a plain await — deterministic and
+ * clock-injectable. Backtest mode does not skip the call or auto-approve;
+ * it overrides gate 6's outcome after the channel answers (see
+ * `VerdictInput.mode` below).
  */
 export interface ApprovalChannel {
   requestApproval(request: ApprovalRequest): Promise<ApprovalOutcome>;
@@ -140,7 +142,12 @@ export interface VerdictInput {
   positionStore: PositionStore;
   breakers: BreakerState;
   config: VerdictConfig;
-  /** backtest bypasses HITL (auto-approve), recording would_require_approval; paper behaves like live. */
+  /**
+   * backtest overrides gate 6's outcome to `go` once `approvals` answers
+   * (recording `would_require_approval`), rather than skipping the call — a
+   * channel that throws instead of answering still refuses; paper behaves
+   * like live.
+   */
   mode: 'live' | 'paper' | 'backtest';
   approvals: ApprovalChannel;
 }

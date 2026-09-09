@@ -24,6 +24,7 @@ import { STAGE_OWNED_TABLES } from '../../shared/store/index.js';
 import { LIVE_BOOK_GBP } from './paper-profile.js';
 import {
   type AnalystFailureCauseEvidence,
+  type ApprovalFallbackEvidence,
   type ArmComparisonEvidence,
   buildSmokeFixtureBars,
   ConstantResponseLlmClient,
@@ -299,6 +300,7 @@ function healthyGateOptions(
     logRetention?: LogRetentionEvidence;
     entrypointFaultGuards?: EntrypointFaultGuardEvidence;
     thresholdClamp?: ThresholdClampEvidence;
+    approvalFallback?: ApprovalFallbackEvidence;
     dataFailover?: DataFailoverEvidence;
     riskCritic?: RiskCriticEvidence;
     promptTierWarning?: PromptTierWarningEvidence;
@@ -335,6 +337,7 @@ function healthyGateOptions(
     logRetention: overrides.logRetention ?? healthyLogRetention(),
     entrypointFaultGuards: overrides.entrypointFaultGuards ?? healthyEntrypointFaultGuards(),
     thresholdClamp: overrides.thresholdClamp ?? healthyThresholdClamp(),
+    approvalFallback: overrides.approvalFallback ?? healthyApprovalFallback(),
     dataFailover: overrides.dataFailover ?? healthyDataFailover(),
     riskCritic: overrides.riskCritic ?? healthyRiskCritic(),
     promptTierWarning: overrides.promptTierWarning ?? healthyPromptTierWarning(),
@@ -575,6 +578,17 @@ function healthyThresholdClamp(
     killLineCheckRefused: true,
     shippedConfigAccepted: true,
     exitBypassesLiveClamp: true,
+    ...overrides,
+  };
+}
+
+/** What `runApprovalFallbackScenario` reports when the fallback refuses correctly (#1152). */
+function healthyApprovalFallback(
+  overrides: Partial<ApprovalFallbackEvidence> = {},
+): ApprovalFallbackEvidence {
+  return {
+    refusedFabricatedConsent: true,
+    message: "Verdict's HITL gate (6) was reached, but no ApprovalChannel is wired.",
     ...overrides,
   };
 }
@@ -1016,6 +1030,37 @@ describe('evaluateSmokeGate', () => {
 
     expect(gate.passed).toBe(false);
     expect(gate.failures.some((failure) => failure.includes('exit intent did not reach'))).toBe(
+      true,
+    );
+  });
+
+  // #1152 — the composition root's approvals fallback must refuse rather
+  // than fabricate consent if Verdict's HITL gate (6) is ever reached.
+  it('fails when the approvals fallback answers instead of refusing', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        approvalFallback: healthyApprovalFallback({
+          refusedFabricatedConsent: false,
+          message: null,
+        }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('did NOT refuse'))).toBe(true);
+  });
+
+  it('fails when the approvals fallback throws the wrong error', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        approvalFallback: healthyApprovalFallback({ message: 'ECONNRESET' }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('not with the expected refusal'))).toBe(
       true,
     );
   });

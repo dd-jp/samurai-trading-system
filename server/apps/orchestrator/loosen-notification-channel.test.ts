@@ -71,9 +71,9 @@ describe('LoggingLoosenNotificationChannel', () => {
   });
 
   it('returns nothing, so no caller can mistake it for a decision', () => {
-    // The structural reason this stand-in is safe where `ConsoleApprovalChannel`
-    // is not: that port returns `Promise<ApprovalOutcome>` and must answer;
-    // this one returns `void` and is asked nothing.
+    // The structural reason this stand-in is safe where an approval channel
+    // is not: `ApprovalChannel.requestApproval` returns `Promise<ApprovalOutcome>`
+    // and must answer; this one returns `void` and is asked nothing.
     const outcome = new LoggingLoosenNotificationChannel(recordingLogger()).notifyLoosenApplied(
       NOTICE,
     );

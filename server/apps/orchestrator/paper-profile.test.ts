@@ -179,10 +179,9 @@ describe('paperStartingProfile', () => {
 
   it('refuses live mode — these values are uncalibrated starting points', () => {
     // The whole point of the profile is that nobody has tuned it yet: the
-    // volatility baseline is uncalibrated, the notional caps assume a paper
-    // account's default equity, and the HITL gate is auto-approved by
-    // `ConsoleApprovalChannel`. None of that may reach real money by way of
-    // the shipped entrypoint.
+    // volatility baseline is uncalibrated and the notional caps assume a
+    // paper account's default equity. None of that may reach real money by
+    // way of the shipped entrypoint.
     expect(() => paperStartingProfile('live')).toThrow(/live/i);
     expect(() => paperStartingProfile('live')).toThrow(/PAPER_STARTING_PROFILE|paper/i);
   });
