@@ -1,4 +1,10 @@
-import { type FillRow, PIPELINE_STAGES, type PipelineLane, type PositionRow } from '@contracts';
+import {
+  type DebateRow,
+  type FillRow,
+  PIPELINE_STAGES,
+  type PipelineLane,
+  type PositionRow,
+} from '@contracts';
 import type { WireSnapshot } from '../../hooks/useSnapshot.ts';
 import {
   formatClockUtc,
@@ -9,7 +15,12 @@ import {
 } from '../../lib/format.ts';
 import { type ResolvedCell, resolveLaneCells } from '../../lib/lane-cells.ts';
 import { settledOutcome } from '../../lib/ledger.ts';
-import { resolveTrace, type Selection, type TraceDetail } from '../../lib/resolve-trace.ts';
+import {
+  laneDebate,
+  resolveTrace,
+  type Selection,
+  type TraceDetail,
+} from '../../lib/resolve-trace.ts';
 import {
   OUTCOME_WORD,
   sideWord,
@@ -43,10 +54,16 @@ function laneName(lane: PipelineLane, cells: readonly ResolvedCell[]): string {
   return `${lane.instrument}, ${lane.asset_class}, ${OUTCOME_WORD[lane.outcome]}, ${where}${degraded}`;
 }
 
-function LaneRow(props: { lane: PipelineLane; selected: boolean; onSelect: () => void }) {
-  const { lane, selected, onSelect } = props;
+function LaneRow(props: {
+  lane: PipelineLane;
+  /** The lane's debate row, for the degraded `debate` cell's cause (#1428). */
+  debate: DebateRow | undefined;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const { lane, debate, selected, onSelect } = props;
   const settled = settledOutcome(lane.outcome);
-  const cells = resolveLaneCells(lane);
+  const cells = resolveLaneCells(lane, debate);
   return (
     <li>
       <button
@@ -99,6 +116,7 @@ function LaneRow(props: { lane: PipelineLane; selected: boolean; onSelect: () =>
 function LaneList(props: LiveTabProps) {
   const { snapshot, selection, onSelect } = props;
   const lanes = snapshot?.pipeline.lanes ?? [];
+  const debates = snapshot?.debates ?? [];
   const running = lanes.filter((lane) => lane.outcome === 'in_flight').length;
   return (
     <section className="lanes" aria-label="Lanes">
@@ -129,6 +147,7 @@ function LaneList(props: LiveTabProps) {
             <LaneRow
               key={lane.instrument}
               lane={lane}
+              debate={laneDebate(debates, lane)}
               selected={
                 selection !== null &&
                 selection.instrument === lane.instrument &&

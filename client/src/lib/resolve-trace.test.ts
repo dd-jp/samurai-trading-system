@@ -8,7 +8,7 @@ import {
   makeSnapshot,
   makeVerdict,
 } from '../test-fixtures.ts';
-import { resolveTrace, resolveTrade } from './resolve-trace.ts';
+import { laneDebate, resolveTrace, resolveTrade } from './resolve-trace.ts';
 import { doneThrough, makeLane, makeView } from './test-support.ts';
 
 describe('resolveTrade', () => {
@@ -336,5 +336,30 @@ describe('resolveTrace', () => {
     );
     expect(detail.position).toBeUndefined();
     expect(detail.fills).toEqual([]);
+  });
+});
+
+describe('laneDebate', () => {
+  it('hands the lane matrix the SAME row the drawer resolves for that instrument (#1428)', () => {
+    const lane = doneThrough('SPY', 'trace-spy', 'execution', { outcome: 'go' });
+    const snapshot = makeSnapshot({
+      pipeline: makeView([lane]),
+      debates: [
+        makeDebate({ debate_id: 'newest-spy', instrument: 'SPY' }),
+        makeDebate({ debate_id: 'older-spy', instrument: 'SPY' }),
+        makeDebate({ debate_id: 'other', instrument: 'QQQ' }),
+      ],
+    });
+    // Identity, not equality: the matrix and the drawer disagree the moment
+    // they reach two different rows, whatever either then renders.
+    expect(laneDebate(snapshot.debates, lane)).toBe(
+      resolveTrace(snapshot, { instrument: 'SPY', traceId: null }).debate,
+    );
+    expect(laneDebate(snapshot.debates, lane)?.debate_id).toBe('newest-spy');
+  });
+
+  it('has no row for an instrument whose debates have left the window', () => {
+    const lane = doneThrough('SPY', 'trace-spy', 'execution', { outcome: 'go' });
+    expect(laneDebate([makeDebate({ instrument: 'QQQ' })], lane)).toBeUndefined();
   });
 });

@@ -107,7 +107,9 @@ Where a wire enum needs more than one display value — a word and a colour, a l
 
 ## One display of a wire row, one module
 
-Two renderers of the same wire structure re-derive its display rules independently and drift. The lane matrix and the drawer timeline both walk `PIPELINE_STAGES` over a lane's cells; only the drawer glossed degraded decisions, so #1080's starved-debate legibility never reached the surface an operator scans first, and no test could catch it because only one renderer set the `data-degraded` hook. Resolve the row once into a display shape (`resolveLaneCells(lane): readonly ResolvedCell[]`) and let each renderer choose how much of it to paint. (Review 2026-09-04 F1.)
+Two renderers of the same wire structure re-derive its display rules independently and drift. The lane matrix and the drawer timeline both walk `PIPELINE_STAGES` over a lane's cells; only the drawer glossed degraded decisions, so #1080's starved-debate legibility never reached the surface an operator scans first, and no test could catch it because only one renderer set the `data-degraded` hook. Resolve the row once into a display shape (`resolveLaneCells(lane, debate): readonly ResolvedCell[]`) and let each renderer choose how much of it to paint. (Review 2026-09-04 F1.)
+
+Resolving once is not sufficient while the resolver reads fewer records than the question needs. `audit_log` records THAT a debate degraded and never which control fired, so both renderers agreed on `budget_exhausted` while the drawer's debate section — reading `debate_log.termination_cause` through `debateDegradedGloss` — said "an LLM call failed" about the same debate, two lines apart. When a fact is written to two tables, the resolver must read both — and every surface must reach the second row by the SAME join (`latestDebateFor`, reached by the matrix through `laneDebate` and pinned equal to the drawer's by test), or they re-acquire the drift through joins that disagree. (#1428, from #1396's review.)
 
 ## Test stubs must type-check without casts
 

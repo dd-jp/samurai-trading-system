@@ -1,12 +1,13 @@
-import { DEGRADED_DECISIONS, type PipelineLane } from '@contracts';
+import { DEGRADED_DECISIONS, type DebateRow, type PipelineLane } from '@contracts';
 import { describe, expect, it } from 'vitest';
+import { debateDegradedGloss } from './debate-termination.ts';
 import { resolveLaneCells } from './lane-cells.ts';
 import { at, makeLane } from './test-support.ts';
 
 describe('resolveLaneCells', () => {
   it('carries the state word and tone paired, already resolved against the lane outcome', () => {
     const idle = makeLane({ instrument: 'SPY', outcome: 'idle' });
-    for (const cell of resolveLaneCells(idle)) {
+    for (const cell of resolveLaneCells(idle, undefined)) {
       expect(cell.present).toBe(true);
       expect(cell.state).toEqual({ word: 'idle', tone: 'wait' });
     }
@@ -16,7 +17,7 @@ describe('resolveLaneCells', () => {
       outcome: 'in_flight',
       cells: { analysts: { state: 'done' } },
     });
-    const debate = resolveLaneCells(inFlight).find((cell) => cell.stage === 'debate');
+    const debate = resolveLaneCells(inFlight, undefined).find((cell) => cell.stage === 'debate');
     expect(debate?.state).toEqual({ word: 'wait', tone: 'wait' });
   });
 
@@ -27,7 +28,7 @@ describe('resolveLaneCells', () => {
         outcome: 'stopped',
         cells: { debate: { state: 'done', decision: word } },
       });
-      const cell = resolveLaneCells(lane).find((c) => c.stage === 'debate');
+      const cell = resolveLaneCells(lane, undefined).find((c) => c.stage === 'debate');
       expect(cell?.degraded).toBe(true);
       expect(cell?.hasRecordedDecision).toBe(true);
       // The matrix paints this — dashboard-spec.md:135 gives a cell its
@@ -42,7 +43,7 @@ describe('resolveLaneCells', () => {
       outcome: 'stopped',
       cells: { trader: { state: 'stopped', decision: 'no_trade' } },
     });
-    const traderCell = resolveLaneCells(genuine).find((c) => c.stage === 'trader');
+    const traderCell = resolveLaneCells(genuine, undefined).find((c) => c.stage === 'trader');
     expect(traderCell?.degraded).toBe(false);
     expect(traderCell?.hasRecordedDecision).toBe(true);
     expect(traderCell?.decisionWord).toBe('no_trade');
@@ -55,7 +56,7 @@ describe('resolveLaneCells', () => {
       outcome: 'stopped',
       cells: { trader: { state: 'stopped', decision: '' } },
     });
-    const cell = resolveLaneCells(lane).find((c) => c.stage === 'trader');
+    const cell = resolveLaneCells(lane, undefined).find((c) => c.stage === 'trader');
     expect(cell?.hasRecordedDecision).toBe(false);
     expect(cell?.decisionWord).toBeNull();
     expect(cell?.degraded).toBe(false);
@@ -72,7 +73,7 @@ describe('resolveLaneCells', () => {
         risk: { state: 'stopped' },
       },
     });
-    const byStage = new Map(resolveLaneCells(lane).map((c) => [c.stage, c]));
+    const byStage = new Map(resolveLaneCells(lane, undefined).map((c) => [c.stage, c]));
     expect(byStage.get('debate')?.decisionText).toBe('in progress');
     expect(byStage.get('trader')?.decisionText).toBe('skipped — the tick continued');
     // `risk` never records a decision word (#328), regardless of state.
@@ -90,7 +91,7 @@ describe('resolveLaneCells', () => {
       outcome: 'stopped',
       cells: { execution: { state: 'done' } },
     });
-    const cell = resolveLaneCells(lane).find((c) => c.stage === 'execution');
+    const cell = resolveLaneCells(lane, undefined).find((c) => c.stage === 'execution');
     expect(cell?.decisionText).toBe('no decision recorded');
   });
 
@@ -114,7 +115,7 @@ describe('resolveLaneCells', () => {
       started_at: at(0),
       total_ms: null,
     };
-    const resolved = resolveLaneCells(noCellsLane);
+    const resolved = resolveLaneCells(noCellsLane, undefined);
     expect(resolved.find((c) => c.stage === 'analysts')?.present).toBe(true);
     const debate = resolved.find((c) => c.stage === 'debate');
     expect(debate).toMatchObject({
@@ -143,7 +144,94 @@ describe('resolveLaneCells', () => {
         },
       },
     });
-    const cell = resolveLaneCells(lane).find((c) => c.stage === 'risk');
+    const cell = resolveLaneCells(lane, undefined).find((c) => c.stage === 'risk');
     expect(cell).toMatchObject({ attempts: 3, recordedAt: at(5_000), durationMs: 2_600 });
+  });
+});
+
+describe('resolveLaneCells against the debate row (#1428)', () => {
+  const truncatedByLlmFailure: Pick<DebateRow, 'termination' | 'termination_cause'> = {
+    termination: 'latency_truncated',
+    termination_cause: 'llm_failure',
+  };
+
+  function debateCellOf(
+    decision: string,
+    debate: Pick<DebateRow, 'termination' | 'termination_cause'> | undefined,
+  ) {
+    const lane = makeLane({
+      instrument: 'QQQ',
+      outcome: 'stopped',
+      cells: { debate: { state: 'done', decision } },
+    });
+    return resolveLaneCells(lane, debate).find((c) => c.stage === 'debate');
+  }
+
+  it('names WHICH control fired, from the same gloss the rail and the debate section use', () => {
+    const gloss = debateDegradedGloss(truncatedByLlmFailure);
+    expect(gloss).not.toBeNull();
+
+    const cell = debateCellOf('budget_exhausted', truncatedByLlmFailure);
+    // Derived from the shared function, not a literal, so a reworded gloss
+    // propagates here instead of the two drifting apart again (#1080's class).
+    expect(cell?.decisionText.endsWith(gloss as string)).toBe(true);
+    // The defect: `audit_log`'s word cannot tell a fired budget from an
+    // escaped LLM failure, so stopping at it puts this cell in silent
+    // disagreement with `DebateSection` in the same drawer.
+    expect(cell?.decisionText).not.toBe(
+      `budget_exhausted — ${DEGRADED_DECISIONS.budget_exhausted}`,
+    );
+    // dashboard-spec.md:135 — the matrix still paints the bare audit word.
+    expect(cell?.decisionWord).toBe('budget_exhausted');
+    expect(cell?.degraded).toBe(true);
+  });
+
+  it('reconciles the mid-debate truncation word too, not only the starved one', () => {
+    const cell = debateCellOf('timed_out_partial', truncatedByLlmFailure);
+    expect(cell?.decisionText.endsWith(debateDegradedGloss(truncatedByLlmFailure) as string)).toBe(
+      true,
+    );
+  });
+
+  it('leaves a degraded word that is not a latency truncation glossed by `audit_log` alone', () => {
+    // `not_admitted` comes from `debateDecisionWord`'s rate-limit arm, which
+    // never sets `timed_out` and so never writes a `termination_cause`. The
+    // lane joins its debate by INSTRUMENT, so the row reachable here can be a
+    // DIFFERENT, truncated debate — glossing it on would claim an LLM failure
+    // for a debate that was never admitted.
+    const cell = debateCellOf('not_admitted', truncatedByLlmFailure);
+    expect(cell?.decisionText).toBe(`not_admitted — ${DEGRADED_DECISIONS.not_admitted}`);
+  });
+
+  it('leaves a non-debate stage untouched by the debate row', () => {
+    const lane = makeLane({
+      instrument: 'QQQ',
+      outcome: 'stopped',
+      cells: { analysts: { state: 'stopped', decision: 'quorum_skip_timeout' } },
+    });
+    const cell = resolveLaneCells(lane, truncatedByLlmFailure).find((c) => c.stage === 'analysts');
+    expect(cell?.decisionText).toBe(
+      `quorum_skip_timeout — ${DEGRADED_DECISIONS.quorum_skip_timeout}`,
+    );
+  });
+
+  it('falls back to `audit_log`’s own gloss when no debate row reached the client', () => {
+    const cell = debateCellOf('budget_exhausted', undefined);
+    expect(cell?.decisionText).toBe(`budget_exhausted — ${DEGRADED_DECISIONS.budget_exhausted}`);
+  });
+
+  it('carries the indeterminate gloss for a row written before migration 0051', () => {
+    const preMigration: Pick<DebateRow, 'termination' | 'termination_cause'> = {
+      termination: 'latency_truncated',
+    };
+    const cell = debateCellOf('budget_exhausted', preMigration);
+    // `debateDegradedGloss` says the cause is unrecorded rather than naming
+    // one, and that is what an operator needs here too.
+    expect(cell?.decisionText.endsWith(debateDegradedGloss(preMigration) as string)).toBe(true);
+  });
+
+  it('ignores a converged debate row — nothing to reconcile', () => {
+    const cell = debateCellOf('budget_exhausted', { termination: 'converged' });
+    expect(cell?.decisionText).toBe(`budget_exhausted — ${DEGRADED_DECISIONS.budget_exhausted}`);
   });
 });
