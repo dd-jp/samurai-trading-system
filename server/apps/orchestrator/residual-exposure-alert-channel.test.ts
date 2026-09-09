@@ -9,6 +9,7 @@ const ALERT: ResidualExposureAlert = {
   side: 'buy',
   residual_qty: 12,
   residual_qty_is_upper_bound: false,
+  rearm_unsupported: false,
   stop: 180.5,
   target: 195.25,
   observed_at: new Date('2026-08-04T09:00:00Z'),
@@ -59,6 +60,26 @@ describe('TradeChannelResidualExposureAlert.postResidualExposureAlert', () => {
       string,
     ];
     expect(text).toContain('upper bound');
+  });
+
+  it('tells the operator no retry is coming when the venue cannot re-arm at all (#1214)', async () => {
+    const telegram = makeTelegram();
+
+    await new TradeChannelResidualExposureAlert(telegram, 'chat-1').postResidualExposureAlert({
+      ...ALERT,
+      rearm_unsupported: true,
+    });
+
+    const [, text] = (telegram.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      string,
+    ];
+    // The distinction the page exists to carry: an operator who has learned
+    // that the #549 sweep usually fixes a failed re-arm must not read this
+    // one as another of those.
+    expect(text).toContain('NOTHING will retry');
+    expect(text).toContain('by hand');
+    expect(text).not.toContain('Re-arming at stop');
   });
 
   it('fans out to Discord as well when one is configured', async () => {

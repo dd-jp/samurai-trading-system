@@ -9,6 +9,7 @@ import { LSE_ETP_POOL } from '../../../providers/universe-pool/index.js';
 import type { OpenPosition } from '../../../shared/index.js';
 import { recordingLogger } from '../../../shared/recording-logger.js';
 import { type CostModel, SAXO_COMMISSION_RATE } from '../../../tools/backtest/index.js';
+import { BrokerError } from '../broker-error.js';
 import { InMemoryBrokerStateStore } from '../broker-state-store.js';
 import type {
   DormantLegsUnresolvedAlert,
@@ -20,6 +21,10 @@ import type {
   LegResizeUnverifiedAlert,
   LegResizeUnverifiedAlertChannel,
 } from '../leg-resize-unverified-alert.js';
+import {
+  isProtectiveRearmUnsupported,
+  type ProtectiveRearmUnsupportedError,
+} from '../protective-rearm-unsupported.js';
 import { openTestExecutionStore, type TestExecutionStore } from '../sqlite-store-harness.js';
 import type { ExecutionInput, NativeBracketRequest } from '../types.js';
 import type {
@@ -1057,6 +1062,25 @@ describe('SaxoBrokerAdapter protective legs', () => {
       adapter.rearmProtectiveLegs('key-3usl-0930', '3USL', 'buy', 3, 9, 12),
     ).rejects.toThrow(/IsOcoOrderSupported/);
     expect(client.placeOrder).not.toHaveBeenCalled();
+  });
+
+  it('rearmProtectiveLegs refuses as a PERMANENT gap, outside the sanitizeBrokerError wrapper (#1214)', async () => {
+    const client = makeClient();
+    const { adapter } = makeAdapter(client);
+
+    const error = await adapter.rearmProtectiveLegs('key-3usl-0930', '3USL', 'buy', 3, 9, 12).then(
+      () => undefined,
+      (thrown: unknown) => thrown,
+    );
+
+    // Both halves matter. The discriminator is what stops the #549 sweep
+    // retrying a gap that can never close; throwing outside `this.call` is
+    // what keeps the discriminator alive, since `sanitizeBrokerError` keeps
+    // only `BrokerError`'s own fields (protective-rearm-unsupported.ts's
+    // INVARIANT).
+    expect(isProtectiveRearmUnsupported(error)).toBe(true);
+    expect(error).not.toBeInstanceOf(BrokerError);
+    expect((error as ProtectiveRearmUnsupportedError).venue).toBe('saxo');
   });
 
   it('resizeProtectiveLegs is a silent no-op when the whole bracket filled', async () => {

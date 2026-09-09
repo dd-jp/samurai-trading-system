@@ -262,6 +262,7 @@ describe('LoggingResidualExposureAlertChannel (#525, #551, #1348)', () => {
     side: 'buy',
     residual_qty: 3,
     residual_qty_is_upper_bound: false,
+    rearm_unsupported: false,
     stop: 100,
     target: 110,
     observed_at: observedAt,
@@ -294,6 +295,19 @@ describe('LoggingResidualExposureAlertChannel (#525, #551, #1348)', () => {
     // `LoggingFlattenReconcileAlertChannel`) so the threaded id is not
     // repeated inside the payload it already labels the entry with.
     expect(logger.entries[0]?.payload).not.toHaveProperty('trace_id');
+  });
+
+  it('says a permanent venue gap is permanent, and carries the flag in the payload (#1214)', async () => {
+    const logger = makeLogger();
+
+    await new LoggingResidualExposureAlertChannel(logger).postResidualExposureAlert({
+      ...alert,
+      trace_id: 'fill-sync',
+      rearm_unsupported: true,
+    });
+
+    expect(logger.entries[0]?.message).toContain('cannot arm protective legs at all');
+    expect(logger.entries[0]?.payload).toMatchObject({ rearm_unsupported: true });
   });
 
   // #1348: both arms post through the one channel instance `production.ts`

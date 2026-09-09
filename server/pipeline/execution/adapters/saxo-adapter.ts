@@ -26,7 +26,9 @@
  *   alone — the overnight-resting risk this ticket names lives entirely on
  *   that branch and is UNCHANGED by this fix.
  * - `IsOcoOrderSupported` is false on every pool line, so an entry-less
- *   protective pair cannot be expressed; `rearmProtectiveLegs` throws.
+ *   protective pair cannot be expressed; `rearmProtectiveLegs` throws
+ *   `ProtectiveRearmUnsupportedError` — a PERMANENT refusal, so the #549
+ *   sweep pages for manual action instead of retrying it forever (#1214).
  * - Amounts are whole units (`MinimumLotSize` 1, `OddLotsNotAllowed`) and
  *   prices carry `OrderDecimals` 2 on every pool line.
  * - Prices cross this boundary in the VENUE's unit, which on an LSE GBX line
@@ -46,6 +48,7 @@ import {
 } from '../broker-state-store.js';
 import type { DormantLegsUnresolvedAlertChannel } from '../dormant-legs-unresolved-alert.js';
 import type { LegResizeUnverifiedAlertChannel } from '../leg-resize-unverified-alert.js';
+import { ProtectiveRearmUnsupportedError } from '../protective-rearm-unsupported.js';
 import type {
   BrokerAck,
   BrokerAdapter,
@@ -527,6 +530,14 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     });
   }
 
+  /**
+   * Thrown OUTSIDE `this.call`, and that is load-bearing (#1214): the refusal
+   * is a settled property of the venue, not an attempt that failed, and
+   * `sanitizeBrokerError` would erase the discriminant the #549 sweep reads
+   * to tell those two apart — see `ProtectiveRearmUnsupportedError`'s
+   * INVARIANT. Nothing here talks to the venue, so there is nothing for that
+   * wrapper to sanitize either.
+   */
   async rearmProtectiveLegs(
     clientOrderId: string,
     instrument: string,
@@ -535,11 +546,12 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     _stop: number,
     _target: number,
   ): Promise<void> {
-    throw new Error(
+    throw new ProtectiveRearmUnsupportedError(
+      'saxo',
       `Saxo cannot re-arm protective legs for '${clientOrderId}' (${instrument}): every pool ` +
         'line reports IsOcoOrderSupported false (instrument details, 2026-09-05), so an ' +
         'entry-less stop+target pair is inexpressible without a hand-emulated OCO — #525 ' +
-        'fallback applies.',
+        'fallback applies, and no retry of this call can ever clear it.',
     );
   }
 

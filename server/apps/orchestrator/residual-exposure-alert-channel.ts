@@ -36,12 +36,21 @@ function formatResidualExposureAlert(alert: ResidualExposureAlert): string {
     ? `at most ${alert.residual_qty} (upper bound — the exact residual could not be read)`
     : `${alert.residual_qty}`;
 
+  // #1214: the two cases need different operator behaviour, so they must
+  // not read alike. A failed re-arm is retried by the #549 sweep on cadence
+  // and may clear itself; a venue that cannot express an entry-less
+  // protective pair at all never will, and the operator IS the remedy.
+  const remedyClause = alert.rearm_unsupported
+    ? `Lot ${alert.idempotency_key}. This venue cannot arm protective legs at all (no ` +
+      `entry-less stop+target), so NOTHING will retry stop ${alert.stop} / target ` +
+      `${alert.target}.\nClose or protect this position by hand.`
+    : `Lot ${alert.idempotency_key}. Re-arming at stop ${alert.stop} / target ${alert.target} ` +
+      'failed.\nCheck the position on the venue and re-arm or close it by hand.';
+
   return (
     `Samurai UNPROTECTED RESIDUAL: ${alert.instrument} has ${qtyClause} units left open on the ` +
     `${alert.side} side with NO protective legs armed, as of ${alert.observed_at.toISOString()}.\n` +
-    `Lot ${alert.idempotency_key}. Re-arming at stop ${alert.stop} / target ${alert.target} failed.\n` +
-    'A partial flatten left this position without a stop or a target. Check the position on the ' +
-    'venue and re-arm or close it by hand.'
+    remedyClause
   );
 }
 

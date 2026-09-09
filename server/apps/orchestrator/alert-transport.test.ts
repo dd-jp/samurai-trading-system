@@ -131,6 +131,7 @@ const RESIDUAL_EXPOSURE = {
   side: 'buy' as const,
   residual_qty: 5,
   residual_qty_is_upper_bound: false,
+  rearm_unsupported: false,
   stop: 180.5,
   target: 195.25,
   observed_at: new Date('2026-08-04T09:00:00Z'),

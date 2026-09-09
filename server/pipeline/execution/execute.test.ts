@@ -2428,6 +2428,9 @@ describe('ExecutionImpl.execute', () => {
                 // The fill read failed, so this is the lot's whole requested
                 // size, not the exact residual — and the alert says so.
                 residual_qty_is_upper_bound: true,
+                // No re-arm was attempted at all, so nothing proves the
+                // venue could not do one (#1214).
+                rearm_unsupported: false,
                 stop: 85,
                 target: 110,
                 observed_at: now,

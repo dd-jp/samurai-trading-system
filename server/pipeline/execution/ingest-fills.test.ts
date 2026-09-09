@@ -19,6 +19,7 @@ import {
   FilledZeroSizeThrottle,
 } from './filled-zero-size-throttle.js';
 import { FILLED_WITH_ZERO_SIZE, FILLED_ZERO_SIZE_CLEARED } from './ingest-fills.js';
+import { ProtectiveRearmUnsupportedError } from './protective-rearm-unsupported.js';
 import { openTestExecutionStore, TestExecutionStore } from './sqlite-store-harness.js';
 import type {
   BrokerAck,
@@ -527,6 +528,9 @@ describe('ExecutionImpl.ingestFills', () => {
           // The re-arm failed, not the fill read — so 6 is the measured
           // residual, not an upper bound.
           residual_qty_is_upper_bound: false,
+          // An ordinary venue failure, so the #549 sweep's retries may still
+          // clear it (#1214) — unlike Saxo's permanent refusal.
+          rearm_unsupported: false,
           stop: 95,
           target: 110,
           observed_at: NOW,
@@ -551,6 +555,51 @@ describe('ExecutionImpl.ingestFills', () => {
           }),
         }),
       );
+    });
+
+    it('names a venue that can never re-arm as a permanent gap, not a failed attempt (#1214)', async () => {
+      const { store } = openTestExecutionStore();
+      await seedPosition(store, { requested_size: 10, stop: 95, target: 110, side: 'buy' });
+      const broker = new ScriptedBroker([
+        fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100 }),
+        fill({
+          broker_fill_id: 'x1',
+          leg: 'exit',
+          qty: 4,
+          price: 98,
+          timestamp: new Date('2026-07-20T15:30:00Z'),
+        }),
+      ]);
+      // Saxo's refusal: `IsOcoOrderSupported` is false on every LSE pool
+      // line (doc 43), so the call never reaches the venue and no later poll
+      // can change the answer.
+      broker.rearmFailure = new ProtectiveRearmUnsupportedError(
+        'saxo',
+        'IsOcoOrderSupported false on every pool line',
+      );
+      const residualExposureAlerts = makeResidualExposureAlerts();
+      const logger = recordingLogger();
+
+      await new ExecutionImpl(
+        makeInput(broker, store, residualExposureAlerts, undefined, logger),
+      ).ingestFills();
+
+      expect(residualExposureAlerts.alerts[0]).toMatchObject({
+        idempotency_key: 'key-1',
+        residual_qty: 6,
+        rearm_unsupported: true,
+      });
+      expect(logger.entries).toContainEqual(
+        expect.objectContaining({
+          level: 'error',
+          event: 'residual_rearm_unsupported',
+          message: expect.stringContaining('cannot arm protective legs at all'),
+        }),
+      );
+      // Unchanged by the diagnosis: the residual is real, the marker stays
+      // for the #549 sweep, and the fills still persisted.
+      expect((await store.getResidualProtectionMarker('key-1'))?.unprotected_since).not.toBeNull();
+      expect(await store.getFills('key-1')).toHaveLength(2);
     });
 
     it('survives a throwing logger on the re-arm-failure path — the alert is still posted and the fills still persist', async () => {
