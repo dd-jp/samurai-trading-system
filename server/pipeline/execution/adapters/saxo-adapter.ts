@@ -107,6 +107,13 @@ const DEFAULT_ACTIVITY_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
  * themselves (two separate network calls, not one atomic read) — a single
  * lucky poll where the legs left the open list a beat before the audit
  * trail caught up. A second consecutive occurrence rules that out.
+ *
+ * "Consecutive" counts consecutive ANSWERED defer observations only: a
+ * `listOrderActivities` throw reaches the caller before `escalateIfStale`
+ * runs, so it neither advances nor resets the count (`reconcileLot` leaves
+ * the record untouched on a throw for the same reason — ignorance is not
+ * evidence either way, so it must not silently clear a wedge that outlives
+ * one flaky poll).
  */
 export const DORMANT_DEFER_ALERT_AFTER = 2;
 
