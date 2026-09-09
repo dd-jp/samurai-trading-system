@@ -105,8 +105,30 @@ export interface TradeDetail {
   absence: { trace: 'unreachable' | 'aged_out' | null };
 }
 
-function cellsOf(lane: PipelineLane | undefined): readonly ResolvedCell[] | null {
-  return lane === undefined || lane.trace_id === null ? null : resolveLaneCells(lane);
+function cellsOf(
+  lane: PipelineLane | undefined,
+  debate: DebateRow | undefined,
+): readonly ResolvedCell[] | null {
+  return lane === undefined || lane.trace_id === null ? null : resolveLaneCells(lane, debate);
+}
+
+/**
+ * The debate a lane's cells are resolved against — the one join the lane
+ * matrix needs without the rest of `resolveTrace`'s sequence, on `tradeDebate`'s
+ * precedent.
+ *
+ * By INSTRUMENT, and matching `resolveTrace`'s own `latestDebateFor` call
+ * deliberately rather than lazily: `DebateRow` carries no `trace_id` (the
+ * column exists — migration 0015 — but is unprojected), so an exact join here
+ * beside the drawer's approximate one would manufacture a fresh disagreement
+ * instead of closing #1428's. `resolve-trace.test.ts` pins the two to the same
+ * row by identity.
+ */
+export function laneDebate(
+  debates: readonly DebateRow[],
+  lane: PipelineLane,
+): DebateRow | undefined {
+  return latestDebateFor(debates, lane.instrument);
 }
 
 /** Every row the Live drawer shows for one selected lane or pinned trace. */
@@ -130,15 +152,19 @@ export function resolveTrace(snapshot: WireSnapshot, selection: Selection): Trac
     );
   const traceId = wrongInstrument ? null : (selection.traceId ?? lane?.trace_id ?? null);
   const position = openPositionFor(snapshot.positions, instrument);
+  // One row for both the timeline's degraded `debate` cell and the debate
+  // section beneath it — the drawer cannot state two causes for one debate
+  // if it only ever reads one row (#1428).
+  const debate = latestDebateFor(snapshot.debates, instrument);
   return {
     instrument,
     traceId,
     lane,
-    cells: cellsOf(lane),
+    cells: cellsOf(lane, debate),
     verdict: verdictFor(snapshot.verdicts, traceId, instrument),
     riskCritic: riskCriticFor(snapshot.risk_critics ?? [], traceId, instrument),
     riskCriticJoin: BY_TRACE_ID,
-    debate: latestDebateFor(snapshot.debates, instrument),
+    debate,
     debateJoin: BY_INSTRUMENT,
     position,
     fills: position === undefined ? [] : fillsFor(snapshot.fills, position.idempotency_key),
@@ -177,10 +203,14 @@ export function resolveTrade(snapshot: WireSnapshot, idempotencyKey: string): Tr
   const riskCritic = riskCriticForDebate(snapshot.risk_critics ?? [], trade.debate_id);
   const traceId = riskCritic?.trace_id ?? null;
   const lane = traceId === null ? undefined : laneFor(snapshot.pipeline, trade.instrument, traceId);
-  const cells = cellsOf(lane);
+  // The Review drawer reaches its debate exactly, by `debate_id`, so its
+  // timeline is reconciled against that row rather than the instrument's
+  // latest — the same row `DebateSection` and `whyTaken` already render.
+  const debate = debateById(snapshot.debates, trade.debate_id);
+  const cells = cellsOf(lane, debate);
   return {
     trade,
-    debate: debateById(snapshot.debates, trade.debate_id),
+    debate,
     debateJoin: BY_DEBATE_ID,
     riskCritic,
     riskCriticJoin: BY_DEBATE_ID,

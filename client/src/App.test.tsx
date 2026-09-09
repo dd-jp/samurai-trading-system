@@ -615,6 +615,41 @@ describe('degraded stages on the page (#1080)', () => {
 
     expect(qqq.querySelector('[data-stage="trader"]')?.getAttribute('data-degraded')).toBeNull();
   });
+
+  // #1428: the wiring proof for the two renderers #1396 left on the old
+  // `audit_log`-only resolution. `budget_exhausted` is written for an escaped
+  // LLM failure exactly as it is for a genuine budget expiry, so the drawer
+  // could state both answers at once — the Timeline row saying one thing and
+  // the debate section directly beneath it saying another, for one debate.
+  const llmFailureDebate = makeDebate({
+    instrument: 'QQQ',
+    termination: 'latency_truncated',
+    termination_cause: 'llm_failure',
+  });
+  const CAUSE = 'an LLM call failed outright';
+
+  it('gives the drawer ONE answer for why a debate degraded, not one per section', async () => {
+    renderApp([makeSnapshot({ pipeline: starvedLaneView(), debates: [llmFailureDebate] })]);
+    openTab('Live');
+    fireEvent.click(await screen.findByRole('button', { name: /QQQ, stocks, stopped/ }));
+
+    const drawer = screen.getByRole('complementary', { name: 'Trace detail' });
+    expect(drawer.querySelector('[data-stage="debate"]')?.textContent).toContain(CAUSE);
+    expect(drawer.querySelector('[data-section="debate"]')?.textContent).toContain(CAUSE);
+  });
+
+  it('carries the cause to the lane matrix cell an operator scans first', async () => {
+    renderApp([makeSnapshot({ pipeline: starvedLaneView(), debates: [llmFailureDebate] })]);
+    openTab('Live');
+
+    const qqq = await screen.findByRole('button', { name: /QQQ, stocks, stopped, .*degraded/ });
+    const decisionSpan = qqq.querySelector('[data-stage="debate"] .lane-decision');
+    // Still the bare word visibly (dashboard-spec.md:135); the cause reaches
+    // the surface through the same `title` the audit gloss already used.
+    expect(decisionSpan?.textContent).toContain('budget_exhausted');
+    expect(decisionSpan?.textContent).not.toContain(CAUSE);
+    expect(decisionSpan?.getAttribute('title')).toContain(CAUSE);
+  });
 });
 
 /**
