@@ -3484,6 +3484,75 @@ describe('startTickLoop', () => {
     expect(runInstrument).toHaveBeenCalledTimes(1);
   });
 
+  describe('held-first flatten-tail priority (#1390)', () => {
+    const threeInstrumentPlan: TickPlan = {
+      instruments: [
+        { asset: 'FLAT_A', asset_class: 'stocks' },
+        { asset: 'HELD', asset_class: 'stocks' },
+        { asset: 'FLAT_B', asset_class: 'stocks' },
+      ],
+      tick_time: START,
+    };
+
+    it('dispatches the held instrument first, ahead of its fixed-order position', async () => {
+      const started: string[] = [];
+      const runInstrument = vi.fn(async (signal: { asset: string }): Promise<TickOutcome> => {
+        started.push(signal.asset);
+        return { trace_id: 't', final_stage: 'execution' };
+      });
+
+      const loop = startTickLoop({
+        scheduler: planScheduler(threeInstrumentPlan),
+        runner: { runInstrument } as TickRunner,
+        clock: new SimulatedClock(START),
+        logger: recordingLogger(),
+        persistence: persistence() as never,
+        decisionGate: new DebateBarDecisionGate(),
+        tickIntervalMs: 1_000,
+        maxConcurrentInstruments: 1,
+        heldAssets: async () => new Set(['HELD']),
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await loop.stop();
+
+      expect(started).toEqual(['HELD', 'FLAT_A', 'FLAT_B']);
+    });
+
+    it('falls back to the unordered plan and warns when the held-position lookup fails', async () => {
+      const started: string[] = [];
+      const runInstrument = vi.fn(async (signal: { asset: string }): Promise<TickOutcome> => {
+        started.push(signal.asset);
+        return { trace_id: 't', final_stage: 'execution' };
+      });
+      const logger = recordingLogger();
+
+      const loop = startTickLoop({
+        scheduler: planScheduler(threeInstrumentPlan),
+        runner: { runInstrument } as TickRunner,
+        clock: new SimulatedClock(START),
+        logger,
+        persistence: persistence() as never,
+        decisionGate: new DebateBarDecisionGate(),
+        tickIntervalMs: 1_000,
+        maxConcurrentInstruments: 1,
+        heldAssets: async () => {
+          throw new Error('store unavailable');
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await loop.stop();
+
+      // The tick still ran, in the scheduler's own order — a failed lookup
+      // costs priority, not the tick.
+      expect(started).toEqual(['FLAT_A', 'HELD', 'FLAT_B']);
+      expect(
+        logger.entries.some((entry) => entry.message.includes('held-position lookup failed')),
+      ).toBe(true);
+    });
+  });
+
   describe('tick-skip escalation (#1084)', () => {
     const fourInstrumentPlan: TickPlan = {
       instruments: [
