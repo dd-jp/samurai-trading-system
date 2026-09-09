@@ -597,7 +597,11 @@ describe('TokenBucket wait telemetry repeat window (#1435)', () => {
     // `TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_MS` is 30x the material-wait
     // threshold; with this bucket's 1000ms-per-cycle racer dynamic, the Nth
     // of N concurrently parked callers waits ~N*1000ms, so 30 racers reaches
-    // the catastrophic bound exactly on the last one.
+    // the catastrophic bound exactly on the last one. Dividing by
+    // `TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS` only yields that same 30 because
+    // this bucket's `refillPerSecond: 1` happens to make one cycle 1000ms —
+    // the threshold's current value, not a derivation from it. If either
+    // constant's value changes, re-check this still lands on the last racer.
     const raceCount = TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_MS / TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS;
     const order: number[] = [];
     const pending = Promise.all(

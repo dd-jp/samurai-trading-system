@@ -108,9 +108,13 @@ export const TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS = 1_000;
  * so the worst case is two lines per window PER BUCKET INSTANCE:
  * `2 * (20h / W) <= 57` needs `W >= ~42min`. 45 minutes clears that with
  * margin (~53 lines worst case, fewer if only one lane is actually active in
- * a given soak). This is a projection, not a re-measurement: no raw soak log
- * survives to replay the real clustering of waits, only the aggregate counts
- * above.
+ * a given soak) — PLUS one more line per crossing that hits
+ * `TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_MS`, which bypasses this window
+ * entirely and is not bounded by `W` (see that constant's docblock for why
+ * the extra term stays small: such crossings are rare by construction, so
+ * `53 + C` still clears 5% for any soak this bucket is expected to see).
+ * This is a projection, not a re-measurement: no raw soak log survives to
+ * replay the real clustering of waits, only the aggregate counts above.
  *
  * The budget assumes ONE telemetry-wired bucket lives per process — true
  * today: `production.ts`'s shared `'alpaca'` bucket is the only
