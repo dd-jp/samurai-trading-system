@@ -418,7 +418,11 @@ async function reconcileLot(
     // record is left exactly as it was: treating ignorance as "never placed"
     // would mark a live, possibly filled position `rejected` and hide real
     // exposure from Risk, and treating it as "landed" invents a state the
-    // venue never reported. It surfaces for an operator instead.
+    // venue never reported. It surfaces for an operator instead. (An
+    // adapter's `getOrder` may complete a venue-side cleanup of its own —
+    // e.g. cancelling orders it has independently confirmed dead — before it
+    // throws; a throw here says nothing about whether that cleanup ran, and
+    // a retry is safe because such cleanup is idempotent by construction.)
     return {
       idempotency_key: key,
       instrument: position.instrument,

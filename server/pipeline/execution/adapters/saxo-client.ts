@@ -76,12 +76,21 @@ export interface SaxoOrderPlacement {
     | undefined;
 }
 
+/**
+ * UNVERIFIED (#1215 round 1) — no probe in doc 43 ever listed a resting
+ * IfDone leg row: every probe there was a standalone `DayOrder` `Limit`,
+ * always `Working`. `NotWorking` as "never activated" is #1212's own
+ * reading, uncited to any observed row. `(string & {})` keeps the type open
+ * to whatever else the venue actually sends rather than asserting a closed
+ * contract nothing has confirmed.
+ */
+export type SaxoOpenOrderStatus = 'Working' | 'NotWorking' | (string & {});
+
 /** VERIFIED: one row of `GET /port/v1/orders/me`. `FilledAmount` UNVERIFIED (never partially filled on SIM). */
 export interface SaxoOpenOrder {
   readonly OrderId: string;
   readonly ExternalReference?: string | undefined;
-  /** VERIFIED values: `Working` (master), `NotWorking` (parked IfDone leg). */
-  readonly Status: string;
+  readonly Status: SaxoOpenOrderStatus;
   readonly OpenOrderType: string;
   /** VERIFIED values: `IfDoneMaster`, `StandAlone`; `Oco` documented for activated leg pairs. */
   readonly OrderRelation?: string | undefined;

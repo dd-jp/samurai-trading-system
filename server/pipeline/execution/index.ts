@@ -79,6 +79,10 @@ export type {
   UnpricedFillRecord,
 } from './broker-state-store.js';
 export { InMemoryBrokerStateStore } from './broker-state-store.js';
+export type {
+  DormantLegsUnresolvedAlert,
+  DormantLegsUnresolvedAlertChannel,
+} from './dormant-legs-unresolved-alert.js';
 export { ExecutionImpl } from './execute.js';
 export {
   ALERT_AFTER_CONSECUTIVE_ZERO_SIZE,

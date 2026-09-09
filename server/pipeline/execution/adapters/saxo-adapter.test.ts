@@ -10,6 +10,10 @@ import type { OpenPosition } from '../../../shared/index.js';
 import { recordingLogger } from '../../../shared/recording-logger.js';
 import type { CostModel } from '../../../tools/backtest/index.js';
 import { InMemoryBrokerStateStore } from '../broker-state-store.js';
+import type {
+  DormantLegsUnresolvedAlert,
+  DormantLegsUnresolvedAlertChannel,
+} from '../dormant-legs-unresolved-alert.js';
 import { ExecutionImpl } from '../execute.js';
 import { FilledZeroSizeThrottle } from '../filled-zero-size-throttle.js';
 import type {
@@ -19,6 +23,8 @@ import type {
 import { openTestExecutionStore, type TestExecutionStore } from '../sqlite-store-harness.js';
 import type { ExecutionInput, NativeBracketRequest } from '../types.js';
 import {
+  DORMANT_DEFER_ALERT_AFTER,
+  DORMANT_DEFER_ALERT_REPEAT_EVERY,
   SaxoBrokerAdapter,
   type SaxoInstrumentResolver,
   saxoInstrumentResolverFromPool,
@@ -97,6 +103,28 @@ function workingMaster(overrides: Partial<SaxoOpenOrder> = {}): SaxoOpenOrder {
   };
 }
 
+/**
+ * A related order read as never activated by a master's fill — `Status`
+ * `NotWorking` is UNVERIFIED as that meaning (#1215 round 1, see
+ * `SaxoOpenOrderStatus`). `OrderRelation` is left unset rather than
+ * asserting a value: `Oco` is documented for an ACTIVATED pair only
+ * (saxo-client.ts), which this fixture is not.
+ */
+function dormantLeg(overrides: Partial<SaxoOpenOrder> = {}): SaxoOpenOrder {
+  return {
+    OrderId: '5040047178',
+    ExternalReference: 'key-3usl-0930:stop',
+    Status: 'NotWorking',
+    OpenOrderType: 'StopIfTraded',
+    Price: 9,
+    Amount: 3,
+    BuySell: 'Sell',
+    Uic: 3347273,
+    AssetType: 'Etn',
+    ...overrides,
+  };
+}
+
 function activity(overrides: Partial<SaxoOrderActivity> = {}): SaxoOrderActivity {
   return {
     ActivityTime: '2026-09-05T08:30:00.000000Z',
@@ -136,18 +164,32 @@ function makeLegResizeAlerts(): LegResizeUnverifiedAlertChannel & {
   };
 }
 
+function makeDormantLegsAlerts(): DormantLegsUnresolvedAlertChannel & {
+  alerts: DormantLegsUnresolvedAlert[];
+} {
+  const alerts: DormantLegsUnresolvedAlert[] = [];
+  return {
+    alerts,
+    async postDormantLegsUnresolvedAlert(alert) {
+      alerts.push(alert);
+    },
+  };
+}
+
 function makeAdapter(client: SaxoOpenApiClient, state = new InMemoryBrokerStateStore()) {
   const logger = recordingLogger();
   const legResizeAlerts = makeLegResizeAlerts();
+  const dormantLegsAlerts = makeDormantLegsAlerts();
   const adapter = new SaxoBrokerAdapter({
     client,
     instruments: RESOLVER,
     state,
     clock: { now: () => new Date('2026-09-05T09:00:00Z') },
     legResizeAlerts,
+    dormantLegsAlerts,
     logger,
   });
-  return { adapter, logger, state, legResizeAlerts };
+  return { adapter, logger, state, legResizeAlerts, dormantLegsAlerts };
 }
 
 describe('SaxoBrokerAdapter.submitBracket', () => {
@@ -214,6 +256,35 @@ describe('SaxoBrokerAdapter.submitBracket', () => {
     expect(ack.broker_order_ids).toEqual(['5040047177', '5040047178', '5040047179']);
   });
 
+  // The empty `listOrderActivities` default is realistic on THIS path,
+  // unlike the 30-day `getOrder` lookback (#1215 round 2, finding 6): this
+  // is `placeIdempotently`'s own `PLACEMENT_LOOKBACK_MS` window (60 s), and
+  // a genuinely fresh placement attempt has no audit row for this reference
+  // yet — the deliberate placement-vs-reconcile asymmetry `PLACEMENT_
+  // LOOKBACK_MS`'s own doc explains.
+  it('places fresh rather than adopting a phantom fill when only dormant legs rest under the reference (#1215)', async () => {
+    const client = makeClient({
+      listOpenOrders: vi.fn().mockResolvedValue([
+        dormantLeg(),
+        dormantLeg({
+          OrderId: '5040047179',
+          ExternalReference: 'key-3usl-0930:target',
+          OpenOrderType: 'Limit',
+          Price: 12,
+          BuySell: 'Sell',
+        }),
+      ]),
+    });
+    const { adapter } = makeAdapter(client);
+
+    const ack = await adapter.submitBracket(makeBracket());
+
+    expect(client.cancelOrder).toHaveBeenCalledWith('5040047178');
+    expect(client.cancelOrder).toHaveBeenCalledWith('5040047179');
+    expect(client.placeOrder).toHaveBeenCalledTimes(1);
+    expect(ack.order_state).toBe('submitted');
+  });
+
   it('adopts through the venue 409 duplicate window (doc 43) when the first POST was accepted but its reply was lost', async () => {
     const listOpenOrders = vi
       .fn()
@@ -231,6 +302,35 @@ describe('SaxoBrokerAdapter.submitBracket', () => {
 
     expect(ack.broker_order_ids[0]).toBe('5040047177');
     expect(listOpenOrders).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not adopt or cancel dormant legs found only after a duplicate-request refusal (#1215 round 1)', async () => {
+    const listOpenOrders = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        dormantLeg(),
+        dormantLeg({
+          OrderId: '5040047179',
+          ExternalReference: 'key-3usl-0930:target',
+          OpenOrderType: 'Limit',
+          Price: 12,
+          BuySell: 'Sell',
+        }),
+      ]);
+    const client = makeClient({
+      listOpenOrders,
+      placeOrder: vi
+        .fn()
+        .mockRejectedValue(new SaxoBrokerProviderError('Saxo API error: 409', 409, undefined)),
+    });
+    const { adapter } = makeAdapter(client);
+
+    await expect(adapter.submitBracket(makeBracket())).rejects.toMatchObject({
+      name: 'BrokerError',
+      operation: 'submitBracket',
+    });
+    expect(client.cancelOrder).not.toHaveBeenCalled();
   });
 
   it('looks back only a few duplicate windows on the audit trail before placing', async () => {
@@ -351,6 +451,239 @@ describe('SaxoBrokerAdapter.getOrder', () => {
 
     expect(order?.order_state).toBe('filled');
     expect(order?.filled_qty).toBe(3);
+  });
+
+  it('cancels dormant legs and tolerates one the venue already reaped, when the audit trail carries no row at all — defensive branch, not the shape doc 43 measures for a placed master (#1215 round 2)', async () => {
+    const client = makeClient({
+      listOpenOrders: vi.fn().mockResolvedValue([
+        dormantLeg(),
+        dormantLeg({
+          OrderId: '5040047179',
+          ExternalReference: 'key-3usl-0930:target',
+          OpenOrderType: 'Limit',
+          Price: 12,
+          BuySell: 'Sell',
+        }),
+      ]),
+      cancelOrder: vi
+        .fn()
+        .mockRejectedValueOnce(
+          new SaxoBrokerProviderError('Saxo API error: 404', 404, 'OrderNotFound', 'not found'),
+        )
+        .mockResolvedValueOnce(undefined),
+    });
+    const { adapter } = makeAdapter(client);
+
+    const order = await adapter.getOrder('key-3usl-0930', '3USL');
+
+    expect(order).toBeNull();
+    expect(client.cancelOrder).toHaveBeenCalledWith('5040047178');
+    expect(client.cancelOrder).toHaveBeenCalledWith('5040047179');
+    expect(client.cancelOrder).toHaveBeenCalledTimes(2);
+  });
+
+  it('attempts every dormant leg even when an earlier one fails, rather than stopping cancellation short (#1215 round 2)', async () => {
+    const client = makeClient({
+      listOpenOrders: vi.fn().mockResolvedValue([
+        dormantLeg(),
+        dormantLeg({
+          OrderId: '5040047179',
+          ExternalReference: 'key-3usl-0930:target',
+          OpenOrderType: 'Limit',
+          Price: 12,
+          BuySell: 'Sell',
+        }),
+      ]),
+      listOrderActivities: vi.fn().mockResolvedValue([activity({ Status: 'Expired' })]),
+      cancelOrder: vi
+        .fn()
+        .mockRejectedValueOnce(
+          new SaxoBrokerProviderError('Saxo API error: 500', 500, 'InternalServerError', 'boom'),
+        )
+        .mockResolvedValueOnce(undefined),
+    });
+    const { adapter } = makeAdapter(client);
+
+    await expect(adapter.getOrder('key-3usl-0930', '3USL')).rejects.toThrow();
+
+    expect(client.cancelOrder).toHaveBeenCalledWith('5040047178');
+    expect(client.cancelOrder).toHaveBeenCalledWith('5040047179');
+    expect(client.cancelOrder).toHaveBeenCalledTimes(2);
+  });
+
+  it("adopts a fill the master's own audit row confirms, using the dormant legs' real ids (#1215 round 1)", async () => {
+    const client = makeClient({
+      listOpenOrders: vi.fn().mockResolvedValue([
+        dormantLeg(),
+        dormantLeg({
+          OrderId: '5040047179',
+          ExternalReference: 'key-3usl-0930:target',
+          OpenOrderType: 'Limit',
+          Price: 12,
+          BuySell: 'Sell',
+        }),
+      ]),
+      listOrderActivities: vi
+        .fn()
+        .mockResolvedValue([activity({ Status: 'Filled', FillAmount: 3, AveragePrice: 10 })]),
+    });
+    const { adapter } = makeAdapter(client);
+
+    const order = await adapter.getOrder('key-3usl-0930', '3USL');
+
+    expect(order).toMatchObject({
+      client_order_id: 'key-3usl-0930',
+      broker_order_ids: ['5040047178', '5040047179'],
+      order_state: 'filled',
+      filled_qty: 3,
+    });
+    expect(client.cancelOrder).not.toHaveBeenCalled();
+  });
+
+  it('cancels dormant legs and reports the terminal state the audit trail confirms, not null (#1215 round 1)', async () => {
+    const client = makeClient({
+      listOpenOrders: vi.fn().mockResolvedValue([dormantLeg()]),
+      listOrderActivities: vi.fn().mockResolvedValue([activity({ Status: 'Expired' })]),
+    });
+    const { adapter } = makeAdapter(client);
+
+    const order = await adapter.getOrder('key-3usl-0930', '3USL');
+
+    expect(order?.order_state).toBe('expired');
+    expect(client.cancelOrder).toHaveBeenCalledWith('5040047178');
+  });
+
+  it('does not cancel dormant legs while the audit trail has not settled the master yet (#1215 round 1)', async () => {
+    const client = makeClient({
+      listOpenOrders: vi.fn().mockResolvedValue([dormantLeg()]),
+      listOrderActivities: vi.fn().mockResolvedValue([activity()]),
+    });
+    const { adapter } = makeAdapter(client);
+
+    const order = await adapter.getOrder('key-3usl-0930', '3USL');
+
+    expect(order?.order_state).toBe('submitted');
+    expect(client.cancelOrder).not.toHaveBeenCalled();
+  });
+
+  it('does not alert before DORMANT_DEFER_ALERT_AFTER consecutive deferred polls (#1215 round 2)', async () => {
+    const client = makeClient({
+      listOpenOrders: vi.fn().mockResolvedValue([dormantLeg()]),
+      listOrderActivities: vi.fn().mockResolvedValue([activity()]),
+    });
+    const { adapter, dormantLegsAlerts } = makeAdapter(client);
+
+    for (let i = 0; i < DORMANT_DEFER_ALERT_AFTER - 1; i++) {
+      const order = await adapter.getOrder('key-3usl-0930', '3USL');
+      expect(order?.order_state).toBe('submitted');
+    }
+
+    expect(dormantLegsAlerts.alerts).toHaveLength(0);
+    expect(client.cancelOrder).not.toHaveBeenCalled();
+  });
+
+  it('alerts once the audit trail stays unsettled for DORMANT_DEFER_ALERT_AFTER consecutive polls, without cancelling (#1215 round 2)', async () => {
+    const client = makeClient({
+      listOpenOrders: vi.fn().mockResolvedValue([dormantLeg()]),
+      listOrderActivities: vi.fn().mockResolvedValue([activity()]),
+    });
+    const { adapter, dormantLegsAlerts } = makeAdapter(client);
+
+    for (let i = 0; i < DORMANT_DEFER_ALERT_AFTER; i++) {
+      await adapter.getOrder('key-3usl-0930', '3USL');
+    }
+
+    expect(dormantLegsAlerts.alerts).toHaveLength(1);
+    expect(dormantLegsAlerts.alerts[0]).toMatchObject({
+      client_order_id: 'key-3usl-0930',
+      instrument: '3USL',
+    });
+    expect(dormantLegsAlerts.alerts[0]?.stuck_ms).toBeGreaterThanOrEqual(0);
+    expect(client.cancelOrder).not.toHaveBeenCalled();
+  });
+
+  it('does not re-alert every poll while still stuck, before the repeat interval elapses (#1215 round 2)', async () => {
+    const client = makeClient({
+      listOpenOrders: vi.fn().mockResolvedValue([dormantLeg()]),
+      listOrderActivities: vi.fn().mockResolvedValue([activity()]),
+    });
+    const { adapter, dormantLegsAlerts } = makeAdapter(client);
+
+    const pollsBeforeSecondAlert = DORMANT_DEFER_ALERT_AFTER + DORMANT_DEFER_ALERT_REPEAT_EVERY;
+    for (let i = 0; i < pollsBeforeSecondAlert - 1; i++) {
+      await adapter.getOrder('key-3usl-0930', '3USL');
+    }
+
+    expect(dormantLegsAlerts.alerts).toHaveLength(1);
+  });
+
+  it('repeats the alert once DORMANT_DEFER_ALERT_REPEAT_EVERY further polls elapse while still stuck (#1215 round 2, ruling c)', async () => {
+    const client = makeClient({
+      listOpenOrders: vi.fn().mockResolvedValue([dormantLeg()]),
+      listOrderActivities: vi.fn().mockResolvedValue([activity()]),
+    });
+    const { adapter, dormantLegsAlerts } = makeAdapter(client);
+
+    const pollsForSecondAlert = DORMANT_DEFER_ALERT_AFTER + DORMANT_DEFER_ALERT_REPEAT_EVERY;
+    for (let i = 0; i < pollsForSecondAlert; i++) {
+      await adapter.getOrder('key-3usl-0930', '3USL');
+    }
+
+    expect(dormantLegsAlerts.alerts).toHaveLength(2);
+  });
+
+  it('clears the deferred count once the audit trail settles, so a later dormant episode starts its own bound fresh (#1215 round 2)', async () => {
+    const listOpenOrders = vi.fn().mockResolvedValue([dormantLeg()]);
+    const listOrderActivities = vi.fn().mockResolvedValue([activity()]);
+    const client = makeClient({ listOpenOrders, listOrderActivities });
+    const { adapter, dormantLegsAlerts } = makeAdapter(client);
+
+    for (let i = 0; i < DORMANT_DEFER_ALERT_AFTER; i++) {
+      await adapter.getOrder('key-3usl-0930', '3USL');
+    }
+    expect(dormantLegsAlerts.alerts).toHaveLength(1);
+
+    // The master finally settles: audit trail reports Expired, legs are
+    // cancelled, and the deferred count for this reference is cleared.
+    listOrderActivities.mockResolvedValue([activity({ Status: 'Expired' })]);
+    await adapter.getOrder('key-3usl-0930', '3USL');
+    expect(dormantLegsAlerts.alerts).toHaveLength(1);
+
+    // A brand-new dormant episode under the SAME reference (a fresh bracket
+    // re-using the id, or the venue re-exposing dormant legs) must not
+    // inherit the earlier episode's count — it should take
+    // DORMANT_DEFER_ALERT_AFTER polls of its own before alerting again.
+    listOpenOrders.mockResolvedValue([dormantLeg()]);
+    listOrderActivities.mockResolvedValue([activity()]);
+    for (let i = 0; i < DORMANT_DEFER_ALERT_AFTER - 1; i++) {
+      await adapter.getOrder('key-3usl-0930', '3USL');
+    }
+    expect(dormantLegsAlerts.alerts).toHaveLength(1);
+
+    await adapter.getOrder('key-3usl-0930', '3USL');
+    expect(dormantLegsAlerts.alerts).toHaveLength(2);
+  });
+
+  it('reads a mixed Working/NotWorking leg pair as filled, same as before (#1215 round 1)', async () => {
+    const client = makeClient({
+      listOpenOrders: vi.fn().mockResolvedValue([
+        dormantLeg({ Status: 'Working' }),
+        dormantLeg({
+          OrderId: '5040047179',
+          ExternalReference: 'key-3usl-0930:target',
+          OpenOrderType: 'Limit',
+          Price: 12,
+          BuySell: 'Sell',
+          Status: 'NotWorking',
+        }),
+      ]),
+    });
+    const { adapter } = makeAdapter(client);
+
+    const order = await adapter.getOrder('key-3usl-0930', '3USL');
+
+    expect(order).toMatchObject({ order_state: 'filled', filled_qty: 3 });
+    expect(client.cancelOrder).not.toHaveBeenCalled();
   });
 
   it('falls back to the audit trail for an order no longer open', async () => {
