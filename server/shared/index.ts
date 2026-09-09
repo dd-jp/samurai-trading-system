@@ -39,31 +39,24 @@ export type { TokenBucketConfig, TokenBucketTelemetry } from './http/token-bucke
 export { TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS, TokenBucket } from './http/token-bucket.js';
 // Only what has a real cross-module consumer: `DEFAULT_VENUE_PACING` for the
 // three broker adapters' constructor defaults, `resolveVenuePacing` +
-// `VenuePacingConfig` for the composition root, `resolvePolygonPacing`
+// `VenuePacingConfig` for the composition root, and `resolvePolygonPacing`
 // for `HttpPolygonClient` (#510/#520 — deliberately NOT folded into
 // `resolveVenuePacing`/`VENUE_KEYS`: see that function's doc for why a
-// Stage-2-only venue must not be validated by the live composition root),
-// and `resolveCoinbasePacing`/`resolveBitstampPacing` for the #512/#496
-// warm-start backfill script's primary/fallback crypto clients (same
-// reasoning, same shape, two more script-only venues).
+// Stage-2-only venue must not be validated by the live composition root).
 // `DEFAULT_POLYGON_PACING` joined the barrel in #562: the live orchestrator's
 // equities OHLCV fallback (orchestrator/production/data-failover.ts) resolves
 // `SAMURAI_PACING_POLYGON_*` at boot and falls back to this checked-in default
 // on a malformed override rather than refusing to boot — see that module's doc
 // for why that one variable is not worth failing a live start over.
 // `VenueKey`, `VENUE_KEYS`, `VENUE_DOCUMENTED_CEILING_PER_SECOND`,
-// `POLYGON_DOCUMENTED_CEILING_PER_SECOND`,
-// `DEFAULT_COINBASE_PACING`, `DEFAULT_BITSTAMP_PACING` and
-// `venuePacingEnvVars` are internal to `venue-pacing.ts` and its own test
-// (or, for `venuePacingEnvVars`, imported directly by
-// `http-polygon-client.test.ts` — see that barrel-exclusion note there), so
-// they stay off this barrel.
+// `POLYGON_DOCUMENTED_CEILING_PER_SECOND` and `venuePacingEnvVars` are
+// internal to `venue-pacing.ts` and its own test (or, for
+// `venuePacingEnvVars`, imported directly by `http-polygon-client.test.ts` —
+// see that barrel-exclusion note there), so they stay off this barrel.
 export type { VenuePacingConfig } from './http/venue-pacing.js';
 export {
   DEFAULT_POLYGON_PACING,
   DEFAULT_VENUE_PACING,
-  resolveBitstampPacing,
-  resolveCoinbasePacing,
   resolvePolygonPacing,
   resolveVenuePacing,
 } from './http/venue-pacing.js';

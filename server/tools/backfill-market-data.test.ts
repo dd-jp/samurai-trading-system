@@ -79,7 +79,6 @@ function buildDeps(overrides: Partial<Parameters<typeof backfillMarketData>[0]> 
   const db = openSharedStore(':memory:');
   const store = new SqliteMarketDataStore(db);
   const equityFetches: { symbol: string; window: BarWindow }[] = [];
-  const cryptoFetches: { symbol: string; window: BarWindow }[] = [];
 
   const deps = {
     store,
@@ -90,71 +89,96 @@ function buildDeps(overrides: Partial<Parameters<typeof backfillMarketData>[0]> 
       equityFetches.push({ symbol, window });
       return generateBars(symbol, window.timeframe, at, window.lookback);
     },
-    fetchCryptoBars: async (symbol: string, window: BarWindow, at: Date) => {
-      cryptoFetches.push({ symbol, window });
-      return generateBars(symbol, window.timeframe, at, window.lookback);
-    },
     print: () => {},
     ...overrides,
   };
 
-  return { deps, store, equityFetches, cryptoFetches };
+  return { deps, store, equityFetches };
 }
-
-/**
- * #738: `DEFAULT_UNIVERSE` no longer carries any crypto row — crypto is out
- * of Samurai's scope (ADR-0014 amendment), and the default this CLI tool
- * warms is equities-only now. The crypto routing (`fetchCryptoBars`) itself
- * is untouched code, still reachable for a caller that passes a universe
- * with a crypto instrument in it — `MIXED_UNIVERSE` below is exactly that,
- * used only by the routing test, so the DEFAULT-universe test reflects what
- * `DEFAULT_UNIVERSE` actually resolves to.
- */
-const MIXED_UNIVERSE: readonly UniverseInstrument[] = [
-  ...DEFAULT_UNIVERSE,
-  { asset: 'BTC-USD', asset_class: 'crypto' },
-  { asset: 'ETH-USD', asset_class: 'crypto' },
-];
 
 describe('backfillMarketData', () => {
   it('fetches and fills every (instrument, window) pair from an empty store', async () => {
-    const { deps, equityFetches, cryptoFetches } = buildDeps();
+    const { deps, equityFetches } = buildDeps();
 
     const coverage = await backfillMarketData(deps);
 
     expect(coverage).toHaveLength(DEFAULT_UNIVERSE.length * WARM_START_WINDOWS.length);
     expect(coverage.every((row) => row.satisfied)).toBe(true);
-    // 4 equities x WARM_START_WINDOWS.length windows, 0 crypto — DEFAULT_UNIVERSE
-    // is equities-only since #738. Derived from WARM_START_WINDOWS.length
-    // rather than a literal so this doesn't rot the next time that list
-    // gains/loses a timeframe (#742 added '5m').
+    // DEFAULT_UNIVERSE is equities-only since #738. Derived from
+    // WARM_START_WINDOWS.length rather than a literal so this doesn't rot
+    // the next time that list gains/loses a timeframe (#742 added '5m').
     expect(equityFetches).toHaveLength(DEFAULT_UNIVERSE.length * WARM_START_WINDOWS.length);
-    expect(cryptoFetches).toHaveLength(0);
   });
 
-  it('routes stocks to fetchEquityBars and crypto to fetchCryptoBars', async () => {
-    const { deps, equityFetches, cryptoFetches } = buildDeps({ universe: MIXED_UNIVERSE });
-    await backfillMarketData(deps);
+  it('refuses a crypto instrument as a SHORT row instead of silently routing it to fetchEquityBars (#1157)', async () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteMarketDataStore(db);
+    const equityFetches: { symbol: string; window: BarWindow }[] = [];
 
-    // Derived from `DEFAULT_UNIVERSE` rather than transcribed: the property is
-    // the ROUTING split by `asset_class`, not which equities happen to be in
-    // the universe this week.
-    expect([...new Set(equityFetches.map((f) => f.symbol))].sort()).toEqual(
-      DEFAULT_UNIVERSE.map((instrument) => instrument.asset).sort(),
-    );
-    expect([...new Set(cryptoFetches.map((f) => f.symbol))].sort()).toEqual(['BTC-USD', 'ETH-USD']);
+    const coverage = await backfillMarketData({
+      store,
+      universe: [
+        { asset: 'QQQ', asset_class: 'stocks' },
+        { asset: 'BTC-USD', asset_class: 'crypto' },
+      ] satisfies UniverseInstrument[],
+      windows: [{ timeframe: '1h', lookback: 20 }],
+      asOf: ASOF,
+      fetchEquityBars: async (symbol, window, at) => {
+        equityFetches.push({ symbol, window });
+        return generateBars(symbol, window.timeframe, at, window.lookback);
+      },
+      print: () => {},
+    });
+
+    // QQQ is fetched normally through the equities leg...
+    expect(equityFetches.map((f) => f.symbol)).toEqual(['QQQ']);
+    // ...BTC-USD is refused outright, never priced off Alpaca stocks data.
+    expect(coverage).toEqual([
+      expect.objectContaining({ instrument: 'QQQ', satisfied: true, error: undefined }),
+      expect.objectContaining({
+        instrument: 'BTC-USD',
+        rows: 0,
+        satisfied: false,
+        error: expect.stringContaining('crypto') as string,
+      }),
+    ]);
+  });
+
+  it('refuses a crypto instrument even when the store already holds enough bars to satisfy it (#1157)', async () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteMarketDataStore(db);
+    // A crypto pair backfilled before #1157 removed the crypto fetch leg —
+    // the store still holds a full window of stale bars for it.
+    store.appendBars(generateBars('BTC-USD', '1h', ASOF, 20));
+
+    const coverage = await backfillMarketData({
+      store,
+      universe: [{ asset: 'BTC-USD', asset_class: 'crypto' }] satisfies UniverseInstrument[],
+      windows: [{ timeframe: '1h', lookback: 20 }],
+      asOf: ASOF,
+      fetchEquityBars: async (symbol, window, at) =>
+        generateBars(symbol, window.timeframe, at, window.lookback),
+      print: () => {},
+    });
+
+    expect(coverage).toEqual([
+      expect.objectContaining({
+        instrument: 'BTC-USD',
+        rows: 20,
+        satisfied: false,
+        error: expect.stringContaining('crypto') as string,
+      }),
+    ]);
   });
 
   it('is idempotent — a second run against an already-warm store makes no fetch calls', async () => {
-    const { deps, equityFetches, cryptoFetches } = buildDeps();
+    const { deps, equityFetches } = buildDeps();
     await backfillMarketData(deps);
     equityFetches.length = 0;
-    cryptoFetches.length = 0;
 
     const coverage = await backfillMarketData(deps);
 
     expect(equityFetches).toHaveLength(0);
-    expect(cryptoFetches).toHaveLength(0);
     expect(coverage.every((row) => row.satisfied)).toBe(true);
   });
 
@@ -165,16 +189,11 @@ describe('backfillMarketData', () => {
     store.appendBars(generateBars('QQQ', '1h', ASOF, HOURLY_WARM_START));
 
     const equityFetches: { symbol: string; window: BarWindow }[] = [];
-    const cryptoFetches: { symbol: string; window: BarWindow }[] = [];
     const coverage = await backfillMarketData({
       store,
       asOf: ASOF,
       fetchEquityBars: async (symbol, window, at) => {
         equityFetches.push({ symbol, window });
-        return generateBars(symbol, window.timeframe, at, window.lookback);
-      },
-      fetchCryptoBars: async (symbol, window, at) => {
-        cryptoFetches.push({ symbol, window });
         return generateBars(symbol, window.timeframe, at, window.lookback);
       },
       print: () => {},
@@ -226,7 +245,6 @@ describe('backfillMarketData', () => {
       windows: [{ timeframe: '1h', lookback: 20 }],
       asOf: ASOF,
       fetchEquityBars: async (symbol, window, at) => generateBars(symbol, window.timeframe, at, 5), // short
-      fetchCryptoBars: async () => [],
       print: () => {},
     });
 
@@ -255,7 +273,6 @@ describe('backfillMarketData', () => {
         }
         return generateBars(symbol, window.timeframe, at, window.lookback);
       },
-      fetchCryptoBars: async () => [],
       print: () => {},
     });
 
@@ -306,7 +323,6 @@ describe('backfillMarketData', () => {
       asOf: ASOF,
       fetchEquityBars: async (symbol, window, at) =>
         generateBars(symbol, window.timeframe, at, window.lookback),
-      fetchCryptoBars: async () => [],
       print: () => {},
     });
 
@@ -374,7 +390,6 @@ describe('backfillMarketData', () => {
         attempted.push(symbol);
         return generateBars(symbol, window.timeframe, at, window.lookback);
       },
-      fetchCryptoBars: async () => [],
       print: () => {},
     });
 
@@ -411,7 +426,6 @@ describe('backfillMarketData', () => {
       windows: [{ timeframe: '1h', lookback: 20 }],
       asOf: ASOF,
       fetchEquityBars: async () => [],
-      fetchCryptoBars: async () => [],
       print: () => {},
     });
 
@@ -423,8 +437,8 @@ describe('backfillMarketData', () => {
  * #496: the failover mechanism, exercised through the REAL composition
  * `backfillMarketData` provides — a throwing primary wrapped by
  * `withOhlcvFailover` (the same wrapper `backfill-market-data.ts`'s
- * `runFromEnvironment` wires around the real Alpaca/Polygon and
- * Coinbase/Bitstamp clients) — and read back from a REAL
+ * `runFromEnvironment` wires around the real Alpaca/Polygon
+ * clients) — and read back from a REAL
  * `SqliteMarketDataStore`, not asserted against the in-memory return value
  * alone. This is what answers "is provenance populated by real production
  * code" rather than only a client-level unit test.
@@ -455,7 +469,6 @@ describe('OHLCV failover provenance, through the real store (#496)', () => {
       windows: [{ timeframe: '1h', lookback: 20 }],
       asOf: ASOF,
       fetchEquityBars,
-      fetchCryptoBars: async () => [],
       print: () => {},
     });
 
@@ -501,7 +514,6 @@ describe('OHLCV failover provenance, through the real store (#496)', () => {
       windows: [{ timeframe: '1h', lookback: 20 }],
       asOf: ASOF,
       fetchEquityBars,
-      fetchCryptoBars: async () => [],
       print: () => {},
     });
 
@@ -533,77 +545,10 @@ describe('OHLCV failover provenance, through the real store (#496)', () => {
       windows: [{ timeframe: '1h', lookback: 20 }],
       asOf: ASOF,
       fetchEquityBars,
-      fetchCryptoBars: async () => [],
       print: () => {},
     });
 
     expect(coverage[0]?.quarantined).toBe(false);
-  });
-
-  it('does NOT flag the crypto leg’s bitstamp fallback — the quarantine is equities/Polygon-only (#791/#612)', async () => {
-    const db = openSharedStore(':memory:');
-    const store = new SqliteMarketDataStore(db);
-
-    const fetchCryptoBars = withOhlcvFailover({
-      leg: 'crypto',
-      primary: async () => {
-        throw new Error('Coinbase network error');
-      },
-      primaryName: 'coinbase',
-      fallback: async (symbol, window, at) =>
-        generateBars(symbol, window.timeframe, at, window.lookback).map((bar) => ({
-          ...bar,
-          source: 'bitstamp',
-        })),
-      fallbackName: 'bitstamp',
-      alert: () => {},
-    });
-
-    const coverage = await backfillMarketData({
-      store,
-      universe: [{ asset: 'BTC-USD', asset_class: 'crypto' }] satisfies UniverseInstrument[],
-      windows: [{ timeframe: '1d', lookback: 30 }],
-      asOf: ASOF,
-      fetchEquityBars: async () => [],
-      fetchCryptoBars,
-      print: () => {},
-    });
-
-    expect(coverage[0]?.quarantined).toBe(false);
-  });
-
-  it('persists the CRYPTO fallback source (bitstamp) the same way', async () => {
-    const db = openSharedStore(':memory:');
-    const store = new SqliteMarketDataStore(db);
-
-    const fetchCryptoBars = withOhlcvFailover({
-      leg: 'crypto',
-      primary: async () => {
-        throw new Error('Coinbase network error');
-      },
-      primaryName: 'coinbase',
-      fallback: async (symbol, window, at) =>
-        generateBars(symbol, window.timeframe, at, window.lookback).map((bar) => ({
-          ...bar,
-          source: 'bitstamp',
-        })),
-      fallbackName: 'bitstamp',
-      alert: () => {},
-    });
-
-    await backfillMarketData({
-      store,
-      universe: [{ asset: 'BTC-USD', asset_class: 'crypto' }] satisfies UniverseInstrument[],
-      windows: [{ timeframe: '1d', lookback: 30 }],
-      asOf: ASOF,
-      fetchEquityBars: async () => [],
-      fetchCryptoBars,
-      print: () => {},
-    });
-
-    const stored = store.readBars('BTC-USD', '1d', ASOF, 30);
-    expect(stored).toHaveLength(30);
-    expect(stored.every((bar) => bar.source === 'bitstamp')).toBe(true);
   });
 
   it('leaves provenance at the PRIMARY source when the primary succeeds — failover never fires needlessly', async () => {
@@ -632,7 +577,6 @@ describe('OHLCV failover provenance, through the real store (#496)', () => {
       windows: [{ timeframe: '1h', lookback: 20 }],
       asOf: ASOF,
       fetchEquityBars,
-      fetchCryptoBars: async () => [],
       print: () => {},
     });
 
