@@ -618,4 +618,209 @@ describe('MiIngestAgent', () => {
     expect(news[0]?.source).toBe('benzinga');
     expect(news.some((entry) => entry.source === MI_SOURCES.polymarket)).toBe(false);
   });
+
+  /**
+   * #1420: narrower than the batch-wide outage above — the batch answers
+   * fine, but the model's response omits one item's index. Round 1 of this
+   * ticket's review found that tagging the fallback `omitted: true` and
+   * archiving it anyway broke `unscored`'s own contract above: `write`'s
+   * `INSERT OR IGNORE` on the `mi_items` primary key means a row, once
+   * written, can never later be upgraded to a real score, so a "marked"
+   * item was actually WORSE than a plain neutral — permanently exempt from
+   * every future scoring attempt while inside the lookback window. The fix
+   * withholds the omitted item entirely: raw bytes stay archived (from the
+   * unconditional `newRaws` write, above), but no `mi_items` row and no
+   * live-store item, so it remains a scoring candidate for the next refresh
+   * — exactly #1392's degraded-batch shape, just for one item instead of
+   * the whole batch.
+   */
+  it('archives the raw bytes but withholds an item the model omitted from its response, leaving it a scoring candidate', async () => {
+    const archive = new MiArchiveStore();
+    const store = new MarketIntelligenceStore(clock);
+    const omittedArticle = article({ id: '1002', headline: 'Apple faces antitrust probe' });
+    const omitsSecondIndex = {
+      async complete(request: { prompt: string; parseResponse: (raw: string) => unknown }) {
+        const raw = JSON.stringify({ scores: [{ index: 0, sentiment: 1, confidence: 0.8 }] });
+        const parsed = request.parseResponse(raw) as { valid: boolean; data: unknown };
+        return { data: parsed.data, raw_text: raw, latency_ms: 1 };
+      },
+    };
+    const agent = new MiIngestAgent({
+      archive,
+      store,
+      newsClient: newsClient([
+        article({ id: '1001', headline: 'Apple beats on revenue' }),
+        omittedArticle,
+      ]),
+      // biome-ignore lint/suspicious/noExplicitAny: minimal LlmClient stand-in.
+      llmClient: omitsSecondIndex as any,
+      clock,
+      assetClasses: ['stocks'],
+      spendCap: ADMITS,
+    });
+
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(true);
+
+    const news = store.getContext('stocks', WINDOW, 't').news;
+    expect(news).toHaveLength(1);
+    expect(news[0]).toMatchObject({
+      headline: 'Apple beats on revenue',
+      sentiment: 1,
+      confidence: 0.8,
+    });
+
+    expect(
+      archive.hasItem(MI_SOURCES.alpacaNews, omittedArticle.id, omittedArticle.updated_at),
+    ).toBe(true);
+    expect(
+      archive.hasScoredItem(
+        MI_SOURCES.alpacaNews,
+        omittedArticle.id,
+        omittedArticle.updated_at,
+        'AAPL',
+      ),
+    ).toBe(false);
+  });
+
+  /**
+   * Withholding a `mi_items` row only fixes the bug if the article is
+   * actually retried, not merely never permanently marked. Mirrors the
+   * #1392 batch-outage retry test above (`retries the same article on the
+   * next refresh after a scoring outage, once scoring recovers`), but for
+   * the narrower per-item omission path: same article, same instrument,
+   * second refresh with a client that actually answers for it.
+   */
+  it('rescoring an article the model previously omitted on a later refresh replaces the withheld gap with a real score', async () => {
+    const archive = new MiArchiveStore();
+    const store = new MarketIntelligenceStore(clock);
+    const omittedArticle = article({ id: '1002', headline: 'Apple faces antitrust probe' });
+    const omitsSecondIndex = {
+      async complete(request: { prompt: string; parseResponse: (raw: string) => unknown }) {
+        const raw = JSON.stringify({ scores: [{ index: 0, sentiment: 1, confidence: 0.8 }] });
+        const parsed = request.parseResponse(raw) as { valid: boolean; data: unknown };
+        return { data: parsed.data, raw_text: raw, latency_ms: 1 };
+      },
+    };
+    const agent = new MiIngestAgent({
+      archive,
+      store,
+      newsClient: newsClient([
+        article({ id: '1001', headline: 'Apple beats on revenue' }),
+        omittedArticle,
+      ]),
+      // biome-ignore lint/suspicious/noExplicitAny: minimal LlmClient stand-in.
+      llmClient: omitsSecondIndex as any,
+      clock,
+      assetClasses: ['stocks'],
+      spendCap: ADMITS,
+    });
+
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(true);
+    expect(
+      archive.hasScoredItem(
+        MI_SOURCES.alpacaNews,
+        omittedArticle.id,
+        omittedArticle.updated_at,
+        'AAPL',
+      ),
+    ).toBe(false);
+
+    (agent as unknown as { deps: { llmClient: unknown } }).deps.llmClient = scoringClient(
+      -1,
+      0.9,
+    ).client;
+
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(true);
+
+    expect(
+      archive.hasScoredItem(
+        MI_SOURCES.alpacaNews,
+        omittedArticle.id,
+        omittedArticle.updated_at,
+        'AAPL',
+      ),
+    ).toBe(true);
+    const news = store.getContext('stocks', WINDOW, 't').news;
+    const rescored = news.find((item) => item.headline === 'Apple faces antitrust probe');
+    expect(rescored).toMatchObject({ sentiment: -1, confidence: 0.9 });
+  });
+
+  /**
+   * #1420 review round 1, consequence 2: `hasCoverageFor` (mi-coverage.ts)
+   * counts any item matching the instrument in `MarketContext.news`/`.social`
+   * — it never inspects a per-item marker. Tagging-and-archiving an omitted
+   * item would have made it read as "covered" while `fundamental-analyst.ts`
+   * reported `NO_DATA_MARKER` for the same window, so #752's coverage alert
+   * would never fire. Withholding the item (this ticket's fix) closes that
+   * gap structurally: when every item in the batch is omitted, nothing is
+   * archived or served this refresh, so the window is indistinguishable from
+   * one where nothing was fetched at all — the exact case `hasCoverageFor`
+   * and `fundamental-analyst.ts`'s existing `NO_DATA_MARKER` branch already
+   * handle correctly.
+   */
+  it('serves nothing for a refresh where every item was omitted, leaving the window uncovered', async () => {
+    const archive = new MiArchiveStore();
+    const store = new MarketIntelligenceStore(clock);
+    const articleA = article({ id: '1001', headline: 'Apple faces antitrust probe' });
+    const articleB = article({ id: '1002', headline: 'Apple supplier disruption' });
+    // A response with zero entries fails shape validation outright (`valid.length
+    // === 0`) and takes #1392's WHOLE-BATCH degraded path instead — a different
+    // failure this ticket does not touch. To stay on the PER-ITEM path
+    // (`degraded: false`) while still omitting every supplied index, the model
+    // must answer with at least one shape-valid entry for an index outside the
+    // batch — `isScore` checks shape, not bounds — so neither index 0 nor 1
+    // finds a match in `byIndex`.
+    const answersOutOfRangeIndexOnly = {
+      async complete(request: { prompt: string; parseResponse: (raw: string) => unknown }) {
+        const raw = JSON.stringify({ scores: [{ index: 99, sentiment: 1, confidence: 0.8 }] });
+        const parsed = request.parseResponse(raw) as { valid: boolean; data: unknown };
+        return { data: parsed.data, raw_text: raw, latency_ms: 1 };
+      },
+    };
+    const agent = new MiIngestAgent({
+      archive,
+      store,
+      newsClient: newsClient([articleA, articleB]),
+      // biome-ignore lint/suspicious/noExplicitAny: minimal LlmClient stand-in.
+      llmClient: answersOutOfRangeIndexOnly as any,
+      clock,
+      assetClasses: ['stocks'],
+      spendCap: ADMITS,
+    });
+
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(true);
+
+    const context = store.getContext('stocks', WINDOW, 't');
+    expect(context.news).toHaveLength(0);
+    expect(context.news.some((item) => item.entity === 'AAPL')).toBe(false);
+    expect(archive.hasItem(MI_SOURCES.alpacaNews, articleA.id, articleA.updated_at)).toBe(true);
+    expect(archive.hasItem(MI_SOURCES.alpacaNews, articleB.id, articleB.updated_at)).toBe(true);
+    expect(
+      archive.hasScoredItem(MI_SOURCES.alpacaNews, articleA.id, articleA.updated_at, 'AAPL'),
+    ).toBe(false);
+    expect(
+      archive.hasScoredItem(MI_SOURCES.alpacaNews, articleB.id, articleB.updated_at, 'AAPL'),
+    ).toBe(false);
+
+    const marketData = {
+      getMark: async () => ({
+        price: 150,
+        observed_at: NOW,
+        asset_class: 'stocks' as const,
+        source: 'fixture',
+      }),
+    } as unknown as Parameters<typeof fundamentalAnalyst.run>[0]['market_data'];
+
+    const view = await fundamentalAnalyst.run({
+      trace_id: 't',
+      signal: { asset: 'AAPL', asset_class: 'stocks' as const },
+      clock,
+      bar: NOW,
+      market_intelligence: store,
+      market_data: marketData,
+      calendar: new AlwaysOpenCalendar(),
+      telemetry: NOOP_ANALYST_TELEMETRY,
+    });
+    expect(view.key_points[0]).toContain(NO_DATA_MARKER);
+  });
 });
