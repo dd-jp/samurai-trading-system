@@ -88,11 +88,12 @@ interface VerdictInput {
   positionStore: PositionStore;  // idempotency dedup
   breakers: BreakerState;        // fire-time re-check
   config: VerdictConfig;         // per-asset-class automation level + thresholds
-  mode: 'live' | 'paper' | 'backtest';   // backtest bypasses HITL (auto-approve, records would_require_approval); paper
-                                          // behaves like live. Widened 2026-08-17 (#644) to match `execution-spec.md:103`
-                                          // and the code (`VerdictInput.mode`) — a two-way union here lied about which
-                                          // environments the system runs in.
-  approvals: ApprovalChannel;    // Telegram/Discord gate (no-op auto-approve in backtest)
+  mode: 'live' | 'paper' | 'backtest';   // backtest overrides gate 6's outcome to go once `approvals` answers (records
+                                          // would_require_approval) rather than skipping the call — a throwing channel
+                                          // still refuses; paper behaves like live. Widened 2026-08-17 (#644) to match
+                                          // `execution-spec.md:103` and the code (`VerdictInput.mode`) — a two-way union
+                                          // here lied about which environments the system runs in.
+  approvals: ApprovalChannel;    // Telegram/Discord gate; backtest overrides its answer to go, not the call itself
 }
 
 interface VerdictDecision {
@@ -167,7 +168,7 @@ Ordered; first failure short-circuits to `no_go`:
 ### Module: Determinism & Backtest
 
 - Same code path live vs replay; all reads point-in-time via the injected clock.
-- In `backtest` mode the `ApprovalChannel` is a no-op auto-approve, but `would_require_approval` is still computed and recorded — so a backtest measures gate-engagement frequency without a human.
+- In `backtest` mode, gate 6's outcome is overridden to `go` once the injected `ApprovalChannel` answers — not before; a channel that throws instead of answering still refuses — and `would_require_approval` is recorded regardless, so a backtest measures gate-engagement frequency without a human.
 
 ## Testing Decisions
 
@@ -176,7 +177,7 @@ Ordered; first failure short-circuits to `no_go`:
 - Test at `Verdict.decide(input)`: given an approved `RiskDecision` + mocked market data / store / breakers / config + mock clock, assert on the `VerdictDecision`.
 - Cover each gate's no-go path and the full-pass go path.
 - Cover HITL: approve → go, reject → no-go, timeout → no-go, and automation-level routing (manual/semi_auto/auto; flagged vs unflagged in semi_auto).
-- Cover backtest auto-approve with `would_require_approval` recorded.
+- Cover backtest's outcome override (gate 6 -> `go` once `approvals` answers) with `would_require_approval` recorded.
 - No LLM to mock; assert deterministic outputs (with the injected approval channel controlling HITL outcomes).
 
 ### Modules to Test

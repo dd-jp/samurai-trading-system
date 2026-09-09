@@ -416,6 +416,8 @@ export interface ProductionOrchestrator {
   broker: BrokerAdapter;
   analysts: AnalystOrchestrator;
   logger: Logger;
+  /** `ProductionComponents.approvals` (#1152) — see that field's doc comment. */
+  approvals: ApprovalChannel;
   /** #752: the market-intelligence coverage monitor — see `ProductionComponents.marketIntelligenceCoverage`. */
   marketIntelligenceCoverage: MiCoverageMonitor;
   /**
@@ -495,6 +497,18 @@ export interface ProductionComponents {
   broker: BrokerAdapter;
   analysts: AnalystOrchestrator;
   circuitBreakers: CircuitBreakers;
+  /**
+   * The exact instance `steps.verdict`'s HITL gate (6) would call
+   * `requestApproval` on — `resolveApprovalsChannel(config)`'s result, not a
+   * reconstruction of it (#1152). Exposed for `llmRateLimiter`'s reason: a
+   * probe that called `resolveApprovalsChannel` itself would prove the helper
+   * refuses, not that the tick loop's own Verdict step is bound to that
+   * refusal — and a composition-root regression that stopped passing this
+   * value through would leave such a probe green. `smoke-run.ts`'s
+   * `runApprovalFallbackScenario` reads this field off the real
+   * `ProductionOrchestrator`, not a value it built itself.
+   */
+  approvals: ApprovalChannel;
   /**
    * The `onTradeClose`-hooked store (#237) — every consumer below
    * (`getOpenPositions`, Verdict's `positionStore`, Execution's `store`)
@@ -2447,6 +2461,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     broker,
     analysts,
     circuitBreakers,
+    approvals: verdictStepDeps.approvals,
     executionStore,
     executionDeps,
     controlArmWiring,
@@ -3752,6 +3767,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     broker: components.broker,
     analysts: components.analysts,
     logger,
+    approvals: components.approvals,
     marketIntelligenceCoverage: components.marketIntelligenceCoverage,
     marketIntelligence: components.marketIntelligence,
     marketIntelligenceRefresh: components.marketIntelligenceRefresh,

@@ -140,7 +140,12 @@ export interface VerdictInput {
   positionStore: PositionStore;
   breakers: BreakerState;
   config: VerdictConfig;
-  /** backtest bypasses HITL (auto-approve), recording would_require_approval; paper behaves like live. */
+  /**
+   * backtest overrides gate 6's outcome to `go` once `approvals` answers
+   * (recording `would_require_approval`), rather than skipping the call — a
+   * channel that throws instead of answering still refuses; paper behaves
+   * like live.
+   */
   mode: 'live' | 'paper' | 'backtest';
   approvals: ApprovalChannel;
 }

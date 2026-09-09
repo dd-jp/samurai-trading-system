@@ -75,8 +75,11 @@
  * decision here instead would have hard-coded one operator's posture into a
  * checked-in file; it is a deployment choice, not a tuning value.
  *
- * `approvals` is the exception and is still a log-only stand-in: it is an
- * inbound HITL round trip rather than an alert, and wiring it through Telegram
+ * `approvals` is the exception, and no default is supplied here: the
+ * composition root's own fallback (`UnwiredApprovalChannel`) THROWS rather
+ * than logging or approving if the HITL gate (6) is ever reached — it is an
+ * inbound round trip rather than an alert, so there is no answer a log-only
+ * stand-in could safely fabricate. Wiring a real transport through Telegram
  * is #275's remaining half. See `verdictConfig.automation_level` below for
  * what that means for the `manual` setting in practice.
  *

@@ -829,15 +829,21 @@ export class LoggingLoosenNotificationChannel implements LoosenNotificationChann
  * would block a live start over a gate that never fires.
  *
  * What it will not do is silently stand in for a human if the dial is ever
- * turned back. An auto-approving default is safe only while nothing real
- * depends on the answer; the moment `manual` or `semi_auto` is set with no
- * transport wired, auto-approving means the gate reads as enforced and
- * enforces nothing — this repo's dominant defect class, and the reason the
- * repo's own `ConsoleApprovalChannel` auto-approving stand-in was deleted
- * (#1152) rather than wired: ADR-0013 D2 leaves no human anywhere in the
- * live/paper path for it to stand in for. So this one throws instead, naming
- * both causes and both fixes. The throw propagates out of `VerdictImpl.decide`
- * and fails that instrument's pass loudly rather than fabricating consent.
+ * moved off `auto` — a code change gated on async approval (#434, per
+ * verdict-spec.md's "Problem Statement"), not a config edit. An
+ * auto-approving default is safe only while nothing real depends on the
+ * answer; the moment `manual` or `semi_auto` is set with no transport wired,
+ * auto-approving means the gate reads as enforced and enforces nothing —
+ * this repo's dominant defect class, and the reason the repo's own
+ * `ConsoleApprovalChannel` auto-approving stand-in was deleted (#1152)
+ * rather than wired: ADR-0007 already makes this gate unreachable at the
+ * shipped dial, and ADR-0013 Decision 2 — a separate decision, for the
+ * Feedback Loop's own loosen-approval gate — establishes the same
+ * system-wide property from the other direction: no human gate anywhere in
+ * paper or live. Together they leave no human anywhere for an auto-approving
+ * stand-in to serve. So this one throws instead, naming both causes and both
+ * fixes. The throw propagates out of `VerdictImpl.decide` and fails that
+ * instrument's pass loudly rather than fabricating consent.
  */
 export class UnwiredApprovalChannel implements ApprovalChannel {
   async requestApproval(request: ApprovalRequest): Promise<ApprovalOutcome> {

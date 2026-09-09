@@ -342,8 +342,13 @@ export class VerdictImpl implements Verdict {
     });
 
     if (mode === 'backtest') {
-      // Bypassed-but-recorded: the channel auto-approves, but the gate was
-      // reached, so it would have required approval outside backtest.
+      // Bypassed-but-recorded: the `await` above already ran, so this branch
+      // shields nothing from a channel that throws instead of answering —
+      // the composition root's own fallback (`UnwiredApprovalChannel`)
+      // refuses here exactly as it would in any other mode. Reached only
+      // when the injected channel actually resolved, this overrides its
+      // answer to `go` and records `would_require_approval: true`, because
+      // outside backtest this decision would have required a real one.
       return {
         status: 'go',
         order: orderIntent,

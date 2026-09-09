@@ -1034,9 +1034,8 @@ describe('evaluateSmokeGate', () => {
     );
   });
 
-  // #1152 — ConsoleApprovalChannel (auto-approved) was deleted; the surviving
-  // fallback (UnwiredApprovalChannel, via resolveApprovalsChannel) must
-  // refuse rather than fabricate consent.
+  // #1152 — the composition root's approvals fallback must refuse rather
+  // than fabricate consent if Verdict's HITL gate (6) is ever reached.
   it('fails when the approvals fallback answers instead of refusing', () => {
     const gate = evaluateSmokeGate(
       transactedObservations(),
