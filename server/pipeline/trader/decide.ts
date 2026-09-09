@@ -384,13 +384,21 @@ function withinFlattenWindow(
  *
  * ## What this does NOT fix
  *
- * The straddling intent is still DECIDED late: after the fix its
- * `decision_timestamp` is bar N while the wall clock is in N+1, so Verdict's
- * staleness gate sees an age above one bar and may no-go it. That is the
- * fail-safe direction — refusing a late intent beats corrupting the next bar's
- * key — and it is also, usefully, the marker that tells a straddle apart from
- * an ordinary tick in `trader_log`: `decision_timestamp` no longer floors onto
- * the bar containing `created_at`.
+ * The straddling intent is still DECIDED late: `decision_timestamp` is bar N
+ * while the wall clock is in N+1. `decision_timestamp` no longer floors onto
+ * the bar containing `created_at`, so it stays a usable marker in
+ * `trader_log` that tells a straddle apart from an ordinary tick.
+ *
+ * It stopped being a fail-safe as of #1190, undisclosed there and stated
+ * here: Verdict's staleness gate used to read `decision_timestamp` and so
+ * caught a straddling intent as stale (bar N read against wall-clock N+1) —
+ * "refusing a late intent beats corrupting the next bar's key". #1190 moved
+ * that gate to `OrderIntent.decided_at`, `clock.now()` read fresh at the
+ * point this function's caller builds the intent, regardless of which bar
+ * the debate that produced it started in. A straddling intent now reads
+ * exactly as fresh as an ordinary one and passes the gate. Whether a
+ * straddle-specific bound should be added back is open — tracked as an open
+ * question on #1190, not decided here.
  */
 function decisionBarFor(debate: DebateResult): Date {
   return debate.bar_timestamp;

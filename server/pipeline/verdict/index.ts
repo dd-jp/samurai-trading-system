@@ -52,7 +52,7 @@
  * and neither marker, and drives it through this same `VerdictImpl` via
  * `exitPathVerdict`. Benign — the intent carries neither marker, so no gate
  * is skipped by exemption; it reaches `go` in the harness because its
- * bracket is non-zero, its `decision_timestamp` is fresh, its asset class is
+ * bracket is non-zero, its `decided_at` is fresh, its asset class is
  * crypto so gate 4 (market-open) does not apply, and the harness config
  * widens `max_mark_age` to 24h for the fixture's one frozen mark
  * (`EXIT_PATH_VERDICT_CONFIG`, `smoke-run.ts`) rather than `stale_feed`

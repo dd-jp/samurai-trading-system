@@ -627,6 +627,9 @@ describe('VerdictImpl.decide — staleness vs market-open, for equities (#381)',
     // authoritative here.
     const input = makeInput({
       risk_decision: makeRiskDecision({
+        // `decision_timestamp` no longer drives gate 1 (#1190) — kept here at
+        // its usual fresh default alongside it; `decided_at` (default, 5 min
+        // before NOW) is what actually keeps `staleness` from firing first.
         order_intent: makeIntent({ decision_timestamp: new Date('2026-07-15T13:59:30Z') }),
       }),
       tradingCalendar: makeTradingCalendar(false),
@@ -640,14 +643,14 @@ describe('VerdictImpl.decide — staleness vs market-open, for equities (#381)',
 
   it('gives an equity signal far more headroom than one debate can consume', async () => {
     const verdict = new VerdictImpl();
-    // `LATENCY_BUDGET_MS.stocks` bounds a debate at 60s and
-    // `decision_timestamp` is the quote's own `observed_at`, so the pipeline
-    // that produces the signal cannot approach a 15-minute bound. 10 minutes
-    // — an order of magnitude past that budget — still passes.
+    // `LATENCY_BUDGET_MS.stocks` bounds a debate at 60s and `decided_at`
+    // (#1190) is read once that debate has already resolved, so the
+    // pipeline that produces the signal cannot approach a 15-minute bound.
+    // 10 minutes — an order of magnitude past that budget — still passes.
     const input = makeInput({
       config: makeConfig({ max_signal_age: { crypto: 5 * 60_000, stocks: 15 * 60_000 } }),
       risk_decision: makeRiskDecision({
-        order_intent: makeIntent({ decision_timestamp: new Date('2026-07-15T13:50:00Z') }),
+        order_intent: makeIntent({ decided_at: new Date('2026-07-15T13:50:00Z') }),
       }),
     });
 
@@ -1226,7 +1229,7 @@ describe('VerdictImpl.decide — mandatory flatten and staleness (#894)', () => 
 
   it('leaves a FRESH mandatory flatten gated on everything else, unchanged', async () => {
     const decision = await new VerdictImpl().decide(
-      inputFor(staleExit({ decision_timestamp: NOW }), {
+      inputFor(staleExit({ decided_at: NOW }), {
         marketData: makeMarketData(makeMark({ price: 140 })),
       }),
     );
