@@ -102,7 +102,7 @@ export const fundamentalAnalyst: Analyst = {
         // marker at least makes the debate — and the audit trail — state that
         // the input was absent rather than unremarkable.
         evidence.length === 0
-          ? `${NO_DATA_MARKER}: no news or filing items available for this window — the market-intelligence store returned nothing, so this is an ABSENCE OF INPUT, not a neutral read of the fundamentals. Weight it accordingly.`
+          ? `${NO_DATA_MARKER}: no news, filing or intel items available for this window — the market-intelligence store returned nothing, so this is an ABSENCE OF INPUT, not a neutral read of the fundamentals. Weight it accordingly.`
           : `${marketContext.news.length} news/filing items, ${marketContext.intel.length} intel items in window, net sentiment driving ${direction}`,
         `Price reaction context: mark=${mark.price} observed ${mark.observed_at.toISOString()}`,
       ],

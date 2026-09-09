@@ -17,9 +17,9 @@
  * Polymarket's answer to that was to archive `write(raws, [])` — raw bytes and
  * no items at all — which bought the boot property by giving up replay: the
  * source could not be replayed as items for offline analysis, and its
- * contribution to the `news` bucket vanished on restart with nothing on disk
- * to reconstruct it from. #835 keeps BOTH: the items are archived, and this
- * table is what decides they are not re-ingested at boot.
+ * contribution to `intel` (#1164; `news` before it) vanished on restart with
+ * nothing on disk to reconstruct it from. #835 keeps BOTH: the items are
+ * archived, and this table is what decides they are not re-ingested at boot.
  *
  * ## Why a Record and not a string comparison
  *

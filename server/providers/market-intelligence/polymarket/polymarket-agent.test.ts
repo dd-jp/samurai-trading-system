@@ -93,18 +93,18 @@ describe('PolymarketAgent.refresh', () => {
 
     await expect(agent.refresh('t1')).resolves.toBe(true);
 
-    const news = intelFor(store);
-    expect(news).toHaveLength(1);
-    expect(news[0]).toMatchObject({
+    const intel = intelFor(store);
+    expect(intel).toHaveLength(1);
+    expect(intel[0]).toMatchObject({
       source: SOURCE_POLYMARKET,
       type: 'news',
       entity: 'FOMC-2026-09',
       sentiment: 1,
     });
     // 0.035 delta * 5 = 0.175.
-    expect(news[0]?.confidence).toBeCloseTo(0.175, 6);
-    expect(news[0]?.headline).toContain('0.670');
-    expect(news[0]?.headline).toContain('0.705');
+    expect(intel[0]?.confidence).toBeCloseTo(0.175, 6);
+    expect(intel[0]?.headline).toContain('0.670');
+    expect(intel[0]?.headline).toContain('0.705');
   });
 
   /**
@@ -174,8 +174,9 @@ describe('PolymarketAgent.refresh', () => {
    * The regression #782 fixed, re-entering through a second writer.
    *
    * `getContext` sets `windowEnd = floorToBar(asOf, 1h)` and drops anything
-   * stamped past it, precisely so `news.length` cannot move within one debate
-   * bar. Three things read that count: `technical-analyst` puts it verbatim in
+   * stamped past it, precisely so `intel.length` (#1164; this item routes
+   * there, not into `news`) cannot move within one debate bar. Three things
+   * read that count: `technical-analyst` puts it verbatim in
    * `key_points`, which is hashed into `debate_id` — so a count that changes
    * mid-bar produces a second `debate_id` on a bar that already had one, misses
    * #617's same-bar short-circuit and pays for a SECOND debate against ADR-0008's

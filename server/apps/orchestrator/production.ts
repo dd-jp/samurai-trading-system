@@ -576,8 +576,8 @@ export interface ProductionComponents {
    */
   gdeltScoringPass: GdeltScoringPass | undefined;
   /**
-   * The Polymarket macro/event ingester (#504) — the second writer of the
-   * `news` bucket, beside `MiIngestAgent`.
+   * The Polymarket macro/event ingester (#504) — an `intel` writer, routed
+   * there by `scope` alongside GDELT (#1164), beside `MiIngestAgent`'s `news`.
    *
    * Never `undefined`, unlike `gdeltIngestAgent`: that one needs an archive to
    * write into, while this one's product is a store write and the archive is
@@ -2066,22 +2066,23 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
         });
 
   /**
-   * The Polymarket macro/event layer (#504) — the second `news` writer.
+   * The Polymarket macro/event layer (#504) — an `intel` writer (#1164).
    *
    * Built unconditionally: no credentials to check (the read APIs are keyless),
    * no LLM call in the path, and its product is the store write, so unlike the
    * GDELT archiver it is useful even on a run with no MI archive. The archive
    * is passed when one exists, for the raw bytes replay needs.
    *
-   * It writes the same `news` bucket `miIngestAgent` does, and that is the
-   * point rather than a duplication: the Benzinga wire returns ZERO items for
-   * 3USL/3LDE/SGLN, the LSE ETPs ADR-0016 actually trades, and a 3x FTSE ETP
-   * has no company news to return. Macro is what moves it. Note plainly what
-   * this does NOT do: these items are filed under macro series names, never
-   * tickers, so `MiCoverageMonitor` — which matches `entity === instrument` —
-   * will still report those three as uncovered. Filing them under tickers
-   * would quiet the counter without telling the analysts anything about the
-   * ticker.
+   * Its items reach the same analyst `miIngestAgent`'s `news` does —
+   * `fundamental-analyst.ts` folds `news` + `intel` together (#1164) — and
+   * that is the point rather than a duplication: the Benzinga wire returns
+   * ZERO items for 3USL/3LDE/SGLN, the LSE ETPs ADR-0016 actually trades, and
+   * a 3x FTSE ETP has no company news to return. Macro is what moves it. Note
+   * plainly what this does NOT do: these items are filed under macro series
+   * names, never tickers, so `MiCoverageMonitor` — which matches `entity ===
+   * instrument` — will still report those three as uncovered. Filing them
+   * under tickers would quiet the counter without telling the analysts
+   * anything about the ticker.
    */
   const polymarketAgent = new PolymarketAgent({
     client: config.polymarketClient ?? new PolymarketClient(),

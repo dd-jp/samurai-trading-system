@@ -72,17 +72,19 @@ const MAX_SLOW_CALLBACKS = 3;
  * dated observation: `gdelt-scoring-pass.ts` derives one every debate bar, and
  * consecutive ones share 23 of the 24 hours of their baseline. So an analyst's
  * 24h read holds ~24 restatements of one measurement, and
- * `fundamental-analyst.ts` takes an UNWEIGHTED mean over `news` — leaving them
- * all in lets one macro source outvote every genuinely distinct item an
- * instrument has (an LSE ETP gets 0-1 from the Benzinga wire). That is the
- * time-axis inflation `polymarket-agent.ts` records as its limitation 3,
- * arriving through a second source.
+ * `fundamental-analyst.ts` takes an UNWEIGHTED mean over `news` + `intel`
+ * (#1164) — leaving them all in lets one macro source outvote every genuinely
+ * distinct item an instrument has (an LSE ETP gets 0-1 from the Benzinga
+ * wire). That is the time-axis inflation `polymarket-agent.ts` records as its
+ * limitation 3, arriving through a second source.
  *
  * Entity-scoped items are untouched, because two articles about one ticker
  * ARE two observations. The key carries `entity` and `type` as well as
  * `source`: one source may file several macro series under different names
- * (Polymarket does), and a class-wide `news` and a class-wide `sentiment`
- * item are different evidence in different buckets.
+ * (Polymarket does), and a class-wide `news` item and a class-wide
+ * `sentiment` item are different evidence within the same `intel` bucket
+ * (#1164) — `type` still keeps them from being collapsed into one
+ * restatement of each other.
  *
  * `ingest` cannot do this job, which is why it is done here. Its
  * `(asset_class, entity, id)` dedupe DROPS a repeat rather than replacing it,
@@ -214,9 +216,9 @@ export class MarketIntelligenceStore {
    * `windowEnd` is not the raw clock read: it is `floorToBar(asOf)`, the same
    * grid and the same function the decision gate keys a debate to. The raw
    * clock read gave a ROLLING window, so an item ageing out of it — or one
-   * ingested mid-bar — changed `news.length`/`social.length` between two ticks
-   * of ONE debate bar. Three things read those counts, and none of them should
-   * move within a bar:
+   * ingested mid-bar — changed `news.length`/`social.length`/`intel.length`
+   * between two ticks of ONE debate bar. Three things read those counts, and
+   * none of them should move within a bar:
    *
    *   1. `technical-analyst.ts` puts them verbatim in `key_points`
    *      ("MI context: N news, M social, K intel items in window"), and
@@ -505,8 +507,9 @@ export {
   type XSearchClientOptions,
 } from './grok/x-search-client.js';
 export { MiIngestAgent, type MiIngestAgentDeps, wireSymbol } from './mi-ingest-agent.js';
-// The Polymarket macro/event path (#504) — the second `news` writer, added for
-// the measured LSE-ETP coverage hole rather than for an empty bucket.
+// The Polymarket macro/event path (#504) — an `intel` writer (#1164: routed
+// there by `scope`, not filed as `news`), added for the measured LSE-ETP
+// coverage hole rather than for an empty bucket.
 export {
   CURATED_MACRO_MARKETS,
   type CuratedMacroMarket,
