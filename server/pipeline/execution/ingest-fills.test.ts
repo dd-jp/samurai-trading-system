@@ -14,7 +14,10 @@ import { CostModelImpl, SAXO_COMMISSION_RATE } from '../../tools/backtest/index.
 import { buildArmComparison } from '../control-arm/arm-comparison.js';
 import { SqliteArmComparisonSource } from '../control-arm/sqlite-arm-comparison-source.js';
 import { ExecutionImpl } from './execute.js';
-import { FilledZeroSizeThrottle } from './filled-zero-size-throttle.js';
+import {
+  FILLED_ZERO_SIZE_REANNOUNCE_EVERY_MS,
+  FilledZeroSizeThrottle,
+} from './filled-zero-size-throttle.js';
 import { FILLED_WITH_ZERO_SIZE, FILLED_ZERO_SIZE_CLEARED } from './ingest-fills.js';
 import { openTestExecutionStore, TestExecutionStore } from './sqlite-store-harness.js';
 import type {
@@ -209,6 +212,11 @@ function makeInput(
   // #1348: overridable so a test can prove the two alert producers thread
   // THIS value rather than a literal they picked themselves.
   traceId = 'trace-1',
+  // #1383: overridable so a test can advance wall-clock time across polls
+  // and prove `FilledZeroSizeThrottle`'s time-based info reannounce — the
+  // default fixed clock never advances, so every other test's "no further
+  // announcement" assertions hold exactly as before.
+  clock: Clock = { now: () => NOW },
 ): ExecutionInput {
   const config: ExecutionConfig = {
     simulated: {
@@ -221,7 +229,6 @@ function makeInput(
       adv_window: { timeframe: '1d', lookback: 20 },
     },
   };
-  const clock: Clock = { now: () => NOW };
   return {
     trace_id: traceId,
     clock,
@@ -3187,12 +3194,17 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
 
     await execution.reconcile();
     // Throttled (#1087 review, `FilledZeroSizeThrottle`, rebuilt #1383 to
-    // transition-only): quiet for the first two consecutive wedged polls
-    // (`ALERT_AFTER_CONSECUTIVE_ZERO_SIZE=3` — review pass 2's fix for the
-    // documented benign "once or twice" Alpaca propagation lag), warns once
-    // on the 3rd, then silent for as long as the lot stays wedged. 40 polls
-    // — many multiples of the old every-8th-repeat cadence — proves the
-    // silence holds, not just that it starts.
+    // warn-once/low-cadence-info): quiet for the first two consecutive
+    // wedged polls (`ALERT_AFTER_CONSECUTIVE_ZERO_SIZE=3` — review pass 2's
+    // fix for the documented benign "once or twice" Alpaca propagation
+    // lag), warns once on the 3rd, then silent for as long as the lot stays
+    // wedged AND the fixed test clock never advances (`makeInput`'s default
+    // clock — the info reannounce is time-based, see
+    // `filled-zero-size-throttle.ts`, so a clock that never moves can never
+    // cross the reannounce interval; the advancing-clock case is covered
+    // separately below). 40 polls — many multiples of the old
+    // every-8th-repeat cadence — proves the silence holds, not just that it
+    // starts.
     for (let poll = 0; poll < 40; poll += 1) {
       await execution.ingestFills();
     }
@@ -3204,6 +3216,10 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
 
     const warnings = logger.entries.filter((e) => e.message === FILLED_WITH_ZERO_SIZE);
     expect(warnings).toHaveLength(1);
+    // AC3 (#1383): the FIRST occurrence must announce at `warn`, not `info`
+    // — a mutation flipping this level to 'info' passes every other
+    // assertion in this suite and must fail here.
+    expect(warnings[0]?.level).toBe('warn');
     expect(warnings[0]?.payload).toMatchObject({
       idempotency_key: 'key-1',
       instrument: 'AAPL',
@@ -3212,6 +3228,56 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
     });
     // Never cleared (the lot never advances), so no cleared transition either.
     expect(logger.entries.some((e) => e.message === FILLED_ZERO_SIZE_CLEARED)).toBe(false);
+  });
+
+  it('re-announces a permanently wedged lot at info level, at most once per reannounce interval, never at warn again (#1383)', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 10 });
+    const broker = new ScriptedBroker([
+      fill({
+        broker_fill_id: 'e1',
+        leg: 'entry',
+        qty: 10,
+        price: 100,
+        timestamp: new Date(OPENED_AT.getTime() - 1),
+      }),
+    ]);
+    broker.scriptedOrder = {
+      client_order_id: 'key-1',
+      broker_order_ids: ['key-1:entry', 'key-1:stop', 'key-1:target'],
+      order_state: 'filled',
+      filled_qty: 10,
+    };
+    const logger = recordingLogger();
+    // A clock that advances one reannounce interval PLUS a poll's worth per
+    // `ingestFills()` call — the wedge stays observable, with growing
+    // `stuck_ms`, on a cadence a coordinator-ruled pure transition-only
+    // design could not provide.
+    let currentTime = NOW;
+    const clock: Clock = { now: () => currentTime };
+    const execution = new ExecutionImpl(
+      makeInput(broker, store, undefined, undefined, logger, undefined, 'trace-1', clock),
+    );
+
+    await execution.reconcile();
+    await execution.ingestFills(); // consecutive 1, quiet
+    await execution.ingestFills(); // consecutive 2, quiet
+    await execution.ingestFills(); // consecutive 3, warn
+
+    currentTime = new Date(currentTime.getTime() + FILLED_ZERO_SIZE_REANNOUNCE_EVERY_MS + 1);
+    await execution.ingestFills(); // past the reannounce interval: info
+
+    currentTime = new Date(currentTime.getTime() + FILLED_ZERO_SIZE_REANNOUNCE_EVERY_MS + 1);
+    await execution.ingestFills(); // past it again: another info
+
+    const announcements = logger.entries.filter((e) => e.message === FILLED_WITH_ZERO_SIZE);
+    expect(announcements.map((e) => e.level)).toEqual(['warn', 'info', 'info']);
+    // The wedge's age (`stuck_ms`) grows across the announcements — the
+    // property #1128's `ExitSkipWriteThrottle` docblock relies on this
+    // channel to provide.
+    const stuckMs = announcements.map((e) => (e.payload as { stuck_ms: number }).stuck_ms);
+    expect(stuckMs[1]).toBeGreaterThan(stuckMs[0] ?? 0);
+    expect(stuckMs[2]).toBeGreaterThan(stuckMs[1] ?? 0);
   });
 
   it('warns again when a wedged lot clears and later re-enters the condition (#1383)', async () => {
@@ -3252,6 +3318,69 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
     await execution.ingestFills();
     expect(logger.entries.filter((e) => e.message === FILLED_ZERO_SIZE_CLEARED)).toHaveLength(1);
     expect((await store.getPosition('key-1'))?.filled_size).toBe(10);
+  });
+
+  it('a lot resolved by rejection, not by advancing, never reports cleared — the leaked episode is inert (#1383)', async () => {
+    // `FilledZeroSizeThrottle.clear()` runs from exactly one call site
+    // (`advanceLot`'s `filledSize > 0` branch). Once a lot is adopted
+    // `filled`/`partially_filled`, `reconcile()` never revisits it —
+    // `reconcileLot` only runs for `IN_FLIGHT` (`pending`/`submitted`)
+    // positions (reconcile.ts), so its own `rejected`/`adopted` branches
+    // cannot fire on an already-wedged lot either. The only way a wedged
+    // lot leaves `filled`/zero-size without going through `advanceLot` is
+    // an out-of-band store write — the shape #1186 (the named repair for
+    // the incident's wedged META lot) takes: an operator updates
+    // `open_positions` directly, bypassing `reconcile()`/`ingestFills()`
+    // entirely. Modelled here with the same store primitive `reconcileLot`
+    // itself uses (`updatePositionState`), called directly rather than
+    // through `reconcile()`, since `reconcile()` has no path back to an
+    // already-adopted position at all. Leaves that episode's Map entry,
+    // permanently `warned`, for the rest of the process's life —
+    // pre-existing, not introduced by #1383: the pre-#1383 throttle called
+    // `clear()` from this exact same single site. What matters is that the
+    // leak stays inert — no false "cleared" (the lot never advanced, it was
+    // abandoned) and no further warning (the lot has left
+    // `getOpenPositions()` for good, so `observe()` is never called for it
+    // again).
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 10 });
+    const broker = new ScriptedBroker([
+      fill({
+        broker_fill_id: 'e1',
+        leg: 'entry',
+        qty: 10,
+        price: 100,
+        timestamp: new Date(OPENED_AT.getTime() - 1),
+      }),
+    ]);
+    broker.scriptedOrder = {
+      client_order_id: 'key-1',
+      broker_order_ids: ['key-1:entry', 'key-1:stop', 'key-1:target'],
+      order_state: 'filled',
+      filled_qty: 10,
+    };
+    const logger = recordingLogger();
+    const execution = new ExecutionImpl(makeInput(broker, store, undefined, undefined, logger));
+
+    await execution.reconcile();
+    await execution.ingestFills();
+    await execution.ingestFills();
+    await execution.ingestFills(); // consecutive 3: warns once
+    expect(logger.entries.filter((e) => e.message === FILLED_WITH_ZERO_SIZE)).toHaveLength(1);
+
+    await store.updatePositionState('key-1', { order_state: 'rejected', broker_order_ids: [] });
+    const position = await store.getPosition('key-1');
+    expect(position?.order_state).toBe('rejected');
+    expect(await store.getOpenPositions()).toHaveLength(0);
+
+    // Further polls see no open positions at all, so the throttle is never
+    // consulted again for this key — the leaked episode neither re-warns
+    // nor fabricates a "cleared" transition for a lot that was actually
+    // abandoned, not advanced.
+    await execution.ingestFills();
+    await execution.ingestFills();
+    expect(logger.entries.filter((e) => e.message === FILLED_WITH_ZERO_SIZE)).toHaveLength(1);
+    expect(logger.entries.some((e) => e.message === FILLED_ZERO_SIZE_CLEARED)).toBe(false);
   });
 
   it('does not reset the wedge streak when a non-entry fill lands on a still-wedged lot (#1087 review, pass 2)', async () => {
@@ -3324,11 +3453,11 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
     // poll would observe. Fixed: the streak continued through the
     // interruption (1, 2, [interruption, no observe], 3) — this call lands
     // exactly on `ALERT_AFTER_CONSECUTIVE_ZERO_SIZE` and reports
-    // `{ warn: true, consecutive: 3 }`. Bugged (`clear()` ran on the
+    // `{ announce: 'warn', consecutive: 3 }`. Bugged (`clear()` ran on the
     // interruption poll): the streak restarted, and this call would report
-    // `{ warn: false, consecutive: 1 }` instead — silently missing the
+    // `{ announce: null, consecutive: 1 }` instead — silently missing the
     // alert a genuinely wedged lot is due, not merely mis-numbering it.
-    expect(throttle.observe('key-1')).toEqual({ warn: true, consecutive: 3 });
+    expect(throttle.observe('key-1', NOW)).toEqual({ announce: 'warn', consecutive: 3 });
   });
 });
 

@@ -86,6 +86,7 @@ export type {
 export { ExecutionImpl } from './execute.js';
 export {
   ALERT_AFTER_CONSECUTIVE_ZERO_SIZE,
+  FILLED_ZERO_SIZE_REANNOUNCE_EVERY_MS,
   FilledZeroSizeThrottle,
 } from './filled-zero-size-throttle.js';
 export type {
