@@ -2,7 +2,7 @@
  * In-memory `DataSource` for ticket #64 — a concrete implementation of the
  * source port (not a test-only mock) so `getMark`'s backtest-derives-from-
  * last-bar behaviour is genuine shipped code. Ticket #66 replaces this with
- * ccxt/IBKR/Alpaca-backed sources against the same `DataSource` port.
+ * vendor-backed sources against the same `DataSource` port.
  */
 import type { Bar, BarWindow, DataSource, Mark, Quote } from './types.js';
 

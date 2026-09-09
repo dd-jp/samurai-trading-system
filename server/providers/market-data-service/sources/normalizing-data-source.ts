@@ -1,8 +1,8 @@
 /**
  * Shared DataSource skeleton (ticket #66).
  *
- * Every source — ccxt, IBKR, Alpaca — normalizes through this one class, so
- * "all normalize into the same Bar/Mark shape" is structural rather than three
+ * Every source — Alpaca, LSE — normalizes through this one class, so
+ * "all normalize into the same Bar/Mark shape" is structural rather than
  * parallel implementations that must be kept in agreement by hand. A concrete
  * source supplies only what is genuinely source-specific: mapping its wire
  * payload to `RawCandle` / a live mark observation.
@@ -128,8 +128,8 @@ const MAX_RAW_LIMIT_ABSOLUTE = 20_000;
  * Deliberately NOT `AlpacaDataUnderfetchError`, despite covering the same
  * "the venue answered fine, it just does not hold what you asked for" ground.
  * That error is raised by `AlpacaHttpDataClient` about the RAW wire payload
- * and names itself in its message; this skeleton also backs ccxt (Kraken) and
- * IBKR, so throwing an Alpaca-named error out of a Kraken read would misname
+ * and names itself in its message; this skeleton also backs the LSE mark
+ * source, so throwing an Alpaca-named error out of an LSE read would misname
  * the venue in the logs — the same misattribution that let #358 hide for a
  * whole run. The two are complements, not alternatives: raw scarcity stays
  * the source client's `AlpacaDataUnderfetchError` (#292), and bars lost to
@@ -224,7 +224,7 @@ export interface LiveObservation {
 }
 
 export interface SourceConfig {
-  /** 'kraken' | 'ibkr' | 'alpaca' — audit only; consumers ignore. */
+  /** The vendor that served it, e.g. 'alpaca' — audit only; consumers ignore. */
   source: string;
   asset_class: 'crypto' | 'stocks';
   /** Gates bar production to trading sessions; always-open for crypto. */
@@ -448,10 +448,10 @@ export abstract class NormalizingDataSource implements DataSource {
       // #292), so on the MVP path it is unreachable.
       //
       // Residual gap, stated so it is not rediscovered: a caller whose
-      // lookback EXCEEDS its indicator minimum, reading from a source with no
-      // raw-count guard (ccxt/IBKR — neither live), could be served short
-      // without any throw. Closing that belongs with those sources' own
-      // guards, not here: the shortfall is a property of the venue's history,
+      // lookback EXCEEDS its indicator minimum, reading from a source whose
+      // client has no raw-count guard of its own — `AlpacaHttpDataClient` is
+      // the only one that does — could be served short without any throw.
+      // Closing that belongs with those clients' own guards, not here: the shortfall is a property of the venue's history,
       // not of the calendar, and this method cannot tell the difference.
       if (candles.length < rawLimit) return served;
       if (attempts >= maxAttempts) break;

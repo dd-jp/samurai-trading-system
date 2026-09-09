@@ -67,8 +67,8 @@ export class AlpacaDataProviderError extends Error {
  * shortfall is `InSessionUnderfetchError`'s
  * (`sources/normalizing-data-source.ts`) — a complement to this error, not a
  * replacement for it, and deliberately not this class because the same
- * skeleton also backs ccxt and IBKR reads that no Alpaca-named error should
- * ever describe.
+ * skeleton also backs non-Alpaca reads — `LseMarkDataSource`'s — that no
+ * Alpaca-named error should ever describe.
  */
 export class AlpacaDataUnderfetchError extends Error {
   readonly symbol: string;

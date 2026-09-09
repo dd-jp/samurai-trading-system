@@ -3819,10 +3819,11 @@ export interface DataSourceFactoryEvidence {
  * The vendor name the LSE probe's client stamps.
  *
  * Deliberately not a real vendor's: #895 (choose and provision the real-time
- * L1 feed) and #999 (LSEG Delayed Market Data) are both open, so no vendor in
- * this tree can serve the `kind: 'lse'` arm. What the probe can still prove is
- * that the arm is REACHED — the port is injected, exactly so answering #895
- * lands as a config change.
+ * L1 feed) is open and the delayed-data route is only registered for, not
+ * provisioned (Refs #1034), so no vendor in this tree can serve the
+ * `kind: 'lse'` arm. What the probe can still prove is that the arm is
+ * REACHED — the port is injected, exactly so answering #895 lands as a
+ * config change.
  */
 export const SMOKE_LSE_VENDOR = 'smoke-lse-vendor';
 
@@ -5413,7 +5414,7 @@ export function evaluateSmokeGate(
     failures.push(
       `the LSE arm persisted [${factory.lseStoredSources.join(', ')}] rather than a non-empty ` +
         `run of '${SMOKE_LSE_VENDOR}' — the live equity leg's only mark path is ` +
-        "`createDataSource({ kind: 'lse' })`, and it is kept precisely so #895/#999 can land " +
+        "`createDataSource({ kind: 'lse' })`, and it is kept precisely so #895/#1034 can land " +
         'as a config change; unreached, it is the unwired arm this ticket deleted two of (#1151)',
     );
   }

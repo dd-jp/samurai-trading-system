@@ -3,7 +3,8 @@
  * See docs/specs/market-data-service-spec.md (Module: Ingestion & Sources):
  * Alpaca supplies historical bars AND streaming quotes for the MVP universe
  * (SPY/QQQ/AAPL/TSLA equities + the BTC-USD/ETH-USD pairs Alpaca supports),
- * normalizing into the same Bar/latest_mark representation as ccxt/IBKR.
+ * normalizing into the shared Bar/latest_mark representation every source
+ * produces (`NormalizingDataSource`).
  *
  * Alpaca serves both asset classes, so the calendar is chosen by `asset_class`:
  * equities gate on the injected session calendar, crypto runs 24/7. The client

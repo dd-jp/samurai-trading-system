@@ -35,8 +35,8 @@ export type DataSourceConfig =
   // stays injected: which vendor may lawfully serve a live LSE quote is an
   // open owner decision (docs/research/34-lse-mark-source-options.md), so this
   // arm is UNREACHABLE in production until one is provisioned — Refs #895
-  // (choose and provision the real-time L1 vendor), Refs #999 (LSEG Delayed
-  // Market Data). `buildAlpacaDataSource` reaches it only when a caller
+  // (choose and provision the real-time L1 vendor), Refs #1034 (register for
+  // LSEG Delayed Market Data). `buildAlpacaDataSource` reaches it only when a caller
   // supplies `ProductionConfig.lseMarkClient`, and refuses to boot an LSE
   // universe without one rather than substituting another venue's price.
   | ({ kind: 'lse'; client: LseMarkClient } & LseMarkSourceOptions);

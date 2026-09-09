@@ -1,6 +1,6 @@
 /**
  * Ingestion normalization (ticket #66) — the shared core every DataSource
- * runs its source-native payload through, so ccxt, IBKR and Alpaca land on
+ * runs its source-native payload through, so every vendor source lands on
  * one identical Bar/Mark representation.
  * See docs/specs/market-data-service-spec.md (Module: Ingestion & Sources).
  *
@@ -30,7 +30,7 @@ export interface RawCandle {
 export interface NormalizeContext {
   instrument: string;
   timeframe: string;
-  /** 'kraken' | 'ibkr' | 'alpaca' — audit only; consumers ignore. */
+  /** The vendor that served it, e.g. 'alpaca' — audit only; consumers ignore. */
   source: string;
   calendar: TradingCalendar;
 }
