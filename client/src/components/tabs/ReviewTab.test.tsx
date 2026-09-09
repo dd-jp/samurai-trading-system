@@ -221,7 +221,12 @@ describe('closed trades', () => {
           makeClosedTrade({ idempotency_key: 'k1', debate_id: 'd1', close_reason: 'stop' }),
         ],
         debates: [
-          makeDebate({ debate_id: 'd1', instrument: 'SPY', direction: 'bullish', termination: 'converged' }),
+          makeDebate({
+            debate_id: 'd1',
+            instrument: 'SPY',
+            direction: 'bullish',
+            termination: 'converged',
+          }),
         ],
       }),
     );
