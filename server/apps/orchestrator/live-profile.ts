@@ -253,10 +253,10 @@ const CEILING_LOOKS_LIKE_UNCONVERTED_BOOK_TOLERANCE = 0.05;
  * above for why the ceiling is never converted for the operator.
  *
  * **USD-account premise, not permanent.** This only makes sense while the
- * live account is USD-denominated (Alpaca): once it is GBP-native (Saxo,
- * #946), `LIVE_BOOK_GBP`'s bare number stops being a plausible typo and
- * becomes the correct figure, and this check must be revisited or dropped —
- * not left warning on a now-correct value.
+ * live account is USD-denominated (Alpaca): once the composition root wires
+ * a GBP-native Saxo adapter (#1400), `LIVE_BOOK_GBP`'s bare number stops
+ * being a plausible typo and becomes the correct figure, and this check must
+ * be revisited or dropped — not left warning on a now-correct value.
  */
 function ceilingLooksLikeUnconvertedBookGbp(ceilingUsd: number): boolean {
   return (
