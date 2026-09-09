@@ -115,7 +115,7 @@ The old reasoning for leaving the stage enabled — exercise the caller in a rea
 
 ## Solution
 
-The Market Intelligence layer runs three specialized agents that operate continuously:
+The `agent_id` union (`server/providers/market-intelligence/types.ts:32`) names five sources — DeepResearch, Grok, Alpaca News, Polymarket, GDELT-GKG — but the union is a type-level allowance, not proof of a running producer (the AS-BUILT NARROWING table above is the source of truth for that). Four operate continuously: **Grok**, **Alpaca News** (built as `MiIngestAgent`, tagged `alpaca-news`), **Polymarket**, and **GDELT-GKG**, all wired at the orchestrator's composition root. **DeepResearch has no implementation** — the union member exists, nothing produces it. **WorldMonitor** is adopted (ADR-0002) but is not an `agent_id` member at all: its live item-producer wiring is parked on cost (table above), so today it contributes only the CII soft signal, not an `IntelligenceItem` stream.
 
 **DeepResearch Agent** — Professional news aggregation (Bloomberg, Reuters, SEC filings, earnings reports). High credibility, regulatory compliance, fact-checked sources.
 
@@ -199,7 +199,7 @@ The Market Intelligence layer runs three specialized agents that operate continu
 ### Module: Market Intelligence Core
 
 **Responsibilities**
-- Orchestrate DeepResearch, Grok, and WorldMonitor agents (start, stop, monitor)
+- Orchestrate Grok, Alpaca News, Polymarket, and GDELT-GKG agents (start, stop, monitor); DeepResearch has no implementation and WorldMonitor is not yet wired to an item producer (see Solution above)
 - Deliver structured intelligence to analysts (pull/push interfaces)
 - Invoke the Convergence Engine to detect signals when agents' outputs converge, diverge, or a source is unexpectedly silent
 - Handle analyst delivery failures

@@ -322,7 +322,7 @@ Routing against `positionState`, producing `intent_type`:
 
 **LLM reasoning** — deliberately excluded from the Trader (already spent in the Debate Engine). Adding a Trader LLM would duplicate work and break determinism.
 
-**Exact parameter values** — conviction floor, `max_risk_per_trade`, ATR `k`, `vol_floor` are config, tuned in paper trading; not fixed here. *(Amendment (#1178): the cosine-precedent values in that list are not — `cosine-precedent.ts` hardcodes `K_NEIGHBORS` (5), `MIN_SIMILARITY_THRESHOLD` (0.75), and the multiplier curve (`NO_PRECEDENT_MULTIPLIER` 0.75, `MIN_MULTIPLIER` 0.5, `MAX_MULTIPLIER` 1.5, `R_SATURATION` 2) as module-level constants, not fields read off an injected config. Read as: these five remain unpinned defaults awaiting paper-trading calibration, same as the rest of this line, but wiring them through config so they're addressable without a code change is still open.)*
+**Exact parameter values** — conviction floor, `max_risk_per_trade`, ATR `k`, `vol_floor` are config, tuned in paper trading; not fixed here. *(Amendment (#1178): the cosine-precedent values in that list are not — `cosine-precedent.ts` hardcodes `K_NEIGHBORS` (5), `MIN_SIMILARITY_THRESHOLD` (0.75), and the multiplier curve (`NO_PRECEDENT_MULTIPLIER` 0.75, `MIN_MULTIPLIER` 0.5, `MAX_MULTIPLIER` 1.5, `R_SATURATION` 2) as module-level constants, not fields read off an injected config. Read as: these six remain unpinned defaults awaiting paper-trading calibration, same as the rest of this line, but wiring them through config so they're addressable without a code change is still open.)*
 
 ## Further Notes
 
