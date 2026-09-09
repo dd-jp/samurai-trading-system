@@ -148,8 +148,9 @@ export type AlertsMode = (typeof ALERTS_MODES)[number];
  * escalations, and nothing else. Verdict's `approvals` is deliberately absent
  * from `AlertChannelSlots` itself: it is an inbound round trip
  * (`requestApproval` returns an *answer*), not an alert. #275 (closed)
- * already built the inbound half; wiring it into `AlertChannelSlots` was
- * evaluated and declined (#1152), not left undone.
+ * already built the inbound half; nothing wires it into `AlertChannelSlots`
+ * today, and ADR-0007's `auto` dial makes the gate it would serve
+ * unreachable at the shipped config.
  *
  * `breachAlerts` joined the list in #327: a kill-threshold breach is the
  * fourth outbound escalation, and it had the same shape of hole as the
