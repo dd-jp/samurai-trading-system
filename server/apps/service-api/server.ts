@@ -6,9 +6,16 @@
  * react/vite are devDependencies that produce bytes on disk at build time).
  *
  * Two `GET` surfaces:
- *   - `GET /api/snapshot` → `buildSnapshot(store, now, mode, providers)` as JSON
+ *   - `GET /api/snapshot` → `buildSnapshot(store, now, mode, providers)` as JSON.
+ *                           Requires a valid `Authorization: Bearer <token>`
+ *                           against `SAMURAI_DASHBOARD_TOKEN` whenever that
+ *                           credential is configured (#1038, `request-auth.ts`);
+ *                           unauthenticated when it is not — see
+ *                           `DashboardServerOptions.dashboardCredential`.
  *   - everything else     → a file inside `bundleRoot` (`/` → `index.html`),
- *                           404 when it is not there or not a servable type
+ *                           404 when it is not there or not a servable type.
+ *                           Never gated by the credential — see
+ *                           `request-auth.ts`'s header for why.
  *
  * No `POST`/`PUT`/`DELETE` handlers exist by construction (dashboard-spec.md
  * "Any write path ... strictly read-only") — the dashboard can never place,
@@ -29,6 +36,7 @@ import { describeThrownSafely, sanitizeLogText } from '../../shared/index.js';
 import type { StoreMode } from '../../shared/store/index.js';
 import { assertBindAllowed } from './bind-guard.js';
 import { NULL_PROVIDER_STATUS, type ProviderStatusReader } from './provider-status.js';
+import { isAuthorizedRequest } from './request-auth.js';
 import { buildSnapshot } from './snapshot.js';
 import type { DashboardQueryStore } from './types.js';
 
@@ -95,8 +103,11 @@ export interface DashboardServerOptions {
    * per this repo's env-var convention — this option exists so the guard is
    * testable without touching `process.env`.
    *
-   * Boot-time only: nothing here verifies this value against any request to
-   * `/api/snapshot`. See `bind-guard.ts`'s `assertBindAllowed` doc comment.
+   * Also verified per request against `GET /api/snapshot` (#1038,
+   * `request-auth.ts`) whenever it is configured — the static bundle is
+   * deliberately NOT covered, see that module's header for why. See
+   * `bind-guard.ts`'s `assertBindAllowed` doc comment for how the boot-time
+   * and request-time checks compose.
    */
   dashboardCredential?: string | undefined;
   /**
@@ -345,6 +356,15 @@ export function createDashboardServer(opts: DashboardServerOptions): DashboardSe
     }
 
     if (urlPath === '/api/snapshot') {
+      // #1038: verified before buildSnapshot ever runs, so a request with no
+      // valid credential never touches the store — the store's data is the
+      // asset this check protects, not just the HTTP response.
+      if (!isAuthorizedRequest(req.headers.authorization, opts.dashboardCredential)) {
+        res
+          .writeHead(401, { ...JSON_HEADERS, 'WWW-Authenticate': 'Bearer' })
+          .end(JSON.stringify({ error: 'unauthorized' }));
+        return;
+      }
       try {
         const snapshot = buildSnapshot(store, new Date(), mode, providers);
         res.writeHead(200, JSON_HEADERS).end(JSON.stringify(snapshot));

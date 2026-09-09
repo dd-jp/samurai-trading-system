@@ -15,6 +15,11 @@ import { ReviewTab } from './components/tabs/ReviewTab.tsx';
 import { useEquitySamples } from './hooks/useEquitySamples.ts';
 import { useLedger } from './hooks/useLedger.ts';
 import { type UseSnapshotOptions, useSnapshot } from './hooks/useSnapshot.ts';
+import {
+  resolveDashboardToken,
+  stripTokenParam,
+  type TokenStorage,
+} from './lib/dashboard-token.ts';
 import type { Selection } from './lib/resolve-trace.ts';
 import './App.css';
 
@@ -28,12 +33,83 @@ function tabFromHash(): Tab {
   return isTab(hash) ? hash : 'glance';
 }
 
+/**
+ * Two independent throw sites, both guarded: `window.sessionStorage`'s
+ * PROPERTY ACCESS throws `SecurityError` where site data is blocked
+ * (Safari's Block All Cookies, some Chrome privacy settings, some
+ * extensions); separately, `getItem`/`setItem` THEMSELVES can throw once the
+ * property access has already succeeded (Safari private browsing,
+ * `QuotaExceededError`). This runs inside `useState`'s lazy initializer
+ * (#1038 round 2 finding A), so either throw reaching the caller unguarded
+ * would blow up render with no error boundary to catch it — a white screen,
+ * not a degraded dashboard.
+ */
+function safeSessionStorage(): TokenStorage {
+  let store: TokenStorage;
+  try {
+    store = window.sessionStorage;
+  } catch {
+    return { getItem: () => null, setItem: () => {} };
+  }
+  return {
+    getItem: (key) => {
+      try {
+        return store.getItem(key);
+      } catch {
+        return null;
+      }
+    },
+    setItem: (key, value) => {
+      try {
+        store.setItem(key, value);
+      } catch {
+        // Swallowed: `resolveDashboardToken` still returns the just-read URL
+        // token to the caller even when persisting it fails (round 2 finding
+        // B) — an unreachable store must cost the NEXT reload its token, not
+        // this one's first poll.
+      }
+    },
+  };
+}
+
 export interface AppProps {
   snapshotOptions?: UseSnapshotOptions;
 }
 
 export function App({ snapshotOptions }: AppProps = {}) {
-  const feed = useSnapshot(snapshotOptions);
+  // Resolved synchronously in useState's lazy initializer, not an effect:
+  // useSnapshot's poll effect reads `optionsRef.current.authToken` — set
+  // during render — the instant it mounts, so an effect-deferred resolution
+  // loses that race and sends the FIRST poll unauthenticated whenever a
+  // token is resolvable (#1038 round 2 finding A). StrictMode double-invokes
+  // this initializer, but that is idempotent (same value, same URL) and not
+  // a reason to move it back into an effect. `safeSessionStorage()` guards
+  // every storage access this can reach, so nothing here throws out of
+  // render (finding B).
+  const [authToken] = useState<string | null>(() =>
+    resolveDashboardToken(window.location.search, safeSessionStorage()),
+  );
+  useEffect(() => {
+    // Scrubs `?token=...` off the address bar: keeps the token out of the
+    // poll's referrer and out of the URL visible after first paint — it
+    // does not keep the token off the browser history entry the initial
+    // navigation already committed, or out of same-origin subresource
+    // `Referer` headers the HTML shell sent before this ran
+    // (dashboard-token.ts's header). Preserves `pathname`/`hash` —
+    // `tabFromHash` above reads the hash directly off `location`, and
+    // rewriting it away here would silently reset whichever tab a shared
+    // link pointed at.
+    const nextSearch = stripTokenParam(window.location.search);
+    if (nextSearch !== window.location.search) {
+      window.history.replaceState(
+        null,
+        '',
+        `${window.location.pathname}${nextSearch}${window.location.hash}`,
+      );
+    }
+  }, []);
+
+  const feed = useSnapshot({ authToken, ...snapshotOptions });
   const { snapshot } = feed;
 
   const [tab, setTab] = useState<Tab>(tabFromHash);

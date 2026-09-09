@@ -23,6 +23,7 @@
  */
 import { fileURLToPath } from 'node:url';
 import { defineConfig, devices } from '@playwright/test';
+import { DASHBOARD_CREDENTIAL_ENV_VAR } from '../server/apps/service-api/bind-guard.ts';
 import { resolveE2ePort } from './support/port.ts';
 
 const HOST = '127.0.0.1';
@@ -106,6 +107,18 @@ export default defineConfig({
       SAMURAI_MODE: 'paper',
       PORT: String(PORT),
       HOST,
+      // Pinned blank (#1038) — `fixture-server.ts` passes this straight to
+      // `isAuthorizedRequest`. Playwright spreads `webServer.env` OVER the
+      // inherited `process.env` (`...process.env, ...this._options.env`,
+      // `node_modules/playwright/lib/runner/index.js`), so a key present
+      // here always wins — the bug this pin closes was the key's ABSENCE
+      // from this block, not the spread order: with no entry here, an
+      // ambient `SAMURAI_DASHBOARD_TOKEN` passed through unchanged and made
+      // every fixture-server request 401, since no spec sends an
+      // Authorization header. A blank value reads as unset
+      // (`isConfiguredCredential`), so this is a no-op today and a
+      // structural guarantee against tomorrow's ambient env.
+      [DASHBOARD_CREDENTIAL_ENV_VAR]: '',
     },
     stdout: 'pipe',
     stderr: 'pipe',

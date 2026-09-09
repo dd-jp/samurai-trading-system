@@ -616,3 +616,175 @@ describe('degraded stages on the page (#1080)', () => {
     expect(qqq.querySelector('[data-stage="trader"]')?.getAttribute('data-degraded')).toBeNull();
   });
 });
+
+/**
+ * #1038: the dashboard's only way to acquire a bearer token is `?token=` on
+ * a shared link (`lib/dashboard-token.ts`'s header). These are the wiring
+ * tests — the pure resolve/strip logic is covered directly in
+ * `lib/dashboard-token.test.ts`; this file proves `App.tsx` actually calls
+ * it, scrubs the address bar, and reaches the poll's `Authorization` header.
+ */
+describe('dashboard token from the URL (#1038)', () => {
+  afterEach(() => {
+    window.sessionStorage.clear();
+    window.history.replaceState(null, '', '/');
+  });
+
+  function recordingFetch(): {
+    fetchImpl: typeof fetch;
+    inits: () => (RequestInit | undefined)[];
+    lastInit: () => RequestInit | undefined;
+  } {
+    const inits: (RequestInit | undefined)[] = [];
+    const fetchImpl = (async (_input: unknown, init?: RequestInit) => {
+      inits.push(init);
+      return { ok: true, status: 200, json: async () => makeSnapshot() } as Response;
+    }) as typeof fetch;
+    return { fetchImpl, inits: () => inits, lastInit: () => inits[inits.length - 1] };
+  }
+
+  // Pins `inits()[0]`, not `lastInit()`: round 2 finding A found the round-1
+  // fix regressed exactly the first poll to unauthenticated while a later,
+  // correctly-authenticated poll still landed within `waitFor`'s retry
+  // window — `lastInit()` never caught it.
+  it('sends the ?token= from a shared link as the very first poll’s Authorization header', async () => {
+    window.history.pushState(null, '', '/?token=fixture-dashboard-token');
+    const { fetchImpl, inits } = recordingFetch();
+
+    render(<App snapshotOptions={{ fetchImpl, intervalMs: POLL_MS }} />);
+
+    await waitFor(() => expect(inits().length).toBeGreaterThan(0));
+    const headers = inits()[0]?.headers as Record<string, string> | undefined;
+    expect(headers?.Authorization).toBe('Bearer fixture-dashboard-token');
+  });
+
+  it('scrubs ?token= off the address bar after capture, preserving other params and the hash', async () => {
+    window.history.pushState(null, '', '/?token=fixture-dashboard-token&tab=live#live');
+    const { fetchImpl } = recordingFetch();
+
+    render(<App snapshotOptions={{ fetchImpl, intervalMs: POLL_MS }} />);
+
+    await waitFor(() => expect(window.location.search).not.toContain('token'));
+    expect(window.location.search).toBe('?tab=live');
+    expect(window.location.hash).toBe('#live');
+  });
+
+  it('reuses a previously-captured token from sessionStorage on the first poll of a later mount with no ?token=', async () => {
+    window.sessionStorage.setItem('samurai-dashboard-token', 'fixture-dashboard-token');
+    const { fetchImpl, inits } = recordingFetch();
+
+    render(<App snapshotOptions={{ fetchImpl, intervalMs: POLL_MS }} />);
+
+    await waitFor(() => expect(inits().length).toBeGreaterThan(0));
+    const headers = inits()[0]?.headers as Record<string, string> | undefined;
+    expect(headers?.Authorization).toBe('Bearer fixture-dashboard-token');
+  });
+
+  it('sends no Authorization header on the default path — no ?token= and nothing in storage', async () => {
+    const { fetchImpl, lastInit } = recordingFetch();
+
+    render(<App snapshotOptions={{ fetchImpl, intervalMs: POLL_MS }} />);
+
+    await waitFor(() => expect(lastInit()).toBeDefined());
+    const headers = lastInit()?.headers as Record<string, string> | undefined;
+    expect(headers === undefined || headers.Authorization === undefined).toBe(true);
+  });
+
+  // Token resolution runs inside useState's lazy initializer (round 2
+  // finding A moved it back there from an effect, to win the race against
+  // useSnapshot's mount-time poll). `window.sessionStorage`'s PROPERTY ACCESS
+  // itself throws `SecurityError` where site data is blocked (Safari Block
+  // All Cookies, some Chrome privacy settings, privacy extensions) — with no
+  // error boundary, an uncaught throw here would blow up render (a white
+  // screen). `safeSessionStorage()` catches it and degrades to a no-op
+  // store, so the default no-token path renders instead.
+  it('renders the default path instead of white-screening when sessionStorage access throws', async () => {
+    const original = Object.getOwnPropertyDescriptor(window, 'sessionStorage');
+    Object.defineProperty(window, 'sessionStorage', {
+      configurable: true,
+      get(): Storage {
+        throw new DOMException('The operation is insecure.', 'SecurityError');
+      },
+    });
+    try {
+      const { fetchImpl, lastInit } = recordingFetch();
+
+      render(<App snapshotOptions={{ fetchImpl, intervalMs: POLL_MS }} />);
+
+      const rail = await screen.findByRole('complementary', { name: 'Rail' });
+      expect(rail).toBeTruthy();
+      await waitFor(() => expect(lastInit()).toBeDefined());
+      const headers = lastInit()?.headers as Record<string, string> | undefined;
+      expect(headers === undefined || headers.Authorization === undefined).toBe(true);
+    } finally {
+      if (original) Object.defineProperty(window, 'sessionStorage', original);
+    }
+  });
+
+  // Round 2 finding B: `safeSessionStorage()` guarded only the property
+  // access, so a throwing `getItem`/`setItem` (Safari private browsing,
+  // `QuotaExceededError`) still escaped — and `resolveDashboardToken` calls
+  // `storage.setItem` BEFORE returning a fresh URL token, so an unguarded
+  // throw there would both blank the dashboard (thrown out of the lazy
+  // initializer, no error boundary) AND lose the URL token that triggered
+  // the write. Both halves are asserted: the dashboard renders, and the
+  // first poll still carries the URL token despite the write failing.
+  it('carries the URL token on the first poll, and does not blank the dashboard, when sessionStorage.setItem throws', async () => {
+    const original = Object.getOwnPropertyDescriptor(window, 'sessionStorage');
+    const throwingStore: Pick<Storage, 'getItem' | 'setItem'> = {
+      getItem: () => null,
+      setItem: () => {
+        throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+      },
+    };
+    Object.defineProperty(window, 'sessionStorage', {
+      configurable: true,
+      get: () => throwingStore,
+    });
+    try {
+      window.history.pushState(null, '', '/?token=fixture-dashboard-token');
+      const { fetchImpl, inits } = recordingFetch();
+
+      render(<App snapshotOptions={{ fetchImpl, intervalMs: POLL_MS }} />);
+
+      const rail = await screen.findByRole('complementary', { name: 'Rail' });
+      expect(rail).toBeTruthy();
+      await waitFor(() => expect(inits().length).toBeGreaterThan(0));
+      const headers = inits()[0]?.headers as Record<string, string> | undefined;
+      expect(headers?.Authorization).toBe('Bearer fixture-dashboard-token');
+    } finally {
+      if (original) Object.defineProperty(window, 'sessionStorage', original);
+    }
+  });
+
+  // Round 2 finding B's other half: `getItem` throwing (not just `setItem`)
+  // must also degrade to the default path rather than blank the dashboard.
+  // No ?token= here, so `resolveDashboardToken` falls through to the
+  // `storage.getItem` read this store throws on.
+  it('renders the default path instead of white-screening when sessionStorage.getItem throws', async () => {
+    const original = Object.getOwnPropertyDescriptor(window, 'sessionStorage');
+    const throwingStore: Pick<Storage, 'getItem' | 'setItem'> = {
+      getItem: () => {
+        throw new DOMException('The operation is insecure.', 'SecurityError');
+      },
+      setItem: () => {},
+    };
+    Object.defineProperty(window, 'sessionStorage', {
+      configurable: true,
+      get: () => throwingStore,
+    });
+    try {
+      const { fetchImpl, inits } = recordingFetch();
+
+      render(<App snapshotOptions={{ fetchImpl, intervalMs: POLL_MS }} />);
+
+      const rail = await screen.findByRole('complementary', { name: 'Rail' });
+      expect(rail).toBeTruthy();
+      await waitFor(() => expect(inits().length).toBeGreaterThan(0));
+      const headers = inits()[0]?.headers as Record<string, string> | undefined;
+      expect(headers === undefined || headers.Authorization === undefined).toBe(true);
+    } finally {
+      if (original) Object.defineProperty(window, 'sessionStorage', original);
+    }
+  });
+});
