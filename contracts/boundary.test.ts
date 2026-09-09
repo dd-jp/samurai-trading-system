@@ -412,6 +412,39 @@ describe('inbound routing: nothing bypasses a barrel (#1158)', () => {
     }
   });
 
+  it('the carve-out predicate admits named, default and namespace import type forms, not per-specifier or re-export type', () => {
+    // Pins isBareImportType (:327) against docs/coding-standards.md's
+    // carve-out wording. Finding 2/3 (#1158 round 2) was the doc and the
+    // predicate disagreeing; this pins the predicate side of that agreement
+    // so a future edit to either one fails a test instead of silently
+    // reopening the same drift.
+    const dir = mkdtempSync(join(tmpdir(), 'boundary-carve-out-fixtures-'));
+    try {
+      const file = join(dir, 'carve-out-forms.ts');
+      writeFileSync(
+        file,
+        [
+          "import type { Foo } from '../../../contracts/a.js';",
+          "import type Bar from '../../../contracts/b.js';",
+          "import type * as Baz from '../../../contracts/c.js';",
+          "import { type Qux } from '../../../contracts/d.js';",
+          "export type { Quux } from '../../../contracts/e.js';",
+          '',
+        ].join('\n'),
+      );
+      const bySpecifier = new Map(
+        importStatementsOf(file).map((s) => [s.specifier, s.isBareImportType]),
+      );
+      expect(bySpecifier.get('../../../contracts/a.js')).toBe(true);
+      expect(bySpecifier.get('../../../contracts/b.js')).toBe(true);
+      expect(bySpecifier.get('../../../contracts/c.js')).toBe(true);
+      expect(bySpecifier.get('../../../contracts/d.js')).toBe(false);
+      expect(bySpecifier.get('../../../contracts/e.js')).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('nothing outside contracts/ imports a contracts/*.ts file other than index.ts', () => {
     const violations = deepImportViolations(CONTRACTS_DEEP_IMPORT, () => false, false);
     expect(violations, violations.join('\n')).toEqual([]);
