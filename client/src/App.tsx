@@ -15,7 +15,11 @@ import { ReviewTab } from './components/tabs/ReviewTab.tsx';
 import { useEquitySamples } from './hooks/useEquitySamples.ts';
 import { useLedger } from './hooks/useLedger.ts';
 import { type UseSnapshotOptions, useSnapshot } from './hooks/useSnapshot.ts';
-import { resolveDashboardToken, stripTokenParam } from './lib/dashboard-token.ts';
+import {
+  resolveDashboardToken,
+  stripTokenParam,
+  type TokenStorage,
+} from './lib/dashboard-token.ts';
 import type { Selection } from './lib/resolve-trace.ts';
 import './App.css';
 
@@ -29,17 +33,35 @@ function tabFromHash(): Tab {
   return isTab(hash) ? hash : 'glance';
 }
 
+/**
+ * `window.sessionStorage` throws `SecurityError` on the property access
+ * itself where site data is blocked (Safari's Block All Cookies, some
+ * Chrome privacy settings, some extensions) — not only on `getItem`/
+ * `setItem`. Degrading to a store that reads nothing and writes nowhere
+ * keeps the dashboard on its no-token default path instead of white-
+ * screening from inside a render.
+ */
+function safeSessionStorage(): TokenStorage {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return { getItem: () => null, setItem: () => {} };
+  }
+}
+
 export interface AppProps {
   snapshotOptions?: UseSnapshotOptions;
 }
 
 export function App({ snapshotOptions }: AppProps = {}) {
-  // Resolved once per mount, like `tabFromHash` below — a re-render must not
-  // re-read `location.search` after the effect below has already scrubbed it.
-  const [authToken] = useState<string | null>(() =>
-    resolveDashboardToken(window.location.search, window.sessionStorage),
-  );
+  // Resolved (and, for a URL-borne token, persisted) in an effect rather
+  // than useState's lazy initializer: React invokes a state initializer
+  // twice under StrictMode to surface impure code, and both the storage
+  // write and the property access that can throw belong to a side effect,
+  // not to render.
+  const [authToken, setAuthToken] = useState<string | null>(null);
   useEffect(() => {
+    setAuthToken(resolveDashboardToken(window.location.search, safeSessionStorage()));
     // Scrubs `?token=...` off the address bar (dashboard-token.ts's header:
     // history, referrers and a shared screen are all places a URL-borne
     // credential leaks). Preserves `pathname`/`hash` — `tabFromHash` above

@@ -683,4 +683,34 @@ describe('dashboard token from the URL (#1038)', () => {
     const headers = lastInit()?.headers as Record<string, string> | undefined;
     expect(headers === undefined || headers.Authorization === undefined).toBe(true);
   });
+
+  // Review round 1, finding 2: `window.sessionStorage`'s PROPERTY ACCESS
+  // throws `SecurityError` where site data is blocked (Safari Block All
+  // Cookies, some Chrome privacy settings, privacy extensions) — before the
+  // fix that happened inside useState's lazy initializer, so it threw out of
+  // render with no error boundary to catch it (a white screen). Degrading to
+  // the default no-token path is the honest behaviour: the operator sees the
+  // dashboard, not a blank tab.
+  it('renders the default path instead of white-screening when sessionStorage access throws', async () => {
+    const original = Object.getOwnPropertyDescriptor(window, 'sessionStorage');
+    Object.defineProperty(window, 'sessionStorage', {
+      configurable: true,
+      get(): Storage {
+        throw new DOMException('The operation is insecure.', 'SecurityError');
+      },
+    });
+    try {
+      const { fetchImpl, lastInit } = recordingFetch();
+
+      render(<App snapshotOptions={{ fetchImpl, intervalMs: POLL_MS }} />);
+
+      const rail = await screen.findByRole('complementary', { name: 'Rail' });
+      expect(rail).toBeTruthy();
+      await waitFor(() => expect(lastInit()).toBeDefined());
+      const headers = lastInit()?.headers as Record<string, string> | undefined;
+      expect(headers === undefined || headers.Authorization === undefined).toBe(true);
+    } finally {
+      if (original) Object.defineProperty(window, 'sessionStorage', original);
+    }
+  });
 });

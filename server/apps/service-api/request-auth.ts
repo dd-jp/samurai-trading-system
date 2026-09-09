@@ -74,7 +74,5 @@ export function isAuthorizedRequest(
   if (!isConfiguredCredential(credential)) return true;
   const provided = extractBearerToken(authorizationHeader);
   if (provided === null) return false;
-  // isConfiguredCredential(credential) is true here, so credential is a
-  // defined, non-blank string — the `as string` reflects that, not a guess.
-  return constantTimeStringsEqual(provided, credential as string);
+  return constantTimeStringsEqual(provided, credential);
 }

@@ -2,14 +2,13 @@
  * Fail-closed guard for the dashboard's bind address (#887, ADR-0019).
  *
  * `GET /api/snapshot` (`snapshot.ts`) serves open positions, P&L and LLM
- * spend. Originally with no per-request auth of any kind (see `server.ts`'s
- * header); as of #1038 that route additionally verifies each request's
- * bearer token against this same credential (`request-auth.ts`) whenever one
- * is configured. This module's own job is unchanged: it is the BOOT-time
- * half — the only thing that ever stood between "loopback" and "published to
- * the LAN" was `process.env.HOST` defaulting to `127.0.0.1` in `index.ts` and
- * `fixture-server.ts` — `HOST=0.0.0.0 yarn dashboard` bound the book wide
- * open, silently, with no error and no failing test.
+ * spend, additionally verified per request against this same credential
+ * (`request-auth.ts`) whenever one is configured. This module's own job is
+ * narrower: it is the BOOT-time half — the only thing that ever stood
+ * between "loopback" and "published to the LAN" was `process.env.HOST`
+ * defaulting to `127.0.0.1` in `index.ts` and `fixture-server.ts` —
+ * `HOST=0.0.0.0 yarn dashboard` bound the book wide open, silently, with no
+ * error and no failing test.
  *
  * The fix decided on #887 (recorded in ADR-0019's Consequences and its
  * 2026-09-02 amendment) is **conjunctive** and fail-closed: refuse to start
@@ -79,7 +78,7 @@ export const DASHBOARD_CREDENTIAL_ENV_VAR = 'SAMURAI_DASHBOARD_TOKEN';
  * must agree on what "configured" means, or a blank env var could unlock the
  * bind while still being treated as a live secret to check requests against.
  */
-export function isConfiguredCredential(credential: string | undefined): boolean {
+export function isConfiguredCredential(credential: string | undefined): credential is string {
   return credential !== undefined && credential.trim() !== '';
 }
 
@@ -123,10 +122,11 @@ export function assertBindAllowed(host: string, credential: string | undefined):
   throw new Error(
     `Dashboard refuses to start: HOST=${host} is not a loopback address (127.0.0.1 or ::1) and ` +
       `${DASHBOARD_CREDENTIAL_ENV_VAR} is not configured. GET /api/snapshot serves open ` +
-      'positions, P&L and LLM spend with no per-request auth (#887, ADR-0019) — binding it ' +
-      'beyond localhost with nothing else standing guard would publish the live book to ' +
-      'whatever network HOST reaches. Fix: bind to 127.0.0.1 (the default) or ::1, or set ' +
-      `${DASHBOARD_CREDENTIAL_ENV_VAR} to a non-empty value before binding to ${host} (checked ` +
-      "only at boot here — see this function's doc comment on request-time scope).",
+      'positions, P&L and LLM spend — binding it beyond localhost with nothing else standing ' +
+      'guard would publish the live book to whatever network HOST reaches. Fix: bind to ' +
+      '127.0.0.1 (the default) or ::1, or set ' +
+      `${DASHBOARD_CREDENTIAL_ENV_VAR} to a non-empty value before binding to ${host}. Once set, ` +
+      'every /api/snapshot request must also carry it as `Authorization: Bearer <value>` — open ' +
+      'the dashboard at /?token=<value> once to have the browser capture and send it from then on.',
   );
 }
