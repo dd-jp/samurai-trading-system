@@ -1,7 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runWithTraceId } from '../trace-context.js';
 import type { LogEntry, Logger } from '../types/primitives.js';
-import { TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS, TokenBucket } from './token-bucket.js';
+import {
+  TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_BACKGROUND_MS,
+  TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_PRIORITY_MS,
+  TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS,
+  TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS,
+  TokenBucket,
+} from './token-bucket.js';
+import { DEFAULT_VENUE_PACING } from './venue-pacing.js';
 
 function recordingLogger(): { logger: Logger; entries: LogEntry[] } {
   const entries: LogEntry[] = [];
@@ -313,7 +320,8 @@ describe('TokenBucket wait telemetry (#1083)', () => {
     const [entry] = entries;
     // #1383: pacing under a working bucket is normal operation, not a fault —
     // `warn` here just added to the soak's warn-share without signaling anything
-    // actionable (414/2102 lines, 19.7% of one soak, none of it starvation).
+    // actionable (pre-#1435 raw count: 414/2102 lines, 19.7% of one soak, none
+    // of it starvation; #1435 adds the per-lane repeat window that bounds this).
     expect(entry.level).toBe('info');
     // Grep-distinguishable: neither an LLM token-count field (`input_tokens`)
     // nor a bare digit run (`429`) can match this event name.
@@ -447,5 +455,345 @@ describe('TokenBucket wait telemetry (#1083)', () => {
     await pending;
 
     expect(entries[0]?.trace_id).toBe('token-bucket');
+  });
+});
+
+/**
+ * #1435: severity alone (#1383) does not move `token_bucket_wait`'s raw line
+ * count — a per-lane repeat window does. These pin that a burst of
+ * threshold-crossing waits on one lane collapses to one line per window, and
+ * that the suppressed occurrences ride in the next announcement rather than
+ * vanishing.
+ */
+describe('TokenBucket wait telemetry repeat window (#1435)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('suppresses a threshold-crossing wait inside the repeat window, then re-announces carrying what it suppressed', async () => {
+    const { logger, entries } = recordingLogger();
+    const bucket = new TokenBucket({ capacity: 1, refillPerSecond: 1 }, undefined, {
+      logger,
+      name: 'alpaca',
+    });
+    await bucket.acquire();
+
+    const first = bucket.acquire();
+    await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS);
+    await first;
+    expect(entries).toHaveLength(1);
+
+    // Same lane, still well inside the repeat window: suppressed, not a
+    // second line, but tracked so the next announcement can report it.
+    const second = bucket.acquire();
+    await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS);
+    await second;
+    expect(entries).toHaveLength(1);
+
+    // Let the bucket sit idle past the repeat window (tokens simply refill to
+    // capacity and cap there), then force one more threshold-crossing wait.
+    await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS);
+    await bucket.acquire(); // instant: the idle capacity-1 bucket refilled.
+    const third = bucket.acquire();
+    await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS);
+    await third;
+
+    expect(entries).toHaveLength(2);
+    expect(entries[1]?.payload).toMatchObject({
+      lane: 'priority',
+      suppressed_since_last: 1,
+      max_suppressed_wait_ms: TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS,
+    });
+  });
+
+  it("keeps each lane's repeat window independent, so a background announcement cannot mask a priority lane's first crossing", async () => {
+    const { logger, entries } = recordingLogger();
+    const bucket = new TokenBucket(
+      { capacity: 1, refillPerSecond: 1, reserveForPriority: 0 },
+      undefined,
+      { logger, name: 'alpaca' },
+    );
+    await bucket.acquireBackground();
+
+    const bgWait = bucket.acquireBackground();
+    await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS);
+    await bgWait;
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.payload).toMatchObject({ lane: 'background', suppressed_since_last: 0 });
+
+    // A priority wait immediately after, well inside the background lane's
+    // repeat window, must still announce — it is a different lane's first
+    // crossing, not a repeat of the background one.
+    const priorityWait = bucket.acquire();
+    await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS);
+    await priorityWait;
+
+    expect(entries).toHaveLength(2);
+    expect(entries[1]?.payload).toMatchObject({ lane: 'priority', suppressed_since_last: 0 });
+  });
+
+  it('folds two or more suppressed crossings into the next announcement, reporting the true count and the true max — not the announcing wait itself', async () => {
+    const { logger, entries } = recordingLogger();
+    const bucket = new TokenBucket({ capacity: 1, refillPerSecond: 1 }, undefined, {
+      logger,
+      name: 'alpaca',
+    });
+    await bucket.acquire();
+
+    // Three callers racing a drained, capacity-1 bucket: the loser of each
+    // cycle simply waits another full cycle (see "serializes concurrent
+    // acquires" above), so the first admits at ~1000ms, the second at
+    // ~2000ms, the third at ~3000ms — three DIFFERENT wait magnitudes from
+    // one setup, which a single suppressed wait (the existing test above)
+    // cannot exercise.
+    const order: number[] = [];
+    const pending = Promise.all(
+      [1, 2, 3].map(async (i) => {
+        await bucket.acquire();
+        order.push(i);
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(3_000);
+    await pending;
+    expect(order).toEqual([1, 2, 3]);
+    // Caller 1 announced (opened the window); callers 2 and 3 were folded in
+    // silently — no second or third line yet.
+    expect(entries).toHaveLength(1);
+
+    // Past the window: force one more threshold-crossing wait so the fold
+    // rides on this next announcement.
+    await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS);
+    await bucket.acquire(); // instant: the idle capacity-1 bucket refilled.
+    const fourth = bucket.acquire();
+    await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS);
+    await fourth;
+
+    expect(entries).toHaveLength(2);
+    const [, announcement] = entries;
+    expect(announcement?.payload).toMatchObject({
+      suppressed_since_last: 2,
+      max_suppressed_wait_ms: 3_000,
+    });
+    // The announcing (4th) wait is ~1000ms — well under the true suppressed
+    // max of 3000ms carried from caller 3. Kills the mutant that reports the
+    // announcing wait's own magnitude as `max_suppressed_wait_ms` instead of
+    // the tracked maximum.
+    const payload = announcement?.payload as { wait_ms: number };
+    expect(payload.wait_ms).toBeLessThan(3_000);
+    expect(announcement?.message).toContain('2 more threshold-crossing wait');
+    expect(announcement?.message).toContain('3000ms');
+  });
+
+  it('always announces a priority wait at or past its catastrophic bound, even inside an active repeat window, folding in whatever was suppressed first', async () => {
+    const { logger, entries } = recordingLogger();
+    const bucket = new TokenBucket({ capacity: 1, refillPerSecond: 1 }, undefined, {
+      logger,
+      name: 'alpaca',
+    });
+    await bucket.acquire();
+
+    // `TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_PRIORITY_MS` is 8x the material-wait
+    // threshold; with this bucket's 1000ms-per-cycle racer dynamic, the Nth
+    // of N concurrently parked priority callers waits ~N*1000ms, so 8 racers
+    // reaches the catastrophic bound exactly on the last one. Dividing by
+    // `TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS` only yields that same 8 because
+    // this bucket's `refillPerSecond: 1` happens to make one cycle 1000ms —
+    // the threshold's current value, not a derivation from it. If either
+    // constant's value changes, re-check this still lands on the last racer.
+    const raceCount =
+      TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_PRIORITY_MS / TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS;
+    const order: number[] = [];
+    const pending = Promise.all(
+      Array.from({ length: raceCount }, (_, i) => i + 1).map(async (i) => {
+        await bucket.acquire();
+        order.push(i);
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_PRIORITY_MS);
+    await pending;
+    expect(order).toHaveLength(raceCount);
+
+    // Caller 1 announced at ~1000ms (opens the window). Callers 2..(N-1) were
+    // folded silently. Caller N, at exactly the catastrophic bound and still
+    // well inside caller 1's 45-minute window, must announce anyway —
+    // otherwise a catastrophic wait with no later same-lane crossing before
+    // the window (or process exit) would never be reported. This is also the
+    // `catastrophic_bypass` payload field's proof: the second entry is the
+    // ONLY way this test can reach two announcements inside one window.
+    expect(entries).toHaveLength(2);
+    const [firstAnnouncement, catastrophicAnnouncement] = entries;
+    expect(firstAnnouncement?.payload).toMatchObject({
+      suppressed_since_last: 0,
+      catastrophic_bypass: false,
+    });
+    expect(catastrophicAnnouncement?.payload).toMatchObject({
+      wait_ms: TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_PRIORITY_MS,
+      catastrophic_bypass: true,
+      suppressed_since_last: raceCount - 2,
+      max_suppressed_wait_ms: (raceCount - 1) * TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS,
+    });
+  });
+
+  it("never bypasses a background wait below its own (higher) catastrophic bound, even at the priority lane's bound", async () => {
+    // Guards the lane-split itself: a background wait exactly at
+    // `TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_PRIORITY_MS` must still be an
+    // ordinary suppressed (folded) crossing, because background compares
+    // against its own, higher bound. Kills the mutant that collapses the
+    // per-lane selection back to a single shared constant.
+    const { logger, entries } = recordingLogger();
+    const bucket = new TokenBucket(
+      { capacity: 1, refillPerSecond: 1, reserveForPriority: 0 },
+      undefined,
+      { logger, name: 'alpaca' },
+    );
+    await bucket.acquireBackground();
+
+    const raceCount =
+      TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_PRIORITY_MS / TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS;
+    const order: number[] = [];
+    const pending = Promise.all(
+      Array.from({ length: raceCount }, (_, i) => i + 1).map(async (i) => {
+        await bucket.acquireBackground();
+        order.push(i);
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_PRIORITY_MS);
+    await pending;
+    expect(order).toHaveLength(raceCount);
+
+    // Only caller 1 announced (opened the window); the last caller's wait
+    // equals the priority bound but is still under the (higher) background
+    // bound, so it stays folded rather than bypassing — no second entry
+    // appears while still inside the window.
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.payload).toMatchObject({ lane: 'background', catastrophic_bypass: false });
+
+    // Force one more crossing past the window to surface what was folded —
+    // proves callers 2..N were counted, not silently dropped, and that none
+    // of them (including the one at the priority bound) ever bypassed.
+    await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS);
+    await bucket.acquireBackground(); // instant: the idle capacity-1 bucket refilled.
+    const trailing = bucket.acquireBackground();
+    await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS);
+    await trailing;
+
+    expect(entries).toHaveLength(2);
+    expect(entries[1]?.payload).toMatchObject({
+      lane: 'background',
+      suppressed_since_last: raceCount - 1,
+      catastrophic_bypass: false,
+    });
+  });
+
+  /**
+   * #1435 round 2 finding 1: the pre-split shared 30x bound was unreachable
+   * for a `priority` wait on the live Alpaca config, so this pins reachability
+   * against `DEFAULT_VENUE_PACING.alpaca` itself rather than a synthetic
+   * bucket — the round-1/round-2 tests above use synthetic configs to pin the
+   * window/fold mechanics in isolation, but finding 1 specifically asked for a
+   * bound that is reachable on the REAL numbers.
+   *
+   * `priority`'s `needed` is always 1 and `reserveForPriority` does not
+   * constrain it (only `background`'s draw) — see
+   * `TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_PRIORITY_MS`'s docblock. So: drain the
+   * real 41-token bucket with 41 instant priority acquires, then race enough
+   * further concurrent priority callers to reach the 8s bound. Each racer
+   * costs `1 / refillPerSecond * 1000 = 500ms` more than the last (linear,
+   * because granting removes only 1 token). Two racers open the repeat window
+   * (2nd admits at exactly 1000ms = the material-wait threshold); from the
+   * re-drained bucket, 16 more racers reach `16 * 500 = 8000ms` on the last —
+   * exactly `TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_PRIORITY_MS`.
+   */
+  it('reaches the priority catastrophic bound on the live Alpaca pacing config', async () => {
+    const { logger, entries } = recordingLogger();
+    const bucket = new TokenBucket(DEFAULT_VENUE_PACING.alpaca, undefined, {
+      logger,
+      name: 'alpaca',
+    });
+
+    // Drain the real capacity (41) with instant acquires.
+    for (let i = 0; i < DEFAULT_VENUE_PACING.alpaca.capacity; i++) {
+      await bucket.acquire();
+    }
+
+    // Two concurrent racers on the drained bucket: the 2nd admits at exactly
+    // 1000ms (500ms/token * 2), opening the repeat window with one
+    // announcement.
+    const opening = Promise.all([bucket.acquire(), bucket.acquire()]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await opening;
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.payload).toMatchObject({ suppressed_since_last: 0 });
+
+    // Re-drain (the bucket is back to empty after the two racers above), then
+    // race 16 more concurrent priority callers from empty. The 16th admits at
+    // exactly 16 * 500ms = 8000ms — the priority catastrophic bound — still
+    // well inside the first announcement's 45-minute window.
+    const raceCount = 16;
+    const order: number[] = [];
+    const pending = Promise.all(
+      Array.from({ length: raceCount }, (_, i) => i + 1).map(async (i) => {
+        await bucket.acquire();
+        order.push(i);
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(raceCount * 500);
+    await pending;
+    expect(order).toHaveLength(raceCount);
+
+    expect(entries).toHaveLength(2);
+    const [, bypassAnnouncement] = entries;
+    expect(bypassAnnouncement?.payload).toMatchObject({
+      bucket: 'alpaca',
+      lane: 'priority',
+      wait_ms: TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_PRIORITY_MS,
+      catastrophic_bypass: true,
+      // Racers 2..15 of the 16 (14 of them) crossed the threshold but stayed
+      // under the 8000ms bound, so they folded; racer 15's 7500ms wait is the
+      // carried max.
+      suppressed_since_last: 14,
+      max_suppressed_wait_ms: 7_500,
+    });
+  });
+
+  it("confirms background's by-design ~20.5s worst case on the live Alpaca config stays below its own catastrophic bound", async () => {
+    // #1435 round 2 finding 1: background's bound must NOT fire on its own
+    // by-design worst case (#391) — that would defeat the point of leaving it
+    // above `background`'s normal contention. `needed = 1 + reserveForPriority
+    // = 22`; first grant from drained costs `22 / 2.0 * 1000 = 11000ms`, each
+    // further racer costs +500ms (linear): 20 racers land the 20th at
+    // `11000 + 19*500 = 20500ms`, still under
+    // `TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_BACKGROUND_MS` (30000ms).
+    const { logger, entries } = recordingLogger();
+    const bucket = new TokenBucket(DEFAULT_VENUE_PACING.alpaca, undefined, {
+      logger,
+      name: 'alpaca',
+    });
+    for (let i = 0; i < DEFAULT_VENUE_PACING.alpaca.capacity; i++) {
+      await bucket.acquire();
+    }
+
+    const raceCount = 20;
+    const order: number[] = [];
+    const pending = Promise.all(
+      Array.from({ length: raceCount }, (_, i) => i + 1).map(async (i) => {
+        await bucket.acquireBackground();
+        order.push(i);
+      }),
+    );
+    const expectedLastWaitMs = 11_000 + (raceCount - 1) * 500;
+    expect(expectedLastWaitMs).toBeLessThan(TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_BACKGROUND_MS);
+    await vi.advanceTimersByTimeAsync(expectedLastWaitMs);
+    await pending;
+    expect(order).toHaveLength(raceCount);
+
+    // One announcement (the first racer opens the window); every later racer,
+    // including the 20500ms worst case, stays folded — never a bypass.
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.payload).toMatchObject({ lane: 'background', catastrophic_bypass: false });
   });
 });

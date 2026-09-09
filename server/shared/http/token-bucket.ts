@@ -18,10 +18,12 @@
  * seconds and one served instantly produced the same (nonexistent) trace, so
  * a starved fetch could be neither confirmed nor ruled out as an explanation
  * for a session's timeouts. `TokenBucketTelemetry` closes that gap with an
- * OPTIONAL wait-observed log line; see `take()` and
- * `TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS` for what gets logged and when. It does
- * not change what `acquire()`/`acquireBackground()` resolve on or when —
- * observation only, never a second control on pacing.
+ * OPTIONAL wait-observed log line; see `take()`, `TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS`,
+ * `TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS` and the per-lane
+ * `TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_PRIORITY_MS`/`_BACKGROUND_MS`
+ * for what gets logged, when, and how often. It does not change what
+ * `acquire()`/`acquireBackground()` resolve on or when — observation only,
+ * never a second control on pacing.
  */
 
 import { safeLog } from '../safe-log.js';
@@ -86,9 +88,127 @@ export interface TokenBucketTelemetry {
  */
 export const TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS = 1_000;
 
+/**
+ * #1435: severity alone (#1383, `token_bucket_wait` moved to `info`) does not
+ * move the event's raw line count — only the threshold does, and raising it
+ * is out of scope for the reason #1383 didn't touch it either (it would hide
+ * genuine starvation, the whole point of #1083). This is the cardinality
+ * lever instead: at most one announcement per lane per window; crossings
+ * inside the window are counted and folded into the next announcement
+ * (`suppressed_since_last`/`max_suppressed_wait_ms` in `logIfMaterialWait`)
+ * rather than dropped silently.
+ *
+ * Sized off #1383's own reference 20h soak (2102 structured lines, of which
+ * `token_bucket_wait` was 414 — token-bucket.test.ts's "414/2102" comment).
+ * Held to a self-consistent 5% AC (#1383's own, unmet for this event and
+ * deferred here): with the 414 raw lines replaced by `x` announcements, the
+ * total line count becomes `1090 + x` (1504 projected post-#1383 total minus
+ * the 414 this change replaces), so clearing 5% requires `x <= 0.05*(1090+x)`,
+ * i.e. `x <= ~57.37`, so `x <= 57`. Windowed PER LANE (not per bucket — a
+ * burst on one lane must not swallow the other's first announcement, see
+ * `logIfMaterialWait`), so the worst case per lane over a 20h (1200min) soak
+ * is one announcement at t=0 plus one per full window thereafter:
+ * `floor(1200 / 45) + 1 = 27`; two lanes make the worst case per bucket
+ * instance `2 * 27 = 54` — PLUS one more line per crossing that hits the
+ * per-lane catastrophic bound (`TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_PRIORITY_MS`
+ * / `_BACKGROUND_MS`), which bypasses this window entirely and is not bounded
+ * by `W` (see those constants' docblock for why the extra term `C` stays
+ * small — such crossings are rare by construction). `54 + C <= 57` needs
+ * `C <= 3`; a bypass still calls `waitAnnounce.set` for its lane exactly like
+ * a windowed announcement does, so it resets that lane's window rather than
+ * adding an extra window-driven line on top — `C` is genuinely additive, not
+ * double-counted against the 54. `logIfMaterialWait`'s `catastrophic_bypass`
+ * payload field exists to make `C` countable against this bound from a real
+ * soak's structured log, since this derivation is a projection, not a
+ * re-measurement: no raw soak log survives to replay the real clustering of
+ * waits, only the aggregate counts above.
+ *
+ * The budget assumes ONE telemetry-wired bucket lives per process — true for
+ * every long-lived process today: `production.ts`'s shared `'alpaca'` bucket
+ * is the only telemetry-wired bucket any long-running process constructs;
+ * `saxo-http-client.ts`'s `'saxo'` bucket has no non-test constructor call
+ * anywhere in the tree (Saxo execution wiring is built but nothing calls it
+ * yet — #946). `place-soak-position.ts`'s one-shot `AlpacaBrokerAdapter`
+ * construction falls back to that same telemetry-wired `'alpaca'` bucket
+ * shape (no `rateLimiter` passed in), but it is a short-lived CLI tool
+ * process, not a second concurrent holder alongside `production.ts` — the
+ * "one bucket per process" assumption this budget rests on is unaffected. If
+ * a live process ever holds two telemetry-wired buckets AT ONCE, the worst
+ * case doubles per bucket and this budget needs re-deriving.
+ */
+export const TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS = 45 * 60_000;
+
+/**
+ * Independent of the repeat window above: a wait this long IS the module
+ * header's motivating failure (the unprotected-filled-lot case), not
+ * ordinary contention, and folding it into a later announcement — or losing
+ * it outright if no later crossing on the same lane ever arrives before the
+ * process exits — defeats the reason #1083 exists. Always announced, window
+ * or not; the window still absorbs everything under this line.
+ *
+ * #1435 round 2: a single shared bound across both lanes was unreachable for
+ * `priority` on the live Alpaca config (`DEFAULT_VENUE_PACING.alpaca`:
+ * `capacity: 41`, `refillPerSecond: 2.0`, `reserveForPriority: 21`) and
+ * wrong-headed for `background` — so the bound is now per lane.
+ *
+ * `priority`'s `needed` is always 1 (see `acquire()`) and `reserveForPriority`
+ * only constrains `background`'s draw, not `priority`'s — so from a drained
+ * bucket (41 concurrent priority callers having just emptied it, the same
+ * cold-start burst `venue-pacing.ts` sizes `capacity` for), each further
+ * concurrent `priority` racer costs another `1 / refillPerSecond * 1000 =
+ * 500ms` (mirrors the repeat-window race construction already used in
+ * `token-bucket.test.ts`).
+ * Reaching 8s from there needs ~16 further concurrent `priority` callers on
+ * top of the 2 that open the repeat window — a number this module does not
+ * try to pin exactly (the only real caller pattern found, `fetchNewFills` in
+ * `alpaca-adapter.ts`, issues its `getOrder` polls through a sequential
+ * `for...of` loop, not `Promise.all`, so this bound does not lean on any
+ * specific concurrent-caller count actually being reached in practice — only
+ * on 8s being reachable in principle, which the construction above shows).
+ * Chosen to equal the module header's own motivating "eight seconds" example
+ * rather than an arbitrary multiple, so a priority wait that trips this IS,
+ * by the header's own framing, the failure #1083 exists to surface.
+ */
+export const TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_PRIORITY_MS =
+  TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS * 8;
+
+/**
+ * `background`'s `needed` is always `1 + reserveForPriority` (see
+ * `acquireBackground()`), so on the live Alpaca config a `background` caller
+ * racing from a fully drained bucket already waits `22 / 2.0 * 1000 =
+ * 11000ms` for the FIRST grant, then +500ms per further concurrent racer
+ * (linear, not multiplicative — granting removes only 1 of the 22 needed) —
+ * 20 concurrent racers lands at ~20.5s. That is `background`'s BY-DESIGN
+ * worst case (#391: it is the lane allowed to wait so `priority` does not),
+ * not starvation, so its bound stays well above it — unlike `priority`'s,
+ * this bound is not reachable from ordinary contention and a soak crossing
+ * it really is exceptional. Left at 30x the material-wait threshold, its
+ * original (shared-lane) value; round 2 found no reason to move it. Because
+ * `background` waits carry no protective urgency (#391's whole point — a
+ * late bar fetch costs nothing an order fill would), a `background`
+ * suppressed-then-lost crossing under this bound is accepted, not a defect:
+ * unlike `priority`, `background` has no unprotected-fill failure mode for
+ * `logIfMaterialWait`'s never-fold guarantee to protect.
+ */
+export const TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_BACKGROUND_MS =
+  TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS * 30;
+
+/**
+ * In-memory, per lane, per bucket instance — not restart-clean the way
+ * `FilledZeroSizeThrottle`'s header declares itself to be. A crossing
+ * suppressed here and never followed by a later same-lane crossing before
+ * process exit is never announced; nothing flushes it on shutdown.
+ */
+interface LaneWaitAnnounce {
+  lastAnnouncedAtMs: number;
+  suppressedCount: number;
+  maxSuppressedWaitMs: number;
+}
+
 export class TokenBucket {
   private tokens: number;
   private lastRefill: number;
+  private readonly waitAnnounce = new Map<TokenBucketLane, LaneWaitAnnounce>();
 
   constructor(
     private readonly config: TokenBucketConfig,
@@ -165,10 +285,30 @@ export class TokenBucket {
   }
 
   /**
-   * #1083. `undefined` telemetry (every call site that hasn't wired it) and a
-   * wait under the threshold are both silent by design — see
-   * `TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS` for why the second one is a floor
-   * and not a lower one.
+   * #1083. `undefined` telemetry (every call site that hasn't wired it), a
+   * wait under the threshold, and — #1435 — a threshold-crossing wait under
+   * the announcing lane's own catastrophic bound
+   * (`TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_PRIORITY_MS`/`_BACKGROUND_MS`)
+   * inside its repeat window are all silent by design; see
+   * `TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS` for why the second is a floor and
+   * not a lower one, and `TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS` for the
+   * third. The third case is not lost, only folded into the next
+   * announcement for that lane (`suppressed_since_last`/
+   * `max_suppressed_wait_ms` below) — cardinality reduction, not information
+   * destruction. A catastrophic wait (at or past the lane's own bound) is
+   * NEVER folded, window or not — see those constants' docblocks for why,
+   * including why `background`'s bypass is still accepted to be losable
+   * (its bound sits above its own by-design worst case, unlike
+   * `priority`'s). `payload.catastrophic_bypass` marks which path produced a
+   * given announcement, so a soak's structured log can count real bypasses
+   * (`C` in `TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS`'s line-budget
+   * derivation) separately from ordinary windowed ones (`x` there).
+   *
+   * Folding attributes a suppressed wait's magnitude to the announcing call's
+   * `trace_id`/tick, not the tick it actually happened on — the fold has no
+   * per-suppressed-event timestamp to attribute with. Accepted: the
+   * alternative is a timestamped log line per suppressed occurrence, which is
+   * the exact cardinality this repeat window exists to bound.
    *
    * The event name is `token_bucket_wait`, chosen to survive a grep that a
    * bare `token` or a bare `429` cannot: an LLM `input_tokens` field
@@ -185,7 +325,9 @@ export class TokenBucket {
    * the same as a short real wait would, so the line is silently dropped
    * rather than logged with a nonsense value. Accepted: an NTP step is rare
    * enough, and losing one line to it is a smaller cost than a `wait_ms`
-   * field a reader has to distrust on every line.
+   * field a reader has to distrust on every line. The same backward-step
+   * case can also delay the window's own re-announcement by making `nowMs`
+   * read earlier than it should — same acceptance, same rarity.
    *
    * Runs AFTER `take()` has already decremented `this.tokens` (the caller has
    * been granted its token by the time this is called) and `take()` is
@@ -201,10 +343,42 @@ export class TokenBucket {
     if (this.telemetry === undefined) return;
     if (waitedMs < TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS) return;
     const roundedWaitMs = Math.round(waitedMs);
+    const nowMs = this.now();
+    const prior = this.waitAnnounce.get(lane);
+    const catastrophicMs =
+      lane === 'priority'
+        ? TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_PRIORITY_MS
+        : TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_BACKGROUND_MS;
+    if (
+      prior !== undefined &&
+      nowMs - prior.lastAnnouncedAtMs < TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS &&
+      roundedWaitMs < catastrophicMs
+    ) {
+      prior.suppressedCount += 1;
+      prior.maxSuppressedWaitMs = Math.max(prior.maxSuppressedWaitMs, roundedWaitMs);
+      return;
+    }
+    // A bypass (a catastrophic wait announced while still inside the window)
+    // is the only case that reaches here with `prior` defined AND still
+    // inside the window — see `TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS` for why
+    // this still resets the window rather than adding a second line.
+    const catastrophicBypass =
+      prior !== undefined &&
+      nowMs - prior.lastAnnouncedAtMs < TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS;
+    const suppressedSinceLast = prior?.suppressedCount ?? 0;
+    const maxSuppressedWaitMs = prior?.maxSuppressedWaitMs ?? 0;
+    this.waitAnnounce.set(lane, {
+      lastAnnouncedAtMs: nowMs,
+      suppressedCount: 0,
+      maxSuppressedWaitMs: 0,
+    });
     safeLog(this.telemetry.logger, {
       // The enclosing tick when there is one, so a pacing wait joins to the
       // stage that waited; `'token-bucket'` only outside one. Deliberately
-      // not derived from `lane` — see shared/trace-context.ts.
+      // not derived from `lane` — see shared/trace-context.ts. This is the
+      // ANNOUNCING call's tick, not necessarily the folded waits' — see
+      // `logIfMaterialWait`'s docblock for why that mis-attribution is
+      // accepted.
       trace_id: currentTraceId() ?? 'token-bucket',
       stage: 'rate_limit',
       event: 'token_bucket_wait',
@@ -214,11 +388,18 @@ export class TokenBucket {
       level: 'info',
       message:
         `token_bucket_wait: the '${this.telemetry.name}' bucket paced a ${lane} caller for ` +
-        `${roundedWaitMs}ms before granting a token.`,
+        `${roundedWaitMs}ms before granting a token.` +
+        (suppressedSinceLast > 0
+          ? ` ${suppressedSinceLast} more threshold-crossing wait(s) on this lane were folded ` +
+            `into this line since the last announcement, the longest ${maxSuppressedWaitMs}ms.`
+          : ''),
       payload: {
         bucket: this.telemetry.name,
         lane,
         wait_ms: roundedWaitMs,
+        catastrophic_bypass: catastrophicBypass,
+        suppressed_since_last: suppressedSinceLast,
+        max_suppressed_wait_ms: maxSuppressedWaitMs,
       },
     });
   }
