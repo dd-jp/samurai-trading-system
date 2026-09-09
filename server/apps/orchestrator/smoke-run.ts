@@ -1366,7 +1366,7 @@ function exitPathOrder(
   };
 }
 
-/** An approved, unconstrained `RiskDecision` for `order` — the shape every harness in this file that needs Risk's output already agreeing needs verbatim. */
+/** An approved `RiskDecision` for `order`, shared by every harness in this file that needs one. */
 function approvedRiskDecision(order: OrderIntent): RiskDecision {
   return {
     status: 'approved',
