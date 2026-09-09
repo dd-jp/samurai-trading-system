@@ -17,11 +17,14 @@
  *   cancelled, is UNVERIFIED (#1215) — this adapter defends only the branch
  *   where Saxo leaves them `NotWorking` (parked, never activated): `findOpen`
  *   / `lookup` corroborate that read against the audit trail before
- *   cancelling (#1215 round 1), rather than journalling a phantom fill. If
- *   Saxo instead ACTIVATES the legs on expiry the same way it would on a
- *   genuine fill (`Working` on the book), that read is indistinguishable
- *   from a real fill by `Status` alone — the overnight-resting risk this
- *   ticket names lives entirely on that branch and is UNCHANGED by this fix.
+ *   cancelling (#1215 round 1), rather than journalling a phantom fill. A
+ *   corroboration that never resolves (no terminal audit row ever lands) is
+ *   paged, repeatedly, rather than deferred forever or cancelled without
+ *   evidence (#1215 round 2 — `escalateIfStale`). If Saxo instead ACTIVATES
+ *   the legs on expiry the same way it would on a genuine fill (`Working` on
+ *   the book), that read is indistinguishable from a real fill by `Status`
+ *   alone — the overnight-resting risk this ticket names lives entirely on
+ *   that branch and is UNCHANGED by this fix.
  * - `IsOcoOrderSupported` is false on every pool line, so an entry-less
  *   protective pair cannot be expressed; `rearmProtectiveLegs` throws.
  * - Amounts are whole units (`MinimumLotSize` 1, `OddLotsNotAllowed`) and
@@ -36,6 +39,7 @@ import {
   InMemoryBrokerStateStore,
   toRequestFields,
 } from '../broker-state-store.js';
+import type { DormantLegsUnresolvedAlertChannel } from '../dormant-legs-unresolved-alert.js';
 import type { LegResizeUnverifiedAlertChannel } from '../leg-resize-unverified-alert.js';
 import type {
   BrokerAck,
@@ -86,6 +90,40 @@ const ORDER_DECIMALS = 2;
  * older than this is a restart across many sessions, not a live lot.
  */
 const DEFAULT_ACTIVITY_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Consecutive `lookup()` calls that found the legs dormant (`findOpen`) but
+ * the master's OWN audit-trail row not yet terminal, before the FIRST
+ * `DormantLegsUnresolvedAlert` — see `escalateIfStale`. A wall-clock age was
+ * considered and rejected: this adapter is never told the poll cadence, but
+ * every call that reaches this branch already counts one observation, the
+ * same shape `FilledZeroSizeThrottle.observe` counts consecutive wedged
+ * polls on. Fewer polls of grace than that throttle's `ALERT_AFTER_
+ * CONSECUTIVE_ZERO_SIZE` (3) is deliberate: a resting order with no master
+ * open AND no terminal audit row is already an abnormal shape (doc 43 never
+ * measured it as the normal DayOrder lifecycle), unlike a legitimate fill-
+ * feed propagation lag, so the grace here exists only to absorb the one
+ * genuine race `findOpen` and `listOrderActivities` can produce between
+ * themselves (two separate network calls, not one atomic read) — a single
+ * lucky poll where the legs left the open list a beat before the audit
+ * trail caught up. A second consecutive occurrence rules that out.
+ */
+export const DORMANT_DEFER_ALERT_AFTER = 2;
+
+/**
+ * How often the alert repeats while the master stays unresolved, counted in
+ * further consecutive defer observations after the first — the same
+ * cadence `ALERT_REPEAT_EVERY_ZERO_SIZE` uses, for the same reason: visible
+ * enough that the channel is not a one-shot the operator can miss, rare
+ * enough it is not an unbroken flood while the state persists (ruling (c),
+ * #1215 round 2: recurring, not silent — but not every poll either).
+ */
+export const DORMANT_DEFER_ALERT_REPEAT_EVERY = 8;
+
+function shouldWarnDormantDefer(consecutive: number): boolean {
+  if (consecutive < DORMANT_DEFER_ALERT_AFTER) return false;
+  return (consecutive - DORMANT_DEFER_ALERT_AFTER) % DORMANT_DEFER_ALERT_REPEAT_EVERY === 0;
+}
 
 export interface SaxoInstrumentRef {
   readonly uic: number;
@@ -152,6 +190,17 @@ export interface SaxoBrokerAdapterInput {
    * refiling — same reason Alpaca's `unpricedFillAlerts` refuses one.
    */
   legResizeAlerts: LegResizeUnverifiedAlertChannel;
+  /**
+   * REQUIRED, no default: rulings (a)/(c) on #1215 round 2 are in direct
+   * tension for a dormant-legs corroboration that never reaches a terminal
+   * audit row — never cancel without evidence (a), never silently defer a
+   * wedge forever (c). `escalateIfStale` resolves that by paging here
+   * instead of either cancelling on suspicion or going quiet — a silent
+   * default would resolve the tension in ruling (c)'s favor by construction,
+   * the same "tested mechanism nothing calls" gap `legResizeAlerts` above
+   * refuses.
+   */
+  dormantLegsAlerts: DormantLegsUnresolvedAlertChannel;
   logger: Logger;
 }
 
@@ -177,9 +226,17 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
   private readonly activityLookbackMs: number;
   private readonly logger: Logger;
   private readonly legResizeAlerts: LegResizeUnverifiedAlertChannel;
+  private readonly dormantLegsAlerts: DormantLegsUnresolvedAlertChannel;
   /** Warmed from the journal so a restart keeps sweeping fills. */
   private readonly brackets = new Map<string, BracketRecord>();
   private readonly flattens = new Map<string, FlattenRecord>();
+  /**
+   * Per-reference consecutive defer count + first-observed time for
+   * `escalateIfStale`. In memory and restart-clean — same posture as
+   * `FilledZeroSizeThrottle`'s own map (its doc): a process that just
+   * restarted has no evidence about the previous process's polls.
+   */
+  private readonly dormantDefer = new Map<string, { consecutive: number; firstObservedAt: Date }>();
 
   constructor(input: SaxoBrokerAdapterInput) {
     this.client = input.client;
@@ -189,6 +246,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     this.activityLookbackMs = input.activityLookbackMs ?? DEFAULT_ACTIVITY_LOOKBACK_MS;
     this.logger = input.logger;
     this.legResizeAlerts = input.legResizeAlerts;
+    this.dormantLegsAlerts = input.dormantLegsAlerts;
     for (const record of this.state.loadBrackets('saxo')) {
       this.brackets.set(record.client_order_id, {
         instrument: record.request?.instrument ?? '',
@@ -239,7 +297,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     };
 
     const { ids, order_state } = await this.call('submitBracket', () =>
-      this.placeIdempotently(order.client_order_id, request),
+      this.placeIdempotently(order.client_order_id, request, order.instrument),
     );
     this.brackets.set(order.client_order_id, { instrument: order.instrument, size: order.size });
     this.state.saveBracket({
@@ -263,7 +321,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
 
   async getOrder(clientOrderId: string, instrument: string): Promise<NormalizedOrder | null> {
     const order = await this.call('getOrder', () =>
-      this.lookup(clientOrderId, this.activityLookbackMs),
+      this.lookup(clientOrderId, this.activityLookbackMs, instrument),
     );
     if (order === null) return null;
     this.brackets.set(clientOrderId, {
@@ -280,7 +338,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
 
   async resumeFlatten(clientOrderId: string, instrument: string): Promise<NormalizedOrder | null> {
     const order = await this.call('resumeFlatten', () =>
-      this.lookup(clientOrderId, this.activityLookbackMs),
+      this.lookup(clientOrderId, this.activityLookbackMs, instrument),
     );
     if (order === null) return null;
     this.flattens.set(clientOrderId, {
@@ -366,7 +424,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
       ExternalReference: clientOrderId,
     };
     const { ids, order_state } = await this.call('submitFlatten', () =>
-      this.placeIdempotently(clientOrderId, request),
+      this.placeIdempotently(clientOrderId, request, instrument),
     );
     this.flattens.set(clientOrderId, { instrument, side, size });
     return { client_order_id: clientOrderId, broker_order_ids: orderIdList(ids), order_state };
@@ -424,8 +482,9 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
   private async placeIdempotently(
     externalReference: string,
     request: SaxoOrderRequest,
+    instrument: string,
   ): Promise<Placed> {
-    const existing = await this.lookup(externalReference, PLACEMENT_LOOKBACK_MS);
+    const existing = await this.lookup(externalReference, PLACEMENT_LOOKBACK_MS, instrument);
     if (existing !== null) return adopt(existing, externalReference);
     try {
       return {
@@ -499,8 +558,8 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
       };
     }
     // Only the protective legs still open, no master. `Working` on a leg
-    // means it ACTIVATED on the entry's fill — read as filled below, same as
-    // before. A pair every leg reads `NotWorking` (never activated) SIGNALS
+    // means it ACTIVATED on the entry's fill — treated as filled below. A
+    // pair every leg reads `NotWorking` (never activated) SIGNALS
     // the entry expired unfilled, but that two-value contract is UNVERIFIED
     // (#1215 round 1: doc 43 never listed a resting IfDone leg row, only
     // standalone `DayOrder` `Limit`s always `Working` — see
@@ -535,21 +594,89 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
   /**
    * Cancels a related-order pair `lookup` confirmed dormant against the
    * audit trail (#1215 round 1) — legs from an entry that expired unfilled
-   * rather than a genuine fill. `OrderNotFound` is swallowed exactly as
-   * `cancel()`'s own loop does: the venue may have already reaped one on its
-   * own, and that is success, not failure. Any other failure propagates —
-   * this runs inside a caller already wrapped in `this.call`, so it
-   * surfaces as the caller's own sanitized `BrokerError` rather than a
-   * silently-kept doubt.
+   * rather than a genuine fill. Every leg is attempted independently
+   * (#1215 round 2): the prior version stopped at the first non-
+   * `OrderNotFound` failure, so a sibling leg could be left un-attempted,
+   * not merely left cancelled while a later one fails. No rebuild is ever
+   * needed after a partial cancel here — these legs are dormant (no fill
+   * occurred, so no live position depends on them; `rearmProtectiveLegs`
+   * would throw for Saxo regardless) and `findOpen` re-derives the live leg
+   * set from the venue fresh on every poll, so a retry converges against
+   * whatever the venue actually still holds. `OrderNotFound` is swallowed
+   * exactly as `cancel()`'s own loop does: the venue may have already
+   * reaped one on its own, and that is success, not failure. The first
+   * other failure is thrown only once every leg has been attempted — this
+   * runs inside a caller already wrapped in `this.call`, so it surfaces as
+   * the caller's own sanitized `BrokerError` rather than a silently-kept
+   * doubt.
    */
   private async cancelDormantLegs(legs: readonly SaxoOpenOrder[]): Promise<void> {
+    let hasFailure = false;
+    let firstFailure: unknown;
     for (const leg of legs) {
       try {
         await this.client.cancelOrder(leg.OrderId);
       } catch (cause) {
-        if (!isOrderNotFound(cause)) throw cause;
+        if (isOrderNotFound(cause)) continue;
+        if (!hasFailure) {
+          hasFailure = true;
+          firstFailure = cause;
+        }
       }
     }
+    if (hasFailure) throw firstFailure;
+  }
+
+  /**
+   * Records one more consecutive "legs dormant, master's audit row not yet
+   * terminal" observation for `externalReference` and posts
+   * `DormantLegsUnresolvedAlert` once `shouldWarnDormantDefer` says it is
+   * due — see that function's own doc for the bound and repeat cadence.
+   * Fire-and-forget, fully swallowed: same posture as
+   * `postFlattenReconcileAlert` (reconcile.ts) — the poll this alert
+   * reports on already completed, there is nothing here to undo on a
+   * transport failure, and the failure itself is the one thing worth a log
+   * line, not the alert content repeated.
+   */
+  private async escalateIfStale(
+    externalReference: string,
+    instrument: string | undefined,
+  ): Promise<void> {
+    const now = this.clock.now();
+    const prior = this.dormantDefer.get(externalReference);
+    const consecutive = (prior?.consecutive ?? 0) + 1;
+    const firstObservedAt = prior?.firstObservedAt ?? now;
+    this.dormantDefer.set(externalReference, { consecutive, firstObservedAt });
+    if (!shouldWarnDormantDefer(consecutive)) return;
+    try {
+      await this.dormantLegsAlerts.postDormantLegsUnresolvedAlert({
+        client_order_id: externalReference,
+        instrument: instrument ?? this.brackets.get(externalReference)?.instrument ?? '',
+        stuck_ms: now.getTime() - firstObservedAt.getTime(),
+        observed_at: now,
+      });
+    } catch {
+      safeLog(this.logger, {
+        trace_id: 'saxo-dormant-legs',
+        stage: 'execution',
+        level: 'error',
+        event: 'saxo_dormant_legs_alert_send_failed',
+        message:
+          'postDormantLegsUnresolvedAlert delivery failed — legs stay dormant and unresolved, ' +
+          'and the operator was not paged; check the venue by hand',
+        payload: { client_order_id: externalReference },
+      });
+    }
+  }
+
+  /**
+   * Clears the consecutive-defer count once `lookup` resolves this
+   * reference one way or the other, so a later, unrelated dormant episode
+   * under the same key starts its own grace window fresh rather than
+   * inheriting a stale count.
+   */
+  private clearDormantDefer(externalReference: string): void {
+    this.dormantDefer.delete(externalReference);
   }
 
   /**
@@ -564,16 +691,32 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
    * landed", which is false for an order the venue's own audit trail shows
    * it received. No row at all inside the lookback ties the legs to any
    * known order, so they are cancelled and `null` is the honest answer.
-   * Anything else (no terminal status yet) is not evidence either way, so
-   * nothing is cancelled — the next poll's `reconcile()` (#921: runs every
-   * pass, not just at startup) resolves it once the audit trail catches up.
+   *
+   * Anything else (no terminal status yet, including `partially_filled` —
+   * contradictory alongside a dormant-legs read that says the entry never
+   * activated at all, and not resolvable in either read's favor) is not
+   * evidence either way, so nothing is cancelled here (ruling (a), #1215
+   * round 2) — the next poll's `reconcile()` (#921: runs every pass, not
+   * just at startup) resolves it once the audit trail catches up.
+   * `escalateIfStale` counts these deferrals per reference and pages once
+   * the count crosses `DORMANT_DEFER_ALERT_AFTER`, repeating while it
+   * persists (ruling (c): a wedge that never gets audit-trail evidence must
+   * stay visible to the operator, not silently deferred forever) — see that
+   * constant's own doc for why a consecutive-poll count, not a wall-clock
+   * age. Every other branch below clears that count: a reference that just
+   * resolved is no longer deferred, and a later, unrelated dormant episode
+   * under the same key must start its own grace window fresh.
    */
   private async lookup(
     externalReference: string,
     lookbackMs: number,
+    instrument?: string,
   ): Promise<LookedUpOrder | null> {
     const open = await this.findOpen(externalReference);
-    if (open !== null && !isDormantLegs(open)) return open;
+    if (open !== null && !isDormantLegs(open)) {
+      this.clearDormantDefer(externalReference);
+      return open;
+    }
 
     const from = new Date(this.clock.now().getTime() - lookbackMs);
     const activities = await this.client.listOrderActivities(from);
@@ -584,17 +727,26 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     }
 
     if (open === null) {
-      return latest === undefined ? null : fromActivity(latest, externalReference);
+      if (latest === undefined) return null;
+      this.clearDormantDefer(externalReference);
+      return fromActivity(latest, externalReference);
     }
     if (latest === undefined) {
       await this.cancelDormantLegs(open.dormant);
+      this.clearDormantDefer(externalReference);
       return null;
     }
     const state = activityState(latest);
-    if (state === 'filled') return legsFilled(open.dormant, latest, externalReference);
+    if (state === 'filled') {
+      this.clearDormantDefer(externalReference);
+      return legsFilled(open.dormant, latest, externalReference);
+    }
     if (DEAD_STATES.has(state)) {
       await this.cancelDormantLegs(open.dormant);
+      this.clearDormantDefer(externalReference);
+      return fromActivity(latest, externalReference);
     }
+    await this.escalateIfStale(externalReference, instrument);
     return fromActivity(latest, externalReference);
   }
 
