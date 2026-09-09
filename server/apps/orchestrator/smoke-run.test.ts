@@ -55,6 +55,7 @@ import {
   SMOKE_GDELT_EXPECTED_AGGREGATES,
   SMOKE_GDELT_EXPECTED_ROWS,
   SMOKE_LLM_RESPONSE,
+  SMOKE_LSE_VENDOR,
   SMOKE_RUN_INSTANT,
   type SmokeObservations,
   type ThresholdClampEvidence,
@@ -557,7 +558,7 @@ function healthyDataSourceFactory(
 ): DataSourceFactoryEvidence {
   return {
     alpacaStoredSources: ['alpaca', 'alpaca'],
-    lseStoredSources: ['smoke-lse-vendor', 'smoke-lse-vendor'],
+    lseStoredSources: [SMOKE_LSE_VENDOR, SMOKE_LSE_VENDOR],
     error: null,
     ...overrides,
   };

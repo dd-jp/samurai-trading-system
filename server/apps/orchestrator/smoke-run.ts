@@ -3824,7 +3824,7 @@ export interface DataSourceFactoryEvidence {
  * that the arm is REACHED — the port is injected, exactly so answering #895
  * lands as a config change.
  */
-const SMOKE_LSE_VENDOR = 'smoke-lse-vendor';
+export const SMOKE_LSE_VENDOR = 'smoke-lse-vendor';
 
 /** `1h` opens inside the venue's own regular session on the last completed trading day. */
 const FACTORY_US_OPEN_TIMES = ['2026-08-03T18:00:00.000Z', '2026-08-03T19:00:00.000Z'] as const;
