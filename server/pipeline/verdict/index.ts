@@ -68,10 +68,7 @@
  * `drift` and `market_closed`. The reverse does not hold: a flatten whose
  * mark read succeeded carries `mandatory_flatten` without `unpriced_exit` and
  * skips `staleness` and `market_closed` alone. Under either marker, dedup (3)
- * and the breaker re-check (5) and HITL (6) still run unconditionally — #1388
- * corrected this comment and the one at gate 4's own branch, which both
- * listed `market_closed` among the gates a `mandatory_flatten` intent could
- * not skip; that stopped being true once #1388 landed.
+ * and the breaker re-check (5) and HITL (6) still run unconditionally.
  *
  * HITL only engages per the per-asset-class automation dial: `manual`
  * always engages it, `auto` never does, `semi_auto` engages it only when a

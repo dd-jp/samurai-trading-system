@@ -114,6 +114,8 @@ Three consequences worth stating plainly: the flat-by-close invariant this ADR d
 
 ### The resolution
 
+> **Superseded 2026-09-09 by the amendment below ([#1388](https://github.com/dd-jp/samurai-trading-system/issues/1388)).** "Gates 2–6 are untouched" held on 2026-08-19 and stopped holding once #1388 exempted gate 4 (`market_closed`) too — dedup and the fire-time breaker re-check are still untouched, but gate 4 is not. Left in place, unedited, as the record of what this ADR said and believed on 2026-08-19.
+
 **A mandatory flat-by-close flatten is exempt from gate 1.** The Trader marks the intent `metadata.mandatory_flatten` (set by `buildFlattenExit` exactly when `exit_reason === 'flatten'`), and `VerdictImpl` skips the staleness bound for a marked intent alone. Gates 2–6 are untouched: dedup still stops a repeated flatten double-submitting, and the fire-time breaker re-check still applies.
 
 **Why the exemption is sound rather than convenient:** a flat-by-close exit is not acting on a stale *opinion*, it is acting on the clock. The position must be closed before the session ends whatever the debate that opened it now thinks, so the age of that debate is not a reason to leave leveraged exposure on overnight. Gate 1 bounds how old a *decision* is, and this decision was made by the calendar at the moment the gate ran.
@@ -130,7 +132,7 @@ This mirrors the precedent PR #891 (#826) set one branch below — the unpriced 
 
 `server/apps/orchestrator/production/flat-by-close-to-execution.test.ts` drives a tick-decided flatten through the real Trader, Risk, Verdict and Execution bindings, at **both** the US and LSE closes, and asserts the flatten reaches the broker. `smoke-run.ts`'s exit-path harness no longer fabricates its own `go`: it decides one with the real `VerdictImpl`, so the offline run can no longer prove the exit mechanics while saying nothing about whether a flatten survives the stage above them. (That harness's own orders carry fresh `decision_timestamp`s, so it exercises the real gate stack but not this exemption — the exemption's proof is the dedicated test above.)
 
-> **Superseded 2026-09-08 by the amendment below ([#1388](https://github.com/dd-jp/samurai-trading-system/issues/1388)).** The paragraph below's "pre-existing and correct" reading of gate 4 held for a flatten reaching Verdict hours late; it did not hold for one reaching Verdict *seconds* late, which is exactly what #1388 measured in production. Left in place, unedited, as the record of what this ADR said and believed on 2026-08-19.
+> **Superseded 2026-09-09 by the amendment below ([#1388](https://github.com/dd-jp/samurai-trading-system/issues/1388)).** The paragraph below's "pre-existing and correct" reading of gate 4 held for a flatten reaching Verdict hours late; it did not hold for one reaching Verdict *seconds* late, which is exactly what #1388 measured in production. Left in place, unedited, as the record of what this ADR said and believed on 2026-08-19.
 
 **What this does NOT claim.** The flatten still passes gate 4: a tick that reaches Verdict after `sessionEnd` is refused as `market_closed`, so the exemption's benefit is bounded by tick latency inside the five-minute window. That is pre-existing and correct — a shut venue cannot fill — but it means this amendment makes the flatten survive *staleness*, not that flat-by-close is now unconditional.
 
@@ -144,10 +146,10 @@ The flatten-age table under "The defect" (55–56 min US, 25–26 min LSE) is no
 
 Rejected candidate (3) above — raising `max_signal_age.stocks` past the bar timeframe so a bar-floored coordinate could satisfy it — is #1190's rejected alternative too, for the same reason stated there (it slackens a live freshness bound for every intent to fix a measurement problem in one field) plus a new one: `decided_at` fixes the measurement itself, so there is no bound left to widen around it.
 
-## Amendment — 2026-09-08: the mandatory flatten is ALSO exempt from Verdict's market-closed gate ([#1388](https://github.com/dd-jp/samurai-trading-system/issues/1388))
+## Amendment — 2026-09-09: the mandatory flatten is ALSO exempt from Verdict's market-closed gate ([#1388](https://github.com/dd-jp/samurai-trading-system/issues/1388))
 
 - **Status:** implemented by the PR that closes #1388; **pending David's ratification**, on the same terms as the 2026-08-19 amendment above — an engineering resolution to a defect found in production, not an owner decision. If David rules otherwise, the code changes with the ruling.
-- **Amends:** the 2026-08-19 amendment's "What this does NOT claim" paragraph (quoted and marked superseded above).
+- **Amends:** the 2026-08-19 amendment's "The resolution" paragraph ("Gates 2–6 are untouched") and its "What this does NOT claim" paragraph (both quoted and marked superseded above).
 - **Proposed by:** #1388, found on the live paper store — #894 fixed gate 1 and stopped one gate short.
 
 ### The defect
