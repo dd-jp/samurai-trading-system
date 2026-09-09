@@ -239,13 +239,7 @@ describe('liveStartingProfile', () => {
 });
 
 describe('liveStartingProfile — unconverted-book plausibility warning (#1441)', () => {
-  // #1180 fixed paper's `capitalCeilingUsd` (LIVE_BOOK_GBP x SIZING_USD_PER_GBP
-  // = 1,270). The live env var is the operator's own USD figure and is
-  // deliberately never converted for them, so typing the £1,000 book's bare
-  // number reproduces the exact ~21% under-sizing #1180 fixed, on live money,
-  // silently — `derived_by_conversion: false` is true and therefore not a
-  // warning on its own. This is a plausibility warn, not a refusal: an
-  // operator who genuinely wants a ~$1,000 ceiling is not mistaken.
+  // Rationale: `ceilingLooksLikeUnconvertedBookGbp`'s docblock (live-profile.ts).
 
   it('warns when the declared ceiling is the GBP book’s bare number, unconverted', () => {
     const logger = makeLogger();

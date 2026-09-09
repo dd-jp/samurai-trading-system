@@ -85,7 +85,6 @@ import type { Logger } from '../../shared/index.js';
 import { LIVE_MONEY_GATE_SUMMARY } from './live-money-gates.js';
 import {
   buildStartingProfileConfigs,
-  D5_BOOK_REFUSE_ABOVE_TOLERANCE,
   LIVE_BOOK_GBP,
   LIVE_BOOK_SIZING_USD,
   RISK_CAP_EQUITY_FRACTIONS,
@@ -236,30 +235,34 @@ export function assertLiveCapitalCeilingUsd(value: number, source: string): numb
 }
 
 /**
+ * How close a declared ceiling may sit to `LIVE_BOOK_GBP`'s bare number
+ * before it looks unconverted (#1441). A distinct binding from
+ * `D5_BOOK_REFUSE_ABOVE_TOLERANCE` (paper-profile.ts) on purpose: that one
+ * bounds how far funded EQUITY may drift from the book before a Risk
+ * Manager guard refuses; this bounds how close a DECLARED CEILING may sit to
+ * the book's raw number before it looks like a typo. Same value today only
+ * because both started from the same "a few percent" idiom — retuning one
+ * must not silently retune the other.
+ */
+const CEILING_LOOKS_LIKE_UNCONVERTED_BOOK_TOLERANCE = 0.05;
+
+/**
  * True when a declared USD ceiling sits close enough to `LIVE_BOOK_GBP`'s
- * bare number to be more likely a typo than a coincidence (#1441).
+ * bare number to be more likely a typo than a coincidence (#1441) — the one
+ * input #1180's fix does not touch. See `LIVE_MAX_CAPITAL_ENV_VAR`'s docblock
+ * above for why the ceiling is never converted for the operator.
  *
- * #1180 fixed the one place a GBP *constant* reached sizing (paper's
- * `capitalCeilingUsd`, now `LIVE_BOOK_SIZING_USD`). It deliberately left
- * `SAMURAI_LIVE_MAX_CAPITAL_USD` unconverted — it is the operator's own
- * figure, in the account's currency, and redenominating it silently would be
- * worse than leaving it. That leaves an operator who types the declared book
- * (`1000`) rather than its USD-converted value (`LIVE_BOOK_SIZING_USD`,
- * 1270) reproducing the exact ~21% under-sizing #1180 fixed, on live money,
- * with no warning: `derived_by_conversion: false` is true, and therefore not
- * a warning on its own (production.ts's `sizing_capital_ceiling_resolved`
- * event). This checks the ONE input `liveStartingProfile` has that #1180's
- * fix does not touch.
- *
- * Same tolerance magnitude as `D5_BOOK_REFUSE_ABOVE_TOLERANCE`'s "a few
- * percent" idiom, not the constant itself: that one bounds how far funded
- * EQUITY may drift from the book before a Risk Manager guard refuses; this
- * one bounds how close a DECLARED CEILING may sit to the book's raw number
- * before it looks like the book typed unconverted. The two guard different
- * things and must be free to move independently.
+ * **USD-account premise, not permanent.** This only makes sense while the
+ * live account is USD-denominated (Alpaca): once it is GBP-native (Saxo,
+ * #946), `LIVE_BOOK_GBP`'s bare number stops being a plausible typo and
+ * becomes the correct figure, and this check must be revisited or dropped —
+ * not left warning on a now-correct value.
  */
 function ceilingLooksLikeUnconvertedBookGbp(ceilingUsd: number): boolean {
-  return Math.abs(ceilingUsd - LIVE_BOOK_GBP) <= LIVE_BOOK_GBP * D5_BOOK_REFUSE_ABOVE_TOLERANCE;
+  return (
+    Math.abs(ceilingUsd - LIVE_BOOK_GBP) <=
+    LIVE_BOOK_GBP * CEILING_LOOKS_LIKE_UNCONVERTED_BOOK_TOLERANCE
+  );
 }
 
 /** What `liveStartingProfile` returns: the paper profile's shape, plus the ceiling it was built against. */
@@ -304,8 +307,8 @@ export function liveStartingProfile(
     payload: { capital_ceiling_usd: ceiling },
   });
 
-  if (logger && ceilingLooksLikeUnconvertedBookGbp(ceiling)) {
-    logger.log({
+  if (ceilingLooksLikeUnconvertedBookGbp(ceiling)) {
+    logger?.log({
       trace_id: 'startup',
       stage: 'orchestrator',
       event: 'live_capital_ceiling_looks_unconverted',
@@ -317,7 +320,11 @@ export function liveStartingProfile(
         `the intent was to match the £${LIVE_BOOK_GBP} book, set ` +
         `${LIVE_MAX_CAPITAL_ENV_VAR}=${LIVE_BOOK_SIZING_USD}. A plausibility warning, not a refusal: ` +
         'if this ceiling is deliberately close to that figure in USD terms, ignore it. (#1441)',
-      payload: { capital_ceiling_usd: ceiling, live_book_gbp: LIVE_BOOK_GBP },
+      payload: {
+        capital_ceiling_usd: ceiling,
+        live_book_gbp: LIVE_BOOK_GBP,
+        live_book_sizing_usd: LIVE_BOOK_SIZING_USD,
+      },
     });
   }
 
