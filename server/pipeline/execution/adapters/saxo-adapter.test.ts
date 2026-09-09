@@ -853,10 +853,6 @@ describe('SaxoBrokerAdapter flatten', () => {
     });
     const { adapter } = makeAdapter(client);
 
-    // Asserted via a caught error, not `.rejects.toMatchObject`, so the
-    // `venueCode` check can't be satisfied by the key merely being absent —
-    // it must be explicitly undefined, pinning the raw 409 against a
-    // fabricated DeadOrderUnderReference on the same statusCode.
     const err = await adapter.submitFlatten('3USL', 'sell', 3, 'flat-1').catch((e: unknown) => e);
     expect(err).toMatchObject({ name: 'BrokerError', operation: 'submitFlatten', statusCode: 409 });
     expect((err as { venueCode?: string }).venueCode).toBeUndefined();
