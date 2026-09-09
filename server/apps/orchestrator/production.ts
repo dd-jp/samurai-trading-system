@@ -2723,9 +2723,11 @@ export function startTickLoop(deps: {
    * `flatten-tail-priority.ts`'s file doc for why this runs unconditionally
    * rather than only inside the flatten window.
    *
-   * Absent = no reordering, the honest default for a caller (a focused unit
-   * test, or `smoke-run.ts`'s offline harness) that has no open-position store
-   * to read; `buildProductionOrchestrator` always supplies one.
+   * Absent = no reordering, the honest default for a caller that has not
+   * wired a held-position reader through — a focused unit test calling
+   * `startTickLoop` directly. `buildProductionOrchestrator` (the only
+   * non-test caller, including the one `smoke-run.ts`'s offline harness
+   * drives) always supplies one.
    *
    * A rejection is swallowed: a held-lookup failure must cost this tick's
    * priority, not this tick's flatten. See the `catch` around its call below.
@@ -2885,9 +2887,14 @@ export function startTickLoop(deps: {
         // pass that OWNS them (the one still running) was itself built
         // held-first (see `heldAssets` above): a held lot skipped here is
         // waiting behind that in-flight pass's own held-priority tail, not
-        // behind its flat instruments. Re-dispatching a busy instrument would
-        // reintroduce the double-dispatch #669's `running` guard exists to
-        // forbid, for a case #1390 already removed the harm from.
+        // behind its flat instruments — PROVIDED it was already held when
+        // that pass's plan was built. `heldAssets()` is read once, at
+        // plan-build time; a lot opened after that read has no priority for
+        // that pass's entire lifetime (see `flatten-tail-priority.ts`'s file
+        // doc) and IS behind the flat group until the next pass reads a
+        // fresh held set. Re-dispatching a busy instrument would reintroduce
+        // the double-dispatch #669's `running` guard exists to forbid, for a
+        // case #1390 already removed most of the harm from.
         deps.logger.log({
           trace_id: 'tick-loop',
           stage: 'tick-loop',

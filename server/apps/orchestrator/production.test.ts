@@ -86,7 +86,11 @@ import type { ClosedTrade, OrderIntent, TradingArm } from '../../shared/index.js
 import { SimulatedClock, TokenBucket } from '../../shared/index.js';
 import type { NousCredentials } from '../../shared/llm/index.js';
 import { DEFAULT_NOUS_MODELS } from '../../shared/llm/index.js';
-import { openSharedStore, type SharedStore as SqliteHandle } from '../../shared/store/index.js';
+import {
+  guardedStore,
+  openSharedStore,
+  type SharedStore as SqliteHandle,
+} from '../../shared/store/index.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
 import { CostModelImpl, SqliteStage2SelectionStore } from '../../tools/backtest/index.js';
 import { LLM_SPEND_CAP_BREACH } from './breach-alert-channel.js';
@@ -3779,6 +3783,34 @@ describe('startTickLoop', () => {
  * its own `heldAssets` closure, which is exactly why finding 1 survived round
  * 1's mutation evidence.
  */
+/**
+ * Shared by every #1390 test below that needs a real filled lot in a real
+ * `SqliteExecutionStore` — the composition-root tests need it before
+ * `buildProductionOrchestrator` even runs, so this can't stay nested inside
+ * one describe block.
+ */
+function openLot(instrument: string, idempotencyKey: string) {
+  return {
+    idempotency_key: idempotencyKey,
+    debate_id: `debate-${idempotencyKey}`,
+    instrument,
+    asset_class: 'stocks' as const,
+    side: 'buy' as const,
+    intent_type: 'entry' as const,
+    requested_size: 10,
+    filled_size: 10,
+    avg_entry_price: 150,
+    stop: 140,
+    target: 180,
+    order_state: 'filled' as const,
+    broker_order_ids: [],
+    opened_at: START,
+    decision_timestamp: START,
+    conviction: 0.6,
+    converged: true,
+  };
+}
+
 describe('heldAssets covers both arms, through the composition root (#1390)', () => {
   let db: SqliteHandle;
 
@@ -3789,28 +3821,6 @@ describe('heldAssets covers both arms, through the composition root (#1390)', ()
   afterEach(() => {
     db.close();
   });
-
-  function openLot(instrument: string, idempotencyKey: string) {
-    return {
-      idempotency_key: idempotencyKey,
-      debate_id: `debate-${idempotencyKey}`,
-      instrument,
-      asset_class: 'stocks' as const,
-      side: 'buy' as const,
-      intent_type: 'entry' as const,
-      requested_size: 10,
-      filled_size: 10,
-      avg_entry_price: 150,
-      stop: 140,
-      target: 180,
-      order_state: 'filled' as const,
-      broker_order_ids: [],
-      opened_at: START,
-      decision_timestamp: START,
-      conviction: 0.6,
-      converged: true,
-    };
-  }
 
   it("unions the live arm's held instruments with the control arm's, not the live arm alone", async () => {
     const components = buildProductionComponents(stubConfig(db));
@@ -3846,6 +3856,79 @@ describe('heldAssets covers both arms, through the composition root (#1390)', ()
     const heldAssets = await buildHeldAssetsReader(components)();
 
     expect(heldAssets).toEqual(new Set(['AAPL']));
+  });
+});
+
+/**
+ * Round-2 review finding 1: every test above proves `buildHeldAssetsReader`
+ * itself is correct, and the `startTickLoop`-level "held-first flatten-tail
+ * priority (#1390)" suite (above, in `describe('startTickLoop', ...)`) proves
+ * `orderHeldFirst` is applied correctly when a `heldAssets` function is
+ * supplied — but none of them prove `buildProductionOrchestrator` actually
+ * SUPPLIES one. A reviewer deleted `heldAssets: buildHeldAssetsReader(components)`
+ * from the `startTickLoop({...})` call in `buildProductionOrchestrator` and
+ * the full suite (6157 tests) stayed green, and `smoke-run.ts`'s offline
+ * harness never references `heldAssets` either — so that one line had zero
+ * test coverage. This drives a real tick through the real orchestrator,
+ * against a held lot seeded through a SEPARATE `SqliteExecutionStore`
+ * instance over the same `db` (proving the read reaches whatever
+ * `buildProductionOrchestrator` itself wires, not a reference this test
+ * happens to hold), and observes real dispatch order.
+ */
+describe('held-first reordering reaches a real tick through buildProductionOrchestrator (#1390)', () => {
+  let db: SqliteHandle;
+
+  beforeEach(() => {
+    db = openSharedStore(':memory:');
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    db.close();
+  });
+
+  const universe: UniverseInstrument[] = [
+    { asset: 'FLAT_A', asset_class: 'crypto' },
+    { asset: 'HELD', asset_class: 'crypto' },
+    { asset: 'FLAT_B', asset_class: 'crypto' },
+  ];
+
+  /**
+   * THE MUTATION THIS KILLS: drop `heldAssets: buildHeldAssetsReader(components)`
+   * from `buildProductionOrchestrator`'s `startTickLoop({...})` call
+   * (production.ts). Every other #1390 test in this file still passes —
+   * this is the only one that dispatches through the real composition root,
+   * where HELD would fall back to its fixed-order position (second).
+   */
+  it('dispatches the held instrument first even though it sits second in the fixed universe order', async () => {
+    await new SqliteExecutionStore(guardedStore(db, 'execution'), 'live').writeAheadPosition(
+      openLot('HELD', 'seed-lot'),
+    );
+
+    const dispatchOrder: string[] = [];
+    const config = stubConfig(db, {
+      universe,
+      tradingCalendar: new AlwaysOpenCalendar(),
+      tickIntervalMs: 1_000,
+      heartbeatIntervalMs: 1_000,
+      maxConcurrentInstruments: 1,
+    });
+
+    const orchestrator = buildProductionOrchestrator(config);
+    vi.spyOn(orchestrator.tickRunner, 'runInstrument').mockImplementation(
+      async (signal: { asset: string }): Promise<TickOutcome> => {
+        dispatchOrder.push(signal.asset);
+        return { trace_id: 't', final_stage: 'execution' };
+      },
+    );
+
+    await orchestrator.start();
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(dispatchOrder).toEqual(['HELD', 'FLAT_A', 'FLAT_B']);
+
+    await orchestrator.stop();
   });
 });
 
