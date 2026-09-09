@@ -2,20 +2,25 @@
  * Fail-closed guard for the dashboard's bind address (#887, ADR-0019).
  *
  * `GET /api/snapshot` (`snapshot.ts`) serves open positions, P&L and LLM
- * spend with no per-request auth of any kind (see `server.ts`'s header). The
- * only thing that ever stood between "loopback" and "published to the LAN"
- * was `process.env.HOST` defaulting to `127.0.0.1` in `index.ts` and
+ * spend. Originally with no per-request auth of any kind (see `server.ts`'s
+ * header); as of #1038 that route additionally verifies each request's
+ * bearer token against this same credential (`request-auth.ts`) whenever one
+ * is configured. This module's own job is unchanged: it is the BOOT-time
+ * half — the only thing that ever stood between "loopback" and "published to
+ * the LAN" was `process.env.HOST` defaulting to `127.0.0.1` in `index.ts` and
  * `fixture-server.ts` — `HOST=0.0.0.0 yarn dashboard` bound the book wide
  * open, silently, with no error and no failing test.
  *
  * The fix decided on #887 (recorded in ADR-0019's Consequences and its
  * 2026-09-02 amendment) is **conjunctive** and fail-closed: refuse to start
- * only when the bind is non-loopback AND no credential is configured. Two
- * rejected alternatives are deliberately not implemented here — a bearer
- * token required unconditionally on the endpoint (option 2: adds a secret to
- * manage, and per-request auth was decided out of scope for this ticket), and
- * bind-only enforcement with no credential escape hatch at all (option 3:
- * does nothing once a credential exists to justify wider reach).
+ * only when the bind is non-loopback AND no credential is configured. One
+ * rejected alternative is deliberately not implemented here — bind-only
+ * enforcement with no credential escape hatch at all (option 3: does nothing
+ * once a credential exists to justify wider reach). The other alternative
+ * #887 considered, a bearer token required unconditionally on the endpoint
+ * (option 2), was ruled out of THIS ticket's scope but not out of the
+ * product — David's 2026-09-08 decision on #1038 shipped it, as a request-time
+ * check layered on top of this boot-time one, not a replacement for it.
  *
  * The conjunction matters operationally: loopback-with-no-credential is
  * today's default and every `yarn dashboard` invocation until an operator
@@ -67,8 +72,14 @@ export const DASHBOARD_CREDENTIAL_ENV_VAR = 'SAMURAI_DASHBOARD_TOKEN';
  * A credential counts as "configured" once it is a non-empty string after
  * trimming — a blank or whitespace-only value is indistinguishable from
  * unset and must not be treated as an opt-in to wider reach.
+ *
+ * Exported (not just used internally) so `request-auth.ts` (#1038) applies
+ * the identical "blank counts as unset" rule when deciding whether a request
+ * needs a valid bearer token at all — the boot-time and request-time guards
+ * must agree on what "configured" means, or a blank env var could unlock the
+ * bind while still being treated as a live secret to check requests against.
  */
-function isConfiguredCredential(credential: string | undefined): boolean {
+export function isConfiguredCredential(credential: string | undefined): boolean {
   return credential !== undefined && credential.trim() !== '';
 }
 
@@ -94,12 +105,18 @@ export function isBindAllowed(host: string, credential: string | undefined): boo
  * Never logs, prints or interpolates the credential's VALUE anywhere — only
  * whether one is configured is ever observable from this function.
  *
- * Note on scope (see the PR this shipped in, #887): a configured credential
- * only unlocks the BOOT-time bind here. Nothing in this repo yet verifies
- * that credential per request against `/api/snapshot` — option 2 (a bearer
- * token checked on every request) was considered on #887 and explicitly not
- * chosen. Request-time verification is a separate, unshipped concern, tracked
- * as https://github.com/dd-jp/samurai-trading-system/issues/1038.
+ * Note on scope (#887, amended by #1038): a configured credential unlocks
+ * the BOOT-time bind here — this function alone never inspects a single
+ * request. As of #1038, `GET /api/snapshot` (only that route; the static
+ * bundle stays unauthenticated, see `request-auth.ts`'s header) additionally
+ * verifies the SAME credential against each request's `Authorization`
+ * header (`isAuthorizedRequest`, `request-auth.ts`), wired in
+ * `server.ts`. The two checks read the one env var for two different
+ * purposes: this one decides whether the process may bind beyond loopback at
+ * all; that one decides whether an individual request is let through once it
+ * has. ADR-0019's 2026-09-02 amendment recorded request-time verification as
+ * an explicitly-deferred, unshipped follow-up — see its newer amendment for
+ * the reconciliation now that it has shipped.
  */
 export function assertBindAllowed(host: string, credential: string | undefined): void {
   if (isBindAllowed(host, credential)) return;

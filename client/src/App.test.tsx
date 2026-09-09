@@ -616,3 +616,71 @@ describe('degraded stages on the page (#1080)', () => {
     expect(qqq.querySelector('[data-stage="trader"]')?.getAttribute('data-degraded')).toBeNull();
   });
 });
+
+/**
+ * #1038: the dashboard's only way to acquire a bearer token is `?token=` on
+ * a shared link (`lib/dashboard-token.ts`'s header). These are the wiring
+ * tests — the pure resolve/strip logic is covered directly in
+ * `lib/dashboard-token.test.ts`; this file proves `App.tsx` actually calls
+ * it, scrubs the address bar, and reaches the poll's `Authorization` header.
+ */
+describe('dashboard token from the URL (#1038)', () => {
+  afterEach(() => {
+    window.sessionStorage.clear();
+    window.history.replaceState(null, '', '/');
+  });
+
+  function recordingFetch(): { fetchImpl: typeof fetch; lastInit: () => RequestInit | undefined } {
+    let lastInit: RequestInit | undefined;
+    const fetchImpl = (async (_input: unknown, init?: RequestInit) => {
+      lastInit = init;
+      return { ok: true, status: 200, json: async () => makeSnapshot() } as Response;
+    }) as typeof fetch;
+    return { fetchImpl, lastInit: () => lastInit };
+  }
+
+  it('sends the ?token= from a shared link as the poll’s Authorization header', async () => {
+    window.history.pushState(null, '', '/?token=fixture-dashboard-token');
+    const { fetchImpl, lastInit } = recordingFetch();
+
+    render(<App snapshotOptions={{ fetchImpl, intervalMs: POLL_MS }} />);
+
+    await waitFor(() => {
+      const headers = lastInit()?.headers as Record<string, string> | undefined;
+      expect(headers?.Authorization).toBe('Bearer fixture-dashboard-token');
+    });
+  });
+
+  it('scrubs ?token= off the address bar after capture, preserving other params and the hash', async () => {
+    window.history.pushState(null, '', '/?token=fixture-dashboard-token&tab=live#live');
+    const { fetchImpl } = recordingFetch();
+
+    render(<App snapshotOptions={{ fetchImpl, intervalMs: POLL_MS }} />);
+
+    await waitFor(() => expect(window.location.search).not.toContain('token'));
+    expect(window.location.search).toBe('?tab=live');
+    expect(window.location.hash).toBe('#live');
+  });
+
+  it('reuses a previously-captured token from sessionStorage on a later mount with no ?token=', async () => {
+    window.sessionStorage.setItem('samurai-dashboard-token', 'fixture-dashboard-token');
+    const { fetchImpl, lastInit } = recordingFetch();
+
+    render(<App snapshotOptions={{ fetchImpl, intervalMs: POLL_MS }} />);
+
+    await waitFor(() => {
+      const headers = lastInit()?.headers as Record<string, string> | undefined;
+      expect(headers?.Authorization).toBe('Bearer fixture-dashboard-token');
+    });
+  });
+
+  it('sends no Authorization header on the default path — no ?token= and nothing in storage', async () => {
+    const { fetchImpl, lastInit } = recordingFetch();
+
+    render(<App snapshotOptions={{ fetchImpl, intervalMs: POLL_MS }} />);
+
+    await waitFor(() => expect(lastInit()).toBeDefined());
+    const headers = lastInit()?.headers as Record<string, string> | undefined;
+    expect(headers === undefined || headers.Authorization === undefined).toBe(true);
+  });
+});

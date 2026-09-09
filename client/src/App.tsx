@@ -15,6 +15,7 @@ import { ReviewTab } from './components/tabs/ReviewTab.tsx';
 import { useEquitySamples } from './hooks/useEquitySamples.ts';
 import { useLedger } from './hooks/useLedger.ts';
 import { type UseSnapshotOptions, useSnapshot } from './hooks/useSnapshot.ts';
+import { resolveDashboardToken, stripTokenParam } from './lib/dashboard-token.ts';
 import type { Selection } from './lib/resolve-trace.ts';
 import './App.css';
 
@@ -33,7 +34,28 @@ export interface AppProps {
 }
 
 export function App({ snapshotOptions }: AppProps = {}) {
-  const feed = useSnapshot(snapshotOptions);
+  // Resolved once per mount, like `tabFromHash` below — a re-render must not
+  // re-read `location.search` after the effect below has already scrubbed it.
+  const [authToken] = useState<string | null>(() =>
+    resolveDashboardToken(window.location.search, window.sessionStorage),
+  );
+  useEffect(() => {
+    // Scrubs `?token=...` off the address bar (dashboard-token.ts's header:
+    // history, referrers and a shared screen are all places a URL-borne
+    // credential leaks). Preserves `pathname`/`hash` — `tabFromHash` above
+    // reads the hash directly off `location`, and rewriting it away here
+    // would silently reset whichever tab a shared link pointed at.
+    const nextSearch = stripTokenParam(window.location.search);
+    if (nextSearch !== window.location.search) {
+      window.history.replaceState(
+        null,
+        '',
+        `${window.location.pathname}${nextSearch}${window.location.hash}`,
+      );
+    }
+  }, []);
+
+  const feed = useSnapshot({ authToken, ...snapshotOptions });
   const { snapshot } = feed;
 
   const [tab, setTab] = useState<Tab>(tabFromHash);

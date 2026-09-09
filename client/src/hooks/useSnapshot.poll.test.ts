@@ -254,3 +254,63 @@ describe('useSnapshot polling', () => {
     await waitFor(() => expect(result.current.stale).toBe(true), { timeout: 2_000 });
   });
 });
+
+/**
+ * #1038: the client's only network primitive is this poll, and the dashboard
+ * has no other way to supply the credential a configured
+ * `SAMURAI_DASHBOARD_TOKEN` now requires per request (`request-auth.ts`,
+ * server-side). Local, recording `fetchImpl` here rather than reusing the
+ * shared `fakeFetch` fixture (`test-fixtures.ts`) — that fixture's `impl`
+ * takes no parameters and cannot observe what `init` a caller passed, and
+ * widening a fixture other suites depend on for this one feature is a wider
+ * change than the ruling asked for.
+ */
+function recordingFetch(payload: unknown): {
+  fetchImpl: typeof fetch;
+  lastInit: () => RequestInit | undefined;
+} {
+  let lastInit: RequestInit | undefined;
+  const fetchImpl = (async (_input: unknown, init?: RequestInit) => {
+    lastInit = init;
+    return { ok: true, status: 200, json: async () => payload } as Response;
+  }) as typeof fetch;
+  return { fetchImpl, lastInit: () => lastInit };
+}
+
+describe('useSnapshot — Authorization header (#1038)', () => {
+  it('sends no Authorization header when authToken is absent — the default, no-credential path', async () => {
+    const { fetchImpl, lastInit } = recordingFetch(makeSnapshot());
+    const { result } = renderHook(() => useSnapshot({ fetchImpl, intervalMs: INTERVAL_MS }));
+
+    await waitFor(() => expect(result.current.snapshot).not.toBeNull());
+
+    const headers = lastInit()?.headers as Record<string, string> | undefined;
+    expect(headers === undefined || headers.Authorization === undefined).toBe(true);
+  });
+
+  it('sends no Authorization header when authToken is null or empty', async () => {
+    for (const authToken of [null, ''] as const) {
+      const { fetchImpl, lastInit } = recordingFetch(makeSnapshot());
+      const { result } = renderHook(() =>
+        useSnapshot({ fetchImpl, intervalMs: INTERVAL_MS, authToken }),
+      );
+
+      await waitFor(() => expect(result.current.snapshot).not.toBeNull());
+
+      const headers = lastInit()?.headers as Record<string, string> | undefined;
+      expect(headers === undefined || headers.Authorization === undefined).toBe(true);
+    }
+  });
+
+  it('sends Authorization: Bearer <authToken> on every poll once a token is supplied', async () => {
+    const { fetchImpl, lastInit } = recordingFetch(makeSnapshot());
+    const { result } = renderHook(() =>
+      useSnapshot({ fetchImpl, intervalMs: INTERVAL_MS, authToken: 'fixture-dashboard-token' }),
+    );
+
+    await waitFor(() => expect(result.current.snapshot).not.toBeNull());
+
+    const headers = lastInit()?.headers as Record<string, string> | undefined;
+    expect(headers?.Authorization).toBe('Bearer fixture-dashboard-token');
+  });
+});

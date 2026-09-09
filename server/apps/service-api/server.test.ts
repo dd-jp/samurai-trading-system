@@ -533,3 +533,102 @@ describe('dashboard server — bind guard (#887, ADR-0019)', () => {
     ).not.toThrow();
   });
 });
+
+/**
+ * #1038 (David's 2026-09-08 decision on #887's option 2): a configured
+ * `SAMURAI_DASHBOARD_TOKEN` must additionally be verified against each
+ * request to `GET /api/snapshot`, not just at boot. Bound on loopback
+ * (127.0.0.1) rather than 0.0.0.0 — same reason the bind-guard describe
+ * block above only asserts on construction for the non-loopback case: this
+ * repo's test sandbox does not reliably support binding 0.0.0.0 (see that
+ * block's own comment), and loopback + a configured credential is sufficient
+ * to exercise every branch of `isAuthorizedRequest` over a real socket.
+ */
+describe('dashboard server — request-time token verification (#1038)', () => {
+  const FIXTURE_TOKEN = 'fixture-dashboard-token';
+
+  /** Throws if ever called — proves an unauthorized request never reaches buildSnapshot. */
+  class PoisonedStore extends InMemoryQueryStore {
+    override getTickStatus(): never {
+      throw new Error('PoisonedStore: buildSnapshot must not run for an unauthorized request');
+    }
+  }
+
+  let poisonedServer: DashboardServer;
+  let poisonedBase: string;
+  /** A normal store, for the cases that must actually reach buildSnapshot. */
+  let liveServer: DashboardServer;
+  let liveBase: string;
+
+  beforeAll(async () => {
+    poisonedServer = createDashboardServer({
+      port: 0,
+      host: '127.0.0.1',
+      store: new PoisonedStore(),
+      bundleRoot,
+      mode: 'paper',
+      dashboardCredential: FIXTURE_TOKEN,
+    });
+    await poisonedServer.start();
+    poisonedBase = poisonedServer.url;
+
+    liveServer = createDashboardServer({
+      port: 0,
+      host: '127.0.0.1',
+      store: new InMemoryQueryStore(),
+      bundleRoot,
+      mode: 'paper',
+      dashboardCredential: FIXTURE_TOKEN,
+    });
+    await liveServer.start();
+    liveBase = liveServer.url;
+  });
+
+  afterAll(async () => {
+    await poisonedServer.stop();
+    await liveServer.stop();
+  });
+
+  it('REFUSES /api/snapshot with no Authorization header — the acceptance-critical case', async () => {
+    // A test that only asserted the valid-token case would still pass
+    // against pre-#1038 behaviour, which never checks this header at all.
+    // Uses the poisoned store: the store must never be touched here.
+    const r = await fetch(`${poisonedBase}/api/snapshot`);
+    expect(r.status).toBe(401);
+    expect(r.headers.get('www-authenticate')).toBe('Bearer');
+    expect(await r.json()).toEqual({ error: 'unauthorized' });
+  });
+
+  it('refuses /api/snapshot bearing the wrong token', async () => {
+    const r = await fetch(`${poisonedBase}/api/snapshot`, {
+      headers: { Authorization: 'Bearer wrong-token' },
+    });
+    expect(r.status).toBe(401);
+  });
+
+  it('refuses /api/snapshot with a malformed Authorization header', async () => {
+    const r = await fetch(`${poisonedBase}/api/snapshot`, {
+      headers: { Authorization: `Basic ${FIXTURE_TOKEN}` },
+    });
+    expect(r.status).toBe(401);
+  });
+
+  it('permits /api/snapshot bearing the exact configured token', async () => {
+    const r = await fetch(`${liveBase}/api/snapshot`, {
+      headers: { Authorization: `Bearer ${FIXTURE_TOKEN}` },
+    });
+    expect(r.status).toBe(200);
+    expect(((await r.json()) as { mode: string }).mode).toBe('paper');
+  });
+
+  it('never sends WWW-Authenticate or a 401 on a request nothing gated — the static bundle stays open', async () => {
+    // Deliberate scope decision (request-auth.ts's header): the shell and its
+    // assets carry no book data, and a browser's plain navigation/subresource
+    // requests send no custom header, so gating them would break the client
+    // outright. This proves the decision is actually wired, not just stated.
+    // Uses the poisoned store too: an ungated route must never reach it either.
+    const r = await fetch(`${poisonedBase}/`);
+    expect(r.status).toBe(200);
+    expect(r.headers.get('www-authenticate')).toBeNull();
+  });
+});

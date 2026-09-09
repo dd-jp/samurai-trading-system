@@ -146,6 +146,14 @@ export interface UseSnapshotOptions {
   fetchImpl?: typeof fetch;
   /** Injected for tests; defaults to `Date.now`. */
   now?: () => number;
+  /**
+   * Sent as `Authorization: Bearer <authToken>` on every poll when non-empty
+   * (#1038). `undefined`, `null` or `''` all mean "send no `Authorization`
+   * header at all" — not an empty-string header — which is what keeps the
+   * default, no-credential-configured dashboard's request shape byte-for-byte
+   * identical to before this option existed.
+   */
+  authToken?: string | null;
 }
 
 /**
@@ -430,15 +438,21 @@ function describeError(cause: unknown): string {
 }
 
 export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
-  const { url = SNAPSHOT_URL, intervalMs = POLL_INTERVAL_MS, fetchImpl, now = Date.now } = options;
+  const {
+    url = SNAPSHOT_URL,
+    intervalMs = POLL_INTERVAL_MS,
+    fetchImpl,
+    now = Date.now,
+    authToken,
+  } = options;
 
   const [state, setState] = useState<FeedState>(INITIAL);
 
-  // A ref, not state: the interval callback must see the current url/fetch/now
-  // without the effect being torn down and rebuilt, which would restart the
-  // poll clock on every payload.
-  const optionsRef = useRef({ url, fetchImpl, now });
-  optionsRef.current = { url, fetchImpl, now };
+  // A ref, not state: the interval callback must see the current
+  // url/fetch/now/authToken without the effect being torn down and rebuilt,
+  // which would restart the poll clock on every payload.
+  const optionsRef = useRef({ url, fetchImpl, now, authToken });
+  optionsRef.current = { url, fetchImpl, now, authToken };
 
   useEffect(() => {
     let cancelled = false;
@@ -496,9 +510,19 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
       }, timeoutMs);
 
       try {
+        const { authToken: token } = optionsRef.current;
+        // Omitted entirely when there is no token, rather than sent as an
+        // empty/blank `Authorization` header (#1038) — the no-token request
+        // this dashboard sends by default must stay byte-for-byte the same
+        // shape it was before this option existed.
+        const headers =
+          token !== undefined && token !== null && token !== ''
+            ? { Authorization: `Bearer ${token}` }
+            : undefined;
         const response = await doFetch(optionsRef.current.url, {
           cache: 'no-store',
           signal: controller.signal,
+          ...(headers !== undefined ? { headers } : {}),
         });
         if (!response.ok) throw new Error(`snapshot request failed: HTTP ${response.status}`);
         const body: unknown = await response.json();
