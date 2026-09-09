@@ -272,3 +272,199 @@ describe('specifiersOf strips comments before matching (#1398)', () => {
     expect(() => specifiersOf(file, fixturesDir)).not.toThrow();
   });
 });
+
+/**
+ * The outbound suite above proves `contracts/` imports nothing external. It
+ * does not prove anything routes *into* it correctly — a file elsewhere that
+ * reaches past `contracts/index.ts` straight into `contracts/pipeline.ts`
+ * type-checks green and passes every test above (#1158). This is that other
+ * half: nothing outside `contracts/` may name a `contracts/*.ts` file other
+ * than `index.ts`.
+ *
+ * Two more barrels get the same check rather than a general sweep of every
+ * barrel in the repo: `shared/store/sqlite-utils.ts` and
+ * `shared/safe-log.ts`, each already exported by an existing barrel.
+ */
+describe('inbound routing: nothing bypasses a barrel (#1158)', () => {
+  const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
+  const SKIP_DIRS = new Set(['node_modules', 'dist', 'coverage', '.turbo']);
+
+  function walkSourceFiles(dir: string): string[] {
+    const out: string[] = [];
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (SKIP_DIRS.has(entry.name)) continue;
+        out.push(...walkSourceFiles(join(dir, entry.name)));
+      } else if (entry.isFile() && /\.tsx?$/.test(entry.name)) {
+        out.push(join(dir, entry.name));
+      }
+    }
+    return out;
+  }
+
+  const REPO_SOURCE_FILES = ['server', 'client', 'e2e']
+    .map((d) => join(REPO_ROOT, d))
+    .flatMap((root) => walkSourceFiles(root));
+
+  interface ImportStatement {
+    readonly specifier: string;
+    /** A statement starting `import type` (named, default, or namespace) — see coding-standards.md's carve-out. */
+    readonly isBareImportType: boolean;
+  }
+
+  function importStatementsOf(absPath: string): ImportStatement[] {
+    const raw = readFileSync(absPath, 'utf8');
+    const text = stripComments(raw);
+    // Same failure mode `specifiersOf` above guards against: a regex literal
+    // misread as a comment opener can swallow a real import line before this
+    // scan ever sees it. Without this call the inbound suite fails open on
+    // exactly the import it exists to catch.
+    assertNoVanishedImportLine(raw, text, absPath);
+    const statements: ImportStatement[] = [];
+    for (const match of text.matchAll(/(?:import|export)\s[^;]*?from\s+['"]([^'"]+)['"]/g)) {
+      statements.push({
+        specifier: match[1] as string,
+        isBareImportType: /^import\s+type\b/.test(match[0].trimStart()),
+      });
+    }
+    for (const match of text.matchAll(/(?:^|[;}])\s*import\s+['"]([^'"]+)['"]/gm)) {
+      statements.push({ specifier: match[1] as string, isBareImportType: false });
+    }
+    for (const match of text.matchAll(/\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g)) {
+      statements.push({ specifier: match[1] as string, isBareImportType: false });
+    }
+    return statements;
+  }
+
+  /**
+   * `honourImportTypeCarveOut` is false only for `contracts/`: its barrel is
+   * dependency-free by enforced construction (the outbound suite above), so
+   * the carve-out's reason — routing a type-only need would manufacture a
+   * real import path into a module graph nothing else pulls in — cannot
+   * arise there, and the carve-out does not reach it.
+   */
+  function deepImportViolations(
+    targetPattern: RegExp,
+    isInternalToTarget: (absPath: string) => boolean,
+    honourImportTypeCarveOut: boolean,
+  ): string[] {
+    const violations: string[] = [];
+    for (const file of REPO_SOURCE_FILES) {
+      if (isInternalToTarget(file)) continue;
+      for (const { specifier, isBareImportType } of importStatementsOf(file)) {
+        if (!targetPattern.test(specifier)) continue;
+        if (honourImportTypeCarveOut && isBareImportType) continue;
+        violations.push(`${file}: imports "${specifier}" directly instead of through its barrel`);
+      }
+    }
+    return violations;
+  }
+
+  /**
+   * Must match a nested directory and a multi-dot filename, not only a flat
+   * single-dot name — a charclass that admits neither fails open on exactly
+   * the specifier shape a future `contracts/` layout would use. Must also
+   * match a `.ts`/`.tsx` tail, not only `.js`: `client/tsconfig.json` and
+   * `e2e/tsconfig.json` set `allowImportingTsExtensions`, so a deep import
+   * from either tree can legally spell the extension either way.
+   */
+  const CONTRACTS_DEEP_IMPORT = /\/contracts\/(?!index\.(?:js|ts)$).+\.(?:js|tsx?)$/;
+
+  it('has source files to check', () => {
+    // Guards the assertions below against silently passing on an empty glob.
+    expect(REPO_SOURCE_FILES.length).toBeGreaterThan(0);
+  });
+
+  it('the contracts pattern catches nested and multi-dot specifiers, and only excludes index.js/index.ts', () => {
+    expect(CONTRACTS_DEEP_IMPORT.test('../../../contracts/pipeline.js')).toBe(true);
+    expect(CONTRACTS_DEEP_IMPORT.test('../../contracts/wire/pipeline.js')).toBe(true);
+    expect(CONTRACTS_DEEP_IMPORT.test('../../contracts/pipeline.v2.js')).toBe(true);
+    expect(CONTRACTS_DEEP_IMPORT.test('../../contracts/index.js')).toBe(false);
+    expect(CONTRACTS_DEEP_IMPORT.test('../../contracts/pipeline.ts')).toBe(true);
+    expect(CONTRACTS_DEEP_IMPORT.test('../../contracts/pipeline.tsx')).toBe(true);
+    expect(CONTRACTS_DEEP_IMPORT.test('../../contracts/index.ts')).toBe(false);
+  });
+
+  it('throws instead of silently dropping a deep import when a regex literal opens a phantom comment that a later real comment closes', () => {
+    // Same fixture shape as the outbound suite's equivalent test above
+    // (#1398), aimed at `importStatementsOf` instead of `specifiersOf`:
+    // without `assertNoVanishedImportLine` in the inbound scan too, this
+    // deep import into contracts/ vanishes silently and the suite passes
+    // with the violation undetected.
+    const dir = mkdtempSync(join(tmpdir(), 'boundary-inbound-fixtures-'));
+    try {
+      const file = join(dir, 'regex-literal-swallows-import.ts');
+      writeFileSync(
+        file,
+        [
+          'const re = /a\\/*b/;',
+          "import { PIPELINE_STAGES } from '../../../contracts/pipeline.js';",
+          '/**',
+          ' * a real doc comment further down the file',
+          ' */',
+          'export const scratch = { PIPELINE_STAGES };',
+          '',
+        ].join('\n'),
+      );
+      expect(() => importStatementsOf(file)).toThrow(/vanished|import.*after/i);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('the carve-out predicate admits named, default and namespace import type forms, not per-specifier or re-export type', () => {
+    // Pins isBareImportType (:327) against docs/coding-standards.md's
+    // carve-out wording. Finding 2/3 (#1158 round 2) was the doc and the
+    // predicate disagreeing; this pins the predicate side of that agreement
+    // so a future edit to either one fails a test instead of silently
+    // reopening the same drift.
+    const dir = mkdtempSync(join(tmpdir(), 'boundary-carve-out-fixtures-'));
+    try {
+      const file = join(dir, 'carve-out-forms.ts');
+      writeFileSync(
+        file,
+        [
+          "import type { Foo } from '../../../contracts/a.js';",
+          "import type Bar from '../../../contracts/b.js';",
+          "import type * as Baz from '../../../contracts/c.js';",
+          "import { type Qux } from '../../../contracts/d.js';",
+          "export type { Quux } from '../../../contracts/e.js';",
+          '',
+        ].join('\n'),
+      );
+      const bySpecifier = new Map(
+        importStatementsOf(file).map((s) => [s.specifier, s.isBareImportType]),
+      );
+      expect(bySpecifier.get('../../../contracts/a.js')).toBe(true);
+      expect(bySpecifier.get('../../../contracts/b.js')).toBe(true);
+      expect(bySpecifier.get('../../../contracts/c.js')).toBe(true);
+      expect(bySpecifier.get('../../../contracts/d.js')).toBe(false);
+      expect(bySpecifier.get('../../../contracts/e.js')).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('nothing outside contracts/ imports a contracts/*.ts file other than index.ts', () => {
+    const violations = deepImportViolations(CONTRACTS_DEEP_IMPORT, () => false, false);
+    expect(violations, violations.join('\n')).toEqual([]);
+  });
+
+  it('nothing outside shared/store/ imports shared/store/sqlite-utils.ts directly', () => {
+    const violations = deepImportViolations(
+      /\/shared\/store\/sqlite-utils\.js$/,
+      (file) => file.includes('/shared/store/'),
+      true,
+    );
+    expect(violations, violations.join('\n')).toEqual([]);
+  });
+
+  it('nothing outside shared/ imports shared/safe-log.ts directly', () => {
+    const violations = deepImportViolations(
+      /\/shared\/safe-log\.js$/,
+      (file) => file.includes('/shared/'),
+      true,
+    );
+    expect(violations, violations.join('\n')).toEqual([]);
+  });
+});

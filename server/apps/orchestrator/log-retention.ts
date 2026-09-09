@@ -271,7 +271,7 @@
  */
 import { type Dirent, fstatSync, readdirSync, rmSync, statSync, truncateSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { nonEmpty, positiveIntegerFromEnv } from '../../shared/env-integer.js';
+import { nonEmpty, positiveIntegerFromEnv } from '../../shared/index.js';
 import type { Logger } from './types.js';
 
 /**

@@ -115,7 +115,7 @@ import {
   writeSync,
 } from 'node:fs';
 import { dirname } from 'node:path';
-import { nonEmpty, positiveIntegerFromEnv } from '../../shared/env-integer.js';
+import { nonEmpty, positiveIntegerFromEnv } from '../../shared/index.js';
 
 /**
  * Default path. Relative to the process CWD, sibling to `data/` where the

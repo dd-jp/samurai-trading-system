@@ -9,7 +9,7 @@
  * `SqliteArmComparisonSampleStore`, which this mirrors.
  */
 import type { SharedStore } from '../../shared/store/index.js';
-import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
+import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';
 import type { OutsideBenchmarkId, OutsideBenchmarkSample } from '../outside-benchmark/index.js';
 import type { OutsideBenchmarkSampleStore } from './types.js';
 

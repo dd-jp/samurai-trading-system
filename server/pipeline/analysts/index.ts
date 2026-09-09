@@ -13,7 +13,13 @@
 export { fundamentalAnalyst } from './fundamental-analyst.js';
 export { AnalystOrchestrator, type AnalystOrchestratorDeps } from './orchestrator.js';
 export { sentimentAnalyst } from './sentiment-analyst.js';
-export { technicalAnalyst } from './technical-analyst.js';
+export {
+  type AxisVote,
+  MACD_SPEC,
+  momentumVote,
+  RSI_SPEC,
+  technicalAnalyst,
+} from './technical-analyst.js';
 export type {
   Analyst,
   AnalystFailure,

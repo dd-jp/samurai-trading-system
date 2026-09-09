@@ -14,7 +14,7 @@
  */
 
 import type { SharedStore } from '../../shared/store/index.js';
-import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
+import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';
 import type { AssetClass, CurrentTick, CurrentTickStore, TickStage } from './types.js';
 
 interface CurrentTickRow {

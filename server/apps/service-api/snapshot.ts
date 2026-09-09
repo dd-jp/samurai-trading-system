@@ -11,7 +11,7 @@
  * what actually filled. Recent-history window is fixed
  * (`RECENT_DEBATES_LIMIT` / `RECENT_VERDICTS_LIMIT`), no config surface yet.
  */
-import { toProfitFactorWire } from '../../../contracts/metrics.js';
+import { toProfitFactorWire } from '../../../contracts/index.js';
 import type { AnalystContribution, Direction } from '../../pipeline/debate-engine/index.js';
 import { OUTSIDE_BENCHMARKS } from '../../pipeline/outside-benchmark/index.js';
 import type {

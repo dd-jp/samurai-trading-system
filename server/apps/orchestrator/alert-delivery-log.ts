@@ -6,7 +6,7 @@
 
 import { sanitizeLogText } from '../../shared/sanitize-log-text.js';
 import type { SharedStore } from '../../shared/store/index.js';
-import { toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
+import { toStoredTimestamp } from '../../shared/store/index.js';
 
 export interface AlertDeliveryFailure {
   chat_id: string;

@@ -422,11 +422,11 @@ export interface VerdictLog {
  * carries it to the browser, which renders the state word and must not import
  * the execution registry to learn the union.
  */
-export type { OrderState } from '../../../contracts/primitives.js';
+export type { OrderState } from '../../../contracts/index.js';
 
 // Also imported, not just re-exported: `export … from` publishes the name
 // without binding it locally, and `OpenPosition` below annotates with it.
-import type { OrderState } from '../../../contracts/primitives.js';
+import type { OrderState } from '../../../contracts/index.js';
 
 /**
  * A live open lot — Trader position-awareness + Risk exposure. Defined here

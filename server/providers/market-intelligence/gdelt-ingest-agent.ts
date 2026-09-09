@@ -37,7 +37,7 @@
  */
 
 import type { Clock, LogEntry, LogEntryTemplate, Logger } from '../../shared/index.js';
-import { logCaughtFailure, safeLog } from '../../shared/safe-log.js';
+import { logCaughtFailure, safeLog } from '../../shared/index.js';
 import type { MiArchiveStore, RawArchiveRow } from './archive/mi-archive-store.js';
 import { MI_SOURCES } from './archive/mi-sources.js';
 import {

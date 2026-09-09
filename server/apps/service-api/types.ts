@@ -15,14 +15,15 @@
  * keep working unchanged.
  */
 
-import type { MetricsSuite } from '../../../contracts/metrics.js';
-import type { PipelineStage } from '../../../contracts/pipeline.js';
-import type { AssetClass, StoreMode } from '../../../contracts/primitives.js';
 import type {
+  AssetClass,
   DashboardSnapshot,
   LlmSpendSummary,
+  MetricsSuite,
+  PipelineStage,
+  StoreMode,
   TickStatus,
-} from '../../../contracts/snapshot.js';
+} from '../../../contracts/index.js';
 import type { ArmComparisonSample } from '../../pipeline/feedback-loop/index.js';
 import type { OutsideBenchmarkSample } from '../../pipeline/outside-benchmark/index.js';
 import type { RiskCriticVerdict } from '../../pipeline/risk-manager/index.js';
@@ -55,7 +56,7 @@ export type {
   RiskCriticRow,
   TickStatus,
   VerdictRow,
-} from '../../../contracts/snapshot.js';
+} from '../../../contracts/index.js';
 
 /**
  * One row of the Verdict/audit_log history (dashboard-spec.md "Module: Query

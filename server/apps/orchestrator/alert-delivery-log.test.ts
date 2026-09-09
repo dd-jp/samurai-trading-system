@@ -3,8 +3,7 @@
  * `:memory:` DB, mirroring sqlite-audit-log.test.ts's shape.
  */
 import type { SharedStore } from '../../shared/store/index.js';
-import { openSharedStore } from '../../shared/store/index.js';
-import { fromStoredTimestamp } from '../../shared/store/sqlite-utils.js';
+import { fromStoredTimestamp, openSharedStore } from '../../shared/store/index.js';
 import {
   ALERT_DELIVERY_FAILURE_WINDOW_MS,
   type AlertDeliveryFailure,

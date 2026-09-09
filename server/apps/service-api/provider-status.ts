@@ -60,7 +60,7 @@ export type {
   ProviderState,
   ProviderStatusPanel,
   ProviderTile,
-} from '../../../contracts/providers.js';
+} from '../../../contracts/index.js';
 
 // Imported as well as re-exported above: `export … from` publishes a name
 // without binding it locally, and the poller below annotates with all four.
@@ -69,7 +69,7 @@ import type {
   PolygonTile,
   ProviderState,
   ProviderStatusPanel,
-} from '../../../contracts/providers.js';
+} from '../../../contracts/index.js';
 
 /** The synchronous seam `buildSnapshot` reads. */
 export interface ProviderStatusReader {

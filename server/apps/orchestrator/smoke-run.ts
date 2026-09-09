@@ -236,7 +236,14 @@ import {
   SOURCE_GDELT,
   SOURCE_POLYMARKET,
 } from '../../providers/market-intelligence/index.js';
-import type { OpenPosition, OrderIntent, TradingArm } from '../../shared/index.js';
+import type {
+  ContinueOnFaultEffects,
+  ErrorStream as FaultGuardErrorStream,
+  StdoutStream as FaultGuardStdoutStream,
+  OpenPosition,
+  OrderIntent,
+  TradingArm,
+} from '../../shared/index.js';
 import {
   boundFor,
   delay,
@@ -245,11 +252,6 @@ import {
   SimulatedClock,
   TokenBucket,
 } from '../../shared/index.js';
-import type {
-  ContinueOnFaultEffects,
-  ErrorStream as FaultGuardErrorStream,
-  StdoutStream as FaultGuardStdoutStream,
-} from '../../shared/stdout-fault-guard.js';
 import { openSharedStore, type SharedStore as SqliteHandle } from '../../shared/store/index.js';
 import type { CostConfig, CostModel } from '../../tools/backtest/index.js';
 import { CostModelImpl } from '../../tools/backtest/index.js';

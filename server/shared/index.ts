@@ -14,6 +14,7 @@ export type {
   TraderDecisionRecord,
   TraderLogStore,
 } from './decision-records.js';
+export { nonEmpty, positiveIntegerFromEnv, requireIntegerAtLeast } from './env-integer.js';
 // #568: the one definition of "what this lot still holds", shared by the two
 // stages that size an exit — Trader (`buildExitIntent`) and Execution
 // (`executeExit`). Cross-module, so it belongs on this barrel rather than in
@@ -70,6 +71,13 @@ export {
   safeLog,
 } from './safe-log.js';
 export { maskAndCap, maskCredentials, sanitizeLogText } from './sanitize-log-text.js';
+export type {
+  ContinueOnFaultEffects,
+  ErrorStream,
+  ProcessFault,
+  StdoutStream,
+} from './stdout-fault-guard.js';
+export { guardedWrite, installContinueOnFault, watchStdoutErrors } from './stdout-fault-guard.js';
 // #638: the in-code clamp on the kill-line and breaker thresholds. Exported
 // from the shared barrel because the three paths that can put a threshold into
 // force — boot-time construction, the tuning store's write, and the Risk

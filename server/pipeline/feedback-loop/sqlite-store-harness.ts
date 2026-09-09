@@ -22,8 +22,7 @@
  */
 
 import type { ClosedTrade } from '../../shared/index.js';
-import { openSharedStore, type SharedStore } from '../../shared/store/index.js';
-import { toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
+import { openSharedStore, type SharedStore, toStoredTimestamp } from '../../shared/store/index.js';
 import { SqliteAdjustmentLog } from './sqlite-adjustment-log.js';
 import { SqliteClosedTradeStore } from './sqlite-closed-trade-store.js';
 import { SqliteTuningStore } from './sqlite-tuning-store.js';

@@ -16,7 +16,7 @@
  * `AnalystViewRelay` (control-arm.ts), which threads the live pass's views to
  * the control arm the same way for the same reason.
  */
-import type { QUORUM_SKIP_DECISIONS } from '../../../contracts/pipeline.js';
+import type { QUORUM_SKIP_DECISIONS } from '../../../contracts/index.js';
 import type { AnalystFailure } from '../../pipeline/analysts/index.js';
 
 /**

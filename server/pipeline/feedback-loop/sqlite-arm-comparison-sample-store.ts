@@ -8,7 +8,7 @@
  * at all — see the migration's own comment.
  */
 import type { SharedStore } from '../../shared/store/index.js';
-import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
+import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';
 import type { ArmComparisonSample, ArmComparisonSampleStore } from './types.js';
 
 interface ArmComparisonSampleRow {

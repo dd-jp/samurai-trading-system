@@ -22,7 +22,7 @@
  * before any cycle has ever completed.
  */
 import type { SharedStore } from '../../shared/store/index.js';
-import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
+import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';
 
 const SINGLETON_KEY = 'default';
 const ATTEMPT_KEY = 'attempt';

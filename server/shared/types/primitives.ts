@@ -26,7 +26,7 @@
  * debate-driven arm, or falsifier arm 2's deterministic control. Same
  * re-export rule as `AssetClass` above, and same reason.
  */
-export type { AssetClass, InstrumentSubclass, TradingArm } from '../../../contracts/primitives.js';
+export type { AssetClass, InstrumentSubclass, TradingArm } from '../../../contracts/index.js';
 
 /**
  * The severities a log line can carry.

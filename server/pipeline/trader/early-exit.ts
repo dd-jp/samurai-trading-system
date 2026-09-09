@@ -83,7 +83,7 @@ import {
   InsufficientBarsError,
   type MarketDataService,
 } from '../../providers/market-data-service/index.js';
-import { type AxisVote, MACD_SPEC, momentumVote, RSI_SPEC } from '../analysts/technical-analyst.js';
+import { type AxisVote, MACD_SPEC, momentumVote, RSI_SPEC } from '../analysts/index.js';
 
 /**
  * The decay criterion — INJECTED, never a constant read from module scope

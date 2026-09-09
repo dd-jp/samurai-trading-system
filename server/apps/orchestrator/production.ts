@@ -210,11 +210,16 @@ import {
   X_SEARCH_MODEL,
   XSearchClient,
 } from '../../providers/market-intelligence/index.js';
-import { positiveIntegerFromEnv, requireIntegerAtLeast } from '../../shared/env-integer.js';
 import type { AssetClass, Clock, TuningStore } from '../../shared/index.js';
-import { isThresholdBoundViolation, resolveVenuePacing, TokenBucket } from '../../shared/index.js';
+import {
+  isThresholdBoundViolation,
+  logCaughtFailure,
+  positiveIntegerFromEnv,
+  requireIntegerAtLeast,
+  resolveVenuePacing,
+  TokenBucket,
+} from '../../shared/index.js';
 import { tryNousCredentials } from '../../shared/llm/index.js';
-import { logCaughtFailure } from '../../shared/safe-log.js';
 import type { SharedStore as SqliteHandle } from '../../shared/store/index.js';
 import {
   DEFAULT_MAX_LLM_CALL_ROWS,

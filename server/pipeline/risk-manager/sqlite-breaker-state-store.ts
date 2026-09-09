@@ -16,10 +16,7 @@
  */
 
 import type { SharedStore as Db } from '../../shared/store/index.js';
-import {
-  fromStoredTimestampOrNull,
-  toStoredTimestampOrNull,
-} from '../../shared/store/sqlite-utils.js';
+import { fromStoredTimestampOrNull, toStoredTimestampOrNull } from '../../shared/store/index.js';
 import type { PersistedBreakerState } from './types.js';
 
 /** The narrow write seam the tick path needs — see `computeCurrentPortfolioAndBreakers`. */

@@ -9,7 +9,7 @@ import {
   DEGRADED_DECISIONS,
   isDegradedDecision,
   isQuorumSkipDecision,
-} from '../../../contracts/pipeline.js';
+} from '../../../contracts/index.js';
 import type { AnalystFailure } from '../../pipeline/analysts/index.js';
 import { AnalystSkipKindRelay, analystsSkipDecisionWord, skipKindOf } from './analysts-decision.js';
 import { CONTROL_TRACE_SUFFIX } from './control-arm.js';

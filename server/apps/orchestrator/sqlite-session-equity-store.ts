@@ -12,7 +12,7 @@
  */
 
 import type { SharedStore } from '../../shared/store/index.js';
-import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
+import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';
 
 /** The three snapshot keys: two asset classes plus the portfolio-level figure. */
 export type SessionEquityKey = 'crypto' | 'stocks' | 'portfolio';

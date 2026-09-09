@@ -79,7 +79,7 @@ export interface TradeSeries {
  * path. Moving the declaration is the whole of that fix; every import site,
  * including `index.ts`'s barrel, still resolves through here.
  */
-export type { MetricsSuite } from '../../../contracts/metrics.js';
+export type { MetricsSuite } from '../../../contracts/index.js';
 
 /**
  * One train/test split. Train is a list of ranges, not a single range: CPCV
