@@ -1344,6 +1344,7 @@ function exitPathOrder(
     target: SMOKE_MARK_PRICE + 20,
     time_in_force: 'gtc',
     decision_timestamp: decisionTime,
+    decided_at: decisionTime,
     metadata: {
       debate_id: `debate-${idempotencyKey}`,
       conviction: 0.7,
@@ -3155,6 +3156,7 @@ function makeExitProbeInput(overrides: Partial<OrderIntent> = {}) {
     target: 110,
     time_in_force: 'day',
     decision_timestamp: SMOKE_RUN_INSTANT,
+    decided_at: SMOKE_RUN_INSTANT,
     metadata: {
       debate_id: 'smoke-threshold-clamp-exit-probe',
       conviction: 0.5,

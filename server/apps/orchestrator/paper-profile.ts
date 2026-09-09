@@ -1466,18 +1466,35 @@ export function buildStartingProfileConfigs(
      * the DECISION BAR — floored onto `DEBATE_BAR_TIMEFRAME_MS` (1h), which is
      * what made the idempotency key stable within a bar — and since #687 it is
      * the debate's bar, inherited rather than re-floored. So the sentence above
-     * describes the hazard correctly and then denies it applies: the
-     * `staleness` gate (1) now measures how far into the BAR the tick is, not
-     * how old the quote is. At a
-     * 15-minute cadence a crypto tick at bar+15/30/45 already reads 15/30/45
-     * minutes of "signal age" against a 5-minute bound.
+     * described the hazard correctly and then denied it applies, but between
+     * #687 and #1190 it was itself wrong about the mechanism: the `staleness`
+     * gate (1) measured how far into the BAR the tick was, not how old the
+     * quote — or the decision — was. At a 15-minute cadence a crypto tick at
+     * bar+15/30/45 read 15/30/45 minutes of "signal age" against a 5-minute
+     * bound purely from bar position, with zero stale feeds behind it (23
+     * such no-gos measured 2026-08-27→2026-09-04, #1190).
      *
-     * The values below are deliberately NOT changed here — re-sizing a live
-     * gate is a product decision, not a side effect of a keying fix — but they
-     * are no longer measuring what this note said they measured, and #687's PR
-     * files that separately. After #687 a straddling intent can also carry a
-     * `decision_timestamp` a full bar behind, which this gate refuses; refusing
-     * a late intent is the fail-safe direction and is the intended outcome.
+     * **#1190 gave the gate its own coordinate**, `OrderIntent.decided_at` —
+     * `clock.now()` read at Trader intent-build time (`decide.ts`'s `asOf`),
+     * never floored to a bar. `decision_timestamp` keeps the bar-floored
+     * value for the idempotency key and `OpenPosition` persistence,
+     * untouched. The `staleness` gate now reads `decided_at`, so bar
+     * position no longer matters: a tick at bar+1min and one at bar+55min
+     * read the same age when the decision itself is equally fresh.
+     *
+     * **What #1190 removes, undisclosed there, stated here:** the straddle
+     * fail-safe. A debate that crosses an hour boundary used to keep
+     * `decision_timestamp` at the OLD bar against a wall clock in the new
+     * one, so the `staleness` gate read it as stale and refused it — "a late
+     * intent" being refused "beats corrupting the next bar's key"
+     * (`decisionBarFor`, `decide.ts`). `decided_at` is read fresh at build
+     * time regardless of which bar the debate started in, so a straddling
+     * intent now reads exactly as fresh as an ordinary one and is no longer
+     * caught. Whether to add a straddle-specific bound back is open — an
+     * open question recorded on #1190, not decided here.
+     *
+     * The values below are unaffected by #1190 — re-sizing a live gate is a
+     * product decision, not a side effect of a coordinate fix.
      *
      * 5 min crypto / 15 min stocks, with several tick intervals
      * (`DEFAULT_TICK_INTERVAL_MS`, 60s) of headroom either way. The asymmetry
@@ -1510,9 +1527,10 @@ export function buildStartingProfileConfigs(
      *   staleness bound cannot reject.
      * - **15 minutes is not tight against the pipeline that produces the
      *   signal.** `LATENCY_BUDGET_MS.stocks` bounds one debate at 60s, and
-     *   `decision_timestamp` is the quote's `observed_at`, not the tick start
-     *   — so the budget, not the bound, is what a slow equity debate hits
-     *   first. The headroom is roughly an order of magnitude.
+     *   `decided_at` (#1190) is read once that debate has already resolved,
+     *   not at the tick start — so the budget, not the bound, is what a slow
+     *   equity debate hits first. The headroom is roughly an order of
+     *   magnitude.
      *
      * `UniverseScheduler` is what keeps this rare rather than routine: stock
      * instruments are filtered out of the `TickPlan` entirely while the

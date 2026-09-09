@@ -153,10 +153,11 @@ describe('paperStartingProfile', () => {
     });
 
     it('leaves the stocks staleness bound well clear of one debate latency budget', () => {
-      // `LATENCY_BUDGET_MS.stocks` is 60s and `decision_timestamp` is the
-      // quote's own `observed_at`, so the signal-producing pipeline cannot
-      // approach this bound. If it ever could, every equity order would
-      // no-go on staleness and the soak would silently trade crypto only.
+      // `LATENCY_BUDGET_MS.stocks` is 60s and gate 1 measures age from
+      // `decided_at` (#1190) — `clock.now()` read at Trader intent-build
+      // time, bounded by that same debate latency budget, not the quote's own
+      // `observed_at`. If it ever approached this bound, every equity order
+      // would no-go on staleness and the soak would silently trade crypto only.
       const { verdictConfig } = paperStartingProfile('paper');
 
       expect(verdictConfig.max_signal_age.stocks).toBeGreaterThan(10 * LATENCY_BUDGET_MS.stocks);

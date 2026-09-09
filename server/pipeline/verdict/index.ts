@@ -52,7 +52,7 @@
  * and neither marker, and drives it through this same `VerdictImpl` via
  * `exitPathVerdict`. Benign — the intent carries neither marker, so no gate
  * is skipped by exemption; it reaches `go` in the harness because its
- * bracket is non-zero, its `decision_timestamp` is fresh, its asset class is
+ * bracket is non-zero, its `decided_at` is fresh, its asset class is
  * crypto so gate 4 (market-open) does not apply, and the harness config
  * widens `max_mark_age` to 24h for the fixture's one frozen mark
  * (`EXIT_PATH_VERDICT_CONFIG`, `smoke-run.ts`) rather than `stale_feed`
@@ -195,25 +195,36 @@ export class VerdictImpl implements Verdict {
     const idempotencyKey = orderIntent.idempotency_key;
     const now = clock.now();
 
-    // Gate 1: staleness — signal age vs the per-asset-class bound.
+    // Gate 1: staleness — signal age vs the per-asset-class bound, measured
+    // from `decided_at`, NOT `decision_timestamp` (#1190).
+    //
+    // `decision_timestamp` is the 1h DEBATE BAR coordinate (`bar_timestamp`,
+    // floored by `floorToBar`/`DEBATE_BAR_TIMEFRAME_MS`), kept stable across
+    // every tick that shares a bar because the idempotency key and
+    // `OpenPosition.decision_timestamp` need that stability. It was never a
+    // wall-clock reading, so a decision made 55 minutes into its bar measured
+    // as old as one made seconds into it — signal age grew structurally
+    // toward 60 minutes purely as a function of where in the bar the tick
+    // landed, against a 15-minute `max_signal_age.stocks`: 23 `staleness`
+    // no-gos with zero stale feeds behind them. `decided_at` is `clock.now()`
+    // read at the top of the Trader function that built the intent (`asOf` in
+    // `decide.ts`) and never floored, so two decisions of equal real freshness
+    // now measure equal regardless of where their shared bar puts them.
     //
     // #894 — THE MANDATORY FLAT-BY-CLOSE FLATTEN SKIPS THIS GATE, AND ONLY IT.
     //
-    // The tick path stamps `decision_timestamp` to the DECISION BAR (1h,
-    // `floorToBar`/`DEBATE_BAR_TIMEFRAME_MS`), while ADR-0014's flatten window
-    // opens `flatten_before_close_ms` (5 min) before the session close. So a
-    // flatten's "signal age" is structurally tens of minutes — 56 at the US
-    // close, 26 at the LSE's — against a 15-minute `max_signal_age.stocks`,
-    // and this gate refused EVERY flat-by-close exit, on a healthy feed as
-    // readily as a degraded one. The invariant the horizon rests on could not
-    // reach Execution at all.
-    //
-    // Exempted rather than re-timed or re-sized because the gate's question
-    // does not apply: a flat-by-close exit is not acting on a stale OPINION,
-    // it is acting on the clock. The lot must be closed before the session
-    // ends whatever the debate that opened it now thinks, so how old that
-    // debate is cannot be a reason to leave the position on overnight. Same
-    // structural argument #826 made for the price gates one branch below.
+    // Kept even though `decided_at` also comes out fresh for a flatten (it is
+    // read the same way, at the same site): the exemption's reason was never
+    // about which clock reading the gate used, it is that a flat-by-close
+    // exit does not act on an OPINION at all, so bounding it by any freshness
+    // measure is the wrong question — the lot must close before the session
+    // ends whatever the debate that opened it now thinks. Same structural
+    // argument #826 made for the price gates one branch below. Before #1190
+    // this exemption was also load-bearing for a second, accidental reason:
+    // without it, every flat-by-close flatten measured 26-56 minutes old
+    // against `decision_timestamp` and was refused on a healthy feed as
+    // readily as a degraded one. `decided_at` removes that accident; the
+    // exemption stays because the underlying reason never depended on it.
     //
     // Scoped by `metadata.mandatory_flatten` — set by `buildFlattenExit` only
     // for `exit_reason: 'flatten'` — so the exemption cannot widen by
@@ -224,7 +235,20 @@ export class VerdictImpl implements Verdict {
     // flatten double-submitting, and the breaker re-check (5) still applies.
     // An UNPRICED one additionally skips the two price gates at the branch
     // below, since `unpriced_exit` implies this marker — see the file header.
-    const signalAgeMs = now.getTime() - orderIntent.decision_timestamp.getTime();
+    //
+    // This gate has effectively no PRODUCTION trigger left. `asOf` is read at
+    // Trader intent-build time (`decide.ts`, before the mark/bars/precedent
+    // reads so a slow data fetch still counts), Verdict runs in the same tick
+    // right after Risk, and the Risk Critic is bounded at 10s (#957) — so
+    // `now - decided_at` here is bounded far under both the 5-minute crypto
+    // and 15-minute stocks bounds in every real run. The issue's "a genuinely
+    // stale decision must still no-go" requirement is proved by fixtures
+    // (`index.test.ts`'s `staleExit()`) and, for the #894 exemption
+    // specifically, by an injected clock gap in
+    // `flat-by-close-to-execution.test.ts` — not by a reachable production
+    // scenario. A real trigger would need a stalled Trader/Risk stage, which
+    // has no test coverage of its own; nothing here claims one.
+    const signalAgeMs = now.getTime() - orderIntent.decided_at.getTime();
     const maxAgeMs = config.max_signal_age[orderIntent.asset_class];
     if (orderIntent.metadata.mandatory_flatten !== true && signalAgeMs > maxAgeMs) {
       // #1111: the age and the bound travel with the refusal. Without them a

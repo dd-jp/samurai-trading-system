@@ -67,7 +67,7 @@ export interface VerdictConfig {
    *
    * Distinct from `max_signal_age` above, and deliberately a second field
    * rather than a reuse of it. That one measures how long ago WE decided
-   * (`decision_timestamp`); this measures how long ago the MARKET last spoke
+   * (`decided_at` — #1190); this measures how long ago the MARKET last spoke
    * (`observed_at`). A four-second-old decision priced off yesterday's close
    * passes the first gate cleanly — which is the exact trade this field
    * exists to stop. Collapsing the two would restore that hole under a name

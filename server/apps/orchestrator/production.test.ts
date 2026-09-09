@@ -463,6 +463,7 @@ function goVerdict(): VerdictDecision {
     target: 120,
     time_in_force: 'gtc',
     decision_timestamp: START,
+    decided_at: START,
     metadata: {
       debate_id: 'debate-1',
       conviction: 0.8,

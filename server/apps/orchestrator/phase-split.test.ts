@@ -123,6 +123,7 @@ function makeIntent(instrument: string): OrderIntent {
     target: 110,
     time_in_force: 'day',
     decision_timestamp: NOW,
+    decided_at: NOW,
     metadata: {
       debate_id: `debate-${instrument}`,
       conviction: 0.7,

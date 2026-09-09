@@ -1182,6 +1182,7 @@ describe('runTickPlan decision gate (#743)', () => {
       target: 110,
       time_in_force: 'gtc',
       decision_timestamp: NOW,
+      decided_at: NOW,
       metadata: {
         debate_id: 'debate-prior-bar',
         conviction: 0.7,

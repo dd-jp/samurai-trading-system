@@ -396,13 +396,21 @@ function withinFlattenWindow(
  *
  * ## What this does NOT fix
  *
- * The straddling intent is still DECIDED late: after the fix its
- * `decision_timestamp` is bar N while the wall clock is in N+1, so Verdict's
- * staleness gate sees an age above one bar and may no-go it. That is the
- * fail-safe direction — refusing a late intent beats corrupting the next bar's
- * key — and it is also, usefully, the marker that tells a straddle apart from
- * an ordinary tick in `trader_log`: `decision_timestamp` no longer floors onto
- * the bar containing `created_at`.
+ * The straddling intent is still DECIDED late: `decision_timestamp` is bar N
+ * while the wall clock is in N+1. `decision_timestamp` no longer floors onto
+ * the bar containing `created_at`, so it stays a usable marker in
+ * `trader_log` that tells a straddle apart from an ordinary tick.
+ *
+ * It stopped being a fail-safe as of #1190, undisclosed there and stated
+ * here: Verdict's staleness gate used to read `decision_timestamp` and so
+ * caught a straddling intent as stale (bar N read against wall-clock N+1) —
+ * "refusing a late intent beats corrupting the next bar's key". #1190 moved
+ * that gate to `OrderIntent.decided_at`, `clock.now()` read fresh at the
+ * point this function's caller builds the intent, regardless of which bar
+ * the debate that produced it started in. A straddling intent now reads
+ * exactly as fresh as an ordinary one and passes the gate. Whether a
+ * straddle-specific bound should be added back is open — tracked as an open
+ * question on #1190, not decided here.
  */
 function decisionBarFor(debate: DebateResult): Date {
   return debate.bar_timestamp;
@@ -530,6 +538,15 @@ async function buildBracket(
   // purpose: opening or adding to a position without a live price is worse
   // than deferring to the next tick, unlike the ONE exit ADR-0014 makes
   // mandatory (see `readExitPrice`'s docstring for the full posture).
+  // Stamped onto `decided_at` below (#1190) — Verdict's gate 1 measures signal
+  // age from THIS read, not from `DebateLog.created_at` (the debate's own
+  // completion instant): `DebateResult` does not expose `created_at`, so
+  // reading it here would need a contract change gate 1 does not otherwise
+  // need, and `asOf` already bounds the same latency budget
+  // (`LATENCY_BUDGET_MS.stocks`, 60s) that separates debate completion from
+  // this call. Read BEFORE `getMark`/`getBars`/the precedent lookup below, so
+  // a slow data fetch still counts toward the age Verdict measures — it is
+  // not a cheap timestamp taken after the expensive work is already done.
   const asOf = clock.now();
   const [mark, bars] = await Promise.all([
     marketData.getMark(instrument, asOf),
@@ -784,6 +801,7 @@ async function buildBracket(
       target: entry + direction * targetDistance,
       time_in_force: config.time_in_force[mark.asset_class],
       decision_timestamp: decisionBar,
+      decided_at: asOf,
       metadata: {
         debate_id: debate.debate_id,
         // #753. Recorded on every intent (never omitted for the live arm), so
@@ -1042,6 +1060,11 @@ async function buildFlattenExit(
   const totalSize = totalHeldQuantity(held);
   if (totalSize <= 0) return skip('exit_no_filled_size');
 
+  // Stamped onto `decided_at` below (#1190) — same `clock.now()` read as
+  // `buildBracket`'s, see that call's comment for why this and not
+  // `DebateLog.created_at`. This exit's own gate 1 read is exempted for
+  // `exit_reason: 'flatten'` (`mandatory_flatten`, see verdict/index.ts), so
+  // this timestamp only feeds `trader_log`/observability here, not a gate.
   const asOf = clock.now();
   const priced = await readExitPrice(input, positions, exitReason, asOf);
 
@@ -1070,6 +1093,7 @@ async function buildFlattenExit(
       target: priced.price,
       time_in_force: config.time_in_force[priced.asset_class],
       decision_timestamp: decisionBar,
+      decided_at: asOf,
       metadata: {
         debate_id: attribution.debate_id,
         // #753 — see the entry intent's own `arm` note.

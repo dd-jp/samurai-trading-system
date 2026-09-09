@@ -3,7 +3,8 @@
  *
  * ## Why this is not the staleness gate Verdict already had
  *
- * Verdict's `'staleness'` gate measures SIGNAL age: `now - decision_timestamp`,
+ * Verdict's `'staleness'` gate measures SIGNAL age: `now - decided_at` (#1190;
+ * `decision_timestamp` is the bar-floored idempotency coordinate, not this),
  * i.e. how long ago *we* decided. This measures FEED age: `readAt -
  * mark.observed_at`, i.e. how long ago the *market* last spoke. They fail
  * independently, and the second is the one nothing checked. A signal decided
