@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runWithTraceId } from '../trace-context.js';
 import type { LogEntry, Logger } from '../types/primitives.js';
 import {
+  TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_MS,
   TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS,
   TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS,
   TokenBucket,
@@ -531,5 +532,96 @@ describe('TokenBucket wait telemetry repeat window (#1435)', () => {
 
     expect(entries).toHaveLength(2);
     expect(entries[1]?.payload).toMatchObject({ lane: 'priority', suppressed_since_last: 0 });
+  });
+
+  it('folds two or more suppressed crossings into the next announcement, reporting the true count and the true max — not the announcing wait itself', async () => {
+    const { logger, entries } = recordingLogger();
+    const bucket = new TokenBucket({ capacity: 1, refillPerSecond: 1 }, undefined, {
+      logger,
+      name: 'alpaca',
+    });
+    await bucket.acquire();
+
+    // Three callers racing a drained, capacity-1 bucket: the loser of each
+    // cycle simply waits another full cycle (see "serializes concurrent
+    // acquires" above), so the first admits at ~1000ms, the second at
+    // ~2000ms, the third at ~3000ms — three DIFFERENT wait magnitudes from
+    // one setup, which a single suppressed wait (the existing test above)
+    // cannot exercise.
+    const order: number[] = [];
+    const pending = Promise.all(
+      [1, 2, 3].map(async (i) => {
+        await bucket.acquire();
+        order.push(i);
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(3_000);
+    await pending;
+    expect(order).toEqual([1, 2, 3]);
+    // Caller 1 announced (opened the window); callers 2 and 3 were folded in
+    // silently — no second or third line yet.
+    expect(entries).toHaveLength(1);
+
+    // Past the window: force one more threshold-crossing wait so the fold
+    // rides on this next announcement.
+    await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS);
+    await bucket.acquire(); // instant: the idle capacity-1 bucket refilled.
+    const fourth = bucket.acquire();
+    await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS);
+    await fourth;
+
+    expect(entries).toHaveLength(2);
+    const [, announcement] = entries;
+    expect(announcement?.payload).toMatchObject({
+      suppressed_since_last: 2,
+      max_suppressed_wait_ms: 3_000,
+    });
+    // The announcing (4th) wait is ~1000ms — well under the true suppressed
+    // max of 3000ms carried from caller 3. Kills the mutant that reports the
+    // announcing wait's own magnitude as `max_suppressed_wait_ms` instead of
+    // the tracked maximum.
+    const payload = announcement?.payload as { wait_ms: number };
+    expect(payload.wait_ms).toBeLessThan(3_000);
+    expect(announcement?.message).toContain('2 more threshold-crossing wait');
+    expect(announcement?.message).toContain('3000ms');
+  });
+
+  it('always announces a wait at or past the catastrophic bound, even inside an active repeat window, folding in whatever was suppressed first', async () => {
+    const { logger, entries } = recordingLogger();
+    const bucket = new TokenBucket({ capacity: 1, refillPerSecond: 1 }, undefined, {
+      logger,
+      name: 'alpaca',
+    });
+    await bucket.acquire();
+
+    // `TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_MS` is 30x the material-wait
+    // threshold; with this bucket's 1000ms-per-cycle racer dynamic, the Nth
+    // of N concurrently parked callers waits ~N*1000ms, so 30 racers reaches
+    // the catastrophic bound exactly on the last one.
+    const raceCount = TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_MS / TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS;
+    const order: number[] = [];
+    const pending = Promise.all(
+      Array.from({ length: raceCount }, (_, i) => i + 1).map(async (i) => {
+        await bucket.acquire();
+        order.push(i);
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_MS);
+    await pending;
+    expect(order).toHaveLength(raceCount);
+
+    // Caller 1 announced at ~1000ms (opens the window). Callers 2..29 were
+    // folded silently. Caller 30, at exactly the catastrophic bound and
+    // still well inside caller 1's 45-minute window, must announce anyway —
+    // otherwise a catastrophic wait with no later same-lane crossing before
+    // the window (or process exit) would never be reported.
+    expect(entries).toHaveLength(2);
+    const [firstAnnouncement, catastrophicAnnouncement] = entries;
+    expect(firstAnnouncement?.payload).toMatchObject({ suppressed_since_last: 0 });
+    expect(catastrophicAnnouncement?.payload).toMatchObject({
+      wait_ms: TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_MS,
+      suppressed_since_last: raceCount - 2,
+      max_suppressed_wait_ms: (raceCount - 1) * TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS,
+    });
   });
 });

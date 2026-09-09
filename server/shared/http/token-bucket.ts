@@ -18,10 +18,11 @@
  * seconds and one served instantly produced the same (nonexistent) trace, so
  * a starved fetch could be neither confirmed nor ruled out as an explanation
  * for a session's timeouts. `TokenBucketTelemetry` closes that gap with an
- * OPTIONAL wait-observed log line; see `take()`, `TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS`
- * and `TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS` for what gets logged, when, and
- * how often. It does not change what `acquire()`/`acquireBackground()` resolve
- * on or when — observation only, never a second control on pacing.
+ * OPTIONAL wait-observed log line; see `take()`, `TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS`,
+ * `TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS` and `TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_MS`
+ * for what gets logged, when, and how often. It does not change what
+ * `acquire()`/`acquireBackground()` resolve on or when — observation only,
+ * never a second control on pacing.
  */
 
 import { safeLog } from '../safe-log.js';
@@ -104,14 +105,43 @@ export const TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS = 1_000;
  * the 414 this change replaces), so clearing 5% requires `x <= 0.05*(1090+x)`,
  * i.e. `x <= ~57`. Windowed PER LANE (not per bucket — a burst on one lane
  * must not swallow the other's first announcement, see `logIfMaterialWait`),
- * so the worst case is two lines per window: `2 * (20h / W) <= 57` needs
- * `W >= ~42min`. 45 minutes clears that with margin (~53 lines worst case,
- * fewer if only one lane is actually active in a given soak). This is a
- * projection, not a re-measurement: no raw soak log survives to replay the
- * real clustering of waits, only the aggregate counts above.
+ * so the worst case is two lines per window PER BUCKET INSTANCE:
+ * `2 * (20h / W) <= 57` needs `W >= ~42min`. 45 minutes clears that with
+ * margin (~53 lines worst case, fewer if only one lane is actually active in
+ * a given soak). This is a projection, not a re-measurement: no raw soak log
+ * survives to replay the real clustering of waits, only the aggregate counts
+ * above.
+ *
+ * The budget assumes ONE telemetry-wired bucket lives per process — true
+ * today: `production.ts`'s shared `'alpaca'` bucket is the only
+ * telemetry-wired bucket any live process constructs; `saxo-http-client.ts`'s
+ * `'saxo'` bucket has no non-test constructor call anywhere in the tree
+ * (Saxo execution wiring is built but nothing calls it yet — #946). If a live
+ * process ever holds two telemetry-wired buckets at once, the worst case
+ * doubles per bucket and this budget needs re-deriving.
  */
 export const TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS = 45 * 60_000;
 
+/**
+ * Independent of the repeat window above: a wait this long IS the module
+ * header's motivating failure (the unprotected-filled-lot case), not
+ * ordinary contention, and folding it into a later announcement — or losing
+ * it outright if no later crossing on the same lane ever arrives before the
+ * process exits — defeats the reason #1083 exists. Always announced, window
+ * or not; the window still absorbs everything under this line. 30x the
+ * material-wait threshold: waits this long are rare by construction (a
+ * healthy bucket clears a token in well under a second), so always
+ * announcing them barely moves the line budget the window above is sized
+ * against.
+ */
+export const TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_MS = TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS * 30;
+
+/**
+ * In-memory, per lane, per bucket instance — not restart-clean the way
+ * `FilledZeroSizeThrottle`'s header declares itself to be. A crossing
+ * suppressed here and never followed by a later same-lane crossing before
+ * process exit is never announced; nothing flushes it on shutdown.
+ */
 interface LaneWaitAnnounce {
   lastAnnouncedAtMs: number;
   suppressedCount: number;
@@ -199,13 +229,22 @@ export class TokenBucket {
 
   /**
    * #1083. `undefined` telemetry (every call site that hasn't wired it), a
-   * wait under the threshold, and — #1435 — a threshold-crossing wait inside
-   * the announcing lane's repeat window are all silent by design; see
-   * `TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS` for why the second is a floor and
-   * not a lower one, and `TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS` for the
-   * third. The third case is not lost, only folded into the next
-   * announcement for that lane (`suppressed_since_last`/`max_suppressed_wait_ms`
-   * below) — cardinality reduction, not information destruction.
+   * wait under the threshold, and — #1435 — a threshold-crossing wait under
+   * `TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_MS` inside the announcing lane's
+   * repeat window are all silent by design; see `TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS`
+   * for why the second is a floor and not a lower one, and
+   * `TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS` for the third. The third case is
+   * not lost, only folded into the next announcement for that lane
+   * (`suppressed_since_last`/`max_suppressed_wait_ms` below) — cardinality
+   * reduction, not information destruction. A catastrophic wait (at or past
+   * `TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_MS`) is NEVER folded, window or not —
+   * see that constant for why.
+   *
+   * Folding attributes a suppressed wait's magnitude to the announcing call's
+   * `trace_id`/tick, not the tick it actually happened on — the fold has no
+   * per-suppressed-event timestamp to attribute with. Accepted: the
+   * alternative is a timestamped log line per suppressed occurrence, which is
+   * the exact cardinality this repeat window exists to bound.
    *
    * The event name is `token_bucket_wait`, chosen to survive a grep that a
    * bare `token` or a bare `429` cannot: an LLM `input_tokens` field
@@ -244,7 +283,8 @@ export class TokenBucket {
     const prior = this.waitAnnounce.get(lane);
     if (
       prior !== undefined &&
-      nowMs - prior.lastAnnouncedAtMs < TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS
+      nowMs - prior.lastAnnouncedAtMs < TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS &&
+      roundedWaitMs < TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_MS
     ) {
       prior.suppressedCount += 1;
       prior.maxSuppressedWaitMs = Math.max(prior.maxSuppressedWaitMs, roundedWaitMs);
@@ -260,7 +300,10 @@ export class TokenBucket {
     safeLog(this.telemetry.logger, {
       // The enclosing tick when there is one, so a pacing wait joins to the
       // stage that waited; `'token-bucket'` only outside one. Deliberately
-      // not derived from `lane` — see shared/trace-context.ts.
+      // not derived from `lane` — see shared/trace-context.ts. This is the
+      // ANNOUNCING call's tick, not necessarily the folded waits' — see
+      // `logIfMaterialWait`'s docblock for why that mis-attribution is
+      // accepted.
       trace_id: currentTraceId() ?? 'token-bucket',
       stage: 'rate_limit',
       event: 'token_bucket_wait',
@@ -270,7 +313,11 @@ export class TokenBucket {
       level: 'info',
       message:
         `token_bucket_wait: the '${this.telemetry.name}' bucket paced a ${lane} caller for ` +
-        `${roundedWaitMs}ms before granting a token.`,
+        `${roundedWaitMs}ms before granting a token.` +
+        (suppressedSinceLast > 0
+          ? ` ${suppressedSinceLast} more threshold-crossing wait(s) on this lane were folded ` +
+            `into this line since the last announcement, the longest ${maxSuppressedWaitMs}ms.`
+          : ''),
       payload: {
         bucket: this.telemetry.name,
         lane,
