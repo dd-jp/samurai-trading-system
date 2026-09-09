@@ -22,8 +22,8 @@
  * `redistributeFlattenFills` below routes it back to the lot(s) the flatten
  * journalled it was closing before the rest of this module ever sees it —
  * without that routing there is no other mechanism that closes a
- * flatten-closed lot at all (see the finding in PR #517's body) — splitting
- * it by the per-lot HELD quantities the same journal row recorded (#571).
+ * flatten-closed lot at all — splitting it by the per-lot HELD quantities the
+ * same journal row recorded (#571).
  *
  * #525: `executeExit` cancels every held lot's protective legs BEFORE
  * submitting the flatten (#516 — a resting leg fires into a now-flat
@@ -91,69 +91,18 @@ export async function ingestFills(input: ExecutionInput): Promise<void> {
   // `execute()` that opened the lot it belongs to. Re-offered fills are
   // expected and handled by the dedup below, so this only bounds the query.
   //
-  // #838 (#289's M10) proposed raising this per lot, to
-  // `max(opened_at, last_ingested_fill_ts)`, so that one stale open lot stops
-  // dragging the feed's span across the whole process lifetime. EVALUATED AND
-  // DECLINED — the floor stays GLOBAL and stays keyed on `opened_at` alone.
-  // Do not reinstate the per-lot floor without re-reading this and #838:
-  //
-  //  * A LOT IS NOT ONE ORDERED STREAM. `last_ingested_fill_ts` is a MAX over
-  //    the lot's `fills` rows, and EVERY LEG SHARES THE LOT'S
-  //    `idempotency_key` (the table's PK is `(idempotency_key,
-  //    broker_fill_id)`; `leg` is a column) — so it is a max over entry,
-  //    stop, target AND exit fills, which nothing orders against each other.
-  //    A stop or target leg activates sized to the quantity filled SO FAR and
-  //    can fire while the entry is still filling; that exit fill then raises
-  //    the floor above the entry's own progression, and the next cumulative
-  //    entry observation — dated at its true, earlier instant —
-  //    is dropped. This needs no assumption about the venue at all.
-  //  * A SECOND path, under #842's venue model: Alpaca may report a positive
-  //    `filled_qty` with a NULL `filled_at`, and `collectFill` then books the
-  //    fill at `observedAt`, the adapter's clock reading at the START of that
-  //    sweep. If `filled_at` turns out to carry FIRST-fill semantics and to
-  //    propagate later than `filled_qty`, a subsequent poll re-offers the
-  //    same order dated at that earlier true instant — below a floor already
-  //    raised to `observedAt`. Whether Alpaca behaves that way is exactly
-  //    what #842 established CANNOT BE DETERMINED from the docs, and that is
-  //    the point: an ordering we cannot determine is an ordering we cannot
-  //    state, and a live-money path must not rest on one.
-  //  * Either path ends the same way, and the ending costs money:
-  //    `collectFill`'s strict `filledAt < since` guard drops the observation
-  //    INSIDE the adapter, so `cumulativeTopUp` never sees the increment and
-  //    the shares it owed this lot are never booked — unprotected, invisible
-  //    to the exposure caps, not exited by flat-by-close. `hasFill` cannot
-  //    recover it: dedup protects against OVER-fetching, and this is
-  //    UNDER-fetching.
-  //  * The GLOBAL floor has no such failure mode PROVIDED every adapter
-  //    upholds the invariant it rests on — no fill dated earlier than the
-  //    `opened_at` of the lot it belongs to. #1087: `SimulatedBrokerAdapter`
-  //    violated it and has been fixed at the source (simulated-adapter.ts),
-  //    not here — this floor is still correct, PROVIDED that invariant
-  //    genuinely holds. Re-verify it for any adapter before trusting this
-  //    comment again.
-  //  * Widening this floor to re-verify it is not itself diagnosable through
-  //    `yarn smoke`'s gate (#1125 review, verified by running it): once
-  //    widened, `runFilledZeroSizeWedgeScenario`'s (smoke-run.ts) previously
-  //    excluded scripted fill is let through, `resizeProtectiveLegs` is
-  //    called on it, and `SmokeWedgedLotBroker`'s throw-on-unexpected-call
-  //    posture (deliberate, or the gate would fail QUIETLY on a stub
-  //    returning a silently-wrong value) turns that into a caught,
-  //    per-lot-aggregated failure: `offline smoke run failed to complete:
-  //    ingestFills: 1 contained failure(s) — every other lot in this poll
-  //    was advanced; unresolved: lot-advance 'smoke-filled-zero-size-wedge'
-  //    (AAPL) [Error]`. No stack trace, no `GATE:` line, and no failure
-  //    naming what broke about THIS floor — over-detection rather than a
-  //    hole, and the throw posture is unchanged. Confirmed by running it,
-  //    not assumed.
-  //  * `BrokerAdapter.fetchNewFills` deliberately does NOT promise per-lot
-  //    timestamp monotonicity, and cannot — see its doc in types/broker.ts.
-  //  * The win would have been small anyway: `since` does not bound the venue
-  //    round-trips. `AlpacaBrokerAdapter.fetchNewFills` issues one `getOrder`
-  //    per entry in `brackets` regardless of it and filters afterwards, so
-  //    the returned fill count is bounded by brackets x legs, not by span.
-  //    The saving is a constant factor on `hasFill` round-trips per poll;
-  //    `brackets` — never pruned, and the thing that actually grows without
-  //    bound — is untouched by any change to this floor.
+  // Keep this GLOBAL, keyed on `opened_at` alone — never raise it per lot to
+  // `max(opened_at, last_ingested_fill_ts)` (#838): a lot is not one ordered
+  // stream (every leg shares the lot's `idempotency_key`, so
+  // `last_ingested_fill_ts` is a max over entry/stop/target/exit fills that
+  // nothing orders against each other), so a per-lot floor can raise itself
+  // past an earlier fill still in flight and silently under-fetch it —
+  // `collectFill`'s strict `filledAt < since` guard drops it inside the
+  // adapter, with no recovery path (`hasFill` dedup only guards against
+  // OVER-fetching). This floor is correct only while every adapter upholds
+  // "no fill dated earlier than the `opened_at` of the lot it belongs to" —
+  // verify that before trusting this comment for a new adapter (#1087 found
+  // `SimulatedBrokerAdapter` had once violated it).
   const since = earliest(positions.map((position) => position.opened_at));
   const fills = await broker.fetchNewFills(since);
 
@@ -240,7 +189,7 @@ export async function ingestFills(input: ExecutionInput): Promise<void> {
       await input.store.markFlattenFillsSwept(flattenKey, now);
     } catch (error) {
       // NOT correctness-critical the way a 'flatten-attribution'/'lot-advance'
-      // failure is (#519/#526 review, deepseek): a missed mark only means the
+      // failure is (#519/#526): a missed mark only means the
       // row stays exactly where it already was — unswept, and so still found
       // by `getUnresolvedFlattens()` — which is `reconcile()`'s own designed
       // recovery for it, not data this poll lost. `throwContainedFailures`
@@ -314,11 +263,8 @@ interface ContainedFailure {
    * the way the first two are (see its call site): `ingestFills`'s own call
    * to `throwContainedFailures` is gated to skip it when it is the ONLY
    * scope present, so a mark failure alone resolves the poll rather than
-   * rejecting it — reviewed and fixed on PR #603 after a mark failure was
-   * found to reject the whole poll exactly like the other two, contradicting
-   * this same "not correctness-critical" claim. It still rides in this list,
-   * and so is still named, whenever a correctness-critical failure ALSO
-   * occurs the same poll.
+   * rejecting it (#603). It still rides in this list, and so is still named,
+   * whenever a correctness-critical failure ALSO occurs the same poll.
    */
   scope: 'flatten-attribution' | 'lot-advance' | 'flatten-sweep-mark';
   /**
@@ -719,7 +665,7 @@ async function redistributeOneFlatten(
         // from the SAME constant this fallback's estimate came from, so adding
         // rather than topping up would charge that flatten twice over.
         //
-        // Per fill, not per lot (#1121 review round 2, finding 2). A flatten
+        // Per fill, not per lot (#1121). A flatten
         // the venue splits into several raw fills applies `max` to each slice,
         // and `Σ max ≥ max(Σ, Σ)`, so the lot's total lands in
         // `[max(Σvenue, Σmodelled), Σvenue + Σmodelled]` rather than on the
@@ -796,8 +742,8 @@ async function redistributeOneFlatten(
     // unattributed rather than guessed onto one, which stays exactly right:
     // a split invented here would mis-assign quantity on the money path.
     //
-    // What changed (#527): dropping it used to be SILENT. "Should not
-    // happen" is precisely the condition worth a trace — a venue over-fill,
+    // Dropping it is not silent (#527): "Should not happen" is precisely the
+    // condition worth a trace — a venue over-fill,
     // a store/venue divergence, or a future change to the `heldSize` guard
     // would otherwise make this quantity vanish from the accounting with
     // nothing to show for it, unnoticed through a 14-day unattended soak
@@ -1795,9 +1741,8 @@ function cumulativeTopUp(
       //
       // #1121: subtracted against `priors`' full persisted `fee` — the CHARGED
       // total, which is what makes this right under `chargeTopUpTo`'s top-up
-      // (not addition) rule. An earlier pass of this ticket subtracted a
-      // venue-only component instead, which was correct for the additive
-      // charge it shipped with and is WRONG for a top-up: a prior row's `fee`
+      // (not addition) rule. Subtracting only the venue-reported component
+      // instead would be WRONG here: a prior row's `fee`
       // is `max(venue, modelled)`, so it has already absorbed that row's share
       // of the venue's running total, and subtracting less than it would
       // charge the same venue money twice across increments. Worked through:
@@ -1807,7 +1752,7 @@ function cumulativeTopUp(
       // subtraction returns its real delta untouched.
       //
       // "One modelled commission in total" is a property of THAT example, not
-      // of the mechanism (#1121 review round 2, finding 2): `max` runs per
+      // of the mechanism (#1121): `max` runs per
       // increment, so a venue whose per-increment fee crosses the modelled
       // share charges more than the model once — 0.7 then 0.3 against a
       // modelled 1.0 split 0.5/0.5 charges 1.2. `chargeTopUpTo`'s doc carries
@@ -1823,16 +1768,6 @@ function cumulativeTopUp(
   );
 }
 
-/**
- * Normalized broker shape → the stored record, keyed to its lot.
- *
- * Enumerates its fields rather than spreading, which is what keeps
- * `qty_is_cumulative` (#842) OUT of the persisted row — deliberately, not by
- * omission: a stored `Fill` is always an increment by the time it is written
- * (`cumulativeTopUp` has already taken the difference), so a row carrying a
- * "this is a running total" flag would be a lie that every later rebuild of
- * `filled_size` would have to re-litigate.
- */
 /**
  * #1121: the charge a real-broker fill carries — the venue's own reported fee
  * TOPPED UP to the modelled commission, never stacked on top of it.
@@ -1852,8 +1787,7 @@ function cumulativeTopUp(
  * would otherwise suppress the whole modelled commission and put the arms back
  * on different cost bases, which is the defect this ticket exists to close.
  *
- * WHAT `max` COSTS, stated rather than left to be discovered (#1121 review
- * round 2, finding 5). `max` treats the venue's report and the model's estimate
+ * WHAT `max` COSTS (#1121). `max` treats the venue's report and the model's estimate
  * as two measurements of ONE commission. Where a venue charge is genuinely
  * ADDITIONAL to commission, `max` absorbs it instead of adding it: a levy
  * smaller than the modelled commission is charged nothing extra, and a levy
@@ -1964,8 +1898,8 @@ function modelledEntryCostFor(position: OpenPosition): ModelledEntryCost | null 
  * `docs/research/12-edge-hypothesis-critique.md` D4 and #636 rule out — a
  * matched control has to be matched on cost too, not only on window.
  *
- * The decision (recorded here, not only in the PR): CHARGE the live arm the
- * modelled commission, rather than strip cost from both arms and compare
+ * The decision: CHARGE the live arm the modelled commission, rather than
+ * strip cost from both arms and compare
  * gross. Comparing gross would answer a different, less useful question —
  * it would discard exactly the cost sensitivity ADR-0018's accuracy bar and
  * doc 54's break-even thresholds are written against, and it would still
@@ -2011,9 +1945,8 @@ function modelledEntryCostFor(position: OpenPosition): ModelledEntryCost | null 
  * `max(venue, modelled)`, so the subtraction returns the venue's number
  * exactly when the venue out-charged the model, and 0 otherwise — where the
  * only claim the row supports is "the venue reported at most `commission`".
- * That is a deliberate downgrade of what this doc claimed when the charge was
- * additive: under `max` the two components are not separable from one number,
- * and separating them exactly needs a `fills` column, whose backfill for
+ * Under `max` the two components are not separable from one number, and
+ * separating them exactly needs a `fills` column, whose backfill for
  * pre-fix live rows is genuinely ambiguous (`fee = 0` with `commission = c`
  * subtracts to `−c`, which was never anybody's report).
  *
@@ -2052,8 +1985,8 @@ function modelledEntryCostFor(position: OpenPosition): ModelledEntryCost | null 
  * `alpaca-order-normalization.ts` reports `fee: 0`, so the leg is charged
  * NOTHING and the lot is under-charged by a whole exit commission — the case
  * that holds for the soak, and observed on 1 of the 3 live closes in the soak
- * DB the #1121 round-1 review read (not re-read here; the soak store is not in
- * the repo). `saxo-adapter.ts` reports `price * qty * SAXO_COMMISSION_RATE` on
+ * DB (not re-verified here; the soak store is not in the repo). `saxo-adapter.ts`
+ * reports `price * qty * SAXO_COMMISSION_RATE` on
  * EVERY leg, so under Saxo the leg does pay a commission and the residual is
  * no longer a commission at all — it collapses to a PRICE-BASIS difference,
  * venue at the fill price against the control's modelled cost at submit-time

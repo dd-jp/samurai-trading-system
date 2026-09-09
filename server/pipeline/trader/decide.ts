@@ -8,9 +8,9 @@
  * runs live and in replay; only the injected Clock and the data behind
  * MarketDataService differ.
  *
- * Cosine precedent retrieval (#75) is wired in here as of #432; before that
- * this module hardcoded the no-precedent default on every intent, which meant
- * a permanent 0.75x haircut on every position the system ever took.
+ * Cosine precedent retrieval (#75) is wired in here — removing this wiring
+ * silently reverts every intent to the no-precedent default, a permanent
+ * 0.75x haircut on every position the system takes.
  */
 import {
   type Bar,
@@ -29,13 +29,12 @@ import {
   totalHeldQuantity,
 } from '../../shared/index.js';
 // TYPE-only, and from the defining module rather than the debate-engine
-// barrel, for the reason the deleted `floorToBar` import used to state: the
-// barrel pulls the whole engine's module graph into the Trader path. A type
-// import is erased at compile time, so this adds no runtime edge — and it is
-// deliberately the ONLY thing this module now takes from the debate engine.
-// The bar grid (`floorToBar`, `DEBATE_BAR_TIMEFRAME_MS`) used to be imported
-// here as values so the Trader could re-derive the decision bar; it no longer
-// is, because the Trader no longer derives it (#687).
+// barrel: the barrel pulls the whole engine's module graph into the Trader
+// path, and a type import is erased at compile time, so this is deliberately
+// the ONLY thing this module takes from the debate engine. This module does
+// not re-derive the decision bar — it takes the bar coordinate from
+// `DebateResult`. Do not import `floorToBar` or `DEBATE_BAR_TIMEFRAME_MS`
+// here to recompute it (#687).
 import type { DebateResult } from '../debate-engine/types.js';
 // #1089: the ONE typed dependency this otherwise risk-manager-free module
 // takes, and only for `instanceof` discrimination (coding-standards.md
@@ -84,8 +83,7 @@ export function mostRecentOpenLot(positions: readonly OpenPosition[]): OpenPosit
  * `computeIndicator`'s `params.period ?? spec.lookback` fallback — with
  * `spec.lookback` being the BAR-WINDOW width (see below, matching
  * `DEFAULT_VOLATILITY_INDICATOR`), that fallback would silently make this an
- * ATR(`lookback`+1-ish), the exact off-by-one commit 0281a8c already had to
- * fix once.
+ * off-by-one ATR(`lookback`+1-ish) rather than the intended ATR(`lookback`).
  *
  * `lookback` sits on the CONVERGED warm-up (`recommendedWarmupFor` =
  * `4 x lookback + 1`), not the `lookback + 1` arity floor (#757,
@@ -232,8 +230,7 @@ interface FlattenWindowVerdict {
  * change: `remaining <= flatten_before_close_ms` was already true for every
  * negative `remaining`, so a past close has always meant "flatten". The branch
  * exists because that was reached by accident of a comparison rather than by
- * decision, and reviewers twice reasoned about it wrongly — including the first
- * cut of this very change.
+ * decision.
  *
  * Flattening IS the right answer, which is why the branch only restates it.
  * `sessionEnd <= now` says the session has already ended, and the response to
@@ -242,13 +239,12 @@ interface FlattenWindowVerdict {
  * "inside the window", so nothing new opens. A permanently-wrong calendar
  * therefore parks the book flat and stops trading — a halt, but a safe one.
  *
- * The two alternatives are both worse, and both were tried. Returning FALSE
- * would decline to flatten while the market is shut, which is the overnight
- * carry #668 exists to prevent. THROWING was this change's first cut, and
- * review killed it: this check is the FIRST branch of the held-position path,
- * so a throw takes the whole decision down on every tick — including the
- * direction-flip exit two branches below — stranding exposure the system could
- * then neither flatten nor exit.
+ * The two alternatives are both worse. Returning FALSE would decline to
+ * flatten while the market is shut, which is the overnight carry #668 exists
+ * to prevent. THROWING is also wrong: this check is the FIRST branch of the
+ * held-position path, so a throw takes the whole decision down on every
+ * tick — including the direction-flip exit two branches below — stranding
+ * exposure the system could then neither flatten nor exit.
  *
  * **Audibility is what #698 added, and it did not change any answer above.**
  * A calendar this broken should raise an alert, and `TraderInput` still carries
@@ -329,10 +325,9 @@ function withinFlattenWindow(
   // implementations enforce `close > instant` — so a conforming calendar cannot
   // reach this branch. Reaching it means the calendar is broken, overridden, or
   // has been handed a clock that runs ahead of it. Not "an ordinary tick just
-  // after the bell", which an earlier version of this comment claimed and which
-  // sent a reviewer looking for a grace threshold the alert must not have
-  // (#710). The adapter's repeat throttle bounds the NOISE of a condition that
-  // persists; it is not a confidence filter on the first one.
+  // after the bell" — there is no grace threshold here, and the alert must not
+  // have one (#710). The adapter's repeat throttle bounds the NOISE of a
+  // condition that persists; it is not a confidence filter on the first one.
   if (remaining < 0) {
     return {
       within: true,
@@ -364,24 +359,20 @@ function withinFlattenWindow(
  * `floorToBar` nor `DEBATE_BAR_TIMEFRAME_MS`, and re-deriving the coordinate
  * would take a new import a reviewer can see.
  *
- * ## Two earlier shapes, and why each failed
+ * ## Never derive it from a mark or a clock read
  *
- * It was first `mark.observed_at`. In backtest that is a real bar coordinate
- * (`deriveBacktestMark` derives it from the bar); **in paper and live it is the
- * venue's latest-quote wire timestamp at millisecond resolution** — Alpaca's
- * `quote.t`, and the same shape in the ccxt and IBKR sources. The mark cache
- * cannot bridge ticks (`markTtlMs` defaults to 5s against a 15-minute tick), so
- * the key changed on every pass and every key-based dedup layer was inert in
- * production at once: local `findByKey`, the `open_positions` primary key
- * backstop, and the broker `client_order_id`. The backtest path kept the
- * invariant looking held, which is why no test caught it (#616).
- *
- * #616 then floored `clock.now()` here. That is stable within a bar, but it is
- * a SECOND clock read: it agreed with the debate's only while both landed in
- * the same bar. A debate that straddles an hour boundary — LLM round-trips,
- * retries, a latency-budget timeout — was logged at bar N and keyed at bar N+1,
- * and bar N+1's own genuine decision then computed the key the straddling
- * intent had already taken and was suppressed as a duplicate (#687).
+ * `mark.observed_at` is not a bar coordinate in paper/live: it is the venue's
+ * latest-quote wire timestamp at millisecond resolution (Alpaca's `quote.t`,
+ * same shape in ccxt/IBKR), so it changes on every tick and silently defeats
+ * every key-based dedup layer at once — local `findByKey`, the
+ * `open_positions` primary key backstop, the broker `client_order_id` — while
+ * backtest (where `deriveBacktestMark` derives it from the bar) keeps the
+ * invariant looking held, so no test catches it (#616). A fresh `clock.now()`
+ * read is stable within a bar but is a SECOND clock: it agrees with the
+ * debate's own bar only while both land in the same one, and a debate that
+ * straddles an hour boundary (LLM round-trips, retries, a latency-budget
+ * timeout) gets keyed one bar later than it was decided, colliding with that
+ * next bar's own genuine decision (#687).
  *
  * ## What is consequently NOT decided here any more
  *
@@ -401,16 +392,11 @@ function withinFlattenWindow(
  * the bar containing `created_at`, so it stays a usable marker in
  * `trader_log` that tells a straddle apart from an ordinary tick.
  *
- * It stopped being a fail-safe as of #1190, undisclosed there and stated
- * here: Verdict's staleness gate used to read `decision_timestamp` and so
- * caught a straddling intent as stale (bar N read against wall-clock N+1) —
- * "refusing a late intent beats corrupting the next bar's key". #1190 moved
- * that gate to `OrderIntent.decided_at`, `clock.now()` read fresh at the
- * point this function's caller builds the intent, regardless of which bar
- * the debate that produced it started in. A straddling intent now reads
- * exactly as fresh as an ordinary one and passes the gate. Whether a
- * straddle-specific bound should be added back is open — tracked as an open
- * question on #1190, not decided here.
+ * `decision_timestamp` is NOT a staleness gate: Verdict's staleness check
+ * reads `OrderIntent.decided_at` (`clock.now()`, read fresh at the point this
+ * function's caller builds the intent), so a straddling intent passes that
+ * gate exactly as an ordinary one would (#1190). Whether a straddle-specific
+ * bound belongs there is open, tracked on #1190 — not decided here.
  */
 function decisionBarFor(debate: DebateResult): Date {
   return debate.bar_timestamp;
@@ -553,12 +539,12 @@ async function buildBracket(
     marketData.getBars(
       instrument,
       // CONVERGED width (#757): `recommendedWarmupFor` = `4 x atr_lookback + 1`.
-      // Until #757 this fetched exactly `atr_lookback + 1` bars — one true
-      // range past the seed, so `computeIndicator`'s Wilder smoothing loop ran
-      // ZERO times and the value was a plain mean wearing Wilder's name (the
-      // same warm-up gap #722 fixed for `RSI_SPEC`). Measured before adopting:
-      // median relative shift 3.0%, p90 6.9%, near-zero signed bias, against a
-      // declared median<=15%/p90<=30% gate — see
+      // Fetching only `atr_lookback + 1` bars — one true range past the seed —
+      // leaves `computeIndicator`'s Wilder smoothing loop running ZERO times,
+      // so the value becomes a plain mean wearing Wilder's name (the same
+      // warm-up gap #722 fixed for `RSI_SPEC`). Measured before adopting the
+      // wider window: median relative shift 3.0%, p90 6.9%, near-zero signed
+      // bias, against a declared median<=15%/p90<=30% gate — see
       // `docs/reviews/indicator-characterisation-2026-08-16.md` F1.
       //
       // Two tests pin the two halves, and neither pins the other's:
@@ -604,18 +590,11 @@ async function buildBracket(
   }
 
   // Bars are still fetched here rather than read through
-  // `marketData.getIndicator`, and #315 changed WHY.
-  //
-  // The old reason is gone: `IndicatorSpec` now carries a timeframe and
-  // `getIndicator` builds its window from it, so routing through the serving
-  // layer would no longer silently pin ATR to 1h.
-  //
-  // The remaining reason is what a SHORT window should do, and it is narrower
-  // than it first looks. `computeIndicator` throws `InsufficientBarsError`
-  // below `minimumBarsFor(spec)` and `getIndicator` propagates it, so routing
-  // through the serving layer would NOT silently reprice stops off an
-  // under-seeded ATR — it would fail loudly (PR #461 review corrected an
-  // earlier version of this comment that claimed otherwise).
+  // `marketData.getIndicator`. `computeIndicator` throws
+  // `InsufficientBarsError` below `minimumBarsFor(spec)` and `getIndicator`
+  // propagates it, so routing through the serving layer would fail loudly on
+  // a short window rather than silently repricing stops off an under-seeded
+  // ATR.
   //
   // What differs is the disposition. `atrFor` catches the shortfall itself and
   // returns null, which `decide()` turns into "skip this instrument this
