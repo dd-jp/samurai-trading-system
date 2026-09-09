@@ -62,7 +62,7 @@ describe('formatArmDivergenceAlert', () => {
     const text = formatArmDivergenceAlert(ALERT);
 
     expect(text).toContain('Window 2026-08-02T00:00:00.000Z → 2026-09-01T00:00:00.000Z');
-    expect(text).toContain('basis £1000.00 (the same denominator for both arms)');
+    expect(text).toContain('basis $1000.00 (the same denominator for both arms)');
   });
 
   it("carries the cycle's own reason sentence, so alert and dashboard cannot disagree", () => {

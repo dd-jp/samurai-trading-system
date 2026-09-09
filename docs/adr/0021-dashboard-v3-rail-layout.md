@@ -46,3 +46,11 @@ Two computed figures are new to the client and are computed there deliberately, 
 - **The two other design directions** drawn alongside the Rail (a top-bar variant and a denser single-page variant). Rejected in grilling; the rail's persistence of health across tabs was the deciding read.
 - **Keep the replay motion inside the lane matrix** (cells lighting in sequence). Rejected: ADR-0011's value was the chip's walk between rooms; a cell that lights up on the poll that recorded it is already what a repaint does, and keeping a motion layer for that keeps the reduced-motion branch, the `transitionend` chaining and the mid-walk-poll cancellation for no visible gain.
 - **Render the mockup's £30 / 3-position / flat-by-close limits from client constants.** Rejected: the client would be asserting limits the runtime does not enforce on a live-money surface. If those limits are wanted on screen they arrive on the wire from the component that enforces them.
+
+## Amendment — 2026-09-09: the arm comparison's `basis` is USD, and the card labels it `$` ([#1180](https://github.com/dd-jp/samurai-trading-system/issues/1180))
+
+The Context section above records one exception to the "USD everywhere" rule: *"figures stay in the wire's own denomination — USD everywhere except the arm comparison's `basis`, which the Feedback Loop reports in GBP and the card labels as such."* **That exception is gone.** #1180 converted the Trader's sizing inlet and the Feedback Loop's denominator to the account's currency (`LIVE_BOOK_GBP * SIZING_USD_PER_GBP`), so `ArmComparisonRow.basis` is now a USD figure and `ReviewTab`'s arm card renders it with `formatUsd` — `$`, like every other cash figure on the page.
+
+The layout decision is untouched: the rule was, and remains, that the client renders the wire's own denomination and never converts. Only the wire moved. `docs/specs/dashboard-spec.md`'s "Visual source of truth" section already says this; the sentence above is the one an implementer would otherwise have followed back to a `£`.
+
+The declared book is still £1,000 (ADR-0015's 2026-08-18 amendment). The conversion is the sizing inlet's, not a re-denomination of the book, and the live-money currency guard (`same_currency_verified`, `risk-manager/types.ts`) is deliberately left refusing — see #1180 for why a static rate must not reach that gate.

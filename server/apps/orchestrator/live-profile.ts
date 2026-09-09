@@ -95,29 +95,30 @@ import type { ProductionConfig } from './production.js';
  * message, a doc comment and a credential pre-flight, and a typo in any of them
  * would send an operator looking for a variable that does not exist.
  *
- * **#949, flagged rather than fixed: this is USD-denominated against a
- * GBP book.** `LIVE_BOOK_GBP` (paper-profile.ts) — the £1,000 ADR-0015's
- * 2026-08-18 amendment declares — and this ceiling are two different numbers
- * in two different currencies, and nothing in this file or `direct-bind.ts`
- * converts between them; `min(ceiling, equity)` at `sizingEquity` compares
- * whatever numeric value the operator typed here against `portfolio.equity`
- * as returned by the broker, with no FX step at all. An operator who sets
- * `SAMURAI_LIVE_MAX_CAPITAL_USD=1000` meaning "match the £1,000 book" has
- * actually declared a ceiling denominated in a different currency than the
- * account it bounds — right only by coincidence, if the number happened to be
- * chosen in GBP terms already, wrong by whatever the prevailing USD/GBP rate
- * is otherwise. The variable name says USD, the value is compared unconverted
- * against a GBP-denominated account, and no test in this repo catches a
- * mismatched pair. #888 (closed, PR #948) did not fix this — it was flagged
- * out of scope there and carried forward as #949, which also covers the two
- * newer instances of the same mismatch #888's own fix introduced
- * (`liveBookCeiling` and `equity_ceiling` in risk-manager/index.ts). There is
- * no FX-rate provider anywhere in this codebase to convert with, and bolting
- * one on to resolve a single boot-time comparison is a bigger change than any
- * one of these tickets' scope. Left as an explicit, named gap — the operator
- * must currently choose this ceiling's VALUE in GBP terms themselves, despite
- * the USD name, until either the env var is renamed/redenominated or an FX
- * conversion is added here.
+ * **This is DECLARED in the account's currency, and #1180 left it that way
+ * deliberately.** `LIVE_BOOK_GBP` (paper-profile.ts) — the £1,000 ADR-0015's
+ * 2026-08-18 amendment declares — is a GBP figure; this ceiling is whatever
+ * number the operator typed, compared by `min(ceiling, equity)` at
+ * `sizingEquity` against `portfolio.equity` as the broker returns it. #1180
+ * converted the one place a GBP CONSTANT reached that comparison (paper's
+ * `capitalCeilingUsd`, now `LIVE_BOOK_SIZING_USD`); this path has no constant
+ * to convert, because the value is the operator's own and is asked for in the
+ * account's currency by name.
+ *
+ * What that leaves the operator: an operator who means "match the £1,000
+ * book" must type the CONVERTED figure — `LIVE_BOOK_SIZING_USD` is that
+ * number at `SIZING_USD_PER_GBP`, and a live run's boot log
+ * (`sizing_capital_ceiling_resolved`, production.ts) records this ceiling as
+ * declared rather than derived precisely so the two are never confused.
+ * Converting here instead would mean silently redenominating a number the
+ * operator chose, which is the last thing that may happen to the one figure
+ * they assert personally.
+ *
+ * The two risk-manager guards #888's fix introduced (`liveBookCeiling` and
+ * `equity_ceiling`, risk-manager/index.ts) still refuse to compare their GBP
+ * `book` against USD equity — permanently by design, not pending this
+ * ticket; see `same_currency_verified` (risk-manager/types.ts) for why a
+ * static rate cannot arm a percentage-point funding test.
  */
 export const LIVE_MAX_CAPITAL_ENV_VAR = 'SAMURAI_LIVE_MAX_CAPITAL_USD';
 

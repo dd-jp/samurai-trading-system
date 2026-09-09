@@ -1,5 +1,10 @@
+import { copyFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import BetterSqlite3 from 'better-sqlite3';
 import type { ClosedTrade, TradingArm } from '../../shared/index.js';
 import { openSharedStore, type SharedStore } from '../../shared/store/index.js';
+import { listMigrations, MIGRATIONS_DIR, runMigrations } from '../../shared/store/migrate.js';
 import { toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 import { SqliteArmComparisonSource } from './sqlite-arm-comparison-source.js';
 
@@ -122,6 +127,56 @@ describe('SqliteArmComparisonSource.getClosedTradesBetween — #1112 AC5 regime 
     const source = new SqliteArmComparisonSource(db);
 
     expect(source.getClosedTradesBetween(from, to)).toHaveLength(2);
+  });
+
+  /**
+   * #1180: the conversion of the sizing inlet would otherwise have made every
+   * window straddling it read as two declared ceilings — pre-conversion rows
+   * at the raw GBP book, post-conversion rows at `LIVE_BOOK_SIZING_USD` —
+   * and this guard would throw on a book that never moved. Migration 0052
+   * normalizes the older stamp, and this asserts that through the real reader
+   * rather than against the migration's own UPDATE: it is the throw here that
+   * the backfill exists to prevent.
+   *
+   * Built on a raw DB migrated to 51 and then forward, because a store opened
+   * at HEAD applies 0052 before a pre-conversion row can exist to be
+   * normalized.
+   */
+  it('does not throw over a window straddling the #1180 conversion, once 0052 has run', () => {
+    const raw = new BetterSqlite3(':memory:');
+    const preCutoverVersion = 51;
+    const preCutoverDir = mkdtempSync(join(tmpdir(), 'samurai-arm-comparison-pre-1180-'));
+    try {
+      for (const migration of listMigrations(MIGRATIONS_DIR)) {
+        if (migration.version <= preCutoverVersion) {
+          copyFileSync(
+            join(MIGRATIONS_DIR, migration.filename),
+            join(preCutoverDir, migration.filename),
+          );
+        }
+      }
+      runMigrations(raw, preCutoverDir);
+
+      const db = raw as unknown as SharedStore;
+      seed(db, makeTrade({ idempotency_key: 'pre-conversion' }), 'live', 1000);
+
+      runMigrations(raw, MIGRATIONS_DIR);
+
+      seed(
+        db,
+        makeTrade({
+          idempotency_key: 'post-conversion',
+          closed_at: new Date('2026-07-18T21:00:00Z'),
+        }),
+        'control',
+        1270,
+      );
+
+      expect(new SqliteArmComparisonSource(db).getClosedTradesBetween(from, to)).toHaveLength(2);
+    } finally {
+      raw.close();
+      rmSync(preCutoverDir, { recursive: true, force: true });
+    }
   });
 });
 

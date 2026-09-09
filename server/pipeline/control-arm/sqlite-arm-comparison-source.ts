@@ -244,13 +244,14 @@ function modelledCostCharged<Row extends { modelled_cost_charged: 0 | 1 }>(
  * uncaught exit) — loud, but not fatal to the process.
  *
  * `sizing_capital_ceiling` carries no currency suffix (#949): it is whatever
- * raw value `ProductionConfig.capitalCeilingUsd` held when a row was written,
- * unconverted, so "different regimes" here means "different declared-ceiling
- * VALUES", not necessarily different currencies. When #1180 adds FX
- * conversion, today's `1000` rows and that change's converted rows become a
- * THIRD case — two distinct non-null ceilings, so this throws — even though
- * the book never moved. #1180 owns backfilling the stamp; this guard cannot
- * tell that apart from a real mid-window book change.
+ * value `ProductionConfig.capitalCeilingUsd` held when a row was written, so
+ * "different regimes" here means "different declared-ceiling VALUES", not
+ * necessarily different currencies. #1180's FX conversion would have been
+ * exactly that third case — pre-conversion `1000` rows against converted
+ * `1270` rows, throwing on every straddling window even though the book never
+ * moved — so it shipped migration 0052 to normalize the stamp instead. This
+ * guard could not have told that apart from a real mid-window book change;
+ * the fix belongs in the writer's history, not in a special case here.
  */
 function oneSizingRegime<Row extends { sizing_capital_ceiling: number | null }>(
   rows: readonly Row[],

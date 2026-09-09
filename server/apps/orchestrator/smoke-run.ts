@@ -290,7 +290,7 @@ import { installFaultHandlers, runEntrypointLogRetention, startFromEnvironment }
 import { buildEntrypointLogger, JsonLogger, type StdoutStream } from './logger.js';
 import {
   buildStartingProfileConfigs,
-  LIVE_BOOK_GBP,
+  LIVE_BOOK_SIZING_USD,
   paperStartingProfile,
 } from './paper-profile.js';
 import type { DataFailoverAlert } from './production/data-failover.js';
@@ -3571,7 +3571,7 @@ function readPublishedLlmCap(db: SqliteHandle): {
 }
 
 /** Drives the shipped arm-comparison cycle over the smoke run's own store. */
-function runArmComparisonProbe(db: SqliteHandle): ArmComparisonEvidence {
+export function runArmComparisonProbe(db: SqliteHandle): ArmComparisonEvidence {
   let alerts = 0;
   const samples = new SqliteArmComparisonSampleStore(db);
   const sample = runArmComparisonCycle({
@@ -3583,7 +3583,7 @@ function runArmComparisonProbe(db: SqliteHandle): ArmComparisonEvidence {
         alerts += 1;
       },
     },
-    basis: LIVE_BOOK_GBP,
+    basis: LIVE_BOOK_SIZING_USD,
     window_ms: DEFAULT_ARM_COMPARISON_WINDOW_MS,
     thresholds: DEFAULT_ARM_DIVERGENCE_THRESHOLDS,
   });
@@ -4856,6 +4856,20 @@ export function evaluateSmokeGate(
         `${configuredCeiling} — \`production.ts\` stopped passing \`config.capitalCeilingUsd\` ` +
         'into `new SqliteExecutionStore(...)`, so a `closed_trades` window could once again ' +
         'silently mix rows sized under two different equity bases (#1112)',
+    );
+  }
+
+  // #1112 AC3, and #1180's conversion with it: the comparison's denominator
+  // and the Trader's sizing denominator are ONE value. Split them and
+  // `return_pct` is a return on capital nothing was sized against — the
+  // reading that made both figures wrong when the ceiling became a converted
+  // USD figure and the basis stayed at the raw GBP book.
+  if (configuredCeiling !== undefined && arms.comparison.basis !== configuredCeiling) {
+    failures.push(
+      `the arm comparison divided both arms by ${arms.comparison.basis} while this run sized ` +
+        `against ${configuredCeiling} — the Feedback Loop's basis and the Trader's capital ` +
+        'ceiling have come apart, so every persisted `return_pct` is measured against capital ' +
+        'the arms were never sized on (#1112 AC3, #1180)',
     );
   }
 
@@ -6393,16 +6407,17 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // asserts that throw directly (#1152) — this comment only covers the
       // "never even asked" half.
       ...profile,
-      // #1112: `profile.traderConfig` now sizes against `LIVE_BOOK_GBP`
-      // (£1,000, via `capitalCeilingUsd`) rather than this run's
+      // #1112: `profile.traderConfig` now sizes against the declared book
+      // (£1,000 at `SIZING_USD_PER_GBP`, via `capitalCeilingUsd`, #1180)
+      // rather than this run's
       // `FixedAccountStateProvider` balance (100,000) — that gap between the
       // sizing basis and the fixture's account balance is exactly the defect
       // #1112 fixes. The shared profile's crypto risk multiplier was tuned
-      // against the OLD, ~100x-inflated sizing basis: at the corrected £1,000
-      // ceiling, this fixture's ATR (~9.53, from the fixed +/-2 high/low
-      // spread `buildSmokeFixtureBars` uses) makes the organic entry size
-      // 0.17 BTC, which `whole_share_sizing` floors to zero and the run never
-      // transacts. Bumped for THIS OFFLINE RUN ONLY, enough to clear the
+      // against the OLD, ~100x-inflated sizing basis: at the corrected
+      // $1,270 ceiling, this fixture's ATR (~9.53, from the fixed +/-2
+      // high/low spread `buildSmokeFixtureBars` uses) makes the organic entry
+      // size ~0.22 BTC, which `whole_share_sizing` floors to zero and the run
+      // never transacts. Bumped for THIS OFFLINE RUN ONLY, enough to clear the
       // whole-share floor with one BTC of headroom below the crypto exposure
       // cap (`per_asset_class_cap_fraction_of_equity.crypto`) at this
       // fixture's $160 mark — not tuned to hit any particular notional, and

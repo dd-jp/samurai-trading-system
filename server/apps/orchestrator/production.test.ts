@@ -83,7 +83,7 @@ import {
   X_SEARCH_MODEL,
 } from '../../providers/market-intelligence/index.js';
 import type { ClosedTrade, OrderIntent, TradingArm } from '../../shared/index.js';
-import { SimulatedClock, TokenBucket } from '../../shared/index.js';
+import { currentTraceId, SimulatedClock, TokenBucket } from '../../shared/index.js';
 import type { NousCredentials } from '../../shared/llm/index.js';
 import { DEFAULT_NOUS_MODELS } from '../../shared/llm/index.js';
 import {
@@ -97,7 +97,7 @@ import { LLM_SPEND_CAP_BREACH } from './breach-alert-channel.js';
 import { LoggingBreachAlertChannel, UnwiredApprovalChannel } from './console-channels.js';
 import { DebateBarDecisionGate } from './decision-bar-gate.js';
 import { FILL_SYNC_TRACE_ID, RECONCILE_TRACE_ID } from './fill-sync.js';
-import { LIVE_BOOK_GBP, paperStartingProfile } from './paper-profile.js';
+import { LIVE_BOOK_GBP, LIVE_BOOK_SIZING_USD, paperStartingProfile } from './paper-profile.js';
 import {
   CONTROL_FILL_SYNC_TRACE_ID,
   CONTROL_RECONCILE_TRACE_ID,
@@ -1178,6 +1178,72 @@ describe('buildProductionComponents', () => {
       expect(() => buildProductionComponents(config)).toThrow(/capitalCeilingUsd/);
     },
   );
+
+  /**
+   * #1180: `sizing_capital_ceiling_resolved` is the run's ONLY record of which
+   * rate produced the ceiling every position is sized against, and it is what
+   * makes a constant defensible where an env var was refused — a soak's log is
+   * where the pairing is checked. Nothing asserted it: the whole emitting block
+   * could be deleted and every other gate stayed green.
+   *
+   * Both cases are here because either alone is satisfiable by a literal.
+   * `derived_by_conversion: config.capitalCeilingUsdPerGbp !== undefined` reads
+   * `true` under a hard-coded `true` if only the paper branch is pinned, and a
+   * live ceiling stamped with a rate it was never converted at is precisely the
+   * misattribution the field exists to prevent.
+   *
+   * The expectations come off `config` — the object actually handed to the
+   * composition root — not off a second `paperStartingProfile('paper')` call,
+   * for the reason the #1112 AC3 test below spells out: re-deriving both sides
+   * from one source makes the assertion hold for any ceiling the running config
+   * happens to carry.
+   */
+  it('logs the resolved sizing ceiling with the rate that produced it (#1180)', () => {
+    const logger = recordingLogger();
+    const profile = paperStartingProfile('paper');
+    // Spread conditionally under `exactOptionalPropertyTypes`: a profile that
+    // stopped declaring either field leaves it ABSENT here rather than
+    // explicitly `undefined`, and the assertions then fail on the real shape.
+    const config = stubConfig(db, {
+      logger,
+      ...(profile.capitalCeilingUsd === undefined
+        ? {}
+        : { capitalCeilingUsd: profile.capitalCeilingUsd }),
+      ...(profile.capitalCeilingUsdPerGbp === undefined
+        ? {}
+        : { capitalCeilingUsdPerGbp: profile.capitalCeilingUsdPerGbp }),
+    });
+
+    buildProductionComponents(config);
+
+    const entry = logger.entries.find((line) => line.event === 'sizing_capital_ceiling_resolved');
+    expect(entry).toBeDefined();
+    expect(entry?.message).toContain('USD/GBP');
+    expect(entry?.payload).toEqual({
+      capital_ceiling_usd: config.capitalCeilingUsd,
+      derived_by_conversion: true,
+      usd_per_gbp: config.capitalCeilingUsdPerGbp,
+      usd_per_gbp_provenance: expect.stringContaining('SIZING_USD_PER_GBP'),
+    });
+  });
+
+  it('logs a ceiling declared in the account currency as derived by nothing (#1180)', () => {
+    const logger = recordingLogger();
+    const config = stubConfig(db, { logger, capitalCeilingUsd: 2_000 });
+
+    buildProductionComponents(config);
+
+    const entry = logger.entries.find((line) => line.event === 'sizing_capital_ceiling_resolved');
+    expect(entry).toBeDefined();
+    expect(entry?.message).toContain('no FX conversion applied');
+    // `toEqual`, not `toMatchObject`: the absence of a rate is the assertion.
+    // A rate reported against a ceiling nobody converted would attribute a
+    // number to arithmetic that never ran.
+    expect(entry?.payload).toEqual({
+      capital_ceiling_usd: 2_000,
+      derived_by_conversion: false,
+    });
+  });
 
   describe('xMaxSearchResults (#1161)', () => {
     const savedEnv = process.env.SAMURAI_X_MAX_RESULTS;
@@ -4539,8 +4605,8 @@ describe('buildProductionOrchestrator', () => {
      *
      * Both halves of that are load-bearing, and each one alone is a test that
      * cannot fail. `production.ts`'s `runArmComparison` closes over the
-     * `LIVE_BOOK_GBP` module constant directly for `basis` — it does not read
-     * `config.capitalCeilingUsd` at all — so:
+     * `LIVE_BOOK_SIZING_USD` module constant directly for `basis` — it does
+     * not read `config.capitalCeilingUsd` at all — so:
      *
      * - The expectation must be read off `config`, the object actually handed
      *   to `buildProductionOrchestrator`, not re-derived from a second
@@ -4548,7 +4614,7 @@ describe('buildProductionOrchestrator', () => {
      *   are the module constant and the assertion holds for any ceiling the
      *   running config carries, `undefined` included.
      * - The config's ceiling must come from the PROFILE, not from an inline
-     *   `LIVE_BOOK_GBP` literal here. `stubConfig` (which `feedbackOnlyConfig`
+     *   `LIVE_BOOK_SIZING_USD` literal here. `stubConfig` (which `feedbackOnlyConfig`
      *   builds on) declares no ceiling of its own, so an inline literal pins
      *   two references to one constant and survives `paperStartingProfile`
      *   dropping `capitalCeilingUsd` entirely — the #1112 defect itself.
@@ -7932,6 +7998,61 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
   });
 
   /**
+   * #1180 — the anchor's FALLBACK is in the account's currency too, pinned at
+   * the composition root.
+   *
+   * `control-account-state.test.ts` passes `fallbackBook` in, so it holds for
+   * whatever the caller hands it and cannot see which value `production.ts`
+   * actually wires. Reverting that argument to `LIVE_BOOK_GBP` therefore left
+   * the whole suite green: the control arm would have anchored at 1,000
+   * against a live arm clamped to the 1,270 ceiling — the scale mismatch the
+   * anchor exists to avoid — with nothing to fail.
+   *
+   * The live provider is made to throw only under the CONTROL trace: the live
+   * arm's own Risk stage reads the same provider (`direct-bind.ts`), so a stub
+   * that always threw would take the live tick down and this case would be
+   * measuring an aborted tick instead of the fallback.
+   */
+  it('falls back to the converted book, not the raw GBP one, when the live account is unreadable (#1180)', async () => {
+    await runOneDecisionPass({
+      handle: db,
+      llmClient: llmForOneDebate(),
+      configOverrides: {
+        accountState: {
+          getAccountState: async () => {
+            if (currentTraceId()?.endsWith(':control') === true) {
+              throw new Error('live account unreadable on this tick');
+            }
+            return {
+              cash: 100_000,
+              peak_equity: 100_000,
+              daily_basis: {
+                crypto: { known: true, open_equity: 100_000, realized_pnl: 0 },
+                stocks: { known: true, open_equity: 100_000, realized_pnl: 0 },
+                portfolio: { known: true, open_equity: 100_000, realized_pnl: 0 },
+              } as const,
+              consecutive_losses: 0,
+            };
+          },
+        },
+      },
+    });
+
+    const control = db
+      .prepare('SELECT equity FROM risk_log WHERE trace_id = ?')
+      .get('trace-753:control') as { equity: number } | undefined;
+    // Flat at Risk time, so the control's equity IS the resolved book.
+    expect(control?.equity).toBe(LIVE_BOOK_SIZING_USD);
+    // #972 fix 2: the fallback is this tick's answer and never the persisted
+    // anchor. Its absence also proves the read really did fail — a successful
+    // read writes this row.
+    const anchor = db
+      .prepare('SELECT peak_equity FROM account_state WHERE key = ?')
+      .get(CONTROL_BOOK_ANCHOR_KEY) as { peak_equity: number } | undefined;
+    expect(anchor).toBeUndefined();
+  });
+
+  /**
    * AC2, first half: on the same bar, over the same tape, the two arms' stop
    * and target are IDENTICAL — because both are computed by the same
    * `decide.ts` from the same `TraderConfig` and the same
@@ -8045,9 +8166,9 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
    * Scale-invariance (the "scales the requested size with the declared
    * ceiling" case below) passes even if every size this fix produces is off
    * by a constant factor — which is exactly what finding 2 of that review
-   * found: `capitalCeilingUsd` carries a GBP value into paper with no FX
-   * step, so the effective book is ~21% under what `LIVE_BOOK_GBP` declares.
-   * A ratio test cannot see that. This one pins the single-stock entry's
+   * found, and #1180 then fixed: `capitalCeilingUsd` used to carry a GBP
+   * value into paper with no FX step, ~21% under what `LIVE_BOOK_GBP`
+   * declares. A ratio test cannot see that. This one pins the single-stock entry's
    * NOTIONAL to ADR-0018 D5's formula against the declared ceiling, on both
    * arms, through the armed `subclass_of` path (not the pre-D3 `atr_k`
    * fallback) so it exercises the geometry the live system will actually run
@@ -8228,9 +8349,10 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
    * No local paper-soak history exists at the corrected sizing to replay
    * "today's control-arm session" against, and inventing a `return_pct`
    * number would be worse than not answering. The defect was never in
-   * `production.ts`'s `basis` — it hardcodes `LIVE_BOOK_GBP` regardless of
-   * this bug (see the AC3 case above) — it was in the Trader's sizing
-   * numerator: `capitalCeilingUsd` was `undefined` for paper, so every
+   * `production.ts`'s `basis` — it hardcodes the declared book (converted to
+   * the account's currency since #1180) regardless of this bug (see the AC3
+   * case above) — it was in the Trader's sizing numerator:
+   * `capitalCeilingUsd` was `undefined` for paper, so every
    * notional, and therefore every trade's realized pnl, ran ~100x too large
    * relative to the declared book. `return_pct = pnl / basis`
    * (`buildArmComparison`) with a FIXED, correct `basis` therefore reports a

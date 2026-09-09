@@ -67,9 +67,10 @@
  * 3. **Currency.** The book is GBP and the simulated fills are priced in the
  *    instrument's own currency, exactly the mismatch `RiskConfig.live_book_ceiling`
  *    documents for the live arm (which compares a GBP book against a USD
- *    Alpaca equity). No FX provider exists in this codebase; the arm
- *    comparison already divides both arms by `LIVE_BOOK_GBP` for the same
- *    reason. Nothing here makes that worse, and it is not this ticket's to fix.
+ *    Alpaca equity). #1180 converted the sizing inlet and the arm comparison's
+ *    basis; the simulated fills' own currency is untouched, and it is a
+ *    denominator both arms share, so it moves neither against the other.
+ *    Nothing here makes that worse, and it is not this ticket's to fix.
  * 4. **The starting book is the live arm's equity at first boot, not the
  *    declared £1,000.** A matched control has to start at the same capital as
  *    the arm it is matched against. Since #1112, both arms' Trader-ask sizing
@@ -314,7 +315,9 @@ export interface ControlBookAnchorResolverInput {
   /** Keyed to `CONTROL_BOOK_ANCHOR_KEY` — never the live arm's `'default'` row. */
   store: BookAnchorStore;
   /**
-   * `LIVE_BOOK_GBP` (or `config.riskConfig.live_book_ceiling?.book`). Used
+   * `LIVE_BOOK_SIZING_USD` (or `config.riskConfig.live_book_ceiling?.book`) —
+   * the declared book in the ACCOUNT's currency, since this stands in for an
+   * unreadable account equity (#1180). Used
    * only when the live observation is unusable — and, per #972 fix 2, used
    * for THAT TICK'S return value only. It is never handed to
    * `store.anchorEquity`: `anchorEquity` is first-write-wins, so persisting
@@ -327,7 +330,8 @@ export interface ControlBookAnchorResolverInput {
   /**
    * #972 fix 3 — the SAME `RiskConfig['live_book_ceiling']` the fallback
    * above is already resolved through (`fallbackBook` at the composition root
-   * is `config.riskConfig.live_book_ceiling?.book ?? LIVE_BOOK_GBP`). Without
+   * is `config.riskConfig.live_book_ceiling?.book ?? LIVE_BOOK_SIZING_USD`).
+   * Without
    * this, the primary (live-read) anchor path read `max(cash, peak_equity)`
    * off the live account UNCAPPED while the fallback path was already capped
    * — so the anchor and the live arm's own sizing basis could diverge

@@ -163,11 +163,17 @@ export const PAPER_PROFILE_PROVENANCE = {
   // field's own comment for the arithmetic.
   maxConcurrentInstruments: 'DERIVED',
   universe: 'SPEC',
-  // #1112: `LIVE_BOOK_GBP` itself — ADR-0015's 2026-08-18 amendment's £1,000
-  // book, the same literal the arm comparison's `basis` (production.ts,
-  // smoke-run.ts) is stated against. Not DERIVED: nothing here computes it,
-  // it is pinned to the one already-decided figure.
-  capitalCeilingUsd: 'SPEC',
+  // #1112: ADR-0015's 2026-08-18 amendment's £1,000 book, the same figure the
+  // arm comparison's `basis` (production.ts, smoke-run.ts) is stated against.
+  // DERIVED since #1180: it is that book multiplied by `SIZING_USD_PER_GBP`,
+  // because the equity it clamps is USD-denominated. The BOOK is the spec
+  // value; this is an arithmetic expression of it.
+  capitalCeilingUsd: 'DERIVED',
+  // #1180 — SPEC in the sense the provenance vocabulary means: a chosen
+  // figure, not one computed here. See `SIZING_USD_PER_GBP` for the
+  // provenance of the number itself and for why it is a configured constant
+  // rather than a feed.
+  capitalCeilingUsdPerGbp: 'SPEC',
   'traderConfig.conviction_floor': 'SPEC',
   // #668. SPEC rather than DERIVED: close − 5 minutes is not calculated from
   // anything here, it is the value #657 resolved on 2026-08-09 and ADR-0014's
@@ -415,6 +421,47 @@ export const RISK_CAP_EQUITY_FRACTIONS = {
  * re-introduced static constant.
  */
 export const LIVE_BOOK_GBP = 1_000;
+
+/**
+ * USD per GBP — the rate `LIVE_BOOK_GBP` is converted at before it may be
+ * compared against a USD-denominated `portfolio.equity` (#1180).
+ *
+ * The direction is in the name because getting it backwards is the same bug
+ * class this constant exists to close: £1,000 becomes $1,270, never $787.
+ *
+ * **A configured constant, not a feed, and the reason is the migration.**
+ * #1180's decision requires the converted ceiling to be backfilled over the
+ * rows migration 0045 already stamped, and a `.sql` migration can only carry a
+ * literal. A literal is provably the value the runtime stamps only while the
+ * rate ships in the same commit as the migration that normalizes it, which an
+ * env-var or a live feed cannot promise. Changing this value is therefore a
+ * declared-sizing-regime change: it owes its own backfill migration, exactly as
+ * moving `LIVE_BOOK_GBP` would (see `oneSizingRegime`,
+ * `server/pipeline/control-arm/sqlite-arm-comparison-source.ts`).
+ *
+ * Provenance: 1.27 is the rate #1180 and #949 both state the ~21% shortfall
+ * against, carried forward unchanged rather than re-picked, so the fix is
+ * measured against the same number the defect was. It is a mid-2026 spot level,
+ * not a hedge — a rate this stale is fit for sizing (a rate error is a
+ * proportional sizing error) and NOT for a funding comparison against a 5%
+ * tolerance, which is why the two risk-manager guards stay refused (see
+ * `RiskConfig['live_book_ceiling']`, `server/pipeline/risk-manager/types.ts`).
+ *
+ * A future live FX feed replaces this constant with a rate resolved at the
+ * composition root and passed as `ProductionConfig.capitalCeilingUsdPerGbp`,
+ * which is already the field the value travels through.
+ */
+export const SIZING_USD_PER_GBP = 1.27;
+
+/**
+ * `LIVE_BOOK_GBP` in the currency `portfolio.equity` is denominated in — the
+ * one converted quantity that reaches the Trader's sizing inlet (#1180).
+ *
+ * Exactly 1,270 in IEEE-754 (`1_000 * 1.27` is not a repeating product), which
+ * is what lets migration 0052 normalize the stamped ceiling with an equality
+ * predicate. `paper-profile.test.ts` pins it.
+ */
+export const LIVE_BOOK_SIZING_USD = LIVE_BOOK_GBP * SIZING_USD_PER_GBP;
 
 /**
  * #888's backstop: how far funded equity may drift above `LIVE_BOOK_GBP`
@@ -2570,6 +2617,7 @@ export function paperStartingProfile(
     | 'verdictConfig'
     | 'executionConfig'
     | 'capitalCeilingUsd'
+    | 'capitalCeilingUsdPerGbp'
     | 'correlationConfig'
     | 'breakerConfig'
     | 'costConfig'
@@ -2620,10 +2668,11 @@ export function paperStartingProfile(
     // Trader sizes off the simulated balance directly — ~100x the book —
     // which is the defect #1112 reports. `capitalCeilingUsd` is the SAME
     // clamp `liveStartingProfile()` sets from `SAMURAI_LIVE_MAX_CAPITAL_USD`;
-    // here it is pinned to `LIVE_BOOK_GBP` itself rather than to an
+    // here it is pinned to the declared book itself rather than to an
     // independently-configured value, so paper's sizing denominator and the
-    // arm comparison's `basis` are provably the same literal, not two
-    // constants that happen to agree.
+    // arm comparison's `basis` are provably the same expression, not two
+    // constants that happen to agree — which is why #1180's conversion had to
+    // move both together.
     //
     // `buildControlArmWiring` (control-arm-wiring.ts) spreads the live arm's
     // `TraderStepDeps` verbatim into the control arm's, so this one line
@@ -2636,20 +2685,25 @@ export function paperStartingProfile(
     // and #1112 does not ask that path to change; widening the blast radius
     // there is a separate decision.
     //
-    // **#949, carried into paper by this line: `capitalCeilingUsd` is a GBP
-    // value here, unconverted.** `LIVE_BOOK_GBP` is £1,000; `sizingEquity`
-    // (direct-bind.ts) does `Math.min(ceiling, equity)` against `equity` as
-    // the paper Alpaca account (USD) reports it, with no FX step — the same
-    // gap `live-profile.ts` already documents for `SAMURAI_LIVE_MAX_CAPITAL_USD`
-    // against a real USD account, now also live on THIS path. The practical
-    // effect: paper's declared "£1,000" book clamps at $1,000, which is
-    // roughly £790 at a ~1.27 USD/GBP rate — about 21% under the book this
-    // profile claims to size against. Left unconverted deliberately, same as
-    // #949: there is no FX-rate provider in this codebase, and paper's
-    // purpose is proving the clamp reaches the Trader at all (#1112), not
-    // proving it reaches the exact right number. Fixing the rate is #949's
-    // job, not this ticket's.
-    ...(mode === 'paper' ? { capitalCeilingUsd: LIVE_BOOK_GBP } : {}),
+    // **#1180: CONVERTED. The ceiling is a USD figure because the equity it
+    // clamps is one.** `sizingEquity` (direct-bind.ts) does
+    // `Math.min(ceiling, equity)` against `equity` as the paper Alpaca
+    // account reports it — USD. Passing `LIVE_BOOK_GBP` raw made the declared
+    // £1,000 book clamp at $1,000, ~£790 at `SIZING_USD_PER_GBP`, ~21% under
+    // the book this profile claims to size against (#949 flagged it, #1180
+    // ruled it not accepted). `LIVE_BOOK_SIZING_USD` is the one converted
+    // quantity, and the rate that produced it travels alongside it in
+    // `capitalCeilingUsdPerGbp` below so the two cannot be read apart.
+    //
+    // The field is not renamed: on a live run it holds
+    // `SAMURAI_LIVE_MAX_CAPITAL_USD`, already USD and never converted, so a
+    // `_gbp` suffix would be wrong on the other half of the modes.
+    ...(mode === 'paper'
+      ? {
+          capitalCeilingUsd: LIVE_BOOK_SIZING_USD,
+          capitalCeilingUsdPerGbp: SIZING_USD_PER_GBP,
+        }
+      : {}),
     // #1112 follow-up — DERIVED from ADR-0018 D5, paper only: `backtest`
     // keeps `configs.traderConfig` verbatim, same scoping rationale as
     // `capitalCeilingUsd` above (backtest's cost-model calibration reads

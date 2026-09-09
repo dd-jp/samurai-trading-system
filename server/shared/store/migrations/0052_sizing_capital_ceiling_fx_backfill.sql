@@ -1,0 +1,59 @@
+-- Normalize migration 0045's `sizing_capital_ceiling` stamp to the converted
+-- ceiling (#1180, David's 2026-09-08 decision).
+--
+-- ## What changed above this migration
+--
+-- `paperStartingProfile('paper')` used to set `capitalCeilingUsd:
+-- LIVE_BOOK_GBP` — a GBP figure clamped against Alpaca's USD-denominated
+-- `portfolio.equity`, ~21% under the declared book. It now sets
+-- `LIVE_BOOK_SIZING_USD` (`LIVE_BOOK_GBP * SIZING_USD_PER_GBP` = 1_270), and
+-- `SqliteExecutionStore` stamps that onto every row it writes from here on.
+--
+-- ## Why the old rows are rewritten rather than left
+--
+-- `oneSizingRegime` (server/pipeline/control-arm/sqlite-arm-comparison-source.ts)
+-- refuses a window whose rows carry two distinct non-null ceilings, because
+-- averaging two declared books into one `return_pct` compares incomparable
+-- notional scales. Without this UPDATE, every window straddling the
+-- conversion would throw — and it would be wrong to read that as a book
+-- change, because THE BOOK NEVER MOVED: £1,000 before, £1,000 after, only its
+-- expression in the account's currency changed. Rewriting the stamp is the
+-- truthful record of that, and it costs one migration; the alternative is a
+-- standing footnote on every future reading of the period.
+--
+-- 0045's rule survives unchanged: only EQUALITY over this column is
+-- meaningful. Backfilling restores equality — it does not license ordering or
+-- averaging, and the pre-conversion rows were genuinely sized against a
+-- $1,000 clamp, which is what makes ordering over the column meaningless
+-- rather than merely unhelpful.
+--
+-- ## Why an equality predicate on a REAL column is safe here
+--
+-- Both sides are integer-valued: `1_000 * 1.27` is exactly 1270 in IEEE-754
+-- (no repeating binary product), pinned by `paper-profile.test.ts`, and 1000
+-- is the literal the pre-conversion profile stamped. No row carries a rounded
+-- or accumulated value in this column — the writer copies
+-- `ProductionConfig.capitalCeilingUsd` verbatim.
+--
+-- ## What `= 1000` can and cannot match
+--
+-- Only rows stamped by a run whose declared ceiling was exactly 1000, which
+-- since 0045 means the paper profile's unconverted GBP book (live and control
+-- arms alike — both arms' stores are built from the same
+-- `config.capitalCeilingUsd`). A live run declaring
+-- `SAMURAI_LIVE_MAX_CAPITAL_USD=1000` would also match, and would be rewritten
+-- wrongly; no live run has ever executed (live money is gated on ADR-0017,
+-- and `SAMURAI_MODE=live` refuses on the shipped host), so no such row exists
+-- to rewrite. Stated rather than assumed, because the predicate cannot tell
+-- the two apart on its own.
+--
+-- ## When this must happen again
+--
+-- Moving `SIZING_USD_PER_GBP` is a declared-sizing-regime change and owes its
+-- own backfill migration, exactly as moving `LIVE_BOOK_GBP` would. That is why
+-- the rate is a code constant shipping with this file rather than an env var:
+-- a `.sql` migration can only carry a literal, and the literal is provably the
+-- runtime's stamp only while the two ship together.
+
+UPDATE open_positions SET sizing_capital_ceiling = 1270 WHERE sizing_capital_ceiling = 1000;
+UPDATE closed_trades SET sizing_capital_ceiling = 1270 WHERE sizing_capital_ceiling = 1000;

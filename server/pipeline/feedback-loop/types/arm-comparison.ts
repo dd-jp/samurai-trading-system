@@ -132,9 +132,10 @@ export interface ArmComparisonCycleInput {
   samples: ArmComparisonSampleStore;
   alerts: ArmDivergenceAlertChannel;
   /**
-   * The denominator BOTH arms are divided by — the declared book
-   * (`LIVE_BOOK_GBP`), never live equity, which is a per-arm quantity and would
-   * make the two `return_pct` figures incomparable.
+   * The denominator BOTH arms are divided by — the declared book in the
+   * account's currency (`LIVE_BOOK_SIZING_USD` since #1180, matching the
+   * broker-reported `realized_pnl_net` above it), never live equity, which is a
+   * per-arm quantity and would make the two `return_pct` figures incomparable.
    */
   basis: number;
   /** How far back the comparison window reaches from `clock.now()`. */

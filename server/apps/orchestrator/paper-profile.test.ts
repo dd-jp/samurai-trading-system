@@ -32,7 +32,13 @@ import { openSharedStore } from '../../shared/store/index.js';
 import { SAXO_COMMISSION_RATE, SqliteStage2SelectionStore } from '../../tools/backtest/index.js';
 import { REQUIRED_INJECTED_CONFIG } from './index.js';
 import { liveStartingProfile } from './live-profile.js';
-import { LIVE_BOOK_GBP, paperStartingProfile, subclassOfUniverse } from './paper-profile.js';
+import {
+  LIVE_BOOK_GBP,
+  LIVE_BOOK_SIZING_USD,
+  paperStartingProfile,
+  SIZING_USD_PER_GBP,
+  subclassOfUniverse,
+} from './paper-profile.js';
 import { SqliteDailyEquityMetricsSource } from './production/daily-equity-metrics-source.js';
 import { BENCHMARK_INSTRUMENTS, DEFAULT_FEEDBACK_INTERVAL_MS } from './production.js';
 import { DEFAULT_UNIVERSE } from './scheduler.js';
@@ -55,7 +61,39 @@ describe('paperStartingProfile', () => {
    * default to `undefined`, or drifted it to some OTHER number, would trip.
    */
   it('sizes paper against the declared book, not funded equity (#1112)', () => {
-    expect(paperStartingProfile('paper').capitalCeilingUsd).toBe(LIVE_BOOK_GBP);
+    expect(paperStartingProfile('paper').capitalCeilingUsd).toBe(LIVE_BOOK_SIZING_USD);
+  });
+
+  /**
+   * #1180: the ceiling is clamped against Alpaca's USD-denominated
+   * `portfolio.equity` by `sizingEquity` (direct-bind.ts), so passing the GBP
+   * book raw made the declared £1,000 book bind at $1,000 — ~£790, ~21%
+   * under. The direction is asserted explicitly because inverting a rate is
+   * the same defect wearing the opposite sign: £1,000 must become $1,270, not
+   * $787.
+   *
+   * `toBe` on an exact 1_270 rather than `toBeCloseTo`: migration 0052
+   * normalizes the pre-conversion stamp with `WHERE sizing_capital_ceiling =
+   * 1000` -> `= 1270`, and that literal is only provably the runtime's stamp
+   * while this product is exact.
+   */
+  it('converts the declared book UP into the account currency (#1180)', () => {
+    expect(SIZING_USD_PER_GBP).toBeGreaterThan(1);
+    expect(LIVE_BOOK_SIZING_USD).toBe(LIVE_BOOK_GBP * SIZING_USD_PER_GBP);
+    expect(LIVE_BOOK_SIZING_USD).toBe(1_270);
+    expect(paperStartingProfile('paper').capitalCeilingUsd).toBeGreaterThan(LIVE_BOOK_GBP);
+  });
+
+  /**
+   * #1180: the rate travels with the ceiling as config so the boot log can
+   * say which rate produced which ceiling — and so a live ceiling, declared
+   * in USD and never converted, is distinguishable from a derived one rather
+   * than being stamped with a rate it never saw.
+   */
+  it('carries the rate the ceiling was converted at, and only where one was applied (#1180)', () => {
+    expect(paperStartingProfile('paper').capitalCeilingUsdPerGbp).toBe(SIZING_USD_PER_GBP);
+    expect(paperStartingProfile('backtest').capitalCeilingUsdPerGbp).toBeUndefined();
+    expect('capitalCeilingUsdPerGbp' in liveStartingProfile(LIVE_BOOK_SIZING_USD)).toBe(false);
   });
 
   /**

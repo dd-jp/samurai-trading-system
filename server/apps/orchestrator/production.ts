@@ -264,7 +264,7 @@ import { orderHeldFirst } from './flatten-tail-priority.js';
 import { Heartbeat } from './heartbeat.js';
 import { JsonLogger } from './logger.js';
 import type { OrphanGoVerdict, OrphanVerdictScanner } from './orphan-verdict-scan.js';
-import { LIVE_BOOK_GBP } from './paper-profile.js';
+import { LIVE_BOOK_SIZING_USD } from './paper-profile.js';
 import { AlpacaAccountStateProvider } from './production/account-state.js';
 import { buildAnalystsStep, composeMarketIntelligence } from './production/analysts-adapter.js';
 // #753: the control arm's own account scalars — see `control-account-state.ts`.
@@ -1184,6 +1184,37 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * that hoisted `breachAlerts` below.
    */
   const logger = config.logger ?? new JsonLogger();
+
+  // #1180 — which rate produced which ceiling, on the stream a soak keeps.
+  // The ceiling is a DERIVED figure on a paper run (a GBP book times a
+  // configured rate) and a declared one on a live run, and the two are
+  // indistinguishable from the number alone. `derived_by_conversion` is the
+  // field that separates them: a live ceiling stamped with a rate it was
+  // never converted at would misattribute the figure.
+  if (ceiling !== undefined) {
+    logger.log({
+      trace_id: 'startup',
+      stage: 'orchestrator',
+      event: 'sizing_capital_ceiling_resolved',
+      level: 'info',
+      message:
+        config.capitalCeilingUsdPerGbp === undefined
+          ? `sizing ceiling ${ceiling}, declared in the account currency — no FX conversion applied`
+          : `sizing ceiling ${ceiling}, converted from a GBP book at ` +
+            `${config.capitalCeilingUsdPerGbp} USD/GBP (SIZING_USD_PER_GBP, a configured ` +
+            'constant — not a live rate feed)',
+      payload: {
+        capital_ceiling_usd: ceiling,
+        derived_by_conversion: config.capitalCeilingUsdPerGbp !== undefined,
+        ...(config.capitalCeilingUsdPerGbp === undefined
+          ? {}
+          : {
+              usd_per_gbp: config.capitalCeilingUsdPerGbp,
+              usd_per_gbp_provenance: 'SIZING_USD_PER_GBP (paper-profile.ts), configured constant',
+            }),
+      },
+    });
+  }
 
   // One broker wire client for the whole root: the order adapter and the
   // account-state provider both talk to Alpaca's Trading API, and two clients
@@ -2358,10 +2389,25 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
         // Gated on `same_currency_verified` exactly like the primary live-read
         // clamp below — an unverified ceiling must not cap one path and leave
         // the other uncapped, or #972 fix 3 reopens itself in that one state.
+        //
+        // #1180: the unverified branch is `LIVE_BOOK_SIZING_USD`, not the raw
+        // GBP book. This value stands in for an unreadable ACCOUNT equity, so
+        // it is denominated in the account's currency for the same reason the
+        // sizing ceiling now is — and, concretely, a 1,000 fallback under a
+        // 1,270 ceiling would make the control arm size off the fallback while
+        // the live arm sized off the ceiling, which is the scale mismatch the
+        // "anchor stays above the ceiling" note below depends on not having.
+        //
+        // Both branches are therefore in the ACCOUNT's currency: a true
+        // `same_currency_verified` asserts the account is denominated in the
+        // book's currency, which is what makes the raw `book` the right figure
+        // there. Nothing sets that flag today and `risk-manager/types.ts` holds
+        // it refused by design, so that branch needs a live FX feed or a
+        // GBP-native adapter (#946) before it is reachable at all.
         fallbackBook:
           config.riskConfig.live_book_ceiling?.same_currency_verified === true
             ? config.riskConfig.live_book_ceiling.book
-            : LIVE_BOOK_GBP,
+            : LIVE_BOOK_SIZING_USD,
         // #972 fix 3 — the same ceiling the fallback above resolves through,
         // applied to the primary live-read anchor path too.
         liveBookCeiling: config.riskConfig.live_book_ceiling,
@@ -3481,7 +3527,13 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
       // The declared book, not live equity: both arms must be divided by the
       // SAME denominator or their two `return_pct` figures are not comparable.
       // Same choice `report-arm-comparison.ts` makes, for the same reason.
-      basis: LIVE_BOOK_GBP,
+      //
+      // Converted (#1180), and it has to be: the numerator is `realized_pnl_net`
+      // as the broker reports it — USD — and #1112's AC3 pins this denominator
+      // to the Trader's sizing ceiling so the two resolve from ONE source
+      // (`production.test.ts`). Both arms share it, so the conversion moves the
+      // SCALE of `return_pct` and never a comparison between the arms.
+      basis: LIVE_BOOK_SIZING_USD,
       window_ms: DEFAULT_ARM_COMPARISON_WINDOW_MS,
       thresholds: DEFAULT_ARM_DIVERGENCE_THRESHOLDS,
     });

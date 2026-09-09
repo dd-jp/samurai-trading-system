@@ -168,7 +168,11 @@ export interface ArmComparisonRow {
   computed_at: string;
   window_from: string;
   window_to: string;
-  /** The denominator BOTH arms were divided by (`LIVE_BOOK_GBP` today), in GBP. */
+  /**
+   * The denominator BOTH arms were divided by — the declared book in the
+   * account's currency (`LIVE_BOOK_GBP * SIZING_USD_PER_GBP` today, #1180),
+   * matching `realized_pnl_net` above it.
+   */
   basis: number;
   live: ArmPerformanceWire;
   control: ArmPerformanceWire;
@@ -221,8 +225,8 @@ export type OutsideBenchmarkWire = 'spy' | 'sixty_forty';
  *    verdict, so no renderer can give it the arm panel's alert treatment;
  *  - **no `trade_count`** — SPY is held, not traded;
  *  - **no `realized_pnl_net` and no `basis`** — the benchmark has no account and
- *    made nobody any money, and carrying a basis would invite a £ figure to be
- *    multiplied out of a percentage nobody earned;
+ *    made nobody any money, and carrying a basis would invite a cash figure to
+ *    be multiplied out of a percentage nobody earned;
  *  - **no `arm`** — it is not a third arm.
  *
  * ## `buy_and_hold_return_pct`, NOT `return_pct`

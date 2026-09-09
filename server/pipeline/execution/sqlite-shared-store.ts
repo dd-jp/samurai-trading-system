@@ -266,12 +266,14 @@ export class SqliteExecutionStore implements SharedStore {
    * which is exactly why it defaults to `undefined` rather than to a
    * sentinel number.
    *
-   * Carries whatever value `ProductionConfig.capitalCeilingUsd` held,
-   * unconverted — a real USD figure on a live run, a GBP figure
-   * (`LIVE_BOOK_GBP`) on a paper run since this ticket, with no FX step
-   * either way (#949). The column this stamps (`sizing_capital_ceiling`) is
-   * named without a currency suffix for the same reason: it records the
-   * declared ceiling's value, not a claim about its unit.
+   * Carries whatever value `ProductionConfig.capitalCeilingUsd` held: a
+   * declared USD figure on a live run, and since #1180 a CONVERTED one on a
+   * paper run (`LIVE_BOOK_SIZING_USD`, the GBP book times
+   * `SIZING_USD_PER_GBP`) where it used to be the raw GBP book. Migration
+   * 0052 normalized the rows stamped before that conversion, so equality over
+   * the column still holds across the change. The column
+   * (`sizing_capital_ceiling`) is named without a currency suffix because it
+   * records the declared ceiling's value, not a claim about its unit.
    */
   private readonly sizingCapitalCeiling: number | undefined;
 

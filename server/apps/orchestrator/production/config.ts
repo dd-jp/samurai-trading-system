@@ -793,6 +793,24 @@ export interface ProductionConfig extends AlertChannelSlots {
    */
   capitalCeilingUsd?: number;
   /**
+   * The USD-per-GBP rate `capitalCeilingUsd` above was CONVERTED at, when it
+   * was converted at all (#1180).
+   *
+   * Present means the ceiling is a derived figure: a GBP book
+   * (`LIVE_BOOK_GBP`) multiplied by this rate, which is what
+   * `paperStartingProfile('paper')` sets. Absent means the ceiling was
+   * declared in the account's own currency and no rate was applied —
+   * `liveStartingProfile`'s `SAMURAI_LIVE_MAX_CAPITAL_USD`, and every
+   * backtest/test that declares a ceiling directly. The distinction is the
+   * point: a boot log that stamped a rate onto a ceiling nobody converted
+   * would misattribute the figure.
+   *
+   * Carried as config rather than read from the constant at each use site so
+   * a composition root — a future live FX feed's, or a test's — can supply
+   * the rate the ceiling it also supplies was actually built from.
+   */
+  capitalCeilingUsdPerGbp?: number;
+  /**
    * Whether the market-intelligence sentiment agent runs (D2, review
    * 2026-08-06). Defaults from `SAMURAI_SENTIMENT` (`off` disables, anything
    * else runs it) — the same option-with-env-default idiom every other

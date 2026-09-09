@@ -20,8 +20,8 @@ import type { ArmPerformance } from '../../pipeline/control-arm/index.js';
 import type { ReconcileDivergence } from '../../pipeline/execution/index.js';
 import { computeIndicator } from '../../providers/market-data-service/index.js';
 import { GUARDED_THRESHOLD_NAMES } from '../../shared/index.js';
-import { STAGE_OWNED_TABLES } from '../../shared/store/index.js';
-import { LIVE_BOOK_GBP } from './paper-profile.js';
+import { openSharedStore, STAGE_OWNED_TABLES } from '../../shared/store/index.js';
+import { LIVE_BOOK_GBP, LIVE_BOOK_SIZING_USD } from './paper-profile.js';
 import {
   type AnalystFailureCauseEvidence,
   type ApprovalFallbackEvidence,
@@ -48,6 +48,7 @@ import {
   type OutsideBenchmarkEvidence,
   type PromptTierWarningEvidence,
   type RiskCriticEvidence,
+  runArmComparisonProbe,
   runSmoke,
   type SizingCeilingEvidence,
   SMOKE_GDELT_EXPECTED_AGGREGATES,
@@ -325,7 +326,7 @@ function healthyGateOptions(
     outsideBenchmarks: overrides.outsideBenchmarks ?? healthyOutsideBenchmarks(),
     feedbackCycleScheduleWritten: overrides.feedbackCycleScheduleWritten ?? true,
     sizingCeiling: {
-      configuredCeiling: LIVE_BOOK_GBP,
+      configuredCeiling: LIVE_BOOK_SIZING_USD,
       rows: 1,
       allMatchConfiguredCeiling: true,
       ...overrides.sizingCeiling,
@@ -383,7 +384,7 @@ function healthyArmComparison(
     comparison: {
       from: ARM_WINDOW_FROM,
       to: ARM_WINDOW_TO,
-      basis: 1_000,
+      basis: LIVE_BOOK_SIZING_USD,
       live: arm('live'),
       control: arm('control'),
     },
@@ -2752,6 +2753,42 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
       const gate = evaluateSmokeGate(transactedObservations(), healthyGateOptions());
 
       expect(gate.failures.filter((failure) => failure.includes('arm-comparison'))).toEqual([]);
+    });
+
+    it('fails when the basis and the run’s sizing ceiling are different numbers (#1112 AC3)', () => {
+      const healthy = healthyArmComparison();
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({
+          armComparison: healthyArmComparison({
+            comparison: {
+              ...healthy.comparison,
+              // The #1180 regression exactly: the ceiling converts and the
+              // basis stays at the raw GBP book.
+              basis: LIVE_BOOK_GBP,
+            },
+          }),
+        }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('divided both arms by');
+    });
+
+    /**
+     * The gate branch above reads evidence, so it holds for whatever basis the
+     * caller reports; this is the half that pins what the shipped probe
+     * actually passes to `runArmComparisonCycle` (#1180). Over an empty store
+     * — a zero-trade comparison is a real measurement, which is why the probe
+     * needs no fixture trades here.
+     */
+    it('drives the shipped cycle at the converted sizing ceiling (#1180)', () => {
+      const db = openSharedStore(':memory:');
+      try {
+        expect(runArmComparisonProbe(db).comparison.basis).toBe(LIVE_BOOK_SIZING_USD);
+      } finally {
+        db.close();
+      }
     });
   });
 
