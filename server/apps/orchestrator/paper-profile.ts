@@ -2624,6 +2624,17 @@ export function paperStartingProfile(
    * run does not trade. See `startingProfileForMode` (index.ts).
    */
   universe?: readonly UniverseInstrument[],
+  /**
+   * The currency the account this profile sizes against actually reports, and
+   * therefore the currency `capitalCeilingUsd` must be stated in (#1400 round
+   * 1). Omitted is `'USD'` — every shipped Alpaca run — so an absent argument
+   * reproduces the profile byte for byte.
+   *
+   * `SAMURAI_BROKER=saxo` is the one caller that supplies `'GBP'`: its
+   * `accountState` is a GBP-native read (#949 refuses anything else), so the
+   * converted ceiling would clamp the declared £1,000 book at £1,270.
+   */
+  bookCurrency: 'USD' | 'GBP' = 'USD',
 ): Pick<ProductionConfig, 'mode'> &
   Pick<
     ProductionConfig,
@@ -2715,11 +2726,22 @@ export function paperStartingProfile(
     // The field is not renamed: on a live run it holds
     // `SAMURAI_LIVE_MAX_CAPITAL_USD`, already USD and never converted, so a
     // `_gbp` suffix would be wrong on the other half of the modes.
+    //
+    // **#1400 round 1: a GBP-NATIVE account takes the book raw.** #1180 is not
+    // reversed — it ruled on the Alpaca USD account, where the equity being
+    // clamped is USD and the ceiling therefore must be too. The invariant it
+    // established is that the ceiling is stated in the currency of the equity
+    // `sizingEquity` clamps; a GBP account satisfies that invariant with
+    // `LIVE_BOOK_GBP` itself. `capitalCeilingUsdPerGbp` is OMITTED rather than
+    // set to 1: it is the field the startup log reads to announce a
+    // conversion, and on this path there is none to announce.
     ...(mode === 'paper'
-      ? {
-          capitalCeilingUsd: LIVE_BOOK_SIZING_USD,
-          capitalCeilingUsdPerGbp: SIZING_USD_PER_GBP,
-        }
+      ? bookCurrency === 'GBP'
+        ? { capitalCeilingUsd: LIVE_BOOK_GBP }
+        : {
+            capitalCeilingUsd: LIVE_BOOK_SIZING_USD,
+            capitalCeilingUsdPerGbp: SIZING_USD_PER_GBP,
+          }
       : {}),
     // #1112 follow-up — DERIVED from ADR-0018 D5, paper only: `backtest`
     // keeps `configs.traderConfig` verbatim, same scoping rationale as

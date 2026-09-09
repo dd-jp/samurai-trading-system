@@ -35,6 +35,15 @@
  * - **A universe this venue does not trade.** The adapter routes by
  *   `lse_ticker`; anything else has no Uic, and an instrument that silently
  *   drops out of the resolver reads as a pool gap rather than a wiring one.
+ *
+ * ## NOT REACHABLE FROM `main()` TODAY, and that is deliberate
+ *
+ * The entrypoint supplies no `accountState` — no GBP-native account read
+ * exists in this repo (#946 owns it) — so an operator setting
+ * `SAMURAI_BROKER=saxo` gets the `accountState` refusal above, by design and
+ * not by omission. Everything below is reachable from a PROGRAMMATIC config
+ * that injects one, which is what this branch's tests drive. Do not read the
+ * venue's tests as evidence of an operator boot.
  */
 import type {
   BrokerAdapter,
@@ -216,8 +225,8 @@ export async function buildSaxoBroker(deps: SaxoVenueDeps): Promise<BrokerAdapte
  * `SaxoHttpBrokerClient`'s own default for `production.ts`'s Alpaca reason:
  * the pacing budget belongs to the ACCOUNT, so the composition root owns the
  * one instance and gives it the telemetry that makes a wait on it observable
- * (#1083). `saxo-http-client.ts`'s own doc names this as the thing the
- * composition root does "once Saxo is wired".
+ * (#1083). `saxo-http-client.ts`'s own doc names this function as the bucket
+ * its `telemetry` option never reaches.
  */
 function buildSaxoRateLimiter(logger: Logger): TokenBucket {
   return new TokenBucket(resolveVenuePacing().saxo, undefined, { logger, name: 'saxo' });

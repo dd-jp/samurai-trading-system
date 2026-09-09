@@ -25,7 +25,7 @@ import { MiArchiveStore } from '../../providers/market-intelligence/index.js';
 import type { SharedStore } from '../../shared/store/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { startFromEnvironment, startingProfileForMode } from './index.js';
-import { paperStartingProfile } from './paper-profile.js';
+import { LIVE_BOOK_GBP, LIVE_BOOK_SIZING_USD, paperStartingProfile } from './paper-profile.js';
 import { BROKER_VENUE_ENV_VAR, saxoTradeableUniverse } from './production/saxo-venue.js';
 import type { ProductionConfig, ProductionOrchestrator } from './production.js';
 
@@ -124,16 +124,23 @@ function offlineInjections(db: SharedStore): Partial<ProductionConfig> {
      * REQUIRED by the Saxo venue, not a convenience: Saxo's OpenAPI surface
      * carries no balances endpoint, so without this the venue refuses rather
      * than size a GBP book off Alpaca's USD account (#949).
+     *
+     * The REAL `AccountStateProvider` shape, uncast: a cast fixture here hid
+     * the ceiling defect round 1 found, because an invented `equity`/
+     * `currency` pair reads as a GBP account the sizing path never sees.
      */
     accountState: {
       getAccountState: async () => ({
-        equity: 1_000,
-        cash: 1_000,
-        buying_power: 1_000,
-        currency: 'GBP',
-        as_of: NOW,
+        cash: 1_400,
+        peak_equity: 1_400,
+        daily_basis: {
+          crypto: { known: false, reason: 'crypto is out of scope' },
+          stocks: { known: true, open_equity: 1_400, realized_pnl: 0 },
+          portfolio: { known: true, open_equity: 1_400, realized_pnl: 0 },
+        },
+        consecutive_losses: 0,
       }),
-    } as unknown as NonNullable<ProductionConfig['accountState']>,
+    },
   };
 }
 
@@ -220,6 +227,45 @@ describe('startFromEnvironment (broker venue selection, #1400)', () => {
     // admission of the LSE universe — is where a miswired venue refuses. A tick
     // itself is not asserted: the mark and LLM sides here are fixtures.
     await expect(orchestrator.start()).resolves.toBeDefined();
+  });
+
+  /**
+   * The LSE closes at 16:30 London and `flatten_before_close_ms` is 5 minutes,
+   * so the flatten tail is 16:25-16:30 London. The US cash close is 21:00
+   * London, so the US tail is 20:55-21:00. Either instant alone would pass
+   * under one calendar and fail under the other; both together pin WHICH
+   * calendar the Saxo run resolved without reaching into the scheduler's
+   * private config.
+   */
+  const LSE_FLATTEN_TAIL = new Date('2026-09-09T15:27:00.000Z'); // 16:27 London
+  const US_FLATTEN_TAIL = new Date('2026-09-09T19:57:00.000Z'); // 20:57 London
+
+  it('gates and flattens the Saxo run on the LSE close, not the US close', async () => {
+    const orchestrator = await bootSaxo(fixtureSaxoGateway());
+
+    expect(
+      orchestrator.scheduler.nextTick({ now: () => LSE_FLATTEN_TAIL }).instruments,
+    ).not.toEqual([]);
+    // 4.5 hours of overnight-style carry (#668) is what the US tail would buy
+    // on a book that has been closed since 16:30.
+    expect(orchestrator.scheduler.nextTick({ now: () => US_FLATTEN_TAIL }).instruments).toEqual([]);
+  });
+
+  it('sizes the Saxo run against the GBP book, never the USD-converted ceiling', async () => {
+    const profile = startingProfileForMode('paper', undefined, 'saxo');
+
+    // The account is GBP-native, so the ceiling is the book itself. #1180's
+    // conversion is not reversed — it applies to the Alpaca USD account, and
+    // converting again against a GBP account would clamp £1,000 at £1,270.
+    expect(profile.capitalCeilingUsd).toBe(LIVE_BOOK_GBP);
+    // `in`-narrowed rather than read directly: the live arm of this union has
+    // no such field at all, and the assertion is that the Saxo arm announces
+    // no conversion either.
+    expect(
+      'capitalCeilingUsdPerGbp' in profile && profile.capitalCeilingUsdPerGbp !== undefined,
+    ).toBe(false);
+    // The Alpaca path keeps the converted ceiling, unchanged.
+    expect(startingProfileForMode('paper').capitalCeilingUsd).toBe(LIVE_BOOK_SIZING_USD);
   });
 
   it('leaves the Alpaca paper path in place when the venue is not configured', async () => {

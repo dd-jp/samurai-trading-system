@@ -52,6 +52,7 @@ import {
   ALPACA_CREDENTIAL_ENV_VARS,
   SAXO_CREDENTIAL_ENV_VARS,
 } from '../../pipeline/execution/index.js';
+import { LseRegularHoursCalendar } from '../../providers/market-data-service/index.js';
 import { MiArchiveStore, miArchivePath } from '../../providers/market-intelligence/index.js';
 import { logCaughtFailure, SystemClock } from '../../shared/index.js';
 import {
@@ -798,10 +799,27 @@ export async function startFromEnvironment(
         })
       : undefined;
 
+  // #1400 round 1 — the venue picks the CALENDAR too, not just the adapter.
+  // `equityCalendarFor` resolves `UsEquityRegularHoursCalendar` for every
+  // non-`live` mode, and `live` is the one mode the Saxo venue refuses. Left
+  // unset, a Saxo run would gate entries on New York and take its flatten
+  // tail from the 21:00 London US close — 4.5 hours of overnight-style carry
+  // (#668) on a book that closed at 16:30 — while `LseMarkDataSource`
+  // normalised its bars against London, and #1378's table-coverage guard,
+  // which only arms on an `LseRegularHoursCalendar`, would never run.
+  //
+  // `injected` wins, for `broker`'s reason: a caller that chose a calendar
+  // has chosen, and an environment variable must not override it.
+  const saxoCalendar =
+    venue === 'saxo' && injected.tradingCalendar === undefined
+      ? new LseRegularHoursCalendar()
+      : undefined;
+
   const orchestrator = buildProductionOrchestrator({
     ...alertChannels,
     ...(injected as ProductionConfig),
     ...(saxoBroker === undefined ? {} : { broker: saxoBroker }),
+    ...(saxoCalendar === undefined ? {} : { tradingCalendar: saxoCalendar }),
     logger,
     db,
     miArchive,
@@ -869,7 +887,9 @@ export function startingProfileForMode(
   // the runtime guard for the shipped entrypoint alone.
 ): ReturnType<typeof paperStartingProfile> | LiveStartingProfile {
   if (mode === 'live') return liveStartingProfile(undefined, logger);
-  return paperStartingProfile(mode, venue === 'saxo' ? saxoTradeableUniverse() : undefined);
+  return venue === 'saxo'
+    ? paperStartingProfile(mode, saxoTradeableUniverse(), 'GBP')
+    : paperStartingProfile(mode);
 }
 
 /**
@@ -1123,14 +1143,20 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
     // book) — which would silently zero out every historical bar a backtest
     // replays, with no alert, because the fetch itself would have succeeded.
     // `startFromEnvironment` still resolves `equityCalendarFor`'s LSE default
-    // for `live`, and its hand-entered `UsEquityRegularHoursCalendar` default
-    // for `backtest`, when `tradingCalendar` is omitted (production.ts).
+    // for `live`, an `LseRegularHoursCalendar` for a Saxo paper run (#1400),
+    // and its hand-entered `UsEquityRegularHoursCalendar` default for
+    // `backtest`, when `tradingCalendar` is omitted (production.ts).
+    //
+    // NOT on a Saxo run (#1400): this table is Alpaca's US session calendar,
+    // and injecting it would override the LSE calendar `startFromEnvironment`
+    // resolves for the venue — the override wins there by design.
+    const venue = resolveBrokerVenue();
     const tradingCalendar =
-      mode === 'paper'
+      mode === 'paper' && venue !== 'saxo'
         ? await resolveUsEquitySessionCalendar({ logger: entrypointLogger, now: () => new Date() })
         : undefined;
     const orchestrator = await startFromEnvironment({
-      ...startingProfileForMode(mode, entrypointLogger),
+      ...startingProfileForMode(mode, entrypointLogger, venue),
       logger: entrypointLogger,
       ...(tradingCalendar === undefined ? {} : { tradingCalendar }),
     });
