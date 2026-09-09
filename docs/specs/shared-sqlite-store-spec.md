@@ -228,30 +228,33 @@ CREATE INDEX idx_closed_trades_arm ON closed_trades(arm, closed_at);
 -- may read it; folding it into open_positions would leak the emulation through the seam
 -- and give the lot record a second writer.
 --
--- One table for all four venues because no consumer reads across them: each adapter
+-- One table for both venues because no consumer reads across them: each adapter
 -- loads only `WHERE venue = ?`, and `venue` is in the PK so two adapters can never
 -- collide on a shared client order id. Per-venue column applicability:
---   ccxt   -- all columns; this IS the emulation's state machine.
---   ibkr   -- identity + the three order ids; phase is always 'armed' (the OCA group is
---             the state machine).
---   alpaca -- identity + the three order ids, same as IBKR. Only entry_order_id is read
---             back (the adapter indexes client-order-id -> bracket parent and reaches the
---             children through the parent's legs); both children are written anyway
---             because the submit response carries them.
---   saxo   -- identity + the three order ids, same shape as Alpaca/IBKR. 'saxo' joined
---             the venue set via 0048 (#1032 item 1) -- the live equity leg (ADR-0015,
---             2026-08-30 amendment).
--- The request columns are nullable because the two REHYDRATION paths (Alpaca/IBKR
+--   alpaca -- all columns when the row is alpaca-crypto-emulation's (#586; that
+--             emulation IS the phase state machine), or identity + the three order
+--             ids when the row is alpaca-adapter's native bracket -- only
+--             entry_order_id is read back there (the adapter indexes
+--             client-order-id -> bracket parent and reaches the children through
+--             the parent's legs); both children are written anyway because the
+--             submit response carries them.
+--   saxo   -- identity + the three order ids, same native-bracket shape as
+--             alpaca-adapter's. 'saxo' joined the venue set via 0048 (#1032 item 1)
+--             -- the live equity leg (ADR-0015, 2026-08-30 amendment).
+-- `ccxt`/`ibkr` narrowed out by 0055 (#1459): both left with crypto (2026-08-16) and
+-- the IBKR disqualification (#906), and neither ever had a built adapter.
+-- The request columns are nullable because the two REHYDRATION paths (Alpaca/Saxo
 -- getOrder, which learn of a bracket by asking the venue) legitimately know the order
 -- ids and not the request that produced them; inventing values there would be worse
--- than none. A ccxt row always carries them, being the only venue that re-places legs.
+-- than none. An alpaca-crypto-emulation row always carries them, being the only path
+-- that re-places legs.
 -- phase's CHECK also carries 'submitting' (0017, #312) and 'cancelling_sibling' (0022,
 -- #586), both added before saxo joined and folded in here by #1251.
 CREATE TABLE broker_brackets (
-  venue            TEXT NOT NULL CHECK(venue IN ('ccxt', 'ibkr', 'alpaca', 'saxo')),
+  venue            TEXT NOT NULL CHECK(venue IN ('alpaca', 'saxo')),
   client_order_id  TEXT NOT NULL,    -- same value as open_positions.idempotency_key
   phase            TEXT NOT NULL CHECK(phase IN ('submitting', 'pending_entry', 'arming', 'armed', 'cancelling_sibling', 'resolved')),
-  entry_order_id   TEXT NULL,        -- ccxt entry / IBKR parent / Alpaca bracket parent
+  entry_order_id   TEXT NULL,        -- crypto-emulation entry / native bracket parent
   stop_order_id    TEXT NULL,
   target_order_id  TEXT NULL,
   instrument       TEXT NULL,
@@ -262,9 +265,9 @@ CREATE TABLE broker_brackets (
   stop_price       REAL NULL,        -- live protective levels: named apart on purpose
   target_price     REAL NULL,
   time_in_force    TEXT NULL,
-  armed_qty        REAL NULL,        -- ccxt: quantity the LIVE legs protect
-  arming_qty       REAL NULL,        -- ccxt: quantity the IN-FLIGHT arming episode places
-  arm_attempt      INTEGER NOT NULL DEFAULT 0,  -- ccxt: fixes the leg client-order-id suffix
+  armed_qty        REAL NULL,        -- crypto-emulation: quantity the LIVE legs protect
+  arming_qty       REAL NULL,        -- crypto-emulation: quantity the IN-FLIGHT arming episode places
+  arm_attempt      INTEGER NOT NULL DEFAULT 0,  -- crypto-emulation: fixes the leg client-order-id suffix
   updated_at       TEXT NOT NULL,
   PRIMARY KEY (venue, client_order_id)
 );
@@ -286,9 +289,10 @@ CREATE TABLE broker_brackets (
 -- soak (#238) contains restarts, and an in-process clock would age nothing out. Deleted when
 -- the venue finally prices the fill. Deliberately NOT the retired `broker_observed_fills`,
 -- whose `price` was NOT NULL: an unpriced row on that path is exactly what is being refused.
--- venue's CHECK widened to 'saxo' by 0048, same as broker_brackets above.
+-- venue's CHECK widened to 'saxo' by 0048 and narrowed to drop ccxt/ibkr by 0055
+-- (#1459), same as broker_brackets above both times.
 CREATE TABLE broker_unpriced_fills (
-  venue            TEXT NOT NULL CHECK(venue IN ('ccxt', 'ibkr', 'alpaca', 'saxo')),
+  venue            TEXT NOT NULL CHECK(venue IN ('alpaca', 'saxo')),
   client_order_id  TEXT NOT NULL,
   broker_fill_id   TEXT NOT NULL,
   leg              TEXT NOT NULL CHECK(leg IN ('entry', 'stop', 'target', 'exit')),

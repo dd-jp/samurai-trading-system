@@ -330,14 +330,36 @@ describe('SqliteBrokerStateStore', () => {
       arm_attempt: 0,
     };
 
-    store.saveBracket({ ...base, venue: 'ccxt' });
-    store.saveBracket({ ...base, venue: 'ibkr', entry_order_id: 'e-ibkr' });
+    store.saveBracket({ ...base, venue: 'alpaca' });
     store.saveBracket({ ...base, venue: 'saxo', entry_order_id: 'e-saxo' });
 
-    expect(store.loadBrackets('ccxt')).toHaveLength(1);
-    expect(store.loadBrackets('ibkr')[0]?.entry_order_id).toBe('e-ibkr');
+    expect(store.loadBrackets('alpaca')).toHaveLength(1);
+    expect(store.loadBrackets('alpaca')[0]?.entry_order_id).toBe('e');
+    expect(store.loadBrackets('saxo')).toHaveLength(1);
     expect(store.loadBrackets('saxo')[0]?.entry_order_id).toBe('e-saxo');
-    expect(store.loadBrackets('alpaca')).toEqual([]);
+  });
+
+  it("rejects 'ccxt'/'ibkr' on broker_brackets and broker_unpriced_fills (migration 0055 dropped both venues)", () => {
+    const { db } = openFileStore();
+
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO broker_brackets (venue, client_order_id, phase, arm_attempt, updated_at)
+           VALUES ('ccxt', 'k', 'armed', 0, '2026-09-09T00:00:00.000Z')`,
+        )
+        .run(),
+    ).toThrow(/CHECK constraint failed/);
+
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO broker_unpriced_fills (
+             venue, client_order_id, broker_fill_id, leg, instrument, qty, first_seen_at, last_seen_at
+           ) VALUES ('ibkr', 'k', 'f', 'entry', 'AAPL', 1, '2026-09-09T00:00:00.000Z', '2026-09-09T00:00:00.000Z')`,
+        )
+        .run(),
+    ).toThrow(/CHECK constraint failed/);
   });
 
   it("accepts 'saxo' on broker_unpriced_fills (migration 0048)", () => {
@@ -403,7 +425,7 @@ describe('SqliteBrokerStateStore', () => {
     const store = new SqliteBrokerStateStore(db);
 
     store.saveBracket({
-      venue: 'ibkr',
+      venue: 'saxo',
       client_order_id: 'idem-1',
       phase: 'armed',
       entry_order_id: 'p1',
@@ -416,16 +438,16 @@ describe('SqliteBrokerStateStore', () => {
     });
 
     // The venue has since cancelled the children and no longer reports them.
-    // Blanking the ids would drop them from IBKR's `legs` reverse index on the
-    // next restart, and executions already booked under them would go
+    // Blanking the ids would drop them from the adapter's own order-id index
+    // on the next restart, and executions already booked under them would go
     // unclaimed — #295 reinstated by the fix that was meant to close it.
-    store.recordBracketOrderIds('ibkr', 'idem-1', {
+    store.recordBracketOrderIds('saxo', 'idem-1', {
       entry_order_id: 'p1',
       stop_order_id: null,
       target_order_id: null,
     });
 
-    const [record] = store.loadBrackets('ibkr');
+    const [record] = store.loadBrackets('saxo');
     expect(record?.stop_order_id).toBe('s1');
     expect(record?.target_order_id).toBe('t1');
   });
@@ -434,13 +456,13 @@ describe('SqliteBrokerStateStore', () => {
     const { db } = openFileStore();
     const store = new SqliteBrokerStateStore(db);
 
-    store.recordBracketOrderIds('ibkr', 'idem-1', {
+    store.recordBracketOrderIds('saxo', 'idem-1', {
       entry_order_id: 'p1',
       stop_order_id: null,
       target_order_id: null,
     });
 
-    expect(store.loadBrackets('ibkr')[0]?.request).toBeNull();
+    expect(store.loadBrackets('saxo')[0]?.request).toBeNull();
   });
 });
 
@@ -656,22 +678,22 @@ describe('loadUnpricedFills ordering parity: InMemory vs Sqlite (#1358)', () => 
         seenAt: new Date('2026-09-05T09:00:00Z'),
       },
       {
-        venue: 'ccxt',
-        clientOrderId: 'ccxt-1',
+        venue: 'saxo',
+        clientOrderId: 'saxo-1',
         brokerFillId: 'bf-1',
         seenAt: new Date('2026-09-05T09:01:00Z'),
       },
       { venue: 'alpaca', clientOrderId: 'alpaca-zebra', brokerFillId: 'bf-2', seenAt: tie },
       { venue: 'alpaca', clientOrderId: 'alpaca-apple', brokerFillId: 'bf-3', seenAt: tie },
       {
-        venue: 'ccxt',
-        clientOrderId: 'ccxt-2',
+        venue: 'saxo',
+        clientOrderId: 'saxo-2',
         brokerFillId: 'bf-2',
         seenAt: new Date('2026-09-05T09:03:00Z'),
       },
     ]);
 
     assertBothOrder(stores, 'alpaca', ['alpaca-1', 'alpaca-zebra', 'alpaca-apple']);
-    assertBothOrder(stores, 'ccxt', ['ccxt-1', 'ccxt-2']);
+    assertBothOrder(stores, 'saxo', ['saxo-1', 'saxo-2']);
   });
 });

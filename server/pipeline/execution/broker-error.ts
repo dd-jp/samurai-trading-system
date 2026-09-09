@@ -1,8 +1,8 @@
 /**
  * Credential-safe broker error wrapper.
  *
- * Every broker client this repo injects (ccxt exchanges, Alpaca's REST client,
- * an IBKR/TWS adapter) builds its errors from the failed HTTP exchange — and
+ * Every broker client this repo injects (Alpaca's REST client, Saxo's OpenAPI
+ * client) builds its errors from the failed HTTP exchange — and
  * that exchange carries the API key, in a header, a signed URL or the request
  * body it echoes back. Those errors currently travel unmodified out of an
  * adapter and into `execute()`, which copies `error.message` into
@@ -42,7 +42,7 @@
 import { MAX_ERROR_BODY_CHARS } from '../../shared/index.js';
 
 export class BrokerError extends Error {
-  /** Which adapter failed — 'ccxt' | 'alpaca' | 'ibkr'. */
+  /** Which adapter failed — 'alpaca' | 'saxo'. */
   readonly venue: string;
   /** Which adapter operation failed, e.g. 'submitBracket', 'fetchNewFills'. */
   readonly operation: string;
