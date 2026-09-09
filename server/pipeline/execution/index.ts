@@ -51,6 +51,8 @@ export {
   SaxoBrokerTimeoutError,
 } from './adapters/saxo-broker-errors.js';
 export type {
+  SaxoAssetType,
+  SaxoInstrumentDetails,
   SaxoNetPosition,
   SaxoOpenApiClient,
   SaxoOpenOrder,

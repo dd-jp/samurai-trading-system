@@ -252,11 +252,14 @@ const CEILING_LOOKS_LIKE_UNCONVERTED_BOOK_TOLERANCE = 0.05;
  * input #1180's fix does not touch. See `LIVE_MAX_CAPITAL_ENV_VAR`'s docblock
  * above for why the ceiling is never converted for the operator.
  *
- * **USD-account premise, not permanent.** This only makes sense while the
- * live account is USD-denominated (Alpaca): once the composition root wires
- * a GBP-native Saxo adapter (#1400), `LIVE_BOOK_GBP`'s bare number stops
- * being a plausible typo and becomes the correct figure, and this check must
- * be revisited or dropped — not left warning on a now-correct value.
+ * **USD-account premise, still current.** This only makes sense while the
+ * live account is USD-denominated (Alpaca). #1400 wired a Saxo adapter into
+ * the composition root, but it did not move this premise: the venue is opt-in
+ * (`SAMURAI_BROKER`, unset means Alpaca) and refuses `live` outright, so every
+ * run that reaches this function is still a USD one. Revisit when — and only
+ * when — a GBP-native venue can actually reach live: on that path
+ * `LIVE_BOOK_GBP`'s bare number is the correct figure, not a plausible typo,
+ * and warning on it would be warning on a right answer.
  */
 function ceilingLooksLikeUnconvertedBookGbp(ceilingUsd: number): boolean {
   return (

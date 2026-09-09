@@ -123,12 +123,14 @@ export const TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS = 1_000;
  * re-measurement: no raw soak log survives to replay the real clustering of
  * waits, only the aggregate counts above.
  *
- * The budget assumes ONE telemetry-wired bucket lives per process — true for
- * every long-lived process today: `production.ts`'s shared `'alpaca'` bucket
- * is the only telemetry-wired bucket any long-running process constructs;
- * `saxo-http-client.ts`'s `'saxo'` bucket has no non-test constructor call
- * anywhere in the tree (Saxo execution wiring is built but nothing calls it
- * yet — #946). `place-soak-position.ts`'s one-shot `AlpacaBrokerAdapter`
+ * The budget assumes ONE telemetry-wired bucket lives per process — still true
+ * for every long-lived process today, but no longer by absence: `production.ts`
+ * builds the shared `'alpaca'` bucket and `saxo-venue.ts`'s
+ * `buildSaxoRateLimiter` builds the `'saxo'` one (#1400), and the venues are
+ * MUTUALLY EXCLUSIVE per process — `SAMURAI_BROKER` selects exactly one
+ * adapter, so the two buckets are never telemetry-wired at once. That
+ * exclusivity is what this budget now rests on; a run holding both venues
+ * would need the worst-case note below. `place-soak-position.ts`'s one-shot `AlpacaBrokerAdapter`
  * construction falls back to that same telemetry-wired `'alpaca'` bucket
  * shape (no `rateLimiter` passed in), but it is a short-lived CLI tool
  * process, not a second concurrent holder alongside `production.ts` — the

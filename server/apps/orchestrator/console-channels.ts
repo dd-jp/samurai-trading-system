@@ -28,16 +28,22 @@ import type {
   PromptTierAlertChannel,
 } from '../../pipeline/debate-engine/index.js';
 import type {
+  DormantLegsUnresolvedAlert,
+  DormantLegsUnresolvedAlertChannel,
   FlattenOverfillAlertChannel,
   FlattenOverfillWarning,
   FlattenReconcileAlert,
   FlattenReconcileAlertChannel,
+  LegResizeUnverifiedAlert,
+  LegResizeUnverifiedAlertChannel,
   OcoDoubleFillAlert,
   OcoDoubleFillAlertChannel,
   ResidualExposureAlert,
   ResidualExposureAlertChannel,
   UnpricedFillAlert,
   UnpricedFillAlertChannel,
+  UnresolvedPriceUnitAlert,
+  UnresolvedPriceUnitAlertChannel,
 } from '../../pipeline/execution/index.js';
 import type {
   ArmDivergenceAlert,
@@ -343,6 +349,109 @@ export class LoggingOcoDoubleFillAlertChannel implements OcoDoubleFillAlertChann
         instrument: alert.instrument,
         stop_order_id: alert.stop_order_id,
         target_order_id: alert.target_order_id,
+        observed_at: alert.observed_at.toISOString(),
+      },
+    });
+  }
+}
+
+/**
+ * A partial Saxo entry fill whose protective legs could not be verified as
+ * resized (#1215), written to the log at `error`.
+ *
+ * `error` for `LoggingUnpricedFillAlertChannel`'s reason: the lot may be
+ * sitting under a stop sized to the ORIGINAL amount, so if that stop fires it
+ * over-closes into a reversed position. Nothing downstream resolves it.
+ *
+ * Same caveat as every other stand-in here, and it binds harder for this one:
+ * the adapter REQUIRES this channel with no default of its own precisely
+ * because a log line nobody tails is what the mechanism was built to avoid.
+ * `TradeChannelLegResizeUnverifiedAlert` (saxo-alert-channels.ts) is the
+ * reachable-from-a-phone implementation, selected by `SAMURAI_ALERTS=telegram`.
+ */
+export class LoggingLegResizeUnverifiedAlertChannel implements LegResizeUnverifiedAlertChannel {
+  constructor(private readonly logger: Logger) {}
+
+  async postLegResizeUnverifiedAlert(alert: LegResizeUnverifiedAlert): Promise<void> {
+    this.logger.log({
+      // Same synthetic-trace convention as `oco-double-fill` above: observed
+      // by the fill poll, not by any one tick.
+      trace_id: 'leg-resize-unverified',
+      stage: 'execution',
+      event: 'leg_resize_unverified',
+      level: 'error',
+      message:
+        'a partial entry filled on a venue that cannot confirm its protective legs were ' +
+        'resized — the stop may still be sized to the original amount and would over-close ' +
+        'into a reversed position; check the legs on the venue by hand',
+      payload: {
+        client_order_id: alert.client_order_id,
+        instrument: alert.instrument,
+        requested_qty: alert.requested_qty,
+        filled_qty: alert.filled_qty,
+        observed_at: alert.observed_at.toISOString(),
+      },
+    });
+  }
+}
+
+/**
+ * A dormant Saxo related-order pair the adapter cannot resolve (#1215/#1216),
+ * written to the log at `error`.
+ *
+ * `error`, and repeated: the adapter deliberately does not cancel legs it has
+ * no audit-trail verdict for, so this state does not clear itself — an
+ * operator has to look. Same reachability caveat as
+ * `LoggingLegResizeUnverifiedAlertChannel`.
+ */
+export class LoggingDormantLegsUnresolvedAlertChannel implements DormantLegsUnresolvedAlertChannel {
+  constructor(private readonly logger: Logger) {}
+
+  async postDormantLegsUnresolvedAlert(alert: DormantLegsUnresolvedAlert): Promise<void> {
+    this.logger.log({
+      trace_id: 'dormant-legs-unresolved',
+      stage: 'execution',
+      event: 'dormant_legs_unresolved',
+      level: 'error',
+      message:
+        'a dormant protective-leg pair has no terminal verdict in the venue audit trail — the ' +
+        'legs are left standing rather than cancelled on no evidence; resolve the order by hand',
+      payload: {
+        client_order_id: alert.client_order_id,
+        instrument: alert.instrument,
+        stuck_ms: alert.stuck_ms,
+        observed_at: alert.observed_at.toISOString(),
+      },
+    });
+  }
+}
+
+/**
+ * A priced Saxo fill whose `Uic` resolves to no pool line, so its quote unit
+ * — and therefore its cash — is unknown (#1302), written to the log at
+ * `error`.
+ *
+ * `error`, and this one WEDGES the fill poll: the fill is refused rather than
+ * booked, and `ingestFills` re-drives the same row every poll while nothing
+ * else changes. Same reachability caveat as its two siblings above.
+ */
+export class LoggingUnresolvedPriceUnitAlertChannel implements UnresolvedPriceUnitAlertChannel {
+  constructor(private readonly logger: Logger) {}
+
+  async postUnresolvedPriceUnitAlert(alert: UnresolvedPriceUnitAlert): Promise<void> {
+    this.logger.log({
+      trace_id: 'unresolved-price-unit',
+      stage: 'execution',
+      event: 'unresolved_price_unit',
+      level: 'error',
+      message:
+        'a priced fill arrived for a Uic no pool line resolves, so the quote unit is unknown ' +
+        'and the fill cannot be expressed as cash — it is refused, and every subsequent poll ' +
+        'refuses it again until the pool and the venue agree',
+      payload: {
+        client_order_id: alert.client_order_id,
+        broker_fill_id: alert.broker_fill_id,
+        uic: alert.uic,
         observed_at: alert.observed_at.toISOString(),
       },
     });

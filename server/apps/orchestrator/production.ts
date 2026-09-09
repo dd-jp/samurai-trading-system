@@ -129,6 +129,7 @@ import {
   UNCAPPED_SPEND,
 } from '../../pipeline/debate-engine/index.js';
 import type {
+  AlpacaBrokerClient,
   BrokerAdapter,
   SharedStore as ExecutionSharedStore,
 } from '../../pipeline/execution/index.js';
@@ -1224,8 +1225,19 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // One broker wire client for the whole root: the order adapter and the
   // account-state provider both talk to Alpaca's Trading API, and two clients
   // would mean two token budgets against one account's shared rate limit.
-  const brokerClient =
-    config.alpacaBrokerClient ?? buildDefaultAlpacaBrokerClient(config.mode, logger);
+  //
+  // LAZY since #1400, and memoized so "one client" still holds. It used to be
+  // built unconditionally, on the reasoning that the account-state provider
+  // needs it even when `config.broker` is overridden — true, but only while
+  // `config.accountState` is also defaulted. A run that supplies BOTH (which
+  // is what the Saxo venue requires: Saxo's OpenAPI surface has no balances
+  // endpoint, so `accountState` is mandatory there) reaches neither call
+  // site, and constructing the client anyway made such a run demand
+  // `ALPACA_API_KEY` for a transport it never uses.
+  let alpacaBrokerClient: AlpacaBrokerClient | undefined;
+  const brokerClient = (): AlpacaBrokerClient =>
+    (alpacaBrokerClient ??=
+      config.alpacaBrokerClient ?? buildDefaultAlpacaBrokerClient(config.mode, logger));
 
   // Outbound pacing per venue, from ops config rather than a literal here
   // (#299). Hoisted above the market-data wiring by #391: ONE Alpaca bucket
@@ -1590,7 +1602,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   const broker =
     config.broker ??
     new AlpacaBrokerAdapter({
-      client: brokerClient,
+      client: brokerClient(),
       rateLimiter: alpacaBucket,
       // #287: without a durable bracket index the adapter starts every run
       // blind, and `fetchNewFills` polls nothing for lots that were already
@@ -1666,7 +1678,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     accountState:
       config.accountState ??
       new AlpacaAccountStateProvider({
-        client: brokerClient,
+        client: brokerClient(),
         store: new SqliteAccountStateStore(guardedStore(config.db, 'orchestrator')),
         // Per-class session-open equity snapshots (#332) — the local
         // replacement for Alpaca's blended `last_equity` (GAP-8).

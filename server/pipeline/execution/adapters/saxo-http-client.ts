@@ -78,9 +78,10 @@ export interface SaxoHttpBrokerClientOptions {
    * REQUIRED, no default (#1222 round 2): wires `TokenBucketTelemetry`
    * (#1083) onto the DEFAULT bucket — the fallback for a caller that
    * constructs this client standalone with no `rateLimiter` (the
-   * composition root, once Saxo is wired, builds its own shared bucket with
-   * telemetry the same way `production.ts` does for Alpaca and passes it as
-   * `rateLimiter`, so this option never reaches that path). Made
+   * composition root builds its own shared bucket with telemetry the same way
+   * `production.ts` does for Alpaca and passes it as `rateLimiter` — see
+   * `buildSaxoRateLimiter` (saxo-venue.ts, #1400) — so this option never
+   * reaches that path). Made
    * unconditional rather than optional: the pre-#1222 `SaxoBrokerAdapter`
    * always built its default bucket with telemetry, because its own
    * `logger` was required — an omitted seam at a composition root is this
