@@ -402,8 +402,8 @@ export const SMOKE_GDELT_EXPECTED_ROWS = SMOKE_GDELT_SEEDED_ROWS + 1;
  * derivation is covered by `gdelt-scoring-pass.test.ts` and the composition-
  * root wiring test only. Second, the aggregate this gate observes reaches no
  * analyst that scores it: `fundamentalAnalyst.applies_to` is stocks-only and
- * no other analyst scores `MarketContext.news` (the technical analyst only
- * quotes it into `key_points`), so on a crypto universe the
+ * no other analyst scores `MarketContext.intel` (the technical analyst only
+ * quotes its count into `key_points`, #1164), so on a crypto universe the
  * item is stored and served but never voted on. The gate asserts the pass is
  * CALLED and its item reaches the store — not that an analyst consumed it.
  * Adding an equity leg to the fixture is not the fix: `SMOKE_TEST_UNIVERSE`
@@ -588,7 +588,7 @@ function smokePolymarketClient(): PolymarketClient {
  * `MarketIntelligenceStore.getContext()` floors its window end to the debate
  * bar, so an item stamped at 12:00:00.000 is visible while one stamped at
  * 12:00:00.001 is not until 13:00. Do not nudge this constant off the hour
- * without expecting `news items served: 0` with a row still archived.
+ * without expecting `intel items served: 0` with a row still archived.
  */
 export const SMOKE_RUN_INSTANT = new Date('2026-08-04T12:00:00.000Z');
 
@@ -2904,9 +2904,10 @@ export interface SmokeObservations {
    *
    * BOTH this and `gdeltRowsArchived`, for the reason the Polymarket pair
    * below states: the archive count proves bytes were fetched, and only the
-   * store read proves anything derived from them reached the `news` bucket an
-   * analyst queries. #556 shipped the first half alone for a year, which is
-   * exactly the gap this number closes.
+   * store read proves anything derived from them reached the `intel` bucket
+   * an analyst queries (#1164: class-wide GDELT items route to `intel`, not
+   * `news`). #556 shipped the first half alone for a year, which is exactly
+   * the gap this number closes.
    */
   gdeltAggregateItems: number;
   /**
@@ -2914,13 +2915,14 @@ export interface SmokeObservations {
    * front of `fundamental` (#504).
    *
    * BOTH, deliberately. The archive row proves a fetch happened; only the
-   * store read proves the item reached the `news` bucket the analyst queries —
-   * and the gap between those two claims is where this repo's dominant defect
-   * (a mechanism nothing consumes) lives.
+   * store read proves the item reached the `intel` bucket the analyst queries
+   * (#1164: class-wide Polymarket items route to `intel`, not `news`) — and
+   * the gap between those two claims is where this repo's dominant defect (a
+   * mechanism nothing consumes) lives.
    */
   polymarketRowsArchived: number;
   polymarketItemsArchived: number;
-  polymarketNewsItems: number;
+  polymarketIntelItems: number;
   /**
    * From `cosine_setups` — the row `Trader.decide` writes at decision time
    * (#432). Observed here for `debates`' reason and from the same defect: the
@@ -3044,7 +3046,7 @@ export function readSmokeObservations(
         total +
         (marketIntelligence
           ?.getContext(asset_class, 24 * 60 * 60 * 1000, 'smoke')
-          .news.filter((item) => item.entity === GDELT_MACRO_ENTITY).length ?? 0),
+          .intel.filter((item) => item.entity === GDELT_MACRO_ENTITY).length ?? 0),
       0,
     ),
     polymarketRowsArchived: miArchive?.rawRows(SOURCE_POLYMARKET).length ?? 0,
@@ -3063,10 +3065,11 @@ export function readSmokeObservations(
     // reached this count and no analyst, and the gate stayed green while the
     // whole feed was dark. The ticker is arbitrary — a class-wide item is
     // admitted for any entity, and one filed per entity is admitted for none.
-    polymarketNewsItems:
+    // #1164: class-wide Polymarket items route to `intel`, not `news`.
+    polymarketIntelItems:
       marketIntelligence
         ?.getContext(POLYMARKET_ASSET_CLASS, 24 * 60 * 60 * 1000, 'smoke', undefined, 'SPY')
-        .news.filter((item) => item.source === SOURCE_POLYMARKET).length ?? 0,
+        .intel.filter((item) => item.source === SOURCE_POLYMARKET).length ?? 0,
     // #430. Each of these is a mechanism that was, at some point, fully built,
     // fully unit-tested and called by nothing in production. The table row is
     // the only evidence that a caller exists.
@@ -5913,18 +5916,19 @@ export function evaluateSmokeGate(
         'back to writing raw bytes with no items, which makes it unreplayable as items (#835)',
     );
   }
-  if (observations.polymarketNewsItems !== SMOKE_POLYMARKET_EXPECTED_ITEMS) {
+  if (observations.polymarketIntelItems !== SMOKE_POLYMARKET_EXPECTED_ITEMS) {
     failures.push(
-      `Polymarket put ${observations.polymarketNewsItems} items in the news bucket, expected ` +
+      `Polymarket put ${observations.polymarketIntelItems} items in the intel bucket, expected ` +
         `exactly ${SMOKE_POLYMARKET_EXPECTED_ITEMS} — 0 with rows archived means the items ` +
         'never reached MarketIntelligenceStore, were dropped by the entity filter, or were ' +
         'stamped outside the debate bar the analysts query. This read is ENTITY-SCOPED like ' +
         "every analyst read, so an item that lost `scope: 'asset_class'` reads 0 here with " +
-        'a row archived: filed under a macro series name, it matches no ticker (#914/#960). ' +
-        'Items also carry the INGEST INSTANT (#782), and getContext floors its ' +
-        'window to the hour, so this count depends on SMOKE_RUN_INSTANT being exactly ' +
-        'hour-aligned — a smoke clock that drifts off the hour before the startup refresh ' +
-        'lands would read 0 here with a row archived (#504, #782)',
+        'a row archived: filed under a macro series name, it matches no ticker (#914/#960), ' +
+        "and #1164's routing (`scope: 'asset_class'` -> `intel`, not `news`) would also read " +
+        '0 here if that predicate broke. Items also carry the INGEST INSTANT (#782), and ' +
+        'getContext floors its window to the hour, so this count depends on SMOKE_RUN_INSTANT ' +
+        'being exactly hour-aligned — a smoke clock that drifts off the hour before the ' +
+        'startup refresh lands would read 0 here with a row archived (#504, #782)',
     );
   }
 
@@ -6073,7 +6077,7 @@ export function formatSmokeReport(
   lines.push(
     `Polymarket macro rows archived: ${observations.polymarketRowsArchived}, ` +
       `items archived: ${observations.polymarketItemsArchived}, ` +
-      `news items served: ${observations.polymarketNewsItems}`,
+      `intel items served: ${observations.polymarketIntelItems}`,
   );
 
   lines.push('');

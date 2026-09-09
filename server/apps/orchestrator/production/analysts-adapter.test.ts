@@ -670,7 +670,7 @@ describe('buildAnalystsStep', () => {
         asset_class: 'stocks' as const,
         news: [],
         social: [],
-        conflicts: [],
+        intel: [],
         stale: true,
         last_updated: null,
       }));
@@ -706,7 +706,7 @@ describe('buildAnalystsStep', () => {
               asset_class: 'stocks' as const,
               news: [],
               social: [],
-              conflicts: [],
+              intel: [],
               stale: true,
               last_updated: null,
             }),

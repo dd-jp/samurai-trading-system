@@ -49,9 +49,12 @@ export interface IntelligenceItem {
    * item speaks about `entity` and nothing else, which is what every item
    * before the GDELT scoring pass was.
    *
-   * `'asset_class'` marks a CLASS-WIDE item: a macro aggregate that is
-   * evidence for every instrument in its class and for no one instrument in
-   * particular. `getContext`'s entity filter admits these past an
+   * `'asset_class'` marks a CLASS-WIDE item: a macro aggregate (GDELT-GKG,
+   * Polymarket, and any future macro writer) that is evidence for every
+   * instrument in its class and for no one instrument in particular. #1164:
+   * this is also the routing predicate `getContext` uses to place the item
+   * in `MarketContext.intel` instead of `news`/`social` — see that type.
+   * `getContext`'s entity filter still admits class-wide items past an
    * entity-scoped read (an entity-scoped caller wants the macro backdrop
    * too), while `mi-coverage.ts`'s `hasCoverageFor` still does not count
    * them, because it compares `entity` to the instrument and a macro series
@@ -71,10 +74,24 @@ export interface IntelligenceItem {
 
 /**
  * Downstream contract: what analysts receive from getContext/subscribe.
- * `conflicts` is always `[]` as of #68 — conflict resolution between
- * DeepResearch and Grok signals is not ticketed under epic #52 (only #68
- * core serving and #69 subscribe/staleness exist), so no resolution logic
- * is invented here.
+ *
+ * `news`/`social` hold entity-scoped items (`scope` absent or `'entity'`),
+ * split by `type`. `intel` (#1164) holds every class-wide item (`scope ===
+ * 'asset_class'`) regardless of `type` — macro/GDELT-GKG/Polymarket items,
+ * which are evidence for the whole asset class rather than one ticker, and
+ * so must not be counted or reported as if they were per-instrument news.
+ * The original design (docs/specs/market-intelligence-spec.md "Key
+ * Interfaces") scoped `intel` to WorldMonitor geopolitical items alone and
+ * paired it with a `signals: ConvergenceSignal[]` field; as-built, neither
+ * WorldMonitor nor the Convergence Engine ships as an item producer into
+ * this store (spec's AS-BUILT NARROWING table), so `intel` is defined here
+ * by the routing predicate actually in force — `scope`, not source — and
+ * `signals` stays the spec's documented narrowing, not a field here.
+ *
+ * `conflicts` (`ConflictResolution`, DeepResearch vs Grok resolution) is
+ * deleted as of #1164: it always served `[]` since #68, had no producer, and
+ * the spec's replacement (`signals: ConvergenceSignal[]`) is itself a
+ * documented as-built narrowing (Convergence Engine: "No").
  *
  * `stale`/`last_updated` (#69): staleness of the asset's intelligence as of
  * `timestamp`. `last_updated` is the timestamp of the most recent item ever
@@ -86,18 +103,10 @@ export interface MarketContext {
   asset_class: AssetClass;
   news: IntelligenceItem[];
   social: IntelligenceItem[];
-  conflicts: ConflictResolution[];
+  intel: IntelligenceItem[];
   stale: boolean;
   last_updated: Date | null;
 }
 
 /** Push-delivery callback passed to `MarketIntelligenceStore.subscribe`. */
 export type MarketContextCallback = (ctx: MarketContext) => void;
-
-export interface ConflictResolution {
-  entity: string;
-  deepresearch_signal: { sentiment: 1 | 0 | -1; confidence: number };
-  grok_signal: { sentiment: 1 | 0 | -1; confidence: number };
-  resolved_winner: 'deepresearch' | 'grok';
-  reason: string;
-}

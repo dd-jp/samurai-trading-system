@@ -1,7 +1,6 @@
 import type {
   AgentIntelligence,
   AssetClass,
-  ConflictResolution,
   IntelligenceItem,
   MarketContext,
   MarketContextCallback,
@@ -77,14 +76,14 @@ describe('MarketContext', () => {
       asset_class: 'stocks',
       news: [],
       social: [],
-      conflicts: [],
+      intel: [],
       stale: true,
       last_updated: null,
     };
 
     expectTypeOf(context).toMatchTypeOf<MarketContext>();
     expect(Object.keys(context).sort()).toEqual(
-      ['timestamp', 'asset_class', 'news', 'social', 'conflicts', 'stale', 'last_updated'].sort(),
+      ['timestamp', 'asset_class', 'news', 'social', 'intel', 'stale', 'last_updated'].sort(),
     );
   });
 
@@ -94,13 +93,39 @@ describe('MarketContext', () => {
       asset_class: 'crypto',
       news: [],
       social: [],
-      conflicts: [],
+      intel: [],
       stale: false,
       last_updated: new Date('2026-07-14T09:09:58Z'),
     };
 
     expectTypeOf(context).toMatchTypeOf<MarketContext>();
     expect(context.last_updated).toBeInstanceOf(Date);
+  });
+
+  it('carries class-wide macro/GDELT/Polymarket items separately from news/social', () => {
+    const macroItem: IntelligenceItem = {
+      id: 'gdelt-gkg-GDELT-MACRO-2026-07-14T09:00:00Z',
+      source: 'gdelt-gkg',
+      type: 'news',
+      timestamp: new Date('2026-07-14T09:00:00Z'),
+      entity: 'GDELT-MACRO',
+      scope: 'asset_class',
+      headline: 'Global sentiment aggregate',
+      sentiment: 0,
+      confidence: 0.5,
+    };
+    const context: MarketContext = {
+      timestamp: new Date('2026-07-14T09:10:00Z'),
+      asset_class: 'stocks',
+      news: [],
+      social: [],
+      intel: [macroItem],
+      stale: false,
+      last_updated: new Date('2026-07-14T09:00:00Z'),
+    };
+
+    expectTypeOf(context).toMatchTypeOf<MarketContext>();
+    expect(context.intel).toEqual([macroItem]);
   });
 });
 
@@ -111,20 +136,5 @@ describe('MarketContextCallback', () => {
     };
 
     expectTypeOf(callback).toMatchTypeOf<MarketContextCallback>();
-  });
-});
-
-describe('ConflictResolution', () => {
-  it('matches the audit-log shape', () => {
-    const resolution: ConflictResolution = {
-      entity: 'AAPL',
-      deepresearch_signal: { sentiment: 1, confidence: 0.9 },
-      grok_signal: { sentiment: -1, confidence: 0.4 },
-      resolved_winner: 'deepresearch',
-      reason: 'high_impact_news',
-    };
-
-    expectTypeOf(resolution).toMatchTypeOf<ConflictResolution>();
-    expect(['deepresearch', 'grok']).toContain(resolution.resolved_winner);
   });
 });

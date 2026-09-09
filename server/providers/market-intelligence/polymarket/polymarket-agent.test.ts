@@ -83,8 +83,8 @@ function agentWith(options: {
   return { agent, store, fetchEventMarket, fetchPriceHistory };
 }
 
-function newsFor(store: MarketIntelligenceStore) {
-  return store.getContext(POLYMARKET_ASSET_CLASS, 24 * 60 * 60 * 1000, 'test').news;
+function intelFor(store: MarketIntelligenceStore) {
+  return store.getContext(POLYMARKET_ASSET_CLASS, 24 * 60 * 60 * 1000, 'test').intel;
 }
 
 describe('PolymarketAgent.refresh', () => {
@@ -93,22 +93,22 @@ describe('PolymarketAgent.refresh', () => {
 
     await expect(agent.refresh('t1')).resolves.toBe(true);
 
-    const news = newsFor(store);
-    expect(news).toHaveLength(1);
-    expect(news[0]).toMatchObject({
+    const intel = intelFor(store);
+    expect(intel).toHaveLength(1);
+    expect(intel[0]).toMatchObject({
       source: SOURCE_POLYMARKET,
       type: 'news',
       entity: 'FOMC-2026-09',
       sentiment: 1,
     });
     // 0.035 delta * 5 = 0.175.
-    expect(news[0]?.confidence).toBeCloseTo(0.175, 6);
-    expect(news[0]?.headline).toContain('0.670');
-    expect(news[0]?.headline).toContain('0.705');
+    expect(intel[0]?.confidence).toBeCloseTo(0.175, 6);
+    expect(intel[0]?.headline).toContain('0.670');
+    expect(intel[0]?.headline).toContain('0.705');
   });
 
   /**
-   * The read that matters. `newsFor` passes no entity, which is the shape of
+   * The read that matters. `intelFor` passes no entity, which is the shape of
    * NO production caller: `fundamental-analyst` and `sentiment-analyst` both
    * pass `resolveMiSubject(signal.asset)` (#914/#960), and a curated market is
    * filed under a macro series name that equals no ticker. Asserted through an
@@ -129,7 +129,7 @@ describe('PolymarketAgent.refresh', () => {
       'SPY',
     );
 
-    expect(scoped.news.map((item) => item.entity)).toEqual(['FOMC-2026-09']);
+    expect(scoped.intel.map((item) => item.entity)).toEqual(['FOMC-2026-09']);
   });
 
   it('reads the delta on the BULLISH outcome token, not the first one', async () => {
@@ -145,9 +145,9 @@ describe('PolymarketAgent.refresh', () => {
 
     await agent.refresh('t1');
 
-    expect(newsFor(store)[0]?.sentiment).toBe(-1);
+    expect(intelFor(store)[0]?.sentiment).toBe(-1);
     // |delta| = 0.205 -> 1.025, clamped to the 0.95 ceiling.
-    expect(newsFor(store)[0]?.confidence).toBe(0.95);
+    expect(intelFor(store)[0]?.confidence).toBe(0.95);
   });
 
   it('emits sentiment 0 inside the dead band — "we looked and it did not move"', async () => {
@@ -155,8 +155,8 @@ describe('PolymarketAgent.refresh', () => {
 
     await agent.refresh('t1');
 
-    expect(newsFor(store)[0]?.sentiment).toBe(0);
-    expect(newsFor(store)[0]?.confidence).toBeCloseTo(0.05, 6);
+    expect(intelFor(store)[0]?.sentiment).toBe(0);
+    expect(intelFor(store)[0]?.confidence).toBeCloseTo(0.05, 6);
   });
 
   it('stamps the item at the INGEST INSTANT, not the floored bucket (#782)', async () => {
@@ -167,15 +167,16 @@ describe('PolymarketAgent.refresh', () => {
     // `NOW` is on the hour, so this is the one instant at which the two
     // candidate stamps agree — the discriminating case is the mid-bar one
     // below, and this only pins that nothing shifts the stamp off `now`.
-    expect(newsFor(store)[0]?.timestamp).toEqual(NOW);
+    expect(intelFor(store)[0]?.timestamp).toEqual(NOW);
   });
 
   /**
    * The regression #782 fixed, re-entering through a second writer.
    *
    * `getContext` sets `windowEnd = floorToBar(asOf, 1h)` and drops anything
-   * stamped past it, precisely so `news.length` cannot move within one debate
-   * bar. Three things read that count: `technical-analyst` puts it verbatim in
+   * stamped past it, precisely so `intel.length` (#1164; this item routes
+   * there, not into `news`) cannot move within one debate bar. Three things
+   * read that count: `technical-analyst` puts it verbatim in
    * `key_points`, which is hashed into `debate_id` — so a count that changes
    * mid-bar produces a second `debate_id` on a bar that already had one, misses
    * #617's same-bar short-circuit and pays for a SECOND debate against ADR-0008's
@@ -218,21 +219,21 @@ describe('PolymarketAgent.refresh', () => {
     // Still 10:11 — same bar, and the count the debate hashes must not have
     // moved. Reading through `getContext` rather than the item is the point:
     // this is a statement about what the ANALYST sees.
-    expect(store.getContext(POLYMARKET_ASSET_CLASS, 24 * 60 * 60 * 1000, 'test').news).toHaveLength(
-      0,
-    );
+    expect(
+      store.getContext(POLYMARKET_ASSET_CLASS, 24 * 60 * 60 * 1000, 'test').intel,
+    ).toHaveLength(0);
 
     // 10:59 — the bar has not closed, so it is still invisible.
     asOf = new Date('2026-08-17T10:59:59Z');
-    expect(store.getContext(POLYMARKET_ASSET_CLASS, 24 * 60 * 60 * 1000, 'test').news).toHaveLength(
-      0,
-    );
+    expect(
+      store.getContext(POLYMARKET_ASSET_CLASS, 24 * 60 * 60 * 1000, 'test').intel,
+    ).toHaveLength(0);
 
     // 11:00 — the next bar opens and the item becomes visible, once, for good.
     asOf = new Date('2026-08-17T11:00:00Z');
-    expect(store.getContext(POLYMARKET_ASSET_CLASS, 24 * 60 * 60 * 1000, 'test').news).toHaveLength(
-      1,
-    );
+    expect(
+      store.getContext(POLYMARKET_ASSET_CLASS, 24 * 60 * 60 * 1000, 'test').intel,
+    ).toHaveLength(1);
   });
 
   it('does not re-fetch inside the same hourly bucket', async () => {
@@ -297,7 +298,7 @@ describe('PolymarketAgent fail-closed guards (#504 scope item 7)', () => {
 
     await expect(agent.refresh('t1')).resolves.toBe(false);
 
-    expect(newsFor(store)).toHaveLength(0);
+    expect(intelFor(store)).toHaveLength(0);
     const warned = log.mock.calls.map(([entry]) => entry).filter((e) => e.level === 'warn');
     expect(warned.some((e) => String(e.message).includes('fed-2026-09'))).toBe(true);
   });
@@ -308,7 +309,7 @@ describe('PolymarketAgent fail-closed guards (#504 scope item 7)', () => {
     });
 
     await expect(agent.refresh('t1')).resolves.toBe(false);
-    expect(newsFor(store)).toHaveLength(0);
+    expect(intelFor(store)).toHaveLength(0);
 
     // The bucket is NOT marked, so a transient failure does not buy an hour of
     // silence.
@@ -332,7 +333,7 @@ describe('PolymarketAgent fail-closed guards (#504 scope item 7)', () => {
     });
 
     await expect(agent.refresh('t1')).resolves.toBe(false);
-    expect(newsFor(store)).toHaveLength(0);
+    expect(intelFor(store)).toHaveLength(0);
 
     // The bucket is NOT marked, so the next pass re-asks — the same contract
     // the Gamma-side transport failure above holds to.
@@ -369,7 +370,7 @@ describe('PolymarketAgent fail-closed guards (#504 scope item 7)', () => {
 
     await agent.refresh('t1');
 
-    expect(newsFor(store)).toHaveLength(0);
+    expect(intelFor(store)).toHaveLength(0);
   });
 
   it('escalates a permanently-refused row from info to warn after a day of passes', async () => {
@@ -555,7 +556,7 @@ describe('PolymarketAgent fail-closed guards (#504 scope item 7)', () => {
 
     await agent.refresh('t1');
 
-    expect(newsFor(store)).toHaveLength(0);
+    expect(intelFor(store)).toHaveLength(0);
   });
 
   it('refuses when the latest history point is stale', async () => {
@@ -567,7 +568,7 @@ describe('PolymarketAgent fail-closed guards (#504 scope item 7)', () => {
 
     await agent.refresh('t1');
 
-    expect(newsFor(store)).toHaveLength(0);
+    expect(intelFor(store)).toHaveLength(0);
   });
 
   it('refuses when the curated bullish outcome is not one of the market outcomes', async () => {
@@ -575,7 +576,7 @@ describe('PolymarketAgent fail-closed guards (#504 scope item 7)', () => {
 
     await agent.refresh('t1');
 
-    expect(newsFor(store)).toHaveLength(0);
+    expect(intelFor(store)).toHaveLength(0);
   });
 
   it('refuses a row whose bullish outcome is pinned near certainty, before the CLOB call', async () => {
@@ -590,7 +591,7 @@ describe('PolymarketAgent fail-closed guards (#504 scope item 7)', () => {
 
     await expect(agent.refresh('t1')).resolves.toBe(false);
 
-    expect(newsFor(store)).toHaveLength(0);
+    expect(intelFor(store)).toHaveLength(0);
     // The guard sits above the price-history fetch, so a pinned row costs no
     // CLOB call at all.
     expect(fetchPriceHistory).not.toHaveBeenCalled();
@@ -607,7 +608,7 @@ describe('PolymarketAgent fail-closed guards (#504 scope item 7)', () => {
       history: history(0.88, 0.925),
     });
     await marginal.agent.refresh('t1');
-    expect(newsFor(marginal.store)).toHaveLength(0);
+    expect(intelFor(marginal.store)).toHaveLength(0);
 
     // Exactly at the bound: headroom 0.10 is admitted, so the guard cannot be
     // tightened without this going red either.
@@ -616,7 +617,7 @@ describe('PolymarketAgent fail-closed guards (#504 scope item 7)', () => {
       history: history(0.86, 0.9),
     });
     await expect(atBound.agent.refresh('t2')).resolves.toBe(true);
-    expect(newsFor(atBound.store)).toHaveLength(1);
+    expect(intelFor(atBound.store)).toHaveLength(1);
   });
 
   it('applies the pinned guard to the SHIPPED table, with no table override', async () => {
@@ -644,7 +645,7 @@ describe('PolymarketAgent fail-closed guards (#504 scope item 7)', () => {
 
     await expect(agent.refresh('t1')).resolves.toBe(false);
 
-    expect(newsFor(store)).toHaveLength(0);
+    expect(intelFor(store)).toHaveLength(0);
     expect(fetchPriceHistory).not.toHaveBeenCalled();
   });
 
@@ -664,7 +665,7 @@ describe('PolymarketAgent fail-closed guards (#504 scope item 7)', () => {
 
     await expect(agent.refresh('t1')).resolves.toBe(true);
 
-    expect(newsFor(store).map((item) => item.entity)).toEqual(['US-CPI-YOY']);
+    expect(intelFor(store).map((item) => item.entity)).toEqual(['US-CPI-YOY']);
   });
 
   it('never throws when the store write itself fails', async () => {
@@ -711,7 +712,7 @@ describe('PolymarketAgent.whenIdle', () => {
     release();
     await Promise.all([running, idle]);
 
-    expect(newsFor(store)).toHaveLength(1);
+    expect(intelFor(store)).toHaveLength(1);
   });
 
   it('does not start a second pass while one is in flight', async () => {

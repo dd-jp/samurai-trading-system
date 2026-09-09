@@ -74,8 +74,19 @@ export const fundamentalAnalyst: Analyst = {
       input.market_data.getMark(signal.asset, asOf),
     ]);
 
-    const direction = directionFrom(marketContext.news);
-    const confidence = confidenceFrom(marketContext.news);
+    // #1164: macro/GDELT/Polymarket items are class-wide evidence, not
+    // per-ticker news, so `getContext` routes them to `intel` rather than
+    // `news`. They still belong in this analyst's evidence — on the live
+    // LSE-ETP universe Alpaca News returns 0 `.news` items, and Polymarket's
+    // class-wide items are the only signal reaching `fundamental` (the
+    // 2026-09-05 Polymarket visibility fix this compounds) — so direction and
+    // confidence fold both arrays together, unweighted, exactly as `news`
+    // alone was folded before. `key_points` reports the two counts distinctly
+    // per AC4: an analyst reading the transcript must be able to tell "1
+    // filing" from "1 macro aggregate" even though both moved the same vote.
+    const evidence = [...marketContext.news, ...marketContext.intel];
+    const direction = directionFrom(evidence);
+    const confidence = confidenceFrom(evidence);
 
     return {
       trace_id: input.trace_id,
@@ -90,9 +101,9 @@ export const fundamentalAnalyst: Analyst = {
         // human approval gate, so nobody downstream catches it either. The
         // marker at least makes the debate — and the audit trail — state that
         // the input was absent rather than unremarkable.
-        marketContext.news.length === 0
-          ? `${NO_DATA_MARKER}: no news or filing items available for this window — the market-intelligence store returned nothing, so this is an ABSENCE OF INPUT, not a neutral read of the fundamentals. Weight it accordingly.`
-          : `${marketContext.news.length} news/filing items in window, net sentiment driving ${direction}`,
+        evidence.length === 0
+          ? `${NO_DATA_MARKER}: no news, filing or intel items available for this window — the market-intelligence store returned nothing, so this is an ABSENCE OF INPUT, not a neutral read of the fundamentals. Weight it accordingly.`
+          : `${marketContext.news.length} news/filing items, ${marketContext.intel.length} intel items in window, net sentiment driving ${direction}`,
         `Price reaction context: mark=${mark.price} observed ${mark.observed_at.toISOString()}`,
       ],
       timestamp: asOf,

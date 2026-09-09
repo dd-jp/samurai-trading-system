@@ -248,7 +248,7 @@ function transactedObservations(): SmokeObservations {
     gdeltAggregateItems: SMOKE_GDELT_EXPECTED_AGGREGATES,
     polymarketRowsArchived: 1,
     polymarketItemsArchived: 1,
-    polymarketNewsItems: 1,
+    polymarketIntelItems: 1,
     // #430 — one per wired mechanism. A healthy run has all of them.
     cosineSetups: [{ debate_id: 'debate-1', instrument: 'BTC-USD' }],
     riskThresholds: [{ name: 'max_position_size', value: 5_000 }],
@@ -721,16 +721,16 @@ describe('evaluateSmokeGate', () => {
     expect(gate.failures.join(' ')).toContain('archived 0 items in mi_items');
   });
 
-  it('fails when Polymarket fetched but nothing reached the news bucket (#504)', () => {
+  it('fails when Polymarket fetched but nothing reached the intel bucket (#504)', () => {
     // The half an archive count cannot see: rows written, items invisible to
     // the analyst that the whole source exists to feed.
     const observations = transactedObservations();
-    observations.polymarketNewsItems = 0;
+    observations.polymarketIntelItems = 0;
 
     const gate = evaluateSmokeGate(observations, healthyGateOptions());
 
     expect(gate.passed).toBe(false);
-    expect(gate.failures.join(' ')).toContain('Polymarket put 0 items in the news bucket');
+    expect(gate.failures.join(' ')).toContain('Polymarket put 0 items in the intel bucket');
   });
 
   it('fails when the GDELT theme filter stopped filtering (#556)', () => {
@@ -1669,7 +1669,7 @@ describe('formatSmokeReport', () => {
       gdeltAggregateItems: SMOKE_GDELT_EXPECTED_AGGREGATES,
       polymarketRowsArchived: 1,
       polymarketItemsArchived: 1,
-      polymarketNewsItems: 1,
+      polymarketIntelItems: 1,
 
       cosineSetups: [],
       riskThresholds: [],
@@ -2028,7 +2028,7 @@ describe('runSmoke (end-to-end, real composition root)', () => {
       gdeltAggregateItems: SMOKE_GDELT_EXPECTED_AGGREGATES,
       polymarketRowsArchived: 1,
       polymarketItemsArchived: 1,
-      polymarketNewsItems: 1,
+      polymarketIntelItems: 1,
 
       cosineSetups: [],
       riskThresholds: [],

@@ -280,4 +280,92 @@ describe('fundamentalAnalyst', () => {
       expect(view.key_points.join(' ')).not.toContain(NO_DATA_MARKER);
     });
   });
+
+  /**
+   * #1164: macro/GDELT/Polymarket items now route to `marketContext.intel`,
+   * not `.news` — this analyst must still fold them into its evidence, or the
+   * routing fix silently re-breaks the 2026-09-05 Polymarket visibility fix
+   * on the live LSE-ETP universe, where Alpaca News returns 0 `.news` items
+   * and Polymarket's class-wide items were the only signal reaching
+   * `fundamental`.
+   */
+  describe('class-wide intel items (#1164)', () => {
+    function ingestIntelOnly(
+      clock: ManualClock,
+      entity: string,
+      sentiment: 1 | 0 | -1,
+    ): MarketIntelligenceStore {
+      const store = new MarketIntelligenceStore(clock);
+      store.ingest({
+        agent_id: 'polymarket',
+        timestamp: ASOF,
+        asset_class: 'stocks',
+        items: [
+          {
+            id: 'macro-1',
+            source: 'polymarket',
+            type: 'news',
+            timestamp: ASOF,
+            entity,
+            scope: 'asset_class',
+            headline: 'FOMC odds shift',
+            sentiment,
+            confidence: 0.8,
+          },
+        ],
+      });
+      return store;
+    }
+
+    it('an intel-only window (no news) still yields a non-neutral direction, not NO_DATA_MARKER', async () => {
+      const clock = new ManualClock(ASOF);
+      const store = ingestIntelOnly(clock, 'FOMC-2026-09', 1);
+      const input = { ...buildInput(signal, 'trace-intel-only'), market_intelligence: store };
+
+      const view = await fundamentalAnalyst.run(input);
+
+      expect(view.direction).toBe('bullish');
+      expect(view.confidence).toBe(0.8);
+      expect(view.key_points.join(' ')).not.toContain(NO_DATA_MARKER);
+    });
+
+    it('reports news and intel counts distinctly in key_points rather than merging them silently', async () => {
+      const clock = new ManualClock(ASOF);
+      const store = ingestIntelOnly(clock, 'FOMC-2026-09', 1);
+      store.ingest({
+        agent_id: 'deepresearch',
+        timestamp: ASOF,
+        asset_class: 'stocks',
+        items: [
+          {
+            id: 'news-1',
+            source: 'sec-filing',
+            type: 'news',
+            timestamp: ASOF,
+            entity: signal.asset,
+            headline: 'Earnings beat estimates',
+            sentiment: 1,
+            confidence: 0.7,
+          },
+        ],
+      });
+      const input = { ...buildInput(signal, 'trace-both'), market_intelligence: store };
+
+      const view = await fundamentalAnalyst.run(input);
+
+      expect(view.key_points[0]).toContain('1 news');
+      expect(view.key_points[0]).toContain('1 intel');
+    });
+
+    it('a NO_DATA window still reports absence when both news and intel are empty', async () => {
+      const clock = new ManualClock(ASOF);
+      const empty = new MarketIntelligenceStore(clock);
+      const input = { ...buildInput(signal, 'trace-empty-both'), market_intelligence: empty };
+
+      const view = await fundamentalAnalyst.run(input);
+
+      expect(view.key_points[0]).toContain(NO_DATA_MARKER);
+      expect(view.direction).toBe('neutral');
+    });
+  });
 });

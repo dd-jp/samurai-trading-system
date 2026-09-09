@@ -2,17 +2,19 @@
  * The Polymarket macro/event ingestion agent (#504, decisions from wayfinder
  * research #481 and `docs/research/23-polymarket-source.md`).
  *
- * ## Why a SECOND news source
+ * ## Why a SECOND source feeding `fundamental`
  *
- * The `news` bucket already has a writer — `MiIngestAgent` (`type: 'news'`,
- * the Alpaca/Benzinga wire). This is not the first one and does not exist to
- * fill an empty bucket. It exists because that writer's coverage has a
- * measured hole: **Alpaca News returns 0 items for 3USL / 3LDE / SGLN**
- * against 5 each for AAPL/SPY/BTCUSD (#552, quoted in
- * `docs/specs/market-intelligence-spec.md`). The live universe is exactly
- * those LSE ETPs (ADR-0016), so `fundamental` — mandatory for stocks — has a
- * writer that returns nothing for every instrument Samurai can actually
- * trade. A 3x FTSE ETP has no company news; what moves it is macro.
+ * `MiIngestAgent` (`type: 'news'`, the Alpaca/Benzinga wire) already writes
+ * `news`. This agent is not the first writer feeding `fundamental` and does
+ * not exist to fill an empty bucket — its items route to `intel`, not `news`
+ * (#1164, by `scope`), and `fundamental-analyst.ts` folds the two together.
+ * It exists because `news`'s coverage has a measured hole: **Alpaca News
+ * returns 0 items for 3USL / 3LDE / SGLN** against 5 each for
+ * AAPL/SPY/BTCUSD (#552, quoted in `docs/specs/market-intelligence-spec.md`).
+ * The live universe is exactly those LSE ETPs (ADR-0016), so `fundamental` —
+ * mandatory for stocks — has a `news` writer that returns nothing for every
+ * instrument Samurai can actually trade. A 3x FTSE ETP has no company news;
+ * what moves it is macro.
  *
  * ## Why macro markets and NOT the price ladders
  *
@@ -91,10 +93,12 @@
  * what was stored. What #835 fixed is that the rows exist to be read at all.
  *
  * It is uniform WITHIN this source, so it does not skew one curated row
- * against another. It is **not** uniform across the `news` bucket, and saying
- * so would be false: `directionFrom` averages over every item in the bucket,
- * and the other writer (`MiIngestAgent`, Alpaca/Benzinga) is not replayed
- * hourly. On a universe where Alpaca does return items — the ~5 each it
+ * against another. It is **not** uniform across the combined `news` + `intel`
+ * evidence `fundamental-analyst.ts` folds together (#1164), and saying so
+ * would be false: `directionFrom` averages over every item in that combined
+ * array, and the other writer (`MiIngestAgent`, Alpaca/Benzinga, `news`) is
+ * not replayed hourly. On a universe where Alpaca does return items — the ~5
+ * each it
  * returns for AAPL/SPY (#552) — a handful of curated rows replayed hourly
  * reach ~72 items in the same 24h window, so the mean is roughly 14:1 this
  * source's, on DIRECTION as well as vote count, and on the confidence the
@@ -107,10 +111,10 @@
  *
  * `GrokAgent`'s `spendCap`/`spendSink` are absent on purpose: this path makes
  * no LLM call and costs £0, and zero-cost rows in `llm_spend` would only make
- * ADR-0008's ledger harder to read. `MarketContext.conflicts` stays `[]` — a
- * stated v1 narrowing, as #464 did: `grok` writes `social` and this writes
- * `news`, disjoint buckets read by different analysts, so there is nothing to
- * converge.
+ * ADR-0008's ledger harder to read. `MarketContext.conflicts` was deleted by
+ * #1164, not given a producer: `grok` writes `social` and this writes `intel`
+ * (routed by `scope`, #1086/#1164), disjoint buckets read by different
+ * analysts, so there was never anything to converge.
  */
 
 import type {
@@ -577,8 +581,9 @@ export class PolymarketAgent {
       // and, since `MarketIntelligenceStore.ingest` does no dedup by `id`,
       // compound the time-axis inflation limitation 3 records. That bought the
       // boot property by giving up replay: this source could not be replayed as
-      // items at all, and its `news` contribution vanished on restart with
-      // nothing on disk to rebuild it from, against the spec's user stories
+      // items at all, and its `intel` (#1164; `news` before it) contribution
+      // vanished on restart with nothing on disk to rebuild it from, against
+      // the spec's user stories
       // 26/29/30. `archive/mi-sources.ts` now carries the boot policy per
       // source, so both properties hold: the items are archived, and
       // `HYDRATING_MI_SOURCES` excludes this one from the boot read.
@@ -717,7 +722,8 @@ export class PolymarketAgent {
       // `now`, the INGEST INSTANT — never the floored bucket. `getContext`
       // floors its window end to the debate bar and drops anything stamped
       // past it (#782), and that dropping is the feature, not an obstacle: it
-      // is what stops `news.length` moving between two ticks of ONE bar.
+      // is what stops `intel.length` (#1164; this item routes there by
+      // `scope`, not into `news`) moving between two ticks of ONE bar.
       // `technical-analyst` puts that count verbatim in `key_points`, which is
       // hashed into `debate_id`, so a count that grows mid-bar buys a SECOND
       // paid debate on a bar that already had one (#617, ADR-0008's budget) —
@@ -743,7 +749,7 @@ export class PolymarketAgent {
       // ticker. Without this the item is dropped by `getContext`'s entity
       // filter for every entity-scoped caller (#914) — which is both analysts
       // that read the CONTENT — while still reaching `technical-analyst`,
-      // whose read passes no entity, as a bare `news.length`.
+      // whose read passes no entity, as a bare `intel.length` (#1164).
       scope: 'asset_class',
       headline:
         `${entry.label}: ${baseline.probability.toFixed(3)} -> ` +

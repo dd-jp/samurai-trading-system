@@ -185,7 +185,7 @@ describe('GDELT scoring wiring (#1086)', () => {
       BAR,
       'SPY',
     );
-    expect(context.news.map((item) => item.entity)).toEqual([GDELT_MACRO_ENTITY]);
+    expect(context.intel.map((item) => item.entity)).toEqual([GDELT_MACRO_ENTITY]);
     expect(entries.some((entry) => entry.message.includes('derived GDELT macro aggregate'))).toBe(
       true,
     );

@@ -1161,7 +1161,7 @@ export const technicalAnalyst: Analyst = {
         sessionLine,
         rvolText,
         contextLine,
-        `MI context: ${marketContext.news.length} news, ${marketContext.social.length} social items in window`,
+        `MI context: ${marketContext.news.length} news, ${marketContext.social.length} social, ${marketContext.intel.length} intel items in window`,
       ],
       timestamp: asOf,
     };

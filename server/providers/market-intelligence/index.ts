@@ -26,7 +26,6 @@ import type {
 export type {
   AgentIntelligence,
   AssetClass,
-  ConflictResolution,
   Duration,
   IntelligenceItem,
   MarketContext,
@@ -73,17 +72,19 @@ const MAX_SLOW_CALLBACKS = 3;
  * dated observation: `gdelt-scoring-pass.ts` derives one every debate bar, and
  * consecutive ones share 23 of the 24 hours of their baseline. So an analyst's
  * 24h read holds ~24 restatements of one measurement, and
- * `fundamental-analyst.ts` takes an UNWEIGHTED mean over `news` — leaving them
- * all in lets one macro source outvote every genuinely distinct item an
- * instrument has (an LSE ETP gets 0-1 from the Benzinga wire). That is the
- * time-axis inflation `polymarket-agent.ts` records as its limitation 3,
- * arriving through a second source.
+ * `fundamental-analyst.ts` takes an UNWEIGHTED mean over `news` + `intel`
+ * (#1164) — leaving them all in lets one macro source outvote every genuinely
+ * distinct item an instrument has (an LSE ETP gets 0-1 from the Benzinga
+ * wire). That is the time-axis inflation `polymarket-agent.ts` records as its
+ * limitation 3, arriving through a second source.
  *
  * Entity-scoped items are untouched, because two articles about one ticker
  * ARE two observations. The key carries `entity` and `type` as well as
  * `source`: one source may file several macro series under different names
- * (Polymarket does), and a class-wide `news` and a class-wide `sentiment`
- * item are different evidence in different buckets.
+ * (Polymarket does), and a class-wide `news` item and a class-wide
+ * `sentiment` item are different evidence within the same `intel` bucket
+ * (#1164) — `type` still keeps them from being collapsed into one
+ * restatement of each other.
  *
  * `ingest` cannot do this job, which is why it is done here. Its
  * `(asset_class, entity, id)` dedupe DROPS a repeat rather than replacing it,
@@ -110,6 +111,17 @@ function latestClassWideRestatementOnly(
   if (latest.size === 0) return items;
   const kept = new Set(latest.values());
   return items.filter((item) => item.scope !== 'asset_class' || kept.has(item));
+}
+
+/**
+ * #1164: the sole predicate routing an item to `MarketContext.intel` instead
+ * of `news`/`social` — macro, GDELT-GKG and Polymarket items all set `scope:
+ * 'asset_class'` (gdelt-scorer.ts, polymarket-agent.ts) and are evidence for
+ * the whole asset class, not for one instrument, so they must not be counted
+ * as per-ticker news/sentiment observations.
+ */
+function isClassWide(item: IntelligenceItem): boolean {
+  return item.scope === 'asset_class';
 }
 
 /**
@@ -204,19 +216,19 @@ export class MarketIntelligenceStore {
    * `windowEnd` is not the raw clock read: it is `floorToBar(asOf)`, the same
    * grid and the same function the decision gate keys a debate to. The raw
    * clock read gave a ROLLING window, so an item ageing out of it — or one
-   * ingested mid-bar — changed `news.length`/`social.length` between two ticks
-   * of ONE debate bar. Three things read those counts, and none of them should
-   * move within a bar:
+   * ingested mid-bar — changed `news.length`/`social.length`/`intel.length`
+   * between two ticks of ONE debate bar. Three things read those counts, and
+   * none of them should move within a bar:
    *
    *   1. `technical-analyst.ts` puts them verbatim in `key_points`
-   *      ("MI context: N news, M social items in window"), and `key_points` is
-   *      hashed into `debate_id` (`debate-id.ts`). A changed count is a changed
-   *      id, which misses the #617 same-bar short-circuit and pays for a second
-   *      debate on a bar that already has one.
+   *      ("MI context: N news, M social, K intel items in window"), and
+   *      `key_points` is hashed into `debate_id` (`debate-id.ts`). A changed
+   *      count is a changed id, which misses the #617 same-bar short-circuit
+   *      and pays for a second debate on a bar that already has one.
    *   2. `sentiment-analyst.ts` derives `direction` AND `confidence` from
-   *      `social`, and `fundamental-analyst.ts` does the same from `news`. This
-   *      is the part that is not merely a spend leak: a second, different
-   *      confidence sample on the same bar is what
+   *      `social`, and `fundamental-analyst.ts` does the same from `news` +
+   *      `intel` (#1164). This is the part that is not merely a spend leak: a
+   *      second, different confidence sample on the same bar is what
    *      `scale_in_conviction_delta` can turn into an extra lot.
    *   3. `mi-coverage.ts` counts coverage over the SAME 24h window on purpose
    *      ("the same window the debate itself sees"), so it must floor with the
@@ -331,9 +343,9 @@ export class MarketIntelligenceStore {
     return {
       timestamp: asOf,
       asset_class: assetClass,
-      news: visible.filter((item) => item.type === 'news'),
-      social: visible.filter((item) => item.type === 'sentiment'),
-      conflicts: [],
+      news: visible.filter((item) => !isClassWide(item) && item.type === 'news'),
+      social: visible.filter((item) => !isClassWide(item) && item.type === 'sentiment'),
+      intel: visible.filter(isClassWide),
       last_updated: lastUpdated,
       stale: this.isStale(assetClass, asOf, lastUpdated),
     };
@@ -394,9 +406,9 @@ export class MarketIntelligenceStore {
     const context: MarketContext = {
       timestamp: asOf,
       asset_class: assetClass,
-      news: inWindow.filter((item) => item.type === 'news'),
-      social: inWindow.filter((item) => item.type === 'sentiment'),
-      conflicts: [],
+      news: inWindow.filter((item) => !isClassWide(item) && item.type === 'news'),
+      social: inWindow.filter((item) => !isClassWide(item) && item.type === 'sentiment'),
+      intel: inWindow.filter(isClassWide),
       last_updated: lastUpdated,
       stale: this.isStale(assetClass, asOf, lastUpdated),
     };
@@ -495,8 +507,9 @@ export {
   type XSearchClientOptions,
 } from './grok/x-search-client.js';
 export { MiIngestAgent, type MiIngestAgentDeps, wireSymbol } from './mi-ingest-agent.js';
-// The Polymarket macro/event path (#504) — the second `news` writer, added for
-// the measured LSE-ETP coverage hole rather than for an empty bucket.
+// The Polymarket macro/event path (#504) — an `intel` writer (#1164: routed
+// there by `scope`, not filed as `news`), added for the measured LSE-ETP
+// coverage hole rather than for an empty bucket.
 export {
   CURATED_MACRO_MARKETS,
   type CuratedMacroMarket,
