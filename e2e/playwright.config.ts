@@ -23,6 +23,7 @@
  */
 import { fileURLToPath } from 'node:url';
 import { defineConfig, devices } from '@playwright/test';
+import { DASHBOARD_CREDENTIAL_ENV_VAR } from '../server/apps/service-api/bind-guard.ts';
 import { resolveE2ePort } from './support/port.ts';
 
 const HOST = '127.0.0.1';
@@ -106,6 +107,14 @@ export default defineConfig({
       SAMURAI_MODE: 'paper',
       PORT: String(PORT),
       HOST,
+      // Pinned blank (#1038) — `fixture-server.ts` passes this straight to
+      // `isAuthorizedRequest`, and Playwright's `webServer.env` is spread
+      // *under* the inherited `process.env`, not over it. Without this pin, an
+      // operator or CI with this var exported would make every fixture-server
+      // request 401, since no spec sends an Authorization header. A blank
+      // value reads as unset (`isConfiguredCredential`), so this is a no-op
+      // today and a structural guarantee against tomorrow's ambient env.
+      [DASHBOARD_CREDENTIAL_ENV_VAR]: '',
     },
     stdout: 'pipe',
     stderr: 'pipe',
