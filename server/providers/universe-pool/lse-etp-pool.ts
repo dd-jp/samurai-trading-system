@@ -366,7 +366,16 @@ export interface SaxoInstrumentLine {
   readonly uic: number;
   readonly asset_type: 'Etn' | 'Etf' | 'Etc';
   readonly exchange_id: 'LSE_ETF';
-  /** Saxo reports GBX-quoted lines as `GBP`. */
+  /**
+   * What `GET /ref/v1/instruments` says, which for a GBX-quoted line is
+   * `GBP` — the search endpoint carries no quote unit at all. NOT what the
+   * execution stage prices against: `saxoInstrumentResolverFromVenue`
+   * (saxo-adapter.ts) reads `CurrencyCode`, `PriceCurrency` and
+   * `PriceToContractFactor` from `/ref/v1/instruments/details` per line and
+   * converts every price through the factor (#1302, doc 44 §2.1). This field
+   * is provenance — what the pool's own compile observed — and no cash
+   * amount may be derived from it.
+   */
   readonly currency: string;
 }
 

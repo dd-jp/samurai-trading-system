@@ -8,7 +8,7 @@ import type { MarketDataService } from '../../../providers/market-data-service/i
 import { LSE_ETP_POOL } from '../../../providers/universe-pool/index.js';
 import type { OpenPosition } from '../../../shared/index.js';
 import { recordingLogger } from '../../../shared/recording-logger.js';
-import type { CostModel } from '../../../tools/backtest/index.js';
+import { type CostModel, SAXO_COMMISSION_RATE } from '../../../tools/backtest/index.js';
 import { InMemoryBrokerStateStore } from '../broker-state-store.js';
 import type {
   DormantLegsUnresolvedAlert,
@@ -27,22 +27,65 @@ import {
   DORMANT_DEFER_ALERT_REPEAT_EVERY,
   SaxoBrokerAdapter,
   type SaxoInstrumentResolver,
-  saxoInstrumentResolverFromPool,
+  saxoInstrumentResolverFromVenue,
 } from './saxo-adapter.js';
 import { SaxoBrokerProviderError } from './saxo-broker-errors.js';
 import type {
+  SaxoInstrumentDetails,
   SaxoNetPosition,
   SaxoOpenApiClient,
   SaxoOpenOrder,
   SaxoOrderActivity,
   SaxoOrderPlacement,
 } from './saxo-client.js';
+import { saxoCashPerShare } from './saxo-price-unit.js';
 
 const RESOLVER: SaxoInstrumentResolver = {
   resolve: (lseTicker) =>
-    lseTicker === '3USL' ? { uic: 3347273, asset_type: 'Etn', currency: 'USD' } : undefined,
+    lseTicker === '3USL'
+      ? {
+          uic: 3347273,
+          asset_type: 'Etn',
+          currency: 'USD',
+          price_currency: 'USD',
+          price_to_contract_factor: 1,
+        }
+      : undefined,
   lseTickerFor: (uic) => (uic === 3347273 ? '3USL' : undefined),
 };
+
+/**
+ * LQQ3, the GBX line of doc 44 §2.1's measured pair: quoted in pence,
+ * settled in GBP, `PriceToContractFactor` 0.01.
+ */
+const GBX_REF = {
+  uic: 29391797,
+  asset_type: 'Etn',
+  currency: 'GBP',
+  price_currency: 'GBX',
+  price_to_contract_factor: 0.01,
+} as const;
+
+const GBX_RESOLVER: SaxoInstrumentResolver = {
+  resolve: (lseTicker) => (lseTicker === 'LQQ3' ? GBX_REF : undefined),
+  lseTickerFor: (uic) => (uic === GBX_REF.uic ? 'LQQ3' : undefined),
+};
+
+/** Every pool line answers as 3USL's did on SIM (USD/USD/1.0) unless a test says otherwise. */
+function detailsClient(
+  perUic: ReadonlyMap<number, Partial<SaxoInstrumentDetails>> = new Map(),
+): Pick<SaxoOpenApiClient, 'getInstrumentDetails'> {
+  return {
+    getInstrumentDetails: vi.fn(async (uic: number, assetType: string) => ({
+      Uic: uic,
+      AssetType: assetType,
+      CurrencyCode: 'USD',
+      PriceCurrency: 'USD',
+      PriceToContractFactor: 1,
+      ...perUic.get(uic),
+    })),
+  };
+}
 
 function makeBracket(overrides: Partial<NativeBracketRequest> = {}): NativeBracketRequest {
   return {
@@ -143,6 +186,7 @@ function activity(overrides: Partial<SaxoOrderActivity> = {}): SaxoOrderActivity
 
 function makeClient(overrides: Partial<SaxoOpenApiClient> = {}): SaxoOpenApiClient {
   return {
+    getInstrumentDetails: vi.fn().mockRejectedValue(new Error('unexpected getInstrumentDetails')),
     placeOrder: vi.fn().mockResolvedValue(placement()),
     cancelOrder: vi.fn().mockResolvedValue(undefined),
     listOpenOrders: vi.fn().mockResolvedValue([]),
@@ -176,13 +220,17 @@ function makeDormantLegsAlerts(): DormantLegsUnresolvedAlertChannel & {
   };
 }
 
-function makeAdapter(client: SaxoOpenApiClient, state = new InMemoryBrokerStateStore()) {
+function makeAdapter(
+  client: SaxoOpenApiClient,
+  state = new InMemoryBrokerStateStore(),
+  instruments: SaxoInstrumentResolver = RESOLVER,
+) {
   const logger = recordingLogger();
   const legResizeAlerts = makeLegResizeAlerts();
   const dormantLegsAlerts = makeDormantLegsAlerts();
   const adapter = new SaxoBrokerAdapter({
     client,
-    instruments: RESOLVER,
+    instruments,
     state,
     clock: { now: () => new Date('2026-09-05T09:00:00Z') },
     legResizeAlerts,
@@ -1244,7 +1292,14 @@ describe('SaxoBrokerAdapter.fetchNewFills', () => {
     expect(fill?.timestamp).toEqual(since);
   });
 
-  it('leaves fee_currency unset for one fill whose Uic resolves to no pool line, and logs it', async () => {
+  /**
+   * Until #1302 this left that one fill's `fee_currency` unset and logged,
+   * so a batch was never held hostage to one attribution gap. The price now
+   * depends on the same lookup — without the line's factor a GBX quote is
+   * 100x wrong — so the whole sweep fails instead, and `ingestFills` re-drives
+   * it next poll off the open lots' `opened_at` rather than a watermark.
+   */
+  it('fails the sweep on a fill whose Uic resolves to no pool line, booking neither it nor its batch', async () => {
     const client = makeClient({
       listOrderActivities: vi.fn().mockResolvedValue([
         activity({
@@ -1266,23 +1321,10 @@ describe('SaxoBrokerAdapter.fetchNewFills', () => {
         }),
       ]),
     });
-    const { adapter, logger } = makeAdapter(client);
+    const { adapter } = makeAdapter(client);
     await adapter.submitBracket(makeBracket());
 
-    const fills = await adapter.fetchNewFills(since);
-
-    expect(fills.map((fill) => [fill.broker_fill_id, fill.fee_currency])).toEqual([
-      ['log-fill', undefined],
-      ['log-stop', 'USD'],
-    ]);
-    expect(fills[0]).not.toHaveProperty('fee_currency');
-    expect(logger.entries).toContainEqual(
-      expect.objectContaining({
-        level: 'error',
-        message: expect.stringContaining('fee_currency left unset'),
-        payload: expect.objectContaining({ uic: 999999, log_id: 'log-fill' }),
-      }),
-    );
+    await expect(adapter.fetchNewFills(since)).rejects.toThrow(/log-fill/);
   });
 
   it('throws on a Filled activity that carries no fill amount or price rather than dropping it', async () => {
@@ -1371,9 +1413,9 @@ describe('SaxoBrokerAdapter.getOpenPositions', () => {
   });
 });
 
-describe('saxoInstrumentResolverFromPool', () => {
-  it('maps every checked-in pool row with its own Saxo line, and only those', () => {
-    const resolver = saxoInstrumentResolverFromPool(LSE_ETP_POOL);
+describe('saxoInstrumentResolverFromVenue', () => {
+  it('maps every checked-in pool row with its own Saxo line, and only those', async () => {
+    const resolver = await saxoInstrumentResolverFromVenue(LSE_ETP_POOL, detailsClient());
     const own = LSE_ETP_POOL.filter((row) => row.provenance.saxo.line !== null);
     const siblingOnly = LSE_ETP_POOL.filter(
       (row) => row.provenance.saxo.line === null && row.provenance.saxo.sibling_line !== undefined,
@@ -1386,7 +1428,9 @@ describe('saxoInstrumentResolverFromPool', () => {
       expect(resolver.resolve(row.lse_ticker)).toEqual({
         uic: line.uic,
         asset_type: line.asset_type,
-        currency: line.currency,
+        currency: 'USD',
+        price_currency: 'USD',
+        price_to_contract_factor: 1,
       });
       expect(resolver.lseTickerFor(line.uic)).toBe(row.lse_ticker);
     }
@@ -1397,5 +1441,217 @@ describe('saxoInstrumentResolverFromPool', () => {
       const sibling = row.provenance.saxo.sibling_line;
       if (sibling !== undefined) expect(resolver.lseTickerFor(sibling.uic)).toBeUndefined();
     }
+  });
+});
+
+/**
+ * #1302 — the GBX/GBP unit collision, end to end across the adapter's
+ * boundary. LQQ3 is doc 44 §2.1's measured GBX line: `CurrencyCode` `GBP`,
+ * `PriceCurrency` `GBX`, `PriceToContractFactor` `0.01`, so a quote of 31151
+ * is £311.51 and not £31,151. Saxo's search endpoint — the pool's own source
+ * — reports the line as `GBP` and carries neither of the last two fields, so
+ * nothing but the details endpoint can tell the two readings apart.
+ */
+describe('SaxoBrokerAdapter GBX price unit (#1302)', () => {
+  const GBX_BRACKET: NativeBracketRequest = {
+    client_order_id: 'key-lqq3-0930',
+    instrument: 'LQQ3',
+    asset_class: 'stocks',
+    side: 'buy',
+    size: 1,
+    entry: 311.51,
+    stop: 305,
+    target: 320.25,
+    time_in_force: 'day',
+  };
+
+  function gbxPlacement(): SaxoOrderPlacement {
+    return {
+      ExternalReference: GBX_BRACKET.client_order_id,
+      OrderId: '5040047200',
+      Orders: [
+        { ExternalReference: 'key-lqq3-0930:target', OrderId: '5040047202' },
+        { ExternalReference: 'key-lqq3-0930:stop', OrderId: '5040047201' },
+      ],
+    };
+  }
+
+  it('sends entry, stop and target to the venue in the quoted unit (pence), not in pounds', async () => {
+    const client = makeClient({ placeOrder: vi.fn().mockResolvedValue(gbxPlacement()) });
+    const { adapter } = makeAdapter(client, new InMemoryBrokerStateStore(), GBX_RESOLVER);
+
+    await adapter.submitBracket(GBX_BRACKET);
+
+    const request = vi.mocked(client.placeOrder).mock.calls[0]?.[0];
+    expect(request?.OrderPrice).toBe(31151);
+    const legs = Object.fromEntries(
+      (request?.Orders ?? []).map((leg) => [leg.OrderType, leg.OrderPrice]),
+    );
+    expect(legs).toEqual({ StopIfTraded: 30500, Limit: 32025 });
+  });
+
+  it('books a fill at cash per share, with the fee on that figure in the settlement currency', async () => {
+    const client = makeClient({
+      placeOrder: vi.fn().mockResolvedValue(gbxPlacement()),
+      // Empty for the placement's own adopt-or-place lookup, then the fill.
+      listOrderActivities: vi
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValue([
+          activity({
+            ExternalReference: GBX_BRACKET.client_order_id,
+            Uic: GBX_REF.uic,
+            Status: 'Filled',
+            Amount: 1,
+            FillAmount: 1,
+            AveragePrice: 31151,
+          }),
+        ]),
+    });
+    const { adapter } = makeAdapter(client, new InMemoryBrokerStateStore(), GBX_RESOLVER);
+    await adapter.submitBracket(GBX_BRACKET);
+
+    const [fill] = await adapter.fetchNewFills(new Date('2026-09-05T08:00:00Z'));
+
+    expect(fill?.price).toBeCloseTo(311.51, 8);
+    expect(fill?.fee).toBeCloseTo(311.51 * SAXO_COMMISSION_RATE, 8);
+    expect(fill?.fee_currency).toBe('GBP');
+  });
+
+  it('reports an open position average price in cash', async () => {
+    const client = makeClient({
+      listNetPositions: vi.fn().mockResolvedValue([
+        {
+          NetPositionId: 'LQQ3-pos',
+          NetPositionBase: { Amount: 4, Uic: GBX_REF.uic, AssetType: 'Etn' },
+          NetPositionView: { AverageOpenPrice: 31151 },
+        } satisfies SaxoNetPosition,
+      ]),
+    });
+    const { adapter } = makeAdapter(client, new InMemoryBrokerStateStore(), GBX_RESOLVER);
+
+    const [position] = await adapter.getOpenPositions();
+
+    expect(position?.instrument).toBe('LQQ3');
+    expect(position?.avg_entry_price).toBeCloseTo(311.51, 8);
+  });
+
+  it('reports a position under an unresolvable Uic with a null price rather than a venue-scale one', async () => {
+    const client = makeClient({
+      listNetPositions: vi.fn().mockResolvedValue([
+        {
+          NetPositionId: 'unknown-pos',
+          NetPositionBase: { Amount: 4, Uic: 999999, AssetType: 'Etn' },
+          NetPositionView: { AverageOpenPrice: 31151 },
+        } satisfies SaxoNetPosition,
+      ]),
+    });
+    const { adapter, logger } = makeAdapter(client, new InMemoryBrokerStateStore(), GBX_RESOLVER);
+
+    const [position] = await adapter.getOpenPositions();
+
+    expect(position?.avg_entry_price).toBeNull();
+    expect(logger.entries.map((entry) => entry.event)).toContain(
+      'saxo_position_price_unit_unresolved',
+    );
+  });
+
+  it('refuses to book a fill whose Uic resolves to no line, rather than booking it unscaled', async () => {
+    const client = makeClient({
+      placeOrder: vi.fn().mockResolvedValue(gbxPlacement()),
+      listOrderActivities: vi
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValue([
+          activity({
+            ExternalReference: GBX_BRACKET.client_order_id,
+            Uic: 999999,
+            Status: 'Filled',
+            Amount: 1,
+            FillAmount: 1,
+            AveragePrice: 31151,
+          }),
+        ]),
+    });
+    const { adapter } = makeAdapter(client, new InMemoryBrokerStateStore(), GBX_RESOLVER);
+    await adapter.submitBracket(GBX_BRACKET);
+
+    await expect(adapter.fetchNewFills(new Date('2026-09-05T08:00:00Z'))).rejects.toThrow(
+      /resolves to no pool line/,
+    );
+  });
+
+  it('leaves a USD line (factor 1.0) at the numbers it was given, both directions', async () => {
+    const client = makeClient({
+      // Empty for the placement's own adopt-or-place lookup, then the fill.
+      listOrderActivities: vi
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValue([activity({ Status: 'Filled', FillAmount: 3, AveragePrice: 10.25 })]),
+    });
+    const { adapter } = makeAdapter(client);
+
+    await adapter.submitBracket(makeBracket());
+    const [fill] = await adapter.fetchNewFills(new Date('2026-09-05T08:00:00Z'));
+
+    expect(vi.mocked(client.placeOrder).mock.calls[0]?.[0].OrderPrice).toBe(10);
+    expect(fill?.price).toBe(10.25);
+    expect(fill?.fee_currency).toBe('USD');
+  });
+
+  /**
+   * The issue's own blast-radius arithmetic, pinned against the conversion
+   * rather than against the pipeline: ADR-0018 D5's £350 index allowance over
+   * 3UKL at 2,435 GBp buys 14 shares, while the same quote read as pounds
+   * buys none at all and the instrument silently leaves the tradeable set.
+   * Nothing feeds a Saxo quote into sizing today (no LSE mark source, #895),
+   * so this pins the consequence of the unit, not a wired path.
+   */
+  it('turns the D5 cash allowance into a non-zero quantity on a GBX line', () => {
+    const D5_INDEX_CASH_GBP = 350;
+    const quoted = 2435;
+
+    expect(Math.floor(D5_INDEX_CASH_GBP / saxoCashPerShare(GBX_REF, quoted))).toBe(14);
+    expect(Math.floor(D5_INDEX_CASH_GBP / quoted)).toBe(0);
+  });
+});
+
+describe('saxoInstrumentResolverFromVenue quote units (#1302)', () => {
+  const GBX_ROW = [
+    {
+      lse_ticker: 'LQQ3',
+      provenance: { saxo: { line: { uic: 29391797, asset_type: 'Etn' as const } } },
+    },
+  ];
+
+  it('carries the venue-published factor and settlement currency onto the resolved ref', async () => {
+    const client = detailsClient(
+      new Map([
+        [29391797, { CurrencyCode: 'GBP', PriceCurrency: 'GBX', PriceToContractFactor: 0.01 }],
+      ]),
+    );
+
+    const resolver = await saxoInstrumentResolverFromVenue(GBX_ROW, client);
+
+    expect(resolver.resolve('LQQ3')).toEqual({
+      uic: 29391797,
+      asset_type: 'Etn',
+      currency: 'GBP',
+      price_currency: 'GBX',
+      price_to_contract_factor: 0.01,
+    });
+    expect(client.getInstrumentDetails).toHaveBeenCalledWith(29391797, 'Etn');
+  });
+
+  it('refuses a line quoted in one currency, settled in another, with a factor of 1', async () => {
+    const client = detailsClient(
+      new Map([
+        [29391797, { CurrencyCode: 'GBP', PriceCurrency: 'GBX', PriceToContractFactor: 1 }],
+      ]),
+    );
+
+    await expect(saxoInstrumentResolverFromVenue(GBX_ROW, client)).rejects.toThrow(
+      /self-contradictory/,
+    );
   });
 });

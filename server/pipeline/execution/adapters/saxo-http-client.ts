@@ -28,6 +28,8 @@ import {
   SaxoBrokerProviderError,
 } from './saxo-broker-errors.js';
 import type {
+  SaxoAssetType,
+  SaxoInstrumentDetails,
   SaxoNetPosition,
   SaxoOpenApiClient,
   SaxoOpenOrder,
@@ -260,6 +262,27 @@ function validateNetPosition(raw: unknown, context: string): SaxoNetPosition {
   };
 }
 
+/**
+ * A missing or non-positive `PriceToContractFactor` fails here rather than
+ * defaulting to 1: the whole point of reading this endpoint is that the unit
+ * must not be guessed (#1302), and a line whose unit the venue will not state
+ * is a line this adapter must refuse to price.
+ */
+function validateInstrumentDetails(body: unknown, context: string): SaxoInstrumentDetails {
+  if (!isRecord(body)) failValidation(context, 'expected an object', body);
+  const factor = requireNumber(body, 'PriceToContractFactor', context);
+  if (factor <= 0) {
+    failValidation(context, 'PriceToContractFactor must be positive', body);
+  }
+  return {
+    Uic: requireNumber(body, 'Uic', context),
+    AssetType: requireString(body, 'AssetType', context),
+    CurrencyCode: requireString(body, 'CurrencyCode', context),
+    PriceCurrency: optionalString(body, 'PriceCurrency', context),
+    PriceToContractFactor: factor,
+  };
+}
+
 function validateIdentity(body: unknown, pinnedAccountKey: string | undefined): AccountIdentity {
   const context = 'resolveAccount';
   const rows = readData(body, context).map((row) => {
@@ -431,6 +454,21 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
       path = page.next?.startsWith(this.baseUrl) ? page.next.slice(this.baseUrl.length) : page.next;
     }
     return rows;
+  }
+
+  /** Unauthenticated by account: reference data, no `AccountKey` in the path or query. */
+  async getInstrumentDetails(
+    uic: number,
+    assetType: SaxoAssetType,
+  ): Promise<SaxoInstrumentDetails> {
+    return this.request(
+      `/ref/v1/instruments/details/${encodeURIComponent(String(uic))}/${encodeURIComponent(
+        assetType,
+      )}`,
+      { method: 'GET' },
+      'getInstrumentDetails',
+      validateInstrumentDetails,
+    );
   }
 
   /**

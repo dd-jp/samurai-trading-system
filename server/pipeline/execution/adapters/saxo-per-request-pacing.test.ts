@@ -63,7 +63,15 @@ const BRACKET_OPEN_ORDERS = [
 
 const RESOLVER: SaxoInstrumentResolver = {
   resolve: (lseTicker) =>
-    lseTicker === '3USL' ? { uic: 3347273, asset_type: 'Etn', currency: 'USD' } : undefined,
+    lseTicker === '3USL'
+      ? {
+          uic: 3347273,
+          asset_type: 'Etn',
+          currency: 'USD',
+          price_currency: 'USD',
+          price_to_contract_factor: 1,
+        }
+      : undefined,
   lseTickerFor: (uic) => (uic === 3347273 ? '3USL' : undefined),
 };
 

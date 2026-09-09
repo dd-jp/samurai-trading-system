@@ -29,6 +29,11 @@
  *   protective pair cannot be expressed; `rearmProtectiveLegs` throws.
  * - Amounts are whole units (`MinimumLotSize` 1, `OddLotsNotAllowed`) and
  *   prices carry `OrderDecimals` 2 on every pool line.
+ * - Prices cross this boundary in the VENUE's unit, which on an LSE GBX line
+ *   is pence while the line settles in GBP (#1302). Everything above the
+ *   adapter speaks cash; `saxo-price-unit.ts` is the only place either
+ *   direction is converted, and `SaxoInstrumentRef` carries the factor the
+ *   venue itself publishes per instrument.
  */
 import type { Clock, Logger } from '../../../shared/index.js';
 import { safeLog } from '../../../shared/index.js';
@@ -58,12 +63,14 @@ import type {
   SaxoAssetType,
   SaxoBuySell,
   SaxoDurationType,
+  SaxoInstrumentDetails,
   SaxoOpenApiClient,
   SaxoOpenOrder,
   SaxoOrderActivity,
   SaxoOrderPlacement,
   SaxoOrderRequest,
 } from './saxo-client.js';
+import { type SaxoQuoteUnit, saxoCashPerShare, saxoQuotedPrice } from './saxo-price-unit.js';
 
 /** Measured on SIM 2026-09-05: identical placements 17 s apart both landed; inside the window the second earned 409 (doc 43). */
 const SAXO_DUPLICATE_WINDOW_MS = 15_000;
@@ -137,10 +144,17 @@ function shouldWarnDormantDefer(consecutive: number): boolean {
   return (consecutive - DORMANT_DEFER_ALERT_AFTER) % DORMANT_DEFER_ALERT_REPEAT_EVERY === 0;
 }
 
-export interface SaxoInstrumentRef {
+export interface SaxoInstrumentRef extends SaxoQuoteUnit {
   readonly uic: number;
   readonly asset_type: SaxoAssetType;
+  /**
+   * `CurrencyCode` — what `price x price_to_contract_factor` is denominated
+   * in, which on a GBX line is NOT the unit the price is quoted in. Never
+   * compute cash from this field alone (#1302, see saxo-price-unit.ts).
+   */
   readonly currency: string;
+  /** `PriceCurrency`: `GBX` on a pence line whose `currency` is `GBP` (doc 44 §2.1). */
+  readonly price_currency: string | undefined;
 }
 
 /** LSE ticker <-> Saxo Uic, both ways: orders go out by Uic, positions come back by Uic. */
@@ -157,29 +171,47 @@ export interface SaxoResolvablePoolRow {
       readonly line: {
         readonly uic: number;
         readonly asset_type: SaxoAssetType;
-        readonly currency: string;
       } | null;
     };
   };
 }
 
 /**
- * Builds the resolver from the pool's recorded Saxo evidence. Only a row's
- * OWN line resolves — a `sibling_line` is a different instrument
- * (`lse-etp-pool.ts`) and must not be traded under the row's ticker.
+ * Builds the resolver from the pool's recorded Saxo evidence, joined to the
+ * venue's own instrument details for each line's quote unit and settlement
+ * currency (#1302). Only a row's OWN line resolves — a `sibling_line` is a
+ * different instrument (`lse-etp-pool.ts`) and must not be traded under the
+ * row's ticker.
+ *
+ * The pool supplies identity (ticker, Uic, asset type) and the VENUE supplies
+ * money units: the pool's own `currency` is vendor-sourced, and Saxo's search
+ * endpoint — which is where the pool's Saxo evidence came from — reports a
+ * pence line as `GBP`. One `getInstrumentDetails` call per line, at build
+ * time, on reference data that does not change intraday.
+ *
+ * A line whose details cannot be read, or whose unit fields contradict each
+ * other, throws rather than resolving without a factor: an instrument that
+ * quietly drops out of the resolver is an instrument the router reports as
+ * "no Saxo Uic recorded", which reads as a pool gap rather than a venue
+ * failure.
  */
-export function saxoInstrumentResolverFromPool(
+export async function saxoInstrumentResolverFromVenue(
   rows: readonly SaxoResolvablePoolRow[],
-): SaxoInstrumentResolver {
+  client: Pick<SaxoOpenApiClient, 'getInstrumentDetails'>,
+): Promise<SaxoInstrumentResolver> {
   const byTicker = new Map<string, SaxoInstrumentRef>();
   const byUic = new Map<number, string>();
   for (const row of rows) {
     const line = row.provenance.saxo.line;
     if (line === null) continue;
+    const details = await client.getInstrumentDetails(line.uic, line.asset_type);
+    assertUnitIsSelfConsistent(details, row.lse_ticker);
     byTicker.set(row.lse_ticker, {
       uic: line.uic,
       asset_type: line.asset_type,
-      currency: line.currency,
+      currency: details.CurrencyCode,
+      price_currency: details.PriceCurrency,
+      price_to_contract_factor: details.PriceToContractFactor,
     });
     byUic.set(line.uic, row.lse_ticker);
   }
@@ -187,6 +219,23 @@ export function saxoInstrumentResolverFromPool(
     resolve: (lseTicker) => byTicker.get(lseTicker),
     lseTickerFor: (uic) => byUic.get(uic),
   };
+}
+
+/**
+ * A line quoted in one currency and settled in another must carry a factor
+ * that converts between them; a factor of exactly 1 alongside that mismatch
+ * is the venue contradicting itself, and taking either field as authoritative
+ * would be a coin flip on a 100x error (#1302).
+ */
+function assertUnitIsSelfConsistent(details: SaxoInstrumentDetails, lseTicker: string): void {
+  const quoteCurrency = details.PriceCurrency;
+  if (quoteCurrency === undefined || quoteCurrency === details.CurrencyCode) return;
+  if (details.PriceToContractFactor !== 1) return;
+  throw new Error(
+    `Saxo instrument details for '${lseTicker}' (Uic ${details.Uic}) quote in ` +
+      `${quoteCurrency} but settle in ${details.CurrencyCode} with PriceToContractFactor 1 — ` +
+      'cash per share is unknowable from a self-contradictory pair, so the line is not tradeable.',
+  );
 }
 
 export interface SaxoBrokerAdapterInput {
@@ -283,7 +332,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     const exitSide = toBuySell(order.side === 'buy' ? 'sell' : 'buy');
     const leg = (type: 'StopIfTraded' | 'Limit', price: number, suffix: Leg) => ({
       OrderType: type,
-      OrderPrice: roundPrice(price),
+      OrderPrice: venueOrderPrice(ref, price),
       BuySell: exitSide,
       Amount: order.size,
       AssetType: ref.asset_type,
@@ -301,7 +350,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
       BuySell: toBuySell(order.side),
       Amount: order.size,
       OrderType: 'Limit',
-      OrderPrice: roundPrice(order.entry),
+      OrderPrice: venueOrderPrice(ref, order.entry),
       OrderDuration: { DurationType: toDuration(order.time_in_force) },
       ManualOrder: false,
       ExternalReference: order.client_order_id,
@@ -369,10 +418,15 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     for (const activity of activities) {
       const owner = this.attribute(activity.ExternalReference);
       if (owner === undefined) continue;
-      const fill = toFill(activity, owner.clientOrderId, owner.leg, since);
+      const fill = toFill(
+        activity,
+        owner.clientOrderId,
+        owner.leg,
+        since,
+        this.unitForOwnedActivity(activity),
+      );
       if (fill === undefined) continue;
-      const feeCurrency = this.feeCurrencyFor(activity);
-      fills.push(feeCurrency === undefined ? fill : { ...fill, fee_currency: feeCurrency });
+      fills.push(fill);
     }
     return fills;
   }
@@ -473,7 +527,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
           this.instruments.lseTickerFor(uic) ?? position.DisplayAndFormat?.Symbol ?? `uic:${uic}`,
         qty,
         side: qty > 0 ? 'buy' : 'sell',
-        avg_entry_price: position.NetPositionView.AverageOpenPrice ?? null,
+        avg_entry_price: this.cashOpenPrice(position.NetPositionView.AverageOpenPrice, uic),
       });
     }
     return out;
@@ -528,33 +582,61 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
   }
 
   /**
-   * The activity feed carries no charge field, so the fee is the published
-   * GBP-ETP tariff (ADR-0015 §"Saxo", 0.08 %, no minimum) applied to the fill
-   * — and it is denominated in the LINE's quote currency (USD on most pool
-   * lines), which `NormalizedFill.fee_currency` makes explicit rather than
-   * letting a USD figure be summed as GBP. No FX rate is invented here.
-   *
-   * A Uic no pool line resolves leaves that ONE fill's currency unset and is
-   * logged at `error`; it does not fail the sweep, which would hold every
-   * other fill in the same batch hostage to one attribution gap.
+   * A net position's `AverageOpenPrice` in cash (#1302). A Uic no pool line
+   * resolves reports `null` — the honest answer for a price whose unit is
+   * unknown, and one `NormalizedPosition.avg_entry_price` already admits —
+   * rather than the throw `unitForOwnedActivity` uses: a position under an
+   * unrecognised Uic is not necessarily this system's (a hand-placed trade in
+   * the same account is enough), and refusing the whole sweep would blind
+   * `reconcile` to every OTHER position including our own.
    */
-  private feeCurrencyFor(activity: SaxoOrderActivity): string | undefined {
-    const ticker = this.instruments.lseTickerFor(activity.Uic);
-    const ref = ticker === undefined ? undefined : this.instruments.resolve(ticker);
-    if (ref !== undefined) return ref.currency;
+  private cashOpenPrice(quotedPrice: number | undefined, uic: number): number | null {
+    if (quotedPrice === undefined) return null;
+    const ref = this.instrumentForUic(uic);
+    if (ref !== undefined) return saxoCashPerShare(ref, quotedPrice);
     safeLog(this.logger, {
-      trace_id: 'saxo-fill-sweep',
+      trace_id: 'saxo-open-positions',
       stage: 'execution',
       level: 'error',
-      event: 'saxo_fill_fee_currency_unresolved',
-      message: 'Saxo fetchNewFills: fill Uic resolves to no pool line; fee_currency left unset',
-      payload: {
-        log_id: activity.LogId,
-        uic: activity.Uic,
-        external_reference: activity.ExternalReference,
-      },
+      event: 'saxo_position_price_unit_unresolved',
+      message:
+        'Saxo getOpenPositions: position Uic resolves to no pool line, so its quote unit is ' +
+        'unknown; avg_entry_price reported as null rather than at venue scale',
+      payload: { uic },
     });
-    return undefined;
+    return null;
+  }
+
+  private instrumentForUic(uic: number): SaxoInstrumentRef | undefined {
+    const ticker = this.instruments.lseTickerFor(uic);
+    return ticker === undefined ? undefined : this.instruments.resolve(ticker);
+  }
+
+  /**
+   * The quote unit for an activity row this adapter's own `ExternalReference`
+   * owns. Throws when the Uic resolves to no pool line, because without a
+   * factor the row's price cannot be turned into cash and a raw venue price
+   * on a GBX line is 100x wrong (#1302).
+   *
+   * This tightens what `feeCurrencyFor` did before it — that logged and left
+   * `fee_currency` unset rather than failing the sweep, on the grounds that
+   * one attribution gap must not hold a whole batch hostage. It cannot stand
+   * once the PRICE depends on the same lookup: booking a possibly-100x price
+   * is worse than a delayed batch, and the batch is only delayed —
+   * `ingestFills` recomputes `since` from the open lots' `opened_at` on every
+   * poll rather than advancing a watermark, so the next poll re-drives the
+   * same activity rows and `hasFill` dedups whatever already landed. The same
+   * trade-off `toFill` already makes for a `Filled` row with no
+   * `FillAmount`/`AveragePrice`.
+   */
+  private unitForOwnedActivity(activity: SaxoOrderActivity): SaxoInstrumentRef {
+    const ref = this.instrumentForUic(activity.Uic);
+    if (ref !== undefined) return ref;
+    throw new Error(
+      `Saxo activity ${activity.LogId} for '${String(activity.ExternalReference)}' reports Uic ` +
+        `${activity.Uic}, which resolves to no pool line — the line's PriceToContractFactor is ` +
+        'unknown, so its price cannot be expressed as cash and the fill is not booked.',
+    );
   }
 
   private async findOpen(externalReference: string): Promise<LookedUpOrder | DormantLegs | null> {
@@ -947,8 +1029,13 @@ function toDuration(timeInForce: string): SaxoDurationType {
   }
 }
 
-function roundPrice(price: number): number {
-  return Number(price.toFixed(ORDER_DECIMALS));
+/**
+ * Cash price from the caller -> the number this venue takes on an order.
+ * `ORDER_DECIMALS` applies AFTER the unit conversion because it is the
+ * venue's own `OrderDecimals`, i.e. decimals of the QUOTED price.
+ */
+function venueOrderPrice(ref: SaxoInstrumentRef, cashPrice: number): number {
+  return Number(saxoQuotedPrice(ref, cashPrice).toFixed(ORDER_DECIMALS));
 }
 
 function assertWholeUnits(size: number, clientOrderId: string): void {
@@ -988,18 +1075,26 @@ function activityState(activity: SaxoOrderActivity): NormalizedOrder['order_stat
  * AND a finite `AveragePrice` — the two UNVERIFIED fields (saxo-client.ts).
  * A `Filled` row missing either is thrown so the sweep fails loudly and is
  * retried, rather than a filled position going unbooked and unprotected.
- * `fee`: see `feeCurrencyFor`.
+ *
+ * `AveragePrice` is the VENUE-QUOTED price, so it becomes cash through the
+ * line's own factor (#1302) before anything above the adapter sees it. The
+ * activity feed carries no charge field, so the fee is the published GBP-ETP
+ * tariff (ADR-0015 §"Saxo", 0.08 %, no minimum) applied to that cash figure
+ * and denominated in the line's `CurrencyCode` (USD on most pool lines) —
+ * which `fee_currency` states rather than letting a USD figure be summed as
+ * GBP. No FX rate is invented here.
  */
 function toFill(
   activity: SaxoOrderActivity,
   clientOrderId: string,
   leg: Leg,
   since: Date,
+  ref: SaxoInstrumentRef,
 ): NormalizedFill | undefined {
   const qty = activity.FillAmount;
-  const price = activity.AveragePrice;
+  const quoted = activity.AveragePrice;
   const hasQty = typeof qty === 'number' && Number.isFinite(qty) && qty > 0;
-  const hasPrice = typeof price === 'number' && Number.isFinite(price);
+  const hasPrice = typeof quoted === 'number' && Number.isFinite(quoted);
   if (!hasQty && !hasPrice) {
     if (activity.Status === 'Filled') {
       throw new Error(
@@ -1012,11 +1107,12 @@ function toFill(
   if (!hasQty || !hasPrice) {
     throw new Error(
       `Saxo activity ${activity.LogId} for '${clientOrderId}' (${leg}) carries only one of ` +
-        `FillAmount (${String(qty)}) and AveragePrice (${String(price)}).`,
+        `FillAmount (${String(qty)}) and AveragePrice (${String(quoted)}).`,
     );
   }
   const reported = new Date(activity.ActivityTime);
   const timestamp = Number.isNaN(reported.getTime()) || reported < since ? since : reported;
+  const price = saxoCashPerShare(ref, quoted);
   return {
     client_order_id: clientOrderId,
     broker_fill_id: activity.LogId,
@@ -1024,6 +1120,7 @@ function toFill(
     price,
     qty,
     fee: price * qty * SAXO_COMMISSION_RATE,
+    fee_currency: ref.currency,
     timestamp,
   };
 }

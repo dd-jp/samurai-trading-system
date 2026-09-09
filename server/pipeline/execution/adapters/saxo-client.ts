@@ -22,6 +22,25 @@ export type SaxoAssetType = 'Etn' | 'Etf' | 'Etc';
 export type SaxoBuySell = 'Buy' | 'Sell';
 
 /**
+ * VERIFIED on SIM 2026-09-08 (doc 44 §2.1): the quote-unit slice of
+ * `GET /ref/v1/instruments/details/{Uic}/{AssetType}`. LQQ3 (Uic 29391797,
+ * `Etn`) returns `CurrencyCode` `GBP`, `PriceCurrency` `GBX`,
+ * `PriceToContractFactor` `0.01`; 3USL (Uic 3347273, `Etn`) returns `USD`,
+ * `USD`, `1.0`. The search endpoint and `infoprices` carry neither of the
+ * last two, which is why #1302's collision is invisible from there.
+ */
+export interface SaxoInstrumentDetails {
+  readonly Uic: number;
+  readonly AssetType: string;
+  /** The currency `price x PriceToContractFactor` is denominated in. Not the quote unit. */
+  readonly CurrencyCode: string;
+  /** The unit prices are QUOTED in — `GBX` on a pence line whose `CurrencyCode` is `GBP`. */
+  readonly PriceCurrency?: string | undefined;
+  /** Required at the boundary, never defaulted to 1: a defaulted factor is the 100x guess #1302 removes. */
+  readonly PriceToContractFactor: number;
+}
+
+/**
  * VERIFIED: the subset of the `Etn` `SupportedOrderTypes` list this adapter
  * uses. Plain `Stop` is rejected with `OrderTypeNotSupported`; the
  * stop-market leg is `StopIfTraded`.
@@ -168,6 +187,11 @@ export interface SaxoNetPosition {
  * 409 instead of placing twice.
  */
 export interface SaxoOpenApiClient {
+  /**
+   * Reference data, read once per instrument when the resolver is built: it
+   * is the only endpoint that says what unit the line is quoted in (#1302).
+   */
+  getInstrumentDetails(uic: number, assetType: SaxoAssetType): Promise<SaxoInstrumentDetails>;
   placeOrder(request: SaxoOrderRequest, requestId: string): Promise<SaxoOrderPlacement>;
   /** Cancels the order and, for an IfDone master, its related orders (VERIFIED). Throws 404 `OrderNotFound` when already gone. */
   cancelOrder(orderId: string): Promise<void>;

@@ -42,7 +42,7 @@ export type {
 } from './adapters/saxo-adapter.js';
 export {
   SaxoBrokerAdapter,
-  saxoInstrumentResolverFromPool,
+  saxoInstrumentResolverFromVenue,
 } from './adapters/saxo-adapter.js';
 export {
   isRetryableSaxoBrokerError,
