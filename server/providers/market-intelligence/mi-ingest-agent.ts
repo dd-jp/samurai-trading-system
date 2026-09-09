@@ -110,6 +110,30 @@ function toItem(
 }
 
 export class MiIngestAgent {
+  /**
+   * Consecutive DEGRADED scoring attempts per instrument, in memory (#1392
+   * review round 1, F1).
+   *
+   * `hasScoredItem` (below) makes a degraded batch retry on every refresh for
+   * as long as the article stays inside `LOOKBACK_MS` — which by itself turns
+   * a SUSTAINED outage into one scoring attempt per tick, each up to
+   * `DEFAULT_LLM_RETRY.maxAttempts` billed calls, for the whole window. This
+   * is the cheap bound: after two STRAIGHT failures, the third refresh skips
+   * the scoring call (raw bytes are archived regardless, see `refresh`) and
+   * the streak resets, so a sustained outage attempts scoring on 2 of every 3
+   * refreshes rather than every one. A single blip is unaffected — streak 1
+   * always retries on the very next refresh, which is what the "retries...
+   * once scoring recovers" test below depends on. The MI spend cap remains
+   * the real backstop; this only slows how fast one instrument's outage burns
+   * toward it.
+   *
+   * Also reset on a refresh with nothing new to score (#1392 review round 2,
+   * finding 5) — that refresh proves nothing about whether scoring itself is
+   * still failing, so a streak left over from a since-resolved outage must
+   * not survive to wrongly skip the next refresh that finally has work.
+   */
+  readonly #degradedStreak = new Map<string, number>();
+
   constructor(private readonly deps: MiIngestAgentDeps) {}
 
   /**
@@ -164,8 +188,11 @@ export class MiIngestAgent {
     try {
       articles = await this.deps.newsClient.fetchNews(symbols, start, now);
     } catch (error) {
+      // `trace_id` is a required `string` param, never null/undefined — the
+      // `?? fallback` this line and `mi_ingest_refused_spend_cap` below used
+      // to carry was dead code (#1392 review round 1, F6).
       this.deps.logger?.log({
-        trace_id: trace_id ?? 'mi-ingest',
+        trace_id,
         stage: 'market_intelligence',
         event: 'mi_news_fetch_failed',
         level: 'warn',
@@ -178,15 +205,31 @@ export class MiIngestAgent {
       return false;
     }
 
-    // Score only what is genuinely new. An overlapping window is expected every
-    // refresh (see LOOKBACK_MS), and re-scoring articles already on disk would
-    // bill tokens for an answer we hold — and, worse, produce a SECOND
-    // non-deterministic score for one article, which is the divergence #558
-    // banned at replay.
-    const fresh = articles.filter(
-      (article) => !this.deps.archive.hasItem(SOURCE_ALPACA, article.id, article.updated_at),
-    );
-    if (fresh.length === 0) return false;
+    // NEW raw bytes only — `write`'s `INSERT OR IGNORE` would absorb a
+    // repeat regardless, but recomputing every fetched article's row on every
+    // tick is wasted work. Archived unconditionally, below, independent of
+    // whatever happens to scoring: a fetch that succeeded must not lose its
+    // bytes to a scoring failure, a spend-cap refusal, or the streak bound
+    // below (#1392 review round 1, F2) — map #552's "archive the bytes" step
+    // never depended on scoring succeeding.
+    const newRaws: RawArchiveRow[] = articles
+      .filter(
+        (article) => !this.deps.archive.hasItem(SOURCE_ALPACA, article.id, article.updated_at),
+      )
+      .map((article) => ({
+        source: SOURCE_ALPACA,
+        native_id: article.id,
+        updated_at: article.updated_at,
+        payload: article.payload,
+        ingested_at: now,
+        // 'live' because we fetched it now. A backfill run stamps 'backfill',
+        // because Alpaca's `created_at` is publisher time and a backfilled row
+        // would otherwise assert we saw it the instant it published (#558).
+        fidelity: 'live',
+      }));
+    if (newRaws.length > 0) {
+      this.deps.archive.write(newRaws, []);
+    }
 
     // One article carries a symbols[] array, so an article about three tickers
     // is three items — each scored against ITS OWN entity, because a headline
@@ -196,16 +239,62 @@ export class MiIngestAgent {
     // item is filed under, so downstream joins see `BTC-USD` rather than the
     // vendor's `BTCUSD`, and an LSE ETP's items see the US underlying rather
     // than the traded wrapper ticker.
-    const pairs = fresh
+    //
+    // Keyed on `hasScoredItem` (`mi_items`), NOT `hasItem` (`mi_archive_raw`,
+    // used for `newRaws` above): a raw row with no scored item means an
+    // earlier refresh's batch degraded and never scored it, and that article
+    // must stay a scoring candidate for as long as it is inside the lookback
+    // window — independent of whether its bytes are already on disk (#1392
+    // review round 1, F2).
+    const unscored = articles
       .filter((article) => article.symbols.some((symbol) => symbols.includes(symbol)))
-      .map((article) => ({ article, entity: miSubject }));
-    if (pairs.length === 0) return false;
+      .filter(
+        (article) =>
+          !this.deps.archive.hasScoredItem(
+            SOURCE_ALPACA,
+            article.id,
+            article.updated_at,
+            miSubject,
+          ),
+      );
+    if (unscored.length === 0) {
+      // #1392 review round 2, finding 5: nothing here says scoring is still
+      // failing — only that this refresh had no new work — so a streak left
+      // over from a since-resolved outage must not survive to wrongly skip
+      // the next refresh that finally has something to score.
+      this.#degradedStreak.set(instrument, 0);
+      return false;
+    }
+
+    // #1392 review round 1, F1: bounds a SUSTAINED outage's billed-call rate
+    // — see `#degradedStreak`'s doc. A lone blip (streak 1) is unaffected.
+    const streak = this.#degradedStreak.get(instrument) ?? 0;
+    if (streak >= 2) {
+      this.#degradedStreak.set(instrument, 0);
+      // #1392 review round 2, finding 4: this used to be the only `return
+      // false` in `refresh` with no log line — an operator watching
+      // `mi_ingest_scoring_degraded` would see an outage start, then silence,
+      // with no record of the further refreshes this bound kept suppressing.
+      this.deps.logger?.log({
+        trace_id,
+        stage: 'market_intelligence',
+        event: 'mi_ingest_scoring_skipped',
+        level: 'warn',
+        message:
+          `market intelligence: skipping the scoring attempt for ${instrument} after two ` +
+          'consecutive failures; raw bytes stay archived and the next refresh tries again.',
+        payload: { asset_class, instrument, items: unscored.length },
+      });
+      return false;
+    }
+
+    const pairs = unscored.map((article) => ({ article, entity: miSubject }));
 
     // Checked BEFORE the call — see `spendCap`'s doc on `MiIngestAgentDeps` for why.
     const verdict = this.deps.spendCap.check();
     if (!verdict.admitted) {
       this.deps.logger?.log({
-        trace_id: trace_id ?? 'mi-ingest',
+        trace_id,
         stage: 'market_intelligence',
         event: 'mi_ingest_refused_spend_cap',
         level: 'warn',
@@ -224,26 +313,44 @@ export class MiIngestAgent {
       return false;
     }
 
-    const scores = await scoreItems(
+    const { scores, degraded } = await scoreItems(
       pairs.map(({ article, entity }) => ({
         entity,
         headline: article.headline,
         summary: article.summary,
       })),
-      { llmClient: this.deps.llmClient, ...(trace_id === undefined ? {} : { trace_id }) },
+      {
+        llmClient: this.deps.llmClient,
+        // #1392 review round 1, F5: `ScoreItemsDeps.logger` is required —
+        // the defect this ticket fixes was precisely that nobody logged a
+        // scoring failure, so a missing logger here falls back to a no-op
+        // rather than silently reopening that gap. Matches the same
+        // `logger ?? { log: () => {} }` idiom `debate-adapter.ts` already
+        // uses for the same reason.
+        logger: this.deps.logger ?? { log: () => {} },
+        trace_id,
+      },
     );
 
-    const raws: RawArchiveRow[] = fresh.map((article) => ({
-      source: SOURCE_ALPACA,
-      native_id: article.id,
-      updated_at: article.updated_at,
-      payload: article.payload,
-      ingested_at: now,
-      // 'live' because we fetched it now. A backfill run stamps 'backfill',
-      // because Alpaca's `created_at` is publisher time and a backfilled row
-      // would otherwise assert we saw it the instant it published (#558).
-      fidelity: 'live',
-    }));
+    if (degraded) {
+      // Streak, not a reset: this attempt failed, so it counts toward the
+      // bound above. Raw bytes for these articles are already archived
+      // (`newRaws`, above) — only the score is missing.
+      this.#degradedStreak.set(instrument, streak + 1);
+      this.deps.logger?.log({
+        trace_id,
+        stage: 'market_intelligence',
+        event: 'mi_ingest_scoring_degraded',
+        level: 'warn',
+        message:
+          `market intelligence: item scoring failed for ${pairs.length} item(s) for ` +
+          `${instrument}; their raw bytes are archived, but nothing is scored, so the ` +
+          'analysts will report NO DATA for this window rather than a fabricated neutral read.',
+        payload: { asset_class, instrument, items: pairs.length },
+      });
+      return false;
+    }
+    this.#degradedStreak.set(instrument, 0);
 
     const archivedItems: ArchivedItem[] = pairs.map(({ article, entity }, index) => {
       const score = scores[index] ?? { sentiment: 0 as const, confidence: 0.05 };
@@ -258,7 +365,10 @@ export class MiIngestAgent {
       };
     });
 
-    this.deps.archive.write(raws, archivedItems);
+    // Raws for these articles were already written above (or in an earlier
+    // refresh, if this attempt is a retry after a prior batch degraded) —
+    // only the items are new here.
+    this.deps.archive.write([], archivedItems);
     this.deps.store.ingest({
       agent_id: SOURCE_ALPACA,
       timestamp: now,
@@ -267,7 +377,7 @@ export class MiIngestAgent {
     });
 
     this.deps.logger?.log({
-      trace_id: trace_id ?? 'mi-ingest',
+      trace_id,
       stage: 'market_intelligence',
       level: 'info',
       message: 'market intelligence: ingested scored news items',
@@ -278,7 +388,14 @@ export class MiIngestAgent {
         // ETP row — the operator-visible evidence that the resolution step
         // ran (#914/#960).
         mi_subject: miSubject,
-        articles: fresh.length,
+        // NEW raw rows written THIS refresh, pre-symbol-filter — matches this
+        // field's pre-#1392 semantics (was `fresh.length`, filtered the same
+        // way). `unscored.length` would always equal `items.length` here
+        // (both are 1:1 maps of `pairs`), collapsing this into a degenerate
+        // duplicate of `items` below. Can read 0 with `items` > 0: a batch
+        // that degraded on an earlier refresh already wrote its raws then, so
+        // a later refresh that finally scores it writes no NEW raw rows here.
+        articles: newRaws.length,
         items: archivedItems.length,
       },
     });

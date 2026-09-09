@@ -75,6 +75,11 @@ function newsClient(articles: AlpacaNewsArticle[]) {
   } as unknown as AlpacaNewsClient;
 }
 
+/** A client whose `complete` always throws — the shape a provider outage takes. */
+function failingScoringClient(message = 'llm down') {
+  return { complete: async () => Promise.reject(new Error(message)) };
+}
+
 function build(
   articles: AlpacaNewsArticle[],
   sentiment: 1 | 0 | -1 = 1,
@@ -109,6 +114,32 @@ describe('MiIngestAgent', () => {
     expect(context.news).toHaveLength(1);
     expect(context.news[0]?.headline).toBe('Apple beats on revenue');
     expect(context.news[0]?.sentiment).toBe(1);
+  });
+
+  // #1392 review round 1 self-review: `articles` and `items` on the
+  // `ingested scored news items` log record must stay distinct — `articles`
+  // is every fetched/archived row (pre-symbol-filter, matching the old
+  // `fresh.length`), `items` is only what got scored. Regressed once this
+  // round when `articles` was briefly wired to `unscored.length`, which is
+  // always equal to `items.length` (both are 1:1 maps of the same `pairs`),
+  // collapsing the field into a duplicate.
+  it('logs a wider article count than item count when the fetch returns an article for another instrument', async () => {
+    const logger = recordingLogger();
+    const { agent } = build(
+      [
+        article({ id: '1001', symbols: ['AAPL'] }),
+        article({ id: '1002', symbols: ['TSLA'], headline: 'Tesla recalls vehicles' }),
+      ],
+      1,
+      { logger },
+    );
+
+    await agent.refresh('t', 'AAPL', 'stocks');
+
+    const entry = logger.entries.find(
+      (e) => e.message === 'market intelligence: ingested scored news items',
+    );
+    expect(entry?.payload).toMatchObject({ articles: 2, items: 1 });
   });
 
   /**
@@ -172,6 +203,39 @@ describe('MiIngestAgent', () => {
     expect(store.getContext('stocks', WINDOW, 't').news.map((item) => item.entity)).toEqual([
       'AAPL',
     ]);
+  });
+
+  /**
+   * #1392 review round 2, finding 3: eligibility moved from `hasItem`
+   * (`mi_archive_raw`, entity-agnostic) to `hasScoredItem` (`mi_items`,
+   * entity in its key). Under the old `hasItem` gate, a shared article was
+   * scored for whichever instrument's refresh saw it FIRST — a second
+   * instrument covered by the same article never got its own entity-scoped
+   * score, because the raw row already "existed" and the second refresh's
+   * `newRaws` filter (which used to double as the scoring gate) skipped it.
+   * `hasScoredItem` fixes that latent bug: each covering instrument now gets
+   * its own scoring pass over the shared article, at the cost of one more
+   * billed LLM call per additional instrument that shares an article — priced
+   * in the PR body, not built out further here.
+   */
+  it('scores a shared multi-symbol article separately for a second instrument that covers it', async () => {
+    const shared = article({ symbols: ['AAPL', 'NVDA'] });
+    const { agent, store, scorer } = build([shared]);
+
+    await agent.refresh('t', 'AAPL', 'stocks');
+    expect(scorer.calls).toHaveLength(1);
+    expect(store.getContext('stocks', WINDOW, 't').news.map((item) => item.entity)).toEqual([
+      'AAPL',
+    ]);
+
+    await agent.refresh('t', 'NVDA', 'stocks');
+    expect(scorer.calls).toHaveLength(2);
+    expect(
+      store
+        .getContext('stocks', WINDOW, 't')
+        .news.map((item) => item.entity)
+        .sort(),
+    ).toEqual(['AAPL', 'NVDA']);
   });
 
   it('converts a dash-form crypto id to the wire symbol', async () => {
@@ -278,6 +342,189 @@ describe('MiIngestAgent', () => {
     // have traded on the technical analyst alone.
     await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false);
     expect(store.getContext('stocks', WINDOW, 't').news).toEqual([]);
+  });
+
+  /**
+   * #1392: `scoreItems` used to fall back to `UNSCORED` (sentiment 0,
+   * confidence 0.05 — a genuine-looking neutral read) on ANY failure, and
+   * this method archived that fallback exactly like a real score. A provider
+   * outage was then indistinguishable from a neutral news day, on the store
+   * and on the dashboard, and it reinstated #625's conviction ceiling
+   * invisibly.
+   *
+   * Review round 1 (F2) changed the fix's shape: the raw bytes are archived
+   * regardless (the fetch succeeded — losing them would mean re-fetching
+   * something already in hand, or losing it outright if the outage outlasts
+   * LOOKBACK_MS), but no scored item is written, so the analysts still see
+   * NO_DATA_MARKER like an outage should, not a fabricated neutral opinion.
+   */
+  it('archives the raw bytes but not a scored item, and logs the cause, when scoring fails', async () => {
+    const logger = recordingLogger();
+    const archive = new MiArchiveStore();
+    const store = new MarketIntelligenceStore(clock);
+    const agent = new MiIngestAgent({
+      archive,
+      store,
+      newsClient: newsClient([article()]),
+      llmClient: failingScoringClient(),
+      clock,
+      assetClasses: ['stocks'],
+      spendCap: ADMITS,
+      logger,
+    });
+
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false);
+
+    expect(archive.rawRows('alpaca-news')).toHaveLength(1);
+    expect(store.getContext('stocks', WINDOW, 't').news).toEqual([]);
+    expect(
+      logger.entries.some(
+        (entry) => entry.level === 'warn' && entry.event === 'mi_ingest_scoring_degraded',
+      ),
+    ).toBe(true);
+  });
+
+  /**
+   * The counterpart to the archiving assertion above: no scored item was
+   * written for the failed article, so `hasScoredItem` does not yet know it,
+   * and the very next refresh — still inside the overlapping LOOKBACK_MS
+   * window — gets to try scoring it again rather than being poisoned at
+   * UNSCORED forever. A single failure (streak 1) must not trip the
+   * consecutive-failure bound below.
+   */
+  it('retries the same article on the next refresh after a scoring outage, once scoring recovers', async () => {
+    const archive = new MiArchiveStore();
+    const store = new MarketIntelligenceStore(clock);
+    const agent = new MiIngestAgent({
+      archive,
+      store,
+      newsClient: newsClient([article()]),
+      llmClient: failingScoringClient(),
+      clock,
+      assetClasses: ['stocks'],
+      spendCap: ADMITS,
+    });
+
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false);
+    expect(store.getContext('stocks', WINDOW, 't').news).toEqual([]);
+
+    (agent as unknown as { deps: { llmClient: unknown } }).deps.llmClient = scoringClient().client;
+
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(true);
+    expect(store.getContext('stocks', WINDOW, 't').news).toHaveLength(1);
+  });
+
+  /**
+   * #1392 review round 1, F1: the cheap bound on a SUSTAINED outage's billed
+   * calls. Two straight degraded refreshes trip it; the third skips the
+   * scoring attempt entirely (no LLM call — raw bytes stay archived, from the
+   * first refresh, regardless), then the fourth tries again.
+   */
+  it('skips the scoring attempt on the third straight refresh after two consecutive failures, then retries on the fourth', async () => {
+    const archive = new MiArchiveStore();
+    const store = new MarketIntelligenceStore(clock);
+    const failing = failingScoringClient();
+    const agent = new MiIngestAgent({
+      archive,
+      store,
+      newsClient: newsClient([article()]),
+      llmClient: failing,
+      clock,
+      assetClasses: ['stocks'],
+      spendCap: ADMITS,
+    });
+
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false); // streak 1
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false); // streak 2
+
+    const scorer = scoringClient();
+    (agent as unknown as { deps: { llmClient: unknown } }).deps.llmClient = scorer.client;
+
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false); // skipped, streak reset
+    expect(scorer.calls).toHaveLength(0);
+    expect(archive.rawRows('alpaca-news')).toHaveLength(1);
+
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(true); // streak reset, tries again
+    expect(scorer.calls).toHaveLength(1);
+    expect(store.getContext('stocks', WINDOW, 't').news).toHaveLength(1);
+  });
+
+  /**
+   * #1392 review round 2, finding 4: the streak skip was the only `return
+   * false` in `refresh` that withheld intelligence with no log line — an
+   * operator watching for `mi_ingest_scoring_degraded` would see the outage
+   * start, then silence, with no record of the two further refreshes it kept
+   * suppressing.
+   */
+  it('logs when the consecutive-failure streak skips a scoring attempt', async () => {
+    const archive = new MiArchiveStore();
+    const store = new MarketIntelligenceStore(clock);
+    const logger = recordingLogger();
+    const agent = new MiIngestAgent({
+      archive,
+      store,
+      newsClient: newsClient([article()]),
+      llmClient: failingScoringClient(),
+      clock,
+      assetClasses: ['stocks'],
+      spendCap: ADMITS,
+      logger,
+    });
+
+    await agent.refresh('t', 'AAPL', 'stocks'); // streak 1
+    await agent.refresh('t', 'AAPL', 'stocks'); // streak 2
+    logger.entries.length = 0;
+
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false); // skipped
+
+    expect(
+      logger.entries.some(
+        (entry) => entry.level === 'warn' && entry.event === 'mi_ingest_scoring_skipped',
+      ),
+    ).toBe(true);
+  });
+
+  /**
+   * #1392 review round 2, finding 5: `#degradedStreak` reset only inside the
+   * scoring path, so a streak left at 2 by a since-resolved outage survived a
+   * refresh with nothing new to score (the `unscored.length === 0` early
+   * return) and then wrongly skipped the NEXT refresh that finally had new
+   * work, even though scoring itself never failed a third time.
+   */
+  it('does not carry a stale failure streak across a refresh with nothing new to score', async () => {
+    const archive = new MiArchiveStore();
+    const store = new MarketIntelligenceStore(clock);
+    const news = newsClient([article()]);
+    const agent = new MiIngestAgent({
+      archive,
+      store,
+      newsClient: news,
+      llmClient: failingScoringClient(),
+      clock,
+      assetClasses: ['stocks'],
+      spendCap: ADMITS,
+    });
+
+    await agent.refresh('t', 'AAPL', 'stocks'); // streak 1
+    await agent.refresh('t', 'AAPL', 'stocks'); // streak 2
+
+    // A refresh with nothing new to score — the fetch returns no articles at
+    // all, so `unscored.length === 0` and `refresh` returns early, well
+    // before the streak-skip check. A fresh client, not a mutation of `news`
+    // above — mutating the shared object's `fetchNews` would still be in
+    // effect below when `news` is restored.
+    (agent as unknown as { deps: { newsClient: unknown } }).deps.newsClient = newsClient([]);
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false);
+
+    // New work arrives, and scoring itself has recovered. Without the reset,
+    // the stale streak of 2 would skip this attempt with no LLM call.
+    const scorer = scoringClient();
+    (agent as unknown as { deps: { newsClient: unknown; llmClient: unknown } }).deps.newsClient =
+      news;
+    (agent as unknown as { deps: { llmClient: unknown } }).deps.llmClient = scorer.client;
+
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(true);
+    expect(scorer.calls).toHaveLength(1);
   });
 
   /**
