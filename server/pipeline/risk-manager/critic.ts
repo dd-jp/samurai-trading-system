@@ -370,7 +370,6 @@ export interface LlmRiskCriticProducerOptions {
   budgetMs?: number;
 }
 
-/** The `live`/`paper` producer: one metered LLM pass per viable entry intent, persisted by `debate_id`. */
 /**
  * What `risk_critic_verdict_unavailable`'s `failure_cause` can say (#1394).
  * `spend_cap` is not an LLM failure — the call never went out — but it is the
@@ -379,6 +378,7 @@ export interface LlmRiskCriticProducerOptions {
  */
 type CriticUnavailableCause = FailureCause | 'spend_cap';
 
+/** The `live`/`paper` producer: one metered LLM pass per viable entry intent, persisted by `debate_id`. */
 export class LlmRiskCriticProducer implements RiskCriticProducer {
   readonly #llm: LlmClient;
   readonly #store: RiskCriticStore;
@@ -585,27 +585,28 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
    * can produce one (#1394). `failure_cause` is the discriminator: `spend_cap`
    * (the call never went out), `timeout` (the producer's own budget fired), or
    * whatever the classifier reads off the thrown value.
+   *
+   * Through `#warn`, not `#logger` directly: both callers sit in FRONT of
+   * `#record`, so a throwing logger here would cost the run the `unavailable`
+   * row rather than one line.
    */
   #logUnavailable(
     request: RiskCriticRequest,
     failure_cause: CriticUnavailableCause,
     detail: string,
   ): void {
-    this.#logger?.log({
-      trace_id: request.trace_id,
-      stage: 'risk',
-      event: 'risk_critic_verdict_unavailable',
-      level: 'warn',
-      message:
-        'risk critic could not produce a verdict; the decision proceeds on the mechanical ' +
+    this.#warn(
+      request,
+      'risk_critic_verdict_unavailable',
+      'risk critic could not produce a verdict; the decision proceeds on the mechanical ' +
         'steps and records risk_critic: skipped',
-      payload: {
+      {
         instrument: request.intent.instrument,
         debate_id: request.intent.metadata.debate_id,
         failure_cause,
         error: detail,
       },
-    });
+    );
   }
 
   /**

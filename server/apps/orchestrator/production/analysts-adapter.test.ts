@@ -1,4 +1,4 @@
-import type { AnalystOrchestrator } from '../../../pipeline/analysts/index.js';
+import type { AnalystFailureKind, AnalystOrchestrator } from '../../../pipeline/analysts/index.js';
 import type { AnalystView } from '../../../pipeline/debate-engine/index.js';
 import type { Clock, LogEntry, Logger } from '../../../shared/index.js';
 import { AnalystSkipKindRelay } from '../analysts-decision.js';
@@ -56,7 +56,7 @@ describe('buildAnalystsStep', () => {
   });
 
   describe('skip kinds (#1080)', () => {
-    function skippingOrchestrator(kind: 'timeout' | 'error'): AnalystOrchestrator {
+    function skippingOrchestrator(kind: AnalystFailureKind): AnalystOrchestrator {
       const runAnalysts = vi.fn(async () => ({
         views: [],
         analyst_count: 2,
@@ -94,7 +94,7 @@ describe('buildAnalystsStep', () => {
 
     it('distinguishes a fault from a deadline', async () => {
       const skipKinds = new AnalystSkipKindRelay();
-      await run(buildAnalystsStep(skippingOrchestrator('error'), undefined, { skipKinds }));
+      await run(buildAnalystsStep(skippingOrchestrator('transport'), undefined, { skipKinds }));
 
       expect(skipKinds.take('trace-1')).toBe('fault');
     });

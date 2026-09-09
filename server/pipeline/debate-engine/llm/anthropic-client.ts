@@ -202,9 +202,11 @@ export interface AnthropicLlmClientConfig {
    * client for the personas and the disagreement detector) throws
    * `LlmCancelledError` on an already-aborted signal without calling
    * `complete`, by design (#347) — that path costs nothing and reports
-   * nothing. The disagreement detector names its own cancellation through
-   * `debate_disagreement_llm_failed`; a cancelled persona call does not
-   * produce an `llm_call_failed` line.
+   * nothing. Only a cancellation raised BEFORE dispatch is missed this way: an
+   * abort while the call is in flight is raised inside `callWithTimeout`,
+   * inside the retry loop, and does reach here as `cancelled`. The
+   * disagreement detector names its own pre-dispatch cancellation through
+   * `debate_disagreement_llm_failed`.
    */
   onCallFailed?: ((report: LlmCallFailureReport) => void) | undefined;
 }

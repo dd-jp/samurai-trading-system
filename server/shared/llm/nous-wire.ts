@@ -61,9 +61,11 @@ export class NousApiError extends Error {
  * The response ran out of `max_tokens` before the model finished
  * (`finish_reason === 'length'`).
  *
- * Deliberately carries NO `.status`, so `classifyProviderError` lands it on
- * `LlmProviderError`, which `isRetryable` (anthropic-client.ts) rejects. That
- * is the whole reason this class exists.
+ * Deliberately carries NO `.status`, so `classifyProviderError` cannot read it
+ * as a retryable transport fault; `NousMessagesClient` translates it to
+ * `LlmTruncatedError` (#1394), which `isRetryable` (anthropic-client.ts)
+ * rejects like every class outside its three. That is the whole reason this
+ * class exists.
  *
  * A truncated completion arrives as partial — often empty — text. Without this
  * it would reach `parseResponse`, fail, become `LlmMalformedResponseError`,

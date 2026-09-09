@@ -479,6 +479,64 @@ describe('LlmRiskCriticProducer (live/paper)', () => {
         }),
       ).toEqual({ level: 'warn', failure_cause: 'timeout' });
     });
+
+    /**
+     * The invariant `#warn`'s doc comment states, now that a second logging
+     * site sits in front of `#record`: a throwing logger must not be what
+     * costs the run its `unavailable` row. Without that row a backtest reading
+     * this `debate_id` finds nothing and reaches a different decision than the
+     * live run did — see `#record`'s own comment on why the row, not the
+     * verdict, is the thing being protected.
+     */
+    it('still records the unavailable verdict when the logger throws', async () => {
+      const store = new InMemoryRiskCriticStore();
+      const thrower: Logger = {
+        log: () => {
+          throw new Error('log sink is down');
+        },
+      };
+
+      const producer = new LlmRiskCriticProducer({
+        llm: { complete: () => Promise.reject(new LlmProviderError('502')) },
+        store,
+        spendCap: UNCAPPED_SPEND,
+        marketData: stubMarketData(),
+        logger: thrower,
+      });
+
+      // `undefined` IS the unavailable verdict as the risk step reads it
+      // (`toDecisionInput`); the row is the artifact under test.
+      await expect(producer.produce(makeRequest())).resolves.toBeUndefined();
+      expect(store.getByDebateId(DEBATE_ID)?.verdict.verdict).toBe('unavailable');
+    });
+
+    it('still records it when the spend cap refused and the logger throws', async () => {
+      const store = new InMemoryRiskCriticStore();
+      const thrower: Logger = {
+        log: () => {
+          throw new Error('log sink is down');
+        },
+      };
+
+      const producer = new LlmRiskCriticProducer({
+        llm: fakeLlm(PASS_JSON).client,
+        store,
+        spendCap: {
+          check: () => ({
+            admitted: false,
+            spent_usd: 60,
+            budget_usd: 50,
+            reason: 'budget exhausted',
+            kind: 'budget',
+          }),
+        },
+        marketData: stubMarketData(),
+        logger: thrower,
+      });
+
+      await expect(producer.produce(makeRequest())).resolves.toBeUndefined();
+      expect(store.getByDebateId(DEBATE_ID)?.verdict.verdict).toBe('unavailable');
+    });
   });
 
   it('returns within its own budget when the provider never answers, instead of holding the order', async () => {
