@@ -594,9 +594,8 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
    * cancels an IfDone master's related orders with it (VERIFIED, doc 43:33),
    * so no leg is ever named from the same open-orders snapshot the master
    * was read in. That snapshot is exactly what the entry can fill out of
-   * between the read and the DELETE: the master leaves the open list, the
-   * legs activate into the only cover the new position has, and the previous
-   * version deleted them off the stale list and left it naked.
+   * between the read and the DELETE: the master leaves the open list and the
+   * legs activate into the only cover the new position has.
    *
    * `OrderNotFound` on the master's own DELETE is the tell that the snapshot
    * went stale inside this call. Nothing of ours was destroyed by it, so the
@@ -638,17 +637,29 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
    * #549 marks the lots it had already cancelled), where cancelling would
    * strip the only cover off a position nobody is flattening.
    *
-   * With no fill in evidence the legs are settled state and cancelling them
-   * is what the caller asked for: activated legs mean the entry filled long
-   * enough ago for the caller to hold the lot, and dormant ones are
-   * cancelled only on the audit-trail corroboration `lookup` requires
-   * (#1215 ruling (a)) — never on `Status` alone, which is the same
-   * UNVERIFIED read there. A deferred corroboration cancels nothing and is
-   * paged by `escalateIfStale` (ruling (c)) rather than refused: on the read
-   * this adapter defends, the legs it leaves are parked rather than on the
-   * book, so they cannot fire against a flatten the caller sends anyway,
-   * and refusing would abort the flatten of every OTHER lot in the caller's
-   * loop over a bracket whose entry never filled.
+   * A `Filled` audit row under dormant legs refuses too, `masterWasOpen` or
+   * not: the audit trail knows nothing about which read of ours the fill
+   * landed between, and a fill this call cannot place in time is a fill the
+   * caller may have sized its exit before. Resolving instead would leave
+   * legs that read `NotWorking` but may be live (the UNVERIFIED `Status`
+   * read, #1215) standing against the flatten the caller then sends — #516
+   * from the direction cancel-first exists to prevent — and standing after
+   * it completes, on a flat book.
+   *
+   * Only settled state is cancelled: activated legs with no master and no
+   * DELETE refusal (the entry filled long enough ago for the caller to hold
+   * the lot), and dormant legs the audit trail corroborates as dead (#1215
+   * ruling (a)) — never on `Status` alone, which is the same UNVERIFIED
+   * read. A corroboration that says nothing yet cancels nothing and is paged
+   * by `escalateIfStale` (ruling (c)) rather than refused: on the read this
+   * adapter defends, the legs it leaves are parked rather than on the book,
+   * so they cannot fire against a flatten the caller sends anyway, and
+   * refusing would abort the flatten of every OTHER lot in the caller's loop
+   * over a bracket whose entry never filled. Under `masterWasOpen` an EMPTY
+   * audit answer is such a corroboration failure, not a verdict: the master
+   * was on the open list milliseconds earlier, so "no row ties these legs to
+   * any known order" — `lookup`'s justification for cancelling on silence —
+   * is false by construction here.
    */
   private async clearLegs(
     clientOrderId: string,
@@ -662,16 +673,21 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
         clientOrderId,
         this.activityLookbackMs,
         instrument,
+        masterWasOpen,
       );
-      if (verdict.kind === 'defer') {
+      if (verdict.kind === 'defer' || verdict.kind === 'uncorroborated') {
         safeLog(this.logger, {
           trace_id: 'saxo-cancel',
           stage: 'execution',
           level: 'warn',
           event: 'saxo_cancel_deferred_dormant_legs',
           message:
-            'Saxo cancel: the legs read NotWorking but the audit trail has not settled the ' +
-            'master, so they were left in place rather than cancelled on Status alone',
+            verdict.kind === 'defer'
+              ? 'Saxo cancel: the legs read NotWorking but the audit trail has not settled the ' +
+                'master, so they were left in place rather than cancelled on Status alone'
+              : 'Saxo cancel: the master left the open list inside this call and its audit trail ' +
+                'answered nothing at all, so the legs were left in place — an empty answer about ' +
+                'an order this call just read open is a failed corroboration, not a verdict',
           payload: { client_order_id: clientOrderId },
         });
         return;
@@ -680,18 +696,12 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
         await this.cancelLegs(legs);
         return;
       }
+      throw entryFilledDuringCancel(
+        clientOrderId,
+        masterWasOpen ? FILL_INSIDE_CALL : FILL_UNPLACED,
+      );
     }
-    if (masterWasOpen) {
-      // Carried as `venueMessage`, same as `adopt`'s refusal and for the same
-      // reason: `sanitizeBrokerError` keeps only the curated fields, and this
-      // text is composed from our own reference, never from a response body.
-      const reason =
-        `Saxo cancel '${clientOrderId}': the entry filled between this call's open-orders read ` +
-        "and the master's DELETE. Its protective legs are the only cover the new position has, " +
-        'and the caller sized its exit before the fill, so nothing was cancelled — the exit ' +
-        'must be re-derived from a fresh read.';
-      throw new SaxoBrokerProviderError(reason, undefined, 'EntryFilledDuringCancel', reason);
-    }
+    if (masterWasOpen) throw entryFilledDuringCancel(clientOrderId, FILL_INSIDE_CALL);
     await this.cancelLegs(legs);
   }
 
@@ -918,9 +928,14 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
 
   /**
    * Cancels a related-order pair with no master left to cancel it for us —
-   * one `lookup` or `cancel` has already decided may go (a dormant pair
-   * corroborated against the audit trail per #1215 round 1, or, from
-   * `cancel` alone, an activated pair whose lot the caller is flattening).
+   * one `lookup` or `cancel` has already decided may go. Three callers, all
+   * settled state: a dormant pair whose master's audit row is terminal and
+   * not `Filled` (#1215 round 1); a dormant pair with no audit row at all,
+   * from `lookup` only, where nothing ties the legs to a known order; and,
+   * from `cancel` alone, an activated pair whose lot the caller is
+   * flattening. Every other shape refuses or defers in `clearLegs` — a
+   * `Filled` row, or an empty answer about a master `cancel` just watched
+   * leave the open list, never reaches here.
    * Every leg is attempted independently (#1215 round 2): the prior version
    * stopped at the first non-`OrderNotFound` failure, so a sibling leg could
    * be left un-attempted, not merely left cancelled while a later one fails.
@@ -1029,7 +1044,9 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
    * `null` — `null` reads to `reconcileLot` as "the write-ahead never
    * landed", which is false for an order the venue's own audit trail shows
    * it received. No row at all inside the lookback ties the legs to any
-   * known order, so they are cancelled and `null` is the honest answer.
+   * known order, so they are cancelled and `null` is the honest answer —
+   * true on THIS path, where no master was seen open, and false on
+   * `cancel`'s, which is why that caller passes `masterKnownOpen`.
    *
    * Anything else (no terminal status yet, including `partially_filled` —
    * contradictory alongside a dormant-legs read that says the entry never
@@ -1064,10 +1081,16 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
       return fromActivity(latest, externalReference);
     }
 
-    const verdict = await this.corroborateDormantLegs(externalReference, lookbackMs, instrument);
+    const verdict = await this.corroborateDormantLegs(
+      externalReference,
+      lookbackMs,
+      instrument,
+      false,
+    );
     if (verdict.kind === 'filled')
       return legsFilled(open.dormant, verdict.latest, externalReference);
     if (verdict.kind === 'defer') return fromActivity(verdict.latest, externalReference);
+    if (verdict.kind === 'uncorroborated') return null;
     await this.cancelLegs(open.dormant);
     return verdict.latest === undefined ? null : fromActivity(verdict.latest, externalReference);
   }
@@ -1083,14 +1106,29 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
    * wedge whether or not that DELETE lands (a `cancelOrder` throw leaves the
    * legs to a later poll, which will re-derive the same terminal verdict and
    * never reach the deferral the count exists to measure).
+   *
+   * `masterKnownOpen` says this same call read the master on the open list
+   * and its DELETE then answered `OrderNotFound`, which changes what an
+   * EMPTY audit answer means. For `lookup` (false) no row inside the lookback
+   * ties the legs to any known order, so `cancel` is the honest verdict. For
+   * that caller it is a corroboration failure about an order the venue was
+   * serving milliseconds ago, so it defers as `uncorroborated` and counts
+   * towards the page — zero information must not buy more destruction than
+   * a non-terminal row does (#1215's never-on-`Status`-alone ruling, and
+   * #1216's own tell that the snapshot went stale).
    */
   private async corroborateDormantLegs(
     externalReference: string,
     lookbackMs: number,
     instrument: string | undefined,
+    masterKnownOpen: boolean,
   ): Promise<DormantVerdict> {
     const latest = await this.latestActivityFor(externalReference, lookbackMs);
     if (latest === undefined) {
+      if (masterKnownOpen) {
+        await this.escalateIfStale(externalReference, instrument);
+        return { kind: 'uncorroborated' };
+      }
       this.clearDormantDefer(externalReference);
       return { kind: 'cancel', latest: undefined };
     }
@@ -1169,7 +1207,30 @@ function isDormantLegs(result: LookedUpOrder | DormantLegs): result is DormantLe
 type DormantVerdict =
   | { kind: 'filled'; latest: SaxoOrderActivity }
   | { kind: 'cancel'; latest: SaxoOrderActivity | undefined }
-  | { kind: 'defer'; latest: SaxoOrderActivity };
+  | { kind: 'defer'; latest: SaxoOrderActivity }
+  | { kind: 'uncorroborated' };
+
+const FILL_INSIDE_CALL =
+  "the entry filled between this call's open-orders read and the master's DELETE, and the " +
+  'caller sized its exit before that fill';
+
+const FILL_UNPLACED =
+  "the master's audit row says Filled while the legs still read NotWorking, so nothing places " +
+  'that fill against the read the caller sized its exit from';
+
+/**
+ * `cancel`'s refusal: the legs are the only cover the position has and the
+ * caller cannot be shown to be flattening it, so nothing is cancelled. The
+ * text is carried as `venueMessage` too, same as `adopt`'s refusal and for
+ * the same reason — `sanitizeBrokerError` keeps only the curated fields, and
+ * this text is composed from our own reference, never from a response body.
+ */
+function entryFilledDuringCancel(clientOrderId: string, evidence: string): SaxoBrokerProviderError {
+  const reason =
+    `Saxo cancel '${clientOrderId}': ${evidence}. Its protective legs are the only cover the ` +
+    'position has, so nothing was cancelled — the exit must be re-derived from a fresh read.';
+  return new SaxoBrokerProviderError(reason, undefined, 'EntryFilledDuringCancel', reason);
+}
 
 /** The bracket's protective legs as their own `listOpenOrders` rows, master excluded. */
 function legRows(open: readonly SaxoOpenOrder[], externalReference: string): SaxoOpenOrder[] {

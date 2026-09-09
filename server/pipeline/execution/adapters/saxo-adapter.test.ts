@@ -1106,6 +1106,55 @@ describe('SaxoBrokerAdapter.cancel', () => {
     expect(client.cancelOrder).toHaveBeenCalledWith('5040047179');
   });
 
+  it('leaves the legs in place and pages when the master went inside this call and the audit trail answers nothing (#1216)', async () => {
+    let reads = 0;
+    const client = makeClient({
+      // Each cancel() reads twice: the master is open on the first, gone on
+      // the re-read after its DELETE 404s.
+      listOpenOrders: vi.fn(async () =>
+        reads++ % 2 === 0
+          ? [workingMaster(), dormantLeg(), targetLeg()]
+          : [dormantLeg(), targetLeg()],
+      ),
+      listOrderActivities: vi.fn().mockResolvedValue([]),
+      cancelOrder: vi.fn(async (orderId: string) => {
+        if (orderId === '5040047177') {
+          throw new SaxoBrokerProviderError('Saxo API error: 404', 404, 'OrderNotFound', 'gone');
+        }
+      }),
+    });
+    const { adapter, dormantLegsAlerts } = makeAdapter(client);
+
+    await expect(adapter.cancel('key-3usl-0930', '3USL')).resolves.toBeUndefined();
+
+    expect(client.cancelOrder).toHaveBeenCalledTimes(1);
+    expect(client.cancelOrder).not.toHaveBeenCalledWith('5040047178');
+    expect(client.cancelOrder).not.toHaveBeenCalledWith('5040047179');
+
+    // The wedge must reach the page, so the empty answer cannot clear the
+    // consecutive-defer count on its way past.
+    await adapter.cancel('key-3usl-0930', '3USL');
+
+    expect(client.cancelOrder).toHaveBeenCalledTimes(2);
+    expect(client.cancelOrder).not.toHaveBeenCalledWith('5040047178');
+    expect(dormantLegsAlerts.alerts).toHaveLength(1);
+  });
+
+  it('refuses on a Filled audit row under dormant legs even with no master seen open (#1216)', async () => {
+    const client = makeClient({
+      listOpenOrders: vi.fn().mockResolvedValue([dormantLeg(), targetLeg()]),
+      listOrderActivities: vi.fn().mockResolvedValue([activity({ Status: 'Filled' })]),
+    });
+    const { adapter } = makeAdapter(client);
+
+    await expect(adapter.cancel('key-3usl-0930', '3USL')).rejects.toMatchObject({
+      name: 'BrokerError',
+      operation: 'cancel',
+      venueCode: 'EntryFilledDuringCancel',
+    });
+    expect(client.cancelOrder).not.toHaveBeenCalled();
+  });
+
   it('resolves on OrderNotFound when the master is the only open row and the re-read finds nothing left', async () => {
     const client = makeClient({
       listOpenOrders: vi.fn().mockResolvedValue([workingMaster()]),
