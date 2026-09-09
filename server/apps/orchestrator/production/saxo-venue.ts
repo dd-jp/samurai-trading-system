@@ -58,12 +58,11 @@ import {
   SqliteBrokerStateStore,
   saxoInstrumentResolverFromVenue,
 } from '../../../pipeline/execution/index.js';
-import { isBookCurrency } from '../../../providers/market-data-service/index.js';
 import type { LseEtpPoolRow } from '../../../providers/universe-pool/index.js';
 import {
-  gateAdmits,
   LSE_ETP_POOL,
   liveSizingSubclassFor,
+  tradeableUniverse,
 } from '../../../providers/universe-pool/index.js';
 import type { Clock } from '../../../shared/index.js';
 import { resolveVenuePacing, TokenBucket } from '../../../shared/index.js';
@@ -104,39 +103,31 @@ export function resolveBrokerVenue(env: NodeJS.ProcessEnv = process.env): Broker
 }
 
 /**
- * True for a pool row the Saxo venue may trade today: admitted by the
- * liquidity gate AND quoted in a currency the GBP book can carry without an
- * FX rate.
+ * The universe a Saxo run ticks AND the list its gates are keyed to — one
+ * list, for `buildStartingProfileConfigs`'s reason (#739): a D5 envelope
+ * armed off one universe while another is traded is a tick-time refusal
+ * invisible at boot.
  *
- * The sterling half is `isBookCurrency`'s — the same predicate
- * `LseMarkDataSource` refuses a universe on, so the mark path and the order
- * path cannot disagree about which lines are tradeable. #1220 lands
- * `tradeableUniverse()` over the pool with exactly this shape; when it
- * merges, this becomes a call to it.
+ * The tradeable set is `tradeableUniverse()`'s (#1220), never a local
+ * predicate over `LSE_ETP_POOL`: that function is the pool's own account of
+ * which rows a live consumer may trade, and a second copy of the rule here
+ * would diverge from it the first time the ruling moves. This branch shipped
+ * such a copy before #1220 merged; it is now the call its own docblock
+ * promised.
+ *
+ * `subclass` comes from `liveSizingSubclassFor`, so a row whose envelope has
+ * not been MEASURED carries none and sizes on the generic ATR path rather
+ * than on a D5 bracket nobody has calibrated for it.
  *
  * WIDTH IS NOT THIS TICKET'S. #1310 ruled the live ramp widens to the 94
  * sterling Etn/Etc lines gated on burst-sampled p25 spread and ranked on
  * RelativeVolume; that widening is not built, and the venue trades the
  * checked-in pool's tradeable set until it is.
  */
-function isSaxoTradeable(row: LseEtpPoolRow): boolean {
-  return gateAdmits(row) && isBookCurrency(row.currency);
-}
-
-/**
- * The universe a Saxo run ticks AND the list its gates are keyed to — one
- * list, for `buildStartingProfileConfigs`'s reason (#739): a D5 envelope
- * armed off one universe while another is traded is a tick-time refusal
- * invisible at boot.
- *
- * `subclass` comes from `liveSizingSubclassFor`, so a row whose envelope has
- * not been MEASURED carries none and sizes on the generic ATR path rather
- * than on a D5 bracket nobody has calibrated for it.
- */
 export function saxoTradeableUniverse(
   pool: readonly LseEtpPoolRow[] = LSE_ETP_POOL,
 ): UniverseInstrument[] {
-  return pool.filter(isSaxoTradeable).map((row) => {
+  return tradeableUniverse(pool).map((row) => {
     const subclass = liveSizingSubclassFor(row);
     return {
       asset: row.lse_ticker,
@@ -173,9 +164,7 @@ export interface SaxoVenueDeps {
 export async function buildSaxoBroker(deps: SaxoVenueDeps): Promise<BrokerAdapter> {
   assertSaxoVenueBootable(deps);
 
-  const tradeable = new Map(
-    LSE_ETP_POOL.filter(isSaxoTradeable).map((row) => [row.lse_ticker, row]),
-  );
+  const tradeable = new Map(tradeableUniverse().map((row) => [row.lse_ticker, row]));
   assertUniverseIsRoutable(deps.universe, tradeable);
 
   const client =

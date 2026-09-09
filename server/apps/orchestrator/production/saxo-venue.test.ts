@@ -9,7 +9,7 @@ import type {
   SaxoOpenApiClient,
 } from '../../../pipeline/execution/index.js';
 import { SaxoBrokerAdapter } from '../../../pipeline/execution/index.js';
-import { gateAdmits, LSE_ETP_POOL } from '../../../providers/universe-pool/index.js';
+import { LSE_ETP_POOL, tradeableUniverse } from '../../../providers/universe-pool/index.js';
 import { openSharedStore, type SharedStore } from '../../../shared/store/index.js';
 import type { Logger, UniverseInstrument } from '../types.js';
 import {
@@ -80,15 +80,14 @@ describe('resolveBrokerVenue', () => {
 });
 
 describe('saxoTradeableUniverse', () => {
-  it('is the pool rows the liquidity gate admits that are quoted in sterling', () => {
+  it("is EXACTLY the pool's tradeable set (#1220), never a second copy of the rule", () => {
     const universe = saxoTradeableUniverse();
 
     expect(universe.length).toBeGreaterThan(0);
+    expect(universe.map((instrument) => instrument.asset)).toEqual(
+      tradeableUniverse().map((row) => row.lse_ticker),
+    );
     for (const instrument of universe) {
-      const row = LSE_ETP_POOL.find((candidate) => candidate.lse_ticker === instrument.asset);
-      if (row === undefined) throw new Error(`not a pool row: ${instrument.asset}`);
-      expect(gateAdmits(row)).toBe(true);
-      expect(['GBX', 'GBp', 'gbx', 'p', 'GBP']).toContain(row.currency);
       expect(instrument.asset_class).toBe('stocks');
     }
     // Never a US screening proxy: those are what the analysts read, never what is routed.

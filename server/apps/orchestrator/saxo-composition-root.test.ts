@@ -190,7 +190,16 @@ describe('startFromEnvironment (broker venue selection, #1400)', () => {
     const orchestrator = await bootSaxo(fixtureSaxoGateway());
 
     expect(orchestrator.universe).toEqual(saxoTradeableUniverse());
-    expect(orchestrator.universe.map((instrument) => instrument.asset)).not.toContain('SPY');
+    // Named, not just derived: #1220's ruling narrowed the pool's tradeable
+    // set to these five, and a silent change to that list changes what a live
+    // ramp would trade.
+    expect(orchestrator.universe.map((instrument) => instrument.asset)).toEqual([
+      '3LUS',
+      'LQQ3',
+      'LCO3',
+      '3KOR',
+      '3KWE',
+    ]);
   });
 
   it("routes a bracket to the venue in the LINE's quote unit, not the book's (#1302)", async () => {
