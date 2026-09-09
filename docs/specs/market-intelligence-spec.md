@@ -210,7 +210,7 @@ The Market Intelligence layer runs three specialized agents that operate continu
 ```typescript
 // Upstream contract (what agents produce)
 interface AgentIntelligence {
-  agent_id: 'deepresearch' | 'grok' | 'worldmonitor';   // widened per ADR-0002 §5
+  agent_id: 'deepresearch' | 'grok' | 'alpaca-news' | 'polymarket' | 'gdelt-gkg';   // server/providers/market-intelligence/types.ts:32; `worldmonitor` was never a member — WorldMonitor's live wiring is parked (see WorldMonitor Agent below) and it feeds the CII soft signal separately, not this union
   timestamp: Date;
   asset_class: 'crypto' | 'stocks';
   items: IntelligenceItem[];

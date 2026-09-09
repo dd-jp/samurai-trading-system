@@ -49,7 +49,7 @@ Key architectural decisions:
 1. As Execution's simulated broker adapter, I want to call `CostModel.fill(request, marketState)` and get a realistic fill price with a cost breakdown, so that backtest and paper fills are never cheaper than reality.
 2. As the cost model, I want to move the fill price adversely by spread + commission + slippage + √-law market impact (never favorably), so that costs are pessimistic by construction.
 3. As the cost model, I want market impact to scale with √(order size / liquidity), so that scaling capital erodes edge super-linearly and the capacity ceiling is real.
-4. As the cost model, I want asset-class-parameterized pessimistic defaults (crypto wider spreads / taker fees / funding; stocks commission schedule / market-hours), so that each venue's real frictions are modeled.
+4. As the cost model, I want asset-class-parameterized pessimistic defaults (stocks commission schedule / market-hours, with a Saxo-venue override for LSE ETP economics — `CostConfig.venues`, `server/tools/backtest/types.ts:162`), so that each venue's real frictions are modeled. *(Amendment (#1178): this story previously also asked for crypto funding — crypto left scope 2026-08-16, ADR-0015's amendment. It never asked for the leveraged-ETP holding cost the live universe actually carries — daily-reset decay and TER on the LSE ETPs ADR-0016 selected — which is specced and modelled nowhere in this repo; that gap is out of scope here and tracked as its own follow-up ticket.)*
 5. As the system, I want even the most optimistic cost config to apply a non-zero spread+commission floor, so that no backtest can manufacture a frictionless fill (expectancy-first, structurally enforced).
 6. As the cost model, I want to be deterministic given seed + inputs (slippage stochastic only in an opt-in seeded mode), so that fills are reproducible.
 
@@ -124,7 +124,10 @@ interface MarketState {
 // an Execution `Fill` field.
 interface CostModelResult {
   fill_price: number;                 // mid moved adversely by the components below
-  filled_size: number;                // may be < requested (partial — see note)
+  filled_size: number;                // may be < requested size in principle (server/tools/backtest/types.ts:87); the model
+                                       // always fills the full request — partial fills are a real-broker
+                                       // concern that lives in Execution (see "Execution / broker order
+                                       // placement" below), not something this component mandates
   cost_breakdown: {                   // transparent; mapped onto Execution's Fill.cost_breakdown
     spread_cost: number;
     commission: number;
@@ -147,14 +150,14 @@ interface CostModelResult {
 
 **No zero-cost path (Principle 1, structural):** the most optimistic config still applies a non-zero `half_spread + commission` floor. A frictionless fill is not representable.
 
-**Funding / borrow is a holding cost, not part of `fill()`.** `fill()` is execution-only. Crypto perpetual funding (and stock borrow, where relevant) accrues per interval on open positions and is applied by the harness during mark-to-market — keeping `fill()` single-responsibility.
+**A holding cost is not part of `fill()`.** `fill()` is execution-only; any per-interval holding cost on an open position would apply during mark-to-market, in the harness, keeping `fill()` single-responsibility. *(Amendment (#1178): this used to name crypto perpetual funding and stock borrow — both dead with crypto out of scope (ADR-0015's 2026-08-16 amendment) and neither ever built, `types.ts` has no accrual function. The live universe's real holding cost — leveraged-ETP daily-reset decay and TER (ADR-0016) — is not this either, and is unspecced and unmodeled anywhere in this repo; tracked as its own follow-up ticket rather than folded in here.)*
 
 ### Module: Backtest Harness
 
 **Responsibilities**
 - Drive the *same orchestrator the live system runs* over the window, injecting `{clock, data, broker adapter, mode}`.
 - Own the simulated `Clock`; step it monotonically bar-by-bar.
-- Enforce point-in-time / survivorship-free / no-lookahead; apply holding costs (funding/borrow) at mark-to-market.
+- Enforce point-in-time / survivorship-free / no-lookahead. *(Amendment (#1178): this line previously also said "apply holding costs (funding/borrow) at mark-to-market" — `eval-executor.ts` applies no such thing; funding/borrow were crypto/margin concerns that never got built and are now out of scope. See the "holding cost" note above for the real gap this exposes.)*
 - Assemble the `BacktestReport` via the validation library.
 
 **Key Interface**
@@ -384,7 +387,7 @@ Per CONTEXT.md:
 
 ## Resolved Decisions (Sources)
 
-Wayfinder decisions for this component live in [docs/wayfinder/cost-model-backtest-map.md](../wayfinder/cost-model-backtest-map.md) (charted locally). Decisions synthesized here: three-mode matrix; two seams (`CostModel.fill`, `Backtest.run`); cost model (four components, √-law impact, no zero-cost floor, funding as holding cost, determinism); harness (pipeline-unchanged, owns simulated Clock, point-in-time / survivorship-free / no-lookahead audited as a vuln, FL walk-forward replay); validation library (full suite together, walk-forward/CPCV split generator, DSR/PBO/MinBTL, config-trial log with distinct-config N, capacity ceiling); determinism (seed + clock, given analyst cache).
+Wayfinder decisions for this component live in [docs/wayfinder/cost-model-backtest-map.md](../wayfinder/cost-model-backtest-map.md) (charted locally). Decisions synthesized here: three-mode matrix; two seams (`CostModel.fill`, `Backtest.run`); cost model (four components, √-law impact, no zero-cost floor, holding cost kept out of `fill()`, determinism); harness (pipeline-unchanged, owns simulated Clock, point-in-time / survivorship-free / no-lookahead audited as a vuln, FL walk-forward replay); validation library (full suite together, walk-forward/CPCV split generator, DSR/PBO/MinBTL, config-trial log with distinct-config N, capacity ceiling); determinism (seed + clock, given analyst cache).
 
 **NEW cross-spec contracts other specs must adopt:**
 1. **feedback-loop-spec** — metric/validation computation re-homes here. This component owns a flat `MetricsSuite` + DSR/PBO/walk-forward primitives; FL **recomposes** them into its existing nested `MetricsReport` (`.daily` = `MetricsSuite`; `.revalidation` = DSR/PBO/walk-forward output; `.breaches` stays FL-only). FL keeps cadence + breach-response + ~~human-owned kill~~; it delegates the computation. *(Amended 2026-09-08 — [ADR-0013](../adr/0013-no-human-gate-anywhere.md) Decision 3: kill is no longer human-owned; nobody owns it under full automation, and a breach must produce a mechanical response — FL's breach path alerts and defensively auto-tightens (`server/pipeline/feedback-loop/metrics.ts`), with no halt-on-persistence implemented yet.)* (Avoids a same-name/different-shape collision with FL's inline `MetricsReport`.)
