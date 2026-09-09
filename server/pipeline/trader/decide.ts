@@ -62,11 +62,11 @@ function sideFor(direction: 'bullish' | 'bearish'): 'buy' | 'sell' {
 
 /**
  * The lot to attribute a position-level decision to when several are open on
- * the same instrument — most recently OPENED wins. Exported (#1128 review
- * round 1) so `direct-bind.ts`'s own attribution for an exit-check skip uses
- * this exact selection rather than a second, independently-maintained copy
- * of it that could silently drift from this one. Requires a non-empty array,
- * same as the two call sites below did inline before this extraction.
+ * the same instrument — most recently OPENED wins. Exported (#1128) so
+ * `direct-bind.ts`'s own attribution for an exit-check skip uses this exact
+ * selection rather than a second, independently-maintained copy of it that
+ * could silently drift from this one. Requires a non-empty array, same as
+ * the two call sites below.
  */
 export function mostRecentOpenLot(positions: readonly OpenPosition[]): OpenPosition {
   return positions.reduce((latest, lot) => (lot.opened_at > latest.opened_at ? lot : latest));
@@ -148,10 +148,9 @@ export function atrIndicatorSpec(lookback: number, timeframe: string): Indicator
  * Bars are consumed in the order `getBars` returns them — ascending by
  * close_time, which is the documented contract of
  * `MarketDataService.getBars`, the interface Trader is actually injected, and
- * which `computeIndicator` now ENFORCES rather than merely documenting (it
- * throws on a misordered window). Trader used to re-sort defensively; that
- * check belongs at the one place every indicator computation passes through,
- * not in every consumer of it.
+ * which `computeIndicator` enforces by throwing on a misordered window. Do
+ * not re-sort here — that check belongs at the one place every indicator
+ * computation passes through, not in every consumer of it.
  */
 function atrFor(
   bars: Bar[],
@@ -1230,9 +1229,7 @@ export type TraderSkipReason =
  * can isolate it from its genuinely-corrupt siblings without pattern-matching
  * `skip_reason` strings. `TraderDiagnostic` is the other: it already excludes
  * `atr_insufficient_bars` from the alarming `atr_not_finite` kind for exactly
- * this reason (see `TraderDiagnosticKind`) — the class this reviewer's
- * concern actually describes ("a class meant to signal corrupt inputs") is
- * `TraderDiagnostic`, not `TraderDecisionClass`.
+ * this reason (see `TraderDiagnosticKind`).
  *
  * `null` on any outcome that is not a skip: an emitted order has nothing to
  * classify.
@@ -1307,11 +1304,11 @@ function debateWasDegraded(debate: DebateResult): boolean {
  *
  * `session_closing` is the one member: `withinFlattenWindow` decides off the
  * clock and the session calendar, and would fire identically against a fully
- * converged debate. Second-pass review of #1109's fix found the override
- * flipping it to `could_not_decide` on a merely degraded debate, pointing an
- * operator at an upstream failure that is not there. A future reason added
- * here needs the same argument — "this baseline never reads `debate` at
- * all" — not just a baseline of `declined_on_signal`.
+ * converged debate, so the override must not flip it to `could_not_decide`
+ * on a merely degraded one — that would point an operator at an upstream
+ * failure that is not there. A future reason added here needs the same
+ * argument — "this baseline never reads `debate` at all" — not just a
+ * baseline of `declined_on_signal`.
  */
 const DECLINED_ON_SIGNAL_NOT_DEBATE_DERIVED: ReadonlySet<TraderSkipReason> = new Set([
   'session_closing',
