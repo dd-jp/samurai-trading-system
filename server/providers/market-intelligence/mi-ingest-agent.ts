@@ -50,6 +50,31 @@ import type { IntelligenceItem } from './types.js';
 const SOURCE_ALPACA = MI_SOURCES.alpacaNews;
 
 /**
+ * Caps the exponential backoff's skip count (#1421). Without a cap a
+ * sustained outage would push the gap between attempts out unboundedly, and
+ * an outage that resolves mid-gap would go undetected for longer each time
+ * it recurred. 8 keeps the worst case at 9 refreshes between attempts —
+ * under paper-profile.ts's 2-minute cadence, under LOOKBACK_MS either way.
+ */
+const MAX_DEGRADED_SKIP = 8;
+
+interface DegradedState {
+  readonly streak: number;
+  readonly skipRemaining: number;
+}
+
+/**
+ * Refreshes to skip before the next scoring attempt, given the streak a
+ * failure has just extended it to. Streak 1 always retries immediately (a
+ * lone blip must not trip backoff); streak 2 skips exactly 1, matching
+ * #1392's original flat rule for the first two failures. Only a THIRD
+ * straight failure diverges from that rule and starts doubling.
+ */
+function degradedSkip(streak: number): number {
+  return streak < 2 ? 0 : Math.min(2 ** (streak - 2), MAX_DEGRADED_SKIP);
+}
+
+/**
  * How far back a refresh looks.
  *
  * Wider than the tick interval on purpose: a publisher can stamp `created_at`
@@ -112,28 +137,31 @@ function toItem(
 
 export class MiIngestAgent {
   /**
-   * Consecutive DEGRADED scoring attempts per instrument, in memory (#1392
-   * review round 1, F1).
+   * Per-instrument scoring-degradation state, in memory (#1392 review round
+   * 1 F1; exponential backoff #1421).
    *
    * `hasScoredItem` (below) makes a degraded batch retry on every refresh for
    * as long as the article stays inside `LOOKBACK_MS` — which by itself turns
    * a SUSTAINED outage into one scoring attempt per tick, each up to
-   * `DEFAULT_LLM_RETRY.maxAttempts` billed calls, for the whole window. This
-   * is the cheap bound: after two STRAIGHT failures, the third refresh skips
-   * the scoring call (raw bytes are archived regardless, see `refresh`) and
-   * the streak resets, so a sustained outage attempts scoring on 2 of every 3
-   * refreshes rather than every one. A single blip is unaffected — streak 1
-   * always retries on the very next refresh, which is what the "retries...
-   * once scoring recovers" test below depends on. The MI spend cap remains
-   * the real backstop; this only slows how fast one instrument's outage burns
-   * toward it.
+   * `DEFAULT_LLM_RETRY.maxAttempts` billed calls, for the whole window.
+   * `degradedSkip` bounds that: each straight failure widens the gap before
+   * the next attempt (capped, see `MAX_DEGRADED_SKIP`), so a sustained outage
+   * costs a handful of attempts across the window instead of one per tick (or
+   * #1392's flat 2-of-3). `streak` persists across a skipped refresh — only a
+   * refresh that actually attempts scoring and succeeds resets it to 0 — so
+   * the gap keeps widening rather than collapsing back to #1392's fixed
+   * skip-1 every time it fires. A single blip is unaffected: streak 1 always
+   * retries on the very next refresh, which the "retries... once scoring
+   * recovers" test below depends on. The MI spend cap remains the real
+   * backstop; this only slows how fast one instrument's outage burns toward
+   * it.
    *
    * Also reset on a refresh with nothing new to score (#1392 review round 2,
    * finding 5) — that refresh proves nothing about whether scoring itself is
-   * still failing, so a streak left over from a since-resolved outage must
-   * not survive to wrongly skip the next refresh that finally has work.
+   * still failing, so state left over from a since-resolved outage must not
+   * survive to wrongly skip the next refresh that finally has work.
    */
-  readonly #degradedStreak = new Map<string, number>();
+  readonly #degraded = new Map<string, DegradedState>();
 
   constructor(private readonly deps: MiIngestAgentDeps) {}
 
@@ -260,18 +288,20 @@ export class MiIngestAgent {
       );
     if (unscored.length === 0) {
       // #1392 review round 2, finding 5: nothing here says scoring is still
-      // failing — only that this refresh had no new work — so a streak left
+      // failing — only that this refresh had no new work — so state left
       // over from a since-resolved outage must not survive to wrongly skip
       // the next refresh that finally has something to score.
-      this.#degradedStreak.set(instrument, 0);
+      this.#degraded.set(instrument, { streak: 0, skipRemaining: 0 });
       return false;
     }
 
-    // #1392 review round 1, F1: bounds a SUSTAINED outage's billed-call rate
-    // — see `#degradedStreak`'s doc. A lone blip (streak 1) is unaffected.
-    const streak = this.#degradedStreak.get(instrument) ?? 0;
-    if (streak >= 2) {
-      this.#degradedStreak.set(instrument, 0);
+    // #1421: bounds a SUSTAINED outage's billed-call rate with backoff that
+    // widens on each straight failure — see `#degraded`'s doc. A lone blip
+    // (streak 1) is unaffected.
+    const state = this.#degraded.get(instrument) ?? { streak: 0, skipRemaining: 0 };
+    if (state.skipRemaining > 0) {
+      const next: DegradedState = { streak: state.streak, skipRemaining: state.skipRemaining - 1 };
+      this.#degraded.set(instrument, next);
       // #1392 review round 2, finding 4: this used to be the only `return
       // false` in `refresh` with no log line — an operator watching
       // `mi_ingest_scoring_degraded` would see an outage start, then silence,
@@ -282,9 +312,16 @@ export class MiIngestAgent {
         event: 'mi_ingest_scoring_skipped',
         level: 'warn',
         message:
-          `market intelligence: skipping the scoring attempt for ${instrument} after two ` +
-          'consecutive failures; raw bytes stay archived and the next refresh tries again.',
-        payload: { asset_class, instrument, items: unscored.length },
+          `market intelligence: skipping the scoring attempt for ${instrument} — streak ` +
+          `${state.streak}, ${next.skipRemaining} refresh(es) until the next attempt; raw ` +
+          'bytes stay archived.',
+        payload: {
+          asset_class,
+          instrument,
+          items: unscored.length,
+          streak: state.streak,
+          next_attempt_in: next.skipRemaining,
+        },
       });
       return false;
     }
@@ -334,10 +371,15 @@ export class MiIngestAgent {
     );
 
     if (degraded) {
-      // Streak, not a reset: this attempt failed, so it counts toward the
-      // bound above. Raw bytes for these articles are already archived
-      // (`newRaws`, above) — only the score is missing.
-      this.#degradedStreak.set(instrument, streak + 1);
+      // Extends the streak, not a reset: this attempt failed, so it counts
+      // toward the bound above and widens the next gap (`degradedSkip`). Raw
+      // bytes for these articles are already archived (`newRaws`, above) —
+      // only the score is missing.
+      const nextStreak = state.streak + 1;
+      this.#degraded.set(instrument, {
+        streak: nextStreak,
+        skipRemaining: degradedSkip(nextStreak),
+      });
       this.deps.logger?.log({
         trace_id,
         stage: 'market_intelligence',
@@ -347,11 +389,11 @@ export class MiIngestAgent {
           `market intelligence: item scoring failed for ${pairs.length} item(s) for ` +
           `${instrument}; their raw bytes are archived, but nothing is scored, so the ` +
           'analysts will report NO DATA for this window rather than a fabricated neutral read.',
-        payload: { asset_class, instrument, items: pairs.length },
+        payload: { asset_class, instrument, items: pairs.length, streak: nextStreak },
       });
       return false;
     }
-    this.#degradedStreak.set(instrument, 0);
+    this.#degraded.set(instrument, { streak: 0, skipRemaining: 0 });
 
     // `scoreItems` always returns exactly one score per supplied item, so
     // `scores[index]` should never be undefined here; treated the same as an

@@ -528,6 +528,53 @@ describe('MiIngestAgent', () => {
   });
 
   /**
+   * #1421: the flat "skip 1 in 3" rule (#1392) only shaves a sustained
+   * outage's scoring-attempt count by a third — ~30 refreshes/LOOKBACK_MS
+   * window (2-minute paper-profile cadence, 60-minute LOOKBACK_MS) still cost
+   * ~20 attempts. Exponential backoff on the same per-instrument streak
+   * should push that down to a handful, spread across the window rather than
+   * every third refresh.
+   */
+  it("bounds a sustained outage to a handful of scoring attempts across a full lookback window, not the flat rule's ~20-of-30", async () => {
+    const archive = new MiArchiveStore();
+    const store = new MarketIntelligenceStore(clock);
+    let now = NOW;
+    const movingClock: Clock = { now: () => now };
+    let attempts = 0;
+    const countingFailingClient = {
+      complete: async () => {
+        attempts++;
+        throw new Error('llm down');
+      },
+    };
+    const agent = new MiIngestAgent({
+      archive,
+      store,
+      newsClient: newsClient([article()]),
+      llmClient: countingFailingClient,
+      clock: movingClock,
+      assetClasses: ['stocks'],
+      spendCap: ADMITS,
+    });
+
+    // Mirrors the ticket's premise: paper-profile.ts tickIntervalMs (2 min)
+    // against this file's own LOOKBACK_MS (60 min) — a sustained outage stays
+    // inside the lookback window for this many refreshes.
+    const TICK_MS = 2 * 60_000;
+    const REFRESHES_PER_LOOKBACK_WINDOW = 30;
+
+    for (let i = 0; i < REFRESHES_PER_LOOKBACK_WINDOW; i++) {
+      await agent.refresh('t', 'AAPL', 'stocks');
+      now = new Date(now.getTime() + TICK_MS);
+    }
+
+    // Flat rule: ~20 of 30. Backoff: well under half that, never zero (an
+    // outage must still be checked on, not abandoned forever).
+    expect(attempts).toBeGreaterThan(0);
+    expect(attempts).toBeLessThanOrEqual(10);
+  });
+
+  /**
    * `MarketIntelligenceStore` is in-memory, so before the archive a soak
    * restart lost every item ingested up to that point and the run silently
    * measured less than it appeared to.
