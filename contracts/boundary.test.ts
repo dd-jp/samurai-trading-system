@@ -281,9 +281,8 @@ describe('specifiersOf strips comments before matching (#1398)', () => {
  * half: nothing outside `contracts/` may name a `contracts/*.ts` file other
  * than `index.ts`.
  *
- * Two more barrels get the same check — this PR's own scope choice, not
- * mandated by #1158's decision comment — rather than a general sweep of
- * every barrel in the repo: the two cases the review actually found,
+ * Two more barrels get the same check rather than a general sweep of every
+ * barrel in the repo: the two cases the review found,
  * `shared/store/sqlite-utils.ts` and `shared/safe-log.ts`, each already
  * exported by an existing barrel.
  */
@@ -363,11 +362,9 @@ describe('inbound routing: nothing bypasses a barrel (#1158)', () => {
   }
 
   /**
-   * A restricted `[A-Za-z0-9_-]+` charclass here previously missed a
-   * specifier with a nested directory or a second dot in the filename —
-   * both legal shapes, not just today's flat single-dot filenames. Named so
-   * the pattern itself, not just its effect on real repo files, is pinned
-   * below.
+   * Must match a nested directory and a multi-dot filename, not only a flat
+   * single-dot name — a charclass that admits neither fails open on exactly
+   * the specifier shape a future `contracts/` layout would use.
    */
   const CONTRACTS_DEEP_IMPORT = /\/contracts\/(?!index\.js$).+\.js$/;
 
