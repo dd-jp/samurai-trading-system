@@ -86,6 +86,7 @@ import { LIVE_MONEY_GATE_SUMMARY } from './live-money-gates.js';
 import {
   buildStartingProfileConfigs,
   LIVE_BOOK_GBP,
+  LIVE_BOOK_SIZING_USD,
   RISK_CAP_EQUITY_FRACTIONS,
 } from './paper-profile.js';
 import type { ProductionConfig } from './production.js';
@@ -233,6 +234,37 @@ export function assertLiveCapitalCeilingUsd(value: number, source: string): numb
   return value;
 }
 
+/**
+ * How close a declared ceiling may sit to `LIVE_BOOK_GBP`'s bare number
+ * before it looks unconverted (#1441). A distinct binding from
+ * `D5_BOOK_REFUSE_ABOVE_TOLERANCE` (paper-profile.ts) on purpose: that one
+ * bounds how far funded EQUITY may drift from the book before a Risk
+ * Manager guard refuses; this bounds how close a DECLARED CEILING may sit to
+ * the book's raw number before it looks like a typo. Same value today only
+ * because both started from the same "a few percent" idiom — retuning one
+ * must not silently retune the other.
+ */
+const CEILING_LOOKS_LIKE_UNCONVERTED_BOOK_TOLERANCE = 0.05;
+
+/**
+ * True when a declared USD ceiling sits close enough to `LIVE_BOOK_GBP`'s
+ * bare number to be more likely a typo than a coincidence (#1441) — the one
+ * input #1180's fix does not touch. See `LIVE_MAX_CAPITAL_ENV_VAR`'s docblock
+ * above for why the ceiling is never converted for the operator.
+ *
+ * **USD-account premise, not permanent.** This only makes sense while the
+ * live account is USD-denominated (Alpaca): once the composition root wires
+ * a GBP-native Saxo adapter (#1400), `LIVE_BOOK_GBP`'s bare number stops
+ * being a plausible typo and becomes the correct figure, and this check must
+ * be revisited or dropped — not left warning on a now-correct value.
+ */
+function ceilingLooksLikeUnconvertedBookGbp(ceilingUsd: number): boolean {
+  return (
+    Math.abs(ceilingUsd - LIVE_BOOK_GBP) <=
+    LIVE_BOOK_GBP * CEILING_LOOKS_LIKE_UNCONVERTED_BOOK_TOLERANCE
+  );
+}
+
 /** What `liveStartingProfile` returns: the paper profile's shape, plus the ceiling it was built against. */
 export type LiveStartingProfile = ReturnType<typeof buildStartingProfileConfigs> &
   Required<Pick<ProductionConfig, 'mode' | 'capitalCeilingUsd'>>;
@@ -274,6 +306,27 @@ export function liveStartingProfile(
       `— declare a ceiling at or below what the account actually holds. ${LIVE_MONEY_GATE_SUMMARY}`,
     payload: { capital_ceiling_usd: ceiling },
   });
+
+  if (ceilingLooksLikeUnconvertedBookGbp(ceiling)) {
+    logger?.log({
+      trace_id: 'startup',
+      stage: 'orchestrator',
+      event: 'live_capital_ceiling_looks_unconverted',
+      level: 'warn',
+      message:
+        `${LIVE_MAX_CAPITAL_ENV_VAR}=${ceiling} is close to LIVE_BOOK_GBP's bare number ` +
+        `(${LIVE_BOOK_GBP}) rather than its USD-converted value (${LIVE_BOOK_SIZING_USD}, at ` +
+        `SIZING_USD_PER_GBP). ${LIVE_MAX_CAPITAL_ENV_VAR} is USD and is NOT converted for you — if ` +
+        `the intent was to match the £${LIVE_BOOK_GBP} book, set ` +
+        `${LIVE_MAX_CAPITAL_ENV_VAR}=${LIVE_BOOK_SIZING_USD}. A plausibility warning, not a refusal: ` +
+        'if this ceiling is deliberately close to that figure in USD terms, ignore it. (#1441)',
+      payload: {
+        capital_ceiling_usd: ceiling,
+        live_book_gbp: LIVE_BOOK_GBP,
+        live_book_sizing_usd: LIVE_BOOK_SIZING_USD,
+      },
+    });
+  }
 
   return {
     // #888 — `LIVE_BOOK_GBP` is passed through explicitly here, and ONLY
