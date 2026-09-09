@@ -6362,7 +6362,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // exercised — a log-only stand-in is enough, same posture as
       // `calendarFallbackAlerts` above.
       lseCalendarCoverageAlerts: new LoggingLseCalendarCoverageAlertChannel(logger),
-      // #1396. No debate runs long enough in the smoke fixture to accumulate
+      // #1396 — the twenty-first. No debate runs long enough in the smoke fixture to accumulate
       // a real rate — log-only is enough, same posture as the other channels
       // above that this run never exercises.
       llmFailureRateAlerts: new LoggingLlmFailureRateAlertChannel(logger),

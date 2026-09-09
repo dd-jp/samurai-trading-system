@@ -32,19 +32,26 @@
  * the shared `DebateLogStore` port) rather than as a new cross-app
  * construction of `SqliteQueryStore` from the orchestrator.
  *
- * ## Edge-triggered, like `MiCoverageMonitor`
+ * ## Edge-triggered, unlike `MiCoverageMonitor`
  *
  * `LlmFailureRateMonitor` posts only on the check where the rate CROSSES
  * the threshold from below (or from "not enough samples"), and re-arms only
- * once the rate drops back below it — the same "alert once, not every tick
- * it stays bad" rule `MiCoverageMonitor.observe` applies (production/mi-
- * coverage.ts), so a sustained outage does not flood the escalation chat.
+ * once the rate drops back below it — a pure latch, so a sustained outage
+ * does not flood the escalation chat. This differs from `MiCoverageMonitor`
+ * (production/mi-coverage.ts), which re-alerts every
+ * `ALERT_REPEAT_EVERY_NO_DATA` (8) consecutive misses even while still
+ * degraded: coverage gaps are worth a periodic nudge across a long outage,
+ * a rate-threshold crossing is not.
  *
  * ## The floor
  *
- * A window with fewer than `MIN_DEBATES_FOR_LLM_FAILURE_RATE` total rows
- * never fires — one failed debate out of one is a 100% rate on no evidence.
- * Mirrors `MIN_TRADES_PER_ARM_FOR_DIVERGENCE`'s reasoning
+ * A window with fewer than `MIN_DEBATES_FOR_LLM_FAILURE_RATE` truncations
+ * never fires — one failed debate out of one truncation is a 100% rate on no
+ * evidence. This counts truncations, not every debate in the window (review
+ * round 1 F2 — see `getTerminationCauseWindowCounts`'s doc), so a quiet
+ * stream that is mostly clean convergences and rarely truncates can sit
+ * below the floor even on a busy tick cadence. Mirrors
+ * `MIN_TRADES_PER_ARM_FOR_DIVERGENCE`'s reasoning
  * (feedback-loop/arm-comparison-cycle.ts) for the same "not enough samples
  * to mean anything" floor.
  */
@@ -61,7 +68,7 @@ export const LLM_FAILURE_RATE_WINDOW_MS = 24 * 60 * 60 * 1000;
  */
 export const LLM_FAILURE_RATE_THRESHOLD = 0.25;
 
-/** Mirrors `MIN_TRADES_PER_ARM_FOR_DIVERGENCE` — below this, a rate is noise, not a measurement. */
+/** Mirrors `MIN_TRADES_PER_ARM_FOR_DIVERGENCE` — below this many truncations, a rate is noise, not a measurement. */
 export const MIN_DEBATES_FOR_LLM_FAILURE_RATE = 5;
 
 export interface LlmFailureRateWindowCounts {
@@ -128,17 +135,38 @@ export interface CheckLlmFailureRateDeps {
 
 /**
  * Recomputes the window rate and posts the alert when the monitor says one
- * is due. **Never throws.** The one awaited call is the alert POST, and a
- * failed alert is caught and logged — same posture as `checkMiCoverage`
- * (production/mi-coverage.ts): the debate has already resolved by the time
- * this runs, and an undelivered alert must not turn "the failure rate is
- * elevated" into "the orchestrator threw".
+ * is due. **Never throws.** The call site (`debate-adapter.ts`) invokes this
+ * as `void checkLlmFailureRate(...)` — fire-and-forget — so a rejection here
+ * would become an unhandled rejection, which `installFaultHandlers`
+ * (orchestrator/index.ts) treats as fatal and exits the process. Unlike
+ * `checkMiCoverage`'s single try (production/mi-coverage.ts), whose one
+ * synchronous read is over in-memory state, `getTerminationCauseWindowCounts`
+ * is a synchronous `better-sqlite3` call that can throw (SQLITE_BUSY, IO,
+ * a closed handle, the write-guard) — so it needs the same try/catch
+ * discipline as the alert POST, not just the awaited half.
  */
 export async function checkLlmFailureRate(deps: CheckLlmFailureRateDeps, now: Date): Promise<void> {
-  const from = new Date(now.getTime() - LLM_FAILURE_RATE_WINDOW_MS);
-  const { llm_failure, total } = deps.windowSource.getTerminationCauseWindowCounts(from, now);
-  const rate = total === 0 ? 0 : llm_failure / total;
-  const { alert } = deps.monitor.observe(rate, total >= MIN_DEBATES_FOR_LLM_FAILURE_RATE);
+  let llm_failure: number;
+  let total: number;
+  let rate: number;
+  let alert: boolean;
+  try {
+    const from = new Date(now.getTime() - LLM_FAILURE_RATE_WINDOW_MS);
+    ({ llm_failure, total } = deps.windowSource.getTerminationCauseWindowCounts(from, now));
+    rate = total === 0 ? 0 : llm_failure / total;
+    ({ alert } = deps.monitor.observe(rate, total >= MIN_DEBATES_FOR_LLM_FAILURE_RATE));
+  } catch (error) {
+    deps.logger?.log({
+      trace_id: 'llm-failure-rate',
+      stage: 'debate',
+      event: 'llm_failure_rate_check_failed',
+      level: 'error',
+      message: 'LLM-failure-rate window read failed — the rate for this tick is unknown',
+      payload: { error: describeThrownSafely(error) },
+    });
+    return;
+  }
+
   if (!alert) {
     return;
   }

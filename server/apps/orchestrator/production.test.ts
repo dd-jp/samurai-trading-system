@@ -2248,11 +2248,13 @@ describe('llm-failure-rate guard is wired by the composition root (#1396)', () =
     const components = buildProductionComponents(config);
 
     // Two `llm_failure` rows and three `budget` rows, all inside the 24h
-    // window. The tick below writes a SIXTH (converged, non-truncated) row
-    // at `clock.now()` — `SimulatedClock` never advances on its own, so that
-    // row lands exactly at the window's inclusive upper bound — making the
-    // final rate 2/6 rather than 2/5, still over `LLM_FAILURE_RATE_THRESHOLD`
-    // (0.25) on well over `MIN_DEBATES_FOR_LLM_FAILURE_RATE` (5) samples.
+    // window — five truncations, the denominator (review round 1 F2: `total`
+    // counts `termination = 'latency_truncated'` rows, not every debate_log
+    // row). The tick below writes a SIXTH row at `clock.now()` that
+    // CONVERGES (`llmForOneDebate` always returns `converged: true`), so it
+    // is excluded from `total` — the rate stays 2/5 (0.4), still over
+    // `LLM_FAILURE_RATE_THRESHOLD` (0.25) on well over
+    // `MIN_DEBATES_FOR_LLM_FAILURE_RATE` (5) samples.
     for (let i = 0; i < 5; i += 1) {
       components.debateLog.writeLog({
         debate_id: `debate-1396-history-${i}`,
@@ -2293,8 +2295,8 @@ describe('llm-failure-rate guard is wired by the composition root (#1396)', () =
     // and `components.debateLog` into the SAME guard the debate step calls,
     // rather than leaving the log-only default in place.
     expect(alertsPosted).toHaveLength(1);
-    expect(alertsPosted[0]).toMatchObject({ llm_failure_count: 2, total_count: 6 });
-    expect((alertsPosted[0] as { rate: number }).rate).toBeCloseTo(2 / 6);
+    expect(alertsPosted[0]).toMatchObject({ llm_failure_count: 2, total_count: 5 });
+    expect((alertsPosted[0] as { rate: number }).rate).toBeCloseTo(2 / 5);
   });
 });
 

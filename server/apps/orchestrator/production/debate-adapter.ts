@@ -1059,9 +1059,11 @@ export function buildDebateStep(
     resolvedBarByInstrument.set(instrument, { barMs: bar.getTime(), debate_id });
 
     // #1396. Fire-and-forget: `checkLlmFailureRate` never throws (it catches
-    // and logs its own alert-send failures), and the bar is already resolved
-    // above — an elevated failure rate must not delay or fail the tick that
-    // happened to observe it.
+    // and logs its own failures — the window read and the alert POST alike),
+    // and the bar is already resolved above. Its synchronous SQLite window
+    // read (a small, indexed range scan) still runs inline here, before its
+    // first `await`; `void` only keeps the alert POST — the part that could
+    // actually be slow — off this tick's critical path.
     if (llmFailureRateGuard !== undefined) {
       void checkLlmFailureRate(
         {

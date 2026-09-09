@@ -14,10 +14,14 @@ describe('debateDegradedGloss', () => {
     ).toBe('degraded — latency budget exceeded');
   });
 
-  it('glosses a truncated row with no recorded cause (pre-migration 0051)', () => {
-    expect(
-      debateDegradedGloss({ termination: 'latency_truncated', termination_cause: undefined }),
-    ).toBe('degraded — latency budget truncated it (cause not recorded)');
+  it('glosses a truncated row with no recorded cause (pre-migration 0051) without naming a cause', () => {
+    const gloss = debateDegradedGloss({
+      termination: 'latency_truncated',
+      termination_cause: undefined,
+    });
+    expect(gloss).toBe('degraded — latency-truncated, cause not recorded');
+    expect(gloss).not.toMatch(/budget/i);
+    expect(gloss).not.toMatch(/llm/i);
   });
 
   it('is null for a converged debate', () => {

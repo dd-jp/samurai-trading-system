@@ -181,4 +181,36 @@ describe('checkLlmFailureRate', () => {
       ),
     ).resolves.toBeUndefined();
   });
+
+  it('logs at error and never throws when the (sync, SQLite-backed) window source throws (review round 1 F1)', async () => {
+    const { logger, entries } = captureLogger();
+    const throwingSource: LlmFailureRateWindowSource = {
+      getTerminationCauseWindowCounts: () => {
+        throw new Error('SQLITE_BUSY: database is locked');
+      },
+    };
+    const { channel, posted } = capturingChannel();
+
+    // `void checkLlmFailureRate(...)` is the real call site
+    // (debate-adapter.ts) — its returned promise is never awaited, so if
+    // this rejected it would become an unhandled rejection, which
+    // `installFaultHandlers` (index.ts) treats as fatal and exits the
+    // process. A transient DB error in this alerting side channel must
+    // never do that to a process holding open positions.
+    await expect(
+      checkLlmFailureRate(
+        {
+          windowSource: throwingSource,
+          monitor: new LlmFailureRateMonitor(),
+          alertChannel: channel,
+          logger,
+        },
+        NOW,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(posted).toHaveLength(0);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ level: 'error', event: 'llm_failure_rate_check_failed' });
+  });
 });

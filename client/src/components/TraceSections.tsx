@@ -205,7 +205,7 @@ export function DebateSection({ debate, inFlight, linkedBy }: DebateSectionProps
   const gloss = debateDegradedGloss(debate);
   return (
     <div data-section="debate">
-      <p className="drawer-line" data-degraded={gloss === null ? undefined : true}>
+      <p className="drawer-line" data-degraded={gloss === null ? undefined : 'true'}>
         <b>{debate.direction}</b> · {debate.rounds} rounds · opened{' '}
         {formatClockUtc(debate.created_at)}
         {gloss === null ? null : <span className="muted"> · {gloss}</span>}

@@ -397,6 +397,11 @@ function TradeRow(props: {
   const { trade, debate, asOf, selected, onSelect } = props;
   const tone = pnlTone(trade.realized_pnl_net);
   const closeReason = presentCloseReason(trade.close_reason);
+  // Same hook `TraceSections.tsx`'s `DebateSection` sets (#1080's
+  // "only one renderer set the data-degraded hook" gap, docs/coding-
+  // standards.md) — both renderers of the same `debateDegradedGloss` result
+  // must expose it in the DOM, not just in this row's joined text.
+  const degraded = debate !== undefined && debateDegradedGloss(debate) !== null;
   return (
     <li>
       <button
@@ -414,7 +419,9 @@ function TradeRow(props: {
         <span className="mono">{sideWord(trade.side)}</span>
         <span className="mono muted">{formatHeld(trade.opened_at, trade.closed_at)}</span>
         <StateWord state={closeReason} />
-        <span className="muted trade-why">{whyTaken(debate)}</span>
+        <span className="muted trade-why" data-degraded={degraded ? 'true' : undefined}>
+          {whyTaken(debate)}
+        </span>
         <span className={`mono trade-pnl ${tone}`}>{formatSignedUsd(trade.realized_pnl_net)}</span>
       </button>
     </li>

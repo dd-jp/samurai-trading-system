@@ -212,6 +212,10 @@ describe('closed trades', () => {
     );
     const row = screen.getByRole('button', { name: /SPY/ });
     expect(within(row).getByText(/degraded — an LLM call failed outright/)).toBeTruthy();
+    // Same `data-degraded` hook `TraceSections.tsx`'s `DebateSection` sets —
+    // both renderers of the shared gloss must expose it in the DOM, not just
+    // in this row's joined text (docs/coding-standards.md's #1080 entry).
+    expect(row.querySelector('[data-degraded="true"]')).toBeTruthy();
   });
 
   it('does not gloss a converged debate (#1396)', () => {
@@ -232,6 +236,7 @@ describe('closed trades', () => {
     );
     const row = screen.getByRole('button', { name: /SPY/ });
     expect(within(row).queryByText(/degraded/)).toBeNull();
+    expect(row.querySelector('[data-degraded]')).toBeNull();
   });
 
   it('heads every column, naming the side rather than the entry price', () => {
