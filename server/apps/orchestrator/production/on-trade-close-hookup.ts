@@ -84,8 +84,7 @@ export function withOnTradeClose(
 
     getOpenPositions: (): Promise<OpenPosition[]> => store.getOpenPositions(),
 
-    hasFill: (args: { idempotency_key: string; broker_fill_id: string }): Promise<boolean> =>
-      store.hasFill(args),
+    hasFill: (args: Parameters<SharedStore['hasFill']>[0]): Promise<boolean> => store.hasFill(args),
 
     getFills: (idempotency_key: string): Promise<Fill[]> => store.getFills(idempotency_key),
 

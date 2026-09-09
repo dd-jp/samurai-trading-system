@@ -16,7 +16,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { type Clock, TokenBucket } from '../../shared/index.js';
+import { type Clock, TokenBucket, toBrokerFillId } from '../../shared/index.js';
 import { recordingLogger } from '../../shared/recording-logger.js';
 import { type SharedStore as Db, openSharedStore } from '../../shared/store/index.js';
 import { AlpacaBrokerAdapter } from './adapters/alpaca-adapter.js';
@@ -298,7 +298,7 @@ describe('AlpacaBrokerAdapter across a restart', () => {
       {
         venue: 'alpaca',
         client_order_id: 'idem-1',
-        broker_fill_id: 'parent-1',
+        broker_fill_id: toBrokerFillId('parent-1'),
         leg: 'entry',
         instrument: 'AAPL',
         qty: 1,
@@ -346,7 +346,7 @@ describe('SqliteBrokerStateStore', () => {
 
     store.saveObservedFill('saxo', {
       client_order_id: 'k',
-      broker_fill_id: 'bf',
+      broker_fill_id: toBrokerFillId('bf'),
       leg: 'entry',
       price: 10,
       qty: 1,
@@ -355,7 +355,13 @@ describe('SqliteBrokerStateStore', () => {
     });
     store.recordUnpricedFill(
       'saxo',
-      { client_order_id: 'k', broker_fill_id: 'bf', leg: 'entry', instrument: '3USL', qty: 1 },
+      {
+        client_order_id: 'k',
+        broker_fill_id: toBrokerFillId('bf'),
+        leg: 'entry',
+        instrument: '3USL',
+        qty: 1,
+      },
       new Date('2026-09-05T09:00:00Z'),
     );
 
@@ -452,7 +458,7 @@ describe('SqliteBrokerStateStore', () => {
     const store = new SqliteBrokerStateStore(db);
     const fill = {
       client_order_id: 'idem-1',
-      broker_fill_id: 'venue-idem-1',
+      broker_fill_id: toBrokerFillId('venue-idem-1'),
       leg: 'entry' as const,
       price: 100,
       qty: 1,
@@ -487,7 +493,7 @@ function ingest(db: Db, idempotencyKey: string, brokerFillId: string): void {
 describe('pruneIngestedObservedFills (#313)', () => {
   const OBSERVED = {
     client_order_id: 'lot-prune-1',
-    broker_fill_id: 'bf-prune-1',
+    broker_fill_id: toBrokerFillId('bf-prune-1'),
     leg: 'entry' as const,
     price: 100,
     qty: 1,
@@ -503,7 +509,7 @@ describe('pruneIngestedObservedFills (#313)', () => {
     store.saveObservedFill('ccxt', {
       ...OBSERVED,
       client_order_id: 'lot-prune-2',
-      broker_fill_id: 'bf-prune-2',
+      broker_fill_id: toBrokerFillId('bf-prune-2'),
     });
 
     // Nothing ingested yet: this is exactly the state a crash must preserve,
@@ -565,7 +571,7 @@ describe('pruneIngestedObservedFills (#313)', () => {
     const { db } = openFileStore();
     const store = new SqliteBrokerStateStore(db);
 
-    const sharedId = 'bf-collision';
+    const sharedId = toBrokerFillId('bf-collision');
     store.saveObservedFill('ibkr', {
       ...OBSERVED,
       client_order_id: 'lot-ibkr',
@@ -607,9 +613,17 @@ describe('InMemoryBrokerStateStore.pruneIngestedObservedFills matches the fills 
     //   - dropping `C` would be a lot-only match, equally wrong;
     //   - keeping `A` would mean the double had simply stopped pruning.
     const store = new InMemoryBrokerStateStore();
-    const a = { ...OBSERVED, client_order_id: 'lot-1', broker_fill_id: 'bf-shared' };
-    const b = { ...OBSERVED, client_order_id: 'lot-2', broker_fill_id: 'bf-shared' };
-    const c = { ...OBSERVED, client_order_id: 'lot-1', broker_fill_id: 'bf-other' };
+    const a = {
+      ...OBSERVED,
+      client_order_id: 'lot-1',
+      broker_fill_id: toBrokerFillId('bf-shared'),
+    };
+    const b = {
+      ...OBSERVED,
+      client_order_id: 'lot-2',
+      broker_fill_id: toBrokerFillId('bf-shared'),
+    };
+    const c = { ...OBSERVED, client_order_id: 'lot-1', broker_fill_id: toBrokerFillId('bf-other') };
     store.saveObservedFill('ccxt', a);
     store.saveObservedFill('ccxt', b);
     store.saveObservedFill('ccxt', c);
@@ -633,7 +647,7 @@ describe('InMemoryBrokerStateStore.pruneIngestedObservedFills matches the fills 
     // the pair ingested therefore discharges it in every venue that queued it
     // — a double keyed on venue too would be stricter than the real store.
     const store = new InMemoryBrokerStateStore();
-    const fill = { ...OBSERVED, client_order_id: 'lot-1', broker_fill_id: 'bf-1' };
+    const fill = { ...OBSERVED, client_order_id: 'lot-1', broker_fill_id: toBrokerFillId('bf-1') };
     store.saveObservedFill('ccxt', fill);
     store.saveObservedFill('ibkr', fill);
 
@@ -650,10 +664,14 @@ describe('InMemoryBrokerStateStore.pruneIngestedObservedFills matches the fills 
     // of the real store, where `fills` retains every ingested fill for the life
     // of the deployment while the queue holds only rows not yet pruned.
     const store = new InMemoryBrokerStateStore();
-    const queued = { ...OBSERVED, client_order_id: 'lot-1', broker_fill_id: 'bf-1' };
+    const queued = {
+      ...OBSERVED,
+      client_order_id: 'lot-1',
+      broker_fill_id: toBrokerFillId('bf-1'),
+    };
     store.saveObservedFill('ccxt', queued);
     store.markIngested(queued);
-    store.markIngested({ client_order_id: 'lot-9', broker_fill_id: 'bf-9' });
+    store.markIngested({ client_order_id: 'lot-9', broker_fill_id: toBrokerFillId('bf-9') });
 
     expect(store.pruneIngestedObservedFills('ccxt')).toBe(1);
   });
@@ -663,7 +681,7 @@ describe('InMemoryBrokerStateStore.pruneIngestedObservedFills matches the fills 
     store.saveObservedFill('ccxt', {
       ...OBSERVED,
       client_order_id: 'lot-1',
-      broker_fill_id: 'bf-1',
+      broker_fill_id: toBrokerFillId('bf-1'),
     });
 
     expect(store.pruneIngestedObservedFills('ccxt')).toBe(0);

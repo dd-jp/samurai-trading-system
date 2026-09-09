@@ -16,6 +16,7 @@
  */
 import type { MarketDataService } from '../../providers/market-data-service/index.js';
 import type { Clock, OrderState } from '../../shared/index.js';
+import { toBrokerFillId } from '../../shared/index.js';
 import type { CostModel, FillRequest, MarketState } from '../../tools/backtest/index.js';
 import type {
   BrokerAck,
@@ -91,7 +92,7 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
     this.accepted.set(order.client_order_id, order);
     this.fills.push({
       client_order_id: order.client_order_id,
-      broker_fill_id: `${order.client_order_id}:entry`,
+      broker_fill_id: toBrokerFillId(`${order.client_order_id}:entry`),
       leg: 'entry',
       price: result.fill_price,
       qty: result.filled_size,
@@ -262,7 +263,7 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
     } as NativeBracketRequest);
     this.fills.push({
       client_order_id: clientOrderId,
-      broker_fill_id: `${clientOrderId}:flatten`,
+      broker_fill_id: toBrokerFillId(`${clientOrderId}:flatten`),
       leg: 'entry',
       price: result.fill_price,
       qty: result.filled_size,

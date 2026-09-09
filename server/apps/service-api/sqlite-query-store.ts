@@ -53,6 +53,7 @@ import type {
   OpenPosition,
   OrderState,
 } from '../../shared/index.js';
+import { toBrokerFillId } from '../../shared/index.js';
 import {
   type ClosedTradeRow,
   fromClosedTradeRow,
@@ -202,7 +203,7 @@ interface FillRowSql {
 function fromFillRowSql(row: FillRowSql): Fill {
   return {
     idempotency_key: row.idempotency_key,
-    broker_fill_id: row.broker_fill_id,
+    broker_fill_id: toBrokerFillId(row.broker_fill_id),
     leg: row.leg,
     price: row.price,
     qty: row.qty,

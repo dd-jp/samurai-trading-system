@@ -9,6 +9,7 @@ import type {
 import type { OnTradeCloseInput } from '../../../pipeline/feedback-loop/index.js';
 import { FixtureSetupStore } from '../../../pipeline/trader/index.js';
 import type { ClosedTrade, Fill, OpenPosition, OrderState } from '../../../shared/index.js';
+import { toBrokerFillId } from '../../../shared/index.js';
 import type { Logger } from '../types.js';
 
 const { onTradeCloseMock } = vi.hoisted(() => ({ onTradeCloseMock: vi.fn() }));
@@ -69,7 +70,7 @@ class FakeSharedStore implements SharedStore {
   async getOpenPositions(): Promise<OpenPosition[]> {
     return [];
   }
-  async hasFill(_args: { idempotency_key: string; broker_fill_id: string }): Promise<boolean> {
+  async hasFill(_args: Parameters<SharedStore['hasFill']>[0]): Promise<boolean> {
     return false;
   }
   async getFills(_idempotency_key: string): Promise<Fill[]> {
@@ -202,9 +203,9 @@ describe('withOnTradeClose', () => {
 
     await expect(decorated.findByKey('k')).resolves.toBe(false);
     await expect(decorated.getOpenPositions()).resolves.toEqual([]);
-    await expect(decorated.hasFill({ idempotency_key: 'k', broker_fill_id: 'f' })).resolves.toBe(
-      false,
-    );
+    await expect(
+      decorated.hasFill({ idempotency_key: 'k', broker_fill_id: toBrokerFillId('f') }),
+    ).resolves.toBe(false);
     await expect(decorated.getFills('k')).resolves.toEqual([]);
     expect(onTradeCloseMock).not.toHaveBeenCalled();
   });

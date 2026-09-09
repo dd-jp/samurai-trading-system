@@ -52,7 +52,7 @@ import { FILLED_ZERO_SIZE_REANNOUNCE_EVERY_MS } from '../../../pipeline/executio
 import { FILLED_WITH_ZERO_SIZE } from '../../../pipeline/execution/ingest-fills.js';
 import { DEFAULT_TRADER_CONFIG } from '../../../pipeline/trader/index.js';
 import type { Logger, OpenPosition } from '../../../shared/index.js';
-import { SimulatedClock } from '../../../shared/index.js';
+import { SimulatedClock, toBrokerFillId } from '../../../shared/index.js';
 import { recordingLogger } from '../../../shared/recording-logger.js';
 import { openSharedStore, type SharedStore } from '../../../shared/store/index.js';
 import { buildProductionComponents, type ProductionConfig } from '../production.js';
@@ -266,7 +266,7 @@ describe('the FILLED_WITH_ZERO_SIZE throttle is wired through the real compositi
     const broker = new WedgingBroker(order, [
       {
         client_order_id: 'key-1',
-        broker_fill_id: 'e1',
+        broker_fill_id: toBrokerFillId('e1'),
         leg: 'entry',
         qty: 10,
         price: 100,

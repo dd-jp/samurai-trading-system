@@ -57,8 +57,14 @@
  * `throwContainedFailures`'s own doc).
  */
 
-import type { ClosedTrade, Fill, OpenPosition, OrderState } from '../../shared/index.js';
-import { logCaughtFailure, safeLog } from '../../shared/index.js';
+import type {
+  BrokerFillId,
+  ClosedTrade,
+  Fill,
+  OpenPosition,
+  OrderState,
+} from '../../shared/index.js';
+import { logCaughtFailure, safeLog, toBrokerFillId } from '../../shared/index.js';
 import { isProtectiveRearmUnsupported } from './protective-rearm-unsupported.js';
 import type { ExecutionInput, NormalizedFill } from './types.js';
 
@@ -601,7 +607,8 @@ async function redistributeOneFlatten(
     // ran to completion in an earlier poll and its leftover was warned about
     // then — a re-offered fill (this module's own `hasFill` dedup contract)
     // must not re-fire the same warning forever.
-    const attributedIdsThisRawFill: { idempotency_key: string; broker_fill_id: string }[] = [];
+    const attributedIdsThisRawFill: { idempotency_key: string; broker_fill_id: BrokerFillId }[] =
+      [];
     for (const lotKey of lotKeys) {
       if (leftover <= 0) break;
       const need = remaining.get(lotKey) ?? 0;
@@ -662,7 +669,7 @@ async function redistributeOneFlatten(
         // (id, qty) pair recomputes every time, so a repeat poll dedupes
         // cleanly instead of colliding with a differently-sized earlier
         // attempt.
-        broker_fill_id: `${rawFill.broker_fill_id}:${lotKey}`,
+        broker_fill_id: toBrokerFillId(`${rawFill.broker_fill_id}:${lotKey}`),
         qty: take,
         // #1121: the venue-reported share (`rawFill.fee * share`) TOPPED UP
         // to the modelled commission share, when the flatten carries one —
@@ -1787,7 +1794,7 @@ function cumulativeTopUp(
   return toFill(
     {
       ...fill,
-      broker_fill_id: `${prefix}${fill.qty}`,
+      broker_fill_id: toBrokerFillId(`${prefix}${fill.qty}`),
       qty: delta,
       price: priceIsUsable ? derivedPrice : fill.price,
       // Fees are cumulative on the same observation, so the increment owes

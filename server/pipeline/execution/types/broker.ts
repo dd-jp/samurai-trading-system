@@ -6,7 +6,7 @@
  * dirty the file every consumer of `Execution` imports. `types.ts` remains a
  * re-export barrel, so no import site changed.
  */
-import type { ExitReason, OrderState } from '../../../shared/index.js';
+import type { BrokerFillId, ExitReason, OrderState } from '../../../shared/index.js';
 
 /**
  * The normalized abstract bracket Execution hands the adapter: entry +
@@ -51,7 +51,7 @@ export interface BrokerAck {
  */
 export interface NormalizedFill {
   client_order_id: string;
-  broker_fill_id: string;
+  broker_fill_id: BrokerFillId;
   leg: 'entry' | 'stop' | 'target' | 'exit';
   price: number;
   qty: number;

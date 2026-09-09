@@ -83,7 +83,7 @@ import {
   X_SEARCH_MODEL,
 } from '../../providers/market-intelligence/index.js';
 import type { ClosedTrade, OrderIntent, TradingArm } from '../../shared/index.js';
-import { currentTraceId, SimulatedClock, TokenBucket } from '../../shared/index.js';
+import { currentTraceId, SimulatedClock, TokenBucket, toBrokerFillId } from '../../shared/index.js';
 import type { NousCredentials } from '../../shared/llm/index.js';
 import { DEFAULT_NOUS_MODELS } from '../../shared/llm/index.js';
 import {
@@ -2953,7 +2953,7 @@ describe('composed tick chain (integration)', () => {
       fills: [
         {
           idempotency_key: 'lot-partially-flattened',
-          broker_fill_id: 'fill-earlier-partial-flatten',
+          broker_fill_id: toBrokerFillId('fill-earlier-partial-flatten'),
           leg: 'exit',
           price: 158,
           qty: 4,

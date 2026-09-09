@@ -96,6 +96,7 @@ export {
 export { currentTraceId, runWithTraceId } from './trace-context.js';
 export type {
   AssetClass,
+  BrokerFillId,
   ClosedTrade,
   ClosedTradeStore,
   DebateLog,
@@ -122,3 +123,4 @@ export type {
   VerdictLog,
   VerdictLogStore,
 } from './types.js';
+export { toBrokerFillId } from './types.js';

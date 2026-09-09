@@ -11,6 +11,7 @@
  * the typed refusal `collectFill` throws) — no venue calls, no state.
  */
 import type { OrderState } from '../../../shared/index.js';
+import { toBrokerFillId } from '../../../shared/index.js';
 import type { UnpricedFillObservation } from '../broker-state-store.js';
 import type { NormalizedFill } from '../types.js';
 import type { AlpacaOrder, AlpacaOrderLeg } from './alpaca-client.js';
@@ -160,7 +161,7 @@ export function collectFill(
 
   fills.push({
     client_order_id: clientOrderId,
-    broker_fill_id: order.id,
+    broker_fill_id: toBrokerFillId(order.id),
     leg,
     price: Number.parseFloat(order.filled_avg_price),
     qty: filledQty,

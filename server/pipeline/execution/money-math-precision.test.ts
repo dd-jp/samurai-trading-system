@@ -29,6 +29,7 @@ import type {
 } from '../../providers/market-data-service/index.js';
 import { collectMarks } from '../../providers/market-data-service/index.js';
 import type { Clock, ClosedTrade, OpenPosition } from '../../shared/index.js';
+import { toBrokerFillId } from '../../shared/index.js';
 import type { CostModel } from '../../tools/backtest/index.js';
 import { realizedR } from '../feedback-loop/index.js';
 import { computePortfolioView } from '../risk-manager/index.js';
@@ -205,7 +206,7 @@ function normalized(fills: readonly DecimalFill[], leg: NormalizedFill['leg'], t
   return fills.map(
     (decimal, i): NormalizedFill => ({
       client_order_id: 'lot-1',
-      broker_fill_id: `${tag}-${i}`,
+      broker_fill_id: toBrokerFillId(`${tag}-${i}`),
       leg,
       price: Number(decimal.price),
       qty: Number(decimal.qty),

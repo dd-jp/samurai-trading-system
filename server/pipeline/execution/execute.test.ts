@@ -1,5 +1,6 @@
 import type { MarketDataService, MarkRead } from '../../providers/market-data-service/index.js';
 import type { Clock, Fill, OpenPosition, OrderIntent } from '../../shared/index.js';
+import { toBrokerFillId } from '../../shared/index.js';
 import type { CostModel } from '../../tools/backtest/index.js';
 import type { VerdictDecision } from '../verdict/index.js';
 import { sanitizeBrokerError } from './broker-error.js';
@@ -1017,7 +1018,7 @@ describe('ExecutionImpl.execute', () => {
         fills: [
           {
             idempotency_key: 'key-aapl-entry-1',
-            broker_fill_id: 'fill-entry-lot-1',
+            broker_fill_id: toBrokerFillId('fill-entry-lot-1'),
             leg: 'entry',
             price: 95,
             qty: 40,
@@ -1272,7 +1273,7 @@ describe('ExecutionImpl.execute', () => {
           fills: [
             {
               idempotency_key: 'key-aapl-entry-1',
-              broker_fill_id: `fill-partial-flatten-${qty}`,
+              broker_fill_id: toBrokerFillId(`fill-partial-flatten-${qty}`),
               leg: 'exit',
               price: 99,
               qty,

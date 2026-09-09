@@ -34,6 +34,7 @@ import {
 } from '../../../providers/market-data-service/index.js';
 import type { TraderDecisionRecord } from '../../../shared/decision-records.js';
 import type { Clock, LogEntry, Logger, OpenPosition, OrderIntent } from '../../../shared/index.js';
+import { toBrokerFillId } from '../../../shared/index.js';
 import { openSharedStore } from '../../../shared/store/index.js';
 import { OrphanVerdictScanner } from '../orphan-verdict-scan.js';
 import { SqliteAuditLog } from '../sqlite-audit-log.js';
@@ -401,7 +402,7 @@ describe('buildTraderStep', () => {
       fills: [
         {
           idempotency_key: 'key-aapl-entry-1',
-          broker_fill_id: 'fill-partial-flatten',
+          broker_fill_id: toBrokerFillId('fill-partial-flatten'),
           leg: 'exit',
           price: 99,
           qty: 4,

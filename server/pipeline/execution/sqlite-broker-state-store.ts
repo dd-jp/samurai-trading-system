@@ -11,6 +11,7 @@
  * to lose an update between a select and an insert.
  */
 
+import { toBrokerFillId } from '../../shared/index.js';
 import type { SharedStore } from '../../shared/store/index.js';
 import {
   fromStoredTimestamp,
@@ -189,7 +190,7 @@ export class SqliteBrokerStateStore implements BrokerStateStore {
 
     return rows.map((row) => ({
       client_order_id: row.client_order_id,
-      broker_fill_id: row.broker_fill_id,
+      broker_fill_id: toBrokerFillId(row.broker_fill_id),
       leg: row.leg,
       price: row.price,
       qty: row.qty,

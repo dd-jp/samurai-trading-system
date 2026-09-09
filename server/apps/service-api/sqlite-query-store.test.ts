@@ -17,6 +17,7 @@ import { SqliteRiskCriticStore } from '../../pipeline/risk-manager/index.js';
 import type { CallbackAuditLog } from '../../pipeline/verdict/index.js';
 import { TelegramBotApiClient } from '../../pipeline/verdict/index.js';
 import type { ClosedTrade, DebateLog, Fill, OpenPosition } from '../../shared/index.js';
+import { toBrokerFillId } from '../../shared/index.js';
 import {
   openSharedStore,
   type SharedStore,
@@ -108,7 +109,7 @@ function seedClosedTrade(execStore: SqliteExecutionStore, trade: ClosedTrade): P
 function makeFill(overrides: Partial<Fill> = {}): Fill {
   return {
     idempotency_key: 'key-closed-1',
-    broker_fill_id: 'fill-1',
+    broker_fill_id: toBrokerFillId('fill-1'),
     leg: 'entry',
     price: 100,
     qty: 10,
@@ -523,10 +524,14 @@ describe('SqliteQueryStore', () => {
       const db = makeDb();
       const execStore = new SqliteExecutionStore(db);
       await seedClosedTradeWithFills(execStore, makeClosedTrade({ idempotency_key: 'key-A' }), [
-        makeFill({ idempotency_key: 'key-A', broker_fill_id: 'fill-A-entry', leg: 'entry' }),
         makeFill({
           idempotency_key: 'key-A',
-          broker_fill_id: 'fill-A-target',
+          broker_fill_id: toBrokerFillId('fill-A-entry'),
+          leg: 'entry',
+        }),
+        makeFill({
+          idempotency_key: 'key-A',
+          broker_fill_id: toBrokerFillId('fill-A-target'),
           leg: 'target',
           price: 110,
         }),
@@ -534,7 +539,13 @@ describe('SqliteQueryStore', () => {
       await seedClosedTradeWithFills(
         execStore,
         makeClosedTrade({ idempotency_key: 'key-B', debate_id: 'debate-1' }),
-        [makeFill({ idempotency_key: 'key-B', broker_fill_id: 'fill-B-entry', leg: 'entry' })],
+        [
+          makeFill({
+            idempotency_key: 'key-B',
+            broker_fill_id: toBrokerFillId('fill-B-entry'),
+            leg: 'entry',
+          }),
+        ],
       );
 
       const store = new SqliteQueryStore(db);

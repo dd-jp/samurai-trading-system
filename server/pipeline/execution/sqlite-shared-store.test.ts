@@ -1,4 +1,5 @@
 import type { ClosedTrade, Fill, OpenPosition } from '../../shared/index.js';
+import { toBrokerFillId } from '../../shared/index.js';
 import { type SharedStore as Db, openSharedStore } from '../../shared/store/index.js';
 import { SqliteExecutionStore } from './sqlite-shared-store.js';
 
@@ -31,7 +32,7 @@ function makePosition(overrides: Partial<OpenPosition> = {}): OpenPosition {
 function makeFill(overrides: Partial<Fill> = {}): Fill {
   return {
     idempotency_key: 'key-1',
-    broker_fill_id: 'fill-1',
+    broker_fill_id: toBrokerFillId('fill-1'),
     leg: 'entry',
     price: 100,
     qty: 5,
@@ -535,17 +536,17 @@ describe('SqliteExecutionStore', () => {
       const { store } = makeStore();
       await store.writeAheadPosition(makePosition());
 
-      expect(await store.hasFill({ idempotency_key: 'key-1', broker_fill_id: 'fill-1' })).toBe(
-        false,
-      );
+      expect(
+        await store.hasFill({ idempotency_key: 'key-1', broker_fill_id: toBrokerFillId('fill-1') }),
+      ).toBe(false);
       await store.applyLotAdvance({ idempotency_key: 'key-1', fills: [makeFill()] });
-      expect(await store.hasFill({ idempotency_key: 'key-1', broker_fill_id: 'fill-1' })).toBe(
-        true,
-      );
+      expect(
+        await store.hasFill({ idempotency_key: 'key-1', broker_fill_id: toBrokerFillId('fill-1') }),
+      ).toBe(true);
 
       const fills = await store.getFills('key-1');
       expect(fills).toHaveLength(1);
-      expect(fills[0]).toMatchObject({ broker_fill_id: 'fill-1', qty: 5 });
+      expect(fills[0]).toMatchObject({ broker_fill_id: toBrokerFillId('fill-1'), qty: 5 });
     });
 
     it('matches the full (idempotency_key, broker_fill_id) primary key, not the id alone (#1320)', async () => {
@@ -555,28 +556,41 @@ describe('SqliteExecutionStore', () => {
 
       await store.applyLotAdvance({
         idempotency_key: 'key-1',
-        fills: [makeFill({ idempotency_key: 'key-1', broker_fill_id: 'shared-id' })],
+        fills: [
+          makeFill({ idempotency_key: 'key-1', broker_fill_id: toBrokerFillId('shared-id') }),
+        ],
       });
 
       // Same id, but under a DIFFERENT lot's key: the PK has not been
       // written for this pair, so this is not a duplicate of key-1's row —
       // an id-only match would wrongly report it as already ingested and
       // silently drop key-2's own fill.
-      expect(await store.hasFill({ idempotency_key: 'key-2', broker_fill_id: 'shared-id' })).toBe(
-        false,
-      );
+      expect(
+        await store.hasFill({
+          idempotency_key: 'key-2',
+          broker_fill_id: toBrokerFillId('shared-id'),
+        }),
+      ).toBe(false);
       // The exact pair that was written IS reported as ingested.
-      expect(await store.hasFill({ idempotency_key: 'key-1', broker_fill_id: 'shared-id' })).toBe(
-        true,
-      );
+      expect(
+        await store.hasFill({
+          idempotency_key: 'key-1',
+          broker_fill_id: toBrokerFillId('shared-id'),
+        }),
+      ).toBe(true);
 
       await store.applyLotAdvance({
         idempotency_key: 'key-2',
-        fills: [makeFill({ idempotency_key: 'key-2', broker_fill_id: 'shared-id' })],
+        fills: [
+          makeFill({ idempotency_key: 'key-2', broker_fill_id: toBrokerFillId('shared-id') }),
+        ],
       });
-      expect(await store.hasFill({ idempotency_key: 'key-2', broker_fill_id: 'shared-id' })).toBe(
-        true,
-      );
+      expect(
+        await store.hasFill({
+          idempotency_key: 'key-2',
+          broker_fill_id: toBrokerFillId('shared-id'),
+        }),
+      ).toBe(true);
     });
 
     it('preserves cost_breakdown for Simulated-adapter fills and omits it otherwise', async () => {
@@ -586,7 +600,7 @@ describe('SqliteExecutionStore', () => {
         idempotency_key: 'key-1',
         fills: [
           makeFill({
-            broker_fill_id: 'fill-sim',
+            broker_fill_id: toBrokerFillId('fill-sim'),
             cost_breakdown: {
               spread_cost: 0.1,
               commission: 0.2,
@@ -594,7 +608,7 @@ describe('SqliteExecutionStore', () => {
               market_impact: 0.01,
             },
           }),
-          makeFill({ broker_fill_id: 'fill-real' }),
+          makeFill({ broker_fill_id: toBrokerFillId('fill-real') }),
         ],
       });
 
@@ -613,11 +627,14 @@ describe('SqliteExecutionStore', () => {
       await store.writeAheadPosition(makePosition());
       await store.applyLotAdvance({
         idempotency_key: 'key-1',
-        fills: [makeFill({ broker_fill_id: 'fill-a' }), makeFill({ broker_fill_id: 'fill-b' })],
+        fills: [
+          makeFill({ broker_fill_id: toBrokerFillId('fill-a') }),
+          makeFill({ broker_fill_id: toBrokerFillId('fill-b') }),
+        ],
       });
       await store.applyLotAdvance({
         idempotency_key: 'key-1',
-        fills: [makeFill({ broker_fill_id: 'fill-c' })],
+        fills: [makeFill({ broker_fill_id: toBrokerFillId('fill-c') })],
       });
 
       const fills = await store.getFills('key-1');
@@ -679,14 +696,17 @@ describe('SqliteExecutionStore', () => {
       await expect(
         store.applyLotAdvance({
           idempotency_key: 'key-1',
-          fills: [makeFill({ broker_fill_id: 'fill-after-close' })],
+          fills: [makeFill({ broker_fill_id: toBrokerFillId('fill-after-close') })],
           position_update: { filled_size: 5, avg_entry_price: 100, order_state: 'closed' },
           closed_trade: makeClosedTrade(),
         }),
       ).rejects.toThrow();
 
       expect(
-        await store.hasFill({ idempotency_key: 'key-1', broker_fill_id: 'fill-after-close' }),
+        await store.hasFill({
+          idempotency_key: 'key-1',
+          broker_fill_id: toBrokerFillId('fill-after-close'),
+        }),
       ).toBe(false);
       const [position] = await store.getOpenPositions();
       expect(position?.filled_size).toBe(0);
@@ -1024,14 +1044,29 @@ describe('SqliteExecutionStore', () => {
       await store.applyLotAdvance({
         idempotency_key: 'key-lot-1',
         fills: [
-          makeFill({ idempotency_key: 'key-lot-1', broker_fill_id: 'e1', leg: 'entry', qty: 4 }),
-          makeFill({ idempotency_key: 'key-lot-1', broker_fill_id: 'e2', leg: 'entry', qty: 6 }),
+          makeFill({
+            idempotency_key: 'key-lot-1',
+            broker_fill_id: toBrokerFillId('e1'),
+            leg: 'entry',
+            qty: 4,
+          }),
+          makeFill({
+            idempotency_key: 'key-lot-1',
+            broker_fill_id: toBrokerFillId('e2'),
+            leg: 'entry',
+            qty: 6,
+          }),
         ],
       });
       await store.applyLotAdvance({
         idempotency_key: 'key-lot-2',
         fills: [
-          makeFill({ idempotency_key: 'key-lot-2', broker_fill_id: 'e3', leg: 'entry', qty: 15 }),
+          makeFill({
+            idempotency_key: 'key-lot-2',
+            broker_fill_id: toBrokerFillId('e3'),
+            leg: 'entry',
+            qty: 15,
+          }),
         ],
       });
 
@@ -1054,8 +1089,18 @@ describe('SqliteExecutionStore', () => {
       await store.applyLotAdvance({
         idempotency_key: 'key-lot-1',
         fills: [
-          makeFill({ idempotency_key: 'key-lot-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
-          makeFill({ idempotency_key: 'key-lot-1', broker_fill_id: 'x1', leg: 'exit', qty: 4 }),
+          makeFill({
+            idempotency_key: 'key-lot-1',
+            broker_fill_id: toBrokerFillId('e1'),
+            leg: 'entry',
+            qty: 10,
+          }),
+          makeFill({
+            idempotency_key: 'key-lot-1',
+            broker_fill_id: toBrokerFillId('x1'),
+            leg: 'exit',
+            qty: 4,
+          }),
         ],
       });
 
@@ -1079,18 +1124,43 @@ describe('SqliteExecutionStore', () => {
       await store.applyLotAdvance({
         idempotency_key: 'key-lot-1',
         fills: [
-          makeFill({ idempotency_key: 'key-lot-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+          makeFill({
+            idempotency_key: 'key-lot-1',
+            broker_fill_id: toBrokerFillId('e1'),
+            leg: 'entry',
+            qty: 10,
+          }),
           // All three closing legs count — the predicate is `leg != 'entry'`,
           // the SQL spelling of `ingest-fills.ts`'s `isExitFill`.
-          makeFill({ idempotency_key: 'key-lot-1', broker_fill_id: 'x1', leg: 'exit', qty: 4 }),
-          makeFill({ idempotency_key: 'key-lot-1', broker_fill_id: 'x2', leg: 'stop', qty: 1 }),
-          makeFill({ idempotency_key: 'key-lot-1', broker_fill_id: 'x3', leg: 'target', qty: 2 }),
+          makeFill({
+            idempotency_key: 'key-lot-1',
+            broker_fill_id: toBrokerFillId('x1'),
+            leg: 'exit',
+            qty: 4,
+          }),
+          makeFill({
+            idempotency_key: 'key-lot-1',
+            broker_fill_id: toBrokerFillId('x2'),
+            leg: 'stop',
+            qty: 1,
+          }),
+          makeFill({
+            idempotency_key: 'key-lot-1',
+            broker_fill_id: toBrokerFillId('x3'),
+            leg: 'target',
+            qty: 2,
+          }),
         ],
       });
       await store.applyLotAdvance({
         idempotency_key: 'key-lot-2',
         fills: [
-          makeFill({ idempotency_key: 'key-lot-2', broker_fill_id: 'e2', leg: 'entry', qty: 15 }),
+          makeFill({
+            idempotency_key: 'key-lot-2',
+            broker_fill_id: toBrokerFillId('e2'),
+            leg: 'entry',
+            qty: 15,
+          }),
         ],
       });
 

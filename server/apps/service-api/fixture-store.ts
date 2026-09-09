@@ -31,6 +31,7 @@ import {
 import type { OutsideBenchmarkSample } from '../../pipeline/outside-benchmark/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
 import type { ClosedTrade, DebateLog, Fill, OpenPosition } from '../../shared/index.js';
+import { toBrokerFillId } from '../../shared/index.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
 import type {
   AttributionSummary,
@@ -185,7 +186,7 @@ const CLOSED_TRADES: ClosedTrade[] = [
 const FILLS: Fill[] = [
   {
     idempotency_key: 'SPY-2026-07-19T06:30:00Z',
-    broker_fill_id: 'alpaca-fill-spy-entry',
+    broker_fill_id: toBrokerFillId('alpaca-fill-spy-entry'),
     leg: 'entry',
     price: 552.1,
     qty: 20,
@@ -194,7 +195,7 @@ const FILLS: Fill[] = [
   },
   {
     idempotency_key: 'SPY-2026-07-19T06:30:00Z',
-    broker_fill_id: 'alpaca-fill-spy-target',
+    broker_fill_id: toBrokerFillId('alpaca-fill-spy-target'),
     leg: 'target',
     price: 559.8,
     qty: 20,
@@ -203,7 +204,7 @@ const FILLS: Fill[] = [
   },
   {
     idempotency_key: 'QQQ-2026-07-19T04:30:00Z',
-    broker_fill_id: 'alpaca-fill-qqq-entry',
+    broker_fill_id: toBrokerFillId('alpaca-fill-qqq-entry'),
     leg: 'entry',
     price: 495.6,
     qty: 15,
@@ -212,7 +213,7 @@ const FILLS: Fill[] = [
   },
   {
     idempotency_key: 'QQQ-2026-07-19T04:30:00Z',
-    broker_fill_id: 'alpaca-fill-qqq-stop',
+    broker_fill_id: toBrokerFillId('alpaca-fill-qqq-stop'),
     leg: 'stop',
     price: 500.1,
     qty: 15,
