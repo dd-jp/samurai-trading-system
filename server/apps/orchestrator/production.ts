@@ -2823,6 +2823,17 @@ export function startTickLoop(deps: {
         }
       }
 
+      // Re-checked here, not only in `schedule()`: before #1390 this whole
+      // prologue (`nextTick` through the claim loop) ran with no `await` in
+      // it, so `stop()` — itself synchronous up to its own first `await` —
+      // could never observe `runOnce` mid-prologue, and `passes` always
+      // gained this pass's entry before `stop()`'s `Promise.all` snapshot
+      // could be taken. `await deps.heldAssets()` above is now a yield point
+      // ahead of that snapshot: without this check, a `stop()` racing during
+      // the held-position read would return without ever waiting for the
+      // instruments this pass is about to claim and dispatch.
+      if (stopped) return;
+
       // Claim inside ONE loop — check and claim per asset, not filter-then-add.
       // A `filter` followed by a separate `add` loop is not atomic per asset:
       // if `nextTick` ever returned the same asset twice, both entries would
@@ -3079,6 +3090,36 @@ export function equityCalendarFor(config: ProductionConfig): TradingCalendar {
   return config.mode === 'live'
     ? new LseRegularHoursCalendar()
     : new UsEquityRegularHoursCalendar();
+}
+
+/**
+ * #1390's `heldAssets` reader — the union of BOTH arms' open positions, not
+ * just the live arm's.
+ *
+ * `ProductionComponents.executionStore` only ever holds `arm: 'live'` rows
+ * (#753's `WHERE arm = ?` scoping, `sqlite-shared-store.ts`); the control arm
+ * writes its own lots into its own store (`controlArmWiring.store`,
+ * `arm: 'control'`). The SAME `TickPlan.instruments` drives both arms' tick —
+ * the live arm through `TailSequencer`'s tail, the control arm through the
+ * plan's own dispatch order (`control-arm.ts`'s hook runs before the live
+ * exit check's tail wait; #1040's cursor hands out `plan.instruments` in
+ * order) — so a held set that named only the live arm's lots would leave
+ * every control-arm lot exactly as unprioritized as before #1390 shipped.
+ * Round-1 review of #1390 caught this: on the ticket's own incident, every
+ * one of the nine held control lots was `arm: 'control'`, so the live-only
+ * reader made `orderHeldFirst` the identity on the exact tick it exists to
+ * fix.
+ */
+export function buildHeldAssetsReader(
+  components: Pick<ProductionComponents, 'executionStore' | 'controlArmWiring'>,
+): () => Promise<ReadonlySet<string>> {
+  return async () => {
+    const [live, control] = await Promise.all([
+      components.executionStore.getOpenPositions(),
+      components.controlArmWiring.store.getOpenPositions(),
+    ]);
+    return new Set([...live, ...control].map((p) => p.instrument));
+  };
 }
 
 /**
@@ -4091,12 +4132,9 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         decisionGate: new DebateBarDecisionGate(),
         // #1084 — the eighteenth `ALERT_CHANNEL_FIELDS` member.
         tickSkipAlerts: config.tickSkipAlerts ?? new LoggingTickSkipAlertChannel(logger),
-        // #1390: the same `executionStore` `getOpenPositions`, Verdict's
-        // `positionStore` and Execution's `store` already share (see
-        // `ProductionComponents.executionStore`'s doc) — one open-positions
-        // read per tick, not a second store.
-        heldAssets: async () =>
-          new Set((await components.executionStore.getOpenPositions()).map((p) => p.instrument)),
+        // #1390: unions both arms' open positions — see `buildHeldAssetsReader`'s
+        // doc for why the live arm's store alone is not enough.
+        heldAssets: buildHeldAssetsReader(components),
       });
 
       // #327: both of these degraded modes were previously reached by pure

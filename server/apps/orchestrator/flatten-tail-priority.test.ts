@@ -208,6 +208,72 @@ describe('flatten-tail throughput at incident scale (#1390)', () => {
 });
 
 /**
+ * Round-1 review finding 3: `flatten-tail throughput at incident scale`
+ * above measures order at `beginPortfolioTail` GRANT time — the live arm's
+ * `TailSequencer` order. The control arm's own flatten (`control-arm.ts`'s
+ * hook) never takes a tail turn at all (#1040 — it writes to its own shadow
+ * book, not the live one) and instead runs eagerly, synchronously ahead of
+ * any tail wait, the moment `SequentialTickRunner.runInstrument` is invoked
+ * for that instrument (`tick-runner.ts`'s tick path calls `steps.controlArm`
+ * before the live exit check's own `beginPortfolioTail` await). So the
+ * control arm's ordering is governed by DISPATCH order — when
+ * `TickRunner.runInstrument` is first called for an instrument
+ * (`tick-loop.ts`'s cursor-fed `worker()` loop) — not by the tail turnstile.
+ *
+ * At full concurrency (`max_concurrent_instruments === plan.instruments.length`)
+ * every worker starts synchronously in plan order before any of them yields
+ * (each worker's first `await` is its own `runInstrument` call), so dispatch
+ * order is deterministically the plan's own order. This test pins THAT order
+ * directly, at the incident's own scale, to show held-first reordering
+ * governs the control arm's flatten ordering too — not only the live arm's
+ * tail.
+ */
+describe('dispatch order at incident scale, the coordinate control-arm flattens use (#1390)', () => {
+  it('held-first reordering puts every held instrument\'s runInstrument call ahead of every flat one', async () => {
+    const HELD = new Set(['QQQ', 'AAPL', 'AMZN', 'NFLX', 'SMCI', 'PLTR', 'MSTR', 'RIOT', 'UBER']);
+    const universe = [...DEFAULT_UNIVERSE];
+    const dispatchOrder: string[] = [];
+
+    const runner: TickRunner = {
+      async runInstrument(signal, ctx) {
+        // Recorded as the FIRST statement, before any await — this is
+        // dispatch order, the coordinate the control arm's own eager,
+        // un-sequenced flatten hook actually runs on.
+        dispatchOrder.push(signal.asset);
+        await ctx.beginPortfolioTail?.();
+        return { trace_id: ctx.trace_id, final_stage: 'execution' };
+      },
+    };
+
+    const plan: TickPlan = {
+      instruments: orderHeldFirst(universe, HELD),
+      tick_time: new Date('2026-09-08T19:58:00Z'),
+    };
+
+    await runTickPlan(plan, runner, { now: () => plan.tick_time }, {
+      max_concurrent_instruments: plan.instruments.length,
+      logger: { log: () => {} },
+      auditLog: { record: () => {} },
+      currentTickStore: { upsert: () => {}, delete: () => {}, get: () => undefined },
+      decisionGate: new DebateBarDecisionGate(),
+    });
+
+    // Every held instrument's dispatch precedes every flat instrument's.
+    const heldDispatchIndices = dispatchOrder
+      .map((asset, index) => ({ asset, index }))
+      .filter(({ asset }) => HELD.has(asset))
+      .map(({ index }) => index);
+    const flatDispatchIndices = dispatchOrder
+      .map((asset, index) => ({ asset, index }))
+      .filter(({ asset }) => !HELD.has(asset))
+      .map(({ index }) => index);
+
+    expect(Math.max(...heldDispatchIndices)).toBeLessThan(Math.min(...flatDispatchIndices));
+    expect(dispatchOrder.slice(0, HELD.size).every((asset) => HELD.has(asset))).toBe(true);
+  });
+});
+
+/**
  * Acceptance criterion 3: the exit path's tail latency does not depend on
  * debate latency. `tick-runner.ts`'s tick/decision split already guarantees
  * the exit check itself never calls `debate` (`SequentialTickRunner tick

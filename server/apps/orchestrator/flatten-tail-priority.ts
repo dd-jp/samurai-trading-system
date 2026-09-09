@@ -34,9 +34,15 @@
  * one incident: "The tail must be correct at whatever throughput the pass
  * happens to have." A policy that depends on knowing how long a pass runs is
  * a throughput dependency in a different shape. Ordering held-first
- * unconditionally has no such dependency, and it is a strict superset of
- * "inside the window, held before flat" — so it satisfies that requirement
- * without needing to detect the window at all.
+ * unconditionally has no such dependency, and for FLATTEN COVERAGE it is a
+ * strict superset of "inside the window, held before flat" — every held lot
+ * that would have been reached by a window-gated reorder is still reached
+ * here. It is not a superset in every respect: reordering runs on EVERY tick,
+ * not only inside the window, so on a saturated pass outside the window it
+ * also pushes flat instruments to the back — costing them entry timing, not
+ * just flatten timing. That cost is accepted, not incidental: ADR-0014's
+ * flat-by-close obligation is mandatory and an entry is not, so a saturated
+ * pass should spend its limited throughput on the obligation first.
  *
  * ## Why the wholesale "still running from a previous pass" skip is left alone
  *
@@ -44,12 +50,23 @@
  * still-in-flight pass claimed, every tick, unconditionally — that guard's
  * job is preventing double-dispatch of one instrument, not scheduling. This
  * file does not touch it. Deferral is safe once every pass is held-first
- * ordered, because the reason a busy tick is safe to skip is that the pass
- * OWNING those instruments is now working through them held-first itself: a
- * held lot delayed by a busy skip is delayed behind the same in-flight pass's
- * own held-priority tail, not behind that pass's flat instruments. Re-dispatch
+ * ordered — for BOTH arms; `production.ts`'s `heldAssets` reader
+ * (`buildHeldAssetsReader`) unions the live and control-arm stores for
+ * exactly this reason, since a held-only-for-one-arm set would leave the
+ * other arm's held lots exactly as unprioritized as no fix at all — because
+ * the reason a busy tick is safe to skip is that the pass OWNING those
+ * instruments is now working through them held-first itself: a held lot
+ * delayed by a busy skip is delayed behind the same in-flight pass's own
+ * held-priority tail, not behind that pass's flat instruments. Re-dispatch
  * (pre-emption) would reintroduce the double-dispatch #669 exists to forbid,
  * for a case this reordering already removes the harm from.
+ *
+ * This safety is bounded by when the held set was READ, not by anything the
+ * in-flight pass does afterward: `heldAssets()` is called once per pass, at
+ * plan-build time (`production.ts`'s `runOnce`), so a lot opened AFTER that
+ * read has no priority for that pass's entire lifetime — 6+ minutes in the
+ * incident. Such a lot is ordered as flat until the NEXT pass reads a fresh
+ * held set, not re-prioritized mid-pass.
  *
  * ## Coverage bound (state it, don't leave it emergent)
  *
