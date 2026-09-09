@@ -416,6 +416,39 @@ describe('SaxoBrokerAdapter.submitBracket', () => {
     expect(client.cancelOrder).not.toHaveBeenCalled();
   });
 
+  // The dormant-legs defer (#1215 round 1) must win even when a corroborating
+  // audit row IS available on the 409 retry — the retry reads the open list
+  // only, never the audit trail, so a `Filled` row sitting right there is
+  // never consulted (#1438). Consulting it would adopt a phantom fill on
+  // `Status` evidence the retry itself cannot corroborate against a
+  // `masterSeenOpen` fact, exactly what `cancel`'s corroboration path exists
+  // to avoid doing on the placement side too.
+  it('defers dormant legs found after a duplicate-request refusal even when the audit trail already has a Filled row for them (#1438)', async () => {
+    const listOpenOrders = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([dormantLeg(), targetLeg()]);
+    const listOrderActivities = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([activity({ Status: 'Filled', FillAmount: 3, AveragePrice: 10 })]);
+    const client = makeClient({
+      listOpenOrders,
+      listOrderActivities,
+      placeOrder: vi
+        .fn()
+        .mockRejectedValue(new SaxoBrokerProviderError('Saxo API error: 409', 409, undefined)),
+    });
+    const { adapter } = makeAdapter(client);
+
+    const err = await adapter.submitBracket(makeBracket()).catch((e: unknown) => e);
+
+    expect(err).toMatchObject({ name: 'BrokerError', operation: 'submitBracket', statusCode: 409 });
+    expect((err as { venueCode?: string }).venueCode).toBeUndefined();
+    expect(client.cancelOrder).not.toHaveBeenCalled();
+    expect(listOrderActivities).toHaveBeenCalledTimes(1);
+  });
+
   it('looks back only a few duplicate windows on the audit trail before placing', async () => {
     const client = makeClient();
     const { adapter } = makeAdapter(client);
