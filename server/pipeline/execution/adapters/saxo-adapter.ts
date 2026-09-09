@@ -385,15 +385,19 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
    * Per-reference consecutive unresolved-observation count + first-observed
    * time for `escalateIfStale`. In memory and restart-clean — same posture as
    * `FilledZeroSizeThrottle`'s own map (its doc): a process that just
-   * restarted has no evidence about the previous process's polls.
+   * restarted has no evidence about the previous process's polls. That
+   * posture covers the counter, not `masterSeenOpen`: losing the counter
+   * delays a page, losing the flag re-enables the leg deletion it guards
+   * against until the next `cancel` observes the master open again. The flag
+   * also drops on any non-dormant read of the reference (`lookup`), so it
+   * holds only across consecutive dormant observations within one process.
    *
    * Two conditions are counted here under namespaced keys, the same shape
    * `priceUnitDefer` uses and for the same reason — they must not shift each
    * other's cadence. The bare reference counts "the audit trail has not
    * answered"; `refusedKey` counts "it answered `Filled` and `cancel` refused
    * to act on it" (#1216 round 2). A shared key would let one caller's
-   * settled verdict clear the other's wedge, which is the defect #1216 round
-   * 2 finding 1 found in the first version of this counter.
+   * settled verdict clear the other's wedge.
    */
   private readonly dormantDefer = new Map<string, DormantDeferRecord>();
   /**
@@ -991,8 +995,8 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
    * Cancels a related-order pair with no master left to cancel it for us —
    * one `lookup` or `cancel` has already decided may go. Three callers, all
    * settled state: a dormant pair whose master's audit row is terminal and
-   * not `Filled` (#1215 round 1); a dormant pair with no audit row at all,
-   * from `lookup` only, where nothing ties the legs to a known order; and,
+   * not `Filled` (#1215 round 1); a dormant pair with no audit row at all
+   * and no master seen open, where nothing ties the legs to a known order; and,
    * from `cancel` alone, an activated pair whose lot the caller is
    * flattening. Every other shape refuses or defers in `clearLegs` — a
    * `Filled` row, or an empty answer about a master `cancel` just watched
@@ -1033,9 +1037,9 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
    * bare reference), or answering `Filled` where `cancel` then refused
    * (`refusedKey`) — and posts `DormantLegsUnresolvedAlert` once
    * `shouldWarnDormantDefer` says it is due; see that function's own doc for
-   * the bound and repeat cadence. `masterSeenOpen` is sticky per reference:
-   * once one observation reports it, every later one under the same key
-   * inherits it (see `DormantDeferRecord`).
+   * the bound and repeat cadence. `masterSeenOpen` is stored here and read
+   * back by `corroborateDormantLegs`, which is what makes it sticky across a
+   * `cancel` followed by `lookup` under the same reference.
    * Fire-and-forget, fully swallowed: same posture as
    * `postFlattenReconcileAlert` (reconcile.ts) — the poll this alert
    * reports on already completed, there is nothing here to undo on a
