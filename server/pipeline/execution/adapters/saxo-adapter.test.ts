@@ -29,6 +29,7 @@ import type {
 import {
   DORMANT_DEFER_ALERT_AFTER,
   DORMANT_DEFER_ALERT_REPEAT_EVERY,
+  PRICE_UNIT_ALERT_REPEAT_EVERY,
   SaxoBrokerAdapter,
   type SaxoInstrumentResolver,
   saxoInstrumentResolverFromVenue,
@@ -1614,6 +1615,120 @@ describe('SaxoBrokerAdapter GBX price unit (#1302)', () => {
   });
 
   /**
+   * `ingestFills` floors its `since` at the earliest open lot's `opened_at`
+   * rather than advancing a watermark, so a PERSISTENT unresolvable Uic is
+   * re-driven every poll. The refusal must fire on every one of them —
+   * booking a possibly-100x price is the only outcome worse than the flood —
+   * while the page repeats on the throttle's cadence instead. The `LogId`
+   * changes each poll deliberately: the episode is the Uic, not the row that
+   * happened to trigger it, and `fetchNewFills` refuses at the FIRST
+   * unresolved row, so keying on the row would let a shifting venue order
+   * restart the count and page every poll anyway.
+   */
+  it('refuses every poll while paging on the throttle cadence for one unresolvable Uic', async () => {
+    let row = 0;
+    const client = makeClient({
+      placeOrder: vi.fn().mockResolvedValue(gbxPlacement()),
+      listOrderActivities: vi
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockImplementation(async () => {
+          row += 1;
+          return [
+            activity({
+              LogId: `log-${row}`,
+              ExternalReference: GBX_BRACKET.client_order_id,
+              Uic: 999999,
+              Status: 'Filled',
+              Amount: 1,
+              FillAmount: 1,
+              AveragePrice: 31151,
+            }),
+          ];
+        }),
+    });
+    const { adapter, priceUnitAlerts } = makeAdapter(
+      client,
+      new InMemoryBrokerStateStore(),
+      GBX_RESOLVER,
+    );
+    await adapter.submitBracket(GBX_BRACKET);
+    const since = new Date('2026-09-05T08:00:00Z');
+
+    for (let poll = 0; poll < PRICE_UNIT_ALERT_REPEAT_EVERY; poll += 1) {
+      await expect(adapter.fetchNewFills(since)).rejects.toThrow(/resolves to no pool line/);
+    }
+
+    expect(priceUnitAlerts.alerts.map((alert) => alert.broker_fill_id)).toEqual(['log-1']);
+
+    await expect(adapter.fetchNewFills(since)).rejects.toThrow(/resolves to no pool line/);
+
+    expect(priceUnitAlerts.alerts.map((alert) => alert.broker_fill_id)).toEqual([
+      'log-1',
+      `log-${PRICE_UNIT_ALERT_REPEAT_EVERY + 1}`,
+    ]);
+  });
+
+  /** One episode per Uic: a second unresolvable line pages at once, not on the first one's cadence. */
+  it('pages a different unresolvable Uic immediately', async () => {
+    const filled = {
+      ExternalReference: GBX_BRACKET.client_order_id,
+      Status: 'Filled' as const,
+      Amount: 1,
+      FillAmount: 1,
+      AveragePrice: 31151,
+    };
+    const client = makeClient({
+      placeOrder: vi.fn().mockResolvedValue(gbxPlacement()),
+      listOrderActivities: vi
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([activity({ ...filled, LogId: 'log-a', Uic: 999999 })])
+        .mockResolvedValue([activity({ ...filled, LogId: 'log-b', Uic: 888888 })]),
+    });
+    const { adapter, priceUnitAlerts } = makeAdapter(
+      client,
+      new InMemoryBrokerStateStore(),
+      GBX_RESOLVER,
+    );
+    await adapter.submitBracket(GBX_BRACKET);
+    const since = new Date('2026-09-05T08:00:00Z');
+
+    await expect(adapter.fetchNewFills(since)).rejects.toThrow(/resolves to no pool line/);
+    await expect(adapter.fetchNewFills(since)).rejects.toThrow(/resolves to no pool line/);
+
+    expect(priceUnitAlerts.alerts.map((alert) => alert.uic)).toEqual([999999, 888888]);
+  });
+
+  /** The same cadence on the read-only side, where the price is nulled rather than refused. */
+  it('nulls the price every poll while logging the unresolvable position Uic on the cadence', async () => {
+    const client = makeClient({
+      listNetPositions: vi.fn().mockResolvedValue([
+        {
+          NetPositionId: 'unknown-pos',
+          NetPositionBase: { Amount: 4, Uic: 999999, AssetType: 'Etn' },
+          NetPositionView: { AverageOpenPrice: 31151 },
+        } satisfies SaxoNetPosition,
+      ]),
+    });
+    const { adapter, logger } = makeAdapter(client, new InMemoryBrokerStateStore(), GBX_RESOLVER);
+    const logged = () =>
+      logger.entries.filter((entry) => entry.event === 'saxo_position_price_unit_unresolved')
+        .length;
+
+    for (let poll = 0; poll < PRICE_UNIT_ALERT_REPEAT_EVERY; poll += 1) {
+      const [position] = await adapter.getOpenPositions();
+      expect(position?.avg_entry_price).toBeNull();
+    }
+
+    expect(logged()).toBe(1);
+
+    await adapter.getOpenPositions();
+
+    expect(logged()).toBe(2);
+  });
+
+  /**
    * The refusal is scoped to rows that carry a PRICE (#1302 round 1). An
    * owned row with no price — `Placed` here — has no unit to resolve, and
    * `ingestFills` floors its lookback at the earliest open lot's `opened_at`
@@ -1734,5 +1849,51 @@ describe('saxoInstrumentResolverFromVenue quote units (#1302)', () => {
     await expect(saxoInstrumentResolverFromVenue(GBX_ROW, client)).rejects.toThrow(
       /self-contradictory/,
     );
+  });
+
+  /**
+   * The other side of the same coin flip, and the dangerous one: a scaling
+   * factor no currency difference corroborates would resolve clean and read
+   * 31151 as £3.1151, so an order aimed at £311.51 goes out as 31151. ADR-0018
+   * D5 sizes cash-first, making that a 100x OVER-quantity on a live GIA rather
+   * than the undersize the issue's own blast radius describes.
+   */
+  it('refuses a scaling factor no PriceCurrency difference corroborates', async () => {
+    const absent = detailsClient(
+      new Map([
+        [29391797, { CurrencyCode: 'GBP', PriceCurrency: undefined, PriceToContractFactor: 0.01 }],
+      ]),
+    );
+    const same = detailsClient(
+      new Map([
+        [29391797, { CurrencyCode: 'GBP', PriceCurrency: 'GBP', PriceToContractFactor: 0.01 }],
+      ]),
+    );
+
+    await expect(saxoInstrumentResolverFromVenue(GBX_ROW, absent)).rejects.toThrow(
+      /self-contradictory/,
+    );
+    await expect(saxoInstrumentResolverFromVenue(GBX_ROW, same)).rejects.toThrow(
+      /self-contradictory/,
+    );
+  });
+
+  /**
+   * That refusal is fail-closed at boot, so its boundary matters: a line
+   * stating no quote unit and no scaling is not a contradiction — quote and
+   * cash coincide whatever `PriceCurrency` would have said — and must still
+   * resolve, or a gateway that merely omits the field takes the adapter down
+   * for every line rather than for a mis-priced one.
+   */
+  it('resolves a line with no PriceCurrency and a factor of 1', async () => {
+    const client = detailsClient(
+      new Map([
+        [29391797, { CurrencyCode: 'GBP', PriceCurrency: undefined, PriceToContractFactor: 1 }],
+      ]),
+    );
+
+    const resolver = await saxoInstrumentResolverFromVenue(GBX_ROW, client);
+
+    expect(resolver.resolve('LQQ3')?.price_to_contract_factor).toBe(1);
   });
 });

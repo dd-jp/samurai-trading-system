@@ -150,6 +150,22 @@ function shouldWarnDormantDefer(consecutive: number): boolean {
   return (consecutive - DORMANT_DEFER_ALERT_AFTER) % DORMANT_DEFER_ALERT_REPEAT_EVERY === 0;
 }
 
+/**
+ * How often an unresolvable quote unit re-announces — the page from
+ * `refuseUnresolvedPriceUnit`, and `cashOpenPrice`'s log line — counted in
+ * consecutive observations of the SAME Uic. Both sites are re-driven every
+ * poll while the cause persists (`unresolved-price-unit-alert.ts`), so
+ * without this they announce at the poll cadence; #1383 measured that shape
+ * at ~600 identical lines over a 20h soak.
+ *
+ * The same poll-count repeat `DORMANT_DEFER_ALERT_REPEAT_EVERY` uses, for the
+ * same reason. Unlike that one there is NO grace before the first
+ * announcement: its bound exists to absorb a race between two network calls,
+ * where a Uic either is or is not in the resolver's in-memory map on the
+ * first look, and a refused fill is a lot that cannot go terminal meanwhile.
+ */
+export const PRICE_UNIT_ALERT_REPEAT_EVERY = 8;
+
 export interface SaxoInstrumentRef extends SaxoQuoteUnit {
   readonly uic: number;
   readonly asset_type: SaxoAssetType;
@@ -229,19 +245,38 @@ export async function saxoInstrumentResolverFromVenue(
 }
 
 /**
- * A line quoted in one currency and settled in another must carry a factor
- * that converts between them; a factor of exactly 1 alongside that mismatch
- * is the venue contradicting itself, and taking either field as authoritative
- * would be a coin flip on a 100x error (#1302).
+ * The two unit fields must corroborate each other in BOTH directions, because
+ * either one alone is a coin flip on a 100x error (#1302). A line quoted in
+ * one currency and settled in another must carry a factor that converts
+ * between them, and a factor other than 1 must be a quote unit some
+ * `PriceCurrency` names — an uncorroborated 0.01 reads 31151 as £3.1151, so
+ * an order aimed at £311.51 goes out as 31151, and ADR-0018 D5 sizes
+ * cash-first, making that a 100x OVER-quantity rather than the undersize the
+ * issue describes.
+ *
+ * The second direction holds only for the GBP LSE-listed ETPs this adapter is
+ * restricted to (ADR-0015, #659). On other Saxo asset types
+ * `PriceToContractFactor` is a contract multiplier that sits legitimately
+ * beside `PriceCurrency === CurrencyCode`, so a future reader meeting one
+ * must widen the universe, not relax this guard.
+ *
+ * An ABSENT `PriceCurrency` corroborates nothing and is refused with the
+ * rest: doc 44 §2.1 tabulates that field's VALUES on two lines, never its
+ * presence on any gateway, so reading silence as assent would be the same
+ * guess. A gateway that omits the field therefore fails at boot instead of
+ * mis-pricing — the intended direction, and why the #1302 follow-up's SIM
+ * probe records presence and not only value.
  */
 function assertUnitIsSelfConsistent(ref: SaxoInstrumentRef, lseTicker: string): void {
-  const quoteCurrency = ref.price_currency;
-  if (quoteCurrency === undefined || quoteCurrency === ref.currency) return;
-  if (ref.price_to_contract_factor !== 1) return;
+  const quotesInAnotherUnit =
+    ref.price_currency !== undefined && ref.price_currency !== ref.currency;
+  const scales = ref.price_to_contract_factor !== 1;
+  if (quotesInAnotherUnit === scales) return;
   throw new Error(
-    `Saxo instrument details for '${lseTicker}' (Uic ${ref.uic}) quote in ` +
-      `${quoteCurrency} but settle in ${ref.currency} with PriceToContractFactor 1 — ` +
-      'cash per share is unknowable from a self-contradictory pair, so the line is not tradeable.',
+    `Saxo instrument details for '${lseTicker}' (Uic ${ref.uic}) report PriceCurrency ` +
+      `${ref.price_currency ?? '(absent)'} against CurrencyCode ${ref.currency} with ` +
+      `PriceToContractFactor ${ref.price_to_contract_factor} — cash per share is unknowable ` +
+      'from a self-contradictory pair, so the line is not tradeable.',
   );
 }
 
@@ -315,6 +350,21 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
    * restarted has no evidence about the previous process's polls.
    */
   private readonly dormantDefer = new Map<string, { consecutive: number; firstObservedAt: Date }>();
+  /**
+   * Consecutive observations of a Uic whose quote unit is unresolvable, one
+   * namespaced key per site so the two cadences do not shift each other.
+   * Keyed by Uic and not by the row that triggered the observation:
+   * `fetchNewFills` refuses at the FIRST unresolved row, so a shifting venue
+   * row order would otherwise open a fresh episode — and announce — every
+   * poll. In memory and restart-clean, same posture as `dormantDefer`.
+   *
+   * No counterpart to `clearDormantDefer`: the resolver is built once, from a
+   * fixed row set (`saxoInstrumentResolverFromVenue`), so a Uic it cannot
+   * resolve stays unresolvable for the life of the process and no later,
+   * unrelated episode can arrive under the same key. Bounded by the distinct
+   * unresolvable Uics one process sees.
+   */
+  private readonly priceUnitDefer = new Map<string, number>();
 
   constructor(input: SaxoBrokerAdapterInput) {
     this.client = input.client;
@@ -608,7 +658,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
    * A net position's `AverageOpenPrice` in cash (#1302). A Uic no pool line
    * resolves reports `null` — the honest answer for a price whose unit is
    * unknown, and one `NormalizedPosition.avg_entry_price` already admits —
-   * rather than the throw `unitForOwnedActivity` uses: a position under an
+   * rather than the throw `refuseUnresolvedPriceUnit` returns: a position under an
    * unrecognised Uic is not necessarily this system's (a hand-placed trade in
    * the same account is enough), and refusing the whole sweep would blind
    * `reconcile` to every OTHER position including our own.
@@ -617,22 +667,39 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     if (quotedPrice === undefined) return null;
     const ref = this.instrumentForUic(uic);
     if (ref !== undefined) return saxoCashPerShare(ref, quotedPrice);
-    safeLog(this.logger, {
-      trace_id: 'saxo-open-positions',
-      stage: 'execution',
-      level: 'error',
-      event: 'saxo_position_price_unit_unresolved',
-      message:
-        'Saxo getOpenPositions: position Uic resolves to no pool line, so its quote unit is ' +
-        'unknown; avg_entry_price reported as null rather than at venue scale',
-      payload: { uic },
-    });
+    if (this.shouldAnnounceUnresolvedUnit('position', uic)) {
+      safeLog(this.logger, {
+        trace_id: 'saxo-open-positions',
+        stage: 'execution',
+        level: 'error',
+        event: 'saxo_position_price_unit_unresolved',
+        message:
+          'Saxo getOpenPositions: position Uic resolves to no pool line, so its quote unit is ' +
+          'unknown; avg_entry_price reported as null rather than at venue scale',
+        payload: { uic },
+      });
+    }
     return null;
   }
 
   private instrumentForUic(uic: number): SaxoInstrumentRef | undefined {
     const ticker = this.instruments.lseTickerFor(uic);
     return ticker === undefined ? undefined : this.instruments.resolve(ticker);
+  }
+
+  /**
+   * Records one more consecutive unresolvable-unit observation of `uic` at
+   * `site`, and answers whether THIS one announces — see
+   * `PRICE_UNIT_ALERT_REPEAT_EVERY`. Only the announcement is throttled:
+   * every caller still nulls or refuses its own price on every poll, because
+   * suppressing the refusal would book a possibly-100x fill on seven polls in
+   * eight.
+   */
+  private shouldAnnounceUnresolvedUnit(site: 'fill' | 'position', uic: number): boolean {
+    const key = `${site}:${uic}`;
+    const consecutive = (this.priceUnitDefer.get(key) ?? 0) + 1;
+    this.priceUnitDefer.set(key, consecutive);
+    return (consecutive - 1) % PRICE_UNIT_ALERT_REPEAT_EVERY === 0;
   }
 
   /**
@@ -649,33 +716,39 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
    * `hasFill` dedups whatever landed. A PERSISTENT one does not: the same row
    * stays in the lookback, every poll throws, the lot never goes terminal and
    * `since` never advances. Nothing else changes while that runs, which is
-   * why it is paged rather than only logged.
+   * why it is paged rather than only logged — on the cadence
+   * `PRICE_UNIT_ALERT_REPEAT_EVERY` sets, since that same persistence would
+   * otherwise page at the poll rate. The REFUSAL is never throttled: it is
+   * the safety property, and skipping it between announcements would book
+   * exactly the mis-scaled price the alert exists to report.
    *
-   * Delivery failure is swallowed to a log line — the throw below is the
-   * safety property, and it does not depend on the alert landing.
+   * Delivery failure is swallowed to a log line — the throw below does not
+   * depend on the alert landing.
    */
   private async refuseUnresolvedPriceUnit(
     activity: SaxoOrderActivity,
     clientOrderId: string,
   ): Promise<Error> {
-    try {
-      await this.priceUnitAlerts.postUnresolvedPriceUnitAlert({
-        client_order_id: clientOrderId,
-        broker_fill_id: activity.LogId,
-        uic: activity.Uic,
-        observed_at: this.clock.now(),
-      });
-    } catch {
-      safeLog(this.logger, {
-        trace_id: 'saxo-fills',
-        stage: 'execution',
-        level: 'error',
-        event: 'saxo_price_unit_alert_send_failed',
-        message:
-          'postUnresolvedPriceUnitAlert delivery failed — the fill is still refused and the ' +
-          'sweep still fails, but the operator was not paged; check the venue by hand',
-        payload: { client_order_id: clientOrderId, uic: activity.Uic },
-      });
+    if (this.shouldAnnounceUnresolvedUnit('fill', activity.Uic)) {
+      try {
+        await this.priceUnitAlerts.postUnresolvedPriceUnitAlert({
+          client_order_id: clientOrderId,
+          broker_fill_id: activity.LogId,
+          uic: activity.Uic,
+          observed_at: this.clock.now(),
+        });
+      } catch {
+        safeLog(this.logger, {
+          trace_id: 'saxo-fills',
+          stage: 'execution',
+          level: 'error',
+          event: 'saxo_price_unit_alert_send_failed',
+          message:
+            'postUnresolvedPriceUnitAlert delivery failed — the fill is still refused and the ' +
+            'sweep still fails, but the operator was not paged; check the venue by hand',
+          payload: { client_order_id: clientOrderId, uic: activity.Uic },
+        });
+      }
     }
     return new Error(
       `Saxo activity ${activity.LogId} for '${clientOrderId}' reports Uic ${activity.Uic}, which ` +
