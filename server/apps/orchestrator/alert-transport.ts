@@ -126,6 +126,7 @@ import { TradeChannelLlmFailureRateAlert } from './llm-failure-rate-alert-channe
 import { TradeChannelLoosenNotice } from './loosen-notification-channel.js';
 import { TradeChannelLseCalendarCoverageAlert } from './lse-calendar-coverage-alert-channel.js';
 import { TradeChannelMiCoverageAlert } from './mi-coverage-alert-channel.js';
+import { TradeChannelNonSterlingFeeAlert } from './non-sterling-fee-alert-channel.js';
 import { TradeChannelOcoDoubleFillAlert } from './oco-double-fill-channel.js';
 import { TradeChannelOrphanAlert } from './orphan-alert-channel.js';
 import type { AlertChannelSlots, ProductionConfig } from './production.js';
@@ -315,6 +316,14 @@ export const ALERT_CHANNEL_FIELDS = [
   'legResizeAlerts',
   'dormantLegsAlerts',
   'priceUnitAlerts',
+  // #1465 — the twenty-first. Channel type and transport in the SAME
+  // change: #1220 raised `FEE_CURRENCY_NOT_BOOK_CURRENCY` at `error` with no
+  // channel behind it, the same hole `residualExposureAlerts` closed for
+  // #525. The condition it reports (a fill fee outside book currency) means
+  // an instrument was traded that `tradeableUniverse()` should already have
+  // excluded — a selection-layer defect that already reached the venue with
+  // real money.
+  'nonSterlingFeeAlerts',
 ] as const satisfies readonly (keyof AlertChannelSlots)[];
 
 /**
@@ -651,6 +660,14 @@ export function buildAlertChannels(deps: {
       : {}),
     ...(deps.injected.priceUnitAlerts === undefined
       ? { priceUnitAlerts: new TradeChannelUnresolvedPriceUnitAlert(telegram, chatId) }
+      : {}),
+    // #1465. The escalation chat, never the heartbeat chat: a foreign fill
+    // fee means an instrument was traded that `tradeableUniverse()` should
+    // already have excluded — a decision waiting on the operator (check the
+    // universe pool / selection wiring), not a beat — same reasoning as
+    // `residualExposureAlerts`, the closest in kind.
+    ...(deps.injected.nonSterlingFeeAlerts === undefined
+      ? { nonSterlingFeeAlerts: new TradeChannelNonSterlingFeeAlert(telegram, chatId) }
       : {}),
   };
 }

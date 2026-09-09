@@ -14,6 +14,7 @@ import type { VerdictDecision } from '../../verdict/index.js';
 import type { FilledZeroSizeThrottle } from '../filled-zero-size-throttle.js';
 import type { FlattenOverfillAlertChannel } from '../flatten-overfill-alert.js';
 import type { FlattenReconcileAlertChannel } from '../flatten-reconcile-alert.js';
+import type { NonSterlingFeeAlertChannel } from '../non-sterling-fee-alert.js';
 import type { ResidualExposureAlertChannel } from '../residual-exposure-alert.js';
 import type { BrokerAdapter } from './broker.js';
 import type { SharedStore } from './store.js';
@@ -144,6 +145,19 @@ export interface ExecutionInput {
    * a module-level singleton — see the class doc for why.
    */
   filledZeroSizeThrottle: FilledZeroSizeThrottle;
+  /**
+   * #1465: where a fill fee reported outside book currency is escalated —
+   * `warnOnNonSterlingFee` (ingest-fills.ts) posts here after writing its own
+   * `error`-level `safeLog` line. OPTIONAL, unlike `residualExposureAlerts`
+   * et al. above, and deliberately with no `Logging…Channel` default: that
+   * `safeLog` line already carries this alert's fields at `error`, so a
+   * logging implementation behind this port would emit every trip twice —
+   * the same reasoning `ThresholdClampAlertChannel`/
+   * `TraderDiagnosticAlertChannel` document for their own absence of one.
+   * Absent means "no second, audible copy", never "silent": the durable
+   * record is the log line and the `fee_currency` column on the booked fill.
+   */
+  nonSterlingFeeAlerts?: NonSterlingFeeAlertChannel;
 }
 
 export interface ExecutionResult {

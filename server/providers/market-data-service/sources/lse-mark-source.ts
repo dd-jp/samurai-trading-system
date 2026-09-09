@@ -73,28 +73,18 @@
  * at `LseMarkDataSource` construction over the lines actually held, so it
  * still catches a universe assembled without that selector.
  */
+import { BOOK_CURRENCY, isBookCurrency, isPenceCurrency } from '../../../shared/index.js';
 import type { RawCandle } from '../ingestion.js';
 import { LseRegularHoursCalendar } from '../trading-calendar.js';
 import type { Quote } from '../types.js';
 import { type LiveObservation, NormalizingDataSource } from './normalizing-data-source.js';
 
-/** The account/book currency every mark this source emits is denominated in. */
-export const BOOK_CURRENCY = 'GBP';
-
-/**
- * Codes that mean "pence sterling" — a SUB-UNIT of `GBP`, worth exactly 1/100
- * of it.
- *
- * `GBX` is the ISO-style code `lse-etp-pool.ts` records; `GBp` (lowercase `p`)
- * is what the vendor payloads probed for doc 34 actually carry; `p` appears on
- * exchange factsheets. All three name the same unit, and a source recognising
- * only one of them would silently 100x the others.
- *
- * **`GBp` differs from `GBP` by capitalisation alone and means one hundredth
- * of it**, which is why this set is matched BEFORE the case-insensitive `GBP`
- * comparison and why `GBp` is listed here case-sensitively.
- */
-const PENCE_CODES: readonly string[] = ['GBX', 'gbx', 'GBp', 'p'];
+// `BOOK_CURRENCY`/`isBookCurrency` are re-exported below for this module's
+// own existing consumers (its test, the `market-data-service` barrel) — the
+// definitions themselves moved to `shared/book-currency.ts` under #1465,
+// which also repoints `lse-etp-pool.ts`'s `isSterlingQuoted` at the same
+// predicate instead of a hand-duplicated code list.
+export { BOOK_CURRENCY, isBookCurrency };
 
 /**
  * A vendor quote whose currency this source cannot serve into a GBP book.
@@ -280,7 +270,7 @@ export function toBookCurrency(
   const code = currency.trim();
   // Pence FIRST: 'GBp' upper-cases to 'GBP', so a case-insensitive pound test
   // run first would swallow it and 100x the price.
-  if (PENCE_CODES.includes(code)) {
+  if (isPenceCurrency(code)) {
     return price / 100;
   }
   if (code.toUpperCase() === BOOK_CURRENCY) {
@@ -298,11 +288,6 @@ export function toBookCurrency(
  * one here would drop every bar between 08:00 and 14:30 London and keep every
  * bar after 16:30.
  */
-/** True when `currency` is one this system can carry into the GBP book without an FX rate. */
-export function isBookCurrency(currency: string): boolean {
-  const code = currency.trim();
-  return PENCE_CODES.includes(code) || code.toUpperCase() === BOOK_CURRENCY;
-}
 
 /**
  * Refuse a set of declared currencies at CONSTRUCTION, naming every offending

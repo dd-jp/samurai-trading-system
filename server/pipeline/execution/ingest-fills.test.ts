@@ -35,6 +35,8 @@ import type {
   FlattenOverfillWarning,
   LotAdvance,
   NativeBracketRequest,
+  NonSterlingFeeAlert,
+  NonSterlingFeeAlertChannel,
   NormalizedFill,
   NormalizedOrder,
   NormalizedPosition,
@@ -205,6 +207,19 @@ function makeFlattenOverfillAlerts(): FlattenOverfillAlertChannel & {
   };
 }
 
+/** Records every non-sterling-fee alert posted (#1465) — never posted for a book-currency fee. */
+function makeNonSterlingFeeAlerts(): NonSterlingFeeAlertChannel & {
+  alerts: NonSterlingFeeAlert[];
+} {
+  const alerts: NonSterlingFeeAlert[] = [];
+  return {
+    alerts,
+    async postNonSterlingFeeAlert(alert: NonSterlingFeeAlert): Promise<void> {
+      alerts.push(alert);
+    },
+  };
+}
+
 function makeInput(
   broker: BrokerAdapter,
   store: TestExecutionStore,
@@ -224,6 +239,10 @@ function makeInput(
   // default fixed clock never advances, so every other test's "no further
   // announcement" assertions hold exactly as before.
   clock: Clock = { now: () => NOW },
+  // #1465: absent by default (undefined) — most scenarios never touch a
+  // non-sterling fee, and `ExecutionInput.nonSterlingFeeAlerts` is OPTIONAL
+  // precisely so a caller (production or test) need not supply one.
+  nonSterlingFeeAlerts?: NonSterlingFeeAlertChannel,
 ): ExecutionInput {
   const config: ExecutionConfig = {
     simulated: {
@@ -247,6 +266,7 @@ function makeInput(
     mode: 'backtest',
     residualExposureAlerts,
     flattenOverfillAlerts,
+    ...(nonSterlingFeeAlerts === undefined ? {} : { nonSterlingFeeAlerts }),
     // #519: `ingestFills()` never reconciles, so this is never posted to.
     flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
     logger,
@@ -3983,5 +4003,171 @@ describe('a non-sterling fee is a loud contradiction, not a silent GBP sum (#122
     expect(
       logger.entries.filter((entry) => entry.message === FEE_CURRENCY_NOT_BOOK_CURRENCY),
     ).toHaveLength(1);
+  });
+});
+
+// #1465: #1220 recorded the fee and raised it at `error`, but wired no
+// channel — the only sink was `ExecutionInput.logger`, a rotating file
+// nobody escalates. This closes the other half.
+describe('a non-sterling fee pages an operator, not just a log line (#1465)', () => {
+  it('posts to nonSterlingFeeAlerts, beside the existing safeLog line, for a fill on the direct advanceLot path', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 5 });
+    const broker = new ScriptedBroker([
+      fill({ broker_fill_id: toBrokerFillId('usd-1'), qty: 5, fee: 0.8, fee_currency: 'USD' }),
+    ]);
+    const logger = recordingLogger();
+    const nonSterlingFeeAlerts = makeNonSterlingFeeAlerts();
+
+    await new ExecutionImpl(
+      makeInput(
+        broker,
+        store,
+        undefined,
+        undefined,
+        logger,
+        undefined,
+        undefined,
+        undefined,
+        nonSterlingFeeAlerts,
+      ),
+    ).ingestFills();
+
+    expect(nonSterlingFeeAlerts.alerts).toEqual([
+      {
+        trace_id: 'trace-1',
+        idempotency_key: 'key-1',
+        instrument: 'AAPL',
+        broker_fill_id: 'usd-1',
+        fee: 0.8,
+        fee_currency: 'USD',
+        book_currency: 'GBP',
+      },
+    ]);
+    // The channel post is IN ADDITION TO the log line, not instead of it —
+    // matching ResidualExposureAlert's posture (#525): the durable trace and
+    // the page are both present.
+    expect(logger.entries).toContainEqual(
+      expect.objectContaining({ level: 'error', message: FEE_CURRENCY_NOT_BOOK_CURRENCY }),
+    );
+  });
+
+  it('is silent when nonSterlingFeeAlerts is not supplied — optional, no default channel', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 5 });
+    const broker = new ScriptedBroker([
+      fill({ broker_fill_id: toBrokerFillId('usd-1'), qty: 5, fee: 0.8, fee_currency: 'USD' }),
+    ]);
+
+    await expect(new ExecutionImpl(makeInput(broker, store)).ingestFills()).resolves.not.toThrow();
+  });
+
+  it("posts for the increment booked through cumulativeTopUp, not just advanceLot's direct path (#842 seam)", async () => {
+    // THE GAP #1465 closes: `advanceLot`'s per-fill loop called
+    // `warnOnNonSterlingFee` beside its `toFill` push, but `cumulativeTopUp`
+    // (the OTHER call site into `toFill`, reached when a cumulative feed
+    // re-offers a bigger running total under the same order id) had no such
+    // call at all. First poll's fee currency is GBP (books cleanly, no
+    // alert); the SECOND poll reports the same order's fee in USD — a
+    // currency the increment now carries and only cumulativeTopUp's own
+    // guard can catch.
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 100, filled_size: 0 });
+    const broker = new ScriptedBroker([
+      fill({
+        broker_fill_id: toBrokerFillId('cumulative-1'),
+        leg: 'entry',
+        qty: 50,
+        price: 100,
+        fee: 0.4,
+        fee_currency: 'GBP',
+        timestamp: new Date('2026-07-20T15:00:00Z'),
+        qty_is_cumulative: true,
+      }),
+    ]);
+    const logger = recordingLogger();
+    const nonSterlingFeeAlerts = makeNonSterlingFeeAlerts();
+    const execution = new ExecutionImpl(
+      makeInput(
+        broker,
+        store,
+        undefined,
+        undefined,
+        logger,
+        undefined,
+        undefined,
+        undefined,
+        nonSterlingFeeAlerts,
+      ),
+    );
+    await execution.ingestFills();
+
+    expect(nonSterlingFeeAlerts.alerts).toEqual([]);
+
+    broker.replaceFills([
+      fill({
+        broker_fill_id: toBrokerFillId('cumulative-1'),
+        leg: 'entry',
+        qty: 100,
+        price: 100,
+        fee: 0.8,
+        fee_currency: 'USD',
+        timestamp: new Date('2026-07-20T15:30:00Z'),
+        qty_is_cumulative: true,
+      }),
+    ]);
+    await execution.ingestFills();
+
+    expect(nonSterlingFeeAlerts.alerts).toEqual([
+      expect.objectContaining({
+        idempotency_key: 'key-1',
+        broker_fill_id: 'cumulative-1',
+        fee_currency: 'USD',
+      }),
+    ]);
+    expect(
+      logger.entries.filter((entry) => entry.message === FEE_CURRENCY_NOT_BOOK_CURRENCY),
+    ).toHaveLength(1);
+
+    // A re-poll at the SAME cumulative must not re-page: `cumulativeTopUp`
+    // returns null on a zero delta before `warnOnNonSterlingFee` is reached.
+    await execution.ingestFills();
+    expect(nonSterlingFeeAlerts.alerts).toHaveLength(1);
+  });
+
+  it("logs a fixed, self-authored message on a channel send failure — never the channel's own error text (CREDENTIALS)", async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 5 });
+    const broker = new ScriptedBroker([
+      fill({ broker_fill_id: toBrokerFillId('usd-1'), qty: 5, fee: 0.8, fee_currency: 'USD' }),
+    ]);
+    const logger = recordingLogger();
+    const failingChannel: NonSterlingFeeAlertChannel = {
+      postNonSterlingFeeAlert: async () => {
+        throw new Error('secret bot token abc123 rejected by transport');
+      },
+    };
+
+    await expect(
+      new ExecutionImpl(
+        makeInput(
+          broker,
+          store,
+          undefined,
+          undefined,
+          logger,
+          undefined,
+          undefined,
+          undefined,
+          failingChannel,
+        ),
+      ).ingestFills(),
+    ).resolves.not.toThrow();
+
+    const failureEntries = logger.entries.filter(
+      (entry) => entry.event === 'non_sterling_fee_alert_send_failed',
+    );
+    expect(failureEntries).toHaveLength(1);
+    expect(JSON.stringify(failureEntries[0])).not.toContain('secret bot token');
   });
 });

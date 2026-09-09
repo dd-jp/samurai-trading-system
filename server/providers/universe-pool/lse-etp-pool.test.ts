@@ -4,7 +4,7 @@ import {
   resolveSubclassBracket,
   SubclassBracketUnresolvableError,
 } from '../../pipeline/trader/subclass-bracket.js';
-import { isBookCurrency } from '../market-data-service/index.js';
+import { isBookCurrency } from '../../shared/index.js';
 import {
   assertKnownSubclass,
   assertValidFallbackSubset,
@@ -649,11 +649,11 @@ describe('resolveMiSubject — the MI-wide retrieval-subject resolution (#914/#9
 // deprioritised — an unmodelled GBP/USD leg on a GBP book is a cost the
 // system cannot price, and #1310 owns the width consequence.
 describe('sterling-only tradeable universe (#1220)', () => {
-  it("isSterlingQuoted agrees with the mark side's isBookCurrency on every pool row and every pence code", () => {
-    // Two places answering "is this sterling" is the defect #1100 already
-    // fixed once for `gateAdmits`. The pool cannot import the market-data
-    // barrel (it would pull the whole service into every analyst that reads
-    // this file), so the agreement is pinned here instead of shared.
+  it('isSterlingQuoted agrees with the shared isBookCurrency on every pool row and every pence code', () => {
+    // #1465: `isSterlingQuoted` now delegates to `isBookCurrency` directly, so
+    // this is no longer pinning two hand-kept lists in agreement (#1100's
+    // failure mode) — it guards against a future edit making `isSterlingQuoted`
+    // stop delegating and drift again.
     for (const row of LSE_ETP_POOL) {
       expect(isSterlingQuoted(row)).toBe(isBookCurrency(row.currency));
     }

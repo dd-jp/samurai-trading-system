@@ -46,6 +46,10 @@ export type {
   FlattenReconcileAlertChannel,
 } from './flatten-reconcile-alert.js';
 export type {
+  NonSterlingFeeAlert,
+  NonSterlingFeeAlertChannel,
+} from './non-sterling-fee-alert.js';
+export type {
   ResidualExposureAlert,
   ResidualExposureAlertChannel,
 } from './residual-exposure-alert.js';

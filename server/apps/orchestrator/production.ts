@@ -1783,6 +1783,11 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // `ingestFills()`, but the throttle is process-scoped, not
     // surface-scoped, so sharing the reference is correct, not incidental.
     filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
+    // #1465: optional, unlike the required channels above — no `Logging…`
+    // default, see `ExecutionInput.nonSterlingFeeAlerts`'s doc for why.
+    ...(config.nonSterlingFeeAlerts === undefined
+      ? {}
+      : { nonSterlingFeeAlerts: config.nonSterlingFeeAlerts }),
   };
 
   // #464, retargeted at Nous by ADR-0009. The off switch used to be the

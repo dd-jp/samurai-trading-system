@@ -358,7 +358,7 @@
  * reason the screener's output is a watchlist, not a signal (doc 18, doc 41
  * already rest on this same assumption).
  */
-import type { AssetClass, InstrumentSubclass } from '../../shared/index.js';
+import { type AssetClass, type InstrumentSubclass, isBookCurrency } from '../../shared/index.js';
 
 /** Long/short stance the ETP itself carries — separate from any debate direction. */
 export type EtpDirection = 'long' | 'short';
@@ -1909,23 +1909,6 @@ export function gateAdmits(row: LseEtpPoolRow): boolean {
 }
 
 /**
- * The sterling codes a pool row's `currency` may carry and still be a line
- * Samurai may hold. Deliberately the SAME set `isBookCurrency`
- * (`server/providers/market-data-service/sources/lse-mark-source.ts`) accepts
- * on the mark side — pence in any of its four spellings, plus GBP in any
- * case.
- *
- * Duplicated rather than imported: importing the market-data barrel here
- * would pull the whole service into every module that reads this pool file
- * (three analysts, the MI ingest agent, the orchestrator defaults), and
- * `assertValidPool` runs at import. `lse-etp-pool.test.ts` pins the two
- * predicates' agreement on every pool row and every code instead, so they
- * cannot silently diverge — the failure mode #1100 already closed once for
- * `gateAdmits`.
- */
-const STERLING_QUOTE_CODES: readonly string[] = ['GBX', 'gbx', 'GBp', 'p', 'GBP'];
-
-/**
  * Whether the row's LSE line is quoted in sterling — the second gate the
  * tradeable universe applies, alongside `gateAdmits` (#1220).
  *
@@ -1939,10 +1922,16 @@ const STERLING_QUOTE_CODES: readonly string[] = ['GBX', 'gbx', 'GBp', 'p', 'GBP'
  *
  * GBX is IN. Pence is an exact unit conversion, not an FX rate, and #1302
  * already lands the scaling through Saxo's `PriceToContractFactor`.
+ *
+ * Delegates to `isBookCurrency` (`shared/book-currency.ts`, #1465) rather
+ * than a hand-duplicated code list: this file already imports the `shared`
+ * barrel for `AssetClass`/`InstrumentSubclass` (no `assertValidPool`-at-
+ * import cost the way importing `market-data-service` would carry), so the
+ * two "is this sterling" answers can no longer silently diverge the way
+ * `gateAdmits` once did (#1100).
  */
 export function isSterlingQuoted(row: LseEtpPoolRow): boolean {
-  const code = row.currency.trim();
-  return STERLING_QUOTE_CODES.includes(code) || code.toUpperCase() === 'GBP';
+  return isBookCurrency(row.currency);
 }
 
 /**

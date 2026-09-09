@@ -57,7 +57,6 @@
  * `throwContainedFailures`'s own doc).
  */
 
-import { BOOK_CURRENCY, isBookCurrency } from '../../providers/market-data-service/index.js';
 import type {
   BrokerFillId,
   ClosedTrade,
@@ -65,9 +64,15 @@ import type {
   OpenPosition,
   OrderState,
 } from '../../shared/index.js';
-import { logCaughtFailure, safeLog, toBrokerFillId } from '../../shared/index.js';
+import {
+  BOOK_CURRENCY,
+  isBookCurrency,
+  logCaughtFailure,
+  safeLog,
+  toBrokerFillId,
+} from '../../shared/index.js';
 import { isProtectiveRearmUnsupported } from './protective-rearm-unsupported.js';
-import type { ExecutionInput, NormalizedFill } from './types.js';
+import type { ExecutionInput, NonSterlingFeeAlert, NormalizedFill } from './types.js';
 
 /** A fill on a protective/closing leg — anything that isn't opening the lot. */
 type ExitFill = Fill & { leg: 'stop' | 'target' | 'exit' };
@@ -100,15 +105,13 @@ export const FILLED_ZERO_SIZE_CLEARED =
  * shouted about. The row is written with `fee_currency` verbatim
  * (migration 0054) and this is raised at `error`.
  *
- * **RECORDED, NOT PAGED — and that is a gap, not the finished posture.**
- * This goes to `ExecutionInput.logger` only. Every other `error`-level entry
- * in this file sits beside an `AlertChannelSlots` post (`ResidualExposureAlert`,
- * the flatten-overfill channel) or reports one failing; the logger sink is a
- * rotating file nobody escalates, so a foreign fee is durable and greppable
- * but wakes no operator. Adding a channel is compiler-enforced across
- * `production.ts`, `alert-transport.ts` and every composition root, which is
- * out of #1220's scope — the fee currency reaching the store at all was the
- * ruling's ask. Paging is tracked as its own follow-up.
+ * **Paged, not just logged (#1465).** `warnOnNonSterlingFee` posts to
+ * `ExecutionInput.nonSterlingFeeAlerts` beside this `safeLog` line — #1220
+ * left this recorded-but-not-paged (the only sink was `ExecutionInput.logger`,
+ * a rotating file nobody escalates); #1465 closes that gap the way every
+ * other `error`-level entry in this file already does, beside an
+ * `AlertChannelSlots` post (`ResidualExposureAlert`) or a report of one
+ * failing.
  *
  * It is a CONTRADICTION rather than an FX conversion to model because
  * `tradeableUniverse` (universe-pool) excludes every non-sterling line: a
@@ -1022,7 +1025,7 @@ async function advanceLot(
     // inclusive of `since`, so every adapter re-offers the same fill
     // forever, and a check above the gate would re-announce this
     // contradiction on every poll for the life of the lot.
-    warnOnNonSterlingFee(input, position, fill);
+    await warnOnNonSterlingFee(input, position, fill);
     ingestedEntry ||= fill.leg === 'entry';
     ingestedExit ||= fill.leg === 'exit';
   }
@@ -1050,7 +1053,7 @@ async function advanceLot(
       // computed for the same order id in this same loop must count against
       // the next one, or two re-offers in one pass would each claim the full
       // increment.
-      const topUp = cumulativeTopUp(input, position, fill, [...persisted, ...newFills]);
+      const topUp = await cumulativeTopUp(input, position, fill, [...persisted, ...newFills]);
       if (topUp === null) continue;
       newFills.push(topUp);
       // THE POINT OF THE TICKET. `resizeProtectiveLegs` below fires on
@@ -1758,12 +1761,12 @@ const TOP_UP_ID_SEPARATOR = '#';
  * same cumulative recomputes the same id, finds it among `booked`, computes a
  * zero delta, and returns `null`. Idempotent by arithmetic, not by luck.
  */
-function cumulativeTopUp(
+async function cumulativeTopUp(
   input: ExecutionInput,
   position: OpenPosition,
   fill: NormalizedFill,
   booked: readonly Fill[],
-): Fill | null {
+): Promise<Fill | null> {
   const base = fill.broker_fill_id;
   const prefix = `${base}${TOP_UP_ID_SEPARATOR}`;
   const priors = booked.filter(
@@ -1825,6 +1828,13 @@ function cumulativeTopUp(
       },
     });
   }
+
+  // #1465: reached only past both early returns above, so only when this
+  // call is about to book a genuinely new increment — a re-poll at the same
+  // cumulative returns `null` before reaching here and pages nothing twice,
+  // the same property `advanceLot`'s own call (below the dedup gate) relies
+  // on for its half of `toFill`'s two call sites.
+  await warnOnNonSterlingFee(input, position, fill);
 
   return toFill(
     {
@@ -2101,29 +2111,56 @@ function modelledEntryCostFor(position: OpenPosition): ModelledEntryCost | null 
  * `isBookCurrency` is the mark side's own predicate (pence in any of its four
  * spellings, plus GBP in any case), reused rather than re-derived so this
  * cannot disagree with what `LseMarkDataSource` refuses at boot.
+ *
+ * Posts to `input.nonSterlingFeeAlerts` AFTER the `safeLog` line, never
+ * instead of it (#1465) — see that field's own doc for why absence is not
+ * silence. A rejected post reaches only a fixed, self-authored log line, per
+ * `NonSterlingFeeAlert`'s CREDENTIALS boundary: the channel's own thrown
+ * error is never logged, since an alert transport can carry a credential in
+ * its failure text.
  */
-function warnOnNonSterlingFee(
+async function warnOnNonSterlingFee(
   input: ExecutionInput,
   position: OpenPosition,
   fill: NormalizedFill,
-): void {
+): Promise<void> {
   const currency = fill.fee_currency;
   if (currency === undefined || isBookCurrency(currency)) return;
+  const alert: NonSterlingFeeAlert = {
+    trace_id: input.trace_id,
+    idempotency_key: position.idempotency_key,
+    instrument: position.instrument,
+    broker_fill_id: fill.broker_fill_id,
+    fee: fill.fee,
+    fee_currency: currency,
+    book_currency: BOOK_CURRENCY,
+  };
   safeLog(input.logger, {
     trace_id: input.trace_id,
     stage: 'execution',
     event: 'fee_currency_not_book_currency',
     level: 'error',
     message: FEE_CURRENCY_NOT_BOOK_CURRENCY,
-    payload: {
-      idempotency_key: position.idempotency_key,
-      instrument: position.instrument,
-      broker_fill_id: fill.broker_fill_id,
-      fee: fill.fee,
-      fee_currency: currency,
-      book_currency: BOOK_CURRENCY,
-    },
+    payload: alert,
   });
+  if (input.nonSterlingFeeAlerts === undefined) return;
+  try {
+    await input.nonSterlingFeeAlerts.postNonSterlingFeeAlert(alert);
+  } catch {
+    safeLog(input.logger, {
+      trace_id: input.trace_id,
+      stage: 'execution',
+      event: 'non_sterling_fee_alert_send_failed',
+      level: 'error',
+      message:
+        'postNonSterlingFeeAlert delivery failed — see the fee_currency_not_book_currency ' +
+        'entry above for the fill this concerns',
+      payload: {
+        idempotency_key: position.idempotency_key,
+        broker_fill_id: fill.broker_fill_id,
+      },
+    });
+  }
 }
 
 function toFill(
@@ -2164,10 +2201,8 @@ function toFill(
       : { flatten_idempotency_key: fill.flatten_idempotency_key }),
     // #1220, migration 0054: carried through verbatim and never converted —
     // `Fill.fee_currency`'s doc has the reasoning, and `warnOnNonSterlingFee`
-    // is what makes a foreign one loud on the `advanceLot` path. The
-    // `cumulativeTopUp` path is unguarded and inert today: cumulative feeds
-    // are Alpaca-only and Alpaca reports `fee: 0` with no currency
-    // (`alpaca-order-normalization.ts`).
+    // is what makes a foreign one loud, on both `toFill` call sites (#1465
+    // closed the `cumulativeTopUp` gap — see that function's own call).
     ...(fill.fee_currency === undefined ? {} : { fee_currency: fill.fee_currency }),
   };
 }
