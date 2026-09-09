@@ -491,7 +491,7 @@ describe('MiIngestAgent', () => {
    * return) and then wrongly skipped the NEXT refresh that finally had new
    * work, even though scoring itself never failed a third time.
    */
-  it('does not carry a stale failure streak across a refresh with nothing new to score', async () => {
+  it('does not carry a stale skip cooldown across a refresh with nothing new to score', async () => {
     const archive = new MiArchiveStore();
     const store = new MarketIntelligenceStore(clock);
     const news = newsClient([article()]);
