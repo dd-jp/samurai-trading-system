@@ -162,6 +162,11 @@ interface CostModelResult {
 
 **Key Interface**
 
+> **SUPERSEDED (2026-09-09) — `Backtest` and `BacktestConfig` deleted, #1156.** No composition
+> root ever constructed `BacktestHarness`, the one `Backtest` implementation, so neither interface
+> exists in the tree any more. `BacktestReport` below is unaffected — `trial-execution.ts` remains
+> its one real writer, still filling only the #88 subset this section describes.
+
 ```typescript
 // Seam 2. Deterministic given seed + clock (and the analyst response cache).
 interface Backtest {
@@ -226,6 +231,13 @@ interface BacktestReport {
 
 **~~Backtest/eval executor — pybroker (ADR-0001).~~ SUPERSEDED 2026-08-06 — the executor is the in-tree TypeScript `eval-executor.ts`; no pybroker dependency and no Python exist in this repo. Read "pybroker" below as "the eval executor", and do not derive an implementation ticket that adds a Python dependency.** The walkforward/CPCV split generation and eval-metric computation are executed via **pybroker** (mine `src/eval.py` eval metrics + `src/strategy.py` walkforward-split patterns), not a fully-custom harness. pybroker is the executor of the **eval/validation layer only** — it runs the splits and computes eval metrics over the trades the orchestrator produces. It does **NOT** host the pipeline tick loop: its synchronous per-bar `exec_fn` cannot host the seconds-to-minutes LLM debate (verified in the base-repo analysis), so the harness + live orchestrator keep the simulated `Clock` and drive the pipeline unchanged (see Backtest Harness above). Crucially, **the transaction-cost / market-impact model stays ours** and is **injected into the pybroker eval path**: pybroker's built-in fill model is not pessimistic enough for the √-law market-impact requirement (Principle 2), so `CostModel.fill` remains the single fill authority (one implementation → live metrics == backtest metrics, cross-spec §5) and pybroker consumes it rather than its own fills. FL owns the live metric *cadence*; this component (via pybroker) owns the computation. <!-- cite-exempt: foreign — the two Python paths on this line are pybroker's own tree, a different repository; they are not expected to exist here -->
 
+> **Further SUPERSEDED (2026-09-09) — the harness that "keeps the simulated `Clock` and drives
+> the pipeline unchanged" no longer exists.** #1156 deleted `BacktestHarness`: no composition root
+> ever constructed it, and no open issue depended on wiring it. Stage 2 runs `ReplayDriver` +
+> the proxy-strategy signal instead, which does not drive the live pipeline at all — see
+> `ReplayDriver`'s import-list test, which refuses by construction to import the Trader, Risk
+> Manager or Verdict.
+
 **Key Interface**
 
 ```typescript
@@ -288,7 +300,7 @@ interface MetricsSuite {                  // reported together — never one num
   - **A row with no persisted conditions — pre-fold, or a persisted list that fails shape validation on read — replays as `no_conditions`.** This is the *same* code path the live run uses for "nothing checkable came out," not a distinct `unavailable` marker: the prose verdict replays with the authority it always had, so historical backtest results are unchanged by the fold.
   - **The replay property is a byte-identical decision, not an attestation.** There is no `BacktestReport.invalidation_replay` field — that belonged to the declined stage's cold-window inertness, which no longer applies (conditions ride the same verdict the backtest already replays either way). #997's acceptance criterion instead states the invariant directly: a replayed decision is identical in status, size and `binding_constraint` to the one the live run reached; `reasons` gains exactly one `no_conditions` line where the live run had none, and is not otherwise byte-identical.
   - **A validator or evaluator fix does not retroactively apply to already-logged post-fold rows** — only newly-emitted conditions get corrected behaviour. This is the cost of replaying the verdict rather than re-running the validator, recorded here rather than left to be discovered.
-  - The Risk Critic step still only runs on the `BacktestHarness` path — Stage-2's `ReplayDriver` refuses by construction to import the Trader, Risk Manager, or Verdict, enforced by a test over its import list.
+  - The Risk Critic step still only runs on the `BacktestHarness` path — Stage-2's `ReplayDriver` refuses by construction to import the Trader, Risk Manager, or Verdict, enforced by a test over its import list. *(SUPERSEDED 2026-09-09 — #1156 deleted `BacktestHarness`: no composition root ever constructed it. The Risk Critic replay path this bullet describes now runs on no path at all; `ReplayDriver`'s refusal to import the Risk Manager stands as before.)*
 
 ## Testing Decisions
 
@@ -358,7 +370,7 @@ Execution (live) → real Kraken/IBKR adapter (no cost model; real fills calibra
 
 ~~Per ADR-0001, the backtest/eval **executor is pybroker**, not a fully-custom harness:~~ **Superseded — the executor is the in-tree TypeScript `eval-executor.ts`.** The bullets below survive only as constraints, all of which still hold:
 - **Mined, not depended-on.** Fork/adapt pybroker's eval-metrics (`src/eval.py`) and walkforward-split (`src/strategy.py`) patterns; no build-time dependency on the base repo (ADR-0001 reuse posture). <!-- cite-exempt: foreign — pybroker's tree, mined not depended on; these paths are in the base repo, never in ours -->
-- **Executor of the eval/validation layer only.** pybroker executes the walkforward/CPCV splits and eval-metric computation over the trades the orchestrator produces. It is **not** the tick-loop host — its synchronous per-bar `exec_fn` cannot host the LLM debate, so the harness + live orchestrator retain the simulated `Clock` and drive the pipeline; the point-in-time / survivorship-free / no-lookahead discipline is unchanged.
+- **Executor of the eval/validation layer only.** pybroker executes the walkforward/CPCV splits and eval-metric computation over the trades the orchestrator produces. It is **not** the tick-loop host — its synchronous per-bar `exec_fn` cannot host the LLM debate, so the harness + live orchestrator retain the simulated `Clock` and drive the pipeline; the point-in-time / survivorship-free / no-lookahead discipline is unchanged. *(SUPERSEDED 2026-09-09 — #1156 deleted `BacktestHarness`; no code plays the "harness + live orchestrator drive the pipeline" role this bullet describes any more.)*
 - **Our cost model is injected into pybroker's eval path.** pybroker's own fill model is bypassed — it is not pessimistic enough for the √-law market-impact requirement (Principle 2). `CostModel.fill` stays the single fill authority (Execution's `SimulatedBrokerAdapter` calls it; pybroker consumes those fills), preserving live == backtest metrics (cross-spec §5).
 - **Cadence stays with FL.** pybroker/this component owns the walkforward/CPCV + metric *computation*; the Feedback Loop owns the live metric *cadence* ~~and the kill/rework decision~~. *(Amended 2026-09-08 — [ADR-0013](../adr/0013-no-human-gate-anywhere.md) Decision 3: nobody owns the kill/rework decision under full automation. FL's breach path alerts and defensively auto-tightens on a kill-threshold breach (`server/pipeline/feedback-loop/metrics.ts`), with no halt-on-persistence implemented yet. This component's boundary is unchanged.)*
 

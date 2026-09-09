@@ -186,12 +186,6 @@ describe('EvalExecutorImpl — acceptance criterion 3: one metric implementation
     );
   }
 
-  it('scores every scripted round trip', async () => {
-    const report = await executorOf(sourceOf(TRADES)).evaluate(OPTIONS);
-
-    expect(report.window).toBeDefined();
-  });
-
   it('produces the same MetricsSuite as scoring the trade record directly', async () => {
     const report = await executorOf(sourceOf(TRADES)).evaluate(OPTIONS);
 

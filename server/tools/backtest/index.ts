@@ -5,14 +5,16 @@
  * Ticket #88 built the replay harness — `BacktestHarness`, driving the
  * Orchestrator's `Scheduler` + `TickRunner` bar-by-bar via a stepped
  * `SimulatedClock` — as the spec's intended "replay and live share one code
- * path" seam. #1156 deleted it: no composition root ever constructed it
- * (only its own test and `eval-executor.test.ts`'s cross-check did), and
- * wiring it for real would mean replaying the live LLM debate over history,
- * which ADR-0001 rules out ("a backtest cannot host an LLM debate") — the
- * reason the proxy-strategy path below (#242-#245) exists instead. The
- * no-lookahead auditor (`lookahead.ts`) and survivorship-free check
- * (`universe.ts`) it also introduced stayed: both are live via
- * `replay-driver.ts`.
+ * path" seam, built precisely because pybroker's synchronous `exec_fn`
+ * cannot host the LLM debate and the harness had to (`cost-model-backtest-
+ * spec.md:227`). #1156 deleted it under `docs/coding-standards.md`'s
+ * "speculative implementations live in git history" rule: no composition
+ * root ever constructed it (only its own test and `eval-executor.test.ts`'s
+ * cross-check did), and no open issue depends on wiring it — Stage 2 runs
+ * the separate proxy-strategy path below (#242-#245) instead, which was
+ * never derived from this harness's absence. The no-lookahead auditor
+ * (`lookahead.ts`) and survivorship-free check (`universe.ts`) it also
+ * introduced stayed: both are live via `replay-driver.ts`.
  *
  * `BacktestReport` is declared in its #88-fillable subset only: the `metrics`
  * / walk-forward / capacity-ceiling fields belong to the validation library
@@ -43,13 +45,6 @@
  * each test slice. It computes no metric and generates no split of its own —
  * `CostModel.fill` stays the single fill authority and `computeMetrics` the
  * single metric implementation, which is what makes live == backtest.
- *
- * `BacktestReport.metrics` / `walk_forward` still stand empty. Scoring a
- * replay needs the deployed capital and the bar cadence (`EvalOptions`), and
- * `BacktestConfig` carries neither; adding them is a contract change #90 was
- * not asked to make, so the caller runs the executor over the report's window
- * rather than the harness inventing the inputs. `capacity_ceiling` remains
- * with `CostModel.capacityCeiling` (#87).
  *
  * CPCV *generation* works (#89); CPCV *scoring* deliberately throws — see
  * `testRangeOf` in eval-executor.ts for why a disjoint test side cannot be
