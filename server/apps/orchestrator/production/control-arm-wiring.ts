@@ -159,6 +159,16 @@ export interface ControlArmWiring {
   fillSyncExecution: ReturnType<typeof buildExecutionSurface>;
   /** The control arm's startup reconcile surface — same reasoning, at boot. */
   reconcileExecution: ReturnType<typeof buildExecutionSurface>;
+  /**
+   * The control arm's own book (`deps.store`, `arm: 'control'`), exposed for
+   * the reason `executionDeps` is: #1390's held-first tail priority reads
+   * `getOpenPositions()` to build the current tick's held set, and the live
+   * arm's own store (`ProductionComponents.executionStore`) only ever holds
+   * `arm: 'live'` rows (#753's `WHERE arm = ?` scoping). A held set built from
+   * the live store alone silently excludes every control-arm lot — the same
+   * one-store-per-arm split this field exists everywhere else to respect.
+   */
+  store: ExecutionSharedStore;
 }
 
 /**
@@ -304,5 +314,6 @@ export function buildControlArmWiring(deps: ControlArmWiringDeps): ControlArmWir
     }),
     fillSyncExecution: buildExecutionSurface(executionDeps, CONTROL_FILL_SYNC_TRACE_ID),
     reconcileExecution: buildExecutionSurface(executionDeps, CONTROL_RECONCILE_TRACE_ID),
+    store: deps.store,
   };
 }

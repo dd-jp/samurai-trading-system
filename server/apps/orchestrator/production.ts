@@ -260,6 +260,7 @@ import {
   runStartupReconcile,
   startFillSync,
 } from './fill-sync.js';
+import { orderHeldFirst } from './flatten-tail-priority.js';
 import { Heartbeat } from './heartbeat.js';
 import { JsonLogger } from './logger.js';
 import type { OrphanGoVerdict, OrphanVerdictScanner } from './orphan-verdict-scan.js';
@@ -2714,6 +2715,25 @@ export function startTickLoop(deps: {
    * itself — see `tick-skip-alert.ts`'s file doc.
    */
   tickSkipAlerts?: TickSkipAlertChannel;
+  /**
+   * Held instruments for THIS tick, read once per pass and applied via
+   * `orderHeldFirst` before the claim loop (#1390) — every instrument it
+   * names moves ahead of every instrument it does not, in `plan.instruments`,
+   * so `TailSequencer` (`tick-loop.ts`) grants their tails first regardless
+   * of where the scheduler's fixed universe order placed them. See
+   * `flatten-tail-priority.ts`'s file doc for why this runs unconditionally
+   * rather than only inside the flatten window.
+   *
+   * Absent = no reordering, the honest default for a caller that has not
+   * wired a held-position reader through — a focused unit test calling
+   * `startTickLoop` directly. `buildProductionOrchestrator` (the only
+   * non-test caller, including the one `smoke-run.ts`'s offline harness
+   * drives) always supplies one.
+   *
+   * A rejection is swallowed: a held-lookup failure must cost this tick's
+   * priority, not this tick's flatten. See the `catch` around its call below.
+   */
+  heldAssets?: () => Promise<ReadonlySet<string>>;
 }): { stop: () => Promise<void> } {
   let stopped = false;
   /** Consecutive-degraded-tick counter for the escalation above (#1084). */
@@ -2782,6 +2802,41 @@ export function startTickLoop(deps: {
     try {
       const plan = deps.scheduler.nextTick(deps.clock);
 
+      // #1390: held-first, computed BEFORE the claim loop and never inside
+      // it — the claim loop's check-then-set has to stay one synchronous
+      // pass over the plan (see its own comment below), so the only safe
+      // place for an async read is upstream of it, not interleaved with it.
+      let instruments = plan.instruments;
+      if (deps.heldAssets !== undefined && instruments.length > 0) {
+        try {
+          instruments = orderHeldFirst(instruments, await deps.heldAssets());
+        } catch (error) {
+          // A failed position read must not cost the tick — only its
+          // priority. Falling through to the unordered plan keeps every
+          // instrument claimable exactly as before #1390 shipped.
+          deps.logger.log({
+            trace_id: 'tick-loop',
+            stage: 'tick-loop',
+            event: 'tick_held_lookup_failed',
+            level: 'warn',
+            message:
+              'tick: held-position lookup failed, flatten-tail priority not applied this tick',
+            payload: { error: describeThrownSafely(error) },
+          });
+        }
+      }
+
+      // Re-checked here, not only in `schedule()`: before #1390 this whole
+      // prologue (`nextTick` through the claim loop) ran with no `await` in
+      // it, so `stop()` — itself synchronous up to its own first `await` —
+      // could never observe `runOnce` mid-prologue, and `passes` always
+      // gained this pass's entry before `stop()`'s `Promise.all` snapshot
+      // could be taken. `await deps.heldAssets()` above is now a yield point
+      // ahead of that snapshot: without this check, a `stop()` racing during
+      // the held-position read would return without ever waiting for the
+      // instruments this pass is about to claim and dispatch.
+      if (stopped) return;
+
       // Claim inside ONE loop — check and claim per asset, not filter-then-add.
       // A `filter` followed by a separate `add` loop is not atomic per asset:
       // if `nextTick` ever returned the same asset twice, both entries would
@@ -2808,7 +2863,7 @@ export function startTickLoop(deps: {
       // most likely to matter. Seen-in-plan has to be tracked independently of
       // whether the instrument was claimable.
       const seenInPlan = new Set<string>();
-      for (const instrument of plan.instruments) {
+      for (const instrument of instruments) {
         if (seenInPlan.has(instrument.asset)) {
           duplicated.push(instrument.asset);
           continue;
@@ -2827,6 +2882,22 @@ export function startTickLoop(deps: {
       }
 
       if (busy.length > 0) {
+        // #1390: this tick still contributes NOTHING for every busy
+        // instrument, held ones included — that is unchanged, and no
+        // pre-emption is added here. It stays safe to defer them because the
+        // pass that OWNS them (the one still running) was itself built
+        // held-first (see `heldAssets` above): a held lot skipped here is
+        // waiting behind that in-flight pass's own held-priority tail, not
+        // behind its flat instruments — PROVIDED it was already held when
+        // that pass's plan was built. `heldAssets()` is read once, at
+        // plan-build time; a lot opened after that read has no priority for
+        // that pass's entire lifetime (see `flatten-tail-priority.ts`'s file
+        // doc) and IS behind the flat group until the next pass reads a
+        // fresh held set. Re-dispatching a busy instrument would reintroduce
+        // the double-dispatch #669's `running` guard exists to forbid — the
+        // harm #1390 removes is exactly for lots already held at plan-build
+        // time; a lot opened after that read still waits one pass, same as
+        // before this fix.
         deps.logger.log({
           trace_id: 'tick-loop',
           stage: 'tick-loop',
@@ -3029,6 +3100,36 @@ export function equityCalendarFor(config: ProductionConfig): TradingCalendar {
   return config.mode === 'live'
     ? new LseRegularHoursCalendar()
     : new UsEquityRegularHoursCalendar();
+}
+
+/**
+ * #1390's `heldAssets` reader — the union of BOTH arms' open positions, not
+ * just the live arm's.
+ *
+ * `ProductionComponents.executionStore` only ever holds `arm: 'live'` rows
+ * (#753's `WHERE arm = ?` scoping, `sqlite-shared-store.ts`); the control arm
+ * writes its own lots into its own store (`controlArmWiring.store`,
+ * `arm: 'control'`). The SAME `TickPlan.instruments` drives both arms' tick —
+ * the live arm through `TailSequencer`'s tail, the control arm through the
+ * plan's own dispatch order (`control-arm.ts`'s hook runs before the live
+ * exit check's tail wait; #1040's cursor hands out `plan.instruments` in
+ * order) — so a held set that named only the live arm's lots would leave
+ * every control-arm lot exactly as unprioritized as before #1390 shipped.
+ * Round-1 review of #1390 caught this: on the ticket's own incident, every
+ * one of the nine held control lots was `arm: 'control'`, so the live-only
+ * reader made `orderHeldFirst` the identity on the exact tick it exists to
+ * fix.
+ */
+export function buildHeldAssetsReader(
+  components: Pick<ProductionComponents, 'executionStore' | 'controlArmWiring'>,
+): () => Promise<ReadonlySet<string>> {
+  return async () => {
+    const [live, control] = await Promise.all([
+      components.executionStore.getOpenPositions(),
+      components.controlArmWiring.store.getOpenPositions(),
+    ]);
+    return new Set([...live, ...control].map((p) => p.instrument));
+  };
 }
 
 /**
@@ -4041,6 +4142,9 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         decisionGate: new DebateBarDecisionGate(),
         // #1084 — the eighteenth `ALERT_CHANNEL_FIELDS` member.
         tickSkipAlerts: config.tickSkipAlerts ?? new LoggingTickSkipAlertChannel(logger),
+        // #1390: unions both arms' open positions — see `buildHeldAssetsReader`'s
+        // doc for why the live arm's store alone is not enough.
+        heldAssets: buildHeldAssetsReader(components),
       });
 
       // #327: both of these degraded modes were previously reached by pure

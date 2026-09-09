@@ -86,7 +86,11 @@ import type { ClosedTrade, OrderIntent, TradingArm } from '../../shared/index.js
 import { SimulatedClock, TokenBucket } from '../../shared/index.js';
 import type { NousCredentials } from '../../shared/llm/index.js';
 import { DEFAULT_NOUS_MODELS } from '../../shared/llm/index.js';
-import { openSharedStore, type SharedStore as SqliteHandle } from '../../shared/store/index.js';
+import {
+  guardedStore,
+  openSharedStore,
+  type SharedStore as SqliteHandle,
+} from '../../shared/store/index.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
 import { CostModelImpl, SqliteStage2SelectionStore } from '../../tools/backtest/index.js';
 import { LLM_SPEND_CAP_BREACH } from './breach-alert-channel.js';
@@ -113,6 +117,7 @@ import {
   buildAlpacaDataSource,
   buildBenchmarkDataSource,
   buildDefaultLlmClient,
+  buildHeldAssetsReader,
   buildProductionComponents,
   buildProductionOrchestrator,
   buildProductionTickRunner,
@@ -3484,6 +3489,129 @@ describe('startTickLoop', () => {
     expect(runInstrument).toHaveBeenCalledTimes(1);
   });
 
+  describe('held-first flatten-tail priority (#1390)', () => {
+    const threeInstrumentPlan: TickPlan = {
+      instruments: [
+        { asset: 'FLAT_A', asset_class: 'stocks' },
+        { asset: 'HELD', asset_class: 'stocks' },
+        { asset: 'FLAT_B', asset_class: 'stocks' },
+      ],
+      tick_time: START,
+    };
+
+    it('dispatches the held instrument first, ahead of its fixed-order position', async () => {
+      const started: string[] = [];
+      const runInstrument = vi.fn(async (signal: { asset: string }): Promise<TickOutcome> => {
+        started.push(signal.asset);
+        return { trace_id: 't', final_stage: 'execution' };
+      });
+
+      const loop = startTickLoop({
+        scheduler: planScheduler(threeInstrumentPlan),
+        runner: { runInstrument } as TickRunner,
+        clock: new SimulatedClock(START),
+        logger: recordingLogger(),
+        persistence: persistence() as never,
+        decisionGate: new DebateBarDecisionGate(),
+        tickIntervalMs: 1_000,
+        maxConcurrentInstruments: 1,
+        heldAssets: async () => new Set(['HELD']),
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await loop.stop();
+
+      expect(started).toEqual(['HELD', 'FLAT_A', 'FLAT_B']);
+    });
+
+    it('falls back to the unordered plan and warns when the held-position lookup fails', async () => {
+      const started: string[] = [];
+      const runInstrument = vi.fn(async (signal: { asset: string }): Promise<TickOutcome> => {
+        started.push(signal.asset);
+        return { trace_id: 't', final_stage: 'execution' };
+      });
+      const logger = recordingLogger();
+
+      const loop = startTickLoop({
+        scheduler: planScheduler(threeInstrumentPlan),
+        runner: { runInstrument } as TickRunner,
+        clock: new SimulatedClock(START),
+        logger,
+        persistence: persistence() as never,
+        decisionGate: new DebateBarDecisionGate(),
+        tickIntervalMs: 1_000,
+        maxConcurrentInstruments: 1,
+        heldAssets: async () => {
+          throw new Error('store unavailable');
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await loop.stop();
+
+      // The tick still ran, in the scheduler's own order — a failed lookup
+      // costs priority, not the tick.
+      expect(started).toEqual(['FLAT_A', 'HELD', 'FLAT_B']);
+      expect(
+        logger.entries.some((entry) => entry.message.includes('held-position lookup failed')),
+      ).toBe(true);
+    });
+
+    /**
+     * Round-1 review finding 6: before #1390, `runOnce`'s prologue (`nextTick`
+     * through the claim loop) had no `await` in it, so `stop()` — synchronous
+     * up to its OWN first await — could never observe `runOnce` mid-prologue;
+     * `passes` always gained the in-flight pass's entry before `stop()`'s
+     * `Promise.all([...passes])` snapshot could be taken. `await
+     * deps.heldAssets()` is a new yield point ahead of that snapshot: without
+     * the `if (stopped) return;` re-check this test pins, `stop()` racing
+     * during the held-position read would resolve without ever waiting for
+     * the instruments that pass goes on to claim and dispatch.
+     */
+    it('does not dispatch any instrument if stop() resolves while heldAssets() is still pending', async () => {
+      const started: string[] = [];
+      const runInstrument = vi.fn(async (signal: { asset: string }): Promise<TickOutcome> => {
+        started.push(signal.asset);
+        return { trace_id: 't', final_stage: 'execution' };
+      });
+
+      let resolveHeldAssets!: (assets: ReadonlySet<string>) => void;
+      const heldAssetsGate = new Promise<ReadonlySet<string>>((resolve) => {
+        resolveHeldAssets = resolve;
+      });
+
+      const loop = startTickLoop({
+        scheduler: planScheduler(threeInstrumentPlan),
+        runner: { runInstrument } as TickRunner,
+        clock: new SimulatedClock(START),
+        logger: recordingLogger(),
+        persistence: persistence() as never,
+        decisionGate: new DebateBarDecisionGate(),
+        tickIntervalMs: 1_000,
+        maxConcurrentInstruments: 1,
+        heldAssets: () => heldAssetsGate,
+      });
+
+      // Fires the tick; `runOnce` reaches `await deps.heldAssets()` and parks
+      // there — `heldAssetsGate` is still unresolved, so nothing past that
+      // point (the claim loop, `passes.add`) has run yet.
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      // Races in while the pass is parked. Nothing is in `passes` yet, so
+      // this resolves immediately rather than waiting for the parked pass.
+      await loop.stop();
+
+      // The parked pass resumes; the `stopped` re-check must abort it before
+      // it claims or dispatches anything.
+      resolveHeldAssets(new Set(['HELD']));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(started).toEqual([]);
+      expect(runInstrument).not.toHaveBeenCalled();
+    });
+  });
+
   describe('tick-skip escalation (#1084)', () => {
     const fourInstrumentPlan: TickPlan = {
       instruments: [
@@ -3637,6 +3765,170 @@ describe('startTickLoop', () => {
       releaseAll();
       await loop.stop();
     });
+  });
+});
+
+/**
+ * Round-1 review finding 1 (BLOCKING): the FIRST version of #1390's
+ * `heldAssets` wiring read only `components.executionStore` — `arm: 'live'`
+ * rows (#753's `WHERE arm = ?` scoping). Every held lot in the ticket's own
+ * incident (all nine control lots: AAPL, NFLX, AMZN, QQQ, PLTR, SMCI, MSTR,
+ * RIOT, UBER) was `arm: 'control'`, so on the incident tick that reader
+ * returned the empty set and `orderHeldFirst` was the identity — bit-
+ * identical to no fix at all. This drives `buildHeldAssetsReader` (the exact
+ * function `startTickLoop({ heldAssets: ... })` is bound to inside
+ * `buildProductionOrchestrator`) through a REAL `ProductionComponents` built
+ * by `buildProductionComponents`, not a hand-rolled synthetic reader — a
+ * regression back to live-store-only is invisible to any test that injects
+ * its own `heldAssets` closure, which is exactly why finding 1 survived round
+ * 1's mutation evidence.
+ */
+/**
+ * Shared by every #1390 test below that needs a real filled lot in a real
+ * `SqliteExecutionStore` — the composition-root tests need it before
+ * `buildProductionOrchestrator` even runs, so this can't stay nested inside
+ * one describe block.
+ */
+function openLot(instrument: string, idempotencyKey: string) {
+  return {
+    idempotency_key: idempotencyKey,
+    debate_id: `debate-${idempotencyKey}`,
+    instrument,
+    asset_class: 'stocks' as const,
+    side: 'buy' as const,
+    intent_type: 'entry' as const,
+    requested_size: 10,
+    filled_size: 10,
+    avg_entry_price: 150,
+    stop: 140,
+    target: 180,
+    order_state: 'filled' as const,
+    broker_order_ids: [],
+    opened_at: START,
+    decision_timestamp: START,
+    conviction: 0.6,
+    converged: true,
+  };
+}
+
+describe('heldAssets covers both arms, through the composition root (#1390)', () => {
+  let db: SqliteHandle;
+
+  beforeEach(() => {
+    db = openSharedStore(':memory:');
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it("unions the live arm's held instruments with the control arm's, not the live arm alone", async () => {
+    const components = buildProductionComponents(stubConfig(db));
+
+    // A live-arm lot and a DIFFERENT control-arm lot — through the same two
+    // stores `buildHeldAssetsReader` reads, `components.executionStore` (live)
+    // and `components.controlArmWiring.store` (control), so this only proves
+    // something if the reader genuinely reaches both.
+    await components.executionStore.writeAheadPosition(openLot('AAPL', 'live-lot'));
+    await components.controlArmWiring.store.writeAheadPosition(openLot('QQQ', 'control-lot'));
+
+    const heldAssets = await buildHeldAssetsReader(components)();
+
+    expect(heldAssets).toEqual(new Set(['AAPL', 'QQQ']));
+
+    // The exact regression finding 1 caught: reading the live store alone
+    // (#1390's first version) sees only the live lot and misses the control
+    // one — reproduced here directly against the same two stores, so a
+    // future change that narrows `buildHeldAssetsReader` back to one store
+    // fails this assertion, not just the union one above.
+    const liveOnly = new Set(
+      (await components.executionStore.getOpenPositions()).map((p) => p.instrument),
+    );
+    expect(liveOnly).toEqual(new Set(['AAPL']));
+    expect(liveOnly.has('QQQ')).toBe(false);
+  });
+
+  it("returns the live arm's held instruments when the control arm holds nothing", async () => {
+    const components = buildProductionComponents(stubConfig(db));
+
+    await components.executionStore.writeAheadPosition(openLot('AAPL', 'live-lot'));
+
+    const heldAssets = await buildHeldAssetsReader(components)();
+
+    expect(heldAssets).toEqual(new Set(['AAPL']));
+  });
+});
+
+/**
+ * Round-2 review finding 1: every test above proves `buildHeldAssetsReader`
+ * itself is correct, and the `startTickLoop`-level "held-first flatten-tail
+ * priority (#1390)" suite (above, in `describe('startTickLoop', ...)`) proves
+ * `orderHeldFirst` is applied correctly when a `heldAssets` function is
+ * supplied — but none of them prove `buildProductionOrchestrator` actually
+ * SUPPLIES one. A reviewer deleted `heldAssets: buildHeldAssetsReader(components)`
+ * from the `startTickLoop({...})` call in `buildProductionOrchestrator` and
+ * the full suite (6157 tests) stayed green, and `smoke-run.ts`'s offline
+ * harness never references `heldAssets` either — so that one line had zero
+ * test coverage. This drives a real tick through the real orchestrator,
+ * against a held lot seeded through a SEPARATE `SqliteExecutionStore`
+ * instance over the same `db` (proving the read reaches whatever
+ * `buildProductionOrchestrator` itself wires, not a reference this test
+ * happens to hold), and observes real dispatch order.
+ */
+describe('held-first reordering reaches a real tick through buildProductionOrchestrator (#1390)', () => {
+  let db: SqliteHandle;
+
+  beforeEach(() => {
+    db = openSharedStore(':memory:');
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    db.close();
+  });
+
+  const universe: UniverseInstrument[] = [
+    { asset: 'FLAT_A', asset_class: 'crypto' },
+    { asset: 'HELD', asset_class: 'crypto' },
+    { asset: 'FLAT_B', asset_class: 'crypto' },
+  ];
+
+  /**
+   * THE MUTATION THIS KILLS: drop `heldAssets: buildHeldAssetsReader(components)`
+   * from `buildProductionOrchestrator`'s `startTickLoop({...})` call
+   * (production.ts). Every other #1390 test in this file still passes —
+   * this is the only one that dispatches through the real composition root,
+   * where HELD would fall back to its fixed-order position (second).
+   */
+  it('dispatches the held instrument first even though it sits second in the fixed universe order', async () => {
+    await new SqliteExecutionStore(guardedStore(db, 'execution'), 'live').writeAheadPosition(
+      openLot('HELD', 'seed-lot'),
+    );
+
+    const dispatchOrder: string[] = [];
+    const config = stubConfig(db, {
+      universe,
+      tradingCalendar: new AlwaysOpenCalendar(),
+      tickIntervalMs: 1_000,
+      heartbeatIntervalMs: 1_000,
+      maxConcurrentInstruments: 1,
+    });
+
+    const orchestrator = buildProductionOrchestrator(config);
+    vi.spyOn(orchestrator.tickRunner, 'runInstrument').mockImplementation(
+      async (signal: { asset: string }): Promise<TickOutcome> => {
+        dispatchOrder.push(signal.asset);
+        return { trace_id: 't', final_stage: 'execution' };
+      },
+    );
+
+    await orchestrator.start();
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(dispatchOrder).toEqual(['HELD', 'FLAT_A', 'FLAT_B']);
+
+    await orchestrator.stop();
   });
 });
 
