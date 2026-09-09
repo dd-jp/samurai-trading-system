@@ -7,8 +7,9 @@
  * windowing `countFailures`), and the table itself had no pruning at all —
  * unlike `llm_call_log` (#1045) and the MI archive (#1060), both of which
  * shipped a retention sweep AND two asserted composition-root call sites
- * after `pruneIngestedObservedFills` (#313) shipped as a mechanism nothing
- * called. This file mirrors `mi-archive-retention.test.ts` exactly.
+ * after #313's observed-fill prune shipped as a mechanism nothing called
+ * (retired unused by #1059). This file mirrors `mi-archive-retention.test.ts`
+ * exactly.
  *
  * WHAT THE SOURCE-TEXT BLOCK BELOW PINS, AND WHAT IT DOES NOT (#1313).
  * A unit test of `pruneOlderThan` cannot catch a missing caller, because the

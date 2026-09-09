@@ -1,6 +1,6 @@
 /**
- * SQLite-backed `BrokerStateStore` over `broker_brackets` /
- * `broker_observed_fills` (#287, migration `0007`). See
+ * SQLite-backed `BrokerStateStore` over `broker_brackets` (#287, migration
+ * `0007`) and `broker_unpriced_fills` (#298, migration `0008`). See
  * docs/specs/shared-sqlite-store-spec.md ("Consolidated Schema") and
  * broker-state-store.ts for why this seam is synchronous.
  *
@@ -11,7 +11,6 @@
  * to lose an update between a select and an insert.
  */
 
-import { toBrokerFillId } from '../../shared/index.js';
 import type { SharedStore } from '../../shared/store/index.js';
 import {
   fromStoredTimestamp,
@@ -47,16 +46,6 @@ interface BracketRow {
   armed_qty: number | null;
   arming_qty: number | null;
   arm_attempt: number;
-}
-
-interface ObservedFillRow {
-  client_order_id: string;
-  broker_fill_id: string;
-  leg: NormalizedFill['leg'];
-  price: number;
-  qty: number;
-  fee: number;
-  timestamp: string;
 }
 
 interface UnpricedFillRow {
@@ -177,90 +166,6 @@ export class SqliteBrokerStateStore implements BrokerStateStore {
         ids.stop_order_id,
         ids.target_order_id,
         toStoredTimestamp(new Date()),
-      );
-  }
-
-  loadObservedFills(venue: BrokerVenue): NormalizedFill[] {
-    const rows = this.db
-      .prepare(
-        `SELECT client_order_id, broker_fill_id, leg, price, qty, fee, timestamp
-         FROM broker_observed_fills WHERE venue = ? ORDER BY rowid`,
-      )
-      .all(venue) as ObservedFillRow[];
-
-    return rows.map((row) => ({
-      client_order_id: row.client_order_id,
-      broker_fill_id: toBrokerFillId(row.broker_fill_id),
-      leg: row.leg,
-      price: row.price,
-      qty: row.qty,
-      fee: row.fee,
-      timestamp: fromStoredTimestamp(row.timestamp),
-      // No `cost_breakdown`: only the Simulated adapter produces one, and it
-      // has no venue state to persist.
-    }));
-  }
-
-  pruneIngestedObservedFills(venue: BrokerVenue): number {
-    // The queue row's only job is surviving a crash between observing a fill
-    // and ingesting it. Once `fills` holds the id that job is done, and a
-    // re-offer is caught by `SharedStore.hasFill` reading that same table —
-    // so this cannot reintroduce a double-count no matter how early it runs.
-    //
-    // Correlated subquery rather than a join or an id list from the caller:
-    // `fills` lives in this same database (one handle serves both, see
-    // `openSharedStore`), and the alternative would have the caller loading
-    // every ingested id into memory to hand back down.
-    // Matched on the FULL `fills` primary key — `(idempotency_key,
-    // broker_fill_id)` — not on `broker_fill_id` alone (PR #459 review).
-    // `fills` has no venue column, and `broker_fill_id` is venue-assigned, so
-    // two venues can issue the same id string. An id-only match would then let
-    // one venue's ingested fill prune ANOTHER venue's queue row that has not
-    // been ingested, losing it if the process dies before the next poll —
-    // precisely the crash this queue exists to survive.
-    //
-    // The join is exact because `client_order_id` IS the lot's
-    // `idempotency_key` (`NativeBracketRequest`: "Set to the OrderIntent's
-    // idempotency_key", and `execute.ts` does), and a lot belongs to one venue.
-    const result = this.db
-      .prepare(
-        `DELETE FROM broker_observed_fills
-         WHERE venue = ?
-           AND EXISTS (
-             SELECT 1 FROM fills
-             WHERE fills.idempotency_key = broker_observed_fills.client_order_id
-               AND fills.broker_fill_id = broker_observed_fills.broker_fill_id
-           )`,
-      )
-      .run(venue);
-    return result.changes;
-  }
-
-  saveObservedFill(venue: BrokerVenue, fill: NormalizedFill): void {
-    this.db
-      .prepare(
-        `INSERT INTO broker_observed_fills (
-           venue, client_order_id, broker_fill_id, leg, price, qty, fee, timestamp
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(venue, client_order_id, broker_fill_id) DO UPDATE SET
-           -- A re-poll re-offers the same aggregate fill with a grown
-           -- quantity; the latest observation wins, exactly as the in-memory
-           -- queue's later entry did.
-           leg = excluded.leg,
-           price = excluded.price,
-           qty = excluded.qty,
-           fee = excluded.fee,
-           timestamp = excluded.timestamp`,
-      )
-      .run(
-        venue,
-        fill.client_order_id,
-        fill.broker_fill_id,
-        fill.leg,
-        fill.price,
-        fill.qty,
-        fill.fee,
-        toStoredTimestamp(fill.timestamp),
       );
   }
 

@@ -110,7 +110,6 @@ export const STAGE_OWNED_TABLES: Record<StoreOwnerStage, readonly string[]> = {
   // reconciliation tables the same stage owns.
   execution: [
     'broker_brackets',
-    'broker_observed_fills',
     'broker_unpriced_fills',
     'closed_trades',
     'fills',

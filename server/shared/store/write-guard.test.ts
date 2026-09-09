@@ -124,9 +124,9 @@ describe('writeTargetTables', () => {
   it('reads every statement of a multi-statement exec', () => {
     expect(
       writeTargetTables(
-        'DELETE FROM broker_observed_fills; INSERT INTO broker_brackets VALUES (?)',
+        'DELETE FROM broker_unpriced_fills; INSERT INTO broker_brackets VALUES (?)',
       ),
-    ).toEqual(['broker_observed_fills', 'broker_brackets']);
+    ).toEqual(['broker_unpriced_fills', 'broker_brackets']);
   });
 
   it('reads through a CTE prologue', () => {
@@ -211,15 +211,17 @@ describe('STAGE_OWNED_TABLES', () => {
 });
 
 describe('guardedStore', () => {
+  const SEEN_AT = '2026-09-03T00:00:00.000Z';
+
   /** A minimal write to a table Execution owns, used by the transaction tests. */
-  function insertObservedFill(store: SharedStore, fillId: string): void {
+  function insertUnpricedFill(store: SharedStore, fillId: string): void {
     store
       .prepare(
-        `INSERT INTO broker_observed_fills
-           (venue, client_order_id, broker_fill_id, leg, price, qty, fee, timestamp)
+        `INSERT INTO broker_unpriced_fills
+           (venue, client_order_id, broker_fill_id, leg, instrument, qty, first_seen_at, last_seen_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run('alpaca', 'c1', fillId, 'entry', 10, 1, 0, '2026-09-03T00:00:00.000Z');
+      .run('alpaca', 'c1', fillId, 'entry', '3USL', 1, SEEN_AT, SEEN_AT);
   }
 
   function openGuarded(stage: Parameters<typeof guardedStore>[1]) {
@@ -298,11 +300,11 @@ describe('guardedStore', () => {
     const { db, guarded } = openGuarded('execution');
     try {
       guarded.transaction(() => {
-        insertObservedFill(guarded, 'f1');
-        guarded.prepare('DELETE FROM broker_unpriced_fills WHERE venue = ?').run('alpaca');
+        insertUnpricedFill(guarded, 'f1');
+        guarded.prepare('DELETE FROM broker_brackets WHERE venue = ?').run('alpaca');
       })();
       expect(
-        (db.prepare('SELECT COUNT(*) AS n FROM broker_observed_fills').get() as { n: number }).n,
+        (db.prepare('SELECT COUNT(*) AS n FROM broker_unpriced_fills').get() as { n: number }).n,
       ).toBe(1);
     } finally {
       db.close();
@@ -313,12 +315,12 @@ describe('guardedStore', () => {
     const { db, guarded } = openGuarded('execution');
     try {
       const run = guarded.transaction(() => {
-        insertObservedFill(guarded, 'f1');
+        insertUnpricedFill(guarded, 'f1');
         guarded.prepare('DELETE FROM audit_log').run();
       });
       expect(() => run()).toThrow(/audit_log/);
       expect(
-        (db.prepare('SELECT COUNT(*) AS n FROM broker_observed_fills').get() as { n: number }).n,
+        (db.prepare('SELECT COUNT(*) AS n FROM broker_unpriced_fills').get() as { n: number }).n,
       ).toBe(0);
       expect(db.inTransaction).toBe(false);
     } finally {

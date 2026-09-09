@@ -430,9 +430,9 @@ export class SqliteExecutionStore implements SharedStore {
   /**
    * Dedup gate for the fill feed's re-offered fills. Matched on the FULL
    * `fills` primary key — `(idempotency_key, broker_fill_id)` — not on
-   * `broker_fill_id` alone (#1320), for the same reason
-   * `pruneIngestedObservedFills` (sqlite-broker-state-store.ts) already
-   * matches the full key on this same table: `fills` has no venue column
+   * `broker_fill_id` alone (#1320), for the reason #313's observed-fill
+   * prune matched the full key on this same table before it was retired
+   * (#1059): `fills` has no venue column
    * and `broker_fill_id` is venue-assigned, so two venues (or, short of a
    * second live venue, two lots sharing one id string — see the flatten
    * split's `:${lotKey}` suffix in `ingest-fills.ts`) could otherwise let
