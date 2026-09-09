@@ -163,6 +163,42 @@ describe('MiArchiveStore', () => {
   });
 
   /**
+   * #1392 review round 1 (F1/F2): `hasItem` (raw-fetch dedup) and
+   * `hasScoredItem` (scoring-eligibility dedup) are deliberately independent
+   * gates — a degraded batch archives the raw bytes without a scored item, so
+   * the row must read `hasItem: true, hasScoredItem: false` until a later
+   * refresh actually scores it.
+   */
+  describe('hasScoredItem', () => {
+    it('is false before anything is written', () => {
+      const store = new MiArchiveStore();
+      expect(store.hasScoredItem(MI_SOURCES.alpacaNews, '1', T0, 'AAPL')).toBe(false);
+    });
+
+    it('is true once a matching item is written', () => {
+      const store = new MiArchiveStore();
+      store.write([raw()], [archived()]);
+      expect(store.hasScoredItem(MI_SOURCES.alpacaNews, '1', T0, 'AAPL')).toBe(true);
+    });
+
+    it('is false for a raw row archived with no item — the degraded-batch case', () => {
+      const store = new MiArchiveStore();
+      store.write([raw()], []);
+
+      expect(store.hasItem(MI_SOURCES.alpacaNews, '1', T0)).toBe(true);
+      expect(store.hasScoredItem(MI_SOURCES.alpacaNews, '1', T0, 'AAPL')).toBe(false);
+    });
+
+    it('is keyed on entity — one raw row can yield several entities, scored independently', () => {
+      const store = new MiArchiveStore();
+      store.write([raw()], [archived({ entity: 'AAPL', item: item({ entity: 'AAPL' }) })]);
+
+      expect(store.hasScoredItem(MI_SOURCES.alpacaNews, '1', T0, 'AAPL')).toBe(true);
+      expect(store.hasScoredItem(MI_SOURCES.alpacaNews, '1', T0, 'TSLA')).toBe(false);
+    });
+  });
+
+  /**
    * One raw article carries a `symbols[]` array, so an article about three
    * tickers is three items. Keying without `entity` would silently keep one —
    * and the analyst would then see news for AAPL but not for TSLA from the same

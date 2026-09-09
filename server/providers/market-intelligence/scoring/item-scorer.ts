@@ -104,7 +104,15 @@ function clampConfidence(value: number): number {
 export interface ScoreItemsDeps {
   llmClient: LlmClient;
   trace_id?: string | undefined;
-  logger?: Logger | undefined;
+  /**
+   * Required, not optional (#1392 review round 1): the defect this ticket
+   * fixes was precisely that nobody logged a scoring failure, so a call site
+   * that cannot supply a `Logger` must pass a no-op one explicitly rather
+   * than silently opting back into the unlogged failure this function exists
+   * to end. Every production caller already has one (`buildMiIngestAgent`,
+   * production.ts).
+   */
+  logger: Logger;
 }
 
 /**
@@ -186,41 +194,39 @@ export async function scoreItems(
     const response = await deps.llmClient.complete(request);
     scores = response.data.scores;
   } catch (error) {
-    if (deps.logger !== undefined) {
-      const trace_id = deps.trace_id ?? 'unattributed';
-      const message =
-        'market intelligence: item scoring failed; this batch degrades to UNSCORED ' +
-        '(neutral, floor confidence) rather than a genuine neutral read';
-      // Two literal branches, not a computed `event:`, so
-      // `log-event-code.test.ts`'s spelling scan (a textual grep, not an
-      // evaluator) sees both codes.
-      if (error instanceof LlmMalformedResponseError) {
-        logCaughtFailure(
-          deps.logger,
-          {
-            trace_id,
-            stage: 'market_intelligence',
-            level: 'warn',
-            event: 'mi_scoring_malformed_response',
-            message,
-          },
-          error,
-          { items: items.length, error_kind: 'malformed_response' },
-        );
-      } else {
-        logCaughtFailure(
-          deps.logger,
-          {
-            trace_id,
-            stage: 'market_intelligence',
-            level: 'warn',
-            event: 'mi_scoring_provider_failure',
-            message,
-          },
-          error,
-          { items: items.length, error_kind: 'transport' },
-        );
-      }
+    const trace_id = deps.trace_id ?? 'unattributed';
+    const message =
+      'market intelligence: item scoring failed; this batch degrades to UNSCORED ' +
+      '(neutral, floor confidence) rather than a genuine neutral read';
+    // Two literal branches, not a computed `event:`, so
+    // `log-event-code.test.ts`'s spelling scan (a textual grep, not an
+    // evaluator) sees both codes.
+    if (error instanceof LlmMalformedResponseError) {
+      logCaughtFailure(
+        deps.logger,
+        {
+          trace_id,
+          stage: 'market_intelligence',
+          level: 'warn',
+          event: 'mi_scoring_malformed_response',
+          message,
+        },
+        error,
+        { items: items.length, error_kind: 'malformed_response' },
+      );
+    } else {
+      logCaughtFailure(
+        deps.logger,
+        {
+          trace_id,
+          stage: 'market_intelligence',
+          level: 'warn',
+          event: 'mi_scoring_provider_failure',
+          message,
+        },
+        error,
+        { items: items.length, error_kind: 'transport' },
+      );
     }
     return { scores: fallback, degraded: true };
   }

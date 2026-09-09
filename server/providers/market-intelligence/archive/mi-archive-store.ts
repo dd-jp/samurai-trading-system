@@ -31,7 +31,12 @@
  * **Scores are stored, never recomputed at replay.** Per-item LLM scoring
  * (#555) is non-deterministic; re-scoring would make two runs of one backtest
  * disagree, which ADR-0003 §2 disqualifies exactly as it disqualifies a live
- * LLM call inside a replayed path.
+ * LLM call inside a replayed path. This does NOT mean every raw row has a
+ * scored item behind it: #1392 made "raw archived, not yet scored" a normal
+ * transient state (a batch that degrades archives its bytes but not a
+ * fabricated score), so `mi_archive_raw` and `mi_items` are allowed to
+ * disagree on which rows exist — `hasItem` vs. `hasScoredItem` is the two
+ * questions kept separate.
  *
  * ## Exemption: raw `.toISOString()`/`new Date(...)` round-trips (#884)
  *
@@ -172,10 +177,14 @@ export class MiArchiveStore {
   /**
    * Writes raw rows and their derived items in ONE transaction.
    *
-   * Together, deliberately: an item whose raw row is missing has no provenance,
-   * and provenance is what `retrievalEvidence` now means (#555) — an item is
-   * evidenced iff it links archive rows we fetched. A half-applied batch would
-   * produce exactly the un-evidenced items the #485 guard exists to refuse.
+   * Either array may be empty — a raw row with no item is how #1392 keeps a
+   * degraded scoring batch's bytes without fabricating a score for them (the
+   * caller writes `items: []` in that case). The reverse is NOT valid: an
+   * item whose raw row is missing has no provenance, and provenance is what
+   * `retrievalEvidence` means (#555) — an item is evidenced iff it links
+   * archive rows we fetched. Not enforced by a foreign key (`PRAGMA
+   * foreign_keys` is off here, see the class doc), so a caller must still
+   * write an item's raw row — here or in an earlier call — before the item.
    *
    * `INSERT OR IGNORE` on the natural key, matching the bars idiom: re-fetching
    * an overlapping window is a no-op rather than a duplicate. A genuine
@@ -265,15 +274,14 @@ export class MiArchiveStore {
   }
 
   /**
-   * Is this exact vendor revision already held?
+   * Is this exact vendor revision's raw payload already archived?
    *
-   * The pre-scoring dedup gate. A refresh window deliberately overlaps the
-   * previous one (a publisher can stamp its time slightly behind the wire), so
-   * most of what a poll returns is already on disk. `INSERT OR IGNORE` would
-   * absorb it — but only *after* the batch has been scored, and scoring costs
-   * tokens. Worse, re-scoring an article we already hold would mint a SECOND,
-   * different score for one row, which is exactly the non-determinism #558
-   * banned from replay.
+   * The fetch-side dedup gate ONLY: whether another `mi_archive_raw` row for
+   * this article would be redundant. NOT whether it needs scoring — since
+   * #1392 a raw row can exist with no scored item behind it (a batch that
+   * degraded still archives its bytes, `write`'s doc explains why), so using
+   * this to decide scoring eligibility would silently exempt a degraded
+   * article from every future attempt. `hasScoredItem` is that gate.
    */
   hasItem(source: MiSourceId, native_id: string, updated_at: Date): boolean {
     const row = this.db
@@ -282,6 +290,29 @@ export class MiArchiveStore {
           WHERE source = ? AND native_id = ? AND updated_at = ?`,
       )
       .get(source, native_id, updated_at.toISOString()) as { present: number } | undefined;
+
+    return row !== undefined;
+  }
+
+  /**
+   * Is this exact vendor revision already SCORED, for this entity?
+   *
+   * The pre-scoring dedup gate (`hasItem` is not it — see its doc). A refresh
+   * window deliberately overlaps the previous one (a publisher can stamp its
+   * time slightly behind the wire), so most of what a poll returns already has
+   * a scored item. Re-scoring one would bill tokens for an answer already on
+   * disk and, worse, mint a SECOND, different score for one row — the
+   * non-determinism #558 banned from replay. Keyed on all four columns of
+   * `mi_items`' own primary key, `entity` included: one raw row can yield
+   * several entities' items (a multi-symbol article), scored independently.
+   */
+  hasScoredItem(source: MiSourceId, native_id: string, updated_at: Date, entity: string): boolean {
+    const row = this.db
+      .prepare(
+        `SELECT 1 AS present FROM mi_items
+          WHERE source = ? AND native_id = ? AND updated_at = ? AND entity = ?`,
+      )
+      .get(source, native_id, updated_at.toISOString(), entity) as { present: number } | undefined;
 
     return row !== undefined;
   }

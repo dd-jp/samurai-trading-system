@@ -291,12 +291,15 @@ describe('MiIngestAgent', () => {
    * this method archived that fallback exactly like a real score. A provider
    * outage was then indistinguishable from a neutral news day, on the store
    * and on the dashboard, and it reinstated #625's conviction ceiling
-   * invisibly. Archiving nothing on a degraded batch — the same posture the
-   * fetch-failure and (later) spend-cap-refusal branches already took — is
-   * what keeps that distinguishable: a degraded batch produces NO_DATA_MARKER
-   * like an outage should, not a fabricated neutral opinion.
+   * invisibly.
+   *
+   * Review round 1 (F2) changed the fix's shape: the raw bytes are archived
+   * regardless (the fetch succeeded — losing them would mean re-fetching
+   * something already in hand, or losing it outright if the outage outlasts
+   * LOOKBACK_MS), but no scored item is written, so the analysts still see
+   * NO_DATA_MARKER like an outage should, not a fabricated neutral opinion.
    */
-  it('archives nothing and logs the cause when scoring fails, rather than a fabricated neutral read', async () => {
+  it('archives the raw bytes but not a scored item, and logs the cause, when scoring fails', async () => {
     const logger = recordingLogger();
     const archive = new MiArchiveStore();
     const store = new MarketIntelligenceStore(clock);
@@ -313,7 +316,7 @@ describe('MiIngestAgent', () => {
 
     await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false);
 
-    expect(archive.rawRows('alpaca-news')).toEqual([]);
+    expect(archive.rawRows('alpaca-news')).toHaveLength(1);
     expect(store.getContext('stocks', WINDOW, 't').news).toEqual([]);
     expect(
       logger.entries.some(
@@ -323,11 +326,12 @@ describe('MiIngestAgent', () => {
   });
 
   /**
-   * The counterpart to the archiving assertion above: nothing was written for
-   * the failed article, so `hasItem` (the `fresh` filter) does not yet know
-   * it, and the very next refresh — still inside the overlapping LOOKBACK_MS
+   * The counterpart to the archiving assertion above: no scored item was
+   * written for the failed article, so `hasScoredItem` does not yet know it,
+   * and the very next refresh — still inside the overlapping LOOKBACK_MS
    * window — gets to try scoring it again rather than being poisoned at
-   * UNSCORED forever.
+   * UNSCORED forever. A single failure (streak 1) must not trip the
+   * consecutive-failure bound below.
    */
   it('retries the same article on the next refresh after a scoring outage, once scoring recovers', async () => {
     const archive = new MiArchiveStore();
@@ -348,6 +352,41 @@ describe('MiIngestAgent', () => {
     (agent as unknown as { deps: { llmClient: unknown } }).deps.llmClient = scoringClient().client;
 
     await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(true);
+    expect(store.getContext('stocks', WINDOW, 't').news).toHaveLength(1);
+  });
+
+  /**
+   * #1392 review round 1, F1: the cheap bound on a SUSTAINED outage's billed
+   * calls. Two straight degraded refreshes trip it; the third skips the
+   * scoring attempt entirely (no LLM call — raw bytes stay archived, from the
+   * first refresh, regardless), then the fourth tries again.
+   */
+  it('skips the scoring attempt on the third straight refresh after two consecutive failures, then retries on the fourth', async () => {
+    const archive = new MiArchiveStore();
+    const store = new MarketIntelligenceStore(clock);
+    const failing = failingScoringClient();
+    const agent = new MiIngestAgent({
+      archive,
+      store,
+      newsClient: newsClient([article()]),
+      llmClient: failing,
+      clock,
+      assetClasses: ['stocks'],
+      spendCap: ADMITS,
+    });
+
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false); // streak 1
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false); // streak 2
+
+    const scorer = scoringClient();
+    (agent as unknown as { deps: { llmClient: unknown } }).deps.llmClient = scorer.client;
+
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false); // skipped, streak reset
+    expect(scorer.calls).toHaveLength(0);
+    expect(archive.rawRows('alpaca-news')).toHaveLength(1);
+
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(true); // streak reset, tries again
+    expect(scorer.calls).toHaveLength(1);
     expect(store.getContext('stocks', WINDOW, 't').news).toHaveLength(1);
   });
 

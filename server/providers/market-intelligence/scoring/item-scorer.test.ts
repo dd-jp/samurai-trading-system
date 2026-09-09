@@ -11,6 +11,11 @@ function recordingLogger(): Logger & { entries: LogEntry[] } {
   return { entries, log: (entry) => entries.push(entry) };
 }
 
+// `ScoreItemsDeps.logger` is required (#1392 review round 1, F5) — every call
+// below that isn't asserting on logged entries passes this instead of a
+// `recordingLogger()`.
+const NOOP_LOGGER: Logger = { log: () => {} };
+
 const ITEMS: ScorableItem[] = [
   { entity: 'AAPL', headline: 'Apple beats on revenue', summary: 'Q3 revenue above consensus.' },
   { entity: 'AAPL', headline: 'Apple faces antitrust probe', summary: 'EU opens inquiry.' },
@@ -19,7 +24,7 @@ const ITEMS: ScorableItem[] = [
 describe('scoreItems', () => {
   it('returns [] and degraded: false for an empty batch, without calling the client', async () => {
     const client = new MockLlmClient();
-    const result = await scoreItems([], { llmClient: client });
+    const result = await scoreItems([], { llmClient: client, logger: NOOP_LOGGER });
     expect(result).toEqual({ scores: [], degraded: false });
     expect(client.requests).toHaveLength(0);
   });
@@ -35,7 +40,7 @@ describe('scoreItems', () => {
       }),
     );
 
-    const result = await scoreItems(ITEMS, { llmClient: client });
+    const result = await scoreItems(ITEMS, { llmClient: client, logger: NOOP_LOGGER });
 
     expect(result.degraded).toBe(false);
     expect(result.scores).toEqual([
@@ -52,17 +57,26 @@ describe('scoreItems', () => {
         '\n```',
     );
 
-    const result = await scoreItems([ITEMS[0] as ScorableItem], { llmClient: client });
+    const result = await scoreItems([ITEMS[0] as ScorableItem], {
+      llmClient: client,
+      logger: NOOP_LOGGER,
+    });
 
     expect(result.degraded).toBe(false);
     expect(result.scores).toEqual([{ index: 0, sentiment: 1, confidence: 0.8 }]);
   });
 
-  it('an item the model omitted falls back to UNSCORED without marking the batch degraded', async () => {
+  // Narrower than #1392's batch-wide scope, not an endorsement: this item is
+  // indistinguishable from a genuine unanimous-neutral read (`degraded:
+  // false`), the same gap #1392 fixed at the batch level. Filed as a
+  // follow-up (see pr-body-1392.md / followup-1392.md) rather than fixed
+  // here — the fix is a per-item degraded marker through `ArchivedItem`,
+  // which is out of this ticket's scope.
+  it('an item the model omitted falls back to UNSCORED, currently indistinguishable from a genuine neutral read (tracked follow-up, not fixed here)', async () => {
     const client = new MockLlmClient();
     client.enqueueText(JSON.stringify({ scores: [{ index: 0, sentiment: 1, confidence: 0.8 }] }));
 
-    const result = await scoreItems(ITEMS, { llmClient: client });
+    const result = await scoreItems(ITEMS, { llmClient: client, logger: NOOP_LOGGER });
 
     expect(result.degraded).toBe(false);
     expect(result.scores).toEqual([
@@ -76,7 +90,7 @@ describe('scoreItems', () => {
       const client = new MockLlmClient();
       client.enqueueError(new LlmTimeoutError('boom'));
 
-      const result = await scoreItems(ITEMS, { llmClient: client });
+      const result = await scoreItems(ITEMS, { llmClient: client, logger: NOOP_LOGGER });
 
       expect(result).toEqual({
         degraded: true,
@@ -91,7 +105,7 @@ describe('scoreItems', () => {
       const client = new MockLlmClient();
       client.enqueueText("I can't help with that request.");
 
-      const result = await scoreItems(ITEMS, { llmClient: client });
+      const result = await scoreItems(ITEMS, { llmClient: client, logger: NOOP_LOGGER });
 
       expect(result.degraded).toBe(true);
       expect(result.scores).toEqual([
@@ -107,7 +121,7 @@ describe('scoreItems', () => {
       // `valid: true` with `data: { scores: [] }`.
       client.enqueueText(JSON.stringify({ scores: [{ note: 'no directional read' }] }));
 
-      const result = await scoreItems(ITEMS, { llmClient: client });
+      const result = await scoreItems(ITEMS, { llmClient: client, logger: NOOP_LOGGER });
 
       expect(result.degraded).toBe(true);
       expect(result.scores).toEqual([
@@ -120,7 +134,7 @@ describe('scoreItems', () => {
       const client = new MockLlmClient();
       client.enqueueText(JSON.stringify({ scores: [] }));
 
-      const result = await scoreItems(ITEMS, { llmClient: client });
+      const result = await scoreItems(ITEMS, { llmClient: client, logger: NOOP_LOGGER });
 
       expect(result.degraded).toBe(true);
     });
@@ -129,16 +143,9 @@ describe('scoreItems', () => {
       const client = new MockLlmClient();
       client.enqueueError(new LlmProviderError('503'));
 
-      await expect(scoreItems(ITEMS, { llmClient: client })).resolves.toMatchObject({
-        degraded: true,
-      });
-    });
-
-    it('does not throw when no logger is supplied', async () => {
-      const client = new MockLlmClient();
-      client.enqueueError(new LlmTimeoutError('boom'));
-
-      await expect(scoreItems(ITEMS, { llmClient: client })).resolves.toMatchObject({
+      await expect(
+        scoreItems(ITEMS, { llmClient: client, logger: NOOP_LOGGER }),
+      ).resolves.toMatchObject({
         degraded: true,
       });
     });
@@ -188,7 +195,7 @@ describe('scoreItems', () => {
     const client = new MockLlmClient();
     client.enqueueText(JSON.stringify({ scores: [{ index: 0, sentiment: 1, confidence: 0.8 }] }));
 
-    await scoreItems([ITEMS[0] as ScorableItem], { llmClient: client });
+    await scoreItems([ITEMS[0] as ScorableItem], { llmClient: client, logger: NOOP_LOGGER });
 
     expect(client.requests[0]?.prompt).toContain('no markdown code fence');
   });
@@ -197,7 +204,9 @@ describe('scoreItems', () => {
     const client = new MockLlmClient();
     client.enqueueText('```\nunterminated fence');
 
-    await expect(scoreItems(ITEMS, { llmClient: client })).resolves.toMatchObject({
+    await expect(
+      scoreItems(ITEMS, { llmClient: client, logger: NOOP_LOGGER }),
+    ).resolves.toMatchObject({
       degraded: true,
     });
   });
