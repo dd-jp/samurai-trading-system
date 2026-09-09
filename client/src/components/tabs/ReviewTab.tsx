@@ -245,9 +245,18 @@ function ArmCard({ comparisons }: { comparisons: readonly ArmComparisonRow[] }) 
           </ul>
           <p className="muted small">
             {formatDateUtc(latest.window_from)} to {formatDateUtc(latest.window_to)} · one window,
-            both arms · basis £{formatFixed(latest.basis, 2)}
+            both arms · basis {formatUsd(latest.basis)}
           </p>
           <ArmVerdict row={latest} />
+          {/*
+            #1180: `basis` converted from the declared GBP book to the account's
+            currency, so a trend spanning that ship date steps by 1/1.27 on both
+            arms at once. Each row is honest at its own denominator — the row
+            carries the basis it was computed against — and no arm moves against
+            the other, but the step is real and a reader should not read it as
+            performance. No backfill is owed: unlike `sizing_capital_ceiling`,
+            nothing compares this column across rows.
+          */}
           {comparisons.length > 1 ? (
             <ul className="arm-trend">
               {comparisons.map((row) => {

@@ -46,7 +46,7 @@ export function formatArmDivergenceAlert(alert: ArmDivergenceAlert): string {
     'Samurai ARM DIVERGENCE: the matched control (falsifier arm 2) is out-performing the ' +
     'debate-driven live arm.\n' +
     `Window ${alert.comparison.from.toISOString()} → ${alert.comparison.to.toISOString()}, ` +
-    `basis £${alert.comparison.basis.toFixed(2)} (the same denominator for both arms).\n` +
+    `basis $${alert.comparison.basis.toFixed(2)} (the same denominator for both arms).\n` +
     `live:    ${live.trade_count} trade(s), return ${pct(live.return_pct)}, ` +
     `max drawdown ${pct(live.max_drawdown_pct)}\n` +
     `control: ${control.trade_count} trade(s), return ${pct(control.return_pct)}, ` +
