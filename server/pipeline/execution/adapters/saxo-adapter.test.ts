@@ -1062,6 +1062,50 @@ describe('SaxoBrokerAdapter.cancel', () => {
     expect(client.cancelOrder).not.toHaveBeenCalledWith('5040047179');
   });
 
+  it('refuses on a fill the audit trail confirms, even where the re-read still shows the legs NotWorking (#1216)', async () => {
+    const client = makeClient({
+      listOpenOrders: vi
+        .fn()
+        .mockResolvedValueOnce([workingMaster(), dormantLeg(), targetLeg()])
+        .mockResolvedValue([dormantLeg(), targetLeg()]),
+      listOrderActivities: vi.fn().mockResolvedValue([activity({ Status: 'Filled' })]),
+      cancelOrder: vi.fn(async (orderId: string) => {
+        if (orderId === '5040047177') {
+          throw new SaxoBrokerProviderError('Saxo API error: 404', 404, 'OrderNotFound', 'gone');
+        }
+      }),
+    });
+    const { adapter } = makeAdapter(client);
+
+    await expect(adapter.cancel('key-3usl-0930', '3USL')).rejects.toMatchObject({
+      name: 'BrokerError',
+      operation: 'cancel',
+      venueCode: 'EntryFilledDuringCancel',
+    });
+    expect(client.cancelOrder).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels the legs when the master went while this call ran but the audit trail says it never filled (#1216)', async () => {
+    const client = makeClient({
+      listOpenOrders: vi
+        .fn()
+        .mockResolvedValueOnce([workingMaster(), dormantLeg(), targetLeg()])
+        .mockResolvedValue([dormantLeg(), targetLeg()]),
+      listOrderActivities: vi.fn().mockResolvedValue([activity({ Status: 'Expired' })]),
+      cancelOrder: vi.fn(async (orderId: string) => {
+        if (orderId === '5040047177') {
+          throw new SaxoBrokerProviderError('Saxo API error: 404', 404, 'OrderNotFound', 'gone');
+        }
+      }),
+    });
+    const { adapter } = makeAdapter(client);
+
+    await adapter.cancel('key-3usl-0930', '3USL');
+
+    expect(client.cancelOrder).toHaveBeenCalledWith('5040047178');
+    expect(client.cancelOrder).toHaveBeenCalledWith('5040047179');
+  });
+
   it('resolves on OrderNotFound when the master is the only open row and the re-read finds nothing left', async () => {
     const client = makeClient({
       listOpenOrders: vi.fn().mockResolvedValue([workingMaster()]),

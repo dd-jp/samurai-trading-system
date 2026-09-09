@@ -111,9 +111,14 @@ const ORDER_DECIMALS = 2;
 const DEFAULT_ACTIVITY_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
- * Consecutive `lookup()` calls that found the legs dormant (`findOpen`) but
- * the master's OWN audit-trail row not yet terminal, before the FIRST
- * `DormantLegsUnresolvedAlert` — see `escalateIfStale`. A wall-clock age was
+ * Consecutive observations — by `lookup()` or by `cancel()`'s re-read, which
+ * share one counter per reference (`corroborateDormantLegs`) — of legs
+ * dormant but the master's OWN audit-trail row not yet terminal, before the
+ * FIRST `DormantLegsUnresolvedAlert` — see `escalateIfStale`. Sharing means
+ * a flat-by-close `cancel` and one `reconcile` poll page between them where
+ * two polls were needed before #1216: intended, since the wedge is a
+ * property of the reference and each answered observation is equal evidence
+ * of it, whichever path made the call. A wall-clock age was
  * considered and rejected: this adapter is never told the poll cadence, but
  * every call that reaches this branch already counts one observation, the
  * same shape `FilledZeroSizeThrottle.observe` counts consecutive wedged
@@ -1073,7 +1078,11 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
    * with `cancel` so both reach the venue's verdict the same way and from
    * one `listOrderActivities`. The defer bookkeeping lives here because it
    * is per-reference, not per-caller: whichever path observes the wedge
-   * counts it, and every settled verdict clears it.
+   * counts it, and every settled verdict clears it — on the verdict, not on
+   * the caller's subsequent DELETE, because terminal audit evidence ends the
+   * wedge whether or not that DELETE lands (a `cancelOrder` throw leaves the
+   * legs to a later poll, which will re-derive the same terminal verdict and
+   * never reach the deferral the count exists to measure).
    */
   private async corroborateDormantLegs(
     externalReference: string,
