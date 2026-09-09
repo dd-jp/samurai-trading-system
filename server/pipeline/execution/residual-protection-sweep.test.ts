@@ -201,8 +201,12 @@ describe('residual-protection sweep (#549)', () => {
     // Reported through reconcile's own divergence surface, and counted.
     const divergence = report.divergences.find((entry) => entry.idempotency_key === LOT);
     expect(divergence?.action).toBe('adopted');
-    // Distinct from `reconcileLot`'s bracket rows — never routed through
-    // `reconcileDivergenceLevel()` (#1122 review round 1).
+    // Distinct from `reconcileLot`'s bracket rows: this row DOES flow
+    // through `reconcileDivergenceLevel()` (it's read off `report.divergences`
+    // right above, same array that loop consumes) but never demotes, since
+    // the demotion predicate requires `kind === 'bracket'` (#1122 review
+    // round 3 — round 1's comment here claimed "never routed", which this
+    // very assertion's lookup path contradicts).
     expect(divergence?.kind).toBe('sweep');
     expect(report.checked).toBeGreaterThanOrEqual(1);
     expect(report.corrected).toBeGreaterThanOrEqual(1);

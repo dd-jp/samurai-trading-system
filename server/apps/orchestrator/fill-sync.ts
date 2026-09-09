@@ -370,10 +370,15 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
             stage: 'execution',
             event: 'residual_sweep_divergence',
             // Deliberately its own plain 2-way split, not
-            // `reconcileDivergenceLevel()` — these carry `kind: 'sweep'`,
-            // never `'bracket'`, precisely so they can't be routed through
-            // that demotion logic (see `ReconcileDivergence.kind`'s doc for
-            // why that matters) (#1122 review round 1).
+            // `reconcileDivergenceLevel()`. This is a SECOND log line for
+            // the same sweep row `runPoll`'s `report.divergences` loop
+            // above already routed through that function (reconcile()
+            // merges sweep divergences in — see `ReconcileDivergence.kind`'s
+            // doc) — pre-existing duplicate logging (#1122 review round 3),
+            // not introduced here. `reconcileDivergenceLevel()` never
+            // demotes a sweep row either way (`kind !== 'bracket'`), so
+            // this inline split and that function agree on every case; it
+            // just doesn't call it a second time to reach the same answer.
             level: divergence.action === 'undetermined' ? 'warn' : 'info',
             message: 'residual-protection sweep divergence',
             payload: { ...divergence },

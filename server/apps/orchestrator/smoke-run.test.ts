@@ -3128,7 +3128,7 @@ describe('findSweepDivergence (#1285)', () => {
       store_state: 'submitted',
       broker_state: 'filled',
       action: 'rejected',
-      kind: 'bracket',
+      kind: 'sweep',
       reason: '',
       ...overrides,
     };
