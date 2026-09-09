@@ -298,8 +298,37 @@ export const DEFAULT_VENUE_PACING: VenuePacingConfig = {
    * disconnects happen while the venue holds live bracket legs.
    */
   ibkr: { capacity: 5, refillPerSecond: 5, reserveForPriority: 0 },
-  // Capacity 2 lets an adopt-or-place pair (open-orders lookup, then the POST)
-  // go out back to back; the 1/s refill is the order-placement session limit.
+  // Capacity 2 covers only the first two requests of a fan-out sequence back
+  // to back; the rest queue on the 1/s refill — the order-placement SESSION
+  // throttle named in the prose above `saxo: 120 / 60` (NOT
+  // VENUE_DOCUMENTED_CEILING_PER_SECOND.saxo itself, which is the 120/min
+  // SERVICE-GROUP ceiling, 2 here — the 1/s session figure has no exported
+  // symbol of its own). Raising capacity would burst past that documented
+  // per-session limit rather than an invented one.
+  //
+  // #1222 measured the real fan-outs this paces, as FLOORS, not exact
+  // counts: `listOpenOrders`/`listOrderActivities`/`listNetPositions` each
+  // page on Saxo's `__next` cursor (`listAll()` in saxo-http-client.ts —
+  // one additional paced request per page beyond the first, though $top=500
+  // makes a second page unlikely for a single account), and a cold client
+  // re-pays `resolveIdentity()` on every call until one succeeds (its
+  // promise is cleared on failure). So submitBracket's fresh-placement path
+  // is AT LEAST 3 requests (listOpenOrders, listOrderActivities,
+  // placeOrder) — the POST parks ~1s behind the first two — and cancelling
+  // a 3-leg bracket is AT LEAST 4 (listOpenOrders + one cancelOrder per
+  // leg) — ~2s of the ~1s/leg refill after the burst. No hard deadline is
+  // known to bind on either path today.
+  //
+  // Every Saxo request, read or write, spends this same pool through
+  // `acquire()` (the priority lane) — `reserveForPriority: 0` reserves
+  // nothing back FOR that lane against a `acquireBackground()` caller,
+  // because there is no `acquireBackground()` caller here to reserve
+  // against. A multi-page poll sweep (listOpenOrders/listOrderActivities)
+  // can therefore still drain the bucket ahead of a protective-leg
+  // placement queued behind it — the same failure mode #391's
+  // `reserveForPriority` exists to prevent for Alpaca, just not yet solved
+  // here: doing so needs Saxo's read and write calls classified into two
+  // lanes first, which #1222 did not do (see its PR body's follow-up).
   saxo: { capacity: 2, refillPerSecond: 1, reserveForPriority: 0 },
 };
 

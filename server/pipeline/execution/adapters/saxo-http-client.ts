@@ -12,8 +12,14 @@
  * `AccountKey`/`ClientKey` are resolved once from `/port/v1/accounts/me` and
  * memoised, so the adapter never holds an account identifier.
  */
-import type { RetryConfig } from '../../../shared/index.js';
-import { fetchWithTimeout, truncateForError, withRetry } from '../../../shared/index.js';
+import type { Logger, RetryConfig } from '../../../shared/index.js';
+import {
+  DEFAULT_VENUE_PACING,
+  fetchWithTimeout,
+  TokenBucket,
+  truncateForError,
+  withRetry,
+} from '../../../shared/index.js';
 import type { SaxoHttpMethod } from './saxo-broker-errors.js';
 import {
   classifySaxoBrokerNetworkError,
@@ -59,6 +65,28 @@ export interface SaxoHttpBrokerClientOptions {
   accountKey?: string;
   timeoutMs?: number;
   retry?: RetryConfig;
+  /**
+   * Paces every upstream HTTP request this client issues, one token per
+   * `fetchWithTimeout` call (#1222 — a public operation like `submitBracket`
+   * or `cancel` can fan out to several, so pacing lives at the transport
+   * boundary rather than the caller). Defaults to `DEFAULT_VENUE_PACING.saxo`.
+   */
+  rateLimiter?: TokenBucket;
+  /**
+   * REQUIRED, no default (#1222 round 2): wires `TokenBucketTelemetry`
+   * (#1083) onto the DEFAULT bucket — the fallback for a caller that
+   * constructs this client standalone with no `rateLimiter` (the
+   * composition root, once Saxo is wired, builds its own shared bucket with
+   * telemetry the same way `production.ts` does for Alpaca and passes it as
+   * `rateLimiter`, so this option never reaches that path). Made
+   * unconditional rather than optional: the pre-#1222 `SaxoBrokerAdapter`
+   * always built its default bucket with telemetry, because its own
+   * `logger` was required — an omitted seam at a composition root is this
+   * repo's dominant defect class (`AlpacaBrokerAdapterInput.logger` refuses
+   * a silent default for the identical reason), and pacing moving to this
+   * client should not weaken that guarantee.
+   */
+  logger: Logger;
 }
 
 interface AccountIdentity {
@@ -268,9 +296,10 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
   private readonly pinnedAccountKey: string | undefined;
   private readonly timeoutMs: number;
   private readonly retry: RetryConfig;
+  private readonly rateLimiter: TokenBucket;
   private identity: Promise<AccountIdentity> | undefined;
 
-  constructor(options: SaxoHttpBrokerClientOptions = {}) {
+  constructor(options: SaxoHttpBrokerClientOptions) {
     const environment = options.environment ?? 'sim';
     const names = SAXO_CREDENTIAL_ENV_VARS[environment];
     const fromEnv = (name: string): string | undefined => {
@@ -294,6 +323,12 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
     this.pinnedAccountKey = options.accountKey;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.retry = options.retry ?? DEFAULT_RETRY_CONFIG;
+    this.rateLimiter =
+      options.rateLimiter ??
+      new TokenBucket(DEFAULT_VENUE_PACING.saxo, undefined, {
+        logger: options.logger,
+        name: 'saxo',
+      });
   }
 
   private headers(init: RequestInit, extra: Record<string, string> = {}): Record<string, string> {
@@ -315,6 +350,10 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
   ): Promise<T> {
     return withRetry<T>(
       async () => {
+        // One token per attempt (#1222): a retried request is a second
+        // upstream call and must be paced as one, not covered by the first
+        // attempt's token.
+        await this.rateLimiter.acquire();
         let response: Response;
         try {
           response = await fetchWithTimeout(
