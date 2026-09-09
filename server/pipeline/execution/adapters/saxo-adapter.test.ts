@@ -178,6 +178,17 @@ function dormantLeg(overrides: Partial<SaxoOpenOrder> = {}): SaxoOpenOrder {
   };
 }
 
+/** The `:target` sibling of `dormantLeg`, as its own `listOpenOrders` row. */
+function targetLeg(overrides: Partial<SaxoOpenOrder> = {}): SaxoOpenOrder {
+  return dormantLeg({
+    OrderId: '5040047179',
+    ExternalReference: 'key-3usl-0930:target',
+    OpenOrderType: 'Limit',
+    Price: 12,
+    ...overrides,
+  });
+}
+
 function activity(overrides: Partial<SaxoOrderActivity> = {}): SaxoOrderActivity {
   return {
     ActivityTime: '2026-09-05T08:30:00.000000Z',
@@ -1015,7 +1026,43 @@ describe('SaxoBrokerAdapter flatten', () => {
 });
 
 describe('SaxoBrokerAdapter.cancel', () => {
-  it('cancels every open order the bracket owns and resolves on OrderNotFound', async () => {
+  it('cancels the master alone and leaves the legs to the venue (doc 43:33), naming no leg from a snapshot the entry can fill out of (#1216)', async () => {
+    const client = makeClient({
+      listOpenOrders: vi.fn().mockResolvedValue([workingMaster(), dormantLeg(), targetLeg()]),
+    });
+    const { adapter } = makeAdapter(client);
+
+    await adapter.cancel('key-3usl-0930', '3USL');
+
+    expect(client.cancelOrder).toHaveBeenCalledTimes(1);
+    expect(client.cancelOrder).toHaveBeenCalledWith('5040047177');
+  });
+
+  it('refuses without deleting a leg when the entry fills between the open-orders read and the master DELETE (#1216)', async () => {
+    const client = makeClient({
+      listOpenOrders: vi
+        .fn()
+        .mockResolvedValueOnce([workingMaster(), dormantLeg(), targetLeg()])
+        .mockResolvedValue([dormantLeg({ Status: 'Working' }), targetLeg({ Status: 'Working' })]),
+      cancelOrder: vi.fn(async (orderId: string) => {
+        if (orderId === '5040047177') {
+          throw new SaxoBrokerProviderError('Saxo API error: 404', 404, 'OrderNotFound', 'gone');
+        }
+      }),
+    });
+    const { adapter } = makeAdapter(client);
+
+    await expect(adapter.cancel('key-3usl-0930', '3USL')).rejects.toMatchObject({
+      name: 'BrokerError',
+      operation: 'cancel',
+      venueCode: 'EntryFilledDuringCancel',
+    });
+    expect(client.cancelOrder).toHaveBeenCalledTimes(1);
+    expect(client.cancelOrder).not.toHaveBeenCalledWith('5040047178');
+    expect(client.cancelOrder).not.toHaveBeenCalledWith('5040047179');
+  });
+
+  it('resolves on OrderNotFound when the master is the only open row and the re-read finds nothing left', async () => {
     const client = makeClient({
       listOpenOrders: vi.fn().mockResolvedValue([workingMaster()]),
       cancelOrder: vi
@@ -1037,6 +1084,46 @@ describe('SaxoBrokerAdapter.cancel', () => {
     await adapter.cancel('key-3usl-0930', '3USL');
 
     expect(client.cancelOrder).not.toHaveBeenCalled();
+  });
+
+  it('cancels activated legs when no master is open — the caller holds the lot and must clear them before flattening', async () => {
+    const client = makeClient({
+      listOpenOrders: vi
+        .fn()
+        .mockResolvedValue([dormantLeg({ Status: 'Working' }), targetLeg({ Status: 'Working' })]),
+    });
+    const { adapter } = makeAdapter(client);
+
+    await adapter.cancel('key-3usl-0930', '3USL');
+
+    expect(client.cancelOrder).toHaveBeenCalledWith('5040047178');
+    expect(client.cancelOrder).toHaveBeenCalledWith('5040047179');
+    expect(client.listOrderActivities).not.toHaveBeenCalled();
+  });
+
+  it('does not cancel dormant legs the audit trail has not settled, on Status alone (#1215 ruling (a))', async () => {
+    const client = makeClient({
+      listOpenOrders: vi.fn().mockResolvedValue([dormantLeg(), targetLeg()]),
+      listOrderActivities: vi.fn().mockResolvedValue([activity()]),
+    });
+    const { adapter } = makeAdapter(client);
+
+    await adapter.cancel('key-3usl-0930', '3USL');
+
+    expect(client.cancelOrder).not.toHaveBeenCalled();
+  });
+
+  it('cancels dormant legs once the audit trail confirms the master died without filling', async () => {
+    const client = makeClient({
+      listOpenOrders: vi.fn().mockResolvedValue([dormantLeg(), targetLeg()]),
+      listOrderActivities: vi.fn().mockResolvedValue([activity({ Status: 'Expired' })]),
+    });
+    const { adapter } = makeAdapter(client);
+
+    await adapter.cancel('key-3usl-0930', '3USL');
+
+    expect(client.cancelOrder).toHaveBeenCalledWith('5040047178');
+    expect(client.cancelOrder).toHaveBeenCalledWith('5040047179');
   });
 
   it('throws on a transport failure instead of pretending the cancel landed', async () => {

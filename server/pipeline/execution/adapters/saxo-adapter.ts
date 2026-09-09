@@ -12,12 +12,15 @@
  * - The bracket is an IfDone master (Limit entry) with two related orders
  *   (`StopIfTraded` stop, `Limit` target). The venue holds the state machine
  *   and cancels the related orders with the master on an explicit cancel
- *   (VERIFIED, doc 43). What Saxo does to a `DayOrder` master's own related
- *   orders when it EXPIRES unfilled at session end, rather than being
- *   cancelled, is UNVERIFIED (#1215) — this adapter defends only the branch
- *   where Saxo leaves them `NotWorking` (parked, never activated): `findOpen`
- *   / `lookup` corroborate that read against the audit trail before
- *   cancelling (#1215 round 1), rather than journalling a phantom fill. A
+ *   (VERIFIED, doc 43). `cancel` leans on exactly that: it DELETEs the
+ *   master alone, so no leg is ever named from an open-orders snapshot the
+ *   entry can fill out of underneath it (#1216). What Saxo does to a
+ *   `DayOrder` master's own related orders when it EXPIRES unfilled at
+ *   session end, rather than being cancelled, is UNVERIFIED (#1215) — this
+ *   adapter defends only the branch where Saxo leaves them `NotWorking`
+ *   (parked, never activated): `findOpen` / `lookup` corroborate that read
+ *   against the audit trail before cancelling (#1215 round 1), and so does
+ *   `cancel` now, rather than journalling a phantom fill. A
  *   corroboration that never resolves (no terminal audit row ever lands) is
  *   paged, repeatedly, rather than deferred forever or cancelled without
  *   evidence (#1215 round 2 — `escalateIfStale`). If Saxo instead ACTIVATES
@@ -581,23 +584,110 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     return { client_order_id: clientOrderId, broker_order_ids: orderIdList(ids), order_state };
   }
 
-  async cancel(clientOrderId: string, _instrument: string): Promise<void> {
+  /**
+   * Cancels the bracket — the MASTER first and alone (#1216). The venue
+   * cancels an IfDone master's related orders with it (VERIFIED, doc 43:33),
+   * so no leg is ever named from the same open-orders snapshot the master
+   * was read in. That snapshot is exactly what the entry can fill out of
+   * between the read and the DELETE: the master leaves the open list, the
+   * legs activate into the only cover the new position has, and the previous
+   * version deleted them off the stale list and left it naked.
+   *
+   * `OrderNotFound` on the master's own DELETE is the tell that the snapshot
+   * went stale inside this call. Nothing of ours was destroyed by it, so the
+   * legs are re-derived from a FRESH read rather than the stale one. That a
+   * master which filled MILLISECONDS earlier answers `404 OrderNotFound`
+   * rather than some other refusal is UNVERIFIED — doc 43:33 measured that
+   * code for a repeat or unknown id, and nothing could fill on SIM. The
+   * unmeasured branch fails safe: every other error rethrows, so the caller
+   * refuses its flatten with the legs untouched.
+   */
+  async cancel(clientOrderId: string, instrument: string): Promise<void> {
     await this.call('cancel', async () => {
-      const owned = new Set([
-        clientOrderId,
-        legReference(clientOrderId, 'stop'),
-        legReference(clientOrderId, 'target'),
-      ]);
       const open = await this.client.listOpenOrders();
-      for (const order of open) {
-        if (order.ExternalReference === undefined || !owned.has(order.ExternalReference)) continue;
-        try {
-          await this.client.cancelOrder(order.OrderId);
-        } catch (cause) {
-          if (!isOrderNotFound(cause)) throw cause;
-        }
+      const master = open.find((order) => order.ExternalReference === clientOrderId);
+      if (master === undefined) {
+        await this.clearLegs(clientOrderId, legRows(open, clientOrderId), instrument, false);
+        return;
       }
+      try {
+        await this.client.cancelOrder(master.OrderId);
+        return;
+      } catch (cause) {
+        if (!isOrderNotFound(cause)) throw cause;
+      }
+      const fresh = await this.client.listOpenOrders();
+      await this.clearLegs(clientOrderId, legRows(fresh, clientOrderId), instrument, true);
     });
+  }
+
+  /**
+   * The leg half of `cancel()`, for a bracket with no master on the open
+   * list. `masterWasOpen` says the master WAS open when this same call
+   * started and its DELETE then answered `OrderNotFound` — so any evidence
+   * of a fill here means the entry filled INSIDE this call, and the caller's
+   * own view of what it holds predates it. Nothing reports what `ingestFills`
+   * has booked, so the adapter cannot know whether the caller's flatten
+   * covers that quantity; it refuses rather than guess. The throw leaves the
+   * legs exactly where they are (`executeExit` then refuses its flatten and
+   * #549 marks the lots it had already cancelled), where cancelling would
+   * strip the only cover off a position nobody is flattening.
+   *
+   * With no fill in evidence the legs are settled state and cancelling them
+   * is what the caller asked for: activated legs mean the entry filled long
+   * enough ago for the caller to hold the lot, and dormant ones are
+   * cancelled only on the audit-trail corroboration `lookup` requires
+   * (#1215 ruling (a)) — never on `Status` alone, which is the same
+   * UNVERIFIED read there. A deferred corroboration cancels nothing and is
+   * paged by `escalateIfStale` (ruling (c)) rather than refused: on the read
+   * this adapter defends, the legs it leaves are parked rather than on the
+   * book, so they cannot fire against a flatten the caller sends anyway,
+   * and refusing would abort the flatten of every OTHER lot in the caller's
+   * loop over a bracket whose entry never filled.
+   */
+  private async clearLegs(
+    clientOrderId: string,
+    legs: readonly SaxoOpenOrder[],
+    instrument: string,
+    masterWasOpen: boolean,
+  ): Promise<void> {
+    if (legs.length === 0) return;
+    if (legs.every(isNeverActivated)) {
+      const verdict = await this.corroborateDormantLegs(
+        clientOrderId,
+        this.activityLookbackMs,
+        instrument,
+      );
+      if (verdict.kind === 'defer') {
+        safeLog(this.logger, {
+          trace_id: 'saxo-cancel',
+          stage: 'execution',
+          level: 'warn',
+          event: 'saxo_cancel_deferred_dormant_legs',
+          message:
+            'Saxo cancel: the legs read NotWorking but the audit trail has not settled the ' +
+            'master, so they were left in place rather than cancelled on Status alone',
+          payload: { client_order_id: clientOrderId },
+        });
+        return;
+      }
+      if (verdict.kind === 'cancel') {
+        await this.cancelLegs(legs);
+        return;
+      }
+    }
+    if (masterWasOpen) {
+      // Carried as `venueMessage`, same as `adopt`'s refusal and for the same
+      // reason: `sanitizeBrokerError` keeps only the curated fields, and this
+      // text is composed from our own reference, never from a response body.
+      const reason =
+        `Saxo cancel '${clientOrderId}': the entry filled between this call's open-orders read ` +
+        "and the master's DELETE. Its protective legs are the only cover the new position has, " +
+        'and the caller sized its exit before the fill, so nothing was cancelled — the exit ' +
+        'must be re-derived from a fresh read.';
+      throw new SaxoBrokerProviderError(reason, undefined, 'EntryFilledDuringCancel', reason);
+    }
+    await this.cancelLegs(legs);
   }
 
   async getOpenPositions(): Promise<NormalizedPosition[]> {
@@ -799,11 +889,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     // standalone `DayOrder` `Limit`s always `Working` — see
     // `SaxoOpenOrderStatus`), so it is not proof; `lookup` corroborates it
     // against the audit trail before cancelling anything.
-    const legs = open.filter(
-      (order) =>
-        order.ExternalReference === legReference(externalReference, 'stop') ||
-        order.ExternalReference === legReference(externalReference, 'target'),
-    );
+    const legs = legRows(open, externalReference);
     const [first] = legs;
     if (first === undefined) return null;
     if (legs.every(isNeverActivated)) return { dormant: legs };
@@ -826,25 +912,24 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
   }
 
   /**
-   * Cancels a related-order pair `lookup` confirmed dormant against the
-   * audit trail (#1215 round 1) — legs from an entry that expired unfilled
-   * rather than a genuine fill. Every leg is attempted independently
-   * (#1215 round 2): the prior version stopped at the first non-
-   * `OrderNotFound` failure, so a sibling leg could be left un-attempted,
-   * not merely left cancelled while a later one fails. No rebuild is ever
-   * needed after a partial cancel here — these legs are dormant (no fill
-   * occurred, so no live position depends on them; `rearmProtectiveLegs`
-   * would throw for Saxo regardless) and `findOpen` re-derives the live leg
-   * set from the venue fresh on every poll, so a retry converges against
-   * whatever the venue actually still holds. `OrderNotFound` is swallowed
-   * exactly as `cancel()`'s own loop does: the venue may have already
-   * reaped one on its own, and that is success, not failure. The first
-   * other failure is thrown only once every leg has been attempted — this
-   * runs inside a caller already wrapped in `this.call`, so it surfaces as
-   * the caller's own sanitized `BrokerError` rather than a silently-kept
-   * doubt.
+   * Cancels a related-order pair with no master left to cancel it for us —
+   * one `lookup` or `cancel` has already decided may go (a dormant pair
+   * corroborated against the audit trail per #1215 round 1, or, from
+   * `cancel` alone, an activated pair whose lot the caller is flattening).
+   * Every leg is attempted independently (#1215 round 2): the prior version
+   * stopped at the first non-`OrderNotFound` failure, so a sibling leg could
+   * be left un-attempted, not merely left cancelled while a later one fails.
+   * No rebuild is ever needed after a partial cancel here — `findOpen`
+   * re-derives the live leg set from the venue fresh on every poll, so a
+   * retry converges against whatever the venue actually still holds, and
+   * `rearmProtectiveLegs` would throw for Saxo regardless. `OrderNotFound`
+   * is swallowed: the venue may have already reaped one on its own, and
+   * that is success, not failure. The first other failure is thrown only
+   * once every leg has been attempted — this runs inside a caller already
+   * wrapped in `this.call`, so it surfaces as the caller's own sanitized
+   * `BrokerError` rather than a silently-kept doubt.
    */
-  private async cancelDormantLegs(legs: readonly SaxoOpenOrder[]): Promise<void> {
+  private async cancelLegs(legs: readonly SaxoOpenOrder[]): Promise<void> {
     let hasFailure = false;
     let firstFailure: unknown;
     for (const leg of legs) {
@@ -967,30 +1052,50 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
       return open;
     }
 
-    const latest = await this.latestActivityFor(externalReference, lookbackMs);
-
     if (open === null) {
+      const latest = await this.latestActivityFor(externalReference, lookbackMs);
       if (latest === undefined) return null;
       this.clearDormantDefer(externalReference);
       return fromActivity(latest, externalReference);
     }
+
+    const verdict = await this.corroborateDormantLegs(externalReference, lookbackMs, instrument);
+    if (verdict.kind === 'filled')
+      return legsFilled(open.dormant, verdict.latest, externalReference);
+    if (verdict.kind === 'defer') return fromActivity(verdict.latest, externalReference);
+    await this.cancelLegs(open.dormant);
+    return verdict.latest === undefined ? null : fromActivity(verdict.latest, externalReference);
+  }
+
+  /**
+   * What the master's own audit-trail row says about a leg pair `findOpen`
+   * read as dormant — the corroboration `lookup`'s doc describes, shared
+   * with `cancel` so both reach the venue's verdict the same way and from
+   * one `listOrderActivities`. The defer bookkeeping lives here because it
+   * is per-reference, not per-caller: whichever path observes the wedge
+   * counts it, and every settled verdict clears it.
+   */
+  private async corroborateDormantLegs(
+    externalReference: string,
+    lookbackMs: number,
+    instrument: string | undefined,
+  ): Promise<DormantVerdict> {
+    const latest = await this.latestActivityFor(externalReference, lookbackMs);
     if (latest === undefined) {
-      await this.cancelDormantLegs(open.dormant);
       this.clearDormantDefer(externalReference);
-      return null;
+      return { kind: 'cancel', latest: undefined };
     }
     const state = activityState(latest);
     if (state === 'filled') {
       this.clearDormantDefer(externalReference);
-      return legsFilled(open.dormant, latest, externalReference);
+      return { kind: 'filled', latest };
     }
     if (DEAD_STATES.has(state)) {
-      await this.cancelDormantLegs(open.dormant);
       this.clearDormantDefer(externalReference);
-      return fromActivity(latest, externalReference);
+      return { kind: 'cancel', latest };
     }
     await this.escalateIfStale(externalReference, instrument);
-    return fromActivity(latest, externalReference);
+    return { kind: 'defer', latest };
   }
 
   private attribute(
@@ -1045,6 +1150,25 @@ interface DormantLegs {
 
 function isDormantLegs(result: LookedUpOrder | DormantLegs): result is DormantLegs {
   return 'dormant' in result;
+}
+
+/**
+ * `corroborateDormantLegs`' reading of the master's audit row: the entry
+ * filled, the master died without filling (`latest` absent when no row ties
+ * the legs to any known order at all), or the trail has not settled yet.
+ */
+type DormantVerdict =
+  | { kind: 'filled'; latest: SaxoOrderActivity }
+  | { kind: 'cancel'; latest: SaxoOrderActivity | undefined }
+  | { kind: 'defer'; latest: SaxoOrderActivity };
+
+/** The bracket's protective legs as their own `listOpenOrders` rows, master excluded. */
+function legRows(open: readonly SaxoOpenOrder[], externalReference: string): SaxoOpenOrder[] {
+  return open.filter(
+    (order) =>
+      order.ExternalReference === legReference(externalReference, 'stop') ||
+      order.ExternalReference === legReference(externalReference, 'target'),
+  );
 }
 
 /** `Status === 'NotWorking'` — UNVERIFIED as "never activated" (see `SaxoOpenOrderStatus`). */

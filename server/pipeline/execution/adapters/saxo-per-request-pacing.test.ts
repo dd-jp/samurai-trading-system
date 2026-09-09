@@ -2,7 +2,7 @@
  * #1222: `SaxoBrokerAdapter.call()` used to acquire one pacing token per
  * PUBLIC OPERATION, but `submitBracket`/`cancel` fan out to several upstream
  * Saxo HTTP requests each (`listOpenOrders` + `listOrderActivities` +
- * `placeOrder`; `listOpenOrders` + one `cancelOrder` per leg). Against a
+ * `placeOrder`; `listOpenOrders` + `cancelOrder`). Against a
  * bucket configured 2 capacity / 1 per second, that let real request bursts
  * outrun the pacing config.
  *
@@ -197,7 +197,12 @@ describe('Saxo per-request pacing (#1222)', () => {
     expect(acquireSpy.mock.calls.length).toBe(fetchMock.mock.calls.length);
   });
 
-  it('cancel of a three-leg bracket acquires one token per upstream request (listOpenOrders + 3x cancelOrder), not one per operation', async () => {
+  // Two requests, not the four this asserted before #1216: `cancel` now
+  // DELETEs the master alone and lets the venue cancel the related orders
+  // with it (doc 43:33), so a three-leg bracket costs `listOpenOrders` + one
+  // `cancelOrder`. Two still discriminates the per-operation mutant, which
+  // acquires one token however many requests `fn()` issues.
+  it('cancel of a three-leg bracket acquires one token per upstream request (listOpenOrders + cancelOrder on the master), not one per operation', async () => {
     const { adapter, fetchMock, acquireSpy } = makeWiredAdapter(BRACKET_OPEN_ORDERS);
 
     await adapter.getOrder('warmup', '3USL');
@@ -206,8 +211,8 @@ describe('Saxo per-request pacing (#1222)', () => {
 
     await adapter.cancel('key-3usl-0930', '3USL');
 
-    expect(fetchMock).toHaveBeenCalledTimes(4);
-    expect(acquireSpy).toHaveBeenCalledTimes(4);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(acquireSpy).toHaveBeenCalledTimes(2);
     expect(acquireSpy.mock.calls.length).toBe(fetchMock.mock.calls.length);
   });
 });
