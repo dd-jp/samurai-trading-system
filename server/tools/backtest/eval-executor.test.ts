@@ -1,4 +1,5 @@
 import type { ClosedTrade, Fill } from '../../shared/index.js';
+import { toBrokerFillId } from '../../shared/index.js';
 import { EvalExecutorImpl } from './eval-executor.js';
 import type { EvalOptions, ReplayTradeSource } from './eval-types.js';
 import { computeMetrics } from './metrics.js';
@@ -60,7 +61,7 @@ function tradeAt(idempotency_key: string, openDay: number, pnl: number): ClosedT
 function pricedFills(trade: ClosedTrade): Fill[] {
   return (['entry', 'exit'] as const).map((leg) => ({
     idempotency_key: trade.idempotency_key,
-    broker_fill_id: `${trade.idempotency_key}-${leg}`,
+    broker_fill_id: toBrokerFillId(`${trade.idempotency_key}-${leg}`),
     leg,
     price: trade.entry,
     qty: trade.filled_size,

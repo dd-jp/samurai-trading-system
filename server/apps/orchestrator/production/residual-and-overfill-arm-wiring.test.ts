@@ -69,7 +69,7 @@ import { DEFAULT_TRADER_CONFIG } from '../../../pipeline/trader/index.js';
 import { AlwaysOpenCalendar } from '../../../providers/market-data-service/index.js';
 import { PolymarketClient } from '../../../providers/market-intelligence/index.js';
 import type { Logger, OpenPosition } from '../../../shared/index.js';
-import { SimulatedClock, TokenBucket } from '../../../shared/index.js';
+import { SimulatedClock, TokenBucket, toBrokerFillId } from '../../../shared/index.js';
 import { recordingLogger } from '../../../shared/recording-logger.js';
 import { guardedStore, openSharedStore, type SharedStore } from '../../../shared/store/index.js';
 import { buildProductionOrchestrator, type ProductionConfig } from '../production.js';
@@ -203,7 +203,7 @@ class ScriptedLiveBroker implements BrokerAdapter {
 function fill(overrides: Partial<NormalizedFill> = {}): NormalizedFill {
   return {
     client_order_id: 'residual-live',
-    broker_fill_id: 'fill-1',
+    broker_fill_id: toBrokerFillId('fill-1'),
     leg: 'entry',
     price: 100,
     qty: 5,
@@ -404,9 +404,9 @@ describe('residual-exposure and flatten-overfill alerts name the arm that raised
     await seedPosition(store);
 
     const broker = new ScriptedLiveBroker([
-      fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100 }),
+      fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 10, price: 100 }),
       fill({
-        broker_fill_id: 'x1',
+        broker_fill_id: toBrokerFillId('x1'),
         leg: 'exit',
         qty: 4,
         price: 98,
@@ -460,10 +460,15 @@ describe('residual-exposure and flatten-overfill alerts name the arm that raised
     });
 
     const broker = new ScriptedLiveBroker([
-      fill({ client_order_id: 'overfill-live', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+      fill({
+        client_order_id: 'overfill-live',
+        broker_fill_id: toBrokerFillId('e1'),
+        leg: 'entry',
+        qty: 10,
+      }),
       fill({
         client_order_id: 'flatten-overfill-live',
-        broker_fill_id: 'f1',
+        broker_fill_id: toBrokerFillId('f1'),
         leg: 'exit',
         qty: 10,
         timestamp: new Date('2026-07-20T15:30:00Z'),

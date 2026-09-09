@@ -1,7 +1,7 @@
 import type { Bar } from '../../providers/market-data-service/index.js';
 import { AlwaysOpenCalendar } from '../../providers/market-data-service/index.js';
 import type { Fill } from '../../shared/index.js';
-import { SimulatedClock } from '../../shared/index.js';
+import { SimulatedClock, toBrokerFillId } from '../../shared/index.js';
 import {
   attributeRunCosts,
   attributeTradeCost,
@@ -149,7 +149,7 @@ function runReplay(costModel: CostModel): Promise<ReplayRunResult> {
 function fill(leg: Fill['leg'], qty: number, breakdown: Fill['cost_breakdown']): Fill {
   return {
     idempotency_key: 'lot-1',
-    broker_fill_id: `lot-1:${leg}`,
+    broker_fill_id: toBrokerFillId(`lot-1:${leg}`),
     leg,
     price: 100,
     qty,

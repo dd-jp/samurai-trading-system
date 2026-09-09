@@ -9,6 +9,7 @@
 import type { AnalystContribution } from '../../pipeline/debate-engine/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
 import type { ClosedTrade, DebateLog, Fill, OpenPosition } from '../../shared/index.js';
+import { toBrokerFillId } from '../../shared/index.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
 import { PIPELINE_LOOKBACK_MS, PIPELINE_MAX_LANES } from './pipeline-query.js';
 import { buildSnapshot } from './snapshot.js';
@@ -84,7 +85,7 @@ function makeClosedTrade(overrides: Partial<ClosedTrade> = {}): ClosedTrade {
 function makeFill(overrides: Partial<Fill> = {}): Fill {
   return {
     idempotency_key: 'AAPL-2026-07-19T09:30:00Z',
-    broker_fill_id: 'fill-1',
+    broker_fill_id: toBrokerFillId('fill-1'),
     leg: 'entry',
     price: 100,
     qty: 10,
@@ -631,7 +632,7 @@ describe('buildSnapshot', () => {
       const trade = makeClosedTrade({ idempotency_key: 'K3' });
       const fill = makeFill({
         idempotency_key: 'K3',
-        broker_fill_id: 'alpaca-fill-9',
+        broker_fill_id: toBrokerFillId('alpaca-fill-9'),
         leg: 'target',
         price: 110,
         qty: 10,

@@ -6,7 +6,8 @@
  * venue's timing.
  */
 import type { MarketDataService } from '../../providers/market-data-service/index.js';
-import type { Clock, Logger, OpenPosition } from '../../shared/index.js';
+import type { BrokerFillId, Clock, Logger, OpenPosition } from '../../shared/index.js';
+import { toBrokerFillId } from '../../shared/index.js';
 import { recordingLogger } from '../../shared/recording-logger.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import type { CostConfig, CostModel, MarketState } from '../../tools/backtest/index.js';
@@ -35,6 +36,7 @@ import type {
   NormalizedPosition,
   ResidualExposureAlert,
   ResidualExposureAlertChannel,
+  SharedStore,
 } from './types.js';
 
 const NOW = new Date('2026-07-20T16:00:00Z');
@@ -163,7 +165,7 @@ class ScriptedBroker implements BrokerAdapter {
 function fill(overrides: Partial<NormalizedFill> = {}): NormalizedFill {
   return {
     client_order_id: 'key-1',
-    broker_fill_id: 'fill-1',
+    broker_fill_id: toBrokerFillId('fill-1'),
     leg: 'entry',
     price: 100,
     qty: 5,
@@ -257,9 +259,9 @@ describe('ExecutionImpl.ingestFills', () => {
     const { store } = openTestExecutionStore();
     await seedPosition(store, { requested_size: 10 });
     const broker = new ScriptedBroker([
-      fill({ broker_fill_id: 'e1', leg: 'entry', qty: 4, price: 100 }),
+      fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 4, price: 100 }),
       fill({
-        broker_fill_id: 'e2',
+        broker_fill_id: toBrokerFillId('e2'),
         leg: 'entry',
         qty: 6,
         price: 101,
@@ -283,9 +285,9 @@ describe('ExecutionImpl.ingestFills', () => {
     await seedPosition(store, { requested_size: 10, side: 'buy', stop: 95 });
     const broker = new ScriptedBroker([
       // Entry fills in two tranches: 4 @ 100, then 6 @ 101 → avg 100.6.
-      fill({ broker_fill_id: 'e1', leg: 'entry', qty: 4, price: 100, fee: 1 }),
+      fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 4, price: 100, fee: 1 }),
       fill({
-        broker_fill_id: 'e2',
+        broker_fill_id: toBrokerFillId('e2'),
         leg: 'entry',
         qty: 6,
         price: 101,
@@ -294,7 +296,7 @@ describe('ExecutionImpl.ingestFills', () => {
       }),
       // Stop-out takes the whole 10 flat @ 95.
       fill({
-        broker_fill_id: 's1',
+        broker_fill_id: toBrokerFillId('s1'),
         leg: 'stop',
         qty: 10,
         price: 95,
@@ -336,9 +338,9 @@ describe('ExecutionImpl.ingestFills', () => {
     const { store } = openTestExecutionStore();
     await seedPosition(store, { requested_size: 10, side: 'sell', stop: 105 });
     const broker = new ScriptedBroker([
-      fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100, fee: 0 }),
+      fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 10, price: 100, fee: 0 }),
       fill({
-        broker_fill_id: 't1',
+        broker_fill_id: toBrokerFillId('t1'),
         leg: 'target',
         qty: 10,
         price: 90,
@@ -369,19 +371,31 @@ describe('ExecutionImpl.ingestFills', () => {
       requested_size: 5,
     });
     const broker = new ScriptedBroker([
-      fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100 }),
       fill({
         client_order_id: 'key-1',
-        broker_fill_id: 's1',
+        broker_fill_id: toBrokerFillId('e1'),
+        leg: 'entry',
+        qty: 10,
+        price: 100,
+      }),
+      fill({
+        client_order_id: 'key-1',
+        broker_fill_id: toBrokerFillId('s1'),
         leg: 'stop',
         qty: 10,
         price: 95,
         timestamp: new Date('2026-07-20T15:30:00Z'),
       }),
-      fill({ client_order_id: 'key-2', broker_fill_id: 'e2', leg: 'entry', qty: 5, price: 100 }),
       fill({
         client_order_id: 'key-2',
-        broker_fill_id: 't2',
+        broker_fill_id: toBrokerFillId('e2'),
+        leg: 'entry',
+        qty: 5,
+        price: 100,
+      }),
+      fill({
+        client_order_id: 'key-2',
+        broker_fill_id: toBrokerFillId('t2'),
         leg: 'target',
         qty: 5,
         price: 110,
@@ -405,7 +419,7 @@ describe('ExecutionImpl.ingestFills', () => {
     const { store } = openTestExecutionStore();
     await seedPosition(store, { requested_size: 10 });
     const broker = new ScriptedBroker([
-      fill({ broker_fill_id: 'e1', leg: 'entry', qty: 4, price: 100 }),
+      fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 4, price: 100 }),
     ]);
 
     await new ExecutionImpl(makeInput(broker, store)).ingestFills();
@@ -420,10 +434,10 @@ describe('ExecutionImpl.ingestFills', () => {
     const { store } = openTestExecutionStore();
     await seedPosition(store, { requested_size: 10 });
     const broker = new ScriptedBroker([
-      fill({ broker_fill_id: 'e1', leg: 'entry', qty: 4, price: 100 }),
+      fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 4, price: 100 }),
       // Dated one hour past NOW — the simulated future has not happened yet.
       fill({
-        broker_fill_id: 'e2',
+        broker_fill_id: toBrokerFillId('e2'),
         leg: 'entry',
         qty: 6,
         price: 101,
@@ -443,7 +457,7 @@ describe('ExecutionImpl.ingestFills', () => {
       const { store } = openTestExecutionStore();
       await seedPosition(store, { requested_size: 10, stop: 95, target: 110, side: 'buy' });
       const broker = new ScriptedBroker([
-        fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100 }),
+        fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 10, price: 100 }),
         // A partial exit fill — 4 of the 10 held closed, 6 left naked. This
         // file bypasses the flatten-routing layer (`redistributeFlattenFills`)
         // by scripting the fill directly under the lot's own key; the
@@ -451,7 +465,7 @@ describe('ExecutionImpl.ingestFills', () => {
         // "flatten fill attribution" suite, via the real
         // `SimulatedBrokerAdapter`.
         fill({
-          broker_fill_id: 'x1',
+          broker_fill_id: toBrokerFillId('x1'),
           leg: 'exit',
           qty: 4,
           price: 98,
@@ -481,9 +495,9 @@ describe('ExecutionImpl.ingestFills', () => {
       const { store } = openTestExecutionStore();
       await seedPosition(store, { requested_size: 10, stop: 95, target: 110, side: 'buy' });
       const broker = new ScriptedBroker([
-        fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100 }),
+        fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 10, price: 100 }),
         fill({
-          broker_fill_id: 'x1',
+          broker_fill_id: toBrokerFillId('x1'),
           leg: 'exit',
           qty: 10,
           price: 98,
@@ -501,9 +515,9 @@ describe('ExecutionImpl.ingestFills', () => {
       const { store } = openTestExecutionStore();
       await seedPosition(store, { requested_size: 10, stop: 95, target: 110, side: 'buy' });
       const broker = new ScriptedBroker([
-        fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100 }),
+        fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 10, price: 100 }),
         fill({
-          broker_fill_id: 'x1',
+          broker_fill_id: toBrokerFillId('x1'),
           leg: 'exit',
           qty: 4,
           price: 98,
@@ -561,9 +575,9 @@ describe('ExecutionImpl.ingestFills', () => {
       const { store } = openTestExecutionStore();
       await seedPosition(store, { requested_size: 10, stop: 95, target: 110, side: 'buy' });
       const broker = new ScriptedBroker([
-        fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100 }),
+        fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 10, price: 100 }),
         fill({
-          broker_fill_id: 'x1',
+          broker_fill_id: toBrokerFillId('x1'),
           leg: 'exit',
           qty: 4,
           price: 98,
@@ -606,9 +620,9 @@ describe('ExecutionImpl.ingestFills', () => {
       const { store } = openTestExecutionStore();
       await seedPosition(store, { requested_size: 10, stop: 95, target: 110, side: 'buy' });
       const broker = new ScriptedBroker([
-        fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100 }),
+        fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 10, price: 100 }),
         fill({
-          broker_fill_id: 'x1',
+          broker_fill_id: toBrokerFillId('x1'),
           leg: 'exit',
           qty: 4,
           price: 98,
@@ -682,8 +696,18 @@ describe('ExecutionImpl.ingestFills', () => {
         opened_at: new Date(OPENED_AT.getTime() + 1_000),
       });
       const entryOnly = new ScriptedBroker([
-        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 6 }),
-        fill({ client_order_id: 'key-2', broker_fill_id: 'e2', leg: 'entry', qty: 4 }),
+        fill({
+          client_order_id: 'key-1',
+          broker_fill_id: toBrokerFillId('e1'),
+          leg: 'entry',
+          qty: 6,
+        }),
+        fill({
+          client_order_id: 'key-2',
+          broker_fill_id: toBrokerFillId('e2'),
+          leg: 'entry',
+          qty: 4,
+        }),
       ]);
       await new ExecutionImpl(makeInput(entryOnly, store)).ingestFills();
       store.armed = true;
@@ -714,11 +738,21 @@ describe('ExecutionImpl.ingestFills', () => {
       // own this poll, which is what routes it through
       // `maybeRearmResidual`'s `known === undefined` branch.
       const withFlatten = new ScriptedBroker([
-        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 6 }),
-        fill({ client_order_id: 'key-2', broker_fill_id: 'e2', leg: 'entry', qty: 4 }),
+        fill({
+          client_order_id: 'key-1',
+          broker_fill_id: toBrokerFillId('e1'),
+          leg: 'entry',
+          qty: 6,
+        }),
+        fill({
+          client_order_id: 'key-2',
+          broker_fill_id: toBrokerFillId('e2'),
+          leg: 'entry',
+          qty: 4,
+        }),
         fill({
           client_order_id: 'flatten-1',
-          broker_fill_id: 'f1',
+          broker_fill_id: toBrokerFillId('f1'),
           leg: 'exit',
           qty: 6,
           timestamp: new Date('2026-07-20T15:30:00Z'),
@@ -781,8 +815,18 @@ describe('ExecutionImpl.ingestFills', () => {
         opened_at: new Date(OPENED_AT.getTime() + 1_000),
       });
       const entryOnly = new ScriptedBroker([
-        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 6 }),
-        fill({ client_order_id: 'key-2', broker_fill_id: 'e2', leg: 'entry', qty: 4 }),
+        fill({
+          client_order_id: 'key-1',
+          broker_fill_id: toBrokerFillId('e1'),
+          leg: 'entry',
+          qty: 6,
+        }),
+        fill({
+          client_order_id: 'key-2',
+          broker_fill_id: toBrokerFillId('e2'),
+          leg: 'entry',
+          qty: 4,
+        }),
       ]);
       await new ExecutionImpl(makeInput(entryOnly, store)).ingestFills();
       store.armed = true;
@@ -807,11 +851,21 @@ describe('ExecutionImpl.ingestFills', () => {
         modelled_cost_breakdown: null,
       });
       const withFlatten = new ScriptedBroker([
-        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 6 }),
-        fill({ client_order_id: 'key-2', broker_fill_id: 'e2', leg: 'entry', qty: 4 }),
+        fill({
+          client_order_id: 'key-1',
+          broker_fill_id: toBrokerFillId('e1'),
+          leg: 'entry',
+          qty: 6,
+        }),
+        fill({
+          client_order_id: 'key-2',
+          broker_fill_id: toBrokerFillId('e2'),
+          leg: 'entry',
+          qty: 4,
+        }),
         fill({
           client_order_id: 'flatten-1',
-          broker_fill_id: 'f1',
+          broker_fill_id: toBrokerFillId('f1'),
           leg: 'exit',
           qty: 6,
           timestamp: new Date('2026-07-20T15:30:00Z'),
@@ -871,8 +925,18 @@ describe('ExecutionImpl.ingestFills', () => {
         broker_order_ids: ['key-healthy:entry'],
       });
       const broker = new ScriptedBroker([
-        fill({ client_order_id: 'key-flaky', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
-        fill({ client_order_id: 'key-healthy', broker_fill_id: 'e2', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'key-flaky',
+          broker_fill_id: toBrokerFillId('e1'),
+          leg: 'entry',
+          qty: 10,
+        }),
+        fill({
+          client_order_id: 'key-healthy',
+          broker_fill_id: toBrokerFillId('e2'),
+          leg: 'entry',
+          qty: 10,
+        }),
       ]);
 
       // Visible, not swallowed: the poll still reports that it did not fully
@@ -910,7 +974,12 @@ describe('ExecutionImpl.ingestFills', () => {
 
       // Poll 1 persists the lot's entry fill, so it has a residual to re-arm.
       const entryOnly = new ScriptedBroker([
-        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'key-1',
+          broker_fill_id: toBrokerFillId('e1'),
+          leg: 'entry',
+          qty: 10,
+        }),
       ]);
       await new ExecutionImpl(makeInput(entryOnly, store)).ingestFills();
 
@@ -938,10 +1007,15 @@ describe('ExecutionImpl.ingestFills', () => {
       ).run('flatten-1');
 
       const withFlatten = new ScriptedBroker([
-        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'key-1',
+          broker_fill_id: toBrokerFillId('e1'),
+          leg: 'entry',
+          qty: 10,
+        }),
         fill({
           client_order_id: 'flatten-1',
-          broker_fill_id: 'f1',
+          broker_fill_id: toBrokerFillId('f1'),
           leg: 'exit',
           qty: 4,
           timestamp: new Date('2026-07-20T15:30:00Z'),
@@ -991,7 +1065,12 @@ describe('ExecutionImpl.ingestFills', () => {
         requested_size: 10,
       });
       const broker = new ScriptedBroker([
-        fill({ client_order_id: 'key-flaky', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'key-flaky',
+          broker_fill_id: toBrokerFillId('e1'),
+          leg: 'entry',
+          qty: 10,
+        }),
       ]);
 
       // `TypeError`, not the `Error` the other containment tests throw, so a
@@ -1016,7 +1095,12 @@ describe('ExecutionImpl.ingestFills', () => {
       await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10, stop: 95 });
 
       const entryOnly = new ScriptedBroker([
-        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'key-1',
+          broker_fill_id: toBrokerFillId('e1'),
+          leg: 'entry',
+          qty: 10,
+        }),
       ]);
       await new ExecutionImpl(makeInput(entryOnly, store)).ingestFills();
 
@@ -1044,10 +1128,15 @@ describe('ExecutionImpl.ingestFills', () => {
       ).run('flatten-1');
 
       const withFlatten = new ScriptedBroker([
-        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'key-1',
+          broker_fill_id: toBrokerFillId('e1'),
+          leg: 'entry',
+          qty: 10,
+        }),
         fill({
           client_order_id: 'flatten-1',
-          broker_fill_id: 'f1',
+          broker_fill_id: toBrokerFillId('f1'),
           leg: 'exit',
           qty: 4,
           timestamp: new Date('2026-07-20T15:30:00Z'),
@@ -1072,7 +1161,12 @@ describe('ExecutionImpl.ingestFills', () => {
       const { store } = openTestExecutionStore();
       await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10, stop: 95 });
       const entryOnly = new ScriptedBroker([
-        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'key-1',
+          broker_fill_id: toBrokerFillId('e1'),
+          leg: 'entry',
+          qty: 10,
+        }),
       ]);
       await new ExecutionImpl(makeInput(entryOnly, store)).ingestFills();
 
@@ -1093,10 +1187,15 @@ describe('ExecutionImpl.ingestFills', () => {
         modelled_cost_breakdown: null,
       });
       const withFlatten = new ScriptedBroker([
-        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'key-1',
+          broker_fill_id: toBrokerFillId('e1'),
+          leg: 'entry',
+          qty: 10,
+        }),
         fill({
           client_order_id: 'flatten-1',
-          broker_fill_id: 'f1',
+          broker_fill_id: toBrokerFillId('f1'),
           leg: 'exit',
           qty: 10,
           timestamp: new Date('2026-07-20T15:30:00Z'),
@@ -1124,7 +1223,12 @@ describe('ExecutionImpl.ingestFills', () => {
       const store = new FlakyAdvanceStore(db);
       await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10, stop: 95 });
       const entryOnly = new ScriptedBroker([
-        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'key-1',
+          broker_fill_id: toBrokerFillId('e1'),
+          leg: 'entry',
+          qty: 10,
+        }),
       ]);
       // `FlakyAdvanceStore.applyLotAdvance` throws for EVERY advance to
       // 'key-1', including the entry fill's own — so the entry has to be
@@ -1151,10 +1255,15 @@ describe('ExecutionImpl.ingestFills', () => {
         modelled_cost_breakdown: null,
       });
       const withFlatten = new ScriptedBroker([
-        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'key-1',
+          broker_fill_id: toBrokerFillId('e1'),
+          leg: 'entry',
+          qty: 10,
+        }),
         fill({
           client_order_id: 'flatten-1',
-          broker_fill_id: 'f1',
+          broker_fill_id: toBrokerFillId('f1'),
           leg: 'exit',
           qty: 10,
           timestamp: new Date('2026-07-20T15:30:00Z'),
@@ -1186,7 +1295,12 @@ describe('ExecutionImpl.ingestFills', () => {
       const store = new FlakyEntrySizesStore(db);
       await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10, stop: 95 });
       const entryOnly = new ScriptedBroker([
-        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'key-1',
+          broker_fill_id: toBrokerFillId('e1'),
+          leg: 'entry',
+          qty: 10,
+        }),
       ]);
       await new ExecutionImpl(makeInput(entryOnly, store)).ingestFills();
 
@@ -1213,10 +1327,15 @@ describe('ExecutionImpl.ingestFills', () => {
         'UPDATE flatten_submissions SET lot_held_quantities = NULL WHERE idempotency_key = ?',
       ).run('flatten-1');
       const withFlatten = new ScriptedBroker([
-        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'key-1',
+          broker_fill_id: toBrokerFillId('e1'),
+          leg: 'entry',
+          qty: 10,
+        }),
         fill({
           client_order_id: 'flatten-1',
-          broker_fill_id: 'f1',
+          broker_fill_id: toBrokerFillId('f1'),
           leg: 'exit',
           qty: 10,
           timestamp: new Date('2026-07-20T15:30:00Z'),
@@ -1261,10 +1380,15 @@ describe('ExecutionImpl.ingestFills', () => {
       // genuinely terminal — excluded from `getOpenPositions()` — before the
       // contrived flatten row below ever exists.
       const closeDirectly = new ScriptedBroker([
-        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
         fill({
           client_order_id: 'key-1',
-          broker_fill_id: 'x1',
+          broker_fill_id: toBrokerFillId('e1'),
+          leg: 'entry',
+          qty: 10,
+        }),
+        fill({
+          client_order_id: 'key-1',
+          broker_fill_id: toBrokerFillId('x1'),
           leg: 'exit',
           qty: 10,
           timestamp: new Date('2026-07-20T15:30:00Z'),
@@ -1307,7 +1431,7 @@ describe('ExecutionImpl.ingestFills', () => {
       const withOrphanFlatten = new ScriptedBroker([
         fill({
           client_order_id: 'flatten-orphan',
-          broker_fill_id: 'fo1',
+          broker_fill_id: toBrokerFillId('fo1'),
           leg: 'exit',
           qty: 10,
           timestamp: new Date('2026-07-20T16:00:00Z'),
@@ -1380,10 +1504,15 @@ describe('ExecutionImpl.ingestFills', () => {
         OPENED_AT,
       );
       const broker = new ScriptedBroker([
-        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'key-1',
+          broker_fill_id: toBrokerFillId('e1'),
+          leg: 'entry',
+          qty: 10,
+        }),
         fill({
           client_order_id: 'flatten-1',
-          broker_fill_id: 'f1',
+          broker_fill_id: toBrokerFillId('f1'),
           leg: 'exit',
           qty: 10,
           timestamp: new Date('2026-07-20T15:30:00Z'),
@@ -1433,7 +1562,12 @@ describe('ExecutionImpl.ingestFills', () => {
 
       // Poll 1 persists the lot's entry fill.
       const entryOnly = new ScriptedBroker([
-        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'key-1',
+          broker_fill_id: toBrokerFillId('e1'),
+          leg: 'entry',
+          qty: 10,
+        }),
       ]);
       await new ExecutionImpl(makeInput(entryOnly, store)).ingestFills();
 
@@ -1458,10 +1592,15 @@ describe('ExecutionImpl.ingestFills', () => {
       });
 
       const withFlatten = new ScriptedBroker([
-        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'key-1',
+          broker_fill_id: toBrokerFillId('e1'),
+          leg: 'entry',
+          qty: 10,
+        }),
         fill({
           client_order_id: 'flatten-1',
-          broker_fill_id: 'f1',
+          broker_fill_id: toBrokerFillId('f1'),
           leg: 'exit',
           qty: 10,
           timestamp: new Date('2026-07-20T15:30:00Z'),
@@ -1499,7 +1638,12 @@ describe('ExecutionImpl.ingestFills', () => {
       await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10, stop: 95 });
 
       const entryOnly = new ScriptedBroker([
-        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'key-1',
+          broker_fill_id: toBrokerFillId('e1'),
+          leg: 'entry',
+          qty: 10,
+        }),
       ]);
       await new ExecutionImpl(makeInput(entryOnly, store)).ingestFills();
 
@@ -1526,10 +1670,15 @@ describe('ExecutionImpl.ingestFills', () => {
       // which prunes after one poll) — the exact re-offer this test exists to
       // pin `ingestFills()` against.
       const withFlatten = new ScriptedBroker([
-        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'key-1',
+          broker_fill_id: toBrokerFillId('e1'),
+          leg: 'entry',
+          qty: 10,
+        }),
         fill({
           client_order_id: 'flatten-1',
-          broker_fill_id: 'f1',
+          broker_fill_id: toBrokerFillId('f1'),
           leg: 'exit',
           qty: 10,
           timestamp: new Date('2026-07-20T15:30:00Z'),
@@ -1561,7 +1710,12 @@ describe('ExecutionImpl.ingestFills', () => {
       await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10, stop: 95 });
 
       const entryOnly = new ScriptedBroker([
-        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'key-1',
+          broker_fill_id: toBrokerFillId('e1'),
+          leg: 'entry',
+          qty: 10,
+        }),
       ]);
       await new ExecutionImpl(makeInput(entryOnly, store)).ingestFills();
 
@@ -1583,10 +1737,15 @@ describe('ExecutionImpl.ingestFills', () => {
       });
 
       const withFlatten = new ScriptedBroker([
-        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'key-1',
+          broker_fill_id: toBrokerFillId('e1'),
+          leg: 'entry',
+          qty: 10,
+        }),
         fill({
           client_order_id: 'flatten-1',
-          broker_fill_id: 'f1',
+          broker_fill_id: toBrokerFillId('f1'),
           leg: 'exit',
           qty: 10,
           timestamp: new Date('2026-07-20T15:30:00Z'),
@@ -1606,7 +1765,12 @@ describe('ExecutionImpl.ingestFills', () => {
       await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10, stop: 95 });
 
       const entryOnly = new ScriptedBroker([
-        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'key-1',
+          broker_fill_id: toBrokerFillId('e1'),
+          leg: 'entry',
+          qty: 10,
+        }),
       ]);
       await new ExecutionImpl(makeInput(entryOnly, store)).ingestFills();
 
@@ -1627,10 +1791,15 @@ describe('ExecutionImpl.ingestFills', () => {
         modelled_cost_breakdown: null,
       });
       const withFlatten = new ScriptedBroker([
-        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'key-1',
+          broker_fill_id: toBrokerFillId('e1'),
+          leg: 'entry',
+          qty: 10,
+        }),
         fill({
           client_order_id: 'flatten-1',
-          broker_fill_id: 'f1',
+          broker_fill_id: toBrokerFillId('f1'),
           leg: 'exit',
           qty: 10,
           timestamp: new Date('2026-07-20T15:30:00Z'),
@@ -1675,9 +1844,9 @@ describe('ExecutionImpl.ingestFills', () => {
       const { store } = openTestExecutionStore();
       await seedPosition(store, { requested_size: 10, stop: 95, target: 110, side: 'buy' });
       const broker = new ScriptedBroker([
-        fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100 }),
+        fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 10, price: 100 }),
         fill({
-          broker_fill_id: 'x1',
+          broker_fill_id: toBrokerFillId('x1'),
           leg: 'exit',
           qty: 4,
           price: 98,
@@ -1734,7 +1903,7 @@ describe('ExecutionImpl.ingestFills — cumulative partial fills (#842)', () => 
     return fill({
       // ONE id for every observation — the ORDER id. That is the whole
       // problem: the id has no room to say "and now 50 more".
-      broker_fill_id: 'alpaca-entry-1',
+      broker_fill_id: toBrokerFillId('alpaca-entry-1'),
       leg: 'entry',
       qty: cumQty,
       price: cumAvgPrice,
@@ -1861,13 +2030,13 @@ describe('ExecutionImpl.ingestFills — cumulative partial fills (#842)', () => 
     // one row per fill EVENT, so "same id, bigger qty" would be a bug in the
     // feed, not an increment to book.
     const broker = new ScriptedBroker([
-      fill({ broker_fill_id: 'sim-1', leg: 'entry', qty: 50, price: 100, fee: 0 }),
+      fill({ broker_fill_id: toBrokerFillId('sim-1'), leg: 'entry', qty: 50, price: 100, fee: 0 }),
     ]);
     const execution = new ExecutionImpl(makeInput(broker, store));
     await execution.ingestFills();
     broker.replaceFills([
       fill({
-        broker_fill_id: 'sim-1',
+        broker_fill_id: toBrokerFillId('sim-1'),
         leg: 'entry',
         qty: 100,
         price: 100,
@@ -1893,7 +2062,7 @@ describe('ExecutionImpl.ingestFills — cumulative partial fills (#842)', () => 
     // half-open forever and never emits its ClosedTrade.
     broker.replaceFills([
       fill({
-        broker_fill_id: 'alpaca-stop-1',
+        broker_fill_id: toBrokerFillId('alpaca-stop-1'),
         leg: 'stop',
         qty: 40,
         price: 95,
@@ -1907,7 +2076,7 @@ describe('ExecutionImpl.ingestFills — cumulative partial fills (#842)', () => 
 
     broker.replaceFills([
       fill({
-        broker_fill_id: 'alpaca-stop-1',
+        broker_fill_id: toBrokerFillId('alpaca-stop-1'),
         leg: 'stop',
         qty: 100,
         price: 95,
@@ -1966,9 +2135,9 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
       modelled_cost_breakdown: modelledCostBreakdown,
     });
     const broker = new ScriptedBroker([
-      fill({ broker_fill_id: 'e1', leg: 'entry', qty: 4, price: 100 }),
+      fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 4, price: 100 }),
       fill({
-        broker_fill_id: 'e2',
+        broker_fill_id: toBrokerFillId('e2'),
         leg: 'entry',
         qty: 6,
         price: 101,
@@ -2001,7 +2170,9 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
     // No `modelled_cost_breakdown` override — a pre-migration-0037 row, or a
     // submit-time capture that failed.
     await seedPosition(store, { requested_size: 10 });
-    const broker = new ScriptedBroker([fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10 })]);
+    const broker = new ScriptedBroker([
+      fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 10 }),
+    ]);
 
     await new ExecutionImpl(makeInput(broker, store)).ingestFills();
 
@@ -2017,7 +2188,12 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
     });
     const ownBreakdown = { spread_cost: 9, commission: 9, slippage: 9, market_impact: 9 };
     const broker = new ScriptedBroker([
-      fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, cost_breakdown: ownBreakdown }),
+      fill({
+        broker_fill_id: toBrokerFillId('e1'),
+        leg: 'entry',
+        qty: 10,
+        cost_breakdown: ownBreakdown,
+      }),
     ]);
 
     await new ExecutionImpl(makeInput(broker, store)).ingestFills();
@@ -2035,9 +2211,9 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
       modelled_cost_breakdown: modelledCostBreakdown,
     });
     const broker = new ScriptedBroker([
-      fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+      fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 10 }),
       fill({
-        broker_fill_id: 's1',
+        broker_fill_id: toBrokerFillId('s1'),
         leg: 'stop',
         qty: 10,
         price: 95,
@@ -2065,8 +2241,18 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
       opened_at: new Date(OPENED_AT.getTime() + 1_000),
     });
     const entryOnly = new ScriptedBroker([
-      fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 6 }),
-      fill({ client_order_id: 'key-2', broker_fill_id: 'e2', leg: 'entry', qty: 4 }),
+      fill({
+        client_order_id: 'key-1',
+        broker_fill_id: toBrokerFillId('e1'),
+        leg: 'entry',
+        qty: 6,
+      }),
+      fill({
+        client_order_id: 'key-2',
+        broker_fill_id: toBrokerFillId('e2'),
+        leg: 'entry',
+        qty: 4,
+      }),
     ]);
     await new ExecutionImpl(makeInput(entryOnly, store)).ingestFills();
 
@@ -2091,13 +2277,23 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
     });
 
     const withFlatten = new ScriptedBroker([
-      fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 6 }),
-      fill({ client_order_id: 'key-2', broker_fill_id: 'e2', leg: 'entry', qty: 4 }),
+      fill({
+        client_order_id: 'key-1',
+        broker_fill_id: toBrokerFillId('e1'),
+        leg: 'entry',
+        qty: 6,
+      }),
+      fill({
+        client_order_id: 'key-2',
+        broker_fill_id: toBrokerFillId('e2'),
+        leg: 'entry',
+        qty: 4,
+      }),
       // A single raw exit fill covering the whole 10 — FIFO-allocates 6 to
       // key-1 and 4 to key-2 (`redistributeOneFlatten`).
       fill({
         client_order_id: 'flatten-1',
-        broker_fill_id: 'f1',
+        broker_fill_id: toBrokerFillId('f1'),
         leg: 'exit',
         qty: 10,
         timestamp: new Date('2026-07-20T15:30:00Z'),
@@ -2152,7 +2348,12 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
     const { store } = openTestExecutionStore();
     await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10 });
     const entryOnly = new ScriptedBroker([
-      fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+      fill({
+        client_order_id: 'key-1',
+        broker_fill_id: toBrokerFillId('e1'),
+        leg: 'entry',
+        qty: 10,
+      }),
     ]);
     await new ExecutionImpl(makeInput(entryOnly, store)).ingestFills();
 
@@ -2174,20 +2375,25 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
     });
 
     const withFlatten = new ScriptedBroker([
-      fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+      fill({
+        client_order_id: 'key-1',
+        broker_fill_id: toBrokerFillId('e1'),
+        leg: 'entry',
+        qty: 10,
+      }),
       // ONE flatten submission for 10, filled by the venue in two partial raw
       // fills of 5. Each is its own `rawFill`, so each ran its own
       // 100%-of-the-snapshot allocation under the old basis.
       fill({
         client_order_id: 'flatten-1',
-        broker_fill_id: 'f1',
+        broker_fill_id: toBrokerFillId('f1'),
         leg: 'exit',
         qty: 5,
         timestamp: new Date('2026-07-20T15:30:00Z'),
       }),
       fill({
         client_order_id: 'flatten-1',
-        broker_fill_id: 'f2',
+        broker_fill_id: toBrokerFillId('f2'),
         leg: 'exit',
         qty: 5,
         timestamp: new Date('2026-07-20T15:31:00Z'),
@@ -2225,9 +2431,9 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
     const { store } = openTestExecutionStore();
     await seedPosition(store, { requested_size: 10, side: 'buy', stop: 95 });
     const broker = new ScriptedBroker([
-      fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+      fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 10 }),
       fill({
-        broker_fill_id: 's1',
+        broker_fill_id: toBrokerFillId('s1'),
         leg: 'stop',
         qty: 10,
         price: 95,
@@ -2319,7 +2525,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
     });
     // Alpaca-shaped: commission-free, fee always 0 on the wire.
     const broker = new ScriptedBroker([
-      fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100, fee: 0 }),
+      fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 10, price: 100, fee: 0 }),
     ]);
 
     await new ExecutionImpl(makeInput(broker, store)).ingestFills();
@@ -2342,7 +2548,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
     const { store } = openTestExecutionStore();
     await seedPosition(store, { requested_size: 10 });
     const broker = new ScriptedBroker([
-      fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100, fee: 0 }),
+      fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 10, price: 100, fee: 0 }),
     ]);
 
     await new ExecutionImpl(makeInput(broker, store)).ingestFills();
@@ -2363,7 +2569,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
     const ownBreakdown = { spread_cost: 9, commission: 9, slippage: 9, market_impact: 9 };
     const broker = new ScriptedBroker([
       fill({
-        broker_fill_id: 'e1',
+        broker_fill_id: toBrokerFillId('e1'),
         leg: 'entry',
         qty: 10,
         price: 100,
@@ -2382,7 +2588,13 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
     const { store } = openTestExecutionStore();
     await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10 });
     const entryOnly = new ScriptedBroker([
-      fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10, fee: 0 }),
+      fill({
+        client_order_id: 'key-1',
+        broker_fill_id: toBrokerFillId('e1'),
+        leg: 'entry',
+        qty: 10,
+        fee: 0,
+      }),
     ]);
     await new ExecutionImpl(makeInput(entryOnly, store)).ingestFills();
 
@@ -2404,10 +2616,16 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
     });
 
     const withFlatten = new ScriptedBroker([
-      fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10, fee: 0 }),
+      fill({
+        client_order_id: 'key-1',
+        broker_fill_id: toBrokerFillId('e1'),
+        leg: 'entry',
+        qty: 10,
+        fee: 0,
+      }),
       fill({
         client_order_id: 'flatten-1',
-        broker_fill_id: 'f1',
+        broker_fill_id: toBrokerFillId('f1'),
         leg: 'exit',
         qty: 10,
         fee: 0,
@@ -2430,7 +2648,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
       modelled_cost_breakdown: modelledCostBreakdown,
     });
     const entryOnly = new ScriptedBroker([
-      fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100, fee: 0 }),
+      fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 10, price: 100, fee: 0 }),
     ]);
     await new ExecutionImpl(makeInput(entryOnly, store)).ingestFills();
 
@@ -2451,10 +2669,10 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
       modelled_cost_breakdown: modelledCostBreakdown,
     });
     const withFlatten = new ScriptedBroker([
-      fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100, fee: 0 }),
+      fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 10, price: 100, fee: 0 }),
       fill({
         client_order_id: 'flatten-1',
-        broker_fill_id: 'f1',
+        broker_fill_id: toBrokerFillId('f1'),
         leg: 'exit',
         qty: 10,
         price: 110,
@@ -2482,7 +2700,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
     });
     const broker = new ScriptedBroker([
       fill({
-        broker_fill_id: 'alpaca-entry-1',
+        broker_fill_id: toBrokerFillId('alpaca-entry-1'),
         leg: 'entry',
         qty: 50,
         price: 100,
@@ -2496,7 +2714,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
 
     broker.replaceFills([
       fill({
-        broker_fill_id: 'alpaca-entry-1',
+        broker_fill_id: toBrokerFillId('alpaca-entry-1'),
         leg: 'entry',
         qty: 100,
         price: 101,
@@ -2541,7 +2759,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
     });
     // Live arm: same instrument/size/price, Alpaca-shaped zero fee.
     const broker = new ScriptedBroker([
-      fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100, fee: 0 }),
+      fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 10, price: 100, fee: 0 }),
     ]);
     await new ExecutionImpl(makeInput(broker, store)).ingestFills();
 
@@ -2605,7 +2823,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
         new ScriptedBroker([
           fill({
             client_order_id: 'live-key',
-            broker_fill_id: 'live-e1',
+            broker_fill_id: toBrokerFillId('live-e1'),
             leg: 'entry',
             qty: 10,
             price: 100,
@@ -2636,7 +2854,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
         new ScriptedBroker([
           fill({
             client_order_id: 'live-key',
-            broker_fill_id: 'live-e1',
+            broker_fill_id: toBrokerFillId('live-e1'),
             leg: 'entry',
             qty: 10,
             price: 100,
@@ -2644,7 +2862,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
           }),
           fill({
             client_order_id: 'live-flatten-1',
-            broker_fill_id: 'live-f1',
+            broker_fill_id: toBrokerFillId('live-f1'),
             leg: 'exit',
             qty: 10,
             price: 110,
@@ -2665,7 +2883,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
         new ScriptedBroker([
           fill({
             client_order_id: 'control-key',
-            broker_fill_id: 'control-e1',
+            broker_fill_id: toBrokerFillId('control-e1'),
             leg: 'entry',
             qty: 10,
             price: 100,
@@ -2697,7 +2915,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
         new ScriptedBroker([
           fill({
             client_order_id: 'control-key',
-            broker_fill_id: 'control-e1',
+            broker_fill_id: toBrokerFillId('control-e1'),
             leg: 'entry',
             qty: 10,
             price: 100,
@@ -2706,7 +2924,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
           }),
           fill({
             client_order_id: 'control-flatten-1',
-            broker_fill_id: 'control-f1',
+            broker_fill_id: toBrokerFillId('control-f1'),
             leg: 'exit',
             qty: 10,
             price: 110,
@@ -2773,7 +2991,13 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
     await new ExecutionImpl(
       makeInput(
         new ScriptedBroker([
-          fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100, fee: venueFee }),
+          fill({
+            broker_fill_id: toBrokerFillId('e1'),
+            leg: 'entry',
+            qty: 10,
+            price: 100,
+            fee: venueFee,
+          }),
         ]),
         store,
       ),
@@ -2815,7 +3039,13 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
     await new ExecutionImpl(
       makeInput(
         new ScriptedBroker([
-          fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 110, fee: venueFee }),
+          fill({
+            broker_fill_id: toBrokerFillId('e1'),
+            leg: 'entry',
+            qty: 10,
+            price: 110,
+            fee: venueFee,
+          }),
         ]),
         store,
       ),
@@ -2831,7 +3061,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
     await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10 });
     const entryFill = fill({
       client_order_id: 'key-1',
-      broker_fill_id: 'e1',
+      broker_fill_id: toBrokerFillId('e1'),
       leg: 'entry',
       qty: 10,
       fee: 0,
@@ -2864,7 +3094,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
           entryFill,
           fill({
             client_order_id: 'flatten-1',
-            broker_fill_id: 'f1',
+            broker_fill_id: toBrokerFillId('f1'),
             leg: 'exit',
             qty: 10,
             fee: venueFee,
@@ -2899,7 +3129,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
     });
     const broker = new ScriptedBroker([
       fill({
-        broker_fill_id: 'cumulative-1',
+        broker_fill_id: toBrokerFillId('cumulative-1'),
         leg: 'entry',
         qty: 50,
         price: 100,
@@ -2913,7 +3143,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
 
     broker.replaceFills([
       fill({
-        broker_fill_id: 'cumulative-1',
+        broker_fill_id: toBrokerFillId('cumulative-1'),
         leg: 'entry',
         qty: 100,
         price: 100,
@@ -2942,7 +3172,13 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
   it('records modelled_cost_charged = false on a live round trip whose lot carries no modelled snapshot', async () => {
     const { store } = openTestExecutionStore();
     await seedPosition(store, { requested_size: 10, side: 'buy' });
-    const entryFill = fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100, fee: 0 });
+    const entryFill = fill({
+      broker_fill_id: toBrokerFillId('e1'),
+      leg: 'entry',
+      qty: 10,
+      price: 100,
+      fee: 0,
+    });
     await new ExecutionImpl(makeInput(new ScriptedBroker([entryFill]), store)).ingestFills();
 
     await store.writeAheadFlatten({
@@ -2967,7 +3203,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
           entryFill,
           fill({
             client_order_id: 'flatten-1',
-            broker_fill_id: 'f1',
+            broker_fill_id: toBrokerFillId('f1'),
             leg: 'exit',
             qty: 10,
             price: 110,
@@ -2991,7 +3227,13 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
       side: 'buy',
       modelled_cost_breakdown: modelledCostBreakdown,
     });
-    const entryFill = fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100, fee: 0 });
+    const entryFill = fill({
+      broker_fill_id: toBrokerFillId('e1'),
+      leg: 'entry',
+      qty: 10,
+      price: 100,
+      fee: 0,
+    });
     await new ExecutionImpl(makeInput(new ScriptedBroker([entryFill]), store)).ingestFills();
 
     await store.writeAheadFlatten({
@@ -3016,7 +3258,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
           entryFill,
           fill({
             client_order_id: 'flatten-1',
-            broker_fill_id: 'f1',
+            broker_fill_id: toBrokerFillId('f1'),
             leg: 'exit',
             qty: 10,
             price: 110,
@@ -3054,7 +3296,13 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
       side: 'buy',
       modelled_cost_breakdown: modelledCostBreakdown,
     });
-    const entryFill = fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100, fee: 0 });
+    const entryFill = fill({
+      broker_fill_id: toBrokerFillId('e1'),
+      leg: 'entry',
+      qty: 10,
+      price: 100,
+      fee: 0,
+    });
     await new ExecutionImpl(makeInput(new ScriptedBroker([entryFill]), store)).ingestFills();
 
     // The flatten carries NO snapshot, so its exit leg closes uncharged while
@@ -3081,7 +3329,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
           entryFill,
           fill({
             client_order_id: 'flatten-1',
-            broker_fill_id: 'f1',
+            broker_fill_id: toBrokerFillId('f1'),
             leg: 'exit',
             qty: 10,
             price: 110,
@@ -3134,9 +3382,9 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
     await new ExecutionImpl(
       makeInput(
         new ScriptedBroker([
-          fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100, fee: 0 }),
+          fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 10, price: 100, fee: 0 }),
           fill({
-            broker_fill_id: 's1',
+            broker_fill_id: toBrokerFillId('s1'),
             leg: 'stop',
             qty: 10,
             price: 95,
@@ -3179,7 +3427,7 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
       // on (ingest-fills.ts's #838 comment): dated at/after the lot's own
       // `opened_at`, which every real adapter and the fixed Simulated one
       // (#1087) both guarantee.
-      fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100 }),
+      fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 10, price: 100 }),
     ]);
     broker.scriptedOrder = {
       client_order_id: 'key-1',
@@ -3225,7 +3473,7 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
     await seedPosition(store, { requested_size: 10 });
     const broker = new ScriptedBroker([
       fill({
-        broker_fill_id: 'e1',
+        broker_fill_id: toBrokerFillId('e1'),
         leg: 'entry',
         qty: 10,
         price: 100,
@@ -3284,7 +3532,7 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
     await seedPosition(store, { requested_size: 10 });
     const broker = new ScriptedBroker([
       fill({
-        broker_fill_id: 'e1',
+        broker_fill_id: toBrokerFillId('e1'),
         leg: 'entry',
         qty: 10,
         price: 100,
@@ -3333,7 +3581,7 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
     const { store } = openTestExecutionStore();
     await seedPosition(store, { requested_size: 10 });
     const entryFill = fill({
-      broker_fill_id: 'e1',
+      broker_fill_id: toBrokerFillId('e1'),
       leg: 'entry',
       qty: 10,
       price: 100,
@@ -3395,7 +3643,7 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
     await seedPosition(store, { requested_size: 10 });
     const broker = new ScriptedBroker([
       fill({
-        broker_fill_id: 'e1',
+        broker_fill_id: toBrokerFillId('e1'),
         leg: 'entry',
         qty: 10,
         price: 100,
@@ -3443,7 +3691,7 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
     const { store } = openTestExecutionStore();
     await seedPosition(store, { requested_size: 10 });
     const entryFill = fill({
-      broker_fill_id: 'e1',
+      broker_fill_id: toBrokerFillId('e1'),
       leg: 'entry',
       qty: 10,
       price: 100,
@@ -3477,7 +3725,7 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
     // exact "new fill, but the lot is still wedged at zero" shape the review
     // named, not a genuine advance.
     const stopFill = fill({
-      broker_fill_id: 's1',
+      broker_fill_id: toBrokerFillId('s1'),
       leg: 'stop',
       qty: 10,
       price: 95,
@@ -3523,9 +3771,9 @@ describe('trace_id threading onto alerts (#1348)', () => {
     const { store } = openTestExecutionStore();
     await seedPosition(store, { requested_size: 10, stop: 95, target: 110 });
     const broker = new ScriptedBroker([
-      fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+      fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 10 }),
       fill({
-        broker_fill_id: 'x1',
+        broker_fill_id: toBrokerFillId('x1'),
         leg: 'exit',
         qty: 4,
         timestamp: new Date('2026-07-20T15:30:00Z'),
@@ -3571,10 +3819,15 @@ describe('trace_id threading onto alerts (#1348)', () => {
       modelled_cost_breakdown: null,
     });
     const withFlatten = new ScriptedBroker([
-      fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+      fill({
+        client_order_id: 'key-1',
+        broker_fill_id: toBrokerFillId('e1'),
+        leg: 'entry',
+        qty: 10,
+      }),
       fill({
         client_order_id: 'flatten-1',
-        broker_fill_id: 'f1',
+        broker_fill_id: toBrokerFillId('f1'),
         leg: 'exit',
         qty: 10,
         timestamp: new Date('2026-07-20T15:30:00Z'),
@@ -3597,5 +3850,46 @@ describe('trace_id threading onto alerts (#1348)', () => {
     expect(flattenOverfillAlerts.warnings.map((warning) => warning.trace_id)).toEqual([
       'control-arm-fill-sync',
     ]);
+  });
+});
+
+/**
+ * #1334: `broker_fill_id` is branded so a MISLABELED `hasFill` argument (both
+ * fields swapped under their correct key names) fails to compile, closing the
+ * gap #1328's single-object form left open — that change stopped a
+ * POSITIONAL swap but left two same-shaped `string` fields swappable by name.
+ * The `@ts-expect-error` and `expectTypeOf` lines are the assertions; the
+ * store calls exist only to give them a real call site. This block is the
+ * only guard against the store re-widening its parameter to `string`:
+ * `implements SharedStore` checks method parameters bivariantly and would
+ * not catch it.
+ */
+describe('hasFill argument branding (#1334)', () => {
+  it('pins the hasFill argument shape so a rename or widening fails loudly instead of leaving the @ts-expect-error below unused for the wrong reason', () => {
+    expectTypeOf<Parameters<SharedStore['hasFill']>[0]>().toEqualTypeOf<{
+      idempotency_key: string;
+      broker_fill_id: BrokerFillId;
+    }>();
+  });
+
+  it('rejects a mislabeled hasFill argument at compile time', () => {
+    const { store } = openTestExecutionStore();
+    const idempotency_key = 'lot-1';
+    const broker_fill_id = toBrokerFillId('venue-fill-1');
+
+    // Swapped under their own correct-looking key names. Both source values
+    // are `string`-typed before branding, so without the brand this object
+    // would satisfy `hasFill`'s parameter type and the swap would ship
+    // silently — exactly the hazard this ticket closes.
+    // @ts-expect-error — `broker_fill_id` must be a `BrokerFillId`, not the raw idempotency key.
+    void store.hasFill({ idempotency_key: broker_fill_id, broker_fill_id: idempotency_key });
+  });
+
+  it('accepts the correctly labeled argument', async () => {
+    const { store } = openTestExecutionStore();
+
+    await expect(
+      store.hasFill({ idempotency_key: 'lot-1', broker_fill_id: toBrokerFillId('venue-fill-1') }),
+    ).resolves.toBe(false);
   });
 });

@@ -7,6 +7,7 @@
  */
 import type { MarketDataService } from '../../providers/market-data-service/index.js';
 import type { Clock, Fill, Logger, OpenPosition } from '../../shared/index.js';
+import { toBrokerFillId } from '../../shared/index.js';
 import { recordingLogger } from '../../shared/recording-logger.js';
 import type { CostModel } from '../../tools/backtest/index.js';
 import { ExecutionImpl } from './execute.js';
@@ -63,7 +64,7 @@ async function seedPosition(
 async function seedPartiallyFlattenedFills(store: TestExecutionStore): Promise<void> {
   const entry: Fill = {
     idempotency_key: LOT,
-    broker_fill_id: 'e1',
+    broker_fill_id: toBrokerFillId('e1'),
     leg: 'entry',
     price: 100,
     qty: 10,
@@ -72,7 +73,7 @@ async function seedPartiallyFlattenedFills(store: TestExecutionStore): Promise<v
   };
   const exit: Fill = {
     idempotency_key: LOT,
-    broker_fill_id: 'x1',
+    broker_fill_id: toBrokerFillId('x1'),
     leg: 'exit',
     price: 104,
     qty: 4,
@@ -258,7 +259,7 @@ describe('residual-protection sweep (#549)', () => {
       fills: [
         {
           idempotency_key: LOT,
-          broker_fill_id: 'e1',
+          broker_fill_id: toBrokerFillId('e1'),
           leg: 'entry',
           price: 100,
           qty: 10,
@@ -274,7 +275,7 @@ describe('residual-protection sweep (#549)', () => {
         return [
           {
             client_order_id: LOT,
-            broker_fill_id: 'x1',
+            broker_fill_id: toBrokerFillId('x1'),
             leg: 'exit',
             price: 104,
             qty: 4,
@@ -318,7 +319,7 @@ describe('residual-protection sweep (#549)', () => {
         return [
           {
             client_order_id: LOT,
-            broker_fill_id: 'e1',
+            broker_fill_id: toBrokerFillId('e1'),
             leg: 'entry',
             price: 100,
             qty: 10,
@@ -327,7 +328,7 @@ describe('residual-protection sweep (#549)', () => {
           },
           {
             client_order_id: LOT,
-            broker_fill_id: 'x1',
+            broker_fill_id: toBrokerFillId('x1'),
             leg: 'exit',
             price: 104,
             qty: 4,
@@ -509,7 +510,7 @@ describe('residual-protection sweep (#549)', () => {
       fills: [
         {
           idempotency_key: LOT,
-          broker_fill_id: 'e1',
+          broker_fill_id: toBrokerFillId('e1'),
           leg: 'entry',
           price: 100,
           qty: 10,
@@ -518,7 +519,7 @@ describe('residual-protection sweep (#549)', () => {
         },
         {
           idempotency_key: LOT,
-          broker_fill_id: 'x1',
+          broker_fill_id: toBrokerFillId('x1'),
           leg: 'exit',
           price: 104,
           qty: 10,
@@ -577,7 +578,7 @@ describe('residual-protection sweep (#549)', () => {
           fills: [
             {
               idempotency_key: key,
-              broker_fill_id: `${key}-e1`,
+              broker_fill_id: toBrokerFillId(`${key}-e1`),
               leg: 'entry',
               price: 100,
               qty: 10,
@@ -586,7 +587,7 @@ describe('residual-protection sweep (#549)', () => {
             },
             {
               idempotency_key: key,
-              broker_fill_id: `${key}-x1`,
+              broker_fill_id: toBrokerFillId(`${key}-x1`),
               leg: 'exit',
               price: 104,
               qty: 4,
@@ -704,8 +705,18 @@ describe('residual-protection sweep (#549)', () => {
             timestamp: new Date('2026-08-07T15:00:00Z'),
           };
           return [
-            { ...base, broker_fill_id: 'e1', leg: 'entry', qty: Number.POSITIVE_INFINITY },
-            { ...base, broker_fill_id: 'x1', leg: 'exit', qty: Number.POSITIVE_INFINITY },
+            {
+              ...base,
+              broker_fill_id: toBrokerFillId('e1'),
+              leg: 'entry',
+              qty: Number.POSITIVE_INFINITY,
+            },
+            {
+              ...base,
+              broker_fill_id: toBrokerFillId('x1'),
+              leg: 'exit',
+              qty: Number.POSITIVE_INFINITY,
+            },
           ];
         }
       })(db);

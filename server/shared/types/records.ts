@@ -514,6 +514,20 @@ export interface OpenPosition {
 }
 
 /**
+ * Nominal wrapper on the venue-assigned fill id (#1334): both this and
+ * `idempotency_key` are plain `string`, so an object literal built with the
+ * two fields swapped still type-checked before this brand existed (#1328's
+ * gap). Produce one only via `toBrokerFillId` at the venue boundary; a raw
+ * `string` (such as an `idempotency_key`) placed in a `broker_fill_id` field
+ * fails to compile instead of silently swapping. Nothing lints a bare
+ * `as BrokerFillId`, so the guarantee holds only while that convention does.
+ */
+export type BrokerFillId = string & { readonly __brand: 'BrokerFillId' };
+export function toBrokerFillId(value: string): BrokerFillId {
+  return value as BrokerFillId;
+}
+
+/**
  * One row per (partial) fill — every fill logged (CONTEXT.md invariant #4),
  * so the accounting view can reconstruct realized PnL from the raw record
  * rather than trusting a running total. Written by #83's `ingestFills()`.
@@ -524,7 +538,7 @@ export interface OpenPosition {
  */
 export interface Fill {
   idempotency_key: string;
-  broker_fill_id: string;
+  broker_fill_id: BrokerFillId;
   leg: 'entry' | 'stop' | 'target' | 'exit';
   price: number;
   qty: number;

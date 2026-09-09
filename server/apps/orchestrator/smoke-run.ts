@@ -251,6 +251,7 @@ import {
   isThresholdBoundViolation,
   SimulatedClock,
   TokenBucket,
+  toBrokerFillId,
 } from '../../shared/index.js';
 import { openSharedStore, type SharedStore as SqliteHandle } from '../../shared/store/index.js';
 import type { CostConfig, CostModel } from '../../tools/backtest/index.js';
@@ -4070,7 +4071,7 @@ async function runFilledZeroSizeWedgeScenario(
       [
         {
           client_order_id: FILLED_ZERO_SIZE_WEDGE_LOT_KEY,
-          broker_fill_id: 'smoke-wedge-fill',
+          broker_fill_id: toBrokerFillId('smoke-wedge-fill'),
           leg: 'entry',
           qty: 10,
           price: 100,

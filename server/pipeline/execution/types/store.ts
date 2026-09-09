@@ -5,6 +5,7 @@
  */
 import type {
   AssetClass,
+  BrokerFillId,
   ClosedTrade,
   ExitReason,
   Fill,
@@ -60,12 +61,14 @@ export interface SharedStore {
    *
    * Takes one object rather than two positional strings (#1328): the old
    * two-argument form no longer compiles, closing a POSITIONAL swap at this
-   * call site. It does not close a MISLABELED object — both fields are
-   * still plain `string`, so `{ idempotency_key: broker_fill_id,
-   * broker_fill_id: idempotency_key }` still typechecks; that mistake is
-   * still caught by tests only, not the compiler.
+   * call site. A MISLABELED object is also closed now (#1334):
+   * `broker_fill_id` is branded `BrokerFillId`, so `{ idempotency_key:
+   * fill.broker_fill_id, broker_fill_id: position.idempotency_key }` no
+   * longer typechecks: `position.idempotency_key` is a plain `string` and
+   * cannot land in the branded field. The brand is one-sided, so the
+   * reverse leak (a `BrokerFillId` into `idempotency_key`) still compiles.
    */
-  hasFill(args: { idempotency_key: string; broker_fill_id: string }): Promise<boolean>;
+  hasFill(args: { idempotency_key: string; broker_fill_id: BrokerFillId }): Promise<boolean>;
   /**
    * Every `Fill` recorded against a lot, in ingestion order. Realized size,
    * avg price and PnL are reconstructed from these rather than a running

@@ -1,4 +1,5 @@
 import type { ClosedTrade, Fill } from '../../shared/index.js';
+import { toBrokerFillId } from '../../shared/index.js';
 import { assertCostModelPriced, toReturnSeries, toTradeSeries } from './trade-derivation.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -37,7 +38,7 @@ function closedTrade(overrides: Partial<ClosedTrade> = {}): ClosedTrade {
 function fill(overrides: Partial<Fill> = {}): Fill {
   return {
     idempotency_key: 'lot-1',
-    broker_fill_id: 'fill-1',
+    broker_fill_id: toBrokerFillId('fill-1'),
     leg: 'entry',
     price: 100,
     qty: 10,
@@ -193,7 +194,7 @@ describe('assertCostModelPriced', () => {
     // the repo runs exactOptionalPropertyTypes.
     const unpriced: Fill = {
       idempotency_key: 'lot-1',
-      broker_fill_id: 'fill-2',
+      broker_fill_id: toBrokerFillId('fill-2'),
       leg: 'exit',
       price: 110,
       qty: 10,

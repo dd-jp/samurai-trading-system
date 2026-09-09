@@ -84,6 +84,7 @@ import type {
   OrderState,
   TradingArm,
 } from '../../shared/index.js';
+import { toBrokerFillId } from '../../shared/index.js';
 import {
   type SharedStore as Db,
   fromStoredTimestamp,
@@ -439,17 +440,18 @@ export class SqliteExecutionStore implements SharedStore {
    *
    * Takes one object rather than two positional strings (#1328): the old
    * two-argument form no longer compiles, closing a POSITIONAL swap. A
-   * mislabeled object (both fields swapped under the correct key names)
-   * still typechecks — both are plain `string` — and stays a test-caught
-   * mistake, not a compile-caught one.
+   * mislabeled object (both fields swapped under the correct key names) is
+   * now also caught at compile time (#1334): `broker_fill_id` is branded
+   * `BrokerFillId`, so a plain-`string` `idempotency_key` cannot land in the
+   * `broker_fill_id` field. Declared via `SharedStore['hasFill']`'s own
+   * parameter type rather than restated inline: `implements` checks method
+   * parameters bivariantly, so an inline `string` here would still compile
+   * and silently drop the brand.
    */
   async hasFill({
     idempotency_key,
     broker_fill_id,
-  }: {
-    idempotency_key: string;
-    broker_fill_id: string;
-  }): Promise<boolean> {
+  }: Parameters<SharedStore['hasFill']>[0]): Promise<boolean> {
     const row = this.db
       .prepare('SELECT 1 FROM fills WHERE idempotency_key = ? AND broker_fill_id = ?')
       .get(idempotency_key, broker_fill_id);
@@ -1218,7 +1220,7 @@ export function fromPositionRow(row: OpenPositionRow): OpenPosition {
 function fromFillRow(row: FillRow): Fill {
   return {
     idempotency_key: row.idempotency_key,
-    broker_fill_id: row.broker_fill_id,
+    broker_fill_id: toBrokerFillId(row.broker_fill_id),
     leg: row.leg,
     price: row.price,
     qty: row.qty,

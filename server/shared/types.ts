@@ -23,6 +23,7 @@ export type {
   TradingArm,
 } from './types/primitives.js';
 export type {
+  BrokerFillId,
   ClosedTrade,
   DebateLog,
   DebateTermination,
@@ -37,3 +38,4 @@ export type {
   SetupVector,
   VerdictLog,
 } from './types/records.js';
+export { toBrokerFillId } from './types/records.js';
