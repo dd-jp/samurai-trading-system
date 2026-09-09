@@ -276,6 +276,28 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    */
   private readonly flattens = new Map<string, string>();
   /**
+   * client_order_id (the EXIT's own idempotency_key `submitFlatten`'s caller
+   * passes — NOT the lot's) -> a local clock read taken before
+   * `submitFlatten`'s POST. #1415: the flatten-sweep counterpart of
+   * `bracketSubmittedAt` above. The two cannot share one map the way
+   * `rearmedLegs` shares `bracketSubmittedAt`'s key space (#1123) — a
+   * flatten's client_order_id is a different value from its lot's, minted by
+   * `buildExitIntent` via `computeIdempotencyKey` (trader/decide.ts);
+   * `executeExit` only ever derives a `:retry-N` suffix from it
+   * (`resolveExitRetryKey`, execute.ts), it does not mint the base key.
+   * Same first-write-wins population (a retried/idempotent resubmission
+   * under the same client_order_id must not move the bound past a fill the
+   * true first submission already covers) and the same accepted gap:
+   * `resumeFlatten` (below) has no same-process clock read to offer, so a
+   * flatten resumed after a restart has no entry here and stays unaudited —
+   * the same asymmetry `bracketSubmittedAt`'s doc describes for a
+   * `getOrder`-restored bracket. Pruned alongside `flattens` (below) — once
+   * `flattens` drops a client_order_id on a terminal fill, this bound can
+   * never be read again, so keeping it around past that point would only be
+   * a leak.
+   */
+  private readonly flattenSubmittedAt = new Map<string, Date>();
+  /**
    * lot's `idempotency_key` -> the re-armed OCO's Alpaca order id (#525).
    * Keyed by the LOT, not by the OCO's own wire `client_order_id`
    * (`${lotKey}:rearm`) — `fetchNewFills`'s rearm sweep below tags fills
@@ -424,6 +446,8 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     size: number,
     clientOrderId: string,
   ): Promise<BrokerAck> {
+    // Read before the POST, not after — see `flattenSubmittedAt`'s doc comment.
+    const submittedAt = this.clock.now();
     const response = await this.call('submitFlatten', () =>
       this.input.client.submitMarketOrder({
         symbol: toAlpacaSymbol(instrument),
@@ -435,6 +459,10 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     );
 
     this.flattens.set(clientOrderId, response.id);
+    // First-write-wins — see `flattenSubmittedAt`'s doc comment.
+    if (!this.flattenSubmittedAt.has(clientOrderId)) {
+      this.flattenSubmittedAt.set(clientOrderId, submittedAt);
+    }
 
     return {
       client_order_id: clientOrderId,
@@ -742,6 +770,13 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * `submitFlatten`'s own reason: a flatten has no legs to arm or resize,
    * and half-formed bracket-shaped state for one is the wrong shape
    * (migration 0019's comment).
+   *
+   * #1415: deliberately does NOT populate `flattenSubmittedAt` — this
+   * process never submitted the flatten, so it has no same-process clock
+   * read to offer, the same reason `getOrder`'s bracket-restore path leaves
+   * `bracketSubmittedAt` empty for a restored bracket. A flatten resumed
+   * this way stays unaudited by `auditSinceFloorInvariant` rather than
+   * clamped or estimated.
    */
   async resumeFlatten(clientOrderId: string, _instrument: string): Promise<NormalizedOrder | null> {
     const order = await this.call('resumeFlatten', () =>
@@ -996,25 +1031,30 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * response to a real violation is to fix the source, the way #1096 fixed
    * `SimulatedBrokerAdapter`, not to paper over it here.
    *
-   * Compares against `bracketSubmittedAt`, NOT the global `since` floor: the
-   * FILL SWEEP never prunes `brackets` (only `cancel()` does, on a confirmed
-   * cancel), so an old, long-closed-but-not-cancelled bracket is re-polled
-   * every sweep and would trip `filledAt < since` constantly and harmlessly
-   * once `since` has moved on to newer lots — noise, not signal.
-   * `bracketSubmittedAt` is a per-bracket, locally-anchored bound instead:
-   * silent for a restored (post-restart) bracket, which has no entry in the
-   * map and no local proxy for its `opened_at` to compare against.
+   * Compares against a per-key submission-time bound, NOT the global `since`
+   * floor: the FILL SWEEP never prunes `brackets` (only `cancel()` does, on a
+   * confirmed cancel), so an old, long-closed-but-not-cancelled bracket is
+   * re-polled every sweep and would trip `filledAt < since` constantly and
+   * harmlessly once `since` has moved on to newer lots — noise, not signal.
+   * The bound is per-key, locally-anchored instead: silent for a restored
+   * (post-restart) bracket or flatten, which has no entry in either map and
+   * no local proxy for its `opened_at` to compare against.
    *
-   * `submittedAt` is this host's own clock; `filled_at` is Alpaca's server
-   * clock. The first thing to check on seeing this warning is host clock
-   * skew (NTP drift), not the venue — `bracketSubmittedAt`'s doc above names
-   * the OTHER source of a benign trip: the `[opened_at, submittedAt)` gap
-   * this bound cannot see into. Throttled to first sighting per lot+LEG via
-   * `warnedSinceFloorViolations` (keyed `clientOrderId:leg`, not
-   * `clientOrderId` alone — see that field's doc for why a lot-only key is
-   * unsafe here) — the fill sweep never prunes `brackets`, so a genuinely
-   * violating bracket is re-polled, and would otherwise warn every sweep,
-   * for the life of the process (or until `cancel()` removes it).
+   * `submittedAt` is the CALLER's own clock (this host's), never looked up
+   * here — #1415 split it out of the method so the bracket/re-arm sweeps
+   * (keyed by the lot's own `idempotency_key`, `bracketSubmittedAt`) and the
+   * flatten sweep (keyed by the exit's own, `flattenSubmittedAt`) can share
+   * one check and one throttle set over two disjoint key spaces. `filled_at`
+   * is Alpaca's server clock. The first thing to check on seeing this
+   * warning is host clock skew (NTP drift), not the venue —
+   * `bracketSubmittedAt`'s doc names the OTHER source of a benign trip: the
+   * `[opened_at, submittedAt)` gap this bound cannot see into. Throttled to
+   * first sighting per lot+LEG via `warnedSinceFloorViolations` (keyed
+   * `clientOrderId:leg`, not `clientOrderId` alone — see that field's doc for
+   * why a lot-only key is unsafe here) — the fill sweep never prunes
+   * `brackets`, so a genuinely violating bracket is re-polled, and would
+   * otherwise warn every sweep, for the life of the process (or until
+   * `cancel()` removes it).
    */
   private auditSinceFloorInvariant(
     order: AlpacaOrder | AlpacaOrderLeg,
@@ -1022,11 +1062,11 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     clientOrderId: string,
     instrument: string,
     observedAt: Date,
+    submittedAt: Date | undefined,
   ): void {
     const filledQty = Number.parseFloat(order.filled_qty);
     if (!Number.isFinite(filledQty) || filledQty <= 0) return;
 
-    const submittedAt = this.bracketSubmittedAt.get(clientOrderId);
     if (submittedAt === undefined) return;
 
     const filledAt = resolveFilledAt(order, observedAt);
@@ -1046,7 +1086,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       event: 'alpaca_fill_predates_bracket_submission',
       level: 'warn',
       message:
-        '#1123: Alpaca fill dated before its own bracket was submitted — the ingest-fills since-floor invariant may be violated',
+        '#1123: Alpaca fill dated before its own order was submitted — the ingest-fills since-floor invariant may be violated',
       payload: {
         client_order_id: clientOrderId,
         broker_fill_id: order.id,
@@ -1119,10 +1159,25 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         );
 
         const instrument = fromAlpacaSymbol(symbolOf(entry));
-        this.auditSinceFloorInvariant(entry, 'entry', clientOrderId, instrument, observedAt);
+        const submittedAt = this.bracketSubmittedAt.get(clientOrderId);
+        this.auditSinceFloorInvariant(
+          entry,
+          'entry',
+          clientOrderId,
+          instrument,
+          observedAt,
+          submittedAt,
+        );
         collectFill(entry, 'entry', clientOrderId, instrument, since, observedAt, fills);
         for (const leg of entry.legs ?? []) {
-          this.auditSinceFloorInvariant(leg, legName(leg), clientOrderId, instrument, observedAt);
+          this.auditSinceFloorInvariant(
+            leg,
+            legName(leg),
+            clientOrderId,
+            instrument,
+            observedAt,
+            submittedAt,
+          );
           collectFill(leg, legName(leg), clientOrderId, instrument, since, observedAt, fills);
         }
       } catch (error) {
@@ -1239,17 +1294,22 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     for (const [clientOrderId, orderId] of [...this.flattens]) {
       try {
         const order = await this.call('fetchNewFills', () => this.input.client.getOrder(orderId));
-        collectFill(
+        const instrument = fromAlpacaSymbol(symbolOf(order));
+        // #1415: `flattens` is keyed by the EXIT's own idempotency_key, a
+        // different key space from `bracketSubmittedAt` — see
+        // `flattenSubmittedAt`'s doc for why this needs its own map.
+        this.auditSinceFloorInvariant(
           order,
           'exit',
           clientOrderId,
-          fromAlpacaSymbol(symbolOf(order)),
-          since,
+          instrument,
           observedAt,
-          fills,
+          this.flattenSubmittedAt.get(clientOrderId),
         );
+        collectFill(order, 'exit', clientOrderId, instrument, since, observedAt, fills);
         if (mapOrderState(order.status) !== 'submitted') {
           this.flattens.delete(clientOrderId);
+          this.flattenSubmittedAt.delete(clientOrderId);
         }
       } catch (error) {
         // Same isolation, same UnpricedFillError bookkeeping, and (#524
@@ -1303,10 +1363,18 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         // (see its doc above) — the same key space `bracketSubmittedAt` uses,
         // so the original bracket's submission-time bound still applies here
         // with no new map.
-        this.auditSinceFloorInvariant(order, 'target', lotKey, instrument, observedAt);
+        const submittedAt = this.bracketSubmittedAt.get(lotKey);
+        this.auditSinceFloorInvariant(order, 'target', lotKey, instrument, observedAt, submittedAt);
         collectFill(order, 'target', lotKey, instrument, since, observedAt, fills);
         for (const leg of order.legs ?? []) {
-          this.auditSinceFloorInvariant(leg, legName(leg), lotKey, instrument, observedAt);
+          this.auditSinceFloorInvariant(
+            leg,
+            legName(leg),
+            lotKey,
+            instrument,
+            observedAt,
+            submittedAt,
+          );
           collectFill(leg, legName(leg), lotKey, instrument, since, observedAt, fills);
         }
         if (mapOrderState(order.status) !== 'submitted') {

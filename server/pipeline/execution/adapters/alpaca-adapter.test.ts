@@ -1230,9 +1230,9 @@ describe('AlpacaBrokerAdapter since-floor invariant audit (#1123)', () => {
   // #1123 round-1 review: `rearmedLegs` (the re-arm sweep) is keyed by the
   // LOT's own `idempotency_key` — the SAME key space `bracketSubmittedAt`
   // uses — so the original bracket's submission-time bound applies here too,
-  // with no new map. The flatten sweep is NOT covered: `flattens` is keyed by
-  // the EXIT's own idempotency_key, a different value, so auditing it needs
-  // its own bound (tracked as a follow-up, out of scope here).
+  // with no new map. The flatten sweep needed its own bound instead
+  // (`flattens` is keyed by the EXIT's own idempotency_key, a different
+  // value) — covered separately by #1415, below.
   //
   // #1123 round-2 review (F1): this test ALSO makes the ORIGINAL bracket
   // entry a violation, not just the re-armed leg — the exact scenario the
@@ -1411,6 +1411,162 @@ describe('AlpacaBrokerAdapter since-floor invariant audit (#1123)', () => {
     });
 
     await recoveredAdapter.fetchNewFills(new Date(0));
+
+    expect(logger.entries).toEqual([]);
+  });
+});
+
+/**
+ * #1415: the since-floor invariant audit (#1123, above) extended to the
+ * flatten sweep. `flattens` is keyed by the EXIT's own idempotency_key, a
+ * DIFFERENT value from `bracketSubmittedAt`'s key space (the lot's own),
+ * which is why `rearmedLegs` could reuse that map (same key space, #1123)
+ * but `flattens` needs its own — `flattenSubmittedAt`, populated the same
+ * way (`submitFlatten`'s own clock read, first-write-wins).
+ */
+describe('AlpacaBrokerAdapter flatten sweep since-floor invariant audit (#1415)', () => {
+  const T0 = new Date('2026-07-20T16:00:00Z');
+
+  it('warns when a flatten fill is dated before its own submission', async () => {
+    const clock = new FixedClock(T0);
+    const logger = recordingLogger();
+    const client = makeClient({
+      submitMarketOrder: vi.fn().mockResolvedValue({ ...acceptedOrder(), id: 'flatten-1' }),
+      getOrder: vi.fn().mockResolvedValue(
+        acceptedOrder({
+          id: 'flatten-1',
+          status: 'filled',
+          filled_qty: '12',
+          filled_avg_price: '99.50',
+          // Earlier than T0, the clock read at submission time below.
+          filled_at: '2026-07-20T15:59:00Z',
+          legs: [],
+        }),
+      ),
+    });
+    const adapter = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger,
+      clock,
+    });
+    await adapter.submitFlatten('AAPL', 'sell', 12, 'flatten-key');
+
+    const fills = await adapter.fetchNewFills(new Date(0));
+
+    // Flagged, not clamped: the fill is still booked at its reported date.
+    expect(fills).toHaveLength(1);
+    expect(logger.entries).toEqual([
+      expect.objectContaining({
+        level: 'warn',
+        event: 'alpaca_fill_predates_bracket_submission',
+        payload: expect.objectContaining({
+          client_order_id: 'flatten-key',
+          leg: 'exit',
+          filled_at: '2026-07-20T15:59:00.000Z',
+          submitted_at: T0.toISOString(),
+        }),
+      }),
+    ]);
+  });
+
+  it('warns only on first sighting of a genuine violation, not every sweep', async () => {
+    const clock = new FixedClock(T0);
+    const logger = recordingLogger();
+    const client = makeClient({
+      submitMarketOrder: vi.fn().mockResolvedValue({ ...acceptedOrder(), id: 'flatten-1' }),
+      getOrder: vi.fn().mockResolvedValue(
+        acceptedOrder({
+          id: 'flatten-1',
+          status: 'accepted', // stays 'submitted' so `flattens` is never pruned
+          filled_qty: '12',
+          filled_avg_price: '99.50',
+          filled_at: '2026-07-20T15:59:00Z',
+          legs: [],
+        }),
+      ),
+    });
+    const adapter = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger,
+      clock,
+    });
+    await adapter.submitFlatten('AAPL', 'sell', 12, 'flatten-key');
+
+    await adapter.fetchNewFills(new Date(0));
+    await adapter.fetchNewFills(new Date(0));
+    await adapter.fetchNewFills(new Date(0));
+
+    expect(logger.entries).toHaveLength(1);
+  });
+
+  it('stays quiet for a fill dated after its flatten was submitted', async () => {
+    const clock = new FixedClock(T0);
+    const logger = recordingLogger();
+    const client = makeClient({
+      submitMarketOrder: vi.fn().mockResolvedValue({ ...acceptedOrder(), id: 'flatten-1' }),
+      getOrder: vi.fn().mockResolvedValue(
+        acceptedOrder({
+          id: 'flatten-1',
+          status: 'filled',
+          filled_qty: '12',
+          filled_avg_price: '99.50',
+          filled_at: '2026-07-20T16:00:01Z',
+          legs: [],
+        }),
+      ),
+    });
+    const adapter = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger,
+      clock,
+    });
+    await adapter.submitFlatten('AAPL', 'sell', 12, 'flatten-key');
+
+    await adapter.fetchNewFills(new Date(0));
+
+    expect(logger.entries).toEqual([]);
+  });
+
+  // #1415: `resumeFlatten` has no same-process clock read to offer — same
+  // reason `getOrder`'s bracket-restore path leaves `bracketSubmittedAt`
+  // empty for a restored bracket (#1123). A flatten resumed after a restart
+  // therefore stays unaudited rather than clamped or estimated.
+  it('does not audit a flatten resumed after a restart, which has no local submission-time proxy', async () => {
+    const clock = new FixedClock(T0);
+    const violatingOrder = acceptedOrder({
+      id: 'flatten-1',
+      status: 'filled',
+      filled_qty: '12',
+      filled_avg_price: '99.50',
+      // Earlier than T0 — would warn if this flatten had a local proxy.
+      filled_at: '2026-07-20T15:00:00Z',
+      legs: [],
+    });
+    const logger = recordingLogger();
+    const client = makeClient({
+      getOrderByClientOrderId: vi.fn().mockResolvedValue(violatingOrder),
+      getOrder: vi.fn().mockResolvedValue(violatingOrder),
+    });
+    const adapter = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger,
+      clock,
+    });
+
+    await adapter.resumeFlatten('flatten-key', 'AAPL');
+    await adapter.fetchNewFills(new Date(0));
 
     expect(logger.entries).toEqual([]);
   });
