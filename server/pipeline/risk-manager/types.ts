@@ -320,11 +320,27 @@ export interface RiskConfig {
    * (risk-manager/index.ts) refuses to arm — a distinct `currency_mismatch`
    * `binding_constraint`, not the `equity_exceeds_book` refusal below — for
    * as long as this is `false`/absent, regardless of what `portfolio.equity`
-   * reads. No caller sets it today; nothing in this codebase can verify a
-   * same-currency read yet (no FX-rate provider, no GBP-native broker
-   * adapter — #946 is the eventual same-currency adapter). Setting it true
-   * is only correct once one of those exists and this comparison is known to
-   * hold like-for-like.
+   * reads. No caller sets it, and #1180 decided none should yet.
+   *
+   * **Why a configured rate does NOT lift this, now that one exists.** #1180
+   * added `SIZING_USD_PER_GBP` (paper-profile.ts) — a static, code-configured
+   * rate — and converted the Trader's sizing inlet with it. This gate is the
+   * one place that rate must not reach, and the reason is the tolerance it
+   * fires against. At `refuse_above_tolerance = 0.05` the gate refuses above
+   * `book * 1.05`; convert the book at 1.27 while the true rate is 1.35 and
+   * the effective threshold becomes `1000 * 1.27 * 1.05 / 1.35` ~= £988, so a
+   * correctly funded £1,000 account refuses every entry. GBP/USD moves 6%
+   * inside a quarter, which is enough to flip the outcome in either
+   * direction. The asymmetry with the sizing inlet is the whole decision: a
+   * 6% rate error there is a 6% sizing error, and here it is a total refusal
+   * or a total miss — rate staleness would become indistinguishable from the
+   * overfunding this refusal exists to catch.
+   *
+   * So the refusal is PERMANENT BY DESIGN until a LIVE rate feed or a
+   * GBP-native broker adapter exists (#946 is the eventual same-currency
+   * adapter) — not a stale guard left standing after its cause was removed.
+   * Setting it true is only correct once one of those exists and this
+   * comparison is known to hold like-for-like.
    */
   live_book_ceiling?: {
     /** The declared book (`LIVE_BOOK_GBP`), in GBP. */
@@ -444,13 +460,17 @@ export interface SubclassDeploymentCap {
      * mechanism as `RiskConfig['live_book_ceiling'].same_currency_verified`,
      * read that field's doc comment for the full account.** `book` is GBP;
      * `portfolio.equity` is read from Alpaca's USD-denominated
-     * `GET /v2/account` (`production/account-state.ts:129`) with no FX
-     * conversion anywhere in this codebase, so comparing the two proves
-     * nothing about real funding regardless of which way the tolerance check
-     * comes out. `perSubclassDeploymentCap` (risk-manager/index.ts) refuses
-     * to arm — `binding_constraint` ending `:currency_mismatch:<instrument>`,
-     * distinct from `:equity_exceeds_book:<instrument>` below — for as long
-     * as this is `false`/absent. No caller sets it today.
+     * `GET /v2/account` (`production/account-state.ts:129`), so comparing the
+     * two proves nothing about real funding regardless of which way the
+     * tolerance check comes out. `perSubclassDeploymentCap`
+     * (risk-manager/index.ts) refuses to arm — `binding_constraint` ending
+     * `:currency_mismatch:<instrument>`, distinct from
+     * `:equity_exceeds_book:<instrument>` below — for as long as this is
+     * `false`/absent. No caller sets it, and #1180's configured
+     * `SIZING_USD_PER_GBP` deliberately does not: its drift exceeds
+     * `refuse_above_tolerance`, so arming with it would make FX movement
+     * indistinguishable from overfunding. Permanently refusing by design
+     * until a live rate feed or a GBP-native adapter exists.
      */
     same_currency_verified?: boolean;
   };

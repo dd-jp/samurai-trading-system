@@ -21,7 +21,7 @@ import type { ReconcileDivergence } from '../../pipeline/execution/index.js';
 import { computeIndicator } from '../../providers/market-data-service/index.js';
 import { GUARDED_THRESHOLD_NAMES } from '../../shared/index.js';
 import { STAGE_OWNED_TABLES } from '../../shared/store/index.js';
-import { LIVE_BOOK_GBP } from './paper-profile.js';
+import { LIVE_BOOK_SIZING_USD } from './paper-profile.js';
 import {
   type AnalystFailureCauseEvidence,
   type ApprovalFallbackEvidence,
@@ -325,7 +325,7 @@ function healthyGateOptions(
     outsideBenchmarks: overrides.outsideBenchmarks ?? healthyOutsideBenchmarks(),
     feedbackCycleScheduleWritten: overrides.feedbackCycleScheduleWritten ?? true,
     sizingCeiling: {
-      configuredCeiling: LIVE_BOOK_GBP,
+      configuredCeiling: LIVE_BOOK_SIZING_USD,
       rows: 1,
       allMatchConfiguredCeiling: true,
       ...overrides.sizingCeiling,

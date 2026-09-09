@@ -46,7 +46,10 @@ export const DEFAULT_ARM_COMPARISON_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
  * economics (#840) put the equities-only LLM bill at ~£58/yr, and ADR-0015's
  * 2026-08-18 amendment puts the book at £1,000 — so running the debate layer
  * costs ~5.8% of the book per year, which pro-rates over this module's 30-day
- * window to £58 × 30/365 = £4.77, or **0.48 pp of the £1,000 basis**. Rounded to
+ * window to £58 × 30/365 = £4.77, or **0.48 pp of the £1,000 book**. The basis
+ * the cycle divides by is that same book in the account's currency since #1180
+ * (£1,000 × 1.27), and the bill converts at the same rate, so the ratio — and
+ * therefore this threshold — is unchanged by the conversion. Rounded to
  * 0.5 pp, which is the line: a control arm that is ahead by less than what the
  * debate layer costs to run has not yet shown the layer is not worth its bill,
  * and a control ahead by more has.

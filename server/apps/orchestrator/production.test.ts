@@ -4539,8 +4539,8 @@ describe('buildProductionOrchestrator', () => {
      *
      * Both halves of that are load-bearing, and each one alone is a test that
      * cannot fail. `production.ts`'s `runArmComparison` closes over the
-     * `LIVE_BOOK_GBP` module constant directly for `basis` — it does not read
-     * `config.capitalCeilingUsd` at all — so:
+     * `LIVE_BOOK_SIZING_USD` module constant directly for `basis` — it does
+     * not read `config.capitalCeilingUsd` at all — so:
      *
      * - The expectation must be read off `config`, the object actually handed
      *   to `buildProductionOrchestrator`, not re-derived from a second
@@ -4548,7 +4548,7 @@ describe('buildProductionOrchestrator', () => {
      *   are the module constant and the assertion holds for any ceiling the
      *   running config carries, `undefined` included.
      * - The config's ceiling must come from the PROFILE, not from an inline
-     *   `LIVE_BOOK_GBP` literal here. `stubConfig` (which `feedbackOnlyConfig`
+     *   `LIVE_BOOK_SIZING_USD` literal here. `stubConfig` (which `feedbackOnlyConfig`
      *   builds on) declares no ceiling of its own, so an inline literal pins
      *   two references to one constant and survives `paperStartingProfile`
      *   dropping `capitalCeilingUsd` entirely — the #1112 defect itself.
@@ -8045,9 +8045,9 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
    * Scale-invariance (the "scales the requested size with the declared
    * ceiling" case below) passes even if every size this fix produces is off
    * by a constant factor — which is exactly what finding 2 of that review
-   * found: `capitalCeilingUsd` carries a GBP value into paper with no FX
-   * step, so the effective book is ~21% under what `LIVE_BOOK_GBP` declares.
-   * A ratio test cannot see that. This one pins the single-stock entry's
+   * found, and #1180 then fixed: `capitalCeilingUsd` used to carry a GBP
+   * value into paper with no FX step, ~21% under what `LIVE_BOOK_GBP`
+   * declares. A ratio test cannot see that. This one pins the single-stock entry's
    * NOTIONAL to ADR-0018 D5's formula against the declared ceiling, on both
    * arms, through the armed `subclass_of` path (not the pre-D3 `atr_k`
    * fallback) so it exercises the geometry the live system will actually run
@@ -8228,9 +8228,10 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
    * No local paper-soak history exists at the corrected sizing to replay
    * "today's control-arm session" against, and inventing a `return_pct`
    * number would be worse than not answering. The defect was never in
-   * `production.ts`'s `basis` — it hardcodes `LIVE_BOOK_GBP` regardless of
-   * this bug (see the AC3 case above) — it was in the Trader's sizing
-   * numerator: `capitalCeilingUsd` was `undefined` for paper, so every
+   * `production.ts`'s `basis` — it hardcodes the declared book (converted to
+   * the account's currency since #1180) regardless of this bug (see the AC3
+   * case above) — it was in the Trader's sizing numerator:
+   * `capitalCeilingUsd` was `undefined` for paper, so every
    * notional, and therefore every trade's realized pnl, ran ~100x too large
    * relative to the declared book. `return_pct = pnl / basis`
    * (`buildArmComparison`) with a FIXED, correct `basis` therefore reports a

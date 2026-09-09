@@ -30,6 +30,10 @@
 -- mismatch and is CLOSED — it resolved by refusing the comparison, not by
 -- converting. #1180 owns the conversion, and the backfill it will owe this
 -- column when it lands.
+--
+-- #1180 landed: migration 0052 is that backfill. Paper's ceiling is now a
+-- CONVERTED USD figure, and the rows this migration stamped at the raw GBP
+-- book were normalized to it. The equality-only rule above is unchanged.
 
 ALTER TABLE open_positions ADD COLUMN sizing_capital_ceiling REAL;
 ALTER TABLE closed_trades ADD COLUMN sizing_capital_ceiling REAL;

@@ -207,9 +207,12 @@ export interface TraderStepDeps extends BreakerStateDeps {
   /**
    * The declared capital ceiling (#511, `ProductionConfig.capitalCeilingUsd`).
    * Undefined on every backtest run and in most tests; defined on paper runs
-   * too since #1112, at `LIVE_BOOK_GBP` (paper-profile.ts), and on live runs
-   * at `SAMURAI_LIVE_MAX_CAPITAL_USD`. Absent means "no ceiling declared",
-   * never "a ceiling of zero". See `sizingEquity`.
+   * too since #1112, at `LIVE_BOOK_SIZING_USD` (paper-profile.ts — the GBP
+   * book converted, #1180) and on live runs at
+   * `SAMURAI_LIVE_MAX_CAPITAL_USD`. Either way it is denominated in the same
+   * currency as the `portfolio.equity` it is clamped against, which is the
+   * whole of #1180. Absent means "no ceiling declared", never "a ceiling of
+   * zero". See `sizingEquity`.
    */
   capitalCeilingUsd?: number;
   /**

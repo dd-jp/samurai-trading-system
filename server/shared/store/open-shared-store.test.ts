@@ -107,7 +107,7 @@ const CONSOLIDATED_SCHEMA_TABLE_COUNT = 35;
  */
 const MIGRATIONS = listMigrations(MIGRATIONS_DIR);
 const MIGRATION_VERSIONS = MIGRATIONS.map((migration) => migration.version);
-const HIGHEST_KNOWN_MIGRATION_VERSION = 51;
+const HIGHEST_KNOWN_MIGRATION_VERSION = 52;
 
 /** A temp copy of `MIGRATIONS_DIR` holding every migration through `throughVersion`, inclusive. */
 function copyMigrationsUpTo(throughVersion: number): string {
@@ -272,6 +272,78 @@ describe('openSharedStore', () => {
           .prepare('SELECT modelled_cost_charged FROM closed_trades WHERE idempotency_key = ?')
           .get('control-pre-fix'),
       ).toEqual({ modelled_cost_charged: 1 });
+    } finally {
+      raw.close();
+      rmSync(preCutoverDir, { recursive: true, force: true });
+    }
+  });
+
+  // Same cutover shape as the 0049 test above, and for the same reason: 0052's
+  // whole content is an UPDATE over rows that must already exist when it runs,
+  // so a fresh `:memory:` DB — which applies 0052 before any row is written —
+  // proves nothing about it.
+  //
+  // The pre-conversion value is the GBP book (1000) that `paperStartingProfile`
+  // stamped through `sizing_capital_ceiling` before #1180 converted the sizing
+  // inlet; the post value is `LIVE_BOOK_SIZING_USD`. Both tables, because
+  // migration 0045 added the column to both and a one-table UPDATE would leave
+  // `open_positions` mixed. The unrelated-ceiling row is what stops the UPDATE
+  // being written as an unconditional rewrite of the column: a genuinely
+  // different declared ceiling must survive untouched, or the backfill would
+  // erase the real mid-window book change `oneSizingRegime` exists to refuse.
+  it('migration 0052 normalizes the pre-conversion ceiling stamp on both lot tables (#1180)', () => {
+    const raw = new BetterSqlite3(':memory:');
+    const preCutoverVersion = 51;
+    const preCutoverDir = copyMigrationsUpTo(preCutoverVersion);
+    try {
+      runMigrations(raw, preCutoverDir);
+
+      for (const [key, ceiling] of [
+        ['paper-pre-conversion', 1000],
+        ['other-book', 5000],
+      ] as const) {
+        raw
+          .prepare(
+            `INSERT INTO closed_trades (
+               idempotency_key, debate_id, instrument, asset_class, side,
+               entry, stop, filled_size, realized_pnl_net, fees_total,
+               opened_at, closed_at, close_reason, arm, sizing_capital_ceiling
+             ) VALUES (?, 'd1', 'AAPL', 'stocks', 'buy', 100, 90, 10, 5, 0,
+               '2026-08-01T00:00:00.000Z', '2026-08-01T01:00:00.000Z', 'target', 'live', ?)`,
+          )
+          .run(key, ceiling);
+        raw
+          .prepare(
+            `INSERT INTO open_positions (
+               idempotency_key, debate_id, instrument, asset_class, side, intent_type,
+               requested_size, filled_size, avg_entry_price, stop, target,
+               order_state, broker_order_ids, opened_at, decision_timestamp,
+               conviction, converged, arm, sizing_capital_ceiling
+             ) VALUES (?, 'd1', 'AAPL', 'stocks', 'buy', 'entry', 10, 10, 100, 90, 110,
+               'filled', '[]', '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z',
+               0.7, 1, 'live', ?)`,
+          )
+          .run(key, ceiling);
+      }
+
+      expect(runMigrations(raw, MIGRATIONS_DIR)).toEqual(
+        MIGRATION_VERSIONS.filter((version) => version > preCutoverVersion),
+      );
+
+      for (const table of ['closed_trades', 'open_positions']) {
+        expect(
+          raw
+            .prepare(`SELECT sizing_capital_ceiling FROM ${table} WHERE idempotency_key = ?`)
+            .get('paper-pre-conversion'),
+          `${table} was not normalized to the converted ceiling`,
+        ).toEqual({ sizing_capital_ceiling: 1270 });
+        expect(
+          raw
+            .prepare(`SELECT sizing_capital_ceiling FROM ${table} WHERE idempotency_key = ?`)
+            .get('other-book'),
+          `${table}: a genuinely different declared ceiling was rewritten`,
+        ).toEqual({ sizing_capital_ceiling: 5000 });
+      }
     } finally {
       raw.close();
       rmSync(preCutoverDir, { recursive: true, force: true });

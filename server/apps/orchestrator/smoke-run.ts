@@ -290,7 +290,7 @@ import { installFaultHandlers, runEntrypointLogRetention, startFromEnvironment }
 import { buildEntrypointLogger, JsonLogger, type StdoutStream } from './logger.js';
 import {
   buildStartingProfileConfigs,
-  LIVE_BOOK_GBP,
+  LIVE_BOOK_SIZING_USD,
   paperStartingProfile,
 } from './paper-profile.js';
 import type { DataFailoverAlert } from './production/data-failover.js';
@@ -3583,7 +3583,7 @@ function runArmComparisonProbe(db: SqliteHandle): ArmComparisonEvidence {
         alerts += 1;
       },
     },
-    basis: LIVE_BOOK_GBP,
+    basis: LIVE_BOOK_SIZING_USD,
     window_ms: DEFAULT_ARM_COMPARISON_WINDOW_MS,
     thresholds: DEFAULT_ARM_DIVERGENCE_THRESHOLDS,
   });
@@ -6393,8 +6393,9 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // asserts that throw directly (#1152) — this comment only covers the
       // "never even asked" half.
       ...profile,
-      // #1112: `profile.traderConfig` now sizes against `LIVE_BOOK_GBP`
-      // (£1,000, via `capitalCeilingUsd`) rather than this run's
+      // #1112: `profile.traderConfig` now sizes against the declared book
+      // (£1,000 at `SIZING_USD_PER_GBP`, via `capitalCeilingUsd`, #1180)
+      // rather than this run's
       // `FixedAccountStateProvider` balance (100,000) — that gap between the
       // sizing basis and the fixture's account balance is exactly the defect
       // #1112 fixes. The shared profile's crypto risk multiplier was tuned

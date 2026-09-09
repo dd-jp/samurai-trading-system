@@ -168,7 +168,11 @@ export interface ArmComparisonRow {
   computed_at: string;
   window_from: string;
   window_to: string;
-  /** The denominator BOTH arms were divided by (`LIVE_BOOK_GBP` today), in GBP. */
+  /**
+   * The denominator BOTH arms were divided by — the declared book in the
+   * account's currency (`LIVE_BOOK_GBP * SIZING_USD_PER_GBP` today, #1180),
+   * matching `realized_pnl_net` above it.
+   */
   basis: number;
   live: ArmPerformanceWire;
   control: ArmPerformanceWire;

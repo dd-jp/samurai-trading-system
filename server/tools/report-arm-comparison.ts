@@ -50,7 +50,7 @@
 
 import { isAbsolute, resolve } from 'node:path';
 import { assertStorePathMatchesMode } from '../apps/orchestrator/index.js';
-import { LIVE_BOOK_GBP } from '../apps/orchestrator/paper-profile.js';
+import { LIVE_BOOK_SIZING_USD } from '../apps/orchestrator/paper-profile.js';
 import {
   type ArmComparison,
   buildArmComparison,
@@ -79,7 +79,7 @@ export function formatArmComparison(comparison: ArmComparison): string {
   const lines: string[] = [
     'FALSIFIER ARM 2 — matched control vs the live arm (#753)',
     `  window: ${comparison.from.toISOString()} → ${comparison.to.toISOString()}`,
-    `  basis:  £${comparison.basis.toFixed(2)} (the same denominator for both arms)`,
+    `  basis:  $${comparison.basis.toFixed(2)} (the same denominator for both arms)`,
     '',
     '  arm      trades   realized      return   max drawdown',
   ];
@@ -197,7 +197,7 @@ if (isMain) {
         // The declared book, not live equity: both arms must be divided by the
         // SAME denominator or the two `return_pct` figures are not comparable,
         // and live equity is a per-arm quantity.
-        basis: LIVE_BOOK_GBP,
+        basis: LIVE_BOOK_SIZING_USD,
       }),
     ),
   );
