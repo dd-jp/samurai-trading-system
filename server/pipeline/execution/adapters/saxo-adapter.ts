@@ -18,7 +18,7 @@
  *   prices carry `OrderDecimals` 2 on every pool line.
  */
 import type { Clock, Logger } from '../../../shared/index.js';
-import { DEFAULT_VENUE_PACING, safeLog, TokenBucket } from '../../../shared/index.js';
+import { safeLog } from '../../../shared/index.js';
 import { SAXO_COMMISSION_RATE } from '../../../tools/backtest/index.js';
 import { sanitizeBrokerError } from '../broker-error.js';
 import {
@@ -129,9 +129,13 @@ export function saxoInstrumentResolverFromPool(
 }
 
 export interface SaxoBrokerAdapterInput {
+  /**
+   * Pacing (#1222) lives on the concrete `SaxoHttpBrokerClient` this wraps,
+   * not here: a fan-out operation like `submitBracket`/`cancel` issues
+   * several upstream requests, and only the transport layer sees each one.
+   */
   client: SaxoOpenApiClient;
   instruments: SaxoInstrumentResolver;
-  rateLimiter?: TokenBucket;
   state?: BrokerStateStore;
   clock?: Clock;
   activityLookbackMs?: number;
@@ -162,7 +166,6 @@ type Leg = NormalizedFill['leg'];
 export class SaxoBrokerAdapter implements BrokerAdapter {
   private readonly client: SaxoOpenApiClient;
   private readonly instruments: SaxoInstrumentResolver;
-  private readonly rateLimiter: TokenBucket;
   private readonly state: BrokerStateStore;
   private readonly clock: Clock;
   private readonly activityLookbackMs: number;
@@ -175,12 +178,6 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
   constructor(input: SaxoBrokerAdapterInput) {
     this.client = input.client;
     this.instruments = input.instruments;
-    this.rateLimiter =
-      input.rateLimiter ??
-      new TokenBucket(DEFAULT_VENUE_PACING.saxo, undefined, {
-        logger: input.logger,
-        name: 'saxo',
-      });
     this.state = input.state ?? new InMemoryBrokerStateStore();
     this.clock = input.clock ?? { now: () => new Date() };
     this.activityLookbackMs = input.activityLookbackMs ?? DEFAULT_ACTIVITY_LOOKBACK_MS;
@@ -195,7 +192,6 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
   }
 
   private async call<T>(operation: string, fn: () => Promise<T>): Promise<T> {
-    await this.rateLimiter.acquire();
     try {
       return await fn();
     } catch (cause) {

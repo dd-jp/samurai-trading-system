@@ -13,7 +13,13 @@
  * memoised, so the adapter never holds an account identifier.
  */
 import type { RetryConfig } from '../../../shared/index.js';
-import { fetchWithTimeout, truncateForError, withRetry } from '../../../shared/index.js';
+import {
+  DEFAULT_VENUE_PACING,
+  fetchWithTimeout,
+  TokenBucket,
+  truncateForError,
+  withRetry,
+} from '../../../shared/index.js';
 import type { SaxoHttpMethod } from './saxo-broker-errors.js';
 import {
   classifySaxoBrokerNetworkError,
@@ -59,6 +65,13 @@ export interface SaxoHttpBrokerClientOptions {
   accountKey?: string;
   timeoutMs?: number;
   retry?: RetryConfig;
+  /**
+   * Paces every upstream HTTP request this client issues, one token per
+   * `fetchWithTimeout` call (#1222 — a public operation like `submitBracket`
+   * or `cancel` can fan out to several, so pacing lives at the transport
+   * boundary rather than the caller). Defaults to `DEFAULT_VENUE_PACING.saxo`.
+   */
+  rateLimiter?: TokenBucket;
 }
 
 interface AccountIdentity {
@@ -268,6 +281,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
   private readonly pinnedAccountKey: string | undefined;
   private readonly timeoutMs: number;
   private readonly retry: RetryConfig;
+  private readonly rateLimiter: TokenBucket;
   private identity: Promise<AccountIdentity> | undefined;
 
   constructor(options: SaxoHttpBrokerClientOptions = {}) {
@@ -294,6 +308,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
     this.pinnedAccountKey = options.accountKey;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.retry = options.retry ?? DEFAULT_RETRY_CONFIG;
+    this.rateLimiter = options.rateLimiter ?? new TokenBucket(DEFAULT_VENUE_PACING.saxo);
   }
 
   private headers(init: RequestInit, extra: Record<string, string> = {}): Record<string, string> {
@@ -315,6 +330,10 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
   ): Promise<T> {
     return withRetry<T>(
       async () => {
+        // One token per attempt (#1222): a retried request is a second
+        // upstream call and must be paced as one, not covered by the first
+        // attempt's token.
+        await this.rateLimiter.acquire();
         let response: Response;
         try {
           response = await fetchWithTimeout(

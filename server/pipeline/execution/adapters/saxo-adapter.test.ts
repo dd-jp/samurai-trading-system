@@ -7,7 +7,6 @@
 import type { MarketDataService } from '../../../providers/market-data-service/index.js';
 import { LSE_ETP_POOL } from '../../../providers/universe-pool/index.js';
 import type { OpenPosition } from '../../../shared/index.js';
-import { TokenBucket } from '../../../shared/index.js';
 import { recordingLogger } from '../../../shared/recording-logger.js';
 import type { CostModel } from '../../../tools/backtest/index.js';
 import { InMemoryBrokerStateStore } from '../broker-state-store.js';
@@ -32,10 +31,6 @@ import type {
   SaxoOrderActivity,
   SaxoOrderPlacement,
 } from './saxo-client.js';
-
-function permissiveLimiter(): TokenBucket {
-  return new TokenBucket({ capacity: 1_000, refillPerSecond: 1_000 });
-}
 
 const RESOLVER: SaxoInstrumentResolver = {
   resolve: (lseTicker) =>
@@ -147,7 +142,6 @@ function makeAdapter(client: SaxoOpenApiClient, state = new InMemoryBrokerStateS
   const adapter = new SaxoBrokerAdapter({
     client,
     instruments: RESOLVER,
-    rateLimiter: permissiveLimiter(),
     state,
     clock: { now: () => new Date('2026-09-05T09:00:00Z') },
     legResizeAlerts,

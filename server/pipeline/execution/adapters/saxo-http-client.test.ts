@@ -1,3 +1,4 @@
+import { TokenBucket } from '../../../shared/index.js';
 import {
   SaxoBrokerProviderError,
   SaxoBrokerRateLimitError,
@@ -5,6 +6,17 @@ import {
 } from './saxo-broker-errors.js';
 import type { SaxoOrderRequest } from './saxo-client.js';
 import { SAXO_CREDENTIAL_ENV_VARS, SaxoHttpBrokerClient } from './saxo-http-client.js';
+
+/**
+ * These tests assert transport behaviour (retry, validation, error mapping),
+ * not pacing (#1222 covers per-request pacing directly, in
+ * saxo-per-request-pacing.test.ts) — a permissive bucket keeps every case
+ * off the (fake, non-advancing) pacing clock regardless of how many requests
+ * it issues on one client.
+ */
+function permissiveLimiter(): TokenBucket {
+  return new TokenBucket({ capacity: 1_000, refillPerSecond: 1_000 });
+}
 
 const FAKE_TOKEN = 'test-fake-saxo-token';
 const ACCOUNTS = { Data: [{ AccountKey: 'acct-key', ClientKey: 'client-key' }] };
@@ -42,6 +54,7 @@ function makeClient(
     accessToken: FAKE_TOKEN,
     baseUrl: 'https://gateway.example/sim/openapi/',
     retry,
+    rateLimiter: permissiveLimiter(),
   });
 }
 
