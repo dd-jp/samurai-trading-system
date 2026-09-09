@@ -2893,8 +2893,10 @@ export function startTickLoop(deps: {
         // that pass's entire lifetime (see `flatten-tail-priority.ts`'s file
         // doc) and IS behind the flat group until the next pass reads a
         // fresh held set. Re-dispatching a busy instrument would reintroduce
-        // the double-dispatch #669's `running` guard exists to forbid, for a
-        // case #1390 already removed most of the harm from.
+        // the double-dispatch #669's `running` guard exists to forbid — the
+        // harm #1390 removes is exactly for lots already held at plan-build
+        // time; a lot opened after that read still waits one pass, same as
+        // before this fix.
         deps.logger.log({
           trace_id: 'tick-loop',
           stage: 'tick-loop',
