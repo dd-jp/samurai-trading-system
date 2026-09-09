@@ -442,11 +442,11 @@ export class SqliteExecutionStore implements SharedStore {
    * two-argument form no longer compiles, closing a POSITIONAL swap. A
    * mislabeled object (both fields swapped under the correct key names) is
    * now also caught at compile time (#1334): `broker_fill_id` is branded
-   * `BrokerFillId`, so `{ idempotency_key: fill.broker_fill_id,
-   * broker_fill_id: position.idempotency_key }` no longer typechecks even
-   * though both source fields are still plain strings before `toBrokerFillId`
-   * runs. Declared via `SharedStore['hasFill']`'s own parameter type rather
-   * than restated inline, so this signature cannot drift from the port's.
+   * `BrokerFillId`, so a plain-`string` `idempotency_key` cannot land in the
+   * `broker_fill_id` field. Declared via `SharedStore['hasFill']`'s own
+   * parameter type rather than restated inline: `implements` checks method
+   * parameters bivariantly, so an inline `string` here would still compile
+   * and silently drop the brand.
    */
   async hasFill({
     idempotency_key,

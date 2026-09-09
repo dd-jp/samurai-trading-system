@@ -517,8 +517,10 @@ export interface OpenPosition {
  * Nominal wrapper on the venue-assigned fill id (#1334): both this and
  * `idempotency_key` are plain `string`, so an object literal built with the
  * two fields swapped still type-checked before this brand existed (#1328's
- * gap). `toBrokerFillId` is the only way to produce one, so a swap now fails
- * at the `broker_fill_id` field specifically instead of compiling silently.
+ * gap). Produce one only via `toBrokerFillId` at the venue boundary; a raw
+ * `string` (such as an `idempotency_key`) placed in a `broker_fill_id` field
+ * fails to compile instead of silently swapping. Nothing lints a bare
+ * `as BrokerFillId`, so the guarantee holds only while that convention does.
  */
 export type BrokerFillId = string & { readonly __brand: 'BrokerFillId' };
 export function toBrokerFillId(value: string): BrokerFillId {

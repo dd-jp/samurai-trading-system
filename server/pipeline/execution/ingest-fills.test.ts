@@ -3858,7 +3858,11 @@ describe('trace_id threading onto alerts (#1348)', () => {
  * fields swapped under their correct key names) fails to compile, closing the
  * gap #1328's single-object form left open — that change stopped a
  * POSITIONAL swap but left two same-shaped `string` fields swappable by name.
- * Compile-only: nothing here runs, `@ts-expect-error` is the assertion.
+ * The `@ts-expect-error` and `expectTypeOf` lines are the assertions; the
+ * store calls exist only to give them a real call site. This block is the
+ * only guard against the store re-widening its parameter to `string`:
+ * `implements SharedStore` checks method parameters bivariantly and would
+ * not catch it.
  */
 describe('hasFill argument branding (#1334)', () => {
   it('pins the hasFill argument shape so a rename or widening fails loudly instead of leaving the @ts-expect-error below unused for the wrong reason', () => {

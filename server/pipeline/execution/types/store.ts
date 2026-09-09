@@ -64,8 +64,9 @@ export interface SharedStore {
    * call site. A MISLABELED object is also closed now (#1334):
    * `broker_fill_id` is branded `BrokerFillId`, so `{ idempotency_key:
    * fill.broker_fill_id, broker_fill_id: position.idempotency_key }` no
-   * longer typechecks even though both source values are plain `string`
-   * before `toBrokerFillId` runs.
+   * longer typechecks: `position.idempotency_key` is a plain `string` and
+   * cannot land in the branded field. The brand is one-sided, so the
+   * reverse leak (a `BrokerFillId` into `idempotency_key`) still compiles.
    */
   hasFill(args: { idempotency_key: string; broker_fill_id: BrokerFillId }): Promise<boolean>;
   /**
