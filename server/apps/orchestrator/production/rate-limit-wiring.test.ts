@@ -160,19 +160,20 @@ describe('the LLM rate limiter is in the production path (#388)', () => {
    * (PR #390 review). `buildDebateStep` calls `reserve` outside its try/catch
    * because `reserve` is total over `AssetClass` — but that only held while the
    * config shape was well formed, and the shape was guaranteed by TypeScript
-   * alone. A `rateLimiterConfig` injected with no `default` (reachable by any
-   * caller who casts) used to survive construction and throw on the first
-   * debate; now the root refuses to build.
+   * alone. A malformed `rateLimiterConfig` used to survive construction and
+   * throw on the first debate; now the root refuses to build. `windowMs: 0` is
+   * the type-legal malformed shape (`assertBudget` requires it positive); the
+   * missing-`default` shape is unit-pinned in rate-limiter.test.ts.
    */
-  it('refuses to build with a rateLimiterConfig that has no `default`', () => {
+  it('refuses to build with a malformed rateLimiterConfig', () => {
     expect(() =>
       buildProductionComponents(
         stubConfig(db, {
           llmClient: countingLlmClient(),
-          rateLimiterConfig: {} as unknown as NonNullable<ProductionConfig['rateLimiterConfig']>,
+          rateLimiterConfig: budget({ windowMs: 0 }),
         }),
       ),
-    ).toThrow(/config\.default is required/);
+    ).toThrow(/default\.windowMs must be a finite positive number/);
   });
 
   it('refuses before opening any store or wire client, not part-way through wiring', () => {
@@ -182,7 +183,7 @@ describe('the LLM rate limiter is in the production path (#388)', () => {
     // by the broker wire client never being touched.
     const config = stubConfig(db, {
       llmClient: countingLlmClient(),
-      rateLimiterConfig: {} as unknown as NonNullable<ProductionConfig['rateLimiterConfig']>,
+      rateLimiterConfig: budget({ windowMs: 0 }),
     });
 
     expect(() => buildProductionComponents(config)).toThrow();
@@ -209,6 +210,41 @@ describe('the LLM rate limiter is in the production path (#388)', () => {
     });
 
     expect(components.llmRateLimiter.snapshot().crypto?.llmCallsUsed).toBeGreaterThan(0);
+  });
+
+  /**
+   * THE MUTATION THIS KILLS: `config.llmRateLimiter ?? new RateLimiter(clock,
+   * DEFAULT_LLM_RATE_LIMIT_CONFIG)` — dropping the `config.rateLimiterConfig
+   * ??` half. `DEFAULT_LLM_RATE_LIMIT_CONFIG.default.maxDebates` is 30, so a
+   * root that silently discarded an injected `rateLimiterConfig` would still
+   * admit both debates here; only a tight, actually-read budget can refuse
+   * the second one. The two `default`-omission tests above cover the guard
+   * that rejects a malformed config — this covers that a WELL-FORMED one is
+   * the value the limiter is actually built from.
+   */
+  it('builds the limiter from the injected rateLimiterConfig, not the compiled-in default', async () => {
+    const components = buildProductionComponents(
+      stubConfig(db, {
+        llmClient: countingLlmClient(),
+        rateLimiterConfig: budget({ maxDebates: 1 }),
+      }),
+    );
+
+    const debate = (instrument: string) =>
+      components.steps.debate({
+        trace_id: 'trace-1',
+        instrument,
+        asset_class: 'crypto',
+        views: [makeView()],
+        clock: CLOCK,
+        bar: NOW,
+      });
+
+    const first = await debate('BTC-USD');
+    const second = await debate('ETH-USD');
+
+    expect(first.rate_limited).toBeUndefined();
+    expect(second.rate_limited?.reason).toMatch(/debate budget exhausted/);
   });
 });
 
