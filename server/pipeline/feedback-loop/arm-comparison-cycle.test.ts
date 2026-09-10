@@ -342,14 +342,32 @@ describe('runArmComparisonCycle', () => {
     expect(source.refusalWindows).toEqual(source.windows);
   });
 
-  it('does not let refusals move the divergence verdict', () => {
+  /**
+   * #1099 ruled the refusal count OUT of the verdict: it is a signal for the
+   * operator reading the report, not an input to alerting. Asserted on the
+   * DIVERGING fixture on purpose — the arms below cross, so a verdict that
+   * quietly suppressed (or manufactured) divergence when refusals are present
+   * changes this result. The non-diverging fixture would pass either way.
+   */
+  it('does not let refusals move the divergence verdict, on a window that DOES diverge', () => {
     const trades = [
-      ...armTrades('live', [10, 10, 10, 10, 10]),
-      ...armTrades('control', [1, 1, 1, 1, 1]),
+      ...armTrades('live', [-1, -1, -1, -1, -1]),
+      ...armTrades('control', [4, 4, 4, 4, 4]),
     ];
-    const quiet = runArmComparisonCycle(cycleInput(trades).input);
-    const refused = runArmComparisonCycle(cycleInput(trades, { live: 0, control: 40 }).input);
+    const quiet = cycleInput(trades);
+    const refused = cycleInput(trades, { live: 0, control: 40 });
 
-    expect(refused.divergence).toEqual(quiet.divergence);
+    const quietSample = runArmComparisonCycle(quiet.input);
+    const refusedSample = runArmComparisonCycle(refused.input);
+
+    expect(quietSample.divergence.diverged).toBe(true);
+    expect(refusedSample.divergence).toEqual(quietSample.divergence);
+    // And the alert the verdict drives: same count, same sentence, same instant.
+    // `alert.comparison` itself differs by the refusal count by design — what
+    // the operator READS of it is asserted byte-for-byte in
+    // `arm-divergence-alert-channel.test.ts`.
+    expect(refused.alerts.posted).toHaveLength(quiet.alerts.posted.length);
+    expect(refused.alerts.posted[0]?.reason).toBe(quiet.alerts.posted[0]?.reason);
+    expect(refused.alerts.posted[0]?.reported_at).toEqual(quiet.alerts.posted[0]?.reported_at);
   });
 });

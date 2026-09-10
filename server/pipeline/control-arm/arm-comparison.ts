@@ -112,7 +112,13 @@ export type ArmRefusedPassCounts = Readonly<Record<TradingArm, number>>;
 
 /** Both arms, over one window, always together. */
 export interface ArmComparison {
-  /** Half-open at the start: `closed_at > from AND closed_at <= to`. */
+  /**
+   * Half-open at the start, on BOTH reads behind this comparison:
+   * `closed_at > from AND closed_at <= to` for trades, and the same bounds on
+   * `trader_log.created_at` for `refused_pass_count` (#1099). Consecutive
+   * windows therefore partition the timeline for refusals as well as trades —
+   * no pass is counted twice, none is dropped.
+   */
   from: Date;
   to: Date;
   /**

@@ -60,6 +60,26 @@ describe('formatArmDivergenceAlert', () => {
     expect(text).toContain('control: 14 trade(s), return 1.82%, max drawdown 1.90%');
   });
 
+  /**
+   * #1099 added `refused_pass_count` to `ArmPerformance`, which this alert
+   * carries whole. The ruling kept refusals OUT of alerting, so the message an
+   * operator's phone shows must not move — this formatter picks its fields
+   * explicitly and reads no refusal count, and that is asserted rather than
+   * left to review.
+   */
+  it('renders the identical message whether or not the window carried refusals', () => {
+    const refused: ArmDivergenceAlert = {
+      ...ALERT,
+      comparison: {
+        ...ALERT.comparison,
+        live: { ...ALERT.comparison.live, refused_pass_count: 3 },
+        control: { ...ALERT.comparison.control, refused_pass_count: 27 },
+      },
+    };
+
+    expect(formatArmDivergenceAlert(refused)).toBe(formatArmDivergenceAlert(ALERT));
+  });
+
   it('states the ONE window and the shared basis, so two-window misreading is impossible', () => {
     const text = formatArmDivergenceAlert(ALERT);
 
